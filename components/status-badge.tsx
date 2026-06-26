@@ -34,6 +34,11 @@ const toneMap: Record<string, Tone> = {
   binding: "danger",
   advisory: "primary",
   informational: "neutral",
+  // doctrine category + status
+  principle: "primary",
+  policy: "primary",
+  guardrail: "danger",
+  retired: "neutral",
 }
 
 const toneClasses: Record<Tone, string> = {

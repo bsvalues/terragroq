@@ -8,7 +8,7 @@ export default async function DoctrinePage() {
     <>
       <PageHeader
         title="Doctrine"
-        description="The operating principles, policies, and guardrails that govern behavior. Active doctrine steers the AI in Operator Chat."
+        description="Machine-readable operating rules with allowed, forbidden, and requires-approval clauses. Active doctrine is injected into the agent and enforced in Operator Chat."
       />
       <DoctrineView initial={doctrine} />
     </>

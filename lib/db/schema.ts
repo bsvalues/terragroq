@@ -116,15 +116,27 @@ export const decision = pgTable("decision", {
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
 
-// Doctrine: the operating principles / rules that govern behavior.
+// Doctrine: machine-readable operating rules that govern behavior.
+// status: active | superseded | retired
 export const doctrine = pgTable("doctrine", {
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
+  ref: text("ref"), // RULE-0001 style human reference
   title: text("title").notNull(),
   statement: text("statement").notNull(),
   category: text("category").default("principle").notNull(), // principle | policy | guardrail
+  scope: text("scope"),
+  status: text("status").default("active").notNull(),
   priority: integer("priority").default(0).notNull(),
   active: boolean("active").default(true).notNull(),
+  allowed: text("allowed").array().default([]).notNull(),
+  forbidden: text("forbidden").array().default([]).notNull(),
+  requiresApproval: text("requiresApproval").array().default([]).notNull(),
+  evidence: text("evidence").array().default([]).notNull(),
+  owner: text("owner").default("Bill").notNull(),
+  locked: boolean("locked").default(false).notNull(), // seeded doctrine
+  supersedesId: integer("supersedesId"),
+  supersededById: integer("supersededById"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
