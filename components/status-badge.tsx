@@ -69,6 +69,42 @@ const toneMap: Record<string, Tone> = {
   parked: "neutral",
   promoted: "success",
   dropped: "neutral",
+  // goal console — lanes
+  docs: "neutral",
+  read_model: "success",
+  write_model: "primary",
+  schema: "warning",
+  auth: "danger",
+  integration: "primary",
+  release: "danger",
+  // goal console — modes
+  inspect: "neutral",
+  plan: "primary",
+  implement: "primary",
+  verify: "primary",
+  operate: "danger",
+  // goal console — verdicts
+  allow: "success",
+  requires_approval: "warning",
+  refuse: "danger",
+  // goal console — authority levels
+  A0_READ_ONLY: "success",
+  A1_DRAFT: "primary",
+  A2_WRITE_OWN: "primary",
+  A3_WRITE_SHARED: "warning",
+  A4_SCHEMA: "warning",
+  A5_DESTRUCTIVE: "danger",
+  A6_AUTH: "danger",
+  A7_COMMIT: "danger",
+  A8_PUSH: "danger",
+  A9_RELEASE: "danger",
+  // loop run status
+  completed: "success",
+  stopped: "danger",
+  // goal status
+  classified: "primary",
+  converted: "success",
+  dismissed: "neutral",
 }
 
 const toneClasses: Record<Tone, string> = {
