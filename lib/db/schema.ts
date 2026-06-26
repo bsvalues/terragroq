@@ -68,6 +68,8 @@ export const verification = pgTable("verification", {
 /* ------------------------------------------------------------------ */
 
 // Memory: durable facts about the operator and their world, embedded for recall.
+// Authority lifecycle (Track B governance):
+//   intake | unreviewed | working | reviewed | canon | deprecated | superseded | archived
 export const memoryFact = pgTable("memory_fact", {
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
@@ -75,52 +77,107 @@ export const memoryFact = pgTable("memory_fact", {
   kind: text("kind").default("fact").notNull(), // fact | preference | identity | relationship
   source: text("source"),
   confidence: text("confidence").default("medium").notNull(), // low | medium | high
+  authority: text("authority").default("unreviewed").notNull(),
+  stale: boolean("stale").default(false).notNull(),
   tags: text("tags").array().default([]).notNull(),
   pinned: boolean("pinned").default(false).notNull(),
   embedding: vector("embedding", { dimensions: 1536 }),
+  reviewedAt: timestamp("reviewedAt"),
+  lastUsedAt: timestamp("lastUsedAt"),
+  supersededById: integer("supersededById"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
 
 // Decisions: the decision register (ADR-style) with status lifecycle.
+// status:    proposed | accepted | superseded | rejected
+// authority: binding (enforced, injected into agent context) | advisory | informational
 export const decision = pgTable("decision", {
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
+  ref: text("ref"), // ADR-0001 style human reference
   title: text("title").notNull(),
   context: text("context"),
   decision: text("decision").notNull(),
   rationale: text("rationale"),
   consequences: text("consequences"),
-  status: text("status").default("proposed").notNull(), // proposed | accepted | superseded | rejected
+  status: text("status").default("proposed").notNull(),
+  authority: text("authority").default("advisory").notNull(),
+  owner: text("owner").default("Bill").notNull(),
+  scope: text("scope"),
+  evidence: text("evidence").array().default([]).notNull(),
+  tags: text("tags").array().default([]).notNull(),
+  locked: boolean("locked").default(false).notNull(), // seeded governance decisions
+  supersedesId: integer("supersedesId"),
+  supersededById: integer("supersededById"),
+  reviewAt: timestamp("reviewAt"),
   decidedAt: timestamp("decidedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
 
-// Doctrine: the operating principles / rules that govern behavior.
+// Doctrine: machine-readable operating rules that govern behavior.
+// status: active | superseded | retired
 export const doctrine = pgTable("doctrine", {
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
+  ref: text("ref"), // RULE-0001 style human reference
   title: text("title").notNull(),
   statement: text("statement").notNull(),
   category: text("category").default("principle").notNull(), // principle | policy | guardrail
+  scope: text("scope"),
+  status: text("status").default("active").notNull(),
   priority: integer("priority").default(0).notNull(),
   active: boolean("active").default(true).notNull(),
+  allowed: text("allowed").array().default([]).notNull(),
+  forbidden: text("forbidden").array().default([]).notNull(),
+  requiresApproval: text("requiresApproval").array().default([]).notNull(),
+  evidence: text("evidence").array().default([]).notNull(),
+  owner: text("owner").default("Bill").notNull(),
+  locked: boolean("locked").default(false).notNull(), // seeded doctrine
+  supersedesId: integer("supersedesId"),
+  supersededById: integer("supersededById"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
 
-// Work Orders: governed units of work.
+// Work Orders: governed units of work (Track E — Work Order Engine).
+// status lifecycle (8): draft | proposed | approved | active | blocked | review | closed | aborted
 export const workOrder = pgTable("work_order", {
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
+  ref: text("ref"), // WO-0001 style human reference
   title: text("title").notNull(),
   description: text("description"),
-  status: text("status").default("backlog").notNull(), // backlog | in_progress | blocked | done
+  // The WO object (operator-grade contract)
+  goal: text("goal"),
+  loop: text("loop"), // the execution loop discipline for this WO
+  scope: text("scope"),
+  nonGoals: text("nonGoals").array().default([]).notNull(),
+  allowedFiles: text("allowedFiles").array().default([]).notNull(),
+  forbiddenFiles: text("forbiddenFiles").array().default([]).notNull(),
+  validators: text("validators").array().default([]).notNull(),
+  stopConditions: text("stopConditions").array().default([]).notNull(),
+  lane: text("lane"), // e.g. "A — docs only", "client surface only"
+  phase: text("phase"),
+  status: text("status").default("draft").notNull(),
   priority: text("priority").default("medium").notNull(), // low | medium | high | critical
   assignee: text("assignee"),
   linkedDecisionId: integer("linkedDecisionId"),
+  // Evidence & closure
+  evidence: text("evidence").array().default([]).notNull(),
+  result: text("result"), // PASS | FAIL | PARTIAL | null
+  commitRef: text("commitRef"),
+  tagRef: text("tagRef"),
+  // Release gates (default closed — require explicit approval)
+  commitAllowed: boolean("commitAllowed").default(false).notNull(),
+  tagAllowed: boolean("tagAllowed").default(false).notNull(),
+  pushAllowed: boolean("pushAllowed").default(false).notNull(),
+  // Lineage
+  supersedesId: integer("supersedesId"),
+  supersededById: integer("supersededById"),
   dueAt: timestamp("dueAt"),
+  closedAt: timestamp("closedAt"),
   completedAt: timestamp("completedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),

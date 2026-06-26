@@ -8,7 +8,12 @@ const toneMap: Record<string, Tone> = {
   accepted: "success",
   superseded: "neutral",
   rejected: "danger",
-  // work orders
+  // work orders (8-status lifecycle)
+  draft: "neutral",
+  approved: "primary",
+  review: "warning",
+  closed: "success",
+  aborted: "danger",
   backlog: "neutral",
   in_progress: "primary",
   blocked: "danger",
@@ -21,6 +26,24 @@ const toneMap: Record<string, Tone> = {
   // confidence
   active: "success",
   inactive: "neutral",
+  // memory authority lifecycle
+  intake: "neutral",
+  unreviewed: "warning",
+  working: "primary",
+  reviewed: "primary",
+  canon: "success",
+  deprecated: "neutral",
+  archived: "neutral",
+  stale: "warning",
+  // decision authority
+  binding: "danger",
+  advisory: "primary",
+  informational: "neutral",
+  // doctrine category + status
+  principle: "primary",
+  policy: "primary",
+  guardrail: "danger",
+  retired: "neutral",
 }
 
 const toneClasses: Record<Tone, string> = {

@@ -7,6 +7,7 @@ import {
   Library,
   MessageSquare,
   Activity,
+  Cpu,
   type LucideIcon,
 } from "lucide-react"
 
@@ -26,4 +27,5 @@ export const navItems: NavItem[] = [
   { href: "/work-orders", label: "Work Orders", icon: ClipboardList, group: "Registers" },
   { href: "/corpus", label: "Corpus", icon: Library, group: "Knowledge" },
   { href: "/audit", label: "Audit Log", icon: Activity, group: "Knowledge" },
+  { href: "/runtime", label: "Runtime", icon: Cpu, group: "Knowledge" },
 ]

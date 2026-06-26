@@ -8,7 +8,7 @@ export default async function WorkOrdersPage() {
     <>
       <PageHeader
         title="Work Orders"
-        description="Governed units of work tracked across a status board from backlog to done."
+        description="Governed units of work — each a contract run through the draft → proposed → approved → active → review → closed lifecycle, gated by doctrine."
       />
       <WorkOrdersView initial={orders} />
     </>

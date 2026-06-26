@@ -8,7 +8,7 @@ export default async function DecisionsPage() {
     <>
       <PageHeader
         title="Decisions"
-        description="An append-only register of consequential calls. Capture context, rationale, and consequences so intent is never lost."
+        description="Structured ADR-style register. Decisions carry authority, evidence, and supersession lineage — binding decisions are injected into the agent's context."
       />
       <DecisionsView initial={decisions} />
     </>
