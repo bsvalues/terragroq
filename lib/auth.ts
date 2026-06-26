@@ -31,9 +31,16 @@ export const auth = betterAuth({
   ...(process.env.NODE_ENV === "development"
     ? {
         advanced: {
+          // The v0 preview renders the app inside a cross-site iframe. Browsers
+          // block ordinary third-party cookies there, which silently drops the
+          // session cookie and bounces every sign-in/sign-up back to /sign-in.
+          // SameSite=None + Secure + Partitioned (CHIPS) lets the cookie be
+          // stored in the partitioned (per-top-site) jar, so auth works in the
+          // iframe even with third-party cookies disabled.
           defaultCookieAttributes: {
             sameSite: "none" as const,
             secure: true,
+            partitioned: true,
           },
         },
       }
