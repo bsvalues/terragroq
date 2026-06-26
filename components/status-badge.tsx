@@ -21,6 +21,15 @@ const toneMap: Record<string, Tone> = {
   // confidence
   active: "success",
   inactive: "neutral",
+  // memory authority lifecycle
+  intake: "neutral",
+  unreviewed: "warning",
+  working: "primary",
+  reviewed: "primary",
+  canon: "success",
+  deprecated: "neutral",
+  archived: "neutral",
+  stale: "warning",
 }
 
 const toneClasses: Record<Tone, string> = {

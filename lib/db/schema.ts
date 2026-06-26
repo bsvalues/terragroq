@@ -68,6 +68,8 @@ export const verification = pgTable("verification", {
 /* ------------------------------------------------------------------ */
 
 // Memory: durable facts about the operator and their world, embedded for recall.
+// Authority lifecycle (Track B governance):
+//   intake | unreviewed | working | reviewed | canon | deprecated | superseded | archived
 export const memoryFact = pgTable("memory_fact", {
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
@@ -75,9 +77,14 @@ export const memoryFact = pgTable("memory_fact", {
   kind: text("kind").default("fact").notNull(), // fact | preference | identity | relationship
   source: text("source"),
   confidence: text("confidence").default("medium").notNull(), // low | medium | high
+  authority: text("authority").default("unreviewed").notNull(),
+  stale: boolean("stale").default(false).notNull(),
   tags: text("tags").array().default([]).notNull(),
   pinned: boolean("pinned").default(false).notNull(),
   embedding: vector("embedding", { dimensions: 1536 }),
+  reviewedAt: timestamp("reviewedAt"),
+  lastUsedAt: timestamp("lastUsedAt"),
+  supersededById: integer("supersededById"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })

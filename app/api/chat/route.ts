@@ -47,10 +47,12 @@ export async function POST(req: Request) {
     ...memories.map((m, i) => ({
       ref: corpus.length + i + 1,
       kind: "memory" as const,
-      title: `Memory (${m.kind})`,
+      title: `Memory (${m.kind}) · ${m.authority}${m.stale ? " · stale" : ""}`,
       source: null as string | null,
       snippet: m.content,
       similarity: m.similarity,
+      authority: m.authority,
+      stale: m.stale,
     })),
   ]
 
@@ -64,7 +66,12 @@ export async function POST(req: Request) {
   const sourcesBlock =
     sources.length > 0
       ? sources
-          .map((s) => `[${s.ref}] (${s.kind}) ${s.title}\n${s.snippet}`)
+          .map((s) => {
+            const authority =
+              s.kind === "memory" && "authority" in s ? ` authority=${s.authority}` : ""
+            const stale = s.kind === "memory" && "stale" in s && s.stale ? " STALE" : ""
+            return `[${s.ref}] (${s.kind}${authority}${stale}) ${s.title}\n${s.snippet}`
+          })
           .join("\n\n")
       : "(no relevant sources retrieved)"
 
@@ -79,6 +86,7 @@ ${sourcesBlock}
 RULES:
 - Answer ONLY from the retrieved context and doctrine. Do not invent facts about the operator.
 - Cite every claim drawn from context using bracketed numbers like [1] or [2], matching the source numbers above.
+- Respect memory authority: 'canon' and 'reviewed' facts are trusted; 'unreviewed' facts are unverified intake — when you rely on one, note that it is unverified. Treat any source flagged STALE with caution and surface the caveat.
 - If the context does not contain the answer, say so plainly and suggest committing a memory or ingesting a document. Never fabricate citations.
 - Be concise, direct, and operator-grade. No filler.`
 

@@ -8,7 +8,7 @@ export default async function MemoryPage() {
     <>
       <PageHeader
         title="Memory"
-        description="Durable, embedded facts about you and your world. Pinned facts are prioritized; all are searchable by meaning."
+        description="Governed second-brain memory. Facts move through review to canon; only trusted authority states feed recall, and provenance is never destroyed."
       />
       <MemoryView initial={facts} />
     </>
