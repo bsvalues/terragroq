@@ -6,7 +6,17 @@ import type { WorkOrder } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { logEvent } from "@/lib/registers/events"
 import { validateAction } from "@/app/actions/doctrine"
-import { canTransition, buildClosureReport, type WoStatus } from "@/lib/work-orders/lifecycle"
+import {
+  canTransition,
+  buildClosureReport,
+  checkApprovalReadiness,
+  requiresExplicitApproval,
+  type WoStatus,
+} from "@/lib/work-orders/lifecycle"
+import { checkAgentPermission } from "@/lib/goal/agent-matrix"
+import { createAuthorityGrant } from "@/app/actions/authority"
+import { appendGovernanceEvent } from "@/lib/governance/events"
+import { authorityRank } from "@/lib/goal/taxonomy"
 import { and, desc, eq } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
@@ -72,10 +82,13 @@ export async function createWorkOrder(input: {
   forbiddenFiles?: string
   validators?: string
   stopConditions?: string
+  acceptanceCriteria?: string
   lane?: string
   phase?: string
   priority?: string
   assignee?: string
+  agent?: string
+  authorityLevel?: string
   linkedDecisionId?: number
 }) {
   const userId = await getUserId()
@@ -95,11 +108,14 @@ export async function createWorkOrder(input: {
       forbiddenFiles: splitList(input.forbiddenFiles),
       validators: splitList(input.validators),
       stopConditions: splitList(input.stopConditions),
+      acceptanceCriteria: splitList(input.acceptanceCriteria),
       lane: input.lane ?? null,
       phase: input.phase ?? null,
       priority: input.priority ?? "medium",
       status: "draft",
       assignee: input.assignee ?? null,
+      agent: input.agent ?? null,
+      authorityLevel: input.authorityLevel ?? "A0_READ_ONLY",
       linkedDecisionId: input.linkedDecisionId ?? null,
     })
     .returning()
@@ -117,14 +133,20 @@ export async function createWorkOrder(input: {
 
 export type TransitionResult =
   | { ok: true; status: WoStatus }
-  | { ok: false; reason: string; verdict?: Awaited<ReturnType<typeof validateAction>> }
+  | {
+      ok: false
+      reason: string
+      missing?: string[]
+      verdict?: Awaited<ReturnType<typeof validateAction>>
+    }
 
-// Governed status transition. Validates the transition graph and, for the
-// activation step, checks the WO goal/scope against active doctrine.
+// Governed status transition. Validates the transition graph and enforces the
+// playbook's two gates: the approval-readiness gate (§9.2) on AUTHORIZED and
+// the doctrine gate on activation.
 export async function transitionWorkOrder(
   id: number,
   to: WoStatus,
-  opts?: { approveDoctrine?: boolean },
+  opts?: { approveDoctrine?: boolean; grantAuthority?: boolean },
 ): Promise<TransitionResult> {
   const userId = await getUserId()
   const wo = await requireOwn(id, userId)
@@ -133,6 +155,34 @@ export async function transitionWorkOrder(
     return {
       ok: false,
       reason: `Illegal transition: ${wo.status} → ${to}`,
+    }
+  }
+
+  // Approval gate (§9.2): a WO may not become AUTHORIZED unless every
+  // precondition is satisfied, AND authority above A1 needs an explicit grant.
+  if (to === "approved") {
+    const readiness = checkApprovalReadiness(wo)
+    if (!readiness.ready) {
+      return {
+        ok: false,
+        reason: "Not ready for authorization",
+        missing: readiness.missing,
+      }
+    }
+    // Agent Permission Matrix (§14): the WO's authority must be permitted for
+    // its assigned agent.
+    if (wo.agent) {
+      const perm = checkAgentPermission(wo.agent, wo.authorityLevel)
+      if (!perm.allowed) {
+        return { ok: false, reason: perm.reason, missing: [perm.reason] }
+      }
+    }
+    if (requiresExplicitApproval(wo.authorityLevel) && !opts?.grantAuthority) {
+      return {
+        ok: false,
+        reason: `Authority ${wo.authorityLevel} requires explicit operator approval to grant`,
+        missing: [`Grant ${wo.authorityLevel} authority explicitly`],
+      }
     }
   }
 
@@ -159,25 +209,112 @@ export async function transitionWorkOrder(
   }
 
   const terminal = to === "closed" || to === "aborted"
+  // On authorization, explicitly grant the requested authority and stamp the
+  // approver — this is the only place authorityGranted is ever set.
+  const granting = to === "approved"
   await db
     .update(workOrder)
     .set({
       status: to,
+      authorityGranted: granting ? wo.authorityLevel : wo.authorityGranted,
+      approvedBy: granting ? userId : wo.approvedBy,
+      approvedAt: granting ? new Date() : wo.approvedAt,
       closedAt: terminal ? new Date() : wo.closedAt,
       completedAt: to === "closed" ? new Date() : wo.completedAt,
       updatedAt: new Date(),
     })
     .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
 
+  // WO-011: authorization above A0 mints a durable AuthorityGrant record — the
+  // WO's authorityGranted field is a display mirror, not the source of truth.
+  // Loops consult the grant registry, so without this record no execute loop runs.
+  if (granting && authorityRank(wo.authorityLevel) > authorityRank("A0_READ_ONLY")) {
+    await createAuthorityGrant({
+      workOrderId: id,
+      grantedTo: wo.agent ?? "operator",
+      authorityLevel: wo.authorityLevel,
+      scope: wo.scope ?? undefined,
+      allowedActions: wo.allowedFiles,
+      blockedActions: wo.forbiddenFiles,
+      reason: `Granted on authorization of ${wo.ref ?? `#${id}`}`,
+    })
+  }
+
+  await appendGovernanceEvent({
+    userId,
+    eventType: granting ? "WO_AUTHORIZED" : "WO_TRANSITION",
+    entityType: "work_order",
+    entityId: id,
+    reason: granting ? `Authorized at ${wo.authorityLevel}` : `${wo.status} → ${to}`,
+    before: { status: wo.status },
+    after: { status: to },
+  })
   await logEvent({
     userId,
-    type: "work_order.transition",
-    summary: `${wo.ref ?? `#${id}`}: ${wo.status} → ${to}`,
+    type: granting ? "work_order.authorized" : "work_order.transition",
+    summary: granting
+      ? `${wo.ref ?? `#${id}`}: AUTHORIZED at ${wo.authorityLevel}`
+      : `${wo.ref ?? `#${id}`}: ${wo.status} → ${to}`,
     register: "work-orders",
     refId: id,
   })
   revalidatePath("/work-orders")
   return { ok: true, status: to }
+}
+
+// Complete or amend the WO contract while it is still a draft/proposed. This is
+// how an operator fills the fields the approval gate (§9.2) requires.
+export async function updateWorkOrderContract(
+  id: number,
+  input: {
+    scope?: string
+    authorityLevel?: string
+    agent?: string | null
+    acceptanceCriteria?: string
+    validators?: string
+    forbiddenFiles?: string
+    allowedFiles?: string
+    stopConditions?: string
+  },
+) {
+  const userId = await getUserId()
+  const wo = await requireOwn(id, userId)
+  if (wo.status !== "draft" && wo.status !== "proposed") {
+    throw new Error("Contract can only be edited while the WO is a draft or proposed")
+  }
+  await db
+    .update(workOrder)
+    .set({
+      scope: input.scope ?? wo.scope,
+      authorityLevel: input.authorityLevel ?? wo.authorityLevel,
+      agent: input.agent === undefined ? wo.agent : input.agent,
+      acceptanceCriteria:
+        input.acceptanceCriteria !== undefined
+          ? splitList(input.acceptanceCriteria)
+          : wo.acceptanceCriteria,
+      validators:
+        input.validators !== undefined ? splitList(input.validators) : wo.validators,
+      forbiddenFiles:
+        input.forbiddenFiles !== undefined
+          ? splitList(input.forbiddenFiles)
+          : wo.forbiddenFiles,
+      allowedFiles:
+        input.allowedFiles !== undefined ? splitList(input.allowedFiles) : wo.allowedFiles,
+      stopConditions:
+        input.stopConditions !== undefined
+          ? splitList(input.stopConditions)
+          : wo.stopConditions,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
+  await logEvent({
+    userId,
+    type: "work_order.contract",
+    summary: `${wo.ref ?? `#${id}`}: contract updated`,
+    register: "work-orders",
+    refId: id,
+  })
+  revalidatePath("/work-orders")
 }
 
 export async function linkWorkOrderEvidence(id: number, evidence: string) {

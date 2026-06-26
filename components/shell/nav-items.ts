@@ -8,6 +8,8 @@ import {
   MessageSquare,
   Activity,
   Cpu,
+  Crosshair,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react"
 
@@ -20,6 +22,8 @@ export type NavItem = {
 
 export const navItems: NavItem[] = [
   { href: "/", label: "Overview", icon: LayoutDashboard, group: "Command" },
+  { href: "/goal-console", label: "Goal Console", icon: Crosshair, group: "Command" },
+  { href: "/governance", label: "Governance", icon: ShieldCheck, group: "Command" },
   { href: "/chat", label: "Operator Chat", icon: MessageSquare, group: "Command" },
   { href: "/memory", label: "Memory", icon: BrainCircuit, group: "Registers" },
   { href: "/decisions", label: "Decisions", icon: GitBranch, group: "Registers" },

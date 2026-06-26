@@ -10,12 +10,20 @@ import {
   recordWorkOrderResult,
   setWorkOrderGate,
   getClosureReport,
+  updateWorkOrderContract,
 } from "@/app/actions/work-orders"
+import { recordEvidence } from "@/app/actions/evidence"
+import { runGovernedLoop } from "@/app/actions/loops"
 import {
   canTransition,
+  checkApprovalReadiness,
+  requiresExplicitApproval,
   WO_STATUSES,
   type WoStatus,
 } from "@/lib/work-orders/lifecycle"
+import { AUTHORITY_LEVELS, authority as findAuthority } from "@/lib/goal/taxonomy"
+import { AGENTS, agent as findAgent } from "@/lib/goal/agent-matrix"
+import { LOOP_TYPES, type LoopTypeId } from "@/lib/goal/loop-engine"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -46,9 +54,14 @@ import {
   ClipboardList,
   ArrowRight,
   ShieldAlert,
+  ShieldCheck,
   Paperclip,
   FileText,
   Copy,
+  Repeat,
+  Bot,
+  CheckCircle2,
+  CircleAlert,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -74,7 +87,7 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
   const [, startTransition] = useTransition()
 
   // create form
-  const [form, setForm] = useState({
+  const emptyForm = {
     title: "",
     goal: "",
     lane: "",
@@ -85,29 +98,19 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
     forbiddenFiles: "",
     validators: "",
     stopConditions: "",
+    acceptanceCriteria: "",
     loop: "",
     priority: "medium",
     assignee: "",
-  })
+    authorityLevel: "A0_READ_ONLY",
+    agent: "none",
+  }
+  const [form, setForm] = useState(emptyForm)
   const set = (k: keyof typeof form, v: string) =>
     setForm((p) => ({ ...p, [k]: v }))
 
   function reset() {
-    setForm({
-      title: "",
-      goal: "",
-      lane: "",
-      phase: "",
-      scope: "",
-      nonGoals: "",
-      allowedFiles: "",
-      forbiddenFiles: "",
-      validators: "",
-      stopConditions: "",
-      loop: "",
-      priority: "medium",
-      assignee: "",
-    })
+    setForm(emptyForm)
   }
 
   async function handleCreate() {
@@ -124,9 +127,12 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
         forbiddenFiles: form.forbiddenFiles || undefined,
         validators: form.validators || undefined,
         stopConditions: form.stopConditions || undefined,
+        acceptanceCriteria: form.acceptanceCriteria || undefined,
         loop: form.loop || undefined,
         priority: form.priority,
         assignee: form.assignee || undefined,
+        authorityLevel: form.authorityLevel,
+        agent: form.agent === "none" ? undefined : form.agent,
       })
       setRows((prev) => [row, ...prev])
       toast.success(`Drafted ${row.ref ?? "work order"}`)
@@ -145,9 +151,9 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
   async function handleTransition(
     wo: WorkOrder,
     to: WoStatus,
-    approveDoctrine = false,
+    opts: { approveDoctrine?: boolean; grantAuthority?: boolean } = {},
   ) {
-    const res = await transitionWorkOrder(wo.id, to, { approveDoctrine })
+    const res = await transitionWorkOrder(wo.id, to, opts)
     if (!res.ok) {
       if (res.verdict && res.verdict.verdict === "forbidden") {
         const m = res.verdict.matches[0]
@@ -161,10 +167,26 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
           {
             action: {
               label: "Approve & activate",
-              onClick: () => handleTransition(wo, to, true),
+              onClick: () => handleTransition(wo, to, { ...opts, approveDoctrine: true }),
             },
           },
         )
+      } else if (
+        to === "approved" &&
+        res.missing &&
+        requiresExplicitApproval(wo.authorityLevel) &&
+        res.missing.length === 1 &&
+        res.missing[0].startsWith("Grant ")
+      ) {
+        // Contract is complete; only the explicit authority grant remains.
+        toast.warning(`Authorize ${wo.authorityLevel}? This grants elevated authority.`, {
+          action: {
+            label: "Grant & authorize",
+            onClick: () => handleTransition(wo, to, { ...opts, grantAuthority: true }),
+          },
+        })
+      } else if (res.missing && res.missing.length > 0) {
+        toast.error(`Not ready to authorize: ${res.missing.join("; ")}`)
       } else {
         toast.error(res.reason)
       }
@@ -172,13 +194,20 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
     }
     const now = new Date()
     const terminal = to === "closed" || to === "aborted"
+    const granting = to === "approved"
     patch({
       ...wo,
       status: to,
+      authorityGranted: granting ? wo.authorityLevel : wo.authorityGranted,
+      approvedAt: granting ? now : wo.approvedAt,
       closedAt: terminal ? now : wo.closedAt,
       completedAt: to === "closed" ? now : wo.completedAt,
     })
-    toast.success(`${wo.ref ?? `#${wo.id}`} → ${COLUMN_LABEL[to]}`)
+    toast.success(
+      granting
+        ? `${wo.ref ?? `#${wo.id}`} AUTHORIZED at ${wo.authorityLevel}`
+        : `${wo.ref ?? `#${wo.id}`} → ${COLUMN_LABEL[to]}`,
+    )
   }
 
   function handleDelete(id: number) {
@@ -282,6 +311,51 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
                     placeholder="tsc --noEmit&#10;pnpm build"
                   />
                 </Field>
+                <Field
+                  label="Acceptance criteria"
+                  hint="Required to authorize. One per line."
+                >
+                  <Textarea
+                    value={form.acceptanceCriteria}
+                    onChange={(e) => set("acceptanceCriteria", e.target.value)}
+                    rows={2}
+                    placeholder="p95 latency < 50ms&#10;all validators green"
+                  />
+                </Field>
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Authority requested" hint="A0–A9 (§6).">
+                    <Select
+                      value={form.authorityLevel}
+                      onValueChange={(v) => set("authorityLevel", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {AUTHORITY_LEVELS.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {a.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="Agent" hint="Permission matrix (§14).">
+                    <Select value={form.agent} onValueChange={(v) => set("agent", v)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        {AGENTS.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {a.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
                 <Field label="Stop conditions">
                   <Textarea
                     value={form.stopConditions}
@@ -447,10 +521,34 @@ function DetailDialog({
 }) {
   const [evidence, setEvidence] = useState("")
   const [report, setReport] = useState<string | null>(null)
+  // Contract completion (draft/proposed only)
+  const [contract, setContract] = useState({
+    authorityLevel: wo?.authorityLevel ?? "A0_READ_ONLY",
+    agent: wo?.agent ?? "none",
+    acceptanceCriteria: wo?.acceptanceCriteria.join("\n") ?? "",
+    validators: wo?.validators.join("\n") ?? "",
+    forbiddenFiles: wo?.forbiddenFiles.join("\n") ?? "",
+  })
+  // Governed loop runner
+  const [loopTypeId, setLoopTypeId] = useState<LoopTypeId>("read")
+  const [loopAuthority, setLoopAuthority] = useState("A0_READ_ONLY")
+  const [loopResult, setLoopResult] = useState<Awaited<ReturnType<typeof runGovernedLoop>> | null>(
+    null,
+  )
+  // Structured evidence record (§11)
+  const [ev, setEv] = useState({
+    result: "PASS",
+    filesChanged: "",
+    validators: "",
+    knownFailures: "",
+    nextValidMove: "",
+  })
 
   if (!wo) return null
 
   const nextStates = WO_STATUSES.filter((s) => canTransition(wo.status, s))
+  const readiness = checkApprovalReadiness(wo)
+  const isEditable = wo.status === "draft" || wo.status === "proposed"
 
   async function addEvidence() {
     if (!wo || !evidence.trim()) return
@@ -458,6 +556,65 @@ function DetailDialog({
     onPatch({ ...wo, evidence: [...wo.evidence, evidence.trim()] })
     setEvidence("")
     toast.success("Evidence linked")
+  }
+
+  async function saveContract() {
+    if (!wo) return
+    try {
+      await updateWorkOrderContract(wo.id, {
+        authorityLevel: contract.authorityLevel,
+        agent: contract.agent === "none" ? null : contract.agent,
+        acceptanceCriteria: contract.acceptanceCriteria,
+        validators: contract.validators,
+        forbiddenFiles: contract.forbiddenFiles,
+      })
+      onPatch({
+        ...wo,
+        authorityLevel: contract.authorityLevel,
+        agent: contract.agent === "none" ? null : contract.agent,
+        acceptanceCriteria: splitLines(contract.acceptanceCriteria),
+        validators: splitLines(contract.validators),
+        forbiddenFiles: splitLines(contract.forbiddenFiles),
+      })
+      toast.success("Contract updated")
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update contract")
+    }
+  }
+
+  async function runLoop() {
+    if (!wo) return
+    try {
+      const row = await runGovernedLoop({
+        loopTypeId,
+        authority: loopAuthority as never,
+        workOrderId: wo.id,
+      })
+      setLoopResult(row)
+      toast[row.status === "completed" ? "success" : "warning"](
+        `${row.ref}: ${row.status === "completed" ? "completed" : "STOPPED"}`,
+      )
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Loop failed")
+    }
+  }
+
+  async function saveEvidenceRecord() {
+    if (!wo) return
+    try {
+      await recordEvidence({
+        workOrderId: wo.id,
+        result: ev.result as "PASS" | "FAIL" | "PARTIAL",
+        filesChanged: ev.filesChanged,
+        validators: ev.validators,
+        knownFailures: ev.knownFailures,
+        nextValidMove: ev.nextValidMove,
+      })
+      setEv({ result: "PASS", filesChanged: "", validators: "", knownFailures: "", nextValidMove: "" })
+      toast.success("Evidence record saved")
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to record evidence")
+    }
   }
 
   async function toggleGate(gate: "commit" | "tag" | "push", open: boolean) {
@@ -498,6 +655,21 @@ function DetailDialog({
           <DialogDescription className="flex flex-wrap items-center gap-2 pt-1">
             <StatusBadge value={wo.status} label={COLUMN_LABEL[wo.status]} />
             <StatusBadge value={wo.priority} />
+            <span className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+              {wo.authorityGranted ? (
+                <ShieldCheck className="h-2.5 w-2.5 text-success" />
+              ) : (
+                <ShieldAlert className="h-2.5 w-2.5" />
+              )}
+              {findAuthority(wo.authorityGranted ?? wo.authorityLevel)?.label ?? wo.authorityLevel}
+              {wo.authorityGranted ? " · granted" : " · requested"}
+            </span>
+            {wo.agent && (
+              <span className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                <Bot className="h-2.5 w-2.5" />
+                {findAgent(wo.agent)?.label ?? wo.agent}
+              </span>
+            )}
             {wo.result && (
               <span className="font-mono text-xs text-muted-foreground">
                 {wo.result}
@@ -555,6 +727,238 @@ function DetailDialog({
                   Link
                 </Button>
               </div>
+            </div>
+
+            <Separator />
+
+            {/* Authority & approval readiness (§6, §9) */}
+            <div className="flex flex-col gap-2">
+              <Label className="flex items-center gap-2">
+                <ShieldCheck className="h-3.5 w-3.5" />
+                Authority &amp; approval
+              </Label>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="rounded bg-muted px-2 py-1 font-mono text-[11px]">
+                  Requested: {findAuthority(wo.authorityLevel)?.label ?? wo.authorityLevel}
+                </span>
+                <span className="rounded bg-muted px-2 py-1 font-mono text-[11px]">
+                  Granted: {wo.authorityGranted ? findAuthority(wo.authorityGranted)?.label : "—"}
+                </span>
+              </div>
+              {wo.status === "proposed" && (
+                <ul className="flex flex-col gap-1">
+                  {(readiness.ready
+                    ? ["Ready for authorization"]
+                    : readiness.missing
+                  ).map((item, i) => (
+                    <li
+                      key={i}
+                      className="flex items-center gap-2 text-[11px] text-muted-foreground"
+                    >
+                      {readiness.ready ? (
+                        <CheckCircle2 className="h-3 w-3 shrink-0 text-success" />
+                      ) : (
+                        <CircleAlert className="h-3 w-3 shrink-0 text-warning" />
+                      )}
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {/* Complete the contract (draft/proposed only) */}
+            {isEditable && (
+              <>
+                <Separator />
+                <div className="flex flex-col gap-3">
+                  <Label className="flex items-center gap-2">
+                    <FileText className="h-3.5 w-3.5" />
+                    Complete contract
+                  </Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[11px] text-muted-foreground">Authority</span>
+                      <Select
+                        value={contract.authorityLevel}
+                        onValueChange={(v) => setContract((p) => ({ ...p, authorityLevel: v }))}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {AUTHORITY_LEVELS.map((a) => (
+                            <SelectItem key={a.id} value={a.id}>
+                              {a.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[11px] text-muted-foreground">Agent (§14)</span>
+                      <Select
+                        value={contract.agent}
+                        onValueChange={(v) => setContract((p) => ({ ...p, agent: v }))}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          {AGENTS.map((a) => (
+                            <SelectItem key={a.id} value={a.id}>
+                              {a.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <Textarea
+                    value={contract.acceptanceCriteria}
+                    onChange={(e) =>
+                      setContract((p) => ({ ...p, acceptanceCriteria: e.target.value }))
+                    }
+                    rows={2}
+                    placeholder="Acceptance criteria (one per line)"
+                    className="text-xs"
+                  />
+                  <Textarea
+                    value={contract.validators}
+                    onChange={(e) => setContract((p) => ({ ...p, validators: e.target.value }))}
+                    rows={2}
+                    placeholder="Validators (one per line)"
+                    className="text-xs"
+                  />
+                  <Textarea
+                    value={contract.forbiddenFiles}
+                    onChange={(e) => setContract((p) => ({ ...p, forbiddenFiles: e.target.value }))}
+                    rows={2}
+                    placeholder="Blocked actions / forbidden files (one per line)"
+                    className="text-xs"
+                  />
+                  <Button size="sm" variant="secondary" onClick={saveContract}>
+                    Save contract
+                  </Button>
+                </div>
+              </>
+            )}
+
+            <Separator />
+
+            {/* Governed loop runner (§8) */}
+            <div className="flex flex-col gap-3">
+              <Label className="flex items-center gap-2">
+                <Repeat className="h-3.5 w-3.5" />
+                Run governed loop
+              </Label>
+              <div className="grid grid-cols-2 gap-3">
+                <Select value={loopTypeId} onValueChange={(v) => setLoopTypeId(v as LoopTypeId)}>
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LOOP_TYPES.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={loopAuthority} onValueChange={setLoopAuthority}>
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AUTHORITY_LEVELS.map((a) => (
+                      <SelectItem key={a.id} value={a.id}>
+                        {a.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button size="sm" variant="secondary" onClick={runLoop}>
+                <Repeat className="h-3 w-3" />
+                Run loop
+              </Button>
+              {loopResult && (
+                <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-muted/40 p-3 text-[11px]">
+                  <div className="flex items-center gap-2 font-mono">
+                    <StatusBadge
+                      value={loopResult.status === "completed" ? "active" : "blocked"}
+                      label={loopResult.status === "completed" ? "COMPLETED" : "STOPPED"}
+                    />
+                    <span className="text-muted-foreground">
+                      {loopResult.ref} · {loopResult.loopType}
+                    </span>
+                  </div>
+                  {loopResult.stopReason && (
+                    <p className="text-warning">STOP: {loopResult.stopReason}</p>
+                  )}
+                  {loopResult.actionsTaken.length > 0 && (
+                    <p className="text-muted-foreground">
+                      Actions: {loopResult.actionsTaken.join("; ")}
+                    </p>
+                  )}
+                  {loopResult.evidenceCollected.length > 0 && (
+                    <p className="text-muted-foreground">
+                      Evidence: {loopResult.evidenceCollected.join("; ")}
+                    </p>
+                  )}
+                  <p className="text-muted-foreground">Next: {loopResult.nextValidMove}</p>
+                </div>
+              )}
+            </div>
+
+            <Separator />
+
+            {/* Structured evidence record (§11) */}
+            <div className="flex flex-col gap-3">
+              <Label className="flex items-center gap-2">
+                <Paperclip className="h-3.5 w-3.5" />
+                Evidence record (§11)
+              </Label>
+              <Select value={ev.result} onValueChange={(v) => setEv((p) => ({ ...p, result: v }))}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="PASS">PASS</SelectItem>
+                  <SelectItem value="PARTIAL">PARTIAL</SelectItem>
+                  <SelectItem value="FAIL">FAIL</SelectItem>
+                </SelectContent>
+              </Select>
+              <Textarea
+                value={ev.filesChanged}
+                onChange={(e) => setEv((p) => ({ ...p, filesChanged: e.target.value }))}
+                rows={2}
+                placeholder="Files changed (one per line)"
+                className="text-xs"
+              />
+              <Textarea
+                value={ev.validators}
+                onChange={(e) => setEv((p) => ({ ...p, validators: e.target.value }))}
+                rows={2}
+                placeholder="Validator results (one per line)"
+                className="text-xs"
+              />
+              <Input
+                value={ev.knownFailures}
+                onChange={(e) => setEv((p) => ({ ...p, knownFailures: e.target.value }))}
+                placeholder="Known failures (comma-separated)"
+                className="h-8 text-xs"
+              />
+              <Input
+                value={ev.nextValidMove}
+                onChange={(e) => setEv((p) => ({ ...p, nextValidMove: e.target.value }))}
+                placeholder="Next valid move"
+                className="h-8 text-xs"
+              />
+              <Button size="sm" variant="secondary" onClick={saveEvidenceRecord}>
+                Save evidence record
+              </Button>
             </div>
 
             <Separator />
@@ -674,6 +1078,13 @@ function DetailDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+function splitLines(v: string): string[] {
+  return v
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
 }
 
 function Block({ label, children }: { label: string; children: React.ReactNode }) {
