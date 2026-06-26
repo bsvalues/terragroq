@@ -44,6 +44,31 @@ const toneMap: Record<string, Tone> = {
   policy: "primary",
   guardrail: "danger",
   retired: "neutral",
+  // governance hardening — authority grants
+  revoked: "danger",
+  expired: "neutral",
+  // locks
+  released: "neutral",
+  HOLD: "warning",
+  STOP: "danger",
+  FREEZE: "primary",
+  // conflicts
+  open: "warning",
+  resolved: "success",
+  accepted_risk: "neutral",
+  // truth freshness
+  fresh: "success",
+  aging: "warning",
+  // agent claim classifications
+  SELF_REPORTED: "neutral",
+  EVIDENCE_BACKED: "success",
+  UNSUPPORTED: "warning",
+  CONFLICTING: "danger",
+  REQUIRES_VERIFICATION: "warning",
+  // not-now vault
+  parked: "neutral",
+  promoted: "success",
+  dropped: "neutral",
 }
 
 const toneClasses: Record<Tone, string> = {
