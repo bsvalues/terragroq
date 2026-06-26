@@ -50,7 +50,7 @@ export async function ingestDocument(input: {
         documentId: doc.id,
         chunkIndex: i,
         content: chunk,
-        embedding: toVectorLiteral(embeddings[i]) as unknown as number[],
+        embedding: embeddings[i],
       })),
     )
   }

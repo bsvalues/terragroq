@@ -38,7 +38,7 @@ export async function createMemoryFact(input: {
       confidence: input.confidence ?? "medium",
       tags: input.tags ?? [],
       pinned: input.pinned ?? false,
-      embedding: toVectorLiteral(embedding) as unknown as number[],
+      embedding,
     })
     .returning()
 
