@@ -211,6 +211,34 @@ export const documentChunk = pgTable("document_chunk", {
 })
 
 /* ------------------------------------------------------------------ */
+/* Goal register (Goal Console — the /goal + /loop operating system)   */
+/* ------------------------------------------------------------------ */
+
+// Every operator goal is classified and persisted here before any execution.
+// status: classified | converted | dismissed
+export const goal = pgTable("goal", {
+  id: serial("id").primaryKey(),
+  userId: text("userId").notNull(),
+  ref: text("ref"), // GOAL-0001 style human reference
+  command: text("command").notNull(),
+  // Classification (deterministic engine output)
+  lane: text("lane").notNull(),
+  mode: text("mode").notNull(),
+  risk: text("risk").notNull(), // low | medium | high | critical
+  authority: text("authority").default("A0_READ_ONLY").notNull(),
+  verdict: text("verdict").notNull(), // allow | requires_approval | refuse
+  rationale: text("rationale"),
+  mistakePatterns: text("mistakePatterns").array().default([]).notNull(),
+  matchedRules: text("matchedRules").array().default([]).notNull(),
+  recommendedMove: text("recommendedMove"),
+  requiresApproval: boolean("requiresApproval").default(false).notNull(),
+  linkedWorkOrderId: integer("linkedWorkOrderId"),
+  status: text("status").default("classified").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+})
+
+/* ------------------------------------------------------------------ */
 /* Audit / event log                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -231,3 +259,4 @@ export type Doctrine = typeof doctrine.$inferSelect
 export type WorkOrder = typeof workOrder.$inferSelect
 export type Document = typeof document.$inferSelect
 export type EventLog = typeof eventLog.$inferSelect
+export type Goal = typeof goal.$inferSelect
