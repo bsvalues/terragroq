@@ -30,6 +30,10 @@ const toneMap: Record<string, Tone> = {
   deprecated: "neutral",
   archived: "neutral",
   stale: "warning",
+  // decision authority
+  binding: "danger",
+  advisory: "primary",
+  informational: "neutral",
 }
 
 const toneClasses: Record<Tone, string> = {

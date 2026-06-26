@@ -90,15 +90,27 @@ export const memoryFact = pgTable("memory_fact", {
 })
 
 // Decisions: the decision register (ADR-style) with status lifecycle.
+// status:    proposed | accepted | superseded | rejected
+// authority: binding (enforced, injected into agent context) | advisory | informational
 export const decision = pgTable("decision", {
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
+  ref: text("ref"), // ADR-0001 style human reference
   title: text("title").notNull(),
   context: text("context"),
   decision: text("decision").notNull(),
   rationale: text("rationale"),
   consequences: text("consequences"),
-  status: text("status").default("proposed").notNull(), // proposed | accepted | superseded | rejected
+  status: text("status").default("proposed").notNull(),
+  authority: text("authority").default("advisory").notNull(),
+  owner: text("owner").default("Bill").notNull(),
+  scope: text("scope"),
+  evidence: text("evidence").array().default([]).notNull(),
+  tags: text("tags").array().default([]).notNull(),
+  locked: boolean("locked").default(false).notNull(), // seeded governance decisions
+  supersedesId: integer("supersedesId"),
+  supersededById: integer("supersededById"),
+  reviewAt: timestamp("reviewAt"),
   decidedAt: timestamp("decidedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
