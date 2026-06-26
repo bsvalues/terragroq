@@ -14,6 +14,9 @@ import {
   type WoStatus,
 } from "@/lib/work-orders/lifecycle"
 import { checkAgentPermission } from "@/lib/goal/agent-matrix"
+import { createAuthorityGrant } from "@/app/actions/authority"
+import { appendGovernanceEvent } from "@/lib/governance/events"
+import { authorityRank } from "@/lib/goal/taxonomy"
 import { and, desc, eq } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
@@ -222,6 +225,30 @@ export async function transitionWorkOrder(
     })
     .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
 
+  // WO-011: authorization above A0 mints a durable AuthorityGrant record — the
+  // WO's authorityGranted field is a display mirror, not the source of truth.
+  // Loops consult the grant registry, so without this record no execute loop runs.
+  if (granting && authorityRank(wo.authorityLevel) > authorityRank("A0_READ_ONLY")) {
+    await createAuthorityGrant({
+      workOrderId: id,
+      grantedTo: wo.agent ?? "operator",
+      authorityLevel: wo.authorityLevel,
+      scope: wo.scope ?? undefined,
+      allowedActions: wo.allowedFiles,
+      blockedActions: wo.forbiddenFiles,
+      reason: `Granted on authorization of ${wo.ref ?? `#${id}`}`,
+    })
+  }
+
+  await appendGovernanceEvent({
+    userId,
+    eventType: granting ? "WO_AUTHORIZED" : "WO_TRANSITION",
+    entityType: "work_order",
+    entityId: id,
+    reason: granting ? `Authorized at ${wo.authorityLevel}` : `${wo.status} → ${to}`,
+    before: { status: wo.status },
+    after: { status: to },
+  })
   await logEvent({
     userId,
     type: granting ? "work_order.authorized" : "work_order.transition",

@@ -16,6 +16,12 @@ import {
   lane as findLane,
 } from "./taxonomy"
 import { matchMistakePatterns, type MistakeMatch } from "./mistake-patterns"
+import { checkDoctrineRules, type DoctrineViolation } from "@/lib/governance/doctrine-rules"
+
+export interface ClassifyContext {
+  activeLocks?: { kind: string; scope?: string | null }[]
+  phase6Authorized?: boolean
+}
 
 export interface Classification {
   command: string
@@ -28,6 +34,7 @@ export interface Classification {
   recommendedMove: string
   requiresApproval: boolean
   mistakePatterns: MistakeMatch[]
+  doctrineViolations: DoctrineViolation[]
 }
 
 /* ------------------------------------------------------------------ */
@@ -89,7 +96,7 @@ function escalateRisk(base: RiskLevel, by: number): RiskLevel {
   return RISK_LEVELS[idx]
 }
 
-export function classifyGoal(command: string): Classification {
+export function classifyGoal(command: string, ctx?: ClassifyContext): Classification {
   const text = command.toLowerCase().trim()
   const laneId = detectLane(text)
   const modeId = detectMode(text)
@@ -97,6 +104,15 @@ export function classifyGoal(command: string): Classification {
   const mistakePatterns = matchMistakePatterns(command)
 
   const authority = deriveAuthority(laneId, modeId)
+
+  // WO-015: machine-checkable constitutional doctrine, evaluated against the
+  // current lock posture. Forbidden violations force a refusal regardless of lane.
+  const doctrine = checkDoctrineRules({
+    intent: command,
+    authority,
+    activeLocks: ctx?.activeLocks,
+    phase6Authorized: ctx?.phase6Authorized,
+  })
 
   // Risk starts at the lane baseline, escalates per blocking mistake pattern and
   // per authority rank above write-shared.
@@ -106,16 +122,25 @@ export function classifyGoal(command: string): Classification {
   if (blocking > 0) risk = "critical"
   else if (warns > 0) risk = escalateRisk(risk, 1)
   if (authorityRank(authority) >= 5) risk = escalateRisk(risk, 1)
+  if (doctrine.verdict === "forbidden") risk = "critical"
 
-  // Verdict: refuse on any blocking pattern; require approval above A1; else allow.
+  // Verdict: refuse on any blocking pattern or forbidden doctrine; require
+  // approval above A1 or on a doctrine approval-gate; else allow.
   let verdict: Verdict = "allow"
-  if (blocking > 0) verdict = "refuse"
-  else if (authorityRank(authority) > authorityRank("A1_DRAFT")) verdict = "requires_approval"
+  if (blocking > 0 || doctrine.verdict === "forbidden") verdict = "refuse"
+  else if (
+    authorityRank(authority) > authorityRank("A1_DRAFT") ||
+    doctrine.verdict === "requires_approval"
+  )
+    verdict = "requires_approval"
 
   const requiresApproval = verdict === "requires_approval"
 
-  const rationale = buildRationale(laneDef.label, modeId, authority, verdict, mistakePatterns)
-  const recommendedMove = buildRecommendedMove(verdict, modeId, mistakePatterns)
+  const rationale = buildRationale(laneDef.label, modeId, authority, verdict, mistakePatterns, doctrine.violations)
+  const recommendedMove =
+    doctrine.violations.length > 0 && verdict !== "allow"
+      ? doctrine.violations[0].safeAlternative
+      : buildRecommendedMove(verdict, modeId, mistakePatterns)
 
   return {
     command,
@@ -128,6 +153,7 @@ export function classifyGoal(command: string): Classification {
     recommendedMove,
     requiresApproval,
     mistakePatterns,
+    doctrineViolations: doctrine.violations,
   }
 }
 
@@ -137,10 +163,14 @@ function buildRationale(
   authority: AuthorityId,
   verdict: Verdict,
   mistakes: MistakeMatch[],
+  doctrineViolations: DoctrineViolation[] = [],
 ): string {
   const parts = [`Classified as ${laneLabel} work in ${mode} mode, requiring ${authority}.`]
   if (mistakes.length > 0) {
     parts.push(`Matched ${mistakes.length} mistake pattern(s): ${mistakes.map((m) => m.id).join(", ")}.`)
+  }
+  if (doctrineViolations.length > 0) {
+    parts.push(`Doctrine: ${doctrineViolations.map((v) => v.ruleId).join(", ")} (${doctrineViolations[0].message}).`)
   }
   if (verdict === "refuse") parts.push("A blocking pattern was matched — the goal is refused as stated.")
   else if (verdict === "requires_approval") parts.push("Authority above draft level — explicit operator approval required.")

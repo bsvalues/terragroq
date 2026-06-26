@@ -165,7 +165,8 @@ export const workOrder = pgTable("work_order", {
   assignee: text("assignee"),
   // Authority model (§6) + approval gate (§9)
   authorityLevel: text("authorityLevel").default("A0_READ_ONLY").notNull(), // requested A0–A9
-  authorityGranted: text("authorityGranted"), // set only on explicit approval
+  authorityGranted: text("authorityGranted"), // display mirror of the active grant
+  authorityGrantId: integer("authorityGrantId"), // FK → authority_grant (WO-011, source of truth)
   acceptanceCriteria: text("acceptanceCriteria").array().default([]).notNull(),
   agent: text("agent"), // codex | claude | copilot | local | null — Agent Permission Matrix (§14)
   approvedBy: text("approvedBy"),
@@ -294,7 +295,162 @@ export const evidenceRecord = pgTable("evidence_record", {
   deferredItems: text("deferredItems").array().default([]).notNull(),
   nextValidMove: text("nextValidMove"),
   notes: text("notes"),
+  // Tier-2/3 ledger: tamper-evidence hash + filesystem artifact path.
+  contentHash: text("contentHash"),
+  artifactPath: text("artifactPath"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
+})
+
+/* ------------------------------------------------------------------ */
+/* Governance hardening registers (WO-011..020)                        */
+/* ------------------------------------------------------------------ */
+
+// Append-only event log for tamper-evident governance history (event sourcing).
+// Never updated in place — every state change appends an event with before/after
+// content hashes so WilliamOS can reconstruct how a state came to exist.
+export const governanceEvent = pgTable("governance_event", {
+  id: serial("id").primaryKey(),
+  userId: text("userId").notNull(),
+  ref: text("ref"), // GEV-0001
+  eventType: text("eventType").notNull(), // AUTHORITY_GRANTED | AUTHORITY_REVOKED | LOCK_RELEASED | ...
+  entityType: text("entityType"), // authority_grant | lock_record | work_order | ...
+  entityId: text("entityId"),
+  actor: text("actor"),
+  reason: text("reason"),
+  beforeHash: text("beforeHash"),
+  afterHash: text("afterHash"),
+  evidenceId: integer("evidenceId"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+})
+
+// WO-011: durable Authority Grant Registry. Approval is NOT authority — an
+// explicit grant record must exist (active, unexpired, unrevoked) before any
+// loop or transition may act above A0.
+// status: active | expired | revoked
+export const authorityGrant = pgTable("authority_grant", {
+  id: serial("id").primaryKey(),
+  userId: text("userId").notNull(),
+  ref: text("ref"), // GRANT-0001
+  workOrderId: integer("workOrderId"),
+  grantedBy: text("grantedBy").notNull(),
+  grantedTo: text("grantedTo").default("operator").notNull(), // operator | codex | claude | ...
+  authorityLevel: text("authorityLevel").notNull(), // A0..A9
+  scope: text("scope"),
+  allowedActions: text("allowedActions").array().default([]).notNull(),
+  blockedActions: text("blockedActions").array().default([]).notNull(),
+  reason: text("reason"),
+  status: text("status").default("active").notNull(),
+  expiresAt: timestamp("expiresAt"),
+  revokedAt: timestamp("revokedAt"),
+  revokedBy: text("revokedBy"),
+  revokeReason: text("revokeReason"),
+  contentHash: text("contentHash"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+})
+
+// WO-014: Current Truth with freshness + confidence categories. Volatile truth
+// must be rechecked before mutation/commit/push/tag/release.
+// truthType: STATIC | SESSION | VOLATILE | EVIDENCE | LOCK | UNKNOWN | STALE | ASSUMED
+// freshness: fresh | aging | stale
+export const truthClaim = pgTable("truth_claim", {
+  id: serial("id").primaryKey(),
+  userId: text("userId").notNull(),
+  ref: text("ref"), // TRUTH-0001
+  claim: text("claim").notNull(),
+  system: text("system"),
+  source: text("source"),
+  truthType: text("truthType").default("UNKNOWN").notNull(),
+  confidence: text("confidence").default("medium").notNull(), // low | medium | high
+  freshness: text("freshness").default("fresh").notNull(),
+  evidenceId: integer("evidenceId"),
+  verificationRequiredBefore: text("verificationRequiredBefore").array().default([]).notNull(),
+  capturedAt: timestamp("capturedAt").defaultNow().notNull(),
+  expiresAt: timestamp("expiresAt"),
+  status: text("status").default("active").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+})
+
+// WO-016: agent claims are untrusted until verified.
+// classification: SELF_REPORTED | EVIDENCE_BACKED | UNSUPPORTED | CONFLICTING | REQUIRES_VERIFICATION
+export const agentClaim = pgTable("agent_claim", {
+  id: serial("id").primaryKey(),
+  userId: text("userId").notNull(),
+  ref: text("ref"), // CLAIM-0001
+  agent: text("agent").notNull(),
+  claim: text("claim").notNull(),
+  classification: text("classification").default("REQUIRES_VERIFICATION").notNull(),
+  workOrderId: integer("workOrderId"),
+  evidenceId: integer("evidenceId"),
+  command: text("command"),
+  repo: text("repo"),
+  branch: text("branch"),
+  head: text("head"),
+  conflictId: integer("conflictId"),
+  status: text("status").default("open").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+})
+
+// WO-018: Conflict Register. High-risk unresolved conflicts block loops.
+// status: open | resolved | accepted_risk
+export const conflictRecord = pgTable("conflict_record", {
+  id: serial("id").primaryKey(),
+  userId: text("userId").notNull(),
+  ref: text("ref"), // CONFLICT-0001
+  detectedBetween: text("detectedBetween").notNull(),
+  severity: text("severity").default("medium").notNull(), // low | medium | high | critical
+  system: text("system"),
+  workOrderId: integer("workOrderId"),
+  doctrineRule: text("doctrineRule"),
+  description: text("description"),
+  resolution: text("resolution"),
+  resolvedBy: text("resolvedBy"),
+  resolvedAt: timestamp("resolvedAt"),
+  status: text("status").default("open").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+})
+
+// WO-020: explicit locks (HOLD/STOP/FREEZE) with a deliberate release protocol.
+// Vague language can never release a lock; release requires reason + posture.
+// kind: HOLD | STOP | FREEZE   status: active | released
+export const lockRecord = pgTable("lock_record", {
+  id: serial("id").primaryKey(),
+  userId: text("userId").notNull(),
+  ref: text("ref"), // LOCK-0001
+  kind: text("kind").default("HOLD").notNull(),
+  title: text("title").notNull(),
+  scope: text("scope"),
+  posture: text("posture"),
+  reason: text("reason"),
+  allowedActions: text("allowedActions").array().default([]).notNull(),
+  blockedActions: text("blockedActions").array().default([]).notNull(),
+  status: text("status").default("active").notNull(),
+  newPosture: text("newPosture"),
+  releasedBy: text("releasedBy"),
+  releaseReason: text("releaseReason"),
+  releasedAt: timestamp("releasedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+})
+
+// WO-019: Not-Now Vault. Preserve vision without activating it. Parked ideas
+// cannot create loops; promotion requires a decision record.
+// maturity: seed | sketch | spec_ready   status: parked | promoted | dropped
+export const parkedIdea = pgTable("parked_idea", {
+  id: serial("id").primaryKey(),
+  userId: text("userId").notNull(),
+  ref: text("ref"), // IDEA-0001
+  idea: text("idea").notNull(),
+  lane: text("lane"),
+  whyItMatters: text("whyItMatters"),
+  whyNotNow: text("whyNotNow"),
+  maturity: text("maturity").default("seed").notNull(),
+  unlockCondition: text("unlockCondition"),
+  relatedWorkOrderId: integer("relatedWorkOrderId"),
+  promoteRequires: text("promoteRequires"),
+  status: text("status").default("parked").notNull(),
+  promotedWorkOrderId: integer("promotedWorkOrderId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
 
 /* ------------------------------------------------------------------ */
@@ -321,3 +477,10 @@ export type EventLog = typeof eventLog.$inferSelect
 export type Goal = typeof goal.$inferSelect
 export type LoopRun = typeof loopRun.$inferSelect
 export type EvidenceRecord = typeof evidenceRecord.$inferSelect
+export type GovernanceEvent = typeof governanceEvent.$inferSelect
+export type AuthorityGrant = typeof authorityGrant.$inferSelect
+export type TruthClaim = typeof truthClaim.$inferSelect
+export type AgentClaim = typeof agentClaim.$inferSelect
+export type ConflictRecord = typeof conflictRecord.$inferSelect
+export type LockRecord = typeof lockRecord.$inferSelect
+export type ParkedIdea = typeof parkedIdea.$inferSelect

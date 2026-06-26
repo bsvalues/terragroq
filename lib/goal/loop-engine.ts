@@ -10,6 +10,7 @@
 
 import type { WorkOrder } from "@/lib/db/schema"
 import { authorityRank, type AuthorityId } from "./taxonomy"
+import { EXECUTE_LOOP_VERSION } from "@/lib/governance/execute-guard"
 
 /* ------------------------------------------------------------------ */
 /* Loop types (§8.3)                                                   */
@@ -103,6 +104,16 @@ export interface LoopInput {
   repoDirty?: boolean
   // A doctrine verdict for the loop target, if one was computed.
   doctrineVerdict?: "allowed" | "requires_approval" | "forbidden"
+  // WO-011: the durable authority grant resolved for this target, if any.
+  // A mutating loop is blocked unless an active grant covering `authority` exists.
+  activeGrant?: {
+    ref: string | null
+    authorityLevel: AuthorityId | string
+    active: boolean
+    reason?: string
+  } | null
+  // WO-018: an unresolved high-risk conflict touching this target blocks the loop.
+  blockingConflict?: { ref: string | null; reason: string } | null
 }
 
 /* ------------------------------------------------------------------ */
@@ -120,7 +131,6 @@ export function evaluateLoop(input: LoopInput, wo: WorkOrder | null): LoopOutcom
   const evidenceCollected: string[] = []
   let stopReason: string | null = null
 
-  const grantedRank = wo?.authorityGranted ? authorityRank(wo.authorityGranted) : -1
   const loopRank = authorityRank(input.authority)
 
   /* ---- §8.4 stop conditions, evaluated in priority order ---------- */
@@ -128,6 +138,12 @@ export function evaluateLoop(input: LoopInput, wo: WorkOrder | null): LoopOutcom
   // Doctrine conflict appears.
   if (input.doctrineVerdict === "forbidden") {
     stopReason = "Doctrine conflict: the loop target is forbidden by active doctrine."
+    blockers.push(stopReason)
+  }
+
+  // WO-018: an unresolved high-risk conflict touching this target blocks first.
+  if (!stopReason && input.blockingConflict) {
+    stopReason = `Blocked by unresolved conflict ${input.blockingConflict.ref ?? ""}: ${input.blockingConflict.reason}`.trim()
     blockers.push(stopReason)
   }
 
@@ -142,13 +158,18 @@ export function evaluateLoop(input: LoopInput, wo: WorkOrder | null): LoopOutcom
     }
   }
 
-  // Mutating loop without sufficient granted authority.
+  // WO-011: a mutating loop requires a durable, active authority grant that
+  // covers the requested authority. The work order's authorityGranted field is
+  // NO LONGER sufficient on its own — an AuthorityGrant record must exist.
   if (!stopReason && spec.mutating) {
-    if (!wo?.authorityGranted) {
-      stopReason = "Execute loop blocked: no authority has been granted on the work order."
+    const grant = input.activeGrant
+    if (!grant || !grant.active) {
+      stopReason =
+        grant?.reason ??
+        "Execute loop blocked: no active authority grant exists. Approval is not authority — grant it explicitly."
       blockers.push(stopReason)
-    } else if (loopRank > grantedRank) {
-      stopReason = `Execute loop needs ${input.authority} but only ${wo.authorityGranted} is granted.`
+    } else if (loopRank > authorityRank(String(grant.authorityLevel))) {
+      stopReason = `Execute loop needs ${input.authority} but the active grant only provides ${grant.authorityLevel}.`
       blockers.push(stopReason)
     } else if (input.repoDirty) {
       stopReason = "Repo is dirty and mutation was requested — resolve dirty state first."
@@ -206,12 +227,13 @@ export function evaluateLoop(input: LoopInput, wo: WorkOrder | null): LoopOutcom
         break
       case "execute":
         actionsTaken.push(
-          `Recorded governed execution iteration under ${wo?.authorityGranted}`,
+          `Recorded governed execution iteration under grant ${input.activeGrant?.ref ?? input.activeGrant?.authorityLevel ?? "(none)"}`,
           "Scoped to allowed files; blocked files untouched",
+          `${EXECUTE_LOOP_VERSION}: planned actions recorded only — no shell, no file writes, no commit/push/tag/release`,
         )
         evidenceCollected.push("Execution iteration logged for operator review")
         findings.push(
-          "Governed execution iteration recorded. The engine does not perform repo mutation itself — act under granted authority and attach evidence.",
+          `Governed execution iteration recorded under ${EXECUTE_LOOP_VERSION} (non-mutating). The engine does not shell out or mutate the repo — any actual mutation returns ESCALATION_NEEDED. Act under granted authority and attach evidence.`,
         )
         break
     }

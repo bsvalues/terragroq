@@ -7,6 +7,13 @@ import { logEvent } from "@/lib/registers/events"
 import { validateAction } from "@/app/actions/doctrine"
 import { evaluateLoop, loopType, type LoopTypeId } from "@/lib/goal/loop-engine"
 import type { AuthorityId } from "@/lib/goal/taxonomy"
+import { getActiveGrantForWorkOrder } from "@/app/actions/authority"
+import { getBlockingConflictForWorkOrder } from "@/app/actions/conflicts"
+import { getActiveLocks } from "@/app/actions/locks"
+import { isGrantActive } from "@/lib/governance/authority"
+import { checkDoctrineRules } from "@/lib/governance/doctrine-rules"
+import { agent as agentSpec } from "@/lib/goal/agent-matrix"
+import { appendGovernanceEvent } from "@/lib/governance/events"
 import { and, desc, eq } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
@@ -66,17 +73,58 @@ export async function runGovernedLoop(input: RunLoopInput): Promise<LoopRun> {
 
   const target = wo ? `${wo.ref ?? `#${wo.id}`} — ${wo.title}` : input.target?.trim() || "(no target)"
 
-  // Cross-check the loop target against active doctrine when we have a WO.
+  // Cross-check the loop target against active doctrine when we have a WO. This
+  // combines the DB doctrine register (validateAction) with the machine-checkable
+  // constitutional rules (WO-015), evaluated against the current lock posture.
   let doctrineVerdict: "allowed" | "requires_approval" | "forbidden" | undefined
   if (wo) {
     const probe = [wo.goal, wo.scope, wo.title].filter(Boolean).join(" . ")
     const v = await validateAction(probe)
-    // The engine only cares about the three governing verdicts; "unspecified"
-    // (no rule matched) is treated as no doctrine signal.
+    const activeLocks = await getActiveLocks()
+    const machine = checkDoctrineRules({
+      intent: probe,
+      authority: input.authority,
+      agentMaxAuthority: wo.agent ? agentSpec(wo.agent)?.maxAuthority : undefined,
+      activeLocks: activeLocks.map((l) => ({ kind: l.kind, scope: l.scope })),
+    })
+
+    // Forbidden (from either source) wins; then requires_approval; else the DB signal.
     doctrineVerdict =
-      v.verdict === "forbidden" || v.verdict === "requires_approval" || v.verdict === "allowed"
-        ? v.verdict
-        : undefined
+      v.verdict === "forbidden" || machine.verdict === "forbidden"
+        ? "forbidden"
+        : v.verdict === "requires_approval" || machine.verdict === "requires_approval"
+          ? "requires_approval"
+          : v.verdict === "allowed"
+            ? "allowed"
+            : undefined
+  }
+
+  // WO-011: resolve the durable authority grant for this WO. A mutating loop is
+  // blocked unless an active grant covers the requested authority.
+  let activeGrant: { ref: string | null; authorityLevel: string; active: boolean; reason?: string } | null = null
+  if (wo) {
+    const grant = await getActiveGrantForWorkOrder(wo.id)
+    if (grant) {
+      const live = isGrantActive(grant)
+      activeGrant = {
+        ref: grant.ref,
+        authorityLevel: grant.authorityLevel,
+        active: live.ok,
+        reason: live.ok ? undefined : live.reason,
+      }
+    }
+  }
+
+  // WO-018: an unresolved high-risk conflict on this WO blocks the loop.
+  let blockingConflict: { ref: string | null; reason: string } | null = null
+  if (wo) {
+    const conflict = await getBlockingConflictForWorkOrder(wo.id)
+    if (conflict) {
+      blockingConflict = {
+        ref: conflict.ref,
+        reason: conflict.description ?? conflict.detectedBetween,
+      }
+    }
   }
 
   const outcome = evaluateLoop(
@@ -87,6 +135,8 @@ export async function runGovernedLoop(input: RunLoopInput): Promise<LoopRun> {
       maxIterations: input.maxIterations,
       repoDirty: input.repoDirty,
       doctrineVerdict,
+      activeGrant,
+      blockingConflict,
     },
     wo,
   )
@@ -114,6 +164,16 @@ export async function runGovernedLoop(input: RunLoopInput): Promise<LoopRun> {
     })
     .returning()
 
+  await appendGovernanceEvent({
+    userId,
+    eventType: outcome.permitted ? "LOOP_STARTED" : "LOOP_STOPPED",
+    entityType: "loop_run",
+    entityId: row.id,
+    actor: wo?.agent ?? "operator",
+    reason: outcome.stopReason ?? `${outcome.loopType} loop permitted`,
+    after: { loopType: outcome.loopType, authority: outcome.authority, permitted: outcome.permitted },
+    metadata: { target, stopReason: outcome.stopReason },
+  })
   await logEvent({
     userId,
     type: "loop.run",

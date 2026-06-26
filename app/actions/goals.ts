@@ -10,6 +10,8 @@ import { classifyGoal } from "@/lib/goal/classifier"
 import { runLoopVerifier, refuseExecution, type LoopReport } from "@/lib/goal/loop"
 import type { CurrentTruth } from "@/lib/goal/current-truth"
 import { lane as findLane } from "@/lib/goal/taxonomy"
+import { getActiveLocks } from "@/app/actions/locks"
+import { appendGovernanceEvent } from "@/lib/governance/events"
 import { and, desc, eq } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
@@ -85,20 +87,26 @@ export async function submitGoal(command: string): Promise<Goal> {
   const trimmed = command.trim()
   if (!trimmed) throw new Error("A goal command is required.")
 
-  // 1. Deterministic classification.
-  const cls = classifyGoal(trimmed)
+  // 1. Deterministic classification, evaluated against the live lock posture so
+  //    machine-checkable doctrine (WO-015) can fire (e.g. STOP/HOLD conflicts).
+  const activeLocks = await getActiveLocks()
+  const cls = classifyGoal(trimmed, {
+    activeLocks: activeLocks.map((l) => ({ kind: l.kind, scope: l.scope })),
+  })
 
-  // 2. Cross-check against the live doctrine engine. Doctrine can only make the
-  //    verdict STRICTER, never looser (fail-closed).
+  // 2. Cross-check against the live DB doctrine engine. Doctrine can only make
+  //    the verdict STRICTER, never looser (fail-closed).
   const doctrineVerdict = await validateAction(trimmed)
   let verdict = cls.verdict
   if (doctrineVerdict.verdict === "forbidden") verdict = "refuse"
   else if (doctrineVerdict.verdict === "requires_approval" && verdict === "allow") {
     verdict = "requires_approval"
   }
-  const matchedRules = doctrineVerdict.matches
-    .map((m) => m.ref)
-    .filter((r): r is string => Boolean(r))
+  // Merge DB doctrine refs with machine-doctrine rule ids for the audit trail.
+  const matchedRules = [
+    ...doctrineVerdict.matches.map((m) => m.ref).filter((r): r is string => Boolean(r)),
+    ...cls.doctrineViolations.map((v) => v.ruleId),
+  ]
 
   const requiresApproval = verdict === "requires_approval"
   const ref = await nextRef(userId)
@@ -123,6 +131,14 @@ export async function submitGoal(command: string): Promise<Goal> {
     })
     .returning()
 
+  await appendGovernanceEvent({
+    userId,
+    eventType: "GOAL_CREATED",
+    entityType: "goal",
+    entityId: row.id,
+    reason: `Classified ${cls.lane}/${cls.mode} → ${verdict}`,
+    after: { verdict, authority: cls.authority, doctrine: cls.doctrineViolations.map((v) => v.ruleId) },
+  })
   await logEvent({
     userId,
     type: "goal.classified",
