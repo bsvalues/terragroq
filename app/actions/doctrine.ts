@@ -1,0 +1,72 @@
+"use server"
+
+import { db } from "@/lib/db"
+import { doctrine } from "@/lib/db/schema"
+import { getUserId } from "@/lib/session"
+import { logEvent } from "@/lib/registers/events"
+import { and, desc, eq } from "drizzle-orm"
+import { revalidatePath } from "next/cache"
+
+export async function getDoctrine() {
+  const userId = await getUserId()
+  return db
+    .select()
+    .from(doctrine)
+    .where(eq(doctrine.userId, userId))
+    .orderBy(desc(doctrine.priority), desc(doctrine.createdAt))
+}
+
+// Active doctrine injected into the governed chat system prompt.
+export async function getActiveDoctrine(userId: string) {
+  return db
+    .select()
+    .from(doctrine)
+    .where(and(eq(doctrine.userId, userId), eq(doctrine.active, true)))
+    .orderBy(desc(doctrine.priority))
+}
+
+export async function createDoctrine(input: {
+  title: string
+  statement: string
+  category?: string
+  priority?: number
+}) {
+  const userId = await getUserId()
+  const [row] = await db
+    .insert(doctrine)
+    .values({
+      userId,
+      title: input.title,
+      statement: input.statement,
+      category: input.category ?? "principle",
+      priority: input.priority ?? 0,
+    })
+    .returning()
+
+  await logEvent({
+    userId,
+    type: "doctrine.created",
+    summary: `Ratified doctrine: ${input.title}`,
+    register: "doctrine",
+    refId: row.id,
+  })
+  revalidatePath("/doctrine")
+  return row
+}
+
+export async function toggleDoctrine(id: number, active: boolean) {
+  const userId = await getUserId()
+  await db
+    .update(doctrine)
+    .set({ active, updatedAt: new Date() })
+    .where(and(eq(doctrine.id, id), eq(doctrine.userId, userId)))
+  revalidatePath("/doctrine")
+}
+
+export async function deleteDoctrine(id: number) {
+  const userId = await getUserId()
+  await db
+    .delete(doctrine)
+    .where(and(eq(doctrine.id, id), eq(doctrine.userId, userId)))
+  revalidatePath("/doctrine")
+}
