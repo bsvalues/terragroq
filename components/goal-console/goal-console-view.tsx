@@ -13,6 +13,7 @@ import type { LoopReport } from "@/lib/goal/loop"
 import type { CurrentTruth } from "@/lib/goal/current-truth"
 import { truthLines } from "@/lib/goal/current-truth"
 import { MISTAKE_PATTERNS } from "@/lib/goal/mistake-patterns"
+import { AGENTS } from "@/lib/goal/agent-matrix"
 import { lane as findLane, mode as findMode, authority as findAuthority } from "@/lib/goal/taxonomy"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -31,6 +32,7 @@ import {
   CircleDot,
   Lock,
   ArrowRight,
+  Bot,
 } from "lucide-react"
 
 /* ------------------------------------------------------------------ */
@@ -306,6 +308,34 @@ export function GoalConsoleView({
                 )
               })}
             </ul>
+          </section>
+
+          {/* Agent Permission Matrix (§14) */}
+          <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
+            <div className="flex items-center gap-2">
+              <Bot className="h-4 w-4 text-primary" aria-hidden />
+              <h2 className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Agent permission matrix
+              </h2>
+            </div>
+            <ul className="flex flex-col gap-2.5">
+              {AGENTS.map((a) => (
+                <li key={a.id} className="rounded-md border border-border px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{a.label}</span>
+                    <span className="ml-auto rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                      max {findAuthority(a.maxAuthority)?.label ?? a.maxAuthority}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+                    {a.description}
+                  </p>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[11px] text-muted-foreground">
+              Caps the authority each agent may be granted on a work order.
+            </p>
           </section>
         </div>
       </div>

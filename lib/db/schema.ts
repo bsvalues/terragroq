@@ -163,6 +163,13 @@ export const workOrder = pgTable("work_order", {
   status: text("status").default("draft").notNull(),
   priority: text("priority").default("medium").notNull(), // low | medium | high | critical
   assignee: text("assignee"),
+  // Authority model (§6) + approval gate (§9)
+  authorityLevel: text("authorityLevel").default("A0_READ_ONLY").notNull(), // requested A0–A9
+  authorityGranted: text("authorityGranted"), // set only on explicit approval
+  acceptanceCriteria: text("acceptanceCriteria").array().default([]).notNull(),
+  agent: text("agent"), // codex | claude | copilot | local | null — Agent Permission Matrix (§14)
+  approvedBy: text("approvedBy"),
+  approvedAt: timestamp("approvedAt"),
   linkedDecisionId: integer("linkedDecisionId"),
   // Evidence & closure
   evidence: text("evidence").array().default([]).notNull(),
@@ -239,6 +246,58 @@ export const goal = pgTable("goal", {
 })
 
 /* ------------------------------------------------------------------ */
+/* Loop register (§8 — governed /loop iterations)                      */
+/* ------------------------------------------------------------------ */
+
+// Every /loop run is persisted with the playbook's §8.5 output shape.
+// loopType: read | verify | plan | evidence | watch | execute
+// status:   completed | stopped
+export const loopRun = pgTable("loop_run", {
+  id: serial("id").primaryKey(),
+  userId: text("userId").notNull(),
+  ref: text("ref"), // LOOP-0001 style human reference
+  target: text("target").notNull(),
+  workOrderId: integer("workOrderId"),
+  loopType: text("loopType").notNull(),
+  authority: text("authority").default("A0_READ_ONLY").notNull(),
+  iteration: integer("iteration").default(1).notNull(),
+  maxIterations: integer("maxIterations").default(1).notNull(),
+  mode: text("mode"),
+  actionsTaken: text("actionsTaken").array().default([]).notNull(),
+  evidenceCollected: text("evidenceCollected").array().default([]).notNull(),
+  findings: text("findings").array().default([]).notNull(),
+  blockers: text("blockers").array().default([]).notNull(),
+  stopReason: text("stopReason"),
+  nextValidMove: text("nextValidMove"),
+  status: text("status").default("completed").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+})
+
+/* ------------------------------------------------------------------ */
+/* Evidence records (§11 — operator-grade evidence per work order)     */
+/* ------------------------------------------------------------------ */
+
+export const evidenceRecord = pgTable("evidence_record", {
+  id: serial("id").primaryKey(),
+  userId: text("userId").notNull(),
+  ref: text("ref"), // EV-0001 style human reference
+  workOrderId: integer("workOrderId").notNull(),
+  result: text("result").notNull(), // PASS | FAIL | PARTIAL
+  repo: text("repo"),
+  branch: text("branch"),
+  head: text("head"),
+  worktreeStatus: text("worktreeStatus"),
+  filesChanged: text("filesChanged").array().default([]).notNull(),
+  validators: text("validators").array().default([]).notNull(),
+  knownFailures: text("knownFailures").array().default([]).notNull(),
+  outOfScopeChanges: text("outOfScopeChanges").array().default([]).notNull(),
+  deferredItems: text("deferredItems").array().default([]).notNull(),
+  nextValidMove: text("nextValidMove"),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+})
+
+/* ------------------------------------------------------------------ */
 /* Audit / event log                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -260,3 +319,5 @@ export type WorkOrder = typeof workOrder.$inferSelect
 export type Document = typeof document.$inferSelect
 export type EventLog = typeof eventLog.$inferSelect
 export type Goal = typeof goal.$inferSelect
+export type LoopRun = typeof loopRun.$inferSelect
+export type EvidenceRecord = typeof evidenceRecord.$inferSelect

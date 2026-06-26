@@ -195,6 +195,7 @@ export async function convertGoalToWorkOrder(goalId: number): Promise<{ workOrde
     description: g.rationale ?? undefined,
     lane: laneDef?.label ?? g.lane,
     scope: `Authority required: ${g.authority}. Risk: ${g.risk}.`,
+    authorityLevel: g.authority,
     stopConditions: g.requiresApproval ? "Requires explicit operator approval before execution" : undefined,
     priority: g.risk === "critical" ? "critical" : g.risk === "high" ? "high" : "medium",
   })

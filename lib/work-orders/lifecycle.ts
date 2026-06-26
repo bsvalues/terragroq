@@ -35,6 +35,32 @@ export function canTransition(from: string, to: string): boolean {
   return Array.isArray(allowed) && allowed.includes(to as WoStatus)
 }
 
+/* ------------------------------------------------------------------ */
+/* Approval-readiness gate (§9.2)                                      */
+/* ------------------------------------------------------------------ */
+
+// A work order may not be AUTHORIZED (proposed → approved) unless every
+// precondition the playbook requires is satisfied. Pure check — returns the
+// list of what's missing so the UI can show the operator exactly what to fix.
+export function checkApprovalReadiness(wo: WorkOrder): {
+  ready: boolean
+  missing: string[]
+} {
+  const missing: string[] = []
+  if (!wo.scope || wo.scope.trim().length === 0) missing.push("Scope must be defined")
+  if (!wo.authorityLevel) missing.push("Authority level must be declared")
+  if (wo.forbiddenFiles.length === 0) missing.push("Blocked actions / forbidden files must be declared")
+  if (wo.acceptanceCriteria.length === 0) missing.push("Acceptance criteria must exist")
+  if (wo.validators.length === 0) missing.push("A validation method must exist")
+  return { ready: missing.length === 0, missing }
+}
+
+// Authority above A1 always requires an explicit operator approval act.
+export function requiresExplicitApproval(authorityLevel: string): boolean {
+  const m = authorityLevel.match(/^A(\d)/)
+  return m ? Number.parseInt(m[1], 10) > 1 : false
+}
+
 // Build the operator-grade closure report from the WO object. Pure function of
 // the stored record — no side effects.
 export function buildClosureReport(wo: WorkOrder): string {
