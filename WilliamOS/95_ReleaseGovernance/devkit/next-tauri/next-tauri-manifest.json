@@ -1,0 +1,72 @@
+{
+  "name": "WilliamOS Next.js + Tauri Migration Kit",
+  "work_order": "WO-WILLIAMOS-NEXT-TAURI-ARCH-001",
+  "status": "draft",
+  "baseline": "WilliamOS v1.3.1 local hardening baseline",
+  "phase_6_status": "blocked",
+  "authority": "WilliamOS control plane",
+  "primary_rule": "Do not rewrite the brain. Wrap, harden, and migrate surfaces gradually.",
+  "repo_reality_note": "This repository is the realized Next.js operator shell. The Python control plane and Vite Control Center referenced by the WO live in the broader WilliamOS project and are marked [REFERENCED] in the docs.",
+  "documents": [
+    { "id": "00", "file": "00_CURRENT_SURFACE_INVENTORY.md", "lane": "A", "title": "Current Surface Inventory" },
+    { "id": "10", "file": "10_API_CONTRACTS.md", "lane": "B", "title": "API Contract Freeze" },
+    { "id": "20", "file": "20_NEXTJS_MIGRATION_MAP.md", "lane": "G", "title": "Next.js Migration Map" },
+    { "id": "30", "file": "30_NEXTJS_SCAFFOLD_PLAN.md", "lane": "C", "title": "Next.js Scaffold Plan" },
+    { "id": "40", "file": "40_PWA_PLAN.md", "lane": "D", "title": "PWA Plan" },
+    { "id": "50", "file": "50_TAURI_ARCHITECTURE.md", "lane": "E", "title": "Tauri Architecture" },
+    { "id": "60", "file": "60_RUST_BRIDGE_BOUNDARY.md", "lane": "F", "title": "Rust Bridge Boundary" },
+    { "id": "70", "file": "70_DATA_STORAGE_BOUNDARY.md", "lane": "A", "title": "Data / Storage Boundary" },
+    { "id": "80", "file": "80_SECURITY_SECRETS_BOUNDARY.md", "lane": "A", "title": "Security / Secrets Boundary" },
+    { "id": "90", "file": "90_MIGRATION_SEQUENCE.md", "lane": "A", "title": "Migration Sequence" }
+  ],
+  "boundaries": [
+    "WilliamOS Core (Python control plane) remains the authority.",
+    "Next.js renders the operator shell and owns the governance registers in this repo.",
+    "Tauri is a native wrapper with no authority; it calls WilliamOS APIs or governed CLI.",
+    "Rust is a mechanical local bridge; it holds no governance/policy authority.",
+    "One owner per data type; UI layers may cache but never own source of truth.",
+    "Secrets live server-side / OS keychain only; never embedded in shells.",
+    "Explicit-runtime-only: no silent model fallback, no cloud fallback."
+  ],
+  "non_goals": [
+    "Phase 6 proactive intelligence",
+    "Rewriting the Python control plane",
+    "Removing the current Vite frontend",
+    "Making Next.js the authority layer",
+    "Making Tauri/Rust a command system",
+    "Silent model fallback or cloud fallback",
+    "External worker write authority",
+    "Automatic canon promotion, commits, tags, or releases",
+    "PWA offline mutation queue or hidden background sync",
+    "Native shell bypassing WilliamOS safety"
+  ],
+  "future_tracks": [
+    "N0 API contract freeze",
+    "N1 Next.js shell prototype (/runtime first)",
+    "N2 Next.js parity (/command, /review, /workers as thin governed clients)",
+    "N3 PWA install layer",
+    "T1 Tauri wrapper",
+    "T2 Tauri runtime bridge",
+    "R1 Rust worker/process bridge",
+    "R2 optional worker sandbox",
+    "Vite retirement (only after parity sign-off)"
+  ],
+  "acceptance_checklist": {
+    "current_surface_inventory": true,
+    "api_contracts": true,
+    "nextjs_migration_map": true,
+    "nextjs_scaffold_plan": true,
+    "pwa_plan": true,
+    "tauri_architecture": true,
+    "rust_bridge_boundary": true,
+    "data_storage_boundary": true,
+    "security_secrets_boundary": true,
+    "migration_sequence": true,
+    "manifest": true,
+    "phase_6_blocked": true,
+    "no_vite_removal": true,
+    "no_python_backend_rewrite": true,
+    "no_tauri_rust_authority_added": true,
+    "no_behavior_changes": true
+  }
+}
