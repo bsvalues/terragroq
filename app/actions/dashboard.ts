@@ -10,9 +10,14 @@ import {
 } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { getRecentEvents } from "@/lib/registers/events"
-import { and, count, eq } from "drizzle-orm"
+import { and, count, eq, type SQL } from "drizzle-orm"
+import type { PgColumn, PgTable } from "drizzle-orm/pg-core"
 
-async function countWhere(table: any, userId: string, extra?: any) {
+async function countWhere(
+  table: PgTable & { userId: PgColumn },
+  userId: string,
+  extra?: SQL,
+) {
   const [row] = await db
     .select({ value: count() })
     .from(table)

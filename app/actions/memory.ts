@@ -14,18 +14,15 @@ import { revalidatePath } from "next/cache"
 
 // Ordered authority states. Promotion may only advance toward canon from a
 // reviewed state; demotion returns canon facts to working memory.
-const AUTHORITY_STATES = [
-  "intake",
-  "unreviewed",
-  "working",
-  "reviewed",
-  "canon",
-  "deprecated",
-  "superseded",
-  "archived",
-] as const
-
-type Authority = (typeof AUTHORITY_STATES)[number]
+type Authority =
+  | "intake"
+  | "unreviewed"
+  | "working"
+  | "reviewed"
+  | "canon"
+  | "deprecated"
+  | "superseded"
+  | "archived"
 
 // States excluded from semantic recall — they are no longer trustworthy canon.
 const NON_RECALLABLE: Authority[] = ["deprecated", "superseded", "archived"]
