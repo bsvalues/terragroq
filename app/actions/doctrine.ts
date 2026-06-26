@@ -73,13 +73,6 @@ async function nextRuleRef(userId: string): Promise<string> {
   return `RULE-${String(max + 1).padStart(4, "0")}`
 }
 
-function splitLines(value?: string): string[] {
-  if (!value) return []
-  return value
-    .split(/[\n,]/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-}
 
 /* ------------------------------------------------------------------ */
 /* Writes                                                            */
@@ -385,7 +378,7 @@ export async function seedGovernanceDoctrine() {
   let created = 0
   let n = 0
   const base = await nextRuleRef(userId)
-  let counter = Number(base.match(/RULE-(\d+)/)?.[1] ?? "1")
+  const counter = Number(base.match(/RULE-(\d+)/)?.[1] ?? "1")
 
   for (const seed of DOCTRINE_SEEDS) {
     if (have.has(seed.title)) continue

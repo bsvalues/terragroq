@@ -1,14 +1,14 @@
 // Shared human-reference generator (PREFIX-0001) scoped per operator.
 // Mirrors the existing nextRef pattern used by the decision/work-order registers.
 
-import type { PgTable } from "drizzle-orm/pg-core"
+import type { PgColumn, PgTable } from "drizzle-orm/pg-core"
 import { eq } from "drizzle-orm"
 import { db } from "@/lib/db"
 
 // Compute the next "PREFIX-NNNN" reference for a register, per user.
 export async function nextRef(
   // The drizzle table — must expose `ref` and `userId` text columns.
-  table: PgTable & { ref: any; userId: any },
+  table: PgTable & { ref: PgColumn; userId: PgColumn },
   prefix: string,
   userId: string,
 ): Promise<string> {
