@@ -1,83 +1,144 @@
-<a href="https://ai-sdk-starter-groq.vercel.app">
-  <h1 align="center">Vercel x Groq Chatbot</h1>
-</a>
+# WilliamOS
 
-<p align="center">
-  An open-source AI chatbot app template built with Next.js, the AI SDK by Vercel, and Groq.
-</p>
+A governed operating console for AI-assisted software work. WilliamOS treats every
+operator command as a **goal that must be classified before it can act** — not a
+prompt that is immediately executed. It enforces an explicit authority model
+(A0–A9), a deterministic risk classifier, doctrine guardrails, a work-order
+lifecycle, and a tamper-evident audit trail so that *what an agent is allowed to do*
+is always separate from *what it claims it will do*.
 
-<p align="center">
-  <a href="#features"><strong>Features</strong></a> ·
-  <a href="#deploy-your-own"><strong>Deploy Your Own</strong></a> ·
-  <a href="#running-locally"><strong>Running Locally</strong></a> ·
-  <a href="#authors"><strong>Authors</strong></a>
-</p>
-<br/>
+> **One sentence:** a goal is not execution authority. WilliamOS makes that
+> separation the center of the product.
 
-## Features
+---
 
-- Streaming text responses powered by the [AI SDK by Vercel](https://sdk.vercel.ai/docs), allowing multiple AI providers to be used interchangeably with just a few lines of code.
-- Built-in tool integration for extending AI capabilities (demonstrated with a weather tool example).
-- Reasoning model support.
-- [shadcn/ui](https://ui.shadcn.com/) components for a modern, responsive UI powered by [Tailwind CSS](https://tailwindcss.com).
-- Built with the latest [Next.js](https://nextjs.org) App Router.
+## Why this exists
 
-## Deploy Your Own
+Most AI tooling collapses intent into action: you ask, it does. That is fine until
+the action is destructive, irreversible, or outside the scope you actually agreed
+to. WilliamOS inserts a governed layer between intent and action:
 
-You can deploy your own version to Vercel by clicking the button below:
+1. **Classify** every goal deterministically (lane, mode, risk, required authority).
+2. **Refuse or gate** anything that trips a blocking mistake pattern or doctrine rule.
+3. **Require an explicit authority grant** — approval alone never grants power.
+4. **Run loops that plan and verify but never silently mutate** the repo.
+5. **Record everything** in append-only, hash-chained governance events.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?project-name=Vercel+x+Groq+Chatbot&repository-name=ai-sdk-starter-groq&repository-url=https%3A%2F%2Fgithub.com%2Fvercel-labs%2Fai-sdk-starter-groq&demo-title=Vercel+x+Groq+Chatbot&demo-url=https%3A%2F%2Fai-sdk-starter-groq.labs.vercel.dev%2F&demo-description=A+simple+chatbot+application+built+with+Next.js+that+uses+Groq+via+the+AI+SDK+and+the+Vercel+Marketplace&products=%5B%7B%22type%22%3A%22integration%22%2C%22protocol%22%3A%22ai%22%2C%22productSlug%22%3A%22api-key%22%2C%22integrationSlug%22%3A%22groq%22%7D%5D)
+These are not suggestions enforced by prompt text — they are enforced in code and
+covered by tests.
 
-## Running Locally
+---
 
-1. Clone the repository and install dependencies:
+## Tech stack
 
-   ```bash
-   npm install
-   # or
-   yarn install
-   # or
-   pnpm install
-   ```
+| Concern        | Choice                                              |
+| -------------- | --------------------------------------------------- |
+| Framework      | Next.js 15 (App Router, RSC, Server Actions)        |
+| UI             | React 19, Tailwind CSS v4, Radix UI, lucide-react   |
+| Auth           | Better Auth (email + password)                      |
+| Database       | Neon Postgres via Drizzle ORM (`pg` driver)         |
+| Vector / RAG   | `pgvector` (1536-dim embeddings)                    |
+| AI             | AI SDK 6 (`ai`, `@ai-sdk/react`) over Vercel AI Gateway |
+| Client state   | SWR                                                  |
+| Tests          | Vitest                                              |
 
-2. Install the [Vercel CLI](https://vercel.com/docs/cli):
+---
 
-   ```bash
-   npm i -g vercel
-   # or
-   yarn global add vercel
-   # or
-   pnpm install -g vercel
-   ```
+## Getting started
 
-   Once installed, link your local project to your Vercel project:
+### Prerequisites
 
-   ```bash
-   vercel link
-   ```
+- Node.js 20+
+- A Neon Postgres database (provided via the v0 Neon integration)
+- The following environment variables (injected by the integration / project settings):
+  - `DATABASE_URL` — Neon connection string
+  - `BETTER_AUTH_SECRET` — session signing secret (`openssl rand -base64 32`)
+  - `BETTER_AUTH_URL` — base URL of the app (optional in dev)
 
-   After linking, pull your environment variables:
+### Install & run
 
-   ```bash
-   vercel env pull
-   ```
+```bash
+pnpm install
+pnpm dev          # http://localhost:3000
+```
 
-   This will create a `.env.local` file with all the necessary environment variables.
+The app is auth-gated. Visit `/sign-in` to create an account (email + password),
+then you are redirected into the console shell.
 
-3. Run the development server:
+### Scripts
 
-   ```bash
-   npm run dev
-   # or
-   yarn dev
-   # or
-   pnpm dev
-   ```
+| Script           | Purpose                                  |
+| ---------------- | ---------------------------------------- |
+| `pnpm dev`       | Dev server (Turbopack)                   |
+| `pnpm build`     | Production build (lint + type-check gate)|
+| `pnpm start`     | Run the production build                 |
+| `pnpm test`      | Run the Vitest suite                     |
+| `pnpm test:watch`| Watch mode                              |
 
-4. Open [http://localhost:3000](http://localhost:3000) to view your new AI chatbot application.
+The database schema lives in [`lib/db/schema.ts`](lib/db/schema.ts) and is applied
+to Neon through the integration. There is no separate migrate step in this repo.
 
-## Authors
+---
 
-This repository is maintained by the [Vercel](https://vercel.com) team and community contributors.
+## What's inside (the console)
 
-Contributions are welcome! Feel free to open issues or submit pull requests to enhance functionality or fix bugs.
+All application routes live under the authenticated shell at `app/(shell)/`:
+
+| Route            | What it is                                                        |
+| ---------------- | ---------------------------------------------------------------- |
+| `/`              | Dashboard — register counts and recent activity                  |
+| `/goal-console`  | **The core surface.** Classify a goal, run a read/verify loop, convert to a work order, or get a refusal |
+| `/work-orders`   | The governed work-order lifecycle (draft → … → closed)           |
+| `/governance`    | Authority grants, truth claims, agent claims, conflicts, locks   |
+| `/decisions`     | Decision register (ADR-style)                                    |
+| `/doctrine`      | Machine-readable operating rules                                 |
+| `/memory`        | Durable memory facts with an authority lifecycle                 |
+| `/corpus`        | RAG document corpus (embedded chunks)                            |
+| `/audit`         | The append-only event + governance-event log                    |
+| `/runtime`       | Runtime / system status                                          |
+| `/chat`          | AI chat surface                                                  |
+
+---
+
+## Core concepts at a glance
+
+- **Lanes (8)** — *what kind* of work a goal is: docs, ui, read_model, write_model, schema, auth, integration, release.
+- **Modes (7)** — *how* it proceeds: inspect, plan, draft, implement, verify, review, operate.
+- **Authority A0–A9** — *what the actor may do*, from read-only (A0) to release (A9).
+- **Verdict** — `allow` · `requires_approval` · `refuse`, derived deterministically.
+- **Mistake patterns (MP-001…MP-010)** — recurring failure modes matched *before* work starts.
+- **Loop types (6)** — read, verify, plan, evidence, watch, execute. Only `execute` is mutating, and even it is non-mutating in V1 (`EXECUTE_LOOP_V1`).
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full model and data flow.
+
+---
+
+## Documentation
+
+| Doc | Purpose |
+| --- | ------- |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System overview, layers, data flow, register map, invariants |
+| [`docs/reference/goals.md`](docs/reference/goals.md) | The Goal Console + deterministic classifier |
+| [`docs/reference/work-orders.md`](docs/reference/work-orders.md) | The work-order lifecycle and approval gates |
+| [`docs/reference/authority.md`](docs/reference/authority.md) | The A0–A9 model and the Authority Grant Registry |
+| [`docs/reference/doctrine.md`](docs/reference/doctrine.md) | Doctrine rules and constitutional checks |
+| [`docs/reference/audit.md`](docs/reference/audit.md) | Event log, governance events, and the evidence ledger |
+| [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | How to develop, test, and ship slices with discipline |
+| [`docs/PLAN-RECONCILIATION.md`](docs/PLAN-RECONCILIATION.md) | What shipped vs. the original build plan |
+
+---
+
+## Non-negotiable invariants
+
+These hold across the codebase and are protected by tests in [`tests/`](tests):
+
+1. **Approval is not authority.** A mutating loop or an A2+ transition requires an
+   active, unexpired, unrevoked `authority_grant` record — not just an approval flag.
+2. **The execute loop never shells out, writes files, or commits.** `EXECUTE_LOOP_V1`
+   records planned actions only; any real mutation returns `ESCALATION_NEEDED`.
+3. **Classification is deterministic.** The same command always yields the same
+   lane / mode / risk / authority / verdict, so every decision is auditable.
+4. **Auth fails closed.** Every shell route requires a session; unauthenticated
+   requests redirect to `/sign-in`.
+5. **Every state change is per-user scoped and logged.** Registers filter by the
+   session user id; governance events are append-only with before/after hashes.
