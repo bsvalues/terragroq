@@ -26,18 +26,15 @@ export async function createMemoryFact(input: {
   pinned?: boolean
 }) {
   const userId = await getUserId()
-  const content = input.content.trim()
-  if (!content) throw new Error("Content is required")
-
-  const embedding = await embedText(content)
+  const embedding = await embedText(input.content)
 
   const [row] = await db
     .insert(memoryFact)
     .values({
       userId,
-      content,
+      content: input.content,
       kind: input.kind ?? "fact",
-      source: input.source,
+      source: input.source ?? null,
       confidence: input.confidence ?? "medium",
       tags: input.tags ?? [],
       pinned: input.pinned ?? false,
@@ -48,13 +45,11 @@ export async function createMemoryFact(input: {
   await logEvent({
     userId,
     type: "memory.created",
-    summary: `Captured memory: ${content.slice(0, 80)}`,
+    summary: `Committed memory: ${input.content.slice(0, 80)}`,
     register: "memory",
     refId: row.id,
   })
-
   revalidatePath("/memory")
-  revalidatePath("/")
   return row
 }
 
@@ -69,16 +64,23 @@ export async function togglePinMemory(id: number, pinned: boolean) {
 
 export async function deleteMemoryFact(id: number) {
   const userId = await getUserId()
-  await db.delete(memoryFact).where(and(eq(memoryFact.id, id), eq(memoryFact.userId, userId)))
-  await logEvent({ userId, type: "memory.deleted", summary: `Deleted memory #${id}`, register: "memory", refId: id })
+  await db
+    .delete(memoryFact)
+    .where(and(eq(memoryFact.id, id), eq(memoryFact.userId, userId)))
+  await logEvent({
+    userId,
+    type: "memory.deleted",
+    summary: `Removed memory #${id}`,
+    register: "memory",
+    refId: id,
+  })
   revalidatePath("/memory")
 }
 
 // Semantic recall used by the governed chat.
 export async function searchMemory(userId: string, query: string, limit = 5) {
-  const queryEmbedding = await embedText(query)
-  const literal = toVectorLiteral(queryEmbedding)
-
+  const embedding = await embedText(query)
+  const literal = toVectorLiteral(embedding)
   const rows = await db
     .select({
       id: memoryFact.id,
@@ -91,6 +93,5 @@ export async function searchMemory(userId: string, query: string, limit = 5) {
     .where(eq(memoryFact.userId, userId))
     .orderBy(sql`${memoryFact.embedding} <=> ${literal}::vector`)
     .limit(limit)
-
   return rows
 }

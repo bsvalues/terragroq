@@ -8,11 +8,19 @@ export default async function SignInPage() {
   if (session?.user) redirect("/")
 
   return (
-    <main className="grid min-h-svh lg:grid-cols-2">
-      <div className="flex items-center justify-center p-8">
-        <AuthForm mode="sign-in" />
-      </div>
+    <main className="grid min-h-screen lg:grid-cols-2">
       <AuthAside />
+      <div className="flex items-center justify-center p-6">
+        <div className="w-full max-w-sm flex flex-col gap-8">
+          <div className="flex flex-col gap-2">
+            <h1 className="text-2xl font-semibold">Operator sign in</h1>
+            <p className="text-muted-foreground text-sm">
+              Authenticate to access your governed second brain.
+            </p>
+          </div>
+          <AuthForm mode="sign-in" />
+        </div>
+      </div>
     </main>
   )
 }

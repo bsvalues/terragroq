@@ -2,7 +2,6 @@
 
 import { useRouter } from "next/navigation"
 import { authClient } from "@/lib/auth-client"
-import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,18 +10,18 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { LogOut } from "lucide-react"
+import { LogOut, User } from "lucide-react"
 
 export function UserMenu({ name, email }: { name: string; email: string }) {
   const router = useRouter()
   const initials = name
     .split(" ")
-    .map((p) => p[0])
-    .slice(0, 2)
+    .map((w) => w[0])
     .join("")
+    .slice(0, 2)
     .toUpperCase()
 
-  async function signOut() {
+  async function handleSignOut() {
     await authClient.signOut()
     router.push("/sign-in")
     router.refresh()
@@ -30,23 +29,24 @@ export function UserMenu({ name, email }: { name: string; email: string }) {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="h-9 gap-2 px-2">
-          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15 font-mono text-xs text-primary">
-            {initials || "OP"}
-          </span>
-          <span className="hidden text-sm sm:inline">{name}</span>
-        </Button>
+      <DropdownMenuTrigger className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-accent transition-colors outline-none">
+        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground text-xs font-semibold">
+          {initials || <User className="h-4 w-4" />}
+        </div>
+        <div className="hidden md:flex flex-col items-start leading-tight">
+          <span className="text-sm font-medium">{name}</span>
+          <span className="text-xs text-muted-foreground">{email}</span>
+        </div>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel>
-          <p className="text-sm font-medium">{name}</p>
-          <p className="font-mono text-xs text-muted-foreground">{email}</p>
+        <DropdownMenuLabel className="flex flex-col">
+          <span>{name}</span>
+          <span className="text-xs font-normal text-muted-foreground">{email}</span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={signOut}>
+        <DropdownMenuItem onClick={handleSignOut} className="text-destructive focus:text-destructive">
           <LogOut className="h-4 w-4" />
-          End session
+          Sign out
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

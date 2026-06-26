@@ -1,9 +1,8 @@
 import Link from "next/link"
-import { Terminal } from "lucide-react"
 import { SidebarNav } from "./sidebar-nav"
 import { UserMenu } from "./user-menu"
-import { RUNTIME } from "@/lib/ai/config"
 import { MobileNav } from "./mobile-nav"
+import { RUNTIME } from "@/lib/ai/config"
 
 export function AppShell({
   user,
@@ -13,40 +12,40 @@ export function AppShell({
   children: React.ReactNode
 }) {
   return (
-    <div className="flex min-h-svh">
+    <div className="flex min-h-screen">
       {/* Sidebar */}
-      <aside className="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-border bg-sidebar lg:flex">
-        <Link href="/" className="flex items-center gap-2.5 border-b border-border px-4 py-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/15 text-primary">
-            <Terminal className="h-4 w-4" />
+      <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
+        <Link href="/" className="flex items-center gap-2 px-5 h-16 border-b border-sidebar-border">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground font-mono text-sm font-bold">
+            W
           </div>
-          <div>
-            <p className="font-mono text-sm font-semibold leading-none tracking-tight">WilliamOS</p>
-            <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">operator shell</p>
+          <div className="flex flex-col leading-tight">
+            <span className="font-mono text-sm tracking-wide text-sidebar-foreground">WilliamOS</span>
+            <span className="text-[10px] text-muted-foreground">Operator Shell</span>
           </div>
         </Link>
-        <SidebarNav />
-        <div className="border-t border-border px-4 py-3">
-          <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
-            <span className="text-success">●</span> runtime online
-            <br />
-            {RUNTIME.chatModel}
-          </p>
+        <div className="flex-1 overflow-y-auto">
+          <SidebarNav />
+        </div>
+        <div className="border-t border-sidebar-border px-4 py-3 font-mono text-[10px] text-muted-foreground">
+          <div className="flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-success" />
+            gateway online
+          </div>
+          <div className="mt-1 truncate">model: {RUNTIME.chatModel}</div>
         </div>
       </aside>
 
       {/* Main */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-3 border-b border-border bg-background/80 px-4 backdrop-blur sm:px-6">
+      <div className="flex flex-1 flex-col min-w-0">
+        <header className="flex h-16 items-center justify-between gap-4 border-b border-border bg-background/80 px-4 backdrop-blur-sm sticky top-0 z-10">
           <div className="flex items-center gap-2">
             <MobileNav />
-            <span className="font-mono text-xs text-muted-foreground">
-              williamos / <span className="text-foreground">governed</span>
-            </span>
+            <span className="font-mono text-sm lg:hidden">WilliamOS</span>
           </div>
           <UserMenu name={user.name} email={user.email} />
         </header>
-        <main className="flex-1">{children}</main>
+        <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>
   )

@@ -1,4 +1,4 @@
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import "./globals.css"
 import { Toaster } from "@/components/ui/sonner"
@@ -16,11 +16,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "WilliamOS — Operator Shell",
   description:
-    "A governed second brain: memory, decisions, doctrine, work orders, and a RAG-grounded operator chat with full provenance.",
+    "A governed second brain: memory, decisions, doctrine, work orders, and a RAG corpus with provenance-forward AI.",
 }
 
-export const viewport = {
-  themeColor: "#0c0f16",
+export const viewport: Viewport = {
+  themeColor: "#0b1220",
 }
 
 export default function RootLayout({
@@ -32,7 +32,7 @@ export default function RootLayout({
     <html lang="en" className="bg-background">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         {children}
-        <Toaster />
+        <Toaster theme="dark" />
       </body>
     </html>
   )

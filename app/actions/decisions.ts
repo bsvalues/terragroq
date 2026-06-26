@@ -9,7 +9,11 @@ import { revalidatePath } from "next/cache"
 
 export async function getDecisions() {
   const userId = await getUserId()
-  return db.select().from(decision).where(eq(decision.userId, userId)).orderBy(desc(decision.createdAt))
+  return db
+    .select()
+    .from(decision)
+    .where(eq(decision.userId, userId))
+    .orderBy(desc(decision.createdAt))
 }
 
 export async function createDecision(input: {
@@ -21,17 +25,15 @@ export async function createDecision(input: {
   status?: string
 }) {
   const userId = await getUserId()
-  if (!input.title.trim() || !input.decision.trim()) throw new Error("Title and decision are required")
-
   const [row] = await db
     .insert(decision)
     .values({
       userId,
-      title: input.title.trim(),
-      context: input.context,
-      decision: input.decision.trim(),
-      rationale: input.rationale,
-      consequences: input.consequences,
+      title: input.title,
+      context: input.context ?? null,
+      decision: input.decision,
+      rationale: input.rationale ?? null,
+      consequences: input.consequences ?? null,
       status: input.status ?? "proposed",
       decidedAt: input.status === "accepted" ? new Date() : null,
     })
@@ -40,13 +42,11 @@ export async function createDecision(input: {
   await logEvent({
     userId,
     type: "decision.created",
-    summary: `Logged decision: ${row.title}`,
+    summary: `Logged decision: ${input.title}`,
     register: "decisions",
     refId: row.id,
   })
-
   revalidatePath("/decisions")
-  revalidatePath("/")
   return row
 }
 
@@ -54,9 +54,12 @@ export async function updateDecisionStatus(id: number, status: string) {
   const userId = await getUserId()
   await db
     .update(decision)
-    .set({ status, decidedAt: status === "accepted" ? new Date() : null, updatedAt: new Date() })
+    .set({
+      status,
+      decidedAt: status === "accepted" ? new Date() : null,
+      updatedAt: new Date(),
+    })
     .where(and(eq(decision.id, id), eq(decision.userId, userId)))
-
   await logEvent({
     userId,
     type: "decision.status",
@@ -65,11 +68,12 @@ export async function updateDecisionStatus(id: number, status: string) {
     refId: id,
   })
   revalidatePath("/decisions")
-  revalidatePath("/")
 }
 
 export async function deleteDecision(id: number) {
   const userId = await getUserId()
-  await db.delete(decision).where(and(eq(decision.id, id), eq(decision.userId, userId)))
+  await db
+    .delete(decision)
+    .where(and(eq(decision.id, id), eq(decision.userId, userId)))
   revalidatePath("/decisions")
 }

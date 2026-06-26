@@ -9,9 +9,9 @@ import {
   vector,
 } from "drizzle-orm/pg-core"
 
-/* ---------------------------------------------------------------------------
- * Better Auth tables (do not rename columns)
- * ------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------ */
+/* Better Auth tables (camelCase columns required by Better Auth)      */
+/* ------------------------------------------------------------------ */
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -63,16 +63,16 @@ export const verification = pgTable("verification", {
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
 
-/* ---------------------------------------------------------------------------
- * WilliamOS governance registers
- * ------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------ */
+/* WilliamOS governance registers                                      */
+/* ------------------------------------------------------------------ */
 
-// Memory: durable facts the operator wants the system to remember.
+// Memory: durable facts about the operator and their world, embedded for recall.
 export const memoryFact = pgTable("memory_fact", {
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
   content: text("content").notNull(),
-  kind: text("kind").default("fact").notNull(), // fact | preference | constraint | context
+  kind: text("kind").default("fact").notNull(), // fact | preference | identity | relationship
   source: text("source"),
   confidence: text("confidence").default("medium").notNull(), // low | medium | high
   tags: text("tags").array().default([]).notNull(),
@@ -82,7 +82,7 @@ export const memoryFact = pgTable("memory_fact", {
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
 
-// Decisions: the decision register (proposed / accepted / superseded / rejected).
+// Decisions: the decision register (ADR-style) with status lifecycle.
 export const decision = pgTable("decision", {
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
@@ -97,27 +97,27 @@ export const decision = pgTable("decision", {
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
 
-// Doctrine: standing principles / rules that govern the operator's behaviour.
+// Doctrine: the operating principles / rules that govern behavior.
 export const doctrine = pgTable("doctrine", {
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
   title: text("title").notNull(),
   statement: text("statement").notNull(),
-  category: text("category").default("principle").notNull(), // principle | policy | guardrail | value
+  category: text("category").default("principle").notNull(), // principle | policy | guardrail
   priority: integer("priority").default(0).notNull(),
   active: boolean("active").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
 
-// Work Orders: actionable items derived from decisions / doctrine.
+// Work Orders: governed units of work.
 export const workOrder = pgTable("work_order", {
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
   title: text("title").notNull(),
   description: text("description"),
   status: text("status").default("backlog").notNull(), // backlog | in_progress | blocked | done
-  priority: text("priority").default("medium").notNull(), // low | medium | high | urgent
+  priority: text("priority").default("medium").notNull(), // low | medium | high | critical
   assignee: text("assignee"),
   linkedDecisionId: integer("linkedDecisionId"),
   dueAt: timestamp("dueAt"),
@@ -126,9 +126,9 @@ export const workOrder = pgTable("work_order", {
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
 
-/* ---------------------------------------------------------------------------
- * RAG corpus
- * ------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------ */
+/* RAG corpus                                                          */
+/* ------------------------------------------------------------------ */
 
 export const document = pgTable("document", {
   id: serial("id").primaryKey(),
@@ -138,7 +138,7 @@ export const document = pgTable("document", {
   mimeType: text("mimeType").default("text/plain").notNull(),
   content: text("content").notNull(),
   chunkCount: integer("chunkCount").default(0).notNull(),
-  status: text("status").default("indexed").notNull(), // indexing | indexed | failed
+  status: text("status").default("indexed").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
@@ -153,9 +153,9 @@ export const documentChunk = pgTable("document_chunk", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 })
 
-/* ---------------------------------------------------------------------------
- * Audit / event log
- * ------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------ */
+/* Audit / event log                                                   */
+/* ------------------------------------------------------------------ */
 
 export const eventLog = pgTable("event_log", {
   id: serial("id").primaryKey(),
@@ -173,5 +173,4 @@ export type Decision = typeof decision.$inferSelect
 export type Doctrine = typeof doctrine.$inferSelect
 export type WorkOrder = typeof workOrder.$inferSelect
 export type Document = typeof document.$inferSelect
-export type DocumentChunk = typeof documentChunk.$inferSelect
 export type EventLog = typeof eventLog.$inferSelect

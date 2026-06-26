@@ -9,7 +9,6 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@ai-sdk/groq": "^1.2.5",
     "@ai-sdk/react": "^3.0.214",
     "@opentelemetry/api-logs": "^0.200.0",
     "@opentelemetry/instrumentation": "^0.200.0",

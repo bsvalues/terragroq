@@ -4,7 +4,7 @@ import { db } from "@/lib/db"
 import { doctrine } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { logEvent } from "@/lib/registers/events"
-import { and, asc, desc, eq } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
 export async function getDoctrine() {
@@ -13,7 +13,16 @@ export async function getDoctrine() {
     .select()
     .from(doctrine)
     .where(eq(doctrine.userId, userId))
-    .orderBy(desc(doctrine.priority), asc(doctrine.createdAt))
+    .orderBy(desc(doctrine.priority), desc(doctrine.createdAt))
+}
+
+// Active doctrine injected into the governed chat system prompt.
+export async function getActiveDoctrine(userId: string) {
+  return db
+    .select()
+    .from(doctrine)
+    .where(and(eq(doctrine.userId, userId), eq(doctrine.active, true)))
+    .orderBy(desc(doctrine.priority))
 }
 
 export async function createDoctrine(input: {
@@ -23,14 +32,12 @@ export async function createDoctrine(input: {
   priority?: number
 }) {
   const userId = await getUserId()
-  if (!input.title.trim() || !input.statement.trim()) throw new Error("Title and statement are required")
-
   const [row] = await db
     .insert(doctrine)
     .values({
       userId,
-      title: input.title.trim(),
-      statement: input.statement.trim(),
+      title: input.title,
+      statement: input.statement,
       category: input.category ?? "principle",
       priority: input.priority ?? 0,
     })
@@ -39,13 +46,11 @@ export async function createDoctrine(input: {
   await logEvent({
     userId,
     type: "doctrine.created",
-    summary: `Added doctrine: ${row.title}`,
+    summary: `Ratified doctrine: ${input.title}`,
     register: "doctrine",
     refId: row.id,
   })
-
   revalidatePath("/doctrine")
-  revalidatePath("/")
   return row
 }
 
@@ -60,15 +65,8 @@ export async function toggleDoctrine(id: number, active: boolean) {
 
 export async function deleteDoctrine(id: number) {
   const userId = await getUserId()
-  await db.delete(doctrine).where(and(eq(doctrine.id, id), eq(doctrine.userId, userId)))
+  await db
+    .delete(doctrine)
+    .where(and(eq(doctrine.id, id), eq(doctrine.userId, userId)))
   revalidatePath("/doctrine")
-}
-
-// Active doctrine used to govern the chat system prompt.
-export async function getActiveDoctrine(userId: string) {
-  return db
-    .select()
-    .from(doctrine)
-    .where(and(eq(doctrine.userId, userId), eq(doctrine.active, true)))
-    .orderBy(desc(doctrine.priority))
 }
