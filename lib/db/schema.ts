@@ -141,17 +141,43 @@ export const doctrine = pgTable("doctrine", {
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
 
-// Work Orders: governed units of work.
+// Work Orders: governed units of work (Track E — Work Order Engine).
+// status lifecycle (8): draft | proposed | approved | active | blocked | review | closed | aborted
 export const workOrder = pgTable("work_order", {
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
+  ref: text("ref"), // WO-0001 style human reference
   title: text("title").notNull(),
   description: text("description"),
-  status: text("status").default("backlog").notNull(), // backlog | in_progress | blocked | done
+  // The WO object (operator-grade contract)
+  goal: text("goal"),
+  loop: text("loop"), // the execution loop discipline for this WO
+  scope: text("scope"),
+  nonGoals: text("nonGoals").array().default([]).notNull(),
+  allowedFiles: text("allowedFiles").array().default([]).notNull(),
+  forbiddenFiles: text("forbiddenFiles").array().default([]).notNull(),
+  validators: text("validators").array().default([]).notNull(),
+  stopConditions: text("stopConditions").array().default([]).notNull(),
+  lane: text("lane"), // e.g. "A — docs only", "client surface only"
+  phase: text("phase"),
+  status: text("status").default("draft").notNull(),
   priority: text("priority").default("medium").notNull(), // low | medium | high | critical
   assignee: text("assignee"),
   linkedDecisionId: integer("linkedDecisionId"),
+  // Evidence & closure
+  evidence: text("evidence").array().default([]).notNull(),
+  result: text("result"), // PASS | FAIL | PARTIAL | null
+  commitRef: text("commitRef"),
+  tagRef: text("tagRef"),
+  // Release gates (default closed — require explicit approval)
+  commitAllowed: boolean("commitAllowed").default(false).notNull(),
+  tagAllowed: boolean("tagAllowed").default(false).notNull(),
+  pushAllowed: boolean("pushAllowed").default(false).notNull(),
+  // Lineage
+  supersedesId: integer("supersedesId"),
+  supersededById: integer("supersededById"),
   dueAt: timestamp("dueAt"),
+  closedAt: timestamp("closedAt"),
   completedAt: timestamp("completedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),

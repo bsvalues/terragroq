@@ -8,7 +8,12 @@ const toneMap: Record<string, Tone> = {
   accepted: "success",
   superseded: "neutral",
   rejected: "danger",
-  // work orders
+  // work orders (8-status lifecycle)
+  draft: "neutral",
+  approved: "primary",
+  review: "warning",
+  closed: "success",
+  aborted: "danger",
   backlog: "neutral",
   in_progress: "primary",
   blocked: "danger",
