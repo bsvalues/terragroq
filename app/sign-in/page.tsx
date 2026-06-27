@@ -1,11 +1,13 @@
 import { redirect } from "next/navigation"
 import { getSession } from "@/lib/session"
+import { getAuthReadiness } from "@/lib/auth-readiness"
 import { AuthForm } from "@/components/auth-form"
 import { AuthAside } from "@/components/auth-aside"
 
 export default async function SignInPage() {
   const session = await getSession()
   if (session?.user) redirect("/")
+  const readiness = await getAuthReadiness({ probeDatabase: true })
 
   return (
     <main className="grid min-h-screen lg:grid-cols-2">
@@ -18,7 +20,7 @@ export default async function SignInPage() {
               Authenticate to access your governed second brain.
             </p>
           </div>
-          <AuthForm mode="sign-in" />
+          <AuthForm mode="sign-in" readiness={readiness} />
         </div>
       </div>
     </main>

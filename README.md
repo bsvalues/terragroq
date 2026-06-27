@@ -54,6 +54,7 @@ covered by tests.
   - `DATABASE_URL` — Neon connection string
   - `BETTER_AUTH_SECRET` — session signing secret (`openssl rand -base64 32`)
   - `BETTER_AUTH_URL` — base URL of the app (optional in dev)
+  - `AUTH_SIGNUP_MODE` — `bootstrap` (default), `open`, or `closed`
 
 ### Install & run
 
@@ -64,6 +65,12 @@ pnpm dev          # http://localhost:3000
 
 The app is auth-gated. Visit `/sign-in` to create an account (email + password),
 then you are redirected into the console shell.
+
+If auth prerequisites are missing, use `/setup` to configure local onboarding from
+the UI (writes `.env.local`), then restart the app process.
+
+Enterprise sign-up policy defaults to bootstrap-only: first operator can register,
+then sign-up closes automatically unless `AUTH_SIGNUP_MODE=open`.
 
 ### Scripts
 
@@ -97,6 +104,12 @@ All application routes live under the authenticated shell at `app/(shell)/`:
 | `/audit`         | The append-only event + governance-event log                    |
 | `/runtime`       | Runtime / system status                                          |
 | `/chat`          | AI chat surface                                                  |
+
+Operational probe endpoint:
+- `GET /api/health` — machine-readable health for database, auth configuration, and model runtime metadata (`200 ok` / `503 degraded`).
+- `GET /api/auth/readiness` — focused auth preflight (`200 ready` / `503 not ready`) used by sign-in/sign-up UX to block misconfigured authentication.
+- `POST /api/setup/local-config` — local-only setup writer used by `/setup` to save auth prerequisites for onboarding.
+- `GET /api/setup/local-status` — local-only post-restart status check used by `/setup` to confirm readiness handoff.
 
 ---
 

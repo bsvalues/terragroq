@@ -18,6 +18,11 @@ export const WO_STATUSES = [
 
 export type WoStatus = (typeof WO_STATUSES)[number]
 
+export const TERMINAL_WO_STATUSES: WoStatus[] = ["closed", "aborted"]
+export const OPEN_WO_STATUSES: WoStatus[] = WO_STATUSES.filter(
+  (status): status is WoStatus => !TERMINAL_WO_STATUSES.includes(status as WoStatus),
+)
+
 // Allowed transitions. Anything not listed is rejected.
 export const TRANSITIONS: Record<WoStatus, WoStatus[]> = {
   draft: ["proposed", "aborted"],

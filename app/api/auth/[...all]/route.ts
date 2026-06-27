@@ -1,4 +1,29 @@
 import { auth } from "@/lib/auth"
 import { toNextJsHandler } from "better-auth/next-js"
+import { getSignupPolicy } from "@/lib/auth-policy"
 
-export const { GET, POST } = toNextJsHandler(auth.handler)
+const handlers = toNextJsHandler(auth.handler)
+
+export const GET = handlers.GET
+
+export async function POST(req: Request) {
+  const url = new URL(req.url)
+  const isEmailSignup = /\/api\/auth\/sign-up\/email\/?$/.test(url.pathname)
+
+  if (isEmailSignup) {
+    const policy = await getSignupPolicy()
+    if (!policy.open) {
+      return Response.json(
+        {
+          code: "SIGNUP_DISABLED",
+          message:
+            policy.reason ??
+            "Operator sign-up is disabled by policy. Contact your platform administrator.",
+        },
+        { status: 403 },
+      )
+    }
+  }
+
+  return handlers.POST(req)
+}
