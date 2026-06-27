@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest"
 
 import {
   WO_STATUSES,
+  OPEN_WO_STATUSES,
+  TERMINAL_WO_STATUSES,
   TRANSITIONS,
   canTransition,
   checkApprovalReadiness,
@@ -67,6 +69,11 @@ function makeWO(overrides: Partial<WorkOrder> = {}): WorkOrder {
 /* ------------------------------------------------------------------ */
 
 describe("WO transition graph is a closed, legal state machine", () => {
+  it("open statuses include every non-terminal lifecycle state", () => {
+    expect(TERMINAL_WO_STATUSES).toEqual(["closed", "aborted"])
+    expect(OPEN_WO_STATUSES).toEqual(["draft", "proposed", "approved", "active", "blocked", "review"])
+  })
+
   it("only permits transitions declared in TRANSITIONS", () => {
     for (const from of WO_STATUSES) {
       for (const to of WO_STATUSES) {

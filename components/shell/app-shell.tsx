@@ -3,14 +3,22 @@ import { SidebarNav } from "./sidebar-nav"
 import { UserMenu } from "./user-menu"
 import { MobileNav } from "./mobile-nav"
 import { RUNTIME } from "@/lib/ai/config"
+import { getAuthReadiness } from "@/lib/auth-readiness"
+import { buildRuntimeStatus } from "@/lib/ai/runtime"
+import { HealthStatusStrip } from "./health-status-strip"
 
-export function AppShell({
+export async function AppShell({
   user,
   children,
 }: {
   user: { name: string; email: string }
   children: React.ReactNode
 }) {
+  const [readiness, runtime] = await Promise.all([
+    getAuthReadiness({ probeDatabase: true }),
+    Promise.resolve(buildRuntimeStatus()),
+  ])
+
   return (
     <div className="flex min-h-screen">
       {/* Sidebar */}
@@ -45,6 +53,7 @@ export function AppShell({
           </div>
           <UserMenu name={user.name} email={user.email} />
         </header>
+        <HealthStatusStrip readiness={readiness} runtime={runtime} />
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>

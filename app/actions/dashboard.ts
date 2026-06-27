@@ -10,8 +10,9 @@ import {
 } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { getRecentEvents } from "@/lib/registers/events"
-import { and, count, eq, type SQL } from "drizzle-orm"
+import { and, count, eq, inArray, type SQL } from "drizzle-orm"
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core"
+import { OPEN_WO_STATUSES } from "@/lib/work-orders/lifecycle"
 
 async function countWhere(
   table: PgTable & { userId: PgColumn },
@@ -35,7 +36,7 @@ export async function getDashboardData() {
       countWhere(decision, userId, eq(decision.status, "proposed")),
       countWhere(doctrine, userId, eq(doctrine.active, true)),
       countWhere(workOrder, userId),
-      countWhere(workOrder, userId, eq(workOrder.status, "in_progress")),
+      countWhere(workOrder, userId, inArray(workOrder.status, OPEN_WO_STATUSES)),
       countWhere(document, userId),
       getRecentEvents(userId, 8),
     ])

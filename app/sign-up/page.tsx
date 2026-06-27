@@ -1,11 +1,13 @@
 import { redirect } from "next/navigation"
 import { getSession } from "@/lib/session"
+import { getAuthReadiness } from "@/lib/auth-readiness"
 import { AuthForm } from "@/components/auth-form"
 import { AuthAside } from "@/components/auth-aside"
 
 export default async function SignUpPage() {
   const session = await getSession()
   if (session?.user) redirect("/")
+  const readiness = await getAuthReadiness({ probeDatabase: true })
 
   return (
     <main className="grid min-h-screen lg:grid-cols-2">
@@ -18,7 +20,7 @@ export default async function SignUpPage() {
               Create your account to start capturing memory, decisions, and doctrine.
             </p>
           </div>
-          <AuthForm mode="sign-up" />
+          <AuthForm mode="sign-up" readiness={readiness} />
         </div>
       </div>
     </main>

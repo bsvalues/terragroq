@@ -10,7 +10,7 @@ import type { AuthorityId } from "@/lib/goal/taxonomy"
 import { getActiveGrantForWorkOrder } from "@/app/actions/authority"
 import { getBlockingConflictForWorkOrder } from "@/app/actions/conflicts"
 import { getActiveLocks } from "@/app/actions/locks"
-import { isGrantActive } from "@/lib/governance/authority"
+import { grantCovers, isGrantActive } from "@/lib/governance/authority"
 import { checkDoctrineRules } from "@/lib/governance/doctrine-rules"
 import { agent as agentSpec } from "@/lib/goal/agent-matrix"
 import { appendGovernanceEvent } from "@/lib/governance/events"
@@ -106,11 +106,47 @@ export async function runGovernedLoop(input: RunLoopInput): Promise<LoopRun> {
     const grant = await getActiveGrantForWorkOrder(wo.id)
     if (grant) {
       const live = isGrantActive(grant)
+      const coverage = grantCovers(grant, input.authority)
+      const scopeIssues: string[] = []
+      if (spec.mutating) {
+        if (grant.allowedActions.length > 0 && wo.allowedFiles.length > 0) {
+          const missingAllowed = wo.allowedFiles.filter(
+            (file) => !grant.allowedActions.includes(file),
+          )
+          if (missingAllowed.length > 0) {
+            scopeIssues.push(
+              `grant missing allowed scope for: ${missingAllowed.join(", ")}`,
+            )
+          }
+        }
+
+        if (wo.forbiddenFiles.length > 0) {
+          const missingBlocked = wo.forbiddenFiles.filter(
+            (file) => !grant.blockedActions.includes(file),
+          )
+          if (missingBlocked.length > 0) {
+            scopeIssues.push(
+              `grant missing blocked scope for: ${missingBlocked.join(", ")}`,
+            )
+          }
+        }
+      }
+
+      const scopeOk = scopeIssues.length === 0
+      const grantActive = live.ok && coverage.ok && scopeOk
+      const grantReason = !live.ok
+        ? live.reason
+        : !coverage.ok
+          ? coverage.reason
+          : !scopeOk
+            ? scopeIssues.join("; ")
+            : undefined
+
       activeGrant = {
         ref: grant.ref,
         authorityLevel: grant.authorityLevel,
-        active: live.ok,
-        reason: live.ok ? undefined : live.reason,
+        active: grantActive,
+        reason: grantReason,
       }
     }
   }
