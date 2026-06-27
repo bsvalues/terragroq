@@ -60,14 +60,16 @@ async function writeLocalEnv(input: {
   authUrl: string
 }) {
   const envPath = path.join(process.cwd(), ".env.local")
-  const managedEntries = new Map([
+  const optionalEntries: [string, string][] = process.env.GROQ_API_KEY
+    ? [["GROQ_API_KEY", envLine("GROQ_API_KEY", process.env.GROQ_API_KEY)]]
+    : []
+
+  const managedEntries = new Map<string, string>([
     ["DATABASE_URL", envLine("DATABASE_URL", input.databaseUrl)],
     ["BETTER_AUTH_SECRET", envLine("BETTER_AUTH_SECRET", input.authSecret)],
     ["BETTER_AUTH_URL", envLine("BETTER_AUTH_URL", input.authUrl)],
     ["LOCAL_SETUP_ENABLED", envLine("LOCAL_SETUP_ENABLED", "true")],
-    ...(process.env.GROQ_API_KEY
-      ? [["GROQ_API_KEY", envLine("GROQ_API_KEY", process.env.GROQ_API_KEY)]]
-      : []),
+    ...optionalEntries,
   ])
 
   let existing = ""
