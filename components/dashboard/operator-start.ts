@@ -63,5 +63,5 @@ export function getOperatorStartSteps(stats: DashboardStats): OperatorStartStep[
     })
   }
 
-  return steps.slice(0, 3)
+  return steps.slice(0, 4)
 }

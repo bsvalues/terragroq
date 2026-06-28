@@ -23,7 +23,7 @@ export function OperatorStartPanel({ stats }: { stats: DashboardStats }) {
       <div className="grid gap-3 p-4 md:grid-cols-3">
         {steps.map((step, index) => (
           <Link
-            key={step.title}
+            key={step.href}
             href={step.href}
             className="group flex min-h-36 flex-col justify-between rounded-lg border border-border bg-background p-4 transition-colors hover:border-primary/40"
           >

@@ -19,7 +19,23 @@ describe("operator start path", () => {
       "/doctrine",
       "/decisions",
       "/work-orders",
+      "/corpus",
     ])
+  })
+
+  it("recommends corpus ingestion when documents are the only missing primitive", () => {
+    const steps = getOperatorStartSteps({
+      ...emptyStats,
+      decisions: 1,
+      doctrines: 1,
+      work: 1,
+    })
+
+    expect(steps).toHaveLength(1)
+    expect(steps[0]).toMatchObject({
+      href: "/corpus",
+      action: "Ingest document",
+    })
   })
 
   it("routes established workspaces to the goal console", () => {
