@@ -26,6 +26,8 @@ export function normalizeDatabaseUrlForPg(rawUrl: string | undefined) {
 }
 
 export function buildPoolConfig(databaseUrl = process.env.DATABASE_URL): PoolConfig {
+  if (!databaseUrl?.trim()) return {}
+
   return {
     connectionString: normalizeDatabaseUrlForPg(databaseUrl),
   }

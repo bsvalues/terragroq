@@ -41,4 +41,10 @@ describe("database connection SSL normalization", () => {
       connectionString: "postgres://user:pass@example.neon.tech/db?sslmode=verify-full",
     })
   })
+
+  it("omits connectionString when the database URL is unset or blank", () => {
+    expect(buildPoolConfig(undefined)).toEqual({})
+    expect(buildPoolConfig("")).toEqual({})
+    expect(buildPoolConfig("   ")).toEqual({})
+  })
 })
