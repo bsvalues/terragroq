@@ -51,7 +51,7 @@ covered by tests.
 - Node.js 20+
 - A Neon Postgres database (provided via the v0 Neon integration)
 - The following environment variables (injected by the integration / project settings):
-  - `DATABASE_URL` — Neon connection string
+  - `DATABASE_URL` — Neon connection string. Prefer `sslmode=verify-full`; the app normalizes ambiguous `sslmode=require` / `prefer` / `verify-ca` values before passing the URL to `pg`.
   - `BETTER_AUTH_SECRET` — session signing secret (`openssl rand -base64 32`)
   - `BETTER_AUTH_URL` — base URL of the app (optional in dev)
   - `AUTH_SIGNUP_MODE` — `bootstrap` (default), `open`, or `closed`
