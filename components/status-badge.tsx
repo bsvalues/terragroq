@@ -87,6 +87,10 @@ const toneMap: Record<string, Tone> = {
   allow: "success",
   requires_approval: "warning",
   refuse: "danger",
+  // evidence results
+  pass: "success",
+  partial: "warning",
+  fail: "danger",
   // goal console — authority levels
   A0_READ_ONLY: "success",
   A1_DRAFT: "primary",
