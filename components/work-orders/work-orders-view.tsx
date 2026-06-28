@@ -48,6 +48,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { StatusBadge } from "@/components/status-badge"
+import { getWorkOrderDraftChecklist } from "@/components/work-orders/work-order-draft-guidance"
 import { getWorkOrderEmptyStateSteps } from "@/components/work-orders/work-order-empty-state"
 import {
   Plus,
@@ -80,6 +81,8 @@ const COLUMNS: { key: WoStatus; label: string }[] = [
 const COLUMN_LABEL: Record<string, string> = Object.fromEntries(
   COLUMNS.map((c) => [c.key, c.label]),
 )
+
+const DRAFT_CHECKLIST = getWorkOrderDraftChecklist()
 
 export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
   const [rows, setRows] = useState(initial)
@@ -238,6 +241,28 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
             </DialogHeader>
             <ScrollArea className="max-h-[60vh] pr-4">
               <div className="flex flex-col gap-4 py-2">
+                <div className="rounded-lg border border-border bg-muted/30 p-4">
+                  <div className="flex items-start gap-3">
+                    <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden />
+                    <div>
+                      <p className="text-sm font-medium">Draft contract checklist</p>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        Use this as a planning surface. Saving a draft does not approve work,
+                        execute agents, commit code, push branches, or release changes.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-2">
+                    {DRAFT_CHECKLIST.map((item) => (
+                      <div key={item.title} className="rounded-md border border-border bg-background/60 p-3">
+                        <p className="text-xs font-medium">{item.title}</p>
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                          {item.description}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
                 <Field label="Title">
                   <Input
                     value={form.title}
