@@ -1,5 +1,7 @@
 import type { EventLog } from "@/lib/db/schema"
+import Link from "next/link"
 import { Activity } from "lucide-react"
+import { getEventEmptyStateActions } from "@/components/dashboard/event-empty-state"
 
 function timeAgo(date: Date) {
   const diff = Date.now() - new Date(date).getTime()
@@ -12,6 +14,8 @@ function timeAgo(date: Date) {
 }
 
 export function EventFeed({ events }: { events: EventLog[] }) {
+  const emptyStateActions = getEventEmptyStateActions()
+
   return (
     <div className="rounded-lg border border-border bg-card">
       <div className="flex items-center gap-2 border-b border-border px-4 py-3">
@@ -19,9 +23,29 @@ export function EventFeed({ events }: { events: EventLog[] }) {
         <h2 className="text-sm font-medium">Audit stream</h2>
       </div>
       {events.length === 0 ? (
-        <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-          No activity yet. Actions across registers are recorded here.
-        </p>
+        <div className="space-y-4 px-4 py-6">
+          <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-5 text-center">
+            <p className="text-sm font-medium">No audit events recorded yet</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Manual operator actions across goals, work orders, doctrine, and registers
+              will appear here after they are recorded.
+            </p>
+          </div>
+          <div className="grid gap-2">
+            {emptyStateActions.map((action) => (
+              <Link
+                key={action.href}
+                href={action.href}
+                className="rounded-md border border-border bg-background px-3 py-2 transition-colors hover:border-primary/40"
+              >
+                <p className="text-xs font-medium">{action.title}</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {action.description}
+                </p>
+              </Link>
+            ))}
+          </div>
+        </div>
       ) : (
         <ul className="divide-y divide-border">
           {events.map((e) => (
