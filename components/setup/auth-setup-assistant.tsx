@@ -237,7 +237,7 @@ export function AuthSetupAssistant({
           />
         </div>
 
-        <Button type="submit" disabled={saving || bootstrapLocked}>
+        <Button type="submit" disabled={saving}>
           {saving ? (
             <>
               <RefreshCw className="mr-1.5 h-4 w-4 animate-spin" aria-hidden />
