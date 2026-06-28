@@ -8,7 +8,6 @@ import Link from "next/link"
 export default async function AuditPage() {
   const userId = await getUserId()
   const events = await getRecentEvents(userId, 200)
-  const emptyStateActions = getEventEmptyStateActions()
 
   return (
     <>
@@ -29,7 +28,7 @@ export default async function AuditPage() {
               </p>
             </div>
             <div className="mx-auto mt-6 grid max-w-3xl gap-3 md:grid-cols-3">
-              {emptyStateActions.map((action) => (
+              {getEventEmptyStateActions().map((action) => (
                 <Link
                   key={action.href}
                   href={action.href}
