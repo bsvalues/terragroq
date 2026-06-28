@@ -1,0 +1,30 @@
+{
+  "version": "1.5.0",
+  "skills": [
+    {
+      "id": "operational-closure",
+      "path": "skills/operational-closure.md",
+      "status": "seeded"
+    },
+    {
+      "id": "next-objective-gate",
+      "path": "skills/next-objective-gate.md",
+      "status": "seeded"
+    },
+    {
+      "id": "gate-scoreboard-review",
+      "path": "skills/gate-scoreboard-review.md",
+      "status": "seeded"
+    },
+    {
+      "id": "package-disposition",
+      "path": "skills/package-disposition.md",
+      "status": "seeded"
+    },
+    {
+      "id": "commit-candidate-review",
+      "path": "skills/commit-candidate-review.md",
+      "status": "seeded"
+    }
+  ]
+}

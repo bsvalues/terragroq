@@ -1,0 +1,35 @@
+{
+  "version": "1.5.0",
+  "gates": [
+    {
+      "id": "GATE-001",
+      "name": "Package artifact built",
+      "required": true,
+      "seed_status": "PASS"
+    },
+    {
+      "id": "GATE-002",
+      "name": "Stop-here disposition exists",
+      "required": true,
+      "seed_status": "PASS"
+    },
+    {
+      "id": "GATE-003",
+      "name": "Gate scoreboard exists",
+      "required": true,
+      "seed_status": "PASS"
+    },
+    {
+      "id": "GATE-004",
+      "name": "Next objective gate exists",
+      "required": true,
+      "seed_status": "PASS"
+    },
+    {
+      "id": "GATE-005",
+      "name": "No push/PR/merge/release authority granted",
+      "required": true,
+      "seed_status": "PASS"
+    }
+  ]
+}

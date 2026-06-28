@@ -1,0 +1,18 @@
+{
+  "version": "1.5.0",
+  "closure_status": "package_design_lane_closed_as_artifact",
+  "valid_next_lanes": [
+    "install_local_copy",
+    "verify_install",
+    "codex_readonly_verify",
+    "owner_commit_decision",
+    "preserve_artifact_stop"
+  ],
+  "blocked_next_lanes": [
+    "unbounded_package_expansion",
+    "mcp_activation",
+    "autonomy",
+    "production_write",
+    "push_pr_merge_release"
+  ]
+}

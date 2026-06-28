@@ -1,0 +1,29 @@
+{
+  "version": "1.5.0",
+  "commands": [
+    {
+      "command": "status",
+      "purpose": "show package state"
+    },
+    {
+      "command": "quickstart",
+      "purpose": "show adoption commands"
+    },
+    {
+      "command": "release",
+      "purpose": "show v1.5 release manifest"
+    },
+    {
+      "command": "scoreboard",
+      "purpose": "show gate scoreboard"
+    },
+    {
+      "command": "closure",
+      "purpose": "show stop-here disposition"
+    },
+    {
+      "command": "commit-candidate",
+      "purpose": "show commit-candidate review format"
+    }
+  ]
+}

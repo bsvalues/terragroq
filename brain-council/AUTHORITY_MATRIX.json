@@ -1,0 +1,87 @@
+{
+  "version": "1.5.0",
+  "levels": [
+    {
+      "level": "A0",
+      "name": "Reflect",
+      "allowed": [
+        "advice",
+        "symbolic reflection",
+        "draft packets"
+      ],
+      "blocked": [
+        "action authority"
+      ]
+    },
+    {
+      "level": "A1",
+      "name": "Local Artifact",
+      "allowed": [
+        "package generation",
+        "local packet"
+      ],
+      "blocked": [
+        "repo mutation"
+      ]
+    },
+    {
+      "level": "A2",
+      "name": "Install Copy",
+      "allowed": [
+        "copy files when user runs install helper"
+      ],
+      "blocked": [
+        "git add",
+        "commit",
+        "push"
+      ]
+    },
+    {
+      "level": "A3",
+      "name": "Read-Only Verification",
+      "allowed": [
+        "verify installed package",
+        "Codex read-only review"
+      ],
+      "blocked": [
+        "edits",
+        "commit",
+        "push"
+      ]
+    },
+    {
+      "level": "A4",
+      "name": "Commit Candidate Review",
+      "allowed": [
+        "diff-scope review",
+        "owner decision form"
+      ],
+      "blocked": [
+        "commit without owner gate"
+      ]
+    },
+    {
+      "level": "A5",
+      "name": "Owner Authorized Commit",
+      "allowed": [
+        "explicitly approved local commit"
+      ],
+      "blocked": [
+        "push",
+        "PR readiness",
+        "merge",
+        "release"
+      ]
+    },
+    {
+      "level": "A6",
+      "name": "Prohibited Default",
+      "allowed": [],
+      "blocked": [
+        "production write",
+        "uncontrolled autonomy",
+        "unreviewed MCP write tools"
+      ]
+    }
+  ]
+}

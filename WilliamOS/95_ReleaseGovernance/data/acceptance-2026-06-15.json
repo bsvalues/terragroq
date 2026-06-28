@@ -1,0 +1,254 @@
+{
+  "generated": "2026-06-15 18:58:19 PDT",
+  "overall": "PASS",
+  "total": 20,
+  "passed": 20,
+  "failed": 0,
+  "blocking_failures": 0,
+  "warning_failures": 0,
+  "checks": [
+    {
+      "name": "Vault governance (check)",
+      "category": "required",
+      "passed": true,
+      "output_preview": "WilliamOS check passed."
+    },
+    {
+      "name": "MCP readiness",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "MCP Readiness Check\n========================================\n\nPassed (11):\n  + 30_MCP directory exists\n  + Found: 30_MCP/AI_ACCESS_RULES.md\n  + Found: 30_MCP/MCP_WRITE_POLICY.md\n  + Found: 30_MCP/READ"
+    },
+    {
+      "name": "Semantic search status",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Semantic Search Status\n========================================\n  Available mode: semantic\n  Index exists: yes\n  Index mode: semantic\n  Model: all-MiniLM-L6-v2\n  Files indexed: 16\n  Chunks indexed: 84"
+    },
+    {
+      "name": "Weekly synthesis status",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Weekly Synthesis Status\n========================================\n  Docs exist: yes\n  Output dir: WilliamOS\\60_Synthesis (exists)\n  Last synthesis: Weekly Synthesis - 2026-W24.md\n  Semantic search: sem"
+    },
+    {
+      "name": "Inbox processor status",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Inbox Processor Status\n========================================\n  Inbox exists: yes\n  Inbox notes: 1\n  Oldest: 2026-06-14-We-should-always-validate-evidence-before-forming-an-opinion.md\n  Newest: 2026"
+    },
+    {
+      "name": "Doctrine promotion status",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Doctrine Promotion Status\n========================================\n  Official doctrine dir: yes\n  Official doctrine notes: 3\n  Promotion dir: yes\n  Promotion docs: yes\n  Existing drafts: 3\n  Synthesis"
+    },
+    {
+      "name": "Decision promotion status",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Decision Promotion Status\n========================================\n  Official decisions dir: yes\n  Official decision notes: 0\n  Open decisions: 0\n  Promotion dir: yes\n  Promotion docs: yes\n  Existing "
+    },
+    {
+      "name": "Concept promotion status",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Concept Promotion Status\n========================================\n  Official ideas dir: yes\n  Official idea/concept notes: 3\n  Promotion dir: yes\n  Promotion docs: yes\n  Existing drafts: 1\n  Synthesis"
+    },
+    {
+      "name": "Project/WO promotion status",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Project / WO Promotion Status\n========================================\n  Official projects dir: yes\n  Official project notes: 0\n  Promotion dir: yes\n  Promotion docs: yes\n  Project drafts: 4\n  Work-or"
+    },
+    {
+      "name": "Cortex map status",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Cortex Map Status\n========================================\n  Cortex dir: yes\n  Docs exist: yes\n  Reports dir: yes\n  Graphs dir: yes\n  Maps dir: yes\n  Core source notes: 8\n  Promotion source notes: 20\n"
+    },
+    {
+      "name": "Review cockpit status",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Review Cockpit Status\n========================================\n  Cockpit dir: yes\n  Docs exist: yes\n  Lanes: 12\n  Green: 7, Yellow: 5, Red: 0\n  Latest report: Review Cockpit - 2026-06-15.md\n  Latest J"
+    },
+    {
+      "name": "Git governance status",
+      "category": "required",
+      "passed": true,
+      "output_preview": "Git Status\n========================================\n  Git repo: yes\n  Branch: master\n  Has commits: yes\n  Latest commit: d459814 Baseline WilliamOS v1 \u00e2\u20ac\u201d WO-001 through WO-012 complete\n  Untracked fi"
+    },
+    {
+      "name": "Backup governance status",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Backup Status\n========================================\n  Backup dir exists: yes\n  Governance docs: yes\n  Git repo: yes\n  Branch: master\n  Latest commit: d459814 Baseline WilliamOS v1 \u00e2\u20ac\u201d WO-001 throug"
+    },
+    {
+      "name": "Restore drill status",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Restore Drill Status\n========================================\n  Restore dir exists: yes\n  Governance docs: yes\n  Manifest exists: yes\n  Latest report: Restore Drill - 2026-06-15.md\n  Backup dir exists"
+    },
+    {
+      "name": "Remote protection status",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Remote Status\n========================================\n  Remote strategy dir: yes\n  Governance docs: yes\n  Git repo: yes\n  Branch: master\n  Latest commit: d459814 Baseline WilliamOS v1 \u00e2\u20ac\u201d WO-001 thro"
+    },
+    {
+      "name": "Orphan notes scan",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "Potential orphan notes:\n  WilliamOS\\00_Inbox\\2026-06-14-We-should-always-validate-evidence-before-forming-an-opinion.md\n  WilliamOS\\01_Daily\\2026-06-13.md\n  WilliamOS\\01_Daily\\Weekly Review - 2026-W24"
+    },
+    {
+      "name": "Stale decisions scan",
+      "category": "warning",
+      "passed": true,
+      "output_preview": "No stale decisions found."
+    },
+    {
+      "name": "Forbidden file scan",
+      "category": "required",
+      "passed": true,
+      "output_preview": "No forbidden files"
+    },
+    {
+      "name": "Remote scan",
+      "category": "required",
+      "passed": true,
+      "output_preview": "No remotes configured"
+    },
+    {
+      "name": "Source note integrity",
+      "category": "required",
+      "passed": true,
+      "output_preview": "High-trust folders OK (02_Decisions: 0, 03_Doctrine: 3, 10_Ideas: 3, 11_Projects: 0)"
+    }
+  ],
+  "layers": [
+    {
+      "wo": "WO-001",
+      "name": "Vault Structure",
+      "present": true,
+      "check": "REQUIRED_DIRS present"
+    },
+    {
+      "wo": "WO-002",
+      "name": "CLI Automation",
+      "present": true,
+      "check": "scripts/william.py exists"
+    },
+    {
+      "wo": "WO-003",
+      "name": "Templates",
+      "present": true,
+      "check": "12 templates present"
+    },
+    {
+      "wo": "WO-004",
+      "name": "Dashboards",
+      "present": true,
+      "check": "MOC files present"
+    },
+    {
+      "wo": "WO-005",
+      "name": "MCP Guardrails",
+      "present": true,
+      "check": "AI access rules present"
+    },
+    {
+      "wo": "WO-006",
+      "name": "Semantic Search",
+      "present": true,
+      "check": "Search docs present"
+    },
+    {
+      "wo": "WO-007",
+      "name": "Weekly Synthesis",
+      "present": true,
+      "check": "Synthesis docs present"
+    },
+    {
+      "wo": "WO-008",
+      "name": "Inbox Processor",
+      "present": true,
+      "check": "Processor docs present"
+    },
+    {
+      "wo": "WO-009",
+      "name": "Doctrine Promotion",
+      "present": true,
+      "check": "Promotion docs present"
+    },
+    {
+      "wo": "WO-010",
+      "name": "Decision Promotion",
+      "present": true,
+      "check": "Promotion docs present"
+    },
+    {
+      "wo": "WO-011",
+      "name": "Concept Promotion",
+      "present": true,
+      "check": "Promotion docs present"
+    },
+    {
+      "wo": "WO-012A",
+      "name": "Project/WO Promotion",
+      "present": true,
+      "check": "Promotion docs present"
+    },
+    {
+      "wo": "WO-012B",
+      "name": "Cortex Map",
+      "present": true,
+      "check": "Cortex docs present"
+    },
+    {
+      "wo": "WO-012C",
+      "name": "Review Cockpit",
+      "present": true,
+      "check": "Cockpit docs present"
+    },
+    {
+      "wo": "WO-012D",
+      "name": "Git Governance",
+      "present": true,
+      "check": "Git gov docs present"
+    },
+    {
+      "wo": "WO-013",
+      "name": "Backup Governance",
+      "present": true,
+      "check": "Backup docs present"
+    },
+    {
+      "wo": "WO-014",
+      "name": "Restore Drill",
+      "present": true,
+      "check": "Restore docs present"
+    },
+    {
+      "wo": "WO-015",
+      "name": "Private Remote Strategy",
+      "present": true,
+      "check": "Strategy docs present"
+    },
+    {
+      "wo": "WO-016",
+      "name": "Release Governance",
+      "present": true,
+      "check": "Release docs present"
+    }
+  ],
+  "git": {
+    "repo": true,
+    "branch": "master",
+    "commit": "d459814 Baseline WilliamOS v1 \u00e2\u20ac\u201d WO-001 through WO-012 complete",
+    "clean": false,
+    "tag": null
+  }
+}

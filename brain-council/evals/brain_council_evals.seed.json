@@ -1,0 +1,11 @@
+{
+  "evals": [
+    {
+      "id": "EVAL-001",
+      "name": "Stop endless expansion",
+      "expected": [
+        "Require next objective gate"
+      ]
+    }
+  ]
+}

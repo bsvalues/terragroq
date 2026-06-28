@@ -1,0 +1,60 @@
+{
+  "date": "2026-06-24",
+  "verdict": "PASS",
+  "checks": [
+    {
+      "name": "global-governance",
+      "passed": true,
+      "detail": "WilliamOS check passed."
+    },
+    {
+      "name": "runtime-smoke",
+      "passed": true,
+      "overall": "PASS",
+      "total": 28,
+      "pass_count": 28,
+      "fail_count": 0,
+      "critical_fail": 0,
+      "detail": "28/28 pass, 0 critical fail"
+    },
+    {
+      "name": "restore-proof",
+      "passed": true,
+      "detail": "Latest: Runtime Proof - 2026-06-16.md, confidence: HIGH"
+    },
+    {
+      "name": "schema-check",
+      "passed": true,
+      "detail": "all valid (36 schemas, 12 templates)"
+    },
+    {
+      "name": "command-registry",
+      "passed": true,
+      "detail": "registry=92, cli=92, match=yes"
+    },
+    {
+      "name": "backup-archive",
+      "passed": true,
+      "detail": "4 archives, latest: WilliamOS-backup-20260616-014220.zip"
+    },
+    {
+      "name": "git-safety",
+      "passed": true,
+      "detail": "no remote, local only"
+    },
+    {
+      "name": "required-docs",
+      "passed": true,
+      "detail": "all present"
+    },
+    {
+      "name": "no-forbidden-files",
+      "passed": true,
+      "detail": "none found"
+    }
+  ],
+  "total": 9,
+  "passed": 9,
+  "failed": 0,
+  "report_path": "WilliamOS\\106_ProductionReadiness\\reports\\Production Readiness - 2026-06-24.md"
+}
