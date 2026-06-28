@@ -34,6 +34,24 @@ describe("database connection SSL normalization", () => {
     expect(normalizeDatabaseUrlForPg("not-a-url")).toBe("not-a-url")
   })
 
+  it("normalizes postgresql protocol URLs", () => {
+    expect(
+      normalizeDatabaseUrlForPg(
+        "postgresql://user:pass@example.neon.tech/db?sslmode=require",
+      ),
+    ).toBe("postgresql://user:pass@example.neon.tech/db?sslmode=verify-full")
+  })
+
+  it("preserves unrelated query params while normalizing sslmode", () => {
+    expect(
+      normalizeDatabaseUrlForPg(
+        "postgres://user:pass@example.neon.tech/db?application_name=terragroq&sslmode=require",
+      ),
+    ).toBe(
+      "postgres://user:pass@example.neon.tech/db?application_name=terragroq&sslmode=verify-full",
+    )
+  })
+
   it("builds the pg pool config from the normalized database URL", () => {
     expect(
       buildPoolConfig("postgres://user:pass@example.neon.tech/db?sslmode=require"),
