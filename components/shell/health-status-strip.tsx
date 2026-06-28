@@ -2,24 +2,15 @@ import Link from "next/link"
 import type { AuthReadiness } from "@/lib/auth-readiness"
 import type { RuntimeStatus } from "@/lib/ai/runtime"
 import { cn } from "@/lib/utils"
+import { getSignupStatus, type HealthTone } from "./health-status"
 
-type Tone = "ready" | "warn" | "blocked"
-
-function chipClass(tone: Tone) {
+function chipClass(tone: HealthTone) {
   return cn(
     "inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px]",
     tone === "ready" && "border-success/30 bg-success/15 text-success",
     tone === "warn" && "border-warning/30 bg-warning/15 text-warning",
     tone === "blocked" && "border-destructive/30 bg-destructive/15 text-destructive",
   )
-}
-
-function signupTone(readiness: AuthReadiness): Tone {
-  if (readiness.signup.mode === "closed") return "blocked"
-  if (readiness.signup.mode === "bootstrap") {
-    return readiness.signup.open ? "warn" : "blocked"
-  }
-  return "ready"
 }
 
 export function HealthStatusStrip({
@@ -39,6 +30,7 @@ export function HealthStatusStrip({
     process.env.NODE_ENV !== "production" &&
     process.env.LOCAL_SETUP_ENABLED !== "false" &&
     process.env.AUTH_SIGNUP_MODE !== "closed"
+  const signupStatus = getSignupStatus(readiness)
 
   return (
     <div className="border-b border-border bg-muted/30 px-4 py-2">
@@ -52,13 +44,8 @@ export function HealthStatusStrip({
         <span className={chipClass(readiness.authReady ? "ready" : "blocked")}>
           Auth: {readiness.authReady ? "ready" : "setup needed"}
         </span>
-        <span className={chipClass(signupTone(readiness))}>
-          Signup: {readiness.signup.mode}
-          {readiness.signup.mode === "bootstrap"
-            ? readiness.signup.open
-              ? " (open)"
-              : " (locked)"
-            : ""}
+        <span className={chipClass(signupStatus.tone)} title={signupStatus.title}>
+          {signupStatus.label}
         </span>
         <span className={chipClass(runtime.fallback ? "warn" : "ready")}>
           Runtime: {runtime.fallback ? "fallback" : "explicit"}
