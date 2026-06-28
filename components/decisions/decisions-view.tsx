@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { DECISION_EMPTY_STATE_STEPS } from "@/components/decisions/decision-empty-state"
+import { getDecisionReviewFlow } from "@/components/decisions/decision-review-flow"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -126,6 +127,7 @@ export function DecisionsView({ initial }: { initial: Decision[] }) {
     }),
     [rows],
   )
+  const reviewFlow = useMemo(() => getDecisionReviewFlow(counts), [counts])
 
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows])
 
@@ -361,6 +363,24 @@ export function DecisionsView({ initial }: { initial: Decision[] }) {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-card p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
+            <div>
+              <p className="text-sm font-medium">{reviewFlow.title}</p>
+              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                {reviewFlow.description}
+              </p>
+            </div>
+          </div>
+          <Button type="button" variant="secondary" size="sm" onClick={() => setTab(reviewFlow.tab)}>
+            {reviewFlow.action}
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
         </div>
       </div>
 
