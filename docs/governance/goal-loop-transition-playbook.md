@@ -26,8 +26,7 @@ A completed transition is not a stop. `RESULT: PASS`, `MERGED_POST_VERIFY_READY`
 `NEXT_WO_TRANSITION`, a selected next work order, or a completed transition chain
 must not be treated as a return-to-owner condition.
 
-Return to the owner only when `ESCALATION_REQUIRED: YES`, or when the active
-goal is fully complete and no next work order exists.
+Return to the owner only when `ESCALATION_REQUIRED: YES`.
 
 If `ESCALATION_REQUIRED: NO` and `NEXT_WO` exists, start `NEXT_WO` immediately and
 carry the prior result forward as evidence inside that next work order. Do not
@@ -86,8 +85,7 @@ ESCALATION_RULES:
 11. Merge only when standing merge rules pass and merge authority is present.
 12. Post-merge verify.
 13. Generate or start the next work order.
-14. Continue operating without returning to the owner unless escalation is required
-    or the active goal is complete and no next work order exists.
+14. Continue operating without returning to the owner unless escalation is required.
 
 ## Normal Transitions
 
@@ -143,8 +141,9 @@ order and continue.
 
 Start the selected next work order immediately. If no next work order exists and
 the active goal is not complete, generate one from the active goal registry.
-Return to the owner only if escalation is required, or the active goal is complete
-and no next work order exists.
+Return to the owner only if escalation is required. Emit a final owner-facing
+report only if escalation is required or the active goal is complete and no next
+work order exists.
 
 ## Standing Merge Rules
 
