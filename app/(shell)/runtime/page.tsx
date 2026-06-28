@@ -1,11 +1,14 @@
 import { Cpu, Database, Network, ShieldCheck } from "lucide-react"
 import { PageHeader } from "@/components/shell/page-header"
 import { StatusBadge } from "@/components/status-badge"
+import { getRecentEvidence } from "@/app/actions/evidence"
+import { RuntimeEvidencePanel } from "@/components/runtime/runtime-evidence-panel"
 import { RuntimeProbe } from "@/components/runtime/runtime-probe"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
 
-export default function RuntimePage() {
+export default async function RuntimePage() {
   const rt = buildRuntimeStatus()
+  const evidence = await getRecentEvidence(5)
 
   const rows: { icon: typeof Cpu; label: string; value: string; mono?: boolean }[] = [
     { icon: Cpu, label: "Chat model", value: rt.chatModel, mono: true },
@@ -66,6 +69,8 @@ export default function RuntimePage() {
           </h2>
           <RuntimeProbe />
         </div>
+
+        <RuntimeEvidencePanel records={evidence} />
       </div>
     </>
   )
