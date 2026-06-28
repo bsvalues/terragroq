@@ -22,7 +22,8 @@ import {
   CORPUS_EMPTY_STATE_TITLE,
   getCorpusEmptyStateSteps,
 } from "@/components/corpus/corpus-empty-state"
-import { Plus, Trash2, Library, FileText, Loader2 } from "lucide-react"
+import { buildCorpusSafetyPreview } from "@/components/corpus/corpus-safety-preview"
+import { Plus, Trash2, Library, FileText, Loader2, ShieldAlert, ShieldCheck } from "lucide-react"
 import { toast } from "sonner"
 
 export function CorpusView({ initial }: { initial: Document[] }) {
@@ -34,6 +35,7 @@ export function CorpusView({ initial }: { initial: Document[] }) {
   const [title, setTitle] = useState("")
   const [source, setSource] = useState("")
   const [content, setContent] = useState("")
+  const safetyPreview = buildCorpusSafetyPreview(content)
 
   function reset() {
     setTitle("")
@@ -104,6 +106,28 @@ export function CorpusView({ initial }: { initial: Document[] }) {
                 <span className="font-mono text-[10px] text-muted-foreground">
                   {content.length.toLocaleString()} chars
                 </span>
+              </div>
+              <div className="rounded-lg border border-border bg-muted/25 p-4">
+                <div className="flex items-start gap-3">
+                  {safetyPreview.secretSignals.length > 0 ? (
+                    <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
+                  ) : (
+                    <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">Safety preview</p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {safetyPreview.guidance}
+                    </p>
+                    <div className="mt-3 grid gap-2 font-mono text-[11px] text-muted-foreground md:grid-cols-3">
+                      <span>{safetyPreview.characterCount.toLocaleString()} chars</span>
+                      <span>~{safetyPreview.estimatedChunks} chunks</span>
+                      <span>
+                        signals: {safetyPreview.secretSignals.length > 0 ? safetyPreview.secretSignals.join(", ") : "none"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
             <DialogFooter>
