@@ -39,6 +39,17 @@ Required environment variables (see README): `DATABASE_URL`, `BETTER_AUTH_SECRET
 Use `sslmode=verify-full` for Neon/Postgres URLs; the runtime normalizes ambiguous
 `sslmode=require`, `prefer`, and `verify-ca` values before passing the URL to `pg`.
 
+### Dependency build-script posture
+
+`pnpm ignored-builds` may report ignored build scripts for `sharp` and `esbuild`.
+This is the current conservative supply-chain posture, not an automatic blocker:
+`sharp` is transitive through `next`, `esbuild` is transitive through `braintrust`,
+and production/local builds currently pass with those scripts ignored.
+
+Do not run `pnpm approve-builds` or add an `allowBuilds` policy as drive-by cleanup.
+Allowing dependency build scripts is an owner-gated supply-chain decision and should
+only be considered if a reproducible install, build, or runtime failure requires it.
+
 ---
 
 ## 3. The development loop (practice what we preach)
