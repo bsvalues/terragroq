@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { DECISION_EMPTY_STATE_STEPS } from "@/components/decisions/decision-empty-state"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -657,17 +658,33 @@ function Empty({
   pending: boolean
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border py-16 text-center">
-      <GitBranch className="h-8 w-8 text-muted-foreground" />
-      <p className="text-sm font-medium">No decisions here</p>
-      <p className="max-w-sm text-sm text-muted-foreground">
-        Record consequential calls as structured objects so rationale, authority, and evidence survive.
-      </p>
+    <div className="rounded-lg border border-dashed border-border bg-card p-6">
+      <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 text-center">
+        <GitBranch className="h-8 w-8 text-muted-foreground" />
+        <p className="text-sm font-medium">No decisions recorded here</p>
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          Record consequential calls as structured objects so rationale, authority,
+          and evidence survive. Decisions document governance; they do not execute
+          changes or bypass work-order gates.
+        </p>
+      </div>
+      <div className="mx-auto mt-6 grid max-w-4xl gap-3 md:grid-cols-3">
+        {DECISION_EMPTY_STATE_STEPS.map((step) => (
+          <div key={step.id} className="rounded-md border border-border bg-background px-4 py-3 text-left">
+            <p className="text-sm font-medium">{step.title}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              {step.description}
+            </p>
+          </div>
+        ))}
+      </div>
       {!seeded && (
-        <Button variant="outline" onClick={onSeed} disabled={pending} className="mt-1">
-          <ShieldCheck className="h-4 w-4" />
-          Seed governance decisions
-        </Button>
+        <div className="mt-6 flex justify-center">
+          <Button variant="outline" onClick={onSeed} disabled={pending}>
+            <ShieldCheck className="h-4 w-4" />
+            Seed governance decisions
+          </Button>
+        </div>
       )}
     </div>
   )
