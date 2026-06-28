@@ -15,6 +15,7 @@ export type RuntimeEvidence = Pick<
 export type RuntimeEvidenceSummary = {
   total: number
   latest?: RuntimeEvidence
+  timeline: RuntimeEvidence[]
   passCount: number
   partialCount: number
   failCount: number
@@ -23,9 +24,10 @@ export type RuntimeEvidenceSummary = {
 }
 
 export function summarizeRuntimeEvidence(records: RuntimeEvidence[]): RuntimeEvidenceSummary {
-  const latest = records[0]
+  const timeline = [...records].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+  const latest = timeline[0]
 
-  return records.reduce<RuntimeEvidenceSummary>(
+  return timeline.reduce<RuntimeEvidenceSummary>(
     (summary, record) => {
       const result = record.result.toUpperCase()
       return {
@@ -38,8 +40,9 @@ export function summarizeRuntimeEvidence(records: RuntimeEvidence[]): RuntimeEvi
       }
     },
     {
-      total: records.length,
+      total: timeline.length,
       latest,
+      timeline,
       passCount: 0,
       partialCount: 0,
       failCount: 0,

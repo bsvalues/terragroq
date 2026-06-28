@@ -21,13 +21,14 @@ function record(overrides: Partial<RuntimeEvidence>): RuntimeEvidence {
 describe("runtime evidence panel summary", () => {
   it("summarizes recent evidence without mutating runtime state", () => {
     const summary = summarizeRuntimeEvidence([
-      record({ ref: "EV-0003", result: "PASS", validators: ["vitest", "next build"] }),
-      record({ ref: "EV-0002", result: "PARTIAL", filesChanged: ["a.ts", "b.ts"] }),
-      record({ ref: "EV-0001", result: "FAIL", validators: [] }),
+      record({ ref: "EV-0001", result: "FAIL", validators: [], createdAt: new Date("2026-06-28T00:00:00.000Z") }),
+      record({ ref: "EV-0003", result: "PASS", validators: ["vitest", "next build"], createdAt: new Date("2026-06-28T02:00:00.000Z") }),
+      record({ ref: "EV-0002", result: "PARTIAL", filesChanged: ["a.ts", "b.ts"], createdAt: new Date("2026-06-28T01:00:00.000Z") }),
     ])
 
     expect(summary.total).toBe(3)
     expect(summary.latest?.ref).toBe("EV-0003")
+    expect(summary.timeline.map((entry) => entry.ref)).toEqual(["EV-0003", "EV-0002", "EV-0001"])
     expect(summary.passCount).toBe(1)
     expect(summary.partialCount).toBe(1)
     expect(summary.failCount).toBe(1)

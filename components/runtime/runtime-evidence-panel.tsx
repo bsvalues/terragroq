@@ -1,9 +1,18 @@
-import { ClipboardCheck, FileText, GitBranch, ShieldCheck } from "lucide-react"
+import { ClipboardCheck, Clock3, FileText, GitBranch, ShieldCheck } from "lucide-react"
 import { StatusBadge } from "@/components/status-badge"
 import { summarizeRuntimeEvidence, type RuntimeEvidence } from "./runtime-evidence"
 
 function formatHead(head?: string | null) {
   return head ? head.slice(0, 7) : "not recorded"
+}
+
+function formatTimestamp(date: Date) {
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
 }
 
 export function RuntimeEvidencePanel({ records }: { records: RuntimeEvidence[] }) {
@@ -39,7 +48,7 @@ export function RuntimeEvidencePanel({ records }: { records: RuntimeEvidence[] }
               <div className="flex flex-wrap items-center gap-2">
                 <StatusBadge value={latest.result.toLowerCase()} />
                 <span className="font-mono text-xs text-muted-foreground">
-                  {latest.ref ?? "EV-unassigned"} · {formatHead(latest.head)}
+                  {latest.ref ?? "EV-unassigned"} · {formatHead(latest.head)} · {formatTimestamp(latest.createdAt)}
                 </span>
               </div>
               <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
@@ -55,6 +64,40 @@ export function RuntimeEvidencePanel({ records }: { records: RuntimeEvidence[] }
                   label="Changed files"
                   value={latest.filesChanged.length > 0 ? latest.filesChanged.join("; ") : "not recorded"}
                 />
+              </div>
+            </div>
+
+            <div className="rounded-md border border-border">
+              <div className="border-b border-border px-3 py-2">
+                <h3 className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Recent evidence timeline
+                </h3>
+              </div>
+              <div className="divide-y divide-border">
+                {summary.timeline.slice(0, 5).map((record) => (
+                  <div key={`${record.ref}-${record.createdAt.toISOString()}`} className="grid gap-2 p-3 md:grid-cols-[9rem_1fr]">
+                    <div className="flex items-center gap-2">
+                      <Clock3 className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+                      <span className="font-mono text-[11px] text-muted-foreground">
+                        {formatTimestamp(record.createdAt)}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusBadge value={record.result.toLowerCase()} />
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {record.ref ?? "EV-unassigned"} · {record.branch ?? "branch not recorded"} · {formatHead(record.head)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Validators: {record.validators.length > 0 ? record.validators.join("; ") : "not recorded"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Next gate: {record.nextValidMove ?? "not recorded"}
+                      </p>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </>
