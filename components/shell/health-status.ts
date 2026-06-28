@@ -8,16 +8,28 @@ export type SignupStatus = {
   title: string
 }
 
+function isBootstrapCheckFailure(reason?: string) {
+  return reason?.toLowerCase().startsWith("bootstrap sign-up check failed")
+}
+
 export function getSignupStatus(readiness: AuthReadiness): SignupStatus {
   if (!readiness.databaseReady || !readiness.authReady) {
     return {
       tone: "blocked",
       label: `Signup: ${readiness.signup.mode}`,
-      title: "Signup policy cannot be trusted until auth readiness is restored.",
+      title: "Signup policy cannot be trusted until auth/database readiness is restored.",
     }
   }
 
   if (readiness.signup.mode === "bootstrap") {
+    if (!readiness.signup.open && isBootstrapCheckFailure(readiness.signup.reason)) {
+      return {
+        tone: "blocked",
+        label: "Signup: bootstrap check failed",
+        title: readiness.signup.reason ?? "Bootstrap sign-up check failed.",
+      }
+    }
+
     return readiness.signup.open
       ? {
           tone: "warn",

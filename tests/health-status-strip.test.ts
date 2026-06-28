@@ -51,6 +51,23 @@ describe("HealthStatusStrip signup status", () => {
 
     expect(status.tone).toBe("blocked")
     expect(status.label).toBe("Signup: bootstrap")
+    expect(status.title).toContain("auth/database readiness")
+  })
+
+  it("does not mark failed bootstrap policy checks as secured", () => {
+    const status = getSignupStatus(
+      readiness({
+        signup: {
+          mode: "bootstrap",
+          open: false,
+          reason: 'Bootstrap sign-up check failed: relation "user" does not exist.',
+        },
+      }),
+    )
+
+    expect(status.tone).toBe("blocked")
+    expect(status.label).toBe("Signup: bootstrap check failed")
+    expect(status.title).toContain("Bootstrap sign-up check failed")
   })
 
   it("shows policy-closed signup as a warning when auth itself is ready", () => {
