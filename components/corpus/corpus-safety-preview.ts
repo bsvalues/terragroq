@@ -6,6 +6,12 @@ export type CorpusSafetyPreview = {
   guidance: string
 }
 
+export type CorpusSafetyPreviewInput = {
+  title?: string
+  source?: string
+  content: string
+}
+
 const SECRET_PATTERNS: { label: string; pattern: RegExp }[] = [
   { label: "DATABASE_URL", pattern: /DATABASE_URL\s*=/i },
   { label: "BETTER_AUTH_SECRET", pattern: /BETTER_AUTH_SECRET\s*=/i },
@@ -13,9 +19,11 @@ const SECRET_PATTERNS: { label: string; pattern: RegExp }[] = [
   { label: "private key", pattern: /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/i },
 ]
 
-export function buildCorpusSafetyPreview(content: string): CorpusSafetyPreview {
+export function buildCorpusSafetyPreview(input: string | CorpusSafetyPreviewInput): CorpusSafetyPreview {
+  const content = typeof input === "string" ? input : input.content
+  const scanText = typeof input === "string" ? input : [input.title, input.source, input.content].join("\n")
   const trimmed = content.trim()
-  const secretSignals = SECRET_PATTERNS.filter((entry) => entry.pattern.test(content)).map(
+  const secretSignals = SECRET_PATTERNS.filter((entry) => entry.pattern.test(scanText)).map(
     (entry) => entry.label,
   )
   const estimatedChunks = trimmed.length === 0 ? 0 : Math.max(1, Math.ceil(trimmed.length / 1200))

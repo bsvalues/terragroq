@@ -35,7 +35,7 @@ export function CorpusView({ initial }: { initial: Document[] }) {
   const [title, setTitle] = useState("")
   const [source, setSource] = useState("")
   const [content, setContent] = useState("")
-  const safetyPreview = buildCorpusSafetyPreview(content)
+  const safetyPreview = buildCorpusSafetyPreview({ title, source, content })
 
   function reset() {
     setTitle("")
@@ -109,7 +109,7 @@ export function CorpusView({ initial }: { initial: Document[] }) {
               </div>
               <div className="rounded-lg border border-border bg-muted/25 p-4">
                 <div className="flex items-start gap-3">
-                  {safetyPreview.secretSignals.length > 0 ? (
+                  {!safetyPreview.safeToReview ? (
                     <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
                   ) : (
                     <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden />
