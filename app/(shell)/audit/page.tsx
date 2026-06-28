@@ -1,11 +1,14 @@
 import { getUserId } from "@/lib/session"
 import { getRecentEvents } from "@/lib/registers/events"
 import { PageHeader } from "@/components/shell/page-header"
+import { getEventEmptyStateActions } from "@/components/dashboard/event-empty-state"
 import { Activity } from "lucide-react"
+import Link from "next/link"
 
 export default async function AuditPage() {
   const userId = await getUserId()
   const events = await getRecentEvents(userId, 200)
+  const emptyStateActions = getEventEmptyStateActions()
 
   return (
     <>
@@ -15,10 +18,30 @@ export default async function AuditPage() {
       />
       <div className="p-6">
         {events.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border py-16 text-center">
-            <Activity className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm font-medium">No events recorded</p>
-            <p className="text-sm text-muted-foreground">Activity across registers will appear here.</p>
+          <div className="rounded-lg border border-dashed border-border bg-card p-6">
+            <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 text-center">
+              <Activity className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm font-medium">No audit events recorded yet</p>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                The audit log fills only after manual operator actions are recorded.
+                Start with a safe governance surface; nothing runs automatically from
+                these links.
+              </p>
+            </div>
+            <div className="mx-auto mt-6 grid max-w-3xl gap-3 md:grid-cols-3">
+              {emptyStateActions.map((action) => (
+                <Link
+                  key={action.href}
+                  href={action.href}
+                  className="rounded-md border border-border bg-background px-4 py-3 transition-colors hover:border-primary/40"
+                >
+                  <p className="text-sm font-medium">{action.title}</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {action.description}
+                  </p>
+                </Link>
+              ))}
+            </div>
           </div>
         ) : (
           <div className="overflow-hidden rounded-lg border border-border">
