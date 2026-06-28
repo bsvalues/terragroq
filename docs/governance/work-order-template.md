@@ -77,7 +77,7 @@ POST_MERGE_TRANSITION:
 Fetch and verify `origin/main`.
 Verify production/readiness if normal deployment occurred.
 Continue to NEXT_WO_TRANSITION without returning to the owner unless escalation
-is required or the active goal is complete.
+is required, or the active goal is complete and no next WO exists.
 
 NEXT_WO_TRANSITION:
 Start the next WO under the same goal immediately. If no next WO exists, generate
