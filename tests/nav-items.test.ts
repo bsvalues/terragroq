@@ -29,7 +29,7 @@ describe("operator navigation information architecture", () => {
     const groups = new Set(navGroups.map((group) => group.id))
 
     expect(navItems.every((item) => groups.has(item.group))).toBe(true)
-    expect(navItems.every((item) => item.description.length > 0)).toBe(true)
-    expect(navGroups.every((group) => group.description.length > 0)).toBe(true)
+    expect(navItems.every((item) => item.description.trim().length > 0)).toBe(true)
+    expect(navGroups.every((group) => group.description.trim().length > 0)).toBe(true)
   })
 })

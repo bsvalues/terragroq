@@ -21,7 +21,9 @@ export type NavItem = {
   description: string
 }
 
-export type NavGroupId = "Command" | "Governance" | "Knowledge" | "Operations"
+export const NAV_GROUP_IDS = ["Command", "Governance", "Knowledge", "Operations"] as const
+
+export type NavGroupId = (typeof NAV_GROUP_IDS)[number]
 
 export type NavGroup = {
   id: NavGroupId
@@ -80,7 +82,7 @@ export const navItems: NavItem[] = [
   },
   {
     href: "/governance",
-    label: "Governance",
+    label: "Governance Overview",
     icon: ShieldCheck,
     group: "Governance",
     description: "Review authority and locks.",
