@@ -18,7 +18,23 @@ OUT_OF_SCOPE:
 
 FILES_ALLOWED:
 
+FILES_FORBIDDEN:
+
+BLOCKED_ACTIONS:
+
+AUTHORITY_LEVEL:
+
+AUTHORITY_GRANT:
+
+COMMIT_ALLOWED:
+
+PUSH_ALLOWED:
+
+TAG_ALLOWED:
+
 VALIDATION_REQUIRED:
+
+ACCEPTANCE_CRITERIA:
 
 SUCCESS_TRANSITION:
 
@@ -39,7 +55,8 @@ ESCALATION_RULES:
 
 ```text
 SUCCESS_TRANSITION:
-If local validation passes and PR flow is allowed, push/open PR.
+If local validation passes and PR flow is allowed, push/open PR only when A8_PUSH
+authority and the push gate are active.
 If no PR is needed, continue directly to NEXT_WO_TRANSITION.
 
 VALIDATION_FAILURE_TRANSITION:
@@ -52,11 +69,12 @@ Patch cheap in-scope nits.
 Record non-blocking or out-of-scope nits as follow-up WOs.
 
 MERGE_TRANSITION:
-Merge automatically when standing merge rules pass.
+Merge automatically when standing merge rules pass and required authority/release
+gates are active.
 Escalate only when an escalation rule is met.
 
 POST_MERGE_TRANSITION:
-Fetch and verify origin/main.
+Fetch and verify `origin/main`.
 Verify production/readiness if normal deployment occurred.
 Continue to NEXT_WO_TRANSITION.
 
@@ -67,10 +85,12 @@ Start the next WO under the same goal, or close the goal if complete.
 ## Standing Merge Rules
 
 ```text
-Agent may merge automatically when all are true:
+An agent may merge automatically when all are true:
 - Checks green.
 - Merge state clean/mergeable.
 - Diff within WO scope.
+- Required authority grant covers the action.
+- Required commit/push/merge gates are open.
 - No secrets.
 - No DB/data mutation.
 - No auth policy change.

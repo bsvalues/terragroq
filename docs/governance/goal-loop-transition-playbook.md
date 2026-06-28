@@ -1,13 +1,17 @@
 # Goal/Loop Autonomous Transition Playbook
 
 Work order: `WO-TERRAGROQ-030`  
-Goal: Remove Owner as Middle Man  
+Goal: Remove Owner as Middleman
 Repository: `bsvalues/terragroq`
 
-This playbook defines how agents continue through normal governed software-work
+This playbook defines how agents continue through normal governed software work
 states without using the owner as the workflow engine. The owner is an escalation
 authority for exceptional risk, not a required approval hop for every successful
 PASS, PR, review, merge, validation, post-merge, or next-work-order transition.
+
+This playbook does not replace the authority model. Normal transitions are
+automatic only inside the authority and release gates already granted by the
+active work order. Approval is still not authority.
 
 ## Goal Model
 
@@ -31,7 +35,14 @@ OBJECTIVE:
 SCOPE:
 OUT_OF_SCOPE:
 FILES_ALLOWED:
+FILES_FORBIDDEN:
+AUTHORITY_LEVEL:
+AUTHORITY_GRANT:
+COMMIT_ALLOWED:
+PUSH_ALLOWED:
+TAG_ALLOWED:
 VALIDATION_REQUIRED:
+ACCEPTANCE_CRITERIA:
 SUCCESS_TRANSITION:
 VALIDATION_FAILURE_TRANSITION:
 REVIEW_TRANSITION:
@@ -49,20 +60,30 @@ ESCALATION_RULES:
 4. Implement scoped change.
 5. Validate.
 6. Repair validation failures when the repair stays in scope.
-7. Commit.
-8. Push and open PR when PR flow is part of the transition.
+7. Commit only when `A7_COMMIT` authority and the commit gate are open.
+8. Push and open PR only when `A8_PUSH` authority and the push gate are open.
 9. Inspect checks and review comments.
 10. Patch in-scope review comments.
-11. Merge when standing merge rules pass.
+11. Merge only when standing merge rules pass and merge authority is present.
 12. Post-merge verify.
 13. Generate or start the next work order.
 
 ## Normal Transitions
 
+| State | Trigger | Next transition |
+| ----- | ------- | --------------- |
+| `PASS_LOCAL_READY` | Local validation passes and scope is contained. | Push/open PR if PR flow and authority gates allow it; otherwise continue to `NEXT_WO_TRANSITION`. |
+| `PR_OPEN_READY_FOR_REVIEW` | PR exists and checks/reviews need inspection. | Patch in-scope issues until `PR_READY_FOR_MERGE`, or escalate if a rule is met. |
+| `PR_READY_FOR_MERGE` | Checks are green, review comments are addressed or non-blocking, and merge state is clean. | Merge if standing merge rules and authority gates pass; otherwise transition to repair/escalation. |
+| `MERGED_POST_VERIFY_READY` | PR merged. | Fetch/verify `origin/main`, verify readiness if normal deployment occurred, then continue to `NEXT_WO_TRANSITION`. |
+| `VALIDATION_FAILURE` | Validator fails. | Repair in same WO if in scope; otherwise create a narrow repair WO. |
+| `SCOPE_DRIFT` | Diff exceeds allowed scope. | Narrow the diff or split into a new WO. |
+| `REVIEW_NIT` | Non-blocking review feedback appears. | Patch if cheap and in scope; otherwise record follow-up WO. |
+
 ### PASS_LOCAL_READY
 
-If PR is allowed, push the branch and open a PR. If no PR is needed, continue to
-the next work order.
+If PR is allowed and `A8_PUSH` plus the push gate are active, push the branch and
+open a PR. If no PR is needed, continue to the next work order.
 
 ### PR_OPEN_READY_FOR_REVIEW
 
@@ -71,7 +92,8 @@ until the PR is merge-ready or an escalation rule is met.
 
 ### PR_READY_FOR_MERGE
 
-Merge automatically when all standing merge rules pass. Continue to post-merge
+Merge automatically only when all standing merge rules pass and the active WO
+also grants the required merge/release authority. Continue to post-merge
 verification.
 
 ### MERGED_POST_VERIFY_READY
@@ -101,6 +123,9 @@ An agent may merge automatically when all are true:
 - Checks are green.
 - Merge state is clean and mergeable.
 - Diff is within the active work-order scope.
+- Required authority grant exists and covers the action.
+- Required release gates are open (`commitAllowed`, `pushAllowed`, or equivalent
+  merge gate for the active WO).
 - No secrets are present.
 - No database or production data mutation is introduced.
 - No auth policy change is introduced.
@@ -167,3 +192,5 @@ Under this playbook, the next transition is:
 - Future agents can transition from one work order to the next without asking
   when standing rules pass.
 - PR #17 routing is unambiguous.
+- Git publication never bypasses `A7_COMMIT`, `A8_PUSH`, or release-gate
+  requirements.
