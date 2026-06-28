@@ -1,0 +1,8 @@
+{
+  "required": [
+    "version",
+    "closure_status",
+    "valid_next_lanes",
+    "blocked_next_lanes"
+  ]
+}

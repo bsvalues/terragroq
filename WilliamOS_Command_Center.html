@@ -1,0 +1,1887 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WilliamOS Command Center</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: rgba(22, 27, 34, 0.88);
+      --panel-2: rgba(13, 17, 23, 0.72);
+      --text: #e6edf3;
+      --muted: #9aa7b2;
+      --line: rgba(139, 148, 158, 0.28);
+      --accent: #70e1c8;
+      --accent-2: #8ab4ff;
+      --warn: #ffd166;
+      --danger: #ff7b72;
+      --ok: #7ee787;
+      --shadow: 0 24px 80px rgba(0,0,0,.38);
+      --radius: 22px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% 8%, rgba(112,225,200,.16), transparent 26%),
+        radial-gradient(circle at 78% 18%, rgba(138,180,255,.18), transparent 28%),
+        radial-gradient(circle at 50% 100%, rgba(255,209,102,.09), transparent 28%),
+        var(--bg);
+      line-height: 1.55;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    .shell { max-width: 1240px; margin: 0 auto; padding: 26px; }
+
+    .topbar {
+      position: sticky;
+      top: 12px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 34px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(13, 17, 23, .72);
+      backdrop-filter: blur(18px);
+      box-shadow: 0 12px 34px rgba(0,0,0,.22);
+    }
+
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 260px; }
+    .sigil {
+      width: 38px; height: 38px; border-radius: 50%;
+      background: conic-gradient(from 180deg, var(--accent), var(--accent-2), var(--warn), var(--accent));
+      box-shadow: 0 0 28px rgba(112,225,200,.26);
+      position: relative;
+    }
+    .sigil:after { content:""; position:absolute; inset:8px; border-radius:50%; background:var(--bg); border:1px solid rgba(255,255,255,.18); }
+    .brand strong { display: block; letter-spacing: .02em; }
+    .brand span { display: block; font-size: 12px; color: var(--muted); margin-top: -2px; }
+
+    .nav { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .nav a {
+      padding: 8px 12px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .nav a:hover { color: var(--text); border-color: var(--line); background: rgba(255,255,255,.04); }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.15fr .85fr;
+      gap: 22px;
+      align-items: stretch;
+      margin-bottom: 22px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .hero-main { padding: 38px; position: relative; }
+    .eyebrow { color: var(--accent); text-transform: uppercase; letter-spacing: .16em; font-size: 12px; font-weight: 800; }
+    h1 { font-size: clamp(42px, 6vw, 78px); line-height: .95; margin: 16px 0 18px; letter-spacing: -.06em; }
+    .hero-main p { max-width: 720px; color: #c7d1da; font-size: 18px; margin: 0 0 26px; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+    .button {
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 12px 15px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.04);
+      font-weight: 750;
+      transition: transform .15s ease, border-color .15s ease, background .15s ease;
+    }
+    .button:hover { transform: translateY(-1px); border-color: rgba(112,225,200,.58); background: rgba(112,225,200,.08); }
+    .button.primary { background: linear-gradient(135deg, rgba(112,225,200,.22), rgba(138,180,255,.16)); border-color: rgba(112,225,200,.46); }
+
+    .hero-side { padding: 24px; display: flex; flex-direction: column; gap: 14px; }
+    .truth { padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel-2); }
+    .truth .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .12em; }
+    .truth .value { font-size: 22px; font-weight: 850; margin-top: 4px; }
+    .truth .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+    .section { margin-top: 26px; }
+    .section-head { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin: 0 4px 14px; }
+    .section h2 { font-size: 28px; margin: 0; letter-spacing: -.03em; }
+    .section-head p { margin: 0; color: var(--muted); max-width: 620px; }
+
+    .grid { display: grid; gap: 14px; }
+    .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+    .grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+    .grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+
+    .tile { padding: 20px; border: 1px solid var(--line); border-radius: 20px; background: rgba(22,27,34,.72); min-height: 160px; }
+    .tile:hover { border-color: rgba(112,225,200,.35); background: rgba(22,27,34,.9); }
+    .tile h3 { margin: 0 0 8px; font-size: 18px; }
+    .tile p { margin: 0; color: var(--muted); font-size: 14px; }
+    .tile .pillrow { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+    .pill { font-size: 12px; color: #c7d1da; border: 1px solid var(--line); border-radius: 999px; padding: 5px 8px; background: rgba(255,255,255,.03); }
+
+    .codeblock {
+      font-family: var(--mono);
+      white-space: pre-wrap;
+      font-size: 13px;
+      color: #d6deeb;
+      background: rgba(0,0,0,.28);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+    .flow-step { padding: 16px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.035); position: relative; }
+    .flow-step:not(:last-child):after { content:"\2192"; position:absolute; right:-13px; top: 50%; transform: translateY(-50%); color: var(--accent); font-weight: 900; z-index: 1; }
+    .flow-step strong { display: block; margin-bottom: 5px; }
+    .flow-step span { color: var(--muted); font-size: 13px; }
+
+    .split { display: grid; grid-template-columns: .9fr 1.1fr; gap: 14px; }
+    .list { margin: 0; padding-left: 18px; color: #c7d1da; }
+    .list li { margin: 8px 0; }
+
+    .status { display: inline-flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 16px rgba(126,231,135,.5); }
+
+    .day-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+    .day-card { padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.035); }
+    .day-card strong { display: block; color: var(--accent); margin-bottom: 6px; }
+    .day-card span { color: var(--muted); font-size: 13px; }
+
+    footer { color: var(--muted); text-align: center; padding: 40px 0 16px; font-size: 13px; }
+
+    @media (max-width: 980px) {
+      .hero, .split { grid-template-columns: 1fr; }
+      .grid.cols-4, .grid.cols-3, .grid.cols-2, .flow { grid-template-columns: 1fr; }
+      .flow-step:after { display: none; }
+      .topbar { align-items: flex-start; border-radius: 22px; flex-direction: column; }
+      .nav { justify-content: flex-start; }
+      .brand { min-width: 0; }
+      .hero-main { padding: 28px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="WilliamOS home">
+        <div class="sigil" aria-hidden="true"></div>
+        <div>
+          <strong>WilliamOS</strong>
+          <span>Personal Cortex Command Center</span>
+        </div>
+      </a>
+      <nav class="nav" aria-label="Page navigation">
+        <a href="#mission">Mission</a>
+        <a href="#stack">Stack</a>
+        <a href="#vault">Vault</a>
+        <a href="#commands">Commands</a>
+        <a href="#workflow">Rhythm</a>
+        <a href="#graphify">Graphify</a>
+        <a href="#guardrails">Guardrails</a>
+        <a href="#search">Search</a>
+        <a href="#synthesis">Synthesis</a>
+        <a href="#inbox-proc">Inbox</a>
+        <a href="#doctrine-promo">Doctrine</a>
+        <a href="#decision-promo">Decisions</a>
+        <a href="#concept-promo">Concepts</a>
+        <a href="#project-promo">Projects</a>
+        <a href="#cortex-map">Cortex</a>
+        <a href="#cockpit">Cockpit</a>
+        <a href="#git-gov">Git</a>
+        <a href="#backup-gov">Backup</a>
+        <a href="#restore-drill">Restore</a>
+        <a href="#remote-strategy">Remote</a>
+        <a href="#release-gov">Release</a>
+        <a href="#routine">Routine</a>
+        <a href="#review-queues">Review</a>
+        <a href="#acceptance">Accept</a>
+        <a href="#closure">Closure</a>
+        <a href="#maintenance">v1.1</a>
+        <a href="#drive-backup">Drive</a>
+        <a href="#workspace">Workspace</a>
+        <a href="#production">Production</a>
+        <a href="#control-center">Control Center</a>
+        <a href="#plugins">Plugins</a>
+        <a href="#first7">Start</a>
+      </nav>
+    </header>
+
+    <main id="top">
+
+      <!-- MISSION -->
+      <section class="hero" id="mission">
+        <div class="card hero-main">
+          <div class="eyebrow">Separate from TerraFusion</div>
+          <h1>Your private judgment engine.</h1>
+          <p>WilliamOS turns daily notes, appraisal judgment, county leadership, doctrine, decisions, learning, and TerraFusion strategy into a navigable personal cortex powered by Obsidian, Graphify, Git, CLI automation, and AI guardrails.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="#commands">Run the CLI</a>
+            <a class="button" href="#workflow">See the rhythm</a>
+            <a class="button" href="#vault">Open the vault map</a>
+          </div>
+        </div>
+        <aside class="card hero-side">
+          <div class="truth">
+            <div class="label">Prime directive</div>
+            <div class="value">Think clearly.</div>
+            <div class="sub">Not a task dump. Not a wiki. A personal meaning system.</div>
+          </div>
+          <div class="truth">
+            <div class="label">Boundary</div>
+            <div class="value">WilliamOS &ne; TerraFusion Brain</div>
+            <div class="sub">Product truth stays in TerraFusion. Personal judgment lives here.</div>
+          </div>
+          <div class="truth">
+            <div class="label">Current status</div>
+            <div class="status"><span class="dot"></span> Control Center live</div>
+            <div class="sub">91 commands. One-command launch. Visual cockpit at localhost:8420.</div>
+          </div>
+        </aside>
+      </section>
+
+      <!-- BRAIN LAYERS -->
+      <section class="section" id="stack">
+        <div class="section-head">
+          <h2>Personal intelligence stack</h2>
+          <p>Each layer has a job. Keep the stack boring, inspectable, and hard to corrupt.</p>
+        </div>
+        <div class="grid cols-4">
+          <div class="tile"><h3>Obsidian</h3><p>The human-readable vault for notes, decisions, doctrine, cases, maps, and daily command logs.</p><div class="pillrow"><span class="pill">Markdown</span><span class="pill">Backlinks</span><span class="pill">Canvas</span></div></div>
+          <div class="tile"><h3>Graphify</h3><p>The relationship engine for revealing central concepts, orphan ideas, duplicated themes, and bridges.</p><div class="pillrow"><span class="pill">graph.html</span><span class="pill">graph.json</span><span class="pill">GRAPH_REPORT</span></div></div>
+          <div class="tile"><h3>CLI</h3><p>The nervous system for creating notes, running checks, finding stale decisions, and maintaining the vault.</p><div class="pillrow"><span class="pill">python</span><span class="pill">just</span><span class="pill">rg</span><span class="pill">jq</span></div></div>
+          <div class="tile"><h3>AI / MCP</h3><p>Read-first AI access with write restrictions so assistants can reason over the vault without polluting it.</p><div class="pillrow"><span class="pill">read-only first</span><span class="pill">guardrails</span></div></div>
+        </div>
+      </section>
+
+      <!-- VAULT MAP -->
+      <section class="section" id="vault">
+        <div class="section-head">
+          <h2>Vault map</h2>
+          <p>The vault separates raw capture, durable judgment, strategy, people, maps, exports, and archive.</p>
+        </div>
+        <div class="grid cols-3">
+          <div class="tile"><h3>00-03: Cortex core</h3><p>Inbox, daily notes, decisions, and doctrine. This is where raw life becomes judgment.</p></div>
+          <div class="tile"><h3>04-06: Professional brain</h3><p>Appraisal, assessor office, and TerraFusion strategy notes without mixing into product repo governance.</p></div>
+          <div class="tile"><h3>07-12: Growth and maps</h3><p>Learning, people, cases, ideas, projects, and canvas/diagram thinking.</p></div>
+          <div class="tile"><h3>13: Templates</h3><p>12 repeatable note shapes for daily command, weekly review, decision, doctrine, concept, case, meeting, person, project, learning, source, and work order seed.</p></div>
+          <div class="tile"><h3>20-40: Systems</h3><p>Graphify, MCP policy, AI access rules, and scripts. This is the machine-readable support layer.</p></div>
+          <div class="tile"><h3>50-99: Dashboards and archive</h3><p>6 MOC dashboards, index notes, exports, and cold storage. Keep the active brain clean.</p></div>
+        </div>
+      </section>
+
+      <!-- CLI COCKPIT -->
+      <section class="section" id="commands">
+        <div class="section-head">
+          <h2>Command line cockpit</h2>
+          <p>Use these from the package root. They create real Markdown files in the WilliamOS vault.</p>
+        </div>
+        <div class="split">
+          <div class="tile">
+            <h3>Core commands</h3>
+            <ul class="list">
+              <li><code>init</code> initializes the vault scaffold.</li>
+              <li><code>today</code> creates today's daily command note.</li>
+              <li><code>weekly</code> creates the current weekly review.</li>
+              <li><code>inbox "text"</code> captures a fast thought.</li>
+              <li><code>decision "title"</code> creates a decision record.</li>
+              <li><code>doctrine "title"</code> creates a doctrine note.</li>
+              <li><code>concept "title"</code> creates a concept note.</li>
+              <li><code>case "title"</code> creates a case analysis.</li>
+              <li><code>orphans</code> finds unlinked notes.</li>
+              <li><code>stale-decisions</code> finds overdue reviews.</li>
+              <li><code>check</code> runs vault governance checks.</li>
+              <li><code>mcp-check</code> checks MCP readiness.</li>
+              <li><code>graph</code> runs Graphify.</li>
+              <li><code>semantic-index</code> builds the search index.</li>
+              <li><code>semantic-search "query"</code> searches the vault.</li>
+              <li><code>semantic-status</code> shows index status.</li>
+              <li><code>semantic-clear</code> deletes the index.</li>
+              <li><code>synth-week</code> generates weekly synthesis.</li>
+              <li><code>synth-week --dry-run</code> previews without writing.</li>
+              <li><code>synth-status</code> shows synthesis status.</li>
+              <li><code>inbox-status</code> shows inbox processor status.</li>
+              <li><code>process-inbox</code> generates triage report.</li>
+              <li><code>process-inbox --dry-run</code> previews without writing.</li>
+              <li><code>process-inbox --promote-drafts</code> creates draft notes.</li>
+              <li><code>doctrine-status</code> shows doctrine promotion status.</li>
+              <li><code>promote-doctrine</code> generates doctrine promotion report.</li>
+              <li><code>promote-doctrine --dry-run</code> previews without writing.</li>
+              <li><code>promote-doctrine --source inbox</code> inbox sources only.</li>
+              <li><code>cockpit-status</code> shows review cockpit status.</li>
+              <li><code>cockpit</code> generates review cockpit dashboard.</li>
+              <li><code>cockpit --dry-run</code> previews without writing.</li>
+              <li><code>cockpit --html</code> generates with HTML dashboard.</li>
+              <li><code>git-status</code> shows Git repo status and safety.</li>
+              <li><code>git-init</code> initializes Git (no remote).</li>
+              <li><code>snapshot --dry-run</code> previews snapshot.</li>
+              <li><code>snapshot --message "..."</code> creates snapshot.</li>
+              <li><code>snapshot-manifest</code> generates manifest.</li>
+            </ul>
+          </div>
+          <pre class="codeblock">python scripts/william.py init
+python scripts/william.py today
+python scripts/william.py weekly
+python scripts/william.py inbox "thought here"
+python scripts/william.py decision "Separate Personal Brain"
+python scripts/william.py doctrine "Public Trust Is the Product"
+python scripts/william.py concept "Assessor as Translator"
+python scripts/william.py case "Comparable Selection"
+python scripts/william.py orphans
+python scripts/william.py stale-decisions
+python scripts/william.py check
+python scripts/william.py mcp-check
+python scripts/william.py graph
+python scripts/william.py semantic-index
+python scripts/william.py semantic-search "query"
+python scripts/william.py semantic-status
+python scripts/william.py semantic-clear --confirm
+python scripts/william.py synth-week
+python scripts/william.py synth-week --dry-run
+python scripts/william.py synth-status
+python scripts/william.py inbox-status
+python scripts/william.py process-inbox
+python scripts/william.py process-inbox --dry-run
+python scripts/william.py process-inbox --promote-drafts
+python scripts/william.py doctrine-status
+python scripts/william.py promote-doctrine
+python scripts/william.py promote-doctrine --dry-run
+python scripts/william.py promote-doctrine --source inbox
+python scripts/william.py promote-doctrine --source synthesis
+python scripts/william.py decision-status
+python scripts/william.py promote-decisions
+python scripts/william.py promote-decisions --dry-run
+python scripts/william.py promote-decisions --source inbox
+python scripts/william.py promote-decisions --source synthesis
+python scripts/william.py concept-status
+python scripts/william.py promote-concepts
+python scripts/william.py promote-concepts --dry-run
+python scripts/william.py promote-concepts --source inbox
+python scripts/william.py promote-concepts --source synthesis
+python scripts/william.py promote-concepts --source ideas
+python scripts/william.py project-status
+python scripts/william.py promote-projects
+python scripts/william.py promote-projects --dry-run
+python scripts/william.py promote-projects --source inbox
+python scripts/william.py promote-projects --source synthesis
+python scripts/william.py promote-projects --source ideas
+python scripts/william.py cortex-status
+python scripts/william.py cortex-map
+python scripts/william.py cortex-map --dry-run
+python scripts/william.py cortex-map --scope core
+python scripts/william.py cockpit-status
+python scripts/william.py cockpit
+python scripts/william.py cockpit --dry-run
+python scripts/william.py cockpit --html
+python scripts/william.py git-status
+python scripts/william.py git-init
+python scripts/william.py snapshot --dry-run
+python scripts/william.py snapshot --message "Baseline WilliamOS v1"
+python scripts/william.py snapshot-manifest</pre>
+        </div>
+      </section>
+
+      <!-- OPERATING RHYTHM -->
+      <section class="section" id="workflow">
+        <div class="section-head">
+          <h2>Operating rhythm</h2>
+          <p>The system compounds only if captured experience becomes linked insight, then doctrine or decision.</p>
+        </div>
+        <div class="card" style="padding:18px;">
+          <div class="flow">
+            <div class="flow-step"><strong>Capture</strong><span>Inbox, daily notes, cases, questions, meeting fragments.</span></div>
+            <div class="flow-step"><strong>Link</strong><span>Connect ideas to people, cases, doctrine, county pain, and strategy.</span></div>
+            <div class="flow-step"><strong>Decide</strong><span>Turn unresolved loops into dated decision records.</span></div>
+            <div class="flow-step"><strong>Doctrine</strong><span>Promote repeated truths into reusable personal rules.</span></div>
+            <div class="flow-step"><strong>Graph review</strong><span>Use Graphify to find the hidden structure of your thinking.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- GRAPHIFY WORKFLOW -->
+      <section class="section" id="graphify">
+        <div class="section-head">
+          <h2>Graphify workflow</h2>
+          <p>Graphify reveals what your brain connects, avoids, and circles.</p>
+        </div>
+        <div class="split">
+          <div class="tile">
+            <h3>What to look for</h3>
+            <ul class="list">
+              <li>Central nodes: your most-connected ideas.</li>
+              <li>Bridge nodes: ideas that connect domains.</li>
+              <li>Orphans: unlinked notes that need a home.</li>
+              <li>Duplicates: concepts that should be merged.</li>
+              <li>Emerging doctrine: repeated truths waiting for promotion.</li>
+              <li>Circling: decisions you avoid making.</li>
+            </ul>
+          </div>
+          <div class="tile">
+            <h3>Default target folders</h3>
+            <ul class="list">
+              <li>03_Doctrine</li>
+              <li>04_Appraisal</li>
+              <li>05_Assessor_Office</li>
+              <li>06_TerraFusion_Strategy</li>
+              <li>07_Learning</li>
+              <li>09_Cases</li>
+              <li>10_Ideas</li>
+              <li>11_Projects</li>
+            </ul>
+            <p style="margin-top:12px;">99_Archive is excluded. Output goes to 20_Graphify/generated/.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- MCP GUARDRAILS -->
+      <section class="section" id="guardrails">
+        <div class="section-head">
+          <h2>AI / MCP access layer</h2>
+          <p>Read-only first. AI helps you think. AI does not own your memory.</p>
+        </div>
+        <div class="grid cols-3">
+          <div class="tile">
+            <h3>Read-only by default</h3>
+            <ul class="list">
+              <li>Read notes and summarize with path citations.</li>
+              <li>Search for concepts, decisions, doctrine, cases.</li>
+              <li>Find contradictions and connections.</li>
+              <li>Suggest links, tags, and missing frontmatter.</li>
+            </ul>
+          </div>
+          <div class="tile">
+            <h3>Protected folders</h3>
+            <ul class="list">
+              <li><code>02_Decisions/</code></li>
+              <li><code>03_Doctrine/</code></li>
+              <li><code>05_Assessor_Office/</code></li>
+              <li><code>09_Cases/</code></li>
+              <li><code>50_Dashboards/</code></li>
+            </ul>
+            <p style="margin-top:8px;">AI may read these but never write without explicit approval.</p>
+          </div>
+          <div class="tile">
+            <h3>Future safe write zones</h3>
+            <ul class="list">
+              <li><code>00_Inbox/</code></li>
+              <li><code>01_Daily/</code></li>
+              <li><code>90_Exports/</code></li>
+            </ul>
+            <p style="margin-top:8px;">Write access not yet enabled. Documented for a future work order.</p>
+          </div>
+        </div>
+        <div class="split" style="margin-top:14px;">
+          <div class="tile">
+            <h3>MCP readiness check</h3>
+            <pre class="codeblock" style="margin-top:10px;">python scripts/william.py mcp-check</pre>
+            <p style="margin-top:10px;">Validates docs, scope policy, write policy, and protected folder listings. Does not require MCP to be installed.</p>
+          </div>
+          <div class="tile">
+            <h3>Disable access</h3>
+            <ul class="list">
+              <li>Remove the MCP server entry from your AI client config.</li>
+              <li>Or disable the Obsidian REST API plugin.</li>
+              <li>No vault data is modified when you disable access.</li>
+              <li>See <code>30_MCP/MCP_SETUP.md</code> for details.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Example AI prompt</h3>
+          <pre class="codeblock" style="margin:0;">You have read-only access to my WilliamOS vault.
+Search for notes related to public trust.
+Summarize what I have written, cite note paths,
+and separate direct notes from your inference.
+Do not edit files.</pre>
+        </div>
+      </section>
+
+      <!-- SEMANTIC SEARCH -->
+      <section class="section" id="search">
+        <div class="section-head">
+          <h2>Semantic search</h2>
+          <p>Local-first search that understands meaning, not just keywords. No cloud APIs, no secrets.</p>
+        </div>
+        <div class="grid cols-3">
+          <div class="tile">
+            <h3>Semantic mode</h3>
+            <p>sentence-transformers with all-MiniLM-L6-v2. Understands meaning and finds conceptually related notes.</p>
+            <div class="pillrow"><span class="pill">best quality</span><span class="pill">~80 MB model</span><span class="pill">local CPU</span></div>
+          </div>
+          <div class="tile">
+            <h3>TF-IDF mode</h3>
+            <p>scikit-learn TF-IDF vectors. Matches keyword overlap without needing a neural model.</p>
+            <div class="pillrow"><span class="pill">good fallback</span><span class="pill">lightweight</span><span class="pill">fast</span></div>
+          </div>
+          <div class="tile">
+            <h3>Keyword mode</h3>
+            <p>ripgrep exact string matching via <code>just search</code>. Always available, no install needed.</p>
+            <div class="pillrow"><span class="pill">basic</span><span class="pill">zero install</span><span class="pill">exact match</span></div>
+          </div>
+        </div>
+        <div class="split" style="margin-top:14px;">
+          <div class="tile">
+            <h3>Quick start</h3>
+            <pre class="codeblock" style="margin-top:10px;">pip install -r requirements-search.txt
+python scripts/william.py semantic-index
+python scripts/william.py semantic-search "appraisal methodology"
+python scripts/william.py semantic-status</pre>
+          </div>
+          <div class="tile">
+            <h3>Index scope</h3>
+            <ul class="list">
+              <li>Indexes: Decisions, Doctrine, Appraisal, Assessor, TerraFusion Strategy, Learning, Cases, Ideas, Projects, Dashboards</li>
+              <li>Excludes: Inbox, Daily, People, Templates, Graphify, MCP, Scripts, Exports, Archive</li>
+              <li>Output: <code>40_Search/generated/</code> (git-ignored)</li>
+              <li>Never modifies source Markdown files</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- WEEKLY SYNTHESIS -->
+      <section class="section" id="synthesis">
+        <div class="section-head">
+          <h2>Weekly synthesis</h2>
+          <p>Local-first review generator. Turns a week of notes into a structured operating summary. Deterministic heuristics, optionally enhanced by semantic search.</p>
+        </div>
+        <div class="grid cols-3">
+          <div class="tile">
+            <h3>What it detects</h3>
+            <ul class="list">
+              <li>Open decisions and stale reviews</li>
+              <li>Active doctrine references</li>
+              <li>Repeated themes across notes</li>
+              <li>Open loops (unchecked tasks)</li>
+              <li>Candidate doctrines</li>
+              <li>Candidate work orders</li>
+              <li>Tensions and contradictions</li>
+            </ul>
+          </div>
+          <div class="tile">
+            <h3>What it will not do</h3>
+            <ul class="list">
+              <li>Modify source notes</li>
+              <li>Rewrite doctrine</li>
+              <li>Close or change decisions</li>
+              <li>Delete anything</li>
+              <li>Require cloud AI</li>
+              <li>Run as a background daemon</li>
+            </ul>
+            <p style="margin-top:8px;">Review before relying on it. Every synthesis is a draft.</p>
+          </div>
+          <div class="tile">
+            <h3>Commands</h3>
+            <pre class="codeblock" style="margin-top:10px;">python scripts/william.py synth-week
+python scripts/william.py synth-week --week 2026-W25
+python scripts/william.py synth-week --dry-run
+python scripts/william.py synth-status</pre>
+            <p style="margin-top:10px;">Output: <code>60_Synthesis/Weekly Synthesis - YYYY-Www.md</code></p>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Source scope</h3>
+          <p style="margin:0; color: var(--muted);">Scans: Daily, Decisions, Doctrine, Appraisal, Assessor, TerraFusion Strategy, Learning, Cases, Ideas, Projects. Excludes: Inbox, People, Templates, Graphify, MCP, Scripts, Search, Dashboards, Exports, Archive. If the semantic index is available, theme suggestions are enhanced.</p>
+        </div>
+      </section>
+
+      <!-- INBOX PROCESSOR -->
+      <section class="section" id="inbox-proc">
+        <div class="section-head">
+          <h2>Inbox processor</h2>
+          <p>Local triage assistant. Classifies raw inbox notes into 12 categories using signal-pattern heuristics. Never modifies source notes.</p>
+        </div>
+        <div class="grid cols-3">
+          <div class="tile">
+            <h3>What it does</h3>
+            <ul class="list">
+              <li>Scans <code>00_Inbox/</code> for unprocessed notes</li>
+              <li>Classifies into 12 categories by signal patterns</li>
+              <li>Assigns confidence tiers (high/medium/low)</li>
+              <li>Generates structured triage reports</li>
+              <li>Optionally creates promoted drafts</li>
+              <li>Suggests links via semantic search</li>
+            </ul>
+          </div>
+          <div class="tile">
+            <h3>What it will not do</h3>
+            <ul class="list">
+              <li>Modify inbox notes</li>
+              <li>Delete anything</li>
+              <li>Move notes automatically</li>
+              <li>Create doctrine or decisions</li>
+              <li>Require cloud AI</li>
+              <li>Run as a background daemon</li>
+            </ul>
+            <p style="margin-top:8px;">Promoted drafts require human review before action.</p>
+          </div>
+          <div class="tile">
+            <h3>Commands</h3>
+            <pre class="codeblock" style="margin-top:10px;">python scripts/william.py inbox-status
+python scripts/william.py process-inbox
+python scripts/william.py process-inbox --dry-run
+python scripts/william.py process-inbox --since 2026-06-01
+python scripts/william.py process-inbox --promote-drafts</pre>
+            <p style="margin-top:10px;">Reports: <code>70_InboxProcessor/reports/</code></p>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Classification categories</h3>
+          <div class="pillrow">
+            <span class="pill">doctrine_candidate</span>
+            <span class="pill">decision_candidate</span>
+            <span class="pill">concept_candidate</span>
+            <span class="pill">case_candidate</span>
+            <span class="pill">project_candidate</span>
+            <span class="pill">learning_candidate</span>
+            <span class="pill">person_or_relationship</span>
+            <span class="pill">source_or_reference</span>
+            <span class="pill">work_order_seed</span>
+            <span class="pill">open_loop</span>
+            <span class="pill">daily_log_fragment</span>
+            <span class="pill">archive_or_noise</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- DOCTRINE PROMOTION -->
+      <section class="section" id="doctrine-promo">
+        <div class="section-head">
+          <h2>Doctrine promotion</h2>
+          <p>Local doctrine drafting assistant. Detects candidates from synthesis, inbox, and idea notes. Official doctrine folder is never modified automatically.</p>
+        </div>
+        <div class="grid cols-3">
+          <div class="tile">
+            <h3>What it does</h3>
+            <ul class="list">
+              <li>Scans synthesis, inbox, ideas, learning, assessor, TerraFusion notes</li>
+              <li>Detects doctrine candidates by signal patterns</li>
+              <li>Groups similar candidates</li>
+              <li>Checks for duplicate existing doctrine</li>
+              <li>Generates promotion reports</li>
+              <li>Creates draft doctrine notes for review</li>
+            </ul>
+          </div>
+          <div class="tile">
+            <h3>What it will not do</h3>
+            <ul class="list">
+              <li>Modify <code>03_Doctrine/</code></li>
+              <li>Delete anything</li>
+              <li>Move drafts automatically</li>
+              <li>Accept candidates without human review</li>
+              <li>Rewrite existing doctrine</li>
+              <li>Require cloud AI</li>
+            </ul>
+            <p style="margin-top:8px;">Every draft includes a human review checklist.</p>
+          </div>
+          <div class="tile">
+            <h3>Commands</h3>
+            <pre class="codeblock" style="margin-top:10px;">python scripts/william.py doctrine-status
+python scripts/william.py promote-doctrine --dry-run
+python scripts/william.py promote-doctrine
+python scripts/william.py promote-doctrine --source inbox
+python scripts/william.py promote-doctrine --source synthesis</pre>
+            <p style="margin-top:10px;">Reports: <code>80_DoctrinePromotion/reports/</code><br>Drafts: <code>80_DoctrinePromotion/drafts/</code></p>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Duplicate doctrine warning</h3>
+          <p style="margin:0; color: var(--muted);">The engine checks candidate titles and content against existing notes in <code>03_Doctrine/</code> using keyword overlap. Possible duplicates are flagged in reports and drafts, but never blocked. If the semantic index is available, related doctrine is also surfaced. Human judgment decides what is truly a duplicate.</p>
+        </div>
+      </section>
+
+      <!-- DECISION PROMOTION -->
+      <section class="section" id="decision-promo">
+        <div class="section-head">
+          <h2>Decision Promotion</h2>
+          <p>Detect decision candidates from source material. Generate draft decision records for human review. Never modify <code>02_Decisions/</code> automatically.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>How it works</h3>
+            <ol style="margin-top:10px; padding-left:18px;">
+              <li>Scan source folders for decision-signal language</li>
+              <li>Score each note by signal density (general + domain patterns)</li>
+              <li>Extract candidate lines with strong decision language</li>
+              <li>Capture rationale/tradeoff lines from the same source</li>
+              <li>Check for similar existing decisions in <code>02_Decisions/</code></li>
+              <li>Generate a promotion report and draft decision records</li>
+            </ol>
+            <h3 style="margin-top:14px;">Will NOT</h3>
+            <ul style="margin-top:6px; padding-left:18px;">
+              <li>Modify existing decisions</li>
+              <li>Auto-promote drafts to active</li>
+              <li>Require cloud AI</li>
+            </ul>
+            <p style="margin-top:8px;">Every draft includes a human review checklist and captured rationale.</p>
+          </div>
+          <div class="tile">
+            <h3>Commands</h3>
+            <pre class="codeblock" style="margin-top:10px;">python scripts/william.py decision-status
+python scripts/william.py promote-decisions --dry-run
+python scripts/william.py promote-decisions
+python scripts/william.py promote-decisions --source inbox
+python scripts/william.py promote-decisions --source synthesis</pre>
+            <p style="margin-top:10px;">Reports: <code>85_DecisionPromotion/reports/</code><br>Drafts: <code>85_DecisionPromotion/drafts/</code></p>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Duplicate decision warning</h3>
+          <p style="margin:0; color: var(--muted);">The engine checks candidate titles and content against existing notes in <code>02_Decisions/</code> using keyword overlap. Possible duplicates are flagged in reports and drafts, but never blocked. If the semantic index is available, related decisions are also surfaced. Human judgment decides what is truly a duplicate.</p>
+        </div>
+      </section>
+
+      <!-- CONCEPT PROMOTION -->
+      <section class="section" id="concept-promo">
+        <div class="section-head">
+          <h2>Concept Promotion</h2>
+          <p>Detect concept candidates from source material. Generate draft concept notes for human review. Never modify <code>10_Ideas/</code> automatically.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>How it works</h3>
+            <ol style="margin-top:10px; padding-left:18px;">
+              <li>Scan source folders for concept-signal language</li>
+              <li>Score each note by signal density (general + domain patterns)</li>
+              <li>Extract candidate lines with strong concept language</li>
+              <li>Extract definition/meaning lines from the same source</li>
+              <li>Infer why the concept matters</li>
+              <li>Check for similar existing concepts</li>
+              <li>Generate a promotion report and draft concept notes</li>
+            </ol>
+            <h3 style="margin-top:14px;">Will NOT</h3>
+            <ul style="margin-top:6px; padding-left:18px;">
+              <li>Modify existing idea/concept notes</li>
+              <li>Auto-promote drafts to active</li>
+              <li>Rewrite doctrine or decisions</li>
+              <li>Require cloud AI</li>
+            </ul>
+            <p style="margin-top:8px;">Every draft includes a human review checklist, definition, and source evidence.</p>
+          </div>
+          <div class="tile">
+            <h3>Commands</h3>
+            <pre class="codeblock" style="margin-top:10px;">python scripts/william.py concept-status
+python scripts/william.py promote-concepts --dry-run
+python scripts/william.py promote-concepts
+python scripts/william.py promote-concepts --source inbox
+python scripts/william.py promote-concepts --source synthesis
+python scripts/william.py promote-concepts --source ideas</pre>
+            <p style="margin-top:10px;">Reports: <code>86_ConceptPromotion/reports/</code><br>Drafts: <code>86_ConceptPromotion/drafts/</code></p>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Duplicate concept warning</h3>
+          <p style="margin:0; color: var(--muted);">The engine checks candidate titles and content against existing notes in <code>10_Ideas/</code>, <code>07_Learning/</code>, <code>05_Assessor_Office/</code>, and <code>06_TerraFusion_Strategy/</code> using keyword overlap. Possible duplicates are flagged in reports and drafts, but never blocked. If the semantic index is available, related concepts are also surfaced. Human judgment decides what is truly a duplicate.</p>
+        </div>
+      </section>
+
+      <!-- PROJECT / WO PROMOTION -->
+      <section class="section" id="project-promo">
+        <div class="section-head">
+          <h2>Project / WO Promotion</h2>
+          <p>Detect project candidates, work-order seeds, and action items from source material. Generate draft notes for human review. Never modify <code>11_Projects/</code> automatically. Never execute work orders. Never create GitHub issues or PRs.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>How it works</h3>
+            <ol style="margin-top:10px; padding-left:18px;">
+              <li>Scan source folders for project, WO, and action signals</li>
+              <li>Score each note across four signal categories</li>
+              <li>Classify candidates as project, work_order, or action_item</li>
+              <li>Extract scope, rationale, acceptance criteria, risks, dependencies</li>
+              <li>Check for similar existing projects</li>
+              <li>Generate a promotion report and draft notes</li>
+            </ol>
+            <h3 style="margin-top:14px;">Will NOT</h3>
+            <ul style="margin-top:6px; padding-left:18px;">
+              <li>Modify existing project notes</li>
+              <li>Execute work orders</li>
+              <li>Create GitHub issues or PRs</li>
+              <li>Invoke agents</li>
+              <li>Require cloud AI</li>
+            </ul>
+            <p style="margin-top:8px;">Every draft includes a human review checklist.</p>
+          </div>
+          <div class="tile">
+            <h3>Commands</h3>
+            <pre class="codeblock" style="margin-top:10px;">python scripts/william.py project-status
+python scripts/william.py promote-projects --dry-run
+python scripts/william.py promote-projects
+python scripts/william.py promote-projects --source inbox
+python scripts/william.py promote-projects --source synthesis
+python scripts/william.py promote-projects --source ideas</pre>
+            <p style="margin-top:10px;">Reports: <code>87_ProjectPromotion/reports/</code><br>Project drafts: <code>87_ProjectPromotion/project_drafts/</code><br>WO drafts: <code>87_ProjectPromotion/work_order_drafts/</code></p>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Duplicate project warning</h3>
+          <p style="margin:0; color: var(--muted);">The engine checks candidate titles and content against existing notes in <code>11_Projects/</code>, <code>10_Ideas/</code>, <code>06_TerraFusion_Strategy/</code>, and <code>07_Learning/</code> using keyword overlap. Possible duplicates are flagged in reports and drafts, but never blocked. If the semantic index is available, related projects are also surfaced. Human judgment decides what is truly a duplicate.</p>
+        </div>
+      </section>
+
+      <!-- CORTEX MAP -->
+      <section class="section" id="cortex-map">
+        <div class="section-head">
+          <h2>Cortex Map Generator</h2>
+          <p>Personal graph review. Reveals central ideas, orphan notes, bridge concepts, repeated themes, and missing-link opportunities. Never modifies source notes.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="card" style="padding:18px;">
+            <h3 style="margin:0 0 10px;">How it works</h3>
+            <ol class="list" style="margin:0;">
+              <li>Scans vault notes for wiki links, Markdown links, tags, and frontmatter</li>
+              <li>Builds a local graph model with nodes (notes, tags, folders) and edges (links, tags, citations)</li>
+              <li>Computes centrality, bridge scores, and orphan status</li>
+              <li>Generates a cortex review report, graph JSON, Mermaid map, and suggested link report</li>
+              <li>Optionally reads Graphify output and semantic search metadata</li>
+              <li>William reviews all outputs and decides what to act on</li>
+            </ol>
+          </div>
+          <div class="card" style="padding:18px;">
+            <h3 style="margin:0 0 10px;">Will NOT</h3>
+            <ul class="list" style="margin:0;">
+              <li>Modify source notes</li>
+              <li>Write backlinks into notes automatically</li>
+              <li>Rewrite doctrine, decisions, concepts, or projects</li>
+              <li>Move or delete anything</li>
+              <li>Execute work orders</li>
+              <li>Call cloud APIs</li>
+              <li>Claim graph results are truth</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Commands</h3>
+          <pre style="margin:0; padding:14px; background:var(--panel-2); border-radius:10px; overflow-x:auto;">python scripts/william.py cortex-status
+python scripts/william.py cortex-map --dry-run
+python scripts/william.py cortex-map
+python scripts/william.py cortex-map --scope core
+python scripts/william.py cortex-map --scope promotions
+python scripts/william.py cortex-map --scope all</pre>
+          <p style="margin-top:10px;">Scope options:</p>
+          <ul class="list" style="margin:0;">
+            <li><code>--scope core</code> — Daily, Decisions, Doctrine, Appraisal, Assessor, Strategy, Learning, Cases, Ideas, Projects</li>
+            <li><code>--scope promotions</code> — Synthesis, Inbox reports/drafts, all promotion reports/drafts</li>
+            <li><code>--scope all</code> (default) — core + promotions</li>
+          </ul>
+          <p style="margin-top:10px;">Reports: <code>88_CortexMap/reports/</code><br>Graph JSON: <code>88_CortexMap/graphs/</code><br>Mermaid maps: <code>88_CortexMap/maps/</code><br>Suggested links: <code>88_CortexMap/suggested_links/</code></p>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Graphify and semantic search</h3>
+          <p style="margin:0; color: var(--muted);">Graphify is optional. If <code>20_Graphify/graph.json</code> exists, the cortex report notes its presence. The semantic search index is also optional. Neither is required for the cortex map to generate. The final report honestly states whether each was used or absent.</p>
+        </div>
+      </section>
+
+      <!-- REVIEW COCKPIT -->
+      <section class="section" id="cockpit">
+        <div class="section-head">
+          <h2>Review Cockpit</h2>
+          <p>Mission-control dashboard. Summarizes all WilliamOS lanes in one view. Identifies what needs attention, what changed recently, and what drafts await review. Never modifies source notes.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="card" style="padding:18px;">
+            <h3 style="margin:0 0 10px;">How it works</h3>
+            <ol class="list" style="margin:0;">
+              <li>Reads status from all 12 WilliamOS lanes independently</li>
+              <li>Assigns health status: green / yellow / red / unknown</li>
+              <li>Counts review queues (inbox, drafts, suggestions)</li>
+              <li>Identifies stale artifacts and missing components</li>
+              <li>Generates a dashboard report, JSON data, and optional HTML</li>
+              <li>William reviews and decides what to act on</li>
+            </ol>
+          </div>
+          <div class="card" style="padding:18px;">
+            <h3 style="margin:0 0 10px;">Will NOT</h3>
+            <ul class="list" style="margin:0;">
+              <li>Modify source notes</li>
+              <li>Accept promotions or execute work orders</li>
+              <li>Create GitHub issues or PRs</li>
+              <li>Run background daemons</li>
+              <li>Depend on MCP or cloud services</li>
+              <li>Pretend local status is judgment</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Commands</h3>
+          <pre style="margin:0; padding:14px; background:var(--panel-2); border-radius:10px; overflow-x:auto;">python scripts/william.py cockpit-status
+python scripts/william.py cockpit --dry-run
+python scripts/william.py cockpit
+python scripts/william.py cockpit --html</pre>
+          <p style="margin-top:10px;">Reports: <code>89_ReviewCockpit/reports/</code><br>Dashboard JSON: <code>89_ReviewCockpit/data/</code><br>HTML dashboards: <code>89_ReviewCockpit/html/</code></p>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Lanes tracked</h3>
+          <div class="pillrow">
+            <span class="pill">system_check</span>
+            <span class="pill">mcp_guardrails</span>
+            <span class="pill">semantic_search</span>
+            <span class="pill">weekly_synthesis</span>
+            <span class="pill">inbox_processor</span>
+            <span class="pill">doctrine_promotion</span>
+            <span class="pill">decision_promotion</span>
+            <span class="pill">concept_promotion</span>
+            <span class="pill">project_promotion</span>
+            <span class="pill">cortex_map</span>
+            <span class="pill">orphan_notes</span>
+            <span class="pill">stale_decisions</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- GIT SNAPSHOT GOVERNANCE -->
+      <section class="section" id="git-gov">
+        <div class="section-head">
+          <h2>Git Snapshot Governance</h2>
+          <p>Local memory governance. Preserves vault history as named snapshots. No push by default. No remote by default. No secrets committed.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="card" style="padding:18px;">
+            <h3 style="margin:0 0 10px;">How it works</h3>
+            <ol class="list" style="margin:0;">
+              <li>Initialize Git locally (no remote created)</li>
+              <li>Run safety checks: forbidden files, .gitignore coverage</li>
+              <li>Preview what would be committed with dry-run</li>
+              <li>Generate a snapshot manifest describing system state</li>
+              <li>Create a named commit with all allowed files</li>
+              <li>Blocked if forbidden files (secrets, keys, cache) are detected</li>
+            </ol>
+          </div>
+          <div class="card" style="padding:18px;">
+            <h3 style="margin:0 0 10px;">Will NOT</h3>
+            <ul class="list" style="margin:0;">
+              <li>Push to any remote</li>
+              <li>Create remotes</li>
+              <li>Commit .env, secrets, credentials, or private keys</li>
+              <li>Commit machine-local state (workspace, cache, venv)</li>
+              <li>Rewrite history</li>
+              <li>Delete files</li>
+              <li>Run as a background daemon</li>
+              <li>Assume GitHub exists</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Commands</h3>
+          <pre style="margin:0; padding:14px; background:var(--panel-2); border-radius:10px; overflow-x:auto;">python scripts/william.py git-status
+python scripts/william.py git-init
+python scripts/william.py snapshot --dry-run
+python scripts/william.py snapshot --message "Baseline WilliamOS v1"
+python scripts/william.py snapshot-manifest</pre>
+          <p style="margin-top:10px;">Manifest: <code>91_GitGovernance/SNAPSHOT_MANIFEST.md</code> (committed with each snapshot)</p>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Forbidden file detection</h3>
+          <p style="margin:0; color: var(--muted);">The snapshot engine blocks commits if any forbidden files are detected: <code>.env</code>, <code>*.pem</code>, <code>*.key</code>, <code>id_rsa</code>, <code>credentials.*</code>, <code>secrets.*</code>, and more. Filenames containing <code>secret</code>, <code>token</code>, <code>password</code>, or <code>api_key</code> are flagged as suspicious. Forbidden files block the commit. Suspicious files are reported but do not block.</p>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Restore workflow</h3>
+          <pre style="margin:0; padding:14px; background:var(--panel-2); border-radius:10px; overflow-x:auto;">git log --oneline                          # find snapshot
+git checkout &lt;hash&gt; -- .                   # restore files
+python scripts/william.py check            # verify integrity
+git bundle create backup.bundle --all      # portable backup</pre>
+        </div>
+      </section>
+
+      <!-- BACKUP / SYNC GOVERNANCE -->
+      <section class="section" id="backup-gov">
+        <div class="section-head">
+          <h2>Backup / Sync Governance</h2>
+          <p>Local-first backup archives with SHA-256 checksums. Includes Git history. Never syncs automatically. Never pushes. Never modifies source notes.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="card" style="padding:18px;">
+            <h3 style="margin:0 0 10px;">How it works</h3>
+            <ol class="list" style="margin:0;">
+              <li>Scan files: include vault, scripts, docs, Git history</li>
+              <li>Exclude forbidden files, cache, machine-local state</li>
+              <li>Preview with dry-run before creating archive</li>
+              <li>Create timestamped ZIP with SHA-256 checksum</li>
+              <li>Verify archive integrity and completeness</li>
+              <li>Restore by extracting and running <code>check</code></li>
+            </ol>
+          </div>
+          <div class="card" style="padding:18px;">
+            <h3 style="margin:0 0 10px;">Will NOT</h3>
+            <ul class="list" style="margin:0;">
+              <li>Push to any remote</li>
+              <li>Set up cloud accounts</li>
+              <li>Run sync daemons</li>
+              <li>Include secrets, credentials, or keys</li>
+              <li>Assume external drive exists</li>
+              <li>Delete source files</li>
+              <li>Modify source notes</li>
+              <li>Require .env files</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Commands</h3>
+          <pre style="margin:0; padding:14px; background:var(--panel-2); border-radius:10px; overflow-x:auto;">python scripts/william.py backup-status
+python scripts/william.py backup --dry-run
+python scripts/william.py backup --dest E:\WilliamOS_Backups
+python scripts/william.py backup --dest ./local --create-dest
+python scripts/william.py backup-manifest
+python scripts/william.py backup-verify path/to/archive.zip</pre>
+          <p style="margin-top:10px;">Archive format: <code>WilliamOS-backup-YYYYMMDD-HHMMSS.zip</code> + <code>.sha256</code> checksum</p>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Output folders</h3>
+          <p style="margin:0; color: var(--muted);">Governance docs: <code>92_BackupGovernance/</code><br>Local archives: <code>92_BackupGovernance/local_archives/</code> (git-ignored)<br>Manifest: <code>92_BackupGovernance/BACKUP_MANIFEST.md</code> (committed with snapshots)</p>
+        </div>
+      </section>
+
+      <!-- RESTORE DRILL / DISASTER RECOVERY -->
+      <section class="section" id="restore-drill">
+        <div class="section-head">
+          <h2>Restore Drill / Disaster Recovery</h2>
+          <p>A backup is not trusted until restore is tested. Extracts to a safe temporary folder, runs health checks, and proves the archive is operational.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="card" style="padding:18px;">
+            <h3 style="margin:0 0 10px;">How it works</h3>
+            <ol class="list" style="margin:0;">
+              <li>Verify archive checksum (SHA-256)</li>
+              <li>Extract to a temporary folder outside the live repo</li>
+              <li>Check required files and directories exist</li>
+              <li>Check no forbidden files leaked into the archive</li>
+              <li>Verify Git history is present</li>
+              <li>Run health checks: <code>check</code>, <code>git-status</code>, <code>backup-status</code>, <code>cockpit-status</code></li>
+              <li>Generate restore drill report and manifest</li>
+              <li>Clean up temporary folder (unless <code>--keep</code>)</li>
+            </ol>
+          </div>
+          <div class="card" style="padding:18px;">
+            <h3 style="margin:0 0 10px;">Will NOT</h3>
+            <ul class="list" style="margin:0;">
+              <li>Overwrite the live WilliamOS folder</li>
+              <li>Delete live files</li>
+              <li>Move restored files over live files</li>
+              <li>Push to any remote</li>
+              <li>Create cloud sync</li>
+              <li>Modify source notes</li>
+              <li>Rewrite Git history</li>
+              <li>Claim success unless checks pass</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Commands</h3>
+          <pre style="margin:0; padding:14px; background:var(--panel-2); border-radius:10px; overflow-x:auto;">python scripts/william.py restore-status
+python scripts/william.py restore-drill --archive path/to/archive.zip --dest C:\temp\restore-test
+python scripts/william.py restore-drill --archive path/to/archive.zip --dest C:\temp\restore-test --keep
+python scripts/william.py restore-drill --latest --dest C:\temp\restore-test
+python scripts/william.py restore-manifest</pre>
+          <p style="margin-top:10px;">Reports: <code>93_RestoreDrill/reports/</code> &bull; Manifest: <code>93_RestoreDrill/RESTORE_MANIFEST.md</code></p>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Confidence levels</h3>
+          <p style="margin:0; color: var(--muted);"><strong style="color:var(--ok);">HIGH</strong> — all checks pass, checksum verified, all health checks pass.<br><strong style="color:var(--warn);">MEDIUM</strong> — required files present, Git history present, some health checks fail.<br><strong style="color:var(--danger);">LOW</strong> — missing required files or Git history.</p>
+        </div>
+      </section>
+
+      <!-- PRIVATE REMOTE STRATEGY -->
+      <section class="section" id="remote-strategy">
+        <div class="section-head">
+          <h2>Private Remote Strategy</h2>
+          <p>Remote is optional. No remote by default. No push by default. William chooses the protection strategy. Privacy and control come first.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="card" style="padding:18px;">
+            <h3 style="margin:0 0 10px;">Recommended order</h3>
+            <ol class="list" style="margin:0;">
+              <li><strong>Local Git snapshot</strong> — version history on this machine</li>
+              <li><strong>External encrypted drive</strong> — verified archive on separate hardware</li>
+              <li><strong>Restore drill</strong> — proof that backup is restorable</li>
+              <li><strong>Encrypted off-machine archive</strong> — geographic redundancy</li>
+              <li><strong>Optional: private Git remote</strong> — only if explicitly approved</li>
+              <li><strong>Optional: Obsidian Sync</strong> — convenience, not sole backup</li>
+            </ol>
+          </div>
+          <div class="card" style="padding:18px;">
+            <h3 style="margin:0 0 10px;">Will NOT</h3>
+            <ul class="list" style="margin:0;">
+              <li>Create any remote</li>
+              <li>Push to any service</li>
+              <li>Upload notes to cloud</li>
+              <li>Store tokens or credentials</li>
+              <li>Configure sync daemons</li>
+              <li>Choose a provider automatically</li>
+              <li>Require internet access</li>
+              <li>Enable background sync</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Commands</h3>
+          <pre style="margin:0; padding:14px; background:var(--panel-2); border-radius:10px; overflow-x:auto;">python scripts/william.py remote-status
+python scripts/william.py remote-strategy
+python scripts/william.py remote-readiness
+python scripts/william.py remote-readiness --provider github-private
+python scripts/william.py remote-readiness --provider external-drive
+python scripts/william.py remote-readiness --provider encrypted-archive
+python scripts/william.py remote-readiness --provider syncthing
+python scripts/william.py remote-readiness --provider obsidian-sync</pre>
+          <p style="margin-top:10px;">Docs: <code>94_PrivateRemoteStrategy/</code> &bull; Manifest: <code>REMOTE_STRATEGY_MANIFEST.md</code></p>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Option comparison</h3>
+          <p style="margin:0; color: var(--muted);">
+            <strong style="color:var(--ok);">External drive</strong> — full privacy, offline, low complexity<br>
+            <strong style="color:var(--ok);">Encrypted archive</strong> — full privacy, geographic redundancy<br>
+            <strong style="color:var(--accent-2);">Private GitHub</strong> — moderate privacy (Microsoft hosts), convenient<br>
+            <strong style="color:var(--accent-2);">Syncthing</strong> — full privacy, peer-to-peer, no version history<br>
+            <strong style="color:var(--warn);">Obsidian Sync</strong> — E2E encrypted, vault only (not scripts/Git)
+          </p>
+        </div>
+      </section>
+
+      <!-- v1 ACCEPTANCE / RELEASE GOVERNANCE -->
+      <section class="section" id="release-gov">
+        <div class="section-head">
+          <h2>v1 Acceptance / Release Governance</h2>
+          <p>Local-only release validation. Run full acceptance checks, generate reports, and create local Git tags. No push. No remote. No upload.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>How it works</h3>
+            <ol>
+              <li><code>acceptance --dry-run</code> previews all 20 checks</li>
+              <li><code>acceptance</code> runs checks and writes a report + JSON</li>
+              <li><code>release-manifest</code> generates a release state summary</li>
+              <li><code>release-tag --name v1.0.0 --dry-run</code> verifies tag readiness</li>
+              <li><code>release-tag --name v1.0.0</code> creates a local annotated tag</li>
+            </ol>
+            <p style="margin-top:0.5em; color: var(--muted);">Acceptance checks 20 items: vault governance, Git safety, forbidden file scan, remote scan, source note integrity, plus 15 layer status checks.</p>
+          </div>
+          <div class="tile">
+            <h3>Will NOT</h3>
+            <ul>
+              <li>Push tags or commits to any remote</li>
+              <li>Create a remote repository</li>
+              <li>Upload notes, data, or reports</li>
+              <li>Modify source notes in high-trust folders</li>
+              <li>Auto-commit changes</li>
+              <li>Tag if required checks fail</li>
+              <li>Publish anything externally</li>
+              <li>Require internet access</li>
+            </ul>
+          </div>
+        </div>
+        <div class="tile" style="margin-top:1em;">
+          <h3>Commands</h3>
+          <pre style="margin:0.5em 0;">
+python scripts/william.py release-status
+python scripts/william.py acceptance --dry-run
+python scripts/william.py acceptance
+python scripts/william.py release-manifest
+python scripts/william.py release-tag --name v1.0.0 --dry-run
+python scripts/william.py release-tag --name v1.0.0</pre>
+        </div>
+        <div class="grid cols-2" style="margin-top:1em;">
+          <div class="tile">
+            <h3>Acceptance classification</h3>
+            <p style="margin:0; color: var(--muted);">
+              <strong style="color:var(--ok);">PASS</strong> — all required checks pass, no warnings<br>
+              <strong style="color:var(--accent-2);">PASS_WITH_WARNINGS</strong> — required pass, some info-level flags<br>
+              <strong style="color:var(--warn);">FAIL</strong> — required checks failed, tagging blocked
+            </p>
+          </div>
+          <div class="tile">
+            <h3>Tagging rules</h3>
+            <p style="margin:0; color: var(--muted);">
+              Tags are local annotated Git tags only.<br>
+              Tags require a passing acceptance review.<br>
+              Tags require a clean working tree.<br>
+              Tags require no forbidden files.<br>
+              Tags are never pushed automatically.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- DAILY / WEEKLY OPERATING ROUTINE -->
+      <section class="section" id="routine">
+        <div class="section-head">
+          <h2>Daily / Weekly Operating Routine</h2>
+          <p>Turn WilliamOS from a built system into a repeatable habit. Generate review notes, scan queues, and get actionable recommendations — no background automation, no auto-commit, no push.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>How it works</h3>
+            <ol>
+              <li><strong>Daily</strong> — cockpit summary, inbox count, draft queues, top-3 actions</li>
+              <li><strong>Weekly</strong> — synthesis + inbox processing + promotion review + snapshot/backup readiness</li>
+              <li><strong>Monthly</strong> — cortex map, central/bridge/orphan nodes, suggested links, system health</li>
+            </ol>
+            <p style="margin-top:0.5em; color: var(--muted);">Every generated review is <code>status: draft</code>. You decide what to act on.</p>
+          </div>
+          <div class="tile">
+            <h3>Will NOT</h3>
+            <ul>
+              <li>Modify source notes (doctrine, decisions, concepts, projects)</li>
+              <li>Accept or reject promotion drafts</li>
+              <li>Move drafts into official folders</li>
+              <li>Auto-commit or auto-snapshot</li>
+              <li>Create backups automatically</li>
+              <li>Push to remote</li>
+              <li>Run background daemons</li>
+            </ul>
+          </div>
+        </div>
+        <div class="tile" style="margin-top:1em;">
+          <h3>Commands</h3>
+          <pre style="margin:0.5em 0;">
+python scripts/william.py routine-status
+python scripts/william.py daily-review --dry-run
+python scripts/william.py daily-review
+python scripts/william.py weekly-review --dry-run
+python scripts/william.py weekly-review
+python scripts/william.py monthly-review --dry-run
+python scripts/william.py monthly-review</pre>
+        </div>
+        <div class="grid cols-3" style="margin-top:1em;">
+          <div class="tile">
+            <h3>Daily (5 min)</h3>
+            <p style="margin:0; color: var(--muted);">
+              Generate daily review<br>
+              Scan cockpit lanes<br>
+              Pick top 3 actions<br>
+              Capture thoughts all day<br>
+              End-of-day reflection
+            </p>
+          </div>
+          <div class="tile">
+            <h3>Weekly (20–30 min)</h3>
+            <p style="margin:0; color: var(--muted);">
+              Run synthesis + inbox<br>
+              Generate weekly review<br>
+              Review promotion drafts<br>
+              Snapshot changes<br>
+              Check backup readiness
+            </p>
+          </div>
+          <div class="tile">
+            <h3>Monthly (30–45 min)</h3>
+            <p style="margin:0; color: var(--muted);">
+              Regenerate cortex map<br>
+              Generate monthly review<br>
+              Review stale decisions<br>
+              Promotion sweep<br>
+              Off-machine backup
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- HUMAN REVIEW QUEUES -->
+      <section class="section" id="review-queues">
+        <div class="section-head">
+          <h2>Human Review Queues</h2>
+          <p>The missing human gate. All generated drafts wait in queues until William reviews and manually accepts them. No automatic moves, no automatic acceptance, no deletion.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>How it works</h3>
+            <ol>
+              <li><strong>Scan</strong> — review-queues reads all promotion draft folders and routine review folders</li>
+              <li><strong>Report</strong> — generates a queue report with counts, staleness, duplicates, and priority</li>
+              <li><strong>Checklist</strong> — acceptance-checklist produces a per-lane checklist with manual steps</li>
+              <li><strong>Accept</strong> — you read each draft, decide, and move files manually to official folders</li>
+            </ol>
+            <p style="margin-top:0.5em; color: var(--muted);">WilliamOS may suggest. William accepts.</p>
+          </div>
+          <div class="tile">
+            <h3>Will NOT</h3>
+            <ul>
+              <li>Move drafts into official folders automatically</li>
+              <li>Modify official doctrine, decision, concept, or project notes</li>
+              <li>Delete any drafts or generated files</li>
+              <li>Mark items accepted without explicit manual action</li>
+              <li>Execute work orders</li>
+              <li>Push to remote or create GitHub issues</li>
+              <li>Rewrite source notes</li>
+            </ul>
+          </div>
+        </div>
+        <div class="tile" style="margin-top:1em;">
+          <h3>Commands</h3>
+          <pre style="margin:0.5em 0;">
+python scripts/william.py review-status
+python scripts/william.py review-queues --dry-run
+python scripts/william.py review-queues
+python scripts/william.py review-queues --lane doctrine
+python scripts/william.py review-queues --lane decisions
+python scripts/william.py review-queues --lane concepts
+python scripts/william.py review-queues --lane projects
+python scripts/william.py review-queues --lane work-orders
+python scripts/william.py acceptance-checklist
+python scripts/william.py acceptance-checklist --lane doctrine
+python scripts/william.py acceptance-checklist --lane all</pre>
+        </div>
+        <div class="grid cols-2" style="margin-top:1em;">
+          <div class="tile">
+            <h3>Review Lanes</h3>
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+              <tr style="border-bottom:1px solid var(--line);"><td>Doctrine Drafts</td><td style="color:var(--muted);">→ 03_Doctrine/</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Decision Drafts</td><td style="color:var(--muted);">→ 02_Decisions/</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Concept Drafts</td><td style="color:var(--muted);">→ 10_Ideas/</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Project Drafts</td><td style="color:var(--muted);">→ 11_Projects/</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Work Order Drafts</td><td style="color:var(--muted);">→ 11_Projects/</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Inbox Promoted</td><td style="color:var(--muted);">review only</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Suggested Links</td><td style="color:var(--muted);">manual edit only</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Daily Reviews</td><td style="color:var(--muted);">review only</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Weekly Reviews</td><td style="color:var(--muted);">review only</td></tr>
+              <tr><td>Monthly Reviews</td><td style="color:var(--muted);">review only</td></tr>
+            </table>
+          </div>
+          <div class="tile">
+            <h3>Stale Thresholds</h3>
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+              <tr style="border-bottom:1px solid var(--line);"><td>Routine reviews</td><td style="color:var(--warn);">14 days</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Inbox promoted</td><td style="color:var(--warn);">14 days</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Doctrine drafts</td><td style="color:var(--warn);">30 days</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Decision drafts</td><td style="color:var(--warn);">30 days</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Concept drafts</td><td style="color:var(--warn);">30 days</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Project drafts</td><td style="color:var(--warn);">30 days</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Work order drafts</td><td style="color:var(--warn);">30 days</td></tr>
+              <tr><td>Suggested links</td><td style="color:var(--warn);">30 days</td></tr>
+            </table>
+            <p style="margin-top:0.5em; color:var(--muted); font-size:0.85em;">Stale = needs review, not failure. After manual moves: run check, cockpit-status, snapshot.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- OFFICIAL ACCEPTANCE ASSISTANT -->
+      <section class="section" id="acceptance">
+        <div class="section-head">
+          <h2>Official Acceptance Assistant</h2>
+          <p>One-item-at-a-time controlled acceptance. Copy a reviewed draft into its official folder — only with explicit <code>--confirm</code>. No batch, no auto-accept, no overwrite.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>How it works</h3>
+            <ol>
+              <li><strong>Plan</strong> — accept-plan validates draft, checks duplicates, verifies sections, shows exact action</li>
+              <li><strong>Review</strong> — read the plan, fix any blockers, confirm destination is correct</li>
+              <li><strong>Accept</strong> — accept-draft with --confirm copies the draft to official folder</li>
+              <li><strong>Log</strong> — every acceptance is logged with timestamp, source, and destination</li>
+              <li><strong>Snapshot</strong> — run snapshot after accepting to preserve the change</li>
+            </ol>
+            <p style="margin-top:0.5em; color: var(--muted);">Copy-by-default — original draft stays in source folder.</p>
+          </div>
+          <div class="tile">
+            <h3>Will NOT</h3>
+            <ul>
+              <li>Auto-accept or batch-accept drafts</li>
+              <li>Move files without <code>--confirm</code></li>
+              <li>Overwrite existing official notes</li>
+              <li>Delete original drafts</li>
+              <li>Accept from unknown source folders</li>
+              <li>Accept into unknown destination folders</li>
+              <li>Push to remote</li>
+            </ul>
+          </div>
+        </div>
+        <div class="tile" style="margin-top:1em;">
+          <h3>Commands</h3>
+          <pre style="margin:0.5em 0;">
+python scripts/william.py accept-status
+python scripts/william.py accept-plan --draft "80_DoctrinePromotion/drafts/Doctrine - Example.md"
+python scripts/william.py accept-plan --draft "path/to/draft.md" --dest "WilliamOS/03_Doctrine/"
+python scripts/william.py accept-draft --draft "path/to/draft.md" --dest "WilliamOS/03_Doctrine/" --confirm
+python scripts/william.py accept-log</pre>
+        </div>
+        <div class="grid cols-2" style="margin-top:1em;">
+          <div class="tile">
+            <h3>Source → Destination</h3>
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+              <tr style="border-bottom:1px solid var(--line);"><td>Doctrine drafts</td><td style="color:var(--muted);">→ 03_Doctrine/</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Decision drafts</td><td style="color:var(--muted);">→ 02_Decisions/</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Concept drafts</td><td style="color:var(--muted);">→ 10_Ideas/</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Project drafts</td><td style="color:var(--muted);">→ 11_Projects/</td></tr>
+              <tr><td>Work order drafts</td><td style="color:var(--muted);">→ 11_Projects/</td></tr>
+            </table>
+          </div>
+          <div class="tile">
+            <h3>Blocking Rules</h3>
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+              <tr style="border-bottom:1px solid var(--line);"><td>Exact filename exists</td><td style="color:var(--danger);">BLOCKS</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Missing required sections</td><td style="color:var(--danger);">BLOCKS</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Unknown source folder</td><td style="color:var(--danger);">BLOCKS</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Unknown destination</td><td style="color:var(--danger);">BLOCKS</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Similar title found</td><td style="color:var(--warn);">WARNS</td></tr>
+              <tr><td>No frontmatter</td><td style="color:var(--warn);">WARNS</td></tr>
+            </table>
+            <p style="margin-top:0.5em; color:var(--muted); font-size:0.85em;">After acceptance: run check, cockpit-status, snapshot.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- POST-ACCEPTANCE CLOSURE -->
+      <section class="section" id="closure">
+        <div class="section-head">
+          <h2>Post-Acceptance Closure</h2>
+          <p>After accepting a draft, run closure to refresh queues, check system health, and get a snapshot recommendation. No commit, no backup, no push.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>How it works</h3>
+            <ol>
+              <li><strong>Accept</strong> — accept a draft via accept-draft --confirm</li>
+              <li><strong>Closure</strong> — post-acceptance refreshes queues, cockpit, runs check</li>
+              <li><strong>Review</strong> — read the closure report, verify no warnings</li>
+              <li><strong>Snapshot</strong> — use the recommended snapshot message</li>
+            </ol>
+            <p style="margin-top:0.5em; color: var(--muted);">Optional: add --refresh-cortex to also rebuild the cortex map.</p>
+          </div>
+          <div class="tile">
+            <h3>Will NOT</h3>
+            <ul>
+              <li>Accept, move, or delete any files</li>
+              <li>Auto-commit or auto-backup</li>
+              <li>Push to remote</li>
+              <li>Modify source notes</li>
+              <li>Claim closure if check fails</li>
+              <li>Run in the background</li>
+            </ul>
+          </div>
+        </div>
+        <div class="tile" style="margin-top:1em;">
+          <h3>Commands</h3>
+          <pre style="margin:0.5em 0;">
+python scripts/william.py closure-status
+python scripts/william.py post-acceptance --dry-run
+python scripts/william.py post-acceptance
+python scripts/william.py post-acceptance --refresh-cortex
+python scripts/william.py post-acceptance-checklist</pre>
+        </div>
+        <div class="grid cols-2" style="margin-top:1em;">
+          <div class="tile">
+            <h3>Closure Refreshes</h3>
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+              <tr style="border-bottom:1px solid var(--line);"><td>Review Queues</td><td style="color:var(--muted);">always</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Cockpit</td><td style="color:var(--muted);">always</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Cortex Map</td><td style="color:var(--muted);">with --refresh-cortex</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Global Check</td><td style="color:var(--muted);">always (report only)</td></tr>
+              <tr><td>Snapshot Dry-Run</td><td style="color:var(--muted);">always (report only)</td></tr>
+            </table>
+          </div>
+          <div class="tile">
+            <h3>Generated Artifacts</h3>
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+              <tr style="border-bottom:1px solid var(--line);"><td>Closure Report</td><td style="color:var(--muted);">99_PostAcceptanceClosure/reports/</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Closure Data</td><td style="color:var(--muted);">99_PostAcceptanceClosure/data/</td></tr>
+              <tr><td>Closure Checklist</td><td style="color:var(--muted);">99_PostAcceptanceClosure/checklists/</td></tr>
+            </table>
+            <p style="margin-top:0.5em; color:var(--muted); font-size:0.85em;">After closure: review report, then snapshot if clean.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- v1.1 MAINTENANCE RELEASE -->
+      <section class="section" id="maintenance">
+        <div class="section-head">
+          <h2>v1.1 Maintenance Release</h2>
+          <p>Local maintenance release for post-v1 operating governance (WO-017 through WO-020). No push. No remote. No cloud.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>What v1.1 Includes</h3>
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+              <tr style="border-bottom:1px solid var(--line);"><td>WO-017</td><td>Operating Routine</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>WO-018</td><td>Human Review Queues</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>WO-019</td><td>Official Acceptance</td></tr>
+              <tr><td>WO-020</td><td>Post-Acceptance Closure</td></tr>
+            </table>
+            <p style="margin-top:0.5em; color: var(--muted); font-size:0.85em;">20-check validation: 5 required (blocking), 15 warning (non-blocking)</p>
+          </div>
+          <div class="tile">
+            <h3>Will NOT</h3>
+            <ul>
+              <li>Push to any remote</li>
+              <li>Create a remote</li>
+              <li>Upload anything</li>
+              <li>Modify source notes</li>
+              <li>Tag if checks fail</li>
+              <li>Rewrite Git history</li>
+              <li>Require internet</li>
+            </ul>
+          </div>
+        </div>
+        <div class="tile" style="margin-top:1em;">
+          <h3>Commands</h3>
+          <pre style="margin:0.5em 0;">
+python scripts/william.py maintenance-status
+python scripts/william.py maintenance-review --dry-run
+python scripts/william.py maintenance-review
+python scripts/william.py maintenance-manifest
+python scripts/william.py maintenance-tag --name v1.1.0 --dry-run
+python scripts/william.py maintenance-tag --name v1.1.0</pre>
+        </div>
+        <div class="grid cols-2" style="margin-top:1em;">
+          <div class="tile">
+            <h3>Tagging Workflow</h3>
+            <ol style="font-size:0.85em;">
+              <li>Run <code>maintenance-review</code></li>
+              <li>Fix any blocking failures</li>
+              <li>Run <code>snapshot --message "..."</code></li>
+              <li>Run <code>maintenance-manifest</code></li>
+              <li>Run <code>maintenance-tag --name v1.1.0 --dry-run</code></li>
+              <li>Run <code>maintenance-tag --name v1.1.0</code></li>
+              <li><strong>Do NOT push</strong></li>
+            </ol>
+          </div>
+          <div class="tile">
+            <h3>Post-Maintenance</h3>
+            <ul style="font-size:0.85em;">
+              <li>Verify tag: <code>git tag -l</code></li>
+              <li>Continue daily/weekly/monthly routine</li>
+              <li>Snapshot as usual for routine changes</li>
+              <li>Next maintenance release after next WO batch</li>
+              <li>Do NOT push unless explicitly intended</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- EXTERNAL DRIVE BACKUP -->
+      <section class="section" id="drive-backup">
+        <div class="section-head">
+          <h2>External Drive Backup Runbook</h2>
+          <p>Local-first, human-run backup to removable drives. You choose the destination every time. No cloud, no sync, no guessing.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>Workflow</h3>
+            <ol style="font-size:0.85em;">
+              <li>Connect external drive, note the path</li>
+              <li>Run <code>drive-backup-plan --dest ... --dry-run</code></li>
+              <li>Review destination readiness and size estimate</li>
+              <li>Run <code>drive-backup --dest ...</code></li>
+              <li>Archive is created, verified, and logged</li>
+              <li>Run restore drill to temp folder</li>
+              <li>Eject drive</li>
+            </ol>
+          </div>
+          <div class="tile">
+            <h3>Will NOT</h3>
+            <ul>
+              <li>Guess or remember drive paths</li>
+              <li>Format or delete from drives</li>
+              <li>Overwrite existing archives</li>
+              <li>Run in background or auto-sync</li>
+              <li>Push to remote or cloud</li>
+              <li>Include secrets or forbidden files</li>
+            </ul>
+          </div>
+        </div>
+        <div class="tile" style="margin-top:1em;">
+          <h3>Commands</h3>
+          <pre style="margin:0.5em 0;">
+python scripts/william.py drive-backup-status
+python scripts/william.py drive-backup-plan --dest "D:\WilliamOS-Backups" --dry-run
+python scripts/william.py drive-backup-plan --dest "D:\WilliamOS-Backups"
+python scripts/william.py drive-backup --dest "D:\WilliamOS-Backups"
+python scripts/william.py drive-backup-log</pre>
+        </div>
+        <div class="grid cols-2" style="margin-top:1em;">
+          <div class="tile">
+            <h3>Destination Readiness</h3>
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+              <tr style="border-bottom:1px solid var(--line);"><td>Path provided</td><td style="color:var(--danger);">required</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Path exists</td><td style="color:var(--danger);">required</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Is directory</td><td style="color:var(--danger);">required</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Is writable</td><td style="color:var(--danger);">required</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Outside repo</td><td style="color:var(--danger);">required</td></tr>
+              <tr><td>Free space</td><td style="color:var(--warn);">best effort</td></tr>
+            </table>
+          </div>
+          <div class="tile">
+            <h3>Restore Drill Cadence</h3>
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+              <tr style="border-bottom:1px solid var(--line);"><td>After every backup</td><td style="color:var(--muted);">same session</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td>Monthly</td><td style="color:var(--muted);">first week</td></tr>
+              <tr><td>After maintenance tag</td><td style="color:var(--muted);">same session</td></tr>
+            </table>
+            <p style="margin-top:0.5em; color:var(--muted); font-size:0.85em;">Keep at least 2 verified backups on your external drive.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- OBSIDIAN WORKSPACE QUALITY -->
+      <section class="section" id="workspace">
+        <div class="section-head">
+          <h2>Obsidian Workspace Quality</h2>
+          <p>Vault usability layer. Folder READMEs, tag conventions, linking patterns, dashboards, and quality metrics.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>What It Covers</h3>
+            <ul>
+              <li>Folder README in every content folder (00–12)</li>
+              <li>TAG_INDEX — canonical tag reference</li>
+              <li>LINKING_GUIDE — wikilink conventions</li>
+              <li>4 new dashboards: Human Review Queue, Governance Overview, Promotion Pipeline, Cortex &amp; Graph</li>
+              <li>Improved MOC Home with full command reference</li>
+              <li>Quality report: frontmatter, links, tags, dashboards</li>
+            </ul>
+          </div>
+          <div class="tile">
+            <h3>Will NOT</h3>
+            <ul>
+              <li>Modify source notes</li>
+              <li>Install or require plugins</li>
+              <li>Configure Obsidian settings</li>
+              <li>Enable sync or cloud features</li>
+              <li>Touch high-trust folders</li>
+            </ul>
+          </div>
+        </div>
+        <div class="tile" style="margin-top:1em;">
+          <h3>Commands</h3>
+          <pre style="margin:0.5em 0;">
+python scripts/william.py obsidian-status
+python scripts/william.py obsidian-quality --dry-run
+python scripts/william.py obsidian-quality</pre>
+        </div>
+        <div class="grid cols-3" style="margin-top:1em;">
+          <div class="tile">
+            <h3>New Dashboards</h3>
+            <ul style="font-size:0.85em;">
+              <li>Human Review Queue</li>
+              <li>Governance Overview</li>
+              <li>Promotion Pipeline</li>
+              <li>Cortex and Graph</li>
+            </ul>
+          </div>
+          <div class="tile">
+            <h3>Folder READMEs</h3>
+            <p style="font-size:0.85em;">13 content folders (00_Inbox through 12_Maps) each have a README with purpose, template link, and related MOC.</p>
+          </div>
+          <div class="tile">
+            <h3>Quality Metrics</h3>
+            <ul style="font-size:0.85em;">
+              <li>Frontmatter coverage %</li>
+              <li>Avg links per note</li>
+              <li>Tag distribution</li>
+              <li>Dashboard count</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- PRODUCTION READINESS -->
+      <section class="section" id="production">
+        <div class="section-head">
+          <h2>Production Readiness Gate</h2>
+          <p>Final pre-release checkpoint. Aggregates all subsystem checks into a single PASS/FAIL verdict.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>9-Point Gate</h3>
+            <ol style="font-size:0.85em;">
+              <li>Global governance check</li>
+              <li>Runtime smoke (29 commands)</li>
+              <li>Restore runtime proof</li>
+              <li>Schema validation (36 schemas)</li>
+              <li>Command registry (86 commands)</li>
+              <li>Backup archive exists</li>
+              <li>Git safety (no remote)</li>
+              <li>Required docs present</li>
+              <li>No forbidden files</li>
+            </ol>
+          </div>
+          <div class="tile">
+            <h3>Verdicts</h3>
+            <ul>
+              <li><strong style="color:var(--ok);">PASS</strong> — all 9 checks pass. Safe to tag.</li>
+              <li><strong style="color:var(--warn);">WARN</strong> — blocking checks pass but non-critical smoke failures. Tag with caution.</li>
+              <li><strong style="color:var(--danger);">FAIL</strong> — blocking check failed. Do not tag.</li>
+            </ul>
+            <h3 style="margin-top:1em;">Will NOT</h3>
+            <ul>
+              <li>Auto-tag or auto-release</li>
+              <li>Modify source notes</li>
+              <li>Push, sync, or create remotes</li>
+            </ul>
+          </div>
+        </div>
+        <div class="tile" style="margin-top:1em;">
+          <h3>Commands</h3>
+          <pre style="margin:0.5em 0;">
+python scripts/william.py production-status
+python scripts/william.py production-readiness
+python scripts/william.py restore-runtime-proof --latest --dest &lt;path&gt;</pre>
+        </div>
+      </section>
+
+      <!-- CONTROL CENTER -->
+      <section class="section" id="control-center">
+        <div class="section-head">
+          <h2>Control Center</h2>
+          <p>One command. One cockpit. Browser opens. Health checked. No second terminal. No npm commands. No guessing ports.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>Daily Start</h3>
+            <pre class="codeblock" style="margin-top:10px;">william control-center</pre>
+            <p style="margin-top:10px;">That's it. One command:</p>
+            <ul class="list">
+              <li>Starts the backend server (port 8420)</li>
+              <li>Serves the built React frontend</li>
+              <li>Opens your browser</li>
+              <li>Prints the next recommended action</li>
+              <li>Waits for Ctrl+C to stop</li>
+            </ul>
+          </div>
+          <div class="tile">
+            <h3>6 Screens</h3>
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+              <tr style="border-bottom:1px solid var(--line);"><td style="color:var(--accent);">Home</td><td style="color:var(--muted);">Dashboard with status cards, next action, recent inbox</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td style="color:var(--accent);">Capture</td><td style="color:var(--muted);">Fast inbox capture (Ctrl+Enter)</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td style="color:var(--accent);">Review</td><td style="color:var(--muted);">Queue counts for doctrine, decisions, concepts, projects, WOs</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td style="color:var(--accent);">Agent</td><td style="color:var(--muted);">5 interactive buttons: next action, today, queues, health, ignore</td></tr>
+              <tr style="border-bottom:1px solid var(--line);"><td style="color:var(--accent);">Search</td><td style="color:var(--muted);">Semantic search across the vault</td></tr>
+              <tr><td style="color:var(--accent);">Safety</td><td style="color:var(--muted);">System health, non-negotiable rules, production readiness</td></tr>
+            </table>
+          </div>
+        </div>
+        <div class="grid cols-2" style="margin-top:14px;">
+          <div class="tile">
+            <h3>Commands</h3>
+            <pre class="codeblock" style="margin-top:10px;">william control-center
+william control-center --no-open
+william control-center-stop
+william control-center-status
+william control-center-build
+william control-center-smoke</pre>
+          </div>
+          <div class="tile">
+            <h3>Will NOT</h3>
+            <ul class="list">
+              <li>Execute commands without the safety gate</li>
+              <li>Use an external LLM</li>
+              <li>Make network calls</li>
+              <li>Run in the background without explicit launch</li>
+              <li>Modify any vault files directly</li>
+              <li>Push, sync, or create remotes</li>
+              <li>Store secrets or tokens</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card" style="padding:18px; margin-top:14px;">
+          <h3 style="margin:0 0 10px;">Architecture</h3>
+          <p style="margin:0; color: var(--muted);">One process serves everything. FastAPI backend on port 8420 serves the API (<code>/api/*</code>) and the pre-built React frontend from <code>control-center/frontend/dist/</code>. No Node.js process at runtime. The operator agent is deterministic and rule-based — same state produces same recommendations. Every command goes through the safety gate before execution. 8-point smoke test validates all endpoints.</p>
+        </div>
+      </section>
+
+      <!-- OBSIDIAN PLUGIN STACK -->
+      <section class="section" id="plugins">
+        <div class="section-head">
+          <h2>Obsidian plugin stack</h2>
+          <p>Install these from Obsidian Community Plugins. All are optional but recommended.</p>
+        </div>
+        <div class="grid cols-3">
+          <div class="tile"><h3>Dataview</h3><p>Dashboards and queryable notes. Powers the MOC pages.</p></div>
+          <div class="tile"><h3>Templater</h3><p>Structured note creation with dynamic templates.</p></div>
+          <div class="tile"><h3>Tasks</h3><p>Light action tracking from any note.</p></div>
+          <div class="tile"><h3>Calendar</h3><p>Daily/weekly rhythm navigation.</p></div>
+          <div class="tile"><h3>Periodic Notes</h3><p>Automated daily and weekly reviews.</p></div>
+          <div class="tile"><h3>QuickAdd</h3><p>Fast capture from anywhere.</p></div>
+          <div class="tile"><h3>Linter</h3><p>Metadata and formatting hygiene.</p></div>
+          <div class="tile"><h3>Omnisearch</h3><p>Full-text search across the vault.</p></div>
+          <div class="tile"><h3>Excalidraw</h3><p>Visual systems thinking and diagrams.</p></div>
+        </div>
+      </section>
+
+      <!-- FIRST 7 DAYS -->
+      <section class="section" id="first7">
+        <div class="section-head">
+          <h2>First 7 days</h2>
+          <p>One step per day. Build the habit before building the system.</p>
+        </div>
+        <div class="day-grid">
+          <div class="day-card"><strong>Day 1: Open and capture</strong><span>Open vault in Obsidian. Run init. Create first daily note. Capture 5 inbox items.</span></div>
+          <div class="day-card"><strong>Day 2: Write doctrine</strong><span>Create 3 doctrine notes for beliefs you already hold. Fill in Rule and Meaning.</span></div>
+          <div class="day-card"><strong>Day 3: Write concepts</strong><span>Create 3 concept notes for ideas you keep returning to. Link to doctrine.</span></div>
+          <div class="day-card"><strong>Day 4: Make a decision</strong><span>Create first decision record. Fill in Decision, Why, Alternatives, Risks.</span></div>
+          <div class="day-card"><strong>Day 5: Write a case</strong><span>Create first case or appraisal note. Capture reusable judgment.</span></div>
+          <div class="day-card"><strong>Day 6: Check hygiene</strong><span>Run orphans, stale-decisions, check. Fix what the checks find.</span></div>
+          <div class="day-card"><strong>Day 7: Weekly review</strong><span>Create weekly review. Run graph. Commit to Git.</span></div>
+        </div>
+      </section>
+
+      <!-- NEXT BUILD STEPS -->
+      <section class="section" id="next">
+        <div class="section-head">
+          <h2>Next build steps</h2>
+          <p>What to build after the first week.</p>
+        </div>
+        <div class="grid cols-2">
+          <div class="tile">
+            <h3>Near-term</h3>
+            <ul class="list">
+              <li>Build out Assessor and Appraisal areas with real case notes.</li>
+              <li>Connect TerraFusion Strategy notes to product decisions.</li>
+              <li>Run first monthly Graphify review.</li>
+              <li>Set up Git remote for backup.</li>
+              <li>Explore MCP/AI read access for vault summarization.</li>
+            </ul>
+          </div>
+          <div class="tile">
+            <h3>Later</h3>
+            <ul class="list">
+              <li>Semantic search installed (see <a href="#search">Search</a> section).</li>
+              <li>Obsidian Git for automatic commits.</li>
+              <li>Pandoc exports for public memos.</li>
+              <li>Ollama for local/private summarization.</li>
+              <li>Advanced Dataview dashboards as the vault grows.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- NORTH STAR -->
+      <section class="section">
+        <div class="card" style="padding:24px;">
+          <div class="section-head" style="margin:0 0 12px;">
+            <h2>North star</h2>
+            <p>WilliamOS exists to make your judgment compound.</p>
+          </div>
+          <pre class="codeblock">Experience enters through Daily Notes.
+Ideas enter through Inbox.
+Repeated truths become Doctrine.
+Hard choices become Decisions.
+Cases become reusable judgment.
+Public problems become product strategy.
+Graphify reveals hidden connections.
+AI helps synthesize.
+Git preserves memory.
+Weekly review keeps it honest.</pre>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      WilliamOS Command Center &middot; Personal cortex package &middot; Built separate from TerraFusion
+    </footer>
+  </div>
+</body>
+</html>

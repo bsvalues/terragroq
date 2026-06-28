@@ -1,0 +1,13 @@
+{
+  "version": "1.5.0",
+  "guardrails": [
+    {
+      "id": "AG-001",
+      "rule": "Codex verify lane is read-only."
+    },
+    {
+      "id": "AG-002",
+      "rule": "No commit/push/PR/merge/release."
+    }
+  ]
+}

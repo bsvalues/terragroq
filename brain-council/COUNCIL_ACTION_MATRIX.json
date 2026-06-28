@@ -1,0 +1,71 @@
+{
+  "version": "1.5.0",
+  "actions": [
+    {
+      "action": "package_expansion",
+      "default": "blocked_after_v1_5_until_new_objective",
+      "authority": "owner_required",
+      "risk": "medium"
+    },
+    {
+      "action": "install_copy_helper",
+      "default": "allowed_if_user_runs",
+      "authority": "operator",
+      "risk": "medium"
+    },
+    {
+      "action": "post_install_verify",
+      "default": "allowed_readonly",
+      "authority": "auditor",
+      "risk": "low"
+    },
+    {
+      "action": "codex_readonly_verify",
+      "default": "allowed_packet_only",
+      "authority": "execution_chief",
+      "risk": "medium"
+    },
+    {
+      "action": "commit_candidate_review",
+      "default": "allowed_packet_only",
+      "authority": "auditor",
+      "risk": "medium"
+    },
+    {
+      "action": "git_add_commit",
+      "default": "blocked",
+      "authority": "owner_required",
+      "risk": "high"
+    },
+    {
+      "action": "git_push",
+      "default": "blocked",
+      "authority": "owner_required",
+      "risk": "high"
+    },
+    {
+      "action": "pr_ready",
+      "default": "blocked",
+      "authority": "owner_required",
+      "risk": "high"
+    },
+    {
+      "action": "merge_tag_release",
+      "default": "blocked",
+      "authority": "owner_required",
+      "risk": "critical"
+    },
+    {
+      "action": "mcp_connect",
+      "default": "blocked",
+      "authority": "owner_required",
+      "risk": "high"
+    },
+    {
+      "action": "agent_auto_execute",
+      "default": "blocked",
+      "authority": "owner_required",
+      "risk": "high"
+    }
+  ]
+}

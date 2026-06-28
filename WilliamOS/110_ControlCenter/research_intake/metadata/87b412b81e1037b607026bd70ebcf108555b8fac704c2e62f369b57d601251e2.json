@@ -1,0 +1,31 @@
+{
+  "source_filename": "phase5c-research-marker.txt",
+  "hash": "87b412b81e1037b607026bd70ebcf108555b8fac704c2e62f369b57d601251e2",
+  "size": 125,
+  "type": "text",
+  "content_type": "application/octet-stream",
+  "ingested_at": "2026-06-24T11:02:25",
+  "classification": "Research",
+  "destination": "C:\\Users\\bsval\\william-os-devops\\WilliamOS\\07_Learning\\Research Intake",
+  "original_path": "C:\\Users\\bsval\\william-os-devops\\WilliamOS\\110_ControlCenter\\research_intake\\originals\\87b412b81e10-phase5c-research-marker.txt",
+  "note_path": "C:\\Users\\bsval\\william-os-devops\\WilliamOS\\07_Learning\\Research Intake\\2026-06-24-phase5c-research-marker-87b412b8.md",
+  "duplicate": false,
+  "extracted_chars": 123,
+  "search_index": {
+    "ok": true,
+    "created_at": "2026-06-24T11:02:12",
+    "mode": "semantic",
+    "model": "all-MiniLM-L6-v2",
+    "files_indexed": 30,
+    "chunks_indexed": 168,
+    "vault_root": "WilliamOS",
+    "source_policy": "default"
+  },
+  "rag_index": {
+    "ok": true,
+    "path": "C:\\Users\\bsval\\william-os-devops\\WilliamOS\\07_Learning\\Research Intake\\2026-06-24-phase5c-research-marker-87b412b8.md",
+    "chunks": 2,
+    "skipped": 0,
+    "db": "C:\\Users\\bsval\\william-os-devops\\control-center\\backend\\copilot_index.db"
+  }
+}

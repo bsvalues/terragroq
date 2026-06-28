@@ -1,0 +1,59 @@
+{
+  "version": "1.5.0",
+  "doctrine": [
+    {
+      "id": "DOC-001",
+      "statement": "Repo truth beats chat memory.",
+      "authority": "proposed",
+      "ratification_required": true
+    },
+    {
+      "id": "DOC-002",
+      "statement": "PASS does not mean release, merge, production, or county authorization.",
+      "authority": "proposed",
+      "ratification_required": true
+    },
+    {
+      "id": "DOC-003",
+      "statement": "Capability is not permission.",
+      "authority": "proposed",
+      "ratification_required": true
+    },
+    {
+      "id": "DOC-004",
+      "statement": "Human Design is symbolic reflection only and never operational authority.",
+      "authority": "proposed",
+      "ratification_required": true
+    },
+    {
+      "id": "DOC-005",
+      "statement": "The Superbrain is the Council layer, not a single uncontrolled agent.",
+      "authority": "proposed",
+      "ratification_required": true
+    },
+    {
+      "id": "DOC-006",
+      "statement": "Install verification is evidence, not commit authority.",
+      "authority": "proposed",
+      "ratification_required": true
+    },
+    {
+      "id": "DOC-007",
+      "statement": "Install, verify, accept, commit, push, PR-readiness, merge, release, and production are separate gates.",
+      "authority": "proposed",
+      "ratification_required": true
+    },
+    {
+      "id": "DOC-008",
+      "statement": "Safe-to-commit does not mean safe-to-push.",
+      "authority": "proposed",
+      "ratification_required": true
+    },
+    {
+      "id": "DOC-009",
+      "statement": "Further package expansion after v1.5 requires a new owner objective.",
+      "authority": "proposed",
+      "ratification_required": true
+    }
+  ]
+}

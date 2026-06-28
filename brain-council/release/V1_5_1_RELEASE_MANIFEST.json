@@ -1,0 +1,115 @@
+{
+  "version": "1.5.1",
+  "status": "hotfix-real-installer-verifier",
+  "created_at_utc": "2026-06-27T05:57:39.271305+00:00",
+  "hotfix_reason": "Replace placeholder install/verify scripts with real copy-only installer and post-install verifier.",
+  "authorized": [
+    "copy-only install helper",
+    "post-install verification",
+    "local verification report",
+    "preserve artifact",
+    "install/verify lane",
+    "commit-candidate review packet"
+  ],
+  "not_authorized": [
+    "git add",
+    "commit",
+    "push",
+    "PR readiness",
+    "merge",
+    "tag",
+    "release",
+    "MCP activation",
+    "autonomous agents",
+    "production writes",
+    "repo canon promotion"
+  ],
+  "default_next": "install into WilliamOS, verify, then stop for owner decision",
+  "direct_file_check": "PASS",
+  "required_files": [
+    {
+      "path": "README.md",
+      "exists": true,
+      "size_bytes": 836,
+      "sha256": "07914d02683d279b4bcc458362ad70a0cf53723f03baaa15d8899d7c091538de"
+    },
+    {
+      "path": "VERSION.json",
+      "exists": true,
+      "size_bytes": 669,
+      "sha256": "6c751f98b78837790947e8df867bcd9ff334b4cac9cbe81b6c71d9f24e032ce5"
+    },
+    {
+      "path": "V1_SCOPE_CONTRACT.md",
+      "exists": true,
+      "size_bytes": 654,
+      "sha256": "b4a49b82e5a067cda5aeafde77a3793ac68d25d260362661dee44ad9fb832a9a"
+    },
+    {
+      "path": "GATE_SCOREBOARD.json",
+      "exists": true,
+      "size_bytes": 1371,
+      "sha256": "b29a03f7d8012ba8426c7759387ef13e73c6eb2bdfaaeb7dcf87435586128a24"
+    },
+    {
+      "path": "closure/STOP_HERE_DISPOSITION.md",
+      "exists": true,
+      "size_bytes": 571,
+      "sha256": "3fe6b2b619823272d61b04dcd654b8869abfe1423d602895002854c883e29cb5"
+    },
+    {
+      "path": "closure/OPERATIONAL_CLOSURE_LEDGER.json",
+      "exists": true,
+      "size_bytes": 407,
+      "sha256": "267479ad8f1f473b1ac05214edeed722561690468b7b9832f5aad52ce823edbc"
+    },
+    {
+      "path": "release_notes/RELEASE_NOTES_v1_5_1.md",
+      "exists": true,
+      "size_bytes": 598,
+      "sha256": "5f63c012f8d9fedfa23236086b787290dda032c4a3239a973d9b9eed31287f4b"
+    },
+    {
+      "path": "owner_gates/NEXT_OBJECTIVE_GATE.md",
+      "exists": true,
+      "size_bytes": 315,
+      "sha256": "17666fd18da5bf81e2675e3c7cbe214c4ca36242944aa59578f01c50fb86680e"
+    },
+    {
+      "path": "release/V1_5_1_RELEASE_MANIFEST.json",
+      "exists": true,
+      "size_bytes": 767,
+      "sha256": "777f9c1ea656b3f3c818676b93d76dab3297d0da27f81ff8c17518e08aa561bd"
+    },
+    {
+      "path": "scripts/install_into_repo.py",
+      "exists": true,
+      "size_bytes": 3047,
+      "sha256": "a794e4fc596d5483373007bf5b5076e26a7822a99fdc2bde141f31d68fe00172"
+    },
+    {
+      "path": "scripts/verify_install.py",
+      "exists": true,
+      "size_bytes": 3469,
+      "sha256": "ff8d4be29e09e2d511414c816abb712b666a55264d8492e693c1aa043e2f1c1f"
+    },
+    {
+      "path": "handoffs/codex/CODEX-INSTALL-VERIFY-v1_5_1.md",
+      "exists": true,
+      "size_bytes": 1097,
+      "sha256": "2815cf110f4316954c5e8a89ab44fdcc30025009be9e5ce785623052ec2940ea"
+    },
+    {
+      "path": "cli/brain.py",
+      "exists": true,
+      "size_bytes": 2033,
+      "sha256": "6ac03cacfc4e5721571388caf116b81c9174ef21ceeecb2baf3225b428e36741"
+    },
+    {
+      "path": "ui/index.html",
+      "exists": true,
+      "size_bytes": 129,
+      "sha256": "87b6853f890dcac54eeb5e436b0d275e72dd8bea71d13b3fe1b7b39299696161"
+    }
+  ]
+}

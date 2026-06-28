@@ -1,0 +1,35 @@
+{
+  "version": "1.5.0",
+  "roles": [
+    {
+      "id": "owner",
+      "name": "William / Owner",
+      "authority": "final"
+    },
+    {
+      "id": "right_brain",
+      "name": "Right Brain / WilliamOS",
+      "authority": "advisory"
+    },
+    {
+      "id": "left_brain",
+      "name": "Left Brain / TerraFusion Cortex",
+      "authority": "evidence_verification"
+    },
+    {
+      "id": "auditor",
+      "name": "Auditor",
+      "authority": "challenge"
+    },
+    {
+      "id": "execution_chief",
+      "name": "Execution Chief",
+      "authority": "packet_generation"
+    },
+    {
+      "id": "historian",
+      "name": "Historian",
+      "authority": "recordkeeping"
+    }
+  ]
+}

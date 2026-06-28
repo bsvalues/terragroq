@@ -1,0 +1,65 @@
+{
+  "version": "1.5.1",
+  "gates": [
+    {
+      "gate": "artifact_created",
+      "status": "PASS",
+      "authority": "local"
+    },
+    {
+      "gate": "install_to_william_os",
+      "status": "PASS",
+      "authority": "operator"
+    },
+    {
+      "gate": "post_install_verify",
+      "status": "PASS",
+      "authority": "read_only"
+    },
+    {
+      "gate": "codex_readonly_verify",
+      "status": "OPTIONAL_NOT_RUN",
+      "authority": "read_only_handoff"
+    },
+    {
+      "gate": "commit_candidate_review",
+      "status": "NOT_RUN",
+      "authority": "owner_gate_required"
+    },
+    {
+      "gate": "local_commit",
+      "status": "NOT_AUTHORIZED",
+      "authority": "owner_required"
+    },
+    {
+      "gate": "push",
+      "status": "NOT_AUTHORIZED",
+      "authority": "owner_required"
+    },
+    {
+      "gate": "pr_ready",
+      "status": "NOT_AUTHORIZED",
+      "authority": "owner_required"
+    },
+    {
+      "gate": "merge",
+      "status": "NOT_AUTHORIZED",
+      "authority": "owner_required"
+    },
+    {
+      "gate": "release",
+      "status": "NOT_AUTHORIZED",
+      "authority": "owner_required"
+    },
+    {
+      "gate": "mcp_activation",
+      "status": "NOT_AUTHORIZED",
+      "authority": "owner_required"
+    },
+    {
+      "gate": "autonomy",
+      "status": "NOT_AUTHORIZED",
+      "authority": "owner_required"
+    }
+  ]
+}

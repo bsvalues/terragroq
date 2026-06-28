@@ -1,0 +1,243 @@
+{
+  "name": "WilliamOS Developer Kit",
+  "version_target": "v1.3.1",
+  "phase": "post-5e-pre-6",
+  "phase_6_status": "blocked",
+  "generated": "2026-06-24",
+  "release_ready": false,
+  "documents": [
+    {
+      "file": "00_DEVKIT_INDEX.md",
+      "purpose": "Map of the Dev Kit — what WilliamOS is, current baseline, quick-start, safety boundaries"
+    },
+    {
+      "file": "05_GOAL_AND_LOOP.md",
+      "purpose": "/goal and /loop for future agents — read first before any modification"
+    },
+    {
+      "file": "10_OPERATOR_RUNBOOK_v1.3.0.md",
+      "purpose": "Daily operator procedures — start, stop, restart, recover, use all surfaces"
+    },
+    {
+      "file": "20_CLEAN_SETUP_GUIDE.md",
+      "purpose": "Fresh environment setup — Python, Node, Ollama, models, copilot init, first launch"
+    },
+    {
+      "file": "30_VALIDATION_GATES.md",
+      "purpose": "All gate criteria and commands — backend tests, smoke, production-readiness, tag gate"
+    },
+    {
+      "file": "40_RESEARCH_DROP_ZONE.md",
+      "purpose": "Research Drop Zone guide — intake pipeline, file types, authority boundary, smoke test"
+    },
+    {
+      "file": "50_AGENT_DOCK_EXTERNAL_WORKERS.md",
+      "purpose": "Agent Dock guide — worker registry, delegation flow, evidence fields, enabling workers"
+    },
+    {
+      "file": "60_MODEL_RUNTIME_ADAPTER_PLAN.md",
+      "purpose": "Multi-runtime adapter plan — Ollama, LM Studio, llama-server, future runtimes, cloud policy"
+    },
+    {
+      "file": "70_CONTAINERIZATION_PLAN.md",
+      "purpose": "Container scope — test runner, build runner, worker sandbox, non-goals"
+    },
+    {
+      "file": "80_PWA_TAURI_PACKAGING_PLAN.md",
+      "purpose": "Native packaging plan — PWA manifest/SW, Tauri tray, hard rules, implementation order"
+    },
+    {
+      "file": "90_RELEASE_AND_TAG_PLAYBOOK.md",
+      "purpose": "Release and tag procedures — clean tree, gate rerun, notes, tag, post-tag"
+    },
+    {
+      "file": "100_ENTERPRISE_SECOND_BRAIN_DEV_PLAYBOOK.md",
+      "purpose": "Enterprise second-brain development playbook — /goal, /loop, tracks, boundaries, and next-lane map"
+    },
+    {
+      "file": "110_DECISION_REGISTER_PLAN.md",
+      "purpose": "Phase 5G decision register plan — seed register, API/UI scope, and future enforcement boundaries"
+    },
+    {
+      "file": "120_DOCTRINE_REGISTRY_PLAN.md",
+      "purpose": "Phase 5H doctrine registry plan — seed rules, API/UI scope, and future enforcement boundaries"
+    },
+    {
+      "file": "130_WORK_ORDER_ENGINE_PLAN.md",
+      "purpose": "Phase 5I work order engine plan — seed registry, API/UI scope, and future status transition boundaries"
+    },
+    {
+      "file": "140_AGENT_CONFIG_INVENTORY_PLAN.md",
+      "purpose": "Phase 5J agent config inventory plan — redacted config discovery, API/UI scope, and future review boundaries"
+    },
+    {
+      "file": "150_DEVOPS_WORK_ORDER_PLAYBOOK.md",
+      "purpose": "DevOps work order playbook — governed /goal, /loop, evidence, authority, handoff, mistake-pattern, and closure rules"
+    },
+    {
+      "file": "160_AGENT_SKILLS_REGISTRY_PLAN.md",
+      "purpose": "Phase 5K agent skills registry plan — metadata-only capability cards, denied actions, validators, and evidence expectations"
+    },
+    {
+      "file": "170_EVIDENCE_PACK_GENERATOR_PLAN.md",
+      "purpose": "Phase 5L evidence pack generator plan — read-only handoff packet preview from repo state, validator expectations, safety posture, and next gate"
+    },
+    {
+      "file": "180_REPO_STATE_DASHBOARD_PLAN.md",
+      "purpose": "Phase 5M repo state dashboard plan — read-only Control Center summary of baseline, worktree, validation history, gates, recent commits, and next action"
+    },
+    {
+      "file": "190_WORK_ORDER_COMPOSER_PLAN.md",
+      "purpose": "Phase 5N work order composer plan — preview-only structured WO packet generation from objective, scope, validators, evidence, and commit rules"
+    },
+    {
+      "file": "200_VALIDATION_RUNBOOK_REGISTRY_PLAN.md",
+      "purpose": "Phase 5O validation runbook registry plan — metadata-only approved validation recipes for Work Orders and composer previews"
+    },
+    {
+      "file": "210_COMMIT_READINESS_REVIEWER_PLAN.md",
+      "purpose": "Phase 5P commit readiness reviewer plan — preview-only commit candidate decision support from repo state, dist status, and validation runbooks"
+    },
+    {
+      "file": "220_LOCAL_HANDOFF_PACKET_EXPORTER_PLAN.md",
+      "purpose": "Phase 5Q local handoff packet exporter plan — preview-only operator handoff composed from repo state, evidence, readiness, runbooks, and WOs"
+    },
+    {
+      "file": "230_OPERATOR_REVIEW_INBOX_PLAN.md",
+      "purpose": "Phase 5R operator review inbox plan — preview-only generated review queue for handoffs, readiness, validation summaries, and next gates"
+    },
+    {
+      "file": "240_DECISION_GATE_CONSOLE_PLAN.md",
+      "purpose": "Phase 5S decision gate console plan — preview-only owner decision support for pending decisions, blocked gates, allowed actions, and recommended next lane"
+    },
+    {
+      "file": "250_OPERATOR_ACTION_ROUTER_PREVIEW_PLAN.md",
+      "purpose": "Phase 5T operator action router preview plan — classification-only routing of pending decisions to safe next-action categories and required authority"
+    },
+    {
+      "file": "260_AUTHORITY_LEDGER_PREVIEW_PLAN.md",
+      "purpose": "Phase 5U authority ledger preview plan — read-only authority visibility for existing, missing, and denied authority per proposed route"
+    },
+    {
+      "file": "270_OWNER_DECISION_RECORD_PREVIEW_PLAN.md",
+      "purpose": "Phase 5V owner decision record preview plan — draft-only owner decision record composition without writes, grants, or approvals"
+    },
+    {
+      "file": "280_APPROVAL_PACKET_PREVIEW_PLAN.md",
+      "purpose": "Phase 5W approval packet preview plan — clipboard-only approval packet composition without approvals, grants, writes, or execution"
+    },
+    {
+      "file": "290_GOAL_REGISTRY_PREVIEW_PLAN.md",
+      "purpose": "Phase 5X goal registry preview plan — metadata-only governed goal catalog without goal creation, persistence, or execution"
+    },
+    {
+      "file": "300_LOOP_REGISTRY_PREVIEW_PLAN.md",
+      "purpose": "Phase 5Y loop registry preview plan — metadata-only governed loop catalog without loop start, scheduling, execution, or state writes"
+    },
+    {
+      "file": "310_GOAL_LOOP_READINESS_REVIEWER_PLAN.md",
+      "purpose": "Phase 5Z goal/loop readiness reviewer plan — preview-only owner-review readiness decision support without approval or execution"
+    },
+    {
+      "file": "320_GOAL_COMMAND_PREVIEW_HARDENING_PLAN.md",
+      "purpose": "Phase 6A goal command preview hardening plan — non-executing /goal request classifier without goal creation, scheduling, or queue mutation"
+    },
+    {
+      "file": "330_LOOP_COMMAND_PREVIEW_HARDENING_PLAN.md",
+      "purpose": "Phase 6B loop command preview hardening plan — non-executing /loop request classifier without loop start, scheduling, autonomous continuation, or MCP activation"
+    },
+    {
+      "file": "340_GOVERNED_GOAL_LOOP_CONSOLE_PLAN.md",
+      "purpose": "Phase 6C governed goal/loop console plan — preview-only integrated decision support across goal, loop, readiness, authority, approval, and route surfaces"
+    },
+    {
+      "file": "devkit-manifest.json",
+      "purpose": "This file — machine-readable Dev Kit manifest"
+    }
+  ],
+  "commands": {
+    "launch": "python scripts/william.py control-center",
+    "launch_no_browser": "python scripts/william.py control-center --no-open",
+    "stop": "python scripts/william.py control-center-stop",
+    "restart": "python scripts/william.py control-center-restart --no-open",
+    "status": "python scripts/william.py control-center-status",
+    "frontend_build": "cd control-center/frontend && npm run build",
+    "backend_tests": "python -m pytest control-center/backend/tests -q",
+    "control_center_smoke": "python scripts/william.py control-center-smoke",
+    "runtime_smoke": "python scripts/william.py runtime-smoke",
+    "production_readiness": "python scripts/william.py production-readiness",
+    "acceptance": "python scripts/william.py acceptance",
+    "release_manifest": "python scripts/william.py release-manifest",
+    "release_tag": "python scripts/william.py release-tag",
+    "semantic_index": "python scripts/william.py semantic-index",
+    "setup_copilot": "python scripts/setup_copilot.py",
+    "git_status": "git status --short",
+    "check_tag": "git tag -l v1.3.0",
+    "pull_primary_model": "ollama pull qwen2.5:14b-instruct-q4_K_M",
+    "pull_embed_model": "ollama pull nomic-embed-text"
+  },
+  "gates": {
+    "frontend_build": {
+      "command": "cd control-center/frontend && npm run build",
+      "pass_condition": "exit code 0, dist/ populated",
+      "required_for": ["release_candidate", "any_frontend_change"]
+    },
+    "backend_tests": {
+      "command": "python -m pytest control-center/backend/tests -q",
+      "pass_condition": "all tests pass (baseline: 206)",
+      "required_for": ["release_candidate", "any_backend_change"]
+    },
+    "control_center_smoke": {
+      "command": "python scripts/william.py control-center-smoke",
+      "pass_condition": "22/22 PASS",
+      "required_for": ["release_candidate", "any_system_change"]
+    },
+    "runtime_smoke": {
+      "command": "python scripts/william.py runtime-smoke",
+      "pass_condition": "0 critical failures",
+      "required_for": ["release_candidate", "any_system_change"]
+    },
+    "production_readiness": {
+      "command": "python scripts/william.py production-readiness",
+      "pass_condition": "10/10 PASS",
+      "required_for": ["release_candidate", "tag_creation"]
+    },
+    "acceptance_review": {
+      "command": "python scripts/william.py acceptance",
+      "pass_condition": "20/20 PASS",
+      "required_for": ["release_candidate"]
+    },
+    "clean_tree": {
+      "command": "git status --short",
+      "pass_condition": "no modified or untracked files in release scope",
+      "required_for": ["tag_creation"]
+    }
+  },
+  "boundaries": {
+    "phase_6": "BLOCKED — do not implement proactive intelligence until Bill explicitly authorizes",
+    "external_worker_writes": "FORBIDDEN — external workers may propose only; no write/commit/promote authority",
+    "cloud_runtime": "DISABLED — WilliamOS must never silently fall back to a cloud runtime",
+    "auto_commit": "FORBIDDEN — automatic commits without reviewed approval are not permitted",
+    "auto_canon": "FORBIDDEN — automatic canon promotion without reviewed approval is not permitted",
+    "dirty_tree_tag": "FORBIDDEN — no tag may be created from a dirty tree",
+    "safety_gate_weakening": "FORBIDDEN — safety.check_command and command_runner boundaries must not be weakened",
+    "remote_push": "FORBIDDEN — no remote push or cloud sync"
+  },
+  "baseline": {
+    "branch": "copilot-phase1",
+    "latest_tag": "v1.3.1",
+    "latest_hardening_commit": "50e16f97bc9a9f260cc2cf10ff8df1cb2e7f49f9",
+    "phases_complete": ["1", "2", "3", "4", "4.5", "5A", "5B", "5C", "5D", "5E"],
+    "phases_blocked": ["6"],
+    "phases_future": ["7", "8", "9"],
+    "backend_tests": 206,
+    "command_registry": 92,
+    "production_readiness_checks": "10/10",
+    "control_center_smoke_checks": "22/22",
+    "runtime_smoke_checks": "28/28",
+    "port": 8420,
+    "primary_model": "qwen2.5:14b-instruct-q4_K_M",
+    "embed_model": "nomic-embed-text",
+    "local_model_runtime": "ollama"
+  }
+}
