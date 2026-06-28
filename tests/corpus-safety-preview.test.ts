@@ -20,6 +20,17 @@ describe("corpus safety preview", () => {
     expect(preview.guidance).toContain("Potential secret-like content")
   })
 
+  it("scans title and source labels as part of the ingest payload", () => {
+    const preview = buildCorpusSafetyPreview({
+      title: "BETTER_AUTH_SECRET=do-not-index",
+      source: "operator note",
+      content: "ordinary body",
+    })
+
+    expect(preview.secretSignals).toContain("BETTER_AUTH_SECRET")
+    expect(preview.safeToReview).toBe(false)
+  })
+
   it("keeps empty content as a preview-only state", () => {
     const preview = buildCorpusSafetyPreview("")
 
