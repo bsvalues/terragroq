@@ -76,10 +76,21 @@ Escalate only when an escalation rule is met.
 POST_MERGE_TRANSITION:
 Fetch and verify `origin/main`.
 Verify production/readiness if normal deployment occurred.
-Continue to NEXT_WO_TRANSITION.
+Continue to NEXT_WO_TRANSITION without returning to the owner unless escalation
+is required.
 
 NEXT_WO_TRANSITION:
-Start the next WO under the same goal, or close the goal if complete.
+Start the next WO under the same goal immediately.
+If no next WO exists and the active goal is not complete, generate one from the
+active goal registry and start it.
+Close the goal only when it is complete and no next WO exists.
+
+RETURN_TO_OWNER:
+Allowed only when ESCALATION_REQUIRED is YES.
+
+FINAL_OWNER_REPORT:
+Allowed only when ESCALATION_REQUIRED is YES, or when the active goal is complete
+and no next WO exists.
 ```
 
 ## Standing Merge Rules
@@ -117,3 +128,6 @@ TRANSITION_TAKEN:
 NEXT_WO:
 ESCALATION_REQUIRED:
 ```
+
+Treat the result as transition evidence. Do not stop after PASS when
+ESCALATION_REQUIRED is NO and another WO exists or can be generated.

@@ -20,6 +20,24 @@ Goals are business outcomes. A goal can contain one or more work orders.
 Work Orders are execution units under goals. Each completed work order transitions
 to the next work order unless the goal is complete or an escalation rule is met.
 
+## Continuation Rule
+
+A completed transition is not a stop. `RESULT: PASS`, `MERGED_POST_VERIFY_READY`,
+`NEXT_WO_TRANSITION`, a selected next work order, or a completed transition chain
+must not be treated as a return-to-owner condition.
+
+Return to the owner only when `ESCALATION_REQUIRED: YES`.
+
+If `ESCALATION_REQUIRED: NO` and `NEXT_WO` exists, start `NEXT_WO` immediately and
+carry the prior result forward as evidence inside that next work order. Do not
+emit a final owner-facing report first.
+
+If `ESCALATION_REQUIRED: NO` and `NEXT_WO` does not exist, generate the next work
+order from the active goal registry and start it.
+
+Emit a final owner-facing report only when a true escalation is required or when
+the active goal is fully complete and no next work order exists.
+
 ## Work Order Model
 
 Every work order must include:
@@ -67,6 +85,7 @@ ESCALATION_RULES:
 11. Merge only when standing merge rules pass and merge authority is present.
 12. Post-merge verify.
 13. Generate or start the next work order.
+14. Continue operating without returning to the owner unless escalation is required.
 
 ## Normal Transitions
 
@@ -99,7 +118,9 @@ verification.
 ### MERGED_POST_VERIFY_READY
 
 Verify `origin/main`. Verify production/readiness if normal deployment occurred.
-Continue to the next work order.
+Continue to the next work order immediately. Do not return a final report unless
+escalation is required, or the active goal is complete and no next work order
+exists.
 
 ### VALIDATION_FAILURE
 
@@ -115,6 +136,14 @@ work order and continue there.
 
 Patch if the change is cheap and in scope. Otherwise record a follow-up work
 order and continue.
+
+### NEXT_WO_TRANSITION
+
+Start the selected next work order immediately. If no next work order exists and
+the active goal is not complete, generate one from the active goal registry.
+Return to the owner only if escalation is required. Emit a final owner-facing
+report only if escalation is required or the active goal is complete and no next
+work order exists.
 
 ## Standing Merge Rules
 
@@ -167,6 +196,9 @@ TRANSITION_TAKEN:
 NEXT_WO:
 ESCALATION_REQUIRED:
 ```
+
+This result format is evidence carried between transitions. It is not, by itself,
+an instruction to stop or report to the owner.
 
 ## Current Seed Lane
 
