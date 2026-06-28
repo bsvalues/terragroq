@@ -13,4 +13,19 @@ describe("doctrine empty state", () => {
     ])
     expect(steps.some((step) => step.description.includes("explicit authority"))).toBe(true)
   })
+
+  it("returns a copy so callers cannot mutate shared state", () => {
+    const steps = getDoctrineEmptyStateSteps()
+    steps.push({
+      id: "mutated",
+      title: "Mutated",
+      description: "This should not persist.",
+    })
+
+    expect(getDoctrineEmptyStateSteps().map((step) => step.id)).toEqual([
+      "baseline",
+      "approval",
+      "lineage",
+    ])
+  })
 })

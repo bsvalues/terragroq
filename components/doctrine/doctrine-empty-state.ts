@@ -23,5 +23,5 @@ export const DOCTRINE_EMPTY_STATE_STEPS: DoctrineEmptyStateStep[] = [
 ]
 
 export function getDoctrineEmptyStateSteps(): DoctrineEmptyStateStep[] {
-  return DOCTRINE_EMPTY_STATE_STEPS
+  return DOCTRINE_EMPTY_STATE_STEPS.map((step) => ({ ...step }))
 }
