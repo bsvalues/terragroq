@@ -40,6 +40,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { StatusBadge } from "@/components/status-badge"
+import { DOCTRINE_EMPTY_STATE_STEPS } from "@/components/doctrine/doctrine-empty-state"
 import {
   Plus,
   Trash2,
@@ -712,15 +713,39 @@ function ClauseRow({
 }
 
 function Empty({ seeded }: { seeded: boolean }) {
+  if (seeded) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border py-16 text-center">
+        <ShieldCheck className="h-8 w-8 text-muted-foreground" />
+        <p className="text-sm font-medium">No doctrine here</p>
+        <p className="max-w-sm text-sm text-muted-foreground">
+          No rules match this view. Try a different tab or clear the search.
+        </p>
+      </div>
+    )
+  }
+
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border py-16 text-center">
-      <ShieldCheck className="h-8 w-8 text-muted-foreground" />
-      <p className="text-sm font-medium">No doctrine here</p>
-      <p className="max-w-sm text-sm text-muted-foreground">
-        {seeded
-          ? "No rules match this view. Try a different tab or clear the search."
-          : "Ratify rules or seed the governance baseline to define how your operator and its workers must behave."}
-      </p>
+    <div className="rounded-lg border border-dashed border-border bg-card p-6">
+      <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 text-center">
+        <ShieldCheck className="h-8 w-8 text-muted-foreground" />
+        <p className="text-sm font-medium">No doctrine baseline yet</p>
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          Ratify rules or seed the governance baseline before expanding agent
+          behavior. Doctrine defines allowed, forbidden, and approval-gated actions;
+          it does not grant execution authority by itself.
+        </p>
+      </div>
+      <div className="mx-auto mt-6 grid max-w-4xl gap-3 md:grid-cols-3">
+        {DOCTRINE_EMPTY_STATE_STEPS.map((step) => (
+          <div key={step.id} className="rounded-md border border-border bg-background px-4 py-3 text-left">
+            <p className="text-sm font-medium">{step.title}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              {step.description}
+            </p>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
