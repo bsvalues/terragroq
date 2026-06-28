@@ -2,23 +2,26 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { navItems } from "./nav-items"
+import { navGroups, navItems } from "./nav-items"
 import { cn } from "@/lib/utils"
-
-const groups = ["Command", "Registers", "Knowledge"]
 
 export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname()
 
   return (
     <nav className="flex flex-col gap-6 px-3 py-4">
-      {groups.map((group) => (
-        <div key={group} className="flex flex-col gap-1">
-          <div className="px-3 pb-1 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-            {group}
+      {navGroups.map((group) => (
+        <div key={group.id} className="flex flex-col gap-1">
+          <div className="px-3 pb-1">
+            <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+              {group.id}
+            </div>
+            <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground/80">
+              {group.description}
+            </div>
           </div>
           {navItems
-            .filter((item) => item.group === group)
+            .filter((item) => item.group === group.id)
             .map((item) => {
               const active =
                 item.href === "/"
@@ -37,7 +40,12 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
                   )}
                 >
                   <item.icon className="h-4 w-4 shrink-0" />
-                  {item.label}
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate">{item.label}</span>
+                    <span className="truncate text-[11px] font-normal opacity-70">
+                      {item.description}
+                    </span>
+                  </span>
                 </Link>
               )
             })}
