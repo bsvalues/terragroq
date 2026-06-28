@@ -16,6 +16,7 @@ import { MISTAKE_PATTERNS } from "@/lib/goal/mistake-patterns"
 import { AGENTS } from "@/lib/goal/agent-matrix"
 import { lane as findLane, mode as findMode, authority as findAuthority } from "@/lib/goal/taxonomy"
 import { getGoalEmptyStatePrompts } from "@/components/goal-console/goal-empty-state"
+import { getGoalJourneyStep } from "@/components/goal-console/goal-journey"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { StatusBadge } from "@/components/status-badge"
@@ -374,6 +375,7 @@ function ClassificationCard({ goal }: { goal: Goal }) {
   const laneDef = findLane(goal.lane)
   const modeDef = findMode(goal.mode)
   const authDef = findAuthority(goal.authority)
+  const journey = getGoalJourneyStep(goal)
 
   return (
     <section
@@ -413,6 +415,21 @@ function ClassificationCard({ goal }: { goal: Goal }) {
           <p className="text-sm">{goal.recommendedMove}</p>
         </div>
       )}
+
+      <div className="rounded-md border border-border bg-muted/30 p-3">
+        <div className="flex items-start gap-2">
+          <ClipboardCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
+          <div>
+            <p className="text-sm font-medium">{journey.label}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              {journey.description}
+            </p>
+            <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Next: {journey.action}
+            </p>
+          </div>
+        </div>
+      </div>
 
       {goal.matchedRules.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
