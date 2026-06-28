@@ -15,6 +15,7 @@ import { truthLines } from "@/lib/goal/current-truth"
 import { MISTAKE_PATTERNS } from "@/lib/goal/mistake-patterns"
 import { AGENTS } from "@/lib/goal/agent-matrix"
 import { lane as findLane, mode as findMode, authority as findAuthority } from "@/lib/goal/taxonomy"
+import { getGoalEmptyStatePrompts } from "@/components/goal-console/goal-empty-state"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { StatusBadge } from "@/components/status-badge"
@@ -77,6 +78,7 @@ export function GoalConsoleView({
   const [loopReport, setLoopReport] = useState<LoopReport | null>(null)
   const [loopGoalId, setLoopGoalId] = useState<number | null>(null)
   const [pending, startTransition] = useTransition()
+  const emptyStatePrompts = getGoalEmptyStatePrompts()
 
   function handleSubmit() {
     const text = command.trim()
@@ -223,9 +225,30 @@ export function GoalConsoleView({
               Goal register
             </h2>
             {goals.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                No goals yet. State one above to begin.
-              </p>
+              <div className="rounded-lg border border-dashed border-border bg-card p-5">
+                <div className="mx-auto max-w-2xl text-center">
+                  <p className="text-sm font-medium">No goals classified yet</p>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                    Start with a goal statement. The console classifies intent, verifies
+                    current truth, and can draft a work order; it does not execute work.
+                  </p>
+                </div>
+                <div className="mt-4 grid gap-2">
+                  {emptyStatePrompts.map((item) => (
+                    <button
+                      key={item.prompt}
+                      type="button"
+                      onClick={() => setCommand(item.prompt)}
+                      className="rounded-md border border-border bg-background px-3 py-2 text-left transition-colors hover:border-primary/40"
+                    >
+                      <span className="block text-xs font-medium">{item.prompt}</span>
+                      <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                        {item.intent}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             ) : (
               <ul className="flex flex-col gap-2">
                 {goals.map((g) => (
