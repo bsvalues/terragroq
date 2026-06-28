@@ -52,5 +52,23 @@ describe("operator start path", () => {
       href: "/goal-console",
       action: "Open Goal Console",
     })
+    expect(steps[0].signal).toBe("Core registers are initialized.")
+  })
+
+  it("prioritizes reviewing open work before new goal routing", () => {
+    const steps = getOperatorStartSteps({
+      ...emptyStats,
+      decisions: 2,
+      doctrines: 3,
+      work: 3,
+      openWork: 2,
+      docs: 4,
+    })
+
+    expect(steps[0]).toMatchObject({
+      href: "/work-orders",
+      action: "Review work orders",
+      signal: "2 work orders still open.",
+    })
   })
 })

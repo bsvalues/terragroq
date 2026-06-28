@@ -31,6 +31,9 @@ export function OperatorStartPanel({ stats }: { stats: DashboardStats }) {
               <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
                 Step {index + 1}
               </span>
+              <span className="inline-flex rounded-full border border-border bg-muted/40 px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+                {step.signal}
+              </span>
               <h3 className="text-sm font-semibold">{step.title}</h3>
               <p className="text-xs leading-relaxed text-muted-foreground">
                 {step.description}
