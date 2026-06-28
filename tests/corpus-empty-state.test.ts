@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { getCorpusEmptyStateSteps } from "@/components/corpus/corpus-empty-state"
+import {
+  CORPUS_EMPTY_STATE_DESCRIPTION,
+  CORPUS_EMPTY_STATE_STEPS,
+  CORPUS_EMPTY_STATE_TITLE,
+  getCorpusEmptyStateSteps,
+} from "@/components/corpus/corpus-empty-state"
 
 describe("corpus empty state", () => {
   it("describes safe source, citation, and indexing expectations", () => {
@@ -13,6 +18,8 @@ describe("corpus empty state", () => {
     ])
     expect(steps.some((step) => step.description.includes("secrets"))).toBe(true)
     expect(steps.some((step) => step.description.includes("chunks, embeds, and stores"))).toBe(true)
+    expect(CORPUS_EMPTY_STATE_TITLE).toBe("Corpus is empty")
+    expect(CORPUS_EMPTY_STATE_DESCRIPTION).toContain("deliberate indexing write")
   })
 
   it("returns a copy so callers cannot mutate shared state", () => {
@@ -20,5 +27,10 @@ describe("corpus empty state", () => {
     steps.pop()
 
     expect(getCorpusEmptyStateSteps()).toHaveLength(3)
+  })
+
+  it("exports immutable canonical steps", () => {
+    expect(Object.isFrozen(CORPUS_EMPTY_STATE_STEPS)).toBe(true)
+    expect(CORPUS_EMPTY_STATE_STEPS.every((step) => Object.isFrozen(step))).toBe(true)
   })
 })

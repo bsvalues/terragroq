@@ -17,7 +17,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { StatusBadge } from "@/components/status-badge"
-import { CORPUS_EMPTY_STATE_STEPS } from "@/components/corpus/corpus-empty-state"
+import {
+  CORPUS_EMPTY_STATE_DESCRIPTION,
+  CORPUS_EMPTY_STATE_TITLE,
+  getCorpusEmptyStateSteps,
+} from "@/components/corpus/corpus-empty-state"
 import { Plus, Trash2, Library, FileText, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -164,18 +168,19 @@ export function CorpusView({ initial }: { initial: Document[] }) {
 }
 
 function Empty() {
+  const steps = getCorpusEmptyStateSteps()
+
   return (
     <div className="rounded-lg border border-dashed border-border bg-card p-6">
       <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 text-center">
         <Library className="h-8 w-8 text-muted-foreground" />
-        <p className="text-sm font-medium">Corpus is empty</p>
+        <p className="text-sm font-medium">{CORPUS_EMPTY_STATE_TITLE}</p>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Ingest documents so Operator Chat can answer from your knowledge with citations.
-          Ingestion is a deliberate indexing write: review content before storing it.
+          {CORPUS_EMPTY_STATE_DESCRIPTION}
         </p>
       </div>
       <div className="mx-auto mt-6 grid max-w-4xl gap-3 md:grid-cols-3">
-        {CORPUS_EMPTY_STATE_STEPS.map((step) => (
+        {steps.map((step) => (
           <div key={step.id} className="rounded-md border border-border bg-background px-4 py-3 text-left">
             <p className="text-sm font-medium">{step.title}</p>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
