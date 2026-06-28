@@ -48,6 +48,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { StatusBadge } from "@/components/status-badge"
+import { getWorkOrderEmptyStateSteps } from "@/components/work-orders/work-order-empty-state"
 import {
   Plus,
   Trash2,
@@ -1150,14 +1151,29 @@ function Gate({
 }
 
 function Empty() {
+  const steps = getWorkOrderEmptyStateSteps()
+
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border py-16 text-center">
-      <ClipboardList className="h-8 w-8 text-muted-foreground" />
-      <p className="text-sm font-medium">No work orders</p>
-      <p className="text-sm text-muted-foreground">
-        Draft a governed unit of work — define its contract and run it through
-        the lifecycle.
-      </p>
+    <div className="rounded-lg border border-dashed border-border bg-card p-6">
+      <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 text-center">
+        <ClipboardList className="h-8 w-8 text-muted-foreground" />
+        <p className="text-sm font-medium">No work orders drafted yet</p>
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          Draft a governed unit of work before any implementation starts. A draft
+          records intent and evidence requirements; it does not grant execution,
+          commit, push, or deployment authority.
+        </p>
+      </div>
+      <div className="mx-auto mt-6 grid max-w-4xl gap-3 md:grid-cols-3">
+        {steps.map((step) => (
+          <div key={step.title} className="rounded-md border border-border bg-background px-4 py-3 text-left">
+            <p className="text-sm font-medium">{step.title}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              {step.description}
+            </p>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
