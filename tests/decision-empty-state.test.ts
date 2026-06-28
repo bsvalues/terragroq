@@ -5,6 +5,7 @@ describe("decision register empty state", () => {
   it("describes governance capture without implying execution authority", () => {
     const steps = getDecisionEmptyStateSteps()
 
+    expect(steps.map((step) => step.id)).toEqual(["capture", "authority", "lineage"])
     expect(steps.map((step) => step.title)).toEqual([
       "Capture the call",
       "Separate authority",

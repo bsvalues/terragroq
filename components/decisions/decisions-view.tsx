@@ -32,7 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { getDecisionEmptyStateSteps } from "@/components/decisions/decision-empty-state"
+import { DECISION_EMPTY_STATE_STEPS } from "@/components/decisions/decision-empty-state"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -657,8 +657,6 @@ function Empty({
   onSeed: () => void
   pending: boolean
 }) {
-  const steps = getDecisionEmptyStateSteps()
-
   return (
     <div className="rounded-lg border border-dashed border-border bg-card p-6">
       <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 text-center">
@@ -671,8 +669,8 @@ function Empty({
         </p>
       </div>
       <div className="mx-auto mt-6 grid max-w-4xl gap-3 md:grid-cols-3">
-        {steps.map((step) => (
-          <div key={step.title} className="rounded-md border border-border bg-background px-4 py-3 text-left">
+        {DECISION_EMPTY_STATE_STEPS.map((step) => (
+          <div key={step.id} className="rounded-md border border-border bg-background px-4 py-3 text-left">
             <p className="text-sm font-medium">{step.title}</p>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
               {step.description}
