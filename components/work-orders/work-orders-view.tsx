@@ -49,6 +49,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { StatusBadge } from "@/components/status-badge"
 import { getWorkOrderDraftChecklist } from "@/components/work-orders/work-order-draft-guidance"
+import { buildWorkOrderDraftPacket } from "@/components/work-orders/work-order-draft-packet"
 import { getWorkOrderEmptyStateSteps } from "@/components/work-orders/work-order-empty-state"
 import {
   Plus,
@@ -219,6 +220,16 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
     if (selected?.id === id) setSelected(null)
     startTransition(() => deleteWorkOrder(id))
     toast.success("Work order removed")
+  }
+
+  async function copyDraftPacket() {
+    const packet = buildWorkOrderDraftPacket(form)
+    try {
+      await navigator.clipboard.writeText(packet)
+      toast.success("Draft packet copied")
+    } catch {
+      toast.error("Could not copy draft packet")
+    }
   }
 
   return (
@@ -421,6 +432,24 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
                       placeholder="optional"
                     />
                   </Field>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/20 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium">Review packet</p>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        Copy the draft for handoff or review before saving it. This does not
+                        create a work order or grant authority.
+                      </p>
+                    </div>
+                    <Button type="button" variant="secondary" size="sm" onClick={copyDraftPacket}>
+                      <Copy className="h-3.5 w-3.5" />
+                      Copy packet
+                    </Button>
+                  </div>
+                  <pre className="mt-3 max-h-40 overflow-auto rounded-md border border-border bg-background p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                    {buildWorkOrderDraftPacket(form)}
+                  </pre>
                 </div>
               </div>
             </ScrollArea>
