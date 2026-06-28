@@ -1,0 +1,26 @@
+{
+  "version": "1.5.0",
+  "items": [
+    {
+      "item_id": "RATIFY-SEED-001",
+      "timestamp": "2026-06-27T05:41:32.852014+00:00",
+      "type": "package_disposition",
+      "proposal": "Stop package expansion at v1.5 unless a new owner objective is given.",
+      "status": "pending"
+    },
+    {
+      "item_id": "RATIFY-SEED-002",
+      "timestamp": "2026-06-27T05:41:32.852014+00:00",
+      "type": "install_acceptance",
+      "proposal": "Installed package must pass post-install verifier.",
+      "status": "pending"
+    },
+    {
+      "item_id": "RATIFY-SEED-003",
+      "timestamp": "2026-06-27T05:41:32.852014+00:00",
+      "type": "commit_candidate_review",
+      "proposal": "Commit candidate review must pass before owner commit decision.",
+      "status": "pending"
+    }
+  ]
+}

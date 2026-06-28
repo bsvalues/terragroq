@@ -1,0 +1,248 @@
+{
+  "version": 1,
+  "control_rule": "WilliamOS delegates. Workers propose. WilliamOS records evidence. Bill approves writes/promotions/commits.",
+  "workers": [
+    {
+      "id": "claude-code",
+      "label": "Claude Code",
+      "kind": "external_code_worker",
+      "mode": "external_cli",
+      "enabled": false,
+      "availability": {
+        "command": "claude",
+        "args": ["--version"],
+        "timeout_seconds": 8,
+        "expected_contains": "Claude Code"
+      },
+      "allowed_tasks": [
+        "code_review",
+        "implementation_plan",
+        "patch_proposal",
+        "test_failure_analysis"
+      ],
+      "delegation_policy": {
+        "default": "confirm_required",
+        "authority": "proposal_only",
+        "may_write": false,
+        "may_commit": false,
+        "may_promote": false
+      },
+      "proposal_execution": {
+        "enabled": false,
+        "reason": "Disabled until an operator explicitly configures Claude Code proposal-only CLI invocation."
+      },
+      "scope_policy": {
+        "repo_required": true,
+        "allowed_paths": [],
+        "blocked_paths": [
+          ".env",
+          ".env.*",
+          "secrets",
+          "credentials",
+          "*.key",
+          "*.pem",
+          "copilot.db"
+        ]
+      },
+      "evidence_required": [
+        "summary",
+        "commands_run",
+        "files_touched",
+        "diff_or_patch",
+        "test_results",
+        "logs"
+      ]
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "kind": "external_code_worker",
+      "mode": "external_cli",
+      "enabled": false,
+      "availability": {
+        "command": "codex",
+        "args": ["--version"],
+        "timeout_seconds": 8,
+        "expected_contains": "codex-cli"
+      },
+      "allowed_tasks": [
+        "code_review",
+        "implementation_plan",
+        "patch_proposal",
+        "test_failure_analysis"
+      ],
+      "delegation_policy": {
+        "default": "confirm_required",
+        "authority": "proposal_only",
+        "may_write": false,
+        "may_commit": false,
+        "may_promote": false
+      },
+      "proposal_execution": {
+        "enabled": false,
+        "reason": "Disabled until an operator explicitly configures Codex proposal-only CLI invocation."
+      },
+      "scope_policy": {
+        "repo_required": true,
+        "allowed_paths": [],
+        "blocked_paths": [
+          ".env",
+          ".env.*",
+          "secrets",
+          "credentials",
+          "*.key",
+          "*.pem",
+          "copilot.db"
+        ]
+      },
+      "evidence_required": [
+        "summary",
+        "commands_run",
+        "files_touched",
+        "diff_or_patch",
+        "test_results",
+        "logs"
+      ]
+    },
+    {
+      "id": "hermes",
+      "label": "Hermes",
+      "kind": "external_agent_worker",
+      "mode": "external_cli",
+      "enabled": false,
+      "availability": {
+        "command": "hermes",
+        "args": ["--version"],
+        "timeout_seconds": 8,
+        "expected_contains": "Hermes Agent"
+      },
+      "allowed_tasks": [
+        "implementation_plan",
+        "test_failure_analysis",
+        "local_agent_review"
+      ],
+      "delegation_policy": {
+        "default": "confirm_required",
+        "authority": "proposal_only",
+        "may_write": false,
+        "may_commit": false,
+        "may_promote": false
+      },
+      "proposal_execution": {
+        "enabled": false,
+        "reason": "Disabled until an operator explicitly configures Hermes proposal-only CLI invocation."
+      },
+      "scope_policy": {
+        "repo_required": true,
+        "allowed_paths": [],
+        "blocked_paths": [
+          ".env",
+          ".env.*",
+          "secrets",
+          "credentials",
+          "*.key",
+          "*.pem",
+          "copilot.db"
+        ]
+      },
+      "evidence_required": [
+        "summary",
+        "commands_run",
+        "files_touched",
+        "diff_or_patch",
+        "test_results",
+        "logs"
+      ]
+    },
+    {
+      "id": "ollama",
+      "label": "Ollama",
+      "kind": "local_model_runtime",
+      "mode": "local_service",
+      "enabled": true,
+      "availability": {
+        "command": "ollama",
+        "args": ["--version"],
+        "timeout_seconds": 8,
+        "expected_contains": "ollama",
+        "service_url": "http://127.0.0.1:11434/api/tags",
+        "expected_model": "qwen2.5:14b-instruct-q4_K_M"
+      },
+      "allowed_tasks": [
+        "local_reasoning",
+        "tool_routing",
+        "vault_rag"
+      ],
+      "delegation_policy": {
+        "default": "not_delegatable",
+        "authority": "runtime_capacity",
+        "may_write": false,
+        "may_commit": false,
+        "may_promote": false
+      },
+      "scope_policy": {
+        "repo_required": false,
+        "allowed_paths": [],
+        "blocked_paths": [
+          ".env",
+          ".env.*",
+          "secrets",
+          "credentials",
+          "*.key",
+          "*.pem",
+          "copilot.db"
+        ]
+      },
+      "evidence_required": [
+        "model",
+        "service_reachable",
+        "runtime_status"
+      ]
+    },
+    {
+      "id": "williamos",
+      "label": "WilliamOS",
+      "kind": "control_plane",
+      "mode": "local_cli",
+      "enabled": true,
+      "availability": {
+        "command": "python",
+        "args": ["scripts/william.py", "command-status"],
+        "timeout_seconds": 12,
+        "expected_contains": "Registry commands"
+      },
+      "allowed_tasks": [
+        "governed_command_execution",
+        "approval_gate",
+        "evidence_history",
+        "production_readiness"
+      ],
+      "delegation_policy": {
+        "default": "control_plane",
+        "authority": "governor",
+        "may_write": true,
+        "may_commit": true,
+        "may_promote": true
+      },
+      "scope_policy": {
+        "repo_required": true,
+        "allowed_paths": [],
+        "blocked_paths": [
+          ".env",
+          ".env.*",
+          "secrets",
+          "credentials",
+          "*.key",
+          "*.pem"
+        ]
+      },
+      "evidence_required": [
+        "command",
+        "approval",
+        "stdout",
+        "stderr",
+        "returncode"
+      ]
+    }
+  ]
+}

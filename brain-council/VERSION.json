@@ -1,0 +1,16 @@
+{
+  "package": "brain_council_superbrain_package",
+  "version": "1.5.1",
+  "status": "operational-closure-hotfix-real-installer-verifier",
+  "generated_at_utc": "2026-06-27T05:57:39.271305+00:00",
+  "authority": "local artifact only; no external repo mutation performed",
+  "release_classification": "v1.5 hotfix: real copy-only installer and real post-install verifier",
+  "hotfix_reason": "v1.5 installer/verifier were placeholders and did not install or verify the package.",
+  "blocked_by_design": [
+    "MCP activation",
+    "production/data write",
+    "autonomous loops",
+    "git add/commit/push/merge/tag/release authority",
+    "PR readiness authority"
+  ]
+}

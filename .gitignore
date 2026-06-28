@@ -1,43 +1,84 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# Obsidian machine-local state
+.obsidian/workspace*
+.obsidian/cache
 
-# dependencies
-/node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
-
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
+# OS junk
 .DS_Store
-*.pem
+Thumbs.db
+.trash/
 
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# Python
+__pycache__/
+*.pyc
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
 .pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env
-.env.local
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
+coverage/
+build/
+.next/
+out/
+.vercel/
 next-env.d.ts
-.env*.local
+*.tsbuildinfo
+
+# Local agent/tool workspaces
+.codex/
+.understand-anything/
+.playwright-mcp/
+
+# Local package artifacts
+brain_council_superbrain_package_v*_build/
+brain_council_superbrain_package_*.zip
+
+# Secrets (never commit)
+.env
+*.env
+.env.*
+.env.local
+*.env.local
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Generated / cache (rebuild on demand)
+WilliamOS/20_Graphify/generated/
+WilliamOS/40_Search/generated/
+WilliamOS/60_Synthesis/generated/cache/
+WilliamOS/70_InboxProcessor/generated/cache/
+WilliamOS/80_DoctrinePromotion/generated/cache/
+WilliamOS/85_DecisionPromotion/generated/cache/
+WilliamOS/86_ConceptPromotion/generated/cache/
+WilliamOS/87_ProjectPromotion/generated/cache/
+WilliamOS/88_CortexMap/generated/cache/
+WilliamOS/89_ReviewCockpit/generated/cache/
+WilliamOS/91_GitGovernance/generated/cache/
+WilliamOS/92_BackupGovernance/generated/cache/
+WilliamOS/92_BackupGovernance/local_archives/
+WilliamOS/93_RestoreDrill/generated/cache/
+WilliamOS/94_PrivateRemoteStrategy/generated/cache/
+WilliamOS/95_ReleaseGovernance/generated/cache/
+WilliamOS/96_OperatingRoutine/generated/cache/
+WilliamOS/97_HumanReviewQueues/generated/cache/
+WilliamOS/98_OfficialAcceptance/generated/cache/
+WilliamOS/99_PostAcceptanceClosure/generated/cache/
+WilliamOS/100_MaintenanceRelease/generated/cache/
+WilliamOS/101_ExternalDriveBackup/generated/cache/
+WilliamOS/102_ObsidianWorkspace/generated/cache/
+WilliamOS/103_SchemaRegistry/generated/cache/
+WilliamOS/104_CommandRegistry/generated/cache/
+WilliamOS/105_RuntimeSmoke/generated/cache/
+WilliamOS/106_ProductionReadiness/generated/cache/
+
+# Co-pilot runtime artifacts
+control-center/backend/copilot.db
+copilot_index.db
+*_index.db
+*.db

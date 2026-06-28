@@ -1,0 +1,832 @@
+{
+  "date": "2026-06-19",
+  "registry_count": 91,
+  "cli_count": 91,
+  "groups": {
+    "create": {
+      "desc": "Create new notes",
+      "count": 8
+    },
+    "check": {
+      "desc": "Governance and health checks",
+      "count": 4
+    },
+    "search": {
+      "desc": "Search and graph",
+      "count": 5
+    },
+    "synthesis": {
+      "desc": "Weekly synthesis",
+      "count": 2
+    },
+    "promotion": {
+      "desc": "Promote inbox and source notes into official knowledge",
+      "count": 10
+    },
+    "cortex": {
+      "desc": "Knowledge graph and cockpit",
+      "count": 4
+    },
+    "git": {
+      "desc": "Git snapshot governance",
+      "count": 4
+    },
+    "backup": {
+      "desc": "Backup, restore, and remote strategy",
+      "count": 15
+    },
+    "release": {
+      "desc": "Release governance and maintenance",
+      "count": 8
+    },
+    "routine": {
+      "desc": "Operating routine and reviews",
+      "count": 7
+    },
+    "acceptance": {
+      "desc": "Official acceptance workflow",
+      "count": 7
+    },
+    "workspace": {
+      "desc": "Workspace quality, schema registry, and command registry",
+      "count": 12
+    },
+    "control": {
+      "desc": "Control Center cockpit and runtime",
+      "count": 5
+    }
+  },
+  "commands": [
+    {
+      "name": "init",
+      "purpose": "Initialize vault scaffold",
+      "safe": true,
+      "writes": true,
+      "group": "create",
+      "group_desc": "Create new notes"
+    },
+    {
+      "name": "today",
+      "purpose": "Create today's daily note",
+      "safe": true,
+      "writes": true,
+      "group": "create",
+      "group_desc": "Create new notes"
+    },
+    {
+      "name": "weekly",
+      "purpose": "Create this week's review note",
+      "safe": true,
+      "writes": true,
+      "group": "create",
+      "group_desc": "Create new notes"
+    },
+    {
+      "name": "inbox",
+      "purpose": "Capture a quick thought",
+      "safe": true,
+      "writes": true,
+      "args": [
+        "text"
+      ],
+      "group": "create",
+      "group_desc": "Create new notes"
+    },
+    {
+      "name": "decision",
+      "purpose": "Create a decision record",
+      "safe": true,
+      "writes": true,
+      "args": [
+        "title"
+      ],
+      "group": "create",
+      "group_desc": "Create new notes"
+    },
+    {
+      "name": "doctrine",
+      "purpose": "Create a doctrine note",
+      "safe": true,
+      "writes": true,
+      "args": [
+        "title"
+      ],
+      "group": "create",
+      "group_desc": "Create new notes"
+    },
+    {
+      "name": "concept",
+      "purpose": "Create a concept note",
+      "safe": true,
+      "writes": true,
+      "args": [
+        "title"
+      ],
+      "group": "create",
+      "group_desc": "Create new notes"
+    },
+    {
+      "name": "case",
+      "purpose": "Create a case analysis note",
+      "safe": true,
+      "writes": true,
+      "args": [
+        "title"
+      ],
+      "group": "create",
+      "group_desc": "Create new notes"
+    },
+    {
+      "name": "check",
+      "purpose": "Run vault governance checks",
+      "safe": true,
+      "writes": false,
+      "group": "check",
+      "group_desc": "Governance and health checks"
+    },
+    {
+      "name": "mcp-check",
+      "purpose": "Check MCP readiness",
+      "safe": true,
+      "writes": false,
+      "group": "check",
+      "group_desc": "Governance and health checks"
+    },
+    {
+      "name": "orphans",
+      "purpose": "Find unlinked notes",
+      "safe": true,
+      "writes": false,
+      "group": "check",
+      "group_desc": "Governance and health checks"
+    },
+    {
+      "name": "stale-decisions",
+      "purpose": "Find decisions past review date",
+      "safe": true,
+      "writes": false,
+      "group": "check",
+      "group_desc": "Governance and health checks"
+    },
+    {
+      "name": "graph",
+      "purpose": "Run Graphify on vault",
+      "safe": true,
+      "writes": true,
+      "group": "search",
+      "group_desc": "Search and graph"
+    },
+    {
+      "name": "semantic-index",
+      "purpose": "Build semantic search index",
+      "safe": true,
+      "writes": true,
+      "group": "search",
+      "group_desc": "Search and graph"
+    },
+    {
+      "name": "semantic-search",
+      "purpose": "Search the vault semantically",
+      "safe": true,
+      "writes": false,
+      "args": [
+        "query"
+      ],
+      "group": "search",
+      "group_desc": "Search and graph"
+    },
+    {
+      "name": "semantic-status",
+      "purpose": "Show semantic search status",
+      "safe": true,
+      "writes": false,
+      "group": "search",
+      "group_desc": "Search and graph"
+    },
+    {
+      "name": "semantic-clear",
+      "purpose": "Delete search index",
+      "safe": false,
+      "writes": true,
+      "group": "search",
+      "group_desc": "Search and graph"
+    },
+    {
+      "name": "synth-week",
+      "purpose": "Generate weekly synthesis",
+      "safe": true,
+      "writes": true,
+      "group": "synthesis",
+      "group_desc": "Weekly synthesis"
+    },
+    {
+      "name": "synth-status",
+      "purpose": "Show weekly synthesis status",
+      "safe": true,
+      "writes": false,
+      "group": "synthesis",
+      "group_desc": "Weekly synthesis"
+    },
+    {
+      "name": "inbox-status",
+      "purpose": "Show inbox processor status",
+      "safe": true,
+      "writes": false,
+      "group": "promotion",
+      "group_desc": "Promote inbox and source notes into official knowledge"
+    },
+    {
+      "name": "process-inbox",
+      "purpose": "Process inbox notes",
+      "safe": true,
+      "writes": true,
+      "group": "promotion",
+      "group_desc": "Promote inbox and source notes into official knowledge"
+    },
+    {
+      "name": "doctrine-status",
+      "purpose": "Show doctrine promotion status",
+      "safe": true,
+      "writes": false,
+      "group": "promotion",
+      "group_desc": "Promote inbox and source notes into official knowledge"
+    },
+    {
+      "name": "promote-doctrine",
+      "purpose": "Promote doctrine candidates",
+      "safe": true,
+      "writes": true,
+      "group": "promotion",
+      "group_desc": "Promote inbox and source notes into official knowledge"
+    },
+    {
+      "name": "decision-status",
+      "purpose": "Show decision promotion status",
+      "safe": true,
+      "writes": false,
+      "group": "promotion",
+      "group_desc": "Promote inbox and source notes into official knowledge"
+    },
+    {
+      "name": "promote-decisions",
+      "purpose": "Promote decision candidates",
+      "safe": true,
+      "writes": true,
+      "group": "promotion",
+      "group_desc": "Promote inbox and source notes into official knowledge"
+    },
+    {
+      "name": "concept-status",
+      "purpose": "Show concept promotion status",
+      "safe": true,
+      "writes": false,
+      "group": "promotion",
+      "group_desc": "Promote inbox and source notes into official knowledge"
+    },
+    {
+      "name": "promote-concepts",
+      "purpose": "Promote concept candidates",
+      "safe": true,
+      "writes": true,
+      "group": "promotion",
+      "group_desc": "Promote inbox and source notes into official knowledge"
+    },
+    {
+      "name": "project-status",
+      "purpose": "Show project/WO promotion status",
+      "safe": true,
+      "writes": false,
+      "group": "promotion",
+      "group_desc": "Promote inbox and source notes into official knowledge"
+    },
+    {
+      "name": "promote-projects",
+      "purpose": "Promote project/WO candidates",
+      "safe": true,
+      "writes": true,
+      "group": "promotion",
+      "group_desc": "Promote inbox and source notes into official knowledge"
+    },
+    {
+      "name": "cortex-status",
+      "purpose": "Show cortex map status",
+      "safe": true,
+      "writes": false,
+      "group": "cortex",
+      "group_desc": "Knowledge graph and cockpit"
+    },
+    {
+      "name": "cortex-map",
+      "purpose": "Generate cortex map",
+      "safe": true,
+      "writes": true,
+      "group": "cortex",
+      "group_desc": "Knowledge graph and cockpit"
+    },
+    {
+      "name": "cockpit-status",
+      "purpose": "Show review cockpit status",
+      "safe": true,
+      "writes": false,
+      "group": "cortex",
+      "group_desc": "Knowledge graph and cockpit"
+    },
+    {
+      "name": "cockpit",
+      "purpose": "Generate review cockpit dashboard",
+      "safe": true,
+      "writes": true,
+      "group": "cortex",
+      "group_desc": "Knowledge graph and cockpit"
+    },
+    {
+      "name": "git-status",
+      "purpose": "Show Git repo status and safety checks",
+      "safe": true,
+      "writes": false,
+      "group": "git",
+      "group_desc": "Git snapshot governance"
+    },
+    {
+      "name": "git-init",
+      "purpose": "Initialize Git repository (no remote)",
+      "safe": true,
+      "writes": true,
+      "group": "git",
+      "group_desc": "Git snapshot governance"
+    },
+    {
+      "name": "snapshot",
+      "purpose": "Create a Git snapshot",
+      "safe": true,
+      "writes": true,
+      "group": "git",
+      "group_desc": "Git snapshot governance"
+    },
+    {
+      "name": "snapshot-manifest",
+      "purpose": "Generate snapshot manifest",
+      "safe": true,
+      "writes": true,
+      "group": "git",
+      "group_desc": "Git snapshot governance"
+    },
+    {
+      "name": "backup-status",
+      "purpose": "Show backup readiness",
+      "safe": true,
+      "writes": false,
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "backup",
+      "purpose": "Create a backup archive",
+      "safe": true,
+      "writes": true,
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "backup-manifest",
+      "purpose": "Generate/update backup manifest",
+      "safe": true,
+      "writes": true,
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "backup-verify",
+      "purpose": "Verify a backup archive",
+      "safe": true,
+      "writes": false,
+      "args": [
+        "archive"
+      ],
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "restore-status",
+      "purpose": "Show restore drill readiness",
+      "safe": true,
+      "writes": false,
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "restore-drill",
+      "purpose": "Run a restore drill",
+      "safe": true,
+      "writes": true,
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "restore-runtime-proof",
+      "purpose": "Run full runtime proof against restored backup",
+      "safe": true,
+      "writes": true,
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "restore-manifest",
+      "purpose": "Generate/update restore manifest",
+      "safe": true,
+      "writes": true,
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "remote-status",
+      "purpose": "Show remote protection status",
+      "safe": true,
+      "writes": false,
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "remote-strategy",
+      "purpose": "Generate remote strategy manifest",
+      "safe": true,
+      "writes": true,
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "remote-readiness",
+      "purpose": "Check readiness for remote protection",
+      "safe": true,
+      "writes": false,
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "drive-backup-status",
+      "purpose": "Show external drive backup status",
+      "safe": true,
+      "writes": false,
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "drive-backup-plan",
+      "purpose": "Generate drive backup plan",
+      "safe": true,
+      "writes": true,
+      "args": [
+        "--dest"
+      ],
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "drive-backup",
+      "purpose": "Run backup to external drive",
+      "safe": true,
+      "writes": true,
+      "args": [
+        "--dest"
+      ],
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "drive-backup-log",
+      "purpose": "Show external drive backup log",
+      "safe": true,
+      "writes": false,
+      "group": "backup",
+      "group_desc": "Backup, restore, and remote strategy"
+    },
+    {
+      "name": "release-status",
+      "purpose": "Show release governance status",
+      "safe": true,
+      "writes": false,
+      "group": "release",
+      "group_desc": "Release governance and maintenance"
+    },
+    {
+      "name": "acceptance",
+      "purpose": "Run v1 acceptance review",
+      "safe": true,
+      "writes": true,
+      "group": "release",
+      "group_desc": "Release governance and maintenance"
+    },
+    {
+      "name": "release-manifest",
+      "purpose": "Generate/update release manifest",
+      "safe": true,
+      "writes": true,
+      "group": "release",
+      "group_desc": "Release governance and maintenance"
+    },
+    {
+      "name": "release-tag",
+      "purpose": "Create a local release tag",
+      "safe": true,
+      "writes": true,
+      "args": [
+        "--name"
+      ],
+      "group": "release",
+      "group_desc": "Release governance and maintenance"
+    },
+    {
+      "name": "maintenance-status",
+      "purpose": "Show maintenance release status",
+      "safe": true,
+      "writes": false,
+      "group": "release",
+      "group_desc": "Release governance and maintenance"
+    },
+    {
+      "name": "maintenance-review",
+      "purpose": "Run maintenance review checks",
+      "safe": true,
+      "writes": true,
+      "group": "release",
+      "group_desc": "Release governance and maintenance"
+    },
+    {
+      "name": "maintenance-manifest",
+      "purpose": "Generate maintenance manifest",
+      "safe": true,
+      "writes": true,
+      "group": "release",
+      "group_desc": "Release governance and maintenance"
+    },
+    {
+      "name": "maintenance-tag",
+      "purpose": "Create maintenance release tag",
+      "safe": true,
+      "writes": true,
+      "args": [
+        "--name"
+      ],
+      "group": "release",
+      "group_desc": "Release governance and maintenance"
+    },
+    {
+      "name": "routine-status",
+      "purpose": "Show operating routine status",
+      "safe": true,
+      "writes": false,
+      "group": "routine",
+      "group_desc": "Operating routine and reviews"
+    },
+    {
+      "name": "daily-review",
+      "purpose": "Generate daily review note",
+      "safe": true,
+      "writes": true,
+      "group": "routine",
+      "group_desc": "Operating routine and reviews"
+    },
+    {
+      "name": "weekly-review",
+      "purpose": "Generate weekly operating review",
+      "safe": true,
+      "writes": true,
+      "group": "routine",
+      "group_desc": "Operating routine and reviews"
+    },
+    {
+      "name": "monthly-review",
+      "purpose": "Generate monthly cortex review",
+      "safe": true,
+      "writes": true,
+      "group": "routine",
+      "group_desc": "Operating routine and reviews"
+    },
+    {
+      "name": "review-status",
+      "purpose": "Show human review queue status",
+      "safe": true,
+      "writes": false,
+      "group": "routine",
+      "group_desc": "Operating routine and reviews"
+    },
+    {
+      "name": "review-queues",
+      "purpose": "Generate review queue report",
+      "safe": true,
+      "writes": true,
+      "group": "routine",
+      "group_desc": "Operating routine and reviews"
+    },
+    {
+      "name": "acceptance-checklist",
+      "purpose": "Generate acceptance checklist",
+      "safe": true,
+      "writes": true,
+      "group": "routine",
+      "group_desc": "Operating routine and reviews"
+    },
+    {
+      "name": "accept-status",
+      "purpose": "Show acceptance assistant status",
+      "safe": true,
+      "writes": false,
+      "group": "acceptance",
+      "group_desc": "Official acceptance workflow"
+    },
+    {
+      "name": "accept-plan",
+      "purpose": "Generate acceptance plan",
+      "safe": true,
+      "writes": true,
+      "args": [
+        "--draft"
+      ],
+      "group": "acceptance",
+      "group_desc": "Official acceptance workflow"
+    },
+    {
+      "name": "accept-draft",
+      "purpose": "Accept a draft into official folder",
+      "safe": false,
+      "writes": true,
+      "args": [
+        "--draft",
+        "--dest"
+      ],
+      "group": "acceptance",
+      "group_desc": "Official acceptance workflow"
+    },
+    {
+      "name": "accept-log",
+      "purpose": "Show acceptance log",
+      "safe": true,
+      "writes": false,
+      "group": "acceptance",
+      "group_desc": "Official acceptance workflow"
+    },
+    {
+      "name": "closure-status",
+      "purpose": "Show post-acceptance closure status",
+      "safe": true,
+      "writes": false,
+      "group": "acceptance",
+      "group_desc": "Official acceptance workflow"
+    },
+    {
+      "name": "post-acceptance",
+      "purpose": "Generate closure report",
+      "safe": true,
+      "writes": true,
+      "group": "acceptance",
+      "group_desc": "Official acceptance workflow"
+    },
+    {
+      "name": "post-acceptance-checklist",
+      "purpose": "Generate closure checklist",
+      "safe": true,
+      "writes": true,
+      "group": "acceptance",
+      "group_desc": "Official acceptance workflow"
+    },
+    {
+      "name": "obsidian-status",
+      "purpose": "Show workspace quality status",
+      "safe": true,
+      "writes": false,
+      "group": "workspace",
+      "group_desc": "Workspace quality, schema registry, and command registry"
+    },
+    {
+      "name": "obsidian-quality",
+      "purpose": "Generate workspace quality report",
+      "safe": true,
+      "writes": true,
+      "group": "workspace",
+      "group_desc": "Workspace quality, schema registry, and command registry"
+    },
+    {
+      "name": "schema-status",
+      "purpose": "Show schema registry status",
+      "safe": true,
+      "writes": false,
+      "group": "workspace",
+      "group_desc": "Workspace quality, schema registry, and command registry"
+    },
+    {
+      "name": "schema-check",
+      "purpose": "Validate schemas and templates",
+      "safe": true,
+      "writes": false,
+      "group": "workspace",
+      "group_desc": "Workspace quality, schema registry, and command registry"
+    },
+    {
+      "name": "schema-report",
+      "purpose": "Generate schema report",
+      "safe": true,
+      "writes": true,
+      "group": "workspace",
+      "group_desc": "Workspace quality, schema registry, and command registry"
+    },
+    {
+      "name": "help-all",
+      "purpose": "Show all commands grouped",
+      "safe": true,
+      "writes": false,
+      "group": "workspace",
+      "group_desc": "Workspace quality, schema registry, and command registry"
+    },
+    {
+      "name": "command-status",
+      "purpose": "Show command registry status",
+      "safe": true,
+      "writes": false,
+      "group": "workspace",
+      "group_desc": "Workspace quality, schema registry, and command registry"
+    },
+    {
+      "name": "command-report",
+      "purpose": "Generate command report",
+      "safe": true,
+      "writes": true,
+      "group": "workspace",
+      "group_desc": "Workspace quality, schema registry, and command registry"
+    },
+    {
+      "name": "runtime-status",
+      "purpose": "Show runtime smoke status",
+      "safe": true,
+      "writes": false,
+      "group": "workspace",
+      "group_desc": "Workspace quality, schema registry, and command registry"
+    },
+    {
+      "name": "runtime-smoke",
+      "purpose": "Run runtime smoke suite",
+      "safe": true,
+      "writes": true,
+      "group": "workspace",
+      "group_desc": "Workspace quality, schema registry, and command registry"
+    },
+    {
+      "name": "production-status",
+      "purpose": "Show production readiness status",
+      "safe": true,
+      "writes": false,
+      "group": "workspace",
+      "group_desc": "Workspace quality, schema registry, and command registry"
+    },
+    {
+      "name": "production-readiness",
+      "purpose": "Run full production readiness gate",
+      "safe": true,
+      "writes": true,
+      "group": "workspace",
+      "group_desc": "Workspace quality, schema registry, and command registry"
+    },
+    {
+      "name": "control-center",
+      "purpose": "Launch the Control Center cockpit",
+      "safe": true,
+      "writes": true,
+      "args": [
+        "--no-open"
+      ],
+      "group": "control",
+      "group_desc": "Control Center cockpit and runtime"
+    },
+    {
+      "name": "control-center-stop",
+      "purpose": "Stop the Control Center",
+      "safe": true,
+      "writes": true,
+      "group": "control",
+      "group_desc": "Control Center cockpit and runtime"
+    },
+    {
+      "name": "control-center-status",
+      "purpose": "Show Control Center status",
+      "safe": true,
+      "writes": false,
+      "group": "control",
+      "group_desc": "Control Center cockpit and runtime"
+    },
+    {
+      "name": "control-center-build",
+      "purpose": "Build frontend production bundle",
+      "safe": true,
+      "writes": true,
+      "group": "control",
+      "group_desc": "Control Center cockpit and runtime"
+    },
+    {
+      "name": "control-center-smoke",
+      "purpose": "Run Control Center smoke tests",
+      "safe": true,
+      "writes": false,
+      "group": "control",
+      "group_desc": "Control Center cockpit and runtime"
+    }
+  ]
+}

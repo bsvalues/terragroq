@@ -1,0 +1,216 @@
+{
+  "date": "2026-06-24",
+  "total": 28,
+  "pass": 28,
+  "fail": 0,
+  "critical_fail": 0,
+  "overall": "PASS",
+  "results": [
+    {
+      "name": "check",
+      "critical": true,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "WilliamOS check passed.\n"
+    },
+    {
+      "name": "mcp-check",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "MCP Readiness Check\n========================================\n\nPassed (11):\n  + 30_MCP directory exists\n  + Found: 30_MCP/AI_ACCESS_RULES.md\n  + Found: 30_MCP/MCP_WRITE_POLICY.md\n  + Found: 30_MCP/READ_ONLY_SCOPE_POLICY.md\n  + Found: 30_MCP/SAFE_AI_PROMPTS.md\n  + Write policy confirms read-only default\n  + Protected folder listed in scope policy: 02_Decisions\n  + Protected folder listed in scope policy: 03_Doctrine\n  + Protected folder listed in scope policy: 09_Cases\n  + Protected folder listed "
+    },
+    {
+      "name": "git-status",
+      "critical": true,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Git Status\n========================================\n  Git repo: yes\n  Branch: copilot-phase1\n  Has commits: yes\n  Latest commit: 8b0d409 docs(devkit): add WilliamOS v1.3.0 production playbook\n  Untracked files: 1\n  Modified files: 3\n  Staged files: 0\n  .gitignore exists: yes\n  .gitignore coverage: 100%\n  Forbidden files: none (safe)\n"
+    },
+    {
+      "name": "semantic-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Semantic Search Status\n========================================\n  Available mode: semantic\n  Index exists: yes\n  Index mode: semantic\n  Model: all-MiniLM-L6-v2\n  Files indexed: 30\n  Chunks indexed: 168\n  Created: 2026-06-24T11:02:12\n"
+    },
+    {
+      "name": "synth-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Weekly Synthesis Status\n========================================\n  Docs exist: yes\n  Output dir: WilliamOS\\60_Synthesis (exists)\n  Last synthesis: Weekly Synthesis - 2026-W24.md\n  Semantic search: semantic\n  Semantic index: yes\n"
+    },
+    {
+      "name": "inbox-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Inbox Processor Status\n========================================\n  Inbox exists: yes\n  Inbox notes: 8\n  Oldest: README.md\n  Newest: 2026-06-16-TerraFusion-Asset-Inventory-Vendor-DiligencePurpose-an.md\n  Processor docs: yes\n  Last report: Inbox Triage - 2026-06-14.md\n  Semantic: semantic\n"
+    },
+    {
+      "name": "doctrine-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Doctrine Promotion Status\n========================================\n  Official doctrine dir: yes\n  Official doctrine notes: 4\n  Promotion dir: yes\n  Promotion docs: yes\n  Existing drafts: 3\n  Synthesis reports: 1\n  Inbox triage reports: 1\n  Last promotion report: Doctrine Promotion - 2026-06-14.md\n  Semantic: semantic\n"
+    },
+    {
+      "name": "decision-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Decision Promotion Status\n========================================\n  Official decisions dir: yes\n  Official decision notes: 1\n  Open decisions: 1\n  Promotion dir: yes\n  Promotion docs: yes\n  Existing drafts: 0\n  Synthesis reports: 1\n  Inbox triage reports: 1\n  Last promotion report: Decision Promotion - 2026-06-14.md\n  Semantic: semantic\n"
+    },
+    {
+      "name": "concept-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Concept Promotion Status\n========================================\n  Official ideas dir: yes\n  Official idea/concept notes: 4\n  Promotion dir: yes\n  Promotion docs: yes\n  Existing drafts: 1\n  Synthesis reports: 5\n  Inbox triage reports: 1\n  Learning notes: 1\n  Case notes: 1\n  Project notes: 1\n  Last promotion report: Concept Promotion - 2026-06-14.md\n  Semantic: semantic\n"
+    },
+    {
+      "name": "project-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Project / WO Promotion Status\n========================================\n  Official projects dir: yes\n  Official project notes: 1\n  Promotion dir: yes\n  Promotion docs: yes\n  Project drafts: 4\n  Work-order drafts: 1\n  Synthesis reports: 5\n  Inbox triage reports: 1\n  Idea notes: 4\n  Learning notes: 1\n  Case notes: 1\n  Project notes: 1\n  Last promotion report: Project Promotion - 2026-06-15.md\n  Semantic: semantic\n"
+    },
+    {
+      "name": "cortex-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Cortex Map Status\n========================================\n  Cortex dir: yes\n  Docs exist: yes\n  Reports dir: yes\n  Graphs dir: yes\n  Maps dir: yes\n  Core source notes: 23\n  Promotion source notes: 20\n  All source notes: 43\n  Last report: Cortex Review - 2026-06-15.md\n  Last graph: cortex-graph-2026-06-15.json (52 nodes, 105 edges)\n  Graphify output: no\n  Semantic index: yes\n"
+    },
+    {
+      "name": "cockpit-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Review Cockpit Status\n========================================\n  Cockpit dir: yes\n  Docs exist: yes\n  Lanes: 12\n  Green: 7, Yellow: 5, Red: 0\n  Latest report: Review Cockpit - 2026-06-15.md\n  Latest JSON: cockpit-status-2026-06-15.json\n  Latest HTML: Review Cockpit - 2026-06-15.html\n"
+    },
+    {
+      "name": "routine-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Routine Status\n========================================\n  Routine dir: yes\n  Governance docs: yes\n  Latest daily review: Daily Review - 2026-06-15.md\n  Latest weekly review: Weekly Operating Review - 2026-W25.md\n  Latest monthly review: Monthly Cortex Review - 2026-06.md\n  Cockpit available: yes\n  Cockpit: 7 green / 5 yellow / 0 red\n  Draft queue total: 9\n    doctrine: 3\n    concept: 1\n    project: 4\n    work_order: 1\n  Git clean: no\n  Latest tag: v1.2.0\n  Archives: 4\n  Recommended: Review 9 pen"
+    },
+    {
+      "name": "review-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Review Queue Status\n========================================\n  Review dir: yes\n  Governance docs: yes\n  Total pending: 14\n  Stale total: 0\n  Oldest pending: 2026-06-14\n  Newest pending: 2026-06-24\n    inbox_promoted_drafts: 1\n    doctrine_drafts: 3\n    concept_drafts: 1\n    project_drafts: 4\n    work_order_drafts: 1\n    suggested_links: 1\n    daily_reviews: 1\n    weekly_reviews: 1\n    monthly_reviews: 1\n  Latest report: Review Queues - 2026-06-15.md\n  Latest checklist: Acceptance Checklist - 202"
+    },
+    {
+      "name": "accept-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Acceptance Status\n========================================\n  Acceptance dir: yes\n  Governance docs: yes\n  Pending drafts: 9\n    doctrine: 3\n    concept: 1\n    project: 4\n    work_order: 1\n  Acceptance log: not yet\n  Latest entry: (none)\n  Official folders:\n    02_Decisions: 1 notes\n    03_Doctrine: 4 notes\n    10_Ideas: 4 notes\n    11_Projects: 1 notes\n  Git clean: no\n  Snapshot: recommended\n"
+    },
+    {
+      "name": "closure-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Post-Acceptance Closure Status\n========================================\n  Closure dir: yes\n  Governance docs: yes\n  Acceptance log: no\n  Acceptance entries: 0\n  Latest closure report: Post-Acceptance Closure - 2026-06-15.md\n  Latest closure checklist: Post-Acceptance Checklist - 2026-06-24.md\n  Latest review queue report: Review Queues - 2026-06-15.md\n  Latest cockpit report: Review Cockpit - 2026-06-15.md\n  Git clean: no\n  Snapshot recommended: yes\n"
+    },
+    {
+      "name": "maintenance-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Maintenance Release Status\n========================================\n  Maintenance dir: yes\n  Governance docs: yes\n  Latest report: Maintenance Review - 2026-06-15.md\n  Manifest: yes\n  Latest tag: v1.2.0\n  Branch: copilot-phase1\n  Latest commit: 8b0d409 docs(devkit): add WilliamOS v1.3.0 production playbook\n  Working tree clean: no\n  Remotes: 0\n"
+    },
+    {
+      "name": "backup-status",
+      "critical": true,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Backup Status\n========================================\n  Backup dir exists: yes\n  Governance docs: yes\n  Git repo: yes\n  Branch: copilot-phase1\n  Latest commit: 8b0d409 docs(devkit): add WilliamOS v1.3.0 production playbook\n  Clean tree: no\n  Manifest exists: yes\n  Local archives: 4\n  Latest archive: WilliamOS-backup-20260616-014220.zip\n"
+    },
+    {
+      "name": "restore-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Restore Drill Status\n========================================\n  Restore dir exists: yes\n  Governance docs: yes\n  Manifest exists: yes\n  Latest report: Restore Drill - 2026-06-15.md\n  Backup dir exists: yes\n  Backup docs: yes\n  Local archives: 4\n  Latest archive: WilliamOS-backup-20260616-014220.zip\n"
+    },
+    {
+      "name": "remote-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Remote Status\n========================================\n  Remote strategy dir: yes\n  Governance docs: yes\n  Git repo: yes\n  Branch: copilot-phase1\n  Latest commit: 8b0d409 docs(devkit): add WilliamOS v1.3.0 production playbook\n  Clean tree: no\n  Remotes: 0\n  Remote state: none\n  Strategy manifest: yes\n  Backup manifest: BACKUP_MANIFEST.md\n  Restore manifest: RESTORE_MANIFEST.md\n  Latest restore report: Restore Drill - 2026-06-15.md\n"
+    },
+    {
+      "name": "release-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Release Status\n========================================\n  Release governance dir: yes\n  Governance docs: yes\n  Release manifest: yes\n  Latest acceptance report: Acceptance Review - 2026-06-24.md\n  Latest acceptance data: acceptance-2026-06-24.json\n  Git repo: yes\n  Branch: copilot-phase1\n  Latest commit: 8b0d409 docs(devkit): add WilliamOS v1.3.0 production playbook\n  Clean tree: no\n  Latest tag: v1.2.0\n  Remotes: 0\n  Remote state: none\n"
+    },
+    {
+      "name": "drive-backup-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "External Drive Backup Status\n========================================\n  Drive backup dir: yes\n  Governance docs: yes\n  Backup log: yes\n  Latest log entry: 2026-06-15 23:45:59\n  Backup governance: yes\n  Backup archives: 4\n  Latest archive: WilliamOS-backup-20260616-014220.zip\n  Git clean: no\n  Latest tag: v1.2.0\n"
+    },
+    {
+      "name": "obsidian-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Obsidian Workspace Status\n========================================\n  Workspace dir: yes\n  Governance docs: yes\n  Folder READMEs: 13/13\n  Dashboards: 14\n  Templates: 12\n  Latest report: none\n"
+    },
+    {
+      "name": "schema-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Schema Registry Status\n========================================\n  Schema dir: yes\n  Governance docs: yes\n  Schemas defined: 36\n  Check: PASS\n  Latest report: none\n"
+    },
+    {
+      "name": "schema-check",
+      "critical": true,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Schema Check\n========================================\n  Schemas: 36\n  Template checks: 12\n  Result: PASS\n"
+    },
+    {
+      "name": "command-status",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Command Registry Status\n========================================\n  Registry dir: yes\n  Governance docs: yes\n  Registry commands: 92\n  CLI commands: 92\n  Groups: 13\n  Safe commands: 90\n  Write commands: 54\n  Latest report: Command Report - 2026-06-19.md\n"
+    },
+    {
+      "name": "orphans",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "Potential orphan notes:\n  WilliamOS\\00_Inbox\\2026-06-14-We-should-always-validate-evidence-before-forming-an-opinion.md\n  WilliamOS\\00_Inbox\\2026-06-16-satellite-imagery-for-rural-parcels.md\n  WilliamOS\\00_Inbox\\2026-06-16-TerraFusion-Asset-Inventory-Vendor-DiligencePurpose-an.md\n  WilliamOS\\00_Inbox\\2026-06-16-Test-thought-from-UX-pass.md\n  WilliamOS\\00_Inbox\\2026-06-18-The-real-moat-is-public-trust-not-features..md\n  WilliamOS\\00_Inbox\\2026-06-19-satellite-imagery-for-rural-parcels.md\n  Willia"
+    },
+    {
+      "name": "stale-decisions",
+      "critical": false,
+      "status": "PASS",
+      "exit_code": 0,
+      "output": "No stale decisions found.\n"
+    },
+    {
+      "name": "copilot-health",
+      "critical": false,
+      "info": true,
+      "status": "offline (informational)",
+      "exit_code": 1,
+      "output": "model=qwen2.5:14b-instruct-q4_K_M detail=[WinError 10061] No connection could be made because the target machine actively refused it"
+    }
+  ],
+  "dry_run": false,
+  "report_path": "WilliamOS\\105_RuntimeSmoke\\reports\\Runtime Smoke - 2026-06-24.md"
+}

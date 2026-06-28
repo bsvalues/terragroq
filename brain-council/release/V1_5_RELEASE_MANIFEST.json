@@ -1,0 +1,91 @@
+{
+  "version": "1.5.0",
+  "status": "operational-closure-layer",
+  "created_at_utc": "2026-06-27T05:41:32.852014+00:00",
+  "authorized": [
+    "preserve artifact",
+    "install/verify lane",
+    "commit-candidate review packet",
+    "stop-here disposition"
+  ],
+  "not_authorized": [
+    "unbounded further expansion",
+    "MCP activation",
+    "autonomous agents",
+    "production writes",
+    "git add/commit/push/merge/tag/release",
+    "PR readiness"
+  ],
+  "default_next": "STOP unless owner selects next objective",
+  "direct_file_check": "PASS",
+  "required_files": [
+    {
+      "path": "README.md",
+      "exists": true,
+      "size_bytes": 856,
+      "sha256": "40f631983cb3643bec9bc603032cdc405e9761d19749db72c8f41b8ca075bafe"
+    },
+    {
+      "path": "VERSION.json",
+      "exists": true,
+      "size_bytes": 703,
+      "sha256": "c3e3ab721cb18ef27c0cd1ecde8a343fe46889861ae2f02998ce384b96877184"
+    },
+    {
+      "path": "V1_SCOPE_CONTRACT.md",
+      "exists": true,
+      "size_bytes": 714,
+      "sha256": "d7daf7a17456a5b0325857861ffde480d23af08854583a8fcaab9fbe2a5b8fff"
+    },
+    {
+      "path": "GATE_SCOREBOARD.json",
+      "exists": true,
+      "size_bytes": 1371,
+      "sha256": "b29a03f7d8012ba8426c7759387ef13e73c6eb2bdfaaeb7dcf87435586128a24"
+    },
+    {
+      "path": "closure/STOP_HERE_DISPOSITION.md",
+      "exists": true,
+      "size_bytes": 571,
+      "sha256": "3fe6b2b619823272d61b04dcd654b8869abfe1423d602895002854c883e29cb5"
+    },
+    {
+      "path": "closure/OPERATIONAL_CLOSURE_LEDGER.json",
+      "exists": true,
+      "size_bytes": 407,
+      "sha256": "267479ad8f1f473b1ac05214edeed722561690468b7b9832f5aad52ce823edbc"
+    },
+    {
+      "path": "release_notes/RELEASE_NOTES_v1_5.md",
+      "exists": true,
+      "size_bytes": 452,
+      "sha256": "8a0b67afa88242003fd9c8f4bde7434981282f13577516198a94d697e3e90fd2"
+    },
+    {
+      "path": "owner_gates/NEXT_OBJECTIVE_GATE.md",
+      "exists": true,
+      "size_bytes": 315,
+      "sha256": "17666fd18da5bf81e2675e3c7cbe214c4ca36242944aa59578f01c50fb86680e"
+    },
+    {
+      "path": "release/V1_5_RELEASE_MANIFEST.json",
+      "exists": true,
+      "size_bytes": 523,
+      "sha256": "fff9b625e56fabaf23282faa05f750e1298ebcfc96a0e31011fbbc5617f208e0"
+    },
+    {
+      "path": "cli/brain.py",
+      "exists": true,
+      "size_bytes": 2033,
+      "sha256": "6ac03cacfc4e5721571388caf116b81c9174ef21ceeecb2baf3225b428e36741"
+    },
+    {
+      "path": "ui/index.html",
+      "exists": true,
+      "size_bytes": 129,
+      "sha256": "87b6853f890dcac54eeb5e436b0d275e72dd8bea71d13b3fe1b7b39299696161"
+    }
+  ],
+  "superseded_by": "release/V1_5_1_RELEASE_MANIFEST.json",
+  "superseded_reason": "v1.5 installer/verifier were placeholders."
+}

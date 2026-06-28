@@ -1,0 +1,18 @@
+{
+  "version": "1.5.0",
+  "current_focus": "Stop package expansion and move to adoption/verification/owner disposition.",
+  "open_loops": [
+    "Install into WilliamOS OR preserve artifact",
+    "Run verifier if installed",
+    "Optional Codex read-only verification",
+    "Owner commit decision gate if adopting"
+  ],
+  "blocked_actions": [
+    "MCP activation",
+    "agent auto-execution",
+    "production write",
+    "commit without owner gate",
+    "push/PR/merge/tag/release"
+  ],
+  "next_safe_action": "Choose adoption, verification, or stop."
+}

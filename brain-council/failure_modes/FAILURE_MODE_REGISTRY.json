@@ -1,0 +1,20 @@
+{
+  "version": "1.5.0",
+  "failure_modes": [
+    {
+      "id": "FM-001",
+      "name": "Endless package expansion",
+      "guardrail": "Next objective gate required."
+    },
+    {
+      "id": "FM-002",
+      "name": "Safe-to-commit treated as safe-to-push",
+      "guardrail": "Post-commit non-authorizations required."
+    },
+    {
+      "id": "FM-003",
+      "name": "Artifact treated as installed",
+      "guardrail": "Install gate remains NOT_RUN until performed."
+    }
+  ]
+}
