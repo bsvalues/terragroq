@@ -193,7 +193,7 @@ export function AuthSetupAssistant({
             type="password"
             value={databaseUrl}
             onChange={(e) => setDatabaseUrl(e.target.value)}
-            placeholder="postgres://USER:PASSWORD@HOST:5432/DB_NAME?sslmode=require"
+            placeholder="postgres://USER:PASSWORD@HOST:5432/DB_NAME?sslmode=verify-full"
             required
             autoComplete="off"
           />

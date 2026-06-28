@@ -36,6 +36,8 @@ pnpm build        # production build; gates on lint + types
 
 Required environment variables (see README): `DATABASE_URL`, `BETTER_AUTH_SECRET`,
 `BETTER_AUTH_URL`. In v0 these come from the Neon integration and project settings.
+Use `sslmode=verify-full` for Neon/Postgres URLs; the runtime normalizes ambiguous
+`sslmode=require`, `prefer`, and `verify-ca` values before passing the URL to `pg`.
 
 ---
 
