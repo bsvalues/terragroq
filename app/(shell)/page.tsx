@@ -3,6 +3,7 @@ import { getDashboardData } from "@/app/actions/dashboard"
 import { PageHeader } from "@/components/shell/page-header"
 import { StatGrid } from "@/components/dashboard/stat-grid"
 import { EventFeed } from "@/components/dashboard/event-feed"
+import { OperatorStartPanel } from "@/components/dashboard/operator-start-panel"
 import { RUNTIME } from "@/lib/ai/config"
 import { MessageSquare, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -26,6 +27,7 @@ export default async function DashboardPage() {
       />
 
       <div className="flex flex-col gap-8 p-6">
+        <OperatorStartPanel stats={stats} />
         <StatGrid stats={stats} />
 
         <div className="grid gap-6 lg:grid-cols-3">
