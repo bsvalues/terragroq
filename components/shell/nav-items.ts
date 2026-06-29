@@ -88,6 +88,13 @@ export const navItems: NavItem[] = [
     description: "Review authority and locks.",
   },
   {
+    href: "/brain-council",
+    label: "Brain Council",
+    icon: BrainCircuit,
+    group: "Governance",
+    description: "Reason through evidence without execution.",
+  },
+  {
     href: "/memory",
     label: "Memory",
     icon: BrainCircuit,
