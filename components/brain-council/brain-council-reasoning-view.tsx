@@ -21,6 +21,7 @@ import { BrainCouncilInputComposerPanel } from "@/components/brain-council/brain
 import { BrainCouncilProcedureCandidateViewer } from "@/components/brain-council/brain-council-procedure-candidate-viewer"
 import { BrainCouncilPredictionCalibrationPanel } from "@/components/brain-council/brain-council-prediction-calibration-panel"
 import { BrainCouncilReadinessEvaluator } from "@/components/brain-council/brain-council-readiness-evaluator"
+import { BrainCouncilReadinessRegressionPanel } from "@/components/brain-council/brain-council-readiness-regression-panel"
 import { BrainCouncilResearchModeOverviewPanel } from "@/components/brain-council/brain-council-research-mode-overview-panel"
 import { BrainCouncilUnknownsRegistryPanel } from "@/components/brain-council/brain-council-unknowns-registry-panel"
 import { BrainCouncilWorkerPacketPreview } from "@/components/brain-council/brain-council-worker-packet-preview"
@@ -221,6 +222,8 @@ export function BrainCouncilReasoningView() {
       <BrainCouncilCognitiveDebtPanel />
 
       <BrainCouncilContradictionReviewPanel />
+
+      <BrainCouncilReadinessRegressionPanel />
 
       <BrainCouncilProcedureCandidateViewer />
 
