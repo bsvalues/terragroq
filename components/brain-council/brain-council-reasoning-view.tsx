@@ -8,6 +8,7 @@ import { BrainCouncilHermesInventoryPanel } from "@/components/brain-council/bra
 import { BrainCouncilHermesExperimentPlanPanel } from "@/components/brain-council/brain-council-hermes-experiment-plan-panel"
 import { BrainCouncilHermesProcedureReviewPanel } from "@/components/brain-council/brain-council-hermes-procedure-review-panel"
 import { BrainCouncilHermesRiskRegisterPanel } from "@/components/brain-council/brain-council-hermes-risk-register-panel"
+import { BrainCouncilHermesSandboxChecklistPanel } from "@/components/brain-council/brain-council-hermes-sandbox-checklist-panel"
 import { BrainCouncilHermesSkillQuarantinePanel } from "@/components/brain-council/brain-council-hermes-skill-quarantine-panel"
 import { BrainCouncilHypothesisEditorPanel } from "@/components/brain-council/brain-council-hypothesis-editor-panel"
 import { BrainCouncilInputComposerPanel } from "@/components/brain-council/brain-council-input-composer-panel"
@@ -215,6 +216,8 @@ export function BrainCouncilReasoningView() {
       <BrainCouncilHermesProcedureReviewPanel />
 
       <BrainCouncilHermesSkillQuarantinePanel />
+
+      <BrainCouncilHermesSandboxChecklistPanel />
     </div>
   )
 }
