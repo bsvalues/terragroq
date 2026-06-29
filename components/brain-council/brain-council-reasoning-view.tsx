@@ -1,4 +1,5 @@
 import { ArrowRight, BrainCircuit, FlaskConical, LockKeyhole, ShieldCheck } from "lucide-react"
+import { BrainCouncilReadinessEvaluator } from "@/components/brain-council/brain-council-readiness-evaluator"
 import { getBrainCouncilReasoningPacket } from "@/components/brain-council/brain-council-reasoning"
 import { StatusBadge } from "@/components/status-badge"
 
@@ -170,6 +171,8 @@ export function BrainCouncilReasoningView() {
           <SafetyTile label="Production write" value={packet.safety.productionWrite ? "enabled" : "disabled"} />
         </div>
       </section>
+
+      <BrainCouncilReadinessEvaluator />
     </div>
   )
 }
