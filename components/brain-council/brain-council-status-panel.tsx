@@ -1,6 +1,8 @@
+import Link from "next/link"
 import { BrainCircuit, LockKeyhole, ShieldCheck } from "lucide-react"
 import { StatusBadge } from "@/components/status-badge"
 import { getBrainCouncilBoundary } from "@/components/brain-council/brain-council-boundary"
+import { getBrainCouncilEvidenceLinks } from "@/components/brain-council/brain-council-evidence-links"
 import { summarizeBrainCouncilGates } from "@/components/brain-council/brain-council-gates"
 import { getBrainCouncilManifestSummary } from "@/components/brain-council/brain-council-manifest"
 import { getBrainCouncilStatus } from "@/components/brain-council/brain-council-status"
@@ -10,6 +12,7 @@ export function BrainCouncilStatusPanel() {
   const manifest = getBrainCouncilManifestSummary()
   const gateSummary = summarizeBrainCouncilGates()
   const boundary = getBrainCouncilBoundary()
+  const evidenceLinks = getBrainCouncilEvidenceLinks()
 
   return (
     <section className="rounded-xl border border-border bg-card p-4">
@@ -106,6 +109,30 @@ export function BrainCouncilStatusPanel() {
           </div>
           <p className="mt-3 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
             Not granted: {boundary.prohibited.join(" · ")}
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border bg-background/40 p-3">
+          <h3 className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Readiness evidence links
+          </h3>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {evidenceLinks.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="rounded-md border border-border bg-card px-3 py-2 transition-colors hover:border-primary/40"
+              >
+                <p className="text-xs font-medium">{link.label}</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {link.description}
+                </p>
+              </Link>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            These links inspect existing operator evidence surfaces. They do not create records,
+            run validators, activate agents, or approve gates.
           </p>
         </div>
       </div>
