@@ -56,22 +56,25 @@ export function BrainCouncilInputComposerPanel() {
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_0.85fr]">
         <div className="flex flex-col gap-4">
-          <Field label="Question">
+          <Field id="brain-council-question" label="Question">
             <Textarea
+              id="brain-council-question"
               value={draft.question}
               onChange={(event) => updateDraft({ question: event.target.value })}
               rows={3}
             />
           </Field>
-          <Field label="Context">
+          <Field id="brain-council-context" label="Context">
             <Textarea
+              id="brain-council-context"
               value={draft.context}
               onChange={(event) => updateDraft({ context: event.target.value })}
               rows={3}
             />
           </Field>
-          <Field label="Desired output">
+          <Field id="brain-council-desired-output" label="Desired output">
             <Textarea
+              id="brain-council-desired-output"
               value={draft.desiredOutput}
               onChange={(event) => updateDraft({ desiredOutput: event.target.value })}
               rows={2}
@@ -90,6 +93,7 @@ export function BrainCouncilInputComposerPanel() {
                 <button
                   key={brain}
                   type="button"
+                  aria-pressed={selected}
                   onClick={() => toggleBrain(brain)}
                   className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
                     selected
@@ -118,10 +122,10 @@ export function BrainCouncilInputComposerPanel() {
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ id, label, children }: { id: string; label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-2">
-      <Label>{label}</Label>
+      <Label htmlFor={id}>{label}</Label>
       {children}
     </div>
   )
