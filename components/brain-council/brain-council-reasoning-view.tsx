@@ -1,4 +1,5 @@
 import { ArrowRight, BrainCircuit, FlaskConical, LockKeyhole, ShieldCheck } from "lucide-react"
+import { BrainCouncilEvidenceSelectorPanel } from "@/components/brain-council/brain-council-evidence-selector-panel"
 import { BrainCouncilExperimentDashboard } from "@/components/brain-council/brain-council-experiment-dashboard"
 import { BrainCouncilInputComposerPanel } from "@/components/brain-council/brain-council-input-composer-panel"
 import { BrainCouncilProcedureCandidateViewer } from "@/components/brain-council/brain-council-procedure-candidate-viewer"
@@ -50,6 +51,8 @@ export function BrainCouncilReasoningView() {
       </section>
 
       <BrainCouncilInputComposerPanel />
+
+      <BrainCouncilEvidenceSelectorPanel />
 
       <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
         <section className="rounded-xl border border-border bg-card p-4">
