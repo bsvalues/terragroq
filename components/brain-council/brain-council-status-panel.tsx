@@ -1,9 +1,11 @@
 import { BrainCircuit, LockKeyhole, ShieldCheck } from "lucide-react"
 import { StatusBadge } from "@/components/status-badge"
+import { getBrainCouncilManifestSummary } from "@/components/brain-council/brain-council-manifest"
 import { getBrainCouncilStatus } from "@/components/brain-council/brain-council-status"
 
 export function BrainCouncilStatusPanel() {
   const status = getBrainCouncilStatus()
+  const manifest = getBrainCouncilManifestSummary()
 
   return (
     <section className="rounded-xl border border-border bg-card p-4">
@@ -31,6 +33,34 @@ export function BrainCouncilStatusPanel() {
           <ReadinessTile label="Production write" value="disabled" tone="pass" />
         </div>
 
+        <div className="rounded-lg border border-border bg-background/40 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Manifest snapshot
+            </h3>
+            <StatusBadge value="neutral" label={manifest.releaseStatus} />
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-4">
+            <ManifestCount label="Roles" value={manifest.roleCount} />
+            <ManifestCount label="Skills" value={manifest.skillCount} />
+            <ManifestCount label="Workflows" value={manifest.workflowCount} />
+            <ManifestCount label="Required files" value={manifest.requiredFileCount} />
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {manifest.roles.slice(0, 6).map((role) => (
+              <div key={role.id} className="rounded-md border border-border bg-card px-3 py-2">
+                <p className="text-xs font-medium">{role.name}</p>
+                <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+                  {role.id} · authority: {role.authority}
+                </p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Roles, skills, and workflows are manifest definitions only. This view does not instantiate agents.
+          </p>
+        </div>
+
         <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3">
           <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
           <p className="text-xs leading-relaxed text-muted-foreground">
@@ -40,6 +70,17 @@ export function BrainCouncilStatusPanel() {
         </div>
       </div>
     </section>
+  )
+}
+
+function ManifestCount({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <div className="font-mono text-lg">{value}</div>
+      <div className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+    </div>
   )
 }
 
