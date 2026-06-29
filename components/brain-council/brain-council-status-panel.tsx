@@ -1,5 +1,6 @@
 import { BrainCircuit, LockKeyhole, ShieldCheck } from "lucide-react"
 import { StatusBadge } from "@/components/status-badge"
+import { getBrainCouncilBoundary } from "@/components/brain-council/brain-council-boundary"
 import { summarizeBrainCouncilGates } from "@/components/brain-council/brain-council-gates"
 import { getBrainCouncilManifestSummary } from "@/components/brain-council/brain-council-manifest"
 import { getBrainCouncilStatus } from "@/components/brain-council/brain-council-status"
@@ -8,6 +9,7 @@ export function BrainCouncilStatusPanel() {
   const status = getBrainCouncilStatus()
   const manifest = getBrainCouncilManifestSummary()
   const gateSummary = summarizeBrainCouncilGates()
+  const boundary = getBrainCouncilBoundary()
 
   return (
     <section className="rounded-xl border border-border bg-card p-4">
@@ -92,6 +94,18 @@ export function BrainCouncilStatusPanel() {
           <p className="text-xs leading-relaxed text-muted-foreground">
             Runtime activation is disabled. This panel does not execute Brain Council,
             start agents, enable MCP, schedule work, or write production data.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+          <h3 className="text-sm font-medium">Console boundary</h3>
+          <div className="mt-2 grid gap-2 text-xs leading-relaxed text-muted-foreground md:grid-cols-3">
+            <p>{boundary.operatorConsole}</p>
+            <p>{boundary.brainCouncil}</p>
+            <p>{boundary.inactiveRuntime}</p>
+          </div>
+          <p className="mt-3 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Not granted: {boundary.prohibited.join(" · ")}
           </p>
         </div>
       </div>
