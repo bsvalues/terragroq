@@ -15,6 +15,7 @@ import { BrainCouncilHypothesisEditorPanel } from "@/components/brain-council/br
 import { BrainCouncilInputComposerPanel } from "@/components/brain-council/brain-council-input-composer-panel"
 import { BrainCouncilProcedureCandidateViewer } from "@/components/brain-council/brain-council-procedure-candidate-viewer"
 import { BrainCouncilReadinessEvaluator } from "@/components/brain-council/brain-council-readiness-evaluator"
+import { BrainCouncilResearchModeOverviewPanel } from "@/components/brain-council/brain-council-research-mode-overview-panel"
 import { BrainCouncilWorkerPacketPreview } from "@/components/brain-council/brain-council-worker-packet-preview"
 import { getBrainCouncilReasoningPacket } from "@/components/brain-council/brain-council-reasoning"
 import { StatusBadge } from "@/components/status-badge"
@@ -193,6 +194,8 @@ export function BrainCouncilReasoningView() {
           <SafetyTile label="Production write" value={packet.safety.productionWrite ? "enabled" : "disabled"} />
         </div>
       </section>
+
+      <BrainCouncilResearchModeOverviewPanel />
 
       <BrainCouncilReadinessEvaluator />
 
