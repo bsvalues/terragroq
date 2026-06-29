@@ -1,9 +1,13 @@
 import { ShieldBan } from "lucide-react"
-import { getHermesSkillQuarantinePreview } from "@/components/brain-council/brain-council-hermes-skill-quarantine"
+import {
+  getHermesSkillQuarantinePreview,
+  getHermesSkillQuarantineSafetySummary,
+} from "@/components/brain-council/brain-council-hermes-skill-quarantine"
 import { StatusBadge } from "@/components/status-badge"
 
 export function BrainCouncilHermesSkillQuarantinePanel() {
   const preview = getHermesSkillQuarantinePreview()
+  const disabledSafetyClaims = getHermesSkillQuarantineSafetySummary(preview.safety)
 
   return (
     <section className="rounded-2xl border border-warning/30 bg-warning/10 p-4">
@@ -15,8 +19,9 @@ export function BrainCouncilHermesSkillQuarantinePanel() {
             <StatusBadge value="partial" label={preview.posture.replace(/_/g, " ")} />
           </div>
           <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            Skill-like outputs are visible only as quarantined candidates. Nothing here is invokable,
-            canonized, promoted to memory, imported from sandbox output, or granted runtime authority.
+            Skill-like outputs are visible only as quarantined candidates. Disabled safety flags:
+            {" "}
+            {disabledSafetyClaims}.
           </p>
         </div>
       </div>

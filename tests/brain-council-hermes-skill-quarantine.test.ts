@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { getHermesSkillQuarantinePreview } from "@/components/brain-council/brain-council-hermes-skill-quarantine"
+import {
+  getHermesSkillQuarantinePreview,
+  getHermesSkillQuarantineSafetySummary,
+} from "@/components/brain-council/brain-council-hermes-skill-quarantine"
 
 describe("Hermes skill quarantine preview", () => {
   it("keeps skill-like outputs quarantined", () => {
@@ -27,5 +30,13 @@ describe("Hermes skill quarantine preview", () => {
       importsSandboxOutput: false,
       grantsRuntime: false,
     })
+  })
+
+  it("derives the panel safety summary from the safety contract", () => {
+    const preview = getHermesSkillQuarantinePreview()
+    const summary = getHermesSkillQuarantineSafetySummary(preview.safety)
+
+    expect(summary).toContain("invokes skill")
+    expect(summary).toContain("grants runtime")
   })
 })

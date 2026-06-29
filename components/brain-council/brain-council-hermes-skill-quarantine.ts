@@ -60,3 +60,12 @@ export function getHermesSkillQuarantinePreview(): HermesSkillQuarantinePreview 
     },
   }
 }
+
+export function getHermesSkillQuarantineSafetySummary(
+  safety: HermesSkillQuarantinePreview["safety"],
+): string {
+  return Object.entries(safety)
+    .filter(([, enabled]) => enabled === false)
+    .map(([flag]) => flag.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`))
+    .join(", ")
+}
