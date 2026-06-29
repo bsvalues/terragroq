@@ -1,11 +1,13 @@
 import { BrainCircuit, LockKeyhole, ShieldCheck } from "lucide-react"
 import { StatusBadge } from "@/components/status-badge"
+import { summarizeBrainCouncilGates } from "@/components/brain-council/brain-council-gates"
 import { getBrainCouncilManifestSummary } from "@/components/brain-council/brain-council-manifest"
 import { getBrainCouncilStatus } from "@/components/brain-council/brain-council-status"
 
 export function BrainCouncilStatusPanel() {
   const status = getBrainCouncilStatus()
   const manifest = getBrainCouncilManifestSummary()
+  const gateSummary = summarizeBrainCouncilGates()
 
   return (
     <section className="rounded-xl border border-border bg-card p-4">
@@ -59,6 +61,30 @@ export function BrainCouncilStatusPanel() {
           <p className="mt-3 text-xs text-muted-foreground">
             Roles, skills, and workflows are manifest definitions only. This view does not instantiate agents.
           </p>
+        </div>
+
+        <div className="rounded-lg border border-border bg-background/40 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Gate status explainer
+            </h3>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              {gateSummary.complete} complete · {gateSummary.inactive} inactive · {gateSummary.review} review
+            </span>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {gateSummary.gates.map((gate) => (
+              <div key={gate.gate} className="rounded-md border border-border bg-card px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-mono text-[11px]">{gate.gate}</p>
+                  <StatusBadge value={gate.category === "complete" ? "pass" : gate.category === "inactive" ? "neutral" : "partial"} label={gate.status} />
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {gate.explanation}
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3">
