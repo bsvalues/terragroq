@@ -2,6 +2,7 @@ import { ArrowRight, BrainCircuit, FlaskConical, LockKeyhole, ShieldCheck } from
 import { BrainCouncilExperimentDashboard } from "@/components/brain-council/brain-council-experiment-dashboard"
 import { BrainCouncilProcedureCandidateViewer } from "@/components/brain-council/brain-council-procedure-candidate-viewer"
 import { BrainCouncilReadinessEvaluator } from "@/components/brain-council/brain-council-readiness-evaluator"
+import { BrainCouncilWorkerPacketPreview } from "@/components/brain-council/brain-council-worker-packet-preview"
 import { getBrainCouncilReasoningPacket } from "@/components/brain-council/brain-council-reasoning"
 import { StatusBadge } from "@/components/status-badge"
 
@@ -179,6 +180,8 @@ export function BrainCouncilReasoningView() {
       <BrainCouncilExperimentDashboard />
 
       <BrainCouncilProcedureCandidateViewer />
+
+      <BrainCouncilWorkerPacketPreview />
     </div>
   )
 }
