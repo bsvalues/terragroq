@@ -15,6 +15,7 @@ import { BrainCouncilHermesSkillQuarantinePanel } from "@/components/brain-counc
 import { BrainCouncilHypothesisEditorPanel } from "@/components/brain-council/brain-council-hypothesis-editor-panel"
 import { BrainCouncilInputComposerPanel } from "@/components/brain-council/brain-council-input-composer-panel"
 import { BrainCouncilProcedureCandidateViewer } from "@/components/brain-council/brain-council-procedure-candidate-viewer"
+import { BrainCouncilPredictionCalibrationPanel } from "@/components/brain-council/brain-council-prediction-calibration-panel"
 import { BrainCouncilReadinessEvaluator } from "@/components/brain-council/brain-council-readiness-evaluator"
 import { BrainCouncilResearchModeOverviewPanel } from "@/components/brain-council/brain-council-research-mode-overview-panel"
 import { BrainCouncilWorkerPacketPreview } from "@/components/brain-council/brain-council-worker-packet-preview"
@@ -203,6 +204,8 @@ export function BrainCouncilReasoningView() {
       <BrainCouncilExperimentDashboard />
 
       <BrainCouncilExperimentRegistryPanel />
+
+      <BrainCouncilPredictionCalibrationPanel />
 
       <BrainCouncilProcedureCandidateViewer />
 
