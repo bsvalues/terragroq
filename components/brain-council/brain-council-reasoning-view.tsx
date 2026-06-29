@@ -2,6 +2,7 @@ import { ArrowRight, BrainCircuit, FlaskConical, LockKeyhole, ShieldCheck } from
 import { BrainCouncilDecisionPacketExportPanel } from "@/components/brain-council/brain-council-decision-packet-export-panel"
 import { BrainCouncilEvidenceSelectorPanel } from "@/components/brain-council/brain-council-evidence-selector-panel"
 import { BrainCouncilExperimentDashboard } from "@/components/brain-council/brain-council-experiment-dashboard"
+import { BrainCouncilExperimentRegistryPanel } from "@/components/brain-council/brain-council-experiment-registry-panel"
 import { BrainCouncilHermesBoundaryPreviewPanel } from "@/components/brain-council/brain-council-hermes-boundary-preview"
 import { BrainCouncilHermesCapabilityMapPanel } from "@/components/brain-council/brain-council-hermes-capability-map-panel"
 import { BrainCouncilHermesActivationRubricPanel } from "@/components/brain-council/brain-council-hermes-activation-rubric-panel"
@@ -200,6 +201,8 @@ export function BrainCouncilReasoningView() {
       <BrainCouncilReadinessEvaluator />
 
       <BrainCouncilExperimentDashboard />
+
+      <BrainCouncilExperimentRegistryPanel />
 
       <BrainCouncilProcedureCandidateViewer />
 
