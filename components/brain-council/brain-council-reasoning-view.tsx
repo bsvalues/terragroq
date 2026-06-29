@@ -19,6 +19,7 @@ import { BrainCouncilProcedureCandidateViewer } from "@/components/brain-council
 import { BrainCouncilPredictionCalibrationPanel } from "@/components/brain-council/brain-council-prediction-calibration-panel"
 import { BrainCouncilReadinessEvaluator } from "@/components/brain-council/brain-council-readiness-evaluator"
 import { BrainCouncilResearchModeOverviewPanel } from "@/components/brain-council/brain-council-research-mode-overview-panel"
+import { BrainCouncilUnknownsRegistryPanel } from "@/components/brain-council/brain-council-unknowns-registry-panel"
 import { BrainCouncilWorkerPacketPreview } from "@/components/brain-council/brain-council-worker-packet-preview"
 import { getBrainCouncilReasoningPacket } from "@/components/brain-council/brain-council-reasoning"
 import { StatusBadge } from "@/components/status-badge"
@@ -209,6 +210,8 @@ export function BrainCouncilReasoningView() {
       <BrainCouncilPredictionCalibrationPanel />
 
       <BrainCouncilAssumptionRegistryPanel />
+
+      <BrainCouncilUnknownsRegistryPanel />
 
       <BrainCouncilProcedureCandidateViewer />
 
