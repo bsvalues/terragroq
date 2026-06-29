@@ -36,6 +36,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { BrainCouncilStatusPanel } from "@/components/brain-council/brain-council-status-panel"
 import { StatusBadge } from "@/components/status-badge"
 import {
   KeyRound,
@@ -89,6 +90,8 @@ export function GovernanceView({
 
   return (
     <div className="flex flex-col gap-4 p-6">
+      <BrainCouncilStatusPanel />
+
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
         <TabsList className="flex-wrap">
           <TabsTrigger value="authority">
