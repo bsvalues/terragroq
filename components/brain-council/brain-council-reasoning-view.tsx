@@ -4,6 +4,7 @@ import { BrainCouncilEvidenceSelectorPanel } from "@/components/brain-council/br
 import { BrainCouncilExperimentDashboard } from "@/components/brain-council/brain-council-experiment-dashboard"
 import { BrainCouncilHermesBoundaryPreviewPanel } from "@/components/brain-council/brain-council-hermes-boundary-preview"
 import { BrainCouncilHermesCapabilityMapPanel } from "@/components/brain-council/brain-council-hermes-capability-map-panel"
+import { BrainCouncilHermesActivationRubricPanel } from "@/components/brain-council/brain-council-hermes-activation-rubric-panel"
 import { BrainCouncilHermesInventoryPanel } from "@/components/brain-council/brain-council-hermes-inventory-panel"
 import { BrainCouncilHermesExperimentPlanPanel } from "@/components/brain-council/brain-council-hermes-experiment-plan-panel"
 import { BrainCouncilHermesProcedureReviewPanel } from "@/components/brain-council/brain-council-hermes-procedure-review-panel"
@@ -218,6 +219,8 @@ export function BrainCouncilReasoningView() {
       <BrainCouncilHermesSkillQuarantinePanel />
 
       <BrainCouncilHermesSandboxChecklistPanel />
+
+      <BrainCouncilHermesActivationRubricPanel />
     </div>
   )
 }
