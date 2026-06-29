@@ -1,4 +1,5 @@
 import { ArrowRight, BrainCircuit, FlaskConical, LockKeyhole, ShieldCheck } from "lucide-react"
+import { BrainCouncilExperimentDashboard } from "@/components/brain-council/brain-council-experiment-dashboard"
 import { BrainCouncilReadinessEvaluator } from "@/components/brain-council/brain-council-readiness-evaluator"
 import { getBrainCouncilReasoningPacket } from "@/components/brain-council/brain-council-reasoning"
 import { StatusBadge } from "@/components/status-badge"
@@ -173,6 +174,8 @@ export function BrainCouncilReasoningView() {
       </section>
 
       <BrainCouncilReadinessEvaluator />
+
+      <BrainCouncilExperimentDashboard />
     </div>
   )
 }
