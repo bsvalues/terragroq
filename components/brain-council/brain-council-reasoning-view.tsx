@@ -1,4 +1,5 @@
 import { ArrowRight, BrainCircuit, FlaskConical, LockKeyhole, ShieldCheck } from "lucide-react"
+import { BrainCouncilDecisionPacketExportPanel } from "@/components/brain-council/brain-council-decision-packet-export-panel"
 import { BrainCouncilEvidenceSelectorPanel } from "@/components/brain-council/brain-council-evidence-selector-panel"
 import { BrainCouncilExperimentDashboard } from "@/components/brain-council/brain-council-experiment-dashboard"
 import { BrainCouncilHypothesisEditorPanel } from "@/components/brain-council/brain-council-hypothesis-editor-panel"
@@ -191,6 +192,8 @@ export function BrainCouncilReasoningView() {
       <BrainCouncilProcedureCandidateViewer />
 
       <BrainCouncilWorkerPacketPreview />
+
+      <BrainCouncilDecisionPacketExportPanel />
     </div>
   )
 }
