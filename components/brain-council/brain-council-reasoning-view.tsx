@@ -5,6 +5,7 @@ import { BrainCouncilContradictionReviewPanel } from "@/components/brain-council
 import { BrainCouncilDecisionPacketExportPanel } from "@/components/brain-council/brain-council-decision-packet-export-panel"
 import { BrainCouncilDecisionQualityPanel } from "@/components/brain-council/brain-council-decision-quality-panel"
 import { BrainCouncilEvidenceSelectorPanel } from "@/components/brain-council/brain-council-evidence-selector-panel"
+import { BrainCouncilEvalPromotionRubricPanel } from "@/components/brain-council/brain-council-eval-promotion-rubric-panel"
 import { BrainCouncilExperimentDashboard } from "@/components/brain-council/brain-council-experiment-dashboard"
 import { BrainCouncilExperimentRegistryPanel } from "@/components/brain-council/brain-council-experiment-registry-panel"
 import { BrainCouncilFailureEvalCandidatesPanel } from "@/components/brain-council/brain-council-failure-eval-candidates-panel"
@@ -227,6 +228,8 @@ export function BrainCouncilReasoningView() {
       <BrainCouncilReadinessRegressionPanel />
 
       <BrainCouncilFailureEvalCandidatesPanel />
+
+      <BrainCouncilEvalPromotionRubricPanel />
 
       <BrainCouncilProcedureCandidateViewer />
 
