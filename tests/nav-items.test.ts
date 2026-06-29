@@ -18,6 +18,7 @@ describe("operator navigation information architecture", () => {
       "/decisions",
       "/doctrine",
       "/governance",
+      "/brain-council",
       "/memory",
       "/corpus",
       "/audit",
