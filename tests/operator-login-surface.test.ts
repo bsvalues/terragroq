@@ -42,7 +42,7 @@ describe("operator login surface", () => {
     )
     expect(actions).toContainEqual(
       expect.objectContaining({
-        href: "#scoped-access",
+        href: "/access/preview",
       }),
     )
   })
