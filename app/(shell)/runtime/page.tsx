@@ -4,6 +4,7 @@ import { StatusBadge } from "@/components/status-badge"
 import { getRecentEvidence } from "@/app/actions/evidence"
 import { RuntimeEvidencePanel } from "@/components/runtime/runtime-evidence-panel"
 import { RuntimeProbe } from "@/components/runtime/runtime-probe"
+import { SystemsStatusPanel } from "@/components/systems/systems-status-panel"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
 
 export default async function RuntimePage() {
@@ -21,10 +22,12 @@ export default async function RuntimePage() {
   return (
     <>
       <PageHeader
-        title="Runtime"
-        description="Model and inference provenance for this shell. Read-only — this surface reports the runtime, it never selects or changes it."
+        title="Systems"
+        description="Read-only operational posture for WilliamOS, auth, runtime, Brain Council, Hermes preview, Agent Forge, deployment, and governed project systems."
       />
       <div className="flex flex-col gap-6 p-6">
+        <SystemsStatusPanel />
+
         {/* Fallback posture — the governed guarantee */}
         <div className="rounded-lg border border-border bg-card p-4">
           <div className="flex items-start gap-3">
