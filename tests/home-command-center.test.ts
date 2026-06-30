@@ -56,6 +56,23 @@ describe("WilliamOS Home Command Center", () => {
     })
   })
 
+  it("routes zero active work to goal classification", () => {
+    const home = getHomeCommandCenter({
+      ...initializedStats,
+      openWork: 0,
+    })
+
+    expect(home.nextMove).toMatchObject({
+      label: "Classify the next objective",
+      href: "/goal-console",
+      reason: "No active work is blocking the Primary Operator briefing.",
+    })
+    expect(home.statusCards.find((card) => card.label === "Attention")).toMatchObject({
+      value: "none",
+      href: "/goal-console",
+    })
+  })
+
   it("does not grant execution, autonomy, authority, or production-write behavior", () => {
     const home = getHomeCommandCenter(initializedStats)
 
