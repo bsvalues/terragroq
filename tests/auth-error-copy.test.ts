@@ -34,6 +34,17 @@ describe("auth recovery copy", () => {
     expect(JSON.stringify(copy)).not.toContain("postgres://secret")
   })
 
+  it("does not classify unrelated user messages as invalid credentials", () => {
+    const copy = getAuthRecoveryCopy({
+      mode: "sign-up",
+      rawMessage: "User already exists",
+      readiness: { ready: true, issues: [] },
+    })
+
+    expect(copy.code).toBe("UNEXPECTED_AUTH_FAILURE")
+    expect(copy.message).toContain("Raw failure details are not shown")
+  })
+
   it("distinguishes bootstrap signup lock from policy-disabled signup", () => {
     const locked = getAuthRecoveryCopy({
       mode: "sign-up",

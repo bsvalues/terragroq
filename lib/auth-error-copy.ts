@@ -15,6 +15,10 @@ export type AuthRecoveryCopy = {
   tone: "warning" | "blocked"
 }
 
+function matchesAny(value: string, patterns: RegExp[]) {
+  return patterns.some((pattern) => pattern.test(value))
+}
+
 function hasBlockingSetupIssue(readiness?: AuthUxReadiness) {
   return (
     !readiness?.ready ||
@@ -41,25 +45,13 @@ export function getAuthRecoveryCopy({
 }): AuthRecoveryCopy {
   const normalized = rawMessage.toLowerCase()
 
-  if (hasBlockingSetupIssue(readiness)) {
-    return {
-      code: "SETUP_REQUIRED",
-      title: "Authentication setup is incomplete",
-      message:
-        "The app cannot safely complete authentication until setup blockers are resolved.",
-      recovery: [
-        "Open the setup assistant.",
-        "Verify database, auth secret, base URL, and trusted-origin settings.",
-        "After changing local env values, restart the app process.",
-      ],
-      tone: "blocked",
-    }
-  }
-
   if (
-    normalized.includes("origin") ||
-    normalized.includes("trusted") ||
-    normalized.includes("cors")
+    matchesAny(normalized, [
+      /\binvalid origin\b/,
+      /\borigin .*not trusted\b/,
+      /\bnot trusted\b/,
+      /\bcors\b/,
+    ])
   ) {
     return {
       code: "ORIGIN_NOT_TRUSTED",
@@ -76,9 +68,12 @@ export function getAuthRecoveryCopy({
   }
 
   if (
-    normalized.includes("provider") ||
-    normalized.includes("oauth") ||
-    normalized.includes("social")
+    matchesAny(normalized, [
+      /\bprovider .*not configured\b/,
+      /\boauth .*not configured\b/,
+      /\bsocial .*not configured\b/,
+      /\bprovider .*unavailable\b/,
+    ])
   ) {
     return {
       code: "PROVIDER_UNAVAILABLE",
@@ -132,11 +127,14 @@ export function getAuthRecoveryCopy({
   }
 
   if (
-    normalized.includes("invalid") ||
-    normalized.includes("password") ||
-    normalized.includes("credential") ||
-    normalized.includes("not found") ||
-    normalized.includes("user")
+    matchesAny(normalized, [
+      /\binvalid (email or password|credentials?)\b/,
+      /\bincorrect password\b/,
+      /\bwrong password\b/,
+      /\bcredential(s)? (did not match|invalid)\b/,
+      /\buser (not found|does not exist)\b/,
+      /\bno user found\b/,
+    ])
   ) {
     return {
       code: "INVALID_CREDENTIALS",
@@ -152,11 +150,26 @@ export function getAuthRecoveryCopy({
     }
   }
 
+  if (hasBlockingSetupIssue(readiness)) {
+    return {
+      code: "SETUP_REQUIRED",
+      title: "Authentication setup is incomplete",
+      message:
+        "The app cannot safely complete authentication until setup blockers are resolved.",
+      recovery: [
+        "Open the setup assistant.",
+        "Verify database, auth secret, base URL, and trusted-origin settings.",
+        "After changing local env values, restart the app process.",
+      ],
+      tone: "blocked",
+    }
+  }
+
   return {
     code: "UNEXPECTED_AUTH_FAILURE",
     title: "Authentication failed",
     message:
-      "The sign-in attempt did not complete. The app preserved the raw failure details from the UI to avoid leaking sensitive configuration.",
+      "The sign-in attempt did not complete. Raw failure details are not shown here to avoid leaking sensitive configuration.",
     recovery: [
       "Try again once.",
       "If it repeats, check auth readiness and origin diagnostics.",
