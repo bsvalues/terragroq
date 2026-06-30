@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { AlertTriangle, CheckCircle2, LockKeyhole, ShieldAlert } from "lucide-react"
 import { authClient } from "@/lib/auth-client"
+import { getAuthRecoveryCopy, type AuthRecoveryCopy } from "@/lib/auth-error-copy"
 import { getAuthUxState } from "@/lib/auth-ux-state"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -40,6 +41,7 @@ export function AuthForm({
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [runtimeIssues, setRuntimeIssues] = useState<AuthIssue[]>([])
+  const [authFailure, setAuthFailure] = useState<AuthRecoveryCopy | null>(null)
   const [runtimeSignup, setRuntimeSignup] = useState<AuthReadinessState["signup"]>(
     readiness?.signup,
   )
@@ -56,6 +58,10 @@ export function AuthForm({
   })
   const submitDisabled =
     loading || blockingIssues.length > 0 || (isSignUp && !signupOpen)
+  const recoveryClass =
+    authFailure?.tone === "blocked"
+      ? "border-destructive/30 bg-destructive/10 text-destructive"
+      : "border-warning/30 bg-warning/10 text-warning"
   const StateIcon =
     uxState.tone === "blocked"
       ? ShieldAlert
@@ -69,19 +75,22 @@ export function AuthForm({
         ? "border-warning/30 bg-warning/10 text-warning"
         : "border-border bg-muted/30 text-foreground"
 
-  async function refreshReadiness() {
+  async function refreshReadiness(): Promise<{
+    issues: AuthIssue[]
+    signup?: AuthReadinessState["signup"]
+  } | null> {
     const res = await fetch("/api/auth/readiness", {
       method: "GET",
       cache: "no-store",
       headers: { accept: "application/json" },
     })
-    if (!res.ok && res.status !== 503) return
+    if (!res.ok && res.status !== 503) return null
 
     const payload = (await res.json()) as {
       issues?: unknown
       signup?: unknown
     }
-    if (!Array.isArray(payload.issues)) return
+    if (!Array.isArray(payload.issues)) return null
     const hydratedIssues = payload.issues.filter((item): item is AuthIssue => {
       if (!item || typeof item !== "object") return false
       if (!("code" in item) || !("severity" in item) || !("message" in item)) return false
@@ -89,6 +98,7 @@ export function AuthForm({
       return severity === "error" || severity === "warning"
     })
     setRuntimeIssues(hydratedIssues)
+    let hydratedSignup: AuthReadinessState["signup"] | undefined
     if (payload.signup && typeof payload.signup === "object") {
       const mode = (payload.signup as { mode?: unknown }).mode
       const open = (payload.signup as { open?: unknown }).open
@@ -97,19 +107,22 @@ export function AuthForm({
         (mode === "open" || mode === "bootstrap" || mode === "closed") &&
         typeof open === "boolean"
       ) {
-        setRuntimeSignup({
+        hydratedSignup = {
           mode,
           open,
           reason: typeof reason === "string" ? reason : undefined,
-        })
+        }
+        setRuntimeSignup(hydratedSignup)
       }
     }
+    return { issues: hydratedIssues, signup: hydratedSignup }
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (submitDisabled) return
     setLoading(true)
+    setAuthFailure(null)
     try {
       if (isSignUp) {
         const { error } = await authClient.signUp.email({ email, password, name })
@@ -122,14 +135,33 @@ export function AuthForm({
       router.refresh()
     } catch (err) {
       const message = err instanceof Error ? err.message : "Authentication failed"
+      let recoveryIssues = mergedIssues
+      let recoverySignup = runtimeSignup
       if (/internal server error|network|fetch/i.test(message)) {
         try {
-          await refreshReadiness()
+          const refreshed = await refreshReadiness()
+          if (refreshed) {
+            recoveryIssues = refreshed.issues
+            recoverySignup = refreshed.signup ?? recoverySignup
+          }
         } catch {
           // Keep the original auth error as the primary signal.
         }
       }
-      toast.error(message)
+      const recoveryBlockingIssues = recoveryIssues.filter(
+        (issue) => issue.severity === "error",
+      )
+      const recovery = getAuthRecoveryCopy({
+        mode,
+        rawMessage: message,
+        readiness: {
+          ready: readiness?.ready ?? recoveryBlockingIssues.length === 0,
+          issues: recoveryIssues,
+          signup: recoverySignup,
+        },
+      })
+      setAuthFailure(recovery)
+      toast.error(recovery.title)
     } finally {
       setLoading(false)
     }
@@ -196,6 +228,25 @@ export function AuthForm({
                   </Link>
                 </p>
               ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {authFailure ? (
+        <div className={`rounded-lg border p-3 text-sm ${recoveryClass}`}>
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4" aria-hidden />
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <p className="font-medium">{authFailure.title}</p>
+                <p className="text-xs opacity-85">{authFailure.message}</p>
+              </div>
+              <ul className="list-disc pl-5 text-xs opacity-85">
+                {authFailure.recovery.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
             </div>
           </div>
         </div>
