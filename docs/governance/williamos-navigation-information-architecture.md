@@ -24,39 +24,42 @@ WO-SHELL-002 follows:
 
 ## Current Route Inventory
 
+This inventory describes current URL paths, not final UI labels.
+
 ### Auth and access routes
 
-- `/operator` - operator entry shell and Primary Operator access orientation.
-- `/sign-in` - existing sign-in behavior.
-- `/sign-up` - bootstrap-gated sign-up behavior.
-- `/setup` - local setup assistant.
+- route: `/operator` - operator entry shell and Primary Operator access
+  orientation.
+- route: `/sign-in` - existing sign-in behavior.
+- route: `/sign-up` - bootstrap-gated sign-up behavior.
+- route: `/setup` - local setup assistant.
 
 ### Primary shell routes
 
-- `/` - current Command Overview.
-- `/goal-console` - goal classification and next objective surface.
-- `/work-orders` - governed work drafting and work order state.
-- `/chat` - operator chat with project context.
-- `/decisions` - decision register.
-- `/doctrine` - doctrine and rule register.
-- `/governance` - authority, locks, and governance overview.
-- `/brain-council` - Brain Council reasoning, readiness, research, and Hermes
+- route: `/` - current Command Overview.
+- route: `/goal-console` - goal classification and next objective surface.
+- route: `/work-orders` - governed work drafting and work order state.
+- route: `/chat` - operator chat with project context.
+- route: `/decisions` - decision register.
+- route: `/doctrine` - doctrine and rule register.
+- route: `/governance` - authority, locks, and governance overview.
+- route: `/brain-council` - Brain Council reasoning, readiness, research, and Hermes
   preview surfaces.
-- `/memory` - memory facts and durable context.
-- `/corpus` - corpus/source material index.
-- `/audit` - audit/event history.
-- `/runtime` - runtime and system health.
+- route: `/memory` - memory facts and durable context.
+- route: `/corpus` - corpus/source material index.
+- route: `/audit` - audit/event history.
+- route: `/runtime` - runtime and system health.
 
 ### API and system routes
 
-- `/api/health` - production/runtime health.
-- `/api/auth/readiness` - auth readiness and signup posture.
-- `/api/auth/origin-diagnostics` - trusted origin diagnostics.
-- `/api/auth/[...all]` - Better Auth handler.
-- `/api/chat` - chat route.
-- `/api/copilot/runtime` - runtime metadata.
-- `/api/setup/local-status` - local setup status.
-- `/api/setup/local-config` - local setup configuration.
+- route: `/api/health` - production/runtime health.
+- route: `/api/auth/readiness` - auth readiness and signup posture.
+- route: `/api/auth/origin-diagnostics` - trusted origin diagnostics.
+- route: `/api/auth/[...all]` - Better Auth handler.
+- route: `/api/chat` - chat route.
+- route: `/api/copilot/runtime` - runtime metadata.
+- route: `/api/setup/local-status` - local setup status.
+- route: `/api/setup/local-config` - local setup configuration.
 
 ## Current Navigation Model
 
@@ -250,8 +253,8 @@ Current route mapping:
 
 - Keep `/memory`.
 - Keep `/corpus` as a secondary Memory or Evidence surface.
-- Consider grouping `/decisions` and `/doctrine` under Memory or Governance
-  depending on implementation needs.
+- Cross-link `/decisions` and `/doctrine`, but do not make Memory their primary
+  home. Decisions and Doctrine are governance records that Memory may reference.
 
 ### Governance
 
@@ -270,8 +273,8 @@ Current route mapping:
 
 - Keep `/governance` as the governance overview.
 - Keep `/doctrine` as a secondary Governance surface.
-- Keep `/decisions` as either Governance or Memory. Decision records are
-  evidence-backed governance objects.
+- Keep `/decisions` as a secondary Governance surface. Decision records are
+  evidence-backed governance objects that Memory can reference.
 
 ### Authority
 
@@ -358,16 +361,19 @@ Recommended primary cards:
 
 Recommended current-to-target naming:
 
-- Overview -> Home
-- Command Overview -> Primary Home
-- Operator Chat -> Ask WilliamOS or Operator Query
-- Goal Console -> Next Objective or Goal Console under Work Orders
-- Governance Overview -> Governance
-- Audit Log -> Evidence / Audit
-- Runtime -> Systems / Runtime
-- Corpus -> Memory / Corpus
-- Decisions -> Governance / Decisions or Memory / Decisions
-- Doctrine -> Governance / Doctrine
+- label: Overview -> Home
+- label: Command Overview -> Primary Home
+- label: Operator Chat -> Ask WilliamOS or Operator Query
+- label: Goal Console -> Next Objective or Goal Console under Work Orders
+- label: Governance Overview -> Governance
+- label: Audit Log -> Evidence / Audit
+- label: Runtime -> Systems / Runtime
+- label: Corpus -> Memory / Corpus
+- label: Decisions -> Governance / Decisions
+- label: Doctrine -> Governance / Doctrine
+
+These are label recommendations. They do not imply route renames unless a future
+implementation work order explicitly authorizes routing changes.
 
 Avoid introducing product names that compete with WilliamOS. Brain Council,
 Hermes, and Agent Forge are subsystem names, not separate applications.
@@ -407,6 +413,19 @@ Hermes, and Agent Forge are subsystem names, not separate applications.
 - `/hermes`
 - `/agent-forge`
 - `/authority`
+
+Future route readiness criteria:
+
+- Add `/projects` only when there is a project context model or useful
+  project-specific aggregation to show.
+- Add `/evidence` only when at least two existing evidence sources can be
+  unified into one proof-oriented surface.
+- Add `/hermes` only when Hermes readiness, sandbox, or worker-dock state needs
+  a dedicated room. Do not add it to imply runtime activation.
+- Add `/agent-forge` only when agent definitions, capability cards, lifecycle,
+  or quarantine state need a dedicated room.
+- Add `/authority` only when access grants, approval state, denied actions, or
+  execution authority become visible enough to warrant a first-class surface.
 
 ### De-emphasize
 
@@ -463,4 +482,3 @@ WO-SHELL-002 is documentation-only. It does not change runtime behavior, auth
 policy, database schema, environment configuration, package dependencies,
 deployment settings, Hermes, MCP, Brain Council autonomy, or production-write
 behavior.
-
