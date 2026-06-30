@@ -165,6 +165,36 @@ Settings contains configuration visibility and owner-controlled preferences.
 Settings should make authority boundaries explicit and should not hide risky
 state changes behind casual controls.
 
+## Subsystem Interaction Rules
+
+Subsystems should cooperate through explicit boundaries:
+
+- Work Orders govern changes across all subsystems.
+- Evidence records how claims, validations, deployments, and decisions were
+  proven.
+- Brain Council advises on strategy, architecture, and reasoning quality.
+- Hermes executes only after a Work Order and authority gate allow execution.
+- Agent Forge defines agent capabilities, but it does not bypass Work Orders or
+  authority gates.
+- Memory preserves durable context, decisions, and verified facts for future
+  reasoning.
+- Systems reports operational readiness and risk, but it does not define product
+  direction.
+- Projects provide the real-world context that Work Orders, Evidence, Brain
+  Council, Hermes, and Memory operate on.
+
+The normal flow is:
+
+1. Project context creates a need.
+2. Brain Council may reason about the need.
+3. A Work Order defines the allowed action.
+4. Systems and Memory provide context.
+5. Hermes or a human operator executes only if authority allows it.
+6. Evidence records what happened and what was proven.
+7. Memory retains durable decisions and verified facts.
+
+No subsystem may silently promote advisory output into execution authority.
+
 ## Navigation Philosophy
 
 Navigation should be shallow. The Primary Operator should reach any major
@@ -213,6 +243,19 @@ WilliamOS should feel personal, calm, capable, trusted, deliberate,
 intelligent, and evidence-based. It should not feel noisy, gimmicky,
 theatrical, corporate, or over-automated.
 
+Canonical UI phrase patterns:
+
+- "Attention needed: [specific condition]."
+- "Readiness: [ready, blocked, degraded, or unknown]."
+- "Authority required before [specific action]."
+- "Evidence: [test, deployment, report, or verification source]."
+- "Next move: [one concrete recommendation]."
+- "Prepared, not executed."
+- "Advisory only until authorized."
+- "This does not change production."
+- "This is stable unless evidence changes."
+- "Blocked because [specific gate or missing proof]."
+
 ## Subsystem Identity Rules
 
 WilliamOS is the operating environment.
@@ -253,4 +296,3 @@ WO-SHELL-001 is complete when:
 4. WO-SHELL-005 - Brain Council Integration
 5. WO-SHELL-006 - Hermes Integration
 6. WO-SHELL-007 - Agent Forge Integration
-
