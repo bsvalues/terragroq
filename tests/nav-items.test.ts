@@ -1,15 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { navGroups, navItems } from "@/components/shell/nav-items"
+import { NAV_GROUP_IDS, navGroups, navItems } from "@/components/shell/nav-items"
 
 describe("operator navigation information architecture", () => {
   it("orders the shell around the operator journey", () => {
-    expect(navGroups.map((group) => group.id)).toEqual([
-      "Home",
-      "Work",
-      "Council",
-      "Authority",
-      "Systems",
-    ])
+    expect(navGroups.map((group) => group.id)).toEqual([...NAV_GROUP_IDS])
 
     expect(navItems.map((item) => item.href)).toEqual([
       "/",
@@ -35,6 +29,14 @@ describe("operator navigation information architecture", () => {
     expect(labels.get("/goal-console")).toBe("Next Objective")
     expect(labels.get("/audit")).toBe("Evidence / Audit")
     expect(labels.get("/runtime")).toBe("Systems")
+  })
+
+  it("uses Primary Operator descriptions for key routes", () => {
+    const descriptions = new Map(navItems.map((item) => [item.href, item.description]))
+
+    expect(descriptions.get("/")).toBe("Primary Operator briefing.")
+    expect(descriptions.get("/audit")).toBe("Inspect proof and events.")
+    expect(descriptions.get("/runtime")).toBe("Check runtime health.")
   })
 
   it("keeps every nav item described and assigned to a declared group", () => {
