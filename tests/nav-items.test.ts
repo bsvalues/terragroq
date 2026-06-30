@@ -12,6 +12,7 @@ describe("operator navigation information architecture", () => {
       "/work-orders",
       "/audit",
       "/projects",
+      "/agent-forge",
       "/brain-council",
       "/memory",
       "/corpus",
@@ -30,6 +31,7 @@ describe("operator navigation information architecture", () => {
     expect(labels.get("/goal-console")).toBe("Next Objective")
     expect(labels.get("/audit")).toBe("Evidence / Audit")
     expect(labels.get("/projects")).toBe("Projects")
+    expect(labels.get("/agent-forge")).toBe("Agent Forge")
     expect(labels.get("/runtime")).toBe("Systems")
   })
 
@@ -39,6 +41,7 @@ describe("operator navigation information architecture", () => {
     expect(descriptions.get("/")).toBe("Primary Operator briefing.")
     expect(descriptions.get("/audit")).toBe("Inspect proof and events.")
     expect(descriptions.get("/projects")).toBe("Track governed systems.")
+    expect(descriptions.get("/agent-forge")).toBe("Prepare capabilities.")
     expect(descriptions.get("/runtime")).toBe("Check runtime health.")
   })
 
