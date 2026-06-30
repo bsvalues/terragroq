@@ -81,8 +81,8 @@ export function getAuthUxState(
         description:
           signup.reason ??
           "An operator already exists, so public account creation is intentionally closed.",
-        primaryAction: "Enter instead",
-        secondaryAction: { href: "/sign-in", label: "Go to Primary access" },
+        primaryAction: "Enter WilliamOS instead",
+        secondaryAction: { href: "/sign-in", label: "Go to Primary Operator access" },
         tone: "neutral",
       }
     }
@@ -94,15 +94,15 @@ export function getAuthUxState(
       description:
         signup?.reason ??
         "Public account creation is disabled. Use an existing operator account.",
-      primaryAction: "Enter instead",
-      secondaryAction: { href: "/sign-in", label: "Go to Primary access" },
+      primaryAction: "Enter WilliamOS instead",
+      secondaryAction: { href: "/sign-in", label: "Go to Primary Operator access" },
       tone: "warning",
     }
   }
 
   return {
     state: "sign-in",
-    label: "Primary access",
+    label: "Primary Operator access",
     title: "Enter WilliamOS",
     description:
       signup?.mode === "bootstrap" && signup.open === false

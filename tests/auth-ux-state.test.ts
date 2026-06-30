@@ -57,6 +57,7 @@ describe("auth UX state classification", () => {
 
     expect(state.state).toBe("sign-in")
     expect(state.tone).toBe("ready")
+    expect(state.label).toBe("Primary Operator access")
     expect(state.primaryAction).toBe("Enter WilliamOS")
   })
 
