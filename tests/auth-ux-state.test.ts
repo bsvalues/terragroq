@@ -59,6 +59,7 @@ describe("auth UX state classification", () => {
     expect(state.tone).toBe("ready")
     expect(state.label).toBe("Primary Operator access")
     expect(state.primaryAction).toBe("Enter WilliamOS")
+    expect(state.secondaryAction).toBeUndefined()
   })
 
   it("shows policy-closed sign-in without implying an operator already exists", () => {

@@ -314,15 +314,16 @@ export function AuthForm({
         {loading ? "Authenticating…" : uxState.primaryAction}
       </Button>
 
-      <p className="text-sm text-muted-foreground text-center">
-        {isSignUp ? "Already provisioned? " : "No operator yet? "}
-        <Link
-          href={isSignUp ? "/sign-in" : "/sign-up"}
-          className="text-primary hover:underline font-medium"
-        >
-          {isSignUp ? "Enter WilliamOS" : "Create Primary Operator"}
-        </Link>
-      </p>
+      {uxState.secondaryAction ? (
+        <p className="text-sm text-muted-foreground text-center">
+          <Link
+            href={uxState.secondaryAction.href}
+            className="text-primary hover:underline font-medium"
+          >
+            {uxState.secondaryAction.label}
+          </Link>
+        </p>
+      ) : null}
     </form>
   )
 }
