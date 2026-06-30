@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { AlertTriangle, CheckCircle2, LockKeyhole, ShieldAlert } from "lucide-react"
 import { authClient } from "@/lib/auth-client"
+import { getAuthRecoveryCopy, type AuthRecoveryCopy } from "@/lib/auth-error-copy"
 import { getAuthUxState } from "@/lib/auth-ux-state"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -40,6 +41,7 @@ export function AuthForm({
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [runtimeIssues, setRuntimeIssues] = useState<AuthIssue[]>([])
+  const [authFailure, setAuthFailure] = useState<AuthRecoveryCopy | null>(null)
   const [runtimeSignup, setRuntimeSignup] = useState<AuthReadinessState["signup"]>(
     readiness?.signup,
   )
@@ -56,6 +58,10 @@ export function AuthForm({
   })
   const submitDisabled =
     loading || blockingIssues.length > 0 || (isSignUp && !signupOpen)
+  const recoveryClass =
+    authFailure?.tone === "blocked"
+      ? "border-destructive/30 bg-destructive/10 text-destructive"
+      : "border-warning/30 bg-warning/10 text-warning"
   const StateIcon =
     uxState.tone === "blocked"
       ? ShieldAlert
@@ -110,6 +116,7 @@ export function AuthForm({
     e.preventDefault()
     if (submitDisabled) return
     setLoading(true)
+    setAuthFailure(null)
     try {
       if (isSignUp) {
         const { error } = await authClient.signUp.email({ email, password, name })
@@ -122,6 +129,15 @@ export function AuthForm({
       router.refresh()
     } catch (err) {
       const message = err instanceof Error ? err.message : "Authentication failed"
+      const recovery = getAuthRecoveryCopy({
+        mode,
+        rawMessage: message,
+        readiness: {
+          ready: readiness?.ready ?? blockingIssues.length === 0,
+          issues: mergedIssues,
+          signup: runtimeSignup,
+        },
+      })
       if (/internal server error|network|fetch/i.test(message)) {
         try {
           await refreshReadiness()
@@ -129,7 +145,8 @@ export function AuthForm({
           // Keep the original auth error as the primary signal.
         }
       }
-      toast.error(message)
+      setAuthFailure(recovery)
+      toast.error(recovery.title)
     } finally {
       setLoading(false)
     }
@@ -196,6 +213,25 @@ export function AuthForm({
                   </Link>
                 </p>
               ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {authFailure ? (
+        <div className={`rounded-lg border p-3 text-sm ${recoveryClass}`}>
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4" aria-hidden />
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <p className="font-medium">{authFailure.title}</p>
+                <p className="text-xs opacity-85">{authFailure.message}</p>
+              </div>
+              <ul className="list-disc pl-5 text-xs opacity-85">
+                {authFailure.recovery.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
             </div>
           </div>
         </div>
