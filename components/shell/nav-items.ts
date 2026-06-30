@@ -10,6 +10,7 @@ import {
   Cpu,
   Crosshair,
   FolderKanban,
+  Hammer,
   ShieldCheck,
   type LucideIcon,
 } from "lucide-react"
@@ -81,6 +82,13 @@ export const navItems: NavItem[] = [
     icon: FolderKanban,
     group: "Work",
     description: "Track governed systems.",
+  },
+  {
+    href: "/agent-forge",
+    label: "Agent Forge",
+    icon: Hammer,
+    group: "Work",
+    description: "Prepare capabilities.",
   },
   {
     href: "/brain-council",
