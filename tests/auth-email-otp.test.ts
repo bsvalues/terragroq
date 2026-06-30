@@ -15,18 +15,16 @@ describe("auth email OTP scaffolding", () => {
     expect(readiness.reason).toContain("AUTH_EMAIL_OTP_ENABLED=true")
   })
 
-  it("fails closed when provider config is missing", async () => {
+  it("no-ops uniformly when provider config is missing", async () => {
     const fetchImpl = vi.fn()
 
-    await expect(
-      sendEmailOtp({
-        email: "operator@example.com",
-        otp: "123456",
-        type: "sign-in",
-        env: { AUTH_EMAIL_OTP_ENABLED: "true" },
-        fetchImpl: fetchImpl as unknown as typeof fetch,
-      }),
-    ).rejects.toThrow("EMAIL_OTP_PROVIDER_UNAVAILABLE")
+    await sendEmailOtp({
+      email: "operator@example.com",
+      otp: "123456",
+      type: "sign-in",
+      env: { AUTH_EMAIL_OTP_ENABLED: "true" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 

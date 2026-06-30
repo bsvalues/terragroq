@@ -113,7 +113,9 @@ export async function sendEmailOtp({
 }) {
   const readiness = getEmailOtpReadiness(env)
   if (!readiness.configured) {
-    throw new Error("EMAIL_OTP_PROVIDER_UNAVAILABLE")
+    // Public OTP request endpoints must not reveal whether an email belongs to
+    // an operator. Missing provider config therefore no-ops uniformly.
+    return
   }
 
   const message = getEmailOtpMessage(type, otp)
