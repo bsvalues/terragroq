@@ -25,11 +25,21 @@ describe("WilliamOS Home Command Center", () => {
     })
   })
 
-  it("surfaces systems, attention, council, and worker dock status", () => {
+  it("surfaces the unified WilliamOS command areas", () => {
     const home = getHomeCommandCenter(initializedStats)
     const labels = home.statusCards.map((card) => card.label)
 
-    expect(labels).toEqual(["Systems", "Attention", "Council", "Worker Dock"])
+    expect(labels).toEqual([
+      "Active Work",
+      "Ready Next",
+      "Blocked Decisions",
+      "Evidence Required",
+      "Systems",
+      "Council",
+      "Worker Dock",
+      "Agent Forge",
+      "Active Project",
+    ])
     expect(home.statusCards.find((card) => card.label === "Council")).toMatchObject({
       value: "Advisory",
       href: "/brain-council",
@@ -37,6 +47,14 @@ describe("WilliamOS Home Command Center", () => {
     expect(home.statusCards.find((card) => card.label === "Worker Dock")).toMatchObject({
       value: "Inactive",
       href: "/brain-council",
+    })
+    expect(home.statusCards.find((card) => card.label === "Agent Forge")).toMatchObject({
+      value: "Proposal-only",
+      href: "/agent-forge",
+    })
+    expect(home.statusCards.find((card) => card.label === "Active Project")).toMatchObject({
+      value: "TerraFusion OS",
+      href: "/projects",
     })
   })
 
@@ -50,7 +68,7 @@ describe("WilliamOS Home Command Center", () => {
       label: "Review active work orders",
       href: "/work-orders",
     })
-    expect(home.statusCards.find((card) => card.label === "Attention")).toMatchObject({
+    expect(home.statusCards.find((card) => card.label === "Active Work")).toMatchObject({
       value: "2 active",
       href: "/work-orders",
     })
@@ -67,7 +85,7 @@ describe("WilliamOS Home Command Center", () => {
       href: "/goal-console",
       reason: "No active work is blocking the Primary Operator briefing.",
     })
-    expect(home.statusCards.find((card) => card.label === "Attention")).toMatchObject({
+    expect(home.statusCards.find((card) => card.label === "Active Work")).toMatchObject({
       value: "none",
       href: "/goal-console",
     })
@@ -80,6 +98,8 @@ describe("WilliamOS Home Command Center", () => {
       readOnly: true,
       startsHermes: false,
       activatesBrainCouncil: false,
+      executesWorkOrders: false,
+      deploys: false,
       writesProduction: false,
       changesAuthority: false,
     })
