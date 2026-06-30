@@ -36,24 +36,24 @@ function getEmailOtpMessage(type: EmailOtpType, otp: string) {
   switch (type) {
     case "forget-password":
       return {
-        subject: "Reset your TerraGroq password",
-        text: `Use ${otp} to reset your TerraGroq password. It expires in 5 minutes.`,
+        subject: "Reset your WilliamOS access",
+        text: `Use ${otp} to reset your WilliamOS access. It expires in 5 minutes.`,
       }
     case "email-verification":
       return {
-        subject: "Verify your TerraGroq email",
-        text: `Use ${otp} to verify your TerraGroq email address. It expires in 5 minutes.`,
+        subject: "Verify your WilliamOS email",
+        text: `Use ${otp} to verify your WilliamOS email address. It expires in 5 minutes.`,
       }
     case "change-email":
       return {
-        subject: "Confirm your TerraGroq email change",
-        text: `Use ${otp} to confirm your TerraGroq email change. It expires in 5 minutes.`,
+        subject: "Confirm your WilliamOS email change",
+        text: `Use ${otp} to confirm your WilliamOS email change. It expires in 5 minutes.`,
       }
     case "sign-in":
     default:
       return {
-        subject: "Your TerraGroq sign-in code",
-        text: `Use ${otp} to sign in to TerraGroq. It expires in 5 minutes.`,
+        subject: "Your WilliamOS access code",
+        text: `Use ${otp} to enter WilliamOS. It expires in 5 minutes.`,
       }
   }
 }

@@ -10,7 +10,7 @@ describe("operator login surface", () => {
 
     expect(surface.eyebrow).toBe("WilliamOS Operator Console")
     expect(surface.primaryAction).toMatchObject({
-      label: "Sign in as operator",
+      label: "Enter as Primary Operator",
       href: "/sign-in",
     })
   })
@@ -20,7 +20,7 @@ describe("operator login surface", () => {
 
     expect(surface.secondaryActions).toContainEqual(
       expect.objectContaining({
-        label: "Create first operator",
+        label: "Create Primary Operator",
         href: "/sign-up",
       }),
     )
@@ -67,5 +67,6 @@ describe("operator login surface", () => {
     expect(surfaceText).not.toContain("xAI-powered")
     expect(surfaceText).not.toContain("public signup is available")
     expect(surfaceText).not.toContain("login grants")
+    expect(surfaceText).not.toContain("signing into TerraGroq")
   })
 })

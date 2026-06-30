@@ -15,9 +15,9 @@ export default async function SignInPage() {
       <div className="flex items-center justify-center p-6">
         <div className="w-full max-w-sm flex flex-col gap-8">
           <div className="flex flex-col gap-2">
-            <h1 className="text-2xl font-semibold">Operator sign in</h1>
+            <h1 className="text-2xl font-semibold">Primary Operator access</h1>
             <p className="text-muted-foreground text-sm">
-              Authenticate to access your governed second brain.
+              Enter WilliamOS with the operator account created during bootstrap.
             </p>
           </div>
           <AuthForm mode="sign-in" readiness={readiness} />

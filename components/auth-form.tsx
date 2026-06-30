@@ -261,7 +261,7 @@ export function AuthForm({
 
       {!isSignUp ? (
         <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm">
-          <p className="font-medium">Email code recovery</p>
+          <p className="font-medium">Recovery access</p>
           <p className="mt-1 text-xs text-muted-foreground">
             {readiness?.emailOtp?.configured
               ? "Email OTP is configured, but production recovery remains gated by the next auth work order."
@@ -320,7 +320,7 @@ export function AuthForm({
           href={isSignUp ? "/sign-in" : "/sign-up"}
           className="text-primary hover:underline font-medium"
         >
-          {isSignUp ? "Sign in" : "Create account"}
+          {isSignUp ? "Enter WilliamOS" : "Create Primary Operator"}
         </Link>
       </p>
     </form>

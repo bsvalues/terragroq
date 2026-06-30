@@ -38,7 +38,7 @@ describe("auth email OTP scaffolding", () => {
       env: {
         AUTH_EMAIL_OTP_ENABLED: "true",
         RESEND_API_KEY: "test-key",
-        AUTH_EMAIL_FROM: "TerraGroq <auth@example.com>",
+        AUTH_EMAIL_FROM: "WilliamOS <auth@example.com>",
       },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     })
@@ -53,8 +53,8 @@ describe("auth email OTP scaffolding", () => {
       }),
     )
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body as string)
-    expect(body.subject).toBe("Reset your TerraGroq password")
-    expect(body.text).toContain("reset your TerraGroq password")
+    expect(body.subject).toBe("Reset your WilliamOS access")
+    expect(body.text).toContain("reset your WilliamOS access")
   })
 
   it("hard-gates OTP sign-in against implicit user creation", () => {
