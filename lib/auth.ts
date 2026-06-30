@@ -1,5 +1,7 @@
 import { betterAuth } from "better-auth"
+import { emailOTP } from "better-auth/plugins/email-otp"
 import { pool } from "@/lib/db"
+import { createEmailOtpOptions } from "@/lib/auth-email-otp"
 import { resolveAuthBaseUrl, resolveTrustedOriginConfig } from "@/lib/auth-origins"
 
 const trustedOriginConfig = resolveTrustedOriginConfig()
@@ -12,6 +14,7 @@ export const auth = betterAuth({
     autoSignIn: true,
   },
   trustedOrigins: trustedOriginConfig.trustedOrigins,
+  plugins: [emailOTP(createEmailOtpOptions())],
   session: {
     expiresIn: 60 * 60 * 24 * 7,
     updateAge: 60 * 60 * 24,

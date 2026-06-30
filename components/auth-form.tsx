@@ -26,6 +26,13 @@ export type AuthReadinessState = {
     open: boolean
     reason?: string
   }
+  emailOtp?: {
+    enabled: boolean
+    configured: boolean
+    provider: "resend"
+    providerLabel?: string
+    reason: string
+  }
 }
 
 export function AuthForm({
@@ -249,6 +256,18 @@ export function AuthForm({
               </ul>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {!isSignUp ? (
+        <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm">
+          <p className="font-medium">Email code recovery</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {readiness?.emailOtp?.configured
+              ? "Email OTP is configured, but production recovery remains gated by the next auth work order."
+              : readiness?.emailOtp?.reason ??
+                "Email OTP is scaffolded but not configured. Use email and password for now."}
+          </p>
         </div>
       ) : null}
 
