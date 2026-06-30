@@ -33,6 +33,16 @@ describe("auth trusted origin resolution", () => {
     expect(resolveAuthBaseUrl()).toBe("https://auth.example.com")
   })
 
+  it("extracts the auth base origin even when BETTER_AUTH_URL includes a path", () => {
+    process.env.BETTER_AUTH_URL = "https://auth.example.com/api/auth"
+
+    const config = resolveTrustedOriginConfig()
+
+    expect(config.authBaseOrigin).toBe("https://auth.example.com")
+    expect(config.trustedOrigins).toContain("https://auth.example.com")
+    expect(config.invalidConfiguredOrigins).toEqual([])
+  })
+
   it("parses configured trusted origins and keeps development defaults", () => {
     process.env.BETTER_AUTH_TRUSTED_ORIGINS =
       "http://localhost:3000, https://operator.example.com\nhttps://preview.example.com"

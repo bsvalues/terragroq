@@ -31,11 +31,32 @@ export type OriginDiagnostics = TrustedOriginConfig & {
   recoveryActions: string[]
 }
 
+let cachedSignature: string | null = null
+let cachedConfig: TrustedOriginConfig | null = null
+
 function splitConfiguredOrigins(value: string | undefined) {
   return (value ?? "")
     .split(/[,\s]+/)
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function normalizeUrlOrigin(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return { origin: null, reason: "URL is empty." }
+
+  let url: URL
+  try {
+    url = new URL(trimmed)
+  } catch {
+    return { origin: null, reason: "URL must be absolute." }
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return { origin: null, reason: "URL must use http or https." }
+  }
+
+  return { origin: url.origin, reason: null }
 }
 
 function normalizeStrictOrigin(value: string) {
@@ -113,13 +134,27 @@ function resolveAuthBaseUrlSource(): TrustedOriginSource | null {
   return null
 }
 
+function trustedOriginEnvSignature() {
+  return JSON.stringify({
+    betterAuthUrl: process.env.BETTER_AUTH_URL ?? null,
+    trustedOrigins: process.env.BETTER_AUTH_TRUSTED_ORIGINS ?? null,
+    vercelProjectProductionUrl: process.env.VERCEL_PROJECT_PRODUCTION_URL ?? null,
+    vercelUrl: process.env.VERCEL_URL ?? null,
+    v0RuntimeUrl: process.env.V0_RUNTIME_URL ?? null,
+    nodeEnv: process.env.NODE_ENV ?? null,
+  })
+}
+
 export function resolveTrustedOriginConfig(): TrustedOriginConfig {
+  const signature = trustedOriginEnvSignature()
+  if (cachedConfig && cachedSignature === signature) return cachedConfig
+
   const origins = new Map<string, Set<TrustedOriginSource>>()
   const invalidConfiguredOrigins: InvalidTrustedOrigin[] = []
 
   const authBaseUrl = resolveAuthBaseUrl()
   const authBaseSource = resolveAuthBaseUrlSource()
-  const authBase = authBaseUrl ? normalizeStrictOrigin(authBaseUrl) : null
+  const authBase = authBaseUrl ? normalizeUrlOrigin(authBaseUrl) : null
   if (authBase?.origin) {
     addOrigin(
       origins,
@@ -170,12 +205,14 @@ export function resolveTrustedOriginConfig(): TrustedOriginConfig {
       sources: [...sources].sort(),
     }))
 
-  return {
+  cachedConfig = {
     authBaseOrigin: authBase?.origin ?? null,
     trustedOrigins: entries.map((entry) => entry.origin),
     entries,
     invalidConfiguredOrigins,
   }
+  cachedSignature = signature
+  return cachedConfig
 }
 
 function strictOriginFromHeader(value: string | null) {
