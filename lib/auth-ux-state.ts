@@ -62,12 +62,16 @@ export function getAuthUxState(
       return {
         state: "create-first-operator",
         label: signup?.mode === "bootstrap" ? "Primary Operator" : "Access open",
-        title: "Create the Primary Operator",
+        title:
+          signup?.mode === "bootstrap"
+            ? "Create the Primary Operator"
+            : "Request WilliamOS access",
         description:
           signup?.mode === "bootstrap"
             ? "Bootstrap is open because no operator exists yet."
-            : "Account creation is currently open by policy.",
-        primaryAction: "Create Primary Operator",
+            : "Access requests are currently open by policy.",
+        primaryAction:
+          signup?.mode === "bootstrap" ? "Create Primary Operator" : "Request access",
         secondaryAction: { href: "/sign-in", label: "Already provisioned? Enter" },
         tone: "ready",
       }

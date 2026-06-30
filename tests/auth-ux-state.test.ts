@@ -91,6 +91,18 @@ describe("auth UX state classification", () => {
     })
   })
 
+  it("does not call policy-open signup first-operator bootstrap", () => {
+    const state = getAuthUxState("sign-up", {
+      ready: true,
+      issues: [],
+      signup: { mode: "open", open: true },
+    })
+
+    expect(state.label).toBe("Access open")
+    expect(state.title).toBe("Request WilliamOS access")
+    expect(state.primaryAction).toBe("Request access")
+  })
+
   it("treats missing signup policy as open-compatible rather than disabled", () => {
     const state = getAuthUxState("sign-up", {
       ready: true,
