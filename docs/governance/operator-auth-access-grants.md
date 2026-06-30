@@ -72,7 +72,7 @@ An access grant must never allow:
 - Full operator console entry.
 - Public account creation.
 - Authority grants.
-- Work-order approval.
+- Work order approval.
 - Deploy, release, tag, merge, push, schema, DB, auth-policy, Hermes, MCP,
   autonomy, scheduler, worker dispatch, or production-write actions.
 - Escalation from scoped reviewer/builder to operator without a separate operator
@@ -104,6 +104,11 @@ Proposed lifecycle:
 8. Each open/verify/comment action appends audit evidence.
 9. Grant expires, reaches max use count, or is revoked.
 
+Audit records should not live only inside the access-grant row. Future
+implementation should write human-facing activity to `event_log` and
+governance-critical grant lifecycle transitions to `governance_event`, while the
+grant table stores current state and lookup fields.
+
 Recommended grant states:
 
 - `active`
@@ -119,6 +124,10 @@ Recommended grant scopes:
 - `comment_work_order`
 - `view_demo`
 - `limited_builder_workspace`
+
+These names are doctrine seeds, not a second implementation enum. `WO-AUTH-007B`
+must reconcile them with the codebase's eventual access-grant scope constants so
+the data model, validator, and UI share one source of truth.
 
 Forbidden grant scopes:
 
@@ -241,4 +250,3 @@ Before any implementation after this doctrine:
 - No DB/schema mutation without explicit schema work order.
 - No Hermes/MCP/autonomy/runtime activation through auth or access.
 - No authority from login alone.
-
