@@ -95,3 +95,20 @@ export const ACCESS_GRANT_FORBIDDEN_AUDIT_FIELDS = [
   "providerSecret",
   "emailBody",
 ] as const
+
+export const ACCESS_GRANT_RUNTIME_DISABLED_REASON =
+  "Access grant runtime remains disabled until owner activation approval."
+
+export const ACCESS_GRANT_TOKEN_PREFIX = "wag_"
+
+export const ACCESS_GRANT_TOKEN_RANDOM_BYTES = 32
+
+export const ACCESS_GRANT_TOKEN_MIN_PAYLOAD_LENGTH = 32
+
+export const ACCESS_GRANT_TOKEN_MAX_LENGTH = 128
+
+export const ACCESS_GRANT_LIMITER_DEFAULTS = {
+  maxAttempts: 5,
+  windowMs: 15 * 60 * 1000,
+  cooldownMs: 60 * 1000,
+} as const
