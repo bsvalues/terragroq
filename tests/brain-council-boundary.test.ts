@@ -5,8 +5,9 @@ describe("Brain Council boundary copy", () => {
   it("separates operator console duties from Brain Council duties", () => {
     const boundary = getBrainCouncilBoundary()
 
-    expect(boundary.operatorConsole).toContain("operator console")
-    expect(boundary.brainCouncil).toContain("specification/readiness layer")
+    expect(boundary.operatorConsole).toContain("WilliamOS")
+    expect(boundary.operatorConsole).toContain("Primary Operator console")
+    expect(boundary.brainCouncil).toContain("native advisory/readiness layer")
     expect(boundary.inactiveRuntime).toContain("not running")
   })
 

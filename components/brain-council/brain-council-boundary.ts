@@ -7,8 +7,8 @@ export type BrainCouncilBoundary = {
 
 export function getBrainCouncilBoundary(): BrainCouncilBoundary {
   return {
-    operatorConsole: "TerraGroq/WilliamOS is the operator console: it presents state, routes attention, and records governed actions.",
-    brainCouncil: "Brain Council is the specification/readiness layer: it defines roles, gates, skills, workflows, and verification posture.",
+    operatorConsole: "WilliamOS is the Primary Operator console: it presents state, routes attention, and records governed actions.",
+    brainCouncil: "Brain Council is the native advisory/readiness layer: it defines roles, gates, skills, workflows, and verification posture.",
     inactiveRuntime: "Brain Council is not running as an autonomous runtime from this console.",
     prohibited: [
       "MCP activation",
