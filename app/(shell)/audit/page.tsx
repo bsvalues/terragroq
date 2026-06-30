@@ -2,6 +2,7 @@ import { getUserId } from "@/lib/session"
 import { getRecentEvents } from "@/lib/registers/events"
 import { PageHeader } from "@/components/shell/page-header"
 import { getEventEmptyStateActions } from "@/components/dashboard/event-empty-state"
+import { EvidenceCommandPanel } from "@/components/evidence/evidence-command-panel"
 import { Activity } from "lucide-react"
 import Link from "next/link"
 
@@ -12,10 +13,11 @@ export default async function AuditPage() {
   return (
     <>
       <PageHeader
-        title="Audit Log"
-        description="An append-only stream of every governed action across the system. Provenance, not vibes."
+        title="Evidence"
+        description="The proof layer for Work Orders, production verification, safety posture, and governed decisions. Evidence observes; it does not execute."
       />
-      <div className="p-6">
+      <div className="flex flex-col gap-6 p-6">
+        <EvidenceCommandPanel />
         {events.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border bg-card p-6">
             <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 text-center">
