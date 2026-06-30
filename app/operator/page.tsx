@@ -18,6 +18,12 @@ const noticeClasses = {
   disabled: "border-border bg-card",
 }
 
+const actionButtonVariants = {
+  primary: "default",
+  secondary: "outline",
+  muted: "ghost",
+} as const
+
 export default async function OperatorPage() {
   const session = await getSession()
   if (session?.user) redirect("/")
@@ -50,11 +56,16 @@ export default async function OperatorPage() {
                 <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
               </Link>
             </Button>
-            <Button asChild size="lg" variant="outline">
-              <Link href={surface.secondaryActions[0].href}>
-                {surface.secondaryActions[0].label}
-              </Link>
-            </Button>
+            {surface.secondaryActions.map((action) => (
+              <Button
+                key={action.href}
+                asChild
+                size="lg"
+                variant={actionButtonVariants[action.variant]}
+              >
+                <Link href={action.href}>{action.label}</Link>
+              </Button>
+            ))}
           </div>
 
           <div id="scoped-access" className="grid gap-3">
