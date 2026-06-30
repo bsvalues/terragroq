@@ -44,8 +44,8 @@ export function getOperatorLoginSurface(): OperatorLoginSurface {
         variant: "secondary",
       },
       {
-        label: "Scoped access links are coming later",
-        href: "#scoped-access",
+        label: "Open scoped access preview",
+        href: "/access/preview",
         variant: "muted",
       },
     ],
