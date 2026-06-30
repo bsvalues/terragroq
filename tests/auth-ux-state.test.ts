@@ -31,7 +31,7 @@ describe("auth UX state classification", () => {
     })
 
     expect(state.state).toBe("setup-required")
-    expect(state.primaryAction).toBe("Open setup assistant")
+    expect(state.primaryAction).toBe("Authentication blocked")
     expect(state.secondaryAction?.href).toBe("/setup")
   })
 
@@ -58,6 +58,45 @@ describe("auth UX state classification", () => {
     expect(state.state).toBe("sign-in")
     expect(state.tone).toBe("ready")
     expect(state.primaryAction).toBe("Enter the shell")
+  })
+
+  it("shows policy-closed sign-in without implying an operator already exists", () => {
+    const state = getAuthUxState("sign-in", {
+      ready: true,
+      issues: [],
+      signup: {
+        mode: "closed",
+        open: false,
+        reason: "Public account creation is disabled by policy.",
+      },
+    })
+
+    expect(state.state).toBe("sign-in")
+    expect(state.description).toContain("disabled by policy")
+    expect(state.description).not.toContain("operator already exists")
+  })
+
+  it("uses generic account creation copy when signup is open by policy", () => {
+    const state = getAuthUxState("sign-in", {
+      ready: true,
+      issues: [],
+      signup: { mode: "open", open: true },
+    })
+
+    expect(state.secondaryAction).toMatchObject({
+      href: "/sign-up",
+      label: "Create account",
+    })
+  })
+
+  it("treats missing signup policy as open-compatible rather than disabled", () => {
+    const state = getAuthUxState("sign-up", {
+      ready: true,
+      issues: [],
+    })
+
+    expect(state.state).toBe("create-first-operator")
+    expect(state.tone).toBe("ready")
   })
 
   it("distinguishes policy-disabled signup from completed bootstrap", () => {

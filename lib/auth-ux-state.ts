@@ -50,7 +50,7 @@ export function getAuthUxState(
       title: "Authentication setup is incomplete",
       description:
         "Finish database, secret, base URL, and trusted-origin setup before signing in.",
-      primaryAction: "Open setup assistant",
+      primaryAction: "Authentication blocked",
       secondaryAction: { href: "/setup", label: "Open setup assistant" },
       tone: "blocked",
     }
@@ -58,13 +58,13 @@ export function getAuthUxState(
 
   const signup = readiness.signup
   if (mode === "sign-up") {
-    if (signup?.open) {
+    if (!signup || signup.open) {
       return {
         state: "create-first-operator",
-        label: signup.mode === "bootstrap" ? "First operator" : "Signup open",
+        label: signup?.mode === "bootstrap" ? "First operator" : "Signup open",
         title: "Create the operator account",
         description:
-          signup.mode === "bootstrap"
+          signup?.mode === "bootstrap"
             ? "Bootstrap is open because no operator exists yet."
             : "Signup is currently open by policy.",
         primaryAction: "Provision operator",
@@ -105,12 +105,17 @@ export function getAuthUxState(
     label: "Operator sign in",
     title: "Sign in to WilliamOS",
     description:
-      signup?.open === false
+      signup?.mode === "bootstrap" && signup.open === false
         ? "Auth is ready. Signup may be locked because an operator already exists."
+        : signup?.mode === "closed"
+          ? "Auth is ready. New account creation is disabled by policy."
         : "Auth is ready. Use your operator credentials to enter the shell.",
     primaryAction: "Enter the shell",
     secondaryAction: signup?.open
-      ? { href: "/sign-up", label: "Create first operator" }
+      ? {
+          href: "/sign-up",
+          label: signup.mode === "bootstrap" ? "Create first operator" : "Create account",
+        }
       : undefined,
     tone: "ready",
   }
