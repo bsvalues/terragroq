@@ -38,12 +38,12 @@ export default async function DashboardPage() {
             <div className="mt-2 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
                 <h2 className="text-2xl font-semibold tracking-tight">
-                  Private system briefing
+                  WilliamOS Operator Console
                 </h2>
                 <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-                  WilliamOS shows what needs attention, what is stable, what is
-                  waiting for authority, and where the Primary Operator should
-                  move next.
+                  Control your build environment from one place. Brain Council
+                  advises. Hermes remains preview-only. Work Orders and
+                  Evidence govern action.
                 </p>
               </div>
               <Button variant="outline" asChild>
@@ -103,6 +103,8 @@ export default async function DashboardPage() {
                 <QuickLink href="/decisions" label="Log a decision" />
                 <QuickLink href="/doctrine" label="Ratify doctrine" />
                 <QuickLink href="/work-orders" label="Open a work order" />
+                <QuickLink href="/projects" label="Review project systems" />
+                <QuickLink href="/agent-forge" label="Inspect Agent Forge" />
                 <QuickLink href="/corpus" label="Ingest a document" />
               </div>
             </div>

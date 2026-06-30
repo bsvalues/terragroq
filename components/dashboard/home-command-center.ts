@@ -25,6 +25,8 @@ export type HomeCommandCenter = {
     readOnly: true
     startsHermes: false
     activatesBrainCouncil: false
+    executesWorkOrders: false
+    deploys: false
     writesProduction: false
     changesAuthority: false
   }
@@ -47,16 +49,34 @@ export function getHomeCommandCenter(stats: DashboardStats): HomeCommandCenter {
     },
     statusCards: [
       {
+        label: "Active Work",
+        value: blockedWork,
+        description: "Open Work Orders define the current governed attention queue.",
+        href: stats.openWork > 0 ? "/work-orders" : "/goal-console",
+      },
+      {
+        label: "Ready Next",
+        value: "Classify",
+        description: "New intent starts in Next Objective before any mutation is allowed.",
+        href: "/goal-console",
+      },
+      {
+        label: "Blocked Decisions",
+        value: String(stats.openDecisions),
+        description: "Authority-sensitive calls remain visible until explicitly resolved.",
+        href: "/decisions",
+      },
+      {
+        label: "Evidence Required",
+        value: "Tracked",
+        description: "Evidence proves validation, production posture, and completion claims.",
+        href: "/audit",
+      },
+      {
         label: "Systems",
         value: "Ready",
         description: "Health and auth readiness remain visible without changing configuration.",
         href: "/runtime",
-      },
-      {
-        label: "Attention",
-        value: blockedWork,
-        description: "Open work orders and missing governance primitives determine attention.",
-        href: stats.openWork > 0 ? "/work-orders" : "/goal-console",
       },
       {
         label: "Council",
@@ -69,6 +89,18 @@ export function getHomeCommandCenter(stats: DashboardStats): HomeCommandCenter {
         value: "Inactive",
         description: "Hermes remains preview-only until explicit authority grants execution.",
         href: "/brain-council",
+      },
+      {
+        label: "Agent Forge",
+        value: "Proposal-only",
+        description: "Capabilities, packets, and skill definitions prepare work without running it.",
+        href: "/agent-forge",
+      },
+      {
+        label: "Active Project",
+        value: "TerraFusion OS",
+        description: "Project systems stay inside WilliamOS under Work Orders and Evidence.",
+        href: "/projects",
       },
     ],
     nextMove:
@@ -87,6 +119,8 @@ export function getHomeCommandCenter(stats: DashboardStats): HomeCommandCenter {
       readOnly: true,
       startsHermes: false,
       activatesBrainCouncil: false,
+      executesWorkOrders: false,
+      deploys: false,
       writesProduction: false,
       changesAuthority: false,
     },
