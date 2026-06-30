@@ -10,6 +10,7 @@ export type EmailOtpReadiness = {
   enabled: boolean
   configured: boolean
   provider: "resend"
+  providerLabel: string
   fromConfigured: boolean
   replyToConfigured: boolean
   reason: string
@@ -26,6 +27,37 @@ function isExplicitlyEnabled(value: string | undefined) {
   return value?.trim().toLowerCase() === "true"
 }
 
+const emailOtpProvider = {
+  id: "resend" as const,
+  label: "Resend",
+}
+
+function getEmailOtpMessage(type: EmailOtpType, otp: string) {
+  switch (type) {
+    case "forget-password":
+      return {
+        subject: "Reset your TerraGroq password",
+        text: `Use ${otp} to reset your TerraGroq password. It expires in 5 minutes.`,
+      }
+    case "email-verification":
+      return {
+        subject: "Verify your TerraGroq email",
+        text: `Use ${otp} to verify your TerraGroq email address. It expires in 5 minutes.`,
+      }
+    case "change-email":
+      return {
+        subject: "Confirm your TerraGroq email change",
+        text: `Use ${otp} to confirm your TerraGroq email change. It expires in 5 minutes.`,
+      }
+    case "sign-in":
+    default:
+      return {
+        subject: "Your TerraGroq sign-in code",
+        text: `Use ${otp} to sign in to TerraGroq. It expires in 5 minutes.`,
+      }
+  }
+}
+
 export function getEmailOtpReadiness(env: EmailOtpEnv = process.env): EmailOtpReadiness {
   const enabled = isExplicitlyEnabled(env.AUTH_EMAIL_OTP_ENABLED)
   const hasApiKey = Boolean(env.RESEND_API_KEY?.trim())
@@ -35,7 +67,8 @@ export function getEmailOtpReadiness(env: EmailOtpEnv = process.env): EmailOtpRe
     return {
       enabled: false,
       configured: false,
-      provider: "resend",
+      provider: emailOtpProvider.id,
+      providerLabel: emailOtpProvider.label,
       fromConfigured: hasFrom,
       replyToConfigured: Boolean(env.AUTH_EMAIL_REPLY_TO?.trim()),
       reason: "Email OTP is scaffolded but disabled until AUTH_EMAIL_OTP_ENABLED=true.",
@@ -46,7 +79,8 @@ export function getEmailOtpReadiness(env: EmailOtpEnv = process.env): EmailOtpRe
     return {
       enabled: true,
       configured: false,
-      provider: "resend",
+      provider: emailOtpProvider.id,
+      providerLabel: emailOtpProvider.label,
       fromConfigured: hasFrom,
       replyToConfigured: Boolean(env.AUTH_EMAIL_REPLY_TO?.trim()),
       reason: "Email OTP requires RESEND_API_KEY and AUTH_EMAIL_FROM before sending.",
@@ -56,10 +90,11 @@ export function getEmailOtpReadiness(env: EmailOtpEnv = process.env): EmailOtpRe
   return {
     enabled: true,
     configured: true,
-    provider: "resend",
+    provider: emailOtpProvider.id,
+    providerLabel: emailOtpProvider.label,
     fromConfigured: true,
     replyToConfigured: Boolean(env.AUTH_EMAIL_REPLY_TO?.trim()),
-    reason: "Email OTP is configured for Resend.",
+    reason: `Email OTP is configured for ${emailOtpProvider.label}.`,
   }
 }
 
@@ -81,6 +116,7 @@ export async function sendEmailOtp({
     throw new Error("EMAIL_OTP_PROVIDER_UNAVAILABLE")
   }
 
+  const message = getEmailOtpMessage(type, otp)
   const res = await fetchImpl("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -91,8 +127,8 @@ export async function sendEmailOtp({
       from: env.AUTH_EMAIL_FROM,
       to: email,
       reply_to: env.AUTH_EMAIL_REPLY_TO?.trim() || undefined,
-      subject: type === "forget-password" ? "Reset your TerraGroq password" : "Your TerraGroq sign-in code",
-      text: `Your TerraGroq code is ${otp}. It expires in 5 minutes.`,
+      subject: message.subject,
+      text: message.text,
     }),
   })
 

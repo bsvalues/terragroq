@@ -11,6 +11,7 @@ describe("auth email OTP scaffolding", () => {
 
     expect(readiness.enabled).toBe(false)
     expect(readiness.configured).toBe(false)
+    expect(readiness.providerLabel).toBe("Resend")
     expect(readiness.reason).toContain("AUTH_EMAIL_OTP_ENABLED=true")
   })
 
@@ -53,6 +54,9 @@ describe("auth email OTP scaffolding", () => {
         }),
       }),
     )
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body as string)
+    expect(body.subject).toBe("Reset your TerraGroq password")
+    expect(body.text).toContain("reset your TerraGroq password")
   })
 
   it("hard-gates OTP sign-in against implicit user creation", () => {

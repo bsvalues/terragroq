@@ -30,6 +30,7 @@ export type AuthReadinessState = {
     enabled: boolean
     configured: boolean
     provider: "resend"
+    providerLabel?: string
     reason: string
   }
 }
