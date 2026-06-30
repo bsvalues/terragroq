@@ -21,7 +21,7 @@ export type NavItem = {
   description: string
 }
 
-export const NAV_GROUP_IDS = ["Command", "Governance", "Knowledge", "Operations"] as const
+export const NAV_GROUP_IDS = ["Home", "Work", "Council", "Authority", "Systems"] as const
 
 export type NavGroupId = (typeof NAV_GROUP_IDS)[number]
 
@@ -31,95 +31,96 @@ export type NavGroup = {
 }
 
 export const navGroups: NavGroup[] = [
-  { id: "Command", description: "Start, classify, and route operator work." },
-  { id: "Governance", description: "Record decisions, doctrine, and authority posture." },
-  { id: "Knowledge", description: "Capture memory and retrieval context." },
-  { id: "Operations", description: "Inspect audit history and runtime health." },
+  { id: "Home", description: "Briefing, questions, and the next move." },
+  { id: "Work", description: "Goals, work orders, and proof trails." },
+  { id: "Council", description: "Reasoning, memory, and source context." },
+  { id: "Authority", description: "Decisions, doctrine, and governance gates." },
+  { id: "Systems", description: "Operational health and system evidence." },
 ]
 
 export const navItems: NavItem[] = [
   {
     href: "/",
-    label: "Overview",
+    label: "Home",
     icon: LayoutDashboard,
-    group: "Command",
-    description: "Current operating state.",
+    group: "Home",
+    description: "Primary Operator briefing.",
+  },
+  {
+    href: "/chat",
+    label: "Ask WilliamOS",
+    icon: MessageSquare,
+    group: "Home",
+    description: "Ask with project context.",
   },
   {
     href: "/goal-console",
-    label: "Goal Console",
+    label: "Next Objective",
     icon: Crosshair,
-    group: "Command",
-    description: "Classify the next objective.",
+    group: "Work",
+    description: "Classify governed intent.",
   },
   {
     href: "/work-orders",
     label: "Work Orders",
     icon: ClipboardList,
-    group: "Command",
-    description: "Draft scoped governed work.",
+    group: "Work",
+    description: "Control scoped mutation.",
   },
   {
-    href: "/chat",
-    label: "Operator Chat",
-    icon: MessageSquare,
-    group: "Command",
-    description: "Ask with project context.",
-  },
-  {
-    href: "/decisions",
-    label: "Decisions",
-    icon: GitBranch,
-    group: "Governance",
-    description: "Capture consequential calls.",
-  },
-  {
-    href: "/doctrine",
-    label: "Doctrine",
-    icon: ScrollText,
-    group: "Governance",
-    description: "Define rules and guardrails.",
-  },
-  {
-    href: "/governance",
-    label: "Governance Overview",
-    icon: ShieldCheck,
-    group: "Governance",
-    description: "Review authority and locks.",
+    href: "/audit",
+    label: "Evidence / Audit",
+    icon: Activity,
+    group: "Work",
+    description: "Inspect proof and events.",
   },
   {
     href: "/brain-council",
     label: "Brain Council",
     icon: BrainCircuit,
-    group: "Governance",
-    description: "Reason through evidence without execution.",
+    group: "Council",
+    description: "Advisory reasoning only.",
   },
   {
     href: "/memory",
     label: "Memory",
     icon: BrainCircuit,
-    group: "Knowledge",
-    description: "Store working facts.",
+    group: "Council",
+    description: "Preserve durable context.",
   },
   {
     href: "/corpus",
     label: "Corpus",
     icon: Library,
-    group: "Knowledge",
-    description: "Index source documents.",
+    group: "Council",
+    description: "Index source material.",
   },
   {
-    href: "/audit",
-    label: "Audit Log",
-    icon: Activity,
-    group: "Operations",
-    description: "Inspect recorded events.",
+    href: "/decisions",
+    label: "Decisions",
+    icon: GitBranch,
+    group: "Authority",
+    description: "Record consequential calls.",
+  },
+  {
+    href: "/doctrine",
+    label: "Doctrine",
+    icon: ScrollText,
+    group: "Authority",
+    description: "Define rules and guardrails.",
+  },
+  {
+    href: "/governance",
+    label: "Governance",
+    icon: ShieldCheck,
+    group: "Authority",
+    description: "Review gates and locks.",
   },
   {
     href: "/runtime",
-    label: "Runtime",
+    label: "Systems",
     icon: Cpu,
-    group: "Operations",
-    description: "Check system health.",
+    group: "Systems",
+    description: "Check runtime health.",
   },
 ]
