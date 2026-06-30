@@ -7,6 +7,8 @@ import {
   integer,
   jsonb,
   vector,
+  index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core"
 
 /* ------------------------------------------------------------------ */
@@ -349,6 +351,92 @@ export const authorityGrant = pgTable("authority_grant", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 })
 
+// Scoped human access grants. These are NOT authority grants: they may open one
+// bounded review surface, but they never confer operator/runtime authority.
+export const accessGrant = pgTable(
+  "access_grant",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    ref: text("ref"), // ACCESS-0001
+    publicTokenHash: text("publicTokenHash").notNull(),
+    tokenPrefix: text("tokenPrefix"),
+    scope: text("scope").notNull(),
+    targetResourceType: text("targetResourceType").notNull(),
+    targetResourceId: text("targetResourceId").notNull(),
+    recipientEmailHash: text("recipientEmailHash"),
+    recipientEmailEncrypted: text("recipientEmailEncrypted"),
+    emailVerificationRequired: boolean("emailVerificationRequired").default(false).notNull(),
+    createdByOperatorId: text("createdByOperatorId").notNull(),
+    createdReason: text("createdReason"),
+    status: text("status").default("active").notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    maxUses: integer("maxUses").default(1).notNull(),
+    useCount: integer("useCount").default(0).notNull(),
+    lastUsedAt: timestamp("lastUsedAt"),
+    revokedAt: timestamp("revokedAt"),
+    revokedBy: text("revokedBy"),
+    revokeReason: text("revokeReason"),
+    metadata: jsonb("metadata"),
+    auditCorrelationId: text("auditCorrelationId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("access_grant_public_token_hash_idx").on(table.publicTokenHash),
+    index("access_grant_user_status_expires_idx").on(table.userId, table.status, table.expiresAt),
+    index("access_grant_target_idx").on(table.targetResourceType, table.targetResourceId),
+    index("access_grant_recipient_email_hash_idx").on(table.recipientEmailHash),
+  ],
+)
+
+export const accessGrantSession = pgTable(
+  "access_grant_session",
+  {
+    id: serial("id").primaryKey(),
+    grantId: integer("grantId")
+      .notNull()
+      .references(() => accessGrant.id, { onDelete: "cascade" }),
+    sessionTokenHash: text("sessionTokenHash").notNull(),
+    recipientEmailVerified: boolean("recipientEmailVerified").default(false).notNull(),
+    ipAddressHash: text("ipAddressHash"),
+    userAgentHash: text("userAgentHash"),
+    expiresAt: timestamp("expiresAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    lastSeenAt: timestamp("lastSeenAt"),
+  },
+  (table) => [
+    uniqueIndex("access_grant_session_token_hash_idx").on(table.sessionTokenHash),
+    index("access_grant_session_grant_expires_idx").on(table.grantId, table.expiresAt),
+  ],
+)
+
+export const accessGrantEvent = pgTable(
+  "access_grant_event",
+  {
+    id: serial("id").primaryKey(),
+    grantId: integer("grantId").references(() => accessGrant.id, { onDelete: "set null" }),
+    correlationId: text("correlationId").notNull(),
+    eventType: text("eventType").notNull(),
+    actorType: text("actorType").notNull(),
+    outcome: text("outcome").notNull(),
+    scope: text("scope"),
+    targetResourceType: text("targetResourceType"),
+    targetResourceId: text("targetResourceId"),
+    reasonCode: text("reasonCode"),
+    ipAddressHash: text("ipAddressHash"),
+    userAgentHash: text("userAgentHash"),
+    tokenPrefix: text("tokenPrefix"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    index("access_grant_event_grant_created_idx").on(table.grantId, table.createdAt),
+    index("access_grant_event_correlation_idx").on(table.correlationId),
+    index("access_grant_event_type_created_idx").on(table.eventType, table.createdAt),
+  ],
+)
+
 // WO-014: Current Truth with freshness + confidence categories. Volatile truth
 // must be rechecked before mutation/commit/push/tag/release.
 // truthType: STATIC | SESSION | VOLATILE | EVIDENCE | LOCK | UNKNOWN | STALE | ASSUMED
@@ -479,6 +567,9 @@ export type LoopRun = typeof loopRun.$inferSelect
 export type EvidenceRecord = typeof evidenceRecord.$inferSelect
 export type GovernanceEvent = typeof governanceEvent.$inferSelect
 export type AuthorityGrant = typeof authorityGrant.$inferSelect
+export type AccessGrant = typeof accessGrant.$inferSelect
+export type AccessGrantSession = typeof accessGrantSession.$inferSelect
+export type AccessGrantEvent = typeof accessGrantEvent.$inferSelect
 export type TruthClaim = typeof truthClaim.$inferSelect
 export type AgentClaim = typeof agentClaim.$inferSelect
 export type ConflictRecord = typeof conflictRecord.$inferSelect
