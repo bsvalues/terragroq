@@ -3,8 +3,9 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
-import { AlertTriangle } from "lucide-react"
+import { AlertTriangle, CheckCircle2, LockKeyhole, ShieldAlert } from "lucide-react"
 import { authClient } from "@/lib/auth-client"
+import { getAuthUxState } from "@/lib/auth-ux-state"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -48,8 +49,25 @@ export function AuthForm({
   const blockingIssues = mergedIssues.filter((issue) => issue.severity === "error")
   const warningIssues = mergedIssues.filter((issue) => issue.severity === "warning")
   const signupOpen = runtimeSignup?.open ?? true
+  const uxState = getAuthUxState(mode, {
+    ready: readiness?.ready ?? blockingIssues.length === 0,
+    issues: mergedIssues,
+    signup: runtimeSignup,
+  })
   const submitDisabled =
     loading || blockingIssues.length > 0 || (isSignUp && !signupOpen)
+  const StateIcon =
+    uxState.tone === "blocked"
+      ? ShieldAlert
+      : uxState.state === "signup-locked" || uxState.state === "signup-disabled"
+        ? LockKeyhole
+        : CheckCircle2
+  const stateClass =
+    uxState.tone === "blocked"
+      ? "border-destructive/30 bg-destructive/10 text-destructive"
+      : uxState.tone === "warning"
+        ? "border-warning/30 bg-warning/10 text-warning"
+        : "border-border bg-muted/30 text-foreground"
 
   async function refreshReadiness() {
     const res = await fetch("/api/auth/readiness", {
@@ -119,6 +137,27 @@ export function AuthForm({
 
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-5">
+      <div className={`rounded-lg border p-3 text-sm ${stateClass}`}>
+        <div className="flex items-start gap-2">
+          <StateIcon className="mt-0.5 h-4 w-4" aria-hidden />
+          <div className="space-y-1">
+            <p className="text-xs font-medium uppercase tracking-wide">{uxState.label}</p>
+            <p className="font-medium">{uxState.title}</p>
+            <p className="text-xs opacity-85">{uxState.description}</p>
+            {uxState.secondaryAction ? (
+              <p className="text-xs">
+                <Link
+                  href={uxState.secondaryAction.href}
+                  className="font-medium text-primary hover:underline"
+                >
+                  {uxState.secondaryAction.label}
+                </Link>
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
       {mergedIssues.length > 0 ? (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm">
           <div className="flex items-start gap-2">
@@ -202,7 +241,7 @@ export function AuthForm({
       </div>
 
       <Button type="submit" disabled={submitDisabled} className="mt-1">
-        {loading ? "Authenticating…" : isSignUp ? "Provision operator" : "Enter the shell"}
+        {loading ? "Authenticating…" : uxState.primaryAction}
       </Button>
 
       <p className="text-sm text-muted-foreground text-center">
