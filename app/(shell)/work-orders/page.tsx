@@ -1,5 +1,6 @@
 import { getWorkOrders } from "@/app/actions/work-orders"
 import { PageHeader } from "@/components/shell/page-header"
+import { WorkOrdersCommandPanel } from "@/components/work-orders/work-orders-command-panel"
 import { WorkOrdersView } from "@/components/work-orders/work-orders-view"
 
 export default async function WorkOrdersPage() {
@@ -8,9 +9,12 @@ export default async function WorkOrdersPage() {
     <>
       <PageHeader
         title="Work Orders"
-        description="Governed units of work — each a contract run through the draft → proposed → approved → active → review → closed lifecycle. Authority-scoped, doctrine-gated, agent-executed, and closed only against acceptance evidence."
+        description="Governed work for the Primary Operator. /goal defines intent, /loop governs progress, Work Orders control mutation, and Evidence proves reality."
       />
-      <WorkOrdersView initial={orders} />
+      <div className="flex flex-col gap-6 p-6">
+        <WorkOrdersCommandPanel orders={orders} />
+        <WorkOrdersView initial={orders} />
+      </div>
     </>
   )
 }
