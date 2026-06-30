@@ -34,10 +34,10 @@ export type NavGroup = {
 
 export const navGroups: NavGroup[] = [
   { id: "Home", description: "Briefing, questions, and the next move." },
-  { id: "Work", description: "Goals, work orders, and proof trails." },
-  { id: "Council", description: "Reasoning, memory, and source context." },
+  { id: "Work", description: "Projects, goals, work orders, and evidence." },
+  { id: "Council", description: "Reasoning, memory, and knowledge context." },
   { id: "Authority", description: "Decisions, doctrine, and governance gates." },
-  { id: "Systems", description: "Operational health and system evidence." },
+  { id: "Systems", description: "Runtime, readiness, and operational posture." },
 ]
 
 export const navItems: NavItem[] = [
@@ -71,17 +71,17 @@ export const navItems: NavItem[] = [
   },
   {
     href: "/audit",
-    label: "Evidence / Audit",
+    label: "Evidence",
     icon: Activity,
     group: "Work",
-    description: "Inspect proof and events.",
+    description: "Inspect proof trails.",
   },
   {
     href: "/projects",
     label: "Projects",
     icon: FolderKanban,
     group: "Work",
-    description: "Track governed systems.",
+    description: "Track project systems.",
   },
   {
     href: "/agent-forge",
@@ -95,7 +95,7 @@ export const navItems: NavItem[] = [
     label: "Brain Council",
     icon: BrainCircuit,
     group: "Council",
-    description: "Advisory reasoning only.",
+    description: "Review advisory reasoning.",
   },
   {
     href: "/memory",
@@ -109,7 +109,7 @@ export const navItems: NavItem[] = [
     label: "Corpus",
     icon: Library,
     group: "Council",
-    description: "Index source material.",
+    description: "Review source material.",
   },
   {
     href: "/decisions",
@@ -137,6 +137,6 @@ export const navItems: NavItem[] = [
     label: "Systems",
     icon: Cpu,
     group: "Systems",
-    description: "Check runtime health.",
+    description: "Check operational posture.",
   },
 ]
