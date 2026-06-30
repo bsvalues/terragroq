@@ -55,6 +55,9 @@ function normalizeUrlOrigin(value: string) {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return { origin: null, reason: "URL must use http or https." }
   }
+  if (url.hostname.includes("*")) {
+    return { origin: null, reason: "Wildcard origins are not supported." }
+  }
 
   return { origin: url.origin, reason: null }
 }
@@ -72,6 +75,9 @@ function normalizeStrictOrigin(value: string) {
 
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return { origin: null, reason: "Origin must use http or https." }
+  }
+  if (url.hostname.includes("*")) {
+    return { origin: null, reason: "Wildcard origins are not supported." }
   }
   if (url.pathname !== "/" || url.search || url.hash) {
     return {
@@ -240,6 +246,16 @@ function currentOriginFromRequest(req: Request) {
   )
 }
 
+function redactConfiguredOriginValue(value: string) {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "<redacted>"
+    return `${url.protocol}//${url.host}${url.pathname === "/" ? "" : "/<path>"}`
+  } catch {
+    return "<redacted>"
+  }
+}
+
 export function getOriginDiagnostics(req: Request): OriginDiagnostics {
   const config = resolveTrustedOriginConfig()
   const currentOrigin = currentOriginFromRequest(req)
@@ -270,6 +286,10 @@ export function getOriginDiagnostics(req: Request): OriginDiagnostics {
 
   return {
     ...config,
+    invalidConfiguredOrigins: config.invalidConfiguredOrigins.map((origin) => ({
+      ...origin,
+      value: redactConfiguredOriginValue(origin.value),
+    })),
     currentOrigin,
     isCurrentOriginTrusted,
     warnings,
