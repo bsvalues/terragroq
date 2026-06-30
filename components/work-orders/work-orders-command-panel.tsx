@@ -9,7 +9,7 @@ export function WorkOrdersCommandPanel({ orders }: { orders: WorkOrder[] }) {
     <section className="overflow-hidden rounded-xl border border-border bg-card">
       <div className="border-b border-border bg-muted/30 px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <ClipboardList className="h-4 w-4 text-primary" aria-hidden />
+          <ClipboardList className="h-4 w-4 text-primary" aria-hidden={true} />
           <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
             {surface.eyebrow}
           </p>
@@ -42,7 +42,7 @@ export function WorkOrdersCommandPanel({ orders }: { orders: WorkOrder[] }) {
           </p>
         </div>
         <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground">
-          <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden />
+          <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden={true} />
           Read-only surface. No loop starts, authority grants, or production writes.
         </div>
       </div>

@@ -67,7 +67,7 @@ describe("Work Orders command surface", () => {
     expect(cards.get("Active Work")).toBe("2")
     expect(cards.get("Ready Next")).toBe("2")
     expect(cards.get("Blocked Decisions")).toBe("1")
-    expect(cards.get("Completed Recently")).toBe("2")
+    expect(cards.get("Total Completed")).toBe("2")
     expect(cards.get("Evidence Required")).toBe("4")
   })
 

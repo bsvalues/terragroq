@@ -1,5 +1,5 @@
 import type { WorkOrder } from "@/lib/db/schema"
-import type { WoStatus } from "@/lib/work-orders/lifecycle"
+import { WO_STATUSES, type WoStatus } from "@/lib/work-orders/lifecycle"
 
 export type WorkOrderSurfaceCard = {
   label: string
@@ -8,12 +8,12 @@ export type WorkOrderSurfaceCard = {
 }
 
 export type WorkOrdersCommandSurface = {
-  title: "Work Orders"
-  eyebrow: "Primary Operator Work Queue"
+  title: string
+  eyebrow: string
   description: string
   cards: WorkOrderSurfaceCard[]
   nextRecommendedWo: {
-    label: "WO-SHELL-006 - Evidence Surface"
+    label: string
     reason: string
   }
   safety: {
@@ -29,14 +29,21 @@ const ACTIVE_STATUSES: WoStatus[] = ["approved", "active", "review"]
 const READY_STATUSES: WoStatus[] = ["draft", "proposed"]
 const COMPLETED_STATUSES: WoStatus[] = ["closed", "aborted"]
 
+function asWoStatus(status: string): WoStatus | null {
+  return WO_STATUSES.includes(status as WoStatus) ? (status as WoStatus) : null
+}
+
 function countByStatus(orders: WorkOrder[], statuses: WoStatus[]) {
-  return orders.filter((order) => statuses.includes(order.status as WoStatus)).length
+  return orders.filter((order) => {
+    const status = asWoStatus(order.status)
+    return status !== null && statuses.includes(status)
+  }).length
 }
 
 function countEvidenceRequired(orders: WorkOrder[]) {
   return orders.filter((order) => {
-    const status = order.status as WoStatus
-    return !COMPLETED_STATUSES.includes(status) && order.evidence.length === 0
+    const status = asWoStatus(order.status)
+    return status !== null && !COMPLETED_STATUSES.includes(status) && order.evidence.length === 0
   }).length
 }
 
@@ -71,9 +78,9 @@ export function getWorkOrdersCommandSurface(
         description: "Work waiting on an explicit gate, approval, or missing proof.",
       },
       {
-        label: "Completed Recently",
+        label: "Total Completed",
         value: String(completed),
-        description: "Closed or aborted work retained for evidence and continuity.",
+        description: "All closed or aborted work retained for evidence and continuity.",
       },
       {
         label: "Evidence Required",
