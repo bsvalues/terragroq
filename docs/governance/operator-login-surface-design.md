@@ -19,7 +19,7 @@ The surface must not imply that ordinary visitors can self-register for the
 operator console. Non-operators enter through scoped access grants, not through
 operator onboarding.
 
-## 2. Naming Guidance
+## 2. Reusable Naming Style Guide
 
 TerraGroq is legacy repo/product naming from an earlier Groq-era build. The
 current system must not describe itself as Groq-powered or xAI-powered unless
@@ -35,6 +35,13 @@ Preferred user-facing language:
 Acceptable limited usage:
 
 - `TerraGroq`: legacy repository, deployment, or historical product name.
+
+Reference rule:
+
+- Future auth, UX, governance, and onboarding work orders should reference this
+  section instead of redefining product naming from scratch. If a broader
+  repository style guide is created later, move this guidance there and link
+  back from this document.
 
 Avoid on auth surfaces:
 
@@ -258,6 +265,13 @@ Recovery copy:
 Use the canonical WilliamOS URL or ask the operator to update trusted origins.
 ```
 
+Implementation note:
+
+- Trusted-origin diagnostics should read from the same policy source used by
+  auth runtime checks. Today that means `BETTER_AUTH_URL`, deployment URL
+  fallbacks, and `BETTER_AUTH_TRUSTED_ORIGINS` as parsed by the repo-owned auth
+  origin helper. Do not create a second trusted-origin list for UI copy.
+
 ### Recovery unavailable
 
 Title:
@@ -343,7 +357,7 @@ language where appropriate.
 
 Known candidate:
 
-- Email OTP subjects/body currently mention TerraGroq.
+- Email OTP subject/body currently mentions TerraGroq.
 
 Constraints:
 
