@@ -75,6 +75,6 @@ describe("operator navigation information architecture", () => {
         "Governance",
       ]),
     )
-    expect(text).not.toMatch(/Groq|xAI|AI-powered|TerraGroq/)
+    expect(text).not.toMatch(/\b(groq|xai|ai-powered|terragroq)\b/i)
   })
 })
