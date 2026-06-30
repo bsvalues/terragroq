@@ -9,6 +9,7 @@ import { BrainCouncilEvalPromotionRubricPanel } from "@/components/brain-council
 import { BrainCouncilExperimentDashboard } from "@/components/brain-council/brain-council-experiment-dashboard"
 import { BrainCouncilExperimentRegistryPanel } from "@/components/brain-council/brain-council-experiment-registry-panel"
 import { BrainCouncilFailureEvalCandidatesPanel } from "@/components/brain-council/brain-council-failure-eval-candidates-panel"
+import { BrainCouncilNativeAreaPanel } from "@/components/brain-council/brain-council-native-area-panel"
 import { BrainCouncilHermesBoundaryPreviewPanel } from "@/components/brain-council/brain-council-hermes-boundary-preview"
 import { BrainCouncilHermesCapabilityMapPanel } from "@/components/brain-council/brain-council-hermes-capability-map-panel"
 import { BrainCouncilHermesActivationRubricPanel } from "@/components/brain-council/brain-council-hermes-activation-rubric-panel"
@@ -39,6 +40,8 @@ export function BrainCouncilReasoningView() {
 
   return (
     <div className="flex flex-col gap-6 p-6">
+      <BrainCouncilNativeAreaPanel />
+
       <section className="overflow-hidden rounded-2xl border border-border bg-card">
         <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
           <div className="border-b border-border p-5 lg:border-b-0 lg:border-r">
@@ -51,8 +54,8 @@ export function BrainCouncilReasoningView() {
               {packet.question}
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-              Brain Council is now visible. This view makes it useful by showing the
-              operator how a question is decomposed into evidence, unknowns,
+              Brain Council is a native WilliamOS advisory area. This view shows the
+              Primary Operator how a question is decomposed into evidence, unknowns,
               hypotheses, confidence, verification, and a bounded decision packet.
             </p>
           </div>

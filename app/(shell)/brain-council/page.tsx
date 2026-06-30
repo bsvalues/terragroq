@@ -6,7 +6,7 @@ export default function BrainCouncilPage() {
     <>
       <PageHeader
         title="Brain Council"
-        description="Reasoning workspace for questions, evidence, hypotheses, confidence, and decision packets. Preview-only — no agents are executed."
+        description="WilliamOS advisory and governance layer for reasoning, evidence synthesis, hypotheses, confidence, and decision packets. Read-only — no agents are executed."
       />
       <BrainCouncilReasoningView />
     </>
