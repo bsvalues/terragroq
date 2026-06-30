@@ -3,7 +3,11 @@ import { redirect } from "next/navigation"
 import { ArrowRight, KeyRound, LockKeyhole, ShieldCheck } from "lucide-react"
 import { AuthAside } from "@/components/auth-aside"
 import { Button } from "@/components/ui/button"
-import { getOperatorLoginSurface } from "@/lib/operator-login-surface"
+import { getAuthReadiness } from "@/lib/auth-readiness"
+import {
+  getOperatorLoginSurface,
+  getVisibleOperatorSecondaryActions,
+} from "@/lib/operator-login-surface"
 import { getSession } from "@/lib/session"
 
 const noticeIcons = {
@@ -29,6 +33,8 @@ export default async function OperatorPage() {
   if (session?.user) redirect("/")
 
   const surface = getOperatorLoginSurface()
+  const readiness = await getAuthReadiness({ probeDatabase: true })
+  const secondaryActions = getVisibleOperatorSecondaryActions(surface, readiness)
 
   return (
     <main className="grid min-h-screen lg:grid-cols-2">
@@ -56,7 +62,7 @@ export default async function OperatorPage() {
                 <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
               </Link>
             </Button>
-            {surface.secondaryActions.map((action) => (
+            {secondaryActions.map((action) => (
               <Button
                 key={action.href}
                 asChild

@@ -20,6 +20,12 @@ export type OperatorLoginSurface = {
   prohibitedClaims: string[]
 }
 
+export type OperatorLoginReadiness = {
+  signup?: {
+    open: boolean
+  }
+}
+
 export function getOperatorLoginSurface(): OperatorLoginSurface {
   return {
     eyebrow: "WilliamOS Operator Console",
@@ -69,4 +75,14 @@ export function getOperatorLoginSurface(): OperatorLoginSurface {
       "MCP activation",
     ],
   }
+}
+
+export function getVisibleOperatorSecondaryActions(
+  surface: OperatorLoginSurface,
+  readiness?: OperatorLoginReadiness,
+): OperatorLoginAction[] {
+  return surface.secondaryActions.filter((action) => {
+    if (action.href !== "/sign-up") return true
+    return readiness?.signup?.open ?? true
+  })
 }
