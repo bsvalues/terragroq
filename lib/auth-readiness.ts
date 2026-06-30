@@ -1,5 +1,6 @@
 import { pool } from "@/lib/db"
 import { getSignupPolicy, type SignupPolicy } from "@/lib/auth-policy"
+import { getEmailOtpReadiness, type EmailOtpReadiness } from "@/lib/auth-email-otp"
 import { resolveAuthBaseUrl } from "@/lib/auth-origins"
 
 export type AuthReadinessIssue = {
@@ -31,6 +32,7 @@ export type AuthReadiness = {
     authSecret: ReadinessCheck
     baseUrl: ReadinessCheck
   }
+  emailOtp: EmailOtpReadiness
   issues: AuthReadinessIssue[]
 }
 
@@ -97,6 +99,7 @@ export async function getAuthReadiness(options?: {
     databaseUrl,
   )
   const signup = await getSignupPolicy()
+  const emailOtp = getEmailOtpReadiness()
 
   const databaseReady = databaseConnectivity
     ? databaseConnectivity.ok
@@ -150,6 +153,7 @@ export async function getAuthReadiness(options?: {
       authSecret,
       baseUrl,
     },
+    emailOtp,
     issues,
   }
 }
