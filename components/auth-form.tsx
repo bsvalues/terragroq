@@ -75,19 +75,22 @@ export function AuthForm({
         ? "border-warning/30 bg-warning/10 text-warning"
         : "border-border bg-muted/30 text-foreground"
 
-  async function refreshReadiness() {
+  async function refreshReadiness(): Promise<{
+    issues: AuthIssue[]
+    signup?: AuthReadinessState["signup"]
+  } | null> {
     const res = await fetch("/api/auth/readiness", {
       method: "GET",
       cache: "no-store",
       headers: { accept: "application/json" },
     })
-    if (!res.ok && res.status !== 503) return
+    if (!res.ok && res.status !== 503) return null
 
     const payload = (await res.json()) as {
       issues?: unknown
       signup?: unknown
     }
-    if (!Array.isArray(payload.issues)) return
+    if (!Array.isArray(payload.issues)) return null
     const hydratedIssues = payload.issues.filter((item): item is AuthIssue => {
       if (!item || typeof item !== "object") return false
       if (!("code" in item) || !("severity" in item) || !("message" in item)) return false
@@ -95,6 +98,7 @@ export function AuthForm({
       return severity === "error" || severity === "warning"
     })
     setRuntimeIssues(hydratedIssues)
+    let hydratedSignup: AuthReadinessState["signup"] | undefined
     if (payload.signup && typeof payload.signup === "object") {
       const mode = (payload.signup as { mode?: unknown }).mode
       const open = (payload.signup as { open?: unknown }).open
@@ -103,13 +107,15 @@ export function AuthForm({
         (mode === "open" || mode === "bootstrap" || mode === "closed") &&
         typeof open === "boolean"
       ) {
-        setRuntimeSignup({
+        hydratedSignup = {
           mode,
           open,
           reason: typeof reason === "string" ? reason : undefined,
-        })
+        }
+        setRuntimeSignup(hydratedSignup)
       }
     }
+    return { issues: hydratedIssues, signup: hydratedSignup }
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -129,22 +135,31 @@ export function AuthForm({
       router.refresh()
     } catch (err) {
       const message = err instanceof Error ? err.message : "Authentication failed"
-      const recovery = getAuthRecoveryCopy({
-        mode,
-        rawMessage: message,
-        readiness: {
-          ready: readiness?.ready ?? blockingIssues.length === 0,
-          issues: mergedIssues,
-          signup: runtimeSignup,
-        },
-      })
+      let recoveryIssues = mergedIssues
+      let recoverySignup = runtimeSignup
       if (/internal server error|network|fetch/i.test(message)) {
         try {
-          await refreshReadiness()
+          const refreshed = await refreshReadiness()
+          if (refreshed) {
+            recoveryIssues = refreshed.issues
+            recoverySignup = refreshed.signup ?? recoverySignup
+          }
         } catch {
           // Keep the original auth error as the primary signal.
         }
       }
+      const recoveryBlockingIssues = recoveryIssues.filter(
+        (issue) => issue.severity === "error",
+      )
+      const recovery = getAuthRecoveryCopy({
+        mode,
+        rawMessage: message,
+        readiness: {
+          ready: readiness?.ready ?? recoveryBlockingIssues.length === 0,
+          issues: recoveryIssues,
+          signup: recoverySignup,
+        },
+      })
       setAuthFailure(recovery)
       toast.error(recovery.title)
     } finally {

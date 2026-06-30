@@ -71,6 +71,22 @@ describe("auth recovery copy", () => {
     expect(disabled.message).toContain("public account creation")
   })
 
+  it("maps explicit signup-disabled server errors even when readiness is stale", () => {
+    const copy = getAuthRecoveryCopy({
+      mode: "sign-up",
+      rawMessage: "SIGNUP_DISABLED",
+      readiness: {
+        ready: true,
+        issues: [],
+        signup: { mode: "bootstrap", open: true },
+      },
+    })
+
+    expect(copy.code).toBe("SIGNUP_DISABLED")
+    expect(copy.title).toBe("Signup is not available")
+    expect(copy.recovery.join(" ")).toContain("refresh the page")
+  })
+
   it("maps untrusted origin failures to diagnostics guidance", () => {
     const copy = getAuthRecoveryCopy({
       mode: "sign-in",

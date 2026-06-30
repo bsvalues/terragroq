@@ -124,6 +124,19 @@ export function getAuthRecoveryCopy({
         tone: "warning",
       }
     }
+
+    return {
+      code: "SIGNUP_DISABLED",
+      title: "Signup is not available",
+      message:
+        "The server rejected account creation because signup is currently closed.",
+      recovery: [
+        "Use the sign-in screen if an operator account already exists.",
+        "If bootstrap just completed in another session, refresh the page.",
+        "Use the future invite or allowlist flow when it is implemented.",
+      ],
+      tone: "warning",
+    }
   }
 
   if (
