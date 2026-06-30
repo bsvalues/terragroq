@@ -1,5 +1,6 @@
 import { pool } from "@/lib/db"
 import { getSignupPolicy, type SignupPolicy } from "@/lib/auth-policy"
+import { resolveAuthBaseUrl } from "@/lib/auth-origins"
 
 export type AuthReadinessIssue = {
   code:
@@ -33,17 +34,6 @@ export type AuthReadiness = {
   issues: AuthReadinessIssue[]
 }
 
-function resolveBaseUrl() {
-  return (
-    process.env.BETTER_AUTH_URL ??
-    (process.env.VERCEL_PROJECT_PRODUCTION_URL
-      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-      : process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : process.env.V0_RUNTIME_URL)
-  )
-}
-
 function checkDatabaseUrl(): ReadinessCheck {
   if (process.env.DATABASE_URL?.trim()) return { ok: true }
   return { ok: false, detail: "DATABASE_URL is not configured." }
@@ -65,7 +55,7 @@ function checkAuthSecret(): ReadinessCheck {
 }
 
 function checkBaseUrl(): ReadinessCheck {
-  if (resolveBaseUrl()) return { ok: true }
+  if (resolveAuthBaseUrl()) return { ok: true }
   return {
     ok: false,
     detail:
