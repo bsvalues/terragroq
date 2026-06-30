@@ -6,6 +6,12 @@ import {
 } from "@/lib/auth-email-otp"
 
 describe("auth email OTP scaffolding", () => {
+  const configuredEnv = {
+    AUTH_EMAIL_OTP_ENABLED: "true",
+    RESEND_API_KEY: "test-key",
+    AUTH_EMAIL_FROM: "WilliamOS <auth@example.com>",
+  }
+
   it("is disabled until explicitly enabled", () => {
     const readiness = getEmailOtpReadiness({})
 
@@ -35,11 +41,7 @@ describe("auth email OTP scaffolding", () => {
       email: "operator@example.com",
       otp: "123456",
       type: "forget-password",
-      env: {
-        AUTH_EMAIL_OTP_ENABLED: "true",
-        RESEND_API_KEY: "test-key",
-        AUTH_EMAIL_FROM: "TerraGroq <auth@example.com>",
-      },
+      env: configuredEnv,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     })
 
@@ -53,8 +55,30 @@ describe("auth email OTP scaffolding", () => {
       }),
     )
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body as string)
-    expect(body.subject).toBe("Reset your TerraGroq password")
-    expect(body.text).toContain("reset your TerraGroq password")
+    expect(body.subject).toBe("Reset your WilliamOS access")
+    expect(body.text).toContain("reset your WilliamOS access")
+  })
+
+  it.each([
+    ["forget-password", "Reset your WilliamOS access", "reset your WilliamOS access"],
+    ["email-verification", "Verify your WilliamOS email", "verify your WilliamOS email"],
+    ["change-email", "Confirm your WilliamOS email change", "confirm your WilliamOS email change"],
+    ["sign-in", "Your WilliamOS access code", "enter WilliamOS"],
+  ] as const)("uses WilliamOS copy for %s OTP email", async (type, subject, text) => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true })
+
+    await sendEmailOtp({
+      email: "operator@example.com",
+      otp: "123456",
+      type,
+      env: configuredEnv,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body as string)
+    expect(body.subject).toBe(subject)
+    expect(body.text).toContain(text)
+    expect(body.text).not.toContain("TerraGroq")
   })
 
   it("hard-gates OTP sign-in against implicit user creation", () => {

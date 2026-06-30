@@ -61,14 +61,18 @@ export function getAuthUxState(
     if (!signup || signup.open) {
       return {
         state: "create-first-operator",
-        label: signup?.mode === "bootstrap" ? "First operator" : "Signup open",
-        title: "Create the operator account",
+        label: signup?.mode === "bootstrap" ? "Primary Operator" : "Access open",
+        title:
+          signup?.mode === "bootstrap"
+            ? "Create the Primary Operator"
+            : "Request WilliamOS access",
         description:
           signup?.mode === "bootstrap"
             ? "Bootstrap is open because no operator exists yet."
-            : "Signup is currently open by policy.",
-        primaryAction: "Provision operator",
-        secondaryAction: { href: "/sign-in", label: "Already provisioned? Sign in" },
+            : "Access requests are currently open by policy.",
+        primaryAction:
+          signup?.mode === "bootstrap" ? "Create Primary Operator" : "Request access",
+        secondaryAction: { href: "/sign-in", label: "Already provisioned? Enter" },
         tone: "ready",
       }
     }
@@ -81,8 +85,8 @@ export function getAuthUxState(
         description:
           signup.reason ??
           "An operator already exists, so public account creation is intentionally closed.",
-        primaryAction: "Sign in instead",
-        secondaryAction: { href: "/sign-in", label: "Go to sign in" },
+        primaryAction: "Enter WilliamOS instead",
+        secondaryAction: { href: "/sign-in", label: "Go to Primary Operator access" },
         tone: "neutral",
       }
     }
@@ -94,27 +98,27 @@ export function getAuthUxState(
       description:
         signup?.reason ??
         "Public account creation is disabled. Use an existing operator account.",
-      primaryAction: "Sign in instead",
-      secondaryAction: { href: "/sign-in", label: "Go to sign in" },
+      primaryAction: "Enter WilliamOS instead",
+      secondaryAction: { href: "/sign-in", label: "Go to Primary Operator access" },
       tone: "warning",
     }
   }
 
   return {
     state: "sign-in",
-    label: "Operator sign in",
-    title: "Sign in to WilliamOS",
+    label: "Primary Operator access",
+    title: "Enter WilliamOS",
     description:
       signup?.mode === "bootstrap" && signup.open === false
         ? "Auth is ready. Signup may be locked because an operator already exists."
         : signup?.mode === "closed"
           ? "Auth is ready. New account creation is disabled by policy."
-        : "Auth is ready. Use your operator credentials to enter the shell.",
-    primaryAction: "Enter the shell",
+        : "Auth is ready. Use your Primary Operator credentials to enter WilliamOS.",
+    primaryAction: "Enter WilliamOS",
     secondaryAction: signup?.open
       ? {
           href: "/sign-up",
-          label: signup.mode === "bootstrap" ? "Create first operator" : "Create account",
+          label: signup.mode === "bootstrap" ? "Create Primary Operator" : "Request access",
         }
       : undefined,
     tone: "ready",

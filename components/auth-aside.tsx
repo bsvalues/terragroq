@@ -21,11 +21,11 @@ export function AuthAside() {
 
       <div className="flex flex-col gap-6">
         <h2 className="text-2xl font-semibold text-balance text-sidebar-foreground leading-tight">
-          A governed second brain for serious operators.
+          Your private command environment.
         </h2>
         <p className="text-muted-foreground text-pretty leading-relaxed max-w-sm">
-          Every fact, decision, and action is captured, embedded, and auditable.
-          The AI answers from your corpus — with citations, not vibes.
+          WilliamOS keeps memory, decisions, doctrine, and work orders under
+          Primary Operator control, with evidence before action.
         </p>
 
         <div className="grid grid-cols-2 gap-3 max-w-sm">
@@ -43,7 +43,7 @@ export function AuthAside() {
       </div>
 
       <div className="font-mono text-xs text-muted-foreground">
-        provenance-forward · local-first · RAG-grounded
+        private · evidence-led · authority-gated
       </div>
     </div>
   )

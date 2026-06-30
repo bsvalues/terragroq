@@ -29,17 +29,17 @@ export type OperatorLoginReadiness = {
 export function getOperatorLoginSurface(): OperatorLoginSurface {
   return {
     eyebrow: "WilliamOS Operator Console",
-    title: "Sign in to control your build environment",
+    title: "Enter your private command environment",
     description:
-      "Operator access is for the person governing work orders, Brain Council evidence, release decisions, and safety gates.",
+      "Primary Operator access is for the owner governing work orders, Brain Council evidence, release decisions, and safety gates.",
     primaryAction: {
-      label: "Sign in as operator",
+      label: "Enter as Primary Operator",
       href: "/sign-in",
       variant: "primary",
     },
     secondaryActions: [
       {
-        label: "Create first operator",
+        label: "Create Primary Operator",
         href: "/sign-up",
         variant: "secondary",
       },
@@ -52,7 +52,7 @@ export function getOperatorLoginSurface(): OperatorLoginSurface {
     notices: [
       {
         title: "Authentication is not authority",
-        body: "Signing in opens the Operator Console. Deploys, merges, production writes, MCP, Hermes, and autonomous actions still require separate gates.",
+        body: "Access opens the Operator Console. Deploys, merges, production writes, MCP, Hermes, and autonomous actions still require separate gates.",
         tone: "neutral",
       },
       {
@@ -62,7 +62,7 @@ export function getOperatorLoginSurface(): OperatorLoginSurface {
       },
       {
         title: "Non-operators do not sign up here",
-        body: "Reviewers and collaborators will use scoped access links under /access/[token], not public account creation.",
+        body: "Reviewers and builders will use scoped access links under /access/[token], not public account creation.",
         tone: "locked",
       },
     ],
@@ -70,7 +70,7 @@ export function getOperatorLoginSurface(): OperatorLoginSurface {
       "Groq-powered",
       "xAI-powered",
       "public signup",
-      "operator authority from login",
+      "operator authority from access",
       "Hermes activation",
       "MCP activation",
     ],

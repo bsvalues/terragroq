@@ -39,8 +39,8 @@ describe("auth UX state classification", () => {
     const state = getAuthUxState("sign-up", readyBootstrapOpen)
 
     expect(state.state).toBe("create-first-operator")
-    expect(state.label).toBe("First operator")
-    expect(state.primaryAction).toBe("Provision operator")
+    expect(state.label).toBe("Primary Operator")
+    expect(state.primaryAction).toBe("Create Primary Operator")
   })
 
   it("shows bootstrap locked as normal secured state, not setup failure", () => {
@@ -57,7 +57,9 @@ describe("auth UX state classification", () => {
 
     expect(state.state).toBe("sign-in")
     expect(state.tone).toBe("ready")
-    expect(state.primaryAction).toBe("Enter the shell")
+    expect(state.label).toBe("Primary Operator access")
+    expect(state.primaryAction).toBe("Enter WilliamOS")
+    expect(state.secondaryAction).toBeUndefined()
   })
 
   it("shows policy-closed sign-in without implying an operator already exists", () => {
@@ -85,8 +87,20 @@ describe("auth UX state classification", () => {
 
     expect(state.secondaryAction).toMatchObject({
       href: "/sign-up",
-      label: "Create account",
+      label: "Request access",
     })
+  })
+
+  it("does not call policy-open signup first-operator bootstrap", () => {
+    const state = getAuthUxState("sign-up", {
+      ready: true,
+      issues: [],
+      signup: { mode: "open", open: true },
+    })
+
+    expect(state.label).toBe("Access open")
+    expect(state.title).toBe("Request WilliamOS access")
+    expect(state.primaryAction).toBe("Request access")
   })
 
   it("treats missing signup policy as open-compatible rather than disabled", () => {
