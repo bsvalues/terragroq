@@ -69,7 +69,7 @@ export function getBrainCouncilNativeArea(): BrainCouncilNativeArea {
       },
     ],
     blockedActions: [
-      "execute Brain Council",
+      "execute recommendations",
       "deploy changes",
       "grant authority",
       "activate Hermes",
