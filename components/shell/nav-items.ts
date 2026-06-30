@@ -9,6 +9,7 @@ import {
   Activity,
   Cpu,
   Crosshair,
+  FolderKanban,
   ShieldCheck,
   type LucideIcon,
 } from "lucide-react"
@@ -73,6 +74,13 @@ export const navItems: NavItem[] = [
     icon: Activity,
     group: "Work",
     description: "Inspect proof and events.",
+  },
+  {
+    href: "/projects",
+    label: "Projects",
+    icon: FolderKanban,
+    group: "Work",
+    description: "Track governed systems.",
   },
   {
     href: "/brain-council",
