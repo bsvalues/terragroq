@@ -29,7 +29,7 @@ describe("operator navigation information architecture", () => {
     expect(labels.get("/")).toBe("Home")
     expect(labels.get("/chat")).toBe("Ask WilliamOS")
     expect(labels.get("/goal-console")).toBe("Next Objective")
-    expect(labels.get("/audit")).toBe("Evidence / Audit")
+    expect(labels.get("/audit")).toBe("Evidence")
     expect(labels.get("/projects")).toBe("Projects")
     expect(labels.get("/agent-forge")).toBe("Agent Forge")
     expect(labels.get("/runtime")).toBe("Systems")
@@ -39,10 +39,10 @@ describe("operator navigation information architecture", () => {
     const descriptions = new Map(navItems.map((item) => [item.href, item.description]))
 
     expect(descriptions.get("/")).toBe("Primary Operator briefing.")
-    expect(descriptions.get("/audit")).toBe("Inspect proof and events.")
-    expect(descriptions.get("/projects")).toBe("Track governed systems.")
+    expect(descriptions.get("/audit")).toBe("Inspect proof trails.")
+    expect(descriptions.get("/projects")).toBe("Track project systems.")
     expect(descriptions.get("/agent-forge")).toBe("Prepare capabilities.")
-    expect(descriptions.get("/runtime")).toBe("Check runtime health.")
+    expect(descriptions.get("/runtime")).toBe("Check operational posture.")
   })
 
   it("keeps every nav item described and assigned to a declared group", () => {
@@ -51,5 +51,30 @@ describe("operator navigation information architecture", () => {
     expect(navItems.every((item) => groups.has(item.group))).toBe(true)
     expect(navItems.every((item) => item.description.trim().length > 0)).toBe(true)
     expect(navGroups.every((group) => group.description.trim().length > 0)).toBe(true)
+  })
+
+  it("keeps major surfaces unique and avoids legacy vendor claims", () => {
+    const labels = navItems.map((item) => item.label)
+    const text = [
+      ...labels,
+      ...navItems.map((item) => item.description),
+      ...navGroups.map((group) => group.description),
+    ].join(" ")
+
+    expect(new Set(labels).size).toBe(labels.length)
+    expect(labels).toEqual(
+      expect.arrayContaining([
+        "Home",
+        "Work Orders",
+        "Evidence",
+        "Systems",
+        "Brain Council",
+        "Agent Forge",
+        "Projects",
+        "Memory",
+        "Governance",
+      ]),
+    )
+    expect(text).not.toMatch(/\b(groq|xai|ai-powered|terragroq)\b/i)
   })
 })
