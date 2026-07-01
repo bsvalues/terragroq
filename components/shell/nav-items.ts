@@ -33,11 +33,11 @@ export type NavGroup = {
 }
 
 export const navGroups: NavGroup[] = [
-  { id: "Home", description: "Briefing, questions, and the next move." },
-  { id: "Work", description: "Projects, goals, work orders, and evidence." },
-  { id: "Council", description: "Reasoning, memory, and knowledge context." },
-  { id: "Authority", description: "Decisions, doctrine, and governance gates." },
-  { id: "Systems", description: "Runtime, readiness, and operational posture." },
+  { id: "Home", description: "Primary briefing, command conversation, and next move." },
+  { id: "Work", description: "Projects, objectives, Work Orders, and Evidence." },
+  { id: "Council", description: "Brain Council, Memory, and Corpus context." },
+  { id: "Authority", description: "Decisions, Doctrine, Governance, and approval gates." },
+  { id: "Systems", description: "Systems, Readiness, production health, and safe states." },
 ]
 
 export const navItems: NavItem[] = [
@@ -50,10 +50,10 @@ export const navItems: NavItem[] = [
   },
   {
     href: "/chat",
-    label: "Ask WilliamOS",
+    label: "Operator Chat",
     icon: MessageSquare,
     group: "Home",
-    description: "Ask with project context.",
+    description: "Command conversation.",
   },
   {
     href: "/goal-console",
@@ -67,21 +67,21 @@ export const navItems: NavItem[] = [
     label: "Work Orders",
     icon: ClipboardList,
     group: "Work",
-    description: "Control scoped mutation.",
+    description: "Control governed mutation.",
   },
   {
     href: "/audit",
     label: "Evidence",
     icon: Activity,
     group: "Work",
-    description: "Inspect proof trails.",
+    description: "Inspect proof records.",
   },
   {
     href: "/projects",
     label: "Projects",
     icon: FolderKanban,
     group: "Work",
-    description: "Track project systems.",
+    description: "Review systems under command.",
   },
   {
     href: "/agent-forge",
@@ -109,34 +109,34 @@ export const navItems: NavItem[] = [
     label: "Corpus",
     icon: Library,
     group: "Council",
-    description: "Review source material.",
+    description: "Review source body.",
   },
   {
     href: "/decisions",
     label: "Decisions",
     icon: GitBranch,
     group: "Authority",
-    description: "Record consequential calls.",
+    description: "Record authority calls.",
   },
   {
     href: "/doctrine",
     label: "Doctrine",
     icon: ScrollText,
     group: "Authority",
-    description: "Define rules and guardrails.",
+    description: "Read operating law.",
   },
   {
     href: "/governance",
     label: "Governance",
     icon: ShieldCheck,
     group: "Authority",
-    description: "Review gates and locks.",
+    description: "Review gates and boundaries.",
   },
   {
     href: "/runtime",
     label: "Systems",
     icon: Cpu,
     group: "Systems",
-    description: "Check operational posture.",
+    description: "Check readiness and health.",
   },
 ]

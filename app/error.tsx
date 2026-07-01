@@ -24,12 +24,12 @@ export default function RootError({
           <div className="flex flex-col gap-3">
             <h1 className="text-lg font-semibold">Something went wrong</h1>
             <p className="text-sm text-muted-foreground">
-              The application hit an unexpected error. Retry this view, or return to the dashboard.
+              The application hit an unexpected error. Retry this view, or return Home.
             </p>
             <div className="flex items-center gap-2">
               <Button onClick={reset}>Retry</Button>
               <Button asChild variant="outline">
-                <Link href="/">Go to dashboard</Link>
+                <Link href="/">Return Home</Link>
               </Button>
             </div>
           </div>

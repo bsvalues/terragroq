@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "WilliamOS — Operator Shell",
   description:
-    "A governed second brain: memory, decisions, doctrine, work orders, and a RAG corpus with provenance-forward AI.",
+    "WilliamOS is the Primary Operator's private command environment for governed work, evidence, memory, systems, and authority.",
 }
 
 export const viewport: Viewport = {

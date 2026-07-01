@@ -27,7 +27,7 @@ describe("operator navigation information architecture", () => {
     const labels = new Map(navItems.map((item) => [item.href, item.label]))
 
     expect(labels.get("/")).toBe("Home")
-    expect(labels.get("/chat")).toBe("Ask WilliamOS")
+    expect(labels.get("/chat")).toBe("Operator Chat")
     expect(labels.get("/goal-console")).toBe("Next Objective")
     expect(labels.get("/audit")).toBe("Evidence")
     expect(labels.get("/projects")).toBe("Projects")
@@ -39,10 +39,11 @@ describe("operator navigation information architecture", () => {
     const descriptions = new Map(navItems.map((item) => [item.href, item.description]))
 
     expect(descriptions.get("/")).toBe("Primary Operator briefing.")
-    expect(descriptions.get("/audit")).toBe("Inspect proof trails.")
-    expect(descriptions.get("/projects")).toBe("Track project systems.")
+    expect(descriptions.get("/chat")).toBe("Command conversation.")
+    expect(descriptions.get("/audit")).toBe("Inspect proof records.")
+    expect(descriptions.get("/projects")).toBe("Review systems under command.")
     expect(descriptions.get("/agent-forge")).toBe("Prepare capabilities.")
-    expect(descriptions.get("/runtime")).toBe("Check operational posture.")
+    expect(descriptions.get("/runtime")).toBe("Check readiness and health.")
   })
 
   it("keeps every nav item described and assigned to a declared group", () => {
@@ -65,6 +66,7 @@ describe("operator navigation information architecture", () => {
     expect(labels).toEqual(
       expect.arrayContaining([
         "Home",
+        "Operator Chat",
         "Work Orders",
         "Evidence",
         "Systems",
@@ -76,5 +78,6 @@ describe("operator navigation information architecture", () => {
       ]),
     )
     expect(text).not.toMatch(/\b(groq|xai|ai-powered|terragroq)\b/i)
+    expect(text).not.toMatch(/dashboard|workspace|admin portal|team status|productivity/i)
   })
 })

@@ -11,10 +11,10 @@ export default function NotFound() {
           <div className="flex flex-col gap-3">
             <h1 className="text-lg font-semibold">Page not found</h1>
             <p className="text-sm text-muted-foreground">
-              The route you requested does not exist in this workspace.
+              The route you requested does not exist in WilliamOS.
             </p>
             <Button asChild className="w-fit">
-              <Link href="/">Go to dashboard</Link>
+              <Link href="/">Return Home</Link>
             </Button>
           </div>
         </div>
