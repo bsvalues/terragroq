@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { ClipboardCheck, FileCheck2, ShieldCheck } from "lucide-react"
 import { getEvidenceCommandSurface } from "@/components/evidence/evidence-command-surface"
+import { VerificationFlowGrid } from "@/components/shell/verification-flow-grid"
 
 export function EvidenceCommandPanel() {
   const surface = getEvidenceCommandSurface()
@@ -19,6 +20,8 @@ export function EvidenceCommandPanel() {
           {surface.description}
         </p>
       </div>
+
+      <VerificationFlowGrid steps={surface.verificationFlow} />
 
       <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5">
         {surface.categories.map((category) => (

@@ -1,6 +1,7 @@
 import { ClipboardList, ShieldCheck } from "lucide-react"
 import type { WorkOrder } from "@/lib/db/schema"
 import { getWorkOrdersCommandSurface } from "@/components/work-orders/work-orders-command-surface"
+import { VerificationFlowGrid } from "@/components/shell/verification-flow-grid"
 
 export function WorkOrdersCommandPanel({ orders }: { orders: WorkOrder[] }) {
   const surface = getWorkOrdersCommandSurface(orders)
@@ -19,6 +20,8 @@ export function WorkOrdersCommandPanel({ orders }: { orders: WorkOrder[] }) {
           {surface.description}
         </p>
       </div>
+
+      <VerificationFlowGrid steps={surface.verificationFlow} />
 
       <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5">
         {surface.cards.map((card) => (
