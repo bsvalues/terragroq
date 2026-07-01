@@ -29,9 +29,9 @@ describe("Evidence command surface", () => {
     const surface = getEvidenceCommandSurface()
 
     expect(surface.nextRecommendedWo).toMatchObject({
-      label: "WO-SHELL-007 - Systems Status Surface",
+      label: "WO-SHELL-018 - Systems Native Area Reframe",
     })
-    expect(surface.nextRecommendedWo.reason).toContain("runtime")
+    expect(surface.nextRecommendedWo.reason).toContain("one native WilliamOS area")
   })
 
   it("connects decision authority to work evidence and verified result", () => {
@@ -50,26 +50,61 @@ describe("Evidence command surface", () => {
       }),
       expect.objectContaining({
         label: "Evidence",
-        value: "Verification layer",
+        value: "Proof layer",
         href: "/audit",
       }),
       expect.objectContaining({
         label: "Verified Result",
-        value: "Next move ready",
+        value: "Reality confirmed",
         href: "/",
       }),
     ])
   })
 
-  it("does not execute, deploy, grant authority, or write production", () => {
+  it("does not mutate evidence, auto-ingest, execute, deploy, grant authority, or write production", () => {
     const surface = getEvidenceCommandSurface()
 
     expect(surface.safety).toEqual({
       readOnly: true,
+      mutatesEvidence: false,
+      autoIngests: false,
+      activatesExternalConnectors: false,
       executesWork: false,
       deploys: false,
       grantsAuthority: false,
+      changesSchema: false,
+      activatesHermes: false,
+      activatesMcp: false,
+      enablesAutonomy: false,
       writesProduction: false,
     })
+  })
+
+  it("frames Evidence as proof and record of reality, not reporting or analytics", () => {
+    const surface = getEvidenceCommandSurface()
+    const text = [
+      surface.title,
+      surface.eyebrow,
+      surface.description,
+      ...surface.verificationFlow.flatMap((step) => [
+        step.label,
+        step.value,
+        step.description,
+      ]),
+      ...surface.categories.flatMap((category) => [
+        category.label,
+        category.status,
+        category.description,
+      ]),
+      surface.nextRecommendedWo.label,
+      surface.nextRecommendedWo.reason,
+    ].join(" ")
+
+    expect(text).toContain("native WilliamOS proof layer")
+    expect(text).toContain("record of reality")
+    expect(text).toContain("production verification")
+    expect(text).not.toMatch(
+      /analytics dashboard|reporting center|team reports|activity feed|vanity metrics|auto-proof|magic validation/i,
+    )
   })
 })
