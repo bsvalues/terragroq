@@ -7,15 +7,18 @@ export function getWorkOrderEmptyStateSteps(): WorkOrderEmptyStateStep[] {
   return [
     {
       title: "Draft the contract",
-      description: "Define scope, forbidden files, validators, and stop conditions before work starts.",
+      description:
+        "Define scope, forbidden files, validators, evidence requirements, and stop conditions before governed work starts.",
     },
     {
       title: "Keep authority explicit",
-      description: "New work orders start as drafts; approval and execution authority are separate gates.",
+      description:
+        "New Work Orders start as drafts; owner approval and execution authority stay separate gates.",
     },
     {
       title: "Record evidence",
-      description: "Validation, review, and closure evidence should be attached before a work order closes.",
+      description:
+        "Validation, review, and closure evidence should be attached before a Work Order closes.",
     },
   ]
 }

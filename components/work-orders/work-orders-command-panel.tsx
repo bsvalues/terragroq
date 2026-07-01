@@ -46,7 +46,8 @@ export function WorkOrdersCommandPanel({ orders }: { orders: WorkOrder[] }) {
         </div>
         <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground">
           <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden={true} />
-          Read-only surface. No loop starts, authority grants, or production writes.
+          Read-only control surface. No mutation, loop starts, authority grants, scheduler,
+          automation, or production writes.
         </div>
       </div>
     </section>

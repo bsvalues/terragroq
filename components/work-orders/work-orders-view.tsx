@@ -1211,11 +1211,11 @@ function Empty() {
     <div className="rounded-lg border border-dashed border-border bg-card p-6">
       <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 text-center">
         <ClipboardList className="h-8 w-8 text-muted-foreground" />
-        <p className="text-sm font-medium">No work orders drafted yet</p>
+        <p className="text-sm font-medium">No governed Work Orders drafted yet</p>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Draft a governed unit of work before any implementation starts. A draft
-          records intent and evidence requirements; it does not grant execution,
-          commit, push, or deployment authority.
+          Draft a mutation contract before implementation starts. A draft records
+          intent, scope, authority gates, and evidence requirements; it does not
+          grant execution, commit, push, automation, or deployment authority.
         </p>
       </div>
       <div className="mx-auto mt-6 grid max-w-4xl gap-3 md:grid-cols-3">

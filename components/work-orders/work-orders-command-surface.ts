@@ -21,8 +21,15 @@ export type WorkOrdersCommandSurface = {
   safety: {
     readOnly: true
     executesWork: false
+    mutatesWorkOrders: false
     startsLoop: false
+    startsScheduler: false
     grantsAuthority: false
+    approvesWork: false
+    changesSchema: false
+    activatesHermes: false
+    activatesMcp: false
+    enablesAutonomy: false
     writesProduction: false
   }
 }
@@ -60,20 +67,20 @@ export function getWorkOrdersCommandSurface(
 
   return {
     title: "Work Orders",
-    eyebrow: "Primary Operator Work Queue",
+    eyebrow: "WilliamOS Mutation Control",
     description:
-      "Governed work is visible here before authority, execution, or completion. Work Orders control mutation; Evidence proves reality.",
+      "Work Orders are the native WilliamOS control primitive for governed change. They define scope, authority gates, blocked actions, validators, evidence, and safe next moves before any mutation is allowed.",
     verificationFlow: [
       {
         label: "Decision",
-        value: "Authority first",
-        description: "Resolve the operating call before scoped work is approved.",
+        value: "Authority call",
+        description: "Resolve the Primary decision before scoped work can advance.",
         href: "/decisions",
       },
       {
         label: "Work Order",
-        value: "Scope locked",
-        description: "Define allowed files, blocked actions, validators, and stop conditions.",
+        value: "Mutation contract",
+        description: "Define allowed files, blocked actions, validators, evidence, and stop conditions.",
         href: "/work-orders",
       },
       {
@@ -84,7 +91,7 @@ export function getWorkOrdersCommandSurface(
       },
       {
         label: "Next Move",
-        value: "Return Home",
+        value: "Safe continuation",
         description: "After evidence is clear, Home chooses the next governed lane.",
         href: "/",
       },
@@ -93,39 +100,46 @@ export function getWorkOrdersCommandSurface(
       {
         label: "Active Work",
         value: String(active),
-        description: "Approved, active, or review-state work currently under attention.",
+        description: "Approved, active, or review-state governed work currently under Primary attention.",
       },
       {
         label: "Ready Next",
         value: String(ready),
-        description: "Draft or proposed work that still needs review before action.",
+        description: "Draft or proposed work that still needs authority review before action.",
       },
       {
         label: "Blocked Decisions",
         value: String(blocked),
-        description: "Work waiting on an explicit gate, approval, or missing proof.",
+        description: "Work waiting on an authority gate, owner decision, or missing proof.",
       },
       {
         label: "Total Completed",
         value: String(completed),
-        description: "All closed or aborted work retained for evidence and continuity.",
+        description: "Closed or aborted work retained for evidence, continuity, and review.",
       },
       {
         label: "Evidence Required",
         value: String(evidenceRequired),
-        description: "Open work that still needs validation or closure evidence.",
+        description: "Open governed work that still needs validation or closure evidence.",
       },
     ],
     nextRecommendedWo: {
-      label: "WO-SHELL-006 - Evidence Surface",
+      label: "WO-SHELL-017 - Evidence Native Area Reframe",
       reason:
-        "The next shell slice should make validation, PR outcomes, production checks, and safety posture easier to inspect.",
+        "After Work Orders are framed as mutation control, Evidence should be reframed as the native proof layer for validation, PR outcomes, production checks, and safety posture.",
     },
     safety: {
       readOnly: true,
       executesWork: false,
+      mutatesWorkOrders: false,
       startsLoop: false,
+      startsScheduler: false,
       grantsAuthority: false,
+      approvesWork: false,
+      changesSchema: false,
+      activatesHermes: false,
+      activatesMcp: false,
+      enablesAutonomy: false,
       writesProduction: false,
     },
   }
