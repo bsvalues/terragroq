@@ -60,6 +60,20 @@ export default async function AccessGrantPlaceholderPage({
             </div>
           </div>
 
+          <div className="grid gap-3 sm:grid-cols-2">
+            {surface.readiness.map((item) => (
+              <div key={item.label} className="rounded-xl border border-border bg-card p-4">
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+                  {item.label}
+                </p>
+                <p className="mt-2 text-sm font-semibold">{item.value}</p>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  {item.description}
+                </p>
+              </div>
+            ))}
+          </div>
+
           <div className="flex flex-col gap-3 sm:flex-row">
             <Button asChild size="lg">
               <Link href={surface.primaryAction.href}>

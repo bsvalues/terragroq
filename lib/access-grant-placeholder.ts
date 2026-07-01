@@ -16,6 +16,11 @@ export type AccessGrantPlaceholderSurface = {
   description: string
   statusLabel: string
   tokenPosture: string
+  readiness: {
+    label: string
+    value: string
+    description: string
+  }[]
   primaryAction: AccessGrantPlaceholderAction
   secondaryActions: AccessGrantPlaceholderAction[]
   notices: AccessGrantPlaceholderNotice[]
@@ -24,12 +29,34 @@ export type AccessGrantPlaceholderSurface = {
 
 export function getAccessGrantPlaceholderSurface(): AccessGrantPlaceholderSurface {
   return {
-    eyebrow: "WilliamOS Scoped Access",
-    title: "Scoped access is not active yet",
+    eyebrow: "WilliamOS Access Grants",
+    title: "Access Grants are disabled",
     description:
-      "Access links will open limited review packets for non-operators after the access-grant data model, token validation, audit, and rate-limit gates are approved.",
-    statusLabel: "Preview only",
-    tokenPosture: "Token observed, not validated",
+      "Access Grants are a future controlled-access path for non-operator review packets. They are disabled, not configured, and require owner activation before any issue route, accept route, token validation, or production access behavior can run.",
+    statusLabel: "Disabled",
+    tokenPosture: "Token observed; no validation active",
+    readiness: [
+      {
+        label: "Issue route",
+        value: "disabled",
+        description: "No access grant can be issued from this surface.",
+      },
+      {
+        label: "Accept route",
+        value: "disabled",
+        description: "No token can be accepted or exchanged for access.",
+      },
+      {
+        label: "Validation",
+        value: "not active",
+        description: "Tokens are not persisted, consumed, displayed, or validated here.",
+      },
+      {
+        label: "Authority gate",
+        value: "owner activation required",
+        description: "Future controlled access requires a separate owner-approved activation gate.",
+      },
+    ],
     primaryAction: {
       label: "Return to operator entry",
       href: "/operator",
@@ -49,21 +76,25 @@ export function getAccessGrantPlaceholderSurface(): AccessGrantPlaceholderSurfac
         tone: "locked",
       },
       {
-        title: "No token validation is running",
-        body: "WilliamOS does not validate, persist, consume, or display this access token in the placeholder route.",
+        title: "No validation is active",
+        body: "WilliamOS does not validate, persist, consume, display, or exchange this access token in the placeholder route.",
         tone: "disabled",
       },
       {
         title: "Authority remains separate",
-        body: "Scoped access can never grant deploy, merge, production-write, Hermes, MCP, autonomy, or operator-console authority.",
+        body: "Access Grants can never grant deploy, merge, production-write, Hermes, MCP, autonomy, or operator-console authority.",
         tone: "neutral",
       },
     ],
     blockedClaims: [
       "account created",
       "token validated",
+      "issue route enabled",
+      "accept route enabled",
+      "validation active",
       "public signup",
       "operator authority",
+      "live access",
       "Hermes activation",
       "MCP activation",
       "autonomy enabled",
