@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { FolderKanban, ShieldCheck } from "lucide-react"
+import { Compass, FolderKanban, ShieldCheck } from "lucide-react"
 import { getProjectsWorkspace, type ProjectPosture } from "@/components/projects/projects-workspace"
 import { StatusBadge } from "@/components/status-badge"
 
@@ -27,6 +27,40 @@ export function ProjectsWorkspacePanel() {
         </p>
       </div>
 
+      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-3">
+        {workspace.postureSummary.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.value}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="border-b border-border bg-muted/10 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Compass className="h-4 w-4 text-primary" aria-hidden={true} />
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Project command context
+          </p>
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          {workspace.commandStates.map((item) => (
+            <div key={item.label} className="rounded-lg border border-border bg-card p-3">
+              <p className="text-sm font-semibold">{item.label}</p>
+              <p className="mt-2 text-xs font-medium text-foreground">{item.state}</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {item.description}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="grid gap-3 p-4 xl:grid-cols-2">
         {workspace.projects.map((project) => (
           <article key={project.name} className="rounded-lg border border-border bg-background p-3">
@@ -49,6 +83,20 @@ export function ProjectsWorkspacePanel() {
               Next: {project.nextRecommendedWork}
             </p>
           </article>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-t border-border bg-muted/10 p-4 md:grid-cols-3">
+        {workspace.authorityBoundaries.map((boundary) => (
+          <div key={boundary.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {boundary.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{boundary.state}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {boundary.description}
+            </p>
+          </div>
         ))}
       </div>
 
