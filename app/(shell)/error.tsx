@@ -24,14 +24,14 @@ export default function ShellError({
           <div className="flex flex-col gap-3">
             <h2 className="text-base font-semibold">Shell route failed to load</h2>
             <p className="text-sm text-muted-foreground">
-              This route encountered an unexpected error. Retry the route or navigate back to the dashboard.
+              This route encountered an unexpected error. Retry the route or return Home.
             </p>
             <div className="flex items-center gap-2">
               <Button size="sm" onClick={reset}>
                 Retry route
               </Button>
               <Button asChild size="sm" variant="outline">
-                <Link href="/">Dashboard</Link>
+                <Link href="/">Home</Link>
               </Button>
             </div>
           </div>
