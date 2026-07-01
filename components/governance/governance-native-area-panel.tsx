@@ -18,8 +18,8 @@ export function GovernanceNativeAreaPanel() {
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <h2 className="text-lg font-semibold tracking-tight">{area.title}</h2>
           <StatusBadge value="pass" label="native area" />
-          <StatusBadge value="warning" label="approval required" />
-          <StatusBadge value="neutral" label="prepared, not authorized" />
+          <StatusBadge value="requires_approval" label="approval required" />
+          <StatusBadge value="inactive" label="prepared, not authorized" />
         </div>
         <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           {area.description}
