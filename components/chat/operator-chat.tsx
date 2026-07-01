@@ -25,7 +25,7 @@ type Source = {
 
 const SUGGESTIONS = getOperatorChatNativeArea().suggestions
 
-export function OperatorChat() {
+export function OperatorChat({ className }: { className?: string }) {
   const [input, setInput] = useState("")
   const { messages, sendMessage, status } = useChat({
     transport: new DefaultChatTransport({ api: "/api/chat" }),
@@ -44,7 +44,7 @@ export function OperatorChat() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] flex-col">
+    <div className={cn("flex h-[calc(100vh-4rem)] flex-col", className)}>
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6">
           {messages.length === 0 && (
