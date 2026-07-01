@@ -38,6 +38,7 @@ import { CouncilDecisionPacketSchemaPanel } from "@/components/brain-council/cou
 import { CouncilStateMachinePanel } from "@/components/brain-council/council-state-machine-panel"
 import { CouncilTraceEvidenceLinkPanel } from "@/components/brain-council/council-trace-evidence-link-panel"
 import { HermesAuthorityStatePanel } from "@/components/brain-council/hermes-authority-state-panel"
+import { HermesBlockedDeniedStatePanel } from "@/components/brain-council/hermes-blocked-denied-state-panel"
 import { HermesDoctrinePanel } from "@/components/brain-council/hermes-doctrine-panel"
 import { HermesWorkerDockReadinessPanel } from "@/components/brain-council/hermes-worker-dock-readiness-panel"
 import { HermesWorkerPacketSchemaPanel } from "@/components/brain-council/hermes-worker-packet-schema-panel"
@@ -59,6 +60,8 @@ export function BrainCouncilReasoningView() {
       <HermesWorkerPacketSchemaPanel />
 
       <HermesWorkerDockReadinessPanel />
+
+      <HermesBlockedDeniedStatePanel />
 
       <BrainCouncilDoctrinePanel />
 
