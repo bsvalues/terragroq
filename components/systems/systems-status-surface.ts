@@ -1,4 +1,9 @@
-export type SystemStatusTone = "ready" | "read-only" | "preview-only" | "needs-authority"
+export type SystemStatusTone =
+  | "ready"
+  | "read-only"
+  | "preview-only"
+  | "disabled"
+  | "needs-authority"
 
 export type SystemStatusCategory = {
   label: string
@@ -12,6 +17,17 @@ export type SystemsStatusSurface = {
   title: string
   eyebrow: string
   description: string
+  postureSummary: {
+    label: string
+    value: string
+    description: string
+    tone: SystemStatusTone
+  }[]
+  boundaryRail: {
+    label: string
+    state: string
+    description: string
+  }[]
   categories: SystemStatusCategory[]
   nextRecommendedWo: {
     label: string
@@ -34,7 +50,51 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
     title: "Systems Status",
     eyebrow: "WilliamOS Operational Posture",
     description:
-      "A read-only view of the unified WilliamOS control plane: shell, auth, Work Orders, Evidence, Brain Council, Hermes preview, Agent Forge, deployment, and project systems.",
+      "A read-only view of the unified WilliamOS control plane: shell, auth, Work Orders, Evidence, Brain Council, Hermes preview, Agent Forge, Access Grants, Memory, Governance, deployment, and project systems.",
+    postureSummary: [
+      {
+        label: "Ready",
+        value: "3 systems",
+        description: "Shell, auth/readiness, and production health are operating normally.",
+        tone: "ready",
+      },
+      {
+        label: "Read-only",
+        value: "4 surfaces",
+        description:
+          "Work Orders, Evidence, Brain Council, and Memory are visible without execution.",
+        tone: "read-only",
+      },
+      {
+        label: "Preview-only",
+        value: "1 dock",
+        description: "Hermes can be reviewed, but no worker runtime is active.",
+        tone: "preview-only",
+      },
+      {
+        label: "Disabled",
+        value: "access grants",
+        description: "Issue and accept routes exist but remain fail-closed.",
+        tone: "disabled",
+      },
+    ],
+    boundaryRail: [
+      {
+        label: "Authority",
+        state: "Owner-gated",
+        description: "Approvals, access grants, and production authority stay explicit.",
+      },
+      {
+        label: "Execution",
+        state: "Not active",
+        description: "No Hermes, MCP, scheduler, worker dispatch, or loop execution is enabled.",
+      },
+      {
+        label: "Production",
+        state: "Observed only",
+        description: "Systems can verify health and headers, but cannot deploy from this view.",
+      },
+    ],
     categories: [
       {
         label: "WilliamOS Shell",
@@ -86,10 +146,34 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
       },
       {
         label: "Agent Forge / Skills",
-        status: "Needs authority",
+        status: "Proposal-only",
         tone: "needs-authority",
         description:
           "Agent and skill posture remains governed. Capabilities require explicit Work Orders and authority gates.",
+        href: "/governance",
+      },
+      {
+        label: "Access Grants",
+        status: "Disabled",
+        tone: "disabled",
+        description:
+          "Issue and accept routes fail closed until owner approval enables live access behavior.",
+        href: "/operator",
+      },
+      {
+        label: "Memory / Knowledge",
+        status: "Read-only",
+        tone: "read-only",
+        description:
+          "Durable knowledge remains inspectable as context; this Systems surface does not write memory.",
+        href: "/memory",
+      },
+      {
+        label: "Governance / Authority",
+        status: "Needs authority",
+        tone: "needs-authority",
+        description:
+          "Doctrine, decisions, and gates define the rules before any higher-risk action proceeds.",
         href: "/governance",
       },
       {
