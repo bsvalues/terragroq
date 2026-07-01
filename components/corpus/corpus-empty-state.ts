@@ -7,13 +7,13 @@ export type CorpusEmptyStateStep = {
 export const CORPUS_EMPTY_STATE_TITLE = "Corpus is empty"
 
 export const CORPUS_EMPTY_STATE_DESCRIPTION =
-  "Ingest documents so Operator Chat can answer from your knowledge with citations. Ingestion is a deliberate indexing write: review content before storing it."
+  "Add reviewed source material so WilliamOS can cite governed knowledge with provenance. Indexing is a deliberate write: review content before storing it."
 
 export const CORPUS_EMPTY_STATE_STEPS: readonly Readonly<CorpusEmptyStateStep>[] = Object.freeze([
   Object.freeze({
     id: "source",
-    title: "Choose safe source text",
-    description: "Use documents intended for retrieval; do not paste secrets or private credentials.",
+    title: "Choose reviewed source text",
+    description: "Use source material intended for governed knowledge; do not paste secrets or private credentials.",
   }),
   Object.freeze({
     id: "citations",
