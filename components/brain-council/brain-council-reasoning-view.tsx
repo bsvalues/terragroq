@@ -37,6 +37,7 @@ import { CouncilAdvisorySurfacePanel } from "@/components/brain-council/council-
 import { CouncilDecisionPacketSchemaPanel } from "@/components/brain-council/council-decision-packet-schema-panel"
 import { CouncilStateMachinePanel } from "@/components/brain-council/council-state-machine-panel"
 import { CouncilTraceEvidenceLinkPanel } from "@/components/brain-council/council-trace-evidence-link-panel"
+import { HermesDoctrinePanel } from "@/components/brain-council/hermes-doctrine-panel"
 import { getBrainCouncilReasoningPacket } from "@/components/brain-council/brain-council-reasoning"
 import { StatusBadge } from "@/components/status-badge"
 
@@ -47,6 +48,8 @@ export function BrainCouncilReasoningView() {
   return (
     <div className="flex flex-col gap-6 p-6">
       <BrainCouncilNativeAreaPanel />
+
+      <HermesDoctrinePanel />
 
       <BrainCouncilDoctrinePanel />
 
