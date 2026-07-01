@@ -12,14 +12,14 @@ describe("corpus empty state", () => {
 
     expect(steps.map((step) => step.id)).toEqual(["source", "citations", "indexing"])
     expect(steps.map((step) => step.title)).toEqual([
-      "Choose safe source text",
+      "Choose reviewed source text",
       "Preserve source labels",
       "Understand the write",
     ])
     expect(steps.some((step) => step.description.includes("secrets"))).toBe(true)
     expect(steps.some((step) => step.description.includes("chunks, embeds, and stores"))).toBe(true)
     expect(CORPUS_EMPTY_STATE_TITLE).toBe("Corpus is empty")
-    expect(CORPUS_EMPTY_STATE_DESCRIPTION).toContain("deliberate indexing write")
+    expect(CORPUS_EMPTY_STATE_DESCRIPTION).toContain("deliberate write")
   })
 
   it("returns a copy so callers cannot mutate shared state", () => {

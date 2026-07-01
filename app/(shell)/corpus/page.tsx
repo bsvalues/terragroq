@@ -1,5 +1,6 @@
 import { getDocuments } from "@/app/actions/documents"
 import { PageHeader } from "@/components/shell/page-header"
+import { CorpusNativeAreaPanel } from "@/components/corpus/corpus-native-area-panel"
 import { CorpusView } from "@/components/corpus/corpus-view"
 
 export default async function CorpusPage() {
@@ -8,8 +9,11 @@ export default async function CorpusPage() {
     <>
       <PageHeader
         title="Corpus"
-        description="Your retrieval-augmented knowledge base. Documents are chunked and embedded so the operator can cite them."
+        description="WilliamOS source body for governed knowledge, reviewed sources, provenance, citations, and evidence-linked context."
       />
+      <div className="p-6 pb-0">
+        <CorpusNativeAreaPanel />
+      </div>
       <CorpusView initial={docs} />
     </>
   )
