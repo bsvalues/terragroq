@@ -33,6 +33,7 @@ import { BrainCouncilReadinessRegressionPanel } from "@/components/brain-council
 import { BrainCouncilResearchModeOverviewPanel } from "@/components/brain-council/brain-council-research-mode-overview-panel"
 import { BrainCouncilUnknownsRegistryPanel } from "@/components/brain-council/brain-council-unknowns-registry-panel"
 import { BrainCouncilWorkerPacketPreview } from "@/components/brain-council/brain-council-worker-packet-preview"
+import { CouncilAdvisorySurfacePanel } from "@/components/brain-council/council-advisory-surface-panel"
 import { CouncilDecisionPacketSchemaPanel } from "@/components/brain-council/council-decision-packet-schema-panel"
 import { CouncilStateMachinePanel } from "@/components/brain-council/council-state-machine-panel"
 import { getBrainCouncilReasoningPacket } from "@/components/brain-council/brain-council-reasoning"
@@ -51,6 +52,8 @@ export function BrainCouncilReasoningView() {
       <CouncilStateMachinePanel />
 
       <CouncilDecisionPacketSchemaPanel />
+
+      <CouncilAdvisorySurfacePanel />
 
       <section className="overflow-hidden rounded-2xl border border-border bg-card">
         <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
