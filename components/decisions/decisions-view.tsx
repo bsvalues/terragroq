@@ -366,21 +366,49 @@ export function DecisionsView({ initial }: { initial: Decision[] }) {
         </div>
       </div>
 
-      <div className="rounded-lg border border-border bg-card p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="border-b border-border bg-muted/30 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <ShieldCheck className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+              Command Center decision gate
+            </p>
+          </div>
+          <div className="mt-2 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-sm font-medium">{reviewFlow.title}</p>
-              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+              <p className="text-lg font-semibold tracking-tight">{reviewFlow.title}</p>
+              <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
                 {reviewFlow.description}
               </p>
             </div>
+            <Button type="button" variant="secondary" size="sm" onClick={() => setTab(reviewFlow.tab)}>
+              {reviewFlow.action}
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
           </div>
-          <Button type="button" variant="secondary" size="sm" onClick={() => setTab(reviewFlow.tab)}>
-            {reviewFlow.action}
-            <ArrowRight className="h-3.5 w-3.5" />
-          </Button>
+        </div>
+
+        <div className="grid gap-3 p-4 md:grid-cols-4">
+          <DecisionFlowStep
+            label="From Home"
+            value={reviewFlow.homeSignal}
+            detail="Attention moves here before a new objective is classified."
+          />
+          <DecisionFlowStep
+            label="Current Queue"
+            value={reviewFlow.queueLabel}
+            detail={`${counts.proposed} proposed · ${counts.active} accepted · ${counts.superseded} superseded`}
+          />
+          <DecisionFlowStep
+            label="After Decision"
+            value={reviewFlow.nextMove}
+            detail="Return to Home when the authority question is resolved."
+          />
+          <DecisionFlowStep
+            label="Boundary"
+            value="Authority record only"
+            detail={reviewFlow.boundary}
+          />
         </div>
       </div>
 
@@ -655,6 +683,26 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div className="flex flex-col gap-2">
       <Label>{label}</Label>
       {children}
+    </div>
+  )
+}
+
+function DecisionFlowStep({
+  label,
+  value,
+  detail,
+}: {
+  label: string
+  value: string
+  detail: string
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-background p-3">
+      <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-2 text-sm font-medium leading-snug">{value}</p>
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{detail}</p>
     </div>
   )
 }
