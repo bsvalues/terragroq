@@ -23,7 +23,7 @@ export default async function RuntimePage() {
     <>
       <PageHeader
         title="Systems"
-        description="Read-only operational posture for WilliamOS, auth, runtime, Brain Council, Hermes preview, Agent Forge, deployment, and governed project systems."
+        description="Read-only view of WilliamOS systems under command: readiness, stable areas, blocked states, disabled-by-design capabilities, advisory layers, and production health."
       />
       <div className="flex flex-col gap-6 p-6">
         <SystemsStatusPanel />
