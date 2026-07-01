@@ -102,7 +102,7 @@ export const navItems: NavItem[] = [
     label: "Memory",
     icon: BrainCircuit,
     group: "Council",
-    description: "Preserve durable context.",
+    description: "Preserve governed continuity.",
   },
   {
     href: "/corpus",
