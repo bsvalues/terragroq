@@ -76,16 +76,19 @@ describe("Systems status surface", () => {
     const surface = getSystemsStatusSurface()
 
     expect(surface.nextRecommendedWo).toMatchObject({
-      label: "WO-SHELL-008 - Brain Council Native Area Reframe",
+      label: "WO-SHELL-019 - Access Grants Native Area Reframe",
     })
-    expect(surface.nextRecommendedWo.reason).toContain("advisory-only")
+    expect(surface.nextRecommendedWo.reason).toContain("disabled authority gate")
   })
 
-  it("does not execute, deploy, grant authority, write production, or activate runtimes", () => {
+  it("does not change health endpoints, poll, monitor, execute, deploy, write production, or activate runtimes", () => {
     const surface = getSystemsStatusSurface()
 
     expect(surface.safety).toEqual({
       readOnly: true,
+      changesHealthEndpoints: false,
+      startsBackgroundPolling: false,
+      activatesExternalMonitoring: false,
       executesWork: false,
       deploys: false,
       grantsAuthority: false,
@@ -94,5 +97,39 @@ describe("Systems status surface", () => {
       activatesMcp: false,
       enablesAutonomy: false,
     })
+  })
+
+  it("frames Systems as under command, not an ops dashboard or monitoring product", () => {
+    const surface = getSystemsStatusSurface()
+    const text = [
+      surface.title,
+      surface.eyebrow,
+      surface.description,
+      ...surface.postureSummary.flatMap((item) => [
+        item.label,
+        item.value,
+        item.description,
+      ]),
+      ...surface.boundaryRail.flatMap((boundary) => [
+        boundary.label,
+        boundary.state,
+        boundary.description,
+      ]),
+      ...surface.categories.flatMap((category) => [
+        category.label,
+        category.status,
+        category.description,
+      ]),
+      surface.nextRecommendedWo.label,
+      surface.nextRecommendedWo.reason,
+    ].join(" ")
+
+    expect(text).toContain("systems under command")
+    expect(text).toContain("readiness")
+    expect(text).toContain("production health")
+    expect(text).toContain("disabled-by-design")
+    expect(text).not.toMatch(
+      /admin dashboard|ops dashboard|SaaS status page|team monitoring|observability marketing|always-on automation/i,
+    )
   })
 })

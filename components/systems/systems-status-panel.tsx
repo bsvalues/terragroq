@@ -107,7 +107,8 @@ export function SystemsStatusPanel() {
         </div>
         <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground">
           <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden={true} />
-          No execution, deploy, authority grant, production write, Hermes, MCP, or autonomy activation.
+          No endpoint change, polling, monitoring integration, execution, deploy, authority
+          grant, production write, Hermes, MCP, or autonomy activation.
         </div>
       </div>
     </section>

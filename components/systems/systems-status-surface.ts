@@ -35,6 +35,9 @@ export type SystemsStatusSurface = {
   }
   safety: {
     readOnly: true
+    changesHealthEndpoints: false
+    startsBackgroundPolling: false
+    activatesExternalMonitoring: false
     executesWork: false
     deploys: false
     grantsAuthority: false
@@ -48,14 +51,14 @@ export type SystemsStatusSurface = {
 export function getSystemsStatusSurface(): SystemsStatusSurface {
   return {
     title: "Systems Status",
-    eyebrow: "WilliamOS Operational Posture",
+    eyebrow: "WilliamOS Systems Under Command",
     description:
-      "A read-only view of the unified WilliamOS control plane: shell, auth, Work Orders, Evidence, Brain Council, Hermes preview, Agent Forge, Access Grants, Memory, Governance, deployment, and project systems.",
+      "Systems is the Primary's native view of WilliamOS systems under command: readiness, stable areas, disabled-by-design capabilities, blocked states, advisory layers, verified production health, and safe-state boundaries.",
     postureSummary: [
       {
         label: "Ready",
         value: "3 systems",
-        description: "Shell, auth/readiness, and production health are operating normally.",
+        description: "Shell, auth/readiness, and production health are stable and verified.",
         tone: "ready",
       },
       {
@@ -68,7 +71,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
       {
         label: "Preview-only",
         value: "1 dock",
-        description: "Hermes can be reviewed, but no worker runtime is active.",
+        description: "Hermes can be reviewed, but no worker runtime or automation is active.",
         tone: "preview-only",
       },
       {
@@ -82,7 +85,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
       {
         label: "Authority",
         state: "Owner-gated",
-        description: "Approvals, access grants, and production authority stay explicit.",
+        description: "Approvals, access grants, and production authority stay explicit and blocked until granted.",
       },
       {
         label: "Execution",
@@ -92,7 +95,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
       {
         label: "Production",
         state: "Observed only",
-        description: "Systems can verify health and headers, but cannot deploy from this view.",
+        description: "Systems can show production health and headers, but cannot deploy from this view.",
       },
     ],
     categories: [
@@ -101,7 +104,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         status: "Ready",
         tone: "ready",
         description:
-          "Home, navigation, Work Orders, Evidence, and Systems are presented as one Primary Operator environment.",
+          "Home, navigation, Work Orders, Evidence, and Systems are presented as one Primary environment under command.",
         href: "/",
       },
       {
@@ -109,7 +112,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         status: "Ready",
         tone: "ready",
         description:
-          "Operator access is checked through readiness diagnostics; signup remains governed by existing policy.",
+          "Operator access is checked through readiness diagnostics; signup remains governed by existing policy and safe state.",
         href: "/operator",
       },
       {
@@ -117,7 +120,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         status: "Read-only",
         tone: "read-only",
         description:
-          "Governed work is visible, but this surface does not start loops, execute work, or grant authority.",
+          "Governed work is visible, but Systems does not start loops, execute work, or grant authority.",
         href: "/work-orders",
       },
       {
@@ -125,7 +128,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         status: "Read-only",
         tone: "read-only",
         description:
-          "Validation, production checks, and safety posture are inspectable as proof, not as execution controls.",
+          "Validation, production verification, and safety posture are inspectable as proof, not as execution controls.",
         href: "/audit",
       },
       {
@@ -149,7 +152,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         status: "Proposal-only",
         tone: "needs-authority",
         description:
-          "Agent and skill posture remains governed. Capabilities require explicit Work Orders and authority gates.",
+          "Agent and skill posture remains governed. Capability activation requires explicit Work Orders and authority gates.",
         href: "/governance",
       },
       {
@@ -181,7 +184,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         status: "Ready",
         tone: "ready",
         description:
-          "Runtime health, model provenance, and verification evidence remain inspectable from this Systems area.",
+          "Runtime health, model provenance, security headers, and verification evidence remain inspectable from Systems.",
         href: "/runtime",
       },
       {
@@ -194,12 +197,15 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
       },
     ],
     nextRecommendedWo: {
-      label: "WO-SHELL-008 - Brain Council Native Area Reframe",
+      label: "WO-SHELL-019 - Access Grants Native Area Reframe",
       reason:
-        "With Work Orders, Evidence, and Systems visible, the next shell slice should make Brain Council feel native to WilliamOS while preserving advisory-only boundaries.",
+        "After Systems shows disabled-by-design capabilities, Access Grants should be reframed so the disabled authority gate is unmistakable.",
     },
     safety: {
       readOnly: true,
+      changesHealthEndpoints: false,
+      startsBackgroundPolling: false,
+      activatesExternalMonitoring: false,
       executesWork: false,
       deploys: false,
       grantsAuthority: false,
