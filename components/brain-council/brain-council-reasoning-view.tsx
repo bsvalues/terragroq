@@ -4,6 +4,7 @@ import { BrainCouncilCognitiveDebtPanel } from "@/components/brain-council/brain
 import { BrainCouncilContradictionReviewPanel } from "@/components/brain-council/brain-council-contradiction-review-panel"
 import { BrainCouncilDecisionPacketExportPanel } from "@/components/brain-council/brain-council-decision-packet-export-panel"
 import { BrainCouncilDecisionQualityPanel } from "@/components/brain-council/brain-council-decision-quality-panel"
+import { BrainCouncilDoctrinePanel } from "@/components/brain-council/brain-council-doctrine-panel"
 import { BrainCouncilEvidenceSelectorPanel } from "@/components/brain-council/brain-council-evidence-selector-panel"
 import { BrainCouncilEvalPromotionRubricPanel } from "@/components/brain-council/brain-council-eval-promotion-rubric-panel"
 import { BrainCouncilExperimentDashboard } from "@/components/brain-council/brain-council-experiment-dashboard"
@@ -42,6 +43,8 @@ export function BrainCouncilReasoningView() {
   return (
     <div className="flex flex-col gap-6 p-6">
       <BrainCouncilNativeAreaPanel />
+
+      <BrainCouncilDoctrinePanel />
 
       <section className="overflow-hidden rounded-2xl border border-border bg-card">
         <div className="grid gap-0 lg:grid-cols-[1.05fr_0.95fr]">
