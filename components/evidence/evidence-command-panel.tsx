@@ -1,6 +1,7 @@
 import Link from "next/link"
-import { ArrowRight, ClipboardCheck, FileCheck2, ShieldCheck } from "lucide-react"
+import { ClipboardCheck, FileCheck2, ShieldCheck } from "lucide-react"
 import { getEvidenceCommandSurface } from "@/components/evidence/evidence-command-surface"
+import { VerificationFlowGrid } from "@/components/shell/verification-flow-grid"
 
 export function EvidenceCommandPanel() {
   const surface = getEvidenceCommandSurface()
@@ -20,26 +21,7 @@ export function EvidenceCommandPanel() {
         </p>
       </div>
 
-      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-4">
-        {surface.verificationFlow.map((step, index) => (
-          <Link
-            key={step.label}
-            href={step.href}
-            className="group rounded-lg border border-border bg-background p-3 transition-colors hover:border-primary/40"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                {String(index + 1).padStart(2, "0")} · {step.label}
-              </p>
-              <ArrowRight className="h-3.5 w-3.5 text-primary transition-transform group-hover:translate-x-0.5" />
-            </div>
-            <p className="mt-2 text-sm font-semibold">{step.value}</p>
-            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              {step.description}
-            </p>
-          </Link>
-        ))}
-      </div>
+      <VerificationFlowGrid steps={surface.verificationFlow} />
 
       <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5">
         {surface.categories.map((category) => (

@@ -1,3 +1,5 @@
+import type { VerificationFlowStep } from "@/components/shell/verification-flow-grid"
+
 export type EvidenceCategory = {
   label: string
   status: string
@@ -9,12 +11,7 @@ export type EvidenceCommandSurface = {
   title: string
   eyebrow: string
   description: string
-  verificationFlow: {
-    label: string
-    value: string
-    description: string
-    href: string
-  }[]
+  verificationFlow: VerificationFlowStep[]
   categories: EvidenceCategory[]
   nextRecommendedWo: {
     label: string

@@ -1,5 +1,6 @@
 import type { WorkOrder } from "@/lib/db/schema"
 import { WO_STATUSES, type WoStatus } from "@/lib/work-orders/lifecycle"
+import type { VerificationFlowStep } from "@/components/shell/verification-flow-grid"
 
 export type WorkOrderSurfaceCard = {
   label: string
@@ -11,12 +12,7 @@ export type WorkOrdersCommandSurface = {
   title: string
   eyebrow: string
   description: string
-  verificationFlow: {
-    label: string
-    value: string
-    description: string
-    href: string
-  }[]
+  verificationFlow: VerificationFlowStep[]
   cards: WorkOrderSurfaceCard[]
   nextRecommendedWo: {
     label: string
