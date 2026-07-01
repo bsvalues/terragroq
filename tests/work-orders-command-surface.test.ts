@@ -75,9 +75,9 @@ describe("Work Orders command surface", () => {
     const surface = getWorkOrdersCommandSurface([])
 
     expect(surface.nextRecommendedWo).toMatchObject({
-      label: "WO-SHELL-006 - Evidence Surface",
+      label: "WO-SHELL-017 - Evidence Native Area Reframe",
     })
-    expect(surface.nextRecommendedWo.reason).toContain("validation")
+    expect(surface.nextRecommendedWo.reason).toContain("native proof layer")
   })
 
   it("connects decisions, work orders, evidence, and next move", () => {
@@ -86,12 +86,12 @@ describe("Work Orders command surface", () => {
     expect(surface.verificationFlow).toEqual([
       expect.objectContaining({
         label: "Decision",
-        value: "Authority first",
+        value: "Authority call",
         href: "/decisions",
       }),
       expect.objectContaining({
         label: "Work Order",
-        value: "Scope locked",
+        value: "Mutation contract",
         href: "/work-orders",
       }),
       expect.objectContaining({
@@ -101,21 +101,52 @@ describe("Work Orders command surface", () => {
       }),
       expect.objectContaining({
         label: "Next Move",
-        value: "Return Home",
+        value: "Safe continuation",
         href: "/",
       }),
     ])
   })
 
-  it("does not execute work, start loops, grant authority, or write production", () => {
+  it("does not mutate work orders, execute work, start loops, grant authority, or write production", () => {
     const surface = getWorkOrdersCommandSurface([workOrder("active")])
 
     expect(surface.safety).toEqual({
       readOnly: true,
       executesWork: false,
+      mutatesWorkOrders: false,
       startsLoop: false,
+      startsScheduler: false,
       grantsAuthority: false,
+      approvesWork: false,
+      changesSchema: false,
+      activatesHermes: false,
+      activatesMcp: false,
+      enablesAutonomy: false,
       writesProduction: false,
     })
+  })
+
+  it("frames Work Orders as governed mutation control, not task management", () => {
+    const surface = getWorkOrdersCommandSurface([])
+    const text = [
+      surface.title,
+      surface.eyebrow,
+      surface.description,
+      ...surface.verificationFlow.flatMap((step) => [
+        step.label,
+        step.value,
+        step.description,
+      ]),
+      ...surface.cards.flatMap((card) => [card.label, card.value, card.description]),
+      surface.nextRecommendedWo.label,
+      surface.nextRecommendedWo.reason,
+    ].join(" ")
+
+    expect(text).toContain("native WilliamOS control primitive")
+    expect(text).toContain("mutation control")
+    expect(text).toContain("authority gates")
+    expect(text).not.toMatch(
+      /task board|kanban|project management|tickets|productivity pipeline|team queue|sprint|one-click execute|auto-run/i,
+    )
   })
 })
