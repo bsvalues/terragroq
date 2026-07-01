@@ -4,6 +4,7 @@ import { StatusBadge } from "@/components/status-badge"
 import { getRecentEvidence } from "@/app/actions/evidence"
 import { RuntimeEvidencePanel } from "@/components/runtime/runtime-evidence-panel"
 import { RuntimeProbe } from "@/components/runtime/runtime-probe"
+import { ReadinessNativeAreaPanel } from "@/components/runtime/readiness-native-area-panel"
 import { SystemsStatusPanel } from "@/components/systems/systems-status-panel"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
 
@@ -27,6 +28,7 @@ export default async function RuntimePage() {
       />
       <div className="flex flex-col gap-6 p-6">
         <SystemsStatusPanel />
+        <ReadinessNativeAreaPanel />
 
         {/* Fallback posture — the governed guarantee */}
         <div className="rounded-lg border border-border bg-card p-4">
