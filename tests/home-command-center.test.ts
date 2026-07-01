@@ -19,9 +19,59 @@ describe("WilliamOS Home Command Center", () => {
     expect(home.title).toBe("WilliamOS Home")
     expect(home.eyebrow).toBe("Primary Operator Command Center")
     expect(home.description).toContain("private command environment")
+    expect(home.thesis).toContain("Primary briefing")
     expect(home.primaryAction).toEqual({
       label: "Review next move",
       href: "/work-orders",
+    })
+  })
+
+  it("answers attention, stable, and blocked briefing questions", () => {
+    const home = getHomeCommandCenter({
+      ...initializedStats,
+      openWork: 2,
+      openDecisions: 1,
+    })
+
+    expect(home.briefing).toMatchObject({
+      status: "Attention",
+      summary: "Operator attention required",
+    })
+    expect(home.lanes).toEqual([
+      expect.objectContaining({
+        label: "Attention",
+        value: "2 work orders",
+        href: "/work-orders",
+        tone: "attention",
+      }),
+      expect.objectContaining({
+        label: "Stable",
+        value: "systems visible",
+        href: "/runtime",
+        tone: "stable",
+      }),
+      expect.objectContaining({
+        label: "Blocked",
+        value: "1 decision",
+        href: "/decisions",
+        tone: "authority",
+      }),
+    ])
+  })
+
+  it("reports a ready briefing when nothing is blocking Home", () => {
+    const home = getHomeCommandCenter(initializedStats)
+
+    expect(home.briefing).toMatchObject({
+      status: "Ready",
+      summary: "No active work is blocking Home",
+    })
+    expect(home.lanes.find((lane) => lane.label === "Attention")).toMatchObject({
+      value: "clear",
+      href: "/goal-console",
+    })
+    expect(home.lanes.find((lane) => lane.label === "Blocked")).toMatchObject({
+      value: "none",
     })
   })
 
@@ -58,6 +108,33 @@ describe("WilliamOS Home Command Center", () => {
     })
   })
 
+  it("shows Brain Council, Hermes, Evidence, and Access Grants posture without activation", () => {
+    const home = getHomeCommandCenter(initializedStats)
+
+    expect(home.systemPosture).toEqual([
+      expect.objectContaining({
+        label: "Brain Council",
+        posture: "Advisory",
+        href: "/brain-council",
+      }),
+      expect.objectContaining({
+        label: "Hermes Worker Dock",
+        posture: "Inactive",
+        href: "/brain-council",
+      }),
+      expect.objectContaining({
+        label: "Evidence",
+        posture: "Read-only",
+        href: "/audit",
+      }),
+      expect.objectContaining({
+        label: "Access Grants",
+        posture: "Disabled",
+        href: "/operator",
+      }),
+    ])
+  })
+
   it("routes active work to work order review", () => {
     const home = getHomeCommandCenter({
       ...initializedStats,
@@ -89,6 +166,21 @@ describe("WilliamOS Home Command Center", () => {
       value: "none",
       href: "/goal-console",
     })
+  })
+
+  it("routes proposed decisions to authority review before new goals", () => {
+    const home = getHomeCommandCenter({
+      ...initializedStats,
+      openWork: 0,
+      openDecisions: 2,
+    })
+
+    expect(home.nextMove).toMatchObject({
+      label: "Resolve blocked decisions",
+      href: "/decisions",
+      reason: "Proposed decisions are waiting on Primary authority before new work starts.",
+    })
+    expect(home.briefing.status).toBe("Attention")
   })
 
   it("does not grant execution, autonomy, authority, or production-write behavior", () => {

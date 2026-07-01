@@ -7,7 +7,7 @@ import { getHomeCommandCenter } from "@/components/dashboard/home-command-center
 import { OperatorStartPanel } from "@/components/dashboard/operator-start-panel"
 import { ResearchModeSummaryPanel } from "@/components/dashboard/research-mode-summary-panel"
 import { RUNTIME } from "@/lib/ai/config"
-import { ArrowRight, Plus, ShieldCheck } from "lucide-react"
+import { ArrowRight, CircleDot, Plus, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 export default async function DashboardPage() {
@@ -30,60 +30,132 @@ export default async function DashboardPage() {
       />
 
       <div className="flex flex-col gap-8 p-6">
-        <section className="overflow-hidden rounded-2xl border border-border bg-card">
-          <div className="border-b border-border bg-muted/30 px-5 py-4">
-            <p className="font-mono text-[11px] uppercase tracking-[0.25em] text-muted-foreground">
-              {home.eyebrow}
-            </p>
-            <div className="mt-2 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-              <div>
-                <h2 className="text-2xl font-semibold tracking-tight">
-                  WilliamOS Operator Console
+        <section className="overflow-hidden rounded-3xl border border-border bg-card">
+          <div className="grid lg:grid-cols-[1.15fr_0.85fr]">
+            <div className="relative overflow-hidden border-b border-border bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.16),transparent_38%),linear-gradient(135deg,hsl(var(--card)),hsl(var(--muted)/0.32))] p-6 lg:border-b-0 lg:border-r">
+              <div className="absolute right-6 top-6 hidden h-28 w-28 rounded-full border border-primary/20 lg:block" />
+              <div className="absolute right-12 top-12 hidden h-16 w-16 rounded-full border border-primary/10 lg:block" />
+              <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-muted-foreground">
+                {home.eyebrow}
+              </p>
+              <div className="mt-8 max-w-3xl">
+                <h2 className="text-3xl font-semibold tracking-tight text-balance md:text-4xl">
+                  WilliamOS Command Center
                 </h2>
-                <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-                  Control your build environment from one place. Brain Council
-                  advises. Hermes remains preview-only. Work Orders and
-                  Evidence govern action.
+                <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground">
+                  {home.thesis}
                 </p>
               </div>
-              <Button variant="outline" asChild>
-                <Link href={home.nextMove.href}>
-                  {home.nextMove.label}
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
-              </Button>
-            </div>
-          </div>
 
-          <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
-            {home.statusCards.map((card) => (
-              <Link
-                key={card.label}
-                href={card.href}
-                className="group rounded-xl border border-border bg-background p-4 transition-colors hover:border-primary/40"
-              >
-                <div className="flex items-start justify-between gap-3">
+              <div className="mt-8 grid gap-3 md:grid-cols-3">
+                {home.lanes.map((lane) => (
+                  <Link
+                    key={lane.label}
+                    href={lane.href}
+                    className="group rounded-2xl border border-border/80 bg-background/80 p-4 backdrop-blur transition-colors hover:border-primary/40"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {lane.label}
+                      </span>
+                      <span
+                        className={`h-2 w-2 rounded-full ${
+                          lane.tone === "attention"
+                            ? "bg-warning"
+                            : lane.tone === "stable"
+                              ? "bg-success"
+                              : "bg-primary"
+                        }`}
+                      />
+                    </div>
+                    <p className="mt-3 text-lg font-semibold">{lane.value}</p>
+                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                      {lane.description}
+                    </p>
+                  </Link>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col justify-between gap-6 p-6">
+              <div className="rounded-2xl border border-border bg-background p-5">
+                <div className="flex items-start gap-3">
+                  <CircleDot className="mt-0.5 h-5 w-5 text-primary" aria-hidden />
                   <div>
                     <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                      {card.label}
+                      Primary Status · {home.briefing.status}
                     </p>
-                    <p className="mt-2 text-lg font-semibold">{card.value}</p>
+                    <h3 className="mt-2 text-xl font-semibold tracking-tight">
+                      {home.briefing.summary}
+                    </h3>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      {home.briefing.detail}
+                    </p>
                   </div>
-                  <ArrowRight className="h-4 w-4 text-primary opacity-70 transition-transform group-hover:translate-x-0.5" />
                 </div>
-                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-                  {card.description}
-                </p>
-              </Link>
-            ))}
-          </div>
+              </div>
 
-          <div className="border-t border-border px-5 py-3">
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              <span className="font-medium text-foreground">Next Move:</span>{" "}
-              {home.nextMove.reason}
-            </p>
+              <div className="grid gap-3">
+                {home.systemPosture.map((item) => (
+                  <Link
+                    key={item.label}
+                    href={item.href}
+                    className="group rounded-xl border border-border bg-background px-4 py-3 transition-colors hover:border-primary/40"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium">{item.label}</p>
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                          {item.description}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full border border-border bg-muted/40 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {item.posture}
+                      </span>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+
+              <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
+                <p className="font-mono text-[10px] uppercase tracking-wider text-primary">
+                  Next Move
+                </p>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                  {home.nextMove.reason}
+                </p>
+                <Button className="mt-4" variant="outline" asChild>
+                  <Link href={home.nextMove.href}>
+                    {home.nextMove.label}
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </Button>
+              </div>
+            </div>
           </div>
+        </section>
+
+        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {home.statusCards.map((card) => (
+            <Link
+              key={card.label}
+              href={card.href}
+              className="group rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/40"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {card.label}
+                  </p>
+                  <p className="mt-2 text-lg font-semibold">{card.value}</p>
+                </div>
+                <ArrowRight className="h-4 w-4 text-primary opacity-70 transition-transform group-hover:translate-x-0.5" />
+              </div>
+              <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                {card.description}
+              </p>
+            </Link>
+          ))}
         </section>
 
         <OperatorStartPanel stats={stats} />
