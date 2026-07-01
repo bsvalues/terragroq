@@ -31,7 +31,7 @@ describe("Systems status surface", () => {
       tone: "ready",
     })
     expect(summary.get("Read-only")).toMatchObject({
-      value: "3 surfaces",
+      value: "4 surfaces",
       tone: "read-only",
     })
     expect(summary.get("Preview-only")).toMatchObject({

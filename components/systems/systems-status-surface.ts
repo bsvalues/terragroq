@@ -60,8 +60,9 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
       },
       {
         label: "Read-only",
-        value: "3 surfaces",
-        description: "Work Orders, Evidence, and Brain Council are visible without execution.",
+        value: "4 surfaces",
+        description:
+          "Work Orders, Evidence, Brain Council, and Memory are visible without execution.",
         tone: "read-only",
       },
       {
