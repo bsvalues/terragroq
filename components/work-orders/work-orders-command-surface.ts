@@ -11,6 +11,12 @@ export type WorkOrdersCommandSurface = {
   title: string
   eyebrow: string
   description: string
+  verificationFlow: {
+    label: string
+    value: string
+    description: string
+    href: string
+  }[]
   cards: WorkOrderSurfaceCard[]
   nextRecommendedWo: {
     label: string
@@ -61,6 +67,32 @@ export function getWorkOrdersCommandSurface(
     eyebrow: "Primary Operator Work Queue",
     description:
       "Governed work is visible here before authority, execution, or completion. Work Orders control mutation; Evidence proves reality.",
+    verificationFlow: [
+      {
+        label: "Decision",
+        value: "Authority first",
+        description: "Resolve the operating call before scoped work is approved.",
+        href: "/decisions",
+      },
+      {
+        label: "Work Order",
+        value: "Scope locked",
+        description: "Define allowed files, blocked actions, validators, and stop conditions.",
+        href: "/work-orders",
+      },
+      {
+        label: "Evidence",
+        value: "Proof required",
+        description: "Attach tests, build output, PR checks, and production verification.",
+        href: "/audit",
+      },
+      {
+        label: "Next Move",
+        value: "Return Home",
+        description: "After evidence is clear, Home chooses the next governed lane.",
+        href: "/",
+      },
+    ],
     cards: [
       {
         label: "Active Work",

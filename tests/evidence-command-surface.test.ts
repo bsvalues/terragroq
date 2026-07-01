@@ -34,6 +34,33 @@ describe("Evidence command surface", () => {
     expect(surface.nextRecommendedWo.reason).toContain("runtime")
   })
 
+  it("connects decision authority to work evidence and verified result", () => {
+    const surface = getEvidenceCommandSurface()
+
+    expect(surface.verificationFlow).toEqual([
+      expect.objectContaining({
+        label: "Decision",
+        value: "Authority source",
+        href: "/decisions",
+      }),
+      expect.objectContaining({
+        label: "Work Order",
+        value: "Scope record",
+        href: "/work-orders",
+      }),
+      expect.objectContaining({
+        label: "Evidence",
+        value: "Verification layer",
+        href: "/audit",
+      }),
+      expect.objectContaining({
+        label: "Verified Result",
+        value: "Next move ready",
+        href: "/",
+      }),
+    ])
+  })
+
   it("does not execute, deploy, grant authority, or write production", () => {
     const surface = getEvidenceCommandSurface()
 

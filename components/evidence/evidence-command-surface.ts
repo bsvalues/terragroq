@@ -9,6 +9,12 @@ export type EvidenceCommandSurface = {
   title: string
   eyebrow: string
   description: string
+  verificationFlow: {
+    label: string
+    value: string
+    description: string
+    href: string
+  }[]
   categories: EvidenceCategory[]
   nextRecommendedWo: {
     label: string
@@ -29,6 +35,32 @@ export function getEvidenceCommandSurface(): EvidenceCommandSurface {
     eyebrow: "Primary Operator Proof Layer",
     description:
       "Evidence keeps Work Orders, production checks, reviews, and safety posture tied to verifiable records. It observes and explains; it does not execute.",
+    verificationFlow: [
+      {
+        label: "Decision",
+        value: "Authority source",
+        description: "The reason work was allowed, blocked, or redirected.",
+        href: "/decisions",
+      },
+      {
+        label: "Work Order",
+        value: "Scope record",
+        description: "The bounded contract that defines what changed and what stayed blocked.",
+        href: "/work-orders",
+      },
+      {
+        label: "Evidence",
+        value: "Verification layer",
+        description: "The test, build, PR, production, and safety proof for the claim.",
+        href: "/audit",
+      },
+      {
+        label: "Verified Result",
+        value: "Next move ready",
+        description: "A completed lane can return to Home only after evidence is inspectable.",
+        href: "/",
+      },
+    ],
     categories: [
       {
         label: "Latest Production Verification",

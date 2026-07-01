@@ -80,6 +80,33 @@ describe("Work Orders command surface", () => {
     expect(surface.nextRecommendedWo.reason).toContain("validation")
   })
 
+  it("connects decisions, work orders, evidence, and next move", () => {
+    const surface = getWorkOrdersCommandSurface([])
+
+    expect(surface.verificationFlow).toEqual([
+      expect.objectContaining({
+        label: "Decision",
+        value: "Authority first",
+        href: "/decisions",
+      }),
+      expect.objectContaining({
+        label: "Work Order",
+        value: "Scope locked",
+        href: "/work-orders",
+      }),
+      expect.objectContaining({
+        label: "Evidence",
+        value: "Proof required",
+        href: "/audit",
+      }),
+      expect.objectContaining({
+        label: "Next Move",
+        value: "Return Home",
+        href: "/",
+      }),
+    ])
+  })
+
   it("does not execute work, start loops, grant authority, or write production", () => {
     const surface = getWorkOrdersCommandSurface([workOrder("active")])
 
