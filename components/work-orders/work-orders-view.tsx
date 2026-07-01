@@ -51,6 +51,7 @@ import { StatusBadge } from "@/components/status-badge"
 import { getWorkOrderDraftChecklist } from "@/components/work-orders/work-order-draft-guidance"
 import { buildWorkOrderDraftPacket } from "@/components/work-orders/work-order-draft-packet"
 import { getWorkOrderEmptyStateSteps } from "@/components/work-orders/work-order-empty-state"
+import { filterWorkOrders, getWorkOrderFilterOptions, type WorkOrderFilter } from "@/components/work-orders/work-order-search-filter"
 import {
   Plus,
   Trash2,
@@ -87,6 +88,7 @@ const DRAFT_CHECKLIST = getWorkOrderDraftChecklist()
 
 export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
   const [rows, setRows] = useState(initial)
+  const [filter, setFilter] = useState<WorkOrderFilter>({ query: "", status: "all" })
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<WorkOrder | null>(null)
   const [, startTransition] = useTransition()
@@ -113,6 +115,7 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
   const [form, setForm] = useState(emptyForm)
   const set = (k: keyof typeof form, v: string) =>
     setForm((p) => ({ ...p, [k]: v }))
+  const filteredRows = filterWorkOrders(rows, filter)
 
   function reset() {
     setForm(emptyForm)
@@ -465,70 +468,110 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
       {rows.length === 0 ? (
         <Empty />
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {COLUMNS.map((col) => {
-            const items = rows.filter((r) => r.status === col.key)
-            return (
-              <div key={col.key} className="flex flex-col gap-3">
-                <div className="flex items-center justify-between px-1">
-                  <span className="flex items-center gap-2 text-sm font-medium">
-                    <StatusBadge value={col.key} label={col.label} />
-                  </span>
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {items.length}
-                  </span>
-                </div>
-                <div className="flex flex-col gap-2">
-                  {items.map((w) => (
-                    <button
-                      key={w.id}
-                      type="button"
-                      onClick={() => setSelected(w)}
-                      className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 text-left transition-colors hover:border-primary/40"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-mono text-[10px] text-muted-foreground">
-                          {w.ref ?? `#${w.id}`}
-                        </span>
-                        <StatusBadge value={w.priority} />
-                      </div>
-                      <span className="text-sm font-medium leading-snug">
-                        {w.title}
-                      </span>
-                      {w.goal && (
-                        <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-                          {w.goal}
-                        </p>
-                      )}
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {w.lane && (
-                          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                            {w.lane}
-                          </span>
-                        )}
-                        {w.evidence.length > 0 && (
-                          <span className="flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
-                            <Paperclip className="h-2.5 w-2.5" />
-                            {w.evidence.length}
-                          </span>
-                        )}
-                        {w.result && (
-                          <span className="font-mono text-[10px] text-muted-foreground">
-                            {w.result}
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  ))}
-                  {items.length === 0 && (
-                    <div className="rounded-lg border border-dashed border-border py-6 text-center text-xs text-muted-foreground">
-                      Empty
-                    </div>
-                  )}
-                </div>
+        <div className="flex flex-col gap-4">
+          <div className="rounded-xl border border-border bg-card p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+              <div className="flex-1">
+                <Label htmlFor="work-order-search">Search governed work</Label>
+                <Input
+                  id="work-order-search"
+                  value={filter.query}
+                  onChange={(event) => setFilter((current) => ({ ...current, query: event.target.value }))}
+                  placeholder="Search ref, title, goal, evidence, validators, lane, or authority"
+                  className="mt-2"
+                />
               </div>
-            )
-          })}
+              <div className="lg:w-56">
+                <Label>Status filter</Label>
+                <Select
+                  value={filter.status}
+                  onValueChange={(status) =>
+                    setFilter((current) => ({ ...current, status: status as WorkOrderFilter["status"] }))
+                  }
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {getWorkOrderFilterOptions().map((status) => (
+                      <SelectItem key={status} value={status}>
+                        {status === "all" ? "All statuses" : COLUMN_LABEL[status] ?? status}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Local read-only filter. It changes the view only; it does not mutate Work Orders, start loops, or grant authority.
+            </p>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {COLUMNS.map((col) => {
+              const items = filteredRows.filter((r) => r.status === col.key)
+              return (
+                <div key={col.key} className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="flex items-center gap-2 text-sm font-medium">
+                      <StatusBadge value={col.key} label={col.label} />
+                    </span>
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {items.length}
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {items.map((w) => (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() => setSelected(w)}
+                        className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 text-left transition-colors hover:border-primary/40"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-[10px] text-muted-foreground">
+                            {w.ref ?? `#${w.id}`}
+                          </span>
+                          <StatusBadge value={w.priority} />
+                        </div>
+                        <span className="text-sm font-medium leading-snug">
+                          {w.title}
+                        </span>
+                        {w.goal && (
+                          <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                            {w.goal}
+                          </p>
+                        )}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {w.lane && (
+                            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                              {w.lane}
+                            </span>
+                          )}
+                          {w.evidence.length > 0 && (
+                            <span className="flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
+                              <Paperclip className="h-2.5 w-2.5" />
+                              {w.evidence.length}
+                            </span>
+                          )}
+                          {w.result && (
+                            <span className="font-mono text-[10px] text-muted-foreground">
+                              {w.result}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                    {items.length === 0 && (
+                      <div className="rounded-lg border border-dashed border-border py-6 text-center text-xs text-muted-foreground">
+                        Empty
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
 
