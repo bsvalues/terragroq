@@ -14,17 +14,62 @@ describe("Systems status surface", () => {
       "Brain Council",
       "Hermes Preview / Worker Dock",
       "Agent Forge / Skills",
+      "Access Grants",
+      "Memory / Knowledge",
+      "Governance / Authority",
       "Deployment / Production Health",
       "TerraFusion OS Project",
     ])
   })
 
-  it("keeps Brain Council and Hermes in non-runtime postures", () => {
+  it("summarizes ready, read-only, preview-only, and disabled posture", () => {
+    const surface = getSystemsStatusSurface()
+    const summary = new Map(surface.postureSummary.map((item) => [item.label, item]))
+
+    expect(summary.get("Ready")).toMatchObject({
+      value: "3 systems",
+      tone: "ready",
+    })
+    expect(summary.get("Read-only")).toMatchObject({
+      value: "3 surfaces",
+      tone: "read-only",
+    })
+    expect(summary.get("Preview-only")).toMatchObject({
+      value: "1 dock",
+      tone: "preview-only",
+    })
+    expect(summary.get("Disabled")).toMatchObject({
+      value: "access grants",
+      tone: "disabled",
+    })
+  })
+
+  it("keeps Brain Council, Hermes, and Access Grants in non-runtime postures", () => {
     const surface = getSystemsStatusSurface()
     const statuses = new Map(surface.categories.map((category) => [category.label, category.status]))
 
     expect(statuses.get("Brain Council")).toBe("Read-only")
     expect(statuses.get("Hermes Preview / Worker Dock")).toBe("Preview-only")
+    expect(statuses.get("Access Grants")).toBe("Disabled")
+  })
+
+  it("shows authority, execution, and production boundaries", () => {
+    const surface = getSystemsStatusSurface()
+
+    expect(surface.boundaryRail).toEqual([
+      expect.objectContaining({
+        label: "Authority",
+        state: "Owner-gated",
+      }),
+      expect.objectContaining({
+        label: "Execution",
+        state: "Not active",
+      }),
+      expect.objectContaining({
+        label: "Production",
+        state: "Observed only",
+      }),
+    ])
   })
 
   it("recommends the next shell slice without granting authority", () => {

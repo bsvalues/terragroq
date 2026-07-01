@@ -9,6 +9,7 @@ const toneClasses: Record<SystemStatusTone, string> = {
   ready: "border-success/30 bg-success/10 text-success",
   "read-only": "border-primary/30 bg-primary/10 text-primary",
   "preview-only": "border-warning/30 bg-warning/10 text-warning",
+  disabled: "border-destructive/30 bg-destructive/10 text-destructive",
   "needs-authority": "border-border bg-muted text-muted-foreground",
 }
 
@@ -28,6 +29,49 @@ export function SystemsStatusPanel() {
         <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           {surface.description}
         </p>
+      </div>
+
+      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-4">
+        {surface.postureSummary.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {item.label}
+              </p>
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  item.tone === "ready"
+                    ? "bg-success"
+                    : item.tone === "read-only"
+                      ? "bg-primary"
+                      : item.tone === "preview-only"
+                        ? "bg-warning"
+                        : item.tone === "disabled"
+                          ? "bg-destructive"
+                          : "bg-muted-foreground"
+                }`}
+              />
+            </div>
+            <p className="mt-2 text-lg font-semibold">{item.value}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-b border-border bg-muted/10 p-4 md:grid-cols-3">
+        {surface.boundaryRail.map((boundary) => (
+          <div key={boundary.label} className="rounded-lg border border-border bg-card p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {boundary.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{boundary.state}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {boundary.description}
+            </p>
+          </div>
+        ))}
       </div>
 
       <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
