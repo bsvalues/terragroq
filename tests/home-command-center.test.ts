@@ -168,6 +168,21 @@ describe("WilliamOS Home Command Center", () => {
     })
   })
 
+  it("routes proposed decisions to authority review before new goals", () => {
+    const home = getHomeCommandCenter({
+      ...initializedStats,
+      openWork: 0,
+      openDecisions: 2,
+    })
+
+    expect(home.nextMove).toMatchObject({
+      label: "Resolve blocked decisions",
+      href: "/decisions",
+      reason: "Proposed decisions are waiting on Primary authority before new work starts.",
+    })
+    expect(home.briefing.status).toBe("Attention")
+  })
+
   it("does not grant execution, autonomy, authority, or production-write behavior", () => {
     const home = getHomeCommandCenter(initializedStats)
 

@@ -209,6 +209,12 @@ export function getHomeCommandCenter(stats: DashboardStats): HomeCommandCenter {
             href: "/work-orders",
             reason: "Open work exists. Resolve or classify it before starting another lane.",
           }
+        : stats.openDecisions > 0
+          ? {
+              label: "Resolve blocked decisions",
+              href: "/decisions",
+              reason: "Proposed decisions are waiting on Primary authority before new work starts.",
+            }
         : {
             label: "Classify the next objective",
             href: "/goal-console",
