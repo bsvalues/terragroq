@@ -10,7 +10,8 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import { Send, Sparkles, FileText, BrainCircuit, ChevronDown, Loader2 } from "lucide-react"
+import { Send, ShieldCheck, FileText, BrainCircuit, ChevronDown, Loader2 } from "lucide-react"
+import { getOperatorChatNativeArea } from "@/components/chat/operator-chat-native-area"
 import { cn } from "@/lib/utils"
 
 type Source = {
@@ -22,11 +23,7 @@ type Source = {
   similarity: number
 }
 
-const SUGGESTIONS = [
-  "What decisions have I made recently?",
-  "Summarize what you know about my operating principles.",
-  "What does my corpus say about strategy?",
-]
+const SUGGESTIONS = getOperatorChatNativeArea().suggestions
 
 export function OperatorChat() {
   const [input, setInput] = useState("")
@@ -53,12 +50,15 @@ export function OperatorChat() {
           {messages.length === 0 && (
             <div className="flex flex-col items-center gap-6 py-12 text-center">
               <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/15 text-primary">
-                <Sparkles className="h-6 w-6" />
+                <ShieldCheck className="h-6 w-6" />
               </div>
               <div className="flex flex-col gap-1">
-                <h2 className="text-lg font-semibold">Ask your governed second brain</h2>
+                <h2 className="text-lg font-semibold">
+                  Start a governed command conversation
+                </h2>
                 <p className="max-w-md text-sm text-muted-foreground leading-relaxed">
-                  Answers are grounded in your memory and corpus, governed by your doctrine, and cited with sources.
+                  Ask WilliamOS to inspect context, prepare a safe next move, or draft a Work Order.
+                  Conversation remains advisory; authority and execution stay gated.
                 </p>
               </div>
               <div className="flex flex-col gap-2 w-full max-w-md">
@@ -100,7 +100,7 @@ export function OperatorChat() {
                     W
                   </div>
                   <div className="flex-1 whitespace-pre-wrap text-sm leading-relaxed pt-0.5">
-                    {text || (busy && <span className="text-muted-foreground">Thinking…</span>)}
+                    {text || (busy && <span className="text-muted-foreground">Preparing response…</span>)}
                   </div>
                 </div>
                 {sources.length > 0 && <SourceList sources={sources} />}
@@ -111,7 +111,7 @@ export function OperatorChat() {
           {status === "submitted" && (
             <div className="flex items-center gap-2 pl-10 text-sm text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Retrieving context…
+              Reviewing governed context…
             </div>
           )}
           <div ref={bottomRef} />
@@ -129,7 +129,7 @@ export function OperatorChat() {
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask anything grounded in your second brain…"
+            placeholder="Ask WilliamOS to inspect, prepare, or route the next move..."
             disabled={busy}
           />
           <Button type="submit" size="icon" disabled={busy || !input.trim()} aria-label="Send">
