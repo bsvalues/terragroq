@@ -13,6 +13,14 @@ const toneClasses: Record<SystemStatusTone, string> = {
   "needs-authority": "border-border bg-muted text-muted-foreground",
 }
 
+const toneDotClasses: Record<SystemStatusTone, string> = {
+  ready: "bg-success",
+  "read-only": "bg-primary",
+  "preview-only": "bg-warning",
+  disabled: "bg-destructive",
+  "needs-authority": "bg-muted-foreground",
+}
+
 export function SystemsStatusPanel() {
   const surface = getSystemsStatusSurface()
 
@@ -39,17 +47,8 @@ export function SystemsStatusPanel() {
                 {item.label}
               </p>
               <span
-                className={`h-2 w-2 rounded-full ${
-                  item.tone === "ready"
-                    ? "bg-success"
-                    : item.tone === "read-only"
-                      ? "bg-primary"
-                      : item.tone === "preview-only"
-                        ? "bg-warning"
-                        : item.tone === "disabled"
-                          ? "bg-destructive"
-                          : "bg-muted-foreground"
-                }`}
+                className={`h-2 w-2 rounded-full ${toneDotClasses[item.tone]}`}
+                aria-hidden={true}
               />
             </div>
             <p className="mt-2 text-lg font-semibold">{item.value}</p>

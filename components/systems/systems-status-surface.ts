@@ -50,7 +50,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
     title: "Systems Status",
     eyebrow: "WilliamOS Operational Posture",
     description:
-      "A read-only view of the unified WilliamOS control plane: shell, auth, Work Orders, Evidence, Brain Council, Hermes preview, Agent Forge, deployment, and project systems.",
+      "A read-only view of the unified WilliamOS control plane: shell, auth, Work Orders, Evidence, Brain Council, Hermes preview, Agent Forge, Access Grants, Memory, Governance, deployment, and project systems.",
     postureSummary: [
       {
         label: "Ready",
