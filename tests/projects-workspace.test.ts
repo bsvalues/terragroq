@@ -6,8 +6,41 @@ describe("Projects workspace", () => {
     const workspace = getProjectsWorkspace()
 
     expect(workspace.title).toBe("Projects")
-    expect(workspace.description).toContain("inside WilliamOS")
-    expect(workspace.description).toContain("without becoming separate command environments")
+    expect(workspace.description).toContain("governed systems under WilliamOS command")
+    expect(workspace.description).toContain("without becoming task boards")
+    expect(workspace.postureSummary).toEqual([
+      expect.objectContaining({
+        label: "Systems",
+        value: "under command",
+      }),
+      expect.objectContaining({
+        label: "Primary review",
+        value: "required",
+      }),
+      expect.objectContaining({
+        label: "Execution",
+        value: "not available",
+      }),
+    ])
+  })
+
+  it("shows project context as organized, evidence-bound, and governed", () => {
+    const workspace = getProjectsWorkspace()
+
+    expect(workspace.commandStates).toEqual([
+      expect.objectContaining({
+        label: "Context",
+        state: "Organized",
+      }),
+      expect.objectContaining({
+        label: "Evidence",
+        state: "Required",
+      }),
+      expect.objectContaining({
+        label: "Next Move",
+        state: "Governed",
+      }),
+    ])
   })
 
   it("includes TerraFusion OS and future project placeholders", () => {
@@ -52,5 +85,47 @@ describe("Projects workspace", () => {
       activatesMcp: false,
       enablesAutonomy: false,
     })
+    expect(workspace.authorityBoundaries).toEqual([
+      expect.objectContaining({
+        label: "Project execution",
+        state: "Disabled",
+      }),
+      expect.objectContaining({
+        label: "Data",
+        state: "No mutation",
+      }),
+      expect.objectContaining({
+        label: "Authority",
+        state: "Primary gated",
+      }),
+    ])
+  })
+
+  it("avoids project-management, collaboration, and automation language", () => {
+    const workspace = getProjectsWorkspace()
+    const text = [
+      workspace.title,
+      workspace.eyebrow,
+      workspace.description,
+      ...workspace.postureSummary.flatMap((item) => [item.label, item.value, item.description]),
+      ...workspace.commandStates.flatMap((item) => [item.label, item.state, item.description]),
+      ...workspace.authorityBoundaries.flatMap((boundary) => [
+        boundary.label,
+        boundary.state,
+        boundary.description,
+      ]),
+      ...workspace.projects.flatMap((project) => [
+        project.name,
+        project.currentFocus,
+        project.latestWorkOrder,
+        project.latestEvidence,
+        project.deploymentPosture,
+        project.blockedDecision,
+        project.nextRecommendedWork,
+      ]),
+      ...workspace.links.flatMap((link) => [link.label, link.description]),
+    ].join(" ")
+
+    expect(text).not.toMatch(/team workspace|project management|assign tasks|collaborate with your team|launch automation|AI-powered planning|boost productivity/i)
   })
 })

@@ -6,7 +6,7 @@ export default function ProjectsPage() {
     <>
       <PageHeader
         title="Projects"
-        description="Governed project systems inside WilliamOS. TerraFusion OS and future systems stay under Work Orders, Evidence, Systems checks, and authority boundaries."
+        description="Governed systems under WilliamOS command. Projects preserve context, evidence, blockers, and next moves without becoming task boards or execution surfaces."
       />
       <div className="p-6">
         <ProjectsWorkspacePanel />
