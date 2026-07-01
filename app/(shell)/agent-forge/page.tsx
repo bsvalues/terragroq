@@ -6,7 +6,7 @@ export default function AgentForgePage() {
     <>
       <PageHeader
         title="Agent Forge"
-        description="WilliamOS capability preparation layer for skill definitions, worker packets, evidence contracts, and execution proposals. Proposal-only — no skills run here."
+        description="WilliamOS capability forge for skill proposals, worker packet drafts, quarantine review, and evidence contracts. Prepared, not active — no skills run here."
       />
       <div className="p-6">
         <AgentForgePanel />

@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { Hammer, ShieldCheck } from "lucide-react"
+import { Hammer, PackageCheck, ShieldCheck } from "lucide-react"
 import { getAgentForgeSurface, type AgentForgeArea } from "@/components/agent-forge/agent-forge-surface"
 import { StatusBadge } from "@/components/status-badge"
 
@@ -27,6 +27,40 @@ export function AgentForgePanel() {
         </p>
       </div>
 
+      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-3">
+        {forge.postureSummary.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.value}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="border-b border-border bg-muted/10 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <PackageCheck className="h-4 w-4 text-primary" aria-hidden={true} />
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Capability preparation path
+          </p>
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          {forge.capabilityStates.map((item) => (
+            <div key={item.label} className="rounded-lg border border-border bg-card p-3">
+              <p className="text-sm font-semibold">{item.label}</p>
+              <p className="mt-2 text-xs font-medium text-foreground">{item.state}</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {item.description}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="grid gap-3 p-4 md:grid-cols-2">
         {forge.areas.map((area) => (
           <div key={area.label} className="rounded-lg border border-border bg-background p-3">
@@ -36,6 +70,20 @@ export function AgentForgePanel() {
             </div>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
               {area.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-t border-border bg-muted/10 p-4 md:grid-cols-3">
+        {forge.authorityBoundaries.map((boundary) => (
+          <div key={boundary.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {boundary.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{boundary.state}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {boundary.description}
             </p>
           </div>
         ))}
