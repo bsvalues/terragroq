@@ -14,7 +14,7 @@ export default async function AuditPage() {
     <>
       <PageHeader
         title="Evidence"
-        description="The proof layer for Work Orders, production verification, safety posture, and governed decisions. Evidence observes; it does not execute."
+        description="The WilliamOS proof layer for validation, production verification, safety posture, sources, timestamps, blockers, and governed decisions. Evidence records reality; it does not execute."
       />
       <div className="flex flex-col gap-6 p-6">
         <EvidenceCommandPanel />
@@ -22,11 +22,11 @@ export default async function AuditPage() {
           <div className="rounded-lg border border-dashed border-border bg-card p-6">
             <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 text-center">
               <Activity className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm font-medium">No audit events recorded yet</p>
+              <p className="text-sm font-medium">No evidence events recorded yet</p>
               <p className="text-sm leading-relaxed text-muted-foreground">
-                The audit log fills only after manual operator actions are recorded.
-                Start with a safe governance surface; nothing runs automatically from
-                these links.
+                The record of reality fills only after operator actions, validation,
+                reviews, or production checks are captured. Start with a safe
+                governance surface; nothing runs automatically from these links.
               </p>
             </div>
             <div className="mx-auto mt-6 grid max-w-3xl gap-3 md:grid-cols-3">

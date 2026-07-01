@@ -53,7 +53,8 @@ export function EvidenceCommandPanel() {
         </div>
         <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground">
           <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden={true} />
-          Evidence is read-only. No execution, deploy, authority grant, or production write.
+          Evidence is read-only. No mutation, auto-ingestion, connectors, execution,
+          deploy, authority grant, or production write.
         </div>
       </div>
     </section>

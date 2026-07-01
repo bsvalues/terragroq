@@ -19,9 +19,16 @@ export type EvidenceCommandSurface = {
   }
   safety: {
     readOnly: true
+    mutatesEvidence: false
+    autoIngests: false
+    activatesExternalConnectors: false
     executesWork: false
     deploys: false
     grantsAuthority: false
+    changesSchema: false
+    activatesHermes: false
+    activatesMcp: false
+    enablesAutonomy: false
     writesProduction: false
   }
 }
@@ -29,14 +36,14 @@ export type EvidenceCommandSurface = {
 export function getEvidenceCommandSurface(): EvidenceCommandSurface {
   return {
     title: "Evidence",
-    eyebrow: "Primary Operator Proof Layer",
+    eyebrow: "WilliamOS Record of Reality",
     description:
-      "Evidence keeps Work Orders, production checks, reviews, and safety posture tied to verifiable records. It observes and explains; it does not execute.",
+      "Evidence is the native WilliamOS proof layer and record of reality: validation, PR outcomes, production verification, safety posture, timestamps, sources, blockers, and confirmed reality. It records what is known; it does not execute.",
     verificationFlow: [
       {
         label: "Decision",
         value: "Authority source",
-        description: "The reason work was allowed, blocked, or redirected.",
+        description: "The reason work was allowed, blocked, redirected, or held for review.",
         href: "/decisions",
       },
       {
@@ -47,30 +54,30 @@ export function getEvidenceCommandSurface(): EvidenceCommandSurface {
       },
       {
         label: "Evidence",
-        value: "Verification layer",
-        description: "The test, build, PR, production, and safety proof for the claim.",
+        value: "Proof layer",
+        description: "The test, build, PR, production, source, timestamp, and safety proof for the claim.",
         href: "/audit",
       },
       {
         label: "Verified Result",
-        value: "Next move ready",
-        description: "A completed lane can return to Home only after evidence is inspectable.",
+        value: "Reality confirmed",
+        description: "A completed lane can return to Home only after proof is inspectable.",
         href: "/",
       },
     ],
     categories: [
       {
         label: "Latest Production Verification",
-        status: "Observed",
+        status: "Confirmed",
         description:
-          "Health, readiness, and security-header checks belong here before any claim is treated as true.",
+          "Health, readiness, deployment, and security-header checks belong here before production claims are treated as true.",
         href: "/runtime",
       },
       {
         label: "PR / Check / Build / Test Evidence",
         status: "Required",
         description:
-          "Pull request checks, focused tests, full-suite results, and build output form the release proof chain.",
+          "Pull request checks, focused tests, full-suite results, and build output form the validation proof chain.",
         href: "/audit",
       },
       {
@@ -84,7 +91,7 @@ export function getEvidenceCommandSurface(): EvidenceCommandSurface {
         label: "Blocked Decision Evidence",
         status: "Gated",
         description:
-          "Blocked choices stay visible with the evidence required before authority can move forward.",
+          "Blocked choices stay visible with the failed check, blocker, or missing proof required before authority can move forward.",
         href: "/governance",
       },
       {
@@ -96,15 +103,22 @@ export function getEvidenceCommandSurface(): EvidenceCommandSurface {
       },
     ],
     nextRecommendedWo: {
-      label: "WO-SHELL-007 - Systems Status Surface",
+      label: "WO-SHELL-018 - Systems Native Area Reframe",
       reason:
-        "After Work Orders and Evidence, the shell should make runtime, auth, infrastructure, and deployment posture easier to inspect from one Systems area.",
+        "After Evidence is framed as the proof layer, Systems should present runtime, auth, infrastructure, deployment, and readiness posture as one native WilliamOS area.",
     },
     safety: {
       readOnly: true,
+      mutatesEvidence: false,
+      autoIngests: false,
+      activatesExternalConnectors: false,
       executesWork: false,
       deploys: false,
       grantsAuthority: false,
+      changesSchema: false,
+      activatesHermes: false,
+      activatesMcp: false,
+      enablesAutonomy: false,
       writesProduction: false,
     },
   }
