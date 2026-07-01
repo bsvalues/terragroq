@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { Anchor, ShieldCheck } from "lucide-react"
+import { Anchor, PackageCheck, ShieldCheck } from "lucide-react"
 import { getHermesWorkerDockPreview } from "@/components/brain-council/hermes-worker-dock"
 import { StatusBadge } from "@/components/status-badge"
 
@@ -24,6 +24,40 @@ export function HermesWorkerDockPanel() {
         <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           {dock.description}
         </p>
+      </div>
+
+      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-3">
+        {dock.postureSummary.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.value}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="border-b border-border bg-muted/10 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <PackageCheck className="h-4 w-4 text-primary" aria-hidden={true} />
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Authorized work packet path
+          </p>
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          {dock.workPacketStates.map((item) => (
+            <div key={item.label} className="rounded-lg border border-border bg-card p-3">
+              <p className="text-sm font-semibold">{item.label}</p>
+              <p className="mt-2 text-xs font-medium text-foreground">{item.state}</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {item.description}
+              </p>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="grid gap-3 p-4 lg:grid-cols-[0.9fr_1.1fr]">
@@ -52,6 +86,20 @@ export function HermesWorkerDockPanel() {
             </Link>
           ))}
         </div>
+      </div>
+
+      <div className="grid gap-3 border-t border-border bg-muted/10 p-4 md:grid-cols-3">
+        {dock.authorityBoundaries.map((boundary) => (
+          <div key={boundary.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {boundary.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{boundary.state}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {boundary.description}
+            </p>
+          </div>
+        ))}
       </div>
 
       <div className="flex items-start gap-2 border-t border-border px-4 py-3">
