@@ -40,6 +40,7 @@ Canonical production URL: `https://terragroq.vercel.app`
 | `/api/auth/readiness` | 200 | n/a | Auth readiness endpoint reachable. |
 | `/operator` | 200 | yes | Operator entry reachable. |
 | `/brain-council` | 200 | yes | Brain Council area reachable. |
+| Hermes Worker Dock | n/a | n/a | Native Worker Dock copy is scoped into Brain Council/Hermes preview surfaces; there is no standalone Hermes production route in this sequence. |
 | `/agent-forge` | 200 | yes | Agent Forge area reachable. |
 | `/projects` | 200 | yes | Projects area reachable. |
 | `/memory` | 200 | yes | Memory area reachable. |
@@ -89,16 +90,16 @@ Confirmed unchanged:
 - No production-write behavior
 - No manual deploy, release, or tag action
 
-## Validation Plan
+## Validation Results
 
-Required validation for this packet:
+Validation recorded for this packet:
 
-- Focused native-area shell tests
-- Full test suite
-- `npm run build`
-- Production route verification
-- Production security-header verification
-- Access Grant disabled endpoint verification
+- Focused native-area shell tests: 15 files passed, 81 tests passed
+- Full test suite: 83 files passed, 367 tests passed
+- `npm run build`: passed
+- Production route verification: passed
+- Production security-header verification: passed
+- Access Grant disabled endpoint verification: passed
 
 ## Known Limits
 
