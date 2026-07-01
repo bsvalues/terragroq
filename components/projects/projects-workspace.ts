@@ -11,13 +11,13 @@ export type WilliamOsProject = {
   nextRecommendedWork: string
 }
 
-export type ProjectsPosture = {
+export type ProjectsPostureSummaryItem = {
   label: string
   value: string
   description: string
 }
 
-export type ProjectCommandState = {
+export type ProjectsCommandState = {
   label: string
   state: string
   description: string
@@ -33,8 +33,8 @@ export type ProjectsWorkspace = {
   title: string
   eyebrow: string
   description: string
-  postureSummary: ProjectsPosture[]
-  commandStates: ProjectCommandState[]
+  postureSummary: ProjectsPostureSummaryItem[]
+  commandStates: ProjectsCommandState[]
   authorityBoundaries: ProjectsAuthorityBoundary[]
   projects: WilliamOsProject[]
   links: {
