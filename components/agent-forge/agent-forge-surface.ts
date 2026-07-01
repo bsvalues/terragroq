@@ -4,10 +4,31 @@ export type AgentForgeArea = {
   description: string
 }
 
+export type AgentForgePosture = {
+  label: string
+  value: string
+  description: string
+}
+
+export type AgentForgeCapabilityState = {
+  label: string
+  state: string
+  description: string
+}
+
+export type AgentForgeAuthorityBoundary = {
+  label: string
+  state: string
+  description: string
+}
+
 export type AgentForgeSurface = {
   title: string
   eyebrow: string
   description: string
+  postureSummary: AgentForgePosture[]
+  capabilityStates: AgentForgeCapabilityState[]
+  authorityBoundaries: AgentForgeAuthorityBoundary[]
   areas: AgentForgeArea[]
   links: {
     label: string
@@ -29,9 +50,63 @@ export type AgentForgeSurface = {
 export function getAgentForgeSurface(): AgentForgeSurface {
   return {
     title: "Agent Forge",
-    eyebrow: "Capability Preparation Layer",
+    eyebrow: "WilliamOS Capability Forge",
     description:
-      "Agent Forge is the WilliamOS area for preparing skill definitions, worker packets, evidence contracts, and execution proposals before any authority is requested.",
+      "Agent Forge is the native WilliamOS area for preparing, reviewing, and quarantining proposed capabilities before they can ever become authorized worker skills.",
+    postureSummary: [
+      {
+        label: "Prepared",
+        value: "not active",
+        description:
+          "Capabilities can be shaped into proposals, but no skill runtime is present or invoked.",
+      },
+      {
+        label: "Quarantined",
+        value: "review required",
+        description:
+          "Skill-like outputs remain held until evidence, scope, and authority boundaries are proven.",
+      },
+      {
+        label: "Authority",
+        value: "Primary required",
+        description:
+          "Promotion from proposal to worker skill requires explicit owner approval and a Work Order.",
+      },
+    ],
+    capabilityStates: [
+      {
+        label: "Proposal",
+        state: "Draftable",
+        description: "A capability can be described as scope, risk, and expected evidence.",
+      },
+      {
+        label: "Quarantine",
+        state: "Held",
+        description: "Skill definitions remain provenance-only until review and ratification.",
+      },
+      {
+        label: "Activation review",
+        state: "Blocked",
+        description: "No capability can run until authority, evidence, and runtime gates pass.",
+      },
+    ],
+    authorityBoundaries: [
+      {
+        label: "Skill execution",
+        state: "Disabled",
+        description: "Agent Forge cannot invoke skills, add tools, or start worker behavior.",
+      },
+      {
+        label: "Hermes",
+        state: "Not activated",
+        description: "Prepared capabilities do not activate Hermes or dispatch Worker Dock packets.",
+      },
+      {
+        label: "Production",
+        state: "No write",
+        description: "Capability review cannot mutate data, deploy, or change production posture.",
+      },
+    ],
     areas: [
       {
         label: "Skill Registry",
