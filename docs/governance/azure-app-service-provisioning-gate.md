@@ -107,7 +107,7 @@ Suggested tags:
 
 Region selection should consider:
 
-- owner/county alignment
+- owner, county, or country alignment
 - latency to expected operators
 - regional availability
 - budget ceiling
