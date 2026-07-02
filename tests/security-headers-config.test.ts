@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest"
 import nextConfig from "@/next.config"
 
 describe("security header baseline config", () => {
+  it("emits a standalone server artifact for Azure App Service proof packaging", () => {
+    expect(nextConfig.output).toBe("standalone")
+  })
+
   it("disables the Next.js powered-by header", () => {
     expect(nextConfig.poweredByHeader).toBe(false)
   })
