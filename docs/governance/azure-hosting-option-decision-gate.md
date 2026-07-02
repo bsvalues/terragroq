@@ -162,8 +162,8 @@ Provenance:
 
 | Input | Required | Owner Answer |
 | --- | --- | --- |
-| Azure selected? | yes/no | Pending |
-| Hosting option | App Service / Container Apps / VM / deferred / no | Pending |
+| Azure selected? | YES / NO | Pending |
+| Hosting option | App Service / Container Apps / VM / deferred Azure proof / no Azure proof | Pending |
 | Azure subscription/tenant available? | before proof | Pending |
 | Budget ceiling | before proof | Pending |
 | Resource group strategy | before proof | Pending |
@@ -229,7 +229,7 @@ If Azure is rejected:
 ```text
 OWNER_DECISION:
 Azure selected: YES/NO
-Hosting option: App Service / Container Apps / VM / deferred / no Azure
+Hosting option: App Service / Container Apps / VM / deferred Azure proof / no Azure proof
 Budget ceiling:
 Azure subscription/tenant posture:
 Resource group posture:
