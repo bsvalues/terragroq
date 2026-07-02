@@ -88,7 +88,18 @@ if (Test-Path $pnpmStore) {
 
 Get-ChildItem -Path $ArtifactRoot -Recurse -Force -Filter ".env*" | Remove-Item -Force
 
-Compress-Archive -Path (Join-Path $ArtifactRoot "*") -DestinationPath $ZipPath -Force
+$artifactPnpmStore = Join-Path $ArtifactRoot "node_modules\.pnpm"
+Remove-Item -LiteralPath $artifactPnpmStore -Recurse -Force -ErrorAction SilentlyContinue
+
+Push-Location $ArtifactRoot
+try {
+  & tar.exe -a -cf $ZipPath *
+  if ($LASTEXITCODE -ne 0) {
+    throw "tar.exe failed creating $ZipPath with exit code $LASTEXITCODE"
+  }
+} finally {
+  Pop-Location
+}
 
 $hash = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash
 $size = (Get-Item $ZipPath).Length
@@ -104,5 +115,6 @@ $envFiles = @(Get-ChildItem -Path $ArtifactRoot -Recurse -Force -Filter ".env*")
   staticAssets = Test-Path (Join-Path $ArtifactRoot ".next\static")
   styledJsx = Test-Path (Join-Path $ArtifactRoot "node_modules\styled-jsx")
   swcHelpers = Test-Path (Join-Path $ArtifactRoot "node_modules\@swc\helpers")
+  pnpmStore = Test-Path (Join-Path $ArtifactRoot "node_modules\.pnpm")
   envFiles = $envFiles
 } | ConvertTo-Json
