@@ -357,6 +357,32 @@ Do not commit backups.
 
 ## 6. Restore Procedure
 
+Prefer a disposable restore drill before any live recovery operation.
+
+Disposable drill target:
+
+```text
+temporary PostgreSQL container
+no host port binding
+backup mounted read-only or from the operator-local backup folder
+removed after verification
+```
+
+Disposable restore drill outline:
+
+```powershell
+cd C:\Users\bsval\williamos-local-runtime
+$backupFile = "williamos-local-YYYYMMDD-HHMMSS.dump"
+$container = "williamos-restore-drill-YYYYMMDD-HHMMSS"
+docker run -d --name $container --network none -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=williamos_restore_drill -v "C:\Users\bsval\williamos-local-runtime\backups:/backup" postgres:16-bookworm
+docker exec $container pg_isready -U postgres -d williamos_restore_drill
+docker exec $container pg_restore -U postgres -d williamos_restore_drill "/backup/$backupFile"
+docker exec $container psql -U postgres -d williamos_restore_drill -c "select current_database();"
+docker rm -f $container
+```
+
+Use a live restore only after the Primary Operator explicitly approves replacing or rebuilding the local WilliamOS proof database.
+
 Restore is destructive to the selected local WilliamOS database. Confirm the target and backup before proceeding.
 
 Prerequisites:
