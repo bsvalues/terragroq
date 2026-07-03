@@ -63,6 +63,7 @@ describe("Local operator surface", () => {
   it("shows validated manual wrapper commands as read-only PowerShell references", () => {
     const surface = getLocalOperatorSurface()
     const commands = new Map(surface.commandReference.map((item) => [item.label, item.command]))
+    const descriptions = surface.commandReference.map((item) => item.description).join(" ")
 
     expect(commands.get("Status")).toBe("scripts/local/williamos-omen-status.ps1")
     expect(commands.get("Backup check")).toBe("scripts/local/williamos-omen-backup-check.ps1")
@@ -70,6 +71,12 @@ describe("Local operator surface", () => {
     expect(commands.get("Stop")).toBe("scripts/local/williamos-omen-stop.ps1")
     expect(commands.get("Help")).toBe("-Help")
     expect(surface.description).toContain("does not execute local commands")
+    expect(descriptions).toContain("Reports Postgres proof")
+    expect(descriptions).toContain("latest local backup reminder")
+    expect(descriptions).toContain("Operator-run PowerShell helper")
+    expect(descriptions).toContain("stopping and removing only the app proof container")
+    expect(surface.safety.addsShellEndpoint).toBe(false)
+    expect(surface.safety.mutatesContainers).toBe(false)
   })
 
   it("shows backup posture guidance without automation or secret disclosure", () => {
