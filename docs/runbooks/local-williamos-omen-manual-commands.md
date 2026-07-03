@@ -1,0 +1,183 @@
+# Local WilliamOS OMEN Manual Command Set
+
+## Purpose
+
+This is the canonical manual command set for WilliamOS on the HP OMEN Phase 1 host.
+
+It keeps WilliamOS manual-only. It does not authorize service registration, scheduled tasks, automatic startup, LAN exposure, firewall changes, DNS changes, DB/schema migration, cloud changes, or autonomy activation.
+
+## Pre-Start Checks
+
+Confirm repository state:
+
+```powershell
+git status --short
+```
+
+Confirm Docker is available:
+
+```powershell
+docker version
+docker compose version
+```
+
+Confirm operator-local env exists without printing it:
+
+```powershell
+Test-Path -LiteralPath "C:\Users\bsval\williamos-local-runtime\app-container.env"
+```
+
+## PostgreSQL Proof Status
+
+```powershell
+docker inspect -f '{{.State.Health.Status}}' williamos-postgres-proof
+docker ps --filter name=williamos-postgres-proof --format "{{.Names}} {{.Status}} {{.Ports}}"
+```
+
+Expected:
+
+```text
+healthy
+127.0.0.1:15432 -> 5432
+```
+
+## Port Checks
+
+```powershell
+Get-NetTCPConnection -LocalPort 3100,3101 -State Listen -ErrorAction SilentlyContinue
+```
+
+Expected before start:
+
+```text
+3100: not listening
+3101: not listening
+```
+
+Stop if both ports are unavailable.
+
+## Build App Image
+
+```powershell
+docker build -f Dockerfile.local-app-proof -t williamos-app-proof:omen .
+```
+
+Do not change packages or dependencies to make this pass without a separate owner-approved work order.
+
+## Manual App Run
+
+Preferred:
+
+```powershell
+docker run -d --name williamos-omen-app-proof --env-file C:\Users\bsval\williamos-local-runtime\app-container.env -p 127.0.0.1:3100:3000 williamos-app-proof:omen
+```
+
+Fallback if `3100` is occupied and `3101` is clear:
+
+```powershell
+docker run -d --name williamos-omen-app-proof --env-file C:\Users\bsval\williamos-local-runtime\app-container.env -p 127.0.0.1:3101:3000 williamos-app-proof:omen
+```
+
+Blocked:
+
+```text
+0.0.0.0 binding
+host port 3000
+LAN/public exposure
+```
+
+## Health / Readiness Checks
+
+For the preferred port:
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:3100/ -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:3100/goal-console -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:3100/api/health -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:3100/api/auth/readiness -UseBasicParsing
+```
+
+Expected:
+
+```text
+/: 200
+/goal-console: 200
+/api/health: 200
+/api/auth/readiness: 200
+```
+
+## Shell Route Check
+
+Minimum shell route:
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:3100/goal-console -UseBasicParsing
+```
+
+Use `3101` only if the fallback port was used.
+
+## Manual Stop
+
+```powershell
+docker stop williamos-omen-app-proof
+```
+
+## Container Remove
+
+```powershell
+docker rm williamos-omen-app-proof
+```
+
+Forced cleanup only if needed:
+
+```powershell
+docker rm -f williamos-omen-app-proof
+```
+
+## Port Cleanup Verification
+
+```powershell
+Get-NetTCPConnection -LocalPort 3100,3101 -State Listen -ErrorAction SilentlyContinue
+```
+
+Expected after cleanup:
+
+```text
+3100: not listening
+3101: not listening
+```
+
+## Common Failure Handling
+
+### Port Conflict
+
+Use `3101` only if `3100` is occupied. Stop if both are occupied.
+
+### Missing Env
+
+Do not print secrets. Confirm only the operator-local env path exists.
+
+### Unhealthy Postgres
+
+Do not run migrations or repairs automatically. Stop app proof and record evidence.
+
+### Build Failure
+
+Do not install packages or change dependencies without explicit approval.
+
+### Readiness Failure
+
+Inspect non-secret logs, stop/remove app container, and document the failure category.
+
+## Safety Boundary
+
+```text
+SERVICE_REGISTERED: false
+SCHEDULE_CREATED: false
+AUTOMATIC_STARTUP_ENABLED: false
+LAN_EXPOSURE_ENABLED: false
+PUBLIC_EXPOSURE_ENABLED: false
+DB_SCHEMA_CHANGED: false
+SECRETS_DISCLOSED: false
+HERMES_MCP_AUTONOMY_CHANGED: false
+```
