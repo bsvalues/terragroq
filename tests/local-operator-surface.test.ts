@@ -44,4 +44,16 @@ describe("Local operator surface", () => {
       enablesAutonomy: false,
     })
   })
+
+  it("shows validated manual wrapper commands as read-only PowerShell references", () => {
+    const surface = getLocalOperatorSurface()
+    const commands = new Map(surface.commandReference.map((item) => [item.label, item.command]))
+
+    expect(commands.get("Status")).toBe("scripts/local/williamos-omen-status.ps1")
+    expect(commands.get("Backup check")).toBe("scripts/local/williamos-omen-backup-check.ps1")
+    expect(commands.get("Start")).toBe("scripts/local/williamos-omen-start.ps1")
+    expect(commands.get("Stop")).toBe("scripts/local/williamos-omen-stop.ps1")
+    expect(commands.get("Help")).toBe("-Help")
+    expect(surface.description).toContain("does not execute local commands")
+  })
 })
