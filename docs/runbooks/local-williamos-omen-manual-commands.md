@@ -55,6 +55,14 @@ Stop helper:
 
 The stop helper stops and removes only `williamos-omen-app-proof`, then verifies ports `3100` and `3101`. It does not touch `williamos-postgres-proof`, TerraFusion containers, or unrelated local Postgres processes.
 
+Backup check helper:
+
+```powershell
+.\scripts\local\williamos-omen-backup-check.ps1
+```
+
+The backup check helper reports whether the operator-local backup folder exists and shows the latest backup filename and timestamp if present. It does not create backups, schedules, cloud sync, or secret output.
+
 ## Pre-Start Checks
 
 Confirm repository state:
