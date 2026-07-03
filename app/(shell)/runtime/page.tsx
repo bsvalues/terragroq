@@ -7,6 +7,7 @@ import { RuntimeProbe } from "@/components/runtime/runtime-probe"
 import { ReadinessNativeAreaPanel } from "@/components/runtime/readiness-native-area-panel"
 import { SystemsStatusPanel } from "@/components/systems/systems-status-panel"
 import { LocalOperatorPanel } from "@/components/local/local-operator-panel"
+import { LocalRuntimeLiveStatusPanel } from "@/components/local/local-runtime-live-status-panel"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
 
 export default async function RuntimePage() {
@@ -29,6 +30,7 @@ export default async function RuntimePage() {
       />
       <div className="flex flex-col gap-6 p-6">
         <SystemsStatusPanel />
+        <LocalRuntimeLiveStatusPanel />
         <LocalOperatorPanel />
         <ReadinessNativeAreaPanel />
 
