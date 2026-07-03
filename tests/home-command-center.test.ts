@@ -85,6 +85,7 @@ describe("WilliamOS Home Command Center", () => {
       "Blocked Decisions",
       "Evidence Required",
       "Systems",
+      "Local Operations",
       "Council",
       "Worker Dock",
       "Agent Forge",
@@ -105,6 +106,10 @@ describe("WilliamOS Home Command Center", () => {
     expect(home.statusCards.find((card) => card.label === "Active Project")).toMatchObject({
       value: "TerraFusion OS",
       href: "/projects",
+    })
+    expect(home.statusCards.find((card) => card.label === "Local Operations")).toMatchObject({
+      value: "Manual-ready",
+      href: "/runtime",
     })
   })
 

@@ -1,4 +1,5 @@
 import type { DashboardStats } from "@/components/dashboard/operator-start"
+import { getLocalOperatorSurface } from "@/components/local/local-operator-surface"
 
 export type HomeStatusCard = {
   label: string
@@ -56,6 +57,7 @@ export type HomeCommandCenter = {
 }
 
 export function getHomeCommandCenter(stats: DashboardStats): HomeCommandCenter {
+  const localOperatorSurface = getLocalOperatorSurface()
   const blockedWork =
     stats.openWork > 0
       ? `${stats.openWork} active`
@@ -147,6 +149,7 @@ export function getHomeCommandCenter(stats: DashboardStats): HomeCommandCenter {
         description: "Health and auth readiness remain visible without changing configuration.",
         href: "/runtime",
       },
+      localOperatorSurface.homeCard,
       {
         label: "Council",
         value: "Advisory",
