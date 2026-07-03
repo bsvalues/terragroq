@@ -6,13 +6,28 @@ describe("Local operator surface", () => {
     const surface = getLocalOperatorSurface()
 
     expect(surface.title).toBe("Local Operations")
+    expect(surface.eyebrow).toBe("OMEN Manual Runtime")
     expect(surface.phaseHost).toBe("HP OMEN Gaming Laptop 16-ap0xxx")
+    expect(surface.description).toContain("Read-only guidance")
+    expect(surface.description).toContain("does not execute local commands")
     expect(surface.posture).toEqual([
       expect.objectContaining({ label: "Operating mode", value: "Manual-only" }),
       expect.objectContaining({ label: "Network posture", value: "Localhost-only" }),
       expect.objectContaining({ label: "Persistence", value: "Disabled" }),
       expect.objectContaining({ label: "Autonomy", value: "Disabled" }),
     ])
+  })
+
+  it("provides Home-card navigation into the runtime surface", () => {
+    const surface = getLocalOperatorSurface()
+
+    expect(surface.homeCard).toEqual({
+      label: "Local Operations",
+      value: "Manual-ready",
+      description: "OMEN local operation is wrapper-supported, localhost-only, and operator-triggered.",
+      href: "/runtime",
+    })
+    expect(surface.safety.executesCommands).toBe(false)
   })
 
   it("describes expected local runtime containers and ports without querying the host", () => {
