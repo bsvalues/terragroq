@@ -27,6 +27,42 @@ Confirm operator-local env exists without printing it:
 Test-Path -LiteralPath "C:\Users\bsval\williamos-local-runtime\app-container.env"
 ```
 
+## Backup Reminder
+
+Before meaningful local operation, take or confirm a recent WilliamOS PostgreSQL backup.
+
+Meaningful local operation includes:
+
+- work that changes local data
+- extended manual operation
+- troubleshooting that may alter runtime state
+- any future persistence decision or proof
+- any restore, upgrade, or migration rehearsal
+
+Backup location:
+
+```text
+C:\Users\bsval\williamos-local-runtime\backups
+```
+
+Naming convention:
+
+```text
+williamos-omen-manual-backup-YYYYMMDD-HHMMSS.dump
+```
+
+Do not back up into the repository. Do not print or commit credentials, `.env` files, database URLs, or secret-bearing logs.
+
+Minimum reminder checklist:
+
+```text
+backup exists in operator-local backup folder
+backup timestamp is appropriate for the planned operation
+backup is outside the repository
+restore expectation is understood before risky work
+TerraFusion PostgreSQL is not used or modified
+```
+
 ## PostgreSQL Proof Status
 
 ```powershell
