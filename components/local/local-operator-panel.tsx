@@ -71,6 +71,27 @@ export function LocalOperatorPanel() {
         </div>
       </div>
 
+      <div className="border-b border-border bg-muted/10 p-4">
+        <div className="mb-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Safety Warnings
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            These boundaries keep the OMEN proof manual, local, and reversible.
+          </p>
+        </div>
+        <ul className="grid gap-2 md:grid-cols-2">
+          {surface.safetyWarnings.map((warning) => (
+            <li
+              key={warning}
+              className="rounded-lg border border-border bg-background px-3 py-2 text-xs leading-relaxed text-muted-foreground"
+            >
+              {warning}
+            </li>
+          ))}
+        </ul>
+      </div>
+
       <div className="border-b border-border p-4">
         <div className="mb-3">
           <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">

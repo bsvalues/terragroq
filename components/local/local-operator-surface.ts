@@ -150,7 +150,16 @@ export function getLocalOperatorSurface(): LocalOperatorSurface {
           "WO-LOCAL-010 proved backup/restore once; future important changes should preserve that discipline.",
       },
     ],
-    safetyWarnings: [],
+    safetyWarnings: [
+      "Manual-only mode is intentional; start and stop WilliamOS from PowerShell.",
+      "Do not expose LAN or public access from this lane.",
+      "Do not bind WilliamOS to 0.0.0.0.",
+      "Do not use host port 3000 for the OMEN proof app.",
+      "Do not enable services, startup items, automatic restart, or scheduled tasks.",
+      "Do not implement persistence without a future owner decision.",
+      "Do not disclose or commit local env files, database URLs, or secrets.",
+      "Do not touch TerraFusion Postgres from this lane.",
+    ],
     homeCard: {
       label: "Local Operations",
       value: "Manual-ready",

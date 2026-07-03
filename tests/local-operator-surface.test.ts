@@ -70,4 +70,22 @@ describe("Local operator surface", () => {
     expect(surface.safety.createsSchedule).toBe(false)
     expect(surface.safety.disclosesSecrets).toBe(false)
   })
+
+  it("states local runtime safety warnings without enabling persistence or LAN exposure", () => {
+    const surface = getLocalOperatorSurface()
+    const warningText = surface.safetyWarnings.join(" ")
+
+    expect(warningText).toContain("Manual-only mode is intentional")
+    expect(warningText).toContain("Do not expose LAN or public access")
+    expect(warningText).toContain("Do not bind WilliamOS to 0.0.0.0")
+    expect(warningText).toContain("Do not use host port 3000")
+    expect(warningText).toContain("Do not enable services")
+    expect(warningText).toContain("Do not implement persistence")
+    expect(warningText).toContain("Do not disclose or commit local env files")
+    expect(warningText).toContain("Do not touch TerraFusion Postgres")
+    expect(surface.safety.registersService).toBe(false)
+    expect(surface.safety.createsSchedule).toBe(false)
+    expect(surface.safety.enablesLan).toBe(false)
+    expect(surface.safety.executesCommands).toBe(false)
+  })
 })
