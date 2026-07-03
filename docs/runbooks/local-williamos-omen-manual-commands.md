@@ -39,6 +39,14 @@ Status helper:
 
 The status helper is read-only. It reports container posture, ports, expected localhost URLs, backup directory presence, and manual-only safety posture. It does not start or stop containers.
 
+Start helper:
+
+```powershell
+.\scripts\local\williamos-omen-start.ps1
+```
+
+The start helper starts only `williamos-omen-app-proof`. It requires the operator-local env file and existing `williamos-app-proof:omen` image. It binds `127.0.0.1:3100 -> 3000`, or `127.0.0.1:3101 -> 3000` only if `3100` is occupied. It stops if both ports are unavailable.
+
 ## Pre-Start Checks
 
 Confirm repository state:
