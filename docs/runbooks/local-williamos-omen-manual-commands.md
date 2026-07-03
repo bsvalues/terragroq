@@ -31,6 +31,14 @@ Wrappers must remain operator-triggered. They must not create services, schedule
 
 Wrappers must not print secret values. They may report whether the operator-local env file exists, but not its contents.
 
+Status helper:
+
+```powershell
+.\scripts\local\williamos-omen-status.ps1
+```
+
+The status helper is read-only. It reports container posture, ports, expected localhost URLs, backup directory presence, and manual-only safety posture. It does not start or stop containers.
+
 ## Pre-Start Checks
 
 Confirm repository state:
