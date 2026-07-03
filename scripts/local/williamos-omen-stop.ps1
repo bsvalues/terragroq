@@ -1,7 +1,19 @@
+param(
+    [switch]$Help
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $containerName = "williamos-omen-app-proof"
+
+if ($Help) {
+    Write-Output "USAGE: .\scripts\local\williamos-omen-stop.ps1 [-Help]"
+    Write-Output "PURPOSE: Stop and remove only the OMEN WilliamOS app proof container."
+    Write-Output "TARGET: williamos-omen-app-proof"
+    Write-Output "SAFETY: does not touch williamos-postgres-proof, TerraFusion, services, schedules, or LAN exposure"
+    exit 0
+}
 
 function Get-ContainerLine {
     param([string]$Name)

@@ -63,6 +63,15 @@ Backup check helper:
 
 The backup check helper reports whether the operator-local backup folder exists and shows the latest backup filename and timestamp if present. It does not create backups, schedules, cloud sync, or secret output.
 
+Each wrapper supports usage output:
+
+```powershell
+.\scripts\local\williamos-omen-status.ps1 -Help
+.\scripts\local\williamos-omen-start.ps1 -Help
+.\scripts\local\williamos-omen-stop.ps1 -Help
+.\scripts\local\williamos-omen-backup-check.ps1 -Help
+```
+
 ## Pre-Start Checks
 
 Confirm repository state:

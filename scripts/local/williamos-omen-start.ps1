@@ -1,3 +1,7 @@
+param(
+    [switch]$Help
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -7,6 +11,15 @@ $envFile = "C:\Users\bsval\williamos-local-runtime\app-container.env"
 $internalPort = 3000
 $preferredPort = 3100
 $fallbackPort = 3101
+
+if ($Help) {
+    Write-Output "USAGE: .\scripts\local\williamos-omen-start.ps1 [-Help]"
+    Write-Output "PURPOSE: Manually start the OMEN WilliamOS app proof container."
+    Write-Output "BINDING: 127.0.0.1:3100 -> 3000, fallback 127.0.0.1:3101 -> 3000."
+    Write-Output "REQUIRES: existing williamos-app-proof:omen image and operator-local app-container.env."
+    Write-Output "SAFETY: operator-triggered / no service / no schedule / no LAN exposure / no secrets printed"
+    exit 0
+}
 
 function Test-PortClear {
     param([int]$Port)
