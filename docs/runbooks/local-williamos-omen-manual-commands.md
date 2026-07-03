@@ -6,6 +6,31 @@ This is the canonical manual command set for WilliamOS on the HP OMEN Phase 1 ho
 
 It keeps WilliamOS manual-only. It does not authorize service registration, scheduled tasks, automatic startup, LAN exposure, firewall changes, DNS changes, DB/schema migration, cloud changes, or autonomy activation.
 
+## Manual Wrapper Pattern
+
+Thin local wrappers may live under:
+
+```text
+scripts/local/
+```
+
+Naming convention:
+
+```text
+williamos-omen-<verb>.ps1
+```
+
+Approved wrapper verbs:
+
+- `status`
+- `start`
+- `stop`
+- `backup-check`
+
+Wrappers must remain operator-triggered. They must not create services, scheduled tasks, startup entries, firewall rules, DNS/router changes, LAN bindings, cloud changes, DB/schema migrations, or autonomous/background workers.
+
+Wrappers must not print secret values. They may report whether the operator-local env file exists, but not its contents.
+
 ## Pre-Start Checks
 
 Confirm repository state:
