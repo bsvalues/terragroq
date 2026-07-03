@@ -49,6 +49,13 @@ PORT_CHECKS_ADDED: false
 SECRETS_DISCLOSED: false
 ```
 
+## Preflight Review
+
+The reported `PORT_15432` inconsistency does not block this first slice because the
+implemented status route treats Postgres proof as documented-only posture. It does
+not inspect Docker, probe port `15432`, connect to Postgres, read database
+contents, or touch TerraFusion Postgres.
+
 ## Validation
 
 ```text
