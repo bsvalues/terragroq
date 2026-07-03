@@ -1,0 +1,59 @@
+import { Laptop, ShieldCheck } from "lucide-react"
+import { getLocalOperatorSurface } from "@/components/local/local-operator-surface"
+
+export function LocalOperatorPanel() {
+  const surface = getLocalOperatorSurface()
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <div className="border-b border-border bg-muted/30 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Laptop className="h-4 w-4 text-primary" aria-hidden={true} />
+          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+            {surface.eyebrow}
+          </p>
+        </div>
+        <h2 className="mt-2 text-lg font-semibold tracking-tight">{surface.title}</h2>
+        <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+          {surface.description}
+        </p>
+      </div>
+
+      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-4">
+        {surface.posture.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.value}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 p-4 md:grid-cols-2">
+        {surface.runtimeStatus.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.value}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="border-t border-border px-4 py-3">
+        <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground">
+          <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden={true} />
+          Read-only guidance. No local command execution, shell endpoint, container mutation,
+          service registration, schedule, LAN exposure, secret disclosure, or autonomy.
+        </div>
+      </div>
+    </section>
+  )
+}
