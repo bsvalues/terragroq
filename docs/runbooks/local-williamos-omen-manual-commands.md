@@ -47,6 +47,14 @@ Start helper:
 
 The start helper starts only `williamos-omen-app-proof`. It requires the operator-local env file and existing `williamos-app-proof:omen` image. It binds `127.0.0.1:3100 -> 3000`, or `127.0.0.1:3101 -> 3000` only if `3100` is occupied. It stops if both ports are unavailable.
 
+Stop helper:
+
+```powershell
+.\scripts\local\williamos-omen-stop.ps1
+```
+
+The stop helper stops and removes only `williamos-omen-app-proof`, then verifies ports `3100` and `3101`. It does not touch `williamos-postgres-proof`, TerraFusion containers, or unrelated local Postgres processes.
+
 ## Pre-Start Checks
 
 Confirm repository state:
