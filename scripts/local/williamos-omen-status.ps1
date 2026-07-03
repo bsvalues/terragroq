@@ -1,8 +1,20 @@
+param(
+    [switch]$Help
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $backupDir = "C:\Users\bsval\williamos-local-runtime\backups"
 $envFile = "C:\Users\bsval\williamos-local-runtime\app-container.env"
+
+if ($Help) {
+    Write-Output "USAGE: .\scripts\local\williamos-omen-status.ps1 [-Help]"
+    Write-Output "PURPOSE: Report OMEN local WilliamOS posture without starting or stopping containers."
+    Write-Output "OUTPUT: Postgres proof, app container, ports, env-file presence, backup directory, expected localhost URLs."
+    Write-Output "SAFETY: read-only / localhost-only / no persistence / no schedules / no secrets printed"
+    exit 0
+}
 
 function Get-ContainerLine {
     param([string]$Name)

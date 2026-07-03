@@ -1,7 +1,19 @@
+param(
+    [switch]$Help
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $backupDir = "C:\Users\bsval\williamos-local-runtime\backups"
+
+if ($Help) {
+    Write-Output "USAGE: .\scripts\local\williamos-omen-backup-check.ps1 [-Help]"
+    Write-Output "PURPOSE: Check for operator-local WilliamOS backups and remind before meaningful local operation."
+    Write-Output "BACKUP_DIR: C:\Users\bsval\williamos-local-runtime\backups"
+    Write-Output "SAFETY: no automatic backup / no schedule / no cloud sync / no secrets printed"
+    exit 0
+}
 
 Write-Output "WILLIAMOS_OMEN_BACKUP_CHECK"
 Write-Output "MANUAL_ONLY: true"
