@@ -95,7 +95,37 @@ export function getLocalOperatorSurface(): LocalOperatorSurface {
         description: "Host port 3000 and 0.0.0.0 binding remain blocked.",
       },
     ],
-    commandReference: [],
+    commandReference: [
+      {
+        label: "Status",
+        command: "scripts/local/williamos-omen-status.ps1",
+        description:
+          "Reports Postgres proof, app container, ports, backup directory, and manual-only posture.",
+      },
+      {
+        label: "Backup check",
+        command: "scripts/local/williamos-omen-backup-check.ps1",
+        description:
+          "Shows backup directory posture and latest local backup reminder without creating backups.",
+      },
+      {
+        label: "Start",
+        command: "scripts/local/williamos-omen-start.ps1",
+        description:
+          "Operator-run PowerShell helper for starting the app proof container on localhost only.",
+      },
+      {
+        label: "Stop",
+        command: "scripts/local/williamos-omen-stop.ps1",
+        description:
+          "Operator-run PowerShell helper for stopping and removing only the app proof container.",
+      },
+      {
+        label: "Help",
+        command: "-Help",
+        description: "Supported by all OMEN manual wrappers for usage and safety output.",
+      },
+    ],
     backupGuidance: [],
     safetyWarnings: [],
     homeCard: {

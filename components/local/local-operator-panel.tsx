@@ -33,7 +33,7 @@ export function LocalOperatorPanel() {
         ))}
       </div>
 
-      <div className="grid gap-3 p-4 md:grid-cols-2">
+      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-2">
         {surface.runtimeStatus.map((item) => (
           <div key={item.label} className="rounded-lg border border-border bg-background p-3">
             <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -45,6 +45,30 @@ export function LocalOperatorPanel() {
             </p>
           </div>
         ))}
+      </div>
+
+      <div className="border-b border-border p-4">
+        <div className="mb-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Manual Command Reference
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Commands are operator-run in PowerShell. WilliamOS displays these commands; it does not execute them.
+          </p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {surface.commandReference.map((item) => (
+            <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+              <p className="text-sm font-semibold">{item.label}</p>
+              <code className="mt-2 block rounded-md border border-border bg-muted/40 px-2 py-1 font-mono text-xs text-muted-foreground">
+                {item.command}
+              </code>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {item.description}
+              </p>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="border-t border-border px-4 py-3">
