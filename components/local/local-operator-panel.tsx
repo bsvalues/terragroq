@@ -71,6 +71,34 @@ export function LocalOperatorPanel() {
         </div>
       </div>
 
+      <div className="border-b border-border p-4">
+        <div className="mb-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Backup Posture
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Backup status is guidance only. WilliamOS does not create backups, schedules, or cloud sync from this surface.
+          </p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {surface.backupGuidance.map((item) => (
+            <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {item.label}
+              </p>
+              <p className="mt-2 text-sm font-semibold">{item.value}</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {item.description}
+              </p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          Secret exclusion: do not commit or display env files, database URLs, Better Auth secrets,
+          access grant secrets, or secret-bearing logs.
+        </p>
+      </div>
+
       <div className="border-t border-border px-4 py-3">
         <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground">
           <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden={true} />

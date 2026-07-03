@@ -56,4 +56,18 @@ describe("Local operator surface", () => {
     expect(commands.get("Help")).toBe("-Help")
     expect(surface.description).toContain("does not execute local commands")
   })
+
+  it("shows backup posture guidance without automation or secret disclosure", () => {
+    const surface = getLocalOperatorSurface()
+    const backup = new Map(surface.backupGuidance.map((item) => [item.label, item.value]))
+
+    expect(backup.get("Manual backup expectation")).toBe("Before meaningful local work")
+    expect(backup.get("Backup location convention")).toContain("williamos-local-runtime")
+    expect(backup.get("Latest known backup example")).toBe(
+      "williamos-omen-manual-backup-20260703-060207.dump",
+    )
+    expect(backup.get("Restore drill reminder")).toBe("Backup is trusted after restore proof")
+    expect(surface.safety.createsSchedule).toBe(false)
+    expect(surface.safety.disclosesSecrets).toBe(false)
+  })
 })
