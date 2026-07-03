@@ -126,7 +126,30 @@ export function getLocalOperatorSurface(): LocalOperatorSurface {
         description: "Supported by all OMEN manual wrappers for usage and safety output.",
       },
     ],
-    backupGuidance: [],
+    backupGuidance: [
+      {
+        label: "Manual backup expectation",
+        value: "Before meaningful local work",
+        description:
+          "The operator should confirm or create a local PostgreSQL backup before data-changing work, restore drills, or future persistence decisions.",
+      },
+      {
+        label: "Backup location convention",
+        value: "C:\\Users\\bsval\\williamos-local-runtime\\backups",
+        description: "Backups stay operator-local and outside the repository.",
+      },
+      {
+        label: "Latest known backup example",
+        value: "williamos-omen-manual-backup-20260703-060207.dump",
+        description: "Documented proof backup from the OMEN local operations lane.",
+      },
+      {
+        label: "Restore drill reminder",
+        value: "Backup is trusted after restore proof",
+        description:
+          "WO-LOCAL-010 proved backup/restore once; future important changes should preserve that discipline.",
+      },
+    ],
     safetyWarnings: [],
     homeCard: {
       label: "Local Operations",
