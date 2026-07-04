@@ -1,5 +1,6 @@
 export type LocalRuntimeCheckState = "ready" | "stopped" | "unknown" | "degraded" | "stale"
 export type LocalRuntimeCheckHealth = "pass" | "fail" | "unknown"
+export type LocalRuntimeLoopbackContext = "host-loopback"
 
 export type LocalRuntimeHttpTarget = {
   label: "root" | "runtime" | "goalConsole" | "health" | "readiness"
@@ -25,6 +26,20 @@ export type LocalRuntimeStatus = {
   lanExposureEnabled: false
   checkedAt: string
   checks: {
+    statusRoute: {
+      state: "ready"
+      source: "this request"
+      note: string
+    }
+    appHttp: {
+      state: LocalRuntimeCheckState
+      context: LocalRuntimeLoopbackContext
+      url: "http://127.0.0.1:3100" | "http://127.0.0.1:3101"
+      health: LocalRuntimeCheckHealth
+      readiness: LocalRuntimeCheckHealth
+      note: string
+      routes: LocalRuntimeHttpCheck[]
+    }
     app: {
       state: LocalRuntimeCheckState
       url: "http://127.0.0.1:3100" | "http://127.0.0.1:3101"
@@ -128,10 +143,16 @@ export const LOCAL_RUNTIME_STATUS_SEMANTICS: LocalRuntimeStatus["semantics"] = {
   sourceModel: "static posture + localhost HTTP GET checks",
   stateModel: LOCAL_RUNTIME_STATE_MODEL,
   containerizedProofNote:
-    "When this status route runs inside the OMEN app proof container, 127.0.0.1 checks describe that container process namespace. A 200 response from this route proves the refreshed image serves the API; the app check may still report stopped or degraded if host-bound ports are outside that namespace.",
+    "WilliamOS status route is live when this handler responds. Host-loopback checks may show unknown, stopped, or degraded when viewed from inside the proof container because 127.0.0.1 is evaluated from that process namespace.",
   controlBoundary:
     "Read-only status only. No command execution, Docker metadata, backup scanning, port scanning, persistence, LAN exposure, repair, or automation is enabled.",
 }
+
+const STATUS_ROUTE_READY_NOTE =
+  "This status route is serving this request. Host-loopback app HTTP checks are reported separately."
+
+const APP_HTTP_CONTEXT_NOTE =
+  "Approved localhost app HTTP checks target the host-loopback bases. They may be unavailable from inside the app proof container and do not determine whether this status route is live."
 
 const ACTION_QUERY_PARAMS = new Set(["action", "target", "command", "refresh", "start", "stop", "restart"])
 
@@ -219,6 +240,15 @@ export async function getLocalRuntimeStatus(options: { timeoutMs?: number } = {}
   const useFallback = primarySummary.state === "stopped"
   const routes = useFallback ? await runChecksForBase(true, timeoutMs) : primaryRoutes
   const summary = summarizeChecks(routes)
+  const appHttp = {
+    state: summary.state,
+    context: "host-loopback" as const,
+    url: useFallback ? "http://127.0.0.1:3101" as const : "http://127.0.0.1:3100" as const,
+    health: summary.health,
+    readiness: summary.readiness,
+    note: APP_HTTP_CONTEXT_NOTE,
+    routes,
+  }
 
   return {
     ok: true,
@@ -230,13 +260,13 @@ export async function getLocalRuntimeStatus(options: { timeoutMs?: number } = {}
     lanExposureEnabled: LOCAL_RUNTIME_POSTURE.lanExposureEnabled,
     checkedAt: new Date().toISOString(),
     checks: {
-      app: {
-        state: summary.state,
-        url: useFallback ? "http://127.0.0.1:3101" : "http://127.0.0.1:3100",
-        health: summary.health,
-        readiness: summary.readiness,
-        routes,
+      statusRoute: {
+        state: "ready",
+        source: "this request",
+        note: STATUS_ROUTE_READY_NOTE,
       },
+      appHttp,
+      app: appHttp,
       postgresProof: {
         state: "documented",
         expectedPort: "127.0.0.1:15432",
@@ -249,6 +279,7 @@ export async function getLocalRuntimeStatus(options: { timeoutMs?: number } = {}
       summary.state === "ready"
         ? []
         : [
+            "WilliamOS status route is live. Host-loopback checks may be unavailable from inside the proof container.",
             "Local status is read-only. Use the manual OMEN wrappers for operator-run start, stop, and status proof.",
           ],
   }

@@ -45,14 +45,24 @@ describe("GET /api/local/runtime/status", () => {
         warnings: [],
       }),
     )
-    expect(body.checks.app).toEqual(
+    expect(body.checks.statusRoute).toEqual(
       expect.objectContaining({
         state: "ready",
+        source: "this request",
+        note: expect.stringContaining("serving this request"),
+      }),
+    )
+    expect(body.checks.appHttp).toEqual(
+      expect.objectContaining({
+        state: "ready",
+        context: "host-loopback",
         url: "http://127.0.0.1:3100",
         health: "pass",
         readiness: "pass",
+        note: expect.stringContaining("host-loopback"),
       }),
     )
+    expect(body.checks.app).toEqual(body.checks.appHttp)
     expect(body.checks.app.routes).toHaveLength(LOCAL_RUNTIME_HTTP_TARGETS.length)
     expect(body.checks.postgresProof).toEqual(
       expect.objectContaining({
@@ -63,7 +73,7 @@ describe("GET /api/local/runtime/status", () => {
     expect(body.semantics).toEqual(
       expect.objectContaining({
         sourceModel: "static posture + localhost HTTP GET checks",
-        containerizedProofNote: expect.stringContaining("proof container"),
+        containerizedProofNote: expect.stringContaining("WilliamOS status route is live"),
         controlBoundary: expect.stringContaining("No command execution"),
       }),
     )
@@ -94,6 +104,9 @@ describe("GET /api/local/runtime/status", () => {
     const status = await getLocalRuntimeStatus({ timeoutMs: 5 })
 
     expect(status.checks.app.state).toBe("ready")
+    expect(status.checks.statusRoute.state).toBe("ready")
+    expect(status.checks.appHttp.state).toBe("ready")
+    expect(status.checks.appHttp.context).toBe("host-loopback")
     expect(status.checks.app.url).toBe("http://127.0.0.1:3101")
     expect(fetchMock.mock.calls.slice(5).map((call) => call[0])).toEqual(
       LOCAL_RUNTIME_HTTP_TARGETS.map((target) => target.fallbackUrl),
@@ -111,9 +124,34 @@ describe("GET /api/local/runtime/status", () => {
     const status = await getLocalRuntimeStatus({ timeoutMs: 5 })
 
     expect(status.checks.app.state).toBe("degraded")
+    expect(status.checks.statusRoute.state).toBe("ready")
+    expect(status.checks.appHttp.state).toBe("degraded")
     expect(status.checks.app.health).toBe("fail")
     expect(status.checks.app.readiness).toBe("unknown")
     expect(status.warnings.join(" ")).toContain("read-only")
+    expect(status.warnings.join(" ")).toContain("status route is live")
+  })
+
+  it("does not mark the status route missing when all localhost app checks are unavailable", async () => {
+    fetchMock.mockRejectedValue(new Error("container namespace cannot reach host loopback"))
+
+    const status = await getLocalRuntimeStatus({ timeoutMs: 5 })
+
+    expect(status.checks.statusRoute).toEqual(
+      expect.objectContaining({
+        state: "ready",
+        source: "this request",
+      }),
+    )
+    expect(status.checks.appHttp).toEqual(
+      expect.objectContaining({
+        state: "stopped",
+        context: "host-loopback",
+        health: "unknown",
+        readiness: "unknown",
+      }),
+    )
+    expect(status.warnings.join(" ")).toContain("Host-loopback checks may be unavailable")
   })
 
   it("rejects action parameters without running localhost checks", async () => {

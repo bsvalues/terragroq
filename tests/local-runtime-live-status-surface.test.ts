@@ -31,7 +31,8 @@ describe("Local runtime live status surface model", () => {
   it("keeps the UI copy scoped to status display rather than local control", () => {
     const copy = Object.values(LOCAL_RUNTIME_STATUS_BOUNDARY_COPY).join(" ")
 
-    expect(copy).toContain("Read-only GET status")
+    expect(copy).toContain("WilliamOS status route is live")
+    expect(copy).toContain("Host-loopback checks may show unknown")
     expect(copy).toContain("Primary Operator")
     expect(copy).toContain("No start, stop, restart, repair")
     expect(copy).toContain("command execution")

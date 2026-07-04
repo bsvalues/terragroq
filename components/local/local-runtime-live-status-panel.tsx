@@ -33,7 +33,9 @@ export function LocalRuntimeLiveStatusPanel() {
     fetchLocalRuntimeStatus,
     { revalidateOnFocus: false, revalidateIfStale: false },
   )
-  const state = data?.checks.app.state
+  const routeState = data?.checks.statusRoute.state
+  const appHttpState = data?.checks.appHttp?.state ?? data?.checks.app.state
+  const appHttpRoutes = data?.checks.appHttp?.routes ?? data?.checks.app.routes ?? []
 
   return (
     <section className="overflow-hidden rounded-xl border border-border bg-card">
@@ -47,7 +49,7 @@ export function LocalRuntimeLiveStatusPanel() {
               </p>
             </div>
             <h2 className="mt-2 text-lg font-semibold tracking-tight">
-              OMEN runtime status
+              OMEN status route
             </h2>
           </div>
           <Button
@@ -72,7 +74,7 @@ export function LocalRuntimeLiveStatusPanel() {
       <div className="grid gap-3 border-b border-border p-4 md:grid-cols-4">
         <div className="rounded-lg border border-border bg-background p-3">
           <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            App state
+            Status route
           </p>
           <div className="mt-2 flex items-center gap-2">
             {isLoading ? (
@@ -82,7 +84,10 @@ export function LocalRuntimeLiveStatusPanel() {
             ) : (
               <CheckCircle2 className="h-4 w-4 text-success" aria-hidden />
             )}
-            <StatusBadge value={statusBadgeValue(state)} label={error ? "unknown" : state ?? "checking"} />
+            <StatusBadge
+              value={statusBadgeValue(routeState)}
+              label={error ? "unknown" : routeState ?? "checking"}
+            />
           </div>
         </div>
         <div className="rounded-lg border border-border bg-background p-3">
@@ -116,7 +121,11 @@ export function LocalRuntimeLiveStatusPanel() {
             GET /api/local/runtime/status
           </code>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            Approved app base: {data?.checks.app.url ?? "http://127.0.0.1:3100"}
+            Approved host-loopback base: {data?.checks.appHttp?.url ?? data?.checks.app.url ?? "http://127.0.0.1:3100"}
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            Host-loopback check: {appHttpState ?? "checking"}.{" "}
+            {data?.checks.appHttp?.note ?? "The route-serving state is reported separately from app HTTP checks."}
           </p>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             {data?.semantics.containerizedProofNote ??
@@ -170,7 +179,7 @@ export function LocalRuntimeLiveStatusPanel() {
       ) : null}
 
       <div className="grid gap-2 p-4 md:grid-cols-5">
-        {(data?.checks.app.routes ?? []).map((route) => (
+        {appHttpRoutes.map((route) => (
           <div key={route.label} className="rounded-lg border border-border bg-background p-3">
             <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
               {route.label}
