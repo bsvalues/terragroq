@@ -96,6 +96,13 @@ export function getEvidenceCommandSurface(): EvidenceCommandSurface {
         href: LOCAL_OMEN_PHASE_ROLLUP.href,
       },
       {
+        label: "Evidence Spine",
+        status: "First-class",
+        description:
+          "Goals, batches, Work Orders, validation, local proof, production proof, safety proof, blockers, and next-lane decisions are grouped here as read-only evidence.",
+        href: "/audit",
+      },
+      {
         label: "Blocked Decision Evidence",
         status: "Gated",
         description:
@@ -111,9 +118,9 @@ export function getEvidenceCommandSurface(): EvidenceCommandSurface {
       },
     ],
     nextRecommendedWo: {
-      label: "WILLIAMOS-WOE-DETAIL-SURFACES-BATCH-001",
+      label: "WILLIAMOS-AUTHORITY-GOVERNANCE-REGISTRY-BATCH-001",
       reason:
-        "After this Shell / WOE resume, Work Order detail surfaces should become stronger before returning to metadata, Council, Hermes, or server planning.",
+        "After WOE details and the Evidence Spine, WilliamOS needs a formal authority registry before mutation, metadata expansion, runtime control, autonomy, deploy, DB/schema change, or production action.",
     },
     safety: {
       readOnly: true,

@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/shell/page-header"
 import { getEventEmptyStateActions } from "@/components/dashboard/event-empty-state"
 import { EvidenceCommandPanel } from "@/components/evidence/evidence-command-panel"
 import { EvidenceRollupPanel } from "@/components/evidence/evidence-rollup-panel"
+import { EvidenceSpinePanel } from "@/components/evidence/evidence-spine-panel"
 import { Activity } from "lucide-react"
 import Link from "next/link"
 
@@ -19,6 +20,7 @@ export default async function AuditPage() {
       />
       <div className="flex flex-col gap-6 p-6">
         <EvidenceCommandPanel />
+        <EvidenceSpinePanel />
         <EvidenceRollupPanel events={events} />
         {events.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border bg-card p-6">

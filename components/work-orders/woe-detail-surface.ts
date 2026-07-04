@@ -106,14 +106,14 @@ export const WOE_COMPLETION_REPORT_FIELDS = [
 export function getWoeDetailSurface(): WoeDetailSurface {
   const evidence = [
     {
-      label: "Shell / WOE resume evidence",
+      label: "Shell / WOE resume evidence spine record",
       href: "/audit",
-      description: "PR #280 and WO-SHELL-021 through WO-SHELL-028 reports.",
+      description: "PR #280 and WO-SHELL-021 through WO-SHELL-028 reports are represented in the Evidence Spine.",
     },
     {
-      label: "Local OMEN status evidence",
-      href: "/runtime",
-      description: "Completed local status proof remains a read-only governed subsystem.",
+      label: "Local OMEN status evidence spine record",
+      href: "/audit",
+      description: "Completed local status proof remains a read-only governed subsystem in the Evidence Spine.",
     },
   ]
 
@@ -130,7 +130,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
       activeBatches: ["WILLIAMOS-WOE-DETAIL-SURFACES-BATCH-001"],
       completedWorkOrders: ["WO-SHELL-021 through WO-SHELL-028", "WO-WOE-019 through WO-WOE-021"],
       blockedDecisions: ["Metadata expansion", "Runtime control", "Autonomy"],
-      nextRecommendedWork: "Evidence spine expansion after WOE detail surfaces pass.",
+      nextRecommendedWork: "Authority / Governance Registry after Evidence Spine pass.",
     },
     batch: {
       name: "WILLIAMOS-SHELL-WOE-RESUME-BATCH-001",
@@ -158,7 +158,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
         "No runtime control",
         "No autonomy",
       ],
-      nextRecommendedBatch: "WILLIAMOS-WOE-DETAIL-SURFACES-BATCH-001",
+      nextRecommendedBatch: "WILLIAMOS-EVIDENCE-SPINE-BATCH-001",
     },
     workOrder: {
       id: "WO-WOE-022..032",
@@ -195,7 +195,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
         "The current lane is read-model/UI only. Metadata, runtime control, command execution, and autonomy require separate owner authority.",
       ownerDecisionNeeded:
         "Choose a future gate before Docker metadata, backup metadata, port checks, runtime control, or autonomy can be considered.",
-      safeNextAction: "Continue WOE detail surfaces and then move to Evidence spine expansion.",
+      safeNextAction: "Complete Evidence Spine and then move to the Authority / Governance Registry.",
       prohibitedActions: [
         "run WO",
         "run batch",
