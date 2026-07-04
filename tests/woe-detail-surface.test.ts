@@ -18,7 +18,7 @@ describe("WOE detail surface", () => {
     expect(surface.workOrder.id).toBe("WO-WOE-022..032")
     expect(surface.workOrder.evidence).toHaveLength(2)
     expect(surface.blockedDecision.ownerDecisionNeeded).toContain("future gate")
-    expect(surface.goal.nextRecommendedWork).toContain("Evidence spine expansion")
+    expect(surface.goal.nextRecommendedWork).toContain("Authority / Governance Registry")
   })
 
   it("renders the standard completion report fields", () => {
@@ -87,5 +87,6 @@ describe("WOE detail surface", () => {
     expect(serialized).not.toContain("docker inspect")
     expect(serialized).not.toContain("github write action enabled")
     expect(serialized).not.toContain("run batch button")
+    expect(serialized).toContain("evidence spine")
   })
 })

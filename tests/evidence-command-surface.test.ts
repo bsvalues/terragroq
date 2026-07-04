@@ -11,6 +11,7 @@ describe("Evidence command surface", () => {
       "PR / Check / Build / Test Evidence",
       "Work Order Completion Evidence",
       "Local OMEN Phase 1 Evidence",
+      "Evidence Spine",
       "Blocked Decision Evidence",
       "Safety Posture Evidence",
     ])
@@ -23,17 +24,18 @@ describe("Evidence command surface", () => {
     expect(links.get("Latest Production Verification")).toBe("/runtime")
     expect(links.get("Work Order Completion Evidence")).toBe("/work-orders")
     expect(links.get("Local OMEN Phase 1 Evidence")).toBe("/runtime")
+    expect(links.get("Evidence Spine")).toBe("/audit")
     expect(links.get("Blocked Decision Evidence")).toBe("/governance")
     expect(links.get("Safety Posture Evidence")).toBe("/brain-council")
   })
 
-  it("keeps the next recommended batch focused on WOE detail surfaces", () => {
+  it("keeps the next recommended batch focused on the Authority / Governance Registry", () => {
     const surface = getEvidenceCommandSurface()
 
     expect(surface.nextRecommendedWo).toMatchObject({
-      label: "WILLIAMOS-WOE-DETAIL-SURFACES-BATCH-001",
+      label: "WILLIAMOS-AUTHORITY-GOVERNANCE-REGISTRY-BATCH-001",
     })
-    expect(surface.nextRecommendedWo.reason).toContain("Work Order detail surfaces")
+    expect(surface.nextRecommendedWo.reason).toContain("formal authority registry")
   })
 
   it("connects decision authority to work evidence and verified result", () => {
@@ -105,6 +107,7 @@ describe("Evidence command surface", () => {
     expect(text).toContain("native WilliamOS proof layer")
     expect(text).toContain("record of reality")
     expect(text).toContain("production verification")
+    expect(text).toContain("Evidence Spine")
     expect(text).not.toMatch(
       /analytics dashboard|reporting center|team reports|activity feed|vanity metrics|auto-proof|magic validation/i,
     )
