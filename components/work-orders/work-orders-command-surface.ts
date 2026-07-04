@@ -1,6 +1,11 @@
 import type { WorkOrder } from "@/lib/db/schema"
 import { WO_STATUSES, type WoStatus } from "@/lib/work-orders/lifecycle"
 import type { VerificationFlowStep } from "@/components/shell/verification-flow-grid"
+import {
+  LOCAL_OMEN_PHASE_ROLLUP,
+  SHELL_WOE_AUTHORITY_BLOCKERS,
+  SHELL_WOE_NEXT_BATCH,
+} from "@/components/shell/shell-woe-resume-surface"
 
 export type WorkOrderSurfaceCard = {
   label: string
@@ -18,6 +23,9 @@ export type WorkOrdersCommandSurface = {
     label: string
     reason: string
   }
+  completedPhase: typeof LOCAL_OMEN_PHASE_ROLLUP
+  nextBatch: typeof SHELL_WOE_NEXT_BATCH
+  blockedDecisions: typeof SHELL_WOE_AUTHORITY_BLOCKERS
   safety: {
     readOnly: true
     executesWork: false
@@ -122,12 +130,25 @@ export function getWorkOrdersCommandSurface(
         value: String(evidenceRequired),
         description: "Open governed work that still needs validation or closure evidence.",
       },
+      {
+        label: "Local Phase Complete",
+        value: LOCAL_OMEN_PHASE_ROLLUP.value,
+        description: "OMEN local status/refinement is complete and remains read-only.",
+      },
+      {
+        label: "Next Batch",
+        value: "Shell / WOE",
+        description: "Resume native Work Order Engine surfaces before metadata expansion.",
+      },
     ],
     nextRecommendedWo: {
-      label: "WO-SHELL-017 - Evidence Native Area Reframe",
+      label: "WILLIAMOS-WOE-DETAIL-SURFACES-BATCH-001",
       reason:
-        "After Work Orders are framed as mutation control, Evidence should be reframed as the native proof layer for validation, PR outcomes, production checks, and safety posture.",
+        "After Shell and WOE read models are resumed, the next useful lane is deeper Work Order detail surfaces, not local metadata expansion.",
     },
+    completedPhase: LOCAL_OMEN_PHASE_ROLLUP,
+    nextBatch: SHELL_WOE_NEXT_BATCH,
+    blockedDecisions: SHELL_WOE_AUTHORITY_BLOCKERS,
     safety: {
       readOnly: true,
       executesWork: false,

@@ -85,7 +85,11 @@ describe("WilliamOS Home Command Center", () => {
       "Blocked Decisions",
       "Evidence Required",
       "Systems",
+      "Local Status",
       "Local Operations",
+      "Completed Phase",
+      "Next Batch",
+      "Authority Gates",
       "Council",
       "Worker Dock",
       "Agent Forge",
@@ -110,6 +114,18 @@ describe("WilliamOS Home Command Center", () => {
     expect(home.statusCards.find((card) => card.label === "Local Operations")).toMatchObject({
       value: "Manual-ready",
       href: "/runtime",
+    })
+    expect(home.statusCards.find((card) => card.label === "Local Status")).toMatchObject({
+      value: "Stable",
+      href: "/runtime",
+    })
+    expect(home.statusCards.find((card) => card.label === "Next Batch")).toMatchObject({
+      value: "Shell / WOE",
+      href: "/work-orders",
+    })
+    expect(home.statusCards.find((card) => card.label === "Authority Gates")).toMatchObject({
+      value: "Closed",
+      href: "/decisions",
     })
   })
 
@@ -137,6 +153,31 @@ describe("WilliamOS Home Command Center", () => {
         posture: "Disabled",
         href: "/operator",
       }),
+      expect.objectContaining({
+        label: "Local Status",
+        posture: "Read-only",
+        href: "/runtime",
+      }),
+    ])
+  })
+
+  it("shows authority blockers and attention model without granting control", () => {
+    const home = getHomeCommandCenter(initializedStats)
+
+    expect(home.authorityPanel.title).toBe("Authority / Blocked Decisions")
+    expect(home.authorityPanel.blockers.map((blocker) => blocker.label)).toEqual([
+      "Local runtime control",
+      "Metadata expansion",
+      "Execution authority",
+      "External mutation",
+    ])
+    expect(home.attentionModel).toEqual([
+      "Stable systems",
+      "Ready next work",
+      "Blocked decisions",
+      "Recent completed phase",
+      "Local runtime status",
+      "Evidence links",
     ])
   })
 
@@ -199,6 +240,11 @@ describe("WilliamOS Home Command Center", () => {
       deploys: false,
       writesProduction: false,
       changesAuthority: false,
+      commandRunnerAdded: false,
+      dockerMetadataAdded: false,
+      backupScanAdded: false,
+      portChecksAdded: false,
+      lanExposureEnabled: false,
     })
   })
 })

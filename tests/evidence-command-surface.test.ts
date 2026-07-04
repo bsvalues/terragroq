@@ -10,6 +10,7 @@ describe("Evidence command surface", () => {
       "Latest Production Verification",
       "PR / Check / Build / Test Evidence",
       "Work Order Completion Evidence",
+      "Local OMEN Phase 1 Evidence",
       "Blocked Decision Evidence",
       "Safety Posture Evidence",
     ])
@@ -21,17 +22,18 @@ describe("Evidence command surface", () => {
 
     expect(links.get("Latest Production Verification")).toBe("/runtime")
     expect(links.get("Work Order Completion Evidence")).toBe("/work-orders")
+    expect(links.get("Local OMEN Phase 1 Evidence")).toBe("/runtime")
     expect(links.get("Blocked Decision Evidence")).toBe("/governance")
     expect(links.get("Safety Posture Evidence")).toBe("/brain-council")
   })
 
-  it("keeps the next recommended work order focused on Systems visibility", () => {
+  it("keeps the next recommended batch focused on WOE detail surfaces", () => {
     const surface = getEvidenceCommandSurface()
 
     expect(surface.nextRecommendedWo).toMatchObject({
-      label: "WO-SHELL-018 - Systems Native Area Reframe",
+      label: "WILLIAMOS-WOE-DETAIL-SURFACES-BATCH-001",
     })
-    expect(surface.nextRecommendedWo.reason).toContain("one native WilliamOS area")
+    expect(surface.nextRecommendedWo.reason).toContain("Work Order detail surfaces")
   })
 
   it("connects decision authority to work evidence and verified result", () => {

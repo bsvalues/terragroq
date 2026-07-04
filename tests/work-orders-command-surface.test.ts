@@ -69,15 +69,20 @@ describe("Work Orders command surface", () => {
     expect(cards.get("Blocked Decisions")).toBe("1")
     expect(cards.get("Total Completed")).toBe("2")
     expect(cards.get("Evidence Required")).toBe("4")
+    expect(cards.get("Local Phase Complete")).toBe("Stable")
+    expect(cards.get("Next Batch")).toBe("Shell / WOE")
   })
 
-  it("keeps the next recommended work order focused on evidence", () => {
+  it("keeps the next recommended batch focused on Work Order detail surfaces", () => {
     const surface = getWorkOrdersCommandSurface([])
 
     expect(surface.nextRecommendedWo).toMatchObject({
-      label: "WO-SHELL-017 - Evidence Native Area Reframe",
+      label: "WILLIAMOS-WOE-DETAIL-SURFACES-BATCH-001",
     })
-    expect(surface.nextRecommendedWo.reason).toContain("native proof layer")
+    expect(surface.nextRecommendedWo.reason).toContain("Work Order detail surfaces")
+    expect(surface.completedPhase.label).toBe("Local OMEN Phase 1")
+    expect(surface.nextBatch.label).toBe("WILLIAMOS-SHELL-WOE-RESUME-BATCH-001")
+    expect(surface.blockedDecisions.map((item) => item.label)).toContain("Metadata expansion")
   })
 
   it("connects decisions, work orders, evidence, and next move", () => {
@@ -143,7 +148,7 @@ describe("Work Orders command surface", () => {
     ].join(" ")
 
     expect(text).toContain("native WilliamOS control primitive")
-    expect(text).toContain("mutation control")
+    expect(text.toLowerCase()).toContain("mutation control")
     expect(text).toContain("authority gates")
     expect(text).not.toMatch(
       /task board|kanban|project management|tickets|productivity pipeline|team queue|sprint|one-click execute|auto-run/i,

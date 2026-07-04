@@ -1,5 +1,12 @@
 import type { DashboardStats } from "@/components/dashboard/operator-start"
 import { getLocalOperatorSurface } from "@/components/local/local-operator-surface"
+import {
+  LOCAL_OMEN_PHASE_ROLLUP,
+  SHELL_WOE_ATTENTION_MODEL,
+  SHELL_WOE_AUTHORITY_BLOCKERS,
+  SHELL_WOE_NEXT_BATCH,
+  SHELL_WOE_SAFETY,
+} from "@/components/shell/shell-woe-resume-surface"
 
 export type HomeStatusCard = {
   label: string
@@ -40,6 +47,12 @@ export type HomeCommandCenter = {
   lanes: HomeBriefingLane[]
   statusCards: HomeStatusCard[]
   systemPosture: HomeSystemPosture[]
+  authorityPanel: {
+    title: string
+    description: string
+    blockers: typeof SHELL_WOE_AUTHORITY_BLOCKERS
+  }
+  attentionModel: typeof SHELL_WOE_ATTENTION_MODEL
   nextMove: {
     label: string
     href: string
@@ -53,6 +66,11 @@ export type HomeCommandCenter = {
     deploys: false
     writesProduction: false
     changesAuthority: false
+    commandRunnerAdded: false
+    dockerMetadataAdded: false
+    backupScanAdded: false
+    portChecksAdded: false
+    lanExposureEnabled: false
   }
 }
 
@@ -149,7 +167,31 @@ export function getHomeCommandCenter(stats: DashboardStats): HomeCommandCenter {
         description: "Health and auth readiness remain visible without changing configuration.",
         href: "/runtime",
       },
+      {
+        label: "Local Status",
+        value: LOCAL_OMEN_PHASE_ROLLUP.value,
+        description: LOCAL_OMEN_PHASE_ROLLUP.description,
+        href: LOCAL_OMEN_PHASE_ROLLUP.href,
+      },
       localOperatorSurface.homeCard,
+      {
+        label: "Completed Phase",
+        value: "OMEN stable",
+        description: "Latest local status/refinement lane is complete, validated, and read-only.",
+        href: "/audit",
+      },
+      {
+        label: "Next Batch",
+        value: "Shell / WOE",
+        description: "Resume WilliamOS shell and Work Order Engine read models.",
+        href: SHELL_WOE_NEXT_BATCH.href,
+      },
+      {
+        label: "Authority Gates",
+        value: "Closed",
+        description: "Metadata, runtime control, persistence, LAN exposure, and autonomy remain blocked.",
+        href: "/decisions",
+      },
       {
         label: "Council",
         value: "Advisory",
@@ -204,7 +246,21 @@ export function getHomeCommandCenter(stats: DashboardStats): HomeCommandCenter {
           "Scoped access routes exist, but issuance and acceptance remain owner-gated.",
         href: "/operator",
       },
+      {
+        label: "Local Status",
+        posture: "Read-only",
+        description:
+          "OMEN status is stable as a governed subsystem; metadata and controls remain blocked.",
+        href: "/runtime",
+      },
     ],
+    authorityPanel: {
+      title: "Authority / Blocked Decisions",
+      description:
+        "These boundaries require explicit Primary approval before any implementation can expand.",
+      blockers: SHELL_WOE_AUTHORITY_BLOCKERS,
+    },
+    attentionModel: SHELL_WOE_ATTENTION_MODEL,
     nextMove:
       stats.openWork > 0
         ? {
@@ -231,6 +287,11 @@ export function getHomeCommandCenter(stats: DashboardStats): HomeCommandCenter {
       deploys: false,
       writesProduction: false,
       changesAuthority: false,
+      commandRunnerAdded: SHELL_WOE_SAFETY.commandRunnerAdded,
+      dockerMetadataAdded: SHELL_WOE_SAFETY.dockerMetadataAdded,
+      backupScanAdded: SHELL_WOE_SAFETY.backupScanAdded,
+      portChecksAdded: SHELL_WOE_SAFETY.portChecksAdded,
+      lanExposureEnabled: SHELL_WOE_SAFETY.lanExposureEnabled,
     },
   }
 }
