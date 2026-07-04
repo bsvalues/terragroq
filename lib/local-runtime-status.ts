@@ -38,6 +38,15 @@ export type LocalRuntimeStatus = {
       note: string
     }
   }
+  semantics: {
+    sourceModel: "static posture + localhost HTTP GET checks"
+    stateModel: {
+      state: LocalRuntimeCheckState
+      meaning: string
+    }[]
+    containerizedProofNote: string
+    controlBoundary: string
+  }
   warnings: string[]
 }
 
@@ -91,6 +100,38 @@ export const LOCAL_RUNTIME_HTTP_TARGETS: LocalRuntimeHttpTarget[] = [
     fallbackUrl: "http://127.0.0.1:3101/api/auth/readiness",
   },
 ]
+
+export const LOCAL_RUNTIME_STATE_MODEL: LocalRuntimeStatus["semantics"]["stateModel"] = [
+  {
+    state: "ready",
+    meaning: "All approved localhost HTTP checks returned successful responses.",
+  },
+  {
+    state: "stopped",
+    meaning: "No approved localhost HTTP checks responded from the checked process namespace.",
+  },
+  {
+    state: "degraded",
+    meaning: "At least one approved localhost HTTP check responded, but not every check passed.",
+  },
+  {
+    state: "stale",
+    meaning: "The displayed status is older than the current request cycle or could not be refreshed.",
+  },
+  {
+    state: "unknown",
+    meaning: "The status route could not classify the app from approved localhost HTTP checks.",
+  },
+]
+
+export const LOCAL_RUNTIME_STATUS_SEMANTICS: LocalRuntimeStatus["semantics"] = {
+  sourceModel: "static posture + localhost HTTP GET checks",
+  stateModel: LOCAL_RUNTIME_STATE_MODEL,
+  containerizedProofNote:
+    "When this status route runs inside the OMEN app proof container, 127.0.0.1 checks describe that container process namespace. A 200 response from this route proves the refreshed image serves the API; the app check may still report stopped or degraded if host-bound ports are outside that namespace.",
+  controlBoundary:
+    "Read-only status only. No command execution, Docker metadata, backup scanning, port scanning, persistence, LAN exposure, repair, or automation is enabled.",
+}
 
 const ACTION_QUERY_PARAMS = new Set(["action", "target", "command", "refresh", "start", "stop", "restart"])
 
@@ -203,6 +244,7 @@ export async function getLocalRuntimeStatus(options: { timeoutMs?: number } = {}
           "Documented only in this first slice. The status API does not inspect Docker, ports, backups, or database contents.",
       },
     },
+    semantics: LOCAL_RUNTIME_STATUS_SEMANTICS,
     warnings:
       summary.state === "ready"
         ? []
