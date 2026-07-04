@@ -25,6 +25,8 @@ LAN_EXPOSURE_ENABLED: false
 ## State Model
 
 ```text
+statusRoute.ready: this status handler is serving the current request
+appHttp.*: approved host-loopback HTTP checks, reported separately from route serving
 ready: all approved localhost HTTP checks passed
 stopped: no approved localhost HTTP checks responded from the checked process namespace
 degraded: at least one approved localhost HTTP check responded, but not every check passed
@@ -42,6 +44,20 @@ the refreshed image serves the route, while the app check can still report
 
 This is explicitly represented as status semantics, not as Docker metadata,
 port scanning, or container control.
+
+## Source Refinement
+
+```text
+checks.statusRoute.state: ready
+checks.statusRoute.source: this request
+checks.appHttp.context: host-loopback
+checks.app: retained as a legacy alias for checks.appHttp
+```
+
+The source contract now separates "this status route is live" from the
+host-loopback app HTTP checks. If every `127.0.0.1:3100/3101` app check is
+unavailable from the serving process namespace, `checks.statusRoute` remains
+`ready` while `checks.appHttp` reports the host-loopback result.
 
 ## Postgres Proof Language
 

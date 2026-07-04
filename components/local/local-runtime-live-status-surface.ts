@@ -18,9 +18,9 @@ export const LOCAL_RUNTIME_EVIDENCE_REFERENCES = [
 
 export const LOCAL_RUNTIME_STATUS_BOUNDARY_COPY = {
   summary:
-    "Read-only GET status from approved localhost targets. WilliamOS shows posture and evidence; the Primary Operator still runs the wrappers manually.",
+    "WilliamOS status route is live when this panel receives the GET response. Approved host-loopback checks are shown separately; the Primary Operator still runs the wrappers manually.",
   blocked:
     "No start, stop, restart, repair, schedule, persistence, LAN exposure, Docker metadata, backup scanning, port scanning, or command execution is available from this UI.",
   containerizedProof:
-    "Containerized proof can serve the status API while localhost app checks report stopped or degraded, because 127.0.0.1 is evaluated from the running process namespace.",
+    "Host-loopback checks may show unknown when viewed from inside the proof container. WilliamOS does not start, stop, repair, or manage containers.",
 } as const
