@@ -60,6 +60,27 @@ export function ActiveWorkQueuePanel({ orders }: { orders: WorkOrder[] }) {
         </div>
       )}
 
+      <div className="grid gap-3 border-t border-border p-4 md:grid-cols-2">
+        <div className="rounded-lg border border-border bg-background p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Next valid batch
+          </p>
+          <p className="mt-2 text-sm font-semibold">{surface.nextBatch.label}</p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            {surface.nextBatch.description}
+          </p>
+        </div>
+        <div className="rounded-lg border border-border bg-background p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Recent completed phase
+          </p>
+          <p className="mt-2 text-sm font-semibold">{surface.completedPhase.label}</p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            {surface.completedPhase.validation}
+          </p>
+        </div>
+      </div>
+
       <div className="flex items-center gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">
         <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden />
         Read-only queue. No loop start, execution, authority grant, or production write.

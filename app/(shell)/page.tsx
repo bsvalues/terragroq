@@ -131,6 +131,33 @@ export default async function DashboardPage() {
                   </Link>
                 </Button>
               </div>
+
+              <div className="rounded-2xl border border-border bg-background p-4">
+                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {home.authorityPanel.title}
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  {home.authorityPanel.description}
+                </p>
+                <div className="mt-3 grid gap-2">
+                  {home.authorityPanel.blockers.map((blocker) => (
+                    <div
+                      key={blocker.label}
+                      className="rounded-lg border border-border bg-card px-3 py-2"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs font-medium">{blocker.label}</p>
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                          {blocker.status}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        {blocker.description}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </section>

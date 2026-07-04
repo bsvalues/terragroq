@@ -1,5 +1,9 @@
 import type { WorkOrder } from "@/lib/db/schema"
 import { WO_STATUSES, type WoStatus } from "@/lib/work-orders/lifecycle"
+import {
+  LOCAL_OMEN_PHASE_ROLLUP,
+  SHELL_WOE_NEXT_BATCH,
+} from "@/components/shell/shell-woe-resume-surface"
 
 export type ActiveWorkQueueItem = {
   ref: string
@@ -18,11 +22,15 @@ export type ActiveWorkQueueSurface = {
     title: string
     description: string
   }
+  nextBatch: typeof SHELL_WOE_NEXT_BATCH
+  completedPhase: typeof LOCAL_OMEN_PHASE_ROLLUP
   safety: {
     readOnly: true
     startsLoop: false
     executesWork: false
     grantsAuthority: false
+    startsScheduler: false
+    startsBackgroundLoop: false
     writesProduction: false
   }
 }
@@ -66,13 +74,17 @@ export function getActiveWorkQueueSurface(orders: WorkOrder[]): ActiveWorkQueueS
     emptyState: {
       title: "No active governed work",
       description:
-        "When a goal becomes an approved, active, blocked, or review-state Work Order, it appears here for Primary review.",
+        "When a goal becomes an approved, active, blocked, or review-state Work Order, it appears here for Primary review. The current recommended lane is shown as read-only guidance.",
     },
+    nextBatch: SHELL_WOE_NEXT_BATCH,
+    completedPhase: LOCAL_OMEN_PHASE_ROLLUP,
     safety: {
       readOnly: true,
       startsLoop: false,
       executesWork: false,
       grantsAuthority: false,
+      startsScheduler: false,
+      startsBackgroundLoop: false,
       writesProduction: false,
     },
   }

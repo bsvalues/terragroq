@@ -37,6 +37,38 @@ export function WorkOrdersCommandPanel({ orders }: { orders: WorkOrder[] }) {
         ))}
       </div>
 
+      <div className="grid gap-3 border-t border-border p-4 lg:grid-cols-3">
+        <div className="rounded-lg border border-border bg-background p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Completed phase
+          </p>
+          <p className="mt-2 text-sm font-semibold">{surface.completedPhase.label}</p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            {surface.completedPhase.safety}
+          </p>
+        </div>
+        <div className="rounded-lg border border-border bg-background p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Next batch
+          </p>
+          <p className="mt-2 text-sm font-semibold">{surface.nextBatch.label}</p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            {surface.nextBatch.description}
+          </p>
+        </div>
+        <div className="rounded-lg border border-border bg-background p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Blocked authority
+          </p>
+          <p className="mt-2 text-sm font-semibold">
+            {surface.blockedDecisions.length} gates closed
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            Runtime control, metadata expansion, execution authority, and external mutation remain blocked.
+          </p>
+        </div>
+      </div>
+
       <div className="flex flex-col gap-3 border-t border-border px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className="text-sm font-medium">Next Recommended WO</p>

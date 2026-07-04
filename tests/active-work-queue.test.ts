@@ -71,8 +71,12 @@ describe("active work queue surface", () => {
       startsLoop: false,
       executesWork: false,
       grantsAuthority: false,
+      startsScheduler: false,
+      startsBackgroundLoop: false,
       writesProduction: false,
     })
+    expect(surface.nextBatch.label).toBe("WILLIAMOS-SHELL-WOE-RESUME-BATCH-001")
+    expect(surface.completedPhase.label).toBe("Local OMEN Phase 1")
   })
 
   it("provides an empty state when no governed work is active", () => {
@@ -81,5 +85,6 @@ describe("active work queue surface", () => {
     expect(surface.items).toHaveLength(0)
     expect(surface.emptyState.title).toBe("No active governed work")
     expect(surface.emptyState.description).toContain("approved, active, blocked, or review-state")
+    expect(surface.emptyState.description).toContain("read-only guidance")
   })
 })

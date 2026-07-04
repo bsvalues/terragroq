@@ -1,4 +1,5 @@
 import type { VerificationFlowStep } from "@/components/shell/verification-flow-grid"
+import { LOCAL_OMEN_PHASE_ROLLUP } from "@/components/shell/shell-woe-resume-surface"
 
 export type EvidenceCategory = {
   label: string
@@ -88,6 +89,13 @@ export function getEvidenceCommandSurface(): EvidenceCommandSurface {
         href: "/work-orders",
       },
       {
+        label: "Local OMEN Phase 1 Evidence",
+        status: "Complete",
+        description:
+          "Local status API, runtime surface, proof route, manual wrapper proof, UX refinement, and safety posture are recorded as a stable read-only subsystem.",
+        href: LOCAL_OMEN_PHASE_ROLLUP.href,
+      },
+      {
         label: "Blocked Decision Evidence",
         status: "Gated",
         description:
@@ -103,9 +111,9 @@ export function getEvidenceCommandSurface(): EvidenceCommandSurface {
       },
     ],
     nextRecommendedWo: {
-      label: "WO-SHELL-018 - Systems Native Area Reframe",
+      label: "WILLIAMOS-WOE-DETAIL-SURFACES-BATCH-001",
       reason:
-        "After Evidence is framed as the proof layer, Systems should present runtime, auth, infrastructure, deployment, and readiness posture as one native WilliamOS area.",
+        "After this Shell / WOE resume, Work Order detail surfaces should become stronger before returning to metadata, Council, Hermes, or server planning.",
     },
     safety: {
       readOnly: true,
