@@ -5,6 +5,10 @@ import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, ShieldCheck } from "lu
 import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
 import type { LocalRuntimeStatus } from "@/lib/local-runtime-status"
+import {
+  LOCAL_RUNTIME_EVIDENCE_REFERENCES,
+  LOCAL_RUNTIME_STATUS_BOUNDARY_COPY,
+} from "@/components/local/local-runtime-live-status-surface"
 
 async function fetchLocalRuntimeStatus(url: string): Promise<LocalRuntimeStatus> {
   const response = await fetch(url, {
@@ -58,8 +62,10 @@ export function LocalRuntimeLiveStatusPanel() {
           </Button>
         </div>
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-          Read-only GET status from approved localhost targets. This surface does not start,
-          stop, restart, repair, schedule, persist, or expose WilliamOS.
+          {LOCAL_RUNTIME_STATUS_BOUNDARY_COPY.summary}
+        </p>
+        <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+          {LOCAL_RUNTIME_STATUS_BOUNDARY_COPY.blocked}
         </p>
       </div>
 
@@ -112,6 +118,10 @@ export function LocalRuntimeLiveStatusPanel() {
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             Approved app base: {data?.checks.app.url ?? "http://127.0.0.1:3100"}
           </p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            {data?.semantics.containerizedProofNote ??
+              LOCAL_RUNTIME_STATUS_BOUNDARY_COPY.containerizedProof}
+          </p>
         </div>
         <div className="rounded-lg border border-border bg-background p-3">
           <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -124,6 +134,23 @@ export function LocalRuntimeLiveStatusPanel() {
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             Documented only. This slice does not inspect Docker, ports, backups, or database contents.
           </p>
+        </div>
+      </div>
+
+      <div className="border-b border-border p-4">
+        <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          Evidence references
+        </p>
+        <div className="mt-3 grid gap-2 md:grid-cols-3">
+          {LOCAL_RUNTIME_EVIDENCE_REFERENCES.map((item) => (
+            <div key={item.path} className="rounded-lg border border-border bg-background p-3">
+              <p className="text-sm font-semibold">{item.label}</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.summary}</p>
+              <code className="mt-2 block rounded-md border border-border bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
+                {item.path}
+              </code>
+            </div>
+          ))}
         </div>
       </div>
 

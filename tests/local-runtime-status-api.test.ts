@@ -11,6 +11,7 @@ import {
   getLocalRuntimeStatus,
   LOCAL_RUNTIME_HTTP_TARGETS,
   LOCAL_RUNTIME_POSTURE,
+  LOCAL_RUNTIME_STATUS_SEMANTICS,
   validateLocalRuntimeStatusRequest,
 } from "@/lib/local-runtime-status"
 
@@ -58,6 +59,22 @@ describe("GET /api/local/runtime/status", () => {
         state: "documented",
         expectedPort: "127.0.0.1:15432",
       }),
+    )
+    expect(body.semantics).toEqual(
+      expect.objectContaining({
+        sourceModel: "static posture + localhost HTTP GET checks",
+        containerizedProofNote: expect.stringContaining("proof container"),
+        controlBoundary: expect.stringContaining("No command execution"),
+      }),
+    )
+    expect(body.semantics.stateModel).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ state: "ready" }),
+        expect.objectContaining({ state: "stopped" }),
+        expect.objectContaining({ state: "degraded" }),
+        expect.objectContaining({ state: "stale" }),
+        expect.objectContaining({ state: "unknown" }),
+      ]),
     )
     expect(fetchMock).toHaveBeenCalledTimes(LOCAL_RUNTIME_HTTP_TARGETS.length)
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual(
@@ -124,7 +141,10 @@ describe("GET /api/local/runtime/status", () => {
   })
 
   it("keeps the posture model free of execution, Docker, backup, port-scan, and secret surfaces", () => {
-    const serialized = JSON.stringify(LOCAL_RUNTIME_POSTURE)
+    const serialized = JSON.stringify({
+      posture: LOCAL_RUNTIME_POSTURE,
+      semantics: LOCAL_RUNTIME_STATUS_SEMANTICS,
+    })
 
     expect(LOCAL_RUNTIME_POSTURE.executionEnabled).toBe(false)
     expect(LOCAL_RUNTIME_POSTURE.persistenceEnabled).toBe(false)
@@ -132,8 +152,27 @@ describe("GET /api/local/runtime/status", () => {
     expect(serialized).not.toContain("DATABASE_URL")
     expect(serialized).not.toContain("BETTER_AUTH_SECRET")
     expect(serialized).not.toContain("docker inspect")
-    expect(serialized).not.toContain("backup scan")
+    expect(serialized).not.toContain("backupPath")
+    expect(serialized).not.toContain("latestBackup")
     expect(serialized).not.toContain("netstat")
+  })
+
+  it("keeps the runtime status contract observational rather than operational", async () => {
+    const response = await GET(new Request("http://localhost/api/local/runtime/status"))
+    const body = await response.json()
+    const serialized = JSON.stringify(body).toLowerCase()
+
+    expect(body.executionEnabled).toBe(false)
+    expect(body.persistenceEnabled).toBe(false)
+    expect(body.lanExposureEnabled).toBe(false)
+    expect(serialized).not.toContain("docker inspect")
+    expect(serialized).not.toContain("docker ps")
+    expect(serialized).not.toContain("backuppath")
+    expect(serialized).not.toContain("latestbackup")
+    expect(serialized).not.toContain("portstatus")
+    expect(serialized).not.toContain("listeningports")
+    expect(serialized).not.toContain("database_url")
+    expect(serialized).not.toContain("better_auth_secret")
   })
 
   it("treats refresh, command, target, and start-stop params as unsafe action inputs", () => {
