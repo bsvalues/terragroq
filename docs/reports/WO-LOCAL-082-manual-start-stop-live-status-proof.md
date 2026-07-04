@@ -2,46 +2,51 @@
 
 ## Result
 
-BLOCKED / MANUAL WRAPPER PROOF COULD NOT COMPLETE.
+PARTIAL / MANUAL START-STOP WRAPPERS PASS, LIVE STATUS ROUTE PROOF LIMITED BY STALE IMAGE.
 
-The first-slice implementation reached manual proof, but the local runtime was
-not healthy enough to execute the scoped manual start/stop proof. The status
-wrapper ran and reported the app proof container missing, ports `3100` and `3101`
-clear, and the WilliamOS Postgres proof missing. Follow-up Docker inspection then
-failed with `Docker Desktop is unable to start`.
+The local container runtime recovered enough to run the scoped OMEN manual
+wrappers. The start wrapper launched `williamos-omen-app-proof` on
+`127.0.0.1:3100`; the stop wrapper removed only that app proof container and
+reported ports `3100` and `3101` clear with `POSTGRES_PROOF_TOUCHED: false`.
+
+The running image served `/`, `/runtime`, `/goal-console`, `/api/health`, and
+`/api/auth/readiness`, but returned `404` for `/api/local/runtime/status`.
+Source and build output contain the route, so this is treated as a stale local
+proof image limitation. Rebuilding the Docker image was not performed because
+image build/update was outside this first-slice authorization.
 
 ## Base
 
 ```text
-origin/main = e6eb6802378805ba51298ddee32f09ee61475349
+origin/main = 8530c6b2dc9bf205204235ffe351eb3598eb25cd
 ```
 
 ## Pre-Start Proof
 
 ```text
 scripts/local/williamos-omen-status.ps1: pass
-POSTGRES_PROOF: missing
+POSTGRES_PROOF: williamos-postgres-proof healthy, 127.0.0.1:15432->5432/tcp
 APP_CONTAINER: missing
 PORT_3100: clear
 PORT_3101: clear
-PORT_15432: clear
-docker ps: failed, Docker Desktop is unable to start
-GET http://127.0.0.1:3100/api/local/runtime/status: connection refused
-GET http://127.0.0.1:3101/api/local/runtime/status: connection refused
+PORT_15432: listening on 127.0.0.1:15432
+LATEST_BACKUP: williamos-omen-manual-backup-20260703-060207.dump
 ```
-
-The refused localhost status endpoints are safe stopped/unknown posture for the
-host, but they are not a successful route-level proof because the app process is
-not running.
 
 ## Manual Start/Stop Proof
 
 ```text
-START_STATUS_RESULT: not run after Docker Desktop runtime failure
-RUNNING_STATUS_RESULT: not available
-STOP_STATUS_RESULT: not run after Docker Desktop runtime failure
-APP_CONTAINER_REMOVED: not verified
-PORTS_CLEAR: true for 3100 and 3101 from status wrapper
+START_STATUS_RESULT: pass, container started on 127.0.0.1:3100
+RUNNING_STATUS_RESULT:
+  /: 200
+  /runtime: 200
+  /goal-console: 200
+  /api/health: 200
+  /api/auth/readiness: 200
+  /api/local/runtime/status: 404 from local proof image
+STOP_STATUS_RESULT: pass
+APP_CONTAINER_REMOVED: true
+PORTS_CLEAR: true for 3100 and 3101 after stop
 POSTGRES_TOUCHED: false
 COMMAND_EXECUTION_FROM_UI: false
 ```
@@ -52,7 +57,7 @@ COMMAND_EXECUTION_FROM_UI: false
 focused local runtime status tests: pass
 npm test -- --run: pass
 git diff --check: pass
-npm run build: pass
+npm run build with NEXT_PRIVATE_BUILD_WORKER=0 after clearing .next: pass
 ```
 
 ## Safety
@@ -73,5 +78,5 @@ SECRETS_DISCLOSED: false
 ## Next Recommended WO
 
 ```text
-Retry WO-LOCAL-082 after Docker Desktop/local container runtime is healthy.
+WO-LOCAL-083 — First Slice Safety Regression Sweep.
 ```
