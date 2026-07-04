@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
 import type { LocalRuntimeStatus } from "@/lib/local-runtime-status"
 import {
+  LOCAL_RUNTIME_BOUNDARY_ITEMS,
   LOCAL_RUNTIME_EVIDENCE_REFERENCES,
+  LOCAL_RUNTIME_STATE_EXPLAINERS,
   LOCAL_RUNTIME_STATUS_BOUNDARY_COPY,
 } from "@/components/local/local-runtime-live-status-surface"
 
@@ -148,6 +150,23 @@ export function LocalRuntimeLiveStatusPanel() {
 
       <div className="border-b border-border p-4">
         <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          State guide
+        </p>
+        <div className="mt-3 grid gap-2 md:grid-cols-5">
+          {LOCAL_RUNTIME_STATE_EXPLAINERS.map((item) => (
+            <div key={item.state} className="rounded-lg border border-border bg-background p-3">
+              <p className="text-sm font-semibold">{item.title}</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.meaning}</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {item.operatorGuidance}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-b border-border p-4">
+        <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
           Evidence references
         </p>
         <div className="mt-3 grid gap-2 md:grid-cols-3">
@@ -159,6 +178,25 @@ export function LocalRuntimeLiveStatusPanel() {
                 {item.path}
               </code>
             </div>
+          ))}
+        </div>
+        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          {LOCAL_RUNTIME_STATUS_BOUNDARY_COPY.proofSummary}
+        </p>
+      </div>
+
+      <div className="border-b border-border p-4">
+        <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          No-control boundary
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {LOCAL_RUNTIME_BOUNDARY_ITEMS.map((item) => (
+            <span
+              key={item}
+              className="rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground"
+            >
+              {item}
+            </span>
           ))}
         </div>
       </div>
