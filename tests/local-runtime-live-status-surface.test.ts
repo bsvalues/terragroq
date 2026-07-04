@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  LOCAL_RUNTIME_BOUNDARY_ITEMS,
   LOCAL_RUNTIME_EVIDENCE_REFERENCES,
+  LOCAL_RUNTIME_STATE_EXPLAINERS,
   LOCAL_RUNTIME_STATUS_BOUNDARY_COPY,
 } from "@/components/local/local-runtime-live-status-surface"
 
@@ -31,14 +33,42 @@ describe("Local runtime live status surface model", () => {
   it("keeps the UI copy scoped to status display rather than local control", () => {
     const copy = Object.values(LOCAL_RUNTIME_STATUS_BOUNDARY_COPY).join(" ")
 
-    expect(copy).toContain("WilliamOS status route is live")
+    expect(copy).toContain("WilliamOS reports local runtime posture")
     expect(copy).toContain("Host-loopback checks may show unknown")
-    expect(copy).toContain("Primary Operator")
+    expect(copy).toContain("refreshed OMEN app image")
     expect(copy).toContain("No start, stop, restart, repair")
     expect(copy).toContain("command execution")
     expect(copy).not.toContain("Run wrapper")
     expect(copy).not.toContain("Execute wrapper")
     expect(copy).not.toContain("Start Docker")
     expect(copy).not.toContain("Reset Docker")
+  })
+
+  it("explains all supported states without implying automated repair", () => {
+    expect(LOCAL_RUNTIME_STATE_EXPLAINERS.map((item) => item.state)).toEqual([
+      "ready",
+      "degraded",
+      "stopped",
+      "unknown",
+      "stale",
+    ])
+
+    const explainerText = LOCAL_RUNTIME_STATE_EXPLAINERS
+      .map((item) => `${item.meaning} ${item.operatorGuidance}`)
+      .join(" ")
+
+    expect(explainerText).toContain("manual wrappers")
+    expect(explainerText).toContain("proof container namespace")
+    expect(explainerText).toContain("not as permission to repair automatically")
+    expect(explainerText).not.toContain("Click to start")
+    expect(explainerText).not.toContain("Auto-repair")
+  })
+
+  it("keeps boundary chips focused on blocked capabilities rather than metadata expansion", () => {
+    expect(LOCAL_RUNTIME_BOUNDARY_ITEMS).toContain("No UI command execution")
+    expect(LOCAL_RUNTIME_BOUNDARY_ITEMS).toContain("No Docker metadata")
+    expect(LOCAL_RUNTIME_BOUNDARY_ITEMS).toContain("No backup metadata")
+    expect(LOCAL_RUNTIME_BOUNDARY_ITEMS).toContain("No port status")
+    expect(LOCAL_RUNTIME_BOUNDARY_ITEMS).toContain("No persistence or LAN exposure")
   })
 })
