@@ -1,5 +1,6 @@
 import { ArrowRight, BrainCircuit, FlaskConical, LockKeyhole, ShieldCheck } from "lucide-react"
 import { BrainCouncilAssumptionRegistryPanel } from "@/components/brain-council/brain-council-assumption-registry-panel"
+import { BrainCouncilAdvisoryRegistryPanel } from "@/components/brain-council/brain-council-advisory-registry-panel"
 import { BrainCouncilCognitiveDebtPanel } from "@/components/brain-council/brain-council-cognitive-debt-panel"
 import { BrainCouncilContradictionReviewPanel } from "@/components/brain-council/brain-council-contradiction-review-panel"
 import { BrainCouncilDecisionPacketExportPanel } from "@/components/brain-council/brain-council-decision-packet-export-panel"
@@ -52,6 +53,8 @@ export function BrainCouncilReasoningView() {
   return (
     <div className="flex flex-col gap-6 p-6">
       <BrainCouncilNativeAreaPanel />
+
+      <BrainCouncilAdvisoryRegistryPanel />
 
       <HermesDoctrinePanel />
 
