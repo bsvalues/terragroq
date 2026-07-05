@@ -12,9 +12,13 @@ describe("Shell / WOE resume surface", () => {
   it("carries the completed Local OMEN phase as a read-only subsystem", () => {
     expect(LOCAL_OMEN_PHASE_ROLLUP.value).toBe("Stable")
     expect(LOCAL_OMEN_PHASE_ROLLUP.originMain).toBe(
-      "585a5dfd0ceccff76df2842e1fee8538275fe840",
+      "fe9fb98edeb393949cab8e59337eab8550c6950d",
     )
+    expect(LOCAL_OMEN_PHASE_ROLLUP.description).toContain("route status")
+    expect(LOCAL_OMEN_PHASE_ROLLUP.description).toContain("host-loopback checks")
+    expect(LOCAL_OMEN_PHASE_ROLLUP.description).toContain("operator-run wrappers")
     expect(LOCAL_OMEN_PHASE_ROLLUP.safety).toContain("Read-only governed subsystem")
+    expect(LOCAL_OMEN_PHASE_ROLLUP.safety).toContain("PowerShell wrappers remain operator-run")
     expect(LOCAL_OMEN_PHASE_ROLLUP.safety).toContain("No command execution")
   })
 

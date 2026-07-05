@@ -1,13 +1,40 @@
-# WO-LOCAL-116 — Evidence Reference UX Polish
+# WO-LOCAL-116 — Runtime Authority Boundary Copy
 
 ## Result
 
 PASS.
 
-The evidence reference section was polished with a clearer proof summary that
-keeps the evidence static and read-only.
+The runtime surface explicitly shows that WilliamOS is not allowed to control
+the OMEN runtime from the UI.
+
+## Authority Boundary Copy
+
+```text
+AUTHORITY_BOUNDARY_COPY_ADDED: true
+MANUAL_ONLY_OPERATION: intentional
+POWERSHELL_WRAPPERS: operator-run only
+UI_COMMAND_EXECUTION: disabled
+DOCKER_METADATA_ENABLED: false
+BACKUP_SCANNING_ENABLED: false
+PERSISTENCE_ENABLED: false
+LAN_EXPOSURE_ENABLED: false
+AUTONOMY_ENABLED: false
+```
+
+The no-control boundary chips keep the blocked lanes visible:
+
+```text
+No UI command execution
+No Docker metadata
+No backup metadata
+No port status
+No persistence or LAN exposure
+```
 
 ## Evidence UX
+
+The evidence reference section also remains static and read-only.
+
 
 ```text
 EVIDENCE_UX_POLISHED: true

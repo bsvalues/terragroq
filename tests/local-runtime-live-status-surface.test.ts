@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   LOCAL_RUNTIME_BOUNDARY_ITEMS,
   LOCAL_RUNTIME_EVIDENCE_REFERENCES,
+  LOCAL_RUNTIME_SEMANTIC_ITEMS,
   LOCAL_RUNTIME_STATE_EXPLAINERS,
   LOCAL_RUNTIME_STATUS_BOUNDARY_COPY,
 } from "@/components/local/local-runtime-live-status-surface"
@@ -62,6 +63,30 @@ describe("Local runtime live status surface model", () => {
     expect(explainerText).toContain("not as permission to repair automatically")
     expect(explainerText).not.toContain("Click to start")
     expect(explainerText).not.toContain("Auto-repair")
+  })
+
+  it("separates status route, host-loopback checks, and the compatibility alias", () => {
+    expect(LOCAL_RUNTIME_SEMANTIC_ITEMS).toEqual([
+      expect.objectContaining({
+        label: "Status route",
+        description: expect.stringContaining("Route/status API truth"),
+      }),
+      expect.objectContaining({
+        label: "Host-loopback checks",
+        description: expect.stringContaining("separate from route status"),
+      }),
+      expect.objectContaining({
+        label: "Compatibility alias",
+        description: expect.stringContaining("not the primary operator-facing concept"),
+      }),
+    ])
+
+    const text = LOCAL_RUNTIME_SEMANTIC_ITEMS.map((item) => item.description).join(" ")
+
+    expect(text).toContain("checks.appHttp")
+    expect(text).toContain("checks.app")
+    expect(text).not.toContain("Start app")
+    expect(text).not.toContain("Stop app")
   })
 
   it("keeps boundary chips focused on blocked capabilities rather than metadata expansion", () => {

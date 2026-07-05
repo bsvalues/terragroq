@@ -43,5 +43,5 @@ SECRETS_DISCLOSED: false
 ## Next Recommended WO
 
 ```text
-WO-LOCAL-118 — UX-Only Route Proof / Build Validation
+WO-LOCAL-118 — Runtime Home Card Consistency
 ```

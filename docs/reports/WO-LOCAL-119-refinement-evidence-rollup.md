@@ -11,27 +11,29 @@ The UX-only local runtime status refinement batch is ready for closure.
 ```text
 WO-LOCAL-114: runtime status copy refined
 WO-LOCAL-115: state explainer cards added
-WO-LOCAL-116: evidence reference UX polished
+WO-LOCAL-116: authority boundary copy added
 WO-LOCAL-117: manual-only boundary tests expanded
-WO-LOCAL-118: UX-only validation completed
+WO-LOCAL-118: Home Local Status card consistency completed
 ```
 
 ## Current Local Status UX
 
 ```text
 status route displayed separately from host-loopback checks
+checks.app retained only as a compatibility alias
 state guide explains ready/degraded/stopped/unknown/stale
 evidence references remain static and read-only
 proof summary clarifies refreshed image result and cleanup
 no-control boundary chips make blocked capabilities visible
+Home Local Status card links to /runtime and matches manual-only semantics
 ```
 
 ## Validation Rollup
 
 ```text
-focused tests: pass
-full suite: pass
-production build: pass
+focused tests: pass, 37 tests
+full suite: pass, 112 files / 482 tests
+production build: pass after clearing stale workspace-local .next
 git diff --check: pass
 ```
 
@@ -58,10 +60,11 @@ UNRELATED_CONTAINERS_TOUCHED: false
 Docker Desktop remains a Windows/WSL runtime dependency for future manual proof.
 Metadata expansion remains intentionally unimplemented.
 The status surface remains advisory and observational, not operational control.
+Home remains a concise summary and points to /runtime for detail.
 ```
 
 ## Next Recommended WO
 
 ```text
-WO-LOCAL-120 — Next Metadata Gate Decision Packet
+Freeze local runtime authority, or run one more UX polish gate only if operator copy remains unclear.
 ```
