@@ -137,10 +137,44 @@ export function AuthorityRegistryPanel() {
         </div>
       </div>
 
+      <div className="border-t border-border p-4">
+        <p className="text-sm font-medium">Authority gates</p>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {registry.gates.map((gate) => (
+            <div key={gate.gateId} className="rounded-lg border border-border bg-background p-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <p className="text-sm font-semibold">{gate.title}</p>
+                <Badge variant="outline">{gate.status}</Badge>
+              </div>
+              <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {gate.gateId}
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {gate.summary}
+              </p>
+              <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+                Next: {gate.safeNextAction}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="grid gap-4 border-t border-border p-4 lg:grid-cols-3">
         <LinkColumn title="Work Order authority" links={registry.workOrderAuthorityLinks} />
         <LinkColumn title="Evidence authority" links={registry.evidenceAuthorityLinks} />
-        <LinkColumn title="Blocked decision authority" links={registry.blockedDecisionAuthorityLinks} />
+        <LinkColumn title="Owner decision authority" links={registry.ownerDecisionAuthorityLinks} />
+        <LinkColumn title="Memory authority" links={registry.memoryAuthorityLinks} />
+        <LinkColumn title="Council authority" links={registry.councilAuthorityLinks} />
+        <LinkColumn title="Local runtime authority" links={registry.localRuntimeAuthorityLinks} />
+      </div>
+
+      <div className="grid gap-4 border-t border-border bg-muted/10 p-4 xl:grid-cols-2">
+        <GateGroup title="Metadata expansion gates" gates={registry.metadataExpansionGates} />
+        <GateGroup title="Runtime control gates" gates={registry.runtimeControlGates} />
+        <GateGroup title="Production / deploy gates" gates={registry.productionDeployGates} />
+        <GateGroup title="DB / schema gates" gates={registry.dbSchemaGates} />
+        <GateGroup title="Autonomy / worker gates" gates={registry.autonomyWorkerGates} />
       </div>
 
       <div className="border-t border-border p-4">
@@ -199,8 +233,11 @@ function LinkColumn({
   links: {
     label: string
     authorityId: string
+    gateId: string
     relatedItem: string
     description: string
+    safeNextAction?: string
+    prohibitedAction?: string
   }[]
 }) {
   return (
@@ -211,12 +248,61 @@ function LinkColumn({
           <div key={`${link.authorityId}-${link.label}`} className="rounded-lg border border-border bg-background p-3">
             <p className="text-sm font-semibold">{link.label}</p>
             <p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              {link.authorityId}
+              {link.authorityId} | {link.gateId}
             </p>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
               {link.description}
             </p>
+            {link.safeNextAction && (
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                Safe next: {link.safeNextAction}
+              </p>
+            )}
+            {link.prohibitedAction && (
+              <p className="mt-2 text-xs leading-relaxed text-destructive">
+                Blocked: {link.prohibitedAction}
+              </p>
+            )}
             <p className="mt-2 text-xs text-muted-foreground">{link.relatedItem}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function GateGroup({
+  title,
+  gates,
+}: {
+  title: string
+  gates: {
+    gateId: string
+    title: string
+    requiredOwnerDecision: string
+    prohibitedActions: string[]
+    safeNextAction: string
+  }[]
+}) {
+  return (
+    <div>
+      <p className="text-sm font-medium">{title}</p>
+      <div className="mt-3 grid gap-2">
+        {gates.map((gate) => (
+          <div key={`${title}-${gate.gateId}`} className="rounded-lg border border-border bg-background p-3">
+            <p className="text-sm font-semibold">{gate.title}</p>
+            <p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {gate.gateId}
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              Decision: {gate.requiredOwnerDecision}
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              Blocked: {gate.prohibitedActions.join(", ")}
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              Safe next: {gate.safeNextAction}
+            </p>
           </div>
         ))}
       </div>
