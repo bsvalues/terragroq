@@ -11,6 +11,7 @@ import {
   Crosshair,
   FolderKanban,
   Hammer,
+  GitCommitHorizontal,
   ShieldCheck,
   type LucideIcon,
 } from "lucide-react"
@@ -75,6 +76,13 @@ export const navItems: NavItem[] = [
     icon: Activity,
     group: "Work",
     description: "Inspect proof records.",
+  },
+  {
+    href: "/trace",
+    label: "Trace Ledger",
+    icon: GitCommitHorizontal,
+    group: "Work",
+    description: "Review reasoning records.",
   },
   {
     href: "/projects",
