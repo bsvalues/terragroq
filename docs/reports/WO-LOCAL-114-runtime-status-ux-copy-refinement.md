@@ -26,6 +26,9 @@ UX_COPY_REFINED: true
 POSTURE: read-only, manual-only, localhost-only
 PRIMARY_OPERATOR_CONTEXT: preserved
 CONTROL_BEHAVIOR_IMPLIED: false
+STATUS_ROUTE_COPY_UPDATED: true
+APP_HTTP_COPY_UPDATED: true
+COMPAT_ALIAS_HANDLED: true
 ```
 
 The top-level summary now distinguishes:
@@ -35,6 +38,14 @@ status route
 host-loopback checks
 evidence references
 manual wrapper ownership
+```
+
+The runtime surface now includes a static status semantics section:
+
+```text
+checks.statusRoute: route/status API truth
+checks.appHttp: host-loopback app HTTP checks
+checks.app: compatibility alias only, not the primary operator-facing concept
 ```
 
 ## Safety

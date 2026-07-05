@@ -119,6 +119,9 @@ describe("WilliamOS Home Command Center", () => {
       value: "Stable",
       href: "/runtime",
     })
+    expect(home.statusCards.find((card) => card.label === "Local Status")?.description).toContain(
+      "route status, host-loopback checks, and operator-run wrappers stay separated",
+    )
     expect(home.statusCards.find((card) => card.label === "Next Batch")).toMatchObject({
       value: "Shell / WOE",
       href: "/work-orders",
@@ -246,5 +249,25 @@ describe("WilliamOS Home Command Center", () => {
       portChecksAdded: false,
       lanExposureEnabled: false,
     })
+  })
+
+  it("keeps the Home local status card consistent with manual-only runtime semantics", () => {
+    const home = getHomeCommandCenter(initializedStats)
+    const localStatus = home.statusCards.find((card) => card.label === "Local Status")
+    const localPosture = home.systemPosture.find((card) => card.label === "Local Status")
+    const text = [localStatus?.description, localPosture?.description].join(" ")
+
+    expect(localStatus).toMatchObject({
+      value: "Stable",
+      href: "/runtime",
+    })
+    expect(text).toContain("route status")
+    expect(text).toContain("host-loopback checks")
+    expect(text).toContain("operator-run wrappers")
+    expect(text).toContain("metadata and controls remain blocked")
+    expect(text).not.toContain("start")
+    expect(text).not.toContain("restart")
+    expect(text).not.toContain("enable persistence")
+    expect(text).not.toContain("LAN exposure enabled")
   })
 })

@@ -250,7 +250,7 @@ export function getHomeCommandCenter(stats: DashboardStats): HomeCommandCenter {
         label: "Local Status",
         posture: "Read-only",
         description:
-          "OMEN status is stable as a governed subsystem; metadata and controls remain blocked.",
+          "OMEN route status and host-loopback checks stay separate; operator-run wrappers remain manual and metadata and controls remain blocked.",
         href: "/runtime",
       },
     ],

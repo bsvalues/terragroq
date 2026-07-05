@@ -8,6 +8,7 @@ import type { LocalRuntimeStatus } from "@/lib/local-runtime-status"
 import {
   LOCAL_RUNTIME_BOUNDARY_ITEMS,
   LOCAL_RUNTIME_EVIDENCE_REFERENCES,
+  LOCAL_RUNTIME_SEMANTIC_ITEMS,
   LOCAL_RUNTIME_STATE_EXPLAINERS,
   LOCAL_RUNTIME_STATUS_BOUNDARY_COPY,
 } from "@/components/local/local-runtime-live-status-surface"
@@ -145,6 +146,22 @@ export function LocalRuntimeLiveStatusPanel() {
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             Documented only. This slice does not inspect Docker, ports, backups, or database contents.
           </p>
+        </div>
+      </div>
+
+      <div className="border-b border-border p-4">
+        <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          Status semantics
+        </p>
+        <div className="mt-3 grid gap-2 md:grid-cols-3">
+          {LOCAL_RUNTIME_SEMANTIC_ITEMS.map((item) => (
+            <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+              <p className="text-sm font-semibold">{item.label}</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {item.description}
+              </p>
+            </div>
+          ))}
         </div>
       </div>
 

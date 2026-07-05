@@ -2,16 +2,16 @@ export const LOCAL_OMEN_PHASE_ROLLUP = {
   label: "Local OMEN Phase 1",
   value: "Stable",
   description:
-    "Local status API, runtime surface, proof route, manual wrapper proof, and UX refinement are complete.",
+    "Manual-only local status is readable: route status, host-loopback checks, and operator-run wrappers stay separated.",
   href: "/runtime",
-  originMain: "585a5dfd0ceccff76df2842e1fee8538275fe840",
+  originMain: "fe9fb98edeb393949cab8e59337eab8550c6950d",
   completedBatches: [
     "LOCAL-OMEN-RUNTIME-STATUS-POST-PROOF-BATCH-001",
     "LOCAL-OMEN-LIVE-STATUS-REFINEMENT-BATCH-001",
   ],
   validation: "git diff, focused tests, full suite, production build, Vercel, and CodeRabbit passed",
   safety:
-    "Read-only governed subsystem. No command execution, metadata expansion, persistence, LAN exposure, or autonomy.",
+    "Read-only governed subsystem. PowerShell wrappers remain operator-run. No command execution, metadata expansion, persistence, LAN exposure, or autonomy.",
 } as const
 
 export const SHELL_WOE_NEXT_BATCH = {

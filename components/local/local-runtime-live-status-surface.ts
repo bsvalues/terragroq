@@ -59,6 +59,21 @@ export const LOCAL_RUNTIME_BOUNDARY_ITEMS = [
   "No persistence or LAN exposure",
 ] as const
 
+export const LOCAL_RUNTIME_SEMANTIC_ITEMS = [
+  {
+    label: "Status route",
+    description: "Route/status API truth: this read-only handler is reachable and rendering its own status.",
+  },
+  {
+    label: "Host-loopback checks",
+    description: "Approved localhost app HTTP checks are separate from route status and may be unknown from a proof container namespace.",
+  },
+  {
+    label: "Compatibility alias",
+    description: "checks.app remains a compatibility alias for checks.appHttp; it is not the primary operator-facing concept.",
+  },
+] as const
+
 export const LOCAL_RUNTIME_STATUS_BOUNDARY_COPY = {
   summary:
     "WilliamOS reports local runtime posture without taking control. The status route, host-loopback checks, and evidence references are separated so proof stays readable.",
