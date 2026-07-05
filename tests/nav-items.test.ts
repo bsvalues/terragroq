@@ -12,6 +12,7 @@ describe("operator navigation information architecture", () => {
       "/work-orders",
       "/audit",
       "/trace",
+      "/academy",
       "/projects",
       "/agent-forge",
       "/brain-council",
@@ -32,6 +33,7 @@ describe("operator navigation information architecture", () => {
     expect(labels.get("/goal-console")).toBe("Next Objective")
     expect(labels.get("/audit")).toBe("Evidence")
     expect(labels.get("/trace")).toBe("Trace Ledger")
+    expect(labels.get("/academy")).toBe("Academy")
     expect(labels.get("/projects")).toBe("Projects")
     expect(labels.get("/agent-forge")).toBe("Agent Forge")
     expect(labels.get("/runtime")).toBe("Systems")
@@ -44,6 +46,7 @@ describe("operator navigation information architecture", () => {
     expect(descriptions.get("/chat")).toBe("Command conversation.")
     expect(descriptions.get("/audit")).toBe("Inspect proof records.")
     expect(descriptions.get("/trace")).toBe("Review reasoning records.")
+    expect(descriptions.get("/academy")).toBe("Learn WilliamOS operation.")
     expect(descriptions.get("/projects")).toBe("Review systems under command.")
     expect(descriptions.get("/agent-forge")).toBe("Prepare capabilities.")
     expect(descriptions.get("/runtime")).toBe("Check readiness and health.")
@@ -73,6 +76,7 @@ describe("operator navigation information architecture", () => {
         "Work Orders",
         "Evidence",
         "Trace Ledger",
+        "Academy",
         "Systems",
         "Brain Council",
         "Agent Forge",

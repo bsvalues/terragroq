@@ -12,6 +12,7 @@ import {
   FolderKanban,
   Hammer,
   GitCommitHorizontal,
+  GraduationCap,
   ShieldCheck,
   type LucideIcon,
 } from "lucide-react"
@@ -83,6 +84,13 @@ export const navItems: NavItem[] = [
     icon: GitCommitHorizontal,
     group: "Work",
     description: "Review reasoning records.",
+  },
+  {
+    href: "/academy",
+    label: "Academy",
+    icon: GraduationCap,
+    group: "Work",
+    description: "Learn WilliamOS operation.",
   },
   {
     href: "/projects",
