@@ -30,6 +30,8 @@ describe("Evidence Spine surface", () => {
       "BLOCKED_DECISION_PROOF",
       "ROLLUP_PROOF",
       "NEXT_LANE_DECISION",
+      "AUTHORITY_PROOF",
+      "WORK_ORDER_PROOF",
     ])
   })
 
@@ -42,7 +44,7 @@ describe("Evidence Spine surface", () => {
     expect(record).toMatchObject({
       evidenceId: "evidence-woe-detail-surfaces",
       title: expect.any(String),
-      type: "PR_PROOF",
+      type: "WORK_ORDER_PROOF",
       scope: expect.any(String),
       relatedGoal: expect.any(String),
       relatedBatch: "WILLIAMOS-WOE-DETAIL-SURFACES-BATCH-001",
@@ -73,6 +75,8 @@ describe("Evidence Spine surface", () => {
       "BLOCKED_DECISION_PROOF",
       "ROLLUP_PROOF",
       "NEXT_LANE_DECISION",
+      "AUTHORITY_PROOF",
+      "WORK_ORDER_PROOF",
     ]
 
     for (const type of expectedTypes) {
@@ -156,6 +160,34 @@ describe("Evidence Spine surface", () => {
       "Autonomy not authorized",
     ])
     expect(surface.blockedDecisionEvidenceLinks.every((link) => link.evidenceId.length > 0)).toBe(true)
+  })
+
+  it("records the current local runtime freeze, authority registry, and owner decision evidence", () => {
+    const surface = getEvidenceSpineSurface()
+    const recordsById = new Map(surface.records.map((record) => [record.evidenceId, record]))
+
+    expect(recordsById.get("evidence-local-omen-status")).toMatchObject({
+      title: "Local OMEN Runtime Authority Freeze Proof",
+      relatedBatch: "LOCAL-OMEN-RUNTIME-AUTHORITY-FREEZE-BATCH-001",
+      relatedWorkOrder: "WO-LOCAL-120 through WO-LOCAL-124",
+      relatedPr: "#287",
+      originMain: "dcebc87c13a1194cfadc13ce2079c35fb5e4739d",
+      sourcePath: "docs/reports/WO-LOCAL-123-local-runtime-freeze-evidence-rollup.md",
+    })
+    expect(recordsById.get("evidence-authority-governance-registry")).toMatchObject({
+      type: "AUTHORITY_PROOF",
+      relatedPr: "#285",
+      originMain: "f4b40f893ea2f2815ffe31fc45e7d7c62c612058",
+    })
+    expect(recordsById.get("evidence-owner-decision-queue")).toMatchObject({
+      type: "BLOCKED_DECISION_PROOF",
+      relatedPr: "#286",
+      originMain: "6d1145bf5e7461c481a4c550201fc66d72504f23",
+    })
+    expect(recordsById.get("evidence-pr-local-freeze")).toMatchObject({
+      type: "PR_PROOF",
+      relatedPr: "#287",
+    })
   })
 
   it("integrates WOE evidence navigation without dynamic graph or background indexer behavior", () => {

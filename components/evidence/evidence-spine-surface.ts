@@ -7,6 +7,8 @@ export type EvidenceCategoryId =
   | "BLOCKED_DECISION_PROOF"
   | "ROLLUP_PROOF"
   | "NEXT_LANE_DECISION"
+  | "AUTHORITY_PROOF"
+  | "WORK_ORDER_PROOF"
 
 export type EvidenceStatus = "confirmed" | "recorded" | "blocked" | "recommended"
 
@@ -154,30 +156,40 @@ export const EVIDENCE_CATEGORIES: EvidenceCategoryRecord[] = [
     label: "Next Lane Decision",
     description: "Decision packets that recommend the next bounded lane without authorizing execution.",
   },
+  {
+    id: "AUTHORITY_PROOF",
+    label: "Authority Proof",
+    description: "Authority gates, blocker registries, owner decisions, and escalation boundaries.",
+  },
+  {
+    id: "WORK_ORDER_PROOF",
+    label: "Work Order Proof",
+    description: "Goal, batch, Work Order, completion, and WOE navigation evidence.",
+  },
 ]
 
 export const EVIDENCE_RECORDS: EvidenceRecord[] = [
   {
     evidenceId: "evidence-local-omen-status",
-    title: "Local OMEN Phase 1 Status Proof",
+    title: "Local OMEN Runtime Authority Freeze Proof",
     type: "LOCAL_PROOF",
     scope: "HP OMEN manual-only local runtime status",
     relatedGoal: "Phase 1 local host posture",
-    relatedBatch: "LOCAL-OMEN-LIVE-STATUS-REFINEMENT-BATCH-001",
-    relatedWorkOrder: "WO-LOCAL-114 through WO-LOCAL-120",
-    relatedPr: "#279",
-    originMain: "585a5dfd0ceccff76df2842e1fee8538275fe840",
-    validationSummary: "Focused tests, full suite, production build, Vercel, and CodeRabbit passed.",
+    relatedBatch: "LOCAL-OMEN-RUNTIME-AUTHORITY-FREEZE-BATCH-001",
+    relatedWorkOrder: "WO-LOCAL-120 through WO-LOCAL-124",
+    relatedPr: "#287",
+    originMain: "dcebc87c13a1194cfadc13ce2079c35fb5e4739d",
+    validationSummary: "git diff --check, 114-file full suite, production build, Vercel, Sourcery, and CodeRabbit passed.",
     proofSummary:
-      "The local status API and runtime surface were proven as read-only, manual-only, localhost-only operator guidance.",
+      "The local status API, runtime surface, Home copy, and authority-freeze packet now hold Local OMEN at read-only, manual-only, localhost-only.",
     safetySummary:
-      "No command execution, metadata expansion, persistence, scheduler, LAN exposure, secrets, or autonomy were added.",
-    sourcePath: "docs/reports/WO-LOCAL-119-refinement-evidence-rollup.md",
+      "No command execution, metadata expansion, persistence, service/schedule, LAN exposure, secrets, TerraFusion/PACS touch, container touch, or autonomy was added.",
+    sourcePath: "docs/reports/WO-LOCAL-123-local-runtime-freeze-evidence-rollup.md",
     status: "confirmed",
-    createdAtLabel: "Local OMEN Phase 1 refinement closure",
-    proves: "WilliamOS can display local OMEN runtime status as a bounded read-only subsystem.",
+    createdAtLabel: "Local OMEN runtime authority freeze",
+    proves: "WilliamOS can display local OMEN runtime status while keeping local authority frozen.",
     doesNotProve: "It does not prove Docker metadata, backup metadata, port status, or runtime control authority.",
-    nextRelatedItem: "WILLIAMOS-SHELL-WOE-RESUME-BATCH-001",
+    nextRelatedItem: "WILLIAMOS-EVIDENCE-SPINE-BATCH-001",
   },
   {
     evidenceId: "evidence-shell-woe-resume",
@@ -204,7 +216,7 @@ export const EVIDENCE_RECORDS: EvidenceRecord[] = [
   {
     evidenceId: "evidence-woe-detail-surfaces",
     title: "WOE Detail Surfaces Proof",
-    type: "PR_PROOF",
+    type: "WORK_ORDER_PROOF",
     scope: "Goal, batch, Work Order, evidence, blocker, safety, and report detail surfaces",
     relatedGoal: "Work Order Engine detail visibility",
     relatedBatch: "WILLIAMOS-WOE-DETAIL-SURFACES-BATCH-001",
@@ -243,6 +255,28 @@ export const EVIDENCE_RECORDS: EvidenceRecord[] = [
     proves: "The code and UI changes passed the required validation chain.",
     doesNotProve: "It does not provide live CI polling or GitHub API integration.",
     nextRelatedItem: "WO-EVIDENCE-006",
+  },
+  {
+    evidenceId: "evidence-pr-local-freeze",
+    title: "PR #287 Local Runtime Authority Freeze Proof",
+    type: "PR_PROOF",
+    scope: "Merged PR and hosted checks",
+    relatedGoal: "Local OMEN runtime authority freeze",
+    relatedBatch: "LOCAL-OMEN-RUNTIME-AUTHORITY-FREEZE-BATCH-001",
+    relatedWorkOrder: "WO-LOCAL-120 through WO-LOCAL-124",
+    relatedPr: "#287",
+    originMain: "dcebc87c13a1194cfadc13ce2079c35fb5e4739d",
+    validationSummary: "CodeRabbit, Sourcery, Vercel, Vercel Preview Comments, full suite, diff check, and build passed.",
+    proofSummary:
+      "PR #287 merged the local runtime authority freeze packet and blocker registry as docs/report evidence.",
+    safetySummary:
+      "The PR added no command execution, metadata expansion, runtime control, persistence, LAN exposure, secrets, or autonomy.",
+    sourcePath: "docs/reports/WO-LOCAL-124-return-to-williamos-lane-decision-packet.md",
+    status: "confirmed",
+    createdAtLabel: "PR #287 merge proof",
+    proves: "The local runtime authority freeze was merged and checked.",
+    doesNotProve: "It does not authorize a new runtime lane.",
+    nextRelatedItem: "WILLIAMOS-EVIDENCE-SPINE-BATCH-001",
   },
   {
     evidenceId: "evidence-production-proof",
@@ -291,20 +325,64 @@ export const EVIDENCE_RECORDS: EvidenceRecord[] = [
     type: "BLOCKED_DECISION_PROOF",
     scope: "Runtime and metadata expansion gates",
     relatedGoal: "Keep local status bounded",
-    relatedBatch: "LOCAL-OMEN-LIVE-STATUS-REFINEMENT-BATCH-001",
-    relatedWorkOrder: "WO-LOCAL-120",
-    relatedPr: "#279",
-    originMain: "585a5dfd0ceccff76df2842e1fee8538275fe840",
-    validationSummary: "The metadata gate remained closed after local status UX refinement.",
+    relatedBatch: "LOCAL-OMEN-RUNTIME-AUTHORITY-FREEZE-BATCH-001",
+    relatedWorkOrder: "WO-LOCAL-121",
+    relatedPr: "#287",
+    originMain: "dcebc87c13a1194cfadc13ce2079c35fb5e4739d",
+    validationSummary: "The metadata gate remained closed after local runtime authority was frozen.",
     proofSummary:
-      "Docker metadata, backup metadata, port checks, runtime control, and autonomy remain blocked until owner authority opens a specific gate.",
+      "Docker metadata, backup metadata, port checks, runtime control, persistence, LAN exposure, and autonomy remain blocked until owner authority opens a specific gate.",
     safetySummary: "No metadata expansion or runtime control was authorized.",
-    sourcePath: "docs/reports/WO-LOCAL-120-next-metadata-gate-decision-packet.md",
+    sourcePath: "docs/reports/WO-LOCAL-121-metadata-expansion-blocker-registry.md",
     status: "blocked",
-    createdAtLabel: "Local metadata gate decision",
+    createdAtLabel: "Local runtime blocker registry",
     proves: "Blocked local metadata decisions have supporting evidence.",
     doesNotProve: "It does not authorize metadata expansion.",
     nextRelatedItem: "Future metadata gate only if explicitly authorized",
+  },
+  {
+    evidenceId: "evidence-authority-governance-registry",
+    title: "Authority Governance Registry Proof",
+    type: "AUTHORITY_PROOF",
+    scope: "Authority gates, blockers, and owner decision boundaries",
+    relatedGoal: "Authority / Governance Registry",
+    relatedBatch: "WILLIAMOS-AUTHORITY-GOVERNANCE-REGISTRY-BATCH-001",
+    relatedWorkOrder: "WO-AUTHORITY-001 through WO-AUTHORITY-014",
+    relatedPr: "#285",
+    originMain: "f4b40f893ea2f2815ffe31fc45e7d7c62c612058",
+    validationSummary: "Authority registry tests, full suite, production build, Vercel, and CodeRabbit passed.",
+    proofSummary:
+      "Authority doctrine, gate registry, blocked actions, metadata gates, runtime gates, production gates, DB/schema gates, autonomy gates, badges, links, safety sweep, and rollup are represented as read-only authority evidence.",
+    safetySummary:
+      "No approval controls, enforcement engine, runtime mutation, metadata expansion, cloud change, DB/schema change, secrets, or autonomy were added.",
+    sourcePath: "docs/reports/WO-AUTHORITY-014-authority-registry-evidence-rollup.md",
+    status: "confirmed",
+    createdAtLabel: "Authority registry closure",
+    proves: "Authority gates are visible as evidence and governance records.",
+    doesNotProve: "It does not implement an approval engine or grant authority.",
+    nextRelatedItem: "Owner decision queue evidence",
+  },
+  {
+    evidenceId: "evidence-owner-decision-queue",
+    title: "Owner Decision Queue Proof",
+    type: "BLOCKED_DECISION_PROOF",
+    scope: "Owner decisions, blocked actions, and escalation boundaries",
+    relatedGoal: "Authority / owner decision visibility",
+    relatedBatch: "WILLIAMOS-OWNER-DECISION-QUEUE-BATCH-001",
+    relatedWorkOrder: "WO-DECISION-001 through WO-DECISION-015",
+    relatedPr: "#286",
+    originMain: "6d1145bf5e7461c481a4c550201fc66d72504f23",
+    validationSummary: "Owner decision queue tests, full suite, production build, Vercel, and CodeRabbit passed.",
+    proofSummary:
+      "Blocked decisions are visible with owner actions, supporting evidence, safety cards, and next-lane decision records.",
+    safetySummary:
+      "No approval mutation, command execution, dynamic ingestion, runtime mutation, production action, or autonomy was added.",
+    sourcePath: "docs/reports/WO-DECISION-014-owner-decision-evidence-rollup.md",
+    status: "confirmed",
+    createdAtLabel: "Owner decision queue closure",
+    proves: "Blocked decisions can be inspected without granting authority.",
+    doesNotProve: "It does not approve, deny, execute, or mutate decision state.",
+    nextRelatedItem: "WILLIAMOS-MEMORY-SPINE-BATCH-001",
   },
   {
     evidenceId: "evidence-next-lane-authority-registry",

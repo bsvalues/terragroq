@@ -5,6 +5,8 @@ RESULT: PASS
 ## Scope
 
 Added a static read-only Evidence Record model for WilliamOS evidence surfaces.
+The model was refreshed from the accepted current state at
+`origin/main = dcebc87c13a1194cfadc13ce2079c35fb5e4739d`.
 
 ## Fields
 
@@ -26,6 +28,19 @@ Added a static read-only Evidence Record model for WilliamOS evidence surfaces.
 - `proves`
 - `doesNotProve`
 - `nextRelatedItem`
+
+## Current Records
+
+- Local OMEN runtime authority freeze proof
+- PR #287 local runtime authority freeze proof
+- WOE detail surfaces proof
+- validation proof
+- production proof boundary
+- safety boundary proof
+- blocked runtime metadata decision proof
+- authority governance registry proof
+- owner decision queue proof
+- next-lane authority registry decision proof
 
 ## Safety
 
