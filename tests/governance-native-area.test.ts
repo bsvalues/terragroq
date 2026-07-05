@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { getGovernanceNativeArea } from "@/components/governance/governance-native-area"
+import { getAuthorityRegistrySurface } from "@/components/governance/authority-registry"
 
 describe("Governance native area", () => {
   it("frames Governance as the native WilliamOS authority layer", () => {
@@ -129,5 +130,21 @@ describe("Governance native area", () => {
     expect(text).not.toMatch(
       /admin panel|user management|team permissions|workspace settings|execute approval|auto-approve|grant access now|activate now|unleash|AI administrator|compliance theater/i,
     )
+  })
+
+  it("keeps the Authority Registry static, read-only, and owner-gated", () => {
+    const registry = getAuthorityRegistrySurface()
+
+    expect(registry.doctrine.statements).toContain("WilliamOS must not grant itself authority.")
+    expect(registry.records.map((record) => record.authorityId)).toContain(
+      "authority-read-only-registry",
+    )
+    expect(registry.records.map((record) => record.authorityId)).toContain(
+      "authority-local-runtime-mutation",
+    )
+    expect(registry.safety.staticReadOnly).toBe(true)
+    expect(registry.safety.commandExecutionAdded).toBe(false)
+    expect(registry.safety.runtimeEnforcementEngineAdded).toBe(false)
+    expect(registry.safety.permissionModelChanged).toBe(false)
   })
 })
