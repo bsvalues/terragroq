@@ -23,3 +23,8 @@ RESULT: PASS
 
 Focused Evidence Spine tests assert the static read model and blocked-scope flags.
 
+The refresh also asserts that current Local OMEN freeze, authority registry, and
+owner decision evidence are represented as static records without ingestion,
+filesystem scanning, GitHub API integration, command execution, or authority
+mutation.
+

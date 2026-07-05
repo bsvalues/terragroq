@@ -21,6 +21,14 @@ B - Authority / Governance Registry
 
 After WOE detail surfaces and the Evidence Spine, the next highest-value layer is a formal authority registry so WilliamOS can consistently show what requires owner authority before mutation, metadata expansion, runtime control, autonomy, deploy, DB/schema change, or production action.
 
+## Current-State Note
+
+The accepted base already includes authority governance and owner decision queue
+work on `origin/main`. This packet preserves the Evidence Spine recommendation
+without authorizing any additional authority engine, approval controls,
+metadata expansion, runtime control, autonomy, deploy, DB/schema change, or
+production action.
+
 ## Safety
 
 Authority engine added: false
