@@ -15,6 +15,7 @@ describe("operator navigation information architecture", () => {
       "/academy",
       "/projects",
       "/agent-forge",
+      "/hermes",
       "/brain-council",
       "/memory",
       "/corpus",
@@ -36,6 +37,7 @@ describe("operator navigation information architecture", () => {
     expect(labels.get("/academy")).toBe("Academy")
     expect(labels.get("/projects")).toBe("Projects")
     expect(labels.get("/agent-forge")).toBe("Agent Forge")
+    expect(labels.get("/hermes")).toBe("Hermes")
     expect(labels.get("/runtime")).toBe("Systems")
   })
 
@@ -49,6 +51,7 @@ describe("operator navigation information architecture", () => {
     expect(descriptions.get("/academy")).toBe("Learn WilliamOS operation.")
     expect(descriptions.get("/projects")).toBe("Review systems under command.")
     expect(descriptions.get("/agent-forge")).toBe("Prepare capabilities.")
+    expect(descriptions.get("/hermes")).toBe("Review worker boundaries.")
     expect(descriptions.get("/runtime")).toBe("Check readiness and health.")
   })
 
@@ -80,6 +83,7 @@ describe("operator navigation information architecture", () => {
         "Systems",
         "Brain Council",
         "Agent Forge",
+        "Hermes",
         "Projects",
         "Memory",
         "Governance",

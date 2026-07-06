@@ -13,6 +13,7 @@ import {
   Hammer,
   GitCommitHorizontal,
   GraduationCap,
+  Bot,
   ShieldCheck,
   type LucideIcon,
 } from "lucide-react"
@@ -105,6 +106,13 @@ export const navItems: NavItem[] = [
     icon: Hammer,
     group: "Work",
     description: "Prepare capabilities.",
+  },
+  {
+    href: "/hermes",
+    label: "Hermes",
+    icon: Bot,
+    group: "Work",
+    description: "Review worker boundaries.",
   },
   {
     href: "/brain-council",
