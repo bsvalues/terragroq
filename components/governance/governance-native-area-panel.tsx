@@ -26,7 +26,21 @@ export function GovernanceNativeAreaPanel() {
         </p>
       </div>
 
-      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-3">
+      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-4">
+        {area.shellSequence.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.value}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-b border-border bg-muted/10 p-4 md:grid-cols-3">
         {area.postureSummary.map((item) => (
           <div key={item.label} className="rounded-lg border border-border bg-background p-3">
             <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">

@@ -24,6 +24,7 @@ export type GovernanceNativeArea = {
   title: string
   eyebrow: string
   description: string
+  shellSequence: GovernancePostureSummaryItem[]
   postureSummary: GovernancePostureSummaryItem[]
   sections: GovernanceControlSection[]
   authorityBoundaries: GovernanceAuthorityBoundary[]
@@ -55,9 +56,35 @@ export type GovernanceNativeArea = {
 export function getGovernanceNativeArea(): GovernanceNativeArea {
   return {
     title: "Governance",
-    eyebrow: "WilliamOS Authority Layer",
+    eyebrow: "Primary Authority Layer",
     description:
-      "Governance is the native WilliamOS area for Primary authority, safety gates, blocked decisions, access posture, and evidence-backed approval boundaries. It shows what the system may prepare, what it may recommend, and what requires owner approval before anything can act.",
+      "Governance is the Primary Operator authority layer for WilliamOS. It makes scope, denied authority, owner decisions, and evidence requirements visible without turning the shell into an approval console or permission system.",
+    shellSequence: [
+      {
+        label: "Authority",
+        value: "Declare",
+        description:
+          "Show the current owner-held authority boundary before any Work Order can expand scope.",
+      },
+      {
+        label: "Gate",
+        value: "Hold",
+        description:
+          "Keep mutation, access, runtime, production, and autonomy lanes blocked until separately authorized.",
+      },
+      {
+        label: "Evidence",
+        value: "Prove",
+        description:
+          "Attach validation and production proof before a gate can move or a claim can be trusted.",
+      },
+      {
+        label: "Decision",
+        value: "Return",
+        description:
+          "Route risk-changing choices back to the Primary instead of letting the UI self-authorize.",
+      },
+    ],
     postureSummary: [
       {
         label: "Primary authority",
@@ -86,7 +113,7 @@ export function getGovernanceNativeArea(): GovernanceNativeArea {
         allowed: "Review authority posture and active grants.",
         blocked: "No automatic approval, permission expansion, or grant execution is added here.",
         ownerApproval: "Required before authority can expand beyond the current gate.",
-        nextSafeStep: "Keep authority decisions attached to Work Orders and Evidence.",
+        nextSafeStep: "Keep authority decisions attached to Work Orders, Evidence, and the Primary shell sequence.",
       },
       {
         label: "Blocked Decisions",
@@ -131,7 +158,7 @@ export function getGovernanceNativeArea(): GovernanceNativeArea {
         allowed: "Link validation, production checks, and review evidence to gates.",
         blocked: "No claim can become authority merely because it is stated.",
         ownerApproval: "Required when evidence supports a risk-changing decision.",
-        nextSafeStep: "Verify through /audit before changing posture.",
+        nextSafeStep: "Verify through Evidence before changing posture.",
       },
       {
         label: "Permission Boundaries",

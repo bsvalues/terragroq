@@ -228,16 +228,19 @@ describe("Authority Registry", () => {
     expect(links.get("Runtime")).toBe("/runtime")
   })
 
-  it("recommends Trace Ledger / Failure-to-Eval and keeps runtime lanes blocked", () => {
+  it("recommends Memory Placement for the Primary shell and keeps runtime lanes blocked", () => {
     const registry = getAuthorityRegistrySurface()
 
     expect(registry.nextLaneDecision).toMatchObject({
-      recommendedBatch: "WILLIAMOS-TRACE-LEDGER-FAILURE-EVAL-BATCH-001",
-      recommendedOption: "C - Trace Ledger / Failure-to-Eval",
+      recommendedBatch: "WO-SHELL-009 - Memory Placement",
+      recommendedOption: "A - Primary shell memory placement",
     })
     expect(registry.nextLaneDecision.blockedLanes).toContain("runtime tracing")
     expect(registry.nextLaneDecision.blockedLanes).toContain("background collection")
     expect(registry.nextLaneDecision.blockedLanes).toContain("metadata expansion")
+    expect(registry.nextLaneDecision.blockedLanes).toContain("memory write")
+    expect(registry.nextLaneDecision.blockedLanes).toContain("dynamic memory retrieval")
+    expect(registry.nextLaneDecision.reason).toContain("static governance-aware context surface")
   })
 
   it("does not add approval, mutation, execution, runtime control, metadata, memory write, autonomy, production, DB/schema, secrets, or TerraFusion touch", () => {
