@@ -72,7 +72,7 @@ First loop:
 
 Current loop:
 
-`WO-OPS-003 - Standard Result Classifier`
+`WO-OPS-004 - Review Thread Monitor Protocol`
 
 ## Authorized Goal Sequence
 
