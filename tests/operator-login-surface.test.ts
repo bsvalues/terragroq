@@ -5,7 +5,7 @@ import {
 } from "@/lib/operator-login-surface"
 
 describe("operator login surface", () => {
-  it("routes operators to the existing sign-in flow without changing auth behavior", () => {
+  it("routes operators to Primary Access without changing auth behavior", () => {
     const surface = getOperatorLoginSurface()
 
     expect(surface.eyebrow).toBe("WilliamOS Operator Console")
@@ -15,26 +15,17 @@ describe("operator login surface", () => {
     })
   })
 
-  it("keeps first-operator bootstrap and scoped access distinct", () => {
+  it("does not expose self-service owner provisioning from normal operator entry", () => {
     const surface = getOperatorLoginSurface()
+    const actions = getVisibleOperatorSecondaryActions(surface, {
+      signup: { open: true },
+    })
 
-    expect(surface.secondaryActions).toContainEqual(
+    expect(surface.secondaryActions).not.toContainEqual(
       expect.objectContaining({
-        label: "Create Primary Operator",
         href: "/sign-up",
       }),
     )
-    expect(surface.notices.map((notice) => notice.body).join(" ")).toContain(
-      "scoped access links under /access/[token]",
-    )
-  })
-
-  it("hides first-operator bootstrap when signup is locked", () => {
-    const surface = getOperatorLoginSurface()
-    const actions = getVisibleOperatorSecondaryActions(surface, {
-      signup: { open: false },
-    })
-
     expect(actions).not.toContainEqual(
       expect.objectContaining({
         href: "/sign-up",
@@ -58,15 +49,12 @@ describe("operator login surface", () => {
     )
   })
 
-  it("does not claim Groq, xAI, public signup, or runtime authority", () => {
+  it("does not claim SaaS signup, workspace, team, or runtime authority", () => {
     const { prohibitedClaims: _prohibitedClaims, ...displaySurface } =
       getOperatorLoginSurface()
     const surfaceText = JSON.stringify(displaySurface)
 
-    expect(surfaceText).not.toContain("Groq-powered")
-    expect(surfaceText).not.toContain("xAI-powered")
-    expect(surfaceText).not.toContain("public signup is available")
-    expect(surfaceText).not.toContain("login grants")
-    expect(surfaceText).not.toContain("signing into TerraGroq")
+    expect(surfaceText).not.toMatch(/Groq-powered|xAI-powered|public signup|login grants|signing into TerraGroq/i)
+    expect(surfaceText).not.toMatch(/create account|create primary|request access|sign up|signup|workspace|team|organization|user onboarding/i)
   })
 })

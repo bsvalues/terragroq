@@ -100,12 +100,12 @@ export function getAuthRecoveryCopy({
     if (isBootstrapLocked(readiness)) {
       return {
         code: "SIGNUP_LOCKED",
-        title: "Signup is intentionally locked",
+        title: "Owner provisioning is intentionally locked",
         message:
-          "Bootstrap has already completed because an operator account exists.",
+          "Bootstrap has already completed because a Primary Operator exists.",
         recovery: [
-          "Use the sign-in screen with the existing operator account.",
-          "If you need another account, use the future invite flow instead of public signup.",
+          "Use Primary Access with the existing operator credentials.",
+          "Additional access belongs behind a future owner-authorized provisioning lane.",
         ],
         tone: "warning",
       }
@@ -114,12 +114,12 @@ export function getAuthRecoveryCopy({
     if (isPolicyClosed(readiness)) {
       return {
         code: "SIGNUP_DISABLED",
-        title: "Signup is disabled by policy",
+        title: "Owner provisioning is disabled by policy",
         message:
-          "This environment does not allow public account creation.",
+          "This private system does not allow self-service account creation.",
         recovery: [
-          "Use an existing operator account.",
-          "Ask the platform owner for an invite or allowlist path when that lane is implemented.",
+          "Use authorized Primary Access.",
+          "Do not open self-service provisioning from the operator experience.",
         ],
         tone: "warning",
       }
@@ -127,13 +127,13 @@ export function getAuthRecoveryCopy({
 
     return {
       code: "SIGNUP_DISABLED",
-      title: "Signup is not available",
-      message:
-        "The server rejected account creation because signup is currently closed.",
+      title: "Owner provisioning is not available",
+    message:
+        "The server rejected provisioning because this private system is closed to self-service entry.",
       recovery: [
-        "Use the sign-in screen if an operator account already exists.",
+        "Use Primary Access if a Primary Operator already exists.",
         "If bootstrap just completed in another session, refresh the page.",
-        "Use the future invite or allowlist flow when it is implemented.",
+        "Use a future owner-authorized provisioning lane when it is implemented.",
       ],
       tone: "warning",
     }
@@ -156,7 +156,7 @@ export function getAuthRecoveryCopy({
         "The app could not verify those credentials for an existing operator account.",
       recovery: [
         "Check the email address and password.",
-        "If this is the first operator account, use the create-account flow only while bootstrap is open.",
+        "If this is the first Primary Operator, use controlled owner provisioning only while bootstrap is open.",
         "Password reset is not available yet; that is a separate recovery lane.",
       ],
       tone: "warning",

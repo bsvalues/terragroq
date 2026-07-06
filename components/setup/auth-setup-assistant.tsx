@@ -8,6 +8,7 @@ import type { AuthReadiness } from "@/lib/auth-readiness"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { DECLARED_PRIMARY_EMAIL } from "@/lib/primary-identity"
 
 type SetupSaveResponse = {
   ok: boolean
@@ -22,6 +23,12 @@ type SetupStatusResponse = {
   runtimeInstanceId: string
   checkedAt: string
   message?: string
+}
+
+type PrimaryCredentialResponse = {
+  ok: boolean
+  operation?: "provisioning" | "recovery"
+  message: string
 }
 
 function generateSecret() {
@@ -47,6 +54,12 @@ export function AuthSetupAssistant({
   const [statusChecking, setStatusChecking] = useState(false)
   const [saved, setSaved] = useState(false)
   const [statusResult, setStatusResult] = useState<SetupStatusResponse | null>(null)
+  const [primaryEmail] = useState(DECLARED_PRIMARY_EMAIL)
+  const [primaryName, setPrimaryName] = useState("Primary Operator")
+  const [primaryPassword, setPrimaryPassword] = useState("")
+  const [primaryPasswordConfirm, setPrimaryPasswordConfirm] = useState("")
+  const [credentialSaving, setCredentialSaving] = useState(false)
+  const [credentialSaved, setCredentialSaved] = useState(false)
 
   const effectiveReadiness = statusResult?.readiness ?? initialReadiness
   const restartDetected =
@@ -118,16 +131,49 @@ export function AuthSetupAssistant({
     }
   }
 
+  async function onPrimaryCredentialSave(e: React.FormEvent) {
+    e.preventDefault()
+    setCredentialSaving(true)
+    try {
+      const response = await fetch("/api/setup/primary-credential", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          email: primaryEmail,
+          name: primaryName,
+          password: primaryPassword,
+          confirmPassword: primaryPasswordConfirm,
+        }),
+      })
+
+      const payload = (await response.json()) as PrimaryCredentialResponse
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || "Primary credential setup failed.")
+      }
+
+      setCredentialSaved(true)
+      setPrimaryPassword("")
+      setPrimaryPasswordConfirm("")
+      toast.success(payload.message)
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Primary credential setup failed.",
+      )
+    } finally {
+      setCredentialSaving(false)
+    }
+  }
+
   if (effectiveReadiness.ready) {
     return (
-      <div className="rounded-lg border border-border bg-card p-6">
+      <div className="flex flex-col gap-6 rounded-lg border border-border bg-card p-6">
         <div className="flex items-start gap-3">
           <CheckCircle2 className="mt-0.5 h-5 w-5 text-success" aria-hidden />
           <div className="space-y-2">
             <h2 className="text-lg font-semibold">Authentication is already configured</h2>
             <p className="text-sm text-muted-foreground">
               {saved
-                ? "Setup completed successfully. Continue to create the first operator account."
+                ? "Setup completed successfully. Continue to controlled owner provisioning."
                 : "This environment passed auth readiness checks. You can continue to sign in."}
             </p>
             {saved && restartDetected ? (
@@ -137,11 +183,89 @@ export function AuthSetupAssistant({
               </p>
             ) : null}
             <Button asChild size="sm">
-              <Link href={saved ? "/sign-up" : "/sign-in"}>
-                {saved ? "Create first operator" : "Go to sign in"}
-              </Link>
+              <Link href="/sign-in">Go to Primary Access</Link>
             </Button>
           </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-muted/20 p-4">
+          <div className="space-y-1">
+            <h3 className="text-sm font-semibold">Controlled Primary credential</h3>
+            <p className="text-sm text-muted-foreground">
+              Establish or recover access for the declared Primary Operator identity
+              on this local machine.
+            </p>
+          </div>
+
+          <form onSubmit={onPrimaryCredentialSave} className="mt-4 grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="primary-name">Primary Operator name</Label>
+              <Input
+                id="primary-name"
+                value={primaryName}
+                onChange={(e) => setPrimaryName(e.target.value)}
+                autoComplete="name"
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="primary-email">Primary email</Label>
+              <Input
+                id="primary-email"
+                type="email"
+                value={primaryEmail}
+                required
+                readOnly
+                autoComplete="email"
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="primary-password">Primary password</Label>
+              <Input
+                id="primary-password"
+                type="password"
+                value={primaryPassword}
+                onChange={(e) => setPrimaryPassword(e.target.value)}
+                required
+                minLength={8}
+                maxLength={128}
+                autoComplete="new-password"
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="primary-password-confirm">Confirm Primary password</Label>
+              <Input
+                id="primary-password-confirm"
+                type="password"
+                value={primaryPasswordConfirm}
+                onChange={(e) => setPrimaryPasswordConfirm(e.target.value)}
+                required
+                minLength={8}
+                maxLength={128}
+                autoComplete="new-password"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="submit" disabled={credentialSaving}>
+                {credentialSaving ? (
+                  <>
+                    <RefreshCw className="mr-1.5 h-4 w-4 animate-spin" aria-hidden />
+                    Saving Primary credential…
+                  </>
+                ) : (
+                  "Save Primary credential"
+                )}
+              </Button>
+              {credentialSaved ? (
+                <Button asChild variant="outline">
+                  <Link href="/sign-in">Enter WilliamOS</Link>
+                </Button>
+              ) : null}
+            </div>
+          </form>
         </div>
       </div>
     )
@@ -158,7 +282,7 @@ export function AuthSetupAssistant({
         <p className="text-sm text-muted-foreground">
           Configure local auth prerequisites directly from the app. This writes a
           <span className="mx-1 font-mono">.env.local</span>
-          file for this workspace.
+          file for this private WilliamOS instance.
         </p>
       </div>
 
@@ -289,7 +413,7 @@ export function AuthSetupAssistant({
           </div>
         ) : (
           <>
-            This assistant is intended for local onboarding. In production, platform
+            This assistant is intended for local owner provisioning. In production, platform
             configuration should be managed by deployment administrators and secret
             managers.
           </>
@@ -298,10 +422,10 @@ export function AuthSetupAssistant({
 
       <div className="flex items-center gap-2">
         <Button asChild size="sm" variant="outline">
-          <Link href="/sign-up">Back to sign up</Link>
+          <Link href="/sign-in">Back to Primary Access</Link>
         </Button>
         <Button asChild size="sm" variant="ghost">
-          <Link href="/sign-in">Back to sign in</Link>
+          <Link href="/operator">Back to Operator entry</Link>
         </Button>
       </div>
     </div>

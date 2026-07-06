@@ -9,15 +9,19 @@ export type SignupStatus = {
 }
 
 function isBootstrapCheckFailure(reason?: string) {
-  return reason?.toLowerCase().startsWith("bootstrap sign-up check failed")
+  const lower = reason?.toLowerCase()
+  return (
+    lower?.startsWith("bootstrap sign-up check failed") ||
+    lower?.startsWith("bootstrap owner provisioning check failed")
+  )
 }
 
 export function getSignupStatus(readiness: AuthReadiness): SignupStatus {
   if (!readiness.databaseReady || !readiness.authReady) {
     return {
       tone: "blocked",
-      label: `Signup: ${readiness.signup.mode}`,
-      title: "Signup policy cannot be trusted until auth/database readiness is restored.",
+      label: `Provisioning: ${readiness.signup.mode}`,
+      title: "Owner provisioning policy cannot be trusted until auth/database readiness is restored.",
     }
   }
 
@@ -25,35 +29,35 @@ export function getSignupStatus(readiness: AuthReadiness): SignupStatus {
     if (!readiness.signup.open && isBootstrapCheckFailure(readiness.signup.reason)) {
       return {
         tone: "blocked",
-        label: "Signup: bootstrap check failed",
-        title: readiness.signup.reason ?? "Bootstrap sign-up check failed.",
+        label: "Provisioning: bootstrap check failed",
+        title: readiness.signup.reason ?? "Bootstrap owner provisioning check failed.",
       }
     }
 
     return readiness.signup.open
       ? {
           tone: "warn",
-          label: "Signup: bootstrap open",
-          title: "Bootstrap signup is open until the first operator account is created.",
+          label: "Provisioning: bootstrap open",
+          title: "Controlled owner provisioning is open until the Primary Operator exists.",
         }
       : {
           tone: "ready",
-          label: "Signup: secured",
-          title: "Bootstrap signup is locked because an operator account already exists.",
+          label: "Provisioning: secured",
+          title: "Owner provisioning is locked because a Primary Operator already exists.",
         }
   }
 
   if (readiness.signup.mode === "closed") {
     return {
       tone: "warn",
-      label: "Signup: closed",
-      title: readiness.signup.reason ?? "Operator signup is disabled by policy.",
+      label: "Provisioning: closed",
+      title: readiness.signup.reason ?? "Owner provisioning is disabled by policy.",
     }
   }
 
   return {
     tone: "ready",
-    label: "Signup: open",
-    title: "Operator signup is open by policy.",
+    label: "Provisioning: controlled",
+    title: "Owner provisioning is controlled by policy.",
   }
 }

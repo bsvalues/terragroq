@@ -10,7 +10,7 @@ function readiness(overrides: Partial<AuthReadiness>): AuthReadiness {
     signup: {
       mode: "bootstrap",
       open: false,
-      reason: "Operator sign-up is not available. Contact your platform administrator.",
+      reason: "Owner provisioning is not available. Contact the Primary Operator.",
     },
     checkedAt: "2026-06-28T00:00:00.000Z",
     checks: {
@@ -24,16 +24,16 @@ function readiness(overrides: Partial<AuthReadiness>): AuthReadiness {
   }
 }
 
-describe("HealthStatusStrip signup status", () => {
-  it("treats healthy bootstrap-locked signup as secured, not destructive", () => {
+describe("HealthStatusStrip owner provisioning status", () => {
+  it("treats healthy bootstrap-locked owner provisioning as secured, not destructive", () => {
     const status = getSignupStatus(readiness({}))
 
     expect(status.tone).toBe("ready")
-    expect(status.label).toBe("Signup: secured")
-    expect(status.title).toContain("operator account already exists")
+    expect(status.label).toBe("Provisioning: secured")
+    expect(status.title).toContain("Primary Operator already exists")
   })
 
-  it("keeps signup destructive when auth readiness is not trustworthy", () => {
+  it("keeps owner provisioning destructive when auth readiness is not trustworthy", () => {
     const status = getSignupStatus(
       readiness({
         ready: false,
@@ -50,7 +50,7 @@ describe("HealthStatusStrip signup status", () => {
     )
 
     expect(status.tone).toBe("blocked")
-    expect(status.label).toBe("Signup: bootstrap")
+    expect(status.label).toBe("Provisioning: bootstrap")
     expect(status.title).toContain("auth/database readiness")
   })
 
@@ -60,29 +60,29 @@ describe("HealthStatusStrip signup status", () => {
         signup: {
           mode: "bootstrap",
           open: false,
-          reason: 'Bootstrap sign-up check failed: relation "user" does not exist.',
+          reason: 'Bootstrap owner provisioning check failed: relation "user" does not exist.',
         },
       }),
     )
 
     expect(status.tone).toBe("blocked")
-    expect(status.label).toBe("Signup: bootstrap check failed")
-    expect(status.title).toContain("Bootstrap sign-up check failed")
+    expect(status.label).toBe("Provisioning: bootstrap check failed")
+    expect(status.title).toContain("Bootstrap owner provisioning check failed")
   })
 
-  it("shows policy-closed signup as a warning when auth itself is ready", () => {
+  it("shows policy-closed owner provisioning as a warning when auth itself is ready", () => {
     const status = getSignupStatus(
       readiness({
         signup: {
           mode: "closed",
           open: false,
-          reason: "Public sign-up is disabled by policy.",
+          reason: "Owner provisioning is disabled by policy.",
         },
       }),
     )
 
     expect(status.tone).toBe("warn")
-    expect(status.label).toBe("Signup: closed")
-    expect(status.title).toBe("Public sign-up is disabled by policy.")
+    expect(status.label).toBe("Provisioning: closed")
+    expect(status.title).toBe("Owner provisioning is disabled by policy.")
   })
 })

@@ -75,7 +75,7 @@ describe("POST /api/setup/local-config route contract", () => {
 
     expect(response.status).toBe(403)
     expect(body.ok).toBe(false)
-    expect(body.message).toContain("AUTH_SIGNUP_MODE=closed")
+    expect(body.message).toContain("owner provisioning is closed")
     expect(writeFileMock).not.toHaveBeenCalled()
   })
 

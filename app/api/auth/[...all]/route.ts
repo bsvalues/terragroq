@@ -18,7 +18,7 @@ export async function POST(req: Request) {
           code: "SIGNUP_DISABLED",
           message:
             policy.reason ??
-            "Operator sign-up is disabled by policy. Contact your platform administrator.",
+            "Owner provisioning is disabled by policy. Contact the Primary Operator.",
         },
         { status: 403 },
       )

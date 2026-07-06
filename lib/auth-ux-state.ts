@@ -18,10 +18,10 @@ export type AuthUxMode = "sign-in" | "sign-up"
 
 export type AuthUxState =
   | "setup-required"
-  | "create-first-operator"
+  | "owner-provisioning"
   | "sign-in"
-  | "signup-locked"
-  | "signup-disabled"
+  | "provisioning-locked"
+  | "provisioning-disabled"
 
 export type AuthUxCopy = {
   state: AuthUxState
@@ -58,20 +58,14 @@ export function getAuthUxState(
 
   const signup = readiness.signup
   if (mode === "sign-up") {
-    if (!signup || signup.open) {
+    if (signup?.mode === "bootstrap" && signup.open) {
       return {
-        state: "create-first-operator",
-        label: signup?.mode === "bootstrap" ? "Primary Operator" : "Access open",
-        title:
-          signup?.mode === "bootstrap"
-            ? "Create the Primary Operator"
-            : "Request WilliamOS access",
+        state: "owner-provisioning",
+        label: "Owner provisioning",
+        title: "Provision Primary Operator",
         description:
-          signup?.mode === "bootstrap"
-            ? "Bootstrap is open because no operator exists yet."
-            : "Access requests are currently open by policy.",
-        primaryAction:
-          signup?.mode === "bootstrap" ? "Create Primary Operator" : "Request access",
+          "Controlled bootstrap is open because no Primary Operator exists yet. This is owner-authorized provisioning only.",
+        primaryAction: "Provision Primary Operator",
         secondaryAction: { href: "/sign-in", label: "Already provisioned? Enter" },
         tone: "ready",
       }
@@ -79,12 +73,12 @@ export function getAuthUxState(
 
     if (signup?.mode === "bootstrap") {
       return {
-        state: "signup-locked",
-        label: "Signup locked",
+        state: "provisioning-locked",
+        label: "Provisioning locked",
         title: "Bootstrap is complete",
         description:
           signup.reason ??
-          "An operator already exists, so public account creation is intentionally closed.",
+          "A Primary Operator already exists, so owner provisioning is intentionally closed.",
         primaryAction: "Enter WilliamOS instead",
         secondaryAction: { href: "/sign-in", label: "Go to Primary Operator access" },
         tone: "neutral",
@@ -92,12 +86,12 @@ export function getAuthUxState(
     }
 
     return {
-      state: "signup-disabled",
-      label: "Signup disabled",
-      title: "Account creation requires an invite",
+      state: "provisioning-disabled",
+      label: "Provisioning disabled",
+      title: "Owner provisioning is unavailable",
       description:
         signup?.reason ??
-        "Public account creation is disabled. Use an existing operator account.",
+        "This private system does not offer self-service provisioning. Use authorized Primary access.",
       primaryAction: "Enter WilliamOS instead",
       secondaryAction: { href: "/sign-in", label: "Go to Primary Operator access" },
       tone: "warning",
@@ -110,17 +104,12 @@ export function getAuthUxState(
     title: "Enter WilliamOS",
     description:
       signup?.mode === "bootstrap" && signup.open === false
-        ? "Auth is ready. Signup may be locked because an operator already exists."
+        ? "Auth is ready. Owner provisioning is locked because a Primary Operator already exists."
         : signup?.mode === "closed"
-          ? "Auth is ready. New account creation is disabled by policy."
+          ? "Auth is ready. Owner provisioning is disabled by policy."
         : "Auth is ready. Use your Primary Operator credentials to enter WilliamOS.",
     primaryAction: "Enter WilliamOS",
-    secondaryAction: signup?.open
-      ? {
-          href: "/sign-up",
-          label: signup.mode === "bootstrap" ? "Create Primary Operator" : "Request access",
-        }
-      : undefined,
+    secondaryAction: undefined,
     tone: "ready",
   }
 }

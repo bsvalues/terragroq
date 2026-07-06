@@ -51,7 +51,7 @@ export function getReadinessNativeArea(): ReadinessNativeArea {
       {
         label: "Auth readiness",
         state: "configured",
-        description: "Auth checks confirm required configuration and bootstrap-locked signup posture.",
+        description: "Auth checks confirm required configuration and bootstrap-locked owner provisioning posture.",
       },
       {
         label: "Security headers",
