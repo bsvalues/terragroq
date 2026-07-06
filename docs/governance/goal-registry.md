@@ -72,7 +72,7 @@ First loop:
 
 Current loop:
 
-`WO-OPS-006 - Production Verification Checklist`
+`WO-OPS-007 - Owner Decision Packet Template`
 
 ## Authorized Goal Sequence
 
