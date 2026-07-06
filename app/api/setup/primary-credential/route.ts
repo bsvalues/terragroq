@@ -21,10 +21,11 @@ function isLoopbackHost(url: URL) {
   return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1"
 }
 
-function isLoopbackOrigin(value: string | null) {
-  if (!value) return true
+function isSameOriginLoopback(value: string | null, expectedOrigin: string) {
+  if (!value) return false
   try {
-    return isLoopbackHost(new URL(value))
+    const parsed = new URL(value)
+    return parsed.origin === expectedOrigin && isLoopbackHost(parsed)
   } catch {
     return false
   }
@@ -38,8 +39,8 @@ function isLocalSetupRequest(req: Request) {
   return (
     isLoopbackHost(url) &&
     Boolean(origin || referer) &&
-    isLoopbackOrigin(origin) &&
-    isLoopbackOrigin(referer)
+    (!origin || isSameOriginLoopback(origin, url.origin)) &&
+    (!referer || isSameOriginLoopback(referer, url.origin))
   )
 }
 
@@ -63,13 +64,21 @@ async function getPrimaryRecordState(client: PoolClient) {
 
 async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>) {
   const client = await pool.connect()
+  let transactionStarted = false
   try {
     await client.query("begin")
+    transactionStarted = true
     const result = await fn(client)
     await client.query("commit")
     return result
   } catch (error) {
-    await client.query("rollback")
+    if (transactionStarted) {
+      try {
+        await client.query("rollback")
+      } catch {
+        // Preserve the original setup failure; rollback errors are secondary.
+      }
+    }
     throw error
   } finally {
     client.release()
