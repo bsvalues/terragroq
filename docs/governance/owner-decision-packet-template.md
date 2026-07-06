@@ -132,17 +132,55 @@ execution would be activated.
 
 Default: stop. Advisory/read-only posture remains.
 
+## Owner Decision Queue Mapping
+
+When a packet should later be represented in the Owner Decision Queue, map it to
+the existing `OwnerDecisionRecord` shape:
+
+```text
+decisionId:
+title:
+category:
+status:
+riskLevel:
+blockedLane:
+whyBlocked:
+authorityRequired:
+evidenceRequired:
+relatedAuthorityRecords:
+relatedEvidenceRecords:
+relatedWorkOrders:
+safeDefault:
+ownerActionRequired:
+nextValidAction:
+blockedActions:
+```
+
+Mapping guidance:
+
+- `DECISION` maps to `title`.
+- `WHY` maps to `whyBlocked`.
+- `RISK` maps to `riskLevel` plus `blockedActions` when relevant.
+- `SAFE_DEFAULT` maps to `safeDefault`.
+- `RECOMMENDED` maps to `nextValidAction` only when the recommendation is a
+  safe next action, not approval.
+- `OPTIONS` remain packet guidance unless a future queue work order records
+  them in evidence or related records.
+- `DO_NOT_PROVIDE` remains a secret-safety instruction and must not become a
+  stored secret field.
+
+The queue remains read-only. Mapping a packet to the queue does not approve,
+deny, authorize, execute, or mutate work.
+
 ## Return Shape For Blocked Work
 
 ```text
 RESULT: BLOCKED_OWNER_DECISION
 WORK_ORDER:
-GOAL:
 BLOCKER:
 WHY_BLOCKED:
 SAFE_TO_CONTINUE:
 OWNER_DECISION_NEEDED:
-SAFE_DEFAULT:
 NEXT_VALID_ACTION:
 ```
 
