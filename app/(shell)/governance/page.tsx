@@ -25,7 +25,7 @@ export default async function GovernancePage() {
     <>
       <PageHeader
         title="Governance"
-        description="WilliamOS authority layer for Primary approval, safety gates, blocked decisions, access posture, and evidence-backed permission boundaries."
+        description="Primary Operator authority layer for scope, gates, evidence requirements, owner decisions, and denied authority."
       />
       <div className="flex flex-col gap-6 p-6 pb-0">
         <GovernanceNativeAreaPanel />

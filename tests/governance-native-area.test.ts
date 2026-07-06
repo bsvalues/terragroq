@@ -7,10 +7,28 @@ describe("Governance native area", () => {
     const area = getGovernanceNativeArea()
 
     expect(area.title).toBe("Governance")
-    expect(area.eyebrow).toBe("WilliamOS Authority Layer")
-    expect(area.description).toContain("native WilliamOS area")
-    expect(area.description).toContain("Primary authority")
-    expect(area.description).toContain("owner approval")
+    expect(area.eyebrow).toBe("Primary Authority Layer")
+    expect(area.description).toContain("Primary Operator authority layer")
+    expect(area.description).toContain("denied authority")
+    expect(area.description).toContain("without turning the shell into an approval console")
+    expect(area.shellSequence).toEqual([
+      expect.objectContaining({
+        label: "Authority",
+        value: "Declare",
+      }),
+      expect.objectContaining({
+        label: "Gate",
+        value: "Hold",
+      }),
+      expect.objectContaining({
+        label: "Evidence",
+        value: "Prove",
+      }),
+      expect.objectContaining({
+        label: "Decision",
+        value: "Return",
+      }),
+    ])
     expect(area.postureSummary).toEqual([
       expect.objectContaining({
         label: "Primary authority",
@@ -109,6 +127,7 @@ describe("Governance native area", () => {
       area.title,
       area.eyebrow,
       area.description,
+      ...area.shellSequence.flatMap((item) => [item.label, item.value, item.description]),
       ...area.postureSummary.flatMap((item) => [item.label, item.value, item.description]),
       ...area.sections.flatMap((section) => [
         section.label,

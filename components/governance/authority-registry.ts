@@ -1048,17 +1048,19 @@ export function getAuthorityRegistrySurface(): AuthorityRegistrySurface {
       },
     ],
     nextLaneDecision: {
-      recommendedBatch: "WILLIAMOS-TRACE-LEDGER-FAILURE-EVAL-BATCH-001",
-      recommendedOption: "C - Trace Ledger / Failure-to-Eval",
+      recommendedBatch: "WO-SHELL-009 - Memory Placement",
+      recommendedOption: "A - Primary shell memory placement",
       blockedLanes: [
         "runtime tracing",
         "background collection",
         "Hermes/MCP/autonomy activation",
         "metadata expansion",
         "runtime control",
+        "memory write",
+        "dynamic memory retrieval",
       ],
       reason:
-        "After Evidence, Owner Decisions, Memory, Brain Council advisory, and Authority Registry refresh, the next highest-value layer is a static Trace Ledger / Failure-to-Eval lane so WilliamOS can record reasoning outcomes without granting autonomy.",
+        "After Work Orders, Evidence, Systems, and Governance are aligned inside the Primary shell, the next safe shell step is to place Memory as a static governance-aware context surface without adding memory writes, runtime reads, embeddings, or dynamic retrieval.",
     },
     safety: {
       staticReadOnly: true,
