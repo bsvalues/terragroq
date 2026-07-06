@@ -72,7 +72,7 @@ First loop:
 
 Current loop:
 
-`WO-OPS-002 - Goal Registry / Loop Registry Files`
+`WO-OPS-003 - Standard Result Classifier`
 
 ## Authorized Goal Sequence
 

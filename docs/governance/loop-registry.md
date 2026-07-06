@@ -40,7 +40,8 @@ work, execute commands, mutate memory, or activate workers.
 Current status:
 
 - `WO-OPS-001`: complete through PR #300.
-- `WO-OPS-002`: active.
+- `WO-OPS-002`: complete through PR #301.
+- `WO-OPS-003`: active.
 
 ## Next Product Loop Order
 
