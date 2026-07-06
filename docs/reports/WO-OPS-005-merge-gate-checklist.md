@@ -2,7 +2,7 @@
 
 ## Result
 
-PASS_PENDING_CHECKS
+`RESULT: PASS_PENDING_CHECKS`
 
 ## Goal
 

@@ -71,14 +71,14 @@ Acceptable check states:
 
 - required checks successful
 - Sourcery skipped because of known account or rate-limit status
-- informational comments with no requested changes
+- informational review or bot comments with no requested changes
 
 Blocking check states:
 
 - failed required check
 - pending required check
 - Vercel failed when applicable
-- requested changes
+- PR review state has requested changes
 - secret scan finding
 - unresolved substantive review thread
 
