@@ -72,7 +72,7 @@ First loop:
 
 Current loop:
 
-`WO-OPS-004 - Review Thread Monitor Protocol`
+`WO-OPS-005 - Merge Gate Checklist`
 
 ## Authorized Goal Sequence
 
