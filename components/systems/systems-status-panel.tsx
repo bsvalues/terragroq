@@ -37,6 +37,9 @@ export function SystemsStatusPanel() {
         <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           {surface.description}
         </p>
+        <p className="mt-3 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+          {surface.operatorPosture}
+        </p>
       </div>
 
       <div className="grid gap-3 border-b border-border p-4 md:grid-cols-4">
@@ -59,6 +62,20 @@ export function SystemsStatusPanel() {
         ))}
       </div>
 
+      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-2 xl:grid-cols-4">
+        {surface.statusSequence.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.value}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
       <div className="grid gap-3 border-b border-border bg-muted/10 p-4 md:grid-cols-3">
         {surface.boundaryRail.map((boundary) => (
           <div key={boundary.label} className="rounded-lg border border-border bg-card p-3">
@@ -68,6 +85,20 @@ export function SystemsStatusPanel() {
             <p className="mt-2 text-sm font-semibold">{boundary.state}</p>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
               {boundary.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-2 xl:grid-cols-4">
+        {surface.blockedExpansion.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.state}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.label}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
             </p>
           </div>
         ))}

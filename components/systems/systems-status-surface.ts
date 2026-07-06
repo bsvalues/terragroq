@@ -17,6 +17,7 @@ export type SystemsStatusSurface = {
   title: string
   eyebrow: string
   description: string
+  operatorPosture: string
   postureSummary: {
     label: string
     value: string
@@ -24,6 +25,16 @@ export type SystemsStatusSurface = {
     tone: SystemStatusTone
   }[]
   boundaryRail: {
+    label: string
+    state: string
+    description: string
+  }[]
+  statusSequence: {
+    label: string
+    value: string
+    description: string
+  }[]
+  blockedExpansion: {
     label: string
     state: string
     description: string
@@ -51,9 +62,11 @@ export type SystemsStatusSurface = {
 export function getSystemsStatusSurface(): SystemsStatusSurface {
   return {
     title: "Systems Status",
-    eyebrow: "WilliamOS Systems Under Command",
+    eyebrow: "Primary Systems Status",
     description:
-      "Systems is the Primary's native view of WilliamOS systems under command: readiness, stable areas, disabled-by-design capabilities, blocked states, advisory layers, verified production health, and safe-state boundaries.",
+      "Systems is the Primary Operator's native status view for WilliamOS systems under command: readiness, stable areas, disabled-by-design capabilities, blocked states, advisory layers, local runtime posture, verified production health, and safe-state boundaries.",
+    operatorPosture:
+      "This page observes and explains status. It does not poll in the background, start repairs, change endpoints, deploy, grant authority, or activate runtime workers.",
     postureSummary: [
       {
         label: "Ready",
@@ -96,6 +109,50 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         label: "Production",
         state: "Observed only",
         description: "Systems can show production health and headers, but cannot deploy from this view.",
+      },
+    ],
+    statusSequence: [
+      {
+        label: "1. Readiness",
+        value: "Pre-action",
+        description: "Health, auth readiness, and disabled-by-design states are checked before claims move forward.",
+      },
+      {
+        label: "2. Local status",
+        value: "Read-only",
+        description: "Local OMEN status remains manual-only, localhost-only, and separated from runtime control.",
+      },
+      {
+        label: "3. Production health",
+        value: "Observed",
+        description: "Production health and readiness are verification evidence, not deploy authority.",
+      },
+      {
+        label: "4. Authority boundary",
+        value: "Owner-gated",
+        description: "Higher-risk actions stay blocked until a specific owner-authorized Work Order opens them.",
+      },
+    ],
+    blockedExpansion: [
+      {
+        label: "No background polling",
+        state: "Blocked",
+        description: "Systems does not add timers, workers, sockets, webhooks, or monitoring integrations.",
+      },
+      {
+        label: "No repair controls",
+        state: "Blocked",
+        description: "No start, stop, restart, repair, command runner, or remediation button is added.",
+      },
+      {
+        label: "No metadata expansion",
+        state: "Blocked",
+        description: "Docker metadata, backup metadata, port checks, and LAN exposure remain closed gates.",
+      },
+      {
+        label: "No runtime activation",
+        state: "Blocked",
+        description: "Hermes, MCP, schedulers, background workers, and autonomy remain inactive.",
       },
     ],
     categories: [
@@ -197,9 +254,9 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
       },
     ],
     nextRecommendedWo: {
-      label: "WO-SHELL-019 - Access Grants Native Area Reframe",
+      label: "WO-SHELL-008 - Authority / Governance Surface",
       reason:
-        "After Systems shows disabled-by-design capabilities, Access Grants should be reframed so the disabled authority gate is unmistakable.",
+        "After Systems status is centered in the Primary shell, the next safe lane is Authority / Governance so status boundaries map to owner gates.",
     },
     safety: {
       readOnly: true,

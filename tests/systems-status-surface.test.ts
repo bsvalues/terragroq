@@ -72,13 +72,30 @@ describe("Systems status surface", () => {
     ])
   })
 
+  it("shows the Primary status sequence and blocked expansion posture", () => {
+    const surface = getSystemsStatusSurface()
+
+    expect(surface.statusSequence.map((item) => item.value)).toEqual([
+      "Pre-action",
+      "Read-only",
+      "Observed",
+      "Owner-gated",
+    ])
+    expect(surface.blockedExpansion.map((item) => item.label)).toEqual([
+      "No background polling",
+      "No repair controls",
+      "No metadata expansion",
+      "No runtime activation",
+    ])
+  })
+
   it("recommends the next shell slice without granting authority", () => {
     const surface = getSystemsStatusSurface()
 
     expect(surface.nextRecommendedWo).toMatchObject({
-      label: "WO-SHELL-019 - Access Grants Native Area Reframe",
+      label: "WO-SHELL-008 - Authority / Governance Surface",
     })
-    expect(surface.nextRecommendedWo.reason).toContain("disabled authority gate")
+    expect(surface.nextRecommendedWo.reason).toContain("Authority / Governance")
   })
 
   it("does not change health endpoints, poll, monitor, execute, deploy, write production, or activate runtimes", () => {
@@ -105,7 +122,13 @@ describe("Systems status surface", () => {
       surface.title,
       surface.eyebrow,
       surface.description,
+      surface.operatorPosture,
       ...surface.postureSummary.flatMap((item) => [
+        item.label,
+        item.value,
+        item.description,
+      ]),
+      ...surface.statusSequence.flatMap((item) => [
         item.label,
         item.value,
         item.description,
@@ -114,6 +137,11 @@ describe("Systems status surface", () => {
         boundary.label,
         boundary.state,
         boundary.description,
+      ]),
+      ...surface.blockedExpansion.flatMap((item) => [
+        item.label,
+        item.state,
+        item.description,
       ]),
       ...surface.categories.flatMap((category) => [
         category.label,
@@ -127,7 +155,10 @@ describe("Systems status surface", () => {
     expect(text).toContain("systems under command")
     expect(text).toContain("readiness")
     expect(text).toContain("production health")
+    expect(text).toContain("local runtime posture")
     expect(text).toContain("disabled-by-design")
+    expect(text).toContain("No background polling")
+    expect(text).toContain("No repair controls")
     expect(text).not.toMatch(
       /admin dashboard|ops dashboard|SaaS status page|team monitoring|observability marketing|always-on automation/i,
     )
