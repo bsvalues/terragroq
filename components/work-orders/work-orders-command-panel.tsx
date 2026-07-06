@@ -19,11 +19,28 @@ export function WorkOrdersCommandPanel({ orders }: { orders: WorkOrder[] }) {
         <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           {surface.description}
         </p>
+        <p className="mt-3 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+          {surface.operatorPosture}
+        </p>
       </div>
 
       <VerificationFlowGrid steps={surface.verificationFlow} />
 
-      <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-3 border-t border-border p-4 md:grid-cols-2 xl:grid-cols-4">
+        {surface.primarySequence.map((step) => (
+          <div key={step.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {step.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{step.value}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {step.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-t border-border p-4 md:grid-cols-2 xl:grid-cols-5">
         {surface.cards.map((card) => (
           <div key={card.label} className="rounded-lg border border-border bg-background p-3">
             <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -67,6 +84,20 @@ export function WorkOrdersCommandPanel({ orders }: { orders: WorkOrder[] }) {
             Runtime control, metadata expansion, execution authority, and external mutation remain blocked.
           </p>
         </div>
+      </div>
+
+      <div className="grid gap-3 border-t border-border p-4 md:grid-cols-2 xl:grid-cols-4">
+        {surface.blockedExpansion.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.label}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.value}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+        ))}
       </div>
 
       <div className="flex flex-col gap-3 border-t border-border px-4 py-3 lg:flex-row lg:items-center lg:justify-between">

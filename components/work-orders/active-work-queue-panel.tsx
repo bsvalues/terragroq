@@ -13,7 +13,7 @@ export function ActiveWorkQueuePanel({ orders }: { orders: WorkOrder[] }) {
         <div className="flex flex-wrap items-center gap-2">
           <ListChecks className="h-4 w-4 text-primary" aria-hidden />
           <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-            WilliamOS Work Order Engine
+            WilliamOS Primary Queue
           </p>
         </div>
         <h2 className="mt-2 text-lg font-semibold tracking-tight">{surface.title}</h2>

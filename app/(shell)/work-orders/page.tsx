@@ -12,12 +12,12 @@ export default async function WorkOrdersPage() {
     <>
       <PageHeader
         title="Work Orders"
-        description="Governed work for the Primary Operator. /goal defines intent, /loop governs progress, Work Orders control mutation, and Evidence proves reality."
+        description="Primary Operator work control. /goal defines intent, /loop governs progress, Work Orders hold authority boundaries, and Evidence proves reality."
       />
       <div className="flex flex-col gap-6 p-6">
         <WorkOrdersCommandPanel orders={orders} />
-        <WoeDetailSurfacePanel />
         <ActiveWorkQueuePanel orders={orders} />
+        <WoeDetailSurfacePanel />
         <CompletionReportPanel orders={orders} />
         <WorkOrdersView initial={orders} />
       </div>
