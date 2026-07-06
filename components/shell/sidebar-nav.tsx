@@ -9,12 +9,17 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname()
 
   return (
-    <nav className="flex flex-col gap-6 px-3 py-4">
+    <nav aria-label="Primary navigation" className="flex flex-col gap-5 px-3 py-4">
       {navGroups.map((group) => (
         <div key={group.id} className="flex flex-col gap-1">
           <div className="px-3 pb-1">
-            <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-              {group.id}
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                {group.id}
+              </div>
+              <div className="rounded-sm border border-sidebar-border px-1.5 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
+                {group.tier}
+              </div>
             </div>
             <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground/80">
               {group.description}
@@ -32,8 +37,9 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
                   key={item.href}
                   href={item.href}
                   onClick={onNavigate}
+                  aria-current={active ? "page" : undefined}
                   className={cn(
-                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     active
                       ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
                       : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",

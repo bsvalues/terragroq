@@ -29,7 +29,7 @@ export async function AppShell({
           </div>
           <div className="flex flex-col leading-tight">
             <span className="font-mono text-sm tracking-wide text-sidebar-foreground">WilliamOS</span>
-            <span className="text-[10px] text-muted-foreground">Operator Shell</span>
+            <span className="text-[10px] text-muted-foreground">Primary Shell</span>
           </div>
         </Link>
         <div className="flex-1 overflow-y-auto">
@@ -49,7 +49,7 @@ export async function AppShell({
         <header className="flex h-16 items-center justify-between gap-4 border-b border-border bg-background/80 px-4 backdrop-blur-sm sticky top-0 z-10">
           <div className="flex items-center gap-2">
             <MobileNav />
-            <span className="font-mono text-sm lg:hidden">WilliamOS</span>
+            <span className="font-mono text-sm lg:hidden">WilliamOS Primary Shell</span>
           </div>
           <UserMenu name={user.name} email={user.email} />
         </header>

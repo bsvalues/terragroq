@@ -7,22 +7,22 @@ describe("operator navigation information architecture", () => {
 
     expect(navItems.map((item) => item.href)).toEqual([
       "/",
-      "/chat",
-      "/goal-console",
       "/work-orders",
       "/audit",
-      "/trace",
-      "/academy",
       "/projects",
-      "/agent-forge",
-      "/hermes",
-      "/brain-council",
-      "/memory",
-      "/corpus",
+      "/runtime",
+      "/governance",
       "/decisions",
       "/doctrine",
-      "/governance",
-      "/runtime",
+      "/memory",
+      "/brain-council",
+      "/agent-forge",
+      "/hermes",
+      "/goal-console",
+      "/trace",
+      "/academy",
+      "/corpus",
+      "/chat",
     ])
   })
 
@@ -30,13 +30,14 @@ describe("operator navigation information architecture", () => {
     const labels = new Map(navItems.map((item) => [item.href, item.label]))
 
     expect(labels.get("/")).toBe("Home")
-    expect(labels.get("/chat")).toBe("Operator Chat")
+    expect(labels.get("/governance")).toBe("Authority")
+    expect(labels.get("/brain-council")).toBe("Council")
     expect(labels.get("/goal-console")).toBe("Next Objective")
     expect(labels.get("/audit")).toBe("Evidence")
-    expect(labels.get("/trace")).toBe("Trace Ledger")
+    expect(labels.get("/trace")).toBe("Trace")
     expect(labels.get("/academy")).toBe("Academy")
     expect(labels.get("/projects")).toBe("Projects")
-    expect(labels.get("/agent-forge")).toBe("Agent Forge")
+    expect(labels.get("/agent-forge")).toBe("Forge")
     expect(labels.get("/hermes")).toBe("Hermes")
     expect(labels.get("/runtime")).toBe("Systems")
   })
@@ -78,18 +79,44 @@ describe("operator navigation information architecture", () => {
         "Operator Chat",
         "Work Orders",
         "Evidence",
-        "Trace Ledger",
+        "Trace",
         "Academy",
         "Systems",
-        "Brain Council",
-        "Agent Forge",
+        "Council",
+        "Forge",
         "Hermes",
         "Projects",
         "Memory",
-        "Governance",
+        "Authority",
       ]),
     )
     expect(text).not.toMatch(/\b(groq|xai|ai-powered|terragroq)\b/i)
-    expect(text).not.toMatch(/dashboard|workspace|admin portal|team status|productivity/i)
+    expect(text).not.toMatch(/dashboard|workspace|admin portal|team status|productivity|users|organization|sign up|create account|request access/i)
+  })
+
+  it("separates primary command areas from supporting references", () => {
+    const groupTiers = new Map(navGroups.map((group) => [group.id, group.tier]))
+    const primaryGroups = navGroups
+      .filter((group) => group.tier === "Primary")
+      .map((group) => group.id)
+
+    expect(primaryGroups).toEqual(["Home", "Work", "Authority"])
+    expect(groupTiers.get("Council")).toBe("Supporting")
+    expect(groupTiers.get("Systems")).toBe("Supporting")
+
+    const primaryLabels = navItems
+      .filter((item) => groupTiers.get(item.group) === "Primary")
+      .map((item) => item.label)
+
+    expect(primaryLabels).toEqual([
+      "Home",
+      "Work Orders",
+      "Evidence",
+      "Projects",
+      "Systems",
+      "Authority",
+      "Decisions",
+      "Doctrine",
+    ])
   })
 })

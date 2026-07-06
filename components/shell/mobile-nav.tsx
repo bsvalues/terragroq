@@ -22,7 +22,10 @@ export function MobileNav() {
       </DialogTrigger>
       <DialogContent className="left-0 top-0 flex h-full max-w-[280px] translate-x-0 translate-y-0 flex-col rounded-none border-r p-0 data-[state=open]:slide-in-from-left data-[state=closed]:slide-out-to-left">
         <DialogTitle className="sr-only">Navigation</DialogTitle>
-        <div className="border-b border-border px-5 py-4 font-mono text-sm">WilliamOS</div>
+        <div className="border-b border-border px-5 py-4">
+          <div className="font-mono text-sm">WilliamOS</div>
+          <div className="mt-1 text-xs text-muted-foreground">Primary Navigation</div>
+        </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <SidebarNav onNavigate={() => setOpen(false)} />
         </div>
