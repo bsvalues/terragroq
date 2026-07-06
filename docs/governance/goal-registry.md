@@ -72,7 +72,7 @@ First loop:
 
 Current loop:
 
-`WO-OPS-007 - Owner Decision Packet Template`
+`WO-OPS-008 - Operator Continuation Rule / Stop-Only-On-Gate Policy`
 
 ## Authorized Goal Sequence
 
