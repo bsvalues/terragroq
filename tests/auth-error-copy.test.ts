@@ -45,7 +45,7 @@ describe("auth recovery copy", () => {
     expect(copy.message).toContain("Raw failure details are not shown")
   })
 
-  it("distinguishes bootstrap signup lock from policy-disabled signup", () => {
+  it("distinguishes bootstrap provisioning lock from policy-disabled provisioning", () => {
     const locked = getAuthRecoveryCopy({
       mode: "sign-up",
       rawMessage: "SIGNUP_DISABLED",
@@ -66,9 +66,9 @@ describe("auth recovery copy", () => {
     })
 
     expect(locked.code).toBe("SIGNUP_LOCKED")
-    expect(locked.message).toContain("Bootstrap")
+    expect(locked.message).toContain("Primary Operator")
     expect(disabled.code).toBe("SIGNUP_DISABLED")
-    expect(disabled.message).toContain("public account creation")
+    expect(disabled.message).toContain("self-service account creation")
   })
 
   it("maps explicit signup-disabled server errors even when readiness is stale", () => {
@@ -83,7 +83,7 @@ describe("auth recovery copy", () => {
     })
 
     expect(copy.code).toBe("SIGNUP_DISABLED")
-    expect(copy.title).toBe("Signup is not available")
+    expect(copy.title).toBe("Owner provisioning is not available")
     expect(copy.recovery.join(" ")).toContain("refresh the page")
   })
 

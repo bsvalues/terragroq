@@ -39,11 +39,6 @@ export function getOperatorLoginSurface(): OperatorLoginSurface {
     },
     secondaryActions: [
       {
-        label: "Create Primary Operator",
-        href: "/sign-up",
-        variant: "secondary",
-      },
-      {
         label: "Open scoped access preview",
         href: "/access/preview",
         variant: "muted",
@@ -61,15 +56,15 @@ export function getOperatorLoginSurface(): OperatorLoginSurface {
         tone: "disabled",
       },
       {
-        title: "Non-operators do not sign up here",
-        body: "Reviewers and builders will use scoped access links under /access/[token], not public account creation.",
+        title: "Non-operators do not enter here",
+        body: "Reviewers and builders use scoped access links under /access/[token], not owner provisioning.",
         tone: "locked",
       },
     ],
     prohibitedClaims: [
       "Groq-powered",
       "xAI-powered",
-      "public signup",
+      "self-service provisioning",
       "operator authority from access",
       "Hermes activation",
       "MCP activation",
@@ -81,8 +76,6 @@ export function getVisibleOperatorSecondaryActions(
   surface: OperatorLoginSurface,
   readiness?: OperatorLoginReadiness,
 ): OperatorLoginAction[] {
-  return surface.secondaryActions.filter((action) => {
-    if (action.href !== "/sign-up") return true
-    return readiness?.signup?.open ?? true
-  })
+  void readiness
+  return surface.secondaryActions.filter((action) => action.href !== "/sign-up")
 }

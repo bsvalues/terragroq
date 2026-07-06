@@ -72,7 +72,7 @@ export function AuthForm({
   const StateIcon =
     uxState.tone === "blocked"
       ? ShieldAlert
-      : uxState.state === "signup-locked" || uxState.state === "signup-disabled"
+      : uxState.state === "provisioning-locked" || uxState.state === "provisioning-disabled"
         ? LockKeyhole
         : CheckCircle2
   const stateClass =
@@ -222,7 +222,7 @@ export function AuthForm({
               {isSignUp && !signupOpen ? (
                 <p className="text-xs text-destructive">
                   {runtimeSignup?.reason ??
-                    "Operator sign-up is currently disabled by policy."}
+                    "Owner provisioning is currently disabled by policy."}
                 </p>
               ) : null}
               <p className="text-xs text-muted-foreground">
@@ -273,12 +273,12 @@ export function AuthForm({
 
       {isSignUp && (
         <div className="flex flex-col gap-2">
-          <Label htmlFor="name">Operator name</Label>
+          <Label htmlFor="name">Primary Operator name</Label>
           <Input
             id="name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Jane Operator"
+            placeholder="Primary Operator"
             required
             autoComplete="name"
           />
@@ -306,8 +306,8 @@ export function AuthForm({
           placeholder="••••••••"
           required
           minLength={8}
-          autoComplete={isSignUp ? "new-password" : "current-password"}
-        />
+        autoComplete={isSignUp ? "new-password" : "current-password"}
+      />
       </div>
 
       <Button type="submit" disabled={submitDisabled} className="mt-1">

@@ -112,7 +112,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         status: "Ready",
         tone: "ready",
         description:
-          "Operator access is checked through readiness diagnostics; signup remains governed by existing policy and safe state.",
+          "Operator access is checked through readiness diagnostics; owner provisioning remains governed by existing policy and safe state.",
         href: "/operator",
       },
       {

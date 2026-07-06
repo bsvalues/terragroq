@@ -9,6 +9,9 @@ export default async function SignUpPage() {
   const session = await getSession()
   if (session?.user) redirect("/")
   const readiness = await getAuthReadiness({ probeDatabase: true })
+  if (!(readiness.signup.mode === "bootstrap" && readiness.signup.open)) {
+    redirect("/sign-in")
+  }
   const uxState = getAuthUxState("sign-up", readiness)
 
   return (

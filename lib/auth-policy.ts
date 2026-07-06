@@ -35,7 +35,7 @@ export async function getSignupPolicy(): Promise<SignupPolicy> {
     return {
       mode,
       open: false,
-      reason: "Public sign-up is disabled by policy (AUTH_SIGNUP_MODE=closed).",
+      reason: "Owner provisioning is disabled by policy (AUTH_SIGNUP_MODE=closed).",
     }
   }
 
@@ -44,7 +44,7 @@ export async function getSignupPolicy(): Promise<SignupPolicy> {
       mode,
       open: false,
       reason:
-        "Bootstrap sign-up cannot be evaluated because DATABASE_URL is not configured.",
+        "Bootstrap owner provisioning cannot be evaluated because DATABASE_URL is not configured.",
     }
   }
 
@@ -55,12 +55,12 @@ export async function getSignupPolicy(): Promise<SignupPolicy> {
           mode,
           open: false,
           reason:
-            "Bootstrap sign-up is closed because at least one operator account already exists.",
+            "Bootstrap owner provisioning is closed because a Primary Operator already exists.",
         }
       : {
           mode,
           open: true,
-          reason: "Bootstrap sign-up is open until the first operator account is created.",
+          reason: "Bootstrap owner provisioning is open until the Primary Operator exists.",
         }
   } catch (error) {
     return {
@@ -68,8 +68,8 @@ export async function getSignupPolicy(): Promise<SignupPolicy> {
       open: false,
       reason:
         error instanceof Error
-          ? `Bootstrap sign-up check failed: ${error.message}`
-          : "Bootstrap sign-up check failed.",
+          ? `Bootstrap owner provisioning check failed: ${error.message}`
+          : "Bootstrap owner provisioning check failed.",
     }
   }
 }

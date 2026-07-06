@@ -19,7 +19,7 @@ export async function GET() {
           : {
               ...readiness.signup,
               reason:
-                "Operator sign-up is not available. Contact your platform administrator.",
+                "Owner provisioning is not available. Contact the Primary Operator.",
             },
       }
     : readiness

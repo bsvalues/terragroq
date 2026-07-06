@@ -127,7 +127,7 @@ export function AuthSetupAssistant({
             <h2 className="text-lg font-semibold">Authentication is already configured</h2>
             <p className="text-sm text-muted-foreground">
               {saved
-                ? "Setup completed successfully. Continue to create the first operator account."
+                ? "Setup completed successfully. Continue to controlled owner provisioning."
                 : "This environment passed auth readiness checks. You can continue to sign in."}
             </p>
             {saved && restartDetected ? (
@@ -138,7 +138,7 @@ export function AuthSetupAssistant({
             ) : null}
             <Button asChild size="sm">
               <Link href={saved ? "/sign-up" : "/sign-in"}>
-                {saved ? "Create first operator" : "Go to sign in"}
+                {saved ? "Open owner provisioning" : "Go to Primary Access"}
               </Link>
             </Button>
           </div>
@@ -158,7 +158,7 @@ export function AuthSetupAssistant({
         <p className="text-sm text-muted-foreground">
           Configure local auth prerequisites directly from the app. This writes a
           <span className="mx-1 font-mono">.env.local</span>
-          file for this workspace.
+          file for this private WilliamOS instance.
         </p>
       </div>
 
@@ -289,7 +289,7 @@ export function AuthSetupAssistant({
           </div>
         ) : (
           <>
-            This assistant is intended for local onboarding. In production, platform
+            This assistant is intended for local owner provisioning. In production, platform
             configuration should be managed by deployment administrators and secret
             managers.
           </>
@@ -298,10 +298,10 @@ export function AuthSetupAssistant({
 
       <div className="flex items-center gap-2">
         <Button asChild size="sm" variant="outline">
-          <Link href="/sign-up">Back to sign up</Link>
+          <Link href="/sign-in">Back to Primary Access</Link>
         </Button>
         <Button asChild size="sm" variant="ghost">
-          <Link href="/sign-in">Back to sign in</Link>
+          <Link href="/operator">Back to Operator entry</Link>
         </Button>
       </div>
     </div>
