@@ -53,8 +53,9 @@ Required before merge:
 - `NEXT_PRIVATE_BUILD_WORKER=0 NEXT_TELEMETRY_DISABLED=1 npm run build`
 - PR checks
 - review threads 0 unresolved
-- production `/api/health`
-- production `/api/auth/readiness`
+- if the merge touches production-relevant surfaces:
+  - production `/api/health`
+  - production `/api/auth/readiness`
 
 ## Next Recommended Work Order
 
