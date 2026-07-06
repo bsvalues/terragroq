@@ -45,7 +45,8 @@ Current status:
 - `WO-OPS-004`: complete through PR #303.
 - `WO-OPS-005`: complete through PR #304.
 - `WO-OPS-006`: complete through PR #305.
-- `WO-OPS-007`: active.
+- `WO-OPS-007`: complete through PR #306.
+- `WO-OPS-008`: active.
 
 ## Next Product Loop Order
 
