@@ -15,6 +15,7 @@ import {
   GraduationCap,
   Bot,
   ShieldCheck,
+  Database,
   type LucideIcon,
 } from "lucide-react"
 
@@ -26,21 +27,22 @@ export type NavItem = {
   description: string
 }
 
-export const NAV_GROUP_IDS = ["Home", "Work", "Council", "Authority", "Systems"] as const
+export const NAV_GROUP_IDS = ["Home", "Work", "Authority", "Council", "Systems"] as const
 
 export type NavGroupId = (typeof NAV_GROUP_IDS)[number]
 
 export type NavGroup = {
   id: NavGroupId
+  tier: "Primary" | "Supporting"
   description: string
 }
 
 export const navGroups: NavGroup[] = [
-  { id: "Home", description: "Primary briefing, command conversation, and next move." },
-  { id: "Work", description: "Projects, objectives, Work Orders, and Evidence." },
-  { id: "Council", description: "Brain Council, Memory, and Corpus context." },
-  { id: "Authority", description: "Decisions, Doctrine, Governance, and approval gates." },
-  { id: "Systems", description: "Systems, Readiness, production health, and safe states." },
+  { id: "Home", tier: "Primary", description: "Primary briefing and next move." },
+  { id: "Work", tier: "Primary", description: "Work Orders, Evidence, Projects, and Systems." },
+  { id: "Authority", tier: "Primary", description: "Authority gates, decisions, and operating doctrine." },
+  { id: "Council", tier: "Supporting", description: "Advisory, Memory, Forge, and Hermes boundaries." },
+  { id: "Systems", tier: "Supporting", description: "Reference, trace, corpus, and command conversation." },
 ]
 
 export const navItems: NavItem[] = [
@@ -50,20 +52,6 @@ export const navItems: NavItem[] = [
     icon: LayoutDashboard,
     group: "Home",
     description: "Primary Operator briefing.",
-  },
-  {
-    href: "/chat",
-    label: "Operator Chat",
-    icon: MessageSquare,
-    group: "Home",
-    description: "Command conversation.",
-  },
-  {
-    href: "/goal-console",
-    label: "Next Objective",
-    icon: Crosshair,
-    group: "Work",
-    description: "Classify governed intent.",
   },
   {
     href: "/work-orders",
@@ -80,20 +68,6 @@ export const navItems: NavItem[] = [
     description: "Inspect proof records.",
   },
   {
-    href: "/trace",
-    label: "Trace Ledger",
-    icon: GitCommitHorizontal,
-    group: "Work",
-    description: "Review reasoning records.",
-  },
-  {
-    href: "/academy",
-    label: "Academy",
-    icon: GraduationCap,
-    group: "Work",
-    description: "Learn WilliamOS operation.",
-  },
-  {
     href: "/projects",
     label: "Projects",
     icon: FolderKanban,
@@ -101,39 +75,18 @@ export const navItems: NavItem[] = [
     description: "Review systems under command.",
   },
   {
-    href: "/agent-forge",
-    label: "Agent Forge",
-    icon: Hammer,
+    href: "/runtime",
+    label: "Systems",
+    icon: Cpu,
     group: "Work",
-    description: "Prepare capabilities.",
+    description: "Check readiness and health.",
   },
   {
-    href: "/hermes",
-    label: "Hermes",
-    icon: Bot,
-    group: "Work",
-    description: "Review worker boundaries.",
-  },
-  {
-    href: "/brain-council",
-    label: "Brain Council",
-    icon: BrainCircuit,
-    group: "Council",
-    description: "Review advisory reasoning.",
-  },
-  {
-    href: "/memory",
-    label: "Memory",
-    icon: BrainCircuit,
-    group: "Council",
-    description: "Preserve durable context.",
-  },
-  {
-    href: "/corpus",
-    label: "Corpus",
-    icon: Library,
-    group: "Council",
-    description: "Review source body.",
+    href: "/governance",
+    label: "Authority",
+    icon: ShieldCheck,
+    group: "Authority",
+    description: "Review gates and boundaries.",
   },
   {
     href: "/decisions",
@@ -150,17 +103,66 @@ export const navItems: NavItem[] = [
     description: "Read operating law.",
   },
   {
-    href: "/governance",
-    label: "Governance",
-    icon: ShieldCheck,
-    group: "Authority",
-    description: "Review gates and boundaries.",
+    href: "/memory",
+    label: "Memory",
+    icon: Database,
+    group: "Council",
+    description: "Preserve durable context.",
   },
   {
-    href: "/runtime",
-    label: "Systems",
-    icon: Cpu,
+    href: "/brain-council",
+    label: "Council",
+    icon: BrainCircuit,
+    group: "Council",
+    description: "Review advisory reasoning.",
+  },
+  {
+    href: "/agent-forge",
+    label: "Forge",
+    icon: Hammer,
+    group: "Council",
+    description: "Prepare capabilities.",
+  },
+  {
+    href: "/hermes",
+    label: "Hermes",
+    icon: Bot,
+    group: "Council",
+    description: "Review worker boundaries.",
+  },
+  {
+    href: "/goal-console",
+    label: "Next Objective",
+    icon: Crosshair,
     group: "Systems",
-    description: "Check readiness and health.",
+    description: "Classify governed intent.",
+  },
+  {
+    href: "/trace",
+    label: "Trace",
+    icon: GitCommitHorizontal,
+    group: "Systems",
+    description: "Review reasoning records.",
+  },
+  {
+    href: "/academy",
+    label: "Academy",
+    icon: GraduationCap,
+    group: "Systems",
+    description: "Learn WilliamOS operation.",
+  },
+  {
+    href: "/corpus",
+    label: "Corpus",
+    icon: Library,
+    group: "Systems",
+    description: "Review source body.",
+  },
+  {
+    href: "/chat",
+    label: "Operator Chat",
+    icon: MessageSquare,
+    group: "Systems",
+    description: "Command conversation.",
   },
 ]
