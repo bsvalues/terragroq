@@ -11,6 +11,11 @@ export type PrimaryCredentialInput = {
   password: string
 }
 
+export type PrimaryCredentialRecordState = {
+  anyAuthRecordsExist: boolean
+  declaredPrimaryExists: boolean
+}
+
 function readString(value: unknown) {
   return typeof value === "string" ? value.trim() : ""
 }
@@ -50,6 +55,8 @@ export function validatePrimaryCredentialPayload(
   return { email, name, password }
 }
 
-export function classifyPrimaryCredentialOperation(declaredPrimaryExists: boolean) {
-  return declaredPrimaryExists ? "recovery" : "provisioning"
+export function classifyPrimaryCredentialOperation(state: PrimaryCredentialRecordState) {
+  if (state.declaredPrimaryExists) return "recovery"
+  if (state.anyAuthRecordsExist) return "blocked_identity_missing"
+  return "provisioning"
 }

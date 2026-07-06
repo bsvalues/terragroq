@@ -128,7 +128,7 @@ export function getAuthRecoveryCopy({
     return {
       code: "SIGNUP_DISABLED",
       title: "Owner provisioning is not available",
-    message:
+      message:
         "The server rejected provisioning because this private system is closed to self-service entry.",
       recovery: [
         "Use Primary Access if a Primary Operator already exists.",

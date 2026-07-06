@@ -306,8 +306,8 @@ export function AuthForm({
           placeholder="••••••••"
           required
           minLength={8}
-        autoComplete={isSignUp ? "new-password" : "current-password"}
-      />
+          autoComplete={isSignUp ? "new-password" : "current-password"}
+        />
       </div>
 
       <Button type="submit" disabled={submitDisabled} className="mt-1">
