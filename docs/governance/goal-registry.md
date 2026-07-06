@@ -72,7 +72,7 @@ First loop:
 
 Current loop:
 
-`WO-OPS-005 - Merge Gate Checklist`
+`WO-OPS-006 - Production Verification Checklist`
 
 ## Authorized Goal Sequence
 
