@@ -170,6 +170,50 @@ export const EVIDENCE_CATEGORIES: EvidenceCategoryRecord[] = [
 
 export const EVIDENCE_RECORDS: EvidenceRecord[] = [
   {
+    evidenceId: "evidence-primary-navigation-shell",
+    title: "Primary Navigation Shell Proof",
+    type: "WORK_ORDER_PROOF",
+    scope: "Primary Navigation Shell",
+    relatedGoal: "GOAL-WOS-001 - Primary Shell Completion",
+    relatedBatch: "Primary Shell Completion",
+    relatedWorkOrder: "WO-SHELL-004",
+    relatedPr: "#308",
+    originMain: "4938134e4ccdc5e960197f5b90af0c7b0890fe87",
+    validationSummary: "Focused shell tests, forbidden-language scan, secret scan, diff check, lint, full suite, build, Vercel, and CodeRabbit passed.",
+    proofSummary:
+      "Home, Work Orders, Evidence, Projects, Systems, Authority, Decisions, Doctrine, Memory, Council, Forge, Hermes, and supporting routes were organized into a Primary shell.",
+    safetySummary:
+      "No auth behavior, auth policy, public signup, DB/schema, env/package, runtime control, autonomy, or production-write behavior was added.",
+    sourcePath: "docs/reports/WO-SHELL-004-primary-navigation-shell.md",
+    status: "confirmed",
+    createdAtLabel: "Primary Navigation Shell closure",
+    proves: "The Primary shell has a coherent navigation model centered on the Primary Operator.",
+    doesNotProve: "It does not complete every shell surface or authorize runtime control.",
+    nextRelatedItem: "WO-SHELL-005 - Work Orders Surface",
+  },
+  {
+    evidenceId: "evidence-work-orders-surface",
+    title: "Work Orders Surface Proof",
+    type: "WORK_ORDER_PROOF",
+    scope: "Primary Work Orders shell surface",
+    relatedGoal: "GOAL-WOS-001 - Primary Shell Completion",
+    relatedBatch: "Primary Shell Completion",
+    relatedWorkOrder: "WO-SHELL-005",
+    relatedPr: "#309",
+    originMain: "a81a2979f95748c6bf900d75cf0c327107041d5d",
+    validationSummary: "Focused Work Orders tests, forbidden-language scan, secret scan, diff check, lint, full suite, build, Vercel, and CodeRabbit passed.",
+    proofSummary:
+      "The Work Orders surface now leads with Primary work-control framing, queue visibility, /goal to /loop sequence, and blocked expansion boundaries.",
+    safetySummary:
+      "No command runner, authority grant control, autonomy, scheduler, DB/schema, env/package, auth, public signup, or production-write behavior was added.",
+    sourcePath: "docs/reports/WO-SHELL-005-work-orders-surface.md",
+    status: "confirmed",
+    createdAtLabel: "Work Orders Surface closure",
+    proves: "The Work Orders shell surface is centered on Primary Operator work control.",
+    doesNotProve: "It does not execute Work Orders, grant authority, or create an automation engine.",
+    nextRelatedItem: "WO-SHELL-006 - Evidence Surface",
+  },
+  {
     evidenceId: "evidence-local-omen-status",
     title: "Local OMEN Runtime Authority Freeze Proof",
     type: "LOCAL_PROOF",
@@ -653,10 +697,10 @@ export function getEvidenceSpineSurface(): EvidenceSpineSurface {
       },
     ],
     nextLaneDecision: {
-      recommendedBatch: "WILLIAMOS-AUTHORITY-GOVERNANCE-REGISTRY-BATCH-001",
-      recommendedOption: "B - Authority / Governance Registry",
+      recommendedBatch: "GOAL-WOS-001 - Primary Shell Completion",
+      recommendedOption: "WO-SHELL-007 - Systems Status Surface",
       reason:
-        "After WOE details and the Evidence Spine, WilliamOS needs a formal authority registry before mutation, metadata expansion, runtime control, autonomy, deploy, DB/schema change, or production action.",
+        "After Work Orders and Evidence are centered in the Primary shell, the next safe lane is Systems Status with read-only health, readiness, and runtime posture.",
     },
     safety: {
       readOnly: true,

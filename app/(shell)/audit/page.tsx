@@ -16,7 +16,7 @@ export default async function AuditPage() {
     <>
       <PageHeader
         title="Evidence"
-        description="The WilliamOS proof layer for validation, production verification, safety posture, sources, timestamps, blockers, and governed decisions. Evidence records reality; it does not execute."
+        description="Primary proof layer for validation, production verification, safety posture, sources, timestamps, blockers, Work Orders, and governed decisions. Evidence records reality; it does not execute or authorize."
       />
       <div className="flex flex-col gap-6 p-6">
         <EvidenceCommandPanel />

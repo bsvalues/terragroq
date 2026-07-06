@@ -12,7 +12,10 @@ export type EvidenceCommandSurface = {
   title: string
   eyebrow: string
   description: string
+  operatorPosture: string
   verificationFlow: VerificationFlowStep[]
+  proofSequence: EvidenceCategory[]
+  blockedExpansion: EvidenceCategory[]
   categories: EvidenceCategory[]
   nextRecommendedWo: {
     label: string
@@ -36,13 +39,15 @@ export type EvidenceCommandSurface = {
 
 export function getEvidenceCommandSurface(): EvidenceCommandSurface {
   return {
-    title: "Evidence",
-    eyebrow: "WilliamOS Record of Reality",
+    title: "Primary Evidence",
+    eyebrow: "WilliamOS Proof Layer",
     description:
-      "Evidence is the native WilliamOS proof layer and record of reality: validation, PR outcomes, production verification, safety posture, timestamps, sources, blockers, and confirmed reality. It records what is known; it does not execute.",
+      "Evidence is the Primary Operator proof layer and record of reality: validation, PR outcomes, production verification, safety posture, timestamps, sources, blockers, and confirmed reality. It records what is known; it does not execute or authorize.",
+    operatorPosture:
+      "Codex may collect and cite proof inside an authorized Work Order, but Evidence itself cannot grant authority, run checks, ingest sources, or change state.",
     verificationFlow: [
       {
-        label: "Decision",
+        label: "Owner Decision",
         value: "Authority source",
         description: "The reason work was allowed, blocked, redirected, or held for review.",
         href: "/decisions",
@@ -64,6 +69,32 @@ export function getEvidenceCommandSurface(): EvidenceCommandSurface {
         value: "Reality confirmed",
         description: "A completed lane can return to Home only after proof is inspectable.",
         href: "/",
+      },
+    ],
+    proofSequence: [
+      {
+        label: "1. Scope",
+        status: "Bound",
+        description: "Evidence starts with the Work Order contract: goal, files, blocked actions, validators, and stop conditions.",
+        href: "/work-orders",
+      },
+      {
+        label: "2. Validate",
+        status: "Required",
+        description: "Focused tests, full tests, diff checks, build output, PR checks, and review state prove the implementation lane.",
+        href: "/audit",
+      },
+      {
+        label: "3. Verify",
+        status: "Production",
+        description: "Health, auth readiness, touched routes, and deployment state prove hosted behavior when access allows inspection.",
+        href: "/runtime",
+      },
+      {
+        label: "4. Close",
+        status: "Report",
+        description: "Completion reports bind result, files changed, safety posture, review state, and next recommended lane.",
+        href: "/work-orders",
       },
     ],
     categories: [
@@ -117,10 +148,36 @@ export function getEvidenceCommandSurface(): EvidenceCommandSurface {
         href: "/brain-council",
       },
     ],
+    blockedExpansion: [
+      {
+        label: "No auto-ingestion",
+        status: "Blocked",
+        description: "Evidence remains manually recorded or statically modeled; no background importer or scanner is added.",
+        href: "/audit",
+      },
+      {
+        label: "No proof runner",
+        status: "Blocked",
+        description: "The Evidence surface may list validators, but it does not execute tests, builds, checks, or commands.",
+        href: "/audit",
+      },
+      {
+        label: "No authority grant",
+        status: "Blocked",
+        description: "Evidence can support an owner decision, but it cannot approve, grant, or bypass authority.",
+        href: "/governance",
+      },
+      {
+        label: "No production mutation",
+        status: "Blocked",
+        description: "Production verification is evidence; deployment, settings, DNS, and runtime writes remain outside this surface.",
+        href: "/runtime",
+      },
+    ],
     nextRecommendedWo: {
-      label: "WILLIAMOS-AUTHORITY-GOVERNANCE-REGISTRY-BATCH-001",
+      label: "WO-SHELL-007 - Systems Status Surface",
       reason:
-        "After WOE details and the Evidence Spine, WilliamOS needs a formal authority registry before mutation, metadata expansion, runtime control, autonomy, deploy, DB/schema change, or production action.",
+        "After Work Orders and Evidence are centered in the Primary shell, the next safe lane is Systems Status: read-only health, readiness, and local/runtime posture.",
     },
     safety: {
       readOnly: true,

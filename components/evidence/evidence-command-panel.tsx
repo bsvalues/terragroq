@@ -19,11 +19,32 @@ export function EvidenceCommandPanel() {
         <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           {surface.description}
         </p>
+        <p className="mt-3 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+          {surface.operatorPosture}
+        </p>
       </div>
 
       <VerificationFlowGrid steps={surface.verificationFlow} />
 
-      <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-3 border-t border-border p-4 md:grid-cols-2 xl:grid-cols-4">
+        {surface.proofSequence.map((step) => (
+          <Link
+            key={step.label}
+            href={step.href}
+            className="rounded-lg border border-border bg-background p-3 transition-colors hover:border-primary/40"
+          >
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {step.status}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{step.label}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {step.description}
+            </p>
+          </Link>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-t border-border p-4 md:grid-cols-2 xl:grid-cols-5">
         {surface.categories.map((category) => (
           <Link
             key={category.label}
@@ -36,6 +57,24 @@ export function EvidenceCommandPanel() {
             <p className="mt-2 text-sm font-semibold">{category.label}</p>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
               {category.description}
+            </p>
+          </Link>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-t border-border p-4 md:grid-cols-2 xl:grid-cols-4">
+        {surface.blockedExpansion.map((item) => (
+          <Link
+            key={item.label}
+            href={item.href}
+            className="rounded-lg border border-border bg-background p-3 transition-colors hover:border-primary/40"
+          >
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.status}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.label}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
             </p>
           </Link>
         ))}
