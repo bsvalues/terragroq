@@ -26,7 +26,7 @@ export default async function RuntimePage() {
     <>
       <PageHeader
         title="Systems"
-        description="Read-only view of WilliamOS systems under command: readiness, stable areas, blocked states, disabled-by-design capabilities, advisory layers, and production health."
+        description="Primary read-only status view for WilliamOS systems under command: readiness, stable areas, blocked states, disabled-by-design capabilities, advisory layers, local runtime posture, and production health."
       />
       <div className="flex flex-col gap-6 p-6">
         <SystemsStatusPanel />
