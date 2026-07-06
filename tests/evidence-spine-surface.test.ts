@@ -63,6 +63,28 @@ describe("Evidence Spine surface", () => {
     })
   })
 
+  it("records Primary Shell navigation and Work Orders surface proof", () => {
+    const surface = getEvidenceSpineSurface()
+    const recordsById = new Map(surface.records.map((record) => [record.evidenceId, record]))
+
+    expect(recordsById.get("evidence-primary-navigation-shell")).toMatchObject({
+      type: "WORK_ORDER_PROOF",
+      relatedGoal: "GOAL-WOS-001 - Primary Shell Completion",
+      relatedWorkOrder: "WO-SHELL-004",
+      relatedPr: "#308",
+      originMain: "4938134e4ccdc5e960197f5b90af0c7b0890fe87",
+      sourcePath: "docs/reports/WO-SHELL-004-primary-navigation-shell.md",
+    })
+    expect(recordsById.get("evidence-work-orders-surface")).toMatchObject({
+      type: "WORK_ORDER_PROOF",
+      relatedGoal: "GOAL-WOS-001 - Primary Shell Completion",
+      relatedWorkOrder: "WO-SHELL-005",
+      relatedPr: "#309",
+      originMain: "a81a2979f95748c6bf900d75cf0c327107041d5d",
+      sourcePath: "docs/reports/WO-SHELL-005-work-orders-surface.md",
+    })
+  })
+
   it("groups evidence across validation, local, production, safety, blocked decision, rollup, and next-lane proof", () => {
     const surface = getEvidenceSpineSurface()
     const recordTypes = new Set(surface.records.map((record) => record.type))
@@ -200,12 +222,12 @@ describe("Evidence Spine surface", () => {
     expect(serialized).not.toContain("background indexer")
   })
 
-  it("recommends Authority / Governance Registry as the next lane without authorizing it", () => {
+  it("recommends Systems Status as the next Primary Shell lane without authorizing expansion", () => {
     const surface = getEvidenceSpineSurface()
 
     expect(surface.nextLaneDecision).toMatchObject({
-      recommendedBatch: "WILLIAMOS-AUTHORITY-GOVERNANCE-REGISTRY-BATCH-001",
-      recommendedOption: "B - Authority / Governance Registry",
+      recommendedBatch: "GOAL-WOS-001 - Primary Shell Completion",
+      recommendedOption: "WO-SHELL-007 - Systems Status Surface",
     })
     expect(surface.safety.autonomyAuthorized).toBe(false)
     expect(surface.safety.runtimeControlAuthorized).toBe(false)

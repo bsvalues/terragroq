@@ -29,21 +29,21 @@ describe("Evidence command surface", () => {
     expect(links.get("Safety Posture Evidence")).toBe("/brain-council")
   })
 
-  it("keeps the next recommended batch focused on the Authority / Governance Registry", () => {
+  it("keeps the next recommended work focused on the Systems Status shell surface", () => {
     const surface = getEvidenceCommandSurface()
 
     expect(surface.nextRecommendedWo).toMatchObject({
-      label: "WILLIAMOS-AUTHORITY-GOVERNANCE-REGISTRY-BATCH-001",
+      label: "WO-SHELL-007 - Systems Status Surface",
     })
-    expect(surface.nextRecommendedWo.reason).toContain("formal authority registry")
+    expect(surface.nextRecommendedWo.reason).toContain("Systems Status")
   })
 
-  it("connects decision authority to work evidence and verified result", () => {
+  it("connects decision authority to work evidence, verified result, and the proof sequence", () => {
     const surface = getEvidenceCommandSurface()
 
     expect(surface.verificationFlow).toEqual([
       expect.objectContaining({
-        label: "Decision",
+        label: "Owner Decision",
         value: "Authority source",
         href: "/decisions",
       }),
@@ -62,6 +62,12 @@ describe("Evidence command surface", () => {
         value: "Reality confirmed",
         href: "/",
       }),
+    ])
+    expect(surface.proofSequence.map((step) => step.status)).toEqual([
+      "Bound",
+      "Required",
+      "Production",
+      "Report",
     ])
   })
 
@@ -90,9 +96,15 @@ describe("Evidence command surface", () => {
       surface.title,
       surface.eyebrow,
       surface.description,
+      surface.operatorPosture,
       ...surface.verificationFlow.flatMap((step) => [
         step.label,
         step.value,
+        step.description,
+      ]),
+      ...surface.proofSequence.flatMap((step) => [
+        step.label,
+        step.status,
         step.description,
       ]),
       ...surface.categories.flatMap((category) => [
@@ -100,14 +112,21 @@ describe("Evidence command surface", () => {
         category.status,
         category.description,
       ]),
+      ...surface.blockedExpansion.flatMap((item) => [
+        item.label,
+        item.status,
+        item.description,
+      ]),
       surface.nextRecommendedWo.label,
       surface.nextRecommendedWo.reason,
     ].join(" ")
 
-    expect(text).toContain("native WilliamOS proof layer")
+    expect(text).toContain("Primary Operator proof layer")
     expect(text).toContain("record of reality")
     expect(text).toContain("production verification")
     expect(text).toContain("Evidence Spine")
+    expect(text).toContain("No auto-ingestion")
+    expect(text).toContain("No proof runner")
     expect(text).not.toMatch(
       /analytics dashboard|reporting center|team reports|activity feed|vanity metrics|auto-proof|magic validation/i,
     )
