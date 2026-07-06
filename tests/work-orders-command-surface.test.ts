@@ -70,33 +70,33 @@ describe("Work Orders command surface", () => {
     expect(cards.get("Total Completed")).toBe("2")
     expect(cards.get("Evidence Required")).toBe("4")
     expect(cards.get("Local Phase Complete")).toBe("Stable")
-    expect(cards.get("Next Batch")).toBe("Shell / WOE")
+    expect(cards.get("Next Batch")).toBe("Shell / Evidence")
   })
 
-  it("keeps the next recommended batch focused on Work Order detail surfaces", () => {
+  it("keeps the next recommended work focused on the Evidence shell surface", () => {
     const surface = getWorkOrdersCommandSurface([])
 
     expect(surface.nextRecommendedWo).toMatchObject({
-      label: "WILLIAMOS-WOE-DETAIL-SURFACES-BATCH-001",
+      label: "WO-SHELL-006 - Evidence Surface",
     })
-    expect(surface.nextRecommendedWo.reason).toContain("Work Order detail surfaces")
+    expect(surface.nextRecommendedWo.reason).toContain("Evidence surface")
     expect(surface.completedPhase.label).toBe("Local OMEN Phase 1")
     expect(surface.nextBatch.label).toBe("WILLIAMOS-SHELL-WOE-RESUME-BATCH-001")
     expect(surface.blockedDecisions.map((item) => item.label)).toContain("Metadata expansion")
   })
 
-  it("connects decisions, work orders, evidence, and next move", () => {
+  it("connects decisions, work orders, evidence, next move, and the Primary loop sequence", () => {
     const surface = getWorkOrdersCommandSurface([])
 
     expect(surface.verificationFlow).toEqual([
       expect.objectContaining({
-        label: "Decision",
-        value: "Authority call",
+        label: "Owner Decision",
+        value: "Authority source",
         href: "/decisions",
       }),
       expect.objectContaining({
         label: "Work Order",
-        value: "Mutation contract",
+        value: "Scope contract",
         href: "/work-orders",
       }),
       expect.objectContaining({
@@ -109,6 +109,12 @@ describe("Work Orders command surface", () => {
         value: "Safe continuation",
         href: "/",
       }),
+    ])
+    expect(surface.primarySequence.map((step) => step.value)).toEqual([
+      "/goal",
+      "WO gate",
+      "/loop",
+      "Evidence",
     ])
   })
 
@@ -137,19 +143,24 @@ describe("Work Orders command surface", () => {
       surface.title,
       surface.eyebrow,
       surface.description,
+      surface.operatorPosture,
       ...surface.verificationFlow.flatMap((step) => [
         step.label,
         step.value,
         step.description,
       ]),
+      ...surface.primarySequence.flatMap((step) => [step.label, step.value, step.description]),
       ...surface.cards.flatMap((card) => [card.label, card.value, card.description]),
+      ...surface.blockedExpansion.flatMap((item) => [item.label, item.value, item.description]),
       surface.nextRecommendedWo.label,
       surface.nextRecommendedWo.reason,
     ].join(" ")
 
-    expect(text).toContain("native WilliamOS control primitive")
+    expect(text).toContain("Primary Operator control surface")
     expect(text.toLowerCase()).toContain("mutation control")
     expect(text).toContain("authority gates")
+    expect(text).toContain("No command runner")
+    expect(text).toContain("No autonomy")
     expect(text).not.toMatch(
       /task board|kanban|project management|tickets|productivity pipeline|team queue|sprint|one-click execute|auto-run/i,
     )

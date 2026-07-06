@@ -67,12 +67,12 @@ export function getActiveWorkQueueSurface(orders: WorkOrder[]): ActiveWorkQueueS
     .filter((item): item is ActiveWorkQueueItem => item !== null)
 
   return {
-    title: "Active Work Queue",
+    title: "Primary Work Queue",
     description:
-      "The active queue shows governed work already under motion or blocked at an authority boundary. It is a read-only operating view, not a launcher.",
+      "The Primary queue shows governed work already under motion or blocked at an authority boundary. It is a read-only operating view, not a launcher.",
     items,
     emptyState: {
-      title: "No active governed work",
+      title: "No active Primary work",
       description:
         "When a goal becomes an approved, active, blocked, or review-state Work Order, it appears here for Primary review. The current recommended lane is shown as read-only guidance.",
     },

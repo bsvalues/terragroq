@@ -83,7 +83,7 @@ describe("active work queue surface", () => {
     const surface = getActiveWorkQueueSurface([workOrder("draft"), workOrder("closed")])
 
     expect(surface.items).toHaveLength(0)
-    expect(surface.emptyState.title).toBe("No active governed work")
+    expect(surface.emptyState.title).toBe("No active Primary work")
     expect(surface.emptyState.description).toContain("approved, active, blocked, or review-state")
     expect(surface.emptyState.description).toContain("read-only guidance")
   })

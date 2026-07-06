@@ -17,7 +17,10 @@ export type WorkOrdersCommandSurface = {
   title: string
   eyebrow: string
   description: string
+  operatorPosture: string
   verificationFlow: VerificationFlowStep[]
+  primarySequence: WorkOrderSurfaceCard[]
+  blockedExpansion: WorkOrderSurfaceCard[]
   cards: WorkOrderSurfaceCard[]
   nextRecommendedWo: {
     label: string
@@ -74,20 +77,22 @@ export function getWorkOrdersCommandSurface(
   const evidenceRequired = countEvidenceRequired(orders)
 
   return {
-    title: "Work Orders",
-    eyebrow: "WilliamOS Mutation Control",
+    title: "Primary Work Orders",
+    eyebrow: "Owner-Controlled Work",
     description:
-      "Work Orders are the native WilliamOS control primitive for governed change. They define scope, authority gates, blocked actions, validators, evidence, and safe next moves before any mutation is allowed.",
+      "Work Orders are the Primary Operator control surface for governed mutation control. They define scope, authority gates, blocked actions, validators, evidence, and safe next moves before any mutation is allowed.",
+    operatorPosture:
+      "Codex may operate only inside an authorized Work Order. The Owner remains the authority source; this surface records boundaries and proof instead of launching work.",
     verificationFlow: [
       {
-        label: "Decision",
-        value: "Authority call",
+        label: "Owner Decision",
+        value: "Authority source",
         description: "Resolve the Primary decision before scoped work can advance.",
         href: "/decisions",
       },
       {
         label: "Work Order",
-        value: "Mutation contract",
+        value: "Scope contract",
         description: "Define allowed files, blocked actions, validators, evidence, and stop conditions.",
         href: "/work-orders",
       },
@@ -102,6 +107,28 @@ export function getWorkOrdersCommandSurface(
         value: "Safe continuation",
         description: "After evidence is clear, Home chooses the next governed lane.",
         href: "/",
+      },
+    ],
+    primarySequence: [
+      {
+        label: "1. Declare intent",
+        value: "/goal",
+        description: "State the Primary outcome and lane before any implementation begins.",
+      },
+      {
+        label: "2. Bind authority",
+        value: "WO gate",
+        description: "Keep allowed files, blocked actions, stop conditions, and validators visible.",
+      },
+      {
+        label: "3. Operate the loop",
+        value: "/loop",
+        description: "Codex carries the authorized batch until completion or a real stop condition.",
+      },
+      {
+        label: "4. Prove closure",
+        value: "Evidence",
+        description: "Tests, checks, review threads, merge state, and production verification close the lane.",
       },
     ],
     cards: [
@@ -137,14 +164,36 @@ export function getWorkOrdersCommandSurface(
       },
       {
         label: "Next Batch",
-        value: "Shell / WOE",
-        description: "Resume native Work Order Engine surfaces before metadata expansion.",
+        value: "Shell / Evidence",
+        description: "Finish the Primary shell evidence surface before metadata expansion.",
+      },
+    ],
+    blockedExpansion: [
+      {
+        label: "No command runner",
+        value: "Blocked",
+        description: "Work Orders may describe validation but must not execute commands from the UI.",
+      },
+      {
+        label: "No authority grants",
+        value: "Blocked",
+        description: "This surface does not approve, grant, or bypass owner authority.",
+      },
+      {
+        label: "No autonomy",
+        value: "Blocked",
+        description: "Hermes, MCP, schedulers, background workers, and automatic loops remain closed.",
+      },
+      {
+        label: "No production writes",
+        value: "Blocked",
+        description: "Production changes occur only through the governed PR/merge path.",
       },
     ],
     nextRecommendedWo: {
-      label: "WILLIAMOS-WOE-DETAIL-SURFACES-BATCH-001",
+      label: "WO-SHELL-006 - Evidence Surface",
       reason:
-        "After Shell and WOE read models are resumed, the next useful lane is deeper Work Order detail surfaces, not local metadata expansion.",
+        "After Work Orders are centered in the Primary shell, the next safe lane is the Evidence surface that proves each governed change.",
     },
     completedPhase: LOCAL_OMEN_PHASE_ROLLUP,
     nextBatch: SHELL_WOE_NEXT_BATCH,
