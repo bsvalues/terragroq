@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import type { PoolClient } from "pg"
 import { NextResponse } from "next/server"
 import { hashPassword } from "better-auth/crypto"
 import { pool } from "@/lib/db"
@@ -20,15 +21,62 @@ function isLoopbackHost(url: URL) {
   return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1"
 }
 
-async function declaredPrimaryExists() {
-  const result = await pool.query<{ count: number }>(
-    'select count(*)::int as count from "user" where lower(email) = lower($1)',
-    [DECLARED_PRIMARY_EMAIL],
-  )
-  return (result.rows[0]?.count ?? 0) > 0
+function isLoopbackOrigin(value: string | null) {
+  if (!value) return true
+  try {
+    return isLoopbackHost(new URL(value))
+  } catch {
+    return false
+  }
 }
 
-async function provisionPrimary(input: {
+function isLocalSetupRequest(req: Request) {
+  const url = new URL(req.url)
+  const origin = req.headers.get("origin")
+  const referer = req.headers.get("referer")
+
+  return (
+    isLoopbackHost(url) &&
+    Boolean(origin || referer) &&
+    isLoopbackOrigin(origin) &&
+    isLoopbackOrigin(referer)
+  )
+}
+
+async function getPrimaryRecordState(client: PoolClient) {
+  const result = await client.query<{
+    auth_record_count: number
+    declared_primary_count: number
+  }>(
+    `select
+      count(*)::int as auth_record_count,
+      count(*) filter (where lower(email) = lower($1))::int as declared_primary_count
+    from "user"`,
+    [DECLARED_PRIMARY_EMAIL],
+  )
+
+  return {
+    anyAuthRecordsExist: (result.rows[0]?.auth_record_count ?? 0) > 0,
+    declaredPrimaryExists: (result.rows[0]?.declared_primary_count ?? 0) > 0,
+  }
+}
+
+async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>) {
+  const client = await pool.connect()
+  try {
+    await client.query("begin")
+    const result = await fn(client)
+    await client.query("commit")
+    return result
+  } catch (error) {
+    await client.query("rollback")
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+async function provisionPrimary(client: PoolClient, input: {
   email: string
   name: string
   passwordHash: string
@@ -36,56 +84,44 @@ async function provisionPrimary(input: {
   const userId = randomUUID()
   const accountId = randomUUID()
 
-  await pool.query("begin")
-  try {
-    await pool.query(
-      'insert into "user" (id, name, email, "emailVerified", "createdAt", "updatedAt") values ($1, $2, $3, true, now(), now())',
-      [userId, input.name, input.email],
-    )
-    await pool.query(
-      'insert into account (id, "accountId", "providerId", "userId", password, "createdAt", "updatedAt") values ($1, $2, $3, $4, $5, now(), now())',
-      [accountId, input.email, "credential", userId, input.passwordHash],
-    )
-    await pool.query("commit")
-  } catch (error) {
-    await pool.query("rollback")
-    throw error
-  }
+  await client.query(
+    'insert into "user" (id, name, email, "emailVerified", "createdAt", "updatedAt") values ($1, $2, $3, true, now(), now())',
+    [userId, input.name, input.email],
+  )
+  await client.query(
+    'insert into account (id, "accountId", "providerId", "userId", password, "createdAt", "updatedAt") values ($1, $2, $3, $4, $5, now(), now())',
+    [accountId, input.email, "credential", userId, input.passwordHash],
+  )
 }
 
-async function recoverPrimary(input: { email: string; passwordHash: string }) {
-  await pool.query("begin")
-  try {
-    const primary = await pool.query<{ id: string }>(
-      'select id from "user" where lower(email) = lower($1) limit 1',
-      [input.email],
-    )
-    const primaryId = primary.rows[0]?.id
+async function recoverPrimary(
+  client: PoolClient,
+  input: { email: string; passwordHash: string },
+) {
+  const primary = await client.query<{ id: string }>(
+    'select id from "user" where lower(email) = lower($1) limit 1',
+    [input.email],
+  )
+  const primaryId = primary.rows[0]?.id
 
-    if (!primaryId) {
-      await pool.query("rollback")
-      return false
-    }
-
-    const updated = await pool.query(
-      'update account set password = $1, "updatedAt" = now() where "userId" = $2 and "providerId" = $3',
-      [input.passwordHash, primaryId, "credential"],
-    )
-
-    if ((updated.rowCount ?? 0) === 0) {
-      await pool.query(
-        'insert into account (id, "accountId", "providerId", "userId", password, "createdAt", "updatedAt") values ($1, $2, $3, $4, $5, now(), now())',
-        [randomUUID(), input.email, "credential", primaryId, input.passwordHash],
-      )
-    }
-
-    await pool.query('delete from session where "userId" = $1', [primaryId])
-    await pool.query("commit")
-    return true
-  } catch (error) {
-    await pool.query("rollback")
-    throw error
+  if (!primaryId) {
+    return false
   }
+
+  const updated = await client.query(
+    'update account set password = $1, "updatedAt" = now() where "userId" = $2 and "providerId" = $3',
+    [input.passwordHash, primaryId, "credential"],
+  )
+
+  if ((updated.rowCount ?? 0) === 0) {
+    await client.query(
+      'insert into account (id, "accountId", "providerId", "userId", password, "createdAt", "updatedAt") values ($1, $2, $3, $4, $5, now(), now())',
+      [randomUUID(), input.email, "credential", primaryId, input.passwordHash],
+    )
+  }
+
+  await client.query('delete from session where "userId" = $1', [primaryId])
+  return true
 }
 
 export async function POST(req: Request) {
@@ -96,10 +132,13 @@ export async function POST(req: Request) {
     )
   }
 
-  const url = new URL(req.url)
-  if (!isLoopbackHost(url)) {
+  if (!isLocalSetupRequest(req)) {
     return NextResponse.json(
-      { ok: false, message: "Primary credential setup only accepts loopback requests." },
+      {
+        ok: false,
+        message:
+          "Primary credential setup only accepts same-origin loopback setup requests.",
+      },
       { status: 403 },
     )
   }
@@ -134,35 +173,73 @@ export async function POST(req: Request) {
   }
 
   try {
-    const operation = classifyPrimaryCredentialOperation(await declaredPrimaryExists())
     const passwordHash = await hashPassword(input.password)
 
-    if (operation === "provisioning") {
-      await provisionPrimary({ email: input.email, name: input.name, passwordHash })
-      return NextResponse.json({
-        ok: true,
-        operation,
-        message: "Primary credential established. Continue to Primary Access.",
-      })
-    }
+    const result = await withTransaction(async (client) => {
+      const operation = classifyPrimaryCredentialOperation(
+        await getPrimaryRecordState(client),
+      )
 
-    const recovered = await recoverPrimary({ email: input.email, passwordHash })
-    if (!recovered) {
-      return NextResponse.json(
-        {
-          ok: false,
+      if (operation === "blocked_identity_missing") {
+        return {
+          ok: false as const,
+          status: 409,
+          operation,
+          message:
+            "Primary identity is not declared in the local auth records. Resolve identity before credential recovery.",
+        }
+      }
+
+      if (operation === "provisioning") {
+        await provisionPrimary(client, {
+          email: input.email,
+          name: input.name,
+          passwordHash,
+        })
+        return {
+          ok: true as const,
+          operation,
+          message: "Primary credential established. Continue to Primary Access.",
+        }
+      }
+
+      const recovered = await recoverPrimary(client, {
+        email: input.email,
+        passwordHash,
+      })
+      if (!recovered) {
+        return {
+          ok: false as const,
+          status: 404,
           operation,
           message:
             "No matching Primary record was found for that email. Credential recovery did not run.",
-        },
-        { status: 404 },
-      )
+        }
+      }
+
+      return {
+        ok: true as const,
+        operation,
+        message: "Primary credential recovered. Continue to Primary Access.",
+      }
+    })
+
+    if (!result.ok) {
+      return NextResponse.json(result, { status: result.status })
+    }
+
+    if (result.operation === "provisioning") {
+      return NextResponse.json({
+        ok: true,
+        operation: result.operation,
+        message: result.message,
+      })
     }
 
     return NextResponse.json({
       ok: true,
-      operation,
-      message: "Primary credential recovered. Continue to Primary Access.",
+      operation: result.operation,
+      message: result.message,
     })
   } catch {
     return NextResponse.json(

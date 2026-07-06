@@ -13,11 +13,30 @@ import {
 
 describe("Primary credential setup helpers", () => {
   it("classifies empty auth state as provisioning", () => {
-    expect(classifyPrimaryCredentialOperation(false)).toBe("provisioning")
+    expect(
+      classifyPrimaryCredentialOperation({
+        anyAuthRecordsExist: false,
+        declaredPrimaryExists: false,
+      }),
+    ).toBe("provisioning")
   })
 
   it("classifies existing auth state as recovery", () => {
-    expect(classifyPrimaryCredentialOperation(true)).toBe("recovery")
+    expect(
+      classifyPrimaryCredentialOperation({
+        anyAuthRecordsExist: true,
+        declaredPrimaryExists: true,
+      }),
+    ).toBe("recovery")
+  })
+
+  it("blocks recovery when auth records exist but the declared Primary is absent", () => {
+    expect(
+      classifyPrimaryCredentialOperation({
+        anyAuthRecordsExist: true,
+        declaredPrimaryExists: false,
+      }),
+    ).toBe("blocked_identity_missing")
   })
 
   it("validates and normalizes credential input without exposing secret values", () => {
