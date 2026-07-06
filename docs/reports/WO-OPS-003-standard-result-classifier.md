@@ -2,7 +2,7 @@
 
 ## Result
 
-PASS_PENDING_PR
+PASS_PENDING_CHECKS
 
 ## Goal
 

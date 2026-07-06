@@ -47,6 +47,9 @@ Operator action:
 Meaning: local work passed and a PR is open, but remote checks are still
 pending.
 
+Legacy note: older reports may use `PASS_PENDING_PR`. Treat that as a deprecated
+alias for `PASS_PENDING_CHECKS`. New reports must use `PASS_PENDING_CHECKS`.
+
 Required evidence:
 
 - PR URL
