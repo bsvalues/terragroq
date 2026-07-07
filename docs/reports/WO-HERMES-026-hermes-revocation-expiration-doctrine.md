@@ -1,4 +1,4 @@
-# WO-HERMES-009 - Hermes Revocation and Expiration Doctrine
+# WO-HERMES-026 - Hermes Revocation and Expiration Doctrine
 
 RESULT: PASS
 

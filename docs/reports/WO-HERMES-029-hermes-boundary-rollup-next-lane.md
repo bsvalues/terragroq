@@ -1,4 +1,4 @@
-# WO-HERMES-012 - Hermes Boundary Rollup + Next-Lane Decision
+# WO-HERMES-029 - Hermes Boundary Rollup + Next-Lane Decision
 
 RESULT: PASS
 
@@ -6,17 +6,17 @@ Completed the Hermes Sidecar Boundary doctrine lane.
 
 COMPLETED_WOS:
 
-- WO-HERMES-001 - Hermes Boundary Doctrine
-- WO-HERMES-002 - Hermes State Model
-- WO-HERMES-003 - Worker Packet Schema
-- WO-HERMES-004 - Activation Review Packet Schema
-- WO-HERMES-005 - Authority Boundary Rules
-- WO-HERMES-006 - Denied / Blocked UX Doctrine
-- WO-HERMES-007 - Hermes Relationship Map
-- WO-HERMES-008 - Safety Classification Matrix
-- WO-HERMES-009 - Revocation and Expiration Doctrine
-- WO-HERMES-010 - Academy Lesson: Safe Hermes Use
-- WO-HERMES-011 - Hermes Boundary Safety Sweep
+- WO-HERMES-018 - Hermes Boundary Doctrine
+- WO-HERMES-019 - Hermes State Model
+- WO-HERMES-020 - Worker Packet Schema
+- WO-HERMES-021 - Activation Review Packet Schema
+- WO-HERMES-022 - Authority Boundary Rules
+- WO-HERMES-023 - Denied / Blocked UX Doctrine
+- WO-HERMES-024 - Hermes Relationship Map
+- WO-HERMES-025 - Safety Classification Matrix
+- WO-HERMES-026 - Revocation and Expiration Doctrine
+- WO-HERMES-027 - Academy Lesson: Safe Hermes Use
+- WO-HERMES-028 - Hermes Boundary Safety Sweep
 
 VALIDATION_SCOPE:
 

@@ -1,4 +1,4 @@
-# WO-HERMES-005 - Hermes Authority Boundary Rules
+# WO-HERMES-022 - Hermes Authority Boundary Rules
 
 RESULT: PASS
 

@@ -1,4 +1,4 @@
-# WO-HERMES-004 - Hermes Activation Review Packet Schema
+# WO-HERMES-021 - Hermes Activation Review Packet Schema
 
 RESULT: PASS
 

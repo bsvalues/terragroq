@@ -1,4 +1,4 @@
-# WO-HERMES-001 - Hermes Boundary Doctrine
+# WO-HERMES-018 - Hermes Boundary Doctrine
 
 RESULT: PASS
 

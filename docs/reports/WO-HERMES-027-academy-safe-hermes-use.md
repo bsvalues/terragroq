@@ -1,4 +1,4 @@
-# WO-HERMES-010 - Academy Lesson: Safe Hermes Use
+# WO-HERMES-027 - Academy Lesson: Safe Hermes Use
 
 RESULT: PASS
 

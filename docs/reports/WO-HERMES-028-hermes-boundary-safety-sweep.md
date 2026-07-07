@@ -1,4 +1,4 @@
-# WO-HERMES-011 - Hermes Boundary Safety Sweep
+# WO-HERMES-028 - Hermes Boundary Safety Sweep
 
 RESULT: PASS
 
