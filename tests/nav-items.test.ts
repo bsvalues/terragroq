@@ -94,7 +94,7 @@ describe("operator navigation information architecture", () => {
     )
     expect(text).not.toMatch(/\b(groq|xai|ai-powered|terragroq)\b/i)
     expect(text).not.toMatch(/dashboard|workspace|admin portal|team status|productivity|users|organization|sign up|create account|request access/i)
-    expect(text).not.toMatch(/\b(execute|run|commit|ingest|deploy|approve|approval|grant|saas)\b/i)
+    expect(text).not.toMatch(/\b(execute|run|commit|ingest|deploy|approve|approval|grant|saas|admin)\b/i)
   })
 
   it("separates primary command areas from supporting references", () => {
