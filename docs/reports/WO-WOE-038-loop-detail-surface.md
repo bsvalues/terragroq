@@ -7,7 +7,7 @@ PASS.
 ## Scope
 
 Rendered the `/loop` read model on the Work Orders WOE detail surface with
-batch, stop-condition, and validation placement.
+batch, stop condition, and validation placement.
 
 ## Safety
 

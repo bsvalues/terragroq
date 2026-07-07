@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useMemo, useState, useTransition } from "react"
 import type { WorkOrder } from "@/lib/db/schema"
 import {
   createWorkOrder,
@@ -97,7 +97,7 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<WorkOrder | null>(null)
   const [, startTransition] = useTransition()
-  const distinctFilterValues = getDistinctWorkOrderFilterValues(rows)
+  const distinctFilterValues = useMemo(() => getDistinctWorkOrderFilterValues(rows), [rows])
 
   // create form
   const emptyForm = {
