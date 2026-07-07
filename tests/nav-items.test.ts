@@ -47,13 +47,15 @@ describe("operator navigation information architecture", () => {
 
     expect(descriptions.get("/")).toBe("Primary Operator briefing.")
     expect(descriptions.get("/chat")).toBe("Command conversation.")
-    expect(descriptions.get("/audit")).toBe("Inspect proof records.")
+    expect(descriptions.get("/work-orders")).toBe("Control scoped work.")
+    expect(descriptions.get("/audit")).toBe("Verify proof records.")
     expect(descriptions.get("/trace")).toBe("Review reasoning records.")
     expect(descriptions.get("/academy")).toBe("Learn WilliamOS operation.")
-    expect(descriptions.get("/projects")).toBe("Review systems under command.")
-    expect(descriptions.get("/agent-forge")).toBe("Prepare capabilities.")
-    expect(descriptions.get("/hermes")).toBe("Review worker boundaries.")
-    expect(descriptions.get("/runtime")).toBe("Check readiness and health.")
+    expect(descriptions.get("/projects")).toBe("Review project posture.")
+    expect(descriptions.get("/agent-forge")).toBe("Inspect capability prep.")
+    expect(descriptions.get("/hermes")).toBe("Inspect worker boundaries.")
+    expect(descriptions.get("/memory")).toBe("Place governed context.")
+    expect(descriptions.get("/runtime")).toBe("Check status boundaries.")
   })
 
   it("keeps every nav item described and assigned to a declared group", () => {
@@ -92,6 +94,7 @@ describe("operator navigation information architecture", () => {
     )
     expect(text).not.toMatch(/\b(groq|xai|ai-powered|terragroq)\b/i)
     expect(text).not.toMatch(/dashboard|workspace|admin portal|team status|productivity|users|organization|sign up|create account|request access/i)
+    expect(text).not.toMatch(/\b(execute|run|commit|ingest|deploy|approve now|grant now)\b/i)
   })
 
   it("separates primary command areas from supporting references", () => {
