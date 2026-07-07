@@ -73,6 +73,8 @@ describe("completion report surface", () => {
     const surface = getCompletionReportSurface([])
 
     expect(surface.emptyState.title).toBe("No completion reports yet")
+    expect(surface.description).toContain("proof packets")
+    expect(surface.emptyState.description).toContain("before the next governed move")
     expect(surface.safety).toEqual({
       readOnly: true,
       recordsResult: false,

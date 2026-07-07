@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { ClipboardList, Route, Search, ShieldCheck } from "lucide-react"
+import { ClipboardList, Compass, Route, Search, ShieldCheck } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { getWoeDetailSurface } from "@/components/work-orders/woe-detail-surface"
@@ -9,22 +9,43 @@ export function WoeDetailSurfacePanel() {
 
   return (
     <section className="overflow-hidden rounded-xl border border-border bg-card">
-      <div className="border-b border-border bg-muted/30 px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <ClipboardList className="h-4 w-4 text-primary" aria-hidden />
-          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-            WilliamOS WOE Detail
-          </p>
+      <div className="border-b border-border bg-muted/30 px-4 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <ClipboardList className="h-4 w-4 text-primary" aria-hidden />
+              <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+                Primary WOE map
+              </p>
+            </div>
+            <h2 className="mt-2 text-lg font-semibold tracking-tight">{surface.title}</h2>
+          </div>
+          <Badge variant="secondary">{surface.polish.posture}</Badge>
         </div>
-        <h2 className="mt-2 text-lg font-semibold tracking-tight">{surface.title}</h2>
         <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           {surface.description}
         </p>
+        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-foreground">
+          {surface.polish.primarySignal}
+        </p>
+      </div>
+
+      <div className="grid gap-2 border-b border-border p-4 md:grid-cols-5">
+        {surface.polish.operatingMap.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <div className="flex items-center gap-2">
+              <Compass className="h-3.5 w-3.5 text-primary" aria-hidden />
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{item.label}</p>
+            </div>
+            <p className="mt-2 text-sm font-semibold">{item.value}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.description}</p>
+          </div>
+        ))}
       </div>
 
       <div className="grid gap-3 p-4 lg:grid-cols-3">
         <DetailCard title="Goal" value={`${surface.goal.id} - ${surface.goal.label}`} body={surface.goal.purpose} />
-        <DetailCard title="Batch" value={surface.batch.name} body={surface.batch.nextRecommendedBatch} />
+        <DetailCard title="Next lane" value={surface.batch.nextRecommendedBatch} body={surface.goal.nextRecommendedWork} />
         <DetailCard title="Work Order" value={surface.workOrder.id} body={surface.workOrder.goal} />
       </div>
 
@@ -77,7 +98,7 @@ export function WoeDetailSurfacePanel() {
       <div className="grid gap-3 border-t border-border p-4 lg:grid-cols-2">
         <div className="rounded-lg border border-border bg-background p-3">
           <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            Blocked decision
+            Blocked authority
           </p>
           <p className="mt-2 text-sm font-semibold">{surface.blockedDecision.blocker}</p>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
@@ -104,6 +125,18 @@ export function WoeDetailSurfacePanel() {
             ))}
           </div>
         </div>
+      </div>
+
+      <div className="grid gap-3 border-t border-border p-4 md:grid-cols-3">
+        {surface.polish.readabilityCues.map((cue) => (
+          <div key={cue.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Readability cue
+            </p>
+            <p className="mt-2 text-sm font-semibold">{cue.label}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{cue.description}</p>
+          </div>
+        ))}
       </div>
 
       <div className="grid gap-3 border-t border-border p-4 lg:grid-cols-2">
@@ -184,8 +217,8 @@ export function WoeDetailSurfacePanel() {
 
       <div className="flex items-center gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">
         <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden />
-        Read-only WOE integration surface. No command runner, autonomous loop execution, background worker,
-        production write, runtime mutation, Hermes/MCP activation, memory write, dynamic ingestion, or secrets.
+        Read-only WOE map. It clarifies intent, blockers, proof, and next lane; it does not run work,
+        mutate authority, start workers, write production, activate Hermes/MCP, ingest memory, or expose secrets.
       </div>
     </section>
   )

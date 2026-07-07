@@ -33,9 +33,27 @@ export type WoeQueueSection = {
   excludedPowers: string[]
 }
 
+export type WoeOperatingMapItem = {
+  label: string
+  value: string
+  description: string
+}
+
+export type WoeReadabilityCue = {
+  label: string
+  description: string
+}
+
 export type WoeDetailSurface = {
   title: "Work Order Engine Integration"
   description: string
+  polish: {
+    batch: "WILLIAMOS-WOE-SHELL-POLISH-BATCH-001"
+    posture: "read-only/static-first"
+    primarySignal: string
+    operatingMap: WoeOperatingMapItem[]
+    readabilityCues: WoeReadabilityCue[]
+  }
   goal: {
     label: string
     id: "GOAL-WOS-002"
@@ -214,7 +232,54 @@ export function getWoeDetailSurface(): WoeDetailSurface {
   return {
     title: "Work Order Engine Integration",
     description:
-      "Native read-only WilliamOS surfaces for /goal, /loop, Work Orders, evidence rollups, active queues, blocked decisions, completion reports, and next-lane safety.",
+      "A read-only operating map for the Primary: current intent, loop boundary, active work, blockers, proof, completion, and next lane.",
+    polish: {
+      batch: "WILLIAMOS-WOE-SHELL-POLISH-BATCH-001",
+      posture: "read-only/static-first",
+      primarySignal:
+        "Primary can read the lane, inspect proof, and see what remains blocked without encountering execution affordances.",
+      operatingMap: [
+        {
+          label: "Intent",
+          value: "/goal",
+          description: "What this lane is for and what completion means.",
+        },
+        {
+          label: "Boundary",
+          value: "/loop",
+          description: "The authorized batch, validation, and stop conditions.",
+        },
+        {
+          label: "Motion",
+          value: "Queue",
+          description: "Approved, active, review, and blocked Work Orders.",
+        },
+        {
+          label: "Proof",
+          value: "Evidence",
+          description: "Validation and production facts tied to the work.",
+        },
+        {
+          label: "Closure",
+          value: "Report",
+          description: "Machine-readable completion fields and next lane.",
+        },
+      ],
+      readabilityCues: [
+        {
+          label: "Read first",
+          description: "Intent, boundary, motion, proof, and closure are grouped in that order.",
+        },
+        {
+          label: "Blocked stays visible",
+          description: "Authority blockers are kept near the queue and safety posture.",
+        },
+        {
+          label: "Navigation is evidence-led",
+          description: "Links lead to existing read-only surfaces, not action paths.",
+        },
+      ],
+    },
     goal: {
       label: "Primary Shell Completion",
       id: "GOAL-WOS-002",
@@ -231,7 +296,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
         "Production-write behavior",
         "Hermes/MCP/runtime activation",
       ],
-      nextRecommendedWork: "GOAL-WOS-002 follow-on surface polish after this read-only integration is merged.",
+      nextRecommendedWork: "GOAL-WOS-010 WOE shell polish keeps this surface readable without opening execution.",
     },
     batch: {
       name: "WILLIAMOS-WOE-INTEGRATION-BATCH-001",

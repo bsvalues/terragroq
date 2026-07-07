@@ -40,12 +40,12 @@ export function getCompletionReportSurface(orders: WorkOrder[]): CompletionRepor
   return {
     title: "Completion Reports",
     description:
-      "Completion reports turn closed Work Orders into evidence packets: result, validators, stop conditions, evidence, gates, and closure state.",
+      "Completion reports turn closed Work Orders into proof packets: result, validators, stop conditions, evidence, boundaries, and closure state.",
     items,
     emptyState: {
       title: "No completion reports yet",
       description:
-        "When Work Orders close or abort, WilliamOS renders their result and evidence here for review before the next governed move.",
+        "When Work Orders close or abort, WilliamOS renders their result and evidence here before the next governed move.",
     },
     safety: {
       readOnly: true,

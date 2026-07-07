@@ -11,6 +11,21 @@ describe("WOE detail surface", () => {
     const surface = getWoeDetailSurface()
 
     expect(surface.goal.id).toBe("GOAL-WOS-002")
+    expect(surface.polish.batch).toBe("WILLIAMOS-WOE-SHELL-POLISH-BATCH-001")
+    expect(surface.polish.posture).toBe("read-only/static-first")
+    expect(surface.polish.primarySignal).toContain("without encountering execution affordances")
+    expect(surface.polish.operatingMap.map((item) => item.label)).toEqual([
+      "Intent",
+      "Boundary",
+      "Motion",
+      "Proof",
+      "Closure",
+    ])
+    expect(surface.polish.readabilityCues.map((cue) => cue.label)).toEqual([
+      "Read first",
+      "Blocked stays visible",
+      "Navigation is evidence-led",
+    ])
     expect(surface.goal.purpose).toContain("Work Order Engine state visible")
     expect(surface.goal.successState).toContain("inspect goals, loops, active work")
     expect(surface.batch.name).toBe("WILLIAMOS-WOE-INTEGRATION-BATCH-001")

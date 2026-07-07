@@ -65,7 +65,7 @@ describe("active work queue surface", () => {
   it("names next moves without creating execution controls", () => {
     const surface = getActiveWorkQueueSurface([workOrder("blocked")])
 
-    expect(surface.items[0]?.nextMove).toContain("Resolve the authority gate")
+    expect(surface.items[0]?.nextMove).toContain("Hold position")
     expect(surface.safety).toEqual({
       readOnly: true,
       startsLoop: false,
@@ -84,7 +84,7 @@ describe("active work queue surface", () => {
 
     expect(surface.items).toHaveLength(0)
     expect(surface.emptyState.title).toBe("No active Primary work")
-    expect(surface.emptyState.description).toContain("approved, active, blocked, or review-state")
+    expect(surface.emptyState.description).toContain("Approved, active, blocked, and review-state")
     expect(surface.emptyState.description).toContain("read-only guidance")
   })
 })
