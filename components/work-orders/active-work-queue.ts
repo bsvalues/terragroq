@@ -42,11 +42,11 @@ function asWoStatus(status: string): WoStatus | null {
 }
 
 function nextMoveFor(order: WorkOrder, status: WoStatus): string {
-  if (status === "blocked") return "Resolve the authority gate or missing evidence before movement."
-  if (status === "review") return "Review evidence, PR state, and production verification before closure."
-  if (order.evidence.length === 0) return "Collect validation evidence before advancing."
-  if (status === "approved") return "Confirm active grant and loop conditions before activation."
-  return "Continue the current governed loop and report the transition."
+  if (status === "blocked") return "Hold position until the authority gate or missing evidence is resolved."
+  if (status === "review") return "Check evidence, PR state, and production verification before closure."
+  if (order.evidence.length === 0) return "Add validation evidence before this work can move cleanly."
+  if (status === "approved") return "Confirm the loop boundary and required proof before work becomes active."
+  return "Continue inside the current governed loop and keep proof attached."
 }
 
 export function getActiveWorkQueueSurface(orders: WorkOrder[]): ActiveWorkQueueSurface {
@@ -69,12 +69,12 @@ export function getActiveWorkQueueSurface(orders: WorkOrder[]): ActiveWorkQueueS
   return {
     title: "Primary Work Queue",
     description:
-      "The Primary queue shows governed work already under motion or blocked at an authority boundary. It is a read-only operating view, not a launcher.",
+      "The Primary queue shows governed work that is authorized, active, under review, or blocked. It is a read-only operating view, not a launcher.",
     items,
     emptyState: {
       title: "No active Primary work",
       description:
-        "When a goal becomes an approved, active, blocked, or review-state Work Order, it appears here for Primary review. The current recommended lane is shown as read-only guidance.",
+        "Approved, active, blocked, and review-state Work Orders appear here for Primary review. The current recommended lane remains read-only guidance.",
     },
     nextBatch: SHELL_WOE_NEXT_BATCH,
     completedPhase: LOCAL_OMEN_PHASE_ROLLUP,

@@ -13,7 +13,7 @@ export function CompletionReportPanel({ orders }: { orders: WorkOrder[] }) {
         <div className="flex flex-wrap items-center gap-2">
           <FileText className="h-4 w-4 text-primary" aria-hidden />
           <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-            WilliamOS Work Order Engine
+            Completion proof
           </p>
         </div>
         <h2 className="mt-2 text-lg font-semibold tracking-tight">{surface.title}</h2>
@@ -53,7 +53,7 @@ export function CompletionReportPanel({ orders }: { orders: WorkOrder[] }) {
 
       <div className="flex items-center gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">
         <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden />
-        Read-only renderer. No result recording, gate changes, closure action, or production write.
+        Read-only renderer. It shows closure proof; it does not record results, change gates, close work, or write production.
       </div>
     </section>
   )

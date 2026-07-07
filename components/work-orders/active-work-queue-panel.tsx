@@ -13,7 +13,7 @@ export function ActiveWorkQueuePanel({ orders }: { orders: WorkOrder[] }) {
         <div className="flex flex-wrap items-center gap-2">
           <ListChecks className="h-4 w-4 text-primary" aria-hidden />
           <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-            WilliamOS Primary Queue
+            Primary work queue
           </p>
         </div>
         <h2 className="mt-2 text-lg font-semibold tracking-tight">{surface.title}</h2>
@@ -40,11 +40,11 @@ export function ActiveWorkQueuePanel({ orders }: { orders: WorkOrder[] }) {
               </div>
               <div className="mt-4 grid gap-3 text-xs text-muted-foreground md:grid-cols-[0.7fr_1fr]">
                 <div>
-                  <p className="font-mono uppercase tracking-wider">Authority</p>
+                  <p className="font-mono uppercase tracking-wider">Boundary</p>
                   <p className="mt-1 text-foreground">{item.authority}</p>
                 </div>
                 <div>
-                  <p className="font-mono uppercase tracking-wider">Next move</p>
+                  <p className="font-mono uppercase tracking-wider">Read next</p>
                   <p className="mt-1 leading-relaxed text-foreground">{item.nextMove}</p>
                 </div>
               </div>
@@ -63,7 +63,7 @@ export function ActiveWorkQueuePanel({ orders }: { orders: WorkOrder[] }) {
       <div className="grid gap-3 border-t border-border p-4 md:grid-cols-2">
         <div className="rounded-lg border border-border bg-background p-3">
           <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            Next valid batch
+            Next lane
           </p>
           <p className="mt-2 text-sm font-semibold">{surface.nextBatch.label}</p>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
@@ -72,7 +72,7 @@ export function ActiveWorkQueuePanel({ orders }: { orders: WorkOrder[] }) {
         </div>
         <div className="rounded-lg border border-border bg-background p-3">
           <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            Recent completed phase
+            Last proven phase
           </p>
           <p className="mt-2 text-sm font-semibold">{surface.completedPhase.label}</p>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
@@ -83,7 +83,7 @@ export function ActiveWorkQueuePanel({ orders }: { orders: WorkOrder[] }) {
 
       <div className="flex items-center gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">
         <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden />
-        Read-only queue. No loop start, execution, authority grant, or production write.
+        Read-only queue. It shows motion and blockers; it does not start loops, execute work, grant authority, or write production.
       </div>
     </section>
   )
