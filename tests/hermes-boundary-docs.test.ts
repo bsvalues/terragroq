@@ -1,22 +1,27 @@
-import { readFileSync } from "node:fs"
+import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 
 import { describe, expect, it } from "vitest"
 
+const governanceDoc = (file: string) => `docs/governance/${file}`
+const academyDoc = (file: string) => `docs/academy/operator-training/${file}`
+const wikiDoc = (file: string) => `docs/wiki/concepts/${file}`
+const reportDoc = (file: string) => `docs/reports/${file}`
+
 const docs = {
-  doctrine: "docs/governance/hermes-sidecar-boundary-doctrine.md",
-  stateModel: "docs/governance/hermes-state-model.md",
-  workerPacket: "docs/governance/hermes-worker-packet-schema.md",
-  activationReview: "docs/governance/hermes-activation-review-packet-schema.md",
-  authorityRules: "docs/governance/hermes-authority-boundary-rules.md",
-  deniedUx: "docs/governance/hermes-denied-blocked-ux-doctrine.md",
-  relationshipMap: "docs/governance/hermes-relationship-map.md",
-  safetyMatrix: "docs/governance/hermes-safety-classification-matrix.md",
-  revocation: "docs/governance/hermes-revocation-expiration-doctrine.md",
-  academy: "docs/academy/operator-training/safe-hermes-use.md",
-  wiki: "docs/wiki/concepts/hermes-boundary.md",
-  safetySweep: "docs/reports/WO-HERMES-011-hermes-boundary-safety-sweep.md",
-  rollup: "docs/reports/WO-HERMES-012-hermes-boundary-rollup-next-lane.md",
+  doctrine: governanceDoc("hermes-sidecar-boundary-doctrine.md"),
+  stateModel: governanceDoc("hermes-state-model.md"),
+  workerPacket: governanceDoc("hermes-worker-packet-schema.md"),
+  activationReview: governanceDoc("hermes-activation-review-packet-schema.md"),
+  authorityRules: governanceDoc("hermes-authority-boundary-rules.md"),
+  deniedUx: governanceDoc("hermes-denied-blocked-ux-doctrine.md"),
+  relationshipMap: governanceDoc("hermes-relationship-map.md"),
+  safetyMatrix: governanceDoc("hermes-safety-classification-matrix.md"),
+  revocation: governanceDoc("hermes-revocation-expiration-doctrine.md"),
+  academy: academyDoc("safe-hermes-use.md"),
+  wiki: wikiDoc("hermes-boundary.md"),
+  safetySweep: reportDoc("WO-HERMES-028-hermes-boundary-safety-sweep.md"),
+  rollup: reportDoc("WO-HERMES-029-hermes-boundary-rollup-next-lane.md"),
 } as const
 
 function readDoc(path: string) {
@@ -25,9 +30,28 @@ function readDoc(path: string) {
 
 describe("Hermes boundary doctrine docs", () => {
   it("creates the required Hermes doctrine and schema documents", () => {
-    for (const path of Object.values(docs)) {
-      expect(readDoc(path).trim().length).toBeGreaterThan(200)
-    }
+    expect(readDoc(docs.doctrine)).toContain("# Hermes Sidecar Boundary Doctrine")
+    expect(readDoc(docs.stateModel)).toContain("# Hermes State Model")
+    expect(readDoc(docs.workerPacket)).toContain("# Hermes Worker Packet Schema")
+    expect(readDoc(docs.activationReview)).toContain("# Hermes Activation Review Packet Schema")
+    expect(readDoc(docs.authorityRules)).toContain("# Hermes Authority Boundary Rules")
+    expect(readDoc(docs.deniedUx)).toContain("# Hermes Denied / Blocked UX Doctrine")
+    expect(readDoc(docs.relationshipMap)).toContain("# Hermes Relationship Map")
+    expect(readDoc(docs.safetyMatrix)).toContain("# Hermes Safety Classification Matrix")
+    expect(readDoc(docs.revocation)).toContain("# Hermes Revocation and Expiration Doctrine")
+    expect(readDoc(docs.academy)).toContain("# Safe Hermes Use")
+    expect(readDoc(docs.wiki)).toContain("# Hermes Boundary")
+    expect(readDoc(docs.safetySweep)).toContain("# WO-HERMES-028 - Hermes Boundary Safety Sweep")
+    expect(readDoc(docs.rollup)).toContain("# WO-HERMES-029 - Hermes Boundary Rollup + Next-Lane Decision")
+  })
+
+  it("keeps Hermes report work-order ids unique", () => {
+    const reportIds = readdirSync(join(process.cwd(), "docs/reports"))
+      .map((file) => file.match(/^(WO-HERMES-\d+)/)?.[1])
+      .filter((id): id is string => Boolean(id))
+    const uniqueReportIds = new Set(reportIds)
+
+    expect(uniqueReportIds.size).toBe(reportIds.length)
   })
 
   it("keeps Hermes disabled by default and blocks runtime activation", () => {
@@ -50,6 +74,7 @@ describe("Hermes boundary doctrine docs", () => {
     expect(stateModel).toContain("`BLOCKED`")
     expect(stateModel).toContain("`REVIEW_READY`")
     expect(stateModel).toContain("`AUTHORIZED`")
+    expect(readDoc(docs.doctrine)).toContain("the Owner has explicitly approved")
     expect(stateModel).toContain("`ACTIVE_LIMITED_FUTURE` is only a named future state")
     expect(stateModel).toContain("not a runtime state machine")
   })

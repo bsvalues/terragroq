@@ -1,4 +1,4 @@
-# WO-HERMES-006 - Hermes Denied / Blocked UX Doctrine
+# WO-HERMES-023 - Hermes Denied / Blocked UX Doctrine
 
 RESULT: PASS
 

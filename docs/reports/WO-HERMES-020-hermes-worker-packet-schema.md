@@ -1,4 +1,4 @@
-# WO-HERMES-003 - Hermes Worker Packet Schema
+# WO-HERMES-020 - Hermes Worker Packet Schema
 
 RESULT: PASS
 

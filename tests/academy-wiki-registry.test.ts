@@ -152,12 +152,12 @@ describe("Academy Wiki Registry", () => {
     ])
   })
 
-  it("recommends Hermes boundary doctrine while keeping runtime lanes blocked", () => {
+  it("recommends Work Order Engine integration after Hermes boundary doctrine while keeping runtime lanes blocked", () => {
     const surface = getAcademyWikiSurface()
 
     expect(surface.nextLaneDecision).toMatchObject({
-      recommendedBatch: "WILLIAMOS-HERMES-BOUNDARY-DOCTRINE-BATCH-001",
-      recommendedOption: "B - Hermes boundary doctrine",
+      recommendedBatch: "WILLIAMOS-WORK-ORDER-ENGINE-INTEGRATION-BATCH-001",
+      recommendedOption: "A - Work Order Engine Integration",
     })
     expect(surface.nextLaneDecision.blockedLanes).toContain("Hermes activation")
     expect(surface.nextLaneDecision.blockedLanes).toContain("worker activation")

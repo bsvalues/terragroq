@@ -1,4 +1,4 @@
-# WO-HERMES-007 - Hermes Relationship Map
+# WO-HERMES-024 - Hermes Relationship Map
 
 RESULT: PASS
 

@@ -20,7 +20,7 @@ Hermes exists to describe a possible future worker boundary: a sidecar may recei
 - `DISABLED`: no runtime, worker, MCP, queue, scheduler, or sidecar process exists.
 - `PROPOSED`: a Work Order may describe a future Worker Packet or activation review.
 - `BLOCKED`: a safety, validation, evidence, or authority gap prevents progress.
-- `AUTHORIZED`: the Primary has explicitly approved a bounded future packet.
+- `AUTHORIZED`: the Owner has explicitly approved a bounded future packet.
 - `REVOKED`: prior authority is withdrawn or expires.
 
 ## Hard Blocked States

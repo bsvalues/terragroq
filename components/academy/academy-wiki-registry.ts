@@ -489,8 +489,8 @@ export function getAcademyWikiSurface(): AcademyWikiSurface {
       { label: "Local Status", href: "/runtime", description: "Review read-only local runtime status." },
     ],
     nextLaneDecision: {
-      recommendedBatch: "WILLIAMOS-HERMES-BOUNDARY-DOCTRINE-BATCH-001",
-      recommendedOption: "B - Hermes boundary doctrine",
+      recommendedBatch: "WILLIAMOS-WORK-ORDER-ENGINE-INTEGRATION-BATCH-001",
+      recommendedOption: "A - Work Order Engine Integration",
       blockedLanes: [
         "Hermes activation",
         "MCP activation",
@@ -500,7 +500,7 @@ export function getAcademyWikiSurface(): AcademyWikiSurface {
         "runtime control",
       ],
       reason:
-        "After Academy/Wiki makes the operating model teachable, the next governance layer should define Hermes boundaries before any worker or sidecar capability is considered.",
+        "After Academy/Wiki and Hermes boundary doctrine are complete, the next safe lane is governed Work Order execution visibility, not worker activation.",
     },
     safety: {
       staticReadOnly: true,

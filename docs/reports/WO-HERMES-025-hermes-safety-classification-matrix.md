@@ -1,4 +1,4 @@
-# WO-HERMES-008 - Hermes Safety Classification Matrix
+# WO-HERMES-025 - Hermes Safety Classification Matrix
 
 RESULT: PASS
 
