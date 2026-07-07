@@ -221,7 +221,7 @@ export function MemoryView({ initial }: { initial: MemoryFact[] }) {
                   id="content"
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
-                  placeholder="e.g. The team ships on Thursdays and freezes deploys on Fridays."
+                  placeholder="e.g. The Primary prefers release notes before merges."
                   rows={3}
                 />
               </div>

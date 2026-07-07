@@ -11,13 +11,13 @@ export default async function MemoryPage() {
     <>
       <PageHeader
         title="Memory"
-        description="WilliamOS continuity layer for facts, decisions, procedures, patterns, contradictions, stale items, and review queues. Evidence-linked, correctable, and authority-aware."
+        description="Primary Operator continuity layer for evidence-linked context, review queues, stale or contradicted memory, and authority-aware recall."
       />
       <div className="p-6 pb-0">
         <div className="flex flex-col gap-4">
-          <TrainingCandidateQueuePanel />
-          <MemoryGovernancePanel />
           <MemoryNativeAreaPanel />
+          <MemoryGovernancePanel />
+          <TrainingCandidateQueuePanel />
         </div>
       </div>
       <MemoryView initial={facts} />
