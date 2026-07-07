@@ -198,13 +198,13 @@ export default async function DashboardPage() {
             <div className="rounded-lg border border-border bg-card p-4">
               <h2 className="text-sm font-medium mb-3">Command Center links</h2>
               <div className="flex flex-col gap-2">
-                <QuickLink href="/memory" label="Commit a memory fact" />
-                <QuickLink href="/decisions" label="Log a decision" />
-                <QuickLink href="/doctrine" label="Ratify doctrine" />
-                <QuickLink href="/work-orders" label="Open a work order" />
+                <QuickLink href="/memory" label="Review memory context" />
+                <QuickLink href="/decisions" label="Review owner decisions" />
+                <QuickLink href="/doctrine" label="Review doctrine" />
+                <QuickLink href="/work-orders" label="Review work orders" />
                 <QuickLink href="/projects" label="Review project systems" />
                 <QuickLink href="/agent-forge" label="Inspect Agent Forge" />
-                <QuickLink href="/corpus" label="Ingest a document" />
+                <QuickLink href="/corpus" label="Review corpus" />
               </div>
             </div>
 

@@ -39,10 +39,10 @@ export type NavGroup = {
 
 export const navGroups: NavGroup[] = [
   { id: "Home", tier: "Primary", description: "Primary briefing and next move." },
-  { id: "Work", tier: "Primary", description: "Work Orders, Evidence, Projects, and Systems." },
+  { id: "Work", tier: "Primary", description: "Work Orders, Evidence, Systems, and project posture." },
   { id: "Authority", tier: "Primary", description: "Authority gates, decisions, and operating doctrine." },
-  { id: "Council", tier: "Supporting", description: "Advisory, Memory, Forge, and Hermes boundaries." },
-  { id: "Systems", tier: "Supporting", description: "Reference, trace, corpus, and command conversation." },
+  { id: "Council", tier: "Supporting", description: "Memory, Council, Forge, and Hermes boundaries." },
+  { id: "Systems", tier: "Supporting", description: "Objective, trace, academy, corpus, and command conversation." },
 ]
 
 export const navItems: NavItem[] = [
@@ -58,28 +58,28 @@ export const navItems: NavItem[] = [
     label: "Work Orders",
     icon: ClipboardList,
     group: "Work",
-    description: "Control governed mutation.",
+    description: "Control scoped work.",
   },
   {
     href: "/audit",
     label: "Evidence",
     icon: Activity,
     group: "Work",
-    description: "Inspect proof records.",
+    description: "Verify proof records.",
   },
   {
     href: "/projects",
     label: "Projects",
     icon: FolderKanban,
     group: "Work",
-    description: "Review systems under command.",
+    description: "Review project posture.",
   },
   {
     href: "/runtime",
     label: "Systems",
     icon: Cpu,
     group: "Work",
-    description: "Check readiness and health.",
+    description: "Check status boundaries.",
   },
   {
     href: "/governance",
@@ -93,7 +93,7 @@ export const navItems: NavItem[] = [
     label: "Decisions",
     icon: GitBranch,
     group: "Authority",
-    description: "Record authority calls.",
+    description: "Review owner gates.",
   },
   {
     href: "/doctrine",
@@ -107,28 +107,28 @@ export const navItems: NavItem[] = [
     label: "Memory",
     icon: Database,
     group: "Council",
-    description: "Preserve durable context.",
+    description: "Place governed context.",
   },
   {
     href: "/brain-council",
     label: "Council",
     icon: BrainCircuit,
     group: "Council",
-    description: "Review advisory reasoning.",
+    description: "Inspect advisory reasoning.",
   },
   {
     href: "/agent-forge",
     label: "Forge",
     icon: Hammer,
     group: "Council",
-    description: "Prepare capabilities.",
+    description: "Inspect capability prep.",
   },
   {
     href: "/hermes",
     label: "Hermes",
     icon: Bot,
     group: "Council",
-    description: "Review worker boundaries.",
+    description: "Inspect worker boundaries.",
   },
   {
     href: "/goal-console",
