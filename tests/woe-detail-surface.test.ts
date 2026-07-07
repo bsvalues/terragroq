@@ -34,12 +34,18 @@ describe("WOE detail surface", () => {
       "Cross-link proof",
       "Closure proof",
     ])
-    expect(surface.goal.purpose).toContain("Work Order Engine state visible")
-    expect(surface.goal.successState).toContain("inspect goals, loops, active work")
-    expect(surface.batch.name).toBe("WILLIAMOS-WOE-INTEGRATION-BATCH-001")
-    expect(surface.batch.base).toBe("1423aa6885eba0d5ec0860ee8e7a6ba761a196f2")
+    expect(surface.goal.purpose).toContain("central operating primitive")
+    expect(surface.goal.successState).toContain("active goals, active loops")
+    expect(surface.batch.name).toBe("WILLIAMOS-WORK-ORDER-ENGINE-INTEGRATION-BATCH-001")
+    expect(surface.batch.base).toBe("0dc222d1bbfacd05f5ca1e0e8c815dc2dec3f133")
     expect(surface.batch.result).toBe("PHASE_PASS")
-    expect(surface.workOrder.id).toBe("WO-WOE-001..015")
+    expect(surface.workOrder.id).toBe("WO-WOE-009..022")
+    expect(surface.goalRegistry.records).toContain("goal id")
+    expect(surface.goalRegistry.blockedPowers).toContain("goal mutation")
+    expect(surface.goalIndex.records).toContain("blocked goals")
+    expect(surface.goalIndex.blockedPowers).toContain("execution controls")
+    expect(surface.loopRegistry.records).toContain("current WO")
+    expect(surface.loopRegistry.blockedPowers).toContain("auto-continue")
     expect(surface.workOrder.evidence).toHaveLength(3)
     expect(surface.goalDetail.nativeSurface).toBe("/goal-console")
     expect(surface.loopDetail.blockedPowers).toContain("loop start button")
@@ -56,10 +62,8 @@ describe("WOE detail surface", () => {
     expect(surface.reportFields).toContain("RESULT")
     expect(surface.reportFields).toContain("WORK_ORDER")
     expect(surface.reportFields).toContain("GOAL")
-    expect(surface.reportFields).toContain("AUTONOMOUS_LOOP_EXECUTION_ADDED")
-    expect(surface.reportFields).toContain("BACKGROUND_WORKER_ADDED")
-    expect(surface.reportFields).toContain("PRODUCTION_WRITE_BEHAVIOR_ADDED")
-    expect(surface.reportFields).toContain("OWNER_DECISION_REQUIRED")
+    expect(surface.reportFields).toContain("PRODUCTION_VERIFICATION")
+    expect(surface.reportFields).toContain("SAFETY_POSTURE")
     expect(surface.reportFields).toContain("NEXT_RECOMMENDED_WO")
   })
 
@@ -142,6 +146,9 @@ describe("WOE detail surface", () => {
       "owner decision",
       "safety posture",
       "completion state",
+      "ready",
+      "blocked",
+      "completed",
     ])
   })
 

@@ -99,7 +99,7 @@ export type WoeDetailSurface = {
     nextRecommendedWork: string
   }
   batch: {
-    name: "WILLIAMOS-WOE-INTEGRATION-BATCH-001"
+    name: "WILLIAMOS-WORK-ORDER-ENGINE-INTEGRATION-BATCH-001"
     result: "PHASE_PASS"
     base: string
     originMain: string
@@ -110,6 +110,9 @@ export type WoeDetailSurface = {
     nextRecommendedBatch: string
   }
   goalDetail: WoeDetailSection
+  goalRegistry: WoeDetailSection
+  goalIndex: WoeDetailSection
+  loopRegistry: WoeDetailSection
   loopDetail: WoeDetailSection
   evidenceRollup: WoeDetailSection
   activeQueue: WoeQueueSection
@@ -213,31 +216,12 @@ export const WOE_COMPLETION_REPORT_FIELDS = [
   "GOAL",
   "BATCH",
   "BASE",
-  "BRANCH",
-  "COMMIT",
   "PR",
-  "MERGED",
   "origin/main",
-  "COMPLETED_WOS",
   "FILES_CHANGED",
-  "NAVIGATION_CHANGED",
-  "AUTH_BEHAVIOR_CHANGED",
-  "AUTH_POLICY_CHANGED",
-  "PUBLIC_SIGNUP_REINTRODUCED",
-  "COMMAND_EXECUTION_ADDED",
-  "AUTONOMOUS_LOOP_EXECUTION_ADDED",
-  "BACKGROUND_WORKER_ADDED",
-  "PRODUCTION_WRITE_BEHAVIOR_ADDED",
-  "EVIDENCE_ROLLUP_NATIVE",
-  "ACTIVE_QUEUE_NATIVE",
-  "BLOCKED_DECISION_QUEUE_NATIVE",
-  "COMPLETION_REPORT_NATIVE",
   "VALIDATION",
-  "REVIEW_THREADS",
   "PRODUCTION_VERIFICATION",
-  "SECRETS_EXPOSED",
   "SAFETY_POSTURE",
-  "OWNER_DECISION_REQUIRED",
   "NEXT_RECOMMENDED_WO",
 ] as const
 
@@ -431,11 +415,11 @@ export function getWoeDetailSurface(): WoeDetailSurface {
       label: "Primary Shell Completion",
       id: "GOAL-WOS-002",
       purpose:
-        "Make Work Order Engine state visible inside WilliamOS without adding execution authority, command runners, background workers, or production-write behavior.",
+        "Make Work Orders the central operating primitive inside WilliamOS without adding execution authority, command runners, background workers, or production-write behavior.",
       successState:
-        "The Primary can inspect goals, loops, active work, blocked decisions, evidence, completion reports, and safety posture from native shell surfaces.",
-      activeBatches: ["WILLIAMOS-WOE-INTEGRATION-BATCH-001"],
-      completedWorkOrders: ["WO-WOE-001 through WO-WOE-015"],
+        "WilliamOS can show active goals, active loops, ready Work Orders, blocked decisions, completion reports, evidence rollups, safety posture, and next recommended action.",
+      activeBatches: ["WILLIAMOS-WORK-ORDER-ENGINE-INTEGRATION-BATCH-001"],
+      completedWorkOrders: ["WO-WOE-009 through WO-WOE-022"],
       blockedDecisions: [
         "Command runner",
         "Autonomous loop execution",
@@ -446,26 +430,25 @@ export function getWoeDetailSurface(): WoeDetailSurface {
       nextRecommendedWork: "GOAL-WOS-011 WOE evidence clarity makes proof chains easier to inspect without opening execution.",
     },
     batch: {
-      name: "WILLIAMOS-WOE-INTEGRATION-BATCH-001",
+      name: "WILLIAMOS-WORK-ORDER-ENGINE-INTEGRATION-BATCH-001",
       result: "PHASE_PASS",
-      base: "1423aa6885eba0d5ec0860ee8e7a6ba761a196f2",
-      originMain: "1423aa6885eba0d5ec0860ee8e7a6ba761a196f2",
+      base: "0dc222d1bbfacd05f5ca1e0e8c815dc2dec3f133",
+      originMain: "reconciled by final batch report",
       completedWorkOrders: [
-        "WO-WOE-001 doctrine reconciliation",
-        "WO-WOE-002 /goal detail model",
-        "WO-WOE-003 /loop detail model",
-        "WO-WOE-004 evidence rollup model",
-        "WO-WOE-005 goal detail surface",
-        "WO-WOE-006 loop detail surface",
-        "WO-WOE-007 active work queue",
-        "WO-WOE-008 blocked decision queue",
-        "WO-WOE-009 completion report model",
-        "WO-WOE-010 completion report renderer",
-        "WO-WOE-011 work order search/filter",
-        "WO-WOE-012 registry/index coverage",
-        "WO-WOE-013 Academy/Wiki cross-link pass",
-        "WO-WOE-014 safety sweep",
-        "WO-WOE-015 final rollup + next-lane decision",
+        "WO-WOE-009 goal registry model",
+        "WO-WOE-010 goal index surface",
+        "WO-WOE-011 goal detail surface",
+        "WO-WOE-012 loop registry model",
+        "WO-WOE-013 loop detail surface",
+        "WO-WOE-014 active work queue",
+        "WO-WOE-015 blocked decision queue",
+        "WO-WOE-016 evidence rollup model",
+        "WO-WOE-017 evidence rollup surface",
+        "WO-WOE-018 completion report renderer",
+        "WO-WOE-019 work order search/filter",
+        "WO-WOE-020 home integration",
+        "WO-WOE-021 safety boundary tests",
+        "WO-WOE-022 batch rollup + production verification",
       ],
       mergedPrs: [],
       validation: [
@@ -488,7 +471,21 @@ export function getWoeDetailSurface(): WoeDetailSurface {
         "No auth, DB, env, package, or Vercel setting change",
         "No Hermes, MCP, Brain Council, memory, vector, or ingestion activation",
       ],
-      nextRecommendedBatch: "WILLIAMOS-WOE-EVIDENCE-CLARITY-BATCH-001",
+      nextRecommendedBatch: "GOAL-WOS-003 - Brain Council Advisory Layer",
+    },
+    goalRegistry: {
+      label: "Goal registry model",
+      purpose: "Models governed goals with purpose, success state, status, active batch, evidence, blocked decisions, and next work.",
+      nativeSurface: "/goal-console",
+      records: ["goal id", "title", "purpose", "success state", "status", "active batch", "evidence", "blocked decisions", "next recommended WO"],
+      blockedPowers: ["create goal action", "edit goal action", "delete goal action", "goal mutation"],
+    },
+    goalIndex: {
+      label: "Goal index surface",
+      purpose: "Groups active, completed, and blocked goals for Primary review without execution controls.",
+      nativeSurface: "/goal-console",
+      records: ["active goals", "completed goals", "blocked goals", "status labels", "navigation links"],
+      blockedPowers: ["create goal button", "edit goal button", "delete goal button", "execution controls"],
     },
     goalDetail: {
       label: "/goal detail",
@@ -496,6 +493,13 @@ export function getWoeDetailSurface(): WoeDetailSurface {
       nativeSurface: "/goal-console",
       records: ["goal id", "purpose", "success state", "current base", "authority scope", "stop conditions"],
       blockedPowers: ["goal mutation", "authority grant", "autonomous continuation"],
+    },
+    loopRegistry: {
+      label: "Loop registry model",
+      purpose: "Models /loop state with active goal, current WO, mode, safety posture, status, evidence links, and next gate.",
+      nativeSurface: "/goal-console",
+      records: ["loop id", "goal id", "current WO", "mode", "safety posture", "status", "evidence links", "next gate"],
+      blockedPowers: ["loop execution", "auto-continue", "background runner", "scheduler"],
     },
     loopDetail: {
       label: "/loop detail",
@@ -542,6 +546,9 @@ export function getWoeDetailSurface(): WoeDetailSurface {
         "owner decision",
         "safety posture",
         "completion state",
+        "ready",
+        "blocked",
+        "completed",
       ],
       readOnlyBehavior:
         "Filters only the local browser view of existing Work Order records; it does not mutate rows or trigger workflows.",
@@ -555,7 +562,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
       { label: "Wiki", href: "/academy", description: "Static WOE concept definitions and boundary language." },
     ],
     workOrder: {
-      id: "WO-WOE-001..015",
+      id: "WO-WOE-009..022",
       title: "Work Order Engine Integration",
       mode: "read-only/static-first",
       goal: "Make WOE state native inside WilliamOS without adding execution authority.",
@@ -588,7 +595,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
       ],
       evidence,
       safetyPosture: WOE_SAFETY_BADGES,
-      nextRecommendedWo: "WO-WOE-015 — Final rollup + next-lane decision",
+      nextRecommendedWo: "WO-WOE-022 — Batch rollup + production verification",
     },
     blockedDecision: {
       blocker: "Execution authority remains closed.",

@@ -85,6 +85,30 @@ export function WoeDetailSurfacePanel() {
 
       <div className="grid gap-3 border-t border-border p-4 lg:grid-cols-3">
         <SectionCard
+          title={surface.goalRegistry.label}
+          eyebrow={surface.goalRegistry.nativeSurface}
+          body={surface.goalRegistry.purpose}
+          records={surface.goalRegistry.records}
+          blocked={surface.goalRegistry.blockedPowers}
+        />
+        <SectionCard
+          title={surface.goalIndex.label}
+          eyebrow={surface.goalIndex.nativeSurface}
+          body={surface.goalIndex.purpose}
+          records={surface.goalIndex.records}
+          blocked={surface.goalIndex.blockedPowers}
+        />
+        <SectionCard
+          title={surface.loopRegistry.label}
+          eyebrow={surface.loopRegistry.nativeSurface}
+          body={surface.loopRegistry.purpose}
+          records={surface.loopRegistry.records}
+          blocked={surface.loopRegistry.blockedPowers}
+        />
+      </div>
+
+      <div className="grid gap-3 border-t border-border p-4 lg:grid-cols-3">
+        <SectionCard
           title={surface.goalDetail.label}
           eyebrow={surface.goalDetail.nativeSurface}
           body={surface.goalDetail.purpose}
