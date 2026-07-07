@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useMemo, useState, useTransition } from "react"
 import type { WorkOrder } from "@/lib/db/schema"
 import {
   createWorkOrder,
@@ -51,7 +51,12 @@ import { StatusBadge } from "@/components/status-badge"
 import { getWorkOrderDraftChecklist } from "@/components/work-orders/work-order-draft-guidance"
 import { buildWorkOrderDraftPacket } from "@/components/work-orders/work-order-draft-packet"
 import { getWorkOrderEmptyStateSteps } from "@/components/work-orders/work-order-empty-state"
-import { filterWorkOrders, getWorkOrderFilterOptions, type WorkOrderFilter } from "@/components/work-orders/work-order-search-filter"
+import {
+  filterWorkOrders,
+  getDistinctWorkOrderFilterValues,
+  getWorkOrderFilterOptions,
+  type WorkOrderFilter,
+} from "@/components/work-orders/work-order-search-filter"
 import {
   Plus,
   Trash2,
@@ -92,6 +97,7 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<WorkOrder | null>(null)
   const [, startTransition] = useTransition()
+  const distinctFilterValues = useMemo(() => getDistinctWorkOrderFilterValues(rows), [rows])
 
   // create form
   const emptyForm = {
@@ -470,7 +476,7 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
       ) : (
         <div className="flex flex-col gap-4">
           <div className="rounded-xl border border-border bg-card p-4">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_repeat(3,minmax(10rem,14rem))]">
               <div className="flex-1">
                 <Label htmlFor="work-order-search">Search governed work</Label>
                 <Input
@@ -481,7 +487,7 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
                   className="mt-2"
                 />
               </div>
-              <div className="lg:w-56">
+              <div>
                 <Label>Status filter</Label>
                 <Select
                   value={filter.status}
@@ -501,9 +507,84 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
                   </SelectContent>
                 </Select>
               </div>
+              <FilterSelect
+                label="Goal"
+                value={filter.goal ?? "all"}
+                values={distinctFilterValues.goals}
+                allLabel="All goals"
+                onChange={(goal) => setFilter((current) => ({ ...current, goal }))}
+              />
+              <FilterSelect
+                label="Loop"
+                value={filter.loop ?? "all"}
+                values={distinctFilterValues.loops}
+                allLabel="All loops"
+                onChange={(loop) => setFilter((current) => ({ ...current, loop }))}
+              />
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-5">
+              <FilterSelect
+                label="Lane"
+                value={filter.lane ?? "all"}
+                values={distinctFilterValues.lanes}
+                allLabel="All lanes"
+                onChange={(lane) => setFilter((current) => ({ ...current, lane }))}
+              />
+              <FilterSelect
+                label="Authority"
+                value={filter.authority ?? "all"}
+                values={distinctFilterValues.authorities}
+                allLabel="All authority"
+                onChange={(authority) => setFilter((current) => ({ ...current, authority }))}
+              />
+              <FixedFilterSelect
+                label="Owner decision"
+                value={filter.ownerDecision ?? "all"}
+                options={[
+                  ["all", "All decisions"],
+                  ["required", "Decision required"],
+                  ["not-required", "No decision blocker"],
+                ]}
+                onChange={(ownerDecision) =>
+                  setFilter((current) => ({
+                    ...current,
+                    ownerDecision: ownerDecision as WorkOrderFilter["ownerDecision"],
+                  }))
+                }
+              />
+              <FixedFilterSelect
+                label="Safety posture"
+                value={filter.safetyPosture ?? "all"}
+                options={[
+                  ["all", "All posture"],
+                  ["read-only", "Read-only"],
+                  ["elevated", "Elevated"],
+                ]}
+                onChange={(safetyPosture) =>
+                  setFilter((current) => ({
+                    ...current,
+                    safetyPosture: safetyPosture as WorkOrderFilter["safetyPosture"],
+                  }))
+                }
+              />
+              <FixedFilterSelect
+                label="Completion"
+                value={filter.completionState ?? "all"}
+                options={[
+                  ["all", "All completion"],
+                  ["open", "Open"],
+                  ["complete", "Complete"],
+                ]}
+                onChange={(completionState) =>
+                  setFilter((current) => ({
+                    ...current,
+                    completionState: completionState as WorkOrderFilter["completionState"],
+                  }))
+                }
+              />
             </div>
             <p className="mt-3 text-xs text-muted-foreground">
-              Local read-only filter. It changes the view only; it does not mutate Work Orders, start loops, or grant authority.
+              Local read-only filter. It changes the view only; it does not mutate Work Orders, start loops, approve decisions, or grant authority.
             </p>
           </div>
 
@@ -582,6 +663,69 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
         onDelete={handleDelete}
         onPatch={patch}
       />
+    </div>
+  )
+}
+
+function FilterSelect({
+  label,
+  value,
+  values,
+  allLabel,
+  onChange,
+}: {
+  label: string
+  value: string
+  values: string[]
+  allLabel: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <div>
+      <Label>{label}</Label>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger className="mt-2">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">{allLabel}</SelectItem>
+          {values.map((item) => (
+            <SelectItem key={item} value={item}>
+              {item}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}
+
+function FixedFilterSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: string
+  options: Array<[string, string]>
+  onChange: (value: string) => void
+}) {
+  return (
+    <div>
+      <Label>{label}</Label>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger className="mt-2">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(([optionValue, optionLabel]) => (
+            <SelectItem key={optionValue} value={optionValue}>
+              {optionLabel}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   )
 }

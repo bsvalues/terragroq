@@ -30,11 +30,12 @@ describe("Academy Wiki Registry", () => {
     expect(doctrine).toContain("or authorize action")
   })
 
-  it("creates static lessons for onboarding, goal loop, WOs, evidence authority decisions, memory council trace, and Local OMEN", () => {
+  it("creates static lessons for onboarding, goal loop, WOs, WOE integration, evidence authority decisions, memory council trace, and Local OMEN", () => {
     expect(ACADEMY_LESSONS.map((lesson) => lesson.lessonId)).toEqual([
       "lesson-operator-onboarding",
       "lesson-goal-loop",
       "lesson-work-order-governance",
+      "lesson-work-order-engine-integration",
       "lesson-evidence-authority-decision",
       "lesson-memory-council-trace",
       "lesson-local-omen-runtime",
@@ -48,6 +49,7 @@ describe("Academy Wiki Registry", () => {
     expect(WIKI_PAGES.map((page) => page.pageId)).toEqual([
       "wiki-primary",
       "wiki-goal-loop",
+      "wiki-work-order-engine",
       "wiki-authority",
       "wiki-memory",
       "wiki-brain-council",
@@ -72,10 +74,14 @@ describe("Academy Wiki Registry", () => {
   it("teaches the mandatory operator lessons", () => {
     const onboarding = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-operator-onboarding")
     const goalLoop = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-goal-loop")
+    const woe = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-work-order-engine-integration")
     const local = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-local-omen-runtime")
 
     expect(onboarding?.whatThisTeaches.join(" ")).toContain("Codex operates authorized loops")
     expect(goalLoop?.whatThisTeaches.join(" ")).toContain("Codex continues through listed WOs")
+    expect(woe?.whatThisTeaches.join(" ")).toContain("WOE state can be native")
+    expect(woe?.whatThisDoesNotEnable).toContain("command runner")
+    expect(woe?.whatThisDoesNotEnable).toContain("autonomous loop execution")
     expect(local?.whatThisTeaches.join(" ")).toContain("Local runtime status is read-only")
     expect(local?.whatThisDoesNotEnable).toContain("Docker metadata")
     expect(local?.whatThisDoesNotEnable).toContain("runtime control")
@@ -91,6 +97,8 @@ describe("Academy Wiki Registry", () => {
       "/goal",
       "/loop",
       "Work Order",
+      "Work Order Engine",
+      "Completion Report",
       "Evidence",
       "Authority",
       "Owner Decision",
@@ -114,9 +122,11 @@ describe("Academy Wiki Registry", () => {
     ])
   })
 
-  it("places Agent Forge, Hermes, Trace/Eval, and County Ops as static concepts only", () => {
+  it("places Work Order Engine, Agent Forge, Hermes, Trace/Eval, and County Ops as static concepts only", () => {
     const pages = new Map(WIKI_PAGES.map((page) => [page.pageId, page]))
 
+    expect(pages.get("wiki-work-order-engine")?.whatItIs).toContain("static-first read model")
+    expect(pages.get("wiki-work-order-engine")?.whatItIsNot).toContain("command runner")
     expect(pages.get("wiki-agent-forge")?.whatItIsNot).toContain("executable skill loader")
     expect(pages.get("wiki-hermes")?.whatItIsNot).toContain("active worker")
     expect(pages.get("wiki-trace-ledger")?.whatItIsNot).toContain("eval execution")
@@ -130,6 +140,7 @@ describe("Academy Wiki Registry", () => {
     const links = new Map(surface.navigation.map((item) => [item.label, item.href]))
 
     expect(links.get("Work Orders")).toBe("/work-orders")
+    expect(links.get("Goal Console")).toBe("/goal-console")
     expect(links.get("Evidence")).toBe("/audit")
     expect(links.get("Authority")).toBe("/governance")
     expect(links.get("Memory")).toBe("/memory")
@@ -152,16 +163,17 @@ describe("Academy Wiki Registry", () => {
     ])
   })
 
-  it("recommends Work Order Engine integration after Hermes boundary doctrine while keeping runtime lanes blocked", () => {
+  it("recommends WOE shell polish after read-only integration while keeping runtime lanes blocked", () => {
     const surface = getAcademyWikiSurface()
 
     expect(surface.nextLaneDecision).toMatchObject({
-      recommendedBatch: "WILLIAMOS-WORK-ORDER-ENGINE-INTEGRATION-BATCH-001",
-      recommendedOption: "A - Work Order Engine Integration",
+      recommendedBatch: "WILLIAMOS-WOE-SHELL-POLISH-BATCH-001",
+      recommendedOption: "A - WOE Shell Polish",
     })
     expect(surface.nextLaneDecision.blockedLanes).toContain("Hermes activation")
     expect(surface.nextLaneDecision.blockedLanes).toContain("worker activation")
-    expect(surface.nextLaneDecision.blockedLanes).toContain("runtime training system")
+    expect(surface.nextLaneDecision.blockedLanes).toContain("command runner")
+    expect(surface.nextLaneDecision.blockedLanes).toContain("autonomous loop execution")
   })
 
   it("does not add runtime training, progress persistence, command execution, dynamic ingestion, runtime control, secrets, or autonomy", () => {

@@ -29,6 +29,16 @@ Proof of reality: tests, builds, PR checks, production checks, route proof, repo
 
 A bounded unit of governed work.
 
+## Work Order Engine
+
+The native read-only model for goals, loops, queues, evidence, blockers, and
+completion reports.
+
+## Completion Report
+
+A final proof packet for a batch or Work Order. It does not execute, merge,
+release, or mutate production by itself.
+
 ## Goal
 
 The statement of governed intent and success state.

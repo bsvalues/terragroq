@@ -35,6 +35,7 @@ The Primary owns authority. Codex may use Academy lessons as static guidance ins
 
 - `onboarding/operator-level-1.md` teaches first-run Primary orientation.
 - `operator-training/work-order-governance.md` teaches WOs, `/goal`, and `/loop`.
+- `operator-training/work-order-engine-integration.md` teaches native read-only WOE surfaces and boundaries.
 - `operator-training/evidence-discipline.md` teaches proof rules.
 - `operator-training/authority-gates.md` teaches owner authority boundaries.
 - `operator-training/codex-operator-runbook.md` teaches Codex as bounded operator.

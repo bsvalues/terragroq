@@ -8,6 +8,7 @@ export type WikiConceptType =
   | "council"
   | "memory"
   | "trace"
+  | "work-order-engine"
   | "forge"
   | "county-ops"
 
@@ -207,6 +208,26 @@ export const ACADEMY_LESSONS: AcademyLesson[] = [
     whatThisDoesNotEnable: ["WO execution engine", "GitHub write integration", "approval controls"],
   },
   {
+    lessonId: "lesson-work-order-engine-integration",
+    title: "Work Order Engine Integration",
+    audience: "Codex operator",
+    level: "operator",
+    summary: "Explains native read-only /goal, /loop, queue, evidence, blocked decision, and completion report surfaces.",
+    concepts: ["Work Order Engine", "/goal", "/loop", "Active Work Queue", "Completion Report"],
+    relatedGoal: "GOAL-WOS-002",
+    relatedLoop: "WILLIAMOS-WOE-INTEGRATION-BATCH-001",
+    relatedWorkOrders: ["WO-WOE-001 through WO-WOE-015"],
+    relatedEvidence: ["WOE integration surface", "Academy/Wiki cross-link pass"],
+    relatedAuthorityGates: ["COMMAND_RUNNER_GATE", "AUTONOMOUS_LOOP_GATE", "PRODUCTION_WRITE_GATE"],
+    whatThisTeaches: [
+      "WOE state can be native without becoming an executor.",
+      "/goal and /loop can be inspected without being started from the UI.",
+      "Completion reports are proof records, not production-write controls.",
+      "Blocked decisions remain owner authority gates.",
+    ],
+    whatThisDoesNotEnable: ["command runner", "autonomous loop execution", "background worker", "production write"],
+  },
+  {
     lessonId: "lesson-evidence-authority-decision",
     title: "Evidence, Authority, and Owner Decisions",
     audience: "Primary Operator and Codex",
@@ -299,6 +320,22 @@ export const WIKI_PAGES: WikiPage[] = [
     relatedTrace: ["trace-owner-not-courier-contract"],
     whatItIs: "A governed operator workflow.",
     whatItIsNot: "A runtime autonomous loop or UI automation system.",
+  },
+  {
+    pageId: "wiki-work-order-engine",
+    title: "Work Order Engine",
+    conceptType: "work-order-engine",
+    summary: "The native read-only operating surface for governed Work Order state.",
+    canonicalDefinition:
+      "Work Order Engine integration makes /goal, /loop, queues, evidence rollups, blocked decisions, and completion reports inspectable inside WilliamOS without adding execution authority.",
+    relatedSurfaces: ["/work-orders", "/goal-console", "/audit", "/decisions"],
+    relatedEvidence: ["WOE integration surface", "Trace Ledger completion", "Academy/Wiki knowledge layer"],
+    relatedAuthority: ["COMMAND_RUNNER_GATE", "AUTONOMOUS_LOOP_GATE", "PRODUCTION_WRITE_GATE"],
+    relatedMemory: ["memory-stale-contradiction-review"],
+    relatedDecisions: ["decision-command-execution", "decision-autonomy"],
+    relatedTrace: ["trace-owner-not-courier-contract"],
+    whatItIs: "A static-first read model for governed work.",
+    whatItIsNot: "A command runner, autonomous loop engine, background worker, scheduler, or production-write surface.",
   },
   {
     pageId: "wiki-authority",
@@ -431,6 +468,8 @@ export const WILLIAMOS_GLOSSARY: GlossaryTerm[] = [
   ["/goal", "A governed intent packet that defines purpose and success state.", "core"],
   ["/loop", "A governed batch operation that Codex runs through authorized WOs.", "core"],
   ["Work Order", "A narrow unit of governed scope inside a batch.", "governance"],
+  ["Work Order Engine", "The native read-only model for goals, loops, queues, evidence, blockers, and completion reports.", "governance"],
+  ["Completion Report", "A final proof packet for a batch or Work Order; not an execution transcript or mutation control.", "governance"],
   ["Evidence", "Proof of reality; it informs but does not authorize.", "governance"],
   ["Authority", "The gate model for mutation and protected actions.", "governance"],
   ["Owner Decision", "A visible blocker or choice requiring Primary authority.", "governance"],
@@ -481,6 +520,7 @@ export function getAcademyWikiSurface(): AcademyWikiSurface {
     safetyProofCards: ACADEMY_WIKI_SAFETY_PROOF_CARDS,
     navigation: [
       { label: "Work Orders", href: "/work-orders", description: "Review WOs that Academy lessons explain." },
+      { label: "Goal Console", href: "/goal-console", description: "Review /goal and /loop read-only placement." },
       { label: "Evidence", href: "/audit", description: "Review proof used by lessons and wiki concepts." },
       { label: "Authority", href: "/governance", description: "Review gates behind protected actions." },
       { label: "Memory", href: "/memory", description: "Review governed continuity context." },
@@ -489,18 +529,19 @@ export function getAcademyWikiSurface(): AcademyWikiSurface {
       { label: "Local Status", href: "/runtime", description: "Review read-only local runtime status." },
     ],
     nextLaneDecision: {
-      recommendedBatch: "WILLIAMOS-WORK-ORDER-ENGINE-INTEGRATION-BATCH-001",
-      recommendedOption: "A - Work Order Engine Integration",
+      recommendedBatch: "WILLIAMOS-WOE-SHELL-POLISH-BATCH-001",
+      recommendedOption: "A - WOE Shell Polish",
       blockedLanes: [
         "Hermes activation",
         "MCP activation",
         "worker activation",
-        "runtime training system",
-        "metadata expansion",
-        "runtime control",
+        "command runner",
+        "autonomous loop execution",
+        "background worker",
+        "production-write behavior",
       ],
       reason:
-        "After Academy/Wiki and Hermes boundary doctrine are complete, the next safe lane is governed Work Order execution visibility, not worker activation.",
+        "After static-first WOE integration, the next safe lane is shell polish and evidence clarity, not execution authority.",
     },
     safety: {
       staticReadOnly: true,
