@@ -60,8 +60,7 @@ describe("WOE detail surface", () => {
     expect(surface.reportFields).toContain("BACKGROUND_WORKER_ADDED")
     expect(surface.reportFields).toContain("PRODUCTION_WRITE_BEHAVIOR_ADDED")
     expect(surface.reportFields).toContain("OWNER_DECISION_REQUIRED")
-    expect(surface.reportFields).toContain("NEXT_RECOMMENDED_GOAL")
-    expect(surface.reportFields).not.toContain("NEXT_RECOMMENDED_WO")
+    expect(surface.reportFields).toContain("NEXT_RECOMMENDED_WO")
   })
 
   it("clarifies evidence-to-WO links, production routes, PR checks, review state, and proof gaps", () => {

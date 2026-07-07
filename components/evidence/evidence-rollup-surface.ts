@@ -8,7 +8,7 @@ export type EvidenceRollupCard = {
 
 export type EvidenceProofState = {
   label: string
-  status: string
+  status: "missing" | "present" | "required" | "thread-gated" | "false-flags-required"
   description: string
 }
 
@@ -35,11 +35,26 @@ function countByType(events: EventLog[], fragment: string) {
   return events.filter((event) => event.type.includes(fragment)).length
 }
 
+function countProductionProof(events: EventLog[]) {
+  return events.filter((event) => {
+    const text = `${event.type} ${event.summary}`.toLowerCase()
+    return (
+      text.includes("production") ||
+      text.includes("/api/health") ||
+      text.includes("/api/auth/readiness") ||
+      text.includes("/work-orders") ||
+      text.includes("/goal-console") ||
+      text.includes("/audit")
+    )
+  }).length
+}
+
 export function getEvidenceRollupSurface(events: EventLog[]): EvidenceRollupSurface {
   const workOrderEvents = countByRegister(events, "work-orders")
   const decisionEvents = countByRegister(events, "decisions")
   const evidenceEvents = countByType(events, "evidence")
   const authorityEvents = countByRegister(events, "authority")
+  const productionProofEvents = countProductionProof(events)
 
   return {
     title: "Evidence Rollup",
@@ -76,8 +91,8 @@ export function getEvidenceRollupSurface(events: EventLog[]): EvidenceRollupSurf
       },
       {
         label: "Production proof",
-        status: "route-verified",
-        description: "Health, auth readiness, and touched production routes belong in the final proof packet.",
+        status: productionProofEvents > 0 ? "present" : "required",
+        description: "Health, auth readiness, and touched production routes must appear as events before production proof is treated as verified.",
       },
       {
         label: "Review proof",

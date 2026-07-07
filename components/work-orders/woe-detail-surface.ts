@@ -238,7 +238,7 @@ export const WOE_COMPLETION_REPORT_FIELDS = [
   "SECRETS_EXPOSED",
   "SAFETY_POSTURE",
   "OWNER_DECISION_REQUIRED",
-  "NEXT_RECOMMENDED_GOAL",
+  "NEXT_RECOMMENDED_WO",
 ] as const
 
 export function getWoeDetailSurface(): WoeDetailSurface {
