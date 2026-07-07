@@ -46,12 +46,25 @@ describe("Hermes boundary doctrine docs", () => {
   })
 
   it("keeps Hermes report work-order ids unique", () => {
-    const reportIds = readdirSync(join(process.cwd(), "docs/reports"))
-      .map((file) => file.match(/^(WO-HERMES-\d+)/)?.[1])
-      .filter((id): id is string => Boolean(id))
-    const uniqueReportIds = new Set(reportIds)
+    const reportRecords = readdirSync(join(process.cwd(), "docs/reports"))
+      .map((file) => {
+        const filenameId = file.match(/^(WO-HERMES-\d+)/)?.[1]
 
-    expect(uniqueReportIds.size).toBe(reportIds.length)
+        if (!filenameId) {
+          return null
+        }
+
+        const content = readDoc(reportDoc(file))
+        const headingId = content.match(/^# (WO-HERMES-\d+)/m)?.[1]
+
+        return { file, filenameId, headingId }
+      })
+      .filter((record): record is { file: string; filenameId: string; headingId: string } => Boolean(record?.headingId))
+    const headingIds = reportRecords.map((record) => record.headingId)
+    const uniqueHeadingIds = new Set(headingIds)
+
+    expect(reportRecords.every((record) => record.filenameId === record.headingId)).toBe(true)
+    expect(uniqueHeadingIds.size).toBe(headingIds.length)
   })
 
   it("keeps Hermes disabled by default and blocks runtime activation", () => {
