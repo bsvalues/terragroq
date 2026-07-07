@@ -36,6 +36,7 @@ The Primary owns canon. Wiki pages are useful reference material, but current ow
 - `concepts/williamos.md` defines the private command environment.
 - `concepts/brain-council.md` defines advisory reasoning.
 - `concepts/hermes-sidecar.md` defines the governed sidecar boundary.
+- `concepts/hermes-boundary.md` records the stricter Hermes activation boundary and packet references.
 - `concepts/agent-forge.md` defines capability preparation.
 - `concepts/memory.md` defines governed continuity.
 - `concepts/trace-eval.md` defines trace and failure-to-eval placement.
