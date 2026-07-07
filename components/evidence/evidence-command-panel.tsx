@@ -44,6 +44,65 @@ export function EvidenceCommandPanel() {
         ))}
       </div>
 
+      <div className="grid gap-3 border-t border-border p-4 lg:grid-cols-3">
+        {surface.workOrderLinks.map((item) => (
+          <Link
+            key={item.label}
+            href={item.href}
+            className="rounded-lg border border-border bg-background p-3 transition-colors hover:border-primary/40"
+          >
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.workOrder}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.label}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.evidence}
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-foreground">
+              Opens {item.destination}
+            </p>
+          </Link>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-t border-border p-4 md:grid-cols-2 xl:grid-cols-3">
+        {surface.productionVerificationSummary.map((item) => (
+          <Link
+            key={item.label}
+            href={item.href}
+            className="rounded-lg border border-border bg-background p-3 transition-colors hover:border-primary/40"
+          >
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Production verification
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.label}</p>
+            <p className="mt-1 text-xs font-medium text-foreground">{item.status}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </Link>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-t border-border p-4 md:grid-cols-3">
+        {surface.reviewProofContext.map((item) => (
+          <Link
+            key={item.label}
+            href={item.href}
+            className="rounded-lg border border-border bg-background p-3 transition-colors hover:border-primary/40"
+          >
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              PR / checks / review
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.label}</p>
+            <p className="mt-1 text-xs font-medium text-foreground">{item.status}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </Link>
+        ))}
+      </div>
+
       <div className="grid gap-3 border-t border-border p-4 md:grid-cols-2 xl:grid-cols-5">
         {surface.categories.map((category) => (
           <Link

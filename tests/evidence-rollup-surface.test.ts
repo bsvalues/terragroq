@@ -42,6 +42,12 @@ describe("evidence rollup surface", () => {
       "work_order.result: WO-1 PASS",
       "decision.status: ADR accepted",
     ])
+    expect(surface.proofStates.map((state) => state.label)).toEqual([
+      "Validation proof",
+      "Production proof",
+      "Review proof",
+      "Safety proof",
+    ])
     expect(surface.safety).toEqual({
       readOnly: true,
       recordsEvidence: false,
@@ -49,5 +55,18 @@ describe("evidence rollup surface", () => {
       autoIngests: false,
       writesProduction: false,
     })
+  })
+
+  it("makes missing and blocked proof visible without adding ingestion", () => {
+    const surface = getEvidenceRollupSurface([])
+    const states = new Map(surface.proofStates.map((state) => [state.label, state.status]))
+
+    expect(states.get("Validation proof")).toBe("missing")
+    expect(states.get("Production proof")).toBe("route-verified")
+    expect(states.get("Review proof")).toBe("thread-gated")
+    expect(states.get("Safety proof")).toBe("false-flags-required")
+    expect(surface.proofStates.map((state) => state.description).join(" ")).toContain(
+      "Command runner, autonomy, background worker, production write, ingestion, and secrets flags must stay false.",
+    )
   })
 })

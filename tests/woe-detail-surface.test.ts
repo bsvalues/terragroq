@@ -26,6 +26,14 @@ describe("WOE detail surface", () => {
       "Blocked stays visible",
       "Navigation is evidence-led",
     ])
+    expect(surface.evidenceClarity.batch).toBe("WILLIAMOS-WOE-EVIDENCE-CLARITY-BATCH-001")
+    expect(surface.evidenceClarity.posture).toBe("read-only/static-first")
+    expect(surface.evidenceClarity.proofChain.map((item) => item.label)).toEqual([
+      "Scope proof",
+      "Implementation proof",
+      "Cross-link proof",
+      "Closure proof",
+    ])
     expect(surface.goal.purpose).toContain("Work Order Engine state visible")
     expect(surface.goal.successState).toContain("inspect goals, loops, active work")
     expect(surface.batch.name).toBe("WILLIAMOS-WOE-INTEGRATION-BATCH-001")
@@ -52,6 +60,55 @@ describe("WOE detail surface", () => {
     expect(surface.reportFields).toContain("BACKGROUND_WORKER_ADDED")
     expect(surface.reportFields).toContain("PRODUCTION_WRITE_BEHAVIOR_ADDED")
     expect(surface.reportFields).toContain("OWNER_DECISION_REQUIRED")
+    expect(surface.reportFields).toContain("NEXT_RECOMMENDED_GOAL")
+    expect(surface.reportFields).not.toContain("NEXT_RECOMMENDED_WO")
+  })
+
+  it("clarifies evidence-to-WO links, production routes, PR checks, review state, and proof gaps", () => {
+    const surface = getWoeDetailSurface()
+
+    expect(surface.evidenceClarity.proofChain).toEqual([
+      expect.objectContaining({
+        workOrder: "WO-WOE-033 through WO-WOE-035",
+        href: "/goal-console",
+      }),
+      expect.objectContaining({
+        workOrder: "WO-WOE-036 through WO-WOE-043",
+        href: "/work-orders",
+      }),
+      expect.objectContaining({
+        workOrder: "WO-WOE-044 through WO-WOE-045",
+        href: "/academy",
+      }),
+      expect.objectContaining({
+        workOrder: "WO-WOE-046 through WO-WOE-047",
+        href: "/audit",
+      }),
+    ])
+    expect(surface.evidenceClarity.productionVerification.map((item) => item.route)).toEqual([
+      "/api/health",
+      "/api/auth/readiness",
+      "/work-orders",
+      "/goal-console",
+      "/audit",
+    ])
+    expect(surface.evidenceClarity.prCheckReviewContext.map((item) => item.label)).toEqual([
+      "PR",
+      "Checks",
+      "Review threads",
+    ])
+    expect(surface.evidenceClarity.safetyFlagExplanations.map((item) => item.flag)).toEqual([
+      "READ_ONLY",
+      "NO_COMMAND_RUNNER",
+      "NO_AUTONOMOUS_LOOP",
+      "NO_PRODUCTION_WRITE",
+    ])
+    expect(surface.evidenceClarity.proofGaps.map((gap) => gap.status)).toEqual([
+      "missing",
+      "blocked",
+      "not authorized",
+    ])
+    expect(surface.evidenceClarity.proofGaps[2]?.nextSafeMove).toContain("separate authority packet")
   })
 
   it("provides navigation between WOE detail surfaces without action nav", () => {
