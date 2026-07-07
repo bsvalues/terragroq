@@ -401,7 +401,7 @@ export const WIKI_PAGES: WikiPage[] = [
     relatedAuthority: ["TERRAFUSION_TOUCH_GATE", "SECRET_ACCESS_GATE"],
     relatedMemory: ["memory-stale-contradiction-review"],
     relatedDecisions: ["decision-terrafusion-pacs-touch"],
-    relatedTrace: ["trace-county-ops-placement"],
+    relatedTrace: ["trace-authority-refresh-pass"],
     whatItIs: "Static placement for PACS rules, levy workflows, BOE evidence, permits, redaction, ratio studies, and appeals knowledge.",
     whatItIsNot: "A PACS connection, county DB query, data extraction, or production county-system touch.",
   },

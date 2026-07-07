@@ -6,6 +6,7 @@ import {
   WILLIAMOS_GLOSSARY,
   getAcademyWikiSurface,
 } from "@/components/academy/academy-wiki-registry"
+import { TRACE_RECORDS } from "@/components/trace/trace-ledger-registry"
 
 describe("Academy Wiki Registry", () => {
   it("defines Academy as a read-only learning layer", () => {
@@ -58,6 +59,14 @@ describe("Academy Wiki Registry", () => {
     ])
     expect(WIKI_PAGES.every((page) => page.whatItIs.length > 0)).toBe(true)
     expect(WIKI_PAGES.every((page) => page.whatItIsNot.length > 0)).toBe(true)
+  })
+
+  it("links wiki concepts only to existing trace records", () => {
+    const traceIds = new Set(TRACE_RECORDS.map((record) => record.traceId))
+    const linkedTraceIds = WIKI_PAGES.flatMap((page) => page.relatedTrace)
+
+    expect(linkedTraceIds.length).toBeGreaterThan(0)
+    expect(linkedTraceIds.every((traceId) => traceIds.has(traceId))).toBe(true)
   })
 
   it("teaches the mandatory operator lessons", () => {
