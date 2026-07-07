@@ -6,7 +6,7 @@
 
 ## Scope
 
-Kept WOE navigation evidence-led and routed to existing read-only WilliamOS
+Kept WOE navigation as evidence-led and routed to existing read-only WilliamOS
 surfaces.
 
 ## Safety
