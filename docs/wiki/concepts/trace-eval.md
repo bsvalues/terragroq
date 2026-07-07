@@ -10,8 +10,9 @@ decision, and which authority gates remained blocked.
 
 ## Failure-to-Eval
 
-A failure can become an eval proposal when it identifies a repeatable risk,
-missing test, unclear doctrine, or wrong operating assumption.
+A failure can become an eval proposal only after it is classified as an eval
+candidate, such as a repeatable risk, missing test, unclear doctrine, or wrong
+operating assumption.
 
 ## Boundary
 
