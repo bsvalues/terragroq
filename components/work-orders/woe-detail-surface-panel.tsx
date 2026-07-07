@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { ClipboardList, ShieldCheck } from "lucide-react"
+import { ClipboardList, Route, Search, ShieldCheck } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { getWoeDetailSurface } from "@/components/work-orders/woe-detail-surface"
@@ -23,9 +23,55 @@ export function WoeDetailSurfacePanel() {
       </div>
 
       <div className="grid gap-3 p-4 lg:grid-cols-3">
-        <DetailCard title="Goal" value={surface.goal.label} body={surface.goal.purpose} />
+        <DetailCard title="Goal" value={`${surface.goal.id} - ${surface.goal.label}`} body={surface.goal.purpose} />
         <DetailCard title="Batch" value={surface.batch.name} body={surface.batch.nextRecommendedBatch} />
         <DetailCard title="Work Order" value={surface.workOrder.id} body={surface.workOrder.goal} />
+      </div>
+
+      <div className="grid gap-3 border-t border-border p-4 lg:grid-cols-3">
+        <SectionCard
+          title={surface.goalDetail.label}
+          eyebrow={surface.goalDetail.nativeSurface}
+          body={surface.goalDetail.purpose}
+          records={surface.goalDetail.records}
+          blocked={surface.goalDetail.blockedPowers}
+        />
+        <SectionCard
+          title={surface.loopDetail.label}
+          eyebrow={surface.loopDetail.nativeSurface}
+          body={surface.loopDetail.purpose}
+          records={surface.loopDetail.records}
+          blocked={surface.loopDetail.blockedPowers}
+        />
+        <SectionCard
+          title={surface.evidenceRollup.label}
+          eyebrow={surface.evidenceRollup.nativeSurface}
+          body={surface.evidenceRollup.purpose}
+          records={surface.evidenceRollup.records}
+          blocked={surface.evidenceRollup.blockedPowers}
+        />
+      </div>
+
+      <div className="grid gap-3 border-t border-border p-4 lg:grid-cols-3">
+        <QueueCard
+          title={surface.activeQueue.label}
+          body={surface.activeQueue.purpose}
+          states={surface.activeQueue.includedStates}
+          blocked={surface.activeQueue.excludedPowers}
+        />
+        <QueueCard
+          title={surface.blockedQueue.label}
+          body={surface.blockedQueue.purpose}
+          states={surface.blockedQueue.includedStates}
+          blocked={surface.blockedQueue.excludedPowers}
+        />
+        <SectionCard
+          title={surface.completionReport.label}
+          eyebrow={surface.completionReport.nativeSurface}
+          body={surface.completionReport.purpose}
+          records={surface.completionReport.records.slice(0, 8)}
+          blocked={surface.completionReport.blockedPowers}
+        />
       </div>
 
       <div className="grid gap-3 border-t border-border p-4 lg:grid-cols-2">
@@ -42,11 +88,18 @@ export function WoeDetailSurfacePanel() {
           </p>
         </div>
         <div className="rounded-lg border border-border bg-background p-3">
-          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            Completion report fields
+          <div className="flex items-center gap-2">
+            <Search className="h-3.5 w-3.5 text-primary" aria-hidden />
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Search and filter model
+            </p>
+          </div>
+          <p className="mt-2 text-sm font-semibold">{surface.searchFilter.label}</p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            {surface.searchFilter.readOnlyBehavior}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
-            {surface.reportFields.map((field) => (
+            {surface.searchFilter.fields.map((field) => (
               <Badge key={field} variant="outline">{field}</Badge>
             ))}
           </div>
@@ -60,6 +113,39 @@ export function WoeDetailSurfacePanel() {
           </p>
           <div className="mt-3 grid gap-2">
             {surface.workOrder.evidence.map((item) => (
+              <Link
+                key={item.label}
+                href={item.href}
+                className="rounded-md border border-border bg-card px-3 py-2 transition-colors hover:border-primary/40"
+              >
+                <p className="text-xs font-medium">{item.label}</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.description}</p>
+              </Link>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-lg border border-border bg-background p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Completion report fields
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {surface.reportFields.map((field) => (
+              <Badge key={field} variant="outline">{field}</Badge>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 border-t border-border p-4 lg:grid-cols-2">
+        <div className="rounded-lg border border-border bg-background p-3">
+          <div className="flex items-center gap-2">
+            <Route className="h-3.5 w-3.5 text-primary" aria-hidden />
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Registry coverage
+            </p>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {surface.registryCoverage.map((item) => (
               <Link
                 key={item.label}
                 href={item.href}
@@ -98,8 +184,8 @@ export function WoeDetailSurfacePanel() {
 
       <div className="flex items-center gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">
         <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden />
-        Read-only WOE detail surface. No run buttons, execution, GitHub writes, Codex automation,
-        metadata expansion, scheduler, persistence, LAN exposure, or autonomy.
+        Read-only WOE integration surface. No command runner, autonomous loop execution, background worker,
+        production write, runtime mutation, Hermes/MCP activation, memory write, dynamic ingestion, or secrets.
       </div>
     </section>
   )
@@ -113,6 +199,73 @@ function DetailCard({ title, value, body }: { title: string; value: string; body
       </p>
       <p className="mt-2 text-sm font-semibold">{value}</p>
       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{body}</p>
+    </div>
+  )
+}
+
+function SectionCard({
+  title,
+  eyebrow,
+  body,
+  records,
+  blocked,
+}: {
+  title: string
+  eyebrow: string
+  body: string
+  records: string[]
+  blocked: string[]
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-background p-3">
+      <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{eyebrow}</p>
+      <p className="mt-2 text-sm font-semibold">{title}</p>
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{body}</p>
+      <BadgeList label="Records" items={records} />
+      <BadgeList label="Blocked" items={blocked} variant="secondary" />
+    </div>
+  )
+}
+
+function QueueCard({
+  title,
+  body,
+  states,
+  blocked,
+}: {
+  title: string
+  body: string
+  states: string[]
+  blocked: string[]
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-background p-3">
+      <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Queue</p>
+      <p className="mt-2 text-sm font-semibold">{title}</p>
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{body}</p>
+      <BadgeList label="Includes" items={states} />
+      <BadgeList label="Excludes" items={blocked} variant="secondary" />
+    </div>
+  )
+}
+
+function BadgeList({
+  label,
+  items,
+  variant = "outline",
+}: {
+  label: string
+  items: string[]
+  variant?: "outline" | "secondary"
+}) {
+  return (
+    <div className="mt-3">
+      <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {items.map((item) => (
+          <Badge key={item} variant={variant}>{item}</Badge>
+        ))}
+      </div>
     </div>
   )
 }

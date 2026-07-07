@@ -34,6 +34,7 @@ The Primary owns canon. Wiki pages are useful reference material, but current ow
 ## Concept Map
 
 - `concepts/williamos.md` defines the private command environment.
+- `concepts/work-order-engine.md` defines the native read-only WOE surface.
 - `concepts/brain-council.md` defines advisory reasoning.
 - `concepts/hermes-sidecar.md` defines the governed sidecar boundary.
 - `concepts/hermes-boundary.md` records the stricter Hermes activation boundary and packet references.

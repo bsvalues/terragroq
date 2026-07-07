@@ -7,79 +7,137 @@ import {
 } from "@/components/work-orders/woe-detail-surface"
 
 describe("WOE detail surface", () => {
-  it("shows goal, batch, work order, evidence, blocker, and next work detail", () => {
+  it("shows native goal, loop, evidence, queue, blocker, and next work detail", () => {
     const surface = getWoeDetailSurface()
 
-    expect(surface.goal.purpose).toContain("what goal is active")
-    expect(surface.goal.successState).toContain("without triggering execution")
-    expect(surface.batch.name).toBe("WILLIAMOS-SHELL-WOE-RESUME-BATCH-001")
+    expect(surface.goal.id).toBe("GOAL-WOS-002")
+    expect(surface.goal.purpose).toContain("Work Order Engine state visible")
+    expect(surface.goal.successState).toContain("inspect goals, loops, active work")
+    expect(surface.batch.name).toBe("WILLIAMOS-WOE-INTEGRATION-BATCH-001")
+    expect(surface.batch.base).toBe("1423aa6885eba0d5ec0860ee8e7a6ba761a196f2")
     expect(surface.batch.result).toBe("PHASE_PASS")
-    expect(surface.batch.mergedPrs).toEqual(["#280"])
-    expect(surface.workOrder.id).toBe("WO-WOE-022..032")
-    expect(surface.workOrder.evidence).toHaveLength(2)
-    expect(surface.blockedDecision.ownerDecisionNeeded).toContain("future gate")
-    expect(surface.goal.nextRecommendedWork).toContain("Authority / Governance Registry")
+    expect(surface.workOrder.id).toBe("WO-WOE-001..015")
+    expect(surface.workOrder.evidence).toHaveLength(3)
+    expect(surface.goalDetail.nativeSurface).toBe("/goal-console")
+    expect(surface.loopDetail.blockedPowers).toContain("loop start button")
+    expect(surface.evidenceRollup.blockedPowers).toContain("dynamic crawler")
+    expect(surface.activeQueue.excludedPowers).toContain("execute WO")
+    expect(surface.blockedQueue.excludedPowers).toContain("grant authority")
+    expect(surface.blockedDecision.ownerDecisionNeeded).toContain("future owner gate")
   })
 
-  it("renders the standard completion report fields", () => {
+  it("renders the standard completion report fields for the operator return packet", () => {
     const surface = getWoeDetailSurface()
 
     expect(surface.reportFields).toEqual([...WOE_COMPLETION_REPORT_FIELDS])
-    expect(surface.reportFields).toEqual([
-      "RESULT",
-      "BATCH",
-      "WORK_ORDER",
-      "COMPLETED_WOS",
-      "MERGED_PRS",
-      "origin/main",
-      "VALIDATION",
-      "SAFETY_POSTURE",
-      "NEXT_RECOMMENDED_BATCH",
-    ])
+    expect(surface.reportFields).toContain("RESULT")
+    expect(surface.reportFields).toContain("WORK_ORDER")
+    expect(surface.reportFields).toContain("GOAL")
+    expect(surface.reportFields).toContain("AUTONOMOUS_LOOP_EXECUTION_ADDED")
+    expect(surface.reportFields).toContain("BACKGROUND_WORKER_ADDED")
+    expect(surface.reportFields).toContain("PRODUCTION_WRITE_BEHAVIOR_ADDED")
+    expect(surface.reportFields).toContain("OWNER_DECISION_REQUIRED")
   })
 
   it("provides navigation between WOE detail surfaces without action nav", () => {
     const surface = getWoeDetailSurface()
     const links = new Map(surface.navigation.map((item) => [item.label, item.href]))
 
-    expect(links.get("Back to Work Orders")).toBe("/work-orders")
-    expect(links.get("View Evidence")).toBe("/audit")
-    expect(links.get("View Runtime")).toBe("/runtime")
-    expect(links.get("View Decisions")).toBe("/decisions")
+    expect(links.get("Work Orders")).toBe("/work-orders")
+    expect(links.get("Goal Console")).toBe("/goal-console")
+    expect(links.get("Evidence")).toBe("/audit")
+    expect(links.get("Decisions")).toBe("/decisions")
+    expect(links.get("Academy")).toBe("/academy")
+    expect(links.get("Wiki")).toBe("/wiki")
+  })
+
+  it("covers the native registry surfaces for WOE integration", () => {
+    const surface = getWoeDetailSurface()
+    const links = new Map(surface.registryCoverage.map((item) => [item.label, item.href]))
+
+    expect(links.get("Work Orders")).toBe("/work-orders")
+    expect(links.get("Goal Console")).toBe("/goal-console")
+    expect(links.get("Evidence")).toBe("/audit")
+    expect(links.get("Decisions")).toBe("/decisions")
+    expect(links.get("Academy")).toBe("/academy")
+    expect(links.get("Wiki")).toBe("/wiki")
+    expect(surface.searchFilter.fields).toEqual([
+      "query",
+      "status",
+      "goal",
+      "batch/loop",
+      "lane",
+      "authority",
+      "owner decision",
+      "safety posture",
+      "completion state",
+    ])
   })
 
   it("defines the expected safety badge model", () => {
     expect(WOE_SAFETY_BADGES).toEqual([
       "READ_ONLY",
+      "STATIC_FIRST",
       "UI_ONLY",
       "DOCS_ONLY",
       "PROOF_ONLY",
       "BLOCKED_OWNER_DECISION",
-      "LOCAL_STATUS_READ_ONLY",
       "NO_COMMAND_EXECUTION",
-      "NO_AUTONOMY",
+      "NO_COMMAND_RUNNER",
+      "NO_AUTONOMOUS_LOOP",
+      "NO_BACKGROUND_WORKER",
       "NO_RUNTIME_MUTATION",
+      "NO_PRODUCTION_WRITE",
     ])
   })
 
-  it("does not add execution, mutation, automation, metadata, scheduler, LAN, or secrets", () => {
+  it("does not add execution, mutation, automation, runtime activation, ingestion, production writes, or secrets", () => {
     const surface = getWoeDetailSurface()
     const serialized = JSON.stringify(surface).toLowerCase()
 
     expect(surface.safety).toEqual({
       readOnly: true,
+      staticFirst: true,
       runButtonsAdded: false,
       executeButtonsAdded: false,
       commandExecutionAdded: false,
       commandRunnerAdded: false,
+      autonomousLoopExecutionAdded: false,
+      backgroundWorkerAdded: false,
+      schedulerAdded: false,
+      serviceRegistered: false,
       githubWriteAdded: false,
       codexAutomationAdded: false,
-      schedulerAdded: false,
+      authBehaviorChanged: false,
+      authPolicyChanged: false,
+      publicSignupReintroduced: false,
+      databaseAdded: false,
+      dbSchemaChanged: false,
+      dataMutationAdded: false,
+      envChanged: false,
+      packageChanged: false,
+      vercelSettingsChanged: false,
+      deployAdded: false,
+      releaseAdded: false,
+      tagAdded: false,
+      productionWriteBehaviorAdded: false,
+      hermesActivationAdded: false,
+      mcpActivationAdded: false,
+      workerActivationAdded: false,
+      brainCouncilRuntimeAdded: false,
+      memoryWriteAdded: false,
+      runtimeMemoryReadAdded: false,
+      vectorStoreAdded: false,
+      embeddingsAdded: false,
+      ragRuntimeAdded: false,
+      dynamicIngestionAdded: false,
       persistenceImplemented: false,
       dockerMetadataAdded: false,
       backupScanAdded: false,
       portChecksAdded: false,
+      runtimeControlAdded: false,
       lanExposureEnabled: false,
+      terraFusionPacsTouched: false,
       secretsDisclosed: false,
     })
     expect(serialized).not.toContain("database_url")
@@ -87,6 +145,8 @@ describe("WOE detail surface", () => {
     expect(serialized).not.toContain("docker inspect")
     expect(serialized).not.toContain("github write action enabled")
     expect(serialized).not.toContain("run batch button")
-    expect(serialized).toContain("evidence spine")
+    expect(serialized).not.toContain("sign up")
+    expect(serialized).not.toContain("workspace")
+    expect(serialized).toContain("work order engine")
   })
 })
