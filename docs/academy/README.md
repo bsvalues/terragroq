@@ -38,6 +38,7 @@ The Primary owns authority. Codex may use Academy lessons as static guidance ins
 - `operator-training/evidence-discipline.md` teaches proof rules.
 - `operator-training/authority-gates.md` teaches owner authority boundaries.
 - `operator-training/codex-operator-runbook.md` teaches Codex as bounded operator.
+- `operator-training/safe-hermes-use.md` teaches Hermes as a disabled-by-default sidecar boundary.
 - `agent-training/agent-level-1.md` teaches safe agent conduct.
 - `exercises/` contains static drills that do not mutate state.
 - `certification/` describes learning levels without granting permissions.

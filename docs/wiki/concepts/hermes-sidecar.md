@@ -21,3 +21,5 @@ Hermes acts only when authorized by:
 ## Boundary
 
 This page documents the concept only. It does not activate Hermes.
+
+For the stricter activation boundary, Worker Packet schema, Activation Review Packet schema, safety matrix, and revocation doctrine, see `concepts/hermes-boundary.md`.
