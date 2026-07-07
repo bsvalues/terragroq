@@ -44,6 +44,31 @@ export type WoeReadabilityCue = {
   description: string
 }
 
+export type WoeProofChainItem = {
+  label: string
+  workOrder: string
+  evidence: string
+  proofSignal: string
+  href: string
+}
+
+export type WoeProductionVerificationItem = {
+  route: string
+  expected: string
+  proves: string
+}
+
+export type WoeSafetyFlagExplanation = {
+  flag: WoeSafetyBadge
+  meaning: string
+}
+
+export type WoeProofGap = {
+  label: string
+  status: "missing" | "blocked" | "not authorized"
+  nextSafeMove: string
+}
+
 export type WoeDetailSurface = {
   title: "Work Order Engine Integration"
   description: string
@@ -53,6 +78,15 @@ export type WoeDetailSurface = {
     primarySignal: string
     operatingMap: WoeOperatingMapItem[]
     readabilityCues: WoeReadabilityCue[]
+  }
+  evidenceClarity: {
+    batch: "WILLIAMOS-WOE-EVIDENCE-CLARITY-BATCH-001"
+    posture: "read-only/static-first"
+    proofChain: WoeProofChainItem[]
+    productionVerification: WoeProductionVerificationItem[]
+    prCheckReviewContext: WoeOperatingMapItem[]
+    safetyFlagExplanations: WoeSafetyFlagExplanation[]
+    proofGaps: WoeProofGap[]
   }
   goal: {
     label: string
@@ -280,6 +314,119 @@ export function getWoeDetailSurface(): WoeDetailSurface {
         },
       ],
     },
+    evidenceClarity: {
+      batch: "WILLIAMOS-WOE-EVIDENCE-CLARITY-BATCH-001",
+      posture: "read-only/static-first",
+      proofChain: [
+        {
+          label: "Scope proof",
+          workOrder: "WO-WOE-033 through WO-WOE-035",
+          evidence: "Doctrine, goal, and loop models define the bounded lane before implementation.",
+          proofSignal: "The Primary can see intent, base, allowed scope, validators, and stop conditions.",
+          href: "/goal-console",
+        },
+        {
+          label: "Implementation proof",
+          workOrder: "WO-WOE-036 through WO-WOE-043",
+          evidence: "Goal, loop, evidence, queue, blocked decision, completion, and filter surfaces are native.",
+          proofSignal: "The WOE lane is inspectable without adding run buttons, workers, or command paths.",
+          href: "/work-orders",
+        },
+        {
+          label: "Cross-link proof",
+          workOrder: "WO-WOE-044 through WO-WOE-045",
+          evidence: "Registry, Academy, Wiki, Work Orders, Goal Console, Evidence, and Decisions link together.",
+          proofSignal: "Evidence can be followed back to the Work Order and forward to the next safe lane.",
+          href: "/academy",
+        },
+        {
+          label: "Closure proof",
+          workOrder: "WO-WOE-046 through WO-WOE-047",
+          evidence: "Safety sweep, validation gates, PR checks, merge state, production verification, and next lane.",
+          proofSignal: "Completion is readable as proof of reality, not as permission to execute new work.",
+          href: "/audit",
+        },
+      ],
+      productionVerification: [
+        {
+          route: "/api/health",
+          expected: "200",
+          proves: "The deployed WilliamOS process responds after merge.",
+        },
+        {
+          route: "/api/auth/readiness",
+          expected: "ready/healthy",
+          proves: "Owner-only auth readiness remains intact after WOE changes.",
+        },
+        {
+          route: "/work-orders",
+          expected: "200",
+          proves: "The WOE surface touched by this lane renders in production.",
+        },
+        {
+          route: "/goal-console",
+          expected: "200",
+          proves: "The native /goal and /loop placement remains reachable.",
+        },
+        {
+          route: "/audit",
+          expected: "200",
+          proves: "Evidence and proof rollups remain reachable for inspection.",
+        },
+      ],
+      prCheckReviewContext: [
+        {
+          label: "PR",
+          value: "merged PR",
+          description: "The final report records the PR number and merge state before the lane closes.",
+        },
+        {
+          label: "Checks",
+          value: "green",
+          description: "Focused tests, lint, full test suite, build, and hosted checks must be visible as proof.",
+        },
+        {
+          label: "Review threads",
+          value: "0 unresolved",
+          description: "Review findings are remediated narrowly or left as an explicit blocker before merge.",
+        },
+      ],
+      safetyFlagExplanations: [
+        {
+          flag: "READ_ONLY",
+          meaning: "The surface reads static/modelled WOE evidence and does not persist new evidence.",
+        },
+        {
+          flag: "NO_COMMAND_RUNNER",
+          meaning: "Validators may be listed as proof requirements, but no UI path runs them.",
+        },
+        {
+          flag: "NO_AUTONOMOUS_LOOP",
+          meaning: "Codex operation remains outside the app under owner-authorized packets.",
+        },
+        {
+          flag: "NO_PRODUCTION_WRITE",
+          meaning: "Production verification is observed evidence, not a deploy or settings mutation.",
+        },
+      ],
+      proofGaps: [
+        {
+          label: "Missing production route proof",
+          status: "missing",
+          nextSafeMove: "Record the route, expected status, actual result, and blocker before claiming completion.",
+        },
+        {
+          label: "Blocked review-thread evidence",
+          status: "blocked",
+          nextSafeMove: "Resolve the thread or return an owner-decision packet; do not merge as pass.",
+        },
+        {
+          label: "Execution evidence request",
+          status: "not authorized",
+          nextSafeMove: "Create a separate authority packet; this WOE evidence surface stays read-only.",
+        },
+      ],
+    },
     goal: {
       label: "Primary Shell Completion",
       id: "GOAL-WOS-002",
@@ -296,7 +443,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
         "Production-write behavior",
         "Hermes/MCP/runtime activation",
       ],
-      nextRecommendedWork: "GOAL-WOS-010 WOE shell polish keeps this surface readable without opening execution.",
+      nextRecommendedWork: "GOAL-WOS-011 WOE evidence clarity makes proof chains easier to inspect without opening execution.",
     },
     batch: {
       name: "WILLIAMOS-WOE-INTEGRATION-BATCH-001",
@@ -341,7 +488,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
         "No auth, DB, env, package, or Vercel setting change",
         "No Hermes, MCP, Brain Council, memory, vector, or ingestion activation",
       ],
-      nextRecommendedBatch: "WILLIAMOS-WOE-SHELL-POLISH-BATCH-001",
+      nextRecommendedBatch: "WILLIAMOS-WOE-EVIDENCE-CLARITY-BATCH-001",
     },
     goalDetail: {
       label: "/goal detail",

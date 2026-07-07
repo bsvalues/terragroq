@@ -6,11 +6,18 @@ export type EvidenceRollupCard = {
   description: string
 }
 
+export type EvidenceProofState = {
+  label: string
+  status: "missing" | "present" | "required" | "thread-gated" | "false-flags-required"
+  description: string
+}
+
 export type EvidenceRollupSurface = {
   title: string
   description: string
   cards: EvidenceRollupCard[]
   recentSignals: string[]
+  proofStates: EvidenceProofState[]
   safety: {
     readOnly: true
     recordsEvidence: false
@@ -28,11 +35,26 @@ function countByType(events: EventLog[], fragment: string) {
   return events.filter((event) => event.type.includes(fragment)).length
 }
 
+function countProductionProof(events: EventLog[]) {
+  return events.filter((event) => {
+    const text = `${event.type} ${event.summary}`.toLowerCase()
+    return (
+      text.includes("production") ||
+      text.includes("/api/health") ||
+      text.includes("/api/auth/readiness") ||
+      text.includes("/work-orders") ||
+      text.includes("/goal-console") ||
+      text.includes("/audit")
+    )
+  }).length
+}
+
 export function getEvidenceRollupSurface(events: EventLog[]): EvidenceRollupSurface {
   const workOrderEvents = countByRegister(events, "work-orders")
   const decisionEvents = countByRegister(events, "decisions")
   const evidenceEvents = countByType(events, "evidence")
   const authorityEvents = countByRegister(events, "authority")
+  const productionProofEvents = countProductionProof(events)
 
   return {
     title: "Evidence Rollup",
@@ -61,6 +83,28 @@ export function getEvidenceRollupSurface(events: EventLog[]): EvidenceRollupSurf
       },
     ],
     recentSignals: events.slice(0, 5).map((event) => `${event.type}: ${event.summary}`),
+    proofStates: [
+      {
+        label: "Validation proof",
+        status: evidenceEvents > 0 ? "present" : "missing",
+        description: "Focused tests, full tests, diff checks, build output, and PR checks must be cited before closure.",
+      },
+      {
+        label: "Production proof",
+        status: productionProofEvents > 0 ? "present" : "required",
+        description: "Health, auth readiness, and touched production routes must appear as events before production proof is treated as verified.",
+      },
+      {
+        label: "Review proof",
+        status: "thread-gated",
+        description: "Unresolved review threads remain blockers until remediated or returned as owner decisions.",
+      },
+      {
+        label: "Safety proof",
+        status: "false-flags-required",
+        description: "Command runner, autonomy, background worker, production write, ingestion, and secrets flags must stay false.",
+      },
+    ],
     safety: {
       readOnly: true,
       recordsEvidence: false,

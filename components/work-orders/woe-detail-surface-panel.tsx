@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { ClipboardList, Compass, Route, Search, ShieldCheck } from "lucide-react"
+import { ClipboardList, Compass, FileSearch, Route, Search, ShieldCheck } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { getWoeDetailSurface } from "@/components/work-orders/woe-detail-surface"
@@ -47,6 +47,40 @@ export function WoeDetailSurfacePanel() {
         <DetailCard title="Goal" value={`${surface.goal.id} - ${surface.goal.label}`} body={surface.goal.purpose} />
         <DetailCard title="Next lane" value={surface.batch.nextRecommendedBatch} body={surface.goal.nextRecommendedWork} />
         <DetailCard title="Work Order" value={surface.workOrder.id} body={surface.workOrder.goal} />
+      </div>
+
+      <div className="border-t border-border p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <FileSearch className="h-3.5 w-3.5 text-primary" aria-hidden />
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Evidence clarity
+              </p>
+            </div>
+            <p className="mt-2 text-sm font-semibold">{surface.evidenceClarity.batch}</p>
+            <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+              Proof is grouped by Work Order, evidence signal, production verification, review state, safety flag, and missing proof.
+            </p>
+          </div>
+          <Badge variant="secondary">{surface.evidenceClarity.posture}</Badge>
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-4">
+          {surface.evidenceClarity.proofChain.map((item) => (
+            <Link
+              key={item.label}
+              href={item.href}
+              className="rounded-lg border border-border bg-background p-3 transition-colors hover:border-primary/40"
+            >
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {item.workOrder}
+              </p>
+              <p className="mt-2 text-sm font-semibold">{item.label}</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{item.evidence}</p>
+              <p className="mt-2 text-xs leading-relaxed text-foreground">{item.proofSignal}</p>
+            </Link>
+          ))}
+        </div>
       </div>
 
       <div className="grid gap-3 border-t border-border p-4 lg:grid-cols-3">
@@ -127,6 +161,54 @@ export function WoeDetailSurfacePanel() {
         </div>
       </div>
 
+      <div className="grid gap-3 border-t border-border p-4 lg:grid-cols-3">
+        <div className="rounded-lg border border-border bg-background p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Production verification
+          </p>
+          <div className="mt-3 grid gap-2">
+            {surface.evidenceClarity.productionVerification.map((item) => (
+              <div key={item.route} className="rounded-md border border-border bg-card px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-mono text-xs font-medium">{item.route}</p>
+                  <Badge variant="outline">{item.expected}</Badge>
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.proves}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-lg border border-border bg-background p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            PR / checks / review
+          </p>
+          <div className="mt-3 grid gap-2">
+            {surface.evidenceClarity.prCheckReviewContext.map((item) => (
+              <div key={item.label} className="rounded-md border border-border bg-card px-3 py-2">
+                <p className="text-xs font-medium">{item.label}: {item.value}</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-lg border border-border bg-background p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Missing / blocked proof
+          </p>
+          <div className="mt-3 grid gap-2">
+            {surface.evidenceClarity.proofGaps.map((gap) => (
+              <div key={gap.label} className="rounded-md border border-border bg-card px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-medium">{gap.label}</p>
+                  <Badge variant="secondary">{gap.status}</Badge>
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{gap.nextSafeMove}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
       <div className="grid gap-3 border-t border-border p-4 md:grid-cols-3">
         {surface.polish.readabilityCues.map((cue) => (
           <div key={cue.label} className="rounded-lg border border-border bg-background p-3">
@@ -197,6 +279,14 @@ export function WoeDetailSurfacePanel() {
           <div className="mt-3 flex flex-wrap gap-2">
             {surface.safetyBadges.map((badge) => (
               <Badge key={badge} variant="secondary">{badge}</Badge>
+            ))}
+          </div>
+          <div className="mt-3 grid gap-2">
+            {surface.evidenceClarity.safetyFlagExplanations.map((item) => (
+              <div key={item.flag} className="rounded-md border border-border bg-card px-3 py-2">
+                <p className="font-mono text-[10px] uppercase tracking-wider text-foreground">{item.flag}</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.meaning}</p>
+              </div>
             ))}
           </div>
         </div>

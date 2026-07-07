@@ -71,6 +71,38 @@ describe("Evidence command surface", () => {
     ])
   })
 
+  it("links Work Order evidence to production, PR, checks, and review proof", () => {
+    const surface = getEvidenceCommandSurface()
+
+    expect(surface.workOrderLinks).toEqual([
+      expect.objectContaining({
+        label: "Scope to proof",
+        workOrder: "WO-WOE-033..035",
+        href: "/goal-console",
+      }),
+      expect.objectContaining({
+        label: "Surface to proof",
+        workOrder: "WO-WOE-036..043",
+        href: "/work-orders",
+      }),
+      expect.objectContaining({
+        label: "Closure to proof",
+        workOrder: "WO-WOE-046..047",
+        href: "/audit",
+      }),
+    ])
+    expect(surface.productionVerificationSummary.map((item) => item.label)).toEqual([
+      "/api/health",
+      "/api/auth/readiness",
+      "/work-orders, /goal-console, /audit",
+    ])
+    expect(surface.reviewProofContext.map((item) => `${item.label}:${item.status}`)).toEqual([
+      "PR state:merged",
+      "Checks:green",
+      "Review threads:0 unresolved",
+    ])
+  })
+
   it("does not mutate evidence, auto-ingest, execute, deploy, grant authority, or write production", () => {
     const surface = getEvidenceCommandSurface()
 

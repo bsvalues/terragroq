@@ -48,6 +48,18 @@ export function EvidenceRollupPanel({ events }: { events: EventLog[] }) {
         )}
       </div>
 
+      <div className="grid gap-3 border-t border-border p-4 md:grid-cols-2 xl:grid-cols-4">
+        {surface.proofStates.map((state) => (
+          <div key={state.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {state.status}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{state.label}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{state.description}</p>
+          </div>
+        ))}
+      </div>
+
       <div className="flex items-center gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">
         <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden />
         Read-only rollup. No evidence recording, event mutation, ingestion, or production write.

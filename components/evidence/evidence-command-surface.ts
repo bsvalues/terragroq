@@ -8,6 +8,14 @@ export type EvidenceCategory = {
   href: string
 }
 
+export type EvidenceClarityLink = {
+  label: string
+  workOrder: string
+  evidence: string
+  destination: string
+  href: string
+}
+
 export type EvidenceCommandSurface = {
   title: string
   eyebrow: string
@@ -15,6 +23,9 @@ export type EvidenceCommandSurface = {
   operatorPosture: string
   verificationFlow: VerificationFlowStep[]
   proofSequence: EvidenceCategory[]
+  workOrderLinks: EvidenceClarityLink[]
+  productionVerificationSummary: EvidenceCategory[]
+  reviewProofContext: EvidenceCategory[]
   blockedExpansion: EvidenceCategory[]
   categories: EvidenceCategory[]
   nextRecommendedWo: {
@@ -95,6 +106,69 @@ export function getEvidenceCommandSurface(): EvidenceCommandSurface {
         status: "Report",
         description: "Completion reports bind result, files changed, safety posture, review state, and next recommended lane.",
         href: "/work-orders",
+      },
+    ],
+    workOrderLinks: [
+      {
+        label: "Scope to proof",
+        workOrder: "WO-WOE-033..035",
+        evidence: "Goal and loop contract records bind purpose, scope, validators, and stop conditions.",
+        destination: "Goal Console",
+        href: "/goal-console",
+      },
+      {
+        label: "Surface to proof",
+        workOrder: "WO-WOE-036..043",
+        evidence: "Native WOE surfaces expose queue, detail, blockers, completion report, and filters.",
+        destination: "Work Orders",
+        href: "/work-orders",
+      },
+      {
+        label: "Closure to proof",
+        workOrder: "WO-WOE-046..047",
+        evidence: "Safety sweep, final validation, PR checks, merge state, and production routes close the lane.",
+        destination: "Evidence",
+        href: "/audit",
+      },
+    ],
+    productionVerificationSummary: [
+      {
+        label: "/api/health",
+        status: "200",
+        description: "Confirms the hosted WilliamOS process responds after merge.",
+        href: "/runtime",
+      },
+      {
+        label: "/api/auth/readiness",
+        status: "ready",
+        description: "Confirms owner-only auth readiness remains healthy.",
+        href: "/runtime",
+      },
+      {
+        label: "/work-orders, /goal-console, /audit",
+        status: "reachable",
+        description: "Confirms WOE and evidence surfaces remain inspectable in production.",
+        href: "/work-orders",
+      },
+    ],
+    reviewProofContext: [
+      {
+        label: "PR state",
+        status: "merged",
+        description: "The PR number, merge state, and main commit are proof fields, not assumptions.",
+        href: "/audit",
+      },
+      {
+        label: "Checks",
+        status: "green",
+        description: "Focused tests, lint, full suite, build, and hosted checks must be recorded before closure.",
+        href: "/audit",
+      },
+      {
+        label: "Review threads",
+        status: "0 unresolved",
+        description: "Unresolved review feedback blocks completion unless the final report marks it as an owner decision.",
+        href: "/audit",
       },
     ],
     categories: [
