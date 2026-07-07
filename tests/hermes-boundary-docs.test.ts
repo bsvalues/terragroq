@@ -45,13 +45,30 @@ describe("Hermes boundary doctrine docs", () => {
     expect(readDoc(docs.rollup)).toContain("# WO-HERMES-029 - Hermes Boundary Rollup + Next-Lane Decision")
   })
 
-  it("keeps Hermes report work-order ids unique", () => {
-    const reportIds = readdirSync(join(process.cwd(), "docs/reports"))
-      .map((file) => file.match(/^(WO-HERMES-\d+)/)?.[1])
-      .filter((id): id is string => Boolean(id))
-    const uniqueReportIds = new Set(reportIds)
+  it("keeps Hermes report filename and heading work-order ids aligned and unique", () => {
+    const reportRecords: { file: string; filenameId: string; headingId?: string }[] = []
 
-    expect(uniqueReportIds.size).toBe(reportIds.length)
+    for (const file of readdirSync(join(process.cwd(), "docs/reports"))) {
+      const filenameId = file.match(/^(WO-HERMES-\d+)/)?.[1]
+
+      if (!filenameId) {
+        continue
+      }
+
+      const content = readDoc(reportDoc(file))
+      const headingId = content.match(/^# (WO-HERMES-\d+)/m)?.[1]
+
+      reportRecords.push({ file, filenameId, headingId })
+    }
+
+    const missingHeadingIds = reportRecords.filter((record) => !record.headingId)
+    const headingIds = reportRecords.map((record) => record.headingId)
+    const filenameIds = reportRecords.map((record) => record.filenameId)
+    const uniqueHeadingIds = new Set(headingIds)
+
+    expect(missingHeadingIds).toEqual([])
+    expect(filenameIds).toEqual(headingIds)
+    expect(uniqueHeadingIds.size).toBe(headingIds.length)
   })
 
   it("keeps Hermes disabled by default and blocks runtime activation", () => {
