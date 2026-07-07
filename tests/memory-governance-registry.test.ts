@@ -155,16 +155,17 @@ describe("Memory Governance Registry", () => {
     expect(links.get("Work Orders")).toBe("/work-orders")
   })
 
-  it("recommends an advisory evidence and UX lane while keeping new authority blocked", () => {
+  it("recommends shell polish and evidence rollup while keeping new authority blocked", () => {
     const surface = getMemoryGovernanceSurface()
 
     expect(surface.nextLaneDecision).toMatchObject({
-      recommendedBatch: "WILLIAMOS-BRAIN-COUNCIL-ADVISORY-BATCH-001",
-      recommendedOption: "B - advisory evidence and UX lane",
+      recommendedBatch: "WO-SHELL-010 - Shell Polish / Primary Experience Rollup",
+      recommendedOption: "A - Primary shell polish and evidence rollup",
     })
     expect(surface.nextLaneDecision.blockedLanes).toContain("Memory ingestion")
     expect(surface.nextLaneDecision.blockedLanes).toContain("Hermes/MCP/autonomy activation")
     expect(surface.nextLaneDecision.blockedLanes).toContain("Docker/backup/port metadata")
+    expect(surface.nextLaneDecision.reason).toContain("checks navigation coherence")
   })
 
   it("does not add ingestion, writes, runtime reads, embeddings, execution, metadata, persistence, LAN, secrets, or autonomy", () => {

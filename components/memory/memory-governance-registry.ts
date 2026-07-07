@@ -541,8 +541,8 @@ export function getMemoryGovernanceSurface(): MemoryGovernanceSurface {
       },
     ],
     nextLaneDecision: {
-      recommendedBatch: "WILLIAMOS-BRAIN-COUNCIL-ADVISORY-BATCH-001",
-      recommendedOption: "B - advisory evidence and UX lane",
+      recommendedBatch: "WO-SHELL-010 - Shell Polish / Primary Experience Rollup",
+      recommendedOption: "A - Primary shell polish and evidence rollup",
       blockedLanes: [
         "Memory ingestion",
         "Memory write/canon promotion",
@@ -552,7 +552,7 @@ export function getMemoryGovernanceSurface(): MemoryGovernanceSurface {
         "Docker/backup/port metadata",
       ],
       reason:
-        "After static memory governance is visible, the safest next lane is advisory UX/evidence work that can use the governance model without opening ingestion, writes, runtime reads, metadata expansion, or autonomy.",
+        "After Memory is placed as a Primary shell continuity surface, the safest next lane is a shell polish and evidence rollup that checks navigation coherence without opening ingestion, writes, runtime reads, metadata expansion, or autonomy.",
     },
     safety: {
       staticReadOnly: true,

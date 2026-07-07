@@ -6,10 +6,27 @@ describe("Memory native area", () => {
     const area = getMemoryNativeArea()
 
     expect(area.title).toBe("Memory")
-    expect(area.eyebrow).toBe("WilliamOS Continuity Layer")
-    expect(area.description).toContain("native WilliamOS continuity layer")
-    expect(area.description).toContain("inspectable")
-    expect(area.description).toContain("authority-aware")
+    expect(area.eyebrow).toBe("Primary Continuity Layer")
+    expect(area.description).toContain("Primary Operator continuity layer")
+    expect(area.description).toContain("remembered context become authority")
+    expect(area.shellPlacement).toEqual([
+      expect.objectContaining({
+        label: "Capture",
+        value: "Review first",
+      }),
+      expect.objectContaining({
+        label: "Connect",
+        value: "Evidence-linked",
+      }),
+      expect.objectContaining({
+        label: "Correct",
+        value: "Stale visible",
+      }),
+      expect.objectContaining({
+        label: "Constrain",
+        value: "Not authority",
+      }),
+    ])
     expect(area.postureSummary).toEqual([
       expect.objectContaining({
         label: "Continuity",
@@ -107,6 +124,7 @@ describe("Memory native area", () => {
       area.title,
       area.eyebrow,
       area.description,
+      ...area.shellPlacement.flatMap((item) => [item.label, item.value, item.description]),
       ...area.postureSummary.flatMap((item) => [item.label, item.value, item.description]),
       ...area.categories.flatMap((category) => [
         category.label,
@@ -128,5 +146,6 @@ describe("Memory native area", () => {
     expect(text).not.toMatch(
       /chat history|AI remembers everything|autonomous learning|self-improving memory|personalization magic|surveillance|black box memory|auto-train|always learning/i,
     )
+    expect(text).not.toMatch(/\bteam members?\b|workspace|user onboarding|admin panel/i)
   })
 })

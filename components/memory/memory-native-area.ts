@@ -24,6 +24,7 @@ export type MemoryNativeArea = {
   title: string
   eyebrow: string
   description: string
+  shellPlacement: MemoryPostureSummaryItem[]
   postureSummary: MemoryPostureSummaryItem[]
   categories: MemoryContinuityCategory[]
   authorityBoundaries: MemoryAuthorityBoundary[]
@@ -50,9 +51,35 @@ export type MemoryNativeArea = {
 export function getMemoryNativeArea(): MemoryNativeArea {
   return {
     title: "Memory",
-    eyebrow: "WilliamOS Continuity Layer",
+    eyebrow: "Primary Continuity Layer",
     description:
-      "Memory is the native WilliamOS continuity layer for facts, decisions, procedures, patterns, contradictions, stale items, and review queues. It is inspectable, correctable, evidence-linked, and authority-aware.",
+      "Memory is the Primary Operator continuity layer for WilliamOS. It keeps facts, decisions, procedures, patterns, contradictions, stale items, and review queues visible without letting remembered context become authority.",
+    shellPlacement: [
+      {
+        label: "Capture",
+        value: "Review first",
+        description:
+          "New context belongs in review before it can influence Work Orders or operator decisions.",
+      },
+      {
+        label: "Connect",
+        value: "Evidence-linked",
+        description:
+          "Trusted memory stays tied to proof, authority, owner decisions, and current project state.",
+      },
+      {
+        label: "Correct",
+        value: "Stale visible",
+        description:
+          "Outdated or contradicted context remains inspectable so it can be corrected before use.",
+      },
+      {
+        label: "Constrain",
+        value: "Not authority",
+        description:
+          "Memory can guide the Primary shell, but it cannot approve, execute, promote, or expand scope.",
+      },
+    ],
     postureSummary: [
       {
         label: "Continuity",
