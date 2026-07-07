@@ -46,20 +46,21 @@ describe("Hermes boundary doctrine docs", () => {
   })
 
   it("keeps Hermes report filename and heading work-order ids aligned and unique", () => {
-    const reportRecords = readdirSync(join(process.cwd(), "docs/reports"))
-      .map((file) => {
-        const filenameId = file.match(/^(WO-HERMES-\d+)/)?.[1]
+    const reportRecords: { file: string; filenameId: string; headingId?: string }[] = []
 
-        if (!filenameId) {
-          return null
-        }
+    for (const file of readdirSync(join(process.cwd(), "docs/reports"))) {
+      const filenameId = file.match(/^(WO-HERMES-\d+)/)?.[1]
 
-        const content = readDoc(reportDoc(file))
-        const headingId = content.match(/^# (WO-HERMES-\d+)/m)?.[1]
+      if (!filenameId) {
+        continue
+      }
 
-        return { file, filenameId, headingId }
-      })
-      .filter((record): record is { file: string; filenameId: string; headingId?: string } => Boolean(record))
+      const content = readDoc(reportDoc(file))
+      const headingId = content.match(/^# (WO-HERMES-\d+)/m)?.[1]
+
+      reportRecords.push({ file, filenameId, headingId })
+    }
+
     const missingHeadingIds = reportRecords.filter((record) => !record.headingId)
     const headingIds = reportRecords.map((record) => record.headingId)
     const filenameIds = reportRecords.map((record) => record.filenameId)
