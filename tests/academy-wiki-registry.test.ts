@@ -6,6 +6,7 @@ import {
   WILLIAMOS_GLOSSARY,
   getAcademyWikiSurface,
 } from "@/components/academy/academy-wiki-registry"
+import { TRACE_RECORDS } from "@/components/trace/trace-ledger-registry"
 
 describe("Academy Wiki Registry", () => {
   it("defines Academy as a read-only learning layer", () => {
@@ -50,11 +51,22 @@ describe("Academy Wiki Registry", () => {
       "wiki-authority",
       "wiki-memory",
       "wiki-brain-council",
+      "wiki-hermes",
+      "wiki-agent-forge",
       "wiki-trace-ledger",
+      "wiki-county-ops",
       "wiki-local-omen",
     ])
     expect(WIKI_PAGES.every((page) => page.whatItIs.length > 0)).toBe(true)
     expect(WIKI_PAGES.every((page) => page.whatItIsNot.length > 0)).toBe(true)
+  })
+
+  it("links wiki concepts only to existing trace records", () => {
+    const traceIds = new Set(TRACE_RECORDS.map((record) => record.traceId))
+    const linkedTraceIds = WIKI_PAGES.flatMap((page) => page.relatedTrace)
+
+    expect(linkedTraceIds.length).toBeGreaterThan(0)
+    expect(linkedTraceIds.every((traceId) => traceIds.has(traceId))).toBe(true)
   })
 
   it("teaches the mandatory operator lessons", () => {
@@ -73,6 +85,9 @@ describe("Academy Wiki Registry", () => {
     expect(WILLIAMOS_GLOSSARY.map((term) => term.term)).toEqual([
       "Primary",
       "Owner",
+      "Operator",
+      "Codex Operator",
+      "Courier",
       "/goal",
       "/loop",
       "Work Order",
@@ -83,13 +98,31 @@ describe("Academy Wiki Registry", () => {
       "Brain Council",
       "Trace Ledger",
       "Failure-to-Eval",
+      "Eval",
       "Hermes",
       "MCP",
+      "Agent Forge",
+      "Skill",
+      "Quarantine",
       "Local OMEN",
       "Read-only subsystem",
+      "County Ops",
+      "Production Write",
+      "Autonomy",
       "Stop condition",
       "Safety posture",
     ])
+  })
+
+  it("places Agent Forge, Hermes, Trace/Eval, and County Ops as static concepts only", () => {
+    const pages = new Map(WIKI_PAGES.map((page) => [page.pageId, page]))
+
+    expect(pages.get("wiki-agent-forge")?.whatItIsNot).toContain("executable skill loader")
+    expect(pages.get("wiki-hermes")?.whatItIsNot).toContain("active worker")
+    expect(pages.get("wiki-trace-ledger")?.whatItIsNot).toContain("eval execution")
+    expect(pages.get("wiki-county-ops")?.whatItIs).toContain("PACS rules")
+    expect(pages.get("wiki-county-ops")?.whatItIsNot).toContain("PACS connection")
+    expect(pages.get("wiki-county-ops")?.relatedAuthority).toContain("TERRAFUSION_TOUCH_GATE")
   })
 
   it("links Academy and Wiki to existing read-only surfaces", () => {

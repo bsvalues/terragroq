@@ -30,3 +30,24 @@ The Primary owns authority. Codex may use Academy lessons as static guidance ins
 - `agent-training/` contains agent-facing safety lessons.
 - `exercises/` contains static drills.
 - `certification/` defines learning levels without granting permissions.
+
+## Directory Map
+
+- `onboarding/operator-level-1.md` teaches first-run Primary orientation.
+- `operator-training/work-order-governance.md` teaches WOs, `/goal`, and `/loop`.
+- `operator-training/evidence-discipline.md` teaches proof rules.
+- `operator-training/authority-gates.md` teaches owner authority boundaries.
+- `operator-training/codex-operator-runbook.md` teaches Codex as bounded operator.
+- `agent-training/agent-level-1.md` teaches safe agent conduct.
+- `exercises/` contains static drills that do not mutate state.
+- `certification/` describes learning levels without granting permissions.
+
+## Naming Rules
+
+Use lower-case, hyphenated filenames. Academy pages should name the audience or
+lesson purpose directly. Wiki pages should name the concept directly.
+
+## Expansion Rules
+
+Add new lessons only through a scoped Work Order. Academy content may explain
+authority gates, but it must not grant authority or add runtime behavior.

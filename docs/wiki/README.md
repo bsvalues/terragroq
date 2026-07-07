@@ -30,3 +30,19 @@ The Primary owns canon. Wiki pages are useful reference material, but current ow
 - `playbooks/` records reusable operating procedures.
 - `troubleshooting/` records safe diagnosis guidance.
 - `glossary.md` defines core vocabulary.
+
+## Concept Map
+
+- `concepts/williamos.md` defines the private command environment.
+- `concepts/brain-council.md` defines advisory reasoning.
+- `concepts/hermes-sidecar.md` defines the governed sidecar boundary.
+- `concepts/agent-forge.md` defines capability preparation.
+- `concepts/memory.md` defines governed continuity.
+- `concepts/trace-eval.md` defines trace and failure-to-eval placement.
+- `concepts/county-ops.md` defines static County Ops knowledge placement.
+
+## Knowledge Ownership
+
+The Primary owns canon. Codex may update Wiki knowledge only inside a scoped
+Work Order. Wiki pages should preserve boundaries, denied authority, and
+evidence expectations beside every concept.
