@@ -73,6 +73,9 @@ export function CouncilDecisionPacketSchemaPanel() {
         <p className="text-xs leading-relaxed text-muted-foreground">
           Blocked until approved: {schema.blockedUntilApproved.join(", ")}.
         </p>
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+          {schema.criticalRule}
+        </p>
       </div>
     </section>
   )

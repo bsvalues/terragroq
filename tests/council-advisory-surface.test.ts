@@ -18,6 +18,56 @@ describe("Council advisory surface", () => {
       "Hypotheses",
       "Confidence",
     ])
+    expect(surface.evidenceRequirements.map((item) => item.type)).toEqual([
+      "current origin/main",
+      "GOAL/WO reports",
+      "PR/check status",
+      "production verification",
+      "safety posture",
+      "Academy/Wiki, Hermes, and WOE doctrine",
+    ])
+  })
+
+  it("defines confidence, risk, recommendation-to-WOE, and blocked denied doctrine", () => {
+    const surface = getCouncilAdvisorySurface()
+
+    expect(surface.confidenceRiskModel.map((item) => item.level)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "blocked",
+    ])
+    expect(surface.confidenceRiskModel[3]?.description).toContain("TerraFusion/PACS")
+    expect(surface.recommendationModel.requiredFields).toEqual([
+      "goal",
+      "scope",
+      "authority required",
+      "stop conditions",
+      "evidence required",
+      "validators",
+      "blocked actions",
+      "next safe gate",
+    ])
+    expect(surface.recommendationModel.rule).toContain("Council does not execute Codex")
+    expect(surface.recommendationModel.blockedActions).toContain("auto-WO creation")
+    expect(surface.blockedDeniedDoctrine.map((item) => item.label)).toEqual([
+      "Evidence missing",
+      "Owner authority required",
+      "Execution implied",
+      "Policy boundary crossed",
+    ])
+  })
+
+  it("covers the expected static registry links", () => {
+    const surface = getCouncilAdvisorySurface()
+    const links = new Map(surface.registryCoverage.map((item) => [item.label, item.value]))
+
+    expect(links.get("Council doctrine")).toBe("/brain-council")
+    expect(links.get("Work Orders")).toBe("/work-orders")
+    expect(links.get("Evidence")).toBe("/audit")
+    expect(links.get("Academy/Wiki")).toBe("/academy")
+    expect(links.get("Hermes")).toBe("/hermes")
+    expect(links.get("Authority")).toBe("/governance")
   })
 
   it("keeps blocked powers visible for Primary review", () => {
@@ -46,6 +96,10 @@ describe("Council advisory surface", () => {
       createsWorkOrder: false,
       grantsAuthority: false,
       activatesTools: false,
+      activatesHermes: false,
+      activatesMcp: false,
+      writesMemory: false,
+      dynamicIngestion: false,
       writesProduction: false,
     })
   })

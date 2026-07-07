@@ -9,12 +9,36 @@ export type CouncilAdvisorySurfaceItem = {
   description: string
 }
 
+export type CouncilEvidenceRequirement = {
+  type: string
+  requiredFor: "low confidence" | "medium confidence" | "high confidence" | "blocker"
+  missingBehavior: string
+}
+
+export type CouncilConfidenceRiskRule = {
+  label: string
+  level: "low" | "medium" | "high" | "blocked" | "denied"
+  description: string
+}
+
+export type CouncilWoeRecommendationModel = {
+  label: string
+  requiredFields: string[]
+  rule: string
+  blockedActions: string[]
+}
+
 export type CouncilAdvisorySurface = {
   title: string
   summary: string
   currentQuestion: string
   operatingLoop: CouncilAdvisorySurfaceItem[]
   reviewReadiness: CouncilAdvisorySurfaceItem[]
+  evidenceRequirements: CouncilEvidenceRequirement[]
+  confidenceRiskModel: CouncilConfidenceRiskRule[]
+  recommendationModel: CouncilWoeRecommendationModel
+  blockedDeniedDoctrine: CouncilConfidenceRiskRule[]
+  registryCoverage: CouncilAdvisorySurfaceItem[]
   blockedPowers: string[]
   nextSafeMove: string
   safety: {
@@ -23,6 +47,10 @@ export type CouncilAdvisorySurface = {
     createsWorkOrder: false
     grantsAuthority: false
     activatesTools: false
+    activatesHermes: false
+    activatesMcp: false
+    writesMemory: false
+    dynamicIngestion: false
     writesProduction: false
   }
 }
@@ -77,6 +105,107 @@ export function getCouncilAdvisorySurface(): CouncilAdvisorySurface {
         description: "Advisory confidence, not authority to execute.",
       },
     ],
+    evidenceRequirements: [
+      {
+        type: "current origin/main",
+        requiredFor: "low confidence",
+        missingBehavior: "mark base stale and request current repo evidence",
+      },
+      {
+        type: "GOAL/WO reports",
+        requiredFor: "medium confidence",
+        missingBehavior: "lower confidence and list missing reports",
+      },
+      {
+        type: "PR/check status",
+        requiredFor: "medium confidence",
+        missingBehavior: "block completion recommendation until checks are known",
+      },
+      {
+        type: "production verification",
+        requiredFor: "high confidence",
+        missingBehavior: "require route proof before production claims",
+      },
+      {
+        type: "safety posture",
+        requiredFor: "blocker",
+        missingBehavior: "block if runtime, execution, auth, DB, memory, or secret flags are unclear",
+      },
+      {
+        type: "Academy/Wiki, Hermes, and WOE doctrine",
+        requiredFor: "medium confidence",
+        missingBehavior: "treat recommendation as doctrine-incomplete",
+      },
+    ],
+    confidenceRiskModel: [
+      {
+        label: "Low confidence",
+        level: "low",
+        description: "Enough context to ask for evidence, not enough to recommend action.",
+      },
+      {
+        label: "Medium confidence",
+        level: "medium",
+        description: "Relevant reports and safety posture exist; production or review proof may still be pending.",
+      },
+      {
+        label: "High confidence",
+        level: "high",
+        description: "Current base, reports, checks, production verification, and safety flags are all cited.",
+      },
+      {
+        label: "Risk escalated",
+        level: "blocked",
+        description:
+          "Auth, DB/schema, env/package/Vercel, production-write, autonomy, Hermes/MCP/worker, memory write, TerraFusion/PACS, or secret risk blocks the recommendation.",
+      },
+    ],
+    recommendationModel: {
+      label: "Council-to-WOE recommendation",
+      requiredFields: [
+        "goal",
+        "scope",
+        "authority required",
+        "stop conditions",
+        "evidence required",
+        "validators",
+        "blocked actions",
+        "next safe gate",
+      ],
+      rule:
+        "Council may recommend a Work Order packet. Codex may operate only when the Owner provides an authorized packet. Council does not execute Codex.",
+      blockedActions: ["auto-WO creation", "Codex invocation", "background dispatch", "command runner", "queue worker"],
+    },
+    blockedDeniedDoctrine: [
+      {
+        label: "Evidence missing",
+        level: "blocked",
+        description: "Block when proof is absent, stale, or contradicted.",
+      },
+      {
+        label: "Owner authority required",
+        level: "blocked",
+        description: "Block when the recommendation needs Primary authority before action.",
+      },
+      {
+        label: "Execution implied",
+        level: "blocked",
+        description: "Block when advice implies commands, tools, workers, schedulers, Hermes, MCP, or autonomy.",
+      },
+      {
+        label: "Policy boundary crossed",
+        level: "denied",
+        description: "Deny when secrets, production writes, auth/DB changes, or TerraFusion/PACS touch are implied without authority.",
+      },
+    ],
+    registryCoverage: [
+      { label: "Council doctrine", value: "/brain-council", description: "Advisory identity and boundaries." },
+      { label: "Work Orders", value: "/work-orders", description: "Recommendations become WOE packets, not direct actions." },
+      { label: "Evidence", value: "/audit", description: "Proof drives confidence and blocks weak advice." },
+      { label: "Academy/Wiki", value: "/academy", description: "Static lessons and glossary cross-links." },
+      { label: "Hermes", value: "/hermes", description: "Council cannot activate Hermes or MCP." },
+      { label: "Authority", value: "/governance", description: "Owner gates remain outside Council control." },
+    ],
     blockedPowers: [
       ...new Set([
         ...doctrine.boundaries.flatMap((boundary) =>
@@ -93,6 +222,10 @@ export function getCouncilAdvisorySurface(): CouncilAdvisorySurface {
       createsWorkOrder: false,
       grantsAuthority: false,
       activatesTools: false,
+      activatesHermes: false,
+      activatesMcp: false,
+      writesMemory: false,
+      dynamicIngestion: false,
       writesProduction: false,
     },
   }
