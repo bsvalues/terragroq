@@ -8,6 +8,8 @@ export type WikiConceptType =
   | "council"
   | "memory"
   | "trace"
+  | "forge"
+  | "county-ops"
 
 export type AcademyLesson = {
   lessonId: string
@@ -344,6 +346,36 @@ export const WIKI_PAGES: WikiPage[] = [
     whatItIsNot: "A runtime agent system.",
   },
   {
+    pageId: "wiki-hermes",
+    title: "Hermes Sidecar",
+    conceptType: "safety",
+    summary: "The governed worker sidecar boundary.",
+    canonicalDefinition: "Hermes is a proposed sidecar that remains disabled until explicit activation authority.",
+    relatedSurfaces: ["/hermes", "/governance"],
+    relatedEvidence: ["Hermes boundary doctrine"],
+    relatedAuthority: ["HERMES_ACTIVATION_GATE", "MCP_ACTIVATION_GATE"],
+    relatedMemory: ["memory-authority-registry-current"],
+    relatedDecisions: ["decision-autonomy"],
+    relatedTrace: ["trace-authority-refresh-pass"],
+    whatItIs: "A documented sidecar boundary.",
+    whatItIsNot: "An active worker, MCP runtime, scheduler, or autonomous service.",
+  },
+  {
+    pageId: "wiki-agent-forge",
+    title: "Agent Forge",
+    conceptType: "forge",
+    summary: "The skill and capability preparation surface.",
+    canonicalDefinition: "Agent Forge prepares capability proposals, quarantine state, risk, evidence, and activation review requirements.",
+    relatedSurfaces: ["/agent-forge", "/governance"],
+    relatedEvidence: ["Agent Forge doctrine"],
+    relatedAuthority: ["TOOL_CALL_GATE", "HERMES_ACTIVATION_GATE"],
+    relatedMemory: ["memory-authority-registry-current"],
+    relatedDecisions: ["decision-autonomy"],
+    relatedTrace: ["trace-authority-refresh-pass"],
+    whatItIs: "A capability preparation and quarantine model.",
+    whatItIsNot: "An executable skill loader, dependency installer, or tool-calling runtime.",
+  },
+  {
     pageId: "wiki-trace-ledger",
     title: "Trace Ledger",
     conceptType: "trace",
@@ -357,6 +389,21 @@ export const WIKI_PAGES: WikiPage[] = [
     relatedTrace: ["trace-authority-refresh-pass"],
     whatItIs: "A static reasoning record.",
     whatItIsNot: "Runtime tracing, background collection, or eval execution.",
+  },
+  {
+    pageId: "wiki-county-ops",
+    title: "County Ops Knowledge",
+    conceptType: "county-ops",
+    summary: "The static placement model for county operating knowledge.",
+    canonicalDefinition: "County Ops knowledge may be documented as static guidance while PACS, county production systems, and TerraFusion production remain untouched.",
+    relatedSurfaces: ["/projects", "/audit", "/governance"],
+    relatedEvidence: ["county-ops-static-placement"],
+    relatedAuthority: ["TERRAFUSION_TOUCH_GATE", "SECRET_ACCESS_GATE"],
+    relatedMemory: ["memory-stale-contradiction-review"],
+    relatedDecisions: ["decision-terrafusion-pacs-touch"],
+    relatedTrace: ["trace-county-ops-placement"],
+    whatItIs: "Static placement for PACS rules, levy workflows, BOE evidence, permits, redaction, ratio studies, and appeals knowledge.",
+    whatItIsNot: "A PACS connection, county DB query, data extraction, or production county-system touch.",
   },
   {
     pageId: "wiki-local-omen",
@@ -378,6 +425,9 @@ export const WIKI_PAGES: WikiPage[] = [
 export const WILLIAMOS_GLOSSARY: GlossaryTerm[] = [
   ["Primary", "The human authority who approves gates, decisions, and boundaries.", "core"],
   ["Owner", "The person authorizing goals and safety boundaries; not a courier between WOs.", "core"],
+  ["Operator", "A human or bounded agent operating inside authorized scope.", "core"],
+  ["Codex Operator", "The bounded repo operator that executes authorized Work Orders end to end.", "core"],
+  ["Courier", "The limited packet/result carrying role; not routine operator work.", "core"],
   ["/goal", "A governed intent packet that defines purpose and success state.", "core"],
   ["/loop", "A governed batch operation that Codex runs through authorized WOs.", "core"],
   ["Work Order", "A narrow unit of governed scope inside a batch.", "governance"],
@@ -388,10 +438,17 @@ export const WILLIAMOS_GLOSSARY: GlossaryTerm[] = [
   ["Brain Council", "Advisory reasoning surface; not an agent runtime.", "system"],
   ["Trace Ledger", "Static reasoning record for work and blockers.", "system"],
   ["Failure-to-Eval", "A proposal to turn a failure into a future eval; not eval execution.", "system"],
+  ["Eval", "A future test or evaluation proposal derived from a classified failure.", "system"],
   ["Hermes", "A worker/sidecar concept that remains blocked until activation gates.", "system"],
   ["MCP", "A tool-activation boundary that remains blocked until explicit authority.", "system"],
+  ["Agent Forge", "The capability preparation surface for skills, risk, quarantine, and activation review.", "system"],
+  ["Skill", "A proposed capability that remains quarantined until evidence and authority permit activation.", "system"],
+  ["Quarantine", "The safe holding state for unreviewed capabilities, integrations, or skills.", "safety"],
   ["Local OMEN", "The local runtime host/status lane, currently read-only/manual-only/localhost-only.", "system"],
   ["Read-only subsystem", "A surface that displays state without mutation or execution.", "safety"],
+  ["County Ops", "Static county-operating knowledge placement; no PACS or county production touch.", "system"],
+  ["Production Write", "Any action that changes production state, data, runtime, release, or external-system posture.", "safety"],
+  ["Autonomy", "System action without explicit bounded Work Order and owner authority.", "safety"],
   ["Stop condition", "A boundary crossing or validation failure that halts the loop.", "safety"],
   ["Safety posture", "The explicit set of powers that remain blocked.", "safety"],
 ].map(([term, definition, category]) => ({
