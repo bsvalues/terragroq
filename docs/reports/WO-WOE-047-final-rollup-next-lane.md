@@ -2,7 +2,7 @@
 
 ## Result
 
-PASS pending PR validation and merge.
+`RESULT: PASS_PENDING_CHECKS`
 
 ## Completed WOs
 

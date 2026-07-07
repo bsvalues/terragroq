@@ -48,7 +48,7 @@ describe("WOE detail surface", () => {
     expect(links.get("Evidence")).toBe("/audit")
     expect(links.get("Decisions")).toBe("/decisions")
     expect(links.get("Academy")).toBe("/academy")
-    expect(links.get("Wiki")).toBe("/wiki")
+    expect(links.get("Wiki")).toBe("/academy")
   })
 
   it("covers the native registry surfaces for WOE integration", () => {
@@ -60,7 +60,7 @@ describe("WOE detail surface", () => {
     expect(links.get("Evidence")).toBe("/audit")
     expect(links.get("Decisions")).toBe("/decisions")
     expect(links.get("Academy")).toBe("/academy")
-    expect(links.get("Wiki")).toBe("/wiki")
+    expect(links.get("Wiki")).toBe("/academy")
     expect(surface.searchFilter.fields).toEqual([
       "query",
       "status",

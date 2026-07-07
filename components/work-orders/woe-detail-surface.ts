@@ -340,7 +340,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
       { label: "Evidence", href: "/audit", description: "Evidence rollups and completion proof references." },
       { label: "Decisions", href: "/decisions", description: "Blocked owner decision queue and authority blockers." },
       { label: "Academy", href: "/academy", description: "Static lessons for WOE operation and stop conditions." },
-      { label: "Wiki", href: "/wiki", description: "Static WOE concept definitions and boundary language." },
+      { label: "Wiki", href: "/academy", description: "Static WOE concept definitions and boundary language." },
     ],
     workOrder: {
       id: "WO-WOE-001..015",
@@ -404,7 +404,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
       { label: "Evidence", href: "/audit", description: "Inspect proof and evidence rollups." },
       { label: "Decisions", href: "/decisions", description: "Inspect owner blockers before a lane advances." },
       { label: "Academy", href: "/academy", description: "Review static WOE operating lessons." },
-      { label: "Wiki", href: "/wiki", description: "Review WOE definitions and boundaries." },
+      { label: "Wiki", href: "/academy", description: "Review WOE definitions and boundaries." },
     ],
     safetyBadges: WOE_SAFETY_BADGES,
     safety: {
