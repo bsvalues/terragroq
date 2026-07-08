@@ -101,6 +101,7 @@ describe("Agent Forge surface", () => {
       "skill-hermes-packet-review",
       "skill-local-runtime-proof",
     ])
+    expect(SKILL_REGISTRY.every((skill) => skill.relatedGoal === "GOAL-WOS-007")).toBe(true)
     expect(SKILL_REGISTRY.every((skill) => skill.relatedAuthorityGate.length > 0)).toBe(true)
     expect(SKILL_REGISTRY.every((skill) => skill.blockedActions.length > 0)).toBe(true)
     expect(SKILL_REGISTRY.find((skill) => skill.skillId === "skill-hermes-packet-review")?.whatThisDoesNotAuthorize).toContain(
