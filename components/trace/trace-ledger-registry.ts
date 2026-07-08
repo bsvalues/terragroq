@@ -126,6 +126,49 @@ export type TraceSafetyProofCard = {
   description: string
 }
 
+export type TraceProofReadabilityItem = {
+  label: string
+  value: string
+  description: string
+}
+
+export type FailureClassificationPolish = {
+  failureType: FailureType | EvidenceGapType
+  plainLabel: string
+  severity: "low" | "medium" | "high" | "critical"
+  evidenceRequired: string
+  blocksAction: boolean
+  mayProduceEvalCandidate: boolean
+  ownerDecisionImplication: string
+}
+
+export type EvalCandidateReadabilityItem = {
+  label: string
+  description: string
+}
+
+export type MissingProofState = {
+  state: "missing proof" | "stale proof" | "insufficient proof" | "blocked proof"
+  definition: string
+  primaryAction: string
+  codexAction: string
+  nextGate: string
+}
+
+export type TraceRelationshipClarity = {
+  label: string
+  source: string
+  target: string
+  meaning: string
+  boundary: string
+}
+
+export type TraceSafetyFlagGroup = {
+  label: string
+  flags: string[]
+  blockedMeaning: string
+}
+
 export type TraceLedgerSurface = {
   currentBatch: {
     goal: string
@@ -148,6 +191,12 @@ export type TraceLedgerSurface = {
   confidenceMovementModel: ConfidenceMovementRule[]
   evalCandidatePacket: FailureToEvalCandidatePacket
   evalProposals: FailureToEvalProposal[]
+  proofReadability: TraceProofReadabilityItem[]
+  failureClassificationPolish: FailureClassificationPolish[]
+  evalCandidateReadability: EvalCandidateReadabilityItem[]
+  missingProofStates: MissingProofState[]
+  relationshipClarity: TraceRelationshipClarity[]
+  safetyFlagGroups: TraceSafetyFlagGroup[]
   workOrderLinks: TraceLink[]
   evidenceLinks: TraceLink[]
   memoryLinks: TraceLink[]
@@ -393,6 +442,222 @@ export const FAILURE_TO_EVAL_CANDIDATE_PACKET: FailureToEvalCandidatePacket = {
     "invoke command runner",
   ],
 }
+
+export const TRACE_PROOF_READABILITY: TraceProofReadabilityItem[] = [
+  {
+    label: "Trace identity",
+    value: "Trace ID, title, category, result, and failure type",
+    description: "Shows what record the Primary is reading before any interpretation.",
+  },
+  {
+    label: "Evidence used",
+    value: "Proof references and production/check observations",
+    description: "Names the evidence behind the trace and exposes missing proof when evidence is incomplete.",
+  },
+  {
+    label: "Confidence impact",
+    value: "Raised, lowered, blocked, or unchanged",
+    description: "Explains how evidence affects confidence without turning confidence into authority.",
+  },
+  {
+    label: "Safety posture",
+    value: "False flags and blocked future powers",
+    description: "Keeps runtime, telemetry, eval runner, command, memory, production, and autonomy powers visibly blocked.",
+  },
+  {
+    label: "Next safe gate",
+    value: "Owner decision, future WO, or static polish",
+    description: "Points to the next safe step without creating a runtime control or execution path.",
+  },
+]
+
+export const FAILURE_CLASSIFICATION_POLISH: FailureClassificationPolish[] = [
+  {
+    failureType: "VALIDATION_FAILURE",
+    plainLabel: "Validation failed",
+    severity: "medium",
+    evidenceRequired: "Exact command, failing assertion, and scoped remediation proof.",
+    blocksAction: true,
+    mayProduceEvalCandidate: true,
+    ownerDecisionImplication: "Owner decision only when the fix would expand scope.",
+  },
+  {
+    failureType: "BUILD_FAILURE",
+    plainLabel: "Build failed",
+    severity: "high",
+    evidenceRequired: "Build output, source/tooling classification, and rerun result.",
+    blocksAction: true,
+    mayProduceEvalCandidate: true,
+    ownerDecisionImplication: "Owner decision only when repair requires env, package, or platform change.",
+  },
+  {
+    failureType: "ROUTE_PROOF_FAILURE",
+    plainLabel: "Production route proof failed",
+    severity: "high",
+    evidenceRequired: "Route, status, expected behavior, and whether the route was in scope.",
+    blocksAction: true,
+    mayProduceEvalCandidate: true,
+    ownerDecisionImplication: "Owner decision required if production behavior must change.",
+  },
+  {
+    failureType: "SAFETY_STOP",
+    plainLabel: "Safety boundary stopped work",
+    severity: "critical",
+    evidenceRequired: "Stopped action, blocked gate, and safe return packet.",
+    blocksAction: true,
+    mayProduceEvalCandidate: true,
+    ownerDecisionImplication: "Owner authority is required before reopening the lane.",
+  },
+  {
+    failureType: "MISSING_BASE_PROOF",
+    plainLabel: "Base proof missing",
+    severity: "medium",
+    evidenceRequired: "Current origin/main, branch, and merge-base proof.",
+    blocksAction: true,
+    mayProduceEvalCandidate: false,
+    ownerDecisionImplication: "Codex can collect read-only repo proof inside scope.",
+  },
+  {
+    failureType: "STALE_CONTEXT",
+    plainLabel: "Evidence is stale",
+    severity: "medium",
+    evidenceRequired: "Current repo, PR, review, or production state.",
+    blocksAction: true,
+    mayProduceEvalCandidate: false,
+    ownerDecisionImplication: "Codex should refresh evidence; owner decides only if results contradict the lane.",
+  },
+  {
+    failureType: "OWNER_DECISION_REQUIRED",
+    plainLabel: "Owner decision is required",
+    severity: "critical",
+    evidenceRequired: "Decision question, blocked action, authority gate, and safe default.",
+    blocksAction: true,
+    mayProduceEvalCandidate: false,
+    ownerDecisionImplication: "Stop until the Primary decides.",
+  },
+  {
+    failureType: "ENVIRONMENT_DEPENDENCY",
+    plainLabel: "Environment/tooling blocked proof",
+    severity: "medium",
+    evidenceRequired: "Tooling output and source-versus-environment classification.",
+    blocksAction: true,
+    mayProduceEvalCandidate: true,
+    ownerDecisionImplication: "Owner decision only when repair is outside scoped local evidence collection.",
+  },
+]
+
+export const EVAL_CANDIDATE_READABILITY: EvalCandidateReadabilityItem[] = [
+  {
+    label: "Purpose",
+    description: "What future risk the eval would guard if a later WO authorizes implementation.",
+  },
+  {
+    label: "Expected input",
+    description: "The static packet, report, route proof, or fixture a future eval might inspect.",
+  },
+  {
+    label: "Expected output",
+    description: "The plain assertion the future eval would need to prove.",
+  },
+  {
+    label: "Safety boundary tested",
+    description: "Which blocked power, authority gate, or evidence gap the future eval protects.",
+  },
+  {
+    label: "Authority required",
+    description: "The future owner-authorized WO required before any eval is written or run.",
+  },
+]
+
+export const MISSING_PROOF_STATES: MissingProofState[] = [
+  {
+    state: "missing proof",
+    definition: "Required evidence has not been supplied yet.",
+    primaryAction: "Decide whether the missing proof matters before accepting the recommendation.",
+    codexAction: "Collect only scoped read-only evidence or mark the lane blocked.",
+    nextGate: "Evidence required.",
+  },
+  {
+    state: "stale proof",
+    definition: "Evidence may describe an older repo, PR, check, route, or production state.",
+    primaryAction: "Use current proof before relying on the trace.",
+    codexAction: "Refresh current base, PR, check, or production route evidence.",
+    nextGate: "Current-state reconciliation.",
+  },
+  {
+    state: "insufficient proof",
+    definition: "Evidence exists but does not fully prove the claim being made.",
+    primaryAction: "Treat confidence as lowered until the missing part is supplied.",
+    codexAction: "Name the gap and avoid stronger completion language.",
+    nextGate: "Additional validation or narrowed claim.",
+  },
+  {
+    state: "blocked proof",
+    definition: "Proof requires authority outside the current packet.",
+    primaryAction: "Decide whether to open a future WO or leave the lane blocked.",
+    codexAction: "Stop and return an owner-decision packet.",
+    nextGate: "Owner authority required.",
+  },
+]
+
+export const TRACE_RELATIONSHIP_CLARITY: TraceRelationshipClarity[] = [
+  {
+    label: "Council to Trace",
+    source: "Brain Council",
+    target: "Trace Ledger",
+    meaning: "Council advice can become trace evidence when it is static, cited, and authority-bounded.",
+    boundary: "Council does not execute and Trace does not activate Council.",
+  },
+  {
+    label: "WOE to Trace",
+    source: "Work Order Engine",
+    target: "Trace Ledger",
+    meaning: "WOE supplies scope, result, validation, and blocker context for trace records.",
+    boundary: "Trace does not start or operate WOs.",
+  },
+  {
+    label: "Evidence to Trace",
+    source: "Evidence surfaces",
+    target: "Trace Ledger",
+    meaning: "Evidence supports a trace claim and exposes missing or stale proof.",
+    boundary: "Evidence informs but does not authorize.",
+  },
+  {
+    label: "Trace to Eval Candidate",
+    source: "Trace Ledger",
+    target: "Failure-to-Eval",
+    meaning: "A classified failure may become a future eval candidate packet.",
+    boundary: "No eval file, runner, fixture generation, or command path is created.",
+  },
+]
+
+export const TRACE_SAFETY_FLAG_GROUPS: TraceSafetyFlagGroup[] = [
+  {
+    label: "Runtime and telemetry",
+    flags: ["runtimeTracingAdded: false", "backgroundCollectionAdded: false"],
+    blockedMeaning: "No runtime trace collection, telemetry service, polling, scheduler, or background worker.",
+  },
+  {
+    label: "Eval execution",
+    flags: ["evalExecutionAdded: false", "testGenerationAdded: false", "evalFileCreationAdded: false"],
+    blockedMeaning: "Eval candidates remain proposals and no runner or generated tests are created.",
+  },
+  {
+    label: "Command and production",
+    flags: ["commandExecutionAdded: false", "commandRunnerAdded: false", "productionDeployAdded: false"],
+    blockedMeaning: "No command/control surface, production write, deploy, or release authority.",
+  },
+  {
+    label: "Authority and memory",
+    flags: ["councilRuntimeAdded: false", "memoryWriteAdded: false", "runtimeMemoryReadAdded: false"],
+    blockedMeaning: "No Council runtime, memory write, memory read runtime, or authority bypass.",
+  },
+  {
+    label: "External systems",
+    flags: ["dynamicIngestionAdded: false", "terraFusionPacsTouched: false", "secretsDisclosed: false"],
+    blockedMeaning: "No ingestion, TerraFusion/PACS touch, or secret exposure.",
+  },
+]
 
 export const TRACE_RECORDS: TraceRecord[] = [
   {
@@ -642,6 +907,12 @@ export function getTraceLedgerSurface(): TraceLedgerSurface {
     confidenceMovementModel: CONFIDENCE_MOVEMENT_MODEL,
     evalCandidatePacket: FAILURE_TO_EVAL_CANDIDATE_PACKET,
     evalProposals: FAILURE_TO_EVAL_PROPOSALS,
+    proofReadability: TRACE_PROOF_READABILITY,
+    failureClassificationPolish: FAILURE_CLASSIFICATION_POLISH,
+    evalCandidateReadability: EVAL_CANDIDATE_READABILITY,
+    missingProofStates: MISSING_PROOF_STATES,
+    relationshipClarity: TRACE_RELATIONSHIP_CLARITY,
+    safetyFlagGroups: TRACE_SAFETY_FLAG_GROUPS,
     workOrderLinks: TRACE_WORK_ORDER_LINKS,
     evidenceLinks: TRACE_EVIDENCE_LINKS,
     memoryLinks: TRACE_MEMORY_LINKS,

@@ -65,6 +65,23 @@ export function TraceLedgerPanel() {
       </div>
 
       <div className="border-t border-border p-4">
+        <p className="text-sm font-medium">Trace proof readability</p>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {surface.proofReadability.map((item) => (
+            <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {item.label}
+              </p>
+              <p className="mt-2 text-xs font-medium">{item.value}</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {item.description}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t border-border p-4">
         <p className="text-sm font-medium">Trace categories</p>
         <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {surface.categories.map((category) => (
@@ -141,6 +158,32 @@ export function TraceLedgerPanel() {
               </p>
               <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                 Safe default: {failure.safeDefault}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t border-border p-4">
+        <p className="text-sm font-medium">Failure classification clarity</p>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {surface.failureClassificationPolish.map((failure) => (
+            <div key={`${failure.failureType}-${failure.plainLabel}`} className="rounded-lg border border-border bg-background p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold">{failure.plainLabel}</p>
+                <Badge variant="outline">{failure.severity}</Badge>
+              </div>
+              <p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {failure.failureType}
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                Evidence: {failure.evidenceRequired}
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                Eval candidate: {failure.mayProduceEvalCandidate ? "possible" : "not by default"}
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-destructive">
+                {failure.ownerDecisionImplication}
               </p>
             </div>
           ))}
@@ -228,6 +271,63 @@ export function TraceLedgerPanel() {
             ))}
           </div>
         </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {surface.evalCandidateReadability.map((item) => (
+            <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {item.label}
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {item.description}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid gap-4 border-t border-border p-4 xl:grid-cols-2">
+        <div>
+          <p className="text-sm font-medium">Missing and stale proof states</p>
+          <div className="mt-3 grid gap-2">
+            {surface.missingProofStates.map((state) => (
+              <div key={state.state} className="rounded-lg border border-border bg-background p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold">{state.state}</p>
+                  <Badge variant="outline">{state.nextGate}</Badge>
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  {state.definition}
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  Primary: {state.primaryAction}
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  Codex: {state.codexAction}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-sm font-medium">Council / WOE / Evidence / Trace relationships</p>
+          <div className="mt-3 grid gap-2">
+            {surface.relationshipClarity.map((item) => (
+              <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+                <p className="text-sm font-semibold">{item.label}</p>
+                <p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {item.source} to {item.target}
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  {item.meaning}
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-destructive">
+                  {item.boundary}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="grid gap-4 border-t border-border p-4 lg:grid-cols-3">
@@ -250,6 +350,23 @@ export function TraceLedgerPanel() {
               <p className="mt-2 text-sm font-semibold">{card.value}</p>
               <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                 {card.description}
+              </p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {surface.safetyFlagGroups.map((group) => (
+            <div key={group.label} className="rounded-lg border border-border bg-background p-3">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {group.label}
+              </p>
+              <ul className="mt-2 grid gap-1 text-xs leading-relaxed text-muted-foreground">
+                {group.flags.map((flag) => (
+                  <li key={flag}>{flag}</li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs leading-relaxed text-destructive">
+                {group.blockedMeaning}
               </p>
             </div>
           ))}

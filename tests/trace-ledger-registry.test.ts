@@ -107,6 +107,98 @@ describe("Trace Ledger Registry", () => {
     )
   })
 
+  it("polishes trace proof readability for Primary inspection", () => {
+    const surface = getTraceLedgerSurface()
+
+    expect(surface.proofReadability.map((item) => item.label)).toEqual([
+      "Trace identity",
+      "Evidence used",
+      "Confidence impact",
+      "Safety posture",
+      "Next safe gate",
+    ])
+    expect(surface.proofReadability[3]?.description).toContain("runtime")
+    expect(surface.proofReadability[3]?.description).toContain("telemetry")
+    expect(surface.proofReadability[3]?.description).toContain("eval runner")
+  })
+
+  it("clarifies failure classification severity, evidence, eval candidacy, and owner decision impact", () => {
+    const surface = getTraceLedgerSurface()
+    const labels = surface.failureClassificationPolish.map((entry) => entry.plainLabel)
+
+    expect(labels).toEqual([
+      "Validation failed",
+      "Build failed",
+      "Production route proof failed",
+      "Safety boundary stopped work",
+      "Base proof missing",
+      "Evidence is stale",
+      "Owner decision is required",
+      "Environment/tooling blocked proof",
+    ])
+    expect(
+      surface.failureClassificationPolish.find((entry) => entry.failureType === "SAFETY_STOP"),
+    ).toMatchObject({
+      severity: "critical",
+      blocksAction: true,
+      mayProduceEvalCandidate: true,
+    })
+  })
+
+  it("makes eval candidates readable without implying a runner exists", () => {
+    const surface = getTraceLedgerSurface()
+
+    expect(surface.evalCandidateReadability.map((entry) => entry.label)).toEqual([
+      "Purpose",
+      "Expected input",
+      "Expected output",
+      "Safety boundary tested",
+      "Authority required",
+    ])
+    expect(surface.evalCandidateReadability[4]?.description).toContain("owner-authorized WO")
+  })
+
+  it("defines calm missing, stale, insufficient, and blocked proof states", () => {
+    const surface = getTraceLedgerSurface()
+
+    expect(surface.missingProofStates.map((state) => state.state)).toEqual([
+      "missing proof",
+      "stale proof",
+      "insufficient proof",
+      "blocked proof",
+    ])
+    expect(surface.missingProofStates.find((state) => state.state === "blocked proof")?.nextGate).toBe(
+      "Owner authority required.",
+    )
+  })
+
+  it("clarifies Council, WOE, Evidence, Trace, and eval candidate relationships", () => {
+    const surface = getTraceLedgerSurface()
+
+    expect(surface.relationshipClarity.map((item) => item.label)).toEqual([
+      "Council to Trace",
+      "WOE to Trace",
+      "Evidence to Trace",
+      "Trace to Eval Candidate",
+    ])
+    expect(surface.relationshipClarity[3]?.boundary).toContain("No eval file")
+    expect(surface.relationshipClarity[3]?.boundary).toContain("runner")
+  })
+
+  it("groups safety flags for runtime, eval, command, authority, and external-system boundaries", () => {
+    const surface = getTraceLedgerSurface()
+
+    expect(surface.safetyFlagGroups.map((group) => group.label)).toEqual([
+      "Runtime and telemetry",
+      "Eval execution",
+      "Command and production",
+      "Authority and memory",
+      "External systems",
+    ])
+    expect(surface.safetyFlagGroups[0]?.blockedMeaning).toContain("No runtime trace collection")
+    expect(surface.safetyFlagGroups[4]?.blockedMeaning).toContain("No ingestion")
+  })
+
   it("creates static trace records linked to WOs, evidence, memory, decisions, authority, and Council", () => {
     const surface = getTraceLedgerSurface()
     const councilTrace = surface.records.find(
@@ -180,7 +272,7 @@ describe("Trace Ledger Registry", () => {
     ])
   })
 
-  it("recommends Academy / Wiki while keeping runtime lanes blocked", () => {
+  it("recommends Trace/Eval polish while keeping runtime lanes blocked", () => {
     const surface = getTraceLedgerSurface()
 
     expect(surface.nextLaneDecision).toMatchObject({
