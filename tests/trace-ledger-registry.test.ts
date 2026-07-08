@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  EVIDENCE_GAP_CLASSIFICATIONS,
   FAILURE_CLASSIFICATIONS,
   TRACE_CATEGORIES,
   getTraceLedgerSurface,
@@ -55,11 +56,72 @@ describe("Trace Ledger Registry", () => {
     ).toBe("Stop and queue owner decision.")
   })
 
+  it("classifies evidence gaps and confidence movement without runtime collection", () => {
+    expect(EVIDENCE_GAP_CLASSIFICATIONS.map((entry) => entry.gapType)).toEqual([
+      "MISSING_BASE_PROOF",
+      "MISSING_PR_CHECKS",
+      "MISSING_PRODUCTION_ROUTE_PROOF",
+      "MISSING_OWNER_DECISION",
+      "MISSING_AUTHORITY_GATE",
+      "MISSING_SAFETY_FLAGS",
+      "CONTRADICTED_EVIDENCE",
+      "STALE_CONTEXT",
+    ])
+
+    const surface = getTraceLedgerSurface()
+
+    expect(surface.confidenceMovementModel.map((entry) => entry.movement)).toEqual([
+      "confidence-raised",
+      "confidence-lowered",
+      "confidence-blocked",
+      "confidence-unchanged",
+    ])
+    expect(surface.confidenceMovementModel[0]?.authorityBoundary).toContain(
+      "does not grant authority",
+    )
+  })
+
+  it("defines a Failure-to-Eval candidate packet without creating evals", () => {
+    const surface = getTraceLedgerSurface()
+
+    expect(surface.evalCandidatePacket.requiredFields.map((field) => field.label)).toEqual([
+      "Candidate ID",
+      "Source trace",
+      "Failure classification",
+      "Evidence gap",
+      "Expected assertion",
+      "Risk level",
+      "Authority required",
+      "Blocked actions",
+    ])
+    expect(surface.evalCandidatePacket.blockedUntilAuthorized).toEqual(
+      expect.arrayContaining([
+        "create eval file",
+        "run eval",
+        "runtime trace collection",
+        "telemetry service activation",
+        "write memory",
+        "dispatch worker",
+        "invoke command runner",
+      ]),
+    )
+  })
+
   it("creates static trace records linked to WOs, evidence, memory, decisions, authority, and Council", () => {
     const surface = getTraceLedgerSurface()
+    const councilTrace = surface.records.find(
+      (record) => record.traceId === "trace-brain-council-advisory-complete",
+    )
     const authorityTrace = surface.records.find((record) => record.traceId === "trace-authority-refresh-pass")
     const memoryTrace = surface.records.find((record) => record.traceId === "trace-memory-governance-boundary")
 
+    expect(councilTrace).toMatchObject({
+      category: "COUNCIL_TRACE",
+      relatedGoal: "GOAL-WOS-003",
+      result: "pass",
+      failureType: "NONE",
+    })
+    expect(councilTrace?.whatItDoesNotAuthorize).toContain("Council runtime")
     expect(authorityTrace).toMatchObject({
       category: "AUTHORITY_TRACE",
       relatedGoal: "GOAL-WOS-007",
@@ -77,6 +139,7 @@ describe("Trace Ledger Registry", () => {
     const proposals = surface.evalProposals.map((proposal) => proposal.proposalId)
 
     expect(proposals).toEqual([
+      "eval-proposal-council-no-execution",
       "eval-proposal-owner-not-courier",
       "eval-proposal-runtime-repair-gate",
       "eval-proposal-trace-boundary",
@@ -121,11 +184,13 @@ describe("Trace Ledger Registry", () => {
     const surface = getTraceLedgerSurface()
 
     expect(surface.nextLaneDecision).toMatchObject({
-      recommendedBatch: "WILLIAMOS-ACADEMY-WIKI-BATCH-001",
-      recommendedOption: "B - Academy / Wiki",
+      recommendedBatch: "WILLIAMOS-TRACE-EVAL-EVIDENCE-POLISH-BATCH-001",
+      recommendedOption: "A - Trace/Eval evidence clarity polish",
     })
-    expect(surface.nextLaneDecision.blockedLanes).toContain("runtime training system")
+    expect(surface.nextLaneDecision.blockedLanes).toContain("runtime trace collection")
+    expect(surface.nextLaneDecision.blockedLanes).toContain("telemetry service")
     expect(surface.nextLaneDecision.blockedLanes).toContain("eval execution")
+    expect(surface.nextLaneDecision.blockedLanes).toContain("command runner")
     expect(surface.nextLaneDecision.blockedLanes).toContain("autonomy")
   })
 

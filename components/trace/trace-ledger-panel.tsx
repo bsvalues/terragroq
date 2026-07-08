@@ -23,6 +23,11 @@ export function TraceLedgerPanel() {
           decisions, authority gates, Council packets, blockers, and proposed evals.
           Trace explains. It does not execute.
         </p>
+        <div className="mt-3 grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
+          <TracePill label="Goal" value={surface.currentBatch.goal} />
+          <TracePill label="Batch" value={surface.currentBatch.batch} />
+          <TracePill label="Mode" value={surface.currentBatch.mode} />
+        </div>
       </div>
 
       <div className="grid gap-3 p-4 lg:grid-cols-[0.9fr_1.1fr]">
@@ -142,6 +147,89 @@ export function TraceLedgerPanel() {
         </div>
       </div>
 
+      <div className="grid gap-4 border-t border-border p-4 xl:grid-cols-2">
+        <div>
+          <p className="text-sm font-medium">Evidence gap classes</p>
+          <div className="mt-3 grid gap-2">
+            {surface.evidenceGapClassifications.map((gap) => (
+              <div key={gap.gapType} className="rounded-lg border border-border bg-background p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {gap.gapType}
+                  </p>
+                  <Badge variant="outline">{gap.confidenceEffect}</Badge>
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  {gap.description}
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  Safe default: {gap.safeDefault}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-sm font-medium">Confidence movement</p>
+          <div className="mt-3 grid gap-2">
+            {surface.confidenceMovementModel.map((rule) => (
+              <div key={rule.movement} className="rounded-lg border border-border bg-background p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {rule.movement}
+                  </p>
+                  <Badge variant="outline">advisory</Badge>
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  Trigger: {rule.trigger}
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  Trace requirement: {rule.traceRequirement}
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-destructive">
+                  Boundary: {rule.authorityBoundary}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t border-border p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-medium">{surface.evalCandidatePacket.title}</p>
+          <Badge variant="outline">proposal-only</Badge>
+        </div>
+        <p className="mt-2 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+          {surface.evalCandidatePacket.rule}
+        </p>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {surface.evalCandidatePacket.requiredFields.map((field) => (
+            <div key={field.label} className="rounded-lg border border-border bg-background p-3">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {field.label}
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {field.description}
+              </p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 rounded-lg border border-border bg-background p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Blocked until authorized
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {surface.evalCandidatePacket.blockedUntilAuthorized.map((action) => (
+              <Badge key={action} variant="outline">
+                {action}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      </div>
+
       <div className="grid gap-4 border-t border-border p-4 lg:grid-cols-3">
         <TraceLinks title="Work Order links" links={surface.workOrderLinks} />
         <TraceLinks title="Evidence links" links={surface.evidenceLinks} />
@@ -210,6 +298,17 @@ function TraceField({ label, values }: { label: string; values: string[] }) {
           <li key={value}>{value}</li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+function TracePill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-background px-3 py-2">
+      <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-1 text-xs leading-relaxed text-foreground">{value}</p>
     </div>
   )
 }

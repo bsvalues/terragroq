@@ -25,6 +25,22 @@ export type FailureType =
   | "SAFETY_STOP"
   | "UNKNOWN"
 
+export type EvidenceGapType =
+  | "MISSING_BASE_PROOF"
+  | "MISSING_PR_CHECKS"
+  | "MISSING_PRODUCTION_ROUTE_PROOF"
+  | "MISSING_OWNER_DECISION"
+  | "MISSING_AUTHORITY_GATE"
+  | "MISSING_SAFETY_FLAGS"
+  | "CONTRADICTED_EVIDENCE"
+  | "STALE_CONTEXT"
+
+export type ConfidenceMovement =
+  | "confidence-raised"
+  | "confidence-lowered"
+  | "confidence-blocked"
+  | "confidence-unchanged"
+
 export type TraceRecord = {
   traceId: string
   title: string
@@ -49,11 +65,38 @@ export type TraceRecord = {
   whatItDoesNotAuthorize: string
 }
 
+export type EvidenceGapClassification = {
+  gapType: EvidenceGapType
+  description: string
+  safeDefault: string
+  confidenceEffect: ConfidenceMovement
+}
+
+export type ConfidenceMovementRule = {
+  movement: ConfidenceMovement
+  trigger: string
+  traceRequirement: string
+  authorityBoundary: string
+}
+
 export type FailureClassification = {
   failureType: FailureType
   description: string
   safeDefault: string
   proposedEvalUse: string
+}
+
+export type FailureToEvalCandidateField = {
+  label: string
+  required: boolean
+  description: string
+}
+
+export type FailureToEvalCandidatePacket = {
+  title: string
+  rule: string
+  requiredFields: FailureToEvalCandidateField[]
+  blockedUntilAuthorized: string[]
 }
 
 export type FailureToEvalProposal = {
@@ -84,6 +127,13 @@ export type TraceSafetyProofCard = {
 }
 
 export type TraceLedgerSurface = {
+  currentBatch: {
+    goal: string
+    batch: string
+    base: string
+    mode: string
+    workOrders: string[]
+  }
   doctrine: {
     title: string
     statements: readonly string[]
@@ -94,6 +144,9 @@ export type TraceLedgerSurface = {
   }[]
   records: TraceRecord[]
   failureClassifications: FailureClassification[]
+  evidenceGapClassifications: EvidenceGapClassification[]
+  confidenceMovementModel: ConfidenceMovementRule[]
+  evalCandidatePacket: FailureToEvalCandidatePacket
   evalProposals: FailureToEvalProposal[]
   workOrderLinks: TraceLink[]
   evidenceLinks: TraceLink[]
@@ -201,7 +254,170 @@ export const FAILURE_CLASSIFICATIONS: FailureClassification[] = [
   proposedEvalUse,
 }))
 
+export const EVIDENCE_GAP_CLASSIFICATIONS: EvidenceGapClassification[] = [
+  [
+    "MISSING_BASE_PROOF",
+    "The trace names a base or result without current origin/main proof.",
+    "Mark the trace stale until current base evidence is cited.",
+    "confidence-blocked",
+  ],
+  [
+    "MISSING_PR_CHECKS",
+    "The trace claims PR readiness or mergeability without check evidence.",
+    "Lower confidence and require PR check proof before completion claims.",
+    "confidence-lowered",
+  ],
+  [
+    "MISSING_PRODUCTION_ROUTE_PROOF",
+    "The trace claims production health without route status evidence.",
+    "Block production-readiness claims until route proof is recorded.",
+    "confidence-blocked",
+  ],
+  [
+    "MISSING_OWNER_DECISION",
+    "The trace depends on Primary authority but no owner decision is identified.",
+    "Stop at owner decision required.",
+    "confidence-blocked",
+  ],
+  [
+    "MISSING_AUTHORITY_GATE",
+    "The trace recommends a protected next move without naming the gate.",
+    "Default deny and add the authority gate before recommending action.",
+    "confidence-blocked",
+  ],
+  [
+    "MISSING_SAFETY_FLAGS",
+    "The trace omits blocked runtime, execution, data, production, autonomy, or secret flags.",
+    "Lower confidence and require a safety sweep.",
+    "confidence-lowered",
+  ],
+  [
+    "CONTRADICTED_EVIDENCE",
+    "Current evidence conflicts with the trace conclusion.",
+    "Classify as blocked and require reconciliation before recommendation.",
+    "confidence-blocked",
+  ],
+  [
+    "STALE_CONTEXT",
+    "The trace uses older packet state where live repo, PR, or production state has moved.",
+    "Reconcile to current state before treating the trace as evidence.",
+    "confidence-lowered",
+  ],
+].map(([gapType, description, safeDefault, confidenceEffect]) => ({
+  gapType: gapType as EvidenceGapType,
+  description,
+  safeDefault,
+  confidenceEffect: confidenceEffect as ConfidenceMovement,
+}))
+
+export const CONFIDENCE_MOVEMENT_MODEL: ConfidenceMovementRule[] = [
+  {
+    movement: "confidence-raised",
+    trigger: "Current base, tests, build, PR checks, review threads, and production route proof are all cited.",
+    traceRequirement: "Record the exact evidence and the route/check result that raised confidence.",
+    authorityBoundary: "Higher confidence still does not grant authority.",
+  },
+  {
+    movement: "confidence-lowered",
+    trigger: "Evidence is partial, stale, indirect, or missing a non-critical proof point.",
+    traceRequirement: "Name the missing evidence gap and keep the recommendation advisory.",
+    authorityBoundary: "Lower confidence cannot be hidden by stronger wording.",
+  },
+  {
+    movement: "confidence-blocked",
+    trigger: "Owner authority, production proof, safety flags, or contradiction reconciliation is missing.",
+    traceRequirement: "Record the blocker and stop at the next safe gate.",
+    authorityBoundary: "Blocked confidence cannot become a Work Order without owner authority.",
+  },
+  {
+    movement: "confidence-unchanged",
+    trigger: "New evidence confirms the current conclusion but adds no new authority or proof depth.",
+    traceRequirement: "Append the corroborating evidence as static context only.",
+    authorityBoundary: "No state changes are implied.",
+  },
+]
+
+export const FAILURE_TO_EVAL_CANDIDATE_PACKET: FailureToEvalCandidatePacket = {
+  title: "Failure-to-Eval candidate packet",
+  rule:
+    "A failure can become an eval candidate only as a static proposal until a future Work Order authorizes implementation.",
+  requiredFields: [
+    {
+      label: "Candidate ID",
+      required: true,
+      description: "Stable identifier for the proposed eval candidate.",
+    },
+    {
+      label: "Source trace",
+      required: true,
+      description: "Trace record that captured the failure, blocker, or evidence gap.",
+    },
+    {
+      label: "Failure classification",
+      required: true,
+      description: "Failure type that explains why this could become an eval.",
+    },
+    {
+      label: "Evidence gap",
+      required: true,
+      description: "Missing or contradicted proof the future eval should guard.",
+    },
+    {
+      label: "Expected assertion",
+      required: true,
+      description: "Plain-language assertion a future eval might check.",
+    },
+    {
+      label: "Risk level",
+      required: true,
+      description: "Risk level if the failure repeats without coverage.",
+    },
+    {
+      label: "Authority required",
+      required: true,
+      description: "Future owner authority needed before writing or running any eval.",
+    },
+    {
+      label: "Blocked actions",
+      required: true,
+      description: "Runtime, command, worker, production, memory, or data actions still blocked.",
+    },
+  ],
+  blockedUntilAuthorized: [
+    "create eval file",
+    "run eval",
+    "runtime trace collection",
+    "telemetry service activation",
+    "write memory",
+    "dispatch worker",
+    "invoke command runner",
+  ],
+}
+
 export const TRACE_RECORDS: TraceRecord[] = [
+  {
+    traceId: "trace-brain-council-advisory-complete",
+    title: "Brain Council advisory layer completed without activation",
+    category: "COUNCIL_TRACE",
+    relatedGoal: "GOAL-WOS-003",
+    relatedLoop: "WILLIAMOS-BRAIN-COUNCIL-ADVISORY-BATCH-001",
+    relatedBatch: "WILLIAMOS-BRAIN-COUNCIL-ADVISORY-BATCH-001",
+    relatedWorkOrder: "WO-COUNCIL-001 through WO-COUNCIL-011",
+    relatedPr: "#324 and #325",
+    originMain: "aa824c3aee6d59a155f38572a62288f2e31e8330",
+    inputSummary: "Brain Council advisory doctrine, state, decision packet, evidence, confidence, and WOE recommendation model landed.",
+    reasoningSummary: "The Council can advise, cite evidence, rate confidence and risk, and recommend WOs, but it remains static/read-only and cannot activate tools, workers, Hermes, MCP, memory writes, or production behavior.",
+    evidenceUsed: ["PR #324 merged", "PR #325 merged", "production /brain-council 200", "Council safety tests"],
+    memoryReferenced: ["Brain Council Advisory Layer completion"],
+    councilPacket: "Council is available as advisory context for Trace/Eval, not as a runtime actor.",
+    ownerDecision: "Trace Ledger + Failure-to-Eval selected as the next read-only proof-history lane.",
+    authorityGate: "COUNCIL_RUNTIME_GATE",
+    result: "pass",
+    failureType: "NONE",
+    proposedEval: "Future eval candidates should assert Council recommendations never imply execution authority.",
+    whatItProves: "Council advisory state can feed Trace/Eval evidence without adding Council runtime power.",
+    whatItDoesNotAuthorize: "Does not authorize Council runtime, autonomous reasoning loop, tool calls, Hermes/MCP activation, worker activation, memory writes, or production writes.",
+  },
   {
     traceId: "trace-authority-refresh-pass",
     title: "Authority refresh closed the governance gate",
@@ -252,12 +468,12 @@ export const TRACE_RECORDS: TraceRecord[] = [
     traceId: "trace-owner-not-courier-contract",
     title: "Owner is not the courier",
     category: "LOOP_TRACE",
-    relatedGoal: "GOAL-WOS-008",
-    relatedLoop: "WILLIAMOS-TRACE-LEDGER-FAILURE-EVAL-BATCH-001",
-    relatedBatch: "WILLIAMOS-TRACE-LEDGER-FAILURE-EVAL-BATCH-001",
-    relatedWorkOrder: "WO-TRACE-001 through WO-TRACE-017",
+    relatedGoal: "GOAL-WOS-005",
+    relatedLoop: "WILLIAMOS-TRACE-EVAL-BATCH-001",
+    relatedBatch: "WILLIAMOS-TRACE-EVAL-BATCH-001",
+    relatedWorkOrder: "WO-TRACE-001 through WO-TRACE-009",
     relatedPr: "current batch",
-    originMain: "0f1ebf24c5da8533add476a413326dfd82e81a39",
+    originMain: "aa824c3aee6d59a155f38572a62288f2e31e8330",
     inputSummary: "The packet requires Codex to operate the loop instead of returning partial WO handoffs.",
     reasoningSummary: "The trace lane records the operator contract as a static trace so future batches can preserve the same continuation rule.",
     evidenceUsed: ["Trace doctrine", "Owner decision queue", "Authority refresh"],
@@ -297,6 +513,19 @@ export const TRACE_RECORDS: TraceRecord[] = [
 ]
 
 export const FAILURE_TO_EVAL_PROPOSALS: FailureToEvalProposal[] = [
+  {
+    proposalId: "eval-proposal-council-no-execution",
+    sourceTrace: "trace-brain-council-advisory-complete",
+    failureType: "SCOPE_CONFLICT",
+    proposedEvalTitle: "Council advice never implies execution authority",
+    proposedEvalScope: "Council, WOE, and Trace safety language",
+    evidenceNeeded: ["Council decision packet schema", "Trace safety proof cards", "WOE recommendation model"],
+    expectedAssertion: "Council recommendations can cite evidence and recommend WOs, but cannot execute, create WOs automatically, or invoke Codex.",
+    riskLevel: "medium",
+    authorityRequired: "Future eval implementation authority",
+    status: "proposal-only",
+    whatThisDoesNotDo: "Does not create, write, or run an eval; does not activate Council runtime.",
+  },
   {
     proposalId: "eval-proposal-owner-not-courier",
     sourceTrace: "trace-owner-not-courier-contract",
@@ -343,11 +572,13 @@ function link(traceId: string, relatedItem: string, relationship: string, bounda
 }
 
 export const TRACE_WORK_ORDER_LINKS = [
+  link("trace-brain-council-advisory-complete", "WO-COUNCIL-001 through WO-COUNCIL-011", "Council advisory source", "Read-only trace linkage only."),
   link("trace-authority-refresh-pass", "WO-AUTHORITY-001 through WO-AUTHORITY-017", "Authority refresh source", "Read-only report linkage only."),
-  link("trace-owner-not-courier-contract", "WO-TRACE-001 through WO-TRACE-017", "Current trace batch", "No work-order execution controls."),
+  link("trace-owner-not-courier-contract", "WO-TRACE-001 through WO-TRACE-009", "Current trace batch", "No work-order execution controls."),
 ]
 
 export const TRACE_EVIDENCE_LINKS = [
+  link("trace-brain-council-advisory-complete", "docs/reports/WO-COUNCIL-011-focused-tests-final-rollup.md", "Council final evidence", "Evidence does not activate Council."),
   link("trace-authority-refresh-pass", "docs/reports/WO-AUTHORITY-016-authority-registry-rollup.md", "Rollup evidence", "Evidence proves completion but grants no authority."),
   link("trace-docker-runtime-timeout", "Docker runtime repair reports", "Failure evidence", "Historical evidence only; no runtime inspection."),
 ]
@@ -369,6 +600,7 @@ export const TRACE_AUTHORITY_LINKS = [
 ]
 
 export const TRACE_COUNCIL_LINKS = [
+  link("trace-brain-council-advisory-complete", "Council advisory surface", "Council feeds trace confidence", "Advisory only; no Council runtime."),
   link("trace-authority-refresh-pass", "Brain Council Advisory Layer", "Council-advised next lane", "Council recommends but does not execute."),
   link("trace-owner-not-courier-contract", "Council packet authority boundary", "Advisory context", "No Council runtime or worker activation."),
 ]
@@ -385,10 +617,30 @@ export const TRACE_SAFETY_PROOF_CARDS: TraceSafetyProofCard[] = [
 
 export function getTraceLedgerSurface(): TraceLedgerSurface {
   return {
+    currentBatch: {
+      goal: "GOAL-WOS-005 - Trace Ledger + Failure-to-Eval",
+      batch: "WILLIAMOS-TRACE-EVAL-BATCH-001",
+      base: "origin/main = aa824c3aee6d59a155f38572a62288f2e31e8330",
+      mode: "static/read-only proof history and eval candidate modeling",
+      workOrders: [
+        "WO-TRACE-001 - Trace Ledger Doctrine + Static Model",
+        "WO-TRACE-002 - Trace Ledger Surface / Registry Placement",
+        "WO-TRACE-003 - Failure Taxonomy Model",
+        "WO-TRACE-004 - Evidence Gap + Confidence Movement Model",
+        "WO-TRACE-005 - Failure-to-Eval Candidate Packet Model",
+        "WO-TRACE-006 - Council / WOE / Evidence Cross-Link Pass",
+        "WO-TRACE-007 - Academy / Wiki Trace + Eval Learning Pass",
+        "WO-TRACE-008 - Safety Sweep: No Runtime Trace Collection / No Eval Runner",
+        "WO-TRACE-009 - Focused Tests + Final Evidence Rollup",
+      ],
+    },
     doctrine: TRACE_DOCTRINE,
     categories: TRACE_CATEGORIES,
     records: TRACE_RECORDS,
     failureClassifications: FAILURE_CLASSIFICATIONS,
+    evidenceGapClassifications: EVIDENCE_GAP_CLASSIFICATIONS,
+    confidenceMovementModel: CONFIDENCE_MOVEMENT_MODEL,
+    evalCandidatePacket: FAILURE_TO_EVAL_CANDIDATE_PACKET,
     evalProposals: FAILURE_TO_EVAL_PROPOSALS,
     workOrderLinks: TRACE_WORK_ORDER_LINKS,
     evidenceLinks: TRACE_EVIDENCE_LINKS,
@@ -406,17 +658,19 @@ export function getTraceLedgerSurface(): TraceLedgerSurface {
       { label: "Brain Council", href: "/brain-council", description: "Inspect advisory context without Council runtime." },
     ],
     nextLaneDecision: {
-      recommendedBatch: "WILLIAMOS-ACADEMY-WIKI-BATCH-001",
-      recommendedOption: "B - Academy / Wiki",
+      recommendedBatch: "WILLIAMOS-TRACE-EVAL-EVIDENCE-POLISH-BATCH-001",
+      recommendedOption: "A - Trace/Eval evidence clarity polish",
       blockedLanes: [
-        "runtime training system",
+        "runtime trace collection",
+        "telemetry service",
         "eval execution",
+        "command runner",
         "autonomy",
-        "metadata expansion",
-        "runtime control",
+        "memory write",
+        "dynamic ingestion",
       ],
       reason:
-        "After WOE, Evidence, Owner Decisions, Memory, Brain Council, Authority, and Trace Ledger, WilliamOS needs Academy/Wiki to make the system teachable and easier for Codex to operate without making the Owner the courier.",
+        "Trace/Eval now has the static proof-history model. The next safe lane should polish evidence clarity or pause for owner direction, not open runtime telemetry or eval execution.",
     },
     safety: {
       staticReadOnly: true,
