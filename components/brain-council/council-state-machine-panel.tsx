@@ -37,6 +37,22 @@ export function CouncilStateMachinePanel() {
             </p>
             <div className="mt-3 border-t border-border pt-3">
               <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Allowed outputs
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {state.allowedOutputs.join(", ")}
+              </p>
+            </div>
+            <div className="mt-3 border-t border-border pt-3">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Evidence to advance
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {state.requiredEvidence.join(", ")}
+              </p>
+            </div>
+            <div className="mt-3 border-t border-border pt-3">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
                 Next guarded transition
               </p>
               {state.allowedTransitions[0] ? (
@@ -50,6 +66,14 @@ export function CouncilStateMachinePanel() {
                 </p>
               )}
             </div>
+            <div className="mt-3 border-t border-border pt-3">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Authority
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {state.authorityImplication}
+              </p>
+            </div>
           </div>
         ))}
       </div>
@@ -57,7 +81,7 @@ export function CouncilStateMachinePanel() {
       <div className="flex items-start gap-2 border-t border-border bg-muted/10 px-4 py-3">
         <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden={true} />
         <p className="text-xs leading-relaxed text-muted-foreground">
-          This state machine is descriptive. It does not execute transitions, start loops,
+          {machine.noRuntimeTransitionDisclaimer} It does not execute transitions, start loops,
           dispatch workers, or write production data.
         </p>
       </div>

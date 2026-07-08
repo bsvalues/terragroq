@@ -25,6 +25,17 @@ describe("Brain Council doctrine", () => {
       expect.objectContaining({ label: "Authority transfer", state: "owner-gated" }),
       expect.objectContaining({ label: "Decision packet", state: "read-only" }),
     ])
+    expect(doctrine.relationships.map((relationship) => relationship.label)).toEqual([
+      "Primary authority",
+      "Work Orders",
+      "Evidence",
+      "Hermes boundary",
+      "Academy and Wiki",
+      "Memory and Trace",
+    ])
+    expect(doctrine.relationships.map((relationship) => relationship.description).join(" ")).toContain(
+      "not runtime Council memory",
+    )
   })
 
   it("does not grant execution, MCP, Hermes, production, or authority powers", () => {

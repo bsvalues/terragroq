@@ -15,6 +15,7 @@ export type BrainCouncilDoctrine = {
   summary: string
   principles: BrainCouncilDoctrinePrinciple[]
   boundaries: BrainCouncilDoctrineBoundary[]
+  relationships: BrainCouncilDoctrinePrinciple[]
   operatingRule: string
   safety: {
     advisoryOnly: true
@@ -76,6 +77,32 @@ export function getBrainCouncilDoctrine(): BrainCouncilDoctrine {
         label: "Decision packet",
         state: "read-only",
         description: "Decision packets are prepared for review; they do not trigger action by themselves.",
+      },
+    ],
+    relationships: [
+      {
+        label: "Primary authority",
+        description: "The Council may advise the Primary, but authority stays with the Primary.",
+      },
+      {
+        label: "Work Orders",
+        description: "Recommendations become Work Order packets before Codex may operate.",
+      },
+      {
+        label: "Evidence",
+        description: "Evidence drives confidence and missing evidence blocks or lowers recommendations.",
+      },
+      {
+        label: "Hermes boundary",
+        description: "Council cannot activate Hermes, MCP, workers, tools, or sidecars.",
+      },
+      {
+        label: "Academy and Wiki",
+        description: "Academy/Wiki explain the advisory boundary as static doctrine.",
+      },
+      {
+        label: "Memory and Trace",
+        description: "Memory and Trace are future proof-history lanes, not runtime Council memory in this batch.",
       },
     ],
     operatingRule:

@@ -53,6 +53,20 @@ export function BrainCouncilDoctrinePanel() {
         ))}
       </div>
 
+      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-2 xl:grid-cols-3">
+        {doctrine.relationships.map((relationship) => (
+          <div key={relationship.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Relationship
+            </p>
+            <p className="mt-2 text-sm font-semibold">{relationship.label}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {relationship.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
       <div className="flex items-start gap-2 px-4 py-3">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden={true} />
         <p className="text-xs leading-relaxed text-muted-foreground">

@@ -63,6 +63,89 @@ export function CouncilAdvisorySurfacePanel() {
         ))}
       </div>
 
+      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-2 xl:grid-cols-3">
+        {surface.evidenceRequirements.map((item) => (
+          <div key={item.type} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.requiredFor}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.type}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.missingBehavior}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-b border-border bg-muted/10 p-4 md:grid-cols-2 xl:grid-cols-4">
+        {surface.confidenceRiskModel.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.level}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.label}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-b border-border p-4 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="rounded-lg border border-border bg-background p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Recommendation to WOE
+          </p>
+          <p className="mt-2 text-sm font-semibold">{surface.recommendationModel.label}</p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            {surface.recommendationModel.rule}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {surface.recommendationModel.requiredFields.map((field) => (
+              <span key={field} className="rounded-full border border-border bg-muted/40 px-2 py-1 font-mono text-[10px] text-muted-foreground">
+                {field}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-lg border border-destructive/25 bg-destructive/10 p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-destructive">
+            Recommendation cannot
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            {surface.recommendationModel.blockedActions.join(", ")}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 border-b border-border p-4 md:grid-cols-2 xl:grid-cols-4">
+        {surface.blockedDeniedDoctrine.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.level}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.label}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 border-b border-border bg-muted/10 p-4 md:grid-cols-2 xl:grid-cols-3">
+        {surface.registryCoverage.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {item.value}
+            </p>
+            <p className="mt-2 text-sm font-semibold">{item.label}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
       <div className="grid gap-3 border-b border-border p-4 lg:grid-cols-[1fr_1.2fr]">
         <div className="rounded-lg border border-border bg-background p-3">
           <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -86,7 +169,7 @@ export function CouncilAdvisorySurfacePanel() {
       <div className="px-4 py-3">
         <p className="text-xs leading-relaxed text-muted-foreground">
           Council overview cannot execute, create Work Orders, grant authority, activate tools,
-          or write production data.
+          activate Hermes/MCP, write memory, ingest dynamically, or write production data.
         </p>
       </div>
     </section>

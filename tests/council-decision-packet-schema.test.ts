@@ -15,13 +15,26 @@ describe("Council decision packet schema", () => {
       "blocked-for-authority",
     ])
     expect(schema.requiredFields.map((field) => field.label)).toEqual([
-      "Question",
-      "Evidence",
-      "Unknowns",
+      "Packet ID",
+      "Goal ID",
+      "Work Order ID",
+      "Problem statement",
+      "Context used",
+      "Evidence used",
+      "Assumptions",
+      "Options considered",
       "Recommendation",
-      "Required verification",
+      "Confidence",
+      "Risk rating",
+      "Safety flags",
       "Blocked actions",
+      "Authority required",
+      "Validation required",
+      "Evidence required",
+      "Recommended Work Order",
+      "Next safe gate",
     ])
+    expect(schema.criticalRule).toBe("Decision packets recommend. They do not execute.")
   })
 
   it("requires Work Order, Primary approval, and evidence checks", () => {
@@ -59,19 +72,30 @@ describe("Council decision packet schema", () => {
   it("only marks packets reviewable when required fields are present", () => {
     expect(
       isCouncilDecisionPacketReviewable({
-        Question: "Should the Council recommend the next Work Order?",
-        Evidence: "Production health and tests passed.",
-        Unknowns: "Review coverage may be incomplete.",
+        "Packet ID": "COUNCIL-PACKET-001",
+        "Goal ID": "GOAL-WOS-003",
+        "Problem statement": "Should the Council recommend the next Work Order?",
+        "Context used": "Current origin/main and reports.",
+        "Evidence used": "Production health and tests passed.",
+        Assumptions: "Review coverage may be incomplete.",
+        "Options considered": "No action, docs-only, static advisory update.",
         Recommendation: "Prepare a bounded Work Order.",
-        "Required verification": "Run tests and production checks.",
+        Confidence: "medium",
+        "Risk rating": "low",
+        "Safety flags": "no runtime",
         "Blocked actions": "No execution without authority.",
+        "Authority required": "Primary approval",
+        "Validation required": "Run tests and production checks.",
+        "Evidence required": "PR checks",
+        "Recommended Work Order": "WO-COUNCIL-011",
+        "Next safe gate": "Trace Ledger",
       }),
     ).toBe(true)
 
     expect(
       isCouncilDecisionPacketReviewable({
-        Question: "Can this execute?",
-        Evidence: "No",
+        "Problem statement": "Can this execute?",
+        "Evidence used": "No",
       }),
     ).toBe(false)
   })
