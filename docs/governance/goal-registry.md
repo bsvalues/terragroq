@@ -83,7 +83,7 @@ Current loop:
 5. `GOAL-MEMORY-001 - Brain Memory Spine`
 6. `GOAL-TRACE-001 - Trace Ledger + Failure-to-Eval`
 7. `GOAL-ACADEMY-001 - Academy + Wiki`
-8. `GOAL-FORGE-001 - Agent Forge Skill Governance`
+8. `GOAL-WOS-007 - Agent Forge Skill Governance`
 9. `GOAL-HERMES-001 - Hermes Sidecar Boundary`
 10. `GOAL-COUNTY-001 - County Ops Knowledge Pack`
 11. `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer`
@@ -142,11 +142,11 @@ First loop: `WO-ACADEMY-001 - Academy/Wiki Directory Map`
 
 Blocked: product behavior changes unless separately scoped.
 
-### `GOAL-FORGE-001 - Agent Forge Skill Governance`
+### `GOAL-WOS-007 - Agent Forge Skill Governance`
 
 Purpose: prepare and review skills safely before any worker can use them.
 
-First loop: `WO-FORGE-001 - Skill Registry Schema`
+First loop: `WO-FORGE-001 - Agent Forge Doctrine Page`
 
 Blocked: skill activation or execution.
 
