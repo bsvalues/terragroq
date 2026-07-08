@@ -30,7 +30,7 @@ describe("Academy Wiki Registry", () => {
     expect(doctrine).toContain("or authorize action")
   })
 
-  it("creates static lessons for onboarding, goal loop, WOs, WOE integration, evidence authority decisions, memory council trace, Brain Council advisory, and Local OMEN", () => {
+  it("creates static lessons for onboarding, goal loop, WOs, WOE integration, evidence authority decisions, memory council trace, Trace/Eval, Brain Council advisory, and Local OMEN", () => {
     expect(ACADEMY_LESSONS.map((lesson) => lesson.lessonId)).toEqual([
       "lesson-operator-onboarding",
       "lesson-goal-loop",
@@ -38,6 +38,7 @@ describe("Academy Wiki Registry", () => {
       "lesson-work-order-engine-integration",
       "lesson-evidence-authority-decision",
       "lesson-memory-council-trace",
+      "lesson-trace-ledger-failure-eval",
       "lesson-brain-council-advisory-layer",
       "lesson-local-omen-runtime",
     ])
@@ -76,6 +77,7 @@ describe("Academy Wiki Registry", () => {
     const onboarding = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-operator-onboarding")
     const goalLoop = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-goal-loop")
     const woe = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-work-order-engine-integration")
+    const trace = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-trace-ledger-failure-eval")
     const council = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-brain-council-advisory-layer")
     const local = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-local-omen-runtime")
 
@@ -84,6 +86,26 @@ describe("Academy Wiki Registry", () => {
     expect(woe?.whatThisTeaches.join(" ")).toContain("WOE state can be native")
     expect(woe?.whatThisDoesNotEnable).toContain("command runner")
     expect(woe?.whatThisDoesNotEnable).toContain("autonomous loop execution")
+    expect(trace?.whatThisTeaches.join(" ")).toContain("Evidence gaps lower or block confidence")
+    expect(trace?.relatedWorkOrders).toEqual([
+      "WO-TRACE-001",
+      "WO-TRACE-002",
+      "WO-TRACE-003",
+      "WO-TRACE-004",
+      "WO-TRACE-005",
+      "WO-TRACE-006",
+      "WO-TRACE-007",
+      "WO-TRACE-008",
+      "WO-TRACE-009",
+    ])
+    expect(trace?.relatedAuthorityGates).toEqual([
+      "COMMAND_RUNNER_GATE",
+      "AUTONOMOUS_LOOP_GATE",
+      "MEMORY_WRITE_GATE",
+      "TOOL_CALL_GATE",
+    ])
+    expect(trace?.whatThisDoesNotEnable).toContain("runtime trace collection")
+    expect(trace?.whatThisDoesNotEnable).toContain("eval runner")
     expect(council?.whatThisTeaches.join(" ")).toContain("Recommendations become Work Order packets")
     expect(council?.whatThisDoesNotEnable).toContain("Council runtime")
     expect(council?.whatThisDoesNotEnable).toContain("Hermes/MCP activation")
@@ -114,6 +136,9 @@ describe("Academy Wiki Registry", () => {
       "Council Risk",
       "Trace Ledger",
       "Failure-to-Eval",
+      "Evidence Gap",
+      "Confidence Movement",
+      "Eval Candidate",
       "Eval",
       "Hermes",
       "MCP",
@@ -146,7 +171,9 @@ describe("Academy Wiki Registry", () => {
     expect(pages.get("wiki-brain-council")?.whatItIs).toContain("evidence-backed recommendations")
     expect(pages.get("wiki-brain-council")?.whatItIsNot).toContain("autonomous reasoning loop")
     expect(pages.get("wiki-hermes")?.whatItIsNot).toContain("active worker")
-    expect(pages.get("wiki-trace-ledger")?.whatItIsNot).toContain("eval execution")
+    expect(pages.get("wiki-trace-ledger")?.whatItIs).toContain("eval-candidate proposal model")
+    expect(pages.get("wiki-trace-ledger")?.whatItIsNot).toContain("telemetry service")
+    expect(pages.get("wiki-trace-ledger")?.relatedSurfaces).toContain("/brain-council")
     expect(pages.get("wiki-county-ops")?.whatItIs).toContain("PACS rules")
     expect(pages.get("wiki-county-ops")?.whatItIsNot).toContain("PACS connection")
     expect(pages.get("wiki-county-ops")?.relatedAuthority).toContain("TERRAFUSION_TOUCH_GATE")

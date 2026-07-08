@@ -2,6 +2,15 @@
 
 RESULT: PASS
 
+SUPERSEDED_BY: WO-TRACE-009 — Focused Tests + Final Evidence Rollup
+
+SUPERSEDED_REASON: This was the historical next-lane decision from the earlier
+Trace Ledger batch. Its recommended Academy/Wiki lane has since completed. The
+current `/trace` surface now points to Trace/Eval evidence clarity polish as the
+next safe static/read-only lane, while runtime trace collection, telemetry,
+eval execution, command runners, autonomy, memory writes, and dynamic ingestion
+remain blocked.
+
 Decision packet created for the next major lane after Trace Ledger / Failure-to-Eval.
 
 OPTIONS CLASSIFIED:

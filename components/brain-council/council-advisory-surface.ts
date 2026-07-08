@@ -132,7 +132,7 @@ export function getCouncilAdvisorySurface(): CouncilAdvisorySurface {
         missingBehavior: "block if runtime, execution, auth, DB, memory, or secret flags are unclear",
       },
       {
-        type: "Academy/Wiki, Hermes, and WOE doctrine",
+        type: "Academy/Wiki, Hermes, WOE, and Trace/Eval doctrine",
         requiredFor: "medium confidence",
         missingBehavior: "treat recommendation as doctrine-incomplete",
       },
@@ -203,6 +203,7 @@ export function getCouncilAdvisorySurface(): CouncilAdvisorySurface {
       { label: "Work Orders", value: "/work-orders", description: "Recommendations become WOE packets, not direct actions." },
       { label: "Evidence", value: "/audit", description: "Proof drives confidence and blocks weak advice." },
       { label: "Academy/Wiki", value: "/academy", description: "Static lessons and glossary cross-links." },
+      { label: "Trace/Eval", value: "/trace", description: "Static proof history, evidence gaps, and eval candidates." },
       { label: "Hermes", value: "/hermes", description: "Council cannot activate Hermes or MCP." },
       { label: "Authority", value: "/governance", description: "Owner gates remain outside Council control." },
     ],

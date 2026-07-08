@@ -24,7 +24,7 @@ describe("Council advisory surface", () => {
       "PR/check status",
       "production verification",
       "safety posture",
-      "Academy/Wiki, Hermes, and WOE doctrine",
+      "Academy/Wiki, Hermes, WOE, and Trace/Eval doctrine",
     ])
   })
 
@@ -66,6 +66,7 @@ describe("Council advisory surface", () => {
     expect(links.get("Work Orders")).toBe("/work-orders")
     expect(links.get("Evidence")).toBe("/audit")
     expect(links.get("Academy/Wiki")).toBe("/academy")
+    expect(links.get("Trace/Eval")).toBe("/trace")
     expect(links.get("Hermes")).toBe("/hermes")
     expect(links.get("Authority")).toBe("/governance")
   })
