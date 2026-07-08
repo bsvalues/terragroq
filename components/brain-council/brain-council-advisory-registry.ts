@@ -84,8 +84,12 @@ export type BrainCouncilAdvisoryRegistry = {
   detailPacket: CouncilDecisionPacket
   recommendations: CouncilRecommendation[]
   evidenceLinks: CouncilLink[]
+  workOrderLinks: CouncilLink[]
+  authorityLinks: CouncilLink[]
   memoryLinks: CouncilLink[]
+  traceLinks: CouncilLink[]
   ownerDecisionLinks: CouncilLink[]
+  academyWikiLinks: CouncilLink[]
   safetyProofCards: CouncilSafetyProofCard[]
   navigation: {
     label: string
@@ -124,6 +128,14 @@ export type BrainCouncilAdvisoryRegistry = {
     lanExposureEnabled: false
     cloudChanged: false
     productionDeployAdded: false
+    productionWriteBehaviorAdded: false
+    authBehaviorChanged: false
+    authPolicyChanged: false
+    publicSignupReintroduced: false
+    dbSchemaChanged: false
+    envChanged: false
+    packageChanged: false
+    vercelSettingsChanged: false
     secretsDisclosed: false
     terraFusionPacsTouched: false
     unrelatedContainersTouched: false
@@ -253,7 +265,7 @@ export const COUNCIL_DECISION_PACKETS: CouncilDecisionPacket[] = [
     stopCondition: "Stop if implementation adds execution, tool calls, worker activation, dynamic retrieval, or memory writes.",
     recommendation: "Create a static/read-only Brain Council Advisory layer and keep all runtime powers blocked.",
     ownerDecisionNeeded: "No owner decision needed for static read-only display; owner decision required for any action lane.",
-    recommendedWorkOrder: "WO-COUNCIL-001 through WO-COUNCIL-015",
+    recommendedWorkOrder: "WO-COUNCIL-001 through WO-COUNCIL-017",
     blockedActions: [
       "run Council",
       "ask Council runtime action",
@@ -316,7 +328,7 @@ export const COUNCIL_DECISION_PACKETS: CouncilDecisionPacket[] = [
 
 export const COUNCIL_RECOMMENDATIONS: CouncilRecommendation[] = [
   {
-    recommendedWorkOrder: "WO-COUNCIL-001 through WO-COUNCIL-015",
+    recommendedWorkOrder: "WO-COUNCIL-001 through WO-COUNCIL-017",
     reason: "Create the first static advisory layer after Memory Governance.",
     evidenceBasis: ["PR #289", "evidence-owner-decision-queue", "evidence-authority-governance-registry"],
     memoryBasis: ["memory-evidence-spine-current", "memory-owner-decision-queue-current"],
@@ -356,6 +368,53 @@ export const COUNCIL_EVIDENCE_LINKS: CouncilLink[] = [
   },
 ]
 
+export const COUNCIL_WORK_ORDER_LINKS: CouncilLink[] = [
+  {
+    label: "Completed WOE dependency",
+    packetId: "council-packet-advisory-next-lane",
+    relatedItem: "GOAL-WOS-002",
+    description:
+      "Work Order Engine Integration is complete and used only as static dependency context; this lane does not perform more WOE integration work.",
+  },
+  {
+    label: "Brain Council batch",
+    packetId: "council-packet-advisory-next-lane",
+    relatedItem: "WO-COUNCIL-001 through WO-COUNCIL-017",
+    description:
+      "The advisory batch is represented as bounded Work Orders, not as a runtime Council loop.",
+  },
+  {
+    label: "Recommended Work Order shape",
+    packetId: "council-packet-authority-needed",
+    relatedItem: "future-owner-authorized-wo-only",
+    description:
+      "Council advice may recommend Work Order shape, but it cannot create, run, or advance Work Orders.",
+  },
+]
+
+export const COUNCIL_AUTHORITY_LINKS: CouncilLink[] = [
+  {
+    label: "Primary authority",
+    packetId: "council-packet-authority-needed",
+    relatedItem: "authority-primary-owner",
+    description: "The Primary remains the approving authority for any advisory-to-action path.",
+  },
+  {
+    label: "Runtime authority blocked",
+    packetId: "council-packet-advisory-next-lane",
+    relatedItem: "authority-runtime-control-gate",
+    description:
+      "Council recommendations do not authorize command execution, runtime control, tools, workers, Hermes, or MCP.",
+  },
+  {
+    label: "Metadata authority blocked",
+    packetId: "council-packet-advisory-next-lane",
+    relatedItem: "authority-metadata-expansion-gate",
+    description:
+      "Docker, backup, port, filesystem, and dynamic metadata expansion remain outside this advisory lane.",
+  },
+]
+
 export const COUNCIL_MEMORY_LINKS: CouncilLink[] = [
   {
     label: "Evidence Spine memory",
@@ -377,6 +436,23 @@ export const COUNCIL_MEMORY_LINKS: CouncilLink[] = [
   },
 ]
 
+export const COUNCIL_TRACE_LINKS: CouncilLink[] = [
+  {
+    label: "Trace Ledger boundary",
+    packetId: "council-packet-advisory-next-lane",
+    relatedItem: "trace-ledger-static-read-only",
+    description:
+      "Trace records can explain advisory reasoning, but this lane adds no runtime tracing or background collection.",
+  },
+  {
+    label: "Failure-to-eval boundary",
+    packetId: "council-packet-authority-needed",
+    relatedItem: "failure-to-eval-proposal-only",
+    description:
+      "Council may point to future eval proposals, but it cannot create tests, run evals, or integrate CI.",
+  },
+]
+
 export const COUNCIL_OWNER_DECISION_LINKS: CouncilLink[] = [
   {
     label: "Command execution blocked",
@@ -395,6 +471,30 @@ export const COUNCIL_OWNER_DECISION_LINKS: CouncilLink[] = [
     packetId: "council-packet-authority-needed",
     relatedItem: "decision-codex-automation",
     description: "Council recommendations do not launch Codex automation.",
+  },
+]
+
+export const COUNCIL_ACADEMY_WIKI_LINKS: CouncilLink[] = [
+  {
+    label: "Academy learning path",
+    packetId: "council-packet-advisory-next-lane",
+    relatedItem: "docs/academy/operator-training/brain-council-advisory-layer.md",
+    description:
+      "Academy material teaches Council as advisory only; it does not grant agent or runtime authority.",
+  },
+  {
+    label: "Wiki concept doctrine",
+    packetId: "council-packet-advisory-next-lane",
+    relatedItem: "docs/wiki/concepts/brain-council.md",
+    description:
+      "Wiki doctrine records Brain Council as recommendation and review, not execution or autonomy.",
+  },
+  {
+    label: "Hermes boundary reference",
+    packetId: "council-packet-authority-needed",
+    relatedItem: "docs/wiki/concepts/hermes-sidecar.md",
+    description:
+      "Council may reference Hermes doctrine, but it cannot activate Hermes, MCP, workers, or sidecars.",
   },
 ]
 
@@ -420,8 +520,12 @@ export function getBrainCouncilAdvisoryRegistry(): BrainCouncilAdvisoryRegistry 
       COUNCIL_DECISION_PACKETS[0],
     recommendations: COUNCIL_RECOMMENDATIONS,
     evidenceLinks: COUNCIL_EVIDENCE_LINKS,
+    workOrderLinks: COUNCIL_WORK_ORDER_LINKS,
+    authorityLinks: COUNCIL_AUTHORITY_LINKS,
     memoryLinks: COUNCIL_MEMORY_LINKS,
+    traceLinks: COUNCIL_TRACE_LINKS,
     ownerDecisionLinks: COUNCIL_OWNER_DECISION_LINKS,
+    academyWikiLinks: COUNCIL_ACADEMY_WIKI_LINKS,
     safetyProofCards: COUNCIL_SAFETY_PROOF_CARDS,
     navigation: [
       {
@@ -485,6 +589,14 @@ export function getBrainCouncilAdvisoryRegistry(): BrainCouncilAdvisoryRegistry 
       lanExposureEnabled: false,
       cloudChanged: false,
       productionDeployAdded: false,
+      productionWriteBehaviorAdded: false,
+      authBehaviorChanged: false,
+      authPolicyChanged: false,
+      publicSignupReintroduced: false,
+      dbSchemaChanged: false,
+      envChanged: false,
+      packageChanged: false,
+      vercelSettingsChanged: false,
       secretsDisclosed: false,
       terraFusionPacsTouched: false,
       unrelatedContainersTouched: false,

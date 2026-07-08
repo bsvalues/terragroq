@@ -55,7 +55,7 @@ describe("Brain Council advisory registry", () => {
       packetId: "council-packet-advisory-next-lane",
       advisoryState: "WORK_ORDER_RECOMMENDED",
       confidence: "high",
-      recommendedWorkOrder: "WO-COUNCIL-001 through WO-COUNCIL-015",
+      recommendedWorkOrder: "WO-COUNCIL-001 through WO-COUNCIL-017",
     })
     expect(packet.evidenceUsed).toContain("evidence-owner-decision-queue")
     expect(packet.memoryUsed).toContain("memory-authority-registry-current")
@@ -76,14 +76,18 @@ describe("Brain Council advisory registry", () => {
     expect(packet.stopCondition).toContain("Stop if implementation adds execution")
   })
 
-  it("links Council packets to Evidence, Memory, and Owner Decisions statically", () => {
+  it("links Council packets to Evidence, Work Orders, Authority, Memory, Trace, Owner Decisions, Academy, and Wiki statically", () => {
     const registry = getBrainCouncilAdvisoryRegistry()
     const packetIds = new Set(registry.packets.map((packet) => packet.packetId))
 
     for (const link of [
       ...registry.evidenceLinks,
+      ...registry.workOrderLinks,
+      ...registry.authorityLinks,
       ...registry.memoryLinks,
+      ...registry.traceLinks,
       ...registry.ownerDecisionLinks,
+      ...registry.academyWikiLinks,
     ]) {
       expect(packetIds.has(link.packetId)).toBe(true)
       expect(link.relatedItem.length).toBeGreaterThan(0)
@@ -91,11 +95,20 @@ describe("Brain Council advisory registry", () => {
     }
   })
 
+  it("uses completed WOE only as a static dependency", () => {
+    const registry = getBrainCouncilAdvisoryRegistry()
+    const woeLink = registry.workOrderLinks.find((link) => link.relatedItem === "GOAL-WOS-002")
+
+    expect(woeLink?.description).toContain("complete")
+    expect(woeLink?.description).toContain("static dependency context")
+    expect(woeLink?.description).toContain("does not perform more WOE integration work")
+  })
+
   it("displays Work Order recommendations as recommendations only", () => {
     const registry = getBrainCouncilAdvisoryRegistry()
     const recommendation = registry.recommendations[0]
 
-    expect(recommendation.recommendedWorkOrder).toBe("WO-COUNCIL-001 through WO-COUNCIL-015")
+    expect(recommendation.recommendedWorkOrder).toBe("WO-COUNCIL-001 through WO-COUNCIL-017")
     expect(recommendation.authorityRequired).toBe("Read-only UI/model authority only.")
     expect(recommendation.blockedActions).toContain("execute recommendation")
     expect(recommendation.nextSafeOwnerAction).toContain("do not open runtime authority")
@@ -158,6 +171,14 @@ describe("Brain Council advisory registry", () => {
       lanExposureEnabled: false,
       cloudChanged: false,
       productionDeployAdded: false,
+      productionWriteBehaviorAdded: false,
+      authBehaviorChanged: false,
+      authPolicyChanged: false,
+      publicSignupReintroduced: false,
+      dbSchemaChanged: false,
+      envChanged: false,
+      packageChanged: false,
+      vercelSettingsChanged: false,
       secretsDisclosed: false,
       terraFusionPacsTouched: false,
       unrelatedContainersTouched: false,
