@@ -42,8 +42,9 @@ export function BrainCouncilAdvisoryRegistryPanel() {
           <StatusBadge value="neutral" label="owner authority" />
         </div>
         <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-          Council roles, states, packets, recommendations, evidence, memory, and owner-decision
-          links are displayed as static advice. Nothing here runs work.
+          Council roles, states, packets, recommendations, evidence, Work Order, authority, memory,
+          trace, Academy, Wiki, and owner-decision links are displayed as static advice. Nothing here
+          runs work.
         </p>
       </div>
 
@@ -155,9 +156,36 @@ export function BrainCouncilAdvisoryRegistryPanel() {
           </div>
         </div>
         <div>
+          <p className="text-sm font-medium">Work Order links</p>
+          <div className="mt-3 grid gap-2">
+            {registry.workOrderLinks.map((link) => (
+              <InfoCard key={`${link.packetId}-${link.relatedItem}`} label={link.label} value={link.relatedItem} description={link.description} />
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="text-sm font-medium">Authority links</p>
+          <div className="mt-3 grid gap-2">
+            {registry.authorityLinks.map((link) => (
+              <InfoCard key={`${link.packetId}-${link.relatedItem}`} label={link.label} value={link.relatedItem} description={link.description} />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 border-t border-border bg-muted/10 p-4 xl:grid-cols-3">
+        <div>
           <p className="text-sm font-medium">Memory links</p>
           <div className="mt-3 grid gap-2">
             {registry.memoryLinks.map((link) => (
+              <InfoCard key={`${link.packetId}-${link.relatedItem}`} label={link.label} value={link.relatedItem} description={link.description} />
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="text-sm font-medium">Trace links</p>
+          <div className="mt-3 grid gap-2">
+            {registry.traceLinks.map((link) => (
               <InfoCard key={`${link.packetId}-${link.relatedItem}`} label={link.label} value={link.relatedItem} description={link.description} />
             ))}
           </div>
@@ -169,6 +197,15 @@ export function BrainCouncilAdvisoryRegistryPanel() {
               <InfoCard key={`${link.packetId}-${link.relatedItem}`} label={link.label} value={link.relatedItem} description={link.description} />
             ))}
           </div>
+        </div>
+      </div>
+
+      <div className="border-t border-border bg-muted/10 p-4">
+        <p className="text-sm font-medium">Academy and Wiki links</p>
+        <div className="mt-3 grid gap-2 md:grid-cols-3">
+          {registry.academyWikiLinks.map((link) => (
+            <InfoCard key={`${link.packetId}-${link.relatedItem}`} label={link.label} value={link.relatedItem} description={link.description} />
+          ))}
         </div>
       </div>
 
