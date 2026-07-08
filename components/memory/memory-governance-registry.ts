@@ -2,6 +2,7 @@ export type MemoryGovernanceCategory =
   | "FACT"
   | "DECISION"
   | "PROCEDURE"
+  | "PATTERN"
   | "POLICY"
   | "PREFERENCE"
   | "PROJECT_STATE"
@@ -9,6 +10,12 @@ export type MemoryGovernanceCategory =
   | "EVIDENCE_SUMMARY"
   | "AUTHORITY_SUMMARY"
   | "OWNER_DECISION_SUMMARY"
+  | "REVIEW_QUEUE_ITEM"
+  | "AUTHORITY_MEMORY"
+  | "EVIDENCE_LINKED_MEMORY"
+  | "TRACE_LINKED_MEMORY"
+  | "COUNCIL_REFERENCED_MEMORY"
+  | "FUTURE_SKILL_FORGE_REFERENCED_MEMORY"
   | "CONTRADICTION"
   | "STALE_ITEM"
   | "SENSITIVE_ITEM"
@@ -47,6 +54,11 @@ export type MemoryGovernanceRecord = {
   authorityLinks: string[]
   ownerDecisionLinks: string[]
   workOrderLinks: string[]
+  traceLinks: string[]
+  councilLinks: string[]
+  forgeLinks: string[]
+  relatedPrOrCommit: string
+  nextSafeGate: string
   staleness: string
   contradictionStatus: string
   reviewRequirement: string
@@ -71,6 +83,23 @@ export type MemoryLinkRecord = {
   memoryId: string
   relatedItem: string
   description: string
+}
+
+export type MemorySchemaField = {
+  field: string
+  purpose: string
+  required: boolean
+  blockedRuntimeBehavior: string
+}
+
+export type MemoryModelRecord = {
+  modelId: string
+  title: string
+  purpose: string
+  requiredFields: string[]
+  examples: string[]
+  blockedBehavior: string[]
+  nextSafeGate: string
 }
 
 export type MemorySafetyProofCard = {
@@ -98,6 +127,11 @@ export type MemoryGovernanceSurface = {
     examples: string[]
     safeDefault: string
   }[]
+  recordSchema: MemorySchemaField[]
+  decisionMemoryModel: MemoryModelRecord
+  procedureMemoryModel: MemoryModelRecord
+  patternMemoryModel: MemoryModelRecord
+  contradictionStaleMemoryModel: MemoryModelRecord
   records: MemoryGovernanceRecord[]
   detailRecord: MemoryGovernanceRecord
   reviewQueue: MemoryReviewQueueItem[]
@@ -106,6 +140,11 @@ export type MemoryGovernanceSurface = {
     statements: string[]
   }
   evidenceMemoryLinks: MemoryLinkRecord[]
+  workOrderMemoryLinks: MemoryLinkRecord[]
+  councilMemoryLinks: MemoryLinkRecord[]
+  traceMemoryLinks: MemoryLinkRecord[]
+  forgeMemoryLinks: MemoryLinkRecord[]
+  academyWikiMemoryLinks: MemoryLinkRecord[]
   authorityMemoryLinks: MemoryLinkRecord[]
   ownerDecisionMemoryLinks: MemoryLinkRecord[]
   safetyProofCards: MemorySafetyProofCard[]
@@ -125,6 +164,7 @@ export type MemoryGovernanceSurface = {
     memoryIngestionAdded: false
     memoryExtractionAdded: false
     memoryWriteAdded: false
+    memoryPersistenceAdded: false
     canonPromotionAdded: false
     deletionArchiveMutationAdded: false
     runtimeMemoryReadAdded: false
@@ -133,7 +173,9 @@ export type MemoryGovernanceSurface = {
     mcpMemoryReadAdded: false
     vectorStoreAdded: false
     embeddingsAdded: false
+    ragRuntimeAdded: false
     databaseSchemaChanged: false
+    dataMutationAdded: false
     filesystemScanAdded: false
     dynamicIngestionAdded: false
     commandExecutionAdded: false
@@ -148,6 +190,16 @@ export type MemoryGovernanceSurface = {
     lanExposureEnabled: false
     cloudChanged: false
     productionDeployAdded: false
+    productionWriteBehaviorAdded: false
+    authBehaviorChanged: false
+    authPolicyChanged: false
+    publicSignupReintroduced: false
+    envChanged: false
+    packageChanged: false
+    vercelSettingsChanged: false
+    brainCouncilRuntimeActivated: false
+    telemetryServiceAdded: false
+    evalRunnerAdded: false
     secretsDisclosed: false
     hermesMcpAutonomyChanged: false
     terraFusionPacsTouched: false
@@ -156,16 +208,21 @@ export type MemoryGovernanceSurface = {
 }
 
 export const MEMORY_GOVERNANCE_DOCTRINE = {
-  title: "Memory Governance Doctrine",
+  title: "Brain Memory Spine Doctrine",
   statements: [
+    "Brain Memory is governed continuity, not uncontrolled recall.",
     "Memory is governed continuity, not authority.",
-    "Memory may preserve facts, decisions, procedures, preferences, stale items, contradictions, and evidence summaries.",
+    "Memory may represent facts, decisions, procedures, patterns, contradictions, stale items, review queues, sensitivity metadata, and authority states.",
     "Memory may not promote itself to canon.",
     "Memory may not delete, archive, ingest, extract, or mutate itself in this batch.",
+    "Memory may not retrieve runtime context, create embeddings, store vectors, or add RAG behavior in this batch.",
     "Memory may not authorize commands, runtime control, metadata expansion, production changes, or autonomy.",
     "Every trusted memory record needs evidence, authority context, sensitivity classification, and review state.",
     "Contradicted or stale memory remains visible but untrusted until reviewed.",
     "Sensitive and secret-adjacent material defaults to blocked from memory.",
+    "Brain Council may reference memory as static context only; it cannot read memory at runtime.",
+    "Trace/Eval may link memory as proof history only; it cannot collect or write memory.",
+    "Hermes, MCP, Agent Forge, and workers remain future-authority layers and cannot consume memory here.",
     "The Primary remains the approving authority.",
     "WilliamOS may display memory governance state but must not grant itself memory authority.",
   ],
@@ -175,6 +232,7 @@ export const MEMORY_GOVERNANCE_CATEGORIES = [
   ["FACT", "A specific claim that needs source, evidence, confidence, sensitivity, and review state."],
   ["DECISION", "A consequential choice with rationale, owner authority, and supporting proof."],
   ["PROCEDURE", "A repeatable pattern that may guide work only after evidence and Work Order context."],
+  ["PATTERN", "A repeated operating lesson with observed examples, confidence, limits, and review triggers."],
   ["POLICY", "A governing rule or boundary that requires authority linkage before use."],
   ["PREFERENCE", "Operator preference that remains subordinate to safety, evidence, and authority."],
   ["PROJECT_STATE", "Repository, goal, batch, PR, or lane state that can become stale quickly."],
@@ -182,6 +240,12 @@ export const MEMORY_GOVERNANCE_CATEGORIES = [
   ["EVIDENCE_SUMMARY", "A compact summary of proof already represented in the Evidence Spine."],
   ["AUTHORITY_SUMMARY", "A compact summary of authority records and blocked gates."],
   ["OWNER_DECISION_SUMMARY", "A compact summary of owner decisions and unresolved blockers."],
+  ["REVIEW_QUEUE_ITEM", "A memory candidate that needs evidence or owner review before trust."],
+  ["AUTHORITY_MEMORY", "Memory about what is allowed, blocked, future-gated, or owner-decision-required."],
+  ["EVIDENCE_LINKED_MEMORY", "Memory whose trust depends on explicit proof links."],
+  ["TRACE_LINKED_MEMORY", "Memory connected to proof-history and failure-to-eval traces."],
+  ["COUNCIL_REFERENCED_MEMORY", "Memory referenced by Brain Council advice as static context only."],
+  ["FUTURE_SKILL_FORGE_REFERENCED_MEMORY", "Memory that may inform future skill governance without activating skills."],
   ["CONTRADICTION", "A conflict between memories, evidence, authority, or operator direction."],
   ["STALE_ITEM", "A memory that may no longer be current and must not silently guide work."],
   ["SENSITIVE_ITEM", "A memory candidate that may contain private, local, or secret-adjacent material."],
@@ -244,6 +308,152 @@ export const MEMORY_SENSITIVITY_REGISTRY = [
   },
 ] satisfies MemoryGovernanceSurface["sensitivityRegistry"]
 
+const MEMORY_RECORD_SCHEMA_ROWS: [string, string, boolean, string][] = [
+  ["memory id", "Stable identifier for the static record.", true, "does not create a database row"],
+  ["memory type", "Taxonomy label such as Fact, Decision, Procedure, Pattern, Contradiction, Stale, or Review Queue.", true, "does not run a classifier"],
+  ["title", "Short operator-readable label.", true, "does not generate content dynamically"],
+  ["summary", "Concise source-aware memory statement.", true, "does not write memory"],
+  ["source", "Human-readable provenance or report reference.", true, "does not scan filesystems"],
+  ["source type", "Evidence, Work Order, PR, trace, owner decision, or doctrine source class.", true, "does not ingest source data"],
+  ["evidence links", "Static proof references that support or constrain trust.", true, "does not call Evidence APIs"],
+  ["related goal id", "Optional goal relationship.", false, "does not mutate goals"],
+  ["related work order id", "Optional Work Order relationship.", false, "does not run Work Orders"],
+  ["related PR/commit", "Optional merge or commit provenance.", false, "does not write GitHub"],
+  ["related trace id", "Optional Trace/Eval proof-history relationship.", false, "does not collect traces"],
+  ["confidence", "Low, medium, or high trust label.", true, "does not compute confidence automatically"],
+  ["sensitivity", "Sensitivity posture and safe default.", true, "does not implement access control"],
+  ["authority state", "Allowed, review-required, runtime-blocked, or prohibited use posture.", true, "does not grant authority"],
+  ["review state", "Proposed, needs evidence, accepted static, stale, contradicted, blocked, denied, or retired.", true, "does not transition state"],
+  ["stale/review date", "Static review trigger when available.", false, "does not schedule review"],
+  ["contradiction links", "Static references to conflicting records.", false, "does not detect contradictions"],
+  ["replacement/supersession links", "Static references to newer records.", false, "does not overwrite memory"],
+  ["blocked actions", "Actions this memory must not authorize.", true, "does not enforce policy"],
+  ["next safe gate", "Future owner-authorized gate if action is needed.", true, "does not open the gate"],
+]
+
+export const MEMORY_RECORD_SCHEMA: MemorySchemaField[] = MEMORY_RECORD_SCHEMA_ROWS.map(([field, purpose, required, blockedRuntimeBehavior]) => ({
+  field,
+  purpose,
+  required: required === true,
+  blockedRuntimeBehavior,
+}))
+
+export const DECISION_MEMORY_MODEL: MemoryModelRecord = {
+  modelId: "decision-memory-model",
+  title: "Decision Memory Model",
+  purpose: "Represent owner and system decisions with authority source, options, outcome, evidence, safety flags, and review conditions.",
+  requiredFields: [
+    "decision id",
+    "decision summary",
+    "owner authority source",
+    "context",
+    "options considered",
+    "decision outcome",
+    "evidence used",
+    "related WO/goal/PR",
+    "safety flags",
+    "expiration or review condition",
+    "supersession or reversal handling",
+    "next lane implication",
+  ],
+  examples: [
+    "auth policy decision",
+    "DB/schema authority decision",
+    "Hermes activation denial",
+    "runtime authority pause",
+    "static/read-only posture decision",
+    "merge/deploy authority decision",
+  ],
+  blockedBehavior: ["decision capture runtime", "approval system", "access grant implementation", "decision state mutation"],
+  nextSafeGate: "Owner Decision Queue authority packet",
+}
+
+export const PROCEDURE_MEMORY_MODEL: MemoryModelRecord = {
+  modelId: "procedure-memory-model",
+  title: "Procedure Memory Model",
+  purpose: "Represent repeatable procedures as static guidance with authority, validation, evidence, and stop conditions.",
+  requiredFields: [
+    "procedure id",
+    "procedure title",
+    "purpose",
+    "when to use",
+    "required authority",
+    "allowed steps",
+    "blocked steps",
+    "validation required",
+    "evidence required",
+    "stop conditions",
+    "related WOs",
+    "related Academy lessons",
+    "related Wiki concepts",
+    "stale/review trigger",
+  ],
+  examples: [
+    "Codex operator packet procedure",
+    "PR validation procedure",
+    "production verification procedure",
+    "evidence rollup procedure",
+    "blocked owner decision procedure",
+    "stale .next cleanup proof procedure",
+  ],
+  blockedBehavior: ["runnable procedure engine", "command runner", "automation executor", "scheduler"],
+  nextSafeGate: "Work Order procedure lane only if owner-authorized",
+}
+
+export const PATTERN_MEMORY_MODEL: MemoryModelRecord = {
+  modelId: "pattern-memory-model",
+  title: "Pattern Memory Model",
+  purpose: "Represent repeated operating lessons with observed examples, confidence, supporting evidence, limits, and possible future eval links.",
+  requiredFields: [
+    "pattern id",
+    "pattern summary",
+    "observed examples",
+    "confidence",
+    "supporting evidence",
+    "related WOs/goals",
+    "risk implications",
+    "when pattern applies",
+    "when pattern does not apply",
+    "review/stale trigger",
+    "possible future eval candidate link",
+  ],
+  examples: [
+    "stale local .next artifact cleanup before build",
+    "static/read-only lane before runtime lane",
+    "Codex should not courier normal git work back to owner",
+    "evidence clarity before runtime authority",
+    "review-thread remediation before merge",
+  ],
+  blockedBehavior: ["automatic pattern mining", "dynamic ingestion", "ML classifier", "background categorizer"],
+  nextSafeGate: "Trace/Eval proposal only; no eval execution here",
+}
+
+export const CONTRADICTION_STALE_MEMORY_MODEL: MemoryModelRecord = {
+  modelId: "contradiction-stale-memory-model",
+  title: "Contradiction and Stale Memory Model",
+  purpose: "Represent stale, superseded, contradicted, and unresolved memory as visible but untrusted until reviewed.",
+  requiredFields: [
+    "contradiction definition",
+    "stale memory definition",
+    "superseded memory definition",
+    "unresolved conflict definition",
+    "evidence requirements",
+    "confidence behavior",
+    "owner decision implications",
+    "recommendation blocker",
+    "next safe gate",
+  ],
+  examples: [
+    "prior next-lane pointer superseded by merged lane",
+    "old base commit superseded by new origin/main",
+    "old Hermes pointer after Hermes completion",
+    "stale production verification after route changes",
+    "conflicting safety posture reports",
+  ],
+  blockedBehavior: ["contradiction detector runtime", "automatic stale scanner", "memory mutation behavior", "canon update"],
+  nextSafeGate: "Memory review Work Order if the conflict affects current work",
+}
+
 export const MEMORY_GOVERNANCE_RECORDS: MemoryGovernanceRecord[] = [
   {
     memoryId: "memory-evidence-spine-current",
@@ -259,6 +469,11 @@ export const MEMORY_GOVERNANCE_RECORDS: MemoryGovernanceRecord[] = [
     authorityLinks: ["authority-read-only-registry"],
     ownerDecisionLinks: ["decision-command-execution", "decision-autonomy"],
     workOrderLinks: ["WO-EVIDENCE-001 through WO-EVIDENCE-014"],
+    traceLinks: ["trace-authority-refresh-pass", "trace-operator-contract-static"],
+    councilLinks: ["council-packet-advisory-next-lane"],
+    forgeLinks: ["future-skill-governance-only"],
+    relatedPrOrCommit: "PR #288",
+    nextSafeGate: "GOAL-WOS-007 — Agent Forge Skill Governance",
     staleness: "Review after any new evidence or authority PR merges.",
     contradictionStatus: "No known contradiction in this static registry.",
     reviewRequirement: "Evidence refresh required if origin/main advances with new authority facts.",
@@ -279,6 +494,11 @@ export const MEMORY_GOVERNANCE_RECORDS: MemoryGovernanceRecord[] = [
     authorityLinks: ["authority-local-runtime-mutation", "authority-metadata-expansion"],
     ownerDecisionLinks: ["decision-docker-metadata", "decision-backup-metadata", "decision-port-checks"],
     workOrderLinks: ["WO-LOCAL-120 through WO-LOCAL-124"],
+    traceLinks: ["trace-local-docker-runtime-blocker"],
+    councilLinks: ["council-packet-authority-needed"],
+    forgeLinks: ["not-applicable"],
+    relatedPrOrCommit: "PR #287",
+    nextSafeGate: "Local metadata gate only if owner-authorized",
     staleness: "Review after any local runtime, Docker metadata, backup metadata, or port-status gate.",
     contradictionStatus: "No current contradiction; metadata expansion remains blocked.",
     reviewRequirement: "Owner authority required before expanding runtime observation or control.",
@@ -299,6 +519,11 @@ export const MEMORY_GOVERNANCE_RECORDS: MemoryGovernanceRecord[] = [
     authorityLinks: ["authority-read-only-registry", "authority-autonomy", "authority-secret-handling"],
     ownerDecisionLinks: ["decision-command-execution", "decision-secrets-handling", "decision-autonomy"],
     workOrderLinks: ["WO-AUTHORITY-001 through WO-AUTHORITY-014"],
+    traceLinks: ["trace-authority-refresh-pass"],
+    councilLinks: ["council-packet-authority-needed"],
+    forgeLinks: ["future-skill-governance-only"],
+    relatedPrOrCommit: "PR #285",
+    nextSafeGate: "Owner authority packet before any authority expansion",
     staleness: "Review when a new authority registry PR merges.",
     contradictionStatus: "No known contradiction.",
     reviewRequirement: "Compare against Owner Decision Queue before treating any lane as open.",
@@ -319,6 +544,11 @@ export const MEMORY_GOVERNANCE_RECORDS: MemoryGovernanceRecord[] = [
     authorityLinks: ["authority-github-write", "authority-autonomy", "authority-production-change"],
     ownerDecisionLinks: ["decision-github-write", "decision-production-deploy", "decision-codex-automation"],
     workOrderLinks: ["WO-DECISION-001 through WO-DECISION-015"],
+    traceLinks: ["trace-operator-contract-static"],
+    councilLinks: ["council-packet-authority-needed"],
+    forgeLinks: ["future-skill-governance-only"],
+    relatedPrOrCommit: "PR #286",
+    nextSafeGate: "Owner decision packet before any blocked lane changes",
     staleness: "Review after any owner decision is explicitly approved, declined, or parked by new evidence.",
     contradictionStatus: "No known contradiction.",
     reviewRequirement: "Owner decision remains required before blocked lanes proceed.",
@@ -339,6 +569,11 @@ export const MEMORY_GOVERNANCE_RECORDS: MemoryGovernanceRecord[] = [
     authorityLinks: ["authority-read-only-registry"],
     ownerDecisionLinks: ["decision-command-execution"],
     workOrderLinks: ["WO-MEMORY-007", "WO-MEMORY-008"],
+    traceLinks: ["trace-memory-links-static"],
+    councilLinks: ["council-packet-advisory-next-lane"],
+    forgeLinks: ["future-skill-governance-only"],
+    relatedPrOrCommit: "Memory Governance Registry",
+    nextSafeGate: "Memory review Work Order before trust",
     staleness: "Assume stale until refreshed by current evidence.",
     contradictionStatus: "Contradiction must be resolved before canon eligibility.",
     reviewRequirement: "Compare evidence, authority, and newest operator instruction.",
@@ -359,6 +594,11 @@ export const MEMORY_GOVERNANCE_RECORDS: MemoryGovernanceRecord[] = [
     authorityLinks: ["authority-secret-handling"],
     ownerDecisionLinks: ["decision-secrets-handling", "decision-terrafusion-pacs-touch"],
     workOrderLinks: ["WO-MEMORY-004", "WO-MEMORY-012"],
+    traceLinks: ["trace-secret-access-blocked"],
+    councilLinks: ["council-packet-authority-needed"],
+    forgeLinks: ["blocked-from-skill-context"],
+    relatedPrOrCommit: "Memory Governance Registry",
+    nextSafeGate: "Secret-handling authority gate only",
     staleness: "Always blocked unless a future secret-handling gate says otherwise.",
     contradictionStatus: "No exception granted by this batch.",
     reviewRequirement: "Represent as redacted blocker evidence only.",
@@ -447,6 +687,81 @@ export const EVIDENCE_MEMORY_LINKS: MemoryLinkRecord[] = [
   },
 ]
 
+export const WORK_ORDER_MEMORY_LINKS: MemoryLinkRecord[] = [
+  {
+    label: "Work Order Engine context",
+    memoryId: "memory-evidence-spine-current",
+    relatedItem: "GOAL-WOS-002",
+    description: "Memory may reference completed WOE structure as static context; it cannot run Work Orders.",
+  },
+  {
+    label: "Brain Memory Spine batch",
+    memoryId: "memory-stale-contradiction-review",
+    relatedItem: "WO-MEMORY-001 through WO-MEMORY-014",
+    description: "The current lane reconciles memory doctrine and models without write, retrieval, or promotion behavior.",
+  },
+]
+
+export const COUNCIL_MEMORY_LINKS: MemoryLinkRecord[] = [
+  {
+    label: "Council static context",
+    memoryId: "memory-evidence-spine-current",
+    relatedItem: "council-packet-advisory-next-lane",
+    description: "Brain Council may reference memory as static context but cannot read memory at runtime.",
+  },
+  {
+    label: "Council authority blocker",
+    memoryId: "memory-authority-registry-current",
+    relatedItem: "council-packet-authority-needed",
+    description: "Council recommendations do not authorize memory writes, retrieval, tools, or action.",
+  },
+]
+
+export const TRACE_MEMORY_LINKS: MemoryLinkRecord[] = [
+  {
+    label: "Trace proof history",
+    memoryId: "memory-evidence-spine-current",
+    relatedItem: "trace-authority-refresh-pass",
+    description: "Trace links show reasoning history without collecting runtime traces or writing memory.",
+  },
+  {
+    label: "Stale pointer correction",
+    memoryId: "memory-stale-contradiction-review",
+    relatedItem: "trace-memory-links-static",
+    description: "Trace/Eval can explain stale or superseded next-lane pointers as review signals.",
+  },
+]
+
+export const FORGE_MEMORY_LINKS: MemoryLinkRecord[] = [
+  {
+    label: "Future skill governance",
+    memoryId: "memory-sensitive-blocked-example",
+    relatedItem: "GOAL-WOS-007 — Agent Forge Skill Governance",
+    description: "Forge may define future skill governance, but this lane activates no skills or workers.",
+  },
+  {
+    label: "Skill context blocked",
+    memoryId: "memory-authority-registry-current",
+    relatedItem: "skill-context-future-authority-only",
+    description: "Memory cannot become executable skill context without a separate owner-authorized gate.",
+  },
+]
+
+export const ACADEMY_WIKI_MEMORY_LINKS: MemoryLinkRecord[] = [
+  {
+    label: "Academy memory lesson",
+    memoryId: "memory-stale-contradiction-review",
+    relatedItem: "docs/academy/operator-training/brain-memory-spine.md",
+    description: "Academy teaches Brain Memory as governed continuity, not runtime recall.",
+  },
+  {
+    label: "Wiki memory concept",
+    memoryId: "memory-evidence-spine-current",
+    relatedItem: "docs/wiki/concepts/brain-memory.md",
+    description: "Wiki records memory taxonomy, authority states, and blocked runtime behavior.",
+  },
+]
+
 export const AUTHORITY_MEMORY_LINKS: MemoryLinkRecord[] = [
   {
     label: "Read-only memory authority",
@@ -507,6 +822,11 @@ export function getMemoryGovernanceSurface(): MemoryGovernanceSurface {
     categories: MEMORY_GOVERNANCE_CATEGORIES,
     states: MEMORY_GOVERNANCE_STATES,
     sensitivityRegistry: MEMORY_SENSITIVITY_REGISTRY,
+    recordSchema: MEMORY_RECORD_SCHEMA,
+    decisionMemoryModel: DECISION_MEMORY_MODEL,
+    procedureMemoryModel: PROCEDURE_MEMORY_MODEL,
+    patternMemoryModel: PATTERN_MEMORY_MODEL,
+    contradictionStaleMemoryModel: CONTRADICTION_STALE_MEMORY_MODEL,
     records: MEMORY_GOVERNANCE_RECORDS,
     detailRecord:
       MEMORY_GOVERNANCE_RECORDS.find(
@@ -515,6 +835,11 @@ export function getMemoryGovernanceSurface(): MemoryGovernanceSurface {
     reviewQueue: MEMORY_REVIEW_QUEUE,
     staleContradictionUx: MEMORY_STALE_CONTRADICTION_UX,
     evidenceMemoryLinks: EVIDENCE_MEMORY_LINKS,
+    workOrderMemoryLinks: WORK_ORDER_MEMORY_LINKS,
+    councilMemoryLinks: COUNCIL_MEMORY_LINKS,
+    traceMemoryLinks: TRACE_MEMORY_LINKS,
+    forgeMemoryLinks: FORGE_MEMORY_LINKS,
+    academyWikiMemoryLinks: ACADEMY_WIKI_MEMORY_LINKS,
     authorityMemoryLinks: AUTHORITY_MEMORY_LINKS,
     ownerDecisionMemoryLinks: OWNER_DECISION_MEMORY_LINKS,
     safetyProofCards: MEMORY_SAFETY_PROOF_CARDS,
@@ -559,6 +884,7 @@ export function getMemoryGovernanceSurface(): MemoryGovernanceSurface {
       memoryIngestionAdded: false,
       memoryExtractionAdded: false,
       memoryWriteAdded: false,
+      memoryPersistenceAdded: false,
       canonPromotionAdded: false,
       deletionArchiveMutationAdded: false,
       runtimeMemoryReadAdded: false,
@@ -567,7 +893,9 @@ export function getMemoryGovernanceSurface(): MemoryGovernanceSurface {
       mcpMemoryReadAdded: false,
       vectorStoreAdded: false,
       embeddingsAdded: false,
+      ragRuntimeAdded: false,
       databaseSchemaChanged: false,
+      dataMutationAdded: false,
       filesystemScanAdded: false,
       dynamicIngestionAdded: false,
       commandExecutionAdded: false,
@@ -582,6 +910,16 @@ export function getMemoryGovernanceSurface(): MemoryGovernanceSurface {
       lanExposureEnabled: false,
       cloudChanged: false,
       productionDeployAdded: false,
+      productionWriteBehaviorAdded: false,
+      authBehaviorChanged: false,
+      authPolicyChanged: false,
+      publicSignupReintroduced: false,
+      envChanged: false,
+      packageChanged: false,
+      vercelSettingsChanged: false,
+      brainCouncilRuntimeActivated: false,
+      telemetryServiceAdded: false,
+      evalRunnerAdded: false,
       secretsDisclosed: false,
       hermesMcpAutonomyChanged: false,
       terraFusionPacsTouched: false,

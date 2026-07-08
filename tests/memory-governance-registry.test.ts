@@ -23,6 +23,7 @@ describe("Memory Governance Registry", () => {
       "FACT",
       "DECISION",
       "PROCEDURE",
+      "PATTERN",
       "POLICY",
       "PREFERENCE",
       "PROJECT_STATE",
@@ -30,6 +31,12 @@ describe("Memory Governance Registry", () => {
       "EVIDENCE_SUMMARY",
       "AUTHORITY_SUMMARY",
       "OWNER_DECISION_SUMMARY",
+      "REVIEW_QUEUE_ITEM",
+      "AUTHORITY_MEMORY",
+      "EVIDENCE_LINKED_MEMORY",
+      "TRACE_LINKED_MEMORY",
+      "COUNCIL_REFERENCED_MEMORY",
+      "FUTURE_SKILL_FORGE_REFERENCED_MEMORY",
       "CONTRADICTION",
       "STALE_ITEM",
       "SENSITIVE_ITEM",
@@ -66,6 +73,49 @@ describe("Memory Governance Registry", () => {
     expect(blocked?.safeDefault).toBe("do not capture; represent only as redacted blocker evidence")
   })
 
+  it("defines the Brain Memory record schema without runtime behavior", () => {
+    const surface = getMemoryGovernanceSurface()
+    const fields = surface.recordSchema.map((field) => field.field)
+
+    expect(fields).toEqual([
+      "memory id",
+      "memory type",
+      "title",
+      "summary",
+      "source",
+      "source type",
+      "evidence links",
+      "related goal id",
+      "related work order id",
+      "related PR/commit",
+      "related trace id",
+      "confidence",
+      "sensitivity",
+      "authority state",
+      "review state",
+      "stale/review date",
+      "contradiction links",
+      "replacement/supersession links",
+      "blocked actions",
+      "next safe gate",
+    ])
+    expect(surface.recordSchema.every((field) => field.blockedRuntimeBehavior.length > 0)).toBe(true)
+    expect(surface.recordSchema.find((field) => field.field === "memory id")?.required).toBe(true)
+  })
+
+  it("defines decision, procedure, pattern, contradiction, and stale memory models", () => {
+    const surface = getMemoryGovernanceSurface()
+
+    expect(surface.decisionMemoryModel.examples).toContain("Hermes activation denial")
+    expect(surface.decisionMemoryModel.blockedBehavior).toContain("approval system")
+    expect(surface.procedureMemoryModel.examples).toContain("production verification procedure")
+    expect(surface.procedureMemoryModel.blockedBehavior).toContain("command runner")
+    expect(surface.patternMemoryModel.examples).toContain("static/read-only lane before runtime lane")
+    expect(surface.patternMemoryModel.blockedBehavior).toContain("automatic pattern mining")
+    expect(surface.contradictionStaleMemoryModel.examples).toContain("old base commit superseded by new origin/main")
+    expect(surface.contradictionStaleMemoryModel.blockedBehavior).toContain("automatic stale scanner")
+  })
+
   it("creates static records linked to Evidence, Authority, Owner Decisions, and Work Orders", () => {
     const surface = getMemoryGovernanceSurface()
     const localFreeze = surface.records.find(
@@ -78,6 +128,7 @@ describe("Memory Governance Registry", () => {
       sensitivity: "SENSITIVE_LOCAL",
       confidence: "high",
       safeDefault: "Keep local runtime read-only, manual-only, and localhost-only.",
+      nextSafeGate: "Local metadata gate only if owner-authorized",
     })
     expect(localFreeze?.evidenceLinks).toContain("evidence-pr-local-freeze")
     expect(localFreeze?.authorityLinks).toContain("authority-metadata-expansion")
@@ -113,12 +164,17 @@ describe("Memory Governance Registry", () => {
     expect(surface.reviewQueue.find((item) => item.reviewItemId === "review-sensitive-memory")?.riskLevel).toBe("critical")
   })
 
-  it("connects memory to evidence, authority, and owner decision records", () => {
+  it("connects memory to evidence, WOE, Council, Trace, Forge, Academy/Wiki, authority, and owner decision records", () => {
     const surface = getMemoryGovernanceSurface()
     const memoryIds = new Set(surface.records.map((record) => record.memoryId))
 
     for (const link of [
       ...surface.evidenceMemoryLinks,
+      ...surface.workOrderMemoryLinks,
+      ...surface.councilMemoryLinks,
+      ...surface.traceMemoryLinks,
+      ...surface.forgeMemoryLinks,
+      ...surface.academyWikiMemoryLinks,
       ...surface.authorityMemoryLinks,
       ...surface.ownerDecisionMemoryLinks,
     ]) {
@@ -177,6 +233,7 @@ describe("Memory Governance Registry", () => {
       memoryIngestionAdded: false,
       memoryExtractionAdded: false,
       memoryWriteAdded: false,
+      memoryPersistenceAdded: false,
       canonPromotionAdded: false,
       deletionArchiveMutationAdded: false,
       runtimeMemoryReadAdded: false,
@@ -185,7 +242,9 @@ describe("Memory Governance Registry", () => {
       mcpMemoryReadAdded: false,
       vectorStoreAdded: false,
       embeddingsAdded: false,
+      ragRuntimeAdded: false,
       databaseSchemaChanged: false,
+      dataMutationAdded: false,
       filesystemScanAdded: false,
       dynamicIngestionAdded: false,
       commandExecutionAdded: false,
@@ -200,6 +259,16 @@ describe("Memory Governance Registry", () => {
       lanExposureEnabled: false,
       cloudChanged: false,
       productionDeployAdded: false,
+      productionWriteBehaviorAdded: false,
+      authBehaviorChanged: false,
+      authPolicyChanged: false,
+      publicSignupReintroduced: false,
+      envChanged: false,
+      packageChanged: false,
+      vercelSettingsChanged: false,
+      brainCouncilRuntimeActivated: false,
+      telemetryServiceAdded: false,
+      evalRunnerAdded: false,
       secretsDisclosed: false,
       hermesMcpAutonomyChanged: false,
       terraFusionPacsTouched: false,

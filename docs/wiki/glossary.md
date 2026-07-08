@@ -72,6 +72,40 @@ The safe holding state for unreviewed skills, integrations, or capabilities.
 
 Governed continuity context. It does not authorize action.
 
+## Brain Memory Spine
+
+The static/read-only doctrine, taxonomy, schema, review, sensitivity, and
+authority model for Memory.
+
+## Fact Memory
+
+A sourced claim with confidence, sensitivity, evidence, and review state.
+
+## Decision Memory
+
+A prior owner or system decision represented with context, options, outcome,
+evidence, safety posture, and review conditions.
+
+## Procedure Memory
+
+A repeatable procedure represented as guidance with authority, evidence,
+validation, and stop conditions.
+
+## Pattern Memory
+
+A repeated operating lesson with examples, confidence, limits, and stale
+triggers.
+
+## Contradiction Memory
+
+A conflict between records, evidence, authority, or owner direction that blocks
+trust until reviewed.
+
+## Stale Memory
+
+Context that may no longer match current evidence, current `origin/main`, or the
+newest owner instruction.
+
 ## Trace Ledger
 
 Static reasoning records and failure-to-eval proposals.

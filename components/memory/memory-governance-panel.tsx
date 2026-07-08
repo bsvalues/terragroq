@@ -41,8 +41,9 @@ export function MemoryGovernancePanel() {
           <StatusBadge value="neutral" label="review before canon" />
         </div>
         <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-          Memory is classified, linked, reviewed, and protected before it can become trusted
-          context. This registry displays governance state only.
+          Brain Memory is classified, linked, reviewed, source-aware, sensitivity-aware, and
+          authority-gated before it can become trusted context. This registry displays governance
+          state only.
         </p>
       </div>
 
@@ -144,6 +145,58 @@ export function MemoryGovernancePanel() {
         </div>
       </div>
 
+      <div className="grid gap-4 border-t border-border p-4 xl:grid-cols-[1.1fr_0.9fr]">
+        <div>
+          <p className="text-sm font-medium">Memory record schema</p>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {surface.recordSchema.map((field) => (
+              <div key={field.field} className="rounded-lg border border-border bg-background p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {field.field}
+                  </p>
+                  <StatusBadge value={field.required ? "required" : "optional"} />
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  {field.purpose}
+                </p>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                  Blocked runtime behavior: {field.blockedRuntimeBehavior}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-sm font-medium">Brain Memory models</p>
+          <div className="mt-3 grid gap-2">
+            {[
+              surface.decisionMemoryModel,
+              surface.procedureMemoryModel,
+              surface.patternMemoryModel,
+              surface.contradictionStaleMemoryModel,
+            ].map((model) => (
+              <div key={model.modelId} className="rounded-lg border border-border bg-background p-3">
+                <p className="text-sm font-semibold">{model.title}</p>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  {model.purpose}
+                </p>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                  Examples: {model.examples.join(", ")}
+                </p>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                  Blocked: {model.blockedBehavior.join(", ")}
+                </p>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                  Next safe gate: {model.nextSafeGate}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
       <div className="grid gap-4 border-t border-border p-4 xl:grid-cols-2">
         <div>
           <p className="text-sm font-medium">Static memory records</p>
@@ -199,9 +252,18 @@ export function MemoryGovernancePanel() {
         </div>
 
         <div className="rounded-lg border border-border bg-background p-4">
-          <p className="text-sm font-medium">Evidence, Authority, and Owner Decision links</p>
+          <p className="text-sm font-medium">Evidence, WOE, Council, Trace, Forge, Academy, Wiki, Authority, and Owner Decision links</p>
           <div className="mt-3 grid gap-2">
-            {[...surface.evidenceMemoryLinks, ...surface.authorityMemoryLinks, ...surface.ownerDecisionMemoryLinks].map(
+            {[
+              ...surface.evidenceMemoryLinks,
+              ...surface.workOrderMemoryLinks,
+              ...surface.councilMemoryLinks,
+              ...surface.traceMemoryLinks,
+              ...surface.forgeMemoryLinks,
+              ...surface.academyWikiMemoryLinks,
+              ...surface.authorityMemoryLinks,
+              ...surface.ownerDecisionMemoryLinks,
+            ].map(
               (link) => (
                 <div key={`${link.memoryId}-${link.relatedItem}`} className="rounded-md border border-border bg-card p-3">
                   <p className="text-xs font-semibold">{link.label}</p>
