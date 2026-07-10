@@ -18,8 +18,9 @@ guessing.
 - Memory writes, retrieval expansion, vector stores, embeddings, and canon
   promotion require separate governance.
 - Memory must not contain secrets, raw protected data, or PACS/private material.
-- Brain Council, Trace/Eval, Hermes, MCP, workers, and Agent Forge may reference
-  memory only through separately authorized static or runtime gates.
+- Brain Council may reference memory as static context only.
+- Trace/Eval may link memory as proof history only.
+- Hermes, MCP, workers, and Agent Forge cannot consume memory in this lane.
 
 Memory guides review. It does not execute work.
 

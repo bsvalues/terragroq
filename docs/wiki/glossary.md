@@ -89,7 +89,7 @@ evidence, safety posture, and review conditions.
 ## Procedure Memory
 
 A repeatable procedure represented as guidance with authority, evidence,
-validation, and stop conditions.
+validation, stop conditions, and Work Order context before it can guide work.
 
 ## Pattern Memory
 
