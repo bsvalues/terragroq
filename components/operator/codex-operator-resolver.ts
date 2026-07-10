@@ -91,11 +91,11 @@ const RISK_RANK: Record<OperatorRiskClass, number> = {
 const CAPABILITY_WALLS: { pattern: RegExp; reasonCode: AuthorityWallReasonCode }[] = [
   { pattern: /auth|access policy|signup|credential/i, reasonCode: "AUTH_ACCESS_WALL" },
   { pattern: /database|schema|migration|data mutation/i, reasonCode: "DB_SCHEMA_WALL" },
-  { pattern: /secret|token|password|cookie|private key/i, reasonCode: "SECRET_WALL" },
+  { pattern: /secret|token|password|cookie|private key|connection string/i, reasonCode: "SECRET_WALL" },
   { pattern: /TerraFusion|PACS|county.*mutation/i, reasonCode: "TERRAFUSION_PACS_WALL" },
   { pattern: /production (?:deploy|write|promotion)|deploy|release|tag|rollback|cutover/i, reasonCode: "PRODUCTION_RELEASE_WALL" },
   { pattern: /\benv(?:ironment)?\b|package|dependency|Vercel|DNS|cloud|external service/i, reasonCode: "ENV_PACKAGE_VERCEL_WALL" },
-  { pattern: /memory (?:write|read|retrieval)|runtime retrieval|vector|embedding|RAG|dynamic ingestion|filesystem scan/i, reasonCode: "MEMORY_RUNTIME_WALL" },
+  { pattern: /memory (?:write|read|retrieval)|runtime retrieval|dynamic retrieval|vector|embedding|RAG|dynamic ingestion|filesystem scan/i, reasonCode: "MEMORY_RUNTIME_WALL" },
   { pattern: /Hermes|MCP|worker|scheduler|command runner|runtime activation|Agent Forge skill|Brain Council runtime|autonomous|autonomy|background service/i, reasonCode: "RUNTIME_ACTIVATION_WALL" },
   { pattern: /scope expansion|broaden(?:ed|ing)? scope|risk expansion/i, reasonCode: "SCOPE_EXPANSION_WALL" },
   { pattern: /destructive|reset --hard|force.*worktree|history rewrite/i, reasonCode: "DESTRUCTIVE_OPERATION_WALL" },
@@ -103,7 +103,8 @@ const CAPABILITY_WALLS: { pattern: RegExp; reasonCode: AuthorityWallReasonCode }
 
 export function evaluateOperatorContinuation(input: ContinuationInput): ContinuationDecision {
   if (input.requestedCapability) {
-    const wall = CAPABILITY_WALLS.find(({ pattern }) => pattern.test(input.requestedCapability!))
+    const normalizedCapability = input.requestedCapability.replace(/[-_]+/g, " ")
+    const wall = CAPABILITY_WALLS.find(({ pattern }) => pattern.test(normalizedCapability))
     if (wall) {
       return {
         decision: "AUTHORITY_WALL",
