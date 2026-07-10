@@ -44,7 +44,9 @@ while the Primary retains authority over auth, secrets, schemas, production,
 external systems, runtime activation, destructive operations, and scope/risk
 expansion.
 
-Current registered transition: `WO-CODEX-OPERATOR-022 - End-to-End Low-Risk Pilot`.
+Completion state: `WO-CODEX-OPERATOR-001` through
+`WO-CODEX-OPERATOR-024` are evidenced complete. The low-risk pilot merged as
+PR #333 at `9e3a48395945d7b26449cf2e462bc65142aa136c`.
 
 The typed source of truth is
 `components/operator/codex-operator-registry.ts`. The registry is static and

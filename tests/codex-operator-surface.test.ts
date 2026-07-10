@@ -22,10 +22,10 @@ describe("Codex operator current-truth surface", () => {
       label: "Declared program state",
       caution: "Confirm live Git, PR, checks, and routes before acting.",
     })
-    expect(surface.progress).toMatchObject({ completed: 21, total: 24 })
+    expect(surface.progress).toMatchObject({ completed: 24, total: 24 })
     expect(surface.nextAction).toMatchObject({
-      decision: "NEXT_WORK_ORDER",
-      workOrderId: "WO-CODEX-OPERATOR-022",
+      decision: "GOAL_COMPLETE",
+      workOrderId: null,
     })
   })
 

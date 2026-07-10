@@ -23,13 +23,17 @@ work, execute commands, mutate memory, or activate workers.
 - Mode: sequential
 - Continue until: goal complete or typed authority wall
 - Selection: first incomplete Work Order whose dependencies are complete
-- Current transition: `WO-CODEX-OPERATOR-022`
+- Current transition: goal complete after `WO-CODEX-OPERATOR-024`
 - Product posture: static/read-only decision model; no runtime executor
 
 Codex refreshes live baseline truth before acting, remediates recoverable
 in-scope failures, owns eligible pull-request and merge work, records
 post-merge proof, and continues. The loop returns to the Primary only for a
 true authority wall or final goal closure.
+
+Final pilot proof: PR #333 merged at
+`9e3a48395945d7b26449cf2e462bc65142aa136c`; all required production routes
+returned HTTP 200 and auth readiness remained healthy with signup closed.
 
 ## Loop Rules
 
