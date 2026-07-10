@@ -13,6 +13,10 @@ when the active work order requires production verification.
 The checklist is documentation-only. It does not deploy, promote, release, tag,
 change Vercel settings, create monitors, or add production-write behavior.
 
+Production reports distinguish declared state from observed live state. A
+static registry entry is never accepted as production proof; Codex records the
+actual URL, HTTP status, visible posture, and observation time after merge.
+
 ## When Production Verification Is Required
 
 Production verification is required after merge when the work order touches:

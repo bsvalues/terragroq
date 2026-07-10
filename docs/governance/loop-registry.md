@@ -14,6 +14,23 @@ preserving owner gates and safety blocks.
 The registry is not an automation runtime. It does not schedule background
 work, execute commands, mutate memory, or activate workers.
 
+## Canonical Active Loop
+
+### `LOOP-WOS-CODEX-OPERATOR-001`
+
+- Goal: `GOAL-WOS-CODEX-OPERATOR-001`
+- Program: `PROGRAM-WILLIAMOS-CODEX-OPERATOR-001`
+- Mode: sequential
+- Continue until: goal complete or typed authority wall
+- Selection: first incomplete Work Order whose dependencies are complete
+- Current transition: `WO-CODEX-OPERATOR-022`
+- Product posture: static/read-only decision model; no runtime executor
+
+Codex refreshes live baseline truth before acting, remediates recoverable
+in-scope failures, owns eligible pull-request and merge work, records
+post-merge proof, and continues. The loop returns to the Primary only for a
+true authority wall or final goal closure.
+
 ## Loop Rules
 
 - Codex continues to the next listed loop only when it remains inside active

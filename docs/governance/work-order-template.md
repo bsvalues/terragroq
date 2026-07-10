@@ -1,5 +1,36 @@
 # Work Order Template
 
+Canonical goal: `GOAL-WOS-CODEX-OPERATOR-001`
+
+Every new operator Work Order must additionally declare:
+
+```text
+PROGRAM:
+GOAL:
+LOOP:
+STATUS:
+RISK_CLASS:
+DEPENDS_ON:
+PURPOSE:
+CURRENT_TRUTH:
+ALLOWED_FILES_OR_AREAS:
+ALLOWED_ACTIONS:
+BLOCKED:
+DELIVERABLES:
+ACCEPTANCE_CRITERIA:
+VALIDATION:
+REVIEW_REQUIREMENTS:
+MERGE_AUTHORITY:
+ROLLBACK_OR_REVERSAL:
+STOP_CONDITIONS:
+EVIDENCE_PATH:
+NEXT_ON_PASS:
+NEXT_ON_BLOCK:
+```
+
+One Work Order owns one coherent outcome. A discovered prerequisite becomes a
+registered Work Order; it does not become silent scope expansion.
+
 Use this template for governed Goal/Loop work. Fill every field before starting.
 
 ```text

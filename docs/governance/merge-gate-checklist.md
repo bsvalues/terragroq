@@ -17,6 +17,10 @@ branch protection, alter GitHub settings, or grant runtime authority.
 
 Codex may merge only when the active goal or work order grants merge authority.
 
+`GOAL-WOS-CODEX-OPERATOR-001` grants merge authority for registered R0/R1
+Work Orders when every local, remote, review, secret, scope, and post-merge
+gate in this checklist is satisfied. R2 and above remain outside this grant.
+
 If merge authority is missing:
 
 ```text

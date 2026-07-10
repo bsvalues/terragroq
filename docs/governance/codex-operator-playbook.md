@@ -1,5 +1,34 @@
 # WilliamOS Codex Operator Playbook
 
+Canonical document: `WILLIAMOS-CODEX-OPERATOR-PLAYBOOK-001`
+
+Version: `1.0`
+
+Active goal: `GOAL-WOS-CODEX-OPERATOR-001`
+
+Active loop: `LOOP-WOS-CODEX-OPERATOR-001`
+
+Risk ceiling: `R1`
+
+Status: adopted for static/read-only operator governance
+
+This document supersedes narrower operator guidance where that guidance makes
+William relay routine implementation, validation, pull-request, review, merge,
+or verification work. Historical Work Orders remain closed and their evidence
+remains valid.
+
+## Canonical Operating Law
+
+`/goal` owns intent and standing authority. `/loop` owns repeated selection,
+validation, remediation, merge, evidence, and continuation. A Work Order owns
+one bounded mutation or proof task. Evidence proves reality. `/stop` represents
+a typed authority wall. Codex operates the eligible chain; the Primary retains
+consequential authority.
+
+Product surfaces remain read-only. This doctrine does not add an unattended
+agent, scheduler, command runner, background service, runtime loop, dynamic
+ingestion path, memory writer, production writer, or authority mutation.
+
 Work order: `WO-OPS-001`
 Goal: `GOAL-OPS-001 - Codex Operator Mode`
 Type: Governance / Operating Contract

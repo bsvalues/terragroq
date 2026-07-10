@@ -38,6 +38,10 @@ goal and loop.
 ```text
 OWNER_DECISION_REQUIRED
 
+DECISION_ID:
+BLOCKED_WORK_ORDER:
+WALL_TYPE:
+
 DECISION:
 <one specific decision>
 
@@ -58,6 +62,9 @@ RISK:
 SAFE_DEFAULT:
 <what happens if no decision is made>
 
+RESUME_ACTION:
+<the exact blocked Work Order and next action Codex resumes after the decision>
+
 DO_NOT_PROVIDE:
 - passwords
 - tokens
@@ -67,6 +74,9 @@ DO_NOT_PROVIDE:
 - DB URLs
 - secrets
 ```
+
+The packet is resumable state, not a handoff to another operator. After the
+Primary records the decision, Codex resumes the blocked Work Order itself.
 
 ## Decision Quality Rules
 
