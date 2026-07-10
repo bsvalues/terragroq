@@ -184,6 +184,15 @@ describe("Memory Governance Registry", () => {
     }
   })
 
+  it("links the Wiki memory concept to the existing concept file", () => {
+    const surface = getMemoryGovernanceSurface()
+    const wikiMemoryLink = surface.academyWikiMemoryLinks.find(
+      (link) => link.label === "Wiki memory concept",
+    )
+
+    expect(wikiMemoryLink?.relatedItem).toBe("docs/wiki/concepts/memory.md")
+  })
+
   it("adds safety proof cards for the blocked memory authority lanes", () => {
     const surface = getMemoryGovernanceSurface()
     const labels = surface.safetyProofCards.map((card) => card.label)

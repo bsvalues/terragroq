@@ -757,7 +757,7 @@ export const ACADEMY_WIKI_MEMORY_LINKS: MemoryLinkRecord[] = [
   {
     label: "Wiki memory concept",
     memoryId: "memory-evidence-spine-current",
-    relatedItem: "docs/wiki/concepts/brain-memory.md",
+    relatedItem: "docs/wiki/concepts/memory.md",
     description: "Wiki records memory taxonomy, authority states, and blocked runtime behavior.",
   },
 ]
