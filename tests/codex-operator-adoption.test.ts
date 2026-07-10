@@ -48,6 +48,12 @@ describe("Codex operator adoption", () => {
     ["secret", "private key", "AUTHORITY_WALL", "SECRET_WALL"],
     ["PACS mutation", "PACS mutation", "AUTHORITY_WALL", "TERRAFUSION_PACS_WALL"],
     ["runtime activation", "Hermes activation", "AUTHORITY_WALL", "RUNTIME_ACTIVATION_WALL"],
+    ["production deploy", "production deploy", "AUTHORITY_WALL", "PRODUCTION_RELEASE_WALL"],
+    ["package update", "package update", "AUTHORITY_WALL", "ENV_PACKAGE_VERCEL_WALL"],
+    ["memory write", "memory write", "AUTHORITY_WALL", "MEMORY_RUNTIME_WALL"],
+    ["runtime retrieval", "runtime retrieval", "AUTHORITY_WALL", "MEMORY_RUNTIME_WALL"],
+    ["autonomous loop", "autonomous loop", "AUTHORITY_WALL", "RUNTIME_ACTIVATION_WALL"],
+    ["scope expansion", "scope expansion", "AUTHORITY_WALL", "SCOPE_EXPANSION_WALL"],
     ["destructive cleanup", "destructive worktree cleanup", "AUTHORITY_WALL", "DESTRUCTIVE_OPERATION_WALL"],
   ])("classifies %s", (_scenario, requestedCapability, decision, reasonCode) => {
     expect(

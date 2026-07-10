@@ -5,6 +5,7 @@ import type {
 
 export type NextWorkOrderResolution =
   | { decision: "NEXT_WORK_ORDER"; workOrderId: string; blockers: [] }
+  | { decision: "BLOCKED_WORK_ORDER"; workOrderId: string; blockers: string[] }
   | { decision: "BLOCKED_DEPENDENCY"; workOrderId: string; blockers: string[] }
   | { decision: "GOAL_COMPLETE"; workOrderId: null; blockers: [] }
 
@@ -13,6 +14,14 @@ export function resolveNextOperatorWorkOrder(
 ): NextWorkOrderResolution {
   const next = program.workOrders.find((workOrder) => workOrder.status !== "COMPLETE")
   if (!next) return { decision: "GOAL_COMPLETE", workOrderId: null, blockers: [] }
+
+  if (next.status === "BLOCKED") {
+    return {
+      decision: "BLOCKED_WORK_ORDER",
+      workOrderId: next.workOrderId,
+      blockers: ["The Work Order is blocked by its recorded authority or validation gate."],
+    }
+  }
 
   const completeIds = new Set(
     program.workOrders
@@ -32,19 +41,29 @@ export function resolveNextOperatorWorkOrder(
   return { decision: "NEXT_WORK_ORDER", workOrderId: next.workOrderId, blockers: [] }
 }
 
+export const AUTHORITY_WALL_REASON_CODES = [
+  "GOAL_NOT_PROVEN",
+  "RISK_CEILING_WALL",
+  "OUT_OF_SCOPE_REPAIR_WALL",
+  "AUTH_ACCESS_WALL",
+  "DB_SCHEMA_WALL",
+  "SECRET_WALL",
+  "TERRAFUSION_PACS_WALL",
+  "RUNTIME_ACTIVATION_WALL",
+  "PRODUCTION_RELEASE_WALL",
+  "ENV_PACKAGE_VERCEL_WALL",
+  "MEMORY_RUNTIME_WALL",
+  "SCOPE_EXPANSION_WALL",
+  "DESTRUCTIVE_OPERATION_WALL",
+] as const
+
+export type AuthorityWallReasonCode = (typeof AUTHORITY_WALL_REASON_CODES)[number]
+
 export type ContinuationReasonCode =
   | "NEXT_WO_ELIGIBLE"
   | "IN_SCOPE_REPAIR"
   | "GOAL_PROVEN"
-  | "GOAL_NOT_PROVEN"
-  | "RISK_CEILING_WALL"
-  | "OUT_OF_SCOPE_REPAIR_WALL"
-  | "AUTH_ACCESS_WALL"
-  | "DB_SCHEMA_WALL"
-  | "SECRET_WALL"
-  | "TERRAFUSION_PACS_WALL"
-  | "RUNTIME_ACTIVATION_WALL"
-  | "DESTRUCTIVE_OPERATION_WALL"
+  | AuthorityWallReasonCode
 
 export type ContinuationDecision = {
   decision: "CONTINUE" | "REMEDIATE" | "COMPLETE" | "AUTHORITY_WALL"
@@ -69,12 +88,16 @@ const RISK_RANK: Record<OperatorRiskClass, number> = {
   R4: 4,
 }
 
-const CAPABILITY_WALLS: { pattern: RegExp; reasonCode: ContinuationReasonCode }[] = [
+const CAPABILITY_WALLS: { pattern: RegExp; reasonCode: AuthorityWallReasonCode }[] = [
   { pattern: /auth|access policy|signup|credential/i, reasonCode: "AUTH_ACCESS_WALL" },
   { pattern: /database|schema|migration|data mutation/i, reasonCode: "DB_SCHEMA_WALL" },
   { pattern: /secret|token|password|cookie|private key/i, reasonCode: "SECRET_WALL" },
   { pattern: /TerraFusion|PACS|county.*mutation/i, reasonCode: "TERRAFUSION_PACS_WALL" },
-  { pattern: /Hermes|MCP|worker|scheduler|command runner|runtime activation/i, reasonCode: "RUNTIME_ACTIVATION_WALL" },
+  { pattern: /production (?:deploy|write|promotion)|deploy|release|tag|rollback|cutover/i, reasonCode: "PRODUCTION_RELEASE_WALL" },
+  { pattern: /\benv(?:ironment)?\b|package|dependency|Vercel|DNS|cloud|external service/i, reasonCode: "ENV_PACKAGE_VERCEL_WALL" },
+  { pattern: /memory (?:write|read|retrieval)|runtime retrieval|vector|embedding|RAG|dynamic ingestion|filesystem scan/i, reasonCode: "MEMORY_RUNTIME_WALL" },
+  { pattern: /Hermes|MCP|worker|scheduler|command runner|runtime activation|Agent Forge skill|Brain Council runtime|autonomous|autonomy|background service/i, reasonCode: "RUNTIME_ACTIVATION_WALL" },
+  { pattern: /scope expansion|broaden(?:ed|ing)? scope|risk expansion/i, reasonCode: "SCOPE_EXPANSION_WALL" },
   { pattern: /destructive|reset --hard|force.*worktree|history rewrite/i, reasonCode: "DESTRUCTIVE_OPERATION_WALL" },
 ]
 
@@ -137,7 +160,7 @@ export function evaluateOperatorContinuation(input: ContinuationInput): Continua
 export type OperatorStopPacketInput = {
   decisionId: string
   blockedWorkOrderId: string
-  wallType: ContinuationReasonCode
+  wallType: AuthorityWallReasonCode
   decisionRequired: string
   options: string[]
   recommendedOption: string

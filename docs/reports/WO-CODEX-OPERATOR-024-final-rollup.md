@@ -46,7 +46,7 @@ The product addition is static/read-only. No command runner, autonomous runtime
 loop, background worker, production write, auth change, database/schema/data
 change, environment/package/Vercel change, Hermes/MCP/worker activation,
 memory write or retrieval runtime, vector store, embeddings, RAG, dynamic
-ingestion, TerraFusion/PACS touch, or secret exposure was added.
+ingestion, TerraFusion/PACS touch, or secret exposure were added.
 
 Open authority walls: 0.
 
