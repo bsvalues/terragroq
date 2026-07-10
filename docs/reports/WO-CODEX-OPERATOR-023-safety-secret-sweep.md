@@ -16,10 +16,11 @@ PACS code.
 
 ## Secret Proof
 
-A filename-only changed-file scan checked for credential-like API keys,
-GitHub tokens, private-key headers, database URL assignments, auth-secret
-assignments, passwords, tokens, cookies, and session values. It returned no
-matching files. The scan did not print credential values.
+A content scan ran only against the exact changed-file list. It checked those
+files for credential-like API keys, GitHub tokens, private-key headers,
+database URL assignments, auth-secret assignments, passwords, tokens, cookies,
+and session values. It returned filenames only and found no matching files, so
+no credential values were printed.
 
 ## Blocked Capability Matrix
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { getCodexOperatorProgram } from "@/components/operator/codex-operator-registry"
 import {
+  AUTHORITY_WALL_REASON_CODES,
   buildOperatorStopPacket,
   evaluateOperatorContinuation,
   resolveNextOperatorWorkOrder,
@@ -47,6 +48,19 @@ describe("Codex operator next-WO resolver", () => {
     })
   })
 
+  it("surfaces a blocked Work Order as a stop state instead of runnable work", () => {
+    const program = getCodexOperatorProgram()
+    const workOrders = program.workOrders.map((workOrder, index) => ({
+      ...workOrder,
+      status: index < 21 ? ("COMPLETE" as const) : index === 21 ? ("BLOCKED" as const) : ("PENDING" as const),
+    }))
+
+    expect(resolveNextOperatorWorkOrder({ ...program, status: "ACTIVE", workOrders })).toMatchObject({
+      decision: "BLOCKED_WORK_ORDER",
+      workOrderId: "WO-CODEX-OPERATOR-022",
+    })
+  })
+
   it("continues after a normal pass and remediates in-scope validation failures", () => {
     expect(
       evaluateOperatorContinuation({
@@ -72,6 +86,22 @@ describe("Codex operator next-WO resolver", () => {
     ["secret rotation", "SECRET_WALL"],
     ["PACS mutation", "TERRAFUSION_PACS_WALL"],
     ["Hermes activation", "RUNTIME_ACTIVATION_WALL"],
+    ["production deploy", "PRODUCTION_RELEASE_WALL"],
+    ["production-write behavior", "PRODUCTION_RELEASE_WALL"],
+    ["release tag", "PRODUCTION_RELEASE_WALL"],
+    ["package update", "ENV_PACKAGE_VERCEL_WALL"],
+    ["env change", "ENV_PACKAGE_VERCEL_WALL"],
+    ["Vercel setting", "ENV_PACKAGE_VERCEL_WALL"],
+    ["memory write", "MEMORY_RUNTIME_WALL"],
+    ["runtime retrieval", "MEMORY_RUNTIME_WALL"],
+    ["dynamic retrieval", "MEMORY_RUNTIME_WALL"],
+    ["RAG retrieval", "MEMORY_RUNTIME_WALL"],
+    ["dynamic ingestion", "MEMORY_RUNTIME_WALL"],
+    ["autonomous loop", "RUNTIME_ACTIVATION_WALL"],
+    ["Agent Forge skill activation", "RUNTIME_ACTIVATION_WALL"],
+    ["Brain Council runtime", "RUNTIME_ACTIVATION_WALL"],
+    ["scope expansion", "SCOPE_EXPANSION_WALL"],
+    ["connection string", "SECRET_WALL"],
     ["destructive worktree cleanup", "DESTRUCTIVE_OPERATION_WALL"],
   ])("stops on %s", (requestedCapability, reasonCode) => {
     expect(
@@ -125,5 +155,9 @@ describe("Codex operator next-WO resolver", () => {
       "secrets",
     ])
     expect(packet.resumeAction).toContain("Resume")
+    expect(AUTHORITY_WALL_REASON_CODES).not.toContain("NEXT_WO_ELIGIBLE")
+    expect(AUTHORITY_WALL_REASON_CODES).not.toContain("IN_SCOPE_REPAIR")
+    expect(AUTHORITY_WALL_REASON_CODES).not.toContain("GOAL_PROVEN")
+    expect(AUTHORITY_WALL_REASON_CODES).toContain("AUTH_ACCESS_WALL")
   })
 })
