@@ -13,6 +13,11 @@ GitHub PR review threads during WilliamOS work-order loops.
 The protocol is documentation-only. It does not create a GitHub integration,
 background monitor, webhook, worker, or autonomous process.
 
+Under `LOOP-WOS-CODEX-OPERATOR-001`, review monitoring is routine Codex
+operator work. A normal in-scope thread resolves to remediation and revalidation;
+only a scope-expanding, higher-risk, secret, security, or owner-policy thread
+creates a typed `/stop` wall.
+
 ## Required Monitoring Points
 
 Codex checks review threads:

@@ -10,7 +10,22 @@ The person or bounded agent operating inside authorized scope.
 
 ## Codex Operator
 
-The bounded repo operator that executes authorized Work Orders end to end.
+The bounded repo operator that carries owner-approved Work Orders through
+truth gathering, implementation, validation, pull-request review, eligible
+merge, evidence, and continuation. It is not a WilliamOS runtime or authority
+source.
+
+## Authority Wall
+
+A typed stop condition requiring Primary authority because the next action
+would change risk, scope, auth, secrets, schemas, production, external systems,
+runtime activation, or destructive state.
+
+## Continuation Law
+
+The rule that Codex proceeds to the next dependency-ready Work Order after a
+normal pass and returns to the Primary only at goal completion or a true
+authority wall.
 
 ## Courier
 

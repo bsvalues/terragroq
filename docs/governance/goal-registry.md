@@ -25,7 +25,42 @@ governance reference for the Codex Operator playbook.
 - Owner gates override registry sequence.
 - Any scope-expanding change requires a new owner-authorized packet.
 
-## Active Goal
+## Canonical Active Goal
+
+### `GOAL-WOS-CODEX-OPERATOR-001 - WilliamOS Codex Operator System`
+
+Document: `WILLIAMOS-CODEX-OPERATOR-PLAYBOOK-001`
+
+Loop: `LOOP-WOS-CODEX-OPERATOR-001`
+
+Risk ceiling: `R1`
+
+Merge policy: Codex-eligible for registered R0/R1 work after all gates pass
+
+Production policy: read-only verification only
+
+Purpose: make Codex the Work Order Operator for the complete eligible chain
+while the Primary retains authority over auth, secrets, schemas, production,
+external systems, runtime activation, destructive operations, and scope/risk
+expansion.
+
+Current registered transition: `WO-CODEX-OPERATOR-022 - End-to-End Low-Risk Pilot`.
+
+The typed source of truth is
+`components/operator/codex-operator-registry.ts`. The registry is static and
+does not execute, schedule, ingest, persist, approve, or mutate work.
+
+### Closed Goal Preservation Register
+
+- `GOAL-WOS-004 - Brain Memory Spine`: closed and preserved at PRs #329,
+  #330, and #332; it is not reopened by this adoption.
+- `GOAL-WOS-007 - Agent Forge Skill Governance`: closed and preserved at PR
+  #331; its static/read-only boundary remains unchanged.
+- Earlier shell, Work Order Engine, Academy/Wiki, Hermes boundary, Brain
+  Council, Trace/Eval, Evidence, Authority, and Owner Decision goals retain
+  their existing evidence and closed state.
+
+## Historical Operator Goal
 
 ### `GOAL-OPS-001 - Codex Operator Mode`
 

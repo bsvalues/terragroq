@@ -9,6 +9,7 @@ export type WikiConceptType =
   | "memory"
   | "trace"
   | "work-order-engine"
+  | "operator"
   | "forge"
   | "county-ops"
 
@@ -350,9 +351,45 @@ export const ACADEMY_LESSONS: AcademyLesson[] = [
     ],
     whatThisDoesNotEnable: ["Docker metadata", "backup scan", "port check", "runtime control", "LAN exposure"],
   },
+  {
+    lessonId: "lesson-codex-operator-goal-loop",
+    title: "Codex Operator Goal and Loop",
+    audience: "Primary Operator and Codex",
+    level: "governance",
+    summary: "Teaches the canonical owner-governed, Codex-operated Work Order lifecycle.",
+    concepts: ["/goal", "/loop", "Work Order", "Evidence", "/stop", "continuation law"],
+    relatedGoal: "GOAL-WOS-CODEX-OPERATOR-001",
+    relatedLoop: "LOOP-WOS-CODEX-OPERATOR-001",
+    relatedWorkOrders: ["WO-CODEX-OPERATOR-001 through WO-CODEX-OPERATOR-024"],
+    relatedEvidence: ["Codex Operator adoption evidence", "low-risk pilot", "final operator acceptance"],
+    relatedAuthorityGates: ["AUTH_ACCESS_WALL", "DB_SCHEMA_WALL", "SECRET_WALL", "RUNTIME_ACTIVATION_WALL"],
+    whatThisTeaches: [
+      "The Primary approves the goal and resolves true authority walls.",
+      "Codex owns routine branch, implementation, validation, PR, review, merge, and verification work.",
+      "A passed Work Order normally continues to the next dependency-ready Work Order.",
+      "Evidence proves completion; declared state alone is not live proof.",
+    ],
+    whatThisDoesNotEnable: ["command runner", "background worker", "autonomous runtime loop", "production write"],
+  },
 ]
 
 export const WIKI_PAGES: WikiPage[] = [
+  {
+    pageId: "wiki-codex-operator",
+    title: "Codex Operator",
+    conceptType: "operator",
+    summary: "The bounded repository operator for owner-approved WilliamOS goals.",
+    canonicalDefinition:
+      "Codex operates registered R0/R1 Work Orders through evidence-backed completion and stops at typed authority walls; the Primary retains consequential authority.",
+    relatedSurfaces: ["/goal-console", "/work-orders", "/audit", "/decisions"],
+    relatedEvidence: ["Codex Operator adoption evidence"],
+    relatedAuthority: ["AUTH_ACCESS_WALL", "DB_SCHEMA_WALL", "SECRET_WALL", "RUNTIME_ACTIVATION_WALL"],
+    relatedMemory: ["memory-stale-contradiction-review"],
+    relatedDecisions: ["decision-command-execution", "decision-autonomy"],
+    relatedTrace: ["trace-owner-not-courier-contract"],
+    whatItIs: "A governed development-workflow operator under explicit goal and Work Order scope.",
+    whatItIsNot: "A product runtime, command runner, scheduler, autonomous agent, or authority source.",
+  },
   {
     pageId: "wiki-primary",
     title: "Primary",

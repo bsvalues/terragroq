@@ -41,6 +41,7 @@ describe("Academy Wiki Registry", () => {
       "lesson-trace-ledger-failure-eval",
       "lesson-brain-council-advisory-layer",
       "lesson-local-omen-runtime",
+      "lesson-codex-operator-goal-loop",
     ])
 
     expect(ACADEMY_LESSONS.every((lesson) => lesson.relatedWorkOrders.length > 0)).toBe(true)
@@ -49,6 +50,7 @@ describe("Academy Wiki Registry", () => {
 
   it("creates wiki pages for core concepts and major surfaces", () => {
     expect(WIKI_PAGES.map((page) => page.pageId)).toEqual([
+      "wiki-codex-operator",
       "wiki-primary",
       "wiki-goal-loop",
       "wiki-work-order-engine",
