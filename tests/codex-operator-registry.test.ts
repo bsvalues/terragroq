@@ -58,7 +58,7 @@ describe("Codex operator program registry", () => {
     expect(blocked).toMatch(/TerraFusion|PACS/i)
   })
 
-  it("starts with WO-022 ready after the adoption implementation batch", () => {
+  it("closes all 24 Work Orders after the evidenced low-risk pilot", () => {
     const program = getCodexOperatorProgram()
     const statuses = new Map(
       program.workOrders.map((workOrder) => [workOrder.workOrderId, workOrder.status]),
@@ -66,8 +66,9 @@ describe("Codex operator program registry", () => {
 
     expect(statuses.get("WO-CODEX-OPERATOR-001")).toBe("COMPLETE")
     expect(statuses.get("WO-CODEX-OPERATOR-021")).toBe("COMPLETE")
-    expect(statuses.get("WO-CODEX-OPERATOR-022")).toBe("READY")
-    expect(statuses.get("WO-CODEX-OPERATOR-023")).toBe("PENDING")
-    expect(statuses.get("WO-CODEX-OPERATOR-024")).toBe("PENDING")
+    expect(program.status).toBe("COMPLETE")
+    expect(statuses.get("WO-CODEX-OPERATOR-022")).toBe("COMPLETE")
+    expect(statuses.get("WO-CODEX-OPERATOR-023")).toBe("COMPLETE")
+    expect(statuses.get("WO-CODEX-OPERATOR-024")).toBe("COMPLETE")
   })
 })

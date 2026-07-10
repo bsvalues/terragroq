@@ -10,20 +10,34 @@ import {
 describe("Codex operator next-WO resolver", () => {
   it("selects the same dependency-ready work order deterministically", () => {
     const program = getCodexOperatorProgram()
+    const activePilot = {
+      ...program,
+      status: "ACTIVE" as const,
+      workOrders: program.workOrders.map((workOrder, index) => ({
+        ...workOrder,
+        status: index < 21 ? ("COMPLETE" as const) : index === 21 ? ("READY" as const) : ("PENDING" as const),
+      })),
+    }
 
-    expect(resolveNextOperatorWorkOrder(program)).toMatchObject({
+    expect(resolveNextOperatorWorkOrder(activePilot)).toMatchObject({
       decision: "NEXT_WORK_ORDER",
       workOrderId: "WO-CODEX-OPERATOR-022",
     })
-    expect(resolveNextOperatorWorkOrder(program)).toEqual(resolveNextOperatorWorkOrder(program))
+    expect(resolveNextOperatorWorkOrder(activePilot)).toEqual(resolveNextOperatorWorkOrder(activePilot))
   })
 
   it("reports unmet dependencies instead of skipping ahead", () => {
     const program = getCodexOperatorProgram()
     const workOrders = program.workOrders.map((workOrder) =>
       workOrder.workOrderId === "WO-CODEX-OPERATOR-022"
-        ? { ...workOrder, dependsOn: [...workOrder.dependsOn, "WO-CODEX-OPERATOR-999"] }
-        : workOrder,
+        ? {
+            ...workOrder,
+            status: "READY" as const,
+            dependsOn: [...workOrder.dependsOn, "WO-CODEX-OPERATOR-999"],
+          }
+        : workOrder.workOrderId > "WO-CODEX-OPERATOR-022"
+          ? { ...workOrder, status: "PENDING" as const }
+          : workOrder,
     )
 
     expect(resolveNextOperatorWorkOrder({ ...program, workOrders })).toMatchObject({
@@ -71,6 +85,12 @@ describe("Codex operator next-WO resolver", () => {
   })
 
   it("marks the goal complete only when no registered work remains", () => {
+    expect(resolveNextOperatorWorkOrder(getCodexOperatorProgram())).toEqual({
+      decision: "GOAL_COMPLETE",
+      workOrderId: null,
+      blockers: [],
+    })
+
     expect(
       evaluateOperatorContinuation({
         previousWorkOrderResult: "PASS",
