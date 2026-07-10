@@ -15,6 +15,11 @@ Implementation and pilot PR: [#333](https://github.com/bsvalues/terragroq/pull/3
 
 Pilot merge commit: `9e3a48395945d7b26449cf2e462bc65142aa136c`
 
+Post-merge review remediation: [PR #335](https://github.com/bsvalues/terragroq/pull/335).
+It addresses three late review threads on PR #333 and two late review threads
+on PR #334. Final check, thread-resolution, merge, and production state are
+verified externally when this goal closes.
+
 ## Delivered State
 
 - One canonical playbook defines goal, loop, Work Order, Evidence, stop, and
