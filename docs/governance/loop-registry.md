@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
-Work order: `WO-COUNTY-001 through WO-COUNTY-010`
-Goal: `GOAL-COUNTY-001 - County Ops Knowledge Pack`
+Work order: `WO-TF-COMMAND-000A through WO-TF-COMMAND-000F`
+Goal: `GOAL-TF-COMMAND-PREFLIGHT-001 - TerraFusion Command Layer Preflight`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -42,23 +42,36 @@ returned HTTP 200 and auth readiness remained healthy with signup closed.
 The queue reconciliation loop completed through PR #336 and advanced to the
 County Ops knowledge program.
 
-## Canonical Active Loop
+## Canonical Completed County Ops Loop
 
 ### `LOOP-WILLIAMOS-COUNTY-OPS-001`
 
 - Goal: `GOAL-COUNTY-001`
 - Program: `PROGRAM-WILLIAMOS-COUNTY-OPS-001`
-- Mode: sequential static/read-only knowledge batch
-- Start: `WO-COUNTY-001`
-- Continue until: `WO-COUNTY-010` verified complete or a typed authority wall
-- Selection: first incomplete County Ops Work Order in declared order
-- Product posture: documentation, static registry data, tests, and evidence
-  only
-- Stop before: real records, PACS/county access, case decisions, TerraFusion,
-  runtime activation, persistence, or production mutation
+- Completion: `WO-COUNTY-001` through `WO-COUNTY-010`
+- Merge proof: PR #337 at
+  `49fa4ffe7917bdc0440950ed7a1fb47cd2c0a837`
+- Product posture: static/read-only knowledge; standing safety boundaries remain
 
-Codex owns the eligible chain through validation, PR, review remediation,
-eligible merge, post-merge verification, evidence, and next-program resolution.
+## Canonical Active Loop
+
+### `LOOP-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
+
+- Goal: `GOAL-TF-COMMAND-PREFLIGHT-001`
+- Program: `PROGRAM-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
+- Mode: sequential R0 preflight
+- Start: `WO-TF-COMMAND-000A`
+- Continue until: `WO-TF-COMMAND-000F` is verified complete or a typed
+  authority wall is reached
+- Selection: first incomplete preflight Work Order in declared order
+- Product posture: repository-local static inventory, contracts, governance,
+  and evidence only
+- Stop before: external repository access, live status ingestion, deployment
+  inspection, credentials, county/PACS interaction, runtime activation,
+  persistence, or mutation
+
+Codex owns this eligible chain through validation, PR, review remediation,
+eligible merge, post-merge verification, evidence, and next-goal resolution.
 
 ## Loop Rules
 
@@ -96,17 +109,18 @@ Current status:
 
 ## Current Continuation Order
 
-1. Complete `WO-COUNTY-001` through `WO-COUNTY-008` as source-backed,
-   static knowledge pages.
-2. Complete `WO-COUNTY-009` through Academy/Wiki registration and tests.
-3. Complete `WO-COUNTY-010` with safety, validation, and evidence rollup.
-4. Merge and verify the County Ops program.
-5. Resolve the next eligible program from current truth.
+1. Inventory existing WilliamOS TerraFusion references.
+2. Define project identity and provenance states.
+3. Define static project-card and feed contracts.
+4. Define deployment and staleness semantics.
+5. Classify authority and safety boundaries.
+6. Record the implementation decision and preflight evidence.
+7. Merge, verify, and resolve whether the R1 static implementation may begin.
 
 Historical Shell, WOE, Evidence, Authority, Council, Trace/Eval, Memory,
 Academy/Wiki, Hermes-boundary, Agent Forge, local-status refinement,
-dedicated-host planning, Codex Operator adoption, and queue-reconciliation work
-remain evidence rather than active queue entries.
+dedicated-host planning, Codex Operator adoption, queue reconciliation, and
+County Ops work remain evidence rather than active queue entries.
 
 ## Stop Gates
 
