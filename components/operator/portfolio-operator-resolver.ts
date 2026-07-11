@@ -60,7 +60,24 @@ export function buildLoopPacket(program: PortfolioProgramRecord) {
 }
 
 export function buildWorkOrderChain(program: PortfolioProgramRecord) {
-  const titles = program.programId === "PROGRAM-RELEASE-ENGINEERING-001"
+  const titles = program.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
+    ? [
+        "Runtime Authority and Threat Boundary",
+        "Durable Work Order Envelope",
+        "Authority Policy Evaluator",
+        "Deterministic Lease and Idempotency Model",
+        "Read-Only Codex Patch Boundary",
+        "Validation and Publish Isolation",
+        "Pull Request Check Monitor",
+        "Review Remediation and Retry Ceiling",
+        "Audit Artifact Attestation",
+        "Kill Switch and Stop Runbook",
+        "Adversarial Safety Tests",
+        "Disabled Control Plane Deployment",
+        "Owner Credential Activation Gate",
+        "End-to-End Low-Risk Pilot",
+      ]
+    : program.programId === "PROGRAM-RELEASE-ENGINEERING-001"
     ? [
         "Current Release Evidence Reconciliation",
         "Release Artifact and Provenance Contract",
@@ -73,7 +90,9 @@ export function buildWorkOrderChain(program: PortfolioProgramRecord) {
 
   const workOrderPrefix = program.programId === "PROGRAM-RELEASE-ENGINEERING-001"
     ? "WO-RELEASE"
-    : `WO-${program.programId.replace(/^PROGRAM-/, "").replace(/-001$/, "")}`
+    : program.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
+      ? "WO-RUNTIME-OPERATOR"
+      : `WO-${program.programId.replace(/^PROGRAM-/, "").replace(/-001$/, "")}`
 
   return titles.map((title, index) => ({
     workOrderId: `${workOrderPrefix}-${String(index + 1).padStart(3, "0")}`,

@@ -23,6 +23,7 @@ describe("portfolio operator", () => {
       ]),
     )
     expect(portfolio.backlog.map((program) => program.programId)).toEqual([
+      "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001",
       "PROGRAM-RELEASE-ENGINEERING-001",
       "PROGRAM-DEVEX-HOOK-TOOLING-001",
       "PROGRAM-BACKEND-OE-001",
@@ -40,8 +41,8 @@ describe("portfolio operator", () => {
 
     expect(resolveNextPortfolioProgram(portfolio.backlog)).toMatchObject({
       decision: "SELECT_PROGRAM",
-      programId: "PROGRAM-RELEASE-ENGINEERING-001",
-      goalId: "GOAL-RELEASE-ENGINEERING-001",
+      programId: "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001",
+      goalId: "GOAL-WILLIAMOS-RUNTIME-OPERATOR-001",
       ownerDecisionRequired: false,
     })
   })
@@ -71,15 +72,15 @@ describe("portfolio operator", () => {
     const workOrders = buildWorkOrderChain(selected)
 
     expect(goal).toMatchObject({
-      goalId: "GOAL-RELEASE-ENGINEERING-001",
-      riskCeiling: "R1",
+      goalId: "GOAL-WILLIAMOS-RUNTIME-OPERATOR-001",
+      riskCeiling: "R3",
       ownerDecisionRequired: false,
     })
     expect(loop.continuationRule).toContain("portfolio resolver")
     expect(loop.activeWorkOrder).toBe(workOrders[0].workOrderId)
     expect(loop.orderedWorkOrderQueue[0]).toBe(loop.activeWorkOrder)
     expect(workOrders[0]).toMatchObject({
-      workOrderId: "WO-RELEASE-001",
+      workOrderId: "WO-RUNTIME-OPERATOR-001",
       status: "ACTIVE",
       riskClass: "R0",
     })
@@ -87,8 +88,8 @@ describe("portfolio operator", () => {
   })
 
   it("preserves program risk and derives program-specific loop and Work Order identities", () => {
-    const devex = getPortfolioOperatorProgram().backlog[1]
-    const protectedProgram = getPortfolioOperatorProgram().backlog[4]
+    const devex = getPortfolioOperatorProgram().backlog[2]
+    const protectedProgram = getPortfolioOperatorProgram().backlog[5]
     const devexWorkOrders = buildWorkOrderChain(devex)
 
     expect(buildGoalPacket(protectedProgram)).toMatchObject({
@@ -97,13 +98,13 @@ describe("portfolio operator", () => {
     })
     expect(buildLoopPacket(devex).activeWorkOrder).toBe(devexWorkOrders[0].workOrderId)
     expect(devexWorkOrders[0].workOrderId).toBe("WO-DEVEX-HOOK-TOOLING-001")
-    expect(buildWorkOrderChain(getPortfolioOperatorProgram().backlog[2])[0].workOrderId).toBe("WO-BACKEND-OE-001")
+    expect(buildWorkOrderChain(getPortfolioOperatorProgram().backlog[3])[0].workOrderId).toBe("WO-BACKEND-OE-001")
   })
 
   it("accepts completed-program evidence when resolving backlog dependencies", () => {
     const portfolio = getPortfolioOperatorProgram()
     const dependent = {
-      ...portfolio.backlog[1],
+      ...portfolio.backlog[2],
       dependencies: ["PROGRAM-WILLIAMOS-TF-COMMAND-001"],
       priorityScore: 999,
     }

@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
-Work order: `WO-PORTFOLIO-001 through WO-PORTFOLIO-010; WO-RELEASE-001 active`
-Goal: `GOAL-RELEASE-ENGINEERING-001 - Release Engineering Foundation (active)`
+Work order: `WO-RUNTIME-OPERATOR-001 through WO-RUNTIME-OPERATOR-014`
+Goal: `GOAL-WILLIAMOS-RUNTIME-OPERATOR-001 (active)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -89,6 +89,16 @@ Evidence:
 
 ## Active Loop State
 
+### `LOOP-WILLIAMOS-RUNTIME-OPERATOR-001`
+
+Status: `active / serialized background control plane`
+
+Goal: `GOAL-WILLIAMOS-RUNTIME-OPERATOR-001`
+
+Continuation: complete implementation and disabled deployment, stop at the
+owner credential gate, then activate and prove one low-risk Work Order through
+lease, patch, validation, PR, review, eligible merge, and checkpoint closure.
+
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
 Status: `standing`
@@ -100,7 +110,7 @@ exists or a typed authority wall is reached.
 
 ### `LOOP-RELEASE-ENGINEERING-001`
 
-Status: `active`
+Status: `ready / deferred behind runtime operator activation`
 
 Goal: `GOAL-RELEASE-ENGINEERING-001`
 

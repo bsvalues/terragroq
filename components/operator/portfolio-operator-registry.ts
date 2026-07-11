@@ -56,7 +56,9 @@ const backlogSeeds: Array<{
   riskClass: OperatorRiskClass
   dependencies?: string[]
   authorityMode?: PortfolioAuthorityMode
+  priorityOverride?: number
 }> = [
+  { programId: "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001", title: "WilliamOS Runtime Operator", goalId: "GOAL-WILLIAMOS-RUNTIME-OPERATOR-001", businessValue: 10, engineeringValue: 10, riskClass: "R3", priorityOverride: 200 },
   { programId: "PROGRAM-RELEASE-ENGINEERING-001", title: "Release Engineering", goalId: "GOAL-RELEASE-ENGINEERING-001", businessValue: 9, engineeringValue: 9, riskClass: "R1" },
   { programId: "PROGRAM-DEVEX-HOOK-TOOLING-001", title: "DevEx / Hook Tooling", goalId: "GOAL-DEVEX-HOOK-TOOLING-001", businessValue: 7, engineeringValue: 9, riskClass: "R1" },
   { programId: "PROGRAM-BACKEND-OE-001", title: "Backend Operational Excellence", goalId: "GOAL-BACKEND-OE-001", businessValue: 8, engineeringValue: 8, riskClass: "R1" },
@@ -72,7 +74,7 @@ function priorityScore(seed: (typeof backlogSeeds)[number]) {
   const dependencyBonus = seed.dependencies?.length ? 0 : 20
   const authorityPenalty = seed.authorityMode === "OWNER_GATED" ? 100 : 0
   const riskPenalty = { R0: 0, R1: 2, R2: 10, R3: 20, R4: 30 }[seed.riskClass]
-  return seed.businessValue * 5 + seed.engineeringValue * 3 + dependencyBonus - authorityPenalty - riskPenalty
+  return seed.priorityOverride ?? seed.businessValue * 5 + seed.engineeringValue * 3 + dependencyBonus - authorityPenalty - riskPenalty
 }
 
 export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((seed) => ({
@@ -85,7 +87,7 @@ export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((see
   authorityMode: seed.authorityMode ?? "CODEX_ELIGIBLE",
   state: seed.authorityMode === "OWNER_GATED"
     ? "BLOCKED"
-    : seed.programId === "PROGRAM-RELEASE-ENGINEERING-001"
+    : seed.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
       ? "SELECTED"
       : "READY",
   nextGoalId: seed.goalId,
