@@ -76,6 +76,8 @@ describe("portfolio operator", () => {
       ownerDecisionRequired: false,
     })
     expect(loop.continuationRule).toContain("portfolio resolver")
+    expect(loop.activeWorkOrder).toBe(workOrders[0].workOrderId)
+    expect(loop.orderedWorkOrderQueue[0]).toBe(loop.activeWorkOrder)
     expect(workOrders[0]).toMatchObject({
       workOrderId: "WO-RELEASE-001",
       status: "ACTIVE",

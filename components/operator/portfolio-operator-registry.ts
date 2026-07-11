@@ -75,7 +75,7 @@ function priorityScore(seed: (typeof backlogSeeds)[number]) {
   return seed.businessValue * 5 + seed.engineeringValue * 3 + dependencyBonus - authorityPenalty - riskPenalty
 }
 
-export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((seed, index) => ({
+export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((seed) => ({
   programId: seed.programId,
   title: seed.title,
   businessValue: seed.businessValue,
@@ -83,7 +83,11 @@ export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((see
   riskClass: seed.riskClass,
   dependencies: seed.dependencies ?? [],
   authorityMode: seed.authorityMode ?? "CODEX_ELIGIBLE",
-  state: index === 0 ? "SELECTED" : seed.authorityMode === "OWNER_GATED" ? "BLOCKED" : "READY",
+  state: seed.authorityMode === "OWNER_GATED"
+    ? "BLOCKED"
+    : seed.programId === "PROGRAM-RELEASE-ENGINEERING-001"
+      ? "SELECTED"
+      : "READY",
   nextGoalId: seed.goalId,
   nextGoalTitle: `${seed.title} Foundation`,
   completionEvidence: [],
