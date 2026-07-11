@@ -183,8 +183,8 @@ describe("Academy Wiki Registry", () => {
     expect(pages.get("wiki-trace-ledger")?.relatedSurfaces).toContain("/brain-council")
     expect(pages.get("wiki-county-ops")?.whatItIs).toContain("PACS rules")
     expect(pages.get("wiki-county-ops")?.whatItIsNot).toContain("PACS connection")
-    expect(pages.get("wiki-county-ops")?.relatedAuthority).toContain("COUNTY_DATA_GATE")
-    expect(pages.get("wiki-county-ops")?.relatedAuthority).toContain("PACS_ACCESS_GATE")
+    expect(pages.get("wiki-county-ops")?.relatedAuthority).toContain("DATA_MUTATION_GATE")
+    expect(pages.get("wiki-county-ops")?.relatedAuthority).toContain("SECRET_ACCESS_GATE")
     expect(pages.get("wiki-county-ops")?.relatedAuthority).toContain("TERRAFUSION_TOUCH_GATE")
   })
 
