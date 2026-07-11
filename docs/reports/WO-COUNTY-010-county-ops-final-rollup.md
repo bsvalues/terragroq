@@ -65,7 +65,19 @@ Reviewed 2026-07-10:
 These links are starting authorities. Live work must verify current law,
 current DOR guidance, adopted county policy, and counsel direction.
 
-## Validation Required
+## Validation
+
+Completed before PR:
+
+- Academy/Wiki focused test slice: 1 file / 12 tests passed using the branch
+  Academy and Trace registries;
+- TypeScript `tsc --noEmit` on the focused slice: passed;
+- 17-file scope, identifier, whitespace, secret, and sensitive-added-line
+  inspection: passed;
+- no real county record, PACS host, database, credential, connection string, or
+  owner data added.
+
+Required remotely before merge:
 
 - Academy/Wiki focused tests;
 - full test suite;
