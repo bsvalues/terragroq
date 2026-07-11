@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
-Work order: `WO-COUNTY-001 through WO-COUNTY-010`
-Goal: `GOAL-COUNTY-001 - County Ops Knowledge Pack`
+Work order: `WO-TF-COMMAND-001 through WO-TF-COMMAND-006`
+Goal: `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -42,23 +42,47 @@ returned HTTP 200 and auth readiness remained healthy with signup closed.
 The queue reconciliation loop completed through PR #336 and advanced to the
 County Ops knowledge program.
 
-## Canonical Active Loop
+## Canonical Completed County Ops Loop
 
 ### `LOOP-WILLIAMOS-COUNTY-OPS-001`
 
 - Goal: `GOAL-COUNTY-001`
 - Program: `PROGRAM-WILLIAMOS-COUNTY-OPS-001`
-- Mode: sequential static/read-only knowledge batch
-- Start: `WO-COUNTY-001`
-- Continue until: `WO-COUNTY-010` verified complete or a typed authority wall
-- Selection: first incomplete County Ops Work Order in declared order
-- Product posture: documentation, static registry data, tests, and evidence
-  only
-- Stop before: real records, PACS/county access, case decisions, TerraFusion,
-  runtime activation, persistence, or production mutation
+- Completion: `WO-COUNTY-001` through `WO-COUNTY-010`
+- Merge proof: PR #337 at
+  `49fa4ffe7917bdc0440950ed7a1fb47cd2c0a837`
+- Product posture: static/read-only knowledge; standing safety boundaries remain
+
+## Canonical Completed TerraFusion Preflight Loop
+
+### `LOOP-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
+
+- Goal: `GOAL-TF-COMMAND-PREFLIGHT-001`
+- Program: `PROGRAM-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
+- Completion: `WO-TF-COMMAND-000A` through `WO-TF-COMMAND-000F`
+- Decision: R1 static/read-only implementation is eligible
+- Evidence:
+  `docs/reports/WO-TF-COMMAND-000F-preflight-rollup.md`
+
+## Canonical Active Loop
+
+### `LOOP-WILLIAMOS-TF-COMMAND-001`
+
+- Goal: `GOAL-TF-COMMAND-001`
+- Program: `PROGRAM-WILLIAMOS-TF-COMMAND-001`
+- Mode: sequential R1 static/read-only product slice
+- Start: `WO-TF-COMMAND-001`
+- Continue until: `WO-TF-COMMAND-006` is verified complete or a typed
+  authority wall is reached
+- Selection: first incomplete Work Order in declared order
+- Product posture: repository-local static records, UI read models, tests, and
+  evidence only
+- Stop before: external repository access, live ingestion, deployment
+  inspection, credentials, county/PACS interaction, persistence, command
+  execution, runtime activation, or mutation
 
 Codex owns the eligible chain through validation, PR, review remediation,
-eligible merge, post-merge verification, evidence, and next-program resolution.
+eligible merge, post-merge verification, evidence, and next-goal resolution.
 
 ## Loop Rules
 
@@ -96,17 +120,21 @@ Current status:
 
 ## Current Continuation Order
 
-1. Complete `WO-COUNTY-001` through `WO-COUNTY-008` as source-backed,
-   static knowledge pages.
-2. Complete `WO-COUNTY-009` through Academy/Wiki registration and tests.
-3. Complete `WO-COUNTY-010` with safety, validation, and evidence rollup.
-4. Merge and verify the County Ops program.
-5. Resolve the next eligible program from current truth.
+1. Complete `WO-TF-COMMAND-001` with a sourced TerraFusion project card.
+2. Complete `WO-TF-COMMAND-002` and `003` with static Work Order and evidence
+   feeds.
+3. Complete `WO-TF-COMMAND-004` with a typed blocker queue.
+4. Complete `WO-TF-COMMAND-005` with deployment and staleness semantics that
+   make no unsupported live claim.
+5. Complete `WO-TF-COMMAND-006` with the governed next-move recommendation,
+   validation, and final evidence.
+6. Merge, verify, and resolve the next eligible goal.
 
 Historical Shell, WOE, Evidence, Authority, Council, Trace/Eval, Memory,
 Academy/Wiki, Hermes-boundary, Agent Forge, local-status refinement,
-dedicated-host planning, Codex Operator adoption, and queue-reconciliation work
-remain evidence rather than active queue entries.
+dedicated-host planning, Codex Operator adoption, queue reconciliation, County
+Ops, and TerraFusion preflight work remain evidence rather than active queue
+entries.
 
 ## Stop Gates
 
