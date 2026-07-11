@@ -1,6 +1,11 @@
 import Link from "next/link"
 import { Compass, FolderKanban, ShieldCheck } from "lucide-react"
-import { getProjectsWorkspace, type ProjectPosture } from "@/components/projects/projects-workspace"
+import {
+  getProjectsWorkspace,
+  type ProjectPosture,
+  type TerraFusionCommandLayer,
+  type TerraFusionCommandRecord,
+} from "@/components/projects/projects-workspace"
 import { StatusBadge } from "@/components/status-badge"
 
 const postureValue: Record<ProjectPosture, "pass" | "neutral" | "partial"> = {
@@ -82,6 +87,7 @@ export function ProjectsWorkspacePanel() {
             <p className="mt-3 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
               Next: {project.nextRecommendedWork}
             </p>
+            {project.commandLayer ? <TerraFusionCommandView command={project.commandLayer} /> : null}
           </article>
         ))}
       </div>
@@ -131,6 +137,51 @@ function ProjectField({ label, value }: { label: string; value: string }) {
     <div>
       <dt className="font-mono text-[10px] uppercase tracking-wider">{label}</dt>
       <dd className="mt-1 leading-relaxed">{value}</dd>
+    </div>
+  )
+}
+
+function TerraFusionCommandView({ command }: { command: TerraFusionCommandLayer }) {
+  const feeds = [
+    ...command.workOrders,
+    ...command.evidence,
+    ...command.blockers,
+    command.deployment,
+    command.nextMove,
+  ]
+
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+        TerraFusion command layer
+      </p>
+      <CommandRecord record={command.projectCard} />
+      <div className="mt-2 grid gap-2">
+        {feeds.map((record) => (
+          <CommandRecord key={record.id} record={record} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function CommandRecord({ record }: { record: TerraFusionCommandRecord }) {
+  return (
+    <div className="mt-2 rounded-md border border-border bg-card px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-semibold">{record.label}</p>
+        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          {record.source.state}
+        </span>
+      </div>
+      <p className="mt-1 leading-relaxed text-muted-foreground">{record.summary}</p>
+      <p className="mt-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+        Source: {record.source.reference}
+        {record.source.observedAt ? ` · Observed ${record.source.observedAt}` : ""}
+      </p>
+      <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+        {record.source.explanation}
+      </p>
     </div>
   )
 }
