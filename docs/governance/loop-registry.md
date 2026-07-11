@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
-Work order: `WO-OPS-002`
-Goal: `GOAL-OPS-001 - Codex Operator Mode`
+Work order: `WO-OPERATOR-QUEUE-003`
+Goal: `GOAL-WOS-ACTIVE-PROGRAM-QUEUE-001 - Active Program Queue Reconciliation`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -14,7 +14,7 @@ preserving owner gates and safety blocks.
 The registry is not an automation runtime. It does not schedule background
 work, execute commands, mutate memory, or activate workers.
 
-## Canonical Active Loop
+## Canonical Completed Operator Loop
 
 ### `LOOP-WOS-CODEX-OPERATOR-001`
 
@@ -34,6 +34,24 @@ true authority wall or final goal closure.
 Final pilot proof: PR #333 merged at
 `9e3a48395945d7b26449cf2e462bc65142aa136c`; all required production routes
 returned HTTP 200 and auth readiness remained healthy with signup closed.
+
+## Canonical Active Loop
+
+### `LOOP-WOS-ACTIVE-PROGRAM-QUEUE-001`
+
+- Goal: `GOAL-WOS-ACTIVE-PROGRAM-QUEUE-001`
+- Program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
+- Mode: sequential R0 reconciliation
+- Start: `WO-OPERATOR-QUEUE-001`
+- Continue until: queue reconciled and next eligible goal is registered, or a
+  typed authority wall
+- Current Work Orders: `WO-OPERATOR-QUEUE-001` through `005`
+- Next on verified completion:
+  `GOAL-COUNTY-001 / WO-COUNTY-001`
+
+The active queue is
+`docs/governance/active-program-queue.md`. Codex owns this R0 chain through
+eligible merge and post-merge verification. The Primary is not a relay.
 
 ## Loop Rules
 
@@ -67,27 +85,22 @@ Current status:
 - `WO-OPS-005`: complete through PR #304.
 - `WO-OPS-006`: complete through PR #305.
 - `WO-OPS-007`: complete through PR #306.
-- `WO-OPS-008`: active.
+- `WO-OPS-008`: complete as a historical operator-doctrine step.
 
-## Next Product Loop Order
+## Current Continuation Order
 
-After `GOAL-OPS-001`, Codex moves to `GOAL-WOS-001` unless William overrides.
+1. Complete `WO-OPERATOR-QUEUE-001` through `005`.
+2. Merge and verify the active-program queue reconciliation.
+3. Start `GOAL-COUNTY-001 / WO-COUNTY-001`.
+4. Continue through the static/read-only County Ops knowledge sequence while it
+   remains inside the registered boundaries.
+5. Stop before real county data, PACS access, credentials, production systems,
+   TerraFusion integration, or any other typed authority wall.
 
-1. `WO-SHELL-004 - Primary Navigation Shell`
-2. `WO-SHELL-005 - Work Orders Surface`
-3. `WO-SHELL-006 - Evidence Surface`
-4. `WO-SHELL-007 - Systems Status Surface`
-5. `WO-SHELL-008 - Authority / Governance Surface`
-6. `WO-SHELL-009 - Memory Surface Placeholder`
-7. `WO-SHELL-010 - Shell Polish + Production Verification`
-
-Then Codex moves to `GOAL-WOE-001` unless William overrides.
-
-1. `WO-WOE-008 - Evidence Rollup`
-2. `WO-WOE-009 - Goal Detail Surface`
-3. `WO-WOE-010 - Loop Detail Surface`
-4. `WO-WOE-011 - Active Work Queue`
-5. `WO-WOE-012 - Blocked Decision Queue`
+Historical Shell, WOE, Evidence, Authority, Council, Trace/Eval, Memory,
+Academy/Wiki, Hermes-boundary, Agent Forge, local-status refinement, and
+dedicated-host planning sequences are complete or superseded. They are evidence,
+not active queue entries.
 
 ## Stop Gates
 
