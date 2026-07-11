@@ -364,10 +364,10 @@ export const ACADEMY_LESSONS: AcademyLesson[] = [
     relatedWorkOrders: ["WO-COUNTY-001 through WO-COUNTY-010"],
     relatedEvidence: ["County Ops knowledge map", "County Ops final rollup"],
     relatedAuthorityGates: [
-      "COUNTY_DATA_GATE",
-      "PACS_ACCESS_GATE",
-      "PUBLIC_RECORDS_DECISION_GATE",
       "TERRAFUSION_TOUCH_GATE",
+      "SECRET_ACCESS_GATE",
+      "DATA_MUTATION_GATE",
+      "PRODUCTION_DEPLOY_GATE",
     ],
     whatThisTeaches: [
       "County Ops knowledge is static and source-backed.",
@@ -568,7 +568,7 @@ export const WIKI_PAGES: WikiPage[] = [
     canonicalDefinition: "County Ops organizes source-backed PACS safety, levy, BOE, permit, redaction, ratio-study, and appeals guidance while real county records and systems remain outside WilliamOS.",
     relatedSurfaces: ["/projects", "/audit", "/governance"],
     relatedEvidence: ["County Ops knowledge map", "County Ops final rollup"],
-    relatedAuthority: ["COUNTY_DATA_GATE", "PACS_ACCESS_GATE", "PUBLIC_RECORDS_DECISION_GATE", "TERRAFUSION_TOUCH_GATE", "SECRET_ACCESS_GATE"],
+    relatedAuthority: ["TERRAFUSION_TOUCH_GATE", "SECRET_ACCESS_GATE", "DATA_MUTATION_GATE", "PRODUCTION_DEPLOY_GATE"],
     relatedMemory: ["memory-stale-contradiction-review"],
     relatedDecisions: ["decision-terrafusion-pacs-touch"],
     relatedTrace: ["trace-authority-refresh-pass"],
