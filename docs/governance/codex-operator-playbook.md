@@ -419,3 +419,9 @@ explicitly grants that authority.
 Codex must not ask what to do next when the next action is already authorized.
 Codex returns either a completed result, a continuation result, or a specific
 owner gate.
+
+After a complete program, Codex invokes
+`LOOP-PORTFOLIO-OPERATOR-001`. An exhausted Work Order sequence is not a
+terminal owner stop while the ratified backlog contains an approved,
+dependency-cleared program inside standing authority. See
+`docs/governance/portfolio-operator-playbook.md`.

@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
-Work order: `WO-TF-COMMAND-001 through WO-TF-COMMAND-006`
-Goal: `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer (complete)`
+Work order: `WO-PORTFOLIO-001 through WO-PORTFOLIO-010; WO-RELEASE-001 active`
+Goal: `GOAL-RELEASE-ENGINEERING-001 - Release Engineering Foundation (active)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -89,9 +89,29 @@ Evidence:
 
 ## Active Loop State
 
-No further material loop is authorized. Codex completed routine implementation,
-review remediation, merge, verification, and evidence. A new program now
-requires explicit owner authorization.
+### `LOOP-PORTFOLIO-OPERATOR-001`
+
+Status: `standing`
+
+Selection rule: finish active work and PR remediation first, then rank the
+ratified backlog and activate the highest-priority dependency-cleared program
+inside standing authority. Stop only when no approved executable program
+exists or a typed authority wall is reached.
+
+### `LOOP-RELEASE-ENGINEERING-001`
+
+Status: `active`
+
+Goal: `GOAL-RELEASE-ENGINEERING-001`
+
+Active Work Order: `WO-RELEASE-001`
+
+Continuation: complete the six bounded release-engineering Work Orders, then
+return to `LOOP-PORTFOLIO-OPERATOR-001` for the next program selection.
+
+The portfolio loop remains the default continuation path after each program.
+Routine implementation, review remediation, merge, verification, evidence,
+and next-program activation do not require the Primary to courier a new loop.
 
 ## Loop Rules
 

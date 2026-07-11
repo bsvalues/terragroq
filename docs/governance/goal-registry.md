@@ -1,7 +1,7 @@
 # WilliamOS Goal Registry
 
-Work order: `WO-TF-COMMAND-001 through WO-TF-COMMAND-006`
-Goal: `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer (complete)`
+Work order: `WO-PORTFOLIO-001 through WO-PORTFOLIO-010; WO-RELEASE-001 active`
+Goal: `GOAL-RELEASE-ENGINEERING-001 - Release Engineering Foundation (active)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -137,10 +137,31 @@ persistence, command execution, and any production mutation.
 
 ## Active Goal State
 
-No additional material program is authorized in the canonical sequence. A new
-goal packet or explicit owner authorization is required before selecting a new
-program or crossing a standing authority wall. Routine post-merge evidence is
-complete.
+### `GOAL-PORTFOLIO-OPERATOR-001 - Continuous Program and Goal Selection`
+
+Status: `complete / standing continuation contract`
+
+Loop: `LOOP-PORTFOLIO-OPERATOR-001`
+
+Evidence: `docs/reports/WO-PORTFOLIO-001-010-portfolio-operator-evidence.md`
+
+The standing portfolio resolver selected the highest-priority approved,
+dependency-cleared program without returning routine planning to the Primary.
+
+### `GOAL-RELEASE-ENGINEERING-001 - Release Engineering Foundation`
+
+Status: `active`
+
+Loop: `LOOP-RELEASE-ENGINEERING-001`
+
+Active Work Order: `WO-RELEASE-001 - Current Release Evidence Reconciliation`
+
+Risk ceiling: `R1`; static/read-only release governance only. Deployment,
+release, tag, rollback execution, and production writes remain owner-gated.
+
+The portfolio resolver may activate the next ratified dependency-cleared goal
+inside standing authority. Explicit owner authorization remains required only
+for a strategic conflict or typed authority wall.
 
 ### Closed Goal Preservation Register
 
