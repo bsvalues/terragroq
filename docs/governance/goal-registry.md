@@ -1,7 +1,7 @@
 # WilliamOS Goal Registry
 
-Work order: `WO-RUNTIME-OPERATOR-001 through WO-RUNTIME-OPERATOR-014`
-Goal: `GOAL-WILLIAMOS-RUNTIME-OPERATOR-001 (active)`
+Work order: `WO-RUNTIME-LOCAL-001 through WO-RUNTIME-LOCAL-008`
+Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001 (active)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -137,16 +137,18 @@ persistence, command execution, and any production mutation.
 
 ## Active Goal State
 
-### `GOAL-WILLIAMOS-RUNTIME-OPERATOR-001 - Bounded Background Operator`
+### `GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001 - Local-First Bounded Background Operator`
 
 Status: `active / owner-authorized`
 
-Loop: `LOOP-WILLIAMOS-RUNTIME-OPERATOR-001`
+Loop: `LOOP-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001`
 
 Program: `PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001`
 
-Current gate: deploy the disabled control plane, then stop for owner-only
-`OPENAI_API_KEY` creation before activation and the low-risk pilot.
+Current gate: deploy the disabled HP OMEN Docker control plane, then stop for
+owner-only creation of host-local OpenAI and least-privilege GitHub credential
+files before activation and the low-risk pilot. GitHub Actions hosting is
+prohibited and cannot be selected without a future explicit owner decision.
 
 ### `GOAL-PORTFOLIO-OPERATOR-001 - Continuous Program and Goal Selection`
 

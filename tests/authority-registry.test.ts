@@ -82,6 +82,7 @@ describe("Authority Registry", () => {
       "BACKUP_RESTORE_GATE",
       "TOOL_CALL_GATE",
       "AUTONOMOUS_LOOP_GATE",
+      "OPERATOR_HOST_GATE",
     ])
     expect(AUTHORITY_GATES.every((gate) => gate.requiredOwnerDecision.length > 0)).toBe(true)
     expect(AUTHORITY_GATES.every((gate) => gate.safeNextAction.length > 0)).toBe(true)
@@ -126,6 +127,7 @@ describe("Authority Registry", () => {
       "command runner",
       "GitHub write",
       "Codex automation",
+      "GitHub Actions operator host",
       "Docker metadata",
       "backup scan",
       "port checks",

@@ -42,7 +42,7 @@ describe("portfolio operator", () => {
     expect(resolveNextPortfolioProgram(portfolio.backlog)).toMatchObject({
       decision: "SELECT_PROGRAM",
       programId: "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001",
-      goalId: "GOAL-WILLIAMOS-RUNTIME-OPERATOR-001",
+      goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001",
       ownerDecisionRequired: false,
     })
   })
@@ -72,7 +72,7 @@ describe("portfolio operator", () => {
     const workOrders = buildWorkOrderChain(selected)
 
     expect(goal).toMatchObject({
-      goalId: "GOAL-WILLIAMOS-RUNTIME-OPERATOR-001",
+      goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001",
       riskCeiling: "R3",
       ownerDecisionRequired: false,
     })
