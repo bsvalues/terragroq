@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
-Work order: `WO-TF-COMMAND-000A through WO-TF-COMMAND-000F`
-Goal: `GOAL-TF-COMMAND-PREFLIGHT-001 - TerraFusion Command Layer Preflight`
+Work order: `WO-TF-COMMAND-001 through WO-TF-COMMAND-006`
+Goal: `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -53,24 +53,35 @@ County Ops knowledge program.
   `49fa4ffe7917bdc0440950ed7a1fb47cd2c0a837`
 - Product posture: static/read-only knowledge; standing safety boundaries remain
 
-## Canonical Active Loop
+## Canonical Completed TerraFusion Preflight Loop
 
 ### `LOOP-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
 
 - Goal: `GOAL-TF-COMMAND-PREFLIGHT-001`
 - Program: `PROGRAM-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
-- Mode: sequential R0 preflight
-- Start: `WO-TF-COMMAND-000A`
-- Continue until: `WO-TF-COMMAND-000F` is verified complete or a typed
-  authority wall is reached
-- Selection: first incomplete preflight Work Order in declared order
-- Product posture: repository-local static inventory, contracts, governance,
-  and evidence only
-- Stop before: external repository access, live status ingestion, deployment
-  inspection, credentials, county/PACS interaction, runtime activation,
-  persistence, or mutation
+- Completion: `WO-TF-COMMAND-000A` through `WO-TF-COMMAND-000F`
+- Decision: R1 static/read-only implementation is eligible
+- Evidence:
+  `docs/reports/WO-TF-COMMAND-000F-preflight-rollup.md`
 
-Codex owns this eligible chain through validation, PR, review remediation,
+## Canonical Active Loop
+
+### `LOOP-WILLIAMOS-TF-COMMAND-001`
+
+- Goal: `GOAL-TF-COMMAND-001`
+- Program: `PROGRAM-WILLIAMOS-TF-COMMAND-001`
+- Mode: sequential R1 static/read-only product slice
+- Start: `WO-TF-COMMAND-001`
+- Continue until: `WO-TF-COMMAND-006` is verified complete or a typed
+  authority wall is reached
+- Selection: first incomplete Work Order in declared order
+- Product posture: repository-local static records, UI read models, tests, and
+  evidence only
+- Stop before: external repository access, live ingestion, deployment
+  inspection, credentials, county/PACS interaction, persistence, command
+  execution, runtime activation, or mutation
+
+Codex owns the eligible chain through validation, PR, review remediation,
 eligible merge, post-merge verification, evidence, and next-goal resolution.
 
 ## Loop Rules
@@ -109,18 +120,21 @@ Current status:
 
 ## Current Continuation Order
 
-1. Inventory existing WilliamOS TerraFusion references.
-2. Define project identity and provenance states.
-3. Define static project-card and feed contracts.
-4. Define deployment and staleness semantics.
-5. Classify authority and safety boundaries.
-6. Record the implementation decision and preflight evidence.
-7. Merge, verify, and resolve whether the R1 static implementation may begin.
+1. Complete `WO-TF-COMMAND-001` with a sourced TerraFusion project card.
+2. Complete `WO-TF-COMMAND-002` and `003` with static Work Order and evidence
+   feeds.
+3. Complete `WO-TF-COMMAND-004` with a typed blocker queue.
+4. Complete `WO-TF-COMMAND-005` with deployment and staleness semantics that
+   make no unsupported live claim.
+5. Complete `WO-TF-COMMAND-006` with the governed next-move recommendation,
+   validation, and final evidence.
+6. Merge, verify, and resolve the next eligible goal.
 
 Historical Shell, WOE, Evidence, Authority, Council, Trace/Eval, Memory,
 Academy/Wiki, Hermes-boundary, Agent Forge, local-status refinement,
-dedicated-host planning, Codex Operator adoption, queue reconciliation, and
-County Ops work remain evidence rather than active queue entries.
+dedicated-host planning, Codex Operator adoption, queue reconciliation, County
+Ops, and TerraFusion preflight work remain evidence rather than active queue
+entries.
 
 ## Stop Gates
 
