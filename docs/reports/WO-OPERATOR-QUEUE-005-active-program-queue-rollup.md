@@ -16,9 +16,11 @@
 
 `LOOP-WOS-ACTIVE-PROGRAM-QUEUE-001`
 
-## Baseline
+## Base
 
-`origin/main = e5a396ce19c3c19fb2ef66c32b43aaee20f41cc9`
+```text
+origin/main = e5a396ce19c3c19fb2ef66c32b43aaee20f41cc9
+```
 
 ## Work Orders
 
@@ -97,11 +99,14 @@ TERRAFUSION_PACS_COUNTY_TOUCHED: false
 SECRETS_EXPOSED: false
 ```
 
-## Continuation
+## Next Recommended WO
+
+```text
+GOAL: GOAL-COUNTY-001 - County Ops Knowledge Pack
+WORK_ORDER: WO-COUNTY-001 - County Ops Knowledge Map
+```
 
 After checks, review, merge, and post-merge verification, Codex continues
-directly to:
+directly to this registered static/read-only slice.
 
-`GOAL-COUNTY-001 / WO-COUNTY-001 - County Ops Knowledge Map`
-
-Owner decision required: false for the registered static/read-only slice.
+Owner decision required: false.
