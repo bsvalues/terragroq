@@ -25,7 +25,7 @@ governance reference for the Codex Operator playbook.
 - Owner gates override registry sequence.
 - Any scope-expanding change requires a new owner-authorized packet.
 
-## Canonical Active Goal
+## Canonical Completed Operator Goal
 
 ### `GOAL-WOS-CODEX-OPERATOR-001 - WilliamOS Codex Operator System`
 
@@ -51,6 +51,37 @@ PR #333 at `9e3a48395945d7b26449cf2e462bc65142aa136c`.
 The typed source of truth is
 `components/operator/codex-operator-registry.ts`. The registry is static and
 does not execute, schedule, ingest, persist, approve, or mutate work.
+
+## Canonical Active Goal
+
+### `GOAL-WOS-ACTIVE-PROGRAM-QUEUE-001 - Active Program Queue Reconciliation`
+
+Program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
+
+Loop: `LOOP-WOS-ACTIVE-PROGRAM-QUEUE-001`
+
+Risk ceiling: `R0`
+
+Purpose: reconcile completed goals, stale next-lane recommendations, and reused
+goal identifiers so Codex has one truthful next eligible program.
+
+Work Orders:
+
+1. `WO-OPERATOR-QUEUE-001 - Current Truth Reconciliation`
+2. `WO-OPERATOR-QUEUE-002 - Goal Registry Status Correction`
+3. `WO-OPERATOR-QUEUE-003 - Loop Registry Status Correction`
+4. `WO-OPERATOR-QUEUE-004 - Stale Recommendation and Identifier Reconciliation`
+5. `WO-OPERATOR-QUEUE-005 - Next Eligible Program Decision and Evidence Rollup`
+
+Canonical queue:
+`docs/governance/active-program-queue.md`
+
+Next on verified completion:
+`GOAL-COUNTY-001 - County Ops Knowledge Pack`.
+
+County Ops uses `GOAL-COUNTY-001`; it must not reuse `GOAL-WOS-009`, which is
+preserved as the completed Academy + Wiki reconciliation identity.
+
 
 ### Closed Goal Preservation Register
 
