@@ -32,7 +32,8 @@ activate a worker, inspect a host, mutate production, or change authority.
 - PRs #333, #334, and #335 are merged.
 - Canonical baseline is
   `e5a396ce19c3c19fb2ef66c32b43aaee20f41cc9`.
-- No open pull request or issue was found during queue reconciliation.
+- At the recorded baseline, before this reconciliation branch and PR were
+  created, no open pull request or issue was found.
 - The Phase 2 dedicated Ubuntu host planning gates already completed through
   `WO-LOCAL-019` to `WO-LOCAL-024`.
 - Dedicated-host implementation remains owner-gated because it would require
