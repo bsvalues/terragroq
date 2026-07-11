@@ -15,7 +15,7 @@ function assertString(value, field) {
 
 export function parseWorkOrderEnvelope(body) {
   const start = body.indexOf(ENVELOPE_START)
-  const end = body.indexOf(ENVELOPE_END)
+  const end = body.indexOf(ENVELOPE_END, start + ENVELOPE_START.length)
   if (start < 0 || end < 0 || end <= start) throw new Error("Work Order envelope marker is missing")
   const json = body.slice(start + ENVELOPE_START.length, end).trim()
   const envelope = JSON.parse(json)

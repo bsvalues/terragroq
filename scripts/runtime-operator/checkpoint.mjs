@@ -10,7 +10,7 @@ const detail = process.env.CHECKPOINT_DETAIL ?? ""
 if (!issueNumber || !leaseId || !state) throw new Error("ISSUE_NUMBER, LEASE_ID, and CHECKPOINT_STATE are required")
 
 const checkpoint = buildCheckpoint({ leaseId, state, detail, at: new Date().toISOString() })
-const labels = state === "MERGED"
+const labels = state === "MERGED" || state === "COMPLETED"
   ? ["williamos:done"]
   : state === "BLOCKED"
     ? ["williamos:blocked"]

@@ -142,14 +142,24 @@ jobs:
         with:
           subject-path: runtime-result/result.json
 
-      - name: Record authority wall or no-change result
-        if: steps.result.outputs.result != 'PATCH_READY'
+      - name: Record authority wall
+        if: steps.result.outputs.result == 'AUTHORITY_WALL'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ needs.control.outputs.issue_number }}
           LEASE_ID: ${{ needs.control.outputs.lease_id }}
           CHECKPOINT_STATE: BLOCKED
-          CHECKPOINT_DETAIL: Codex returned ${{ steps.result.outputs.result }} without a patch.
+          CHECKPOINT_DETAIL: Codex returned an authority wall without a patch.
+        run: node scripts/runtime-operator/checkpoint.mjs
+
+      - name: Record completed no-change result
+        if: steps.result.outputs.result == 'NO_CHANGE'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.control.outputs.issue_number }}
+          LEASE_ID: ${{ needs.control.outputs.lease_id }}
+          CHECKPOINT_STATE: COMPLETED
+          CHECKPOINT_DETAIL: Codex confirmed the Work Order required no repository change.
         run: node scripts/runtime-operator/checkpoint.mjs
 
       - name: Apply patch

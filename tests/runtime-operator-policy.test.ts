@@ -28,6 +28,11 @@ describe("runtime operator authority policy", () => {
     expect(parseWorkOrderEnvelope(body)).toEqual(envelope)
   })
 
+  it("anchors the envelope end marker after the selected start marker", () => {
+    const body = `Historical text WILLIAMOS_RUNTIME_WO -->\n<!-- WILLIAMOS_RUNTIME_WO\n${JSON.stringify(envelope)}\nWILLIAMOS_RUNTIME_WO -->`
+    expect(parseWorkOrderEnvelope(body)).toEqual(envelope)
+  })
+
   it("rejects shell-unsafe identifiers and path traversal before leasing", () => {
     expect(() => parseWorkOrderEnvelope(`<!-- WILLIAMOS_RUNTIME_WO\n${JSON.stringify({ ...envelope, workOrderId: "WO; rm -rf" })}\nWILLIAMOS_RUNTIME_WO -->`)).toThrow(/identifier/i)
     expect(() => parseWorkOrderEnvelope(`<!-- WILLIAMOS_RUNTIME_WO\n${JSON.stringify({ ...envelope, allowedPaths: ["docs/../package.json"] })}\nWILLIAMOS_RUNTIME_WO -->`)).toThrow(/path/i)
