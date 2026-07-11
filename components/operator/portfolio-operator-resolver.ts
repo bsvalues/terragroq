@@ -28,6 +28,16 @@ export function resolveNextPortfolioProgram(programs: PortfolioProgramRecord[]) 
   }
 }
 
+export type OperatorHost = "LOCAL_OMEN_DOCKER" | "DEDICATED_UBUNTU" | "GITHUB_ACTIONS"
+
+export function evaluateOperatorHost(host: OperatorHost, explicitOwnerDecision = false) {
+  if (host === "LOCAL_OMEN_DOCKER") return { selectable: true, reasonCode: "LOCAL_HOST_AUTHORIZED" as const }
+  if (host === "DEDICATED_UBUNTU") return { selectable: false, reasonCode: "PHASE_2_NOT_AUTHORIZED" as const }
+  return explicitOwnerDecision
+    ? { selectable: true, reasonCode: "FUTURE_EXPLICIT_OWNER_DECISION" as const }
+    : { selectable: false, reasonCode: "GITHUB_ACTIONS_HOST_PROHIBITED" as const }
+}
+
 export function buildGoalPacket(program: PortfolioProgramRecord) {
   return {
     goalId: program.nextGoalId,

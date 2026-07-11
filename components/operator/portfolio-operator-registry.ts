@@ -58,7 +58,7 @@ const backlogSeeds: Array<{
   authorityMode?: PortfolioAuthorityMode
   priorityOverride?: number
 }> = [
-  { programId: "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001", title: "WilliamOS Runtime Operator", goalId: "GOAL-WILLIAMOS-RUNTIME-OPERATOR-001", businessValue: 10, engineeringValue: 10, riskClass: "R3", priorityOverride: 200 },
+  { programId: "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001", title: "WilliamOS Runtime Operator", goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001", businessValue: 10, engineeringValue: 10, riskClass: "R3", priorityOverride: 200 },
   { programId: "PROGRAM-RELEASE-ENGINEERING-001", title: "Release Engineering", goalId: "GOAL-RELEASE-ENGINEERING-001", businessValue: 9, engineeringValue: 9, riskClass: "R1" },
   { programId: "PROGRAM-DEVEX-HOOK-TOOLING-001", title: "DevEx / Hook Tooling", goalId: "GOAL-DEVEX-HOOK-TOOLING-001", businessValue: 7, engineeringValue: 9, riskClass: "R1" },
   { programId: "PROGRAM-BACKEND-OE-001", title: "Backend Operational Excellence", goalId: "GOAL-BACKEND-OE-001", businessValue: 8, engineeringValue: 8, riskClass: "R1" },
@@ -94,7 +94,9 @@ export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((see
   nextGoalTitle: `${seed.title} Foundation`,
   completionEvidence: [],
   priorityScore: priorityScore(seed),
-  blockedReason: seed.authorityMode === "OWNER_GATED" ? "Protected authority is required before activation." : undefined,
+  blockedReason: seed.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
+    ? "Local OMEN hosting is authorized, but activation requires host-local owner credentials. GitHub Actions hosting is prohibited without a future explicit owner decision."
+    : seed.authorityMode === "OWNER_GATED" ? "Protected authority is required before activation." : undefined,
 }))
 
 const portfolioWorkOrders: PortfolioWorkOrder[] = [

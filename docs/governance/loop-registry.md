@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
-Work order: `WO-RUNTIME-OPERATOR-001 through WO-RUNTIME-OPERATOR-014`
-Goal: `GOAL-WILLIAMOS-RUNTIME-OPERATOR-001 (active)`
+Work order: `WO-RUNTIME-LOCAL-001 through WO-RUNTIME-LOCAL-008`
+Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001 (active)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -89,15 +89,17 @@ Evidence:
 
 ## Active Loop State
 
-### `LOOP-WILLIAMOS-RUNTIME-OPERATOR-001`
+### `LOOP-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001`
 
-Status: `active / serialized background control plane`
+Status: `active / local HP OMEN Docker control plane / disabled pending owner credentials`
 
-Goal: `GOAL-WILLIAMOS-RUNTIME-OPERATOR-001`
+Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001`
 
-Continuation: complete implementation and disabled deployment, stop at the
-owner credential gate, then activate and prove one low-risk Work Order through
-lease, patch, validation, PR, review, eligible merge, and checkpoint closure.
+Continuation: remove GitHub Actions hosting, complete local implementation and
+disabled deployment, stop at the host-local owner credential gate, then
+activate and prove one low-risk Work Order through lease, patch, validation,
+PR, review, eligible merge, and checkpoint closure. GitHub Actions may not be
+selected as the host without a future explicit owner decision.
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 

@@ -54,6 +54,7 @@ export type AuthorityGateId =
   | "BACKUP_RESTORE_GATE"
   | "TOOL_CALL_GATE"
   | "AUTONOMOUS_LOOP_GATE"
+  | "OPERATOR_HOST_GATE"
 
 export type AuthorityRecord = {
   authorityId: string
@@ -754,6 +755,19 @@ export const AUTHORITY_GATES: AuthorityGateRecord[] = [
     safeNextAction: "No autonomy.",
     riskLevel: "critical",
   }),
+  gate({
+    gateId: "OPERATOR_HOST_GATE",
+    title: "Runtime operator host gate",
+    category: "AUTONOMY",
+    level: "owner-decision-required",
+    status: "blocked",
+    summary: "The HP OMEN Docker host is the authorized Phase 1 exception. GitHub Actions and dedicated Ubuntu hosting are not selectable without a new explicit owner decision.",
+    requiredOwnerDecision: "Explicitly name and authorize a replacement operator host.",
+    requiredEvidence: ["Host threat boundary", "Credential storage boundary", "Activation and kill-switch proof"],
+    prohibitedActions: ["GitHub Actions operator hosting", "implicit cloud host selection", "concurrent operator hosts"],
+    safeNextAction: "Keep the OMEN operator disabled until host-local credentials are placed by the owner.",
+    riskLevel: "critical",
+  }),
 ]
 
 export const BLOCKED_ACTIONS: BlockedActionRecord[] = [
@@ -761,6 +775,7 @@ export const BLOCKED_ACTIONS: BlockedActionRecord[] = [
   ["command runner", "A command runner would create host-control authority.", "AUTONOMY", "COMMAND_RUNNER_GATE"],
   ["GitHub write", "Repository writes require owner authorization.", "GITHUB_WRITE", "GITHUB_METADATA_GATE"],
   ["Codex automation", "Agent execution from UI remains blocked.", "AUTONOMY", "AUTONOMOUS_LOOP_GATE"],
+  ["GitHub Actions operator host", "Cloud CI is not an authorized WilliamOS runtime host.", "AUTONOMY", "OPERATOR_HOST_GATE"],
   ["Docker metadata", "Docker metadata expands local runtime visibility.", "LOCAL_RUNTIME_READ", "DOCKER_METADATA_GATE"],
   ["backup scan", "Backup metadata or contents require a separate gate.", "LOCAL_RUNTIME_READ", "BACKUP_METADATA_GATE"],
   ["port checks", "Port checks were deferred from live status.", "LOCAL_RUNTIME_READ", "PORT_STATUS_GATE"],
@@ -1013,6 +1028,7 @@ export function getAuthorityRegistrySurface(): AuthorityRegistrySurface {
       "WORKER_ACTIVATION_GATE",
       "TOOL_CALL_GATE",
       "AUTONOMOUS_LOOP_GATE",
+      "OPERATOR_HOST_GATE",
     ]),
     safetyProofCards: AUTHORITY_SAFETY_PROOF_CARDS,
     navigation: [

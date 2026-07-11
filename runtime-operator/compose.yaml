@@ -1,0 +1,48 @@
+name: williamos-runtime-operator
+
+services:
+  operator:
+    build:
+      context: ..
+      dockerfile: runtime-operator/Dockerfile
+      args:
+        CODEX_VERSION: "0.142.2"
+    restart: unless-stopped
+    environment:
+      GITHUB_REPOSITORY: bsvalues/terragroq
+      WILLIAMOS_RUNTIME_OPERATOR_ENABLED: "true"
+      WILLIAMOS_POLL_SECONDS: "60"
+      WILLIAMOS_MAX_RETRY_SECONDS: "300"
+      GIT_AUTHOR_NAME: williamos-local-operator
+      GIT_AUTHOR_EMAIL: williamos-local-operator@users.noreply.github.com
+      GIT_COMMITTER_NAME: williamos-local-operator
+      GIT_COMMITTER_EMAIL: williamos-local-operator@users.noreply.github.com
+      HOME: /state/operator
+      NPM_CONFIG_CACHE: /state/npm
+    secrets:
+      - openai_api_key
+      - github_token
+      - activation
+    volumes:
+      - operator-state:/state
+      - operator-audit:/audit
+      - operator-workspace:/workspace
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  openai_api_key:
+    file: ${WILLIAMOS_OPERATOR_HOME}/secrets/openai_api_key
+  github_token:
+    file: ${WILLIAMOS_OPERATOR_HOME}/secrets/github_token
+  activation:
+    file: ${WILLIAMOS_OPERATOR_HOME}/control/activation
+
+volumes:
+  operator-state:
+  operator-audit:
+  operator-workspace:
