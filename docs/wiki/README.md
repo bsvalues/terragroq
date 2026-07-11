@@ -41,7 +41,9 @@ The Primary owns canon. Wiki pages are useful reference material, but current ow
 - `concepts/agent-forge.md` defines capability preparation.
 - `concepts/memory.md` defines governed continuity.
 - `concepts/trace-eval.md` defines trace and failure-to-eval placement.
-- `concepts/county-ops.md` defines static County Ops knowledge placement.
+- `concepts/county-ops.md` defines the County Ops boundary and entry point.
+- `county-ops/README.md` maps the PACS, levy, BOE, permit, public-data,
+  ratio-study, and appeals references.
 
 ## Knowledge Ownership
 

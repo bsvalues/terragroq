@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
-Work order: `WO-OPERATOR-QUEUE-003`
-Goal: `GOAL-WOS-ACTIVE-PROGRAM-QUEUE-001 - Active Program Queue Reconciliation`
+Work order: `WO-COUNTY-001 through WO-COUNTY-010`
+Goal: `GOAL-COUNTY-001 - County Ops Knowledge Pack`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -35,23 +35,30 @@ Final pilot proof: PR #333 merged at
 `9e3a48395945d7b26449cf2e462bc65142aa136c`; all required production routes
 returned HTTP 200 and auth readiness remained healthy with signup closed.
 
-## Canonical Active Loop
+## Canonical Completed Queue Reconciliation Loop
 
 ### `LOOP-WOS-ACTIVE-PROGRAM-QUEUE-001`
 
-- Goal: `GOAL-WOS-ACTIVE-PROGRAM-QUEUE-001`
-- Program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
-- Mode: sequential R0 reconciliation
-- Start: `WO-OPERATOR-QUEUE-001`
-- Continue until: queue reconciled and next eligible goal is registered, or a
-  typed authority wall
-- Current Work Orders: `WO-OPERATOR-QUEUE-001` through `005`
-- Next on verified completion:
-  `GOAL-COUNTY-001 / WO-COUNTY-001`
+The queue reconciliation loop completed through PR #336 and advanced to the
+County Ops knowledge program.
 
-The active queue is
-`docs/governance/active-program-queue.md`. Codex owns this R0 chain through
-eligible merge and post-merge verification. The Primary is not a relay.
+## Canonical Active Loop
+
+### `LOOP-WILLIAMOS-COUNTY-OPS-001`
+
+- Goal: `GOAL-COUNTY-001`
+- Program: `PROGRAM-WILLIAMOS-COUNTY-OPS-001`
+- Mode: sequential static/read-only knowledge batch
+- Start: `WO-COUNTY-001`
+- Continue until: `WO-COUNTY-010` verified complete or a typed authority wall
+- Selection: first incomplete County Ops Work Order in declared order
+- Product posture: documentation, static registry data, tests, and evidence
+  only
+- Stop before: real records, PACS/county access, case decisions, TerraFusion,
+  runtime activation, persistence, or production mutation
+
+Codex owns the eligible chain through validation, PR, review remediation,
+eligible merge, post-merge verification, evidence, and next-program resolution.
 
 ## Loop Rules
 
@@ -89,18 +96,17 @@ Current status:
 
 ## Current Continuation Order
 
-1. Complete `WO-OPERATOR-QUEUE-001` through `005`.
-2. Merge and verify the active-program queue reconciliation.
-3. Start `GOAL-COUNTY-001 / WO-COUNTY-001`.
-4. Continue through the static/read-only County Ops knowledge sequence while it
-   remains inside the registered boundaries.
-5. Stop before real county data, PACS access, credentials, production systems,
-   TerraFusion integration, or any other typed authority wall.
+1. Complete `WO-COUNTY-001` through `WO-COUNTY-008` as source-backed,
+   static knowledge pages.
+2. Complete `WO-COUNTY-009` through Academy/Wiki registration and tests.
+3. Complete `WO-COUNTY-010` with safety, validation, and evidence rollup.
+4. Merge and verify the County Ops program.
+5. Resolve the next eligible program from current truth.
 
 Historical Shell, WOE, Evidence, Authority, Council, Trace/Eval, Memory,
-Academy/Wiki, Hermes-boundary, Agent Forge, local-status refinement, and
-dedicated-host planning sequences are complete or superseded. They are evidence,
-not active queue entries.
+Academy/Wiki, Hermes-boundary, Agent Forge, local-status refinement,
+dedicated-host planning, Codex Operator adoption, and queue-reconciliation work
+remain evidence rather than active queue entries.
 
 ## Stop Gates
 

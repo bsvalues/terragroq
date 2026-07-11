@@ -1,7 +1,7 @@
 # WilliamOS Goal Registry
 
-Work order: `WO-OPERATOR-QUEUE-002`
-Goal: `GOAL-WOS-ACTIVE-PROGRAM-QUEUE-001 - Active Program Queue Reconciliation`
+Work order: `WO-COUNTY-001 through WO-COUNTY-010`
+Goal: `GOAL-COUNTY-001 - County Ops Knowledge Pack`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -52,35 +52,50 @@ The typed source of truth is
 `components/operator/codex-operator-registry.ts`. The registry is static and
 does not execute, schedule, ingest, persist, approve, or mutate work.
 
-## Canonical Active Goal
+## Canonical Completed Queue Reconciliation Goal
 
 ### `GOAL-WOS-ACTIVE-PROGRAM-QUEUE-001 - Active Program Queue Reconciliation`
 
-Program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
+Completed through PR #336 at
+`123b95eed0a0017f2b4fda7b21df7cc471297c2d`.
 
-Loop: `LOOP-WOS-ACTIVE-PROGRAM-QUEUE-001`
+The reconciliation closed stale active labels, superseded historical next-work
+lists, preserved `GOAL-WOS-009` for Academy/Wiki evidence, and selected the
+collision-free County Ops identity.
 
-Risk ceiling: `R0`
+## Canonical Active Goal
 
-Purpose: reconcile completed goals, stale next-lane recommendations, and reused
-goal identifiers so Codex has one truthful next eligible program.
+### `GOAL-COUNTY-001 - County Ops Knowledge Pack`
+
+Program: `PROGRAM-WILLIAMOS-COUNTY-OPS-001`
+
+Loop: `LOOP-WILLIAMOS-COUNTY-OPS-001`
+
+Risk ceiling: `R1`
+
+Purpose: create a current-source-backed, static/read-only Washington
+county-assessor knowledge pack covering PACS safety, levy, BOE evidence, permit
+intake, public-data redaction, ratio studies, and appeals.
 
 Work Orders:
 
-1. `WO-OPERATOR-QUEUE-001 - Current Truth Reconciliation`
-2. `WO-OPERATOR-QUEUE-002 - Goal Registry Status Correction`
-3. `WO-OPERATOR-QUEUE-003 - Loop Registry Status Correction`
-4. `WO-OPERATOR-QUEUE-004 - Stale Recommendation and Identifier Reconciliation`
-5. `WO-OPERATOR-QUEUE-005 - Next Eligible Program Decision and Evidence Rollup`
+1. `WO-COUNTY-001 - County Ops Knowledge Map`
+2. `WO-COUNTY-002 - PACS Read-Only Rules Page`
+3. `WO-COUNTY-003 - Levy Workflow Page`
+4. `WO-COUNTY-004 - BOE Evidence Page`
+5. `WO-COUNTY-005 - Permit Import Knowledge Page`
+6. `WO-COUNTY-006 - Public Data Redaction Policy`
+7. `WO-COUNTY-007 - Ratio Study Knowledge Page`
+8. `WO-COUNTY-008 - Appeals Packet Playbook`
+9. `WO-COUNTY-009 - Academy/Wiki and Navigation Cross-Links`
+10. `WO-COUNTY-010 - Safety, Validation, and Final Rollup`
 
-Canonical queue:
-`docs/governance/active-program-queue.md`
+Canonical program:
+`docs/governance/county-ops-program.md`
 
-Next on verified completion:
-`GOAL-COUNTY-001 - County Ops Knowledge Pack`.
-
-County Ops uses `GOAL-COUNTY-001`; it must not reuse `GOAL-WOS-009`, which is
-preserved as the completed Academy + Wiki reconciliation identity.
+Blocked: real county data, PACS or county-system access, case-specific legal or
+disclosure decisions, TerraFusion touch, runtime activation, persistence, and
+production mutation.
 
 ### Closed Goal Preservation Register
 

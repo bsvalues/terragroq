@@ -41,6 +41,7 @@ describe("Academy Wiki Registry", () => {
       "lesson-trace-ledger-failure-eval",
       "lesson-brain-council-advisory-layer",
       "lesson-local-omen-runtime",
+      "lesson-county-ops-knowledge-pack",
       "lesson-codex-operator-goal-loop",
     ])
 
@@ -82,6 +83,7 @@ describe("Academy Wiki Registry", () => {
     const trace = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-trace-ledger-failure-eval")
     const council = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-brain-council-advisory-layer")
     const local = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-local-omen-runtime")
+    const county = ACADEMY_LESSONS.find((lesson) => lesson.lessonId === "lesson-county-ops-knowledge-pack")
 
     expect(onboarding?.whatThisTeaches.join(" ")).toContain("Codex operates authorized loops")
     expect(goalLoop?.whatThisTeaches.join(" ")).toContain("Codex continues through listed WOs")
@@ -114,6 +116,9 @@ describe("Academy Wiki Registry", () => {
     expect(local?.whatThisTeaches.join(" ")).toContain("Local runtime status is read-only")
     expect(local?.whatThisDoesNotEnable).toContain("Docker metadata")
     expect(local?.whatThisDoesNotEnable).toContain("runtime control")
+    expect(county?.relatedGoal).toBe("GOAL-COUNTY-001")
+    expect(county?.whatThisTeaches.join(" ")).toContain("Real records and systems remain outside")
+    expect(county?.whatThisDoesNotEnable).toContain("PACS connection")
   })
 
   it("defines the WilliamOS glossary terms", () => {
@@ -178,6 +183,8 @@ describe("Academy Wiki Registry", () => {
     expect(pages.get("wiki-trace-ledger")?.relatedSurfaces).toContain("/brain-council")
     expect(pages.get("wiki-county-ops")?.whatItIs).toContain("PACS rules")
     expect(pages.get("wiki-county-ops")?.whatItIsNot).toContain("PACS connection")
+    expect(pages.get("wiki-county-ops")?.relatedAuthority).toContain("DATA_MUTATION_GATE")
+    expect(pages.get("wiki-county-ops")?.relatedAuthority).toContain("SECRET_ACCESS_GATE")
     expect(pages.get("wiki-county-ops")?.relatedAuthority).toContain("TERRAFUSION_TOUCH_GATE")
   })
 
