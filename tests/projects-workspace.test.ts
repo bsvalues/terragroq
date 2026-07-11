@@ -98,9 +98,11 @@ describe("Projects workspace", () => {
     ].filter((record) => record !== undefined)
 
     expect(records.every((record) => record.source.reference.length > 0)).toBe(true)
-    expect(records.filter((record) => record.source.state === "observed")).toSatisfy(
-      (observed) => observed.every((record) => record.source.observedAt !== null),
-    )
+    expect(
+      records
+        .filter((record) => record.source.state === "observed")
+        .every((record) => record.source.observedAt !== null),
+    ).toBe(true)
     expect(command?.deployment.summary).toContain("No current TerraFusion deployment status")
   })
 
