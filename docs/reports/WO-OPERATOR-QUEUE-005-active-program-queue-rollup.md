@@ -65,6 +65,7 @@
 - `docs/governance/active-program-queue.md`
 - `docs/governance/goal-registry.md`
 - `docs/governance/loop-registry.md`
+- `docs/governance/williamos-work-order-playbook.md`
 - `docs/reports/WO-OPERATOR-QUEUE-005-active-program-queue-rollup.md`
 
 ## Validation Required
