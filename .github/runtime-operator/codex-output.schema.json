@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workOrderId", "result", "summary", "unifiedPatch"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "workOrderId": { "type": "string", "minLength": 1 },
+    "result": { "enum": ["PATCH_READY", "AUTHORITY_WALL", "NO_CHANGE"] },
+    "summary": { "type": "string", "minLength": 1 },
+    "unifiedPatch": { "type": "string" }
+  }
+}

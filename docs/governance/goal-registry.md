@@ -1,7 +1,7 @@
 # WilliamOS Goal Registry
 
-Work order: `WO-PORTFOLIO-001 through WO-PORTFOLIO-010; WO-RELEASE-001 active`
-Goal: `GOAL-RELEASE-ENGINEERING-001 - Release Engineering Foundation (active)`
+Work order: `WO-RUNTIME-OPERATOR-001 through WO-RUNTIME-OPERATOR-014`
+Goal: `GOAL-WILLIAMOS-RUNTIME-OPERATOR-001 (active)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -137,6 +137,17 @@ persistence, command execution, and any production mutation.
 
 ## Active Goal State
 
+### `GOAL-WILLIAMOS-RUNTIME-OPERATOR-001 - Bounded Background Operator`
+
+Status: `active / owner-authorized`
+
+Loop: `LOOP-WILLIAMOS-RUNTIME-OPERATOR-001`
+
+Program: `PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001`
+
+Current gate: deploy the disabled control plane, then stop for owner-only
+`OPENAI_API_KEY` creation before activation and the low-risk pilot.
+
 ### `GOAL-PORTFOLIO-OPERATOR-001 - Continuous Program and Goal Selection`
 
 Status: `complete / standing continuation contract`
@@ -150,7 +161,7 @@ dependency-cleared program without returning routine planning to the Primary.
 
 ### `GOAL-RELEASE-ENGINEERING-001 - Release Engineering Foundation`
 
-Status: `active`
+Status: `ready / deferred behind the active runtime operator program`
 
 Loop: `LOOP-RELEASE-ENGINEERING-001`
 

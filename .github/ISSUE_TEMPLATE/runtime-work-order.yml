@@ -1,0 +1,34 @@
+name: WilliamOS Runtime Work Order
+description: Queue one bounded R0/R1 Work Order for the owner-authorized runtime operator.
+title: "[Runtime WO] "
+labels: ["williamos:ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Only the Primary may queue runtime Work Orders. Keep secrets, credentials,
+        production mutation, PACS, county systems, and destructive actions out.
+  - type: textarea
+    id: envelope
+    attributes:
+      label: Work Order envelope
+      description: Keep the markers and provide valid JSON. Paths are exact or directory/** allowlists.
+      value: |
+        <!-- WILLIAMOS_RUNTIME_WO
+        {
+          "schemaVersion": 1,
+          "programId": "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001",
+          "goalId": "GOAL-RUNTIME-OPERATOR-PILOT-001",
+          "loopId": "LOOP-RUNTIME-OPERATOR-PILOT-001",
+          "workOrderId": "WO-RUNTIME-PILOT-001",
+          "title": "Bounded runtime pilot",
+          "task": "Add one static evidence report proving the bounded runtime path.",
+          "riskClass": "R0",
+          "baseBranch": "main",
+          "allowedPaths": ["docs/reports/WO-RUNTIME-PILOT-001.md"],
+          "requiredValidation": ["diff-check", "lint", "test", "build"],
+          "mergeMode": "AUTO_ELIGIBLE"
+        }
+        WILLIAMOS_RUNTIME_WO -->
+    validations:
+      required: true

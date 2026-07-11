@@ -4,17 +4,17 @@ Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
 
 Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
-Active program: `PROGRAM-RELEASE-ENGINEERING-001 - Release Engineering`
+Active program: `PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001 - WilliamOS Runtime Operator`
 
-Goal: `GOAL-RELEASE-ENGINEERING-001 - Release Engineering Foundation`
+Goal: `GOAL-WILLIAMOS-RUNTIME-OPERATOR-001`
 
-Loop: `LOOP-RELEASE-ENGINEERING-001`
+Loop: `LOOP-WILLIAMOS-RUNTIME-OPERATOR-001`
 
 Baseline: `origin/main = 2966527a0dc3790feeea3deaf86e10808fb6605b`
 
 Risk ceiling: `R1`
 
-Status: portfolio resolver selected the highest-priority executable program
+Status: owner-authorized runtime control plane implementation active
 
 ## Purpose
 
@@ -93,10 +93,11 @@ Evidence:
 
 ## Canonical Active Program
 
-`PROGRAM-RELEASE-ENGINEERING-001` is selected from the ratified portfolio
-backlog. Its first bounded goal is `GOAL-RELEASE-ENGINEERING-001`; its loop is
-`LOOP-RELEASE-ENGINEERING-001`; and `WO-RELEASE-001 - Current Release Evidence
-Reconciliation` is active.
+`PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001` is selected by explicit Owner
+authorization. Its goal is `GOAL-WILLIAMOS-RUNTIME-OPERATOR-001`; its loop is
+`LOOP-WILLIAMOS-RUNTIME-OPERATOR-001`; and its bounded control-plane chain is
+active. `PROGRAM-RELEASE-ENGINEERING-001` remains ratified and ready after the
+runtime operator reaches its credential/pilot gates.
 
 Selection is deterministic: completed, blocked, deferred, superseded,
 dependency-blocked, and owner-gated programs are filtered out; remaining
