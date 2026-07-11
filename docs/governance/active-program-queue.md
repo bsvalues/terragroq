@@ -4,17 +4,17 @@ Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
 
 Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
-Active program: `PROGRAM-WILLIAMOS-TF-COMMAND-001`
+Active program: `NONE - AUTHORIZED SEQUENCE COMPLETE`
 
-Goal: `GOAL-TF-COMMAND-001`
+Goal: `NONE - NEW GOAL AUTHORIZATION REQUIRED`
 
-Loop: `LOOP-WILLIAMOS-TF-COMMAND-001`
+Loop: `NONE - NEW LOOP AUTHORIZATION REQUIRED`
 
-Baseline: `origin/main = 49fa4ffe7917bdc0440950ed7a1fb47cd2c0a837`
+Baseline: `origin/main = 05fcf18fba8a6a2be5fef7865e3a6842ae9bb747`
 
 Risk ceiling: `R1`
 
-Status: TerraFusion project command layer active
+Status: authorized material goal sequence complete
 
 ## Purpose
 
@@ -31,7 +31,7 @@ activate a worker, inspect a host, mutate production, or change authority.
 - `GOAL-WOS-CODEX-OPERATOR-001` is complete.
 - `LOOP-WOS-CODEX-OPERATOR-001` reached goal completion.
 - `WO-CODEX-OPERATOR-001` through `024` are complete.
-- PRs #333 through #337 are merged.
+- PRs #333 through #339 are merged.
 - Queue reconciliation completed through PR #336.
 - County Ops completed through PR #337 at
   `49fa4ffe7917bdc0440950ed7a1fb47cd2c0a837`.
@@ -83,21 +83,25 @@ semantics and approved only an R1 static/read-only first implementation slice.
 Evidence:
 `docs/reports/WO-TF-COMMAND-000F-preflight-rollup.md`
 
+## Completed TerraFusion Command Program
+
+`GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer` completed through PR
+#339 at `05fcf18fba8a6a2be5fef7865e3a6842ae9bb747`.
+
+Evidence:
+`docs/reports/WO-TF-COMMAND-006-final-rollup.md`
+
 ## Canonical Active Program
 
-The current dependency-ready program is:
+No material program is active. The authorized goal sequence is complete.
 
-`GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer`
+Why work stops here:
 
-Why:
-
-- the R0 preflight is complete;
-- the six implementation records can remain static, read-only, and explicitly
-  sourced;
-- provenance and staleness semantics prevent declared or historical text from
-  being presented as live TerraFusion state;
-- external integration and the dedicated-host implementation lane remain
-  correctly owner-gated.
+- routine implementation, validation, review, merge, and evidence are complete;
+- remaining dedicated-host, external repository, live deployment, credential,
+  county/PACS, runtime, and mutation lanes are standing authority walls;
+- inventing a materially new program would expand scope beyond the authorized
+  sequence.
 
 Completed County Ops work-order sequence:
 
@@ -124,7 +128,7 @@ Completed County Ops work-order sequence:
 Canonical preflight:
 `docs/governance/terrafusion-command-preflight.md`
 
-## Active TerraFusion Command Work Orders
+## Completed TerraFusion Command Work Orders
 
 1. `WO-TF-COMMAND-001 - TerraFusion Project Card`
 2. `WO-TF-COMMAND-002 - TerraFusion Work Order Feed`
@@ -162,11 +166,11 @@ Any need for real county data or system access becomes a typed authority wall.
 
 ## Continuation Rule
 
-Codex continues through `WO-TF-COMMAND-001` to `WO-TF-COMMAND-006` without
-asking the Primary to relay another packet. The implementation may use only
-repository-local, explicitly sourced static records. Codex stops before
-external repository access, live status ingestion, deployment inspection,
-TerraFusion or county mutation, credentials, or any higher-risk integration.
+Codex completed `WO-TF-COMMAND-001` through `WO-TF-COMMAND-006`, review
+remediation, eligible merge, and evidence without asking the Primary to relay
+another packet. The next material program requires explicit owner authorization.
+Standing external repository, live status, deployment, TerraFusion/county,
+credential, runtime, and mutation gates remain closed.
 
 ## Validation
 

@@ -1,7 +1,7 @@
 # WilliamOS Goal Registry
 
 Work order: `WO-TF-COMMAND-001 through WO-TF-COMMAND-006`
-Goal: `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer`
+Goal: `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer (complete)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -98,7 +98,7 @@ Decision: the first implementation slice may proceed as R1 static/read-only
 records with explicit provenance and staleness. External or live integration
 remains owner-gated.
 
-## Canonical Active Goal
+## Canonical Completed TerraFusion Command Goal
 
 ### `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer`
 
@@ -125,9 +125,22 @@ Required semantics: each record is declared, observed, stale, unknown, or
 blocked; observed claims require dated proof; historical evidence never becomes
 current truth implicitly.
 
-Blocked: external repository access, dynamic ingestion, deployment inspection,
-credentials, county/PACS access, runtime activation, persistence, command
-execution, and any production mutation.
+Completion state: `WO-TF-COMMAND-001` through `WO-TF-COMMAND-006` merged
+through PR #339 at `05fcf18fba8a6a2be5fef7865e3a6842ae9bb747`.
+
+Canonical evidence:
+`docs/reports/WO-TF-COMMAND-006-final-rollup.md`
+
+Standing blocked scope: external repository access, dynamic ingestion,
+deployment inspection, credentials, county/PACS access, runtime activation,
+persistence, command execution, and any production mutation.
+
+## Active Goal State
+
+No additional material program is authorized in the canonical sequence. A new
+goal packet or explicit owner authorization is required before selecting a new
+program or crossing a standing authority wall. Routine post-merge evidence is
+complete.
 
 ### Closed Goal Preservation Register
 
