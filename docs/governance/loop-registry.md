@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
 Work order: `WO-TF-COMMAND-001 through WO-TF-COMMAND-006`
-Goal: `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer`
+Goal: `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer (complete)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -64,7 +64,7 @@ County Ops knowledge program.
 - Evidence:
   `docs/reports/WO-TF-COMMAND-000F-preflight-rollup.md`
 
-## Canonical Active Loop
+## Canonical Completed TerraFusion Command Loop
 
 ### `LOOP-WILLIAMOS-TF-COMMAND-001`
 
@@ -81,8 +81,17 @@ County Ops knowledge program.
   inspection, credentials, county/PACS interaction, persistence, command
   execution, runtime activation, or mutation
 
-Codex owns the eligible chain through validation, PR, review remediation,
-eligible merge, post-merge verification, evidence, and next-goal resolution.
+Completion: `WO-TF-COMMAND-001` through `WO-TF-COMMAND-006` merged
+through PR #339 at `05fcf18fba8a6a2be5fef7865e3a6842ae9bb747`.
+
+Evidence:
+`docs/reports/WO-TF-COMMAND-006-final-rollup.md`
+
+## Active Loop State
+
+No further material loop is authorized. Codex completed routine implementation,
+review remediation, merge, verification, and evidence. A new program now
+requires explicit owner authorization.
 
 ## Loop Rules
 
@@ -120,21 +129,16 @@ Current status:
 
 ## Current Continuation Order
 
-1. Complete `WO-TF-COMMAND-001` with a sourced TerraFusion project card.
-2. Complete `WO-TF-COMMAND-002` and `003` with static Work Order and evidence
-   feeds.
-3. Complete `WO-TF-COMMAND-004` with a typed blocker queue.
-4. Complete `WO-TF-COMMAND-005` with deployment and staleness semantics that
-   make no unsupported live claim.
-5. Complete `WO-TF-COMMAND-006` with the governed next-move recommendation,
-   validation, and final evidence.
-6. Merge, verify, and resolve the next eligible goal.
+1. TerraFusion command implementation is complete.
+2. Post-merge evidence and canonical registry closure are complete.
+3. Stop at the new-goal authority wall until the owner authorizes another
+   material program.
 
 Historical Shell, WOE, Evidence, Authority, Council, Trace/Eval, Memory,
 Academy/Wiki, Hermes-boundary, Agent Forge, local-status refinement,
 dedicated-host planning, Codex Operator adoption, queue reconciliation, County
-Ops, and TerraFusion preflight work remain evidence rather than active queue
-entries.
+Ops, TerraFusion preflight, and TerraFusion command work remain evidence rather
+than active queue entries.
 
 ## Stop Gates
 
