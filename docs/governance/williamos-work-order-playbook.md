@@ -5,6 +5,14 @@ Title: WilliamOS Work Order Playbook
 Type: Governance / Operating Model
 Risk: Low, documentation and planning only
 
+## Current Execution Source
+
+The canonical current goal, loop, and next eligible program are maintained in
+`docs/governance/active-program-queue.md`. Numbered execution sequences later
+in this document are historical foundation plans unless the active queue
+explicitly selects them.
+
+
 ## Purpose
 
 This playbook defines how WilliamOS uses `/goal`, `/loop`, Work Orders,
@@ -277,7 +285,7 @@ Work orders:
 5. WO-TRACE-005 - Eval Queue Surface
 6. WO-TRACE-006 - Trace-to-Evidence Linking
 
-### GOAL-WOS-006 - Academy + Wiki
+### GOAL-ACADEMY-001 - Academy + Wiki
 
 Purpose: make WilliamOS teachable, transferable, and self-documenting.
 
@@ -331,7 +339,11 @@ Work orders:
 5. WO-HERMES-005 - Hermes Activation Review Packet
 6. WO-HERMES-006 - Hermes Denied/Blocked State UX
 
-### GOAL-WOS-009 - County Ops Knowledge Pack
+### GOAL-COUNTY-001 - County Ops Knowledge Pack
+
+Identity note: `GOAL-WOS-009` is preserved for the later Academy + Wiki
+reconciliation evidence and must not be reused for County Ops.
+
 
 Purpose: add a dedicated assessor and county operations knowledge layer without
 touching production county systems.
@@ -368,7 +380,7 @@ Work orders:
 5. WO-TF-COMMAND-005 - TerraFusion Deployment Status Read Model
 6. WO-TF-COMMAND-006 - TerraFusion Next Move Recommendation
 
-## Immediate Execution Sequence
+## Historical Immediate Execution Sequence
 
 ### Phase A - Finish Shell Spine
 
@@ -392,7 +404,7 @@ Work orders:
 2. WO-COUNCIL-002 - Council State Machine Schema
 3. WO-COUNCIL-003 - Council Decision Packet Schema
 
-## Recommended Next 12 Work Orders
+## Historical Recommended Next 12 Work Orders
 
 1. WO-SHELL-004 - Primary Navigation Shell
 2. WO-SHELL-005 - Work Orders Surface
