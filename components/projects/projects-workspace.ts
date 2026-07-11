@@ -1,4 +1,29 @@
 export type ProjectPosture = "active" | "planned" | "blocked"
+export type ProjectEvidenceState = "declared" | "observed" | "stale" | "unknown" | "blocked"
+
+export type ProjectSource = {
+  label: string
+  reference: string
+  state: ProjectEvidenceState
+  observedAt: string | null
+  explanation: string
+}
+
+export type TerraFusionCommandRecord = {
+  id: string
+  label: string
+  summary: string
+  source: ProjectSource
+}
+
+export type TerraFusionCommandLayer = {
+  projectCard: TerraFusionCommandRecord
+  workOrders: TerraFusionCommandRecord[]
+  evidence: TerraFusionCommandRecord[]
+  blockers: TerraFusionCommandRecord[]
+  deployment: TerraFusionCommandRecord
+  nextMove: TerraFusionCommandRecord
+}
 
 export type WilliamOsProject = {
   name: string
@@ -9,6 +34,7 @@ export type WilliamOsProject = {
   deploymentPosture: string
   blockedDecision: string
   nextRecommendedWork: string
+  commandLayer?: TerraFusionCommandLayer
 }
 
 export type ProjectsPostureSummaryItem = {
@@ -124,7 +150,101 @@ export function getProjectsWorkspace(): ProjectsWorkspace {
         latestEvidence: "Production health, readiness, PR checks, and shell tests remain the proof chain.",
         deploymentPosture: "Production is observed through Systems and Evidence; no deploy action is available here.",
         blockedDecision: "No blocker in this read-only slice.",
-        nextRecommendedWork: "Connect project status to future Work Orders and Evidence feeds.",
+        nextRecommendedWork:
+          "Complete WO-TF-COMMAND-001 through WO-TF-COMMAND-006 as a static, sourced command layer.",
+        commandLayer: {
+          projectCard: {
+            id: "TF-PROJECT-001",
+            label: "TerraFusion OS",
+            summary:
+              "Governed project under WilliamOS command; this card is declared repository state, not a live TerraFusion observation.",
+            source: {
+              label: "WilliamOS architecture",
+              reference: "docs/governance/williamos-unified-system-architecture.md",
+              state: "declared",
+              observedAt: null,
+              explanation: "Canonical repository-local product doctrine.",
+            },
+          },
+          workOrders: [
+            {
+              id: "TF-WO-FEED-001",
+              label: "TerraFusion command Work Orders",
+              summary: "WO-TF-COMMAND-001 through WO-TF-COMMAND-006 are the active static implementation sequence.",
+              source: {
+                label: "Active program queue",
+                reference: "docs/governance/active-program-queue.md",
+                state: "observed",
+                observedAt: "2026-07-10",
+                explanation: "Verified on merged WilliamOS main after PR #338.",
+              },
+            },
+          ],
+          evidence: [
+            {
+              id: "TF-EVIDENCE-001",
+              label: "Command-layer preflight",
+              summary: "The R0 preflight completed and approved only an R1 static/read-only implementation.",
+              source: {
+                label: "WO-TF-COMMAND-000F rollup",
+                reference: "docs/reports/WO-TF-COMMAND-000F-preflight-rollup.md",
+                state: "observed",
+                observedAt: "2026-07-10",
+                explanation: "Repository-local merge evidence from PR #338.",
+              },
+            },
+            {
+              id: "TF-EVIDENCE-002",
+              label: "Historical Azure precedent",
+              summary: "Prior TerraFusion deployment material exists but does not establish current WilliamOS or TerraFusion status.",
+              source: {
+                label: "WO-DEPLOY-011B audit",
+                reference: "docs/reports/WO-DEPLOY-011B-azure-inputs-discovery-audit.md",
+                state: "stale",
+                observedAt: null,
+                explanation: "Historical precedent only; current applicability is unverified.",
+              },
+            },
+          ],
+          blockers: [
+            {
+              id: "TF-BLOCKER-001",
+              label: "Live TerraFusion state",
+              summary: "External repository, deployment, runtime, county, and PACS inspection require separate authority.",
+              source: {
+                label: "TerraFusion command preflight",
+                reference: "docs/governance/terrafusion-command-preflight.md",
+                state: "blocked",
+                observedAt: null,
+                explanation: "Outside the R1 static/read-only authority ceiling.",
+              },
+            },
+          ],
+          deployment: {
+            id: "TF-DEPLOYMENT-001",
+            label: "Deployment status",
+            summary: "No current TerraFusion deployment status is asserted by this read model.",
+            source: {
+              label: "No current deployment proof",
+              reference: "docs/reports/WO-TF-COMMAND-000F-preflight-rollup.md",
+              state: "unknown",
+              observedAt: null,
+              explanation: "A current deployment claim requires dated observed evidence.",
+            },
+          },
+          nextMove: {
+            id: "TF-NEXT-001",
+            label: "Next governed move",
+            summary: "Validate and merge the repository-local static command layer; stop before live integration.",
+            source: {
+              label: "WilliamOS loop registry",
+              reference: "docs/governance/loop-registry.md",
+              state: "declared",
+              observedAt: null,
+              explanation: "Governed recommendation, not execution authority.",
+            },
+          },
+        },
       },
       {
         name: "BS County Values",
