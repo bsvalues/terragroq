@@ -37,19 +37,20 @@ export function buildGoalPacket(program: PortfolioProgramRecord) {
     blockedScope: ["Production writes", "Secrets", "Destructive operations", "Runtime autonomy", "Auth or database changes"],
     successCriteria: ["The program baseline is reconciled.", "The bounded Work Order chain is evidenced.", "No authority wall is crossed."],
     authorityMode: program.authorityMode,
-    riskCeiling: program.riskClass === "R0" ? "R0" as const : "R1" as const,
+    riskCeiling: program.riskClass,
     mergeMode: "CODEX_ELIGIBLE" as const,
     stopConditions: ["Protected authority required", "Unsafe validation repair", "Secrets or destructive operation required"],
-    ownerDecisionRequired: false as const,
+    ownerDecisionRequired: program.authorityMode === "OWNER_GATED",
   }
 }
 
 export function buildLoopPacket(program: PortfolioProgramRecord) {
+  const workOrders = buildWorkOrderChain(program)
   return {
     loopId: `LOOP-${program.nextGoalId.replace(/^GOAL-/, "")}`,
     goalId: program.nextGoalId,
-    activeWorkOrder: "WO-RELEASE-001",
-    orderedWorkOrderQueue: buildWorkOrderChain(program).map((workOrder) => workOrder.workOrderId),
+    activeWorkOrder: workOrders[0]?.workOrderId ?? null,
+    orderedWorkOrderQueue: workOrders.map((workOrder) => workOrder.workOrderId),
     validationCadence: "Focused tests, diff check, lint, full tests, build, PR checks, review threads, merged-main proof.",
     evidenceCadence: "Record observable proof at each Work Order and program closure.",
     prLifecycle: "Codex owns branch, PR, review remediation, eligible merge, and post-merge verification.",
@@ -70,8 +71,12 @@ export function buildWorkOrderChain(program: PortfolioProgramRecord) {
       ]
     : [`${program.title} Evidence Reconciliation`, `${program.title} Bounded First Slice`, `${program.title} Safety and Rollup`]
 
+  const workOrderPrefix = program.programId === "PROGRAM-RELEASE-ENGINEERING-001"
+    ? "WO-RELEASE"
+    : `WO-${program.programId.replace(/^PROGRAM-/, "").replace(/-001$/, "")}`
+
   return titles.map((title, index) => ({
-    workOrderId: `${program.programId === "PROGRAM-RELEASE-ENGINEERING-001" ? "WO-RELEASE" : "WO-PROGRAM"}-${String(index + 1).padStart(3, "0")}`,
+    workOrderId: `${workOrderPrefix}-${String(index + 1).padStart(3, "0")}`,
     title,
     objective: index === 0 ? `Reconcile existing ${program.title} evidence before any implementation.` : `Deliver the bounded ${title.toLowerCase()}.`,
     scope: ["Declared repository evidence", "Static/read-only models", "Tests and reports"],
@@ -79,9 +84,9 @@ export function buildWorkOrderChain(program: PortfolioProgramRecord) {
     riskClass: index === 0 ? "R0" as const : "R1" as const,
     status: index === 0 ? "ACTIVE" as const : "PENDING" as const,
     validationPlan: ["Focused tests", "git diff --check", "lint", "full tests", "build"],
-    evidence: `docs/reports/${program.programId === "PROGRAM-RELEASE-ENGINEERING-001" ? "WO-RELEASE" : "WO-PROGRAM"}-${String(index + 1).padStart(3, "0")}.md`,
+    evidence: `docs/reports/${workOrderPrefix}-${String(index + 1).padStart(3, "0")}.md`,
     rollback: "Revert the scoped documentation and static model changes.",
-    continuationTarget: index === titles.length - 1 ? "PORTFOLIO_RESOLVER" : `${program.programId === "PROGRAM-RELEASE-ENGINEERING-001" ? "WO-RELEASE" : "WO-PROGRAM"}-${String(index + 2).padStart(3, "0")}`,
+    continuationTarget: index === titles.length - 1 ? "PORTFOLIO_RESOLVER" : `${workOrderPrefix}-${String(index + 2).padStart(3, "0")}`,
     stopConditions: ["Authority mode changes", "Protected runtime or production scope required", "Validation requires broad repair"],
   }))
 }

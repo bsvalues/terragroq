@@ -83,4 +83,32 @@ describe("portfolio operator", () => {
     })
     expect(workOrders.every((workOrder) => workOrder.rollback === "Revert the scoped documentation and static model changes.")).toBe(true)
   })
+
+  it("preserves program risk and derives program-specific loop and Work Order identities", () => {
+    const devex = getPortfolioOperatorProgram().backlog[1]
+    const protectedProgram = getPortfolioOperatorProgram().backlog[4]
+    const devexWorkOrders = buildWorkOrderChain(devex)
+
+    expect(buildGoalPacket(protectedProgram)).toMatchObject({
+      riskCeiling: "R2",
+      ownerDecisionRequired: true,
+    })
+    expect(buildLoopPacket(devex).activeWorkOrder).toBe(devexWorkOrders[0].workOrderId)
+    expect(devexWorkOrders[0].workOrderId).toBe("WO-DEVEX-HOOK-TOOLING-001")
+    expect(buildWorkOrderChain(getPortfolioOperatorProgram().backlog[2])[0].workOrderId).toBe("WO-BACKEND-OE-001")
+  })
+
+  it("accepts completed-program evidence when resolving backlog dependencies", () => {
+    const portfolio = getPortfolioOperatorProgram()
+    const dependent = {
+      ...portfolio.backlog[1],
+      dependencies: ["PROGRAM-WILLIAMOS-TF-COMMAND-001"],
+      priorityScore: 999,
+    }
+
+    expect(resolveNextPortfolioProgram([...portfolio.completedPrograms, dependent])).toMatchObject({
+      decision: "SELECT_PROGRAM",
+      programId: dependent.programId,
+    })
+  })
 })

@@ -102,6 +102,7 @@ Selection is deterministic: completed, blocked, deferred, superseded,
 dependency-blocked, and owner-gated programs are filtered out; remaining
 programs are ranked by operational and engineering value, dependency
 readiness, risk, evidence readiness, reversibility, and bounded scope.
+Equal scores are resolved by stable ascending `programId` order.
 
 Completed County Ops work-order sequence:
 

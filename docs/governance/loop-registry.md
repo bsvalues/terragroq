@@ -110,8 +110,10 @@ Continuation: complete the six bounded release-engineering Work Orders, then
 return to `LOOP-PORTFOLIO-OPERATOR-001` for the next program selection.
 
 The portfolio loop remains the default continuation path after each program.
-Routine implementation, review remediation, merge, verification, evidence,
-and next-program activation do not require the Primary to courier a new loop.
+Routine implementation, review remediation, already-authorized or otherwise
+eligible merge, verification, evidence, and next-program activation do not
+require the Primary to courier a new loop. This does not authorize a merge or
+other consequential action that lacks authority under the operator playbook.
 
 ## Loop Rules
 

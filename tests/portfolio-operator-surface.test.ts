@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import { getPortfolioOperatorProgram } from "@/components/operator/portfolio-operator-registry"
 import { getPortfolioOperatorSurface } from "@/components/operator/portfolio-operator-surface"
 
 describe("portfolio operator surface", () => {
@@ -18,5 +19,17 @@ describe("portfolio operator surface", () => {
       autonomousRuntimeLoopAdded: false,
       productionWriteAdded: false,
     })
+  })
+
+  it("shows no selected program or active work at an owner-decision wall", () => {
+    const portfolio = getPortfolioOperatorProgram()
+    const surface = getPortfolioOperatorSurface({
+      ...portfolio,
+      backlog: portfolio.backlog.map((program) => ({ ...program, state: "BLOCKED" as const })),
+    })
+
+    expect(surface.selection.decision).toBe("OWNER_DECISION_REQUIRED")
+    expect(surface.selectedProgram).toBeNull()
+    expect(surface.activeWorkOrder).toBeNull()
   })
 })

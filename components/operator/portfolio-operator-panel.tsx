@@ -22,13 +22,13 @@ export function PortfolioOperatorPanel() {
       <div className="grid gap-px bg-border lg:grid-cols-3">
         <div className="bg-card p-4">
           <div className="flex items-center gap-2"><Route className="h-4 w-4 text-primary" aria-hidden /><p className="text-sm font-medium">Selected program</p></div>
-          <p className="mt-2 text-sm font-semibold">{surface.selectedProgram.title}</p>
-          <p className="mt-1 font-mono text-[10px] text-muted-foreground">{surface.selectedProgram.programId}</p>
+          <p className="mt-2 text-sm font-semibold">{surface.selectedProgram?.title ?? "Owner decision required"}</p>
+          <p className="mt-1 font-mono text-[10px] text-muted-foreground">{surface.selectedProgram?.programId ?? surface.selection.reasonCode}</p>
         </div>
         <div className="bg-card p-4">
           <div className="flex items-center gap-2"><ArrowRight className="h-4 w-4 text-primary" aria-hidden /><p className="text-sm font-medium">Active Work Order</p></div>
-          <p className="mt-2 text-sm font-semibold">{surface.activeWorkOrder.title}</p>
-          <p className="mt-1 font-mono text-[10px] text-muted-foreground">{surface.activeWorkOrder.workOrderId}</p>
+          <p className="mt-2 text-sm font-semibold">{surface.activeWorkOrder?.title ?? "No Work Order activated"}</p>
+          <p className="mt-1 font-mono text-[10px] text-muted-foreground">{surface.activeWorkOrder?.workOrderId ?? "AUTHORITY WALL"}</p>
         </div>
         <div className="bg-card p-4">
           <div className="flex items-center gap-2"><LockKeyhole className="h-4 w-4 text-primary" aria-hidden /><p className="text-sm font-medium">Authority posture</p></div>
