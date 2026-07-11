@@ -149,7 +149,8 @@ export function getProjectsWorkspace(): ProjectsWorkspace {
         latestWorkOrder: "WO-SHELL-010 - Projects Workspace / TerraFusion OS Native Area",
         latestEvidence: "Production health, readiness, PR checks, and shell tests remain the proof chain.",
         deploymentPosture: "Production is observed through Systems and Evidence; no deploy action is available here.",
-        blockedDecision: "No blocker in this read-only slice.",
+        blockedDecision:
+          "Live external state is blocked pending separate authority; the static repository-local command view is unblocked.",
         nextRecommendedWork:
           "Complete WO-TF-COMMAND-001 through WO-TF-COMMAND-006 as a static, sourced command layer.",
         commandLayer: {
