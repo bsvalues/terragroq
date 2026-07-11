@@ -27,7 +27,7 @@ disabled until that owner-only action is complete.
 ## Validation
 
 - Runtime policy/state/prompt/workflow/secret tests: pass.
-- Full suite: 134 files and 694 tests pass.
+- Full suite: 134 files and 696 tests pass.
 - `npm run lint`: pass.
 - Production build with private worker and telemetry disabled: pass.
 - `actionlint` 1.7.12: pass for `runtime-operator.yml`.

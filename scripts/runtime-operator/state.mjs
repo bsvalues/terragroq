@@ -28,3 +28,14 @@ export function isLeaseExpired(leasedAt, now, ttlMinutes) {
 export function buildCheckpoint({ leaseId, state, detail, at }) {
   return { schemaVersion: 1, leaseId, state, detail, at }
 }
+
+export function evaluatePullRequestGate({ legacyStatuses, checkRuns, unresolvedThreads }) {
+  if (unresolvedThreads > 0) return { decision: "REMEDIATE", reason: "UNRESOLVED_REVIEW_THREADS" }
+  const failedCheck = checkRuns.some((check) => check.status === "completed" && !["success", "neutral", "skipped"].includes(check.conclusion))
+  const failedStatus = legacyStatuses.some((status) => !["success", "pending"].includes(status.state))
+  if (failedCheck || failedStatus) return { decision: "REMEDIATE", reason: "FAILED_CHECK" }
+  const pendingCheck = checkRuns.length === 0 || checkRuns.some((check) => check.status !== "completed")
+  const pendingStatus = legacyStatuses.some((status) => status.state === "pending")
+  if (pendingCheck || pendingStatus) return { decision: "WAIT" }
+  return { decision: "MERGE" }
+}

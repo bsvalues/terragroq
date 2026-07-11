@@ -5,6 +5,7 @@ import {
   buildLease,
   chooseNextWorkOrder,
   isLeaseExpired,
+  evaluatePullRequestGate,
 } from "@/scripts/runtime-operator/state.mjs"
 
 describe("runtime operator durable state", () => {
@@ -35,5 +36,18 @@ describe("runtime operator durable state", () => {
       detail: "PR #400",
       at: "2026-07-10T03:00:00Z",
     })
+  })
+
+  it("merges checks-only PRs without requiring legacy status contexts", () => {
+    expect(evaluatePullRequestGate({
+      legacyStatuses: [],
+      checkRuns: [{ status: "completed", conclusion: "success" }],
+      unresolvedThreads: 0,
+    })).toEqual({ decision: "MERGE" })
+    expect(evaluatePullRequestGate({
+      legacyStatuses: [],
+      checkRuns: [{ status: "in_progress", conclusion: null }],
+      unresolvedThreads: 0,
+    })).toEqual({ decision: "WAIT" })
   })
 })

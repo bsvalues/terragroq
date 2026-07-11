@@ -1,4 +1,5 @@
 import { commentOnIssue, githubContext, githubRequest, setIssueLabels } from "./github.mjs"
+import { evaluatePullRequestGate } from "./state.mjs"
 
 const { owner, repo } = githubContext()
 const pulls = await githubRequest(`/repos/${owner}/${repo}/pulls?state=open&per_page=100`)
@@ -17,11 +18,13 @@ for (const pull of pulls.filter((candidate) => candidate.head.ref.startsWith("ru
     }),
   })
   const unresolved = graph.data.repository.pullRequest.reviewThreads.nodes.filter((thread) => !thread.isResolved).length
-  const checkConclusions = checks.check_runs.map((check) => check.conclusion).filter(Boolean)
-  const checksFailed = checkConclusions.some((conclusion) => !["success", "neutral", "skipped"].includes(conclusion))
-  const checksPending = checks.check_runs.some((check) => check.status !== "completed") || status.state === "pending"
+  const gate = evaluatePullRequestGate({
+    legacyStatuses: status.statuses,
+    checkRuns: checks.check_runs,
+    unresolvedThreads: unresolved,
+  })
 
-  if (unresolved > 0 || checksFailed) {
+  if (gate.decision === "REMEDIATE") {
     const issue = await githubRequest(`/repos/${owner}/${repo}/issues/${issueNumber}`)
     const issueLabels = issue.labels.map((label) => label.name)
     if (issueLabels.includes("williamos:leased") || issueLabels.includes("williamos:ready")) continue
@@ -34,11 +37,11 @@ for (const pull of pulls.filter((candidate) => candidate.head.ref.startsWith("ru
       continue
     }
     await setIssueLabels(issueNumber, ["williamos:ready", "williamos:remediation"])
-    await commentOnIssue(issueNumber, `Runtime operator queued remediation attempt ${nextRetry} for PR #${pull.number}: ${unresolved} unresolved thread(s), check failure=${checksFailed}.`)
+    await commentOnIssue(issueNumber, `Runtime operator queued remediation attempt ${nextRetry} for PR #${pull.number}: ${gate.reason}.`)
     continue
   }
 
-  if (checksPending || status.state !== "success") continue
+  if (gate.decision === "WAIT") continue
   await githubRequest(`/repos/${owner}/${repo}/pulls/${pull.number}/merge`, {
     method: "PUT",
     body: JSON.stringify({ merge_method: "squash" }),

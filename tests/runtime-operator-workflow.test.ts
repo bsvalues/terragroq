@@ -30,6 +30,7 @@ describe("runtime operator workflow boundary", () => {
     expect(workflow).toContain("node scripts/runtime-operator/resolve-threads.mjs")
     expect(workflow).toContain("node scripts/runtime-operator/recover.mjs")
     expect(workflow).toContain("node scripts/runtime-operator/scan-secrets.mjs")
+    expect(workflow).toContain("git diff --cached --name-only -z | node scripts/runtime-operator/scan-secrets.mjs --nul-stdin")
     expect(workflow).toContain("steps.result.outputs.result == 'NO_CHANGE'")
     expect(workflow).toContain("CHECKPOINT_STATE: COMPLETED")
     expect(policy).toContain("ALLOWED_REPOSITORY")

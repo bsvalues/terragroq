@@ -36,7 +36,7 @@ export function parseWorkOrderEnvelope(body) {
 }
 
 function pathMatches(pattern, path) {
-  if (pattern.endsWith("/**")) return path.startsWith(pattern.slice(0, -3))
+  if (pattern.endsWith("/**")) return path.startsWith(pattern.slice(0, -2))
   return path === pattern
 }
 

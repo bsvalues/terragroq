@@ -172,7 +172,7 @@ jobs:
 
       - name: Reject secret-bearing changed files
         if: steps.result.outputs.result == 'PATCH_READY'
-        run: node scripts/runtime-operator/scan-secrets.mjs $(git diff --cached --name-only)
+        run: git diff --cached --name-only -z | node scripts/runtime-operator/scan-secrets.mjs --nul-stdin
 
       - name: Install locked dependencies
         if: steps.result.outputs.result == 'PATCH_READY'

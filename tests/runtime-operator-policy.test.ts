@@ -77,6 +77,10 @@ describe("runtime operator authority policy", () => {
       allowed: false,
       violations: ["package.json"],
     })
+    expect(validateChangedPaths({ ...envelope, allowedPaths: ["docs/reports/**"] }, ["docs/reports-old/escape.md"])).toEqual({
+      allowed: false,
+      violations: ["docs/reports-old/escape.md"],
+    })
   })
 
   it("allows only a runtime branch tied to an explicit remediation PR", () => {

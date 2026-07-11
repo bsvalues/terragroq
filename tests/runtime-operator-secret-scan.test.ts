@@ -15,4 +15,14 @@ describe("runtime operator secret scan", () => {
     expect(() => execFileSync(process.execPath, ["scripts/runtime-operator/scan-secrets.mjs", safe])).not.toThrow()
     expect(() => execFileSync(process.execPath, ["scripts/runtime-operator/scan-secrets.mjs", unsafe])).toThrow()
   })
+
+  it("accepts NUL-delimited filenames containing spaces", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "runtime operator "))
+    const safe = path.join(directory, "evidence report.txt")
+    fs.writeFileSync(safe, "Static evidence only.\n")
+
+    expect(() => execFileSync(process.execPath, ["scripts/runtime-operator/scan-secrets.mjs", "--nul-stdin"], {
+      input: `${safe}\0`,
+    })).not.toThrow()
+  })
 })

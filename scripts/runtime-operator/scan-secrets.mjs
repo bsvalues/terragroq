@@ -1,6 +1,8 @@
 import fs from "node:fs"
 
-const files = process.argv.slice(2)
+const files = process.argv[2] === "--nul-stdin"
+  ? fs.readFileSync(0).toString("utf8").split("\0").filter(Boolean)
+  : process.argv.slice(2)
 if (files.length === 0) throw new Error("At least one file is required for secret scanning")
 
 const patterns = [
