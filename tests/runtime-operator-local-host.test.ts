@@ -30,5 +30,8 @@ describe("local-first runtime operator", () => {
     const audit = fs.readFileSync(path.join(root, "runtime-operator/audit.mjs"), "utf8")
     expect(audit).toContain("previousHash")
     expect(audit).toContain('createHash("sha256")')
+    const provision = fs.readFileSync(path.join(root, "scripts/local/williamos-operator-provision.ps1"), "utf8")
+    expect(provision).toContain("Refusing to replace non-empty directory")
+    expect(provision).toContain('Initialize-OperatorFile "$OperatorHome\\control\\activation" "disabled"')
   })
 })
