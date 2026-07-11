@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
-Work order: `WO-OPS-002`
-Goal: `GOAL-OPS-001 - Codex Operator Mode`
+Work order: `WO-OPERATOR-QUEUE-003`
+Goal: `GOAL-WOS-ACTIVE-PROGRAM-QUEUE-001 - Active Program Queue Reconciliation`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -52,7 +52,6 @@ returned HTTP 200 and auth readiness remained healthy with signup closed.
 The active queue is
 `docs/governance/active-program-queue.md`. Codex owns this R0 chain through
 eligible merge and post-merge verification. The Primary is not a relay.
-
 
 ## Loop Rules
 
