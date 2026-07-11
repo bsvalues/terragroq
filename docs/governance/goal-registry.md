@@ -1,7 +1,7 @@
 # WilliamOS Goal Registry
 
-Work order: `WO-COUNTY-001 through WO-COUNTY-010`
-Goal: `GOAL-COUNTY-001 - County Ops Knowledge Pack`
+Work order: `WO-TF-COMMAND-000A through WO-TF-COMMAND-000F`
+Goal: `GOAL-TF-COMMAND-PREFLIGHT-001 - TerraFusion Command Layer Preflight`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -63,7 +63,7 @@ The reconciliation closed stale active labels, superseded historical next-work
 lists, preserved `GOAL-WOS-009` for Academy/Wiki evidence, and selected the
 collision-free County Ops identity.
 
-## Canonical Active Goal
+## Canonical Completed County Ops Goal
 
 ### `GOAL-COUNTY-001 - County Ops Knowledge Pack`
 
@@ -71,31 +71,44 @@ Program: `PROGRAM-WILLIAMOS-COUNTY-OPS-001`
 
 Loop: `LOOP-WILLIAMOS-COUNTY-OPS-001`
 
-Risk ceiling: `R1`
+Completion state: `WO-COUNTY-001` through `WO-COUNTY-010` completed
+through PR #337 at `49fa4ffe7917bdc0440950ed7a1fb47cd2c0a837`.
+The result is a static/read-only Washington county-assessor knowledge pack;
+its PACS, county-data, legal-decision, runtime, and production boundaries remain
+in force.
 
-Purpose: create a current-source-backed, static/read-only Washington
-county-assessor knowledge pack covering PACS safety, levy, BOE evidence, permit
-intake, public-data redaction, ratio studies, and appeals.
+Canonical evidence:
+`docs/reports/WO-COUNTY-010-county-ops-final-rollup.md`
+
+## Canonical Active Goal
+
+### `GOAL-TF-COMMAND-PREFLIGHT-001 - TerraFusion Command Layer Preflight`
+
+Program: `PROGRAM-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
+
+Loop: `LOOP-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
+
+Risk ceiling: `R0`
+
+Purpose: reconcile TerraFusion identity, provenance, staleness, static project
+contracts, and authority boundaries before any implementation of
+`GOAL-TF-COMMAND-001`.
 
 Work Orders:
 
-1. `WO-COUNTY-001 - County Ops Knowledge Map`
-2. `WO-COUNTY-002 - PACS Read-Only Rules Page`
-3. `WO-COUNTY-003 - Levy Workflow Page`
-4. `WO-COUNTY-004 - BOE Evidence Page`
-5. `WO-COUNTY-005 - Permit Import Knowledge Page`
-6. `WO-COUNTY-006 - Public Data Redaction Policy`
-7. `WO-COUNTY-007 - Ratio Study Knowledge Page`
-8. `WO-COUNTY-008 - Appeals Packet Playbook`
-9. `WO-COUNTY-009 - Academy/Wiki and Navigation Cross-Links`
-10. `WO-COUNTY-010 - Safety, Validation, and Final Rollup`
+1. `WO-TF-COMMAND-000A - Existing WilliamOS TerraFusion Reference Inventory`
+2. `WO-TF-COMMAND-000B - Project Identity and Provenance Contract`
+3. `WO-TF-COMMAND-000C - Static Project Card and Feed Contracts`
+4. `WO-TF-COMMAND-000D - Deployment and Staleness Semantics`
+5. `WO-TF-COMMAND-000E - Authority and Safety Classification`
+6. `WO-TF-COMMAND-000F - Implementation Decision and Evidence Rollup`
 
-Canonical program:
-`docs/governance/county-ops-program.md`
+Canonical preflight:
+`docs/governance/terrafusion-command-preflight.md`
 
-Blocked: real county data, PACS or county-system access, case-specific legal or
-disclosure decisions, TerraFusion touch, runtime activation, persistence, and
-production mutation.
+Blocked: external TerraFusion repository access, live status ingestion,
+deployment inspection, credentials, county/PACS access, runtime activation,
+persistence, and any production mutation.
 
 ### Closed Goal Preservation Register
 
