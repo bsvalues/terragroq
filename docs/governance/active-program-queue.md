@@ -4,17 +4,17 @@ Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
 
 Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
-Active program: `PROGRAM-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
+Active program: `PROGRAM-WILLIAMOS-TF-COMMAND-001`
 
-Goal: `GOAL-TF-COMMAND-PREFLIGHT-001`
+Goal: `GOAL-TF-COMMAND-001`
 
-Loop: `LOOP-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
+Loop: `LOOP-WILLIAMOS-TF-COMMAND-001`
 
 Baseline: `origin/main = 49fa4ffe7917bdc0440950ed7a1fb47cd2c0a837`
 
-Risk ceiling: `R0`
+Risk ceiling: `R1`
 
-Status: TerraFusion command-layer preflight active
+Status: TerraFusion project command layer active
 
 ## Purpose
 
@@ -74,21 +74,30 @@ County Ops program.
 
 `GOAL-COUNTY-001 - County Ops Knowledge Pack` completed through PR #337.
 
+## Completed TerraFusion Preflight
+
+`GOAL-TF-COMMAND-PREFLIGHT-001` completed `WO-TF-COMMAND-000A` through
+`WO-TF-COMMAND-000F`. It established explicit provenance and staleness
+semantics and approved only an R1 static/read-only first implementation slice.
+
+Evidence:
+`docs/reports/WO-TF-COMMAND-000F-preflight-rollup.md`
+
 ## Canonical Active Program
 
 The current dependency-ready program is:
 
-`GOAL-TF-COMMAND-PREFLIGHT-001 - TerraFusion Command Layer Preflight`
+`GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer`
 
 Why:
 
-- it is the first incomplete goal in the authorized goal sequence;
-- its first slice can remain static, read-only, and documentation/governance
-  only;
-- it can improve WilliamOS usefulness for the Primary without connecting to or
-  mutating PACS, TerraFusion, county systems, databases, or production;
-- the more consequential dedicated-host implementation lane remains correctly
-  owner-gated.
+- the R0 preflight is complete;
+- the six implementation records can remain static, read-only, and explicitly
+  sourced;
+- provenance and staleness semantics prevent declared or historical text from
+  being presented as live TerraFusion state;
+- external integration and the dedicated-host implementation lane remain
+  correctly owner-gated.
 
 Completed County Ops work-order sequence:
 
@@ -103,7 +112,7 @@ Completed County Ops work-order sequence:
 9. `WO-COUNTY-009 - Academy/Wiki and Navigation Cross-Links`
 10. `WO-COUNTY-010 - Safety, Validation, and Final Rollup`
 
-## TerraFusion Preflight Work Orders
+## Completed TerraFusion Preflight Work Orders
 
 1. `WO-TF-COMMAND-000A - Existing WilliamOS TerraFusion Reference Inventory`
 2. `WO-TF-COMMAND-000B - Project Identity and Provenance Contract`
@@ -114,6 +123,15 @@ Completed County Ops work-order sequence:
 
 Canonical preflight:
 `docs/governance/terrafusion-command-preflight.md`
+
+## Active TerraFusion Command Work Orders
+
+1. `WO-TF-COMMAND-001 - TerraFusion Project Card`
+2. `WO-TF-COMMAND-002 - TerraFusion Work Order Feed`
+3. `WO-TF-COMMAND-003 - TerraFusion Evidence Feed`
+4. `WO-TF-COMMAND-004 - TerraFusion Blocker Queue`
+5. `WO-TF-COMMAND-005 - TerraFusion Deployment Status Read Model`
+6. `WO-TF-COMMAND-006 - TerraFusion Next Move Recommendation`
 
 ## County Ops Standing Boundaries
 
@@ -144,9 +162,9 @@ Any need for real county data or system access becomes a typed authority wall.
 
 ## Continuation Rule
 
-Codex continues through `WO-TF-COMMAND-000A` to
-`WO-TF-COMMAND-000F` without asking the Primary to relay another packet. The
-preflight may inventory and define static contracts only. Codex stops before
+Codex continues through `WO-TF-COMMAND-001` to `WO-TF-COMMAND-006` without
+asking the Primary to relay another packet. The implementation may use only
+repository-local, explicitly sourced static records. Codex stops before
 external repository access, live status ingestion, deployment inspection,
 TerraFusion or county mutation, credentials, or any higher-risk integration.
 
