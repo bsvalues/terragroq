@@ -2,17 +2,19 @@
 
 Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
 
-Program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
+Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
-Goal: `GOAL-WOS-ACTIVE-PROGRAM-QUEUE-001`
+Active program: `PROGRAM-WILLIAMOS-COUNTY-OPS-001`
 
-Loop: `LOOP-WOS-ACTIVE-PROGRAM-QUEUE-001`
+Goal: `GOAL-COUNTY-001`
 
-Baseline: `origin/main = e5a396ce19c3c19fb2ef66c32b43aaee20f41cc9`
+Loop: `LOOP-WILLIAMOS-COUNTY-OPS-001`
 
-Risk ceiling: `R0`
+Baseline: `origin/main = 123b95eed0a0017f2b4fda7b21df7cc471297c2d`
 
-Status: active reconciliation
+Risk ceiling: `R1`
+
+Status: County Ops knowledge pack active
 
 ## Purpose
 
@@ -29,9 +31,9 @@ activate a worker, inspect a host, mutate production, or change authority.
 - `GOAL-WOS-CODEX-OPERATOR-001` is complete.
 - `LOOP-WOS-CODEX-OPERATOR-001` reached goal completion.
 - `WO-CODEX-OPERATOR-001` through `024` are complete.
-- PRs #333, #334, and #335 are merged.
-- Canonical baseline is
-  `e5a396ce19c3c19fb2ef66c32b43aaee20f41cc9`.
+- PRs #333, #334, #335, and #336 are merged.
+- Queue reconciliation completed through PR #336 at
+  `123b95eed0a0017f2b4fda7b21df7cc471297c2d`.
 - At the recorded baseline, before this reconciliation branch and PR were
   created, no open pull request or issue was found.
 - The Phase 2 dedicated Ubuntu host planning gates already completed through
@@ -56,7 +58,7 @@ The canonical County Ops identity is:
 This preserves historical evidence and removes the goal-ID collision in older
 playbook text.
 
-## Active Reconciliation Work Orders
+## Completed Queue Reconciliation Work Orders
 
 1. `WO-OPERATOR-QUEUE-001 - Current Truth Reconciliation`
 2. `WO-OPERATOR-QUEUE-002 - Goal Registry Status Correction`
@@ -64,13 +66,12 @@ playbook text.
 4. `WO-OPERATOR-QUEUE-004 - Stale Recommendation and Identifier Reconciliation`
 5. `WO-OPERATOR-QUEUE-005 - Next Eligible Program Decision and Evidence Rollup`
 
-All five Work Orders are R0 documentation/governance work and may share one
-coherent pull request. Codex owns branch, validation, PR, review remediation,
-eligible merge, post-merge verification, and continuation.
+All five Work Orders completed through PR #336. The queue now advances to the
+County Ops program.
 
-## Deterministic Next Program
+## Canonical Active Program
 
-After this reconciliation merges and verifies, the next eligible program is:
+The current dependency-ready program is:
 
 `GOAL-COUNTY-001 - County Ops Knowledge Pack`
 
@@ -126,10 +127,11 @@ Any need for real county data or system access becomes a typed authority wall.
 
 ## Continuation Rule
 
-After the queue reconciliation PR is merged and verified, Codex starts
-`GOAL-COUNTY-001` at `WO-COUNTY-001` without asking the Primary to relay
-another packet. Codex stops only if the work requires a blocked capability,
-sensitive source, material policy choice, or other true authority wall.
+Codex continues through `WO-COUNTY-001` to `WO-COUNTY-010` without asking the
+Primary to relay another packet. After verified completion, the queue resolves
+the next eligible program from current truth. Codex stops only if the work
+requires a blocked capability, sensitive source, material policy choice, or
+other true authority wall.
 
 ## Validation
 
