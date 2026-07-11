@@ -1,7 +1,7 @@
 # WilliamOS Goal Registry
 
-Work order: `WO-TF-COMMAND-000A through WO-TF-COMMAND-000F`
-Goal: `GOAL-TF-COMMAND-PREFLIGHT-001 - TerraFusion Command Layer Preflight`
+Work order: `WO-TF-COMMAND-001 through WO-TF-COMMAND-006`
+Goal: `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -80,7 +80,7 @@ in force.
 Canonical evidence:
 `docs/reports/WO-COUNTY-010-county-ops-final-rollup.md`
 
-## Canonical Active Goal
+## Canonical Completed TerraFusion Preflight Goal
 
 ### `GOAL-TF-COMMAND-PREFLIGHT-001 - TerraFusion Command Layer Preflight`
 
@@ -88,27 +88,46 @@ Program: `PROGRAM-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
 
 Loop: `LOOP-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
 
-Risk ceiling: `R0`
+Completion state: `WO-TF-COMMAND-000A` through
+`WO-TF-COMMAND-000F` completed as an R0 repository-local preflight.
 
-Purpose: reconcile TerraFusion identity, provenance, staleness, static project
-contracts, and authority boundaries before any implementation of
-`GOAL-TF-COMMAND-001`.
+Canonical evidence:
+`docs/reports/WO-TF-COMMAND-000F-preflight-rollup.md`
+
+Decision: the first implementation slice may proceed as R1 static/read-only
+records with explicit provenance and staleness. External or live integration
+remains owner-gated.
+
+## Canonical Active Goal
+
+### `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer`
+
+Program: `PROGRAM-WILLIAMOS-TF-COMMAND-001`
+
+Loop: `LOOP-WILLIAMOS-TF-COMMAND-001`
+
+Risk ceiling: `R1`
+
+Purpose: represent TerraFusion OS as a governed project under WilliamOS command
+using repository-local, explicitly sourced static records that cannot be
+mistaken for live deployment or runtime state.
 
 Work Orders:
 
-1. `WO-TF-COMMAND-000A - Existing WilliamOS TerraFusion Reference Inventory`
-2. `WO-TF-COMMAND-000B - Project Identity and Provenance Contract`
-3. `WO-TF-COMMAND-000C - Static Project Card and Feed Contracts`
-4. `WO-TF-COMMAND-000D - Deployment and Staleness Semantics`
-5. `WO-TF-COMMAND-000E - Authority and Safety Classification`
-6. `WO-TF-COMMAND-000F - Implementation Decision and Evidence Rollup`
+1. `WO-TF-COMMAND-001 - TerraFusion Project Card`
+2. `WO-TF-COMMAND-002 - TerraFusion Work Order Feed`
+3. `WO-TF-COMMAND-003 - TerraFusion Evidence Feed`
+4. `WO-TF-COMMAND-004 - TerraFusion Blocker Queue`
+5. `WO-TF-COMMAND-005 - TerraFusion Deployment Status Read Model`
+6. `WO-TF-COMMAND-006 - TerraFusion Next Move Recommendation`
 
-Canonical preflight:
-`docs/governance/terrafusion-command-preflight.md`
+Required semantics: each record is declared, observed, stale, unknown, or
+blocked; observed claims require dated proof; historical evidence never becomes
+current truth implicitly.
 
-Blocked: external TerraFusion repository access, live status ingestion,
-deployment inspection, credentials, county/PACS access, runtime activation,
-persistence, and any production mutation.
+Blocked: external repository access, dynamic ingestion, deployment inspection,
+credentials, county/PACS access, runtime activation, persistence, command
+execution, and any production mutation.
 
 ### Closed Goal Preservation Register
 
