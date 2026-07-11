@@ -61,6 +61,52 @@ describe("Projects workspace", () => {
     })
   })
 
+  it("exposes sourced TerraFusion command records without claiming live state", () => {
+    const workspace = getProjectsWorkspace()
+    const terraFusion = workspace.projects.find((project) => project.name === "TerraFusion OS")
+    const command = terraFusion?.commandLayer
+
+    expect(command?.projectCard).toMatchObject({
+      id: "TF-PROJECT-001",
+      source: {
+        state: "declared",
+        observedAt: null,
+      },
+    })
+    expect(command?.workOrders).toHaveLength(1)
+    expect(command?.evidence.map((record) => record.source.state)).toEqual([
+      "observed",
+      "stale",
+    ])
+    expect(command?.blockers[0].source.state).toBe("blocked")
+    expect(terraFusion?.blockedDecision).toContain("Live external state is blocked")
+    expect(command?.deployment).toMatchObject({
+      id: "TF-DEPLOYMENT-001",
+      source: {
+        state: "unknown",
+        observedAt: null,
+      },
+    })
+    expect(command?.nextMove.source.state).toBe("declared")
+
+    const records = [
+      command?.projectCard,
+      ...(command?.workOrders ?? []),
+      ...(command?.evidence ?? []),
+      ...(command?.blockers ?? []),
+      command?.deployment,
+      command?.nextMove,
+    ].filter((record) => record !== undefined)
+
+    expect(records.every((record) => record.source.reference.length > 0)).toBe(true)
+    expect(
+      records
+        .filter((record) => record.source.state === "observed")
+        .every((record) => record.source.observedAt !== null),
+    ).toBe(true)
+    expect(command?.deployment.summary).toContain("No current TerraFusion deployment status")
+  })
+
   it("connects project posture to Work Orders, Evidence, Systems, and Brain Council", () => {
     const workspace = getProjectsWorkspace()
     const links = new Map(workspace.links.map((link) => [link.label, link.href]))
