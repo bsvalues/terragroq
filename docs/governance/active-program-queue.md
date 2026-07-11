@@ -4,17 +4,17 @@ Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
 
 Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
-Active program: `PROGRAM-WILLIAMOS-COUNTY-OPS-001`
+Active program: `PROGRAM-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
 
-Goal: `GOAL-COUNTY-001`
+Goal: `GOAL-TF-COMMAND-PREFLIGHT-001`
 
-Loop: `LOOP-WILLIAMOS-COUNTY-OPS-001`
+Loop: `LOOP-WILLIAMOS-TF-COMMAND-PREFLIGHT-001`
 
-Baseline: `origin/main = 123b95eed0a0017f2b4fda7b21df7cc471297c2d`
+Baseline: `origin/main = 49fa4ffe7917bdc0440950ed7a1fb47cd2c0a837`
 
-Risk ceiling: `R1`
+Risk ceiling: `R0`
 
-Status: County Ops knowledge pack active
+Status: TerraFusion command-layer preflight active
 
 ## Purpose
 
@@ -31,9 +31,10 @@ activate a worker, inspect a host, mutate production, or change authority.
 - `GOAL-WOS-CODEX-OPERATOR-001` is complete.
 - `LOOP-WOS-CODEX-OPERATOR-001` reached goal completion.
 - `WO-CODEX-OPERATOR-001` through `024` are complete.
-- PRs #333, #334, #335, and #336 are merged.
-- Queue reconciliation completed through PR #336 at
-  `123b95eed0a0017f2b4fda7b21df7cc471297c2d`.
+- PRs #333 through #337 are merged.
+- Queue reconciliation completed through PR #336.
+- County Ops completed through PR #337 at
+  `49fa4ffe7917bdc0440950ed7a1fb47cd2c0a837`.
 - At the recorded baseline, before this reconciliation branch and PR were
   created, no open pull request or issue was found.
 - The Phase 2 dedicated Ubuntu host planning gates already completed through
@@ -69,11 +70,15 @@ playbook text.
 All five Work Orders completed through PR #336. The queue now advances to the
 County Ops program.
 
+## Completed County Ops Program
+
+`GOAL-COUNTY-001 - County Ops Knowledge Pack` completed through PR #337.
+
 ## Canonical Active Program
 
 The current dependency-ready program is:
 
-`GOAL-COUNTY-001 - County Ops Knowledge Pack`
+`GOAL-TF-COMMAND-PREFLIGHT-001 - TerraFusion Command Layer Preflight`
 
 Why:
 
@@ -85,7 +90,7 @@ Why:
 - the more consequential dedicated-host implementation lane remains correctly
   owner-gated.
 
-Initial County Ops work-order sequence:
+Completed County Ops work-order sequence:
 
 1. `WO-COUNTY-001 - County Ops Knowledge Map`
 2. `WO-COUNTY-002 - PACS Read-Only Rules Page`
@@ -97,6 +102,18 @@ Initial County Ops work-order sequence:
 8. `WO-COUNTY-008 - Appeals Packet Playbook`
 9. `WO-COUNTY-009 - Academy/Wiki and Navigation Cross-Links`
 10. `WO-COUNTY-010 - Safety, Validation, and Final Rollup`
+
+## TerraFusion Preflight Work Orders
+
+1. `WO-TF-COMMAND-000A - Existing WilliamOS TerraFusion Reference Inventory`
+2. `WO-TF-COMMAND-000B - Project Identity and Provenance Contract`
+3. `WO-TF-COMMAND-000C - Static Project Card and Feed Contracts`
+4. `WO-TF-COMMAND-000D - Deployment and Staleness Semantics`
+5. `WO-TF-COMMAND-000E - Authority and Safety Classification`
+6. `WO-TF-COMMAND-000F - Implementation Decision and Evidence Rollup`
+
+Canonical preflight:
+`docs/governance/terrafusion-command-preflight.md`
 
 ## County Ops Standing Boundaries
 
@@ -127,11 +144,11 @@ Any need for real county data or system access becomes a typed authority wall.
 
 ## Continuation Rule
 
-Codex continues through `WO-COUNTY-001` to `WO-COUNTY-010` without asking the
-Primary to relay another packet. After verified completion, the queue resolves
-the next eligible program from current truth. Codex stops only if the work
-requires a blocked capability, sensitive source, material policy choice, or
-other true authority wall.
+Codex continues through `WO-TF-COMMAND-000A` to
+`WO-TF-COMMAND-000F` without asking the Primary to relay another packet. The
+preflight may inventory and define static contracts only. Codex stops before
+external repository access, live status ingestion, deployment inspection,
+TerraFusion or county mutation, credentials, or any higher-risk integration.
 
 ## Validation
 
