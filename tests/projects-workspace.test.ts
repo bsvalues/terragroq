@@ -79,6 +79,7 @@ describe("Projects workspace", () => {
       "stale",
     ])
     expect(command?.blockers[0].source.state).toBe("blocked")
+    expect(terraFusion?.blockedDecision).toContain("Live external state is blocked")
     expect(command?.deployment).toMatchObject({
       id: "TF-DEPLOYMENT-001",
       source: {
