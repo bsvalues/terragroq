@@ -1,7 +1,7 @@
 # WilliamOS Goal Registry
 
-Work order: `WO-OPS-002`
-Goal: `GOAL-OPS-001 - Codex Operator Mode`
+Work order: `WO-OPERATOR-QUEUE-002`
+Goal: `GOAL-WOS-ACTIVE-PROGRAM-QUEUE-001 - Active Program Queue Reconciliation`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -81,7 +81,6 @@ Next on verified completion:
 
 County Ops uses `GOAL-COUNTY-001`; it must not reuse `GOAL-WOS-009`, which is
 preserved as the completed Academy + Wiki reconciliation identity.
-
 
 ### Closed Goal Preservation Register
 
