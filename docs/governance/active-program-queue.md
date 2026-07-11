@@ -4,17 +4,17 @@ Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
 
 Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
-Active program: `NONE - AUTHORIZED SEQUENCE COMPLETE`
+Active program: `PROGRAM-RELEASE-ENGINEERING-001 - Release Engineering`
 
-Goal: `NONE - NEW GOAL AUTHORIZATION REQUIRED`
+Goal: `GOAL-RELEASE-ENGINEERING-001 - Release Engineering Foundation`
 
-Loop: `NONE - NEW LOOP AUTHORIZATION REQUIRED`
+Loop: `LOOP-RELEASE-ENGINEERING-001`
 
-Baseline: `origin/main = 05fcf18fba8a6a2be5fef7865e3a6842ae9bb747`
+Baseline: `origin/main = 2966527a0dc3790feeea3deaf86e10808fb6605b`
 
 Risk ceiling: `R1`
 
-Status: authorized material goal sequence complete
+Status: portfolio resolver selected the highest-priority executable program
 
 ## Purpose
 
@@ -93,15 +93,16 @@ Evidence:
 
 ## Canonical Active Program
 
-No material program is active. The authorized goal sequence is complete.
+`PROGRAM-RELEASE-ENGINEERING-001` is selected from the ratified portfolio
+backlog. Its first bounded goal is `GOAL-RELEASE-ENGINEERING-001`; its loop is
+`LOOP-RELEASE-ENGINEERING-001`; and `WO-RELEASE-001 - Current Release Evidence
+Reconciliation` is active.
 
-Why work stops here:
-
-- routine implementation, validation, review, merge, and evidence are complete;
-- remaining dedicated-host, external repository, live deployment, credential,
-  county/PACS, runtime, and mutation lanes are standing authority walls;
-- inventing a materially new program would expand scope beyond the authorized
-  sequence.
+Selection is deterministic: completed, blocked, deferred, superseded,
+dependency-blocked, and owner-gated programs are filtered out; remaining
+programs are ranked by operational and engineering value, dependency
+readiness, risk, evidence readiness, reversibility, and bounded scope.
+Equal scores are resolved by stable ascending `programId` order.
 
 Completed County Ops work-order sequence:
 
@@ -166,11 +167,11 @@ Any need for real county data or system access becomes a typed authority wall.
 
 ## Continuation Rule
 
-Codex completed `WO-TF-COMMAND-001` through `WO-TF-COMMAND-006`, review
-remediation, eligible merge, and evidence without asking the Primary to relay
-another packet. The next material program requires explicit owner authorization.
-Standing external repository, live status, deployment, TerraFusion/county,
-credential, runtime, and mutation gates remain closed.
+Codex completed `WO-TF-COMMAND-001` through `WO-TF-COMMAND-006`, then invoked
+the ratified portfolio resolver. A completed program routes to the next
+approved executable program instead of returning routine planning to the
+Primary. Owner involvement is required only when no approved executable
+program remains or a typed authority wall is reached.
 
 ## Validation
 
