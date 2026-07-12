@@ -159,7 +159,10 @@ Work Orders: `WO-RUNTIME-IDENTITY-001` through
 `WO-RUNTIME-IDENTITY-038`.
 
 Current Work Order:
-`WO-RUNTIME-IDENTITY-001 - Live Baseline and Containment Reconciliation`.
+`WO-RUNTIME-IDENTITY-005 - Codex ChatGPT Login Contract`.
+
+Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-004`; evidence
+is recorded under `docs/reports/WO-RUNTIME-IDENTITY-00*.md`.
 
 Owner gates are limited to interactive Codex login, interactive GitHub login,
 activation/revocation, physical or elevated host administration, and future

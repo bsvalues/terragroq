@@ -52,6 +52,17 @@ export function evaluateOperatorHost(host: OperatorHost, explicitOwnerDecision =
     : { selectable: false, reasonCode: "GITHUB_ACTIONS_HOST_PROHIBITED" as const }
 }
 
+export type CredentialCustody = "OS_KEYRING" | "RAW_GITHUB_SECRET" | "RAW_LOCAL_FILE"
+
+export function evaluateCredentialCustody(custody: CredentialCustody) {
+  if (custody === "OS_KEYRING") {
+    return { selectable: true, reasonCode: "OWNER_LOGIN_KEYRING_REQUIRED" as const }
+  }
+  return custody === "RAW_GITHUB_SECRET"
+    ? { selectable: false, reasonCode: "GITHUB_SECRET_CUSTODY_PROHIBITED" as const }
+    : { selectable: false, reasonCode: "RAW_LOCAL_FILE_CUSTODY_PROHIBITED" as const }
+}
+
 export function buildGoalPacket(program: PortfolioProgramRecord) {
   const localIdentityRuntime =
     program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"

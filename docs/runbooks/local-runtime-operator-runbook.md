@@ -8,13 +8,15 @@ Canonical playbook:
 ## Immediate Safe State
 
 - Leave activation `disabled`.
-- Do not populate `openai_api_key` or `github_token`.
+- Run `williamos-operator-provision.ps1` to retire zero-byte legacy
+  placeholders. A non-empty legacy path stops at a migration wall and is never
+  read, printed, moved, or deleted automatically.
 - Do not add `OPENAI_API_KEY` or any other operator credential to GitHub.
 - Do not copy Codex auth caches or GitHub tokens into Docker.
 - Do not start the identity-bearing Docker operator.
 
-The existing credential placeholders were created empty. They are superseded
-and do not need values.
+The legacy credential placeholders are superseded and must not exist after
+safe retirement.
 
 ## Current Status
 

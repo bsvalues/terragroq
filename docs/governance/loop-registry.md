@@ -98,7 +98,10 @@ Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
 Program: `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001`
 
 Current Work Order:
-`WO-RUNTIME-IDENTITY-001 - Live Baseline and Containment Reconciliation`.
+`WO-RUNTIME-IDENTITY-005 - Codex ChatGPT Login Contract`.
+
+Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-004`; evidence
+is recorded under `docs/reports/WO-RUNTIME-IDENTITY-00*.md`.
 
 Selection: first incomplete Work Order whose dependencies and authority gates
 are satisfied.
