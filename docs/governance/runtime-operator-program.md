@@ -1,9 +1,9 @@
 # WilliamOS Runtime Operator Program
 
-Program: `PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001`
+Program: `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001`
 
-Corrective program:
-`PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001`
+Supersedes:
+`PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001`
 
 Active goal:
 `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
@@ -20,10 +20,10 @@ OMEN. GitHub Actions is prohibited as the autonomous runtime host unless a
 future owner decision names that host explicitly. GitHub may provide source,
 issues, pull requests, reviews, and CI validation.
 
-The earlier GitHub Actions control-plane design is removed. No OpenAI
-credential may be added to GitHub.
+The superseded program is not active or selectable. Its earlier GitHub Actions
+control-plane design is removed. No OpenAI credential may be added to GitHub.
 
-The later raw local secret-file design is also superseded. William is not
+Its later raw local secret-file design is also superseded. William is not
 required to populate `openai_api_key` or `github_token`. Those empty
 placeholder paths do not confer authority and may not be used for activation.
 
