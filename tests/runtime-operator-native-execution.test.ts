@@ -20,6 +20,8 @@ describe("native execution controls", () => {
     expect(codex).toContain("--output-schema")
     expect(codex).toContain('EndsWith(".ps1"')
     expect(codex).toContain("node_modules\\@openai\\codex\\bin\\codex.js")
+    for (const wall of ["AUTHORITY", "SCHEMA", "RATE_LIMIT", "NETWORK", "SANDBOX", "EXECUTION"]) expect(codex).toContain(`CODEX_${wall}_WALL`)
+    expect(codex).not.toContain("Write-Output $result.stderr")
     expect(module).toContain("PROCESS_OUTPUT_BUDGET_WALL")
   })
 

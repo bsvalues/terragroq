@@ -26,6 +26,16 @@ if ($codex.Source.EndsWith(".ps1", [StringComparison]::OrdinalIgnoreCase)) {
   $executable = $codex.Source
 }
 $result = Invoke-BoundedProcess $executable $arguments $Workspace $TimeoutSeconds 1048576 $prompt
-if ($result.exitCode -ne 0) { throw "CODEX_EXECUTION_WALL" }
+if ($result.exitCode -ne 0) {
+  $failure = switch -Regex ($result.stderr) {
+    '(?i)not logged in|login required|authentication (failed|required)|credentials? (missing|unavailable)|\b401\b' { "CODEX_AUTHORITY_WALL"; break }
+    '(?i)invalid.{0,40}schema|schema.{0,40}(invalid|error|unsupported)|failed to parse.{0,20}json' { "CODEX_SCHEMA_WALL"; break }
+    '(?i)rate.?limit|too many requests|\b429\b' { "CODEX_RATE_LIMIT_WALL"; break }
+    '(?i)network|connect|timed? out|ECONN|TLS|socket' { "CODEX_NETWORK_WALL"; break }
+    '(?i)sandbox|approval|permission|access denied' { "CODEX_SANDBOX_WALL"; break }
+    default { "CODEX_EXECUTION_WALL" }
+  }
+  throw $failure
+}
 if (-not (Test-Path -LiteralPath $ResultFile -PathType Leaf) -or (Get-Item -LiteralPath $ResultFile).Length -gt 1048576) { throw "CODEX_RESULT_WALL" }
 Write-Output "CODEX_EXECUTION_STATUS=RESULT_READY"
