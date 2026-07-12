@@ -101,7 +101,8 @@ Current Work Order:
 `WO-RUNTIME-IDENTITY-011 - Native Runtime Directory Contract`.
 
 Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-010`; evidence
-is recorded under `docs/reports/WO-RUNTIME-IDENTITY-00*.md`.
+is recorded in `docs/reports/WO-RUNTIME-IDENTITY-001` through
+`docs/reports/WO-RUNTIME-IDENTITY-010` reports.
 
 Selection: first incomplete Work Order whose dependencies and authority gates
 are satisfied.
