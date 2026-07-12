@@ -107,11 +107,19 @@ Continuation: execute `WO-RUNTIME-IDENTITY-001` through
 `WO-RUNTIME-IDENTITY-038`, owning routine implementation, validation, PR,
 review remediation, eligible merge, evidence, and next-WO resolution.
 
-Owner stops occur only for interactive `codex login`, interactive
-`gh auth login`, local activation/revocation, physical or elevated host
-administration, or a typed scope/risk wall. Pending checks, review feedback,
-recoverable failures, PR merge, restart, context compaction, and completed Work
-Orders are nonterminal.
+Stop conditions are the canonical playbook contract:
+
+- interactive `codex login` or `gh auth login`;
+- owner activation, revocation, or physical/elevated host administration;
+- keyring unavailability or any plaintext credential fallback;
+- authenticated GitHub principal other than `bsvalues`;
+- permission expansion or an action above R1;
+- PACS, county, protected-data, TerraFusion-production, deploy, release,
+  secrets-administration, destructive, or other prohibited scope;
+- an unrecoverable failure after bounded remediation.
+
+Pending checks, review feedback, recoverable failures, PR merge, restart,
+context compaction, and completed Work Orders are nonterminal.
 
 Canonical playbook:
 `docs/governance/local-identity-runtime-operator-playbook.md`
