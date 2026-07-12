@@ -13,6 +13,8 @@ if ($envelope.workOrderId -notmatch '^WO-[A-Z0-9-]+$') { throw "AUTHORITY_REGIST
 if (-not $envelope.dependenciesReady) { throw "AUTHORITY_DEPENDENCY_WALL" }
 if ($ExpectedBaseSha -and $envelope.baseSha -ne $ExpectedBaseSha) { throw "AUTHORITY_STALE_BASE_WALL" }
 if ($envelope.ownerGateRequired -or $envelope.protectedScope) { throw "AUTHORITY_OWNER_GATE_WALL" }
-$activation = Get-Content -Raw -LiteralPath "$env:USERPROFILE\.williamos\runtime-operator\control\activation"
+$activationPath = "$env:USERPROFILE\.williamos\runtime-operator\control\activation"
+if (-not (Test-Path -LiteralPath $activationPath -PathType Leaf)) { throw "AUTHORITY_ACTIVATION_WALL" }
+$activation = Get-Content -Raw -LiteralPath $activationPath
 if ($activation -cne "enabled") { throw "AUTHORITY_ACTIVATION_WALL" }
 Write-Output "AUTHORITY_STATUS=PASS STAGE=$Stage"
