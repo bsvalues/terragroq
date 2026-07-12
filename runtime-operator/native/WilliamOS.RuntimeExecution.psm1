@@ -13,21 +13,25 @@ function Invoke-BoundedProcess {
   foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
   foreach ($name in @("OPENAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN")) { $info.Environment.Remove($name) }
   $process = [Diagnostics.Process]::new(); $process.StartInfo = $info
-  if (-not $process.Start()) { throw "PROCESS_START_WALL" }
-  if ($StandardInput) { $process.StandardInput.Write($StandardInput) }
-  $process.StandardInput.Close()
-  $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
-  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) { $process.Kill($true); throw "PROCESS_TIMEOUT_WALL" }
-  $stdout = $stdoutTask.Result; $stderr = $stderrTask.Result
-  if ([Text.Encoding]::UTF8.GetByteCount($stdout) -gt $MaxOutputBytes -or [Text.Encoding]::UTF8.GetByteCount($stderr) -gt $MaxOutputBytes) { throw "PROCESS_OUTPUT_BUDGET_WALL" }
-  return @{ exitCode = $process.ExitCode; stdout = $stdout; stderr = $stderr; pid = $process.Id }
+  try {
+    if (-not $process.Start()) { throw "PROCESS_START_WALL" }
+    if ($StandardInput) { $process.StandardInput.Write($StandardInput) }
+    $process.StandardInput.Close()
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) { $process.Kill($true); $process.WaitForExit(); throw "PROCESS_TIMEOUT_WALL" }
+    $stdout = $stdoutTask.Result; $stderr = $stderrTask.Result
+    if ([Text.Encoding]::UTF8.GetByteCount($stdout) -gt $MaxOutputBytes -or [Text.Encoding]::UTF8.GetByteCount($stderr) -gt $MaxOutputBytes) { throw "PROCESS_OUTPUT_BUDGET_WALL" }
+    return @{ exitCode = $process.ExitCode; stdout = $stdout; stderr = $stderr; pid = $process.Id }
+  } finally {
+    $process.Dispose()
+  }
 }
 
 function Assert-WilliamOSRepository([string]$RepositoryPath) {
   $remote = (Invoke-BoundedProcess git @("remote", "get-url", "origin") $RepositoryPath 30).stdout.Trim()
   if ($remote -notin @("git@github.com:bsvalues/terragroq.git", "https://github.com/bsvalues/terragroq.git")) { throw "REPOSITORY_ALLOWLIST_WALL" }
   $status = (Invoke-BoundedProcess git @("status", "--porcelain=v1", "--untracked-files=all") $RepositoryPath 30).stdout
-  return @{ remote = "bsvalues/terragroq"; dirty = [bool]$status; statusClass = if ($status) { "USER_WORKTREE_DIRTY" } else { "CLEAN" } }
+  return @{ remote = "bsvalues/terragroq"; dirty = [bool]$status; statusClass = $(if ($status) { "USER_WORKTREE_DIRTY" } else { "CLEAN" }) }
 }
 
 function New-WilliamOSWorktree([string]$RuntimeRoot, [string]$RepositoryPath, [string]$WorkOrder, [string]$BaseSha) {

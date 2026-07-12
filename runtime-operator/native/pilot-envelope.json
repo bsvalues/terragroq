@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "repository": "bsvalues/terragroq",
+  "goalId": "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
+  "loopId": "LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
+  "workOrderId": "WO-RUNTIME-IDENTITY-PILOT-001",
+  "title": "Local identity runtime documentation pilot",
+  "riskClass": "R0",
+  "dependenciesReady": true,
+  "ownerGateRequired": false,
+  "protectedScope": false,
+  "baseSha": "SET_AT_ACTIVATION",
+  "allowedPaths": ["docs/reports/WO-RUNTIME-IDENTITY-030-pilot-proof.md"],
+  "blockedPaths": [".github", "app", "components", "lib", "runtime-operator", "scripts", "tests", "package.json", "package-lock.json"],
+  "validation": ["git diff --check", "secret scan", "focused evidence test"],
+  "rollback": "Revert the single documentation file through a reviewed PR.",
+  "idempotencyKey": "DERIVE_FROM_REPOSITORY_WORK_ORDER_BASE_SHA"
+}
