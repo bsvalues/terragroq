@@ -1,6 +1,6 @@
 # WO-RUNTIME-IDENTITY-005 - Codex ChatGPT Login Contract
 
-Implementation state: `PLAINTEXT_FALLBACK_WALL`.
+Implementation state: `PASS_READY_CHATGPT_KEYRING`.
 
 - Native Codex is pinned to `0.142.2`.
 - Configuration requires `forced_login_method = "chatgpt"` and
@@ -16,6 +16,6 @@ Observed preflight: the native plaintext fallback path is a nonempty regular
 file. Only its existence and byte length were observed; contents, hash, prefix,
 and credential state were not inspected.
 
-Owner action: William retires the fallback through the official Codex
-logout/login flow, applies the keyring contract, and completes `codex login`
-personally. Runtime activation remains disabled.
+Owner action completed through the official Codex logout/login flow. The
+sanitized adapter returned `CODEX_AUTH_STATUS=READY_CHATGPT_KEYRING` with
+native Codex `0.142.2`. Runtime activation remained disabled.

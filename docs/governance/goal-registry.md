@@ -159,10 +159,11 @@ Work Orders: `WO-RUNTIME-IDENTITY-001` through
 `WO-RUNTIME-IDENTITY-038`.
 
 Current Work Order:
-`WO-RUNTIME-IDENTITY-005 - Codex ChatGPT Login Contract`.
+`WO-RUNTIME-IDENTITY-011 - Native Runtime Directory Contract`.
 
-Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-004`; evidence
-is recorded under `docs/reports/WO-RUNTIME-IDENTITY-00*.md`.
+Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-010`; evidence
+is recorded in `docs/reports/WO-RUNTIME-IDENTITY-001` through
+`docs/reports/WO-RUNTIME-IDENTITY-010` reports.
 
 Owner gates are limited to interactive Codex login, interactive GitHub login,
 activation/revocation, physical or elevated host administration, and future
