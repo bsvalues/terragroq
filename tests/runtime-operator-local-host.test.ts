@@ -8,7 +8,14 @@ const root = process.cwd()
 
 describe("local-first runtime operator", () => {
   it("prohibits GitHub Actions hosting without an explicit future owner decision", () => {
-    expect(evaluateOperatorHost("LOCAL_OMEN_DOCKER")).toEqual({ selectable: true, reasonCode: "LOCAL_HOST_AUTHORIZED" })
+    expect(evaluateOperatorHost("LOCAL_OMEN_WINDOWS")).toEqual({
+      selectable: true,
+      reasonCode: "LOCAL_WINDOWS_IDENTITY_HOST_AUTHORIZED",
+    })
+    expect(evaluateOperatorHost("LOCAL_OMEN_DOCKER_VALIDATION")).toEqual({
+      selectable: true,
+      reasonCode: "DOCKER_VALIDATION_ONLY",
+    })
     expect(evaluateOperatorHost("GITHUB_ACTIONS")).toEqual({ selectable: false, reasonCode: "GITHUB_ACTIONS_HOST_PROHIBITED" })
     expect(evaluateOperatorHost("DEDICATED_UBUNTU")).toEqual({ selectable: false, reasonCode: "PHASE_2_NOT_AUTHORIZED" })
   })
@@ -18,7 +25,7 @@ describe("local-first runtime operator", () => {
     expect(fs.existsSync(path.join(root, ".github/ISSUE_TEMPLATE/runtime-work-order.yml"))).toBe(false)
   })
 
-  it("keeps secrets external and activation owner-controlled", () => {
+  it("keeps the superseded Docker runtime inert until raw mounts are retired", () => {
     const compose = fs.readFileSync(path.join(root, "runtime-operator/compose.yaml"), "utf8")
     expect(compose).toContain("${WILLIAMOS_OPERATOR_HOME}/secrets/openai_api_key")
     expect(compose).toContain("${WILLIAMOS_OPERATOR_HOME}/control/activation")
