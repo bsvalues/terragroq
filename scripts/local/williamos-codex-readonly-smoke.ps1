@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([int]$TimeoutSeconds = 300)
+param([int]$TimeoutSeconds = 300, [ValidateRange(1, 3)][int]$MaxAttempts = 3)
 
 $ErrorActionPreference = "Stop"
 $root = "$env:USERPROFILE\.williamos\runtime-operator"
@@ -23,7 +23,15 @@ try {
   $prompt = Join-Path $workspace "prompt.md"
   $result = Join-Path $workspace "result.json"
   [IO.File]::WriteAllText($prompt, "Inspect SMOKE.md. Make no changes. Return JSON matching the supplied schema with schemaVersion 1, workOrderId WO-RUNTIME-IDENTITY-027, result NO_CHANGE, a short summary, and unifiedPatch as an empty string.", [Text.UTF8Encoding]::new($false))
-  & "$PSScriptRoot\williamos-codex-exec.ps1" -Workspace $workspace -PromptFile $prompt -ResultFile $result -TimeoutSeconds $TimeoutSeconds | Out-Null
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    try {
+      & "$PSScriptRoot\williamos-codex-exec.ps1" -Workspace $workspace -PromptFile $prompt -ResultFile $result -TimeoutSeconds $TimeoutSeconds | Out-Null
+      break
+    } catch {
+      if ($_.Exception.Message -ne "CODEX_NETWORK_WALL" -or $attempt -eq $MaxAttempts) { throw }
+      Start-Sleep -Seconds (15 * $attempt)
+    }
+  }
   $parsed = Get-Content -Raw -LiteralPath $result | ConvertFrom-Json
   if ($parsed.schemaVersion -ne 1 -or $parsed.workOrderId -ne "WO-RUNTIME-IDENTITY-027" -or $parsed.result -ne "NO_CHANGE" -or $parsed.unifiedPatch) { throw "SMOKE_RESULT_WALL" }
   Write-Output "CODEX_READONLY_SMOKE=PASS"

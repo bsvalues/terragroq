@@ -12,6 +12,8 @@ describe("owner-run authenticated read-only smoke", () => {
     expect(smoke).toContain("FileAttributes]::ReparsePoint")
     expect(smoke).toContain("Select-Object -First 1")
     expect(smoke).toContain("CODEX_READONLY_SMOKE=PASS")
+    expect(smoke).toContain('Exception.Message -ne "CODEX_NETWORK_WALL"')
+    expect(smoke).toContain("ValidateRange(1, 3)")
     expect(smoke).not.toMatch(/git |gh |activation.*enabled/i)
   })
 })

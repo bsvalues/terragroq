@@ -6,9 +6,8 @@ schema-bound Codex `NO_CHANGE` task against a disposable non-repository
 snapshot is the final smoke proof; it creates no branch, issue, PR, comment,
 merge, activation change, or raw credential.
 
-Result: `BLOCKED_NESTED_CODEX_RUNTIME`. Status reads pass, but invoking a child
-Codex CLI from an active Codex desktop task produced no schema result and left
-the disposable working directory held by the desktop process. The active
-desktop process was not terminated. Repeat the sanitized smoke from a separate
-PowerShell session after Codex desktop is closed using
-`scripts/local/williamos-codex-readonly-smoke.ps1`.
+Result: `BLOCKED_CODEX_NETWORK_WALL`. Status reads pass and stale workspace
+recovery is proven. Three bounded smoke attempts from the native adapter ended
+at the sanitized network wall without producing a schema result. No underlying
+stderr, transcript, credential, or cache material was recorded. Repeat
+`scripts/local/williamos-codex-readonly-smoke.ps1` after connectivity recovers.
