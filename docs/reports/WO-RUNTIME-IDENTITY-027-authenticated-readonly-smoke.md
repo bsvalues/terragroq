@@ -10,4 +10,5 @@ Result: `BLOCKED_NESTED_CODEX_RUNTIME`. Status reads pass, but invoking a child
 Codex CLI from an active Codex desktop task produced no schema result and left
 the disposable working directory held by the desktop process. The active
 desktop process was not terminated. Repeat the sanitized smoke from a separate
-PowerShell session after Codex desktop is closed.
+PowerShell session after Codex desktop is closed using
+`scripts/local/williamos-codex-readonly-smoke.ps1`.
