@@ -8,6 +8,7 @@ import {
   buildGoalPacket,
   buildLoopPacket,
   buildWorkOrderChain,
+  evaluateCredentialCustody,
   resolveNextPortfolioProgram,
 } from "@/components/operator/portfolio-operator-resolver"
 
@@ -55,6 +56,12 @@ describe("portfolio operator", () => {
       goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
       ownerDecisionRequired: false,
     })
+  })
+
+  it("allows only owner-login keyring credential custody", () => {
+    expect(evaluateCredentialCustody("OS_KEYRING")).toEqual({ selectable: true, reasonCode: "OWNER_LOGIN_KEYRING_REQUIRED" })
+    expect(evaluateCredentialCustody("RAW_GITHUB_SECRET").selectable).toBe(false)
+    expect(evaluateCredentialCustody("RAW_LOCAL_FILE").selectable).toBe(false)
   })
 
   it("filters complete, blocked, deferred, superseded, dependency-blocked, and authority-blocked entries", () => {
