@@ -1,7 +1,7 @@
 # WilliamOS Goal Registry
 
-Work order: `WO-RUNTIME-LOCAL-001 through WO-RUNTIME-LOCAL-008`
-Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001 (active)`
+Work order: `WO-RUNTIME-IDENTITY-001 through WO-RUNTIME-IDENTITY-038`
+Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001 (playbook active; runtime disabled)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -137,18 +137,39 @@ persistence, command execution, and any production mutation.
 
 ## Active Goal State
 
-### `GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001 - Local-First Bounded Background Operator`
+### `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001 - Local-Identity Bounded Runtime Operator`
 
-Status: `active / owner-authorized`
+Status: `playbook active / runtime disabled`
 
-Loop: `LOOP-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001`
+Loop: `LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
 
-Program: `PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001`
+Program: `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001`
 
-Current gate: deploy the disabled HP OMEN Docker control plane, then stop for
-owner-only creation of host-local OpenAI and least-privilege GitHub credential
-files before activation and the low-risk pilot. GitHub Actions hosting is
-prohibited and cannot be selected without a future explicit owner decision.
+Risk ceiling: `R2` for runtime implementation; leased product work remains
+limited to policy-eligible `R0` and `R1`.
+
+Purpose: replace both GitHub-hosted secrets and raw local credential files with
+ChatGPT and GitHub CLI browser sign-in stored in the Windows credential store,
+then prove a native, owner-controlled OMEN operator.
+
+Canonical playbook:
+`docs/governance/local-identity-runtime-operator-playbook.md`
+
+Work Orders: `WO-RUNTIME-IDENTITY-001` through
+`WO-RUNTIME-IDENTITY-038`.
+
+Current Work Order:
+`WO-RUNTIME-IDENTITY-001 - Live Baseline and Containment Reconciliation`.
+
+Owner gates are limited to interactive Codex login, interactive GitHub login,
+activation/revocation, physical or elevated host administration, and future
+Phase 2 identity decisions. William must never be asked to paste a key or token
+into GitHub, Docker, a file, terminal transcript, report, issue, PR, or chat.
+
+Standing blocks: GitHub Actions hosting, raw API keys/PAT files, copied auth
+caches, Docker credential mounts, PACS/county/protected data, TerraFusion
+production, deployment/release/tag, DB/schema/data mutation, other
+repositories, permission changes, destructive actions, and scope expansion.
 
 ### `GOAL-PORTFOLIO-OPERATOR-001 - Continuous Program and Goal Selection`
 

@@ -1,4 +1,7 @@
-import type { PortfolioProgramRecord } from "@/components/operator/portfolio-operator-registry"
+import {
+  LOCAL_IDENTITY_RUNTIME_WORK_ORDER_TITLES,
+  type PortfolioProgramRecord,
+} from "@/components/operator/portfolio-operator-registry"
 
 export function resolveNextPortfolioProgram(programs: PortfolioProgramRecord[]) {
   const complete = new Set(programs.filter((program) => program.state === "COMPLETE").map((program) => program.programId))
@@ -28,28 +31,52 @@ export function resolveNextPortfolioProgram(programs: PortfolioProgramRecord[]) 
   }
 }
 
-export type OperatorHost = "LOCAL_OMEN_DOCKER" | "DEDICATED_UBUNTU" | "GITHUB_ACTIONS"
+export type OperatorHost =
+  | "LOCAL_OMEN_WINDOWS"
+  | "LOCAL_OMEN_DOCKER_VALIDATION"
+  | "DEDICATED_UBUNTU"
+  | "GITHUB_ACTIONS"
 
 export function evaluateOperatorHost(host: OperatorHost, explicitOwnerDecision = false) {
-  if (host === "LOCAL_OMEN_DOCKER") return { selectable: true, reasonCode: "LOCAL_HOST_AUTHORIZED" as const }
-  if (host === "DEDICATED_UBUNTU") return { selectable: false, reasonCode: "PHASE_2_NOT_AUTHORIZED" as const }
+  if (host === "LOCAL_OMEN_WINDOWS") {
+    return { selectable: true, reasonCode: "LOCAL_WINDOWS_IDENTITY_HOST_AUTHORIZED" as const }
+  }
+  if (host === "LOCAL_OMEN_DOCKER_VALIDATION") {
+    return { selectable: true, reasonCode: "DOCKER_VALIDATION_ONLY" as const }
+  }
+  if (host === "DEDICATED_UBUNTU") {
+    return { selectable: false, reasonCode: "PHASE_2_NOT_AUTHORIZED" as const }
+  }
   return explicitOwnerDecision
     ? { selectable: true, reasonCode: "FUTURE_EXPLICIT_OWNER_DECISION" as const }
     : { selectable: false, reasonCode: "GITHUB_ACTIONS_HOST_PROHIBITED" as const }
 }
 
 export function buildGoalPacket(program: PortfolioProgramRecord) {
+  const localIdentityRuntime =
+    program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
+
   return {
     goalId: program.nextGoalId,
     title: program.nextGoalTitle,
-    mission: `Deliver the bounded ${program.title} foundation using declared evidence and reversible R0/R1 changes.`,
-    allowedScope: ["Static governance models", "Read-only surfaces", "Tests", "Evidence reports"],
-    blockedScope: ["Production writes", "Secrets", "Destructive operations", "Runtime autonomy", "Auth or database changes"],
-    successCriteria: ["The program baseline is reconciled.", "The bounded Work Order chain is evidenced.", "No authority wall is crossed."],
+    mission: localIdentityRuntime
+      ? "Replace raw credential files with owner-controlled browser login and keyring-backed native OMEN operation while activation remains disabled until its explicit gate."
+      : `Deliver the bounded ${program.title} foundation using declared evidence and reversible R0/R1 changes.`,
+    allowedScope: localIdentityRuntime
+      ? ["Native Windows operator controls", "Keyring authentication contracts", "Docker validation-only isolation", "Tests and evidence"]
+      : ["Static governance models", "Read-only surfaces", "Tests", "Evidence reports"],
+    blockedScope: localIdentityRuntime
+      ? ["Raw API keys or PAT files", "GitHub secrets", "Docker credential mounts", "Remote activation", "PACS, county, or TerraFusion production"]
+      : ["Production writes", "Secrets", "Destructive operations", "Runtime autonomy", "Auth or database changes"],
+    successCriteria: localIdentityRuntime
+      ? ["The raw credential contract is retired.", "A disabled native supervisor passes safety gates.", "One owner-activated R0/R1 pilot and recovery drill are evidenced."]
+      : ["The program baseline is reconciled.", "The bounded Work Order chain is evidenced.", "No authority wall is crossed."],
     authorityMode: program.authorityMode,
     riskCeiling: program.riskClass,
     mergeMode: "CODEX_ELIGIBLE" as const,
-    stopConditions: ["Protected authority required", "Unsafe validation repair", "Secrets or destructive operation required"],
+    stopConditions: localIdentityRuntime
+      ? ["Interactive owner login required", "Owner activation required", "Plaintext credential fallback", "Protected or higher-risk scope required"]
+      : ["Protected authority required", "Unsafe validation repair", "Secrets or destructive operation required"],
     ownerDecisionRequired: program.authorityMode === "OWNER_GATED",
   }
 }
@@ -70,23 +97,8 @@ export function buildLoopPacket(program: PortfolioProgramRecord) {
 }
 
 export function buildWorkOrderChain(program: PortfolioProgramRecord) {
-  const titles = program.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
-    ? [
-        "Runtime Authority and Threat Boundary",
-        "Durable Work Order Envelope",
-        "Authority Policy Evaluator",
-        "Deterministic Lease and Idempotency Model",
-        "Read-Only Codex Patch Boundary",
-        "Validation and Publish Isolation",
-        "Pull Request Check Monitor",
-        "Review Remediation and Retry Ceiling",
-        "Audit Artifact Attestation",
-        "Kill Switch and Stop Runbook",
-        "Adversarial Safety Tests",
-        "Disabled Control Plane Deployment",
-        "Owner Credential Activation Gate",
-        "End-to-End Low-Risk Pilot",
-      ]
+  const titles = program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
+    ? LOCAL_IDENTITY_RUNTIME_WORK_ORDER_TITLES
     : program.programId === "PROGRAM-RELEASE-ENGINEERING-001"
     ? [
         "Current Release Evidence Reconciliation",
@@ -100,21 +112,25 @@ export function buildWorkOrderChain(program: PortfolioProgramRecord) {
 
   const workOrderPrefix = program.programId === "PROGRAM-RELEASE-ENGINEERING-001"
     ? "WO-RELEASE"
-    : program.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
-      ? "WO-RUNTIME-OPERATOR"
+    : program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
+      ? "WO-RUNTIME-IDENTITY"
       : `WO-${program.programId.replace(/^PROGRAM-/, "").replace(/-001$/, "")}`
 
   return titles.map((title, index) => ({
     workOrderId: `${workOrderPrefix}-${String(index + 1).padStart(3, "0")}`,
     title,
     objective: index === 0 ? `Reconcile existing ${program.title} evidence before any implementation.` : `Deliver the bounded ${title.toLowerCase()}.`,
-    scope: ["Declared repository evidence", "Static/read-only models", "Tests and reports"],
+    scope: program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
+      ? ["Declared repository and host evidence", "Bounded native runtime controls", "Tests and reports"]
+      : ["Declared repository evidence", "Static/read-only models", "Tests and reports"],
     discoveryBoundary: ["docs/governance", "docs/reports", "components/operator", "tests"],
     riskClass: index === 0 ? "R0" as const : "R1" as const,
     status: index === 0 ? "ACTIVE" as const : "PENDING" as const,
     validationPlan: ["Focused tests", "git diff --check", "lint", "full tests", "build"],
     evidence: `docs/reports/${workOrderPrefix}-${String(index + 1).padStart(3, "0")}.md`,
-    rollback: "Revert the scoped documentation and static model changes.",
+    rollback: program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
+      ? "Disable the operator first, then revert only runtime-owned scoped changes through normal review."
+      : "Revert the scoped documentation and static model changes.",
     continuationTarget: index === titles.length - 1 ? "PORTFOLIO_RESOLVER" : `${workOrderPrefix}-${String(index + 2).padStart(3, "0")}`,
     stopConditions: ["Authority mode changes", "Protected runtime or production scope required", "Validation requires broad repair"],
   }))

@@ -22,7 +22,17 @@ describe("portfolio operator", () => {
         expect.objectContaining({ programId: "PROGRAM-WILLIAMOS-TF-COMMAND-001" }),
       ]),
     )
+    expect(portfolio.backlog[0]).toMatchObject({
+      programId: "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001",
+      state: "SELECTED",
+      nextGoalId: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
+    })
+    expect(portfolio.backlog[1]).toMatchObject({
+      programId: "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001",
+      state: "SUPERSEDED",
+    })
     expect(portfolio.backlog.map((program) => program.programId)).toEqual([
+      "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001",
       "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001",
       "PROGRAM-RELEASE-ENGINEERING-001",
       "PROGRAM-DEVEX-HOOK-TOOLING-001",
@@ -41,8 +51,8 @@ describe("portfolio operator", () => {
 
     expect(resolveNextPortfolioProgram(portfolio.backlog)).toMatchObject({
       decision: "SELECT_PROGRAM",
-      programId: "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001",
-      goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001",
+      programId: "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001",
+      goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
       ownerDecisionRequired: false,
     })
   })
@@ -72,24 +82,27 @@ describe("portfolio operator", () => {
     const workOrders = buildWorkOrderChain(selected)
 
     expect(goal).toMatchObject({
-      goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001",
-      riskCeiling: "R3",
+      goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
+      riskCeiling: "R2",
       ownerDecisionRequired: false,
     })
     expect(loop.continuationRule).toContain("portfolio resolver")
     expect(loop.activeWorkOrder).toBe(workOrders[0].workOrderId)
     expect(loop.orderedWorkOrderQueue[0]).toBe(loop.activeWorkOrder)
     expect(workOrders[0]).toMatchObject({
-      workOrderId: "WO-RUNTIME-OPERATOR-001",
+      workOrderId: "WO-RUNTIME-IDENTITY-001",
       status: "ACTIVE",
       riskClass: "R0",
     })
-    expect(workOrders.every((workOrder) => workOrder.rollback === "Revert the scoped documentation and static model changes.")).toBe(true)
+    expect(workOrders).toHaveLength(38)
+    expect(workOrders.at(-1)?.workOrderId).toBe("WO-RUNTIME-IDENTITY-038")
+    expect(workOrders.every((workOrder) => workOrder.rollback.includes("Disable the operator first"))).toBe(true)
   })
 
   it("preserves program risk and derives program-specific loop and Work Order identities", () => {
-    const devex = getPortfolioOperatorProgram().backlog[2]
-    const protectedProgram = getPortfolioOperatorProgram().backlog[5]
+    const backlog = getPortfolioOperatorProgram().backlog
+    const devex = backlog.find((program) => program.programId === "PROGRAM-DEVEX-HOOK-TOOLING-001")!
+    const protectedProgram = backlog.find((program) => program.programId === "PROGRAM-TERRAPILOT-LIVE-001")!
     const devexWorkOrders = buildWorkOrderChain(devex)
 
     expect(buildGoalPacket(protectedProgram)).toMatchObject({
@@ -98,13 +111,14 @@ describe("portfolio operator", () => {
     })
     expect(buildLoopPacket(devex).activeWorkOrder).toBe(devexWorkOrders[0].workOrderId)
     expect(devexWorkOrders[0].workOrderId).toBe("WO-DEVEX-HOOK-TOOLING-001")
-    expect(buildWorkOrderChain(getPortfolioOperatorProgram().backlog[3])[0].workOrderId).toBe("WO-BACKEND-OE-001")
+    const backend = backlog.find((program) => program.programId === "PROGRAM-BACKEND-OE-001")!
+    expect(buildWorkOrderChain(backend)[0].workOrderId).toBe("WO-BACKEND-OE-001")
   })
 
   it("accepts completed-program evidence when resolving backlog dependencies", () => {
     const portfolio = getPortfolioOperatorProgram()
     const dependent = {
-      ...portfolio.backlog[2],
+      ...portfolio.backlog.find((program) => program.programId === "PROGRAM-DEVEX-HOOK-TOOLING-001")!,
       dependencies: ["PROGRAM-WILLIAMOS-TF-COMMAND-001"],
       priorityScore: 999,
     }

@@ -57,8 +57,10 @@ const backlogSeeds: Array<{
   dependencies?: string[]
   authorityMode?: PortfolioAuthorityMode
   priorityOverride?: number
+  stateOverride?: PortfolioProgramState
 }> = [
-  { programId: "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001", title: "WilliamOS Runtime Operator", goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001", businessValue: 10, engineeringValue: 10, riskClass: "R3", priorityOverride: 200 },
+  { programId: "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001", title: "WilliamOS Local-Identity Runtime Operator", goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001", businessValue: 10, engineeringValue: 10, riskClass: "R2", priorityOverride: 200 },
+  { programId: "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001", title: "Superseded Raw-Credential Runtime Operator", goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001", businessValue: 0, engineeringValue: 0, riskClass: "R3", priorityOverride: -1, stateOverride: "SUPERSEDED" },
   { programId: "PROGRAM-RELEASE-ENGINEERING-001", title: "Release Engineering", goalId: "GOAL-RELEASE-ENGINEERING-001", businessValue: 9, engineeringValue: 9, riskClass: "R1" },
   { programId: "PROGRAM-DEVEX-HOOK-TOOLING-001", title: "DevEx / Hook Tooling", goalId: "GOAL-DEVEX-HOOK-TOOLING-001", businessValue: 7, engineeringValue: 9, riskClass: "R1" },
   { programId: "PROGRAM-BACKEND-OE-001", title: "Backend Operational Excellence", goalId: "GOAL-BACKEND-OE-001", businessValue: 8, engineeringValue: 8, riskClass: "R1" },
@@ -85,19 +87,62 @@ export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((see
   riskClass: seed.riskClass,
   dependencies: seed.dependencies ?? [],
   authorityMode: seed.authorityMode ?? "CODEX_ELIGIBLE",
-  state: seed.authorityMode === "OWNER_GATED"
+  state: seed.stateOverride ?? (seed.authorityMode === "OWNER_GATED"
     ? "BLOCKED"
-    : seed.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
+    : seed.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
       ? "SELECTED"
-      : "READY",
+      : "READY"),
   nextGoalId: seed.goalId,
   nextGoalTitle: `${seed.title} Foundation`,
   completionEvidence: [],
   priorityScore: priorityScore(seed),
-  blockedReason: seed.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
-    ? "Local OMEN hosting is authorized, but activation requires host-local owner credentials. GitHub Actions hosting is prohibited without a future explicit owner decision."
-    : seed.authorityMode === "OWNER_GATED" ? "Protected authority is required before activation." : undefined,
+  blockedReason: seed.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
+    ? "Runtime remains disabled while the local-identity playbook removes raw credential files and establishes owner-controlled browser login with keyring storage."
+    : seed.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
+      ? "Superseded by the local-identity runtime program; raw credential files and identity-bearing Docker hosting are prohibited."
+      : seed.authorityMode === "OWNER_GATED" ? "Protected authority is required before activation." : undefined,
 }))
+
+export const LOCAL_IDENTITY_RUNTIME_WORK_ORDER_TITLES = [
+  "Live Baseline and Containment Reconciliation",
+  "Credential-Custody Failure Record",
+  "Inert Docker Operator Freeze",
+  "Raw Credential Placeholder Retirement",
+  "Codex ChatGPT Login Contract",
+  "GitHub Browser Login Contract",
+  "Windows User-Context Runtime Decision",
+  "Docker Validation-Only Boundary",
+  "Authentication Status Adapter",
+  "Local Identity Threat Model",
+  "Native Runtime Directory Contract",
+  "PowerShell Supervisor",
+  "Activation and Kill Switch",
+  "Single-Instance Lock and Host Lease",
+  "Durable Checkpoint Store",
+  "Workspace and Git Safety",
+  "Codex Non-Interactive Adapter",
+  "Patch Envelope and Path Policy",
+  "GitHub CLI Adapter",
+  "Retry, Recovery, and Idempotency",
+  "Append-Only Audit Ledger",
+  "Cost, Rate, and Run Budgets",
+  "Authority Evaluator Integration",
+  "Secret and Exfiltration Defense",
+  "Native Supervisor Test Suite",
+  "Disabled End-to-End Dry Run",
+  "Authenticated Read-Only Smoke",
+  "Pilot Work Order Packet",
+  "Owner Activation Gate",
+  "One-Work-Order Pilot Execution",
+  "PR, Review, and Eligible Merge Proof",
+  "Kill, Restart, and Recovery Drill",
+  "At-Logon Scheduling",
+  "Operator Status and Owner UX",
+  "Runbook, Academy, and Incident Procedure",
+  "Final Safety and Evidence Rollup",
+  "Portfolio Continuation Handoff",
+  "Phase 2 Ubuntu Decision Packet",
+] as const
 
 const portfolioWorkOrders: PortfolioWorkOrder[] = [
   "Current-State and Completed-Program Reconciliation",
