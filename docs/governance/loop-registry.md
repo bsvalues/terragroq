@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
-Work order: `WO-RUNTIME-LOCAL-001 through WO-RUNTIME-LOCAL-008`
-Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001 (active)`
+Work order: `WO-RUNTIME-IDENTITY-001 through WO-RUNTIME-IDENTITY-038`
+Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001 (playbook active; runtime disabled)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -89,17 +89,32 @@ Evidence:
 
 ## Active Loop State
 
-### `LOOP-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001`
+### `LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
 
-Status: `active / local HP OMEN Docker control plane / disabled pending owner credentials`
+Status: `playbook active / OMEN runtime disabled`
 
-Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001`
+Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
 
-Continuation: remove GitHub Actions hosting, complete local implementation and
-disabled deployment, stop at the host-local owner credential gate, then
-activate and prove one low-risk Work Order through lease, patch, validation,
-PR, review, eligible merge, and checkpoint closure. GitHub Actions may not be
-selected as the host without a future explicit owner decision.
+Program: `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001`
+
+Current Work Order:
+`WO-RUNTIME-IDENTITY-001 - Live Baseline and Containment Reconciliation`.
+
+Selection: first incomplete Work Order whose dependencies and authority gates
+are satisfied.
+
+Continuation: execute `WO-RUNTIME-IDENTITY-001` through
+`WO-RUNTIME-IDENTITY-038`, owning routine implementation, validation, PR,
+review remediation, eligible merge, evidence, and next-WO resolution.
+
+Owner stops occur only for interactive `codex login`, interactive
+`gh auth login`, local activation/revocation, physical or elevated host
+administration, or a typed scope/risk wall. Pending checks, review feedback,
+recoverable failures, PR merge, restart, context compaction, and completed Work
+Orders are nonterminal.
+
+Canonical playbook:
+`docs/governance/local-identity-runtime-operator-playbook.md`
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
@@ -163,16 +178,27 @@ Current status:
 
 ## Current Continuation Order
 
-1. TerraFusion command implementation is complete.
-2. Post-merge evidence and canonical registry closure are complete.
-3. Stop at the new-goal authority wall until the owner authorizes another
-   material program.
+1. Reconcile containment and retire the raw credential-file contract.
+2. Establish ChatGPT and GitHub CLI browser-login contracts with keyring-only
+   storage.
+3. Move the identity-bearing supervisor to William's native Windows user
+   context.
+4. Keep Docker validation-only and credential-free.
+5. Implement native checkpoint, lease, patch, GitHub, audit, budget, and safety
+   controls.
+6. Prove disabled, authenticated read-only, pilot, review/merge, kill, restart,
+   and recovery behavior.
+7. Close the runtime goal and return automatically to the portfolio resolver.
+
+Runtime activation remains disabled until the explicit owner activation gate at
+`WO-RUNTIME-IDENTITY-029`.
 
 Historical Shell, WOE, Evidence, Authority, Council, Trace/Eval, Memory,
 Academy/Wiki, Hermes-boundary, Agent Forge, local-status refinement,
 dedicated-host planning, Codex Operator adoption, queue reconciliation, County
-Ops, TerraFusion preflight, and TerraFusion command work remain evidence rather
-than active queue entries.
+Ops, TerraFusion preflight, TerraFusion command, portfolio selection, GitHub
+Actions containment, and raw-file local-host work remain evidence rather than
+active queue entries.
 
 ## Stop Gates
 
