@@ -25,14 +25,27 @@ and do not need values.
 Status inspection must not change activation or display credential values,
 environment dumps, browser state, or auth-cache contents.
 
-## Current Kill Switch
+## Current and Target Kill Switch
+
+The mandatory order is:
+
+1. write exactly `disabled` to the local activation file;
+2. stop the native WilliamOS supervisor process;
+3. disable and stop its at-logon scheduled task when installed;
+4. stop the legacy Docker identity supervisor or validation container if it is
+   running;
+5. verify no runtime-owned child `codex`, `gh`, Git, npm, or Docker process
+   remains.
+
+Until the native supervisor Work Orders are implemented, use:
 
 ```powershell
 .\scripts\local\williamos-operator-stop.ps1
 ```
 
-This writes `disabled` before stopping the existing container. Use it whenever
-runtime state is uncertain.
+The corrective implementation must extend this command to perform the native
+process/task termination above while preserving disable-before-terminate.
+Use it whenever runtime state is uncertain.
 
 ## Corrective Authentication Target
 
@@ -83,7 +96,14 @@ If any instruction asks for a key, PAT, token file, copied `auth.json`, Docker
 secret, GitHub secret, or environment token:
 
 1. keep activation disabled;
-2. stop the operator;
-3. record a sanitized architecture failure;
-4. return to the active Work Order;
-5. do not paste or create the credential.
+2. stop the native supervisor, scheduled task, child processes, and any legacy
+   Docker operator;
+3. if any credential may have been copied or exposed, revoke the affected Codex
+   or GitHub identity through the official provider UI;
+4. preserve sanitized evidence only—never the value, fragment, cache, browser
+   state, environment dump, or full auth transcript;
+5. record the architecture or exposure failure;
+6. refuse automatic resumption;
+7. return to the active Work Order and require a new owner login/revocation
+   gate;
+8. do not paste or create the credential.
