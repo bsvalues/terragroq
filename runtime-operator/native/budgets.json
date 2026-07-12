@@ -1,0 +1,10 @@
+{
+  "maxCyclesPerHour": 4,
+  "maxCyclesPerDay": 12,
+  "maxCodexInvocationsPerWorkOrder": 3,
+  "maxRemediationAttempts": 2,
+  "maxElapsedMinutes": 45,
+  "maxChangedFiles": 20,
+  "maxPatchBytes": 262144,
+  "rateLimitCooldownSeconds": 900
+}
