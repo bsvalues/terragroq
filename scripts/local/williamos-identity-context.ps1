@@ -1,14 +1,14 @@
 [CmdletBinding()]
-param([string]$ExpectedUser = $env:USERNAME)
+param([string]$ExpectedUser = "bsval")
 
 $ErrorActionPreference = "Stop"
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 $isAdministrator = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 $actualUser = ($identity.Name -split '\\')[-1]
-$serviceIdentities = @("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE")
+$serviceIdentity = $identity.Name -match '^(NT AUTHORITY|NT SERVICE)\\' -or $actualUser.EndsWith('$')
 
-if ($isAdministrator -or $serviceIdentities -contains $actualUser -or $actualUser -ne $ExpectedUser) {
+if ($isAdministrator -or $serviceIdentity -or $actualUser -cne $ExpectedUser) {
   Write-Output "IDENTITY_CONTEXT=UNEXPECTED"
   exit 2
 }

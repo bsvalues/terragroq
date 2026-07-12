@@ -15,7 +15,7 @@ if (Test-Path -LiteralPath $hostsPath -PathType Leaf) {
   }
 }
 
-$status = & gh auth status --hostname github.com 2>&1 | Out-String
+$status = & gh auth status --hostname github.com --active 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) {
   Write-Output "GITHUB_AUTH_STATUS=OWNER_LOGIN_REQUIRED"
   exit 2

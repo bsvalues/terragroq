@@ -8,7 +8,7 @@ describe("GitHub local identity contract", () => {
     expect(status).toContain("GITHUB_PLAINTEXT_FALLBACK_WALL")
     expect(status).toContain("GITHUB_PRINCIPAL_WALL")
     expect(status).toContain("READY_BROWSER_KEYRING_ACCOUNT_$ExpectedAccount")
-    expect(status).toContain("gh auth status --hostname github.com")
+    expect(status).toContain("gh auth status --hostname github.com --active")
     expect(status).not.toContain("gh auth token")
   })
 })

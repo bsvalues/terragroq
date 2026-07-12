@@ -5,7 +5,9 @@ $ErrorActionPreference = "Stop"
 $scriptRoot = $PSScriptRoot
 
 function Invoke-SanitizedStatus([string]$Script, [string[]]$Arguments = @()) {
-  $output = & pwsh -NoProfile -File (Join-Path $scriptRoot $Script) @Arguments 2>$null | Out-String
+  $shell = Get-Command pwsh -ErrorAction SilentlyContinue
+  if (-not $shell) { $shell = Get-Command powershell.exe -ErrorAction Stop }
+  $output = & $shell.Source -NoProfile -File (Join-Path $scriptRoot $Script) @Arguments 2>$null | Out-String
   return $output.Trim()
 }
 
