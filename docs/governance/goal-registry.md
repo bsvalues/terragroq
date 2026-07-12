@@ -159,11 +159,11 @@ Work Orders: `WO-RUNTIME-IDENTITY-001` through
 `WO-RUNTIME-IDENTITY-038`.
 
 Current Work Order:
-`WO-RUNTIME-IDENTITY-023 - Authority Evaluator Integration`.
+`WO-RUNTIME-IDENTITY-025 - Native Supervisor Test Suite`.
 
-Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-022`; evidence
+Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-024`; evidence
 is recorded in `docs/reports/WO-RUNTIME-IDENTITY-001` through
-`docs/reports/WO-RUNTIME-IDENTITY-022` reports.
+`docs/reports/WO-RUNTIME-IDENTITY-024` reports.
 
 Owner gates are limited to interactive Codex login, interactive GitHub login,
 activation/revocation, physical or elevated host administration, and future

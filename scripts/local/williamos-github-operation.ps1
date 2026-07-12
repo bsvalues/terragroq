@@ -20,7 +20,11 @@ switch ($Operation) {
   "issue-view" { & gh issue view $Number --repo $repo --json number,state,title }
   "pr-view" { & gh pr view $Number --repo $repo --json number,state,headRefName,baseRefName,mergeable }
   "pr-checks" { & gh pr checks $Number --repo $repo --json name,state,workflow }
-  "pr-create" { & gh pr create --repo $repo --base main --head $Head --title $Title --body-file $BodyFile }
+  "pr-create" {
+    $existing = & gh pr list --repo $repo --head $Head --state open --json url --jq '.[0].url'
+    if ($LASTEXITCODE -ne 0) { throw "GITHUB_RECONCILIATION_WALL" }
+    if ($existing) { Write-Output $existing } else { & gh pr create --repo $repo --base main --head $Head --title $Title --body-file $BodyFile }
+  }
   "pr-merge" { & gh pr merge $Number --repo $repo --squash --delete-branch }
 }
 if ($LASTEXITCODE -ne 0) { throw "GITHUB_OPERATION_WALL" }

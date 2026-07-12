@@ -12,7 +12,20 @@ $auth = & "$PSScriptRoot\williamos-codex-auth-status.ps1"
 if ($auth -ne "CODEX_AUTH_STATUS=READY_CHATGPT_KEYRING") { throw "CODEX_AUTHORITY_WALL" }
 $schema = "$PSScriptRoot\..\..\runtime-operator\codex-output.schema.json"
 $prompt = Get-Content -Raw -LiteralPath $PromptFile
-$result = Invoke-BoundedProcess codex @("--ask-for-approval", "never", "exec", "--sandbox", "workspace-write", "--output-schema", $schema, "--output-last-message", $ResultFile, "-") $Workspace $TimeoutSeconds 1048576 $prompt
+$codex = Get-Command codex -ErrorAction Stop
+$arguments = @("--ask-for-approval", "never", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "--output-schema", $schema, "--output-last-message", $ResultFile, "-")
+if ($codex.Source.EndsWith(".ps1", [StringComparison]::OrdinalIgnoreCase)) {
+  $baseDirectory = Split-Path $codex.Source -Parent
+  $node = Join-Path $baseDirectory "node.exe"
+  if (-not (Test-Path -LiteralPath $node -PathType Leaf)) { $node = (Get-Command node.exe -ErrorAction Stop).Source }
+  $entrypoint = Join-Path $baseDirectory "node_modules\@openai\codex\bin\codex.js"
+  if (-not (Test-Path -LiteralPath $entrypoint -PathType Leaf)) { throw "CODEX_ENTRYPOINT_WALL" }
+  $arguments = @($entrypoint) + $arguments
+  $executable = $node
+} else {
+  $executable = $codex.Source
+}
+$result = Invoke-BoundedProcess $executable $arguments $Workspace $TimeoutSeconds 1048576 $prompt
 if ($result.exitCode -ne 0) { throw "CODEX_EXECUTION_WALL" }
 if (-not (Test-Path -LiteralPath $ResultFile -PathType Leaf) -or (Get-Item -LiteralPath $ResultFile).Length -gt 1048576) { throw "CODEX_RESULT_WALL" }
 Write-Output "CODEX_EXECUTION_STATUS=RESULT_READY"

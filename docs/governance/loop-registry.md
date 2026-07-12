@@ -98,11 +98,11 @@ Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
 Program: `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001`
 
 Current Work Order:
-`WO-RUNTIME-IDENTITY-023 - Authority Evaluator Integration`.
+`WO-RUNTIME-IDENTITY-025 - Native Supervisor Test Suite`.
 
-Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-022`; evidence
+Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-024`; evidence
 is recorded in `docs/reports/WO-RUNTIME-IDENTITY-001` through
-`docs/reports/WO-RUNTIME-IDENTITY-022` reports.
+`docs/reports/WO-RUNTIME-IDENTITY-024` reports.
 
 Selection: first incomplete Work Order whose dependencies and authority gates
 are satisfied.

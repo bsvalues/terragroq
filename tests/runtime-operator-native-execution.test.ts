@@ -18,6 +18,8 @@ describe("native execution controls", () => {
     expect(codex).toContain('"--ask-for-approval", "never"')
     expect(codex).toContain('"--sandbox", "workspace-write"')
     expect(codex).toContain("--output-schema")
+    expect(codex).toContain('EndsWith(".ps1"')
+    expect(codex).toContain("node_modules\\@openai\\codex\\bin\\codex.js")
     expect(module).toContain("PROCESS_OUTPUT_BUDGET_WALL")
   })
 
@@ -28,6 +30,8 @@ describe("native execution controls", () => {
     const github = fs.readFileSync("scripts/local/williamos-github-operation.ps1", "utf8")
     expect(github).toContain('ValidateSet("issue-view", "pr-view", "pr-checks", "pr-create", "pr-merge")')
     expect(github).toContain("MERGE_GATE_WALL")
+    expect(github).toContain("GITHUB_RECONCILIATION_WALL")
+    expect(github).toContain("gh pr list")
     expect(github).not.toMatch(/secret|variable|workflow run|release create|repo edit/i)
   })
 

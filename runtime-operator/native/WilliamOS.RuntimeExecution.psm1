@@ -20,7 +20,9 @@ function Invoke-BoundedProcess {
   if (-not $process.WaitForExit($TimeoutSeconds * 1000)) { $process.Kill($true); throw "PROCESS_TIMEOUT_WALL" }
   $stdout = $stdoutTask.Result; $stderr = $stderrTask.Result
   if ([Text.Encoding]::UTF8.GetByteCount($stdout) -gt $MaxOutputBytes -or [Text.Encoding]::UTF8.GetByteCount($stderr) -gt $MaxOutputBytes) { throw "PROCESS_OUTPUT_BUDGET_WALL" }
-  return @{ exitCode = $process.ExitCode; stdout = $stdout; stderr = $stderr; pid = $process.Id }
+  $result = @{ exitCode = $process.ExitCode; stdout = $stdout; stderr = $stderr; pid = $process.Id }
+  $process.Dispose()
+  return $result
 }
 
 function Assert-WilliamOSRepository([string]$RepositoryPath) {
