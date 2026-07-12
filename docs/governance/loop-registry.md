@@ -98,11 +98,11 @@ Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
 Program: `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001`
 
 Current Work Order:
-`WO-RUNTIME-IDENTITY-025 - Native Supervisor Test Suite`.
+`WO-RUNTIME-IDENTITY-027 - Authenticated Read-Only Smoke`.
 
-Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-024`; evidence
+Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-026`; evidence
 is recorded in `docs/reports/WO-RUNTIME-IDENTITY-001` through
-`docs/reports/WO-RUNTIME-IDENTITY-024` reports.
+`docs/reports/WO-RUNTIME-IDENTITY-026` reports.
 
 Selection: first incomplete Work Order whose dependencies and authority gates
 are satisfied.
