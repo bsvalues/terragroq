@@ -34,14 +34,15 @@ change.
 
 ## Validation
 
-- exact seven-file documentation/governance scope;
+- exact eleven-file playbook, static operator-registry, and test scope;
 - Work Orders `001` through `038` present exactly once and in order;
-- program, goal, and loop identifiers consistent;
+- program, goal, loop, executable portfolio selection, and generated Work Order identifiers consistent;
+- superseded raw-credential program is non-selectable;
 - no trailing whitespace;
 - final newlines present;
 - no secret-like values;
 - no instruction remains to populate raw credential files;
-- no runtime, container, host, authentication, GitHub setting, workflow,
+- no runtime execution, container, host, authentication, GitHub setting, workflow,
   production, PACS, county, or TerraFusion system was changed or activated.
 
 ## Next
