@@ -7,7 +7,16 @@ $activation = Join-Path $root "control\activation"
 if (-not (Test-Path -LiteralPath $activation -PathType Leaf) -or (Get-Content -Raw -LiteralPath $activation) -cne "disabled") { throw "SMOKE_REQUIRES_DISABLED_ACTIVATION" }
 
 $workspace = Join-Path $root "workspace\authenticated-readonly-smoke"
-if (Test-Path -LiteralPath $workspace) { throw "SMOKE_WORKSPACE_EXISTS_WALL" }
+if (Test-Path -LiteralPath $workspace) {
+  $stale = Get-Item -LiteralPath $workspace -Force
+  if (-not $stale.PSIsContainer -or $stale.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { throw "SMOKE_WORKSPACE_EXISTS_WALL" }
+  if (Get-ChildItem -LiteralPath $workspace -Force | Select-Object -First 1) { throw "SMOKE_WORKSPACE_EXISTS_WALL" }
+  $referenced = Get-CimInstance Win32_Process | Where-Object {
+    $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains($workspace, [StringComparison]::OrdinalIgnoreCase)
+  } | Select-Object -First 1
+  if ($referenced) { throw "SMOKE_WORKSPACE_ACTIVE_WALL" }
+  Remove-Item -LiteralPath $workspace
+}
 New-Item -ItemType Directory -Path $workspace | Out-Null
 try {
   [IO.File]::WriteAllText((Join-Path $workspace "SMOKE.md"), "WilliamOS authenticated read-only smoke. No repository change is requested.", [Text.UTF8Encoding]::new($false))
