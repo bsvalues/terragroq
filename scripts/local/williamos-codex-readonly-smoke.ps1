@@ -15,7 +15,7 @@ if (Test-Path -LiteralPath $workspace) {
     $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains($workspace, [StringComparison]::OrdinalIgnoreCase)
   } | Select-Object -First 1
   if ($referenced) { throw "SMOKE_WORKSPACE_ACTIVE_WALL" }
-  Remove-Item -LiteralPath $workspace
+  Remove-Item -LiteralPath $workspace -Force
 }
 New-Item -ItemType Directory -Path $workspace | Out-Null
 try {
