@@ -79,6 +79,28 @@ in the system credential store when one is available.
 Source:
 [GitHub CLI authentication](https://cli.github.com/manual/gh_auth_login)
 
+### Tool-Version and Credential-Backend Gate
+
+The current repository image declares Codex CLI `0.142.2`; that is the
+initial compatibility baseline, not permission to drift automatically.
+
+Before G1 or G2 can pass, `WO-RUNTIME-IDENTITY-001` must record the exact
+native `codex --version` and `gh --version` results, and the implementation
+must pin those validated versions in a repository manifest. A version change
+requires a reviewed dependency/update Work Order and reruns the authentication,
+plaintext-fallback, and pilot tests.
+
+Backend verification must prove:
+
+- Codex configuration is `forced_login_method = "chatgpt"` and
+  `cli_auth_credentials_store = "keyring"`;
+- no usable `~/.codex/auth.json` plaintext fallback exists;
+- GitHub CLI reports the system credential store rather than a plaintext
+  configuration file;
+- deliberately unavailable keyring access produces a typed
+  `plaintext-fallback`/credential-store wall and never proceeds to a login,
+  lease, or repository write.
+
 Neither login flow may be scripted, copied into evidence, or performed by the
 runtime operator. William performs the two interactive sign-ins locally.
 
@@ -290,13 +312,17 @@ Acceptance:
 - proof uses `gh auth status --hostname github.com`;
 - no call to `gh auth token` is allowed in runtime code or evidence;
 - no `GH_TOKEN`, `GITHUB_TOKEN`, PAT file, or token mount is required;
+- the expected GitHub principal is exactly `bsvalues`;
+- `gh auth status --hostname github.com` must identify `bsvalues` before
+  repository access is accepted;
 - the authenticated account and repository access are verified without token
   output.
 
 Owner gate: William completes the browser flow.
 
-Failure: plaintext fallback or overbroad/unexpected account access becomes a
-typed authority wall.
+Failure: plaintext fallback, a principal other than `bsvalues`, or
+overbroad/unexpected account access becomes a typed `wrong-account` or
+credential-store authority wall.
 
 #### WO-RUNTIME-IDENTITY-007 — Windows User-Context Runtime Decision
 
@@ -588,7 +614,8 @@ Required tests:
 - disabled start;
 - wrong user/elevation;
 - missing and wrong auth method;
-- plaintext fallback;
+- GitHub principal other than `bsvalues`;
+- Codex or GitHub plaintext credential fallback with keyring unavailable;
 - stale and duplicate locks;
 - malformed checkpoints;
 - stale base;
