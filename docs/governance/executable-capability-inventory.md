@@ -18,6 +18,8 @@ adapter reference, exact active authority evidence, and the implemented preventi
 No current provider record meets that complete adapter contract. The hosted Codex session and native
 subagent team proved bounded R1 coordination through independent post-merge remediation re-review; that
 bounded status remains separate from WilliamOS dispatch eligibility.
+Phase 2 additionally proves the local provider-neutral control contracts; those contracts do not turn
+any provider candidate into an executable worker.
 
 ## Status vocabulary
 
@@ -43,6 +45,7 @@ Execution class is independent of status:
 | Codex operator decision model | `PROVEN` | `NON_EXECUTABLE` | The completed predecessor models continuation and delivery gates; it is not a transport. |
 | Serial operational kernel | `PROVEN` | `NON_EXECUTABLE` | The implementation and bounded lifecycle are tested, but its provider path is rejected and it is not multi-agent. |
 | Local nested Codex adapter | `REJECTED` | `WORKER_CANDIDATE` | `CODEX_NETWORK_WALL`; terminal quarantine, no dispatch, retry, reactivation, wrapping, or silent reuse. |
+| Multi-agent Phase 2 local contracts | `PROVEN` | `NON_EXECUTABLE` | Envelope, DAG, atomic reservation ledger, provider eligibility, lifecycle, leases/checkpoints, evidence ledger, and owner meter are proven locally; no durable dispatch or unattended scheduler. |
 | Supported hosted Codex session | `PROVEN` | `WORKER_CANDIDATE` | Bounded coordination and remediation re-review passed; durable WilliamOS dispatch remains denied. |
 | Codex native coordinator and subagents | `PROVEN` | `WORKER_CANDIDATE` | Native fan-out, remediation, and fan-in are proven; no durable adapter or atomic reservation claim is made. |
 | Claude Code provider lane | `UNAVAILABLE` | `WORKER_CANDIDATE` | No authenticated supported surface or conformant adapter is evidenced. |
@@ -55,6 +58,7 @@ Execution class is independent of status:
 
 - `PROVEN` modifies only the claim in that record. It never promotes a neighboring worker claim.
 - A tested kernel with a rejected adapter is not an active worker.
+- Proven local contracts are not a provider adapter, unattended scheduler, or GitHub delivery worker.
 - Provider availability, authentication, adapter conformance, authority, and trust controls are separate gates.
 - `coordinationEligible` records bounded supported-session team coordination; it never implies
   WilliamOS registry dispatch, a durable adapter, or atomic reservation acquisition.

@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-`PHASE_1_HOSTED_TEAM_PROOF_PASS / WO-MAO-016_READY / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
+`PHASE_2_LOCAL_CONTRACTS_PASS / ELIGIBLE_SET_023_029_032 / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
 
 ## Truth
 
@@ -15,8 +15,14 @@ useful, concurrent repository lanes with separate reservations and automatic dep
 Two post-merge findings were remediated by the original builders, independently re-reviewed at PR #366
 prior remote head `217d998b`, and resolved. Latest local assurance head `44ee48e` incorporates subsequent
 structured and mixed-context path remediation; it is local evidence, not a claimed published PR head.
-Claude capability discovery returned `PROVIDER_UNAVAILABLE`, not an owner task. Durable dispatch and
-atomic reservations remain later work.
+Claude capability discovery returned `PROVIDER_UNAVAILABLE`, not an owner task. Durable provider
+dispatch, unattended scheduling, and GitHub delivery remain later work; the atomic ledger is proven
+only as a local contract.
+
+Phase 2 now proves the provider-neutral work-order envelope, DAG eligible-set resolver, local atomic
+reservation ledger, provider eligibility/response boundary, lifecycle taxonomy, per-lane leases and
+checkpoints, append-only evidence ledger, and mechanically derived owner-touch meter. These are local
+contracts, not a durable provider dispatcher, unattended scheduler, or GitHub delivery implementation.
 
 ## Non-negotiable operating state
 
@@ -55,10 +61,21 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 - `docs/reports/WO-MAO-014-hosted-merge-dependent-release.md`
 - `docs/reports/WO-MAO-015-hosted-team-proof-rollup.md`
 
+## Phase 2 evidence
+
+- `docs/reports/WO-MAO-016-work-order-envelope-v2.md`
+- `docs/reports/WO-MAO-017-dag-eligible-set-resolver.md`
+- `docs/reports/WO-MAO-018-reservation-ledger.md`
+- `docs/reports/WO-MAO-019-provider-capability-dispatch-contract.md`
+- `docs/reports/WO-MAO-020-lifecycle-escalation-taxonomy.md`
+- `docs/reports/WO-MAO-021-per-lane-leases-checkpoints.md`
+- `docs/reports/WO-MAO-022-evidence-ledger-owner-touch-meter.md`
+
 ## Next transition
 
-`WO-MAO-001` through `WO-MAO-015` are complete. `WO-MAO-016 - Work-order envelope v2` is eligible. The
-rejected local runtime is not in its dependency chain.
+`WO-MAO-001` through `WO-MAO-022` are complete. The mechanically eligible set is `WO-MAO-023`,
+`WO-MAO-029`, and `WO-MAO-032`; the singular current-work projection is `WO-MAO-023`. The rejected
+local runtime is not in their dependency chains.
 
 ## Validation evidence
 
@@ -68,3 +85,7 @@ rejected local runtime is not in its dependency chain.
 - Latest scoped ESLint, production build, diff check, and adversarial probes: passed.
 - Detailed Phase 1 validation evidence:
   `docs/reports/WO-MAO-015-hosted-team-proof-rollup.md`.
+- Phase 2 independent assurance at local head `6ae75b2`: PASS.
+- Phase 2 full suite: 14 files and 228 tests passed; scoped lint, Node syntax, and diff checks passed.
+- Mechanical history from `44ee48e..6ae75b2` contains 18 commits: 5 `feat`, 10 `fix`, and 3 `docs`.
+  These are commit categories, not counts of assurance findings or remediation cycles.

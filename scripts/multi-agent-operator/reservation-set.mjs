@@ -26,6 +26,11 @@ const CONFLICT_REASON_ORDER = Object.freeze([
 ])
 
 const IMPLICIT_REPOSITORY = "@dispatch-repository"
+const RESERVATION_SET_FIELDS = Object.freeze([
+  "schemaVersion", "artifactType", "reservationSetId", "workerId", "workOrderId", "reservations",
+])
+const RESERVATION_COLLECTION_FIELDS = Object.freeze(RESERVATION_KINDS.map(([field]) => field))
+const STRUCTURED_PATH_FIELDS = Object.freeze(["repository", "path"])
 
 export class ReservationSetError extends Error {
   constructor(code, detail = code) {
@@ -41,6 +46,12 @@ function plainObject(value) {
 
 function stableCompare(left, right) {
   return left.localeCompare(right, "en", { sensitivity: "variant" })
+}
+
+function unknownFields(value, allowedFields) {
+  if (!plainObject(value)) return []
+  const allowed = new Set(allowedFields)
+  return Object.keys(value).filter((field) => !allowed.has(field)).sort(stableCompare)
 }
 
 function normalizeIdentity(value) {
@@ -112,6 +123,12 @@ function rawValueLabel(value) {
 function normalizePaths(set, values, invalid) {
   const normalized = []
   for (const raw of values) {
+    const unknown = unknownFields(raw, STRUCTURED_PATH_FIELDS)
+    if (unknown.length > 0) {
+      invalid.push(diagnostic("INVALID_RESERVATION_SET", set, "PATH", unknown,
+        { field: "paths", unknownFields: Object.freeze(unknown) }))
+      continue
+    }
     const value = normalizePathReservation(raw)
     if (value === null) {
       invalid.push(diagnostic("INVALID_RESERVATION_VALUE", set, "PATH",
@@ -189,8 +206,19 @@ export function normalizeReservationSet(input) {
     invalid.push(diagnostic("INVALID_RESERVATION_SET", input, "SET", []))
   }
 
+  const unknownTopLevel = unknownFields(input, RESERVATION_SET_FIELDS)
+  if (unknownTopLevel.length > 0) {
+    invalid.push(diagnostic("INVALID_RESERVATION_SET", input, "SET", unknownTopLevel,
+      { field: "reservationSet", unknownFields: Object.freeze(unknownTopLevel) }))
+  }
+
   const safeSet = plainObject(input) ? input : {}
   const reservations = plainObject(safeSet.reservations) ? safeSet.reservations : {}
+  const unknownCollections = unknownFields(reservations, RESERVATION_COLLECTION_FIELDS)
+  if (unknownCollections.length > 0) {
+    invalid.push(diagnostic("INVALID_RESERVATION_SET", safeSet, "RESERVATIONS", unknownCollections,
+      { field: "reservations", unknownFields: Object.freeze(unknownCollections) }))
+  }
   const working = { ...safeSet, reservations }
   const normalizedReservations = {}
   for (const [field, label] of RESERVATION_KINDS) {

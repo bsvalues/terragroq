@@ -118,12 +118,10 @@ Codex team work does not depend on that rejected adapter.
 Canonical playbook:
 `docs/governance/multi-agent-operator-playbook.md`
 
-Current transition: the Phase 1 hosted proof through `WO-MAO-015` is complete.
-Original-builder remediations passed independent re-review in integration
-PR #366 at prior remote head `217d998b`, and both substantive legacy threads are resolved. Latest local
-assurance head `44ee48e` adds the mixed-context path remediation; that local identity is not claimed as
-a published PR head. The
-resolver selects `WO-MAO-016`.
+Current transition: `WO-MAO-001` through `WO-MAO-022` are complete. Phase 2 independent assurance
+passed at local integration head `6ae75b2`. The mechanically eligible set is `WO-MAO-023`,
+`WO-MAO-029`, and `WO-MAO-032`. A singular active-work display selects the lowest stable identifier,
+`WO-MAO-023`, without hiding or serializing the other eligible Work Orders.
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
@@ -188,8 +186,8 @@ Current status:
 ## Current Continuation Order
 
 1. Preserve the completed Phase 0 executable truth and preventive controls.
-2. Preserve the completed Phase 1 hosted proof and post-merge remediation evidence.
-3. Continue at `WO-MAO-016` through the machine contracts, scheduler, provider federation,
+2. Preserve the completed Phase 1 hosted proof and Phase 2 local-contract evidence.
+3. Continue the full eligible set at `WO-MAO-023`, `WO-MAO-029`, and `WO-MAO-032` through scheduler, provider federation,
    GitHub delivery, resilience, and certification phases.
 4. Keep useful independent R0/R1 product lanes moving whenever dependencies and
    reservations permit.

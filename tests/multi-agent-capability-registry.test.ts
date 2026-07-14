@@ -44,6 +44,15 @@ describe("multi-agent executable capability inventory", () => {
       status: "PROVEN",
       executionClass: "NON_EXECUTABLE",
     })
+    expect(capability("multi-agent-phase-two-local-contracts")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "PHASE_TWO_LOCAL_CONTRACTS_PROVEN",
+      restrictions: expect.arrayContaining([
+        "No durable provider dispatch or unattended scheduler",
+        "No GitHub delivery automation",
+      ]),
+    })
     expect(capability("brain-council-advisory")).toMatchObject({
       status: "PROVEN",
       executionClass: "NON_EXECUTABLE",

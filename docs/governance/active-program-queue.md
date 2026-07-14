@@ -12,6 +12,8 @@ Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
 Merged Phase 1 baseline: `origin/main = 94795d37` after Lane B PR #364 and Lane A PR #365
 
+Phase 2 integrated assurance head: `6ae75b2` (local branch evidence)
+
 Risk ceiling: `R3` for control-plane implementation; useful delivery pilots remain `R0/R1`
 
 Status: owner-authorized multi-agent program active; rejected local runtime terminal and disabled
@@ -109,10 +111,16 @@ through `WO-MAO-015` are complete. Two post-merge threads were remediated throug
 integration PR #366, independently re-reviewed at prior remote head `217d998b`, and resolved. Latest
 local assurance head `44ee48e` adds mixed-context path remediation and is not claimed as a published
 remote PR head.
-`WO-MAO-016` is next eligible. The program
+Phase 2 Work Orders `WO-MAO-016` through `WO-MAO-022` are independently assured complete. The
+dependency resolver now exposes `WO-MAO-023`, `WO-MAO-029`, and `WO-MAO-032` together; `WO-MAO-023`
+is the singular current-work display only. The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
 deployment, protected data, or destructive operations.
+
+Phase 2 proves local envelope, DAG, atomic reservation, provider-eligibility, lifecycle, lease,
+checkpoint, evidence-ledger, and owner-meter contracts. Durable provider dispatch, an unattended
+scheduler, and automated GitHub delivery remain unproven.
 
 `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001` is terminal and non-selectable.
 Its rejected nested-Codex adapter cannot be retried or reused. Release
