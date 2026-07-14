@@ -656,6 +656,11 @@ Acceptance:
 - no branch, issue, PR, comment, merge, or activation change;
 - no raw credential is created or displayed.
 
+Result: `BLOCKED_CODEX_NETWORK_WALL / SUPERSEDED AS OPERATIONAL PROOF`.
+This smoke remains diagnostic evidence only and must not be rerun as the
+operator acceptance gate. WOs 001-026 are preactivation foundations, not proof
+of an unattended worker.
+
 ### Phase E — Controlled Pilot and Runtime Proof
 
 #### WO-RUNTIME-IDENTITY-028 — Pilot Work Order Packet
@@ -671,6 +676,14 @@ Acceptance:
 - idempotency key;
 - owner-visible preview;
 - no real county, PACS, protected, or production data.
+
+Implementation correction: the reviewed packet is now machine-readable in
+`runtime-operator/native/authority-registry.json`. GitHub issue text supplies
+queue state and a Work Order identifier only; the native kernel independently
+resolves authority, risk, dependencies, validation, and exact paths from that
+registry. The integrated lifecycle is implemented in
+`scripts/runtime-operator/operational-kernel.mjs` with native adapters in
+`scripts/runtime-operator/native-adapters.mjs`.
 
 #### WO-RUNTIME-IDENTITY-029 — Owner Activation Gate
 
@@ -919,4 +932,8 @@ This program does not authorize:
 
 ## Next Action
 
-Begin with `WO-RUNTIME-IDENTITY-001`. Runtime activation remains disabled.
+Keep runtime activation disabled until the operational-kernel PR is merged and
+the reviewed R0 pilot queue record exists. The next owner action is then the
+explicit `WO-RUNTIME-IDENTITY-029` activation gate. Passing unit or behavioral
+fixtures does not complete the goal; completion requires one live unattended
+pilot to reach merged `main` and select its next eligible Work Order.

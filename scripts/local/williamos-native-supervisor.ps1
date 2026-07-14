@@ -3,7 +3,8 @@ param(
   [switch]$Once,
   [ValidateRange(5, 3600)][int]$PollSeconds = 60,
   [ValidateRange(5, 300)][int]$MaxRetrySeconds = 300,
-  [string]$Root = "$env:USERPROFILE\.williamos\runtime-operator"
+  [string]$Root = "$env:USERPROFILE\.williamos\runtime-operator",
+  [string]$RepositoryPath = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 )
 
 Set-StrictMode -Version Latest
@@ -23,13 +24,29 @@ if (-not $readiness.ready) { throw "RUNTIME_READINESS_WALL" }
 $lock = Enter-WilliamOSHostLock $Root
 try {
   $retry = 5
+  $kernel = Join-Path $RepositoryPath "scripts\runtime-operator\operational-kernel-cli.mjs"
+  $registry = Join-Path $RepositoryPath "runtime-operator\native\authority-registry.json"
   do {
     try {
-      Write-WilliamOSCheckpoint $Root @{ repository = "bsvalues/terragroq"; goal = "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001"; loop = "LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001"; workOrder = $null; state = "READY"; baseSha = $null; branch = $null; pr = $null; attempt = 0 } | Out-Null
-      Write-WilliamOSAudit $Root "idle_ready" @{ state = "READY" }
+      $output = (& node $kernel --root $Root --repository $RepositoryPath --registry $registry 2>&1 | Out-String).Trim()
+      $exitCode = $LASTEXITCODE
+      $wall = if ($output -match '^[A-Z][A-Z0-9_]+_WALL$') { $output } else { "OPERATIONAL_KERNEL_WALL" }
+      if ($exitCode -eq 2) { throw "OWNER_AUTHORITY_WALL" }
+      if ($exitCode -eq 3) { throw "OPERATIONAL_KERNEL_RECOVERABLE_WALL:$wall" }
+      if ($exitCode -ne 0) { throw "OPERATIONAL_KERNEL_TERMINAL_WALL:$wall" }
+      Write-WilliamOSAudit $Root "kernel_cycle" @{ state = "OBSERVED" }
+      Write-Output $output
       $retry = 5
       if (-not $Once) { Start-Sleep -Seconds $PollSeconds }
     } catch {
+      if ($_.Exception.Message -eq "OWNER_AUTHORITY_WALL") {
+        Write-WilliamOSAudit $Root "owner_authority_wall" @{ state = "BLOCKED" }
+        throw
+      }
+      if ($_.Exception.Message -notlike "OPERATIONAL_KERNEL_RECOVERABLE_WALL:*") {
+        Write-WilliamOSAudit $Root "kernel_terminal_failure" @{ state = "FAILED_TERMINAL" }
+        throw
+      }
       Write-WilliamOSAudit $Root "cycle_recoverable_failure" @{ state = "FAILED_RECOVERABLE"; category = $_.Exception.GetType().Name }
       if ($Once) { throw }
       Start-Sleep -Seconds $retry

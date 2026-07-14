@@ -94,10 +94,13 @@ export function buildGoalPacket(program: PortfolioProgramRecord) {
 
 export function buildLoopPacket(program: PortfolioProgramRecord) {
   const workOrders = buildWorkOrderChain(program)
+  const activeWorkOrder = program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
+    ? workOrders.find((workOrder) => workOrder.workOrderId === "WO-RUNTIME-IDENTITY-029")
+    : workOrders.find((workOrder) => workOrder.status !== "COMPLETE")
   return {
     loopId: `LOOP-${program.nextGoalId.replace(/^GOAL-/, "")}`,
     goalId: program.nextGoalId,
-    activeWorkOrder: workOrders[0]?.workOrderId ?? null,
+    activeWorkOrder: activeWorkOrder?.workOrderId ?? null,
     orderedWorkOrderQueue: workOrders.map((workOrder) => workOrder.workOrderId),
     validationCadence: "Focused tests, diff check, lint, full tests, build, PR checks, review threads, merged-main proof.",
     evidenceCadence: "Record observable proof at each Work Order and program closure.",
@@ -136,7 +139,13 @@ export function buildWorkOrderChain(program: PortfolioProgramRecord) {
       : ["Declared repository evidence", "Static/read-only models", "Tests and reports"],
     discoveryBoundary: ["docs/governance", "docs/reports", "components/operator", "tests"],
     riskClass: index === 0 ? "R0" as const : "R1" as const,
-    status: index === 0 ? "ACTIVE" as const : "PENDING" as const,
+    status: program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
+      ? index < 26 || index === 27
+        ? "COMPLETE" as const
+        : index === 26 || index === 28
+          ? "BLOCKED" as const
+          : "PENDING" as const
+      : index === 0 ? "READY" as const : "PENDING" as const,
     validationPlan: ["Focused tests", "git diff --check", "lint", "full tests", "build"],
     evidence: `docs/reports/${workOrderPrefix}-${String(index + 1).padStart(3, "0")}.md`,
     rollback: program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"

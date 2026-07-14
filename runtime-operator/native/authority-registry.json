@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "repository": "bsvalues/terragroq",
+  "workOrders": [
+    {
+      "workOrderId": "WO-RUNTIME-KERNEL-PILOT-001",
+      "authority": "APPROVED",
+      "riskClass": "R0",
+      "dependencies": [],
+      "ownerGateRequired": false,
+      "protectedScope": false,
+      "baseBranch": "main",
+      "mergeMode": "AUTO_ELIGIBLE",
+      "allowedPaths": [
+        "docs/reports/WO-RUNTIME-KERNEL-PILOT-001-operational-proof.md"
+      ],
+      "requiredValidation": [
+        "diff-check",
+        "lint",
+        "test",
+        "build"
+      ],
+      "task": "Create the operational proof report for the bounded local WilliamOS kernel. Record only repository-visible lifecycle evidence supplied by the Work Order context. Do not change runtime code, configuration, authentication, dependencies, workflows, production behavior, or any other path."
+    },
+    {
+      "workOrderId": "WO-RUNTIME-KERNEL-CONTINUATION-001",
+      "authority": "APPROVED",
+      "riskClass": "R0",
+      "dependencies": [
+        "WO-RUNTIME-KERNEL-PILOT-001"
+      ],
+      "ownerGateRequired": false,
+      "protectedScope": false,
+      "baseBranch": "main",
+      "mergeMode": "AUTO_ELIGIBLE",
+      "allowedPaths": [
+        "docs/reports/WO-RUNTIME-KERNEL-CONTINUATION-001-next-selection-proof.md"
+      ],
+      "requiredValidation": [
+        "diff-check"
+      ],
+      "task": "Record that the operational kernel selected this next approved Work Order after verified completion of its dependency. Change only the declared evidence file."
+    }
+  ]
+}
