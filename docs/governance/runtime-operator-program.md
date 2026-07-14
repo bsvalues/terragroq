@@ -5,20 +5,33 @@ Program: `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001`
 Supersedes:
 `PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001`
 
-Active goal:
+Historical goal:
 `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
 
-Active loop:
+Historical loop:
 `LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
 
-Status: runtime disabled; local-identity remediation required before activation.
+Status: `REJECTED / TERMINAL / DISABLED / NON_SELECTABLE`.
 
-## Authority
+Successor: `PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001`.
 
-The owner authorized a bounded background operator hosted locally on the HP
-OMEN. GitHub Actions is prohibited as the autonomous runtime host unless a
-future owner decision names that host explicitly. GitHub may provide source,
-issues, pull requests, reviews, and CI validation.
+## Terminal decision
+
+Issue #357 ended `FAILED_TERMINAL` after bounded `CODEX_NETWORK_WALL`
+attempts. It will not be retried. Issue #358 is dependency-blocked. The nested
+local `codex exec` adapter, supervisor, and activation path are quarantined and
+must not be renamed, wrapped, or reused as a prerequisite for hosted work.
+
+William has no activation, login, smoke-test, diagnostic, or runtime-repair
+task. Historical implementation and sanitized evidence are preserved only for
+audit and rejected-architecture learning.
+
+## Historical authority
+
+The owner formerly authorized a bounded background operator hosted locally on
+the HP OMEN. That program is now terminal and its authority is no longer an
+executable route. GitHub may still provide source, issues, pull requests,
+reviews, and CI validation for supported hosted agent work.
 
 The superseded program is not active or selectable. Its earlier GitHub Actions
 control-plane design is removed. No OpenAI credential may be added to GitHub.
@@ -27,7 +40,7 @@ Its later raw local secret-file design is also superseded. William is not
 required to populate `openai_api_key` or `github_token`. Those empty
 placeholder paths do not confer authority and may not be used for activation.
 
-## Corrective Runtime Contract
+## Rejected runtime design record
 
 Phase 1 uses the normal Windows user context on the HP OMEN:
 
@@ -38,22 +51,16 @@ Phase 1 uses the normal Windows user context on the HP OMEN:
 - The identity-bearing supervisor runs natively under William's non-elevated
   Windows account.
 - Docker may perform validation only and receives no authentication material.
-- Activation remains disabled until the corrective playbook reaches its
-  explicit owner activation gate.
+- Activation remains disabled permanently for this adapter.
 
 Canonical playbook:
 `docs/governance/local-identity-runtime-operator-playbook.md`
 
-## Owner-Only Actions
+## Owner operations
 
-Owner authority is required only for:
-
-- interactive `codex login`;
-- interactive `gh auth login`;
-- changing the local activation switch;
-- credential revocation or reauthentication;
-- physical or elevated administration of the OMEN;
-- any future Phase 2 host or service-identity decision.
+No operation is requested from the owner for this terminal program. A future,
+materially different service architecture would require a new explicit owner
+decision; it cannot reopen this adapter implicitly.
 
 Credential values, cached auth files, token output, and browser data never enter
 GitHub, Docker, repository evidence, prompts, logs, checkpoints, screenshots, or

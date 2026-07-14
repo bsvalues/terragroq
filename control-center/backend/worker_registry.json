@@ -1,12 +1,14 @@
 {
-  "version": 1,
-  "control_rule": "WilliamOS delegates. Workers propose. WilliamOS records evidence. Bill approves writes/promotions/commits.",
+  "version": 2,
+  "control_rule": "WilliamOS dispatches only through explicit work-order execution grants. Catalog registration is not executable status, and no worker receives ambient write, commit, promotion, merge, or release authority.",
   "workers": [
     {
       "id": "claude-code",
       "label": "Claude Code",
       "kind": "external_code_worker",
-      "mode": "external_cli",
+      "mode": "hosted_provider_lane",
+      "catalog_status": "registered",
+      "execution_status": "provider_lane_unproven",
       "enabled": false,
       "availability": {
         "command": "claude",
@@ -17,19 +19,66 @@
       "allowed_tasks": [
         "code_review",
         "implementation_plan",
+        "scoped_implementation",
         "patch_proposal",
-        "test_failure_analysis"
+        "test_failure_analysis",
+        "validation",
+        "commit",
+        "push",
+        "pull_request",
+        "review_remediation"
       ],
       "delegation_policy": {
-        "default": "confirm_required",
-        "authority": "proposal_only",
-        "may_write": false,
-        "may_commit": false,
+        "default": "work_order_grant_required",
+        "authority": "work_order_bounded",
+        "may_write": true,
+        "may_commit": true,
         "may_promote": false
+      },
+      "execution_policy": {
+        "requires_work_order_grant": true,
+        "max_authority": "A8_PUSH",
+        "allowed_actions": [
+          "inspect",
+          "proposal",
+          "write",
+          "test",
+          "commit",
+          "push",
+          "open_pr",
+          "merge",
+          "review",
+          "review_remediation"
+        ],
+        "blocked_actions": [
+          "release",
+          "deploy",
+          "promote",
+          "auth_or_secret_change",
+          "destructive_change"
+        ]
+      },
+      "preventive_trust_gate_v2": {
+        "schemaVersion": 2,
+        "workerIdentity": {
+          "workerId": "claude-code",
+          "provider": "anthropic",
+          "surface": "claude-code-provider-lane",
+          "attributable": true
+        },
+        "rawCredentialInspection": false,
+        "promptInjectionBoundary": "trusted-work-order-envelope-v1",
+        "exactPathConfinement": true,
+        "outputRedaction": true,
+        "cancellation": {
+          "supported": true,
+          "mode": "pre-dispatch"
+        },
+        "independentEvidenceCapture": true
       },
       "proposal_execution": {
         "enabled": false,
-        "reason": "Disabled until an operator explicitly configures Claude Code proposal-only CLI invocation."
+        "reason": "No durable authenticated Claude provider adapter is connected. Catalog registration does not make this lane executable."
       },
       "scope_policy": {
         "repo_required": true,
@@ -57,7 +106,9 @@
       "id": "codex",
       "label": "Codex",
       "kind": "external_code_worker",
-      "mode": "external_cli",
+      "mode": "hosted_provider_lane",
+      "catalog_status": "registered",
+      "execution_status": "hosted_transport_unproven",
       "enabled": false,
       "availability": {
         "command": "codex",
@@ -68,19 +119,74 @@
       "allowed_tasks": [
         "code_review",
         "implementation_plan",
+        "scoped_implementation",
         "patch_proposal",
-        "test_failure_analysis"
+        "test_failure_analysis",
+        "validation",
+        "commit",
+        "push",
+        "pull_request",
+        "review_remediation"
       ],
       "delegation_policy": {
-        "default": "confirm_required",
-        "authority": "proposal_only",
-        "may_write": false,
-        "may_commit": false,
+        "default": "work_order_grant_required",
+        "authority": "work_order_bounded",
+        "may_write": true,
+        "may_commit": true,
         "may_promote": false
       },
+      "execution_policy": {
+        "requires_work_order_grant": true,
+        "max_authority": "A8_PUSH",
+        "allowed_actions": [
+          "inspect",
+          "proposal",
+          "write",
+          "test",
+          "commit",
+          "push",
+          "open_pr",
+          "merge",
+          "review",
+          "review_remediation"
+        ],
+        "blocked_actions": [
+          "release",
+          "deploy",
+          "promote",
+          "auth_or_secret_change",
+          "destructive_change"
+        ]
+      },
+      "preventive_trust_gate_v2": {
+        "schemaVersion": 2,
+        "workerIdentity": {
+          "workerId": "codex",
+          "provider": "openai",
+          "surface": "hosted-codex-provider-lane",
+          "attributable": true
+        },
+        "rawCredentialInspection": false,
+        "promptInjectionBoundary": "trusted-work-order-envelope-v1",
+        "exactPathConfinement": true,
+        "outputRedaction": true,
+        "cancellation": {
+          "supported": true,
+          "mode": "pre-dispatch"
+        },
+        "independentEvidenceCapture": true
+      },
+      "legacy_adapters": [
+        {
+          "id": "local-nested-codex-exec",
+          "status": "quarantined_terminal",
+          "execution_allowed": false,
+          "reason": "BLOCKED_CODEX_NETWORK_WALL_CONFIRMED; issue #357 is terminal and must not be retried."
+        }
+      ],
       "proposal_execution": {
         "enabled": false,
-        "reason": "Disabled until an operator explicitly configures Codex proposal-only CLI invocation."
+        "reason": "Authenticated hosted Codex transport is not independently proven. The quarantined local nested adapter is not a fallback."
       },
       "scope_policy": {
         "repo_required": true,
@@ -109,6 +215,8 @@
       "label": "Hermes",
       "kind": "external_agent_worker",
       "mode": "external_cli",
+      "catalog_status": "registered",
+      "execution_status": "not_connected",
       "enabled": false,
       "availability": {
         "command": "hermes",
@@ -127,6 +235,12 @@
         "may_write": false,
         "may_commit": false,
         "may_promote": false
+      },
+      "execution_policy": {
+        "requires_work_order_grant": true,
+        "max_authority": "A1_DRAFT",
+        "allowed_actions": ["inspect", "proposal"],
+        "blocked_actions": ["write", "commit", "push", "merge", "release", "deploy", "promote"]
       },
       "proposal_execution": {
         "enabled": false,
@@ -159,6 +273,8 @@
       "label": "Ollama",
       "kind": "local_model_runtime",
       "mode": "local_service",
+      "catalog_status": "registered",
+      "execution_status": "local_capacity",
       "enabled": true,
       "availability": {
         "command": "ollama",
@@ -204,6 +320,8 @@
       "label": "WilliamOS",
       "kind": "control_plane",
       "mode": "local_cli",
+      "catalog_status": "registered",
+      "execution_status": "control_plane_available",
       "enabled": true,
       "availability": {
         "command": "python",

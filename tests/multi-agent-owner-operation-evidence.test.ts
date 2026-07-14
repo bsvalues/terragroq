@@ -17,6 +17,7 @@ const zeroCounters = {
   OWNER_CREDENTIAL_TOUCH_COUNT: 0,
   OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
   OWNER_ROUTINE_DECISION_COUNT: 0,
+  OWNER_ROUTINE_CONTACT_COUNT: 0,
 }
 
 function fixture() {
@@ -169,7 +170,7 @@ describe("independently anchored owner-operation evidence", () => {
     const { contentHash: _evidenceHash, signature: _evidenceSignature, ...evidencePayload } = data.evidence
     const changedEvidence = data.sign({
       ...evidencePayload,
-      counters: { ...zeroCounters, OWNER_DIAGNOSTIC_TOUCH_COUNT: 1 },
+      counters: { ...zeroCounters, OWNER_ROUTINE_CONTACT_COUNT: 1 },
     }, data.recorderPrivateKey, "assurance-recorder-key-test")
     const { contentHash: _checkpointHash, signature: _checkpointSignature, ...checkpointPayload } = data.checkpoints[0]
     const changedCheckpoint = data.sign({
@@ -183,7 +184,7 @@ describe("independently anchored owner-operation evidence", () => {
       checkpointAnchor: { ...data.checkpointAnchor, checkpointContentHash: changedCheckpoint.contentHash },
     })).toMatchObject({
       status: "EVIDENCE_ARTIFACTS_VALIDATED_NOT_CERTIFIED",
-      reasonCode: "INDEPENDENT_EVIDENCE_SOURCE_REQUIRED",
+      reasonCode: "FAIL_OWNER_BABYSITTING",
       counterAssessment: "NONZERO_COUNTERS_OBSERVED",
       certified: false,
       authorityGranted: false,

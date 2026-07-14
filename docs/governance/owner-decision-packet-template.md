@@ -69,6 +69,7 @@ OWNER_OPERATION_TOUCH_COUNT:
 OWNER_CREDENTIAL_TOUCH_COUNT:
 OWNER_DIAGNOSTIC_TOUCH_COUNT:
 OWNER_ROUTINE_DECISION_COUNT:
+OWNER_ROUTINE_CONTACT_COUNT:
 OWNER_OPERATION_EVIDENCE_REF:
 OWNER_OPERATION_CERTIFICATION_STATE:
 
@@ -85,10 +86,10 @@ DO_NOT_PROVIDE:
 The packet is resumable state, not a handoff to another operator. After the
 Primary records the decision, Codex resumes the blocked Work Order itself.
 
-The four owner-touch counters and evidence state are mandatory even on a stop
+The five owner-touch/contact counters and evidence state are mandatory even on a stop
 packet. A genuine owner authority decision requested by this packet is not a
 routine operation and does not increment `OWNER_ROUTINE_DECISION_COUNT`.
-Asking the Owner to courier work, run diagnostics, repair credentials, or make
+Asking the Owner to courier work, run diagnostics, repair credentials, receive routine status, or make
 a routine implementation choice does increment the applicable counter and
 disqualifies zero-owner-operation certification.
 
@@ -219,6 +220,7 @@ OWNER_OPERATION_TOUCH_COUNT:
 OWNER_CREDENTIAL_TOUCH_COUNT:
 OWNER_DIAGNOSTIC_TOUCH_COUNT:
 OWNER_ROUTINE_DECISION_COUNT:
+OWNER_ROUTINE_CONTACT_COUNT:
 OWNER_OPERATION_EVIDENCE_REF:
 OWNER_OPERATION_CERTIFICATION_STATE:
 ```

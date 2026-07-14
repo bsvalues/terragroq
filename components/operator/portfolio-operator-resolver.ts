@@ -2,6 +2,7 @@ import {
   LOCAL_IDENTITY_RUNTIME_WORK_ORDER_TITLES,
   type PortfolioProgramRecord,
 } from "@/components/operator/portfolio-operator-registry"
+import { MULTI_AGENT_OPERATOR_WORK_ORDERS } from "@/components/operator/multi-agent-operator-registry"
 
 export function resolveNextPortfolioProgram(programs: PortfolioProgramRecord[]) {
   const complete = new Set(programs.filter((program) => program.state === "COMPLETE").map((program) => program.programId))
@@ -66,26 +67,38 @@ export function evaluateCredentialCustody(custody: CredentialCustody) {
 export function buildGoalPacket(program: PortfolioProgramRecord) {
   const localIdentityRuntime =
     program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
+  const multiAgentOperator =
+    program.programId === "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"
 
   return {
     goalId: program.nextGoalId,
     title: program.nextGoalTitle,
-    mission: localIdentityRuntime
+    mission: multiAgentOperator
+      ? "Deliver useful repository work through dependency-cleared, reservation-compatible multi-agent lanes while William remains authority-only."
+      : localIdentityRuntime
       ? "Replace raw credential files with owner-controlled browser login and keyring-backed native OMEN operation while activation remains disabled until its explicit gate."
       : `Deliver the bounded ${program.title} foundation using declared evidence and reversible R0/R1 changes.`,
-    allowedScope: localIdentityRuntime
+    allowedScope: multiAgentOperator
+      ? ["Phase 0/1 R1 integration and useful pilots", "Authorized R3 machine-control-plane implementation", "Native Codex teams", "Independent assurance", "Agent-owned GitHub delivery", "Tests and evidence"]
+      : localIdentityRuntime
       ? ["Native Windows operator controls", "Keyring authentication contracts", "Docker validation-only isolation", "Tests and evidence"]
       : ["Static governance models", "Read-only surfaces", "Tests", "Evidence reports"],
-    blockedScope: localIdentityRuntime
+    blockedScope: multiAgentOperator
+      ? ["Owner operations", "Owner diagnostics", "Credential handling", "Rejected local runtime retry", "Production or higher-risk authority without an explicit grant"]
+      : localIdentityRuntime
       ? ["Raw API keys or PAT files", "GitHub secrets", "Docker credential mounts", "Remote activation", "PACS, county, or TerraFusion production"]
       : ["Production writes", "Secrets", "Destructive operations", "Runtime autonomy", "Auth or database changes"],
-    successCriteria: localIdentityRuntime
+    successCriteria: multiAgentOperator
+      ? ["Useful work is delivered by concurrent isolated agents.", "Dependencies release automatically from the eligible set.", "All five owner-operation/contact counters remain zero."]
+      : localIdentityRuntime
       ? ["The raw credential contract is retired.", "A disabled native supervisor passes safety gates.", "One owner-activated R0/R1 pilot and recovery drill are evidenced."]
       : ["The program baseline is reconciled.", "The bounded Work Order chain is evidenced.", "No authority wall is crossed."],
     authorityMode: program.authorityMode,
     riskCeiling: program.riskClass,
     mergeMode: "CODEX_ELIGIBLE" as const,
-    stopConditions: localIdentityRuntime
+    stopConditions: multiAgentOperator
+      ? ["Genuine authority expansion required", "Trust-boundary violation", "Secret exposure", "Reservation collision after dispatch"]
+      : localIdentityRuntime
       ? ["Interactive owner login required", "Owner activation required", "Plaintext credential fallback", "Protected or higher-risk scope required"]
       : ["Protected authority required", "Unsafe validation repair", "Secrets or destructive operation required"],
     ownerDecisionRequired: program.authorityMode === "OWNER_GATED",
@@ -97,20 +110,48 @@ export function buildLoopPacket(program: PortfolioProgramRecord) {
   const activeWorkOrder = program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
     ? workOrders.find((workOrder) => workOrder.workOrderId === "WO-RUNTIME-IDENTITY-029")
     : workOrders.find((workOrder) => workOrder.status !== "COMPLETE")
+  const eligibleWorkOrders = workOrders
+    .filter((workOrder) => workOrder.status === "READY")
+    .map((workOrder) => workOrder.workOrderId)
   return {
     loopId: `LOOP-${program.nextGoalId.replace(/^GOAL-/, "")}`,
     goalId: program.nextGoalId,
     activeWorkOrder: activeWorkOrder?.workOrderId ?? null,
+    eligibleWorkOrders,
     orderedWorkOrderQueue: workOrders.map((workOrder) => workOrder.workOrderId),
+    executionMode: program.programId === "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"
+      ? "DEPENDENCY_RESERVATION_ELIGIBLE_SET" as const
+      : "ORDERED_QUEUE" as const,
     validationCadence: "Focused tests, diff check, lint, full tests, build, PR checks, review threads, merged-main proof.",
     evidenceCadence: "Record observable proof at each Work Order and program closure.",
     prLifecycle: "Codex owns branch, PR, review remediation, eligible merge, and post-merge verification.",
-    continuationRule: "After completion, return to the portfolio resolver instead of the Owner.",
+    continuationRule: program.programId === "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"
+      ? "Recompute and dispatch every dependency-cleared, reservation-compatible Work Order; contact the Owner only for a genuine authority wall or the final outcome."
+      : "After completion, return to the portfolio resolver instead of the Owner.",
     completionCondition: "All bounded Work Orders and evidence are complete.",
   }
 }
 
 export function buildWorkOrderChain(program: PortfolioProgramRecord) {
+  if (program.programId === "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001") {
+    return MULTI_AGENT_OPERATOR_WORK_ORDERS.map((record) => ({
+      workOrderId: record.workOrderId,
+      title: record.title,
+      objective: `Deliver ${record.title.toLowerCase()} with dependency, reservation, authority, and evidence gates.`,
+      scope: ["Declared repository evidence", `Reserved ${record.riskClass} paths`, "Tests and reports"],
+      discoveryBoundary: ["docs/governance", "docs/reports", "components/operator", "scripts/multi-agent-operator", "tests"],
+      riskClass: record.riskClass,
+      status: record.status,
+      validationPlan: ["Focused tests", "git diff --check", "lint", "full tests", "build"],
+      evidence: record.evidencePath,
+      rollback: "Revert only the lane-owned, reservation-scoped changes through normal review.",
+      continuationTarget: "DEPENDENCY_RESERVATION_ELIGIBLE_SET",
+      stopConditions: ["Genuine authority expansion required", "Trust-boundary violation", "Reservation conflict"],
+      dependsOn: record.dependsOn,
+      ownerOperationsAllowed: record.ownerOperationsAllowed,
+    }))
+  }
+
   const titles = program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
     ? LOCAL_IDENTITY_RUNTIME_WORK_ORDER_TITLES
     : program.programId === "PROGRAM-RELEASE-ENGINEERING-001"

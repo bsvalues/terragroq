@@ -1,6 +1,6 @@
 import type { OperatorRiskClass, OperatorWorkOrderStatus } from "@/components/operator/codex-operator-registry"
 
-export type PortfolioProgramState = "SELECTED" | "READY" | "BLOCKED" | "DEFERRED" | "COMPLETE" | "SUPERSEDED"
+export type PortfolioProgramState = "SELECTED" | "READY" | "BLOCKED" | "DEFERRED" | "COMPLETE" | "SUPERSEDED" | "TERMINAL"
 export type PortfolioAuthorityMode = "CODEX_ELIGIBLE" | "OWNER_GATED"
 
 export type PortfolioProgramRecord = {
@@ -59,7 +59,8 @@ const backlogSeeds: Array<{
   priorityOverride?: number
   stateOverride?: PortfolioProgramState
 }> = [
-  { programId: "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001", title: "WilliamOS Local-Identity Runtime Operator", goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001", businessValue: 10, engineeringValue: 10, riskClass: "R2", priorityOverride: 200 },
+  { programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001", title: "WilliamOS Multi-Agent Operator", goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001", businessValue: 10, engineeringValue: 10, riskClass: "R3", priorityOverride: 300, stateOverride: "SELECTED" },
+  { programId: "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001", title: "WilliamOS Local-Identity Runtime Operator", goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001", businessValue: 0, engineeringValue: 0, riskClass: "R2", priorityOverride: -2, stateOverride: "TERMINAL" },
   { programId: "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001", title: "Superseded Raw-Credential Runtime Operator", goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001", businessValue: 0, engineeringValue: 0, riskClass: "R3", priorityOverride: -1, stateOverride: "SUPERSEDED" },
   { programId: "PROGRAM-RELEASE-ENGINEERING-001", title: "Release Engineering", goalId: "GOAL-RELEASE-ENGINEERING-001", businessValue: 9, engineeringValue: 9, riskClass: "R1" },
   { programId: "PROGRAM-DEVEX-HOOK-TOOLING-001", title: "DevEx / Hook Tooling", goalId: "GOAL-DEVEX-HOOK-TOOLING-001", businessValue: 7, engineeringValue: 9, riskClass: "R1" },
@@ -87,17 +88,13 @@ export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((see
   riskClass: seed.riskClass,
   dependencies: seed.dependencies ?? [],
   authorityMode: seed.authorityMode ?? "CODEX_ELIGIBLE",
-  state: seed.stateOverride ?? (seed.authorityMode === "OWNER_GATED"
-    ? "BLOCKED"
-    : seed.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
-      ? "SELECTED"
-      : "READY"),
+  state: seed.stateOverride ?? (seed.authorityMode === "OWNER_GATED" ? "BLOCKED" : "READY"),
   nextGoalId: seed.goalId,
   nextGoalTitle: `${seed.title} Foundation`,
   completionEvidence: [],
   priorityScore: priorityScore(seed),
   blockedReason: seed.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
-    ? "The operational kernel is implemented and behaviorally tested. Runtime remains disabled pending the explicit owner activation gate and one live unattended R0 pilot."
+    ? "Terminal and nonselectable: issue #357 failed at CODEX_NETWORK_WALL and must not be retried; issue #358 remains dependency-blocked; activation remains disabled."
     : seed.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
       ? "Superseded by the local-identity runtime program; raw credential files and identity-bearing Docker hosting are prohibited."
       : seed.authorityMode === "OWNER_GATED" ? "Protected authority is required before activation." : undefined,

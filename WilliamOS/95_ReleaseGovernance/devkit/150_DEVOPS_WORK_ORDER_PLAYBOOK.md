@@ -2,8 +2,8 @@
 type: devkit-playbook
 source: "WilliamOS DevOps Work Order Playbook.pdf"
 source_path: "C:/Users/bsval/Downloads/WilliamOS DevOps Work Order Playbook.pdf"
-status: draft-full-operating-playbook
-authority: non-executing-specification-until-ratified
+status: historical-superseded
+authority: historical-reference-only
 generated: 2026-06-26
 phase_6_status: blocked
 tags:
@@ -16,6 +16,15 @@ tags:
 ---
 
 # WilliamOS DevOps Work Order Playbook
+
+> **HISTORICAL / SUPERSEDED:** The active operating doctrine is
+> [`docs/governance/multi-agent-operator-playbook.md`](../../../docs/governance/multi-agent-operator-playbook.md),
+> with provider entrypoints in root [`AGENTS.md`](../../../AGENTS.md) and
+> [`CLAUDE.md`](../../../CLAUDE.md). This imported playbook remains evidence of the earlier operating
+> model and grants no present authority. Every statement below that assigns routine operation,
+> approval, Git/PR work, diagnostics, provider repair, or status carriage to William is superseded.
+> William is owner-only. The issue #357 adapter is terminal, the local runtime remains disabled, and
+> issue #358 remains dependency-blocked.
 
 ## Source Packet
 
@@ -66,9 +75,11 @@ WilliamOS DevOps should:
 
 These rules govern all `/goal` and `/loop` behavior.
 
-## Authority Model
+## Authority Model (Historical / Superseded)
 
-William is the operator and approval authority.
+The former rule that made William the operator is superseded. William is the owner and provides only
+genuinely new authority decisions. Agents own routine operation and the Git/PR lifecycle under the
+active multi-agent playbook and recorded authority.
 
 AI systems may:
 
@@ -97,8 +108,8 @@ AI systems may not silently:
 - expand Phase 6 authority
 - convert handoffs into execution
 
-Default authority is `A0_READ_ONLY`. Any authority above `A1_DRAFT_ONLY`
-requires explicit operator approval.
+The historical default was `A0_READ_ONLY`. Current authority is resolved mechanically from the active
+Work Order and immutable owner-issued grants; this document cannot grant, narrow, or expand it.
 
 ## Handoff Rule
 

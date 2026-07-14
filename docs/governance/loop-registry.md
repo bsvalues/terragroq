@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
-Work order: `WO-RUNTIME-IDENTITY-001 through WO-RUNTIME-IDENTITY-038`
-Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001 (playbook active; runtime disabled)`
+Work order: `WO-MAO-001 through WO-MAO-062`
+Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001 (active; local runtime terminal and disabled)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -89,54 +89,34 @@ Evidence:
 
 ## Active Loop State
 
-### `LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
+### `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
-Status: `operational kernel implemented / OMEN runtime disabled`
+Status: `ACTIVE / DEPENDENCY_AND_RESERVATION_DRIVEN`
 
-Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
+Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001`
 
-Program: `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001`
+Program: `PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001`
 
-Current Work Order:
-`WO-RUNTIME-IDENTITY-029 - Owner Activation Gate`.
+Selection: compute every dependency-cleared Work Order, then dispatch the
+largest reservation-compatible set within provider and risk budgets. Numeric
+order is an identifier, not a global mutex.
 
-Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-026`, plus
-`WO-RUNTIME-IDENTITY-028`. Foundation evidence is recorded in
-`docs/reports/WO-RUNTIME-IDENTITY-001` through
-`docs/reports/WO-RUNTIME-IDENTITY-026` reports; WO-028 is represented by the
-reviewed native pilot authority record.
+Continuation: agents own implementation, isolated branches/worktrees, focused
+and full validation, PRs, review remediation, eligible merge, merged-main
+verification, cleanup, evidence, and dependent release. Routine failures are
+retried, rerouted, deferred, or terminalized by stable machine reason codes.
 
-`WO-RUNTIME-IDENTITY-027` is closed blocked and superseded; it proved only a
-sanitized Codex transport failure. `WO-RUNTIME-IDENTITY-028` is complete through
-the reviewed native pilot authority record. The integrated kernel now owns
-queue selection, checkpoint reconciliation, bounded Codex execution, actual
-Git diff policy, validation, PR/review/merge continuation, and next selection.
-Live proof remains owner-gated at WO-029 while activation is disabled.
+Owner communication is final-only except for a genuinely new authority wall.
+No run command, diagnostic, provider repair, approval relay, Git operation, or
+status courier task may be assigned to William. All owner-operation counters,
+including `OWNER_ROUTINE_CONTACT_COUNT`, must remain zero.
 
-Selection: first incomplete Work Order whose dependencies and authority gates
-are satisfied.
-
-Continuation: after the owner activation gate, execute exactly one reviewed R0
-pilot through the operational kernel. Continue only after merged-main proof and
-automatic next-WO selection are recorded. Routine transport failure is handled
-through durable backoff rather than owner courier work.
-
-Stop conditions are the canonical playbook contract:
-
-- interactive `codex login` or `gh auth login`;
-- owner activation, revocation, or physical/elevated host administration;
-- keyring unavailability or any plaintext credential fallback;
-- authenticated GitHub principal other than `bsvalues`;
-- permission expansion or an action above R1;
-- PACS, county, protected-data, TerraFusion-production, deploy, release,
-  secrets-administration, destructive, or other prohibited scope;
-- an unrecoverable failure after bounded remediation.
-
-Pending checks, review feedback, recoverable failures, PR merge, restart,
-context compaction, and completed Work Orders are nonterminal.
+The local OMEN runtime loop is terminal, non-selectable, and disabled. Issue
+#357 will not be retried, and #358 remains dependency-blocked. Supported hosted
+Codex team work does not depend on that rejected adapter.
 
 Canonical playbook:
-`docs/governance/local-identity-runtime-operator-playbook.md`
+`docs/governance/multi-agent-operator-playbook.md`
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
@@ -149,7 +129,7 @@ exists or a typed authority wall is reached.
 
 ### `LOOP-RELEASE-ENGINEERING-001`
 
-Status: `ready / deferred behind runtime operator activation`
+Status: `ready / independently eligible when reservations permit`
 
 Goal: `GOAL-RELEASE-ENGINEERING-001`
 
@@ -200,20 +180,16 @@ Current status:
 
 ## Current Continuation Order
 
-1. Reconcile containment and retire the raw credential-file contract.
-2. Establish ChatGPT and GitHub CLI browser-login contracts with keyring-only
-   storage.
-3. Move the identity-bearing supervisor to William's native Windows user
-   context.
-4. Keep Docker validation-only and credential-free.
-5. Implement native checkpoint, lease, patch, GitHub, audit, budget, and safety
-   controls.
-6. Prove disabled, authenticated read-only, pilot, review/merge, kill, restart,
-   and recovery behavior.
-7. Close the runtime goal and return automatically to the portfolio resolver.
+1. Complete and validate Phase 0 executable truth and preventive controls.
+2. Run the Phase 1 hosted Codex team proof with two independent builders and
+   independent assurance.
+3. Release and execute its dependent fan-in Work Order automatically.
+4. Continue through the machine contracts, scheduler, provider federation,
+   GitHub delivery, resilience, and certification phases.
+5. Keep useful independent R0/R1 product lanes moving whenever dependencies and
+   reservations permit.
 
-Runtime activation remains disabled until the explicit owner activation gate at
-`WO-RUNTIME-IDENTITY-029`.
+The rejected local runtime remains disabled and is not a continuation gate.
 
 Historical Shell, WOE, Evidence, Authority, Council, Trace/Eval, Memory,
 Academy/Wiki, Hermes-boundary, Agent Forge, local-status refinement,
@@ -227,7 +203,8 @@ active queue entries.
 Codex stops before:
 
 - live Hermes activation
-- autonomous worker execution
+- unauthorized background or rejected-adapter worker execution (supported hosted lanes inside the
+  active multi-agent Work Order are allowed)
 - DB writes
 - schema migration
 - production county-system integration
@@ -265,13 +242,15 @@ OWNER_OPERATION_TOUCH_COUNT:
 OWNER_CREDENTIAL_TOUCH_COUNT:
 OWNER_DIAGNOSTIC_TOUCH_COUNT:
 OWNER_ROUTINE_DECISION_COUNT:
+OWNER_ROUTINE_CONTACT_COUNT:
 OWNER_OPERATION_EVIDENCE_REF:
 OWNER_OPERATION_CERTIFICATION_STATE:
 ```
 
-Every loop return carries the four owner-operation counters. Zero values are unverified until linked
+Every loop return carries the five owner-operation/contact counters. Zero values are unverified until linked
 to independent durable evidence for the same run. Genuine owner authority decisions do not count as
-routine operations; using the Owner for courier, credential, diagnostic, or routine decision work does.
+routine operations; using the Owner for courier, credential, diagnostic, routine decision, or progress
+contact does.
 
 ## Registry Maintenance
 

@@ -14,6 +14,7 @@ const zeroCounters = {
   OWNER_CREDENTIAL_TOUCH_COUNT: 0,
   OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
   OWNER_ROUTINE_DECISION_COUNT: 0,
+  OWNER_ROUTINE_CONTACT_COUNT: 0,
 } as const
 
 describe("owner-operation cross-surface binding", () => {
@@ -27,7 +28,7 @@ describe("owner-operation cross-surface binding", () => {
 
     expect(surfaces.map((surface) => surface.binding.surface)).toEqual(["goal", "loop", "evidence", "authority"])
     expect(surfaces.every((surface) => surface.counters.OWNER_OPERATION_TOUCH_COUNT === null)).toBe(true)
-    expect(OWNER_OPERATION_COUNTER_NAMES).toHaveLength(4)
+    expect(OWNER_OPERATION_COUNTER_NAMES).toHaveLength(5)
     expect(surfaces[0]).toMatchObject({
       lifecycleState: "NO_OWNER_OPERATION_EVIDENCE",
       reasonCode: "OWNER_OPERATION_EVIDENCE_MISSING",

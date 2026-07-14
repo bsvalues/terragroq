@@ -8,6 +8,7 @@ const zeroOwnerOperations = {
   OWNER_CREDENTIAL_TOUCH_COUNT: 0,
   OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
   OWNER_ROUTINE_DECISION_COUNT: 0,
+  OWNER_ROUTINE_CONTACT_COUNT: 0,
 } as const
 
 function event(type: string, register: string | null, summary = "recorded proof"): EventLog {

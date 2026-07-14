@@ -76,15 +76,15 @@ describe("WilliamOS operational kernel", () => {
     expect(sideEffects).toEqual([])
   })
 
-  it("exposes owner revocation verification without allowing terminal adapter dispatch", async () => {
+  it("treats signed revocation evidence as optional defense-in-depth without allowing dispatch", async () => {
     const registry = JSON.parse(fs.readFileSync("runtime-operator/native/authority-registry.json", "utf8"))
     const observations: unknown[] = []
     await expect(assertLegacyAdapterDispatchAllowed(
       registry,
-      async () => ({ status: "UNVERIFIED" }),
+      undefined,
       "local-nested-codex-exec",
     ))
-      .rejects.toThrow("OWNER_REVOCATION_EVENT_VERIFIER_WALL")
+      .rejects.toThrow("QUARANTINED_TERMINAL")
     await expect(assertLegacyAdapterDispatchAllowed(registry, async (request) => {
       observations.push(request)
       return { status: "VERIFIED_REVOKED" }

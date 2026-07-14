@@ -1,6 +1,6 @@
 # Work Order Template
 
-Canonical goal: `GOAL-WOS-CODEX-OPERATOR-001`
+Canonical goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001`
 
 Every new operator Work Order must additionally declare:
 
@@ -69,6 +69,8 @@ AUTHORITY_SCOPE_REQUIRED:
 
 PROGRAM_ACTIVATION_GRANT_REF:
 
+ACTIVE_AUTHORITY_EVIDENCE_REF:
+
 OWNER_OPERATION_TOUCH_COUNT: 0
 
 OWNER_CREDENTIAL_TOUCH_COUNT: 0
@@ -76,6 +78,8 @@ OWNER_CREDENTIAL_TOUCH_COUNT: 0
 OWNER_DIAGNOSTIC_TOUCH_COUNT: 0
 
 OWNER_ROUTINE_DECISION_COUNT: 0
+
+OWNER_ROUTINE_CONTACT_COUNT: 0
 
 OWNER_OPERATION_EVIDENCE_REF:
 
@@ -107,17 +111,19 @@ ESCALATION_RULES:
 ```
 
 Authority references are verifier inputs, not authority created by a Work Order or coordinator. Before
-an authority-gated action, verify the immutable owner grant and its complete append-only owner-signed
-status stream against the exact subject, scope, expiry, and current revocation state. A missing,
-expired, untrusted, mismatched, or revoked grant fails closed. A program activation grant is separate
-from implementation or merge authority and must be explicitly referenced when activation is in scope.
+an authority-gated action, verify that active recorded authority evidence covers the exact subject,
+scope, risk, and action and has not been revoked or materially changed. Signed artifacts may strengthen
+certification but are not required to re-authorize an already-recorded owner decision. A missing,
+mismatched, or revoked authority record fails closed.
 
-All four owner-touch counters are mandatory evidence. Caller-supplied zeros remain
+All five owner-touch/contact counters are mandatory evidence. Caller-supplied zeros remain
 `UNVERIFIED_ZERO_OWNER_OPERATIONS`; this phase has no verifier capable of certification. Any
 nonzero value records lifecycle state `FAILED_OWNER_BABYSITTING` with reason code
 `FAIL_OWNER_BABYSITTING`; the reason code is not a state. A genuine owner authority decision is outside
 routine-operation counts, while owner courier, credential, diagnostic, or routine implementation work
-increments the applicable counter.
+increments the applicable counter. Progress and status contact also increments
+`OWNER_ROUTINE_CONTACT_COUNT`; communication is final-only unless a genuinely new authority decision
+is required.
 
 ## Transition Defaults
 
@@ -148,10 +154,11 @@ Continue to NEXT_WO_TRANSITION without returning to the owner unless escalation
 is required.
 
 NEXT_WO_TRANSITION:
-Start the next WO under the same goal immediately.
-If no next WO exists and the active goal is not complete, generate one from the
-active goal registry and start it.
-Close the goal only when it is complete and no next WO exists.
+Recompute the dependency-cleared eligible set under the active goal.
+Dispatch every reservation-compatible Work Order within provider and risk budgets.
+Generate a new Work Order only for a discovered prerequisite or approved scope gap;
+never use numeric adjacency as a global mutex.
+Close the goal only when every declared Work Order is complete or explicitly deferred.
 
 RETURN_TO_OWNER:
 Allowed only when ESCALATION_REQUIRED is YES.

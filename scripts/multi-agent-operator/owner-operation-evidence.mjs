@@ -14,6 +14,7 @@ const COUNTER_NAMES = Object.freeze([
   "OWNER_CREDENTIAL_TOUCH_COUNT",
   "OWNER_DIAGNOSTIC_TOUCH_COUNT",
   "OWNER_ROUTINE_DECISION_COUNT",
+  "OWNER_ROUTINE_CONTACT_COUNT",
 ])
 const SCOPE_FIELDS = Object.freeze(["programId", "goalId", "loopId", "workOrderId", "decisionId", "action"])
 
@@ -273,7 +274,7 @@ export function validateOwnerOperationEvidenceArtifacts(input) {
   const touched = COUNTER_NAMES.some((name) => validated.counters[name] !== 0)
   return Object.freeze({
     status: "EVIDENCE_ARTIFACTS_VALIDATED_NOT_CERTIFIED",
-    reasonCode: "INDEPENDENT_EVIDENCE_SOURCE_REQUIRED",
+    reasonCode: touched ? "FAIL_OWNER_BABYSITTING" : "INDEPENDENT_EVIDENCE_SOURCE_REQUIRED",
     counterAssessment: touched ? "NONZERO_COUNTERS_OBSERVED" : "ZERO_COUNTERS_UNVERIFIED",
     certified: false,
     authorityGranted: false,

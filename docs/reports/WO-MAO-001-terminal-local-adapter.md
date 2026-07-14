@@ -2,11 +2,11 @@
 
 ## Result
 
-`BLOCKED_OWNER_SIGNED_REVOCATION_EVENT / MECHANICAL_QUARANTINE_COMPLETE`
+`COMPLETE / MECHANICAL_QUARANTINE_ENFORCED / NO_OWNER_OPERATION_REQUIRED`
 
 The rejected `local-nested-codex-exec` adapter is mechanically `QUARANTINED_TERMINAL`, and changing
-the local activation file cannot dispatch it. WO-MAO-001 is not complete until the Owner independently
-issues the two required signed legacy-revocation events in the owner-controlled local store.
+the local activation file cannot dispatch it. The recorded terminal program decision is sufficient to
+keep this historical adapter non-selectable; William is not assigned a signing, activation, or host task.
 
 ## Executable state
 
@@ -17,21 +17,23 @@ issues the two required signed legacy-revocation events in the owner-controlled 
 - The operational kernel checks the same invariant before queue inspection, leasing, workspace creation,
   or provider dispatch, including direct kernel invocation.
 
-## Owner revocation event boundary
+## Authority and hardening boundary
 
-No owner-signed revocation event was created or inferred in this Work Order. The registry records that
-the event is required and pending. When activation is changed, the supervisor and direct kernel entry
-point both require the same externally stored `legacy-revocation-events.json` and
-`trusted-owner-keys.json` stream to verify as `VERIFIED_REVOKED` before ending at
-`QUARANTINED_TERMINAL`. A successful verifier result corroborates revocation but cannot reactivate this
-terminal adapter.
-
-The verifier validates an immutable, append-only owner-signed event for both legacy authority records.
-Until those owner-issued artifacts exist, the authority event gate and quarantine both remain
-fail-closed.
+Existing signed-event verification remains available as defense-in-depth and future certification
+evidence. It is not a prerequisite that converts the already-recorded terminal decision into owner
+clerical work. No successful verifier result can reactivate this adapter, and absence of a newly issued
+event cannot make the terminal adapter selectable.
 
 ## Safety
 
 - Runtime activation was not changed.
 - Neither issue was executed, leased, relabeled, or retried.
 - No credential, keyring, session, token, or raw provider output was read or recorded.
+
+```text
+OWNER_OPERATION_TOUCH_COUNT=0
+OWNER_CREDENTIAL_TOUCH_COUNT=0
+OWNER_DIAGNOSTIC_TOUCH_COUNT=0
+OWNER_ROUTINE_DECISION_COUNT=0
+OWNER_ROUTINE_CONTACT_COUNT=0
+```

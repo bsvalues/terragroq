@@ -38,8 +38,8 @@ describe("native supervisor foundation", () => {
       terminalIssueNumber: 357,
       terminalReason: "CODEX_NETWORK_WALL",
       revocationEvent: {
-        required: true,
-        status: "PENDING_OWNER_SIGNED_EVENT",
+        required: false,
+        status: "OPTIONAL_DEFENSE_IN_DEPTH",
         eventId: null,
         ownerKeyFingerprint: null,
         trustBundleContentHash: null,
@@ -51,12 +51,12 @@ describe("native supervisor foundation", () => {
       && record.executionAllowed === false
       && record.retryAllowed === false)).toBe(true)
 
-    const quarantineCall = "Assert-LegacyAdapterQuarantined -RegistryPath $registry -AuthorityRoot $OwnerAuthorityRoot"
+    const quarantineCall = "Assert-LegacyAdapterQuarantined -RegistryPath $registry"
     const readinessCall = '& "$PSScriptRoot\\williamos-auth-readiness.ps1"'
     const invocation = "& node $kernel --root $Root --repository $RepositoryPath --registry $registry 2>&1"
     expect(supervisor).toContain('throw "QUARANTINED_TERMINAL"')
-    expect(supervisor).toContain('assert-legacy-revocations')
-    expect(supervisor).toContain('OWNER_REVOCATION_ASSERTION=')
+    expect(supervisor).not.toContain('assert-legacy-revocations')
+    expect(supervisor).not.toContain('OWNER_REVOCATION_ASSERTION=')
     expect(supervisor.indexOf(quarantineCall)).toBeLessThan(supervisor.indexOf(readinessCall))
     expect(supervisor.indexOf(quarantineCall)).toBeLessThan(supervisor.indexOf(invocation))
   })
