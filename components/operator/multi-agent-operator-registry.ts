@@ -114,6 +114,16 @@ const PHASE_ONE_EVIDENCE_PATHS = [
   "docs/reports/WO-MAO-015-hosted-team-proof-rollup.md",
 ] as const
 
+const PHASE_TWO_EVIDENCE_PATHS = [
+  "docs/reports/WO-MAO-016-work-order-envelope-v2.md",
+  "docs/reports/WO-MAO-017-dag-eligible-set-resolver.md",
+  "docs/reports/WO-MAO-018-reservation-ledger.md",
+  "docs/reports/WO-MAO-019-provider-capability-dispatch-contract.md",
+  "docs/reports/WO-MAO-020-lifecycle-escalation-taxonomy.md",
+  "docs/reports/WO-MAO-021-per-lane-leases-checkpoints.md",
+  "docs/reports/WO-MAO-022-evidence-ledger-owner-touch-meter.md",
+] as const
+
 export function resolveMultiAgentWorkOrders(
   completedIds: ReadonlySet<string>,
   blockedIds: ReadonlySet<string> = new Set(),
@@ -140,14 +150,15 @@ export function resolveMultiAgentWorkOrders(
       ownerOperationsAllowed: false,
       evidencePath: PHASE_ZERO_EVIDENCE_PATHS[index]
         ?? PHASE_ONE_EVIDENCE_PATHS[index - PHASE_ZERO_EVIDENCE_PATHS.length]
+        ?? PHASE_TWO_EVIDENCE_PATHS[index - PHASE_ZERO_EVIDENCE_PATHS.length - PHASE_ONE_EVIDENCE_PATHS.length]
         ?? `docs/reports/${id}.md`,
     }
   })
 }
 
-const PHASE_ONE_COMPLETE = new Set(range(1, 15).map(workOrderId))
+const PHASE_TWO_COMPLETE = new Set(range(1, 22).map(workOrderId))
 
-export const MULTI_AGENT_OPERATOR_WORK_ORDERS = resolveMultiAgentWorkOrders(PHASE_ONE_COMPLETE)
+export const MULTI_AGENT_OPERATOR_WORK_ORDERS = resolveMultiAgentWorkOrders(PHASE_TWO_COMPLETE)
 
 export const MULTI_AGENT_OPERATOR_PROGRAM = {
   programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",

@@ -17,17 +17,19 @@ describe("multi-agent operator registry", () => {
     expect(new Set(MULTI_AGENT_OPERATOR_WORK_ORDERS.map((record) => record.workOrderId)).size).toBe(62)
   })
 
-  it("advances after final independent assurance passes", () => {
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 15).every(({ status }) => status === "COMPLETE")).toBe(true)
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 15).every(({ evidencePath }) => existsSync(evidencePath))).toBe(true)
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[15]).toMatchObject({
-      workOrderId: "WO-MAO-016",
-      dependsOn: ["WO-MAO-015"],
+  it("exposes the complete Phase 3/provider-proof eligible set after Phase 2 assurance", () => {
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 22).every(({ status }) => status === "COMPLETE")).toBe(true)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 22).every(({ evidencePath }) => existsSync(evidencePath))).toBe(true)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[22]).toMatchObject({
+      workOrderId: "WO-MAO-023",
+      dependsOn: ["WO-MAO-017", "WO-MAO-018", "WO-MAO-019", "WO-MAO-020", "WO-MAO-021", "WO-MAO-022"],
       status: "READY",
       riskClass: "R3",
     })
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "READY")
+      .map(({ workOrderId }) => workOrderId)).toEqual(["WO-MAO-023", "WO-MAO-029", "WO-MAO-032"])
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[53]).toMatchObject({ workOrderId: "WO-MAO-054", riskClass: "R2" })
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(16).every(({ status }) => status === "PENDING")).toBe(true)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "PENDING")).toHaveLength(37)
 
     const afterSixteen = resolveMultiAgentWorkOrders(
       new Set(Array.from({ length: 16 }, (_, index) => `WO-MAO-${String(index + 1).padStart(3, "0")}`)),

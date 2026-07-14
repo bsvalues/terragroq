@@ -75,3 +75,13 @@ No runtime activation, provider authentication, credential inspection, owner con
 - Resolution: mixed whole-repository/implicit-path comparisons now fail closed symmetrically as typed `CONFLICT` with `REPOSITORY_PATH_CONTEXT_UNRESOLVED`. Structured path comparisons retain exact repository semantics, and implicit-path versus implicit-path legacy collision behavior is unchanged.
 - Regression validation: focused Vitest PASS, 1 file and 21 tests; both Node syntax checks PASS; `git diff --check` PASS.
 - Reservation and all five zero owner-operation counters above remain unchanged.
+
+## Phase 2 exact-schema assurance remediation
+
+- Remediation started UTC: `2026-07-14T16:53:21Z`
+- Remediation completed UTC: `2026-07-14T16:54:07Z`
+- Finding: unknown top-level fields, reservation collection fields, and structured-path fields were silently accepted by the public normalizer and compatibility checker.
+- Resolution: all three object boundaries now enforce exact allowed field sets and emit stable `INVALID_RESERVATION_SET` diagnostics containing the rejected, sorted field names. CLI compatibility output remains typed `INVALID` and exits `2`.
+- Compatibility proof: exact-field legacy string paths and explicit `{ repository, path }` entries remain valid, with their existing compatibility and collision semantics unchanged.
+- Regression validation: focused Vitest PASS, 1 file and 24 tests; both Node syntax checks PASS; `git diff --check` PASS.
+- Reservation and all five zero owner-operation counters above remain unchanged.

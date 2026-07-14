@@ -139,7 +139,7 @@ persistence, command execution, and any production mutation.
 
 ### `GOAL-WOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
 
-Status: `ACTIVE / PHASE_1 HOSTED PROOF COMPLETE / WO-MAO-016 READY`
+Status: `ACTIVE / PHASE_2 LOCAL CONTRACTS COMPLETE / THREE WORK ORDERS READY`
 
 Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
@@ -160,11 +160,11 @@ Work Orders: `WO-MAO-001` through `WO-MAO-062`. Dependencies and reservations,
 not numeric serialization, determine the eligible set. The executable registry
 is `components/operator/multi-agent-operator-registry.ts`.
 
-Current transition: `WO-MAO-001` through `WO-MAO-015` are complete. Two
-post-merge assurance findings were remediated by the original builders,
-independently re-reviewed through integration PR #366, and resolved.
-`WO-MAO-016 - Work-order envelope v2` is ready. Durable WilliamOS dispatch and
-atomic reservations remain unproven.
+Current transition: `WO-MAO-001` through `WO-MAO-022` are complete. Phase 2 proves the local
+work-order, DAG, atomic reservation-ledger, provider-eligibility, lifecycle, lease/checkpoint,
+evidence-ledger, and owner-meter contracts. The eligible set is `WO-MAO-023`, `WO-MAO-029`, and
+`WO-MAO-032`; a singular UI displays `WO-MAO-023`. Durable provider dispatch, unattended scheduling,
+and GitHub delivery remain unproven.
 
 Communication contract: routine implementation, diagnosis, retry, review,
 merge, verification, cleanup, and continuation remain agent-owned. William is
@@ -172,8 +172,8 @@ contacted only for a genuinely new authority decision or the final program
 outcome. `OWNER_ROUTINE_CONTACT_COUNT` and all owner-operation counters must be
 zero for certification.
 
-The separate local-identity runtime goal is terminal historical evidence. Issue
-#357 is `FAILED_TERMINAL` with reason `CODEX_NETWORK_WALL`; it will not be
+The separate local-identity runtime goal is terminal historical evidence.
+Issue #357 is `FAILED_TERMINAL` with reason `CODEX_NETWORK_WALL`; it will not be
 retried. Issue #358 is `BLOCKED_DEPENDENCY`. The supervisor and runtime remain
 disabled and are not prerequisites for supported hosted agent execution.
 

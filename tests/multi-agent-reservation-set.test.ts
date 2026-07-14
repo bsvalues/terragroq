@@ -249,6 +249,54 @@ describe("multi-agent reservation-set compatibility", () => {
     expect(outcome.diagnostics.every(({ reasonCode }) => reasonCode === "INVALID_RESERVATION_VALUE")).toBe(true)
   })
 
+  it("rejects unknown fields at every public schema boundary", () => {
+    const topLevel = { ...reservationSet("top-level"), unexpected: true, anotherUnknown: "x" }
+    expect(normalizeReservationSet(topLevel)).toMatchObject({
+      valid: false,
+      diagnostics: [expect.objectContaining({
+        reasonCode: "INVALID_RESERVATION_SET",
+        field: "reservationSet",
+        unknownFields: ["anotherUnknown", "unexpected"],
+      })],
+    })
+
+    const collection = reservationSet("collection")
+    const collectionWithUnknown = {
+      ...collection,
+      reservations: { ...collection.reservations, pathContexts: [], surprise: [] },
+    }
+    expect(normalizeReservationSet(collectionWithUnknown)).toMatchObject({
+      valid: false,
+      diagnostics: [expect.objectContaining({
+        reasonCode: "INVALID_RESERVATION_SET",
+        field: "reservations",
+        unknownFields: ["pathContexts", "surprise"],
+      })],
+    })
+
+    const structuredPath = reservationSet("structured-path", { paths: [{
+      repository: "bsvalues/shared",
+      path: "src/a.ts",
+      mode: "exclusive",
+    } as unknown as PathReservation] })
+    expect(normalizeReservationSet(structuredPath)).toMatchObject({
+      valid: false,
+      diagnostics: [expect.objectContaining({
+        reasonCode: "INVALID_RESERVATION_SET",
+        field: "paths",
+        unknownFields: ["mode"],
+      })],
+    })
+  })
+
+  it("keeps exact-field legacy and structured path contracts valid", () => {
+    expect(normalizeReservationSet(reservationSet("legacy", { paths: ["src/a.ts"] })).valid).toBe(true)
+    expect(normalizeReservationSet(reservationSet("structured", { paths: [{
+      repository: "bsvalues/shared",
+      path: "src/a.ts",
+    }] })).valid).toBe(true)
+  })
+
   it("rejects duplicates, self-overlapping paths, malformed values and duplicate set identities", () => {
     const malformed = reservationSet("same", {
       paths: ["src", "src/a.ts", "./src", "../../escape"],
@@ -319,5 +367,27 @@ describe("multi-agent reservation-set compatibility", () => {
       { cwd: process.cwd(), encoding: "utf8" })
     expect(input.status).toBe(2)
     expect(JSON.parse(input.stdout).status).toBe("RESERVATION_SET_INPUT_WALL")
+  })
+
+  it("CLI returns typed INVALID and code 2 for unknown schema fields", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mao-reservation-schema-"))
+    temporaryDirectories.push(directory)
+    const left = path.join(directory, "left.json")
+    const right = path.join(directory, "right.json")
+    fs.writeFileSync(left, JSON.stringify({ ...reservationSet("left"), unknown: "rejected" }))
+    fs.writeFileSync(right, JSON.stringify(reservationSet("right")))
+
+    const cli = spawnSync(process.execPath,
+      ["scripts/multi-agent-operator/reservation-set-cli.mjs", left, right],
+      { cwd: process.cwd(), encoding: "utf8", env: {} })
+    expect(cli.status).toBe(2)
+    expect(cli.stderr).toBe("")
+    expect(JSON.parse(cli.stdout)).toMatchObject({
+      artifactType: "MULTI_AGENT_RESERVATION_COMPATIBILITY_RESULT",
+      status: "INVALID",
+      compatible: false,
+      reasonCodes: ["INVALID_RESERVATION_SET"],
+      invalid: [expect.objectContaining({ field: "reservationSet", unknownFields: ["unknown"] })],
+    })
   })
 })

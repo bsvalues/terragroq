@@ -101,8 +101,8 @@ describe("portfolio operator", () => {
       ownerDecisionRequired: false,
     })
     expect(loop).toMatchObject({
-      activeWorkOrder: "WO-MAO-016",
-      eligibleWorkOrders: ["WO-MAO-016"],
+      activeWorkOrder: "WO-MAO-023",
+      eligibleWorkOrders: ["WO-MAO-023", "WO-MAO-029", "WO-MAO-032"],
       executionMode: "DEPENDENCY_RESERVATION_ELIGIBLE_SET",
     })
     expect(loop.continuationRule).toContain("contact the Owner only for a genuine authority wall or the final outcome")
@@ -113,8 +113,10 @@ describe("portfolio operator", () => {
       riskClass: "R1",
       ownerOperationsAllowed: false,
     })
-    expect(workOrders[14]).toMatchObject({ workOrderId: "WO-MAO-015", status: "COMPLETE", riskClass: "R1" })
-    expect(workOrders[15]).toMatchObject({ workOrderId: "WO-MAO-016", status: "READY", riskClass: "R3" })
+    expect(workOrders[21]).toMatchObject({ workOrderId: "WO-MAO-022", status: "COMPLETE", riskClass: "R3" })
+    expect(workOrders[22]).toMatchObject({ workOrderId: "WO-MAO-023", status: "READY", riskClass: "R3" })
+    expect(workOrders[28]).toMatchObject({ workOrderId: "WO-MAO-029", status: "READY", riskClass: "R3" })
+    expect(workOrders[31]).toMatchObject({ workOrderId: "WO-MAO-032", status: "READY", riskClass: "R3" })
     expect(workOrders).toHaveLength(62)
     expect(workOrders.at(-1)?.workOrderId).toBe("WO-MAO-062")
     expect(workOrders.every((workOrder) => "ownerOperationsAllowed" in workOrder && workOrder.ownerOperationsAllowed === false)).toBe(true)
