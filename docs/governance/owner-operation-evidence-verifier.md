@@ -17,7 +17,8 @@ independently:
    fingerprint come from the existing external owner-controlled monotonic anchor.
 2. An assurance-signed `OWNER_OPERATION_EVIDENCE` record binds a preregistered run ID and manifest,
    exact program/goal/loop/Work Order/decision/action context, terminal run state, complete observation
-   boundaries, classification-policy hash, and the four counters.
+   boundaries, classification-policy hash, and the five counters, including
+   `OWNER_ROUTINE_CONTACT_COUNT`.
 3. An assurance-log-signed `OWNER_OPERATION_EVIDENCE_CHECKPOINT` chain commits each run ID exactly once
    to one evidence content hash. A separate external monotonic checkpoint anchor supplies the one
    authoritative latest log ID, sequence, and checkpoint hash.
@@ -59,6 +60,10 @@ manifest hash prevent reuse for a later attempt with otherwise identical context
   `EVIDENCE_ARTIFACTS_VALIDATED_NOT_CERTIFIED`, `certified: false`, and `authorityGranted: false`.
 - Zero counters are reported as `ZERO_COUNTERS_UNVERIFIED`; nonzero counters as
   `NONZERO_COUNTERS_OBSERVED`. Neither result establishes an authoritative lifecycle state.
+- Any nonzero counter, including `OWNER_ROUTINE_CONTACT_COUNT`, returns
+  `FAIL_OWNER_BABYSITTING` immediately. Routine progress, confirmation, and status contact is not
+  exempt from the zero-owner-operation requirement. This fail-closed result does not make zero
+  counters certified; certification still requires independent trusted-host verification.
 - A future trusted-host integration may emit `FAILED_OWNER_BABYSITTING` or
   `CERTIFIED_ZERO_OWNER_OPERATIONS` only after it independently sources all current anchors and expected
   run state and verifies the complete source-log chain.

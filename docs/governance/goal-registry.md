@@ -1,7 +1,7 @@
 # WilliamOS Goal Registry
 
-Work order: `WO-RUNTIME-IDENTITY-001 through WO-RUNTIME-IDENTITY-038`
-Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001 (playbook active; runtime disabled)`
+Work order: `WO-MAO-001 through WO-MAO-062`
+Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001 (active; local runtime terminal and disabled)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -137,52 +137,39 @@ persistence, command execution, and any production mutation.
 
 ## Active Goal State
 
-### `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001 - Local-Identity Bounded Runtime Operator`
+### `GOAL-WOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
 
-Status: `operational kernel implemented / live proof owner-gated / runtime disabled`
+Status: `ACTIVE / PHASE_0 INTEGRATION`
 
-Loop: `LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
+Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
-Program: `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001`
+Program: `PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001`
 
-Risk ceiling: `R2` for runtime implementation; leased product work remains
-limited to policy-eligible `R0` and `R1`.
+Risk model: Phase 0 truth/registry integration and Phase 1 provider proof are
+`R1`; machine-control-plane Phases 2-6 may reach `R3`; Phase 7 certification is
+`R2`. Useful product delivery remains limited to authorized `R0` and `R1` work.
 
-Purpose: replace both GitHub-hosted secrets and raw local credential files with
-ChatGPT and GitHub CLI browser sign-in stored in the Windows credential store,
-then prove a native, owner-controlled OMEN operator.
+Purpose: make WilliamOS select dependency-cleared work, reserve non-overlapping
+scope, dispatch multiple builders and independent assurance, own the complete
+GitHub lifecycle, and continue without making William an agent or operator.
 
 Canonical playbook:
-`docs/governance/local-identity-runtime-operator-playbook.md`
+`docs/governance/multi-agent-operator-playbook.md`
 
-Work Orders: `WO-RUNTIME-IDENTITY-001` through
-`WO-RUNTIME-IDENTITY-038`.
+Work Orders: `WO-MAO-001` through `WO-MAO-062`. Dependencies and reservations,
+not numeric serialization, determine the eligible set. The executable registry
+is `components/operator/multi-agent-operator-registry.ts`.
 
-Current Work Order:
-`WO-RUNTIME-IDENTITY-029 - Owner Activation Gate`.
+Communication contract: routine implementation, diagnosis, retry, review,
+merge, verification, cleanup, and continuation remain agent-owned. William is
+contacted only for a genuinely new authority decision or the final program
+outcome. `OWNER_ROUTINE_CONTACT_COUNT` and all owner-operation counters must be
+zero for certification.
 
-Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-026`, plus
-`WO-RUNTIME-IDENTITY-028`. Foundation evidence is recorded in
-`docs/reports/WO-RUNTIME-IDENTITY-001` through
-`docs/reports/WO-RUNTIME-IDENTITY-026` reports; WO-028 is represented by the
-reviewed native pilot authority record.
-
-`WO-RUNTIME-IDENTITY-027` is closed as a blocked, superseded network
-diagnostic rather than operational proof. `WO-RUNTIME-IDENTITY-028` is complete:
-the reviewed native authority registry now defines the bounded pilot packet.
-The integrated operational kernel and behavioral acceptance evidence are
-recorded in `docs/reports/WO-RUNTIME-KERNEL-001-operational-kernel.md`. Live
-unattended proof remains pending the explicit owner activation gate.
-
-Owner gates are limited to interactive Codex login, interactive GitHub login,
-activation/revocation, physical or elevated host administration, and future
-Phase 2 identity decisions. William must never be asked to paste a key or token
-into GitHub, Docker, a file, terminal transcript, report, issue, PR, or chat.
-
-Standing blocks: GitHub Actions hosting, raw API keys/PAT files, copied auth
-caches, Docker credential mounts, PACS/county/protected data, TerraFusion
-production, deployment/release/tag, DB/schema/data mutation, other
-repositories, permission changes, destructive actions, and scope expansion.
+The separate local-identity runtime goal is terminal historical evidence. Issue
+#357 is `FAILED_TERMINAL` with reason `CODEX_NETWORK_WALL`; it will not be
+retried. Issue #358 is `BLOCKED_DEPENDENCY`. The supervisor and runtime remain
+disabled and are not prerequisites for supported hosted agent execution.
 
 ### `GOAL-PORTFOLIO-OPERATOR-001 - Continuous Program and Goal Selection`
 
@@ -197,7 +184,7 @@ dependency-cleared program without returning routine planning to the Primary.
 
 ### `GOAL-RELEASE-ENGINEERING-001 - Release Engineering Foundation`
 
-Status: `ready / deferred behind the active runtime operator program`
+Status: `ready / independently eligible when reservations permit`
 
 Loop: `LOOP-RELEASE-ENGINEERING-001`
 
@@ -372,7 +359,7 @@ Blocked: TerraFusion production mutation unless separately authorized.
 
 ## Registry Maintenance
 
-Every active goal records the four owner-operation counters when evidence exists, an independent
+Every active goal records the five owner-operation/contact counters when evidence exists, an independent
 evidence reference when available, and one current lifecycle state: `NO_OWNER_OPERATION_EVIDENCE`,
 `UNVERIFIED_ZERO_OWNER_OPERATIONS`, `CERTIFIED_ZERO_OWNER_OPERATIONS`, or
 `FAILED_OWNER_BABYSITTING`. `CERTIFIED_ZERO_OWNER_OPERATIONS` requires the independent context-bound
@@ -380,7 +367,7 @@ evidence verifier, signed assurance record, complete checkpoint and source-log c
 anchors sourced by the trusted host rather than passed through the operator CLI. Caller-supplied zeros
 cannot certify a goal. Genuine consequential owner authority decisions
 are excluded from routine-operation counts;
-owner courier, credential, diagnostic, and routine implementation actions are counted and disqualify
+owner courier, credential, diagnostic, routine implementation, and progress-contact actions are counted and disqualify
 certification with reason `FAIL_OWNER_BABYSITTING`.
 
 Update this registry when William authorizes a new goal, changes execution

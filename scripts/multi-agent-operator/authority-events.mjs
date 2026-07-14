@@ -6,6 +6,7 @@ const COUNTER_NAMES = Object.freeze([
   "OWNER_CREDENTIAL_TOUCH_COUNT",
   "OWNER_DIAGNOSTIC_TOUCH_COUNT",
   "OWNER_ROUTINE_DECISION_COUNT",
+  "OWNER_ROUTINE_CONTACT_COUNT",
 ])
 
 export class AuthorityAssertionError extends Error {

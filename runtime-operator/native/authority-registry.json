@@ -9,8 +9,8 @@
     "terminalIssueNumber": 357,
     "terminalReason": "CODEX_NETWORK_WALL",
     "revocationEvent": {
-      "required": true,
-      "status": "PENDING_OWNER_SIGNED_EVENT",
+      "required": false,
+      "status": "OPTIONAL_DEFENSE_IN_DEPTH",
       "eventId": null,
       "ownerKeyFingerprint": null,
       "trustBundleContentHash": null

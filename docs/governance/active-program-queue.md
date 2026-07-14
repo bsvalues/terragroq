@@ -4,17 +4,17 @@ Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
 
 Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
-Active program: `PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001 - WilliamOS Runtime Operator`
+Active program: `PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
 
-Goal: `GOAL-WILLIAMOS-RUNTIME-OPERATOR-001`
+Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001`
 
-Loop: `LOOP-WILLIAMOS-RUNTIME-OPERATOR-001`
+Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
-Baseline: `origin/main = 2966527a0dc3790feeea3deaf86e10808fb6605b`
+Baseline: `origin/main = 2aec3bf8e7a154cd6cbb7ff85c9b6c81694fbc5a`
 
-Risk ceiling: `R1`
+Risk ceiling: `R3` for control-plane implementation; useful delivery pilots remain `R0/R1`
 
-Status: owner-authorized runtime control plane implementation active
+Status: owner-authorized multi-agent program active; rejected local runtime terminal and disabled
 
 ## Purpose
 
@@ -45,6 +45,13 @@ activate a worker, inspect a host, mutate production, or change authority.
 - Historical recommendations pointing to completed Evidence, Authority,
   Council, Trace, Academy/Wiki, Hermes, Agent Forge, WOE polish, local-status
   refinement, or Ubuntu planning lanes are not active work.
+- PR #359 merged the proof-first multi-agent playbook.
+- PRs #360 through #362 mechanically quarantined the rejected adapter and
+  bound owner-operation evidence surfaces.
+- Issue #357 is `FAILED_TERMINAL / CODEX_NETWORK_WALL` and is not retryable.
+- Issue #358 is `BLOCKED_DEPENDENCY`; its issue packet records #357 as its
+  dependency and its stale ready label has been removed.
+- Runtime activation and the local supervisor remain disabled.
 
 ## Identifier Reconciliation
 
@@ -93,11 +100,20 @@ Evidence:
 
 ## Canonical Active Program
 
-`PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001` is selected by explicit Owner
-authorization. Its goal is `GOAL-WILLIAMOS-RUNTIME-OPERATOR-001`; its loop is
-`LOOP-WILLIAMOS-RUNTIME-OPERATOR-001`; and its bounded control-plane chain is
-active. `PROGRAM-RELEASE-ENGINEERING-001` remains ratified and ready after the
-runtime operator reaches its credential/pilot gates.
+`PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001` is selected under the recorded
+owner direction that William is owner-only and the agents execute the complete
+program without routine owner contact. Its goal is
+`GOAL-WOS-MULTI-AGENT-OPERATOR-001`; its loop is
+`LOOP-WOS-MULTI-AGENT-OPERATOR-001`; and its dependency-aware Phase 0 chain is
+active. The program grant is limited to repository-scoped, reversible work and
+does not authorize runtime activation, credentials, secrets, production writes,
+deployment, protected data, or destructive operations.
+
+`PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001` is terminal and non-selectable.
+Its rejected nested-Codex adapter cannot be retried or reused. Release
+Engineering and other independent approved R0/R1 programs remain eligible for
+parallel reservation-safe delivery; multi-agent control-plane work does not
+monopolize the portfolio.
 
 Selection is deterministic: completed, blocked, deferred, superseded,
 dependency-blocked, and owner-gated programs are filtered out; remaining

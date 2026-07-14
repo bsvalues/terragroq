@@ -18,7 +18,7 @@ const root = path.resolve(option("--root", path.join(process.env.USERPROFILE, ".
 const registryPath = path.resolve(option("--registry", path.join(repositoryPath, "runtime-operator", "native", "authority-registry.json")))
 const registry = JSON.parse(fs.readFileSync(registryPath, "utf8"))
 const adapters = createNativeAdapters({ root, repositoryPath, scriptsPath: path.join(repositoryPath, "scripts", "local") })
-adapters.verifyOwnerRevocationEvent = async (expected) => {
+if (registry.adapter?.revocationEvent?.required === true) adapters.verifyOwnerRevocationEvent = async (expected) => {
   try {
     const authorityRoot = path.join(root, "authority")
     return assertLegacyAuthorityRevocations({

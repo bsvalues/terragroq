@@ -111,6 +111,7 @@ OWNER_OPERATION_TOUCH_COUNT
 OWNER_CREDENTIAL_TOUCH_COUNT
 OWNER_DIAGNOSTIC_TOUCH_COUNT
 OWNER_ROUTINE_DECISION_COUNT
+OWNER_ROUTINE_CONTACT_COUNT
 ```
 
 No selected record is `NO_OWNER_OPERATION_EVIDENCE`; its counters display as `not recorded`, not zero.
@@ -122,8 +123,10 @@ counter set. Its assurance signature and create-once run commitment must validat
 anchored checkpoint and source-log chains described in `owner-operation-evidence-verifier.md` before
 `CERTIFIED_ZERO_OWNER_OPERATIONS` can be emitted.
 `FAILED_OWNER_BABYSITTING` is the lifecycle state for any nonzero routine touch, with stable reason
-`FAIL_OWNER_BABYSITTING`. Genuine owner authority decisions are outside routine-operation counts; using
-the Owner as courier, diagnostician, credential operator, or routine decision-maker is not.
+`FAIL_OWNER_BABYSITTING`. `OWNER_ROUTINE_CONTACT_COUNT` includes every status prompt, progress-update
+request, confirmation request, or other non-authority contact that interrupts the Owner before the
+final outcome. Genuine owner authority decisions are outside routine-operation counts; using the Owner
+as courier, diagnostician, credential operator, routine decision-maker, or routine correspondent is not.
 
 The current CLI argument is deliberately named `--owner-counters`: it validates an untrusted counter
 record only. It must not be renamed or represented as `--owner-operation-evidence` until an independent,
@@ -133,11 +136,16 @@ integration required for certification is not implemented in this phase.
 
 ## Integration Contract
 
-Before lease, provider dispatch, GitHub write, merge, dependent release, or program activation, the
-future coordinator must obtain the current independent anchors, validate artifacts with the exact
-contemplated subject and scope, and create only a transient action assertion. It must treat exit 2 or
-missing/malformed validation output as terminal authority denial. Callers must never cache validation
-across action boundaries because expiry or a newly appended revocation can change current authority.
+This cryptographic contract applies when a Work Order or policy explicitly requires independently
+anchored owner artifacts, including final zero-touch certification and future protected actions. For
+those actions, the coordinator must obtain current anchors, validate exact subject and scope, create
+only a transient assertion, treat exit 2 or malformed output as denial, and never cache validation
+across action boundaries.
 
-This slice does not wire a supervisor, dispatch a provider, activate a program, or create an owner
-artifact.
+The active multi-agent program's already-recorded owner decision separately covers bounded R0/R1
+repository implementation and normal GitHub lifecycle work. Persisting that decision does not require
+William to issue a new signature, pin, key, or activation artifact. This contract cannot retroactively
+turn authorized routine work into an owner ceremony; it remains available as defense-in-depth and as a
+mandatory verifier only where an active packet explicitly names it.
+
+This slice does not wire a supervisor, dispatch a provider, or create an owner artifact.

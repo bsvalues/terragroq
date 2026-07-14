@@ -24,15 +24,21 @@ describe("portfolio operator", () => {
       ]),
     )
     expect(portfolio.backlog[0]).toMatchObject({
-      programId: "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001",
+      programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
       state: "SELECTED",
-      nextGoalId: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
+      nextGoalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001",
     })
     expect(portfolio.backlog[1]).toMatchObject({
+      programId: "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001",
+      state: "TERMINAL",
+      blockedReason: expect.stringContaining("#357 failed"),
+    })
+    expect(portfolio.backlog[2]).toMatchObject({
       programId: "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001",
       state: "SUPERSEDED",
     })
     expect(portfolio.backlog.map((program) => program.programId)).toEqual([
+      "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
       "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001",
       "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001",
       "PROGRAM-RELEASE-ENGINEERING-001",
@@ -52,8 +58,8 @@ describe("portfolio operator", () => {
 
     expect(resolveNextPortfolioProgram(portfolio.backlog)).toMatchObject({
       decision: "SELECT_PROGRAM",
-      programId: "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001",
-      goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
+      programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
+      goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001",
       ownerDecisionRequired: false,
     })
   })
@@ -71,6 +77,7 @@ describe("portfolio operator", () => {
       { ...seed, programId: "BLOCKED", state: "BLOCKED" },
       { ...seed, programId: "DEFERRED", state: "DEFERRED" },
       { ...seed, programId: "SUPERSEDED", state: "SUPERSEDED" },
+      { ...seed, programId: "TERMINAL", state: "TERMINAL" },
       { ...seed, programId: "DEPENDENCY", dependencies: ["MISSING"] },
       { ...seed, programId: "AUTHORITY", authorityMode: "OWNER_GATED" },
     ]
@@ -89,24 +96,27 @@ describe("portfolio operator", () => {
     const workOrders = buildWorkOrderChain(selected)
 
     expect(goal).toMatchObject({
-      goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
-      riskCeiling: "R2",
+      goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001",
+      riskCeiling: "R3",
       ownerDecisionRequired: false,
     })
-    expect(loop.continuationRule).toContain("portfolio resolver")
-    expect(loop.activeWorkOrder).toBe("WO-RUNTIME-IDENTITY-029")
+    expect(loop).toMatchObject({
+      activeWorkOrder: "WO-MAO-008",
+      eligibleWorkOrders: ["WO-MAO-008"],
+      executionMode: "DEPENDENCY_RESERVATION_ELIGIBLE_SET",
+    })
+    expect(loop.continuationRule).toContain("contact the Owner only for a genuine authority wall or the final outcome")
     expect(loop.orderedWorkOrderQueue[0]).toBe(workOrders[0].workOrderId)
     expect(workOrders[0]).toMatchObject({
-      workOrderId: "WO-RUNTIME-IDENTITY-001",
+      workOrderId: "WO-MAO-001",
       status: "COMPLETE",
-      riskClass: "R0",
+      riskClass: "R1",
+      ownerOperationsAllowed: false,
     })
-    expect(workOrders[26]).toMatchObject({ workOrderId: "WO-RUNTIME-IDENTITY-027", status: "BLOCKED" })
-    expect(workOrders[27]).toMatchObject({ workOrderId: "WO-RUNTIME-IDENTITY-028", status: "COMPLETE" })
-    expect(workOrders[28]).toMatchObject({ workOrderId: "WO-RUNTIME-IDENTITY-029", status: "BLOCKED" })
-    expect(workOrders).toHaveLength(38)
-    expect(workOrders.at(-1)?.workOrderId).toBe("WO-RUNTIME-IDENTITY-038")
-    expect(workOrders.every((workOrder) => workOrder.rollback.includes("Disable the operator first"))).toBe(true)
+    expect(workOrders[7]).toMatchObject({ workOrderId: "WO-MAO-008", status: "READY", riskClass: "R1" })
+    expect(workOrders).toHaveLength(62)
+    expect(workOrders.at(-1)?.workOrderId).toBe("WO-MAO-062")
+    expect(workOrders.every((workOrder) => "ownerOperationsAllowed" in workOrder && workOrder.ownerOperationsAllowed === false)).toBe(true)
   })
 
   it("preserves program risk and derives program-specific loop and Work Order identities", () => {

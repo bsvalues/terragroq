@@ -12,6 +12,12 @@ The canonical current goal, loop, and next eligible program are maintained in
 in this document are historical foundation plans unless the active queue
 explicitly selects them.
 
+The active executable program is
+`docs/governance/multi-agent-operator-playbook.md`, Work Orders `WO-MAO-001`
+through `WO-MAO-062`. Its dependency and reservation rules supersede any
+historical global-sequential or “William is the operator” wording here. William
+is owner-only; agents own routine implementation and the GitHub lifecycle.
+
 
 ## Purpose
 
@@ -536,4 +542,3 @@ where:
 - Forge prepares capability.
 - Hermes acts only when authorized.
 - The Primary remains the authority.
-

@@ -3,6 +3,7 @@ export const OWNER_OPERATION_COUNTER_NAMES = [
   "OWNER_CREDENTIAL_TOUCH_COUNT",
   "OWNER_DIAGNOSTIC_TOUCH_COUNT",
   "OWNER_ROUTINE_DECISION_COUNT",
+  "OWNER_ROUTINE_CONTACT_COUNT",
 ] as const
 
 export type OwnerOperationCounterName = (typeof OWNER_OPERATION_COUNTER_NAMES)[number]
@@ -111,6 +112,7 @@ const NO_COUNTERS: OwnerOperationDisplayCounters = Object.freeze({
   OWNER_CREDENTIAL_TOUCH_COUNT: null,
   OWNER_DIAGNOSTIC_TOUCH_COUNT: null,
   OWNER_ROUTINE_DECISION_COUNT: null,
+  OWNER_ROUTINE_CONTACT_COUNT: null,
 })
 
 const OWNER_AUTHORITY_DECISIONS = Object.freeze({
@@ -154,7 +156,7 @@ function normalizeCounters(counters: OwnerOperationCounters): OwnerOperationCoun
   const keys = Object.keys(counters).sort()
   const expectedKeys = [...OWNER_OPERATION_COUNTER_NAMES].sort()
   if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
-    throw new TypeError("Owner-operation counters must contain exactly the canonical four keys")
+    throw new TypeError("Owner-operation counters must contain exactly the canonical five keys")
   }
   const normalized = {} as Record<OwnerOperationCounterName, number>
 

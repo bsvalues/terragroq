@@ -2,7 +2,7 @@
 
 ## Result
 
-`BLOCKED_TRUSTED_SOURCE_INTEGRATION / ARTIFACT_VALIDATOR_IMPLEMENTED / NO_AUTHORITY_ISSUED`
+`COMPLETE / OWNER_ONLY_CONSTITUTION_RATIFIED / FINAL_CERTIFICATION_PENDING`
 
 ## Delivered
 
@@ -12,7 +12,8 @@
 - Direct terminal-revocation verification for executable records that predate immutable grants.
 - Fail-closed expiry, trust, chain, scope, and current-revocation assertions.
 - Supervisor-consumable CLI with typed authority walls and exit code 2.
-- Four-counter zero-owner-operation schema with proposed context and evidence-head fields.
+- Five-counter zero-owner-operation/contact schema with proposed context and evidence-head fields.
+- `OWNER_ROUTINE_CONTACT_COUNT` requirement and final-only communication contract.
 - Canonical `FAILED_OWNER_BABYSITTING` lifecycle state and `FAIL_OWNER_BABYSITTING` reason-code split.
 - Work Order template authority references and owner-touch evidence fields.
 - Shared read-only owner-operation model across goals, loops, Work Orders, stop packets, completion
@@ -36,23 +37,19 @@
 - The coordinator remains unable to mint, mutate, extend, revoke, or reactivate authority through this
   implementation.
 
-## Remaining acceptance gate
+## Certification boundary
 
-WO-MAO-003 is not complete. The standalone validator receives every path and pin from its caller, so it
-cannot establish independent sourcing. It also validates a recorder's completeness assertion without
-yet verifying the source event chain through an independently anchored authoritative run boundary. A
-trusted host must source the run registry, owner trust pins, assurance checkpoint head, and source-log
-head from their separate protected stores and perform that source-chain verification before any
-`CERTIFIED_ZERO_OWNER_OPERATIONS` result exists. No live evidence, key, pin, anchor, or authority
-artifact has been issued. Before WO-MAO-005 may activate the successor, the Owner must independently
-provision the owner trust anchor and issue the scoped program-activation artifact.
+WO-MAO-003 ratifies the operating contract and records the owner's already-issued program decision.
+It does not claim the independent evidence-chain proof required by WO-MAO-060 and WO-MAO-061.
+Cryptographic pins, signed events, and trusted-store integration remain defense-in-depth for final
+certification; they are not a new signing chore or a prerequisite for authorized R0/R1 repository work.
 
 ## Integration
 
 `authority-event-cli.mjs validate-artifacts` performs integrity and scope validation only. Its
-`OWNER_AUTHORITY_ARTIFACT_VALIDATION` output does not authorize an action. The future coordinator must
-source the key fingerprint and current trust-bundle hash from an independent monotonic owner anchor
-before producing a transient action assertion. That integration remains incomplete. The legacy adapter separately invokes
+`OWNER_AUTHORITY_ARTIFACT_VALIDATION` output does not create or expand authority. The future
+certification coordinator must source independent evidence anchors before claiming
+`CERTIFIED_ZERO_OWNER_OPERATIONS`. The legacy adapter separately invokes
 `assert-legacy-revocations`; its pass can only confirm terminal revocation and never permit dispatch.
 The proposed post-run artifact protocol is documented in
 `docs/governance/owner-operation-evidence-verifier.md`; the current CLI validates but does not certify.
@@ -63,3 +60,11 @@ Focused tests cover valid authority, mutation, untrusted issuer, scope mismatch,
 event-chain tampering, owner-touch disqualification, and typed CLI failure. Full validation results are
 reported with the commit evidence. Test signatures use ephemeral fixture-only keys and identities; they
 are not owner artifacts and confer no authority.
+
+```text
+OWNER_OPERATION_TOUCH_COUNT=0
+OWNER_CREDENTIAL_TOUCH_COUNT=0
+OWNER_DIAGNOSTIC_TOUCH_COUNT=0
+OWNER_ROUTINE_DECISION_COUNT=0
+OWNER_ROUTINE_CONTACT_COUNT=0
+```

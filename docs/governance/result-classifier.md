@@ -23,12 +23,12 @@ automate execution, or mutate data.
 - Review threads after merge require immediate classification and remediation
   when they are substantive and in scope.
 - Secret exposure always stops the loop.
-- Every stop or completion result carries all four owner-touch counters, the
+- Every stop or completion result carries all five owner-touch/contact counters, the
   independent evidence reference when one exists, and the resulting
   certification state.
 - Genuine consequential owner authority decisions are excluded from
   `OWNER_ROUTINE_DECISION_COUNT`. Routine owner courier, diagnostic,
-  credential, or implementation decisions disqualify certification.
+  credential, implementation, or progress contact disqualifies certification.
 - Caller-supplied zero counters remain `UNVERIFIED_ZERO_OWNER_OPERATIONS`
   because that input path does not invoke the independent context-bound evidence verifier.
 - A surface with no selected run or Work Order reports `NO_OWNER_OPERATION_EVIDENCE`
@@ -217,12 +217,12 @@ Operator action:
 ### `RESULT: FAILED_OWNER_BABYSITTING`
 
 Meaning: the run required at least one routine owner operation, credential
-touch, diagnostic touch, or routine decision. A genuine owner-only authority
+touch, diagnostic touch, routine decision, or routine contact. A genuine owner-only authority
 decision is consequential governance and is not counted as a routine decision.
 
 Required evidence:
 
-- all four owner-touch counters
+- all five owner-touch/contact counters
 - the nonzero counter or counters
 - `FAIL_OWNER_BABYSITTING` reason code
 - independent evidence reference when available
@@ -236,7 +236,7 @@ Operator action:
 
 ### `RESULT: CERTIFIED_ZERO_OWNER_OPERATIONS`
 
-Meaning: a terminal run's exact context and four zero counters were signed by an owner-approved,
+Meaning: a terminal run's exact context and five zero counters were signed by an owner-approved,
 purpose-restricted assurance recorder and committed once in the complete assurance checkpoint chain
 whose current head was independently anchored. The trusted host also verified the complete source event
 chain through the authoritative run boundary. The standalone artifact validator cannot emit this result.
@@ -248,7 +248,7 @@ Required evidence:
 - complete source-log observation bounds and classification-policy hash
 - assurance evidence content hash and signature
 - checkpoint chain, sequence, commitment, and independently sourced current head
-- all four validated counters equal zero
+- all five validated counters equal zero
 
 Operator action:
 
@@ -304,6 +304,7 @@ OWNER_OPERATION_TOUCH_COUNT:
 OWNER_CREDENTIAL_TOUCH_COUNT:
 OWNER_DIAGNOSTIC_TOUCH_COUNT:
 OWNER_ROUTINE_DECISION_COUNT:
+OWNER_ROUTINE_CONTACT_COUNT:
 OWNER_OPERATION_EVIDENCE_REF:
 OWNER_OPERATION_CERTIFICATION_STATE:
 ```
@@ -322,6 +323,7 @@ OWNER_OPERATION_TOUCH_COUNT:
 OWNER_CREDENTIAL_TOUCH_COUNT:
 OWNER_DIAGNOSTIC_TOUCH_COUNT:
 OWNER_ROUTINE_DECISION_COUNT:
+OWNER_ROUTINE_CONTACT_COUNT:
 OWNER_OPERATION_EVIDENCE_REF:
 OWNER_OPERATION_CERTIFICATION_STATE:
 ```

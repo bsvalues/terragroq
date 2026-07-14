@@ -19,6 +19,7 @@ const counters = {
   OWNER_CREDENTIAL_TOUCH_COUNT: 0,
   OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
   OWNER_ROUTINE_DECISION_COUNT: 0,
+  OWNER_ROUTINE_CONTACT_COUNT: 0,
 }
 
 function fixture() {
@@ -264,6 +265,11 @@ describe("owner authority event verifier", () => {
     })
     expect(() => validateOwnerAuthorityArtifacts({ ...data, events: [data.active], counters: { ...counters, OWNER_DIAGNOSTIC_TOUCH_COUNT: 1 }, now: "2026-07-13T00:00:00.000Z" }))
       .toThrow(/OWNER_BABYSITTING_WALL/)
+    expect(evaluateOwnerOperationCounters({ ...counters, OWNER_ROUTINE_CONTACT_COUNT: 1 })).toMatchObject({
+      certified: false,
+      lifecycleState: "FAILED_OWNER_BABYSITTING",
+      reasonCode: "FAIL_OWNER_BABYSITTING",
+    })
     expect(() => evaluateOwnerOperationCounters({ ...counters, OWNER_OTHER_TOUCH_COUNT: 0 }))
       .toThrow(/OWNER_TOUCH_EVIDENCE_WALL/)
   })

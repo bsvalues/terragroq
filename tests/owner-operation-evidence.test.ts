@@ -12,6 +12,7 @@ const zeroCounters: OwnerOperationCounters = {
   OWNER_CREDENTIAL_TOUCH_COUNT: 0,
   OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
   OWNER_ROUTINE_DECISION_COUNT: 0,
+  OWNER_ROUTINE_CONTACT_COUNT: 0,
 }
 const binding = {
   surface: "work-order" as const,
@@ -29,15 +30,16 @@ describe("owner-operation evidence governance", () => {
     expect(() => evaluateOwnerOperationEvidence(zeroCounters, null as never)).toThrow(/supported surface/i)
     expect(() => createOwnerOperationEvidencePlaceholder({ ...binding, action: "" })).toThrow(/action/i)
     expect(() => evaluateOwnerOperationEvidence({ ...zeroCounters, OWNER_OTHER_TOUCH_COUNT: 0 } as never, binding))
-      .toThrow(/canonical four keys/i)
+      .toThrow(/canonical five keys/i)
   })
 
-  it("defines the exact four counters without inventing a measurement", () => {
+  it("defines the exact five counters without inventing a measurement", () => {
     expect(OWNER_OPERATION_COUNTER_NAMES).toEqual([
       "OWNER_OPERATION_TOUCH_COUNT",
       "OWNER_CREDENTIAL_TOUCH_COUNT",
       "OWNER_DIAGNOSTIC_TOUCH_COUNT",
       "OWNER_ROUTINE_DECISION_COUNT",
+      "OWNER_ROUTINE_CONTACT_COUNT",
     ])
     const placeholder = createOwnerOperationEvidencePlaceholder(binding)
     expect(placeholder).toMatchObject({
@@ -47,6 +49,7 @@ describe("owner-operation evidence governance", () => {
         OWNER_CREDENTIAL_TOUCH_COUNT: null,
         OWNER_DIAGNOSTIC_TOUCH_COUNT: null,
         OWNER_ROUTINE_DECISION_COUNT: null,
+        OWNER_ROUTINE_CONTACT_COUNT: null,
       },
       lifecycleState: "NO_OWNER_OPERATION_EVIDENCE",
       reasonCode: "OWNER_OPERATION_EVIDENCE_MISSING",

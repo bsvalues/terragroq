@@ -8,6 +8,7 @@ const zeroOwnerOperations = {
   OWNER_CREDENTIAL_TOUCH_COUNT: 0,
   OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
   OWNER_ROUTINE_DECISION_COUNT: 0,
+  OWNER_ROUTINE_CONTACT_COUNT: 0,
 } as const
 
 function workOrder(status: WorkOrder["status"], result: WorkOrder["result"] = null): WorkOrder {

@@ -13,6 +13,7 @@ const zeroOwnerOperations = {
   OWNER_CREDENTIAL_TOUCH_COUNT: 0,
   OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
   OWNER_ROUTINE_DECISION_COUNT: 0,
+  OWNER_ROUTINE_CONTACT_COUNT: 0,
 } as const
 
 describe("Codex operator next-WO resolver", () => {
@@ -184,6 +185,7 @@ describe("Codex operator next-WO resolver", () => {
     ["courier", "OWNER_OPERATION_TOUCH_COUNT"],
     ["diagnostic", "OWNER_DIAGNOSTIC_TOUCH_COUNT"],
     ["credential", "OWNER_CREDENTIAL_TOUCH_COUNT"],
+    ["correspondent", "OWNER_ROUTINE_CONTACT_COUNT"],
   ] as const)("disqualifies a stop packet that used the owner as a routine %s", (_touch, counter) => {
     const packet = buildOperatorStopPacket({
       decisionId: "DECISION-AUTH-002",
