@@ -12,7 +12,16 @@ import {
 
 const temporaryDirectories: string[] = []
 
-function reservationSet(id: string, reservations: Partial<Record<string, string[]>> = {}) {
+type PathReservation = string | { repository: string; path: string }
+type ReservationOverrides = {
+  paths?: PathReservation[]
+  contracts?: string[]
+  environments?: string[]
+  repositories?: string[]
+  protectedResources?: string[]
+}
+
+function reservationSet(id: string, reservations: ReservationOverrides = {}) {
   return {
     schemaVersion: 1,
     artifactType: "MULTI_AGENT_RESERVATION_SET",
@@ -47,11 +56,13 @@ describe("multi-agent reservation-set compatibility", () => {
   it("returns collision-free compatibility without claiming a ledger or authority", () => {
     const outcome = checkReservationCompatibility(
       reservationSet("left", {
-        paths: ["scripts/a.mjs"], contracts: ["contract-a"], environments: ["preview"],
+        paths: [{ repository: "bsvalues/terragroq", path: "scripts/a.mjs" }],
+        contracts: ["contract-a"], environments: ["preview"],
         repositories: ["bsvalues/terragroq"], protectedResources: ["github:issue:1"],
       }),
       reservationSet("right", {
-        paths: ["tests/b.test.ts"], contracts: ["contract-b"], environments: ["staging"],
+        paths: [{ repository: "bsvalues/other", path: "tests/b.test.ts" }],
+        contracts: ["contract-b"], environments: ["staging"],
         repositories: ["bsvalues/other"], protectedResources: ["github:issue:2"],
       }),
     )
@@ -81,7 +92,7 @@ describe("multi-agent reservation-set compatibility", () => {
 
   it("sorts comprehensive cross-set collisions in stable reason order", () => {
     const common = {
-      paths: ["src/a.ts"], contracts: ["c"], environments: ["e"],
+      paths: [{ repository: "path-context", path: "src/a.ts" }], contracts: ["c"], environments: ["e"],
       repositories: ["r"], protectedResources: ["p"],
     }
     const outcome = checkReservationCompatibility(reservationSet("left", common), reservationSet("right", common))
@@ -90,6 +101,152 @@ describe("multi-agent reservation-set compatibility", () => {
       "REPOSITORY_COLLISION", "PROTECTED_RESOURCE_COLLISION",
     ])
     expect(outcome.conflicts).toHaveLength(5)
+  })
+
+  it("does not collide equal or ancestor-related paths in disjoint repositories", () => {
+    const exact = checkReservationCompatibility(
+      reservationSet("left", { paths: [{ repository: "bsvalues/repo-a", path: "src/operator.ts" }] }),
+      reservationSet("right", { paths: [{ repository: "bsvalues/repo-b", path: "src/operator.ts" }] }),
+    )
+    expect(exact).toMatchObject({ status: "COMPATIBLE", compatible: true, reasonCodes: [] })
+
+    const ancestor = checkReservationCompatibility(
+      reservationSet("left", { paths: [{ repository: "bsvalues/repo-a", path: "src" }] }),
+      reservationSet("right", { paths: [{ repository: "bsvalues/repo-b", path: "src/operator.ts" }] }),
+    )
+    expect(ancestor).toMatchObject({ status: "COMPATIBLE", compatible: true, reasonCodes: [] })
+  })
+
+  it("preserves exact and ancestor path collisions in overlapping repositories", () => {
+    const exact = checkReservationCompatibility(
+      reservationSet("left", { paths: [{ repository: "bsvalues/shared", path: "src/operator.ts" }] }),
+      reservationSet("right", { paths: [{ repository: "bsvalues/shared", path: "./src/operator.ts" }] }),
+    )
+    expect(exact).toMatchObject({
+      status: "CONFLICT",
+      reasonCodes: ["PATH_EXACT_COLLISION"],
+      conflicts: expect.arrayContaining([expect.objectContaining({
+        reasonCode: "PATH_EXACT_COLLISION",
+        repositoryContext: "bsvalues/shared",
+      })]),
+    })
+
+    const ancestor = checkReservationCompatibility(
+      reservationSet("left", { paths: [{ repository: "bsvalues/shared", path: "src" }] }),
+      reservationSet("right", { paths: [{ repository: "bsvalues/shared", path: "src/operator.ts" }] }),
+    )
+    expect(ancestor).toMatchObject({
+      status: "CONFLICT",
+      reasonCodes: ["PATH_ANCESTOR_COLLISION"],
+      conflicts: expect.arrayContaining([expect.objectContaining({
+        reasonCode: "PATH_ANCESTOR_COLLISION",
+        repositoryContext: "bsvalues/shared",
+      })]),
+    })
+  })
+
+  it("allows disjoint paths in the same repository without a whole-repository claim", () => {
+    const outcome = checkReservationCompatibility(
+      reservationSet("left", { paths: [{ repository: "bsvalues/shared", path: "src/a.ts" }] }),
+      reservationSet("right", { paths: [{ repository: "bsvalues/shared", path: "tests/b.test.ts" }] }),
+    )
+    expect(outcome).toMatchObject({ status: "COMPATIBLE", compatible: true, reasonCodes: [] })
+  })
+
+  it("makes an explicit whole-repository claim conflict with a path claim in that repository", () => {
+    const outcome = checkReservationCompatibility(
+      reservationSet("left", { repositories: ["bsvalues/shared"] }),
+      reservationSet("right", { paths: [{ repository: "bsvalues/shared", path: "src/a.ts" }] }),
+    )
+    expect(outcome).toMatchObject({
+      status: "CONFLICT",
+      compatible: false,
+      reasonCodes: ["REPOSITORY_PATH_COLLISION"],
+      conflicts: [expect.objectContaining({
+        reasonCode: "REPOSITORY_PATH_COLLISION",
+        repositoryContext: "bsvalues/shared",
+      })],
+    })
+
+    const reverse = checkReservationCompatibility(
+      reservationSet("path", { paths: [{ repository: "bsvalues/shared", path: "src/a.ts" }] }),
+      reservationSet("repository", { repositories: ["bsvalues/shared"] }),
+    )
+    expect(reverse.reasonCodes).toEqual(["REPOSITORY_PATH_COLLISION"])
+
+    const disjoint = checkReservationCompatibility(
+      reservationSet("repo-a", { repositories: ["bsvalues/a"] }),
+      reservationSet("path-b", { paths: [{ repository: "bsvalues/b", path: "src/a.ts" }] }),
+    )
+    expect(disjoint).toMatchObject({ status: "COMPATIBLE", compatible: true })
+  })
+
+  it("fails closed symmetrically for whole-repository claims versus legacy implicit paths", () => {
+    const wholeThenImplicit = checkReservationCompatibility(
+      reservationSet("repository", { repositories: ["bsvalues/shared"] }),
+      reservationSet("legacy", { paths: ["src/a.ts"] }),
+    )
+    expect(wholeThenImplicit).toMatchObject({
+      status: "CONFLICT",
+      compatible: false,
+      reasonCodes: ["REPOSITORY_PATH_CONTEXT_UNRESOLVED"],
+      conflicts: [expect.objectContaining({
+        reasonCode: "REPOSITORY_PATH_CONTEXT_UNRESOLVED",
+        repositoryContext: null,
+        implicitRepositoryContext: "@dispatch-repository",
+      })],
+    })
+
+    const implicitThenWhole = checkReservationCompatibility(
+      reservationSet("legacy", { paths: ["src/a.ts"] }),
+      reservationSet("repository", { repositories: ["bsvalues/shared"] }),
+    )
+    expect(implicitThenWhole).toMatchObject({
+      status: "CONFLICT",
+      compatible: false,
+      reasonCodes: ["REPOSITORY_PATH_CONTEXT_UNRESOLVED"],
+    })
+
+    const implicitLegacyPair = checkReservationCompatibility(
+      reservationSet("legacy-a", { paths: ["src"] }),
+      reservationSet("legacy-b", { paths: ["src/a.ts"] }),
+    )
+    expect(implicitLegacyPair).toMatchObject({
+      status: "CONFLICT",
+      reasonCodes: ["PATH_ANCESTOR_COLLISION"],
+    })
+  })
+
+  it("scopes duplicate and self-overlap validation to each path repository", () => {
+    const crossRepository = reservationSet("valid", { paths: [
+      { repository: "bsvalues/a", path: "src" },
+      { repository: "bsvalues/b", path: "src/a.ts" },
+    ] })
+    expect(normalizeReservationSet(crossRepository).valid).toBe(true)
+
+    const sameRepository = reservationSet("invalid", { paths: [
+      { repository: "bsvalues/a", path: "src" },
+      { repository: "bsvalues/a", path: "src/a.ts" },
+    ] })
+    expect(normalizeReservationSet(sameRepository)).toMatchObject({
+      valid: false,
+      diagnostics: [expect.objectContaining({ reasonCode: "SELF_PATH_COLLISION" })],
+    })
+  })
+
+  it("rejects malformed structured paths with stable diagnostics", () => {
+    const malformed = reservationSet("malformed", { paths: [
+      // @ts-expect-error deliberate invalid fixtures
+      { repository: "bsvalues/a" },
+      // @ts-expect-error deliberate invalid fixtures
+      { path: "src/a.ts" },
+      // @ts-expect-error deliberate invalid fixtures
+      undefined,
+    ] })
+    const outcome = normalizeReservationSet(malformed)
+    expect(outcome.valid).toBe(false)
+    expect(outcome.diagnostics).toHaveLength(3)
+    expect(outcome.diagnostics.every(({ reasonCode }) => reasonCode === "INVALID_RESERVATION_VALUE")).toBe(true)
   })
 
   it("rejects duplicates, self-overlapping paths, malformed values and duplicate set identities", () => {

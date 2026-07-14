@@ -111,12 +111,19 @@ No run command, diagnostic, provider repair, approval relay, Git operation, or
 status courier task may be assigned to William. All owner-operation counters,
 including `OWNER_ROUTINE_CONTACT_COUNT`, must remain zero.
 
-The local OMEN runtime loop is terminal, non-selectable, and disabled. Issue
-#357 will not be retried, and #358 remains dependency-blocked. Supported hosted
+The local OMEN runtime loop is terminal, non-selectable, and disabled.
+Issue #357 will not be retried, and #358 remains dependency-blocked. Supported hosted
 Codex team work does not depend on that rejected adapter.
 
 Canonical playbook:
 `docs/governance/multi-agent-operator-playbook.md`
+
+Current transition: the Phase 1 hosted proof through `WO-MAO-015` is complete.
+Original-builder remediations passed independent re-review in integration
+PR #366 at prior remote head `217d998b`, and both substantive legacy threads are resolved. Latest local
+assurance head `44ee48e` adds the mixed-context path remediation; that local identity is not claimed as
+a published PR head. The
+resolver selects `WO-MAO-016`.
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
@@ -180,13 +187,11 @@ Current status:
 
 ## Current Continuation Order
 
-1. Complete and validate Phase 0 executable truth and preventive controls.
-2. Run the Phase 1 hosted Codex team proof with two independent builders and
-   independent assurance.
-3. Release and execute its dependent fan-in Work Order automatically.
-4. Continue through the machine contracts, scheduler, provider federation,
+1. Preserve the completed Phase 0 executable truth and preventive controls.
+2. Preserve the completed Phase 1 hosted proof and post-merge remediation evidence.
+3. Continue at `WO-MAO-016` through the machine contracts, scheduler, provider federation,
    GitHub delivery, resilience, and certification phases.
-5. Keep useful independent R0/R1 product lanes moving whenever dependencies and
+4. Keep useful independent R0/R1 product lanes moving whenever dependencies and
    reservations permit.
 
 The rejected local runtime remains disabled and is not a continuation gate.

@@ -1,6 +1,6 @@
 # WO-MAO-008/009/010 — Hosted Codex Lane A Evidence
 
-Status: `REMEDIATED / INDEPENDENT_RE-REVIEW_REQUESTED`
+Status: `INDEPENDENT_REVIEW_PASS / FOLLOW_UP_PR_366_PENDING_MERGE`
 
 ## Execution identity
 
@@ -11,6 +11,9 @@ Status: `REMEDIATED / INDEPENDENT_RE-REVIEW_REQUESTED`
 - Started at (UTC): `2026-07-14T15:41:32Z`
 - Initial implementation completed at (UTC): `2026-07-14T15:47:02Z`
 - Assurance remediation completed at (UTC): `2026-07-14T15:56:39Z`
+- Post-merge P1 remediation started at (UTC): `2026-07-14T16:14:31Z`
+- Post-merge P1 remediation completed at (UTC): `2026-07-14T16:15:22Z`
+- Review-state evidence reconciled at (UTC): `2026-07-14T16:46:23Z`
 - Local runtime activation: `false`
 - Provider credential access: `false`
 - Push performed by builder: `false`
@@ -48,7 +51,9 @@ No file outside this reservation was modified.
 - Coordinator, builder, and reviewer identities must be distinct.
 - Preferred and fallback provider sets cannot overlap.
 - Allowed and forbidden actions cannot overlap; unsupported actions fail closed.
-- Owner contact cannot appear in allowed actions while `ownerOperationsAllowed=false`.
+- Owner contact and privileged credential, runtime activation, production-write, branch-protection
+  bypass, and destructive-Git actions cannot appear in allowed actions while
+  `ownerOperationsAllowed=false`.
 - Merge-mode/action pairs fail closed: `NO_MERGE` has no PR-lifecycle action,
   `DRAFT_PR_ONLY` requires draft creation and forbids merge, and `ASSURANCE_GATED` requires the
   eligible-merge action.
@@ -60,6 +65,7 @@ No file outside this reservation was modified.
 
 - Focused test after initial implementation: `27 passed / 27 total`
 - Focused test after assurance remediation: `33 passed / 33 total`
+- Focused test after post-merge P1 remediation: `38 passed / 38 total`
 - Focused lint: `PASS` (React package-detection warning only; no lint findings)
 - `git diff --check`: `PASS`
 - Secret or raw provider-output inspection: `NOT PERFORMED`
@@ -74,8 +80,23 @@ four within the original reservation:
 3. Reservation paths reject Unicode control and format characters, including NUL and newline.
 4. Direct and CLI success results now carry `validationOnly=true` and `authorityGranted=false`.
 
-Exact regression tests cover each assurance finding. Independent re-review is requested against the
-second scoped commit; this builder does not self-approve the remediation.
+Exact regression tests cover each assurance finding. Independent re-review passed and its
+remediation threads were resolved; the evidence records that external verdict rather than a builder
+self-approval.
+
+## Post-merge P1 remediation
+
+PR `#365` assurance identified that five privileged actions not prefixed with `OWNER_` could still
+enter `allowedActions` in a zero-owner envelope. The validator now uses one explicit protected-action
+set for `OWNER_CONTACT`, `CREDENTIAL_ACCESS`, `RUNTIME_ACTIVATION`, `PRODUCTION_WRITE`,
+`BRANCH_PROTECTION_BYPASS`, and `DESTRUCTIVE_GIT`, while retaining prefix denial for future
+`OWNER_*` actions. A table-driven regression executes every protected action independently and
+expects `DISPATCH_ENVELOPE_OWNER_OPERATION_WALL`.
+
+Final independent re-review passed after the P1 remediation, and the remediation threads were
+resolved. Follow-up PR `#366` carries the latest integrated remediation and this evidence correction;
+CodeRabbit thread `PRRT_kwDOOfTWK86Q07J-` is dispositioned by this status reconciliation. PR `#366`
+remains pending merge at the time of this record and is not represented here as merged.
 
 ## Owner-operation counters
 

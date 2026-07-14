@@ -15,8 +15,9 @@ WilliamOS worker merely because it is present or useful.
 The inventory is fail-closed. A capability may dispatch only when its machine record is an
 `EXECUTABLE_WORKER`, its status is `PROVEN` or narrowly `PILOT_AUTHORIZED`, and it contains a conformant
 adapter reference, exact active authority evidence, and the implemented preventive trust-gate reference.
-No current provider record meets that complete adapter contract. The current hosted Codex session may
-still coordinate the bounded Phase 1 proof; coordination availability is not WilliamOS dispatch eligibility.
+No current provider record meets that complete adapter contract. The hosted Codex session and native
+subagent team proved bounded R1 coordination through independent post-merge remediation re-review; that
+bounded status remains separate from WilliamOS dispatch eligibility.
 
 ## Status vocabulary
 
@@ -42,8 +43,8 @@ Execution class is independent of status:
 | Codex operator decision model | `PROVEN` | `NON_EXECUTABLE` | The completed predecessor models continuation and delivery gates; it is not a transport. |
 | Serial operational kernel | `PROVEN` | `NON_EXECUTABLE` | The implementation and bounded lifecycle are tested, but its provider path is rejected and it is not multi-agent. |
 | Local nested Codex adapter | `REJECTED` | `WORKER_CANDIDATE` | `CODEX_NETWORK_WALL`; terminal quarantine, no dispatch, retry, reactivation, wrapping, or silent reuse. |
-| Supported hosted Codex session | `PILOT_AUTHORIZED` | `WORKER_CANDIDATE` | Current-session coordination is eligible for Phase 1; WilliamOS registry dispatch remains denied. |
-| Codex native coordinator and subagents | `PILOT_AUTHORIZED` | `WORKER_CANDIDATE` | Native team coordination is eligible; no durable adapter or executable-worker claim is made. |
+| Supported hosted Codex session | `PROVEN` | `WORKER_CANDIDATE` | Bounded coordination and remediation re-review passed; durable WilliamOS dispatch remains denied. |
+| Codex native coordinator and subagents | `PROVEN` | `WORKER_CANDIDATE` | Native fan-out, remediation, and fan-in are proven; no durable adapter or atomic reservation claim is made. |
 | Claude Code provider lane | `UNAVAILABLE` | `WORKER_CANDIDATE` | No authenticated supported surface or conformant adapter is evidenced. |
 | Brain Council advisory surface | `PROVEN` | `NON_EXECUTABLE` | Static advisory and decision-packet read model only. |
 | Agent Forge governance surface | `PROVEN` | `NON_EXECUTABLE` | Skill governance, review, and quarantine read models only. |
@@ -55,8 +56,8 @@ Execution class is independent of status:
 - `PROVEN` modifies only the claim in that record. It never promotes a neighboring worker claim.
 - A tested kernel with a rejected adapter is not an active worker.
 - Provider availability, authentication, adapter conformance, authority, and trust controls are separate gates.
-- `coordinationEligible` permits only current supported-session team coordination; it never implies
-  WilliamOS registry dispatch or a durable adapter.
+- `coordinationEligible` records bounded supported-session team coordination; it never implies
+  WilliamOS registry dispatch, a durable adapter, or atomic reservation acquisition.
 - Brain Council, Agent Forge, Hermes, and named agent roles cannot be shown as active workers without an
   `EXECUTABLE_WORKER` record.
 - Claude unavailability becomes `PROVIDER_UNAVAILABLE`; William is not asked to launch, authenticate, or

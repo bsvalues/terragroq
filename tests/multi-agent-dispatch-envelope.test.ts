@@ -118,7 +118,6 @@ describe("hosted-team dispatch envelope", () => {
     ["base repository mismatch", (value: ReturnType<typeof validEnvelope>) => { value.baseRefs[0].repository = "bsvalues/wrong" }, "DISPATCH_ENVELOPE_BASE_REF_WALL", "baseRefs"],
     ["partial base ref", (value: ReturnType<typeof validEnvelope>) => { value.baseRefs[0].ref = "main" }, "DISPATCH_ENVELOPE_BASE_REF_WALL", "baseRefs[0].ref"],
     ["overlapping actions", (value: ReturnType<typeof validEnvelope>) => { value.forbiddenActions.push("RUN_VALIDATION") }, "DISPATCH_ENVELOPE_CONTRADICTION_WALL", "allowedActions"],
-    ["owner contact action", (value: ReturnType<typeof validEnvelope>) => { value.allowedActions.push("OWNER_CONTACT") }, "DISPATCH_ENVELOPE_OWNER_OPERATION_WALL", "allowedActions"],
     ["unsupported action", (value: ReturnType<typeof validEnvelope>) => { value.allowedActions.push("DO_ANYTHING") }, "DISPATCH_ENVELOPE_ACTION_WALL", "allowedActions"],
     ["retry attempts below bound", (value: ReturnType<typeof validEnvelope>) => { value.retryBudget.maxAttempts = 0 }, "DISPATCH_ENVELOPE_RETRY_BUDGET_WALL", "retryBudget.maxAttempts"],
     ["retry attempts above bound", (value: ReturnType<typeof validEnvelope>) => { value.retryBudget.maxAttempts = 6 }, "DISPATCH_ENVELOPE_RETRY_BUDGET_WALL", "retryBudget.maxAttempts"],
@@ -132,6 +131,19 @@ describe("hosted-team dispatch envelope", () => {
     ["reviewer not independent", (value: ReturnType<typeof validEnvelope>) => { value.reviewRequirements.independentReviewer = false }, "DISPATCH_ENVELOPE_REVIEW_WALL", "reviewRequirements.independentReviewer"],
   ])("rejects %s", (_name, mutate, code, field) => {
     expectWall(mutate, code, field)
+  })
+
+  it.each([
+    "OWNER_CONTACT",
+    "CREDENTIAL_ACCESS",
+    "RUNTIME_ACTIVATION",
+    "PRODUCTION_WRITE",
+    "BRANCH_PROTECTION_BYPASS",
+    "DESTRUCTIVE_GIT",
+  ])("rejects the protected %s action in a zero-owner envelope", (action) => {
+    expectWall((value) => {
+      value.allowedActions.push(action)
+    }, "DISPATCH_ENVELOPE_OWNER_OPERATION_WALL", "allowedActions")
   })
 
   it.each([

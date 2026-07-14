@@ -20,8 +20,12 @@ const CONFLICT_REASON_ORDER = Object.freeze([
   "CONTRACT_COLLISION",
   "ENVIRONMENT_COLLISION",
   "REPOSITORY_COLLISION",
+  "REPOSITORY_PATH_CONTEXT_UNRESOLVED",
+  "REPOSITORY_PATH_COLLISION",
   "PROTECTED_RESOURCE_COLLISION",
 ])
+
+const IMPLICIT_REPOSITORY = "@dispatch-repository"
 
 export class ReservationSetError extends Error {
   constructor(code, detail = code) {
@@ -80,6 +84,69 @@ function diagnostic(reasonCode, set, kind, values, detail = {}) {
   })
 }
 
+function normalizePathReservation(raw) {
+  if (typeof raw === "string") {
+    const path = normalizeRelativePath(raw)
+    return path === null ? null : Object.freeze({ repository: IMPLICIT_REPOSITORY, path })
+  }
+  if (!plainObject(raw)) return null
+  const repository = normalizeIdentity(raw.repository)
+  const path = normalizeRelativePath(raw.path)
+  return repository === null || path === null ? null : Object.freeze({ repository, path })
+}
+
+function pathReservationKey(value) {
+  return `${value.repository}\0${value.path}`
+}
+
+function pathReservationLabel(value) {
+  return `${value.repository}:${value.path}`
+}
+
+function rawValueLabel(value) {
+  if (typeof value === "string") return value
+  const serialized = JSON.stringify(value)
+  return serialized === undefined ? String(value) : serialized
+}
+
+function normalizePaths(set, values, invalid) {
+  const normalized = []
+  for (const raw of values) {
+    const value = normalizePathReservation(raw)
+    if (value === null) {
+      invalid.push(diagnostic("INVALID_RESERVATION_VALUE", set, "PATH",
+        [rawValueLabel(raw)], { field: "paths" }))
+    } else {
+      normalized.push(value)
+    }
+  }
+
+  const counts = new Map()
+  for (const value of normalized) {
+    const key = pathReservationKey(value)
+    const entry = counts.get(key) ?? { value, count: 0 }
+    entry.count += 1
+    counts.set(key, entry)
+  }
+  for (const { value, count } of counts.values()) {
+    if (count > 1) invalid.push(diagnostic("DUPLICATE_RESERVATION", set, "PATH",
+      [pathReservationLabel(value)], { count }))
+  }
+
+  const unique = [...counts.values()].map(({ value }) => value).sort((left, right) =>
+    stableCompare(left.repository, right.repository) || stableCompare(left.path, right.path))
+  for (let left = 0; left < unique.length; left += 1) {
+    for (let right = left + 1; right < unique.length; right += 1) {
+      if (unique[left].repository === unique[right].repository
+        && pathRelation(unique[left].path, unique[right].path) === "ANCESTOR") {
+        invalid.push(diagnostic("SELF_PATH_COLLISION", set, "PATH",
+          [pathReservationLabel(unique[left]), pathReservationLabel(unique[right])]))
+      }
+    }
+  }
+  return unique
+}
+
 function normalizeKind(set, field, label, invalid) {
   const values = set.reservations[field]
   if (!Array.isArray(values)) {
@@ -87,12 +154,14 @@ function normalizeKind(set, field, label, invalid) {
     return []
   }
 
+  if (field === "paths") return normalizePaths(set, values, invalid)
+
   const normalized = []
   for (const raw of values) {
-    const value = field === "paths" ? normalizeRelativePath(raw) : normalizeIdentity(raw)
+    const value = normalizeIdentity(raw)
     if (value === null || value === "") {
       invalid.push(diagnostic("INVALID_RESERVATION_VALUE", set, label,
-        [typeof raw === "string" ? raw : JSON.stringify(raw)], { field }))
+        [rawValueLabel(raw)], { field }))
     } else {
       normalized.push(value)
     }
@@ -105,15 +174,6 @@ function normalizeKind(set, field, label, invalid) {
   }
 
   const unique = [...counts.keys()].sort(stableCompare)
-  if (field === "paths") {
-    for (let left = 0; left < unique.length; left += 1) {
-      for (let right = left + 1; right < unique.length; right += 1) {
-        if (pathRelation(unique[left], unique[right]) === "ANCESTOR") {
-          invalid.push(diagnostic("SELF_PATH_COLLISION", set, label, [unique[left], unique[right]]))
-        }
-      }
-    }
-  }
   return unique
 }
 
@@ -155,7 +215,7 @@ export function normalizeReservationSet(input) {
   })
 }
 
-function conflict(reasonCode, kind, leftSet, rightSet, leftValue, rightValue) {
+function conflict(reasonCode, kind, leftSet, rightSet, leftValue, rightValue, detail = {}) {
   return Object.freeze({
     reasonCode,
     kind,
@@ -163,6 +223,7 @@ function conflict(reasonCode, kind, leftSet, rightSet, leftValue, rightValue) {
     rightReservationSetId: rightSet.reservationSetId,
     leftValue,
     rightValue,
+    ...detail,
   })
 }
 
@@ -189,10 +250,12 @@ export function checkReservationCompatibility(leftInput, rightInput) {
     const rightSet = right.reservationSet
     for (const leftPath of leftSet.reservations.paths) {
       for (const rightPath of rightSet.reservations.paths) {
-        const relation = pathRelation(leftPath, rightPath)
+        if (leftPath.repository !== rightPath.repository) continue
+        const relation = pathRelation(leftPath.path, rightPath.path)
         if (relation) conflicts.push(conflict(
           relation === "EXACT" ? "PATH_EXACT_COLLISION" : "PATH_ANCESTOR_COLLISION",
-          "PATH", leftSet, rightSet, leftPath, rightPath,
+          "PATH", leftSet, rightSet, leftPath.path, rightPath.path,
+          { repositoryContext: leftPath.repository },
         ))
       }
     }
@@ -201,6 +264,30 @@ export function checkReservationCompatibility(leftInput, rightInput) {
       for (const value of leftSet.reservations[field]) {
         if (rightValues.has(value)) conflicts.push(conflict(
           `${label}_COLLISION`, label, leftSet, rightSet, value, value,
+        ))
+      }
+    }
+    for (const repository of leftSet.reservations.repositories) {
+      for (const path of rightSet.reservations.paths) {
+        if (path.repository === IMPLICIT_REPOSITORY) conflicts.push(conflict(
+          "REPOSITORY_PATH_CONTEXT_UNRESOLVED", "REPOSITORY_PATH", leftSet, rightSet, repository, path.path,
+          { repositoryContext: null, implicitRepositoryContext: IMPLICIT_REPOSITORY },
+        ))
+        else if (repository === path.repository) conflicts.push(conflict(
+          "REPOSITORY_PATH_COLLISION", "REPOSITORY_PATH", leftSet, rightSet, repository, path.path,
+          { repositoryContext: repository },
+        ))
+      }
+    }
+    for (const path of leftSet.reservations.paths) {
+      for (const repository of rightSet.reservations.repositories) {
+        if (path.repository === IMPLICIT_REPOSITORY) conflicts.push(conflict(
+          "REPOSITORY_PATH_CONTEXT_UNRESOLVED", "REPOSITORY_PATH", leftSet, rightSet, path.path, repository,
+          { repositoryContext: null, implicitRepositoryContext: IMPLICIT_REPOSITORY },
+        ))
+        else if (path.repository === repository) conflicts.push(conflict(
+          "REPOSITORY_PATH_COLLISION", "REPOSITORY_PATH", leftSet, rightSet, path.path, repository,
+          { repositoryContext: repository },
         ))
       }
     }
