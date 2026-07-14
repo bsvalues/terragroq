@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url"
 
 import { createNativeAdapters } from "./native-adapters.mjs"
 import { runOperationalKernelCycle } from "./operational-kernel.mjs"
+import { assertLegacyAuthorityRevocations } from "../multi-agent-operator/authority-events.mjs"
 
 function option(name, fallback) {
   const index = process.argv.indexOf(name)
@@ -17,6 +18,20 @@ const root = path.resolve(option("--root", path.join(process.env.USERPROFILE, ".
 const registryPath = path.resolve(option("--registry", path.join(repositoryPath, "runtime-operator", "native", "authority-registry.json")))
 const registry = JSON.parse(fs.readFileSync(registryPath, "utf8"))
 const adapters = createNativeAdapters({ root, repositoryPath, scriptsPath: path.join(repositoryPath, "scripts", "local") })
+adapters.verifyOwnerRevocationEvent = async (expected) => {
+  try {
+    const authorityRoot = path.join(root, "authority")
+    return assertLegacyAuthorityRevocations({
+      events: JSON.parse(fs.readFileSync(path.join(authorityRoot, "legacy-revocation-events.json"), "utf8")),
+      trustedOwners: JSON.parse(fs.readFileSync(path.join(authorityRoot, "trusted-owner-keys.json"), "utf8")),
+      trustedOwnerKeyFingerprint: registry.adapter?.revocationEvent?.ownerKeyFingerprint,
+      trustedOwnerBundleContentHash: registry.adapter?.revocationEvent?.trustBundleContentHash,
+      expected: { ...expected, authorityRecordIds: expected.workOrderIds },
+    })
+  } catch {
+    throw new Error("OWNER_REVOCATION_EVENT_VERIFIER_WALL")
+  }
+}
 
 try {
   const result = await runOperationalKernelCycle({ root, registry, adapters })
@@ -31,9 +46,9 @@ try {
   if (result.ownerDecisionRequired) process.exitCode = 2
 } catch (error) {
   const message = String(error?.message ?? error)
-  const wall = message.match(/[A-Z][A-Z0-9_]+_WALL/)?.[0] ?? "OPERATIONAL_KERNEL_WALL"
+  const wall = message.match(/QUARANTINED_TERMINAL|[A-Z][A-Z0-9_]+_WALL/)?.[0] ?? "OPERATIONAL_KERNEL_WALL"
   process.stderr.write(`${wall}\n`)
-  process.exitCode = /(?:AUTHORITY_(?:ACTIVATION|OWNER_GATE)_WALL|CODEX_AUTHORITY_WALL|GITHUB_AUTHORITY_WALL|RUNTIME_READINESS_WALL)/.test(wall)
+  process.exitCode = /(?:AUTHORITY_(?:ACTIVATION|OWNER_GATE)_WALL|OWNER_REVOCATION_EVENT_VERIFIER_WALL|CODEX_AUTHORITY_WALL|GITHUB_AUTHORITY_WALL|RUNTIME_READINESS_WALL)/.test(wall)
     ? 2
     : /CODEX_(?:NETWORK|RATE_LIMIT)_WALL|PROCESS_WALL:(?:gh|git)/.test(message) ? 3 : 1
 }
