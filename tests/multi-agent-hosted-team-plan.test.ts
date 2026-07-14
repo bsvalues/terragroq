@@ -90,6 +90,47 @@ describe("hosted team fan-in planner", () => {
     })
   })
 
+  it("preserves structured repository context for path compatibility", () => {
+    const sameRepository = envelope("WO-MAO-010", "LANE-MAO-A", ["scripts/shared.mjs"])
+    const sameRepositoryCollision = envelope("WO-MAO-011", "LANE-MAO-B", ["scripts/shared.mjs"])
+    expect(planHostedTeamWave(input([sameRepository, sameRepositoryCollision]))).toMatchObject({
+      selected: [{ workOrderId: "WO-MAO-010" }],
+      blocked: [{
+        workOrderId: "WO-MAO-011",
+        reasonCode: "RESERVATION_CONFLICT",
+        collisions: [{ reasonCodes: ["PATH_EXACT_COLLISION"] }],
+      }],
+    })
+
+    const differentRepository = envelope("WO-MAO-011", "LANE-MAO-B", ["scripts/shared.mjs"])
+    differentRepository.repositories = ["bsvalues/other"]
+    differentRepository.baseRefs = [{
+      repository: "bsvalues/other",
+      ref: "refs/heads/main",
+      commitSha: BASE_SHA,
+    }]
+    differentRepository.reservations.paths = [{
+      repository: "bsvalues/other",
+      path: "scripts/shared.mjs",
+    }]
+    expect(planHostedTeamWave(input([sameRepository, differentRepository]))).toMatchObject({
+      selected: [
+        { workOrderId: "WO-MAO-010" },
+        { workOrderId: "WO-MAO-011" },
+      ],
+      blocked: [],
+    })
+  })
+
+  it("does not inflate repository membership into a whole-repository claim", () => {
+    const left = envelope("WO-MAO-010", "LANE-MAO-A", ["scripts/a.mjs"])
+    const right = envelope("WO-MAO-011", "LANE-MAO-B", ["scripts/b.mjs"])
+    expect(planHostedTeamWave(input([left, right]))).toMatchObject({
+      selected: [{ workOrderId: "WO-MAO-010" }, { workOrderId: "WO-MAO-011" }],
+      blocked: [],
+    })
+  })
+
   it("releases a dependent only after both fan-in dependencies are complete", () => {
     const fanIn = envelope("WO-MAO-012", "LANE-MAO-C", ["scripts/multi-agent-operator/hosted-team-plan.mjs"], [
       "WO-MAO-010", "WO-MAO-011",
@@ -137,6 +178,18 @@ describe("hosted team fan-in planner", () => {
       selected: [],
       blocked: [{ reasonCode: "DEPENDENCY_INCOMPLETE", fanInGate: "ALL" }],
     })
+
+    for (const fanInGate of ["ANY", "ALL"]) {
+      const rootCandidate = envelope("WO-MAO-010", `LANE-MAO-ROOT-${fanInGate}`, [
+        `scripts/root-${fanInGate.toLowerCase()}.mjs`,
+      ], [])
+      rootCandidate.fanInGate = fanInGate
+      expect(planHostedTeamWave(input([rootCandidate], []))).toMatchObject({
+        status: "WAVE_READY",
+        selected: [{ workOrderId: "WO-MAO-010", laneId: `LANE-MAO-ROOT-${fanInGate}` }],
+        blocked: [],
+      })
+    }
   })
 
   it("rejects internally invalid reservation sets before admitting a first candidate", () => {

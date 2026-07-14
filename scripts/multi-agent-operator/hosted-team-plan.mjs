@@ -47,7 +47,7 @@ function reservationSetFor(envelope) {
     workerId: envelope.teamRoles.builder,
     workOrderId: envelope.workOrderId,
     reservations: {
-      paths: envelope.reservations.paths.map(({ repository, path }) => `${repository}/${path}`),
+      paths: envelope.reservations.paths.map(({ repository, path }) => ({ repository, path })),
       contracts: [...envelope.reservations.contracts],
       environments: [...envelope.reservations.environments],
       repositories: [],
@@ -135,7 +135,7 @@ export function planHostedTeamWave(input) {
       .sort(stableCompare)
     const dependencyGateSatisfied = candidate.envelope.fanInGate === "ALL"
       ? incompleteDependencies.length === 0
-      : candidate.envelope.dependencies.length > 0 && completedDependencies.length > 0
+      : candidate.envelope.dependencies.length === 0 || completedDependencies.length > 0
     if (!dependencyGateSatisfied) {
       blocked.push(block(candidate, "DEPENDENCY_INCOMPLETE", {
         fanInGate: candidate.envelope.fanInGate,

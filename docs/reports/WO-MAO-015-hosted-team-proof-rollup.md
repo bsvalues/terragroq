@@ -30,7 +30,10 @@ post-merge remediation through independent re-review.
 - strict, canonical dispatch-envelope validation;
 - deterministic reservation compatibility with deliberate collision proof;
 - deterministic dependency-cleared, reservation-compatible wave planning with exact `ALL`/`ANY`
-  gates, derived-set self-validation, and stable lane assignment;
+  gates, root eligibility for empty dependency sets, structured per-path repository context,
+  derived-set self-validation, and stable lane assignment;
+- repository membership remains context rather than an inferred whole-repository reservation; explicit
+  whole-repository claims remain a separate reservation-set contract;
 - typed `DEPENDENCY_INCOMPLETE`, `RESERVATION_CONFLICT`, and invalid-envelope outcomes;
 - explicit non-claims for dispatch, authority, atomic acquisition, persistence, lease, or durable runtime.
 

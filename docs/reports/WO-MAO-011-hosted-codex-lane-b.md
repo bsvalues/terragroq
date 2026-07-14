@@ -51,7 +51,27 @@ No runtime activation, provider authentication, credential inspection, owner con
 - Remediation started UTC: `2026-07-14T16:14:36Z`
 - Remediation completed UTC: `2026-07-14T16:15:23Z`
 - Finding: repository-relative path strings were compared globally, which could falsely collide identical paths reserved in disjoint repositories.
-- Resolution: exact and ancestor/descendant path identity is now scoped to overlapping repository context. Disjoint explicit repositories are compatible; shared repositories and conservative implicit dispatch-repository context preserve collision detection.
+- Interim resolution: exact and ancestor/descendant path identity was scoped using the `repositories` collection. PR #366 assurance later found that this overloaded whole-repository claims as path context; the redesign below supersedes it.
 - Regression coverage: equal paths in disjoint repositories, ancestor-related paths in disjoint repositories, equal paths in a shared repository, and ancestor-related paths in a shared repository.
 - Remediation validation: focused Vitest PASS, 1 file and 16 tests; both Node syntax checks PASS; `git diff --check` PASS.
+- Reservation and all five zero owner-operation counters above remain unchanged.
+
+## PR #366 assurance remediation
+
+- Remediation started UTC: `2026-07-14T16:36:32Z`
+- Remediation completed UTC: `2026-07-14T16:38:50Z`
+- Finding: using `reservations.repositories` as path context made two disjoint paths in one repository incompatible because repository equality independently means a whole-repository reservation.
+- Resolution: a path is now either a standalone string in implicit `@dispatch-repository` context or `{ repository, path }` with explicit per-path context. `reservations.repositories` exclusively represents whole-repository claims.
+- Whole-repository semantics: repo/repo equality retains `REPOSITORY_COLLISION`; a whole-repository claim against a path in that repository emits `REPOSITORY_PATH_COLLISION`.
+- Adversarial coverage: different repositories with the same path, same repository with disjoint paths, same repository with exact and ancestor overlaps, whole-repository versus path claims, and repository-scoped duplicate/self-overlap validation.
+- Remediation validation: focused Vitest PASS, 1 file and 20 tests; both Node syntax checks PASS; `git diff --check` PASS.
+- Reservation and all five zero owner-operation counters above remain unchanged.
+
+## PR #366 mixed-context assurance follow-up
+
+- Follow-up started UTC: `2026-07-14T16:42:01Z`
+- Follow-up completed UTC: `2026-07-14T16:42:52Z`
+- Finding: an explicit whole-repository claim compared with an accepted legacy string path had no resolvable common repository identity and returned compatible.
+- Resolution: mixed whole-repository/implicit-path comparisons now fail closed symmetrically as typed `CONFLICT` with `REPOSITORY_PATH_CONTEXT_UNRESOLVED`. Structured path comparisons retain exact repository semantics, and implicit-path versus implicit-path legacy collision behavior is unchanged.
+- Regression validation: focused Vitest PASS, 1 file and 21 tests; both Node syntax checks PASS; `git diff --check` PASS.
 - Reservation and all five zero owner-operation counters above remain unchanged.
