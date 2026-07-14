@@ -1,10 +1,28 @@
 {
   "schemaVersion": 1,
   "repository": "bsvalues/terragroq",
+  "adapter": {
+    "adapterId": "local-nested-codex-exec",
+    "state": "QUARANTINED_TERMINAL",
+    "dispatchAllowed": false,
+    "retryAllowed": false,
+    "terminalIssueNumber": 357,
+    "terminalReason": "CODEX_NETWORK_WALL",
+    "revocationEvent": {
+      "required": true,
+      "status": "PENDING_OWNER_SIGNED_EVENT",
+      "eventId": null
+    }
+  },
   "workOrders": [
     {
       "workOrderId": "WO-RUNTIME-KERNEL-PILOT-001",
-      "authority": "APPROVED",
+      "adapterId": "local-nested-codex-exec",
+      "authority": "REVOKED_TERMINAL",
+      "executionAllowed": false,
+      "retryAllowed": false,
+      "terminalIssueNumber": 357,
+      "terminalReason": "CODEX_NETWORK_WALL",
       "riskClass": "R0",
       "dependencies": [],
       "ownerGateRequired": false,
@@ -24,7 +42,14 @@
     },
     {
       "workOrderId": "WO-RUNTIME-KERNEL-CONTINUATION-001",
-      "authority": "APPROVED",
+      "adapterId": "local-nested-codex-exec",
+      "authority": "REVOKED_TERMINAL",
+      "executionAllowed": false,
+      "retryAllowed": false,
+      "blockedByIssueNumber": 357,
+      "blockedIssueNumber": 358,
+      "blockedState": "BLOCKED_DEPENDENCY",
+      "dependencyTerminal": true,
       "riskClass": "R0",
       "dependencies": [
         "WO-RUNTIME-KERNEL-PILOT-001"

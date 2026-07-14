@@ -9,6 +9,11 @@ const FORBIDDEN_PATH = /^(?:\.github\/workflows\/|app\/api\/auth\/|app\/api\/set
 const SECRET_VALUE = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{20,}\b|\bgh[oprsu]_[A-Za-z0-9]{20,}\b|(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s]+|(?:password|token|api[_ -]?key|client[_ -]?secret)\s*[:=]\s*["']?[^\s"']{12,})/i
 const MAX_CHANGED_FILES = 20
 const MAX_PATCH_BYTES = 262_144
+const LEGACY_ADAPTER_ID = "local-nested-codex-exec"
+const LEGACY_WORK_ORDER_IDS = new Set([
+  "WO-RUNTIME-KERNEL-PILOT-001",
+  "WO-RUNTIME-KERNEL-CONTINUATION-001",
+])
 
 function atomicWrite(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -78,6 +83,40 @@ function validateAuthorityRecord(record) {
   if (!Array.isArray(record.allowedPaths) || record.allowedPaths.length === 0) throw new Error("AUTHORITY_PATH_WALL")
   if (record.allowedPaths.some((candidate) => typeof candidate !== "string" || candidate.startsWith("/") || candidate.includes("\\") || candidate.split("/").includes("..") || FORBIDDEN_PATH.test(candidate))) throw new Error("AUTHORITY_PATH_WALL")
   if (!Array.isArray(record.requiredValidation) || record.requiredValidation.length === 0 || record.requiredValidation.some((gate) => !ALLOWED_VALIDATION.has(gate))) throw new Error("AUTHORITY_VALIDATION_WALL")
+}
+
+export async function assertLegacyAdapterDispatchAllowed(registry, verifyOwnerRevocationEvent) {
+  const adapter = registry.adapter
+  const records = registry.workOrders.filter((record) =>
+    record.adapterId === LEGACY_ADAPTER_ID || LEGACY_WORK_ORDER_IDS.has(record.workOrderId))
+  if (!adapter && records.length === 0) return
+
+  const quarantineIntact = adapter?.adapterId === LEGACY_ADAPTER_ID
+    && adapter.state === "QUARANTINED_TERMINAL"
+    && adapter.dispatchAllowed === false
+    && adapter.retryAllowed === false
+    && adapter.terminalIssueNumber === 357
+    && adapter.terminalReason === "CODEX_NETWORK_WALL"
+    && records.length === 2
+    && records.every((record) => LEGACY_WORK_ORDER_IDS.has(record.workOrderId)
+      && record.adapterId === LEGACY_ADAPTER_ID
+      && record.authority === "REVOKED_TERMINAL"
+      && record.executionAllowed === false
+      && record.retryAllowed === false)
+
+  if (!quarantineIntact) throw new Error("LEGACY_ADAPTER_QUARANTINE_INTEGRITY_WALL")
+
+  if (verifyOwnerRevocationEvent) {
+    const verification = await verifyOwnerRevocationEvent({
+      adapterId: LEGACY_ADAPTER_ID,
+      terminalIssueNumber: 357,
+      terminalReason: "CODEX_NETWORK_WALL",
+      workOrderIds: records.map((record) => record.workOrderId),
+    })
+    if (verification?.status !== "VERIFIED_REVOKED") throw new Error("OWNER_REVOCATION_EVENT_VERIFIER_WALL")
+  }
+
+  throw new Error("QUARANTINED_TERMINAL")
 }
 
 export function selectEligibleWorkOrder(registry, queue) {
@@ -167,6 +206,7 @@ async function completionResult({ checkpoint, registry, adapters }) {
 }
 
 async function runCycle({ root, registry, adapters }) {
+  await assertLegacyAdapterDispatchAllowed(registry, adapters.verifyOwnerRevocationEvent)
   let checkpoint = readJson(path.join(root, "state", "kernel-checkpoint.json"))
   if (checkpoint?.state === "BLOCKED" || checkpoint?.state === "FAILED_TERMINAL") return checkpoint
   if (checkpoint?.state === "FAILED_RECOVERABLE" && Date.parse(checkpoint.nextAttemptAt) > Date.now()) {

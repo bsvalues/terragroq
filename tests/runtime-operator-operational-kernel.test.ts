@@ -3,13 +3,83 @@ import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { runOperationalKernelCycle, selectEligibleWorkOrder } from "@/scripts/runtime-operator/operational-kernel.mjs"
+import { assertLegacyAdapterDispatchAllowed, runOperationalKernelCycle, selectEligibleWorkOrder } from "@/scripts/runtime-operator/operational-kernel.mjs"
 
 describe("WilliamOS operational kernel", () => {
   const roots: string[] = []
 
   afterEach(() => {
     for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  it("rejects the quarantined legacy adapter before any dispatch side effect", async () => {
+    const registry = {
+      schemaVersion: 1,
+      repository: "bsvalues/terragroq",
+      adapter: {
+        adapterId: "local-nested-codex-exec",
+        state: "QUARANTINED_TERMINAL",
+        dispatchAllowed: false,
+        retryAllowed: false,
+        terminalIssueNumber: 357,
+        terminalReason: "CODEX_NETWORK_WALL",
+      },
+      workOrders: [
+        {
+          workOrderId: "WO-RUNTIME-KERNEL-PILOT-001",
+          adapterId: "local-nested-codex-exec",
+          authority: "REVOKED_TERMINAL",
+          executionAllowed: false,
+          retryAllowed: false,
+        },
+        {
+          workOrderId: "WO-RUNTIME-KERNEL-CONTINUATION-001",
+          adapterId: "local-nested-codex-exec",
+          authority: "REVOKED_TERMINAL",
+          executionAllowed: false,
+          retryAllowed: false,
+        },
+      ],
+    }
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-kernel-quarantine-"))
+    roots.push(root)
+    const sideEffects: string[] = []
+    const adapters = {
+      assertRuntime: async () => sideEffects.push("readiness"),
+      listQueue: async () => { sideEffects.push("queue"); return [] },
+      lease: async () => sideEffects.push("lease"),
+      prepareWorkspace: async () => { sideEffects.push("workspace"); return "unused" },
+      invokeCodex: async () => { sideEffects.push("provider"); return { result: "NO_CHANGE" } },
+    }
+
+    await expect(runOperationalKernelCycle({ root, registry, adapters })).rejects.toThrow("QUARANTINED_TERMINAL")
+    expect(sideEffects).toEqual([])
+
+    const changedRegistry = structuredClone(registry)
+    changedRegistry.adapter.state = "ACTIVE"
+    await expect(runOperationalKernelCycle({ root, registry: changedRegistry, adapters })).rejects.toThrow("LEGACY_ADAPTER_QUARANTINE_INTEGRITY_WALL")
+
+    const markerRemoved = structuredClone(registry)
+    delete (markerRemoved as { adapter?: unknown }).adapter
+    await expect(runOperationalKernelCycle({ root, registry: markerRemoved, adapters })).rejects.toThrow("LEGACY_ADAPTER_QUARANTINE_INTEGRITY_WALL")
+    expect(sideEffects).toEqual([])
+  })
+
+  it("exposes owner revocation verification without allowing terminal adapter dispatch", async () => {
+    const registry = JSON.parse(fs.readFileSync("runtime-operator/native/authority-registry.json", "utf8"))
+    const observations: unknown[] = []
+    await expect(assertLegacyAdapterDispatchAllowed(registry, async () => ({ status: "UNVERIFIED" })))
+      .rejects.toThrow("OWNER_REVOCATION_EVENT_VERIFIER_WALL")
+    await expect(assertLegacyAdapterDispatchAllowed(registry, async (request) => {
+      observations.push(request)
+      return { status: "VERIFIED_REVOKED" }
+    })).rejects.toThrow("QUARANTINED_TERMINAL")
+    expect(observations).toEqual([{
+      adapterId: "local-nested-codex-exec",
+      terminalIssueNumber: 357,
+      terminalReason: "CODEX_NETWORK_WALL",
+      workOrderIds: ["WO-RUNTIME-KERNEL-PILOT-001", "WO-RUNTIME-KERNEL-CONTINUATION-001"],
+    }])
   })
 
   it("resumes one approved Work Order through remediation, verified merge, evidence, and next selection", async () => {
