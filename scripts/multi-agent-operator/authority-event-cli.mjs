@@ -4,7 +4,7 @@ import process from "node:process"
 import {
   AuthorityAssertionError,
   assertLegacyAuthorityRevocations,
-  assertOwnerAuthority,
+  validateOwnerAuthorityArtifacts,
 } from "./authority-events.mjs"
 
 function option(name, required = true) {
@@ -26,7 +26,7 @@ function readJson(name) {
 try {
   const command = process.argv[2]
   if (command === "validate-artifacts") {
-    const result = assertOwnerAuthority({
+    const result = validateOwnerAuthorityArtifacts({
       grant: readJson("--grant"),
       events: readJson("--events"),
       trustedOwners: readJson("--trusted-owners"),
@@ -38,6 +38,10 @@ try {
         subjectType: option("--subject-type"),
         subjectId: option("--subject-id"),
         programId: option("--program"),
+        goalId: option("--goal"),
+        loopId: option("--loop"),
+        workOrderId: option("--work-order"),
+        decisionId: option("--decision"),
         repository: option("--repository"),
         riskClass: option("--risk"),
         action: option("--action"),

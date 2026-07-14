@@ -65,6 +65,13 @@ SAFE_DEFAULT:
 RESUME_ACTION:
 <the exact blocked Work Order and next action Codex resumes after the decision>
 
+OWNER_OPERATION_TOUCH_COUNT:
+OWNER_CREDENTIAL_TOUCH_COUNT:
+OWNER_DIAGNOSTIC_TOUCH_COUNT:
+OWNER_ROUTINE_DECISION_COUNT:
+OWNER_OPERATION_EVIDENCE_REF:
+OWNER_OPERATION_CERTIFICATION_STATE:
+
 DO_NOT_PROVIDE:
 - passwords
 - tokens
@@ -77,6 +84,19 @@ DO_NOT_PROVIDE:
 
 The packet is resumable state, not a handoff to another operator. After the
 Primary records the decision, Codex resumes the blocked Work Order itself.
+
+The four owner-touch counters and evidence state are mandatory even on a stop
+packet. A genuine owner authority decision requested by this packet is not a
+routine operation and does not increment `OWNER_ROUTINE_DECISION_COUNT`.
+Asking the Owner to courier work, run diagnostics, repair credentials, or make
+a routine implementation choice does increment the applicable counter and
+disqualifies zero-owner-operation certification.
+
+Zero counters supplied by a caller are not certification evidence. The packet
+remains `UNVERIFIED_ZERO_OWNER_OPERATIONS`; the independently anchored,
+context-bound verifier required for certification is not implemented in this
+phase. Any nonzero counter is `FAILED_OWNER_BABYSITTING`; a stop packet must
+never describe either state as certified.
 
 ## Decision Quality Rules
 
@@ -97,6 +117,9 @@ Codex must not:
 - hide a scope expansion inside a routine question
 - ask for broad permission when a narrow decision is enough
 - proceed on assumptions when owner authority is required
+- count a genuine consequential authority decision as a routine owner decision
+- label caller-supplied zero counters certified without an independent evidence
+  reference
 - convert a blocked owner decision into a runtime implementation without a new
   packet
 
@@ -192,6 +215,12 @@ WHY_BLOCKED:
 SAFE_TO_CONTINUE:
 OWNER_DECISION_NEEDED:
 NEXT_VALID_ACTION:
+OWNER_OPERATION_TOUCH_COUNT:
+OWNER_CREDENTIAL_TOUCH_COUNT:
+OWNER_DIAGNOSTIC_TOUCH_COUNT:
+OWNER_ROUTINE_DECISION_COUNT:
+OWNER_OPERATION_EVIDENCE_REF:
+OWNER_OPERATION_CERTIFICATION_STATE:
 ```
 
 ## Safe Defaults

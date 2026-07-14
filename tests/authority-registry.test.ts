@@ -20,6 +20,24 @@ describe("Authority Registry", () => {
     expect(doctrine).toContain("Local OMEN remains read-only, manual-only, and localhost-only")
     expect(doctrine).toContain("Hermes, MCP, workers, and autonomy remain blocked")
     expect(doctrine).toContain("WilliamOS must not grant itself authority")
+    expect(doctrine).toContain("Caller-supplied zero owner-operation counters are unverified")
+    expect(doctrine).toContain("Genuine owner authority decisions are distinct from routine owner operations")
+  })
+
+  it("binds the shared owner-operation evidence model without self-certifying zeros", () => {
+    const registry = getAuthorityRegistrySurface()
+
+    expect(registry.ownerOperationEvidence).toMatchObject({
+      posture: "static/read-only",
+      lifecycleState: "NO_OWNER_OPERATION_EVIDENCE",
+      reasonCode: "OWNER_OPERATION_EVIDENCE_MISSING",
+      certification: {
+        independentEvidenceRequired: true,
+        independentlyVerified: false,
+      },
+    })
+    expect(registry.ownerOperationEvidence.ownerAuthorityDecisions.countsAsRoutineOwnerOperation).toBe(false)
+    expect(registry.ownerOperationEvidence.routineOwnerOperations.countsAsRoutineOwnerOperation).toBe(true)
   })
 
   it("defines refreshed authority categories and levels", () => {

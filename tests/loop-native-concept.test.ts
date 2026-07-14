@@ -32,4 +32,14 @@ describe("/loop native concept surface", () => {
     expect(stopStep?.description).toContain("data mutation")
     expect(stopStep?.description).toContain("deploy")
   })
+
+  it("exposes a loop-bound read-only owner-operation evidence placeholder", () => {
+    const surface = getLoopNativeConceptSurface()
+
+    expect(surface.ownerOperationEvidence.binding.surface).toBe("loop")
+    expect(surface.ownerOperationEvidence.counters.OWNER_OPERATION_TOUCH_COUNT).toBeNull()
+    expect(surface.ownerOperationEvidence.lifecycleState).toBe("NO_OWNER_OPERATION_EVIDENCE")
+    expect(surface.ownerOperationEvidence.certification.independentEvidenceRequired).toBe(true)
+    expect(surface.ownerOperationEvidence.routineOwnerOperations.countsAsRoutineOwnerOperation).toBe(true)
+  })
 })

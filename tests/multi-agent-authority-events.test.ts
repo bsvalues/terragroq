@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest"
 
 import {
   assertLegacyAuthorityRevocations,
-  assertOwnerAuthority,
+  validateOwnerAuthorityArtifacts,
   canonicalJson,
   computeAuthorityContentHash,
   evaluateOwnerOperationCounters,
@@ -49,6 +49,10 @@ function fixture() {
     subject: { type: "PROGRAM", id: "PROGRAM-TEST-001" },
     scope: {
       programIds: ["PROGRAM-TEST-001"],
+      goalIds: ["GOAL-TEST-001"],
+      loopIds: ["LOOP-TEST-001"],
+      workOrderIds: ["WO-TEST-001"],
+      decisionIds: ["decision-test-001"],
       repositories: ["bsvalues/terragroq"],
       riskClasses: ["R0", "R1"],
       actions: ["VERIFY", "MERGE"],
@@ -95,6 +99,10 @@ function fixture() {
     subjectType: "PROGRAM",
     subjectId: "PROGRAM-TEST-001",
     programId: "PROGRAM-TEST-001",
+    goalId: "GOAL-TEST-001",
+    loopId: "LOOP-TEST-001",
+    workOrderId: "WO-TEST-001",
+    decisionId: "decision-test-001",
     repository: "bsvalues/terragroq",
     riskClass: "R0",
     action: "VERIFY",
@@ -126,34 +134,54 @@ describe("owner authority event verifier", () => {
 
   it("accepts an owner-signed, active, in-scope grant without creating authority", () => {
     const data = fixture()
-    const result = assertOwnerAuthority({ ...data, events: [data.active], counters, now: "2026-07-13T00:00:00.000Z" })
-    expect(result).toMatchObject({ status: "PASS", currentGrantStatus: "ACTIVE", statusEventCount: 1 })
+    const result = validateOwnerAuthorityArtifacts({ ...data, events: [data.active], counters, now: "2026-07-13T00:00:00.000Z" })
+    expect(result).toMatchObject({
+      status: "ARTIFACTS_VALIDATED_NOT_AUTHORIZED",
+      authorityGranted: false,
+      currentGrantStatus: "ACTIVE",
+      statusEventCount: 1,
+      ownerOperations: {
+        certified: false,
+        lifecycleState: "UNVERIFIED_ZERO_OWNER_OPERATIONS",
+      },
+    })
   })
 
   it("fails closed when immutable grant content is changed", () => {
     const data = fixture()
     const changed = { ...data.grant, expiresAt: "2026-09-01T00:00:00.000Z" }
-    expect(() => assertOwnerAuthority({ ...data, grant: changed, events: [data.active], counters, now: "2026-07-13T00:00:00.000Z" }))
+    expect(() => validateOwnerAuthorityArtifacts({ ...data, grant: changed, events: [data.active], counters, now: "2026-07-13T00:00:00.000Z" }))
       .toThrow(/AUTHORITY_HASH_WALL/)
   })
 
   it("rejects an untrusted bundle and exact-scope mismatches", () => {
     const data = fixture()
-    expect(() => assertOwnerAuthority({ ...data, events: [data.active], trustedOwners: { schemaVersion: 1, owners: [] }, counters, now: "2026-07-13T00:00:00.000Z" }))
+    expect(() => validateOwnerAuthorityArtifacts({ ...data, events: [data.active], trustedOwners: { schemaVersion: 1, owners: [] }, counters, now: "2026-07-13T00:00:00.000Z" }))
       .toThrow(/AUTHORITY_TRUST_BUNDLE_WALL/)
-    expect(() => assertOwnerAuthority({ ...data, events: [data.active], request: { ...data.request, action: "DISPATCH" }, counters, now: "2026-07-13T00:00:00.000Z" }))
+    expect(() => validateOwnerAuthorityArtifacts({ ...data, events: [data.active], request: { ...data.request, action: "DISPATCH" }, counters, now: "2026-07-13T00:00:00.000Z" }))
       .toThrow(/AUTHORITY_SCOPE_WALL/)
+    expect(() => validateOwnerAuthorityArtifacts({ ...data, events: [data.active], request: { ...data.request, workOrderId: "WO-OTHER" }, counters, now: "2026-07-13T00:00:00.000Z" }))
+      .toThrow(/AUTHORITY_SCOPE_WALL/)
+  })
+
+  it("fails with typed walls for malformed direct-consumer input", () => {
+    const data = fixture()
+    expect(() => validateOwnerAuthorityArtifacts(null as never)).toThrow(/AUTHORITY_SCHEMA_WALL/)
+    expect(() => validateOwnerAuthorityArtifacts({ ...data, grant: null, events: [data.active], counters, now: "2026-07-13T00:00:00.000Z" }))
+      .toThrow(/AUTHORITY_SCHEMA_WALL/)
+    expect(() => validateOwnerAuthorityArtifacts({ ...data, events: [null], counters, now: "2026-07-13T00:00:00.000Z" }))
+      .toThrow(/AUTHORITY_EVENT_CHAIN_WALL/)
   })
 
   it("rejects expired grants", () => {
     const data = fixture()
-    expect(() => assertOwnerAuthority({ ...data, events: [data.active], counters, now: "2026-08-01T00:00:00.000Z" }))
+    expect(() => validateOwnerAuthorityArtifacts({ ...data, events: [data.active], counters, now: "2026-08-01T00:00:00.000Z" }))
       .toThrow(/AUTHORITY_EXPIRED_WALL/)
   })
 
   it("requires a distinct program-activation grant for activation scope", () => {
     const data = fixture()
-    expect(() => assertOwnerAuthority({
+    expect(() => validateOwnerAuthorityArtifacts({
       ...data,
       events: [data.active],
       request: { ...data.request, action: "ACTIVATE_PROGRAM" },
@@ -181,9 +209,9 @@ describe("owner authority event verifier", () => {
       latestEventHash: revoked.contentHash,
     }]
     data.sealTrustBundle()
-    expect(() => assertOwnerAuthority({ ...data, events: [data.active, revoked], counters, now: "2026-07-13T00:00:00.000Z" }))
+    expect(() => validateOwnerAuthorityArtifacts({ ...data, events: [data.active, revoked], counters, now: "2026-07-13T00:00:00.000Z" }))
       .toThrow(/AUTHORITY_REVOKED_WALL/)
-    expect(() => assertOwnerAuthority({ ...data, events: [data.active, { ...revoked, previousEventHash: "0".repeat(64) }], counters, now: "2026-07-13T00:00:00.000Z" }))
+    expect(() => validateOwnerAuthorityArtifacts({ ...data, events: [data.active, { ...revoked, previousEventHash: "0".repeat(64) }], counters, now: "2026-07-13T00:00:00.000Z" }))
       .toThrow(/AUTHORITY_EVENT_CHAIN_WALL/)
   })
 
@@ -195,7 +223,7 @@ describe("owner authority event verifier", () => {
       latestEventHash: "a".repeat(64),
     }]
     data.sealTrustBundle()
-    expect(() => assertOwnerAuthority({ ...data, events: [data.active], counters, now: "2026-07-13T00:00:00.000Z" }))
+    expect(() => validateOwnerAuthorityArtifacts({ ...data, events: [data.active], counters, now: "2026-07-13T00:00:00.000Z" }))
       .toThrow(/AUTHORITY_EVENT_HEAD_WALL/)
   })
 
@@ -206,14 +234,14 @@ describe("owner authority event verifier", () => {
       eventCount: 1,
       latestEventHash: "b".repeat(64),
     }]
-    expect(() => assertOwnerAuthority({
+    expect(() => validateOwnerAuthorityArtifacts({
       ...data, events: [data.active], counters, now: "2026-07-13T00:00:00.000Z",
     })).toThrow(/AUTHORITY_TRUST_BUNDLE_WALL/)
   })
 
   it("rejects a valid signed bundle that does not match the independently anchored current hash", () => {
     const data = fixture()
-    expect(() => assertOwnerAuthority({
+    expect(() => validateOwnerAuthorityArtifacts({
       ...data,
       trustedOwnerBundleContentHash: "c".repeat(64),
       events: [data.active],
@@ -222,15 +250,19 @@ describe("owner authority event verifier", () => {
     })).toThrow(/AUTHORITY_TRUST_BUNDLE_REPLAY_WALL/)
   })
 
-  it("separates the owner-babysitting lifecycle state from its reason code", () => {
-    expect(evaluateOwnerOperationCounters(counters)).toMatchObject({ certified: true, reasonCode: null })
+  it("never certifies caller-supplied zeros and preserves babysitting failure", () => {
+    expect(evaluateOwnerOperationCounters(counters)).toMatchObject({
+      certified: false,
+      lifecycleState: "UNVERIFIED_ZERO_OWNER_OPERATIONS",
+      reasonCode: "OWNER_OPERATION_EVIDENCE_UNVERIFIED",
+    })
+    const data = fixture()
     expect(evaluateOwnerOperationCounters({ ...counters, OWNER_DIAGNOSTIC_TOUCH_COUNT: 1 })).toMatchObject({
       certified: false,
       lifecycleState: "FAILED_OWNER_BABYSITTING",
       reasonCode: "FAIL_OWNER_BABYSITTING",
     })
-    const data = fixture()
-    expect(() => assertOwnerAuthority({ ...data, events: [data.active], counters: { ...counters, OWNER_DIAGNOSTIC_TOUCH_COUNT: 1 }, now: "2026-07-13T00:00:00.000Z" }))
+    expect(() => validateOwnerAuthorityArtifacts({ ...data, events: [data.active], counters: { ...counters, OWNER_DIAGNOSTIC_TOUCH_COUNT: 1 }, now: "2026-07-13T00:00:00.000Z" }))
       .toThrow(/OWNER_BABYSITTING_WALL/)
   })
 
@@ -247,10 +279,13 @@ describe("owner authority event verifier", () => {
     for (const [name, value] of Object.entries(inputs)) fs.writeFileSync(path.join(directory, `${name}.json`), JSON.stringify(value))
     const cli = path.resolve("scripts/multi-agent-operator/authority-event-cli.mjs")
     const args = [cli, "validate-artifacts", "--grant", path.join(directory, "grant.json"), "--events", path.join(directory, "events.json"),
-      "--trusted-owners", path.join(directory, "owners.json"), "--owner-counters", path.join(directory, "counters.json"),
+      "--trusted-owners", path.join(directory, "owners.json"),
+      "--owner-counters", path.join(directory, "counters.json"),
       "--owner-key-fingerprint", data.ownerKeyFingerprint,
       "--owner-bundle-hash", data.trustedOwners.contentHash,
       "--subject-type", "PROGRAM", "--subject-id", "PROGRAM-TEST-001", "--program", "PROGRAM-TEST-001",
+      "--goal", "GOAL-TEST-001", "--loop", "LOOP-TEST-001", "--work-order", "WO-TEST-001",
+      "--decision", "decision-test-001",
       "--repository", "bsvalues/terragroq", "--risk", "R0", "--action", "VERIFY", "--merge-mode", "NONE",
       "--at", "2026-07-13T00:00:00.000Z"]
     const pass = spawnSync(process.execPath, args, { encoding: "utf8" })
@@ -340,6 +375,25 @@ describe("owner authority event verifier", () => {
 
     expect(() => assertLegacyAuthorityRevocations({
       events: [first, { ...second, authorityRecordId: "WO-OTHER" }],
+      trustedOwners: data.trustedOwners,
+      trustedOwnerKeyFingerprint: data.ownerKeyFingerprint,
+      trustedOwnerBundleContentHash: data.trustedOwners.contentHash,
+      expected,
+      now: "2026-07-13T00:00:00.000Z",
+    })).toThrow(/AUTHORITY_LEGACY_REVOCATION_WALL/)
+  })
+
+  it("fails with typed walls for malformed legacy-revocation input", () => {
+    const data = fixture()
+    const expected = {
+      adapterId: "local-nested-codex-exec",
+      authorityRecordIds: ["WO-RUNTIME-KERNEL-PILOT-001"],
+      terminalIssueNumber: 357,
+      terminalReason: "CODEX_NETWORK_WALL",
+    }
+    expect(() => assertLegacyAuthorityRevocations(null as never)).toThrow(/AUTHORITY_LEGACY_REVOCATION_WALL/)
+    expect(() => assertLegacyAuthorityRevocations({
+      events: [null],
       trustedOwners: data.trustedOwners,
       trustedOwnerKeyFingerprint: data.ownerKeyFingerprint,
       trustedOwnerBundleContentHash: data.trustedOwners.contentHash,

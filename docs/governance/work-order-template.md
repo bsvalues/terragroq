@@ -77,6 +77,10 @@ OWNER_DIAGNOSTIC_TOUCH_COUNT: 0
 
 OWNER_ROUTINE_DECISION_COUNT: 0
 
+OWNER_OPERATION_EVIDENCE_REF:
+
+OWNER_OPERATION_CERTIFICATION_STATE: UNVERIFIED_ZERO_OWNER_OPERATIONS
+
 COMMIT_ALLOWED:
 
 PUSH_ALLOWED:
@@ -108,8 +112,12 @@ status stream against the exact subject, scope, expiry, and current revocation s
 expired, untrusted, mismatched, or revoked grant fails closed. A program activation grant is separate
 from implementation or merge authority and must be explicitly referenced when activation is in scope.
 
-All four owner-touch counters are mandatory evidence. Any nonzero value records lifecycle state
-`FAILED_OWNER_BABYSITTING` with reason code `FAIL_OWNER_BABYSITTING`; the reason code is not a state.
+All four owner-touch counters are mandatory evidence. Caller-supplied zeros remain
+`UNVERIFIED_ZERO_OWNER_OPERATIONS`; this phase has no verifier capable of certification. Any
+nonzero value records lifecycle state `FAILED_OWNER_BABYSITTING` with reason code
+`FAIL_OWNER_BABYSITTING`; the reason code is not a state. A genuine owner authority decision is outside
+routine-operation counts, while owner courier, credential, diagnostic, or routine implementation work
+increments the applicable counter.
 
 ## Transition Defaults
 

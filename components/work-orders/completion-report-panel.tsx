@@ -1,11 +1,21 @@
 import { FileText, ShieldCheck } from "lucide-react"
 
 import type { WorkOrder } from "@/lib/db/schema"
-import { getCompletionReportSurface } from "@/components/work-orders/completion-report-surface"
+import {
+  getCompletionReportSurface,
+  type CompletionOwnerOperationInput,
+} from "@/components/work-orders/completion-report-surface"
 import { Badge } from "@/components/ui/badge"
+import { formatOwnerOperationCounter, OWNER_OPERATION_COUNTER_NAMES } from "@/lib/governance/owner-operation-evidence"
 
-export function CompletionReportPanel({ orders }: { orders: WorkOrder[] }) {
-  const surface = getCompletionReportSurface(orders)
+export function CompletionReportPanel({
+  orders,
+  ownerOperations,
+}: {
+  orders: WorkOrder[]
+  ownerOperations?: CompletionOwnerOperationInput
+}) {
+  const surface = getCompletionReportSurface(orders, ownerOperations)
 
   return (
     <section className="rounded-xl border border-border bg-card">
@@ -39,6 +49,29 @@ export function CompletionReportPanel({ orders }: { orders: WorkOrder[] }) {
               <pre className="mt-4 max-h-56 overflow-auto rounded-lg border border-border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
                 {item.report}
               </pre>
+              <div className="mt-3 border-t border-border pt-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-medium">Owner-operation evidence</p>
+                  <Badge variant="outline" className="max-w-full whitespace-normal break-all text-right">
+                    {item.ownerOperationEvidence.lifecycleState}
+                  </Badge>
+                </div>
+                <dl className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {OWNER_OPERATION_COUNTER_NAMES.map((name) => (
+                    <div key={name} className="flex items-center justify-between gap-3 text-xs">
+                      <dt className="break-all font-mono text-[10px] text-muted-foreground">{name}</dt>
+                      <dd className="font-semibold tabular-nums">
+                        {formatOwnerOperationCounter(item.ownerOperationEvidence.counters[name])}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+                <p className="mt-3 break-all text-xs leading-relaxed text-muted-foreground">
+                  {item.ownerOperationEvidence.certification.evidenceHeadHash
+                    ? `Independent evidence: ${item.ownerOperationEvidence.certification.evidenceHeadHash}`
+                    : "Non-certifying: no independent owner-operation evidence reference is bound."}
+                </p>
+              </div>
             </article>
           ))}
         </div>

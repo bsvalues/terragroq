@@ -1,10 +1,21 @@
 import { BarChart3, ShieldCheck } from "lucide-react"
 
 import type { EventLog } from "@/lib/db/schema"
-import { getEvidenceRollupSurface } from "@/components/evidence/evidence-rollup-surface"
+import {
+  getEvidenceRollupSurface,
+  type EvidenceRollupOwnerOperationInput,
+} from "@/components/evidence/evidence-rollup-surface"
+import { Badge } from "@/components/ui/badge"
+import { formatOwnerOperationCounter, OWNER_OPERATION_COUNTER_NAMES } from "@/lib/governance/owner-operation-evidence"
 
-export function EvidenceRollupPanel({ events }: { events: EventLog[] }) {
-  const surface = getEvidenceRollupSurface(events)
+export function EvidenceRollupPanel({
+  events,
+  ownerOperations,
+}: {
+  events: EventLog[]
+  ownerOperations?: EvidenceRollupOwnerOperationInput
+}) {
+  const surface = getEvidenceRollupSurface(events, ownerOperations)
 
   return (
     <section className="rounded-xl border border-border bg-card">
@@ -58,6 +69,32 @@ export function EvidenceRollupPanel({ events }: { events: EventLog[] }) {
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{state.description}</p>
           </div>
         ))}
+      </div>
+
+      <div className="border-t border-border p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-medium">Owner-operation evidence</p>
+          <Badge variant="outline" className="max-w-full whitespace-normal break-all text-right">
+            {surface.ownerOperationEvidence.lifecycleState}
+          </Badge>
+        </div>
+        <dl className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {OWNER_OPERATION_COUNTER_NAMES.map((name) => (
+            <div key={name} className="rounded-lg border border-border bg-background p-3">
+              <dt className="break-all font-mono text-[10px] text-muted-foreground">{name}</dt>
+              <dd className="mt-2 text-xl font-semibold tabular-nums">
+                {formatOwnerOperationCounter(surface.ownerOperationEvidence.counters[name])}
+              </dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-3 break-all text-xs leading-relaxed text-muted-foreground">
+          {surface.ownerOperationEvidence.certification.evidenceHeadHash
+            ? `Independent evidence: ${surface.ownerOperationEvidence.certification.evidenceHeadHash}`
+            : surface.ownerOperationEvidence.lifecycleState === "NO_OWNER_OPERATION_EVIDENCE"
+              ? "No owner-operation evidence is bound to this surface. Counters are not recorded."
+              : "Non-certifying: caller-supplied counters have no independent owner-operation evidence reference."}
+        </p>
       </div>
 
       <div className="flex items-center gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">

@@ -153,6 +153,7 @@ function verifySignedRecord(record, trustedOwners, trustedOwnerKeyFingerprint) {
 }
 
 function validateLegacyRevocationEvent(event) {
+  if (!plainObject(event)) wall("AUTHORITY_LEGACY_REVOCATION_WALL", "SCHEMA")
   if (event.schemaVersion !== 1 || event.artifactType !== "OWNER_LEGACY_AUTHORITY_REVOCATION_EVENT") {
     wall("AUTHORITY_LEGACY_REVOCATION_WALL", "SCHEMA")
   }
@@ -171,9 +172,12 @@ function validateLegacyRevocationEvent(event) {
   }
 }
 
-export function assertLegacyAuthorityRevocations({
-  events, trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash, expected, now = new Date(),
-}) {
+export function assertLegacyAuthorityRevocations(input) {
+  if (!plainObject(input)) wall("AUTHORITY_LEGACY_REVOCATION_WALL", "INPUT")
+  const {
+    events, trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash,
+    expected, now = new Date(),
+  } = input
   verifyTrustBundle(trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash)
   if (!plainObject(expected)) wall("AUTHORITY_LEGACY_REVOCATION_WALL", "EXPECTED")
   const adapterId = requiredString(expected.adapterId, "expected.adapterId")
@@ -228,6 +232,7 @@ export function assertLegacyAuthorityRevocations({
 }
 
 function validateGrantSchema(grant) {
+  if (!plainObject(grant)) wall("AUTHORITY_SCHEMA_WALL", "GRANT")
   if (grant.schemaVersion !== 1 || grant.artifactType !== "OWNER_AUTHORITY_GRANT") wall("AUTHORITY_SCHEMA_WALL", "GRANT")
   if (!(grant.grantKind === "ACTION_AUTHORITY" || grant.grantKind === "PROGRAM_ACTIVATION")) {
     wall("AUTHORITY_SCHEMA_WALL", "grantKind")
@@ -239,6 +244,10 @@ function validateGrantSchema(grant) {
   requiredString(grant.subject.id, "subject.id")
   if (!plainObject(grant.scope)) wall("AUTHORITY_SCHEMA_WALL", "scope")
   requiredStringArray(grant.scope.programIds, "scope.programIds")
+  requiredStringArray(grant.scope.goalIds, "scope.goalIds")
+  requiredStringArray(grant.scope.loopIds, "scope.loopIds")
+  requiredStringArray(grant.scope.workOrderIds, "scope.workOrderIds")
+  requiredStringArray(grant.scope.decisionIds, "scope.decisionIds")
   requiredStringArray(grant.scope.repositories, "scope.repositories")
   requiredStringArray(grant.scope.riskClasses, "scope.riskClasses")
   requiredStringArray(grant.scope.actions, "scope.actions")
@@ -249,6 +258,7 @@ function validateGrantSchema(grant) {
 }
 
 function validateEventSchema(event) {
+  if (!plainObject(event)) wall("AUTHORITY_EVENT_CHAIN_WALL", "SCHEMA")
   if (event.schemaVersion !== 1 || event.artifactType !== "OWNER_AUTHORITY_STATUS_EVENT") {
     wall("AUTHORITY_EVENT_CHAIN_WALL", "SCHEMA")
   }
@@ -309,16 +319,20 @@ export function evaluateOwnerOperationCounters(counters) {
   const touched = COUNTER_NAMES.some((name) => normalized[name] !== 0)
   return Object.freeze({
     counters: Object.freeze(normalized),
-    certified: !touched,
-    lifecycleState: touched ? "FAILED_OWNER_BABYSITTING" : "CERTIFIED_ZERO_OWNER_OPERATIONS",
-    reasonCode: touched ? "FAIL_OWNER_BABYSITTING" : null,
+    certified: false,
+    lifecycleState: touched ? "FAILED_OWNER_BABYSITTING" : "UNVERIFIED_ZERO_OWNER_OPERATIONS",
+    reasonCode: touched ? "FAIL_OWNER_BABYSITTING" : "OWNER_OPERATION_EVIDENCE_UNVERIFIED",
+    evidenceHeadHash: null,
+    runId: null,
   })
 }
 
-export function assertOwnerAuthority({
-  grant, events, trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash,
-  request, counters, now = new Date(),
-}) {
+export function validateOwnerAuthorityArtifacts(input) {
+  if (!plainObject(input)) wall("AUTHORITY_SCHEMA_WALL", "VALIDATION_INPUT")
+  const {
+    grant, events, trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash,
+    request, counters, now = new Date(),
+  } = input
   verifyTrustBundle(trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash)
   validateGrantSchema(grant)
   verifySignedRecord(grant, trustedOwners, trustedOwnerKeyFingerprint)
@@ -334,14 +348,21 @@ export function assertOwnerAuthority({
     wall("AUTHORITY_GRANT_KIND_WALL")
   }
   includes(grant.scope, "programIds", request.programId)
+  includes(grant.scope, "goalIds", request.goalId)
+  includes(grant.scope, "loopIds", request.loopId)
+  includes(grant.scope, "workOrderIds", request.workOrderId)
+  includes(grant.scope, "decisionIds", request.decisionId)
   includes(grant.scope, "repositories", request.repository)
   includes(grant.scope, "riskClasses", request.riskClass)
   includes(grant.scope, "actions", request.action)
   includes(grant.scope, "mergeModes", request.mergeMode)
   const ownerOperations = evaluateOwnerOperationCounters(counters)
-  if (!ownerOperations.certified) wall("OWNER_BABYSITTING_WALL", ownerOperations.reasonCode)
+  if (ownerOperations.lifecycleState === "FAILED_OWNER_BABYSITTING") {
+    wall("OWNER_BABYSITTING_WALL", ownerOperations.reasonCode)
+  }
   return Object.freeze({
-    status: "PASS",
+    status: "ARTIFACTS_VALIDATED_NOT_AUTHORIZED",
+    authorityGranted: false,
     grantId: grant.grantId,
     authorityDecisionId: grant.authorityDecisionId,
     subject: Object.freeze({ ...grant.subject }),

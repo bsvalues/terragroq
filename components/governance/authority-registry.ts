@@ -1,3 +1,8 @@
+import {
+  createOwnerOperationEvidencePlaceholder,
+  type OwnerOperationEvidenceModel,
+} from "@/lib/governance/owner-operation-evidence"
+
 export type AuthorityCategory =
   | "READ_ONLY"
   | "DOCS_ONLY"
@@ -144,6 +149,7 @@ export type AuthorityRegistrySurface = {
   dbSchemaGates: AuthorityGateRecord[]
   autonomyWorkerGates: AuthorityGateRecord[]
   safetyProofCards: AuthoritySafetyProofCard[]
+  ownerOperationEvidence: OwnerOperationEvidenceModel
   navigation: {
     label: string
     href: string
@@ -217,6 +223,8 @@ export const AUTHORITY_DOCTRINE = {
     "WilliamOS may display authority state.",
     "WilliamOS must not grant itself authority.",
     "Codex does not self-authorize.",
+    "Caller-supplied zero owner-operation counters are unverified until independently evidenced.",
+    "Genuine owner authority decisions are distinct from routine owner operations.",
     "Anything outside scope stops.",
   ],
 } as const
@@ -1031,6 +1039,15 @@ export function getAuthorityRegistrySurface(): AuthorityRegistrySurface {
       "OPERATOR_HOST_GATE",
     ]),
     safetyProofCards: AUTHORITY_SAFETY_PROOF_CARDS,
+    ownerOperationEvidence: createOwnerOperationEvidencePlaceholder({
+      surface: "authority",
+      programId: null,
+      goalId: null,
+      loopId: null,
+      workOrderId: null,
+      decisionId: null,
+      action: null,
+    }),
     navigation: [
       {
         label: "Work Orders",

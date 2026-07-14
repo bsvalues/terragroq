@@ -3,6 +3,13 @@ import type { WorkOrder } from "@/lib/db/schema"
 
 import { getCompletionReportSurface } from "@/components/work-orders/completion-report-surface"
 
+const zeroOwnerOperations = {
+  OWNER_OPERATION_TOUCH_COUNT: 0,
+  OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+  OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
+  OWNER_ROUTINE_DECISION_COUNT: 0,
+} as const
+
 function workOrder(status: WorkOrder["status"], result: WorkOrder["result"] = null): WorkOrder {
   return {
     id: 1,
@@ -67,6 +74,36 @@ describe("completion report surface", () => {
     expect(surface.items[0]?.report).toContain("WORK ORDER: WO-0001")
     expect(surface.items[0]?.report).toContain("VALIDATORS:")
     expect(surface.items[0]?.report).toContain("EVIDENCE:")
+    expect(surface.items[0]?.ownerOperationEvidence).toMatchObject({
+      lifecycleState: "NO_OWNER_OPERATION_EVIDENCE",
+      reasonCode: "OWNER_OPERATION_EVIDENCE_MISSING",
+      certification: { independentlyVerified: false, evidenceHeadHash: null },
+    })
+  })
+
+  it("keeps record-bound zero counters unverified", () => {
+    const surface = getCompletionReportSurface([workOrder("closed", "PASS")], {
+      countersByWorkOrder: { "WO-0001": zeroOwnerOperations },
+    })
+
+    expect(surface.items[0]?.ownerOperationEvidence).toMatchObject({
+      lifecycleState: "UNVERIFIED_ZERO_OWNER_OPERATIONS",
+      reasonCode: "OWNER_OPERATION_EVIDENCE_UNVERIFIED",
+      certification: { independentlyVerified: false },
+    })
+  })
+
+  it("disqualifies completion when a routine owner credential action occurred", () => {
+    const surface = getCompletionReportSurface([workOrder("closed", "PASS")], {
+      countersByWorkOrder: {
+        "WO-0001": { ...zeroOwnerOperations, OWNER_CREDENTIAL_TOUCH_COUNT: 1 },
+      },
+    })
+
+    expect(surface.items[0]?.ownerOperationEvidence).toMatchObject({
+      lifecycleState: "FAILED_OWNER_BABYSITTING",
+      reasonCode: "FAIL_OWNER_BABYSITTING",
+    })
   })
 
   it("does not record results, change gates, close work orders, or write production", () => {

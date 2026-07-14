@@ -23,6 +23,16 @@ automate execution, or mutate data.
 - Review threads after merge require immediate classification and remediation
   when they are substantive and in scope.
 - Secret exposure always stops the loop.
+- Every stop or completion result carries all four owner-touch counters, the
+  independent evidence reference when one exists, and the resulting
+  certification state.
+- Genuine consequential owner authority decisions are excluded from
+  `OWNER_ROUTINE_DECISION_COUNT`. Routine owner courier, diagnostic,
+  credential, or implementation decisions disqualify certification.
+- Caller-supplied zero counters remain `UNVERIFIED_ZERO_OWNER_OPERATIONS`
+  because the independent context-bound evidence verifier is not yet implemented.
+- A surface with no selected run or Work Order reports `NO_OWNER_OPERATION_EVIDENCE`
+  and `not recorded` counters rather than invented zeros.
 
 ## Result Classes
 
@@ -204,6 +214,26 @@ Operator action:
 - apply a narrow in-scope fix when authorized
 - otherwise return a blocker with required authority
 
+### `RESULT: FAILED_OWNER_BABYSITTING`
+
+Meaning: the run required at least one routine owner operation, credential
+touch, diagnostic touch, or routine decision. A genuine owner-only authority
+decision is consequential governance and is not counted as a routine decision.
+
+Required evidence:
+
+- all four owner-touch counters
+- the nonzero counter or counters
+- `FAIL_OWNER_BABYSITTING` reason code
+- independent evidence reference when available
+- safe next operator action
+
+Operator action:
+
+- do not certify the run
+- remove the routine owner dependency before a later certification attempt
+- do not reinterpret owner courier, diagnostic, or credential work as authority
+
 ### `RESULT: BLOCKED_SAFETY`
 
 Meaning: continuing would violate the work order, product doctrine, or safety
@@ -249,6 +279,12 @@ PRODUCTION_VERIFICATION:
 SAFETY_POSTURE:
 OWNER_DECISION_REQUIRED:
 NEXT_RECOMMENDED_WO:
+OWNER_OPERATION_TOUCH_COUNT:
+OWNER_CREDENTIAL_TOUCH_COUNT:
+OWNER_DIAGNOSTIC_TOUCH_COUNT:
+OWNER_ROUTINE_DECISION_COUNT:
+OWNER_OPERATION_EVIDENCE_REF:
+OWNER_OPERATION_CERTIFICATION_STATE:
 ```
 
 Every owner-blocked loop should report:
@@ -261,6 +297,12 @@ WHY_BLOCKED:
 SAFE_TO_CONTINUE:
 OWNER_DECISION_NEEDED:
 NEXT_VALID_ACTION:
+OWNER_OPERATION_TOUCH_COUNT:
+OWNER_CREDENTIAL_TOUCH_COUNT:
+OWNER_DIAGNOSTIC_TOUCH_COUNT:
+OWNER_ROUTINE_DECISION_COUNT:
+OWNER_OPERATION_EVIDENCE_REF:
+OWNER_OPERATION_CERTIFICATION_STATE:
 ```
 
 ## Safe Defaults
