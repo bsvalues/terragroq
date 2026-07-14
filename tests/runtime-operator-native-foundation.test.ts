@@ -18,9 +18,13 @@ describe("native supervisor foundation", () => {
     expect(supervisor).toContain("MaxRetrySeconds")
     expect(module).toContain("FileMode]::CreateNew")
     expect(module).toContain("ACTIVE_SUPERVISOR_LOCK")
-    expect(supervisor).toContain("operational-kernel-cli.mjs")
-    expect(supervisor).toContain("authority-registry.json")
-    expect(supervisor).toContain("OWNER_AUTHORITY_WALL")
+    const invocation = "& node $kernel --root $Root --repository $RepositoryPath --registry $registry 2>&1"
+    expect(supervisor).toContain(invocation)
+    expect(supervisor.indexOf("Get-WilliamOSActivation")).toBeLessThan(supervisor.indexOf(invocation))
+    expect(supervisor.indexOf('"runtime-operator\\native\\authority-registry.json"')).toBeLessThan(supervisor.indexOf(invocation))
+    expect(supervisor.indexOf('$exitCode -eq 2')).toBeLessThan(supervisor.indexOf('$exitCode -eq 3'))
+    expect(supervisor.indexOf('$exitCode -eq 3')).toBeLessThan(supervisor.indexOf('$exitCode -ne 0'))
+    expect(supervisor).toContain("OPERATIONAL_KERNEL_TERMINAL_WALL")
     expect(supervisor).not.toContain('workOrder = $null; state = "READY"')
   })
 

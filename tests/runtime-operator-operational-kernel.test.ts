@@ -71,15 +71,16 @@ describe("WilliamOS operational kernel", () => {
         return { changedPaths: ["docs/reports/kernel-acceptance.md"], patchBytes: 128 }
       },
       validate: async ({ requiredValidation }: { requiredValidation: string[] }) => calls.push(`validate:${requiredValidation.join(",")}`),
-      publish: async ({ existingPr }: { existingPr: number | null }) => {
+      publish: async ({ existingPr, resolvedThreadIds }: { existingPr: number | null; resolvedThreadIds: string[] }) => {
         calls.push(existingPr ? `push:${existingPr}` : "publish:new")
+        if (existingPr) expect(resolvedThreadIds).toEqual(["thread-1"])
         return { branch: "runtime/wo-kernel-acceptance-001-issue-901", pr: existingPr ?? 77 }
       },
       inspectPullRequest: async () => {
         prInspection += 1
         calls.push(`inspect:${prInspection}`)
         return prInspection === 1
-          ? { decision: "REMEDIATE", reason: "UNRESOLVED_REVIEW_THREADS", feedback: "Narrow evidence wording fix." }
+          ? { decision: "REMEDIATE", reason: "UNRESOLVED_REVIEW_THREADS", feedback: "Narrow evidence wording fix.", threadIds: ["thread-1"], threadPaths: ["docs/reports/kernel-acceptance.md"] }
           : { decision: "MERGE", reason: "ALL_GATES_GREEN", feedback: "" }
       },
       merge: async (pr: number) => {
@@ -141,6 +142,9 @@ describe("WilliamOS operational kernel", () => {
       "VALIDATING",
       "PR_OPEN",
       "MERGE_READY",
+      "MERGED",
+      "MERGED_VERIFIED",
+      "ISSUE_COMPLETED",
       "COMPLETED",
     ])
   })
@@ -215,6 +219,7 @@ describe("WilliamOS operational kernel", () => {
         task: "Exercise recoverable transport state.",
       }],
     }
+    const startedAt = Date.now()
     const result = await runOperationalKernelCycle({ root, registry, adapters: {
       assertRuntime: async () => undefined,
       listQueue: async () => [{ issueNumber: 904, workOrderId: "WO-KERNEL-RETRY-001", state: "READY", createdAt: "2026-07-13T01:00:00Z" }],
@@ -225,7 +230,9 @@ describe("WilliamOS operational kernel", () => {
     } })
     expect(result).toMatchObject({ state: "FAILED_RECOVERABLE", resumeState: "LEASED", attempt: 2, ownerDecisionRequired: false })
     const checkpoint = JSON.parse(fs.readFileSync(path.join(root, "state", "kernel-checkpoint.json"), "utf8"))
-    expect(checkpoint.nextAttemptAt).toMatch(/Z$/)
+    const retryDelay = Date.parse(checkpoint.nextAttemptAt) - startedAt
+    expect(retryDelay).toBeGreaterThanOrEqual(14_000)
+    expect(retryDelay).toBeLessThanOrEqual(17_000)
   })
 
   it("rejects globally forbidden authority paths before leasing", () => {
@@ -252,6 +259,44 @@ describe("WilliamOS operational kernel", () => {
       state: "READY",
       createdAt: "2026-07-13T01:00:00Z",
     }])).toThrow("AUTHORITY_PATH_WALL")
+  })
+
+  it("rejects missing validation and secret-wall codes persist as terminal evidence", async () => {
+    const invalid = {
+      workOrderId: "WO-KERNEL-VALIDATION-MISSING-001",
+      authority: "APPROVED",
+      riskClass: "R0",
+      dependencies: [],
+      ownerGateRequired: false,
+      protectedScope: false,
+      baseBranch: "main",
+      mergeMode: "AUTO_ELIGIBLE",
+      allowedPaths: ["docs/reports/missing.md"],
+      requiredValidation: [],
+      task: "Missing validation.",
+    }
+    expect(() => selectEligibleWorkOrder({ schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: [invalid] }, [
+      { issueNumber: 910, workOrderId: invalid.workOrderId, state: "READY", createdAt: "2026-07-13T01:00:00Z" },
+    ])).toThrow("AUTHORITY_VALIDATION_WALL")
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-kernel-secret-wall-"))
+    roots.push(root)
+    const valid = { ...invalid, workOrderId: "WO-KERNEL-SECRET-WALL-001", requiredValidation: ["diff-check"] }
+    const result = await runOperationalKernelCycle({ root, registry: { schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: [valid] }, adapters: {
+      assertRuntime: async () => undefined,
+      listQueue: async () => [{ issueNumber: 911, workOrderId: valid.workOrderId, state: "READY", createdAt: "2026-07-13T01:00:00Z" }],
+      resolveBaseSha: async () => "a".repeat(40),
+      lease: async () => undefined,
+      prepareWorkspace: async () => path.join(root, "workspace"),
+      invokeCodex: async () => ({ result: "PATCH_READY", summary: "bounded", unifiedPatch: "diff --git a/x b/x" }),
+      applyAndInspect: async () => { throw new Error("PATCH_SECRET_OR_BINARY_WALL") },
+    } })
+    expect(result).toMatchObject({ state: "FAILED_TERMINAL", failureCode: "PATCH_SECRET_OR_BINARY_WALL" })
+    const checkpointFile = path.join(root, "state", "kernel-checkpoint.json")
+    const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, "utf8"))
+    checkpoint.failureCode = `password = "${"x".repeat(16)}"`
+    fs.writeFileSync(checkpointFile, JSON.stringify(checkpoint))
+    await expect(runOperationalKernelCycle({ root, registry: { schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: [valid] }, adapters: {} })).rejects.toThrow("CHECKPOINT_SECRET_FIELD_WALL")
   })
 
   it("does not lease a duplicate queue record after the Work Order is completed", () => {
@@ -326,7 +371,8 @@ describe("WilliamOS operational kernel", () => {
         calls.push(`codex:${remediation}`)
         return { result: "PATCH_READY", summary: "repair", unifiedPatch: "diff --git a/x b/x" }
       },
-      applyAndInspect: async ({ allowExistingStaged }: { allowExistingStaged: boolean }) => {
+      applyAndInspect: async ({ allowExistingStaged, allowedPaths }: { allowExistingStaged: boolean; allowedPaths: string[] }) => {
+        expect(allowedPaths).toEqual(["docs/reports/validation.md"])
         calls.push(`existing:${allowExistingStaged}`)
         return { changedPaths: ["docs/reports/validation.md"], patchBytes: 96 }
       },
@@ -383,6 +429,57 @@ describe("WilliamOS operational kernel", () => {
 
     fs.writeFileSync(checkpointPath, JSON.stringify({ ...base, state: "FAILED_RECOVERABLE", resumeState: "LEASED", nextAttemptAt: "2999-01-01T00:00:00.000Z", ownerDecisionRequired: false }))
     await expect(runOperationalKernelCycle({ root, registry, adapters })).resolves.toMatchObject({ state: "FAILED_RECOVERABLE" })
+
+    fs.writeFileSync(checkpointPath, JSON.stringify({ ...base, state: "FAILED_TERMINAL", failureCode: "PATCH_POLICY_WALL", ownerDecisionRequired: false }))
+    await expect(runOperationalKernelCycle({ root, registry, adapters })).resolves.toMatchObject({ state: "FAILED_TERMINAL" })
     expect(readinessCalls).toBe(0)
+  })
+
+  it("resumes after merge without repeating the merge operation", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-kernel-merged-"))
+    roots.push(root)
+    fs.mkdirSync(path.join(root, "state"), { recursive: true })
+    fs.writeFileSync(path.join(root, "state", "kernel-checkpoint.json"), JSON.stringify({
+      schemaVersion: 1,
+      repository: "bsvalues/terragroq",
+      goal: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
+      loop: "LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
+      workOrderId: "WO-KERNEL-MERGED-001",
+      issueNumber: 912,
+      state: "MERGED",
+      baseSha: "a".repeat(40),
+      branch: "runtime/merged",
+      pr: 80,
+      mergeSha: "b".repeat(40),
+      attempt: 1,
+      remediationAttempts: 0,
+    }))
+    const registry = {
+      schemaVersion: 1,
+      repository: "bsvalues/terragroq",
+      workOrders: [{
+        workOrderId: "WO-KERNEL-MERGED-001",
+        authority: "APPROVED",
+        riskClass: "R0",
+        dependencies: [],
+        ownerGateRequired: false,
+        protectedScope: false,
+        baseBranch: "main",
+        mergeMode: "AUTO_ELIGIBLE",
+        allowedPaths: ["docs/reports/merged.md"],
+        requiredValidation: ["diff-check"],
+        task: "Resume merged state.",
+      }],
+    }
+    const calls: string[] = []
+    const result = await runOperationalKernelCycle({ root, registry, adapters: {
+      assertRuntime: async () => undefined,
+      merge: async () => { throw new Error("merge must not repeat") },
+      verifyMergedMain: async () => calls.push("verify"),
+      complete: async () => calls.push("complete"),
+      listQueue: async () => [{ issueNumber: 912, workOrderId: "WO-KERNEL-MERGED-001", state: "COMPLETED", createdAt: "2026-07-13T01:00:00Z" }],
+    } })
+    expect(result).toMatchObject({ state: "COMPLETED", mergeSha: "b".repeat(40) })
+    expect(calls).toEqual(["verify", "complete"])
   })
 })

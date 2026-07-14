@@ -33,5 +33,7 @@ try {
   const message = String(error?.message ?? error)
   const wall = message.match(/[A-Z][A-Z0-9_]+_WALL/)?.[0] ?? "OPERATIONAL_KERNEL_WALL"
   process.stderr.write(`${wall}\n`)
-  process.exitCode = /(?:AUTHORITY_(?:ACTIVATION|OWNER_GATE)_WALL|CODEX_AUTHORITY_WALL|GITHUB_AUTHORITY_WALL|RUNTIME_READINESS_WALL)/.test(wall) ? 2 : 1
+  process.exitCode = /(?:AUTHORITY_(?:ACTIVATION|OWNER_GATE)_WALL|CODEX_AUTHORITY_WALL|GITHUB_AUTHORITY_WALL|RUNTIME_READINESS_WALL)/.test(wall)
+    ? 2
+    : /CODEX_(?:NETWORK|RATE_LIMIT)_WALL|PROCESS_WALL:(?:gh|git)/.test(message) ? 3 : 1
 }

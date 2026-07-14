@@ -9,10 +9,21 @@ import { buildCodexPrompt, parseCodexResult } from "./prompt.mjs"
 const execFile = promisify(execFileCallback)
 const REPOSITORY = "bsvalues/terragroq"
 const SECRET_FIELD = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{20,}\b|\bgh[oprsu]_[A-Za-z0-9]{20,}\b|(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s]+|(?:password|token|api[_ -]?key|client[_ -]?secret)\s*[:=]\s*["']?[^\s"']{12,})/i
+const ENVIRONMENT_ALLOWLIST = new Set([
+  "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "PATH", "TEMP", "TMP", "USERPROFILE", "HOME",
+  "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432",
+  "HOMEDRIVE", "HOMEPATH", "USERNAME", "USERDOMAIN", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+  "SSH_AUTH_SOCK",
+])
+const ENVIRONMENT_ADDITIONS = new Set(["NEXT_PRIVATE_BUILD_WORKER", "NEXT_TELEMETRY_DISABLED"])
 
-function sanitizedEnvironment(additions = {}) {
-  const environment = { ...process.env, ...additions }
-  for (const name of ["OPENAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN"]) delete environment[name]
+export function buildSanitizedEnvironment(additions = {}, source = process.env) {
+  const environment = {}
+  for (const name of ENVIRONMENT_ALLOWLIST) if (source[name]) environment[name] = source[name]
+  for (const [name, value] of Object.entries(additions)) {
+    if (!ENVIRONMENT_ADDITIONS.has(name)) throw new Error("PROCESS_ENVIRONMENT_WALL")
+    environment[name] = value
+  }
   return environment
 }
 
@@ -20,7 +31,7 @@ async function run(command, args, options = {}) {
   try {
     return await execFile(command, args, {
       cwd: options.cwd,
-      env: sanitizedEnvironment(options.env),
+      env: buildSanitizedEnvironment(options.env),
       encoding: "utf8",
       maxBuffer: options.maxBuffer ?? 8 * 1024 * 1024,
       timeout: options.timeout ?? 30 * 60 * 1000,
@@ -72,8 +83,6 @@ export async function inspectWorkspaceChanges(workspace, allowedPaths) {
     git(workspace, ["diff", "--cached", "--binary"]),
   ])
   const changedPaths = splitNul(stagedResult.stdout)
-  if (splitNul(unstagedResult.stdout).length > 0) throw new Error("PATCH_UNSTAGED_WALL")
-  if (splitNul(untrackedResult.stdout).length > 0) throw new Error("PATCH_UNTRACKED_WALL")
   if (changedPaths.length === 0) throw new Error("PATCH_EMPTY_WALL")
   for (const changedPath of changedPaths) {
     assertRelativePath(changedPath)
@@ -83,6 +92,8 @@ export async function inspectWorkspaceChanges(workspace, allowedPaths) {
   if (/mode (?:120000|160000)|create mode (?:120000|160000)/.test(summaryResult.stdout)) throw new Error("PATCH_SYMLINK_OR_SUBMODULE_WALL")
   const indexEntries = await Promise.all(changedPaths.map((changedPath) => git(workspace, ["ls-files", "-s", "--", changedPath])))
   if (indexEntries.some((entry) => /^(?:120000|160000)\s/.test(entry.stdout))) throw new Error("PATCH_SYMLINK_OR_SUBMODULE_WALL")
+  if (splitNul(unstagedResult.stdout).length > 0) throw new Error("PATCH_UNSTAGED_WALL")
+  if (splitNul(untrackedResult.stdout).length > 0) throw new Error("PATCH_UNTRACKED_WALL")
   assertNoSecretMaterial(workspace, changedPaths)
   return { changedPaths, patchBytes: Buffer.byteLength(patchResult.stdout, "utf8") }
 }
@@ -113,11 +124,9 @@ export function evaluateCheckRollup(checks) {
 export function createNativeAdapters({ root, repositoryPath, scriptsPath = path.resolve("scripts", "local") }) {
   const requestRoot = path.join(root, "state", "requests")
 
-  async function resolveReviewThreads(pr) {
-    const query = await gh(["api", "graphql", "-f", "query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved}}}}}", "-f", "owner=bsvalues", "-f", "repo=terragroq", "-F", `number=${pr}`])
-    const threads = JSON.parse(query.stdout).data.repository.pullRequest.reviewThreads.nodes
-    for (const thread of threads.filter((candidate) => !candidate.isResolved)) {
-      await gh(["api", "graphql", "-f", "query=mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}", "-f", `id=${thread.id}`])
+  async function resolveReviewThreads(threadIds) {
+    for (const threadId of threadIds) {
+      await gh(["api", "graphql", "-f", "query=mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}", "-f", `id=${threadId}`])
     }
   }
 
@@ -232,7 +241,7 @@ export function createNativeAdapters({ root, repositoryPath, scriptsPath = path.
       }
     },
 
-    async publish({ issueNumber, workOrderId, workspace, branch, existingPr }) {
+    async publish({ issueNumber, workOrderId, workspace, branch, existingPr, resolvedThreadIds = [] }) {
       let effectiveBranch = branch || (await git(workspace, ["branch", "--show-current"])).stdout.trim()
       if (!effectiveBranch) {
         effectiveBranch = `runtime/${workOrderId.toLowerCase()}-issue-${issueNumber}`
@@ -246,7 +255,7 @@ export function createNativeAdapters({ root, repositoryPath, scriptsPath = path.
       }
       await git(workspace, ["push", "-u", "origin", effectiveBranch])
       if (existingPr) {
-        await resolveReviewThreads(existingPr)
+        await resolveReviewThreads(resolvedThreadIds)
         return { branch: effectiveBranch, pr: existingPr }
       }
       const existing = await gh(["pr", "list", "--repo", REPOSITORY, "--head", effectiveBranch, "--state", "all", "--json", "number", "--jq", ".[0].number"])
@@ -264,10 +273,10 @@ export function createNativeAdapters({ root, repositoryPath, scriptsPath = path.
     },
 
     async inspectPullRequest(pr) {
-      const result = await gh(["pr", "view", String(pr), "--repo", REPOSITORY, "--json", "state,mergeable,reviewDecision,statusCheckRollup"])
+      const result = await gh(["pr", "view", String(pr), "--repo", REPOSITORY, "--json", "state,mergeable,reviewDecision,statusCheckRollup,reviews"])
       const pull = JSON.parse(result.stdout)
       if (pull.state === "MERGED") return { decision: "MERGE", reason: "ALREADY_MERGED", feedback: "" }
-      const graph = await gh(["api", "graphql", "-f", "query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(last:1){nodes{body path}}}}}}}", "-f", "owner=bsvalues", "-f", "repo=terragroq", "-F", `number=${pr}`])
+      const graph = await gh(["api", "graphql", "-f", "query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved comments(last:1){nodes{body path}}}}}}}", "-f", "owner=bsvalues", "-f", "repo=terragroq", "-F", `number=${pr}`])
       const threads = JSON.parse(graph.stdout).data.repository.pullRequest.reviewThreads.nodes
       const unresolved = threads.filter((thread) => !thread.isResolved)
       const checks = pull.statusCheckRollup ?? []
@@ -278,7 +287,16 @@ export function createNativeAdapters({ root, repositoryPath, scriptsPath = path.
           return `${comment.path ?? "PR"}: ${safeFeedback(comment.body)}`
         })
         const checkFeedback = failures.map((check) => `Check ${check.name ?? check.context ?? "unknown"}: ${check.conclusion ?? check.state}`)
-        return { decision: "REMEDIATE", reason: unresolved.length ? "UNRESOLVED_REVIEW_THREADS" : "FAILED_CHECK", feedback: [...threadFeedback, ...checkFeedback].join("\n") }
+        const requested = [...(pull.reviews ?? [])].reverse().find((review) => review.state === "CHANGES_REQUESTED")
+        const reviewFeedback = requested?.body ? [safeFeedback(requested.body)] : []
+        const reason = unresolved.length ? "UNRESOLVED_REVIEW_THREADS" : failures.length ? "FAILED_CHECK" : "CHANGES_REQUESTED"
+        return {
+          decision: "REMEDIATE",
+          reason,
+          feedback: [...threadFeedback, ...checkFeedback, ...reviewFeedback].join("\n"),
+          threadIds: unresolved.map((thread) => thread.id),
+          threadPaths: unresolved.map((thread) => thread.comments.nodes.at(-1)?.path ?? null),
+        }
       }
       if (pending || pull.mergeable !== "MERGEABLE") return { decision: "WAIT", reason: "CHECKS_OR_MERGEABILITY_PENDING", feedback: "" }
       return { decision: "MERGE", reason: "ALL_GATES_GREEN", feedback: "" }
@@ -300,8 +318,9 @@ export function createNativeAdapters({ root, repositoryPath, scriptsPath = path.
     },
 
     async complete(issueNumber) {
-      await gh(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:done"])
-      await gh(["issue", "close", String(issueNumber), "--repo", REPOSITORY, "--comment", "WilliamOS operational kernel verified the merged-main completion evidence."])
+      const issue = JSON.parse((await gh(["issue", "view", String(issueNumber), "--repo", REPOSITORY, "--json", "state,labels"])).stdout)
+      if (!issue.labels.some((label) => label.name === "williamos:done")) await gh(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:done"])
+      if (issue.state !== "CLOSED") await gh(["issue", "close", String(issueNumber), "--repo", REPOSITORY, "--comment", "WilliamOS operational kernel verified the merged-main completion evidence."])
     },
   }
 }

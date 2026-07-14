@@ -161,9 +161,11 @@ Work Orders: `WO-RUNTIME-IDENTITY-001` through
 Current Work Order:
 `WO-RUNTIME-IDENTITY-029 - Owner Activation Gate`.
 
-Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-026`; evidence
-is recorded in `docs/reports/WO-RUNTIME-IDENTITY-001` through
-`docs/reports/WO-RUNTIME-IDENTITY-026` reports.
+Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-026`, plus
+`WO-RUNTIME-IDENTITY-028`. Foundation evidence is recorded in
+`docs/reports/WO-RUNTIME-IDENTITY-001` through
+`docs/reports/WO-RUNTIME-IDENTITY-026` reports; WO-028 is represented by the
+reviewed native pilot authority record.
 
 `WO-RUNTIME-IDENTITY-027` is closed as a blocked, superseded network
 diagnostic rather than operational proof. `WO-RUNTIME-IDENTITY-028` is complete:

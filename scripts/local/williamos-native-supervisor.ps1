@@ -28,9 +28,12 @@ try {
   $registry = Join-Path $RepositoryPath "runtime-operator\native\authority-registry.json"
   do {
     try {
-      $output = & node $kernel --root $Root --repository $RepositoryPath --registry $registry
-      if ($LASTEXITCODE -eq 2) { throw "OWNER_AUTHORITY_WALL" }
-      if ($LASTEXITCODE -ne 0) { throw "OPERATIONAL_KERNEL_PROCESS_WALL" }
+      $output = (& node $kernel --root $Root --repository $RepositoryPath --registry $registry 2>&1 | Out-String).Trim()
+      $exitCode = $LASTEXITCODE
+      $wall = if ($output -match '^[A-Z][A-Z0-9_]+_WALL$') { $output } else { "OPERATIONAL_KERNEL_WALL" }
+      if ($exitCode -eq 2) { throw "OWNER_AUTHORITY_WALL" }
+      if ($exitCode -eq 3) { throw "OPERATIONAL_KERNEL_RECOVERABLE_WALL:$wall" }
+      if ($exitCode -ne 0) { throw "OPERATIONAL_KERNEL_TERMINAL_WALL:$wall" }
       Write-WilliamOSAudit $Root "kernel_cycle" @{ state = "OBSERVED" }
       Write-Output $output
       $retry = 5
@@ -38,6 +41,10 @@ try {
     } catch {
       if ($_.Exception.Message -eq "OWNER_AUTHORITY_WALL") {
         Write-WilliamOSAudit $Root "owner_authority_wall" @{ state = "BLOCKED" }
+        throw
+      }
+      if ($_.Exception.Message -notlike "OPERATIONAL_KERNEL_RECOVERABLE_WALL:*") {
+        Write-WilliamOSAudit $Root "kernel_terminal_failure" @{ state = "FAILED_TERMINAL" }
         throw
       }
       Write-WilliamOSAudit $Root "cycle_recoverable_failure" @{ state = "FAILED_RECOVERABLE"; category = $_.Exception.GetType().Name }
