@@ -3,6 +3,13 @@ import type { EventLog } from "@/lib/db/schema"
 
 import { getEvidenceRollupSurface } from "@/components/evidence/evidence-rollup-surface"
 
+const zeroOwnerOperations = {
+  OWNER_OPERATION_TOUCH_COUNT: 0,
+  OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+  OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
+  OWNER_ROUTINE_DECISION_COUNT: 0,
+} as const
+
 function event(type: string, register: string | null, summary = "recorded proof"): EventLog {
   return {
     id: 1,
@@ -55,6 +62,11 @@ describe("evidence rollup surface", () => {
       autoIngests: false,
       writesProduction: false,
     })
+    expect(surface.ownerOperationEvidence).toMatchObject({
+      lifecycleState: "NO_OWNER_OPERATION_EVIDENCE",
+      reasonCode: "OWNER_OPERATION_EVIDENCE_MISSING",
+      certification: { independentlyVerified: false, evidenceHeadHash: null },
+    })
   })
 
   it("makes missing and blocked proof visible without adding ingestion", () => {
@@ -77,5 +89,28 @@ describe("evidence rollup surface", () => {
     const states = new Map(surface.proofStates.map((state) => [state.label, state.status]))
 
     expect(states.get("Production proof")).toBe("present")
+  })
+
+  it("keeps supplied zeros unverified and rejects routine owner work", () => {
+    const unverified = getEvidenceRollupSurface([], {
+      counters: zeroOwnerOperations,
+      workOrderId: "WO-ROLLUP-001",
+      action: "evidence-rollup",
+    })
+    const disqualified = getEvidenceRollupSurface([], {
+      counters: { ...zeroOwnerOperations, OWNER_ROUTINE_DECISION_COUNT: 1 },
+      workOrderId: "WO-ROLLUP-001",
+      action: "evidence-rollup",
+    })
+
+    expect(unverified.ownerOperationEvidence).toMatchObject({
+      lifecycleState: "UNVERIFIED_ZERO_OWNER_OPERATIONS",
+      reasonCode: "OWNER_OPERATION_EVIDENCE_UNVERIFIED",
+      certification: { independentlyVerified: false },
+    })
+    expect(disqualified.ownerOperationEvidence).toMatchObject({
+      lifecycleState: "FAILED_OWNER_BABYSITTING",
+      reasonCode: "FAIL_OWNER_BABYSITTING",
+    })
   })
 })

@@ -1,3 +1,8 @@
+import {
+  createOwnerOperationEvidencePlaceholder,
+  type OwnerOperationEvidenceModel,
+} from "@/lib/governance/owner-operation-evidence"
+
 export type GoalNativeConceptCard = {
   title: string
   description: string
@@ -10,6 +15,7 @@ export type GoalNativeConceptSurface = {
   description: string
   cards: GoalNativeConceptCard[]
   boundaries: string[]
+  ownerOperationEvidence: OwnerOperationEvidenceModel
   nextStep: {
     label: string
     href: string
@@ -45,6 +51,15 @@ export function getGoalNativeConceptSurface(): GoalNativeConceptSurface {
       "A goal does not create background loops.",
       "A goal must hand off to a Work Order before mutation.",
     ],
+    ownerOperationEvidence: createOwnerOperationEvidencePlaceholder({
+      surface: "goal",
+      programId: null,
+      goalId: null,
+      loopId: null,
+      workOrderId: null,
+      decisionId: null,
+      action: null,
+    }),
     nextStep: {
       label: "Review Work Orders",
       href: "/work-orders",

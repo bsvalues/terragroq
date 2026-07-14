@@ -372,5 +372,14 @@ Blocked: TerraFusion production mutation unless separately authorized.
 
 ## Registry Maintenance
 
+Every active goal records the four owner-operation counters when evidence exists, an independent
+evidence reference when available, and one current lifecycle state: `NO_OWNER_OPERATION_EVIDENCE`,
+`UNVERIFIED_ZERO_OWNER_OPERATIONS`, or `FAILED_OWNER_BABYSITTING`. The future
+`CERTIFIED_ZERO_OWNER_OPERATIONS` state is blocked until an independent context-bound evidence verifier
+exists. Caller-supplied zeros cannot certify a goal. Genuine consequential owner authority decisions
+are excluded from routine-operation counts;
+owner courier, credential, diagnostic, and routine implementation actions are counted and disqualify
+certification with reason `FAIL_OWNER_BABYSITTING`.
+
 Update this registry when William authorizes a new goal, changes execution
 order, closes a goal, or explicitly pauses a lane.

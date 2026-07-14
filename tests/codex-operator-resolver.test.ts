@@ -8,6 +8,13 @@ import {
   resolveNextOperatorWorkOrder,
 } from "@/components/operator/codex-operator-resolver"
 
+const zeroOwnerOperations = {
+  OWNER_OPERATION_TOUCH_COUNT: 0,
+  OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+  OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
+  OWNER_ROUTINE_DECISION_COUNT: 0,
+} as const
+
 describe("Codex operator next-WO resolver", () => {
   it("selects the same dependency-ready work order deterministically", () => {
     const program = getCodexOperatorProgram()
@@ -142,6 +149,7 @@ describe("Codex operator next-WO resolver", () => {
       risk: "R3",
       safeDefault: "No auth change",
       resumeAction: "Resume the blocked WO only after an explicit owner decision.",
+      ownerOperationCounters: zeroOwnerOperations,
     })
 
     expect(packet.ownerDecisionRequired).toBe(true)
@@ -155,9 +163,48 @@ describe("Codex operator next-WO resolver", () => {
       "secrets",
     ])
     expect(packet.resumeAction).toContain("Resume")
+    expect(packet.ownerOperationEvidence).toMatchObject({
+      counters: zeroOwnerOperations,
+      lifecycleState: "UNVERIFIED_ZERO_OWNER_OPERATIONS",
+      certification: {
+        independentEvidenceRequired: true,
+        independentlyVerified: false,
+        evidenceHeadHash: null,
+      },
+      ownerAuthorityDecisions: { countsAsRoutineOwnerOperation: false },
+      routineOwnerOperations: { countsAsRoutineOwnerOperation: true },
+    })
     expect(AUTHORITY_WALL_REASON_CODES).not.toContain("NEXT_WO_ELIGIBLE")
     expect(AUTHORITY_WALL_REASON_CODES).not.toContain("IN_SCOPE_REPAIR")
     expect(AUTHORITY_WALL_REASON_CODES).not.toContain("GOAL_PROVEN")
     expect(AUTHORITY_WALL_REASON_CODES).toContain("AUTH_ACCESS_WALL")
+  })
+
+  it.each([
+    ["courier", "OWNER_OPERATION_TOUCH_COUNT"],
+    ["diagnostic", "OWNER_DIAGNOSTIC_TOUCH_COUNT"],
+    ["credential", "OWNER_CREDENTIAL_TOUCH_COUNT"],
+  ] as const)("disqualifies a stop packet that used the owner as a routine %s", (_touch, counter) => {
+    const packet = buildOperatorStopPacket({
+      decisionId: "DECISION-AUTH-002",
+      blockedWorkOrderId: "WO-CODEX-OPERATOR-022",
+      wallType: "AUTH_ACCESS_WALL",
+      decisionRequired: "Choose whether to open a separately scoped auth goal.",
+      options: ["Keep the current policy", "Open a separately scoped auth goal"],
+      recommendedOption: "Keep the current policy",
+      risk: "R3",
+      safeDefault: "No auth change",
+      resumeAction: "Resume only after the authority decision.",
+      ownerOperationCounters: {
+        ...zeroOwnerOperations,
+        [counter]: 1,
+      },
+    })
+
+    expect(packet.ownerOperationEvidence).toMatchObject({
+      lifecycleState: "FAILED_OWNER_BABYSITTING",
+      reasonCode: "FAIL_OWNER_BABYSITTING",
+      certification: { independentlyVerified: false },
+    })
   })
 })

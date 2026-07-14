@@ -1,5 +1,15 @@
 import type { WorkOrder } from "@/lib/db/schema"
+import {
+  createOwnerOperationEvidencePlaceholder,
+  evaluateOwnerOperationEvidence,
+  type OwnerOperationCounters,
+  type OwnerOperationEvidenceModel,
+} from "@/lib/governance/owner-operation-evidence"
 import { buildClosureReport } from "@/lib/work-orders/lifecycle"
+
+export type CompletionOwnerOperationInput = {
+  countersByWorkOrder: Readonly<Record<string, OwnerOperationCounters>>
+}
 
 export type CompletionReportItem = {
   ref: string
@@ -7,6 +17,7 @@ export type CompletionReportItem = {
   status: string
   result: string
   report: string
+  ownerOperationEvidence: OwnerOperationEvidenceModel
 }
 
 export type CompletionReportSurface = {
@@ -26,16 +37,42 @@ export type CompletionReportSurface = {
   }
 }
 
-export function getCompletionReportSurface(orders: WorkOrder[]): CompletionReportSurface {
+export function getCompletionReportSurface(
+  orders: WorkOrder[],
+  ownerOperations?: CompletionOwnerOperationInput,
+): CompletionReportSurface {
   const items = orders
     .filter((order) => order.status === "closed" || order.status === "aborted")
-    .map((order): CompletionReportItem => ({
-      ref: order.ref ?? `WO-${order.id}`,
-      title: order.title,
-      status: order.status,
-      result: order.result ?? "PENDING",
-      report: buildClosureReport(order),
-    }))
+    .map((order): CompletionReportItem => {
+      const ref = order.ref ?? `WO-${order.id}`
+      const counters = ownerOperations?.countersByWorkOrder[ref]
+      return {
+        ref,
+        title: order.title,
+        status: order.status,
+        result: order.result ?? "PENDING",
+        report: buildClosureReport(order),
+        ownerOperationEvidence: counters
+          ? evaluateOwnerOperationEvidence(counters, {
+              surface: "completion-report",
+              programId: null,
+              goalId: null,
+              loopId: null,
+              workOrderId: ref,
+              decisionId: null,
+              action: "close-work-order",
+            })
+          : createOwnerOperationEvidencePlaceholder({
+              surface: "completion-report",
+              programId: null,
+              goalId: null,
+              loopId: null,
+              workOrderId: ref,
+              decisionId: null,
+              action: "close-work-order",
+            }),
+      }
+    })
 
   return {
     title: "Completion Reports",

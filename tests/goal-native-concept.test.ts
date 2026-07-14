@@ -32,4 +32,14 @@ describe("/goal native concept surface", () => {
       href: "/work-orders",
     })
   })
+
+  it("exposes a goal-bound read-only owner-operation evidence placeholder", () => {
+    const surface = getGoalNativeConceptSurface()
+
+    expect(surface.ownerOperationEvidence.binding.surface).toBe("goal")
+    expect(surface.ownerOperationEvidence.counters.OWNER_OPERATION_TOUCH_COUNT).toBeNull()
+    expect(surface.ownerOperationEvidence.lifecycleState).toBe("NO_OWNER_OPERATION_EVIDENCE")
+    expect(surface.ownerOperationEvidence.certification.independentEvidenceRequired).toBe(true)
+    expect(surface.ownerOperationEvidence.reasonCode).toBe("OWNER_OPERATION_EVIDENCE_MISSING")
+  })
 })

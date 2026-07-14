@@ -261,7 +261,17 @@ PRODUCTION_VERIFICATION:
 SAFETY_POSTURE:
 OWNER_DECISION_REQUIRED:
 NEXT_RECOMMENDED_WO:
+OWNER_OPERATION_TOUCH_COUNT:
+OWNER_CREDENTIAL_TOUCH_COUNT:
+OWNER_DIAGNOSTIC_TOUCH_COUNT:
+OWNER_ROUTINE_DECISION_COUNT:
+OWNER_OPERATION_EVIDENCE_REF:
+OWNER_OPERATION_CERTIFICATION_STATE:
 ```
+
+Every loop return carries the four owner-operation counters. Zero values are unverified until linked
+to independent durable evidence for the same run. Genuine owner authority decisions do not count as
+routine operations; using the Owner for courier, credential, diagnostic, or routine decision work does.
 
 ## Registry Maintenance
 

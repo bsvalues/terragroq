@@ -2,6 +2,10 @@ import type {
   OperatorProgramRecord,
   OperatorRiskClass,
 } from "@/components/operator/codex-operator-registry"
+import {
+  evaluateOwnerOperationEvidence,
+  type OwnerOperationCounters,
+} from "@/lib/governance/owner-operation-evidence"
 
 export type NextWorkOrderResolution =
   | { decision: "NEXT_WORK_ORDER"; workOrderId: string; blockers: [] }
@@ -168,12 +172,24 @@ export type OperatorStopPacketInput = {
   risk: OperatorRiskClass
   safeDefault: string
   resumeAction: string
+  ownerOperationCounters: OwnerOperationCounters
 }
 
 export function buildOperatorStopPacket(input: OperatorStopPacketInput) {
+  const { ownerOperationCounters, ...packet } = input
+
   return {
-    ...input,
+    ...packet,
     ownerDecisionRequired: true as const,
+    ownerOperationEvidence: evaluateOwnerOperationEvidence(ownerOperationCounters, {
+      surface: "stop-packet",
+      programId: null,
+      goalId: null,
+      loopId: null,
+      workOrderId: packet.blockedWorkOrderId,
+      decisionId: packet.decisionId,
+      action: "owner-authority-decision",
+    }),
     doNotProvide: [
       "passwords",
       "tokens",

@@ -2,7 +2,7 @@
 
 ## Result
 
-`BLOCKED_CROSS_SURFACE_BINDING / VERIFIER_IMPLEMENTED / NO_AUTHORITY_ISSUED`
+`BLOCKED_INDEPENDENT_EVIDENCE_VERIFIER / STATIC_MODEL_BOUND / NO_AUTHORITY_ISSUED`
 
 ## Delivered
 
@@ -12,9 +12,13 @@
 - Direct terminal-revocation verification for executable records that predate immutable grants.
 - Fail-closed expiry, trust, chain, scope, and current-revocation assertions.
 - Supervisor-consumable CLI with typed authority walls and exit code 2.
-- Four-counter zero-owner-operation schema and fail-closed value validation.
+- Four-counter zero-owner-operation schema with proposed context and evidence-head fields.
 - Canonical `FAILED_OWNER_BABYSITTING` lifecycle state and `FAIL_OWNER_BABYSITTING` reason-code split.
 - Work Order template authority references and owner-touch evidence fields.
+- Shared read-only owner-operation model across goals, loops, Work Orders, stop packets, completion
+  reports, Evidence, Authority, and visible UI surfaces.
+- `NO_OWNER_OPERATION_EVIDENCE` and `not recorded` counters on unbound surfaces.
+- `UNVERIFIED_ZERO_OWNER_OPERATIONS` for record-bound caller-supplied zeros; no certification path.
 
 ## Boundary Evidence
 
@@ -27,10 +31,11 @@
 
 ## Remaining acceptance gate
 
-WO-MAO-003 is not complete. Caller-supplied zero counters are structural inputs, not independent audit
-evidence, and the new multi-agent coordinator does not yet exist to enforce assertions before every
-lease, provider call, GitHub write, merge, release, or activation. The counters must be bound across
-goals, loops, Work Orders, stop packets, UI, and the durable evidence chain before this WO may pass.
+The static surfaces are bound, but WO-MAO-003 is not complete. A separate technical slice must verify a
+context-bound owner-operation evidence artifact against an independent monotonic evidence anchor before
+any run can become `CERTIFIED_ZERO_OWNER_OPERATIONS`. Before WO-MAO-005 may activate the successor, the
+Owner must also independently provision the monotonic owner anchor and issue the scoped
+program-activation artifact.
 
 ## Integration
 

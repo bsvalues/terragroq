@@ -32,7 +32,8 @@ An `OWNER_AUTHORITY_GRANT` is canonical JSON with:
 - `grantKind`, exactly `ACTION_AUTHORITY` or `PROGRAM_ACTIVATION`;
 - owner `issuer` containing `role: OWNER` and `ownerId`;
 - one `subject` (`type` and `id`);
-- explicit `scope` arrays for program IDs, repositories, risk classes, actions, and merge modes;
+- explicit `scope` arrays for program, goal, loop, Work Order, and decision IDs, plus repositories,
+  risk classes, actions, and merge modes;
 - RFC 3339 `issuedAt` and `expiresAt` instants;
 - SHA-256 `contentHash` of canonical JSON excluding `contentHash` and `signature`;
 - an Ed25519 `signature` containing `algorithm`, trusted `keyId`, and base64 `value`.
@@ -93,6 +94,9 @@ node scripts/multi-agent-operator/authority-event-cli.mjs validate-artifacts `
   --owner-counters C:\runtime-evidence\owner-counters.json `
   --subject-type PROGRAM --subject-id PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001 `
   --program PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001 `
+  --goal GOAL-WILLIAMOS-MULTI-AGENT-OPERATOR-001 `
+  --loop LOOP-WILLIAMOS-MULTI-AGENT-OPERATOR-001 `
+  --work-order WO-MAO-003 --decision OWNER-DECISION-MAO-003 `
   --repository bsvalues/terragroq --risk R0 --action VERIFY --merge-mode NONE
 ```
 
@@ -109,14 +113,18 @@ OWNER_DIAGNOSTIC_TOUCH_COUNT
 OWNER_ROUTINE_DECISION_COUNT
 ```
 
-Certification requires all four to be zero. `FAILED_OWNER_BABYSITTING` is the lifecycle state recorded
-for a disqualified run. `FAIL_OWNER_BABYSITTING` is its stable reason code; reason codes are not
-lifecycle states. The verifier surfaces a nonzero counter as `OWNER_BABYSITTING_WALL` and never treats
-an owner operation as successful evidence.
+No selected record is `NO_OWNER_OPERATION_EVIDENCE`; its counters display as `not recorded`, not zero.
+Caller-supplied zero counters are `UNVERIFIED_ZERO_OWNER_OPERATIONS` and never certification. A future
+`OWNER_OPERATION_EVIDENCE` artifact must bind the run, program, goal, loop, Work Order, decision when
+applicable, exact action, evidence-head hash, and identical counter set. This phase does not implement
+the independently anchored evidence verifier, so `CERTIFIED_ZERO_OWNER_OPERATIONS` cannot be emitted.
+`FAILED_OWNER_BABYSITTING` is the lifecycle state for any nonzero routine touch, with stable reason
+`FAIL_OWNER_BABYSITTING`. Genuine owner authority decisions are outside routine-operation counts; using
+the Owner as courier, diagnostician, credential operator, or routine decision-maker is not.
 
-At this phase the verifier validates counter shape and zero values; the counters are not yet an
-independent audit source. Binding them to the durable evidence chain, UI, stop packets, goals, and loops
-remains part of WO-MAO-003 completion and must not be certified from caller-supplied zeros alone.
+The current CLI argument is deliberately named `--owner-counters`: it validates an untrusted counter
+record only. It must not be renamed or represented as `--owner-operation-evidence` until an independent,
+context-bound evidence verifier and monotonic anchor are implemented.
 
 ## Integration Contract
 

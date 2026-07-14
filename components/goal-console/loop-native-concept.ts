@@ -1,3 +1,8 @@
+import {
+  createOwnerOperationEvidencePlaceholder,
+  type OwnerOperationEvidenceModel,
+} from "@/lib/governance/owner-operation-evidence"
+
 export type LoopNativeConceptStep = {
   label: string
   description: string
@@ -10,6 +15,7 @@ export type LoopNativeConceptSurface = {
   description: string
   steps: LoopNativeConceptStep[]
   guarantees: string[]
+  ownerOperationEvidence: OwnerOperationEvidenceModel
 }
 
 export function getLoopNativeConceptSurface(): LoopNativeConceptSurface {
@@ -46,5 +52,14 @@ export function getLoopNativeConceptSurface(): LoopNativeConceptSurface {
       "No scheduler, background worker, Hermes, MCP, or autonomy activation.",
       "No production write without a separate authorized Work Order.",
     ],
+    ownerOperationEvidence: createOwnerOperationEvidencePlaceholder({
+      surface: "loop",
+      programId: null,
+      goalId: null,
+      loopId: null,
+      workOrderId: null,
+      decisionId: null,
+      action: null,
+    }),
   }
 }

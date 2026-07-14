@@ -3,6 +3,7 @@ import { KeyRound, ShieldCheck } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { getAuthorityRegistrySurface } from "@/components/governance/authority-registry"
+import { formatOwnerOperationCounter, OWNER_OPERATION_COUNTER_NAMES } from "@/lib/governance/owner-operation-evidence"
 
 function AuthorityField({ label, values }: { label: string; values: string[] }) {
   return (
@@ -175,6 +176,44 @@ export function AuthorityRegistryPanel() {
         <GateGroup title="Production / deploy gates" gates={registry.productionDeployGates} />
         <GateGroup title="DB / schema gates" gates={registry.dbSchemaGates} />
         <GateGroup title="Autonomy / worker gates" gates={registry.autonomyWorkerGates} />
+      </div>
+
+      <div className="border-t border-border p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm font-medium">Owner-operation evidence</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              No measurement is implied when evidence is absent. Recorded zero counters remain unverified.
+            </p>
+          </div>
+          <Badge variant="outline" className="max-w-full whitespace-normal break-all font-mono text-[10px]">
+            {registry.ownerOperationEvidence.lifecycleState}
+          </Badge>
+        </div>
+        <dl className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {OWNER_OPERATION_COUNTER_NAMES.map((name) => (
+            <div key={name} className="min-w-0 border-l-2 border-border pl-3">
+              <dt className="break-all font-mono text-[10px] text-muted-foreground">{name}</dt>
+              <dd className="mt-1 text-sm font-semibold tabular-nums">
+                {formatOwnerOperationCounter(registry.ownerOperationEvidence.counters[name])}
+              </dd>
+            </div>
+          ))}
+        </dl>
+        <div className="mt-4 grid gap-4 text-sm md:grid-cols-2">
+          <div>
+            <p className="font-medium">{registry.ownerOperationEvidence.ownerAuthorityDecisions.label}</p>
+            <p className="mt-1 text-muted-foreground">
+              {registry.ownerOperationEvidence.ownerAuthorityDecisions.description}
+            </p>
+          </div>
+          <div>
+            <p className="font-medium">{registry.ownerOperationEvidence.routineOwnerOperations.label}</p>
+            <p className="mt-1 text-muted-foreground">
+              {registry.ownerOperationEvidence.routineOwnerOperations.description}
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="border-t border-border p-4">

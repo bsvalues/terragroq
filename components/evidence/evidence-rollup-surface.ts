@@ -1,4 +1,16 @@
 import type { EventLog } from "@/lib/db/schema"
+import {
+  createOwnerOperationEvidencePlaceholder,
+  evaluateOwnerOperationEvidence,
+  type OwnerOperationCounters,
+  type OwnerOperationEvidenceModel,
+} from "@/lib/governance/owner-operation-evidence"
+
+export type EvidenceRollupOwnerOperationInput = {
+  counters: OwnerOperationCounters
+  workOrderId: string
+  action: string
+}
 
 export type EvidenceRollupCard = {
   label: string
@@ -18,6 +30,7 @@ export type EvidenceRollupSurface = {
   cards: EvidenceRollupCard[]
   recentSignals: string[]
   proofStates: EvidenceProofState[]
+  ownerOperationEvidence: OwnerOperationEvidenceModel
   safety: {
     readOnly: true
     recordsEvidence: false
@@ -49,12 +62,34 @@ function countProductionProof(events: EventLog[]) {
   }).length
 }
 
-export function getEvidenceRollupSurface(events: EventLog[]): EvidenceRollupSurface {
+export function getEvidenceRollupSurface(
+  events: EventLog[],
+  ownerOperations?: EvidenceRollupOwnerOperationInput,
+): EvidenceRollupSurface {
   const workOrderEvents = countByRegister(events, "work-orders")
   const decisionEvents = countByRegister(events, "decisions")
   const evidenceEvents = countByType(events, "evidence")
   const authorityEvents = countByRegister(events, "authority")
   const productionProofEvents = countProductionProof(events)
+  const ownerOperationEvidence = ownerOperations
+    ? evaluateOwnerOperationEvidence(ownerOperations.counters, {
+        surface: "evidence",
+        programId: null,
+        goalId: null,
+        loopId: null,
+        workOrderId: ownerOperations.workOrderId,
+        decisionId: null,
+        action: ownerOperations.action,
+      })
+    : createOwnerOperationEvidencePlaceholder({
+        surface: "evidence",
+        programId: null,
+        goalId: null,
+        loopId: null,
+        workOrderId: null,
+        decisionId: null,
+        action: null,
+      })
 
   return {
     title: "Evidence Rollup",
@@ -83,6 +118,7 @@ export function getEvidenceRollupSurface(events: EventLog[]): EvidenceRollupSurf
       },
     ],
     recentSignals: events.slice(0, 5).map((event) => `${event.type}: ${event.summary}`),
+    ownerOperationEvidence,
     proofStates: [
       {
         label: "Validation proof",
