@@ -374,9 +374,11 @@ Blocked: TerraFusion production mutation unless separately authorized.
 
 Every active goal records the four owner-operation counters when evidence exists, an independent
 evidence reference when available, and one current lifecycle state: `NO_OWNER_OPERATION_EVIDENCE`,
-`UNVERIFIED_ZERO_OWNER_OPERATIONS`, or `FAILED_OWNER_BABYSITTING`. The future
-`CERTIFIED_ZERO_OWNER_OPERATIONS` state is blocked until an independent context-bound evidence verifier
-exists. Caller-supplied zeros cannot certify a goal. Genuine consequential owner authority decisions
+`UNVERIFIED_ZERO_OWNER_OPERATIONS`, `CERTIFIED_ZERO_OWNER_OPERATIONS`, or
+`FAILED_OWNER_BABYSITTING`. `CERTIFIED_ZERO_OWNER_OPERATIONS` requires the independent context-bound
+evidence verifier, signed assurance record, complete checkpoint and source-log chains, and current
+anchors sourced by the trusted host rather than passed through the operator CLI. Caller-supplied zeros
+cannot certify a goal. Genuine consequential owner authority decisions
 are excluded from routine-operation counts;
 owner courier, credential, diagnostic, and routine implementation actions are counted and disqualify
 certification with reason `FAIL_OWNER_BABYSITTING`.

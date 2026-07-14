@@ -89,7 +89,7 @@ function trustedOwnerFor(record, trustedOwners, trustedOwnerKeyFingerprint) {
   return owner
 }
 
-function verifyTrustBundle(trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash) {
+export function verifyTrustBundle(trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash) {
   if (!plainObject(trustedOwners)
     || trustedOwners.schemaVersion !== 1
     || trustedOwners.artifactType !== "OWNER_TRUST_BUNDLE"
@@ -311,6 +311,11 @@ function includes(scope, field, expected) {
 
 export function evaluateOwnerOperationCounters(counters) {
   if (!plainObject(counters)) wall("OWNER_TOUCH_EVIDENCE_WALL")
+  const keys = Object.keys(counters).sort()
+  const expectedKeys = [...COUNTER_NAMES].sort()
+  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+    wall("OWNER_TOUCH_EVIDENCE_WALL", "COUNTER_SET")
+  }
   const normalized = {}
   for (const name of COUNTER_NAMES) {
     if (!Number.isSafeInteger(counters[name]) || counters[name] < 0) wall("OWNER_TOUCH_EVIDENCE_WALL", name)

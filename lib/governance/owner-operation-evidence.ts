@@ -37,10 +37,44 @@ export type OwnerOperationBindingContext = Readonly<{
 export type ProposedIndependentOwnerOperationEvidence = Readonly<{
   schemaVersion: 1
   artifactType: "OWNER_OPERATION_EVIDENCE"
+  canonicalization: "WILLIAMOS-CANONICAL-JSON-V1"
+  hashAlgorithm: "SHA-256"
+  evidenceId: string
   runId: string
-  evidenceHeadHash: string
+  runManifestHash: string
   scope: OwnerOperationEvidenceScope
+  observation: Readonly<{
+    sourceLogId: string
+    startSequence: number
+    startEventHash: string
+    endSequence: number
+    endEventHash: string
+    observedEventCount: number
+    classificationPolicyHash: string
+    complete: true
+  }>
+  runState: "COMPLETED"
+  startedAt: string
+  completedAt: string
+  recordedAt: string
   counters: OwnerOperationCounters
+  issuer: Readonly<{ role: "ASSURANCE"; recorderId: string }>
+  contentHash: string
+  signature: Readonly<{ algorithm: "Ed25519"; keyId: string; value: string }>
+}>
+
+export type ProposedOwnerOperationEvidenceCheckpoint = Readonly<{
+  schemaVersion: 1
+  artifactType: "OWNER_OPERATION_EVIDENCE_CHECKPOINT"
+  checkpointId: string
+  logId: string
+  sequence: number
+  previousCheckpointHash: string | null
+  commitment: Readonly<{ runId: string; evidenceContentHash: string }>
+  issuedAt: string
+  issuer: Readonly<{ role: "ASSURANCE_LOG"; logId: string }>
+  contentHash: string
+  signature: Readonly<{ algorithm: "Ed25519"; keyId: string; value: string }>
 }>
 
 export type OwnerOperationEvidenceModel = Readonly<{
@@ -116,6 +150,11 @@ function record(value: unknown): value is Record<string, unknown> {
 function normalizeCounters(counters: OwnerOperationCounters): OwnerOperationCounters {
   if (!record(counters)) {
     throw new TypeError("Owner-operation counters must be an object")
+  }
+  const keys = Object.keys(counters).sort()
+  const expectedKeys = [...OWNER_OPERATION_COUNTER_NAMES].sort()
+  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+    throw new TypeError("Owner-operation counters must contain exactly the canonical four keys")
   }
   const normalized = {} as Record<OwnerOperationCounterName, number>
 

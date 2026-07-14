@@ -28,6 +28,8 @@ describe("owner-operation evidence governance", () => {
     expect(() => evaluateOwnerOperationEvidence(null as never, binding)).toThrow(/counters must be an object/i)
     expect(() => evaluateOwnerOperationEvidence(zeroCounters, null as never)).toThrow(/supported surface/i)
     expect(() => createOwnerOperationEvidencePlaceholder({ ...binding, action: "" })).toThrow(/action/i)
+    expect(() => evaluateOwnerOperationEvidence({ ...zeroCounters, OWNER_OTHER_TOUCH_COUNT: 0 } as never, binding))
+      .toThrow(/canonical four keys/i)
   })
 
   it("defines the exact four counters without inventing a measurement", () => {
