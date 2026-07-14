@@ -6,7 +6,8 @@ Lane B PR `#364` merged first as `8ec632aa`; Lane A PR `#365` merged next as `94
 dependencies were complete on main, the coordinator automatically released Lane C without an owner
 prompt. Before both merges, the dependent planner lane was not eligible. Two post-merge assurance
 findings were corrected in integration/remediation PR `#366`, independently verified at head
-`217d998b`, and their original threads resolved.
+`217d998b`, and their original threads resolved. Latest local assurance head `44ee48e` adds path-context
+remediation and is not claimed as a published remote head.
 
 Lane C implements only deterministic planning. It validates candidate dispatch envelopes, checks
 dependency completion, applies the reservation compatibility contract, assigns a stable wave order,

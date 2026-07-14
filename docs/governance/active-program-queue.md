@@ -92,8 +92,8 @@ Evidence:
 
 ## Completed TerraFusion Command Program
 
-`GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer` completed through PR
-#339 at `05fcf18fba8a6a2be5fef7865e3a6842ae9bb747`.
+`GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer` completed through
+PR #339 at `05fcf18fba8a6a2be5fef7865e3a6842ae9bb747`.
 
 Evidence:
 `docs/reports/WO-TF-COMMAND-006-final-rollup.md`
@@ -106,7 +106,9 @@ program without routine owner contact. Its goal is
 `GOAL-WOS-MULTI-AGENT-OPERATOR-001`; its loop is
 `LOOP-WOS-MULTI-AGENT-OPERATOR-001`. Phase 0 and the bounded hosted-team proof
 through `WO-MAO-015` are complete. Two post-merge threads were remediated through
-integration PR #366, independently re-reviewed at head `217d998b`, and resolved.
+integration PR #366, independently re-reviewed at prior remote head `217d998b`, and resolved. Latest
+local assurance head `44ee48e` adds mixed-context path remediation and is not claimed as a published
+remote PR head.
 `WO-MAO-016` is next eligible. The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,

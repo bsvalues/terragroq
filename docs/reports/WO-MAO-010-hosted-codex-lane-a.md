@@ -1,6 +1,6 @@
 # WO-MAO-008/009/010 — Hosted Codex Lane A Evidence
 
-Status: `P1_REMEDIATED / FINAL_INDEPENDENT_RE-REVIEW_REQUESTED`
+Status: `INDEPENDENT_REVIEW_PASS / FOLLOW_UP_PR_366_PENDING_MERGE`
 
 ## Execution identity
 
@@ -13,6 +13,7 @@ Status: `P1_REMEDIATED / FINAL_INDEPENDENT_RE-REVIEW_REQUESTED`
 - Assurance remediation completed at (UTC): `2026-07-14T15:56:39Z`
 - Post-merge P1 remediation started at (UTC): `2026-07-14T16:14:31Z`
 - Post-merge P1 remediation completed at (UTC): `2026-07-14T16:15:22Z`
+- Review-state evidence reconciled at (UTC): `2026-07-14T16:46:23Z`
 - Local runtime activation: `false`
 - Provider credential access: `false`
 - Push performed by builder: `false`
@@ -79,8 +80,9 @@ four within the original reservation:
 3. Reservation paths reject Unicode control and format characters, including NUL and newline.
 4. Direct and CLI success results now carry `validationOnly=true` and `authorityGranted=false`.
 
-Exact regression tests cover each assurance finding. Independent re-review is requested against the
-second scoped commit; this builder does not self-approve the remediation.
+Exact regression tests cover each assurance finding. Independent re-review passed and its
+remediation threads were resolved; the evidence records that external verdict rather than a builder
+self-approval.
 
 ## Post-merge P1 remediation
 
@@ -91,8 +93,10 @@ set for `OWNER_CONTACT`, `CREDENTIAL_ACCESS`, `RUNTIME_ACTIVATION`, `PRODUCTION_
 `OWNER_*` actions. A table-driven regression executes every protected action independently and
 expects `DISPATCH_ENVELOPE_OWNER_OPERATION_WALL`.
 
-Final independent re-review is requested against the P1 remediation commit. This builder records the
-remediation and does not self-assert the final assurance verdict.
+Final independent re-review passed after the P1 remediation, and the remediation threads were
+resolved. Follow-up PR `#366` carries the latest integrated remediation and this evidence correction;
+CodeRabbit thread `PRRT_kwDOOfTWK86Q07J-` is dispositioned by this status reconciliation. PR `#366`
+remains pending merge at the time of this record and is not represented here as merged.
 
 ## Owner-operation counters
 

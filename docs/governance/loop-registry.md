@@ -111,16 +111,18 @@ No run command, diagnostic, provider repair, approval relay, Git operation, or
 status courier task may be assigned to William. All owner-operation counters,
 including `OWNER_ROUTINE_CONTACT_COUNT`, must remain zero.
 
-The local OMEN runtime loop is terminal, non-selectable, and disabled. Issue
-#357 will not be retried, and #358 remains dependency-blocked. Supported hosted
+The local OMEN runtime loop is terminal, non-selectable, and disabled.
+Issue #357 will not be retried, and #358 remains dependency-blocked. Supported hosted
 Codex team work does not depend on that rejected adapter.
 
 Canonical playbook:
 `docs/governance/multi-agent-operator-playbook.md`
 
 Current transition: the Phase 1 hosted proof through `WO-MAO-015` is complete.
-Original-builder remediations passed independent re-review at integration PR
-#366 head `217d998b`, and both substantive legacy threads are resolved. The
+Original-builder remediations passed independent re-review in integration
+PR #366 at prior remote head `217d998b`, and both substantive legacy threads are resolved. Latest local
+assurance head `44ee48e` adds the mixed-context path remediation; that local identity is not claimed as
+a published PR head. The
 resolver selects `WO-MAO-016`.
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`

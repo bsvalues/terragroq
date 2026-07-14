@@ -13,8 +13,10 @@ capability truth, registers dependency-driven continuation, and removes blanket 
 This rollup does not claim final unattended certification. A supported hosted Codex team executed two
 useful, concurrent repository lanes with separate reservations and automatic dependent fan-in release.
 Two post-merge findings were remediated by the original builders, independently re-reviewed at PR #366
-head `217d998b`, and resolved. Claude capability discovery returned `PROVIDER_UNAVAILABLE`, not an owner
-task. Durable dispatch and atomic reservations remain later work.
+prior remote head `217d998b`, and resolved. Latest local assurance head `44ee48e` incorporates subsequent
+structured and mixed-context path remediation; it is local evidence, not a claimed published PR head.
+Claude capability discovery returned `PROVIDER_UNAVAILABLE`, not an owner task. Durable dispatch and
+atomic reservations remain later work.
 
 ## Non-negotiable operating state
 
@@ -58,11 +60,11 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 `WO-MAO-001` through `WO-MAO-015` are complete. `WO-MAO-016 - Work-order envelope v2` is eligible. The
 rejected local runtime is not in its dependency chain.
 
-## Validation
+## Validation evidence
 
-- Independent Phase 0 assurance completed against the full diff.
-- Python worker trust-gate harness: 19 passed.
-- Vitest: 151 files, 789 tests passed.
-- Lint: passed with no warnings or errors.
-- Production build: passed after replacing a stale generated `.next` cache.
-- `git diff --check`: passed.
+- Historical Phase 0 worker trust-gate harness: 19 passed.
+- Latest local assurance at `44ee48e`: 87 focused tests passed.
+- Latest full Vitest at `44ee48e`: 154 files and 857 tests passed.
+- Latest scoped ESLint, production build, diff check, and adversarial probes: passed.
+- Detailed Phase 1 validation evidence:
+  `docs/reports/WO-MAO-015-hosted-team-proof-rollup.md`.

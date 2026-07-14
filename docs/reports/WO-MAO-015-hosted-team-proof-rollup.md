@@ -17,9 +17,11 @@ post-merge remediation through independent re-review.
 - Original-builder local remediations: Lane A `bd155fac`, Lane B `9c3dc01`; coordinating-branch
   local-only integrations `42719b9` and `11aac31`, respectively. None is claimed as published remote
   remediation evidence.
-- Integration/remediation PR: `#366`; independently reviewed head: `217d998b`.
+- Integration/remediation PR: `#366`; prior independently reviewed remote head: `217d998b`.
+- Latest local assurance head: `44ee48e`; it is not claimed as a published remote PR head.
 - Final independent remediation re-review: `PASS`; zero unresolved substantive threads.
-- Validation: 80 focused tests; 154 files / 850 full tests; scoped ESLint, production build, diff check,
+- Validation at latest local assurance head: 87 focused tests; 154 files / 857 full tests; scoped ESLint,
+  production build, diff check,
   and adversarial probes all PASS.
 - Fan-in: Lane C released only after both merged dependencies.
 - Claude: `PROVIDER_UNAVAILABLE`; no owner-assisted authentication or launch.

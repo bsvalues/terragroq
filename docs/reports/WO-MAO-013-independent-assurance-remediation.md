@@ -18,6 +18,8 @@ The two original-builder and two coordinating identities above are local commit 
 published remote remediation commits; remote publication begins only with the fan-in branch lifecycle.
 
 Integration/remediation PR `#366` assembled the corrected proof. Independent assurance re-reviewed head
-`217d998b` and returned `PASS`: 80 focused tests, 154 files / 850 full tests, scoped ESLint, production
-build, diff check, and adversarial probes passed. Both substantive PR #364/#365 threads were replied to
-with that integration evidence and resolved. No owner acted as reviewer or remediator.
+`217d998b` and returned `PASS`. Subsequent local assurance head `44ee48e` adds structured mixed-context
+path remediation; it is not claimed as a published remote head. At that latest local head, 87 focused
+tests, 154 files / 857 full tests, scoped ESLint, production build, diff check, and adversarial probes
+passed. Both substantive PR #364/#365 threads were replied to with integration evidence and resolved.
+No owner acted as reviewer or remediator.
