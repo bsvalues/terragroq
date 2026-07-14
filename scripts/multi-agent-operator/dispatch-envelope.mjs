@@ -67,6 +67,7 @@ const COMMIT_SHA = /^[a-f0-9]{40}$/
 const PROVIDER_IDENTIFIER = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/
 const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/
 const WILDCARD = /[*?\[\]{}!]/
+const CONTROL_OR_FORMAT_CHARACTER = /[\p{Cc}\p{Cf}]/u
 
 function lexicalCompare(left, right) {
   return left < right ? -1 : left > right ? 1 : 0
@@ -166,7 +167,8 @@ function normalizeReservationPath(entry, index, repositories) {
     || segments.includes("..")
     || segments.includes(".")
     || segments.some((segment) => segment === "")
-    || WILDCARD.test(reservationPath)) {
+    || WILDCARD.test(reservationPath)
+    || CONTROL_OR_FORMAT_CHARACTER.test(reservationPath)) {
     wall("DISPATCH_ENVELOPE_PATH_WALL", `reservations.paths[${index}].path`, "SAFE_RELATIVE_POSIX_PATH_REQUIRED")
   }
   return { repository, path: reservationPath }
@@ -286,12 +288,24 @@ export function normalizeDispatchEnvelope(input) {
   }
   const allowedActions = normalizeActions(input.allowedActions, "allowedActions")
   const forbiddenActions = normalizeActions(input.forbiddenActions, "forbiddenActions")
+  const ownerOperationAction = allowedActions.find((action) => action.startsWith("OWNER_"))
+  if (ownerOperationAction) {
+    wall("DISPATCH_ENVELOPE_OWNER_OPERATION_WALL", "allowedActions", ownerOperationAction)
+  }
   const actionOverlap = allowedActions.find((action) => forbiddenActions.includes(action))
   if (actionOverlap) wall("DISPATCH_ENVELOPE_CONTRADICTION_WALL", "allowedActions", `FORBIDDEN:${actionOverlap}`)
   const mergeMode = stringValue(input.mergeMode, "mergeMode")
   if (!MERGE_MODES.has(mergeMode)) wall("DISPATCH_ENVELOPE_FORMAT_WALL", "mergeMode")
-  if (mergeMode === "NO_MERGE" && allowedActions.includes("MERGE_ELIGIBLE_PR")) {
-    wall("DISPATCH_ENVELOPE_CONTRADICTION_WALL", "mergeMode", "MERGE_ACTION_ALLOWED")
+  const opensDraft = allowedActions.includes("OPEN_DRAFT_PR")
+  const mergesPr = allowedActions.includes("MERGE_ELIGIBLE_PR")
+  if (mergeMode === "NO_MERGE" && (opensDraft || mergesPr)) {
+    wall("DISPATCH_ENVELOPE_CONTRADICTION_WALL", "mergeMode", "PR_LIFECYCLE_ACTION_ALLOWED")
+  }
+  if (mergeMode === "DRAFT_PR_ONLY" && (!opensDraft || mergesPr)) {
+    wall("DISPATCH_ENVELOPE_CONTRADICTION_WALL", "mergeMode", "DRAFT_ONLY_ACTION_SET_REQUIRED")
+  }
+  if (mergeMode === "ASSURANCE_GATED" && !mergesPr) {
+    wall("DISPATCH_ENVELOPE_CONTRADICTION_WALL", "mergeMode", "MERGE_ACTION_REQUIRED")
   }
   const reroutePolicy = stringValue(input.reroutePolicy, "reroutePolicy")
   if (!REROUTE_POLICIES.has(reroutePolicy)) wall("DISPATCH_ENVELOPE_FORMAT_WALL", "reroutePolicy")
@@ -348,6 +362,8 @@ export function validateDispatchEnvelope(input) {
   return Object.freeze({
     ok: true,
     code: "DISPATCH_ENVELOPE_VALID",
+    validationOnly: true,
+    authorityGranted: false,
     contentHash: crypto.createHash("sha256").update(canonicalJson).digest("hex"),
     envelope,
   })

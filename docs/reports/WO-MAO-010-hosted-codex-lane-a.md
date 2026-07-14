@@ -1,6 +1,6 @@
 # WO-MAO-008/009/010 — Hosted Codex Lane A Evidence
 
-Status: `COMPLETE_LOCAL / AWAITING_INDEPENDENT_ASSURANCE`
+Status: `REMEDIATED / INDEPENDENT_RE-REVIEW_REQUESTED`
 
 ## Execution identity
 
@@ -9,7 +9,8 @@ Status: `COMPLETE_LOCAL / AWAITING_INDEPENDENT_ASSURANCE`
 - Branch: `codex/mao-hosted-lane-a`
 - Base commit: `7713d3b80b421fd4ae76c2b9a2c31b9e59c7e828`
 - Started at (UTC): `2026-07-14T15:41:32Z`
-- Completed at (UTC): `2026-07-14T15:47:02Z`
+- Initial implementation completed at (UTC): `2026-07-14T15:47:02Z`
+- Assurance remediation completed at (UTC): `2026-07-14T15:56:39Z`
 - Local runtime activation: `false`
 - Provider credential access: `false`
 - Push performed by builder: `false`
@@ -23,7 +24,9 @@ retry, remediation, evidence, and owner-operation fields before a packet can be 
 
 The CLI accepts exactly one local JSON file and emits canonical machine-readable JSON with either
 `DISPATCH_ENVELOPE_VALID` or one typed wall code. It performs no network, provider, credential,
-runtime, GitHub, production, or owner operation.
+runtime, GitHub, production, or owner operation. Every successful result states
+`validationOnly=true` and `authorityGranted=false`; a valid packet cannot be represented as an
+authority grant.
 
 ## Exclusive reservation
 
@@ -45,16 +48,34 @@ No file outside this reservation was modified.
 - Coordinator, builder, and reviewer identities must be distinct.
 - Preferred and fallback provider sets cannot overlap.
 - Allowed and forbidden actions cannot overlap; unsupported actions fail closed.
+- Owner contact cannot appear in allowed actions while `ownerOperationsAllowed=false`.
+- Merge-mode/action pairs fail closed: `NO_MERGE` has no PR-lifecycle action,
+  `DRAFT_PR_ONLY` requires draft creation and forbids merge, and `ASSURANCE_GATED` requires the
+  eligible-merge action.
 - Retry, backoff, and remediation budgets have strict finite upper bounds.
 - Independent review, at least one approval, and zero unresolved threads are mandatory.
 - Canonical normalization gives semantically equivalent packets the same SHA-256 content hash.
 
 ## Validation
 
-- Focused test: `27 passed / 27 total`
+- Focused test after initial implementation: `27 passed / 27 total`
+- Focused test after assurance remediation: `33 passed / 33 total`
 - Focused lint: `PASS` (React package-detection warning only; no lint findings)
 - `git diff --check`: `PASS`
 - Secret or raw provider-output inspection: `NOT PERFORMED`
+
+## Independent assurance remediation
+
+Independent assurance returned `REQUEST_CHANGES` on four fail-open edges. The builder remediated all
+four within the original reservation:
+
+1. Owner-contact actions now raise `DISPATCH_ENVELOPE_OWNER_OPERATION_WALL`.
+2. Every merge mode now has an explicit compatible action set.
+3. Reservation paths reject Unicode control and format characters, including NUL and newline.
+4. Direct and CLI success results now carry `validationOnly=true` and `authorityGranted=false`.
+
+Exact regression tests cover each assurance finding. Independent re-review is requested against the
+second scoped commit; this builder does not self-approve the remediation.
 
 ## Owner-operation counters
 
