@@ -97,7 +97,7 @@ export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((see
   completionEvidence: [],
   priorityScore: priorityScore(seed),
   blockedReason: seed.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
-    ? "Runtime remains disabled while the local-identity playbook removes raw credential files and establishes owner-controlled browser login with keyring storage."
+    ? "The operational kernel is implemented and behaviorally tested. Runtime remains disabled pending the explicit owner activation gate and one live unattended R0 pilot."
     : seed.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
       ? "Superseded by the local-identity runtime program; raw credential files and identity-bearing Docker hosting are prohibited."
       : seed.authorityMode === "OWNER_GATED" ? "Protected authority is required before activation." : undefined,

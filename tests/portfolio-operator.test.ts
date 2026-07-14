@@ -94,13 +94,16 @@ describe("portfolio operator", () => {
       ownerDecisionRequired: false,
     })
     expect(loop.continuationRule).toContain("portfolio resolver")
-    expect(loop.activeWorkOrder).toBe(workOrders[0].workOrderId)
-    expect(loop.orderedWorkOrderQueue[0]).toBe(loop.activeWorkOrder)
+    expect(loop.activeWorkOrder).toBe("WO-RUNTIME-IDENTITY-029")
+    expect(loop.orderedWorkOrderQueue[0]).toBe(workOrders[0].workOrderId)
     expect(workOrders[0]).toMatchObject({
       workOrderId: "WO-RUNTIME-IDENTITY-001",
-      status: "ACTIVE",
+      status: "COMPLETE",
       riskClass: "R0",
     })
+    expect(workOrders[26]).toMatchObject({ workOrderId: "WO-RUNTIME-IDENTITY-027", status: "BLOCKED" })
+    expect(workOrders[27]).toMatchObject({ workOrderId: "WO-RUNTIME-IDENTITY-028", status: "COMPLETE" })
+    expect(workOrders[28]).toMatchObject({ workOrderId: "WO-RUNTIME-IDENTITY-029", status: "BLOCKED" })
     expect(workOrders).toHaveLength(38)
     expect(workOrders.at(-1)?.workOrderId).toBe("WO-RUNTIME-IDENTITY-038")
     expect(workOrders.every((workOrder) => workOrder.rollback.includes("Disable the operator first"))).toBe(true)

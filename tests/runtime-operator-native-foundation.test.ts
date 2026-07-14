@@ -18,6 +18,10 @@ describe("native supervisor foundation", () => {
     expect(supervisor).toContain("MaxRetrySeconds")
     expect(module).toContain("FileMode]::CreateNew")
     expect(module).toContain("ACTIVE_SUPERVISOR_LOCK")
+    expect(supervisor).toContain("operational-kernel-cli.mjs")
+    expect(supervisor).toContain("authority-registry.json")
+    expect(supervisor).toContain("OWNER_AUTHORITY_WALL")
+    expect(supervisor).not.toContain('workOrder = $null; state = "READY"')
   })
 
   it("uses atomic schema-bound secret-free checkpoints", () => {

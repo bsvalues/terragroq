@@ -3,6 +3,7 @@ param(
   [Parameter(Mandatory)][string]$Workspace,
   [Parameter(Mandatory)][string]$PromptFile,
   [Parameter(Mandatory)][string]$ResultFile,
+  [ValidateSet("read-only", "workspace-write")][string]$Sandbox = "workspace-write",
   [int]$TimeoutSeconds = 1800
 )
 
@@ -13,7 +14,7 @@ if ($auth -ne "CODEX_AUTH_STATUS=READY_CHATGPT_KEYRING") { throw "CODEX_AUTHORIT
 $schema = "$PSScriptRoot\..\..\runtime-operator\codex-output.schema.json"
 $prompt = Get-Content -Raw -LiteralPath $PromptFile
 $codex = Get-Command codex -ErrorAction Stop
-$arguments = @("--ask-for-approval", "never", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "--output-schema", $schema, "--output-last-message", $ResultFile, "-")
+$arguments = @("--ask-for-approval", "never", "exec", "--skip-git-repo-check", "--sandbox", $Sandbox, "--output-schema", $schema, "--output-last-message", $ResultFile, "-")
 if ($codex.Source.EndsWith(".ps1", [StringComparison]::OrdinalIgnoreCase)) {
   $baseDirectory = Split-Path $codex.Source -Parent
   $node = Join-Path $baseDirectory "node.exe"

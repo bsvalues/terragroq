@@ -91,25 +91,33 @@ Evidence:
 
 ### `LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
 
-Status: `playbook active / OMEN runtime disabled`
+Status: `operational kernel implemented / OMEN runtime disabled`
 
 Goal: `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
 
 Program: `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001`
 
 Current Work Order:
-`WO-RUNTIME-IDENTITY-027 - Authenticated Read-Only Smoke`.
+`WO-RUNTIME-IDENTITY-029 - Owner Activation Gate`.
 
 Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-026`; evidence
 is recorded in `docs/reports/WO-RUNTIME-IDENTITY-001` through
 `docs/reports/WO-RUNTIME-IDENTITY-026` reports.
 
+`WO-RUNTIME-IDENTITY-027` is closed blocked and superseded; it proved only a
+sanitized Codex transport failure. `WO-RUNTIME-IDENTITY-028` is complete through
+the reviewed native pilot authority record. The integrated kernel now owns
+queue selection, checkpoint reconciliation, bounded Codex execution, actual
+Git diff policy, validation, PR/review/merge continuation, and next selection.
+Live proof remains owner-gated at WO-029 while activation is disabled.
+
 Selection: first incomplete Work Order whose dependencies and authority gates
 are satisfied.
 
-Continuation: execute `WO-RUNTIME-IDENTITY-001` through
-`WO-RUNTIME-IDENTITY-038`, owning routine implementation, validation, PR,
-review remediation, eligible merge, evidence, and next-WO resolution.
+Continuation: after the owner activation gate, execute exactly one reviewed R0
+pilot through the operational kernel. Continue only after merged-main proof and
+automatic next-WO selection are recorded. Routine transport failure is handled
+through durable backoff rather than owner courier work.
 
 Stop conditions are the canonical playbook contract:
 

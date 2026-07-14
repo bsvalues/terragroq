@@ -139,7 +139,7 @@ persistence, command execution, and any production mutation.
 
 ### `GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001 - Local-Identity Bounded Runtime Operator`
 
-Status: `playbook active / runtime disabled`
+Status: `operational kernel implemented / live proof owner-gated / runtime disabled`
 
 Loop: `LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001`
 
@@ -159,11 +159,18 @@ Work Orders: `WO-RUNTIME-IDENTITY-001` through
 `WO-RUNTIME-IDENTITY-038`.
 
 Current Work Order:
-`WO-RUNTIME-IDENTITY-027 - Authenticated Read-Only Smoke`.
+`WO-RUNTIME-IDENTITY-029 - Owner Activation Gate`.
 
 Completed: `WO-RUNTIME-IDENTITY-001` through `WO-RUNTIME-IDENTITY-026`; evidence
 is recorded in `docs/reports/WO-RUNTIME-IDENTITY-001` through
 `docs/reports/WO-RUNTIME-IDENTITY-026` reports.
+
+`WO-RUNTIME-IDENTITY-027` is closed as a blocked, superseded network
+diagnostic rather than operational proof. `WO-RUNTIME-IDENTITY-028` is complete:
+the reviewed native authority registry now defines the bounded pilot packet.
+The integrated operational kernel and behavioral acceptance evidence are
+recorded in `docs/reports/WO-RUNTIME-KERNEL-001-operational-kernel.md`. Live
+unattended proof remains pending the explicit owner activation gate.
 
 Owner gates are limited to interactive Codex login, interactive GitHub login,
 activation/revocation, physical or elevated host administration, and future
