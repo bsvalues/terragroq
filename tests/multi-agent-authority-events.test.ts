@@ -264,6 +264,8 @@ describe("owner authority event verifier", () => {
     })
     expect(() => validateOwnerAuthorityArtifacts({ ...data, events: [data.active], counters: { ...counters, OWNER_DIAGNOSTIC_TOUCH_COUNT: 1 }, now: "2026-07-13T00:00:00.000Z" }))
       .toThrow(/OWNER_BABYSITTING_WALL/)
+    expect(() => evaluateOwnerOperationCounters({ ...counters, OWNER_OTHER_TOUCH_COUNT: 0 }))
+      .toThrow(/OWNER_TOUCH_EVIDENCE_WALL/)
   })
 
   it("exposes typed CLI artifact validation without producing an authority assertion", () => {

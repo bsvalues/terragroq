@@ -2,7 +2,7 @@
 
 ## Result
 
-`BLOCKED_INDEPENDENT_EVIDENCE_VERIFIER / STATIC_MODEL_BOUND / NO_AUTHORITY_ISSUED`
+`BLOCKED_TRUSTED_SOURCE_INTEGRATION / ARTIFACT_VALIDATOR_IMPLEMENTED / NO_AUTHORITY_ISSUED`
 
 ## Delivered
 
@@ -18,7 +18,14 @@
 - Shared read-only owner-operation model across goals, loops, Work Orders, stop packets, completion
   reports, Evidence, Authority, and visible UI surfaces.
 - `NO_OWNER_OPERATION_EVIDENCE` and `not recorded` counters on unbound surfaces.
-- `UNVERIFIED_ZERO_OWNER_OPERATIONS` for record-bound caller-supplied zeros; no certification path.
+- `UNVERIFIED_ZERO_OWNER_OPERATIONS` for record-bound caller-supplied zeros; no certification path from
+  untrusted counters.
+- Purpose-restricted assurance recorder and checkpoint-key trust records inside the owner-signed bundle.
+- Signed terminal evidence with exact run/context, observation bounds, policy hash, and counters.
+- Complete hash-chained assurance checkpoints with create-once run commitments and a separately pinned
+  current head.
+- A validator-only CLI that checks proposed evidence/checkpoint artifacts while always returning
+  `certified: false` and `authorityGranted: false`.
 
 ## Boundary Evidence
 
@@ -31,11 +38,14 @@
 
 ## Remaining acceptance gate
 
-The static surfaces are bound, but WO-MAO-003 is not complete. A separate technical slice must verify a
-context-bound owner-operation evidence artifact against an independent monotonic evidence anchor before
-any run can become `CERTIFIED_ZERO_OWNER_OPERATIONS`. Before WO-MAO-005 may activate the successor, the
-Owner must also independently provision the monotonic owner anchor and issue the scoped
-program-activation artifact.
+WO-MAO-003 is not complete. The standalone validator receives every path and pin from its caller, so it
+cannot establish independent sourcing. It also validates a recorder's completeness assertion without
+yet verifying the source event chain through an independently anchored authoritative run boundary. A
+trusted host must source the run registry, owner trust pins, assurance checkpoint head, and source-log
+head from their separate protected stores and perform that source-chain verification before any
+`CERTIFIED_ZERO_OWNER_OPERATIONS` result exists. No live evidence, key, pin, anchor, or authority
+artifact has been issued. Before WO-MAO-005 may activate the successor, the Owner must independently
+provision the owner trust anchor and issue the scoped program-activation artifact.
 
 ## Integration
 
@@ -44,6 +54,8 @@ program-activation artifact.
 source the key fingerprint and current trust-bundle hash from an independent monotonic owner anchor
 before producing a transient action assertion. That integration remains incomplete. The legacy adapter separately invokes
 `assert-legacy-revocations`; its pass can only confirm terminal revocation and never permit dispatch.
+The proposed post-run artifact protocol is documented in
+`docs/governance/owner-operation-evidence-verifier.md`; the current CLI validates but does not certify.
 
 ## Validation
 

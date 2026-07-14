@@ -115,16 +115,21 @@ OWNER_ROUTINE_DECISION_COUNT
 
 No selected record is `NO_OWNER_OPERATION_EVIDENCE`; its counters display as `not recorded`, not zero.
 Caller-supplied zero counters are `UNVERIFIED_ZERO_OWNER_OPERATIONS` and never certification. A future
-`OWNER_OPERATION_EVIDENCE` artifact must bind the run, program, goal, loop, Work Order, decision when
-applicable, exact action, evidence-head hash, and identical counter set. This phase does not implement
-the independently anchored evidence verifier, so `CERTIFIED_ZERO_OWNER_OPERATIONS` cannot be emitted.
+trusted-host verification of an
+`OWNER_OPERATION_EVIDENCE` artifact binds the preregistered run and manifest, program, goal, loop, Work
+Order, decision when applicable, exact action, complete observation bounds, policy hash, and identical
+counter set. Its assurance signature and create-once run commitment must validate through the separately
+anchored checkpoint and source-log chains described in `owner-operation-evidence-verifier.md` before
+`CERTIFIED_ZERO_OWNER_OPERATIONS` can be emitted.
 `FAILED_OWNER_BABYSITTING` is the lifecycle state for any nonzero routine touch, with stable reason
 `FAIL_OWNER_BABYSITTING`. Genuine owner authority decisions are outside routine-operation counts; using
 the Owner as courier, diagnostician, credential operator, or routine decision-maker is not.
 
 The current CLI argument is deliberately named `--owner-counters`: it validates an untrusted counter
 record only. It must not be renamed or represented as `--owner-operation-evidence` until an independent,
-context-bound evidence verifier and monotonic anchor are implemented.
+context-bound evidence verifier is invoked. The separate `owner-operation-evidence-cli.mjs` implements
+artifact validation only and returns `certified: false` and `authorityGranted: false`; the trusted source
+integration required for certification is not implemented in this phase.
 
 ## Integration Contract
 

@@ -30,7 +30,7 @@ automate execution, or mutate data.
   `OWNER_ROUTINE_DECISION_COUNT`. Routine owner courier, diagnostic,
   credential, or implementation decisions disqualify certification.
 - Caller-supplied zero counters remain `UNVERIFIED_ZERO_OWNER_OPERATIONS`
-  because the independent context-bound evidence verifier is not yet implemented.
+  because that input path does not invoke the independent context-bound evidence verifier.
 - A surface with no selected run or Work Order reports `NO_OWNER_OPERATION_EVIDENCE`
   and `not recorded` counters rather than invented zeros.
 
@@ -233,6 +233,27 @@ Operator action:
 - do not certify the run
 - remove the routine owner dependency before a later certification attempt
 - do not reinterpret owner courier, diagnostic, or credential work as authority
+
+### `RESULT: CERTIFIED_ZERO_OWNER_OPERATIONS`
+
+Meaning: a terminal run's exact context and four zero counters were signed by an owner-approved,
+purpose-restricted assurance recorder and committed once in the complete assurance checkpoint chain
+whose current head was independently anchored. The trusted host also verified the complete source event
+chain through the authoritative run boundary. The standalone artifact validator cannot emit this result.
+
+Required evidence:
+
+- preregistered run ID and manifest hash
+- exact program, goal, loop, Work Order, decision, and action context
+- complete source-log observation bounds and classification-policy hash
+- assurance evidence content hash and signature
+- checkpoint chain, sequence, commitment, and independently sourced current head
+- all four validated counters equal zero
+
+Operator action:
+
+- record the post-run certification as evidence only
+- do not treat certification as dispatch, write, merge, release, or activation authority
 
 ### `RESULT: BLOCKED_SAFETY`
 
