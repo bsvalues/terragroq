@@ -57,6 +57,26 @@ AUTHORITY_LEVEL:
 
 AUTHORITY_GRANT:
 
+AUTHORITY_DECISION_ID:
+
+AUTHORITY_GRANT_REF:
+
+AUTHORITY_STATUS_EVENT_REFS:
+
+AUTHORITY_SUBJECT:
+
+AUTHORITY_SCOPE_REQUIRED:
+
+PROGRAM_ACTIVATION_GRANT_REF:
+
+OWNER_OPERATION_TOUCH_COUNT: 0
+
+OWNER_CREDENTIAL_TOUCH_COUNT: 0
+
+OWNER_DIAGNOSTIC_TOUCH_COUNT: 0
+
+OWNER_ROUTINE_DECISION_COUNT: 0
+
 COMMIT_ALLOWED:
 
 PUSH_ALLOWED:
@@ -81,6 +101,15 @@ NEXT_WO_TRANSITION:
 
 ESCALATION_RULES:
 ```
+
+Authority references are verifier inputs, not authority created by a Work Order or coordinator. Before
+an authority-gated action, verify the immutable owner grant and its complete append-only owner-signed
+status stream against the exact subject, scope, expiry, and current revocation state. A missing,
+expired, untrusted, mismatched, or revoked grant fails closed. A program activation grant is separate
+from implementation or merge authority and must be explicitly referenced when activation is in scope.
+
+All four owner-touch counters are mandatory evidence. Any nonzero value records lifecycle state
+`FAILED_OWNER_BABYSITTING` with reason code `FAIL_OWNER_BABYSITTING`; the reason code is not a state.
 
 ## Transition Defaults
 
