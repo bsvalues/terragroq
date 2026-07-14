@@ -104,10 +104,10 @@ Evidence:
 owner direction that William is owner-only and the agents execute the complete
 program without routine owner contact. Its goal is
 `GOAL-WOS-MULTI-AGENT-OPERATOR-001`; its loop is
-`LOOP-WOS-MULTI-AGENT-OPERATOR-001`. Phase 0 and hosted execution through
-`WO-MAO-012` are complete. Two post-merge threads place the lifecycle in
-`MERGED_WITH_REMEDIATION_REQUIRED`; `WO-MAO-013` remains next eligible pending
-independent remediation re-review. `WO-MAO-016` is not yet eligible. The program
+`LOOP-WOS-MULTI-AGENT-OPERATOR-001`. Phase 0 and the bounded hosted-team proof
+through `WO-MAO-015` are complete. Two post-merge threads were remediated through
+integration PR #366, independently re-reviewed at head `217d998b`, and resolved.
+`WO-MAO-016` is next eligible. The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
 deployment, protected data, or destructive operations.

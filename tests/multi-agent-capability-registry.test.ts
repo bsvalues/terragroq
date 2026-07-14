@@ -68,14 +68,14 @@ describe("multi-agent executable capability inventory", () => {
       reasonCode: "CODEX_NETWORK_WALL",
     })
     expect(capability("hosted-codex-session")).toMatchObject({
-      status: "PILOT_AUTHORIZED",
+      status: "PROVEN",
       executionClass: "WORKER_CANDIDATE",
       coordinationEligible: true,
       adapterRef: null,
       trustGateRef: PREVENTIVE_TRUST_GATE_V2_REF,
     })
     expect(capability("codex-native-subagent-team")).toMatchObject({
-      status: "PILOT_AUTHORIZED",
+      status: "PROVEN",
       executionClass: "WORKER_CANDIDATE",
       coordinationEligible: true,
       adapterRef: null,

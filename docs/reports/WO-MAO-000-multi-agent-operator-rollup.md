@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-`PHASE_1_MERGED_WITH_REMEDIATION_REQUIRED / WO-MAO-013_READY / FINAL_REVIEW_PENDING`
+`PHASE_1_HOSTED_TEAM_PROOF_PASS / WO-MAO-016_READY / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
 
 ## Truth
 
@@ -12,9 +12,9 @@ capability truth, registers dependency-driven continuation, and removes blanket 
 
 This rollup does not claim final unattended certification. A supported hosted Codex team executed two
 useful, concurrent repository lanes with separate reservations and automatic dependent fan-in release.
-Two post-merge findings were remediated by the original builders, but final independent re-review is
-pending. Claude capability discovery returned `PROVIDER_UNAVAILABLE`, not an owner task. Durable dispatch
-and atomic reservations remain later work.
+Two post-merge findings were remediated by the original builders, independently re-reviewed at PR #366
+head `217d998b`, and resolved. Claude capability discovery returned `PROVIDER_UNAVAILABLE`, not an owner
+task. Durable dispatch and atomic reservations remain later work.
 
 ## Non-negotiable operating state
 
@@ -55,8 +55,8 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 
 ## Next transition
 
-`WO-MAO-013 - Independent assurance and remediation lifecycle` remains eligible until re-review passes.
-`WO-MAO-016` is not eligible yet. The rejected local runtime is not in either dependency chain.
+`WO-MAO-001` through `WO-MAO-015` are complete. `WO-MAO-016 - Work-order envelope v2` is eligible. The
+rejected local runtime is not in its dependency chain.
 
 ## Validation
 

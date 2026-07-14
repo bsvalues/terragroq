@@ -17,16 +17,15 @@ describe("multi-agent operator registry", () => {
     expect(new Set(MULTI_AGENT_OPERATOR_WORK_ORDERS.map((record) => record.workOrderId)).size).toBe(62)
   })
 
-  it("holds the hosted lifecycle at independent assurance pending", () => {
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 12).every(({ status }) => status === "COMPLETE")).toBe(true)
+  it("advances after final independent assurance passes", () => {
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 15).every(({ status }) => status === "COMPLETE")).toBe(true)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 15).every(({ evidencePath }) => existsSync(evidencePath))).toBe(true)
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[12]).toMatchObject({
-      workOrderId: "WO-MAO-013",
-      dependsOn: ["WO-MAO-012"],
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[15]).toMatchObject({
+      workOrderId: "WO-MAO-016",
+      dependsOn: ["WO-MAO-015"],
       status: "READY",
-      riskClass: "R1",
+      riskClass: "R3",
     })
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[15]).toMatchObject({ workOrderId: "WO-MAO-016", status: "PENDING" })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[53]).toMatchObject({ workOrderId: "WO-MAO-054", riskClass: "R2" })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(16).every(({ status }) => status === "PENDING")).toBe(true)
 

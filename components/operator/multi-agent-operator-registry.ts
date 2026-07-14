@@ -145,9 +145,9 @@ export function resolveMultiAgentWorkOrders(
   })
 }
 
-const PHASE_ONE_ASSURANCE_PENDING = new Set(range(1, 12).map(workOrderId))
+const PHASE_ONE_COMPLETE = new Set(range(1, 15).map(workOrderId))
 
-export const MULTI_AGENT_OPERATOR_WORK_ORDERS = resolveMultiAgentWorkOrders(PHASE_ONE_ASSURANCE_PENDING)
+export const MULTI_AGENT_OPERATOR_WORK_ORDERS = resolveMultiAgentWorkOrders(PHASE_ONE_COMPLETE)
 
 export const MULTI_AGENT_OPERATOR_PROGRAM = {
   programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",

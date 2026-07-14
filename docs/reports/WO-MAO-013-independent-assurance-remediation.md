@@ -1,6 +1,6 @@
 # WO-MAO-013 - Independent Assurance and Remediation
 
-Status: `REMEDIATED / INDEPENDENT_RE_REVIEW_PENDING`
+Status: `COMPLETE / INDEPENDENT_RE_REVIEW_PASS`
 
 Independent assurance initially returned `REQUEST_CHANGES` on Lane A for owner-contact actions,
 merge-mode/action contradictions, control characters in reservation paths, and ambiguous validation
@@ -17,5 +17,7 @@ After merge, independent assurance opened two additional substantive threads:
 The two original-builder and two coordinating identities above are local commit evidence. They are not
 published remote remediation commits; remote publication begins only with the fan-in branch lifecycle.
 
-Final independent re-review is pending. The threads must not be recorded as resolved and the Phase 1
-proof must not be marked PASS until that re-review succeeds. No owner acted as reviewer or remediator.
+Integration/remediation PR `#366` assembled the corrected proof. Independent assurance re-reviewed head
+`217d998b` and returned `PASS`: 80 focused tests, 154 files / 850 full tests, scoped ESLint, production
+build, diff check, and adversarial probes passed. Both substantive PR #364/#365 threads were replied to
+with that integration evidence and resolved. No owner acted as reviewer or remediator.
