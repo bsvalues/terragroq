@@ -46,7 +46,7 @@ try {
   if (result.ownerDecisionRequired) process.exitCode = 2
 } catch (error) {
   const message = String(error?.message ?? error)
-  const wall = message.match(/[A-Z][A-Z0-9_]+_WALL/)?.[0] ?? "OPERATIONAL_KERNEL_WALL"
+  const wall = message.match(/QUARANTINED_TERMINAL|[A-Z][A-Z0-9_]+_WALL/)?.[0] ?? "OPERATIONAL_KERNEL_WALL"
   process.stderr.write(`${wall}\n`)
   process.exitCode = /(?:AUTHORITY_(?:ACTIVATION|OWNER_GATE)_WALL|OWNER_REVOCATION_EVENT_VERIFIER_WALL|CODEX_AUTHORITY_WALL|GITHUB_AUTHORITY_WALL|RUNTIME_READINESS_WALL)/.test(wall)
     ? 2

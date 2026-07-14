@@ -12,6 +12,11 @@ describe("WilliamOS operational kernel", () => {
     for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
   })
 
+  it("preserves the typed terminal-quarantine signal in the direct CLI", () => {
+    const cli = fs.readFileSync("scripts/runtime-operator/operational-kernel-cli.mjs", "utf8")
+    expect(cli).toContain("QUARANTINED_TERMINAL|[A-Z][A-Z0-9_]+_WALL")
+  })
+
   it("rejects the quarantined legacy adapter before any dispatch side effect", async () => {
     const registry = {
       schemaVersion: 1,
