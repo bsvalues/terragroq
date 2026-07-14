@@ -5,7 +5,7 @@ param(
   [ValidateRange(5, 300)][int]$MaxRetrySeconds = 300,
   [string]$Root = "$env:USERPROFILE\.williamos\runtime-operator",
   [string]$RepositoryPath = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
-  [string]$OwnerRevocationVerifierPath = ""
+  [string]$OwnerAuthorityRoot = ""
 )
 
 Set-StrictMode -Version Latest
@@ -17,7 +17,7 @@ $registry = Join-Path $RepositoryPath "runtime-operator\native\authority-registr
 function Assert-LegacyAdapterQuarantined {
   param(
     [Parameter(Mandatory)][string]$RegistryPath,
-    [string]$VerifierPath = ""
+    [Parameter(Mandatory)][string]$AuthorityRoot
   )
 
   $document = Get-Content -LiteralPath $RegistryPath -Raw | ConvertFrom-Json
@@ -45,14 +45,21 @@ function Assert-LegacyAdapterQuarantined {
 
   if (-not $registryQuarantined) { throw "LEGACY_ADAPTER_QUARANTINE_INTEGRITY_WALL" }
 
-  if ($VerifierPath) {
-    if (-not (Test-Path -LiteralPath $VerifierPath -PathType Leaf)) {
-      throw "OWNER_REVOCATION_EVENT_VERIFIER_WALL"
-    }
-    $verification = (& $VerifierPath -RegistryPath $RegistryPath | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $verification -ne "OWNER_REVOCATION_EVENT=VERIFIED") {
-      throw "OWNER_REVOCATION_EVENT_VERIFIER_WALL"
-    }
+  $cli = Join-Path $RepositoryPath "scripts\multi-agent-operator\authority-event-cli.mjs"
+  $events = Join-Path $AuthorityRoot "legacy-revocation-events.json"
+  $trustedOwners = Join-Path $AuthorityRoot "trusted-owner-keys.json"
+  if (-not (Test-Path -LiteralPath $cli -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $events -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $trustedOwners -PathType Leaf)) {
+    throw "OWNER_REVOCATION_EVENT_VERIFIER_WALL"
+  }
+  $verification = (& node $cli assert-legacy-revocations --registry $RegistryPath --events $events --trusted-owners $trustedOwners 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or -not $verification.StartsWith("OWNER_REVOCATION_ASSERTION=")) {
+    throw "OWNER_REVOCATION_EVENT_VERIFIER_WALL"
+  }
+  $assertion = $verification.Substring("OWNER_REVOCATION_ASSERTION=".Length) | ConvertFrom-Json
+  if ($assertion.status -ne "VERIFIED_REVOKED") {
+    throw "OWNER_REVOCATION_EVENT_VERIFIER_WALL"
   }
 
   throw "QUARANTINED_TERMINAL"
@@ -64,7 +71,15 @@ if ((Get-WilliamOSActivation $Root) -ne "enabled") {
   exit 0
 }
 
-Assert-LegacyAdapterQuarantined -RegistryPath $registry -VerifierPath $OwnerRevocationVerifierPath
+if (-not $OwnerAuthorityRoot) { $OwnerAuthorityRoot = Join-Path $Root "authority" }
+try {
+  Assert-LegacyAdapterQuarantined -RegistryPath $registry -AuthorityRoot $OwnerAuthorityRoot
+}
+catch {
+  $wall = if ($_.Exception.Message -match "[A-Z][A-Z0-9_]+_WALL|QUARANTINED_TERMINAL") { $Matches[0] } else { "OWNER_REVOCATION_EVENT_VERIFIER_WALL" }
+  Write-WilliamOSAudit $Root "terminal_quarantine" @{ state = "BLOCKED"; reason = $wall }
+  throw $wall
+}
 
 $readiness = & "$PSScriptRoot\williamos-auth-readiness.ps1" | ConvertFrom-Json
 if (-not $readiness.ready) { throw "RUNTIME_READINESS_WALL" }

@@ -85,12 +85,11 @@ function validateAuthorityRecord(record) {
   if (!Array.isArray(record.requiredValidation) || record.requiredValidation.length === 0 || record.requiredValidation.some((gate) => !ALLOWED_VALIDATION.has(gate))) throw new Error("AUTHORITY_VALIDATION_WALL")
 }
 
-export async function assertLegacyAdapterDispatchAllowed(registry, verifyOwnerRevocationEvent) {
+export async function assertLegacyAdapterDispatchAllowed(registry, verifyOwnerRevocationEvent, activeAdapterId) {
+  if (activeAdapterId !== LEGACY_ADAPTER_ID) return
   const adapter = registry.adapter
   const records = registry.workOrders.filter((record) =>
     record.adapterId === LEGACY_ADAPTER_ID || LEGACY_WORK_ORDER_IDS.has(record.workOrderId))
-  if (!adapter && records.length === 0) return
-
   const quarantineIntact = adapter?.adapterId === LEGACY_ADAPTER_ID
     && adapter.state === "QUARANTINED_TERMINAL"
     && adapter.dispatchAllowed === false
@@ -206,7 +205,7 @@ async function completionResult({ checkpoint, registry, adapters }) {
 }
 
 async function runCycle({ root, registry, adapters }) {
-  await assertLegacyAdapterDispatchAllowed(registry, adapters.verifyOwnerRevocationEvent)
+  await assertLegacyAdapterDispatchAllowed(registry, adapters.verifyOwnerRevocationEvent, adapters.adapterId)
   let checkpoint = readJson(path.join(root, "state", "kernel-checkpoint.json"))
   if (checkpoint?.state === "BLOCKED" || checkpoint?.state === "FAILED_TERMINAL") return checkpoint
   if (checkpoint?.state === "FAILED_RECOVERABLE" && Date.parse(checkpoint.nextAttemptAt) > Date.now()) {
@@ -315,7 +314,7 @@ function isRecoverableFailure(message) {
 }
 
 function isOwnerWall(message) {
-  return /(?:AUTHORITY_(?:ACTIVATION|OWNER_GATE)_WALL|CODEX_AUTHORITY_WALL|GITHUB_AUTHORITY_WALL|RUNTIME_READINESS_WALL)/.test(message)
+  return /(?:AUTHORITY_(?:ACTIVATION|OWNER_GATE)_WALL|OWNER_REVOCATION_EVENT_VERIFIER_WALL|CODEX_AUTHORITY_WALL|GITHUB_AUTHORITY_WALL|RUNTIME_READINESS_WALL)/.test(message)
 }
 
 export async function runOperationalKernelCycle({ root, registry, adapters }) {

@@ -2,8 +2,11 @@
 
 ## Result
 
-The rejected `local-nested-codex-exec` adapter is mechanically `QUARANTINED_TERMINAL`.
-Changing the local activation file cannot dispatch this adapter.
+`BLOCKED_OWNER_SIGNED_REVOCATION_EVENT / MECHANICAL_QUARANTINE_COMPLETE`
+
+The rejected `local-nested-codex-exec` adapter is mechanically `QUARANTINED_TERMINAL`, and changing
+the local activation file cannot dispatch it. WO-MAO-001 is not complete until the Owner independently
+issues the two required signed legacy-revocation events in the owner-controlled local store.
 
 ## Executable state
 
@@ -17,14 +20,15 @@ Changing the local activation file cannot dispatch this adapter.
 ## Owner revocation event boundary
 
 No owner-signed revocation event was created or inferred in this Work Order. The registry records that
-the event is required and pending. The supervisor accepts an optional verifier script that must return
-exactly `OWNER_REVOCATION_EVENT=VERIFIED`; the kernel accepts a verifier callback that must return
-`VERIFIED_REVOKED`. A successful verifier result corroborates revocation but cannot reactivate this
+the event is required and pending. When activation is changed, the supervisor and direct kernel entry
+point both require the same externally stored `legacy-revocation-events.json` and
+`trusted-owner-keys.json` stream to verify as `VERIFIED_REVOKED` before ending at
+`QUARANTINED_TERMINAL`. A successful verifier result corroborates revocation but cannot reactivate this
 terminal adapter.
 
-The separately implemented verifier must validate an immutable, append-only owner-signed event for
-both legacy authority records and must not be writable by the coordinator or adapter. Until that
-integration exists, quarantine remains fail-closed.
+The verifier validates an immutable, append-only owner-signed event for both legacy authority records.
+Until those owner-issued artifacts exist, the authority event gate and quarantine both remain
+fail-closed.
 
 ## Safety
 

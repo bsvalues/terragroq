@@ -45,6 +45,7 @@ describe("WilliamOS operational kernel", () => {
     roots.push(root)
     const sideEffects: string[] = []
     const adapters = {
+      adapterId: "local-nested-codex-exec",
       assertRuntime: async () => sideEffects.push("readiness"),
       listQueue: async () => { sideEffects.push("queue"); return [] },
       lease: async () => sideEffects.push("lease"),
@@ -62,18 +63,27 @@ describe("WilliamOS operational kernel", () => {
     const markerRemoved = structuredClone(registry)
     delete (markerRemoved as { adapter?: unknown }).adapter
     await expect(runOperationalKernelCycle({ root, registry: markerRemoved, adapters })).rejects.toThrow("LEGACY_ADAPTER_QUARANTINE_INTEGRITY_WALL")
+    await expect(runOperationalKernelCycle({
+      root,
+      registry: { schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: [] },
+      adapters,
+    })).rejects.toThrow("LEGACY_ADAPTER_QUARANTINE_INTEGRITY_WALL")
     expect(sideEffects).toEqual([])
   })
 
   it("exposes owner revocation verification without allowing terminal adapter dispatch", async () => {
     const registry = JSON.parse(fs.readFileSync("runtime-operator/native/authority-registry.json", "utf8"))
     const observations: unknown[] = []
-    await expect(assertLegacyAdapterDispatchAllowed(registry, async () => ({ status: "UNVERIFIED" })))
+    await expect(assertLegacyAdapterDispatchAllowed(
+      registry,
+      async () => ({ status: "UNVERIFIED" }),
+      "local-nested-codex-exec",
+    ))
       .rejects.toThrow("OWNER_REVOCATION_EVENT_VERIFIER_WALL")
     await expect(assertLegacyAdapterDispatchAllowed(registry, async (request) => {
       observations.push(request)
       return { status: "VERIFIED_REVOKED" }
-    })).rejects.toThrow("QUARANTINED_TERMINAL")
+    }, "local-nested-codex-exec")).rejects.toThrow("QUARANTINED_TERMINAL")
     expect(observations).toEqual([{
       adapterId: "local-nested-codex-exec",
       terminalIssueNumber: 357,

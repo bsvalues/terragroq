@@ -16,6 +16,14 @@ API. Production owner artifacts belong in an owner-controlled store outside prov
 trusted-owner public-key registry may be readable by the supervisor; private signing keys may not be
 stored in the repository or exposed to a coordinator or provider.
 
+The public key is not trusted merely because it appears in a caller-supplied bundle. Every assertion
+also requires an independently pinned SHA-256 fingerprint of the owner's DER-encoded SPKI public key.
+The entire `OWNER_TRUST_BUNDLE`, including active keys and all current stream heads, is content-hashed
+and signed by that pinned key. Every governed caller must also supply the exact current bundle hash
+from an independently monotonic owner-controlled anchor; this rejects replay of an older validly signed
+bundle. The legacy quarantine reads both pins from its reviewed registry record; they remain null and
+therefore fail-closed until the Owner provisions a real key and authorizes the anchors.
+
 ## Immutable Grant
 
 An `OWNER_AUTHORITY_GRANT` is canonical JSON with:
@@ -33,6 +41,12 @@ Any field change invalidates the hash or signature. Expiry is exclusive. Wildcar
 meaning: scope matching is exact and fail closed. `ACTIVATE_PROGRAM` requires a distinct
 `PROGRAM_ACTIVATION` grant, and that grant cannot authorize non-activation actions.
 
+`WILLIAMOS-CANONICAL-JSON-V1` recursively emits JSON primitives without whitespace, preserves array
+order, sorts object keys by JavaScript string code-unit order, rejects undefined/non-finite/unsupported
+values, and requires timestamps in exact UTC millisecond `YYYY-MM-DDTHH:mm:ss.sssZ` form. The fixed
+cross-implementation vector `{"a":"x","b":1}` hashes to
+`cdab067e9f3beb32d1252cfd63e492592fecbf591b0d08cadb24bb17f3864246`.
+
 ## Append-Only Status Stream
 
 Authority status is a separate array of `OWNER_AUTHORITY_STATUS_EVENT` records. Every event is owner
@@ -49,20 +63,33 @@ verifier compares the supplied stream with that anchor, rejecting stale truncati
 `AUTHORITY_EVENT_HEAD_WALL`. Events from a different owner, before the grant, out of time order, or
 after the assertion instant are rejected.
 
+## Legacy Authority Revocation Stream
+
+Legacy executable registry records that predate immutable grants are terminalized with a separate
+`OWNER_LEGACY_AUTHORITY_REVOCATION_EVENT` stream. Each event names exactly one legacy authority record,
+the rejected adapter, terminal issue and reason, sequence, previous-event hash, issue time, owner
+issuer, content hash, and Ed25519 signature. The externally stored trust bundle anchors the current
+stream head in `legacyRevocationHeads`. The verifier requires the exact registry record set and rejects
+missing, duplicate, reordered, changed, future-dated, or stale events. A verified legacy revocation can
+only corroborate terminal quarantine; it cannot grant or reactivate authority.
+
 ## Assertion Gate
 
-`authority-event-cli.mjs assert` verifies issuer trust, subject, exact scope, issue/expiry time, grant
-hash/signature, every status-event hash/signature/link, current revocation state, and owner-operation
-counters. A pass emits one sanitized `OWNER_AUTHORITY_ASSERTION=<json>` line. Every failure emits only
-a typed `*_WALL` code on stderr and exits 2, suitable for a Windows supervisor owner-authority stop.
+`authority-event-cli.mjs validate-artifacts` verifies internal artifact integrity against caller-supplied
+anchors and exact scope. A pass emits `OWNER_AUTHORITY_ARTIFACT_VALIDATION=<json>`; it is not an
+authority assertion and no governed action may consume it as permission. A future coordinator must
+obtain both anchors from the independent owner-controlled monotonic source before converting validation
+into an action-specific assertion. Every failure emits only a typed `*_WALL` code on stderr and exits 2.
 
 Example shape, using paths to externally issued artifacts:
 
 ```powershell
-node scripts/multi-agent-operator/authority-event-cli.mjs assert `
+node scripts/multi-agent-operator/authority-event-cli.mjs validate-artifacts `
   --grant C:\owner-store\grant.json `
   --events C:\owner-store\grant-events.json `
   --trusted-owners C:\owner-store\trusted-owner-keys.json `
+  --owner-key-fingerprint <pinned-sha256-spki-fingerprint> `
+  --owner-bundle-hash <pinned-current-trust-bundle-content-hash> `
   --owner-counters C:\runtime-evidence\owner-counters.json `
   --subject-type PROGRAM --subject-id PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001 `
   --program PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001 `
@@ -87,12 +114,17 @@ for a disqualified run. `FAIL_OWNER_BABYSITTING` is its stable reason code; reas
 lifecycle states. The verifier surfaces a nonzero counter as `OWNER_BABYSITTING_WALL` and never treats
 an owner operation as successful evidence.
 
+At this phase the verifier validates counter shape and zero values; the counters are not yet an
+independent audit source. Binding them to the durable evidence chain, UI, stop packets, goals, and loops
+remains part of WO-MAO-003 completion and must not be certified from caller-supplied zeros alone.
+
 ## Integration Contract
 
 Before lease, provider dispatch, GitHub write, merge, dependent release, or program activation, the
-supervisor must invoke the assertion with the exact contemplated subject and scope. It must treat exit
-2 or missing/malformed pass output as terminal authority denial. Callers must never cache a pass beyond
-the action boundary because expiry or a newly appended revocation can change current authority.
+future coordinator must obtain the current independent anchors, validate artifacts with the exact
+contemplated subject and scope, and create only a transient action assertion. It must treat exit 2 or
+missing/malformed validation output as terminal authority denial. Callers must never cache validation
+across action boundaries because expiry or a newly appended revocation can change current authority.
 
 This slice does not wire a supervisor, dispatch a provider, activate a program, or create an owner
 artifact.

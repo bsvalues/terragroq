@@ -131,6 +131,7 @@ export function createNativeAdapters({ root, repositoryPath, scriptsPath = path.
   }
 
   return {
+    adapterId: "local-nested-codex-exec",
     async assertRuntime() {
       const activation = path.join(root, "control", "activation")
       if (!fs.existsSync(activation) || fs.readFileSync(activation, "utf8") !== "enabled") throw new Error("AUTHORITY_ACTIVATION_WALL")

@@ -65,7 +65,8 @@ function instant(value, field) {
   return parsed
 }
 
-function trustedOwnerFor(record, trustedOwners) {
+function trustedOwnerFor(record, trustedOwners, trustedOwnerKeyFingerprint) {
+  if (!HASH_PATTERN.test(trustedOwnerKeyFingerprint ?? "")) wall("AUTHORITY_TRUST_ANCHOR_WALL")
   if (!plainObject(record.issuer) || record.issuer.role !== "OWNER") wall("AUTHORITY_ISSUER_WALL")
   const ownerId = requiredString(record.issuer.ownerId, "issuer.ownerId")
   const keyId = requiredString(record.signature?.keyId, "signature.keyId")
@@ -77,17 +78,67 @@ function trustedOwnerFor(record, trustedOwners) {
     candidate?.ownerId === ownerId && candidate?.publicKeyId === keyId && candidate?.status === "ACTIVE"
   )
   if (!owner || owner.algorithm !== "Ed25519" || typeof owner.publicKeyPem !== "string") wall("AUTHORITY_ISSUER_WALL")
+  let actualFingerprint
+  try {
+    const key = crypto.createPublicKey(owner.publicKeyPem).export({ type: "spki", format: "der" })
+    actualFingerprint = crypto.createHash("sha256").update(key).digest("hex")
+  } catch {
+    wall("AUTHORITY_TRUST_ANCHOR_WALL")
+  }
+  if (actualFingerprint !== trustedOwnerKeyFingerprint) wall("AUTHORITY_TRUST_ANCHOR_WALL")
   return owner
 }
 
-function verifySignedRecord(record, trustedOwners) {
+function verifyTrustBundle(trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash) {
+  if (!plainObject(trustedOwners)
+    || trustedOwners.schemaVersion !== 1
+    || trustedOwners.artifactType !== "OWNER_TRUST_BUNDLE"
+    || !Array.isArray(trustedOwners.owners)
+    || !HASH_PATTERN.test(trustedOwnerKeyFingerprint ?? "")
+    || !HASH_PATTERN.test(trustedOwnerBundleContentHash ?? "")) {
+    wall("AUTHORITY_TRUST_BUNDLE_WALL")
+  }
+  const candidates = trustedOwners.owners.filter((owner) => {
+    if (owner?.status !== "ACTIVE" || owner?.algorithm !== "Ed25519" || typeof owner.publicKeyPem !== "string") return false
+    try {
+      const key = crypto.createPublicKey(owner.publicKeyPem).export({ type: "spki", format: "der" })
+      return crypto.createHash("sha256").update(key).digest("hex") === trustedOwnerKeyFingerprint
+    } catch {
+      return false
+    }
+  })
+  if (candidates.length !== 1) wall("AUTHORITY_TRUST_ANCHOR_WALL")
+  const owner = candidates[0]
+  if (trustedOwners.issuer?.role !== "OWNER"
+    || trustedOwners.issuer?.ownerId !== owner.ownerId
+    || trustedOwners.signature?.algorithm !== "Ed25519"
+    || trustedOwners.signature?.keyId !== owner.publicKeyId) {
+    wall("AUTHORITY_TRUST_BUNDLE_WALL")
+  }
+  if (!HASH_PATTERN.test(trustedOwners.contentHash ?? "")) wall("AUTHORITY_TRUST_BUNDLE_WALL")
+  if (trustedOwners.contentHash !== trustedOwnerBundleContentHash) wall("AUTHORITY_TRUST_BUNDLE_REPLAY_WALL")
+  const payload = canonicalJson(signedPayload(trustedOwners))
+  const computed = crypto.createHash("sha256").update(payload, "utf8").digest("hex")
+  if (computed !== trustedOwners.contentHash) wall("AUTHORITY_TRUST_BUNDLE_WALL")
+  try {
+    const signature = Buffer.from(requiredString(trustedOwners.signature.value, "signature.value"), "base64")
+    if (signature.length === 0 || !crypto.verify(null, Buffer.from(payload, "utf8"), owner.publicKeyPem, signature)) {
+      wall("AUTHORITY_TRUST_BUNDLE_WALL")
+    }
+  } catch (error) {
+    if (error instanceof AuthorityAssertionError) throw error
+    wall("AUTHORITY_TRUST_BUNDLE_WALL")
+  }
+}
+
+function verifySignedRecord(record, trustedOwners, trustedOwnerKeyFingerprint) {
   if (!HASH_PATTERN.test(record.contentHash ?? "")) wall("AUTHORITY_HASH_WALL", "FORMAT")
   const payload = canonicalJson(signedPayload(record))
   const computed = crypto.createHash("sha256").update(payload, "utf8").digest("hex")
   if (!crypto.timingSafeEqual(Buffer.from(computed, "hex"), Buffer.from(record.contentHash, "hex"))) {
     wall("AUTHORITY_HASH_WALL", "MISMATCH")
   }
-  const owner = trustedOwnerFor(record, trustedOwners)
+  const owner = trustedOwnerFor(record, trustedOwners, trustedOwnerKeyFingerprint)
   let signature
   try {
     signature = Buffer.from(requiredString(record.signature.value, "signature.value"), "base64")
@@ -99,6 +150,81 @@ function verifySignedRecord(record, trustedOwners) {
     if (error instanceof AuthorityAssertionError) throw error
     wall("AUTHORITY_SIGNATURE_WALL", "INVALID")
   }
+}
+
+function validateLegacyRevocationEvent(event) {
+  if (event.schemaVersion !== 1 || event.artifactType !== "OWNER_LEGACY_AUTHORITY_REVOCATION_EVENT") {
+    wall("AUTHORITY_LEGACY_REVOCATION_WALL", "SCHEMA")
+  }
+  requiredString(event.eventId, "eventId")
+  requiredString(event.authorityRecordId, "authorityRecordId")
+  requiredString(event.adapterId, "adapterId")
+  if (!Number.isSafeInteger(event.sequence) || event.sequence < 1) wall("AUTHORITY_LEGACY_REVOCATION_WALL", "SEQUENCE")
+  if (event.status !== "REVOKED_TERMINAL") wall("AUTHORITY_LEGACY_REVOCATION_WALL", "STATUS")
+  if (!Number.isSafeInteger(event.terminalIssueNumber) || event.terminalIssueNumber < 1) {
+    wall("AUTHORITY_LEGACY_REVOCATION_WALL", "TERMINAL_ISSUE")
+  }
+  requiredString(event.terminalReason, "terminalReason")
+  instant(event.issuedAt, "issuedAt")
+  if (event.previousEventHash !== null && !HASH_PATTERN.test(event.previousEventHash ?? "")) {
+    wall("AUTHORITY_LEGACY_REVOCATION_WALL", "PREVIOUS_HASH")
+  }
+}
+
+export function assertLegacyAuthorityRevocations({
+  events, trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash, expected, now = new Date(),
+}) {
+  verifyTrustBundle(trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash)
+  if (!plainObject(expected)) wall("AUTHORITY_LEGACY_REVOCATION_WALL", "EXPECTED")
+  const adapterId = requiredString(expected.adapterId, "expected.adapterId")
+  const authorityRecordIds = requiredStringArray(expected.authorityRecordIds, "expected.authorityRecordIds")
+  if (!Number.isSafeInteger(expected.terminalIssueNumber) || expected.terminalIssueNumber < 1) {
+    wall("AUTHORITY_LEGACY_REVOCATION_WALL", "EXPECTED_TERMINAL_ISSUE")
+  }
+  requiredString(expected.terminalReason, "expected.terminalReason")
+  if (!Array.isArray(events) || events.length !== authorityRecordIds.length) {
+    wall("AUTHORITY_LEGACY_REVOCATION_WALL", "EVENT_COUNT")
+  }
+  const assertionTime = now instanceof Date ? now.getTime() : Date.parse(now)
+  if (!Number.isFinite(assertionTime)) wall("AUTHORITY_TIME_WALL")
+
+  let previous = null
+  const seenRecords = new Set()
+  const seenEvents = new Set()
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index]
+    validateLegacyRevocationEvent(event)
+    if (seenEvents.has(event.eventId) || seenRecords.has(event.authorityRecordId)) {
+      wall("AUTHORITY_LEGACY_REVOCATION_WALL", "DUPLICATE")
+    }
+    if (event.sequence !== index + 1 || event.previousEventHash !== previous) {
+      wall("AUTHORITY_LEGACY_REVOCATION_WALL", "LINK")
+    }
+    if (!authorityRecordIds.includes(event.authorityRecordId)
+      || event.adapterId !== adapterId
+      || event.terminalIssueNumber !== expected.terminalIssueNumber
+      || event.terminalReason !== expected.terminalReason) {
+      wall("AUTHORITY_LEGACY_REVOCATION_WALL", "SCOPE")
+    }
+    if (Date.parse(event.issuedAt) > assertionTime) wall("AUTHORITY_LEGACY_REVOCATION_WALL", "EVENT_TIME")
+    verifySignedRecord(event, trustedOwners, trustedOwnerKeyFingerprint)
+    seenEvents.add(event.eventId)
+    seenRecords.add(event.authorityRecordId)
+    previous = event.contentHash
+  }
+
+  if (seenRecords.size !== authorityRecordIds.length) wall("AUTHORITY_LEGACY_REVOCATION_WALL", "RECORD_SET")
+  const head = trustedOwners.legacyRevocationHeads?.find((candidate) => candidate?.adapterId === adapterId)
+  if (!head || head.eventCount !== events.length || head.latestEventHash !== previous) {
+    wall("AUTHORITY_EVENT_HEAD_WALL")
+  }
+  return Object.freeze({
+    status: "VERIFIED_REVOKED",
+    adapterId,
+    authorityRecordIds: Object.freeze([...authorityRecordIds]),
+    latestEventHash: previous,
+    eventCount: events.length,
+  })
 }
 
 function validateGrantSchema(grant) {
@@ -136,7 +262,7 @@ function validateEventSchema(event) {
   }
 }
 
-function verifyEventChain(grant, events, trustedOwners, assertionTime) {
+function verifyEventChain(grant, events, trustedOwners, trustedOwnerKeyFingerprint, assertionTime) {
   if (!Array.isArray(events) || events.length === 0) wall("AUTHORITY_STATUS_WALL", "MISSING")
   let previous = null
   let revoked = false
@@ -156,7 +282,7 @@ function verifyEventChain(grant, events, trustedOwners, assertionTime) {
     if (index === 0 && event.status !== "ACTIVE") wall("AUTHORITY_EVENT_CHAIN_WALL", "INITIAL_STATUS")
     if (revoked) wall("AUTHORITY_EVENT_CHAIN_WALL", "EVENT_AFTER_REVOCATION")
     if (event.status === "REVOKED") revoked = true
-    verifySignedRecord(event, trustedOwners)
+    verifySignedRecord(event, trustedOwners, trustedOwnerKeyFingerprint)
     previous = event.contentHash
     previousTime = eventTime
   }
@@ -189,12 +315,16 @@ export function evaluateOwnerOperationCounters(counters) {
   })
 }
 
-export function assertOwnerAuthority({ grant, events, trustedOwners, request, counters, now = new Date() }) {
+export function assertOwnerAuthority({
+  grant, events, trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash,
+  request, counters, now = new Date(),
+}) {
+  verifyTrustBundle(trustedOwners, trustedOwnerKeyFingerprint, trustedOwnerBundleContentHash)
   validateGrantSchema(grant)
-  verifySignedRecord(grant, trustedOwners)
+  verifySignedRecord(grant, trustedOwners, trustedOwnerKeyFingerprint)
   const at = now instanceof Date ? now.getTime() : Date.parse(now)
   if (!Number.isFinite(at)) wall("AUTHORITY_TIME_WALL")
-  const status = verifyEventChain(grant, events, trustedOwners, at)
+  const status = verifyEventChain(grant, events, trustedOwners, trustedOwnerKeyFingerprint, at)
   if (at < Date.parse(grant.issuedAt)) wall("AUTHORITY_NOT_YET_VALID_WALL")
   if (at >= Date.parse(grant.expiresAt)) wall("AUTHORITY_EXPIRED_WALL")
   if (status.status === "REVOKED") wall("AUTHORITY_REVOKED_WALL")

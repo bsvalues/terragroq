@@ -11,7 +11,9 @@
     "revocationEvent": {
       "required": true,
       "status": "PENDING_OWNER_SIGNED_EVENT",
-      "eventId": null
+      "eventId": null,
+      "ownerKeyFingerprint": null,
+      "trustBundleContentHash": null
     }
   },
   "workOrders": [

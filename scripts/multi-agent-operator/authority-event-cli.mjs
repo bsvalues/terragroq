@@ -1,7 +1,11 @@
 import fs from "node:fs"
 import process from "node:process"
 
-import { AuthorityAssertionError, assertOwnerAuthority } from "./authority-events.mjs"
+import {
+  AuthorityAssertionError,
+  assertLegacyAuthorityRevocations,
+  assertOwnerAuthority,
+} from "./authority-events.mjs"
 
 function option(name, required = true) {
   const index = process.argv.indexOf(name)
@@ -20,24 +24,48 @@ function readJson(name) {
 }
 
 try {
-  if (process.argv[2] !== "assert") throw new AuthorityAssertionError("AUTHORITY_CLI_WALL", "COMMAND")
-  const result = assertOwnerAuthority({
-    grant: readJson("--grant"),
-    events: readJson("--events"),
-    trustedOwners: readJson("--trusted-owners"),
-    counters: readJson("--owner-counters"),
-    now: option("--at", false) ?? new Date(),
-    request: {
-      subjectType: option("--subject-type"),
-      subjectId: option("--subject-id"),
-      programId: option("--program"),
-      repository: option("--repository"),
-      riskClass: option("--risk"),
-      action: option("--action"),
-      mergeMode: option("--merge-mode"),
-    },
-  })
-  process.stdout.write(`OWNER_AUTHORITY_ASSERTION=${JSON.stringify(result)}\n`)
+  const command = process.argv[2]
+  if (command === "validate-artifacts") {
+    const result = assertOwnerAuthority({
+      grant: readJson("--grant"),
+      events: readJson("--events"),
+      trustedOwners: readJson("--trusted-owners"),
+      trustedOwnerKeyFingerprint: option("--owner-key-fingerprint"),
+      trustedOwnerBundleContentHash: option("--owner-bundle-hash"),
+      counters: readJson("--owner-counters"),
+      now: option("--at", false) ?? new Date(),
+      request: {
+        subjectType: option("--subject-type"),
+        subjectId: option("--subject-id"),
+        programId: option("--program"),
+        repository: option("--repository"),
+        riskClass: option("--risk"),
+        action: option("--action"),
+        mergeMode: option("--merge-mode"),
+      },
+    })
+    process.stdout.write(`OWNER_AUTHORITY_ARTIFACT_VALIDATION=${JSON.stringify(result)}\n`)
+  } else if (command === "assert-legacy-revocations") {
+    const registry = readJson("--registry")
+    const result = assertLegacyAuthorityRevocations({
+      events: readJson("--events"),
+      trustedOwners: readJson("--trusted-owners"),
+      trustedOwnerKeyFingerprint: registry.adapter?.revocationEvent?.ownerKeyFingerprint,
+      trustedOwnerBundleContentHash: registry.adapter?.revocationEvent?.trustBundleContentHash,
+      now: option("--at", false) ?? new Date(),
+      expected: {
+        adapterId: registry.adapter?.adapterId,
+        authorityRecordIds: registry.workOrders
+          ?.filter((record) => record.adapterId === registry.adapter?.adapterId)
+          .map((record) => record.workOrderId),
+        terminalIssueNumber: registry.adapter?.terminalIssueNumber,
+        terminalReason: registry.adapter?.terminalReason,
+      },
+    })
+    process.stdout.write(`OWNER_REVOCATION_ASSERTION=${JSON.stringify(result)}\n`)
+  } else {
+    throw new AuthorityAssertionError("AUTHORITY_CLI_WALL", "COMMAND")
+  }
 } catch (error) {
   const code = error instanceof AuthorityAssertionError ? error.code : "AUTHORITY_ASSERTION_WALL"
   process.stderr.write(`${code}\n`)
