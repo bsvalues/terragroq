@@ -45,3 +45,13 @@ No other tracked path was changed. The implementation is a deterministic pre-dis
 - `OWNER_ROUTINE_CONTACT_COUNT=0`
 
 No runtime activation, provider authentication, credential inspection, owner contact, GitHub write, push, or merge occurred in this lane.
+
+## PR #364 assurance remediation
+
+- Remediation started UTC: `2026-07-14T16:14:36Z`
+- Remediation completed UTC: `2026-07-14T16:15:23Z`
+- Finding: repository-relative path strings were compared globally, which could falsely collide identical paths reserved in disjoint repositories.
+- Resolution: exact and ancestor/descendant path identity is now scoped to overlapping repository context. Disjoint explicit repositories are compatible; shared repositories and conservative implicit dispatch-repository context preserve collision detection.
+- Regression coverage: equal paths in disjoint repositories, ancestor-related paths in disjoint repositories, equal paths in a shared repository, and ancestor-related paths in a shared repository.
+- Remediation validation: focused Vitest PASS, 1 file and 16 tests; both Node syntax checks PASS; `git diff --check` PASS.
+- Reservation and all five zero owner-operation counters above remain unchanged.

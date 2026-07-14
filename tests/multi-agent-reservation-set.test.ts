@@ -92,6 +92,48 @@ describe("multi-agent reservation-set compatibility", () => {
     expect(outcome.conflicts).toHaveLength(5)
   })
 
+  it("does not collide equal or ancestor-related paths in disjoint repositories", () => {
+    const exact = checkReservationCompatibility(
+      reservationSet("left", { paths: ["src/operator.ts"], repositories: ["bsvalues/repo-a"] }),
+      reservationSet("right", { paths: ["src/operator.ts"], repositories: ["bsvalues/repo-b"] }),
+    )
+    expect(exact).toMatchObject({ status: "COMPATIBLE", compatible: true, reasonCodes: [] })
+
+    const ancestor = checkReservationCompatibility(
+      reservationSet("left", { paths: ["src"], repositories: ["bsvalues/repo-a"] }),
+      reservationSet("right", { paths: ["src/operator.ts"], repositories: ["bsvalues/repo-b"] }),
+    )
+    expect(ancestor).toMatchObject({ status: "COMPATIBLE", compatible: true, reasonCodes: [] })
+  })
+
+  it("preserves exact and ancestor path collisions in overlapping repositories", () => {
+    const exact = checkReservationCompatibility(
+      reservationSet("left", { paths: ["src/operator.ts"], repositories: ["bsvalues/shared"] }),
+      reservationSet("right", { paths: ["./src/operator.ts"], repositories: ["bsvalues/shared"] }),
+    )
+    expect(exact).toMatchObject({
+      status: "CONFLICT",
+      reasonCodes: ["PATH_EXACT_COLLISION", "REPOSITORY_COLLISION"],
+      conflicts: expect.arrayContaining([expect.objectContaining({
+        reasonCode: "PATH_EXACT_COLLISION",
+        repositoryContexts: ["bsvalues/shared"],
+      })]),
+    })
+
+    const ancestor = checkReservationCompatibility(
+      reservationSet("left", { paths: ["src"], repositories: ["bsvalues/shared", "bsvalues/left"] }),
+      reservationSet("right", { paths: ["src/operator.ts"], repositories: ["bsvalues/shared", "bsvalues/right"] }),
+    )
+    expect(ancestor).toMatchObject({
+      status: "CONFLICT",
+      reasonCodes: ["PATH_ANCESTOR_COLLISION", "REPOSITORY_COLLISION"],
+      conflicts: expect.arrayContaining([expect.objectContaining({
+        reasonCode: "PATH_ANCESTOR_COLLISION",
+        repositoryContexts: ["bsvalues/shared"],
+      })]),
+    })
+  })
+
   it("rejects duplicates, self-overlapping paths, malformed values and duplicate set identities", () => {
     const malformed = reservationSet("same", {
       paths: ["src", "src/a.ts", "./src", "../../escape"],

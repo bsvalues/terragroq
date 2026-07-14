@@ -10,7 +10,7 @@ Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001`
 
 Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
-Baseline: `origin/main = 2aec3bf8e7a154cd6cbb7ff85c9b6c81694fbc5a`
+Merged Phase 1 baseline: `origin/main = 94795d37` after Lane B PR #364 and Lane A PR #365
 
 Risk ceiling: `R3` for control-plane implementation; useful delivery pilots remain `R0/R1`
 
@@ -104,8 +104,11 @@ Evidence:
 owner direction that William is owner-only and the agents execute the complete
 program without routine owner contact. Its goal is
 `GOAL-WOS-MULTI-AGENT-OPERATOR-001`; its loop is
-`LOOP-WOS-MULTI-AGENT-OPERATOR-001`; and its dependency-aware Phase 0 chain is
-active. The program grant is limited to repository-scoped, reversible work and
+`LOOP-WOS-MULTI-AGENT-OPERATOR-001`. Phase 0 and hosted execution through
+`WO-MAO-012` are complete. Two post-merge threads place the lifecycle in
+`MERGED_WITH_REMEDIATION_REQUIRED`; `WO-MAO-013` remains next eligible pending
+independent remediation re-review. `WO-MAO-016` is not yet eligible. The program
+grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
 deployment, protected data, or destructive operations.
 

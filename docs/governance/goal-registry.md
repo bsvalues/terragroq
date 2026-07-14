@@ -139,7 +139,7 @@ persistence, command execution, and any production mutation.
 
 ### `GOAL-WOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
 
-Status: `ACTIVE / PHASE_0 INTEGRATION`
+Status: `ACTIVE / MERGED_WITH_REMEDIATION_REQUIRED / WO-MAO-013 READY`
 
 Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
@@ -159,6 +159,12 @@ Canonical playbook:
 Work Orders: `WO-MAO-001` through `WO-MAO-062`. Dependencies and reservations,
 not numeric serialization, determine the eligible set. The executable registry
 is `components/operator/multi-agent-operator-registry.ts`.
+
+Current transition: `WO-MAO-001` through `WO-MAO-012` are complete. Two
+post-merge assurance findings were remediated by the original builders, but
+independent re-review remains pending at `WO-MAO-013`. `WO-MAO-014` through
+`WO-MAO-016` remain pending. Durable WilliamOS dispatch, final hosted-team proof,
+and atomic reservations remain unproven.
 
 Communication contract: routine implementation, diagnosis, retry, review,
 merge, verification, cleanup, and continuation remain agent-owned. William is

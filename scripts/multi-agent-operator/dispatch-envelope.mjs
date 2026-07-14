@@ -22,6 +22,14 @@ const ACTIONS = new Set([
   "BRANCH_PROTECTION_BYPASS",
   "DESTRUCTIVE_GIT",
 ])
+const ZERO_OWNER_PROTECTED_ACTIONS = new Set([
+  "OWNER_CONTACT",
+  "CREDENTIAL_ACCESS",
+  "RUNTIME_ACTIVATION",
+  "PRODUCTION_WRITE",
+  "BRANCH_PROTECTION_BYPASS",
+  "DESTRUCTIVE_GIT",
+])
 
 const TOP_LEVEL_FIELDS = new Set([
   "schemaVersion",
@@ -288,9 +296,10 @@ export function normalizeDispatchEnvelope(input) {
   }
   const allowedActions = normalizeActions(input.allowedActions, "allowedActions")
   const forbiddenActions = normalizeActions(input.forbiddenActions, "forbiddenActions")
-  const ownerOperationAction = allowedActions.find((action) => action.startsWith("OWNER_"))
-  if (ownerOperationAction) {
-    wall("DISPATCH_ENVELOPE_OWNER_OPERATION_WALL", "allowedActions", ownerOperationAction)
+  const protectedAction = allowedActions.find((action) =>
+    action.startsWith("OWNER_") || ZERO_OWNER_PROTECTED_ACTIONS.has(action))
+  if (protectedAction) {
+    wall("DISPATCH_ENVELOPE_OWNER_OPERATION_WALL", "allowedActions", protectedAction)
   }
   const actionOverlap = allowedActions.find((action) => forbiddenActions.includes(action))
   if (actionOverlap) wall("DISPATCH_ENVELOPE_CONTRADICTION_WALL", "allowedActions", `FORBIDDEN:${actionOverlap}`)

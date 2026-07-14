@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-`PHASE_0_IMPLEMENTED / HOSTED_TEAM_PROOF_NEXT / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
+`PHASE_1_MERGED_WITH_REMEDIATION_REQUIRED / WO-MAO-013_READY / FINAL_REVIEW_PENDING`
 
 ## Truth
 
@@ -10,10 +10,11 @@ The canonical 62-Work-Order program is active. Phase 0 replaces stale queue and 
 terminalizes the rejected local adapter, ratifies William's owner-only role, publishes executable
 capability truth, registers dependency-driven continuation, and removes blanket human Git/PR gates.
 
-This rollup does not claim final unattended certification. The next proof must use a supported hosted
-Codex team to execute two useful, independent repository lanes with separate reservations and an
-independent assurance lane, then automatically release their dependent fan-in Work Order. Claude
-capability discovery runs independently; unavailability is `PROVIDER_UNAVAILABLE`, not an owner task.
+This rollup does not claim final unattended certification. A supported hosted Codex team executed two
+useful, concurrent repository lanes with separate reservations and automatic dependent fan-in release.
+Two post-merge findings were remediated by the original builders, but final independent re-review is
+pending. Claude capability discovery returned `PROVIDER_UNAVAILABLE`, not an owner task. Durable dispatch
+and atomic reservations remain later work.
 
 ## Non-negotiable operating state
 
@@ -41,10 +42,21 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 - root `AGENTS.md` and `CLAUDE.md`
 - worker registry, agent matrix, capability registry, and executable program registry tests
 
+## Phase 1 evidence
+
+- `docs/reports/WO-MAO-008-useful-proof-portfolio.md`
+- `docs/reports/WO-MAO-009-hosted-team-dispatch-packets.md`
+- `docs/reports/WO-MAO-010-hosted-codex-lane-a.md`
+- `docs/reports/WO-MAO-011-hosted-codex-lane-b.md`
+- `docs/reports/WO-MAO-012-hosted-pr-ci-intake.md`
+- `docs/reports/WO-MAO-013-independent-assurance-remediation.md`
+- `docs/reports/WO-MAO-014-hosted-merge-dependent-release.md`
+- `docs/reports/WO-MAO-015-hosted-team-proof-rollup.md`
+
 ## Next transition
 
-`WO-MAO-008 - Select a useful proof portfolio` becomes eligible after Phase 0 merges and merged-main
-truth is refreshed. The rejected local runtime is not in its dependency chain.
+`WO-MAO-013 - Independent assurance and remediation lifecycle` remains eligible until re-review passes.
+`WO-MAO-016` is not eligible yet. The rejected local runtime is not in either dependency chain.
 
 ## Validation
 

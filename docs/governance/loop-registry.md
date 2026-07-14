@@ -118,6 +118,11 @@ Codex team work does not depend on that rejected adapter.
 Canonical playbook:
 `docs/governance/multi-agent-operator-playbook.md`
 
+Current transition: two post-merge findings place Phase 1 in
+`MERGED_WITH_REMEDIATION_REQUIRED`. Original-builder remediations are integrated,
+but independent re-review is pending. The resolver selects `WO-MAO-013`; it must
+not release `WO-MAO-014` through `WO-MAO-016` until assurance passes.
+
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
 Status: `standing`
@@ -180,13 +185,12 @@ Current status:
 
 ## Current Continuation Order
 
-1. Complete and validate Phase 0 executable truth and preventive controls.
-2. Run the Phase 1 hosted Codex team proof with two independent builders and
-   independent assurance.
-3. Release and execute its dependent fan-in Work Order automatically.
-4. Continue through the machine contracts, scheduler, provider federation,
+1. Preserve the completed Phase 0 executable truth and preventive controls.
+2. Complete independent re-review of the Phase 1 post-merge remediations.
+3. Only after PASS, complete the hosted proof rollup and continue at `WO-MAO-016`
+   through the machine contracts, scheduler, provider federation,
    GitHub delivery, resilience, and certification phases.
-5. Keep useful independent R0/R1 product lanes moving whenever dependencies and
+4. Keep useful independent R0/R1 product lanes moving whenever dependencies and
    reservations permit.
 
 The rejected local runtime remains disabled and is not a continuation gate.

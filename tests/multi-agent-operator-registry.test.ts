@@ -17,24 +17,25 @@ describe("multi-agent operator registry", () => {
     expect(new Set(MULTI_AGENT_OPERATOR_WORK_ORDERS.map((record) => record.workOrderId)).size).toBe(62)
   })
 
-  it("uses dependency-driven status with Phase 0 complete and WO-MAO-008 ready", () => {
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 7).every(({ status }) => status === "COMPLETE")).toBe(true)
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 7).every(({ evidencePath }) => existsSync(evidencePath))).toBe(true)
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[7]).toMatchObject({
-      workOrderId: "WO-MAO-008",
-      dependsOn: ["WO-MAO-005", "WO-MAO-007"],
+  it("holds the hosted lifecycle at independent assurance pending", () => {
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 12).every(({ status }) => status === "COMPLETE")).toBe(true)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 15).every(({ evidencePath }) => existsSync(evidencePath))).toBe(true)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[12]).toMatchObject({
+      workOrderId: "WO-MAO-013",
+      dependsOn: ["WO-MAO-012"],
       status: "READY",
       riskClass: "R1",
     })
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[15]).toMatchObject({ workOrderId: "WO-MAO-016", riskClass: "R3" })
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[15]).toMatchObject({ workOrderId: "WO-MAO-016", status: "PENDING" })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[53]).toMatchObject({ workOrderId: "WO-MAO-054", riskClass: "R2" })
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(8).every(({ status }) => status === "PENDING")).toBe(true)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(16).every(({ status }) => status === "PENDING")).toBe(true)
 
-    const afterEight = resolveMultiAgentWorkOrders(
-      new Set(Array.from({ length: 8 }, (_, index) => `WO-MAO-${String(index + 1).padStart(3, "0")}`)),
+    const afterSixteen = resolveMultiAgentWorkOrders(
+      new Set(Array.from({ length: 16 }, (_, index) => `WO-MAO-${String(index + 1).padStart(3, "0")}`)),
     )
-    expect(afterEight[8].status).toBe("READY")
-    expect(afterEight[9].status).toBe("PENDING")
+    expect(afterSixteen[16].status).toBe("READY")
+    expect(afterSixteen[17].status).toBe("READY")
+    expect(afterSixteen[18].status).toBe("READY")
   })
 
   it("has only known, acyclic, backward dependencies", () => {

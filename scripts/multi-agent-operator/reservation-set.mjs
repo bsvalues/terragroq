@@ -70,6 +70,14 @@ function pathRelation(left, right) {
   return null
 }
 
+function overlappingRepositoryContexts(leftRepositories, rightRepositories) {
+  if (leftRepositories.length === 0 && rightRepositories.length === 0) return ["@dispatch-repository"]
+  if (leftRepositories.length === 0) return [...rightRepositories]
+  if (rightRepositories.length === 0) return [...leftRepositories]
+  const right = new Set(rightRepositories)
+  return leftRepositories.filter((repository) => right.has(repository)).sort(stableCompare)
+}
+
 function diagnostic(reasonCode, set, kind, values, detail = {}) {
   return Object.freeze({
     reasonCode,
@@ -155,7 +163,7 @@ export function normalizeReservationSet(input) {
   })
 }
 
-function conflict(reasonCode, kind, leftSet, rightSet, leftValue, rightValue) {
+function conflict(reasonCode, kind, leftSet, rightSet, leftValue, rightValue, detail = {}) {
   return Object.freeze({
     reasonCode,
     kind,
@@ -163,6 +171,7 @@ function conflict(reasonCode, kind, leftSet, rightSet, leftValue, rightValue) {
     rightReservationSetId: rightSet.reservationSetId,
     leftValue,
     rightValue,
+    ...detail,
   })
 }
 
@@ -187,13 +196,20 @@ export function checkReservationCompatibility(leftInput, rightInput) {
   if (invalid.length === 0) {
     const leftSet = left.reservationSet
     const rightSet = right.reservationSet
-    for (const leftPath of leftSet.reservations.paths) {
-      for (const rightPath of rightSet.reservations.paths) {
-        const relation = pathRelation(leftPath, rightPath)
-        if (relation) conflicts.push(conflict(
-          relation === "EXACT" ? "PATH_EXACT_COLLISION" : "PATH_ANCESTOR_COLLISION",
-          "PATH", leftSet, rightSet, leftPath, rightPath,
-        ))
+    const repositoryContexts = overlappingRepositoryContexts(
+      leftSet.reservations.repositories,
+      rightSet.reservations.repositories,
+    )
+    if (repositoryContexts.length > 0) {
+      for (const leftPath of leftSet.reservations.paths) {
+        for (const rightPath of rightSet.reservations.paths) {
+          const relation = pathRelation(leftPath, rightPath)
+          if (relation) conflicts.push(conflict(
+            relation === "EXACT" ? "PATH_EXACT_COLLISION" : "PATH_ANCESTOR_COLLISION",
+            "PATH", leftSet, rightSet, leftPath, rightPath,
+            { repositoryContexts: Object.freeze(repositoryContexts) },
+          ))
+        }
       }
     }
     for (const [field, label] of RESERVATION_KINDS.slice(1)) {
