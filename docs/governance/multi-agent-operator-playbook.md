@@ -87,7 +87,9 @@ At the audited baseline:
 - issue #358 is dependency-blocked even though its stale GitHub label says ready;
 - the local nested-Codex adapter is not an accepted execution surface.
 
-This playbook supersedes conflicting active claims. Historical evidence remains intact.
+This playbook does not supersede active executable claims while it remains proposal-only. Supersession
+occurs only after the Phase 0 integration is merged, mechanically validated, and selected by the
+executable portfolio resolver. Historical evidence remains intact.
 
 ## 4. Target Operating Model
 
@@ -115,13 +117,16 @@ authenticated, supported execution surface. It gets its own branch/worktree, pac
 tests, evidence, and reviewer. Claude and Codex may cross-review; remediation returns to the original
 builder.
 
-If Claude is unavailable, its lane becomes `PROVIDER_UNAVAILABLE`. William is not asked to launch,
+If Claude is unavailable, its lane enters `BLOCKED_NO_ELIGIBLE_PROVIDER` with reason code
+`PROVIDER_UNAVAILABLE`. William is not asked to launch,
 authenticate, or repair it, and healthy Codex lanes continue.
 
 ### Rejected adapter
 
-The nested local `codex exec` supervisor used by #357 remains `QUARANTINED_TERMINAL`. This program may
-read its evidence but may not reactivate, retry, wrap, rename, or silently reuse it.
+The nested local `codex exec` supervisor used by #357 is policy-rejected and disabled. Mechanical
+`QUARANTINED_TERMINAL` enforcement is pending WO-MAO-001 because the legacy executable registry still
+contains approved records. This program may read its evidence but may not reactivate, retry, wrap,
+rename, or silently reuse it.
 
 ## 5. Canonical Execution State
 
@@ -158,13 +163,31 @@ FAILED_VALIDATION_TERMINAL
 FAILED_REVIEW_TERMINAL
 FAILED_SECURITY_TERMINAL
 FAILED_OWNER_BABYSITTING
+FAILED_TERMINAL
+QUARANTINED_TERMINAL
 OWNER_DECISION_REQUIRED
 ```
 
 Provider, network, GitHub, CI, worktree, and merge-conflict failures are operational states, not owner
-decisions.
+decisions. Stable reason codes are separate from lifecycle states. Examples include
+`CODEX_NETWORK_WALL`, `PROVIDER_UNAVAILABLE`, and `FAIL_OWNER_BABYSITTING`; they may not be substituted
+for lifecycle-state names.
 
 ## 6. Mandatory Work-Order Packet
+
+### Owner authority artifact
+
+Execution and merge authority comes only from a separately stored, immutable owner-issued artifact.
+The coordinator may reference this artifact but cannot create, modify, extend, or revoke it. Each
+artifact records an authority-decision ID, issuer, program and repository scope, permitted risks,
+actions and merge modes, issue time, expiry, and content hash. Revocation is an independent,
+append-only owner-signed event that references the immutable grant; the coordinator cannot create or
+modify either artifact. Dispatch checks the authoritative grant-plus-revocation event stream before
+every lease, provider call, GitHub write, and dependent release. A program activation grant is a
+distinct artifact and is required before any multi-agent provider dispatch or automated
+GitHub lifecycle write. Phase 0 governance integration continues through the existing reviewed Codex
+operator contract and cannot dispatch providers or exercise the future delivery engine. Proposal merge
+does not imply activation.
 
 ```yaml
 schemaVersion: 2
@@ -192,7 +215,9 @@ reservations:
   environments: []
 allowedActions: []
 forbiddenActions: []
-authorityGrants: []
+authorityGrantRefs: []
+programActivationGrantRef:
+grantStatusEventRefs: []
 requiredOutputs: []
 requiredValidation: []
 reviewRequirements: []
@@ -206,7 +231,9 @@ ownerDecisionConditions: []
 ownerOperationsAllowed: false
 ```
 
-Missing or contradictory fields keep a packet out of `DEPENDENCY_CLEARED`.
+Missing or contradictory fields keep a packet out of `DEPENDENCY_CLEARED`. Packet fields cannot mint
+authority: every referenced grant must resolve to an unexpired, unrevoked owner artifact whose scope
+covers the exact Work Order, repository, action, risk, and merge mode.
 
 ## 7. Work-Order Program
 
@@ -218,13 +245,13 @@ sets permit.
 
 | WO | Title | Depends on | Deliverable and acceptance gate |
 | --- | --- | --- | --- |
-| `WO-MAO-001` | Terminalize the rejected local adapter | None | Record #357 as `FAILED_TERMINAL/CODEX_NETWORK_WALL`, mark the adapter `QUARANTINED_TERMINAL`, prohibit retry, preserve sanitized evidence, and keep activation disabled. |
+| `WO-MAO-001` | Terminalize the rejected local adapter | None | Record #357 as `FAILED_TERMINAL` with reason `CODEX_NETWORK_WALL`, mark the adapter `QUARANTINED_TERMINAL`, revoke every executable record in its authority registry, add a supervisor/kernel terminal guard that activation cannot bypass, prohibit retry, preserve sanitized evidence, and keep activation disabled. |
 | `WO-MAO-002` | Correct the stale queue | 001 | Remove #358 from the ready set, record its dependency explicitly, and reconcile labels, queue records, goal/loop state, and the active-program queue without executing either issue. |
-| `WO-MAO-003` | Ratify the Owner-Only Constitution | None | Make the four owner-touch counters and `FAIL_OWNER_BABYSITTING` binding across goals, loops, WOs, stop packets, UI, and evidence. Every routine action has a non-owner assignee. |
-| `WO-MAO-004` | Publish the executable capability inventory | 001 | Mark every surface `PROVEN`, `AVAILABLE_UNPROVEN`, `UNAVAILABLE`, or `REJECTED`. Brain Council, Forge, Hermes, and named agents cannot appear active without a conformant adapter. |
-| `WO-MAO-005` | Register the multi-agent program | 002-004 | Register this Program/Goal/Loop as the active successor; mark the local runtime program terminal, preserve historical evidence, and point the umbrella WO playbook to this canonical execution list. |
+| `WO-MAO-003` | Ratify the Owner-Only Constitution | None | Make the four owner-touch counters and `FAILED_OWNER_BABYSITTING` state with reason `FAIL_OWNER_BABYSITTING` binding across goals, loops, WOs, stop packets, UI, and evidence. Define the immutable owner-authority and program-activation grant artifacts, their storage and verifier, and the issuance gate required before WO-MAO-005 can activate the successor. Every routine action has a non-owner assignee. |
+| `WO-MAO-004` | Publish the executable capability inventory | 001 | Mark every surface `PROVEN`, `PILOT_AUTHORIZED`, `AVAILABLE_UNPROVEN`, `UNAVAILABLE`, or `REJECTED`. `PILOT_AUTHORIZED` is limited to an explicit owner grant, a supported hosted surface, preventive trust controls, R0/R1 scope, and the Phase 1 proof; it grants no durable-runtime status. Brain Council, Forge, Hermes, and named agents cannot appear active without a conformant adapter. |
+| `WO-MAO-005` | Register the multi-agent program | 002-004 | Register this Program/Goal/Loop as the active successor only after recording a valid owner program-activation grant; update the executable portfolio selection, mark the local runtime program terminal, preserve historical evidence, and point the umbrella WO playbook to this canonical execution list. |
 | `WO-MAO-006` | Reconcile agent authority entrypoints | 003-005 | Add canonical root agent instructions and a Claude provider adapter; supersede “William is the operator,” sequential-only, and provider-specific authority claims. Instructions narrow authority and never create a competing hierarchy. |
-| `WO-MAO-007` | Worker registry and authority matrix v2 | 004, 006 | Separate catalog entries from executable workers; express per-WO capabilities and grants; remove blanket reliance on William for writes/commits/promotions; fail closed for unproven providers. |
+| `WO-MAO-007` | Worker registry, authority matrix, and preventive trust gate v2 | 004, 006 | Separate catalog entries from executable workers; express per-WO capabilities and immutable grant references; remove blanket reliance on William for writes/commits/promotions. Fail closed except for a `PILOT_AUTHORIZED` hosted Codex provider covered by the active grant. Before any dispatch or GitHub write, prove identity attribution, no raw credential inspection, prompt-injection boundaries, exact path confinement, output redaction, revocation, and independent evidence capture. |
 
 **Phase gate:** repository truth is accurate, the failed adapter cannot run, and William's non-operating
 role is mechanically testable.
@@ -232,18 +259,20 @@ role is mechanically testable.
 ### Phase 1 — Immediate hosted Codex-team proof
 
 This phase occurs before another durable scheduler is built. It proves the multi-agent operating model
-using the native team capability available in a supported Codex session.
+using the native team capability available in a supported Codex session. This is a bounded
+`PILOT_AUTHORIZED` provider proof, not a claim that the provider or a durable runtime is already
+conformant.
 
 | WO | Title | Depends on | Deliverable and acceptance gate |
 | --- | --- | --- | --- |
 | `WO-MAO-008` | Select a useful proof portfolio | 005, 007 | Deterministically select two independent R0/R1 repository WOs plus one dependent WO. Paths and contracts must be disjoint for the first two lanes. William does not invent or dispatch test work. |
-| `WO-MAO-009` | Build the hosted-team dispatch packet | 008 | Produce coordinator, Builder A, Builder B, and assurance packets with explicit reservations, tests, retry limits, evidence targets, and merge authority. |
+| `WO-MAO-009` | Build the hosted-team dispatch packet | 008 | Produce coordinator, Builder A, Builder B, and assurance packets with coordinator-managed, non-overlapping path assignments, tests, retry limits, evidence targets, and immutable authority-grant references. The coordinator cannot mint merge authority. |
 | `WO-MAO-010` | Execute hosted Codex lane A | 009 | Builder A implements and validates a useful bounded WO in its own branch/worktree without owner operations. |
 | `WO-MAO-011` | Execute hosted Codex lane B | 009 | Builder B executes concurrently on non-overlapping reservations; evidence must show overlapping execution intervals and distinct agent identities. |
-| `WO-MAO-012` | Independent assurance and collision audit | 009-011 | A non-builder reviews scope, diff, tests, security, and reservation isolation; deliberately conflicting fixture work proves only one writer can own a reservation. |
-| `WO-MAO-013` | Hosted PR and remediation lifecycle | 010-012 | Agents commit, push, open PRs, monitor CI, ingest review threads, remediate bounded findings, and reach zero unresolved substantive threads. William performs no GitHub operation. |
+| `WO-MAO-012` | Hosted draft PR and CI intake | 009-011 | Agents commit and push only their assigned paths, open draft PRs, and record CI and changed-path evidence. This proves coordinator-managed cooperative isolation only; mechanical collision-safe reservations remain unproven until WO-MAO-018. |
+| `WO-MAO-013` | Independent assurance and remediation lifecycle | 012 | A non-builder reviews scope, diff, tests, security, and coordinator-managed isolation after PR creation. Actionable findings return to the original builder for bounded remediation and re-review until every review thread is resolved. William performs no GitHub operation. |
 | `WO-MAO-014` | Hosted merge, verification, and dependent release | 013 | Merge only under recorded authority, verify main and scope-appropriate routes/artifacts, clean worktrees, and automatically release the dependent WO. |
-| `WO-MAO-015` | Hosted-team proof rollup | 010-014 | Record `CODEX_NATIVE_TEAM=PROVEN` only if useful work merged, concurrency and independent review were real, the dependent released automatically, and all four owner-touch counters are zero. This does not yet claim durable unattended operation. |
+| `WO-MAO-015` | Hosted-team proof rollup | 010-014 | Record `CODEX_NATIVE_TEAM=PROVEN` only for the supported hosted team surface if useful work merged, concurrency, coordinator-managed isolation, and independent review were real, the dependent released automatically, and all four owner-touch counters are zero. Record `ATOMIC_RESERVATIONS=NOT_PROVEN` until WO-MAO-018. This does not claim durable unattended operation. |
 
 **Phase gate:** native Codex team execution is proven on real work. Failure stops architecture inflation and
 produces a provider/platform gap; it does not send William to a terminal.
@@ -258,7 +287,7 @@ produces a provider/platform gap; it does not send William to a terminal.
 | `WO-MAO-019` | Provider capability and dispatch contract | 016 | Define provider-neutral capability discovery, dispatch, status, cancellation, artifact, and evidence interfaces. Unsupported work is never dispatched. |
 | `WO-MAO-020` | Canonical lifecycle and escalation taxonomy | 016-019 | Implement the state machine and typed retry/reroute/defer/block/security/owner-decision vocabulary; transport failures cannot map to owner decisions. |
 | `WO-MAO-021` | Per-lane leases and checkpoints | 017-020 | Replace the global checkpoint with atomic, expiring, renewable per-WO/per-lane leases, heartbeats, idempotency keys, and durable checkpoints. |
-| `WO-MAO-022` | Evidence ledger and owner-touch meter | 003, 016-021 | Persist sanitized authority, worker, provider, reservation, transition, test, commit, PR, review, merge, cleanup, failure, and owner-contact events. Raw auth material is forbidden. |
+| `WO-MAO-022` | Evidence ledger and owner-touch meter | 003, 016-021 | Persist sanitized authority, worker, provider, reservation, transition, test, commit, PR, review, merge, cleanup, failure, and owner-contact events in an append-only, hash-chained, writer-attributed ledger with immutable event IDs and independent chain verification. Raw auth material is forbidden. |
 
 **Phase gate:** WilliamOS can represent and evaluate concurrent execution mechanically without invoking a
 provider.
@@ -278,36 +307,37 @@ provider.
 
 | WO | Title | Depends on | Deliverable and acceptance gate |
 | --- | --- | --- | --- |
-| `WO-MAO-029` | Supported Codex capability proof | 015, 019 | Record the exact supported coordinator/subagent/tool/persistence limits of the chosen Codex surface. No interactive auth surface is represented as a service transport. |
-| `WO-MAO-030` | Hosted Codex coordinator adapter | 024, 028-029 | Translate a team plan into bounded native agent assignments, messaging, cancellation, and evidence without requiring William to relay prompts or results. |
+| `WO-MAO-029` | Supported Codex capability conformance | 015, 019 | Convert the bounded Phase 1 hosted proof into the common provider contract and record the exact supported coordinator/subagent/tool/persistence limits. No interactive auth surface is represented as a service transport. |
+| `WO-MAO-030` | Hosted Codex coordinator adapter | 024, 028-029 | After the preventive trust gate passes for this adapter, translate a team plan into bounded native agent assignments, messaging, cancellation, and evidence without requiring William to relay prompts or results. |
 | `WO-MAO-031` | Codex builder, assurance, and remediation adapters | 026, 029-030 | Prove isolated build, independent review, requested-changes remediation, and bounded re-review using the common provider contract. |
-| `WO-MAO-032` | Claude capability and transport proof | 019, 022 | From Claude's own supported managed environment, prove capabilities and authenticated readiness without exposing credentials or asking William to run a smoke. Unavailable means disabled, not an owner wall. |
+| `WO-MAO-032` | Claude capability and transport proof | 007, 019, 022 | From Claude's own supported managed environment and only after its preventive trust gate passes, prove capabilities and authenticated readiness without exposing credentials or asking William to run a smoke. Unavailable means disabled with reason `PROVIDER_UNAVAILABLE`, not an owner wall. |
 | `WO-MAO-033` | Claude separate-repository/suite adapter | 025, 028, 032 | Execute one bounded candidate in a separate repo or disjoint suite with its own packet, branch, reservation, tests, and evidence. |
 | `WO-MAO-034` | Cross-provider routing and review | 024, 031, 033 | Match capabilities to WOs, keep secrets and workspaces isolated, and support Codex reviewing Claude and Claude reviewing Codex where permitted. |
 | `WO-MAO-035` | Provider health, circuit breakers, and reroute | 020-022, 030-034 | Classify 401/403, 429, network, 5xx, malformed output, timeout, and deterministic failure; quarantine or back off and reroute within budget. William is never the fallback worker. |
 | `WO-MAO-036` | Provider conformance suite | 028-035 | Every enabled provider passes the same dispatch, status, cancel, evidence, isolation, retry, and recovery contract. Provider-specific exceptions cannot weaken the scheduler. |
 
-**Phase gate:** Codex is active only when conformant. Claude is active only when independently available
-and conformant. One unavailable provider cannot block unrelated healthy lanes.
+**Phase gate:** after the bounded Phase 1 `PILOT_AUTHORIZED` exception ends, Codex is generally active
+only when conformant. Claude is active only when independently available and conformant. One
+unavailable provider cannot block unrelated healthy lanes.
 
 ### Phase 5 — GitHub delivery engine
 
 | WO | Title | Depends on | Deliverable and acceptance gate |
 | --- | --- | --- | --- |
-| `WO-MAO-037` | Branch, commit, and push automation | 007, 025-026, 036 | Create governed branches, commit only reserved files, exclude foreign changes/secrets, push with attributable identity, and preserve rollback. |
+| `WO-MAO-037` | Branch, commit, and push automation | 007, 025-026, 036 | Only under an active program grant and a passed preventive trust gate, create governed branches, commit only reserved files, exclude foreign changes/secrets, push with attributable identity, and preserve rollback. |
 | `WO-MAO-038` | PR creation and packet linkage | 022, 037 | Open draft/ready PRs as authorized and generate the PR body from verified WO, authority, validation, and evidence records. |
 | `WO-MAO-039` | CI and review ingestion | 020, 022, 038 | Observe checks and threads to terminal state; distinguish product, flaky infrastructure, provider, policy, and stale-base failures. |
 | `WO-MAO-040` | Automated remediation and re-review | 026, 031, 039 | Route actionable findings to the original builder, apply bounded repairs, rerun validation, and obtain independent re-review. |
-| `WO-MAO-041` | Bounded merge controller | 007, 020, 039-040 | Merge only when authority, freshness, scope, reservations, checks, security, and zero unresolved substantive review gates pass. No branch-protection bypass. |
+| `WO-MAO-041` | Bounded merge controller | 007, 020, 039-040 | Merge only when the immutable owner grant, freshness, scope, reservations, checks, security, and zero unresolved review-thread gates pass. Security and authority threads can never be auto-dismissed. No branch-protection bypass. |
 | `WO-MAO-042` | Post-merge verification and cleanup | 022, 025, 041 | Verify main, deployment/routes/artifacts as applicable, release reservations, remove only proven-safe worktrees, and preserve evidence. |
-| `WO-MAO-043` | Automatic dependent release | 017, 020, 042 | Recompute the eligible set and dispatch newly cleared dependents without owner polling or activation. |
+| `WO-MAO-043` | Automatic dependent release | 017, 020, 042 | Recompute the eligible set and dispatch newly cleared dependents without per-WO owner polling only while the unexpired, unrevoked program-activation grant remains active. Grant expiry or revocation blocks dispatch immediately. |
 | `WO-MAO-044` | GitHub lifecycle conformance | 037-043 | Prove ready queue through verified merge and dependent release with zero manual Git/GitHub actions. |
 
 ### Phase 6 — Security, resilience, and owner-safe operations
 
 | WO | Title | Depends on | Deliverable and acceptance gate |
 | --- | --- | --- | --- |
-| `WO-MAO-045` | Secret, identity, and trust boundary | 022, 036-044 | Prove no raw token/keyring/cache inspection, no cross-provider credential sharing, prompt-injection resistance, path confinement, redaction, attribution, and revocation. |
+| `WO-MAO-045` | Independent secret, identity, and trust-boundary audit | 022, 036-044 | Independently audit the preventive controls required by WO-MAO-007 and each adapter: no raw token/keyring/cache inspection, no cross-provider credential sharing, prompt-injection resistance, path confinement, redaction, attribution, grant integrity, and revocation. A failure invalidates prior executable proof rather than becoming pilot friction. |
 | `WO-MAO-046` | Retry, idempotency, and duplicate prevention | 021, 035, 044 | Bounded state-specific retries and idempotency prevent duplicate branches, commits, PRs, comments, merges, deploys, or cleanup. |
 | `WO-MAO-047` | Worker and coordinator recovery | 021, 025, 030-031, 046 | Recover from death before write, during edit, after commit, after push, and with PR open; reconstruct from durable state without concurrent writers. |
 | `WO-MAO-048` | Provider outage and failover drill | 035-036, 046-047 | Inject network, 401/403, 429, 5xx, timeout, and stream failures; retry, quarantine, reroute, or block without owner diagnostics. |
@@ -323,7 +353,7 @@ and conformant. One unavailable provider cannot block unrelated healthy lanes.
 | --- | --- | --- | --- |
 | `WO-MAO-054` | Select the certification portfolio | 036, 044, 053 | Select two independent useful Codex WOs, one dependent fan-in WO, and one separate Claude repo/suite WO if Claude is conformant. No synthetic evidence-only file is sufficient. |
 | `WO-MAO-055` | Execute concurrent certification lanes | 054 | Run at least two builders concurrently with isolated reservations and an independent assurance agent; Claude runs separately when enabled. |
-| `WO-MAO-056` | Cross-review, CI, and remediation certification | 055 | Complete at least one requested-changes cycle and one CI repair with zero unresolved substantive threads and no owner involvement. |
+| `WO-MAO-056` | Cross-review, CI, and remediation certification | 055 | Complete at least one requested-changes cycle and one CI repair with zero unresolved review threads and no owner involvement. |
 | `WO-MAO-057` | Failure and recovery certification | 055 | During real delivery inject one worker death, one coordinator restart, one provider/network failure, one reservation collision, and one stale-base event; recover or block safely. |
 | `WO-MAO-058` | Merge, verify, clean, and fan-in release | 056-057 | Merge at least two authorized useful PRs, verify results, clean owned resources, and automatically release and execute the dependent WO. |
 | `WO-MAO-059` | Sustained zero-touch soak | 058 | Run a minimum 24-hour or ten-consecutive-WO soak, whichever is more demanding, with bounded concurrency, recovery, evidence continuity, and no operational owner contact. |
@@ -331,23 +361,22 @@ and conformant. One unavailable provider cannot block unrelated healthy lanes.
 | `WO-MAO-061` | Unattended multi-agent certification | 060 | Accept only if real useful work merged, concurrency, fan-in, review, remediation, provider isolation, recovery, and successor release all passed. Otherwise publish an evidence-backed rejection. |
 | `WO-MAO-062` | Program closure and portfolio continuation | 061 | Update the capability matrix, close the goal only on proof, keep failed providers quarantined, and return routine work to automatic portfolio selection. William receives outcomes, not chores. |
 
-## 8. Dependency Waves
+## 8. Topological Phase Groups
 
 ```text
-Wave 0A: 001, 003, 004
-Wave 0B: 002, 005, 006, 007
-Wave 1:  008-015       immediate hosted-team proof
-Wave 2:  016-022       machine contracts
-Wave 3:  023-028       scheduler and isolation
-Wave 4A: 029-031       Codex adapter
-Wave 4B: 032-036       Claude/federation and conformance
-Wave 5:  037-044       GitHub delivery
-Wave 6:  045-053       safety and recovery
-Wave 7:  054-062       real unattended certification
+Phase 0: 001 + 003 -> 002 + 004 -> 005 -> 006 -> 007
+Phase 1: 008 -> 009 -> 010 + 011 -> 012 -> 013 -> 014 -> 015
+Phase 2: 016 -> 017 + 018 + 019 -> 020 -> 021 -> 022
+Phase 3: 023 -> 024 -> 025 -> 026 -> 027 -> 028
+Phase 4: 029-036       provider adapters, federation, and conformance
+Phase 5: 037-044       GitHub delivery
+Phase 6: 045-053       independent safety audit and recovery
+Phase 7: 054-062       real unattended certification
 ```
 
-The eligible-set resolver may run independent WOs inside a wave concurrently. The ranges are planning
-groups, not a global serialization rule.
+These are planning groups with the principal topological order shown. The eligible-set resolver uses
+the Work Order dependency fields as source of truth and may run only dependency-cleared,
+reservation-compatible Work Orders concurrently.
 
 ## 9. Failure Matrix
 
@@ -398,6 +427,16 @@ Implementation of this playbook must update or create, through normal reviewed P
 - root `AGENTS.md` and `CLAUDE.md` provider adapter;
 - `components/operator/multi-agent-operator-registry.ts`;
 - `tests/multi-agent-operator-registry.test.ts`;
+- `runtime-operator/native/authority-registry.json` and
+  `scripts/local/williamos-native-supervisor.ps1` — revoke the rejected adapter and enforce its
+  non-bypassable terminal guard;
+- `components/operator/portfolio-operator-registry.ts`,
+  `components/operator/portfolio-operator-resolver.ts`, and their tests — select the successor only
+  after Phase 0 passes;
+- `components/operator/codex-operator-registry.ts`,
+  `components/operator/codex-operator-resolver.ts`, `lib/goal/agent-matrix.ts`,
+  `control-center/backend/worker_registry.json`, and their tests — reconcile or explicitly deprecate
+  every sequential/provider authority consumer;
 - `docs/reports/WO-MAO-000-multi-agent-operator-rollup.md`;
 - later runtime work under a new `scripts/multi-agent-operator/**` boundary.
 
@@ -421,6 +460,9 @@ BOUNDED_OPERATOR_MERGE=PROVEN
 DEPENDENT_AUTO_RELEASE=PROVEN
 FAILURE_RECOVERY=PROVEN
 SECURITY_ISOLATION=PROVEN
+OWNER_AUTHORITY_GRANTS=VALID_AND_VERIFIED
+PROGRAM_ACTIVATION_GRANT=VALID_DURING_EXECUTION
+EVIDENCE_CHAIN=VERIFIED
 OWNER_OPERATION_TOUCH_COUNT=0
 OWNER_CREDENTIAL_TOUCH_COUNT=0
 OWNER_DIAGNOSTIC_TOUCH_COUNT=0
@@ -429,12 +471,29 @@ USEFUL_WORK=MERGED_AND_VERIFIED
 UNATTENDED_MULTI_AGENT_BUILDER=PROVEN
 ```
 
-Until `WO-MAO-061` passes, the truthful state is:
+Certification and activation are separate. Passing WO-MAO-061 proves capability but does not create or
+extend authority. Before the owner issues the Phase 1 program grant, the truthful state is:
 
 ```text
 WILLIAMOS_CONTROL_PLANE=REAL
 WILLIAMOS_UNATTENDED_MULTI_AGENT_BUILDER=NOT_PROVEN
-LOCAL_NESTED_CODEX_RUNTIME=QUARANTINED_TERMINAL
+LOCAL_NESTED_CODEX_RUNTIME=REJECTED_DISABLED
+LOCAL_NESTED_CODEX_MECHANICAL_QUARANTINE=PENDING_WO_MAO_001
 RUNTIME_ACTIVATION=DISABLED
+MULTI_AGENT_PROGRAM_ACTIVATION=NOT_GRANTED
 OWNER_ROLE=AUTHORITY_ONLY
 ```
+
+During authorized execution before WO-MAO-061, the truthful state replaces only the activation line:
+
+```text
+MULTI_AGENT_PROGRAM_ACTIVATION=ACTIVE_BOUNDED_GRANT
+```
+
+On expiry or an owner-signed revocation event it becomes:
+
+```text
+MULTI_AGENT_PROGRAM_ACTIVATION=INACTIVE_EXPIRED_OR_REVOKED
+```
+
+In every pre-certification state, `WILLIAMOS_UNATTENDED_MULTI_AGENT_BUILDER=NOT_PROVEN` remains true.
