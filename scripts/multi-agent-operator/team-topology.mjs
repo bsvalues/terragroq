@@ -163,7 +163,14 @@ function validateLane(rawLane, laneIndex, eligibility, canonicalById) {
     ...(eligibleEntry?.completedDependencies ?? ineligibleEntry?.completedDependencies ?? []),
     ...settledDependencies,
   ])].sort(lexicalCompare)
-  const pendingDependencies = declaredDependencies.filter((dependency) => !satisfiedDependencies.includes(dependency))
+  const explicitDisposition = ineligibleEntry?.reasonCode === "EXPLICITLY_BLOCKED"
+    ? "EXPLICITLY_BLOCKED"
+    : ineligibleEntry?.reasonCode === "EXPLICITLY_DEFERRED"
+      ? "EXPLICITLY_DEFERRED"
+      : null
+  const pendingDependencies = explicitDisposition === null
+    ? declaredDependencies.filter((dependency) => !satisfiedDependencies.includes(dependency))
+    : []
   const gateSatisfied = eligibleEntry !== undefined
 
   return {
@@ -178,7 +185,11 @@ function validateLane(rawLane, laneIndex, eligibility, canonicalById) {
       satisfiedDependencies,
       pendingDependencies,
       projectedGateSatisfied: gateSatisfied,
+      planningDisposition: gateSatisfied
+        ? "FAN_OUT_CANDIDATE"
+        : explicitDisposition ?? "WAITING_ON_DECLARED_DEPENDENCIES",
       reasonCode: gateSatisfied ? null : ineligibleEntry.reasonCode,
+      stateReasonCode: ineligibleEntry?.stateReasonCode ?? null,
     },
   }
 }
@@ -308,20 +319,32 @@ export function compileTeamTopology(input) {
     .filter((lane) => lane.fanIn.projectedGateSatisfied)
     .map(({ workOrderId, laneId }) => ({ workOrderId, laneId }))
   const waiting = lanes
-    .filter((lane) => !lane.fanIn.projectedGateSatisfied)
+    .filter((lane) => lane.fanIn.planningDisposition === "WAITING_ON_DECLARED_DEPENDENCIES")
     .map(({ workOrderId, laneId, fanIn }) => ({
       workOrderId,
       laneId,
       pendingDependencies: [...fanIn.pendingDependencies],
+    }))
+  const explicitlyIneligible = lanes
+    .filter((lane) => lane.fanIn.planningDisposition === "EXPLICITLY_BLOCKED"
+      || lane.fanIn.planningDisposition === "EXPLICITLY_DEFERRED")
+    .map(({ workOrderId, laneId, fanIn }) => ({
+      workOrderId,
+      laneId,
+      disposition: fanIn.planningDisposition,
+      reasonCode: fanIn.reasonCode,
+      stateReasonCode: fanIn.stateReasonCode,
     }))
 
   const topology = {
     schemaVersion: 1,
     artifactType: "MULTI_AGENT_TEAM_TOPOLOGY",
     topologyId,
-    status: waiting.length === 0
+    status: candidateFanOut.length > 0
       ? "PLANNING_FAN_OUT_CANDIDATES"
-      : "PLANNING_WAITING_ON_DECLARED_DEPENDENCIES",
+      : waiting.length > 0
+        ? "PLANNING_WAITING_ON_DECLARED_DEPENDENCIES"
+        : "PLANNING_EXPLICITLY_INELIGIBLE",
     dagResultHash: contentHash(dagResult),
     declaredCompleteWorkOrderIds: [...dagResult.completedWorkOrderIds],
     coordinator,
@@ -330,6 +353,7 @@ export function compileTeamTopology(input) {
     lanes,
     candidateFanOut,
     waiting,
+    explicitlyIneligible,
     planningOnly: true,
     fanOutIsAdvisory: true,
     requiresSchedulerVerification: true,

@@ -196,6 +196,7 @@ describe("multi-agent team topology", () => {
         { workOrderId: "WO-MAO-025", laneId: "LANE-MAO-B" },
       ],
       waiting: [],
+      explicitlyIneligible: [],
     })
   })
 
@@ -226,6 +227,42 @@ describe("multi-agent team topology", () => {
           satisfiedDependencies: ["WO-MAO-024"],
           pendingDependencies: ["WO-MAO-025"],
           projectedGateSatisfied: false,
+        },
+      }],
+    })
+  })
+
+  it.each([
+    ["BLOCKED", "SECURITY_WALL", "EXPLICITLY_BLOCKED"],
+    ["DEFERRED", "PROVIDER_UNAVAILABLE", "EXPLICITLY_DEFERRED"],
+  ] as const)("partitions an explicitly %s root outside dependency waits", (state, reason, disposition) => {
+    const root = lane(envelope("WO-MAO-024", `LANE-${state}`))
+    const value = input([root])
+    value.dagInput.workOrderStates[0] = {
+      workOrderId: "WO-MAO-024",
+      state,
+      reasonCode: reason,
+    }
+
+    expect(compileTeamTopology(value)).toMatchObject({
+      status: "PLANNING_EXPLICITLY_INELIGIBLE",
+      candidateFanOut: [],
+      waiting: [],
+      explicitlyIneligible: [{
+        workOrderId: "WO-MAO-024",
+        laneId: `LANE-${state}`,
+        disposition,
+        reasonCode: disposition,
+        stateReasonCode: reason,
+      }],
+      lanes: [{
+        fanIn: {
+          declaredDependencies: [],
+          pendingDependencies: [],
+          projectedGateSatisfied: false,
+          planningDisposition: disposition,
+          reasonCode: disposition,
+          stateReasonCode: reason,
         },
       }],
     })
