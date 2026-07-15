@@ -139,7 +139,7 @@ persistence, command execution, and any production mutation.
 
 ### `GOAL-WOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
 
-Status: `ACTIVE / PHASE_2 LOCAL CONTRACTS COMPLETE / THREE WORK ORDERS READY`
+Status: `ACTIVE / PHASE_3 SCHEDULER_AND_TOPOLOGY COMPLETE / WO-MAO-025 READY`
 
 Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
@@ -160,13 +160,11 @@ Work Orders: `WO-MAO-001` through `WO-MAO-062`. Dependencies and reservations,
 not numeric serialization, determine the eligible set. The executable registry
 is `components/operator/multi-agent-operator-registry.ts`.
 
-Current transition: `WO-MAO-001` through `WO-MAO-022`, `WO-MAO-029`, and `WO-MAO-032` are complete. Phase 2 proves the local
-work-order, DAG, atomic reservation-ledger, provider-eligibility, lifecycle, lease/checkpoint,
-evidence-ledger, and owner-meter contracts. `WO-MAO-033` is
-`DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The only dependency-cleared Work Order is
-`WO-MAO-023`; Phase 3 blockers keep `WO-MAO-030`, `WO-MAO-031`, and `WO-MAO-034` through
-`WO-MAO-036` pending. Durable provider dispatch, unattended scheduling, and GitHub delivery remain
-unproven.
+Current transition: `WO-MAO-001` through `WO-MAO-024`, `WO-MAO-029`, and `WO-MAO-032` are complete.
+The local contracts now include the recoverable eligible-set scheduler and deterministic team
+topology/fan-in projection. `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The only
+dependency-cleared Work Order is `WO-MAO-025`; later Phase 3 nodes remain pending on their declared
+dependencies. Durable provider dispatch and automated GitHub delivery remain unproven.
 
 Communication contract: routine implementation, diagnosis, retry, review,
 merge, verification, cleanup, and continuation remain agent-owned. William is

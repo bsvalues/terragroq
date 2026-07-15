@@ -10,9 +10,7 @@ Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001`
 
 Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
-Merged Phase 1 baseline: `origin/main = 94795d37` after Lane B PR #364 and Lane A PR #365
-
-Phase 2 integrated assurance head: `6ae75b2` (local branch evidence)
+Merged scheduler baseline: `origin/main = 6239cd90` after WO-MAO-023 PR #369
 
 Risk ceiling: `R3` for control-plane implementation; useful delivery pilots remain `R0/R1`
 
@@ -107,22 +105,19 @@ owner direction that William is owner-only and the agents execute the complete
 program without routine owner contact. Its goal is
 `GOAL-WOS-MULTI-AGENT-OPERATOR-001`; its loop is
 `LOOP-WOS-MULTI-AGENT-OPERATOR-001`. Phase 0 and the bounded hosted-team proof
-through `WO-MAO-015` are complete. Two post-merge threads were remediated through
-integration PR #366, independently re-reviewed at prior remote head `217d998b`, and resolved. Latest
-local assurance head `44ee48e` adds mixed-context path remediation and is not claimed as a published
-remote PR head.
-Phase 2 Work Orders `WO-MAO-016` through `WO-MAO-022` and the bounded provider assessments
+through `WO-MAO-015` are complete. Phase 2 Work Orders `WO-MAO-016` through `WO-MAO-022`, the
+WO-MAO-023 eligible-set scheduler, the WO-MAO-024 team-topology contract, and the bounded provider assessments
 `WO-MAO-029` and `WO-MAO-032` are complete. `WO-MAO-033` is
 `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The dependency resolver exposes only
-`WO-MAO-023`; Phase 3 dependency blockers keep `WO-MAO-030`, `WO-MAO-031`, and `WO-MAO-034`
-through `WO-MAO-036` pending. The program
+`WO-MAO-025`; later Phase 3 Work Orders remain pending on their declared dependencies. The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
 deployment, protected data, or destructive operations.
 
-Phase 2 proves local envelope, DAG, atomic reservation, provider-eligibility, lifecycle, lease,
-checkpoint, evidence-ledger, and owner-meter contracts. Durable provider dispatch, an unattended
-scheduler, and automated GitHub delivery remain unproven.
+Phase 2 and the first Phase 3 slices prove local envelope, DAG, atomic reservation,
+provider-eligibility, lifecycle, lease, checkpoint, evidence-ledger, owner-meter, recoverable
+eligible-set scheduling, and deterministic team-topology contracts. Durable provider dispatch and
+automated GitHub delivery remain unproven.
 
 `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001` is terminal and non-selectable.
 Its rejected nested-Codex adapter cannot be retried or reused. Release

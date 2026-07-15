@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-`PHASE_2_LOCAL_CONTRACTS_PASS / ELIGIBLE_SET_023_029_032 / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
+`PHASE_3_SCHEDULER_TOPOLOGY_PASS / ELIGIBLE_SET_025 / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
 
 ## Truth
 
@@ -16,13 +16,15 @@ Two post-merge findings were remediated by the original builders, independently 
 prior remote head `217d998b`, and resolved. Latest local assurance head `44ee48e` incorporates subsequent
 structured and mixed-context path remediation; it is local evidence, not a claimed published PR head.
 Claude capability discovery returned `PROVIDER_UNAVAILABLE`, not an owner task. Durable provider
-dispatch, unattended scheduling, and GitHub delivery remain later work; the atomic ledger is proven
-only as a local contract.
+dispatch and automated GitHub delivery remain later work; the scheduler and topology are bounded
+repository-local contracts and do not certify a live unattended builder.
 
-Phase 2 now proves the provider-neutral work-order envelope, DAG eligible-set resolver, local atomic
-reservation ledger, provider eligibility/response boundary, lifecycle taxonomy, per-lane leases and
-checkpoints, append-only evidence ledger, and mechanically derived owner-touch meter. These are local
-contracts, not a durable provider dispatcher, unattended scheduler, or GitHub delivery implementation.
+Phase 2 and the first Phase 3 slices now prove the provider-neutral work-order envelope, DAG eligible-
+set resolver, local atomic reservation ledger, provider eligibility/response boundary, lifecycle
+taxonomy, per-lane leases and checkpoints, append-only evidence ledger, mechanically derived owner-
+touch meter, recoverable eligible-set scheduler, and deterministic team topology/fan-in projection.
+These are bounded contracts, not a durable provider dispatcher or automated GitHub delivery
+implementation.
 
 ## Non-negotiable operating state
 
@@ -71,13 +73,17 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 - `docs/reports/WO-MAO-021-per-lane-leases-checkpoints.md`
 - `docs/reports/WO-MAO-022-evidence-ledger-owner-touch-meter.md`
 
+## Phase 3 evidence
+
+- `docs/reports/WO-MAO-023-eligible-set-scheduler-worker-pool.md`
+- `docs/reports/WO-MAO-024-team-topology-fan-out-fan-in.md`
+
 ## Next transition
 
-`WO-MAO-001` through `WO-MAO-022`, `WO-MAO-029`, and `WO-MAO-032` are complete.
+`WO-MAO-001` through `WO-MAO-024`, `WO-MAO-029`, and `WO-MAO-032` are complete.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set and
-current-work projection contain only `WO-MAO-023`; Phase 3 blockers keep `WO-MAO-030`,
-`WO-MAO-031`, and `WO-MAO-034` through `WO-MAO-036` pending. The rejected local runtime is not in
-the eligible dependency chain.
+current-work projection contain only `WO-MAO-025`; later Phase 3 nodes remain pending on their
+declared dependencies. The rejected local runtime is not in the eligible dependency chain.
 
 ## Validation evidence
 
