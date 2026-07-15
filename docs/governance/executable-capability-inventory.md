@@ -20,6 +20,9 @@ subagent team proved bounded R1 coordination through independent post-merge reme
 bounded status remains separate from WilliamOS dispatch eligibility.
 Phase 2 additionally proves the local provider-neutral control contracts; those contracts do not turn
 any provider candidate into an executable worker.
+WO-MAO-024 adds a Phase 3 team-topology and declared-dependency fan-in planning model. That bounded
+planning claim remains non-executable and adds no dispatch, authority, provider, runtime, or owner-operation
+capability.
 
 ## Status vocabulary
 
@@ -46,6 +49,7 @@ Execution class is independent of status:
 | Serial operational kernel | `PROVEN` | `NON_EXECUTABLE` | The implementation and bounded lifecycle are tested, but its provider path is rejected and it is not multi-agent. |
 | Local nested Codex adapter | `REJECTED` | `WORKER_CANDIDATE` | `CODEX_NETWORK_WALL`; terminal quarantine, no dispatch, retry, reactivation, wrapping, or silent reuse. |
 | Multi-agent Phase 2 local contracts | `PROVEN` | `NON_EXECUTABLE` | Envelope, DAG, atomic reservation ledger, provider eligibility, lifecycle, leases/checkpoints, evidence ledger, and owner meter are proven locally; no durable dispatch or unattended scheduler. |
+| Multi-agent Phase 3 team topology and fan-in plan | `PROVEN` | `NON_EXECUTABLE` | WO-MAO-024 deterministically plans team-role assignments and waits only on declared fan-in dependencies; it executes nothing and grants no authority. |
 | Supported hosted Codex session | `PROVEN` | `WORKER_CANDIDATE` | Bounded coordination and remediation re-review passed; durable WilliamOS dispatch remains denied. |
 | Codex native coordinator and subagents | `PROVEN` | `WORKER_CANDIDATE` | Native fan-out, remediation, and fan-in are proven; no durable adapter or atomic reservation claim is made. |
 | Claude Code provider lane | `UNAVAILABLE` | `WORKER_CANDIDATE` | No authenticated supported surface or conformant adapter is evidenced. |
@@ -59,6 +63,8 @@ Execution class is independent of status:
 - `PROVEN` modifies only the claim in that record. It never promotes a neighboring worker claim.
 - A tested kernel with a rejected adapter is not an active worker.
 - Proven local contracts are not a provider adapter, unattended scheduler, or GitHub delivery worker.
+- A proven Phase 3 topology plan does not dispatch roles, activate a runtime, grant authority, or perform
+  provider, GitHub, production, or owner operations.
 - Provider availability, authentication, adapter conformance, authority, and trust controls are separate gates.
 - `coordinationEligible` records bounded supported-session team coordination; it never implies
   WilliamOS registry dispatch, a durable adapter, or atomic reservation acquisition.
@@ -94,4 +100,5 @@ trust-evidence record that contains no prompt or provider output.
 
 This inventory adds no provider call, worker process, queue, scheduler, command runner, runtime
 activation, credential handling, GitHub write, production mutation, database/schema change, package
-change, or dynamic ingestion. Runtime activation remains disabled.
+change, dynamic ingestion, or owner operation. Runtime activation remains disabled, all owner-touch
+counters remain zero, and the rejected nested local Codex adapter remains terminally quarantined.

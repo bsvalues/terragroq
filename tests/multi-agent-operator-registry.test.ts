@@ -20,16 +20,23 @@ describe("multi-agent operator registry", () => {
   })
 
   it("projects evidenced provider outcomes without bypassing Phase 3 dependencies", () => {
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 22).every(({ status }) => status === "COMPLETE")).toBe(true)
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 22).every(({ evidencePath }) => existsSync(evidencePath))).toBe(true)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 24).every(({ status }) => status === "COMPLETE")).toBe(true)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.slice(0, 24).every(({ evidencePath }) => existsSync(evidencePath))).toBe(true)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[22]).toMatchObject({
       workOrderId: "WO-MAO-023",
       dependsOn: ["WO-MAO-017", "WO-MAO-018", "WO-MAO-019", "WO-MAO-020", "WO-MAO-021", "WO-MAO-022"],
-      status: "READY",
+      status: "COMPLETE",
       riskClass: "R3",
+      evidencePath: "docs/reports/WO-MAO-023-eligible-set-scheduler-worker-pool.md",
+    })
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[23]).toMatchObject({
+      workOrderId: "WO-MAO-024",
+      status: "COMPLETE",
+      riskClass: "R3",
+      evidencePath: "docs/reports/WO-MAO-024-team-topology-fan-out-fan-in.md",
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "READY")
-      .map(({ workOrderId }) => workOrderId)).toEqual(["WO-MAO-023"])
+      .map(({ workOrderId }) => workOrderId)).toEqual(["WO-MAO-025"])
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[28]).toMatchObject({
       workOrderId: "WO-MAO-029",
       status: "COMPLETE",
@@ -50,9 +57,9 @@ describe("multi-agent operator registry", () => {
     })
     expect([30, 31, 34, 35, 36].map((number) => MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].status))
       .toEqual(["PENDING", "PENDING", "PENDING", "PENDING", "PENDING"])
-    expect([29, 32, 33].every((number) => existsSync(MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].evidencePath))).toBe(true)
+    expect([23, 24, 29, 32, 33].every((number) => existsSync(MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].evidencePath))).toBe(true)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[53]).toMatchObject({ workOrderId: "WO-MAO-054", riskClass: "R2" })
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "PENDING")).toHaveLength(36)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "PENDING")).toHaveLength(34)
 
     const afterSixteen = resolveMultiAgentWorkOrders(
       new Set(Array.from({ length: 16 }, (_, index) => `WO-MAO-${String(index + 1).padStart(3, "0")}`)),
@@ -63,12 +70,12 @@ describe("multi-agent operator registry", () => {
   })
 
   it("keeps a provider-unavailable defer explicit and resumable without releasing its blocked consumer", () => {
-    const completed = new Set([...Array.from({ length: 22 }, (_, index) => workOrderId(index + 1)), "WO-MAO-029", "WO-MAO-032"])
+    const completed = new Set([...Array.from({ length: 24 }, (_, index) => workOrderId(index + 1)), "WO-MAO-029", "WO-MAO-032"])
     const workOrders = resolveMultiAgentWorkOrders(completed, new Set(), new Set(["WO-MAO-033"]))
     expect(workOrders[32]).toMatchObject({ status: "DEFERRED_PROVIDER_UNAVAILABLE", resumable: true })
     expect(workOrders[33]).toMatchObject({ workOrderId: "WO-MAO-034", status: "PENDING" })
     expect(workOrders.filter(({ status }) => status === "READY").map(({ workOrderId }) => workOrderId))
-      .toEqual(["WO-MAO-023"])
+      .toEqual(["WO-MAO-025"])
   })
 
   it("has only known, acyclic, backward dependencies", () => {

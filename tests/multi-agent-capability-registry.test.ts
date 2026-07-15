@@ -53,6 +53,20 @@ describe("multi-agent executable capability inventory", () => {
         "No GitHub delivery automation",
       ]),
     })
+    expect(capability("multi-agent-phase-three-team-topology-plan")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "PHASE_THREE_TEAM_TOPOLOGY_PLAN_PROVEN",
+      adapterRef: null,
+      authorityGrantRefs: [],
+      trustGateRef: null,
+      restrictions: expect.arrayContaining([
+        "Planning only; no dispatch or runtime activation",
+        "No authority grant, minting, or expansion",
+        "No rejected nested-runtime reuse",
+        "Owner operations remain prohibited and owner-touch counters remain zero",
+      ]),
+    })
     expect(capability("brain-council-advisory")).toMatchObject({
       status: "PROVEN",
       executionClass: "NON_EXECUTABLE",
