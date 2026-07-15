@@ -890,11 +890,11 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
   it.each(["TRANSACTION_ID", "JOURNAL_FENCE"])("rejects duplicate journal %s ambiguity", (duplicate) => {
     const fixture = journalRebindFixture()
     mutateSchedulerJournal(fixture.config, (journal) => {
-      const original = journal.transactions[0]
+      const original = journal.transactions.findLast((candidate: Record<string, unknown>) => candidate.operation === "OUTCOME")
       const clone = structuredClone(original)
       if (duplicate === "TRANSACTION_ID") clone.journalFencingToken = journal.nextFence++
       else clone.transactionId = `${clone.transactionId}-duplicate`
-      if (clone.operation === "OUTCOME") resealOutcomeTransaction(clone)
+      resealOutcomeTransaction(clone)
       journal.transactions.push(clone)
       journal.version += 1
     })
