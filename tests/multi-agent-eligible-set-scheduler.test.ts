@@ -391,15 +391,15 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     expect(fs.existsSync(lock)).toBe(false)
   })
 
-  it("never steals an expired lock while its same-host owner PID remains alive", () => {
-    const config = { ...configuration(), lockTimeoutMs: 30 }
+  it("reclaims an expired lock even when its stale same-host PID remains alive", () => {
+    const config = { ...configuration(), lockTimeoutMs: 200 }
     const lock = `${config.statePath}.lock`; fs.mkdirSync(lock, { recursive: true })
     const wallClock = Date.now(); const issuedAt = wallClock - 60_000; const nonce = crypto.randomUUID(); const hostname = os.hostname()
     const owner = schedulerLockOwnerRecord({ statePath: config.statePath, pid: process.pid, hostname, nonce, generation: 4,
       issuedAt, heartbeatAt: issuedAt, expiresAt: wallClock - 1 })
     fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify(owner))
-    expectWall(() => schedule(config, input(config)), "SCHEDULER_LOCK_TIMEOUT")
-    expect(JSON.parse(fs.readFileSync(path.join(lock, "owner.json"), "utf8"))).toEqual(owner)
+    expect(schedule(config, input(config))).toMatchObject({ code: "ELIGIBLE_SET_SCHEDULED" })
+    expect(fs.existsSync(lock)).toBe(false)
   })
 
   it("renews generation, heartbeat, and expiry beyond a short lock TTL without permitting a steal", () => {
@@ -409,6 +409,8 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
       ownerHostname: "remote-renewing-owner",
     })
     try {
+      expect(JSON.parse(fs.readFileSync(`${statePath}.lock/owner.json`, "utf8")).generation).toBeGreaterThan(1)
+      expect(() => (unlock as typeof unlock & { assertOwned: () => void }).assertOwned()).not.toThrow()
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 220)
       const owner = JSON.parse(fs.readFileSync(`${statePath}.lock/owner.json`, "utf8"))
       expect(owner.generation).toBeGreaterThan(2)
@@ -424,6 +426,19 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
       expect(fs.existsSync(`${statePath}.lock/owner.json`)).toBe(true)
     } finally { unlock() }
     expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
+  })
+
+  it("fails the ownership guard and preserves a fenced successor", () => {
+    const statePath = configuration().statePath
+    const unlock = acquireSchedulerLock(statePath, { timeoutMs: 200, leaseDurationMs: 200, heartbeatIntervalMs: 50 })
+    const ownerPath = `${statePath}.lock/owner.json`
+    const now = Date.now()
+    const successor = schedulerLockOwnerRecord({ statePath, pid: process.pid, hostname: os.hostname(), nonce: crypto.randomUUID(),
+      generation: 1, issuedAt: now, heartbeatAt: now, expiresAt: now + 1_000 })
+    atomicPersistSchedulerLockOwner(ownerPath, successor)
+    expect(() => (unlock as typeof unlock & { assertOwned: () => void }).assertOwned()).toThrowError(/SCHEDULER_LOCK_WALL:LEASE_LOST/)
+    unlock()
+    expect(JSON.parse(fs.readFileSync(ownerPath, "utf8"))).toEqual(successor)
   })
 
   it("restores rather than deletes a lock renewed during stale-owner quarantine", () => {
@@ -831,6 +846,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     mutateSchedulerJournal(fixture.config, (journal) => {
       const transaction = journal.transactions.find((candidate: Record<string, unknown>) => candidate.transactionId === fixture.recovered.reconciliationLeaseRebind.transactionId)
       transaction.operation = operation
+      resealOutcomeTransaction(transaction)
     })
     expectWall(() => reapAmbiguousOutcomes({ ...configuration(Date.parse("2026-07-15T10:06:00.000Z")), leaseDurationMs: 100 }, {
       expectedVersion: fixture.state.version, claims: [fixture.claim], maxBatch: 1,
@@ -878,6 +894,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
       const clone = structuredClone(original)
       if (duplicate === "TRANSACTION_ID") clone.journalFencingToken = journal.nextFence++
       else clone.transactionId = `${clone.transactionId}-duplicate`
+      if (clone.operation === "OUTCOME") resealOutcomeTransaction(clone)
       journal.transactions.push(clone)
       journal.version += 1
     })

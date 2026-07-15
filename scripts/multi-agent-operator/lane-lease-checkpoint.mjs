@@ -271,6 +271,7 @@ function validateOperation(raw, storeVersion) {
     "idempotencyKey", "operation", "requestDigest", "workOrderId", "laneId", "workerId",
     "storeVersion", "fencingToken", "status", "recordedAt", "checkpointLifecycleState",
     "checkpointEvidenceHash", "checkpointRecordedAt", "checkpointTransition", "recoveryEvidence", "recoveryEvidenceHash",
+    "leaseStatus", "expiresAt", "checkpointSequence", "lifecycleState",
   ])
     || idempotencyKey(raw.idempotencyKey) === null || !OPERATION_TYPES.has(raw.operation)
     || !DIGEST.test(raw.requestDigest) || id(raw.workOrderId) === null || id(raw.laneId) === null || id(raw.workerId) === null
@@ -278,7 +279,10 @@ function validateOperation(raw, storeVersion) {
     || !integer(raw.fencingToken, 1) || instant(raw.recordedAt) === null
     || raw.status !== OPERATION_STATUS[raw.operation]
     || !STATES.has(raw.checkpointLifecycleState) || !DIGEST.test(raw.checkpointEvidenceHash)
-    || instant(raw.checkpointRecordedAt) === null) {
+    || instant(raw.checkpointRecordedAt) === null
+    || !["ACTIVE", "RELEASED", "EXPIRED"].includes(raw.leaseStatus)
+    || instant(raw.expiresAt) === null || !integer(raw.checkpointSequence, 1)
+    || !STATES.has(raw.lifecycleState) || raw.lifecycleState !== raw.checkpointLifecycleState) {
     wall("LANE_LEASE_STORE_CORRUPT", "invalid-operation")
   }
   if (raw.operation === "CHECKPOINT") {
@@ -305,6 +309,14 @@ function validateOperation(raw, storeVersion) {
     wall("LANE_LEASE_STORE_CORRUPT", "unexpected-recovery-evidence")
   }
   return { ...raw }
+}
+
+function assertOperationSnapshot(operation, state) {
+  if (operation.leaseStatus !== state.status || operation.expiresAt !== state.expiresAt
+    || operation.checkpointSequence !== state.checkpointSequence
+    || operation.lifecycleState !== state.checkpointLifecycleState) {
+    wall("LANE_LEASE_STORE_CORRUPT", "operation-response-snapshot-mismatch")
+  }
 }
 
 function validateOperationHistory(operations, lanes, storeVersion, updatedAt) {
@@ -334,11 +346,12 @@ function validateOperationHistory(operations, lanes, storeVersion, updatedAt) {
       reconstructed.set(key, {
         status: "ACTIVE", fencingToken: operation.fencingToken, workerId: operation.workerId, generation: 1,
         acquiredAt: operation.recordedAt, renewedAt: operation.recordedAt, heartbeatAt: operation.recordedAt,
-        releasedAt: null, expiredAt: null, checkpointSequence: 1,
+        expiresAt: operation.expiresAt, releasedAt: null, expiredAt: null, checkpointSequence: 1,
         checkpointLifecycleState: operation.checkpointLifecycleState,
         checkpointEvidenceHash: operation.checkpointEvidenceHash,
         checkpointRecordedAt: operation.checkpointRecordedAt,
       })
+      assertOperationSnapshot(operation, reconstructed.get(key))
       continue
     }
     if (!prior) wall("LANE_LEASE_STORE_CORRUPT", "operation-without-lane")
@@ -356,8 +369,9 @@ function validateOperationHistory(operations, lanes, storeVersion, updatedAt) {
       reconstructed.set(key, {
         ...prior, status: "ACTIVE", fencingToken: operation.fencingToken, workerId: operation.workerId, generation: prior.generation + 1,
         acquiredAt: operation.recordedAt, renewedAt: operation.recordedAt, heartbeatAt: operation.recordedAt,
-        releasedAt: null, expiredAt: null,
+        expiresAt: operation.expiresAt, releasedAt: null, expiredAt: null,
       })
+      assertOperationSnapshot(operation, reconstructed.get(key))
       continue
     }
     if (operation.operation === "SETTLE_TERMINAL") {
@@ -369,8 +383,10 @@ function validateOperationHistory(operations, lanes, storeVersion, updatedAt) {
         wall("LANE_LEASE_STORE_CORRUPT", "invalid-expired-terminal-settlement-history")
       }
       prior.status = "RELEASED"
+      prior.expiresAt = operation.expiresAt
       prior.releasedAt = operation.recordedAt
       prior.expiredAt = null
+      assertOperationSnapshot(operation, prior)
       continue
     }
     if (prior.status !== "ACTIVE" || operation.fencingToken !== prior.fencingToken) {
@@ -393,17 +409,22 @@ function validateOperationHistory(operations, lanes, storeVersion, updatedAt) {
       || operation.checkpointRecordedAt !== prior.checkpointRecordedAt) {
       wall("LANE_LEASE_STORE_CORRUPT", "operation-checkpoint-mismatch")
     }
-    if (operation.operation === "RENEW") prior.renewedAt = operation.recordedAt
+    if (operation.operation === "RENEW") {
+      prior.renewedAt = operation.recordedAt
+      prior.expiresAt = operation.expiresAt
+    }
     if (operation.operation === "HEARTBEAT") prior.heartbeatAt = operation.recordedAt
     if (operation.operation === "CHECKPOINT") prior.checkpointSequence += 1
     if (operation.operation === "RELEASE") {
       prior.status = "RELEASED"
+      prior.expiresAt = operation.expiresAt
       prior.releasedAt = operation.recordedAt
     }
     if (operation.operation === "EXPIRE") {
       prior.status = "EXPIRED"
       prior.expiredAt = operation.recordedAt
     }
+    assertOperationSnapshot(operation, prior)
   }
   if ((storeVersion === 0 && updatedAt !== null)
     || (storeVersion > 0 && operations.at(-1).recordedAt !== updatedAt)) {
@@ -563,13 +584,12 @@ function idempotentResult(store, operation, request) {
   const prior = store.operations.find((entry) => entry.idempotencyKey === request.idempotencyKey)
   if (!prior) return null
   if (prior.operation !== operation || prior.requestDigest !== requestDigest(operation, request)) wall("IDEMPOTENCY_KEY_REUSE_WALL")
-  const lane = store.lanes.find((entry) => entry.workOrderId === prior.workOrderId && entry.laneId === prior.laneId)
   return result(`${prior.status}_IDEMPOTENT`, {
     ok: true, workOrderId: prior.workOrderId, laneId: prior.laneId, workerId: prior.workerId,
     storeVersion: prior.storeVersion, fencingToken: prior.fencingToken,
-    leaseStatus: lane?.status ?? null, expiresAt: lane?.expiresAt ?? null,
-    checkpointSequence: lane?.checkpoint.sequence ?? null,
-    lifecycleState: lane?.checkpoint.lifecycleState ?? null,
+    leaseStatus: prior.leaseStatus, expiresAt: prior.expiresAt,
+    checkpointSequence: prior.checkpointSequence,
+    lifecycleState: prior.lifecycleState,
     idempotent: true,
   })
 }
@@ -621,6 +641,10 @@ function writeOperation(storePath, store, lane, operation, request, status, now)
       checkpointTransition: operation === "CHECKPOINT" ? request.transition : null,
       recoveryEvidence,
       recoveryEvidenceHash: recoveryEvidence === null ? null : digest(canonical(recoveryEvidence)),
+      leaseStatus: lane.status,
+      expiresAt: lane.expiresAt,
+      checkpointSequence: lane.checkpoint.sequence,
+      lifecycleState: lane.checkpoint.lifecycleState,
     }],
   }
   const validated = validateStore(next, store.storeId)

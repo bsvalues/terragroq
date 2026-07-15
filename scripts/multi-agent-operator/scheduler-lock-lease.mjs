@@ -102,8 +102,7 @@ function sameHostPidAlive(owner, hostname) {
 }
 
 function staleOwner(owner, hostname, now) {
-  if (owner.hostname === hostname) return !sameHostPidAlive(owner, hostname)
-  return owner.expiresAt <= now
+  return owner.expiresAt <= now || (owner.hostname === hostname && !sameHostPidAlive(owner, hostname))
 }
 
 function startHeartbeat(ownerPath, owner, leaseDurationMs, heartbeatIntervalMs) {
@@ -114,12 +113,27 @@ function startHeartbeat(ownerPath, owner, leaseDurationMs, heartbeatIntervalMs) 
     workerData: { ownerPath, owner, leaseDurationMs, heartbeatIntervalMs, controlBuffer },
   })
   const ready = Atomics.wait(control, 1, 0, Math.max(1000, heartbeatIntervalMs * 4))
-  if (ready === "timed-out" || Atomics.load(control, 4) !== 0) {
+  if (ready === "timed-out" || Atomics.load(control, 4) !== 0 || Atomics.load(control, 2) <= owner.generation) {
     Atomics.store(control, 0, 1); Atomics.notify(control, 0)
     void worker.terminate()
     wall("SCHEDULER_LOCK_WALL", "HEARTBEAT_START_REQUIRED")
   }
   return { worker, control }
+}
+
+function assertHeartbeatOwnership(ownerPath, owner, heartbeat) {
+  if (Atomics.load(heartbeat.control, 4) !== 0) wall("SCHEDULER_LOCK_WALL", "LEASE_LOST")
+  try {
+    const current = readOwner(ownerPath).owner
+    const generation = Atomics.load(heartbeat.control, 2)
+    if (!validOwner(current, owner.statePath) || current.nonce !== owner.nonce
+      || current.generation !== generation || current.expiresAt <= Date.now()) {
+      wall("SCHEDULER_LOCK_WALL", "LEASE_LOST")
+    }
+  } catch (error) {
+    if (error instanceof SchedulerLockLeaseError) throw error
+    wall("SCHEDULER_LOCK_WALL", "LEASE_LOST")
+  }
 }
 
 function stopHeartbeat(heartbeat) {
@@ -133,6 +147,28 @@ function restoreQuarantine(lock, quarantine) {
   if (fs.existsSync(lock)) wall("SCHEDULER_LOCK_WALL", "QUARANTINE_RESTORE_CONFLICT")
   fs.renameSync(quarantine, lock)
   fsyncDirectory(path.dirname(lock))
+}
+
+function cleanupCreatedLock(lock, statePath, expectedOwner, ownerPublished) {
+  const quarantine = `${lock}.failed-${expectedOwner.nonce}-${expectedOwner.generation}-${crypto.randomUUID()}`
+  try { fs.renameSync(lock, quarantine); fsyncDirectory(path.dirname(lock)) } catch (error) {
+    if (error?.code === "ENOENT") return
+    wall("SCHEDULER_LOCK_WALL", "FAILED_OWNER_QUARANTINE_REQUIRED")
+  }
+  let removable = false
+  try {
+    const quarantinedOwnerPath = path.join(quarantine, "owner.json")
+    if (!ownerPublished && !fs.existsSync(quarantinedOwnerPath)) removable = true
+    else {
+      const current = readOwner(quarantinedOwnerPath).owner
+      removable = validOwner(current, statePath) && current.nonce === expectedOwner.nonce
+        && current.generation === expectedOwner.generation && current.lockFence === expectedOwner.lockFence
+    }
+  } catch { /* preserve unknown ownership rather than deleting it */ }
+  if (removable) {
+    fs.rmSync(quarantine, { recursive: true, force: true })
+    fsyncDirectory(path.dirname(lock))
+  } else if (!fs.existsSync(lock)) restoreQuarantine(lock, quarantine)
 }
 
 export function acquireSchedulerLock(statePath, options = {}) {
@@ -151,6 +187,8 @@ export function acquireSchedulerLock(statePath, options = {}) {
   fs.mkdirSync(path.dirname(statePath), { recursive: true, mode: 0o700 })
   for (;;) {
     let created = false
+    let createdOwner = null
+    let ownerPublished = false
     try {
       fs.mkdirSync(lock, { mode: 0o700 })
       created = true
@@ -159,9 +197,11 @@ export function acquireSchedulerLock(statePath, options = {}) {
         statePath, pid: process.pid, hostname, nonce: crypto.randomUUID(), generation: 1,
         issuedAt: now, heartbeatAt: now, expiresAt: now + leaseDurationMs,
       })
+      createdOwner = owner
       writeInitialOwner(ownerPath, owner)
+      ownerPublished = true
       const heartbeat = startHeartbeat(ownerPath, owner, leaseDurationMs, heartbeatIntervalMs)
-      return () => {
+      const release = () => {
         stopHeartbeat(heartbeat)
         try {
           const current = readOwner(ownerPath).owner
@@ -173,9 +213,11 @@ export function acquireSchedulerLock(statePath, options = {}) {
           }
         } catch { /* a fenced successor or quarantine owns cleanup */ }
       }
+      release.assertOwned = () => assertHeartbeatOwnership(ownerPath, owner, heartbeat)
+      return release
     } catch (error) {
       if (created) {
-        try { fs.rmSync(lock, { recursive: true, force: true }) } catch { /* typed wall below */ }
+        if (createdOwner !== null) cleanupCreatedLock(lock, statePath, createdOwner, ownerPublished)
         if (error instanceof SchedulerLockLeaseError) throw error
         wall("SCHEDULER_LOCK_WALL", "OWNER_RECORD_REQUIRED")
       }

@@ -479,6 +479,20 @@ function acquireLock(configuration) {
   }
 }
 
+function bindSchedulerLock(configuration, unlock) {
+  return { ...configuration, schedulerLockOwnershipGuard: unlock.assertOwned }
+}
+
+function assertSchedulerLockOwned(configuration) {
+  if (typeof configuration.schedulerLockOwnershipGuard !== "function") {
+    wall("SCHEDULER_LOCK_WALL", "state", "OWNERSHIP_GUARD_REQUIRED")
+  }
+  try { configuration.schedulerLockOwnershipGuard() } catch (error) {
+    if (error instanceof SchedulerLockLeaseError) wall(error.code, "state", error.detail)
+    throw error
+  }
+}
+
 function loadState(statePath, stateId) {
   try {
     const value = JSON.parse(fs.readFileSync(statePath, "utf8"))
@@ -578,6 +592,7 @@ function loadJournal(configuration) {
   }
 }
 function writeJournal(configuration, journal) {
+  assertSchedulerLockOwned(configuration)
   const target = journalPath(configuration)
   const temporary = `${target}.tmp-${process.pid}-${crypto.randomUUID()}`
   let handle
@@ -785,6 +800,7 @@ function compensateDivergentEntry(configuration, state, entry, collection, reaso
     let lane = assessment.lane
     if (lane.status === "ACTIVE" && Date.parse(lane.expiresAt) <= now) {
       injectFailure(configuration, "COMPENSATE:LEASE_EXPIRE")
+      assertSchedulerLockOwned(configuration)
       const expired = expireLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
         schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_EXPIRE_REQUEST", workOrderId: entry.workOrderId,
         laneId: entry.laneId, workerId: entry.workerId,
@@ -806,6 +822,7 @@ function compensateDivergentEntry(configuration, state, entry, collection, reaso
           wall("SCHEDULER_COMPENSATION_WALL", "leaseSettleTerminal", "EXACT_TERMINAL_CHECKPOINT_IDENTITY_REQUIRED")
         }
         injectFailure(configuration, "COMPENSATE:LEASE_SETTLE_TERMINAL")
+        assertSchedulerLockOwned(configuration)
         const settled = settleExpiredTerminalLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
           schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_SETTLE_TERMINAL_REQUEST",
           workOrderId: entry.workOrderId, laneId: entry.laneId, workerId: entry.workerId,
@@ -821,6 +838,7 @@ function compensateDivergentEntry(configuration, state, entry, collection, reaso
           .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
       } else {
         injectFailure(configuration, "COMPENSATE:LEASE_RECLAIM")
+        assertSchedulerLockOwned(configuration)
         const reclaimed = reclaimLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
           schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_RECLAIM_REQUEST",
           workOrderId: entry.workOrderId, laneId: entry.laneId, workerId: entry.workerId,
@@ -842,6 +860,7 @@ function compensateDivergentEntry(configuration, state, entry, collection, reaso
     }
     if (lane?.status === "ACTIVE" && !isTerminalLifecycleState(lane.lifecycleState)) {
       injectFailure(configuration, "COMPENSATE:LEASE_TERMINALIZE")
+      assertSchedulerLockOwned(configuration)
       const terminal = checkpointLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
         schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_CHECKPOINT_REQUEST",
         workOrderId: entry.workOrderId, laneId: entry.laneId, workerId: entry.workerId,
@@ -861,6 +880,7 @@ function compensateDivergentEntry(configuration, state, entry, collection, reaso
     }
     if (lane?.status === "ACTIVE" && isTerminalLifecycleState(lane.lifecycleState)) {
       injectFailure(configuration, "COMPENSATE:LEASE_RELEASE")
+      assertSchedulerLockOwned(configuration)
       const released = releaseLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
         schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_RELEASE_REQUEST", workOrderId: entry.workOrderId,
         laneId: entry.laneId, workerId: entry.workerId,
@@ -881,6 +901,7 @@ function compensateDivergentEntry(configuration, state, entry, collection, reaso
   }
   if (durableReservationOwned) {
     injectFailure(configuration, "COMPENSATE:RESERVATION_RELEASE")
+    assertSchedulerLockOwned(configuration)
     const released = releaseReservations(configuration.reservationLedgerPath, configuration.reservationLedgerId, {
       schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_RELEASE_REQUEST", reservationSetId: entry.reservationSet.reservationSetId,
       holderToken: holderToken(configuration, entry), fencingToken: assessment.reservation.fencingToken,
@@ -897,6 +918,7 @@ function rollbackPhaseTwoClaim(configuration, work, reservationFence = null, lea
   const token = holderToken(configuration, work)
   let rollbackError = null
   if (leaseFence !== null) {
+    assertSchedulerLockOwned(configuration)
     const released = releaseLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
       schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_RELEASE_REQUEST",
       workOrderId: work.workOrderId, laneId: work.laneId, workerId: work.workerId,
@@ -906,6 +928,7 @@ function rollbackPhaseTwoClaim(configuration, work, reservationFence = null, lea
     if (!released.ok && released.status !== "LANE_LEASE_ALREADY_RELEASED") rollbackError = released.status
   }
   if (reservationFence !== null) {
+    assertSchedulerLockOwned(configuration)
     const released = releaseReservations(configuration.reservationLedgerPath, configuration.reservationLedgerId, {
       schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_RELEASE_REQUEST",
       reservationSetId: work.reservationSet.reservationSetId, holderToken: token, fencingToken: reservationFence,
@@ -921,6 +944,7 @@ function acquirePhaseTwoClaim(configuration, work, transactionId, schedulerFence
   let lease = null
   try {
     injectFailure(configuration, "SCHEDULE:RESERVATION")
+    assertSchedulerLockOwned(configuration)
     reservation = acquireReservations(configuration.reservationLedgerPath, configuration.reservationLedgerId, {
     schemaVersion: 1,
     artifactType: "MULTI_AGENT_RESERVATION_ACQUIRE_REQUEST",
@@ -938,6 +962,7 @@ function acquirePhaseTwoClaim(configuration, work, transactionId, schedulerFence
     reservationContentHash: work.reservationContentHash,
   }
     injectFailure(configuration, "SCHEDULE:LEASE")
+    assertSchedulerLockOwned(configuration)
     lease = acquireLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
     schemaVersion: 1,
     artifactType: "MULTI_AGENT_LANE_LEASE_ACQUIRE_REQUEST",
@@ -956,6 +981,7 @@ function acquirePhaseTwoClaim(configuration, work, transactionId, schedulerFence
     authorityGap: { present: false, condition: null, conditionRef: null },
   }
     injectFailure(configuration, "SCHEDULE:CHECKPOINT")
+    assertSchedulerLockOwned(configuration)
     const checkpoint = checkpointLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
     schemaVersion: 1,
     artifactType: "MULTI_AGENT_LANE_CHECKPOINT_REQUEST",
@@ -997,6 +1023,7 @@ function acquirePhaseTwoClaim(configuration, work, transactionId, schedulerFence
     sanitized: true, rawAuthMaterialIncluded: false, rawProviderOutputIncluded: false, expectedHead: null,
   }
     injectFailure(configuration, "SCHEDULE:EVIDENCE")
+    assertSchedulerLockOwned(configuration)
     const evidence = appendEvidenceEvent(configuration.evidenceLedgerDir, configuration.evidenceLedgerId, evidenceRequest, {
     leaseStorePath: configuration.leaseStorePath,
     leaseStoreId: configuration.leaseStoreId,
@@ -1021,6 +1048,7 @@ function liveLaneForMutation(configuration, entry) {
   }
   const now = configuration.now()
   if (lane.status === "ACTIVE" && Date.parse(lane.expiresAt) <= now) {
+    assertSchedulerLockOwned(configuration)
     const expired = expireLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
       schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_EXPIRE_REQUEST",
       workOrderId: entry.workOrderId, laneId: entry.laneId, workerId: entry.workerId,
@@ -1033,6 +1061,7 @@ function liveLaneForMutation(configuration, entry) {
   }
   if (lane.status === "EXPIRED") {
     if (isTerminalLifecycleState(lane.lifecycleState)) return lane
+    assertSchedulerLockOwned(configuration)
     const reclaimed = reclaimLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
       schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_RECLAIM_REQUEST",
       workOrderId: entry.workOrderId, laneId: entry.laneId, workerId: entry.workerId,
@@ -1047,6 +1076,7 @@ function liveLaneForMutation(configuration, entry) {
     entry.leaseFencingToken = reclaimed.fencingToken
     lane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
       .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
+    assertSchedulerLockOwned(configuration)
     const reclaimEvidence = appendEvidenceEvent(configuration.evidenceLedgerDir, configuration.evidenceLedgerId, {
       schemaVersion: 1, artifactType: "MULTI_AGENT_EVIDENCE_APPEND_REQUEST",
       eventId: deterministicUuid({ type: "scheduler-reclaim", fullIdentityHash: entry.fullIdentityHash, leaseFencingToken: entry.leaseFencingToken }),
@@ -1096,6 +1126,7 @@ function phaseOutcome(configuration, entry, providerState, reasonCode, responseH
       authorityGap: { present: false, condition: null, conditionRef: null },
     }
     injectFailure(configuration, `OUTCOME:CHECKPOINT:${target}`)
+    assertSchedulerLockOwned(configuration)
     checkpoint = checkpointLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
       schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_CHECKPOINT_REQUEST",
       workOrderId: entry.workOrderId, laneId: entry.laneId, workerId: entry.workerId,
@@ -1115,6 +1146,7 @@ function phaseOutcome(configuration, entry, providerState, reasonCode, responseH
     .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
   if (!updated) wall("SCHEDULER_FENCE_WALL", "leaseStore", "DURABLE_LANE_REQUIRED")
   injectFailure(configuration, "OUTCOME:EVIDENCE")
+  assertSchedulerLockOwned(configuration)
   const evidence = appendEvidenceEvent(configuration.evidenceLedgerDir, configuration.evidenceLedgerId, {
     schemaVersion: 1, artifactType: "MULTI_AGENT_EVIDENCE_APPEND_REQUEST", eventId: deterministicUuid({ type: "scheduler-outcome", fullIdentityHash: entry.fullIdentityHash, providerState, schedulerFencingToken: entry.schedulerFencingToken, outcomeNow }),
     occurredAt: new Date(outcomeNow).toISOString(), eventType: "PROVIDER",
@@ -1134,6 +1166,7 @@ function phaseOutcome(configuration, entry, providerState, reasonCode, responseH
   if (terminal) {
     if (!isTerminalLifecycleState(updated.lifecycleState)) wall("SCHEDULER_CHECKPOINT_WALL", "leaseStore", "TERMINAL_CHECKPOINT_REQUIRED_BEFORE_RELEASE")
     injectFailure(configuration, "OUTCOME:LEASE_RELEASE")
+    assertSchedulerLockOwned(configuration)
     const leaseRelease = releaseLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
       schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_RELEASE_REQUEST",
       workOrderId: entry.workOrderId, laneId: entry.laneId, workerId: entry.workerId,
@@ -1142,6 +1175,7 @@ function phaseOutcome(configuration, entry, providerState, reasonCode, responseH
     }, phaseOptions(configuration))
     if (!leaseRelease.ok) wall("SCHEDULER_LEASE_WALL", "leaseStore", leaseRelease.status)
     injectFailure(configuration, "OUTCOME:RESERVATION_RELEASE")
+    assertSchedulerLockOwned(configuration)
     const reservationRelease = releaseReservations(configuration.reservationLedgerPath, configuration.reservationLedgerId, {
       schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_RELEASE_REQUEST",
       reservationSetId: entry.reservationSet.reservationSetId,
@@ -1339,6 +1373,7 @@ export function scheduleEligibleSet(configuration, input) {
   const ids = works.map((work) => work.fullIdentityHash)
   if (new Set(ids).size !== ids.length) wall("SCHEDULER_REPLAY_WALL", "dispatchClaims", "DUPLICATE_FULL_IDENTITY")
   const unlock = acquireLock(configuration)
+  configuration = bindSchedulerLock(configuration, unlock)
   try {
     const state = loadState(configuration.statePath, configuration.stateId)
     if (state.version !== input.expectedVersion) wall("SCHEDULER_CAS_WALL", "expectedVersion", `${state.version}`)
@@ -1404,6 +1439,7 @@ export function scheduleEligibleSet(configuration, input) {
     }
     try {
       injectFailure(configuration, "SCHEDULE:SCHEDULER_STATE")
+      assertSchedulerLockOwned(configuration)
       durableWrite(configuration.statePath, state)
     } catch (error) {
       for (const transaction of [...transactions].reverse()) {
@@ -1430,6 +1466,7 @@ export function recordProviderOutcome(configuration, input) {
   const now = configuration.now(); integer(now, "now")
   const bundle = loadPinnedTrustBundle(configuration.trustBundleReference)
   const unlock = acquireLock(configuration)
+  configuration = bindSchedulerLock(configuration, unlock)
   try {
     const state = loadState(configuration.statePath, configuration.stateId)
     if (state.version !== input.expectedVersion) wall("SCHEDULER_CAS_WALL", "expectedVersion", `${state.version}`)
@@ -1493,6 +1530,7 @@ export function recordProviderOutcome(configuration, input) {
         .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
       try {
         if (terminal && lane?.status === "RELEASED") {
+          assertSchedulerLockOwned(configuration)
           const reservationRelease = releaseReservations(configuration.reservationLedgerPath, configuration.reservationLedgerId, {
             schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_RELEASE_REQUEST",
             reservationSetId: entry.reservationSet.reservationSetId, holderToken: holderToken(configuration, entry), fencingToken: entry.reservationFencingToken,
@@ -1529,9 +1567,10 @@ export function recordProviderOutcome(configuration, input) {
     }
     try {
       injectFailure(configuration, "OUTCOME:SCHEDULER_STATE")
+      assertSchedulerLockOwned(configuration)
       durableWrite(configuration.statePath, state)
     } catch (error) {
-      try { durableWrite(configuration.statePath, state) } catch (recoveryError) {
+      try { assertSchedulerLockOwned(configuration); durableWrite(configuration.statePath, state) } catch (recoveryError) {
         advanceTransaction(configuration, transactionId, "RECOVERY_REQUIRED", {}, recoveryError?.code ?? error?.code ?? "OUTCOME_STATE_FAILURE")
         throw recoveryError
       }
@@ -1551,6 +1590,7 @@ export function reapAmbiguousOutcomes(configuration, input) {
   const now = configuration.now(); integer(now, "now")
   const bundle = loadPinnedTrustBundle(configuration.trustBundleReference)
   const unlock = acquireLock(configuration)
+  configuration = bindSchedulerLock(configuration, unlock)
   try {
     const state = loadState(configuration.statePath, configuration.stateId)
     if (state.version !== input.expectedVersion) wall("SCHEDULER_CAS_WALL", "expectedVersion", `${state.version}`)
@@ -1598,6 +1638,7 @@ export function reapAmbiguousOutcomes(configuration, input) {
           .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
         try {
           if (lane?.status === "RELEASED") {
+            assertSchedulerLockOwned(configuration)
             const reservationRelease = releaseReservations(configuration.reservationLedgerPath, configuration.reservationLedgerId, {
               schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_RELEASE_REQUEST", reservationSetId: entry.reservationSet.reservationSetId,
               holderToken: holderToken(configuration, entry), fencingToken: entry.reservationFencingToken,
@@ -1621,8 +1662,9 @@ export function reapAmbiguousOutcomes(configuration, input) {
     advanceTransaction(configuration, transactionId, "STORES_APPLIED", { released })
     try {
       injectFailure(configuration, "REAP:SCHEDULER_STATE")
+      assertSchedulerLockOwned(configuration)
       durableWrite(configuration.statePath, state)
-    } catch { durableWrite(configuration.statePath, state) }
+    } catch { assertSchedulerLockOwned(configuration); durableWrite(configuration.statePath, state) }
     for (const { entry } of validated) {
       if (entry.reconciliationLeaseRebind) advanceTransaction(configuration, entry.reconciliationLeaseRebind.transactionId, "SUPERSEDED_BY_REAP")
     }
@@ -1633,9 +1675,11 @@ export function reapAmbiguousOutcomes(configuration, input) {
 
 export function recoverSchedulerTransactions(configuration) {
   validateSchedulerConfiguration(configuration)
-  const recoveryConfiguration = { ...configuration }; delete recoveryConfiguration.failureInjector
+  let recoveryConfiguration = { ...configuration }; delete recoveryConfiguration.failureInjector
   const now = configuration.now(); integer(now, "now")
   const unlock = acquireLock(configuration)
+  configuration = bindSchedulerLock(configuration, unlock)
+  recoveryConfiguration = bindSchedulerLock(recoveryConfiguration, unlock)
   try {
     const journal = loadJournal(configuration)
     const state = loadState(configuration.statePath, configuration.stateId)
@@ -1676,6 +1720,7 @@ export function recoverSchedulerTransactions(configuration) {
             const reservation = inspectReservationLedgerExact(configuration).reservations
               .find((candidate) => candidate.reservationSetId === entry.reservationSet.reservationSetId)
             if (reservation) {
+              assertSchedulerLockOwned(configuration)
               const release = releaseReservations(configuration.reservationLedgerPath, configuration.reservationLedgerId, {
                 schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_RELEASE_REQUEST", reservationSetId: entry.reservationSet.reservationSetId,
                 holderToken: holderToken(configuration, entry), fencingToken: entry.reservationFencingToken,
@@ -1735,6 +1780,7 @@ export function recoverSchedulerTransactions(configuration) {
         } else if (lane.status !== "RELEASED") {
           transaction.phase = "RECOVERY_REQUIRED"; transaction.errorCode = "TERMINAL_RELEASE_STATE_REQUIRED"; continue
         }
+        assertSchedulerLockOwned(configuration)
         const reservationRelease = releaseReservations(configuration.reservationLedgerPath, configuration.reservationLedgerId, {
           schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_RELEASE_REQUEST", reservationSetId: entry.reservationSet.reservationSetId,
           holderToken: holderToken(configuration, entry), fencingToken: entry.reservationFencingToken,
@@ -1829,7 +1875,7 @@ export function recoverSchedulerTransactions(configuration) {
         }
       }
     }
-    if (stateChanged) durableWrite(configuration.statePath, state)
+    if (stateChanged) { assertSchedulerLockOwned(configuration); durableWrite(configuration.statePath, state) }
     journal.version += 1
     for (const transaction of journal.transactions) transaction.updatedAt = new Date(now).toISOString()
     writeJournal(configuration, journal)

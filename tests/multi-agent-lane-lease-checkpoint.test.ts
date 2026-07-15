@@ -86,6 +86,37 @@ describe("per-lane lease and durable checkpoint store", () => {
     expect(acquireLaneLease(store, storeId, { ...request, leaseDurationMs: 2_000 })).toMatchObject({ ok: false, status: "IDEMPOTENCY_KEY_REUSE_WALL" })
   })
 
+  it("replays the original response snapshot after later checkpoint, expiry, and reclaim mutations", () => {
+    const { store } = workspace()
+    const request = acquire({ leaseDurationMs: 100 })
+    const first = acquireLaneLease(store, storeId, request, { now: () => 1_000 })
+    checkpointLaneLease(store, storeId, holder("MULTI_AGENT_LANE_CHECKPOINT_REQUEST", {
+      idempotencyKey: "checkpoint-after-acquire",
+      expectedCheckpointSequence: 1,
+      transition: { from: "LEASED", to: "PROVIDER_DISPATCHED", reasonCode: null, failureClass: null, authorityGap: { present: false, condition: null, conditionRef: null } },
+      evidence: { checkpoint: "later state" },
+    }), { now: () => 1_050 })
+    expireLaneLease(store, storeId, {
+      schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_EXPIRE_REQUEST",
+      workOrderId: "WO-MAO-101", laneId: "LANE-A", workerId: "hosted-codex-a",
+      idempotencyKey: "expire-after-acquire", expectedFencingToken: 1,
+    }, { now: () => 1_100 })
+    reclaimLaneLease(store, storeId, {
+      schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_RECLAIM_REQUEST",
+      workOrderId: "WO-MAO-101", laneId: "LANE-A", workerId: "hosted-codex-a",
+      idempotencyKey: "reclaim-after-acquire", holderToken: holderB,
+      leaseDurationMs: 1_000, expectedFencingToken: 1,
+      checkpointEvidence: { checkpoint: "reclaimed later state" },
+    }, { now: () => 1_200 })
+
+    expect(acquireLaneLease(store, storeId, request, { now: () => 9_000 })).toMatchObject({
+      status: "LANE_LEASE_ACQUIRED_IDEMPOTENT", idempotent: true,
+      storeVersion: first.storeVersion, fencingToken: first.fencingToken,
+      leaseStatus: first.leaseStatus, expiresAt: first.expiresAt,
+      checkpointSequence: first.checkpointSequence, lifecycleState: first.lifecycleState,
+    })
+  })
+
   it("renews with version and expiry compare-and-swap and records heartbeats independently", () => {
     const { store } = workspace()
     acquireLaneLease(store, storeId, acquire(), { now: () => 1_000 })
