@@ -73,9 +73,11 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 
 ## Next transition
 
-`WO-MAO-001` through `WO-MAO-022` are complete. The mechanically eligible set is `WO-MAO-023`,
-`WO-MAO-029`, and `WO-MAO-032`; the singular current-work projection is `WO-MAO-023`. The rejected
-local runtime is not in their dependency chains.
+`WO-MAO-001` through `WO-MAO-022`, `WO-MAO-029`, and `WO-MAO-032` are complete.
+`WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set and
+current-work projection contain only `WO-MAO-023`; Phase 3 blockers keep `WO-MAO-030`,
+`WO-MAO-031`, and `WO-MAO-034` through `WO-MAO-036` pending. The rejected local runtime is not in
+the eligible dependency chain.
 
 ## Validation evidence
 

@@ -111,9 +111,11 @@ through `WO-MAO-015` are complete. Two post-merge threads were remediated throug
 integration PR #366, independently re-reviewed at prior remote head `217d998b`, and resolved. Latest
 local assurance head `44ee48e` adds mixed-context path remediation and is not claimed as a published
 remote PR head.
-Phase 2 Work Orders `WO-MAO-016` through `WO-MAO-022` are independently assured complete. The
-dependency resolver now exposes `WO-MAO-023`, `WO-MAO-029`, and `WO-MAO-032` together; `WO-MAO-023`
-is the singular current-work display only. The program
+Phase 2 Work Orders `WO-MAO-016` through `WO-MAO-022` and the bounded provider assessments
+`WO-MAO-029` and `WO-MAO-032` are complete. `WO-MAO-033` is
+`DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The dependency resolver exposes only
+`WO-MAO-023`; Phase 3 dependency blockers keep `WO-MAO-030`, `WO-MAO-031`, and `WO-MAO-034`
+through `WO-MAO-036` pending. The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
 deployment, protected data, or destructive operations.

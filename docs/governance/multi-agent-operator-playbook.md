@@ -332,15 +332,49 @@ provider.
 | `WO-MAO-029` | Supported Codex capability conformance | 015, 019 | Convert the bounded Phase 1 hosted proof into the common provider contract and record the exact supported coordinator/subagent/tool/persistence limits. No interactive auth surface is represented as a service transport. |
 | `WO-MAO-030` | Hosted Codex coordinator adapter | 024, 028-029 | After the preventive trust gate passes for this adapter, translate a team plan into bounded native agent assignments, messaging, cancellation, and evidence without requiring William to relay prompts or results. |
 | `WO-MAO-031` | Codex builder, assurance, and remediation adapters | 026, 029-030 | Prove isolated build, independent review, requested-changes remediation, and bounded re-review using the common provider contract. |
-| `WO-MAO-032` | Claude capability and transport proof | 007, 019, 022 | From Claude's own supported managed environment and only after its preventive trust gate passes, prove capabilities and authenticated readiness without exposing credentials or asking William to run a smoke. Unavailable means disabled with reason `PROVIDER_UNAVAILABLE`, not an owner wall. |
-| `WO-MAO-033` | Claude separate-repository/suite adapter | 025, 028, 032 | Execute one bounded candidate in a separate repo or disjoint suite with its own packet, branch, reservation, tests, and evidence. |
-| `WO-MAO-034` | Cross-provider routing and review | 024, 031, 033 | Match capabilities to WOs, keep secrets and workspaces isolated, and support Codex reviewing Claude and Claude reviewing Codex where permitted. |
-| `WO-MAO-035` | Provider health, circuit breakers, and reroute | 020-022, 030-034 | Classify 401/403, 429, network, 5xx, malformed output, timeout, and deterministic failure; quarantine or back off and reroute within budget. William is never the fallback worker. |
-| `WO-MAO-036` | Provider conformance suite | 028-035 | Every enabled provider passes the same dispatch, status, cancel, evidence, isolation, retry, and recovery contract. Provider-specific exceptions cannot weaken the scheduler. |
+| `WO-MAO-032` | Claude capability and transport proof | 007, 019, 022 | Assess Claude only from independently available supported transport evidence. If none exists, complete the assessment as `COMPLETE_PROVIDER_ASSESSMENT / PROVIDER_UNAVAILABLE`, keep the provider disabled with concurrency zero, leave the trust gate `NOT_EVALUATED_NO_TRANSPORT`, defer only the affected lane, and continue healthy providers. Never ask William to launch, authenticate, diagnose, or smoke-test Claude. |
+| `WO-MAO-033` | Claude separate-repository/suite adapter | 025, 028, 032 | When Claude is available, execute one bounded candidate in a separate repo or disjoint suite with its own packet, branch, reservation, tests, and evidence. When unavailable, remain `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; never mark adapter execution complete without execution. |
+| `WO-MAO-034` | Cross-provider routing and review | 024, 031, 033 | Match capabilities to WOs, keep secrets and workspaces isolated, and support cross-provider review where permitted. Its explicit `ALL` edge from 033 may use `COMPLETE_OR_PROVIDER_UNAVAILABLE_DEFERRED` only with the independently authoritative assessment settlement defined below; the unavailable provider contributes no capability. |
+| `WO-MAO-035` | Provider health, circuit breakers, and reroute | 020-022, 030-034 | Classify 401/403, 429, network, 5xx, malformed output, timeout, and deterministic failure; quarantine or back off and reroute within budget. A settled unavailable optional provider stays disabled and deferred. William is never the fallback worker. |
+| `WO-MAO-036` | Provider conformance suite | 028-035 | Every enabled provider passes the same dispatch, status, cancel, evidence, isolation, retry, and recovery contract. Disabled provider-unavailable lanes are reported as deferred and excluded, never represented as conformant or complete. Provider-specific exceptions cannot weaken the scheduler. |
 
 **Phase gate:** after the bounded Phase 1 `PILOT_AUTHORIZED` exception ends, Codex is generally active
 only when conformant. Claude is active only when independently available and conformant. One
 unavailable provider cannot block unrelated healthy lanes.
+
+#### Provider-optional dependency settlement
+
+The default dependency rule remains exact `COMPLETE`. A consumer may narrow one declared `ALL` edge
+to `COMPLETE_OR_PROVIDER_UNAVAILABLE_DEFERRED`; `ANY` gates cannot use this policy. The exception is
+valid only when all of the following mechanically agree:
+
+- the subject is exactly `DEFERRED / PROVIDER_UNAVAILABLE`, never `BLOCKED`, another defer reason, or
+  falsely `COMPLETE`;
+- assessment and subject envelopes carry the same provider, assessment-WO, and subject-WO binding;
+- the assessment WO is independently complete as an assessment and its artifact says exactly
+  `UNAVAILABLE / COMPLETE_PROVIDER_ASSESSMENT` with continuation policy
+  `DEFER_AFFECTED_LANE_CONTINUE_HEALTHY_PROVIDERS`;
+- the artifact contains computed hashes of both bound envelopes and is proven by either a signature
+  verified against a writer in a separately configured trust bundle or an exact immutable
+  evidence-ledger anchor in that bundle; the root fingerprint, bundle content hash, and current
+  hash-chained status head are pinned by a separately authenticated immutable registry record before
+  assessment evaluation; callers may identify only its registry ID/version and cannot submit or
+  register roots, pins, bundles, writers, or anchors;
+- the trust bundle is root-signed, fresh, unexpired, and non-revoked, and cross-binds active writer
+  key fingerprints or active ledger-anchor identities to the assessment provider, WOs, artifact,
+  content hash, and both envelope hashes;
+- status events have strictly increasing sequence, version, fencing value, and timestamp; revocation
+  is terminal for a root, writer, or anchor and no later or backdated activation is valid;
+- the subject state references that exact assessment artifact and content hash.
+
+Missing, duplicated, unknown, mismatched, stale, expired, revoked, random-hex, self-rooted,
+self-asserted, raw caller-supplied, or unreferenced proof fails closed. The exception settles only the
+named dependency edge. It does not complete WO-MAO-033,
+enable Claude, grant authority, satisfy an `ANY` gate, or weaken any other dependency.
+
+The embedded production pin registry currently contains no active provider-assessment trust root.
+That preserves the honest WO-MAO-032 unavailable posture: the settlement contract is proven, but no
+production caller can activate it or mint a root without a reviewed canonical registry change.
 
 ### Phase 5 — GitHub delivery engine
 

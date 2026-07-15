@@ -7,6 +7,24 @@ import {
 
 const ARTIFACT_TYPE = "WORK_ORDER_ENVELOPE_V2"
 const COMMUNICATION_POLICY = "FINAL_ONLY"
+const OPTIONAL_TOP_LEVEL_FIELDS = new Set([
+  "dependencyPolicies",
+  "providerBinding",
+])
+const DEPENDENCY_POLICY_FIELDS = new Set([
+  "dependencyWorkOrderId",
+  "satisfaction",
+  "providerId",
+  "assessmentWorkOrderId",
+])
+const PROVIDER_BINDING_FIELDS = new Set([
+  "providerId",
+  "assessmentWorkOrderId",
+  "subjectWorkOrderId",
+  "role",
+])
+const WORK_ORDER_ID = /^WO-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d{3}$/
+const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/
 const OWNER_COUNTER_FIELDS = Object.freeze([
   "credentialTouches",
   "diagnosticTouches",
@@ -51,6 +69,7 @@ const TOP_LEVEL_FIELDS = new Set([
   "ownerOperationsAllowed",
   "ownerTouchBudget",
   "communicationPolicy",
+  ...OPTIONAL_TOP_LEVEL_FIELDS,
 ])
 
 function plainObject(value) {
@@ -83,8 +102,83 @@ function assertExactTopLevelFields(value) {
   if (!plainObject(value)) wall("WORK_ORDER_ENVELOPE_TYPE_WALL", "envelope", "OBJECT_REQUIRED")
   const unknown = Object.keys(value).filter((key) => !TOP_LEVEL_FIELDS.has(key)).sort()
   if (unknown.length > 0) wall("WORK_ORDER_ENVELOPE_UNKNOWN_FIELD_WALL", `envelope.${unknown[0]}`)
-  const missing = [...TOP_LEVEL_FIELDS].filter((key) => !Object.hasOwn(value, key)).sort()
+  const missing = [...TOP_LEVEL_FIELDS]
+    .filter((key) => !OPTIONAL_TOP_LEVEL_FIELDS.has(key) && !Object.hasOwn(value, key))
+    .sort()
   if (missing.length > 0) wall("WORK_ORDER_ENVELOPE_MISSING_FIELD_WALL", `envelope.${missing[0]}`)
+}
+
+function assertExactFields(value, fields, field) {
+  if (!plainObject(value)) wall("WORK_ORDER_ENVELOPE_TYPE_WALL", field, "OBJECT_REQUIRED")
+  const unknown = Object.keys(value).filter((key) => !fields.has(key)).sort()[0]
+  if (unknown) wall("WORK_ORDER_ENVELOPE_UNKNOWN_FIELD_WALL", `${field}.${unknown}`)
+  const missing = [...fields].filter((key) => !Object.hasOwn(value, key)).sort()[0]
+  if (missing) wall("WORK_ORDER_ENVELOPE_MISSING_FIELD_WALL", `${field}.${missing}`)
+}
+
+function identifier(value, field, pattern = IDENTIFIER) {
+  if (typeof value !== "string" || !pattern.test(value)) {
+    wall("WORK_ORDER_ENVELOPE_DEPENDENCY_WALL", field, "VALID_IDENTIFIER_REQUIRED")
+  }
+  return value
+}
+
+function normalizeProviderBinding(value, workOrderId) {
+  if (value === undefined || value === null) return null
+  assertExactFields(value, PROVIDER_BINDING_FIELDS, "providerBinding")
+  const normalized = {
+    providerId: identifier(value.providerId, "providerBinding.providerId"),
+    assessmentWorkOrderId: identifier(value.assessmentWorkOrderId, "providerBinding.assessmentWorkOrderId", WORK_ORDER_ID),
+    subjectWorkOrderId: identifier(value.subjectWorkOrderId, "providerBinding.subjectWorkOrderId", WORK_ORDER_ID),
+    role: value.role,
+  }
+  if (!new Set(["ASSESSMENT", "SUBJECT"]).has(normalized.role)) {
+    wall("WORK_ORDER_ENVELOPE_DEPENDENCY_WALL", "providerBinding.role", "ASSESSMENT_OR_SUBJECT_REQUIRED")
+  }
+  if (normalized.assessmentWorkOrderId === normalized.subjectWorkOrderId) {
+    wall("WORK_ORDER_ENVELOPE_DEPENDENCY_WALL", "providerBinding", "DISTINCT_WORK_ORDERS_REQUIRED")
+  }
+  const boundWorkOrderId = normalized.role === "ASSESSMENT"
+    ? normalized.assessmentWorkOrderId
+    : normalized.subjectWorkOrderId
+  if (boundWorkOrderId !== workOrderId) {
+    wall("WORK_ORDER_ENVELOPE_DEPENDENCY_WALL", "providerBinding", "ROLE_WORK_ORDER_MISMATCH")
+  }
+  return Object.freeze(normalized)
+}
+
+function normalizeDependencyPolicies(value, dependencies, fanInGate) {
+  if (value === undefined) return Object.freeze([])
+  if (!Array.isArray(value)) {
+    wall("WORK_ORDER_ENVELOPE_DEPENDENCY_WALL", "dependencyPolicies", "ARRAY_REQUIRED")
+  }
+  if (value.length > 0 && fanInGate !== "ALL") {
+    wall("WORK_ORDER_ENVELOPE_DEPENDENCY_WALL", "dependencyPolicies", "ALL_GATE_REQUIRED")
+  }
+  const normalized = value.map((entry, index) => {
+    const field = `dependencyPolicies[${index}]`
+    assertExactFields(entry, DEPENDENCY_POLICY_FIELDS, field)
+    const policy = {
+      dependencyWorkOrderId: identifier(entry.dependencyWorkOrderId, `${field}.dependencyWorkOrderId`, WORK_ORDER_ID),
+      satisfaction: entry.satisfaction,
+      providerId: identifier(entry.providerId, `${field}.providerId`),
+      assessmentWorkOrderId: identifier(entry.assessmentWorkOrderId, `${field}.assessmentWorkOrderId`, WORK_ORDER_ID),
+    }
+    if (policy.satisfaction !== "COMPLETE_OR_PROVIDER_UNAVAILABLE_DEFERRED") {
+      wall("WORK_ORDER_ENVELOPE_DEPENDENCY_WALL", `${field}.satisfaction`, "KNOWN_POLICY_REQUIRED")
+    }
+    if (!dependencies.includes(policy.dependencyWorkOrderId)) {
+      wall("WORK_ORDER_ENVELOPE_DEPENDENCY_WALL", `${field}.dependencyWorkOrderId`, "DECLARED_DEPENDENCY_REQUIRED")
+    }
+    if (policy.assessmentWorkOrderId === policy.dependencyWorkOrderId) {
+      wall("WORK_ORDER_ENVELOPE_DEPENDENCY_WALL", field, "INDEPENDENT_ASSESSMENT_WORK_ORDER_REQUIRED")
+    }
+    return Object.freeze(policy)
+  }).sort((left, right) => left.dependencyWorkOrderId.localeCompare(right.dependencyWorkOrderId))
+  if (new Set(normalized.map(({ dependencyWorkOrderId }) => dependencyWorkOrderId)).size !== normalized.length) {
+    wall("WORK_ORDER_ENVELOPE_DEPENDENCY_WALL", "dependencyPolicies", "DUPLICATE_DEPENDENCY_POLICY")
+  }
+  return Object.freeze(normalized)
 }
 
 function normalizeOwnerTouchBudget(value) {
@@ -106,6 +200,8 @@ function dispatchFields(input) {
   delete copy.artifactType
   delete copy.ownerTouchBudget
   delete copy.communicationPolicy
+  delete copy.dependencyPolicies
+  delete copy.providerBinding
   return copy
 }
 
@@ -135,6 +231,12 @@ export function normalizeWorkOrderEnvelopeV2(input) {
   const envelope = Object.freeze({
     artifactType: ARTIFACT_TYPE,
     ...validated.envelope,
+    dependencyPolicies: normalizeDependencyPolicies(
+      input.dependencyPolicies,
+      validated.envelope.dependencies,
+      validated.envelope.fanInGate,
+    ),
+    providerBinding: normalizeProviderBinding(input.providerBinding, validated.envelope.workOrderId),
     ownerTouchBudget,
     communicationPolicy: COMMUNICATION_POLICY,
   })
@@ -156,7 +258,11 @@ export function normalizeWorkOrderEnvelopeV2(input) {
 
 export function validateWorkOrderEnvelopeV2(input) {
   const envelope = normalizeWorkOrderEnvelopeV2(input)
-  const canonicalJson = canonicalWorkOrderEnvelopeV2Json(envelope)
+  const hashEnvelope = { ...envelope }
+  for (const field of OPTIONAL_TOP_LEVEL_FIELDS) {
+    if (!Object.hasOwn(input, field)) delete hashEnvelope[field]
+  }
+  const canonicalJson = canonicalWorkOrderEnvelopeV2Json(hashEnvelope)
   return Object.freeze({
     ok: true,
     code: "WORK_ORDER_ENVELOPE_V2_VALID",

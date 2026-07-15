@@ -160,11 +160,13 @@ Work Orders: `WO-MAO-001` through `WO-MAO-062`. Dependencies and reservations,
 not numeric serialization, determine the eligible set. The executable registry
 is `components/operator/multi-agent-operator-registry.ts`.
 
-Current transition: `WO-MAO-001` through `WO-MAO-022` are complete. Phase 2 proves the local
+Current transition: `WO-MAO-001` through `WO-MAO-022`, `WO-MAO-029`, and `WO-MAO-032` are complete. Phase 2 proves the local
 work-order, DAG, atomic reservation-ledger, provider-eligibility, lifecycle, lease/checkpoint,
-evidence-ledger, and owner-meter contracts. The eligible set is `WO-MAO-023`, `WO-MAO-029`, and
-`WO-MAO-032`; a singular UI displays `WO-MAO-023`. Durable provider dispatch, unattended scheduling,
-and GitHub delivery remain unproven.
+evidence-ledger, and owner-meter contracts. `WO-MAO-033` is
+`DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The only dependency-cleared Work Order is
+`WO-MAO-023`; Phase 3 blockers keep `WO-MAO-030`, `WO-MAO-031`, and `WO-MAO-034` through
+`WO-MAO-036` pending. Durable provider dispatch, unattended scheduling, and GitHub delivery remain
+unproven.
 
 Communication contract: routine implementation, diagnosis, retry, review,
 merge, verification, cleanup, and continuation remain agent-owned. William is

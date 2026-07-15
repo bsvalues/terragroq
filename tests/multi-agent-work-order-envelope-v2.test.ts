@@ -134,6 +134,60 @@ describe("provider-neutral work-order envelope v2", () => {
     expect(canonicalWorkOrderEnvelopeV2Json(second.envelope)).toBe(canonicalWorkOrderEnvelopeV2Json(first.envelope))
   })
 
+  it("defaults provider-optional fields without breaking existing v2 envelopes", () => {
+    const result = validateWorkOrderEnvelopeV2(validEnvelope())
+    expect(result.envelope).toMatchObject({ dependencyPolicies: [], providerBinding: null })
+    expect(result.contentHash).toBe("b033577db1b9cd54d08513637a4582dd731e5de5d5b0beaf6a084c30ff37cd45")
+    expect(toDispatchEnvelope(validEnvelope())).not.toHaveProperty("dependencyPolicies")
+    expect(toDispatchEnvelope(validEnvelope())).not.toHaveProperty("providerBinding")
+  })
+
+  it("hashes populated provider fields while preserving omission semantics", () => {
+    const omitted = validEnvelope()
+    const explicitDefaults = { ...validEnvelope(), dependencyPolicies: [], providerBinding: null }
+    expect(validateWorkOrderEnvelopeV2(explicitDefaults).contentHash)
+      .not.toBe(validateWorkOrderEnvelopeV2(omitted).contentHash)
+  })
+
+  it("accepts only explicit ALL-edge provider-unavailable settlement metadata", () => {
+    const value = validEnvelope()
+    value.dependencies = ["WO-MAO-033"]
+    Object.assign(value, {
+      dependencyPolicies: [{
+        dependencyWorkOrderId: "WO-MAO-033",
+        satisfaction: "COMPLETE_OR_PROVIDER_UNAVAILABLE_DEFERRED",
+        providerId: "claude-code",
+        assessmentWorkOrderId: "WO-MAO-032",
+      }],
+    })
+    expect(validateWorkOrderEnvelopeV2(value).envelope.dependencyPolicies).toEqual([{
+      dependencyWorkOrderId: "WO-MAO-033",
+      satisfaction: "COMPLETE_OR_PROVIDER_UNAVAILABLE_DEFERRED",
+      providerId: "claude-code",
+      assessmentWorkOrderId: "WO-MAO-032",
+    }])
+
+    value.fanInGate = "ANY"
+    expect(() => validateWorkOrderEnvelopeV2(value)).toThrow(/ALL_GATE_REQUIRED/)
+    value.fanInGate = "ALL"
+    value.dependencyPolicies[0].satisfaction = "ANY_DEFER_IS_FINE"
+    expect(() => validateWorkOrderEnvelopeV2(value)).toThrow(/KNOWN_POLICY_REQUIRED/)
+  })
+
+  it("cross-binds optional assessment and subject provider identities", () => {
+    const assessment = validEnvelope()
+    assessment.workOrderId = "WO-MAO-032"
+    Object.assign(assessment, { providerBinding: {
+      providerId: "claude-code",
+      assessmentWorkOrderId: "WO-MAO-032",
+      subjectWorkOrderId: "WO-MAO-033",
+      role: "ASSESSMENT",
+    } })
+    expect(validateWorkOrderEnvelopeV2(assessment).envelope.providerBinding).toMatchObject({ role: "ASSESSMENT" })
+    assessment.providerBinding.role = "SUBJECT"
+    expect(() => validateWorkOrderEnvelopeV2(assessment)).toThrow(/ROLE_WORK_ORDER_MISMATCH/)
+  })
+
   it.each([
     ["missing mandatory field", (value: ReturnType<typeof validEnvelope>) => { delete (value as Partial<typeof value>).ownerTouchBudget }, "WORK_ORDER_ENVELOPE_MISSING_FIELD_WALL", "envelope.ownerTouchBudget"],
     ["unknown field", (value: ReturnType<typeof validEnvelope>) => { Object.assign(value, { surprise: true }) }, "WORK_ORDER_ENVELOPE_UNKNOWN_FIELD_WALL", "envelope.surprise"],
