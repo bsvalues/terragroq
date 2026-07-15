@@ -101,8 +101,8 @@ describe("portfolio operator", () => {
       ownerDecisionRequired: false,
     })
     expect(loop).toMatchObject({
-      activeWorkOrder: "WO-MAO-025",
-      eligibleWorkOrders: ["WO-MAO-025"],
+      activeWorkOrder: "WO-MAO-026",
+      eligibleWorkOrders: ["WO-MAO-026"],
       executionMode: "DEPENDENCY_RESERVATION_ELIGIBLE_SET",
     })
     expect(loop.continuationRule).toContain("contact the Owner only for a genuine authority wall or the final outcome")
@@ -116,7 +116,8 @@ describe("portfolio operator", () => {
     expect(workOrders[21]).toMatchObject({ workOrderId: "WO-MAO-022", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[22]).toMatchObject({ workOrderId: "WO-MAO-023", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[23]).toMatchObject({ workOrderId: "WO-MAO-024", status: "COMPLETE", riskClass: "R3" })
-    expect(workOrders[24]).toMatchObject({ workOrderId: "WO-MAO-025", status: "READY", riskClass: "R3" })
+    expect(workOrders[24]).toMatchObject({ workOrderId: "WO-MAO-025", status: "COMPLETE", riskClass: "R3" })
+    expect(workOrders[25]).toMatchObject({ workOrderId: "WO-MAO-026", status: "READY", riskClass: "R3" })
     expect(workOrders[28]).toMatchObject({ workOrderId: "WO-MAO-029", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[31]).toMatchObject({ workOrderId: "WO-MAO-032", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[32]).toMatchObject({ workOrderId: "WO-MAO-033", status: "DEFERRED_PROVIDER_UNAVAILABLE", resumable: true })

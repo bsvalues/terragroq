@@ -133,6 +133,7 @@ const PHASE_TWO_EVIDENCE_PATHS = [
 const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-023", "docs/reports/WO-MAO-023-eligible-set-scheduler-worker-pool.md"],
   ["WO-MAO-024", "docs/reports/WO-MAO-024-team-topology-fan-out-fan-in.md"],
+  ["WO-MAO-025", "docs/reports/WO-MAO-025-isolated-workspace-manager.md"],
   ["WO-MAO-029", "docs/reports/WO-MAO-029-supported-codex-capability-conformance.md"],
   ["WO-MAO-032", "docs/reports/WO-MAO-032-claude-capability-transport-proof.md"],
   ["WO-MAO-033", "docs/reports/WO-MAO-032-claude-capability-transport-proof.md"],
@@ -175,7 +176,7 @@ export function resolveMultiAgentWorkOrders(
   })
 }
 
-const EVIDENCED_COMPLETE = new Set([...range(1, 24), 29, 32].map(workOrderId))
+const EVIDENCED_COMPLETE = new Set([...range(1, 25), 29, 32].map(workOrderId))
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
 
 export const MULTI_AGENT_OPERATOR_WORK_ORDERS = resolveMultiAgentWorkOrders(
