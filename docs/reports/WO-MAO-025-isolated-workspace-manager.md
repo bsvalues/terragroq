@@ -21,7 +21,8 @@ clean owned state, reattaches a manager-owned branch when its worktree is absent
 terminal clean branch proven merged into a base that remains a descendant of the lane's recorded
 base checkpoint. Shared or nested paths/branches, overlapping
 reservations, foreign identity, path escape, symlinks, tracked/untracked/ignored state, unbound ownership,
-unsafe cleanup, duplicate ownership, and authority-minting input fail closed.
+malformed ownership records, ambiguous same-named Git tags, unsafe cleanup, duplicate ownership, and
+authority-minting input fail closed.
 
 ## Isolation boundary
 

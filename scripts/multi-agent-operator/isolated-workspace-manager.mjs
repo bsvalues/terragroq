@@ -26,6 +26,11 @@ const AUTHORITY_FIELDS = new Set([
   "authorityGranted", "executionAuthorized", "dispatchAuthorized", "mutationAuthorized",
   "cleanupAuthorized", "gitCommandPerformed", "filesystemMutationPerformed", "executionPerformed",
 ])
+const OWNERSHIP_FIELDS = new Set([
+  "laneId", "workOrderId", "repository", "repositoryRoot", "workspacePath", "branch",
+  "baseRef", "baseCommitSha", "reservationSetId", "leaseId", "leaseFence",
+  "evidenceEventId", "headCommitSha",
+])
 
 function lexicalCompare(left, right) {
   return left < right ? -1 : left > right ? 1 : 0
@@ -240,11 +245,7 @@ function assertExactObservedIdentity(lane) {
   }
 }
 
-function coversReservation(reservedPaths, changedPath) {
-  return reservedPaths.some((reservedPath) => changedPath === reservedPath || changedPath.startsWith(`${reservedPath}/`))
-}
-
-function assertChangesReserved(lane) {
+function assertNoObservedChanges(lane) {
   const observed = lane.observedWorkspace
   for (const collection of ["trackedChanges", "untrackedChanges", "ignoredChanges"]) {
     if (observed[collection].length > 0) {
@@ -269,7 +270,7 @@ function actionFor(lane) {
     return { action: terminal ? "CLEANUP" : "CREATE", ...base, reasonCodes: [terminal ? "ALREADY_ABSENT" : "WORKSPACE_ABSENT"] }
   }
   assertExactObservedIdentity(lane)
-  assertChangesReserved(lane)
+  assertNoObservedChanges(lane)
   const observed = lane.observedWorkspace
   const changes = [...observed.trackedChanges, ...observed.untrackedChanges, ...observed.ignoredChanges]
   if (terminal) {
@@ -408,6 +409,13 @@ function readOwnership(workspaceRoot) {
   if (!plainObject(value) || value.schemaVersion !== 1 || !Array.isArray(value.entries)) {
     wall("ISOLATED_WORKSPACE_OWNERSHIP_WALL", "ownership", "SUPPORTED_REGISTRY_REQUIRED")
   }
+  for (const entry of value.entries) {
+    if (!plainObject(entry)
+      || Object.keys(entry).length !== OWNERSHIP_FIELDS.size
+      || [...OWNERSHIP_FIELDS].some((field) => !Object.hasOwn(entry, field))) {
+      wall("ISOLATED_WORKSPACE_OWNERSHIP_WALL", "ownership", "SUPPORTED_REGISTRY_REQUIRED")
+    }
+  }
   return value
 }
 
@@ -501,9 +509,26 @@ function workspaceStatus(lane, worktrees) {
     ? runGit(lane.workspacePath, ["status", "--porcelain=v1", "--untracked-files=all", "--ignored"]).stdout.trim()
     : ""
   const headCommitSha = branchExists
-    ? runGit(lane.repositoryRoot, ["rev-parse", `${lane.branch}^{commit}`]).stdout.trim()
+    ? runGit(lane.repositoryRoot, ["rev-parse", `refs/heads/${lane.branch}^{commit}`]).stdout.trim()
     : null
   return { exists, branchExists, dirty, headCommitSha }
+}
+
+function attachOwnedWorktree(lane, expectedHeadCommitSha) {
+  runGit(lane.repositoryRoot, [
+    "worktree", "add", "--detach", lane.workspacePath, `refs/heads/${lane.branch}`,
+  ])
+  try {
+    runGit(lane.workspacePath, ["symbolic-ref", "HEAD", `refs/heads/${lane.branch}`])
+    const attached = workspaceStatus(lane, parseWorktrees(lane.repositoryRoot))
+    if (!attached.exists || !attached.branchExists || attached.headCommitSha !== expectedHeadCommitSha) {
+      wall("ISOLATED_WORKSPACE_OWNERSHIP_WALL", "worktree", "EXACT_REATTACH_VERIFICATION_REQUIRED")
+    }
+  } catch (error) {
+    const attached = parseWorktrees(lane.repositoryRoot).some((entry) => samePath(entry.path, lane.workspacePath))
+    if (attached) runGit(lane.repositoryRoot, ["worktree", "remove", "--", lane.workspacePath])
+    throw error
+  }
 }
 
 function verifyTrustedBinding(lane, trustedContext) {
@@ -575,7 +600,9 @@ export function executeIsolatedWorkspaceLifecycle(input, trustedContext = undefi
         if (!owned || !state.exists || !state.branchExists) {
           wall("ISOLATED_WORKSPACE_UNSAFE_CLEANUP_WALL", "worktree", "EXACT_OWNED_STATE_REQUIRED")
         }
-        const merged = runGit(lane.repositoryRoot, ["merge-base", "--is-ancestor", lane.branch, lane.baseRef], {
+        const merged = runGit(lane.repositoryRoot, [
+          "merge-base", "--is-ancestor", `refs/heads/${lane.branch}`, lane.baseRef,
+        ], {
           allowFailure: true,
         }).status === 0
         if (!merged) wall("ISOLATED_WORKSPACE_UNSAFE_CLEANUP_WALL", "branch", "MERGED_BRANCH_REQUIRED")
@@ -590,7 +617,7 @@ export function executeIsolatedWorkspaceLifecycle(input, trustedContext = undefi
             runGit(lane.repositoryRoot, ["branch", lane.branch, trustedBinding.headCommitSha])
           }
           if (!rollback.exists) {
-            runGit(lane.repositoryRoot, ["worktree", "add", lane.workspacePath, lane.branch])
+            attachOwnedWorktree(lane, trustedBinding.headCommitSha)
           }
           throw error
         }
@@ -608,7 +635,7 @@ export function executeIsolatedWorkspaceLifecycle(input, trustedContext = undefi
       }
       if (state.branchExists) {
         if (!owned) wall("ISOLATED_WORKSPACE_OWNERSHIP_WALL", "ownership", "OWNERSHIP_RECORD_REQUIRED")
-        runGit(lane.repositoryRoot, ["worktree", "add", lane.workspacePath, lane.branch])
+        attachOwnedWorktree(lane, trustedBinding.headCommitSha)
         mutated = true
         results.push({ laneId: lane.laneId, action: "RECONCILE", changed: true,
           reasonCode: "REATTACHED_OWNED_BRANCH", ...executionBinding })

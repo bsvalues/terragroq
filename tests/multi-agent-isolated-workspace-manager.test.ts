@@ -360,9 +360,15 @@ describe("multi-agent isolated workspace manager", () => {
     })
 
     execFileSync("git", ["worktree", "remove", "--", workspacePath], { cwd: repositoryRoot })
+    fs.writeFileSync(path.join(repositoryRoot, "README.md"), "base advanced\n")
+    execFileSync("git", ["add", "README.md"], { cwd: repositoryRoot })
+    execFileSync("git", ["commit", "-m", "advance base"], { cwd: repositoryRoot })
+    execFileSync("git", ["tag", "codex/wo-mao-025"], { cwd: repositoryRoot })
     expect(executeIsolatedWorkspaceLifecycle(value, trust)).toMatchObject({
       results: [{ action: "RECONCILE", changed: true }],
     })
+    expect(execFileSync("git", ["branch", "--show-current"], { cwd: workspacePath, encoding: "utf8" }).trim())
+      .toBe("codex/wo-mao-025")
     const terminal = structuredClone(value)
     terminal.lanes[0].lifecycleState = "COMPLETE"
     expect(executeIsolatedWorkspaceLifecycle(terminal, trustedContext(terminal.lanes[0]))).toMatchObject({
@@ -520,6 +526,30 @@ describe("multi-agent isolated workspace manager", () => {
       cwd: repositoryRoot,
     }).status).not.toBe(0)
     expect(fs.existsSync(path.join(workspaceRoot, ".williamos-workspace-ownership.json"))).toBe(false)
+  })
+
+  it("fails closed on malformed ownership registry entries", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mao-workspace-corrupt-ownership-"))
+    temporaryDirectories.push(directory)
+    const repositoryRoot = path.join(directory, "repository")
+    const workspaceRoot = path.join(directory, "worktrees")
+    const workspacePath = path.join(workspaceRoot, "lane-a")
+    fs.mkdirSync(repositoryRoot)
+    fs.mkdirSync(workspaceRoot)
+    execFileSync("git", ["init", "-b", "main"], { cwd: repositoryRoot })
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repositoryRoot })
+    execFileSync("git", ["config", "user.name", "WilliamOS Test"], { cwd: repositoryRoot })
+    fs.writeFileSync(path.join(repositoryRoot, "README.md"), "proof\n")
+    execFileSync("git", ["add", "README.md"], { cwd: repositoryRoot })
+    execFileSync("git", ["commit", "-m", "initial"], { cwd: repositoryRoot })
+    const baseCommitSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim()
+    const desired = lane("LANE-A", "WO-MAO-025", { repositoryRoot, workspacePath, baseCommitSha })
+    const value = { ...input([desired]), workspaceRoot }
+    executeIsolatedWorkspaceLifecycle(value, trustedContext(desired))
+    fs.writeFileSync(path.join(workspaceRoot, ".williamos-workspace-ownership.json"),
+      JSON.stringify({ schemaVersion: 1, entries: [null] }))
+    expect(() => executeIsolatedWorkspaceLifecycle(value, trustedContext(desired)))
+      .toThrow("SUPPORTED_REGISTRY_REQUIRED")
   })
 
   it("restores the exact branch and worktree when cleanup persistence fails", () => {
