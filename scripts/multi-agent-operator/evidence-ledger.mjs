@@ -584,6 +584,22 @@ export function verifyEvidenceLedger(ledgerDir, ledgerId, input, options = {}) {
     return locked(ledgerDir, options, () => { const state = loadVerified(ledgerDir, ledgerId); const anchorVerified = verifyAnchor(state.anchor, expected); return commonResult("EVIDENCE_LEDGER_VALID", { ok: true, valid: true, eventCount: state.events.length, headAnchor: state.anchor, anchorVerified, independentlyAnchored: anchorVerified, certified: false }) })
   } catch (error) { return wallResult(error) }
 }
+export function inspectVerifiedEvidenceEvent(ledgerDir, ledgerId, input, options = {}) {
+  try {
+    identifier(ledgerId, "ledgerId")
+    exact(input, ["schemaVersion", "artifactType", "eventId", "expectedAnchor"], "request")
+    if (input.schemaVersion !== 1 || input.artifactType !== "MULTI_AGENT_EVIDENCE_EVENT_INSPECT_REQUEST") wall("EVIDENCE_LEDGER_SCHEMA_WALL", "request")
+    const eventId = identifier(input.eventId, "eventId", UUID_V4_LOWER)
+    const expected = input.expectedAnchor === null ? null : normalizeAnchor(input.expectedAnchor)
+    return locked(ledgerDir, options, () => {
+      const state = loadVerified(ledgerDir, ledgerId)
+      const anchorVerified = verifyAnchor(state.anchor, expected)
+      const event = state.events.find((candidate) => candidate.eventId === eventId)
+      if (!event) wall("EVIDENCE_EVENT_NOT_FOUND_WALL", "eventId")
+      return commonResult("EVIDENCE_EVENT_VERIFIED", { ok: true, valid: true, event: Object.freeze({ ...event }), headAnchor: state.anchor, anchorVerified, independentlyAnchored: anchorVerified })
+    })
+  } catch (error) { return wallResult(error) }
+}
 export function deriveOwnerTouchMeter(ledgerDir, ledgerId, input, options = {}) {
   try {
     identifier(ledgerId, "ledgerId"); const expected = normalizeVerifyRequest(input, "MULTI_AGENT_OWNER_TOUCH_METER_REQUEST")
