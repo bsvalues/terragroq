@@ -258,7 +258,11 @@ export function normalizeWorkOrderEnvelopeV2(input) {
 
 export function validateWorkOrderEnvelopeV2(input) {
   const envelope = normalizeWorkOrderEnvelopeV2(input)
-  const canonicalJson = canonicalWorkOrderEnvelopeV2Json(envelope)
+  const hashEnvelope = { ...envelope }
+  for (const field of OPTIONAL_TOP_LEVEL_FIELDS) {
+    if (!Object.hasOwn(input, field)) delete hashEnvelope[field]
+  }
+  const canonicalJson = canonicalWorkOrderEnvelopeV2Json(hashEnvelope)
   return Object.freeze({
     ok: true,
     code: "WORK_ORDER_ENVELOPE_V2_VALID",

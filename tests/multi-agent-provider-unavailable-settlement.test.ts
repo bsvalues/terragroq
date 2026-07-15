@@ -465,6 +465,21 @@ describe("provider-unavailable dependency settlement", () => {
     })).toThrow(/AUTHENTICATED_PINNED_RECORD_REQUIRED/)
   })
 
+  it("reloads registry trust for every assessment so stale handles cannot survive expiry or revocation", () => {
+    const expired = fixture()
+    expect(verifyProviderUnavailableAssessment(expired.artifact, expired.trust)).toMatchObject({ ok: true })
+    expired.installRecord(expired.registryRecord, "2026-08-01T00:00:00.000Z")
+    expect(() => verifyProviderUnavailableAssessment(expired.artifact, expired.trust))
+      .toThrow(/ACTIVE_WINDOW_REQUIRED/)
+
+    const revoked = fixture()
+    expect(verifyProviderUnavailableAssessment(revoked.artifact, revoked.trust)).toMatchObject({ ok: true })
+    const revokedRecord = { ...structuredClone(revoked.registryRecord), status: "REVOKED" }
+    revoked.installRecord(revokedRecord)
+    expect(() => verifyProviderUnavailableAssessment(revoked.artifact, revoked.trust))
+      .toThrow(/ACTIVE_IMMUTABLE_RECORD_REQUIRED/)
+  })
+
   it("rejects duplicate, out-of-order, rollback, backdated, and post-revocation status chains", () => {
     const assertChainWall = (mutate: (payload: ReturnType<typeof structuredClone>) => void, expected: RegExp) => {
       const data = fixture()
@@ -733,5 +748,27 @@ describe("provider-unavailable dependency settlement", () => {
       ],
     })
     expect(oldResult.eligible).toEqual([{ workOrderId: "WO-MAO-017", fanInGate: "ALL", completedDependencies: ["WO-MAO-016"] }])
+  })
+
+  it("does not demand settlement evidence for PLANNED dependencies or suppress unrelated eligible lanes", () => {
+    const data = fixture()
+    data.input.workOrderStates[1] = { workOrderId: "WO-MAO-033", state: "PLANNED", reasonCode: null }
+    data.input.providerAssessments = []
+    data.input.workOrders.push(envelope("WO-MAO-035"))
+    data.input.workOrderStates.push({ workOrderId: "WO-MAO-035", state: "PLANNED", reasonCode: null })
+    const result = resolveDagEligibleSet(data.input, data.trust)
+    expect(result.eligible).toEqual([
+      { workOrderId: "WO-MAO-033", fanInGate: "ALL", completedDependencies: [] },
+      { workOrderId: "WO-MAO-035", fanInGate: "ALL", completedDependencies: [] },
+    ])
+    expect(result.ineligible).toContainEqual({
+      workOrderId: "WO-MAO-034",
+      reasonCode: "DEPENDENCY_INCOMPLETE",
+      fanInGate: "ALL",
+      completedDependencies: [],
+      pendingDependencies: ["WO-MAO-033"],
+      deferredDependencies: [],
+      blockedDependencies: [],
+    })
   })
 })

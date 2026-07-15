@@ -19,9 +19,11 @@ ceiling of three, only for exact `R0`/`R1` envelopes in `bsvalues/terragroq`.
 
 The common capability deliberately records `availability=UNAVAILABLE` and
 `serviceCompatible=false`. Under the provider-neutral WO-MAO-019 contract, `AVAILABLE` requires a
-service-compatible executable surface. The session wrapper records the narrower positive fact:
-`enabledForCurrentHostedSession=true`. Consequently, current-session native coordination can be
-eligible while common provider-contract dispatch remains denied.
+service-compatible executable surface. Static conformance records
+`enabledForCurrentHostedSession=false` and `hostSessionProofRequired=true`. Current-session native
+coordination becomes eligible only after a separately trusted host registry supplies a live,
+unexpired session identity; a caller object cannot substitute for that opaque verified identity.
+Common provider-contract dispatch remains denied.
 
 ## Exact capability boundary
 
@@ -45,8 +47,10 @@ nested arrays/objects are recursively frozen and detached from caller input.
 
 `evaluateCodexSessionCoordination` first validates a full Work Order envelope v2, then requires the
 canonical program/goal/loop identity, the exact repository, requirements, provider, no fallback
-provider, exact bounded actions, a supported native team role, `R0` or `R1`, distinct team
-identities, and an explicit `RUNTIME_ACTIVATION` prohibition. It retains:
+provider, exact bounded actions, a supported native team role present in `teamRoles`, `R0` or `R1`,
+distinct team identities, an exact host-session worker binding for that role, and an explicit
+`RUNTIME_ACTIVATION` prohibition. The trusted record is reloaded at evaluation so expiry, revocation,
+missing identity, and worker substitution fail closed. It retains:
 
 ```text
 providerContractDispatchAllowed=false
@@ -78,19 +82,20 @@ SHA substitution fails closed.
 The canonical normalized artifact SHA-256 is:
 
 ```text
-4fa4e64cc428a1e15c7f99165b84dc18ae4def1bc34f18e71c7f227bf5251c27
+052c437518a59b15c3d3c5e3553765a00dcf8d94b2eba76b55f9b37f845c0d38
 ```
 
 The adversarial suite recomputes that SHA from canonical JSON, proves key-order invariance, recursively
 checks frozen nested values, rejects post-normalization mutation, and exercises capability inflation,
 wrong repositories and roles, empty requirements, concurrency inflation, support substitutions,
-service/authority/runtime assertions, `R2`/`R3` tasks, evidence substitution, all five owner counters,
-and CLI typed failure.
+service/authority/runtime assertions, missing, expired, revoked, substituted, and caller-asserted host
+sessions, absent or mismatched envelope roles, `R2`/`R3` tasks, evidence substitution, all five owner
+counters, and CLI typed failure.
 
 Validation:
 
-- focused Vitest: `1 file / 38 tests`, PASS;
-- repository-wide Vitest: `162 files / 1,024 tests`, PASS;
+- focused Vitest: `1 file / 41 tests`, PASS;
+- repository-wide Vitest: `163 files / 1,043 tests`, PASS;
 - focused ESLint: PASS;
 - Node syntax checks for module and CLI: PASS;
 - Markdown MD018, secret-pattern sweep, and `git diff --check`: PASS.

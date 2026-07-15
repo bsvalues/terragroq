@@ -5,6 +5,7 @@ import {
   WorkOrderEnvelopeV2Error,
   normalizeWorkOrderEnvelopeV2,
 } from "./work-order-envelope-v2.mjs"
+import { loadCanonicalCodexHostSessionRecord } from "./codex-host-session-registry.mjs"
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/
 const CONFORMANCE_FIELDS = new Set([
@@ -15,6 +16,7 @@ const CONFORMANCE_FIELDS = new Set([
   "outcome",
   "sessionScope",
   "enabledForCurrentHostedSession",
+  "hostSessionProofRequired",
   "capability",
   "providerContractDispatchAllowed",
   "durableTransport",
@@ -34,6 +36,11 @@ const OWNER_FIELDS = Object.freeze([
   "routineContacts",
   "routineDecisions",
 ])
+const HOST_SESSION_FIELDS = new Set([
+  "schemaVersion", "artifactType", "proofId", "sessionId", "workerId", "providerId",
+  "adapterId", "status", "issuedAt", "expiresAt", "evaluationTime",
+])
+const HOST_SESSION_HANDLES = new WeakMap()
 const PHASE_ONE_EVIDENCE = Object.freeze([
   Object.freeze({ pullRequest: 364, mergeCommitSha: "8ec632aaacef731da2bc3e02958679b6c6273be6" }),
   Object.freeze({ pullRequest: 365, mergeCommitSha: "94795d37d4a844045f1461936c5744b89d2e28c0" }),
@@ -174,7 +181,8 @@ export function codexProviderConformanceFixture() {
     controlPlaneRiskClass: "R3",
     outcome: "SESSION_ONLY",
     sessionScope: "CURRENT_HOSTED_SESSION_NATIVE_TEAM_ONLY",
-    enabledForCurrentHostedSession: true,
+    enabledForCurrentHostedSession: false,
+    hostSessionProofRequired: true,
     capability: EXACT_CAPABILITY,
     providerContractDispatchAllowed: false,
     durableTransport: false,
@@ -199,7 +207,8 @@ export function normalizeCodexProviderConformance(input) {
     outcome: "SESSION_ONLY",
     sessionScope: "CURRENT_HOSTED_SESSION_NATIVE_TEAM_ONLY",
   })) exactValue(input[field], expected, field)
-  exactBoolean(input, "enabledForCurrentHostedSession", true)
+  exactBoolean(input, "enabledForCurrentHostedSession", false)
+  exactBoolean(input, "hostSessionProofRequired", true)
   for (const field of [
     "providerContractDispatchAllowed",
     "durableTransport",
@@ -218,7 +227,8 @@ export function normalizeCodexProviderConformance(input) {
     controlPlaneRiskClass: "R3",
     outcome: "SESSION_ONLY",
     sessionScope: "CURRENT_HOSTED_SESSION_NATIVE_TEAM_ONLY",
-    enabledForCurrentHostedSession: true,
+    enabledForCurrentHostedSession: false,
+    hostSessionProofRequired: true,
     capability: exactCapability(input.capability),
     providerContractDispatchAllowed: false,
     durableTransport: false,
@@ -243,7 +253,7 @@ export function validateCodexProviderConformance(input) {
     code: "CODEX_PROVIDER_SESSION_ONLY",
     conformance,
     contentHash,
-    currentSessionCoordinationAllowed: true,
+    currentSessionCoordinationAllowed: false,
     providerContractDispatchAllowed: false,
     authorityGranted: false,
   })
@@ -253,9 +263,63 @@ function exactSet(actual, expected, field) {
   exactValue(actual, expected, field)
 }
 
+function hostSessionRecord(proofId) {
+  if (typeof proofId !== "string" || !IDENTIFIER.test(proofId)) {
+    wall("CODEX_CONFORMANCE_SESSION_WALL", "hostSession.proofId", "SAFE_PROOF_ID_REQUIRED")
+  }
+  const record = loadCanonicalCodexHostSessionRecord(proofId)
+  if (record === null) wall("CODEX_CONFORMANCE_SESSION_WALL", "hostSession", "HOST_ISSUED_LIVE_SESSION_REQUIRED")
+  exactFields(record, HOST_SESSION_FIELDS, "hostSessionRecord")
+  const expected = {
+    schemaVersion: 1,
+    artifactType: "CODEX_HOST_SESSION_IDENTITY",
+    proofId,
+    providerId: EXACT_CAPABILITY.providerId,
+    adapterId: EXACT_CAPABILITY.adapterId,
+    status: "ACTIVE",
+  }
+  for (const [field, value] of Object.entries(expected)) exactValue(record[field], value, `hostSessionRecord.${field}`)
+  for (const field of ["sessionId", "workerId"]) {
+    if (typeof record[field] !== "string" || !IDENTIFIER.test(record[field])) {
+      wall("CODEX_CONFORMANCE_SESSION_WALL", `hostSessionRecord.${field}`, "SAFE_IDENTIFIER_REQUIRED")
+    }
+  }
+  const issuedAt = Date.parse(record.issuedAt)
+  const expiresAt = Date.parse(record.expiresAt)
+  const now = Date.parse(record.evaluationTime)
+  if (![issuedAt, expiresAt, now].every(Number.isFinite) || expiresAt <= issuedAt || now < issuedAt || now >= expiresAt) {
+    wall("CODEX_CONFORMANCE_SESSION_WALL", "hostSessionRecord", "ACTIVE_UNEXPIRED_WINDOW_REQUIRED")
+  }
+  return record
+}
+
+export function verifyCodexHostSessionIdentity(proofReference) {
+  exactFields(proofReference, new Set(["proofId"]), "hostSessionProofReference")
+  const record = hostSessionRecord(proofReference.proofId)
+  const handle = Object.freeze({
+    ok: true,
+    code: "CODEX_HOST_SESSION_IDENTITY_VERIFIED",
+    proofId: record.proofId,
+    sessionId: record.sessionId,
+    workerId: record.workerId,
+    expiresAt: record.expiresAt,
+    authorityGranted: false,
+  })
+  HOST_SESSION_HANDLES.set(handle, Object.freeze({ proofId: record.proofId }))
+  return handle
+}
+
+function configuredHostSession(value) {
+  if (!plainObject(value) || !HOST_SESSION_HANDLES.has(value)) {
+    wall("CODEX_CONFORMANCE_SESSION_WALL", "hostSession", "OPAQUE_HOST_ISSUED_SESSION_REQUIRED")
+  }
+  return hostSessionRecord(HOST_SESSION_HANDLES.get(value).proofId)
+}
+
 export function evaluateCodexSessionCoordination(input) {
-  exactFields(input, new Set(["conformance", "envelope", "requestedRole", "runtimeActivationRequested"]), "coordination")
+  exactFields(input, new Set(["conformance", "envelope", "requestedRole", "runtimeActivationRequested", "hostSession"]), "coordination")
   const validated = validateCodexProviderConformance(input.conformance)
+  const hostSession = configuredHostSession(input.hostSession)
   if (input.runtimeActivationRequested !== false) {
     wall("CODEX_CONFORMANCE_RUNTIME_WALL", "runtimeActivationRequested", "FALSE_REQUIRED")
   }
@@ -289,6 +353,12 @@ export function evaluateCodexSessionCoordination(input) {
   if (new Set(selectedIdentities).size !== selectedIdentities.length) {
     wall("CODEX_CONFORMANCE_ROLE_WALL", "envelope.teamRoles", "DISTINCT_IDENTITIES_REQUIRED")
   }
+  if (!Object.hasOwn(envelope.teamRoles, input.requestedRole)) {
+    wall("CODEX_CONFORMANCE_ROLE_WALL", "requestedRole", "DECLARED_ENVELOPE_ROLE_REQUIRED")
+  }
+  if (envelope.teamRoles[input.requestedRole] !== hostSession.workerId) {
+    wall("CODEX_CONFORMANCE_SESSION_WALL", "hostSession.workerId", "ENVELOPE_ROLE_IDENTITY_MATCH_REQUIRED")
+  }
 
   return deepFreeze({
     ok: true,
@@ -298,6 +368,9 @@ export function evaluateCodexSessionCoordination(input) {
     requestedRole: input.requestedRole,
     providerId: validated.conformance.capability.providerId,
     adapterId: validated.conformance.capability.adapterId,
+    hostSessionProofId: hostSession.proofId,
+    hostSessionId: hostSession.sessionId,
+    workerId: hostSession.workerId,
     conformanceContentHash: validated.contentHash,
     coordinationAllowed: true,
     providerContractDispatchAllowed: false,

@@ -193,7 +193,9 @@ function exactStringSet(value, field, pattern = IDENTIFIER) {
 }
 
 function unsignedTrustBundle(bundle) {
-  const { contentHash: _contentHash, signature: _signature, ...claims } = bundle
+  const claims = { ...bundle }
+  delete claims.contentHash
+  delete claims.signature
   return claims
 }
 
@@ -202,7 +204,8 @@ export function providerTrustBundleContentHash(bundle) {
 }
 
 export function providerTrustStatusEventHash(event) {
-  const { eventHash: _eventHash, ...claims } = event
+  const claims = { ...event }
+  delete claims.eventHash
   return sha256(canonicalJson(claims))
 }
 
@@ -469,7 +472,10 @@ export function verifyPinnedProviderAssessmentTrustBundle(trustOptions) {
     ledgerAnchorCount: trust.ledgerAnchors.length,
     authorityGranted: false,
   })
-  CONFIGURED_TRUST.set(configured, trust)
+  CONFIGURED_TRUST.set(configured, Object.freeze({
+    registryId: trust.registryId,
+    registryVersion: trust.registryVersion,
+  }))
   return configured
 }
 
@@ -481,7 +487,7 @@ function configuredTrust(value) {
   if (!plainObject(value) || !CONFIGURED_TRUST.has(value)) {
     wall("PROVIDER_SETTLEMENT_TRUST_WALL", "configuredTrust", "SEPARATELY_CONFIGURED_PINNED_TRUST_REQUIRED")
   }
-  return CONFIGURED_TRUST.get(value)
+  return normalizePinnedTrustBundle(CONFIGURED_TRUST.get(value))
 }
 
 function verifySignature(proof, claims, claimsJson, trust) {

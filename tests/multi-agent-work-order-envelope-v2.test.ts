@@ -137,8 +137,16 @@ describe("provider-neutral work-order envelope v2", () => {
   it("defaults provider-optional fields without breaking existing v2 envelopes", () => {
     const result = validateWorkOrderEnvelopeV2(validEnvelope())
     expect(result.envelope).toMatchObject({ dependencyPolicies: [], providerBinding: null })
+    expect(result.contentHash).toBe("b033577db1b9cd54d08513637a4582dd731e5de5d5b0beaf6a084c30ff37cd45")
     expect(toDispatchEnvelope(validEnvelope())).not.toHaveProperty("dependencyPolicies")
     expect(toDispatchEnvelope(validEnvelope())).not.toHaveProperty("providerBinding")
+  })
+
+  it("hashes populated provider fields while preserving omission semantics", () => {
+    const omitted = validEnvelope()
+    const explicitDefaults = { ...validEnvelope(), dependencyPolicies: [], providerBinding: null }
+    expect(validateWorkOrderEnvelopeV2(explicitDefaults).contentHash)
+      .not.toBe(validateWorkOrderEnvelopeV2(omitted).contentHash)
   })
 
   it("accepts only explicit ALL-edge provider-unavailable settlement metadata", () => {

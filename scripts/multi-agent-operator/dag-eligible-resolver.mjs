@@ -317,7 +317,9 @@ export function resolveDagEligibleSet(input, trustOptions = {}) {
     const policiesByDependency = new Map(envelope.dependencyPolicies.map((policy) => [policy.dependencyWorkOrderId, policy]))
     const settledDependencies = []
     for (const dependency of envelope.dependencies) {
-      if (stateById.get(dependency).state === "COMPLETE") continue
+      const dependencyState = stateById.get(dependency)
+      if (dependencyState.state !== "DEFERRED"
+        || dependencyState.reasonCode !== "PROVIDER_UNAVAILABLE") continue
       const policy = policiesByDependency.get(dependency)
       if (!policy) continue
       settledDependencies.push(verifySettledDependency({

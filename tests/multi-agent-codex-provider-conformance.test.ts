@@ -4,7 +4,11 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+vi.mock("../scripts/multi-agent-operator/codex-host-session-registry.mjs", async () => (
+  import("./fixtures/codex-host-session-registry-fixture.mjs")
+))
 
 import {
   CodexProviderConformanceError,
@@ -13,7 +17,32 @@ import {
   evaluateCodexSessionCoordination,
   normalizeCodexProviderConformance,
   validateCodexProviderConformance,
+  verifyCodexHostSessionIdentity,
 } from "../scripts/multi-agent-operator/codex-provider-conformance.mjs"
+import {
+  clearTestCodexHostSessionRecords,
+  installTestCodexHostSessionRecord,
+} from "./fixtures/codex-host-session-registry-fixture.mjs"
+
+function hostSessionRecord(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    artifactType: "CODEX_HOST_SESSION_IDENTITY",
+    proofId: "host-proof-mao-030",
+    sessionId: "hosted-session-mao-030",
+    workerId: "codex-builder",
+    providerId: "hosted-codex",
+    adapterId: "hosted-codex-session-native-team-v1",
+    status: "ACTIVE",
+    issuedAt: "2026-07-15T00:00:00.000Z",
+    expiresAt: "2026-07-16T00:00:00.000Z",
+    evaluationTime: "2026-07-15T12:00:00.000Z",
+    ...overrides,
+  }
+}
+
+beforeEach(() => installTestCodexHostSessionRecord(hostSessionRecord()))
+afterEach(() => clearTestCodexHostSessionRecords())
 
 function ownerBudget() {
   return {
@@ -76,6 +105,7 @@ function coordination() {
     envelope: envelope(),
     requestedRole: "builder",
     runtimeActivationRequested: false,
+    hostSession: verifyCodexHostSessionIdentity({ proofId: "host-proof-mao-030" }),
   }
 }
 
@@ -100,12 +130,14 @@ function mutableFixture(): MutableConformance {
 }
 
 describe("WO-MAO-029 supported Codex capability conformance", () => {
+  const EXPECTED_CONFORMANCE_HASH = "052c437518a59b15c3d3c5e3553765a00dcf8d94b2eba76b55f9b37f845c0d38"
+
   it("records only the bounded SESSION_ONLY common-provider truth", () => {
     const result = validateCodexProviderConformance(codexProviderConformanceFixture())
     expect(result).toMatchObject({
       ok: true,
       code: "CODEX_PROVIDER_SESSION_ONLY",
-      currentSessionCoordinationAllowed: true,
+      currentSessionCoordinationAllowed: false,
       providerContractDispatchAllowed: false,
       authorityGranted: false,
       conformance: {
@@ -113,7 +145,8 @@ describe("WO-MAO-029 supported Codex capability conformance", () => {
         controlPlaneRiskClass: "R3",
         outcome: "SESSION_ONLY",
         sessionScope: "CURRENT_HOSTED_SESSION_NATIVE_TEAM_ONLY",
-        enabledForCurrentHostedSession: true,
+        enabledForCurrentHostedSession: false,
+        hostSessionProofRequired: true,
         durableTransport: false,
         durablePersistence: false,
         executableServiceWorker: false,
@@ -170,7 +203,7 @@ describe("WO-MAO-029 supported Codex capability conformance", () => {
       .digest("hex")
     expect(one.contentHash).toBe(direct)
     expect(two.contentHash).toBe(direct)
-    expect(direct).toMatch(/^[a-f0-9]{64}$/)
+    expect(direct).toBe(EXPECTED_CONFORMANCE_HASH)
   })
 
   it("recursively freezes normalized nested objects and arrays without sharing input", () => {
@@ -257,6 +290,46 @@ describe("WO-MAO-029 supported Codex capability conformance", () => {
     }
   })
 
+  it("requires a separately loaded live opaque host session identity and revalidates it", () => {
+    const absent = coordination() as Partial<ReturnType<typeof coordination>>
+    delete absent.hostSession
+    expectWall(() => evaluateCodexSessionCoordination(absent), "CODEX_CONFORMANCE_MISSING_FIELD_WALL", "coordination.hostSession")
+
+    const missing = coordination()
+    missing.hostSession = { proofId: "host-proof-mao-030" } as typeof missing.hostSession
+    expectWall(() => evaluateCodexSessionCoordination(missing), "CODEX_CONFORMANCE_SESSION_WALL", "hostSession")
+
+    const expired = hostSessionRecord({ proofId: "expired-proof", evaluationTime: "2026-07-16T00:00:00.000Z" })
+    installTestCodexHostSessionRecord(expired)
+    expectWall(() => verifyCodexHostSessionIdentity({ proofId: "expired-proof" }), "CODEX_CONFORMANCE_SESSION_WALL")
+
+    const value = coordination()
+    installTestCodexHostSessionRecord(hostSessionRecord({ status: "REVOKED" }))
+    expectWall(() => evaluateCodexSessionCoordination(value), "CODEX_CONFORMANCE_VALUE_WALL", "hostSessionRecord.status")
+  })
+
+  it("exposes no mutable production host-session registration surface", () => {
+    const probe = spawnSync(process.execPath, ["--input-type=module", "-e", [
+      'import * as registry from "./scripts/multi-agent-operator/codex-host-session-registry.mjs"',
+      'console.log(JSON.stringify({keys:Object.keys(registry).sort(),metadata:registry.CODEX_HOST_SESSION_REGISTRY_METADATA,record:registry.loadCanonicalCodexHostSessionRecord("caller-proof")}))',
+    ].join(";")], { cwd: process.cwd(), encoding: "utf8" })
+    expect(probe.status).toBe(0)
+    expect(JSON.parse(probe.stdout)).toEqual({
+      keys: ["CODEX_HOST_SESSION_REGISTRY_METADATA", "loadCanonicalCodexHostSessionRecord"],
+      metadata: { activeRecordCount: 0, mutableRegistrationAllowed: false, authorityGranted: false },
+      record: null,
+    })
+  })
+
+  it("binds the requested role and host worker identity to envelope.teamRoles", () => {
+    const absent = coordination()
+    absent.requestedRole = "verifier"
+    expectWall(() => evaluateCodexSessionCoordination(absent), "CODEX_CONFORMANCE_ROLE_WALL", "requestedRole")
+    const substituted = coordination()
+    substituted.envelope.teamRoles.builder = "codex-other-builder"
+    expectWall(() => evaluateCodexSessionCoordination(substituted), "CODEX_CONFORMANCE_SESSION_WALL", "hostSession.workerId")
+  })
+
   it.each(["R2", "R3"])("rejects %s task execution on the SESSION_ONLY surface", (riskClass) => {
     const value = coordination()
     value.envelope.riskClass = riskClass
@@ -282,12 +355,19 @@ describe("WO-MAO-029 supported Codex capability conformance", () => {
     const fixturePath = path.join(directory, "conformance.json")
     const coordinationPath = path.join(directory, "coordination.json")
     fs.writeFileSync(fixturePath, JSON.stringify(codexProviderConformanceFixture()))
-    fs.writeFileSync(coordinationPath, JSON.stringify(coordination()))
+    fs.writeFileSync(coordinationPath, JSON.stringify({
+      conformance: codexProviderConformanceFixture(),
+      envelope: envelope(),
+      requestedRole: "builder",
+      runtimeActivationRequested: false,
+      hostSession: { proofId: "caller-asserted" },
+    }))
     const cli = path.resolve("scripts/multi-agent-operator/codex-provider-conformance-cli.mjs")
     const validateOutput = JSON.parse(execFileSync(process.execPath, [cli, "validate", fixturePath], { encoding: "utf8" }))
-    const coordinateOutput = JSON.parse(execFileSync(process.execPath, [cli, "coordinate", coordinationPath], { encoding: "utf8" }))
     expect(validateOutput).toMatchObject({ code: "CODEX_PROVIDER_SESSION_ONLY", providerContractDispatchAllowed: false })
-    expect(coordinateOutput).toMatchObject({ code: "CODEX_CURRENT_SESSION_COORDINATION_ELIGIBLE", dispatchPerformed: false })
+    const coordinate = spawnSync(process.execPath, [cli, "coordinate", coordinationPath], { encoding: "utf8" })
+    expect(coordinate.status).toBe(2)
+    expect(JSON.parse(coordinate.stdout)).toMatchObject({ ok: false, code: "CODEX_CONFORMANCE_SESSION_WALL" })
     const failed = spawnSync(process.execPath, [cli, "unsupported", fixturePath], { encoding: "utf8" })
     expect(failed.status).toBe(2)
     expect(JSON.parse(failed.stdout)).toMatchObject({ ok: false, code: "CODEX_CONFORMANCE_CLI_WALL", field: "operation" })
