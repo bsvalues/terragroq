@@ -24,6 +24,7 @@ const WAIT = new Int32Array(new SharedArrayBuffer(4))
 const HASH = /^[a-f0-9]{64}$/
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,191}$/
 const RISKS = new Set(["R0", "R1", "R2", "R3"])
+const TERMINAL_TRANSACTION_PHASES = new Set(["COMMITTED", "ROLLED_BACK", "SUPERSEDED_BY_REAP", "COMPENSATED"])
 const TRUST_FIELDS = new Set([
   "schemaVersion", "artifactType", "artifactId", "issuer", "subject", "issuedAt", "expiresAt",
   "revoked", "priorHash", "evidenceHash", "signature",
@@ -533,6 +534,15 @@ function emptyJournal(configuration) {
   journal.journalHash = schedulerHash(journal)
   return journal
 }
+function immutableOutcomeProjection(transaction) {
+  return {
+    transactionId: transaction.transactionId, operation: transaction.operation,
+    journalFencingToken: transaction.journalFencingToken, fullIdentityHash: transaction.fullIdentityHash,
+    schedulerFencingToken: transaction.schedulerFencingToken, expectedSchedulerVersion: transaction.expectedSchedulerVersion,
+    startedAt: transaction.startedAt, detail: transaction.detail,
+  }
+}
+function computedImmutableOutcomeDetailHash(transaction) { return schedulerHash(immutableOutcomeProjection(transaction)) }
 function loadJournal(configuration) {
   const file = journalPath(configuration)
   try {
@@ -543,6 +553,18 @@ function loadJournal(configuration) {
       || journal.journalId !== `${configuration.stateId}:transactions` || !Number.isSafeInteger(journal.version)
       || !Number.isSafeInteger(journal.nextFence) || !Array.isArray(journal.transactions) || !HASH.test(hash)
       || schedulerHash(journal) !== hash) wall("SCHEDULER_TRANSACTION_JOURNAL_WALL", "transactionJournal", "CORRUPT")
+    const transactionIds = new Set()
+    const journalFences = new Set()
+    for (const transaction of journal.transactions) {
+      if (!plain(transaction) || !ID.test(transaction.transactionId) || !Number.isSafeInteger(transaction.journalFencingToken)
+        || transaction.journalFencingToken < 1 || transaction.journalFencingToken >= journal.nextFence
+        || transactionIds.has(transaction.transactionId) || journalFences.has(transaction.journalFencingToken)) wall("SCHEDULER_TRANSACTION_JOURNAL_WALL", "transactionJournal", "UNIQUE_TRANSACTION_ID_AND_FENCE_REQUIRED")
+      transactionIds.add(transaction.transactionId); journalFences.add(transaction.journalFencingToken)
+      if (transaction.operation === "OUTCOME" && (!HASH.test(transaction.immutableOutcomeDetailHash)
+        || transaction.immutableOutcomeDetailHash !== computedImmutableOutcomeDetailHash(transaction))) {
+        wall("SCHEDULER_TRANSACTION_JOURNAL_WALL", "transactionJournal.immutableOutcomeDetailHash", "EXACT_IMMUTABLE_OUTCOME_REQUIRED")
+      }
+    }
     journal.journalHash = hash
     return journal
   } catch (error) {
@@ -576,8 +598,9 @@ function beginTransaction(configuration, operation, identity, detail, now) {
     operation, phase: "INTENT", journalFencingToken: journal.nextFence,
     fullIdentityHash: identity.fullIdentityHash, schedulerFencingToken: identity.schedulerFencingToken,
     expectedSchedulerVersion: detail.expectedSchedulerVersion, detail,
-    startedAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), errorCode: null,
+    startedAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), errorCode: null, result: {},
   }
+  transaction.immutableOutcomeDetailHash = operation === "OUTCOME" ? computedImmutableOutcomeDetailHash(transaction) : null
   journal.nextFence += 1; journal.version += 1; journal.transactions.push(transaction); writeJournal(configuration, journal)
   return transaction.transactionId
 }
@@ -585,7 +608,10 @@ function advanceTransaction(configuration, transactionId, phase, patch = {}, err
   const journal = loadJournal(configuration)
   const transaction = journal.transactions.find((candidate) => candidate.transactionId === transactionId)
   if (!transaction) wall("SCHEDULER_TRANSACTION_JOURNAL_WALL", "transactionId", "DURABLE_INTENT_REQUIRED")
-  transaction.phase = phase; transaction.detail = { ...transaction.detail, ...patch }; transaction.errorCode = errorCode
+  transaction.phase = phase
+  if (transaction.operation === "OUTCOME") transaction.result = { ...transaction.result, ...patch }
+  else transaction.detail = { ...transaction.detail, ...patch }
+  transaction.errorCode = errorCode
   transaction.updatedAt = new Date(configuration.now()).toISOString(); journal.version += 1; writeJournal(configuration, journal)
 }
 
@@ -680,6 +706,32 @@ function loadEvidenceEvent(configuration, eventId) {
     schemaVersion: 1, artifactType: "MULTI_AGENT_EVIDENCE_EVENT_INSPECT_REQUEST", eventId, expectedAnchor: null,
   }, phaseOptions(configuration))
   return verified.ok && verified.valid ? verified.event : null
+}
+function latestDurableOutcomeEvidence(configuration, entry, lane) {
+  let names
+  try { names = fs.readdirSync(path.join(configuration.evidenceLedgerDir, "events")).sort().reverse() } catch { wall("SCHEDULER_EVIDENCE_WALL", "recovery.evidence", "VERIFIED_OUTCOME_EVIDENCE_REQUIRED") }
+  for (const name of names) {
+    const match = /^\d{12}-([0-9a-f-]{36})\.json$/.exec(name)
+    if (!match) continue
+    const event = loadEvidenceEvent(configuration, match[1])
+    if (event?.eventType === "PROVIDER" && event.scope?.programId === entry.programId
+      && event.scope?.goalId === entry.goalId && event.scope?.loopId === entry.loopId
+      && event.scope?.workOrderId === entry.workOrderId && event.scope?.laneId === entry.laneId
+      && event.scope?.runId === entry.schedulerRunId && event.writer?.writerId === entry.workerId
+      && event.writer?.providerId === entry.providerId && event.writer?.adapterId === entry.adapterId
+      && event.leaseAttribution?.storeId === configuration.leaseStoreId
+      && event.leaseAttribution?.fencingToken === lane.fencingToken
+      && event.leaseAttribution?.checkpointSequence === lane.checkpointSequence
+      && event.leaseAttribution?.checkpointEvidenceHash === schedulerHash(lane.checkpointEvidence)) return event
+  }
+  wall("SCHEDULER_EVIDENCE_WALL", "recovery.evidence", "VERIFIED_OUTCOME_EVIDENCE_REQUIRED")
+}
+function applyDurableOutcomeProjection(configuration, entry, lane) {
+  const evidence = latestDurableOutcomeEvidence(configuration, entry, lane)
+  entry.leaseFencingToken = lane.fencingToken
+  entry.lifecycleState = lane.lifecycleState
+  entry.lastEvidenceEventId = evidence.eventId
+  return evidence
 }
 function assessEntryStores(configuration, entry) {
   const leaseStore = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId)
@@ -926,10 +978,13 @@ function liveLaneForMutation(configuration, entry) {
   return lane
 }
 
-function phaseOutcome(configuration, entry, providerState, reasonCode, responseHash, terminal, ambiguous) {
+function phaseOutcome(configuration, entry, providerState, reasonCode, responseHash, terminal, ambiguous, requiredLeaseFencingToken = null, immutableOutcomeDetailHash = null) {
   const token = holderToken(configuration, entry)
   const outcomeNow = configuration.now()
   const lane = liveLaneForMutation(configuration, entry)
+  if (requiredLeaseFencingToken !== null && (entry.leaseFencingToken !== requiredLeaseFencingToken || lane.fencingToken !== requiredLeaseFencingToken)) {
+    wall("SCHEDULER_RECONCILIATION_WALL", "reconciliationOwnerProof.leaseFencingToken", "CURRENT_ACTIVE_LEASE_PROOF_REQUIRED")
+  }
   let targets
   if (ambiguous) targets = ["REROUTE_PENDING"]
   else if (["ACCEPTED", "RUNNING"].includes(providerState)) targets = lane.lifecycleState === "PROVIDER_DISPATCHED" ? ["EXECUTING"] : []
@@ -983,7 +1038,8 @@ function phaseOutcome(configuration, entry, providerState, reasonCode, responseH
       checkpointSequence: updated.checkpointSequence,
       checkpointEvidenceHash: schedulerHash(updated.checkpointEvidence),
     },
-    payload: { providerId: entry.providerId, adapterId: entry.adapterId, dispatchId: entry.dispatchId, state: providerState, reasonCode, responseContentHash: responseHash },
+    payload: { providerId: entry.providerId, adapterId: entry.adapterId, dispatchId: entry.dispatchId, state: providerState, reasonCode, responseContentHash: responseHash,
+      ...(immutableOutcomeDetailHash === null ? {} : { immutableOutcomeDetailHash }) },
     sourceRefs: schedulerEvidenceRefs(entry), sanitized: true, rawAuthMaterialIncluded: false, rawProviderOutputIncluded: false, expectedHead: null,
   }, { leaseStorePath: configuration.leaseStorePath, leaseStoreId: configuration.leaseStoreId, ...phaseOptions(configuration) })
   if (!evidence.ok) wall("SCHEDULER_EVIDENCE_WALL", "evidenceLedger", evidence.status)
@@ -1043,6 +1099,91 @@ function validateReconciliationOwnerProof(value, bundle, entry, validAt, minimum
   }, claim, "reconciliationOwnerProof.claim")
   if (value.claimHash !== schedulerHash(claim)) wall("SCHEDULER_RECONCILIATION_WALL", "reconciliationOwnerProof.claimHash", "EXACT_CLAIM_HASH_REQUIRED")
   return Object.freeze({ ...value, proofHash: schedulerHash(value) })
+}
+
+function assertCurrentActiveReconciliationLease(configuration, entry, proof) {
+  const lane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
+    .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
+  if (!lane || lane.workerId !== entry.workerId || lane.status !== "ACTIVE"
+    || lane.fencingToken !== entry.leaseFencingToken || proof.leaseFencingToken !== lane.fencingToken
+    || Date.parse(lane.expiresAt) <= configuration.now()) {
+    wall("SCHEDULER_RECONCILIATION_WALL", "reconciliationOwnerProof.leaseFencingToken", "CURRENT_ACTIVE_LEASE_PROOF_REQUIRED")
+  }
+}
+
+function reconciliationAuthorityEntry(entry) {
+  if (entry.reconciliationAuthorityClaim === undefined) return entry
+  exact(entry.reconciliationAuthorityClaim, new Set(["schedulerRunId", "attempt", "fullIdentityHash", "schedulerFencingToken", "leaseFencingToken", "reservationFencingToken"]), "reconciliationAuthorityClaim")
+  return { ...entry, ...entry.reconciliationAuthorityClaim }
+}
+
+function validateReconciliationLeaseRebind(configuration, state, entry, proof) {
+  if (proof.leaseFencingToken === entry.leaseFencingToken) {
+    if (entry.reconciliationLeaseRebind !== null && entry.reconciliationLeaseRebind !== undefined) wall("SCHEDULER_RECONCILIATION_WALL", "reconciliationLeaseRebind", "UNEXPECTED")
+    return
+  }
+  exact(entry.reconciliationLeaseRebind, new Set(["fromLeaseFencingToken", "toLeaseFencingToken", "transactionId", "proofHash", "immutableOutcomeDetailHash", "evidenceEventId", "evidenceEventHash"]), "reconciliationLeaseRebind")
+  const rebind = entry.reconciliationLeaseRebind
+  if (rebind.fromLeaseFencingToken !== proof.leaseFencingToken || rebind.toLeaseFencingToken !== entry.leaseFencingToken
+    || rebind.toLeaseFencingToken <= rebind.fromLeaseFencingToken || rebind.proofHash !== proof.proofHash
+    || !rebind.transactionId.startsWith(`outcome-${entry.fullIdentityHash}-`)) {
+    wall("SCHEDULER_RECONCILIATION_WALL", "reconciliationLeaseRebind", "EXACT_JOURNAL_REBIND_REQUIRED")
+  }
+  const durableState = loadState(configuration.statePath, configuration.stateId)
+  if (canonicalSchedulerJson(durableState) !== canonicalSchedulerJson(state)
+    || state.active.some((candidate) => candidate.fullIdentityHash === entry.fullIdentityHash)
+    || state.released.some((candidate) => candidate.fullIdentityHash === entry.fullIdentityHash)
+    || state.reconciliation.filter((candidate) => candidate.fullIdentityHash === entry.fullIdentityHash).length !== 1) {
+    wall("SCHEDULER_RECONCILIATION_WALL", "reconciliationLeaseRebind.state", "EXACT_DURABLE_RECONCILIATION_STATE_REQUIRED")
+  }
+  const journal = loadJournal(configuration)
+  const transaction = journal.transactions.find((candidate) => candidate.transactionId === rebind.transactionId)
+  if (!transaction || transaction.operation !== "OUTCOME" || transaction.phase !== "RECONCILIATION_HELD"
+    || transaction.transactionId !== `outcome-${entry.fullIdentityHash}-${transaction.journalFencingToken}`
+    || transaction.fullIdentityHash !== entry.fullIdentityHash || transaction.schedulerFencingToken !== entry.schedulerFencingToken
+    || transaction.expectedSchedulerVersion !== transaction.detail?.expectedSchedulerVersion
+    || transaction.detail?.ambiguous !== true || transaction.detail?.terminal !== false) {
+    wall("SCHEDULER_RECONCILIATION_WALL", "reconciliationLeaseRebind.transaction", "EXACT_HELD_OUTCOME_REQUIRED")
+  }
+  if (transaction.immutableOutcomeDetailHash !== computedImmutableOutcomeDetailHash(transaction)
+    || rebind.immutableOutcomeDetailHash !== transaction.immutableOutcomeDetailHash) {
+    wall("SCHEDULER_RECONCILIATION_WALL", "reconciliationLeaseRebind.immutableOutcomeDetailHash", "EXACT_IMMUTABLE_OUTCOME_REQUIRED")
+  }
+  const original = transaction.detail.entry
+  const originalClaim = reconciliationClaim(original)
+  const { proofHash: _proofHash, ...signedProof } = proof
+  if (original.workOrderId !== entry.workOrderId || original.laneId !== entry.laneId
+    || original.schedulerRunId !== entry.schedulerRunId || original.attempt !== entry.attempt
+    || original.schedulerFencingToken !== entry.schedulerFencingToken
+    || canonicalSchedulerJson(originalClaim) !== canonicalSchedulerJson(entry.reconciliationAuthorityClaim)
+    || canonicalSchedulerJson(transaction.detail.claim) !== canonicalSchedulerJson(originalClaim)
+    || transaction.detail.effectiveOutcome !== entry.outcome
+    || canonicalSchedulerJson(transaction.detail.reconciliation?.ownerProof) !== canonicalSchedulerJson(signedProof)
+    || schedulerHash(transaction.detail.reconciliation?.ownerProof) !== proof.proofHash
+    || transaction.detail.reconciliationOwnerProofHash !== proof.proofHash
+    || transaction.detail.reconciliation?.ownerId !== entry.reconciliationOwner
+    || transaction.detail.reconciliation?.deadline !== entry.reconciliationDeadline) {
+    wall("SCHEDULER_RECONCILIATION_WALL", "reconciliationLeaseRebind.transactionDetail", "EXACT_ORIGINAL_GRANT_REQUIRED")
+  }
+  const superseding = journal.transactions.find((candidate) => candidate.journalFencingToken > transaction.journalFencingToken
+    && (candidate.fullIdentityHash === entry.fullIdentityHash
+      || candidate.detail?.entries?.some((item) => item.entry?.fullIdentityHash === entry.fullIdentityHash)))
+  if (superseding) wall("SCHEDULER_RECONCILIATION_WALL", "reconciliationLeaseRebind.transaction", "SUPERSEDED_OR_STALE")
+  const lane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
+    .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
+  const event = loadEvidenceEvent(configuration, rebind.evidenceEventId)
+  if (!lane || lane.workerId !== entry.workerId || lane.fencingToken !== entry.leaseFencingToken
+    || !event || event.eventHash !== rebind.evidenceEventHash || event.eventType !== "PROVIDER"
+    || event.scope?.programId !== entry.programId || event.scope?.goalId !== entry.goalId || event.scope?.loopId !== entry.loopId
+    || event.scope?.workOrderId !== entry.workOrderId || event.scope?.laneId !== entry.laneId || event.scope?.runId !== entry.schedulerRunId
+    || event.writer?.writerId !== entry.workerId || event.writer?.providerId !== entry.providerId || event.writer?.adapterId !== entry.adapterId
+    || event.leaseAttribution?.storeId !== configuration.leaseStoreId || event.leaseAttribution?.fencingToken !== entry.leaseFencingToken
+    || event.leaseAttribution?.checkpointSequence !== lane.checkpointSequence
+    || event.leaseAttribution?.checkpointEvidenceHash !== schedulerHash(lane.checkpointEvidence)
+    || event.payload?.immutableOutcomeDetailHash !== transaction.immutableOutcomeDetailHash
+    || event.payload?.responseContentHash !== transaction.detail.responseHash) {
+    wall("SCHEDULER_RECONCILIATION_WALL", "reconciliationLeaseRebind.evidence", "VERIFIED_NEW_FENCE_EVIDENCE_REQUIRED")
+  }
 }
 
 export function scheduleEligibleSet(configuration, input) {
@@ -1247,14 +1388,17 @@ export function recordProviderOutcome(configuration, input) {
       if (deadline <= now) wall("SCHEDULER_RECONCILIATION_WALL", "reconciliationDeadline", "FUTURE_DEADLINE_REQUIRED")
       proof = validateReconciliationOwnerProof(input.reconciliation.ownerProof, bundle, entry, now, deadline)
       if (input.reconciliation.ownerId !== proof.ownerId) wall("SCHEDULER_RECONCILIATION_WALL", "outcome.reconciliation.ownerId")
+      assertCurrentActiveReconciliationLease(configuration, entry, proof)
     } else if (input.reconciliation !== null) wall("SCHEDULER_RECONCILIATION_WALL", "outcome.reconciliation", "NULL_FOR_ATTRIBUTED_RESPONSE_REQUIRED")
     const transactionId = beginTransaction(configuration, "OUTCOME", entry, {
-      expectedSchedulerVersion: state.version, entry, effectiveOutcome, providerState,
+      expectedSchedulerVersion: state.version, entry, claim: input.claim, effectiveOutcome, providerState,
       reasonCode, responseHash, terminal, ambiguous, reconciliation: input.reconciliation,
+      reconciliationOwnerProofHash: proof?.proofHash ?? null,
     }, now)
+    const immutableOutcomeDetailHash = loadJournal(configuration).transactions.find((candidate) => candidate.transactionId === transactionId).immutableOutcomeDetailHash
     let phase
     try {
-      phase = phaseOutcome(configuration, entry, ambiguous ? "UNKNOWN" : providerState, ambiguous ? reasonCode ?? "ATTRIBUTION_MISMATCH" : reasonCode, responseHash, terminal, ambiguous)
+      phase = phaseOutcome(configuration, entry, ambiguous ? "UNKNOWN" : providerState, ambiguous ? reasonCode ?? "ATTRIBUTION_MISMATCH" : reasonCode, responseHash, terminal, ambiguous, proof?.leaseFencingToken ?? null, immutableOutcomeDetailHash)
     } catch (error) {
       const recoveryConfiguration = { ...configuration }; delete recoveryConfiguration.failureInjector
       const lane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
@@ -1268,7 +1412,7 @@ export function recordProviderOutcome(configuration, input) {
           if (!reservationRelease.released) wall("SCHEDULER_RESERVATION_WALL", "reservationLedger", reservationRelease.status)
           phase = { checkpoint: { lifecycleState: lane.lifecycleState, checkpointSequence: lane.checkpointSequence }, evidence: { recoveredFromDurableLedger: true } }
         } else {
-          phase = phaseOutcome(recoveryConfiguration, entry, ambiguous ? "UNKNOWN" : providerState, ambiguous ? reasonCode ?? "ATTRIBUTION_MISMATCH" : reasonCode, responseHash, terminal, ambiguous)
+          phase = phaseOutcome(recoveryConfiguration, entry, ambiguous ? "UNKNOWN" : providerState, ambiguous ? reasonCode ?? "ATTRIBUTION_MISMATCH" : reasonCode, responseHash, terminal, ambiguous, proof?.leaseFencingToken ?? null, immutableOutcomeDetailHash)
         }
       } catch (recoveryError) {
         advanceTransaction(configuration, transactionId, "RECOVERY_REQUIRED", {}, recoveryError?.code ?? error?.code ?? "OUTCOME_PHASE_FAILURE")
@@ -1283,7 +1427,8 @@ export function recordProviderOutcome(configuration, input) {
     record(state, "CHECKPOINT_PROVIDER_OUTCOME", entry, now, { outcome: effectiveOutcome, evidenceHash, leaseFencingToken: entry.leaseFencingToken })
     if (ambiguous) {
       state.active.splice(index, 1)
-      state.reconciliation.push({ ...entry, status: "RECONCILIATION_REQUIRED", outcome: effectiveOutcome, reconciliationOwner: input.reconciliation.ownerId, reconciliationOwnerProofHash: proof.proofHash, reconciliationGrantExpiresAt: proof.expiresAt, reconciliationDeadline: input.reconciliation.deadline, fenced: true })
+      state.reconciliation.push({ ...entry, status: "RECONCILIATION_REQUIRED", outcome: effectiveOutcome, reconciliationOwner: input.reconciliation.ownerId, reconciliationOwnerProofHash: proof.proofHash, reconciliationGrantExpiresAt: proof.expiresAt, reconciliationDeadline: input.reconciliation.deadline,
+        reconciliationAuthorityClaim: reconciliationClaim(entry), reconciliationLeaseRebind: null, fenced: true })
       record(state, "AMBIGUOUS_OUTCOME_FENCED", entry, now, { reconciliationOwner: input.reconciliation.ownerId, reconciliationOwnerProofHash: proof.proofHash, reconciliationDeadline: input.reconciliation.deadline })
     } else if (terminal) {
       state.active.splice(index, 1)
@@ -1333,8 +1478,9 @@ export function reapAmbiguousOutcomes(configuration, input) {
       const entry = state.reconciliation.find((candidate) => candidate.fullIdentityHash === claim.fullIdentityHash)
       if (!entry) wall("SCHEDULER_RECONCILIATION_WALL", "reaper.claim", "EXACT_RECONCILIATION_IDENTITY_REQUIRED")
       exactMatch({ schedulerRunId: claim.schedulerRunId, attempt: claim.attempt, fullIdentityHash: claim.fullIdentityHash, schedulerFencingToken: claim.schedulerFencingToken, leaseFencingToken: claim.leaseFencingToken, reservationFencingToken: claim.reservationFencingToken }, reconciliationClaim(entry), "reaper.claim")
-      const proof = validateReconciliationOwnerProof(claim.ownerProof, bundle, entry, Date.parse(entry.reconciliationDeadline), Date.parse(entry.reconciliationDeadline))
+      const proof = validateReconciliationOwnerProof(claim.ownerProof, bundle, reconciliationAuthorityEntry(entry), Date.parse(entry.reconciliationDeadline), Date.parse(entry.reconciliationDeadline))
       if (proof.ownerId !== entry.reconciliationOwner || proof.proofHash !== entry.reconciliationOwnerProofHash || proof.expiresAt !== entry.reconciliationGrantExpiresAt) wall("SCHEDULER_RECONCILIATION_WALL", "reaper.ownerProof", "ORIGINAL_DURABLE_OWNER_GRANT_REQUIRED")
+      validateReconciliationLeaseRebind(configuration, state, entry, proof)
       if (Date.parse(entry.reconciliationDeadline) > now) wall("SCHEDULER_RECONCILIATION_WALL", "reaper.claim", "DEADLINE_NOT_REACHED")
       const lane = leaseSnapshot.lanes.find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
       if (!lane || lane.workerId !== entry.workerId || lane.fencingToken !== entry.leaseFencingToken || !["ACTIVE", "EXPIRED"].includes(lane.status)
@@ -1389,6 +1535,9 @@ export function reapAmbiguousOutcomes(configuration, input) {
       injectFailure(configuration, "REAP:SCHEDULER_STATE")
       durableWrite(configuration.statePath, state)
     } catch { durableWrite(configuration.statePath, state) }
+    for (const { entry } of validated) {
+      if (entry.reconciliationLeaseRebind) advanceTransaction(configuration, entry.reconciliationLeaseRebind.transactionId, "SUPERSEDED_BY_REAP")
+    }
     advanceTransaction(configuration, transactionId, "COMMITTED")
     return result("AMBIGUOUS_REAPER_COMPLETE", { released: Object.freeze(released), stateVersion: state.version, capacityRecovered: released.length })
   } finally { unlock() }
@@ -1404,34 +1553,17 @@ export function recoverSchedulerTransactions(configuration) {
     const state = loadState(configuration.statePath, configuration.stateId)
     const recovered = []
     let stateChanged = false
-    for (const [name, collection] of [["ACTIVE", state.active], ["RECONCILIATION", state.reconciliation]]) {
-      for (const entry of [...collection]) {
-        const assessment = assessEntryStores(recoveryConfiguration, entry)
-        if (assessment.healthy) continue
-        const recoveryTransaction = {
-          transactionId: `store-reconciliation-${entry.fullIdentityHash}-${journal.nextFence}`,
-          operation: "STORE_RECONCILIATION", phase: "INTENT", journalFencingToken: journal.nextFence,
-          fullIdentityHash: entry.fullIdentityHash, schedulerFencingToken: entry.schedulerFencingToken,
-          expectedSchedulerVersion: state.version, detail: { expectedSchedulerVersion: state.version, entry, collection: name },
-          startedAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), errorCode: null,
-        }
-        journal.nextFence += 1; journal.version += 1; journal.transactions.push(recoveryTransaction); writeJournal(configuration, journal)
-        try {
-          if (assessment.expired && !isTerminalLifecycleState(entry.lifecycleState) && assessment.exactReservation && assessment.exactEvidence) {
-            const oldFence = entry.leaseFencingToken
-            liveLaneForMutation(recoveryConfiguration, entry)
-            record(state, "EXPIRED_LEASE_RECLAIMED", entry, now, { priorLeaseFencingToken: oldFence, leaseFencingToken: entry.leaseFencingToken })
-          } else compensateDivergentEntry(recoveryConfiguration, state, entry, collection, `${name}_STORE_DIVERGENCE`, now)
-          recoveryTransaction.phase = "COMMITTED"; recoveryTransaction.updatedAt = new Date(now).toISOString(); journal.version += 1; writeJournal(configuration, journal)
-          stateChanged = true
-        } catch (error) {
-          recoveryTransaction.phase = "RECOVERY_REQUIRED"; recoveryTransaction.errorCode = error?.code ?? "STORE_RECONCILIATION_FAILURE"
-          recoveryTransaction.updatedAt = new Date(now).toISOString(); journal.version += 1; writeJournal(configuration, journal)
-          throw error
-        }
+    const pendingTransactions = journal.transactions
+      .filter((candidate) => !TERMINAL_TRANSACTION_PHASES.has(candidate.phase))
+      .sort((left, right) => left.journalFencingToken - right.journalFencingToken)
+    const transactionFirstIdentities = new Set()
+    for (const transaction of pendingTransactions) {
+      if (["OUTCOME", "REAP"].includes(transaction.operation)) transactionFirstIdentities.add(transaction.fullIdentityHash)
+      if (transaction.operation === "REAP_BATCH") {
+        for (const item of transaction.detail.entries) transactionFirstIdentities.add(item.entry.fullIdentityHash)
       }
     }
-    for (const transaction of journal.transactions.filter((candidate) => !["COMMITTED", "ROLLED_BACK"].includes(candidate.phase))) {
+    for (const transaction of pendingTransactions) {
       const detail = transaction.detail
       if (transaction.operation === "STORE_RECONCILIATION") {
         const candidate = state.active.find((entry) => entry.fullIdentityHash === transaction.fullIdentityHash)
@@ -1450,12 +1582,9 @@ export function recoverSchedulerTransactions(configuration) {
           try {
             const lane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
               .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
-            let lifecycleState = lane?.lifecycleState
-            if (lane?.status === "ACTIVE") {
-              const phase = phaseOutcome(recoveryConfiguration, entry, "FAILED", "RECONCILIATION_DEADLINE_EXPIRED", item.responseHash, true, false)
-              lifecycleState = phase.checkpoint.lifecycleState
-              entry.lastEvidenceEventId = phase.evidence.event?.eventId ?? entry.lastEvidenceEventId
-            } else if (!["RELEASED", "EXPIRED"].includes(lane?.status)) wall("SCHEDULER_FENCE_WALL", "recovery.reapBatch", "DURABLE_TERMINAL_LANE_REQUIRED")
+            if (["ACTIVE", "EXPIRED"].includes(lane?.status)) {
+              phaseOutcome(recoveryConfiguration, entry, "FAILED", "RECONCILIATION_DEADLINE_EXPIRED", item.responseHash, true, false)
+            } else if (lane?.status !== "RELEASED") wall("SCHEDULER_FENCE_WALL", "recovery.reapBatch", "DURABLE_TERMINAL_LANE_REQUIRED")
             const reservation = inspectReservationLedgerExact(configuration).reservations
               .find((candidate) => candidate.reservationSetId === entry.reservationSet.reservationSetId)
             if (reservation) {
@@ -1467,7 +1596,9 @@ export function recoverSchedulerTransactions(configuration) {
             }
             const index = state.reconciliation.findIndex((candidate) => candidate.fullIdentityHash === entry.fullIdentityHash)
             if (index >= 0) state.reconciliation.splice(index, 1)
-            entry.lifecycleState = lifecycleState
+            const releasedLane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
+              .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
+            applyDurableOutcomeProjection(recoveryConfiguration, entry, releasedLane)
             state.released.push({ ...entry, status: "RELEASED", outcome: "AMBIGUOUS_REAPED", releasedAt: new Date(now).toISOString() })
             record(state, "TRANSACTION_RECOVERY_REAP_BATCH_RELEASED", entry, now, { transactionId: transaction.transactionId })
             stateChanged = true
@@ -1492,13 +1623,27 @@ export function recoverSchedulerTransactions(configuration) {
         }
         recovered.push(transaction.transactionId); continue
       }
+      if (transaction.operation === "OUTCOME" && transaction.phase === "RECONCILIATION_HELD") {
+        try {
+          if (!reconciling?.reconciliationLeaseRebind || reconciling.reconciliationLeaseRebind.transactionId !== transaction.transactionId) {
+            wall("SCHEDULER_RECONCILIATION_WALL", "recovery.reconciliationLeaseRebind", "EXACT_HELD_RECONCILIATION_REQUIRED")
+          }
+          const bundle = loadPinnedTrustBundle(configuration.trustBundleReference)
+          const proof = validateReconciliationOwnerProof(detail.reconciliation.ownerProof, bundle, reconciliationAuthorityEntry(reconciling), Date.parse(detail.reconciliation.deadline), Date.parse(detail.reconciliation.deadline))
+          validateReconciliationLeaseRebind(configuration, state, reconciling, proof)
+          transaction.errorCode = null
+        } catch (error) {
+          transaction.phase = "RECOVERY_REQUIRED"; transaction.errorCode = error?.code ?? "HELD_RECONCILIATION_INVALID"
+        }
+        continue
+      }
       const entry = active ?? reconciling ?? detail.entry
       const lane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
         .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
       if (!lane) { transaction.phase = "RECOVERY_REQUIRED"; transaction.errorCode = "DURABLE_LANE_REQUIRED"; continue }
       if (detail.terminal || transaction.operation === "REAP") {
-        if (lane.status === "ACTIVE") {
-          phaseOutcome(recoveryConfiguration, entry, detail.providerState ?? "FAILED", detail.reasonCode ?? "RECONCILIATION_DEADLINE_EXPIRED", detail.responseHash, true, false)
+        if (["ACTIVE", "EXPIRED"].includes(lane.status)) {
+          phaseOutcome(recoveryConfiguration, entry, detail.providerState ?? "FAILED", detail.reasonCode ?? "RECONCILIATION_DEADLINE_EXPIRED", detail.responseHash, true, false, null, transaction.immutableOutcomeDetailHash)
         } else if (lane.status !== "RELEASED") {
           transaction.phase = "RECOVERY_REQUIRED"; transaction.errorCode = "TERMINAL_RELEASE_STATE_REQUIRED"; continue
         }
@@ -1512,26 +1657,90 @@ export function recoverSchedulerTransactions(configuration) {
         if (index >= 0) collection.splice(index, 1)
         const updatedLane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
           .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
-        entry.lifecycleState = updatedLane.lifecycleState
+        applyDurableOutcomeProjection(recoveryConfiguration, entry, updatedLane)
         state.released.push({ ...entry, status: "RELEASED", outcome: detail.effectiveOutcome ?? "AMBIGUOUS_REAPED", releasedAt: new Date(now).toISOString() })
         record(state, "TRANSACTION_RECOVERY_TERMINAL_RELEASED", entry, now, { transactionId: transaction.transactionId })
         stateChanged = true
       } else if (detail.ambiguous) {
         if (!active || !detail.reconciliation) { transaction.phase = "RECOVERY_REQUIRED"; transaction.errorCode = "AMBIGUOUS_RECOVERY_SCOPE_REQUIRED"; continue }
+        let proof
+        let reconciliationLeaseRebind = null
+        try {
+          const bundle = loadPinnedTrustBundle(configuration.trustBundleReference)
+          const deadline = Date.parse(detail.reconciliation.deadline)
+          const authorityEntry = detail.entry
+          proof = validateReconciliationOwnerProof(detail.reconciliation.ownerProof, bundle, authorityEntry, Date.parse(transaction.startedAt), deadline)
+          if (proof.ownerId !== detail.reconciliation.ownerId || lane.fencingToken !== proof.leaseFencingToken
+            || lane.fencingToken !== authorityEntry.leaseFencingToken || !["ACTIVE", "EXPIRED"].includes(lane.status)) {
+            wall("SCHEDULER_RECONCILIATION_WALL", "recovery.reconciliationOwnerProof", "JOURNALED_LEASE_PROOF_REQUIRED")
+          }
+          if (lane.lifecycleState !== "REROUTE_PENDING") {
+            phaseOutcome(recoveryConfiguration, entry, "UNKNOWN", detail.reasonCode ?? "ATTRIBUTION_MISMATCH", detail.responseHash, false, true, null, transaction.immutableOutcomeDetailHash)
+          } else entry.lifecycleState = lane.lifecycleState
+          const updatedLane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
+            .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
+          const evidence = applyDurableOutcomeProjection(recoveryConfiguration, entry, updatedLane)
+          if (entry.leaseFencingToken !== proof.leaseFencingToken) {
+            reconciliationLeaseRebind = {
+              fromLeaseFencingToken: proof.leaseFencingToken, toLeaseFencingToken: entry.leaseFencingToken,
+              transactionId: transaction.transactionId, proofHash: proof.proofHash,
+              immutableOutcomeDetailHash: transaction.immutableOutcomeDetailHash,
+              evidenceEventId: evidence.eventId, evidenceEventHash: evidence.eventHash,
+            }
+          }
+        } catch (error) {
+          transaction.phase = "RECOVERY_REQUIRED"; transaction.errorCode = error?.code ?? "AMBIGUOUS_PROOF_RECOVERY_FAILURE"; continue
+        }
         const index = state.active.findIndex((candidate) => candidate.fullIdentityHash === entry.fullIdentityHash)
         state.active.splice(index, 1)
-        const proof = detail.reconciliation.ownerProof
-        state.reconciliation.push({ ...entry, lifecycleState: lane.lifecycleState, status: "RECONCILIATION_REQUIRED", outcome: detail.effectiveOutcome,
-          reconciliationOwner: detail.reconciliation.ownerId, reconciliationOwnerProofHash: schedulerHash(proof), reconciliationGrantExpiresAt: proof.expiresAt,
-          reconciliationDeadline: detail.reconciliation.deadline, fenced: true })
+        state.reconciliation.push({ ...entry, lifecycleState: entry.lifecycleState, status: "RECONCILIATION_REQUIRED", outcome: detail.effectiveOutcome,
+          reconciliationOwner: detail.reconciliation.ownerId, reconciliationOwnerProofHash: proof.proofHash, reconciliationGrantExpiresAt: proof.expiresAt,
+          reconciliationDeadline: detail.reconciliation.deadline, reconciliationAuthorityClaim: reconciliationClaim(detail.entry),
+          reconciliationLeaseRebind, fenced: true })
         record(state, "TRANSACTION_RECOVERY_AMBIGUOUS_FENCED", entry, now, { transactionId: transaction.transactionId })
         stateChanged = true
+        transaction.phase = reconciliationLeaseRebind ? "RECONCILIATION_HELD" : "COMMITTED"
+        transaction.errorCode = null; recovered.push(transaction.transactionId)
+        continue
       } else if (active) {
         active.lifecycleState = lane.lifecycleState
         record(state, "TRANSACTION_RECOVERY_CHECKPOINTED", active, now, { transactionId: transaction.transactionId, lifecycleState: lane.lifecycleState })
         stateChanged = true
       }
       transaction.phase = "COMMITTED"; transaction.errorCode = null; recovered.push(transaction.transactionId)
+    }
+    // Journal intent is replayed first in fencing-token order. Only after that may an
+    // unrelated identity be classified as generic cross-store divergence.
+    for (const [name, collection] of [["ACTIVE", state.active], ["RECONCILIATION", state.reconciliation]]) {
+      for (const entry of [...collection]) {
+        if (transactionFirstIdentities.has(entry.fullIdentityHash)) continue
+        const assessment = assessEntryStores(recoveryConfiguration, entry)
+        if (assessment.healthy) continue
+        // An expired reconciliation lease remains fenced by its original signed owner proof.
+        // The deadline reaper validates that proof before it reclaims under a new lease fence.
+        if (name === "RECONCILIATION" && assessment.expired && assessment.exactReservation && assessment.exactEvidence) continue
+        const recoveryTransaction = {
+          transactionId: `store-reconciliation-${entry.fullIdentityHash}-${journal.nextFence}`,
+          operation: "STORE_RECONCILIATION", phase: "INTENT", journalFencingToken: journal.nextFence,
+          fullIdentityHash: entry.fullIdentityHash, schedulerFencingToken: entry.schedulerFencingToken,
+          expectedSchedulerVersion: state.version, detail: { expectedSchedulerVersion: state.version, entry, collection: name },
+          startedAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), errorCode: null,
+        }
+        journal.nextFence += 1; journal.version += 1; journal.transactions.push(recoveryTransaction); writeJournal(configuration, journal)
+        try {
+          if (assessment.expired && !isTerminalLifecycleState(entry.lifecycleState) && assessment.exactReservation && assessment.exactEvidence) {
+            const oldFence = entry.leaseFencingToken
+            liveLaneForMutation(recoveryConfiguration, entry)
+            record(state, "EXPIRED_LEASE_RECLAIMED", entry, now, { priorLeaseFencingToken: oldFence, leaseFencingToken: entry.leaseFencingToken })
+          } else compensateDivergentEntry(recoveryConfiguration, state, entry, collection, `${name}_STORE_DIVERGENCE`, now)
+          recoveryTransaction.phase = "COMMITTED"; recoveryTransaction.updatedAt = new Date(now).toISOString(); journal.version += 1; writeJournal(configuration, journal)
+          stateChanged = true
+        } catch (error) {
+          recoveryTransaction.phase = "RECOVERY_REQUIRED"; recoveryTransaction.errorCode = error?.code ?? "STORE_RECONCILIATION_FAILURE"
+          recoveryTransaction.updatedAt = new Date(now).toISOString(); journal.version += 1; writeJournal(configuration, journal)
+          throw error
+        }
+      }
     }
     if (stateChanged) durableWrite(configuration.statePath, state)
     journal.version += 1

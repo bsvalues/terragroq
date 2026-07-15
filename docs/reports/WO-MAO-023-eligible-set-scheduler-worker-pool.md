@@ -93,6 +93,15 @@ outcome and reaper failures resume idempotently from the durable store state. Th
 recovery operation reconciles interrupted intents and cannot leave an invisible active claim or an
 ACTIVE scheduler entry pointing at released Phase 2 stores.
 
+Recovery orders every pending intent by its durable journal fencing token. Pending `OUTCOME`, `REAP`,
+and `REAP_BATCH` identities are replayed before any generic cross-store divergence scan may classify
+the same identity. A crash after a terminal outcome or reaper mutates the Phase 2 stores but before the
+scheduler-state write therefore recovers the intended terminal/reaped result; it cannot be rewritten as
+`STORE_DIVERGENCE_COMPENSATED`. Recovery reconstructs the released projection from the verified
+provider evidence and durable post-checkpoint lane, including a lease fence created by an expiry
+reclaim, rather than copying the journal's pre-reap entry. Replaying the same journal again is
+state-idempotent.
+
 Lease operation identities bind the Work Order, lane, full identity hash, run, attempt, and operation
 phase within the store's bounded key format. A batch failure on any candidate journals and compensates
 all earlier applied candidates before returning. Recovery independently re-verifies every scheduler
@@ -136,6 +145,34 @@ lease fence, and reservation fence. The proof must remain valid through the reco
 its exact expiry and hash become a durable owner grant so a post-deadline reaper remains live even if
 wall-clock proof freshness has since elapsed. Raw or secret-shaped provider evidence is rejected.
 
+Ambiguous reconciliation fails before its lifecycle/evidence mutation unless that signed proof still
+matches the current unexpired ACTIVE lease fence. An expired active lease normally may be recovered
+under a new fence only before a caller presents a newly signed proof for that fence; an old/new proof or
+claim substitution is rejected. The bounded exception is an already-durable `OUTCOME` intent whose
+proof was authenticated before its journal write: recovery may atomically reclaim that exact old fence,
+complete `REROUTE_PENDING`, and persist an old-to-new fence rebind bound to the journal transaction,
+original proof hash, and canonically verified new-fence provider evidence. A crash before the first
+outcome phase can therefore complete without weakening proof attribution or remaining permanently
+`RECOVERY_REQUIRED`. The exact OUTCOME transaction remains `RECONCILIATION_HELD` until reaping: every
+use reloads the hash-verified journal and scheduler state, resolves the complete transaction ID, and
+requires its exact operation, nonterminal phase, journal fence, full identity, Work Order, lane, run,
+attempt, scheduler fence, original reconciliation claim, signed owner proof, deadline, and absence of a
+later superseding transaction. Prefix-shaped, missing, cross-transaction, cross-operation, modified,
+committed, compensated, or stale records confer no authority. A successful deadline reap marks the held
+transaction `SUPERSEDED_BY_REAP` only after the terminal scheduler projection is durable.
+At OUTCOME intent creation, the journal seals an `immutableOutcomeDetailHash` over the exact transaction
+ID, journal and scheduler fences, scheduler version, start time, full entry projection, submitted claim,
+configuration identity, effective/provider outcome, reason, response hash, terminal/ambiguity flags,
+deadline, signed owner proof, and validated proof hash. Only phase, error, update time, and explicit
+result projection remain mutable outside that seal. The old-to-new fence rebind and its canonically
+verified provider-evidence payload both carry the same seal. Journal loading and rebind validation
+recompute it, reject duplicate transaction IDs or journal fences, and fail on any resealed detail
+substitution because the durable rebind/evidence still binds the original seal.
+Once an exact proof has durably fenced an ambiguous outcome, generic recovery does
+not reclaim its expired reconciliation lease and invalidate that grant. The deadline reaper validates
+the original authority claim plus any verified journal rebind, then may reclaim under a fresh fence
+solely to perform the already-authorized terminal reap.
+
 ## Exact bounded reaper
 
 The reaper accepts no arbitrary sweep. It prevalidates the complete batch before the first mutation.
@@ -157,7 +194,7 @@ commits the scheduler projection only after the complete batch reaches a consist
 
 ## Mechanical proof
 
-The 60-test scheduler integration/adversarial suite covers registry/bundle forgery/freshness/revocation/
+The 83-test scheduler integration/adversarial suite covers registry/bundle forgery/freshness/revocation/
 substitution, candidate trust forgery/staleness/revocation/substitution, complete identity/configuration/
 reservation mutations, exact DAG-derived selection, all capacity ceilings, real reservation/lease/
 checkpoint/evidence stores, every provider state and delivery-error class, malformed responses,
@@ -166,12 +203,17 @@ failure boundary, deterministic journal recovery, reservation-fence substitution
 liveness, two-Work-Order idempotency isolation, candidate-two rollback, all-before-any reaper validation,
 later-release recovery, missing-store compensation, expired-lease reclaim, terminal replay, final store
 consistency, canonical evidence-chain tampering, missing/substituted evidence, checkpoint/config/fence
-substitution, idempotent reclaim projection, and production CLI fail-closed behavior.
+substitution, idempotent reclaim projection, transaction-first terminal/reaper crash recovery, stale
+reconciliation proof rejection, pre-phase crash/expiry rebind recovery, post-reclaim terminal
+projection recovery, exact held-journal lookup and adversarial identity/operation/detail/proof/fence/
+phase substitution, expired-reconciliation reaper liveness, and production CLI fail-closed behavior.
+It also covers response hash, effective outcome, provider state, reason, configuration projection,
+duplicate transaction-ID, and duplicate journal-fence mutation under the immutable OUTCOME seal.
 
 Validation:
 
-- focused Vitest: `2 files / 79 tests`, PASS;
-- repository-wide Vitest: `162 files / 1,046 tests`, PASS;
+- focused Vitest: `1 file / 83 tests`, PASS;
+- repository-wide Vitest: `162 files / 1,069 tests`, PASS;
 - repository ESLint and production build: PASS;
 - Node syntax and `git diff --check`: PASS.
 

@@ -24,7 +24,7 @@ import {
   schedulerTrustStatusEventHash,
   signSchedulerArtifact,
 } from "../scripts/multi-agent-operator/eligible-set-scheduler.mjs"
-import { verifyEvidenceLedger } from "../scripts/multi-agent-operator/evidence-ledger.mjs"
+import { inspectVerifiedEvidenceEvent, verifyEvidenceLedger } from "../scripts/multi-agent-operator/evidence-ledger.mjs"
 import { inspectLaneLeaseStore } from "../scripts/multi-agent-operator/lane-lease-checkpoint.mjs"
 import { inspectReservationLedger } from "../scripts/multi-agent-operator/reservation-ledger.mjs"
 import { clearTestSchedulerTrustRecords, installTestSchedulerTrustRecord } from "./fixtures/scheduler-trust-registry-fixture.mjs"
@@ -307,6 +307,56 @@ function mutateSchedulerState(config: ReturnType<typeof configuration>, mutate: 
   fs.writeFileSync(config.statePath, `${JSON.stringify(state, null, 2)}\n`)
 }
 
+function mutateSchedulerJournal(config: ReturnType<typeof configuration>, mutate: (journal: Record<string, any>) => void) {
+  const journalPath = `${config.statePath}.transactions.json`
+  const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"))
+  mutate(journal)
+  journal.journalHash = null
+  journal.journalHash = schedulerHash(journal)
+  fs.writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`)
+}
+
+function resealOutcomeTransaction(transaction: Record<string, any>) {
+  transaction.immutableOutcomeDetailHash = schedulerHash({
+    transactionId: transaction.transactionId, operation: transaction.operation,
+    journalFencingToken: transaction.journalFencingToken, fullIdentityHash: transaction.fullIdentityHash,
+    schedulerFencingToken: transaction.schedulerFencingToken, expectedSchedulerVersion: transaction.expectedSchedulerVersion,
+    startedAt: transaction.startedAt, detail: transaction.detail,
+  })
+}
+
+function journalRebindFixture() {
+  const config = { ...configuration(NOW), leaseDurationMs: 100 }
+  const entry = schedule(config, input(config)).scheduled[0]
+  const deadline = "2026-07-15T10:05:00.000Z"
+  const proof = ownerProof(entry, "reconciler-23", deadline)
+  const schedulerBeforeOutcome = fs.readFileSync(config.statePath, "utf8")
+  const leaseBeforeOutcome = fs.readFileSync(config.leaseStorePath, "utf8")
+  const evidenceBeforeOutcome = path.join(root, "evidence-before-journal-rebind-fixture")
+  fs.cpSync(config.evidenceLedgerDir, evidenceBeforeOutcome, { recursive: true })
+  recordProviderOutcome({ ...configuration(NOW + 1), leaseDurationMs: 100 }, outcomeInput(entry, {
+    kind: "TIMEOUT", providerResponse: null, reasonCode: "TIMEOUT_WALL", evidence: { crashBoundary: "intent-before-phase" },
+  }, { ownerId: "reconciler-23", deadline, ownerProof: proof }))
+  fs.writeFileSync(config.statePath, schedulerBeforeOutcome)
+  fs.writeFileSync(config.leaseStorePath, leaseBeforeOutcome)
+  fs.rmSync(config.evidenceLedgerDir, { recursive: true })
+  fs.cpSync(evidenceBeforeOutcome, config.evidenceLedgerDir, { recursive: true })
+  mutateSchedulerJournal(config, (journal) => {
+    const transaction = journal.transactions.findLast((candidate: Record<string, unknown>) => candidate.operation === "OUTCOME")
+    transaction.phase = "INTENT"
+    transaction.errorCode = "SIMULATED_PRE_PHASE_PROCESS_CRASH"
+  })
+  recoverSchedulerTransactions({ ...configuration(NOW + 101), leaseDurationMs: 100 })
+  const state = inspectSchedulerState(config.statePath, config.stateId).state
+  const recovered = state.reconciliation[0]
+  const claim = {
+    schedulerRunId: recovered.schedulerRunId, attempt: recovered.attempt, fullIdentityHash: recovered.fullIdentityHash,
+    schedulerFencingToken: recovered.schedulerFencingToken, leaseFencingToken: recovered.leaseFencingToken,
+    reservationFencingToken: recovered.reservationFencingToken, ownerProof: proof,
+  }
+  return { config, entry, proof, deadline, state, recovered, claim }
+}
+
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "mao-023-remediation-"))
   writeBundle()
@@ -522,6 +572,29 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     expect(inspectReservationLedger(config.reservationLedgerPath, config.reservationLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_INSPECT_REQUEST" }).reservations).toEqual([])
   })
 
+  it("replays a pending OUTCOME before cross-store divergence compensation after the stores/state crash boundary", () => {
+    const config = configuration()
+    const entry = schedule(config).scheduled[0]
+    const schedulerBeforeOutcome = fs.readFileSync(config.statePath, "utf8")
+    recordProviderOutcome(configuration(NOW + 1), outcomeInput(entry, {
+      kind: "PROVIDER_RESPONSE", providerResponse: providerResponse(entry, "SUCCEEDED"), reasonCode: null, evidence: { crashBoundary: "stores-before-state" },
+    }))
+    fs.writeFileSync(config.statePath, schedulerBeforeOutcome)
+    mutateSchedulerJournal(config, (journal) => {
+      const transaction = journal.transactions.findLast((candidate: Record<string, unknown>) => candidate.operation === "OUTCOME")
+      transaction.phase = "STORES_APPLIED"
+      transaction.errorCode = "SIMULATED_PROCESS_CRASH"
+    })
+
+    const recovered = recoverSchedulerTransactions(configuration(NOW + 2))
+    const state = inspectSchedulerState(config.statePath, config.stateId).state
+    expect(recovered.recovered).toContainEqual(expect.stringMatching(/^outcome-/))
+    expect(state.active).toEqual([])
+    expect(state.released).toMatchObject([{ status: "RELEASED", outcome: "SUCCEEDED", lifecycleState: "DEPENDENTS_RELEASED" }])
+    expect(state.released[0].outcome).not.toBe("STORE_DIVERGENCE_COMPENSATED")
+    expect(recoverSchedulerTransactions(configuration(NOW + 3)).stateVersion).toBe(state.version)
+  })
+
   it("rejects malformed common-provider response without mutating scheduler or Phase2 stores", () => {
     const entry = schedule().scheduled[0]
     expect(() => recordProviderOutcome(configuration(NOW + 1), outcomeInput(entry, {
@@ -541,6 +614,190 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     const lane = inspectLaneLeaseStore(initial.leaseStorePath, initial.leaseStoreId).lanes[0]
     expect(lane.status).toBe("RELEASED")
     expect(lane.fencingToken).toBeGreaterThan(entry.leaseFencingToken)
+  })
+
+  it("fails ambiguous reconciliation on an expired proof fence, then accepts only a fresh proof after recovery reclaims the lease", () => {
+    const initial = { ...configuration(NOW), leaseDurationMs: 100 }
+    const entry = schedule(initial, input(initial)).scheduled[0]
+    const delivery = { kind: "TIMEOUT", providerResponse: null, reasonCode: "TIMEOUT_WALL", evidence: { expired: true } }
+    expectWall(() => recordProviderOutcome({ ...configuration(NOW + 101), leaseDurationMs: 100 }, outcomeInput(entry, delivery, {
+      ownerId: "reconciler-23", deadline: "2026-07-15T10:05:00.000Z", ownerProof: ownerProof(entry),
+    })), "SCHEDULER_RECONCILIATION_WALL")
+    expect(inspectSchedulerState(initial.statePath, initial.stateId).state.reconciliation).toEqual([])
+
+    recoverSchedulerTransactions({ ...configuration(NOW + 102), leaseDurationMs: 100 })
+    const currentState = inspectSchedulerState(initial.statePath, initial.stateId).state
+    const current = currentState.active[0]
+    expect(current.leaseFencingToken).toBeGreaterThan(entry.leaseFencingToken)
+    expectWall(() => recordProviderOutcome({ ...configuration(NOW + 103), leaseDurationMs: 100 }, outcomeInput(entry, delivery, {
+      ownerId: "reconciler-23", deadline: "2026-07-15T10:05:00.000Z", ownerProof: ownerProof(entry),
+    }, currentState.version)), "SCHEDULER_SCOPE_WALL")
+    const accepted = recordProviderOutcome({ ...configuration(NOW + 103), leaseDurationMs: 1_000 }, outcomeInput(current, delivery, {
+      ownerId: "reconciler-23", deadline: "2026-07-15T10:05:00.000Z", ownerProof: ownerProof(current),
+    }, currentState.version))
+    expect(accepted).toMatchObject({ code: "OUTCOME_RECONCILIATION_REQUIRED", fencedForReconciliation: true })
+  })
+
+  it("recovers a journaled ambiguous intent after pre-phase crash and expiry with an evidence-bound fence rebind", () => {
+    const initial = { ...configuration(NOW), leaseDurationMs: 100 }
+    const entry = schedule(initial, input(initial)).scheduled[0]
+    const proof = ownerProof(entry, "reconciler-23", "2026-07-15T10:05:00.000Z")
+    const schedulerBeforeOutcome = fs.readFileSync(initial.statePath, "utf8")
+    const leaseBeforeOutcome = fs.readFileSync(initial.leaseStorePath, "utf8")
+    const evidenceBeforeOutcome = path.join(root, "evidence-before-ambiguous-phase")
+    fs.cpSync(initial.evidenceLedgerDir, evidenceBeforeOutcome, { recursive: true })
+    recordProviderOutcome({ ...configuration(NOW + 1), leaseDurationMs: 100 }, outcomeInput(entry, {
+      kind: "TIMEOUT", providerResponse: null, reasonCode: "TIMEOUT_WALL", evidence: { crashBoundary: "intent-before-phase" },
+    }, { ownerId: "reconciler-23", deadline: "2026-07-15T10:05:00.000Z", ownerProof: proof }))
+
+    fs.writeFileSync(initial.statePath, schedulerBeforeOutcome)
+    fs.writeFileSync(initial.leaseStorePath, leaseBeforeOutcome)
+    fs.rmSync(initial.evidenceLedgerDir, { recursive: true })
+    fs.cpSync(evidenceBeforeOutcome, initial.evidenceLedgerDir, { recursive: true })
+    mutateSchedulerJournal(initial, (journal) => {
+      const transaction = journal.transactions.findLast((candidate: Record<string, unknown>) => candidate.operation === "OUTCOME")
+      transaction.phase = "INTENT"
+      transaction.errorCode = "SIMULATED_PRE_PHASE_PROCESS_CRASH"
+    })
+
+    const first = recoverSchedulerTransactions({ ...configuration(NOW + 101), leaseDurationMs: 100 })
+    const recoveredState = inspectSchedulerState(initial.statePath, initial.stateId).state
+    const recovered = recoveredState.reconciliation[0]
+    expect(first.recovered).toContainEqual(expect.stringMatching(/^outcome-/))
+    expect(recovered).toMatchObject({
+      lifecycleState: "REROUTE_PENDING",
+      reconciliationOwnerProofHash: schedulerHash(proof),
+      reconciliationAuthorityClaim: { leaseFencingToken: entry.leaseFencingToken },
+      reconciliationLeaseRebind: {
+        fromLeaseFencingToken: entry.leaseFencingToken,
+        toLeaseFencingToken: recovered.leaseFencingToken,
+        proofHash: schedulerHash(proof),
+        immutableOutcomeDetailHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        evidenceEventId: recovered.lastEvidenceEventId,
+      },
+    })
+    const reboundEvidence = inspectVerifiedEvidenceEvent(initial.evidenceLedgerDir, initial.evidenceLedgerId, {
+      schemaVersion: 1, artifactType: "MULTI_AGENT_EVIDENCE_EVENT_INSPECT_REQUEST",
+      eventId: recovered.lastEvidenceEventId, expectedAnchor: null,
+    })
+    expect(reboundEvidence.event.payload.immutableOutcomeDetailHash).toBe(recovered.reconciliationLeaseRebind.immutableOutcomeDetailHash)
+    expect(recovered.leaseFencingToken).toBeGreaterThan(entry.leaseFencingToken)
+    const second = recoverSchedulerTransactions({ ...configuration(NOW + 102), leaseDurationMs: 100 })
+    expect(second.stateVersion).toBe(first.stateVersion)
+    expect(inspectSchedulerState(initial.statePath, initial.stateId).state.reconciliation[0]).toEqual(recovered)
+
+    const reaped = reapAmbiguousOutcomes({ ...configuration(Date.parse("2026-07-15T10:06:00.000Z")), leaseDurationMs: 100 }, {
+      expectedVersion: recoveredState.version,
+      claims: [{
+        schedulerRunId: recovered.schedulerRunId, attempt: recovered.attempt, fullIdentityHash: recovered.fullIdentityHash,
+        schedulerFencingToken: recovered.schedulerFencingToken, leaseFencingToken: recovered.leaseFencingToken,
+        reservationFencingToken: recovered.reservationFencingToken, ownerProof: proof,
+      }],
+      maxBatch: 1,
+    })
+    expect(reaped).toMatchObject({ code: "AMBIGUOUS_REAPER_COMPLETE", capacityRecovered: 1 })
+    const journal = JSON.parse(fs.readFileSync(`${initial.statePath}.transactions.json`, "utf8"))
+    expect(journal.transactions.find((candidate: Record<string, unknown>) => candidate.transactionId === recovered.reconciliationLeaseRebind.transactionId).phase).toBe("SUPERSEDED_BY_REAP")
+  })
+
+  it("rejects a fake prefix-shaped but nonexistent rebind transaction ID", () => {
+    const fixture = journalRebindFixture()
+    mutateSchedulerState(fixture.config, (state: any) => {
+      state.reconciliation[0].reconciliationLeaseRebind.transactionId = `outcome-${fixture.recovered.fullIdentityHash}-999999`
+    })
+    expectWall(() => reapAmbiguousOutcomes({ ...configuration(Date.parse("2026-07-15T10:06:00.000Z")), leaseDurationMs: 100 }, {
+      expectedVersion: fixture.state.version, claims: [fixture.claim], maxBatch: 1,
+    }), "SCHEDULER_RECONCILIATION_WALL")
+  })
+
+  it("rejects a different held OUTCOME transaction even when its ID has the expected identity prefix", () => {
+    const fixture = journalRebindFixture()
+    let otherTransactionId = ""
+    mutateSchedulerJournal(fixture.config, (journal) => {
+      const original = journal.transactions.find((candidate: Record<string, unknown>) => candidate.transactionId === fixture.recovered.reconciliationLeaseRebind.transactionId)
+      const fence = journal.nextFence++
+      otherTransactionId = `outcome-${fixture.recovered.fullIdentityHash}-${fence}`
+      const other = { ...structuredClone(original), transactionId: otherTransactionId, journalFencingToken: fence,
+        detail: { ...structuredClone(original.detail), entry: { ...structuredClone(original.detail.entry), workOrderId: "WO-MAO-OTHER" } } }
+      resealOutcomeTransaction(other)
+      journal.transactions.push(other)
+      journal.version += 1
+    })
+    mutateSchedulerState(fixture.config, (state: any) => { state.reconciliation[0].reconciliationLeaseRebind.transactionId = otherTransactionId })
+    expectWall(() => reapAmbiguousOutcomes({ ...configuration(Date.parse("2026-07-15T10:06:00.000Z")), leaseDurationMs: 100 }, {
+      expectedVersion: fixture.state.version, claims: [fixture.claim], maxBatch: 1,
+    }), "SCHEDULER_RECONCILIATION_WALL")
+  })
+
+  it.each(["REAP", "SCHEDULE"])("rejects a %s operation hidden behind an OUTCOME-shaped rebind ID", (operation) => {
+    const fixture = journalRebindFixture()
+    mutateSchedulerJournal(fixture.config, (journal) => {
+      const transaction = journal.transactions.find((candidate: Record<string, unknown>) => candidate.transactionId === fixture.recovered.reconciliationLeaseRebind.transactionId)
+      transaction.operation = operation
+    })
+    expectWall(() => reapAmbiguousOutcomes({ ...configuration(Date.parse("2026-07-15T10:06:00.000Z")), leaseDurationMs: 100 }, {
+      expectedVersion: fixture.state.version, claims: [fixture.claim], maxBatch: 1,
+    }), "SCHEDULER_RECONCILIATION_WALL")
+  })
+
+  it.each(["CLAIM", "PROOF", "PROOF_HASH", "SCHEDULER_FENCE"])("rejects altered held-transaction %s binding", (mutation) => {
+    const fixture = journalRebindFixture()
+    if (mutation === "PROOF_HASH") {
+      mutateSchedulerState(fixture.config, (state: any) => { state.reconciliation[0].reconciliationLeaseRebind.proofHash = "f".repeat(64) })
+    } else {
+      mutateSchedulerJournal(fixture.config, (journal) => {
+        const transaction = journal.transactions.find((candidate: Record<string, unknown>) => candidate.transactionId === fixture.recovered.reconciliationLeaseRebind.transactionId)
+        if (mutation === "CLAIM") transaction.detail.entry.leaseFencingToken += 10
+        if (mutation === "PROOF") transaction.detail.reconciliation.ownerProof.signature = `${transaction.detail.reconciliation.ownerProof.signature}A`
+        if (mutation === "SCHEDULER_FENCE") transaction.schedulerFencingToken += 1
+        resealOutcomeTransaction(transaction)
+      })
+    }
+    expectWall(() => reapAmbiguousOutcomes({ ...configuration(Date.parse("2026-07-15T10:06:00.000Z")), leaseDurationMs: 100 }, {
+      expectedVersion: fixture.state.version, claims: [fixture.claim], maxBatch: 1,
+    }), "SCHEDULER_RECONCILIATION_WALL")
+  })
+
+  it.each(["responseHash", "effectiveOutcome", "providerState", "reasonCode", "configurationHash"])("rejects resealed immutable OUTCOME detail mutation of %s", (field) => {
+    const fixture = journalRebindFixture()
+    mutateSchedulerJournal(fixture.config, (journal) => {
+      const transaction = journal.transactions.find((candidate: Record<string, unknown>) => candidate.transactionId === fixture.recovered.reconciliationLeaseRebind.transactionId)
+      if (field === "responseHash") transaction.detail.responseHash = "f".repeat(64)
+      if (field === "effectiveOutcome") transaction.detail.effectiveOutcome = "SUCCEEDED"
+      if (field === "providerState") transaction.detail.providerState = "SUCCEEDED"
+      if (field === "reasonCode") transaction.detail.reasonCode = "ALTERED_REASON"
+      if (field === "configurationHash") transaction.detail.entry.configurationHash = "f".repeat(64)
+      resealOutcomeTransaction(transaction)
+    })
+    expectWall(() => reapAmbiguousOutcomes({ ...configuration(Date.parse("2026-07-15T10:06:00.000Z")), leaseDurationMs: 100 }, {
+      expectedVersion: fixture.state.version, claims: [fixture.claim], maxBatch: 1,
+    }), "SCHEDULER_RECONCILIATION_WALL")
+  })
+
+  it.each(["TRANSACTION_ID", "JOURNAL_FENCE"])("rejects duplicate journal %s ambiguity", (duplicate) => {
+    const fixture = journalRebindFixture()
+    mutateSchedulerJournal(fixture.config, (journal) => {
+      const original = journal.transactions[0]
+      const clone = structuredClone(original)
+      if (duplicate === "TRANSACTION_ID") clone.journalFencingToken = journal.nextFence++
+      else clone.transactionId = `${clone.transactionId}-duplicate`
+      journal.transactions.push(clone)
+      journal.version += 1
+    })
+    expectWall(() => reapAmbiguousOutcomes({ ...configuration(Date.parse("2026-07-15T10:06:00.000Z")), leaseDurationMs: 100 }, {
+      expectedVersion: fixture.state.version, claims: [fixture.claim], maxBatch: 1,
+    }), "SCHEDULER_TRANSACTION_JOURNAL_WALL")
+  })
+
+  it.each(["COMMITTED", "COMPENSATED", "SUPERSEDED_BY_REAP"])("rejects stale %s rebind transaction state", (phase) => {
+    const fixture = journalRebindFixture()
+    mutateSchedulerJournal(fixture.config, (journal) => {
+      const transaction = journal.transactions.find((candidate: Record<string, unknown>) => candidate.transactionId === fixture.recovered.reconciliationLeaseRebind.transactionId)
+      transaction.phase = phase
+    })
+    expectWall(() => reapAmbiguousOutcomes({ ...configuration(Date.parse("2026-07-15T10:06:00.000Z")), leaseDurationMs: 100 }, {
+      expectedVersion: fixture.state.version, claims: [fixture.claim], maxBatch: 1,
+    }), "SCHEDULER_RECONCILIATION_WALL")
   })
 
   it("recovery detects a missing reservation store and safely compensates the scheduler claim", () => {
@@ -716,6 +973,73 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     const reaped = reapAmbiguousOutcomes(recoveringReapConfig, { expectedVersion: version, claims, maxBatch: 2 })
     expect(reaped).toMatchObject({ capacityRecovered: 2 })
     expect(inspectSchedulerState(config.statePath, config.stateId).state.reconciliation).toEqual([])
+  })
+
+  it("replays an expired-lease REAP_BATCH with the durable new fence/evidence projection and idempotent second recovery", () => {
+    const config = { ...configuration(NOW), leaseDurationMs: 100 }
+    const entry = schedule(config, input(config)).scheduled[0]
+    const deadline = "2026-07-15T10:00:00.050Z"
+    const proof = ownerProof(entry, "reconciler-23", deadline)
+    recordProviderOutcome({ ...configuration(NOW + 1), leaseDurationMs: 100 }, outcomeInput(entry, {
+      kind: "TIMEOUT", providerResponse: null, reasonCode: "TIMEOUT_WALL", evidence: { crashBoundary: "reap-stores-before-state" },
+    }, { ownerId: "reconciler-23", deadline, ownerProof: proof }))
+    const schedulerBeforeReap = fs.readFileSync(config.statePath, "utf8")
+    const claimValue = {
+      schedulerRunId: entry.schedulerRunId, attempt: entry.attempt, fullIdentityHash: entry.fullIdentityHash,
+      schedulerFencingToken: entry.schedulerFencingToken, leaseFencingToken: entry.leaseFencingToken,
+      reservationFencingToken: entry.reservationFencingToken, ownerProof: proof,
+    }
+    reapAmbiguousOutcomes({ ...configuration(NOW + 101), leaseDurationMs: 100 }, { expectedVersion: 9, claims: [claimValue], maxBatch: 1 })
+    const durableLane = inspectLaneLeaseStore(config.leaseStorePath, config.leaseStoreId).lanes[0]
+    expect(durableLane.fencingToken).toBeGreaterThan(entry.leaseFencingToken)
+    fs.writeFileSync(config.statePath, schedulerBeforeReap)
+    mutateSchedulerJournal(config, (journal) => {
+      const transaction = journal.transactions.findLast((candidate: Record<string, unknown>) => candidate.operation === "REAP_BATCH")
+      transaction.phase = "STORES_APPLIED"
+      transaction.errorCode = "SIMULATED_PROCESS_CRASH"
+    })
+
+    const first = recoverSchedulerTransactions({ ...configuration(NOW + 102), leaseDurationMs: 100 })
+    const state = inspectSchedulerState(config.statePath, config.stateId).state
+    expect(state.reconciliation).toEqual([])
+    expect(state.released).toMatchObject([{ status: "RELEASED", outcome: "AMBIGUOUS_REAPED", lifecycleState: "FAILED_TERMINAL" }])
+    expect(state.released[0].outcome).not.toBe("STORE_DIVERGENCE_COMPENSATED")
+    expect(state.released[0].leaseFencingToken).toBe(durableLane.fencingToken)
+    const evidence = inspectVerifiedEvidenceEvent(config.evidenceLedgerDir, config.evidenceLedgerId, {
+      schemaVersion: 1, artifactType: "MULTI_AGENT_EVIDENCE_EVENT_INSPECT_REQUEST",
+      eventId: state.released[0].lastEvidenceEventId, expectedAnchor: null,
+    })
+    expect(evidence).toMatchObject({ ok: true, valid: true, event: { leaseAttribution: {
+      fencingToken: durableLane.fencingToken,
+      checkpointSequence: durableLane.checkpointSequence,
+    } } })
+    const second = recoverSchedulerTransactions({ ...configuration(NOW + 103), leaseDurationMs: 100 })
+    expect(second.stateVersion).toBe(first.stateVersion)
+    expect(inspectSchedulerState(config.statePath, config.stateId).state.released[0]).toEqual(state.released[0])
+  })
+
+  it("validates the original proof then reclaims and reaps an expired reconciliation lease after deadline", () => {
+    const initial = { ...configuration(NOW), leaseDurationMs: 100 }
+    const entry = schedule(initial, input(initial)).scheduled[0]
+    const deadline = "2026-07-15T10:00:00.050Z"
+    const proof = ownerProof(entry, "reconciler-23", deadline)
+    recordProviderOutcome({ ...configuration(NOW + 1), leaseDurationMs: 100 }, outcomeInput(entry, {
+      kind: "TIMEOUT", providerResponse: null, reasonCode: "TIMEOUT_WALL", evidence: {},
+    }, { ownerId: "reconciler-23", deadline, ownerProof: proof }))
+    const claimValue = {
+      schedulerRunId: entry.schedulerRunId, attempt: entry.attempt, fullIdentityHash: entry.fullIdentityHash,
+      schedulerFencingToken: entry.schedulerFencingToken, leaseFencingToken: entry.leaseFencingToken,
+      reservationFencingToken: entry.reservationFencingToken, ownerProof: proof,
+    }
+    const futureFenceProof = ownerProof({ ...entry, leaseFencingToken: entry.leaseFencingToken + 1 }, "reconciler-23", deadline)
+    expectWall(() => reapAmbiguousOutcomes({ ...configuration(NOW + 101), leaseDurationMs: 100 }, {
+      expectedVersion: 9, claims: [{ ...claimValue, ownerProof: futureFenceProof }], maxBatch: 1,
+    }), "SCHEDULER_SCOPE_WALL")
+    const reaped = reapAmbiguousOutcomes({ ...configuration(NOW + 101), leaseDurationMs: 100 }, { expectedVersion: 9, claims: [claimValue], maxBatch: 1 })
+    expect(reaped).toMatchObject({ code: "AMBIGUOUS_REAPER_COMPLETE", capacityRecovered: 1 })
+    const lane = inspectLaneLeaseStore(initial.leaseStorePath, initial.leaseStoreId).lanes[0]
+    expect(lane).toMatchObject({ status: "RELEASED", lifecycleState: "FAILED_TERMINAL" })
+    expect(lane.fencingToken).toBeGreaterThan(entry.leaseFencingToken)
   })
 
   it("rejects a reconciliation proof that expires before its deadline", () => {

@@ -64,7 +64,7 @@ export const OWNER_TOUCH_COUNTERS = Object.freeze([
 const TYPE_FIELDS = Object.freeze({
   AUTHORITY: ["grantId", "authorityDecisionId", "status", "contentHash"],
   WORKER: ["workerId", "role", "action", "reasonCode"],
-  PROVIDER: ["providerId", "adapterId", "dispatchId", "state", "reasonCode", "responseContentHash"],
+  PROVIDER: ["providerId", "adapterId", "dispatchId", "state", "reasonCode", "responseContentHash", "immutableOutcomeDetailHash"],
   RESERVATION: ["reservationSetId", "action", "ledgerVersion", "fencingToken", "reasonCodes", "resultContentHash"],
   TRANSITION: ["from", "to", "reasonCode", "failureClass", "authorityGap", "transitionContentHash"],
   TEST: ["suiteId", "status", "passed", "failed", "skipped", "durationMs", "resultContentHash"],
@@ -233,7 +233,9 @@ function normalizeAuthorityGap(value, field) {
 function nullableId(value, field) { return value === null ? null : identifier(value, field) }
 function normalizePayload(type, input) {
   assertSanitized(input)
-  exact(input, TYPE_FIELDS[type], "payload")
+  const payloadFields = type === "PROVIDER" && !Object.hasOwn(input, "immutableOutcomeDetailHash")
+    ? TYPE_FIELDS[type].filter((field) => field !== "immutableOutcomeDetailHash") : TYPE_FIELDS[type]
+  exact(input, payloadFields, "payload")
   const p = { ...input }
   if (type === "AUTHORITY") {
     p.grantId = identifier(p.grantId, "payload.grantId"); p.authorityDecisionId = identifier(p.authorityDecisionId, "payload.authorityDecisionId")
@@ -245,6 +247,7 @@ function normalizePayload(type, input) {
     for (const key of ["providerId", "adapterId", "dispatchId"]) p[key] = identifier(p[key], `payload.${key}`)
     p.state = enumValue(p.state, ["ACCEPTED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"], "payload.state")
     p.reasonCode = nullableId(p.reasonCode, "payload.reasonCode"); p.responseContentHash = hash(p.responseContentHash, "payload.responseContentHash")
+    if (p.immutableOutcomeDetailHash !== undefined) p.immutableOutcomeDetailHash = hash(p.immutableOutcomeDetailHash, "payload.immutableOutcomeDetailHash")
     const failed = ["FAILED", "CANCELLED", "UNKNOWN"].includes(p.state)
     if (failed !== (p.reasonCode !== null)) wall("EVIDENCE_LEDGER_SEMANTIC_WALL", "payload.reasonCode")
   } else if (type === "RESERVATION") {
