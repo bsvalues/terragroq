@@ -199,6 +199,12 @@ function assertUniqueLanes(lanes) {
 function assertPortfolioRoleIndependence(lanes) {
   const builders = new Set(lanes.map(({ roleAssignments }) => roleAssignments.builder))
   const reviewers = new Set(lanes.map(({ roleAssignments }) => roleAssignments.reviewer))
+  if (builders.size !== lanes.length) {
+    wall("TEAM_TOPOLOGY_ROLE_WALL", "lanes", "CROSS_LANE_BUILDER_REUSE")
+  }
+  if (reviewers.size !== lanes.length) {
+    wall("TEAM_TOPOLOGY_ROLE_WALL", "lanes", "CROSS_LANE_REVIEWER_REUSE")
+  }
   const collision = [...builders].find((workerId) => reviewers.has(workerId))
   if (collision) wall("TEAM_TOPOLOGY_ROLE_WALL", "lanes", "CROSS_LANE_BUILDER_REVIEWER_COLLISION")
 }

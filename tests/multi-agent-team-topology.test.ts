@@ -371,6 +371,19 @@ describe("multi-agent team topology", () => {
     )
   })
 
+  it.each([
+    ["builder", "CROSS_LANE_BUILDER_REUSE"],
+    ["reviewer", "CROSS_LANE_REVIEWER_REUSE"],
+  ] as const)("rejects cross-lane %s reuse", (role, reason) => {
+    const a = lane(envelope("WO-MAO-024", "LANE-A"))
+    const b = lane(envelope("WO-MAO-025", "LANE-B"))
+    b.roleAssignments[role] = a.roleAssignments[role]
+    b.envelope.teamRoles[role] = a.roleAssignments[role]
+    if (role === "builder") b.roleAssignments.remediator = a.roleAssignments.builder
+
+    expectWall(input([a, b]), "TEAM_TOPOLOGY_ROLE_WALL", "lanes", reason)
+  })
+
   it("rejects reservation collisions across the ready fan-out wave", () => {
     const a = lane(envelope("WO-MAO-024", "LANE-MAO-A"))
     const b = lane(envelope("WO-MAO-025", "LANE-MAO-B"))
