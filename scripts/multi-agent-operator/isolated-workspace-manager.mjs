@@ -465,8 +465,13 @@ function assertLiveRoots(workspaceRoot, lane) {
     cwd: lane.repositoryRoot,
   })
   if (refCheck.status !== 0) wall("ISOLATED_WORKSPACE_FORMAT_WALL", "branch", "GIT_BRANCH_REQUIRED")
-  const base = runGit(lane.repositoryRoot, ["rev-parse", `${lane.baseRef}^{commit}`]).stdout.trim()
-  if (base !== lane.baseCommitSha) wall("ISOLATED_WORKSPACE_FOREIGN_BASE_WALL", "baseCommitSha")
+  const baseCommitExists = runGit(lane.repositoryRoot, ["cat-file", "-e", `${lane.baseCommitSha}^{commit}`], {
+    allowFailure: true,
+  }).status === 0
+  const baseDescendsFromCheckpoint = baseCommitExists && runGit(lane.repositoryRoot, [
+    "merge-base", "--is-ancestor", lane.baseCommitSha, lane.baseRef,
+  ], { allowFailure: true }).status === 0
+  if (!baseDescendsFromCheckpoint) wall("ISOLATED_WORKSPACE_FOREIGN_BASE_WALL", "baseCommitSha")
   const parent = path.dirname(lane.workspacePath)
   if (!fs.existsSync(parent) || normalizedPath(fs.realpathSync(parent)) !== normalizedPath(workspaceRoot)) {
     wall("ISOLATED_WORKSPACE_PATH_WALL", "workspacePath", "DIRECT_CANONICAL_CHILD_REQUIRED")

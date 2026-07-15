@@ -18,7 +18,8 @@ a later lane cannot strand an earlier mutation behind a failed multi-lane reques
 
 The manager derives live Git state itself. It creates an absent isolated branch/worktree, reuses exact
 clean owned state, reattaches a manager-owned branch when its worktree is absent, and cleans only a
-terminal clean branch proven merged into its base. Shared or nested paths/branches, overlapping
+terminal clean branch proven merged into a base that remains a descendant of the lane's recorded
+base checkpoint. Shared or nested paths/branches, overlapping
 reservations, foreign identity, path escape, symlinks, tracked/untracked/ignored state, unbound ownership,
 unsafe cleanup, duplicate ownership, and authority-minting input fail closed.
 

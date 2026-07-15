@@ -462,6 +462,16 @@ describe("multi-agent isolated workspace manager", () => {
     expect(executeIsolatedWorkspaceLifecycle(value, trustedContext(desired, advancedHead))).toMatchObject({
       results: [{ action: "REUSE", changed: false }],
     })
+    execFileSync("git", ["merge", "--ff-only", "codex/wo-mao-025"], { cwd: repositoryRoot })
+    const terminal = structuredClone(value)
+    terminal.lanes[0].lifecycleState = "COMPLETE"
+    expect(executeIsolatedWorkspaceLifecycle(
+      terminal,
+      trustedContext(terminal.lanes[0], advancedHead),
+    )).toMatchObject({
+      results: [{ action: "CLEANUP", changed: true }],
+    })
+    expect(fs.existsSync(workspacePath)).toBe(false)
   })
 
   it("binds trusted verification to lifecycle intent and reservation scope", () => {
