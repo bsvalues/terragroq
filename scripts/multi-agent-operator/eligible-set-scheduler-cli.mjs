@@ -22,6 +22,8 @@ try {
   try {
     const raw = JSON.parse(fs.readFileSync(process.argv[3], "utf8"))
     input = JSON.parse(fs.readFileSync(process.argv[4], "utf8"))
+    const fields = ["statePath", "stateId", "trustBundleReference", "reservationLedgerPath", "reservationLedgerId", "leaseStorePath", "leaseStoreId", "evidenceLedgerDir", "evidenceLedgerId", "leaseTokenKey", "leaseDurationMs", "reconciliationBatchCeiling", "lockTimeoutMs"]
+    if (!raw || typeof raw !== "object" || Array.isArray(raw) || Object.keys(raw).some((field) => !fields.includes(field)) || fields.some((field) => !Object.hasOwn(raw, field))) wall("SCHEDULER_INPUT_WALL", "configuration", "EXACT_PRODUCTION_CONFIGURATION_REQUIRED")
     configuration = {
       statePath: raw.statePath,
       stateId: raw.stateId,
@@ -35,10 +37,13 @@ try {
       leaseTokenKey: raw.leaseTokenKey,
       leaseDurationMs: raw.leaseDurationMs,
       reconciliationBatchCeiling: raw.reconciliationBatchCeiling,
-      now: () => raw.now,
+      now: Date.now,
       lockTimeoutMs: raw.lockTimeoutMs,
     }
-  } catch { wall("SCHEDULER_INPUT_WALL", "file", "READABLE_JSON_REQUIRED") }
+  } catch (error) {
+    if (error instanceof EligibleSetSchedulerError) throw error
+    wall("SCHEDULER_INPUT_WALL", "file", "READABLE_JSON_REQUIRED")
+  }
   if (process.argv[2] === "schedule") output(scheduleEligibleSet(configuration, input))
   else if (process.argv[2] === "outcome") output(recordProviderOutcome(configuration, input))
   else if (process.argv[2] === "reap") output(reapAmbiguousOutcomes(configuration, input))

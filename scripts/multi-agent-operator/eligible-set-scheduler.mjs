@@ -1,6 +1,5 @@
 import crypto from "node:crypto"
 import fs from "node:fs"
-import os from "node:os"
 import path from "node:path"
 
 import { normalizeProviderCapability } from "./provider-contract.mjs"
@@ -16,11 +15,12 @@ import {
   inspectLaneLeaseStore,
   reclaimLaneLease,
   releaseLaneLease,
+  settleExpiredTerminalLaneLease,
 } from "./lane-lease-checkpoint.mjs"
 import { appendEvidenceEvent, inspectVerifiedEvidenceEvent } from "./evidence-ledger.mjs"
 import { loadCanonicalSchedulerTrustRecord } from "./scheduler-trust-registry.mjs"
+import { acquireSchedulerLock, SchedulerLockLeaseError } from "./scheduler-lock-lease.mjs"
 
-const WAIT = new Int32Array(new SharedArrayBuffer(4))
 const HASH = /^[a-f0-9]{64}$/
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,191}$/
 const RISKS = new Set(["R0", "R1", "R2", "R3"])
@@ -73,7 +73,7 @@ const SCHEDULER_CONFIGURATION_FIELDS = new Set([
   "leaseStorePath", "leaseStoreId", "evidenceLedgerDir", "evidenceLedgerId", "leaseTokenKey",
   "leaseDurationMs", "reconciliationBatchCeiling", "now", "lockTimeoutMs",
 ])
-const SCHEDULER_CONFIGURATION_OPTIONAL_FIELDS = new Set(["failureInjector"])
+const SCHEDULER_CONFIGURATION_OPTIONAL_FIELDS = new Set(["failureInjector", "lockLeaseDurationMs", "lockHeartbeatIntervalMs"])
 const OWNER_COUNTERS = Object.freeze({
   ownerOperationTouchCount: 0,
   ownerCredentialTouchCount: 0,
@@ -111,6 +111,8 @@ function validateSchedulerConfiguration(value) {
   const missing = [...SCHEDULER_CONFIGURATION_FIELDS].filter((key) => !Object.hasOwn(value, key)).sort()[0]
   if (missing) wall("SCHEDULER_MISSING_FIELD_WALL", `configuration.${missing}`)
   if (Object.hasOwn(value, "failureInjector") && typeof value.failureInjector !== "function") wall("SCHEDULER_TYPE_WALL", "configuration.failureInjector", "FUNCTION_REQUIRED")
+  if (Object.hasOwn(value, "lockLeaseDurationMs")) integer(value.lockLeaseDurationMs, "configuration.lockLeaseDurationMs", 30)
+  if (Object.hasOwn(value, "lockHeartbeatIntervalMs")) integer(value.lockHeartbeatIntervalMs, "configuration.lockHeartbeatIntervalMs", 5)
 }
 function injectFailure(configuration, point) { if (configuration.failureInjector) configuration.failureInjector(point) }
 function identifier(value, field) {
@@ -300,6 +302,7 @@ function loadPinnedTrustBundle(reference) {
 }
 
 export function schedulerConfigurationHash(configuration, budgets) {
+  const lockLease = lockLeaseOptions(configuration)
   return schedulerHash({
     stateId: configuration.stateId,
     statePath: configuration.statePath,
@@ -313,6 +316,8 @@ export function schedulerConfigurationHash(configuration, budgets) {
     reconciliationBatchCeiling: configuration.reconciliationBatchCeiling,
     leaseDurationMs: configuration.leaseDurationMs,
     lockTimeoutMs: configuration.lockTimeoutMs,
+    lockLeaseDurationMs: lockLease.leaseDurationMs,
+    lockHeartbeatIntervalMs: lockLease.heartbeatIntervalMs,
     budgets: validateBudgets(budgets),
   })
 }
@@ -458,20 +463,19 @@ function emptyState(stateId) {
   return state
 }
 
-function acquireLock(statePath, timeoutMs = 5000) {
-  const lock = `${statePath}.lock`
-  const started = Date.now()
-  fs.mkdirSync(path.dirname(statePath), { recursive: true, mode: 0o700 })
-  for (;;) {
-    try {
-      fs.mkdirSync(lock, { mode: 0o700 })
-      fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify({ pid: process.pid, hostname: os.hostname() }), { flag: "wx", mode: 0o600 })
-      return () => fs.rmSync(lock, { recursive: true, force: true })
-    } catch (error) {
-      if (error?.code !== "EEXIST") wall("SCHEDULER_LOCK_WALL", "state")
-      if (Date.now() - started >= timeoutMs) wall("SCHEDULER_LOCK_TIMEOUT", "state")
-      Atomics.wait(WAIT, 0, 0, 10)
-    }
+function lockLeaseOptions(configuration) {
+  const leaseDurationMs = configuration.lockLeaseDurationMs ?? Math.max(30_000, configuration.lockTimeoutMs * 8)
+  return {
+    timeoutMs: configuration.lockTimeoutMs,
+    leaseDurationMs,
+    heartbeatIntervalMs: configuration.lockHeartbeatIntervalMs ?? Math.max(10, Math.floor(leaseDurationMs / 3)),
+  }
+}
+
+function acquireLock(configuration) {
+  try { return acquireSchedulerLock(configuration.statePath, lockLeaseOptions(configuration)) } catch (error) {
+    if (error instanceof SchedulerLockLeaseError) wall(error.code, "state", error.detail)
+    throw error
   }
 }
 
@@ -777,27 +781,111 @@ function compensateDivergentEntry(configuration, state, entry, collection, reaso
   const durableReservationOwned = assessment.reservation?.workerId === entry.workerId
     && assessment.reservation?.workOrderId === entry.workOrderId && assessment.reservation?.laneId === entry.laneId
     && schedulerHash(assessment.reservation?.reservationSet) === schedulerHash(entry.reservationSet)
-  if (assessment.lane?.status === "ACTIVE" && durableLaneOwned
-    && Date.parse(assessment.lane.expiresAt) <= now) {
-    expireLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
-      schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_EXPIRE_REQUEST", workOrderId: entry.workOrderId,
-      laneId: entry.laneId, workerId: entry.workerId,
-      idempotencyKey: scopedOperationKey("scheduler-divergence-expire", entry, entry.leaseFencingToken),
-      expectedFencingToken: assessment.lane.fencingToken,
-    }, phaseOptions(configuration))
-  } else if (assessment.lane?.status === "ACTIVE" && durableLaneOwned) {
-    releaseLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
-      schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_RELEASE_REQUEST", workOrderId: entry.workOrderId,
-      laneId: entry.laneId, workerId: entry.workerId,
-      idempotencyKey: scopedOperationKey("scheduler-divergence-release", entry, assessment.lane.fencingToken),
-      holderToken: holderToken(configuration, entry), fencingToken: assessment.lane.fencingToken,
-    }, phaseOptions(configuration))
+  if (durableLaneOwned) {
+    let lane = assessment.lane
+    if (lane.status === "ACTIVE" && Date.parse(lane.expiresAt) <= now) {
+      injectFailure(configuration, "COMPENSATE:LEASE_EXPIRE")
+      const expired = expireLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
+        schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_EXPIRE_REQUEST", workOrderId: entry.workOrderId,
+        laneId: entry.laneId, workerId: entry.workerId,
+        idempotencyKey: scopedOperationKey("scheduler-divergence-expire", entry, lane.fencingToken),
+        expectedFencingToken: lane.fencingToken,
+      }, phaseOptions(configuration))
+      if (!expired.ok || expired.leaseStatus !== "EXPIRED") wall("SCHEDULER_COMPENSATION_WALL", "leaseExpire", expired.status)
+      lane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
+        .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
+    }
+    if (lane?.status === "EXPIRED") {
+      if (isTerminalLifecycleState(lane.lifecycleState)) {
+        const terminalEvidence = lane.checkpointEvidence
+        if (!plain(terminalEvidence) || terminalEvidence.fullIdentityHash !== entry.fullIdentityHash
+          || terminalEvidence.configurationHash !== entry.configurationHash
+          || terminalEvidence.reservationContentHash !== entry.reservationContentHash
+          || terminalEvidence.reservationFence !== entry.reservationFencingToken
+          || terminalEvidence.leaseFence !== lane.fencingToken) {
+          wall("SCHEDULER_COMPENSATION_WALL", "leaseSettleTerminal", "EXACT_TERMINAL_CHECKPOINT_IDENTITY_REQUIRED")
+        }
+        injectFailure(configuration, "COMPENSATE:LEASE_SETTLE_TERMINAL")
+        const settled = settleExpiredTerminalLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
+          schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_SETTLE_TERMINAL_REQUEST",
+          workOrderId: entry.workOrderId, laneId: entry.laneId, workerId: entry.workerId,
+          idempotencyKey: scopedOperationKey("scheduler-divergence-settle-terminal", entry, lane.fencingToken),
+          holderToken: holderToken(configuration, entry), expectedFencingToken: lane.fencingToken,
+          expectedCheckpointSequence: lane.checkpointSequence, expectedLifecycleState: lane.lifecycleState,
+          expectedCheckpointEvidence: lane.checkpointEvidence,
+        }, phaseOptions(configuration))
+        if (!settled.ok || settled.leaseStatus !== "RELEASED" || !isTerminalLifecycleState(settled.lifecycleState)) {
+          wall("SCHEDULER_COMPENSATION_WALL", "leaseSettleTerminal", settled.status)
+        }
+        lane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
+          .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
+      } else {
+        injectFailure(configuration, "COMPENSATE:LEASE_RECLAIM")
+        const reclaimed = reclaimLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
+          schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_RECLAIM_REQUEST",
+          workOrderId: entry.workOrderId, laneId: entry.laneId, workerId: entry.workerId,
+          idempotencyKey: scopedOperationKey("scheduler-divergence-reclaim", entry, lane.fencingToken),
+          holderToken: holderToken(configuration, entry), leaseDurationMs: configuration.leaseDurationMs,
+          expectedFencingToken: lane.fencingToken,
+          checkpointEvidence: { schedulerRunId: entry.schedulerRunId, attempt: entry.attempt, fullIdentityHash: entry.fullIdentityHash,
+            configurationHash: entry.configurationHash, reservationContentHash: entry.reservationContentHash,
+            reservationFence: entry.reservationFencingToken, reclaimedFromLeaseFence: lane.fencingToken,
+            recoveryReason: "STORE_DIVERGENCE_COMPENSATION" },
+        }, phaseOptions(configuration))
+        if (!reclaimed.ok || reclaimed.leaseStatus !== "ACTIVE" || reclaimed.fencingToken <= lane.fencingToken) {
+          wall("SCHEDULER_COMPENSATION_WALL", "leaseReclaim", reclaimed.status)
+        }
+        entry.leaseFencingToken = reclaimed.fencingToken
+        lane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
+          .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
+      }
+    }
+    if (lane?.status === "ACTIVE" && !isTerminalLifecycleState(lane.lifecycleState)) {
+      injectFailure(configuration, "COMPENSATE:LEASE_TERMINALIZE")
+      const terminal = checkpointLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
+        schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_CHECKPOINT_REQUEST",
+        workOrderId: entry.workOrderId, laneId: entry.laneId, workerId: entry.workerId,
+        idempotencyKey: scopedOperationKey("scheduler-divergence-terminal", entry, lane.fencingToken),
+        holderToken: holderToken(configuration, entry), fencingToken: lane.fencingToken,
+        expectedCheckpointSequence: lane.checkpointSequence,
+        transition: { from: lane.lifecycleState, to: "FAILED_TERMINAL", reasonCode,
+          failureClass: "PROVIDER_SERVER", authorityGap: { present: false, condition: null, conditionRef: null } },
+        evidence: { schedulerRunId: entry.schedulerRunId, attempt: entry.attempt, fullIdentityHash: entry.fullIdentityHash,
+          configurationHash: entry.configurationHash, reservationContentHash: entry.reservationContentHash,
+          reservationFence: entry.reservationFencingToken, leaseFence: lane.fencingToken,
+          recoveryReason: "STORE_DIVERGENCE_COMPENSATION" },
+      }, phaseOptions(configuration))
+      if (!terminal.ok || !isTerminalLifecycleState(terminal.lifecycleState)) wall("SCHEDULER_COMPENSATION_WALL", "leaseTerminalize", terminal.status)
+      lane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
+        .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
+    }
+    if (lane?.status === "ACTIVE" && isTerminalLifecycleState(lane.lifecycleState)) {
+      injectFailure(configuration, "COMPENSATE:LEASE_RELEASE")
+      const released = releaseLaneLease(configuration.leaseStorePath, configuration.leaseStoreId, {
+        schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_RELEASE_REQUEST", workOrderId: entry.workOrderId,
+        laneId: entry.laneId, workerId: entry.workerId,
+        idempotencyKey: scopedOperationKey("scheduler-divergence-release", entry, lane.fencingToken),
+        holderToken: holderToken(configuration, entry), fencingToken: lane.fencingToken,
+      }, phaseOptions(configuration))
+      if (!released.ok || released.leaseStatus !== "RELEASED" || !isTerminalLifecycleState(released.lifecycleState)) {
+        wall("SCHEDULER_COMPENSATION_WALL", "leaseRelease", released.status)
+      }
+      lane = inspectLaneLeaseStore(configuration.leaseStorePath, configuration.leaseStoreId).lanes
+        .find((candidate) => candidate.workOrderId === entry.workOrderId && candidate.laneId === entry.laneId)
+    }
+    if (lane?.status !== "RELEASED" || !isTerminalLifecycleState(lane.lifecycleState)) {
+      wall("SCHEDULER_COMPENSATION_WALL", "leaseRelease", "DURABLE_TERMINAL_RELEASE_REQUIRED")
+    }
+    entry.leaseFencingToken = lane.fencingToken
+    entry.lifecycleState = lane.lifecycleState
   }
   if (durableReservationOwned) {
-    releaseReservations(configuration.reservationLedgerPath, configuration.reservationLedgerId, {
+    injectFailure(configuration, "COMPENSATE:RESERVATION_RELEASE")
+    const released = releaseReservations(configuration.reservationLedgerPath, configuration.reservationLedgerId, {
       schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_RELEASE_REQUEST", reservationSetId: entry.reservationSet.reservationSetId,
       holderToken: holderToken(configuration, entry), fencingToken: assessment.reservation.fencingToken,
     }, phaseOptions(configuration))
+    if (!released.released) wall("SCHEDULER_COMPENSATION_WALL", "reservationRelease", released.status)
   }
   const index = collection.findIndex((candidate) => candidate.fullIdentityHash === entry.fullIdentityHash)
   if (index >= 0) collection.splice(index, 1)
@@ -1250,7 +1338,7 @@ export function scheduleEligibleSet(configuration, input) {
   })
   const ids = works.map((work) => work.fullIdentityHash)
   if (new Set(ids).size !== ids.length) wall("SCHEDULER_REPLAY_WALL", "dispatchClaims", "DUPLICATE_FULL_IDENTITY")
-  const unlock = acquireLock(configuration.statePath, configuration.lockTimeoutMs)
+  const unlock = acquireLock(configuration)
   try {
     const state = loadState(configuration.statePath, configuration.stateId)
     if (state.version !== input.expectedVersion) wall("SCHEDULER_CAS_WALL", "expectedVersion", `${state.version}`)
@@ -1341,7 +1429,7 @@ export function recordProviderOutcome(configuration, input) {
   if (!HASH.test(input.claim.fullIdentityHash)) wall("SCHEDULER_OUTCOME_WALL", "outcome.claim.fullIdentityHash")
   const now = configuration.now(); integer(now, "now")
   const bundle = loadPinnedTrustBundle(configuration.trustBundleReference)
-  const unlock = acquireLock(configuration.statePath, configuration.lockTimeoutMs)
+  const unlock = acquireLock(configuration)
   try {
     const state = loadState(configuration.statePath, configuration.stateId)
     if (state.version !== input.expectedVersion) wall("SCHEDULER_CAS_WALL", "expectedVersion", `${state.version}`)
@@ -1462,7 +1550,7 @@ export function reapAmbiguousOutcomes(configuration, input) {
   if (!Array.isArray(input.claims) || input.claims.length === 0 || input.claims.length > input.maxBatch) wall("SCHEDULER_RECONCILIATION_WALL", "reaper.claims", "BOUNDED_NONEMPTY_BATCH_REQUIRED")
   const now = configuration.now(); integer(now, "now")
   const bundle = loadPinnedTrustBundle(configuration.trustBundleReference)
-  const unlock = acquireLock(configuration.statePath, configuration.lockTimeoutMs)
+  const unlock = acquireLock(configuration)
   try {
     const state = loadState(configuration.statePath, configuration.stateId)
     if (state.version !== input.expectedVersion) wall("SCHEDULER_CAS_WALL", "expectedVersion", `${state.version}`)
@@ -1547,7 +1635,7 @@ export function recoverSchedulerTransactions(configuration) {
   validateSchedulerConfiguration(configuration)
   const recoveryConfiguration = { ...configuration }; delete recoveryConfiguration.failureInjector
   const now = configuration.now(); integer(now, "now")
-  const unlock = acquireLock(configuration.statePath, configuration.lockTimeoutMs)
+  const unlock = acquireLock(configuration)
   try {
     const journal = loadJournal(configuration)
     const state = loadState(configuration.statePath, configuration.stateId)
@@ -1732,13 +1820,12 @@ export function recoverSchedulerTransactions(configuration) {
             const oldFence = entry.leaseFencingToken
             liveLaneForMutation(recoveryConfiguration, entry)
             record(state, "EXPIRED_LEASE_RECLAIMED", entry, now, { priorLeaseFencingToken: oldFence, leaseFencingToken: entry.leaseFencingToken })
-          } else compensateDivergentEntry(recoveryConfiguration, state, entry, collection, `${name}_STORE_DIVERGENCE`, now)
+          } else compensateDivergentEntry(configuration, state, entry, collection, `${name}_STORE_DIVERGENCE`, now)
           recoveryTransaction.phase = "COMMITTED"; recoveryTransaction.updatedAt = new Date(now).toISOString(); journal.version += 1; writeJournal(configuration, journal)
           stateChanged = true
         } catch (error) {
           recoveryTransaction.phase = "RECOVERY_REQUIRED"; recoveryTransaction.errorCode = error?.code ?? "STORE_RECONCILIATION_FAILURE"
           recoveryTransaction.updatedAt = new Date(now).toISOString(); journal.version += 1; writeJournal(configuration, journal)
-          throw error
         }
       }
     }

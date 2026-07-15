@@ -25,7 +25,7 @@ const DIGEST = /^[a-f0-9]{64}$/
 const STATES = new Set(CANONICAL_LIFECYCLE_STATES)
 const TERMINAL_STATES = new Set(TERMINAL_LIFECYCLE_STATES)
 const LEASE_STATUSES = new Set(["ACTIVE", "RELEASED", "EXPIRED"])
-const OPERATION_TYPES = new Set(["ACQUIRE", "RECLAIM", "RENEW", "HEARTBEAT", "CHECKPOINT", "RELEASE", "EXPIRE"])
+const OPERATION_TYPES = new Set(["ACQUIRE", "RECLAIM", "RENEW", "HEARTBEAT", "CHECKPOINT", "RELEASE", "EXPIRE", "SETTLE_TERMINAL"])
 const OPERATION_STATUS = Object.freeze({
   ACQUIRE: "LANE_LEASE_ACQUIRED",
   RECLAIM: "LANE_LEASE_RECLAIMED",
@@ -34,6 +34,7 @@ const OPERATION_STATUS = Object.freeze({
   CHECKPOINT: "LANE_CHECKPOINT_WRITTEN",
   RELEASE: "LANE_LEASE_RELEASED",
   EXPIRE: "LANE_LEASE_EXPIRED_RECORDED",
+  SETTLE_TERMINAL: "LANE_LEASE_EXPIRED_TERMINAL_RELEASED",
 })
 const EVIDENCE_ANCHOR_FIELDS = Object.freeze(["evidenceLedgerId", "eventCount", "headEventHash", "manifestHash"])
 const SENSITIVE_KEY_ALIASES = Object.freeze([
@@ -359,6 +360,19 @@ function validateOperationHistory(operations, lanes, storeVersion, updatedAt) {
       })
       continue
     }
+    if (operation.operation === "SETTLE_TERMINAL") {
+      if (prior.status !== "EXPIRED" || operation.fencingToken !== prior.fencingToken
+        || operation.workerId !== prior.workerId || !TERMINAL_STATES.has(prior.checkpointLifecycleState)
+        || operation.checkpointLifecycleState !== prior.checkpointLifecycleState
+        || operation.checkpointEvidenceHash !== prior.checkpointEvidenceHash
+        || operation.checkpointRecordedAt !== prior.checkpointRecordedAt) {
+        wall("LANE_LEASE_STORE_CORRUPT", "invalid-expired-terminal-settlement-history")
+      }
+      prior.status = "RELEASED"
+      prior.releasedAt = operation.recordedAt
+      prior.expiredAt = null
+      continue
+    }
     if (prior.status !== "ACTIVE" || operation.fencingToken !== prior.fencingToken) {
       wall("LANE_LEASE_STORE_CORRUPT", "operation-on-inactive-lane")
     }
@@ -549,9 +563,14 @@ function idempotentResult(store, operation, request) {
   const prior = store.operations.find((entry) => entry.idempotencyKey === request.idempotencyKey)
   if (!prior) return null
   if (prior.operation !== operation || prior.requestDigest !== requestDigest(operation, request)) wall("IDEMPOTENCY_KEY_REUSE_WALL")
+  const lane = store.lanes.find((entry) => entry.workOrderId === prior.workOrderId && entry.laneId === prior.laneId)
   return result(`${prior.status}_IDEMPOTENT`, {
     ok: true, workOrderId: prior.workOrderId, laneId: prior.laneId, workerId: prior.workerId,
-    storeVersion: prior.storeVersion, fencingToken: prior.fencingToken, idempotent: true,
+    storeVersion: prior.storeVersion, fencingToken: prior.fencingToken,
+    leaseStatus: lane?.status ?? null, expiresAt: lane?.expiresAt ?? null,
+    checkpointSequence: lane?.checkpoint.sequence ?? null,
+    lifecycleState: lane?.checkpoint.lifecycleState ?? null,
+    idempotent: true,
   })
 }
 
@@ -767,6 +786,44 @@ export function expireLaneLease(storePath, storeId, request, options = {}) {
       if (instant(lane.expiresAt) > now) wall("LANE_LEASE_NOT_EXPIRED")
       const expired = { ...lane, status: "EXPIRED", expiredAt: iso(now) }
       return writeOperation(storePath, store, expired, "EXPIRE", request, "LANE_LEASE_EXPIRED_RECORDED", now)
+    })
+  } catch (error) { return wallResult(error) }
+}
+
+export function settleExpiredTerminalLaneLease(storePath, storeId, request, options = {}) {
+  try {
+    validateConfiguration(storePath, storeId)
+    validateCommon(request, "MULTI_AGENT_LANE_LEASE_SETTLE_TERMINAL_REQUEST", [
+      "holderToken", "expectedFencingToken", "expectedCheckpointSequence", "expectedLifecycleState", "expectedCheckpointEvidence",
+    ])
+    if (typeof request.holderToken !== "string" || request.holderToken.length < 16 || request.holderToken.length > 4096 || request.holderToken.includes("\0")
+      || !integer(request.expectedFencingToken, 1) || !integer(request.expectedCheckpointSequence, 1)
+      || !TERMINAL_STATES.has(request.expectedLifecycleState)) wall("MULTI_AGENT_LANE_LEASE_SETTLE_TERMINAL_REQUEST_INVALID")
+    const expectedCheckpointEvidence = validateEvidence(request.expectedCheckpointEvidence, [request.holderToken])
+    const normalized = { ...request, expectedCheckpointEvidence, holderTokenDigest: digest(request.holderToken) }
+    return locked(storePath, options, () => {
+      const store = readStore(storePath, storeId, false)
+      const prior = idempotentResult(store, "SETTLE_TERMINAL", normalized)
+      if (prior) return prior
+      assertVersion(store, request)
+      const lane = locate(store, request)
+      const now = mutationNow(options, store)
+      if (lane.workerId !== request.workerId || lane.fencingToken !== request.expectedFencingToken
+        || !sameDigest(lane.holderTokenDigest, normalized.holderTokenDigest)) wall("LANE_LEASE_NOT_HOLDER")
+      if (lane.status !== "EXPIRED" || !TERMINAL_STATES.has(lane.checkpoint.lifecycleState)) {
+        wall("LANE_LEASE_EXPIRED_TERMINAL_SETTLEMENT_REQUIRED")
+      }
+      if (lane.checkpoint.sequence !== request.expectedCheckpointSequence
+        || lane.checkpoint.lifecycleState !== request.expectedLifecycleState
+        || canonical(lane.checkpoint.evidence) !== canonical(expectedCheckpointEvidence)) {
+        wall("LANE_LEASE_EXPIRED_TERMINAL_SETTLEMENT_EVIDENCE_WALL")
+      }
+      const expiryOperation = store.operations.findLast((entry) => entry.workOrderId === lane.workOrderId
+        && entry.laneId === lane.laneId && entry.operation === "EXPIRE")
+      if (!expiryOperation || expiryOperation.fencingToken !== lane.fencingToken
+        || expiryOperation.status !== OPERATION_STATUS.EXPIRE) wall("LANE_LEASE_RECLAIM_REQUIRES_DURABLE_EXPIRY")
+      const settled = { ...lane, status: "RELEASED", releasedAt: iso(now), expiresAt: iso(now), expiredAt: null }
+      return writeOperation(storePath, store, settled, "SETTLE_TERMINAL", normalized, OPERATION_STATUS.SETTLE_TERMINAL, now)
     })
   } catch (error) { return wallResult(error) }
 }

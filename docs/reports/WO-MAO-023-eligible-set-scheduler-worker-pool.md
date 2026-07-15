@@ -27,6 +27,15 @@ The scheduler invokes the real Phase 2 contracts:
 The scheduler state remains a separate durable global-capacity/CAS ledger. Its manifest and every event
 are SHA-256 chained and reverified before mutation. Filesystem locking, expected-version CAS, atomic
 rename, file sync, and directory sync serialize contenders and reject stale writers.
+The production CLI accepts an exact configuration with no caller clock field and obtains time only from
+the host system clock. Test-only direct APIs may inject a deterministic clock. Scheduler lock ownership
+is fenced by PID, hostname, nonce, issue/heartbeat/expiry times, and a content hash. Failure to create
+the owner record removes the newly created lock. A dedicated watchdog renews generation, heartbeat,
+and expiry before the lease lapses and atomically replaces the owner record; all of those fields are
+covered by its canonical fence. Same-host live PIDs are never stolen. A stale candidate is atomically
+quarantined and its full owner record/fence is compared with the observation made immediately before
+rename; a concurrent renewal restores the quarantine rather than deleting it. Release stops the
+watchdog and removes only the matching nonce and latest generation.
 
 ## Opaque preconfigured trust registry
 
@@ -67,8 +76,8 @@ The signed claim binds all of:
 - the complete signed trust-artifact hash.
 
 The complete configuration hash covers scheduler/reservation/lease/evidence store identities and paths,
-the opaque trust-registry selector, lease duration, reconciliation batch ceiling, lock timeout, and every
-global/provider/repository/risk/combined budget. The claim's reservation worker and Work Order must
+the opaque trust-registry selector, lease duration, reconciliation batch ceiling, lock timeout, lock
+lease duration, lock heartbeat interval, and every global/provider/repository/risk/combined budget. The claim's reservation worker and Work Order must
 match the claim identity. Its normalized reservation content must exactly equal the DAG-validated
 envelope reservation. The envelope's team-role identity and provider selection must also match.
 
@@ -108,7 +117,18 @@ all earlier applied candidates before returning. Recovery independently re-verif
 ACTIVE/reconciliation projection against its exact reservation, lease fence, checkpoint identity, and
 evidence event; missing or divergent stores are repaired or safely compensated rather than trusted.
 Expired active leases are durably expired and reclaimed with a new fence before work resumes, while
-unrecoverable divergence releases remaining capacity.
+unrecoverable divergence releases remaining capacity. Divergence compensation validates every durable
+lease expiry, reclaim, terminal checkpoint, lease release, and reservation-release response before
+removing a scheduler claim. An expired divergent lane is reclaimed under a fresh fence, checkpointed
+`FAILED_TERMINAL`, and durably moved to `RELEASED` before its reservation or scheduler claim is removed.
+A rejected phase retains the claim, records `RECOVERY_REQUIRED`, and a later bounded recovery resumes
+from the mixed durable-store outcome instead of falsely reporting released capacity.
+If a release failure leaves a `FAILED_TERMINAL` reclaimed lease active until its renewed TTL expires,
+the lane store provides a separate fenced terminal-settlement operation. It requires the current expiry
+record, holder/fence, terminal checkpoint sequence/state, and exact checkpoint evidence. It then moves
+the expired lease directly to durable `RELEASED` without attempting an incompatible lifecycle replay.
+Nonterminal expired lanes cannot use settlement and remain on the normal reclaim path. Reservation and
+scheduler projections remain held until settlement succeeds, including across delayed retries.
 
 Evidence lookup is performed only through the canonical Phase 2 evidence-ledger verifier. It verifies
 the manifest plus every event filename, request digest, previous hash, event hash, timestamp, and
@@ -191,10 +211,13 @@ owner, proof, claim, attempt, either store fence, proof-expiry/deadline relation
 without release.
 The batch has one durable transaction intent; a later release failure resumes all remaining entries and
 commits the scheduler projection only after the complete batch reaches a consistent terminal result.
+Recovery bypasses terminal outcome projection only for an already `RELEASED` durable lane. An `EXPIRED`
+`REROUTE_PENDING` lane is reclaimed under a fresh fence, checkpointed and evidenced as terminal, then
+its lease and reservation are released before the durable scheduler result is projected.
 
 ## Mechanical proof
 
-The 83-test scheduler integration/adversarial suite covers registry/bundle forgery/freshness/revocation/
+The 96-test scheduler integration/adversarial suite covers registry/bundle forgery/freshness/revocation/
 substitution, candidate trust forgery/staleness/revocation/substitution, complete identity/configuration/
 reservation mutations, exact DAG-derived selection, all capacity ceilings, real reservation/lease/
 checkpoint/evidence stores, every provider state and delivery-error class, malformed responses,
@@ -209,11 +232,20 @@ projection recovery, exact held-journal lookup and adversarial identity/operatio
 phase substitution, expired-reconciliation reaper liveness, and production CLI fail-closed behavior.
 It also covers response hash, effective outcome, provider state, reason, configuration projection,
 duplicate transaction-ID, and duplicate journal-fence mutation under the immutable OUTCOME seal.
+The current-head remediation adds exact CLI clock rejection, renewable short-TTL lock leases,
+quarantine/renewal race restoration, owner-record cleanup and stale/live owner exclusion,
+checked/idempotent expired compensation through reclaim/terminal/release with mixed-outcome retry, and an
+`EXPIRED`/`REROUTE_PENDING` REAP_BATCH crash replay. The earlier journal-first review threads remain
+covered by transaction-first identity ordering and terminal/reaper crash tests and are not regressed.
+It also covers a lease-release failure followed by a retry after the reclaimed 100 ms lease expires:
+the exact terminal fence is settled, reservation and scheduler capacity release only afterward, and a
+second retry is state-idempotent. Direct lane-store tests reject nonterminal and evidence-substituted
+terminal settlement.
 
 Validation:
 
-- focused Vitest: `1 file / 83 tests`, PASS;
-- repository-wide Vitest: `162 files / 1,069 tests`, PASS;
+- focused Vitest: `2 files / 116 tests`, PASS;
+- repository-wide Vitest: `162 files / 1,083 tests`, PASS;
 - repository ESLint and production build: PASS;
 - Node syntax and `git diff --check`: PASS.
 

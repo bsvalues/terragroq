@@ -14,6 +14,7 @@ import {
   reclaimLaneLease,
   releaseLaneLease,
   renewLaneLease,
+  settleExpiredTerminalLaneLease,
 } from "../scripts/multi-agent-operator/lane-lease-checkpoint.mjs"
 
 const roots: string[] = []
@@ -205,6 +206,47 @@ describe("per-lane lease and durable checkpoint store", () => {
     const request = holder("MULTI_AGENT_LANE_LEASE_RELEASE_REQUEST", { idempotencyKey: "release-operation-0001" })
     expect(releaseLaneLease(store, storeId, request, { now: () => 1_100 })).toMatchObject({ ok: true, leaseStatus: "RELEASED" })
     expect(releaseLaneLease(store, storeId, request, { now: () => 9_000 })).toMatchObject({ status: "LANE_LEASE_RELEASED_IDEMPOTENT", idempotent: true })
+  })
+
+  it("settles only an exactly fenced terminal expired lane and preserves idempotent evidence", () => {
+    const { store } = workspace()
+    acquireLaneLease(store, storeId, acquire({ leaseDurationMs: 100 }), { now: () => 1_000 })
+    const checkpointEvidence = { fullIdentityHash: "a".repeat(64), configurationHash: "b".repeat(64), leaseFence: 1 }
+    checkpointLaneLease(store, storeId, holder("MULTI_AGENT_LANE_CHECKPOINT_REQUEST", {
+      idempotencyKey: "terminal-settlement-checkpoint", expectedCheckpointSequence: 1,
+      transition: { from: "LEASED", to: "FAILED_TERMINAL", reasonCode: "BOUNDED_RECOVERY_EXHAUSTED", failureClass: "TRANSIENT_TRANSPORT", authorityGap: { present: false, condition: null, conditionRef: null } },
+      evidence: checkpointEvidence,
+    }), { now: () => 1_050 })
+    expireLaneLease(store, storeId, {
+      schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_EXPIRE_REQUEST",
+      workOrderId: "WO-MAO-101", laneId: "LANE-A", workerId: "hosted-codex-a",
+      idempotencyKey: "terminal-settlement-expire", expectedFencingToken: 1,
+    }, { now: () => 1_100 })
+    const settlement = {
+      schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_SETTLE_TERMINAL_REQUEST",
+      workOrderId: "WO-MAO-101", laneId: "LANE-A", workerId: "hosted-codex-a",
+      idempotencyKey: "terminal-settlement-release", holderToken: holderA,
+      expectedFencingToken: 1, expectedCheckpointSequence: 2,
+      expectedLifecycleState: "FAILED_TERMINAL", expectedCheckpointEvidence: checkpointEvidence,
+    }
+    expect(settleExpiredTerminalLaneLease(store, storeId, { ...settlement, expectedCheckpointEvidence: { ...checkpointEvidence, leaseFence: 2 } }, { now: () => 1_101 }))
+      .toMatchObject({ status: "LANE_LEASE_EXPIRED_TERMINAL_SETTLEMENT_EVIDENCE_WALL" })
+    expect(settleExpiredTerminalLaneLease(store, storeId, settlement, { now: () => 1_102 }))
+      .toMatchObject({ ok: true, status: "LANE_LEASE_EXPIRED_TERMINAL_RELEASED", leaseStatus: "RELEASED", lifecycleState: "FAILED_TERMINAL" })
+    expect(settleExpiredTerminalLaneLease(store, storeId, settlement, { now: () => 9_000 }))
+      .toMatchObject({ ok: true, status: "LANE_LEASE_EXPIRED_TERMINAL_RELEASED_IDEMPOTENT", idempotent: true, leaseStatus: "RELEASED" })
+
+    const { store: nonterminalStore } = workspace()
+    acquireLaneLease(nonterminalStore, storeId, acquire({ leaseDurationMs: 100 }), { now: () => 1_000 })
+    expireLaneLease(nonterminalStore, storeId, {
+      schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_EXPIRE_REQUEST",
+      workOrderId: "WO-MAO-101", laneId: "LANE-A", workerId: "hosted-codex-a",
+      idempotencyKey: "nonterminal-settle-expire", expectedFencingToken: 1,
+    }, { now: () => 1_100 })
+    expect(settleExpiredTerminalLaneLease(nonterminalStore, storeId, {
+      ...settlement, idempotencyKey: "nonterminal-settle-release", expectedCheckpointSequence: 1,
+      expectedCheckpointEvidence: acquire().checkpointEvidence,
+    }, { now: () => 1_101 })).toMatchObject({ status: "LANE_LEASE_EXPIRED_TERMINAL_SETTLEMENT_REQUIRED" })
   })
 
   it("rejects secret-shaped evidence, unknown request fields, and malformed durable state", () => {

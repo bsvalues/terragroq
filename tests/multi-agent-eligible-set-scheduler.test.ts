@@ -25,8 +25,14 @@ import {
   signSchedulerArtifact,
 } from "../scripts/multi-agent-operator/eligible-set-scheduler.mjs"
 import { inspectVerifiedEvidenceEvent, verifyEvidenceLedger } from "../scripts/multi-agent-operator/evidence-ledger.mjs"
-import { inspectLaneLeaseStore } from "../scripts/multi-agent-operator/lane-lease-checkpoint.mjs"
+import { expireLaneLease, inspectLaneLeaseStore } from "../scripts/multi-agent-operator/lane-lease-checkpoint.mjs"
 import { inspectReservationLedger } from "../scripts/multi-agent-operator/reservation-ledger.mjs"
+import {
+  acquireSchedulerLock,
+  atomicPersistSchedulerLockOwner,
+  SchedulerLockLeaseError,
+  schedulerLockOwnerRecord,
+} from "../scripts/multi-agent-operator/scheduler-lock-lease.mjs"
 import { clearTestSchedulerTrustRecords, installTestSchedulerTrustRecord } from "./fixtures/scheduler-trust-registry-fixture.mjs"
 
 const NOW = Date.parse("2026-07-15T10:00:00.000Z")
@@ -372,6 +378,97 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     expect(inspectReservationLedger(configuration().reservationLedgerPath, configuration().reservationLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_INSPECT_REQUEST" })).toMatchObject({ valid: true, reservations: [{ fencingToken: entry.reservationFencingToken }] })
     expect(inspectLaneLeaseStore(configuration().leaseStorePath, configuration().leaseStoreId)).toMatchObject({ ok: true, lanes: [{ status: "ACTIVE", fencingToken: entry.leaseFencingToken, lifecycleState: "PROVIDER_DISPATCHED" }] })
     expect(verifyEvidenceLedger(configuration().evidenceLedgerDir, configuration().evidenceLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_EVIDENCE_VERIFY_REQUEST", expectedAnchor: null })).toMatchObject({ ok: true, eventCount: 1 })
+  })
+
+  it("atomically reclaims an expired lock owned by a dead/remote process", () => {
+    const config = configuration()
+    const lock = `${config.statePath}.lock`; fs.mkdirSync(lock, { recursive: true })
+    const wallClock = Date.now(); const issuedAt = wallClock - 60_000; const nonce = crypto.randomUUID(); const hostname = "remote-dead-host"
+    const owner = schedulerLockOwnerRecord({ statePath: config.statePath, pid: 999_999, hostname, nonce, generation: 7,
+      issuedAt, heartbeatAt: issuedAt, expiresAt: wallClock - 1 })
+    fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify(owner))
+    expect(schedule(config)).toMatchObject({ code: "ELIGIBLE_SET_SCHEDULED" })
+    expect(fs.existsSync(lock)).toBe(false)
+  })
+
+  it("never steals an expired lock while its same-host owner PID remains alive", () => {
+    const config = { ...configuration(), lockTimeoutMs: 30 }
+    const lock = `${config.statePath}.lock`; fs.mkdirSync(lock, { recursive: true })
+    const wallClock = Date.now(); const issuedAt = wallClock - 60_000; const nonce = crypto.randomUUID(); const hostname = os.hostname()
+    const owner = schedulerLockOwnerRecord({ statePath: config.statePath, pid: process.pid, hostname, nonce, generation: 4,
+      issuedAt, heartbeatAt: issuedAt, expiresAt: wallClock - 1 })
+    fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify(owner))
+    expectWall(() => schedule(config, input(config)), "SCHEDULER_LOCK_TIMEOUT")
+    expect(JSON.parse(fs.readFileSync(path.join(lock, "owner.json"), "utf8"))).toEqual(owner)
+  })
+
+  it("renews generation, heartbeat, and expiry beyond a short lock TTL without permitting a steal", () => {
+    const statePath = configuration().statePath
+    const unlock = acquireSchedulerLock(statePath, {
+      timeoutMs: 200, leaseDurationMs: 80, heartbeatIntervalMs: 20,
+      ownerHostname: "remote-renewing-owner",
+    })
+    try {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 220)
+      const owner = JSON.parse(fs.readFileSync(`${statePath}.lock/owner.json`, "utf8"))
+      expect(owner.generation).toBeGreaterThan(2)
+      expect(owner.heartbeatAt).toBeGreaterThan(owner.issuedAt)
+      expect(owner.expiresAt).toBeGreaterThan(Date.now())
+      try {
+        acquireSchedulerLock(statePath, { timeoutMs: 35, leaseDurationMs: 80, heartbeatIntervalMs: 20 })
+        throw new Error("expected lock timeout")
+      } catch (error) {
+        expect(error).toBeInstanceOf(SchedulerLockLeaseError)
+        expect(error).toMatchObject({ code: "SCHEDULER_LOCK_TIMEOUT" })
+      }
+      expect(fs.existsSync(`${statePath}.lock/owner.json`)).toBe(true)
+    } finally { unlock() }
+    expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
+  })
+
+  it("restores rather than deletes a lock renewed during stale-owner quarantine", () => {
+    const statePath = configuration().statePath
+    const lock = `${statePath}.lock`; fs.mkdirSync(lock, { recursive: true })
+    const wallClock = Date.now(); const issuedAt = wallClock - 1000
+    const stale = schedulerLockOwnerRecord({ statePath, pid: 999_999, hostname: "remote-race-host", nonce: crypto.randomUUID(), generation: 1,
+      issuedAt, heartbeatAt: issuedAt, expiresAt: wallClock - 1 })
+    fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify(stale))
+    try {
+      acquireSchedulerLock(statePath, {
+        timeoutMs: 35, leaseDurationMs: 80, heartbeatIntervalMs: 20,
+        quarantineHook: ({ quarantinePath, observedOwner }: { quarantinePath: string; observedOwner: Record<string, any> }) => {
+          const now = Date.now()
+          const renewed = schedulerLockOwnerRecord({ ...observedOwner, generation: observedOwner.generation + 1,
+            heartbeatAt: now, expiresAt: now + 500 })
+          atomicPersistSchedulerLockOwner(path.join(quarantinePath, "owner.json"), renewed)
+        },
+      })
+      throw new Error("expected renewed owner timeout")
+    } catch (error) {
+      expect(error).toBeInstanceOf(SchedulerLockLeaseError)
+      expect(error).toMatchObject({ code: "SCHEDULER_LOCK_TIMEOUT" })
+    }
+    const restored = JSON.parse(fs.readFileSync(path.join(lock, "owner.json"), "utf8"))
+    expect(restored).toMatchObject({ nonce: stale.nonce, generation: 2 })
+    expect(restored.expiresAt).toBeGreaterThan(Date.now())
+  })
+
+  it("removes a newly created lock directory when its owner record cannot be created", () => {
+    const config = configuration()
+    const originalOpen = fs.openSync.bind(fs)
+    const open = vi.spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) => {
+      if (String(file).endsWith("scheduler.json.lock/owner.json")) {
+        const error = Object.assign(new Error("simulated owner record failure"), { code: "EIO" })
+        throw error
+      }
+      return (originalOpen as (...parameters: unknown[]) => number)(file, ...args)
+    }) as typeof fs.openSync)
+    try {
+      expectWall(() => schedule(config, input(config)), "SCHEDULER_LOCK_WALL")
+      expect(fs.existsSync(`${config.statePath}.lock`)).toBe(false)
+    } finally {
+      open.mockRestore()
+    }
   })
 
   it("does not accept caller-selected eligibility or incomplete/extra DAG claims", () => {
@@ -853,6 +950,66 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     expect(inspectLaneLeaseStore(config.leaseStorePath, config.leaseStoreId).lanes[0].status).toBe("RELEASED")
   })
 
+  it.each([
+    "COMPENSATE:LEASE_EXPIRE",
+    "COMPENSATE:LEASE_RECLAIM",
+    "COMPENSATE:LEASE_TERMINALIZE",
+    "COMPENSATE:LEASE_RELEASE",
+    "COMPENSATE:RESERVATION_RELEASE",
+  ])("retains an expired scheduler claim when %s rejects and completes terminal release on retry", (failurePoint) => {
+    const config = { ...configuration(NOW), leaseDurationMs: 100 }
+    const original = schedule(config, input(config)).scheduled[0]
+    const events = path.join(config.evidenceLedgerDir, "events")
+    fs.rmSync(path.join(events, fs.readdirSync(events)[0]))
+    let injected = false
+    const failed = recoverSchedulerTransactions({ ...configuration(NOW + 101), leaseDurationMs: 100,
+      failureInjector: (point: string) => { if (!injected && point === failurePoint) { injected = true; throw new Error(`INJECTED:${point}`) } } })
+    expect(failed.code).toBe("SCHEDULER_TRANSACTION_RECOVERY_COMPLETE")
+    expect(inspectSchedulerState(config.statePath, config.stateId).state.active).toHaveLength(1)
+    const journal = JSON.parse(fs.readFileSync(`${config.statePath}.transactions.json`, "utf8"))
+    expect(journal.transactions.some((transaction: Record<string, unknown>) => transaction.operation === "STORE_RECONCILIATION" && transaction.phase === "RECOVERY_REQUIRED")).toBe(true)
+    if (failurePoint === "COMPENSATE:RESERVATION_RELEASE") {
+      expect(inspectLaneLeaseStore(config.leaseStorePath, config.leaseStoreId).lanes[0]).toMatchObject({ status: "RELEASED", lifecycleState: "FAILED_TERMINAL" })
+      expect(inspectReservationLedger(config.reservationLedgerPath, config.reservationLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_INSPECT_REQUEST" }).reservations).toHaveLength(1)
+    }
+    const recovered = recoverSchedulerTransactions({ ...configuration(NOW + 302), leaseDurationMs: 100 })
+    const recoveredState = inspectSchedulerState(config.statePath, config.stateId).state
+    expect(recoveredState).toMatchObject({ active: [], released: [{ outcome: "STORE_DIVERGENCE_COMPENSATED" }] })
+    const lane = inspectLaneLeaseStore(config.leaseStorePath, config.leaseStoreId).lanes[0]
+    expect(lane).toMatchObject({ status: "RELEASED", lifecycleState: "FAILED_TERMINAL" })
+    expect(lane.fencingToken).toBeGreaterThan(original.leaseFencingToken)
+    expect(inspectReservationLedger(config.reservationLedgerPath, config.reservationLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_INSPECT_REQUEST" }).reservations).toEqual([])
+    const idempotent = recoverSchedulerTransactions({ ...configuration(NOW + 303), leaseDurationMs: 100 })
+    expect(idempotent.stateVersion).toBe(recovered.stateVersion)
+    expect(inspectSchedulerState(config.statePath, config.stateId).state).toEqual(recoveredState)
+  })
+
+  it("retains a terminal expired claim when fenced settlement fails and releases it idempotently on retry", () => {
+    const config = { ...configuration(NOW), leaseDurationMs: 100 }
+    schedule(config, input(config))
+    const events = path.join(config.evidenceLedgerDir, "events")
+    fs.rmSync(path.join(events, fs.readdirSync(events)[0]))
+    recoverSchedulerTransactions({ ...configuration(NOW + 101), leaseDurationMs: 100,
+      failureInjector: (point: string) => { if (point === "COMPENSATE:LEASE_RELEASE") throw new Error(`INJECTED:${point}`) } })
+    expect(inspectLaneLeaseStore(config.leaseStorePath, config.leaseStoreId).lanes[0]).toMatchObject({ status: "ACTIVE", lifecycleState: "FAILED_TERMINAL" })
+    let injected = false
+    recoverSchedulerTransactions({ ...configuration(NOW + 302), leaseDurationMs: 100,
+      failureInjector: (point: string) => {
+        if (!injected && point === "COMPENSATE:LEASE_SETTLE_TERMINAL") { injected = true; throw new Error(`INJECTED:${point}`) }
+      } })
+    expect(inspectSchedulerState(config.statePath, config.stateId).state.active).toHaveLength(1)
+    expect(inspectLaneLeaseStore(config.leaseStorePath, config.leaseStoreId).lanes[0]).toMatchObject({ status: "EXPIRED", lifecycleState: "FAILED_TERMINAL" })
+    expect(inspectReservationLedger(config.reservationLedgerPath, config.reservationLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_INSPECT_REQUEST" }).reservations).toHaveLength(1)
+    const recovered = recoverSchedulerTransactions({ ...configuration(NOW + 303), leaseDurationMs: 100 })
+    const state = inspectSchedulerState(config.statePath, config.stateId).state
+    expect(state).toMatchObject({ active: [], released: [{ outcome: "STORE_DIVERGENCE_COMPENSATED", lifecycleState: "FAILED_TERMINAL" }] })
+    expect(inspectLaneLeaseStore(config.leaseStorePath, config.leaseStoreId).lanes[0]).toMatchObject({ status: "RELEASED", lifecycleState: "FAILED_TERMINAL" })
+    expect(inspectReservationLedger(config.reservationLedgerPath, config.reservationLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_INSPECT_REQUEST" }).reservations).toEqual([])
+    const idempotent = recoverSchedulerTransactions({ ...configuration(NOW + 304), leaseDurationMs: 100 })
+    expect(idempotent.stateVersion).toBe(recovered.stateVersion)
+    expect(inspectSchedulerState(config.statePath, config.stateId).state).toEqual(state)
+  })
+
   it("rejects substitution of another valid Work Order evidence event", () => {
     const config = configuration()
     const orders = [envelope(), envelope("WO-MAO-024", "LANE-MAO-024", "worker-23")]
@@ -1018,6 +1175,60 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     expect(inspectSchedulerState(config.statePath, config.stateId).state.released[0]).toEqual(state.released[0])
   })
 
+  it("resumes an EXPIRED REROUTE_PENDING lane through terminal outcome before REAP_BATCH release", () => {
+    const config = { ...configuration(NOW), leaseDurationMs: 100 }
+    const entry = schedule(config, input(config)).scheduled[0]
+    const deadline = "2026-07-15T10:00:00.050Z"
+    const proof = ownerProof(entry, "reconciler-23", deadline)
+    recordProviderOutcome({ ...configuration(NOW + 1), leaseDurationMs: 100 }, outcomeInput(entry, {
+      kind: "TIMEOUT", providerResponse: null, reasonCode: "TIMEOUT_WALL", evidence: { crashBoundary: "expired-reroute-pending" },
+    }, { ownerId: "reconciler-23", deadline, ownerProof: proof }))
+    const schedulerBeforeReap = fs.readFileSync(config.statePath, "utf8")
+    const leaseBeforeReap = fs.readFileSync(config.leaseStorePath, "utf8")
+    const reservationsBeforeReap = fs.readFileSync(config.reservationLedgerPath, "utf8")
+    const evidenceBeforeReap = path.join(root, "evidence-before-reap")
+    fs.cpSync(config.evidenceLedgerDir, evidenceBeforeReap, { recursive: true })
+    const claimValue = {
+      schedulerRunId: entry.schedulerRunId, attempt: entry.attempt, fullIdentityHash: entry.fullIdentityHash,
+      schedulerFencingToken: entry.schedulerFencingToken, leaseFencingToken: entry.leaseFencingToken,
+      reservationFencingToken: entry.reservationFencingToken, ownerProof: proof,
+    }
+    reapAmbiguousOutcomes({ ...configuration(NOW + 101), leaseDurationMs: 100 }, { expectedVersion: 9, claims: [claimValue], maxBatch: 1 })
+    fs.writeFileSync(config.statePath, schedulerBeforeReap)
+    fs.writeFileSync(config.leaseStorePath, leaseBeforeReap)
+    fs.writeFileSync(config.reservationLedgerPath, reservationsBeforeReap)
+    fs.rmSync(config.evidenceLedgerDir, { recursive: true })
+    fs.cpSync(evidenceBeforeReap, config.evidenceLedgerDir, { recursive: true })
+    const expired = expireLaneLease(config.leaseStorePath, config.leaseStoreId, {
+      schemaVersion: 1, artifactType: "MULTI_AGENT_LANE_LEASE_EXPIRE_REQUEST",
+      workOrderId: entry.workOrderId, laneId: entry.laneId, workerId: entry.workerId,
+      idempotencyKey: `test-expire-${entry.fullIdentityHash}`,
+      expectedFencingToken: entry.leaseFencingToken,
+    }, { now: () => NOW + 101, lockTimeoutMs: 500 })
+    expect(expired).toMatchObject({ ok: true, leaseStatus: "EXPIRED", lifecycleState: "REROUTE_PENDING" })
+    mutateSchedulerJournal(config, (journal) => {
+      const transaction = journal.transactions.findLast((candidate: Record<string, unknown>) => candidate.operation === "REAP_BATCH")
+      transaction.phase = "STORES_APPLIED"
+      transaction.errorCode = "SIMULATED_EXPIRED_REROUTE_PENDING_CRASH"
+    })
+
+    const first = recoverSchedulerTransactions({ ...configuration(NOW + 102), leaseDurationMs: 100 })
+    const state = inspectSchedulerState(config.statePath, config.stateId).state
+    const lane = inspectLaneLeaseStore(config.leaseStorePath, config.leaseStoreId).lanes[0]
+    expect(lane).toMatchObject({ status: "RELEASED", lifecycleState: "FAILED_TERMINAL" })
+    expect(lane.fencingToken).toBeGreaterThan(entry.leaseFencingToken)
+    expect(state.reconciliation).toEqual([])
+    expect(state.released).toMatchObject([{ status: "RELEASED", outcome: "AMBIGUOUS_REAPED", lifecycleState: "FAILED_TERMINAL", leaseFencingToken: lane.fencingToken }])
+    expect(inspectReservationLedger(config.reservationLedgerPath, config.reservationLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_INSPECT_REQUEST" }).reservations).toEqual([])
+    expect(inspectVerifiedEvidenceEvent(config.evidenceLedgerDir, config.evidenceLedgerId, {
+      schemaVersion: 1, artifactType: "MULTI_AGENT_EVIDENCE_EVENT_INSPECT_REQUEST",
+      eventId: state.released[0].lastEvidenceEventId, expectedAnchor: null,
+    })).toMatchObject({ ok: true, valid: true, event: { leaseAttribution: { fencingToken: lane.fencingToken } } })
+    const second = recoverSchedulerTransactions({ ...configuration(NOW + 103), leaseDurationMs: 100 })
+    expect(second.stateVersion).toBe(first.stateVersion)
+    expect(inspectSchedulerState(config.statePath, config.stateId).state.released[0]).toEqual(state.released[0])
+  })
+
   it("validates the original proof then reclaims and reaps an expired reconciliation lease after deadline", () => {
     const initial = { ...configuration(NOW), leaseDurationMs: 100 }
     const entry = schedule(initial, input(initial)).scheduled[0]
@@ -1053,12 +1264,27 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     const config = configuration()
     const configPath = path.join(root, "cli-config.json")
     const inputPath = path.join(root, "cli-input.json")
-    fs.writeFileSync(configPath, JSON.stringify({ ...config, now: NOW }))
+    const { now: _testClock, ...productionConfig } = config
+    fs.writeFileSync(configPath, JSON.stringify(productionConfig))
     fs.writeFileSync(inputPath, JSON.stringify(input(config)))
     const cli = path.resolve("scripts/multi-agent-operator/eligible-set-scheduler-cli.mjs")
     const processResult = spawnSync(process.execPath, [cli, "schedule", configPath, inputPath], { encoding: "utf8" })
     expect(processResult.status).toBe(2)
     expect(JSON.parse(processResult.stdout)).toMatchObject({ ok: false, code: "SCHEDULER_TRUST_REGISTRY_WALL" })
     expect(config.trustBundleReference).toEqual({ registryId: "test-scheduler-trust-pins", registryVersion: 1 })
+  })
+
+  it("rejects a caller-selected CLI clock without touching scheduler state", () => {
+    const config = configuration()
+    const configPath = path.join(root, "cli-config-with-clock.json")
+    const inputPath = path.join(root, "cli-input-with-clock.json")
+    const { now: _testClock, ...productionConfig } = config
+    fs.writeFileSync(configPath, JSON.stringify({ ...productionConfig, now: NOW }))
+    fs.writeFileSync(inputPath, JSON.stringify(input(config)))
+    const cli = path.resolve("scripts/multi-agent-operator/eligible-set-scheduler-cli.mjs")
+    const processResult = spawnSync(process.execPath, [cli, "schedule", configPath, inputPath], { encoding: "utf8" })
+    expect(processResult.status).toBe(2)
+    expect(JSON.parse(processResult.stdout)).toMatchObject({ ok: false, code: "SCHEDULER_INPUT_WALL", detail: "EXACT_PRODUCTION_CONFIGURATION_REQUIRED" })
+    expect(fs.existsSync(config.statePath)).toBe(false)
   })
 })
