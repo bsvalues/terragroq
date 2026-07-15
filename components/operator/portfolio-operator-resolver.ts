@@ -109,7 +109,7 @@ export function buildLoopPacket(program: PortfolioProgramRecord) {
   const workOrders = buildWorkOrderChain(program)
   const activeWorkOrder = program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
     ? workOrders.find((workOrder) => workOrder.workOrderId === "WO-RUNTIME-IDENTITY-029")
-    : workOrders.find((workOrder) => workOrder.status !== "COMPLETE")
+    : workOrders.find((workOrder) => workOrder.status === "READY")
   const eligibleWorkOrders = workOrders
     .filter((workOrder) => workOrder.status === "READY")
     .map((workOrder) => workOrder.workOrderId)
@@ -142,6 +142,7 @@ export function buildWorkOrderChain(program: PortfolioProgramRecord) {
       discoveryBoundary: ["docs/governance", "docs/reports", "components/operator", "scripts/multi-agent-operator", "tests"],
       riskClass: record.riskClass,
       status: record.status,
+      resumable: record.resumable,
       validationPlan: ["Focused tests", "git diff --check", "lint", "full tests", "build"],
       evidence: record.evidencePath,
       rollback: "Revert only the lane-owned, reservation-scoped changes through normal review.",

@@ -118,10 +118,10 @@ Codex team work does not depend on that rejected adapter.
 Canonical playbook:
 `docs/governance/multi-agent-operator-playbook.md`
 
-Current transition: `WO-MAO-001` through `WO-MAO-022` are complete. Phase 2 independent assurance
-passed at local integration head `6ae75b2`. The mechanically eligible set is `WO-MAO-023`,
-`WO-MAO-029`, and `WO-MAO-032`. A singular active-work display selects the lowest stable identifier,
-`WO-MAO-023`, without hiding or serializing the other eligible Work Orders.
+Current transition: `WO-MAO-001` through `WO-MAO-022`, `WO-MAO-029`, and `WO-MAO-032` are complete.
+Phase 2 independent assurance passed at local integration head `6ae75b2`. `WO-MAO-033` is
+`DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set contains only
+`WO-MAO-023`; the active-work projection does not promote pending Phase 3 dependents.
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
@@ -187,7 +187,7 @@ Current status:
 
 1. Preserve the completed Phase 0 executable truth and preventive controls.
 2. Preserve the completed Phase 1 hosted proof and Phase 2 local-contract evidence.
-3. Continue the full eligible set at `WO-MAO-023`, `WO-MAO-029`, and `WO-MAO-032` through scheduler, provider federation,
+3. Continue the dependency-cleared eligible set at `WO-MAO-023` through scheduler, provider federation,
    GitHub delivery, resilience, and certification phases.
 4. Keep useful independent R0/R1 product lanes moving whenever dependencies and
    reservations permit.

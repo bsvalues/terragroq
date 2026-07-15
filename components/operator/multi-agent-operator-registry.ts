@@ -1,4 +1,9 @@
-export type MultiAgentWorkOrderStatus = "PENDING" | "READY" | "COMPLETE" | "BLOCKED"
+export type MultiAgentWorkOrderStatus =
+  | "PENDING"
+  | "READY"
+  | "COMPLETE"
+  | "BLOCKED"
+  | "DEFERRED_PROVIDER_UNAVAILABLE"
 
 export const MULTI_AGENT_OWNER_COUNTER_NAMES = [
   "OWNER_OPERATION_TOUCH_COUNT",
@@ -15,6 +20,7 @@ export type MultiAgentWorkOrderRecord = {
   riskClass: "R0" | "R1" | "R2" | "R3"
   dependsOn: `WO-MAO-${string}`[]
   status: MultiAgentWorkOrderStatus
+  resumable: boolean
   ownerOperationsAllowed: false
   evidencePath: string
 }
@@ -124,9 +130,16 @@ const PHASE_TWO_EVIDENCE_PATHS = [
   "docs/reports/WO-MAO-022-evidence-ledger-owner-touch-meter.md",
 ] as const
 
+const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
+  ["WO-MAO-029", "docs/reports/WO-MAO-029-supported-codex-capability-conformance.md"],
+  ["WO-MAO-032", "docs/reports/WO-MAO-032-claude-capability-transport-proof.md"],
+  ["WO-MAO-033", "docs/reports/WO-MAO-032-claude-capability-transport-proof.md"],
+])
+
 export function resolveMultiAgentWorkOrders(
   completedIds: ReadonlySet<string>,
   blockedIds: ReadonlySet<string> = new Set(),
+  deferredProviderUnavailableIds: ReadonlySet<string> = new Set(),
 ): MultiAgentWorkOrderRecord[] {
   return WORK_ORDER_SEEDS.map(([title, phase, dependencies], index) => {
     const number = index + 1
@@ -136,9 +149,11 @@ export function resolveMultiAgentWorkOrders(
       ? "COMPLETE"
       : blockedIds.has(id)
         ? "BLOCKED"
-        : dependsOn.every((dependency) => completedIds.has(dependency))
-          ? "READY"
-          : "PENDING"
+        : deferredProviderUnavailableIds.has(id)
+          ? "DEFERRED_PROVIDER_UNAVAILABLE"
+          : dependsOn.every((dependency) => completedIds.has(dependency))
+            ? "READY"
+            : "PENDING"
 
     return {
       workOrderId: id,
@@ -147,8 +162,10 @@ export function resolveMultiAgentWorkOrders(
       riskClass: phase <= 1 ? "R1" : phase === 7 ? "R2" : "R3",
       dependsOn,
       status,
+      resumable: status === "DEFERRED_PROVIDER_UNAVAILABLE",
       ownerOperationsAllowed: false,
-      evidencePath: PHASE_ZERO_EVIDENCE_PATHS[index]
+      evidencePath: EVIDENCE_PATH_OVERRIDES.get(id)
+        ?? PHASE_ZERO_EVIDENCE_PATHS[index]
         ?? PHASE_ONE_EVIDENCE_PATHS[index - PHASE_ZERO_EVIDENCE_PATHS.length]
         ?? PHASE_TWO_EVIDENCE_PATHS[index - PHASE_ZERO_EVIDENCE_PATHS.length - PHASE_ONE_EVIDENCE_PATHS.length]
         ?? `docs/reports/${id}.md`,
@@ -156,9 +173,14 @@ export function resolveMultiAgentWorkOrders(
   })
 }
 
-const PHASE_TWO_COMPLETE = new Set(range(1, 22).map(workOrderId))
+const EVIDENCED_COMPLETE = new Set([...range(1, 22), 29, 32].map(workOrderId))
+const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
 
-export const MULTI_AGENT_OPERATOR_WORK_ORDERS = resolveMultiAgentWorkOrders(PHASE_TWO_COMPLETE)
+export const MULTI_AGENT_OPERATOR_WORK_ORDERS = resolveMultiAgentWorkOrders(
+  EVIDENCED_COMPLETE,
+  new Set(),
+  PROVIDER_UNAVAILABLE_DEFERRED,
+)
 
 export const MULTI_AGENT_OPERATOR_PROGRAM = {
   programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
