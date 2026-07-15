@@ -64,7 +64,7 @@ export const OWNER_TOUCH_COUNTERS = Object.freeze([
 const TYPE_FIELDS = Object.freeze({
   AUTHORITY: ["grantId", "authorityDecisionId", "status", "contentHash"],
   WORKER: ["workerId", "role", "action", "reasonCode"],
-  PROVIDER: ["providerId", "adapterId", "dispatchId", "state", "reasonCode", "responseContentHash"],
+  PROVIDER: ["providerId", "adapterId", "dispatchId", "state", "reasonCode", "responseContentHash", "immutableOutcomeDetailHash"],
   RESERVATION: ["reservationSetId", "action", "ledgerVersion", "fencingToken", "reasonCodes", "resultContentHash"],
   TRANSITION: ["from", "to", "reasonCode", "failureClass", "authorityGap", "transitionContentHash"],
   TEST: ["suiteId", "status", "passed", "failed", "skipped", "durationMs", "resultContentHash"],
@@ -233,7 +233,9 @@ function normalizeAuthorityGap(value, field) {
 function nullableId(value, field) { return value === null ? null : identifier(value, field) }
 function normalizePayload(type, input) {
   assertSanitized(input)
-  exact(input, TYPE_FIELDS[type], "payload")
+  const payloadFields = type === "PROVIDER" && !Object.hasOwn(input, "immutableOutcomeDetailHash")
+    ? TYPE_FIELDS[type].filter((field) => field !== "immutableOutcomeDetailHash") : TYPE_FIELDS[type]
+  exact(input, payloadFields, "payload")
   const p = { ...input }
   if (type === "AUTHORITY") {
     p.grantId = identifier(p.grantId, "payload.grantId"); p.authorityDecisionId = identifier(p.authorityDecisionId, "payload.authorityDecisionId")
@@ -245,6 +247,7 @@ function normalizePayload(type, input) {
     for (const key of ["providerId", "adapterId", "dispatchId"]) p[key] = identifier(p[key], `payload.${key}`)
     p.state = enumValue(p.state, ["ACCEPTED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"], "payload.state")
     p.reasonCode = nullableId(p.reasonCode, "payload.reasonCode"); p.responseContentHash = hash(p.responseContentHash, "payload.responseContentHash")
+    if (p.immutableOutcomeDetailHash !== undefined) p.immutableOutcomeDetailHash = hash(p.immutableOutcomeDetailHash, "payload.immutableOutcomeDetailHash")
     const failed = ["FAILED", "CANCELLED", "UNKNOWN"].includes(p.state)
     if (failed !== (p.reasonCode !== null)) wall("EVIDENCE_LEDGER_SEMANTIC_WALL", "payload.reasonCode")
   } else if (type === "RESERVATION") {
@@ -582,6 +585,22 @@ export function verifyEvidenceLedger(ledgerDir, ledgerId, input, options = {}) {
   try {
     identifier(ledgerId, "ledgerId"); const expected = normalizeVerifyRequest(input, "MULTI_AGENT_EVIDENCE_VERIFY_REQUEST")
     return locked(ledgerDir, options, () => { const state = loadVerified(ledgerDir, ledgerId); const anchorVerified = verifyAnchor(state.anchor, expected); return commonResult("EVIDENCE_LEDGER_VALID", { ok: true, valid: true, eventCount: state.events.length, headAnchor: state.anchor, anchorVerified, independentlyAnchored: anchorVerified, certified: false }) })
+  } catch (error) { return wallResult(error) }
+}
+export function inspectVerifiedEvidenceEvent(ledgerDir, ledgerId, input, options = {}) {
+  try {
+    identifier(ledgerId, "ledgerId")
+    exact(input, ["schemaVersion", "artifactType", "eventId", "expectedAnchor"], "request")
+    if (input.schemaVersion !== 1 || input.artifactType !== "MULTI_AGENT_EVIDENCE_EVENT_INSPECT_REQUEST") wall("EVIDENCE_LEDGER_SCHEMA_WALL", "request")
+    const eventId = identifier(input.eventId, "eventId", UUID_V4_LOWER)
+    const expected = input.expectedAnchor === null ? null : normalizeAnchor(input.expectedAnchor)
+    return locked(ledgerDir, options, () => {
+      const state = loadVerified(ledgerDir, ledgerId)
+      const anchorVerified = verifyAnchor(state.anchor, expected)
+      const event = state.events.find((candidate) => candidate.eventId === eventId)
+      if (!event) wall("EVIDENCE_EVENT_NOT_FOUND_WALL", "eventId")
+      return commonResult("EVIDENCE_EVENT_VERIFIED", { ok: true, valid: true, event: Object.freeze({ ...event }), headAnchor: state.anchor, anchorVerified, independentlyAnchored: anchorVerified })
+    })
   } catch (error) { return wallResult(error) }
 }
 export function deriveOwnerTouchMeter(ledgerDir, ledgerId, input, options = {}) {

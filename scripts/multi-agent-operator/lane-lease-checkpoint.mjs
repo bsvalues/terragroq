@@ -25,7 +25,7 @@ const DIGEST = /^[a-f0-9]{64}$/
 const STATES = new Set(CANONICAL_LIFECYCLE_STATES)
 const TERMINAL_STATES = new Set(TERMINAL_LIFECYCLE_STATES)
 const LEASE_STATUSES = new Set(["ACTIVE", "RELEASED", "EXPIRED"])
-const OPERATION_TYPES = new Set(["ACQUIRE", "RECLAIM", "RENEW", "HEARTBEAT", "CHECKPOINT", "RELEASE", "EXPIRE"])
+const OPERATION_TYPES = new Set(["ACQUIRE", "RECLAIM", "RENEW", "HEARTBEAT", "CHECKPOINT", "RELEASE", "EXPIRE", "SETTLE_TERMINAL"])
 const OPERATION_STATUS = Object.freeze({
   ACQUIRE: "LANE_LEASE_ACQUIRED",
   RECLAIM: "LANE_LEASE_RECLAIMED",
@@ -34,6 +34,7 @@ const OPERATION_STATUS = Object.freeze({
   CHECKPOINT: "LANE_CHECKPOINT_WRITTEN",
   RELEASE: "LANE_LEASE_RELEASED",
   EXPIRE: "LANE_LEASE_EXPIRED_RECORDED",
+  SETTLE_TERMINAL: "LANE_LEASE_EXPIRED_TERMINAL_RELEASED",
 })
 const EVIDENCE_ANCHOR_FIELDS = Object.freeze(["evidenceLedgerId", "eventCount", "headEventHash", "manifestHash"])
 const SENSITIVE_KEY_ALIASES = Object.freeze([
@@ -270,6 +271,7 @@ function validateOperation(raw, storeVersion) {
     "idempotencyKey", "operation", "requestDigest", "workOrderId", "laneId", "workerId",
     "storeVersion", "fencingToken", "status", "recordedAt", "checkpointLifecycleState",
     "checkpointEvidenceHash", "checkpointRecordedAt", "checkpointTransition", "recoveryEvidence", "recoveryEvidenceHash",
+    "leaseStatus", "expiresAt", "checkpointSequence", "lifecycleState",
   ])
     || idempotencyKey(raw.idempotencyKey) === null || !OPERATION_TYPES.has(raw.operation)
     || !DIGEST.test(raw.requestDigest) || id(raw.workOrderId) === null || id(raw.laneId) === null || id(raw.workerId) === null
@@ -277,7 +279,10 @@ function validateOperation(raw, storeVersion) {
     || !integer(raw.fencingToken, 1) || instant(raw.recordedAt) === null
     || raw.status !== OPERATION_STATUS[raw.operation]
     || !STATES.has(raw.checkpointLifecycleState) || !DIGEST.test(raw.checkpointEvidenceHash)
-    || instant(raw.checkpointRecordedAt) === null) {
+    || instant(raw.checkpointRecordedAt) === null
+    || !["ACTIVE", "RELEASED", "EXPIRED"].includes(raw.leaseStatus)
+    || instant(raw.expiresAt) === null || !integer(raw.checkpointSequence, 1)
+    || !STATES.has(raw.lifecycleState) || raw.lifecycleState !== raw.checkpointLifecycleState) {
     wall("LANE_LEASE_STORE_CORRUPT", "invalid-operation")
   }
   if (raw.operation === "CHECKPOINT") {
@@ -304,6 +309,14 @@ function validateOperation(raw, storeVersion) {
     wall("LANE_LEASE_STORE_CORRUPT", "unexpected-recovery-evidence")
   }
   return { ...raw }
+}
+
+function assertOperationSnapshot(operation, state) {
+  if (operation.leaseStatus !== state.status || operation.expiresAt !== state.expiresAt
+    || operation.checkpointSequence !== state.checkpointSequence
+    || operation.lifecycleState !== state.checkpointLifecycleState) {
+    wall("LANE_LEASE_STORE_CORRUPT", "operation-response-snapshot-mismatch")
+  }
 }
 
 function validateOperationHistory(operations, lanes, storeVersion, updatedAt) {
@@ -333,11 +346,12 @@ function validateOperationHistory(operations, lanes, storeVersion, updatedAt) {
       reconstructed.set(key, {
         status: "ACTIVE", fencingToken: operation.fencingToken, workerId: operation.workerId, generation: 1,
         acquiredAt: operation.recordedAt, renewedAt: operation.recordedAt, heartbeatAt: operation.recordedAt,
-        releasedAt: null, expiredAt: null, checkpointSequence: 1,
+        expiresAt: operation.expiresAt, releasedAt: null, expiredAt: null, checkpointSequence: 1,
         checkpointLifecycleState: operation.checkpointLifecycleState,
         checkpointEvidenceHash: operation.checkpointEvidenceHash,
         checkpointRecordedAt: operation.checkpointRecordedAt,
       })
+      assertOperationSnapshot(operation, reconstructed.get(key))
       continue
     }
     if (!prior) wall("LANE_LEASE_STORE_CORRUPT", "operation-without-lane")
@@ -355,8 +369,24 @@ function validateOperationHistory(operations, lanes, storeVersion, updatedAt) {
       reconstructed.set(key, {
         ...prior, status: "ACTIVE", fencingToken: operation.fencingToken, workerId: operation.workerId, generation: prior.generation + 1,
         acquiredAt: operation.recordedAt, renewedAt: operation.recordedAt, heartbeatAt: operation.recordedAt,
-        releasedAt: null, expiredAt: null,
+        expiresAt: operation.expiresAt, releasedAt: null, expiredAt: null,
       })
+      assertOperationSnapshot(operation, reconstructed.get(key))
+      continue
+    }
+    if (operation.operation === "SETTLE_TERMINAL") {
+      if (prior.status !== "EXPIRED" || operation.fencingToken !== prior.fencingToken
+        || operation.workerId !== prior.workerId || !TERMINAL_STATES.has(prior.checkpointLifecycleState)
+        || operation.checkpointLifecycleState !== prior.checkpointLifecycleState
+        || operation.checkpointEvidenceHash !== prior.checkpointEvidenceHash
+        || operation.checkpointRecordedAt !== prior.checkpointRecordedAt) {
+        wall("LANE_LEASE_STORE_CORRUPT", "invalid-expired-terminal-settlement-history")
+      }
+      prior.status = "RELEASED"
+      prior.expiresAt = operation.expiresAt
+      prior.releasedAt = operation.recordedAt
+      prior.expiredAt = null
+      assertOperationSnapshot(operation, prior)
       continue
     }
     if (prior.status !== "ACTIVE" || operation.fencingToken !== prior.fencingToken) {
@@ -379,17 +409,22 @@ function validateOperationHistory(operations, lanes, storeVersion, updatedAt) {
       || operation.checkpointRecordedAt !== prior.checkpointRecordedAt) {
       wall("LANE_LEASE_STORE_CORRUPT", "operation-checkpoint-mismatch")
     }
-    if (operation.operation === "RENEW") prior.renewedAt = operation.recordedAt
+    if (operation.operation === "RENEW") {
+      prior.renewedAt = operation.recordedAt
+      prior.expiresAt = operation.expiresAt
+    }
     if (operation.operation === "HEARTBEAT") prior.heartbeatAt = operation.recordedAt
     if (operation.operation === "CHECKPOINT") prior.checkpointSequence += 1
     if (operation.operation === "RELEASE") {
       prior.status = "RELEASED"
+      prior.expiresAt = operation.expiresAt
       prior.releasedAt = operation.recordedAt
     }
     if (operation.operation === "EXPIRE") {
       prior.status = "EXPIRED"
       prior.expiredAt = operation.recordedAt
     }
+    assertOperationSnapshot(operation, prior)
   }
   if ((storeVersion === 0 && updatedAt !== null)
     || (storeVersion > 0 && operations.at(-1).recordedAt !== updatedAt)) {
@@ -551,7 +586,11 @@ function idempotentResult(store, operation, request) {
   if (prior.operation !== operation || prior.requestDigest !== requestDigest(operation, request)) wall("IDEMPOTENCY_KEY_REUSE_WALL")
   return result(`${prior.status}_IDEMPOTENT`, {
     ok: true, workOrderId: prior.workOrderId, laneId: prior.laneId, workerId: prior.workerId,
-    storeVersion: prior.storeVersion, fencingToken: prior.fencingToken, idempotent: true,
+    storeVersion: prior.storeVersion, fencingToken: prior.fencingToken,
+    leaseStatus: prior.leaseStatus, expiresAt: prior.expiresAt,
+    checkpointSequence: prior.checkpointSequence,
+    lifecycleState: prior.lifecycleState,
+    idempotent: true,
   })
 }
 
@@ -602,6 +641,10 @@ function writeOperation(storePath, store, lane, operation, request, status, now)
       checkpointTransition: operation === "CHECKPOINT" ? request.transition : null,
       recoveryEvidence,
       recoveryEvidenceHash: recoveryEvidence === null ? null : digest(canonical(recoveryEvidence)),
+      leaseStatus: lane.status,
+      expiresAt: lane.expiresAt,
+      checkpointSequence: lane.checkpoint.sequence,
+      lifecycleState: lane.checkpoint.lifecycleState,
     }],
   }
   const validated = validateStore(next, store.storeId)
@@ -767,6 +810,44 @@ export function expireLaneLease(storePath, storeId, request, options = {}) {
       if (instant(lane.expiresAt) > now) wall("LANE_LEASE_NOT_EXPIRED")
       const expired = { ...lane, status: "EXPIRED", expiredAt: iso(now) }
       return writeOperation(storePath, store, expired, "EXPIRE", request, "LANE_LEASE_EXPIRED_RECORDED", now)
+    })
+  } catch (error) { return wallResult(error) }
+}
+
+export function settleExpiredTerminalLaneLease(storePath, storeId, request, options = {}) {
+  try {
+    validateConfiguration(storePath, storeId)
+    validateCommon(request, "MULTI_AGENT_LANE_LEASE_SETTLE_TERMINAL_REQUEST", [
+      "holderToken", "expectedFencingToken", "expectedCheckpointSequence", "expectedLifecycleState", "expectedCheckpointEvidence",
+    ])
+    if (typeof request.holderToken !== "string" || request.holderToken.length < 16 || request.holderToken.length > 4096 || request.holderToken.includes("\0")
+      || !integer(request.expectedFencingToken, 1) || !integer(request.expectedCheckpointSequence, 1)
+      || !TERMINAL_STATES.has(request.expectedLifecycleState)) wall("MULTI_AGENT_LANE_LEASE_SETTLE_TERMINAL_REQUEST_INVALID")
+    const expectedCheckpointEvidence = validateEvidence(request.expectedCheckpointEvidence, [request.holderToken])
+    const normalized = { ...request, expectedCheckpointEvidence, holderTokenDigest: digest(request.holderToken) }
+    return locked(storePath, options, () => {
+      const store = readStore(storePath, storeId, false)
+      const prior = idempotentResult(store, "SETTLE_TERMINAL", normalized)
+      if (prior) return prior
+      assertVersion(store, request)
+      const lane = locate(store, request)
+      const now = mutationNow(options, store)
+      if (lane.workerId !== request.workerId || lane.fencingToken !== request.expectedFencingToken
+        || !sameDigest(lane.holderTokenDigest, normalized.holderTokenDigest)) wall("LANE_LEASE_NOT_HOLDER")
+      if (lane.status !== "EXPIRED" || !TERMINAL_STATES.has(lane.checkpoint.lifecycleState)) {
+        wall("LANE_LEASE_EXPIRED_TERMINAL_SETTLEMENT_REQUIRED")
+      }
+      if (lane.checkpoint.sequence !== request.expectedCheckpointSequence
+        || lane.checkpoint.lifecycleState !== request.expectedLifecycleState
+        || canonical(lane.checkpoint.evidence) !== canonical(expectedCheckpointEvidence)) {
+        wall("LANE_LEASE_EXPIRED_TERMINAL_SETTLEMENT_EVIDENCE_WALL")
+      }
+      const expiryOperation = store.operations.findLast((entry) => entry.workOrderId === lane.workOrderId
+        && entry.laneId === lane.laneId && entry.operation === "EXPIRE")
+      if (!expiryOperation || expiryOperation.fencingToken !== lane.fencingToken
+        || expiryOperation.status !== OPERATION_STATUS.EXPIRE) wall("LANE_LEASE_RECLAIM_REQUIRES_DURABLE_EXPIRY")
+      const settled = { ...lane, status: "RELEASED", releasedAt: iso(now), expiresAt: iso(now), expiredAt: null }
+      return writeOperation(storePath, store, settled, "SETTLE_TERMINAL", normalized, OPERATION_STATUS.SETTLE_TERMINAL, now)
     })
   } catch (error) { return wallResult(error) }
 }
