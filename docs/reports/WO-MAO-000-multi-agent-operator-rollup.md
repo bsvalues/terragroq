@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-`HOSTED_CODEX_COORDINATOR_ADAPTER_PASS / WO-MAO-031_READY / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
+`HOSTED_CODEX_ROLE_ADAPTERS_PASS / NO_READY_MAO_NODE / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
 
 ## Truth
 
@@ -24,11 +24,13 @@ set resolver, local atomic reservation ledger, provider eligibility/response bou
 taxonomy, per-lane leases and checkpoints, append-only evidence ledger, mechanically derived owner-
 touch meter, recoverable eligible-set scheduler, deterministic team topology/fan-in projection,
 isolated-workspace lifecycle, one-writer handoff, hard-ceiling priority/fairness admission policy, and the
-current-session hosted Codex coordinator adapter. WO-MAO-028 additionally proves deterministic scheduler
-simulation and replay behavior in a pure/static harness. WO-MAO-030 translates selected hosted team plans
-into native assignments, cancellation-ready records, messages, and sanitized evidence while preserving the
-WO-MAO-029 `SESSION_ONLY` boundary. These are bounded contracts, not provider or runtime execution, a durable provider dispatcher,
-or automated GitHub delivery implementation.
+current-session hosted Codex coordinator and role lifecycle adapters. WO-MAO-028 additionally proves
+deterministic scheduler simulation and replay behavior in a pure/static harness. WO-MAO-030 translates
+selected hosted team plans into native assignments, cancellation-ready records, messages, and sanitized
+evidence while preserving the WO-MAO-029 `SESSION_ONLY` boundary. WO-MAO-031 proves builder,
+independent assurance, original-builder remediation, and bounded re-review adapters through the common
+provider response contract. These are bounded contracts, not provider or runtime execution, a durable
+provider dispatcher, GitHub review automation, or automated GitHub delivery implementation.
 
 ## Non-negotiable operating state
 
@@ -85,14 +87,18 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 - `docs/reports/WO-MAO-026-reservation-aware-handoff.md`
 - `docs/reports/WO-MAO-027-concurrency-budgets-priority-fairness.md`
 - `docs/reports/WO-MAO-028-scheduler-simulation-model-checking.md`
+
+## Phase 4 evidence
+
 - `docs/reports/WO-MAO-030-hosted-codex-coordinator-adapter.md`
+- `docs/reports/WO-MAO-031-codex-builder-assurance-remediation-adapters.md`
 
 ## Next transition
 
-`WO-MAO-001` through `WO-MAO-030` and `WO-MAO-032` are complete.
+`WO-MAO-001` through `WO-MAO-032` are complete.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set and
-current-work projection contain only `WO-MAO-031`; later nodes remain pending on their
-declared dependencies. The rejected local runtime is not in the eligible dependency chain.
+current-work projection contain no ready MAO Work Order because `WO-MAO-034` still depends on the
+deferred `WO-MAO-033` provider lane. The rejected local runtime is not in the eligible dependency chain.
 
 ## Validation evidence
 

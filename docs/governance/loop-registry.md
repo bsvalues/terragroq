@@ -118,14 +118,16 @@ Codex team work does not depend on that rejected adapter.
 Canonical playbook:
 `docs/governance/multi-agent-operator-playbook.md`
 
-Current transition: `WO-MAO-001` through `WO-MAO-030` and `WO-MAO-032` are complete.
+Current transition: `WO-MAO-001` through `WO-MAO-032` are complete.
 The merged WO-MAO-023 scheduler, deterministic WO-MAO-024 team topology, and WO-MAO-025 isolated-workspace
 manager plus WO-MAO-026 reservation-aware handoff and WO-MAO-027 hard-ceiling concurrency admission
 policy preserve dependency-, reservation-, and ownership-driven selection. WO-MAO-028 adds pure/static
 scheduler model checking without creating provider or runtime authority. WO-MAO-030 adds a current-session hosted
-Codex coordinator adapter without durable provider dispatch, runtime activation, or owner relay. `WO-MAO-033` is `DEFERRED /
-PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set contains only `WO-MAO-031`; the
-active-work projection does not promote later pending dependents.
+Codex coordinator adapter without durable provider dispatch, runtime activation, or owner relay. WO-MAO-031 adds
+current-session builder, independent assurance, original-builder remediation, and bounded re-review adapters without
+GitHub review automation. `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible
+set contains no ready MAO Work Order until the provider-unavailable dependency for `WO-MAO-034` is settled under the
+recorded policy; the active-work projection does not promote later pending dependents.
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
@@ -191,8 +193,8 @@ Current status:
 
 1. Preserve the completed Phase 0 executable truth and preventive controls.
 2. Preserve the completed Phase 1 hosted proof and Phase 2 local-contract evidence.
-3. Continue the dependency-cleared eligible set at `WO-MAO-031` through provider adapters, federation,
-   GitHub delivery, resilience, and certification phases.
+3. Resolve the provider-unavailable dependency policy for `WO-MAO-034` without turning Claude repair into owner work,
+   then continue through federation, GitHub delivery, resilience, and certification phases when dependency-cleared.
 4. Keep useful independent R0/R1 product lanes moving whenever dependencies and
    reservations permit.
 
