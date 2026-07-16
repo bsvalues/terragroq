@@ -110,9 +110,9 @@ WO-MAO-023 eligible-set scheduler, the WO-MAO-024 team-topology contract, the bo
 isolated-workspace manager, the WO-MAO-026 reservation-aware handoff contract, the WO-MAO-027 durable
 concurrency/fairness scheduler extension, the WO-MAO-028 pure deterministic scheduler model-check
 harness, and the provider assessments
-`WO-MAO-029` and `WO-MAO-032` are complete. `WO-MAO-033` is
+`WO-MAO-029`, `WO-MAO-030`, and `WO-MAO-032` are complete. `WO-MAO-033` is
 `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The dependency resolver exposes only
-`WO-MAO-030`; later Work Orders remain pending on their declared dependencies. The program
+`WO-MAO-031`; later Work Orders remain pending on their declared dependencies. The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
 deployment, protected data, or destructive operations.

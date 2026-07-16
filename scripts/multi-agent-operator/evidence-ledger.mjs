@@ -428,7 +428,11 @@ function acquireLock(ledgerDir, options) {
   }
 }
 function locked(ledgerDir, options, fn) { let unlock; try { unlock = acquireLock(ledgerDir, options); return fn() } finally { if (unlock) unlock() } }
-function fsyncDirectory(directory) { const handle = fs.openSync(directory, "r"); try { fs.fsyncSync(handle) } finally { fs.closeSync(handle) } }
+function fsyncDirectory(directory) {
+  if (process.platform === "win32") return
+  const handle = fs.openSync(directory, "r")
+  try { fs.fsyncSync(handle) } finally { fs.closeSync(handle) }
+}
 function durableNoClobber(filePath, content) {
   const parent = path.dirname(filePath); fs.mkdirSync(parent, { recursive: true, mode: 0o700 })
   const temporary = path.join(path.dirname(parent), `.evidence-pending-${process.pid}-${crypto.randomUUID()}`)

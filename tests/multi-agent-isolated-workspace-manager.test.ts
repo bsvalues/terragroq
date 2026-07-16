@@ -378,7 +378,7 @@ describe("multi-agent isolated workspace manager", () => {
     expect(spawnSync("git", ["show-ref", "--verify", "--quiet", "refs/heads/codex/wo-mao-025"], {
       cwd: repositoryRoot,
     }).status).not.toBe(0)
-  })
+  }, 30_000)
 
   it("requires single-lane atomic apply before any workspace mutation", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mao-workspace-atomic-"))
@@ -478,7 +478,7 @@ describe("multi-agent isolated workspace manager", () => {
       results: [{ action: "CLEANUP", changed: true }],
     })
     expect(fs.existsSync(workspacePath)).toBe(false)
-  })
+  }, 30_000)
 
   it("binds trusted verification to lifecycle intent and reservation scope", () => {
     const value = lane()

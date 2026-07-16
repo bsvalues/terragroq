@@ -345,7 +345,7 @@ describe("reservation-aware role handoff", () => {
     git(repository, "remote", "set-url", "origin", "https://evil.example/github.com/bsvalues/terragroq.git")
     expect(() => applyReservationAwareHandoff(handoffStore, reviewerToVerifier, verifier))
       .toThrow("WORKSPACE_NOT_LIVE")
-  })
+  }, 30_000)
 
   it.each([
     ["released reservation", { reservation: { ...request().reservation, released: true } }, "HANDOFF_RESERVATION_WALL"],

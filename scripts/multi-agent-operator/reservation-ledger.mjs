@@ -24,6 +24,17 @@ const COLLISION_REASON_ORDER = Object.freeze([
   "PROTECTED_RESOURCE_COLLISION",
 ])
 
+function fsyncDirectoryBestEffort(directory) {
+  if (process.platform === "win32") return
+  let handle
+  try {
+    handle = fs.openSync(directory, "r")
+    fs.fsyncSync(handle)
+  } finally {
+    if (handle !== undefined) fs.closeSync(handle)
+  }
+}
+
 function stableCompare(left, right) {
   return left.localeCompare(right, "en", { sensitivity: "variant" })
 }
@@ -271,8 +282,7 @@ function durableWrite(ledgerPath, ledger) {
     fs.closeSync(handle)
     handle = null
     fs.renameSync(temporary, ledgerPath)
-    const directoryHandle = fs.openSync(directory, "r")
-    try { fs.fsyncSync(directoryHandle) } finally { fs.closeSync(directoryHandle) }
+    fsyncDirectoryBestEffort(directory)
   } catch {
     if (handle !== null && handle !== undefined) {
       try { fs.closeSync(handle) } catch { /* preserve the typed wall */ }

@@ -165,6 +165,18 @@ describe("multi-agent executable capability inventory", () => {
       adapterRef: null,
       trustGateRef: PREVENTIVE_TRUST_GATE_V2_REF,
     })
+    expect(capability("hosted-codex-coordinator-adapter")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "WORKER_CANDIDATE",
+      coordinationEligible: true,
+      adapterRef: "scripts/multi-agent-operator/codex-coordinator-adapter.mjs",
+      trustGateRef: PREVENTIVE_TRUST_GATE_V2_REF,
+      restrictions: expect.arrayContaining([
+        "Provider-contract dispatch remains false",
+        "No durable persistence, service worker, runtime activation, or authority grant",
+        "No GitHub write, production operation, rejected nested-runtime reuse, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
@@ -186,7 +198,7 @@ describe("multi-agent executable capability inventory", () => {
     })
     expect(MULTI_AGENT_CAPABILITY_INVENTORY.filter((entry) => entry.coordinationEligible)
       .map((entry) => entry.capabilityId))
-      .toEqual(["hosted-codex-session", "codex-native-subagent-team"])
+      .toEqual(["hosted-codex-session", "codex-native-subagent-team", "hosted-codex-coordinator-adapter"])
   })
 
   it("requires status, adapter, authority, and preventive trust proof for an executable worker", () => {

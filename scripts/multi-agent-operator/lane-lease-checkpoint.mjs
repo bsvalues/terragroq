@@ -36,6 +36,17 @@ const OPERATION_STATUS = Object.freeze({
   EXPIRE: "LANE_LEASE_EXPIRED_RECORDED",
   SETTLE_TERMINAL: "LANE_LEASE_EXPIRED_TERMINAL_RELEASED",
 })
+
+function fsyncDirectoryBestEffort(directory) {
+  if (process.platform === "win32") return
+  let handle
+  try {
+    handle = fs.openSync(directory, "r")
+    fs.fsyncSync(handle)
+  } finally {
+    if (handle !== undefined) fs.closeSync(handle)
+  }
+}
 const EVIDENCE_ANCHOR_FIELDS = Object.freeze(["evidenceLedgerId", "eventCount", "headEventHash", "manifestHash"])
 const SENSITIVE_KEY_ALIASES = Object.freeze([
   "authorization", "authheader", "credential", "credentials", "cookie", "cookies",
@@ -501,8 +512,7 @@ function durableWrite(storePath, store) {
     fs.closeSync(handle)
     handle = null
     fs.renameSync(temporary, storePath)
-    const directoryHandle = fs.openSync(directory, "r")
-    try { fs.fsyncSync(directoryHandle) } finally { fs.closeSync(directoryHandle) }
+    fsyncDirectoryBestEffort(directory)
   } catch {
     if (handle !== null) try { fs.closeSync(handle) } catch { /* typed wall wins */ }
     try { fs.rmSync(temporary, { force: true }) } catch { /* typed wall wins */ }
