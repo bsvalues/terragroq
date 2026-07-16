@@ -190,6 +190,19 @@ describe("multi-agent executable capability inventory", () => {
         "No durable persistence, service worker, runtime activation, or authority grant",
       ]),
     })
+    expect(capability("cross-provider-routing-review-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CROSS_PROVIDER_ROUTING_REVIEW_PROVEN",
+      adapterRef: "scripts/multi-agent-operator/cross-provider-routing-review.mjs",
+      authorityGrantRefs: [],
+      trustGateRef: null,
+      restrictions: expect.arrayContaining([
+        "Static routing and review planning only",
+        "Unavailable providers contribute no capability",
+        "No provider dispatch, GitHub review automation, runtime activation, or authority grant",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
