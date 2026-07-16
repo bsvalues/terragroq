@@ -65,6 +65,7 @@ function request(overrides: Record<string, unknown> = {}) {
 
 function trust() {
   return {
+    authorizeStorePath: (storePath: string) => ({ authorized: true, canonicalStorePath: path.resolve(storePath) }),
     verifyHandoffBinding: (binding: Record<string, unknown>) => ({ verified: true, ...binding }),
   }
 }
@@ -186,6 +187,10 @@ describe("reservation-aware role handoff", () => {
     expect(applyReservationAwareHandoff(store, value, trust())).toMatchObject({
       sequence: first.sequence, idempotent: true,
     })
+    expect(applyReservationAwareHandoff(store, value, {
+      authorizeStorePath: trust().authorizeStorePath,
+      verifyHandoffBinding: () => { throw new Error("live custody no longer available") },
+    })).toMatchObject({ sequence: first.sequence, idempotent: true })
     expect(() => applyReservationAwareHandoff(store, { ...value, targetRole: "VERIFIER" }, trust()))
       .toThrow("HANDOFF_IDEMPOTENCY_WALL")
     expect(() => applyReservationAwareHandoff(store,
@@ -195,8 +200,9 @@ describe("reservation-aware role handoff", () => {
 
   it("requires exact live host verification before persistence", () => {
     const { store } = workspace()
-    expect(() => applyReservationAwareHandoff(store, request())).toThrow("HOST_VERIFIER_REQUIRED")
+    expect(() => applyReservationAwareHandoff(store, request())).toThrow("STORE_PATH_AUTHORIZER_REQUIRED")
     expect(() => applyReservationAwareHandoff(store, request(), {
+      authorizeStorePath: trust().authorizeStorePath,
       verifyHandoffBinding: (binding: Record<string, unknown>) => ({ verified: true, ...binding, branch: "codex/foreign" }),
     })).toThrow("EXACT_LIVE_BINDING_REQUIRED")
     expect(fs.existsSync(store)).toBe(false)
@@ -210,6 +216,7 @@ describe("reservation-aware role handoff", () => {
     const leaseStore = path.join(stateRoot, "leases.json")
     const handoffStore = path.join(stateRoot, "handoffs.json")
     const hold = "holder-material-mao-026"
+    const liveNow = Date.now()
     fs.mkdirSync(repository)
     spawnSync("git", ["init", "-b", "codex/mao-reservation-handoff-026", repository], { encoding: "utf8" })
     git(repository, "config", "user.email", "operator@example.invalid")
@@ -245,7 +252,7 @@ describe("reservation-aware role handoff", () => {
       holderToken: hold,
       leaseDurationMs: 60_000,
       checkpointEvidence: { headCommitSha: head },
-    }, { now: () => 1_000 })
+    }, { now: () => liveNow })
     expect(lease.status).toBe("LANE_LEASE_ACQUIRED")
 
     const rFence = reservation.fencingToken
@@ -262,9 +269,24 @@ describe("reservation-aware role handoff", () => {
       reservationLedgerId: "ledger-mao-026",
       laneLeaseStorePath: leaseStore,
       laneLeaseStoreId: "lease-store-mao-026",
-      now: () => 1_500,
+      now: () => liveNow + 500,
     })
-    const builderToReviewer = applyReservationAwareHandoff(handoffStore, value, verifier)
+    const cli = path.resolve("scripts/multi-agent-operator/reservation-aware-handoff-cli.mjs")
+    const inputFile = path.join(root, "live-handoff.json")
+    const hostConfigFile = path.join(root, "handoff-host.json")
+    fs.writeFileSync(inputFile, JSON.stringify(value))
+    fs.writeFileSync(hostConfigFile, JSON.stringify({
+      approvedStateRoot: stateRoot,
+      reservationLedgerPath: reservationLedger,
+      reservationLedgerId: "ledger-mao-026",
+      laneLeaseStorePath: leaseStore,
+      laneLeaseStoreId: "lease-store-mao-026",
+    }))
+    const applied = spawnSync(process.execPath, [cli, "apply", handoffStore, inputFile, hostConfigFile], {
+      encoding: "utf8",
+    })
+    expect(applied.status).toBe(0)
+    const builderToReviewer = JSON.parse(applied.stdout)
     expect(builderToReviewer).toMatchObject({
       sequence: 1,
       targetRole: "REVIEWER",
@@ -294,7 +316,7 @@ describe("reservation-aware role handoff", () => {
       transition: { from: "LEASED", to: "PROVIDER_DISPATCHED", reasonCode: null, failureClass: null,
         authorityGap: { present: false, condition: null, conditionRef: null } },
       evidence: { headCommitSha: remediationHead },
-    }, { now: () => 2_000 })
+    }, { now: () => liveNow + 1_000 })
     expect(checkpoint.status).toBe("LANE_CHECKPOINT_WRITTEN")
     const remediatorToReviewer = {
       ...next(reviewerToRemediator, "REMEDIATOR", "REVIEWER", 2),
@@ -312,6 +334,17 @@ describe("reservation-aware role handoff", () => {
     fs.symlinkSync(outside, path.join(stateRoot, "escape"), "dir")
     expect(() => applyReservationAwareHandoff(path.join(stateRoot, "escape", "handoffs.json"), value, verifier))
       .toThrow("STORE_PATH_OUTSIDE_APPROVED_ROOT")
+    const outsideFile = path.join(outside, "foreign-handoffs.json")
+    fs.writeFileSync(outsideFile, "{}")
+    const linkedStore = path.join(stateRoot, "linked-handoffs.json")
+    fs.symlinkSync(outsideFile, linkedStore, "file")
+    expect(() => applyReservationAwareHandoff(linkedStore, value, verifier))
+      .toThrow("STORE_PATH_OUTSIDE_APPROVED_ROOT")
+
+    const reviewerToVerifier = next(remediatorToReviewer, "REVIEWER", "VERIFIER", 3)
+    git(repository, "remote", "set-url", "origin", "https://evil.example/github.com/bsvalues/terragroq.git")
+    expect(() => applyReservationAwareHandoff(handoffStore, reviewerToVerifier, verifier))
+      .toThrow("WORKSPACE_NOT_LIVE")
   })
 
   it.each([
@@ -449,7 +482,7 @@ describe("reservation-aware role handoff", () => {
       .toThrow("CONSISTENT_LINEAR_HISTORY_REQUIRED")
   })
 
-  it("CLI plans deterministically and fails apply before mutation without host trust", () => {
+  it("CLI plans deterministically and requires explicit host configuration for apply", () => {
     const { root, store } = workspace()
     const inputFile = path.join(root, "input.json")
     fs.writeFileSync(inputFile, JSON.stringify(request()))
@@ -460,8 +493,8 @@ describe("reservation-aware role handoff", () => {
       reservationReleased: false, leaseReleased: false, authorityGranted: false })
     const applied = spawnSync(process.execPath, [cli, "apply", store, inputFile], { encoding: "utf8", env: {} })
     expect(applied.status).toBe(2)
-    expect(JSON.parse(applied.stdout)).toMatchObject({ ok: false, code: "HANDOFF_TRUST_WALL",
-      detail: "HOST_VERIFIER_REQUIRED", persistencePerformed: false,
+    expect(JSON.parse(applied.stdout)).toMatchObject({ ok: false, code: "HANDOFF_CLI_WALL",
+      detail: "PLAN_INPUT_OR_APPLY_STORE_INPUT_HOST_CONFIG_OR_INSPECT_STORE_ID_REQUIRED", persistencePerformed: false,
       reservationReleased: false, leaseReleased: false, secondWriterEnabled: false, authorityGranted: false })
     expect(fs.existsSync(store)).toBe(false)
   })

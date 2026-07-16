@@ -44,8 +44,33 @@ function git(workspacePath, args) {
 }
 
 function githubRepository(remote) {
-  const match = remote.match(/(?:github\.com[/:])([^/]+\/[^/]+?)(?:\.git)?$/i)
-  return match?.[1] ?? null
+  let repository = null
+  try {
+    const parsed = new URL(remote)
+    if (parsed.hostname.toLowerCase() !== "github.com") return null
+    repository = parsed.pathname.replace(/^\/+|\/+$/g, "")
+  } catch {
+    const scp = remote.match(/^(?:[^@/:]+@)?github\.com:([^\s]+)$/i)
+    repository = scp?.[1] ?? null
+  }
+  if (repository === null) return null
+  const normalized = repository.replace(/\.git$/i, "")
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(normalized) ? normalized : null
+}
+
+function authorizeStorePath(stateRoot, requestedStorePath) {
+  const storePath = canonical(requestedStorePath)
+  const storeParent = nearestExistingRealPath(path.dirname(storePath))
+  if (!within(stateRoot, storeParent)) hostWall("STORE_PATH_OUTSIDE_APPROVED_ROOT")
+  try {
+    const stats = fs.lstatSync(storePath)
+    if (stats.isSymbolicLink() || !within(stateRoot, fs.realpathSync.native(storePath))) {
+      hostWall("STORE_PATH_OUTSIDE_APPROVED_ROOT")
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error
+  }
+  return { authorized: true, canonicalStorePath: storePath }
 }
 
 export function createReservationAwareHandoffHostVerifier({
@@ -58,10 +83,11 @@ export function createReservationAwareHandoffHostVerifier({
 }) {
   const stateRoot = fs.realpathSync.native(canonical(approvedStateRoot))
   return Object.freeze({
+    authorizeStorePath(storePath) {
+      return authorizeStorePath(stateRoot, storePath)
+    },
     verifyHandoffBinding(binding) {
-      const storePath = canonical(binding.canonicalStorePath)
-      const storeParent = nearestExistingRealPath(path.dirname(storePath))
-      if (!within(stateRoot, storeParent)) hostWall("STORE_PATH_OUTSIDE_APPROVED_ROOT")
+      authorizeStorePath(stateRoot, binding.canonicalStorePath)
 
       const reservation = inspectReservationLedger(reservationLedgerPath, reservationLedgerId, {
         schemaVersion: 1,

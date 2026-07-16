@@ -410,10 +410,21 @@ function verifyTrust(normalized, plan, storePath, trustedContext) {
   return contentHash(verified)
 }
 
+function verifyStorePathAuthorization(storePath, trustedContext) {
+  if (!trustedContext || typeof trustedContext.authorizeStorePath !== "function") {
+    wall("HANDOFF_TRUST_WALL", "trustedContext", "STORE_PATH_AUTHORIZER_REQUIRED")
+  }
+  const canonicalStorePath = storeFile(storePath)
+  const verified = trustedContext.authorizeStorePath(canonicalStorePath)
+  if (contentHash(verified) !== contentHash({ authorized: true, canonicalStorePath })) {
+    wall("HANDOFF_TRUST_WALL", "trustedContext", "EXACT_STORE_PATH_AUTHORIZATION_REQUIRED")
+  }
+}
+
 export function applyReservationAwareHandoff(storePath, input, trustedContext = undefined) {
   const normalized = normalize(input)
   const plan = planFrom(normalized)
-  const trustBindingHash = verifyTrust(normalized, plan, storePath, trustedContext)
+  verifyStorePathAuthorization(storePath, trustedContext)
   const lock = `${storeFile(storePath)}.lock`
   fs.mkdirSync(path.dirname(lock), { recursive: true })
   try { fs.mkdirSync(lock) } catch { wall("HANDOFF_LOCK_WALL", "store", "HANDOFF_ALREADY_ACTIVE") }
@@ -425,6 +436,7 @@ export function applyReservationAwareHandoff(storePath, input, trustedContext = 
       if (priorOperation.requestHash !== requestHash) wall("HANDOFF_IDEMPOTENCY_WALL", "idempotencyKey", "KEY_REUSE")
       return freeze({ ...priorOperation.result, idempotent: true })
     }
+    const trustBindingHash = verifyTrust(normalized, plan, storePath, trustedContext)
     const laneIndex = store.lanes.findIndex((entry) => entry.workOrderId === normalized.workOrderId
       || entry.laneId === normalized.laneId)
     const current = laneIndex === -1 ? null : store.lanes[laneIndex]
