@@ -77,12 +77,13 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 
 - `docs/reports/WO-MAO-023-eligible-set-scheduler-worker-pool.md`
 - `docs/reports/WO-MAO-024-team-topology-fan-out-fan-in.md`
+- `docs/reports/WO-MAO-025-isolated-workspace-manager.md`
 
 ## Next transition
 
-`WO-MAO-001` through `WO-MAO-024`, `WO-MAO-029`, and `WO-MAO-032` are complete.
+`WO-MAO-001` through `WO-MAO-025`, `WO-MAO-029`, and `WO-MAO-032` are complete.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set and
-current-work projection contain only `WO-MAO-025`; later Phase 3 nodes remain pending on their
+current-work projection contain only `WO-MAO-026`; later Phase 3 nodes remain pending on their
 declared dependencies. The rejected local runtime is not in the eligible dependency chain.
 
 ## Validation evidence

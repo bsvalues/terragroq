@@ -67,6 +67,20 @@ describe("multi-agent executable capability inventory", () => {
         "Owner operations remain prohibited and owner-touch counters remain zero",
       ]),
     })
+    expect(capability("multi-agent-phase-three-isolated-workspace-manager")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "PHASE_THREE_ISOLATED_WORKSPACE_MANAGER_PROVEN",
+      adapterRef: null,
+      authorityGrantRefs: [],
+      trustGateRef: null,
+      restrictions: expect.arrayContaining([
+        "Git mutation is bounded to exact owned branch/worktree lifecycle under an authorized coordinator",
+        "No shared worktree, foreign or dirty change absorption, forced deletion, or unsafe cleanup",
+        "No authority grant, provider dispatch, runtime activation, push, PR, merge, or production operation",
+        "Owner operations remain prohibited and owner-touch counters remain zero",
+      ]),
+    })
     expect(capability("brain-council-advisory")).toMatchObject({
       status: "PROVEN",
       executionClass: "NON_EXECUTABLE",
