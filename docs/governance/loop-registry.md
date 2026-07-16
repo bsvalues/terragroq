@@ -118,7 +118,7 @@ Codex team work does not depend on that rejected adapter.
 Canonical playbook:
 `docs/governance/multi-agent-operator-playbook.md`
 
-Current transition: `WO-MAO-001` through `WO-MAO-032` and `WO-MAO-034` are complete.
+Current transition: `WO-MAO-001` through `WO-MAO-032`, `WO-MAO-034`, and `WO-MAO-035` are complete.
 The merged WO-MAO-023 scheduler, deterministic WO-MAO-024 team topology, and WO-MAO-025 isolated-workspace
 manager plus WO-MAO-026 reservation-aware handoff and WO-MAO-027 hard-ceiling concurrency admission
 policy preserve dependency-, reservation-, and ownership-driven selection. WO-MAO-028 adds pure/static
@@ -126,8 +126,9 @@ scheduler model checking without creating provider or runtime authority. WO-MAO-
 Codex coordinator adapter without durable provider dispatch, runtime activation, or owner relay. WO-MAO-031 adds
 current-session builder, independent assurance, original-builder remediation, and bounded re-review adapters without
 GitHub review automation. WO-MAO-034 adds static cross-provider routing and review planning while excluding unavailable
-providers. `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set contains
-`WO-MAO-035`; the active-work projection does not promote later pending dependents.
+providers. WO-MAO-035 adds static provider-health classification, circuit-breaker/backoff projection, and bounded reroute
+selection. `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set contains
+`WO-MAO-036`; the active-work projection does not promote later pending dependents.
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
@@ -193,7 +194,7 @@ Current status:
 
 1. Preserve the completed Phase 0 executable truth and preventive controls.
 2. Preserve the completed Phase 1 hosted proof and Phase 2 local-contract evidence.
-3. Continue at `WO-MAO-035` through provider health, reroute, conformance, GitHub delivery, resilience, and certification
+3. Continue at `WO-MAO-036` through provider conformance, GitHub delivery, resilience, and certification
    phases when dependency-cleared.
 4. Keep useful independent R0/R1 product lanes moving whenever dependencies and
    reservations permit.

@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-`CROSS_PROVIDER_ROUTING_REVIEW_PASS / WO-MAO-035_READY / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
+`PROVIDER_HEALTH_REROUTE_PASS / WO-MAO-036_READY / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
 
 ## Truth
 
@@ -32,7 +32,8 @@ independent assurance, original-builder remediation, and bounded re-review adapt
 provider response contract. These are bounded contracts, not provider or runtime execution, a durable
 provider dispatcher, GitHub review automation, or automated GitHub delivery implementation. WO-MAO-034
 adds static cross-provider routing and review planning that excludes unavailable providers and keeps
-same-provider independent Codex review explicit.
+same-provider independent Codex review explicit. WO-MAO-035 adds static provider-health classification,
+circuit-breaker/backoff projection, and bounded fallback selection without provider calls or dispatch.
 
 ## Non-negotiable operating state
 
@@ -95,12 +96,13 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 - `docs/reports/WO-MAO-030-hosted-codex-coordinator-adapter.md`
 - `docs/reports/WO-MAO-031-codex-builder-assurance-remediation-adapters.md`
 - `docs/reports/WO-MAO-034-cross-provider-routing-review.md`
+- `docs/reports/WO-MAO-035-provider-health-reroute.md`
 
 ## Next transition
 
-`WO-MAO-001` through `WO-MAO-032` and `WO-MAO-034` are complete.
+`WO-MAO-001` through `WO-MAO-032`, `WO-MAO-034`, and `WO-MAO-035` are complete.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set and
-current-work projection contain `WO-MAO-035`. The rejected local runtime is not in the eligible
+current-work projection contain `WO-MAO-036`. The rejected local runtime is not in the eligible
 dependency chain.
 
 ## Validation evidence

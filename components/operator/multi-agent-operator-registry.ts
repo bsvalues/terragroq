@@ -161,6 +161,7 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-032", "docs/reports/WO-MAO-032-claude-capability-transport-proof.md"],
   ["WO-MAO-033", "docs/reports/WO-MAO-032-claude-capability-transport-proof.md"],
   ["WO-MAO-034", "docs/reports/WO-MAO-034-cross-provider-routing-review.md"],
+  ["WO-MAO-035", "docs/reports/WO-MAO-035-provider-health-reroute.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -201,7 +202,7 @@ export function resolveMultiAgentWorkOrders(
   })
 }
 
-const EVIDENCED_COMPLETE = new Set([...range(1, 32), 34].map(workOrderId))
+const EVIDENCED_COMPLETE = new Set([...range(1, 32), 34, 35].map(workOrderId))
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
 
 export const MULTI_AGENT_OPERATOR_WORK_ORDERS = resolveMultiAgentWorkOrders(
