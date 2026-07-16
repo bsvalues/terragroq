@@ -36,6 +36,10 @@ security drain requests. Existing global, provider, repository, risk, combined, 
 reservation, lease, and reconciliation ceilings remain authoritative. It does not execute a drain,
 cancel work, oversubscribe, grant authority, or perform provider, runtime, GitHub, production, or owner
 operations.
+WO-MAO-028 adds a pure deterministic scheduler model-check harness for DAG, cycle, reservation collision,
+fan-in, duplicate-delivery, expiry, starvation, deadlock, cancellation, and replay behavior. The harness
+has no provider transport, runtime activation, external dispatch, GitHub operation, production mutation,
+authority grant, or owner operation.
 
 ## Status vocabulary
 
@@ -66,6 +70,7 @@ Execution class is independent of status:
 | Multi-agent Phase 3 isolated workspace manager | `PROVEN` | `NON_EXECUTABLE` | WO-MAO-025 plans and executes bounded owned branch/worktree create, validate, reattach, and safe merged cleanup; it is a coordinator utility, not a dispatchable worker. |
 | Multi-agent Phase 3 reservation-aware handoff | `PROVEN` | `NON_EXECUTABLE` | WO-MAO-026 durably transfers role custody without releasing the reservation or lease, enabling a second writer, dispatching a provider, or granting authority. |
 | Multi-agent Phase 3 concurrency and fairness | `PROVEN` | `NON_EXECUTABLE` | WO-MAO-027 enforces trust-signed priority, durable aging/starvation, validated rate-limit backpressure, and bounded security drain requests inside the recoverable scheduler; it grants no authority and executes no drain or cancellation. |
+| Multi-agent Phase 3 scheduler simulation and model checking | `PROVEN` | `NON_EXECUTABLE` | WO-MAO-028 deterministically checks scheduler safety and replay properties in a pure/static harness; it performs no provider or runtime execution. |
 | Supported hosted Codex session | `PROVEN` | `WORKER_CANDIDATE` | Bounded coordination and remediation re-review passed; durable WilliamOS dispatch remains denied. |
 | Codex native coordinator and subagents | `PROVEN` | `WORKER_CANDIDATE` | Native fan-out, remediation, and fan-in are proven; no durable adapter or atomic reservation claim is made. |
 | Claude Code provider lane | `UNAVAILABLE` | `WORKER_CANDIDATE` | No authenticated supported surface or conformant adapter is evidenced. |
@@ -83,6 +88,8 @@ Execution class is independent of status:
   provider, GitHub, production, or owner operations.
 - A security drain result is not cancellation or released capacity. Admission remains blocked until
   terminal evidence plus fenced lease and reservation release are durable.
+- A scheduler model-check result is repository-local simulation evidence, not provider execution,
+  runtime activation, external dispatch, or unattended-builder proof.
 - Provider availability, authentication, adapter conformance, authority, and trust controls are separate gates.
 - `coordinationEligible` records bounded supported-session team coordination; it never implies
   WilliamOS registry dispatch, a durable adapter, or atomic reservation acquisition.
