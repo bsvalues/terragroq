@@ -677,6 +677,16 @@ function loadState(statePath, stateId) {
   }
 }
 
+function fsyncDirectoryBestEffort(directory) {
+  if (process.platform === "win32") return
+  const handle = fs.openSync(directory, "r")
+  try {
+    fs.fsyncSync(handle)
+  } finally {
+    fs.closeSync(handle)
+  }
+}
+
 function durableWrite(statePath, state) {
   const temporary = `${statePath}.tmp-${process.pid}-${crypto.randomUUID()}`
   let handle
@@ -688,7 +698,7 @@ function durableWrite(statePath, state) {
     fs.writeFileSync(handle, `${JSON.stringify(state, null, 2)}\n`)
     fs.fsyncSync(handle); fs.closeSync(handle); handle = null
     fs.renameSync(temporary, statePath)
-    const directory = fs.openSync(path.dirname(statePath), "r"); fs.fsyncSync(directory); fs.closeSync(directory)
+    fsyncDirectoryBestEffort(path.dirname(statePath))
   } catch {
     if (handle) try { fs.closeSync(handle) } catch { /* typed wall below */ }
     try { fs.rmSync(temporary, { force: true }) } catch { /* typed wall below */ }
@@ -752,7 +762,7 @@ function writeJournal(configuration, journal) {
     journal.journalHash = null; journal.journalHash = schedulerHash(journal)
     fs.writeFileSync(handle, `${JSON.stringify(journal, null, 2)}\n`); fs.fsyncSync(handle); fs.closeSync(handle); handle = null
     fs.renameSync(temporary, target)
-    const directory = fs.openSync(path.dirname(target), "r"); fs.fsyncSync(directory); fs.closeSync(directory)
+    fsyncDirectoryBestEffort(path.dirname(target))
   } catch {
     if (handle) try { fs.closeSync(handle) } catch { /* typed wall */ }
     try { fs.rmSync(temporary, { force: true }) } catch { /* typed wall */ }

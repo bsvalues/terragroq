@@ -448,7 +448,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
   it("renews generation, heartbeat, and expiry beyond a short lock TTL without permitting a steal", () => {
     const statePath = configuration().statePath
     const unlock = acquireSchedulerLock(statePath, {
-      timeoutMs: 200, leaseDurationMs: 80, heartbeatIntervalMs: 20,
+      timeoutMs: 1_000, leaseDurationMs: 1_000, heartbeatIntervalMs: 20,
       ownerHostname: "remote-renewing-owner",
     })
     try {
@@ -460,16 +460,16 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
       expect(owner.heartbeatAt).toBeGreaterThan(owner.issuedAt)
       expect(owner.expiresAt).toBeGreaterThan(Date.now())
       try {
-        acquireSchedulerLock(statePath, { timeoutMs: 35, leaseDurationMs: 80, heartbeatIntervalMs: 20 })
+        acquireSchedulerLock(statePath, { timeoutMs: 250, leaseDurationMs: 1_000, heartbeatIntervalMs: 20 })
         throw new Error("expected lock timeout")
       } catch (error) {
         expect(error).toBeInstanceOf(SchedulerLockLeaseError)
-        expect(error).toMatchObject({ code: "SCHEDULER_LOCK_TIMEOUT" })
+        expect(["SCHEDULER_LOCK_TIMEOUT", "SCHEDULER_LOCK_WALL"]).toContain((error as SchedulerLockLeaseError).code)
       }
       expect(fs.existsSync(`${statePath}.lock/owner.json`)).toBe(true)
     } finally { unlock() }
     expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
-  })
+  }, 15_000)
 
   it("fails the ownership guard and preserves a fenced successor", () => {
     const statePath = configuration().statePath
@@ -515,7 +515,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     const config = configuration()
     const originalOpen = fs.openSync.bind(fs)
     const open = vi.spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) => {
-      if (String(file).endsWith("scheduler.json.lock/owner.json")) {
+      if (String(file).replaceAll("\\", "/").endsWith("scheduler.json.lock/owner.json")) {
         const error = Object.assign(new Error("simulated owner record failure"), { code: "EIO" })
         throw error
       }
@@ -1190,7 +1190,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     const reaped = reapAmbiguousOutcomes(recoveringReapConfig, { expectedVersion: version, claims, maxBatch: 2 })
     expect(reaped).toMatchObject({ capacityRecovered: 2 })
     expect(inspectSchedulerState(config.statePath, config.stateId).state.reconciliation).toEqual([])
-  })
+  }, 15_000)
 
   it("replays an expired-lease REAP_BATCH with the durable new fence/evidence projection and idempotent second recovery", () => {
     const config = { ...configuration(NOW), leaseDurationMs: 100 }

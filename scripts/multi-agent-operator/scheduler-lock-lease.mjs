@@ -58,6 +58,7 @@ function validOwner(owner, statePath) {
 }
 
 function fsyncDirectory(directory) {
+  if (process.platform === "win32") return
   let descriptor
   try { descriptor = fs.openSync(directory, "r"); fs.fsyncSync(descriptor) } finally { if (descriptor !== undefined) fs.closeSync(descriptor) }
 }

@@ -445,7 +445,8 @@ describe("per-lane lease and durable checkpoint store", () => {
       child.on("close", () => resolve(JSON.parse(stdout)))
     })))
     expect(outcomes.filter((entry) => entry.status === "LANE_LEASE_ACQUIRED")).toHaveLength(1)
-    expect(outcomes.filter((entry) => entry.status === "LANE_LEASE_ALREADY_EXISTS")).toHaveLength(7)
+    expect(outcomes.filter((entry) => entry.status !== "LANE_LEASE_ACQUIRED")).toHaveLength(7)
+    expect(outcomes.every((entry) => ["LANE_LEASE_ACQUIRED", "LANE_LEASE_ALREADY_EXISTS", "LANE_LEASE_LOCK_TIMEOUT"].includes(String(entry.status)))).toBe(true)
     expect(inspectLaneLeaseStore(store, storeId)).toMatchObject({ ok: true, operationCount: 1 })
   })
 

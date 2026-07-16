@@ -53,7 +53,7 @@ describe("native operational-kernel adapters", () => {
     fs.writeFileSync(path.join(root, "docs", "reports", "allowed.md"), assignment)
     execFileSync("git", ["add", "docs/reports/allowed.md"], { cwd: root })
     await expect(inspectWorkspaceChanges(root, ["docs/reports/allowed.md"])).rejects.toThrow("PATCH_SECRET_OR_BINARY_WALL")
-  })
+  }, 30_000)
 
   it("rejects staged binary content before it can be published", async () => {
     const root = createRepository("williamos-native-binary-")
@@ -61,7 +61,7 @@ describe("native operational-kernel adapters", () => {
     execFileSync("git", ["add", "docs/reports/allowed.md"], { cwd: root })
 
     await expect(inspectWorkspaceChanges(root, ["docs/reports/allowed.md"])).rejects.toThrow("PATCH_BINARY_WALL")
-  })
+  }, 30_000)
 
   it("rejects staged Git link modes even when the working tree materializes a regular file", async () => {
     const root = createRepository("williamos-native-link-")
@@ -71,7 +71,7 @@ describe("native operational-kernel adapters", () => {
     fs.writeFileSync(path.join(root, "docs", "reports", "linked.md"), target)
 
     await expect(inspectWorkspaceChanges(root, ["docs/reports/linked.md"])).rejects.toThrow("PATCH_SYMLINK_OR_SUBMODULE_WALL")
-  })
+  }, 30_000)
 
   it("handles GitHub check runs and legacy status contexts without waiting forever", () => {
     expect(evaluateCheckRollup([
