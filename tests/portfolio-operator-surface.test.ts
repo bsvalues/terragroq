@@ -12,7 +12,7 @@ describe("portfolio operator surface", () => {
       decision: "SELECT_PROGRAM",
       programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
     })
-    expect(surface.activeWorkOrder.workOrderId).toBe("WO-MAO-028")
+    expect(surface.activeWorkOrder.workOrderId).toBe("WO-MAO-030")
     expect(surface.controls).toEqual([])
     expect(surface.safety).toMatchObject({
       commandRunnerAdded: false,

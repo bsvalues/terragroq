@@ -118,12 +118,13 @@ Codex team work does not depend on that rejected adapter.
 Canonical playbook:
 `docs/governance/multi-agent-operator-playbook.md`
 
-Current transition: `WO-MAO-001` through `WO-MAO-027`, `WO-MAO-029`, and `WO-MAO-032` are complete.
+Current transition: `WO-MAO-001` through `WO-MAO-029` and `WO-MAO-032` are complete.
 The merged WO-MAO-023 scheduler, deterministic WO-MAO-024 team topology, and WO-MAO-025 isolated-workspace
 manager plus WO-MAO-026 reservation-aware handoff and WO-MAO-027 hard-ceiling concurrency admission
-policy preserve dependency-, reservation-, and ownership-driven selection without creating provider or runtime authority. `WO-MAO-033` is
-`DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set contains only
-`WO-MAO-028`; the active-work projection does not promote later pending dependents.
+policy preserve dependency-, reservation-, and ownership-driven selection. WO-MAO-028 adds pure/static
+scheduler model checking without creating provider or runtime authority. `WO-MAO-033` is `DEFERRED /
+PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set contains only `WO-MAO-030`; the
+active-work projection does not promote later pending dependents.
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
@@ -189,8 +190,7 @@ Current status:
 
 1. Preserve the completed Phase 0 executable truth and preventive controls.
 2. Preserve the completed Phase 1 hosted proof and Phase 2 local-contract evidence.
-3. Continue the dependency-cleared eligible set at `WO-MAO-028` through scheduler simulation,
-   provider adapters, federation,
+3. Continue the dependency-cleared eligible set at `WO-MAO-030` through provider adapters, federation,
    GitHub delivery, resilience, and certification phases.
 4. Keep useful independent R0/R1 product lanes moving whenever dependencies and
    reservations permit.

@@ -109,6 +109,25 @@ describe("multi-agent executable capability inventory", () => {
         "Owner operations remain prohibited and owner-touch counters remain zero",
       ]),
     })
+    expect(capability("multi-agent-phase-three-scheduler-model-check")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "PHASE_THREE_SCHEDULER_MODEL_CHECK_PROVEN",
+      adapterRef: null,
+      authorityGrantRefs: [],
+      trustGateRef: null,
+      evidence: expect.arrayContaining([
+        "scripts/multi-agent-operator/scheduler-model-check.mjs",
+        "tests/scheduler-model-check.test.ts",
+        "docs/reports/WO-MAO-028-scheduler-simulation-model-checking.md",
+      ]),
+      restrictions: expect.arrayContaining([
+        "Pure deterministic simulation only; no provider or runtime execution",
+        "No external dispatch, GitHub operation, production mutation, or authority grant",
+        "No rejected nested-runtime reuse",
+        "Owner operations remain prohibited and owner-touch counters remain zero",
+      ]),
+    })
     expect(capability("brain-council-advisory")).toMatchObject({
       status: "PROVEN",
       executionClass: "NON_EXECUTABLE",
