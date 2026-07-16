@@ -216,6 +216,20 @@ describe("multi-agent executable capability inventory", () => {
         "No provider call, GitHub automation, runtime activation, authority grant, or owner relay",
       ]),
     })
+    expect(capability("provider-conformance-suite-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "PROVIDER_CONFORMANCE_SUITE_PROVEN",
+      adapterRef: "scripts/multi-agent-operator/provider-conformance-suite.mjs",
+      authorityGrantRefs: [],
+      trustGateRef: null,
+      restrictions: expect.arrayContaining([
+        "Static conformance suite only",
+        "Hosted Codex remains session-only and non-executable",
+        "Unavailable and rejected providers are excluded, not certified",
+        "No provider dispatch, GitHub automation, runtime activation, authority grant, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",

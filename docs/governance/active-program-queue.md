@@ -111,9 +111,10 @@ isolated-workspace manager, the WO-MAO-026 reservation-aware handoff contract, t
 concurrency/fairness scheduler extension, the WO-MAO-028 pure deterministic scheduler model-check
 harness, the provider assessments and hosted Codex adapters
 `WO-MAO-029`, `WO-MAO-030`, `WO-MAO-031`, and `WO-MAO-032`, the static cross-provider routing
-model `WO-MAO-034`, and the static provider-health/reroute model `WO-MAO-035` are complete.
+model `WO-MAO-034`, the static provider-health/reroute model `WO-MAO-035`, and the provider
+conformance suite `WO-MAO-036` are complete.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable.
-The dependency resolver exposes `WO-MAO-036`; later Work Orders remain pending on their declared
+The dependency resolver exposes `WO-MAO-037`; later Work Orders remain pending on their declared
 dependencies. The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
