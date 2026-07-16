@@ -26,6 +26,10 @@ capability.
 WO-MAO-025 adds a fail-closed isolated-workspace lifecycle manager. An authorized coordinator may use it
 to create, validate, reattach, and safely clean exact lease/evidence-bound local branches and worktrees.
 It never absorbs dirty/foreign changes, uses force, cleans unmerged/shared state, or grants authority.
+WO-MAO-026 adds a durable reservation-aware handoff contract. It transfers role custody only across
+declared builder/reviewer/remediator/verifier transitions while the original builder retains the active
+reservation, lease, workspace, and exclusive write fence. Review and verification remain read-only;
+remediation can return only to the original writer.
 
 ## Status vocabulary
 
@@ -54,6 +58,7 @@ Execution class is independent of status:
 | Multi-agent Phase 2 local contracts | `PROVEN` | `NON_EXECUTABLE` | Envelope, DAG, atomic reservation ledger, provider eligibility, lifecycle, leases/checkpoints, evidence ledger, and owner meter are proven locally; no durable dispatch or unattended scheduler. |
 | Multi-agent Phase 3 team topology and fan-in plan | `PROVEN` | `NON_EXECUTABLE` | WO-MAO-024 deterministically plans team-role assignments and waits only on declared fan-in dependencies; it executes nothing and grants no authority. |
 | Multi-agent Phase 3 isolated workspace manager | `PROVEN` | `NON_EXECUTABLE` | WO-MAO-025 plans and executes bounded owned branch/worktree create, validate, reattach, and safe merged cleanup; it is a coordinator utility, not a dispatchable worker. |
+| Multi-agent Phase 3 reservation-aware handoff | `PROVEN` | `NON_EXECUTABLE` | WO-MAO-026 durably transfers role custody without releasing the reservation or lease, enabling a second writer, dispatching a provider, or granting authority. |
 | Supported hosted Codex session | `PROVEN` | `WORKER_CANDIDATE` | Bounded coordination and remediation re-review passed; durable WilliamOS dispatch remains denied. |
 | Codex native coordinator and subagents | `PROVEN` | `WORKER_CANDIDATE` | Native fan-out, remediation, and fan-in are proven; no durable adapter or atomic reservation claim is made. |
 | Claude Code provider lane | `UNAVAILABLE` | `WORKER_CANDIDATE` | No authenticated supported surface or conformant adapter is evidenced. |

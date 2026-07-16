@@ -107,10 +107,10 @@ program without routine owner contact. Its goal is
 `LOOP-WOS-MULTI-AGENT-OPERATOR-001`. Phase 0 and the bounded hosted-team proof
 through `WO-MAO-015` are complete. Phase 2 Work Orders `WO-MAO-016` through `WO-MAO-022`, the
 WO-MAO-023 eligible-set scheduler, the WO-MAO-024 team-topology contract, the bounded WO-MAO-025
-isolated-workspace manager, and the provider assessments
+isolated-workspace manager, the WO-MAO-026 reservation-aware handoff contract, and the provider assessments
 `WO-MAO-029` and `WO-MAO-032` are complete. `WO-MAO-033` is
 `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The dependency resolver exposes only
-`WO-MAO-026`; later Phase 3 Work Orders remain pending on their declared dependencies. The program
+`WO-MAO-027`; later Phase 3 Work Orders remain pending on their declared dependencies. The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
 deployment, protected data, or destructive operations.
