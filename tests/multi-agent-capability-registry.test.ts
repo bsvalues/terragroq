@@ -81,6 +81,20 @@ describe("multi-agent executable capability inventory", () => {
         "Owner operations remain prohibited and owner-touch counters remain zero",
       ]),
     })
+    expect(capability("multi-agent-phase-three-reservation-aware-handoff")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "PHASE_THREE_RESERVATION_AWARE_HANDOFF_PROVEN",
+      adapterRef: null,
+      authorityGrantRefs: [],
+      trustGateRef: null,
+      restrictions: expect.arrayContaining([
+        "No reservation or lease release during handoff",
+        "Reviewer and verifier remain read-only; remediation returns only to the original builder",
+        "No second writer, authority grant, provider dispatch, runtime activation, or GitHub operation",
+        "Owner operations remain prohibited and owner-touch counters remain zero",
+      ]),
+    })
     expect(capability("brain-council-advisory")).toMatchObject({
       status: "PROVEN",
       executionClass: "NON_EXECUTABLE",
