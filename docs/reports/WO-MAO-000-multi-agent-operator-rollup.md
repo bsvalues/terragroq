@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-`PHASE_3_SCHEDULER_TOPOLOGY_PASS / ELIGIBLE_SET_025 / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
+`PHASE_3_CONCURRENCY_ADMISSION_PASS / WO-MAO-028_READY / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
 
 ## Truth
 
@@ -22,7 +22,8 @@ repository-local contracts and do not certify a live unattended builder.
 Phase 2 and the first Phase 3 slices now prove the provider-neutral work-order envelope, DAG eligible-
 set resolver, local atomic reservation ledger, provider eligibility/response boundary, lifecycle
 taxonomy, per-lane leases and checkpoints, append-only evidence ledger, mechanically derived owner-
-touch meter, recoverable eligible-set scheduler, and deterministic team topology/fan-in projection.
+touch meter, recoverable eligible-set scheduler, deterministic team topology/fan-in projection,
+isolated-workspace lifecycle, one-writer handoff, and hard-ceiling priority/fairness admission policy.
 These are bounded contracts, not a durable provider dispatcher or automated GitHub delivery
 implementation.
 
@@ -79,12 +80,13 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 - `docs/reports/WO-MAO-024-team-topology-fan-out-fan-in.md`
 - `docs/reports/WO-MAO-025-isolated-workspace-manager.md`
 - `docs/reports/WO-MAO-026-reservation-aware-handoff.md`
+- `docs/reports/WO-MAO-027-concurrency-budgets-priority-fairness.md`
 
 ## Next transition
 
-`WO-MAO-001` through `WO-MAO-026`, `WO-MAO-029`, and `WO-MAO-032` are complete.
+`WO-MAO-001` through `WO-MAO-027`, `WO-MAO-029`, and `WO-MAO-032` are complete.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set and
-current-work projection contain only `WO-MAO-027`; later Phase 3 nodes remain pending on their
+current-work projection contain only `WO-MAO-028`; later nodes remain pending on their
 declared dependencies. The rejected local runtime is not in the eligible dependency chain.
 
 ## Validation evidence

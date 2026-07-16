@@ -46,6 +46,29 @@ const WORK_FIELDS = new Set([
   "reservationContentHash", "dispatchId", "trustArtifact", "authorityGrant",
 ])
 const BUDGET_FIELDS = new Set(["global", "providers", "repositories", "risks", "combined"])
+const SCHEDULING_POLICY_FIELDS = new Set([
+  "schemaVersion", "artifactType", "policyId", "issuer", "issuedAt", "expiresAt",
+  "budgets", "agingIntervalMs", "agingCap", "starvationThresholdMs",
+  "securityBurstLimit", "rateLimitCooldownMs", "signature",
+])
+const SCHEDULING_CLAIM_FIELDS = new Set([
+  "schemaVersion", "artifactType", "claimId", "issuer", "policyHash", "programId",
+  "goalId", "loopId", "workOrderId", "laneId", "priorityClass", "securityCritical",
+  "preemptible", "issuedAt", "expiresAt", "signature",
+])
+const RATE_LIMIT_OBSERVATION_FIELDS = new Set([
+  "schemaVersion", "artifactType", "observationId", "issuer", "providerId", "adapterId",
+  "dispatchId", "workOrderId", "laneId", "httpStatus", "reasonCode", "observedAt",
+  "expiresAt", "signature",
+])
+const PRIORITY_WEIGHTS = Object.freeze({ LOW: 0, NORMAL: 100, HIGH: 200, CRITICAL: 300 })
+const PENDING_FIELDS = new Set([
+  "workOrderId", "laneId", "firstEligibleAt", "lastEligibleAt", "lastReasonCode",
+  "policyHash", "schedulingClaimHash", "priorityClass", "securityCritical", "preemptible",
+])
+const BACKPRESSURE_FIELDS = new Set([
+  "providerId", "blockedUntil", "reasonCode", "sourceFullIdentityHash",
+])
 const BUNDLE_FIELDS = new Set([
   "schemaVersion", "artifactType", "bundleId", "issuedAt", "expiresAt", "status",
   "revocationChainHead", "trustRoots", "authorityRoots", "rootFingerprints",
@@ -456,9 +479,105 @@ function validateBudgets(value) {
   }
   return Object.freeze({ global, ...maps })
 }
+function safeReason(value, field) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1024
+    || /[\u0000-\u001f\u007f]/u.test(value)) {
+    wall("SCHEDULER_VALUE_WALL", field, "SAFE_REASON_REQUIRED")
+  }
+  return value
+}
+
+function verifySchedulingSignature(value, roots, field) {
+  identifier(value.issuer, `${field}.issuer`)
+  const key = roots[value.issuer]
+  if (!key) wall("SCHEDULER_SCHEDULING_TRUST_WALL", `${field}.issuer`, "PINNED_TRUST_ROOT_REQUIRED")
+  verifySignature(value, key, `${field}.signature`)
+}
+
+function normalizeSchedulingPolicy(value, bundle, now, budgets) {
+  exact(value, SCHEDULING_POLICY_FIELDS, "schedulingPolicy")
+  if (value.schemaVersion !== 1 || value.artifactType !== "MULTI_AGENT_SCHEDULING_POLICY_V1") {
+    wall("SCHEDULER_SCHEDULING_POLICY_WALL", "schedulingPolicy", "V1_POLICY_REQUIRED")
+  }
+  identifier(value.policyId, "schedulingPolicy.policyId")
+  const issuedAt = instant(value.issuedAt, "schedulingPolicy.issuedAt")
+  const expiresAt = instant(value.expiresAt, "schedulingPolicy.expiresAt")
+  if (issuedAt > now || expiresAt <= now) wall("SCHEDULER_SCHEDULING_POLICY_WALL", "schedulingPolicy.expiresAt", "FRESH_POLICY_REQUIRED")
+  const policyBudgets = validateBudgets(value.budgets)
+  if (canonicalSchedulerJson(policyBudgets) !== canonicalSchedulerJson(budgets)) {
+    wall("SCHEDULER_SCHEDULING_POLICY_WALL", "schedulingPolicy.budgets", "EXACT_SCHEDULER_BUDGETS_REQUIRED")
+  }
+  integer(value.agingIntervalMs, "schedulingPolicy.agingIntervalMs", 1)
+  integer(value.agingCap, "schedulingPolicy.agingCap", 1)
+  integer(value.starvationThresholdMs, "schedulingPolicy.starvationThresholdMs", value.agingIntervalMs)
+  integer(value.securityBurstLimit, "schedulingPolicy.securityBurstLimit", 1)
+  integer(value.rateLimitCooldownMs, "schedulingPolicy.rateLimitCooldownMs", 1)
+  verifySchedulingSignature(value, bundle.trustRoots, "schedulingPolicy")
+  return Object.freeze({ ...value, budgets: policyBudgets, policyHash: schedulerHash(value) })
+}
+
+function normalizeSchedulingClaim(value, bundle, policy, work, now, index) {
+  const field = `schedulingClaims[${index}]`
+  exact(value, SCHEDULING_CLAIM_FIELDS, field)
+  if (value.schemaVersion !== 1 || value.artifactType !== "MULTI_AGENT_SCHEDULING_CLAIM_V1") {
+    wall("SCHEDULER_SCHEDULING_CLAIM_WALL", field, "V1_CLAIM_REQUIRED")
+  }
+  identifier(value.claimId, `${field}.claimId`)
+  if (value.policyHash !== policy.policyHash || !HASH.test(value.policyHash)) {
+    wall("SCHEDULER_SCHEDULING_CLAIM_WALL", `${field}.policyHash`, "EXACT_POLICY_HASH_REQUIRED")
+  }
+  exactMatch({
+    programId: value.programId, goalId: value.goalId, loopId: value.loopId,
+    workOrderId: value.workOrderId, laneId: value.laneId,
+  }, {
+    programId: work.programId, goalId: work.goalId, loopId: work.loopId,
+    workOrderId: work.workOrderId, laneId: work.laneId,
+  }, `${field}.scope`)
+  if (!Object.hasOwn(PRIORITY_WEIGHTS, value.priorityClass)) wall("SCHEDULER_SCHEDULING_CLAIM_WALL", `${field}.priorityClass`)
+  for (const key of ["securityCritical", "preemptible"]) {
+    if (typeof value[key] !== "boolean") wall("SCHEDULER_SCHEDULING_CLAIM_WALL", `${field}.${key}`, "BOOLEAN_REQUIRED")
+  }
+  if (value.securityCritical && value.preemptible) {
+    wall("SCHEDULER_SCHEDULING_CLAIM_WALL", field, "SECURITY_WORK_NONPREEMPTIBLE_REQUIRED")
+  }
+  const issuedAt = instant(value.issuedAt, `${field}.issuedAt`)
+  const expiresAt = instant(value.expiresAt, `${field}.expiresAt`)
+  if (issuedAt > now || expiresAt <= now || expiresAt > Date.parse(policy.expiresAt)) {
+    wall("SCHEDULER_SCHEDULING_CLAIM_WALL", `${field}.expiresAt`, "FRESH_POLICY_BOUNDED_CLAIM_REQUIRED")
+  }
+  verifySchedulingSignature(value, bundle.trustRoots, field)
+  return Object.freeze({ ...value, claimHash: schedulerHash(value) })
+}
+
+function validateRateLimitObservation(value, bundle, entry, now, reasonCode) {
+  exact(value, RATE_LIMIT_OBSERVATION_FIELDS, "outcome.delivery.rateLimitObservation")
+  if (value.schemaVersion !== 1 || value.artifactType !== "SIGNED_PROVIDER_RATE_LIMIT_OBSERVATION") {
+    wall("SCHEDULER_RATE_LIMIT_PROVENANCE_WALL", "outcome.delivery.rateLimitObservation", "SIGNED_V1_REQUIRED")
+  }
+  identifier(value.observationId, "outcome.delivery.rateLimitObservation.observationId")
+  identifier(value.issuer, "outcome.delivery.rateLimitObservation.issuer")
+  const key = bundle.trustRoots[value.issuer]
+  if (!key) wall("SCHEDULER_RATE_LIMIT_PROVENANCE_WALL", "outcome.delivery.rateLimitObservation.issuer", "PINNED_TRUST_ROOT_REQUIRED")
+  verifySignature(value, key, "outcome.delivery.rateLimitObservation.signature")
+  const observedAt = instant(value.observedAt, "outcome.delivery.rateLimitObservation.observedAt")
+  const expiresAt = instant(value.expiresAt, "outcome.delivery.rateLimitObservation.expiresAt")
+  if (observedAt > now || expiresAt <= now || expiresAt <= observedAt) {
+    wall("SCHEDULER_RATE_LIMIT_PROVENANCE_WALL", "outcome.delivery.rateLimitObservation", "FRESH_OBSERVATION_REQUIRED")
+  }
+  if (value.httpStatus !== 429) wall("SCHEDULER_RATE_LIMIT_PROVENANCE_WALL", "outcome.delivery.rateLimitObservation.httpStatus", "HTTP_429_REQUIRED")
+  safeReason(value.reasonCode, "outcome.delivery.rateLimitObservation.reasonCode")
+  exactMatch({
+    providerId: entry.providerId, adapterId: entry.adapterId, dispatchId: entry.dispatchId,
+    workOrderId: entry.workOrderId, laneId: entry.laneId, reasonCode,
+  }, {
+    providerId: value.providerId, adapterId: value.adapterId, dispatchId: value.dispatchId,
+    workOrderId: value.workOrderId, laneId: value.laneId, reasonCode: value.reasonCode,
+  }, "outcome.delivery.rateLimitObservation.attribution")
+  return value
+}
 
 function emptyState(stateId) {
-  const state = { schemaVersion: 1, artifactType: "ELIGIBLE_SET_SCHEDULER_STATE", stateId, version: 0, nextFence: 1, active: [], released: [], reconciliation: [], events: [], stateHash: null }
+  const state = { schemaVersion: 2, artifactType: "ELIGIBLE_SET_SCHEDULER_STATE", stateId, version: 0, nextFence: 1, active: [], released: [], reconciliation: [], pending: [], providerBackpressure: [], securityAdmissionsSinceFairness: 0, events: [], stateHash: null }
   state.stateHash = schedulerHash(state)
   return state
 }
@@ -496,10 +615,13 @@ function assertSchedulerLockOwned(configuration) {
 function loadState(statePath, stateId) {
   try {
     const value = JSON.parse(fs.readFileSync(statePath, "utf8"))
-    exact(value, new Set(["schemaVersion", "artifactType", "stateId", "version", "nextFence", "active", "released", "reconciliation", "events", "stateHash"]), "state")
-    if (value.schemaVersion !== 1 || value.artifactType !== "ELIGIBLE_SET_SCHEDULER_STATE" || value.stateId !== stateId
+    exact(value, new Set(["schemaVersion", "artifactType", "stateId", "version", "nextFence", "active", "released", "reconciliation", "pending", "providerBackpressure", "securityAdmissionsSinceFairness", "events", "stateHash"]), "state")
+    if (value.schemaVersion !== 2 || value.artifactType !== "ELIGIBLE_SET_SCHEDULER_STATE" || value.stateId !== stateId
       || !Number.isSafeInteger(value.version) || !Number.isSafeInteger(value.nextFence)
-      || !Array.isArray(value.active) || !Array.isArray(value.released) || !Array.isArray(value.reconciliation) || !Array.isArray(value.events)
+      || !Array.isArray(value.active) || !Array.isArray(value.released) || !Array.isArray(value.reconciliation)
+      || !Array.isArray(value.pending) || !Array.isArray(value.providerBackpressure)
+      || !Number.isSafeInteger(value.securityAdmissionsSinceFairness) || value.securityAdmissionsSinceFairness < 0
+      || !Array.isArray(value.events)
       || !HASH.test(value.stateHash)) {
       wall("SCHEDULER_STATE_CORRUPT", "state")
     }
@@ -508,6 +630,34 @@ function loadState(statePath, stateId) {
     if (schedulerHash(value) !== stateHash) wall("SCHEDULER_STATE_CORRUPT", "state.stateHash", "HASH_MISMATCH")
     value.stateHash = stateHash
     if (value.events.length !== value.version) wall("SCHEDULER_STATE_CORRUPT", "state.events", "VERSION_MISMATCH")
+    const pendingIdentities = new Set()
+    for (const [index, entry] of value.pending.entries()) {
+      exact(entry, PENDING_FIELDS, `state.pending[${index}]`)
+      identifier(entry.workOrderId, `state.pending[${index}].workOrderId`)
+      identifier(entry.laneId, `state.pending[${index}].laneId`)
+      const first = instant(entry.firstEligibleAt, `state.pending[${index}].firstEligibleAt`)
+      const last = instant(entry.lastEligibleAt, `state.pending[${index}].lastEligibleAt`)
+      if (last < first || !HASH.test(entry.policyHash) || !HASH.test(entry.schedulingClaimHash)
+        || !Object.hasOwn(PRIORITY_WEIGHTS, entry.priorityClass)
+        || typeof entry.securityCritical !== "boolean" || typeof entry.preemptible !== "boolean") {
+        wall("SCHEDULER_STATE_CORRUPT", `state.pending[${index}]`, "INVALID_FAIRNESS_ENTRY")
+      }
+      safeReason(entry.lastReasonCode, `state.pending[${index}].lastReasonCode`)
+      const identity = schedulingIdentity(entry)
+      if (pendingIdentities.has(identity)) wall("SCHEDULER_STATE_CORRUPT", "state.pending", "UNIQUE_IDENTITY_REQUIRED")
+      pendingIdentities.add(identity)
+    }
+    const backpressureProviders = new Set()
+    for (const [index, entry] of value.providerBackpressure.entries()) {
+      exact(entry, BACKPRESSURE_FIELDS, `state.providerBackpressure[${index}]`)
+      identifier(entry.providerId, `state.providerBackpressure[${index}].providerId`)
+      instant(entry.blockedUntil, `state.providerBackpressure[${index}].blockedUntil`)
+      safeReason(entry.reasonCode, `state.providerBackpressure[${index}].reasonCode`)
+      if (!HASH.test(entry.sourceFullIdentityHash) || backpressureProviders.has(entry.providerId)) {
+        wall("SCHEDULER_STATE_CORRUPT", "state.providerBackpressure", "UNIQUE_VALID_PROVIDER_REQUIRED")
+      }
+      backpressureProviders.add(entry.providerId)
+    }
     let priorEventHash = "0".repeat(64)
     for (let index = 0; index < value.events.length; index += 1) {
       const event = value.events[index]
@@ -655,6 +805,162 @@ function hasCapacity(state, work, budgets) {
   return null
 }
 
+function schedulingIdentity(value) { return `${value.workOrderId}:${value.laneId}` }
+
+function schedulingOrder(left, right, forceFairness) {
+  if (forceFairness && left.starved !== right.starved) return left.starved ? -1 : 1
+  if ((!forceFairness || left.starved === right.starved) && left.scheduling.securityCritical !== right.scheduling.securityCritical) {
+    return left.scheduling.securityCritical ? -1 : 1
+  }
+  if (!forceFairness && left.starved !== right.starved) return left.starved ? -1 : 1
+  if (left.effectivePriority !== right.effectivePriority) return right.effectivePriority - left.effectivePriority
+  if (left.firstEligibleAt !== right.firstEligibleAt) return left.firstEligibleAt - right.firstEligibleAt
+  return schedulingIdentity(left).localeCompare(schedulingIdentity(right))
+}
+
+function rankedSchedulingWorks(state, works, schedulingClaims, policy, now) {
+  const pendingByIdentity = new Map(state.pending.map((entry) => [schedulingIdentity(entry), entry]))
+  const projected = works.map((work) => {
+    const claim = schedulingClaims.get(schedulingIdentity(work))
+    const scheduling = { ...claim, rateLimitCooldownMs: policy.rateLimitCooldownMs }
+    const prior = pendingByIdentity.get(schedulingIdentity(work))
+    if (prior && (prior.policyHash !== policy.policyHash || prior.schedulingClaimHash !== scheduling.claimHash)) {
+      if (prior.priorityClass !== scheduling.priorityClass
+        || prior.securityCritical !== scheduling.securityCritical
+        || prior.preemptible !== scheduling.preemptible) {
+        wall("SCHEDULER_FAIRNESS_STATE_WALL", `pending.${schedulingIdentity(work)}`, "IMMUTABLE_QUEUE_CLASSIFICATION_REQUIRED")
+      }
+      prior.policyHash = policy.policyHash
+      prior.schedulingClaimHash = scheduling.claimHash
+      record(state, "FAIRNESS_POLICY_ROTATED", work, now, {
+        policyHash: policy.policyHash,
+        schedulingClaimHash: scheduling.claimHash,
+        firstEligibleAt: prior.firstEligibleAt,
+      })
+    }
+    const firstEligibleAt = prior ? Date.parse(prior.firstEligibleAt) : now
+    const ageMs = now - firstEligibleAt
+    return {
+      ...work,
+      scheduling,
+      firstEligibleAt,
+      ageMs,
+      starved: ageMs >= policy.starvationThresholdMs,
+      effectivePriority: PRIORITY_WEIGHTS[scheduling.priorityClass]
+        + Math.min(policy.agingCap, Math.floor(ageMs / policy.agingIntervalMs)),
+    }
+  })
+  const forceFairness = state.securityAdmissionsSinceFairness >= policy.securityBurstLimit
+    && projected.some((entry) => entry.starved && !entry.scheduling.securityCritical)
+  return projected.sort((left, right) => schedulingOrder(left, right, forceFairness))
+}
+
+function rememberPending(state, work, policy, now, reasonCode) {
+  const id = schedulingIdentity(work)
+  const existing = state.pending.find((entry) => schedulingIdentity(entry) === id)
+  if (existing) {
+    existing.lastEligibleAt = new Date(now).toISOString()
+    existing.lastReasonCode = reasonCode
+    return
+  }
+  state.pending.push({
+    workOrderId: work.workOrderId,
+    laneId: work.laneId,
+    firstEligibleAt: new Date(work.firstEligibleAt).toISOString(),
+    lastEligibleAt: new Date(now).toISOString(),
+    lastReasonCode: reasonCode,
+    policyHash: policy.policyHash,
+    schedulingClaimHash: work.scheduling.claimHash,
+    priorityClass: work.scheduling.priorityClass,
+    securityCritical: work.scheduling.securityCritical,
+    preemptible: work.scheduling.preemptible,
+  })
+  record(state, "FAIRNESS_QUEUE_STARTED", work, now, { policyHash: policy.policyHash, schedulingClaimHash: work.scheduling.claimHash })
+}
+
+function forgetPending(state, work) {
+  const index = state.pending.findIndex((entry) => schedulingIdentity(entry) === schedulingIdentity(work))
+  if (index >= 0) state.pending.splice(index, 1)
+}
+
+function activeSchedulingVictims(state, work, budgets) {
+  const holders = [...state.active, ...state.reconciliation]
+  const violations = (entries) => {
+    const result = []
+    if (entries.length >= budgets.global) result.push("global")
+    if (entries.filter((entry) => entry.providerId === work.providerId).length >= budgets.providers[work.providerId]) {
+      result.push(`provider:${work.providerId}`)
+    }
+    if (entries.filter((entry) => entry.providerId === work.providerId).length >= work.providerCapabilityMaxConcurrency) {
+      result.push(`capability:${work.providerId}`)
+    }
+    for (const repository of work.repositories) {
+      if (entries.filter((entry) => entry.repositories.includes(repository)).length >= budgets.repositories[repository]) {
+        result.push(`repository:${repository}`)
+      }
+      const combined = `${work.providerId}:${repository}:${work.riskClass}`
+      if (entries.filter((entry) => entry.providerId === work.providerId && entry.riskClass === work.riskClass
+        && entry.repositories.includes(repository)).length >= budgets.combined[combined]) {
+        result.push(`combined:${combined}`)
+      }
+    }
+    if (entries.filter((entry) => entry.riskClass === work.riskClass).length >= budgets.risks[work.riskClass]) {
+      result.push(`risk:${work.riskClass}`)
+    }
+    return result
+  }
+  const contributes = (victim, violation) => violation === "global"
+    || violation === `provider:${victim.providerId}`
+    || violation === `capability:${victim.providerId}`
+    || victim.repositories.some((repository) => violation === `repository:${repository}`)
+    || violation === `risk:${victim.riskClass}`
+    || victim.repositories.some((repository) => violation === `combined:${victim.providerId}:${repository}:${victim.riskClass}`)
+  if (violations(holders).length === 0) return []
+  const candidates = state.active.filter((entry) => entry.scheduling?.preemptible === true
+    && entry.scheduling?.securityCritical === false)
+  const remaining = [...holders]
+  const selected = []
+  while (candidates.length > 0) {
+    const current = violations(remaining)
+    if (current.length === 0) break
+    const scored = candidates.map((victim) => ({
+      victim,
+      score: current.filter((violation) => contributes(victim, violation)).length,
+    })).filter(({ score }) => score > 0).sort((left, right) => {
+      if (left.score !== right.score) return right.score - left.score
+      const priorityDifference = PRIORITY_WEIGHTS[left.victim.scheduling.priorityClass]
+        - PRIORITY_WEIGHTS[right.victim.scheduling.priorityClass]
+      return priorityDifference || Date.parse(right.victim.acquiredAt) - Date.parse(left.victim.acquiredAt)
+        || schedulingIdentity(left.victim).localeCompare(schedulingIdentity(right.victim))
+    })
+    if (scored.length === 0) break
+    const victim = scored[0].victim
+    remaining.splice(remaining.findIndex((entry) => entry.fullIdentityHash === victim.fullIdentityHash), 1)
+    candidates.splice(candidates.findIndex((entry) => entry.fullIdentityHash === victim.fullIdentityHash), 1)
+    selected.push(schedulingIdentity(victim))
+  }
+  return violations(remaining).length === 0 ? selected : []
+}
+
+function applyProviderBackpressure(state, entry, reasonCode, now, eventType) {
+  const blockedUntil = new Date(now + entry.scheduling.rateLimitCooldownMs).toISOString()
+  const existing = state.providerBackpressure.find((candidate) => candidate.providerId === entry.providerId)
+  if (existing) {
+    if (Date.parse(blockedUntil) > Date.parse(existing.blockedUntil)) existing.blockedUntil = blockedUntil
+    existing.reasonCode = reasonCode
+    existing.sourceFullIdentityHash = entry.fullIdentityHash
+  } else {
+    state.providerBackpressure.push({
+      providerId: entry.providerId,
+      blockedUntil,
+      reasonCode,
+      sourceFullIdentityHash: entry.fullIdentityHash,
+    })
+  }
+  record(state, eventType, entry, now, { providerId: entry.providerId, blockedUntil, reasonCode })
+  return blockedUntil
+}
+
 function record(state, type, work, now, detail = {}) {
   state.version += 1
   const event = {
@@ -682,6 +988,14 @@ function activeEntry(work, fence, leaseFence, reservationFence, now) {
     schedulerFencingToken: fence,
     dispatchId: work.dispatchId, trustArtifactHash: work.trustArtifact.artifactHash,
     authorityGrantHash: work.authorityGrant.grantHash, fullIdentityHash: work.fullIdentityHash,
+    scheduling: {
+      policyHash: work.scheduling.policyHash,
+      schedulingClaimHash: work.scheduling.claimHash,
+      priorityClass: work.scheduling.priorityClass,
+      securityCritical: work.scheduling.securityCritical,
+      preemptible: work.scheduling.preemptible,
+      rateLimitCooldownMs: work.scheduling.rateLimitCooldownMs,
+    },
     status: "ACTIVE", lifecycleState: "PROVIDER_DISPATCHED", acquiredAt: new Date(now).toISOString(),
   }
 }
@@ -1310,7 +1624,7 @@ function validateReconciliationLeaseRebind(configuration, state, entry, proof) {
 
 export function scheduleEligibleSet(configuration, input) {
   validateSchedulerConfiguration(configuration)
-  exact(input, new Set(["expectedVersion", "dagInput", "dispatchClaims", "providerCapabilities", "budgets"]), "input")
+  exact(input, new Set(["expectedVersion", "dagInput", "dispatchClaims", "providerCapabilities", "budgets", "schedulingPolicy", "schedulingClaims"]), "input")
   if (typeof configuration.statePath !== "string" || configuration.statePath.trim() === "") wall("SCHEDULER_CONFIGURATION_WALL", "statePath")
   identifier(configuration.stateId, "stateId")
   for (const field of ["reservationLedgerPath", "leaseStorePath", "evidenceLedgerDir", "leaseTokenKey"]) {
@@ -1324,8 +1638,10 @@ export function scheduleEligibleSet(configuration, input) {
   integer(input.expectedVersion, "expectedVersion")
   if (!Array.isArray(input.dispatchClaims)) wall("SCHEDULER_TYPE_WALL", "dispatchClaims")
   if (!Array.isArray(input.providerCapabilities)) wall("SCHEDULER_TYPE_WALL", "providerCapabilities")
+  if (!Array.isArray(input.schedulingClaims)) wall("SCHEDULER_TYPE_WALL", "schedulingClaims")
   const budgets = validateBudgets(input.budgets)
   const bundle = loadPinnedTrustBundle(configuration.trustBundleReference)
+  const schedulingPolicy = normalizeSchedulingPolicy(input.schedulingPolicy, bundle, now, budgets)
   const configurationHash = schedulerConfigurationHash(configuration, budgets)
   const dag = resolveDagEligibleSet(input.dagInput)
   const eligibleIds = dag.eligible.map((entry) => entry.workOrderId)
@@ -1339,7 +1655,7 @@ export function scheduleEligibleSet(configuration, input) {
     return [capability.providerId, capability]
   }))
   const envelopes = new Map(input.dagInput.workOrders.map((envelope) => [envelope.workOrderId, envelope]))
-  const works = eligibleIds.map((workOrderId) => {
+  let works = eligibleIds.map((workOrderId) => {
     const work = normalizeWork(input.dispatchClaims.find((entry) => entry.workOrderId === workOrderId), bundle, now, configurationHash)
     const envelope = envelopes.get(workOrderId)
     exactMatch({
@@ -1372,16 +1688,36 @@ export function scheduleEligibleSet(configuration, input) {
   })
   const ids = works.map((work) => work.fullIdentityHash)
   if (new Set(ids).size !== ids.length) wall("SCHEDULER_REPLAY_WALL", "dispatchClaims", "DUPLICATE_FULL_IDENTITY")
+  if (input.schedulingClaims.length !== works.length) {
+    wall("SCHEDULER_SCHEDULING_CLAIM_WALL", "schedulingClaims", "EXACT_ELIGIBLE_SET_REQUIRED")
+  }
+  const schedulingClaims = new Map()
+  for (const [index, value] of input.schedulingClaims.entries()) {
+    const work = works.find((candidate) => candidate.workOrderId === value?.workOrderId && candidate.laneId === value?.laneId)
+    if (!work) wall("SCHEDULER_SCHEDULING_CLAIM_WALL", `schedulingClaims[${index}]`, "EXACT_ELIGIBLE_SCOPE_REQUIRED")
+    const normalized = normalizeSchedulingClaim(value, bundle, schedulingPolicy, work, now, index)
+    const key = schedulingIdentity(normalized)
+    if (schedulingClaims.has(key)) wall("SCHEDULER_SCHEDULING_CLAIM_WALL", "schedulingClaims", "UNIQUE_SCOPE_REQUIRED")
+    schedulingClaims.set(key, normalized)
+  }
   const unlock = acquireLock(configuration)
   configuration = bindSchedulerLock(configuration, unlock)
   try {
     const state = loadState(configuration.statePath, configuration.stateId)
     if (state.version !== input.expectedVersion) wall("SCHEDULER_CAS_WALL", "expectedVersion", `${state.version}`)
+    const expiredBackpressure = state.providerBackpressure.filter((entry) => Date.parse(entry.blockedUntil) <= now)
+    if (expiredBackpressure.length > 0) {
+      state.providerBackpressure = state.providerBackpressure.filter((entry) => Date.parse(entry.blockedUntil) > now)
+      for (const entry of expiredBackpressure) record(state, "PROVIDER_BACKPRESSURE_EXPIRED", {
+        fullIdentityHash: schedulerHash(entry),
+      }, now, { providerId: entry.providerId, blockedUntil: entry.blockedUntil })
+    }
+    works = rankedSchedulingWorks(state, works, schedulingClaims, schedulingPolicy, now)
     const scheduled = []
     const blocked = []
     const transactions = []
     try {
-      for (const work of works) {
+      for (let work of works) {
       if ([...state.released, ...state.active, ...state.reconciliation]
         .some((entry) => entry.fullIdentityHash === work.fullIdentityHash)) {
         blocked.push({ workOrderId: work.workOrderId, code: "RELEASED_OR_ACTIVE_REPLAY" }); continue
@@ -1398,13 +1734,44 @@ export function scheduleEligibleSet(configuration, input) {
         || !capability.supportsSanitizedEvidence || !capability.serviceCompatible) {
         blocked.push({ workOrderId: work.workOrderId, code: "PROVIDER_CAPABILITY_UNSUPPORTED" }); continue
       }
+      work = { ...work, providerCapabilityMaxConcurrency: capability.maxConcurrency }
+      const providerBackpressure = state.providerBackpressure.find((entry) => entry.providerId === work.providerId)
+      if (providerBackpressure) {
+        const code = `RATE_LIMIT_BACKPRESSURE:${work.providerId}:${providerBackpressure.blockedUntil}`
+        rememberPending(state, work, schedulingPolicy, now, code)
+        blocked.push({ workOrderId: work.workOrderId, code }); continue
+      }
       if ([...state.active, ...state.reconciliation]
         .filter((entry) => entry.providerId === work.providerId).length >= capability.maxConcurrency) {
-        blocked.push({ workOrderId: work.workOrderId, code: `CAPACITY_EXHAUSTED:capability:${work.providerId}` }); continue
+        if (work.scheduling.securityCritical) {
+          const victims = activeSchedulingVictims(state, work, budgets)
+          if (victims.length > 0) {
+            const code = `SECURITY_DRAIN_REQUIRED:${victims.join(",")}`
+            rememberPending(state, work, schedulingPolicy, now, code)
+            blocked.push({ workOrderId: work.workOrderId, code }); continue
+          }
+        }
+        const code = `CAPACITY_EXHAUSTED:capability:${work.providerId}`
+        rememberPending(state, work, schedulingPolicy, now, code)
+        blocked.push({ workOrderId: work.workOrderId, code }); continue
       }
       const ceiling = hasCapacity(state, work, budgets)
-      if (ceiling) { blocked.push({ workOrderId: work.workOrderId, code: ceiling }); continue }
-      if (!compatible([...state.active, ...state.reconciliation], work)) { blocked.push({ workOrderId: work.workOrderId, code: "RESERVATION_COLLISION" }); continue }
+      if (ceiling) {
+        if (work.scheduling.securityCritical) {
+          const victims = activeSchedulingVictims(state, work, budgets)
+          if (victims.length > 0) {
+            const code = `SECURITY_DRAIN_REQUIRED:${victims.join(",")}`
+            rememberPending(state, work, schedulingPolicy, now, code)
+            blocked.push({ workOrderId: work.workOrderId, code }); continue
+          }
+        }
+        rememberPending(state, work, schedulingPolicy, now, ceiling)
+        blocked.push({ workOrderId: work.workOrderId, code: ceiling }); continue
+      }
+      if (!compatible([...state.active, ...state.reconciliation], work)) {
+        rememberPending(state, work, schedulingPolicy, now, "RESERVATION_COLLISION")
+        blocked.push({ workOrderId: work.workOrderId, code: "RESERVATION_COLLISION" }); continue
+      }
       for (const [from, to] of [["PLANNED", "AUTHORITY_MATCHED"], ["AUTHORITY_MATCHED", "DEPENDENCY_CLEARED"], ["DEPENDENCY_CLEARED", "RESERVED"], ["RESERVED", "LEASED"], ["LEASED", "PROVIDER_DISPATCHED"]]) {
         transitionLifecycle({ from, to, reasonCode: null, failureClass: null, authorityGap: { present: false, condition: null, conditionRef: null } })
       }
@@ -1415,13 +1782,30 @@ export function scheduleEligibleSet(configuration, input) {
       const phase = acquirePhaseTwoClaim(configuration, work, transactionId, state.nextFence)
       record(state, "TRUST_VERIFIED", work, now, { trustArtifactHash: work.trustArtifact.artifactHash, trustBundleHash: bundle.bundleHash })
       record(state, "AUTHORITY_VERIFIED", work, now, { authorityGrantHash: work.authorityGrant.grantHash })
-      record(state, "CAPACITY_RESERVED", work, now)
+      record(state, "CAPACITY_RESERVED", work, now, {
+        policyHash: schedulingPolicy.policyHash,
+        schedulingClaimHash: work.scheduling.claimHash,
+        priorityClass: work.scheduling.priorityClass,
+        securityCritical: work.scheduling.securityCritical,
+        firstEligibleAt: new Date(work.firstEligibleAt).toISOString(),
+        ageMs: work.ageMs,
+        starved: work.starved,
+        effectivePriority: work.effectivePriority,
+      })
       record(state, "RESERVATION_ACQUIRED", work, now, { reservationSetId: work.reservationSet.reservationSetId })
       record(state, "LIFECYCLE_PROVIDER_DISPATCHED", work, now)
       const entry = activeEntry(work, state.nextFence, phase.lease.fencingToken, phase.reservation.fencingToken, now)
       entry.lastEvidenceEventId = phase.evidence.event.eventId
       state.nextFence += 1
       state.active.push(entry)
+      forgetPending(state, work)
+      if (work.scheduling.securityCritical) {
+        state.securityAdmissionsSinceFairness = Math.min(
+          schedulingPolicy.securityBurstLimit,
+          state.securityAdmissionsSinceFairness + 1,
+        )
+      }
+      else state.securityAdmissionsSinceFairness = 0
       scheduled.push(entry)
         advanceTransaction(configuration, transactionId, "STORES_APPLIED", {
           schedulerFencingToken: entry.schedulerFencingToken,
@@ -1450,7 +1834,7 @@ export function scheduleEligibleSet(configuration, input) {
       throw error
     }
     for (const transaction of transactions) advanceTransaction(configuration, transaction.transactionId, "COMMITTED")
-    return result("ELIGIBLE_SET_SCHEDULED", { scheduled: Object.freeze(scheduled), blocked: Object.freeze(blocked), stateVersion: state.version, dagResultHash: schedulerHash(dag), derivedEligibleWorkOrderIds: Object.freeze(eligibleIds), sideEffectOrder: Object.freeze(["TRUST", "AUTHORITY", "CAPACITY", "RESERVATION", "LIFECYCLE", "EVIDENCE"]) })
+    return result("ELIGIBLE_SET_SCHEDULED", { scheduled: Object.freeze(scheduled), blocked: Object.freeze(blocked), stateVersion: state.version, dagResultHash: schedulerHash(dag), derivedEligibleWorkOrderIds: Object.freeze(eligibleIds), sideEffectOrder: Object.freeze(["TRUST", "AUTHORITY", "SCHEDULING", "CAPACITY", "RESERVATION", "LIFECYCLE", "EVIDENCE"]) })
   } finally { unlock() }
 }
 
@@ -1458,7 +1842,7 @@ export function recordProviderOutcome(configuration, input) {
   validateSchedulerConfiguration(configuration)
   exact(input, new Set(["expectedVersion", "claim", "delivery", "reconciliation"]), "outcome")
   exact(input.claim, new Set(["schedulerRunId", "attempt", "fullIdentityHash", "schedulerFencingToken", "leaseFencingToken", "reservationFencingToken"]), "outcome.claim")
-  exact(input.delivery, new Set(["kind", "providerResponse", "reasonCode", "evidence"]), "outcome.delivery")
+  exact(input.delivery, new Set(["kind", "providerResponse", "reasonCode", "evidence", "rateLimitObservation"]), "outcome.delivery")
   integer(input.expectedVersion, "expectedVersion")
   for (const field of ["attempt", "schedulerFencingToken", "leaseFencingToken", "reservationFencingToken"]) integer(input.claim[field], `outcome.claim.${field}`, 1)
   identifier(input.claim.schedulerRunId, "outcome.claim.schedulerRunId")
@@ -1479,8 +1863,10 @@ export function recordProviderOutcome(configuration, input) {
     let reasonCode
     let responseHash
     let normalizedResponse = null
+    let rateLimitObservation = null
     let attributionMatch = false
     if (input.delivery.kind === "PROVIDER_RESPONSE") {
+      if (input.delivery.rateLimitObservation !== null) wall("SCHEDULER_RATE_LIMIT_PROVENANCE_WALL", "outcome.delivery.rateLimitObservation", "NULL_FOR_NON_RATE_LIMIT_REQUIRED")
       if (input.delivery.reasonCode !== null) wall("SCHEDULER_OUTCOME_WALL", "outcome.delivery.reasonCode", "NULL_FOR_RESPONSE_REQUIRED")
       const response = validateProviderResponse(input.delivery.providerResponse)
       normalizedResponse = response
@@ -1493,8 +1879,13 @@ export function recordProviderOutcome(configuration, input) {
     } else if (["TRANSPORT_ERROR", "AUTHENTICATION_ERROR", "RATE_LIMIT", "SERVER_ERROR", "TIMEOUT", "MALFORMED_RESPONSE"].includes(input.delivery.kind)) {
       if (input.delivery.providerResponse !== null) wall("SCHEDULER_OUTCOME_WALL", "outcome.delivery.providerResponse", "NULL_REQUIRED")
       reasonCode = identifier(input.delivery.reasonCode, "outcome.delivery.reasonCode")
+      if (input.delivery.kind === "RATE_LIMIT") {
+        rateLimitObservation = validateRateLimitObservation(input.delivery.rateLimitObservation, bundle, entry, now, reasonCode)
+      } else if (input.delivery.rateLimitObservation !== null) {
+        wall("SCHEDULER_RATE_LIMIT_PROVENANCE_WALL", "outcome.delivery.rateLimitObservation", "NULL_FOR_NON_RATE_LIMIT_REQUIRED")
+      }
       providerState = "UNKNOWN"
-      responseHash = schedulerHash({ kind: input.delivery.kind, reasonCode })
+      responseHash = schedulerHash({ kind: input.delivery.kind, reasonCode, rateLimitObservationHash: rateLimitObservation ? signedHash(rateLimitObservation) : null })
     } else wall("SCHEDULER_OUTCOME_WALL", "outcome.delivery.kind")
     const effectiveOutcome = attributionMatch || input.delivery.kind !== "PROVIDER_RESPONSE" ? providerState : "ATTRIBUTION_MISMATCH"
     const ambiguous = input.delivery.kind !== "PROVIDER_RESPONSE" || !attributionMatch || providerState === "UNKNOWN"
@@ -1516,7 +1907,7 @@ export function recordProviderOutcome(configuration, input) {
       assertCurrentActiveReconciliationLease(configuration, entry, proof)
     } else if (input.reconciliation !== null) wall("SCHEDULER_RECONCILIATION_WALL", "outcome.reconciliation", "NULL_FOR_ATTRIBUTED_RESPONSE_REQUIRED")
     const transactionId = beginTransaction(configuration, "OUTCOME", entry, {
-      expectedSchedulerVersion: state.version, entry, claim: input.claim, effectiveOutcome, providerState,
+      expectedSchedulerVersion: state.version, entry, claim: input.claim, deliveryKind: input.delivery.kind, effectiveOutcome, providerState,
       reasonCode, responseHash, terminal, ambiguous, reconciliation: input.reconciliation,
       reconciliationOwnerProofHash: proof?.proofHash ?? null,
     }, now)
@@ -1551,6 +1942,9 @@ export function recordProviderOutcome(configuration, input) {
     record(state, "EVIDENCE_PROVIDER_OUTCOME", entry, now, { outcome: effectiveOutcome, evidenceHash, phaseEvidenceHash: schedulerHash(phase.evidence) })
     record(state, "LIFECYCLE_PROVIDER_OUTCOME", entry, now, { outcome: effectiveOutcome, lifecycleState: entry.lifecycleState })
     record(state, "CHECKPOINT_PROVIDER_OUTCOME", entry, now, { outcome: effectiveOutcome, evidenceHash, leaseFencingToken: entry.leaseFencingToken })
+    if (input.delivery.kind === "RATE_LIMIT") {
+      applyProviderBackpressure(state, entry, reasonCode, now, "PROVIDER_RATE_LIMIT_BACKPRESSURE")
+    }
     if (ambiguous) {
       state.active.splice(index, 1)
       state.reconciliation.push({ ...entry, status: "RECONCILIATION_REQUIRED", outcome: effectiveOutcome, reconciliationOwner: input.reconciliation.ownerId, reconciliationOwnerProofHash: proof.proofHash, reconciliationGrantExpiresAt: proof.expiresAt, reconciliationDeadline: input.reconciliation.deadline,
@@ -1831,6 +2225,9 @@ export function recoverSchedulerTransactions(configuration) {
           reconciliationOwner: detail.reconciliation.ownerId, reconciliationOwnerProofHash: proof.proofHash, reconciliationGrantExpiresAt: proof.expiresAt,
           reconciliationDeadline: detail.reconciliation.deadline, reconciliationAuthorityClaim: reconciliationClaim(detail.entry),
           reconciliationLeaseRebind, fenced: true })
+        if (detail.deliveryKind === "RATE_LIMIT") {
+          applyProviderBackpressure(state, entry, detail.reasonCode, now, "TRANSACTION_RECOVERY_RATE_LIMIT_BACKPRESSURE")
+        }
         record(state, "TRANSACTION_RECOVERY_AMBIGUOUS_FENCED", entry, now, { transactionId: transaction.transactionId })
         stateChanged = true
         transaction.phase = reconciliationLeaseRebind ? "RECONCILIATION_HELD" : "COMMITTED"

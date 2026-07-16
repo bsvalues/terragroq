@@ -111,6 +111,9 @@ function startHeartbeat(ownerPath, owner, leaseDurationMs, heartbeatIntervalMs) 
   Atomics.store(control, 2, owner.generation)
   const worker = new Worker(new URL("./scheduler-lock-heartbeat.mjs", import.meta.url), {
     workerData: { ownerPath, owner, leaseDurationMs, heartbeatIntervalMs, controlBuffer },
+    // The heartbeat is a self-contained file worker. Do not inherit test-runner or
+    // stdin-only parent flags that can make Node reject the worker entrypoint.
+    execArgv: [],
   })
   const ready = Atomics.wait(control, 1, 0, Math.max(1000, heartbeatIntervalMs * 4))
   if (ready === "timed-out" || Atomics.load(control, 4) !== 0 || Atomics.load(control, 2) <= owner.generation) {
