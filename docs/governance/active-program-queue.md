@@ -107,17 +107,19 @@ program without routine owner contact. Its goal is
 `LOOP-WOS-MULTI-AGENT-OPERATOR-001`. Phase 0 and the bounded hosted-team proof
 through `WO-MAO-015` are complete. Phase 2 Work Orders `WO-MAO-016` through `WO-MAO-022`, the
 WO-MAO-023 eligible-set scheduler, the WO-MAO-024 team-topology contract, the bounded WO-MAO-025
-isolated-workspace manager, the WO-MAO-026 reservation-aware handoff contract, and the provider assessments
+isolated-workspace manager, the WO-MAO-026 reservation-aware handoff contract, the WO-MAO-027 durable
+concurrency/fairness scheduler extension, and the provider assessments
 `WO-MAO-029` and `WO-MAO-032` are complete. `WO-MAO-033` is
 `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The dependency resolver exposes only
-`WO-MAO-027`; later Phase 3 Work Orders remain pending on their declared dependencies. The program
+`WO-MAO-028`; later Work Orders remain pending on their declared dependencies. The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
 deployment, protected data, or destructive operations.
 
 Phase 2 and the first Phase 3 slices prove local envelope, DAG, atomic reservation,
 provider-eligibility, lifecycle, lease, checkpoint, evidence-ledger, owner-meter, recoverable
-eligible-set scheduling, deterministic team-topology, and lease/evidence-bound isolated-workspace lifecycle. Durable provider dispatch and
+eligible-set scheduling, deterministic team-topology, lease/evidence-bound isolated-workspace lifecycle,
+one-writer handoff, and hard-ceiling priority/fairness admission planning. Durable provider dispatch and
 automated GitHub delivery remain unproven.
 
 `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001` is terminal and non-selectable.

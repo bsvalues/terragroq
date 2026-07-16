@@ -224,7 +224,31 @@ function claim(config = configuration(), limit = budgets(), order = envelope(), 
   }
 }
 
+function schedulingPolicy(limit = budgets(), overrides: Record<string, unknown> = {}) {
+  return signSchedulerArtifact({
+    schemaVersion: 1, artifactType: "MULTI_AGENT_SCHEDULING_POLICY_V1",
+    policyId: "scheduling-policy-mao-027", issuer: "trust-reviewer",
+    issuedAt: "2026-07-15T09:30:00.000Z", expiresAt: "2026-07-15T12:00:00.000Z",
+    budgets: limit, agingIntervalMs: 60_000, agingCap: 99,
+    starvationThresholdMs: 900_000, securityBurstLimit: 2,
+    rateLimitCooldownMs: 300_000, ...overrides,
+  }, trust.privateKey)
+}
+
+function schedulingClaim(policy: Record<string, unknown>, order = envelope(), overrides: Record<string, unknown> = {}) {
+  return signSchedulerArtifact({
+    schemaVersion: 1, artifactType: "MULTI_AGENT_SCHEDULING_CLAIM_V1",
+    claimId: `scheduling-${order.workOrderId.toLowerCase()}`, issuer: "trust-reviewer",
+    policyHash: schedulerHash(policy), programId: order.programId, goalId: order.goalId,
+    loopId: order.loopId, workOrderId: order.workOrderId, laneId: order.laneId,
+    priorityClass: "NORMAL", securityCritical: false, preemptible: true,
+    issuedAt: "2026-07-15T09:30:00.000Z", expiresAt: "2026-07-15T12:00:00.000Z",
+    ...overrides,
+  }, trust.privateKey)
+}
+
 function input(config = configuration(), limit = budgets(), orders = [envelope()]) {
+  const policy = schedulingPolicy(limit)
   return {
     expectedVersion: 0,
     dagInput: {
@@ -233,6 +257,8 @@ function input(config = configuration(), limit = budgets(), orders = [envelope()
     },
     dispatchClaims: orders.map((order) => claim(config, limit, order)),
     providerCapabilities: [provider()], budgets: limit,
+    schedulingPolicy: policy,
+    schedulingClaims: orders.map((order) => schedulingClaim(policy, order)),
   }
 }
 
@@ -263,14 +289,31 @@ function providerResponse(entry: Record<string, unknown>, state = "SUCCEEDED") {
   }
 }
 
+function rateLimitObservation(entry: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+  return signSchedulerArtifact({
+    schemaVersion: 1, artifactType: "SIGNED_PROVIDER_RATE_LIMIT_OBSERVATION",
+    observationId: `rate-limit-${String(entry.workOrderId).toLowerCase()}`,
+    issuer: "trust-reviewer", providerId: entry.providerId, adapterId: entry.adapterId,
+    dispatchId: entry.dispatchId, workOrderId: entry.workOrderId, laneId: entry.laneId,
+    httpStatus: 429, reasonCode: "HTTP_429", observedAt: "2026-07-15T10:00:00.000Z",
+    expiresAt: "2026-07-15T10:10:00.000Z", ...overrides,
+  }, trust.privateKey)
+}
+
 function outcomeInput(entry: Record<string, unknown>, delivery: Record<string, unknown>, reconciliation: unknown = null, expectedVersion = 5) {
+  const normalizedDelivery = {
+    ...delivery,
+    rateLimitObservation: Object.hasOwn(delivery, "rateLimitObservation")
+      ? delivery.rateLimitObservation
+      : delivery.kind === "RATE_LIMIT" ? rateLimitObservation(entry, { reasonCode: delivery.reasonCode }) : null,
+  }
   return {
     expectedVersion,
     claim: {
       schedulerRunId: entry.schedulerRunId, attempt: entry.attempt, fullIdentityHash: entry.fullIdentityHash,
       schedulerFencingToken: entry.schedulerFencingToken, leaseFencingToken: entry.leaseFencingToken, reservationFencingToken: entry.reservationFencingToken,
     },
-    delivery,
+    delivery: normalizedDelivery,
     reconciliation,
   }
 }
@@ -1074,7 +1117,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     const result = recordProviderOutcome(configuration(NOW + 1), outcomeInput(entry, {
       kind, providerResponse: null, reasonCode: `${kind}_WALL`, evidence: { kind },
     }, { ownerId: "reconciler-23", deadline: "2026-07-15T10:05:00.000Z", ownerProof: proof }))
-    expect(result).toMatchObject({ code: "OUTCOME_RECONCILIATION_REQUIRED", capacityReleased: false, fencedForReconciliation: true, stateVersion: 9 })
+    expect(result).toMatchObject({ code: "OUTCOME_RECONCILIATION_REQUIRED", capacityReleased: false, fencedForReconciliation: true, stateVersion: kind === "RATE_LIMIT" ? 10 : 9 })
     expect(inspectLaneLeaseStore(configuration().leaseStorePath, configuration().leaseStoreId).lanes[0]).toMatchObject({ status: "ACTIVE", lifecycleState: "REROUTE_PENDING" })
     expect(inspectReservationLedger(configuration().reservationLedgerPath, configuration().reservationLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_INSPECT_REQUEST" }).reservations).toHaveLength(1)
   })
@@ -1275,6 +1318,233 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     expectWall(() => recordProviderOutcome(configuration(NOW + 1), outcomeInput(entry, {
       kind: "TIMEOUT", providerResponse: null, reasonCode: "TIMEOUT_WALL", evidence: {},
     }, { ownerId: "reconciler-23", deadline: "2026-07-15T10:05:00.000Z", ownerProof: ownerProof(entry, "reconciler-23", "2026-07-15T10:04:59.000Z") })), "SCHEDULER_RECONCILIATION_WALL")
+  })
+
+  it("requires fresh trust-signed scheduling policy and exact per-lane claims before lock acquisition", () => {
+    const value = input()
+    value.schedulingPolicy = { ...value.schedulingPolicy, agingCap: 100 }
+    expectWall(() => schedule(configuration(), value), "SCHEDULER_SIGNATURE_WALL")
+    expect(fs.existsSync(configuration().statePath)).toBe(false)
+
+    const second = input()
+    second.schedulingClaims[0] = { ...second.schedulingClaims[0], priorityClass: "HIGH" }
+    expectWall(() => schedule(configuration(), second), "SCHEDULER_SIGNATURE_WALL")
+    expect(fs.existsSync(configuration().statePath)).toBe(false)
+  })
+
+  it("fails closed on a rehashed legacy scheduler-state schema", () => {
+    schedule()
+    const config = configuration()
+    const legacy = JSON.parse(fs.readFileSync(config.statePath, "utf8"))
+    legacy.schemaVersion = 1
+    legacy.stateHash = null
+    legacy.stateHash = schedulerHash(legacy)
+    fs.writeFileSync(config.statePath, `${JSON.stringify(legacy)}\n`)
+    expectWall(() => inspectSchedulerState(config.statePath, config.stateId), "SCHEDULER_STATE_CORRUPT")
+  })
+
+  it("ranks the exact eligible set by signed priority instead of DAG lexical order", () => {
+    const low = envelope("WO-MAO-023", "LANE-MAO-023")
+    const high = envelope("WO-MAO-024", "LANE-MAO-024")
+    const limit = budgets(1)
+    limit.providers["provider-23"] = 1
+    limit.repositories["bsvalues/terragroq"] = 1
+    limit.risks.R1 = 1
+    limit.combined["provider-23:bsvalues/terragroq:R1"] = 1
+    const value = input(configuration(), limit, [low, high])
+    value.schedulingClaims = [
+      schedulingClaim(value.schedulingPolicy, low, { priorityClass: "LOW" }),
+      schedulingClaim(value.schedulingPolicy, high, { priorityClass: "CRITICAL" }),
+    ]
+    const result = schedule(configuration(), value)
+    expect(result.scheduled.map((entry: Record<string, unknown>) => entry.workOrderId)).toEqual(["WO-MAO-024"])
+    expect(result.blocked).toEqual([{ workOrderId: "WO-MAO-023", code: "GLOBAL_CAPACITY_EXHAUSTED" }])
+    const state = inspectSchedulerState(configuration().statePath, configuration().stateId).state
+    expect(state.pending).toMatchObject([{ workOrderId: "WO-MAO-023", lastReasonCode: "GLOBAL_CAPACITY_EXHAUSTED" }])
+  })
+
+  it("persists first eligibility so starved work outranks a newly arrived higher-priority lane", () => {
+    const limit = budgets(1)
+    limit.providers["provider-23"] = 1
+    limit.repositories["bsvalues/terragroq"] = 1
+    limit.risks.R1 = 1
+    limit.combined["provider-23:bsvalues/terragroq:R1"] = 1
+    const low = envelope("WO-MAO-023", "LANE-MAO-023")
+    const holder = envelope("WO-MAO-024", "LANE-MAO-024")
+    const first = input(configuration(), limit, [low, holder])
+    first.schedulingClaims = [
+      schedulingClaim(first.schedulingPolicy, low, { priorityClass: "LOW" }),
+      schedulingClaim(first.schedulingPolicy, holder, { priorityClass: "CRITICAL" }),
+    ]
+    const firstResult = schedule(configuration(), first)
+    const active = firstResult.scheduled[0]
+    const beforeRelease = inspectSchedulerState(configuration().statePath, configuration().stateId).state
+    expect(beforeRelease.pending[0].firstEligibleAt).toBe("2026-07-15T10:00:00.000Z")
+    recordProviderOutcome(configuration(NOW + 1), outcomeInput(active, {
+      kind: "PROVIDER_RESPONSE", providerResponse: providerResponse(active, "SUCCEEDED"),
+      reasonCode: null, evidence: {},
+    }, null, beforeRelease.version))
+
+    const newcomer = envelope("WO-MAO-025", "LANE-MAO-025")
+    const laterConfig = configuration(NOW + 900_001)
+    const second = input(laterConfig, limit, [low, newcomer])
+    second.expectedVersion = inspectSchedulerState(laterConfig.statePath, laterConfig.stateId).state.version
+    second.schedulingClaims = [
+      schedulingClaim(second.schedulingPolicy, low, { priorityClass: "LOW" }),
+      schedulingClaim(second.schedulingPolicy, newcomer, { priorityClass: "HIGH" }),
+    ]
+    const secondResult = schedule(laterConfig, second)
+    expect(secondResult.scheduled.map((entry: Record<string, unknown>) => entry.workOrderId)).toEqual(["WO-MAO-023"])
+    expect(secondResult.blocked[0].workOrderId).toBe("WO-MAO-025")
+  })
+
+  it("rotates a fresh signed policy without resetting durable age or changing lane classification", () => {
+    const limit = budgets(1)
+    limit.providers["provider-23"] = 1
+    limit.repositories["bsvalues/terragroq"] = 1
+    limit.risks.R1 = 1
+    limit.combined["provider-23:bsvalues/terragroq:R1"] = 1
+    const low = envelope("WO-MAO-023", "LANE-MAO-023")
+    const holder = envelope("WO-MAO-024", "LANE-MAO-024")
+    const first = input(configuration(), limit, [low, holder])
+    first.schedulingClaims = [
+      schedulingClaim(first.schedulingPolicy, low, { priorityClass: "LOW" }),
+      schedulingClaim(first.schedulingPolicy, holder, { priorityClass: "HIGH" }),
+    ]
+    schedule(configuration(), first)
+    const prior = inspectSchedulerState(configuration().statePath, configuration().stateId).state
+    const rotatedPolicy = schedulingPolicy(limit, { policyId: "scheduling-policy-mao-027-v2", agingCap: 120 })
+    const rotated = input(configuration(NOW + 1), limit, [low])
+    rotated.expectedVersion = prior.version
+    rotated.schedulingPolicy = rotatedPolicy
+    rotated.schedulingClaims = [schedulingClaim(rotatedPolicy, low, { priorityClass: "LOW" })]
+    const result = schedule(configuration(NOW + 1), rotated)
+    expect(result.scheduled).toEqual([])
+    const state = inspectSchedulerState(configuration().statePath, configuration().stateId).state
+    expect(state.pending[0]).toMatchObject({
+      workOrderId: "WO-MAO-023",
+      firstEligibleAt: "2026-07-15T10:00:00.000Z",
+      priorityClass: "LOW",
+      policyHash: schedulerHash(rotatedPolicy),
+    })
+
+    const changedClass = input(configuration(NOW + 2), limit, [low])
+    changedClass.expectedVersion = state.version
+    changedClass.schedulingPolicy = rotatedPolicy
+    changedClass.schedulingClaims = [schedulingClaim(rotatedPolicy, low, { priorityClass: "HIGH" })]
+    expectWall(() => schedule(configuration(NOW + 2), changedClass), "SCHEDULER_FAIRNESS_STATE_WALL")
+  })
+
+  it("keeps security preemption as a bounded drain request until durable capacity release", () => {
+    const limit = budgets(1)
+    limit.providers["provider-23"] = 1
+    limit.repositories["bsvalues/terragroq"] = 1
+    limit.risks.R1 = 1
+    limit.combined["provider-23:bsvalues/terragroq:R1"] = 1
+    const holderOrder = envelope("WO-MAO-023", "LANE-MAO-023")
+    const holderInput = input(configuration(), limit, [holderOrder])
+    const holder = schedule(configuration(), holderInput).scheduled[0]
+    const securityOrder = envelope("WO-MAO-027", "LANE-MAO-027")
+    const securityInput = input(configuration(NOW + 1), limit, [securityOrder])
+    securityInput.expectedVersion = 5
+    securityInput.schedulingClaims = [schedulingClaim(securityInput.schedulingPolicy, securityOrder, {
+      priorityClass: "CRITICAL", securityCritical: true, preemptible: false,
+    })]
+    const result = schedule(configuration(NOW + 1), securityInput)
+    expect(result.scheduled).toEqual([])
+    expect(result.blocked).toEqual([{
+      workOrderId: "WO-MAO-027",
+      code: "SECURITY_DRAIN_REQUIRED:WO-MAO-023:LANE-MAO-023",
+    }])
+    const state = inspectSchedulerState(configuration().statePath, configuration().stateId).state
+    expect(state.active).toHaveLength(1)
+    expect(state.active[0].fullIdentityHash).toBe(holder.fullIdentityHash)
+    expect(state.reconciliation).toEqual([])
+  })
+
+  it("bounds consecutive security admissions so waiting non-security work receives capacity", () => {
+    const limit = budgets(1)
+    limit.providers["provider-23"] = 1
+    limit.repositories["bsvalues/terragroq"] = 1
+    limit.risks.R1 = 1
+    limit.combined["provider-23:bsvalues/terragroq:R1"] = 1
+    const waiting = envelope("WO-MAO-023", "LANE-MAO-023")
+
+    const runSecurityAdmission = (workOrderId: string, laneId: string, now: number) => {
+      const security = envelope(workOrderId, laneId)
+      const config = configuration(now)
+      const value = input(config, limit, [waiting, security])
+      value.expectedVersion = inspectSchedulerState(config.statePath, config.stateId).state.version
+      value.schedulingPolicy = schedulingPolicy(limit, { agingIntervalMs: 1, starvationThresholdMs: 1 })
+      value.schedulingClaims = [
+        schedulingClaim(value.schedulingPolicy, waiting, { priorityClass: "LOW" }),
+        schedulingClaim(value.schedulingPolicy, security, {
+          priorityClass: "CRITICAL", securityCritical: true, preemptible: false,
+        }),
+      ]
+      return schedule(config, value)
+    }
+
+    const first = runSecurityAdmission("WO-MAO-027", "LANE-MAO-027", NOW)
+    expect(first.scheduled[0].workOrderId).toBe("WO-MAO-027")
+    recordProviderOutcome(configuration(NOW + 1), outcomeInput(first.scheduled[0], {
+      kind: "PROVIDER_RESPONSE", providerResponse: providerResponse(first.scheduled[0], "SUCCEEDED"),
+      reasonCode: null, evidence: {},
+    }, null, inspectSchedulerState(configuration().statePath, configuration().stateId).state.version))
+
+    const second = runSecurityAdmission("WO-MAO-028", "LANE-MAO-028", NOW + 2)
+    expect(second.scheduled[0].workOrderId).toBe("WO-MAO-028")
+    recordProviderOutcome(configuration(NOW + 3), outcomeInput(second.scheduled[0], {
+      kind: "PROVIDER_RESPONSE", providerResponse: providerResponse(second.scheduled[0], "SUCCEEDED"),
+      reasonCode: null, evidence: {},
+    }, null, inspectSchedulerState(configuration().statePath, configuration().stateId).state.version))
+
+    const third = runSecurityAdmission("WO-MAO-029", "LANE-MAO-029", NOW + 4)
+    expect(third.scheduled.map((entry: Record<string, unknown>) => entry.workOrderId)).toEqual(["WO-MAO-023"])
+    expect(third.blocked).toEqual([{
+      workOrderId: "WO-MAO-029", code: "SECURITY_DRAIN_REQUIRED:WO-MAO-023:LANE-MAO-023",
+    }])
+    expect(inspectSchedulerState(configuration().statePath, configuration().stateId).state.securityAdmissionsSinceFairness).toBe(0)
+  })
+
+  it("derives provider backpressure from a validated rate-limit outcome and retains ambiguous capacity", () => {
+    const entry = schedule().scheduled[0]
+    const deadline = "2026-07-15T10:10:00.000Z"
+    recordProviderOutcome(configuration(NOW + 1), outcomeInput(entry, {
+      kind: "RATE_LIMIT", providerResponse: null, reasonCode: "HTTP_429", evidence: {},
+    }, { ownerId: "reconciler-23", deadline, ownerProof: ownerProof(entry, "reconciler-23", deadline) }))
+    const state = inspectSchedulerState(configuration().statePath, configuration().stateId).state
+    expect(state.active).toEqual([])
+    expect(state.reconciliation).toHaveLength(1)
+    expect(state.providerBackpressure).toMatchObject([{
+      providerId: "provider-23", reasonCode: "HTTP_429", blockedUntil: "2026-07-15T10:05:00.001Z",
+    }])
+
+    const nextOrder = envelope("WO-MAO-027", "LANE-MAO-027")
+    const next = input(configuration(NOW + 2), budgets(), [nextOrder])
+    next.expectedVersion = state.version
+    const blocked = schedule(configuration(NOW + 2), next)
+    expect(blocked.scheduled).toEqual([])
+    expect(blocked.blocked[0].code).toBe("RATE_LIMIT_BACKPRESSURE:provider-23:2026-07-15T10:05:00.001Z")
+    expect(inspectSchedulerState(configuration().statePath, configuration().stateId).state.reconciliation).toHaveLength(1)
+  })
+
+  it("rejects missing or forged provider rate-limit provenance before applying backpressure", () => {
+    const entry = schedule().scheduled[0]
+    const reconciliation = {
+      ownerId: "reconciler-23", deadline: "2026-07-15T10:10:00.000Z",
+      ownerProof: ownerProof(entry, "reconciler-23", "2026-07-15T10:10:00.000Z"),
+    }
+    expectWall(() => recordProviderOutcome(configuration(NOW + 1), outcomeInput(entry, {
+      kind: "RATE_LIMIT", providerResponse: null, reasonCode: "HTTP_429", evidence: {}, rateLimitObservation: null,
+    }, reconciliation)), "SCHEDULER_TYPE_WALL")
+    expect(inspectSchedulerState(configuration().statePath, configuration().stateId).state.providerBackpressure).toEqual([])
+
+    const forged = { ...rateLimitObservation(entry), reasonCode: "FORGED_429" }
+    expectWall(() => recordProviderOutcome(configuration(NOW + 1), outcomeInput(entry, {
+      kind: "RATE_LIMIT", providerResponse: null, reasonCode: "FORGED_429", evidence: {}, rateLimitObservation: forged,
+    }, reconciliation)), "SCHEDULER_SIGNATURE_WALL")
+    expect(inspectSchedulerState(configuration().statePath, configuration().stateId).state.providerBackpressure).toEqual([])
   })
 
   it("passes only the opaque registry reference to the CLI and production fails closed without a preconfigured record", () => {

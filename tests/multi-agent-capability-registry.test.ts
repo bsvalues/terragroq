@@ -95,6 +95,20 @@ describe("multi-agent executable capability inventory", () => {
         "Owner operations remain prohibited and owner-touch counters remain zero",
       ]),
     })
+    expect(capability("multi-agent-phase-three-concurrency-fairness")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "PHASE_THREE_CONCURRENCY_FAIRNESS_PROVEN",
+      adapterRef: null,
+      authorityGrantRefs: [],
+      trustGateRef: null,
+      restrictions: expect.arrayContaining([
+        "Priority cannot bypass trust, authority, DAG, provider, reservation, lease, risk, or capacity gates",
+        "Security preemption emits a bounded drain request and never releases capacity or cancels work",
+        "No authority grant, runtime activation, provider dispatch, or GitHub operation",
+        "Owner operations remain prohibited and owner-touch counters remain zero",
+      ]),
+    })
     expect(capability("brain-council-advisory")).toMatchObject({
       status: "PROVEN",
       executionClass: "NON_EXECUTABLE",
