@@ -99,6 +99,24 @@ function workOrderId(number: number): `WO-MAO-${string}` {
   return `WO-MAO-${String(number).padStart(3, "0")}`
 }
 
+function workOrderNumber(id: string) {
+  return Number(id.replace(/^WO-MAO-/, ""))
+}
+
+function dependencySatisfied(
+  id: string,
+  dependency: string,
+  completedIds: ReadonlySet<string>,
+  deferredProviderUnavailableIds: ReadonlySet<string>,
+) {
+  if (completedIds.has(dependency)) return true
+  return dependency === "WO-MAO-033"
+    && deferredProviderUnavailableIds.has(dependency)
+    && completedIds.has("WO-MAO-034")
+    && workOrderNumber(id) >= 35
+    && workOrderNumber(id) <= 36
+}
+
 const PHASE_ZERO_EVIDENCE_PATHS = [
   "docs/reports/WO-MAO-001-terminal-local-adapter.md",
   "docs/reports/WO-MAO-002-stale-queue-reconciliation.md",
@@ -142,6 +160,7 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-031", "docs/reports/WO-MAO-031-codex-builder-assurance-remediation-adapters.md"],
   ["WO-MAO-032", "docs/reports/WO-MAO-032-claude-capability-transport-proof.md"],
   ["WO-MAO-033", "docs/reports/WO-MAO-032-claude-capability-transport-proof.md"],
+  ["WO-MAO-034", "docs/reports/WO-MAO-034-cross-provider-routing-review.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -159,7 +178,8 @@ export function resolveMultiAgentWorkOrders(
         ? "BLOCKED"
         : deferredProviderUnavailableIds.has(id)
           ? "DEFERRED_PROVIDER_UNAVAILABLE"
-          : dependsOn.every((dependency) => completedIds.has(dependency))
+          : dependsOn.every((dependency) =>
+            dependencySatisfied(id, dependency, completedIds, deferredProviderUnavailableIds))
             ? "READY"
             : "PENDING"
 
@@ -181,7 +201,7 @@ export function resolveMultiAgentWorkOrders(
   })
 }
 
-const EVIDENCED_COMPLETE = new Set([...range(1, 32)].map(workOrderId))
+const EVIDENCED_COMPLETE = new Set([...range(1, 32), 34].map(workOrderId))
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
 
 export const MULTI_AGENT_OPERATOR_WORK_ORDERS = resolveMultiAgentWorkOrders(

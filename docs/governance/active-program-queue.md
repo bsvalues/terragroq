@@ -109,11 +109,11 @@ through `WO-MAO-015` are complete. Phase 2 Work Orders `WO-MAO-016` through `WO-
 WO-MAO-023 eligible-set scheduler, the WO-MAO-024 team-topology contract, the bounded WO-MAO-025
 isolated-workspace manager, the WO-MAO-026 reservation-aware handoff contract, the WO-MAO-027 durable
 concurrency/fairness scheduler extension, the WO-MAO-028 pure deterministic scheduler model-check
-harness, and the provider assessments and hosted Codex adapters
-`WO-MAO-029`, `WO-MAO-030`, `WO-MAO-031`, and `WO-MAO-032` are complete. `WO-MAO-033` is
-`DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The dependency resolver exposes no ready
-multi-agent Work Order until the provider-unavailable dependency for `WO-MAO-034` is settled under
-the recorded policy; later Work Orders remain pending on their declared dependencies. The program
+harness, the provider assessments and hosted Codex adapters
+`WO-MAO-029`, `WO-MAO-030`, `WO-MAO-031`, and `WO-MAO-032`, and the static cross-provider routing
+model `WO-MAO-034` are complete. `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable.
+The dependency resolver exposes `WO-MAO-035`; later Work Orders remain pending on their declared
+dependencies. The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
 deployment, protected data, or destructive operations.
@@ -123,8 +123,9 @@ provider-eligibility, lifecycle, lease, checkpoint, evidence-ledger, owner-meter
 eligible-set scheduling, deterministic team-topology, lease/evidence-bound isolated-workspace lifecycle,
 one-writer handoff, hard-ceiling priority/fairness admission planning, current-session coordinator
 assignment translation, and current-session builder/assurance/remediation/re-review role lifecycle
-proof. Durable provider dispatch and automated GitHub delivery remain unproven. The WO-MAO-028 harness
-proves only pure/static model behavior; it performs no provider dispatch or runtime execution.
+proof, and static cross-provider routing/review planning that excludes unavailable providers. Durable
+provider dispatch and automated GitHub delivery remain unproven. The WO-MAO-028 harness proves only
+pure/static model behavior; it performs no provider dispatch or runtime execution.
 
 `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001` is terminal and non-selectable.
 Its rejected nested-Codex adapter cannot be retried or reused. Release
