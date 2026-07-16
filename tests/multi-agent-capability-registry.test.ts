@@ -203,6 +203,19 @@ describe("multi-agent executable capability inventory", () => {
         "No provider dispatch, GitHub review automation, runtime activation, or authority grant",
       ]),
     })
+    expect(capability("provider-health-reroute-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "PROVIDER_HEALTH_REROUTE_PROVEN",
+      adapterRef: "scripts/multi-agent-operator/provider-health-reroute.mjs",
+      authorityGrantRefs: [],
+      trustGateRef: null,
+      restrictions: expect.arrayContaining([
+        "Static health and reroute planning only",
+        "Unavailable providers remain disabled and deferred",
+        "No provider call, GitHub automation, runtime activation, authority grant, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
