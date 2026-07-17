@@ -117,11 +117,11 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 `WO-MAO-001` through `WO-MAO-032` and `WO-MAO-034` are complete. `WO-MAO-033` is
 `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The exact independently verified settlement edge
 `WO-MAO-034<-WO-MAO-033` is authenticated by the canonical version-2 provider-assessment record and
-WO-MAO-034 is `COMPLETE`. WO-MAO-035, WO-MAO-036, and WO-MAO-037 remain pending. That
-settlement cannot satisfy the redundant direct
-WO-MAO-033 edges on WO-MAO-035 or WO-MAO-036; those edges require a separately ratified dependency
-correction. The selected MAO loop now exposes that correction as its typed remediation transition
-while WO-MAO-035 remains pending. The mandatory sequence is WO-MAO-030 -> WO-MAO-031 -> verified settlement -> WO-MAO-034
+WO-MAO-034 is `COMPLETE`. WO-MAO-035 is `READY`; WO-MAO-036 and WO-MAO-037 remain pending. That
+settlement remains exact and cannot be retargeted. A separately ratified graph correction removes
+only the redundant direct WO-MAO-033 edges from WO-MAO-035/036. WO-MAO-035 is now `READY`,
+WO-MAO-036 remains pending on WO-MAO-035, and WO-MAO-033 remains deferred and resumable. The
+mandatory sequence is WO-MAO-030 -> WO-MAO-031 -> verified settlement -> WO-MAO-034
 -> WO-MAO-035 -> WO-MAO-036 -> Phase 5. The rejected local runtime is not in the eligible
 dependency chain.
 

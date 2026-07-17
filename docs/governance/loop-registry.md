@@ -131,11 +131,9 @@ evidence and callable success paths remain invalidated pending ordered redesign 
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The canonical settlement of its
 exact edge into WO-MAO-034 is verified against WO-MAO-032, the consumer envelope, and source-
 assessment hash. WO-MAO-034 is complete through independently approved exact-candidate routing
-evidence. The MAO eligible set is now empty because WO-MAO-035/036
-keep their redundant direct WO-MAO-033 edges fail-closed pending separate ratified correction.
-The loop remains selected with typed transition
-`CORRECT_REDUNDANT_WO_MAO_033_EDGES_BEFORE_WO_MAO_035_REPROOF`; it does not mislabel WO-MAO-035
-ready or route to an unrelated program during that bounded correction.
+evidence. WO-MAO-035/036 previously kept redundant direct WO-MAO-033 edges fail-closed. The separately ratified graph
+correction removes only those redundant edges. The MAO eligible set is now exactly `WO-MAO-035`,
+the temporary remediation transition is cleared, and the active Work Order is WO-MAO-035.
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
@@ -201,8 +199,8 @@ Current status:
 
 1. Preserve the completed Phase 0 executable truth and preventive controls.
 2. Preserve the completed Phase 1 hosted proof and Phase 2 local-contract evidence.
-3. Preserve completed `WO-MAO-034`; separately correct the redundant direct WO-MAO-033 dependency
-   edges before re-proving `WO-MAO-035` and `WO-MAO-036` before Phase 5.
+3. Preserve completed `WO-MAO-034` and the corrected dependency graph; re-prove the now-ready
+   `WO-MAO-035`, then `WO-MAO-036`, before Phase 5.
 4. Keep useful independent R0/R1 product lanes moving whenever dependencies and
    reservations permit.
 

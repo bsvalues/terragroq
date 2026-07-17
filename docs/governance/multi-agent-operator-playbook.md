@@ -335,8 +335,8 @@ provider.
 | `WO-MAO-032` | Claude capability and transport proof | 007, 019, 022 | Assess Claude only from independently available supported transport evidence. If none exists, complete the assessment as `COMPLETE_PROVIDER_ASSESSMENT / PROVIDER_UNAVAILABLE`, keep the provider disabled with concurrency zero, leave the trust gate `NOT_EVALUATED_NO_TRANSPORT`, defer only the affected lane, and continue healthy providers. Never ask William to launch, authenticate, diagnose, or smoke-test Claude. |
 | `WO-MAO-033` | Claude separate-repository/suite adapter | 025, 028, 032 | When Claude is available, execute one bounded candidate in a separate repo or disjoint suite with its own packet, branch, reservation, tests, and evidence. When unavailable, remain `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; never mark adapter execution complete without execution. |
 | `WO-MAO-034` | Cross-provider routing and review | 024, 031, 033 | Match capabilities to WOs, keep secrets and workspaces isolated, and support cross-provider review where permitted. Its explicit `ALL` edge from 033 may use `COMPLETE_OR_PROVIDER_UNAVAILABLE_DEFERRED` only with the independently authoritative assessment settlement defined below; the unavailable provider contributes no capability. |
-| `WO-MAO-035` | Provider health, circuit breakers, and reroute | 020-022, 030-034 | Classify 401/403, 429, network, 5xx, malformed output, timeout, and deterministic failure; quarantine or back off and reroute within budget. A settled unavailable optional provider stays disabled and deferred. William is never the fallback worker. |
-| `WO-MAO-036` | Provider conformance suite | 028-035 | Every enabled provider passes the same dispatch, status, cancel, evidence, isolation, retry, and recovery contract. Disabled provider-unavailable lanes are reported as deferred and excluded, never represented as conformant or complete. Provider-specific exceptions cannot weaken the scheduler. |
+| `WO-MAO-035` | Provider health, circuit breakers, and reroute | 020-022, 030-032, 034 | Classify 401/403, 429, network, 5xx, malformed output, timeout, and deterministic failure; quarantine or back off and reroute within budget. A settled unavailable optional provider stays disabled and deferred. William is never the fallback worker. |
+| `WO-MAO-036` | Provider conformance suite | 028-032, 034-035 | Every enabled provider passes the same dispatch, status, cancel, evidence, isolation, retry, and recovery contract. Disabled provider-unavailable lanes are reported as deferred and excluded, never represented as conformant or complete. Provider-specific exceptions cannot weaken the scheduler. |
 
 **Phase gate:** after the bounded Phase 1 `PILOT_AUTHORIZED` exception ends, Codex is generally active
 only when conformant. Claude is active only when independently available and conformant. One
@@ -378,7 +378,10 @@ to merged source commit `42a63e3e11e5bb1a9c1e9419db3e0f2651b1789c` and the exact
 source-assessment hash. It releases only the declared WO-MAO-034 dependency edge to `READY`.
 WO-MAO-034 subsequently completed through a sealed zero-input routing evaluation and independent
 exact-candidate assurance; WO-MAO-033 stays deferred, Claude stays disabled, and WO-MAO-035/036 stay
-pending. The completion evidence does not settle or waive their direct WO-MAO-033 edges.
+outside that settlement. The separately ratified graph correction removes the redundant direct
+WO-MAO-033 edges from WO-MAO-035/036 without completing WO-MAO-033, changing the settlement, or
+weakening any retained dependency. With WO-MAO-034 complete, WO-MAO-035 is `READY`; WO-MAO-036
+remains pending on WO-MAO-035.
 
 ### Phase 5 — GitHub delivery engine
 

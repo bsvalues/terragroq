@@ -114,10 +114,10 @@ adapter `WO-MAO-030`, re-proved role adapters `WO-MAO-031`, and provider assessm
 are complete. Historical WO-MAO-035 and WO-MAO-036 code/reports remain present, but their evidence
 and callable success paths remain invalidated pending ordered re-proof.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; the exact canonical settlement is
-verified and independently assured `WO-MAO-034` is `COMPLETE`; later Work Orders remain pending.
-No later MAO Work Order is dependency-cleared. The selected MAO program therefore emits the typed
-dependency-graph remediation transition before WO-MAO-035; it does not select unrelated backlog or
-contact the owner.
+verified and independently assured `WO-MAO-034` is `COMPLETE`.
+The separately ratified graph correction removes only the redundant direct WO-MAO-033 edges from
+WO-MAO-035/036. WO-MAO-035 is now `READY`, WO-MAO-036 remains pending, and the selected MAO loop
+resumes at WO-MAO-035 without owner contact.
 The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
@@ -132,8 +132,8 @@ proof. Provider health/reroute and provider conformance require ordered redesign
 `WO-MAO-035`, then `WO-MAO-036`. The deferred WO-MAO-033 edge into WO-MAO-034 is settled by the exact,
 independently verified `WO-MAO-034<-WO-MAO-033` record bound to completed WO-MAO-032, the canonical
 consumer envelope, and the immutable source-assessment hash. The
-redundant direct WO-MAO-033 dependencies on WO-MAO-035/036 remain fail-closed pending separate
-ratified correction. Durable
+redundant direct WO-MAO-033 dependencies on WO-MAO-035/036 have been removed by the narrow ratified
+graph correction; every retained dependency remains fail-closed. Durable
 provider dispatch and automated GitHub delivery remain unproven. The WO-MAO-028 harness proves only
 pure/static model behavior; it performs no provider dispatch or runtime execution.
 
