@@ -78,10 +78,13 @@ not current completion evidence:
 
 ## Next transition
 
-`WO-MAO-031` is `READY / REPROOF_REQUIRED` and is the sole dependency-cleared Work Order. After its
-redesign receives independent approval, WO-MAO-034 may be re-reviewed and re-proved. WO-MAO-035
-remains pending until that ordered chain completes. WO-MAO-033 remains
-`DEFERRED / PROVIDER_UNAVAILABLE` and resumable; William is not asked to repair or operate Claude.
+`WO-MAO-031` is `READY / REPROOF_REQUIRED` and is the sole dependency-cleared Work Order. Its
+independently approved completion is necessary but not sufficient to release WO-MAO-034. WO-MAO-034
+may become ready only when WO-MAO-031 is independently `COMPLETE`, the WO-MAO-032 assessment is
+`COMPLETE`, WO-MAO-033 remains exactly `DEFERRED / PROVIDER_UNAVAILABLE`, and the consumer-specific
+`WO-MAO-034<-WO-MAO-033` settlement is independently verified. The UI remains `PENDING` until that
+verified DAG artifact and provenance are integrated. WO-MAO-035 remains pending until the ordered
+chain completes; William is not asked to repair or operate Claude.
 
 ## Owner-operation evidence
 

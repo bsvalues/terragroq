@@ -14,6 +14,7 @@ import {
   loadCanonicalHostedCodexNativeBridge,
   loadCanonicalHostedCodexTrustRecord,
 } from "./codex-native-bridge-registry.mjs"
+import { loadCanonicalHostedCodexAuthorityStatusChain } from "./hosted-codex-authority-status-registry.mjs"
 import {
   ProviderContractError,
   hashProviderResponse,
@@ -60,6 +61,23 @@ const MESSAGE_TYPES = new Set([
 const START_FIELDS = new Set(["assignmentHandle", "idempotencyKey"])
 const CANCELLATION_FIELDS = new Set(["assignmentHandle", "requestedBy", "reasonCode", "idempotencyKey"])
 const OBSERVATION_FIELDS = new Set(["assignmentHandle", "observationId"])
+const AUTHORITY_STATUS_CHAIN_FIELDS = new Set([
+  "registryId", "registryVersion", "evaluationTime", "recordId", "latestFencingToken",
+  "latestRecordContentHash", "records",
+])
+const AUTHORITY_STATUS_RECORD_FIELDS = new Set([
+  "schemaVersion", "artifactType", "recordId", "recordVersion", "fencingToken", "status",
+  "issuedAt", "expiresAt", "maximumAgeMs", "previousRecordContentHash", "grantId",
+  "authorityDecisionId", "workOrderId", "originalGrantContentHash", "originalEventChainHash",
+  "originalTrustBundleContentHash", "originalStatusHeadHash", "originalStatusEventCount",
+  "currentArtifacts", "currentEventChainHash", "currentTrustBundleContentHash",
+  "currentStatusHeadHash", "currentStatusEventCount", "immutable", "authorityGranted",
+  "recordContentHash",
+])
+const CURRENT_AUTHORITY_ARTIFACT_FIELDS = new Set([
+  "authorityGrant", "authorityStatusEvents", "ownerAuthorityTrustBundle",
+])
+const AUTHORITY_STATUS_REGISTRY_ID = "hosted-codex-authority-status-registry-v1"
 const CANCELLATION_REASONS = new Set([
   "AUTHORITY_REVOKED", "RESERVATION_CONFLICT", "SECURITY_WALL", "SUPERSEDED",
   "WORK_ORDER_CANCELLED",
@@ -110,6 +128,29 @@ function canonical(value) {
 
 function hash(value) {
   return crypto.createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex")
+}
+
+function strictInstant(value, code, field) {
+  if (typeof value !== "string") wall(code, field, "ISO_INSTANT_REQUIRED")
+  const parsed = Date.parse(value)
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== value) {
+    wall(code, field, "ISO_INSTANT_REQUIRED")
+  }
+  return parsed
+}
+
+function authorityEventChainHash(events) {
+  return hash(events.map((event) => event?.contentHash))
+}
+
+function authorityTrustIdentityHash(bundle) {
+  if (!Array.isArray(bundle?.owners)) return null
+  return hash(bundle.owners.map((owner) => ({
+    ownerId: owner?.ownerId,
+    publicKeyId: owner?.publicKeyId,
+    algorithm: owner?.algorithm,
+    publicKeyPem: owner?.publicKeyPem,
+  })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))))
 }
 
 function copy(value) {
@@ -322,6 +363,229 @@ function verifyLaneAuthority(envelope, artifacts) {
   }
 }
 
+function createAuthorityStatusBinding(envelope, artifacts) {
+  const eventHashes = artifacts.events.map(({ contentHash }) => contentHash)
+  const grantId = artifacts.grant.grantId
+  const authorityDecisionId = artifacts.grant.authorityDecisionId
+  return {
+    recordId: hash({
+      domain: "HOSTED_CODEX_AUTHORITY_STATUS_V1",
+      grantId,
+      authorityDecisionId,
+      workOrderId: envelope.workOrderId,
+    }),
+    grantId,
+    authorityDecisionId,
+    workOrderId: envelope.workOrderId,
+    originalGrantContentHash: artifacts.grant.contentHash,
+    originalEventChainHash: hash(eventHashes),
+    originalTrustBundleContentHash: artifacts.trustedOwnerBundleContentHash,
+    originalStatusHeadHash: eventHashes.at(-1) ?? null,
+    originalStatusEventCount: eventHashes.length,
+    originalEventHashes: [...eventHashes],
+    trustedOwnerKeyFingerprint: artifacts.trustedOwnerKeyFingerprint,
+    trustIdentityHash: authorityTrustIdentityHash(artifacts.trustedOwners),
+    grantExpiresAt: Date.parse(artifacts.grant.expiresAt),
+    requests: envelope.allowedActions.map((action) => ({
+      subjectType: artifacts.grant.subject.type,
+      subjectId: artifacts.grant.subject.id,
+      programId: envelope.programId,
+      goalId: envelope.goalId,
+      loopId: envelope.loopId,
+      workOrderId: envelope.workOrderId,
+      decisionId: authorityDecisionId,
+      repository: envelope.repositories[0],
+      riskClass: envelope.riskClass,
+      action,
+      mergeMode: envelope.mergeMode,
+    })),
+    lastFencingToken: 0,
+    lastRecordContentHash: null,
+    registryVersion: 0,
+    lastEvaluationTime: null,
+    lastMaximumAgeMs: null,
+    lastRecordExpiresAt: null,
+    lastCurrentRecord: null,
+    terminalRevoked: false,
+  }
+}
+
+function recordClaims(record) {
+  const claims = { ...record }
+  delete claims.recordContentHash
+  return claims
+}
+
+function validateCurrentAuthorityStatus(binding, record, now) {
+  const artifacts = record.currentArtifacts
+  let result
+  try {
+    for (const request of binding.requests) {
+      result = validateOwnerAuthorityArtifacts({
+        grant: artifacts.authorityGrant,
+        events: artifacts.authorityStatusEvents,
+        trustedOwners: artifacts.ownerAuthorityTrustBundle,
+        trustedOwnerKeyFingerprint: binding.trustedOwnerKeyFingerprint,
+        trustedOwnerBundleContentHash: record.currentTrustBundleContentHash,
+        counters: authorityCounters(),
+        now: new Date(now),
+        request,
+      })
+    }
+  } catch (error) {
+    if (!(error instanceof AuthorityAssertionError)) throw error
+    if (error.code === "AUTHORITY_REVOKED_WALL") return "REVOKED"
+    wall("HOSTED_CODEX_AUTHORITY_STATUS_INTEGRITY_WALL", binding.workOrderId, error.code)
+  }
+  if (record.status !== "ACTIVE" || result?.currentGrantStatus !== "ACTIVE") {
+    wall("HOSTED_CODEX_AUTHORITY_STATUS_INTEGRITY_WALL", binding.workOrderId, "STATUS_PROOF_MISMATCH")
+  }
+  return "ACTIVE"
+}
+
+function revalidateLiveAuthority(trusted, assignment) {
+  const binding = trusted.authorityStatusByWorkOrder.get(assignment.workOrderId)
+  if (binding.terminalRevoked) {
+    wall("HOSTED_CODEX_AUTHORITY_REVOKED_TERMINAL_WALL", assignment.workOrderId, "TERMINAL_REVOCATION_LATCHED")
+  }
+  const loaded = loadCanonicalHostedCodexAuthorityStatusChain(binding.recordId, binding.lastFencingToken)
+  if (loaded === null) {
+    wall("HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_WALL", assignment.workOrderId, "HOST_BACKED_RECORD_REQUIRED")
+  }
+  exactFields(loaded, AUTHORITY_STATUS_CHAIN_FIELDS, "authorityStatusChain")
+  if (loaded.registryId !== AUTHORITY_STATUS_REGISTRY_ID
+    || !Number.isSafeInteger(loaded.registryVersion) || loaded.registryVersion < 1
+    || loaded.registryVersion < binding.registryVersion
+    || loaded.recordId !== binding.recordId
+    || !Number.isSafeInteger(loaded.latestFencingToken)
+    || loaded.latestFencingToken < binding.lastFencingToken
+    || (loaded.latestRecordContentHash !== null
+      && !/^[a-f0-9]{64}$/.test(loaded.latestRecordContentHash))
+    || !Array.isArray(loaded.records)) {
+    wall("HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_WALL", assignment.workOrderId, "MONOTONIC_EXACT_CHAIN_REQUIRED")
+  }
+  const now = Date.now()
+  const evaluationTime = strictInstant(
+    loaded.evaluationTime,
+    "HOSTED_CODEX_AUTHORITY_STATUS_FRESHNESS_WALL",
+    "authorityStatusChain.evaluationTime",
+  )
+  if (evaluationTime > now) {
+    wall("HOSTED_CODEX_AUTHORITY_STATUS_FRESHNESS_WALL", assignment.workOrderId, "FUTURE_EVALUATION_FORBIDDEN")
+  }
+  if (binding.lastEvaluationTime !== null && evaluationTime < binding.lastEvaluationTime) {
+    wall("HOSTED_CODEX_AUTHORITY_STATUS_FRESHNESS_WALL", assignment.workOrderId, "EVALUATION_TIME_ROLLBACK")
+  }
+  if (loaded.records.length === 0 && loaded.latestFencingToken !== binding.lastFencingToken) {
+    wall("HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_WALL", assignment.workOrderId, "COMPLETE_CHAIN_ADVANCE_REQUIRED")
+  }
+  if (binding.lastFencingToken === 0 && loaded.latestFencingToken === 0) {
+    wall("HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_WALL", assignment.workOrderId, "CURRENT_RECORD_REQUIRED")
+  }
+  if (loaded.latestFencingToken === binding.lastFencingToken
+    && loaded.latestRecordContentHash !== binding.lastRecordContentHash) {
+    wall("HOSTED_CODEX_AUTHORITY_STATUS_INTEGRITY_WALL", assignment.workOrderId, "EQUAL_FENCE_EQUIVOCATION")
+  }
+  if (loaded.records.length === 0) {
+    if (binding.lastCurrentRecord === null) {
+      wall("HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_WALL", assignment.workOrderId, "VALIDATED_CURRENT_RECORD_REQUIRED")
+    }
+    const cachedStatus = validateCurrentAuthorityStatus(binding, binding.lastCurrentRecord, now)
+    if (cachedStatus === "REVOKED") {
+      binding.terminalRevoked = true
+      wall("HOSTED_CODEX_AUTHORITY_REVOKED_TERMINAL_WALL", assignment.workOrderId, "SIGNED_REVOCATION_VERIFIED")
+    }
+  }
+  if (loaded.records.length === 0 && (now - evaluationTime > binding.lastMaximumAgeMs
+    || now >= binding.lastRecordExpiresAt)) {
+    wall("HOSTED_CODEX_AUTHORITY_STATUS_FRESHNESS_WALL", assignment.workOrderId, "CURRENT_UNEXPIRED_SOURCE_REQUIRED")
+  }
+
+  let nextFence = binding.lastFencingToken
+  let nextHash = binding.lastRecordContentHash
+  let nextMaximumAgeMs = binding.lastMaximumAgeMs
+  let nextRecordExpiresAt = binding.lastRecordExpiresAt
+  let nextCurrentRecord = binding.lastCurrentRecord
+  for (const [index, record] of loaded.records.entries()) {
+    const field = `authorityStatusChain.records[${index}]`
+    exactFields(record, AUTHORITY_STATUS_RECORD_FIELDS, field)
+    exactFields(record.currentArtifacts, CURRENT_AUTHORITY_ARTIFACT_FIELDS, `${field}.currentArtifacts`)
+    const expectedFence = nextFence + 1
+    if (record.schemaVersion !== 1
+      || record.artifactType !== "HOSTED_CODEX_AUTHORITY_STATUS_RECORD"
+      || record.recordId !== binding.recordId
+      || record.recordVersion !== expectedFence
+      || record.fencingToken !== expectedFence
+      || !new Set(["ACTIVE", "REVOKED_TERMINAL"]).has(record.status)
+      || record.previousRecordContentHash !== (expectedFence === 1 ? null : nextHash)
+      || record.immutable !== true || record.authorityGranted !== false
+      || record.recordContentHash !== hash(recordClaims(record))) {
+      wall("HOSTED_CODEX_AUTHORITY_STATUS_INTEGRITY_WALL", field, "HASH_LINK_OR_SCHEMA_MISMATCH")
+    }
+    for (const [name, expected] of Object.entries({
+      grantId: binding.grantId,
+      authorityDecisionId: binding.authorityDecisionId,
+      workOrderId: binding.workOrderId,
+      originalGrantContentHash: binding.originalGrantContentHash,
+      originalEventChainHash: binding.originalEventChainHash,
+      originalTrustBundleContentHash: binding.originalTrustBundleContentHash,
+      originalStatusHeadHash: binding.originalStatusHeadHash,
+      originalStatusEventCount: binding.originalStatusEventCount,
+    })) {
+      if (record[name] !== expected) {
+        wall("HOSTED_CODEX_AUTHORITY_STATUS_BINDING_WALL", `${field}.${name}`, "ORIGINAL_BINDING_MISMATCH")
+      }
+    }
+    const current = record.currentArtifacts
+    const currentEvents = current.authorityStatusEvents
+    if (!Array.isArray(currentEvents) || !plainObject(current.authorityGrant)
+      || !plainObject(current.ownerAuthorityTrustBundle)) {
+      wall("HOSTED_CODEX_AUTHORITY_STATUS_INTEGRITY_WALL", `${field}.currentArtifacts`, "COMPLETE_ARTIFACTS_REQUIRED")
+    }
+    const eventHashes = currentEvents.map((event) => event?.contentHash)
+    const prefixMatches = binding.originalEventHashes.every((eventHash, eventIndex) => eventHashes[eventIndex] === eventHash)
+    const currentHead = eventHashes.at(-1) ?? null
+    if (current.authorityGrant.grantId !== binding.grantId
+      || current.authorityGrant.authorityDecisionId !== binding.authorityDecisionId
+      || current.authorityGrant.contentHash !== binding.originalGrantContentHash
+      || !prefixMatches
+      || authorityTrustIdentityHash(current.ownerAuthorityTrustBundle) !== binding.trustIdentityHash
+      || record.currentEventChainHash !== authorityEventChainHash(currentEvents)
+      || record.currentTrustBundleContentHash !== current.ownerAuthorityTrustBundle.contentHash
+      || record.currentStatusHeadHash !== currentHead
+      || record.currentStatusEventCount !== currentEvents.length) {
+      wall("HOSTED_CODEX_AUTHORITY_STATUS_BINDING_WALL", field, "CURRENT_ARTIFACT_BINDING_MISMATCH")
+    }
+    const issuedAt = strictInstant(record.issuedAt, "HOSTED_CODEX_AUTHORITY_STATUS_FRESHNESS_WALL", `${field}.issuedAt`)
+    const expiresAt = strictInstant(record.expiresAt, "HOSTED_CODEX_AUTHORITY_STATUS_FRESHNESS_WALL", `${field}.expiresAt`)
+    if (!Number.isSafeInteger(record.maximumAgeMs) || record.maximumAgeMs < 1
+      || issuedAt > evaluationTime || now - evaluationTime > record.maximumAgeMs
+      || expiresAt <= now || expiresAt > binding.grantExpiresAt) {
+      wall("HOSTED_CODEX_AUTHORITY_STATUS_FRESHNESS_WALL", field, "CURRENT_UNEXPIRED_SOURCE_REQUIRED")
+    }
+    const status = validateCurrentAuthorityStatus(binding, record, now)
+    nextFence = expectedFence
+    nextHash = record.recordContentHash
+    nextMaximumAgeMs = record.maximumAgeMs
+    nextRecordExpiresAt = expiresAt
+    nextCurrentRecord = deepFreeze(copy(record))
+    if (status === "REVOKED") {
+      binding.terminalRevoked = true
+      wall("HOSTED_CODEX_AUTHORITY_REVOKED_TERMINAL_WALL", assignment.workOrderId, "SIGNED_REVOCATION_VERIFIED")
+    }
+  }
+  if (nextFence !== loaded.latestFencingToken || nextHash !== loaded.latestRecordContentHash) {
+    wall("HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_WALL", assignment.workOrderId, "EXACT_HEAD_REQUIRED")
+  }
+  binding.lastFencingToken = nextFence
+  binding.lastRecordContentHash = nextHash
+  binding.registryVersion = loaded.registryVersion
+  binding.lastEvaluationTime = evaluationTime
+  binding.lastMaximumAgeMs = nextMaximumAgeMs
+  binding.lastRecordExpiresAt = nextRecordExpiresAt
+  binding.lastCurrentRecord = nextCurrentRecord
+}
+
 function phaseFor(role) {
   return role === "coordinator" ? "COORDINATION" : role === "builder" ? "BUILD" : "REVIEW"
 }
@@ -383,6 +647,7 @@ export function compileHostedCodexCoordinatorAdapter(input) {
   const assignments = []
   const seenAssignmentIds = new Set()
   const authorityByWorkOrder = new Map()
+  const authorityStatusByWorkOrder = new Map()
   const coordinatorSession = normalizeCoordinatorSession(
     input.coordinatorHostSessionProofReference,
     topology.coordinator,
@@ -393,6 +658,10 @@ export function compileHostedCodexCoordinatorAdapter(input) {
     if (!envelope) wall("HOSTED_CODEX_TOPOLOGY_WALL", lane.workOrderId, "CANONICAL_V2_ENVELOPE_REQUIRED")
     const authority = verifyLaneAuthority(envelope, authorityProofs.get(lane.workOrderId))
     authorityByWorkOrder.set(lane.workOrderId, authority)
+    authorityStatusByWorkOrder.set(
+      lane.workOrderId,
+      createAuthorityStatusBinding(envelope, authorityProofs.get(lane.workOrderId)),
+    )
     let coordinatorCoordination
     try {
       coordinatorCoordination = evaluateCodexSessionCoordination({
@@ -530,6 +799,7 @@ export function compileHostedCodexCoordinatorAdapter(input) {
     assignments: new Map(plan.assignments.map((assignment) => [assignment.assignmentId, assignment])),
     coordinators: new Map(readyLanes.map((lane) => [lane.workOrderId, lane.roleAssignments.coordinator])),
     authorityByWorkOrder,
+    authorityStatusByWorkOrder,
     trustExpiresAt: Math.min(...[...trustProofs.values()].map(({ expiresAt }) => Date.parse(expiresAt))),
     coordinatorSession,
     bridge,
@@ -546,6 +816,7 @@ export function compileHostedCodexCoordinatorAdapter(input) {
 }
 
 function revalidateCoordinator(trusted, assignment) {
+  revalidateLiveAuthority(trusted, assignment)
   const session = trusted.coordinatorSession
   const workerId = trusted.coordinators.get(assignment.workOrderId)
   if (Date.now() >= Date.parse(session.expiresAt)) {
@@ -575,6 +846,18 @@ function requireNativeBinding(trusted, assignment, field) {
     wall("HOSTED_CODEX_BRIDGE_WALL", field, "HOST_SPAWN_BINDING_REQUIRED")
   }
   return runtime
+}
+
+function currentSessionOccupancy(trusted) {
+  const coordinatorWorkers = new Set()
+  let childAssignments = 0
+  for (const [assignmentId, runtime] of trusted.assignmentRuntime) {
+    if (["PREPARED", "SUCCEEDED", "FAILED", "CANCELLED"].includes(runtime.state)) continue
+    const assignment = trusted.assignments.get(assignmentId)
+    if (assignment.role === "coordinator") coordinatorWorkers.add(assignment.workerId)
+    else childAssignments += 1
+  }
+  return coordinatorWorkers.size + childAssignments
 }
 
 export function getHostedCodexNativeAssignmentHandle(plan, assignmentIdValue) {
@@ -691,9 +974,7 @@ export function startHostedCodexNativeAssignment(plan, request) {
   const prior = trusted.idempotency.get(request.idempotencyKey)
   if (!prior) {
     if (runtime.state !== "PREPARED") wall("HOSTED_CODEX_ASSIGNMENT_WALL", "start", "PREPARED_ASSIGNMENT_REQUIRED")
-    const occupied = [...trusted.assignmentRuntime.values()].filter(({ state }) => (
-      !["PREPARED", "SUCCEEDED", "FAILED", "CANCELLED"].includes(state)
-    )).length
+    const occupied = currentSessionOccupancy(trusted)
     if (occupied >= plan.concurrency.ceiling) wall("HOSTED_CODEX_CONCURRENCY_WALL", "start", "CURRENT_SESSION_MAX_CONCURRENCY_EXCEEDED")
   }
   const envelope = trusted.envelopeByWorkOrder.get(assignment.workOrderId)

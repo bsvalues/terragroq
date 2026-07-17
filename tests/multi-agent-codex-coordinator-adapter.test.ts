@@ -12,6 +12,9 @@ vi.mock("../scripts/multi-agent-operator/codex-host-session-registry.mjs", async
 vi.mock("../scripts/multi-agent-operator/codex-native-bridge-registry.mjs", async () => (
   import("./fixtures/codex-native-bridge-registry-fixture.mjs")
 ))
+vi.mock("../scripts/multi-agent-operator/hosted-codex-authority-status-registry.mjs", async () => (
+  import("./fixtures/hosted-codex-authority-status-registry-fixture.mjs")
+))
 
 import {
   HostedCodexCoordinatorAdapterError,
@@ -37,12 +40,20 @@ import {
   installTestHostedCodexNativeBridge,
   installTestHostedCodexTrustRecord,
 } from "./fixtures/codex-native-bridge-registry-fixture.mjs"
+import {
+  advanceTestHostedCodexAuthorityStatusChain,
+  clearTestHostedCodexAuthorityStatusRegistry,
+  installTestHostedCodexAuthorityStatusChain,
+  removeTestHostedCodexAuthorityStatusChain,
+} from "./fixtures/hosted-codex-authority-status-registry-fixture.mjs"
 
 const temporaryDirectories: string[] = []
 const PROGRAM = "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"
 const GOAL = "GOAL-WOS-MULTI-AGENT-OPERATOR-001"
 const LOOP = "LOOP-WOS-MULTI-AGENT-OPERATOR-001"
 const HOST_SESSION_ID = "native-coordinator-mao-030"
+const AUTHORITY_SIGNERS = new WeakMap<object, (record: Record<string, unknown>) => Record<string, unknown>>()
+const AUTHORITY_INITIAL_RECORDS = new WeakMap<object, ReturnType<typeof authorityStatusRecord>>()
 const ROLES = {
   coordinator: "codex-coordinator",
   builder: "codex-builder",
@@ -159,8 +170,10 @@ beforeEach(() => {
   installBridge()
 })
 afterEach(() => {
+  vi.useRealTimers()
   clearTestCodexHostSessionRecords()
   clearTestHostedCodexNativeBridgeRegistry()
+  clearTestHostedCodexAuthorityStatusRegistry()
   for (const directory of temporaryDirectories.splice(0)) fs.rmSync(directory, { recursive: true, force: true })
 })
 
@@ -259,7 +272,8 @@ function topologyInput() {
   }
 }
 
-function authorityArtifacts(includeContinuation = false) {
+function authorityArtifacts(includeContinuation = false, workOrderId = "WO-MAO-030") {
+  const suffix = workOrderId === "WO-MAO-030" ? "mao-030" : workOrderId.toLowerCase()
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519")
   const fingerprint = crypto.createHash("sha256").update(publicKey.export({ type: "spki", format: "der" })).digest("hex")
   const sign = <T extends Record<string, unknown>>(record: T) => {
@@ -278,13 +292,13 @@ function authorityArtifacts(includeContinuation = false) {
     schemaVersion: 1,
     artifactType: "OWNER_AUTHORITY_GRANT",
     grantKind: "ACTION_AUTHORITY",
-    grantId: "grant-mao-030",
-    authorityDecisionId: "decision-mao-030",
+    grantId: `grant-${suffix}`,
+    authorityDecisionId: `decision-${suffix}`,
     issuer: { role: "OWNER", ownerId: "owner-mao-030" },
     subject: { type: "PROGRAM", id: PROGRAM },
     scope: {
-      programIds: [PROGRAM], goalIds: [GOAL], loopIds: [LOOP], workOrderIds: ["WO-MAO-030"],
-      decisionIds: ["decision-mao-030"], repositories: ["bsvalues/terragroq"], riskClasses: ["R1"],
+      programIds: [PROGRAM], goalIds: [GOAL], loopIds: [LOOP], workOrderIds: [workOrderId],
+      decisionIds: [`decision-${suffix}`], repositories: ["bsvalues/terragroq"], riskClasses: ["R1"],
       actions: ["READ_REPOSITORY", "RUN_VALIDATION", "WRITE_RESERVED_PATHS"], mergeModes: ["NO_MERGE"],
     },
     issuedAt: iso(-3_600_000),
@@ -293,7 +307,7 @@ function authorityArtifacts(includeContinuation = false) {
   const active = sign({
     schemaVersion: 1,
     artifactType: "OWNER_AUTHORITY_STATUS_EVENT",
-    eventId: "event-mao-030-z-active",
+    eventId: workOrderId === "WO-MAO-030" ? "event-mao-030-z-active" : `event-${workOrderId.toLowerCase()}`,
     grantId: grant.grantId,
     sequence: 1,
     status: "ACTIVE",
@@ -304,7 +318,9 @@ function authorityArtifacts(includeContinuation = false) {
   const continuation = sign({
     schemaVersion: 1,
     artifactType: "OWNER_AUTHORITY_STATUS_EVENT",
-    eventId: "event-mao-030-a-continuation",
+    eventId: workOrderId === "WO-MAO-030"
+      ? "event-mao-030-a-continuation"
+      : `event-${workOrderId.toLowerCase()}-continuation`,
     grantId: grant.grantId,
     sequence: 2,
     status: "ACTIVE",
@@ -328,13 +344,135 @@ function authorityArtifacts(includeContinuation = false) {
       status: "ACTIVE",
     }],
   })
-  return {
+  const artifacts = {
     grant,
     events,
     trustedOwners,
     trustedOwnerKeyFingerprint: fingerprint,
     trustedOwnerBundleContentHash: trustedOwners.contentHash,
   }
+  AUTHORITY_SIGNERS.set(artifacts, sign)
+  return artifacts
+}
+
+function sha256Canonical(value: unknown) {
+  return crypto.createHash("sha256").update(canonicalJson(value)).digest("hex")
+}
+
+function authorityStatusRecordId(artifacts: ReturnType<typeof authorityArtifacts>, workOrderId: string) {
+  return sha256Canonical({
+    domain: "HOSTED_CODEX_AUTHORITY_STATUS_V1",
+    grantId: artifacts.grant.grantId,
+    authorityDecisionId: artifacts.grant.authorityDecisionId,
+    workOrderId,
+  })
+}
+
+function authorityStatusRecord(
+  original: ReturnType<typeof authorityArtifacts>,
+  current: ReturnType<typeof authorityArtifacts>,
+  workOrderId: string,
+  fencingToken: number,
+  previousRecordContentHash: string | null,
+  status: "ACTIVE" | "REVOKED_TERMINAL",
+) {
+  const originalEventHashes = original.events.map(({ contentHash }) => contentHash)
+  const currentEventHashes = current.events.map(({ contentHash }) => contentHash)
+  const claims = {
+    schemaVersion: 1,
+    artifactType: "HOSTED_CODEX_AUTHORITY_STATUS_RECORD",
+    recordId: authorityStatusRecordId(original, workOrderId),
+    recordVersion: fencingToken,
+    fencingToken,
+    status,
+    issuedAt: iso(-1_000),
+    expiresAt: iso(120_000),
+    maximumAgeMs: 60_000,
+    previousRecordContentHash,
+    grantId: original.grant.grantId,
+    authorityDecisionId: original.grant.authorityDecisionId,
+    workOrderId,
+    originalGrantContentHash: original.grant.contentHash,
+    originalEventChainHash: sha256Canonical(originalEventHashes),
+    originalTrustBundleContentHash: original.trustedOwnerBundleContentHash,
+    originalStatusHeadHash: originalEventHashes.at(-1) ?? null,
+    originalStatusEventCount: originalEventHashes.length,
+    currentArtifacts: {
+      authorityGrant: current.grant,
+      authorityStatusEvents: current.events,
+      ownerAuthorityTrustBundle: current.trustedOwners,
+    },
+    currentEventChainHash: sha256Canonical(currentEventHashes),
+    currentTrustBundleContentHash: current.trustedOwnerBundleContentHash,
+    currentStatusHeadHash: currentEventHashes.at(-1) ?? null,
+    currentStatusEventCount: currentEventHashes.length,
+    immutable: true,
+    authorityGranted: false,
+  }
+  return { ...claims, recordContentHash: sha256Canonical(claims) }
+}
+
+function installAuthorityStatus(artifacts: ReturnType<typeof authorityArtifacts>, workOrderId: string) {
+  const record = authorityStatusRecord(artifacts, artifacts, workOrderId, 1, null, "ACTIVE")
+  AUTHORITY_INITIAL_RECORDS.set(artifacts, record)
+  installTestHostedCodexAuthorityStatusChain({
+    registryId: "hosted-codex-authority-status-registry-v1",
+    registryVersion: 1,
+    evaluationTime: iso(0),
+    recordId: record.recordId,
+    latestFencingToken: 1,
+    records: [record],
+  })
+  return record
+}
+
+function revokedAuthorityArtifacts(original: ReturnType<typeof authorityArtifacts>) {
+  const sign = AUTHORITY_SIGNERS.get(original)
+  if (!sign) throw new Error("missing authority test signer")
+  const last = original.events.at(-1)!
+  const revoked = sign({
+    schemaVersion: 1,
+    artifactType: "OWNER_AUTHORITY_STATUS_EVENT",
+    eventId: `${last.eventId}-revoked`,
+    grantId: original.grant.grantId,
+    sequence: original.events.length + 1,
+    status: "REVOKED",
+    issuedAt: iso(-500),
+    previousEventHash: last.contentHash,
+    issuer: { role: "OWNER", ownerId: "owner-mao-030" },
+  })
+  const events = [...original.events, revoked]
+  const { contentHash: _contentHash, signature: _signature, ...trustClaims } = original.trustedOwners
+  const trustedOwners = sign({
+    ...trustClaims,
+    statusHeads: [{
+      grantId: original.grant.grantId,
+      eventCount: events.length,
+      latestEventHash: revoked.contentHash,
+    }],
+  })
+  return {
+    ...original,
+    events,
+    trustedOwners,
+    trustedOwnerBundleContentHash: trustedOwners.contentHash,
+  } as ReturnType<typeof authorityArtifacts>
+}
+
+function advanceAuthorityToRevoked(original: ReturnType<typeof authorityArtifacts>, workOrderId = "WO-MAO-030") {
+  const initial = AUTHORITY_INITIAL_RECORDS.get(original)
+  if (!initial) throw new Error("missing initial authority status record")
+  const revoked = revokedAuthorityArtifacts(original)
+  const record = authorityStatusRecord(
+    original,
+    revoked,
+    workOrderId,
+    2,
+    initial.recordContentHash,
+    "REVOKED_TERMINAL",
+  )
+  advanceTestHostedCodexAuthorityStatusChain(initial.recordId, record, iso(0))
+  return record
 }
 
 function trustEvidence(role: keyof typeof ROLES, envelopeContentHash: string, overrides: Record<string, unknown> = {}) {
@@ -387,6 +525,8 @@ function input(
   for (const role of ["coordinator", "builder", "reviewer"] as const) {
     installTestHostedCodexTrustRecord(trustEvidence(role, envelopeContentHash, { laneId: target.laneId }))
   }
+  const authority = options.authority ?? authorityArtifacts()
+  installAuthorityStatus(authority, "WO-MAO-030")
   return {
     schemaVersion: 1,
     artifactType: "HOSTED_CODEX_COORDINATOR_ADAPTER_INPUT",
@@ -400,13 +540,51 @@ function input(
     preventiveTrustProofReferences: (["coordinator", "builder", "reviewer"] as const)
       .map((role) => ({ proofId: `trust-${role}-mao-030` })),
     hostBridgeReference: { bridgeId: "bridge-mao-030" },
-    authorityProofs: [{ workOrderId: "WO-MAO-030", artifacts: options.authority ?? authorityArtifacts() }],
+    authorityProofs: [{ workOrderId: "WO-MAO-030", artifacts: authority }],
     runtimeActivationRequested: false,
     localIssue357Requested: false,
     durableTransportClaimed: false,
     ownerTouchBudget: ownerBudget(),
     ...overrides,
   }
+}
+
+function multiLaneInput() {
+  const value = input()
+  const workOrderId = "WO-MAO-031"
+  const second = v2Envelope(workOrderId, ["WO-MAO-024", "WO-MAO-028", "WO-MAO-029"])
+  second.teamRoles = {
+    coordinator: ROLES.coordinator,
+    builder: "codex-builder-second-lane",
+    reviewer: "codex-reviewer-second-lane",
+  }
+  value.topologyInput.dagInput.workOrders.push(second)
+  value.topologyInput.dagInput.workOrderStates.push({ workOrderId, state: "PLANNED", reasonCode: null })
+  value.topologyInput.lanes.push({
+    envelope: dispatchEnvelope(second),
+    roleAssignments: {
+      ...second.teamRoles,
+      remediator: second.teamRoles.builder,
+      mergeController: "codex-merge-controller",
+      verifier: "codex-verifier",
+    },
+  })
+  const envelopeContentHash = validateDispatchEnvelope(value.topologyInput.lanes[1].envelope).contentHash
+  for (const role of ["coordinator", "builder", "reviewer"] as const) {
+    const proofId = `trust-${role}-mao-031`
+    installTestHostedCodexTrustRecord(trustEvidence(role, envelopeContentHash, {
+      proofId,
+      workOrderId,
+      laneId: second.laneId,
+      workerId: second.teamRoles[role],
+      allowedPaths: second.reservations.paths.map(({ path }) => path),
+    }))
+    value.preventiveTrustProofReferences.push({ proofId })
+  }
+  const authority = authorityArtifacts(false, workOrderId)
+  installAuthorityStatus(authority, workOrderId)
+  value.authorityProofs.push({ workOrderId, artifacts: authority })
+  return value
 }
 
 function compile() {
@@ -455,6 +633,10 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
     const publicPlan = JSON.stringify(plan)
     expect(publicPlan).not.toContain(HOST_SESSION_ID)
     expect(publicPlan).not.toContain("Execute bounded WO-MAO-030")
+    expect(publicPlan).not.toContain("authorityStatusEvents")
+    expect(publicPlan).not.toContain("ownerAuthorityTrustBundle")
+    expect(publicPlan).not.toContain("publicKeyPem")
+    expect(publicPlan).not.toContain("recordId")
     expect(Object.isFrozen(plan)).toBe(true)
   })
 
@@ -497,6 +679,250 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
     value.authorityProofs[0].artifacts.grant.scope.actions = ["READ_REPOSITORY"]
     expectWall(() => compileHostedCodexCoordinatorAdapter(value), "HOSTED_CODEX_AUTHORITY_WALL")
   })
+
+  it.each(["start", "send", "cancel", "observe", "committed-replay", "ambiguous-lookup"] as const)(
+    "enforces a host-backed terminal authority revocation before %s",
+    (scenario) => {
+      if (scenario === "ambiguous-lookup") {
+        installBridge({
+          send(request: Record<string, unknown>) {
+            bridgeCalls.send += 1
+            const result = {
+              schemaVersion: 1,
+              artifactType: "HOSTED_CODEX_NATIVE_SEND_RESULT",
+              bridgeId: "bridge-mao-030",
+              assignmentId: request.assignmentId,
+              nativeWorkerId: request.nativeWorkerId,
+              messageDigest: request.messageDigest,
+              status: "DELIVERED",
+              deliveryPerformed: true,
+              authorityGranted: false,
+            }
+            bridgeResults.send.set(request.idempotencyKey as string, result)
+            return { ...result, deliveryPerformed: false }
+          },
+        })
+      }
+      const value = input()
+      const original = value.authorityProofs[0].artifacts
+      const plan = compileHostedCodexCoordinatorAdapter(value)
+      const builder = assignment(plan, "builder")
+      if (scenario !== "start") {
+        startHostedCodexNativeAssignment(plan, {
+          assignmentHandle: builder.handle,
+          idempotencyKey: `spawn-before-revocation-${scenario}`,
+        })
+      }
+      const message = {
+        assignmentHandle: builder.handle,
+        direction: "TO_ASSIGNMENT",
+        messageType: "STATUS",
+        summary: "Status before revocation.",
+        idempotencyKey: `send-before-revocation-${scenario}`,
+      }
+      if (scenario === "committed-replay") createHostedCodexNativeMessage(plan, message)
+      if (scenario === "ambiguous-lookup") {
+        expectWall(() => createHostedCodexNativeMessage(plan, message), "HOSTED_CODEX_BRIDGE_WALL")
+      }
+      if (scenario === "observe") {
+        observations.set("observation-after-revocation", {
+          schemaVersion: 1,
+          artifactType: "PROVIDER_STATUS",
+          providerId: "hosted-codex",
+          adapterId: "hosted-codex-session-native-team-v1",
+          dispatchId: builder.item.assignmentId,
+          workOrderId: builder.item.workOrderId,
+          laneId: builder.item.laneId,
+          providerState: "RUNNING",
+          reasonCode: null,
+          sanitized: true,
+          authorityGranted: false,
+          progressMarker: "RUNNING",
+        })
+      }
+      advanceAuthorityToRevoked(original)
+
+      const operation = () => {
+        if (scenario === "start") {
+          return startHostedCodexNativeAssignment(plan, {
+            assignmentHandle: builder.handle,
+            idempotencyKey: "spawn-after-revocation",
+          })
+        }
+        if (scenario === "cancel") {
+          return cancelHostedCodexNativeAssignment(plan, {
+            assignmentHandle: builder.handle,
+            requestedBy: ROLES.coordinator,
+            reasonCode: "SUPERSEDED",
+            idempotencyKey: "cancel-after-revocation",
+          })
+        }
+        if (scenario === "observe") {
+          return captureHostedCodexNativeEvidence(plan, {
+            assignmentHandle: builder.handle,
+            observationId: "observation-after-revocation",
+          })
+        }
+        return createHostedCodexNativeMessage(plan, message)
+      }
+      expectWall(operation, "HOSTED_CODEX_AUTHORITY_REVOKED_TERMINAL_WALL")
+      const counters = { ...bridgeCalls }
+      installAuthorityStatus(original, "WO-MAO-030")
+      expectWall(operation, "HOSTED_CODEX_AUTHORITY_REVOKED_TERMINAL_WALL")
+      expect(bridgeCalls).toEqual(counters)
+      if (scenario === "start") expect(bridgeCalls.spawn).toBe(0)
+      if (scenario === "send") expect(bridgeCalls.send).toBe(0)
+      if (scenario === "cancel") expect(bridgeCalls.cancel).toBe(0)
+      if (scenario === "observe") expect(bridgeCalls.observe).toBe(0)
+      if (scenario === "committed-replay") expect(bridgeCalls.send).toBe(1)
+      if (scenario === "ambiguous-lookup") {
+        expect(bridgeCalls).toMatchObject({ send: 1, lookupSend: 0 })
+      }
+    },
+  )
+
+  it("fails closed when the host authority-status source disappears", () => {
+    const value = input()
+    const original = value.authorityProofs[0].artifacts
+    const plan = compileHostedCodexCoordinatorAdapter(value)
+    const builder = assignment(plan, "builder")
+    removeTestHostedCodexAuthorityStatusChain(authorityStatusRecordId(original, "WO-MAO-030"))
+    expectWall(() => startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-with-missing-authority-source",
+    }), "HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_WALL")
+    expect(bridgeCalls.spawn).toBe(0)
+  })
+
+  it("rejects equal-fence equivocation before any later bridge call", () => {
+    const value = input()
+    const original = value.authorityProofs[0].artifacts
+    const initial = AUTHORITY_INITIAL_RECORDS.get(original)!
+    const plan = compileHostedCodexCoordinatorAdapter(value)
+    const builder = assignment(plan, "builder")
+    startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-before-equal-fence-equivocation",
+    })
+    advanceTestHostedCodexAuthorityStatusChain(initial.recordId, {
+      ...initial,
+      recordContentHash: "a".repeat(64),
+    }, iso(0))
+    expectWall(() => createHostedCodexNativeMessage(plan, {
+      assignmentHandle: builder.handle,
+      direction: "TO_ASSIGNMENT",
+      messageType: "STATUS",
+      summary: "Must not cross an equivocated fence.",
+      idempotencyKey: "send-after-equal-fence-equivocation",
+    }), "HOSTED_CODEX_AUTHORITY_STATUS_INTEGRITY_WALL")
+    expect(bridgeCalls.send).toBe(0)
+  })
+
+  it("cryptographically revalidates cached authority artifacts on an unchanged fence", () => {
+    const value = input()
+    const original = value.authorityProofs[0].artifacts
+    const initial = AUTHORITY_INITIAL_RECORDS.get(original)!
+    const plan = compileHostedCodexCoordinatorAdapter(value)
+    const builder = assignment(plan, "builder")
+    startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-before-cached-authority-expiry",
+    })
+    const afterGrantExpiry = new Date(Date.parse(original.grant.expiresAt) + 1)
+    vi.useFakeTimers()
+    vi.setSystemTime(afterGrantExpiry)
+    installTestHostedCodexAuthorityStatusChain({
+      registryId: "hosted-codex-authority-status-registry-v1",
+      registryVersion: 1,
+      evaluationTime: afterGrantExpiry.toISOString(),
+      recordId: initial.recordId,
+      latestFencingToken: 1,
+      records: [initial],
+    })
+    expectWall(() => createHostedCodexNativeMessage(plan, {
+      assignmentHandle: builder.handle,
+      direction: "TO_ASSIGNMENT",
+      messageType: "STATUS",
+      summary: "Cached authority must be revalidated.",
+      idempotencyKey: "send-after-cached-authority-expiry",
+    }), "HOSTED_CODEX_AUTHORITY_STATUS_INTEGRITY_WALL")
+    expect(bridgeCalls.send).toBe(0)
+  })
+
+  it("terminally latches signed revocation even when its host wrapper claims ACTIVE", () => {
+    const value = input()
+    const original = value.authorityProofs[0].artifacts
+    const initial = AUTHORITY_INITIAL_RECORDS.get(original)!
+    const plan = compileHostedCodexCoordinatorAdapter(value)
+    const builder = assignment(plan, "builder")
+    const revoked = revokedAuthorityArtifacts(original)
+    const mislabeled = authorityStatusRecord(
+      original,
+      revoked,
+      "WO-MAO-030",
+      2,
+      initial.recordContentHash,
+      "ACTIVE",
+    )
+    advanceTestHostedCodexAuthorityStatusChain(initial.recordId, mislabeled, iso(0))
+    const operation = () => startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-after-mislabeled-revocation",
+    })
+    expectWall(operation, "HOSTED_CODEX_AUTHORITY_REVOKED_TERMINAL_WALL")
+    expect(bridgeCalls.spawn).toBe(0)
+
+    const activeSecondFence = authorityStatusRecord(
+      original,
+      original,
+      "WO-MAO-030",
+      2,
+      initial.recordContentHash,
+      "ACTIVE",
+    )
+    installTestHostedCodexAuthorityStatusChain({
+      registryId: "hosted-codex-authority-status-registry-v1",
+      registryVersion: 1,
+      evaluationTime: iso(0),
+      recordId: initial.recordId,
+      latestFencingToken: 2,
+      records: [initial, activeSecondFence],
+    })
+    expectWall(operation, "HOSTED_CODEX_AUTHORITY_REVOKED_TERMINAL_WALL")
+    expect(bridgeCalls.spawn).toBe(0)
+  })
+
+  it("typed-walls malformed current trust identities instead of throwing", () => {
+    const value = input()
+    const original = value.authorityProofs[0].artifacts
+    const initial = AUTHORITY_INITIAL_RECORDS.get(original)!
+    const plan = compileHostedCodexCoordinatorAdapter(value)
+    const builder = assignment(plan, "builder")
+    const malformed = structuredClone(authorityStatusRecord(
+      original,
+      original,
+      "WO-MAO-030",
+      2,
+      initial.recordContentHash,
+      "ACTIVE",
+    ))
+    malformed.currentArtifacts.ownerAuthorityTrustBundle.owners = null as never
+    const { recordContentHash: _recordContentHash, ...claims } = malformed
+    malformed.recordContentHash = sha256Canonical(claims)
+    advanceTestHostedCodexAuthorityStatusChain(initial.recordId, malformed, iso(0))
+    expectWall(() => startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-with-malformed-live-trust",
+    }), "HOSTED_CODEX_AUTHORITY_STATUS_BINDING_WALL")
+    expect(bridgeCalls.spawn).toBe(0)
+  })
+
+  it.each(["authorityStatusRecordId", "authorityRegistryVersion", "fencingToken"])(
+    "rejects caller authority-status selector %s",
+    (field) => {
+      expectWall(() => compileHostedCodexCoordinatorAdapter(input({ [field]: "caller-selected" })), "HOSTED_CODEX_UNKNOWN_FIELD_WALL")
+    },
+  )
 
   it("matches authority event references as an exact duplicate-free set without reordering the signed chain", () => {
     const authority = authorityArtifacts(true)
@@ -1015,6 +1441,86 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
     expect(plan.concurrency.ceiling).toBe(3)
   })
 
+  it("deduplicates a shared coordinator while counting each active or ambiguous child", () => {
+    installBridge({
+      spawn(request: Record<string, unknown>) {
+        bridgeCalls.spawn += 1
+        const result = {
+          schemaVersion: 1,
+          artifactType: "HOSTED_CODEX_NATIVE_SPAWN_RESULT",
+          bridgeId: "bridge-mao-030",
+          adapterRunId: request.adapterRunId,
+          assignmentId: request.assignmentId,
+          workOrderId: request.workOrderId,
+          laneId: request.laneId,
+          role: request.role,
+          logicalWorkerId: request.logicalWorkerId,
+          nativeWorkerId: `native-${String(request.workOrderId).toLowerCase()}-${request.role}`,
+          status: "SPAWNED",
+          spawnPerformed: true,
+          currentSessionOnly: true,
+          authorityGranted: false,
+        }
+        bridgeResults.spawn.set(request.idempotencyKey as string, result)
+        return result
+      },
+      send() {
+        bridgeCalls.send += 1
+        throw new Error("ambiguous send")
+      },
+    })
+    const plan = compileHostedCodexCoordinatorAdapter(multiLaneInput())
+    expect(plan.assignmentCount).toBe(6)
+    expect(plan.concurrency).toEqual({
+      ceiling: 3,
+      phaseWidths: { COORDINATION: 1, BUILD: 3, REVIEW: 3, REMEDIATION: 2 },
+    })
+    const builders = plan.assignments.filter(({ role }) => role === "builder")
+    const reviewers = plan.assignments.filter(({ role }) => role === "reviewer")
+    const handle = (item: typeof plan.assignments[number]) => (
+      getHostedCodexNativeAssignmentHandle(plan, item.assignmentId)
+    )
+    const builderHandles = builders.map(handle)
+    const reviewerHandles = reviewers.map(handle)
+
+    startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builderHandles[0],
+      idempotencyKey: "spawn-multi-builder-one",
+    })
+    startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builderHandles[1],
+      idempotencyKey: "spawn-multi-builder-two",
+    })
+    expect(bridgeCalls.spawn).toBe(2)
+    expectWall(() => startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: reviewerHandles[0],
+      idempotencyKey: "spawn-multi-reviewer-one",
+    }), "HOSTED_CODEX_CONCURRENCY_WALL")
+
+    cancelHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builderHandles[0],
+      requestedBy: ROLES.coordinator,
+      reasonCode: "SUPERSEDED",
+      idempotencyKey: "cancel-multi-builder-one",
+    })
+    startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: reviewerHandles[0],
+      idempotencyKey: "spawn-multi-reviewer-one",
+    })
+    expectWall(() => createHostedCodexNativeMessage(plan, {
+      assignmentHandle: reviewerHandles[0],
+      direction: "TO_ASSIGNMENT",
+      messageType: "STATUS",
+      summary: "Ambiguous child remains occupied.",
+      idempotencyKey: "send-multi-reviewer-ambiguous",
+    }), "HOSTED_CODEX_BRIDGE_WALL")
+    expectWall(() => startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: reviewerHandles[1],
+      idempotencyKey: "spawn-multi-reviewer-two",
+    }), "HOSTED_CODEX_CONCURRENCY_WALL")
+    expect(bridgeCalls).toMatchObject({ spawn: 3, send: 1 })
+  })
+
   it("CLI fails closed because production has no mutable host-session bridge", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mao-030-cli-"))
     temporaryDirectories.push(directory)
@@ -1026,5 +1532,28 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
     })
     expect(result.status).toBe(2)
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: "HOSTED_CODEX_TRUST_WALL" })
+  })
+
+  it("keeps the production authority-status registry immutable and empty", () => {
+    const script = [
+      "import { HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_METADATA as metadata,",
+      "loadCanonicalHostedCodexAuthorityStatusChain as load }",
+      "from './scripts/multi-agent-operator/hosted-codex-authority-status-registry.mjs';",
+      "console.log(JSON.stringify({ metadata, loaded: load('a'.repeat(64), 0) }));",
+    ].join(" ")
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: process.cwd(), encoding: "utf8",
+    })
+    expect(result.status).toBe(0)
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      metadata: {
+        registryId: "hosted-codex-authority-status-registry-v1",
+        mutableRegistrationAllowed: false,
+        hostBacked: true,
+        terminalRevocationEnforced: true,
+        authorityGranted: false,
+      },
+      loaded: null,
+    })
   })
 })

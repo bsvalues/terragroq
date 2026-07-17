@@ -8,9 +8,14 @@
 
 **Depends on:** `WO-MAO-024`, `WO-MAO-031`, `WO-MAO-033`
 
+**Readiness gate:** WO-MAO-031 independently `COMPLETE`; WO-MAO-032 assessment `COMPLETE`;
+WO-MAO-033 exactly `DEFERRED / PROVIDER_UNAVAILABLE`; and independently verified consumer-specific
+settlement `WO-MAO-034<-WO-MAO-033`. WO-MAO-032 is the assessment binding, not a direct dependency.
+The UI remains `PENDING` until the verified DAG settlement artifact and provenance are integrated.
+
 > Post-merge assurance invalidated this completion evidence after WO-MAO-031 was invalidated. The
 > implementation and report are retained as historical inputs only; WO-MAO-034 must be re-reviewed
-> and re-proved after the redesigned WO-MAO-031 completes.
+> and re-proved only after the complete readiness gate above is satisfied.
 
 ## Current assurance outcome
 
@@ -20,8 +25,8 @@ Those proof and completion claims are superseded because WO-MAO-031, a declared 
 longer complete.
 
 The historical model remains non-executing and did not activate Claude, but it cannot complete the
-provider-optional path until the redesigned WO-MAO-031 is independently re-proved and WO-MAO-034 is
-then re-reviewed against the hardened chain.
+provider-optional path until the complete readiness gate is independently satisfied and WO-MAO-034
+is then re-reviewed against the hardened chain.
 
 ## Historical original contract (superseded)
 
@@ -73,9 +78,11 @@ not current completion evidence:
 
 ## Next transition
 
-`WO-MAO-034` is `PENDING / REPROOF_REQUIRED`. The current sequence is WO-MAO-031 redesign and
-independent re-proof, followed by WO-MAO-034 re-review and re-proof, then WO-MAO-035. WO-MAO-033
-remains `DEFERRED / PROVIDER_UNAVAILABLE` and resumable.
+`WO-MAO-034` is `PENDING / REPROOF_REQUIRED`. It may become ready only after WO-MAO-031 is
+independently `COMPLETE`, the WO-MAO-032 assessment is `COMPLETE`, WO-MAO-033 is exactly
+`DEFERRED / PROVIDER_UNAVAILABLE`, and the consumer-specific `WO-MAO-034<-WO-MAO-033` settlement is
+independently verified and integrated with its DAG provenance. Only then may WO-MAO-034 be re-reviewed
+and re-proved before WO-MAO-035.
 
 ## Owner-operation evidence
 

@@ -28,16 +28,18 @@ complete; the historical WO-MAO-031, WO-MAO-034, WO-MAO-035, and WO-MAO-036 evid
 pending re-proof. WO-MAO-031 is the sole ready Work Order; WO-MAO-033 remains deferred and resumable;
 WO-MAO-034 and later Work Orders are pending. Historical code and reports are retained as evidence,
 not treated as completed proof. The mandatory order is WO-MAO-030 hardening, WO-MAO-031
-redesign/re-proof, WO-MAO-034 re-review/re-proof, WO-MAO-035 re-proof, WO-MAO-036 re-proof, then
-Phase 5.
+redesign/re-proof, the independently verified WO-MAO-032/WO-MAO-033 settlement gate for WO-MAO-034,
+WO-MAO-034 re-review/re-proof, WO-MAO-035 re-proof, WO-MAO-036 re-proof, then Phase 5.
 
 ## Descendant invalidations
 
 - WO-MAO-034 cannot become ready merely because a caller includes WO-MAO-033 in a deferred set. The
   UI registry accepts no raw settlement-edge input and treats only completed dependencies as
-  satisfied. WO-MAO-034 remains pending until this projection consumes the hardened DAG contract's
-  exact independently verified `WO-MAO-034<-WO-MAO-033` settlement artifact and provenance. That
-  settlement is consumer-specific and cannot satisfy another edge.
+  satisfied. WO-MAO-034 remains pending until WO-MAO-031 is independently `COMPLETE`, the WO-MAO-032
+  assessment is `COMPLETE`, WO-MAO-033 remains exactly `DEFERRED / PROVIDER_UNAVAILABLE`, and this
+  projection consumes the hardened DAG contract's exact independently verified
+  `WO-MAO-034<-WO-MAO-033` settlement artifact and provenance. That settlement is consumer-specific
+  and cannot satisfy another edge.
 - WO-MAO-035 accepted caller-defined providers, caller-carried observations, and a stateless breaker
   projection. That could manufacture health and reroute proof without trusted operational evidence.
   Its API and CLI are therefore walled with
@@ -96,14 +98,22 @@ Phase 5.
   terminal states and later conflicting cancellation evidence remain fail-closed.
 - Public-plan privacy regression checks the actual fixture host-session identifier rather than an
   unrelated substring.
+- Runtime occupancy deduplicates the active shared coordinator identity within one multi-lane plan,
+  while counting each active or ambiguous child separately and excluding prepared or terminal
+  assignments.
+- Every operation, committed replay, and ambiguous lookup reloads a production-empty immutable
+  host-backed authority-status chain. Exact signed ACTIVE chains advance a private monotonic fence;
+  signed revocation latches terminally before any bridge call, lookup, observation, or cached replay.
 
 ## Canonical files
 
 - `scripts/multi-agent-operator/codex-coordinator-adapter.mjs`
 - `scripts/multi-agent-operator/codex-coordinator-adapter-cli.mjs`
 - `scripts/multi-agent-operator/codex-native-bridge-registry.mjs`
+- `scripts/multi-agent-operator/hosted-codex-authority-status-registry.mjs`
 - `tests/multi-agent-codex-coordinator-adapter.test.ts`
 - `tests/fixtures/codex-native-bridge-registry-fixture.mjs`
+- `tests/fixtures/hosted-codex-authority-status-registry-fixture.mjs`
 
 ## Independent re-review
 
@@ -114,21 +124,20 @@ or unattended-runtime certification.
 
 ## Known limitations before WO-MAO-031 reliance
 
-- Operation-time authority checks recheck only the expiry cached from the authenticated grant at
-  compilation. They do not revalidate the full authority artifact or consume a live
-  post-compilation owner-status stream, so a later revocation is not claimed as enforced.
-- Within one compiled multi-lane plan, static phase width counts a shared logical coordinator once,
-  but runtime occupancy currently counts its duplicated per-lane assignment records. Shared-
-  coordinator multi-lane occupancy therefore remains a separate hardening prerequisite.
+- The adapter reloads and cryptographically revalidates host authority status immediately before an
+  operation, replay, or lookup, but the bridge request/result does not yet echo and atomically enforce
+  the accepted authority fence. The residual final-load-to-side-effect TOCTOU remains an explicit
+  prerequisite; this report does not claim host-side fence enforcement.
 
 ## Validation
 
 - latest-main reconciliation focused adapter/role/routing/health/conformance/state/portfolio suites:
-  `9 files / 59 tests`, PASS;
+  `9 files / 75 tests`, PASS;
+- latest-main repository-wide Vitest: `173 files / 1,308 tests`, PASS;
+- latest-main ESLint: PASS with no warnings or errors;
+- latest-main Next.js production build: PASS;
 - prior remediation-branch canonical adapter suite: `1 file / 25 tests`, PASS;
 - prior remediation-branch repository-wide Vitest: `171 files / 1,282 tests`, PASS;
-- latest-main repository-wide Vitest, production build, and lint are assigned to independent assurance
-  against the immutable remediation commit; they are not claimed by this report before that review.
 
 ## Owner-operation evidence
 

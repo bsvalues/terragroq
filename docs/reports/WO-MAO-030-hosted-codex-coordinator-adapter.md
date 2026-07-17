@@ -28,7 +28,9 @@ structured task derived from that canonical envelope; a caller cannot add a sepa
 a topology result, session identity, trust boolean, authority grant, path set, or assignment handle.
 
 Coordinator-routed messages and cancellation requests use opaque plan/assignment bindings. Every
-operation revalidates the current coordinator-session, trust-expiry, and authority-expiry boundaries.
+operation revalidates the current coordinator-session and trust-expiry boundaries and reloads the
+immutable host-backed authority-status chain before any bridge call, lookup, observation, or cached
+replay. Signed revocation is terminally latched.
 The assignment handle determines its only permitted peer, so a caller cannot substitute another lane
 recipient. Message and cancellation idempotency keys return an exact replay and reject a changed
 replay. Prepared work cancels without a bridge call or delivery claim. Active work invokes the host
@@ -58,7 +60,11 @@ Downstream assurance invalidates the historical WO-MAO-031 and WO-MAO-034 comple
 without deleting their code or reports. Canonical state therefore keeps WO-MAO-030 and WO-MAO-032
 complete, returns WO-MAO-031 to `READY`, keeps WO-MAO-033 deferred and resumable, and returns
 WO-MAO-034 and later Work Orders to `PENDING`. Re-proof order is WO-MAO-030, WO-MAO-031,
-WO-MAO-034, then WO-MAO-035.
+WO-MAO-034, then WO-MAO-035. WO-MAO-031 completion alone does not release WO-MAO-034: readiness also
+requires the completed WO-MAO-032 assessment, WO-MAO-033 exactly
+`DEFERRED / PROVIDER_UNAVAILABLE`, and independently verified consumer-specific settlement
+`WO-MAO-034<-WO-MAO-033`. The UI remains fail-closed until the verified DAG artifact and provenance
+are integrated.
 
 ## Exact boundary
 
@@ -68,10 +74,12 @@ This adapter does **not** claim or create:
 - a background scheduler, local runtime activation, nested `codex exec`, or issue `#357` reuse;
 - credential, token, auth-cache, prompt-body, result-body, or raw-provider-output inspection;
 - GitHub, production, merge, release, or authority-minting behavior;
+- bridge-echoed, atomic host-side enforcement of the last accepted authority fence; the residual
+  final-load-to-side-effect TOCTOU remains a prerequisite;
 - an owner operation, owner relay, owner diagnostic, or owner credential action.
 
-The production host-session, preventive-trust, and native-bridge registries remain intentionally empty
-and immutable. The CLI therefore fails with a typed current-session wall unless a trusted hosted
+The production host-session, preventive-trust, native-bridge, and authority-status registries remain
+intentionally empty and immutable. The CLI therefore fails with a typed current-session wall unless a trusted hosted
 environment supplies those non-serializable bindings. JSON cannot register or forge them.
 
 ## Mechanical proof
@@ -79,8 +87,10 @@ environment supplies those non-serializable bindings. JSON cannot register or fo
 - `scripts/multi-agent-operator/codex-coordinator-adapter.mjs`
 - `scripts/multi-agent-operator/codex-coordinator-adapter-cli.mjs`
 - `scripts/multi-agent-operator/codex-native-bridge-registry.mjs`
+- `scripts/multi-agent-operator/hosted-codex-authority-status-registry.mjs`
 - `tests/multi-agent-codex-coordinator-adapter.test.ts`
 - `tests/fixtures/codex-native-bridge-registry-fixture.mjs`
+- `tests/fixtures/hosted-codex-authority-status-registry-fixture.mjs`
 
 The adversarial suite covers topology recomputation, incomplete dependencies, role substitution,
 immutable trust records and assignment handles, exact path/envelope scope, host identity substitution
@@ -91,21 +101,26 @@ pre-dispatch cancellation, active cancellation acknowledgement, exact terminal-r
 post-terminal committed-send replay, order-independent exact authority-event reference sets,
 bounded domain-separated assignment identifiers, acknowledged cancellation-evidence initialization,
 observation replay binding, actual host-session identifier privacy, sanitized hash-only evidence,
-artifact path confinement, provider binding, concurrency, and production-CLI failure.
+artifact path confinement, provider binding, shared-coordinator multi-lane occupancy, concurrency,
+live signed authority revocation before bridge/replay/lookup paths, authority-fence equivocation,
+production-empty status registry behavior, and production-CLI failure.
 
 Validation:
 
-- focused Vitest: `1 file / 30 tests`, PASS;
+- focused Vitest: `1 file / 46 tests`, PASS;
 - latest-main focused adapter/role/routing/health/conformance/state/portfolio suites:
-  `9 files / 59 tests`, PASS;
-- repository-wide Vitest: `171 files / 1,282 tests`, PASS;
-- ESLint, Next.js build, Node syntax, secret-pattern sweep, and `git diff --check`: PASS.
+  `9 files / 75 tests`, PASS;
+- latest-main repository-wide Vitest: `173 files / 1,308 tests`, PASS;
+- latest-main ESLint, Node syntax, secret-pattern sweep, and `git diff --check`: PASS;
+- latest-main Next.js production build: PASS.
 
 ## Next transition
 
 `WO-MAO-001` through `WO-MAO-030` and `WO-MAO-032` are complete. `WO-MAO-031` is the sole
 dependency-cleared Work Order. `WO-MAO-033` remains `DEFERRED / PROVIDER_UNAVAILABLE` and resumable;
-`WO-MAO-034` and later Work Orders remain pending.
+`WO-MAO-034` and later Work Orders remain pending. WO-MAO-034 cannot become ready until WO-MAO-031
+is independently complete and the exact WO-MAO-032/WO-MAO-033 settlement gate above is verified and
+integrated.
 ## Owner-operation evidence
 
 ```text
