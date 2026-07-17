@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-`WO-MAO-047_THROUGH_WO-MAO-049_COMPLETE / WO-MAO-050_READY /
+`WO-MAO-047_THROUGH_WO-MAO-050_COMPLETE / WO-MAO-051_READY /
 UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
 
 ## Truth
@@ -128,10 +128,11 @@ GitHub lifecycle conformance plan; WO-MAO-045 is `COMPLETE` through the independ
 secret/identity/trust-boundary audit; WO-MAO-046 is `COMPLETE` through the retry/idempotency/
 duplicate-prevention model; WO-MAO-047 is `COMPLETE` through the worker/coordinator recovery
 model; WO-MAO-048 is `COMPLETE` through the provider outage/failover drill; WO-MAO-049 is
-`COMPLETE` through the stale-base/CI/review/merge-race drill; WO-MAO-050 is `READY`. That
+`COMPLETE` through the stale-base/CI/review/merge-race drill; WO-MAO-050 is `COMPLETE` through
+the malicious/defective worker drill; WO-MAO-051 is `READY`. That
 settlement remains exact and cannot be retargeted. A separately ratified graph correction removes only the redundant direct
 WO-MAO-033 edges from WO-MAO-035/036. WO-MAO-033 remains deferred and resumable. The
-mandatory sequence is now governed by the executable dependency graph: WO-MAO-050 is the next
+mandatory sequence is now governed by the executable dependency graph: WO-MAO-051 is the next
 ordered ready gate. The rejected local runtime is not in the eligible dependency chain.
 
 ## Validation evidence
