@@ -65,7 +65,7 @@ describe("multi-agent operator registry", () => {
       evidencePath: "docs/reports/WO-MAO-028-scheduler-simulation-model-checking.md",
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "READY")
-      .map(({ workOrderId }) => workOrderId)).toEqual(["WO-MAO-042"])
+      .map(({ workOrderId }) => workOrderId)).toEqual(["WO-MAO-043"])
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[28]).toMatchObject({
       workOrderId: "WO-MAO-029",
       status: "COMPLETE",
@@ -153,16 +153,23 @@ describe("multi-agent operator registry", () => {
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[41]).toMatchObject({
       workOrderId: "WO-MAO-042",
-      status: "READY",
+      status: "COMPLETE",
       resumable: false,
       dependsOn: ["WO-MAO-022", "WO-MAO-025", "WO-MAO-041"],
+      evidencePath: "docs/reports/WO-MAO-042-post-merge-verification-cleanup.md",
     })
-    expect([30, 31, 34, 35, 36, 37, 38, 39, 40, 41, 42].map((number) => MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].status))
-      .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "READY"])
-    expect([23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41].every((number) => existsSync(MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].evidencePath))).toBe(true)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[42]).toMatchObject({
+      workOrderId: "WO-MAO-043",
+      status: "READY",
+      resumable: false,
+      dependsOn: ["WO-MAO-017", "WO-MAO-020", "WO-MAO-042"],
+    })
+    expect([30, 31, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43].map((number) => MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].status))
+      .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "READY"])
+    expect([23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42].every((number) => existsSync(MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].evidencePath))).toBe(true)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[53]).toMatchObject({ workOrderId: "WO-MAO-054", riskClass: "R2" })
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "PENDING")).toHaveLength(20)
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "COMPLETE")).toHaveLength(40)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "PENDING")).toHaveLength(19)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "COMPLETE")).toHaveLength(41)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "DEFERRED_PROVIDER_UNAVAILABLE")).toHaveLength(1)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "BLOCKED")).toHaveLength(0)
 
