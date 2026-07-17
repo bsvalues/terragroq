@@ -52,6 +52,14 @@ import {
   isVerifiedWoMao046RetryIdempotencyEvidence,
 } from "@/components/operator/multi-agent-retry-idempotency-registry"
 import {
+  MULTI_AGENT_WORKER_RECOVERY_EVIDENCE,
+  isVerifiedWoMao047WorkerRecoveryEvidence,
+} from "@/components/operator/multi-agent-worker-recovery-registry"
+import {
+  MULTI_AGENT_MERGE_RACE_EVIDENCE,
+  isVerifiedWoMao049MergeRaceEvidence,
+} from "@/components/operator/multi-agent-merge-race-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -213,6 +221,8 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-044", "docs/reports/WO-MAO-044-github-lifecycle-conformance.md"],
   ["WO-MAO-045", "docs/reports/WO-MAO-045-independent-secret-identity-trust-boundary-audit.md"],
   ["WO-MAO-046", "docs/reports/WO-MAO-046-retry-idempotency-duplicate-prevention.md"],
+  ["WO-MAO-047", "docs/reports/WO-MAO-047-worker-coordinator-recovery.md"],
+  ["WO-MAO-049", "docs/reports/WO-MAO-049-stale-base-ci-review-merge-race.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -300,6 +310,12 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao046RetryIdempotencyEvidence(MULTI_AGENT_RETRY_IDEMPOTENCY_EVIDENCE)
     ? [workOrderId(46)]
+    : []),
+  ...(isVerifiedWoMao047WorkerRecoveryEvidence(MULTI_AGENT_WORKER_RECOVERY_EVIDENCE)
+    ? [workOrderId(47)]
+    : []),
+  ...(isVerifiedWoMao049MergeRaceEvidence(MULTI_AGENT_MERGE_RACE_EVIDENCE)
+    ? [workOrderId(49)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
