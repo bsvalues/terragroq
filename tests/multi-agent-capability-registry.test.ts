@@ -263,6 +263,21 @@ describe("multi-agent executable capability inventory", () => {
         "No command runner, background worker, runtime activation, credential access, authority minting, or owner relay",
       ]),
     })
+    expect(capability("pr-creation-packet-linkage-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_PR_CREATION_PACKET_LINKAGE_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/pr-creation-packet-linkage.mjs",
+      authorityGrantRefs: ["PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"],
+      trustGateRef: "WO-MAO-007",
+      restrictions: expect.arrayContaining([
+        "Zero-input control-plane packet model only; no pull request is created by the model",
+        "PR body generation must link verified Work Order, authority, validation, and evidence records",
+        "Review thread handling, check ingestion, and merge remain downstream gated work",
+        "WO-MAO-038 is complete; WO-MAO-039 is released to READY through retained prerequisites",
+        "No command runner, background worker, runtime activation, credential access, authority minting, production write, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
