@@ -125,7 +125,9 @@ CI/review ingestion plan; WO-MAO-040 is `COMPLETE` through the canonical remedia
 WO-MAO-041 is `COMPLETE` through the canonical bounded merge-controller plan; WO-MAO-042 is `COMPLETE`
 through the canonical post-merge verification and cleanup plan; WO-MAO-043 is `COMPLETE` through
 the canonical automatic dependent-release plan; WO-MAO-044 is `COMPLETE` through the canonical
-GitHub lifecycle conformance plan; WO-MAO-045 is `READY`. That
+GitHub lifecycle conformance plan; WO-MAO-045 is `COMPLETE` through the independent
+secret/identity/trust-boundary audit; WO-MAO-046 is `COMPLETE` through the retry/idempotency/
+duplicate-prevention model; WO-MAO-047 and WO-MAO-049 are `READY`. That
 settlement remains exact and cannot be retargeted. A separately ratified graph correction removes only the redundant direct
 WO-MAO-033 edges from WO-MAO-035/036. WO-MAO-033 remains deferred and resumable. The
 mandatory sequence is WO-MAO-030 -> WO-MAO-031 -> verified settlement -> WO-MAO-034

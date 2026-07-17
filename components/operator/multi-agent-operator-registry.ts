@@ -44,6 +44,14 @@ import {
   isVerifiedWoMao044GitHubLifecycleEvidence,
 } from "@/components/operator/multi-agent-github-lifecycle-registry"
 import {
+  MULTI_AGENT_SECRET_TRUST_AUDIT_EVIDENCE,
+  isVerifiedWoMao045SecretTrustAuditEvidence,
+} from "@/components/operator/multi-agent-secret-trust-audit-registry"
+import {
+  MULTI_AGENT_RETRY_IDEMPOTENCY_EVIDENCE,
+  isVerifiedWoMao046RetryIdempotencyEvidence,
+} from "@/components/operator/multi-agent-retry-idempotency-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -203,6 +211,8 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-042", "docs/reports/WO-MAO-042-post-merge-verification-cleanup.md"],
   ["WO-MAO-043", "docs/reports/WO-MAO-043-automatic-dependent-release.md"],
   ["WO-MAO-044", "docs/reports/WO-MAO-044-github-lifecycle-conformance.md"],
+  ["WO-MAO-045", "docs/reports/WO-MAO-045-independent-secret-identity-trust-boundary-audit.md"],
+  ["WO-MAO-046", "docs/reports/WO-MAO-046-retry-idempotency-duplicate-prevention.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -284,6 +294,12 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao044GitHubLifecycleEvidence(MULTI_AGENT_GITHUB_LIFECYCLE_EVIDENCE)
     ? [workOrderId(44)]
+    : []),
+  ...(isVerifiedWoMao045SecretTrustAuditEvidence(MULTI_AGENT_SECRET_TRUST_AUDIT_EVIDENCE)
+    ? [workOrderId(45)]
+    : []),
+  ...(isVerifiedWoMao046RetryIdempotencyEvidence(MULTI_AGENT_RETRY_IDEMPOTENCY_EVIDENCE)
+    ? [workOrderId(46)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
