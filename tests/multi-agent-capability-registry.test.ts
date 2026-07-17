@@ -278,6 +278,21 @@ describe("multi-agent executable capability inventory", () => {
         "No command runner, background worker, runtime activation, credential access, authority minting, production write, or owner relay",
       ]),
     })
+    expect(capability("ci-review-ingestion-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_CI_REVIEW_INGESTION_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/ci-review-ingestion.mjs",
+      authorityGrantRefs: ["PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"],
+      trustGateRef: "WO-MAO-007",
+      restrictions: expect.arrayContaining([
+        "Zero-input control-plane ingestion model only; no GitHub API is called by the model",
+        "Check reruns, review thread resolution, remediation, and merge remain downstream gated work",
+        "Failure classes remain classification records: product, flaky infrastructure, provider, policy, and stale base",
+        "WO-MAO-039 is complete; WO-MAO-040 is released to READY through retained prerequisites",
+        "No command runner, background worker, runtime activation, credential access, authority minting, production write, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",

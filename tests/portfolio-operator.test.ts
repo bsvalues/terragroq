@@ -53,13 +53,13 @@ describe("portfolio operator", () => {
     ])
   })
 
-  it("selects WO-MAO-039 after the PR packet linkage proof", () => {
+  it("selects WO-MAO-040 after the CI review ingestion proof", () => {
     const portfolio = getPortfolioOperatorProgram()
     const multiAgentOperator = portfolio.backlog[0]
 
     expect(buildLoopPacket(multiAgentOperator)).toMatchObject({
-      activeWorkOrder: "WO-MAO-039",
-      eligibleWorkOrders: ["WO-MAO-039"],
+      activeWorkOrder: "WO-MAO-040",
+      eligibleWorkOrders: ["WO-MAO-040"],
       remediationTransition: null,
     })
 
@@ -147,8 +147,8 @@ describe("portfolio operator", () => {
       ownerDecisionRequired: false,
     })
     expect(loop).toMatchObject({
-      activeWorkOrder: "WO-MAO-039",
-      eligibleWorkOrders: ["WO-MAO-039"],
+      activeWorkOrder: "WO-MAO-040",
+      eligibleWorkOrders: ["WO-MAO-040"],
       remediationTransition: null,
       executionMode: "DEPENDENCY_RESERVATION_ELIGIBLE_SET",
     })
@@ -177,9 +177,10 @@ describe("portfolio operator", () => {
     expect(workOrders[35]).toMatchObject({ workOrderId: "WO-MAO-036", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[36]).toMatchObject({ workOrderId: "WO-MAO-037", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[37]).toMatchObject({ workOrderId: "WO-MAO-038", status: "COMPLETE", riskClass: "R3" })
-    expect(workOrders[38]).toMatchObject({ workOrderId: "WO-MAO-039", status: "READY", riskClass: "R3" })
-    expect([30, 31, 34, 35, 36, 37, 38, 39].map((number) => workOrders[number - 1].status))
-      .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "READY"])
+    expect(workOrders[38]).toMatchObject({ workOrderId: "WO-MAO-039", status: "COMPLETE", riskClass: "R3" })
+    expect(workOrders[39]).toMatchObject({ workOrderId: "WO-MAO-040", status: "READY", riskClass: "R3" })
+    expect([30, 31, 34, 35, 36, 37, 38, 39, 40].map((number) => workOrders[number - 1].status))
+      .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "READY"])
     expect(workOrders).toHaveLength(62)
     expect(workOrders.at(-1)?.workOrderId).toBe("WO-MAO-062")
     expect(workOrders.every((workOrder) => "ownerOperationsAllowed" in workOrder && workOrder.ownerOperationsAllowed === false)).toBe(true)

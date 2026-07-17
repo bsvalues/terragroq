@@ -65,7 +65,7 @@ describe("multi-agent operator registry", () => {
       evidencePath: "docs/reports/WO-MAO-028-scheduler-simulation-model-checking.md",
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "READY")
-      .map(({ workOrderId }) => workOrderId)).toEqual(["WO-MAO-039"])
+      .map(({ workOrderId }) => workOrderId)).toEqual(["WO-MAO-040"])
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[28]).toMatchObject({
       workOrderId: "WO-MAO-029",
       status: "COMPLETE",
@@ -132,16 +132,23 @@ describe("multi-agent operator registry", () => {
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[38]).toMatchObject({
       workOrderId: "WO-MAO-039",
-      status: "READY",
+      status: "COMPLETE",
       resumable: false,
       dependsOn: ["WO-MAO-020", "WO-MAO-022", "WO-MAO-038"],
+      evidencePath: "docs/reports/WO-MAO-039-ci-review-ingestion.md",
     })
-    expect([30, 31, 34, 35, 36, 37, 38, 39].map((number) => MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].status))
-      .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "READY"])
-    expect([23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38].every((number) => existsSync(MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].evidencePath))).toBe(true)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[39]).toMatchObject({
+      workOrderId: "WO-MAO-040",
+      status: "READY",
+      resumable: false,
+      dependsOn: ["WO-MAO-026", "WO-MAO-031", "WO-MAO-039"],
+    })
+    expect([30, 31, 34, 35, 36, 37, 38, 39, 40].map((number) => MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].status))
+      .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "READY"])
+    expect([23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39].every((number) => existsSync(MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].evidencePath))).toBe(true)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[53]).toMatchObject({ workOrderId: "WO-MAO-054", riskClass: "R2" })
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "PENDING")).toHaveLength(23)
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "COMPLETE")).toHaveLength(37)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "PENDING")).toHaveLength(22)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "COMPLETE")).toHaveLength(38)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "DEFERRED_PROVIDER_UNAVAILABLE")).toHaveLength(1)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "BLOCKED")).toHaveLength(0)
 
