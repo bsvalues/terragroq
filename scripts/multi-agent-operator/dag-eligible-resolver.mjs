@@ -152,8 +152,10 @@ function verifySettledDependency({
   const bindingsMatch = assessment.providerId === policy.providerId
     && assessment.assessmentWorkOrderId === policy.assessmentWorkOrderId
     && assessment.subjectWorkOrderId === dependencyWorkOrderId
+    && assessment.consumerWorkOrderId === consumerEnvelope.workOrderId
     && assessment.assessmentEnvelopeHash === assessmentEnvelopeResult.contentHash
     && assessment.subjectEnvelopeHash === subjectEnvelopeResult.contentHash
+    && assessment.consumerEnvelopeHash === envelopeResultsById.get(consumerEnvelope.workOrderId)?.contentHash
   if (!bindingsMatch) {
     wall("DAG_ELIGIBILITY_SETTLEMENT_WALL", dependencyWorkOrderId, "ASSESSMENT_IDENTITY_OR_ENVELOPE_HASH_MISMATCH")
   }
@@ -165,6 +167,9 @@ function verifySettledDependency({
     assessmentWorkOrderId: policy.assessmentWorkOrderId,
     assessmentArtifactId: assessment.artifactId,
     assessmentContentHash: assessment.contentHash,
+    consumerWorkOrderId: assessment.consumerWorkOrderId,
+    consumerEnvelopeHash: assessment.consumerEnvelopeHash,
+    sourceAssessmentContentHash: assessment.sourceAssessmentContentHash,
   })
 }
 

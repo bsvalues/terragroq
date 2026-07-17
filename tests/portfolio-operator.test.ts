@@ -53,32 +53,32 @@ describe("portfolio operator", () => {
     ])
   })
 
-  it("falls through a selected program with no eligible work to the highest-value executable program", () => {
+  it("selects the active multi-agent program when canonical settlement releases WO-MAO-034", () => {
     const portfolio = getPortfolioOperatorProgram()
     const multiAgentOperator = portfolio.backlog[0]
 
     expect(buildLoopPacket(multiAgentOperator)).toMatchObject({
-      activeWorkOrder: null,
-      eligibleWorkOrders: [],
+      activeWorkOrder: "WO-MAO-034",
+      eligibleWorkOrders: ["WO-MAO-034"],
     })
 
     expect(resolveNextPortfolioProgram(portfolio.backlog)).toMatchObject({
       decision: "SELECT_PROGRAM",
-      programId: "PROGRAM-RELEASE-ENGINEERING-001",
-      goalId: "GOAL-RELEASE-ENGINEERING-001",
+      programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
+      goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001",
       ownerDecisionRequired: false,
     })
     expect(multiAgentOperator.state).toBe("SELECTED")
   })
 
-  it("preserves deterministic priority and program-id ordering after empty programs are skipped", () => {
+  it("preserves deterministic priority and program-id ordering when higher-priority programs are unavailable", () => {
     const portfolio = getPortfolioOperatorProgram()
     const multiAgentOperator = portfolio.backlog[0]
     const release = portfolio.backlog.find((program) => program.programId === "PROGRAM-RELEASE-ENGINEERING-001")!
     const devex = portfolio.backlog.find((program) => program.programId === "PROGRAM-DEVEX-HOOK-TOOLING-001")!
 
     expect(resolveNextPortfolioProgram([
-      multiAgentOperator,
+      { ...multiAgentOperator, state: "BLOCKED" },
       { ...release, priorityScore: 500 },
       { ...devex, priorityScore: 500 },
     ])).toMatchObject({
@@ -125,8 +125,8 @@ describe("portfolio operator", () => {
       ownerDecisionRequired: false,
     })
     expect(loop).toMatchObject({
-      activeWorkOrder: null,
-      eligibleWorkOrders: [],
+      activeWorkOrder: "WO-MAO-034",
+      eligibleWorkOrders: ["WO-MAO-034"],
       executionMode: "DEPENDENCY_RESERVATION_ELIGIBLE_SET",
     })
     expect(loop.continuationRule).toContain("contact the Owner only for a genuine authority wall or the final outcome")
@@ -149,11 +149,11 @@ describe("portfolio operator", () => {
     expect(workOrders[30]).toMatchObject({ workOrderId: "WO-MAO-031", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[31]).toMatchObject({ workOrderId: "WO-MAO-032", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[32]).toMatchObject({ workOrderId: "WO-MAO-033", status: "DEFERRED_PROVIDER_UNAVAILABLE", resumable: true })
-    expect(workOrders[33]).toMatchObject({ workOrderId: "WO-MAO-034", status: "BLOCKED", riskClass: "R3" })
+    expect(workOrders[33]).toMatchObject({ workOrderId: "WO-MAO-034", status: "READY", riskClass: "R3" })
     expect(workOrders[34]).toMatchObject({ workOrderId: "WO-MAO-035", status: "PENDING", riskClass: "R3" })
     expect(workOrders[35]).toMatchObject({ workOrderId: "WO-MAO-036", status: "PENDING", riskClass: "R3" })
     expect([30, 31, 34, 35, 36, 37].map((number) => workOrders[number - 1].status))
-      .toEqual(["COMPLETE", "COMPLETE", "BLOCKED", "PENDING", "PENDING", "PENDING"])
+      .toEqual(["COMPLETE", "COMPLETE", "READY", "PENDING", "PENDING", "PENDING"])
     expect(workOrders).toHaveLength(62)
     expect(workOrders.at(-1)?.workOrderId).toBe("WO-MAO-062")
     expect(workOrders.every((workOrder) => "ownerOperationsAllowed" in workOrder && workOrder.ownerOperationsAllowed === false)).toBe(true)

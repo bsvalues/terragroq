@@ -8,7 +8,8 @@ const WORK_ORDER_ID = /^WO-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d{3}$/
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
 const ARTIFACT_FIELDS = new Set([
   "schemaVersion", "artifactType", "artifactId", "providerId", "assessmentWorkOrderId",
-  "subjectWorkOrderId", "assessmentEnvelopeHash", "subjectEnvelopeHash", "result",
+  "subjectWorkOrderId", "consumerWorkOrderId", "assessmentEnvelopeHash", "subjectEnvelopeHash",
+  "consumerEnvelopeHash", "sourceAssessmentContentHash", "result",
   "completionStatus", "lifecycleState", "reasonCode", "continuationPolicy",
   "assessmentSource", "contentHash", "proof",
 ])
@@ -39,11 +40,13 @@ const TRUST_ROOT_FIELDS = new Set([
 const TRUST_WRITER_FIELDS = new Set([
   "writerId", "keyId", "algorithm", "publicKeyPem", "fingerprint", "status",
   "notBefore", "expiresAt", "providerIds", "assessmentWorkOrderIds", "subjectWorkOrderIds",
+  "consumerWorkOrderIds", "consumerEnvelopeHashes", "sourceAssessmentContentHashes",
 ])
 const TRUST_LEDGER_ANCHOR_FIELDS = new Set([
   "anchorId", "ledgerId", "eventId", "eventHash", "eventCount", "headEventHash",
   "externalAnchorId", "assessmentContentHash", "artifactId", "providerId",
-  "assessmentWorkOrderId", "subjectWorkOrderId", "assessmentEnvelopeHash", "subjectEnvelopeHash",
+  "assessmentWorkOrderId", "subjectWorkOrderId", "consumerWorkOrderId", "assessmentEnvelopeHash",
+  "subjectEnvelopeHash", "consumerEnvelopeHash", "sourceAssessmentContentHash",
   "status", "issuedAt", "expiresAt",
 ])
 const TRUST_STATUS_EVENT_FIELDS = new Set([
@@ -53,6 +56,33 @@ const TRUST_STATUS_EVENT_FIELDS = new Set([
 const TRUST_STATUS_HEAD_FIELDS = new Set(["eventCount", "latestEventHash"])
 const TRUST_SIGNATURE_FIELDS = new Set(["algorithm", "keyId", "value"])
 const CONFIGURED_TRUST = new WeakMap()
+const CANONICAL_WO_MAO_034_ASSESSMENT = Object.freeze({
+  schemaVersion: 2,
+  artifactType: "PROVIDER_AVAILABILITY_ASSESSMENT",
+  artifactId: "settlement-wo-mao-034-claude-unavailable-v2",
+  providerId: "claude-code",
+  assessmentWorkOrderId: "WO-MAO-032",
+  subjectWorkOrderId: "WO-MAO-033",
+  consumerWorkOrderId: "WO-MAO-034",
+  assessmentEnvelopeHash: "4f4495e4ca5e0691ba99ac277a74f5c29c594e9f300fd02979fa2eea07628da8",
+  subjectEnvelopeHash: "5311ed8044b3b40a9ea7604cdb77a90d29f2d5562562a7c2988313f76a7226ee",
+  consumerEnvelopeHash: "c03f2339666105cbe08b51ef32a50000d3b2441103f4420721f216c75667cb03",
+  sourceAssessmentContentHash: "60917d122e314844e175c9d4e6e60e197a5e4f06bc2b6f2ea73b0fc1e09ed523",
+  result: "UNAVAILABLE",
+  completionStatus: "COMPLETE_PROVIDER_ASSESSMENT",
+  lifecycleState: "DEFERRED",
+  reasonCode: "PROVIDER_UNAVAILABLE",
+  continuationPolicy: "DEFER_AFFECTED_LANE_CONTINUE_HEALTHY_PROVIDERS",
+  assessmentSource: "STATIC_REPOSITORY_EVIDENCE",
+  contentHash: "5b19ba9eacf183ea8afaa799f3015c18e48ab0cf3356c5aa35de55056f68a3b6",
+  proof: Object.freeze({
+    proofType: "TRUSTED_WRITER_SIGNATURE",
+    writerId: "williamos-wo-mao-034-settlement-reviewer",
+    keyId: "williamos-wo-mao-034-writer-key-1",
+    algorithm: "ED25519",
+    signature: "8jBjD68rxyeVdIwfKQvtIjvsR/AbY32PWc6UWKihW2eMqrKxRFFPhMbpRPmEaKAX6ZpVQd01ZMqWzHwiJzarDA==",
+  }),
+})
 
 function plainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -116,19 +146,26 @@ export function providerUnavailableAssessmentContentHash(input) {
   return sha256(canonicalJson(claims))
 }
 
+export function loadCanonicalWoMao034ProviderUnavailableAssessment() {
+  return CANONICAL_WO_MAO_034_ASSESSMENT
+}
+
 function normalizeClaims(input) {
-  if (input.schemaVersion !== 1 || input.artifactType !== "PROVIDER_AVAILABILITY_ASSESSMENT") {
-    wall("PROVIDER_SETTLEMENT_SCHEMA_WALL", "assessment", "V1_ASSESSMENT_REQUIRED")
+  if (input.schemaVersion !== 2 || input.artifactType !== "PROVIDER_AVAILABILITY_ASSESSMENT") {
+    wall("PROVIDER_SETTLEMENT_SCHEMA_WALL", "assessment", "V2_ASSESSMENT_REQUIRED")
   }
   const normalized = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     artifactType: "PROVIDER_AVAILABILITY_ASSESSMENT",
     artifactId: identifier(input.artifactId, "assessment.artifactId"),
     providerId: identifier(input.providerId, "assessment.providerId"),
     assessmentWorkOrderId: identifier(input.assessmentWorkOrderId, "assessment.assessmentWorkOrderId", WORK_ORDER_ID),
     subjectWorkOrderId: identifier(input.subjectWorkOrderId, "assessment.subjectWorkOrderId", WORK_ORDER_ID),
+    consumerWorkOrderId: identifier(input.consumerWorkOrderId, "assessment.consumerWorkOrderId", WORK_ORDER_ID),
     assessmentEnvelopeHash: hash(input.assessmentEnvelopeHash, "assessment.assessmentEnvelopeHash"),
     subjectEnvelopeHash: hash(input.subjectEnvelopeHash, "assessment.subjectEnvelopeHash"),
+    consumerEnvelopeHash: hash(input.consumerEnvelopeHash, "assessment.consumerEnvelopeHash"),
+    sourceAssessmentContentHash: hash(input.sourceAssessmentContentHash, "assessment.sourceAssessmentContentHash"),
     result: input.result,
     completionStatus: input.completionStatus,
     lifecycleState: input.lifecycleState,
@@ -136,8 +173,12 @@ function normalizeClaims(input) {
     continuationPolicy: input.continuationPolicy,
     assessmentSource: input.assessmentSource,
   }
-  if (normalized.assessmentWorkOrderId === normalized.subjectWorkOrderId) {
-    wall("PROVIDER_SETTLEMENT_BINDING_WALL", "assessment", "INDEPENDENT_WORK_ORDERS_REQUIRED")
+  if (new Set([
+    normalized.assessmentWorkOrderId,
+    normalized.subjectWorkOrderId,
+    normalized.consumerWorkOrderId,
+  ]).size !== 3) {
+    wall("PROVIDER_SETTLEMENT_BINDING_WALL", "assessment", "DISTINCT_ASSESSMENT_SUBJECT_CONSUMER_REQUIRED")
   }
   const exactValues = {
     result: "UNAVAILABLE",
@@ -412,6 +453,13 @@ function normalizePinnedTrustBundle(registryReference) {
       providerIds: exactStringSet(writer.providerIds, `${field}.providerIds`),
       assessmentWorkOrderIds: exactStringSet(writer.assessmentWorkOrderIds, `${field}.assessmentWorkOrderIds`, WORK_ORDER_ID),
       subjectWorkOrderIds: exactStringSet(writer.subjectWorkOrderIds, `${field}.subjectWorkOrderIds`, WORK_ORDER_ID),
+      consumerWorkOrderIds: exactStringSet(writer.consumerWorkOrderIds, `${field}.consumerWorkOrderIds`, WORK_ORDER_ID),
+      consumerEnvelopeHashes: exactStringSet(writer.consumerEnvelopeHashes, `${field}.consumerEnvelopeHashes`, HASH),
+      sourceAssessmentContentHashes: exactStringSet(
+        writer.sourceAssessmentContentHashes,
+        `${field}.sourceAssessmentContentHashes`,
+        HASH,
+      ),
       notBeforeMs: notBefore,
       expiresAtMs: writerExpiresAt,
     })
@@ -426,7 +474,11 @@ function normalizePinnedTrustBundle(registryReference) {
     }
     identifier(anchor.assessmentWorkOrderId, `${field}.assessmentWorkOrderId`, WORK_ORDER_ID)
     identifier(anchor.subjectWorkOrderId, `${field}.subjectWorkOrderId`, WORK_ORDER_ID)
-    for (const key of ["eventHash", "headEventHash", "assessmentContentHash", "assessmentEnvelopeHash", "subjectEnvelopeHash"]) {
+    identifier(anchor.consumerWorkOrderId, `${field}.consumerWorkOrderId`, WORK_ORDER_ID)
+    for (const key of [
+      "eventHash", "headEventHash", "assessmentContentHash", "assessmentEnvelopeHash", "subjectEnvelopeHash",
+      "consumerEnvelopeHash", "sourceAssessmentContentHash",
+    ]) {
       hash(anchor[key], `${field}.${key}`)
     }
     if (!Number.isSafeInteger(anchor.eventCount) || anchor.eventCount < 1) {
@@ -514,7 +566,10 @@ function verifySignature(proof, claims, claimsJson, trust) {
   }
   if (!writer.providerIds.includes(claims.providerId)
     || !writer.assessmentWorkOrderIds.includes(claims.assessmentWorkOrderId)
-    || !writer.subjectWorkOrderIds.includes(claims.subjectWorkOrderId)) {
+    || !writer.subjectWorkOrderIds.includes(claims.subjectWorkOrderId)
+    || !writer.consumerWorkOrderIds.includes(claims.consumerWorkOrderId)
+    || !writer.consumerEnvelopeHashes.includes(claims.consumerEnvelopeHash)
+    || !writer.sourceAssessmentContentHashes.includes(claims.sourceAssessmentContentHash)) {
     wall("PROVIDER_SETTLEMENT_TRUST_WALL", "assessment.proof.writerId", "WRITER_SCOPE_MISMATCH")
   }
   let verified = false
@@ -555,8 +610,11 @@ function verifyLedgerAnchor(proof, claims, contentHash, trust) {
     && entry.providerId === claims.providerId
     && entry.assessmentWorkOrderId === claims.assessmentWorkOrderId
     && entry.subjectWorkOrderId === claims.subjectWorkOrderId
+    && entry.consumerWorkOrderId === claims.consumerWorkOrderId
     && entry.assessmentEnvelopeHash === claims.assessmentEnvelopeHash
-    && entry.subjectEnvelopeHash === claims.subjectEnvelopeHash)
+    && entry.subjectEnvelopeHash === claims.subjectEnvelopeHash
+    && entry.consumerEnvelopeHash === claims.consumerEnvelopeHash
+    && entry.sourceAssessmentContentHash === claims.sourceAssessmentContentHash)
   if (!trusted || trusted.status !== "ACTIVE" || trust.now < trusted.issuedAtMs || trust.now >= trusted.expiresAtMs) {
     wall("PROVIDER_SETTLEMENT_TRUST_WALL", "assessment.proof", "ACTIVE_PINNED_LEDGER_ANCHOR_REQUIRED")
   }

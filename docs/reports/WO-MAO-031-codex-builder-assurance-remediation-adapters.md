@@ -167,7 +167,6 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 Independent approval of WO-MAO-031 is necessary but not sufficient for WO-MAO-034 readiness.
 WO-MAO-032 must remain complete as the assessment binding; WO-MAO-033 must remain exactly
 `DEFERRED / PROVIDER_UNAVAILABLE`; and the consumer-specific `WO-MAO-034<-WO-MAO-033` settlement
-must be independently verified. WO-MAO-034 remains
-`BLOCKED / PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED` until that verified DAG settlement, its canonical
-trust pin, and provenance are integrated. William is not asked to operate, authenticate, diagnose,
-or relay any provider.
+must be independently verified. That exact canonical DAG settlement, trust pin, and provenance are
+now integrated, so WO-MAO-034 is `READY`, not complete. WO-MAO-033 remains deferred and Claude
+remains disabled. William is not asked to operate, authenticate, diagnose, or relay any provider.

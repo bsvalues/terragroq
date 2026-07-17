@@ -72,6 +72,70 @@ const TOP_LEVEL_FIELDS = new Set([
   ...OPTIONAL_TOP_LEVEL_FIELDS,
 ])
 
+const WO_MAO_034_SETTLEMENT_BASE_SHA = "42a63e3e11e5bb1a9c1e9419db3e0f2651b1789c"
+
+function settlementEnvelope(workOrderId, specification = {}) {
+  return {
+    artifactType: ARTIFACT_TYPE,
+    schemaVersion: 2,
+    programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
+    goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001",
+    loopId: "LOOP-WOS-MULTI-AGENT-OPERATOR-001",
+    workOrderId,
+    objective: specification.objective ?? `Verify completed prerequisite evidence for ${workOrderId}.`,
+    riskClass: "R3",
+    repositories: ["bsvalues/terragroq"],
+    baseRefs: [{
+      repository: "bsvalues/terragroq",
+      ref: "refs/heads/main",
+      commitSha: WO_MAO_034_SETTLEMENT_BASE_SHA,
+    }],
+    dependencies: specification.dependencies ?? [],
+    fanInGate: "ALL",
+    laneId: `LANE-${workOrderId}`,
+    teamRoles: {
+      coordinator: "codex-coordinator",
+      builder: `builder-${workOrderId.toLowerCase()}`,
+      reviewer: `reviewer-${workOrderId.toLowerCase()}`,
+    },
+    providerRequirements: ["isolated-worktree"],
+    preferredProviders: ["hosted-codex"],
+    fallbackProviders: [],
+    reservations: {
+      paths: (specification.paths ?? [`docs/reports/${workOrderId}-evidence.md`])
+        .map((reservedPath) => ({ repository: "bsvalues/terragroq", path: reservedPath })),
+      contracts: specification.contracts ?? [`contract-${workOrderId.toLowerCase()}`],
+      environments: [],
+    },
+    allowedActions: specification.allowedActions ?? ["READ_REPOSITORY", "WRITE_RESERVED_PATHS", "RUN_VALIDATION"],
+    forbiddenActions: ["OWNER_CONTACT", "CREDENTIAL_ACCESS", "RUNTIME_ACTIVATION"],
+    authorityGrantRefs: ["docs/reports/WO-MAO-003-owner-only-authority-contract.md"],
+    programActivationGrantRef: null,
+    grantStatusEventRefs: [],
+    requiredOutputs: specification.requiredOutputs ?? ["artifact"],
+    requiredValidation: specification.requiredValidation ?? ["tests"],
+    reviewRequirements: { independentReviewer: true, minimumApprovals: 1, maximumUnresolvedThreads: 0 },
+    mergeMode: specification.mergeMode ?? "NO_MERGE",
+    retryBudget: { maxAttempts: 1, backoffSeconds: 0 },
+    remediationBudget: { maxCycles: 1 },
+    reroutePolicy: "NONE",
+    stopConditions: ["authority-wall"],
+    evidenceTargets: ["owner-operation-counters"],
+    ownerDecisionConditions: [],
+    ownerOperationsAllowed: false,
+    ownerTouchBudget: {
+      operationTouches: 0,
+      credentialTouches: 0,
+      diagnosticTouches: 0,
+      routineDecisions: 0,
+      routineContacts: 0,
+    },
+    communicationPolicy: COMMUNICATION_POLICY,
+    dependencyPolicies: [],
+    providerBinding: null,
+  }
+}
+
 function plainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
 }
@@ -277,6 +341,102 @@ export function validateWorkOrderEnvelopeV2(input) {
 export function toDispatchEnvelope(envelopeV2) {
   const normalized = normalizeWorkOrderEnvelopeV2(envelopeV2)
   return Object.freeze(dispatchFields(normalized))
+}
+
+export function createWoMao034ProviderSettlementEnvelopes() {
+  const binding = Object.freeze({
+    providerId: "claude-code",
+    assessmentWorkOrderId: "WO-MAO-032",
+    subjectWorkOrderId: "WO-MAO-033",
+  })
+  const governedDeliveryActions = [
+    "READ_REPOSITORY", "WRITE_RESERVED_PATHS", "RUN_VALIDATION", "COMMIT_OWN_CHANGES",
+    "PUSH_OWN_BRANCH", "OPEN_DRAFT_PR", "READ_CI_AND_REVIEW", "REMEDIATE_OWN_CHANGES",
+    "MERGE_ELIGIBLE_PR", "VERIFY_POST_MERGE",
+  ]
+  const assessment = settlementEnvelope("WO-MAO-032", {
+    objective: "Assess Claude only from static repository evidence; record provider unavailable without invoking Claude or contacting the owner.",
+    dependencies: ["WO-MAO-007", "WO-MAO-019", "WO-MAO-022"],
+    paths: [
+      "scripts/multi-agent-operator/claude-provider-assessment.mjs",
+      "docs/reports/WO-MAO-032-claude-capability-transport-proof.md",
+      "tests/multi-agent-provider-unavailable-settlement.test.ts",
+    ],
+    contracts: ["claude-static-provider-assessment", "provider-unavailable-settlement-source"],
+    allowedActions: governedDeliveryActions,
+    requiredOutputs: ["static-provider-assessment", "provider-unavailable-source-hash"],
+    requiredValidation: ["static-assessment-tests", "zero-owner-touch-proof"],
+    mergeMode: "ASSURANCE_GATED",
+  })
+  assessment.providerBinding = { ...binding, role: "ASSESSMENT" }
+  const subject = settlementEnvelope("WO-MAO-033", {
+    objective: "Keep the Claude separate-repository adapter deferred and resumable while provider transport is unavailable.",
+    dependencies: ["WO-MAO-025", "WO-MAO-028", "WO-MAO-032"],
+    paths: [
+      "docs/governance/active-program-queue.md",
+      "docs/governance/loop-registry.md",
+    ],
+    contracts: ["claude-provider-unavailable-defer", "separate-workspace-adapter"],
+    requiredOutputs: ["deferred-provider-lane-state"],
+    requiredValidation: ["provider-unavailable-defer-proof", "zero-provider-invocation-proof"],
+  })
+  subject.providerBinding = { ...binding, role: "SUBJECT" }
+  const consumer = settlementEnvelope("WO-MAO-034", {
+    objective: "Prove consumer-specific cross-provider routing and review while excluding the unavailable Claude provider from capability and execution.",
+    dependencies: ["WO-MAO-024", "WO-MAO-031", "WO-MAO-033"],
+    paths: [
+      "scripts/multi-agent-operator/work-order-envelope-v2.mjs",
+      "scripts/multi-agent-operator/provider-unavailable-settlement.mjs",
+      "scripts/multi-agent-operator/provider-assessment-trust-registry.mjs",
+      "scripts/multi-agent-operator/dag-eligible-resolver.mjs",
+      "scripts/multi-agent-operator/cross-provider-routing-review.mjs",
+      "docs/reports/WO-MAO-034-cross-provider-routing-review.md",
+      "tests/multi-agent-provider-unavailable-settlement.test.ts",
+      "tests/multi-agent-cross-provider-routing-review.test.ts",
+    ],
+    contracts: ["consumer-specific-provider-settlement-v2", "cross-provider-routing-review"],
+    allowedActions: governedDeliveryActions,
+    requiredOutputs: ["authenticated-consumer-settlement", "cross-provider-routing-review-result"],
+    requiredValidation: ["consumer-replay-tests", "provider-trust-tests", "routing-review-tests"],
+    mergeMode: "ASSURANCE_GATED",
+  })
+  consumer.dependencyPolicies = [{
+    dependencyWorkOrderId: "WO-MAO-033",
+    satisfaction: "COMPLETE_OR_PROVIDER_UNAVAILABLE_DEFERRED",
+    providerId: "claude-code",
+    assessmentWorkOrderId: "WO-MAO-032",
+  }]
+  const assessmentResult = validateWorkOrderEnvelopeV2(assessment)
+  const subjectResult = validateWorkOrderEnvelopeV2(subject)
+  const consumerResult = validateWorkOrderEnvelopeV2(consumer)
+  const prerequisiteReports = {
+    "WO-MAO-007": "docs/reports/WO-MAO-007-worker-authority-trust-gate-v2.md",
+    "WO-MAO-019": "docs/reports/WO-MAO-019-provider-capability-dispatch-contract.md",
+    "WO-MAO-022": "docs/reports/WO-MAO-022-evidence-ledger-owner-touch-meter.md",
+    "WO-MAO-024": "docs/reports/WO-MAO-024-team-topology-fan-out-fan-in.md",
+    "WO-MAO-025": "docs/reports/WO-MAO-025-isolated-workspace-manager.md",
+    "WO-MAO-028": "docs/reports/WO-MAO-028-scheduler-simulation-model-checking.md",
+    "WO-MAO-031": "docs/reports/WO-MAO-031-codex-builder-assurance-remediation-adapters.md",
+  }
+  const prerequisiteEnvelopes = Object.freeze(Object.entries(prerequisiteReports).map(([workOrderId, reportPath]) => (
+    validateWorkOrderEnvelopeV2(settlementEnvelope(workOrderId, {
+      objective: `Bind completed ${workOrderId} prerequisite evidence into the WO-MAO-034 settlement DAG.`,
+      paths: [reportPath],
+      contracts: [`completed-prerequisite-${workOrderId.toLowerCase()}`],
+      requiredOutputs: ["completed-prerequisite-evidence"],
+      requiredValidation: ["completed-state-reference"],
+    })).envelope
+  )))
+  return Object.freeze({
+    assessmentEnvelope: assessmentResult.envelope,
+    assessmentEnvelopeHash: assessmentResult.contentHash,
+    subjectEnvelope: subjectResult.envelope,
+    subjectEnvelopeHash: subjectResult.contentHash,
+    consumerEnvelope: consumerResult.envelope,
+    consumerEnvelopeHash: consumerResult.contentHash,
+    prerequisiteEnvelopes,
+    sourceAssessmentContentHash: "60917d122e314844e175c9d4e6e60e197a5e4f06bc2b6f2ea73b0fc1e09ed523",
+  })
 }
 
 export const WORK_ORDER_ENVELOPE_V2_OWNER_COUNTER_FIELDS = OWNER_COUNTER_FIELDS

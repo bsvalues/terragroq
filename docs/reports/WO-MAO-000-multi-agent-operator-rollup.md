@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-`WO-MAO-031_REPROVED / WO-MAO-034_BLOCKED_PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED /
+`WO-MAO-031_REPROVED / WO-MAO-034_READY_CANONICAL_SETTLEMENT_VERIFIED /
 WO-MAO-035_WO-MAO-036_INVALIDATED /
 UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
 
@@ -31,8 +31,9 @@ deterministic scheduler simulation and replay behavior in a pure/static harness.
 canonical team plans into opaque host-trusted assignments, bridge-backed messages/cancellation,
 replay-sealed evidence, and quarantined ambiguous side effects while preserving the WO-MAO-029
 `SESSION_ONLY` boundary. WO-MAO-031 is re-proved against the hardened opaque-handle role lifecycle
-contract. WO-MAO-034 now fails closed at the actual consumer-specific settlement gate because the
-embedded production provider-assessment pin registry contains no active trust record. Post-merge
+contract. The exact WO-MAO-034 consumer-specific edge is now authenticated by the immutable
+version-2 provider-assessment registry record and released to `READY`, without completing WO-MAO-034
+or enabling Claude. Post-merge
 assurance still invalidates the historical WO-MAO-035 health/reroute and WO-MAO-036
 provider-conformance evidence; their code and reports remain historical inputs pending ordered
 re-proof after WO-MAO-034 is completed. The affected APIs and CLIs are mechanically fail-closed
@@ -102,8 +103,8 @@ OWNER_ROUTINE_CONTACT_COUNT=0
   assurance findings and records the downstream invalidation/order.
 - `docs/reports/WO-MAO-031-codex-builder-assurance-remediation-adapters.md` — re-proved role lifecycle
   against opaque WO-MAO-030 native assignment handles.
-- `docs/reports/WO-MAO-034-cross-provider-routing-review.md` — blocked at the missing authenticated
-  `WO-MAO-034<-WO-MAO-033` provider-assessment trust pin.
+- `docs/reports/WO-MAO-034-cross-provider-routing-review.md` — canonical
+  `WO-MAO-034<-WO-MAO-033` settlement verified; WO-MAO-034 ready, not complete.
 - `docs/reports/WO-MAO-035-provider-health-reroute.md` — historical evidence, invalidated because
   caller-carried providers/observations and the stateless breaker could manufacture proof.
 - `docs/reports/WO-MAO-036-provider-conformance-suite.md` — historical evidence, invalidated because
@@ -112,14 +113,13 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 ## Next transition
 
 `WO-MAO-001` through `WO-MAO-032` are complete. `WO-MAO-033` is
-`DEFERRED / PROVIDER_UNAVAILABLE` and resumable; WO-MAO-034 is
-`BLOCKED / PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED`; WO-MAO-035, WO-MAO-036, and WO-MAO-037 remain
-pending. WO-MAO-034 requires completed WO-MAO-032 and the exact independently verified settlement
-edge `WO-MAO-034<-WO-MAO-033`, authenticated by a canonical provider-assessment trust pin or
-equivalent immutable evidence-ledger anchor. That settlement cannot satisfy the redundant direct
+`DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The exact independently verified settlement edge
+`WO-MAO-034<-WO-MAO-033` is authenticated by the canonical version-2 provider-assessment record and
+WO-MAO-034 is `READY`, not complete. WO-MAO-035, WO-MAO-036, and WO-MAO-037 remain pending. That
+settlement cannot satisfy the redundant direct
 WO-MAO-033 edges on WO-MAO-035 or WO-MAO-036; those edges require a separately ratified dependency
-correction. The mandatory sequence is WO-MAO-030 -> WO-MAO-031 -> trust-pin settlement gate ->
-WO-MAO-034 -> WO-MAO-035 -> WO-MAO-036 -> Phase 5. The rejected local runtime is not in the eligible
+correction. The mandatory sequence is WO-MAO-030 -> WO-MAO-031 -> verified settlement -> WO-MAO-034
+-> WO-MAO-035 -> WO-MAO-036 -> Phase 5. The rejected local runtime is not in the eligible
 dependency chain.
 
 ## Validation evidence

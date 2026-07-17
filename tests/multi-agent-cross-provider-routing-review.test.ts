@@ -9,6 +9,9 @@ import {
   CrossProviderRoutingReviewError,
   evaluateCrossProviderRoutingReview,
 } from "../scripts/multi-agent-operator/cross-provider-routing-review.mjs"
+import {
+  loadCanonicalWoMao034ProviderUnavailableAssessment,
+} from "../scripts/multi-agent-operator/provider-unavailable-settlement.mjs"
 
 function providers(overrides: Record<string, unknown> = {}) {
   const value = [
@@ -82,9 +85,9 @@ function input(overrides: Record<string, unknown> = {}) {
       reasonCode: "PROVIDER_UNAVAILABLE",
       configuredTrust: {
         registryId: "williamos-provider-assessment-pins",
-        registryVersion: 1,
+        registryVersion: 2,
       },
-      assessment: {},
+      assessment: loadCanonicalWoMao034ProviderUnavailableAssessment(),
     },
     ...overrides,
   }
@@ -101,11 +104,27 @@ function expectWall(callback: () => unknown, code: string) {
 }
 
 describe("WO-MAO-034 cross-provider routing and review", () => {
-  it("fails closed until the consumer-specific unavailable-provider settlement has an authenticated pinned trust record", () => {
-    expectWall(() => evaluateCrossProviderRoutingReview(input()), "CROSS_PROVIDER_SETTLEMENT_WALL")
+  it("authenticates the exact settlement but keeps WO-MAO-034 execution fail-closed pending re-proof", () => {
+    expectWall(() => evaluateCrossProviderRoutingReview(input()), "CROSS_PROVIDER_REPROOF_REQUIRED_WALL")
     expectWall(() => evaluateCrossProviderRoutingReview(input({
       providers: providers({ 0: { secretIsolation: false } }),
     })), "CROSS_PROVIDER_ISOLATION_WALL")
+  })
+
+  it("rejects copied consumer and source bindings even when the rest of the artifact looks canonical", () => {
+    const canonical = loadCanonicalWoMao034ProviderUnavailableAssessment()
+    for (const assessment of [
+      { ...canonical, consumerWorkOrderId: "WO-MAO-035" },
+      { ...canonical, consumerEnvelopeHash: "f".repeat(64) },
+      { ...canonical, sourceAssessmentContentHash: "f".repeat(64) },
+    ]) {
+      expectWall(() => evaluateCrossProviderRoutingReview(input({
+        dependencySettlement: {
+          ...(input().dependencySettlement as Record<string, unknown>),
+          assessment,
+        },
+      })), "CROSS_PROVIDER_SETTLEMENT_WALL")
+    }
   })
 
   it("exposes the typed settlement wall through the CLI", () => {
@@ -115,12 +134,12 @@ describe("WO-MAO-034 cross-provider routing and review", () => {
     fs.writeFileSync(inputPath, JSON.stringify(input()))
     fs.writeFileSync(badPath, JSON.stringify({ ...input(), workOrderId: "WO-MAO-999" }))
 
-    const historical = spawnSync(process.execPath,
+    const readyOnly = spawnSync(process.execPath,
       ["scripts/multi-agent-operator/cross-provider-routing-review-cli.mjs", inputPath], { encoding: "utf8" })
-    expect(historical.status).toBe(2)
-    expect(JSON.parse(historical.stdout)).toMatchObject({
+    expect(readyOnly.status).toBe(2)
+    expect(JSON.parse(readyOnly.stdout)).toMatchObject({
       ok: false,
-      code: "CROSS_PROVIDER_SETTLEMENT_WALL",
+      code: "CROSS_PROVIDER_REPROOF_REQUIRED_WALL",
       dispatchPerformed: false,
       authorityGranted: false,
     })

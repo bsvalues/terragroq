@@ -17,6 +17,7 @@ import {
 } from "../scripts/multi-agent-operator/dag-eligible-resolver.mjs"
 import {
   ProviderUnavailableSettlementError,
+  loadCanonicalWoMao034ProviderUnavailableAssessment,
   providerUnavailableAssessmentContentHash,
   providerTrustBundleContentHash,
   providerTrustRegistryRecordContentHash,
@@ -25,7 +26,10 @@ import {
   verifyPinnedProviderAssessmentTrustBundle,
   verifyProviderUnavailableAssessment,
 } from "../scripts/multi-agent-operator/provider-unavailable-settlement.mjs"
-import { validateWorkOrderEnvelopeV2 } from "../scripts/multi-agent-operator/work-order-envelope-v2.mjs"
+import {
+  createWoMao034ProviderSettlementEnvelopes,
+  validateWorkOrderEnvelopeV2,
+} from "../scripts/multi-agent-operator/work-order-envelope-v2.mjs"
 import { canonicalJson } from "../scripts/multi-agent-operator/authority-events.mjs"
 import {
   clearTestProviderTrustRecords,
@@ -84,32 +88,22 @@ function envelope(workOrderId: string) {
 }
 
 function fixture() {
-  const assessmentEnvelope = envelope("WO-MAO-032")
-  const subjectEnvelope = envelope("WO-MAO-033")
-  const consumerEnvelope = envelope("WO-MAO-034")
-  const binding = {
-    providerId: "claude-code",
-    assessmentWorkOrderId: "WO-MAO-032",
-    subjectWorkOrderId: "WO-MAO-033",
-  }
-  Object.assign(assessmentEnvelope, { providerBinding: { ...binding, role: "ASSESSMENT" } })
-  Object.assign(subjectEnvelope, { providerBinding: { ...binding, role: "SUBJECT" } })
-  consumerEnvelope.dependencies = ["WO-MAO-033"]
-  Object.assign(consumerEnvelope, { dependencyPolicies: [{
-    dependencyWorkOrderId: "WO-MAO-033",
-    satisfaction: "COMPLETE_OR_PROVIDER_UNAVAILABLE_DEFERRED",
-    providerId: "claude-code",
-    assessmentWorkOrderId: "WO-MAO-032",
-  }] })
+  const canonicalEnvelopes = createWoMao034ProviderSettlementEnvelopes()
+  const assessmentEnvelope = structuredClone(canonicalEnvelopes.assessmentEnvelope)
+  const subjectEnvelope = structuredClone(canonicalEnvelopes.subjectEnvelope)
+  const consumerEnvelope = structuredClone(canonicalEnvelopes.consumerEnvelope)
   const claims = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     artifactType: "PROVIDER_AVAILABILITY_ASSESSMENT",
     artifactId: "assessment-wo-mao-032-claude-code",
     providerId: "claude-code",
     assessmentWorkOrderId: "WO-MAO-032",
     subjectWorkOrderId: "WO-MAO-033",
+    consumerWorkOrderId: "WO-MAO-034",
     assessmentEnvelopeHash: validateWorkOrderEnvelopeV2(assessmentEnvelope).contentHash,
     subjectEnvelopeHash: validateWorkOrderEnvelopeV2(subjectEnvelope).contentHash,
+    consumerEnvelopeHash: validateWorkOrderEnvelopeV2(consumerEnvelope).contentHash,
+    sourceAssessmentContentHash: canonicalEnvelopes.sourceAssessmentContentHash,
     result: "UNAVAILABLE",
     completionStatus: "COMPLETE_PROVIDER_ASSESSMENT",
     lifecycleState: "DEFERRED",
@@ -163,8 +157,11 @@ function fixture() {
     providerId: claims.providerId,
     assessmentWorkOrderId: claims.assessmentWorkOrderId,
     subjectWorkOrderId: claims.subjectWorkOrderId,
+    consumerWorkOrderId: claims.consumerWorkOrderId,
     assessmentEnvelopeHash: claims.assessmentEnvelopeHash,
     subjectEnvelopeHash: claims.subjectEnvelopeHash,
+    consumerEnvelopeHash: claims.consumerEnvelopeHash,
+    sourceAssessmentContentHash: claims.sourceAssessmentContentHash,
     status: "ACTIVE",
     issuedAt: "2026-07-01T00:00:00.000Z",
     expiresAt: "2026-08-01T00:00:00.000Z",
@@ -203,6 +200,9 @@ function fixture() {
       providerIds: ["claude-code"],
       assessmentWorkOrderIds: ["WO-MAO-032"],
       subjectWorkOrderIds: ["WO-MAO-033"],
+      consumerWorkOrderIds: ["WO-MAO-034"],
+      consumerEnvelopeHashes: [claims.consumerEnvelopeHash],
+      sourceAssessmentContentHashes: [claims.sourceAssessmentContentHash],
     }],
     ledgerAnchors: [ledgerAnchor],
     statusEvents,
@@ -251,11 +251,21 @@ function fixture() {
       providerUnavailableAssessmentRef: { artifactId: artifact.artifactId, contentHash: artifact.contentHash },
     },
     { workOrderId: "WO-MAO-034", state: "PLANNED", reasonCode: null },
+    ...canonicalEnvelopes.prerequisiteEnvelopes.map(({ workOrderId }) => ({
+      workOrderId,
+      state: "COMPLETE",
+      reasonCode: null,
+    })),
   ]
   const input = {
     schemaVersion: 1,
     artifactType: "DAG_ELIGIBILITY_INPUT",
-    workOrders: [consumerEnvelope, subjectEnvelope, assessmentEnvelope],
+    workOrders: [
+      consumerEnvelope,
+      subjectEnvelope,
+      assessmentEnvelope,
+      ...canonicalEnvelopes.prerequisiteEnvelopes.map((entry) => structuredClone(entry)),
+    ],
     workOrderStates: states,
     providerAssessments: [artifact],
   }
@@ -335,7 +345,7 @@ describe("provider-unavailable dependency settlement", () => {
     expect(result.eligible).toEqual([{
       workOrderId: "WO-MAO-034",
       fanInGate: "ALL",
-      completedDependencies: [],
+      completedDependencies: ["WO-MAO-024", "WO-MAO-031"],
       settledDependencies: [{
         workOrderId: "WO-MAO-033",
         satisfaction: "COMPLETE_OR_PROVIDER_UNAVAILABLE_DEFERRED",
@@ -343,6 +353,9 @@ describe("provider-unavailable dependency settlement", () => {
         assessmentWorkOrderId: "WO-MAO-032",
         assessmentArtifactId: artifact.artifactId,
         assessmentContentHash: artifact.contentHash,
+        consumerWorkOrderId: "WO-MAO-034",
+        consumerEnvelopeHash: artifact.consumerEnvelopeHash,
+        sourceAssessmentContentHash: artifact.sourceAssessmentContentHash,
       }],
     }])
     expect(result.ineligible).toEqual([{
@@ -350,6 +363,41 @@ describe("provider-unavailable dependency settlement", () => {
       reasonCode: "EXPLICITLY_DEFERRED",
       stateReasonCode: "PROVIDER_UNAVAILABLE",
     }])
+  })
+
+  it("rejects consumer-envelope replay and any tampered V2 consumer/source binding", () => {
+    const replay = fixture()
+    const changedConsumer = structuredClone(replay.consumerEnvelope)
+    changedConsumer.objective = `${changedConsumer.objective} replayed`
+    replay.input.workOrders[0] = changedConsumer
+    expectDagWall(replay.input, replay.trust, "ASSESSMENT_IDENTITY_OR_ENVELOPE_HASH_MISMATCH")
+
+    const tampered = fixture()
+    tampered.input.providerAssessments[0] = {
+      ...tampered.artifact,
+      consumerWorkOrderId: "WO-MAO-099",
+    }
+    expectDagWall(tampered.input, tampered.trust, "PROVIDER_SETTLEMENT_HASH_WALL")
+  })
+
+  it("rejects correctly re-signed claims outside pinned consumer and source-assessment scope", () => {
+    for (const mutation of [
+      { consumerWorkOrderId: "WO-MAO-099" },
+      { consumerEnvelopeHash: "d".repeat(64) },
+      { sourceAssessmentContentHash: "e".repeat(64) },
+    ]) {
+      const data = fixture()
+      const claims = { ...data.claims, ...mutation }
+      const artifact = {
+        ...claims,
+        contentHash: providerUnavailableAssessmentContentHash(claims),
+        proof: {
+          ...data.artifact.proof,
+          signature: signProviderUnavailableAssessmentClaims(claims, data.privateKey),
+        },
+      }
+      expect(() => verifyProviderUnavailableAssessment(artifact, data.trust)).toThrow(/WRITER_SCOPE_MISMATCH/)
+    }
   })
 
   it("rejects random signatures, self-asserted writers, computed-hash mismatch, and unknown fields", () => {
@@ -452,17 +500,58 @@ describe("provider-unavailable dependency settlement", () => {
   it("exposes no production root-registration surface and rejects unknown registry references", () => {
     const probe = spawnSync(process.execPath, ["--input-type=module", "-e", [
       'import * as registry from "./scripts/multi-agent-operator/provider-assessment-trust-registry.mjs"',
-      'console.log(JSON.stringify({keys:Object.keys(registry).sort(),metadata:registry.PROVIDER_ASSESSMENT_PIN_REGISTRY_METADATA,record:registry.loadCanonicalProviderTrustRecord("williamos-provider-assessment-pins",1)}))',
+      'console.log(JSON.stringify({keys:Object.keys(registry).sort(),metadata:registry.PROVIDER_ASSESSMENT_PIN_REGISTRY_METADATA,record:registry.loadCanonicalProviderTrustRecord("williamos-provider-assessment-pins",2)}))',
     ].join(";")], { cwd: process.cwd(), encoding: "utf8" })
     expect(probe.status).toBe(0)
     const result = JSON.parse(probe.stdout)
     expect(result.keys).toEqual(["PROVIDER_ASSESSMENT_PIN_REGISTRY_METADATA", "loadCanonicalProviderTrustRecord"])
-    expect(result.metadata).toMatchObject({ activeRecordCount: 0, mutableRegistrationAllowed: false })
-    expect(result.record).toBeNull()
+    expect(result.metadata).toMatchObject({
+      version: 2,
+      activeRecordCount: 1,
+      mutableRegistrationAllowed: false,
+      contentHash: "36e5454ad60f86580ca621beef685d195877a693eef4fb2c22f8e7fb454e5034",
+    })
+    expect(result.record).toMatchObject({
+      registryRecord: {
+        registryId: "williamos-provider-assessment-pins",
+        registryVersion: 2,
+        status: "ACTIVE",
+        immutable: true,
+      },
+      pinnedRegistryRecordContentHash: "8dfb934e0499518dfefe3215ffab3eb4e6fd42d18f0c9417db300eee280e9c11",
+    })
     expect(() => verifyPinnedProviderAssessmentTrustBundle({
       registryId: "caller-minted-root",
       registryVersion: 1,
     })).toThrow(/AUTHENTICATED_PINNED_RECORD_REQUIRED/)
+  })
+
+  it("verifies the immutable production V2 settlement without exposing private key material", () => {
+    const assessment = loadCanonicalWoMao034ProviderUnavailableAssessment()
+    const probe = spawnSync(process.execPath, ["--input-type=module", "-e", [
+      'import * as settlement from "./scripts/multi-agent-operator/provider-unavailable-settlement.mjs"',
+      'const trust=settlement.verifyPinnedProviderAssessmentTrustBundle({registryId:"williamos-provider-assessment-pins",registryVersion:2})',
+      'const assessment=settlement.loadCanonicalWoMao034ProviderUnavailableAssessment()',
+      'console.log(JSON.stringify({keys:Object.keys(settlement).sort(),trust,verified:settlement.verifyProviderUnavailableAssessment(assessment,trust)}))',
+    ].join(";")], { cwd: process.cwd(), encoding: "utf8" })
+    expect(probe.status).toBe(0)
+    const result = JSON.parse(probe.stdout)
+    expect(result.trust).toMatchObject({
+      registryVersion: 2,
+      rootFingerprint: "55d270e3515c50354718835ff57bfb793b6575a03d43bb415eda9f58739a495a",
+      bundleContentHash: "7198e6c96a30f058f2384c98bed692df2c8a25997bede2138f374314eaf22ee1",
+      statusHeadHash: "3f697265d1efc91373251d1f5bea3f847052ac425eb5a22d41fe74b8d86f8ff0",
+    })
+    expect(result.verified).toMatchObject({
+      ok: true,
+      assessment: {
+        artifactId: assessment.artifactId,
+        consumerWorkOrderId: "WO-MAO-034",
+        consumerEnvelopeHash: "c03f2339666105cbe08b51ef32a50000d3b2441103f4420721f216c75667cb03",
+        sourceAssessmentContentHash: "60917d122e314844e175c9d4e6e60e197a5e4f06bc2b6f2ea73b0fc1e09ed523",
+      },
+    })
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE KEY|privateKey|BEGIN PRIVATE/)
   })
 
   it("reloads registry trust for every assessment so stale handles cannot survive expiry or revocation", () => {
@@ -758,14 +847,18 @@ describe("provider-unavailable dependency settlement", () => {
     data.input.workOrderStates.push({ workOrderId: "WO-MAO-035", state: "PLANNED", reasonCode: null })
     const result = resolveDagEligibleSet(data.input, data.trust)
     expect(result.eligible).toEqual([
-      { workOrderId: "WO-MAO-033", fanInGate: "ALL", completedDependencies: [] },
+      {
+        workOrderId: "WO-MAO-033",
+        fanInGate: "ALL",
+        completedDependencies: ["WO-MAO-025", "WO-MAO-028", "WO-MAO-032"],
+      },
       { workOrderId: "WO-MAO-035", fanInGate: "ALL", completedDependencies: [] },
     ])
     expect(result.ineligible).toContainEqual({
       workOrderId: "WO-MAO-034",
       reasonCode: "DEPENDENCY_INCOMPLETE",
       fanInGate: "ALL",
-      completedDependencies: [],
+      completedDependencies: ["WO-MAO-024", "WO-MAO-031"],
       pendingDependencies: ["WO-MAO-033"],
       deferredDependencies: [],
       blockedDependencies: [],

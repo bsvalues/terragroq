@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest"
 import {
   WorkOrderEnvelopeV2Error,
   canonicalWorkOrderEnvelopeV2Json,
+  createWoMao034ProviderSettlementEnvelopes,
   toDispatchEnvelope,
   validateWorkOrderEnvelopeV2,
 } from "../scripts/multi-agent-operator/work-order-envelope-v2.mjs"
@@ -242,5 +243,20 @@ describe("provider-neutral work-order envelope v2", () => {
       detail: "ZERO_REQUIRED",
     })
     fs.rmSync(directory, { recursive: true, force: true })
+  })
+
+  it("constructs the exact WO-MAO-034 settlement DAG packets without synthetic reservations", () => {
+    const packets = createWoMao034ProviderSettlementEnvelopes()
+    expect(packets.assessmentEnvelope.dependencies).toEqual(["WO-MAO-007", "WO-MAO-019", "WO-MAO-022"])
+    expect(packets.subjectEnvelope.dependencies).toEqual(["WO-MAO-025", "WO-MAO-028", "WO-MAO-032"])
+    expect(packets.consumerEnvelope.dependencies).toEqual(["WO-MAO-024", "WO-MAO-031", "WO-MAO-033"])
+    expect(packets.prerequisiteEnvelopes).toHaveLength(7)
+    expect(packets).toMatchObject({
+      assessmentEnvelopeHash: "4f4495e4ca5e0691ba99ac277a74f5c29c594e9f300fd02979fa2eea07628da8",
+      subjectEnvelopeHash: "5311ed8044b3b40a9ea7604cdb77a90d29f2d5562562a7c2988313f76a7226ee",
+      consumerEnvelopeHash: "c03f2339666105cbe08b51ef32a50000d3b2441103f4420721f216c75667cb03",
+      sourceAssessmentContentHash: "60917d122e314844e175c9d4e6e60e197a5e4f06bc2b6f2ea73b0fc1e09ed523",
+    })
+    expect(JSON.stringify(packets)).not.toContain("tmp/wo-mao")
   })
 })

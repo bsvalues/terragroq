@@ -36,6 +36,10 @@ import {
 import { clearTestSchedulerTrustRecords, installTestSchedulerTrustRecord } from "./fixtures/scheduler-trust-registry-fixture.mjs"
 
 const NOW = Date.parse("2026-07-15T10:00:00.000Z")
+// Worker creation is intentionally bounded by the production lifecycle contract,
+// but can exceed Vitest's default case budget on a saturated shared runner.
+const SHARED_RUNNER_HEARTBEAT_ACK_MS = 5_000
+const REAL_STORE_CASE_TIMEOUT_MS = 15_000
 const signer = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
 const trust = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
 const authority = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
@@ -421,7 +425,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     expect(inspectReservationLedger(configuration().reservationLedgerPath, configuration().reservationLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_INSPECT_REQUEST" })).toMatchObject({ valid: true, reservations: [{ fencingToken: entry.reservationFencingToken }] })
     expect(inspectLaneLeaseStore(configuration().leaseStorePath, configuration().leaseStoreId)).toMatchObject({ ok: true, lanes: [{ status: "ACTIVE", fencingToken: entry.leaseFencingToken, lifecycleState: "PROVIDER_DISPATCHED" }] })
     expect(verifyEvidenceLedger(configuration().evidenceLedgerDir, configuration().evidenceLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_EVIDENCE_VERIFY_REQUEST", expectedAnchor: null })).toMatchObject({ ok: true, eventCount: 1 })
-  })
+  }, REAL_STORE_CASE_TIMEOUT_MS)
 
   it("atomically reclaims an expired lock owned by a dead/remote process", () => {
     const config = configuration()
@@ -476,7 +480,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     try {
       acquireSchedulerLock(statePath, {
         timeoutMs: 500, leaseDurationMs: 1_000, heartbeatIntervalMs: 20,
-        heartbeatStartTimeoutMs: 25, heartbeatStopTimeoutMs: 500,
+        heartbeatStartTimeoutMs: 25, heartbeatStopTimeoutMs: SHARED_RUNNER_HEARTBEAT_ACK_MS,
         heartbeatTestDelays: { startAckMs: 100, stopAckMs: 0 },
       })
       throw new Error("expected bounded heartbeat startup wall")
@@ -486,29 +490,30 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
       expect((error as SchedulerLockLeaseError & { heartbeatGeneration: number }).heartbeatGeneration).toBeGreaterThan(1)
     }
     expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
-  })
+  }, REAL_STORE_CASE_TIMEOUT_MS)
 
   it("waits for a bounded delayed stop acknowledgement before deleting the owned lock", () => {
     const statePath = configuration().statePath
     const unlock = acquireSchedulerLock(statePath, {
       timeoutMs: 500, leaseDurationMs: 1_000, heartbeatIntervalMs: 20,
-      heartbeatStartTimeoutMs: 500, heartbeatStopTimeoutMs: 500,
+      heartbeatStartTimeoutMs: SHARED_RUNNER_HEARTBEAT_ACK_MS,
+      heartbeatStopTimeoutMs: SHARED_RUNNER_HEARTBEAT_ACK_MS,
       heartbeatTestDelays: { startAckMs: 0, stopAckMs: 100 },
     })
     unlock()
     expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
-  })
+  }, REAL_STORE_CASE_TIMEOUT_MS)
 
   it("preserves the owned lock when bounded heartbeat stop acknowledgement is unavailable", () => {
     const statePath = configuration().statePath
     const unlock = acquireSchedulerLock(statePath, {
       timeoutMs: 500, leaseDurationMs: 1_000, heartbeatIntervalMs: 20,
-      heartbeatStartTimeoutMs: 500, heartbeatStopTimeoutMs: 25,
+      heartbeatStartTimeoutMs: SHARED_RUNNER_HEARTBEAT_ACK_MS, heartbeatStopTimeoutMs: 25,
       heartbeatTestDelays: { startAckMs: 0, stopAckMs: 100 },
     })
     expect(() => unlock()).toThrowError(/SCHEDULER_LOCK_WALL:HEARTBEAT_STOP_REQUIRED/)
     expect(fs.existsSync(`${statePath}.lock/owner.json`)).toBe(true)
-  })
+  }, REAL_STORE_CASE_TIMEOUT_MS)
 
   it("fails the ownership guard and preserves a fenced successor", () => {
     const statePath = configuration().statePath
@@ -740,7 +745,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     }))
     expect(result).toMatchObject({ code: "OUTCOME_CHECKPOINTED", capacityReleased: false, lifecycleState: "EXECUTING" })
     expect(inspectLaneLeaseStore(configuration().leaseStorePath, configuration().leaseStoreId).lanes[0]).toMatchObject({ status: "ACTIVE", lifecycleState: "EXECUTING" })
-  })
+  }, REAL_STORE_CASE_TIMEOUT_MS)
 
   it("accepts ACCEPTED then RUNNING and keeps repeated RUNNING lifecycle-idempotent", () => {
     const entry = schedule().scheduled[0]

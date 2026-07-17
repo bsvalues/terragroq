@@ -239,6 +239,13 @@ export function evaluateCrossProviderRoutingReview(input) {
   const workOrders = normalizeWorkOrders(input.workOrders)
   const reviewRequests = normalizeReviewRequests(input.reviewRequests)
   const verifiedDependencySettlement = verifyDependencySettlement(input.dependencySettlement)
+  if (verifiedDependencySettlement.ok === true) {
+    wall(
+      "CROSS_PROVIDER_REPROOF_REQUIRED_WALL",
+      "routingReview",
+      "WO_MAO_034_EXECUTION_AND_INDEPENDENT_REVIEW_REQUIRED",
+    )
+  }
   const providerById = new Map(providers.map((provider) => [provider.providerId, provider]))
   const workOrderById = new Map(workOrders.map((workOrder) => [workOrder.workOrderId, workOrder]))
 
