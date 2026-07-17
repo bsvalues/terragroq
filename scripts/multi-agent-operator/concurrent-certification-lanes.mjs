@@ -120,22 +120,44 @@ const PLAN = deepFreeze({
     { provider: "CLAUDE_CODE", reasonCode: "PROVIDER_UNAVAILABLE_WO_MAO_032", sourceWorkOrderId: "WO-MAO-032", selected: false },
   ],
   reservedPaths: [
+    "components/operator/multi-agent-capability-registry.ts",
     "components/operator/multi-agent-concurrent-certification-registry.ts",
+    "components/operator/multi-agent-operator-registry.ts",
+    "docs/governance/active-program-queue.md",
+    "docs/governance/goal-registry.md",
+    "docs/governance/loop-registry.md",
+    "docs/governance/multi-agent-operator-playbook.md",
+    "docs/reports/WO-MAO-000-multi-agent-operator-rollup.md",
     "docs/reports/WO-MAO-055-concurrent-certification-lanes.md",
     "docs/reports/devex-hook-tooling/WO-DEVEX-HOOK-TOOLING-001-evidence-reconciliation.md",
     "docs/reports/release-engineering/WO-RELEASE-001-current-release-evidence-reconciliation.md",
     "scripts/multi-agent-operator/concurrent-certification-lanes-cli.mjs",
     "scripts/multi-agent-operator/concurrent-certification-lanes.mjs",
+    "tests/multi-agent-capability-registry.test.ts",
     "tests/multi-agent-concurrent-certification-lanes.test.ts",
+    "tests/multi-agent-operator-registry.test.ts",
+    "tests/portfolio-operator-surface.test.ts",
+    "tests/portfolio-operator.test.ts",
   ],
   changedPaths: [
+    "components/operator/multi-agent-capability-registry.ts",
     "components/operator/multi-agent-concurrent-certification-registry.ts",
+    "components/operator/multi-agent-operator-registry.ts",
+    "docs/governance/active-program-queue.md",
+    "docs/governance/goal-registry.md",
+    "docs/governance/loop-registry.md",
+    "docs/governance/multi-agent-operator-playbook.md",
+    "docs/reports/WO-MAO-000-multi-agent-operator-rollup.md",
     "docs/reports/WO-MAO-055-concurrent-certification-lanes.md",
     "docs/reports/devex-hook-tooling/WO-DEVEX-HOOK-TOOLING-001-evidence-reconciliation.md",
     "docs/reports/release-engineering/WO-RELEASE-001-current-release-evidence-reconciliation.md",
     "scripts/multi-agent-operator/concurrent-certification-lanes-cli.mjs",
     "scripts/multi-agent-operator/concurrent-certification-lanes.mjs",
+    "tests/multi-agent-capability-registry.test.ts",
     "tests/multi-agent-concurrent-certification-lanes.test.ts",
+    "tests/multi-agent-operator-registry.test.ts",
+    "tests/portfolio-operator-surface.test.ts",
+    "tests/portfolio-operator.test.ts",
   ],
   foreignChanges: [],
   secretScan: { status: "PASS", scanner: "diff-secret-like-value-scan", secretLikeFindings: 0 },
@@ -160,7 +182,7 @@ const PLAN = deepFreeze({
   },
 })
 
-const PLAN_HASH = "c19174545641b5c7e5381990a83639b40dffadf941e78073e27ba572c36f9cf5"
+const PLAN_HASH = "d2f44190ca117bfc9ec34fbbac0fbe73ae656fcd17f835f4f07c0a22906c5e51"
 
 function stringArray(value, field, pattern = ID) {
   if (!Array.isArray(value) || value.length === 0) wall("CONCURRENT_CERTIFICATION_TYPE_WALL", field, "NON_EMPTY_ARRAY_REQUIRED")

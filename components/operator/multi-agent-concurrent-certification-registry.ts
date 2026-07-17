@@ -18,8 +18,8 @@ export type MultiAgentConcurrentCertificationEvidence = {
   builderLaneCount: 2
   fanInProjectionCount: 1
   providerExclusionCount: 1
-  reservedPathCount: 7
-  changedPathCount: 7
+  reservedPathCount: 18
+  changedPathCount: 18
   foreignChangeCount: 0
   secretLikeFindings: 0
   schedulerAdded: false
@@ -51,8 +51,8 @@ export const MULTI_AGENT_CONCURRENT_CERTIFICATION_EVIDENCE = Object.freeze({
   repository: "bsvalues/terragroq",
   baseCommitSha: "af656d442b6ca47fc7f12bd1ac46a7b7ccdd4a13",
   baseTreeHash: "1f12d7e2d8ed87d148f3f68272775f0768b299fb",
-  planContentHash: "c19174545641b5c7e5381990a83639b40dffadf941e78073e27ba572c36f9cf5",
-  resultHash: "f5a7384ad6ed27b57d5d83339528a02289e88f1b3037f49ede9a586c39ac5b5f",
+  planContentHash: "d2f44190ca117bfc9ec34fbbac0fbe73ae656fcd17f835f4f07c0a22906c5e51",
+  resultHash: "baf46e6cd6073255fc5a33ac5955a36924cfe708c6e12c87e292a552f810da49",
   activeProgramGrant: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
   authorityScope: "CONCURRENT_CERTIFICATION_LANE_EXECUTION_STATIC_USEFUL_WORK",
   dependencyWorkOrders: Object.freeze(["WO-MAO-054"] as const),
@@ -61,8 +61,8 @@ export const MULTI_AGENT_CONCURRENT_CERTIFICATION_EVIDENCE = Object.freeze({
   builderLaneCount: 2,
   fanInProjectionCount: 1,
   providerExclusionCount: 1,
-  reservedPathCount: 7,
-  changedPathCount: 7,
+  reservedPathCount: 18,
+  changedPathCount: 18,
   foreignChangeCount: 0,
   secretLikeFindings: 0,
   schedulerAdded: false,
@@ -80,7 +80,7 @@ export const MULTI_AGENT_CONCURRENT_CERTIFICATION_EVIDENCE = Object.freeze({
   completionState: "COMPLETE",
   downstreamWorkOrders: Object.freeze(["WO-MAO-056", "WO-MAO-057"] as const),
   downstreamState: "READY_AFTER_CONCURRENT_CERTIFICATION_LANES",
-  recordContentHash: "6ea76942424ac149536ec81f299477b133d07a7af151cd1fa694ba0ea393350e",
+  recordContentHash: "2c913d5b131da494fc31951b68ba7b0dd79fcf877ee923679833da3af90f49f3",
 } satisfies MultiAgentConcurrentCertificationEvidence)
 
 export function isVerifiedWoMao055ConcurrentCertificationEvidence(
@@ -96,8 +96,8 @@ export function isVerifiedWoMao055ConcurrentCertificationEvidence(
     && record.repository === "bsvalues/terragroq"
     && record.baseCommitSha === "af656d442b6ca47fc7f12bd1ac46a7b7ccdd4a13"
     && record.baseTreeHash === "1f12d7e2d8ed87d148f3f68272775f0768b299fb"
-    && record.planContentHash === "c19174545641b5c7e5381990a83639b40dffadf941e78073e27ba572c36f9cf5"
-    && record.resultHash === "f5a7384ad6ed27b57d5d83339528a02289e88f1b3037f49ede9a586c39ac5b5f"
+    && record.planContentHash === "d2f44190ca117bfc9ec34fbbac0fbe73ae656fcd17f835f4f07c0a22906c5e51"
+    && record.resultHash === "baf46e6cd6073255fc5a33ac5955a36924cfe708c6e12c87e292a552f810da49"
     && record.activeProgramGrant === "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"
     && record.authorityScope === "CONCURRENT_CERTIFICATION_LANE_EXECUTION_STATIC_USEFUL_WORK"
     && JSON.stringify(record.dependencyWorkOrders) === JSON.stringify(["WO-MAO-054"])
@@ -106,8 +106,8 @@ export function isVerifiedWoMao055ConcurrentCertificationEvidence(
     && record.builderLaneCount === 2
     && record.fanInProjectionCount === 1
     && record.providerExclusionCount === 1
-    && record.reservedPathCount === 7
-    && record.changedPathCount === 7
+    && record.reservedPathCount === 18
+    && record.changedPathCount === 18
     && record.foreignChangeCount === 0
     && record.secretLikeFindings === 0
     && record.schedulerAdded === false
@@ -127,5 +127,5 @@ export function isVerifiedWoMao055ConcurrentCertificationEvidence(
     && record.downstreamState === "READY_AFTER_CONCURRENT_CERTIFICATION_LANES"
     && [record.baseCommitSha, record.baseTreeHash].every((value) => SHA_40.test(value))
     && [record.planContentHash, record.resultHash, record.recordContentHash].every((value) => HASH_64.test(value))
-    && record.recordContentHash === "6ea76942424ac149536ec81f299477b133d07a7af151cd1fa694ba0ea393350e"
+    && record.recordContentHash === "2c913d5b131da494fc31951b68ba7b0dd79fcf877ee923679833da3af90f49f3"
 }
