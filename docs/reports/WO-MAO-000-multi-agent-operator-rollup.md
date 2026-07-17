@@ -118,8 +118,8 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The exact independently verified settlement edge
 `WO-MAO-034<-WO-MAO-033` is authenticated by the canonical version-2 provider-assessment record and
 WO-MAO-034 is `COMPLETE`. WO-MAO-035 is `COMPLETE` through the canonical provider-health/reroute
-registry; WO-MAO-036 is `READY`; WO-MAO-037 remains pending. That settlement remains exact and
-cannot be retargeted. A separately ratified graph correction removes only the redundant direct
+registry; WO-MAO-036 is `COMPLETE` through the canonical provider-conformance suite; WO-MAO-037 is
+`READY`. That settlement remains exact and cannot be retargeted. A separately ratified graph correction removes only the redundant direct
 WO-MAO-033 edges from WO-MAO-035/036. WO-MAO-033 remains deferred and resumable. The
 mandatory sequence is WO-MAO-030 -> WO-MAO-031 -> verified settlement -> WO-MAO-034
 -> WO-MAO-035 -> WO-MAO-036 -> Phase 5. The rejected local runtime is not in the eligible

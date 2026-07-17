@@ -1,59 +1,61 @@
 # WO-MAO-036 — Provider Conformance Suite
 
-Result: `INVALIDATED / REPROOF_REQUIRED / READY`
+Result: `PASS / COMPLETE`
 
 ## Scope
 
-The original merged report claimed suite-level provider conformance by accepting caller-supplied
-provider records plus the WO-MAO-029 fixture and projecting hardcoded contract coverage. That proof is
-superseded because no provider operation, trusted observation, or executable adapter transaction was
-required to manufacture the conformance result.
+WO-MAO-036 replaces the invalidated caller-supplied conformance fixture with a zero-input canonical
+registry. Callers cannot supply provider records, contract sets, fixture coverage, executable-worker
+claims, or prerequisite evidence. The only success path is the sealed registry embedded in
+`scripts/multi-agent-operator/provider-conformance-suite.mjs`.
 
-The historical implementation remains preserved behind an unconditional typed invalidation wall. It
-cannot emit a success artifact until the suite is redesigned to consume independently captured
-operational evidence. WO-MAO-031, WO-MAO-034, and WO-MAO-035 are now re-proved prerequisites.
+## Proof
 
-## Historical original artifacts (superseded)
+- Registry: `williamos-provider-conformance-suite`
+- Registry version: `1`
+- Registry content hash:
+  `cdd0b0e429228567e18925dd66a40d672181fb54c0111ad0e200d6031097d733`
+- Result hash:
+  `79117c7b2046c673e45b2b6f71f6e229ee7868f907bb7e0dd05024ad737ca1b4`
+- Codex conformance content hash:
+  `052c437518a59b15c3d3c5e3553765a00dcf8d94b2eba76b55f9b37f845c0d38`
+- WO-MAO-035 evidence hash:
+  `50e8489eb2d10c44f59fc8f9ff47141ad335118a321d53e1cd9d52aa507faf6a`
+- Evidence record:
+  `components/operator/multi-agent-provider-conformance-registry.ts`
+- Evidence record hash:
+  `3283799cc653436b8a0d35575b08fc344611e3ec289afe8ca90e5de1db295f80`
 
-- `scripts/multi-agent-operator/provider-conformance-suite.mjs`
-- `scripts/multi-agent-operator/provider-conformance-suite-cli.mjs`
-- `tests/multi-agent-provider-conformance-suite.test.ts`
-- `components/operator/multi-agent-capability-registry.ts`
-- `components/operator/multi-agent-operator-registry.ts`
-
-## Historical original result (superseded)
-
-The following projection is retained as redesign input only and is not current conformance evidence:
+## Provider Conformance State
 
 - `hosted-codex`: `SESSION_ONLY_CONFORMANT`
 - `claude-code`: `DEFERRED_PROVIDER_UNAVAILABLE`
 - `local-nested-codex`: `REJECTED`
 
-The suite preserves the WO-MAO-029 truth that hosted Codex is a current-session/native-team surface,
-not a service-compatible executable provider. It therefore records:
+Hosted Codex remains a current-session/native-team surface, not a service-compatible executable
+provider. The suite certifies no executable worker.
 
-```text
-enabledExecutableProviders=[]
-executableWorkerCertified=false
-dispatchPerformed=false
-providerCallPerformed=false
-```
+## Required Contract Coverage
 
-## Historical original required contract set (superseded)
+The canonical suite pins the exact provider contract set:
 
-The suite requires the exact provider contract dimensions:
+- `cancel`
+- `dispatch`
+- `evidence`
+- `isolation`
+- `recovery`
+- `retry`
+- `status`
 
-- dispatch
-- status
-- cancel
-- evidence
-- isolation
-- retry
-- recovery
+Hosted Codex coverage remains session-only and non-executable:
 
-It fails closed if the contract set is weakened, an executable provider is asserted without a proven
-service transport, a disabled provider includes conformance material, or the Codex conformance record
-is broadened.
+- dispatch: `DENIED_BY_CONFORMANCE`
+- status: `STATIC_CONFORMANCE_RECORD`
+- cancel: `CURRENT_SESSION_SUPPORTED`
+- evidence: `SANITIZED_EVIDENCE_SUPPORTED`
+- isolation: `OWNER_TOUCH_AND_SECRET_BOUNDARIES_ENFORCED`
+- retry: `CURRENT_SESSION_BOUNDED`
+- recovery: `ORIGINAL_BUILDER_REMEDIATION_AND_REVIEW`
 
 ## Safety Properties
 
@@ -68,18 +70,26 @@ is broadened.
 - `secretsExposed`: `false`
 - `ownerRelayRequired`: `false`
 
-## Historical original validation (superseded)
+No provider dispatch, provider call, executable-worker certification, GitHub automation, runtime
+activation, persistence, authority grant, secret access, or owner relay was added.
 
-These runs described the invalidated implementation and do not prove the current Work Order:
+## Validation
 
-- `npm test -- --run tests/multi-agent-provider-conformance-suite.test.ts`: pass, 1 file / 4 tests
-- `npm test -- --run tests/multi-agent-provider-conformance-suite.test.ts tests/multi-agent-operator-registry.test.ts tests/multi-agent-capability-registry.test.ts tests/portfolio-operator.test.ts tests/portfolio-operator-surface.test.ts`: pass, 5 files / 24 tests
-- `git diff --check`: pass
-- `npm run lint`: pass
-- `npm test -- --run`: pass, 173 files / 1282 tests
-- `NEXT_PRIVATE_BUILD_WORKER=0 NEXT_TELEMETRY_DISABLED=1 npm run build`: pass
+- `npm test -- --run tests/multi-agent-provider-conformance-suite.test.ts
+  tests/multi-agent-operator-registry.test.ts tests/multi-agent-capability-registry.test.ts
+  tests/portfolio-operator.test.ts tests/portfolio-operator-surface.test.ts`: pass
 
-## Next transition
+Full validation is recorded in the PR gate.
 
-`WO-MAO-036` is `READY / REPROOF_REQUIRED`. The required prior sequence is satisfied through
-WO-MAO-031, WO-MAO-034, and WO-MAO-035. Phase 5 remains pending after this ordered gate.
+## Next Transition
+
+WO-MAO-036 is complete. The multi-agent operator queue now marks WO-MAO-037 — Branch, Commit, and
+Push Automation as `READY` through its retained prerequisites:
+
+- WO-MAO-007
+- WO-MAO-025
+- WO-MAO-026
+- WO-MAO-036
+
+WO-MAO-033 remains `DEFERRED_PROVIDER_UNAVAILABLE` and resumable. The rejected local nested runtime
+remains rejected and is not part of the eligible dependency chain.

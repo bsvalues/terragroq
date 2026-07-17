@@ -8,6 +8,10 @@ import {
   isVerifiedWoMao035ProviderHealthEvidence,
 } from "@/components/operator/multi-agent-provider-health-registry"
 import {
+  MULTI_AGENT_PROVIDER_CONFORMANCE_EVIDENCE,
+  isVerifiedWoMao036ProviderConformanceEvidence,
+} from "@/components/operator/multi-agent-provider-conformance-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -213,6 +217,9 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao035ProviderHealthEvidence(MULTI_AGENT_PROVIDER_HEALTH_EVIDENCE)
     ? [workOrderId(35)]
+    : []),
+  ...(isVerifiedWoMao036ProviderConformanceEvidence(MULTI_AGENT_PROVIDER_CONFORMANCE_EVIDENCE)
+    ? [workOrderId(36)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])

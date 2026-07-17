@@ -110,14 +110,13 @@ WO-MAO-023 eligible-set scheduler, the WO-MAO-024 team-topology contract, the bo
 isolated-workspace manager, the WO-MAO-026 reservation-aware handoff contract, the WO-MAO-027 durable
 concurrency/fairness scheduler extension, the WO-MAO-028 pure deterministic scheduler model-check
 harness, provider conformance `WO-MAO-029`, the post-merge-hardened current-session coordinator
-adapter `WO-MAO-030`, re-proved role adapters `WO-MAO-031`, provider assessment `WO-MAO-032`, and
-provider health/reroute `WO-MAO-035` are complete. Historical WO-MAO-036 code/report remains
-present, but its evidence and callable success path remain invalidated pending ordered re-proof.
+adapter `WO-MAO-030`, re-proved role adapters `WO-MAO-031`, provider assessment `WO-MAO-032`,
+provider health/reroute `WO-MAO-035`, and provider conformance `WO-MAO-036` are complete.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; the exact canonical settlement is
 verified and independently assured `WO-MAO-034` is `COMPLETE`.
 The separately ratified graph correction removes only the redundant direct WO-MAO-033 edges from
-WO-MAO-035/036. WO-MAO-035 is now `COMPLETE`, WO-MAO-036 is `READY`, and the selected MAO loop
-resumes at WO-MAO-036 without owner contact.
+WO-MAO-035/036. WO-MAO-035 and WO-MAO-036 are now `COMPLETE`, WO-MAO-037 is `READY`, and the
+selected MAO loop resumes at WO-MAO-037 without owner contact.
 The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
@@ -128,8 +127,8 @@ provider-eligibility, lifecycle, lease, checkpoint, evidence-ledger, owner-meter
 eligible-set scheduling, deterministic team-topology, lease/evidence-bound isolated-workspace lifecycle,
 one-writer handoff, hard-ceiling priority/fairness admission planning, and hardened current-session
 coordinator assignment translation, role lifecycle proof, and zero-input canonical routing/review
-proof. Provider health/reroute is re-proved through a zero-input canonical registry and stateful
-breaker ledger; provider conformance still requires ordered redesign and re-proof at `WO-MAO-036`.
+proof. Provider health/reroute and provider conformance are re-proved through zero-input canonical
+registries with no executable-worker certification.
 The deferred WO-MAO-033 edge into WO-MAO-034 is settled by the exact,
 independently verified `WO-MAO-034<-WO-MAO-033` record bound to completed WO-MAO-032, the canonical
 consumer envelope, and the immutable source-assessment hash. The

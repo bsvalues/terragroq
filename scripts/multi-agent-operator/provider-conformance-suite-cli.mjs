@@ -1,13 +1,10 @@
 #!/usr/bin/env node
-import fs from "node:fs"
 
 import {
   canonicalProviderConformanceSuiteJson,
-  evaluateProviderConformanceSuite,
   ProviderConformanceSuiteError,
+  runCanonicalProviderConformanceSuite,
 } from "./provider-conformance-suite.mjs"
-
-const [inputPath, ...extra] = process.argv.slice(2)
 
 function failure(code, field, detail = undefined) {
   return {
@@ -18,16 +15,21 @@ function failure(code, field, detail = undefined) {
     field,
     detail,
     dispatchPerformed: false,
+    providerCallPerformed: false,
+    executableWorkerCertified: false,
+    runtimeActivationAllowed: false,
     authorityGranted: false,
+    secretsExposed: false,
+    ownerRelayRequired: false,
   }
 }
 
 let result
-if (!inputPath || extra.length > 0) {
-  result = failure("PROVIDER_CONFORMANCE_CLI_USAGE_WALL", "inputPath")
+if (process.argv.length !== 2) {
+  result = failure("PROVIDER_CONFORMANCE_CLI_ARGUMENT_WALL", "arguments")
 } else {
   try {
-    result = evaluateProviderConformanceSuite(JSON.parse(fs.readFileSync(inputPath, "utf8")))
+    result = { ok: true, ...runCanonicalProviderConformanceSuite() }
   } catch (error) {
     if (error instanceof ProviderConformanceSuiteError) {
       result = failure(error.code, error.field, error.detail)
