@@ -375,8 +375,10 @@ enable Claude, grant authority, satisfy an `ANY` gate, or weaken any other depen
 
 Registry version 2 contains one immutable, reviewed WO-MAO-032/033/034 settlement record. It is bound
 to merged source commit `42a63e3e11e5bb1a9c1e9419db3e0f2651b1789c` and the exact WO-MAO-032
-source-assessment hash. It releases only the declared WO-MAO-034 dependency edge to `READY`; WO-MAO-034
-is not complete, WO-MAO-033 stays deferred, Claude stays disabled, and WO-MAO-035/036 stay pending.
+source-assessment hash. It releases only the declared WO-MAO-034 dependency edge to `READY`.
+WO-MAO-034 subsequently completed through a sealed zero-input routing evaluation and independent
+exact-candidate assurance; WO-MAO-033 stays deferred, Claude stays disabled, and WO-MAO-035/036 stay
+pending. The completion evidence does not settle or waive their direct WO-MAO-033 edges.
 
 ### Phase 5 — GitHub delivery engine
 

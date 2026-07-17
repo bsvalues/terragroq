@@ -114,8 +114,10 @@ adapter `WO-MAO-030`, re-proved role adapters `WO-MAO-031`, and provider assessm
 are complete. Historical WO-MAO-035 and WO-MAO-036 code/reports remain present, but their evidence
 and callable success paths remain invalidated pending ordered re-proof.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; the exact canonical settlement is
-verified and `WO-MAO-034` is `READY`; later Work Orders remain pending. The program's canonical
-`SELECTED` state now resolves to WO-MAO-034 without claiming that Work Order complete.
+verified and independently assured `WO-MAO-034` is `COMPLETE`; later Work Orders remain pending.
+No later MAO Work Order is dependency-cleared. The selected MAO program therefore emits the typed
+dependency-graph remediation transition before WO-MAO-035; it does not select unrelated backlog or
+contact the owner.
 The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
@@ -125,9 +127,9 @@ Phase 2 and the first Phase 3 slices prove local envelope, DAG, atomic reservati
 provider-eligibility, lifecycle, lease, checkpoint, evidence-ledger, owner-meter, recoverable
 eligible-set scheduling, deterministic team-topology, lease/evidence-bound isolated-workspace lifecycle,
 one-writer handoff, hard-ceiling priority/fairness admission planning, and hardened current-session
-coordinator assignment translation and role lifecycle proof. Cross-provider routing, provider
-health/reroute, and provider conformance require ordered re-proof at `WO-MAO-034`, `WO-MAO-035`,
-then `WO-MAO-036`. The deferred WO-MAO-033 edge into WO-MAO-034 is now settled by the exact,
+coordinator assignment translation, role lifecycle proof, and zero-input canonical routing/review
+proof. Provider health/reroute and provider conformance require ordered redesign and re-proof at
+`WO-MAO-035`, then `WO-MAO-036`. The deferred WO-MAO-033 edge into WO-MAO-034 is settled by the exact,
 independently verified `WO-MAO-034<-WO-MAO-033` record bound to completed WO-MAO-032, the canonical
 consumer envelope, and the immutable source-assessment hash. The
 redundant direct WO-MAO-033 dependencies on WO-MAO-035/036 remain fail-closed pending separate
