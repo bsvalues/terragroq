@@ -94,7 +94,7 @@ OWNER_RELAY_REQUIRED: false
 
 The separate ratified dependency-graph correction removes only the redundant direct WO-MAO-033
 edges from WO-MAO-035/036. It does not alter this Work Order's settlement or completion evidence.
-WO-MAO-035 is now ready through its retained prerequisites; WO-MAO-036 remains pending.
+WO-MAO-035 later completed through its own provider-health/reroute proof; WO-MAO-036 is now ready.
 
 ## Owner-operation evidence
 

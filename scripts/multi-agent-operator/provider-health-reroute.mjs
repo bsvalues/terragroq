@@ -1,14 +1,5 @@
 import crypto from "node:crypto"
 
-const INPUT_FIELDS = new Set([
-  "schemaVersion",
-  "artifactType",
-  "workOrderId",
-  "providers",
-  "observations",
-  "rerouteRequests",
-  "budgets",
-])
 const PROVIDER_FIELDS = new Set([
   "providerId",
   "status",
@@ -37,8 +28,18 @@ const REROUTE_REQUEST_FIELDS = new Set([
   "fallbackProviders",
 ])
 const BUDGET_FIELDS = new Set(["maxRetryDelayMs", "maxReroutesPerWorkOrder"])
+const BREAKER_FIELDS = new Set([
+  "transitionId",
+  "providerId",
+  "fromState",
+  "toState",
+  "observationId",
+  "reasonCode",
+  "statefulTransition",
+])
 const PROVIDER_STATUS = new Set(["ACTIVE", "UNAVAILABLE", "DISABLED", "QUARANTINED", "BACKOFF"])
 const OBSERVATION_KIND = new Set(["HTTP", "NETWORK", "MALFORMED_OUTPUT", "TIMEOUT", "DETERMINISTIC_FAILURE"])
+const BREAKER_STATES = new Set(["ACTIVE", "BACKOFF", "QUARANTINED", "UNAVAILABLE", "DISABLED"])
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/
 const REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})\/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$/
 
@@ -106,6 +107,22 @@ function canonicalize(value) {
   return value
 }
 
+function canonicalJson(value) {
+  return JSON.stringify(canonicalize(value))
+}
+
+function contentHash(value) {
+  return crypto.createHash("sha256").update(canonicalJson(value)).digest("hex")
+}
+
+function deepCopy(value) {
+  if (Array.isArray(value)) return value.map(deepCopy)
+  if (plainObject(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, deepCopy(child)]))
+  }
+  return value
+}
+
 function deepFreeze(value) {
   if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
     for (const child of Object.values(value)) deepFreeze(child)
@@ -114,9 +131,97 @@ function deepFreeze(value) {
   return value
 }
 
-function contentHash(value) {
-  return crypto.createHash("sha256").update(JSON.stringify(canonicalize(value))).digest("hex")
-}
+const READINESS_BASE_COMMIT_SHA = "726fb9a3d396c1500aed6c60092d9ea4756c6ad5"
+const READINESS_BASE_TREE_HASH = "616ee350063efcedfa7ac7ddf01a6c8df24e8391"
+
+const EMBEDDED_PROVIDER_HEALTH_REGISTRY = deepFreeze({
+  schemaVersion: 1,
+  artifactType: "CANONICAL_PROVIDER_HEALTH_REROUTE_REGISTRY",
+  registryId: "williamos-provider-health-reroute",
+  registryVersion: 1,
+  workOrderId: "WO-MAO-035",
+  repository: "bsvalues/terragroq",
+  readinessBaseCommitSha: READINESS_BASE_COMMIT_SHA,
+  readinessBaseTreeHash: READINESS_BASE_TREE_HASH,
+  providers: [
+    {
+      providerId: "claude-code",
+      status: "UNAVAILABLE",
+      roles: [],
+      repositories: ["bsvalues/terragroq"],
+      secretIsolation: true,
+      workspaceIsolation: true,
+      rawCredentialAccess: false,
+    },
+    {
+      providerId: "hosted-codex",
+      status: "ACTIVE",
+      roles: ["builder", "coordinator", "reviewer"],
+      repositories: ["bsvalues/terragroq"],
+      secretIsolation: true,
+      workspaceIsolation: true,
+      rawCredentialAccess: false,
+    },
+    {
+      providerId: "hosted-codex-secondary",
+      status: "ACTIVE",
+      roles: ["builder", "reviewer"],
+      repositories: ["bsvalues/terragroq"],
+      secretIsolation: true,
+      workspaceIsolation: true,
+      rawCredentialAccess: false,
+    },
+  ],
+  trustedObservations: [
+    {
+      observationId: "obs-wo-mao-035-hosted-codex-rate-limit-v1",
+      providerId: "hosted-codex",
+      kind: "HTTP",
+      httpStatus: 429,
+      reasonCode: "RATE_LIMITED",
+      observedAt: "2026-07-17T08:20:00.000Z",
+      retryAfterMs: 120000,
+      deterministic: false,
+    },
+  ],
+  circuitBreakerLedger: [
+    {
+      transitionId: "breaker-wo-mao-035-hosted-codex-backoff-v1",
+      providerId: "hosted-codex",
+      fromState: "ACTIVE",
+      toState: "BACKOFF",
+      observationId: "obs-wo-mao-035-hosted-codex-rate-limit-v1",
+      reasonCode: "RATE_LIMITED",
+      statefulTransition: true,
+    },
+  ],
+  rerouteRequests: [
+    {
+      requestId: "reroute-wo-mao-035-hosted-codex-to-secondary-v1",
+      workOrderId: "WO-MAO-035",
+      repository: "bsvalues/terragroq",
+      requiredRoles: ["builder", "reviewer"],
+      fromProviderId: "hosted-codex",
+      fallbackProviders: ["hosted-codex-secondary", "claude-code"],
+    },
+  ],
+  budgets: {
+    maxRetryDelayMs: 60000,
+    maxReroutesPerWorkOrder: 1,
+  },
+  safety: {
+    dispatchPerformed: false,
+    providerCallPerformed: false,
+    durablePersistenceClaimed: false,
+    serviceWorkerClaimed: false,
+    runtimeActivationAllowed: false,
+    authorityGranted: false,
+    secretsExposed: false,
+    ownerRelayRequired: false,
+  },
+})
+
+const EMBEDDED_PROVIDER_HEALTH_REGISTRY_CONTENT_HASH = "50033dc24bc289342f6c7dfd447a2a8c62bd7fb4436e18b18127543590956cc3"
 
 function normalizeProviders(value) {
   if (!Array.isArray(value) || value.length === 0) wall("PROVIDER_HEALTH_TYPE_WALL", "providers", "NON_EMPTY_ARRAY_REQUIRED")
@@ -195,6 +300,29 @@ function normalizeBudgets(value) {
   }
 }
 
+function normalizeBreakerLedger(value) {
+  if (!Array.isArray(value) || value.length === 0) wall("PROVIDER_HEALTH_TYPE_WALL", "circuitBreakerLedger", "NON_EMPTY_ARRAY_REQUIRED")
+  const ledger = value.map((raw, index) => {
+    exactFields(raw, BREAKER_FIELDS, `circuitBreakerLedger[${index}]`)
+    if (!BREAKER_STATES.has(raw.fromState)) wall("PROVIDER_HEALTH_BREAKER_WALL", `circuitBreakerLedger[${index}].fromState`, "KNOWN_STATE_REQUIRED")
+    if (!BREAKER_STATES.has(raw.toState)) wall("PROVIDER_HEALTH_BREAKER_WALL", `circuitBreakerLedger[${index}].toState`, "KNOWN_STATE_REQUIRED")
+    if (raw.statefulTransition !== true) wall("PROVIDER_HEALTH_BREAKER_WALL", `circuitBreakerLedger[${index}].statefulTransition`, "TRUE_REQUIRED")
+    return {
+      transitionId: safeIdentifier(raw.transitionId, `circuitBreakerLedger[${index}].transitionId`),
+      providerId: safeIdentifier(raw.providerId, `circuitBreakerLedger[${index}].providerId`),
+      fromState: raw.fromState,
+      toState: raw.toState,
+      observationId: safeIdentifier(raw.observationId, `circuitBreakerLedger[${index}].observationId`),
+      reasonCode: safeIdentifier(raw.reasonCode, `circuitBreakerLedger[${index}].reasonCode`),
+      statefulTransition: true,
+    }
+  }).sort((left, right) => left.transitionId.localeCompare(right.transitionId))
+  if (new Set(ledger.map(({ transitionId }) => transitionId)).size !== ledger.length) {
+    wall("PROVIDER_HEALTH_DUPLICATE_WALL", "circuitBreakerLedger")
+  }
+  return ledger
+}
+
 function classifyObservation(observation, budgets) {
   if (observation.kind === "HTTP" && [401, 403].includes(observation.httpStatus)) {
     return { state: "QUARANTINED", reasonCode: "AUTHORIZATION_WALL", retryAfterMs: null, rerouteAllowed: true }
@@ -231,23 +359,25 @@ function providerSupports(provider, request) {
     && request.requiredRoles.every((role) => provider.roles.includes(role))
 }
 
-export function evaluateProviderHealthReroute(input) {
+export function evaluateProviderHealthReroute() {
   wall(
-    "PROVIDER_HEALTH_REROUTE_INVALIDATED_PENDING_REPROOF",
+    "PROVIDER_HEALTH_HOST_TRUST_WALL",
     "providerHealth",
-    "WO_MAO_031_THEN_WO_MAO_034_THEN_WO_MAO_035_REPROOF_REQUIRED",
+    "CALLER_SUPPLIED_PROVIDER_HEALTH_INPUT_REJECTED_USE_CANONICAL_REGISTRY",
   )
-  exactFields(input, INPUT_FIELDS, "providerHealth")
-  if (input.schemaVersion !== 1) wall("PROVIDER_HEALTH_INPUT_WALL", "schemaVersion", "1_REQUIRED")
-  if (input.artifactType !== "PROVIDER_HEALTH_REROUTE_INPUT") {
-    wall("PROVIDER_HEALTH_INPUT_WALL", "artifactType", "PROVIDER_HEALTH_REROUTE_INPUT_REQUIRED")
+}
+
+function evaluateTrustedProviderHealthReroute(registry) {
+  if (contentHash(registry) !== EMBEDDED_PROVIDER_HEALTH_REGISTRY_CONTENT_HASH) {
+    wall("PROVIDER_HEALTH_REGISTRY_INTEGRITY_WALL", "providerHealthRegistry", "CANONICAL_HASH_REQUIRED")
   }
-  if (input.workOrderId !== "WO-MAO-035") wall("PROVIDER_HEALTH_INPUT_WALL", "workOrderId", "WO-MAO-035_REQUIRED")
-  const providers = normalizeProviders(input.providers)
-  const observations = normalizeObservations(input.observations)
-  const rerouteRequests = normalizeRerouteRequests(input.rerouteRequests)
-  const budgets = normalizeBudgets(input.budgets)
+  const providers = normalizeProviders(registry.providers)
+  const observations = normalizeObservations(registry.trustedObservations)
+  const rerouteRequests = normalizeRerouteRequests(registry.rerouteRequests)
+  const budgets = normalizeBudgets(registry.budgets)
+  const breakerLedger = normalizeBreakerLedger(registry.circuitBreakerLedger)
   const providerById = new Map(providers.map((provider) => [provider.providerId, provider]))
+  const observationById = new Map(observations.map((observation) => [observation.observationId, observation]))
   for (const observation of observations) {
     if (!providerById.has(observation.providerId)) wall("PROVIDER_HEALTH_OBSERVATION_WALL", observation.observationId, "KNOWN_PROVIDER_REQUIRED")
   }
@@ -279,6 +409,16 @@ export function evaluateProviderHealthReroute(input) {
   })
 
   const healthByProvider = new Map(health.map((entry) => [entry.providerId, entry]))
+  for (const transition of breakerLedger) {
+    const observation = observationById.get(transition.observationId)
+    if (!providerById.has(transition.providerId)) wall("PROVIDER_HEALTH_BREAKER_WALL", transition.transitionId, "KNOWN_PROVIDER_REQUIRED")
+    if (!observation || observation.providerId !== transition.providerId) wall("PROVIDER_HEALTH_BREAKER_WALL", transition.transitionId, "MATCHING_OBSERVATION_REQUIRED")
+    const current = healthByProvider.get(transition.providerId)
+    if (current.state !== transition.toState || current.reasonCode !== transition.reasonCode) {
+      wall("PROVIDER_HEALTH_BREAKER_WALL", transition.transitionId, "STATEFUL_TRANSITION_MUST_MATCH_HEALTH")
+    }
+  }
+
   const reroutes = rerouteRequests.map((request) => {
     if (!providerById.has(request.fromProviderId)) wall("PROVIDER_HEALTH_REROUTE_WALL", request.requestId, "FROM_PROVIDER_REQUIRED")
     const selectedFallbacks = request.fallbackProviders
@@ -307,11 +447,21 @@ export function evaluateProviderHealthReroute(input) {
     artifactType: "PROVIDER_HEALTH_REROUTE_RESULT",
     workOrderId: "WO-MAO-035",
     status: "PROVIDER_HEALTH_REROUTE_PROVEN",
+    registryId: registry.registryId,
+    registryVersion: registry.registryVersion,
+    registryContentHash: EMBEDDED_PROVIDER_HEALTH_REGISTRY_CONTENT_HASH,
+    readinessBaseCommitSha: registry.readinessBaseCommitSha,
+    readinessBaseTreeHash: registry.readinessBaseTreeHash,
     health,
     reroutes,
-    circuitBreakers: health
-      .filter(({ state }) => ["BACKOFF", "QUARANTINED"].includes(state))
-      .map(({ providerId, state, reasonCode, retryAfterMs }) => ({ providerId, state, reasonCode, retryAfterMs })),
+    circuitBreakers: breakerLedger.map(({ transitionId, providerId, fromState, toState, observationId, reasonCode }) => ({
+      transitionId,
+      providerId,
+      fromState,
+      toState,
+      observationId,
+      reasonCode,
+    })),
     deferredProviders: health
       .filter(({ state }) => state === "UNAVAILABLE")
       .map(({ providerId, reasonCode }) => ({ providerId, reasonCode })),
@@ -327,6 +477,41 @@ export function evaluateProviderHealthReroute(input) {
   return deepFreeze({ ...output, resultHash: contentHash(output) })
 }
 
+export function loadCanonicalProviderHealthRerouteRegistry() {
+  return deepFreeze(deepCopy(EMBEDDED_PROVIDER_HEALTH_REGISTRY))
+}
+
+export function providerHealthRerouteRegistryContentHash(value = EMBEDDED_PROVIDER_HEALTH_REGISTRY) {
+  return contentHash(value)
+}
+
+export function verifyCanonicalProviderHealthRerouteRegistry(value = EMBEDDED_PROVIDER_HEALTH_REGISTRY) {
+  if (providerHealthRerouteRegistryContentHash(value) !== EMBEDDED_PROVIDER_HEALTH_REGISTRY_CONTENT_HASH) {
+    wall("PROVIDER_HEALTH_REGISTRY_INTEGRITY_WALL", "providerHealthRegistry", "CANONICAL_HASH_REQUIRED")
+  }
+  return deepFreeze({
+    ok: true,
+    code: "PROVIDER_HEALTH_REGISTRY_VERIFIED",
+    contentHash: EMBEDDED_PROVIDER_HEALTH_REGISTRY_CONTENT_HASH,
+    dispatchPerformed: false,
+    providerCallPerformed: false,
+    authorityGranted: false,
+  })
+}
+
+export function runCanonicalProviderHealthReroute() {
+  verifyCanonicalProviderHealthRerouteRegistry(EMBEDDED_PROVIDER_HEALTH_REGISTRY)
+  return evaluateTrustedProviderHealthReroute(EMBEDDED_PROVIDER_HEALTH_REGISTRY)
+}
+
+export const PROVIDER_HEALTH_REROUTE_REGISTRY_METADATA = Object.freeze({
+  registryId: EMBEDDED_PROVIDER_HEALTH_REGISTRY.registryId,
+  registryVersion: EMBEDDED_PROVIDER_HEALTH_REGISTRY.registryVersion,
+  readinessBaseCommitSha: EMBEDDED_PROVIDER_HEALTH_REGISTRY.readinessBaseCommitSha,
+  readinessBaseTreeHash: EMBEDDED_PROVIDER_HEALTH_REGISTRY.readinessBaseTreeHash,
+  contentHash: EMBEDDED_PROVIDER_HEALTH_REGISTRY_CONTENT_HASH,
+})
+
 export function canonicalProviderHealthRerouteJson(value) {
-  return JSON.stringify(canonicalize(value))
+  return canonicalJson(value)
 }

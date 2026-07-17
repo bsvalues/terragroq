@@ -1,6 +1,6 @@
 # WO-MAO-036 — Provider Conformance Suite
 
-Result: `INVALIDATED / REPROOF_REQUIRED / PENDING`
+Result: `INVALIDATED / REPROOF_REQUIRED / READY`
 
 ## Scope
 
@@ -10,8 +10,8 @@ superseded because no provider operation, trusted observation, or executable ada
 required to manufacture the conformance result.
 
 The historical implementation remains preserved behind an unconditional typed invalidation wall. It
-cannot emit a success artifact until WO-MAO-031, WO-MAO-034, and WO-MAO-035 are re-proved and the
-suite is redesigned to consume independently captured operational evidence.
+cannot emit a success artifact until the suite is redesigned to consume independently captured
+operational evidence. WO-MAO-031, WO-MAO-034, and WO-MAO-035 are now re-proved prerequisites.
 
 ## Historical original artifacts (superseded)
 
@@ -81,5 +81,5 @@ These runs described the invalidated implementation and do not prove the current
 
 ## Next transition
 
-`WO-MAO-036` is `PENDING / REPROOF_REQUIRED`. The required sequence is WO-MAO-031, WO-MAO-034,
-WO-MAO-035, then WO-MAO-036. Phase 5 remains pending after that ordered chain.
+`WO-MAO-036` is `READY / REPROOF_REQUIRED`. The required prior sequence is satisfied through
+WO-MAO-031, WO-MAO-034, and WO-MAO-035. Phase 5 remains pending after this ordered gate.

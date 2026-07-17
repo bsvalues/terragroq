@@ -1,13 +1,10 @@
 #!/usr/bin/env node
-import fs from "node:fs"
 
 import {
   canonicalProviderHealthRerouteJson,
-  evaluateProviderHealthReroute,
   ProviderHealthRerouteError,
+  runCanonicalProviderHealthReroute,
 } from "./provider-health-reroute.mjs"
-
-const [inputPath, ...extra] = process.argv.slice(2)
 
 function failure(code, field, detail = undefined) {
   return {
@@ -18,16 +15,20 @@ function failure(code, field, detail = undefined) {
     field,
     detail,
     dispatchPerformed: false,
+    providerCallPerformed: false,
+    runtimeActivationAllowed: false,
     authorityGranted: false,
+    secretsExposed: false,
+    ownerRelayRequired: false,
   }
 }
 
 let result
-if (!inputPath || extra.length > 0) {
-  result = failure("PROVIDER_HEALTH_CLI_USAGE_WALL", "inputPath")
+if (process.argv.length !== 2) {
+  result = failure("PROVIDER_HEALTH_CLI_ARGUMENT_WALL", "arguments")
 } else {
   try {
-    result = evaluateProviderHealthReroute(JSON.parse(fs.readFileSync(inputPath, "utf8")))
+    result = { ok: true, ...runCanonicalProviderHealthReroute() }
   } catch (error) {
     if (error instanceof ProviderHealthRerouteError) {
       result = failure(error.code, error.field, error.detail)

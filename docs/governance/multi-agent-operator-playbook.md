@@ -380,8 +380,8 @@ WO-MAO-034 subsequently completed through a sealed zero-input routing evaluation
 exact-candidate assurance; WO-MAO-033 stays deferred, Claude stays disabled, and WO-MAO-035/036 stay
 outside that settlement. The separately ratified graph correction removes the redundant direct
 WO-MAO-033 edges from WO-MAO-035/036 without completing WO-MAO-033, changing the settlement, or
-weakening any retained dependency. With WO-MAO-034 complete, WO-MAO-035 is `READY`; WO-MAO-036
-remains pending on WO-MAO-035.
+weakening any retained dependency. With WO-MAO-035 re-proved through a sealed provider-health
+registry, WO-MAO-036 is `READY` and remains the next ordered re-proof gate.
 
 ### Phase 5 — GitHub delivery engine
 

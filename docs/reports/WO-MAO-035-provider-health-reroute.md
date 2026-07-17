@@ -1,38 +1,49 @@
 # WO-MAO-035 — Provider Health, Circuit Breakers, and Reroute
 
-Result: `INVALIDATED / REPROOF_REQUIRED / READY`
+Result: `PASS / COMPLETE`
 
 ## Scope
 
-The original merged report claimed a static provider-health evaluator that classified caller-supplied
-failure observations, projected circuit-breaker/backoff state, and selected fallback providers. That
-proof is superseded: caller-invented provider records, stale observations, and stateless breaker input
-could manufacture a passing result without a host observation or durable state transition.
+WO-MAO-035 replaces the invalidated historical provider-health fixture with a zero-input canonical
+registry. Callers cannot supply provider records, observations, breaker state, reroute requests, or
+budgets. The only success path is the sealed local registry embedded in
+`scripts/multi-agent-operator/provider-health-reroute.mjs`.
 
-The historical implementation remains preserved behind an unconditional typed invalidation wall. It
-cannot emit a success artifact until WO-MAO-031 and WO-MAO-034 are re-proved and WO-MAO-035 is
-redesigned around trusted observations and stateful breaker transitions.
+## Proof
 
-## Historical original artifacts (superseded)
+- Registry: `williamos-provider-health-reroute`
+- Registry version: `1`
+- Registry content hash:
+  `50033dc24bc289342f6c7dfd447a2a8c62bd7fb4436e18b18127543590956cc3`
+- Result hash:
+  `678ddad3816fdbc8e9e6646906b4b1938147acc3629db9af34b65c644c5d8ca5`
+- Evidence record:
+  `components/operator/multi-agent-provider-health-registry.ts`
+- Evidence record hash:
+  `50e8489eb2d10c44f59fc8f9ff47141ad335118a321d53e1cd9d52aa507faf6a`
 
-- `scripts/multi-agent-operator/provider-health-reroute.mjs`
-- `scripts/multi-agent-operator/provider-health-reroute-cli.mjs`
-- `tests/multi-agent-provider-health-reroute.test.ts`
-- `components/operator/multi-agent-capability-registry.ts`
-- `components/operator/multi-agent-operator-registry.ts`
+## Provider State
 
-## Historical original classification rules (superseded)
+- `hosted-codex`: `BACKOFF / RATE_LIMITED`
+- `hosted-codex-secondary`: `ACTIVE / HEALTHY`
+- `claude-code`: `UNAVAILABLE / PROVIDER_UNAVAILABLE`
 
-The following rules are retained as redesign input only and are not current completion evidence:
+The model selects `hosted-codex-secondary` as the bounded static fallback for WO-MAO-035. It does
+not treat unavailable Claude as a fallback while the provider remains unavailable.
 
-- `401` / `403` -> `QUARANTINED` with `AUTHORIZATION_WALL`
-- `429` -> `BACKOFF` with bounded `RATE_LIMITED` retry delay
-- `5xx` -> `BACKOFF` with `PROVIDER_5XX`
-- network failures -> `BACKOFF` with `NETWORK_WALL`
-- timeouts -> `BACKOFF` with `TIMEOUT`
-- malformed output -> `QUARANTINED` with `MALFORMED_OUTPUT`
-- deterministic failures -> `QUARANTINED` with no reroute permission
-- provider-unavailable lanes remain `UNAVAILABLE` / `PROVIDER_UNAVAILABLE`
+## Circuit Breaker
+
+The canonical registry records a stateful breaker transition:
+
+- Transition: `breaker-wo-mao-035-hosted-codex-backoff-v1`
+- Provider: `hosted-codex`
+- From: `ACTIVE`
+- To: `BACKOFF`
+- Observation: `obs-wo-mao-035-hosted-codex-rate-limit-v1`
+- Reason: `RATE_LIMITED`
+
+The evaluator verifies that the breaker transition matches the trusted observation-derived health
+state. Registry mutations fail the integrity wall before any success artifact can be emitted.
 
 ## Safety Properties
 
@@ -45,30 +56,29 @@ The following rules are retained as redesign input only and are not current comp
 - `secretsExposed`: `false`
 - `ownerRelayRequired`: `false`
 
-The evaluator fails closed if provider isolation is false, raw credential access is true, an
-observation references an unknown provider, input fields are unknown or missing, or provider identity
-formats are unsafe.
+No provider call, GitHub automation, runtime activation, persistence, authority grant, secret access,
+or owner relay was added.
 
-## Provider State
+## Validation
 
-`claude-code` remains `UNAVAILABLE / PROVIDER_UNAVAILABLE` and resumably deferred. The static reroute
-model does not treat Claude as a fallback while unavailable. Healthy hosted Codex fallback lanes may be
-selected only when repository scope, required roles, provider health, and reroute budget allow it.
+- `npm test -- --run tests/multi-agent-provider-health-reroute.test.ts
+  tests/multi-agent-operator-registry.test.ts tests/multi-agent-capability-registry.test.ts
+  tests/portfolio-operator.test.ts tests/portfolio-operator-surface.test.ts`: pass
 
-## Historical original validation (superseded)
+Full validation is recorded in the PR gate.
 
-These runs described the invalidated implementation and do not prove the current Work Order:
+## Next Transition
 
-- `npm test -- --run tests/multi-agent-provider-health-reroute.test.ts`: pass, 1 file / 5 tests
-- `npm test -- --run tests/multi-agent-provider-health-reroute.test.ts tests/multi-agent-operator-registry.test.ts tests/multi-agent-capability-registry.test.ts tests/portfolio-operator.test.ts tests/portfolio-operator-surface.test.ts`: pass, 5 files / 25 tests
-- `git diff --check`: pass
-- `npm run lint`: pass
-- `npm test -- --run`: pass, 172 files / 1278 tests
-- `NEXT_PRIVATE_BUILD_WORKER=0 NEXT_TELEMETRY_DISABLED=1 npm run build`: pass
+WO-MAO-035 is complete. The multi-agent operator queue now marks WO-MAO-036 — Provider Conformance
+Suite as `READY` through its retained prerequisites:
 
-## Next transition
+- WO-MAO-028
+- WO-MAO-029
+- WO-MAO-030
+- WO-MAO-031
+- WO-MAO-032
+- WO-MAO-034
+- WO-MAO-035
 
-The narrow ratified graph correction removed only the redundant direct WO-MAO-033 edge after
-WO-MAO-034 completed. `WO-MAO-035` is now `READY / REPROOF_REQUIRED` through its retained
-prerequisites, without a settlement or waiver. WO-MAO-033 remains deferred and resumable;
-WO-MAO-036 and Phase 5 remain pending.
+WO-MAO-033 remains `DEFERRED_PROVIDER_UNAVAILABLE` and resumable. No settlement or waiver is
+generalized beyond the already completed WO-MAO-034 gate.
