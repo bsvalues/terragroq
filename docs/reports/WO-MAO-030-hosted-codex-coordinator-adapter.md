@@ -105,13 +105,22 @@ artifact path confinement, provider binding, shared-coordinator multi-lane occup
 live signed authority revocation before bridge/replay/lookup paths, authority-fence equivocation,
 production-empty status registry behavior, and production-CLI failure.
 
+Multi-repository authority is evaluated from the normalized V2 envelope as the complete exact
+repository-by-action matrix, including declared repositories with no reserved path; one signed grant
+must cover every pair, while a grant may be a strict superset. Multi-repository execution is not
+claimed. Plans declaring more than one repository typed-wall before assignment preparation because
+the preventive trust and provider-evidence artifacts do not yet carry repository-qualified path
+attribution. Identical relative paths and case-variant logical repository identities remain contained
+by that wall rather than being treated as proven-safe execution.
+
 Validation:
 
-- focused Vitest: `1 file / 46 tests`, PASS;
-- latest-main focused adapter/role/routing/health/conformance/state/portfolio suites:
-  `9 files / 75 tests`, PASS;
-- latest-main repository-wide Vitest: `173 files / 1,308 tests`, PASS;
-- latest-main ESLint, Node syntax, secret-pattern sweep, and `git diff --check`: PASS;
+- focused Vitest: `1 file / 61 tests`, PASS;
+- current-branch focused adapter/role/routing/health/conformance/state/portfolio suites:
+  `9 files / 90 tests`, PASS;
+- current-branch authoritative repository-wide Vitest: `173 files / 1,323 tests`, PASS;
+- prior latest-main repository-wide Vitest: `173 files / 1,308 tests`, PASS;
+- current-branch ESLint, Node syntax, secret-pattern sweep, and `git diff --check`: PASS;
 - latest-main Next.js production build: PASS.
 
 ## Next transition

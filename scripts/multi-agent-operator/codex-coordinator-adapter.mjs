@@ -201,6 +201,27 @@ function pathsFor(envelope) {
   return [...envelope.reservations.paths.map(({ path }) => path)].sort()
 }
 
+function authorityRequestMatrix(envelope, artifacts) {
+  if (!artifacts) wall("HOSTED_CODEX_AUTHORITY_WALL", envelope.workOrderId, "SIGNED_ACTIVE_GRANT_REQUIRED")
+  const repositories = [...envelope.repositories]
+  if (envelope.reservations.paths.some(({ repository }) => !repositories.includes(repository))) {
+    wall("HOSTED_CODEX_AUTHORITY_WALL", envelope.workOrderId, "RESERVATION_REPOSITORY_SCOPE_MISMATCH")
+  }
+  return repositories.flatMap((repository) => envelope.allowedActions.map((action) => ({
+    subjectType: artifacts.grant?.subject?.type,
+    subjectId: artifacts.grant?.subject?.id,
+    programId: envelope.programId,
+    goalId: envelope.goalId,
+    loopId: envelope.loopId,
+    workOrderId: envelope.workOrderId,
+    decisionId: artifacts.grant?.authorityDecisionId,
+    repository,
+    riskClass: envelope.riskClass,
+    action,
+    mergeMode: envelope.mergeMode,
+  })))
+}
+
 function normalizeCoordinatorSession(raw, expectedWorkerId) {
   exactFields(raw, SESSION_REFERENCE_FIELDS, "coordinatorHostSessionProofReference")
   const workerId = text(raw.workerId, "coordinatorHostSessionProofReference.workerId")
@@ -311,7 +332,7 @@ function normalizeAuthorityProofs(value) {
   return byWorkOrder
 }
 
-function verifyLaneAuthority(envelope, artifacts) {
+function verifyLaneAuthority(envelope, artifacts, requests) {
   if (!artifacts) wall("HOSTED_CODEX_AUTHORITY_WALL", envelope.workOrderId, "SIGNED_ACTIVE_GRANT_REQUIRED")
   const grantId = artifacts.grant?.grantId
   if (envelope.programActivationGrantRef !== null) {
@@ -328,25 +349,13 @@ function verifyLaneAuthority(envelope, artifacts) {
     "envelope.grantStatusEventRefs",
   )
   let result
-  for (const action of envelope.allowedActions) {
+  for (const request of requests) {
     try {
       result = validateOwnerAuthorityArtifacts({
         ...artifacts,
         counters: authorityCounters(),
         now: new Date(),
-        request: {
-          subjectType: artifacts.grant?.subject?.type,
-          subjectId: artifacts.grant?.subject?.id,
-          programId: envelope.programId,
-          goalId: envelope.goalId,
-          loopId: envelope.loopId,
-          workOrderId: envelope.workOrderId,
-          decisionId: artifacts.grant?.authorityDecisionId,
-          repository: envelope.repositories[0],
-          riskClass: envelope.riskClass,
-          action,
-          mergeMode: envelope.mergeMode,
-        },
+        request,
       })
     } catch (error) {
       if (!(error instanceof AuthorityAssertionError)) throw error
@@ -363,7 +372,7 @@ function verifyLaneAuthority(envelope, artifacts) {
   }
 }
 
-function createAuthorityStatusBinding(envelope, artifacts) {
+function createAuthorityStatusBinding(envelope, artifacts, requests) {
   const eventHashes = artifacts.events.map(({ contentHash }) => contentHash)
   const grantId = artifacts.grant.grantId
   const authorityDecisionId = artifacts.grant.authorityDecisionId
@@ -386,19 +395,7 @@ function createAuthorityStatusBinding(envelope, artifacts) {
     trustedOwnerKeyFingerprint: artifacts.trustedOwnerKeyFingerprint,
     trustIdentityHash: authorityTrustIdentityHash(artifacts.trustedOwners),
     grantExpiresAt: Date.parse(artifacts.grant.expiresAt),
-    requests: envelope.allowedActions.map((action) => ({
-      subjectType: artifacts.grant.subject.type,
-      subjectId: artifacts.grant.subject.id,
-      programId: envelope.programId,
-      goalId: envelope.goalId,
-      loopId: envelope.loopId,
-      workOrderId: envelope.workOrderId,
-      decisionId: authorityDecisionId,
-      repository: envelope.repositories[0],
-      riskClass: envelope.riskClass,
-      action,
-      mergeMode: envelope.mergeMode,
-    })),
+    requests: deepFreeze(copy(requests)),
     lastFencingToken: 0,
     lastRecordContentHash: null,
     registryVersion: 0,
@@ -654,14 +651,22 @@ export function compileHostedCodexCoordinatorAdapter(input) {
   )
 
   for (const lane of readyLanes) {
-    const envelope = input.topologyInput.dagInput.workOrders.find(({ workOrderId }) => workOrderId === lane.workOrderId)
-    if (!envelope) wall("HOSTED_CODEX_TOPOLOGY_WALL", lane.workOrderId, "CANONICAL_V2_ENVELOPE_REQUIRED")
-    const authority = verifyLaneAuthority(envelope, authorityProofs.get(lane.workOrderId))
+    const rawEnvelope = input.topologyInput.dagInput.workOrders.find(({ workOrderId }) => workOrderId === lane.workOrderId)
+    if (!rawEnvelope) wall("HOSTED_CODEX_TOPOLOGY_WALL", lane.workOrderId, "CANONICAL_V2_ENVELOPE_REQUIRED")
+    const envelope = normalizeWorkOrderEnvelopeV2(rawEnvelope)
+    const artifacts = authorityProofs.get(lane.workOrderId)
+    const authorityRequests = authorityRequestMatrix(envelope, artifacts)
+    const authority = verifyLaneAuthority(envelope, artifacts, authorityRequests)
+    const authorityStatus = createAuthorityStatusBinding(envelope, artifacts, authorityRequests)
+    if (envelope.repositories.length !== 1) {
+      wall(
+        "HOSTED_CODEX_MULTI_REPOSITORY_WALL",
+        envelope.workOrderId,
+        "REPOSITORY_QUALIFIED_EVIDENCE_REQUIRED",
+      )
+    }
     authorityByWorkOrder.set(lane.workOrderId, authority)
-    authorityStatusByWorkOrder.set(
-      lane.workOrderId,
-      createAuthorityStatusBinding(envelope, authorityProofs.get(lane.workOrderId)),
-    )
+    authorityStatusByWorkOrder.set(lane.workOrderId, authorityStatus)
     let coordinatorCoordination
     try {
       coordinatorCoordination = evaluateCodexSessionCoordination({

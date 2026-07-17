@@ -12,10 +12,6 @@ function detached(value) {
   return deepFreeze(structuredClone(value))
 }
 
-function latestFencingToken(records) {
-  return records.length === 0 ? 0 : records.at(-1).fencingToken
-}
-
 export function installTestHostedCodexAuthorityStatusChain(chain) {
   const installed = structuredClone(chain)
   CHAINS.set(installed.recordId, installed)
@@ -24,8 +20,10 @@ export function installTestHostedCodexAuthorityStatusChain(chain) {
 export function advanceTestHostedCodexAuthorityStatusChain(recordId, record, evaluationTime) {
   const current = CHAINS.get(recordId)
   if (current === undefined) throw new Error(`UNKNOWN_TEST_AUTHORITY_STATUS_CHAIN:${recordId}`)
+  const fence = record.fencingToken
   current.records.push(structuredClone(record))
   current.evaluationTime = evaluationTime
+  current.latestFencingToken = fence
 }
 
 export function removeTestHostedCodexAuthorityStatusChain(recordId) {
@@ -39,12 +37,13 @@ export function clearTestHostedCodexAuthorityStatusRegistry() {
 export function loadCanonicalHostedCodexAuthorityStatusChain(recordId, afterFencingToken = 0) {
   const chain = CHAINS.get(recordId)
   if (chain === undefined) return null
+  const headFence = chain.latestFencingToken
   return detached({
-    registryId: HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_METADATA.registryId,
+    registryId: chain.registryId,
     registryVersion: chain.registryVersion,
     evaluationTime: chain.evaluationTime,
     recordId: chain.recordId,
-    latestFencingToken: latestFencingToken(chain.records),
+    latestFencingToken: headFence,
     latestRecordContentHash: chain.records.at(-1)?.recordContentHash ?? null,
     records: chain.records.filter((record) => record.fencingToken > afterFencingToken),
   })

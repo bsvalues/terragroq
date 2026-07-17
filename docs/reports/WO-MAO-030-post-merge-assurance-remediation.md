@@ -104,6 +104,18 @@ WO-MAO-034 re-review/re-proof, WO-MAO-035 re-proof, WO-MAO-036 re-proof, then Ph
 - Every operation, committed replay, and ambiguous lookup reloads a production-empty immutable
   host-backed authority-status chain. Exact signed ACTIVE chains advance a private monotonic fence;
   signed revocation latches terminally before any bridge call, lookup, observation, or cached replay.
+- Authority requests are derived only from the normalized V2 envelope and cover the complete exact
+  repository-by-action matrix, including declared repositories without reservations. The same matrix
+  is retained privately for live revalidation, and a scope-superset grant remains valid.
+- Multi-repository execution is deliberately not claimed. Once the complete authority matrix passes,
+  a plan declaring more than one repository typed-walls before assignment preparation because the
+  preventive trust/provider evidence contract lacks repository-qualified artifact attribution.
+  Identical relative paths and case-variant logical repository identities remain contained by this
+  wall pending an end-to-end repository-qualified evidence contract.
+- The authority-status registry fixture preserves installed registry identity, version, and declared
+  fencing head while deriving the content-hash head from the immutable last record, matching the
+  production loader. Substituted identities, fence heads ahead of or behind the record chain, accepted
+  fence rollback, registry-version rollback, and equal-fence equivocation are attacked fail-closed.
 
 ## Canonical files
 
@@ -131,10 +143,11 @@ or unattended-runtime certification.
 
 ## Validation
 
-- latest-main reconciliation focused adapter/role/routing/health/conformance/state/portfolio suites:
-  `9 files / 75 tests`, PASS;
-- latest-main repository-wide Vitest: `173 files / 1,308 tests`, PASS;
-- latest-main ESLint: PASS with no warnings or errors;
+- current-branch focused adapter/role/routing/health/conformance/state/portfolio suites:
+  `9 files / 90 tests`, PASS;
+- current-branch authoritative repository-wide Vitest: `173 files / 1,323 tests`, PASS;
+- prior latest-main repository-wide Vitest: `173 files / 1,308 tests`, PASS;
+- current-branch ESLint, Node syntax, secret-pattern sweep, and `git diff --check`: PASS;
 - latest-main Next.js production build: PASS;
 - prior remediation-branch canonical adapter suite: `1 file / 25 tests`, PASS;
 - prior remediation-branch repository-wide Vitest: `171 files / 1,282 tests`, PASS;

@@ -272,7 +272,11 @@ function topologyInput() {
   }
 }
 
-function authorityArtifacts(includeContinuation = false, workOrderId = "WO-MAO-030") {
+function authorityArtifacts(
+  includeContinuation = false,
+  workOrderId = "WO-MAO-030",
+  repositories = ["bsvalues/terragroq"],
+) {
   const suffix = workOrderId === "WO-MAO-030" ? "mao-030" : workOrderId.toLowerCase()
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519")
   const fingerprint = crypto.createHash("sha256").update(publicKey.export({ type: "spki", format: "der" })).digest("hex")
@@ -298,7 +302,7 @@ function authorityArtifacts(includeContinuation = false, workOrderId = "WO-MAO-0
     subject: { type: "PROGRAM", id: PROGRAM },
     scope: {
       programIds: [PROGRAM], goalIds: [GOAL], loopIds: [LOOP], workOrderIds: [workOrderId],
-      decisionIds: [`decision-${suffix}`], repositories: ["bsvalues/terragroq"], riskClasses: ["R1"],
+      decisionIds: [`decision-${suffix}`], repositories, riskClasses: ["R1"],
       actions: ["READ_REPOSITORY", "RUN_VALIDATION", "WRITE_RESERVED_PATHS"], mergeModes: ["NO_MERGE"],
     },
     issuedAt: iso(-3_600_000),
@@ -421,6 +425,7 @@ function installAuthorityStatus(artifacts: ReturnType<typeof authorityArtifacts>
     evaluationTime: iso(0),
     recordId: record.recordId,
     latestFencingToken: 1,
+    latestRecordContentHash: record.recordContentHash,
     records: [record],
   })
   return record
@@ -509,6 +514,9 @@ function input(
     laneId?: string
     authority?: ReturnType<typeof authorityArtifacts>
     grantStatusEventRefs?: string[]
+    repositories?: string[]
+    reservationRepositories?: string[]
+    sameRelativeReservationPath?: boolean
   } = {},
 ) {
   const topology = topologyInput()
@@ -521,9 +529,29 @@ function input(
     target.grantStatusEventRefs = [...options.grantStatusEventRefs]
     topology.lanes[0].envelope.grantStatusEventRefs = [...options.grantStatusEventRefs]
   }
+  if (options.repositories) {
+    target.repositories = [...options.repositories]
+    target.baseRefs = options.repositories.map((repository) => ({
+      repository,
+      ref: "refs/heads/main",
+      commitSha: "35de2eb8517697abc0539fa8b1cfc686aba26263",
+    }))
+    target.reservations.paths = (options.reservationRepositories ?? options.repositories).map((repository, index) => ({
+      repository,
+      path: options.sameRelativeReservationPath
+        ? "scripts/multi-agent-operator/shared-relative-path.mjs"
+        : index === 0
+        ? "scripts/multi-agent-operator/codex-coordinator-adapter.mjs"
+        : `scripts/multi-agent-operator/repository-scope-${index}.mjs`,
+    }))
+    topology.lanes[0].envelope = dispatchEnvelope(target)
+  }
   const envelopeContentHash = validateDispatchEnvelope(topology.lanes[0].envelope).contentHash
   for (const role of ["coordinator", "builder", "reviewer"] as const) {
-    installTestHostedCodexTrustRecord(trustEvidence(role, envelopeContentHash, { laneId: target.laneId }))
+    installTestHostedCodexTrustRecord(trustEvidence(role, envelopeContentHash, {
+      laneId: target.laneId,
+      allowedPaths: target.reservations.paths.map(({ path }) => path),
+    }))
   }
   const authority = options.authority ?? authorityArtifacts()
   installAuthorityStatus(authority, "WO-MAO-030")
@@ -678,6 +706,71 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
     const value = input()
     value.authorityProofs[0].artifacts.grant.scope.actions = ["READ_REPOSITORY"]
     expectWall(() => compileHostedCodexCoordinatorAdapter(value), "HOSTED_CODEX_AUTHORITY_WALL")
+
+    const nullGrant = input()
+    nullGrant.authorityProofs[0].artifacts.grant = null as never
+    expectWall(() => compileHostedCodexCoordinatorAdapter(nullGrant), "HOSTED_CODEX_AUTHORITY_WALL")
+  })
+
+  it.each([
+    [["bsvalues/terragroq", "bsvalues/second-repository"]],
+    [["bsvalues/second-repository", "bsvalues/terragroq"]],
+  ])("rejects first-repository-only authority for multi-repository order %j", (repositories) => {
+    expectWall(() => compileHostedCodexCoordinatorAdapter(input({}, { repositories })), "HOSTED_CODEX_AUTHORITY_WALL")
+  })
+
+  it.each([
+    [["bsvalues/terragroq", "bsvalues/second-repository"]],
+    [["bsvalues/second-repository", "bsvalues/terragroq"]],
+  ])("validates every exact repository then contains multi-repository execution for order %j", (repositories) => {
+    const authority = authorityArtifacts(false, "WO-MAO-030", repositories)
+    expectWall(() => compileHostedCodexCoordinatorAdapter(input({}, {
+      repositories,
+      authority,
+    })), "HOSTED_CODEX_MULTI_REPOSITORY_WALL")
+    expect(bridgeCalls.spawn).toBe(0)
+  })
+
+  it("allows a grant repository superset for a single-repository envelope", () => {
+    const authority = authorityArtifacts(false, "WO-MAO-030", [
+      "bsvalues/terragroq",
+      "bsvalues/unused-repository",
+    ])
+    expect(compileHostedCodexCoordinatorAdapter(input({}, { authority })).assignments).toHaveLength(3)
+  })
+
+  it("validates declared repositories even when no reservation uses them", () => {
+    const repositories = ["bsvalues/terragroq", "bsvalues/second-repository"]
+    expectWall(() => compileHostedCodexCoordinatorAdapter(input({}, {
+      repositories,
+      reservationRepositories: [repositories[0]],
+    })), "HOSTED_CODEX_AUTHORITY_WALL")
+  })
+
+  it("contains identical relative paths until trust evidence is repository-qualified", () => {
+    const repositories = ["bsvalues/terragroq", "bsvalues/second-repository"]
+    const authority = authorityArtifacts(false, "WO-MAO-030", repositories)
+    const value = input({}, {
+      repositories,
+      authority,
+      sameRelativeReservationPath: true,
+    })
+    const envelopeHash = validateDispatchEnvelope(value.topologyInput.lanes[0].envelope).contentHash
+    for (const role of ["coordinator", "builder", "reviewer"] as const) {
+      installTestHostedCodexTrustRecord(trustEvidence(role, envelopeHash, {
+        allowedPaths: ["scripts/multi-agent-operator/shared-relative-path.mjs"],
+      }))
+    }
+    expectWall(() => compileHostedCodexCoordinatorAdapter(value), "HOSTED_CODEX_MULTI_REPOSITORY_WALL")
+  })
+
+  it("contains case-variant repository identities without claiming logical deduplication", () => {
+    const repositories = ["bsvalues/terragroq", "BSVALUES/TerraGroq"]
+    const authority = authorityArtifacts(false, "WO-MAO-030", repositories)
+    expectWall(() => compileHostedCodexCoordinatorAdapter(input({}, {
+      repositories,
+      authority,
+    })), "HOSTED_CODEX_MULTI_REPOSITORY_WALL")
   })
 
   it.each(["start", "send", "cancel", "observe", "committed-replay", "ambiguous-lookup"] as const)(
@@ -794,6 +887,141 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
     expect(bridgeCalls.spawn).toBe(0)
   })
 
+  it("preserves registry identity and rejects a substituted registry before spawn", () => {
+    const value = input()
+    const original = value.authorityProofs[0].artifacts
+    const initial = AUTHORITY_INITIAL_RECORDS.get(original)!
+    const plan = compileHostedCodexCoordinatorAdapter(value)
+    const builder = assignment(plan, "builder")
+    installTestHostedCodexAuthorityStatusChain({
+      registryId: "substituted-authority-status-registry",
+      registryVersion: 1,
+      evaluationTime: iso(0),
+      recordId: initial.recordId,
+      latestFencingToken: 1,
+      latestRecordContentHash: initial.recordContentHash,
+      records: [initial],
+    })
+    expectWall(() => startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-with-substituted-authority-registry",
+    }), "HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_WALL")
+    expect(bridgeCalls.spawn).toBe(0)
+  })
+
+  it.each([
+    ["ahead", 2],
+    ["behind", 0],
+  ] as const)("rejects a declared authority head fence %s of its records", (_direction, latestFencingToken) => {
+    const value = input()
+    const original = value.authorityProofs[0].artifacts
+    const initial = AUTHORITY_INITIAL_RECORDS.get(original)!
+    const plan = compileHostedCodexCoordinatorAdapter(value)
+    const builder = assignment(plan, "builder")
+    installTestHostedCodexAuthorityStatusChain({
+      registryId: "hosted-codex-authority-status-registry-v1",
+      registryVersion: 1,
+      evaluationTime: iso(0),
+      recordId: initial.recordId,
+      latestFencingToken,
+      latestRecordContentHash: initial.recordContentHash,
+      records: [initial],
+    })
+    expectWall(() => startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: `spawn-with-${_direction}-authority-fence`,
+    }), "HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_WALL")
+    expect(bridgeCalls.spawn).toBe(0)
+  })
+
+  it("derives the authority head hash from the immutable last record", () => {
+    const value = input()
+    const original = value.authorityProofs[0].artifacts
+    const initial = AUTHORITY_INITIAL_RECORDS.get(original)!
+    const plan = compileHostedCodexCoordinatorAdapter(value)
+    const builder = assignment(plan, "builder")
+    installTestHostedCodexAuthorityStatusChain({
+      registryId: "hosted-codex-authority-status-registry-v1",
+      registryVersion: 1,
+      evaluationTime: iso(0),
+      recordId: initial.recordId,
+      latestFencingToken: 1,
+      latestRecordContentHash: "a".repeat(64),
+      records: [initial],
+    })
+    expect(startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-with-derived-authority-head-hash",
+    })).toMatchObject({ nativeAssignmentExecuted: true })
+  })
+
+  it("rejects authority fence rollback after accepting a live record", () => {
+    const value = input()
+    const original = value.authorityProofs[0].artifacts
+    const initial = AUTHORITY_INITIAL_RECORDS.get(original)!
+    const plan = compileHostedCodexCoordinatorAdapter(value)
+    const builder = assignment(plan, "builder")
+    startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-before-authority-fence-rollback",
+    })
+    installTestHostedCodexAuthorityStatusChain({
+      registryId: "hosted-codex-authority-status-registry-v1",
+      registryVersion: 1,
+      evaluationTime: iso(0),
+      recordId: initial.recordId,
+      latestFencingToken: 0,
+      latestRecordContentHash: initial.recordContentHash,
+      records: [initial],
+    })
+    expectWall(() => createHostedCodexNativeMessage(plan, {
+      assignmentHandle: builder.handle,
+      direction: "TO_ASSIGNMENT",
+      messageType: "STATUS",
+      summary: "Fence rollback must fail closed.",
+      idempotencyKey: "send-after-authority-fence-rollback",
+    }), "HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_WALL")
+    expect(bridgeCalls.send).toBe(0)
+  })
+
+  it("rejects authority registry-version rollback after accepting a live record", () => {
+    const value = input()
+    const original = value.authorityProofs[0].artifacts
+    const initial = AUTHORITY_INITIAL_RECORDS.get(original)!
+    installTestHostedCodexAuthorityStatusChain({
+      registryId: "hosted-codex-authority-status-registry-v1",
+      registryVersion: 2,
+      evaluationTime: iso(0),
+      recordId: initial.recordId,
+      latestFencingToken: 1,
+      latestRecordContentHash: initial.recordContentHash,
+      records: [initial],
+    })
+    const plan = compileHostedCodexCoordinatorAdapter(value)
+    const builder = assignment(plan, "builder")
+    startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-before-authority-registry-version-rollback",
+    })
+    installTestHostedCodexAuthorityStatusChain({
+      registryId: "hosted-codex-authority-status-registry-v1",
+      registryVersion: 1,
+      evaluationTime: iso(0),
+      recordId: initial.recordId,
+      latestFencingToken: 1,
+      latestRecordContentHash: initial.recordContentHash,
+      records: [initial],
+    })
+    expectWall(() => createHostedCodexNativeMessage(plan, {
+      assignmentHandle: builder.handle,
+      direction: "TO_ASSIGNMENT",
+      messageType: "STATUS",
+      summary: "Registry version rollback must fail closed.",
+      idempotencyKey: "send-after-authority-registry-version-rollback",
+    }), "HOSTED_CODEX_AUTHORITY_STATUS_REGISTRY_WALL")
+    expect(bridgeCalls.send).toBe(0)
+  })
+
   it("rejects equal-fence equivocation before any later bridge call", () => {
     const value = input()
     const original = value.authorityProofs[0].artifacts
@@ -837,6 +1065,7 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
       evaluationTime: afterGrantExpiry.toISOString(),
       recordId: initial.recordId,
       latestFencingToken: 1,
+      latestRecordContentHash: initial.recordContentHash,
       records: [initial],
     })
     expectWall(() => createHostedCodexNativeMessage(plan, {
@@ -886,6 +1115,7 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
       evaluationTime: iso(0),
       recordId: initial.recordId,
       latestFencingToken: 2,
+      latestRecordContentHash: activeSecondFence.recordContentHash,
       records: [initial, activeSecondFence],
     })
     expectWall(operation, "HOSTED_CODEX_AUTHORITY_REVOKED_TERMINAL_WALL")
@@ -917,7 +1147,7 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
     expect(bridgeCalls.spawn).toBe(0)
   })
 
-  it.each(["authorityStatusRecordId", "authorityRegistryVersion", "fencingToken"])(
+  it.each(["authorityStatusRecordId", "authorityRegistryVersion", "fencingToken", "authorityRepository"])(
     "rejects caller authority-status selector %s",
     (field) => {
       expectWall(() => compileHostedCodexCoordinatorAdapter(input({ [field]: "caller-selected" })), "HOSTED_CODEX_UNKNOWN_FIELD_WALL")
