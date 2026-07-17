@@ -308,6 +308,21 @@ describe("multi-agent executable capability inventory", () => {
         "No command runner, background worker, runtime activation, credential access, authority minting, production write, or owner relay",
       ]),
     })
+    expect(capability("bounded-merge-controller-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_BOUNDED_MERGE_CONTROLLER_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/bounded-merge-controller.mjs",
+      authorityGrantRefs: ["PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"],
+      trustGateRef: "WO-MAO-007",
+      restrictions: expect.arrayContaining([
+        "Zero-input control-plane merge eligibility model only; no merge is performed by the model",
+        "Branch-protection bypass, stale-head merge, failing-check merge, and security or authority thread dismissal remain denied",
+        "Merge eligibility requires active authority, fresh head, green required checks, and zero unresolved review threads",
+        "WO-MAO-041 is complete; WO-MAO-042 is released to READY through retained prerequisites",
+        "No command runner, background worker, runtime activation, credential access, authority minting, production write, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
