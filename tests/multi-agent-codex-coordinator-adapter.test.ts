@@ -533,6 +533,7 @@ function input(
     repositories?: string[]
     reservationRepositories?: string[]
     sameRelativeReservationPath?: boolean
+    retryBudget?: { maxAttempts: number, backoffSeconds: number }
   } = {},
 ) {
   const topology = topologyInput()
@@ -544,6 +545,10 @@ function input(
   if (options.grantStatusEventRefs) {
     target.grantStatusEventRefs = [...options.grantStatusEventRefs]
     topology.lanes[0].envelope.grantStatusEventRefs = [...options.grantStatusEventRefs]
+  }
+  if (options.retryBudget) {
+    target.retryBudget = { ...options.retryBudget }
+    topology.lanes[0].envelope.retryBudget = { ...options.retryBudget }
   }
   if (options.repositories) {
     target.repositories = [...options.repositories]
@@ -2449,11 +2454,29 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
     expect(bridgeCalls).toEqual(committedCounts)
   })
 
-  it.each(["spawn", "send"] as const)(
-    "reconciles a malformed post-effect %s acknowledgement through the real role lifecycle without duplication",
-    (malformedOperation) => {
+  it.each([
+    ["spawn", 2, "RESOLVE"], ["send", 2, "RESOLVE"],
+    ["spawn", 1, "RESOLVE"], ["send", 1, "RESOLVE"],
+    ["spawn", 2, "PERSIST"], ["send", 2, "PERSIST"],
+  ] as const)(
+    "contains a malformed post-effect %s acknowledgement with role retry budget %i in %s mode",
+    (malformedOperation, maximumAttempts, reconciliationMode) => {
       let malformed = true
+      const cancelledAssignments: string[] = []
       installBridge({
+        cancel(request: Record<string, unknown>) {
+          bridgeCalls.cancel += 1
+          cancelledAssignments.push(request.assignmentId as string)
+          const result = {
+            schemaVersion: 1, artifactType: "HOSTED_CODEX_NATIVE_CANCEL_RESULT",
+            bridgeId: "bridge-mao-030", assignmentId: request.assignmentId,
+            nativeWorkerId: request.nativeWorkerId, reasonCode: request.reasonCode,
+            status: "CANCELLED", cancellationPerformed: true, cancelAcknowledged: true,
+            authorityGranted: false,
+          }
+          bridgeResults.cancel.set(request.idempotencyKey as string, result)
+          return result
+        },
         ...(malformedOperation === "spawn" ? {
           spawn(request: Record<string, unknown>) {
             bridgeCalls.spawn += 1
@@ -2490,10 +2513,22 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
             return committed
           },
         } : {}),
+        ...(reconciliationMode === "PERSIST" && malformedOperation === "spawn" ? {
+          lookupSpawn() {
+            bridgeCalls.lookupSpawn += 1
+            throw new Error("spawn outcome unavailable")
+          },
+        } : {}),
+        ...(reconciliationMode === "PERSIST" && malformedOperation === "send" ? {
+          lookupSend() {
+            bridgeCalls.lookupSend += 1
+            throw new Error("send outcome unavailable")
+          },
+        } : {}),
       })
       const plan = compileHostedCodexCoordinatorAdapter(input({
-        adapterRunId: `run-malformed-role-${malformedOperation}`,
-      }))
+        adapterRunId: `run-malformed-role-${malformedOperation}-${maximumAttempts}-${reconciliationMode.toLowerCase()}`,
+      }, { retryBudget: { maxAttempts: maximumAttempts, backoffSeconds: 0 } }))
       const builder = assignment(plan, "builder")
       const reviewer = assignment(plan, "reviewer")
       const ids = {
@@ -2525,7 +2560,7 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
         schemaVersion: 2, artifactType: "CODEX_ROLE_LIFECYCLE_REQUEST",
         adapterId: "hosted-codex-role-lifecycle-v2", plan,
         builderAssignmentHandle: builder.handle, reviewerAssignmentHandle: reviewer.handle,
-        idempotencyNamespace: `malformed-role-${malformedOperation}`, observationIds: ids,
+        idempotencyNamespace: `malformed-role-${malformedOperation}-${maximumAttempts}-${reconciliationMode.toLowerCase()}`, observationIds: ids,
         messageSummaries: {
           buildDirective: "Execute the exact reserved build task.",
           buildResultNotice: "The build result is ready for independent observation.",
@@ -2547,12 +2582,50 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
         })
       }
       const effectsAfterAmbiguity = bridgeCalls[malformedOperation]
-      const result = adaptCodexRoleLifecycle(request)
-      expect(result).toMatchObject({ status: "ROLE_LIFECYCLE_PROVEN", retry: { attemptsUsed: 2 } })
-      expect(bridgeCalls[malformedOperation]).toBe(malformedOperation === "spawn" ? 2 : 7)
+      if (reconciliationMode === "PERSIST") {
+        const expectRoleWall = (code: string, detail: string) => {
+          try {
+            adaptCodexRoleLifecycle(request)
+            throw new Error("expected persistent ambiguity wall")
+          } catch (error) {
+            expect(error).toBeInstanceOf(CodexRoleAdapterError)
+            expect(error).toMatchObject({ code, detail })
+          }
+        }
+        expectRoleWall("CODEX_ROLE_COORDINATOR_WALL", "HOSTED_CODEX_BRIDGE_WALL:HOST_SIDE_EFFECT_RECONCILIATION_PENDING")
+        expectRoleWall("CODEX_ROLE_QUARANTINE_WALL", "AMBIGUOUS_EFFECT_RECONCILIATION_REQUIRED")
+        expectRoleWall("CODEX_ROLE_QUARANTINE_WALL", "AMBIGUOUS_EFFECT_CLEANUP_RETRY_BUDGET_EXHAUSTED")
+        const terminalCounts = { ...bridgeCalls }
+        expectRoleWall("CODEX_ROLE_QUARANTINE_WALL", "AMBIGUOUS_EFFECT_CLEANUP_RETRY_BUDGET_EXHAUSTED")
+        expect(bridgeCalls).toEqual(terminalCounts)
+        expect(bridgeCalls[malformedOperation]).toBe(1)
+        expect(bridgeCalls.cancel).toBe(malformedOperation === "spawn" ? 0 : 1)
+        expect(cancelledAssignments).not.toContain(builder.item.assignmentId)
+        if (malformedOperation === "send") {
+          expect(cancelledAssignments).toEqual([reviewer.item.assignmentId])
+        }
+      } else if (maximumAttempts === 2) {
+        const result = adaptCodexRoleLifecycle(request)
+        expect(result).toMatchObject({ status: "ROLE_LIFECYCLE_PROVEN", retry: { attemptsUsed: 2 } })
+        expect(bridgeCalls[malformedOperation]).toBe(malformedOperation === "spawn" ? 2 : 7)
+      } else {
+        try {
+          adaptCodexRoleLifecycle(request)
+          throw new Error("expected last-attempt containment")
+        } catch (error) {
+          expect(error).toBeInstanceOf(CodexRoleAdapterError)
+          expect(error).toMatchObject({
+            code: "CODEX_ROLE_RETRY_BUDGET_WALL",
+            detail: "LIFECYCLE_RETRY_BUDGET_EXHAUSTED",
+          })
+        }
+        expect(bridgeCalls[malformedOperation]).toBe(1)
+        expect(bridgeCalls.cancel).toBe(malformedOperation === "spawn" ? 1 : 2)
+        expect(cancelledAssignments).toContain(builder.item.assignmentId)
+      }
       expect(effectsAfterAmbiguity).toBe(1)
       const lookup = `lookup${malformedOperation[0].toUpperCase()}${malformedOperation.slice(1)}` as keyof typeof bridgeCalls
-      expect(bridgeCalls[lookup]).toBe(1)
+      expect(bridgeCalls[lookup]).toBe(reconciliationMode === "PERSIST" ? 3 : 1)
     },
   )
 

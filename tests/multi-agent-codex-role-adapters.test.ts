@@ -98,10 +98,40 @@ vi.mock("../scripts/multi-agent-operator/codex-coordinator-adapter.mjs", () => {
     },
     startHostedCodexNativeAssignment(plan: object, request: any) {
       const { state, binding, runtime } = ensure(plan, request.assignmentHandle)
+      const operation = `START:${binding.assignment.assignmentId}`
+      const ambiguous = state.sideEffectTransactions.get(request.idempotencyKey)
+      if (ambiguous?.status === "AMBIGUOUS") {
+        state.effects.push({ type: "SPAWN_LOOKUP", assignmentId: binding.assignment.assignmentId, key: request.idempotencyKey })
+        if (ambiguous.mode === "PERSISTENT") {
+          wall("HOSTED_CODEX_BRIDGE_WALL", "start", "HOST_SIDE_EFFECT_RECONCILIATION_PENDING")
+        }
+        runtime.state = "ACTIVE"
+        runtime.nativeWorkerDigest = ambiguous.result.nativeWorkerDigest
+        runtime.nativeBindingDigest = ambiguous.nativeBindingDigest
+        ambiguous.status = "COMMITTED"
+        state.idempotency.set(request.idempotencyKey, { operation, result: ambiguous.result })
+        return ambiguous.result
+      }
       if (binding.assignment.role === "reviewer" && state.failReviewerStart) {
         wall("HOSTED_CODEX_BRIDGE_WALL", "start", "HOST_SPAWN_REJECTED")
       }
-      return idempotent(state, request.idempotencyKey, `START:${binding.assignment.assignmentId}`, () => {
+      if (state.spawnAmbiguity && binding.assignment.role === state.spawnAmbiguity.role) {
+        const nativeWorkerDigest = digest({ nativeWorkerId: `native-${binding.assignment.workerId}` })
+        const nativeBindingDigest = digest({ assignmentId: binding.assignment.assignmentId, nativeWorkerId: `native-${binding.assignment.workerId}` })
+        const result = Object.freeze({
+          assignmentId: binding.assignment.assignmentId,
+          nativeWorkerDigest,
+          nativeAssignmentExecuted: true,
+          authorityGranted: false,
+        })
+        runtime.state = "SPAWN_AMBIGUOUS"
+        state.sideEffectTransactions.set(request.idempotencyKey, {
+          status: "AMBIGUOUS", mode: state.spawnAmbiguity.mode, result, nativeBindingDigest,
+        })
+        state.effects.push({ type: "SPAWN_ATTEMPT", assignmentId: binding.assignment.assignmentId, key: request.idempotencyKey })
+        wall("HOSTED_CODEX_BRIDGE_WALL", "start", "HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS")
+      }
+      return idempotent(state, request.idempotencyKey, operation, () => {
         if (runtime.state !== "PREPARED") wall("HOSTED_CODEX_ASSIGNMENT_WALL", "start", "PREPARED_ASSIGNMENT_REQUIRED")
         runtime.state = "ACTIVE"
         runtime.nativeWorkerDigest = digest({ nativeWorkerId: `native-${binding.assignment.workerId}` })
@@ -123,6 +153,17 @@ vi.mock("../scripts/multi-agent-operator/codex-coordinator-adapter.mjs", () => {
         if (prior.operation !== operation) wall("HOSTED_CODEX_REPLAY_WALL", "idempotencyKey", "CONFLICTING_REPLAY")
         return prior.result
       }
+      const ambiguous = state.sideEffectTransactions.get(request.idempotencyKey)
+      if (ambiguous?.status === "AMBIGUOUS") {
+        state.effects.push({ type: "SEND_LOOKUP", assignmentId: binding.assignment.assignmentId, key: request.idempotencyKey })
+        if (ambiguous.mode === "PERSISTENT") {
+          wall("HOSTED_CODEX_BRIDGE_WALL", "message", "HOST_SIDE_EFFECT_RECONCILIATION_PENDING")
+        }
+        runtime.state = "ACTIVE"
+        ambiguous.status = "COMMITTED"
+        state.idempotency.set(request.idempotencyKey, { operation, result: ambiguous.result })
+        return ambiguous.result
+      }
       if (state.failNextMessage) {
         const detail = state.failNextMessage
         state.failNextMessage = null
@@ -131,6 +172,22 @@ vi.mock("../scripts/multi-agent-operator/codex-coordinator-adapter.mjs", () => {
       if (runtime.state !== "ACTIVE") wall("HOSTED_CODEX_MESSAGE_WALL", "message", "ACTIVE_ASSIGNMENT_REQUIRED")
       if (/\b(?:password|token|secret)\s*[:=]/i.test(request.summary)) {
         wall("HOSTED_CODEX_MESSAGE_WALL", "message.summary", "PROVIDER_EVIDENCE_SANITIZATION_WALL")
+      }
+      if (state.sendAmbiguity) {
+        const result = Object.freeze({
+          assignmentId: binding.assignment.assignmentId,
+          messageDigest: digest(request),
+          sanitized: true,
+          rawProviderOutputIncluded: false,
+          authorityGranted: false,
+        })
+        runtime.state = "SEND_AMBIGUOUS"
+        state.sideEffectTransactions.set(request.idempotencyKey, {
+          status: "AMBIGUOUS", mode: state.sendAmbiguity, result,
+        })
+        state.sendAmbiguity = null
+        state.effects.push({ type: "SEND_ATTEMPT", assignmentId: binding.assignment.assignmentId, key: request.idempotencyKey })
+        wall("HOSTED_CODEX_BRIDGE_WALL", "message", "HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS")
       }
       return idempotent(state, request.idempotencyKey, operation, () => {
         state.effects.push({ type: "MESSAGE", assignmentId: binding.assignment.assignmentId, key: request.idempotencyKey })
@@ -157,6 +214,9 @@ vi.mock("../scripts/multi-agent-operator/codex-coordinator-adapter.mjs", () => {
       }
       if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(runtime.state)) {
         wall("HOSTED_CODEX_CANCELLATION_WALL", "cancellation", "TERMINAL_ASSIGNMENT_IMMUTABLE")
+      }
+      if (["SPAWN_AMBIGUOUS", "SEND_AMBIGUOUS"].includes(runtime.state)) {
+        wall("HOSTED_CODEX_CANCELLATION_WALL", "cancellation", "ACTIVE_ASSIGNMENT_REQUIRED")
       }
       if (state.cancelMode) {
         const result = Object.freeze({ assignmentId: binding.assignment.assignmentId, terminalState: "CANCELLED", authorityGranted: false })
@@ -366,6 +426,9 @@ function fixture(workOrderId = "WO-MAO-031", suffix = workOrderId.toLowerCase(),
     failNextMessage: null as string | null,
     pairWorkerDigestOverride: null as string | null,
     failReviewerStart: false,
+    spawnAmbiguity: options.spawnAmbiguity ?? null,
+    sendAmbiguity: options.sendAmbiguity ?? null,
+    sideEffectTransactions: new Map(),
     cancelMode: null as null | "AMBIGUOUS_ONCE" | "ALWAYS_AMBIGUOUS",
     cancelTransactions: new Map(),
   }
@@ -605,6 +668,53 @@ describe("WO-MAO-031 opaque Codex role lifecycle", () => {
     expect(value.state.effects.filter(({ type }) => type === "CANCEL")).toHaveLength(2)
     expect([...value.state.runtime.values()].every(({ state }) => state !== "ACTIVE")).toBe(true)
   })
+
+  it.each(["spawn", "send"] as const)(
+    "reconciles a last-attempt %s ambiguity by lookup before canceling either child",
+    (operation) => {
+      const value = fixture(`WO-MAO-LAST-${operation.toUpperCase()}`, `last-${operation}`, {
+        retryBudget: { maxAttempts: 1, backoffSeconds: 0 },
+        ...(operation === "spawn"
+          ? { spawnAmbiguity: { role: "builder", mode: "RESOLVE_ON_LOOKUP" } }
+          : { sendAmbiguity: "RESOLVE_ON_LOOKUP" }),
+      })
+      const input = request(value)
+      expectWall(() => adaptCodexRoleLifecycle(input), "CODEX_ROLE_COORDINATOR_WALL", "HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS")
+      expectWall(() => adaptCodexRoleLifecycle(input), "CODEX_ROLE_RETRY_BUDGET_WALL", "LIFECYCLE_RETRY_BUDGET_EXHAUSTED")
+      expect(value.state.effects.filter(({ type }) => type === `${operation.toUpperCase()}_ATTEMPT`)).toHaveLength(1)
+      expect(value.state.effects.filter(({ type }) => type === `${operation.toUpperCase()}_LOOKUP`)).toHaveLength(1)
+      expect(value.state.effects.filter(({ type }) => type === "CANCEL")).toHaveLength(2)
+      expect([...value.state.runtime.values()].every(({ state }) => state === "CANCELLED")).toBe(true)
+      expectWall(() => adaptCodexRoleLifecycle(input), "CODEX_ROLE_TERMINAL_WALL", "FAILED_LIFECYCLE_IMMUTABLE")
+    },
+  )
+
+  it.each(["spawn", "send"] as const)(
+    "terminal-quarantines persistent %s ambiguity without falsely canceling the affected child",
+    (operation) => {
+      const value = fixture(`WO-MAO-PERSIST-${operation.toUpperCase()}`, `persist-${operation}`, {
+        retryBudget: { maxAttempts: 2, backoffSeconds: 0 },
+        ...(operation === "spawn"
+          ? { spawnAmbiguity: { role: "builder", mode: "PERSISTENT" } }
+          : { sendAmbiguity: "PERSISTENT" }),
+      })
+      const input = request(value)
+      expectWall(() => adaptCodexRoleLifecycle(input), "CODEX_ROLE_COORDINATOR_WALL", "HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS")
+      expectWall(() => adaptCodexRoleLifecycle(input), "CODEX_ROLE_COORDINATOR_WALL", "HOST_SIDE_EFFECT_RECONCILIATION_PENDING")
+      expectWall(() => adaptCodexRoleLifecycle(input), "CODEX_ROLE_QUARANTINE_WALL", "AMBIGUOUS_EFFECT_RECONCILIATION_REQUIRED")
+      expectWall(() => adaptCodexRoleLifecycle(input), "CODEX_ROLE_QUARANTINE_WALL", "AMBIGUOUS_EFFECT_CLEANUP_RETRY_BUDGET_EXHAUSTED")
+      const affected = value.state.runtime.get(value.builder.assignmentId)
+      const other = value.state.runtime.get(value.reviewer.assignmentId)
+      expect(affected.state).toBe(operation === "spawn" ? "SPAWN_AMBIGUOUS" : "SEND_AMBIGUOUS")
+      expect(other.state).toBe("CANCELLED")
+      expect(value.state.effects.filter(({ type, assignmentId }) => (
+        type === "CANCEL" && assignmentId === value.builder.assignmentId
+      ))).toHaveLength(0)
+      const effectCount = value.state.effects.length
+      expectWall(() => adaptCodexRoleLifecycle(input), "CODEX_ROLE_QUARANTINE_WALL", "AMBIGUOUS_EFFECT_CLEANUP_RETRY_BUDGET_EXHAUSTED")
+      expect(value.state.effects).toHaveLength(effectCount)
+    },
+  )
 
   it("enforces the attested retry backoff before consuming another attempt", () => {
     vi.useFakeTimers()

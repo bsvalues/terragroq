@@ -51,6 +51,36 @@ const ROLE_PREFLIGHT_FIELDS = new Set([
 const REMEDIATION_BUDGET_FIELDS = new Set(["maxCycles"])
 const RETRY_BUDGET_FIELDS = new Set(["maxAttempts", "backoffSeconds"])
 const LIFECYCLES = new WeakMap()
+const MESSAGE_RECONCILIATION = Object.freeze({
+  "messages.build-directive": Object.freeze({
+    role: "builder", operation: "build-directive", direction: "TO_ASSIGNMENT",
+    messageType: "STATUS", summary: "buildDirective",
+  }),
+  "messages.build-result": Object.freeze({
+    role: "builder", operation: "build-result", direction: "TO_COORDINATOR",
+    messageType: "RESULT", summary: "buildResultNotice",
+  }),
+  "messages.review-directive": Object.freeze({
+    role: "reviewer", operation: "review-directive", direction: "TO_ASSIGNMENT",
+    messageType: "REVIEW_REQUEST", summary: "reviewDirective",
+  }),
+  "messages.change-request-notice": Object.freeze({
+    role: "reviewer", operation: "change-request-notice", direction: "TO_COORDINATOR",
+    messageType: "CHANGE_REQUEST", summary: "changeRequestNotice",
+  }),
+  "messages.remediation-directive": Object.freeze({
+    role: "builder", operation: "remediation-directive", direction: "TO_ASSIGNMENT",
+    messageType: "CHANGE_REQUEST", summary: "remediationDirective",
+  }),
+  "messages.remediation-result": Object.freeze({
+    role: "builder", operation: "remediation-result", direction: "TO_COORDINATOR",
+    messageType: "RESULT", summary: "remediationResultNotice",
+  }),
+  "messages.rereview-directive": Object.freeze({
+    role: "reviewer", operation: "rereview-directive", direction: "TO_ASSIGNMENT",
+    messageType: "REVIEW_REQUEST", summary: "rereviewDirective",
+  }),
+})
 
 const STAGE_CONSTRAINTS = Object.freeze({
   BUILD: Object.freeze({
@@ -343,6 +373,51 @@ function recoverableCoordinatorFailure(error) {
       || error.detail === "HOSTED_CODEX_OBSERVATION_PENDING_WALL:HOST_OBSERVATION_NOT_COMMITTED")
 }
 
+function sideEffectAmbiguity(error) {
+  return recoverableCoordinatorFailure(error)
+    && (error.detail.endsWith(":HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS")
+      || error.detail.endsWith(":HOST_SIDE_EFFECT_RECONCILIATION_PENDING"))
+}
+
+function storedSideEffectAmbiguity(recovery) {
+  return typeof recovery?.detail === "string"
+    && (recovery.detail.endsWith(":HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS")
+      || recovery.detail.endsWith(":HOST_SIDE_EFFECT_RECONCILIATION_PENDING"))
+}
+
+function recoveryBinding(recovery, builder, reviewer) {
+  if (recovery?.field === "builder.start") return { handle: builder, label: "builder", operation: "start-builder" }
+  if (recovery?.field === "reviewer.start") return { handle: reviewer, label: "reviewer", operation: "start-reviewer" }
+  const message = MESSAGE_RECONCILIATION[recovery?.field]
+  if (!message) return null
+  return {
+    handle: message.role === "builder" ? builder : reviewer,
+    label: message.role,
+    operation: message.operation,
+    message,
+  }
+}
+
+function reconcileAmbiguousSideEffect(plan, builder, reviewer, namespace, messages, recovery) {
+  const binding = recoveryBinding(recovery, builder, reviewer)
+  if (!binding) wall("CODEX_ROLE_QUARANTINE_WALL", "roleLifecycle", "AMBIGUOUS_OPERATION_BINDING_REQUIRED")
+  if (recovery.field === "builder.start" || recovery.field === "reviewer.start") {
+    coordinatorCall(recovery.field, () => startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: binding.handle,
+      idempotencyKey: operationKey(plan, namespace, binding.operation, binding.handle),
+    }))
+  } else {
+    coordinatorCall(recovery.field, () => createHostedCodexNativeMessage(plan, {
+      assignmentHandle: binding.handle,
+      direction: binding.message.direction,
+      messageType: binding.message.messageType,
+      summary: messages[binding.message.summary],
+      idempotencyKey: operationKey(plan, namespace, binding.operation, binding.handle),
+    }))
+  }
+  return binding
+}
+
 function cleanupAssignment(plan, handle, preflight, namespace, transaction, label) {
   try {
     cancelHostedCodexNativeAssignment(plan, {
@@ -375,11 +450,49 @@ function quarantineStartedChildren(plan, builder, reviewer, preflight, namespace
   }
   if (transaction.cleanupAttempts >= preflight.retryBudget.maxAttempts) {
     transaction.status = "QUARANTINED_TERMINAL"
-    wall("CODEX_ROLE_QUARANTINE_WALL", "roleLifecycle", "CHILD_CLEANUP_RETRY_BUDGET_EXHAUSTED")
+    transaction.quarantineReason = "CHILD_CLEANUP_RETRY_BUDGET_EXHAUSTED"
+    wall("CODEX_ROLE_QUARANTINE_WALL", "roleLifecycle", transaction.quarantineReason)
   }
   transaction.nextRetryAt = Date.now() + (preflight.retryBudget.backoffSeconds * 1000)
   transaction.status = "CLEANUP_PENDING"
   wall("CODEX_ROLE_QUARANTINE_WALL", "roleLifecycle", "CHILD_CLEANUP_RECONCILIATION_REQUIRED")
+}
+
+function containAmbiguousSideEffect(
+  plan, builder, reviewer, preflight, namespace, messages, transaction,
+) {
+  const binding = recoveryBinding(transaction.recoverable, builder, reviewer)
+  if (!binding || !storedSideEffectAmbiguity(transaction.recoverable)) {
+    transaction.status = "QUARANTINED_TERMINAL"
+    transaction.quarantineReason = "AMBIGUOUS_OPERATION_BINDING_REQUIRED"
+    wall("CODEX_ROLE_QUARANTINE_WALL", "roleLifecycle", transaction.quarantineReason)
+  }
+  transaction.cleanupAttempts += 1
+  try {
+    reconcileAmbiguousSideEffect(
+      plan, builder, reviewer, namespace, messages, transaction.recoverable,
+    )
+  } catch (error) {
+    transaction.cleanup[binding.label] = "POTENTIALLY_RUNNING_QUARANTINED"
+    const otherLabel = binding.label === "builder" ? "reviewer" : "builder"
+    const otherHandle = otherLabel === "builder" ? builder : reviewer
+    cleanupAssignment(plan, otherHandle, preflight, namespace, transaction, otherLabel)
+    if (!sideEffectAmbiguity(error)
+      || transaction.cleanupAttempts >= preflight.retryBudget.maxAttempts) {
+      transaction.status = "QUARANTINED_TERMINAL"
+      transaction.quarantineReason = "AMBIGUOUS_EFFECT_CLEANUP_RETRY_BUDGET_EXHAUSTED"
+      wall(
+        "CODEX_ROLE_QUARANTINE_WALL",
+        "roleLifecycle",
+        transaction.quarantineReason,
+      )
+    }
+    transaction.nextRetryAt = Date.now() + (preflight.retryBudget.backoffSeconds * 1000)
+    transaction.status = "AMBIGUITY_CONTAINMENT_PENDING"
+    wall("CODEX_ROLE_QUARANTINE_WALL", "roleLifecycle", "AMBIGUOUS_EFFECT_RECONCILIATION_REQUIRED")
+  }
+  transaction.recoverable = null
+  quarantineStartedChildren(plan, builder, reviewer, preflight, namespace, transaction)
 }
 
 export function adaptCodexRoleLifecycle(input) {
@@ -424,6 +537,18 @@ export function adaptCodexRoleLifecycle(input) {
   })
   let transaction = planLifecycles.get(lifecycleKey)
   if (transaction) {
+    if (transaction.status === "AMBIGUITY_CONTAINMENT_PENDING") {
+      if (transaction.requestDigest !== requestDigest) {
+        wall("CODEX_ROLE_REPLAY_WALL", "roleLifecycle", "CONFLICTING_REPLAY")
+      }
+      if (Date.now() < transaction.nextRetryAt) {
+        wall("CODEX_ROLE_BACKOFF_WALL", "roleLifecycle", "AMBIGUITY_RETRY_NOT_YET_ELIGIBLE")
+      }
+      containAmbiguousSideEffect(
+        input.plan, builder, reviewer, preflight, transaction.namespace, messages, transaction,
+      )
+      wall("CODEX_ROLE_RETRY_BUDGET_WALL", "roleLifecycle", "LIFECYCLE_RETRY_BUDGET_EXHAUSTED")
+    }
     if (transaction.status === "CLEANUP_PENDING") {
       if (transaction.requestDigest !== requestDigest) {
         wall("CODEX_ROLE_REPLAY_WALL", "roleLifecycle", "CONFLICTING_REPLAY")
@@ -435,7 +560,11 @@ export function adaptCodexRoleLifecycle(input) {
       wall("CODEX_ROLE_TERMINAL_WALL", "roleLifecycle", "FAILED_LIFECYCLE_IMMUTABLE")
     }
     if (transaction.status === "QUARANTINED_TERMINAL") {
-      wall("CODEX_ROLE_QUARANTINE_WALL", "roleLifecycle", "CHILD_CLEANUP_RETRY_BUDGET_EXHAUSTED")
+      wall(
+        "CODEX_ROLE_QUARANTINE_WALL",
+        "roleLifecycle",
+        transaction.quarantineReason ?? "CHILD_CLEANUP_RETRY_BUDGET_EXHAUSTED",
+      )
     }
     if (transaction.status === "COMMITTED") {
       if (transaction.requestDigest === requestDigest) return transaction.result
@@ -451,7 +580,14 @@ export function adaptCodexRoleLifecycle(input) {
       wall("CODEX_ROLE_BACKOFF_WALL", "roleLifecycle", "RETRY_NOT_YET_ELIGIBLE")
     }
     if (transaction.attemptCount >= transaction.retryBudget.maxAttempts) {
-      quarantineStartedChildren(input.plan, builder, reviewer, preflight, transaction.namespace, transaction)
+      if (storedSideEffectAmbiguity(transaction.recoverable)
+        && recoveryBinding(transaction.recoverable, builder, reviewer)) {
+        containAmbiguousSideEffect(
+          input.plan, builder, reviewer, preflight, transaction.namespace, messages, transaction,
+        )
+      } else {
+        quarantineStartedChildren(input.plan, builder, reviewer, preflight, transaction.namespace, transaction)
+      }
       wall("CODEX_ROLE_RETRY_BUDGET_WALL", "roleLifecycle", "LIFECYCLE_RETRY_BUDGET_EXHAUSTED")
     }
     transaction.attemptCount += 1
@@ -466,6 +602,8 @@ export function adaptCodexRoleLifecycle(input) {
       nextRetryAt: 0,
       cleanupAttempts: 0,
       cleanup: { builder: "NOT_STARTED", reviewer: "NOT_STARTED" },
+      recoverable: null,
+      quarantineReason: null,
     }
     planLifecycles.set(lifecycleKey, transaction)
   }
@@ -581,6 +719,10 @@ export function adaptCodexRoleLifecycle(input) {
   return result
   } catch (error) {
     if (recoverableCoordinatorFailure(error)) {
+      transaction.recoverable = {
+        field: error.field,
+        detail: error.detail,
+      }
       transaction.nextRetryAt = Date.now() + (transaction.retryBudget.backoffSeconds * 1000)
       throw error
     }

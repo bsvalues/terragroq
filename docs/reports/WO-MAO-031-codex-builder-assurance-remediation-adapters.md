@@ -67,9 +67,14 @@ proof identifiers, and raw provider output are absent from the public lifecycle 
   outcomes, and atomic active-fence rejections remain safely retryable with the exact request;
 - the privately attested retry budget bounds attempts; its backoff is enforced before another
   attempt can increment or reach a lifecycle bridge effect;
-- retry exhaustion and unrecoverable semantic failures cancel both exact children; ambiguous cancel
-  outcomes are quarantined, reconciled by lookup without a second cancel, and terminal-quarantined
-  when their own bounded cleanup attempts are exhausted;
+- retry exhaustion first reconciles any known spawn/send ambiguity through that operation's exact
+  lookup-only replay; children are canceled only after the ambiguous operation resolves;
+- a persistently ambiguous potentially running child is explicitly quarantined and is never
+  represented as canceled; the other exact child is canceled, lookup-only containment is bounded,
+  and exhaustion produces a typed terminal-quarantine wall;
+- unrecoverable semantic failures cancel both exact children; ambiguous cancel outcomes are
+  quarantined, reconciled by lookup without a second cancel, and terminal-quarantined when their own
+  bounded cleanup attempts are exhausted;
 - duplicate observation identifiers, reordered kinds, foreign assignments, terminal BUILD,
   terminal REQUEST_CHANGES, wrong cycle, nonzero final threads, and forged evidence all wall;
 - provider, adapter, path, sanitization, residual-secret, raw-output, and terminal-state walls remain
@@ -99,10 +104,12 @@ correlation keys. They are not native worker, session, proof, credential, or raw
 
 ## Validation
 
-Independent assurance verdict: `APPROVE` on integrated head `e9d4a75`. The verdict covers the
-opaque role lifecycle, atomic bridge-fence composition, cleanup/retry ordering, and real
-coordinator/registry/bridge tests described below. It does not release any downstream Work Order or
-expand the explicit non-claims in this report.
+The earlier independent `APPROVE` on integrated head `e9d4a75` was superseded by the ambiguity
+containment remediation. Independent re-review of exact implementation head `b5e3a44` returned
+`APPROVE`: every requested acceptance condition is satisfied and no additional blocking
+correctness, authority-fence, state-projection, privacy, or non-claim finding remains. This approval
+restores WO-MAO-031 completion but does not by itself release a downstream Work Order or expand the
+explicit non-claims in this report.
 
 - role lifecycle contract/attack suite: `tests/multi-agent-codex-role-adapters.test.ts`
   - opaque happy path and a second Work Order/lane;
@@ -112,15 +119,18 @@ expand the explicit non-claims in this report.
   - start-receipt substitution, exact replay, trusted observation-pending resume, retry exhaustion,
     enforced backoff, failed/success terminal sealing, partial-start cleanup, ambiguous cleanup
     reconciliation/exhaustion, CLI wall, and public-result privacy;
-  - focused result: `1 file / 25 tests`, PASS.
+  - last-attempt and persistent spawn/send ambiguity, lookup-only containment, exact-child
+    cancellation, and truthful terminal quarantine;
+  - focused result: `1 file / 28 tests`, PASS.
 - real coordinator/registry/bridge integration in
   `tests/multi-agent-codex-coordinator-adapter.test.ts`: compiles a real opaque plan, crosses every
   production WeakMap boundary, resumes from a trusted pending observation, observes all four
   semantic events under accepted authority fences, replays without extra effects, and rejects
   copied/cross-plan handles before side effects;
   - malformed post-effect spawn and send acknowledgements enter the coordinator's private ambiguous
-    transaction state, then exact-retry through one lookup without repeating the host effect;
-  - combined focused result: `2 files / 114 tests`, PASS.
+    transaction state; normal retry, last-attempt containment, and persistent lookup failure are
+    proven without repeating the host effect or canceling an unresolved potentially running child;
+  - combined focused result: `2 files / 122 tests`, PASS.
 - syntax, focused Vitest, lint, full suite, and `git diff --check` evidence are recorded by the
   integration coordinator after both implementation lanes are combined.
 
@@ -138,6 +148,8 @@ PRODUCTION_WRITE_PERFORMED: false
 AUTHORITY_GRANTED: false
 RAW_PROVIDER_OUTPUT_INCLUDED: false
 OWNER_RELAY_REQUIRED: false
+UNRESOLVED_HOST_EFFECT_REPORTED_CANCELLED: false
+PERSISTENT_AMBIGUITY_COMPLETION_CLAIMED: false
 ```
 
 ## Owner-operation evidence
