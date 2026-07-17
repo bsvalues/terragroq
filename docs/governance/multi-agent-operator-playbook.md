@@ -384,8 +384,9 @@ weakening any retained dependency. With WO-MAO-035 and WO-MAO-036 re-proved thro
 registries, WO-MAO-037 proved as a guarded branch/commit/push lifecycle plan, WO-MAO-038 proved
 as a deterministic PR packet linkage plan, WO-MAO-039 proved as a CI/review ingestion plan, and
 WO-MAO-040 proved as a bounded remediation/re-review plan, and WO-MAO-041 proved as a bounded
-merge-controller plan, and WO-MAO-042 proved as a post-merge verification and cleanup plan,
-WO-MAO-043 is `READY` and remains the next Phase 5 gate.
+merge-controller plan, WO-MAO-042 proved as a post-merge verification and cleanup plan, and
+WO-MAO-043 proved as an automatic dependent-release plan, WO-MAO-044 is `READY` and remains the
+next Phase 5 gate.
 
 ### Phase 5 — GitHub delivery engine
 

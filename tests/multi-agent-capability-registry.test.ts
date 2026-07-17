@@ -338,6 +338,21 @@ describe("multi-agent executable capability inventory", () => {
         "No command runner, background worker, runtime activation, credential access, authority minting, production write, destructive cleanup, or owner relay",
       ]),
     })
+    expect(capability("automatic-dependent-release-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_AUTOMATIC_DEPENDENT_RELEASE_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/automatic-dependent-release.mjs",
+      authorityGrantRefs: ["PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"],
+      trustGateRef: "WO-MAO-007",
+      restrictions: expect.arrayContaining([
+        "Zero-input control-plane release model only; no provider is dispatched by the model",
+        "Only dependency-cleared work is released; blocked dependents remain pending",
+        "Owner polling remains prohibited for routine continuation",
+        "WO-MAO-043 is complete; WO-MAO-044 is released to READY through retained prerequisites",
+        "No command runner, background worker, runtime activation, credential access, authority minting, GitHub operation, production write, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
