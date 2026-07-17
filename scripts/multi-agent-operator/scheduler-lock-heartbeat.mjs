@@ -7,8 +7,12 @@ import {
   schedulerLockOwnerRecord,
 } from "./scheduler-lock-lease.mjs"
 
-const { ownerPath, owner, leaseDurationMs, heartbeatIntervalMs, controlBuffer } = workerData
+const {
+  ownerPath, owner, leaseDurationMs, heartbeatIntervalMs, controlBuffer,
+  lifecycleDelays = { startAckMs: 0, stopAckMs: 0 },
+} = workerData
 const control = new Int32Array(controlBuffer)
+const DELAY = new Int32Array(new SharedArrayBuffer(4))
 
 try {
   const renew = () => {
@@ -34,6 +38,7 @@ try {
   }
 
   renew()
+  if (lifecycleDelays.startAckMs > 0) Atomics.wait(DELAY, 0, 0, lifecycleDelays.startAckMs)
   Atomics.store(control, 1, 1)
   Atomics.notify(control, 1)
   for (;;) {
@@ -41,6 +46,7 @@ try {
     if (Atomics.load(control, 0) !== 0) break
     renew()
   }
+  if (lifecycleDelays.stopAckMs > 0) Atomics.wait(DELAY, 0, 0, lifecycleDelays.stopAckMs)
 } catch {
   Atomics.store(control, 4, 1)
 } finally {

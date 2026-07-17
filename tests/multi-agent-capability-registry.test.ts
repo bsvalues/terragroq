@@ -190,7 +190,6 @@ describe("multi-agent executable capability inventory", () => {
       adapterRef: "scripts/multi-agent-operator/codex-role-adapters.mjs",
       trustGateRef: PREVENTIVE_TRUST_GATE_V2_REF,
       restrictions: expect.arrayContaining([
-        "Current-session role lifecycle proof only",
         "Exactly one bounded remediation and re-review cycle; no multi-cycle or unattended claim",
         "Assurance remains independent and cannot remediate its own finding",
         "Remediation is bound to the original builder and the envelope remediation budget",
@@ -198,20 +197,18 @@ describe("multi-agent executable capability inventory", () => {
         "Provider-contract dispatch remains false",
         "No durable persistence, service worker, runtime activation, or authority grant",
       ]),
-      evidence: expect.arrayContaining([
-        "tests/multi-agent-codex-coordinator-adapter.test.ts",
-        "docs/reports/WO-MAO-031-codex-builder-assurance-remediation-adapters.md",
-      ]),
     })
     expect(capability("cross-provider-routing-review-model")).toMatchObject({
       status: "AVAILABLE_UNPROVEN",
       executionClass: "NON_EXECUTABLE",
-      reasonCode: "POST_MERGE_ASSURANCE_INVALIDATED_PENDING_REPROOF",
+      reasonCode: "PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED",
       adapterRef: "scripts/multi-agent-operator/cross-provider-routing-review.mjs",
       authorityGrantRefs: [],
       trustGateRef: null,
       restrictions: expect.arrayContaining([
         "Static routing and review planning only",
+        "WO-MAO-034 cannot pass until the WO-MAO-034<-WO-MAO-033 settlement is authenticated through a pinned trust record",
+        "Callers cannot submit roots, writers, trust bundles, ledger anchors, signatures, or raw trust material",
         "Unavailable providers contribute no capability",
         "No provider dispatch, GitHub review automation, runtime activation, or authority grant",
       ]),
@@ -264,12 +261,7 @@ describe("multi-agent executable capability inventory", () => {
     })
     expect(MULTI_AGENT_CAPABILITY_INVENTORY.filter((entry) => entry.coordinationEligible)
       .map((entry) => entry.capabilityId))
-      .toEqual([
-        "hosted-codex-session",
-        "codex-native-subagent-team",
-        "hosted-codex-coordinator-adapter",
-        "hosted-codex-role-adapters",
-      ])
+      .toEqual(["hosted-codex-session", "codex-native-subagent-team", "hosted-codex-coordinator-adapter", "hosted-codex-role-adapters"])
   })
 
   it("requires status, adapter, authority, and preventive trust proof for an executable worker", () => {

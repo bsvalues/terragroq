@@ -7,6 +7,8 @@ import { Worker } from "node:worker_threads"
 const WAIT = new Int32Array(new SharedArrayBuffer(4))
 const HASH = /^[a-f0-9]{64}$/
 const OWNER_FIELDS = ["statePath", "pid", "hostname", "nonce", "generation", "issuedAt", "heartbeatAt", "expiresAt", "lockFence"]
+const HEARTBEAT_LIFECYCLE_TIMEOUT_MS = 30_000
+const HEARTBEAT_LIFECYCLE_TIMEOUT_MAX_MS = 60_000
 
 export class SchedulerLockLeaseError extends Error {
   constructor(code, detail = null) {
@@ -106,45 +108,97 @@ function staleOwner(owner, hostname, now) {
   return owner.expiresAt <= now || (owner.hostname === hostname && !sameHostPidAlive(owner, hostname))
 }
 
-function startHeartbeat(ownerPath, owner, leaseDurationMs, heartbeatIntervalMs) {
-  const controlBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 5)
-  const control = new Int32Array(controlBuffer)
-  Atomics.store(control, 2, owner.generation)
-  const worker = new Worker(new URL("./scheduler-lock-heartbeat.mjs", import.meta.url), {
-    workerData: { ownerPath, owner, leaseDurationMs, heartbeatIntervalMs, controlBuffer },
-    // The heartbeat is a self-contained file worker. Do not inherit test-runner or
-    // stdin-only parent flags that can make Node reject the worker entrypoint.
-    execArgv: [],
-  })
-  const ready = Atomics.wait(control, 1, 0, Math.max(1000, heartbeatIntervalMs * 4))
-  if (ready === "timed-out" || Atomics.load(control, 4) !== 0 || Atomics.load(control, 2) <= owner.generation) {
-    Atomics.store(control, 0, 1); Atomics.notify(control, 0)
-    void worker.terminate()
-    wall("SCHEDULER_LOCK_WALL", "HEARTBEAT_START_REQUIRED")
+function boundedHeartbeatTimeout(value, field) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > HEARTBEAT_LIFECYCLE_TIMEOUT_MAX_MS) {
+    wall("SCHEDULER_LOCK_WALL", field)
   }
-  return { worker, control }
+  return value
 }
 
-function assertHeartbeatOwnership(ownerPath, owner, heartbeat) {
-  if (Atomics.load(heartbeat.control, 4) !== 0) wall("SCHEDULER_LOCK_WALL", "LEASE_LOST")
-  try {
-    const current = readOwner(ownerPath).owner
-    const generation = Atomics.load(heartbeat.control, 2)
-    if (!validOwner(current, owner.statePath) || current.nonce !== owner.nonce
-      || current.generation !== generation || current.expiresAt <= Date.now()) {
-      wall("SCHEDULER_LOCK_WALL", "LEASE_LOST")
-    }
-  } catch (error) {
-    if (error instanceof SchedulerLockLeaseError) throw error
-    wall("SCHEDULER_LOCK_WALL", "LEASE_LOST")
+function normalizeHeartbeatTestDelays(value) {
+  if (value === undefined) return { startAckMs: 0, stopAckMs: 0 }
+  if (process.env.NODE_ENV !== "test" || value === null || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).sort().join("\0") !== "startAckMs\0stopAckMs"
+    || !Number.isSafeInteger(value.startAckMs) || value.startAckMs < 0 || value.startAckMs > HEARTBEAT_LIFECYCLE_TIMEOUT_MAX_MS
+    || !Number.isSafeInteger(value.stopAckMs) || value.stopAckMs < 0 || value.stopAckMs > HEARTBEAT_LIFECYCLE_TIMEOUT_MAX_MS) {
+    wall("SCHEDULER_LOCK_WALL", "INVALID_HEARTBEAT_TEST_DELAYS")
   }
+  return { startAckMs: value.startAckMs, stopAckMs: value.stopAckMs }
 }
 
 function stopHeartbeat(heartbeat) {
   Atomics.store(heartbeat.control, 0, 1)
   Atomics.notify(heartbeat.control, 0)
-  Atomics.wait(heartbeat.control, 3, 0, 1000)
+  if (Atomics.load(heartbeat.control, 3) === 0) {
+    Atomics.wait(heartbeat.control, 3, 0, heartbeat.stopTimeoutMs)
+  }
+  const stopped = Atomics.load(heartbeat.control, 3) !== 0
   void heartbeat.worker.terminate()
+  return stopped
+}
+
+function heartbeatStartupFailure(heartbeat) {
+  const stopped = stopHeartbeat(heartbeat)
+  const error = new SchedulerLockLeaseError(
+    "SCHEDULER_LOCK_WALL",
+    stopped ? "HEARTBEAT_START_REQUIRED" : "HEARTBEAT_STOP_REQUIRED",
+  )
+  Object.defineProperties(error, {
+    heartbeatQuiesced: { value: stopped },
+    heartbeatGeneration: { value: Atomics.load(heartbeat.control, 2) },
+  })
+  throw error
+}
+
+function confirmedHeartbeatOwner(ownerPath, owner, heartbeat) {
+  const deadline = Date.now() + heartbeat.confirmationTimeoutMs
+  for (;;) {
+    if (Atomics.load(heartbeat.control, 4) !== 0) return null
+    try {
+      const current = readOwner(ownerPath).owner
+      const generation = Atomics.load(heartbeat.control, 2)
+      if (validOwner(current, owner.statePath) && current.nonce === owner.nonce
+        && current.generation === generation && current.expiresAt > Date.now()) {
+        return current
+      }
+      const renewalPublicationInProgress = validOwner(current, owner.statePath)
+        && current.nonce === owner.nonce && current.generation === generation + 1
+      if (!renewalPublicationInProgress) return null
+    } catch { /* retry a bounded atomic-replace visibility race */ }
+    if (Date.now() >= deadline) return null
+    Atomics.wait(WAIT, 0, 0, 1)
+  }
+}
+
+function startHeartbeat(ownerPath, owner, leaseDurationMs, heartbeatIntervalMs, lifecycle) {
+  const controlBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 5)
+  const control = new Int32Array(controlBuffer)
+  Atomics.store(control, 2, owner.generation)
+  const worker = new Worker(new URL("./scheduler-lock-heartbeat.mjs", import.meta.url), {
+    workerData: {
+      ownerPath, owner, leaseDurationMs, heartbeatIntervalMs, controlBuffer,
+      lifecycleDelays: lifecycle.testDelays,
+    },
+    // The heartbeat is a self-contained file worker. Do not inherit test-runner or
+    // stdin-only parent flags that can make Node reject the worker entrypoint.
+    execArgv: [],
+  })
+  const heartbeat = {
+    worker,
+    control,
+    stopTimeoutMs: lifecycle.stopTimeoutMs,
+    confirmationTimeoutMs: Math.min(lifecycle.startTimeoutMs, Math.max(100, heartbeatIntervalMs * 2)),
+  }
+  const ready = Atomics.wait(control, 1, 0, lifecycle.startTimeoutMs)
+  if (ready === "timed-out" || Atomics.load(control, 4) !== 0 || Atomics.load(control, 2) <= owner.generation) {
+    heartbeatStartupFailure(heartbeat)
+  }
+  if (confirmedHeartbeatOwner(ownerPath, owner, heartbeat) === null) heartbeatStartupFailure(heartbeat)
+  return heartbeat
+}
+
+function assertHeartbeatOwnership(ownerPath, owner, heartbeat) {
+  if (confirmedHeartbeatOwner(ownerPath, owner, heartbeat) === null) wall("SCHEDULER_LOCK_WALL", "LEASE_LOST")
 }
 
 function restoreQuarantine(lock, quarantine) {
@@ -153,20 +207,35 @@ function restoreQuarantine(lock, quarantine) {
   fsyncDirectory(path.dirname(lock))
 }
 
-function cleanupCreatedLock(lock, statePath, expectedOwner, ownerPublished) {
+function cleanupCreatedLock(
+  lock,
+  statePath,
+  expectedOwner,
+  ownerPublished,
+  allowRenewedOwner = false,
+  quarantineHook = null,
+  exactStoppedGeneration = null,
+) {
   const quarantine = `${lock}.failed-${expectedOwner.nonce}-${expectedOwner.generation}-${crypto.randomUUID()}`
   try { fs.renameSync(lock, quarantine); fsyncDirectory(path.dirname(lock)) } catch (error) {
     if (error?.code === "ENOENT") return
     wall("SCHEDULER_LOCK_WALL", "FAILED_OWNER_QUARANTINE_REQUIRED")
   }
+  quarantineHook?.({ lockPath: lock, quarantinePath: quarantine, expectedOwner })
   let removable = false
   try {
     const quarantinedOwnerPath = path.join(quarantine, "owner.json")
     if (!ownerPublished && !fs.existsSync(quarantinedOwnerPath)) removable = true
     else {
       const current = readOwner(quarantinedOwnerPath).owner
+      const exactInitialOwner = current.generation === expectedOwner.generation
+        && current.lockFence === expectedOwner.lockFence
+      const stoppedRenewedOwner = allowRenewedOwner
+        && current.pid === expectedOwner.pid && current.hostname === expectedOwner.hostname
+        && current.issuedAt === expectedOwner.issuedAt && current.generation >= expectedOwner.generation
+        && (exactStoppedGeneration === null || current.generation === exactStoppedGeneration)
       removable = validOwner(current, statePath) && current.nonce === expectedOwner.nonce
-        && current.generation === expectedOwner.generation && current.lockFence === expectedOwner.lockFence
+        && (exactInitialOwner || stoppedRenewedOwner)
     }
   } catch { /* preserve unknown ownership rather than deleting it */ }
   if (removable) {
@@ -182,6 +251,20 @@ export function acquireSchedulerLock(statePath, options = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || !Number.isSafeInteger(leaseDurationMs) || leaseDurationMs < 30
     || !Number.isSafeInteger(heartbeatIntervalMs) || heartbeatIntervalMs < 5 || heartbeatIntervalMs * 2 >= leaseDurationMs) {
     wall("SCHEDULER_LOCK_WALL", "INVALID_LEASE_CONFIGURATION")
+  }
+  const heartbeatStartTimeoutMs = boundedHeartbeatTimeout(
+    options.heartbeatStartTimeoutMs ?? HEARTBEAT_LIFECYCLE_TIMEOUT_MS,
+    "INVALID_HEARTBEAT_START_TIMEOUT",
+  )
+  const heartbeatStopTimeoutMs = boundedHeartbeatTimeout(
+    options.heartbeatStopTimeoutMs ?? HEARTBEAT_LIFECYCLE_TIMEOUT_MS,
+    "INVALID_HEARTBEAT_STOP_TIMEOUT",
+  )
+  const heartbeatTestDelays = normalizeHeartbeatTestDelays(options.heartbeatTestDelays)
+  const releaseQuarantineHook = options.releaseQuarantineHook
+  if (releaseQuarantineHook !== undefined
+    && (process.env.NODE_ENV !== "test" || typeof releaseQuarantineHook !== "function")) {
+    wall("SCHEDULER_LOCK_WALL", "INVALID_RELEASE_QUARANTINE_HOOK")
   }
   const lock = `${statePath}.lock`
   const ownerPath = path.join(lock, "owner.json")
@@ -204,24 +287,38 @@ export function acquireSchedulerLock(statePath, options = {}) {
       createdOwner = owner
       writeInitialOwner(ownerPath, owner)
       ownerPublished = true
-      const heartbeat = startHeartbeat(ownerPath, owner, leaseDurationMs, heartbeatIntervalMs)
+      const heartbeat = startHeartbeat(ownerPath, owner, leaseDurationMs, heartbeatIntervalMs, {
+        startTimeoutMs: heartbeatStartTimeoutMs,
+        stopTimeoutMs: heartbeatStopTimeoutMs,
+        testDelays: heartbeatTestDelays,
+      })
       const release = () => {
-        stopHeartbeat(heartbeat)
-        try {
-          const current = readOwner(ownerPath).owner
-          const generation = Atomics.load(heartbeat.control, 2)
-          if (validOwner(current, statePath) && current.nonce === owner.nonce && current.generation === generation
-            && current.lockFence === schedulerLockFence(current)) {
-            fs.rmSync(lock, { recursive: true, force: true })
-            fsyncDirectory(path.dirname(lock))
-          }
-        } catch { /* a fenced successor or quarantine owns cleanup */ }
+        if (!stopHeartbeat(heartbeat)) wall("SCHEDULER_LOCK_WALL", "HEARTBEAT_STOP_REQUIRED")
+        cleanupCreatedLock(
+          lock,
+          statePath,
+          owner,
+          true,
+          true,
+          releaseQuarantineHook,
+          Atomics.load(heartbeat.control, 2),
+        )
       }
       release.assertOwned = () => assertHeartbeatOwnership(ownerPath, owner, heartbeat)
       return release
     } catch (error) {
       if (created) {
-        if (createdOwner !== null) cleanupCreatedLock(lock, statePath, createdOwner, ownerPublished)
+        if (createdOwner !== null && error?.heartbeatQuiesced !== false) {
+          cleanupCreatedLock(
+            lock,
+            statePath,
+            createdOwner,
+            ownerPublished,
+            error?.heartbeatQuiesced === true,
+            null,
+            error?.heartbeatQuiesced === true ? error.heartbeatGeneration : null,
+          )
+        }
         if (error instanceof SchedulerLockLeaseError) throw error
         wall("SCHEDULER_LOCK_WALL", "OWNER_RECORD_REQUIRED")
       }
