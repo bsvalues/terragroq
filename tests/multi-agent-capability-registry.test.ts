@@ -323,6 +323,21 @@ describe("multi-agent executable capability inventory", () => {
         "No command runner, background worker, runtime activation, credential access, authority minting, production write, or owner relay",
       ]),
     })
+    expect(capability("post-merge-verification-cleanup-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_POST_MERGE_VERIFICATION_CLEANUP_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/post-merge-verification-cleanup.mjs",
+      authorityGrantRefs: ["PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"],
+      trustGateRef: "WO-MAO-007",
+      restrictions: expect.arrayContaining([
+        "Zero-input control-plane verification model only; no cleanup is performed by the model",
+        "Main, production route, evidence preservation, and cleanup-safety gates must pass before dependent release",
+        "Shared worktree cleanup, dirty worktree cleanup, foreign path cleanup, unmerged branch deletion, and .obsidian touch remain denied",
+        "WO-MAO-042 is complete; WO-MAO-043 is released to READY through retained prerequisites",
+        "No command runner, background worker, runtime activation, credential access, authority minting, production write, destructive cleanup, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",

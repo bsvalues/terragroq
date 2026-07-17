@@ -32,6 +32,10 @@ import {
   isVerifiedWoMao041MergeControllerEvidence,
 } from "@/components/operator/multi-agent-merge-controller-registry"
 import {
+  MULTI_AGENT_POST_MERGE_EVIDENCE,
+  isVerifiedWoMao042PostMergeEvidence,
+} from "@/components/operator/multi-agent-post-merge-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -188,6 +192,7 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-039", "docs/reports/WO-MAO-039-ci-review-ingestion.md"],
   ["WO-MAO-040", "docs/reports/WO-MAO-040-remediation-rereview.md"],
   ["WO-MAO-041", "docs/reports/WO-MAO-041-bounded-merge-controller.md"],
+  ["WO-MAO-042", "docs/reports/WO-MAO-042-post-merge-verification-cleanup.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -260,6 +265,9 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao041MergeControllerEvidence(MULTI_AGENT_MERGE_CONTROLLER_EVIDENCE)
     ? [workOrderId(41)]
+    : []),
+  ...(isVerifiedWoMao042PostMergeEvidence(MULTI_AGENT_POST_MERGE_EVIDENCE)
+    ? [workOrderId(42)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
