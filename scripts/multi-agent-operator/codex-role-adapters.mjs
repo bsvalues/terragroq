@@ -1,13 +1,15 @@
 import crypto from "node:crypto"
 
 import {
-  CodexProviderConformanceError,
   canonicalCodexProviderConformanceJson,
-  evaluateCodexSessionCoordination,
-  validateCodexProviderConformance,
-  verifyCodexHostSessionIdentity,
 } from "./codex-provider-conformance.mjs"
-import { ProviderContractError, validateProviderResponse } from "./provider-contract.mjs"
+import {
+  HostedCodexCoordinatorAdapterError,
+  captureHostedCodexNativeEvidence,
+  createHostedCodexNativeMessage,
+  getHostedCodexNativeAssignmentHandle,
+  startHostedCodexNativeAssignment,
+} from "./codex-coordinator-adapter.mjs"
 import {
   WorkOrderEnvelopeV2Error,
   validateWorkOrderEnvelopeV2,
@@ -18,20 +20,39 @@ const INPUT_FIELDS = new Set([
   "schemaVersion",
   "artifactType",
   "adapterId",
-  "conformance",
   "envelope",
-  "coordinatorResult",
-  "roleProofs",
+  "coordinatorPlan",
   "stages",
 ])
 const COORDINATOR_RESULT_FIELDS = new Set([
+  "schemaVersion",
+  "artifactType",
+  "adapterRunId",
+  "topologyId",
+  "topologyHash",
   "adapterId",
   "status",
+  "providerId",
+  "currentSessionOnly",
+  "assignmentCount",
+  "concurrency",
   "assignments",
+  "communication",
+  "cancellation",
+  "evidence",
+  "ownerTouchBudget",
+  "ownerOperationEvidenceCertified",
   "dispatchPerformed",
+  "durableTransportClaimed",
+  "durablePersistenceClaimed",
+  "serviceWorkerClaimed",
+  "localIssue357Allowed",
+  "credentialInspectionAllowed",
+  "authorityMintingAllowed",
   "providerContractDispatchAllowed",
   "runtimeActivationAllowed",
   "authorityGranted",
+  "planContentHash",
 ])
 const ASSIGNMENT_FIELDS = new Set([
   "assignmentId",
@@ -39,25 +60,56 @@ const ASSIGNMENT_FIELDS = new Set([
   "laneId",
   "role",
   "workerId",
-  "state",
-  "dispatchPerformed",
+  "phase",
+  "taskPayload",
+  "envelopeContentHash",
+  "hostIdentityDigest",
+  "conformanceContentHash",
+  "preventiveTrustContentHash",
+  "authorityGrantId",
+  "cancellationSupported",
+  "messagePolicy",
+  "nativeAssignmentPrepared",
+  "nativeAssignmentExecuted",
+  "nativeBindingRequired",
+  "nativeBindingEstablished",
+  "authorityGranted",
 ])
-const ROLE_PROOF_FIELDS = new Set([
-  "role",
-  "workerId",
-  "hostSessionProofReference",
-])
-const HOST_SESSION_PROOF_FIELDS = new Set(["proofId"])
 const STAGE_FIELDS = new Set([
   "stageId",
   "stage",
   "role",
   "workerId",
-  "providerResponse",
+  "startIdempotencyKey",
+  "messageType",
+  "messageSummary",
+  "messageIdempotencyKey",
+  "observationId",
   "review",
   "remediationCycle",
 ])
 const REVIEW_FIELDS = new Set(["verdict", "unresolvedThreads"])
+const CAPTURED_EVIDENCE_FIELDS = new Set([
+  "schemaVersion",
+  "artifactType",
+  "adapterRunId",
+  "assignmentId",
+  "observationId",
+  "providerId",
+  "adapterId",
+  "workOrderId",
+  "laneId",
+  "providerState",
+  "reasonCode",
+  "providerResponseType",
+  "providerResponseHash",
+  "terminalState",
+  "sanitized",
+  "rawProviderOutputIncluded",
+  "independentlyCaptured",
+  "durablePersistenceClaimed",
+  "authorityGranted",
+])
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/
 const REQUIRED_STAGES = Object.freeze([
   "BUILD",
@@ -121,16 +173,34 @@ function contentHash(value) {
 
 function normalizeCoordinatorResult(value, envelope) {
   exactFields(value, COORDINATOR_RESULT_FIELDS, "coordinatorResult")
-  if (value.adapterId !== "hosted-codex-coordinator-adapter-v1") {
-    wall("CODEX_ROLE_COORDINATOR_WALL", "coordinatorResult.adapterId", "HOSTED_COORDINATOR_ADAPTER_REQUIRED")
+  if (value.schemaVersion !== 1 || value.artifactType !== "HOSTED_CODEX_COORDINATOR_PLAN") {
+    wall("CODEX_ROLE_COORDINATOR_WALL", "coordinatorResult.artifactType", "HOSTED_COORDINATOR_PLAN_REQUIRED")
   }
-  if (value.status !== "COORDINATOR_ASSIGNMENTS_READY") {
-    wall("CODEX_ROLE_COORDINATOR_WALL", "coordinatorResult.status", "ASSIGNMENTS_READY_REQUIRED")
+  if (value.providerId !== "hosted-codex" || value.adapterId !== "hosted-codex-session-native-team-v1") {
+    wall("CODEX_ROLE_COORDINATOR_WALL", "coordinatorResult.adapterId", "CURRENT_SESSION_NATIVE_TEAM_REQUIRED")
   }
-  for (const field of ["dispatchPerformed", "providerContractDispatchAllowed", "runtimeActivationAllowed", "authorityGranted"]) {
+  if (value.status !== "CURRENT_SESSION_NATIVE_TEAM_READY" || value.currentSessionOnly !== true) {
+    wall("CODEX_ROLE_COORDINATOR_WALL", "coordinatorResult.status", "CURRENT_SESSION_READY_REQUIRED")
+  }
+  for (const field of [
+    "dispatchPerformed",
+    "providerContractDispatchAllowed",
+    "runtimeActivationAllowed",
+    "authorityGranted",
+    "durableTransportClaimed",
+    "durablePersistenceClaimed",
+    "serviceWorkerClaimed",
+    "localIssue357Allowed",
+    "credentialInspectionAllowed",
+    "authorityMintingAllowed",
+    "ownerOperationEvidenceCertified",
+  ]) {
     if (value[field] !== false) wall("CODEX_ROLE_AUTHORITY_WALL", `coordinatorResult.${field}`, "FALSE_REQUIRED")
   }
   if (!Array.isArray(value.assignments)) wall("CODEX_ROLE_TYPE_WALL", "coordinatorResult.assignments", "ARRAY_REQUIRED")
+  if (value.assignmentCount !== value.assignments.length) {
+    wall("CODEX_ROLE_COORDINATOR_WALL", "coordinatorResult.assignmentCount", "ASSIGNMENT_COUNT_MATCH_REQUIRED")
+  }
   const assignments = value.assignments.map((raw, index) => {
     exactFields(raw, ASSIGNMENT_FIELDS, `coordinatorResult.assignments[${index}]`)
     const assignment = {
@@ -139,42 +209,27 @@ function normalizeCoordinatorResult(value, envelope) {
       laneId: safeIdentifier(raw.laneId, `coordinatorResult.assignments[${index}].laneId`),
       role: safeIdentifier(raw.role, `coordinatorResult.assignments[${index}].role`),
       workerId: safeIdentifier(raw.workerId, `coordinatorResult.assignments[${index}].workerId`),
-      state: raw.state,
-      dispatchPerformed: raw.dispatchPerformed,
+      phase: safeIdentifier(raw.phase, `coordinatorResult.assignments[${index}].phase`),
+      nativeAssignmentPrepared: raw.nativeAssignmentPrepared,
+      nativeAssignmentExecuted: raw.nativeAssignmentExecuted,
+      nativeBindingRequired: raw.nativeBindingRequired,
+      nativeBindingEstablished: raw.nativeBindingEstablished,
+      authorityGranted: raw.authorityGranted,
     }
     if (assignment.workOrderId !== envelope.workOrderId || assignment.laneId !== envelope.laneId) {
       wall("CODEX_ROLE_COORDINATOR_WALL", `coordinatorResult.assignments[${index}]`, "ENVELOPE_LANE_REQUIRED")
     }
-    if (assignment.state !== "ASSIGNMENT_READY" || assignment.dispatchPerformed !== false) {
-      wall("CODEX_ROLE_COORDINATOR_WALL", `coordinatorResult.assignments[${index}].state`, "READY_WITHOUT_DISPATCH_REQUIRED")
+    if (assignment.nativeAssignmentPrepared !== true || assignment.nativeAssignmentExecuted !== false
+      || assignment.authorityGranted !== false) {
+      wall("CODEX_ROLE_COORDINATOR_WALL", `coordinatorResult.assignments[${index}]`, "PREPARED_WITHOUT_EXECUTION_REQUIRED")
+    }
+    const coordinator = assignment.role === "coordinator"
+    if (assignment.nativeBindingRequired !== !coordinator || assignment.nativeBindingEstablished !== coordinator) {
+      wall("CODEX_ROLE_COORDINATOR_WALL", `coordinatorResult.assignments[${index}]`, "OPAQUE_NATIVE_BINDING_STATE_REQUIRED")
     }
     return assignment
   })
   return assignments
-}
-
-function normalizeRoleProofs(value) {
-  if (!Array.isArray(value)) wall("CODEX_ROLE_TYPE_WALL", "roleProofs", "ARRAY_REQUIRED")
-  const proofs = value.map((raw, index) => {
-    exactFields(raw, ROLE_PROOF_FIELDS, `roleProofs[${index}]`)
-    exactFields(raw.hostSessionProofReference, HOST_SESSION_PROOF_FIELDS, `roleProofs[${index}].hostSessionProofReference`)
-    return {
-      role: safeIdentifier(raw.role, `roleProofs[${index}].role`),
-      workerId: safeIdentifier(raw.workerId, `roleProofs[${index}].workerId`),
-      hostSessionProofReference: {
-        proofId: safeIdentifier(raw.hostSessionProofReference.proofId, `roleProofs[${index}].hostSessionProofReference.proofId`),
-      },
-    }
-  })
-  const keys = proofs.map(({ role }) => role)
-  if (new Set(keys).size !== keys.length) wall("CODEX_ROLE_DUPLICATE_WALL", "roleProofs")
-  return proofs
-}
-
-function proofFor(roleProofs, role) {
-  const proof = roleProofs.find((entry) => entry.role === role)
-  if (!proof) wall("CODEX_ROLE_PROOF_WALL", `roleProofs.${role}`, "HOST_SESSION_PROOF_REQUIRED")
-  return proof
 }
 
 function assignmentFor(assignments, role) {
@@ -197,7 +252,80 @@ function normalizeReview(value, field, finalReview = false) {
   return { verdict: value.verdict, unresolvedThreads: value.unresolvedThreads }
 }
 
-function normalizeStages(value, envelope) {
+function getAssignmentHandle(plan, assignmentId, field) {
+  try {
+    return getHostedCodexNativeAssignmentHandle(plan, assignmentId)
+  } catch (error) {
+    if (error instanceof HostedCodexCoordinatorAdapterError) {
+      wall("CODEX_ROLE_COORDINATOR_WALL", field, error.code)
+    }
+    throw error
+  }
+}
+
+function runNativeStage(plan, assignment, raw, index, envelope) {
+  const handle = getAssignmentHandle(plan, assignment.assignmentId, `stages[${index}].assignmentHandle`)
+  if (raw.startIdempotencyKey !== null) {
+    try {
+      startHostedCodexNativeAssignment(plan, {
+        assignmentHandle: handle,
+        idempotencyKey: safeIdentifier(raw.startIdempotencyKey, `stages[${index}].startIdempotencyKey`),
+      })
+    } catch (error) {
+      if (error instanceof HostedCodexCoordinatorAdapterError) {
+        wall("CODEX_ROLE_NATIVE_STAGE_WALL", `stages[${index}].start`, error.code)
+      }
+      throw error
+    }
+  }
+  try {
+    createHostedCodexNativeMessage(plan, {
+      assignmentHandle: handle,
+      direction: "TO_ASSIGNMENT",
+      messageType: safeIdentifier(raw.messageType, `stages[${index}].messageType`),
+      summary: raw.messageSummary,
+      idempotencyKey: safeIdentifier(raw.messageIdempotencyKey, `stages[${index}].messageIdempotencyKey`),
+    })
+  } catch (error) {
+    if (error instanceof HostedCodexCoordinatorAdapterError) {
+      wall("CODEX_ROLE_NATIVE_STAGE_WALL", `stages[${index}].message`, error.code)
+    }
+    throw error
+  }
+  let response
+  try {
+    response = captureHostedCodexNativeEvidence(plan, {
+      assignmentHandle: handle,
+      observationId: safeIdentifier(raw.observationId, `stages[${index}].observationId`),
+    })
+  } catch (error) {
+    if (error instanceof HostedCodexCoordinatorAdapterError) {
+      if (error.code === "HOSTED_CODEX_REPLAY_WALL") {
+        wall("CODEX_ROLE_REPLAY_WALL", `stages[${index}].observation`, error.detail ?? error.code)
+      }
+      wall("CODEX_ROLE_NATIVE_STAGE_WALL", `stages[${index}].observation`, error.code)
+    }
+    throw error
+  }
+  try {
+    exactFields(response, CAPTURED_EVIDENCE_FIELDS, `stages[${index}].capturedEvidence`)
+  } catch (error) {
+    if (error instanceof CodexRoleAdapterError) throw error
+    wall("CODEX_ROLE_PROVIDER_RESPONSE_WALL", `stages[${index}].providerResponse`, "CAPTURED_EVIDENCE_REQUIRED")
+  }
+  if (response.workOrderId !== envelope.workOrderId || response.laneId !== envelope.laneId
+    || response.assignmentId !== assignment.assignmentId || !["RUNNING", "SUCCEEDED"].includes(response.providerState)) {
+    wall("CODEX_ROLE_STAGE_WALL", `stages[${index}].providerResponse`, "BOUND_ACTIVE_OR_SUCCEEDED_EVIDENCE_REQUIRED")
+  }
+  if (response.sanitized !== true || response.rawProviderOutputIncluded !== false
+    || response.independentlyCaptured !== true || response.durablePersistenceClaimed !== false
+    || response.authorityGranted !== false) {
+    wall("CODEX_ROLE_STAGE_WALL", `stages[${index}].providerResponse`, "SANITIZED_INDEPENDENT_EVIDENCE_REQUIRED")
+  }
+  return response
+}
+
+function normalizeStages(value, envelope, plan, assignments) {
   if (!Array.isArray(value) || value.length !== REQUIRED_STAGES.length) {
     wall("CODEX_ROLE_STAGE_WALL", "stages", "FOUR_STAGE_CHAIN_REQUIRED")
   }
@@ -205,25 +333,13 @@ function normalizeStages(value, envelope) {
     exactFields(raw, STAGE_FIELDS, `stages[${index}]`)
     const expectedStage = REQUIRED_STAGES[index]
     if (raw.stage !== expectedStage) wall("CODEX_ROLE_STAGE_WALL", `stages[${index}].stage`, `${expectedStage}_REQUIRED`)
-    let response
-    try {
-      response = validateProviderResponse(raw.providerResponse)
-    } catch (error) {
-      if (error instanceof ProviderContractError) {
-        wall("CODEX_ROLE_PROVIDER_RESPONSE_WALL", `stages[${index}].providerResponse`, error.code)
-      }
-      throw error
-    }
-    if (response.workOrderId !== envelope.workOrderId || response.laneId !== envelope.laneId) {
-      wall("CODEX_ROLE_STAGE_WALL", `stages[${index}].providerResponse`, "ENVELOPE_LANE_REQUIRED")
-    }
-    if (response.providerState !== "SUCCEEDED") {
-      wall("CODEX_ROLE_STAGE_WALL", `stages[${index}].providerResponse.providerState`, "SUCCEEDED_REQUIRED")
-    }
+    const role = safeIdentifier(raw.role, `stages[${index}].role`)
+    const assignment = assignmentFor(assignments, role === "remediator" ? "builder" : role)
+    const response = runNativeStage(plan, assignment, raw, index, envelope)
     return {
       stageId: safeIdentifier(raw.stageId, `stages[${index}].stageId`),
       stage: expectedStage,
-      role: safeIdentifier(raw.role, `stages[${index}].role`),
+      role,
       workerId: safeIdentifier(raw.workerId, `stages[${index}].workerId`),
       providerResponse: response,
       review: raw.review === null ? null : normalizeReview(raw.review, `stages[${index}].review`, expectedStage === "REREVIEW"),
@@ -268,27 +384,12 @@ function assertStageSemantics(stages, envelope) {
 }
 
 export function adaptCodexRoleLifecycle(input) {
-  wall(
-    "CODEX_ROLE_ADAPTER_INVALIDATED_PENDING_REPROOF",
-    "roleAdapter",
-    "WO_MAO_031_REDESIGN_AND_INDEPENDENT_REPROOF_REQUIRED",
-  )
   exactFields(input, INPUT_FIELDS, "roleAdapter")
   if (input.schemaVersion !== 1) wall("CODEX_ROLE_INPUT_WALL", "schemaVersion", "1_REQUIRED")
   if (input.artifactType !== "CODEX_ROLE_ADAPTER_INPUT") {
     wall("CODEX_ROLE_INPUT_WALL", "artifactType", "CODEX_ROLE_ADAPTER_INPUT_REQUIRED")
   }
   if (input.adapterId !== ADAPTER_ID) wall("CODEX_ROLE_INPUT_WALL", "adapterId", `${ADAPTER_ID}_REQUIRED`)
-
-  let validatedConformance
-  try {
-    validatedConformance = validateCodexProviderConformance(input.conformance)
-  } catch (error) {
-    if (error instanceof CodexProviderConformanceError) {
-      wall("CODEX_ROLE_CONFORMANCE_WALL", "conformance", error.code)
-    }
-    throw error
-  }
 
   let envelopeResult
   try {
@@ -306,38 +407,17 @@ export function adaptCodexRoleLifecycle(input) {
     }
   }
 
-  const assignments = normalizeCoordinatorResult(input.coordinatorResult, envelope)
-  const roleProofs = normalizeRoleProofs(input.roleProofs)
-  const stages = normalizeStages(input.stages, envelope)
+  const assignments = normalizeCoordinatorResult(input.coordinatorPlan, envelope)
+  const stages = normalizeStages(input.stages, envelope, input.coordinatorPlan, assignments)
   assertStageSemantics(stages, envelope)
 
   const roleAdapters = []
   for (const role of ["builder", "reviewer", "remediator"]) {
-    const proof = proofFor(roleProofs, role)
     const assignment = assignmentFor(assignments, role === "remediator" ? "builder" : role)
-    const requestedRole = role === "remediator" ? "builder" : role
-    let coordination
-    try {
-      coordination = evaluateCodexSessionCoordination({
-        conformance: validatedConformance.conformance,
-        envelope,
-        requestedRole,
-        runtimeActivationRequested: false,
-        hostSession: verifyCodexHostSessionIdentity(proof.hostSessionProofReference),
-      })
-    } catch (error) {
-      if (error instanceof CodexProviderConformanceError) {
-        wall("CODEX_ROLE_CONFORMANCE_WALL", `roleProofs.${role}`, error.code)
-      }
-      throw error
-    }
-    if (proof.workerId !== coordination.workerId || (role !== "remediator" && assignment.workerId !== coordination.workerId)) {
-      wall("CODEX_ROLE_PROOF_WALL", `roleProofs.${role}.workerId`, "HOST_SESSION_WORKER_MATCH_REQUIRED")
-    }
     roleAdapters.push({
       role,
-      workerId: coordination.workerId,
-      hostSessionProofId: coordination.hostSessionProofId,
+      workerId: assignment.workerId,
+      hostSessionProofId: null,
       state: "ROLE_ADAPTER_READY",
       providerContractDispatchAllowed: false,
       dispatchPerformed: false,
@@ -360,7 +440,7 @@ export function adaptCodexRoleLifecycle(input) {
     evidence: {
       sanitized: true,
       envelopeContentHash: envelopeResult.contentHash,
-      conformanceContentHash: validatedConformance.contentHash,
+      coordinatorPlanContentHash: input.coordinatorPlan.planContentHash,
       coordinatorAssignmentHash: contentHash(assignments),
       stageHash: contentHash(stages),
       responseHashes: stages.map(({ providerResponse }) => contentHash(providerResponse)),

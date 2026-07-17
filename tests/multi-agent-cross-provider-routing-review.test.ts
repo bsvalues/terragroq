@@ -74,6 +74,18 @@ function input(overrides: Record<string, unknown> = {}) {
         reviewMode: "CROSS_PROVIDER_REVIEW",
       },
     ],
+    dependencySettlement: {
+      consumerWorkOrderId: "WO-MAO-034",
+      assessmentWorkOrderId: "WO-MAO-032",
+      subjectWorkOrderId: "WO-MAO-033",
+      lifecycleState: "DEFERRED",
+      reasonCode: "PROVIDER_UNAVAILABLE",
+      configuredTrust: {
+        registryId: "williamos-provider-assessment-pins",
+        registryVersion: 1,
+      },
+      assessment: {},
+    },
     ...overrides,
   }
 }
@@ -89,14 +101,14 @@ function expectWall(callback: () => unknown, code: string) {
 }
 
 describe("WO-MAO-034 cross-provider routing and review", () => {
-  it("mechanically invalidates valid and adversarial historical fixtures pending ordered re-proof", () => {
-    expectWall(() => evaluateCrossProviderRoutingReview(input()), "CROSS_PROVIDER_ROUTING_INVALIDATED_PENDING_REPROOF")
+  it("fails closed until the consumer-specific unavailable-provider settlement has an authenticated pinned trust record", () => {
+    expectWall(() => evaluateCrossProviderRoutingReview(input()), "CROSS_PROVIDER_SETTLEMENT_WALL")
     expectWall(() => evaluateCrossProviderRoutingReview(input({
       providers: providers({ 0: { secretIsolation: false } }),
-    })), "CROSS_PROVIDER_ROUTING_INVALIDATED_PENDING_REPROOF")
+    })), "CROSS_PROVIDER_ISOLATION_WALL")
   })
 
-  it("exposes only the typed invalidation through the CLI", () => {
+  it("exposes the typed settlement wall through the CLI", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cross-provider-routing-"))
     const inputPath = path.join(directory, "input.json")
     const badPath = path.join(directory, "bad.json")
@@ -108,7 +120,7 @@ describe("WO-MAO-034 cross-provider routing and review", () => {
     expect(historical.status).toBe(2)
     expect(JSON.parse(historical.stdout)).toMatchObject({
       ok: false,
-      code: "CROSS_PROVIDER_ROUTING_INVALIDATED_PENDING_REPROOF",
+      code: "CROSS_PROVIDER_SETTLEMENT_WALL",
       dispatchPerformed: false,
       authorityGranted: false,
     })
@@ -118,7 +130,7 @@ describe("WO-MAO-034 cross-provider routing and review", () => {
     expect(failed.status).toBe(2)
     expect(JSON.parse(failed.stdout)).toMatchObject({
       ok: false,
-      code: "CROSS_PROVIDER_ROUTING_INVALIDATED_PENDING_REPROOF",
+      code: "CROSS_PROVIDER_INPUT_WALL",
       dispatchPerformed: false,
       authorityGranted: false,
     })

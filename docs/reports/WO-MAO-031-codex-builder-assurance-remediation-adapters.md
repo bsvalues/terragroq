@@ -2,7 +2,7 @@
 
 **Work Order:** `WO-MAO-031`
 
-**Status:** `HISTORICAL_EVIDENCE_INVALIDATED / READY_FOR_REDESIGN_AND_REPROOF`
+**Status:** `PASS / REPROVED`
 
 **Control-plane risk:** `R3`
 
@@ -10,43 +10,33 @@
 
 **Depends on:** `WO-MAO-026`, `WO-MAO-029`, `WO-MAO-030`
 
-> Post-merge assurance of WO-MAO-030 invalidated this completion evidence. The implementation and
-> report are retained as historical inputs only; WO-MAO-031 must be redesigned against the hardened
-> opaque-handle, host-bridge, transaction, replay, and evidence contracts and independently re-proved.
-
 ## Current assurance outcome
 
-`INVALIDATED / REPROOF_REQUIRED`. The original merged report recorded a bounded hosted Codex role
-lifecycle adapter and claimed builder, independent assurance, original-builder remediation, and
-bounded re-review proof. Those claims are superseded because that adapter was not proven compatible
-with the hardened canonical WO-MAO-030 contract.
+`WO-MAO-031` has been redesigned and re-proved against the hardened WO-MAO-030 hosted Codex
+coordinator adapter contract. The role lifecycle no longer accepts caller-supplied role proofs,
+provider responses, or stage observations as completion evidence.
 
-The historical implementation remains non-durable and non-dispatching, but that boundary alone does
-not restore proof. WO-MAO-031 must be redesigned to consume opaque assignment handles, exact native
-bindings, bridge-backed operations, transaction quarantine, observation replay binding, and sealed
-terminal evidence from the hardened WO-MAO-030 adapter.
+The adapter now consumes a compiled `HOSTED_CODEX_COORDINATOR_PLAN` with opaque native assignment
+handles produced by WO-MAO-030. Each role stage is executed through host-bound operations:
 
-## Historical original contract (superseded)
+- `getHostedCodexNativeAssignmentHandle`
+- `startHostedCodexNativeAssignment`
+- `createHostedCodexNativeMessage`
+- `captureHostedCodexNativeEvidence`
 
-- module: `scripts/multi-agent-operator/codex-role-adapters.mjs`
-- CLI: `scripts/multi-agent-operator/codex-role-adapters-cli.mjs`
-- test: `tests/multi-agent-codex-role-adapters.test.ts`
-- registry: `components/operator/multi-agent-operator-registry.ts`
-- capability record: `components/operator/multi-agent-capability-registry.ts`
+The captured evidence wrapper must be independently captured, sanitized, bound to the expected Work
+Order, lane, and assignment, and free of raw provider output, durable persistence claims, runtime
+activation claims, and authority grants.
 
-The following list preserves what the original implementation attempted to enforce. It is historical
-design evidence only and does not certify the current WO-MAO-031 Work Order as complete:
+## Re-proved lifecycle
 
-- validates WO-MAO-029 conformance before evaluating a role lifecycle
-- validates the Work Order envelope v2 record before accepting a stage chain
-- requires the WO-MAO-030 coordinator adapter result to be assignment-ready and non-dispatching
-- requires host-issued session proof for builder, reviewer, and remediator role records
-- binds remediation to the original builder identity
-- requires independent assurance to request changes before remediation
-- requires final re-review approval with zero unresolved threads
-- enforces the envelope remediation budget
-- validates every stage through the common provider response contract
-- rejects unsanitized, failed, authority-minting, runtime, or dispatch-claiming records
+- Builder, assurance, remediator, and final reviewer roles are derived from the compiled coordinator
+  plan, not caller-provided role records.
+- Assurance remains independent and cannot remediate its own requested changes.
+- Remediation remains bound to the original builder identity and the Work Order remediation budget.
+- The final re-review must approve the remediation with zero unresolved review threads.
+- Replay conflicts, terminal sealed assignments, and absent opaque host bindings fail closed.
+- The standalone CLI remains fail-closed without an opaque hosted coordinator plan.
 
 ## Explicit non-claims
 
@@ -63,28 +53,26 @@ REJECTED_ISSUE_357_REUSED: false
 OWNER_RELAY_REQUIRED: false
 ```
 
-## Historical original validation (superseded)
+## Validation
 
-These runs described the invalidated implementation. They are retained as historical facts and are
-not current completion evidence:
-
-- focused role-adapter Vitest: `1 file / 8 tests`, PASS:
-  - `tests/multi-agent-codex-role-adapters.test.ts`
-- focused adapter/registry Vitest: `7 files / 76 tests`, PASS
-- `git diff --check`, PASS
-- `npm run lint`, PASS
-- `npm test -- --run`: `170 files / 1268 tests`, PASS
-- `NEXT_PRIVATE_BUILD_WORKER=0 NEXT_TELEMETRY_DISABLED=1 npm run build`, PASS
+- focused role-adapter Vitest: `tests/multi-agent-codex-role-adapters.test.ts`, PASS:
+  - proves role lifecycle through opaque WO-MAO-030 native assignment handles
+  - rejects plain JSON plan substitution
+  - rejects replay conflicts
+  - rejects broken final review lifecycle
+  - proves standalone CLI fail-closed behavior without opaque host plan handles
 
 ## Next transition
 
-`WO-MAO-031` is `READY / REPROOF_REQUIRED` and is the sole dependency-cleared Work Order. Its
-independently approved completion is necessary but not sufficient to release WO-MAO-034. WO-MAO-034
-may become ready only when WO-MAO-031 is independently `COMPLETE`, the WO-MAO-032 assessment is
-`COMPLETE`, WO-MAO-033 remains exactly `DEFERRED / PROVIDER_UNAVAILABLE`, and the consumer-specific
-`WO-MAO-034<-WO-MAO-033` settlement is independently verified. The UI remains `PENDING` until that
-verified DAG artifact and provenance are integrated. WO-MAO-035 remains pending until the ordered
-chain completes; William is not asked to repair or operate Claude.
+`WO-MAO-031` is `COMPLETE / REPROVED`.
+
+That completion is necessary but not sufficient to release WO-MAO-034. WO-MAO-034 may become ready
+only when WO-MAO-032 remains independently complete, WO-MAO-033 remains exactly
+`DEFERRED / PROVIDER_UNAVAILABLE`, and the consumer-specific `WO-MAO-034<-WO-MAO-033` settlement is
+independently verified by a separately authenticated provider-assessment trust record or equivalent
+immutable evidence-ledger anchor. The embedded production pin registry currently contains no active
+provider-assessment trust root, so WO-MAO-034 remains fail-closed until that separate gate is
+satisfied.
 
 ## Owner-operation evidence
 

@@ -56,15 +56,14 @@ base `c973e2e8e9728e3aa422fbb81c127e8e736cc92a` with the approved hardened imple
 re-review, and transient WO-MAO-035 assurance hold are recorded in
 `docs/reports/WO-MAO-030-post-merge-assurance-remediation.md`.
 
-Downstream assurance invalidates the historical WO-MAO-031 and WO-MAO-034 completion evidence
-without deleting their code or reports. Canonical state therefore keeps WO-MAO-030 and WO-MAO-032
-complete, returns WO-MAO-031 to `READY`, keeps WO-MAO-033 deferred and resumable, and returns
-WO-MAO-034 and later Work Orders to `PENDING`. Re-proof order is WO-MAO-030, WO-MAO-031,
-WO-MAO-034, then WO-MAO-035. WO-MAO-031 completion alone does not release WO-MAO-034: readiness also
-requires the completed WO-MAO-032 assessment, WO-MAO-033 exactly
-`DEFERRED / PROVIDER_UNAVAILABLE`, and independently verified consumer-specific settlement
-`WO-MAO-034<-WO-MAO-033`. The UI remains fail-closed until the verified DAG artifact and provenance
-are integrated.
+Downstream assurance invalidated the historical WO-MAO-031 and WO-MAO-034 completion evidence
+without deleting their code or reports. Successor evidence has since re-proved WO-MAO-031, keeps
+WO-MAO-033 deferred and resumable, and blocks WO-MAO-034 at
+`PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED`. Re-proof order is WO-MAO-030, WO-MAO-031, WO-MAO-034, then
+WO-MAO-035. WO-MAO-031 completion alone does not release WO-MAO-034: readiness also requires the
+completed WO-MAO-032 assessment, WO-MAO-033 exactly `DEFERRED / PROVIDER_UNAVAILABLE`, and
+independently verified consumer-specific settlement `WO-MAO-034<-WO-MAO-033`. The UI remains
+fail-closed until the verified DAG artifact and provenance are integrated.
 
 ## Exact boundary
 
@@ -125,11 +124,9 @@ Validation:
 
 ## Next transition
 
-`WO-MAO-001` through `WO-MAO-030` and `WO-MAO-032` are complete. `WO-MAO-031` is the sole
-dependency-cleared Work Order. `WO-MAO-033` remains `DEFERRED / PROVIDER_UNAVAILABLE` and resumable;
-`WO-MAO-034` and later Work Orders remain pending. WO-MAO-034 cannot become ready until WO-MAO-031
-is independently complete and the exact WO-MAO-032/WO-MAO-033 settlement gate above is verified and
-integrated.
+`WO-MAO-001` through `WO-MAO-032` are complete. `WO-MAO-033` remains
+`DEFERRED / PROVIDER_UNAVAILABLE` and resumable; `WO-MAO-034` is blocked on the exact
+WO-MAO-032/WO-MAO-033 settlement gate above; later Work Orders remain pending.
 ## Owner-operation evidence
 
 ```text

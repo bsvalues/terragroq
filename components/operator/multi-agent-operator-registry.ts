@@ -184,12 +184,12 @@ export function resolveMultiAgentWorkOrders(
   })
 }
 
-const EVIDENCED_COMPLETE = new Set([...range(1, 30), 32].map(workOrderId))
+const EVIDENCED_COMPLETE = new Set([...range(1, 32)].map(workOrderId))
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
 
 export const MULTI_AGENT_OPERATOR_WORK_ORDERS = resolveMultiAgentWorkOrders(
   EVIDENCED_COMPLETE,
-  new Set(),
+  new Set([workOrderId(34)]),
   PROVIDER_UNAVAILABLE_DEFERRED,
 )
 
