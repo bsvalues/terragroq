@@ -76,6 +76,10 @@ import {
   isVerifiedWoMao052IncidentProcedureEvidence,
 } from "@/components/operator/multi-agent-incident-procedure-registry"
 import {
+  MULTI_AGENT_RESILIENCE_SAFETY_ROLLUP_EVIDENCE,
+  isVerifiedWoMao053ResilienceSafetyRollupEvidence,
+} from "@/components/operator/multi-agent-resilience-safety-rollup-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -243,6 +247,7 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-050", "docs/reports/WO-MAO-050-malicious-defective-worker-drill.md"],
   ["WO-MAO-051", "docs/reports/WO-MAO-051-status-evidence-owner-decision-ux.md"],
   ["WO-MAO-052", "docs/reports/WO-MAO-052-kill-revoke-rollback-incident-procedure.md"],
+  ["WO-MAO-053", "docs/reports/WO-MAO-053-resilience-safety-rollup.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -348,6 +353,9 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao052IncidentProcedureEvidence(MULTI_AGENT_INCIDENT_PROCEDURE_EVIDENCE)
     ? [workOrderId(52)]
+    : []),
+  ...(isVerifiedWoMao053ResilienceSafetyRollupEvidence(MULTI_AGENT_RESILIENCE_SAFETY_ROLLUP_EVIDENCE)
+    ? [workOrderId(53)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])

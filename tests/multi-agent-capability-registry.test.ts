@@ -453,6 +453,16 @@ describe("multi-agent executable capability inventory", () => {
         "WO-MAO-052 is complete; WO-MAO-053 is now READY through retained prerequisites",
       ]),
     })
+    expect(capability("resilience-safety-rollup-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_RESILIENCE_SAFETY_ROLLUP_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/resilience-safety-rollup.mjs",
+      restrictions: expect.arrayContaining([
+        "Zero-input rollup model only; no scheduler, provider, GitHub, runtime, production, or state mutation operation is performed",
+        "WO-MAO-053 is complete; WO-MAO-054 is now READY through retained prerequisites",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",

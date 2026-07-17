@@ -21,36 +21,31 @@ describe("portfolio operator surface", () => {
       programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
     })
     expect(surface.activeWorkOrder).toMatchObject({
-      workOrderId: "WO-MAO-053",
+      workOrderId: "WO-MAO-054",
       status: "READY",
     })
     expect(surface.statusCounts).toEqual({
       total: 62,
-      complete: 51,
+      complete: 52,
       ready: 1,
-      pending: 9,
+      pending: 8,
       blocked: 0,
       deferred: 1,
     })
     expect(surface.activeDependencyState).toMatchObject({
-      total: 8,
-      satisfied: 8,
+      total: 3,
+      satisfied: 3,
     })
     expect(surface.activeDependencyState?.dependencies.map((dependency) => dependency.workOrderId)).toEqual([
-      "WO-MAO-045",
-      "WO-MAO-046",
-      "WO-MAO-047",
-      "WO-MAO-048",
-      "WO-MAO-049",
-      "WO-MAO-050",
-      "WO-MAO-051",
-      "WO-MAO-052",
+      "WO-MAO-036",
+      "WO-MAO-044",
+      "WO-MAO-053",
     ])
     expect(surface.activeReservation).toMatchObject({
-      evidencePath: "docs/reports/WO-MAO-053.md",
+      evidencePath: "docs/reports/WO-MAO-054.md",
       ownerOperationsAllowed: false,
     })
-    expect(surface.activeReservation?.scope).toEqual(["Declared repository evidence", "Reserved R3 paths", "Tests and reports"])
+    expect(surface.activeReservation?.scope).toEqual(["Declared repository evidence", "Reserved R2 paths", "Tests and reports"])
     expect(surface.activeReservation?.discoveryBoundary).toEqual([
       "docs/governance",
       "docs/reports",
@@ -59,12 +54,12 @@ describe("portfolio operator surface", () => {
       "tests",
     ])
     expect(surface.evidenceChain.map((entry) => entry.workOrderId)).toEqual([
-      "WO-MAO-047",
       "WO-MAO-048",
       "WO-MAO-049",
       "WO-MAO-050",
       "WO-MAO-051",
       "WO-MAO-052",
+      "WO-MAO-053",
     ])
     expect(surface.ownerAuthorityWalls.map((wall) => wall.programId)).toEqual(expect.arrayContaining([
       "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001",
