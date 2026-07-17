@@ -433,6 +433,16 @@ describe("multi-agent executable capability inventory", () => {
         "WO-MAO-050 is complete; WO-MAO-051 is now READY through retained prerequisites",
       ]),
     })
+    expect(capability("status-evidence-owner-decision-ux-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_STATUS_EVIDENCE_OWNER_DECISION_UX_VERIFIED",
+      adapterRef: "components/operator/portfolio-operator-surface.ts",
+      restrictions: expect.arrayContaining([
+        "Read-only status and evidence UX only; no run, retry, fix, merge, dispatch, or owner operation controls are exposed",
+        "WO-MAO-051 is complete; WO-MAO-052 is now READY through retained prerequisites",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",

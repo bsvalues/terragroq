@@ -390,7 +390,8 @@ lifecycle conformance plan, WO-MAO-045 proved as an independent secret/identity/
 audit, WO-MAO-046 proved as a retry/idempotency/duplicate-prevention model, WO-MAO-047 proved
 worker/coordinator recovery, WO-MAO-048 proved provider outage/failover handling, WO-MAO-049
 proved stale-base/CI/review/merge-race handling, and WO-MAO-050 proved malicious/defective
-worker containment. WO-MAO-051 is `READY`; the next ordered gate is WO-MAO-051.
+worker containment. WO-MAO-051 proved status, evidence, and owner-decision UX. WO-MAO-052 is
+`READY`; the next ordered gate is WO-MAO-052.
 
 ### Phase 5 — GitHub delivery engine
 
