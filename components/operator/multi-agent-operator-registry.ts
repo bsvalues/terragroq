@@ -56,6 +56,10 @@ import {
   isVerifiedWoMao047WorkerRecoveryEvidence,
 } from "@/components/operator/multi-agent-worker-recovery-registry"
 import {
+  MULTI_AGENT_PROVIDER_FAILOVER_EVIDENCE,
+  isVerifiedWoMao048ProviderFailoverEvidence,
+} from "@/components/operator/multi-agent-provider-failover-registry"
+import {
   MULTI_AGENT_MERGE_RACE_EVIDENCE,
   isVerifiedWoMao049MergeRaceEvidence,
 } from "@/components/operator/multi-agent-merge-race-registry"
@@ -222,6 +226,7 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-045", "docs/reports/WO-MAO-045-independent-secret-identity-trust-boundary-audit.md"],
   ["WO-MAO-046", "docs/reports/WO-MAO-046-retry-idempotency-duplicate-prevention.md"],
   ["WO-MAO-047", "docs/reports/WO-MAO-047-worker-coordinator-recovery.md"],
+  ["WO-MAO-048", "docs/reports/WO-MAO-048-provider-outage-failover-drill.md"],
   ["WO-MAO-049", "docs/reports/WO-MAO-049-stale-base-ci-review-merge-race.md"],
 ])
 
@@ -313,6 +318,9 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao047WorkerRecoveryEvidence(MULTI_AGENT_WORKER_RECOVERY_EVIDENCE)
     ? [workOrderId(47)]
+    : []),
+  ...(isVerifiedWoMao048ProviderFailoverEvidence(MULTI_AGENT_PROVIDER_FAILOVER_EVIDENCE)
+    ? [workOrderId(48)]
     : []),
   ...(isVerifiedWoMao049MergeRaceEvidence(MULTI_AGENT_MERGE_RACE_EVIDENCE)
     ? [workOrderId(49)]
