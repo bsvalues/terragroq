@@ -388,8 +388,9 @@ merge-controller plan, WO-MAO-042 proved as a post-merge verification and cleanu
 WO-MAO-043 proved as an automatic dependent-release plan, WO-MAO-044 proved as a GitHub
 lifecycle conformance plan, WO-MAO-045 proved as an independent secret/identity/trust-boundary
 audit, WO-MAO-046 proved as a retry/idempotency/duplicate-prevention model, WO-MAO-047 proved
-worker/coordinator recovery, and WO-MAO-049 proved stale-base/CI/review/merge-race handling.
-WO-MAO-048 is `READY`; the next ordered gate is WO-MAO-048.
+worker/coordinator recovery, WO-MAO-048 proved provider outage/failover handling, and WO-MAO-049
+proved stale-base/CI/review/merge-race handling. WO-MAO-050 is `READY`; the next ordered gate is
+WO-MAO-050.
 
 ### Phase 5 — GitHub delivery engine
 

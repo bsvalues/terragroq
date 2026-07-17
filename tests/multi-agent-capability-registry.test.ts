@@ -389,8 +389,38 @@ describe("multi-agent executable capability inventory", () => {
         "Zero-input retry/idempotency model only; no scheduler or provider is executed",
         "Retries are bounded to classified transient states and terminal classes fail closed",
         "Duplicate branch, commit, PR, comment, merge, deploy, cleanup, and evidence replay are fenced",
-        "WO-MAO-046 released WO-MAO-047 and WO-MAO-049 through retained prerequisites; both are now complete and WO-MAO-048 is READY",
+        "WO-MAO-046 released WO-MAO-047 and WO-MAO-049 through retained prerequisites; WO-MAO-047 through WO-MAO-049 are now complete",
         "No command runner, background worker, runtime activation, credential access, authority minting, GitHub execution, production write, or owner relay",
+      ]),
+    })
+    expect(capability("worker-coordinator-recovery-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_WORKER_COORDINATOR_RECOVERY_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/worker-coordinator-recovery.mjs",
+      restrictions: expect.arrayContaining([
+        "Zero-input recovery model only; no worker is restarted and no process control is performed",
+        "WO-MAO-047 is complete; WO-MAO-048 is released to READY through retained prerequisites",
+      ]),
+    })
+    expect(capability("provider-outage-failover-drill-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_PROVIDER_OUTAGE_FAILOVER_DRILL_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/provider-outage-failover-drill.mjs",
+      restrictions: expect.arrayContaining([
+        "Zero-input outage drill only; no provider is called and no network failure is injected",
+        "WO-MAO-048 is complete; WO-MAO-050 is released to READY through retained prerequisites",
+      ]),
+    })
+    expect(capability("stale-base-ci-review-merge-race-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_STALE_BASE_CI_REVIEW_MERGE_RACE_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/stale-base-ci-review-merge-race.mjs",
+      restrictions: expect.arrayContaining([
+        "Zero-input control-plane drill only; no GitHub API, rebase, CI rerun, review-thread resolution, or merge is performed",
+        "WO-MAO-049 is complete; WO-MAO-050 is now READY after WO-MAO-048 completion",
       ]),
     })
     expect(capability("claude-code-provider")).toMatchObject({
