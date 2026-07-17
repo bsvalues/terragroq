@@ -53,13 +53,13 @@ describe("portfolio operator", () => {
     ])
   })
 
-  it("selects WO-MAO-052 after status evidence UX proof", () => {
+  it("selects WO-MAO-053 after incident procedure proof", () => {
     const portfolio = getPortfolioOperatorProgram()
     const multiAgentOperator = portfolio.backlog[0]
 
     expect(buildLoopPacket(multiAgentOperator)).toMatchObject({
-      activeWorkOrder: "WO-MAO-052",
-      eligibleWorkOrders: ["WO-MAO-052"],
+      activeWorkOrder: "WO-MAO-053",
+      eligibleWorkOrders: ["WO-MAO-053"],
       remediationTransition: null,
     })
 
@@ -147,8 +147,8 @@ describe("portfolio operator", () => {
       ownerDecisionRequired: false,
     })
     expect(loop).toMatchObject({
-      activeWorkOrder: "WO-MAO-052",
-      eligibleWorkOrders: ["WO-MAO-052"],
+      activeWorkOrder: "WO-MAO-053",
+      eligibleWorkOrders: ["WO-MAO-053"],
       remediationTransition: null,
       executionMode: "DEPENDENCY_RESERVATION_ELIGIBLE_SET",
     })
@@ -190,9 +190,10 @@ describe("portfolio operator", () => {
     expect(workOrders[48]).toMatchObject({ workOrderId: "WO-MAO-049", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[49]).toMatchObject({ workOrderId: "WO-MAO-050", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[50]).toMatchObject({ workOrderId: "WO-MAO-051", status: "COMPLETE", riskClass: "R3" })
-    expect(workOrders[51]).toMatchObject({ workOrderId: "WO-MAO-052", status: "READY", riskClass: "R3" })
-    expect([30, 31, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52].map((number) => workOrders[number - 1].status))
-      .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "READY"])
+    expect(workOrders[51]).toMatchObject({ workOrderId: "WO-MAO-052", status: "COMPLETE", riskClass: "R3" })
+    expect(workOrders[52]).toMatchObject({ workOrderId: "WO-MAO-053", status: "READY", riskClass: "R3" })
+    expect([30, 31, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53].map((number) => workOrders[number - 1].status))
+      .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "READY"])
     expect(workOrders).toHaveLength(62)
     expect(workOrders.at(-1)?.workOrderId).toBe("WO-MAO-062")
     expect(workOrders.every((workOrder) => "ownerOperationsAllowed" in workOrder && workOrder.ownerOperationsAllowed === false)).toBe(true)
