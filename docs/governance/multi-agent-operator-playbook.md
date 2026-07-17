@@ -385,8 +385,10 @@ registries, WO-MAO-037 proved as a guarded branch/commit/push lifecycle plan, WO
 as a deterministic PR packet linkage plan, WO-MAO-039 proved as a CI/review ingestion plan, and
 WO-MAO-040 proved as a bounded remediation/re-review plan, and WO-MAO-041 proved as a bounded
 merge-controller plan, WO-MAO-042 proved as a post-merge verification and cleanup plan, and
-WO-MAO-043 proved as an automatic dependent-release plan, and WO-MAO-044 proved as a GitHub
-lifecycle conformance plan, WO-MAO-045 is `READY` and remains the next gate.
+WO-MAO-043 proved as an automatic dependent-release plan, WO-MAO-044 proved as a GitHub
+lifecycle conformance plan, WO-MAO-045 proved as an independent secret/identity/trust-boundary
+audit, and WO-MAO-046 proved as a retry/idempotency/duplicate-prevention model. WO-MAO-047 and
+WO-MAO-049 are `READY`; the next ordered gate is WO-MAO-047.
 
 ### Phase 5 — GitHub delivery engine
 

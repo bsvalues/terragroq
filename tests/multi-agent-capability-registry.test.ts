@@ -368,6 +368,31 @@ describe("multi-agent executable capability inventory", () => {
         "No command runner, background worker, runtime activation, credential access, authority minting, GitHub execution, production write, or owner relay",
       ]),
     })
+    expect(capability("independent-secret-identity-trust-audit-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_INDEPENDENT_SECRET_IDENTITY_TRUST_AUDIT_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/independent-secret-identity-trust-audit.mjs",
+      restrictions: expect.arrayContaining([
+        "Zero-input independent audit model only; no secret or credential value is read",
+        "Identity mutation, GitHub write activity, runtime activation, trust-boundary expansion, and owner couriering remain denied",
+        "The audit covers the registered WO-MAO-022 and WO-MAO-036 through WO-MAO-044 dependency chain",
+        "No command runner, background worker, runtime activation, credential access, authority minting, GitHub execution, production write, or owner relay",
+      ]),
+    })
+    expect(capability("retry-idempotency-duplicate-prevention-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_RETRY_IDEMPOTENCY_DUPLICATE_PREVENTION_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/retry-idempotency-duplicate-prevention.mjs",
+      restrictions: expect.arrayContaining([
+        "Zero-input retry/idempotency model only; no scheduler or provider is executed",
+        "Retries are bounded to classified transient states and terminal classes fail closed",
+        "Duplicate branch, commit, PR, comment, merge, deploy, cleanup, and evidence replay are fenced",
+        "WO-MAO-046 is complete; WO-MAO-047 and WO-MAO-049 are released to READY through retained prerequisites",
+        "No command runner, background worker, runtime activation, credential access, authority minting, GitHub execution, production write, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",

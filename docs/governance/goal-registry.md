@@ -139,7 +139,7 @@ persistence, command execution, and any production mutation.
 
 ### `GOAL-WOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
 
-Status: `ACTIVE / WO-MAO-044 COMPLETE / WO-MAO-045 READY`
+Status: `ACTIVE / WO-MAO-046 COMPLETE / WO-MAO-047 AND WO-MAO-049 READY`
 
 Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
@@ -187,7 +187,8 @@ into WO-MAO-034 is now independently settled through the canonical immutable ver
 to WO-MAO-032, the consumer envelope, and source-assessment hash. WO-MAO-034 is `COMPLETE` through
 its zero-input canonical routing proof and independently approved exact implementation candidate.
 The separately ratified dependency-graph correction removes only WO-MAO-033's redundant direct
-edges from WO-MAO-035/036. WO-MAO-035 through WO-MAO-044 are now `COMPLETE`; WO-MAO-045 is `READY`.
+edges from WO-MAO-035/036. WO-MAO-035 through WO-MAO-046 are now `COMPLETE`; WO-MAO-047 and
+WO-MAO-049 are `READY`.
 WO-MAO-033 remains deferred and resumable, and the WO-MAO-034 settlement remains exact and
 unchanged. Claude remains unavailable and disabled. Durable provider dispatch
 and post-merge verification/cleanup remains unproven.
