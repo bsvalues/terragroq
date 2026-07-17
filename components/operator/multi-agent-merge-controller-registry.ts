@@ -53,7 +53,7 @@ export const MULTI_AGENT_MERGE_CONTROLLER_EVIDENCE = Object.freeze({
   resultHash: "6c47aade2d779b27be7b72227196ec7e9d0740b8674b25084256740eb7ce6fa2",
   activeProgramGrant: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
   authorityScope: "BOUNDED_MERGE_ELIGIBILITY_DECISION_ONLY",
-  dependencyWorkOrders: ["WO-MAO-007", "WO-MAO-020", "WO-MAO-039", "WO-MAO-040"],
+  dependencyWorkOrders: Object.freeze(["WO-MAO-007", "WO-MAO-020", "WO-MAO-039", "WO-MAO-040"] as const),
   gateCount: 6,
   deniedBypassCount: 5,
   reservedPathCount: 15,
