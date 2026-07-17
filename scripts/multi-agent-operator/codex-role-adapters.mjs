@@ -1,126 +1,109 @@
 import crypto from "node:crypto"
 
 import {
-  canonicalCodexProviderConformanceJson,
-} from "./codex-provider-conformance.mjs"
-import {
   HostedCodexCoordinatorAdapterError,
-  captureHostedCodexNativeEvidence,
+  attestHostedCodexRoleAssignmentHandles,
+  attestHostedCodexRoleAssignmentPair,
+  attestHostedCodexSemanticEvidence,
+  captureHostedCodexNativeSemanticEvidence,
+  cancelHostedCodexNativeAssignment,
   createHostedCodexNativeMessage,
-  getHostedCodexNativeAssignmentHandle,
   startHostedCodexNativeAssignment,
 } from "./codex-coordinator-adapter.mjs"
-import {
-  WorkOrderEnvelopeV2Error,
-  validateWorkOrderEnvelopeV2,
-} from "./work-order-envelope-v2.mjs"
 
-const ADAPTER_ID = "hosted-codex-role-adapters-v1"
+const ADAPTER_ID = "hosted-codex-role-lifecycle-v2"
+const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/
+const SAFE_SUMMARY = /^[^\u0000-\u001f\u007f-\u009f\u2028\u2029]{1,512}$/u
 const INPUT_FIELDS = new Set([
-  "schemaVersion",
-  "artifactType",
-  "adapterId",
-  "envelope",
-  "coordinatorPlan",
-  "stages",
+  "schemaVersion", "artifactType", "adapterId", "plan", "builderAssignmentHandle",
+  "reviewerAssignmentHandle", "idempotencyNamespace", "observationIds", "messageSummaries",
 ])
-const COORDINATOR_RESULT_FIELDS = new Set([
-  "schemaVersion",
-  "artifactType",
-  "adapterRunId",
-  "topologyId",
-  "topologyHash",
-  "adapterId",
-  "status",
-  "providerId",
-  "currentSessionOnly",
-  "assignmentCount",
-  "concurrency",
-  "assignments",
-  "communication",
-  "cancellation",
-  "evidence",
-  "ownerTouchBudget",
-  "ownerOperationEvidenceCertified",
-  "dispatchPerformed",
-  "durableTransportClaimed",
-  "durablePersistenceClaimed",
-  "serviceWorkerClaimed",
-  "localIssue357Allowed",
-  "credentialInspectionAllowed",
-  "authorityMintingAllowed",
-  "providerContractDispatchAllowed",
-  "runtimeActivationAllowed",
-  "authorityGranted",
-  "planContentHash",
+const HANDLE_FIELDS = new Set([
+  "ok", "code", "adapterRunId", "assignmentId", "workOrderId", "laneId", "role",
+  "workerId", "assignmentContentHash", "authorityGranted",
 ])
-const ASSIGNMENT_FIELDS = new Set([
-  "assignmentId",
-  "workOrderId",
-  "laneId",
-  "role",
-  "workerId",
-  "phase",
-  "taskPayload",
-  "envelopeContentHash",
-  "hostIdentityDigest",
-  "conformanceContentHash",
-  "preventiveTrustContentHash",
-  "authorityGrantId",
-  "cancellationSupported",
-  "messagePolicy",
-  "nativeAssignmentPrepared",
-  "nativeAssignmentExecuted",
-  "nativeBindingRequired",
-  "nativeBindingEstablished",
+const OBSERVATION_FIELDS = new Set(["build", "requestChanges", "remediation", "approval"])
+const MESSAGE_FIELDS = new Set([
+  "buildDirective", "buildResultNotice", "reviewDirective", "changeRequestNotice",
+  "remediationDirective", "remediationResultNotice", "rereviewDirective",
+])
+const OWNER_BUDGET_FIELDS = new Set([
+  "credentialTouches", "diagnosticTouches", "operationTouches", "routineContacts",
+  "routineDecisions",
+])
+const SEMANTIC_ATTESTATION_FIELDS = new Set([
+  "assignmentId", "workOrderId", "laneId", "role", "observationId",
+  "semanticConstraintId", "evidenceType", "providerResponseHash", "nativeBindingDigest",
+  "authorityFenceDigest", "evidenceBindingDigest", "sanitized", "rawProviderOutputIncluded",
   "authorityGranted",
 ])
-const STAGE_FIELDS = new Set([
-  "stageId",
-  "stage",
-  "role",
-  "workerId",
-  "startIdempotencyKey",
-  "messageType",
-  "messageSummary",
-  "messageIdempotencyKey",
-  "observationId",
-  "review",
-  "remediationCycle",
+const ROLE_PAIR_FIELDS = new Set([
+  "workOrderId", "laneId", "builderAssignmentId", "reviewerAssignmentId",
+  "builderNativeBindingDigest", "reviewerNativeBindingDigest", "builderNativeWorkerDigest",
+  "reviewerNativeWorkerDigest", "coordinatorWorkerId", "reservationDigest",
+  "remediationBudget", "retryBudget", "authorityGranted",
 ])
-const REVIEW_FIELDS = new Set(["verdict", "unresolvedThreads"])
-const CAPTURED_EVIDENCE_FIELDS = new Set([
-  "schemaVersion",
-  "artifactType",
-  "adapterRunId",
-  "assignmentId",
-  "observationId",
-  "providerId",
-  "adapterId",
-  "workOrderId",
-  "laneId",
-  "providerState",
-  "reasonCode",
-  "providerResponseType",
-  "providerResponseHash",
-  "terminalState",
-  "sanitized",
-  "rawProviderOutputIncluded",
-  "independentlyCaptured",
-  "durablePersistenceClaimed",
+const ROLE_PREFLIGHT_FIELDS = new Set([
+  "workOrderId", "laneId", "builderAssignmentId", "reviewerAssignmentId",
+  "coordinatorWorkerId", "reservationDigest", "remediationBudget", "retryBudget",
   "authorityGranted",
 ])
-const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/
-const REQUIRED_STAGES = Object.freeze([
-  "BUILD",
-  "ASSURANCE_REVIEW",
-  "REMEDIATION",
-  "REREVIEW",
-])
+const REMEDIATION_BUDGET_FIELDS = new Set(["maxCycles"])
+const RETRY_BUDGET_FIELDS = new Set(["maxAttempts", "backoffSeconds"])
+const LIFECYCLES = new WeakMap()
+const MESSAGE_RECONCILIATION = Object.freeze({
+  "messages.build-directive": Object.freeze({
+    role: "builder", operation: "build-directive", direction: "TO_ASSIGNMENT",
+    messageType: "STATUS", summary: "buildDirective",
+  }),
+  "messages.build-result": Object.freeze({
+    role: "builder", operation: "build-result", direction: "TO_COORDINATOR",
+    messageType: "RESULT", summary: "buildResultNotice",
+  }),
+  "messages.review-directive": Object.freeze({
+    role: "reviewer", operation: "review-directive", direction: "TO_ASSIGNMENT",
+    messageType: "REVIEW_REQUEST", summary: "reviewDirective",
+  }),
+  "messages.change-request-notice": Object.freeze({
+    role: "reviewer", operation: "change-request-notice", direction: "TO_COORDINATOR",
+    messageType: "CHANGE_REQUEST", summary: "changeRequestNotice",
+  }),
+  "messages.remediation-directive": Object.freeze({
+    role: "builder", operation: "remediation-directive", direction: "TO_ASSIGNMENT",
+    messageType: "CHANGE_REQUEST", summary: "remediationDirective",
+  }),
+  "messages.remediation-result": Object.freeze({
+    role: "builder", operation: "remediation-result", direction: "TO_COORDINATOR",
+    messageType: "RESULT", summary: "remediationResultNotice",
+  }),
+  "messages.rereview-directive": Object.freeze({
+    role: "reviewer", operation: "rereview-directive", direction: "TO_ASSIGNMENT",
+    messageType: "REVIEW_REQUEST", summary: "rereviewDirective",
+  }),
+})
+
+const STAGE_CONSTRAINTS = Object.freeze({
+  BUILD: Object.freeze({
+    expectedKind: "CODEX_ROLE_BUILD_COMPLETE",
+    semanticConstraintId: "BUILD_COMPLETE",
+  }),
+  REQUEST_CHANGES: Object.freeze({
+    expectedKind: "CODEX_ROLE_REQUEST_CHANGES",
+    semanticConstraintId: "REQUEST_CHANGES_ONE",
+  }),
+  REMEDIATION: Object.freeze({
+    expectedKind: "CODEX_ROLE_REMEDIATION_COMPLETE",
+    semanticConstraintId: "REMEDIATION_COMPLETE_ONE",
+  }),
+  APPROVAL: Object.freeze({
+    expectedKind: "CODEX_ROLE_APPROVED_ZERO_UNRESOLVED",
+    semanticConstraintId: "APPROVED_ZERO_UNRESOLVED",
+  }),
+})
 
 export class CodexRoleAdapterError extends Error {
-  constructor(code, field, detail = undefined) {
-    super(detail ? `${code}:${field}:${detail}` : `${code}:${field}`)
+  constructor(code, field, detail = null) {
+    super(`${code}:${field}${detail === null ? "" : `:${detail}`}`)
     this.name = "CodexRoleAdapterError"
     this.code = code
     this.field = field
@@ -128,7 +111,7 @@ export class CodexRoleAdapterError extends Error {
   }
 }
 
-function wall(code, field, detail) {
+function wall(code, field, detail = null) {
   throw new CodexRoleAdapterError(code, field, detail)
 }
 
@@ -144,19 +127,23 @@ function exactFields(value, fields, field) {
   if (missing) wall("CODEX_ROLE_MISSING_FIELD_WALL", `${field}.${missing}`)
 }
 
-function safeIdentifier(value, field) {
-  if (typeof value !== "string" || !SAFE_IDENTIFIER.test(value)) {
-    wall("CODEX_ROLE_FORMAT_WALL", field, "SAFE_IDENTIFIER_REQUIRED")
+function text(value, field, pattern = IDENTIFIER) {
+  if (typeof value !== "string" || value.trim() !== value || !pattern.test(value)) {
+    wall("CODEX_ROLE_VALUE_WALL", field, "SAFE_VALUE_REQUIRED")
   }
   return value
 }
 
-function canonicalize(value) {
-  if (Array.isArray(value)) return value.map(canonicalize)
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical)
   if (plainObject(value)) {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]))
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]))
   }
   return value
+}
+
+function hash(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex")
 }
 
 function deepFreeze(value) {
@@ -167,297 +154,588 @@ function deepFreeze(value) {
   return value
 }
 
-function contentHash(value) {
-  return crypto.createHash("sha256").update(JSON.stringify(canonicalize(value))).digest("hex")
+function exactValue(actual, expected, code, field) {
+  if (JSON.stringify(canonical(actual)) !== JSON.stringify(canonical(expected))) wall(code, field, "EXACT_VALUE_REQUIRED")
 }
 
-function normalizeCoordinatorResult(value, envelope) {
-  exactFields(value, COORDINATOR_RESULT_FIELDS, "coordinatorResult")
-  if (value.schemaVersion !== 1 || value.artifactType !== "HOSTED_CODEX_COORDINATOR_PLAN") {
-    wall("CODEX_ROLE_COORDINATOR_WALL", "coordinatorResult.artifactType", "HOSTED_COORDINATOR_PLAN_REQUIRED")
+function normalizedHandle(value, expectedRole, field) {
+  exactFields(value, HANDLE_FIELDS, field)
+  if (value.ok !== true || value.code !== "HOSTED_CODEX_ASSIGNMENT_HANDLE_ISSUED"
+    || value.authorityGranted !== false || value.role !== expectedRole) {
+    wall("CODEX_ROLE_ASSIGNMENT_WALL", field, `${expectedRole.toUpperCase()}_OPAQUE_HANDLE_REQUIRED`)
   }
-  if (value.providerId !== "hosted-codex" || value.adapterId !== "hosted-codex-session-native-team-v1") {
-    wall("CODEX_ROLE_COORDINATOR_WALL", "coordinatorResult.adapterId", "CURRENT_SESSION_NATIVE_TEAM_REQUIRED")
+  for (const name of ["adapterRunId", "assignmentId", "workOrderId", "laneId", "workerId"]) {
+    text(value[name], `${field}.${name}`)
   }
-  if (value.status !== "CURRENT_SESSION_NATIVE_TEAM_READY" || value.currentSessionOnly !== true) {
-    wall("CODEX_ROLE_COORDINATOR_WALL", "coordinatorResult.status", "CURRENT_SESSION_READY_REQUIRED")
+  if (!/^[a-f0-9]{64}$/.test(value.assignmentContentHash)) {
+    wall("CODEX_ROLE_ASSIGNMENT_WALL", `${field}.assignmentContentHash`, "CONTENT_HASH_REQUIRED")
   }
-  for (const field of [
-    "dispatchPerformed",
-    "providerContractDispatchAllowed",
-    "runtimeActivationAllowed",
-    "authorityGranted",
-    "durableTransportClaimed",
-    "durablePersistenceClaimed",
-    "serviceWorkerClaimed",
-    "localIssue357Allowed",
-    "credentialInspectionAllowed",
-    "authorityMintingAllowed",
-    "ownerOperationEvidenceCertified",
-  ]) {
-    if (value[field] !== false) wall("CODEX_ROLE_AUTHORITY_WALL", `coordinatorResult.${field}`, "FALSE_REQUIRED")
-  }
-  if (!Array.isArray(value.assignments)) wall("CODEX_ROLE_TYPE_WALL", "coordinatorResult.assignments", "ARRAY_REQUIRED")
-  if (value.assignmentCount !== value.assignments.length) {
-    wall("CODEX_ROLE_COORDINATOR_WALL", "coordinatorResult.assignmentCount", "ASSIGNMENT_COUNT_MATCH_REQUIRED")
-  }
-  const assignments = value.assignments.map((raw, index) => {
-    exactFields(raw, ASSIGNMENT_FIELDS, `coordinatorResult.assignments[${index}]`)
-    const assignment = {
-      assignmentId: safeIdentifier(raw.assignmentId, `coordinatorResult.assignments[${index}].assignmentId`),
-      workOrderId: safeIdentifier(raw.workOrderId, `coordinatorResult.assignments[${index}].workOrderId`),
-      laneId: safeIdentifier(raw.laneId, `coordinatorResult.assignments[${index}].laneId`),
-      role: safeIdentifier(raw.role, `coordinatorResult.assignments[${index}].role`),
-      workerId: safeIdentifier(raw.workerId, `coordinatorResult.assignments[${index}].workerId`),
-      phase: safeIdentifier(raw.phase, `coordinatorResult.assignments[${index}].phase`),
-      nativeAssignmentPrepared: raw.nativeAssignmentPrepared,
-      nativeAssignmentExecuted: raw.nativeAssignmentExecuted,
-      nativeBindingRequired: raw.nativeBindingRequired,
-      nativeBindingEstablished: raw.nativeBindingEstablished,
-      authorityGranted: raw.authorityGranted,
-    }
-    if (assignment.workOrderId !== envelope.workOrderId || assignment.laneId !== envelope.laneId) {
-      wall("CODEX_ROLE_COORDINATOR_WALL", `coordinatorResult.assignments[${index}]`, "ENVELOPE_LANE_REQUIRED")
-    }
-    if (assignment.nativeAssignmentPrepared !== true || assignment.nativeAssignmentExecuted !== false
-      || assignment.authorityGranted !== false) {
-      wall("CODEX_ROLE_COORDINATOR_WALL", `coordinatorResult.assignments[${index}]`, "PREPARED_WITHOUT_EXECUTION_REQUIRED")
-    }
-    const coordinator = assignment.role === "coordinator"
-    if (assignment.nativeBindingRequired !== !coordinator || assignment.nativeBindingEstablished !== coordinator) {
-      wall("CODEX_ROLE_COORDINATOR_WALL", `coordinatorResult.assignments[${index}]`, "OPAQUE_NATIVE_BINDING_STATE_REQUIRED")
-    }
-    return assignment
-  })
-  return assignments
+  return value
 }
 
-function assignmentFor(assignments, role) {
-  const assignment = assignments.find((entry) => entry.role === role)
-  if (!assignment) wall("CODEX_ROLE_COORDINATOR_WALL", `coordinatorResult.assignments.${role}`, "ASSIGNMENT_REQUIRED")
-  return assignment
+function normalizeObservations(value) {
+  exactFields(value, OBSERVATION_FIELDS, "observationIds")
+  const output = Object.fromEntries([...OBSERVATION_FIELDS].map((name) => [
+    name,
+    text(value[name], `observationIds.${name}`),
+  ]))
+  if (new Set(Object.values(output)).size !== OBSERVATION_FIELDS.size) {
+    wall("CODEX_ROLE_REPLAY_WALL", "observationIds", "UNIQUE_STAGE_OBSERVATIONS_REQUIRED")
+  }
+  return output
 }
 
-function normalizeReview(value, field, finalReview = false) {
-  exactFields(value, REVIEW_FIELDS, field)
-  if (!["APPROVED", "REQUESTED_CHANGES"].includes(value.verdict)) {
-    wall("CODEX_ROLE_REVIEW_WALL", `${field}.verdict`, "KNOWN_VERDICT_REQUIRED")
-  }
-  if (!Number.isSafeInteger(value.unresolvedThreads) || value.unresolvedThreads < 0 || value.unresolvedThreads > 100) {
-    wall("CODEX_ROLE_REVIEW_WALL", `${field}.unresolvedThreads`, "BOUNDED_INTEGER_REQUIRED")
-  }
-  if (finalReview && (value.verdict !== "APPROVED" || value.unresolvedThreads !== 0)) {
-    wall("CODEX_ROLE_REVIEW_WALL", field, "FINAL_REREVIEW_APPROVAL_REQUIRED")
-  }
-  return { verdict: value.verdict, unresolvedThreads: value.unresolvedThreads }
+function normalizeMessages(value) {
+  exactFields(value, MESSAGE_FIELDS, "messageSummaries")
+  return Object.fromEntries([...MESSAGE_FIELDS].map((name) => [
+    name,
+    text(value[name], `messageSummaries.${name}`, SAFE_SUMMARY),
+  ]))
 }
 
-function getAssignmentHandle(plan, assignmentId, field) {
+function validatePlanBoundary(plan, builder, reviewer) {
+  if (!plainObject(plan)) wall("CODEX_ROLE_PLAN_WALL", "plan", "PRIVATE_COORDINATOR_PLAN_REQUIRED")
+  const expected = {
+    schemaVersion: 1,
+    artifactType: "HOSTED_CODEX_COORDINATOR_PLAN",
+    status: "CURRENT_SESSION_NATIVE_TEAM_READY",
+    providerId: "hosted-codex",
+    adapterId: "hosted-codex-session-native-team-v1",
+    currentSessionOnly: true,
+    providerContractDispatchAllowed: false,
+    dispatchPerformed: false,
+    durableTransportClaimed: false,
+    runtimeActivationAllowed: false,
+    localIssue357Allowed: false,
+    credentialInspectionAllowed: false,
+    authorityMintingAllowed: false,
+    authorityGranted: false,
+  }
+  for (const [field, expectedValue] of Object.entries(expected)) {
+    if (plan[field] !== expectedValue) wall("CODEX_ROLE_PLAN_WALL", `plan.${field}`, "EXACT_HARDENED_PLAN_REQUIRED")
+  }
+  exactFields(plan.ownerTouchBudget, OWNER_BUDGET_FIELDS, "plan.ownerTouchBudget")
+  if (Object.values(plan.ownerTouchBudget).some((value) => value !== 0)) {
+    wall("CODEX_ROLE_OWNER_TOUCH_WALL", "plan.ownerTouchBudget", "ZERO_REQUIRED")
+  }
+  if (builder.adapterRunId !== plan.adapterRunId || reviewer.adapterRunId !== plan.adapterRunId) {
+    wall("CODEX_ROLE_ASSIGNMENT_WALL", "assignmentHandles.adapterRunId", "SAME_PRIVATE_PLAN_REQUIRED")
+  }
+  if (builder.workOrderId !== reviewer.workOrderId || builder.laneId !== reviewer.laneId) {
+    wall("CODEX_ROLE_ASSIGNMENT_WALL", "assignmentHandles", "SAME_WORK_ORDER_LANE_REQUIRED")
+  }
+  if (builder.assignmentId === reviewer.assignmentId || builder.workerId === reviewer.workerId) {
+    wall("CODEX_ROLE_INDEPENDENCE_WALL", "assignmentHandles", "DISTINCT_BUILDER_REVIEWER_REQUIRED")
+  }
+  if (!Array.isArray(plan.assignments)) wall("CODEX_ROLE_PLAN_WALL", "plan.assignments", "ARRAY_REQUIRED")
+  const assignmentFor = (handle) => plan.assignments.find(({ assignmentId }) => assignmentId === handle.assignmentId)
+  const builderAssignment = assignmentFor(builder)
+  const reviewerAssignment = assignmentFor(reviewer)
+  if (!builderAssignment || !reviewerAssignment
+    || hash(builderAssignment) !== builder.assignmentContentHash
+    || hash(reviewerAssignment) !== reviewer.assignmentContentHash) {
+    wall("CODEX_ROLE_ASSIGNMENT_WALL", "assignmentHandles", "EXACT_PLAN_ASSIGNMENTS_REQUIRED")
+  }
+  exactValue(
+    builderAssignment.taskPayload?.reservations,
+    reviewerAssignment.taskPayload?.reservations,
+    "CODEX_ROLE_RESERVATION_WALL",
+    "assignmentHandles.reservations",
+  )
+  const paths = builderAssignment.taskPayload?.reservations?.paths
+  if (!Array.isArray(paths) || paths.length === 0) {
+    wall("CODEX_ROLE_RESERVATION_WALL", "assignmentHandles.reservations.paths", "NON_EMPTY_EXACT_PATHS_REQUIRED")
+  }
+}
+
+function exactBudgetBindings(binding, field) {
+  exactFields(binding.remediationBudget, REMEDIATION_BUDGET_FIELDS, `${field}.remediationBudget`)
+  exactFields(binding.retryBudget, RETRY_BUDGET_FIELDS, `${field}.retryBudget`)
+  if (!Number.isSafeInteger(binding.remediationBudget.maxCycles) || binding.remediationBudget.maxCycles < 0) {
+    wall("CODEX_ROLE_REMEDIATION_BUDGET_WALL", `${field}.remediationBudget.maxCycles`, "BOUNDED_INTEGER_REQUIRED")
+  }
+  if (!Number.isSafeInteger(binding.retryBudget.maxAttempts) || binding.retryBudget.maxAttempts < 1
+    || !Number.isSafeInteger(binding.retryBudget.backoffSeconds) || binding.retryBudget.backoffSeconds < 0) {
+    wall("CODEX_ROLE_RETRY_BUDGET_WALL", `${field}.retryBudget`, "BOUNDED_RETRY_BUDGET_REQUIRED")
+  }
+}
+
+function validatePairIdentity(binding, fields, builder, reviewer, field) {
+  exactFields(binding, fields, field)
+  const expected = {
+    workOrderId: builder.workOrderId,
+    laneId: builder.laneId,
+    builderAssignmentId: builder.assignmentId,
+    reviewerAssignmentId: reviewer.assignmentId,
+    authorityGranted: false,
+  }
+  for (const [name, value] of Object.entries(expected)) {
+    if (binding[name] !== value) wall("CODEX_ROLE_ASSIGNMENT_WALL", `${field}.${name}`, "EXACT_PAIR_BINDING_REQUIRED")
+  }
+  text(binding.coordinatorWorkerId, `${field}.coordinatorWorkerId`)
+  text(binding.reservationDigest, `${field}.reservationDigest`, /^[a-f0-9]{64}$/)
+  exactBudgetBindings(binding, field)
+  return binding
+}
+
+function coordinatorCall(field, callback) {
   try {
-    return getHostedCodexNativeAssignmentHandle(plan, assignmentId)
-  } catch (error) {
-    if (error instanceof HostedCodexCoordinatorAdapterError) {
-      wall("CODEX_ROLE_COORDINATOR_WALL", field, error.code)
-    }
-    throw error
-  }
-}
-
-function runNativeStage(plan, assignment, raw, index, envelope) {
-  const handle = getAssignmentHandle(plan, assignment.assignmentId, `stages[${index}].assignmentHandle`)
-  if (raw.startIdempotencyKey !== null) {
-    try {
-      startHostedCodexNativeAssignment(plan, {
-        assignmentHandle: handle,
-        idempotencyKey: safeIdentifier(raw.startIdempotencyKey, `stages[${index}].startIdempotencyKey`),
-      })
-    } catch (error) {
-      if (error instanceof HostedCodexCoordinatorAdapterError) {
-        wall("CODEX_ROLE_NATIVE_STAGE_WALL", `stages[${index}].start`, error.code)
-      }
-      throw error
-    }
-  }
-  try {
-    createHostedCodexNativeMessage(plan, {
-      assignmentHandle: handle,
-      direction: "TO_ASSIGNMENT",
-      messageType: safeIdentifier(raw.messageType, `stages[${index}].messageType`),
-      summary: raw.messageSummary,
-      idempotencyKey: safeIdentifier(raw.messageIdempotencyKey, `stages[${index}].messageIdempotencyKey`),
-    })
-  } catch (error) {
-    if (error instanceof HostedCodexCoordinatorAdapterError) {
-      wall("CODEX_ROLE_NATIVE_STAGE_WALL", `stages[${index}].message`, error.code)
-    }
-    throw error
-  }
-  let response
-  try {
-    response = captureHostedCodexNativeEvidence(plan, {
-      assignmentHandle: handle,
-      observationId: safeIdentifier(raw.observationId, `stages[${index}].observationId`),
-    })
-  } catch (error) {
-    if (error instanceof HostedCodexCoordinatorAdapterError) {
-      if (error.code === "HOSTED_CODEX_REPLAY_WALL") {
-        wall("CODEX_ROLE_REPLAY_WALL", `stages[${index}].observation`, error.detail ?? error.code)
-      }
-      wall("CODEX_ROLE_NATIVE_STAGE_WALL", `stages[${index}].observation`, error.code)
-    }
-    throw error
-  }
-  try {
-    exactFields(response, CAPTURED_EVIDENCE_FIELDS, `stages[${index}].capturedEvidence`)
+    return callback()
   } catch (error) {
     if (error instanceof CodexRoleAdapterError) throw error
-    wall("CODEX_ROLE_PROVIDER_RESPONSE_WALL", `stages[${index}].providerResponse`, "CAPTURED_EVIDENCE_REQUIRED")
+    if (error instanceof HostedCodexCoordinatorAdapterError) {
+      wall(
+        "CODEX_ROLE_COORDINATOR_WALL",
+        field,
+        `${error.code}${error.detail === null || error.detail === undefined ? "" : `:${error.detail}`}`,
+      )
+    }
+    wall("CODEX_ROLE_COORDINATOR_WALL", field, "HOSTED_COORDINATOR_FAILURE")
   }
-  if (response.workOrderId !== envelope.workOrderId || response.laneId !== envelope.laneId
-    || response.assignmentId !== assignment.assignmentId || !["RUNNING", "SUCCEEDED"].includes(response.providerState)) {
-    wall("CODEX_ROLE_STAGE_WALL", `stages[${index}].providerResponse`, "BOUND_ACTIVE_OR_SUCCEEDED_EVIDENCE_REQUIRED")
-  }
-  if (response.sanitized !== true || response.rawProviderOutputIncluded !== false
-    || response.independentlyCaptured !== true || response.durablePersistenceClaimed !== false
-    || response.authorityGranted !== false) {
-    wall("CODEX_ROLE_STAGE_WALL", `stages[${index}].providerResponse`, "SANITIZED_INDEPENDENT_EVIDENCE_REQUIRED")
-  }
-  return response
 }
 
-function normalizeStages(value, envelope, plan, assignments) {
-  if (!Array.isArray(value) || value.length !== REQUIRED_STAGES.length) {
-    wall("CODEX_ROLE_STAGE_WALL", "stages", "FOUR_STAGE_CHAIN_REQUIRED")
-  }
-  return value.map((raw, index) => {
-    exactFields(raw, STAGE_FIELDS, `stages[${index}]`)
-    const expectedStage = REQUIRED_STAGES[index]
-    if (raw.stage !== expectedStage) wall("CODEX_ROLE_STAGE_WALL", `stages[${index}].stage`, `${expectedStage}_REQUIRED`)
-    const role = safeIdentifier(raw.role, `stages[${index}].role`)
-    const assignment = assignmentFor(assignments, role === "remediator" ? "builder" : role)
-    const response = runNativeStage(plan, assignment, raw, index, envelope)
-    return {
-      stageId: safeIdentifier(raw.stageId, `stages[${index}].stageId`),
-      stage: expectedStage,
-      role,
-      workerId: safeIdentifier(raw.workerId, `stages[${index}].workerId`),
-      providerResponse: response,
-      review: raw.review === null ? null : normalizeReview(raw.review, `stages[${index}].review`, expectedStage === "REREVIEW"),
-      remediationCycle: raw.remediationCycle,
-    }
-  })
+function operationKey(scope, namespace, operation, handle) {
+  return `role-${operation}-${hash({
+    adapterRunId: scope.adapterRunId,
+    workOrderId: handle.workOrderId,
+    laneId: handle.laneId,
+    assignmentId: handle.assignmentId,
+    namespace,
+    operation,
+  }).slice(0, 32)}`
 }
 
-function assertStageSemantics(stages, envelope) {
-  const [build, review, remediation, rereview] = stages
-  const expectations = [
-    [build, "builder", null],
-    [review, "reviewer", "REQUESTED_CHANGES"],
-    [remediation, "remediator", null],
-    [rereview, "reviewer", "APPROVED"],
-  ]
-  for (const [stage, role, verdict] of expectations) {
-    if (stage.role !== role) wall("CODEX_ROLE_STAGE_WALL", `${stage.stage}.role`, `${role.toUpperCase()}_REQUIRED`)
-    const expectedWorker = role === "remediator" ? envelope.teamRoles.builder : envelope.teamRoles[role]
-    if (stage.workerId !== expectedWorker) {
-      wall(role === "remediator" ? "CODEX_ROLE_REMEDIATION_WALL" : "CODEX_ROLE_STAGE_WALL", `${stage.stage}.workerId`, "ENVELOPE_ROLE_IDENTITY_REQUIRED")
+function send(plan, handle, namespace, operation, direction, messageType, summary) {
+  return coordinatorCall(`messages.${operation}`, () => createHostedCodexNativeMessage(plan, {
+    assignmentHandle: handle,
+    direction,
+    messageType,
+    summary,
+    idempotencyKey: operationKey(plan, namespace, operation, handle),
+  }))
+}
+
+function observe(plan, handle, observationId, constraint, stage) {
+  const evidenceHandle = coordinatorCall(`stages.${stage}.capture`, () => (
+    captureHostedCodexNativeSemanticEvidence(plan, {
+      assignmentHandle: handle,
+      observationId,
+      expectedKind: constraint.expectedKind,
+    })
+  ))
+  const attestation = coordinatorCall(`stages.${stage}.attestation`, () => (
+    attestHostedCodexSemanticEvidence(plan, {
+      assignmentHandle: handle,
+      evidenceHandle,
+      semanticConstraintId: constraint.semanticConstraintId,
+    })
+  ))
+  return { evidenceHandle, attestation }
+}
+
+function publicStage(stage, role, handle, observationId, constraint, attestation) {
+  exactFields(attestation, SEMANTIC_ATTESTATION_FIELDS, `${stage}.attestation`)
+  const expected = {
+    assignmentId: handle.assignmentId,
+    workOrderId: handle.workOrderId,
+    laneId: handle.laneId,
+    role,
+    observationId,
+    semanticConstraintId: constraint.semanticConstraintId,
+    evidenceType: constraint.expectedKind,
+    sanitized: true,
+    rawProviderOutputIncluded: false,
+    authorityGranted: false,
+  }
+  for (const [field, value] of Object.entries(expected)) {
+    if (attestation[field] !== value) wall("CODEX_ROLE_EVIDENCE_WALL", `${stage}.attestation.${field}`, "EXACT_BINDING_REQUIRED")
+  }
+  for (const field of ["providerResponseHash", "nativeBindingDigest", "authorityFenceDigest", "evidenceBindingDigest"]) {
+    text(attestation[field], `${stage}.attestation.${field}`, /^[a-f0-9]{64}$/)
+  }
+  return {
+    stage,
+    role,
+    observationId,
+    semanticKind: constraint.expectedKind,
+    evidenceBindingDigest: text(attestation.evidenceBindingDigest, `${stage}.evidenceBindingDigest`, /^[a-f0-9]{64}$/),
+    authorityFenceDigest: text(attestation.authorityFenceDigest, `${stage}.authorityFenceDigest`, /^[a-f0-9]{64}$/),
+  }
+}
+
+function recoverableCoordinatorFailure(error) {
+  return error instanceof CodexRoleAdapterError
+    && error.code === "CODEX_ROLE_COORDINATOR_WALL"
+    && typeof error.detail === "string"
+    && (error.detail.endsWith(":HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS")
+      || error.detail.endsWith(":HOST_SIDE_EFFECT_RECONCILIATION_PENDING")
+      || error.detail.endsWith(":HOST_ATOMIC_FENCE_REJECTED")
+      || error.detail === "HOSTED_CODEX_OBSERVATION_PENDING_WALL:HOST_OBSERVATION_NOT_COMMITTED")
+}
+
+function sideEffectAmbiguity(error) {
+  return recoverableCoordinatorFailure(error)
+    && (error.detail.endsWith(":HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS")
+      || error.detail.endsWith(":HOST_SIDE_EFFECT_RECONCILIATION_PENDING"))
+}
+
+function storedSideEffectAmbiguity(recovery) {
+  return typeof recovery?.detail === "string"
+    && (recovery.detail.endsWith(":HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS")
+      || recovery.detail.endsWith(":HOST_SIDE_EFFECT_RECONCILIATION_PENDING"))
+}
+
+function recoveryBinding(recovery, builder, reviewer) {
+  if (recovery?.field === "builder.start") return { handle: builder, label: "builder", operation: "start-builder" }
+  if (recovery?.field === "reviewer.start") return { handle: reviewer, label: "reviewer", operation: "start-reviewer" }
+  const message = MESSAGE_RECONCILIATION[recovery?.field]
+  if (!message) return null
+  return {
+    handle: message.role === "builder" ? builder : reviewer,
+    label: message.role,
+    operation: message.operation,
+    message,
+  }
+}
+
+function reconcileAmbiguousSideEffect(plan, builder, reviewer, namespace, messages, recovery) {
+  const binding = recoveryBinding(recovery, builder, reviewer)
+  if (!binding) wall("CODEX_ROLE_QUARANTINE_WALL", "roleLifecycle", "AMBIGUOUS_OPERATION_BINDING_REQUIRED")
+  if (recovery.field === "builder.start" || recovery.field === "reviewer.start") {
+    coordinatorCall(recovery.field, () => startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: binding.handle,
+      idempotencyKey: operationKey(plan, namespace, binding.operation, binding.handle),
+    }))
+  } else {
+    coordinatorCall(recovery.field, () => createHostedCodexNativeMessage(plan, {
+      assignmentHandle: binding.handle,
+      direction: binding.message.direction,
+      messageType: binding.message.messageType,
+      summary: messages[binding.message.summary],
+      idempotencyKey: operationKey(plan, namespace, binding.operation, binding.handle),
+    }))
+  }
+  return binding
+}
+
+function cleanupAssignment(plan, handle, preflight, namespace, transaction, label) {
+  try {
+    cancelHostedCodexNativeAssignment(plan, {
+      assignmentHandle: handle,
+      requestedBy: preflight.coordinatorWorkerId,
+      reasonCode: "SECURITY_WALL",
+      idempotencyKey: operationKey(plan, namespace, `cleanup-${label}`, handle),
+    })
+    transaction.cleanup[label] = "CANCELLED"
+    return true
+  } catch (error) {
+    if (error instanceof HostedCodexCoordinatorAdapterError
+      && error.code === "HOSTED_CODEX_CANCELLATION_WALL"
+      && error.detail === "TERMINAL_ASSIGNMENT_IMMUTABLE") {
+      transaction.cleanup[label] = "ALREADY_TERMINAL"
+      return true
     }
-    if (verdict !== null && stage.review?.verdict !== verdict) {
-      wall("CODEX_ROLE_REVIEW_WALL", `${stage.stage}.review.verdict`, `${verdict}_REQUIRED`)
+    transaction.cleanup[label] = "QUARANTINED"
+    return false
+  }
+}
+
+function quarantineStartedChildren(plan, builder, reviewer, preflight, namespace, transaction) {
+  transaction.cleanupAttempts += 1
+  const builderSettled = cleanupAssignment(plan, builder, preflight, namespace, transaction, "builder")
+  const reviewerSettled = cleanupAssignment(plan, reviewer, preflight, namespace, transaction, "reviewer")
+  if (builderSettled && reviewerSettled) {
+    transaction.status = "FAILED"
+    return
+  }
+  if (transaction.cleanupAttempts >= preflight.retryBudget.maxAttempts) {
+    transaction.status = "QUARANTINED_TERMINAL"
+    transaction.quarantineReason = "CHILD_CLEANUP_RETRY_BUDGET_EXHAUSTED"
+    wall("CODEX_ROLE_QUARANTINE_WALL", "roleLifecycle", transaction.quarantineReason)
+  }
+  transaction.nextRetryAt = Date.now() + (preflight.retryBudget.backoffSeconds * 1000)
+  transaction.status = "CLEANUP_PENDING"
+  wall("CODEX_ROLE_QUARANTINE_WALL", "roleLifecycle", "CHILD_CLEANUP_RECONCILIATION_REQUIRED")
+}
+
+function containAmbiguousSideEffect(
+  plan, builder, reviewer, preflight, namespace, messages, transaction,
+) {
+  const binding = recoveryBinding(transaction.recoverable, builder, reviewer)
+  if (!binding || !storedSideEffectAmbiguity(transaction.recoverable)) {
+    transaction.status = "QUARANTINED_TERMINAL"
+    transaction.quarantineReason = "AMBIGUOUS_OPERATION_BINDING_REQUIRED"
+    wall("CODEX_ROLE_QUARANTINE_WALL", "roleLifecycle", transaction.quarantineReason)
+  }
+  transaction.cleanupAttempts += 1
+  try {
+    reconcileAmbiguousSideEffect(
+      plan, builder, reviewer, namespace, messages, transaction.recoverable,
+    )
+  } catch (error) {
+    transaction.cleanup[binding.label] = "POTENTIALLY_RUNNING_QUARANTINED"
+    const otherLabel = binding.label === "builder" ? "reviewer" : "builder"
+    const otherHandle = otherLabel === "builder" ? builder : reviewer
+    cleanupAssignment(plan, otherHandle, preflight, namespace, transaction, otherLabel)
+    if (!sideEffectAmbiguity(error)
+      || transaction.cleanupAttempts >= preflight.retryBudget.maxAttempts) {
+      transaction.status = "QUARANTINED_TERMINAL"
+      transaction.quarantineReason = "AMBIGUOUS_EFFECT_CLEANUP_RETRY_BUDGET_EXHAUSTED"
+      wall(
+        "CODEX_ROLE_QUARANTINE_WALL",
+        "roleLifecycle",
+        transaction.quarantineReason,
+      )
     }
+    transaction.nextRetryAt = Date.now() + (preflight.retryBudget.backoffSeconds * 1000)
+    transaction.status = "AMBIGUITY_CONTAINMENT_PENDING"
+    wall("CODEX_ROLE_QUARANTINE_WALL", "roleLifecycle", "AMBIGUOUS_EFFECT_RECONCILIATION_REQUIRED")
   }
-  if (review.review === null || rereview.review === null) {
-    wall("CODEX_ROLE_REVIEW_WALL", "stages.review", "REVIEW_REQUIRED")
-  }
-  if (remediation.workerId !== build.workerId) {
-    wall("CODEX_ROLE_REMEDIATION_WALL", "stages.REMEDIATION.workerId", "ORIGINAL_BUILDER_REQUIRED")
-  }
-  if (!Number.isSafeInteger(remediation.remediationCycle) || remediation.remediationCycle < 1
-    || remediation.remediationCycle > envelope.remediationBudget.maxCycles) {
-    wall("CODEX_ROLE_REMEDIATION_WALL", "stages.REMEDIATION.remediationCycle", "WITHIN_REMEDIATION_BUDGET_REQUIRED")
-  }
-  for (const stage of [build, review, rereview]) {
-    if (stage.remediationCycle !== null) {
-      wall("CODEX_ROLE_REMEDIATION_WALL", `${stage.stage}.remediationCycle`, "NULL_REQUIRED")
-    }
-  }
+  transaction.recoverable = null
+  quarantineStartedChildren(plan, builder, reviewer, preflight, namespace, transaction)
 }
 
 export function adaptCodexRoleLifecycle(input) {
-  exactFields(input, INPUT_FIELDS, "roleAdapter")
-  if (input.schemaVersion !== 1) wall("CODEX_ROLE_INPUT_WALL", "schemaVersion", "1_REQUIRED")
-  if (input.artifactType !== "CODEX_ROLE_ADAPTER_INPUT") {
-    wall("CODEX_ROLE_INPUT_WALL", "artifactType", "CODEX_ROLE_ADAPTER_INPUT_REQUIRED")
+  exactFields(input, INPUT_FIELDS, "roleLifecycle")
+  if (input.schemaVersion !== 2 || input.artifactType !== "CODEX_ROLE_LIFECYCLE_REQUEST"
+    || input.adapterId !== ADAPTER_ID) {
+    wall("CODEX_ROLE_INPUT_WALL", "roleLifecycle", "V2_LIFECYCLE_REQUEST_REQUIRED")
   }
-  if (input.adapterId !== ADAPTER_ID) wall("CODEX_ROLE_INPUT_WALL", "adapterId", `${ADAPTER_ID}_REQUIRED`)
+  const builder = normalizedHandle(input.builderAssignmentHandle, "builder", "builderAssignmentHandle")
+  const reviewer = normalizedHandle(input.reviewerAssignmentHandle, "reviewer", "reviewerAssignmentHandle")
+  const namespace = text(input.idempotencyNamespace, "idempotencyNamespace")
+  const observations = normalizeObservations(input.observationIds)
+  const messages = normalizeMessages(input.messageSummaries)
+  validatePlanBoundary(input.plan, builder, reviewer)
+  const preflight = validatePairIdentity(
+    coordinatorCall("rolePreflight", () => attestHostedCodexRoleAssignmentHandles(input.plan, {
+      builderAssignmentHandle: builder,
+      reviewerAssignmentHandle: reviewer,
+    })),
+    ROLE_PREFLIGHT_FIELDS,
+    builder,
+    reviewer,
+    "rolePreflight",
+  )
+  if (preflight.remediationBudget.maxCycles < 1) {
+    wall("CODEX_ROLE_REMEDIATION_BUDGET_WALL", "rolePreflight.remediationBudget.maxCycles", "AT_LEAST_ONE_CYCLE_REQUIRED")
+  }
 
-  let envelopeResult
+  const lifecycleKey = `${builder.assignmentId}\u0000${reviewer.assignmentId}`
+  let planLifecycles = LIFECYCLES.get(input.plan)
+  if (!planLifecycles) {
+    planLifecycles = new Map()
+    LIFECYCLES.set(input.plan, planLifecycles)
+  }
+  const requestDigest = hash({
+    adapterRunId: input.plan.adapterRunId,
+    builderAssignmentId: builder.assignmentId,
+    reviewerAssignmentId: reviewer.assignmentId,
+    namespace,
+    observations,
+    messages,
+  })
+  let transaction = planLifecycles.get(lifecycleKey)
+  if (transaction) {
+    if (transaction.status === "AMBIGUITY_CONTAINMENT_PENDING") {
+      if (transaction.requestDigest !== requestDigest) {
+        wall("CODEX_ROLE_REPLAY_WALL", "roleLifecycle", "CONFLICTING_REPLAY")
+      }
+      if (Date.now() < transaction.nextRetryAt) {
+        wall("CODEX_ROLE_BACKOFF_WALL", "roleLifecycle", "AMBIGUITY_RETRY_NOT_YET_ELIGIBLE")
+      }
+      containAmbiguousSideEffect(
+        input.plan, builder, reviewer, preflight, transaction.namespace, messages, transaction,
+      )
+      wall("CODEX_ROLE_RETRY_BUDGET_WALL", "roleLifecycle", "LIFECYCLE_RETRY_BUDGET_EXHAUSTED")
+    }
+    if (transaction.status === "CLEANUP_PENDING") {
+      if (transaction.requestDigest !== requestDigest) {
+        wall("CODEX_ROLE_REPLAY_WALL", "roleLifecycle", "CONFLICTING_REPLAY")
+      }
+      if (Date.now() < transaction.nextRetryAt) {
+        wall("CODEX_ROLE_BACKOFF_WALL", "roleLifecycle", "CLEANUP_RETRY_NOT_YET_ELIGIBLE")
+      }
+      quarantineStartedChildren(input.plan, builder, reviewer, preflight, transaction.namespace, transaction)
+      wall("CODEX_ROLE_TERMINAL_WALL", "roleLifecycle", "FAILED_LIFECYCLE_IMMUTABLE")
+    }
+    if (transaction.status === "QUARANTINED_TERMINAL") {
+      wall(
+        "CODEX_ROLE_QUARANTINE_WALL",
+        "roleLifecycle",
+        transaction.quarantineReason ?? "CHILD_CLEANUP_RETRY_BUDGET_EXHAUSTED",
+      )
+    }
+    if (transaction.status === "COMMITTED") {
+      if (transaction.requestDigest === requestDigest) return transaction.result
+      wall("CODEX_ROLE_TERMINAL_WALL", "roleLifecycle", "APPROVED_LIFECYCLE_IMMUTABLE")
+    }
+    if (transaction.status === "FAILED") {
+      wall("CODEX_ROLE_TERMINAL_WALL", "roleLifecycle", "FAILED_LIFECYCLE_IMMUTABLE")
+    }
+    if (transaction.requestDigest !== requestDigest) {
+      wall("CODEX_ROLE_REPLAY_WALL", "roleLifecycle", "CONFLICTING_REPLAY")
+    }
+    if (Date.now() < transaction.nextRetryAt) {
+      wall("CODEX_ROLE_BACKOFF_WALL", "roleLifecycle", "RETRY_NOT_YET_ELIGIBLE")
+    }
+    if (transaction.attemptCount >= transaction.retryBudget.maxAttempts) {
+      if (storedSideEffectAmbiguity(transaction.recoverable)
+        && recoveryBinding(transaction.recoverable, builder, reviewer)) {
+        containAmbiguousSideEffect(
+          input.plan, builder, reviewer, preflight, transaction.namespace, messages, transaction,
+        )
+      } else {
+        quarantineStartedChildren(input.plan, builder, reviewer, preflight, transaction.namespace, transaction)
+      }
+      wall("CODEX_ROLE_RETRY_BUDGET_WALL", "roleLifecycle", "LIFECYCLE_RETRY_BUDGET_EXHAUSTED")
+    }
+    transaction.attemptCount += 1
+  } else {
+    transaction = {
+      requestDigest,
+      status: "RUNNING",
+      result: null,
+      namespace,
+      attemptCount: 1,
+      retryBudget: preflight.retryBudget,
+      nextRetryAt: 0,
+      cleanupAttempts: 0,
+      cleanup: { builder: "NOT_STARTED", reviewer: "NOT_STARTED" },
+      recoverable: null,
+      quarantineReason: null,
+    }
+    planLifecycles.set(lifecycleKey, transaction)
+  }
+
   try {
-    envelopeResult = validateWorkOrderEnvelopeV2(input.envelope)
-  } catch (error) {
-    if (error instanceof WorkOrderEnvelopeV2Error) {
-      wall("CODEX_ROLE_ENVELOPE_WALL", `envelope.${error.field}`, error.code)
-    }
-    throw error
+  const builderStart = coordinatorCall("builder.start", () => startHostedCodexNativeAssignment(input.plan, {
+    assignmentHandle: builder,
+    idempotencyKey: operationKey(input.plan, namespace, "start-builder", builder),
+  }))
+  const reviewerStart = coordinatorCall("reviewer.start", () => startHostedCodexNativeAssignment(input.plan, {
+    assignmentHandle: reviewer,
+    idempotencyKey: operationKey(input.plan, namespace, "start-reviewer", reviewer),
+  }))
+  if (builderStart.nativeWorkerDigest === reviewerStart.nativeWorkerDigest) {
+    wall("CODEX_ROLE_INDEPENDENCE_WALL", "nativeAssignments", "DISTINCT_NATIVE_IDENTITIES_REQUIRED")
   }
-  const envelope = envelopeResult.envelope
-  for (const role of ["builder", "reviewer"]) {
-    if (!Object.hasOwn(envelope.teamRoles, role)) {
-      wall("CODEX_ROLE_ENVELOPE_WALL", `envelope.teamRoles.${role}`, "ROLE_REQUIRED")
-    }
+  const roleBinding = coordinatorCall("roleBindings", () => attestHostedCodexRoleAssignmentPair(input.plan, {
+    builderAssignmentHandle: builder,
+    reviewerAssignmentHandle: reviewer,
+  }))
+  validatePairIdentity(roleBinding, ROLE_PAIR_FIELDS, builder, reviewer, "roleBindings")
+  for (const field of [
+    "builderNativeBindingDigest", "reviewerNativeBindingDigest", "builderNativeWorkerDigest",
+    "reviewerNativeWorkerDigest", "reservationDigest",
+  ]) {
+    text(roleBinding[field], `roleBindings.${field}`, /^[a-f0-9]{64}$/)
   }
-
-  const assignments = normalizeCoordinatorResult(input.coordinatorPlan, envelope)
-  const stages = normalizeStages(input.stages, envelope, input.coordinatorPlan, assignments)
-  assertStageSemantics(stages, envelope)
-
-  const roleAdapters = []
-  for (const role of ["builder", "reviewer", "remediator"]) {
-    const assignment = assignmentFor(assignments, role === "remediator" ? "builder" : role)
-    roleAdapters.push({
-      role,
-      workerId: assignment.workerId,
-      hostSessionProofId: null,
-      state: "ROLE_ADAPTER_READY",
-      providerContractDispatchAllowed: false,
-      dispatchPerformed: false,
-      durablePersistenceClaimed: false,
-      serviceWorkerClaimed: false,
-      runtimeActivationAllowed: false,
-      authorityGranted: false,
-    })
+  if (roleBinding.builderNativeBindingDigest === roleBinding.reviewerNativeBindingDigest) {
+    wall("CODEX_ROLE_INDEPENDENCE_WALL", "roleBindings", "DISTINCT_NATIVE_BINDINGS_REQUIRED")
+  }
+  if (roleBinding.builderNativeWorkerDigest !== builderStart.nativeWorkerDigest
+    || roleBinding.reviewerNativeWorkerDigest !== reviewerStart.nativeWorkerDigest) {
+    wall("CODEX_ROLE_INDEPENDENCE_WALL", "roleBindings", "START_RECEIPT_NATIVE_BINDING_REQUIRED")
+  }
+  for (const field of ["coordinatorWorkerId", "reservationDigest", "remediationBudget", "retryBudget"]) {
+    exactValue(roleBinding[field], preflight[field], "CODEX_ROLE_ASSIGNMENT_WALL", `roleBindings.${field}`)
   }
 
-  const output = {
-    schemaVersion: 1,
-    artifactType: "CODEX_ROLE_ADAPTER_RESULT",
+  send(input.plan, builder, namespace, "build-directive", "TO_ASSIGNMENT", "STATUS", messages.buildDirective)
+  const build = observe(input.plan, builder, observations.build, STAGE_CONSTRAINTS.BUILD, "BUILD")
+  send(input.plan, builder, namespace, "build-result", "TO_COORDINATOR", "RESULT", messages.buildResultNotice)
+
+  send(input.plan, reviewer, namespace, "review-directive", "TO_ASSIGNMENT", "REVIEW_REQUEST", messages.reviewDirective)
+  const requestChanges = observe(
+    input.plan, reviewer, observations.requestChanges, STAGE_CONSTRAINTS.REQUEST_CHANGES, "ASSURANCE_REVIEW",
+  )
+  send(input.plan, reviewer, namespace, "change-request-notice", "TO_COORDINATOR", "CHANGE_REQUEST", messages.changeRequestNotice)
+  send(input.plan, builder, namespace, "remediation-directive", "TO_ASSIGNMENT", "CHANGE_REQUEST", messages.remediationDirective)
+  send(input.plan, builder, namespace, "remediation-result", "TO_COORDINATOR", "RESULT", messages.remediationResultNotice)
+  const remediation = observe(
+    input.plan, builder, observations.remediation, STAGE_CONSTRAINTS.REMEDIATION, "REMEDIATION",
+  )
+
+  send(input.plan, reviewer, namespace, "rereview-directive", "TO_ASSIGNMENT", "REVIEW_REQUEST", messages.rereviewDirective)
+  const approval = observe(input.plan, reviewer, observations.approval, STAGE_CONSTRAINTS.APPROVAL, "REREVIEW")
+
+  const body = {
+    schemaVersion: 2,
+    artifactType: "CODEX_ROLE_LIFECYCLE_RESULT",
     adapterId: ADAPTER_ID,
     status: "ROLE_LIFECYCLE_PROVEN",
-    workOrderId: envelope.workOrderId,
-    laneId: envelope.laneId,
-    roleAdapters,
-    stages,
-    evidence: {
-      sanitized: true,
-      envelopeContentHash: envelopeResult.contentHash,
-      coordinatorPlanContentHash: input.coordinatorPlan.planContentHash,
-      coordinatorAssignmentHash: contentHash(assignments),
-      stageHash: contentHash(stages),
-      responseHashes: stages.map(({ providerResponse }) => contentHash(providerResponse)),
+    workOrderId: builder.workOrderId,
+    laneId: builder.laneId,
+    adapterRunId: builder.adapterRunId,
+    roleBindings: {
+      builder: { assignmentId: builder.assignmentId, logicalWorkerDigest: hash({ workerId: builder.workerId }), nativeWorkerDigest: builderStart.nativeWorkerDigest, nativeBindingDigest: roleBinding.builderNativeBindingDigest },
+      reviewer: { assignmentId: reviewer.assignmentId, logicalWorkerDigest: hash({ workerId: reviewer.workerId }), nativeWorkerDigest: reviewerStart.nativeWorkerDigest, nativeBindingDigest: roleBinding.reviewerNativeBindingDigest },
+      identitiesDistinct: true,
+      reservationDigest: roleBinding.reservationDigest,
     },
+    stages: [
+      publicStage("BUILD", "builder", builder, observations.build, STAGE_CONSTRAINTS.BUILD, build.attestation),
+      publicStage("ASSURANCE_REVIEW", "reviewer", reviewer, observations.requestChanges, STAGE_CONSTRAINTS.REQUEST_CHANGES, requestChanges.attestation),
+      publicStage("REMEDIATION", "builder", builder, observations.remediation, STAGE_CONSTRAINTS.REMEDIATION, remediation.attestation),
+      publicStage("REREVIEW", "reviewer", reviewer, observations.approval, STAGE_CONSTRAINTS.APPROVAL, approval.attestation),
+    ],
+    remediation: {
+      originalBuilderReused: true,
+      completedCycles: 1,
+      maximumCycles: roleBinding.remediationBudget.maxCycles,
+      budgetExceeded: false,
+    },
+    retry: {
+      attemptsUsed: transaction.attemptCount,
+      maximumAttempts: roleBinding.retryBudget.maxAttempts,
+      backoffSeconds: roleBinding.retryBudget.backoffSeconds,
+      budgetExceeded: false,
+    },
+    review: {
+      independentReviewer: true,
+      initialVerdict: "REQUEST_CHANGES",
+      initialUnresolvedThreads: 1,
+      finalVerdict: "APPROVED",
+      finalUnresolvedThreads: 0,
+    },
+    messageCount: MESSAGE_FIELDS.size,
+    sanitizedEvidenceOnly: true,
+    rawProviderOutputIncluded: false,
     ownerRelayRequired: false,
+    ownerTouchCount: 0,
     providerContractDispatchAllowed: false,
-    dispatchPerformed: false,
+    nativeAssignmentsStarted: 2,
     durablePersistenceClaimed: false,
     serviceWorkerClaimed: false,
     runtimeActivationAllowed: false,
+    localIssue357Allowed: false,
+    githubMutationClaimed: false,
     authorityGranted: false,
   }
-  return deepFreeze({ ...output, resultHash: contentHash(output) })
+  const result = deepFreeze({ ...body, resultHash: hash(body) })
+  transaction.status = "COMMITTED"
+  transaction.result = result
+  return result
+  } catch (error) {
+    if (recoverableCoordinatorFailure(error)) {
+      transaction.recoverable = {
+        field: error.field,
+        detail: error.detail,
+      }
+      transaction.nextRetryAt = Date.now() + (transaction.retryBudget.backoffSeconds * 1000)
+      throw error
+    }
+    if (transaction.status !== "CLEANUP_PENDING" && transaction.status !== "QUARANTINED_TERMINAL") {
+      quarantineStartedChildren(input.plan, builder, reviewer, preflight, namespace, transaction)
+    }
+    throw error
+  }
 }
 
 export function canonicalCodexRoleAdapterJson(value) {
-  return canonicalCodexProviderConformanceJson(value)
+  return JSON.stringify(canonical(value))
 }
 
 export const CODEX_ROLE_ADAPTER_ID = ADAPTER_ID
+export const CODEX_ROLE_STAGE_CONSTRAINTS = STAGE_CONSTRAINTS

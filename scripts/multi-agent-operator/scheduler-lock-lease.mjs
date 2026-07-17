@@ -7,7 +7,7 @@ import { Worker } from "node:worker_threads"
 const WAIT = new Int32Array(new SharedArrayBuffer(4))
 const HASH = /^[a-f0-9]{64}$/
 const OWNER_FIELDS = ["statePath", "pid", "hostname", "nonce", "generation", "issuedAt", "heartbeatAt", "expiresAt", "lockFence"]
-const HEARTBEAT_LIFECYCLE_TIMEOUT_MS = 5_000
+const HEARTBEAT_LIFECYCLE_TIMEOUT_MS = 30_000
 const HEARTBEAT_LIFECYCLE_TIMEOUT_MAX_MS = 60_000
 
 export class SchedulerLockLeaseError extends Error {

@@ -1,41 +1,29 @@
 #!/usr/bin/env node
-import fs from "node:fs"
-
-import {
-  adaptCodexRoleLifecycle,
-  canonicalCodexRoleAdapterJson,
-  CodexRoleAdapterError,
-} from "./codex-role-adapters.mjs"
 
 const [inputPath, ...extra] = process.argv.slice(2)
 
-function failure(code, field, detail = undefined) {
-  return {
-    schemaVersion: 1,
-    artifactType: "CODEX_ROLE_ADAPTER_CLI_RESULT",
-    ok: false,
-    code,
-    field,
-    detail,
-    dispatchPerformed: false,
-    authorityGranted: false,
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical)
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]))
   }
+  return value
 }
 
-let result
-if (!inputPath || extra.length > 0) {
-  result = failure("CODEX_ROLE_CLI_USAGE_WALL", "inputPath")
-} else {
-  try {
-    result = adaptCodexRoleLifecycle(JSON.parse(fs.readFileSync(inputPath, "utf8")))
-  } catch (error) {
-    if (error instanceof CodexRoleAdapterError) {
-      result = failure(error.code, error.field, error.detail)
-    } else {
-      result = failure("CODEX_ROLE_CLI_INPUT_WALL", "input")
-    }
-  }
+const usageFailure = !inputPath || extra.length > 0
+const result = {
+  schemaVersion: 2,
+  artifactType: "CODEX_ROLE_ADAPTER_CLI_RESULT",
+  ok: false,
+  code: usageFailure ? "CODEX_ROLE_CLI_USAGE_WALL" : "CODEX_ROLE_CLI_PRIVATE_SESSION_WALL",
+  field: usageFailure ? "inputPath" : "roleLifecycle",
+  detail: usageFailure ? null : "OPAQUE_CURRENT_SESSION_PLAN_AND_ASSIGNMENT_HANDLES_REQUIRED",
+  nativeAssignmentsStarted: 0,
+  ownerRelayRequired: false,
+  runtimeActivationAllowed: false,
+  localIssue357Allowed: false,
+  authorityGranted: false,
 }
 
-process.stdout.write(`${canonicalCodexRoleAdapterJson(result)}\n`)
-process.exitCode = result.ok === false ? 2 : 0
+process.stdout.write(`${JSON.stringify(canonical(result))}\n`)
+process.exitCode = 2

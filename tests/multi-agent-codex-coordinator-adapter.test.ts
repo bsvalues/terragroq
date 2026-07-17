@@ -18,8 +18,12 @@ vi.mock("../scripts/multi-agent-operator/hosted-codex-authority-status-registry.
 
 import {
   HostedCodexCoordinatorAdapterError,
+  attestHostedCodexRoleAssignmentPair,
+  attestHostedCodexRoleAssignmentHandles,
+  attestHostedCodexSemanticEvidence,
   cancelHostedCodexNativeAssignment,
   captureHostedCodexNativeEvidence,
+  captureHostedCodexNativeSemanticEvidence,
   compileHostedCodexCoordinatorAdapter,
   createHostedCodexNativeMessage,
   getHostedCodexNativeAssignmentHandle,
@@ -32,11 +36,17 @@ import {
 import { codexProviderConformanceFixture } from "../scripts/multi-agent-operator/codex-provider-conformance.mjs"
 import { validateDispatchEnvelope } from "../scripts/multi-agent-operator/dispatch-envelope.mjs"
 import {
+  CodexRoleAdapterError,
+  adaptCodexRoleLifecycle,
+} from "../scripts/multi-agent-operator/codex-role-adapters.mjs"
+import {
   clearTestCodexHostSessionRecords,
   installTestCodexHostSessionRecord,
 } from "./fixtures/codex-host-session-registry-fixture.mjs"
 import {
   clearTestHostedCodexNativeBridgeRegistry,
+  isHostedCodexAtomicAuthorityFenceRejection,
+  isHostedCodexObservationPending,
   installTestHostedCodexNativeBridge,
   installTestHostedCodexTrustRecord,
 } from "./fixtures/codex-native-bridge-registry-fixture.mjs"
@@ -98,6 +108,12 @@ function installBridge(overrides: Record<string, unknown> = {}) {
     durableTransport: false,
     hostIdempotencyEnforced: true,
     lookupMayPerformSideEffect: false,
+    atomicAuthorityFenceEnforced: true,
+    exactAuthorityFenceEcho: true,
+    authorityFenceEchoRequired: true,
+    authorityStatusRegistryId: "hosted-codex-authority-status-registry-v1",
+    isAtomicAuthorityFenceRejection: isHostedCodexAtomicAuthorityFenceRejection,
+    isObservationPending: isHostedCodexObservationPending,
     authorityGranted: false,
     spawn(request: Record<string, unknown>) {
       bridgeCalls.spawn += 1
@@ -517,6 +533,7 @@ function input(
     repositories?: string[]
     reservationRepositories?: string[]
     sameRelativeReservationPath?: boolean
+    retryBudget?: { maxAttempts: number, backoffSeconds: number }
   } = {},
 ) {
   const topology = topologyInput()
@@ -528,6 +545,10 @@ function input(
   if (options.grantStatusEventRefs) {
     target.grantStatusEventRefs = [...options.grantStatusEventRefs]
     topology.lanes[0].envelope.grantStatusEventRefs = [...options.grantStatusEventRefs]
+  }
+  if (options.retryBudget) {
+    target.retryBudget = { ...options.retryBudget }
+    topology.lanes[0].envelope.retryBudget = { ...options.retryBudget }
   }
   if (options.repositories) {
     target.repositories = [...options.repositories]
@@ -873,6 +894,560 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
       }
     },
   )
+
+  it.each([
+    ["spawn", "ACTIVE_ADVANCE"], ["spawn", "REVOKED"],
+    ["send", "ACTIVE_ADVANCE"], ["send", "REVOKED"],
+    ["cancel", "ACTIVE_ADVANCE"], ["cancel", "REVOKED"],
+    ["observe", "ACTIVE_ADVANCE"], ["observe", "REVOKED"],
+  ] as const)("atomically rejects a %s effect after an in-boundary %s fence change", (operation, transition) => {
+    const value = input()
+    const original = value.authorityProofs[0].artifacts
+    const initial = AUTHORITY_INITIAL_RECORDS.get(original)!
+    let injected = false
+    installBridge({
+      beforeAuthorityFenceCheck(currentOperation: string) {
+        if (currentOperation !== operation || injected) return
+        injected = true
+        if (transition === "REVOKED") {
+          advanceAuthorityToRevoked(original)
+        } else {
+          const activeAdvance = authorityStatusRecord(
+            original,
+            original,
+            "WO-MAO-030",
+            2,
+            initial.recordContentHash,
+            "ACTIVE",
+          )
+          advanceTestHostedCodexAuthorityStatusChain(initial.recordId, activeAdvance, iso(0))
+        }
+      },
+    })
+    const plan = compileHostedCodexCoordinatorAdapter(value)
+    const builder = assignment(plan, "builder")
+    if (operation !== "spawn") {
+      startHostedCodexNativeAssignment(plan, {
+        assignmentHandle: builder.handle,
+        idempotencyKey: `spawn-before-${operation}-${transition.toLowerCase()}`,
+      })
+    }
+    if (operation === "observe") {
+      observations.set(`observe-${transition.toLowerCase()}`, {
+        schemaVersion: 1,
+        artifactType: "PROVIDER_STATUS",
+        providerId: "hosted-codex",
+        adapterId: "hosted-codex-session-native-team-v1",
+        dispatchId: builder.item.assignmentId,
+        workOrderId: builder.item.workOrderId,
+        laneId: builder.item.laneId,
+        providerState: "RUNNING",
+        reasonCode: null,
+        sanitized: true,
+        authorityGranted: false,
+        progressMarker: "RUNNING",
+      })
+    }
+    const before = { ...bridgeCalls }
+    const invoke = () => {
+      if (operation === "spawn") {
+        return startHostedCodexNativeAssignment(plan, {
+          assignmentHandle: builder.handle,
+          idempotencyKey: `spawn-race-${transition.toLowerCase()}`,
+        })
+      }
+      if (operation === "send") {
+        return createHostedCodexNativeMessage(plan, {
+          assignmentHandle: builder.handle,
+          direction: "TO_ASSIGNMENT",
+          messageType: "STATUS",
+          summary: "Atomic authority fence race.",
+          idempotencyKey: `send-race-${transition.toLowerCase()}`,
+        })
+      }
+      if (operation === "cancel") {
+        return cancelHostedCodexNativeAssignment(plan, {
+          assignmentHandle: builder.handle,
+          requestedBy: ROLES.coordinator,
+          reasonCode: "SUPERSEDED",
+          idempotencyKey: `cancel-race-${transition.toLowerCase()}`,
+        })
+      }
+      return captureHostedCodexNativeEvidence(plan, {
+        assignmentHandle: builder.handle,
+        observationId: `observe-${transition.toLowerCase()}`,
+      })
+    }
+    expectWall(invoke, "HOSTED_CODEX_AUTHORITY_FENCE_WALL")
+    expect(injected).toBe(true)
+    expect(bridgeCalls).toEqual(before)
+    if (transition === "REVOKED") {
+      expectWall(invoke, "HOSTED_CODEX_AUTHORITY_REVOKED_TERMINAL_WALL")
+      expect(bridgeCalls).toEqual(before)
+    } else {
+      expect(invoke()).toBeDefined()
+      expect(bridgeCalls).toEqual({ ...before, [operation]: before[operation] + 1 })
+    }
+  })
+
+  it.each([
+    ["lookupSpawn", "ACTIVE_ADVANCE"], ["lookupSpawn", "REVOKED"],
+    ["lookupSend", "ACTIVE_ADVANCE"], ["lookupSend", "REVOKED"],
+    ["lookupCancel", "ACTIVE_ADVANCE"], ["lookupCancel", "REVOKED"],
+  ] as const)("atomically rejects %s after an in-boundary %s fence change", (lookupOperation, transition) => {
+    const value = input()
+    const original = value.authorityProofs[0].artifacts
+    const initial = AUTHORITY_INITIAL_RECORDS.get(original)!
+    const effect = lookupOperation.slice("lookup".length).toLowerCase()
+    let lookupRaceArmed = false
+    let injected = false
+    installBridge({
+      beforeAuthorityFenceCheck(currentOperation: string) {
+        if (!lookupRaceArmed || currentOperation !== lookupOperation || injected) return
+        injected = true
+        if (transition === "REVOKED") {
+          advanceAuthorityToRevoked(original)
+        } else {
+          const activeAdvance = authorityStatusRecord(
+            original, original, "WO-MAO-030", 2, initial.recordContentHash, "ACTIVE",
+          )
+          advanceTestHostedCodexAuthorityStatusChain(initial.recordId, activeAdvance, iso(0))
+        }
+      },
+      ...(effect === "spawn" ? {
+        spawn(request: Record<string, unknown>) {
+          bridgeCalls.spawn += 1
+          const result = {
+            schemaVersion: 1, artifactType: "HOSTED_CODEX_NATIVE_SPAWN_RESULT",
+            bridgeId: "bridge-mao-030", adapterRunId: request.adapterRunId,
+            assignmentId: request.assignmentId, workOrderId: request.workOrderId,
+            laneId: request.laneId, role: request.role, logicalWorkerId: request.logicalWorkerId,
+            nativeWorkerId: "native-builder-ambiguous", status: "SPAWNED", spawnPerformed: false,
+            currentSessionOnly: true, authorityGranted: false,
+          }
+          bridgeResults.spawn.set(request.idempotencyKey as string, { ...result, spawnPerformed: true })
+          return result
+        },
+      } : {}),
+      ...(effect === "send" ? {
+        send(request: Record<string, unknown>) {
+          bridgeCalls.send += 1
+          const committed = {
+            schemaVersion: 1, artifactType: "HOSTED_CODEX_NATIVE_SEND_RESULT", bridgeId: "bridge-mao-030",
+            assignmentId: request.assignmentId, nativeWorkerId: request.nativeWorkerId,
+            messageDigest: request.messageDigest, status: "DELIVERED", deliveryPerformed: true,
+            authorityGranted: false,
+          }
+          bridgeResults.send.set(request.idempotencyKey as string, committed)
+          return { ...committed, deliveryPerformed: false }
+        },
+      } : {}),
+      ...(effect === "cancel" ? {
+        cancel(request: Record<string, unknown>) {
+          bridgeCalls.cancel += 1
+          const committed = {
+            schemaVersion: 1, artifactType: "HOSTED_CODEX_NATIVE_CANCEL_RESULT", bridgeId: "bridge-mao-030",
+            assignmentId: request.assignmentId, nativeWorkerId: request.nativeWorkerId,
+            reasonCode: request.reasonCode, status: "CANCELLED", cancellationPerformed: true,
+            cancelAcknowledged: true, authorityGranted: false,
+          }
+          bridgeResults.cancel.set(request.idempotencyKey as string, committed)
+          return { ...committed, cancellationPerformed: false }
+        },
+      } : {}),
+    })
+    const plan = compileHostedCodexCoordinatorAdapter(value)
+    const builder = assignment(plan, "builder")
+    if (effect !== "spawn") {
+      startHostedCodexNativeAssignment(plan, {
+        assignmentHandle: builder.handle,
+        idempotencyKey: `spawn-before-ambiguous-${effect}-${transition.toLowerCase()}`,
+      })
+    }
+    const idempotencyKey = `ambiguous-${effect}-${transition.toLowerCase()}`
+    const invoke = () => {
+      if (effect === "spawn") {
+        return startHostedCodexNativeAssignment(plan, { assignmentHandle: builder.handle, idempotencyKey })
+      }
+      if (effect === "send") {
+        return createHostedCodexNativeMessage(plan, {
+          assignmentHandle: builder.handle, direction: "TO_ASSIGNMENT", messageType: "STATUS",
+          summary: "Ambiguous effect requires fenced reconciliation.", idempotencyKey,
+        })
+      }
+      return cancelHostedCodexNativeAssignment(plan, {
+        assignmentHandle: builder.handle, requestedBy: ROLES.coordinator,
+        reasonCode: "SUPERSEDED", idempotencyKey,
+      })
+    }
+    expectWall(invoke, "HOSTED_CODEX_BRIDGE_WALL")
+    lookupRaceArmed = true
+    const before = { ...bridgeCalls }
+    expectWall(invoke, "HOSTED_CODEX_AUTHORITY_FENCE_WALL")
+    expect(injected).toBe(true)
+    expect(bridgeCalls).toEqual(before)
+    if (transition === "REVOKED") {
+      expectWall(invoke, "HOSTED_CODEX_AUTHORITY_REVOKED_TERMINAL_WALL")
+      expect(bridgeCalls).toEqual(before)
+    } else {
+      expect(invoke()).toBeDefined()
+      expect(bridgeCalls).toEqual({ ...before, [lookupOperation]: before[lookupOperation] + 1 })
+    }
+  })
+
+  it("quarantines an effect when the trusted bridge does not echo the exact enforced authority fence", () => {
+    installBridge({
+      transformBridgeInvocation(operation: string, invocation: Record<string, unknown>) {
+        if (operation !== "spawn") return invocation
+        return {
+          ...invocation,
+          authorityFence: { ...(invocation.authorityFence as Record<string, unknown>), fencingToken: 999 },
+        }
+      },
+    })
+    const plan = compileHostedCodexCoordinatorAdapter(input())
+    const builder = assignment(plan, "builder")
+    expectWall(() => startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-with-substituted-fence-echo",
+    }), "HOSTED_CODEX_BRIDGE_WALL")
+    expect(bridgeCalls.spawn).toBe(1)
+  })
+
+  it("does not substitute an already compiled plan bridge when the test registry entry changes", () => {
+    const plan = compileHostedCodexCoordinatorAdapter(input())
+    const builder = assignment(plan, "builder")
+    let substitutedBridgeCalled = false
+    installBridge({
+      spawn() {
+        substitutedBridgeCalled = true
+        throw new Error("substituted bridge must remain unreachable")
+      },
+    })
+    expect(startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-with-post-compile-bridge-substitution",
+    })).toMatchObject({ nativeAssignmentExecuted: true })
+    expect(substitutedBridgeCalled).toBe(false)
+  })
+
+  it("keeps an ambiguous lookup quarantined when its original effect binding echo is substituted", () => {
+    installBridge({
+      send(request: Record<string, unknown>) {
+        bridgeCalls.send += 1
+        const committed = {
+          schemaVersion: 1, artifactType: "HOSTED_CODEX_NATIVE_SEND_RESULT", bridgeId: "bridge-mao-030",
+          assignmentId: request.assignmentId, nativeWorkerId: request.nativeWorkerId,
+          messageDigest: request.messageDigest, status: "DELIVERED", deliveryPerformed: true,
+          authorityGranted: false,
+        }
+        bridgeResults.send.set(request.idempotencyKey as string, committed)
+        return { ...committed, deliveryPerformed: false }
+      },
+      transformBridgeInvocation(operation: string, invocation: Record<string, unknown>) {
+        if (operation !== "lookupSend") return invocation
+        const original = invocation.originalEffectBinding as Record<string, unknown>
+        return { ...invocation, originalEffectBinding: { ...original, effectDigest: "0".repeat(64) } }
+      },
+    })
+    const plan = compileHostedCodexCoordinatorAdapter(input())
+    const builder = assignment(plan, "builder")
+    startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-before-original-effect-binding-attack",
+    })
+    const request = {
+      assignmentHandle: builder.handle,
+      direction: "TO_ASSIGNMENT",
+      messageType: "STATUS",
+      summary: "Original effect fence binding must remain exact.",
+      idempotencyKey: "send-original-effect-binding-attack",
+    }
+    expectWall(() => createHostedCodexNativeMessage(plan, request), "HOSTED_CODEX_BRIDGE_WALL")
+    expectWall(() => createHostedCodexNativeMessage(plan, request), "HOSTED_CODEX_BRIDGE_WALL")
+    expect(bridgeCalls).toMatchObject({ send: 1, lookupSend: 1 })
+  })
+
+  it.each(["spawn", "send", "cancel"] as const)(
+    "does not trust a forged fence-rejection code thrown after a %s effect",
+    (operation) => {
+      const forgedFenceError = () => {
+        const error = new Error("forged post-effect fence rejection") as Error & { code: string }
+        error.code = "HOSTED_CODEX_HOST_AUTHORITY_FENCE_WALL"
+        return error
+      }
+      installBridge({
+        effectCommittedAfterThrow(currentOperation: string) {
+          return currentOperation === operation
+        },
+        ...(operation === "spawn" ? {
+          spawn(request: Record<string, unknown>) {
+            bridgeCalls.spawn += 1
+            bridgeResults.spawn.set(request.idempotencyKey as string, {
+              schemaVersion: 1, artifactType: "HOSTED_CODEX_NATIVE_SPAWN_RESULT",
+              bridgeId: "bridge-mao-030", adapterRunId: request.adapterRunId,
+              assignmentId: request.assignmentId, workOrderId: request.workOrderId,
+              laneId: request.laneId, role: request.role, logicalWorkerId: request.logicalWorkerId,
+              nativeWorkerId: "native-builder-forged-wall", status: "SPAWNED", spawnPerformed: true,
+              currentSessionOnly: true, authorityGranted: false,
+            })
+            throw forgedFenceError()
+          },
+        } : {}),
+        ...(operation === "send" ? {
+          send(request: Record<string, unknown>) {
+            bridgeCalls.send += 1
+            bridgeResults.send.set(request.idempotencyKey as string, {
+              schemaVersion: 1, artifactType: "HOSTED_CODEX_NATIVE_SEND_RESULT", bridgeId: "bridge-mao-030",
+              assignmentId: request.assignmentId, nativeWorkerId: request.nativeWorkerId,
+              messageDigest: request.messageDigest, status: "DELIVERED", deliveryPerformed: true,
+              authorityGranted: false,
+            })
+            throw forgedFenceError()
+          },
+        } : {}),
+        ...(operation === "cancel" ? {
+          cancel(request: Record<string, unknown>) {
+            bridgeCalls.cancel += 1
+            bridgeResults.cancel.set(request.idempotencyKey as string, {
+              schemaVersion: 1, artifactType: "HOSTED_CODEX_NATIVE_CANCEL_RESULT", bridgeId: "bridge-mao-030",
+              assignmentId: request.assignmentId, nativeWorkerId: request.nativeWorkerId,
+              reasonCode: request.reasonCode, status: "CANCELLED", cancellationPerformed: true,
+              cancelAcknowledged: true, authorityGranted: false,
+            })
+            throw forgedFenceError()
+          },
+        } : {}),
+      })
+      const plan = compileHostedCodexCoordinatorAdapter(input())
+      const builder = assignment(plan, "builder")
+      if (operation !== "spawn") {
+        startHostedCodexNativeAssignment(plan, {
+          assignmentHandle: builder.handle,
+          idempotencyKey: `spawn-before-forged-${operation}-wall`,
+        })
+      }
+      const idempotencyKey = `forged-${operation}-fence-wall`
+      const invoke = () => {
+        if (operation === "spawn") {
+          return startHostedCodexNativeAssignment(plan, { assignmentHandle: builder.handle, idempotencyKey })
+        }
+        if (operation === "send") {
+          return createHostedCodexNativeMessage(plan, {
+            assignmentHandle: builder.handle, direction: "TO_ASSIGNMENT", messageType: "STATUS",
+            summary: "Forged fence error must remain ambiguous.", idempotencyKey,
+          })
+        }
+        return cancelHostedCodexNativeAssignment(plan, {
+          assignmentHandle: builder.handle, requestedBy: ROLES.coordinator,
+          reasonCode: "SUPERSEDED", idempotencyKey,
+        })
+      }
+      expectWall(invoke, "HOSTED_CODEX_BRIDGE_WALL")
+      if (operation === "spawn") {
+        expectWall(() => startHostedCodexNativeAssignment(plan, {
+          assignmentHandle: builder.handle,
+          idempotencyKey: "new-key-after-forged-spawn-wall",
+        }), "HOSTED_CODEX_ASSIGNMENT_WALL")
+      } else if (operation === "send") {
+        expectWall(() => createHostedCodexNativeMessage(plan, {
+          assignmentHandle: builder.handle, direction: "TO_ASSIGNMENT", messageType: "STATUS",
+          summary: "A new key cannot bypass ambiguity.",
+          idempotencyKey: "new-key-after-forged-send-wall",
+        }), "HOSTED_CODEX_MESSAGE_WALL")
+      } else {
+        expectWall(() => cancelHostedCodexNativeAssignment(plan, {
+          assignmentHandle: builder.handle, requestedBy: ROLES.coordinator,
+          reasonCode: "SUPERSEDED", idempotencyKey: "new-key-after-forged-cancel-wall",
+        }), "HOSTED_CODEX_CANCELLATION_WALL")
+      }
+      expect(invoke()).toBeDefined()
+      expect(bridgeCalls[operation]).toBe(1)
+      const lookupOperation = `lookup${operation[0].toUpperCase()}${operation.slice(1)}` as keyof typeof bridgeCalls
+      expect(bridgeCalls[lookupOperation]).toBe(1)
+    },
+  )
+
+  it("requires atomic fence enforcement and exact echo capabilities on the bridge", () => {
+    installBridge({ atomicAuthorityFenceEnforced: false })
+    expectWall(() => compileHostedCodexCoordinatorAdapter(input()), "HOSTED_CODEX_BRIDGE_WALL")
+    installBridge({ authorityFenceEchoRequired: false })
+    expectWall(() => compileHostedCodexCoordinatorAdapter(input()), "HOSTED_CODEX_BRIDGE_WALL")
+  })
+
+  it("keeps a trusted not-yet-committed observation retryable without manufacturing evidence", () => {
+    let pending = true
+    installBridge({
+      observe(request: Record<string, unknown>) {
+        bridgeCalls.observe += 1
+        if (pending) {
+          const error = new Error("observation not committed") as Error & { code: string }
+          error.code = "HOST_OBSERVATION_PENDING"
+          throw error
+        }
+        const response = observations.get(request.observationId as string)
+        if (!response) throw new Error("missing observation")
+        return response
+      },
+    })
+    const plan = compileHostedCodexCoordinatorAdapter(input())
+    const builder = assignment(plan, "builder")
+    startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-before-pending-observation",
+    })
+    observations.set("pending-observation", {
+      schemaVersion: 1,
+      artifactType: "PROVIDER_STATUS",
+      providerId: "hosted-codex",
+      adapterId: "hosted-codex-session-native-team-v1",
+      dispatchId: builder.item.assignmentId,
+      workOrderId: builder.item.workOrderId,
+      laneId: builder.item.laneId,
+      providerState: "RUNNING",
+      reasonCode: null,
+      sanitized: true,
+      authorityGranted: false,
+      progressMarker: "RUNNING",
+    })
+    const request = { assignmentHandle: builder.handle, observationId: "pending-observation" }
+    expectWall(() => captureHostedCodexNativeEvidence(plan, request), "HOSTED_CODEX_OBSERVATION_PENDING_WALL")
+    expect(bridgeCalls.observe).toBe(1)
+    pending = false
+    expect(captureHostedCodexNativeEvidence(plan, request)).toMatchObject({ providerState: "RUNNING" })
+    expect(bridgeCalls.observe).toBe(2)
+  })
+
+  it("attests only closed PROVIDER_EVIDENCE lifecycle semantics without exposing private attributes or fence fields", () => {
+    const plan = compileHostedCodexCoordinatorAdapter(input())
+    const builder = assignment(plan, "builder")
+    startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-semantic-builder",
+    })
+    observations.set("semantic-build-complete", {
+      schemaVersion: 1,
+      artifactType: "PROVIDER_EVIDENCE",
+      providerId: "hosted-codex",
+      adapterId: "hosted-codex-session-native-team-v1",
+      dispatchId: builder.item.assignmentId,
+      workOrderId: builder.item.workOrderId,
+      laneId: builder.item.laneId,
+      providerState: "RUNNING",
+      reasonCode: null,
+      sanitized: true,
+      authorityGranted: false,
+      eventId: "semantic-build-complete",
+      evidenceType: "CODEX_ROLE_BUILD_COMPLETE",
+      contentHash: "a".repeat(64),
+      summary: "Builder completed the reserved implementation.",
+      attributes: { outcome: "COMPLETE", stage: "BUILD" },
+      rawProviderOutputIncluded: false,
+    })
+    const evidenceHandle = captureHostedCodexNativeSemanticEvidence(plan, {
+      assignmentHandle: builder.handle,
+      observationId: "semantic-build-complete",
+      expectedKind: "CODEX_ROLE_BUILD_COMPLETE",
+    })
+    const attestation = attestHostedCodexSemanticEvidence(plan, {
+      assignmentHandle: builder.handle,
+      evidenceHandle,
+      semanticConstraintId: "BUILD_COMPLETE",
+    })
+    expect(attestation).toMatchObject({
+      assignmentId: builder.item.assignmentId,
+      workOrderId: "WO-MAO-030",
+      role: "builder",
+      semanticConstraintId: "BUILD_COMPLETE",
+      evidenceType: "CODEX_ROLE_BUILD_COMPLETE",
+      sanitized: true,
+      rawProviderOutputIncluded: false,
+      authorityGranted: false,
+    })
+    expect(attestation).not.toHaveProperty("attributes")
+    expect(JSON.stringify(attestation)).not.toMatch(/recordId|fencingToken|recordContentHash|native-builder-mao-030/)
+    expectWall(() => attestHostedCodexSemanticEvidence(plan, {
+      assignmentHandle: builder.handle,
+      evidenceHandle,
+      semanticConstraintId: "CALLER_SELECTED_CONSTRAINT",
+    }), "HOSTED_CODEX_EVIDENCE_HANDLE_WALL")
+  })
+
+  it("does not accept a matching PROVIDER_ARTIFACT kind as lifecycle semantic evidence", () => {
+    const plan = compileHostedCodexCoordinatorAdapter(input())
+    const builder = assignment(plan, "builder")
+    startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-artifact-semantic-wall",
+    })
+    observations.set("artifact-semantic-wall", {
+      schemaVersion: 1,
+      artifactType: "PROVIDER_ARTIFACT",
+      providerId: "hosted-codex",
+      adapterId: "hosted-codex-session-native-team-v1",
+      dispatchId: builder.item.assignmentId,
+      workOrderId: builder.item.workOrderId,
+      laneId: builder.item.laneId,
+      providerState: "SUCCEEDED",
+      reasonCode: null,
+      sanitized: true,
+      authorityGranted: false,
+      artifactId: "artifact-semantic-wall",
+      artifactKind: "CODEX_ROLE_BUILD_COMPLETE",
+      contentHash: "b".repeat(64),
+      relativePath: "scripts/multi-agent-operator/codex-coordinator-adapter.mjs",
+    })
+    expectWall(() => captureHostedCodexNativeSemanticEvidence(plan, {
+      assignmentHandle: builder.handle,
+      observationId: "artifact-semantic-wall",
+      expectedKind: "CODEX_ROLE_BUILD_COMPLETE",
+    }), "HOSTED_CODEX_EVIDENCE_WALL")
+  })
+
+  it("attests a same-lane builder/reviewer pair with distinct private native bindings", () => {
+    const plan = compileHostedCodexCoordinatorAdapter(input())
+    const builder = assignment(plan, "builder")
+    const reviewer = assignment(plan, "reviewer")
+    const builderStart = startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: builder.handle,
+      idempotencyKey: "spawn-pair-builder",
+    })
+    const reviewerStart = startHostedCodexNativeAssignment(plan, {
+      assignmentHandle: reviewer.handle,
+      idempotencyKey: "spawn-pair-reviewer",
+    })
+    const pair = attestHostedCodexRoleAssignmentPair(plan, {
+      builderAssignmentHandle: builder.handle,
+      reviewerAssignmentHandle: reviewer.handle,
+    })
+    expect(pair).toMatchObject({
+      workOrderId: "WO-MAO-030",
+      laneId: "LANE-WO-MAO-030",
+      remediationBudget: { maxCycles: 2 },
+      authorityGranted: false,
+    })
+    expect(pair.builderNativeBindingDigest).not.toBe(pair.reviewerNativeBindingDigest)
+    expect(pair.builderNativeWorkerDigest).toBe(builderStart.nativeWorkerDigest)
+    expect(pair.reviewerNativeWorkerDigest).toBe(reviewerStart.nativeWorkerDigest)
+    expect(JSON.stringify(pair)).not.toMatch(/native-builder-mao-030|native-reviewer-mao-030/)
+  })
+
+  it("rejects copied and cross-plan role handle pairs before any bridge effect", () => {
+    const left = compileHostedCodexCoordinatorAdapter(input({ adapterRunId: "run-cross-plan-left" }))
+    const leftBuilder = assignment(left, "builder")
+    const leftReviewer = assignment(left, "reviewer")
+    const right = compileHostedCodexCoordinatorAdapter(input({ adapterRunId: "run-cross-plan-left" }))
+    const rightReviewer = assignment(right, "reviewer")
+    expectWall(() => attestHostedCodexRoleAssignmentHandles(left, {
+      builderAssignmentHandle: leftBuilder.handle,
+      reviewerAssignmentHandle: structuredClone(leftReviewer.handle),
+    }), "HOSTED_CODEX_ASSIGNMENT_HANDLE_WALL")
+    expectWall(() => attestHostedCodexRoleAssignmentHandles(left, {
+      builderAssignmentHandle: leftBuilder.handle,
+      reviewerAssignmentHandle: rightReviewer.handle,
+    }), "HOSTED_CODEX_ASSIGNMENT_HANDLE_WALL")
+    expect(bridgeCalls).toMatchObject({ spawn: 0, send: 0, cancel: 0, observe: 0 })
+  })
 
   it("fails closed when the host authority-status source disappears", () => {
     const value = input()
@@ -1750,6 +2325,309 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
     }), "HOSTED_CODEX_CONCURRENCY_WALL")
     expect(bridgeCalls).toMatchObject({ spawn: 3, send: 1 })
   })
+
+  it("runs the real one-cycle role lifecycle through the real coordinator bridge with retry-safe observations", () => {
+    let successfulObservations = 0
+    installBridge({
+      observe(request: Record<string, unknown>) {
+        bridgeCalls.observe += 1
+        const response = observations.get(request.observationId as string)
+        if (!response) {
+          const error = new Error("observation not committed") as Error & { code: string }
+          error.code = "HOST_OBSERVATION_PENDING"
+          throw error
+        }
+        successfulObservations += 1
+        return response
+      },
+    })
+    const coordinatorInput = input({ adapterRunId: "run-real-role-lifecycle" })
+    const plan = compileHostedCodexCoordinatorAdapter(coordinatorInput)
+    const twinPlan = compileHostedCodexCoordinatorAdapter(coordinatorInput)
+    const builder = assignment(plan, "builder")
+    const reviewer = assignment(plan, "reviewer")
+    const observationIds = {
+      build: "real-role-build",
+      requestChanges: "real-role-request-changes",
+      remediation: "real-role-remediation",
+      approval: "real-role-approval",
+    }
+    const evidence = (
+      target: typeof builder,
+      observationId: string,
+      evidenceType: string,
+      providerState: "RUNNING" | "SUCCEEDED",
+      attributes: Record<string, unknown>,
+      contentCharacter: string,
+    ) => ({
+      schemaVersion: 1, artifactType: "PROVIDER_EVIDENCE", providerId: "hosted-codex",
+      adapterId: "hosted-codex-session-native-team-v1", dispatchId: target.item.assignmentId,
+      workOrderId: target.item.workOrderId, laneId: target.item.laneId, providerState,
+      reasonCode: null, sanitized: true, authorityGranted: false, eventId: observationId,
+      evidenceType, contentHash: contentCharacter.repeat(64),
+      summary: `Sanitized ${evidenceType} lifecycle evidence.`, attributes,
+      rawProviderOutputIncluded: false,
+    })
+    observations.set(observationIds.requestChanges, evidence(
+      reviewer, observationIds.requestChanges, "CODEX_ROLE_REQUEST_CHANGES", "RUNNING",
+      { stage: "ASSURANCE_REVIEW", unresolvedThreads: 1, verdict: "REQUEST_CHANGES" }, "b",
+    ))
+    observations.set(observationIds.remediation, evidence(
+      builder, observationIds.remediation, "CODEX_ROLE_REMEDIATION_COMPLETE", "SUCCEEDED",
+      { outcome: "COMPLETE", remediationCycle: 1, stage: "REMEDIATION" }, "c",
+    ))
+    observations.set(observationIds.approval, evidence(
+      reviewer, observationIds.approval, "CODEX_ROLE_APPROVED_ZERO_UNRESOLVED", "SUCCEEDED",
+      { stage: "REREVIEW", unresolvedThreads: 0, verdict: "APPROVED" }, "d",
+    ))
+    const lifecycleRequest = {
+      schemaVersion: 2, artifactType: "CODEX_ROLE_LIFECYCLE_REQUEST",
+      adapterId: "hosted-codex-role-lifecycle-v2", plan,
+      builderAssignmentHandle: builder.handle, reviewerAssignmentHandle: reviewer.handle,
+      idempotencyNamespace: "real-role-lifecycle", observationIds,
+      messageSummaries: {
+        buildDirective: "Execute the exact reserved build task.",
+        buildResultNotice: "The build result is ready for independent observation.",
+        reviewDirective: "Independently review the observed build result.",
+        changeRequestNotice: "A bounded change request is ready for coordinator routing.",
+        remediationDirective: "Remediate the independently observed change request.",
+        remediationResultNotice: "The remediation result is ready for independent observation.",
+        rereviewDirective: "Re-review the remediated result and resolve every thread.",
+      },
+    }
+    const roleWall = (callback: () => unknown, detail: string) => {
+      try {
+        callback()
+        throw new Error("expected real role lifecycle wall")
+      } catch (error) {
+        expect(error).toBeInstanceOf(CodexRoleAdapterError)
+        expect((error as CodexRoleAdapterError).detail).toContain(detail)
+      }
+    }
+    roleWall(() => adaptCodexRoleLifecycle({
+      ...lifecycleRequest, reviewerAssignmentHandle: structuredClone(reviewer.handle),
+    }), "HOSTED_CODEX_ASSIGNMENT_HANDLE_WALL")
+    expect(bridgeCalls).toMatchObject({ spawn: 0, send: 0, observe: 0 })
+    const twinReviewer = assignment(twinPlan, "reviewer")
+    expect(twinReviewer.handle).toEqual(reviewer.handle)
+    roleWall(() => adaptCodexRoleLifecycle({
+      ...lifecycleRequest, reviewerAssignmentHandle: twinReviewer.handle,
+    }), "HOSTED_CODEX_ASSIGNMENT_HANDLE_WALL")
+    expect(bridgeCalls).toMatchObject({ spawn: 0, send: 0, observe: 0 })
+
+    roleWall(() => adaptCodexRoleLifecycle(lifecycleRequest), "HOSTED_CODEX_OBSERVATION_PENDING_WALL")
+    expect(bridgeCalls).toMatchObject({ spawn: 2, send: 1, observe: 1 })
+    expect(successfulObservations).toBe(0)
+    observations.set(observationIds.build, evidence(
+      builder, observationIds.build, "CODEX_ROLE_BUILD_COMPLETE", "RUNNING",
+      { outcome: "COMPLETE", stage: "BUILD" }, "a",
+    ))
+    const result = adaptCodexRoleLifecycle(lifecycleRequest)
+    expect(result).toMatchObject({
+      status: "ROLE_LIFECYCLE_PROVEN", roleBindings: { identitiesDistinct: true },
+      remediation: { originalBuilderReused: true, completedCycles: 1, budgetExceeded: false },
+      review: { independentReviewer: true, initialVerdict: "REQUEST_CHANGES", initialUnresolvedThreads: 1, finalVerdict: "APPROVED", finalUnresolvedThreads: 0 },
+      retry: { attemptsUsed: 2, maximumAttempts: 2, backoffSeconds: 0, budgetExceeded: false },
+      nativeAssignmentsStarted: 2, messageCount: 7, ownerTouchCount: 0,
+      durablePersistenceClaimed: false, runtimeActivationAllowed: false,
+      githubMutationClaimed: false, authorityGranted: false,
+    })
+    expect(bridgeCalls).toMatchObject({ spawn: 2, send: 7, observe: 5 })
+    expect(successfulObservations).toBe(4)
+    expect(result.roleBindings.builder.nativeBindingDigest).not.toBe(result.roleBindings.reviewer.nativeBindingDigest)
+    expect(result.stages.map(({ role }) => role)).toEqual(["builder", "reviewer", "builder", "reviewer"])
+    expect(new Set(result.stages.map(({ evidenceBindingDigest }) => evidenceBindingDigest)).size).toBe(4)
+    expect(result.stages.every(({ authorityFenceDigest }) => /^[a-f0-9]{64}$/.test(authorityFenceDigest))).toBe(true)
+    expect(JSON.stringify(result)).not.toMatch(/recordId|fencingToken|recordContentHash|native-builder-mao-030|native-reviewer-mao-030/)
+    const committedCounts = { ...bridgeCalls }
+    expect(adaptCodexRoleLifecycle(lifecycleRequest)).toBe(result)
+    expect(bridgeCalls).toEqual(committedCounts)
+
+    const crossPlan = compileHostedCodexCoordinatorAdapter(input(
+      { adapterRunId: "run-real-role-cross-plan" }, { laneId: "LANE-REAL-ROLE-CROSS-PLAN" },
+    ))
+    const crossReviewer = assignment(crossPlan, "reviewer")
+    roleWall(() => adaptCodexRoleLifecycle({
+      ...lifecycleRequest, idempotencyNamespace: "cross-plan-role-lifecycle",
+      reviewerAssignmentHandle: crossReviewer.handle,
+    }), "SAME_PRIVATE_PLAN_REQUIRED")
+    expect(bridgeCalls).toEqual(committedCounts)
+  })
+
+  it.each([
+    ["spawn", 2, "RESOLVE"], ["send", 2, "RESOLVE"],
+    ["spawn", 1, "RESOLVE"], ["send", 1, "RESOLVE"],
+    ["spawn", 2, "PERSIST"], ["send", 2, "PERSIST"],
+  ] as const)(
+    "contains a malformed post-effect %s acknowledgement with role retry budget %i in %s mode",
+    (malformedOperation, maximumAttempts, reconciliationMode) => {
+      let malformed = true
+      const cancelledAssignments: string[] = []
+      installBridge({
+        cancel(request: Record<string, unknown>) {
+          bridgeCalls.cancel += 1
+          cancelledAssignments.push(request.assignmentId as string)
+          const result = {
+            schemaVersion: 1, artifactType: "HOSTED_CODEX_NATIVE_CANCEL_RESULT",
+            bridgeId: "bridge-mao-030", assignmentId: request.assignmentId,
+            nativeWorkerId: request.nativeWorkerId, reasonCode: request.reasonCode,
+            status: "CANCELLED", cancellationPerformed: true, cancelAcknowledged: true,
+            authorityGranted: false,
+          }
+          bridgeResults.cancel.set(request.idempotencyKey as string, result)
+          return result
+        },
+        ...(malformedOperation === "spawn" ? {
+          spawn(request: Record<string, unknown>) {
+            bridgeCalls.spawn += 1
+            const committed = {
+              schemaVersion: 1, artifactType: "HOSTED_CODEX_NATIVE_SPAWN_RESULT",
+              bridgeId: "bridge-mao-030", adapterRunId: request.adapterRunId,
+              assignmentId: request.assignmentId, workOrderId: request.workOrderId,
+              laneId: request.laneId, role: request.role, logicalWorkerId: request.logicalWorkerId,
+              nativeWorkerId: `native-${request.role}-malformed-role`, status: "SPAWNED",
+              spawnPerformed: true, currentSessionOnly: true, authorityGranted: false,
+            }
+            bridgeResults.spawn.set(request.idempotencyKey as string, committed)
+            if (malformed) {
+              malformed = false
+              return { ...committed, spawnPerformed: false }
+            }
+            return committed
+          },
+        } : {}),
+        ...(malformedOperation === "send" ? {
+          send(request: Record<string, unknown>) {
+            bridgeCalls.send += 1
+            const committed = {
+              schemaVersion: 1, artifactType: "HOSTED_CODEX_NATIVE_SEND_RESULT",
+              bridgeId: "bridge-mao-030", assignmentId: request.assignmentId,
+              nativeWorkerId: request.nativeWorkerId, messageDigest: request.messageDigest,
+              status: "DELIVERED", deliveryPerformed: true, authorityGranted: false,
+            }
+            bridgeResults.send.set(request.idempotencyKey as string, committed)
+            if (malformed) {
+              malformed = false
+              return { ...committed, deliveryPerformed: false }
+            }
+            return committed
+          },
+        } : {}),
+        ...(reconciliationMode === "PERSIST" && malformedOperation === "spawn" ? {
+          lookupSpawn() {
+            bridgeCalls.lookupSpawn += 1
+            throw new Error("spawn outcome unavailable")
+          },
+        } : {}),
+        ...(reconciliationMode === "PERSIST" && malformedOperation === "send" ? {
+          lookupSend() {
+            bridgeCalls.lookupSend += 1
+            throw new Error("send outcome unavailable")
+          },
+        } : {}),
+      })
+      const plan = compileHostedCodexCoordinatorAdapter(input({
+        adapterRunId: `run-malformed-role-${malformedOperation}-${maximumAttempts}-${reconciliationMode.toLowerCase()}`,
+      }, { retryBudget: { maxAttempts: maximumAttempts, backoffSeconds: 0 } }))
+      const builder = assignment(plan, "builder")
+      const reviewer = assignment(plan, "reviewer")
+      const ids = {
+        build: `malformed-${malformedOperation}-build`,
+        requestChanges: `malformed-${malformedOperation}-request-changes`,
+        remediation: `malformed-${malformedOperation}-remediation`,
+        approval: `malformed-${malformedOperation}-approval`,
+      }
+      const event = (
+        target: typeof builder,
+        observationId: string,
+        evidenceType: string,
+        providerState: "RUNNING" | "SUCCEEDED",
+        attributes: Record<string, unknown>,
+        character: string,
+      ) => ({
+        schemaVersion: 1, artifactType: "PROVIDER_EVIDENCE", providerId: "hosted-codex",
+        adapterId: "hosted-codex-session-native-team-v1", dispatchId: target.item.assignmentId,
+        workOrderId: target.item.workOrderId, laneId: target.item.laneId, providerState,
+        reasonCode: null, sanitized: true, authorityGranted: false, eventId: observationId,
+        evidenceType, contentHash: character.repeat(64), summary: `Sanitized ${evidenceType}.`,
+        attributes, rawProviderOutputIncluded: false,
+      })
+      observations.set(ids.build, event(builder, ids.build, "CODEX_ROLE_BUILD_COMPLETE", "RUNNING", { outcome: "COMPLETE", stage: "BUILD" }, "a"))
+      observations.set(ids.requestChanges, event(reviewer, ids.requestChanges, "CODEX_ROLE_REQUEST_CHANGES", "RUNNING", { stage: "ASSURANCE_REVIEW", unresolvedThreads: 1, verdict: "REQUEST_CHANGES" }, "b"))
+      observations.set(ids.remediation, event(builder, ids.remediation, "CODEX_ROLE_REMEDIATION_COMPLETE", "SUCCEEDED", { outcome: "COMPLETE", remediationCycle: 1, stage: "REMEDIATION" }, "c"))
+      observations.set(ids.approval, event(reviewer, ids.approval, "CODEX_ROLE_APPROVED_ZERO_UNRESOLVED", "SUCCEEDED", { stage: "REREVIEW", unresolvedThreads: 0, verdict: "APPROVED" }, "d"))
+      const request = {
+        schemaVersion: 2, artifactType: "CODEX_ROLE_LIFECYCLE_REQUEST",
+        adapterId: "hosted-codex-role-lifecycle-v2", plan,
+        builderAssignmentHandle: builder.handle, reviewerAssignmentHandle: reviewer.handle,
+        idempotencyNamespace: `malformed-role-${malformedOperation}-${maximumAttempts}-${reconciliationMode.toLowerCase()}`, observationIds: ids,
+        messageSummaries: {
+          buildDirective: "Execute the exact reserved build task.",
+          buildResultNotice: "The build result is ready for independent observation.",
+          reviewDirective: "Independently review the observed build result.",
+          changeRequestNotice: "A bounded change request is ready for coordinator routing.",
+          remediationDirective: "Remediate the independently observed change request.",
+          remediationResultNotice: "The remediation result is ready for independent observation.",
+          rereviewDirective: "Re-review the remediated result and resolve every thread.",
+        },
+      }
+      try {
+        adaptCodexRoleLifecycle(request)
+        throw new Error("expected ambiguous role lifecycle outcome")
+      } catch (error) {
+        expect(error).toBeInstanceOf(CodexRoleAdapterError)
+        expect(error).toMatchObject({
+          code: "CODEX_ROLE_COORDINATOR_WALL",
+          detail: "HOSTED_CODEX_BRIDGE_WALL:HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS",
+        })
+      }
+      const effectsAfterAmbiguity = bridgeCalls[malformedOperation]
+      if (reconciliationMode === "PERSIST") {
+        const expectRoleWall = (code: string, detail: string) => {
+          try {
+            adaptCodexRoleLifecycle(request)
+            throw new Error("expected persistent ambiguity wall")
+          } catch (error) {
+            expect(error).toBeInstanceOf(CodexRoleAdapterError)
+            expect(error).toMatchObject({ code, detail })
+          }
+        }
+        expectRoleWall("CODEX_ROLE_COORDINATOR_WALL", "HOSTED_CODEX_BRIDGE_WALL:HOST_SIDE_EFFECT_RECONCILIATION_PENDING")
+        expectRoleWall("CODEX_ROLE_QUARANTINE_WALL", "AMBIGUOUS_EFFECT_RECONCILIATION_REQUIRED")
+        expectRoleWall("CODEX_ROLE_QUARANTINE_WALL", "AMBIGUOUS_EFFECT_CLEANUP_RETRY_BUDGET_EXHAUSTED")
+        const terminalCounts = { ...bridgeCalls }
+        expectRoleWall("CODEX_ROLE_QUARANTINE_WALL", "AMBIGUOUS_EFFECT_CLEANUP_RETRY_BUDGET_EXHAUSTED")
+        expect(bridgeCalls).toEqual(terminalCounts)
+        expect(bridgeCalls[malformedOperation]).toBe(1)
+        expect(bridgeCalls.cancel).toBe(malformedOperation === "spawn" ? 0 : 1)
+        expect(cancelledAssignments).not.toContain(builder.item.assignmentId)
+        if (malformedOperation === "send") {
+          expect(cancelledAssignments).toEqual([reviewer.item.assignmentId])
+        }
+      } else if (maximumAttempts === 2) {
+        const result = adaptCodexRoleLifecycle(request)
+        expect(result).toMatchObject({ status: "ROLE_LIFECYCLE_PROVEN", retry: { attemptsUsed: 2 } })
+        expect(bridgeCalls[malformedOperation]).toBe(malformedOperation === "spawn" ? 2 : 7)
+      } else {
+        try {
+          adaptCodexRoleLifecycle(request)
+          throw new Error("expected last-attempt containment")
+        } catch (error) {
+          expect(error).toBeInstanceOf(CodexRoleAdapterError)
+          expect(error).toMatchObject({
+            code: "CODEX_ROLE_RETRY_BUDGET_WALL",
+            detail: "LIFECYCLE_RETRY_BUDGET_EXHAUSTED",
+          })
+        }
+        expect(bridgeCalls[malformedOperation]).toBe(1)
+        expect(bridgeCalls.cancel).toBe(malformedOperation === "spawn" ? 1 : 2)
+        expect(cancelledAssignments).toContain(builder.item.assignmentId)
+      }
+      expect(effectsAfterAmbiguity).toBe(1)
+      const lookup = `lookup${malformedOperation[0].toUpperCase()}${malformedOperation.slice(1)}` as keyof typeof bridgeCalls
+      expect(bridgeCalls[lookup]).toBe(reconciliationMode === "PERSIST" ? 3 : 1)
+    },
+  )
 
   it("CLI fails closed because production has no mutable host-session bridge", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mao-030-cli-"))

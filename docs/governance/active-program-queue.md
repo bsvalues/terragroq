@@ -115,6 +115,9 @@ are complete. Historical WO-MAO-035 and WO-MAO-036 code/reports remain present, 
 and callable success paths remain invalidated pending ordered re-proof.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; `WO-MAO-034` is
 `BLOCKED / PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED`; later Work Orders remain pending.
+The program's canonical `SELECTED` state is retained, but it is not an executable dispatch claim:
+while its loop packet has no eligible Work Order, the portfolio resolver skips it without false
+activation and falls through deterministically to the next approved program with eligible work.
 The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,

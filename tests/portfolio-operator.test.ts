@@ -53,13 +53,37 @@ describe("portfolio operator", () => {
     ])
   })
 
-  it("selects the highest-value dependency-cleared program inside authority", () => {
+  it("falls through a selected program with no eligible work to the highest-value executable program", () => {
     const portfolio = getPortfolioOperatorProgram()
+    const multiAgentOperator = portfolio.backlog[0]
+
+    expect(buildLoopPacket(multiAgentOperator)).toMatchObject({
+      activeWorkOrder: null,
+      eligibleWorkOrders: [],
+    })
 
     expect(resolveNextPortfolioProgram(portfolio.backlog)).toMatchObject({
       decision: "SELECT_PROGRAM",
-      programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
-      goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001",
+      programId: "PROGRAM-RELEASE-ENGINEERING-001",
+      goalId: "GOAL-RELEASE-ENGINEERING-001",
+      ownerDecisionRequired: false,
+    })
+    expect(multiAgentOperator.state).toBe("SELECTED")
+  })
+
+  it("preserves deterministic priority and program-id ordering after empty programs are skipped", () => {
+    const portfolio = getPortfolioOperatorProgram()
+    const multiAgentOperator = portfolio.backlog[0]
+    const release = portfolio.backlog.find((program) => program.programId === "PROGRAM-RELEASE-ENGINEERING-001")!
+    const devex = portfolio.backlog.find((program) => program.programId === "PROGRAM-DEVEX-HOOK-TOOLING-001")!
+
+    expect(resolveNextPortfolioProgram([
+      multiAgentOperator,
+      { ...release, priorityScore: 500 },
+      { ...devex, priorityScore: 500 },
+    ])).toMatchObject({
+      decision: "SELECT_PROGRAM",
+      programId: "PROGRAM-DEVEX-HOOK-TOOLING-001",
       ownerDecisionRequired: false,
     })
   })
