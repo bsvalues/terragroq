@@ -139,7 +139,7 @@ persistence, command execution, and any production mutation.
 
 ### `GOAL-WOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
 
-Status: `ACTIVE / WO-MAO-034 COMPLETE_INDEPENDENT_ASSURANCE_VERIFIED / LATER_MAO_PENDING`
+Status: `ACTIVE / WO-MAO-034 COMPLETE / WO-MAO-035 READY_GRAPH_CORRECTED`
 
 Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
@@ -175,10 +175,10 @@ ordered redesign and re-proof only after WO-MAO-034 is complete. The exact defer
 into WO-MAO-034 is now independently settled through the canonical immutable version-2 record bound
 to WO-MAO-032, the consumer envelope, and source-assessment hash. WO-MAO-034 is `COMPLETE` through
 its zero-input canonical routing proof and independently approved exact implementation candidate.
-WO-MAO-035, WO-MAO-036, and WO-MAO-037 remain pending because no settlement or waiver applies to
-their direct dependency edges. The selected program's immediate transition is the separately
-reviewed dependency-graph correction; WO-MAO-035 does not become ready in this Work Order. Claude
-remains unavailable and disabled. Durable provider dispatch
+The separately ratified dependency-graph correction removes only WO-MAO-033's redundant direct
+edges from WO-MAO-035/036. WO-MAO-035 is now `READY`; WO-MAO-036 and WO-MAO-037 remain pending.
+WO-MAO-033 remains deferred and resumable, and the WO-MAO-034 settlement remains exact and
+unchanged. Claude remains unavailable and disabled. Durable provider dispatch
 and automated GitHub delivery remain unproven.
 
 Communication contract: routine implementation, diagnosis, retry, review,

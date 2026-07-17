@@ -92,9 +92,9 @@ OWNER_RELAY_REQUIRED: false
 
 ## Next transition
 
-No later MAO Work Order is dependency-cleared: WO-MAO-035 retains its direct WO-MAO-033 edge and
-remains pending. The selected MAO loop exposes the separate dependency-graph correction as a typed
-automatic remediation transition; it neither marks WO-MAO-035 ready nor routes to unrelated backlog.
+The separate ratified dependency-graph correction removes only the redundant direct WO-MAO-033
+edges from WO-MAO-035/036. It does not alter this Work Order's settlement or completion evidence.
+WO-MAO-035 is now ready through its retained prerequisites; WO-MAO-036 remains pending.
 
 ## Owner-operation evidence
 

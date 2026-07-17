@@ -208,8 +208,8 @@ describe("multi-agent executable capability inventory", () => {
       restrictions: expect.arrayContaining([
         "Bounded zero-input control-plane routing evaluation only; no provider execution or dispatch",
         "Logical route-role separation is proven; host-native worker identity is not claimed",
-        "WO-MAO-034 is complete through independently reviewed candidate evidence; WO-MAO-035 remains pending",
-        "The settlement applies only to WO-MAO-034<-WO-MAO-033 and cannot satisfy WO-MAO-035/036 dependency edges",
+        "WO-MAO-034 is complete through independently reviewed candidate evidence; the ratified graph correction releases WO-MAO-035 to READY while WO-MAO-036 remains pending",
+        "The settlement remains scoped only to WO-MAO-034<-WO-MAO-033; the graph correction does not retarget or generalize it",
         "Callers cannot submit roots, writers, trust bundles, ledger anchors, signatures, or raw trust material",
         "Unavailable providers contribute no capability",
         "No provider dispatch, GitHub review automation, runtime activation, or authority grant",
@@ -224,6 +224,7 @@ describe("multi-agent executable capability inventory", () => {
       trustGateRef: null,
       restrictions: expect.arrayContaining([
         "Static health and reroute planning only",
+        "WO-MAO-035 is READY for redesign and re-proof, not proven or complete",
         "Unavailable providers remain disabled and deferred",
         "No provider call, GitHub automation, runtime activation, authority grant, or owner relay",
       ]),

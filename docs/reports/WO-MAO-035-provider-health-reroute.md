@@ -1,6 +1,6 @@
 # WO-MAO-035 — Provider Health, Circuit Breakers, and Reroute
 
-Result: `INVALIDATED / REPROOF_REQUIRED / PENDING`
+Result: `INVALIDATED / REPROOF_REQUIRED / READY`
 
 ## Scope
 
@@ -68,5 +68,7 @@ These runs described the invalidated implementation and do not prove the current
 
 ## Next transition
 
-`WO-MAO-035` is `PENDING / REPROOF_REQUIRED`. The required sequence is WO-MAO-031, WO-MAO-034,
-WO-MAO-035, then WO-MAO-036. Phase 5 remains pending after that ordered chain.
+The narrow ratified graph correction removed only the redundant direct WO-MAO-033 edge after
+WO-MAO-034 completed. `WO-MAO-035` is now `READY / REPROOF_REQUIRED` through its retained
+prerequisites, without a settlement or waiver. WO-MAO-033 remains deferred and resumable;
+WO-MAO-036 and Phase 5 remain pending.
