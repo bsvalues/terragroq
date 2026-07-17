@@ -208,7 +208,7 @@ describe("multi-agent executable capability inventory", () => {
       restrictions: expect.arrayContaining([
         "Bounded zero-input control-plane routing evaluation only; no provider execution or dispatch",
         "Logical route-role separation is proven; host-native worker identity is not claimed",
-        "WO-MAO-034 is complete through independently reviewed candidate evidence; the ratified graph correction released WO-MAO-035 and WO-MAO-035 now releases WO-MAO-036 to READY",
+        "WO-MAO-034 is complete through independently reviewed candidate evidence; WO-MAO-035 and WO-MAO-036 now complete the ordered Phase 4 re-proof chain",
         "The settlement remains scoped only to WO-MAO-034<-WO-MAO-033; the graph correction does not retarget or generalize it",
         "Callers cannot submit roots, writers, trust bundles, ledger anchors, signatures, or raw trust material",
         "Unavailable providers contribute no capability",
@@ -226,22 +226,25 @@ describe("multi-agent executable capability inventory", () => {
         "Static health and reroute planning only",
         "Caller-supplied providers, observations, breaker state, and reroute requests are rejected",
         "Trusted observations and stateful breaker transitions come only from the sealed canonical registry",
-        "WO-MAO-035 is complete; WO-MAO-036 is released to READY through retained prerequisites",
+        "WO-MAO-035 is complete; WO-MAO-036 is now complete and releases WO-MAO-037 through retained prerequisites",
         "Unavailable providers remain disabled and deferred",
         "No provider call, GitHub automation, runtime activation, authority grant, or owner relay",
       ]),
     })
     expect(capability("provider-conformance-suite-model")).toMatchObject({
-      status: "AVAILABLE_UNPROVEN",
+      status: "PROVEN",
       executionClass: "NON_EXECUTABLE",
-      reasonCode: "POST_MERGE_ASSURANCE_INVALIDATED_PENDING_REPROOF",
+      reasonCode: "CANONICAL_PROVIDER_CONFORMANCE_SUITE_VERIFIED",
       adapterRef: "scripts/multi-agent-operator/provider-conformance-suite.mjs",
       authorityGrantRefs: [],
       trustGateRef: null,
       restrictions: expect.arrayContaining([
         "Static conformance suite only",
+        "Caller-supplied provider records, fixture coverage, and contract sets are rejected",
+        "Hosted Codex is session-only conformant, not executable-worker certified",
         "Hosted Codex remains session-only and non-executable",
         "Unavailable and rejected providers are excluded, not certified",
+        "WO-MAO-036 is complete; WO-MAO-037 is released to READY through retained prerequisites",
         "No provider dispatch, GitHub automation, runtime activation, authority grant, or owner relay",
       ]),
     })

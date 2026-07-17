@@ -65,7 +65,7 @@ describe("multi-agent operator registry", () => {
       evidencePath: "docs/reports/WO-MAO-028-scheduler-simulation-model-checking.md",
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "READY")
-      .map(({ workOrderId }) => workOrderId)).toEqual(["WO-MAO-036"])
+      .map(({ workOrderId }) => workOrderId)).toEqual(["WO-MAO-037"])
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[28]).toMatchObject({
       workOrderId: "WO-MAO-029",
       status: "COMPLETE",
@@ -111,17 +111,23 @@ describe("multi-agent operator registry", () => {
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[35]).toMatchObject({
       workOrderId: "WO-MAO-036",
-      status: "READY",
+      status: "COMPLETE",
       resumable: false,
       dependsOn: ["WO-MAO-028", "WO-MAO-029", "WO-MAO-030", "WO-MAO-031", "WO-MAO-032", "WO-MAO-034", "WO-MAO-035"],
       evidencePath: "docs/reports/WO-MAO-036-provider-conformance-suite.md",
     })
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[36]).toMatchObject({
+      workOrderId: "WO-MAO-037",
+      status: "READY",
+      resumable: false,
+      dependsOn: ["WO-MAO-007", "WO-MAO-025", "WO-MAO-026", "WO-MAO-036"],
+    })
     expect([30, 31, 34, 35, 36, 37].map((number) => MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].status))
-      .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "READY", "PENDING"])
+      .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "READY"])
     expect([23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36].every((number) => existsSync(MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].evidencePath))).toBe(true)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[53]).toMatchObject({ workOrderId: "WO-MAO-054", riskClass: "R2" })
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "PENDING")).toHaveLength(26)
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "COMPLETE")).toHaveLength(34)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "PENDING")).toHaveLength(25)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "COMPLETE")).toHaveLength(35)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "DEFERRED_PROVIDER_UNAVAILABLE")).toHaveLength(1)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "BLOCKED")).toHaveLength(0)
 

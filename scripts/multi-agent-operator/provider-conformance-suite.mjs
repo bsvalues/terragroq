@@ -1,14 +1,10 @@
 import crypto from "node:crypto"
 
-import { validateCodexProviderConformance } from "./codex-provider-conformance.mjs"
+import {
+  codexProviderConformanceFixture,
+  validateCodexProviderConformance,
+} from "./codex-provider-conformance.mjs"
 
-const INPUT_FIELDS = new Set([
-  "schemaVersion",
-  "artifactType",
-  "workOrderId",
-  "providers",
-  "requiredContracts",
-])
 const PROVIDER_FIELDS = new Set([
   "providerId",
   "status",
@@ -70,6 +66,22 @@ function canonicalize(value) {
   return value
 }
 
+function canonicalJson(value) {
+  return JSON.stringify(canonicalize(value))
+}
+
+function contentHash(value) {
+  return crypto.createHash("sha256").update(canonicalJson(value)).digest("hex")
+}
+
+function deepCopy(value) {
+  if (Array.isArray(value)) return value.map(deepCopy)
+  if (plainObject(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, deepCopy(child)]))
+  }
+  return value
+}
+
 function deepFreeze(value) {
   if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
     for (const child of Object.values(value)) deepFreeze(child)
@@ -78,9 +90,67 @@ function deepFreeze(value) {
   return value
 }
 
-function contentHash(value) {
-  return crypto.createHash("sha256").update(JSON.stringify(canonicalize(value))).digest("hex")
-}
+const READINESS_BASE_COMMIT_SHA = "ae25dddb0590c19748dc0af13aebfa60bd080728"
+const READINESS_BASE_TREE_HASH = "97ab235a6f343a6de2fafbb3d406d7bf8b0695e2"
+const CODEX_CONFORMANCE_CONTENT_HASH = "052c437518a59b15c3d3c5e3553765a00dcf8d94b2eba76b55f9b37f845c0d38"
+const WO_MAO_035_RESULT_HASH = "678ddad3816fdbc8e9e6646906b4b1938147acc3629db9af34b65c644c5d8ca5"
+const WO_MAO_035_EVIDENCE_HASH = "50e8489eb2d10c44f59fc8f9ff47141ad335118a321d53e1cd9d52aa507faf6a"
+
+const EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY = deepFreeze({
+  schemaVersion: 1,
+  artifactType: "CANONICAL_PROVIDER_CONFORMANCE_SUITE_REGISTRY",
+  registryId: "williamos-provider-conformance-suite",
+  registryVersion: 1,
+  workOrderId: "WO-MAO-036",
+  repository: "bsvalues/terragroq",
+  readinessBaseCommitSha: READINESS_BASE_COMMIT_SHA,
+  readinessBaseTreeHash: READINESS_BASE_TREE_HASH,
+  requiredContracts: REQUIRED_CONTRACTS,
+  prerequisiteEvidence: {
+    woMao031Complete: true,
+    woMao034Complete: true,
+    woMao035Complete: true,
+    woMao035ResultHash: WO_MAO_035_RESULT_HASH,
+    woMao035EvidenceHash: WO_MAO_035_EVIDENCE_HASH,
+  },
+  providers: [
+    {
+      providerId: "claude-code",
+      status: "DEFERRED_PROVIDER_UNAVAILABLE",
+      kind: "CLAUDE_CODE",
+      conformance: null,
+      deferredReason: "PROVIDER_UNAVAILABLE",
+    },
+    {
+      providerId: "hosted-codex",
+      status: "SESSION_ONLY",
+      kind: "HOSTED_CODEX",
+      conformance: codexProviderConformanceFixture(),
+      deferredReason: null,
+    },
+    {
+      providerId: "local-nested-codex",
+      status: "REJECTED",
+      kind: "LOCAL_NESTED_CODEX",
+      conformance: null,
+      deferredReason: "REJECTED_LOCAL_ADAPTER",
+    },
+  ],
+  safety: {
+    dispatchPerformed: false,
+    providerCallPerformed: false,
+    executableWorkerCertified: false,
+    disabledProviderCertified: false,
+    durablePersistenceClaimed: false,
+    serviceWorkerClaimed: false,
+    runtimeActivationAllowed: false,
+    authorityGranted: false,
+    secretsExposed: false,
+    ownerRelayRequired: false,
+  },
+})
+
+const EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY_CONTENT_HASH = "cdd0b0e429228567e18925dd66a40d672181fb54c0111ad0e200d6031097d733"
 
 function requiredContracts(value) {
   if (!Array.isArray(value)) wall("PROVIDER_CONFORMANCE_TYPE_WALL", "requiredContracts", "ARRAY_REQUIRED")
@@ -107,6 +177,9 @@ function normalizeProviders(value) {
       } catch (error) {
         wall("PROVIDER_CONFORMANCE_CODEX_WALL", `providers[${index}].conformance`, error.code ?? "INVALID_CODEX_CONFORMANCE")
       }
+      if (conformance.contentHash !== CODEX_CONFORMANCE_CONTENT_HASH) {
+        wall("PROVIDER_CONFORMANCE_CODEX_WALL", `providers[${index}].conformance`, "CANONICAL_CODEX_CONFORMANCE_REQUIRED")
+      }
       return { providerId, status: raw.status, kind: raw.kind, conformance }
     }
     if (raw.status === "EXECUTABLE_ENABLED") {
@@ -126,20 +199,20 @@ function normalizeProviders(value) {
   return providers
 }
 
-export function evaluateProviderConformanceSuite(input) {
+export function evaluateProviderConformanceSuite() {
   wall(
-    "PROVIDER_CONFORMANCE_SUITE_INVALIDATED_PENDING_REPROOF",
+    "PROVIDER_CONFORMANCE_HOST_TRUST_WALL",
     "providerConformanceSuite",
-    "WO_MAO_031_THROUGH_WO_MAO_036_ORDERED_REPROOF_REQUIRED",
+    "CALLER_SUPPLIED_PROVIDER_CONFORMANCE_INPUT_REJECTED_USE_CANONICAL_REGISTRY",
   )
-  exactFields(input, INPUT_FIELDS, "providerConformanceSuite")
-  if (input.schemaVersion !== 1) wall("PROVIDER_CONFORMANCE_INPUT_WALL", "schemaVersion", "1_REQUIRED")
-  if (input.artifactType !== "PROVIDER_CONFORMANCE_SUITE_INPUT") {
-    wall("PROVIDER_CONFORMANCE_INPUT_WALL", "artifactType", "PROVIDER_CONFORMANCE_SUITE_INPUT_REQUIRED")
+}
+
+function evaluateTrustedProviderConformanceSuite(registry) {
+  if (contentHash(registry) !== EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY_CONTENT_HASH) {
+    wall("PROVIDER_CONFORMANCE_REGISTRY_INTEGRITY_WALL", "providerConformanceRegistry", "CANONICAL_HASH_REQUIRED")
   }
-  if (input.workOrderId !== "WO-MAO-036") wall("PROVIDER_CONFORMANCE_INPUT_WALL", "workOrderId", "WO-MAO-036_REQUIRED")
-  const contracts = requiredContracts(input.requiredContracts)
-  const providers = normalizeProviders(input.providers)
+  const contracts = requiredContracts(registry.requiredContracts)
+  const providers = normalizeProviders(registry.providers)
   const suite = providers.map((provider) => {
     if (provider.status === "SESSION_ONLY") {
       return {
@@ -173,7 +246,13 @@ export function evaluateProviderConformanceSuite(input) {
     artifactType: "PROVIDER_CONFORMANCE_SUITE_RESULT",
     workOrderId: "WO-MAO-036",
     status: "PROVIDER_CONFORMANCE_SUITE_PROVEN",
+    registryId: registry.registryId,
+    registryVersion: registry.registryVersion,
+    registryContentHash: EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY_CONTENT_HASH,
+    readinessBaseCommitSha: registry.readinessBaseCommitSha,
+    readinessBaseTreeHash: registry.readinessBaseTreeHash,
     requiredContracts: contracts,
+    prerequisiteEvidence: registry.prerequisiteEvidence,
     suite,
     enabledExecutableProviders: [],
     deferredProviders: suite.filter(({ status }) => status === "DEFERRED_PROVIDER_UNAVAILABLE")
@@ -194,6 +273,42 @@ export function evaluateProviderConformanceSuite(input) {
   return deepFreeze({ ...output, resultHash: contentHash(output) })
 }
 
+export function loadCanonicalProviderConformanceRegistry() {
+  return deepFreeze(deepCopy(EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY))
+}
+
+export function providerConformanceRegistryContentHash(value = EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY) {
+  return contentHash(value)
+}
+
+export function verifyCanonicalProviderConformanceRegistry(value = EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY) {
+  if (providerConformanceRegistryContentHash(value) !== EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY_CONTENT_HASH) {
+    wall("PROVIDER_CONFORMANCE_REGISTRY_INTEGRITY_WALL", "providerConformanceRegistry", "CANONICAL_HASH_REQUIRED")
+  }
+  return deepFreeze({
+    ok: true,
+    code: "PROVIDER_CONFORMANCE_REGISTRY_VERIFIED",
+    contentHash: EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY_CONTENT_HASH,
+    dispatchPerformed: false,
+    providerCallPerformed: false,
+    executableWorkerCertified: false,
+    authorityGranted: false,
+  })
+}
+
+export function runCanonicalProviderConformanceSuite() {
+  verifyCanonicalProviderConformanceRegistry(EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY)
+  return evaluateTrustedProviderConformanceSuite(EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY)
+}
+
+export const PROVIDER_CONFORMANCE_REGISTRY_METADATA = Object.freeze({
+  registryId: EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY.registryId,
+  registryVersion: EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY.registryVersion,
+  readinessBaseCommitSha: EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY.readinessBaseCommitSha,
+  readinessBaseTreeHash: EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY.readinessBaseTreeHash,
+  contentHash: EMBEDDED_PROVIDER_CONFORMANCE_REGISTRY_CONTENT_HASH,
+})
+
 export function canonicalProviderConformanceSuiteJson(value) {
-  return JSON.stringify(canonicalize(value))
+  return canonicalJson(value)
 }
