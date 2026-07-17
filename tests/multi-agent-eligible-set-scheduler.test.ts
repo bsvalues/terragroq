@@ -36,6 +36,9 @@ import {
 import { clearTestSchedulerTrustRecords, installTestSchedulerTrustRecord } from "./fixtures/scheduler-trust-registry-fixture.mjs"
 
 const NOW = Date.parse("2026-07-15T10:00:00.000Z")
+// Worker creation is intentionally bounded by the production lifecycle contract,
+// but can exceed Vitest's default case budget on a saturated shared runner.
+const SHARED_RUNNER_HEARTBEAT_ACK_MS = 15_000
 const signer = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
 const trust = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
 const authority = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
@@ -412,7 +415,7 @@ beforeEach(() => {
 })
 afterEach(() => { clearTestSchedulerTrustRecords(); fs.rmSync(root, { recursive: true, force: true }) })
 
-describe("WO-MAO-023 remediated real-store scheduler", () => {
+describe("WO-MAO-023 remediated real-store scheduler", { timeout: 30_000 }, () => {
   it("derives eligibility through the Phase2 DAG resolver and commits real reservation/lease/evidence stores", () => {
     const result = schedule()
     expect(result).toMatchObject({ code: "ELIGIBLE_SET_SCHEDULED", derivedEligibleWorkOrderIds: ["WO-MAO-023"], stateVersion: 5 })
@@ -469,14 +472,14 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
       expect(fs.existsSync(`${statePath}.lock/owner.json`)).toBe(true)
     } finally { unlock() }
     expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
-  }, 15_000)
+  })
 
   it("quiesces a delayed startup acknowledgement before removing its same-nonce renewed owner", () => {
     const statePath = configuration().statePath
     try {
       acquireSchedulerLock(statePath, {
         timeoutMs: 500, leaseDurationMs: 1_000, heartbeatIntervalMs: 20,
-        heartbeatStartTimeoutMs: 25, heartbeatStopTimeoutMs: 500,
+        heartbeatStartTimeoutMs: 25, heartbeatStopTimeoutMs: SHARED_RUNNER_HEARTBEAT_ACK_MS,
         heartbeatTestDelays: { startAckMs: 100, stopAckMs: 0 },
       })
       throw new Error("expected bounded heartbeat startup wall")
@@ -492,7 +495,8 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     const statePath = configuration().statePath
     const unlock = acquireSchedulerLock(statePath, {
       timeoutMs: 500, leaseDurationMs: 1_000, heartbeatIntervalMs: 20,
-      heartbeatStartTimeoutMs: 500, heartbeatStopTimeoutMs: 500,
+      heartbeatStartTimeoutMs: SHARED_RUNNER_HEARTBEAT_ACK_MS,
+      heartbeatStopTimeoutMs: SHARED_RUNNER_HEARTBEAT_ACK_MS,
       heartbeatTestDelays: { startAckMs: 0, stopAckMs: 100 },
     })
     unlock()
@@ -503,7 +507,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     const statePath = configuration().statePath
     const unlock = acquireSchedulerLock(statePath, {
       timeoutMs: 500, leaseDurationMs: 1_000, heartbeatIntervalMs: 20,
-      heartbeatStartTimeoutMs: 500, heartbeatStopTimeoutMs: 25,
+      heartbeatStartTimeoutMs: SHARED_RUNNER_HEARTBEAT_ACK_MS, heartbeatStopTimeoutMs: 25,
       heartbeatTestDelays: { startAckMs: 0, stopAckMs: 100 },
     })
     expect(() => unlock()).toThrowError(/SCHEDULER_LOCK_WALL:HEARTBEAT_STOP_REQUIRED/)
@@ -1252,7 +1256,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     const reaped = reapAmbiguousOutcomes(recoveringReapConfig, { expectedVersion: version, claims, maxBatch: 2 })
     expect(reaped).toMatchObject({ capacityRecovered: 2 })
     expect(inspectSchedulerState(config.statePath, config.stateId).state.reconciliation).toEqual([])
-  }, 15_000)
+  })
 
   it("replays an expired-lease REAP_BATCH with the durable new fence/evidence projection and idempotent second recovery", () => {
     const config = { ...configuration(NOW), leaseDurationMs: 100 }

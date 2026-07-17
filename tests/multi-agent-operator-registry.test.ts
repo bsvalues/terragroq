@@ -7,6 +7,10 @@ import {
   MULTI_AGENT_OWNER_COUNTER_NAMES,
   resolveMultiAgentWorkOrders,
 } from "@/components/operator/multi-agent-operator-registry"
+import {
+  MULTI_AGENT_PROVIDER_SETTLEMENT_RECORD,
+  type MultiAgentProviderSettlementRecord,
+} from "@/components/operator/multi-agent-provider-settlement-registry"
 
 const workOrderId = (number: number) => `WO-MAO-${String(number).padStart(3, "0")}`
 
@@ -60,7 +64,7 @@ describe("multi-agent operator registry", () => {
       evidencePath: "docs/reports/WO-MAO-028-scheduler-simulation-model-checking.md",
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "READY")
-      .map(({ workOrderId }) => workOrderId)).toEqual([])
+      .map(({ workOrderId }) => workOrderId)).toEqual(["WO-MAO-034"])
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[28]).toMatchObject({
       workOrderId: "WO-MAO-029",
       status: "COMPLETE",
@@ -93,7 +97,7 @@ describe("multi-agent operator registry", () => {
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[33]).toMatchObject({
       workOrderId: "WO-MAO-034",
-      status: "BLOCKED",
+      status: "READY",
       resumable: false,
       evidencePath: "docs/reports/WO-MAO-034-cross-provider-routing-review.md",
     })
@@ -110,10 +114,13 @@ describe("multi-agent operator registry", () => {
       evidencePath: "docs/reports/WO-MAO-036-provider-conformance-suite.md",
     })
     expect([30, 31, 34, 35, 36, 37].map((number) => MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].status))
-      .toEqual(["COMPLETE", "COMPLETE", "BLOCKED", "PENDING", "PENDING", "PENDING"])
+      .toEqual(["COMPLETE", "COMPLETE", "READY", "PENDING", "PENDING", "PENDING"])
     expect([23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36].every((number) => existsSync(MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].evidencePath))).toBe(true)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[53]).toMatchObject({ workOrderId: "WO-MAO-054", riskClass: "R2" })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "PENDING")).toHaveLength(28)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "COMPLETE")).toHaveLength(32)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "DEFERRED_PROVIDER_UNAVAILABLE")).toHaveLength(1)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "BLOCKED")).toHaveLength(0)
 
     const afterSixteen = resolveMultiAgentWorkOrders(
       new Set(Array.from({ length: 16 }, (_, index) => `WO-MAO-${String(index + 1).padStart(3, "0")}`)),
@@ -129,6 +136,59 @@ describe("multi-agent operator registry", () => {
     const workOrders = resolveMultiAgentWorkOrders(completed, new Set(), deferred)
     expect(workOrders[32]).toMatchObject({ status: "DEFERRED_PROVIDER_UNAVAILABLE", resumable: true })
     expect(workOrders[33]).toMatchObject({ workOrderId: "WO-MAO-034", status: "PENDING" })
+
+    const settled = resolveMultiAgentWorkOrders(
+      completed, new Set(), deferred, MULTI_AGENT_PROVIDER_SETTLEMENT_RECORD,
+    )
+    expect(settled[32]).toMatchObject({ status: "DEFERRED_PROVIDER_UNAVAILABLE", resumable: true })
+    expect(settled[33]).toMatchObject({ workOrderId: "WO-MAO-034", status: "READY" })
+    expect(settled[34]).toMatchObject({ workOrderId: "WO-MAO-035", status: "PENDING" })
+    expect(settled[35]).toMatchObject({ workOrderId: "WO-MAO-036", status: "PENDING" })
+
+    const throughThirtyFive = resolveMultiAgentWorkOrders(
+      new Set([...completed, "WO-MAO-034", "WO-MAO-035"]),
+      new Set(),
+      deferred,
+      MULTI_AGENT_PROVIDER_SETTLEMENT_RECORD,
+    )
+    expect(throughThirtyFive[35]).toMatchObject({ workOrderId: "WO-MAO-036", status: "PENDING" })
+
+    for (const [consumerWorkOrderId, index, prerequisiteIds] of [
+      ["WO-MAO-035", 34, ["WO-MAO-034"]],
+      ["WO-MAO-036", 35, ["WO-MAO-034", "WO-MAO-035"]],
+    ] as const) {
+      const forgedConsumer = resolveMultiAgentWorkOrders(
+        new Set([...completed, ...prerequisiteIds]),
+        new Set(),
+        deferred,
+        {
+          ...MULTI_AGENT_PROVIDER_SETTLEMENT_RECORD,
+          consumerWorkOrderId,
+        } as MultiAgentProviderSettlementRecord,
+      )
+      expect(forgedConsumer[index]).toMatchObject({ workOrderId: consumerWorkOrderId, status: "PENDING" })
+    }
+
+    const wrongLifecycle = resolveMultiAgentWorkOrders(
+      completed, new Set(), new Set(), MULTI_AGENT_PROVIDER_SETTLEMENT_RECORD,
+    )
+    expect(wrongLifecycle[33]).toMatchObject({ workOrderId: "WO-MAO-034", status: "PENDING" })
+
+    const incompleteAssessment = new Set(Array.from({ length: 31 }, (_, index) => workOrderId(index + 1)))
+    const missingAssessmentCompletion = resolveMultiAgentWorkOrders(
+      incompleteAssessment,
+      new Set(),
+      deferred,
+      MULTI_AGENT_PROVIDER_SETTLEMENT_RECORD,
+    )
+    expect(missingAssessmentCompletion[31]).toMatchObject({
+      workOrderId: "WO-MAO-032",
+      status: "READY",
+    })
+    expect(missingAssessmentCompletion[33]).toMatchObject({
+      workOrderId: "WO-MAO-034",
+      status: "PENDING",
+    })
 
     const afterThirtyFour = resolveMultiAgentWorkOrders(
       new Set([...completed, "WO-MAO-034"]), new Set(), deferred,

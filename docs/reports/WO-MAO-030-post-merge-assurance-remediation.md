@@ -24,9 +24,9 @@ the existing capability identifier and canonical adapter reference while restori
 attacked current-session-only, fail-closed contract.
 
 Downstream assurance superseded the transient-hold projection. This report recorded the original
-invalidated state at WO-MAO-030 hardening time. Current successor evidence re-proves WO-MAO-031 and
-blocks WO-MAO-034 at `PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED`; WO-MAO-035, WO-MAO-036, and
-WO-MAO-037 remain pending behind that gate. Historical code and reports are retained as evidence, not
+invalidated state at WO-MAO-030 hardening time. Successor evidence has since re-proved WO-MAO-031 and
+verified the exact canonical settlement, so WO-MAO-034 is now `READY`, not complete; WO-MAO-035,
+WO-MAO-036, and WO-MAO-037 remain pending. Historical code and reports are retained as evidence, not
 treated as completed proof. The mandatory order is WO-MAO-030 hardening, WO-MAO-031 redesign/re-proof,
 the independently verified WO-MAO-032/WO-MAO-033 settlement gate for WO-MAO-034, WO-MAO-034
 re-review/re-proof, WO-MAO-035 re-proof, WO-MAO-036 re-proof, then Phase 5.
@@ -35,9 +35,10 @@ re-review/re-proof, WO-MAO-035 re-proof, WO-MAO-036 re-proof, then Phase 5.
 
 - WO-MAO-034 cannot become ready merely because a caller includes WO-MAO-033 in a deferred set. The
   UI registry accepts no raw settlement-edge input and treats only completed dependencies as
-  satisfied. WO-MAO-034 remains blocked until the WO-MAO-032 assessment is `COMPLETE`, WO-MAO-033
+  satisfied. WO-MAO-034 becomes ready only while the WO-MAO-032 assessment is `COMPLETE`, WO-MAO-033
   remains exactly `DEFERRED / PROVIDER_UNAVAILABLE`, and the projection consumes the hardened DAG
-  contract's exact independently verified `WO-MAO-034<-WO-MAO-033` settlement artifact and provenance.
+  contract's exact independently verified `WO-MAO-034<-WO-MAO-033` settlement artifact and provenance;
+  those conditions are now met by the canonical version-2 record.
   That settlement is consumer-specific and cannot satisfy another edge.
 - WO-MAO-035 accepted caller-defined providers, caller-carried observations, and a stateless breaker
   projection. That could manufacture health and reroute proof without trusted operational evidence.

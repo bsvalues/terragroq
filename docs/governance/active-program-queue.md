@@ -113,11 +113,9 @@ harness, provider conformance `WO-MAO-029`, the post-merge-hardened current-sess
 adapter `WO-MAO-030`, re-proved role adapters `WO-MAO-031`, and provider assessment `WO-MAO-032`
 are complete. Historical WO-MAO-035 and WO-MAO-036 code/reports remain present, but their evidence
 and callable success paths remain invalidated pending ordered re-proof.
-`WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; `WO-MAO-034` is
-`BLOCKED / PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED`; later Work Orders remain pending.
-The program's canonical `SELECTED` state is retained, but it is not an executable dispatch claim:
-while its loop packet has no eligible Work Order, the portfolio resolver skips it without false
-activation and falls through deterministically to the next approved program with eligible work.
+`WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; the exact canonical settlement is
+verified and `WO-MAO-034` is `READY`; later Work Orders remain pending. The program's canonical
+`SELECTED` state now resolves to WO-MAO-034 without claiming that Work Order complete.
 The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
@@ -129,10 +127,9 @@ eligible-set scheduling, deterministic team-topology, lease/evidence-bound isola
 one-writer handoff, hard-ceiling priority/fairness admission planning, and hardened current-session
 coordinator assignment translation and role lifecycle proof. Cross-provider routing, provider
 health/reroute, and provider conformance require ordered re-proof at `WO-MAO-034`, `WO-MAO-035`,
-then `WO-MAO-036`. Releasing the deferred WO-MAO-033 edge into WO-MAO-034 additionally requires an
-exact, independently verified `WO-MAO-034<-WO-MAO-033` settlement bound to completed WO-MAO-032 and
-authenticated by a canonical provider-assessment trust pin or equivalent immutable evidence-ledger
-anchor. The
+then `WO-MAO-036`. The deferred WO-MAO-033 edge into WO-MAO-034 is now settled by the exact,
+independently verified `WO-MAO-034<-WO-MAO-033` record bound to completed WO-MAO-032, the canonical
+consumer envelope, and the immutable source-assessment hash. The
 redundant direct WO-MAO-033 dependencies on WO-MAO-035/036 remain fail-closed pending separate
 ratified correction. Durable
 provider dispatch and automated GitHub delivery remain unproven. The WO-MAO-028 harness proves only

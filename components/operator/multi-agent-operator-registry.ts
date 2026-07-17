@@ -1,3 +1,9 @@
+import {
+  MULTI_AGENT_PROVIDER_SETTLEMENT_RECORD,
+  isVerifiedWoMao034ProviderSettlement,
+  type MultiAgentProviderSettlementRecord,
+} from "@/components/operator/multi-agent-provider-settlement-registry"
+
 export type MultiAgentWorkOrderStatus =
   | "PENDING"
   | "READY"
@@ -151,7 +157,12 @@ export function resolveMultiAgentWorkOrders(
   completedIds: ReadonlySet<string>,
   blockedIds: ReadonlySet<string> = new Set(),
   deferredProviderUnavailableIds: ReadonlySet<string> = new Set(),
+  providerSettlement: MultiAgentProviderSettlementRecord | null = null,
 ): MultiAgentWorkOrderRecord[] {
+  const canonicalSettlementVerified = providerSettlement !== null
+    && isVerifiedWoMao034ProviderSettlement(providerSettlement)
+    && completedIds.has(providerSettlement.assessmentWorkOrderId)
+    && deferredProviderUnavailableIds.has(providerSettlement.subjectWorkOrderId)
   return WORK_ORDER_SEEDS.map(([title, phase, dependencies], index) => {
     const number = index + 1
     const id = workOrderId(number)
@@ -162,7 +173,10 @@ export function resolveMultiAgentWorkOrders(
         ? "BLOCKED"
         : deferredProviderUnavailableIds.has(id)
           ? "DEFERRED_PROVIDER_UNAVAILABLE"
-          : dependsOn.every((dependency) => completedIds.has(dependency))
+          : dependsOn.every((dependency) => completedIds.has(dependency)
+              || (canonicalSettlementVerified
+                && id === providerSettlement.consumerWorkOrderId
+                && dependency === providerSettlement.subjectWorkOrderId))
             ? "READY"
             : "PENDING"
 
@@ -186,11 +200,11 @@ export function resolveMultiAgentWorkOrders(
 
 const EVIDENCED_COMPLETE = new Set([...range(1, 32)].map(workOrderId))
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
-
 export const MULTI_AGENT_OPERATOR_WORK_ORDERS = resolveMultiAgentWorkOrders(
   EVIDENCED_COMPLETE,
-  new Set([workOrderId(34)]),
+  new Set(),
   PROVIDER_UNAVAILABLE_DEFERRED,
+  MULTI_AGENT_PROVIDER_SETTLEMENT_RECORD,
 )
 
 export const MULTI_AGENT_OPERATOR_PROGRAM = {

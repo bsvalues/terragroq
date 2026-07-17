@@ -10,13 +10,13 @@ describe("portfolio operator surface", () => {
     expect(surface.title).toBe("Portfolio Operator")
     expect(surface.selection).toMatchObject({
       decision: "SELECT_PROGRAM",
-      programId: "PROGRAM-RELEASE-ENGINEERING-001",
+      programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
     })
     expect(surface.selectedProgram).toMatchObject({
-      programId: "PROGRAM-RELEASE-ENGINEERING-001",
+      programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
     })
     expect(surface.activeWorkOrder).toMatchObject({
-      workOrderId: "WO-RELEASE-001",
+      workOrderId: "WO-MAO-034",
       status: "READY",
     })
     expect(surface.controls).toEqual([])

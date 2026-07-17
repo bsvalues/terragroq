@@ -354,7 +354,8 @@ valid only when all of the following mechanically agree:
 - the assessment WO is independently complete as an assessment and its artifact says exactly
   `UNAVAILABLE / COMPLETE_PROVIDER_ASSESSMENT` with continuation policy
   `DEFER_AFFECTED_LANE_CONTINUE_HEALTHY_PROVIDERS`;
-- the artifact contains computed hashes of both bound envelopes and is proven by either a signature
+- the artifact contains computed hashes of the assessment, subject, and exact consumer envelopes plus
+  the immutable WO-MAO-032 source-assessment content hash, and is proven by either a signature
   verified against a writer in a separately configured trust bundle or an exact immutable
   evidence-ledger anchor in that bundle; the root fingerprint, bundle content hash, and current
   hash-chained status head are pinned by a separately authenticated immutable registry record before
@@ -362,7 +363,7 @@ valid only when all of the following mechanically agree:
   register roots, pins, bundles, writers, or anchors;
 - the trust bundle is root-signed, fresh, unexpired, and non-revoked, and cross-binds active writer
   key fingerprints or active ledger-anchor identities to the assessment provider, WOs, artifact,
-  content hash, and both envelope hashes;
+  content hash, all three envelope hashes, and the source-assessment content hash;
 - status events have strictly increasing sequence, version, fencing value, and timestamp; revocation
   is terminal for a root, writer, or anchor and no later or backdated activation is valid;
 - the subject state references that exact assessment artifact and content hash.
@@ -372,9 +373,10 @@ self-asserted, raw caller-supplied, or unreferenced proof fails closed. The exce
 named dependency edge. It does not complete WO-MAO-033,
 enable Claude, grant authority, satisfy an `ANY` gate, or weaken any other dependency.
 
-The embedded production pin registry currently contains no active provider-assessment trust root.
-That preserves the honest WO-MAO-032 unavailable posture: the settlement contract is proven, but no
-production caller can activate it or mint a root without a reviewed canonical registry change.
+Registry version 2 contains one immutable, reviewed WO-MAO-032/033/034 settlement record. It is bound
+to merged source commit `42a63e3e11e5bb1a9c1e9419db3e0f2651b1789c` and the exact WO-MAO-032
+source-assessment hash. It releases only the declared WO-MAO-034 dependency edge to `READY`; WO-MAO-034
+is not complete, WO-MAO-033 stays deferred, Claude stays disabled, and WO-MAO-035/036 stay pending.
 
 ### Phase 5 — GitHub delivery engine
 
