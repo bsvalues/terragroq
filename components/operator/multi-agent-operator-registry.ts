@@ -68,6 +68,10 @@ import {
   isVerifiedWoMao050DefectiveWorkerEvidence,
 } from "@/components/operator/multi-agent-defective-worker-registry"
 import {
+  MULTI_AGENT_STATUS_UX_EVIDENCE,
+  isVerifiedWoMao051StatusUxEvidence,
+} from "@/components/operator/multi-agent-status-ux-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -233,6 +237,7 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-048", "docs/reports/WO-MAO-048-provider-outage-failover-drill.md"],
   ["WO-MAO-049", "docs/reports/WO-MAO-049-stale-base-ci-review-merge-race.md"],
   ["WO-MAO-050", "docs/reports/WO-MAO-050-malicious-defective-worker-drill.md"],
+  ["WO-MAO-051", "docs/reports/WO-MAO-051-status-evidence-owner-decision-ux.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -332,6 +337,9 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao050DefectiveWorkerEvidence(MULTI_AGENT_DEFECTIVE_WORKER_EVIDENCE)
     ? [workOrderId(50)]
+    : []),
+  ...(isVerifiedWoMao051StatusUxEvidence(MULTI_AGENT_STATUS_UX_EVIDENCE)
+    ? [workOrderId(51)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])

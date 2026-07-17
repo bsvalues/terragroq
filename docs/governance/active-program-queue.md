@@ -118,8 +118,8 @@ complete.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; the exact canonical settlement is
 verified and independently assured `WO-MAO-034` is `COMPLETE`.
 The separately ratified graph correction removes only the redundant direct WO-MAO-033 edges from
-WO-MAO-035/036. WO-MAO-035 through WO-MAO-050 are now `COMPLETE`; WO-MAO-051 is
-`READY`, and the selected MAO loop resumes at WO-MAO-051 without owner contact.
+WO-MAO-035/036. WO-MAO-035 through WO-MAO-051 are now `COMPLETE`; WO-MAO-052 is
+`READY`, and the selected MAO loop resumes at WO-MAO-052 without owner contact.
 The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
