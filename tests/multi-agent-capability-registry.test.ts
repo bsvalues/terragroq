@@ -473,6 +473,16 @@ describe("multi-agent executable capability inventory", () => {
         "WO-MAO-054 is complete; WO-MAO-055 is now READY through retained prerequisites",
       ]),
     })
+    expect(capability("concurrent-certification-lanes-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_CONCURRENT_CERTIFICATION_LANES_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/concurrent-certification-lanes.mjs",
+      restrictions: expect.arrayContaining([
+        "Static useful-lane evidence only; no provider dispatch, GitHub API call, production write, scheduler, command runner, or runtime activation is performed",
+        "WO-MAO-055 is complete; WO-MAO-056 and WO-MAO-057 are now READY through retained prerequisites",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",

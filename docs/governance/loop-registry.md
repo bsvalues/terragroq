@@ -127,13 +127,14 @@ scheduler model checking without creating provider or runtime authority. WO-MAO-
 Codex coordinator adapter with host-trusted opaque assignments, replay sealing, and ambiguous-effect quarantine,
 without durable provider dispatch, runtime activation, or owner relay. WO-MAO-031 is re-proved
 against the hardened opaque-handle role lifecycle contract. Historical WO-MAO-035 and WO-MAO-036
-evidence and callable success paths remain invalidated pending ordered redesign and re-proof.
+evidence was invalidated and then re-proved through sealed canonical registries.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The canonical settlement of its
 exact edge into WO-MAO-034 is verified against WO-MAO-032, the consumer envelope, and source-
 assessment hash. WO-MAO-034 is complete through independently approved exact-candidate routing
 evidence. WO-MAO-035/036 previously kept redundant direct WO-MAO-033 edges fail-closed. The separately ratified graph
-correction removes only those redundant edges. The MAO eligible set is now exactly `WO-MAO-035`,
-the temporary remediation transition is cleared, and the active Work Order is WO-MAO-035.
+correction removes only those redundant edges. WO-MAO-035 through WO-MAO-055 are now complete.
+The MAO eligible set is now `WO-MAO-056` and `WO-MAO-057`, the temporary remediation transition is
+cleared, and the active Work Order is WO-MAO-056 by deterministic queue order.
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
