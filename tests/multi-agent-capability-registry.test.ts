@@ -353,6 +353,21 @@ describe("multi-agent executable capability inventory", () => {
         "No command runner, background worker, runtime activation, credential access, authority minting, GitHub operation, production write, or owner relay",
       ]),
     })
+    expect(capability("github-lifecycle-conformance-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_GITHUB_LIFECYCLE_CONFORMANCE_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/github-lifecycle-conformance.mjs",
+      authorityGrantRefs: ["PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"],
+      trustGateRef: "WO-MAO-007",
+      restrictions: expect.arrayContaining([
+        "Zero-input control-plane conformance model only; no GitHub operation is performed by the model",
+        "The lifecycle chain must include branch delivery, PR linkage, CI/review, remediation, merge gating, post-merge verification, and dependent release",
+        "Security bypass, authority bypass, direct review-thread resolution, and branch-protection bypass remain denied",
+        "WO-MAO-044 is complete; WO-MAO-045 is released to READY through retained prerequisites",
+        "No command runner, background worker, runtime activation, credential access, authority minting, GitHub execution, production write, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",

@@ -40,6 +40,10 @@ import {
   isVerifiedWoMao043DependentReleaseEvidence,
 } from "@/components/operator/multi-agent-dependent-release-registry"
 import {
+  MULTI_AGENT_GITHUB_LIFECYCLE_EVIDENCE,
+  isVerifiedWoMao044GitHubLifecycleEvidence,
+} from "@/components/operator/multi-agent-github-lifecycle-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -198,6 +202,7 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-041", "docs/reports/WO-MAO-041-bounded-merge-controller.md"],
   ["WO-MAO-042", "docs/reports/WO-MAO-042-post-merge-verification-cleanup.md"],
   ["WO-MAO-043", "docs/reports/WO-MAO-043-automatic-dependent-release.md"],
+  ["WO-MAO-044", "docs/reports/WO-MAO-044-github-lifecycle-conformance.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -276,6 +281,9 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao043DependentReleaseEvidence(MULTI_AGENT_DEPENDENT_RELEASE_EVIDENCE)
     ? [workOrderId(43)]
+    : []),
+  ...(isVerifiedWoMao044GitHubLifecycleEvidence(MULTI_AGENT_GITHUB_LIFECYCLE_EVIDENCE)
+    ? [workOrderId(44)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
