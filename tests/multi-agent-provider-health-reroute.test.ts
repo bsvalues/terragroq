@@ -1,90 +1,15 @@
 import { spawnSync } from "node:child_process"
-import fs from "node:fs"
-import os from "node:os"
-import path from "node:path"
 
 import { describe, expect, it } from "vitest"
 
 import {
   evaluateProviderHealthReroute,
+  loadCanonicalProviderHealthRerouteRegistry,
+  providerHealthRerouteRegistryContentHash,
   ProviderHealthRerouteError,
+  runCanonicalProviderHealthReroute,
+  verifyCanonicalProviderHealthRerouteRegistry,
 } from "../scripts/multi-agent-operator/provider-health-reroute.mjs"
-
-function providers(overrides: Record<string, unknown> = {}) {
-  const value = [
-    {
-      providerId: "hosted-codex",
-      status: "ACTIVE",
-      roles: ["builder", "reviewer", "coordinator"],
-      repositories: ["bsvalues/terragroq"],
-      secretIsolation: true,
-      workspaceIsolation: true,
-      rawCredentialAccess: false,
-    },
-    {
-      providerId: "hosted-codex-secondary",
-      status: "ACTIVE",
-      roles: ["builder", "reviewer"],
-      repositories: ["bsvalues/terragroq"],
-      secretIsolation: true,
-      workspaceIsolation: true,
-      rawCredentialAccess: false,
-    },
-    {
-      providerId: "claude-code",
-      status: "UNAVAILABLE",
-      roles: [],
-      repositories: ["bsvalues/terragroq"],
-      secretIsolation: true,
-      workspaceIsolation: true,
-      rawCredentialAccess: false,
-    },
-  ]
-  for (const [key, child] of Object.entries(overrides)) value[Number(key)] = { ...value[Number(key)], ...(child as Record<string, unknown>) }
-  return value
-}
-
-function observations(overrides: Record<string, unknown> = {}) {
-  const value = [
-    {
-      observationId: "obs-rate-limit",
-      providerId: "hosted-codex",
-      kind: "HTTP",
-      httpStatus: 429,
-      reasonCode: "RATE_LIMITED",
-      observedAt: "2026-07-16T22:00:00.000Z",
-      retryAfterMs: 120000,
-      deterministic: false,
-    },
-  ]
-  for (const [key, child] of Object.entries(overrides)) value[Number(key)] = { ...value[Number(key)], ...(child as Record<string, unknown>) }
-  return value
-}
-
-function input(overrides: Record<string, unknown> = {}) {
-  return {
-    schemaVersion: 1,
-    artifactType: "PROVIDER_HEALTH_REROUTE_INPUT",
-    workOrderId: "WO-MAO-035",
-    providers: providers(),
-    observations: observations(),
-    rerouteRequests: [
-      {
-        requestId: "reroute-hosted-codex",
-        workOrderId: "WO-MAO-035",
-        repository: "bsvalues/terragroq",
-        requiredRoles: ["builder", "reviewer"],
-        fromProviderId: "hosted-codex",
-        fallbackProviders: ["hosted-codex-secondary", "claude-code"],
-      },
-    ],
-    budgets: {
-      maxRetryDelayMs: 60000,
-      maxReroutesPerWorkOrder: 1,
-    },
-    ...overrides,
-  }
-}
 
 function expectWall(callback: () => unknown, code: string) {
   try {
@@ -97,32 +22,132 @@ function expectWall(callback: () => unknown, code: string) {
 }
 
 describe("WO-MAO-035 provider health, circuit breakers, and reroute", () => {
-  it("mechanically invalidates valid and caller-invented historical health fixtures", () => {
-    expectWall(() => evaluateProviderHealthReroute(input()), "PROVIDER_HEALTH_REROUTE_INVALIDATED_PENDING_REPROOF")
-    expectWall(() => evaluateProviderHealthReroute(input({
-      providers: providers({ 0: { status: "ACTIVE", secretIsolation: false } }),
-      observations: observations({ 0: { observedAt: "2000-01-01T00:00:00.000Z" } }),
-    })), "PROVIDER_HEALTH_REROUTE_INVALIDATED_PENDING_REPROOF")
+  it("proves the sealed canonical provider health and reroute registry", () => {
+    const result = runCanonicalProviderHealthReroute()
+
+    expect(result).toMatchObject({
+      schemaVersion: 1,
+      artifactType: "PROVIDER_HEALTH_REROUTE_RESULT",
+      workOrderId: "WO-MAO-035",
+      status: "PROVIDER_HEALTH_REROUTE_PROVEN",
+      registryId: "williamos-provider-health-reroute",
+      registryVersion: 1,
+      registryContentHash: "50033dc24bc289342f6c7dfd447a2a8c62bd7fb4436e18b18127543590956cc3",
+      readinessBaseCommitSha: "726fb9a3d396c1500aed6c60092d9ea4756c6ad5",
+      readinessBaseTreeHash: "616ee350063efcedfa7ac7ddf01a6c8df24e8391",
+      reroutes: [
+        {
+          requestId: "reroute-wo-mao-035-hosted-codex-to-secondary-v1",
+          workOrderId: "WO-MAO-035",
+          fromProviderId: "hosted-codex",
+          selectedFallbackProviders: ["hosted-codex-secondary"],
+          permitted: true,
+          reasonCode: "REROUTE_PERMITTED",
+        },
+      ],
+      circuitBreakers: [
+        {
+          transitionId: "breaker-wo-mao-035-hosted-codex-backoff-v1",
+          providerId: "hosted-codex",
+          fromState: "ACTIVE",
+          toState: "BACKOFF",
+          observationId: "obs-wo-mao-035-hosted-codex-rate-limit-v1",
+          reasonCode: "RATE_LIMITED",
+        },
+      ],
+      deferredProviders: [
+        {
+          providerId: "claude-code",
+          reasonCode: "PROVIDER_UNAVAILABLE",
+        },
+      ],
+      dispatchPerformed: false,
+      providerCallPerformed: false,
+      durablePersistenceClaimed: false,
+      serviceWorkerClaimed: false,
+      runtimeActivationAllowed: false,
+      authorityGranted: false,
+      secretsExposed: false,
+      ownerRelayRequired: false,
+      resultHash: "678ddad3816fdbc8e9e6646906b4b1938147acc3629db9af34b65c644c5d8ca5",
+    })
+    expect(result.health.map(({ providerId, state, reasonCode }) => ({ providerId, state, reasonCode }))).toEqual([
+      { providerId: "claude-code", state: "UNAVAILABLE", reasonCode: "PROVIDER_UNAVAILABLE" },
+      { providerId: "hosted-codex", state: "BACKOFF", reasonCode: "RATE_LIMITED" },
+      { providerId: "hosted-codex-secondary", state: "ACTIVE", reasonCode: "HEALTHY" },
+    ])
+    expect(Object.isFrozen(result)).toBe(true)
+    expect(JSON.stringify(result)).not.toMatch(/password|privateKey|accessToken|rawCredential|cookie|session/i)
   })
 
-  it("exposes only the typed invalidation through the CLI", () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "provider-health-reroute-"))
-    const inputPath = path.join(directory, "input.json")
-    const badPath = path.join(directory, "bad.json")
-    fs.writeFileSync(inputPath, JSON.stringify(input()))
-    fs.writeFileSync(badPath, JSON.stringify({ ...input(), workOrderId: "WO-MAO-999" }))
+  it("is stable under exact rerun but rejects caller-invented historical input", () => {
+    expect(runCanonicalProviderHealthReroute()).toEqual(runCanonicalProviderHealthReroute())
+    expectWall(() => evaluateProviderHealthReroute({
+      schemaVersion: 1,
+      artifactType: "PROVIDER_HEALTH_REROUTE_INPUT",
+      workOrderId: "WO-MAO-035",
+      providers: [],
+      observations: [],
+      rerouteRequests: [],
+      budgets: { maxRetryDelayMs: 0, maxReroutesPerWorkOrder: 0 },
+    }), "PROVIDER_HEALTH_HOST_TRUST_WALL")
+  })
 
-    for (const target of [inputPath, badPath]) {
-      const result = spawnSync(process.execPath,
-        ["scripts/multi-agent-operator/provider-health-reroute-cli.mjs", target], { encoding: "utf8" })
-      expect(result.status).toBe(2)
-      expect(JSON.parse(result.stdout)).toMatchObject({
+  it("pins provider, observation, breaker, reroute, budget, and safety fields", () => {
+    expect(verifyCanonicalProviderHealthRerouteRegistry()).toMatchObject({
+      ok: true,
+      code: "PROVIDER_HEALTH_REGISTRY_VERIFIED",
+      contentHash: "50033dc24bc289342f6c7dfd447a2a8c62bd7fb4436e18b18127543590956cc3",
+      dispatchPerformed: false,
+      providerCallPerformed: false,
+      authorityGranted: false,
+    })
+
+    for (const mutate of [
+      (value: any) => { value.providers[0].status = "ACTIVE" },
+      (value: any) => { value.providers[1].repositories = ["attacker/repository"] },
+      (value: any) => { value.providers[1].rawCredentialAccess = true },
+      (value: any) => { value.trustedObservations[0].observedAt = "2000-01-01T00:00:00.000Z" },
+      (value: any) => { value.trustedObservations[0].providerId = "hosted-codex-secondary" },
+      (value: any) => { value.circuitBreakerLedger[0].statefulTransition = false },
+      (value: any) => { value.circuitBreakerLedger[0].toState = "QUARANTINED" },
+      (value: any) => { value.rerouteRequests[0].fallbackProviders = ["claude-code"] },
+      (value: any) => { value.budgets.maxReroutesPerWorkOrder = 2 },
+      (value: any) => { value.safety.authorityGranted = true },
+      (value: any) => { value.unexpected = true },
+    ]) {
+      const registry = structuredClone(loadCanonicalProviderHealthRerouteRegistry())
+      mutate(registry)
+      expect(providerHealthRerouteRegistryContentHash(registry)).not.toBe("50033dc24bc289342f6c7dfd447a2a8c62bd7fb4436e18b18127543590956cc3")
+      expectWall(() => verifyCanonicalProviderHealthRerouteRegistry(registry), "PROVIDER_HEALTH_REGISTRY_INTEGRITY_WALL")
+    }
+  })
+
+  it("exposes only the zero-input CLI and rejects every caller argument", () => {
+    const passed = spawnSync(process.execPath,
+      ["scripts/multi-agent-operator/provider-health-reroute-cli.mjs"], { encoding: "utf8" })
+    expect(passed.status).toBe(0)
+    expect(JSON.parse(passed.stdout)).toMatchObject({
+      ok: true,
+      status: "PROVIDER_HEALTH_REROUTE_PROVEN",
+      resultHash: "678ddad3816fdbc8e9e6646906b4b1938147acc3629db9af34b65c644c5d8ca5",
+      dispatchPerformed: false,
+      providerCallPerformed: false,
+      authorityGranted: false,
+    })
+
+    for (const argument of ["input.json", "--providers", JSON.stringify({ privateKey: "x" })]) {
+      const rejected = spawnSync(process.execPath,
+        ["scripts/multi-agent-operator/provider-health-reroute-cli.mjs", argument], { encoding: "utf8" })
+      expect(rejected.status).toBe(2)
+      expect(JSON.parse(rejected.stdout)).toMatchObject({
         ok: false,
-        code: "PROVIDER_HEALTH_REROUTE_INVALIDATED_PENDING_REPROOF",
+        code: "PROVIDER_HEALTH_CLI_ARGUMENT_WALL",
         dispatchPerformed: false,
+        providerCallPerformed: false,
+        runtimeActivationAllowed: false,
         authorityGranted: false,
       })
     }
-    fs.rmSync(directory, { recursive: true, force: true })
   })
 })

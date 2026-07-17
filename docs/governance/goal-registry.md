@@ -139,7 +139,7 @@ persistence, command execution, and any production mutation.
 
 ### `GOAL-WOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
 
-Status: `ACTIVE / WO-MAO-034 COMPLETE / WO-MAO-035 READY_GRAPH_CORRECTED`
+Status: `ACTIVE / WO-MAO-035 COMPLETE / WO-MAO-036 READY`
 
 Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
@@ -168,15 +168,17 @@ deterministic hard-ceiling priority/fairness admission policy. WO-MAO-028 adds p
 checking without provider or runtime execution. WO-MAO-030 adds the current-session hosted Codex coordinator
 adapter for opaque host-trusted native assignments, bridge-backed operations, replay sealing, quarantine,
 and sanitized evidence without provider-contract dispatch. WO-MAO-031 has been re-proved against that
-hardened contract using opaque host plan handles and independently captured role evidence. Historical
-WO-MAO-035 and WO-MAO-036 implementations/reports remain present, but post-merge assurance
-invalidated their completion evidence and mechanically walled their success entrypoints. They require
-ordered redesign and re-proof only after WO-MAO-034 is complete. The exact deferred WO-MAO-033 edge
+hardened contract using opaque host plan handles and independently captured role evidence. WO-MAO-035
+is re-proved through a zero-input canonical provider-health registry, trusted observation, stateful
+breaker transition, and bounded static reroute selection. Historical WO-MAO-036 implementation/report
+remains present, but post-merge assurance invalidated its completion evidence and mechanically walled
+its success entrypoint. It requires ordered redesign and re-proof after WO-MAO-035. The exact deferred
+WO-MAO-033 edge
 into WO-MAO-034 is now independently settled through the canonical immutable version-2 record bound
 to WO-MAO-032, the consumer envelope, and source-assessment hash. WO-MAO-034 is `COMPLETE` through
 its zero-input canonical routing proof and independently approved exact implementation candidate.
 The separately ratified dependency-graph correction removes only WO-MAO-033's redundant direct
-edges from WO-MAO-035/036. WO-MAO-035 is now `READY`; WO-MAO-036 and WO-MAO-037 remain pending.
+edges from WO-MAO-035/036. WO-MAO-035 is now `COMPLETE`; WO-MAO-036 is `READY`; WO-MAO-037 remains pending.
 WO-MAO-033 remains deferred and resumable, and the WO-MAO-034 settlement remains exact and
 unchanged. Claude remains unavailable and disabled. Durable provider dispatch
 and automated GitHub delivery remain unproven.

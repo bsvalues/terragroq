@@ -208,7 +208,7 @@ describe("multi-agent executable capability inventory", () => {
       restrictions: expect.arrayContaining([
         "Bounded zero-input control-plane routing evaluation only; no provider execution or dispatch",
         "Logical route-role separation is proven; host-native worker identity is not claimed",
-        "WO-MAO-034 is complete through independently reviewed candidate evidence; the ratified graph correction releases WO-MAO-035 to READY while WO-MAO-036 remains pending",
+        "WO-MAO-034 is complete through independently reviewed candidate evidence; the ratified graph correction released WO-MAO-035 and WO-MAO-035 now releases WO-MAO-036 to READY",
         "The settlement remains scoped only to WO-MAO-034<-WO-MAO-033; the graph correction does not retarget or generalize it",
         "Callers cannot submit roots, writers, trust bundles, ledger anchors, signatures, or raw trust material",
         "Unavailable providers contribute no capability",
@@ -216,15 +216,17 @@ describe("multi-agent executable capability inventory", () => {
       ]),
     })
     expect(capability("provider-health-reroute-model")).toMatchObject({
-      status: "AVAILABLE_UNPROVEN",
+      status: "PROVEN",
       executionClass: "NON_EXECUTABLE",
-      reasonCode: "POST_MERGE_ASSURANCE_INVALIDATED_PENDING_REPROOF",
+      reasonCode: "CANONICAL_PROVIDER_HEALTH_REROUTE_VERIFIED",
       adapterRef: "scripts/multi-agent-operator/provider-health-reroute.mjs",
       authorityGrantRefs: [],
       trustGateRef: null,
       restrictions: expect.arrayContaining([
         "Static health and reroute planning only",
-        "WO-MAO-035 is READY for redesign and re-proof, not proven or complete",
+        "Caller-supplied providers, observations, breaker state, and reroute requests are rejected",
+        "Trusted observations and stateful breaker transitions come only from the sealed canonical registry",
+        "WO-MAO-035 is complete; WO-MAO-036 is released to READY through retained prerequisites",
         "Unavailable providers remain disabled and deferred",
         "No provider call, GitHub automation, runtime activation, authority grant, or owner relay",
       ]),

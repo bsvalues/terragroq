@@ -4,6 +4,10 @@ import {
   type MultiAgentProviderSettlementRecord,
 } from "@/components/operator/multi-agent-provider-settlement-registry"
 import {
+  MULTI_AGENT_PROVIDER_HEALTH_EVIDENCE,
+  isVerifiedWoMao035ProviderHealthEvidence,
+} from "@/components/operator/multi-agent-provider-health-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -206,6 +210,9 @@ const EVIDENCED_COMPLETE = new Set([
   ...range(1, 32).map(workOrderId),
   ...(isVerifiedWoMao034RoutingReviewEvidence(MULTI_AGENT_ROUTING_REVIEW_EVIDENCE)
     ? [workOrderId(34)]
+    : []),
+  ...(isVerifiedWoMao035ProviderHealthEvidence(MULTI_AGENT_PROVIDER_HEALTH_EVIDENCE)
+    ? [workOrderId(35)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
