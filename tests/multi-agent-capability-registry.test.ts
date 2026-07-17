@@ -199,15 +199,16 @@ describe("multi-agent executable capability inventory", () => {
       ]),
     })
     expect(capability("cross-provider-routing-review-model")).toMatchObject({
-      status: "AVAILABLE_UNPROVEN",
+      status: "PROVEN",
       executionClass: "NON_EXECUTABLE",
-      reasonCode: "CANONICAL_PROVIDER_SETTLEMENT_VERIFIED_WO_MAO_034_READY",
+      reasonCode: "CANONICAL_ROUTING_AND_INDEPENDENT_CANDIDATE_ASSURANCE_VERIFIED",
       adapterRef: "scripts/multi-agent-operator/cross-provider-routing-review.mjs",
       authorityGrantRefs: [],
       trustGateRef: null,
       restrictions: expect.arrayContaining([
-        "Static routing and review planning only",
-        "WO-MAO-034 is ready, not complete; routing/review execution and evidence remain outstanding",
+        "Bounded zero-input control-plane routing evaluation only; no provider execution or dispatch",
+        "Logical route-role separation is proven; host-native worker identity is not claimed",
+        "WO-MAO-034 is complete through independently reviewed candidate evidence; WO-MAO-035 remains pending",
         "The settlement applies only to WO-MAO-034<-WO-MAO-033 and cannot satisfy WO-MAO-035/036 dependency edges",
         "Callers cannot submit roots, writers, trust bundles, ledger anchors, signatures, or raw trust material",
         "Unavailable providers contribute no capability",

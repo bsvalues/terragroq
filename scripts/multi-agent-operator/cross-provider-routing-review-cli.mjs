@@ -1,13 +1,10 @@
 #!/usr/bin/env node
-import fs from "node:fs"
 
 import {
   canonicalCrossProviderRoutingReviewJson,
   CrossProviderRoutingReviewError,
-  evaluateCrossProviderRoutingReview,
+  runCanonicalCrossProviderRoutingReview,
 } from "./cross-provider-routing-review.mjs"
-
-const [inputPath, ...extra] = process.argv.slice(2)
 
 function failure(code, field, detail = undefined) {
   return {
@@ -17,23 +14,25 @@ function failure(code, field, detail = undefined) {
     code,
     field,
     detail,
+    providerContractDispatchAllowed: false,
     dispatchPerformed: false,
+    runtimeActivationAllowed: false,
     authorityGranted: false,
+    secretsExposed: false,
+    ownerRelayRequired: false,
   }
 }
 
 let result
-if (!inputPath || extra.length > 0) {
-  result = failure("CROSS_PROVIDER_CLI_USAGE_WALL", "inputPath")
+if (process.argv.length !== 2) {
+  result = failure("CROSS_PROVIDER_CLI_ARGUMENT_WALL", "arguments")
 } else {
   try {
-    result = evaluateCrossProviderRoutingReview(JSON.parse(fs.readFileSync(inputPath, "utf8")))
+    result = { ok: true, ...runCanonicalCrossProviderRoutingReview() }
   } catch (error) {
-    if (error instanceof CrossProviderRoutingReviewError) {
-      result = failure(error.code, error.field, error.detail)
-    } else {
-      result = failure("CROSS_PROVIDER_CLI_INPUT_WALL", "input")
-    }
+    result = error instanceof CrossProviderRoutingReviewError
+      ? failure(error.code, error.field, error.detail)
+      : failure(typeof error?.code === "string" ? error.code : "CROSS_PROVIDER_CANONICAL_EXECUTION_WALL", "execution")
   }
 }
 

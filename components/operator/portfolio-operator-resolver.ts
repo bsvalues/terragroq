@@ -10,7 +10,11 @@ export function resolveNextPortfolioProgram(programs: PortfolioProgramRecord[]) 
     .filter((program) => ["SELECTED", "READY"].includes(program.state))
     .filter((program) => program.authorityMode === "CODEX_ELIGIBLE")
     .filter((program) => program.dependencies.every((dependency) => complete.has(dependency)))
-    .filter((program) => buildLoopPacket(program).eligibleWorkOrders.length > 0)
+    .filter((program) => {
+      const loop = buildLoopPacket(program)
+      return loop.eligibleWorkOrders.length > 0
+        || (program.state === "SELECTED" && loop.remediationTransition !== null)
+    })
     .sort((left, right) => right.priorityScore - left.priorityScore || left.programId.localeCompare(right.programId))
   const selected = candidates[0]
 
@@ -26,7 +30,9 @@ export function resolveNextPortfolioProgram(programs: PortfolioProgramRecord[]) 
 
   return {
     decision: "SELECT_PROGRAM" as const,
-    reasonCode: "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM" as const,
+    reasonCode: selected.state === "SELECTED" && buildLoopPacket(selected).remediationTransition !== null
+      ? "SELECTED_PROGRAM_REMEDIATION_REQUIRED" as const
+      : "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM" as const,
     programId: selected.programId,
     goalId: selected.nextGoalId,
     ownerDecisionRequired: false as const,
@@ -114,11 +120,17 @@ export function buildLoopPacket(program: PortfolioProgramRecord) {
   const eligibleWorkOrders = workOrders
     .filter((workOrder) => workOrder.status === "READY")
     .map((workOrder) => workOrder.workOrderId)
+  const remediationTransition = program.programId === "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"
+    && workOrders.find((workOrder) => workOrder.workOrderId === "WO-MAO-034")?.status === "COMPLETE"
+    && workOrders.find((workOrder) => workOrder.workOrderId === "WO-MAO-035")?.status === "PENDING"
+      ? "CORRECT_REDUNDANT_WO_MAO_033_EDGES_BEFORE_WO_MAO_035_REPROOF" as const
+      : null
   return {
     loopId: `LOOP-${program.nextGoalId.replace(/^GOAL-/, "")}`,
     goalId: program.nextGoalId,
     activeWorkOrder: activeWorkOrder?.workOrderId ?? null,
     eligibleWorkOrders,
+    remediationTransition,
     orderedWorkOrderQueue: workOrders.map((workOrder) => workOrder.workOrderId),
     executionMode: program.programId === "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"
       ? "DEPENDENCY_RESERVATION_ELIGIBLE_SET" as const

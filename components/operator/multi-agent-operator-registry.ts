@@ -3,6 +3,10 @@ import {
   isVerifiedWoMao034ProviderSettlement,
   type MultiAgentProviderSettlementRecord,
 } from "@/components/operator/multi-agent-provider-settlement-registry"
+import {
+  MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
+  isVerifiedWoMao034RoutingReviewEvidence,
+} from "@/components/operator/multi-agent-routing-review-registry"
 
 export type MultiAgentWorkOrderStatus =
   | "PENDING"
@@ -198,7 +202,12 @@ export function resolveMultiAgentWorkOrders(
   })
 }
 
-const EVIDENCED_COMPLETE = new Set([...range(1, 32)].map(workOrderId))
+const EVIDENCED_COMPLETE = new Set([
+  ...range(1, 32).map(workOrderId),
+  ...(isVerifiedWoMao034RoutingReviewEvidence(MULTI_AGENT_ROUTING_REVIEW_EVIDENCE)
+    ? [workOrderId(34)]
+    : []),
+])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
 export const MULTI_AGENT_OPERATOR_WORK_ORDERS = resolveMultiAgentWorkOrders(
   EVIDENCED_COMPLETE,

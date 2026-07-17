@@ -53,17 +53,19 @@ describe("portfolio operator", () => {
     ])
   })
 
-  it("selects the active multi-agent program when canonical settlement releases WO-MAO-034", () => {
+  it("returns to the portfolio after WO-MAO-034 completes with later MAO work dependency-blocked", () => {
     const portfolio = getPortfolioOperatorProgram()
     const multiAgentOperator = portfolio.backlog[0]
 
     expect(buildLoopPacket(multiAgentOperator)).toMatchObject({
-      activeWorkOrder: "WO-MAO-034",
-      eligibleWorkOrders: ["WO-MAO-034"],
+      activeWorkOrder: null,
+      eligibleWorkOrders: [],
+      remediationTransition: "CORRECT_REDUNDANT_WO_MAO_033_EDGES_BEFORE_WO_MAO_035_REPROOF",
     })
 
     expect(resolveNextPortfolioProgram(portfolio.backlog)).toMatchObject({
       decision: "SELECT_PROGRAM",
+      reasonCode: "SELECTED_PROGRAM_REMEDIATION_REQUIRED",
       programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
       goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001",
       ownerDecisionRequired: false,
@@ -85,6 +87,26 @@ describe("portfolio operator", () => {
       decision: "SELECT_PROGRAM",
       programId: "PROGRAM-DEVEX-HOOK-TOOLING-001",
       ownerDecisionRequired: false,
+    })
+  })
+
+  it("does not preserve an unrelated selected program with no typed remediation transition", () => {
+    const portfolio = getPortfolioOperatorProgram()
+    const release = portfolio.backlog.find((program) => program.programId === "PROGRAM-RELEASE-ENGINEERING-001")!
+    const localRuntime = portfolio.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001")!
+
+    expect(resolveNextPortfolioProgram([
+      {
+        ...localRuntime,
+        state: "SELECTED",
+        authorityMode: "CODEX_ELIGIBLE",
+        priorityScore: 1_000,
+      },
+      release,
+    ])).toMatchObject({
+      decision: "SELECT_PROGRAM",
+      reasonCode: "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM",
+      programId: "PROGRAM-RELEASE-ENGINEERING-001",
     })
   })
 
@@ -125,8 +147,9 @@ describe("portfolio operator", () => {
       ownerDecisionRequired: false,
     })
     expect(loop).toMatchObject({
-      activeWorkOrder: "WO-MAO-034",
-      eligibleWorkOrders: ["WO-MAO-034"],
+      activeWorkOrder: null,
+      eligibleWorkOrders: [],
+      remediationTransition: "CORRECT_REDUNDANT_WO_MAO_033_EDGES_BEFORE_WO_MAO_035_REPROOF",
       executionMode: "DEPENDENCY_RESERVATION_ELIGIBLE_SET",
     })
     expect(loop.continuationRule).toContain("contact the Owner only for a genuine authority wall or the final outcome")
@@ -149,11 +172,11 @@ describe("portfolio operator", () => {
     expect(workOrders[30]).toMatchObject({ workOrderId: "WO-MAO-031", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[31]).toMatchObject({ workOrderId: "WO-MAO-032", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[32]).toMatchObject({ workOrderId: "WO-MAO-033", status: "DEFERRED_PROVIDER_UNAVAILABLE", resumable: true })
-    expect(workOrders[33]).toMatchObject({ workOrderId: "WO-MAO-034", status: "READY", riskClass: "R3" })
+    expect(workOrders[33]).toMatchObject({ workOrderId: "WO-MAO-034", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[34]).toMatchObject({ workOrderId: "WO-MAO-035", status: "PENDING", riskClass: "R3" })
     expect(workOrders[35]).toMatchObject({ workOrderId: "WO-MAO-036", status: "PENDING", riskClass: "R3" })
     expect([30, 31, 34, 35, 36, 37].map((number) => workOrders[number - 1].status))
-      .toEqual(["COMPLETE", "COMPLETE", "READY", "PENDING", "PENDING", "PENDING"])
+      .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "PENDING", "PENDING", "PENDING"])
     expect(workOrders).toHaveLength(62)
     expect(workOrders.at(-1)?.workOrderId).toBe("WO-MAO-062")
     expect(workOrders.every((workOrder) => "ownerOperationsAllowed" in workOrder && workOrder.ownerOperationsAllowed === false)).toBe(true)
