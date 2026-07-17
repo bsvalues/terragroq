@@ -1,6 +1,6 @@
 # WO-MAO-035 — Provider Health, Circuit Breakers, and Reroute
 
-Result: `INVALIDATED / REPROOF_REQUIRED / PENDING`
+Result: `BLOCKED / DIRECT_WO_MAO_033_EDGE_REQUIRES_SEPARATE_CORRECTION`
 
 ## Scope
 
@@ -9,9 +9,14 @@ failure observations, projected circuit-breaker/backoff state, and selected fall
 proof is superseded: caller-invented provider records, stale observations, and stateless breaker input
 could manufacture a passing result without a host observation or durable state transition.
 
-The historical implementation remains preserved behind an unconditional typed invalidation wall. It
-cannot emit a success artifact until WO-MAO-031 and WO-MAO-034 are re-proved and WO-MAO-035 is
-redesigned around trusted observations and stateful breaker transitions.
+WO-MAO-031 and WO-MAO-034 are now re-proved. The historical implementation remains preserved behind
+an unconditional typed invalidation wall, but WO-MAO-035 cannot safely proceed yet because it still
+has a direct `WO-MAO-033` dependency edge. The consumer-specific settlement
+`WO-MAO-034<-WO-MAO-033` does not satisfy or launder the separate `WO-MAO-035<-WO-MAO-033` edge.
+
+WO-MAO-035 can resume only after that direct edge receives a separate ratified correction or an
+independently verified consumer-specific settlement, and after the health/reroute model is redesigned
+around trusted observations and stateful breaker transitions.
 
 ## Historical original artifacts (superseded)
 
@@ -68,5 +73,6 @@ These runs described the invalidated implementation and do not prove the current
 
 ## Next transition
 
-`WO-MAO-035` is `PENDING / REPROOF_REQUIRED`. The required sequence is WO-MAO-031, WO-MAO-034,
-WO-MAO-035, then WO-MAO-036. Phase 5 remains pending after that ordered chain.
+`WO-MAO-035` is `BLOCKED / DIRECT_WO_MAO_033_EDGE_REQUIRES_SEPARATE_CORRECTION`. The required
+sequence is now WO-MAO-035 dependency-edge correction, WO-MAO-035 re-proof, WO-MAO-036 re-proof, then
+Phase 5. WO-MAO-037 remains not retryable while WO-MAO-036 is incomplete.

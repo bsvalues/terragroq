@@ -9,9 +9,10 @@ provider records plus the WO-MAO-029 fixture and projecting hardcoded contract c
 superseded because no provider operation, trusted observation, or executable adapter transaction was
 required to manufacture the conformance result.
 
-The historical implementation remains preserved behind an unconditional typed invalidation wall. It
-cannot emit a success artifact until WO-MAO-031, WO-MAO-034, and WO-MAO-035 are re-proved and the
-suite is redesigned to consume independently captured operational evidence.
+The historical implementation remains preserved behind an unconditional typed invalidation wall.
+WO-MAO-031 and WO-MAO-034 are re-proved, but WO-MAO-036 cannot emit a success artifact until
+WO-MAO-035 is re-proved and the suite is redesigned to consume independently captured operational
+evidence.
 
 ## Historical original artifacts (superseded)
 
@@ -81,5 +82,5 @@ These runs described the invalidated implementation and do not prove the current
 
 ## Next transition
 
-`WO-MAO-036` is `PENDING / REPROOF_REQUIRED`. The required sequence is WO-MAO-031, WO-MAO-034,
-WO-MAO-035, then WO-MAO-036. Phase 5 remains pending after that ordered chain.
+`WO-MAO-036` is `PENDING / REPROOF_REQUIRED`. The required sequence is WO-MAO-035 dependency-edge
+correction, WO-MAO-035 re-proof, then WO-MAO-036. Phase 5 remains pending after that ordered chain.

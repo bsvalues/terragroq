@@ -139,7 +139,7 @@ persistence, command execution, and any production mutation.
 
 ### `GOAL-WOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
 
-Status: `ACTIVE / WO-MAO-031 REPROVED / WO-MAO-034 BLOCKED_PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED`
+Status: `ACTIVE / WO-MAO-034 REPROVED / WO-MAO-035 BLOCKED_DIRECT_WO_MAO_033_EDGE`
 
 Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
@@ -160,8 +160,8 @@ Work Orders: `WO-MAO-001` through `WO-MAO-062`. Dependencies and reservations,
 not numeric serialization, determine the eligible set. The executable registry
 is `components/operator/multi-agent-operator-registry.ts`.
 
-Current transition: `WO-MAO-001` through `WO-MAO-032` are complete, with `WO-MAO-033`
-remaining `DEFERRED / PROVIDER_UNAVAILABLE`.
+Current transition: `WO-MAO-001` through `WO-MAO-032` and `WO-MAO-034` are complete, with
+`WO-MAO-033` remaining `DEFERRED / PROVIDER_UNAVAILABLE`.
 The local contracts now include the recoverable eligible-set scheduler and deterministic team
 topology/fan-in projection, bounded isolated-workspace lifecycle, durable one-writer handoff, and the
 deterministic hard-ceiling priority/fairness admission policy. WO-MAO-028 adds pure/static scheduler model
@@ -171,12 +171,12 @@ and sanitized evidence without provider-contract dispatch. WO-MAO-031 has been r
 hardened contract using opaque host plan handles and independently captured role evidence. Historical
 WO-MAO-035 and WO-MAO-036 implementations/reports remain present, but post-merge assurance
 invalidated their completion evidence and mechanically walled their success entrypoints. They require
-ordered redesign and re-proof only after WO-MAO-034 is complete. The deferred WO-MAO-033 edge may
-release WO-MAO-034 only through an exact independently verified settlement bound to WO-MAO-032 and
-authenticated by a canonical provider-assessment trust pin or equivalent immutable evidence-ledger
-anchor. No active production trust pin exists, so WO-MAO-034 is
-`BLOCKED / PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED`; WO-MAO-035, WO-MAO-036, and WO-MAO-037 remain
-pending. Durable provider dispatch and automated GitHub delivery remain unproven.
+ordered redesign and re-proof only after their separate dependency edges are corrected. The deferred
+WO-MAO-033 edge released WO-MAO-034 through an exact independently verified settlement bound to
+WO-MAO-032 and authenticated by a canonical provider-assessment trust pin. That settlement is
+consumer-specific and cannot satisfy the separate direct `WO-MAO-035<-WO-MAO-033` edge, so
+WO-MAO-035 is `BLOCKED / DIRECT_WO_MAO_033_EDGE_REQUIRES_SEPARATE_CORRECTION`; WO-MAO-036 and
+WO-MAO-037 remain pending. Durable provider dispatch and automated GitHub delivery remain unproven.
 
 Communication contract: routine implementation, diagnosis, retry, review,
 merge, verification, cleanup, and continuation remain agent-owned. William is

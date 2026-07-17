@@ -110,11 +110,12 @@ WO-MAO-023 eligible-set scheduler, the WO-MAO-024 team-topology contract, the bo
 isolated-workspace manager, the WO-MAO-026 reservation-aware handoff contract, the WO-MAO-027 durable
 concurrency/fairness scheduler extension, the WO-MAO-028 pure deterministic scheduler model-check
 harness, provider conformance `WO-MAO-029`, the post-merge-hardened current-session coordinator
-adapter `WO-MAO-030`, re-proved role adapters `WO-MAO-031`, and provider assessment `WO-MAO-032`
-are complete. Historical WO-MAO-035 and WO-MAO-036 code/reports remain present, but their evidence
-and callable success paths remain invalidated pending ordered re-proof.
-`WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; `WO-MAO-034` is
-`BLOCKED / PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED`; later Work Orders remain pending.
+adapter `WO-MAO-030`, re-proved role adapters `WO-MAO-031`, provider assessment `WO-MAO-032`, and
+cross-provider routing `WO-MAO-034` are complete. Historical WO-MAO-035 and WO-MAO-036 code/reports
+remain present, but their evidence and callable success paths remain invalidated pending ordered
+re-proof.
+`WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; `WO-MAO-035` is
+`BLOCKED / DIRECT_WO_MAO_033_EDGE_REQUIRES_SEPARATE_CORRECTION`; later Work Orders remain pending.
 The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
@@ -124,14 +125,11 @@ Phase 2 and the first Phase 3 slices prove local envelope, DAG, atomic reservati
 provider-eligibility, lifecycle, lease, checkpoint, evidence-ledger, owner-meter, recoverable
 eligible-set scheduling, deterministic team-topology, lease/evidence-bound isolated-workspace lifecycle,
 one-writer handoff, hard-ceiling priority/fairness admission planning, and hardened current-session
-coordinator assignment translation and role lifecycle proof. Cross-provider routing, provider
-health/reroute, and provider conformance require ordered re-proof at `WO-MAO-034`, `WO-MAO-035`,
-then `WO-MAO-036`. Releasing the deferred WO-MAO-033 edge into WO-MAO-034 additionally requires an
-exact, independently verified `WO-MAO-034<-WO-MAO-033` settlement bound to completed WO-MAO-032 and
-authenticated by a canonical provider-assessment trust pin or equivalent immutable evidence-ledger
-anchor. The
-redundant direct WO-MAO-033 dependencies on WO-MAO-035/036 remain fail-closed pending separate
-ratified correction. Durable
+coordinator assignment translation, role lifecycle proof, and static cross-provider routing with the
+consumer-specific `WO-MAO-034<-WO-MAO-033` settlement authenticated by a canonical provider-assessment
+trust pin. Provider health/reroute and provider conformance still require ordered re-proof at
+`WO-MAO-035`, then `WO-MAO-036`. The redundant direct WO-MAO-033 dependencies on WO-MAO-035/036
+remain fail-closed pending separate ratified correction. Durable
 provider dispatch and automated GitHub delivery remain unproven. The WO-MAO-028 harness proves only
 pure/static model behavior; it performs no provider dispatch or runtime execution.
 

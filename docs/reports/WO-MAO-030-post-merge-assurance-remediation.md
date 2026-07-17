@@ -25,11 +25,12 @@ attacked current-session-only, fail-closed contract.
 
 Downstream assurance superseded the transient-hold projection. This report recorded the original
 invalidated state at WO-MAO-030 hardening time. Current successor evidence re-proves WO-MAO-031 and
-blocks WO-MAO-034 at `PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED`; WO-MAO-035, WO-MAO-036, and
-WO-MAO-037 remain pending behind that gate. Historical code and reports are retained as evidence, not
-treated as completed proof. The mandatory order is WO-MAO-030 hardening, WO-MAO-031 redesign/re-proof,
-the independently verified WO-MAO-032/WO-MAO-033 settlement gate for WO-MAO-034, WO-MAO-034
-re-review/re-proof, WO-MAO-035 re-proof, WO-MAO-036 re-proof, then Phase 5.
+WO-MAO-034; WO-MAO-035 is blocked on its separate direct WO-MAO-033 dependency edge, while
+WO-MAO-036 and WO-MAO-037 remain pending behind that gate. Historical code and reports are retained
+as evidence, not treated as completed proof. The mandatory order is WO-MAO-030 hardening, WO-MAO-031
+redesign/re-proof, the independently verified WO-MAO-032/WO-MAO-033 settlement gate for WO-MAO-034,
+WO-MAO-034 re-review/re-proof, WO-MAO-035 dependency-edge correction and re-proof, WO-MAO-036
+re-proof, then Phase 5.
 
 ## Descendant invalidations
 

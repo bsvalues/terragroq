@@ -2,7 +2,7 @@
 
 **Work Order:** `WO-MAO-034`
 
-**Status:** `BLOCKED / PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED`
+**Status:** `PASS / REPROVED`
 
 **Control-plane risk:** `R3`
 
@@ -14,33 +14,32 @@ WO-MAO-033 exactly `DEFERRED / PROVIDER_UNAVAILABLE`; consumer-specific verified
 
 ## Current assurance outcome
 
-`WO-MAO-031` has been re-proved, so the historical blanket invalidation wall has been narrowed to the
-actual remaining gate. `WO-MAO-034` now validates routing inputs only after the consumer-specific
-Claude unavailable-provider settlement is verified through the separately authenticated
-provider-assessment trust registry.
+`WO-MAO-034` is re-proved. The cross-provider routing and review model now validates the
+consumer-specific Claude unavailable-provider settlement through the canonical
+provider-assessment trust registry before it certifies routing.
 
-The embedded production provider-assessment pin registry currently contains no active trust record.
-As a result, the `WO-MAO-034<-WO-MAO-033` settlement cannot be authenticated and the Work Order fails
-closed with `CROSS_PROVIDER_SETTLEMENT_WALL`.
+The embedded production provider-assessment pin registry contains one immutable active record for the
+WO-MAO-032 Claude provider assessment. The record contains public Ed25519 verification keys,
+fingerprints, hashes, status-chain events, a ledger-anchor binding, and signatures. No private key,
+password, token, credential, cookie, or session material is stored or required.
 
-This is the correct ordered stop. It does not complete WO-MAO-034, does not complete WO-MAO-033, does
-not enable Claude, and does not release WO-MAO-035, WO-MAO-036, or WO-MAO-037.
+## Re-proved behavior
 
-## Re-proofed fail-closed behavior
-
-- valid-looking routing fixtures must include the explicit `dependencySettlement` record;
+- valid routing fixtures must include the explicit `dependencySettlement` record;
 - the settlement must bind `consumerWorkOrderId=WO-MAO-034`;
 - the assessment must bind `assessmentWorkOrderId=WO-MAO-032`;
 - the subject must bind `subjectWorkOrderId=WO-MAO-033`;
 - the subject lifecycle must remain exactly `DEFERRED / PROVIDER_UNAVAILABLE`;
 - callers may supply only a registry ID/version reference, not raw roots, writers, bundles, anchors,
   signatures, or trust material;
-- missing or unauthenticated production pin records fail closed before routing can be certified.
+- the unavailable Claude provider contributes no routing capability;
+- same-provider hosted Codex independent review remains permitted only inside the static planning
+  model.
 
 ## Explicit non-claims
 
 ```text
-WO_MAO_034_COMPLETE: false
+WO_MAO_034_COMPLETE: true
 WO_MAO_033_COMPLETE: false
 CLAUDE_PROVIDER_ENABLED: false
 PROVIDER_CONTRACT_DISPATCH_ALLOWED: false
@@ -57,15 +56,21 @@ OWNER_RELAY_REQUIRED: false
 
 ## Validation
 
-- focused cross-provider routing Vitest:
-  `tests/multi-agent-cross-provider-routing-review.test.ts`, PASS when run with the focused MAO suite
-  after narrowing the stale invalidation wall to the authenticated-settlement wall.
+- focused provider-settlement/routing/registry Vitest:
+  `tests/multi-agent-provider-unavailable-settlement.test.ts`,
+  `tests/multi-agent-cross-provider-routing-review.test.ts`,
+  `tests/multi-agent-operator-registry.test.ts`,
+  `tests/multi-agent-capability-registry.test.ts`,
+  `tests/portfolio-operator.test.ts`, and
+  `tests/portfolio-operator-surface.test.ts`, PASS.
 
 ## Next transition
 
-The next valid action is not WO-MAO-035, WO-MAO-036, or WO-MAO-037. The ordered MAO chain is blocked
-at `WO-MAO-034` until a reviewed canonical provider-assessment trust pin or equivalent immutable
-evidence-ledger anchor is authorized and integrated.
+`WO-MAO-034` is complete, but the chain does not advance to WO-MAO-036 or WO-MAO-037.
+`WO-MAO-035` remains blocked because it has its own direct `WO-MAO-033` dependency edge. The
+consumer-specific `WO-MAO-034<-WO-MAO-033` settlement cannot satisfy, launder, or reuse that separate
+edge. The next valid action is a ratified correction or separately verified settlement for the
+WO-MAO-035 direct dependency before provider-health/reroute re-proof.
 
 ## Owner-operation evidence
 

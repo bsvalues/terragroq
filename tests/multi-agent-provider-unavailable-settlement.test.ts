@@ -449,16 +449,33 @@ describe("provider-unavailable dependency settlement", () => {
     })).toThrow(/RAW_CALLER_TRUST_REJECTED/)
   })
 
-  it("exposes no production root-registration surface and rejects unknown registry references", () => {
+  it("exposes only the canonical production pin and rejects unknown registry references", () => {
     const probe = spawnSync(process.execPath, ["--input-type=module", "-e", [
       'import * as registry from "./scripts/multi-agent-operator/provider-assessment-trust-registry.mjs"',
-      'console.log(JSON.stringify({keys:Object.keys(registry).sort(),metadata:registry.PROVIDER_ASSESSMENT_PIN_REGISTRY_METADATA,record:registry.loadCanonicalProviderTrustRecord("williamos-provider-assessment-pins",1)}))',
+      'import { CLAUDE_PROVIDER_UNAVAILABLE_ASSESSMENT } from "./scripts/multi-agent-operator/provider-assessment-artifacts.mjs"',
+      'import { verifyPinnedProviderAssessmentTrustBundle, verifyProviderUnavailableAssessment } from "./scripts/multi-agent-operator/provider-unavailable-settlement.mjs"',
+      'const trust=verifyPinnedProviderAssessmentTrustBundle({registryId:"williamos-provider-assessment-pins",registryVersion:1})',
+      'const assessment=verifyProviderUnavailableAssessment(CLAUDE_PROVIDER_UNAVAILABLE_ASSESSMENT,trust)',
+      'console.log(JSON.stringify({keys:Object.keys(registry).sort(),metadata:registry.PROVIDER_ASSESSMENT_PIN_REGISTRY_METADATA,record:registry.loadCanonicalProviderTrustRecord("williamos-provider-assessment-pins",1),assessment:{ok:assessment.ok,independentlyAuthoritative:assessment.independentlyAuthoritative,authorityGranted:assessment.authorityGranted,dispatchPerformed:assessment.dispatchPerformed}}))',
     ].join(";")], { cwd: process.cwd(), encoding: "utf8" })
     expect(probe.status).toBe(0)
     const result = JSON.parse(probe.stdout)
     expect(result.keys).toEqual(["PROVIDER_ASSESSMENT_PIN_REGISTRY_METADATA", "loadCanonicalProviderTrustRecord"])
-    expect(result.metadata).toMatchObject({ activeRecordCount: 0, mutableRegistrationAllowed: false })
-    expect(result.record).toBeNull()
+    expect(result.metadata).toMatchObject({ activeRecordCount: 1, mutableRegistrationAllowed: false })
+    expect(result.record).toMatchObject({
+      registryRecord: {
+        registryId: "williamos-provider-assessment-pins",
+        registryVersion: 1,
+        status: "ACTIVE",
+        immutable: true,
+      },
+    })
+    expect(result.assessment).toMatchObject({
+      ok: true,
+      independentlyAuthoritative: true,
+      authorityGranted: false,
+      dispatchPerformed: false,
+    })
     expect(() => verifyPinnedProviderAssessmentTrustBundle({
       registryId: "caller-minted-root",
       registryVersion: 1,

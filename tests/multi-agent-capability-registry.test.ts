@@ -199,15 +199,15 @@ describe("multi-agent executable capability inventory", () => {
       ]),
     })
     expect(capability("cross-provider-routing-review-model")).toMatchObject({
-      status: "AVAILABLE_UNPROVEN",
+      status: "PROVEN",
       executionClass: "NON_EXECUTABLE",
-      reasonCode: "PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED",
+      reasonCode: "CROSS_PROVIDER_ROUTING_REVIEW_PROVEN",
       adapterRef: "scripts/multi-agent-operator/cross-provider-routing-review.mjs",
       authorityGrantRefs: [],
       trustGateRef: null,
       restrictions: expect.arrayContaining([
         "Static routing and review planning only",
-        "WO-MAO-034 cannot pass until the WO-MAO-034<-WO-MAO-033 settlement is authenticated through a pinned trust record",
+        "WO-MAO-034 consumes only the consumer-specific WO-MAO-034<-WO-MAO-033 settlement",
         "Callers cannot submit roots, writers, trust bundles, ledger anchors, signatures, or raw trust material",
         "Unavailable providers contribute no capability",
         "No provider dispatch, GitHub review automation, runtime activation, or authority grant",
@@ -216,7 +216,7 @@ describe("multi-agent executable capability inventory", () => {
     expect(capability("provider-health-reroute-model")).toMatchObject({
       status: "AVAILABLE_UNPROVEN",
       executionClass: "NON_EXECUTABLE",
-      reasonCode: "POST_MERGE_ASSURANCE_INVALIDATED_PENDING_REPROOF",
+      reasonCode: "WO_MAO_035_DIRECT_WO_MAO_033_EDGE_REQUIRES_SEPARATE_CORRECTION",
       adapterRef: "scripts/multi-agent-operator/provider-health-reroute.mjs",
       authorityGrantRefs: [],
       trustGateRef: null,

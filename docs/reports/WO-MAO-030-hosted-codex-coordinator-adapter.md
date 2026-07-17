@@ -57,13 +57,12 @@ re-review, and transient WO-MAO-035 assurance hold are recorded in
 `docs/reports/WO-MAO-030-post-merge-assurance-remediation.md`.
 
 Downstream assurance invalidated the historical WO-MAO-031 and WO-MAO-034 completion evidence
-without deleting their code or reports. Successor evidence has since re-proved WO-MAO-031, keeps
-WO-MAO-033 deferred and resumable, and blocks WO-MAO-034 at
-`PROVIDER_ASSESSMENT_TRUST_PIN_REQUIRED`. Re-proof order is WO-MAO-030, WO-MAO-031, WO-MAO-034, then
-WO-MAO-035. WO-MAO-031 completion alone does not release WO-MAO-034: readiness also requires the
-completed WO-MAO-032 assessment, WO-MAO-033 exactly `DEFERRED / PROVIDER_UNAVAILABLE`, and
-independently verified consumer-specific settlement `WO-MAO-034<-WO-MAO-033`. The UI remains
-fail-closed until the verified DAG artifact and provenance are integrated.
+without deleting their code or reports. Successor evidence has since re-proved WO-MAO-031 and
+WO-MAO-034, keeps WO-MAO-033 deferred and resumable, and blocks WO-MAO-035 on its separate direct
+WO-MAO-033 dependency edge. Re-proof order is WO-MAO-030, WO-MAO-031, WO-MAO-034, then WO-MAO-035.
+WO-MAO-031 completion alone did not release WO-MAO-034: readiness also required the completed
+WO-MAO-032 assessment, WO-MAO-033 exactly `DEFERRED / PROVIDER_UNAVAILABLE`, and independently
+verified consumer-specific settlement `WO-MAO-034<-WO-MAO-033`.
 
 ## Exact boundary
 
