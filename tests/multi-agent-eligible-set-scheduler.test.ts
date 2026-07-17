@@ -471,6 +471,45 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
   }, 15_000)
 
+  it("quiesces a delayed startup acknowledgement before removing its same-nonce renewed owner", () => {
+    const statePath = configuration().statePath
+    try {
+      acquireSchedulerLock(statePath, {
+        timeoutMs: 500, leaseDurationMs: 1_000, heartbeatIntervalMs: 20,
+        heartbeatStartTimeoutMs: 25, heartbeatStopTimeoutMs: 500,
+        heartbeatTestDelays: { startAckMs: 100, stopAckMs: 0 },
+      })
+      throw new Error("expected bounded heartbeat startup wall")
+    } catch (error) {
+      expect(error).toBeInstanceOf(SchedulerLockLeaseError)
+      expect(error).toMatchObject({ code: "SCHEDULER_LOCK_WALL", detail: "HEARTBEAT_START_REQUIRED" })
+      expect((error as SchedulerLockLeaseError & { heartbeatGeneration: number }).heartbeatGeneration).toBeGreaterThan(1)
+    }
+    expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
+  })
+
+  it("waits for a bounded delayed stop acknowledgement before deleting the owned lock", () => {
+    const statePath = configuration().statePath
+    const unlock = acquireSchedulerLock(statePath, {
+      timeoutMs: 500, leaseDurationMs: 1_000, heartbeatIntervalMs: 20,
+      heartbeatStartTimeoutMs: 500, heartbeatStopTimeoutMs: 500,
+      heartbeatTestDelays: { startAckMs: 0, stopAckMs: 100 },
+    })
+    unlock()
+    expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
+  })
+
+  it("preserves the owned lock when bounded heartbeat stop acknowledgement is unavailable", () => {
+    const statePath = configuration().statePath
+    const unlock = acquireSchedulerLock(statePath, {
+      timeoutMs: 500, leaseDurationMs: 1_000, heartbeatIntervalMs: 20,
+      heartbeatStartTimeoutMs: 500, heartbeatStopTimeoutMs: 25,
+      heartbeatTestDelays: { startAckMs: 0, stopAckMs: 100 },
+    })
+    expect(() => unlock()).toThrowError(/SCHEDULER_LOCK_WALL:HEARTBEAT_STOP_REQUIRED/)
+    expect(fs.existsSync(`${statePath}.lock/owner.json`)).toBe(true)
+  })
+
   it("fails the ownership guard and preserves a fenced successor", () => {
     const statePath = configuration().statePath
     const unlock = acquireSchedulerLock(statePath, { timeoutMs: 200, leaseDurationMs: 200, heartbeatIntervalMs: 50 })
@@ -482,6 +521,29 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     expect(() => (unlock as typeof unlock & { assertOwned: () => void }).assertOwned()).toThrowError(/SCHEDULER_LOCK_WALL:LEASE_LOST/)
     unlock()
     expect(JSON.parse(fs.readFileSync(ownerPath, "utf8"))).toEqual(successor)
+  })
+
+  it("atomically quarantines release ownership before a successor acquires the live path", () => {
+    const statePath = configuration().statePath
+    let successorUnlock: (ReturnType<typeof acquireSchedulerLock> & { assertOwned: () => void }) | null = null
+    let quarantinedOwnerPath: string | null = null
+    const unlock = acquireSchedulerLock(statePath, {
+      timeoutMs: 500, leaseDurationMs: 1_000, heartbeatIntervalMs: 20,
+      releaseQuarantineHook: ({ quarantinePath }: { quarantinePath: string }) => {
+        quarantinedOwnerPath = path.join(quarantinePath, "owner.json")
+        successorUnlock = acquireSchedulerLock(statePath, {
+          timeoutMs: 500, leaseDurationMs: 1_000, heartbeatIntervalMs: 20,
+        }) as ReturnType<typeof acquireSchedulerLock> & { assertOwned: () => void }
+      },
+    })
+    unlock()
+    expect(quarantinedOwnerPath).not.toBeNull()
+    expect(fs.existsSync(quarantinedOwnerPath!)).toBe(false)
+    expect(successorUnlock).not.toBeNull()
+    expect(() => successorUnlock!.assertOwned()).not.toThrow()
+    expect(fs.existsSync(`${statePath}.lock/owner.json`)).toBe(true)
+    successorUnlock!()
+    expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
   })
 
   it("restores rather than deletes a lock renewed during stale-owner quarantine", () => {
