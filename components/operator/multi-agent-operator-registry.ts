@@ -80,6 +80,10 @@ import {
   isVerifiedWoMao053ResilienceSafetyRollupEvidence,
 } from "@/components/operator/multi-agent-resilience-safety-rollup-registry"
 import {
+  MULTI_AGENT_CERTIFICATION_PORTFOLIO_EVIDENCE,
+  isVerifiedWoMao054CertificationPortfolioEvidence,
+} from "@/components/operator/multi-agent-certification-portfolio-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -248,6 +252,7 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-051", "docs/reports/WO-MAO-051-status-evidence-owner-decision-ux.md"],
   ["WO-MAO-052", "docs/reports/WO-MAO-052-kill-revoke-rollback-incident-procedure.md"],
   ["WO-MAO-053", "docs/reports/WO-MAO-053-resilience-safety-rollup.md"],
+  ["WO-MAO-054", "docs/reports/WO-MAO-054-certification-portfolio-selection.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -356,6 +361,9 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao053ResilienceSafetyRollupEvidence(MULTI_AGENT_RESILIENCE_SAFETY_ROLLUP_EVIDENCE)
     ? [workOrderId(53)]
+    : []),
+  ...(isVerifiedWoMao054CertificationPortfolioEvidence(MULTI_AGENT_CERTIFICATION_PORTFOLIO_EVIDENCE)
+    ? [workOrderId(54)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])

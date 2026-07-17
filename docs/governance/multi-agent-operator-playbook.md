@@ -391,8 +391,9 @@ audit, WO-MAO-046 proved as a retry/idempotency/duplicate-prevention model, WO-M
 worker/coordinator recovery, WO-MAO-048 proved provider outage/failover handling, WO-MAO-049
 proved stale-base/CI/review/merge-race handling, and WO-MAO-050 proved malicious/defective
 worker containment, WO-MAO-051 proved status, evidence, and owner-decision UX, and WO-MAO-052
-proved the kill/revoke/rollback/incident procedure and WO-MAO-053 proved the resilience and safety
-rollup. WO-MAO-054 is `READY`; the next ordered gate is WO-MAO-054.
+proved the kill/revoke/rollback/incident procedure, WO-MAO-053 proved the resilience and safety
+rollup, and WO-MAO-054 selected the certification portfolio. WO-MAO-055 is `READY`; the next ordered
+gate is WO-MAO-055.
 
 ### Phase 5 — GitHub delivery engine
 

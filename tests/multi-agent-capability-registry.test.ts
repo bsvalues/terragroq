@@ -463,6 +463,16 @@ describe("multi-agent executable capability inventory", () => {
         "WO-MAO-053 is complete; WO-MAO-054 is now READY through retained prerequisites",
       ]),
     })
+    expect(capability("certification-portfolio-selection-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_CERTIFICATION_PORTFOLIO_SELECTION_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/certification-portfolio-selection.mjs",
+      restrictions: expect.arrayContaining([
+        "Selection model only; it does not execute selected lanes, dispatch providers, call GitHub, or certify unattended operation",
+        "WO-MAO-054 is complete; WO-MAO-055 is now READY through retained prerequisites",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
