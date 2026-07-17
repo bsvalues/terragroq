@@ -139,7 +139,7 @@ persistence, command execution, and any production mutation.
 
 ### `GOAL-WOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
 
-Status: `ACTIVE / WO-MAO-038 COMPLETE / WO-MAO-039 READY`
+Status: `ACTIVE / WO-MAO-039 COMPLETE / WO-MAO-040 READY`
 
 Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
@@ -176,15 +176,17 @@ local nested adapter rejected. WO-MAO-037 proves governed branch/commit/push lif
 reserved paths, secret scan, attribution, rollback, and safety gates, without adding a command runner.
 WO-MAO-038 proves PR packet linkage from verified Work Order, authority, validation, and evidence
 records without creating a pull request from the model.
+WO-MAO-039 proves CI/review ingestion and failure classification without calling GitHub, rerunning
+checks, resolving threads, remediating, or merging.
 The exact deferred WO-MAO-033 edge
 into WO-MAO-034 is now independently settled through the canonical immutable version-2 record bound
 to WO-MAO-032, the consumer envelope, and source-assessment hash. WO-MAO-034 is `COMPLETE` through
 its zero-input canonical routing proof and independently approved exact implementation candidate.
 The separately ratified dependency-graph correction removes only WO-MAO-033's redundant direct
-edges from WO-MAO-035/036. WO-MAO-035 through WO-MAO-038 are now `COMPLETE`; WO-MAO-039 is `READY`.
+edges from WO-MAO-035/036. WO-MAO-035 through WO-MAO-039 are now `COMPLETE`; WO-MAO-040 is `READY`.
 WO-MAO-033 remains deferred and resumable, and the WO-MAO-034 settlement remains exact and
 unchanged. Claude remains unavailable and disabled. Durable provider dispatch
-and automated GitHub check/review ingestion remain unproven.
+and automated remediation/re-review remain unproven.
 
 Communication contract: routine implementation, diagnosis, retry, review,
 merge, verification, cleanup, and continuation remain agent-owned. William is

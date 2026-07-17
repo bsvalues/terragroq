@@ -120,7 +120,8 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 WO-MAO-034 is `COMPLETE`. WO-MAO-035 is `COMPLETE` through the canonical provider-health/reroute
 registry; WO-MAO-036 is `COMPLETE` through the canonical provider-conformance suite; WO-MAO-037 is
 `COMPLETE` through the guarded branch/commit/push lifecycle plan; WO-MAO-038 is `COMPLETE` through
-the canonical PR creation/packet linkage plan; WO-MAO-039 is `READY`. That
+the canonical PR creation/packet linkage plan; WO-MAO-039 is `COMPLETE` through the canonical
+CI/review ingestion plan; WO-MAO-040 is `READY`. That
 settlement remains exact and cannot be retargeted. A separately ratified graph correction removes only the redundant direct
 WO-MAO-033 edges from WO-MAO-035/036. WO-MAO-033 remains deferred and resumable. The
 mandatory sequence is WO-MAO-030 -> WO-MAO-031 -> verified settlement -> WO-MAO-034

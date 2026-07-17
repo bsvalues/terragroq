@@ -381,8 +381,9 @@ exact-candidate assurance; WO-MAO-033 stays deferred, Claude stays disabled, and
 outside that settlement. The separately ratified graph correction removes the redundant direct
 WO-MAO-033 edges from WO-MAO-035/036 without completing WO-MAO-033, changing the settlement, or
 weakening any retained dependency. With WO-MAO-035 and WO-MAO-036 re-proved through sealed
-registries, WO-MAO-037 proved as a guarded branch/commit/push lifecycle plan, and WO-MAO-038 proved
-as a deterministic PR packet linkage plan, WO-MAO-039 is `READY` and remains the next Phase 5 gate.
+registries, WO-MAO-037 proved as a guarded branch/commit/push lifecycle plan, WO-MAO-038 proved
+as a deterministic PR packet linkage plan, and WO-MAO-039 proved as a CI/review ingestion plan,
+WO-MAO-040 is `READY` and remains the next Phase 5 gate.
 
 ### Phase 5 — GitHub delivery engine
 
