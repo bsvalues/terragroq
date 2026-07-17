@@ -183,17 +183,24 @@ describe("multi-agent executable capability inventory", () => {
       ]),
     })
     expect(capability("hosted-codex-role-adapters")).toMatchObject({
-      status: "AVAILABLE_UNPROVEN",
+      status: "PROVEN",
       executionClass: "WORKER_CANDIDATE",
-      coordinationEligible: false,
-      reasonCode: "POST_MERGE_ASSURANCE_INVALIDATED_PENDING_REPROOF",
+      coordinationEligible: true,
+      reasonCode: "HOSTED_CODEX_ONE_CYCLE_ROLE_LIFECYCLE_PROVEN",
       adapterRef: "scripts/multi-agent-operator/codex-role-adapters.mjs",
       trustGateRef: PREVENTIVE_TRUST_GATE_V2_REF,
       restrictions: expect.arrayContaining([
+        "Current-session role lifecycle proof only",
+        "Exactly one bounded remediation and re-review cycle; no multi-cycle or unattended claim",
         "Assurance remains independent and cannot remediate its own finding",
         "Remediation is bound to the original builder and the envelope remediation budget",
+        "Opaque same-plan handles, live authority fences, bounded retries, and lookup-only ambiguous-effect reconciliation remain mandatory",
         "Provider-contract dispatch remains false",
         "No durable persistence, service worker, runtime activation, or authority grant",
+      ]),
+      evidence: expect.arrayContaining([
+        "tests/multi-agent-codex-coordinator-adapter.test.ts",
+        "docs/reports/WO-MAO-031-codex-builder-assurance-remediation-adapters.md",
       ]),
     })
     expect(capability("cross-provider-routing-review-model")).toMatchObject({
@@ -257,7 +264,12 @@ describe("multi-agent executable capability inventory", () => {
     })
     expect(MULTI_AGENT_CAPABILITY_INVENTORY.filter((entry) => entry.coordinationEligible)
       .map((entry) => entry.capabilityId))
-      .toEqual(["hosted-codex-session", "codex-native-subagent-team", "hosted-codex-coordinator-adapter"])
+      .toEqual([
+        "hosted-codex-session",
+        "codex-native-subagent-team",
+        "hosted-codex-coordinator-adapter",
+        "hosted-codex-role-adapters",
+      ])
   })
 
   it("requires status, adapter, authority, and preventive trust proof for an executable worker", () => {

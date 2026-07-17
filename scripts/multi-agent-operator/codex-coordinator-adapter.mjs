@@ -11,6 +11,8 @@ import {
   verifyCodexHostSessionIdentity,
 } from "./codex-provider-conformance.mjs"
 import {
+  isHostedCodexAtomicAuthorityFenceRejection,
+  isHostedCodexObservationPending,
   loadCanonicalHostedCodexNativeBridge,
   loadCanonicalHostedCodexTrustRecord,
 } from "./codex-native-bridge-registry.mjs"
@@ -61,6 +63,16 @@ const MESSAGE_TYPES = new Set([
 const START_FIELDS = new Set(["assignmentHandle", "idempotencyKey"])
 const CANCELLATION_FIELDS = new Set(["assignmentHandle", "requestedBy", "reasonCode", "idempotencyKey"])
 const OBSERVATION_FIELDS = new Set(["assignmentHandle", "observationId"])
+const SEMANTIC_OBSERVATION_FIELDS = new Set(["assignmentHandle", "observationId", "expectedKind"])
+const SEMANTIC_ATTESTATION_FIELDS = new Set(["assignmentHandle", "evidenceHandle", "semanticConstraintId"])
+const ROLE_PAIR_FIELDS = new Set(["builderAssignmentHandle", "reviewerAssignmentHandle"])
+const AUTHORITY_FENCE_FIELDS = new Set([
+  "registryId", "registryVersion", "recordId", "fencingToken", "recordContentHash",
+  "workOrderId", "grantId", "authorityDecisionId", "status",
+])
+const ORIGINAL_EFFECT_BINDING_FIELDS = new Set([
+  "operation", "idempotencyKey", "effectDigest", "acceptedAuthorityFence",
+])
 const AUTHORITY_STATUS_CHAIN_FIELDS = new Set([
   "registryId", "registryVersion", "evaluationTime", "recordId", "latestFencingToken",
   "latestRecordContentHash", "records",
@@ -82,8 +94,31 @@ const CANCELLATION_REASONS = new Set([
   "AUTHORITY_REVOKED", "RESERVATION_CONFLICT", "SECURITY_WALL", "SUPERSEDED",
   "WORK_ORDER_CANCELLED",
 ])
+const SEMANTIC_CONSTRAINTS = deepFreeze({
+  BUILD_COMPLETE: {
+    providerState: "RUNNING",
+    evidenceType: "CODEX_ROLE_BUILD_COMPLETE",
+    attributes: { outcome: "COMPLETE", stage: "BUILD" },
+  },
+  REQUEST_CHANGES_ONE: {
+    providerState: "RUNNING",
+    evidenceType: "CODEX_ROLE_REQUEST_CHANGES",
+    attributes: { stage: "ASSURANCE_REVIEW", unresolvedThreads: 1, verdict: "REQUEST_CHANGES" },
+  },
+  REMEDIATION_COMPLETE_ONE: {
+    providerState: "SUCCEEDED",
+    evidenceType: "CODEX_ROLE_REMEDIATION_COMPLETE",
+    attributes: { outcome: "COMPLETE", remediationCycle: 1, stage: "REMEDIATION" },
+  },
+  APPROVED_ZERO_UNRESOLVED: {
+    providerState: "SUCCEEDED",
+    evidenceType: "CODEX_ROLE_APPROVED_ZERO_UNRESOLVED",
+    attributes: { stage: "REREVIEW", unresolvedThreads: 0, verdict: "APPROVED" },
+  },
+})
 const PLAN_HANDLES = new WeakMap()
 const ASSIGNMENT_HANDLES = new WeakMap()
+const SEMANTIC_EVIDENCE_HANDLES = new WeakMap()
 
 export class HostedCodexCoordinatorAdapterError extends Error {
   constructor(code, field, detail = null) {
@@ -306,6 +341,12 @@ function normalizeHostBridge(reference) {
     || bridge.durableTransport !== false
     || bridge.hostIdempotencyEnforced !== true
     || bridge.lookupMayPerformSideEffect !== false
+    || bridge.atomicAuthorityFenceEnforced !== true
+    || bridge.exactAuthorityFenceEcho !== true
+    || bridge.authorityFenceEchoRequired !== true
+    || bridge.authorityStatusRegistryId !== AUTHORITY_STATUS_REGISTRY_ID
+    || bridge.isAtomicAuthorityFenceRejection !== isHostedCodexAtomicAuthorityFenceRejection
+    || bridge.isObservationPending !== isHostedCodexObservationPending
     || bridge.authorityGranted !== false
     || [
       bridge.spawn, bridge.lookupSpawn, bridge.send, bridge.lookupSend,
@@ -581,6 +622,17 @@ function revalidateLiveAuthority(trusted, assignment) {
   binding.lastMaximumAgeMs = nextMaximumAgeMs
   binding.lastRecordExpiresAt = nextRecordExpiresAt
   binding.lastCurrentRecord = nextCurrentRecord
+  return deepFreeze({
+    registryId: AUTHORITY_STATUS_REGISTRY_ID,
+    registryVersion: binding.registryVersion,
+    recordId: binding.recordId,
+    fencingToken: binding.lastFencingToken,
+    recordContentHash: binding.lastRecordContentHash,
+    workOrderId: binding.workOrderId,
+    grantId: binding.grantId,
+    authorityDecisionId: binding.authorityDecisionId,
+    status: "ACTIVE",
+  })
 }
 
 function phaseFor(role) {
@@ -821,7 +873,7 @@ export function compileHostedCodexCoordinatorAdapter(input) {
 }
 
 function revalidateCoordinator(trusted, assignment) {
-  revalidateLiveAuthority(trusted, assignment)
+  const authorityFence = revalidateLiveAuthority(trusted, assignment)
   const session = trusted.coordinatorSession
   const workerId = trusted.coordinators.get(assignment.workOrderId)
   if (Date.now() >= Date.parse(session.expiresAt)) {
@@ -843,6 +895,7 @@ function revalidateCoordinator(trusted, assignment) {
     if (!(error instanceof CodexProviderConformanceError)) throw error
     wall("HOSTED_CODEX_SESSION_WALL", workerId, error.code)
   }
+  return authorityFence
 }
 
 function requireNativeBinding(trusted, assignment, field) {
@@ -917,8 +970,46 @@ function exactBridgeResult(raw, fields, expected, field) {
   return raw
 }
 
+function exactBridgeInvocation(raw, authorityFence, field, originalEffectBinding = null) {
+  const fields = new Set(["authorityFence", "hostEnforced", "result"])
+  if (originalEffectBinding !== null) fields.add("originalEffectBinding")
+  exactFields(raw, fields, `${field}.bridgeInvocation`)
+  if (raw.hostEnforced !== true) {
+    wall("HOSTED_CODEX_AUTHORITY_FENCE_WALL", `${field}.bridgeInvocation.hostEnforced`, "TRUE_REQUIRED")
+  }
+  exactFields(raw.authorityFence, AUTHORITY_FENCE_FIELDS, `${field}.bridgeInvocation.authorityFence`)
+  exactValue(
+    raw.authorityFence,
+    authorityFence,
+    "HOSTED_CODEX_AUTHORITY_FENCE_WALL",
+    `${field}.bridgeInvocation.authorityFence`,
+  )
+  if (originalEffectBinding !== null) {
+    exactFields(
+      raw.originalEffectBinding,
+      ORIGINAL_EFFECT_BINDING_FIELDS,
+      `${field}.bridgeInvocation.originalEffectBinding`,
+    )
+    exactFields(
+      raw.originalEffectBinding.acceptedAuthorityFence,
+      AUTHORITY_FENCE_FIELDS,
+      `${field}.bridgeInvocation.originalEffectBinding.acceptedAuthorityFence`,
+    )
+    exactValue(
+      raw.originalEffectBinding,
+      originalEffectBinding,
+      "HOSTED_CODEX_AUTHORITY_FENCE_WALL",
+      `${field}.bridgeInvocation.originalEffectBinding`,
+    )
+  }
+  if (!plainObject(raw.result)) {
+    wall("HOSTED_CODEX_BRIDGE_WALL", `${field}.bridgeInvocation.result`, "OBJECT_REQUIRED")
+  }
+  return raw.result
+}
+
 function sideEffectAttempt({
-  trusted, key, digest, operation, runtime, ambiguousState, perform, lookup, field,
+  trusted, key, digest, operation, runtime, ambiguousState, authorityFence, perform, lookup, field,
 }) {
   text(key, "idempotencyKey")
   const prior = trusted.idempotency.get(key)
@@ -930,19 +1021,44 @@ function sideEffectAttempt({
     }
     let raw
     try {
-      raw = lookup()
-    } catch {
+      const originalEffectBinding = deepFreeze({
+        operation: prior.operation,
+        idempotencyKey: prior.key,
+        effectDigest: prior.digest,
+        acceptedAuthorityFence: prior.acceptedAuthorityFence,
+      })
+      raw = exactBridgeInvocation(
+        lookup(originalEffectBinding),
+        authorityFence,
+        field,
+        originalEffectBinding,
+      )
+    } catch (error) {
+      if (isHostedCodexAtomicAuthorityFenceRejection(error)) {
+        wall("HOSTED_CODEX_AUTHORITY_FENCE_WALL", field, "HOST_ATOMIC_FENCE_REJECTED")
+      }
       wall("HOSTED_CODEX_BRIDGE_WALL", field, "HOST_SIDE_EFFECT_RECONCILIATION_PENDING")
     }
     return { record: prior, raw, reconciled: true }
   }
 
-  const record = { key, digest, operation, status: "PENDING", result: null }
+  const record = {
+    key,
+    digest,
+    operation,
+    status: "PENDING",
+    result: null,
+    acceptedAuthorityFence: authorityFence,
+  }
   trusted.idempotency.set(key, record)
   let raw
   try {
-    raw = perform()
-  } catch {
+    raw = exactBridgeInvocation(perform(), authorityFence, field)
+  } catch (error) {
+    if (isHostedCodexAtomicAuthorityFenceRejection(error)) {
+      trusted.idempotency.delete(key)
+      wall("HOSTED_CODEX_AUTHORITY_FENCE_WALL", field, "HOST_ATOMIC_FENCE_REJECTED")
+    }
     record.status = "AMBIGUOUS"
     runtime.state = ambiguousState
     runtime.ambiguousOperation = { operation, idempotencyKey: key, digest }
@@ -951,13 +1067,18 @@ function sideEffectAttempt({
   return { record, raw, reconciled: false }
 }
 
-function quarantineSideEffect(transaction, runtime, ambiguousState) {
+function quarantineSideEffect(transaction, runtime, ambiguousState, cause) {
   transaction.record.status = "AMBIGUOUS"
   runtime.state = ambiguousState
   runtime.ambiguousOperation = {
     operation: transaction.record.operation,
     idempotencyKey: transaction.record.key,
     digest: transaction.record.digest,
+    cause: deepFreeze({
+      name: typeof cause?.name === "string" ? cause.name : "UNKNOWN",
+      code: typeof cause?.code === "string" ? cause.code : "UNKNOWN",
+      field: typeof cause?.field === "string" ? cause.field : null,
+    }),
   }
 }
 
@@ -972,7 +1093,7 @@ export function startHostedCodexNativeAssignment(plan, request) {
   const trusted = ensurePlan(plan)
   exactFields(request, START_FIELDS, "start")
   const assignment = assignmentFromHandle(plan, trusted, request.assignmentHandle, "start.assignmentHandle")
-  revalidateCoordinator(trusted, assignment)
+  const authorityFence = revalidateCoordinator(trusted, assignment)
   if (assignment.role === "coordinator") wall("HOSTED_CODEX_ASSIGNMENT_WALL", "start.assignmentHandle", "CHILD_ASSIGNMENT_REQUIRED")
   const runtime = trusted.assignmentRuntime.get(assignment.assignmentId)
   const digest = hash({ operation: "SPAWN", assignmentId: assignment.assignmentId, idempotencyKey: request.idempotencyKey })
@@ -1001,6 +1122,8 @@ export function startHostedCodexNativeAssignment(plan, request) {
     structuredTask,
     taskContractHash: hash(structuredTask),
     idempotencyKey: request.idempotencyKey,
+    effectDigest: digest,
+    authorityFence,
   })
   const transaction = sideEffectAttempt({
     trusted,
@@ -1009,8 +1132,12 @@ export function startHostedCodexNativeAssignment(plan, request) {
     operation: "SPAWN",
     runtime,
     ambiguousState: "SPAWN_AMBIGUOUS",
+    authorityFence,
     perform: () => trusted.bridge.spawn(hostRequest),
-    lookup: () => trusted.bridge.lookupSpawn(hostRequest),
+    lookup: (originalEffectBinding) => trusted.bridge.lookupSpawn(deepFreeze({
+      ...hostRequest,
+      originalEffectBinding,
+    })),
     field: "start",
   })
   if (transaction.committedResult) return transaction.committedResult
@@ -1060,8 +1187,8 @@ export function startHostedCodexNativeAssignment(plan, request) {
     })
     return commitSideEffect(transaction, runtime, publicResult)
   } catch (error) {
-    quarantineSideEffect(transaction, runtime, "SPAWN_AMBIGUOUS")
-    throw error
+    quarantineSideEffect(transaction, runtime, "SPAWN_AMBIGUOUS", error)
+    wall("HOSTED_CODEX_BRIDGE_WALL", "start", "HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS")
   }
 }
 
@@ -1097,7 +1224,7 @@ export function createHostedCodexNativeMessage(plan, request) {
   const trusted = ensurePlan(plan)
   exactFields(request, MESSAGE_FIELDS, "message")
   const assignment = assignmentFromHandle(plan, trusted, request.assignmentHandle, "message.assignmentHandle")
-  revalidateCoordinator(trusted, assignment)
+  const authorityFence = revalidateCoordinator(trusted, assignment)
   const runtime = requireNativeBinding(trusted, assignment, "message.assignmentHandle")
   if (assignment.role === "coordinator") wall("HOSTED_CODEX_MESSAGE_WALL", "message.assignmentHandle", "CHILD_ASSIGNMENT_REQUIRED")
   if (!MESSAGE_DIRECTIONS.has(request.direction)) wall("HOSTED_CODEX_MESSAGE_WALL", "message.direction", "KNOWN_DIRECTION_REQUIRED")
@@ -1127,6 +1254,8 @@ export function createHostedCodexNativeMessage(plan, request) {
     summary,
     messageDigest,
     idempotencyKey: request.idempotencyKey,
+    effectDigest: digest,
+    authorityFence,
   })
   const transaction = sideEffectAttempt({
     trusted,
@@ -1135,8 +1264,12 @@ export function createHostedCodexNativeMessage(plan, request) {
     operation: "SEND",
     runtime,
     ambiguousState: "SEND_AMBIGUOUS",
+    authorityFence,
     perform: () => trusted.bridge.send(hostRequest),
-    lookup: () => trusted.bridge.lookupSend(hostRequest),
+    lookup: (originalEffectBinding) => trusted.bridge.lookupSend(deepFreeze({
+      ...hostRequest,
+      originalEffectBinding,
+    })),
     field: "message",
   })
   if (transaction.committedResult) return transaction.committedResult
@@ -1175,8 +1308,8 @@ export function createHostedCodexNativeMessage(plan, request) {
     })
     return commitSideEffect(transaction, runtime, publicResult)
   } catch (error) {
-    quarantineSideEffect(transaction, runtime, "SEND_AMBIGUOUS")
-    throw error
+    quarantineSideEffect(transaction, runtime, "SEND_AMBIGUOUS", error)
+    wall("HOSTED_CODEX_BRIDGE_WALL", "message", "HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS")
   }
 }
 
@@ -1184,7 +1317,7 @@ export function cancelHostedCodexNativeAssignment(plan, request) {
   const trusted = ensurePlan(plan)
   exactFields(request, CANCELLATION_FIELDS, "cancellation")
   const assignment = assignmentFromHandle(plan, trusted, request.assignmentHandle, "cancellation.assignmentHandle")
-  revalidateCoordinator(trusted, assignment)
+  const authorityFence = revalidateCoordinator(trusted, assignment)
   if (assignment.role === "coordinator") wall("HOSTED_CODEX_CANCELLATION_WALL", "cancellation.assignmentHandle", "CHILD_ASSIGNMENT_REQUIRED")
   const requestedBy = text(request.requestedBy, "cancellation.requestedBy")
   if (requestedBy !== trusted.coordinators.get(assignment.workOrderId)) wall("HOSTED_CODEX_CANCELLATION_WALL", "cancellation.requestedBy", "COORDINATOR_REQUIRED")
@@ -1230,6 +1363,8 @@ export function cancelHostedCodexNativeAssignment(plan, request) {
     nativeWorkerId: runtime.nativeWorkerId,
     reasonCode: request.reasonCode,
     idempotencyKey: request.idempotencyKey,
+    effectDigest: digest,
+    authorityFence,
   })
   const transaction = sideEffectAttempt({
     trusted,
@@ -1238,8 +1373,12 @@ export function cancelHostedCodexNativeAssignment(plan, request) {
     operation: "CANCEL",
     runtime,
     ambiguousState: "CANCEL_AMBIGUOUS",
+    authorityFence,
     perform: () => trusted.bridge.cancel(hostRequest),
-    lookup: () => trusted.bridge.lookupCancel(hostRequest),
+    lookup: (originalEffectBinding) => trusted.bridge.lookupCancel(deepFreeze({
+      ...hostRequest,
+      originalEffectBinding,
+    })),
     field: "cancellation",
   })
   if (transaction.committedResult) return transaction.committedResult
@@ -1285,8 +1424,8 @@ export function cancelHostedCodexNativeAssignment(plan, request) {
     })
     return committed
   } catch (error) {
-    quarantineSideEffect(transaction, runtime, "CANCEL_AMBIGUOUS")
-    throw error
+    quarantineSideEffect(transaction, runtime, "CANCEL_AMBIGUOUS", error)
+    wall("HOSTED_CODEX_BRIDGE_WALL", "cancellation", "HOST_SIDE_EFFECT_OUTCOME_AMBIGUOUS")
   }
 }
 
@@ -1294,7 +1433,7 @@ export function captureHostedCodexNativeEvidence(plan, request) {
   const trusted = ensurePlan(plan)
   exactFields(request, OBSERVATION_FIELDS, "observation")
   const assignment = assignmentFromHandle(plan, trusted, request.assignmentHandle, "observation.assignmentHandle")
-  revalidateCoordinator(trusted, assignment)
+  const authorityFence = revalidateCoordinator(trusted, assignment)
   const runtime = requireNativeBinding(trusted, assignment, "observation.assignmentHandle")
   const observationId = text(request.observationId, "observation.observationId")
   if (["SPAWN_AMBIGUOUS", "SEND_AMBIGUOUS", "CANCEL_AMBIGUOUS"].includes(runtime.state)) {
@@ -1302,12 +1441,19 @@ export function captureHostedCodexNativeEvidence(plan, request) {
   }
   let response
   try {
-    response = trusted.bridge.observe(deepFreeze({
+    response = exactBridgeInvocation(trusted.bridge.observe(deepFreeze({
       observationId,
       assignmentId: assignment.assignmentId,
       nativeWorkerId: runtime.nativeWorkerId,
-    }))
-  } catch {
+      authorityFence,
+    })), authorityFence, "observation")
+  } catch (error) {
+    if (isHostedCodexAtomicAuthorityFenceRejection(error)) {
+      wall("HOSTED_CODEX_AUTHORITY_FENCE_WALL", "observation", "HOST_ATOMIC_FENCE_REJECTED")
+    }
+    if (isHostedCodexObservationPending(error)) {
+      wall("HOSTED_CODEX_OBSERVATION_PENDING_WALL", "observation", "HOST_OBSERVATION_NOT_COMMITTED")
+    }
     wall("HOSTED_CODEX_BRIDGE_WALL", "observation", "HOST_OBSERVATION_FAILED")
   }
   let normalized
@@ -1381,8 +1527,180 @@ export function captureHostedCodexNativeEvidence(plan, request) {
     durablePersistenceClaimed: false,
     authorityGranted: false,
   })
-  trusted.observations.set(observationId, { responseHash, result: publicResult })
+  trusted.observations.set(observationId, {
+    responseHash,
+    result: publicResult,
+    semanticKind: normalized.artifactType === "PROVIDER_EVIDENCE" ? normalized.evidenceType : null,
+    semanticAttributes: normalized.artifactType === "PROVIDER_EVIDENCE" ? normalized.attributes : null,
+    providerState: normalized.providerState,
+    nativeBindingDigest: runtime.nativeBindingDigest,
+    authorityFenceDigest: hash({ domain: "HOSTED_CODEX_AUTHORITY_FENCE_V1", ...authorityFence }),
+  })
   return publicResult
+}
+
+export function captureHostedCodexNativeSemanticEvidence(plan, request) {
+  exactFields(request, SEMANTIC_OBSERVATION_FIELDS, "semanticObservation")
+  const expectedKind = text(request.expectedKind, "semanticObservation.expectedKind")
+  const result = captureHostedCodexNativeEvidence(plan, {
+    assignmentHandle: request.assignmentHandle,
+    observationId: request.observationId,
+  })
+  const trusted = ensurePlan(plan)
+  const observation = trusted.observations.get(request.observationId)
+  if (observation?.semanticKind !== expectedKind) {
+    wall("HOSTED_CODEX_EVIDENCE_WALL", "semanticObservation.expectedKind", "EXACT_SEMANTIC_KIND_REQUIRED")
+  }
+  const publicClaims = {
+    assignmentId: result.assignmentId,
+    observationId: result.observationId,
+    expectedKind,
+    providerResponseHash: result.providerResponseHash,
+    sanitized: true,
+    rawProviderOutputIncluded: false,
+    authorityGranted: false,
+  }
+  const handle = deepFreeze({
+    ...publicClaims,
+    evidenceHandleDigest: hash({ domain: "HOSTED_CODEX_SEMANTIC_EVIDENCE_HANDLE_V1", ...publicClaims }),
+  })
+  SEMANTIC_EVIDENCE_HANDLES.set(handle, deepFreeze({ plan, ...publicClaims }))
+  return handle
+}
+
+export function attestHostedCodexSemanticEvidence(plan, request) {
+  exactFields(request, SEMANTIC_ATTESTATION_FIELDS, "semanticAttestation")
+  const semanticConstraintId = text(request.semanticConstraintId, "semanticAttestation.semanticConstraintId")
+  const expected = SEMANTIC_CONSTRAINTS[semanticConstraintId]
+  if (!expected) {
+    wall("HOSTED_CODEX_EVIDENCE_HANDLE_WALL", "semanticAttestation.semanticConstraintId", "CLOSED_CONSTRAINT_REQUIRED")
+  }
+  const trusted = ensurePlan(plan)
+  const assignment = assignmentFromHandle(
+    plan,
+    trusted,
+    request.assignmentHandle,
+    "semanticAttestation.assignmentHandle",
+  )
+  const claims = SEMANTIC_EVIDENCE_HANDLES.get(request.evidenceHandle)
+  if (!claims || claims.plan !== plan || claims.assignmentId !== assignment.assignmentId) {
+    wall("HOSTED_CODEX_EVIDENCE_HANDLE_WALL", "semanticEvidenceHandle", "OPAQUE_SAME_PLAN_HANDLE_REQUIRED")
+  }
+  revalidateCoordinator(trusted, assignment)
+  const observation = trusted.observations.get(claims.observationId)
+  if (!observation
+    || observation.responseHash !== claims.providerResponseHash
+    || observation.semanticKind !== claims.expectedKind
+    || observation.providerState !== expected.providerState
+    || observation.semanticKind !== expected.evidenceType
+    || !plainObject(observation.semanticAttributes)
+    || trusted.assignmentRuntime.get(assignment.assignmentId).nativeBindingDigest !== observation.nativeBindingDigest) {
+    wall("HOSTED_CODEX_EVIDENCE_HANDLE_WALL", "semanticEvidenceHandle", "EXACT_CAPTURED_EVIDENCE_REQUIRED")
+  }
+  exactValue(
+    observation.semanticAttributes,
+    expected.attributes,
+    "HOSTED_CODEX_EVIDENCE_HANDLE_WALL",
+    "semanticAttestation.semanticConstraintId",
+  )
+  return deepFreeze({
+    assignmentId: assignment.assignmentId,
+    workOrderId: assignment.workOrderId,
+    laneId: assignment.laneId,
+    role: assignment.role,
+    observationId: claims.observationId,
+    semanticConstraintId,
+    evidenceType: expected.evidenceType,
+    providerResponseHash: claims.providerResponseHash,
+    nativeBindingDigest: observation.nativeBindingDigest,
+    authorityFenceDigest: observation.authorityFenceDigest,
+    evidenceBindingDigest: hash({
+      domain: "HOSTED_CODEX_SEMANTIC_EVIDENCE_BINDING_V1",
+      assignmentId: assignment.assignmentId,
+      observationId: claims.observationId,
+      semanticConstraintId,
+      providerResponseHash: claims.providerResponseHash,
+      nativeBindingDigest: observation.nativeBindingDigest,
+      authorityFenceDigest: observation.authorityFenceDigest,
+    }),
+    sanitized: true,
+    rawProviderOutputIncluded: false,
+    authorityGranted: false,
+  })
+}
+
+export function attestHostedCodexRoleAssignmentPair(plan, request) {
+  exactFields(request, ROLE_PAIR_FIELDS, "roleAssignmentPair")
+  const trusted = ensurePlan(plan)
+  const builder = assignmentFromHandle(
+    plan, trusted, request.builderAssignmentHandle, "roleAssignmentPair.builderAssignmentHandle",
+  )
+  const reviewer = assignmentFromHandle(
+    plan, trusted, request.reviewerAssignmentHandle, "roleAssignmentPair.reviewerAssignmentHandle",
+  )
+  if (builder.role !== "builder" || reviewer.role !== "reviewer"
+    || builder.workOrderId !== reviewer.workOrderId || builder.laneId !== reviewer.laneId) {
+    wall("HOSTED_CODEX_ASSIGNMENT_PAIR_WALL", "roleAssignmentPair", "SAME_LANE_BUILDER_REVIEWER_REQUIRED")
+  }
+  revalidateCoordinator(trusted, builder)
+  const builderRuntime = requireNativeBinding(trusted, builder, "roleAssignmentPair.builderAssignmentHandle")
+  const reviewerRuntime = requireNativeBinding(trusted, reviewer, "roleAssignmentPair.reviewerAssignmentHandle")
+  if (builderRuntime.nativeBindingDigest === reviewerRuntime.nativeBindingDigest) {
+    wall("HOSTED_CODEX_ASSIGNMENT_PAIR_WALL", "roleAssignmentPair", "DISTINCT_NATIVE_BINDINGS_REQUIRED")
+  }
+  const envelope = trusted.envelopeByWorkOrder.get(builder.workOrderId)
+  return deepFreeze({
+    workOrderId: builder.workOrderId,
+    laneId: builder.laneId,
+    builderAssignmentId: builder.assignmentId,
+    reviewerAssignmentId: reviewer.assignmentId,
+    coordinatorWorkerId: trusted.coordinators.get(builder.workOrderId),
+    builderNativeBindingDigest: builderRuntime.nativeBindingDigest,
+    reviewerNativeBindingDigest: reviewerRuntime.nativeBindingDigest,
+    builderNativeWorkerDigest: hash({ nativeWorkerId: builderRuntime.nativeWorkerId }),
+    reviewerNativeWorkerDigest: hash({ nativeWorkerId: reviewerRuntime.nativeWorkerId }),
+    reservationDigest: hash({ domain: "HOSTED_CODEX_RESERVATION_V1", reservations: envelope.reservations }),
+    remediationBudget: copy(envelope.remediationBudget),
+    retryBudget: copy(envelope.retryBudget),
+    authorityGranted: false,
+  })
+}
+
+export function attestHostedCodexRoleAssignmentHandles(plan, request) {
+  exactFields(request, ROLE_PAIR_FIELDS, "roleAssignmentHandles")
+  const trusted = ensurePlan(plan)
+  const builder = assignmentFromHandle(
+    plan, trusted, request.builderAssignmentHandle, "roleAssignmentHandles.builderAssignmentHandle",
+  )
+  const reviewer = assignmentFromHandle(
+    plan, trusted, request.reviewerAssignmentHandle, "roleAssignmentHandles.reviewerAssignmentHandle",
+  )
+  if (builder.role !== "builder" || reviewer.role !== "reviewer"
+    || builder.workOrderId !== reviewer.workOrderId || builder.laneId !== reviewer.laneId) {
+    wall("HOSTED_CODEX_ASSIGNMENT_PAIR_WALL", "roleAssignmentHandles", "SAME_LANE_BUILDER_REVIEWER_REQUIRED")
+  }
+  exactValue(
+    builder.taskPayload.reservations,
+    reviewer.taskPayload.reservations,
+    "HOSTED_CODEX_ASSIGNMENT_PAIR_WALL",
+    "roleAssignmentHandles.reservations",
+  )
+  revalidateCoordinator(trusted, builder)
+  const envelope = trusted.envelopeByWorkOrder.get(builder.workOrderId)
+  return deepFreeze({
+    workOrderId: builder.workOrderId,
+    laneId: builder.laneId,
+    builderAssignmentId: builder.assignmentId,
+    reviewerAssignmentId: reviewer.assignmentId,
+    coordinatorWorkerId: trusted.coordinators.get(builder.workOrderId),
+    reservationDigest: hash({
+      domain: "HOSTED_CODEX_RESERVATION_V1",
+      reservations: envelope.reservations,
+    }),
+    remediationBudget: copy(envelope.remediationBudget),
+    retryBudget: copy(envelope.retryBudget),
+    authorityGranted: false,
+  })
 }
 
 // Canonical WO-MAO-030 compatibility surface. Legacy callers receive the hardened contract.

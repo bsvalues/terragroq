@@ -118,17 +118,17 @@ Codex team work does not depend on that rejected adapter.
 Canonical playbook:
 `docs/governance/multi-agent-operator-playbook.md`
 
-Current transition: `WO-MAO-001` through `WO-MAO-030` and `WO-MAO-032` are complete.
+Current transition: `WO-MAO-001` through `WO-MAO-032` are complete.
 The merged WO-MAO-023 scheduler, deterministic WO-MAO-024 team topology, and WO-MAO-025 isolated-workspace
 manager plus WO-MAO-026 reservation-aware handoff and WO-MAO-027 hard-ceiling concurrency admission
 policy preserve dependency-, reservation-, and ownership-driven selection. WO-MAO-028 adds pure/static
 scheduler model checking without creating provider or runtime authority. WO-MAO-030 adds a current-session hosted
 Codex coordinator adapter with host-trusted opaque assignments, replay sealing, and ambiguous-effect quarantine,
-without durable provider dispatch, runtime activation, or owner relay. Historical WO-MAO-031,
-WO-MAO-034, WO-MAO-035, and WO-MAO-036 evidence and callable success paths are invalidated pending
-ordered redesign and re-proof. `WO-MAO-033` is
-`DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set contains `WO-MAO-031`;
-WO-MAO-034 and later dependents remain pending. WO-MAO-034 additionally requires an exact verified
+without durable provider dispatch, runtime activation, or owner relay. WO-MAO-031 independently proves a
+reusable current-session one-cycle builder, assurance, original-builder remediation, and re-review lifecycle.
+Historical WO-MAO-034, WO-MAO-035, and WO-MAO-036 evidence and callable success paths remain invalidated
+pending ordered redesign and re-proof. `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable.
+The mechanically eligible set is empty; WO-MAO-034 and later dependents remain pending. WO-MAO-034 additionally requires an exact verified
 settlement of its WO-MAO-033 edge bound to WO-MAO-032. WO-MAO-035/036 keep their redundant direct
 WO-MAO-033 edges fail-closed pending separate ratified correction.
 
@@ -196,7 +196,7 @@ Current status:
 
 1. Preserve the completed Phase 0 executable truth and preventive controls.
 2. Preserve the completed Phase 1 hosted proof and Phase 2 local-contract evidence.
-3. Re-prove `WO-MAO-031`, then settle and re-prove `WO-MAO-034`, correct the redundant direct
+3. Preserve the approved `WO-MAO-031` one-cycle proof, then settle and re-prove `WO-MAO-034`, correct the redundant direct
    WO-MAO-033 dependency edges, then re-prove `WO-MAO-035` and `WO-MAO-036` before Phase 5.
 4. Keep useful independent R0/R1 product lanes moving whenever dependencies and
    reservations permit.

@@ -40,6 +40,13 @@ WO-MAO-028 adds a pure deterministic scheduler model-check harness for DAG, cycl
 fan-in, duplicate-delivery, expiry, starvation, deadlock, cancellation, and replay behavior. The harness
 has no provider transport, runtime activation, external dispatch, GitHub operation, production mutation,
 authority grant, or owner operation.
+WO-MAO-030 proves a current-session hosted Codex coordinator adapter with opaque native assignment
+handles, atomic live-authority fencing at the host bridge, exact idempotency, lookup-only ambiguous-effect
+reconciliation, cancellation, and sanitized evidence. Its production host registries remain empty.
+WO-MAO-031 composes that adapter into one reusable current-session builder, independent assurance,
+original-builder remediation, and zero-unresolved-thread re-review cycle. The proof is bounded to one
+cycle and two retry-budgeted attempts; it is not durable dispatch, unattended operation, GitHub delivery,
+runtime activation, or an executable-worker promotion.
 
 ## Status vocabulary
 
@@ -73,6 +80,8 @@ Execution class is independent of status:
 | Multi-agent Phase 3 scheduler simulation and model checking | `PROVEN` | `NON_EXECUTABLE` | WO-MAO-028 deterministically checks scheduler safety and replay properties in a pure/static harness; it performs no provider or runtime execution. |
 | Supported hosted Codex session | `PROVEN` | `WORKER_CANDIDATE` | Bounded coordination and remediation re-review passed; durable WilliamOS dispatch remains denied. |
 | Codex native coordinator and subagents | `PROVEN` | `WORKER_CANDIDATE` | Native fan-out, remediation, and fan-in are proven; no durable adapter or atomic reservation claim is made. |
+| Hosted Codex coordinator adapter | `PROVEN` | `WORKER_CANDIDATE` | Current-session opaque assignments and atomically authority-fenced bridge effects are proven; production registries remain empty and no durable dispatch is claimed. |
+| Hosted Codex role lifecycle adapter | `PROVEN` | `WORKER_CANDIDATE` | One current-session builder/assurance/original-builder-remediation/re-review cycle is independently proven with bounded retry; it is not unattended or GitHub automation. |
 | Claude Code provider lane | `UNAVAILABLE` | `WORKER_CANDIDATE` | No authenticated supported surface or conformant adapter is evidenced. |
 | Brain Council advisory surface | `PROVEN` | `NON_EXECUTABLE` | Static advisory and decision-packet read model only. |
 | Agent Forge governance surface | `PROVEN` | `NON_EXECUTABLE` | Skill governance, review, and quarantine read models only. |
@@ -90,6 +99,8 @@ Execution class is independent of status:
   terminal evidence plus fenced lease and reservation release are durable.
 - A scheduler model-check result is repository-local simulation evidence, not provider execution,
   runtime activation, external dispatch, or unattended-builder proof.
+- The WO-MAO-031 one-cycle current-session role proof is not durable or unattended execution, a GitHub
+  lifecycle worker, provider-contract dispatch, runtime activation, or permission to advance WO-MAO-034.
 - Provider availability, authentication, adapter conformance, authority, and trust controls are separate gates.
 - `coordinationEligible` records bounded supported-session team coordination; it never implies
   WilliamOS registry dispatch, a durable adapter, or atomic reservation acquisition.

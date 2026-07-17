@@ -110,10 +110,12 @@ WO-MAO-023 eligible-set scheduler, the WO-MAO-024 team-topology contract, the bo
 isolated-workspace manager, the WO-MAO-026 reservation-aware handoff contract, the WO-MAO-027 durable
 concurrency/fairness scheduler extension, the WO-MAO-028 pure deterministic scheduler model-check
 harness, provider conformance `WO-MAO-029`, the post-merge-hardened current-session coordinator
-adapter `WO-MAO-030`, and provider assessment `WO-MAO-032` are complete. Historical WO-MAO-031,
-WO-MAO-034, WO-MAO-035, and WO-MAO-036 code/reports remain present, but their evidence and callable
-success paths are invalidated pending ordered re-proof.
-`WO-MAO-031` is the sole dependency-cleared Work Order. `WO-MAO-033` is
+adapter `WO-MAO-030`, the independently approved current-session one-cycle role lifecycle
+`WO-MAO-031`, and provider assessment `WO-MAO-032` are complete. Historical WO-MAO-034,
+WO-MAO-035, and WO-MAO-036
+code/reports remain present, but their evidence and callable success paths are invalidated pending
+ordered re-proof.
+No Work Order is currently dependency-cleared. `WO-MAO-033` is
 `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; `WO-MAO-034` and later Work Orders remain pending.
 The program
 grant is limited to repository-scoped, reversible work and
@@ -124,9 +126,10 @@ Phase 2 and the first Phase 3 slices prove local envelope, DAG, atomic reservati
 provider-eligibility, lifecycle, lease, checkpoint, evidence-ledger, owner-meter, recoverable
 eligible-set scheduling, deterministic team-topology, lease/evidence-bound isolated-workspace lifecycle,
 one-writer handoff, hard-ceiling priority/fairness admission planning, and hardened current-session
-coordinator assignment translation. Role lifecycle, cross-provider routing, provider health/reroute,
-and provider conformance require ordered re-proof at `WO-MAO-031`, `WO-MAO-034`, `WO-MAO-035`, then
-`WO-MAO-036`. Releasing the deferred WO-MAO-033 edge into WO-MAO-034 additionally requires an exact,
+coordinator assignment translation plus one bounded builder/assurance/remediation/re-review cycle.
+Cross-provider routing, provider health/reroute, and provider conformance require ordered re-proof at
+`WO-MAO-034`, `WO-MAO-035`, then `WO-MAO-036`. Releasing the deferred WO-MAO-033 edge into WO-MAO-034
+additionally requires an exact,
 independently verified `WO-MAO-034<-WO-MAO-033` settlement bound to completed WO-MAO-032. The
 redundant direct WO-MAO-033 dependencies on WO-MAO-035/036 remain fail-closed pending separate
 ratified correction. Durable
