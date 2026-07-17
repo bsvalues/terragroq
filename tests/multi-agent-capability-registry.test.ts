@@ -248,6 +248,21 @@ describe("multi-agent executable capability inventory", () => {
         "No provider dispatch, GitHub automation, runtime activation, authority grant, or owner relay",
       ]),
     })
+    expect(capability("branch-commit-push-automation-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_BRANCH_COMMIT_PUSH_AUTOMATION_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/branch-commit-push-automation.mjs",
+      authorityGrantRefs: ["PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"],
+      trustGateRef: "WO-MAO-007",
+      restrictions: expect.arrayContaining([
+        "Zero-input control-plane plan only; no git command is executed by the model",
+        "Only reserved paths are eligible; foreign changes and secret-like findings fail closed",
+        "Force-push, tag, release, production write, destructive operations, and secret material remain blocked",
+        "WO-MAO-037 is complete; WO-MAO-038 is released to READY through retained prerequisites",
+        "No command runner, background worker, runtime activation, credential access, authority minting, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
