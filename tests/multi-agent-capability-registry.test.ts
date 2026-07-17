@@ -423,6 +423,16 @@ describe("multi-agent executable capability inventory", () => {
         "WO-MAO-049 is complete; WO-MAO-050 is now READY after WO-MAO-048 completion",
       ]),
     })
+    expect(capability("malicious-defective-worker-drill-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_MALICIOUS_DEFECTIVE_WORKER_DRILL_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/malicious-defective-worker-drill.mjs",
+      restrictions: expect.arrayContaining([
+        "Zero-input control-plane drill only; no provider execution, GitHub API call, production write, cleanup, or authority mutation is performed",
+        "WO-MAO-050 is complete; WO-MAO-051 is now READY through retained prerequisites",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
