@@ -443,6 +443,16 @@ describe("multi-agent executable capability inventory", () => {
         "WO-MAO-051 is complete; WO-MAO-052 is now READY through retained prerequisites",
       ]),
     })
+    expect(capability("kill-revoke-rollback-incident-procedure-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_KILL_REVOKE_ROLLBACK_INCIDENT_PROCEDURE_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/kill-revoke-rollback-incident-procedure.mjs",
+      restrictions: expect.arrayContaining([
+        "Zero-input incident procedure model only; no kill, revoke, rollback, cleanup, provider, GitHub, or production operation is performed",
+        "WO-MAO-052 is complete; WO-MAO-053 is now READY through retained prerequisites",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
