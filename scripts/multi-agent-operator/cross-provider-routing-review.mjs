@@ -1,5 +1,11 @@
 import crypto from "node:crypto"
 
+import {
+  ProviderUnavailableSettlementError,
+  verifyPinnedProviderAssessmentTrustBundle,
+  verifyProviderUnavailableAssessment,
+} from "./provider-unavailable-settlement.mjs"
+
 const INPUT_FIELDS = new Set([
   "schemaVersion",
   "artifactType",
@@ -7,6 +13,7 @@ const INPUT_FIELDS = new Set([
   "providers",
   "workOrders",
   "reviewRequests",
+  "dependencySettlement",
 ])
 const PROVIDER_FIELDS = new Set([
   "providerId",
@@ -32,6 +39,15 @@ const REVIEW_REQUEST_FIELDS = new Set([
   "subjectProviderId",
   "reviewerProviderId",
   "reviewMode",
+])
+const SETTLEMENT_FIELDS = new Set([
+  "consumerWorkOrderId",
+  "assessmentWorkOrderId",
+  "subjectWorkOrderId",
+  "lifecycleState",
+  "reasonCode",
+  "configuredTrust",
+  "assessment",
 ])
 const PROVIDER_STATUS = new Set(["ACTIVE", "UNAVAILABLE", "DISABLED"])
 const REVIEW_MODES = new Set(["SAME_PROVIDER_INDEPENDENT_REVIEW", "CROSS_PROVIDER_REVIEW"])
@@ -177,12 +193,42 @@ function supportsWorkOrder(provider, workOrder) {
     && [...workOrder.preferredProviders, ...workOrder.fallbackProviders].includes(provider.providerId)
 }
 
+function verifyDependencySettlement(value) {
+  exactFields(value, SETTLEMENT_FIELDS, "dependencySettlement")
+  if (value.consumerWorkOrderId !== "WO-MAO-034") {
+    wall("CROSS_PROVIDER_SETTLEMENT_WALL", "dependencySettlement.consumerWorkOrderId", "WO_MAO_034_REQUIRED")
+  }
+  if (value.assessmentWorkOrderId !== "WO-MAO-032") {
+    wall("CROSS_PROVIDER_SETTLEMENT_WALL", "dependencySettlement.assessmentWorkOrderId", "WO_MAO_032_REQUIRED")
+  }
+  if (value.subjectWorkOrderId !== "WO-MAO-033") {
+    wall("CROSS_PROVIDER_SETTLEMENT_WALL", "dependencySettlement.subjectWorkOrderId", "WO_MAO_033_REQUIRED")
+  }
+  if (value.lifecycleState !== "DEFERRED" || value.reasonCode !== "PROVIDER_UNAVAILABLE") {
+    wall("CROSS_PROVIDER_SETTLEMENT_WALL", "dependencySettlement", "DEFERRED_PROVIDER_UNAVAILABLE_REQUIRED")
+  }
+
+  try {
+    const configuredTrust = verifyPinnedProviderAssessmentTrustBundle(value.configuredTrust)
+    const verifiedAssessment = verifyProviderUnavailableAssessment(value.assessment, configuredTrust)
+    const assessment = verifiedAssessment.assessment
+    if (assessment.assessmentWorkOrderId !== "WO-MAO-032"
+      || assessment.subjectWorkOrderId !== "WO-MAO-033"
+      || assessment.reasonCode !== "PROVIDER_UNAVAILABLE"
+      || assessment.lifecycleState !== "DEFERRED") {
+      wall("CROSS_PROVIDER_SETTLEMENT_WALL", "dependencySettlement.assessment", "BOUND_PROVIDER_UNAVAILABLE_ASSESSMENT_REQUIRED")
+    }
+    return verifiedAssessment
+  } catch (error) {
+    if (error instanceof CrossProviderRoutingReviewError) throw error
+    if (error instanceof ProviderUnavailableSettlementError) {
+      wall("CROSS_PROVIDER_SETTLEMENT_WALL", "dependencySettlement", error.message)
+    }
+    throw error
+  }
+}
+
 export function evaluateCrossProviderRoutingReview(input) {
-  wall(
-    "CROSS_PROVIDER_ROUTING_INVALIDATED_PENDING_REPROOF",
-    "routingReview",
-    "WO_MAO_031_THEN_WO_MAO_034_REPROOF_REQUIRED",
-  )
   exactFields(input, INPUT_FIELDS, "routingReview")
   if (input.schemaVersion !== 1) wall("CROSS_PROVIDER_INPUT_WALL", "schemaVersion", "1_REQUIRED")
   if (input.artifactType !== "CROSS_PROVIDER_ROUTING_REVIEW_INPUT") {
@@ -192,6 +238,7 @@ export function evaluateCrossProviderRoutingReview(input) {
   const providers = normalizeProviders(input.providers)
   const workOrders = normalizeWorkOrders(input.workOrders)
   const reviewRequests = normalizeReviewRequests(input.reviewRequests)
+  const verifiedDependencySettlement = verifyDependencySettlement(input.dependencySettlement)
   const providerById = new Map(providers.map((provider) => [provider.providerId, provider]))
   const workOrderById = new Map(workOrders.map((workOrder) => [workOrder.workOrderId, workOrder]))
 
@@ -245,6 +292,15 @@ export function evaluateCrossProviderRoutingReview(input) {
     unavailableProviders: providers
       .filter(({ status }) => status === "UNAVAILABLE")
       .map(({ providerId, unavailableReason }) => ({ providerId, reasonCode: unavailableReason })),
+    dependencySettlement: {
+      consumerWorkOrderId: "WO-MAO-034",
+      assessmentWorkOrderId: "WO-MAO-032",
+      subjectWorkOrderId: "WO-MAO-033",
+      code: verifiedDependencySettlement.code,
+      independentlyAuthoritative: verifiedDependencySettlement.independentlyAuthoritative,
+      authorityGranted: verifiedDependencySettlement.authorityGranted,
+      dispatchPerformed: verifiedDependencySettlement.dispatchPerformed,
+    },
     providerContractDispatchAllowed: false,
     dispatchPerformed: false,
     durablePersistenceClaimed: false,

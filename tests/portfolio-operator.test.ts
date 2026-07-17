@@ -101,8 +101,8 @@ describe("portfolio operator", () => {
       ownerDecisionRequired: false,
     })
     expect(loop).toMatchObject({
-      activeWorkOrder: "WO-MAO-031",
-      eligibleWorkOrders: ["WO-MAO-031"],
+      activeWorkOrder: null,
+      eligibleWorkOrders: [],
       executionMode: "DEPENDENCY_RESERVATION_ELIGIBLE_SET",
     })
     expect(loop.continuationRule).toContain("contact the Owner only for a genuine authority wall or the final outcome")
@@ -122,14 +122,14 @@ describe("portfolio operator", () => {
     expect(workOrders[27]).toMatchObject({ workOrderId: "WO-MAO-028", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[28]).toMatchObject({ workOrderId: "WO-MAO-029", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[29]).toMatchObject({ workOrderId: "WO-MAO-030", status: "COMPLETE", riskClass: "R3" })
-    expect(workOrders[30]).toMatchObject({ workOrderId: "WO-MAO-031", status: "READY", riskClass: "R3" })
+    expect(workOrders[30]).toMatchObject({ workOrderId: "WO-MAO-031", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[31]).toMatchObject({ workOrderId: "WO-MAO-032", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[32]).toMatchObject({ workOrderId: "WO-MAO-033", status: "DEFERRED_PROVIDER_UNAVAILABLE", resumable: true })
-    expect(workOrders[33]).toMatchObject({ workOrderId: "WO-MAO-034", status: "PENDING", riskClass: "R3" })
+    expect(workOrders[33]).toMatchObject({ workOrderId: "WO-MAO-034", status: "BLOCKED", riskClass: "R3" })
     expect(workOrders[34]).toMatchObject({ workOrderId: "WO-MAO-035", status: "PENDING", riskClass: "R3" })
     expect(workOrders[35]).toMatchObject({ workOrderId: "WO-MAO-036", status: "PENDING", riskClass: "R3" })
     expect([30, 31, 34, 35, 36, 37].map((number) => workOrders[number - 1].status))
-      .toEqual(["COMPLETE", "READY", "PENDING", "PENDING", "PENDING", "PENDING"])
+      .toEqual(["COMPLETE", "COMPLETE", "BLOCKED", "PENDING", "PENDING", "PENDING"])
     expect(workOrders).toHaveLength(62)
     expect(workOrders.at(-1)?.workOrderId).toBe("WO-MAO-062")
     expect(workOrders.every((workOrder) => "ownerOperationsAllowed" in workOrder && workOrder.ownerOperationsAllowed === false)).toBe(true)
