@@ -24,6 +24,10 @@ import {
   isVerifiedWoMao039CiReviewEvidence,
 } from "@/components/operator/multi-agent-ci-review-registry"
 import {
+  MULTI_AGENT_REMEDIATION_EVIDENCE,
+  isVerifiedWoMao040RemediationEvidence,
+} from "@/components/operator/multi-agent-remediation-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -178,6 +182,7 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-037", "docs/reports/WO-MAO-037-branch-commit-push-automation.md"],
   ["WO-MAO-038", "docs/reports/WO-MAO-038-pr-creation-packet-linkage.md"],
   ["WO-MAO-039", "docs/reports/WO-MAO-039-ci-review-ingestion.md"],
+  ["WO-MAO-040", "docs/reports/WO-MAO-040-remediation-rereview.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -244,6 +249,9 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao039CiReviewEvidence(MULTI_AGENT_CI_REVIEW_EVIDENCE)
     ? [workOrderId(39)]
+    : []),
+  ...(isVerifiedWoMao040RemediationEvidence(MULTI_AGENT_REMEDIATION_EVIDENCE)
+    ? [workOrderId(40)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
