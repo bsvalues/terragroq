@@ -293,6 +293,21 @@ describe("multi-agent executable capability inventory", () => {
         "No command runner, background worker, runtime activation, credential access, authority minting, production write, or owner relay",
       ]),
     })
+    expect(capability("remediation-rereview-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_REMEDIATION_REREVIEW_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/remediation-rereview.mjs",
+      authorityGrantRefs: ["PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"],
+      trustGateRef: "WO-MAO-007",
+      restrictions: expect.arrayContaining([
+        "Zero-input control-plane remediation model only; no branch is mutated by the model",
+        "Actionable findings route only to the original builder with one bounded cycle",
+        "Independent re-review and zero unresolved threads are required before merge eligibility",
+        "WO-MAO-040 is complete; WO-MAO-041 is released to READY through retained prerequisites",
+        "No command runner, background worker, runtime activation, credential access, authority minting, production write, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
