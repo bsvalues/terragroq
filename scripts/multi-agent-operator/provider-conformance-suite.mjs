@@ -127,6 +127,11 @@ function normalizeProviders(value) {
 }
 
 export function evaluateProviderConformanceSuite(input) {
+  wall(
+    "PROVIDER_CONFORMANCE_SUITE_INVALIDATED_PENDING_REPROOF",
+    "providerConformanceSuite",
+    "WO_MAO_031_THROUGH_WO_MAO_036_ORDERED_REPROOF_REQUIRED",
+  )
   exactFields(input, INPUT_FIELDS, "providerConformanceSuite")
   if (input.schemaVersion !== 1) wall("PROVIDER_CONFORMANCE_INPUT_WALL", "schemaVersion", "1_REQUIRED")
   if (input.artifactType !== "PROVIDER_CONFORMANCE_SUITE_INPUT") {

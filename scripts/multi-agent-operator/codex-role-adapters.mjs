@@ -268,6 +268,11 @@ function assertStageSemantics(stages, envelope) {
 }
 
 export function adaptCodexRoleLifecycle(input) {
+  wall(
+    "CODEX_ROLE_ADAPTER_INVALIDATED_PENDING_REPROOF",
+    "roleAdapter",
+    "WO_MAO_031_REDESIGN_AND_INDEPENDENT_REPROOF_REQUIRED",
+  )
   exactFields(input, INPUT_FIELDS, "roleAdapter")
   if (input.schemaVersion !== 1) wall("CODEX_ROLE_INPUT_WALL", "schemaVersion", "1_REQUIRED")
   if (input.artifactType !== "CODEX_ROLE_ADAPTER_INPUT") {

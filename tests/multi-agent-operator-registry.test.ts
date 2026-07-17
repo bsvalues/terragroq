@@ -60,7 +60,7 @@ describe("multi-agent operator registry", () => {
       evidencePath: "docs/reports/WO-MAO-028-scheduler-simulation-model-checking.md",
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "READY")
-      .map(({ workOrderId }) => workOrderId)).toEqual(["WO-MAO-037"])
+      .map(({ workOrderId }) => workOrderId)).toEqual(["WO-MAO-031"])
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[28]).toMatchObject({
       workOrderId: "WO-MAO-029",
       status: "COMPLETE",
@@ -75,7 +75,7 @@ describe("multi-agent operator registry", () => {
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[30]).toMatchObject({
       workOrderId: "WO-MAO-031",
-      status: "COMPLETE",
+      status: "READY",
       resumable: false,
       evidencePath: "docs/reports/WO-MAO-031-codex-builder-assurance-remediation-adapters.md",
     })
@@ -93,27 +93,27 @@ describe("multi-agent operator registry", () => {
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[33]).toMatchObject({
       workOrderId: "WO-MAO-034",
-      status: "COMPLETE",
+      status: "PENDING",
       resumable: false,
       evidencePath: "docs/reports/WO-MAO-034-cross-provider-routing-review.md",
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[34]).toMatchObject({
       workOrderId: "WO-MAO-035",
-      status: "COMPLETE",
+      status: "PENDING",
       resumable: false,
       evidencePath: "docs/reports/WO-MAO-035-provider-health-reroute.md",
     })
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[35]).toMatchObject({
       workOrderId: "WO-MAO-036",
-      status: "COMPLETE",
+      status: "PENDING",
       resumable: false,
       evidencePath: "docs/reports/WO-MAO-036-provider-conformance-suite.md",
     })
     expect([30, 31, 34, 35, 36, 37].map((number) => MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].status))
-      .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "READY"])
+      .toEqual(["COMPLETE", "READY", "PENDING", "PENDING", "PENDING", "PENDING"])
     expect([23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36].every((number) => existsSync(MULTI_AGENT_OPERATOR_WORK_ORDERS[number - 1].evidencePath))).toBe(true)
     expect(MULTI_AGENT_OPERATOR_WORK_ORDERS[53]).toMatchObject({ workOrderId: "WO-MAO-054", riskClass: "R2" })
-    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "PENDING")).toHaveLength(25)
+    expect(MULTI_AGENT_OPERATOR_WORK_ORDERS.filter(({ status }) => status === "PENDING")).toHaveLength(29)
 
     const afterSixteen = resolveMultiAgentWorkOrders(
       new Set(Array.from({ length: 16 }, (_, index) => `WO-MAO-${String(index + 1).padStart(3, "0")}`)),
@@ -123,13 +123,29 @@ describe("multi-agent operator registry", () => {
     expect(afterSixteen[18].status).toBe("READY")
   })
 
-  it("keeps a provider-unavailable defer explicit and resumable without releasing its blocked consumer", () => {
+  it("keeps deferred-provider dependencies fail-closed without verified settlement provenance", () => {
     const completed = new Set([...Array.from({ length: 32 }, (_, index) => workOrderId(index + 1))])
-    const workOrders = resolveMultiAgentWorkOrders(completed, new Set(), new Set(["WO-MAO-033"]))
+    const deferred = new Set(["WO-MAO-033"])
+    const workOrders = resolveMultiAgentWorkOrders(completed, new Set(), deferred)
     expect(workOrders[32]).toMatchObject({ status: "DEFERRED_PROVIDER_UNAVAILABLE", resumable: true })
     expect(workOrders[33]).toMatchObject({ workOrderId: "WO-MAO-034", status: "PENDING" })
-    expect(workOrders.filter(({ status }) => status === "READY").map(({ workOrderId }) => workOrderId))
-      .toEqual([])
+
+    const afterThirtyFour = resolveMultiAgentWorkOrders(
+      new Set([...completed, "WO-MAO-034"]), new Set(), deferred,
+    )
+    expect(afterThirtyFour[34]).toMatchObject({ workOrderId: "WO-MAO-035", status: "PENDING" })
+    const afterThirtyFive = resolveMultiAgentWorkOrders(
+      new Set([...completed, "WO-MAO-034", "WO-MAO-035"]), new Set(), deferred,
+    )
+    expect(afterThirtyFive[35]).toMatchObject({ workOrderId: "WO-MAO-036", status: "PENDING" })
+  })
+
+  it("does not treat an unrelated deferred dependency as satisfied", () => {
+    const completed = new Set(Array.from({ length: 19 }, (_, index) => workOrderId(index + 1)))
+    completed.delete("WO-MAO-017")
+    const workOrders = resolveMultiAgentWorkOrders(completed, new Set(), new Set(["WO-MAO-017"]))
+    expect(workOrders[16]).toMatchObject({ workOrderId: "WO-MAO-017", status: "DEFERRED_PROVIDER_UNAVAILABLE" })
+    expect(workOrders[19]).toMatchObject({ workOrderId: "WO-MAO-020", status: "PENDING" })
   })
 
   it("has only known, acyclic, backward dependencies", () => {

@@ -172,15 +172,21 @@ describe("multi-agent executable capability inventory", () => {
       adapterRef: "scripts/multi-agent-operator/codex-coordinator-adapter.mjs",
       trustGateRef: PREVENTIVE_TRUST_GATE_V2_REF,
       restrictions: expect.arrayContaining([
+        "Production host-session, trust, and native-bridge registries remain empty and immutable",
+        "Host side effects require exact idempotency, lookup-only reconciliation, and quarantine on uncertain outcomes",
         "Provider-contract dispatch remains false",
         "No durable persistence, service worker, runtime activation, or authority grant",
         "No GitHub write, production operation, rejected nested-runtime reuse, or owner relay",
       ]),
+      evidence: expect.arrayContaining([
+        "docs/reports/WO-MAO-030-post-merge-assurance-remediation.md",
+      ]),
     })
     expect(capability("hosted-codex-role-adapters")).toMatchObject({
-      status: "PROVEN",
+      status: "AVAILABLE_UNPROVEN",
       executionClass: "WORKER_CANDIDATE",
-      coordinationEligible: true,
+      coordinationEligible: false,
+      reasonCode: "POST_MERGE_ASSURANCE_INVALIDATED_PENDING_REPROOF",
       adapterRef: "scripts/multi-agent-operator/codex-role-adapters.mjs",
       trustGateRef: PREVENTIVE_TRUST_GATE_V2_REF,
       restrictions: expect.arrayContaining([
@@ -191,9 +197,9 @@ describe("multi-agent executable capability inventory", () => {
       ]),
     })
     expect(capability("cross-provider-routing-review-model")).toMatchObject({
-      status: "PROVEN",
+      status: "AVAILABLE_UNPROVEN",
       executionClass: "NON_EXECUTABLE",
-      reasonCode: "CROSS_PROVIDER_ROUTING_REVIEW_PROVEN",
+      reasonCode: "POST_MERGE_ASSURANCE_INVALIDATED_PENDING_REPROOF",
       adapterRef: "scripts/multi-agent-operator/cross-provider-routing-review.mjs",
       authorityGrantRefs: [],
       trustGateRef: null,
@@ -204,9 +210,9 @@ describe("multi-agent executable capability inventory", () => {
       ]),
     })
     expect(capability("provider-health-reroute-model")).toMatchObject({
-      status: "PROVEN",
+      status: "AVAILABLE_UNPROVEN",
       executionClass: "NON_EXECUTABLE",
-      reasonCode: "PROVIDER_HEALTH_REROUTE_PROVEN",
+      reasonCode: "POST_MERGE_ASSURANCE_INVALIDATED_PENDING_REPROOF",
       adapterRef: "scripts/multi-agent-operator/provider-health-reroute.mjs",
       authorityGrantRefs: [],
       trustGateRef: null,
@@ -217,9 +223,9 @@ describe("multi-agent executable capability inventory", () => {
       ]),
     })
     expect(capability("provider-conformance-suite-model")).toMatchObject({
-      status: "PROVEN",
+      status: "AVAILABLE_UNPROVEN",
       executionClass: "NON_EXECUTABLE",
-      reasonCode: "PROVIDER_CONFORMANCE_SUITE_PROVEN",
+      reasonCode: "POST_MERGE_ASSURANCE_INVALIDATED_PENDING_REPROOF",
       adapterRef: "scripts/multi-agent-operator/provider-conformance-suite.mjs",
       authorityGrantRefs: [],
       trustGateRef: null,
@@ -251,7 +257,7 @@ describe("multi-agent executable capability inventory", () => {
     })
     expect(MULTI_AGENT_CAPABILITY_INVENTORY.filter((entry) => entry.coordinationEligible)
       .map((entry) => entry.capabilityId))
-      .toEqual(["hosted-codex-session", "codex-native-subagent-team", "hosted-codex-coordinator-adapter", "hosted-codex-role-adapters"])
+      .toEqual(["hosted-codex-session", "codex-native-subagent-team", "hosted-codex-coordinator-adapter"])
   })
 
   it("requires status, adapter, authority, and preventive trust proof for an executable worker", () => {

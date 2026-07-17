@@ -2,7 +2,7 @@
 
 **Work Order:** `WO-MAO-031`
 
-**Status:** `COMPLETE / CURRENT_SESSION_ROLE_LIFECYCLE_PROVEN`
+**Status:** `HISTORICAL_EVIDENCE_INVALIDATED / READY_FOR_REDESIGN_AND_REPROOF`
 
 **Control-plane risk:** `R3`
 
@@ -10,18 +10,23 @@
 
 **Depends on:** `WO-MAO-026`, `WO-MAO-029`, `WO-MAO-030`
 
-## Outcome
+> Post-merge assurance of WO-MAO-030 invalidated this completion evidence. The implementation and
+> report are retained as historical inputs only; WO-MAO-031 must be redesigned against the hardened
+> opaque-handle, host-bridge, transaction, replay, and evidence contracts and independently re-proved.
 
-WilliamOS now has a bounded hosted Codex role lifecycle adapter for the current-session native team
-surface. The adapter proves builder, independent assurance, original-builder remediation, and bounded
-re-review records using the common provider response contract.
+## Current assurance outcome
 
-This is not a durable provider dispatch implementation, GitHub review automation, service worker, or
-runtime activation. It preserves the WO-MAO-029 `SESSION_ONLY` boundary and requires host-issued
-opaque session proof for the builder and reviewer identities. Remediation is treated as the original
-builder continuing after requested changes, not as a new independent writer.
+`INVALIDATED / REPROOF_REQUIRED`. The original merged report recorded a bounded hosted Codex role
+lifecycle adapter and claimed builder, independent assurance, original-builder remediation, and
+bounded re-review proof. Those claims are superseded because that adapter was not proven compatible
+with the hardened canonical WO-MAO-030 contract.
 
-## Implemented contract
+The historical implementation remains non-durable and non-dispatching, but that boundary alone does
+not restore proof. WO-MAO-031 must be redesigned to consume opaque assignment handles, exact native
+bindings, bridge-backed operations, transaction quarantine, observation replay binding, and sealed
+terminal evidence from the hardened WO-MAO-030 adapter.
+
+## Historical original contract (superseded)
 
 - module: `scripts/multi-agent-operator/codex-role-adapters.mjs`
 - CLI: `scripts/multi-agent-operator/codex-role-adapters-cli.mjs`
@@ -29,7 +34,8 @@ builder continuing after requested changes, not as a new independent writer.
 - registry: `components/operator/multi-agent-operator-registry.ts`
 - capability record: `components/operator/multi-agent-capability-registry.ts`
 
-The adapter:
+The following list preserves what the original implementation attempted to enforce. It is historical
+design evidence only and does not certify the current WO-MAO-031 Work Order as complete:
 
 - validates WO-MAO-029 conformance before evaluating a role lifecycle
 - validates the Work Order envelope v2 record before accepting a stage chain
@@ -57,7 +63,10 @@ REJECTED_ISSUE_357_REUSED: false
 OWNER_RELAY_REQUIRED: false
 ```
 
-## Validation
+## Historical original validation (superseded)
+
+These runs described the invalidated implementation. They are retained as historical facts and are
+not current completion evidence:
 
 - focused role-adapter Vitest: `1 file / 8 tests`, PASS:
   - `tests/multi-agent-codex-role-adapters.test.ts`
@@ -69,12 +78,13 @@ OWNER_RELAY_REQUIRED: false
 
 ## Next transition
 
-`WO-MAO-031` is complete. `WO-MAO-033` remains `DEFERRED / PROVIDER_UNAVAILABLE`, so
-`WO-MAO-034` is not dependency-cleared through the ordinary completion-only resolver yet.
-
-The next safe continuation is the provider-unavailable settlement/routing lane that can decide whether
-the deferred Claude dependency can be treated under the existing explicit provider-unavailable policy,
-without asking William to repair or operate Claude.
+`WO-MAO-031` is `READY / REPROOF_REQUIRED` and is the sole dependency-cleared Work Order. Its
+independently approved completion is necessary but not sufficient to release WO-MAO-034. WO-MAO-034
+may become ready only when WO-MAO-031 is independently `COMPLETE`, the WO-MAO-032 assessment is
+`COMPLETE`, WO-MAO-033 remains exactly `DEFERRED / PROVIDER_UNAVAILABLE`, and the consumer-specific
+`WO-MAO-034<-WO-MAO-033` settlement is independently verified. The UI remains `PENDING` until that
+verified DAG artifact and provenance are integrated. WO-MAO-035 remains pending until the ordered
+chain completes; William is not asked to repair or operate Claude.
 
 ## Owner-operation evidence
 

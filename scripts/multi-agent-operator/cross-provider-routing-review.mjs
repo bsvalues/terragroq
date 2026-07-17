@@ -178,6 +178,11 @@ function supportsWorkOrder(provider, workOrder) {
 }
 
 export function evaluateCrossProviderRoutingReview(input) {
+  wall(
+    "CROSS_PROVIDER_ROUTING_INVALIDATED_PENDING_REPROOF",
+    "routingReview",
+    "WO_MAO_031_THEN_WO_MAO_034_REPROOF_REQUIRED",
+  )
   exactFields(input, INPUT_FIELDS, "routingReview")
   if (input.schemaVersion !== 1) wall("CROSS_PROVIDER_INPUT_WALL", "schemaVersion", "1_REQUIRED")
   if (input.artifactType !== "CROSS_PROVIDER_ROUTING_REVIEW_INPUT") {

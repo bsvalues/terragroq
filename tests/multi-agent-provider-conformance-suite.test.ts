@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process"
+import { spawnSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -63,98 +63,32 @@ function expectWall(callback: () => unknown, code: string) {
 }
 
 describe("WO-MAO-036 provider conformance suite", () => {
-  it("records session-only Codex conformance without certifying an executable provider", () => {
-    const result = evaluateProviderConformanceSuite(input())
-
-    expect(result).toMatchObject({
-      artifactType: "PROVIDER_CONFORMANCE_SUITE_RESULT",
-      workOrderId: "WO-MAO-036",
-      status: "PROVIDER_CONFORMANCE_SUITE_PROVEN",
-      enabledExecutableProviders: [],
-      dispatchPerformed: false,
-      providerCallPerformed: false,
-      executableWorkerCertified: false,
-      disabledProviderCertified: false,
-      durablePersistenceClaimed: false,
-      serviceWorkerClaimed: false,
-      runtimeActivationAllowed: false,
-      authorityGranted: false,
-      secretsExposed: false,
-      ownerRelayRequired: false,
-    })
-    expect(result.suite).toEqual([
-      expect.objectContaining({
-        providerId: "claude-code",
-        status: "DEFERRED_PROVIDER_UNAVAILABLE",
-        included: false,
-        executableWorkerConformant: false,
-        reasonCode: "PROVIDER_UNAVAILABLE",
-      }),
-      expect.objectContaining({
-        providerId: "hosted-codex",
-        status: "SESSION_ONLY_CONFORMANT",
-        included: true,
-        executableWorkerConformant: false,
-        conformanceCode: "CODEX_PROVIDER_SESSION_ONLY",
-        contractCoverage: expect.objectContaining({
-          dispatch: "DENIED_BY_CONFORMANCE",
-          evidence: "SANITIZED_EVIDENCE_SUPPORTED",
-          recovery: "ORIGINAL_BUILDER_REMEDIATION_AND_REVIEW",
-        }),
-      }),
-      expect.objectContaining({
-        providerId: "local-nested-codex",
-        status: "REJECTED",
-        included: false,
-        executableWorkerConformant: false,
-        reasonCode: "REJECTED_LOCAL_ADAPTER",
-      }),
-    ])
-    expect(result.deferredProviders).toEqual([{ providerId: "claude-code", reasonCode: "PROVIDER_UNAVAILABLE" }])
-    expect(result.rejectedProviders).toEqual([{ providerId: "local-nested-codex", reasonCode: "REJECTED_LOCAL_ADAPTER" }])
-    expect(result.resultHash).toMatch(/^[a-f0-9]{64}$/)
+  it("mechanically invalidates valid and caller-invented historical conformance fixtures", () => {
+    expectWall(() => evaluateProviderConformanceSuite(input()), "PROVIDER_CONFORMANCE_SUITE_INVALIDATED_PENDING_REPROOF")
+    expectWall(() => evaluateProviderConformanceSuite(input({
+      providers: providers({ 0: { status: "SESSION_ONLY", conformance: codexProviderConformanceFixture() } }),
+      requiredContracts: ["dispatch"],
+    })), "PROVIDER_CONFORMANCE_SUITE_INVALIDATED_PENDING_REPROOF")
   })
 
-  it("rejects contract weakening, executable inflation, and disabled-provider certification", () => {
-    expectWall(() => evaluateProviderConformanceSuite(input({
-      requiredContracts: ["dispatch", "status"],
-    })), "PROVIDER_CONFORMANCE_CONTRACT_WALL")
-    expectWall(() => evaluateProviderConformanceSuite(input({
-      providers: providers({ 0: { status: "EXECUTABLE_ENABLED" } }),
-    })), "PROVIDER_CONFORMANCE_EXECUTABLE_WALL")
-    expectWall(() => evaluateProviderConformanceSuite(input({
-      providers: providers({ 1: { conformance: codexProviderConformanceFixture() } }),
-    })), "PROVIDER_CONFORMANCE_STATUS_WALL")
-  })
-
-  it("rejects Codex conformance substitutions instead of certifying a broader surface", () => {
-    const conformance = codexProviderConformanceFixture()
-    conformance.providerContractDispatchAllowed = true
-    expectWall(() => evaluateProviderConformanceSuite(input({
-      providers: providers({ 0: { conformance } }),
-    })), "PROVIDER_CONFORMANCE_CODEX_WALL")
-  })
-
-  it("exposes deterministic CLI success and typed failure", () => {
+  it("exposes only the typed invalidation through the CLI", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "provider-conformance-suite-"))
     const inputPath = path.join(directory, "input.json")
     const badPath = path.join(directory, "bad.json")
     fs.writeFileSync(inputPath, JSON.stringify(input()))
     fs.writeFileSync(badPath, JSON.stringify({ ...input(), workOrderId: "WO-MAO-999" }))
 
-    const output = JSON.parse(execFileSync(process.execPath,
-      ["scripts/multi-agent-operator/provider-conformance-suite-cli.mjs", inputPath], { encoding: "utf8" }))
-    expect(output).toMatchObject({ status: "PROVIDER_CONFORMANCE_SUITE_PROVEN", dispatchPerformed: false })
-
-    const failed = spawnSync(process.execPath,
-      ["scripts/multi-agent-operator/provider-conformance-suite-cli.mjs", badPath], { encoding: "utf8" })
-    expect(failed.status).toBe(2)
-    expect(JSON.parse(failed.stdout)).toMatchObject({
-      ok: false,
-      code: "PROVIDER_CONFORMANCE_INPUT_WALL",
-      dispatchPerformed: false,
-      authorityGranted: false,
-    })
+    for (const target of [inputPath, badPath]) {
+      const result = spawnSync(process.execPath,
+        ["scripts/multi-agent-operator/provider-conformance-suite-cli.mjs", target], { encoding: "utf8" })
+      expect(result.status).toBe(2)
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        code: "PROVIDER_CONFORMANCE_SUITE_INVALIDATED_PENDING_REPROOF",
+        dispatchPerformed: false,
+        authorityGranted: false,
+      })
+    }
     fs.rmSync(directory, { recursive: true, force: true })
   })
 })

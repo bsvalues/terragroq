@@ -2,7 +2,9 @@
 
 ## Current verdict
 
-`PROVIDER_CONFORMANCE_SUITE_PASS / WO-MAO-037_READY / UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
+`WO-MAO-030_POST_MERGE_ASSURANCE_REMEDIATION_PASS / WO-MAO-031_REPROOF_READY /
+WO-MAO-031_WO-MAO-034_WO-MAO-035_WO-MAO-036_INVALIDATED /
+UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
 
 ## Truth
 
@@ -24,18 +26,16 @@ set resolver, local atomic reservation ledger, provider eligibility/response bou
 taxonomy, per-lane leases and checkpoints, append-only evidence ledger, mechanically derived owner-
 touch meter, recoverable eligible-set scheduler, deterministic team topology/fan-in projection,
 isolated-workspace lifecycle, one-writer handoff, hard-ceiling priority/fairness admission policy, and the
-current-session hosted Codex coordinator and role lifecycle adapters. WO-MAO-028 additionally proves
+current-session hosted Codex coordinator adapter. WO-MAO-028 additionally proves
 deterministic scheduler simulation and replay behavior in a pure/static harness. WO-MAO-030 translates
-selected hosted team plans into native assignments, cancellation-ready records, messages, and sanitized
-evidence while preserving the WO-MAO-029 `SESSION_ONLY` boundary. WO-MAO-031 proves builder,
-independent assurance, original-builder remediation, and bounded re-review adapters through the common
-provider response contract. These are bounded contracts, not provider or runtime execution, a durable
-provider dispatcher, GitHub review automation, or automated GitHub delivery implementation. WO-MAO-034
-adds static cross-provider routing and review planning that excludes unavailable providers and keeps
-same-provider independent Codex review explicit. WO-MAO-035 adds static provider-health classification,
-circuit-breaker/backoff projection, and bounded fallback selection without provider calls or dispatch.
-WO-MAO-036 adds suite-level provider conformance classification while preserving hosted Codex as
-session-only and excluding unavailable or rejected providers from executable certification.
+canonical team plans into opaque host-trusted assignments, bridge-backed messages/cancellation,
+replay-sealed evidence, and quarantined ambiguous side effects while preserving the WO-MAO-029
+`SESSION_ONLY` boundary. Post-merge assurance invalidated the historical WO-MAO-031 role-lifecycle,
+WO-MAO-034 routing, WO-MAO-035 health/reroute, and WO-MAO-036 provider-conformance evidence; their
+code and reports remain historical inputs pending ordered re-proof. The affected APIs and CLIs are
+mechanically fail-closed rather than callable as current proof. The proven contracts are not provider
+or runtime execution, a durable provider dispatcher, GitHub review automation, or automated GitHub
+delivery implementation.
 
 ## Non-negotiable operating state
 
@@ -96,17 +96,27 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 ## Phase 4 evidence
 
 - `docs/reports/WO-MAO-030-hosted-codex-coordinator-adapter.md`
-- `docs/reports/WO-MAO-031-codex-builder-assurance-remediation-adapters.md`
-- `docs/reports/WO-MAO-034-cross-provider-routing-review.md`
-- `docs/reports/WO-MAO-035-provider-health-reroute.md`
-- `docs/reports/WO-MAO-036-provider-conformance-suite.md`
+- `docs/reports/WO-MAO-030-post-merge-assurance-remediation.md` — closes eleven typed post-merge
+  assurance findings and records the downstream invalidation/order.
+- `docs/reports/WO-MAO-031-codex-builder-assurance-remediation-adapters.md` — historical evidence,
+  invalidated pending redesign and independent re-proof.
+- `docs/reports/WO-MAO-034-cross-provider-routing-review.md` — historical evidence, invalidated pending
+  WO-MAO-031 re-proof and a new independent routing review.
+- `docs/reports/WO-MAO-035-provider-health-reroute.md` — historical evidence, invalidated because
+  caller-carried providers/observations and the stateless breaker could manufacture proof.
+- `docs/reports/WO-MAO-036-provider-conformance-suite.md` — historical evidence, invalidated because
+  caller records and fixture coverage did not prove provider operations.
 
 ## Next transition
 
-`WO-MAO-001` through `WO-MAO-032`, `WO-MAO-034`, `WO-MAO-035`, and `WO-MAO-036` are complete.
-`WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The mechanically eligible set and
-current-work projection contain `WO-MAO-037`. The rejected local runtime is not in the eligible
-dependency chain.
+`WO-MAO-001` through `WO-MAO-030` and `WO-MAO-032` are complete. `WO-MAO-031` is the sole ready Work
+Order. `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; WO-MAO-034 and later Work
+Orders remain pending. After WO-MAO-031 re-proof, WO-MAO-034 additionally requires completed
+WO-MAO-032 and the exact independently verified settlement edge `WO-MAO-034<-WO-MAO-033`. That
+settlement cannot satisfy the redundant direct WO-MAO-033 edges on WO-MAO-035 or WO-MAO-036; those
+edges require a separately ratified dependency correction. The mandatory sequence is
+WO-MAO-030 -> WO-MAO-031 -> WO-MAO-034 -> WO-MAO-035 -> WO-MAO-036 -> Phase 5. The rejected local
+runtime is not in the eligible dependency chain.
 
 ## Validation evidence
 
