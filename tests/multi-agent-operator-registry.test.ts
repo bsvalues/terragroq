@@ -174,6 +174,22 @@ describe("multi-agent operator registry", () => {
     )
     expect(wrongLifecycle[33]).toMatchObject({ workOrderId: "WO-MAO-034", status: "PENDING" })
 
+    const incompleteAssessment = new Set(Array.from({ length: 31 }, (_, index) => workOrderId(index + 1)))
+    const missingAssessmentCompletion = resolveMultiAgentWorkOrders(
+      incompleteAssessment,
+      new Set(),
+      deferred,
+      MULTI_AGENT_PROVIDER_SETTLEMENT_RECORD,
+    )
+    expect(missingAssessmentCompletion[31]).toMatchObject({
+      workOrderId: "WO-MAO-032",
+      status: "READY",
+    })
+    expect(missingAssessmentCompletion[33]).toMatchObject({
+      workOrderId: "WO-MAO-034",
+      status: "PENDING",
+    })
+
     const afterThirtyFour = resolveMultiAgentWorkOrders(
       new Set([...completed, "WO-MAO-034"]), new Set(), deferred,
     )

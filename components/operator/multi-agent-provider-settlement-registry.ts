@@ -52,12 +52,12 @@ export const MULTI_AGENT_PROVIDER_SETTLEMENT_RECORD = Object.freeze({
   sourceCommitSha: "42a63e3e11e5bb1a9c1e9419db3e0f2651b1789c",
   trustRegistryId: "williamos-provider-assessment-pins",
   trustRegistryVersion: 2,
-  trustRootFingerprint: "55d270e3515c50354718835ff57bfb793b6575a03d43bb415eda9f58739a495a",
-  trustBundleContentHash: "7198e6c96a30f058f2384c98bed692df2c8a25997bede2138f374314eaf22ee1",
+  trustRootFingerprint: "97ee87ea1c013ed8e4646c3852d935629c01d7c69cf38e8d0f66e87b2d8097be",
+  trustBundleContentHash: "e5b64e7097afc38d363bba83c287053004531421add97c3908b27e8d3cd7a1b0",
   trustStatusHeadHash: "3f697265d1efc91373251d1f5bea3f847052ac425eb5a22d41fe74b8d86f8ff0",
-  trustRegistryRecordContentHash: "8dfb934e0499518dfefe3215ffab3eb4e6fd42d18f0c9417db300eee280e9c11",
-  trustRegistryContentHash: "36e5454ad60f86580ca621beef685d195877a693eef4fb2c22f8e7fb454e5034",
-  settlementResultHash: "87a475befe6650f639fbbc34a4324453399ceb90be35e36351f9280bf516e3fb",
+  trustRegistryRecordContentHash: "302660be359c2bae4d058ed26c466c7e53c38784a895a7fcdcbf5f4312b4a069",
+  trustRegistryContentHash: "a169923137282bd12d643107c8ec623378f14c1bad49743df1a39916ca8d37a2",
+  settlementResultHash: "a1a3ee8742c14dcd458ce28d12d1a392d25d605018f074dc0ebe4855f62b11f9",
   providerId: "claude-code",
   providerEnabled: false,
   dispatchPerformed: false,
@@ -87,12 +87,12 @@ export function isVerifiedWoMao034ProviderSettlement(
     && record.sourceCommitSha === "42a63e3e11e5bb1a9c1e9419db3e0f2651b1789c"
     && record.trustRegistryId === "williamos-provider-assessment-pins"
     && record.trustRegistryVersion === 2
-    && record.trustRootFingerprint === "55d270e3515c50354718835ff57bfb793b6575a03d43bb415eda9f58739a495a"
-    && record.trustBundleContentHash === "7198e6c96a30f058f2384c98bed692df2c8a25997bede2138f374314eaf22ee1"
+    && record.trustRootFingerprint === "97ee87ea1c013ed8e4646c3852d935629c01d7c69cf38e8d0f66e87b2d8097be"
+    && record.trustBundleContentHash === "e5b64e7097afc38d363bba83c287053004531421add97c3908b27e8d3cd7a1b0"
     && record.trustStatusHeadHash === "3f697265d1efc91373251d1f5bea3f847052ac425eb5a22d41fe74b8d86f8ff0"
-    && record.trustRegistryRecordContentHash === "8dfb934e0499518dfefe3215ffab3eb4e6fd42d18f0c9417db300eee280e9c11"
-    && record.trustRegistryContentHash === "36e5454ad60f86580ca621beef685d195877a693eef4fb2c22f8e7fb454e5034"
-    && record.settlementResultHash === "87a475befe6650f639fbbc34a4324453399ceb90be35e36351f9280bf516e3fb"
+    && record.trustRegistryRecordContentHash === "302660be359c2bae4d058ed26c466c7e53c38784a895a7fcdcbf5f4312b4a069"
+    && record.trustRegistryContentHash === "a169923137282bd12d643107c8ec623378f14c1bad49743df1a39916ca8d37a2"
+    && record.settlementResultHash === "a1a3ee8742c14dcd458ce28d12d1a392d25d605018f074dc0ebe4855f62b11f9"
     && [record.assessmentEnvelopeHash, record.assessmentContentHash, record.subjectEnvelopeHash,
       record.consumerEnvelopeHash, record.sourceAssessmentContentHash, record.trustRootFingerprint,
       record.trustBundleContentHash, record.trustStatusHeadHash, record.trustRegistryRecordContentHash,

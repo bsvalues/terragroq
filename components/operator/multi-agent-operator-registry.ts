@@ -161,6 +161,7 @@ export function resolveMultiAgentWorkOrders(
 ): MultiAgentWorkOrderRecord[] {
   const canonicalSettlementVerified = providerSettlement !== null
     && isVerifiedWoMao034ProviderSettlement(providerSettlement)
+    && completedIds.has(providerSettlement.assessmentWorkOrderId)
     && deferredProviderUnavailableIds.has(providerSettlement.subjectWorkOrderId)
   return WORK_ORDER_SEEDS.map(([title, phase, dependencies], index) => {
     const number = index + 1

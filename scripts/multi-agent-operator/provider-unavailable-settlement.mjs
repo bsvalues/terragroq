@@ -40,7 +40,8 @@ const TRUST_ROOT_FIELDS = new Set([
 const TRUST_WRITER_FIELDS = new Set([
   "writerId", "keyId", "algorithm", "publicKeyPem", "fingerprint", "status",
   "notBefore", "expiresAt", "providerIds", "assessmentWorkOrderIds", "subjectWorkOrderIds",
-  "consumerWorkOrderIds", "consumerEnvelopeHashes", "sourceAssessmentContentHashes",
+  "consumerWorkOrderIds", "assessmentEnvelopeHashes", "subjectEnvelopeHashes",
+  "consumerEnvelopeHashes", "sourceAssessmentContentHashes",
 ])
 const TRUST_LEDGER_ANCHOR_FIELDS = new Set([
   "anchorId", "ledgerId", "eventId", "eventHash", "eventCount", "headEventHash",
@@ -454,6 +455,12 @@ function normalizePinnedTrustBundle(registryReference) {
       assessmentWorkOrderIds: exactStringSet(writer.assessmentWorkOrderIds, `${field}.assessmentWorkOrderIds`, WORK_ORDER_ID),
       subjectWorkOrderIds: exactStringSet(writer.subjectWorkOrderIds, `${field}.subjectWorkOrderIds`, WORK_ORDER_ID),
       consumerWorkOrderIds: exactStringSet(writer.consumerWorkOrderIds, `${field}.consumerWorkOrderIds`, WORK_ORDER_ID),
+      assessmentEnvelopeHashes: exactStringSet(
+        writer.assessmentEnvelopeHashes,
+        `${field}.assessmentEnvelopeHashes`,
+        HASH,
+      ),
+      subjectEnvelopeHashes: exactStringSet(writer.subjectEnvelopeHashes, `${field}.subjectEnvelopeHashes`, HASH),
       consumerEnvelopeHashes: exactStringSet(writer.consumerEnvelopeHashes, `${field}.consumerEnvelopeHashes`, HASH),
       sourceAssessmentContentHashes: exactStringSet(
         writer.sourceAssessmentContentHashes,
@@ -568,6 +575,8 @@ function verifySignature(proof, claims, claimsJson, trust) {
     || !writer.assessmentWorkOrderIds.includes(claims.assessmentWorkOrderId)
     || !writer.subjectWorkOrderIds.includes(claims.subjectWorkOrderId)
     || !writer.consumerWorkOrderIds.includes(claims.consumerWorkOrderId)
+    || !writer.assessmentEnvelopeHashes.includes(claims.assessmentEnvelopeHash)
+    || !writer.subjectEnvelopeHashes.includes(claims.subjectEnvelopeHash)
     || !writer.consumerEnvelopeHashes.includes(claims.consumerEnvelopeHash)
     || !writer.sourceAssessmentContentHashes.includes(claims.sourceAssessmentContentHash)) {
     wall("PROVIDER_SETTLEMENT_TRUST_WALL", "assessment.proof.writerId", "WRITER_SCOPE_MISMATCH")

@@ -201,6 +201,8 @@ function fixture() {
       assessmentWorkOrderIds: ["WO-MAO-032"],
       subjectWorkOrderIds: ["WO-MAO-033"],
       consumerWorkOrderIds: ["WO-MAO-034"],
+      assessmentEnvelopeHashes: [claims.assessmentEnvelopeHash],
+      subjectEnvelopeHashes: [claims.subjectEnvelopeHash],
       consumerEnvelopeHashes: [claims.consumerEnvelopeHash],
       sourceAssessmentContentHashes: [claims.sourceAssessmentContentHash],
     }],
@@ -383,6 +385,8 @@ describe("provider-unavailable dependency settlement", () => {
   it("rejects correctly re-signed claims outside pinned consumer and source-assessment scope", () => {
     for (const mutation of [
       { consumerWorkOrderId: "WO-MAO-099" },
+      { assessmentEnvelopeHash: "b".repeat(64) },
+      { subjectEnvelopeHash: "c".repeat(64) },
       { consumerEnvelopeHash: "d".repeat(64) },
       { sourceAssessmentContentHash: "e".repeat(64) },
     ]) {
@@ -397,6 +401,34 @@ describe("provider-unavailable dependency settlement", () => {
         },
       }
       expect(() => verifyProviderUnavailableAssessment(artifact, data.trust)).toThrow(/WRITER_SCOPE_MISMATCH/)
+    }
+  })
+
+  it("requires exact assessment and subject envelope-hash scope in every trusted writer record", () => {
+    for (const field of ["assessmentEnvelopeHashes", "subjectEnvelopeHashes"] as const) {
+      const missing = fixture()
+      const missingPayload = structuredClone(missing.bundlePayload)
+      delete (missingPayload.writers[0] as Record<string, unknown>)[field]
+      const missingBundle = missing.sealBundle(missingPayload)
+      const missingRecord = {
+        ...structuredClone(missing.registryRecord),
+        trustBundle: missingBundle,
+        pinnedBundleContentHash: missingBundle.contentHash,
+      }
+      expect(() => verifyPinnedProviderAssessmentTrustBundle(missing.installRecord(missingRecord)))
+        .toThrow(new RegExp(`MISSING_FIELD_WALL:trustBundle\\.writers\\[0\\]\\.${field}`))
+
+      const duplicate = fixture()
+      const duplicatePayload = structuredClone(duplicate.bundlePayload)
+      duplicatePayload.writers[0][field].push(duplicatePayload.writers[0][field][0])
+      const duplicateBundle = duplicate.sealBundle(duplicatePayload)
+      const duplicateRecord = {
+        ...structuredClone(duplicate.registryRecord),
+        trustBundle: duplicateBundle,
+        pinnedBundleContentHash: duplicateBundle.contentHash,
+      }
+      expect(() => verifyPinnedProviderAssessmentTrustBundle(duplicate.installRecord(duplicateRecord)))
+        .toThrow(/DUPLICATE/)
     }
   })
 
@@ -509,7 +541,7 @@ describe("provider-unavailable dependency settlement", () => {
       version: 2,
       activeRecordCount: 1,
       mutableRegistrationAllowed: false,
-      contentHash: "36e5454ad60f86580ca621beef685d195877a693eef4fb2c22f8e7fb454e5034",
+      contentHash: "a169923137282bd12d643107c8ec623378f14c1bad49743df1a39916ca8d37a2",
     })
     expect(result.record).toMatchObject({
       registryRecord: {
@@ -518,7 +550,7 @@ describe("provider-unavailable dependency settlement", () => {
         status: "ACTIVE",
         immutable: true,
       },
-      pinnedRegistryRecordContentHash: "8dfb934e0499518dfefe3215ffab3eb4e6fd42d18f0c9417db300eee280e9c11",
+      pinnedRegistryRecordContentHash: "302660be359c2bae4d058ed26c466c7e53c38784a895a7fcdcbf5f4312b4a069",
     })
     expect(() => verifyPinnedProviderAssessmentTrustBundle({
       registryId: "caller-minted-root",
@@ -538,8 +570,8 @@ describe("provider-unavailable dependency settlement", () => {
     const result = JSON.parse(probe.stdout)
     expect(result.trust).toMatchObject({
       registryVersion: 2,
-      rootFingerprint: "55d270e3515c50354718835ff57bfb793b6575a03d43bb415eda9f58739a495a",
-      bundleContentHash: "7198e6c96a30f058f2384c98bed692df2c8a25997bede2138f374314eaf22ee1",
+      rootFingerprint: "97ee87ea1c013ed8e4646c3852d935629c01d7c69cf38e8d0f66e87b2d8097be",
+      bundleContentHash: "e5b64e7097afc38d363bba83c287053004531421add97c3908b27e8d3cd7a1b0",
       statusHeadHash: "3f697265d1efc91373251d1f5bea3f847052ac425eb5a22d41fe74b8d86f8ff0",
     })
     expect(result.verified).toMatchObject({
@@ -764,7 +796,7 @@ describe("provider-unavailable dependency settlement", () => {
     }
     envelopeMismatch.input.providerAssessments[0] = mismatchedArtifact
     envelopeMismatch.input.workOrderStates[1].providerUnavailableAssessmentRef.contentHash = mismatchedArtifact.contentHash
-    expectDagWall(envelopeMismatch.input, envelopeMismatch.trust, "ASSESSMENT_IDENTITY_OR_ENVELOPE_HASH_MISMATCH")
+    expectDagWall(envelopeMismatch.input, envelopeMismatch.trust, "PROVIDER_SETTLEMENT_TRUST_WALL:assessment.proof.writerId")
   })
 
   it("rejects blocked, arbitrary deferred, missing evidence, mismatched identities, and arbitrary COMPLETE WOs", () => {

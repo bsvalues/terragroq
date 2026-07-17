@@ -32,6 +32,7 @@ WO-MAO-034 is actually executed and independently reviewed.
 - the settlement must bind `consumerWorkOrderId=WO-MAO-034`;
 - the settlement must bind the exact canonical WO-MAO-034 consumer-envelope hash;
 - the assessment must bind `assessmentWorkOrderId=WO-MAO-032`;
+- the operator projection must independently observe WO-MAO-032 in its completed Work Order set;
 - the subject must bind `subjectWorkOrderId=WO-MAO-033`;
 - the subject lifecycle must remain exactly `DEFERRED / PROVIDER_UNAVAILABLE`;
 - the assessment must bind the exact immutable WO-MAO-032 source-assessment content hash;

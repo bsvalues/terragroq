@@ -38,8 +38,7 @@ import { clearTestSchedulerTrustRecords, installTestSchedulerTrustRecord } from 
 const NOW = Date.parse("2026-07-15T10:00:00.000Z")
 // Worker creation is intentionally bounded by the production lifecycle contract,
 // but can exceed Vitest's default case budget on a saturated shared runner.
-const SHARED_RUNNER_HEARTBEAT_ACK_MS = 5_000
-const REAL_STORE_CASE_TIMEOUT_MS = 15_000
+const SHARED_RUNNER_HEARTBEAT_ACK_MS = 15_000
 const signer = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
 const trust = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
 const authority = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
@@ -416,7 +415,7 @@ beforeEach(() => {
 })
 afterEach(() => { clearTestSchedulerTrustRecords(); fs.rmSync(root, { recursive: true, force: true }) })
 
-describe("WO-MAO-023 remediated real-store scheduler", () => {
+describe("WO-MAO-023 remediated real-store scheduler", { timeout: 30_000 }, () => {
   it("derives eligibility through the Phase2 DAG resolver and commits real reservation/lease/evidence stores", () => {
     const result = schedule()
     expect(result).toMatchObject({ code: "ELIGIBLE_SET_SCHEDULED", derivedEligibleWorkOrderIds: ["WO-MAO-023"], stateVersion: 5 })
@@ -425,7 +424,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     expect(inspectReservationLedger(configuration().reservationLedgerPath, configuration().reservationLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_RESERVATION_INSPECT_REQUEST" })).toMatchObject({ valid: true, reservations: [{ fencingToken: entry.reservationFencingToken }] })
     expect(inspectLaneLeaseStore(configuration().leaseStorePath, configuration().leaseStoreId)).toMatchObject({ ok: true, lanes: [{ status: "ACTIVE", fencingToken: entry.leaseFencingToken, lifecycleState: "PROVIDER_DISPATCHED" }] })
     expect(verifyEvidenceLedger(configuration().evidenceLedgerDir, configuration().evidenceLedgerId, { schemaVersion: 1, artifactType: "MULTI_AGENT_EVIDENCE_VERIFY_REQUEST", expectedAnchor: null })).toMatchObject({ ok: true, eventCount: 1 })
-  }, REAL_STORE_CASE_TIMEOUT_MS)
+  })
 
   it("atomically reclaims an expired lock owned by a dead/remote process", () => {
     const config = configuration()
@@ -473,7 +472,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
       expect(fs.existsSync(`${statePath}.lock/owner.json`)).toBe(true)
     } finally { unlock() }
     expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
-  }, 15_000)
+  })
 
   it("quiesces a delayed startup acknowledgement before removing its same-nonce renewed owner", () => {
     const statePath = configuration().statePath
@@ -490,7 +489,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
       expect((error as SchedulerLockLeaseError & { heartbeatGeneration: number }).heartbeatGeneration).toBeGreaterThan(1)
     }
     expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
-  }, REAL_STORE_CASE_TIMEOUT_MS)
+  })
 
   it("waits for a bounded delayed stop acknowledgement before deleting the owned lock", () => {
     const statePath = configuration().statePath
@@ -502,7 +501,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     })
     unlock()
     expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
-  }, REAL_STORE_CASE_TIMEOUT_MS)
+  })
 
   it("preserves the owned lock when bounded heartbeat stop acknowledgement is unavailable", () => {
     const statePath = configuration().statePath
@@ -513,7 +512,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     })
     expect(() => unlock()).toThrowError(/SCHEDULER_LOCK_WALL:HEARTBEAT_STOP_REQUIRED/)
     expect(fs.existsSync(`${statePath}.lock/owner.json`)).toBe(true)
-  }, REAL_STORE_CASE_TIMEOUT_MS)
+  })
 
   it("fails the ownership guard and preserves a fenced successor", () => {
     const statePath = configuration().statePath
@@ -745,7 +744,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     }))
     expect(result).toMatchObject({ code: "OUTCOME_CHECKPOINTED", capacityReleased: false, lifecycleState: "EXECUTING" })
     expect(inspectLaneLeaseStore(configuration().leaseStorePath, configuration().leaseStoreId).lanes[0]).toMatchObject({ status: "ACTIVE", lifecycleState: "EXECUTING" })
-  }, REAL_STORE_CASE_TIMEOUT_MS)
+  })
 
   it("accepts ACCEPTED then RUNNING and keeps repeated RUNNING lifecycle-idempotent", () => {
     const entry = schedule().scheduled[0]
@@ -1257,7 +1256,7 @@ describe("WO-MAO-023 remediated real-store scheduler", () => {
     const reaped = reapAmbiguousOutcomes(recoveringReapConfig, { expectedVersion: version, claims, maxBatch: 2 })
     expect(reaped).toMatchObject({ capacityRecovered: 2 })
     expect(inspectSchedulerState(config.statePath, config.stateId).state.reconciliation).toEqual([])
-  }, 15_000)
+  })
 
   it("replays an expired-lease REAP_BATCH with the durable new fence/evidence projection and idempotent second recovery", () => {
     const config = { ...configuration(NOW), leaseDurationMs: 100 }

@@ -21,8 +21,8 @@ const EMBEDDED_REGISTRY = Object.freeze({
           rootId: "williamos-provider-assessment-root-v2",
           keyId: "williamos-provider-assessment-root-key-v2",
           algorithm: "ED25519",
-          publicKeyPem: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAfM3PFt4vihPZ/XCBsL8uTSIRCMTBvaCYsj/ZN7mr+3E=\n-----END PUBLIC KEY-----\n",
-          fingerprint: "55d270e3515c50354718835ff57bfb793b6575a03d43bb415eda9f58739a495a",
+          publicKeyPem: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAfyLwIXqr19R5pUetYhMXJ5r5Hh7MUuG/6P3xfXhLu60=\n-----END PUBLIC KEY-----\n",
+          fingerprint: "97ee87ea1c013ed8e4646c3852d935629c01d7c69cf38e8d0f66e87b2d8097be",
           status: "ACTIVE",
           notBefore: "2026-07-16T00:00:00.000Z",
           expiresAt: "2031-07-16T00:00:00.000Z",
@@ -40,6 +40,8 @@ const EMBEDDED_REGISTRY = Object.freeze({
           assessmentWorkOrderIds: Object.freeze(["WO-MAO-032"]),
           subjectWorkOrderIds: Object.freeze(["WO-MAO-033"]),
           consumerWorkOrderIds: Object.freeze(["WO-MAO-034"]),
+          assessmentEnvelopeHashes: Object.freeze(["4f4495e4ca5e0691ba99ac277a74f5c29c594e9f300fd02979fa2eea07628da8"]),
+          subjectEnvelopeHashes: Object.freeze(["5311ed8044b3b40a9ea7604cdb77a90d29f2d5562562a7c2988313f76a7226ee"]),
           consumerEnvelopeHashes: Object.freeze(["c03f2339666105cbe08b51ef32a50000d3b2441103f4420721f216c75667cb03"]),
           sourceAssessmentContentHashes: Object.freeze(["60917d122e314844e175c9d4e6e60e197a5e4f06bc2b6f2ea73b0fc1e09ed523"]),
         })]),
@@ -91,24 +93,24 @@ const EMBEDDED_REGISTRY = Object.freeze({
           eventCount: 3,
           latestEventHash: "3f697265d1efc91373251d1f5bea3f847052ac425eb5a22d41fe74b8d86f8ff0",
         }),
-        contentHash: "7198e6c96a30f058f2384c98bed692df2c8a25997bede2138f374314eaf22ee1",
+        contentHash: "e5b64e7097afc38d363bba83c287053004531421add97c3908b27e8d3cd7a1b0",
         signature: Object.freeze({
           algorithm: "ED25519",
           keyId: "williamos-provider-assessment-root-key-v2",
-          value: "si8UxKWfnWxFKErxzG8lIFnYFWI4xsdZwpsXdRNyOC/CAh2toyMusLBj/ncNtj2Qv4K0wc4Ai9BQKpgu4f3PAg==",
+          value: "q/mHeLkewo1ZznI+I8XzZa8meqJu4hIcicFtdDiitpLQo9Bsc4ZgIAXIT60ly5f/sTDIBpr2HJW84mpmgUGoBA==",
         }),
       }),
-      pinnedRootFingerprint: "55d270e3515c50354718835ff57bfb793b6575a03d43bb415eda9f58739a495a",
-      pinnedBundleContentHash: "7198e6c96a30f058f2384c98bed692df2c8a25997bede2138f374314eaf22ee1",
+      pinnedRootFingerprint: "97ee87ea1c013ed8e4646c3852d935629c01d7c69cf38e8d0f66e87b2d8097be",
+      pinnedBundleContentHash: "e5b64e7097afc38d363bba83c287053004531421add97c3908b27e8d3cd7a1b0",
       pinnedStatusHeadHash: "3f697265d1efc91373251d1f5bea3f847052ac425eb5a22d41fe74b8d86f8ff0",
     }),
-    pinnedRegistryRecordContentHash: "8dfb934e0499518dfefe3215ffab3eb4e6fd42d18f0c9417db300eee280e9c11",
+    pinnedRegistryRecordContentHash: "302660be359c2bae4d058ed26c466c7e53c38784a895a7fcdcbf5f4312b4a069",
   })]),
   registryId: "williamos-provider-assessment-pins",
   schemaVersion: 1,
   version: 2,
 })
-const EMBEDDED_REGISTRY_CONTENT_HASH = "36e5454ad60f86580ca621beef685d195877a693eef4fb2c22f8e7fb454e5034"
+const EMBEDDED_REGISTRY_CONTENT_HASH = "a169923137282bd12d643107c8ec623378f14c1bad49743df1a39916ca8d37a2"
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
