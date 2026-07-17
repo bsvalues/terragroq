@@ -192,85 +192,26 @@ beforeEach(() => installRoleSessions())
 afterEach(() => clearTestCodexHostSessionRecords())
 
 describe("WO-MAO-031 Codex builder, assurance, and remediation adapters", () => {
-  it("proves the bounded builder-reviewer-remediator-rereview lifecycle without dispatch", () => {
-    const result = adaptCodexRoleLifecycle(adapterInput())
-
-    expect(result).toMatchObject({
-      artifactType: "CODEX_ROLE_ADAPTER_RESULT",
-      adapterId: "hosted-codex-role-adapters-v1",
-      status: "ROLE_LIFECYCLE_PROVEN",
-      workOrderId: "WO-MAO-031",
-      laneId: "LANE-MAO-031",
-      ownerRelayRequired: false,
-      providerContractDispatchAllowed: false,
-      dispatchPerformed: false,
-      durablePersistenceClaimed: false,
-      serviceWorkerClaimed: false,
-      runtimeActivationAllowed: false,
-      authorityGranted: false,
-      evidence: { sanitized: true },
-    })
-    expect(result.roleAdapters.map(({ role }) => role).sort()).toEqual(["builder", "remediator", "reviewer"])
-    expect(result.roleAdapters.every(({ state, dispatchPerformed }) =>
-      state === "ROLE_ADAPTER_READY" && dispatchPerformed === false)).toBe(true)
-    expect(result.stages.map(({ stage }) => stage)).toEqual(["BUILD", "ASSURANCE_REVIEW", "REMEDIATION", "REREVIEW"])
-    expect(result.stages[2].workerId).toBe(result.stages[0].workerId)
-    expect(result.resultHash).toMatch(/^[a-f0-9]{64}$/)
-    expect(Object.isFrozen(result.roleAdapters[0])).toBe(true)
-  })
-
-  it("requires independent assurance to request changes before original-builder remediation", () => {
-    expectWall(() => adaptCodexRoleLifecycle(adapterInput({
-      stages: stages({ 1: { review: { verdict: "APPROVED", unresolvedThreads: 0 } } }),
-    })), "CODEX_ROLE_REVIEW_WALL")
-  })
-
-  it("requires final re-review approval with zero unresolved threads", () => {
-    expectWall(() => adaptCodexRoleLifecycle(adapterInput({
-      stages: stages({ 3: { review: { verdict: "REQUESTED_CHANGES", unresolvedThreads: 1 } } }),
-    })), "CODEX_ROLE_REVIEW_WALL")
-  })
-
-  it("rejects remediation by any identity other than the original builder", () => {
-    expectWall(() => adaptCodexRoleLifecycle(adapterInput({
-      stages: stages({ 2: { workerId: "codex-remediator" } }),
-    })), "CODEX_ROLE_REMEDIATION_WALL")
-  })
-
-  it("rejects remediation cycles beyond the envelope budget", () => {
-    expectWall(() => adaptCodexRoleLifecycle(adapterInput({
-      stages: stages({ 2: { remediationCycle: 3 } }),
-    })), "CODEX_ROLE_REMEDIATION_WALL")
-  })
-
-  it("rejects unsanitized or failed provider response evidence", () => {
-    expectWall(() => adaptCodexRoleLifecycle(adapterInput({
-      stages: stages({ 0: { providerResponse: { ...response("BUILD", "builder"), sanitized: false } } }),
-    })), "CODEX_ROLE_PROVIDER_RESPONSE_WALL")
-    expectWall(() => adaptCodexRoleLifecycle(adapterInput({
-      stages: stages({ 0: { providerResponse: { ...response("BUILD", "builder"), providerState: "FAILED", reasonCode: "VALIDATION_FAILED" } } }),
-    })), "CODEX_ROLE_PROVIDER_RESPONSE_WALL")
-  })
-
-  it("rejects coordinator results that claim dispatch or runtime authority", () => {
+  it("mechanically invalidates valid and adversarial historical fixtures pending redesign", () => {
+    expectWall(() => adaptCodexRoleLifecycle(adapterInput()), "CODEX_ROLE_ADAPTER_INVALIDATED_PENDING_REPROOF")
     expectWall(() => adaptCodexRoleLifecycle(adapterInput({
       coordinatorResult: coordinatorResult({ dispatchPerformed: true }),
-    })), "CODEX_ROLE_AUTHORITY_WALL")
+    })), "CODEX_ROLE_ADAPTER_INVALIDATED_PENDING_REPROOF")
   })
 
-  it("exposes deterministic CLI typed failures without a production host-session proof", () => {
+  it("exposes only the typed invalidation through the CLI", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-role-adapter-"))
     const inputPath = path.join(directory, "input.json")
     const badPath = path.join(directory, "bad.json")
     fs.writeFileSync(inputPath, JSON.stringify(adapterInput()))
     fs.writeFileSync(badPath, JSON.stringify({ ...adapterInput(), adapterId: "wrong-adapter" }))
 
-    const missingProof = spawnSync(process.execPath,
+    const historical = spawnSync(process.execPath,
       ["scripts/multi-agent-operator/codex-role-adapters-cli.mjs", inputPath], { encoding: "utf8" })
-    expect(missingProof.status).toBe(2)
-    expect(JSON.parse(missingProof.stdout)).toMatchObject({
+    expect(historical.status).toBe(2)
+    expect(JSON.parse(historical.stdout)).toMatchObject({
       ok: false,
-      code: "CODEX_ROLE_CONFORMANCE_WALL",
+      code: "CODEX_ROLE_ADAPTER_INVALIDATED_PENDING_REPROOF",
       dispatchPerformed: false,
       authorityGranted: false,
     })
@@ -278,7 +219,10 @@ describe("WO-MAO-031 Codex builder, assurance, and remediation adapters", () => 
     const failed = spawnSync(process.execPath,
       ["scripts/multi-agent-operator/codex-role-adapters-cli.mjs", badPath], { encoding: "utf8" })
     expect(failed.status).toBe(2)
-    expect(JSON.parse(failed.stdout)).toMatchObject({ ok: false, code: "CODEX_ROLE_INPUT_WALL" })
+    expect(JSON.parse(failed.stdout)).toMatchObject({
+      ok: false,
+      code: "CODEX_ROLE_ADAPTER_INVALIDATED_PENDING_REPROOF",
+    })
     fs.rmSync(directory, { recursive: true, force: true })
   })
 })

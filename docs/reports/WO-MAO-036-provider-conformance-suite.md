@@ -1,17 +1,19 @@
 # WO-MAO-036 — Provider Conformance Suite
 
-Result: `PROVIDER_CONFORMANCE_SUITE_PASS / WO-MAO-037_READY`
+Result: `INVALIDATED / REPROOF_REQUIRED / PENDING`
 
 ## Scope
 
-WO-MAO-036 adds a static suite-level provider conformance evaluator for the multi-agent operator
-program. It verifies the common required contract set, validates the existing Codex session-only
-conformance artifact, and explicitly excludes unavailable, disabled, or rejected providers from
-certification.
+The original merged report claimed suite-level provider conformance by accepting caller-supplied
+provider records plus the WO-MAO-029 fixture and projecting hardcoded contract coverage. That proof is
+superseded because no provider operation, trusted observation, or executable adapter transaction was
+required to manufacture the conformance result.
 
-This is not a provider dispatcher and not an unattended worker certification.
+The historical implementation remains preserved behind an unconditional typed invalidation wall. It
+cannot emit a success artifact until WO-MAO-031, WO-MAO-034, and WO-MAO-035 are re-proved and the
+suite is redesigned to consume independently captured operational evidence.
 
-## Implemented Artifacts
+## Historical original artifacts (superseded)
 
 - `scripts/multi-agent-operator/provider-conformance-suite.mjs`
 - `scripts/multi-agent-operator/provider-conformance-suite-cli.mjs`
@@ -19,7 +21,9 @@ This is not a provider dispatcher and not an unattended worker certification.
 - `components/operator/multi-agent-capability-registry.ts`
 - `components/operator/multi-agent-operator-registry.ts`
 
-## Conformance Result
+## Historical original result (superseded)
+
+The following projection is retained as redesign input only and is not current conformance evidence:
 
 - `hosted-codex`: `SESSION_ONLY_CONFORMANT`
 - `claude-code`: `DEFERRED_PROVIDER_UNAVAILABLE`
@@ -35,7 +39,7 @@ dispatchPerformed=false
 providerCallPerformed=false
 ```
 
-## Required Contract Set
+## Historical original required contract set (superseded)
 
 The suite requires the exact provider contract dimensions:
 
@@ -64,7 +68,9 @@ is broadened.
 - `secretsExposed`: `false`
 - `ownerRelayRequired`: `false`
 
-## Validation
+## Historical original validation (superseded)
+
+These runs described the invalidated implementation and do not prove the current Work Order:
 
 - `npm test -- --run tests/multi-agent-provider-conformance-suite.test.ts`: pass, 1 file / 4 tests
 - `npm test -- --run tests/multi-agent-provider-conformance-suite.test.ts tests/multi-agent-operator-registry.test.ts tests/multi-agent-capability-registry.test.ts tests/portfolio-operator.test.ts tests/portfolio-operator-surface.test.ts`: pass, 5 files / 24 tests
@@ -73,6 +79,7 @@ is broadened.
 - `npm test -- --run`: pass, 173 files / 1282 tests
 - `NEXT_PRIVATE_BUILD_WORKER=0 NEXT_TELEMETRY_DISABLED=1 npm run build`: pass
 
-## Next Work Order
+## Next transition
 
-`WO-MAO-037 — Branch, commit, and push automation` is dependency-cleared.
+`WO-MAO-036` is `PENDING / REPROOF_REQUIRED`. The required sequence is WO-MAO-031, WO-MAO-034,
+WO-MAO-035, then WO-MAO-036. Phase 5 remains pending after that ordered chain.

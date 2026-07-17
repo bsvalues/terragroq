@@ -232,6 +232,11 @@ function providerSupports(provider, request) {
 }
 
 export function evaluateProviderHealthReroute(input) {
+  wall(
+    "PROVIDER_HEALTH_REROUTE_INVALIDATED_PENDING_REPROOF",
+    "providerHealth",
+    "WO_MAO_031_THEN_WO_MAO_034_THEN_WO_MAO_035_REPROOF_REQUIRED",
+  )
   exactFields(input, INPUT_FIELDS, "providerHealth")
   if (input.schemaVersion !== 1) wall("PROVIDER_HEALTH_INPUT_WALL", "schemaVersion", "1_REQUIRED")
   if (input.artifactType !== "PROVIDER_HEALTH_REROUTE_INPUT") {

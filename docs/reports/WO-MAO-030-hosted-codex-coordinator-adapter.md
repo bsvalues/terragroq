@@ -2,7 +2,7 @@
 
 **Work Order:** `WO-MAO-030`
 
-**Status:** `COMPLETE / CURRENT_SESSION_COORDINATOR_ADAPTER_PROVEN`
+**Status:** `COMPLETE / POST_MERGE_ASSURANCE_HARDENED / CURRENT_SESSION_ONLY / FAIL_CLOSED`
 
 **Control-plane risk:** `R3`
 
@@ -12,72 +12,97 @@
 
 ## Outcome
 
-WilliamOS now has a bounded hosted Codex coordinator adapter for the current-session native team
-surface. The adapter translates a validated hosted team plan into native role assignments,
-secret-free messages, cancellation-ready records, and sanitized evidence hashes.
+WO-MAO-030 implements the bounded hosted Codex coordinator adapter contract. It recomputes the
+canonical WO-MAO-024 topology input and admits only its dependency-cleared `candidateFanOut`. Before
+preparing a native assignment, it verifies an active owner-signed authority artifact, exact reserved
+paths and envelope hash from an immutable host trust registry, the exact WO-MAO-029 provider
+conformance, one opaque live coordinator-session identity, and an immutable current-session native
+bridge. Builder and reviewer identities are accepted only from the bridge's exact spawn result; they
+are not invented as pre-existing sessions.
 
-This is not a durable runtime, service worker, or provider-contract dispatch surface. It preserves the
-WO-MAO-029 `SESSION_ONLY` boundary and requires host-issued opaque session proof for each selected
-coordinator, builder, and reviewer role before an assignment can be emitted.
+The compiled result is current-session-only. It stages coordinator, build, review, and remediation
+phases under the Codex concurrency ceiling of three. `mergeController` and `verifier` remain topology
+roles but are not falsely represented as WO-MAO-029 native assignments. Assignment artifacts retain
+only a hash of the canonical objective, not its body. At spawn, the bridge receives a detached
+structured task derived from that canonical envelope; a caller cannot add a separate prompt or forge
+a topology result, session identity, trust boolean, authority grant, path set, or assignment handle.
 
-## Implemented contract
+Coordinator-routed messages and cancellation requests use opaque plan/assignment bindings. Every
+operation revalidates the current coordinator-session, trust-expiry, and authority-expiry boundaries.
+The assignment handle determines its only permitted peer, so a caller cannot substitute another lane
+recipient. Message and cancellation idempotency keys return an exact replay and reject a changed
+replay. Prepared work cancels without a bridge call or delivery claim. Active work invokes the host
+bridge and requires its exact cancellation acknowledgement before becoming terminal. Terminal work
+rejects later messages and conflicting completion or cancellation. Spawn, send, and cancellation
+side effects require host-enforced idempotency plus lookup-only reconciliation. A throw, malformed
+result, mismatched result, or duplicate native identity quarantines the assignment as ambiguous;
+retries cannot repeat the side effect and only the exact original key may reconcile it by lookup.
 
-- module: `scripts/multi-agent-operator/codex-coordinator-adapter.mjs`
-- CLI: `scripts/multi-agent-operator/codex-coordinator-adapter-cli.mjs`
-- test: `tests/multi-agent-codex-coordinator-adapter.test.ts`
-- registry: `components/operator/multi-agent-operator-registry.ts`
-- capability record: `components/operator/multi-agent-capability-registry.ts`
+Only host-bridge observations can become evidence; public response objects are rejected. Observations
+pass the common WO-MAO-019 sanitizer and exact assignment/path binding. Captured
+evidence stores attribution and hashes only; it excludes session identifiers, prompt/result bodies,
+attributes, credentials, and raw provider output. Observation identifiers are bound to their first
+validated response hash and exact public result. Terminal evidence is sealed to the exact response
+hash, so a later response cannot alter terminal detail while retaining the same terminal state.
 
-The adapter:
+## Post-merge assurance remediation
 
-- validates the WO-MAO-029 conformance artifact before evaluating any plan
-- validates every input as a Work Order envelope v2 before converting it to hosted-team planning input
-- uses the existing hosted-team planner for dependency and reservation compatibility
-- requires selected-lane host-session proof for coordinator, builder, and reviewer
-- rejects caller-supplied or missing session identities
-- rejects role proof and cancellation records that are not bound to selected lanes
-- supports cancellation records without dispatching or creating side effects
-- emits deterministic result hashes for plan, assignments, messages, and sanitized evidence
+The implementation merged at original commit `4d1bb1c` was subsequently found weaker than the
+independently attacked WO-MAO-030 contract. The canonical module and tests were therefore replaced on
+base `c973e2e8e9728e3aa422fbb81c127e8e736cc92a` with the approved hardened implementation from
+`41b3b048931801575eba71b66e75966c0258a287`. The eleven typed findings, fixes, independent
+re-review, and transient WO-MAO-035 assurance hold are recorded in
+`docs/reports/WO-MAO-030-post-merge-assurance-remediation.md`.
 
-## Explicit non-claims
+Downstream assurance invalidates the historical WO-MAO-031 and WO-MAO-034 completion evidence
+without deleting their code or reports. Canonical state therefore keeps WO-MAO-030 and WO-MAO-032
+complete, returns WO-MAO-031 to `READY`, keeps WO-MAO-033 deferred and resumable, and returns
+WO-MAO-034 and later Work Orders to `PENDING`. Re-proof order is WO-MAO-030, WO-MAO-031,
+WO-MAO-034, then WO-MAO-035.
 
-```text
-PROVIDER_CONTRACT_DISPATCH_ALLOWED: false
-DISPATCH_PERFORMED: false
-DURABLE_PERSISTENCE_CLAIMED: false
-SERVICE_WORKER_CLAIMED: false
-RUNTIME_ACTIVATION_ALLOWED: false
-AUTHORITY_GRANTED: false
-GITHUB_WRITE_PERFORMED: false
-PRODUCTION_WRITE_PERFORMED: false
-REJECTED_ISSUE_357_REUSED: false
-OWNER_RELAY_REQUIRED: false
-```
+## Exact boundary
 
-## Validation
+This adapter does **not** claim or create:
 
-- focused hosted-coordinator Vitest: `7 files / 77 tests`, PASS:
-  - `tests/multi-agent-codex-coordinator-adapter.test.ts`
-  - `tests/multi-agent-codex-provider-conformance.test.ts`
-  - `tests/multi-agent-hosted-team-plan.test.ts`
-  - `tests/multi-agent-operator-registry.test.ts`
-  - `tests/multi-agent-capability-registry.test.ts`
-  - `tests/portfolio-operator.test.ts`
-  - `tests/portfolio-operator-surface.test.ts`
-- focused durable storage Vitest: `6 files / 210 tests`, PASS
-- `git diff --check`, PASS
-- `npm run lint`, PASS
-- `npm test -- --run`: `169 files / 1260 tests`, PASS
-- `NEXT_PRIVATE_BUILD_WORKER=0 NEXT_TELEMETRY_DISABLED=1 npm run build`, PASS
+- provider-contract dispatch, a service worker, durable transport, or durable persistence;
+- a background scheduler, local runtime activation, nested `codex exec`, or issue `#357` reuse;
+- credential, token, auth-cache, prompt-body, result-body, or raw-provider-output inspection;
+- GitHub, production, merge, release, or authority-minting behavior;
+- an owner operation, owner relay, owner diagnostic, or owner credential action.
+
+The production host-session, preventive-trust, and native-bridge registries remain intentionally empty
+and immutable. The CLI therefore fails with a typed current-session wall unless a trusted hosted
+environment supplies those non-serializable bindings. JSON cannot register or forge them.
+
+## Mechanical proof
+
+- `scripts/multi-agent-operator/codex-coordinator-adapter.mjs`
+- `scripts/multi-agent-operator/codex-coordinator-adapter-cli.mjs`
+- `scripts/multi-agent-operator/codex-native-bridge-registry.mjs`
+- `tests/multi-agent-codex-coordinator-adapter.test.ts`
+- `tests/fixtures/codex-native-bridge-registry-fixture.mjs`
+
+The adversarial suite covers topology recomputation, incomplete dependencies, role substitution,
+immutable trust records and assignment handles, exact path/envelope scope, host identity substitution
+and expiry, bridge substitution, ambiguous spawn quarantine and lookup-only recovery, detached caller state,
+cryptographic authority scope, runtime/#357/durable-claim walls, coordinator-only routing, secret
+rejection, exact replay, cross-run handles, ambiguous send/cancel acknowledgement recovery,
+pre-dispatch cancellation, active cancellation acknowledgement, exact terminal-response sealing,
+observation replay binding, sanitized hash-only evidence, artifact path confinement,
+provider binding, concurrency, and production-CLI failure.
+
+Validation:
+
+- focused Vitest: `1 file / 25 tests`, PASS;
+- focused adapter/role/routing/state suites: `7 files / 49 tests`, PASS;
+- repository-wide Vitest: `171 files / 1,282 tests`, PASS;
+- ESLint, Next.js build, Node syntax, secret-pattern sweep, and `git diff --check`: PASS.
 
 ## Next transition
 
-`WO-MAO-030` is complete. The next dependency-cleared Work Order is:
-
-`WO-MAO-031 - Codex builder, assurance, and remediation adapters`.
-
-`WO-MAO-033` remains `DEFERRED / PROVIDER_UNAVAILABLE` and resumable.
-
+`WO-MAO-001` through `WO-MAO-030` and `WO-MAO-032` are complete. `WO-MAO-031` is the sole
+dependency-cleared Work Order. `WO-MAO-033` remains `DEFERRED / PROVIDER_UNAVAILABLE` and resumable;
+`WO-MAO-034` and later Work Orders remain pending.
 ## Owner-operation evidence
 
 ```text

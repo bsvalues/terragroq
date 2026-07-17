@@ -1,17 +1,19 @@
 # WO-MAO-035 — Provider Health, Circuit Breakers, and Reroute
 
-Result: `PROVIDER_HEALTH_REROUTE_PASS / WO-MAO-036_READY`
+Result: `INVALIDATED / REPROOF_REQUIRED / PENDING`
 
 ## Scope
 
-WO-MAO-035 adds a static, deterministic provider-health evaluator for the multi-agent operator
-program. It classifies provider failure observations, opens bounded circuit-breaker/backoff states,
-and selects healthy fallback providers when reroute is permitted.
+The original merged report claimed a static provider-health evaluator that classified caller-supplied
+failure observations, projected circuit-breaker/backoff state, and selected fallback providers. That
+proof is superseded: caller-invented provider records, stale observations, and stateless breaker input
+could manufacture a passing result without a host observation or durable state transition.
 
-This is control-plane proof only. It does not call a provider, dispatch work, persist runtime state,
-activate a worker, create a service, or grant authority.
+The historical implementation remains preserved behind an unconditional typed invalidation wall. It
+cannot emit a success artifact until WO-MAO-031 and WO-MAO-034 are re-proved and WO-MAO-035 is
+redesigned around trusted observations and stateful breaker transitions.
 
-## Implemented Artifacts
+## Historical original artifacts (superseded)
 
 - `scripts/multi-agent-operator/provider-health-reroute.mjs`
 - `scripts/multi-agent-operator/provider-health-reroute-cli.mjs`
@@ -19,7 +21,9 @@ activate a worker, create a service, or grant authority.
 - `components/operator/multi-agent-capability-registry.ts`
 - `components/operator/multi-agent-operator-registry.ts`
 
-## Classification Rules
+## Historical original classification rules (superseded)
+
+The following rules are retained as redesign input only and are not current completion evidence:
 
 - `401` / `403` -> `QUARANTINED` with `AUTHORIZATION_WALL`
 - `429` -> `BACKOFF` with bounded `RATE_LIMITED` retry delay
@@ -51,7 +55,9 @@ formats are unsafe.
 model does not treat Claude as a fallback while unavailable. Healthy hosted Codex fallback lanes may be
 selected only when repository scope, required roles, provider health, and reroute budget allow it.
 
-## Validation
+## Historical original validation (superseded)
+
+These runs described the invalidated implementation and do not prove the current Work Order:
 
 - `npm test -- --run tests/multi-agent-provider-health-reroute.test.ts`: pass, 1 file / 5 tests
 - `npm test -- --run tests/multi-agent-provider-health-reroute.test.ts tests/multi-agent-operator-registry.test.ts tests/multi-agent-capability-registry.test.ts tests/portfolio-operator.test.ts tests/portfolio-operator-surface.test.ts`: pass, 5 files / 25 tests
@@ -60,6 +66,7 @@ selected only when repository scope, required roles, provider health, and rerout
 - `npm test -- --run`: pass, 172 files / 1278 tests
 - `NEXT_PRIVATE_BUILD_WORKER=0 NEXT_TELEMETRY_DISABLED=1 npm run build`: pass
 
-## Next Work Order
+## Next transition
 
-`WO-MAO-036 — Provider conformance suite` is dependency-cleared.
+`WO-MAO-035` is `PENDING / REPROOF_REQUIRED`. The required sequence is WO-MAO-031, WO-MAO-034,
+WO-MAO-035, then WO-MAO-036. Phase 5 remains pending after that ordered chain.

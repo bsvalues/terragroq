@@ -2,22 +2,28 @@
 
 **Work Order:** `WO-MAO-034`
 
-**Status:** `COMPLETE / CROSS_PROVIDER_ROUTING_REVIEW_PROVEN`
+**Status:** `HISTORICAL_EVIDENCE_INVALIDATED / PENDING_ORDERED_REPROOF`
 
 **Control-plane risk:** `R3`
 
 **Depends on:** `WO-MAO-024`, `WO-MAO-031`, `WO-MAO-033`
 
-## Outcome
+> Post-merge assurance invalidated this completion evidence after WO-MAO-031 was invalidated. The
+> implementation and report are retained as historical inputs only; WO-MAO-034 must be re-reviewed
+> and re-proved after the redesigned WO-MAO-031 completes.
 
-WilliamOS now has a static cross-provider routing and review model. It keeps unavailable providers out
-of routing and review eligibility, preserves same-provider independent Codex review, and records that
-Claude contributes no capability while its lane remains `DEFERRED / PROVIDER_UNAVAILABLE`.
+## Current assurance outcome
 
-This completes the provider-optional dependency path for the WO-MAO-034 slice without marking
-WO-MAO-033 complete and without activating Claude.
+`INVALIDATED / REPROOF_REQUIRED`. The original merged report recorded a static cross-provider routing
+and review model that excluded unavailable providers and preserved same-provider independent review.
+Those proof and completion claims are superseded because WO-MAO-031, a declared dependency, is no
+longer complete.
 
-## Implemented contract
+The historical model remains non-executing and did not activate Claude, but it cannot complete the
+provider-optional path until the redesigned WO-MAO-031 is independently re-proved and WO-MAO-034 is
+then re-reviewed against the hardened chain.
+
+## Historical original contract (superseded)
 
 - module: `scripts/multi-agent-operator/cross-provider-routing-review.mjs`
 - CLI: `scripts/multi-agent-operator/cross-provider-routing-review-cli.mjs`
@@ -25,7 +31,8 @@ WO-MAO-033 complete and without activating Claude.
 - registry: `components/operator/multi-agent-operator-registry.ts`
 - capability record: `components/operator/multi-agent-capability-registry.ts`
 
-The model:
+The following list preserves what the original implementation attempted to enforce. It is historical
+design evidence only and does not certify the current WO-MAO-034 Work Order as complete:
 
 - routes only active providers whose roles and repository scope match the Work Order
 - excludes `UNAVAILABLE` providers with typed reason `PROVIDER_UNAVAILABLE`
@@ -51,7 +58,10 @@ REJECTED_ISSUE_357_REUSED: false
 OWNER_RELAY_REQUIRED: false
 ```
 
-## Validation
+## Historical original validation (superseded)
+
+These runs described the invalidated implementation. They are retained as historical facts and are
+not current completion evidence:
 
 - focused cross-provider routing Vitest: `1 file / 5 tests`, PASS:
   - `tests/multi-agent-cross-provider-routing-review.test.ts`
@@ -63,11 +73,9 @@ OWNER_RELAY_REQUIRED: false
 
 ## Next transition
 
-`WO-MAO-034` is complete. `WO-MAO-033` remains `DEFERRED / PROVIDER_UNAVAILABLE` and resumable.
-
-The next dependency-cleared Work Order is:
-
-`WO-MAO-035 - Provider health, circuit breakers, and reroute`.
+`WO-MAO-034` is `PENDING / REPROOF_REQUIRED`. The current sequence is WO-MAO-031 redesign and
+independent re-proof, followed by WO-MAO-034 re-review and re-proof, then WO-MAO-035. WO-MAO-033
+remains `DEFERRED / PROVIDER_UNAVAILABLE` and resumable.
 
 ## Owner-operation evidence
 
