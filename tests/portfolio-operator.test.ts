@@ -53,13 +53,13 @@ describe("portfolio operator", () => {
     ])
   })
 
-  it("selects WO-MAO-054 after resilience and safety rollup proof", () => {
+  it("selects WO-MAO-055 after certification portfolio selection", () => {
     const portfolio = getPortfolioOperatorProgram()
     const multiAgentOperator = portfolio.backlog[0]
 
     expect(buildLoopPacket(multiAgentOperator)).toMatchObject({
-      activeWorkOrder: "WO-MAO-054",
-      eligibleWorkOrders: ["WO-MAO-054"],
+      activeWorkOrder: "WO-MAO-055",
+      eligibleWorkOrders: ["WO-MAO-055"],
       remediationTransition: null,
     })
 
@@ -147,8 +147,8 @@ describe("portfolio operator", () => {
       ownerDecisionRequired: false,
     })
     expect(loop).toMatchObject({
-      activeWorkOrder: "WO-MAO-054",
-      eligibleWorkOrders: ["WO-MAO-054"],
+      activeWorkOrder: "WO-MAO-055",
+      eligibleWorkOrders: ["WO-MAO-055"],
       remediationTransition: null,
       executionMode: "DEPENDENCY_RESERVATION_ELIGIBLE_SET",
     })
@@ -192,7 +192,8 @@ describe("portfolio operator", () => {
     expect(workOrders[50]).toMatchObject({ workOrderId: "WO-MAO-051", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[51]).toMatchObject({ workOrderId: "WO-MAO-052", status: "COMPLETE", riskClass: "R3" })
     expect(workOrders[52]).toMatchObject({ workOrderId: "WO-MAO-053", status: "COMPLETE", riskClass: "R3" })
-    expect(workOrders[53]).toMatchObject({ workOrderId: "WO-MAO-054", status: "READY", riskClass: "R2" })
+    expect(workOrders[53]).toMatchObject({ workOrderId: "WO-MAO-054", status: "COMPLETE", riskClass: "R2" })
+    expect(workOrders[54]).toMatchObject({ workOrderId: "WO-MAO-055", status: "READY", riskClass: "R2" })
     expect([30, 31, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53].map((number) => workOrders[number - 1].status))
       .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE"])
     expect(workOrders).toHaveLength(62)

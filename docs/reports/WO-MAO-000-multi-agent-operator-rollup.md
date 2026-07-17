@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-`WO-MAO-047_THROUGH_WO-MAO-053_COMPLETE / WO-MAO-054_READY /
+`WO-MAO-047_THROUGH_WO-MAO-054_COMPLETE / WO-MAO-055_READY /
 UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
 
 ## Truth
@@ -132,10 +132,10 @@ model; WO-MAO-048 is `COMPLETE` through the provider outage/failover drill; WO-M
 the malicious/defective worker drill; WO-MAO-051 is `COMPLETE` through the status/evidence/
 owner-decision UX proof; WO-MAO-052 is `COMPLETE` through the kill/revoke/rollback/incident
 procedure; WO-MAO-053 is `COMPLETE` through the resilience and safety rollup; WO-MAO-054 is
-`READY`. That
+`COMPLETE` through the certification portfolio selection; WO-MAO-055 is `READY`. That
 settlement remains exact and cannot be retargeted. A separately ratified graph correction removes only the redundant direct
 WO-MAO-033 edges from WO-MAO-035/036. WO-MAO-033 remains deferred and resumable. The
-mandatory sequence is now governed by the executable dependency graph: WO-MAO-054 is the next
+mandatory sequence is now governed by the executable dependency graph: WO-MAO-055 is the next
 ordered ready gate. The rejected local runtime is not in the eligible dependency chain.
 
 ## Validation evidence
