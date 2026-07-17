@@ -42,6 +42,7 @@ const temporaryDirectories: string[] = []
 const PROGRAM = "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"
 const GOAL = "GOAL-WOS-MULTI-AGENT-OPERATOR-001"
 const LOOP = "LOOP-WOS-MULTI-AGENT-OPERATOR-001"
+const HOST_SESSION_ID = "native-coordinator-mao-030"
 const ROLES = {
   coordinator: "codex-coordinator",
   builder: "codex-builder",
@@ -57,7 +58,7 @@ function installSessions(overrides: Record<string, unknown> = {}) {
       schemaVersion: 1,
       artifactType: "CODEX_HOST_SESSION_IDENTITY",
       proofId: "proof-coordinator-mao-030",
-      sessionId: "native-coordinator-mao-030",
+      sessionId: HOST_SESSION_ID,
       workerId: ROLES.coordinator,
       providerId: "hosted-codex",
       adapterId: "hosted-codex-session-native-team-v1",
@@ -205,7 +206,7 @@ function v2Envelope(workOrderId: string, dependencies: string[] = []) {
     forbiddenActions: ["CREDENTIAL_ACCESS", "OWNER_CONTACT", "RUNTIME_ACTIVATION"],
     authorityGrantRefs: [workOrderId === "WO-MAO-030" ? "grant-mao-030" : `grant-${workOrderId.toLowerCase()}`],
     programActivationGrantRef: null,
-    grantStatusEventRefs: [workOrderId === "WO-MAO-030" ? "event-mao-030-active" : `event-${workOrderId.toLowerCase()}`],
+    grantStatusEventRefs: [workOrderId === "WO-MAO-030" ? "event-mao-030-z-active" : `event-${workOrderId.toLowerCase()}`],
     requiredOutputs: ["implementation", "tests", "sanitized-evidence"],
     requiredValidation: ["focused-vitest", "independent-review"],
     reviewRequirements: { independentReviewer: true, minimumApprovals: 1, maximumUnresolvedThreads: 0 },
@@ -258,7 +259,7 @@ function topologyInput() {
   }
 }
 
-function authorityArtifacts() {
+function authorityArtifacts(includeContinuation = false) {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519")
   const fingerprint = crypto.createHash("sha256").update(publicKey.export({ type: "spki", format: "der" })).digest("hex")
   const sign = <T extends Record<string, unknown>>(record: T) => {
@@ -292,7 +293,7 @@ function authorityArtifacts() {
   const active = sign({
     schemaVersion: 1,
     artifactType: "OWNER_AUTHORITY_STATUS_EVENT",
-    eventId: "event-mao-030-active",
+    eventId: "event-mao-030-z-active",
     grantId: grant.grantId,
     sequence: 1,
     status: "ACTIVE",
@@ -300,12 +301,24 @@ function authorityArtifacts() {
     previousEventHash: null,
     issuer: { role: "OWNER", ownerId: "owner-mao-030" },
   })
+  const continuation = sign({
+    schemaVersion: 1,
+    artifactType: "OWNER_AUTHORITY_STATUS_EVENT",
+    eventId: "event-mao-030-a-continuation",
+    grantId: grant.grantId,
+    sequence: 2,
+    status: "ACTIVE",
+    issuedAt: iso(-3_450_000),
+    previousEventHash: active.contentHash,
+    issuer: { role: "OWNER", ownerId: "owner-mao-030" },
+  })
+  const events = includeContinuation ? [active, continuation] : [active]
   const trustedOwners = sign({
     schemaVersion: 1,
     artifactType: "OWNER_TRUST_BUNDLE",
     issuer: { role: "OWNER", ownerId: "owner-mao-030" },
     issuedAt: iso(-3_400_000),
-    statusHeads: [{ grantId: grant.grantId, eventCount: 1, latestEventHash: active.contentHash }],
+    statusHeads: [{ grantId: grant.grantId, eventCount: events.length, latestEventHash: events.at(-1)!.contentHash }],
     legacyRevocationHeads: [],
     owners: [{
       ownerId: "owner-mao-030",
@@ -317,7 +330,7 @@ function authorityArtifacts() {
   })
   return {
     grant,
-    events: [active],
+    events,
     trustedOwners,
     trustedOwnerKeyFingerprint: fingerprint,
     trustedOwnerBundleContentHash: trustedOwners.contentHash,
@@ -352,11 +365,27 @@ function trustEvidence(role: keyof typeof ROLES, envelopeContentHash: string, ov
   }
 }
 
-function input(overrides: Record<string, unknown> = {}) {
+function input(
+  overrides: Record<string, unknown> = {},
+  options: {
+    laneId?: string
+    authority?: ReturnType<typeof authorityArtifacts>
+    grantStatusEventRefs?: string[]
+  } = {},
+) {
   const topology = topologyInput()
+  const target = topology.dagInput.workOrders.find(({ workOrderId }) => workOrderId === "WO-MAO-030")!
+  if (options.laneId) {
+    target.laneId = options.laneId
+    topology.lanes[0].envelope.laneId = options.laneId
+  }
+  if (options.grantStatusEventRefs) {
+    target.grantStatusEventRefs = [...options.grantStatusEventRefs]
+    topology.lanes[0].envelope.grantStatusEventRefs = [...options.grantStatusEventRefs]
+  }
   const envelopeContentHash = validateDispatchEnvelope(topology.lanes[0].envelope).contentHash
   for (const role of ["coordinator", "builder", "reviewer"] as const) {
-    installTestHostedCodexTrustRecord(trustEvidence(role, envelopeContentHash))
+    installTestHostedCodexTrustRecord(trustEvidence(role, envelopeContentHash, { laneId: target.laneId }))
   }
   return {
     schemaVersion: 1,
@@ -371,7 +400,7 @@ function input(overrides: Record<string, unknown> = {}) {
     preventiveTrustProofReferences: (["coordinator", "builder", "reviewer"] as const)
       .map((role) => ({ proofId: `trust-${role}-mao-030` })),
     hostBridgeReference: { bridgeId: "bridge-mao-030" },
-    authorityProofs: [{ workOrderId: "WO-MAO-030", artifacts: authorityArtifacts() }],
+    authorityProofs: [{ workOrderId: "WO-MAO-030", artifacts: options.authority ?? authorityArtifacts() }],
     runtimeActivationRequested: false,
     localIssue357Requested: false,
     durableTransportClaimed: false,
@@ -423,8 +452,9 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
     expect(plan.assignments.map(({ role }) => role).sort()).toEqual(["builder", "coordinator", "reviewer"])
     expect(plan.assignments.some(({ role }) => role === "mergeController")).toBe(false)
     expect(plan.assignments.every(({ nativeAssignmentExecuted }) => nativeAssignmentExecuted === false)).toBe(true)
-    expect(JSON.stringify(plan)).not.toContain("native-session-")
-    expect(JSON.stringify(plan)).not.toContain("Execute bounded WO-MAO-030")
+    const publicPlan = JSON.stringify(plan)
+    expect(publicPlan).not.toContain(HOST_SESSION_ID)
+    expect(publicPlan).not.toContain("Execute bounded WO-MAO-030")
     expect(Object.isFrozen(plan)).toBe(true)
   })
 
@@ -466,6 +496,60 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
     const value = input()
     value.authorityProofs[0].artifacts.grant.scope.actions = ["READ_REPOSITORY"]
     expectWall(() => compileHostedCodexCoordinatorAdapter(value), "HOSTED_CODEX_AUTHORITY_WALL")
+  })
+
+  it("matches authority event references as an exact duplicate-free set without reordering the signed chain", () => {
+    const authority = authorityArtifacts(true)
+    const eventRefs = authority.events.map(({ eventId }) => eventId)
+    const plan = compileHostedCodexCoordinatorAdapter(input({}, {
+      authority,
+      grantStatusEventRefs: [...eventRefs].reverse(),
+    }))
+    expect(plan.assignments).toHaveLength(3)
+
+    const reorderedAuthority = { ...authority, events: [...authority.events].reverse() }
+    expectWall(() => compileHostedCodexCoordinatorAdapter(input({}, {
+      authority: reorderedAuthority,
+      grantStatusEventRefs: [...eventRefs].sort(),
+    })), "HOSTED_CODEX_AUTHORITY_WALL")
+
+    const duplicate = input({}, {
+      authority,
+      grantStatusEventRefs: eventRefs,
+    })
+    duplicate.topologyInput.dagInput.workOrders
+      .find(({ workOrderId }) => workOrderId === "WO-MAO-030")!.grantStatusEventRefs = [eventRefs[0], eventRefs[0]]
+    duplicate.topologyInput.lanes[0].envelope.grantStatusEventRefs = [eventRefs[0], eventRefs[0]]
+    expectWall(() => compileHostedCodexCoordinatorAdapter(duplicate), "HOSTED_CODEX_TOPOLOGY_WALL")
+
+    const malformed = input()
+    malformed.authorityProofs[0].artifacts.events = [null as never]
+    expectWall(() => compileHostedCodexCoordinatorAdapter(malformed), "HOSTED_CODEX_AUTHORITY_WALL")
+  })
+
+  it("bounds near-limit assignment identifiers with deterministic collision separation", () => {
+    const runPrefix = `r${"a".repeat(126)}`
+    const runOne = `${runPrefix}x`
+    const runTwo = `${runPrefix}y`
+    const lanePrefix = `L-${"B".repeat(125)}`
+    const laneOne = `${lanePrefix}A`
+    const laneTwo = `${lanePrefix}B`
+    const first = compileHostedCodexCoordinatorAdapter(input({ adapterRunId: runOne }, { laneId: laneOne }))
+    const replay = compileHostedCodexCoordinatorAdapter(input({ adapterRunId: runOne }, { laneId: laneOne }))
+    const distinctLane = compileHostedCodexCoordinatorAdapter(input({ adapterRunId: runOne }, { laneId: laneTwo }))
+    const distinctRun = compileHostedCodexCoordinatorAdapter(input({ adapterRunId: runTwo }, { laneId: laneOne }))
+
+    expect(first.assignments.every(({ assignmentId }) => assignmentId.length <= 128)).toBe(true)
+    expect(first.assignments.map(({ assignmentId }) => assignmentId))
+      .toEqual(replay.assignments.map(({ assignmentId }) => assignmentId))
+    expect(new Set([
+      ...first.assignments.map(({ assignmentId }) => assignmentId),
+      ...distinctLane.assignments.map(({ assignmentId }) => assignmentId),
+      ...distinctRun.assignments.map(({ assignmentId }) => assignmentId),
+    ]).size).toBe(9)
+    for (const item of first.assignments) {
+      expect(getHostedCodexNativeAssignmentHandle(first, item.assignmentId)).toMatchObject({ assignmentId: item.assignmentId })
+    }
   })
 
   it("requires the canonical bridge and reconciles an ambiguous spawn without duplicating the child", () => {
@@ -532,6 +616,64 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
     expectWall(() => createHostedCodexNativeMessage(plan, { ...request, idempotencyKey: "message-mao-030-002", recipientWorkerId: ROLES.reviewer }), "HOSTED_CODEX_UNKNOWN_FIELD_WALL")
     expectWall(() => createHostedCodexNativeMessage(plan, { ...request, idempotencyKey: "message-mao-030-003", summary: ["token", ["super", "secret", "value"].join("-")].join("=") }), "HOSTED_CODEX_MESSAGE_WALL")
   })
+
+  it.each(["SUCCEEDED", "FAILED", "CANCELLED"] as const)(
+    "replays an exact committed send after %s terminal state without redelivery",
+    (terminalState) => {
+      const plan = compile()
+      const builder = assignment(plan, "builder")
+      startHostedCodexNativeAssignment(plan, {
+        assignmentHandle: builder.handle,
+        idempotencyKey: `spawn-terminal-send-replay-${terminalState.toLowerCase()}`,
+      })
+      const request = {
+        assignmentHandle: builder.handle,
+        direction: "TO_ASSIGNMENT",
+        messageType: "STATUS",
+        summary: "Committed before terminal state.",
+        idempotencyKey: `send-before-${terminalState.toLowerCase()}`,
+      }
+      const committed = createHostedCodexNativeMessage(plan, request)
+      if (terminalState === "CANCELLED") {
+        cancelHostedCodexNativeAssignment(plan, {
+          assignmentHandle: builder.handle,
+          requestedBy: ROLES.coordinator,
+          reasonCode: "SUPERSEDED",
+          idempotencyKey: "cancel-after-committed-send",
+        })
+      } else {
+        const observationId = `terminal-send-${terminalState.toLowerCase()}`
+        observations.set(observationId, {
+          schemaVersion: 1,
+          artifactType: "PROVIDER_STATUS",
+          providerId: "hosted-codex",
+          adapterId: "hosted-codex-session-native-team-v1",
+          dispatchId: builder.item.assignmentId,
+          workOrderId: builder.item.workOrderId,
+          laneId: builder.item.laneId,
+          providerState: terminalState,
+          reasonCode: terminalState === "FAILED" ? "WORKER_FAILED" : null,
+          sanitized: true,
+          authorityGranted: false,
+          progressMarker: terminalState,
+        })
+        captureHostedCodexNativeEvidence(plan, { assignmentHandle: builder.handle, observationId })
+      }
+
+      expect(createHostedCodexNativeMessage(plan, request)).toBe(committed)
+      expect(Object.isFrozen(committed)).toBe(true)
+      expect(bridgeCalls.send).toBe(1)
+      expectWall(() => createHostedCodexNativeMessage(plan, {
+        ...request,
+        summary: "Conflicting replay after terminal state.",
+      }), "HOSTED_CODEX_REPLAY_WALL")
+      expectWall(() => createHostedCodexNativeMessage(plan, {
+        ...request,
+        idempotencyKey: `new-send-after-${terminalState.toLowerCase()}`,
+      }), "HOSTED_CODEX_MESSAGE_WALL")
+      expect(bridgeCalls.send).toBe(1)
+    },
+  )
 
   it("quarantines an ambiguous send acknowledgement and reconciles by lookup without redelivery", () => {
     installBridge({
@@ -761,6 +903,39 @@ describe("WO-MAO-030 hosted Codex coordinator adapter", () => {
       progressMarker: "DONE",
     })
     expectWall(() => captureHostedCodexNativeEvidence(plan, { assignmentHandle: builder.handle, observationId: "observation-late-success" }), "HOSTED_CODEX_TERMINAL_RACE_WALL")
+    observations.set("observation-late-failure", {
+      ...common,
+      artifactType: "PROVIDER_STATUS",
+      providerState: "FAILED",
+      reasonCode: "WORKER_FAILED",
+      progressMarker: "FAILED",
+    })
+    expectWall(() => captureHostedCodexNativeEvidence(plan, { assignmentHandle: builder.handle, observationId: "observation-late-failure" }), "HOSTED_CODEX_TERMINAL_RACE_WALL")
+    const cancelled = {
+      ...common,
+      artifactType: "PROVIDER_CANCELLATION",
+      providerState: "CANCELLED",
+      reasonCode: "CANCELLED_BY_COORDINATOR",
+      cancelAcknowledged: true,
+    }
+    observations.set("observation-cancelled", cancelled)
+    const cancellationEvidence = captureHostedCodexNativeEvidence(plan, {
+      assignmentHandle: builder.handle,
+      observationId: "observation-cancelled",
+    })
+    expect(cancellationEvidence).toMatchObject({ providerState: "CANCELLED", terminalState: "CANCELLED" })
+    expect(captureHostedCodexNativeEvidence(plan, {
+      assignmentHandle: builder.handle,
+      observationId: "observation-cancelled",
+    })).toBe(cancellationEvidence)
+    observations.set("observation-conflicting-cancellation", {
+      ...cancelled,
+      reasonCode: "DIFFERENT_CANCELLATION_REASON",
+    })
+    expectWall(() => captureHostedCodexNativeEvidence(plan, {
+      assignmentHandle: builder.handle,
+      observationId: "observation-conflicting-cancellation",
+    }), "HOSTED_CODEX_TERMINAL_RACE_WALL")
     expectWall(() => createHostedCodexNativeMessage(plan, {
       assignmentHandle: builder.handle,
       direction: "TO_ASSIGNMENT",

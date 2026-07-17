@@ -88,13 +88,16 @@ and expiry, bridge substitution, ambiguous spawn quarantine and lookup-only reco
 cryptographic authority scope, runtime/#357/durable-claim walls, coordinator-only routing, secret
 rejection, exact replay, cross-run handles, ambiguous send/cancel acknowledgement recovery,
 pre-dispatch cancellation, active cancellation acknowledgement, exact terminal-response sealing,
-observation replay binding, sanitized hash-only evidence, artifact path confinement,
-provider binding, concurrency, and production-CLI failure.
+post-terminal committed-send replay, order-independent exact authority-event reference sets,
+bounded domain-separated assignment identifiers, acknowledged cancellation-evidence initialization,
+observation replay binding, actual host-session identifier privacy, sanitized hash-only evidence,
+artifact path confinement, provider binding, concurrency, and production-CLI failure.
 
 Validation:
 
-- focused Vitest: `1 file / 25 tests`, PASS;
-- focused adapter/role/routing/state suites: `7 files / 49 tests`, PASS;
+- focused Vitest: `1 file / 30 tests`, PASS;
+- latest-main focused adapter/role/routing/health/conformance/state/portfolio suites:
+  `9 files / 59 tests`, PASS;
 - repository-wide Vitest: `171 files / 1,282 tests`, PASS;
 - ESLint, Next.js build, Node syntax, secret-pattern sweep, and `git diff --check`: PASS.
 

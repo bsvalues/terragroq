@@ -2,7 +2,8 @@
 
 **Canonical Work Order:** `WO-MAO-030`
 
-**Status:** `PASS / ELEVEN_FINDINGS_CLOSED / INDEPENDENT_REREVIEW_PASS`
+**Status:** `ELEVEN_ORIGINAL_FINDINGS_CLOSED / PR381_FOLLOWUP_REMEDIATED /
+INDEPENDENT_REREVIEW_PENDING`
 
 **Remediation base:** `c973e2e8e9728e3aa422fbb81c127e8e736cc92a`
 
@@ -80,6 +81,22 @@ Phase 5.
     lookup-only replay of the exact original idempotency key. The immutable bridge must assert host
     idempotency and that lookup cannot perform a side effect.
 
+## PR #381 follow-up remediation
+
+- Exact committed sends now replay their original frozen result after terminal assignment state;
+  conflicting or new terminal sends remain walled and cannot repeat the bridge call.
+- Authority status-event references are checked as an exact duplicate-free set independent of
+  reference order. The original signed event array remains chain-ordered for authoritative
+  validation, and malformed event entries produce a typed authority wall.
+- Oversized generated assignment IDs retain short-ID compatibility but use a domain-separated,
+  deterministic SHA-256 suffix so all valid near-limit inputs remain handleable within 128 characters
+  and distinct inputs remain separated.
+- An exact provider cancellation observation may initialize terminal evidence only after the same
+  assignment/native binding has a committed bridge-acknowledged cancellation. Other null-hash
+  terminal states and later conflicting cancellation evidence remain fail-closed.
+- Public-plan privacy regression checks the actual fixture host-session identifier rather than an
+  unrelated substring.
+
 ## Canonical files
 
 - `scripts/multi-agent-operator/codex-coordinator-adapter.mjs`
@@ -95,10 +112,19 @@ closed. State/evidence review separately passed the non-inflation boundary: the 
 `PROVEN / WORKER_CANDIDATE`, not an executable worker, service, durable transport, GitHub operator,
 or unattended-runtime certification.
 
+## Known limitations before WO-MAO-031 reliance
+
+- Operation-time authority checks recheck only the expiry cached from the authenticated grant at
+  compilation. They do not revalidate the full authority artifact or consume a live
+  post-compilation owner-status stream, so a later revocation is not claimed as enforced.
+- Within one compiled multi-lane plan, static phase width counts a shared logical coordinator once,
+  but runtime occupancy currently counts its duplicated per-lane assignment records. Shared-
+  coordinator multi-lane occupancy therefore remains a separate hardening prerequisite.
+
 ## Validation
 
 - latest-main reconciliation focused adapter/role/routing/health/conformance/state/portfolio suites:
-  `9 files / 54 tests`, PASS;
+  `9 files / 59 tests`, PASS;
 - prior remediation-branch canonical adapter suite: `1 file / 25 tests`, PASS;
 - prior remediation-branch repository-wide Vitest: `171 files / 1,282 tests`, PASS;
 - latest-main repository-wide Vitest, production build, and lint are assigned to independent assurance

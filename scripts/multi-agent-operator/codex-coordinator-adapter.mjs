@@ -130,6 +130,14 @@ function exactValue(actual, expected, code, field) {
   if (JSON.stringify(canonical(actual)) !== JSON.stringify(canonical(expected))) wall(code, field, "EXACT_VALUE_REQUIRED")
 }
 
+function exactDuplicateFreeSet(actual, expected, code, field) {
+  if (!Array.isArray(actual) || !Array.isArray(expected)) wall(code, field, "ARRAY_REQUIRED")
+  if (new Set(actual).size !== actual.length || new Set(expected).size !== expected.length) {
+    wall(code, field, "DUPLICATE_VALUE_FORBIDDEN")
+  }
+  exactValue([...actual].sort(), [...expected].sort(), code, field)
+}
+
 function ownerBudget(value) {
   exactFields(value, new Set(OWNER_FIELDS), "ownerTouchBudget")
   for (const field of OWNER_FIELDS) {
@@ -269,9 +277,12 @@ function verifyLaneAuthority(envelope, artifacts) {
     wall("HOSTED_CODEX_RUNTIME_WALL", "envelope.programActivationGrantRef", "NO_ACTIVATION_GRANT_ALLOWED")
   }
   exactValue(envelope.authorityGrantRefs, [grantId], "HOSTED_CODEX_AUTHORITY_WALL", "envelope.authorityGrantRefs")
-  exactValue(
+  const authorityEventIds = Array.isArray(artifacts.events)
+    ? artifacts.events.map((event) => event?.eventId)
+    : artifacts.events
+  exactDuplicateFreeSet(
     envelope.grantStatusEventRefs,
-    artifacts.events?.map(({ eventId }) => eventId),
+    authorityEventIds,
     "HOSTED_CODEX_AUTHORITY_WALL",
     "envelope.grantStatusEventRefs",
   )
@@ -316,7 +327,10 @@ function phaseFor(role) {
 }
 
 function assignmentId(runId, laneId, role) {
-  return `${runId}.${laneId}.${role}`
+  const direct = `${runId}.${laneId}.${role}`
+  if (direct.length <= 128) return direct
+  const digest = hash({ domain: "HOSTED_CODEX_ASSIGNMENT_ID_V1", runId, laneId, role })
+  return `${runId.slice(0, 32)}.${laneId.slice(0, 32)}.${role}.${digest.slice(0, 40)}`
 }
 
 function ensurePlan(plan) {
@@ -509,6 +523,7 @@ export function compileHostedCodexCoordinatorAdapter(input) {
     nativeWorkerId: assignment.role === "coordinator" ? assignment.workerId : null,
     nativeBindingDigest: assignment.role === "coordinator" ? assignment.hostIdentityDigest : null,
     terminalResponseHash: null,
+    committedCancellation: null,
     ambiguousOperation: null,
   }]))
   PLAN_HANDLES.set(plan, deepFreeze({
@@ -808,6 +823,10 @@ export function createHostedCodexNativeMessage(plan, request) {
   const messageDigest = hash({ sender, recipient, messageType: request.messageType, summary })
   const digest = hash({ operation: "SEND", assignmentId: assignment.assignmentId, messageDigest, idempotencyKey: request.idempotencyKey })
   const prior = trusted.idempotency.get(request.idempotencyKey)
+  if (prior) {
+    if (prior.digest !== digest) wall("HOSTED_CODEX_REPLAY_WALL", "idempotencyKey", "CONFLICTING_REPLAY")
+    if (prior.status === "COMMITTED") return prior.result
+  }
   const reconciling = runtime.state === "SEND_AMBIGUOUS"
     && prior?.operation === "SEND" && prior.digest === digest && prior.status === "AMBIGUOUS"
   if (runtime.state !== "ACTIVE" && !reconciling) {
@@ -971,7 +990,14 @@ export function cancelHostedCodexNativeAssignment(plan, request) {
       runtimeActivationAllowed: false,
       authorityGranted: false,
     })
-    return commitSideEffect(transaction, runtime, publicResult)
+    const committed = commitSideEffect(transaction, runtime, publicResult)
+    runtime.committedCancellation = deepFreeze({
+      assignmentId: assignment.assignmentId,
+      nativeBindingDigest: runtime.nativeBindingDigest,
+      terminalState: "CANCELLED",
+      cancellationAcknowledged: true,
+    })
+    return committed
   } catch (error) {
     quarantineSideEffect(transaction, runtime, "CANCEL_AMBIGUOUS")
     throw error
@@ -1026,7 +1052,18 @@ export function captureHostedCodexNativeEvidence(plan, request) {
     return priorObservation.result
   }
   if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(runtime.state)) {
-    if (terminalByProviderState[normalized.providerState] !== runtime.state
+    const initializesAcknowledgedCancellation = runtime.state === "CANCELLED"
+      && runtime.terminalResponseHash === null
+      && normalized.artifactType === "PROVIDER_CANCELLATION"
+      && normalized.providerState === "CANCELLED"
+      && normalized.cancelAcknowledged === true
+      && runtime.committedCancellation?.assignmentId === assignment.assignmentId
+      && runtime.committedCancellation.nativeBindingDigest === runtime.nativeBindingDigest
+      && runtime.committedCancellation.terminalState === runtime.state
+      && runtime.committedCancellation.cancellationAcknowledged === true
+    if (initializesAcknowledgedCancellation) {
+      runtime.terminalResponseHash = responseHash
+    } else if (terminalByProviderState[normalized.providerState] !== runtime.state
       || runtime.terminalResponseHash === null
       || runtime.terminalResponseHash !== responseHash) {
       wall("HOSTED_CODEX_TERMINAL_RACE_WALL", "response", "EXACT_TERMINAL_RESPONSE_REQUIRED")
