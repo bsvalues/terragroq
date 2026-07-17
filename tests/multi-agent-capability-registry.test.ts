@@ -230,6 +230,20 @@ describe("multi-agent executable capability inventory", () => {
         "No provider dispatch, GitHub automation, runtime activation, authority grant, or owner relay",
       ]),
     })
+    expect(capability("branch-commit-push-automation-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "BRANCH_COMMIT_PUSH_AUTOMATION_PROVEN",
+      adapterRef: "scripts/multi-agent-operator/branch-commit-push-automation.mjs",
+      authorityGrantRefs: [],
+      trustGateRef: null,
+      restrictions: expect.arrayContaining([
+        "Static Git publish gate model only",
+        "Only reserved files may be staged by the governed plan",
+        "Foreign changes and secrets fail closed",
+        "No runtime activation, authority grant, owner relay, or production operation",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",

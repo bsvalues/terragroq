@@ -139,7 +139,7 @@ persistence, command execution, and any production mutation.
 
 ### `GOAL-WOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
 
-Status: `ACTIVE / PROVIDER CONFORMANCE SUITE COMPLETE / WO-MAO-037 READY`
+Status: `ACTIVE / BRANCH COMMIT PUSH GATE COMPLETE / WO-MAO-038 READY`
 
 Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
@@ -160,7 +160,7 @@ Work Orders: `WO-MAO-001` through `WO-MAO-062`. Dependencies and reservations,
 not numeric serialization, determine the eligible set. The executable registry
 is `components/operator/multi-agent-operator-registry.ts`.
 
-Current transition: `WO-MAO-001` through `WO-MAO-032`, `WO-MAO-034`, `WO-MAO-035`, and `WO-MAO-036` are complete.
+Current transition: `WO-MAO-001` through `WO-MAO-032`, `WO-MAO-034`, `WO-MAO-035`, `WO-MAO-036`, and `WO-MAO-037` are complete.
 The local contracts now include the recoverable eligible-set scheduler and deterministic team
 topology/fan-in projection, bounded isolated-workspace lifecycle, durable one-writer handoff, and the
 deterministic hard-ceiling priority/fairness admission policy. WO-MAO-028 adds pure/static scheduler model
@@ -172,8 +172,11 @@ cross-provider routing and review planning that excludes unavailable providers. 
 provider-health classification, circuit-breaker/backoff projection, and bounded fallback selection.
 WO-MAO-036 adds suite-level provider conformance classification while preserving hosted Codex as
 session-only and excluding unavailable or rejected providers from executable certification.
+WO-MAO-037 adds governed branch/commit/push gates for active authority, preventive trust,
+reserved-file-only staging, foreign-change exclusion, exact secret scan coverage, attributable identity,
+and rollback preservation.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and
-resumable. The dependency-cleared Work Order is `WO-MAO-037`; later nodes remain pending on their
+resumable. The dependency-cleared Work Order is `WO-MAO-038`; later nodes remain pending on their
 declared dependencies. Durable provider dispatch and automated GitHub delivery remain unproven.
 
 Communication contract: routine implementation, diagnosis, retry, review,
