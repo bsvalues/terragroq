@@ -10,6 +10,7 @@ export function resolveNextPortfolioProgram(programs: PortfolioProgramRecord[]) 
     .filter((program) => ["SELECTED", "READY"].includes(program.state))
     .filter((program) => program.authorityMode === "CODEX_ELIGIBLE")
     .filter((program) => program.dependencies.every((dependency) => complete.has(dependency)))
+    .filter((program) => buildLoopPacket(program).eligibleWorkOrders.length > 0)
     .sort((left, right) => right.priorityScore - left.priorityScore || left.programId.localeCompare(right.programId))
   const selected = candidates[0]
 

@@ -117,6 +117,9 @@ code/reports remain present, but their evidence and callable success paths are i
 ordered re-proof.
 No Work Order is currently dependency-cleared. `WO-MAO-033` is
 `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; `WO-MAO-034` and later Work Orders remain pending.
+The program's canonical `SELECTED` state is retained, but it is not an executable dispatch claim:
+while its loop packet has no eligible Work Order, the portfolio resolver must skip it without false
+activation and fall through deterministically to the next approved program with eligible work.
 The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
