@@ -58,11 +58,19 @@ runs only through an independently supported and conformant provider lane.
 ## Sealed Hashes
 
 - Plan hash:
-  `c19174545641b5c7e5381990a83639b40dffadf941e78073e27ba572c36f9cf5`
+  `d2f44190ca117bfc9ec34fbbac0fbe73ae656fcd17f835f4f07c0a22906c5e51`
 - Result hash:
-  `f5a7384ad6ed27b57d5d83339528a02289e88f1b3037f49ede9a586c39ac5b5f`
+  `baf46e6cd6073255fc5a33ac5955a36924cfe708c6e12c87e292a552f810da49`
 - Evidence record hash:
-  `6ea76942424ac149536ec81f299477b133d07a7af151cd1fa694ba0ea393350e`
+  `2c913d5b131da494fc31951b68ba7b0dd79fcf877ee923679833da3af90f49f3`
+
+## Remediation Record
+
+WO-MAO-056 independent assurance found that the first WO-MAO-055 record counted
+only seven lane artifacts even though the merged PR changed 18 intended
+coordinator, registry, test, governance, and worker-lane files. This report and
+the sealed artifact now classify all 18 changed files as reserved and changed,
+with `foreignChangeCount: 0`.
 
 ## Safety
 

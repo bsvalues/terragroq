@@ -88,6 +88,10 @@ import {
   isVerifiedWoMao055ConcurrentCertificationEvidence,
 } from "@/components/operator/multi-agent-concurrent-certification-registry"
 import {
+  MULTI_AGENT_CROSS_REVIEW_CI_EVIDENCE,
+  isVerifiedWoMao056CrossReviewCiEvidence,
+} from "@/components/operator/multi-agent-cross-review-ci-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -258,6 +262,7 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-053", "docs/reports/WO-MAO-053-resilience-safety-rollup.md"],
   ["WO-MAO-054", "docs/reports/WO-MAO-054-certification-portfolio-selection.md"],
   ["WO-MAO-055", "docs/reports/WO-MAO-055-concurrent-certification-lanes.md"],
+  ["WO-MAO-056", "docs/reports/WO-MAO-056-cross-review-ci-remediation-certification.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -372,6 +377,9 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao055ConcurrentCertificationEvidence(MULTI_AGENT_CONCURRENT_CERTIFICATION_EVIDENCE)
     ? [workOrderId(55)]
+    : []),
+  ...(isVerifiedWoMao056CrossReviewCiEvidence(MULTI_AGENT_CROSS_REVIEW_CI_EVIDENCE)
+    ? [workOrderId(56)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])

@@ -132,9 +132,9 @@ evidence was invalidated and then re-proved through sealed canonical registries.
 exact edge into WO-MAO-034 is verified against WO-MAO-032, the consumer envelope, and source-
 assessment hash. WO-MAO-034 is complete through independently approved exact-candidate routing
 evidence. WO-MAO-035/036 previously kept redundant direct WO-MAO-033 edges fail-closed. The separately ratified graph
-correction removes only those redundant edges. WO-MAO-035 through WO-MAO-055 are now complete.
-The MAO eligible set is now `WO-MAO-056` and `WO-MAO-057`, the temporary remediation transition is
-cleared, and the active Work Order is WO-MAO-056 by deterministic queue order.
+correction removes only those redundant edges. WO-MAO-035 through WO-MAO-056 are now complete.
+The MAO eligible set is now `WO-MAO-057`, the temporary remediation transition is cleared, and the
+active Work Order is WO-MAO-057 by deterministic queue order.
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 

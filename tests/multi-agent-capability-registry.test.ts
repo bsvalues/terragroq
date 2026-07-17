@@ -483,6 +483,16 @@ describe("multi-agent executable capability inventory", () => {
         "WO-MAO-055 is complete; WO-MAO-056 and WO-MAO-057 are now READY through retained prerequisites",
       ]),
     })
+    expect(capability("cross-review-ci-remediation-certification-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_CROSS_REVIEW_CI_REMEDIATION_CERTIFICATION_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/cross-review-ci-remediation-certification.mjs",
+      restrictions: expect.arrayContaining([
+        "Static certification evidence only; no provider dispatch, GitHub API call, production write, scheduler, command runner, or runtime activation is performed",
+        "WO-MAO-056 is complete; WO-MAO-057 remains READY and WO-MAO-058 waits for WO-MAO-057",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
