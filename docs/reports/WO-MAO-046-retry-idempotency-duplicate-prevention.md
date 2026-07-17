@@ -29,7 +29,7 @@ Typed evidence hash:
 
 ## Acceptance
 
-- Verified dependency references: `WO-MAO-020`, `WO-MAO-037`, `WO-MAO-041`, and `WO-MAO-043`.
+- Verified dependency references: `WO-MAO-021`, `WO-MAO-035`, and `WO-MAO-044`.
 - Retry budget: `3` attempts.
 - Retryable classes: provider temporary unavailable, CI pending timeout, and review refresh timeout.
 - Terminal classes: authority wall, secret wall, reservation conflict, and destructive operation required.

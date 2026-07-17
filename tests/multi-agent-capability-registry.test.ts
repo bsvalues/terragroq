@@ -389,7 +389,7 @@ describe("multi-agent executable capability inventory", () => {
         "Zero-input retry/idempotency model only; no scheduler or provider is executed",
         "Retries are bounded to classified transient states and terminal classes fail closed",
         "Duplicate branch, commit, PR, comment, merge, deploy, cleanup, and evidence replay are fenced",
-        "WO-MAO-046 is complete; WO-MAO-047 and WO-MAO-049 are released to READY through retained prerequisites",
+        "WO-MAO-046 released WO-MAO-047 and WO-MAO-049 through retained prerequisites; both are now complete and WO-MAO-048 is READY",
         "No command runner, background worker, runtime activation, credential access, authority minting, GitHub execution, production write, or owner relay",
       ]),
     })

@@ -29,7 +29,8 @@ Typed evidence hash:
 
 ## Acceptance
 
-- Verified dependencies: `WO-MAO-007`, `WO-MAO-023`, and `WO-MAO-044`.
+- Verified dependencies: `WO-MAO-022`, `WO-MAO-036`, `WO-MAO-037`, `WO-MAO-038`, `WO-MAO-039`,
+  `WO-MAO-040`, `WO-MAO-041`, `WO-MAO-042`, `WO-MAO-043`, and `WO-MAO-044`.
 - Audit domains: secret material, identity material, GitHub authority, runtime boundary, and owner
   boundary.
 - Trust-boundary gates: no secret access, no identity mutation, no GitHub API, no runtime activation,
