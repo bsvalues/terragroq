@@ -191,7 +191,7 @@ edges from WO-MAO-035/036. WO-MAO-035 through WO-MAO-058 are now `COMPLETE`;
 WO-MAO-059 is `READY`.
 WO-MAO-033 remains deferred and resumable, and the WO-MAO-034 settlement remains exact and
 unchanged. Claude remains unavailable and disabled. Durable provider dispatch
-and the sustained zero-touch soak remains unproven.
+and the sustained zero-touch soak remain unproven.
 
 Communication contract: routine implementation, diagnosis, retry, review,
 merge, verification, cleanup, and continuation remain agent-owned. William is

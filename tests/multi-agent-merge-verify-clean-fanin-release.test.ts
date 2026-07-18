@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { execFileSync } from "node:child_process"
 
 import {
   MULTI_AGENT_MERGE_VERIFY_FANIN_EVIDENCE,
@@ -89,6 +90,8 @@ describe("WO-MAO-058 merge, verify, clean, and fan-in release", () => {
     for (const value of cases) {
       expect(() => verifyCanonicalMergeVerifyCleanFanInRelease(value)).toThrow(MergeVerifyCleanFanInReleaseError)
     }
+    expect(() => verifyCanonicalMergeVerifyCleanFanInRelease(null)).toThrow(MergeVerifyCleanFanInReleaseError)
+    expect(() => verifyCanonicalMergeVerifyCleanFanInRelease("input")).toThrow(MergeVerifyCleanFanInReleaseError)
   })
 
   it("publishes a tamper-evident registry record", () => {
@@ -105,5 +108,15 @@ describe("WO-MAO-058 merge, verify, clean, and fan-in release", () => {
       ...MULTI_AGENT_MERGE_VERIFY_FANIN_EVIDENCE,
       mergedPullRequestCount: 1,
     })).toBe(false)
+    expect(isVerifiedWoMao058MergeVerifyFanInEvidence(null)).toBe(false)
+    expect(isVerifiedWoMao058MergeVerifyFanInEvidence("input")).toBe(false)
+  })
+
+  it("keeps the CLI zero-input by rejecting caller-supplied arguments", () => {
+    expect(() => execFileSync(
+      process.execPath,
+      ["scripts/multi-agent-operator/merge-verify-clean-fanin-release-cli.mjs", "input.json"],
+      { encoding: "utf8" },
+    )).toThrow(/FANIN_RELEASE_CLI_ARGUMENT_WALL/)
   })
 })

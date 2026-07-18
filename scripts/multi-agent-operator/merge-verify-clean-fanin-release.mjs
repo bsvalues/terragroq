@@ -220,8 +220,14 @@ function pathArray(value, field) {
   return normalized
 }
 function validatePlan(plan) {
-  if (contentHash(plan) !== PLAN_HASH) wall("FANIN_RELEASE_PLAN_INTEGRITY_WALL", "plan", "CANONICAL_HASH_REQUIRED")
   exact(plan, PLAN_FIELDS, "plan")
+  let planHash
+  try {
+    planHash = contentHash(plan)
+  } catch {
+    wall("FANIN_RELEASE_PLAN_INTEGRITY_WALL", "plan", "JSON_COMPATIBLE_CANONICAL_PLAN_REQUIRED")
+  }
+  if (planHash !== PLAN_HASH) wall("FANIN_RELEASE_PLAN_INTEGRITY_WALL", "plan", "CANONICAL_HASH_REQUIRED")
   if (plan.schemaVersion !== 1 || plan.artifactType !== "CANONICAL_MERGE_VERIFY_CLEAN_FANIN_RELEASE") wall("FANIN_RELEASE_SCHEMA_WALL", "plan")
   if (text(plan.workOrderId, "plan.workOrderId", WO) !== "WO-MAO-058") wall("FANIN_RELEASE_SCOPE_WALL", "plan.workOrderId")
   text(plan.releaseId, "plan.releaseId")
