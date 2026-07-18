@@ -18,12 +18,23 @@ execution is considered.
 
 ## Ordered Work Orders
 
-1. `WO-RELEASE-001 - Current Release Evidence Reconciliation` (active)
-2. `WO-RELEASE-002 - Release Artifact and Provenance Contract`
-3. `WO-RELEASE-003 - Release Readiness Gate Model`
-4. `WO-RELEASE-004 - Rollback Evidence Contract`
-5. `WO-RELEASE-005 - Release Operator Read-Only Surface`
-6. `WO-RELEASE-006 - Safety Validation and Program Rollup`
+1. `WO-RELEASE-001 - Current Release Evidence Reconciliation` (complete)
+2. `WO-RELEASE-002 - Release Artifact and Provenance Contract` (complete)
+3. `WO-RELEASE-003 - Release Readiness Gate Model` (complete)
+4. `WO-RELEASE-004 - Rollback Evidence Contract` (complete)
+5. `WO-RELEASE-005 - Release Operator Read-Only Surface` (complete)
+6. `WO-RELEASE-006 - Safety Validation and Program Rollup` (complete)
+
+## Static Model
+
+The program's current static/read-only model is
+`components/operator/release-engineering-program.ts`, with focused validation in
+`tests/release-engineering-program.test.ts`. The model covers
+`WO-RELEASE-002` through `WO-RELEASE-006`, pins their report paths, and keeps
+release execution, deployment, tagging, rollback execution, production writes,
+GitHub mutation, secrets, environment/package/Vercel/auth/database changes,
+workers, schedulers, runtime activation, autonomy, and owner tasks outside the
+program.
 
 ## Boundaries
 
