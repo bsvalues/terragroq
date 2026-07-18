@@ -21,8 +21,8 @@ describe("WO-MAO-057 live failure and recovery certification", () => {
       workOrderId: "WO-MAO-057",
       status: "LIVE_FAILURE_RECOVERY_CERTIFIED",
       certificationId: "live-failure-recovery-certification-wo-mao-057-v1",
-      planContentHash: "7ebf21ccdf75ee8e2726e2011f607177523eb47996e1769c7f608237cbb54b93",
-      resultHash: "01d78b8775faac30dd071c3abaf125df1e3438612815d82a2943987a6eac783e",
+      planContentHash: "5fbea53c6fc6b38fd8183fbce5d358a7b887d695736f40000589a36eaa9202fa",
+      resultHash: "e2f3376ca62d0225941b98a0a89e5962b93d56efcf8f4d3578244126ed6d0858",
       repository: "bsvalues/terragroq",
       baseCommitSha: "6b045f885b1a7935ad60110c3096a05bbf28d37c",
       staleBaseRecoveredCommitSha: "21f5e41bfacc5c6d76d743581f3ffb2aaaab2def",
@@ -32,10 +32,11 @@ describe("WO-MAO-057 live failure and recovery certification", () => {
       downstreamState: "READY_AFTER_LIVE_FAILURE_RECOVERY_CERTIFICATION",
       dependencyCount: 5,
       liveInjectionCount: 5,
+      artifactEvidenceCount: 8,
       recoveryGateCount: 5,
       ownerOperationRequiredCount: 0,
-      reservedPathCount: 16,
-      changedPathCount: 16,
+      reservedPathCount: 24,
+      changedPathCount: 24,
       foreignChangeCount: 0,
       secretLikeFindings: 0,
       liveInjectionPerformed: true,
@@ -64,14 +65,14 @@ describe("WO-MAO-057 live failure and recovery certification", () => {
     expect(verifyCanonicalLiveFailureRecoveryCertification()).toEqual({
       ok: true,
       code: "LIVE_FAILURE_RECOVERY_CERTIFICATION_PLAN_VERIFIED",
-      contentHash: "7ebf21ccdf75ee8e2726e2011f607177523eb47996e1769c7f608237cbb54b93",
+      contentHash: "5fbea53c6fc6b38fd8183fbce5d358a7b887d695736f40000589a36eaa9202fa",
       liveInjectionPerformed: true,
       githubPrLifecycleUsed: true,
       ownerOperationRequired: false,
       authorityGranted: false,
     })
     expect(liveFailureRecoveryCertificationPlanContentHash()).toBe(
-      "7ebf21ccdf75ee8e2726e2011f607177523eb47996e1769c7f608237cbb54b93",
+      "5fbea53c6fc6b38fd8183fbce5d358a7b887d695736f40000589a36eaa9202fa",
     )
   })
 
@@ -101,7 +102,7 @@ describe("WO-MAO-057 live failure and recovery certification", () => {
       liveInjectionPerformed: true,
       githubPrLifecycleUsed: true,
       ownerOperationRequired: false,
-      recordContentHash: "a6ad3360b837a6cf1f16589dfd2d05ae49a8bdb4f237854763ec1a4d34391033",
+      recordContentHash: "3c9382bf0173e744923366d8f60673919b8b52ce9e87c7b2bfca21e5b67f7ca7",
     })
     expect(isVerifiedWoMao057LiveFailureRecoveryEvidence()).toBe(true)
     expect(isVerifiedWoMao057LiveFailureRecoveryEvidence({

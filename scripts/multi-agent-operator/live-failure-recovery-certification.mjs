@@ -1,4 +1,6 @@
 import crypto from "node:crypto"
+import fs from "node:fs"
+import path from "node:path"
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/
 const WO = /^WO-[A-Z0-9]+(?:-[A-Z0-9]+)*$/
@@ -14,11 +16,12 @@ const PROHIBITED_PATH = /(^|\/)(\.git|\.env|\.next|node_modules|\.obsidian|secre
 const PLAN_FIELDS = new Set([
   "schemaVersion", "artifactType", "certificationId", "workOrderId", "repository", "baseRef",
   "baseCommitSha", "staleBaseRecoveredCommitSha", "liveRunId", "dependencyEvidence",
-  "liveInjections", "staleBaseControl", "recoveryGates", "reservedPaths", "changedPaths",
+  "liveInjections", "artifactEvidence", "staleBaseControl", "recoveryGates", "reservedPaths", "changedPaths",
   "foreignChanges", "secretScan", "authority", "safety",
 ])
 const DEP_FIELDS = new Set(["workOrderId", "evidenceId", "status", "recordContentHash"])
 const INJECTION_FIELDS = new Set(["injectionClass", "method", "evidenceFile", "evidenceHash", "recovered", "ownerOperationRequired"])
+const ARTIFACT_FIELDS = new Set(["path", "sha256", "length"])
 const STALE_FIELDS = new Set(["controlPr", "baseAtBranchStart", "mainAdvancedTo", "refreshMethod", "revalidated"])
 const GATE_FIELDS = new Set(["durableCheckpointRequired", "reservationFenceRequired", "quarantineRequired", "revalidationRequired", "zeroOwnerTouchRequired"])
 const SECRET_FIELDS = new Set(["status", "scanner", "secretLikeFindings"])
@@ -59,6 +62,8 @@ function canonicalize(value) {
 }
 function canonicalJson(value) { return JSON.stringify(canonicalize(value)) }
 function contentHash(value) { return crypto.createHash("sha256").update(canonicalJson(value)).digest("hex") }
+function artifactText(filePath) { return fs.readFileSync(filePath, "utf8").replace(/\r\n/g, "\n") }
+function fileHash(filePath) { return crypto.createHash("sha256").update(artifactText(filePath), "utf8").digest("hex") }
 function deepCopy(value) {
   if (Array.isArray(value)) return value.map(deepCopy)
   if (object(value)) return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, deepCopy(child)]))
@@ -90,11 +95,21 @@ const PLAN = deepFreeze({
     { workOrderId: "WO-MAO-056", evidenceId: "EVIDENCE-WO-MAO-056-CROSS-REVIEW-CI-REMEDIATION-CERTIFICATION-V1", status: "CANONICAL_CROSS_REVIEW_CI_REMEDIATION_CERTIFICATION_VERIFIED", recordContentHash: "e8414ecf935ef6e14bf135c253cc9c62196a84bfd526d9e05fc15f9ed18fc727" },
   ],
   liveInjections: [
-    { injectionClass: "WORKER_DEATH", method: "TERMINATED_LOCAL_BUILDER_AFTER_SAFE_CHECKPOINT", evidenceFile: "worker-checkpoint.json+worker-resume.json", evidenceHash: "e2eac6ced43e3364549e2c77a01118a38109a78dad1ae27d991f577dd9ed0560:5462ed2e9cbfd3663c4e695463bcfdaa3b29ef26a9c991789577deb787534730", recovered: true, ownerOperationRequired: false },
-    { injectionClass: "COORDINATOR_RESTART", method: "TERMINATED_LOCAL_COORDINATOR_AFTER_DURABLE_STATE", evidenceFile: "coordinator-checkpoint.json+coordinator-recovery.json", evidenceHash: "f0c495fa77ac7f52aafda56d001accd268dac4b8f893ef3c9f344f8b17deb3ce:92a7dc58c3e828c0bb56940a5f72f3594b6e8f93ac985d86f2fdbd71c40c4289", recovered: true, ownerOperationRequired: false },
-    { injectionClass: "PROVIDER_NETWORK_FAILURE", method: "INVALID_LOCAL_PROXY_THEN_NORMAL_GITHUB_RECOVERY", evidenceFile: "network-recovery.json", evidenceHash: "942a6f4f7f3e5a3039afe9fc33a5ad4b4b1356293003f53e0e267345be23cfbf", recovered: true, ownerOperationRequired: false },
-    { injectionClass: "RESERVATION_COLLISION", method: "EXCLUSIVE_RESERVATION_LOCK_REJECTED_SECOND_WRITER", evidenceFile: "reservation-collision.json", evidenceHash: "184351ef0b49ac570857df13a7512755e60cf218f108b308113d5ba5831ab84c", recovered: true, ownerOperationRequired: false },
+    { injectionClass: "WORKER_DEATH", method: "TERMINATED_LOCAL_BUILDER_AFTER_SAFE_CHECKPOINT", evidenceFile: "worker-checkpoint.json+worker-resume.json", evidenceHash: "caf41803306d6c9076a1b2f3d24cc1e27cdddd585038f0878776e71443387adb:24be1c40bf2875967ac7ce5f69450fd4671c148916ef9f7ebd60b2448035af50", recovered: true, ownerOperationRequired: false },
+    { injectionClass: "COORDINATOR_RESTART", method: "TERMINATED_LOCAL_COORDINATOR_AFTER_DURABLE_STATE", evidenceFile: "coordinator-checkpoint.json+coordinator-recovery.json", evidenceHash: "4bf4742a0abc75e6a98721026970de1c2b2a2bb6939de26dff755f5f8ef731ff:79ea76c65182d87676e6fee940ac94fc1f38868916ab944cb7c3761ee7484180", recovered: true, ownerOperationRequired: false },
+    { injectionClass: "PROVIDER_NETWORK_FAILURE", method: "INVALID_LOCAL_PROXY_THEN_NORMAL_GITHUB_RECOVERY", evidenceFile: "network-recovery.json", evidenceHash: "32c2153f2d34f36b46078cb375fc8156cd9e120bde7083a123fbd8b00faa1580", recovered: true, ownerOperationRequired: false },
+    { injectionClass: "RESERVATION_COLLISION", method: "EXCLUSIVE_RESERVATION_LOCK_REJECTED_SECOND_WRITER", evidenceFile: "reservation-collision.json", evidenceHash: "68c9937d055cd533e2a8313478ae0cc654f5e0963e29e41d6c369a0922d5396a", recovered: true, ownerOperationRequired: false },
     { injectionClass: "STALE_BASE_EVENT", method: "PR_411_ADVANCED_MAIN_THEN_CERTIFICATION_BRANCH_REBASED", evidenceFile: "WO-MAO-057-stale-base-control-change.md", evidenceHash: "21f5e41bfacc5c6d76d743581f3ffb2aaaab2def", recovered: true, ownerOperationRequired: false },
+  ],
+  artifactEvidence: [
+    { path: "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/coordinator-checkpoint.json", sha256: "4bf4742a0abc75e6a98721026970de1c2b2a2bb6939de26dff755f5f8ef731ff", length: 364 },
+    { path: "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/coordinator-recovery.json", sha256: "79ea76c65182d87676e6fee940ac94fc1f38868916ab944cb7c3761ee7484180", length: 370 },
+    { path: "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/network-recovery.json", sha256: "32c2153f2d34f36b46078cb375fc8156cd9e120bde7083a123fbd8b00faa1580", length: 376 },
+    { path: "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/reservation-collision.json", sha256: "68c9937d055cd533e2a8313478ae0cc654f5e0963e29e41d6c369a0922d5396a", length: 295 },
+    { path: "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/reservation.lock", sha256: "1e5402b2027b65a2d8e54399d7799a297967614c049f007e0f4b4a12cf9596be", length: 26 },
+    { path: "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/summary.json", sha256: "5e0fac726d20f729020e63301ee12709cf81ad7ae915dcc6fdfd731404261569", length: 1636 },
+    { path: "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/worker-checkpoint.json", sha256: "caf41803306d6c9076a1b2f3d24cc1e27cdddd585038f0878776e71443387adb", length: 299 },
+    { path: "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/worker-resume.json", sha256: "24be1c40bf2875967ac7ce5f69450fd4671c148916ef9f7ebd60b2448035af50", length: 270 },
   ],
   staleBaseControl: {
     controlPr: 411,
@@ -119,6 +134,14 @@ const PLAN = deepFreeze({
     "docs/governance/loop-registry.md",
     "docs/governance/multi-agent-operator-playbook.md",
     "docs/reports/WO-MAO-000-multi-agent-operator-rollup.md",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/coordinator-checkpoint.json",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/coordinator-recovery.json",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/network-recovery.json",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/reservation-collision.json",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/reservation.lock",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/summary.json",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/worker-checkpoint.json",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/worker-resume.json",
     "docs/reports/WO-MAO-057-live-failure-recovery-certification.md",
     "scripts/multi-agent-operator/live-failure-recovery-certification-cli.mjs",
     "scripts/multi-agent-operator/live-failure-recovery-certification.mjs",
@@ -137,6 +160,14 @@ const PLAN = deepFreeze({
     "docs/governance/loop-registry.md",
     "docs/governance/multi-agent-operator-playbook.md",
     "docs/reports/WO-MAO-000-multi-agent-operator-rollup.md",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/coordinator-checkpoint.json",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/coordinator-recovery.json",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/network-recovery.json",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/reservation-collision.json",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/reservation.lock",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/summary.json",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/worker-checkpoint.json",
+    "docs/reports/WO-MAO-057-live-failure-recovery-artifacts/worker-resume.json",
     "docs/reports/WO-MAO-057-live-failure-recovery-certification.md",
     "scripts/multi-agent-operator/live-failure-recovery-certification-cli.mjs",
     "scripts/multi-agent-operator/live-failure-recovery-certification.mjs",
@@ -169,7 +200,7 @@ const PLAN = deepFreeze({
   },
 })
 
-const PLAN_HASH = "7ebf21ccdf75ee8e2726e2011f607177523eb47996e1769c7f608237cbb54b93"
+const PLAN_HASH = "5fbea53c6fc6b38fd8183fbce5d358a7b887d695736f40000589a36eaa9202fa"
 
 function stringArray(value, field, pattern = ID) {
   if (!Array.isArray(value) || value.length === 0) wall("LIVE_FAILURE_RECOVERY_TYPE_WALL", field, "NON_EMPTY_ARRAY_REQUIRED")
@@ -217,6 +248,20 @@ function validatePlan(plan) {
   for (const required of ["WORKER_DEATH", "COORDINATOR_RESTART", "PROVIDER_NETWORK_FAILURE", "RESERVATION_COLLISION", "STALE_BASE_EVENT"]) {
     if (!injectionClasses.includes(required)) wall("LIVE_FAILURE_RECOVERY_INJECTION_WALL", required)
   }
+  if (!Array.isArray(plan.artifactEvidence) || plan.artifactEvidence.length !== 8) wall("LIVE_FAILURE_RECOVERY_ARTIFACT_WALL", "artifactEvidence")
+  const artifactPaths = pathArray(plan.artifactEvidence.map((entry) => entry.path), "artifactEvidence.path")
+  for (const [index, artifact] of plan.artifactEvidence.entries()) {
+    exact(artifact, ARTIFACT_FIELDS, `artifactEvidence[${index}]`)
+    text(artifact.path, `artifactEvidence[${index}].path`, PATH)
+    text(artifact.sha256, `artifactEvidence[${index}].sha256`, HASH64)
+    if (!Number.isInteger(artifact.length) || artifact.length <= 0) wall("LIVE_FAILURE_RECOVERY_ARTIFACT_WALL", `artifactEvidence[${index}].length`)
+    const artifactPath = path.resolve(process.cwd(), artifact.path)
+    if (!fs.existsSync(artifactPath)) wall("LIVE_FAILURE_RECOVERY_ARTIFACT_MISSING_WALL", artifact.path)
+    const stat = fs.statSync(artifactPath)
+    if (!stat.isFile()
+      || Buffer.byteLength(artifactText(artifactPath), "utf8") !== artifact.length
+      || fileHash(artifactPath) !== artifact.sha256) wall("LIVE_FAILURE_RECOVERY_ARTIFACT_INTEGRITY_WALL", artifact.path)
+  }
   exact(plan.staleBaseControl, STALE_FIELDS, "staleBaseControl")
   if (plan.staleBaseControl.controlPr !== 411
     || plan.staleBaseControl.baseAtBranchStart !== plan.baseCommitSha
@@ -227,6 +272,7 @@ function validatePlan(plan) {
   for (const field of GATE_FIELDS) if (plan.recoveryGates[field] !== true) wall("LIVE_FAILURE_RECOVERY_GATE_WALL", `recoveryGates.${field}`)
   const reservedPaths = pathArray(plan.reservedPaths, "reservedPaths")
   const changedPaths = pathArray(plan.changedPaths, "changedPaths")
+  if (!artifactPaths.every((item) => reservedPaths.includes(item) && changedPaths.includes(item))) wall("LIVE_FAILURE_RECOVERY_ARTIFACT_RESERVATION_WALL", "artifactEvidence")
   if (!changedPaths.every((item) => reservedPaths.includes(item))) wall("LIVE_FAILURE_RECOVERY_RESERVATION_WALL", "changedPaths")
   if (!Array.isArray(plan.foreignChanges) || plan.foreignChanges.length !== 0) wall("LIVE_FAILURE_RECOVERY_FOREIGN_CHANGE_WALL", "foreignChanges")
   exact(plan.secretScan, SECRET_FIELDS, "secretScan")
@@ -244,6 +290,7 @@ function validatePlan(plan) {
   return {
     dependencyCount: plan.dependencyEvidence.length,
     liveInjectionCount: plan.liveInjections.length,
+    artifactEvidenceCount: plan.artifactEvidence.length,
     recoveryGateCount: Object.keys(plan.recoveryGates).length,
     ownerOperationRequiredCount: plan.liveInjections.filter((injection) => injection.ownerOperationRequired).length,
     reservedPathCount: reservedPaths.length,

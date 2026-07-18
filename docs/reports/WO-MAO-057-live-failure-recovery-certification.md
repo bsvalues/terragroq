@@ -22,23 +22,27 @@ CERTIFICATION_BRANCH: codex/mao-057-live-failure-recovery
 BASE_AT_BRANCH_START: 6b045f885b1a7935ad60110c3096a05bbf28d37c
 STALE_BASE_CONTROL_PR: #411
 STALE_BASE_RECOVERED_MAIN: 21f5e41bfacc5c6d76d743581f3ffb2aaaab2def
-PLAN_HASH: 7ebf21ccdf75ee8e2726e2011f607177523eb47996e1769c7f608237cbb54b93
-RESULT_HASH: 01d78b8775faac30dd071c3abaf125df1e3438612815d82a2943987a6eac783e
-REGISTRY_HASH: a6ad3360b837a6cf1f16589dfd2d05ae49a8bdb4f237854763ec1a4d34391033
+ARTIFACT_COUNT: 8
+PLAN_HASH: 5fbea53c6fc6b38fd8183fbce5d358a7b887d695736f40000589a36eaa9202fa
+RESULT_HASH: e2f3376ca62d0225941b98a0a89e5962b93d56efcf8f4d3578244126ed6d0858
+REGISTRY_HASH: 3c9382bf0173e744923366d8f60673919b8b52ce9e87c7b2bfca21e5b67f7ca7
 ```
 
 PR #410 was closed unmerged after the valid review finding that static-only
 evidence could not satisfy WO-MAO-057. This report supersedes that attempt with
 live evidence.
 
+Artifact hashes in this report are SHA-256 values over UTF-8 text with CRLF
+normalized to LF so Windows and CI checkouts verify the same evidence.
+
 ## Required live injections
 
 | Injection | Controlled action | Evidence | Outcome |
 | --- | --- | --- | --- |
-| Worker death | Stopped a local builder after a safe checkpoint and before completion | `worker-checkpoint.json` `e2eac6ced43e3364549e2c77a01118a38109a78dad1ae27d991f577dd9ed0560`; `worker-resume.json` `5462ed2e9cbfd3663c4e695463bcfdaa3b29ef26a9c991789577deb787534730` | Recovered from checkpoint with zero duplicate branches, commits, PRs, comments, merges, or owner operations. |
-| Coordinator restart | Stopped a controlled local coordinator process after durable state was written | `coordinator-checkpoint.json` `f0c495fa77ac7f52aafda56d001accd268dac4b8f893ef3c9f344f8b17deb3ce`; `coordinator-recovery.json` `92a7dc58c3e828c0bb56940a5f72f3594b6e8f93ac985d86f2fdbd71c40c4289` | Reconstructed state from checkpoint, current branch, and Git head with no duplicate writers or owner operations. |
-| Provider/network failure | Forced a bounded GitHub request through an invalid local proxy, then retried through the normal path | `network-recovery.json` `942a6f4f7f3e5a3039afe9fc33a5ad4b4b1356293003f53e0e267345be23cfbf` | Classified the interruption, bounded it, and recovered to HTTP 200 without owner diagnostics. |
-| Reservation collision | Held an exclusive reservation lock and attempted a conflicting writer before mutation | `reservation-collision.json` `184351ef0b49ac570857df13a7512755e60cf218f108b308113d5ba5831ab84c` | Rejected the conflicting writer before output mutation; no concurrent writer was admitted. |
+| Worker death | Stopped a local builder after a safe checkpoint and before completion | `docs/reports/WO-MAO-057-live-failure-recovery-artifacts/worker-checkpoint.json` `caf41803306d6c9076a1b2f3d24cc1e27cdddd585038f0878776e71443387adb`; `docs/reports/WO-MAO-057-live-failure-recovery-artifacts/worker-resume.json` `24be1c40bf2875967ac7ce5f69450fd4671c148916ef9f7ebd60b2448035af50` | Recovered from checkpoint with zero duplicate branches, commits, PRs, comments, merges, or owner operations. |
+| Coordinator restart | Stopped a controlled local coordinator process after durable state was written | `docs/reports/WO-MAO-057-live-failure-recovery-artifacts/coordinator-checkpoint.json` `4bf4742a0abc75e6a98721026970de1c2b2a2bb6939de26dff755f5f8ef731ff`; `docs/reports/WO-MAO-057-live-failure-recovery-artifacts/coordinator-recovery.json` `79ea76c65182d87676e6fee940ac94fc1f38868916ab944cb7c3761ee7484180` | Reconstructed state from checkpoint, current branch, and Git head with no duplicate writers or owner operations. |
+| Provider/network failure | Forced a bounded GitHub request through an invalid local proxy, then retried through the normal path | `docs/reports/WO-MAO-057-live-failure-recovery-artifacts/network-recovery.json` `32c2153f2d34f36b46078cb375fc8156cd9e120bde7083a123fbd8b00faa1580` | Classified the interruption, bounded it, and recovered to HTTP 200 without owner diagnostics. |
+| Reservation collision | Held an exclusive reservation lock and attempted a conflicting writer before mutation | `docs/reports/WO-MAO-057-live-failure-recovery-artifacts/reservation-collision.json` `68c9937d055cd533e2a8313478ae0cc654f5e0963e29e41d6c369a0922d5396a`; `docs/reports/WO-MAO-057-live-failure-recovery-artifacts/reservation.lock` `1e5402b2027b65a2d8e54399d7799a297967614c049f007e0f4b4a12cf9596be` | Rejected the conflicting writer before output mutation; no concurrent writer was admitted. |
 | Stale base | Began certification branch at `6b045f...`, advanced `main` through PR #411, then rebased certification branch onto `21f5e41...` | `docs/reports/WO-MAO-057-stale-base-control-change.md`; recovered head `21f5e41bfacc5c6d76d743581f3ffb2aaaab2def` | Stale base was detected and refreshed before validation and merge eligibility. |
 
 ## Certification record
@@ -47,6 +51,7 @@ live evidence.
 - CLI: `scripts/multi-agent-operator/live-failure-recovery-certification-cli.mjs`
 - Registry: `components/operator/multi-agent-live-failure-recovery-registry.ts`
 - Test: `tests/multi-agent-live-failure-recovery-certification.test.ts`
+- Artifact manifest: `docs/reports/WO-MAO-057-live-failure-recovery-artifacts/summary.json`
 - Certified classes: `COORDINATOR_RESTART`, `PROVIDER_NETWORK_FAILURE`,
   `RESERVATION_COLLISION`, `STALE_BASE_EVENT`, `WORKER_DEATH`
 - Recovery gates: durable checkpoint, reservation fence, quarantine,

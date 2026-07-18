@@ -1,0 +1,9 @@
+{
+  "event": "RESERVATION_COLLISION",
+  "primaryReservationHeld": true,
+  "secondWriterBlockedBeforeMutation": true,
+  "secondWriterErrorClass": "MethodInvocationException",
+  "secondWriterOutputCreated": false,
+  "ownerOperationRequired": false,
+  "timestamp": "2026-07-18T03:05:17.2275344Z"
+}
