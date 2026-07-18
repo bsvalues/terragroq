@@ -130,7 +130,10 @@ export const DEVEX_HOOK_TOOLING_PROGRAM_EVIDENCE = Object.freeze({
 } satisfies DevexHookToolingProgramEvidence)
 
 export function isDevexHookToolingPathAllowed(path: string) {
-  return DEVEX_HOOK_TOOLING_PROGRAM_EVIDENCE.allowedPathPrefixes.some((prefix) => path === prefix || path.startsWith(prefix))
+  return DEVEX_HOOK_TOOLING_PROGRAM_EVIDENCE.allowedPathPrefixes.some((prefix) => {
+    if (prefix.endsWith("/") || prefix.endsWith("-")) return path.startsWith(prefix)
+    return path === prefix
+  })
 }
 
 export function isVerifiedDevexHookToolingProgramEvidence(

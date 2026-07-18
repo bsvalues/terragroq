@@ -24,6 +24,24 @@ describe("WO-MAO-059 sustained zero-touch soak ledger", () => {
     expect(result.ledgerHash).toMatch(/^[a-f0-9]{64}$/)
   })
 
+  it("accepts sequence-exact partial progress without certifying the ten-work-order gate", () => {
+    const ledger = loadSustainedZeroTouchSoakLedger()
+    const partial = {
+      ...ledger,
+      usefulWorkOrderCount: 3,
+      tenConsecutiveWorkOrdersCertified: false,
+      certificationState: "NOT_CERTIFIED",
+      completedUsefulWorkOrders: ledger.completedUsefulWorkOrders.slice(0, 3),
+    }
+
+    expect(verifyOpenSustainedZeroTouchSoakLedger(partial)).toMatchObject({
+      usefulWorkOrderCount: 3,
+      completedUsefulWorkOrderCount: 3,
+      tenConsecutiveWorkOrdersCertified: false,
+      certificationState: "NOT_CERTIFIED",
+    })
+  })
+
   it("fails closed if owner touch, safety, queue, or certification claims change", () => {
     const ledger = loadSustainedZeroTouchSoakLedger()
     const cases = [
@@ -52,9 +70,19 @@ describe("WO-MAO-059 sustained zero-touch soak ledger", () => {
           : entry),
       },
       { ...ledger, ownerCounters: { ...ledger.ownerCounters, OWNER_ROUTINE_CONTACT_COUNT: 1 } },
+      { ...ledger, ownerCounters: {} },
+      {
+        ...ledger,
+        ownerCounters: Object.fromEntries(Object.entries(ledger.ownerCounters).filter(([key]) => key !== "OWNER_CREDENTIAL_TOUCH_COUNT")),
+      },
       { ...ledger, blockedScope: { ...ledger.blockedScope, runtimeActivationAllowed: true } },
       { ...ledger, blockedScope: { ...ledger.blockedScope, paidOverageAllowed: true } },
       { ...ledger, blockedScope: { ...ledger.blockedScope, rejectedRuntimeRetryAllowed: true } },
+      { ...ledger, blockedScope: {} },
+      {
+        ...ledger,
+        blockedScope: Object.fromEntries(Object.entries(ledger.blockedScope).filter(([key]) => key !== "productionMutationAllowed")),
+      },
     ]
 
     for (const value of cases) {

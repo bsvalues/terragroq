@@ -5,8 +5,14 @@ import {
   isDevexHookToolingPathAllowed,
   isVerifiedDevexHookToolingProgramEvidence,
 } from "@/components/operator/devex-hook-tooling-registry"
+import { hashRecord } from "@/lib/governance/hash"
 
 const cloneEvidence = () => JSON.parse(JSON.stringify(DEVEX_HOOK_TOOLING_PROGRAM_EVIDENCE))
+const rehash = (record: any) => {
+  const { recordContentHash, ...claims } = record
+  record.recordContentHash = hashRecord(claims)
+  return record
+}
 
 describe("DevEx Hook Tooling static program evidence", () => {
   it("records WO-DEVEX-HOOK-TOOLING-001 through 003 as complete static work", () => {
@@ -44,6 +50,7 @@ describe("DevEx Hook Tooling static program evidence", () => {
       "package.json",
       ".github/workflows/devex.yml",
       "runtime-operator/native/authority-registry.json",
+      "docs/governance/devex-hook-tooling-program.md.bak",
     ]) {
       expect(isDevexHookToolingPathAllowed(path)).toBe(false)
     }
@@ -66,7 +73,7 @@ describe("DevEx Hook Tooling static program evidence", () => {
     ]) {
       const changed = cloneEvidence()
       mutate(changed)
-      expect(isVerifiedDevexHookToolingProgramEvidence(changed)).toBe(false)
+      expect(isVerifiedDevexHookToolingProgramEvidence(rehash(changed))).toBe(false)
     }
   })
 
@@ -74,10 +81,10 @@ describe("DevEx Hook Tooling static program evidence", () => {
     const missingWorkOrder = cloneEvidence()
     missingWorkOrder.workOrders.pop()
     missingWorkOrder.completedWorkOrderCount = 2
-    expect(isVerifiedDevexHookToolingProgramEvidence(missingWorkOrder)).toBe(false)
+    expect(isVerifiedDevexHookToolingProgramEvidence(rehash(missingWorkOrder))).toBe(false)
 
     const escapedEvidencePath = cloneEvidence()
     escapedEvidencePath.workOrders[1].evidencePath = "docs/reports/WO-MAO-999.md"
-    expect(isVerifiedDevexHookToolingProgramEvidence(escapedEvidencePath)).toBe(false)
+    expect(isVerifiedDevexHookToolingProgramEvidence(rehash(escapedEvidencePath))).toBe(false)
   })
 })

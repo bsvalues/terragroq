@@ -15,6 +15,25 @@ const REQUIRED_WORK_ORDERS = [
   "WO-BACKEND-OE-001",
   "WO-BACKEND-OE-002",
 ]
+const REQUIRED_OWNER_COUNTER_KEYS = [
+  "OWNER_OPERATION_TOUCH_COUNT",
+  "OWNER_CREDENTIAL_TOUCH_COUNT",
+  "OWNER_DIAGNOSTIC_TOUCH_COUNT",
+  "OWNER_ROUTINE_DECISION_COUNT",
+  "OWNER_ROUTINE_CONTACT_COUNT",
+]
+const REQUIRED_BLOCKED_SCOPE_KEYS = [
+  "runtimeActivationAllowed",
+  "commandRunnerAllowed",
+  "backgroundWorkerAllowed",
+  "durableProviderDispatchAllowed",
+  "productionMutationAllowed",
+  "paidOverageAllowed",
+  "secretInspectionAllowed",
+  "pacsCountyProtectedDataAllowed",
+  "rejectedRuntimeRetryAllowed",
+  "destructiveCleanupAllowed",
+]
 const REQUIRED_COMPLETED_WORK_ORDERS = [
   {
     workOrderId: "WO-RELEASE-002",
@@ -124,7 +143,7 @@ export function verifyOpenSustainedZeroTouchSoakLedger(ledger = loadLedger()) {
     ? ledger.completedUsefulWorkOrders.map((entry) => entry?.workOrderId)
     : []
   if (ledger.usefulWorkOrderCount !== completedIds.length) wall("SOAK_LEDGER_PROGRESS_WALL", "usefulWorkOrderCount")
-  if (ledger.usefulWorkOrderCount !== 0 && JSON.stringify(completedIds) !== JSON.stringify(REQUIRED_WORK_ORDERS)) wall("SOAK_LEDGER_PROGRESS_WALL", "completedUsefulWorkOrders")
+  if (JSON.stringify(completedIds) !== JSON.stringify(REQUIRED_WORK_ORDERS.slice(0, completedIds.length))) wall("SOAK_LEDGER_PROGRESS_WALL", "completedUsefulWorkOrders")
   for (const [index, entry] of (ledger.completedUsefulWorkOrders ?? []).entries()) {
     const expected = REQUIRED_COMPLETED_WORK_ORDERS[index]
     if (!object(entry)) wall("SOAK_LEDGER_PROGRESS_WALL", `completedUsefulWorkOrders[${index}]`)
@@ -138,11 +157,13 @@ export function verifyOpenSustainedZeroTouchSoakLedger(ledger = loadLedger()) {
   if (ledger.tenConsecutiveWorkOrdersCertified !== (ledger.usefulWorkOrderCount >= 10)) wall("SOAK_LEDGER_PROGRESS_WALL", "tenConsecutiveWorkOrdersCertified")
   if (!["NOT_CERTIFIED", "WORK_ORDER_GATE_LOCALLY_VALIDATED_DURATION_PENDING"].includes(ledger.certificationState)) wall("SOAK_LEDGER_CERTIFICATION_WALL", "certificationState")
   if (ledger.certificationState === "WORK_ORDER_GATE_LOCALLY_VALIDATED_DURATION_PENDING" && ledger.tenConsecutiveWorkOrdersCertified !== true) wall("SOAK_LEDGER_PROGRESS_WALL", "certificationState")
-  for (const [key, value] of Object.entries(ledger.ownerCounters ?? {})) {
-    if (value !== 0) wall("SOAK_LEDGER_OWNER_TOUCH_WALL", key)
+  if (!object(ledger.ownerCounters)) wall("SOAK_LEDGER_OWNER_TOUCH_WALL", "ownerCounters")
+  for (const key of REQUIRED_OWNER_COUNTER_KEYS) {
+    if (ledger.ownerCounters[key] !== 0) wall("SOAK_LEDGER_OWNER_TOUCH_WALL", key)
   }
-  for (const [key, value] of Object.entries(ledger.blockedScope ?? {})) {
-    if (value !== false) wall("SOAK_LEDGER_SAFETY_WALL", key)
+  if (!object(ledger.blockedScope)) wall("SOAK_LEDGER_SAFETY_WALL", "blockedScope")
+  for (const key of REQUIRED_BLOCKED_SCOPE_KEYS) {
+    if (ledger.blockedScope[key] !== false) wall("SOAK_LEDGER_SAFETY_WALL", key)
   }
   return Object.freeze({
     ok: true,
