@@ -96,6 +96,10 @@ import {
   isVerifiedWoMao057LiveFailureRecoveryEvidence,
 } from "@/components/operator/multi-agent-live-failure-recovery-registry"
 import {
+  MULTI_AGENT_MERGE_VERIFY_FANIN_EVIDENCE,
+  isVerifiedWoMao058MergeVerifyFanInEvidence,
+} from "@/components/operator/multi-agent-merge-verify-fanin-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -268,6 +272,7 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-055", "docs/reports/WO-MAO-055-concurrent-certification-lanes.md"],
   ["WO-MAO-056", "docs/reports/WO-MAO-056-cross-review-ci-remediation-certification.md"],
   ["WO-MAO-057", "docs/reports/WO-MAO-057-live-failure-recovery-certification.md"],
+  ["WO-MAO-058", "docs/reports/WO-MAO-058-merge-verify-clean-fanin-release.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -388,6 +393,9 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao057LiveFailureRecoveryEvidence(MULTI_AGENT_LIVE_FAILURE_RECOVERY_EVIDENCE)
     ? [workOrderId(57)]
+    : []),
+  ...(isVerifiedWoMao058MergeVerifyFanInEvidence(MULTI_AGENT_MERGE_VERIFY_FANIN_EVIDENCE)
+    ? [workOrderId(58)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])
