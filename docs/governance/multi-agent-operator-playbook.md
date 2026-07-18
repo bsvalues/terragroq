@@ -395,8 +395,9 @@ proved the kill/revoke/rollback/incident procedure, WO-MAO-053 proved the resili
 rollup, WO-MAO-054 selected the certification portfolio, WO-MAO-055 executed the two selected
 static useful Codex lanes, WO-MAO-056 certified cross-review/CI remediation, and WO-MAO-057
 certified live failure recovery across worker death, coordinator restart, provider/network failure,
-reservation collision, and stale-base refresh. WO-MAO-058 is `READY`; the next eligible gate is
-merge, verification, cleanup, and fan-in release.
+reservation collision, and stale-base refresh. WO-MAO-058 certified the merged PR fan-in,
+main/production verification, owned cleanup classification, and WO-MAO-059 release. WO-MAO-059 is
+`READY`; the next eligible gate is the sustained zero-touch soak.
 
 ### Phase 5 — GitHub delivery engine
 
@@ -433,7 +434,7 @@ merge, verification, cleanup, and fan-in release.
 | `WO-MAO-055` | Execute concurrent certification lanes | 054 | Run at least two builders concurrently with isolated reservations and an independent assurance agent; Claude runs separately when enabled. |
 | `WO-MAO-056` | Cross-review, CI, and remediation certification | 055 | Complete at least one requested-changes cycle and one CI repair with zero unresolved review threads and no owner involvement. |
 | `WO-MAO-057` | Failure and recovery certification | 055 | During real delivery inject one worker death, one coordinator restart, one provider/network failure, one reservation collision, and one stale-base event; recover or block safely. |
-| `WO-MAO-058` | Merge, verify, clean, and fan-in release | 056-057 | Merge at least two authorized useful PRs, verify results, clean owned resources, and automatically release and execute the dependent WO. |
+| `WO-MAO-058` | Merge, verify, clean, and fan-in release | 056-057 | Merge at least two authorized useful PRs, verify results, clean owned resources, and automatically release the dependent WO. |
 | `WO-MAO-059` | Sustained zero-touch soak | 058 | Complete both a minimum 24-hour duration and at least ten consecutive Work Orders in the same soak, with bounded concurrency, recovery, evidence continuity, and no operational owner contact. |
 | `WO-MAO-060` | Zero-owner-touch audit | 054-059 | Independent audit proves all five owner-touch/contact counters are zero and that any genuine owner decision was authority-only and outside the execution path. |
 | `WO-MAO-061` | Unattended multi-agent certification | 060 | Accept only if real useful work merged, concurrency, fan-in, review, remediation, provider isolation, recovery, and successor release all passed. Otherwise publish an evidence-backed rejection. |

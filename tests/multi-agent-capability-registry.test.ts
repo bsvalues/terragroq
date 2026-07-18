@@ -514,6 +514,26 @@ describe("multi-agent executable capability inventory", () => {
         "No production write, secret material, paid overage, rejected #357 runtime retry, authority minting, or owner relay",
       ]),
     })
+    expect(capability("merge-verify-clean-fanin-release-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_MERGE_VERIFY_CLEAN_FANIN_RELEASE_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/merge-verify-clean-fanin-release.mjs",
+      authorityGrantRefs: ["PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"],
+      trustGateRef: "WO-MAO-007",
+      evidence: expect.arrayContaining([
+        "scripts/multi-agent-operator/merge-verify-clean-fanin-release.mjs",
+        "scripts/multi-agent-operator/merge-verify-clean-fanin-release-cli.mjs",
+        "components/operator/multi-agent-merge-verify-fanin-registry.ts",
+        "tests/multi-agent-merge-verify-clean-fanin-release.test.ts",
+        "docs/reports/WO-MAO-058-merge-verify-clean-fanin-release.md",
+      ]),
+      restrictions: expect.arrayContaining([
+        "WO-MAO-058 releases the soak gate only; it does not certify 24-hour duration or ten consecutive Work Orders",
+        "WO-MAO-058 is complete; WO-MAO-059 is released to READY through retained prerequisites",
+        "No production write, secret material, paid overage, rejected #357 runtime retry, authority minting, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
