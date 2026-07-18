@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "WO_MAO_059_CONTINUOUS_SOAK_LEDGER",
+  "programId": "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
+  "workOrderId": "WO-MAO-059",
+  "status": "IN_PROGRESS",
+  "branch": "codex/mao-059-zero-touch-soak",
+  "repository": "bsvalues/terragroq",
+  "startedAt": "2026-07-17T21:25:45.1653885-07:00",
+  "startCommit": "14eabc3a044e7464a7515f285b18a4438d7eb59e",
+  "minimumElapsedHours": 24,
+  "minimumConsecutiveUsefulWorkOrders": 10,
+  "usefulWorkOrderCount": 10,
+  "soakDurationCertified": false,
+  "tenConsecutiveWorkOrdersCertified": true,
+  "certificationState": "WORK_ORDER_GATE_LOCALLY_VALIDATED_DURATION_PENDING",
+  "selectedUsefulWorkOrderQueue": [
+    "WO-RELEASE-002",
+    "WO-RELEASE-003",
+    "WO-RELEASE-004",
+    "WO-RELEASE-005",
+    "WO-RELEASE-006",
+    "WO-DEVEX-HOOK-TOOLING-001",
+    "WO-DEVEX-HOOK-TOOLING-002",
+    "WO-DEVEX-HOOK-TOOLING-003",
+    "WO-BACKEND-OE-001",
+    "WO-BACKEND-OE-002"
+  ],
+  "completedUsefulWorkOrders": [
+    {
+      "workOrderId": "WO-RELEASE-002",
+      "programId": "PROGRAM-RELEASE-ENGINEERING-001",
+      "evidencePath": "docs/reports/release-engineering/WO-RELEASE-002-artifact-provenance-contract.md",
+      "result": "PASS / STATIC_ARTIFACT_PROVENANCE_CONTRACT_MODELED",
+      "completedAt": "2026-07-17T21:33:57-07:00"
+    },
+    {
+      "workOrderId": "WO-RELEASE-003",
+      "programId": "PROGRAM-RELEASE-ENGINEERING-001",
+      "evidencePath": "docs/reports/release-engineering/WO-RELEASE-003-readiness-gate-model.md",
+      "result": "PASS / STATIC_READINESS_GATE_MODELED",
+      "completedAt": "2026-07-17T21:33:57-07:00"
+    },
+    {
+      "workOrderId": "WO-RELEASE-004",
+      "programId": "PROGRAM-RELEASE-ENGINEERING-001",
+      "evidencePath": "docs/reports/release-engineering/WO-RELEASE-004-rollback-evidence-contract.md",
+      "result": "PASS / STATIC_ROLLBACK_EVIDENCE_CONTRACT_MODELED",
+      "completedAt": "2026-07-17T21:33:57-07:00"
+    },
+    {
+      "workOrderId": "WO-RELEASE-005",
+      "programId": "PROGRAM-RELEASE-ENGINEERING-001",
+      "evidencePath": "docs/reports/release-engineering/WO-RELEASE-005-read-only-surface-model.md",
+      "result": "PASS / STATIC_READ_ONLY_SURFACE_MODELED",
+      "completedAt": "2026-07-17T21:33:57-07:00"
+    },
+    {
+      "workOrderId": "WO-RELEASE-006",
+      "programId": "PROGRAM-RELEASE-ENGINEERING-001",
+      "evidencePath": "docs/reports/release-engineering/WO-RELEASE-006-safety-rollup.md",
+      "result": "PASS / STATIC_RELEASE_ENGINEERING_FOUNDATION_COMPLETE",
+      "completedAt": "2026-07-17T21:33:57-07:00"
+    },
+    {
+      "workOrderId": "WO-DEVEX-HOOK-TOOLING-001",
+      "programId": "PROGRAM-DEVEX-HOOK-TOOLING-001",
+      "evidencePath": "docs/reports/devex-hook-tooling/WO-DEVEX-HOOK-TOOLING-001-evidence-reconciliation.md",
+      "result": "PASS / STATIC_READ_ONLY_EVIDENCE_RECONCILED",
+      "completedAt": "2026-07-17T21:33:57-07:00"
+    },
+    {
+      "workOrderId": "WO-DEVEX-HOOK-TOOLING-002",
+      "programId": "PROGRAM-DEVEX-HOOK-TOOLING-001",
+      "evidencePath": "docs/reports/devex-hook-tooling/WO-DEVEX-HOOK-TOOLING-002-policy-inventory.md",
+      "result": "PASS / STATIC_POLICY_INVENTORY_RECORDED",
+      "completedAt": "2026-07-17T21:33:57-07:00"
+    },
+    {
+      "workOrderId": "WO-DEVEX-HOOK-TOOLING-003",
+      "programId": "PROGRAM-DEVEX-HOOK-TOOLING-001",
+      "evidencePath": "docs/reports/devex-hook-tooling/WO-DEVEX-HOOK-TOOLING-003-safety-rollup.md",
+      "result": "PASS / STATIC_SAFETY_ROLLUP_RECORDED",
+      "completedAt": "2026-07-17T21:33:57-07:00"
+    },
+    {
+      "workOrderId": "WO-BACKEND-OE-001",
+      "programId": "PROGRAM-BACKEND-OE-001",
+      "evidencePath": "docs/reports/backend-oe/WO-BACKEND-OE-001-evidence-reconciliation.md",
+      "result": "PASS / STATIC_READ_ONLY_EVIDENCE_RECONCILED",
+      "completedAt": "2026-07-17T21:33:57-07:00"
+    },
+    {
+      "workOrderId": "WO-BACKEND-OE-002",
+      "programId": "PROGRAM-BACKEND-OE-001",
+      "evidencePath": "docs/reports/backend-oe/WO-BACKEND-OE-002-readiness-failure-boundary.md",
+      "result": "PASS / STATIC_READINESS_FAILURE_BOUNDARY_MODELED",
+      "completedAt": "2026-07-17T21:33:57-07:00"
+    }
+  ],
+  "ownerCounters": {
+    "OWNER_OPERATION_TOUCH_COUNT": 0,
+    "OWNER_CREDENTIAL_TOUCH_COUNT": 0,
+    "OWNER_DIAGNOSTIC_TOUCH_COUNT": 0,
+    "OWNER_ROUTINE_DECISION_COUNT": 0,
+    "OWNER_ROUTINE_CONTACT_COUNT": 0
+  },
+  "blockedScope": {
+    "runtimeActivationAllowed": false,
+    "commandRunnerAllowed": false,
+    "backgroundWorkerAllowed": false,
+    "durableProviderDispatchAllowed": false,
+    "productionMutationAllowed": false,
+    "paidOverageAllowed": false,
+    "secretInspectionAllowed": false,
+    "pacsCountyProtectedDataAllowed": false,
+    "rejectedRuntimeRetryAllowed": false,
+    "destructiveCleanupAllowed": false
+  }
+}
