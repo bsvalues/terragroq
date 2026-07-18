@@ -1,0 +1,12 @@
+{
+  "event": "COORDINATOR_RESTART",
+  "phase": "DURABLE_STATE_WRITTEN",
+  "activeBranch": "codex/mao-057-live-failure-recovery",
+  "expectedMain": "21f5e41bfacc5c6d76d743581f3ffb2aaaab2def",
+  "pendingInjections": [
+    "PROVIDER_NETWORK_FAILURE",
+    "RESERVATION_COLLISION"
+  ],
+  "ownerOperationRequired": false,
+  "timestamp": "2026-07-18T02:59:52.7348403Z"
+}

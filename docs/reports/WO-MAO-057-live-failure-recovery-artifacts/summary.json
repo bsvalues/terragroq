@@ -1,0 +1,52 @@
+{
+  "runId": "wo-mao-057-live-20260717195951",
+  "workOrder": "WO-MAO-057",
+  "branch": "codex/mao-057-live-failure-recovery",
+  "baseAtBranchStart": "6b045f885b1a7935ad60110c3096a05bbf28d37c",
+  "staleBaseControlPr": 411,
+  "staleBaseAdvancedMainTo": "21f5e41bfacc5c6d76d743581f3ffb2aaaab2def",
+  "staleBaseRecoveredByRebase": true,
+  "ownerOperationRequired": false,
+  "duplicateBranchCount": 0,
+  "duplicateCommitCount": 0,
+  "duplicatePullRequestCount": 0,
+  "duplicateCommentCount": 0,
+  "duplicateMergeCount": 0,
+  "files": [
+    {
+      "name": "coordinator-checkpoint.json",
+      "sha256": "f0c495fa77ac7f52aafda56d001accd268dac4b8f893ef3c9f344f8b17deb3ce",
+      "length": 376
+    },
+    {
+      "name": "coordinator-recovery.json",
+      "sha256": "92a7dc58c3e828c0bb56940a5f72f3594b6e8f93ac985d86f2fdbd71c40c4289",
+      "length": 380
+    },
+    {
+      "name": "network-recovery.json",
+      "sha256": "942a6f4f7f3e5a3039afe9fc33a5ad4b4b1356293003f53e0e267345be23cfbf",
+      "length": 388
+    },
+    {
+      "name": "reservation-collision.json",
+      "sha256": "184351ef0b49ac570857df13a7512755e60cf218f108b308113d5ba5831ab84c",
+      "length": 304
+    },
+    {
+      "name": "reservation.lock",
+      "sha256": "1e5402b2027b65a2d8e54399d7799a297967614c049f007e0f4b4a12cf9596be",
+      "length": 26
+    },
+    {
+      "name": "worker-checkpoint.json",
+      "sha256": "e2eac6ced43e3364549e2c77a01118a38109a78dad1ae27d991f577dd9ed0560",
+      "length": 309
+    },
+    {
+      "name": "worker-resume.json",
+      "sha256": "5462ed2e9cbfd3663c4e695463bcfdaa3b29ef26a9c991789577deb787534730",
+      "length": 280
+    }
+  ]
+}

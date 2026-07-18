@@ -1,0 +1,10 @@
+{
+  "event": "WORKER_DEATH",
+  "phase": "SAFE_CHECKPOINT_WRITTEN",
+  "workOrder": "WO-MAO-057",
+  "branch": "codex/mao-057-live-failure-recovery",
+  "writesCompletedBeforeCheckpoint": 0,
+  "duplicateSideEffects": 0,
+  "ownerOperationRequired": false,
+  "timestamp": "2026-07-18T02:59:52.0465858Z"
+}

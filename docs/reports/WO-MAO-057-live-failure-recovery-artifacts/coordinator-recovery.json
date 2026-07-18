@@ -1,0 +1,10 @@
+{
+  "event": "COORDINATOR_RESTART_RECOVERY",
+  "recoveredFromCheckpoint": true,
+  "checkpointBranch": "codex/mao-057-live-failure-recovery",
+  "observedBranch": "codex/mao-057-live-failure-recovery",
+  "observedHead": "21f5e41bfacc5c6d76d743581f3ffb2aaaab2def",
+  "duplicateWriters": 0,
+  "ownerOperationRequired": false,
+  "timestamp": "2026-07-18T02:59:52.9293088Z"
+}

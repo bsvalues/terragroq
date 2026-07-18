@@ -1,0 +1,12 @@
+{
+  "event": "PROVIDER_NETWORK_FAILURE_RECOVERY",
+  "provider": "github.com",
+  "interruptionMethod": "INVALID_LOCAL_PROXY_WITH_TIMEOUT",
+  "failedAsExpected": true,
+  "failedStatusClass": "TaskCanceledException",
+  "recovered": true,
+  "recoveryStatus": 200,
+  "failureOutputRedacted": true,
+  "ownerOperationRequired": false,
+  "timestamp": "2026-07-18T03:03:45.9497686Z"
+}

@@ -1,0 +1,10 @@
+{
+  "event": "WORKER_DEATH_RECOVERY",
+  "sourceEvent": "WORKER_DEATH",
+  "recoveredFromCheckpoint": true,
+  "duplicateBranches": 0,
+  "duplicateCommits": 0,
+  "duplicatePullRequests": 0,
+  "ownerOperationRequired": false,
+  "timestamp": "2026-07-18T02:59:52.4327591Z"
+}
