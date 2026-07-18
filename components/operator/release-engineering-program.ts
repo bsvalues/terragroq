@@ -200,6 +200,21 @@ export function getReleaseEngineeringWorkOrder(id: ReleaseEngineeringWorkOrderId
   return RELEASE_ENGINEERING_PROGRAM_MODEL.workOrders.find((workOrder) => workOrder.workOrderId === id)
 }
 
+function matchesCanonicalReleaseWorkOrder(workOrder: ReleaseEngineeringWorkOrder, index: number) {
+  const expected = workOrders[index]
+
+  return expected !== undefined
+    && workOrder.workOrderId === expected.workOrderId
+    && workOrder.title === expected.title
+    && workOrder.status === expected.status
+    && workOrder.purpose === expected.purpose
+    && workOrder.reportPath === expected.reportPath
+    && JSON.stringify(workOrder.requiredInputs) === JSON.stringify(expected.requiredInputs)
+    && JSON.stringify(workOrder.acceptanceGates) === JSON.stringify(expected.acceptanceGates)
+    && JSON.stringify(workOrder.forbiddenActions) === JSON.stringify(expected.forbiddenActions)
+    && workOrder.downstreamState === expected.downstreamState
+}
+
 export function isVerifiedReleaseEngineeringProgramModel(
   model: ReleaseEngineeringProgramModel = RELEASE_ENGINEERING_PROGRAM_MODEL,
 ) {
@@ -221,11 +236,6 @@ export function isVerifiedReleaseEngineeringProgramModel(
     && model.riskCeiling === "R1"
     && model.modelKind === "STATIC_READ_ONLY_RELEASE_ENGINEERING_MODEL"
     && JSON.stringify(model.workOrders.map((workOrder) => workOrder.workOrderId)) === JSON.stringify(expectedIds)
-    && model.workOrders.every((workOrder) => (
-      workOrder.reportPath.startsWith("docs/reports/release-engineering/")
-      && workOrder.requiredInputs.length >= 5
-      && workOrder.acceptanceGates.length >= 3
-      && JSON.stringify(workOrder.forbiddenActions) === JSON.stringify(FORBIDDEN_RELEASE_ACTIONS)
-    ))
+    && model.workOrders.every(matchesCanonicalReleaseWorkOrder)
     && Object.values(model.safety).every((value) => value === false)
 }

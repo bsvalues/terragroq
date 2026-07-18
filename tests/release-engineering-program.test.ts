@@ -5,8 +5,14 @@ import {
   getReleaseEngineeringWorkOrder,
   isVerifiedReleaseEngineeringProgramModel,
 } from "@/components/operator/release-engineering-program"
+import { hashRecord } from "@/lib/governance/hash"
 
 const cloneModel = () => JSON.parse(JSON.stringify(RELEASE_ENGINEERING_PROGRAM_MODEL))
+const rehash = (model: any) => {
+  const { recordContentHash, ...claims } = model
+  model.recordContentHash = hashRecord(claims)
+  return model
+}
 
 describe("Release Engineering static program model", () => {
   it("publishes WO-RELEASE-002 through WO-RELEASE-006 in order", () => {
@@ -64,18 +70,25 @@ describe("Release Engineering static program model", () => {
   it("fails closed when safety or work-order content is mutated", () => {
     const unsafeRelease = cloneModel()
     unsafeRelease.safety.releaseOrDeploymentExecuted = true
-    expect(isVerifiedReleaseEngineeringProgramModel(unsafeRelease)).toBe(false)
+    expect(isVerifiedReleaseEngineeringProgramModel(rehash(unsafeRelease))).toBe(false)
 
     const missingWorkOrder = cloneModel()
     missingWorkOrder.workOrders.pop()
-    expect(isVerifiedReleaseEngineeringProgramModel(missingWorkOrder)).toBe(false)
+    expect(isVerifiedReleaseEngineeringProgramModel(rehash(missingWorkOrder))).toBe(false)
 
     const scopeEscape = cloneModel()
     scopeEscape.workOrders[0].reportPath = "docs/reports/WO-RELEASE-002.md"
-    expect(isVerifiedReleaseEngineeringProgramModel(scopeEscape)).toBe(false)
+    expect(isVerifiedReleaseEngineeringProgramModel(rehash(scopeEscape))).toBe(false)
 
-    const hashMismatch = cloneModel()
-    hashMismatch.workOrders[1].acceptanceGates.push("release can proceed with stale evidence")
-    expect(isVerifiedReleaseEngineeringProgramModel(hashMismatch)).toBe(false)
+    for (const mutate of [
+      (model: any) => { model.workOrders[1].acceptanceGates.push("release can proceed with stale evidence") },
+      (model: any) => { model.workOrders[2].status = "READ_ONLY_SURFACE_MODELED" },
+      (model: any) => { model.workOrders[3].title = "Release Execution Surface" },
+      (model: any) => { model.workOrders[4].downstreamState = "READY_FOR_RELEASE_EXECUTION" },
+    ]) {
+      const changed = cloneModel()
+      mutate(changed)
+      expect(isVerifiedReleaseEngineeringProgramModel(rehash(changed))).toBe(false)
+    }
   })
 })
