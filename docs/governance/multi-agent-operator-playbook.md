@@ -393,8 +393,10 @@ proved stale-base/CI/review/merge-race handling, and WO-MAO-050 proved malicious
 worker containment, WO-MAO-051 proved status, evidence, and owner-decision UX, and WO-MAO-052
 proved the kill/revoke/rollback/incident procedure, WO-MAO-053 proved the resilience and safety
 rollup, WO-MAO-054 selected the certification portfolio, WO-MAO-055 executed the two selected
-static useful Codex lanes, and WO-MAO-056 certified cross-review/CI remediation. WO-MAO-057 is
-`READY`; the next eligible gate is the failure and recovery certification.
+static useful Codex lanes, WO-MAO-056 certified cross-review/CI remediation, and WO-MAO-057
+certified live failure recovery across worker death, coordinator restart, provider/network failure,
+reservation collision, and stale-base refresh. WO-MAO-058 is `READY`; the next eligible gate is
+merge, verification, cleanup, and fan-in release.
 
 ### Phase 5 — GitHub delivery engine
 

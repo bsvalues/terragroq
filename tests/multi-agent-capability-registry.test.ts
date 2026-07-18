@@ -493,6 +493,27 @@ describe("multi-agent executable capability inventory", () => {
         "WO-MAO-056 is complete; WO-MAO-057 remains READY and WO-MAO-058 waits for WO-MAO-057",
       ]),
     })
+    expect(capability("live-failure-recovery-certification-model")).toMatchObject({
+      status: "PROVEN",
+      executionClass: "NON_EXECUTABLE",
+      reasonCode: "CANONICAL_LIVE_FAILURE_RECOVERY_CERTIFICATION_VERIFIED",
+      adapterRef: "scripts/multi-agent-operator/live-failure-recovery-certification.mjs",
+      authorityGrantRefs: ["PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"],
+      trustGateRef: "WO-MAO-007",
+      evidence: expect.arrayContaining([
+        "scripts/multi-agent-operator/live-failure-recovery-certification.mjs",
+        "scripts/multi-agent-operator/live-failure-recovery-certification-cli.mjs",
+        "components/operator/multi-agent-live-failure-recovery-registry.ts",
+        "tests/multi-agent-live-failure-recovery-certification.test.ts",
+        "docs/reports/WO-MAO-057-live-failure-recovery-certification.md",
+      ]),
+      restrictions: expect.arrayContaining([
+        "Live evidence was performed only inside the bounded WO-MAO-057 authority envelope",
+        "The certification model remains non-executable and does not activate a runtime, scheduler, worker, command runner, or provider dispatch path",
+        "WO-MAO-057 is complete; WO-MAO-058 is released to READY through retained prerequisites",
+        "No production write, secret material, paid overage, rejected #357 runtime retry, authority minting, or owner relay",
+      ]),
+    })
     expect(capability("claude-code-provider")).toMatchObject({
       status: "UNAVAILABLE",
       reasonCode: "PROVIDER_UNAVAILABLE",
