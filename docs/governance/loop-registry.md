@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
 Work order: `WO-MAO-001 through WO-MAO-062`
-Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001 (active; local runtime terminal and disabled)`
+Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001 (closed; local runtime terminal and disabled)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -87,11 +87,11 @@ through PR #339 at `05fcf18fba8a6a2be5fef7865e3a6842ae9bb747`.
 Evidence:
 `docs/reports/WO-TF-COMMAND-006-final-rollup.md`
 
-## Active Loop State
+## Closed Multi-Agent Operator Loop
 
 ### `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
-Status: `ACTIVE / DEPENDENCY_AND_RESERVATION_DRIVEN`
+Status: `CLOSED / CERTIFICATION_REJECTED / PORTFOLIO_CONTINUATION`
 
 Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001`
 
@@ -133,8 +133,12 @@ exact edge into WO-MAO-034 is verified against WO-MAO-032, the consumer envelope
 assessment hash. WO-MAO-034 is complete through independently approved exact-candidate routing
 evidence. WO-MAO-035/036 previously kept redundant direct WO-MAO-033 edges fail-closed. The separately ratified graph
 correction removes only those redundant edges. WO-MAO-035 through WO-MAO-058 are now complete.
-The MAO eligible set is now `WO-MAO-059`, the temporary remediation transition is cleared, and the
-active Work Order is WO-MAO-059 by deterministic queue order.
+WO-MAO-059 through WO-MAO-062 are complete. WO-MAO-059 rejected the sustained
+zero-touch soak certification because the useful-work gate passed but no
+durable unattended background process continued across the 24-hour period.
+WO-MAO-060 preserved the zero-owner-touch audit, WO-MAO-061 rejected unattended
+multi-agent certification, and WO-MAO-062 closed the program into portfolio
+continuation.
 
 ### `LOOP-PORTFOLIO-OPERATOR-001`
 
@@ -145,15 +149,15 @@ ratified backlog and activate the highest-priority dependency-cleared program
 inside standing authority. Stop only when no approved executable program
 exists or a typed authority wall is reached.
 
-### `LOOP-RELEASE-ENGINEERING-001`
+### `LOOP-PROPERTY-WORKBENCH-001`
 
-Status: `ready / independently eligible when reservations permit`
+Status: `ready / selected`
 
-Goal: `GOAL-RELEASE-ENGINEERING-001`
+Goal: `GOAL-PROPERTY-WORKBENCH-001`
 
-Active Work Order: `WO-RELEASE-001`
+Active Work Order: `WO-PROPERTY-WORKBENCH-001`
 
-Continuation: complete the six bounded release-engineering Work Orders, then
+Continuation: complete the bounded property-workbench foundation Work Orders, then
 return to `LOOP-PORTFOLIO-OPERATOR-001` for the next program selection.
 
 The portfolio loop remains the default continuation path after each program.

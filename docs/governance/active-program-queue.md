@@ -4,7 +4,7 @@ Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
 
 Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
-Active program: `PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
+Active program: `PROGRAM-PROPERTY-WORKBENCH-001 - Property Workbench`
 
 Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001`
 
@@ -14,7 +14,7 @@ Merged scheduler baseline: `origin/main = 6239cd90` after WO-MAO-023 PR #369
 
 Risk ceiling: `R3` for control-plane implementation; useful delivery pilots remain `R0/R1`
 
-Status: owner-authorized multi-agent program active; rejected local runtime terminal and disabled
+Status: multi-agent program closed with rejected unattended certification; rejected local runtime terminal and disabled
 
 ## Purpose
 
@@ -98,9 +98,9 @@ PR #339 at `05fcf18fba8a6a2be5fef7865e3a6842ae9bb747`.
 Evidence:
 `docs/reports/WO-TF-COMMAND-006-final-rollup.md`
 
-## Canonical Active Program
+## Canonical Closed Multi-Agent Program
 
-`PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001` is selected under the recorded
+`PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001` was selected under the recorded
 owner direction that William is owner-only and the agents execute the complete
 program without routine owner contact. Its goal is
 `GOAL-WOS-MULTI-AGENT-OPERATOR-001`; its loop is
@@ -118,9 +118,11 @@ complete.
 `WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; the exact canonical settlement is
 verified and independently assured `WO-MAO-034` is `COMPLETE`.
 The separately ratified graph correction removes only the redundant direct WO-MAO-033 edges from
-WO-MAO-035/036. WO-MAO-035 through WO-MAO-058 are now `COMPLETE`; WO-MAO-059 is
-`READY`, and the selected MAO loop resumes at the sustained zero-touch soak gate without owner
-contact.
+WO-MAO-035/036. WO-MAO-035 through WO-MAO-058 are `COMPLETE`. WO-MAO-059
+closed as `COMPLETE_EVIDENCE_BACKED_REJECTION`: PR #414 satisfied the ten-useful-Work-Order gate,
+but the required durable 24-hour unattended process did not run between sessions. WO-MAO-060
+completed the zero-owner-touch audit, WO-MAO-061 rejected unattended multi-agent certification, and
+WO-MAO-062 closed the program and returned control to portfolio selection.
 The program
 grant is limited to repository-scoped, reversible work and
 does not authorize runtime activation, credentials, secrets, production writes,
@@ -139,14 +141,14 @@ independently verified `WO-MAO-034<-WO-MAO-033` record bound to completed WO-MAO
 consumer envelope, and the immutable source-assessment hash. The
 redundant direct WO-MAO-033 dependencies on WO-MAO-035/036 have been removed by the narrow ratified
 graph correction; every retained dependency remains fail-closed. Durable
-provider dispatch and automated GitHub delivery remain unproven. The WO-MAO-028 harness proves only
+provider dispatch and unattended background operation remain unproven. The WO-MAO-028 harness proves only
 pure/static model behavior; it performs no provider dispatch or runtime execution.
 
 `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001` is terminal and non-selectable.
 Its rejected nested-Codex adapter cannot be retried or reused. Release
-Engineering and other independent approved R0/R1 programs remain eligible for
-parallel reservation-safe delivery; multi-agent control-plane work does not
-monopolize the portfolio.
+Engineering, DevEx/Hook Tooling, and Backend OE are completed program evidence.
+The portfolio resolver now selects `PROGRAM-PROPERTY-WORKBENCH-001` as the next
+approved dependency-cleared R0/R1 program.
 
 Selection is deterministic: completed, blocked, deferred, superseded,
 dependency-blocked, and owner-gated programs are filtered out; remaining

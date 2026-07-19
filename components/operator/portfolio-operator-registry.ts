@@ -27,11 +27,15 @@ export type PortfolioWorkOrder = {
 }
 
 const completedPrograms: PortfolioProgramRecord[] = [
+  ["PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001", "WilliamOS Multi-Agent Operator", "GOAL-WOS-MULTI-AGENT-OPERATOR-001", "docs/reports/WO-MAO-062-program-closure-portfolio-continuation.md"],
   ["PROGRAM-WILLIAMOS-CODEX-OPERATOR-001", "WilliamOS Codex Operator System", "GOAL-WOS-CODEX-OPERATOR-001", "docs/reports/WO-CODEX-OPERATOR-024-final-rollup.md"],
   ["PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001", "Active Program Queue Reconciliation", "GOAL-WOS-ACTIVE-PROGRAM-QUEUE-001", "docs/reports/WO-OPERATOR-QUEUE-005-active-program-queue-rollup.md"],
   ["PROGRAM-WILLIAMOS-COUNTY-OPS-001", "County Ops Knowledge Pack", "GOAL-COUNTY-001", "docs/reports/WO-COUNTY-010-county-ops-final-rollup.md"],
   ["PROGRAM-WILLIAMOS-TF-COMMAND-PREFLIGHT-001", "TerraFusion Command Preflight", "GOAL-TF-COMMAND-PREFLIGHT-001", "docs/reports/WO-TF-COMMAND-000F-preflight-rollup.md"],
   ["PROGRAM-WILLIAMOS-TF-COMMAND-001", "TerraFusion Project Command Layer", "GOAL-TF-COMMAND-001", "docs/reports/WO-TF-COMMAND-006-final-rollup.md"],
+  ["PROGRAM-RELEASE-ENGINEERING-001", "Release Engineering", "GOAL-RELEASE-ENGINEERING-001", "docs/reports/release-engineering/WO-RELEASE-006-safety-rollup.md"],
+  ["PROGRAM-DEVEX-HOOK-TOOLING-001", "DevEx / Hook Tooling", "GOAL-DEVEX-HOOK-TOOLING-001", "docs/reports/devex-hook-tooling/WO-DEVEX-HOOK-TOOLING-003-safety-rollup.md"],
+  ["PROGRAM-BACKEND-OE-001", "Backend Operational Excellence", "GOAL-BACKEND-OE-001", "docs/reports/backend-oe/WO-BACKEND-OE-002-readiness-failure-boundary.md"],
 ].map(([programId, title, nextGoalId, evidence]) => ({
   programId,
   title,
@@ -59,12 +63,12 @@ const backlogSeeds: Array<{
   priorityOverride?: number
   stateOverride?: PortfolioProgramState
 }> = [
-  { programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001", title: "WilliamOS Multi-Agent Operator", goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001", businessValue: 10, engineeringValue: 10, riskClass: "R3", priorityOverride: 300, stateOverride: "SELECTED" },
+  { programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001", title: "WilliamOS Multi-Agent Operator", goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001", businessValue: 10, engineeringValue: 10, riskClass: "R3", priorityOverride: 300, stateOverride: "COMPLETE" },
   { programId: "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001", title: "WilliamOS Local-Identity Runtime Operator", goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001", businessValue: 0, engineeringValue: 0, riskClass: "R2", priorityOverride: -2, stateOverride: "TERMINAL" },
   { programId: "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001", title: "Superseded Raw-Credential Runtime Operator", goalId: "GOAL-RUNTIME-OPERATOR-LOCAL-FIRST-REMEDIATION-001", businessValue: 0, engineeringValue: 0, riskClass: "R3", priorityOverride: -1, stateOverride: "SUPERSEDED" },
-  { programId: "PROGRAM-RELEASE-ENGINEERING-001", title: "Release Engineering", goalId: "GOAL-RELEASE-ENGINEERING-001", businessValue: 9, engineeringValue: 9, riskClass: "R1" },
-  { programId: "PROGRAM-DEVEX-HOOK-TOOLING-001", title: "DevEx / Hook Tooling", goalId: "GOAL-DEVEX-HOOK-TOOLING-001", businessValue: 7, engineeringValue: 9, riskClass: "R1" },
-  { programId: "PROGRAM-BACKEND-OE-001", title: "Backend Operational Excellence", goalId: "GOAL-BACKEND-OE-001", businessValue: 8, engineeringValue: 8, riskClass: "R1" },
+  { programId: "PROGRAM-RELEASE-ENGINEERING-001", title: "Release Engineering", goalId: "GOAL-RELEASE-ENGINEERING-001", businessValue: 9, engineeringValue: 9, riskClass: "R1", stateOverride: "COMPLETE" },
+  { programId: "PROGRAM-DEVEX-HOOK-TOOLING-001", title: "DevEx / Hook Tooling", goalId: "GOAL-DEVEX-HOOK-TOOLING-001", businessValue: 7, engineeringValue: 9, riskClass: "R1", stateOverride: "COMPLETE" },
+  { programId: "PROGRAM-BACKEND-OE-001", title: "Backend Operational Excellence", goalId: "GOAL-BACKEND-OE-001", businessValue: 8, engineeringValue: 8, riskClass: "R1", stateOverride: "COMPLETE" },
   { programId: "PROGRAM-PROPERTY-WORKBENCH-001", title: "Property Workbench", goalId: "GOAL-PROPERTY-WORKBENCH-001", businessValue: 9, engineeringValue: 7, riskClass: "R1" },
   { programId: "PROGRAM-TERRAPILOT-LIVE-001", title: "TerraPilot Live Integration", goalId: "GOAL-TERRAPILOT-LIVE-001", businessValue: 9, engineeringValue: 8, riskClass: "R2", authorityMode: "OWNER_GATED", dependencies: ["PROGRAM-BACKEND-OE-001"] },
   { programId: "PROGRAM-AI-BRAIN-OPS-001", title: "AI / Brain Operationalization", goalId: "GOAL-AI-BRAIN-OPS-001", businessValue: 8, engineeringValue: 8, riskClass: "R2", authorityMode: "OWNER_GATED" },
@@ -93,7 +97,9 @@ export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((see
   nextGoalTitle: `${seed.title} Foundation`,
   completionEvidence: [],
   priorityScore: priorityScore(seed),
-  blockedReason: seed.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
+  blockedReason: seed.programId === "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"
+    ? "Closed with evidence-backed rejection: hosted Codex delivery advanced, but durable unattended background-runtime certification was not proven."
+    : seed.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
     ? "Terminal and nonselectable: issue #357 failed at CODEX_NETWORK_WALL and must not be retried; issue #358 remains dependency-blocked; activation remains disabled."
     : seed.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
       ? "Superseded by the local-identity runtime program; raw credential files and identity-bearing Docker hosting are prohibited."

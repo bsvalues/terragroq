@@ -1,7 +1,7 @@
 # WilliamOS Goal Registry
 
 Work order: `WO-MAO-001 through WO-MAO-062`
-Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001 (active; local runtime terminal and disabled)`
+Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001 (closed; local runtime terminal and disabled)`
 Type: Governance / Registry
 Risk: Low, documentation only
 
@@ -135,11 +135,11 @@ Standing blocked scope: external repository access, dynamic ingestion,
 deployment inspection, credentials, county/PACS access, runtime activation,
 persistence, command execution, and any production mutation.
 
-## Active Goal State
+## Closed Multi-Agent Operator Goal
 
 ### `GOAL-WOS-MULTI-AGENT-OPERATOR-001 - WilliamOS Multi-Agent Operator`
 
-Status: `ACTIVE / WO-MAO-047 THROUGH WO-MAO-058 COMPLETE / WO-MAO-059 READY`
+Status: `CLOSED / WO-MAO-059 THROUGH WO-MAO-062 COMPLETE / UNATTENDED CERTIFICATION REJECTED`
 
 Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
 
@@ -187,11 +187,15 @@ into WO-MAO-034 is now independently settled through the canonical immutable ver
 to WO-MAO-032, the consumer envelope, and source-assessment hash. WO-MAO-034 is `COMPLETE` through
 its zero-input canonical routing proof and independently approved exact implementation candidate.
 The separately ratified dependency-graph correction removes only WO-MAO-033's redundant direct
-edges from WO-MAO-035/036. WO-MAO-035 through WO-MAO-058 are now `COMPLETE`;
-WO-MAO-059 is `READY`.
+edges from WO-MAO-035/036. WO-MAO-035 through WO-MAO-058 are `COMPLETE`.
+WO-MAO-059 is complete as an evidence-backed rejection because PR #414 satisfied
+the ten-useful-Work-Order gate but no durable unattended process continued
+between sessions for the 24-hour soak. WO-MAO-060 completed the zero-owner-touch
+audit, WO-MAO-061 rejected unattended multi-agent certification, and WO-MAO-062
+closed the program into portfolio continuation.
 WO-MAO-033 remains deferred and resumable, and the WO-MAO-034 settlement remains exact and
 unchanged. Claude remains unavailable and disabled. Durable provider dispatch
-and the sustained zero-touch soak remain unproven.
+and the sustained unattended builder certification remain unproven.
 
 Communication contract: routine implementation, diagnosis, retry, review,
 merge, verification, cleanup, and continuation remain agent-owned. William is
@@ -215,16 +219,17 @@ Evidence: `docs/reports/WO-PORTFOLIO-001-010-portfolio-operator-evidence.md`
 The standing portfolio resolver selected the highest-priority approved,
 dependency-cleared program without returning routine planning to the Primary.
 
-### `GOAL-RELEASE-ENGINEERING-001 - Release Engineering Foundation`
+### `GOAL-PROPERTY-WORKBENCH-001 - Property Workbench Foundation`
 
-Status: `ready / independently eligible when reservations permit`
+Status: `ready / selected by portfolio continuation`
 
-Loop: `LOOP-RELEASE-ENGINEERING-001`
+Loop: `LOOP-PROPERTY-WORKBENCH-001`
 
-Active Work Order: `WO-RELEASE-001 - Current Release Evidence Reconciliation`
+Active Work Order: `WO-PROPERTY-WORKBENCH-001 - Property Workbench Evidence Reconciliation`
 
-Risk ceiling: `R1`; static/read-only release governance only. Deployment,
-release, tag, rollback execution, and production writes remain owner-gated.
+Risk ceiling: `R1`; static/read-only property-workbench foundation only.
+Production writes, protected data, county/PACS access, deployment, and runtime
+activation remain owner-gated.
 
 The portfolio resolver may activate the next ratified dependency-cleared goal
 inside standing authority. Explicit owner authorization remains required only
