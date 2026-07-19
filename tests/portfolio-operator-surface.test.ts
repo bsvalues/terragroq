@@ -15,50 +15,40 @@ describe("portfolio operator surface", () => {
     expect(surface.selection).toMatchObject({
       decision: "SELECT_PROGRAM",
       reasonCode: "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM",
-      programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
+      programId: "PROGRAM-PROPERTY-WORKBENCH-001",
     })
     expect(surface.selectedProgram).toMatchObject({
-      programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
+      programId: "PROGRAM-PROPERTY-WORKBENCH-001",
     })
     expect(surface.activeWorkOrder).toMatchObject({
-      workOrderId: "WO-MAO-059",
+      workOrderId: "WO-PROPERTY-WORKBENCH-001",
       status: "READY",
     })
     expect(surface.statusCounts).toEqual({
-      total: 62,
-      complete: 57,
+      total: 3,
+      complete: 0,
       ready: 1,
-      pending: 3,
+      pending: 2,
       blocked: 0,
-      deferred: 1,
+      deferred: 0,
     })
     expect(surface.activeDependencyState).toMatchObject({
-      total: 1,
-      satisfied: 1,
+      total: 0,
+      satisfied: 0,
     })
-    expect(surface.activeDependencyState?.dependencies.map((dependency) => dependency.workOrderId)).toEqual([
-      "WO-MAO-058",
-    ])
+    expect(surface.activeDependencyState?.dependencies.map((dependency) => dependency.workOrderId)).toEqual([])
     expect(surface.activeReservation).toMatchObject({
-      evidencePath: "docs/reports/WO-MAO-059.md",
+      evidencePath: "docs/reports/WO-PROPERTY-WORKBENCH-001.md",
       ownerOperationsAllowed: false,
     })
-    expect(surface.activeReservation?.scope).toEqual(["Declared repository evidence", "Reserved R2 paths", "Tests and reports"])
+    expect(surface.activeReservation?.scope).toEqual(["Declared repository evidence", "Static/read-only models", "Tests and reports"])
     expect(surface.activeReservation?.discoveryBoundary).toEqual([
       "docs/governance",
       "docs/reports",
       "components/operator",
-      "scripts/multi-agent-operator",
       "tests",
     ])
-    expect(surface.evidenceChain.map((entry) => entry.workOrderId)).toEqual([
-      "WO-MAO-053",
-      "WO-MAO-054",
-      "WO-MAO-055",
-      "WO-MAO-056",
-      "WO-MAO-057",
-      "WO-MAO-058",
-    ])
+    expect(surface.evidenceChain.map((entry) => entry.workOrderId)).toEqual([])
     expect(surface.ownerAuthorityWalls.map((wall) => wall.programId)).toEqual(expect.arrayContaining([
       "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001",
       "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001",

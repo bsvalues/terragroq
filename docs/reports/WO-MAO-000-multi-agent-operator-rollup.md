@@ -2,22 +2,22 @@
 
 ## Current verdict
 
-`WO-MAO-047_THROUGH_WO-MAO-058_COMPLETE / WO-MAO-059_READY /
-UNATTENDED_BUILDER_NOT_YET_CERTIFIED`
+`WO-MAO-001_THROUGH_WO-MAO-062_COMPLETE /
+UNATTENDED_BUILDER_CERTIFICATION_REJECTED`
 
 ## Truth
 
-The canonical 62-Work-Order program is active. Phase 0 replaces stale queue and entrypoint truth,
+The canonical 62-Work-Order program is closed. Phase 0 replaces stale queue and entrypoint truth,
 terminalizes the rejected local adapter, ratifies William's owner-only role, publishes executable
 capability truth, registers dependency-driven continuation, and removes blanket human Git/PR gates.
 
-This rollup does not claim final unattended certification. A supported hosted Codex team executed two
+This rollup rejects final unattended certification. A supported hosted Codex team executed two
 useful, concurrent repository lanes with separate reservations and automatic dependent fan-in release.
 Two post-merge findings were remediated by the original builders, independently re-reviewed at PR #366
 prior remote head `217d998b`, and resolved. Latest local assurance head `44ee48e` incorporates subsequent
 structured and mixed-context path remediation; it is local evidence, not a claimed published PR head.
 Claude capability discovery returned `PROVIDER_UNAVAILABLE`, not an owner task. Durable provider
-dispatch and automated GitHub delivery remain later work; the scheduler and topology are bounded
+dispatch and durable unattended background operation remain unproven; the scheduler and topology are bounded
 repository-local contracts and do not certify a live unattended builder.
 
 Phase 2 and the first Phase 3 slices now prove the provider-neutral work-order envelope, DAG eligible-
@@ -111,7 +111,7 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 - `docs/reports/WO-MAO-036-provider-conformance-suite.md` — historical evidence, invalidated because
   caller records and fixture coverage did not prove provider operations.
 
-## Next transition
+## Final transition
 
 `WO-MAO-001` through `WO-MAO-032` and `WO-MAO-034` are complete. `WO-MAO-033` is
 `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. The exact independently verified settlement edge
@@ -138,11 +138,14 @@ remediation certification; WO-MAO-057 is `COMPLETE` through live failure-and-rec
 certification with worker-death, coordinator-restart, provider/network-failure, reservation-collision,
 and stale-base recovery evidence; WO-MAO-058 is `COMPLETE` through merged PR fan-in,
 main/production verification, owned cleanup classification, and downstream soak release. WO-MAO-059
-is `READY`. That
+is `COMPLETE_EVIDENCE_BACKED_REJECTION`: PR #414 satisfied the ten-useful-Work-Order gate, but the
+24-hour unattended certification is not acceptable because no durable background operator continued
+between sessions. WO-MAO-060 is complete with all five owner-touch counters at zero. WO-MAO-061 is
+complete with unattended multi-agent builder certification rejected. WO-MAO-062 is complete and
+returns to portfolio selection. That
 settlement remains exact and cannot be retargeted. A separately ratified graph correction removes only the redundant direct
 WO-MAO-033 edges from WO-MAO-035/036. WO-MAO-033 remains deferred and resumable. The
-mandatory sequence is now governed by the executable dependency graph: WO-MAO-059 is the next
-ready gate. The rejected local runtime is not in the eligible dependency chain.
+mandatory sequence is closed. The rejected local runtime is not in the eligible dependency chain.
 
 ## Validation evidence
 

@@ -100,6 +100,10 @@ import {
   isVerifiedWoMao058MergeVerifyFanInEvidence,
 } from "@/components/operator/multi-agent-merge-verify-fanin-registry"
 import {
+  MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE,
+  isVerifiedWoMao059Through062FinalCertificationEvidence,
+} from "@/components/operator/multi-agent-final-certification-registry"
+import {
   MULTI_AGENT_ROUTING_REVIEW_EVIDENCE,
   isVerifiedWoMao034RoutingReviewEvidence,
 } from "@/components/operator/multi-agent-routing-review-registry"
@@ -273,6 +277,10 @@ const EVIDENCE_PATH_OVERRIDES = new Map<string, string>([
   ["WO-MAO-056", "docs/reports/WO-MAO-056-cross-review-ci-remediation-certification.md"],
   ["WO-MAO-057", "docs/reports/WO-MAO-057-live-failure-recovery-certification.md"],
   ["WO-MAO-058", "docs/reports/WO-MAO-058-merge-verify-clean-fanin-release.md"],
+  ["WO-MAO-059", "docs/reports/WO-MAO-059-sustained-zero-touch-soak-rejection.md"],
+  ["WO-MAO-060", "docs/reports/WO-MAO-060-zero-owner-touch-audit.md"],
+  ["WO-MAO-061", "docs/reports/WO-MAO-061-unattended-multi-agent-certification-rejection.md"],
+  ["WO-MAO-062", "docs/reports/WO-MAO-062-program-closure-portfolio-continuation.md"],
 ])
 
 export function resolveMultiAgentWorkOrders(
@@ -396,6 +404,9 @@ const EVIDENCED_COMPLETE = new Set([
     : []),
   ...(isVerifiedWoMao058MergeVerifyFanInEvidence(MULTI_AGENT_MERGE_VERIFY_FANIN_EVIDENCE)
     ? [workOrderId(58)]
+    : []),
+  ...(isVerifiedWoMao059Through062FinalCertificationEvidence(MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE)
+    ? [workOrderId(59), workOrderId(60), workOrderId(61), workOrderId(62)]
     : []),
 ])
 const PROVIDER_UNAVAILABLE_DEFERRED = new Set([workOrderId(33)])

@@ -25,7 +25,7 @@ describe("portfolio operator", () => {
     )
     expect(portfolio.backlog[0]).toMatchObject({
       programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
-      state: "SELECTED",
+      state: "COMPLETE",
       nextGoalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001",
     })
     expect(portfolio.backlog[1]).toMatchObject({
@@ -53,31 +53,31 @@ describe("portfolio operator", () => {
     ])
   })
 
-  it("selects WO-MAO-059 after fan-in release certification completes", () => {
+  it("closes the multi-agent operator after evidence-backed certification rejection", () => {
     const portfolio = getPortfolioOperatorProgram()
     const multiAgentOperator = portfolio.backlog[0]
 
     expect(buildLoopPacket(multiAgentOperator)).toMatchObject({
-      activeWorkOrder: "WO-MAO-059",
-      eligibleWorkOrders: ["WO-MAO-059"],
+      activeWorkOrder: null,
+      eligibleWorkOrders: [],
       remediationTransition: null,
     })
 
-    expect(resolveNextPortfolioProgram(portfolio.backlog)).toMatchObject({
+    expect(resolveNextPortfolioProgram([...portfolio.completedPrograms, ...portfolio.backlog])).toMatchObject({
       decision: "SELECT_PROGRAM",
       reasonCode: "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM",
-      programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001",
-      goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001",
+      programId: "PROGRAM-PROPERTY-WORKBENCH-001",
+      goalId: "GOAL-PROPERTY-WORKBENCH-001",
       ownerDecisionRequired: false,
     })
-    expect(multiAgentOperator.state).toBe("SELECTED")
+    expect(multiAgentOperator.state).toBe("COMPLETE")
   })
 
   it("preserves deterministic priority and program-id ordering when higher-priority programs are unavailable", () => {
     const portfolio = getPortfolioOperatorProgram()
     const multiAgentOperator = portfolio.backlog[0]
-    const release = portfolio.backlog.find((program) => program.programId === "PROGRAM-RELEASE-ENGINEERING-001")!
-    const devex = portfolio.backlog.find((program) => program.programId === "PROGRAM-DEVEX-HOOK-TOOLING-001")!
+    const release = { ...portfolio.backlog.find((program) => program.programId === "PROGRAM-RELEASE-ENGINEERING-001")!, state: "READY" as const }
+    const devex = { ...portfolio.backlog.find((program) => program.programId === "PROGRAM-DEVEX-HOOK-TOOLING-001")!, state: "READY" as const }
 
     expect(resolveNextPortfolioProgram([
       { ...multiAgentOperator, state: "BLOCKED" },
@@ -92,7 +92,7 @@ describe("portfolio operator", () => {
 
   it("does not preserve an unrelated selected program with no typed remediation transition", () => {
     const portfolio = getPortfolioOperatorProgram()
-    const release = portfolio.backlog.find((program) => program.programId === "PROGRAM-RELEASE-ENGINEERING-001")!
+    const release = { ...portfolio.backlog.find((program) => program.programId === "PROGRAM-RELEASE-ENGINEERING-001")!, state: "READY" as const }
     const localRuntime = portfolio.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001")!
 
     expect(resolveNextPortfolioProgram([
@@ -147,8 +147,8 @@ describe("portfolio operator", () => {
       ownerDecisionRequired: false,
     })
     expect(loop).toMatchObject({
-      activeWorkOrder: "WO-MAO-059",
-      eligibleWorkOrders: ["WO-MAO-059"],
+      activeWorkOrder: null,
+      eligibleWorkOrders: [],
       remediationTransition: null,
       executionMode: "DEPENDENCY_RESERVATION_ELIGIBLE_SET",
     })
@@ -197,7 +197,10 @@ describe("portfolio operator", () => {
     expect(workOrders[55]).toMatchObject({ workOrderId: "WO-MAO-056", status: "COMPLETE", riskClass: "R2" })
     expect(workOrders[56]).toMatchObject({ workOrderId: "WO-MAO-057", status: "COMPLETE", riskClass: "R2" })
     expect(workOrders[57]).toMatchObject({ workOrderId: "WO-MAO-058", status: "COMPLETE", riskClass: "R2" })
-    expect(workOrders[58]).toMatchObject({ workOrderId: "WO-MAO-059", status: "READY", riskClass: "R2" })
+    expect(workOrders[58]).toMatchObject({ workOrderId: "WO-MAO-059", status: "COMPLETE", riskClass: "R2" })
+    expect(workOrders[59]).toMatchObject({ workOrderId: "WO-MAO-060", status: "COMPLETE", riskClass: "R2" })
+    expect(workOrders[60]).toMatchObject({ workOrderId: "WO-MAO-061", status: "COMPLETE", riskClass: "R2" })
+    expect(workOrders[61]).toMatchObject({ workOrderId: "WO-MAO-062", status: "COMPLETE", riskClass: "R2" })
     expect([30, 31, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53].map((number) => workOrders[number - 1].status))
       .toEqual(["COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE", "COMPLETE"])
     expect(workOrders).toHaveLength(62)
@@ -207,7 +210,7 @@ describe("portfolio operator", () => {
 
   it("preserves program risk and derives program-specific loop and Work Order identities", () => {
     const backlog = getPortfolioOperatorProgram().backlog
-    const devex = backlog.find((program) => program.programId === "PROGRAM-DEVEX-HOOK-TOOLING-001")!
+    const devex = { ...backlog.find((program) => program.programId === "PROGRAM-DEVEX-HOOK-TOOLING-001")!, state: "READY" as const }
     const protectedProgram = backlog.find((program) => program.programId === "PROGRAM-TERRAPILOT-LIVE-001")!
     const devexWorkOrders = buildWorkOrderChain(devex)
 
@@ -227,6 +230,7 @@ describe("portfolio operator", () => {
       ...portfolio.backlog.find((program) => program.programId === "PROGRAM-DEVEX-HOOK-TOOLING-001")!,
       dependencies: ["PROGRAM-WILLIAMOS-TF-COMMAND-001"],
       priorityScore: 999,
+      state: "READY" as const,
     }
 
     expect(resolveNextPortfolioProgram([...portfolio.completedPrograms, dependent])).toMatchObject({
