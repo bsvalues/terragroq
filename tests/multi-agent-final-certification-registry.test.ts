@@ -4,6 +4,7 @@ import {
   isVerifiedWoMao059Through062FinalCertificationEvidence,
   MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE,
 } from "@/components/operator/multi-agent-final-certification-registry"
+import { hashRecord } from "@/lib/governance/hash"
 
 describe("WO-MAO-059 through WO-MAO-062 final certification closure", () => {
   it("records useful work as merged while rejecting unattended durable certification", () => {
@@ -50,5 +51,24 @@ describe("WO-MAO-059 through WO-MAO-062 final certification closure", () => {
       nextEligibleProgramId: "PROGRAM-PROPERTY-WORKBENCH-001",
       ownerDecisionRequired: false,
     })
+  })
+
+  it("rejects rehashed non-canonical nested claims", () => {
+    const forged = structuredClone(MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE)
+    forged.ownerCounters = {}
+    const { recordContentHash: _discarded, ...claims } = forged
+    forged.recordContentHash = hashRecord(claims)
+
+    expect(forged.recordContentHash).not.toBe(MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE.recordContentHash)
+    expect(isVerifiedWoMao059Through062FinalCertificationEvidence(forged)).toBe(false)
+  })
+
+  it("rejects reordered or prefix-only final Work Order claims", () => {
+    const forged = structuredClone(MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE)
+    forged.workOrders = forged.workOrders.slice(0, 3)
+    const { recordContentHash: _discarded, ...claims } = forged
+    forged.recordContentHash = hashRecord(claims)
+
+    expect(isVerifiedWoMao059Through062FinalCertificationEvidence(forged)).toBe(false)
   })
 })
