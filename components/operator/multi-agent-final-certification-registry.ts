@@ -124,9 +124,11 @@ const CLAIMS = {
   },
 } as const
 
+const EXPECTED_RECORD_CONTENT_HASH = "66f2ae166ea9f3088718e5ef8db9feed566eab8574a7453770069d5e427573e9"
+
 export const MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE = Object.freeze({
   ...CLAIMS,
-  recordContentHash: hashRecord(CLAIMS),
+  recordContentHash: EXPECTED_RECORD_CONTENT_HASH,
 } satisfies MultiAgentFinalCertificationEvidence)
 
 export function isVerifiedWoMao059Through062FinalCertificationEvidence(
@@ -143,7 +145,8 @@ export function isVerifiedWoMao059Through062FinalCertificationEvidence(
   }
 
   return JSON.stringify(Object.keys(candidate).sort()) === JSON.stringify(Object.keys(MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE).sort())
-    && computedHash === recordContentHash
+    && computedHash === EXPECTED_RECORD_CONTENT_HASH
+    && recordContentHash === EXPECTED_RECORD_CONTENT_HASH
     && candidate.evidenceId === "EVIDENCE-WO-MAO-059-062-FINAL-CERTIFICATION-CLOSURE-V1"
     && candidate.status === "UNATTENDED_DURABLE_CERTIFICATION_REJECTED_PROGRAM_CLOSED"
     && candidate.programId === "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001"
@@ -161,14 +164,10 @@ export function isVerifiedWoMao059Through062FinalCertificationEvidence(
     && candidate.soakCertificationAccepted === false
     && candidate.rejectionReason === "NO_DURABLE_BACKGROUND_RUNTIME_OR_CONTINUOUS_UNATTENDED_PROCESS"
     && candidate.ownerAuthorizationScope === "PUSH_PR_MERGE_THROUGH_WO_MAO_062"
-    && candidate.workOrders.map((workOrder) => workOrder.workOrderId).join(",") === "WO-MAO-059,WO-MAO-060,WO-MAO-061,WO-MAO-062"
-    && candidate.workOrders.every((workOrder) => workOrder.evidencePath.startsWith("docs/reports/WO-MAO-0"))
-    && candidate.workOrders.every((workOrder) => workOrder.certificationAccepted === false)
-    && Object.values(candidate.ownerCounters).every((value) => value === 0)
-    && Object.values(candidate.blockedScope).every((value) => value === false)
-    && candidate.portfolioContinuation.multiAgentProgramState === "CLOSED_CERTIFICATION_REJECTED"
-    && candidate.portfolioContinuation.nextEligibleProgramId === "PROGRAM-PROPERTY-WORKBENCH-001"
-    && candidate.portfolioContinuation.ownerDecisionRequired === false
+    && JSON.stringify(candidate.workOrders) === JSON.stringify(WORK_ORDERS)
+    && JSON.stringify(candidate.ownerCounters) === JSON.stringify(OWNER_COUNTERS)
+    && JSON.stringify(candidate.blockedScope) === JSON.stringify(CLAIMS.blockedScope)
+    && JSON.stringify(candidate.portfolioContinuation) === JSON.stringify(CLAIMS.portfolioContinuation)
     && [candidate.baseCommitSha, candidate.baseTreeHash, candidate.mergedUsefulWorkOrderCommit].every((value) => SHA_40.test(value))
     && HASH_64.test(candidate.recordContentHash)
 }

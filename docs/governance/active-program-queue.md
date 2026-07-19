@@ -6,13 +6,13 @@ Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
 Active program: `PROGRAM-PROPERTY-WORKBENCH-001 - Property Workbench`
 
-Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001`
+Goal: `GOAL-PROPERTY-WORKBENCH-001`
 
-Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`
+Loop: `LOOP-PROPERTY-WORKBENCH-001`
 
-Merged scheduler baseline: `origin/main = 6239cd90` after WO-MAO-023 PR #369
+Merged selector baseline: `origin/main = 5e474a81` after PR #415
 
-Risk ceiling: `R3` for control-plane implementation; useful delivery pilots remain `R0/R1`
+Risk ceiling: `R1` for static/read-only Property Workbench foundation; protected data, runtime activation, and production writes remain owner-gated
 
 Status: multi-agent program closed with rejected unattended certification; rejected local runtime terminal and disabled
 
