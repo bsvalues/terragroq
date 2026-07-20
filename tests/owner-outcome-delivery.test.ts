@@ -15,7 +15,7 @@ const eligibleSource: OwnerOutcomeSource = {
   mode: "delivery",
   risk: "low",
   authority: "A2_WRITE_OWN",
-  verdict: "requires_approval",
+  verdict: "allow",
   requiresApproval: false,
   matchedRules: [],
   status: "classified",
@@ -117,6 +117,21 @@ describe("owner outcome delivery", () => {
       ownerDecisionRequired: true,
       workOrders: [],
       handoff: null,
+    })
+  })
+
+  it("honors the persisted approval flag even without matched doctrine rules", () => {
+    const delivery = buildOwnerOutcomeDelivery({
+      ...eligibleSource,
+      requiresApproval: true,
+    })
+
+    expect(delivery).toMatchObject({
+      state: "OWNER_DECISION_REQUIRED",
+      authorityDecision: "NEW_OWNER_AUTHORITY_REQUIRED",
+      ownerDecisionRequired: true,
+      blockedReasons: ["DOCTRINE_APPROVAL_REQUIRED"],
+      workOrders: [],
     })
   })
 

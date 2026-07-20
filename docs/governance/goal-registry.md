@@ -242,7 +242,7 @@ Canonical program:
 `docs/governance/owner-outcome-delivery-program.md`
 
 Evidence:
-`docs/reports/WO-OWNER-OUTCOME-001-owner-outcome-delivery-rollup.md`
+`docs/reports/WO-OWNER-OUTCOME-008-owner-outcome-delivery-rollup.md`
 
 ### `NO_ACTIVE_GOAL - Inactive Sentinel Only`
 

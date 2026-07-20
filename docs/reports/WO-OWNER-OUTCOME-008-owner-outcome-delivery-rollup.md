@@ -1,4 +1,4 @@
-# WO-OWNER-OUTCOME-001 - Owner Outcome Delivery Rollup
+# WO-OWNER-OUTCOME-008 - Owner Outcome Delivery Rollup
 
 Result: `VALIDATED / MERGED_MAIN_PROOF_PENDING`
 

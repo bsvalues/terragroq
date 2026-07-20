@@ -130,4 +130,4 @@ not for routine implementation, diagnostics, provider repair, Git operations,
 review remediation, or status relay.
 
 Canonical evidence:
-`docs/reports/WO-OWNER-OUTCOME-001-owner-outcome-delivery-rollup.md`
+`docs/reports/WO-OWNER-OUTCOME-008-owner-outcome-delivery-rollup.md`

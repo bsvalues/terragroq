@@ -132,8 +132,8 @@ describe("portfolio operator", () => {
       mode: "implement",
       risk: "low",
       authority: "A2_WRITE_OWN",
-      verdict: "requires_approval",
-      requiresApproval: true,
+      verdict: "allow",
+      requiresApproval: false,
       matchedRules: [],
       status: "classified",
     }

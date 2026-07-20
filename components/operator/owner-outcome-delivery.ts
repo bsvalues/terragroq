@@ -75,13 +75,12 @@ export function buildOwnerOutcomeDelivery(source: OwnerOutcomeSource | null) {
   const refused = source.verdict === "refuse"
   const dismissed = source.status === "dismissed"
   const handedOff = source.status === "converted"
-  const doctrineApprovalRequired = source.verdict === "requires_approval"
-    && (source.matchedRules?.length ?? 0) > 0
+  const doctrineApprovalRequired = source.requiresApproval
+    || source.verdict === "requires_approval"
   const blockedReasons = doctrineApprovalRequired
     ? [...scopeBlockedReasons, "DOCTRINE_APPROVAL_REQUIRED"]
     : scopeBlockedReasons
   const standingVerdict = source.verdict === "allow"
-    || (source.verdict === "requires_approval" && !doctrineApprovalRequired)
   const standingEligible = !refused
     && !dismissed
     && !handedOff
@@ -153,6 +152,6 @@ export const OWNER_OUTCOME_PROGRAM_WORK_ORDERS = [
   ["WO-OWNER-OUTCOME-005", "Rolling Queue and No-Dead-End Invariant", "COMPLETE", "tests/portfolio-operator.test.ts"],
   ["WO-OWNER-OUTCOME-006", "Durable Session Handoff Evidence", "COMPLETE", "components/goal-console/owner-outcome-delivery-panel.tsx"],
   ["WO-OWNER-OUTCOME-007", "Real WilliamOS Feature Delivery Proof", "READY", "tests/owner-outcome-delivery.test.ts"],
-  ["WO-OWNER-OUTCOME-008", "Safety, Validation, and Program Rollup", "PENDING", "docs/reports/WO-OWNER-OUTCOME-001-owner-outcome-delivery-rollup.md"],
+  ["WO-OWNER-OUTCOME-008", "Safety, Validation, and Program Rollup", "PENDING", "docs/reports/WO-OWNER-OUTCOME-008-owner-outcome-delivery-rollup.md"],
   ["WO-OWNER-OUTCOME-009", "Rolling Owner Outcome Intake", "PENDING", "docs/reports/WO-OWNER-OUTCOME-009.md"],
 ] as const satisfies ReadonlyArray<readonly [string, string, "COMPLETE" | "READY" | "PENDING", string]>

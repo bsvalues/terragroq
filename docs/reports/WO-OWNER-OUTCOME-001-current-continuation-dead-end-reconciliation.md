@@ -6,7 +6,7 @@
 
 This PR #421 planning record is retained as historical evidence. Current status
 and titles are defined by `components/operator/owner-outcome-delivery.ts` and
-`docs/reports/WO-OWNER-OUTCOME-001-owner-outcome-delivery-rollup.md`.
+`docs/reports/WO-OWNER-OUTCOME-008-owner-outcome-delivery-rollup.md`.
 
 ## Baseline
 
