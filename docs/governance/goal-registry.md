@@ -219,11 +219,11 @@ Evidence: `docs/reports/WO-PORTFOLIO-001-010-portfolio-operator-evidence.md`
 The standing portfolio resolver selected the highest-priority approved,
 dependency-cleared program without returning routine planning to the Primary.
 
-### `GOAL-WOE-DETAIL-SURFACES-001 - Work Order Engine Detail Surfaces`
+### `NO_ACTIVE_PROGRAM - Awaiting WilliamOS-Native Selection`
 
-Status: `complete`
+Status: `no active program`
 
-Loop: `LOOP-WOE-DETAIL-SURFACES-001`
+Loop: `NO_ACTIVE_LOOP`
 
 Active Work Order: `none`
 
@@ -231,6 +231,18 @@ Property Workbench, TerraPilot, and county-oriented placeholder programs are
 owner-gated and nonselectable from the WilliamOS portfolio queue. They are not
 active WilliamOS continuation lanes and must not start without a future explicit
 owner decision.
+
+The WOE Detail Surfaces lane completed and returned the queue to
+`NO_ACTIVE_PROGRAM`. A future WilliamOS-native program requires an activation
+packet or standing authority that explicitly covers that program.
+
+### `GOAL-WOE-DETAIL-SURFACES-001 - Work Order Engine Detail Surfaces`
+
+Status: `complete / closed evidence`
+
+Loop: `LOOP-WOE-DETAIL-SURFACES-001`
+
+Active Work Order: `none`
 
 The owner-authorized activation packet selected this WilliamOS-native lane after
 PR #417. Codex completed the bounded Work Orders as read-only/detail-surface

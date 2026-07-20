@@ -43,8 +43,7 @@ describe("WOE detail surface", () => {
     expect(surface.evidenceClarity.proofChain.map((item) => item.label)).toEqual([
       "Scope proof",
       "Implementation proof",
-      "Cross-link proof",
-      "Closure proof",
+      "Safety and rollup proof",
     ])
     expect(surface.goal.purpose).toContain("detail layer")
     expect(surface.goal.successState).toContain("three completed Work Orders")
@@ -85,19 +84,15 @@ describe("WOE detail surface", () => {
 
     expect(surface.evidenceClarity.proofChain).toEqual([
       expect.objectContaining({
-        workOrder: "WO-WOE-033 through WO-WOE-035",
+        workOrder: "WO-WILLIAMOS-WOE-DETAIL-SURFACES-001",
         href: "/goal-console",
       }),
       expect.objectContaining({
-        workOrder: "WO-WOE-036 through WO-WOE-043",
+        workOrder: "WO-WILLIAMOS-WOE-DETAIL-SURFACES-002",
         href: "/work-orders",
       }),
       expect.objectContaining({
-        workOrder: "WO-WOE-044 through WO-WOE-045",
-        href: "/academy",
-      }),
-      expect.objectContaining({
-        workOrder: "WO-WOE-046 through WO-WOE-047",
+        workOrder: "WO-WILLIAMOS-WOE-DETAIL-SURFACES-003",
         href: "/audit",
       }),
     ])
