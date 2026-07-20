@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest"
 describe("active program queue header", () => {
   it("activates owner outcome delivery after WOE detail surfaces completion", () => {
     const queue = readFileSync("docs/governance/active-program-queue.md", "utf8")
+    const goalRegistry = readFileSync("docs/governance/goal-registry.md", "utf8")
+    const loopRegistry = readFileSync("docs/governance/loop-registry.md", "utf8")
     const program = readFileSync("docs/governance/owner-outcome-delivery-program.md", "utf8")
 
     expect(queue).toContain("Active program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`")
@@ -17,6 +19,19 @@ describe("active program queue header", () => {
     expect(queue).toContain("Property Workbench/TerraPilot/county placeholders remain owner-gated and nonselectable")
     expect(queue).not.toContain("Active program: `PROGRAM-PROPERTY-WORKBENCH-001")
     expect(queue).not.toContain("Active program: `NO_ACTIVE_PROGRAM`")
+
+    expect(goalRegistry).toContain("### `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 - Owner Outcome Delivery`")
+    expect(goalRegistry).toContain("Status: `ACTIVE / SELECTED / R1`")
+    expect(goalRegistry).toContain("Active Work Order: `WO-OWNER-OUTCOME-001 - Current Continuation Dead-End Reconciliation`")
+    expect(goalRegistry).toContain("### `NO_ACTIVE_GOAL - Inactive Sentinel`")
+    expect(goalRegistry).toContain("Status: `dormant sentinel / not current`")
+
+    expect(loopRegistry).toContain("### `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`")
+    expect(loopRegistry).toContain("Status: `ACTIVE / ORDERED_QUEUE / R1`")
+    expect(loopRegistry).toContain("DO_NOT_RETURN_TO_NO_ACTIVE_PROGRAM_WHILE_APPROVED_USEFUL_WILLIAMOS_R0_R1_WORK_REMAINS")
+    expect(loopRegistry).toContain("### `NO_ACTIVE_LOOP`")
+    expect(loopRegistry).toContain("Status: `dormant sentinel / not current`")
+
     expect(program).toContain("Status: `SELECTED / ACTIVE CANDIDATE`")
     expect(program).toContain("governance-only completion is insufficient")
     expect(program).toContain("must not return to `NO_ACTIVE_PROGRAM`")
