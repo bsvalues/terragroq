@@ -18,12 +18,14 @@ Status: `SELECTED / STANDING`; owner-authorized outcome delivery is active, Work
 
 ## Purpose
 
-Restore one truthful, deterministic next-program queue after the Codex Operator
-adoption goal completed. This queue prevents Codex from stopping on stale
-recommendations, completed goals marked active, or reused goal identifiers.
+Maintain one truthful, deterministic active-program queue while preventing routine
+continuation from returning to William. A finite lane may complete, but WilliamOS
+must not fall back to `NO_ACTIVE_PROGRAM` while an approved owner outcome still
+has useful bounded WilliamOS-native R0/R1 work remaining.
 
-The queue is governance only. It does not execute commands, schedule work,
-activate a worker, inspect a host, mutate production, or change authority.
+The queue is governance and selection state. It does not itself execute commands,
+schedule background work, activate a worker, inspect a host, mutate production, or
+change protected authority.
 
 ## Current Truth
 
@@ -35,8 +37,6 @@ activate a worker, inspect a host, mutate production, or change authority.
 - Queue reconciliation completed through PR #336.
 - County Ops completed through PR #337 at
   `49fa4ffe7917bdc0440950ed7a1fb47cd2c0a837`.
-- At the recorded baseline, before this reconciliation branch and PR were
-  created, no open pull request or issue was found.
 - The Phase 2 dedicated Ubuntu host planning gates already completed through
   `WO-LOCAL-019` to `WO-LOCAL-024`.
 - Dedicated-host implementation remains owner-gated because it would require
@@ -60,6 +60,8 @@ activate a worker, inspect a host, mutate production, or change authority.
   no database, schema, runtime, scheduler, or background worker.
 - GitHub lifecycle work is performed by supported hosted Codex sessions under
   active Work Orders. It is not evidence of a durable WilliamOS runtime.
+- WOE Detail Surfaces completed through PR #420 at
+  `95cc12c26404d2b7c566af7557c4d0966e033f83`.
 
 ## Identifier Reconciliation
 
@@ -82,8 +84,7 @@ playbook text.
 4. `WO-OPERATOR-QUEUE-004 - Stale Recommendation and Identifier Reconciliation`
 5. `WO-OPERATOR-QUEUE-005 - Next Eligible Program Decision and Evidence Rollup`
 
-All five Work Orders completed through PR #336. The queue now advances to the
-County Ops program.
+All five Work Orders completed through PR #336.
 
 ## Completed County Ops Program
 
@@ -112,57 +113,27 @@ Evidence:
 owner direction that William is owner-only and the agents execute the complete
 program without routine owner contact. Its goal is
 `GOAL-WOS-MULTI-AGENT-OPERATOR-001`; its loop is
-`LOOP-WOS-MULTI-AGENT-OPERATOR-001`. Phase 0 and the bounded hosted-team proof
-through `WO-MAO-015` are complete. Phase 2 Work Orders `WO-MAO-016` through `WO-MAO-022`, the
-WO-MAO-023 eligible-set scheduler, the WO-MAO-024 team-topology contract, the bounded WO-MAO-025
-isolated-workspace manager, the WO-MAO-026 reservation-aware handoff contract, the WO-MAO-027 durable
-concurrency/fairness scheduler extension, the WO-MAO-028 pure deterministic scheduler model-check
-harness, provider conformance `WO-MAO-029`, the post-merge-hardened current-session coordinator
-adapter `WO-MAO-030`, re-proved role adapters `WO-MAO-031`, provider assessment `WO-MAO-032`,
-provider health/reroute `WO-MAO-035`, provider conformance `WO-MAO-036`, branch/commit/push
-automation `WO-MAO-037`, PR creation/packet linkage `WO-MAO-038`, CI/review ingestion
-`WO-MAO-039`, remediation/re-review `WO-MAO-040`, and bounded merge-controller `WO-MAO-041` are
-complete.
-`WO-MAO-033` is `DEFERRED / PROVIDER_UNAVAILABLE` and resumable; the exact canonical settlement is
-verified and independently assured `WO-MAO-034` is `COMPLETE`.
-The separately ratified graph correction removes only the redundant direct WO-MAO-033 edges from
-WO-MAO-035/036. WO-MAO-035 through WO-MAO-058 are `COMPLETE`. WO-MAO-059
-closed as `COMPLETE_EVIDENCE_BACKED_REJECTION`: PR #414 satisfied the ten-useful-Work-Order gate,
-but the required durable 24-hour unattended process did not run between sessions. WO-MAO-060
-completed the zero-owner-touch audit, WO-MAO-061 rejected unattended multi-agent certification, and
-WO-MAO-062 closed the program and returned control to portfolio selection.
-The program
-grant is limited to repository-scoped, reversible work and
-does not authorize runtime activation, credentials, secrets, production writes,
-deployment, protected data, or destructive operations.
+`LOOP-WOS-MULTI-AGENT-OPERATOR-001`.
 
-Phase 2 and the first Phase 3 slices prove local envelope, DAG, atomic reservation,
-provider-eligibility, lifecycle, lease, checkpoint, evidence-ledger, owner-meter, recoverable
-eligible-set scheduling, deterministic team-topology, lease/evidence-bound isolated-workspace lifecycle,
-one-writer handoff, hard-ceiling priority/fairness admission planning, and hardened current-session
-coordinator assignment translation, role lifecycle proof, and zero-input canonical routing/review
-proof. Provider health/reroute and provider conformance are re-proved through zero-input canonical
-registries with no executable-worker certification. Branch/commit/push automation is proven as a
-zero-input lifecycle plan with no command execution by the model.
-The deferred WO-MAO-033 edge into WO-MAO-034 is settled by the exact,
-independently verified `WO-MAO-034<-WO-MAO-033` record bound to completed WO-MAO-032, the canonical
-consumer envelope, and the immutable source-assessment hash. The
-redundant direct WO-MAO-033 dependencies on WO-MAO-035/036 have been removed by the narrow ratified
-graph correction; every retained dependency remains fail-closed. Durable
-provider dispatch and unattended background operation remain unproven. The WO-MAO-028 harness proves only
-pure/static model behavior; it performs no provider dispatch or runtime execution.
+WO-MAO-001 through WO-MAO-058 completed. WO-MAO-059 closed as
+`COMPLETE_EVIDENCE_BACKED_REJECTION`: PR #414 satisfied the ten-useful-Work-Order
+gate, but no durable process continued between sessions for the required 24-hour
+unattended interval. WO-MAO-060 completed the zero-owner-touch audit,
+WO-MAO-061 rejected unattended certification, and WO-MAO-062 closed the program.
 
-`PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001` is terminal and non-selectable.
-Its rejected nested-Codex adapter cannot be retried or reused. Release
-Engineering, DevEx/Hook Tooling, and Backend OE are completed program evidence.
-Property Workbench, TerraPilot, and county runtime readiness are owner-gated and
-nonselectable from the WilliamOS queue. `PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001`
-was activated by an explicit owner packet and completed as a WilliamOS-native
-read-only R0/R1 lane:
+The rejected nested local runtime remains terminal and disabled. Durable provider
+dispatch and unattended background operation remain unproven and are not implied
+by the current hosted-session continuation work.
+
+## Completed WOE Detail Surfaces Program
+
+`PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001` was explicitly activated and
+completed as a WilliamOS-native read-only R0/R1 lane:
 
 1. `WO-WILLIAMOS-WOE-DETAIL-SURFACES-001 - Evidence Reconciliation`
 2. `WO-WILLIAMOS-WOE-DETAIL-SURFACES-002 - Bounded First Slice`
 3. `WO-WILLIAMOS-WOE-DETAIL-SURFACES-003 - Safety and Rollup`
+4. `WO-WILLIAMOS-WOE-DETAIL-SURFACES-004 - Review Remediation`
 
 The completed detail-surface lane handed off to the owner-authorized standing
 owner-outcome delivery program described in
@@ -198,14 +169,33 @@ Hard invariant: `NO_ACTIVE_PROGRAM` is invalid while an approved owner outcome
 has unfinished useful work. Once an outcome is accepted inside standing R0/R1
 authority, the queue keeps this program `SELECTED` until that useful work is
 complete or reaches a typed authority wall.
+PRs #418, #419, and #420 are merged. The completed lane remains closed evidence
+and is not reopened by the active continuation program.
 
-Selection is deterministic: completed, blocked, deferred, superseded,
+The standing program's ordered Work Orders are defined in
+`docs/governance/owner-outcome-delivery-program.md`. WOs 001-008 delivered the
+intake, generation, queue, handoff, product surface, and safety proof. WO-009 is
+the rolling intake sentinel for the next approved outcome; it is not a claim of
+background execution.
+
+The controlling invariant is:
+
+```text
+DO_NOT_RETURN_TO_NO_ACTIVE_PROGRAM_WHILE_APPROVED_USEFUL_WILLIAMOS_R0_R1_WORK_REMAINS
+```
+
+## Selection Rule
+
+Selection remains deterministic: completed, blocked, deferred, superseded,
 dependency-blocked, and owner-gated programs are filtered out; remaining
-programs are ranked by operational and engineering value, dependency
-readiness, risk, evidence readiness, reversibility, and bounded scope.
-Equal scores are resolved by stable ascending `programId` order.
+programs are ranked by operational and engineering value, dependency readiness,
+risk, evidence readiness, reversibility, and bounded scope.
 
-Completed County Ops work-order sequence:
+Static backlog exhaustion is not a legitimate owner decision when a recorded
+owner outcome remains incomplete and useful bounded WilliamOS-native work is
+available. The active owner-outcome program owns generating the successor chain.
+
+## Completed County Ops Work-Order Sequence
 
 1. `WO-COUNTY-001 - County Ops Knowledge Map`
 2. `WO-COUNTY-002 - PACS Read-Only Rules Page`
@@ -217,27 +207,6 @@ Completed County Ops work-order sequence:
 8. `WO-COUNTY-008 - Appeals Packet Playbook`
 9. `WO-COUNTY-009 - Academy/Wiki and Navigation Cross-Links`
 10. `WO-COUNTY-010 - Safety, Validation, and Final Rollup`
-
-## Completed TerraFusion Preflight Work Orders
-
-1. `WO-TF-COMMAND-000A - Existing WilliamOS TerraFusion Reference Inventory`
-2. `WO-TF-COMMAND-000B - Project Identity and Provenance Contract`
-3. `WO-TF-COMMAND-000C - Static Project Card and Feed Contracts`
-4. `WO-TF-COMMAND-000D - Deployment and Staleness Semantics`
-5. `WO-TF-COMMAND-000E - Authority and Safety Classification`
-6. `WO-TF-COMMAND-000F - Implementation Decision and Evidence Rollup`
-
-Canonical preflight:
-`docs/governance/terrafusion-command-preflight.md`
-
-## Completed TerraFusion Command Work Orders
-
-1. `WO-TF-COMMAND-001 - TerraFusion Project Card`
-2. `WO-TF-COMMAND-002 - TerraFusion Work Order Feed`
-3. `WO-TF-COMMAND-003 - TerraFusion Evidence Feed`
-4. `WO-TF-COMMAND-004 - TerraFusion Blocker Queue`
-5. `WO-TF-COMMAND-005 - TerraFusion Deployment Status Read Model`
-6. `WO-TF-COMMAND-006 - TerraFusion Next Move Recommendation`
 
 ## County Ops Standing Boundaries
 
@@ -255,9 +224,9 @@ Blocked:
 - parcel, taxpayer, owner, appeal, exemption, permit, or assessment records;
 - county network, server, VPN, database, file share, or production access;
 - TerraFusion integration or mutation;
-- secrets, connection strings, screenshots containing protected data, or
-  copied production logs;
-- DB/schema/env/package/Vercel changes;
+- secrets, connection strings, screenshots containing protected data, or copied
+  production logs;
+- DB/schema/env/package changes;
 - auth/access behavior;
 - dynamic ingestion, memory write/retrieval runtime, RAG, embeddings, or vector
   storage;
@@ -268,20 +237,27 @@ Any need for real county data or system access becomes a typed authority wall.
 
 ## Continuation Rule
 
-Codex completed `WO-TF-COMMAND-001` through `WO-TF-COMMAND-006`, then invoked
-the ratified portfolio resolver. A completed program routes to the next
-approved executable program instead of returning routine planning to the
-Primary. Owner involvement is required only when no approved executable
-program remains or a typed authority wall is reached.
+Codex owns routine implementation, branch and PR lifecycle, focused and full
+validation, review remediation, eligible merge, merged-main verification,
+evidence, and successor release inside the active R1 authority.
+
+William is contacted only for a genuinely new authority boundary, protected
+external project selection, spending, secrets, production/destructive action, or
+the final owner outcome. He is not asked to repeat activation words, run commands,
+relay logs, diagnose providers, monitor checks, merge PRs, or select routine
+successor work.
 
 ## Validation
 
-Required for this R0 reconciliation:
+Required for this R1 program:
 
+- focused portfolio, queue, goal, loop, and surface tests;
 - changed-file scope inspection;
-- Markdown and identifier consistency inspection;
 - secret and forbidden-path scan on changed files;
-- `git diff --check` or equivalent patch whitespace verification;
+- `git diff --check`;
+- lint;
+- full test suite;
+- build;
 - pull-request checks;
 - zero unresolved substantive review threads;
 - merged `origin/main` verification.
@@ -289,16 +265,21 @@ Required for this R0 reconciliation:
 ## Safety
 
 ```text
-RUNTIME_CODE_CHANGED: false
-COMMAND_EXECUTION_ADDED: false
+RUNTIME_ACTIVATED: false
+COMMAND_RUNNER_ADDED: false
 BACKGROUND_WORKER_ADDED: false
 AUTH_CHANGED: false
 DB_SCHEMA_DATA_CHANGED: false
-ENV_PACKAGE_VERCEL_CHANGED: false
+ENV_PACKAGE_CHANGED: false
 PRODUCTION_WRITE_ADDED: false
 HERMES_MCP_SKILL_ACTIVATED: false
 MEMORY_RUNTIME_CHANGED: false
 DYNAMIC_INGESTION_ADDED: false
+PROPERTY_WORKBENCH_SELECTED: false
+TERRAPILOT_SELECTED: false
 TERRAFUSION_PACS_COUNTY_TOUCHED: false
+PAID_OVERAGE_AUTHORIZED: false
+REJECTED_ISSUE_357_RETRIED: false
 SECRETS_EXPOSED: false
+OWNER_OPERATION_REQUIRED: false
 ```

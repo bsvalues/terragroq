@@ -118,13 +118,13 @@ export function buildOwnerOutcomeDelivery(source: OwnerOutcomeSource | null) {
 }
 
 export const OWNER_OUTCOME_PROGRAM_WORK_ORDERS = [
-  "Program Activation and Authority Record",
-  "Owner Outcome Contract",
-  "Primary Outcome Intake Integration",
-  "Generated Program, Goal, Loop, and Work Order Model",
-  "Rolling Queue and No-Dead-End Invariant",
-  "Durable Session Handoff Evidence",
-  "Real WilliamOS Feature Delivery Proof",
-  "Safety, Validation, and Program Rollup",
-  "Rolling Owner Outcome Intake",
-] as const
+  ["WO-OWNER-OUTCOME-001", "Program Activation and Authority Record", "COMPLETE", "docs/governance/owner-outcome-delivery-program.md"],
+  ["WO-OWNER-OUTCOME-002", "Owner Outcome Contract", "COMPLETE", "docs/reports/WO-OWNER-OUTCOME-002-owner-outcome-intake-contract.md"],
+  ["WO-OWNER-OUTCOME-003", "Primary Outcome Intake Integration", "COMPLETE", "components/goal-console/goal-console-view.tsx"],
+  ["WO-OWNER-OUTCOME-004", "Generated Program, Goal, Loop, and Work Order Model", "COMPLETE", "components/operator/owner-outcome-delivery.ts"],
+  ["WO-OWNER-OUTCOME-005", "Rolling Queue and No-Dead-End Invariant", "COMPLETE", "tests/portfolio-operator.test.ts"],
+  ["WO-OWNER-OUTCOME-006", "Durable Session Handoff Evidence", "COMPLETE", "components/goal-console/owner-outcome-delivery-panel.tsx"],
+  ["WO-OWNER-OUTCOME-007", "Real WilliamOS Feature Delivery Proof", "COMPLETE", "tests/owner-outcome-delivery.test.ts"],
+  ["WO-OWNER-OUTCOME-008", "Safety, Validation, and Program Rollup", "COMPLETE", "docs/reports/WO-OWNER-OUTCOME-001-owner-outcome-delivery-rollup.md"],
+  ["WO-OWNER-OUTCOME-009", "Rolling Owner Outcome Intake", "READY", "docs/reports/WO-OWNER-OUTCOME-009.md"],
+] as const satisfies ReadonlyArray<readonly [string, string, "COMPLETE" | "READY", string]>
