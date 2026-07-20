@@ -7,9 +7,22 @@ import {
 import { getPortfolioOperatorProgram } from "@/components/operator/portfolio-operator-registry"
 import { getPortfolioOperatorSurface } from "@/components/operator/portfolio-operator-surface"
 
+const eligibleOwnerOutcome = {
+  ref: "GOAL-0099",
+  command: "Improve the WilliamOS goal console layout",
+  lane: "ui",
+  mode: "implement",
+  risk: "low",
+  authority: "A2_WRITE_OWN",
+  verdict: "allow",
+  requiresApproval: false,
+  matchedRules: [],
+  status: "classified",
+}
+
 describe("portfolio operator surface", () => {
   it("shows active owner-outcome continuation without exposing execution controls", () => {
-    const surface = getPortfolioOperatorSurface()
+    const surface = getPortfolioOperatorSurface(getPortfolioOperatorProgram(), [eligibleOwnerOutcome])
 
     expect(surface.title).toBe("Portfolio Operator")
     expect(surface.selection).toMatchObject({
@@ -17,24 +30,29 @@ describe("portfolio operator surface", () => {
       reasonCode: "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM",
       programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
       goalId: "GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
+      ownerOutcomeRef: "GOAL-0099",
       ownerDecisionRequired: false,
     })
     expect(surface.selectedProgram).toMatchObject({
       programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
-      state: "SELECTED",
+      state: "READY",
       authorityMode: "CODEX_ELIGIBLE",
       riskClass: "R1",
     })
+    expect(surface.selectedOwnerOutcome).toMatchObject({
+      ref: "GOAL-0099",
+      command: "Improve the WilliamOS goal console layout",
+    })
     expect(surface.activeWorkOrder).toMatchObject({
-      workOrderId: "WO-OWNER-OUTCOME-007",
+      workOrderId: "WO-OWNER-OUTCOME-009",
       status: "READY",
-      title: "Real WilliamOS Feature Delivery Proof",
+      title: "Rolling Owner Outcome Intake",
     })
     expect(surface.statusCounts).toEqual({
       total: 9,
-      complete: 6,
+      complete: 8,
       ready: 1,
-      pending: 2,
+      pending: 0,
       blocked: 0,
       deferred: 0,
     })
@@ -44,24 +62,24 @@ describe("portfolio operator surface", () => {
       dependencies: [],
     })
     expect(surface.activeReservation).toMatchObject({
-      evidencePath: "tests/owner-outcome-delivery.test.ts",
+      evidencePath: "docs/reports/WO-OWNER-OUTCOME-009.md",
       ownerOperationsAllowed: false,
     })
-    expect(surface.readyWorkOrders).toEqual(["WO-OWNER-OUTCOME-007"])
+    expect(surface.readyWorkOrders).toEqual(["WO-OWNER-OUTCOME-009"])
     expect(surface.evidenceChain.map((entry) => entry.workOrderId)).toEqual([
-      "WO-OWNER-OUTCOME-001",
-      "WO-OWNER-OUTCOME-002",
       "WO-OWNER-OUTCOME-003",
       "WO-OWNER-OUTCOME-004",
       "WO-OWNER-OUTCOME-005",
       "WO-OWNER-OUTCOME-006",
+      "WO-OWNER-OUTCOME-007",
+      "WO-OWNER-OUTCOME-008",
     ])
     expect(surface.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001")).toMatchObject({
       state: "COMPLETE",
       blockedReason: expect.stringContaining("completed as a WilliamOS-native"),
     })
     expect(surface.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")).toMatchObject({
-      state: "SELECTED",
+      state: "READY",
       blockedReason: expect.stringContaining("standing"),
     })
     expect(surface.ownerAuthorityWalls.map((wall) => wall.programId)).toEqual(expect.arrayContaining([
@@ -89,6 +107,24 @@ describe("portfolio operator surface", () => {
       recordContentHash: "6d3e2279b02f2a50bde868c2494ea20acfef06485c01b6f52dff24c0fff97d77",
     })
     expect(isVerifiedWoMao051StatusUxEvidence()).toBe(true)
+  })
+
+  it("pins the same eligible outcome when a newer record is blocked", () => {
+    const blockedLatest = {
+      ...eligibleOwnerOutcome,
+      ref: "GOAL-0100",
+      command: "Deploy TerraFusion to production",
+    }
+    const surface = getPortfolioOperatorSurface(
+      getPortfolioOperatorProgram(),
+      [blockedLatest, eligibleOwnerOutcome],
+    )
+
+    expect(surface.selection).toMatchObject({
+      decision: "SELECT_PROGRAM",
+      ownerOutcomeRef: "GOAL-0099",
+    })
+    expect(surface.selectedOwnerOutcome?.ref).toBe("GOAL-0099")
   })
 
   it("shows no selected program or active work at an owner-decision wall", () => {

@@ -1,7 +1,7 @@
 # WilliamOS Goal Registry
 
 Work order: `WO-OWNER-OUTCOME-001 through WO-OWNER-OUTCOME-009`
-Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 (active; R1 WilliamOS-native continuation)`
+Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 (standing awaiting outcome; R1 WilliamOS-native continuation)`
 Type: Governance / Registry / Owner Outcome Delivery
 Risk: `R1`
 
@@ -197,7 +197,7 @@ dependency-cleared program without returning routine planning to the Primary.
 
 ### `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 - Owner Outcome Delivery`
 
-Status: `ACTIVE / DELIVERY CANDIDATE / WO-OWNER-OUTCOME-007 READY`
+Status: `STANDING / AWAITING ELIGIBLE OUTCOME / WO-OWNER-OUTCOME-009 READY`
 
 Program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
@@ -213,10 +213,10 @@ persistence path, convert only authority-matched outcomes into bounded Work
 Orders, and deliver useful repository outcomes without making William the Git,
 GitHub, test, diagnostic, or status operator.
 
-Work Orders `WO-OWNER-OUTCOME-001` through `WO-OWNER-OUTCOME-006` are complete.
-`WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` is `READY`;
-WOs 008 and 009 remain pending until review, merge, and merged-main verification
-make their claims true.
+Work Orders `WO-OWNER-OUTCOME-001` through `WO-OWNER-OUTCOME-008` are complete.
+PR #421 merged and verified the real Owner Outcome Delivery feature on main at
+`0a308fd2a932dbfb1feaa9d1ee26c02dcab1c12d`. `WO-OWNER-OUTCOME-009` is the
+standing ready intake for the next authority-matched persisted outcome.
 
 Existing `/goal` persistence is reused. A persisted goal is governed intent,
 not execution authority, and the existing Work Order and authority gates still
@@ -431,16 +431,6 @@ Purpose: represent TerraFusion OS as a governed project under WilliamOS command.
 First loop: `WO-TF-COMMAND-001 - TerraFusion Project Card`
 
 Blocked: TerraFusion production mutation unless separately authorized.
-
-### `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 - Owner Outcome Delivery`
-
-Purpose: prevent bounded useful WilliamOS-native work from stopping merely
-because a finite static seed list was exhausted.
-
-First loop: `WO-OWNER-OUTCOME-001 - Current Continuation Dead-End Reconciliation`
-
-Blocked: protected external projects, production, secrets, spending, runtime
-activation, destructive operations, and R2+ expansion without a new decision.
 
 ## Registry Maintenance
 

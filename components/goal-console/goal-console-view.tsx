@@ -18,6 +18,7 @@ import { lane as findLane, mode as findMode, authority as findAuthority } from "
 import { getGoalEmptyStatePrompts } from "@/components/goal-console/goal-empty-state"
 import { getGoalJourneyStep } from "@/components/goal-console/goal-journey"
 import { OwnerOutcomeDeliveryPanel } from "@/components/goal-console/owner-outcome-delivery-panel"
+import { findApprovedOwnerOutcome } from "@/components/operator/owner-outcome-delivery"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { StatusBadge } from "@/components/status-badge"
@@ -145,7 +146,7 @@ export function GoalConsoleView({
 
   return (
     <div className="flex flex-col gap-6 p-6">
-      <OwnerOutcomeDeliveryPanel source={latest} />
+      <OwnerOutcomeDeliveryPanel source={findApprovedOwnerOutcome(goals) ?? latest} />
 
       {/* Slice 5: Handoff Authority Banner */}
       <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-4">

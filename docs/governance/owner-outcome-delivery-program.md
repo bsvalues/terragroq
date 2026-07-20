@@ -6,7 +6,7 @@ Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
 Loop: `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
-Status: `SELECTED / STANDING`
+Status: `READY / STANDING_AWAITING_OUTCOME`
 
 Risk ceiling: `R1`
 
@@ -65,14 +65,13 @@ and ineligible for reuse.
 4. `WO-OWNER-OUTCOME-004 - Generated Program, Goal, Loop, and Work Order Model` (`COMPLETE`)
 5. `WO-OWNER-OUTCOME-005 - Rolling Queue and No-Dead-End Invariant` (`COMPLETE`)
 6. `WO-OWNER-OUTCOME-006 - Durable Session Handoff Evidence` (`COMPLETE`)
-7. `WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` (`READY`)
-8. `WO-OWNER-OUTCOME-008 - Safety, Validation, and Program Rollup` (`PENDING`)
-9. `WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake` (`PENDING`)
+7. `WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` (`COMPLETE`)
+8. `WO-OWNER-OUTCOME-008 - Safety, Validation, and Program Rollup` (`COMPLETE`)
+9. `WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake` (`READY`)
 
-Work Orders 001-006 establish the bounded implementation candidate. Work Order
-007 remains ready until review, merge, and merged-main verification prove the
-real feature. Only then may a follow-up evidence PR complete WO-008 and release
-WO-009 as the standing intake node.
+PR #421 merged the bounded implementation and real `/goal-console` feature at
+`0a308fd2a932dbfb1feaa9d1ee26c02dcab1c12d`. The reviewed merge and validation
+complete WOs 007-008 and release WO-009 as the standing intake node.
 
 ## Activation Rules
 
@@ -91,9 +90,9 @@ It cannot infer protected authority from the standing program or from a goal row
 ## Hard Invariant
 
 `NO_ACTIVE_PROGRAM` is forbidden while an approved owner outcome has unfinished
-useful work. The program remains `SELECTED`, activates the next eligible bounded
-outcome, or records a typed authority wall. Completed feature delivery does not
-empty the queue while `WO-OWNER-OUTCOME-009` is ready to receive covered work.
+useful work. Without an eligible outcome the program remains `READY`; with one,
+the resolver selects the exact persisted record or records a typed authority
+wall. Completed feature delivery does not exhaust the standing intake.
 
 ## Boundaries
 
