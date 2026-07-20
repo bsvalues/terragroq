@@ -21,6 +21,7 @@ describe("portfolio operator", () => {
     expect(portfolio.completedPrograms).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ programId: "PROGRAM-WILLIAMOS-TF-COMMAND-001" }),
+        expect.objectContaining({ programId: "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001" }),
       ]),
     )
     expect(portfolio.backlog[0]).toMatchObject({
@@ -78,8 +79,8 @@ describe("portfolio operator", () => {
     })
     expect(portfolio.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001")).toMatchObject({
       authorityMode: "CODEX_ELIGIBLE",
-      state: "DEFERRED",
-      blockedReason: expect.stringContaining("non-executable until a follow-on operator packet"),
+      state: "COMPLETE",
+      blockedReason: expect.stringContaining("completed as a WilliamOS-native"),
     })
     expect(multiAgentOperator.state).toBe("COMPLETE")
   })

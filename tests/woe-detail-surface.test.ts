@@ -10,7 +10,19 @@ describe("WOE detail surface", () => {
   it("shows native goal, loop, evidence, queue, blocker, and next work detail", () => {
     const surface = getWoeDetailSurface()
 
-    expect(surface.goal.id).toBe("GOAL-WOS-002")
+    expect(surface.title).toBe("Work Order Engine Detail Surfaces")
+    expect(surface.activation).toMatchObject({
+      programId: "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001",
+      goalId: "GOAL-WOE-DETAIL-SURFACES-001",
+      loopId: "LOOP-WOE-DETAIL-SURFACES-001",
+      result: "COMPLETE",
+    })
+    expect(surface.activation.workOrders).toEqual([
+      "WO-WILLIAMOS-WOE-DETAIL-SURFACES-001",
+      "WO-WILLIAMOS-WOE-DETAIL-SURFACES-002",
+      "WO-WILLIAMOS-WOE-DETAIL-SURFACES-003",
+    ])
+    expect(surface.goal.id).toBe("GOAL-WOE-DETAIL-SURFACES-001")
     expect(surface.polish.batch).toBe("WILLIAMOS-WOE-SHELL-POLISH-BATCH-001")
     expect(surface.polish.posture).toBe("read-only/static-first")
     expect(surface.polish.primarySignal).toContain("without encountering execution affordances")
@@ -34,12 +46,13 @@ describe("WOE detail surface", () => {
       "Cross-link proof",
       "Closure proof",
     ])
-    expect(surface.goal.purpose).toContain("central operating primitive")
-    expect(surface.goal.successState).toContain("active goals, active loops")
+    expect(surface.goal.purpose).toContain("detail layer")
+    expect(surface.goal.successState).toContain("three completed Work Orders")
     expect(surface.batch.name).toBe("WILLIAMOS-WORK-ORDER-ENGINE-INTEGRATION-BATCH-001")
     expect(surface.batch.base).toBe("0dc222d1bbfacd05f5ca1e0e8c815dc2dec3f133")
     expect(surface.batch.result).toBe("PHASE_PASS")
-    expect(surface.workOrder.id).toBe("WO-WOE-009..022")
+    expect(surface.workOrder.id).toBe("WO-WILLIAMOS-WOE-DETAIL-SURFACES-001..003")
+    expect(surface.workOrder.result).toBe("complete")
     expect(surface.goalRegistry.records).toContain("goal id")
     expect(surface.goalRegistry.blockedPowers).toContain("goal mutation")
     expect(surface.goalIndex.records).toContain("blocked goals")

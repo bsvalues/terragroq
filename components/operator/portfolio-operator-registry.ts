@@ -28,6 +28,7 @@ export type PortfolioWorkOrder = {
 
 const completedPrograms: PortfolioProgramRecord[] = [
   ["PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001", "WilliamOS Multi-Agent Operator", "GOAL-WOS-MULTI-AGENT-OPERATOR-001", "docs/reports/WO-MAO-062-program-closure-portfolio-continuation.md"],
+  ["PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001", "Work Order Engine Detail Surfaces", "GOAL-WOE-DETAIL-SURFACES-001", "docs/reports/WO-WILLIAMOS-WOE-DETAIL-SURFACES-003-safety-and-rollup.md"],
   ["PROGRAM-WILLIAMOS-CODEX-OPERATOR-001", "WilliamOS Codex Operator System", "GOAL-WOS-CODEX-OPERATOR-001", "docs/reports/WO-CODEX-OPERATOR-024-final-rollup.md"],
   ["PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001", "Active Program Queue Reconciliation", "GOAL-WOS-ACTIVE-PROGRAM-QUEUE-001", "docs/reports/WO-OPERATOR-QUEUE-005-active-program-queue-rollup.md"],
   ["PROGRAM-WILLIAMOS-COUNTY-OPS-001", "County Ops Knowledge Pack", "GOAL-COUNTY-001", "docs/reports/WO-COUNTY-010-county-ops-final-rollup.md"],
@@ -70,7 +71,7 @@ const backlogSeeds: Array<{
   { programId: "PROGRAM-DEVEX-HOOK-TOOLING-001", title: "DevEx / Hook Tooling", goalId: "GOAL-DEVEX-HOOK-TOOLING-001", businessValue: 7, engineeringValue: 9, riskClass: "R1", stateOverride: "COMPLETE" },
   { programId: "PROGRAM-BACKEND-OE-001", title: "Backend Operational Excellence", goalId: "GOAL-BACKEND-OE-001", businessValue: 8, engineeringValue: 8, riskClass: "R1", stateOverride: "COMPLETE" },
   { programId: "PROGRAM-PROPERTY-WORKBENCH-001", title: "Property Workbench", goalId: "GOAL-PROPERTY-WORKBENCH-001", businessValue: 9, engineeringValue: 7, riskClass: "R1", authorityMode: "OWNER_GATED", stateOverride: "BLOCKED" },
-  { programId: "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001", title: "Work Order Engine Detail Surfaces", goalId: "GOAL-WOE-DETAIL-SURFACES-001", businessValue: 8, engineeringValue: 9, riskClass: "R1", stateOverride: "DEFERRED" },
+  { programId: "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001", title: "Work Order Engine Detail Surfaces", goalId: "GOAL-WOE-DETAIL-SURFACES-001", businessValue: 8, engineeringValue: 9, riskClass: "R1", stateOverride: "COMPLETE" },
   { programId: "PROGRAM-TERRAPILOT-LIVE-001", title: "TerraPilot Live Integration", goalId: "GOAL-TERRAPILOT-LIVE-001", businessValue: 9, engineeringValue: 8, riskClass: "R2", authorityMode: "OWNER_GATED", dependencies: ["PROGRAM-BACKEND-OE-001"] },
   { programId: "PROGRAM-AI-BRAIN-OPS-001", title: "AI / Brain Operationalization", goalId: "GOAL-AI-BRAIN-OPS-001", businessValue: 8, engineeringValue: 8, riskClass: "R2", authorityMode: "OWNER_GATED" },
   { programId: "PROGRAM-COUNTY-RUNTIME-READINESS-001", title: "County Runtime Readiness", goalId: "GOAL-COUNTY-RUNTIME-READINESS-001", businessValue: 10, engineeringValue: 7, riskClass: "R3", authorityMode: "OWNER_GATED", dependencies: ["PROGRAM-PROPERTY-WORKBENCH-001"] },
@@ -107,7 +108,7 @@ export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((see
       : seed.programId === "PROGRAM-PROPERTY-WORKBENCH-001"
         ? "Owner-gated and nonselectable: property/TerraFusion/county placeholder work must not start from the WilliamOS portfolio queue."
       : seed.programId === "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001"
-        ? "WilliamOS-native next candidate only; non-executable until a follow-on operator packet activates a new program."
+        ? "Activated by owner packet and completed as a WilliamOS-native read-only detail surface program."
       : seed.authorityMode === "OWNER_GATED" ? "Protected authority is required before activation." : undefined,
 }))
 

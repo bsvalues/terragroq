@@ -10,11 +10,11 @@ Goal: `NO_ACTIVE_GOAL`
 
 Loop: `NO_ACTIVE_LOOP`
 
-Merged selector baseline: `origin/main = 4cb89860` after PR #416
+Merged selector baseline: `origin/main = 7f2772e0` after PR #417
 
-Risk ceiling: `NONE` until the next WilliamOS-native program is deliberately activated
+Risk ceiling: `NONE` after completion of the owner-activated WOE Detail Surfaces lane
 
-Status: multi-agent program closed with rejected unattended certification; rejected local runtime terminal and disabled; Property Workbench/TerraPilot/county placeholder programs are owner-gated and nonselectable
+Status: multi-agent program closed with rejected unattended certification; rejected local runtime terminal and disabled; Property Workbench/TerraPilot/county placeholder programs are owner-gated and nonselectable; WOE Detail Surfaces was owner-activated and completed as WilliamOS-native read-only work
 
 ## Purpose
 
@@ -148,11 +148,17 @@ pure/static model behavior; it performs no provider dispatch or runtime executio
 Its rejected nested-Codex adapter cannot be retried or reused. Release
 Engineering, DevEx/Hook Tooling, and Backend OE are completed program evidence.
 Property Workbench, TerraPilot, and county runtime readiness are owner-gated and
-nonselectable from the WilliamOS queue. The portfolio registry now records
-`PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001` as the next WilliamOS-native
-approved dependency-cleared R0/R1 candidate, but the resolver must not execute
-it while this queue remains `NO_ACTIVE_PROGRAM`. It becomes selectable only
-after a follow-on operator packet explicitly activates that lane.
+nonselectable from the WilliamOS queue. `PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001`
+was activated by an explicit owner packet and completed as a WilliamOS-native
+read-only R0/R1 lane:
+
+1. `WO-WILLIAMOS-WOE-DETAIL-SURFACES-001 - Evidence Reconciliation`
+2. `WO-WILLIAMOS-WOE-DETAIL-SURFACES-002 - Bounded First Slice`
+3. `WO-WILLIAMOS-WOE-DETAIL-SURFACES-003 - Safety and Rollup`
+
+The queue returns to `NO_ACTIVE_PROGRAM` after completion. A future WilliamOS
+program must be selected by a new owner-authorized activation packet or by an
+already-recorded standing authority that explicitly covers that program.
 
 Selection is deterministic: completed, blocked, deferred, superseded,
 dependency-blocked, and owner-gated programs are filtered out; remaining
