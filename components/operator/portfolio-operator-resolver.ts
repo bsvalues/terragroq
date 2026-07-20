@@ -4,6 +4,25 @@ import {
 } from "@/components/operator/portfolio-operator-registry"
 import { MULTI_AGENT_OPERATOR_WORK_ORDERS } from "@/components/operator/multi-agent-operator-registry"
 
+export const OWNER_OUTCOME_DELIVERY_COMPLETED_COUNT = 0
+
+export function deriveOrderedWorkOrderStatuses(totalWorkOrders: number, completedWorkOrders: number) {
+  if (!Number.isInteger(totalWorkOrders) || totalWorkOrders < 1) {
+    throw new RangeError("totalWorkOrders must be a positive integer")
+  }
+  if (!Number.isInteger(completedWorkOrders) || completedWorkOrders < 0 || completedWorkOrders > totalWorkOrders) {
+    throw new RangeError("completedWorkOrders must be an integer within the work-order range")
+  }
+
+  return Array.from({ length: totalWorkOrders }, (_, index) =>
+    index < completedWorkOrders
+      ? "COMPLETE" as const
+      : index === completedWorkOrders
+        ? "READY" as const
+        : "PENDING" as const,
+  )
+}
+
 export function resolveNextPortfolioProgram(programs: PortfolioProgramRecord[]) {
   const complete = new Set(programs.filter((program) => program.state === "COMPLETE").map((program) => program.programId))
   const candidates = programs
@@ -124,8 +143,11 @@ export function buildGoalPacket(program: PortfolioProgramRecord) {
   }
 }
 
-export function buildLoopPacket(program: PortfolioProgramRecord) {
-  const workOrders = buildWorkOrderChain(program)
+export function buildLoopPacket(
+  program: PortfolioProgramRecord,
+  ownerOutcomeCompletedCount = OWNER_OUTCOME_DELIVERY_COMPLETED_COUNT,
+) {
+  const workOrders = buildWorkOrderChain(program, ownerOutcomeCompletedCount)
   const activeWorkOrder = program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
     ? workOrders.find((workOrder) => workOrder.workOrderId === "WO-RUNTIME-IDENTITY-029")
     : workOrders.find((workOrder) => workOrder.status === "READY")
@@ -161,7 +183,10 @@ export function buildLoopPacket(program: PortfolioProgramRecord) {
   }
 }
 
-export function buildWorkOrderChain(program: PortfolioProgramRecord) {
+export function buildWorkOrderChain(
+  program: PortfolioProgramRecord,
+  ownerOutcomeCompletedCount = OWNER_OUTCOME_DELIVERY_COMPLETED_COUNT,
+) {
   if (program.programId === "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001") {
     return MULTI_AGENT_OPERATOR_WORK_ORDERS.map((record) => ({
       workOrderId: record.workOrderId,
@@ -212,6 +237,9 @@ export function buildWorkOrderChain(program: PortfolioProgramRecord) {
       : ownerOutcomeDelivery
         ? "WO-OWNER-OUTCOME"
         : `WO-${program.programId.replace(/^PROGRAM-/, "").replace(/-001$/, "")}`
+  const ownerOutcomeStatuses = ownerOutcomeDelivery
+    ? deriveOrderedWorkOrderStatuses(titles.length, ownerOutcomeCompletedCount)
+    : null
 
   return titles.map((title, index) => ({
     workOrderId: `${workOrderPrefix}-${String(index + 1).padStart(3, "0")}`,
@@ -232,7 +260,9 @@ export function buildWorkOrderChain(program: PortfolioProgramRecord) {
         : index === 26 || index === 28
           ? "BLOCKED" as const
           : "PENDING" as const
-      : index === 0 ? "READY" as const : "PENDING" as const,
+      : ownerOutcomeDelivery
+        ? ownerOutcomeStatuses![index]
+        : index === 0 ? "READY" as const : "PENDING" as const,
     validationPlan: ["Focused tests", "git diff --check", "lint", "full tests", "build"],
     evidence: `docs/reports/${workOrderPrefix}-${String(index + 1).padStart(3, "0")}.md`,
     rollback: program.programId === "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001"
