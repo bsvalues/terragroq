@@ -44,7 +44,7 @@ export type MultiAgentFinalCertificationEvidence = {
   }
   portfolioContinuation: {
     multiAgentProgramState: "CLOSED_CERTIFICATION_REJECTED"
-    nextEligibleProgramId: "PROGRAM-PROPERTY-WORKBENCH-001"
+    nextEligibleProgramId: "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001"
     ownerDecisionRequired: false
   }
   recordContentHash: string
@@ -119,17 +119,21 @@ const CLAIMS = {
   },
   portfolioContinuation: {
     multiAgentProgramState: "CLOSED_CERTIFICATION_REJECTED",
-    nextEligibleProgramId: "PROGRAM-PROPERTY-WORKBENCH-001",
+    nextEligibleProgramId: "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001",
     ownerDecisionRequired: false,
   },
 } as const
 
-const EXPECTED_RECORD_CONTENT_HASH = "66f2ae166ea9f3088718e5ef8db9feed566eab8574a7453770069d5e427573e9"
+const EXPECTED_RECORD_CONTENT_HASH = "18edc885139b138c03f7b8674c94ac053adb47e4b2335dd85bc8b6d8802d9e97"
 
 export const MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE = Object.freeze({
   ...CLAIMS,
   recordContentHash: EXPECTED_RECORD_CONTENT_HASH,
 } satisfies MultiAgentFinalCertificationEvidence)
+
+function matchesCanonicalNestedClaim(value: unknown, expected: unknown) {
+  return hashRecord(value) === hashRecord(expected)
+}
 
 export function isVerifiedWoMao059Through062FinalCertificationEvidence(
   record: unknown = MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE,
@@ -164,10 +168,10 @@ export function isVerifiedWoMao059Through062FinalCertificationEvidence(
     && candidate.soakCertificationAccepted === false
     && candidate.rejectionReason === "NO_DURABLE_BACKGROUND_RUNTIME_OR_CONTINUOUS_UNATTENDED_PROCESS"
     && candidate.ownerAuthorizationScope === "PUSH_PR_MERGE_THROUGH_WO_MAO_062"
-    && JSON.stringify(candidate.workOrders) === JSON.stringify(WORK_ORDERS)
-    && JSON.stringify(candidate.ownerCounters) === JSON.stringify(OWNER_COUNTERS)
-    && JSON.stringify(candidate.blockedScope) === JSON.stringify(CLAIMS.blockedScope)
-    && JSON.stringify(candidate.portfolioContinuation) === JSON.stringify(CLAIMS.portfolioContinuation)
+    && matchesCanonicalNestedClaim(candidate.workOrders, WORK_ORDERS)
+    && matchesCanonicalNestedClaim(candidate.ownerCounters, OWNER_COUNTERS)
+    && matchesCanonicalNestedClaim(candidate.blockedScope, CLAIMS.blockedScope)
+    && matchesCanonicalNestedClaim(candidate.portfolioContinuation, CLAIMS.portfolioContinuation)
     && [candidate.baseCommitSha, candidate.baseTreeHash, candidate.mergedUsefulWorkOrderCommit].every((value) => SHA_40.test(value))
     && HASH_64.test(candidate.recordContentHash)
 }

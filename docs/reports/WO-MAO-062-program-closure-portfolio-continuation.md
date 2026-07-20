@@ -23,13 +23,17 @@ to certify unattended durable automation that did not run.
 
 ## Portfolio Continuation
 
-The next eligible program is:
+The corrected next WilliamOS-native eligible candidate is:
 
 ```text
-PROGRAM-PROPERTY-WORKBENCH-001
+PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001
 ```
 
 Owner decision required: `false`
+
+Property Workbench, TerraPilot, and county-oriented placeholder programs are
+owner-gated and nonselectable from the WilliamOS queue. They must not start
+without a future explicit owner decision.
 
 The local nested Codex adapter remains rejected and must not be retried. Claude
 Code remains deferred/provider-unavailable. Runtime activation remains disabled.

@@ -13,46 +13,33 @@ describe("portfolio operator surface", () => {
 
     expect(surface.title).toBe("Portfolio Operator")
     expect(surface.selection).toMatchObject({
-      decision: "SELECT_PROGRAM",
-      reasonCode: "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM",
-      programId: "PROGRAM-PROPERTY-WORKBENCH-001",
+      decision: "OWNER_DECISION_REQUIRED",
+      reasonCode: "NO_APPROVED_EXECUTABLE_PROGRAM",
+      programId: null,
     })
-    expect(surface.selectedProgram).toMatchObject({
-      programId: "PROGRAM-PROPERTY-WORKBENCH-001",
-    })
-    expect(surface.activeWorkOrder).toMatchObject({
-      workOrderId: "WO-PROPERTY-WORKBENCH-001",
-      status: "READY",
-    })
+    expect(surface.selectedProgram).toBeNull()
+    expect(surface.activeWorkOrder).toBeNull()
     expect(surface.statusCounts).toEqual({
-      total: 3,
+      total: 0,
       complete: 0,
-      ready: 1,
-      pending: 2,
+      ready: 0,
+      pending: 0,
       blocked: 0,
       deferred: 0,
     })
-    expect(surface.activeDependencyState).toMatchObject({
-      total: 0,
-      satisfied: 0,
-    })
-    expect(surface.activeDependencyState?.dependencies.map((dependency) => dependency.workOrderId)).toEqual([])
-    expect(surface.activeReservation).toMatchObject({
-      evidencePath: "docs/reports/WO-PROPERTY-WORKBENCH-001.md",
-      ownerOperationsAllowed: false,
-    })
-    expect(surface.activeReservation?.scope).toEqual(["Declared repository evidence", "Static/read-only models", "Tests and reports"])
-    expect(surface.activeReservation?.discoveryBoundary).toEqual([
-      "docs/governance",
-      "docs/reports",
-      "components/operator",
-      "tests",
-    ])
+    expect(surface.activeDependencyState).toBeNull()
+    expect(surface.activeReservation).toBeNull()
     expect(surface.evidenceChain.map((entry) => entry.workOrderId)).toEqual([])
+    expect(surface.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001")).toMatchObject({
+      state: "DEFERRED",
+      blockedReason: expect.stringContaining("non-executable until a follow-on operator packet"),
+    })
     expect(surface.ownerAuthorityWalls.map((wall) => wall.programId)).toEqual(expect.arrayContaining([
       "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001",
       "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001",
+      "PROGRAM-PROPERTY-WORKBENCH-001",
       "PROGRAM-TERRAPILOT-LIVE-001",
+      "PROGRAM-COUNTY-RUNTIME-READINESS-001",
     ]))
     expect(surface.providerPosture).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: "Hosted Codex", status: "available" }),

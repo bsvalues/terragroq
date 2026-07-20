@@ -219,21 +219,23 @@ Evidence: `docs/reports/WO-PORTFOLIO-001-010-portfolio-operator-evidence.md`
 The standing portfolio resolver selected the highest-priority approved,
 dependency-cleared program without returning routine planning to the Primary.
 
-### `GOAL-PROPERTY-WORKBENCH-001 - Property Workbench Foundation`
+### `NO_ACTIVE_PROGRAM - Awaiting WilliamOS-Native Selection`
 
-Status: `ready / selected by portfolio continuation`
+Status: `no active program`
 
-Loop: `LOOP-PROPERTY-WORKBENCH-001`
+Loop: `NO_ACTIVE_LOOP`
 
-Active Work Order: `WO-PROPERTY-WORKBENCH-001 - Property Workbench Evidence Reconciliation`
+Active Work Order: `none`
 
-Risk ceiling: `R1`; static/read-only property-workbench foundation only.
-Production writes, protected data, county/PACS access, deployment, and runtime
-activation remain owner-gated.
+Property Workbench, TerraPilot, and county-oriented placeholder programs are
+owner-gated and nonselectable from the WilliamOS portfolio queue. They are not
+active WilliamOS continuation lanes and must not start without a future explicit
+owner decision.
 
-The portfolio resolver may activate the next ratified dependency-cleared goal
-inside standing authority. Explicit owner authorization remains required only
-for a strategic conflict or typed authority wall.
+The next WilliamOS-native candidate selected by the portfolio resolver is
+`GOAL-WOE-DETAIL-SURFACES-001 - Work Order Engine Detail Surfaces`. It remains a
+candidate, not an executable or active program, until activated by a follow-on
+operator packet.
 
 ### Closed Goal Preservation Register
 

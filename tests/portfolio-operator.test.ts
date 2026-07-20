@@ -45,6 +45,7 @@ describe("portfolio operator", () => {
       "PROGRAM-DEVEX-HOOK-TOOLING-001",
       "PROGRAM-BACKEND-OE-001",
       "PROGRAM-PROPERTY-WORKBENCH-001",
+      "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001",
       "PROGRAM-TERRAPILOT-LIVE-001",
       "PROGRAM-AI-BRAIN-OPS-001",
       "PROGRAM-COUNTY-RUNTIME-READINESS-001",
@@ -64,11 +65,21 @@ describe("portfolio operator", () => {
     })
 
     expect(resolveNextPortfolioProgram([...portfolio.completedPrograms, ...portfolio.backlog])).toMatchObject({
-      decision: "SELECT_PROGRAM",
-      reasonCode: "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM",
-      programId: "PROGRAM-PROPERTY-WORKBENCH-001",
-      goalId: "GOAL-PROPERTY-WORKBENCH-001",
-      ownerDecisionRequired: false,
+      decision: "OWNER_DECISION_REQUIRED",
+      reasonCode: "NO_APPROVED_EXECUTABLE_PROGRAM",
+      programId: null,
+      goalId: null,
+      ownerDecisionRequired: true,
+    })
+    expect(portfolio.backlog.find((program) => program.programId === "PROGRAM-PROPERTY-WORKBENCH-001")).toMatchObject({
+      authorityMode: "OWNER_GATED",
+      state: "BLOCKED",
+      blockedReason: expect.stringContaining("nonselectable"),
+    })
+    expect(portfolio.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001")).toMatchObject({
+      authorityMode: "CODEX_ELIGIBLE",
+      state: "DEFERRED",
+      blockedReason: expect.stringContaining("non-executable until a follow-on operator packet"),
     })
     expect(multiAgentOperator.state).toBe("COMPLETE")
   })
