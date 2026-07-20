@@ -47,6 +47,7 @@ describe("portfolio operator", () => {
       "PROGRAM-BACKEND-OE-001",
       "PROGRAM-PROPERTY-WORKBENCH-001",
       "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001",
+      "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
       "PROGRAM-TERRAPILOT-LIVE-001",
       "PROGRAM-AI-BRAIN-OPS-001",
       "PROGRAM-COUNTY-RUNTIME-READINESS-001",
@@ -55,9 +56,10 @@ describe("portfolio operator", () => {
     ])
   })
 
-  it("closes the multi-agent operator after evidence-backed certification rejection", () => {
+  it("selects owner outcome delivery after evidence-backed MAO closure", () => {
     const portfolio = getPortfolioOperatorProgram()
     const multiAgentOperator = portfolio.backlog[0]
+    const ownerOutcome = portfolio.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")!
 
     expect(buildLoopPacket(multiAgentOperator)).toMatchObject({
       activeWorkOrder: null,
@@ -66,11 +68,11 @@ describe("portfolio operator", () => {
     })
 
     expect(resolveNextPortfolioProgram([...portfolio.completedPrograms, ...portfolio.backlog])).toMatchObject({
-      decision: "OWNER_DECISION_REQUIRED",
-      reasonCode: "NO_APPROVED_EXECUTABLE_PROGRAM",
-      programId: null,
-      goalId: null,
-      ownerDecisionRequired: true,
+      decision: "SELECT_PROGRAM",
+      reasonCode: "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM",
+      programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
+      goalId: "GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
+      ownerDecisionRequired: false,
     })
     expect(portfolio.backlog.find((program) => program.programId === "PROGRAM-PROPERTY-WORKBENCH-001")).toMatchObject({
       authorityMode: "OWNER_GATED",
@@ -82,6 +84,17 @@ describe("portfolio operator", () => {
       state: "COMPLETE",
       blockedReason: expect.stringContaining("completed as a WilliamOS-native"),
     })
+    expect(ownerOutcome).toMatchObject({
+      authorityMode: "CODEX_ELIGIBLE",
+      state: "SELECTED",
+      riskClass: "R1",
+    })
+    expect(buildLoopPacket(ownerOutcome)).toMatchObject({
+      activeWorkOrder: "WO-OWNER-OUTCOME-001",
+      eligibleWorkOrders: ["WO-OWNER-OUTCOME-001"],
+    })
+    expect(buildLoopPacket(ownerOutcome).continuationRule).toContain("never return to NO_ACTIVE_PROGRAM")
+    expect(buildWorkOrderChain(ownerOutcome)).toHaveLength(6)
     expect(multiAgentOperator.state).toBe("COMPLETE")
   })
 
