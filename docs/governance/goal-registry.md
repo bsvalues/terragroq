@@ -219,9 +219,58 @@ Evidence: `docs/reports/WO-PORTFOLIO-001-010-portfolio-operator-evidence.md`
 The standing portfolio resolver selected the highest-priority approved,
 dependency-cleared program without returning routine planning to the Primary.
 
-### `NO_ACTIVE_GOAL - Awaiting WilliamOS-Native Selection`
+### `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 - Owner Outcome Delivery`
 
-Status: `no active goal`
+Status: `ACTIVE / STANDING / WO-OWNER-OUTCOME-009 READY`
+
+Program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
+
+Loop: `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
+
+Risk ceiling: `R1`
+
+Owner authorization: recorded for the program, goal, and loop as a standing
+WilliamOS-native R0/R1 owner-outcome delivery lane.
+
+Purpose: accept owner outcomes through the existing `/goal` classification and
+persistence path, convert only authority-matched outcomes into bounded Work
+Orders, and deliver useful repository outcomes without making William the Git,
+GitHub, test, diagnostic, or status operator.
+
+Work Orders `WO-OWNER-OUTCOME-001` through `WO-OWNER-OUTCOME-008` are complete
+with the feature delivery. `WO-OWNER-OUTCOME-009 - Rolling Owner Outcome
+Intake` is `READY` and keeps the standing goal active for the next approved,
+dependency-cleared outcome.
+
+Existing `/goal` persistence is reused. A persisted goal is governed intent,
+not execution authority, and the existing Work Order and authority gates still
+apply. This goal adds no database, schema, runtime, command runner, scheduler,
+or background worker.
+
+Supported hosted Codex sessions perform branch, commit, push, pull-request,
+review-remediation, eligible-merge, and verification work. This is not a claim
+that WilliamOS has a durable provider runtime or unattended background worker.
+
+Allowed: approved, reversible R0/R1 WilliamOS-native owner outcomes whose exact
+repository scope and actions are covered by standing authority.
+
+Blocked: Property Workbench, TerraPilot, county work, PACS, production actions,
+secrets, paid overages, runtime activation, and any retry, reactivation, or
+reuse of issue #357.
+
+Invariant: the registry must not report `NO_ACTIVE_PROGRAM` while an approved
+owner outcome has unfinished useful work. The active goal remains selected
+until the outcome completes or reaches a typed authority wall.
+
+Canonical program:
+`docs/governance/owner-outcome-delivery-program.md`
+
+Evidence:
+`docs/reports/WO-OWNER-OUTCOME-001-owner-outcome-delivery-rollup.md`
+
+### `NO_ACTIVE_GOAL - Inactive Sentinel Only`
+
+Status: `inactive sentinel / not current`
 
 Program: `NO_ACTIVE_PROGRAM`
 
@@ -229,14 +278,11 @@ Loop: `NO_ACTIVE_LOOP`
 
 Active Work Order: `none`
 
-Property Workbench, TerraPilot, and county-oriented placeholder programs are
-owner-gated and nonselectable from the WilliamOS portfolio queue. They are not
-active WilliamOS continuation lanes and must not start without a future explicit
-owner decision.
-
-The WOE Detail Surfaces lane completed and returned the queue to
-`NO_ACTIVE_PROGRAM`. A future WilliamOS-native program requires an activation
-packet or standing authority that explicitly covers that program.
+This sentinel is valid only when no approved executable program and no approved
+owner outcome with unfinished useful work exists. It is not the current goal.
+Property Workbench, TerraPilot, county work, PACS, production, secrets, paid
+overages, runtime activation, and issue #357 remain blocked rather than becoming
+fallback work.
 
 ### `GOAL-WOE-DETAIL-SURFACES-001 - Work Order Engine Detail Surfaces`
 
@@ -248,7 +294,7 @@ Active Work Order: `none`
 
 The owner-authorized activation packet selected this WilliamOS-native lane after
 PR #417. Codex completed the bounded Work Orders as read-only/detail-surface
-work and returned the queue to `NO_ACTIVE_PROGRAM`.
+work before the standing owner-outcome delivery program became selected.
 
 ### Closed Goal Preservation Register
 

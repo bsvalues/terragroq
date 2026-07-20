@@ -15,7 +15,7 @@ export default async function GoalConsolePage() {
     <>
       <PageHeader
         title="Goal Console"
-        description="State a goal. The console classifies it, checks it against doctrine and known mistake patterns, and drafts a work order. It never executes — read-only by design."
+        description="State the outcome. WilliamOS classifies it, checks authority, and prepares a bounded delivery chain for the operating Codex session."
       />
       <div className="flex flex-col gap-4 px-6 pb-2">
         <PortfolioOperatorPanel />

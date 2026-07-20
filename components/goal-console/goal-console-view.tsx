@@ -17,6 +17,7 @@ import { AGENTS } from "@/lib/goal/agent-matrix"
 import { lane as findLane, mode as findMode, authority as findAuthority } from "@/lib/goal/taxonomy"
 import { getGoalEmptyStatePrompts } from "@/components/goal-console/goal-empty-state"
 import { getGoalJourneyStep } from "@/components/goal-console/goal-journey"
+import { OwnerOutcomeDeliveryPanel } from "@/components/goal-console/owner-outcome-delivery-panel"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { StatusBadge } from "@/components/status-badge"
@@ -143,18 +144,20 @@ export function GoalConsoleView({
 
   return (
     <div className="flex flex-col gap-6 p-6">
+      <OwnerOutcomeDeliveryPanel source={latest} />
+
       {/* Slice 5: Handoff Authority Banner */}
       <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-4">
         <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-warning" aria-hidden />
         <div className="flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium">Handoff authority</span>
-            <StatusBadge value="active" label="A0 · read-only" />
+            <span className="text-sm font-medium">Handoff boundary</span>
+            <StatusBadge value="active" label="console does not execute" />
           </div>
           <p className="mt-1.5 text-sm text-pretty text-muted-foreground">
-            This console classifies, verifies, and drafts work orders. It does <strong>not</strong> execute changes,
-            run migrations, commit, push, or deploy. Anything above draft authority must be approved by the operator on
-            the work order itself.
+            This console persists outcomes, classifies authority, and drafts work orders. The hosted Codex session owns
+            delivery only when the recorded standing R0/R1 authority matches; higher-risk, protected, or production
+            scope remains a genuine owner decision.
           </p>
         </div>
       </div>

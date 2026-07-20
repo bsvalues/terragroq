@@ -4,17 +4,17 @@ Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
 
 Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
-Active program: `NO_ACTIVE_PROGRAM`
+Active program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
-Goal: `NO_ACTIVE_GOAL`
+Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
-Loop: `NO_ACTIVE_LOOP`
+Loop: `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
-Merged selector baseline: `origin/main = 7f2772e0` after PR #417
+Recorded selector baseline: `origin/main = 95cc12c2`
 
-Risk ceiling: `NONE` after completion of the owner-activated WOE Detail Surfaces lane
+Risk ceiling: `R1` for WilliamOS-native, reversible owner outcomes
 
-Status: multi-agent program closed with rejected unattended certification; rejected local runtime terminal and disabled; Property Workbench/TerraPilot/county placeholder programs are owner-gated and nonselectable; WOE Detail Surfaces was owner-activated and completed as WilliamOS-native read-only work
+Status: `SELECTED / STANDING`; owner-authorized outcome delivery is active, Work Orders 001-008 are complete with the feature delivery, and `WO-OWNER-OUTCOME-009` remains `READY` for rolling intake
 
 ## Purpose
 
@@ -52,6 +52,14 @@ activate a worker, inspect a host, mutate production, or change authority.
 - Issue #358 is `BLOCKED_DEPENDENCY`; its issue packet records #357 as its
   dependency and its stale ready label has been removed.
 - Runtime activation and the local supervisor remain disabled.
+- The owner authorized `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`,
+  `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`, and
+  `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001` as a standing WilliamOS-native
+  R0/R1 delivery lane.
+- The program reuses existing `/goal` classification and persistence. It adds
+  no database, schema, runtime, scheduler, or background worker.
+- GitHub lifecycle work is performed by supported hosted Codex sessions under
+  active Work Orders. It is not evidence of a durable WilliamOS runtime.
 
 ## Identifier Reconciliation
 
@@ -156,9 +164,40 @@ read-only R0/R1 lane:
 2. `WO-WILLIAMOS-WOE-DETAIL-SURFACES-002 - Bounded First Slice`
 3. `WO-WILLIAMOS-WOE-DETAIL-SURFACES-003 - Safety and Rollup`
 
-The queue returns to `NO_ACTIVE_PROGRAM` after completion. A future WilliamOS
-program must be selected by a new owner-authorized activation packet or by an
-already-recorded standing authority that explicitly covers that program.
+The completed detail-surface lane handed off to the owner-authorized standing
+owner-outcome delivery program described in
+`docs/governance/owner-outcome-delivery-program.md`.
+
+## Selected Owner Outcome Delivery Program
+
+`PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001` is the standing selected
+WilliamOS-native program. Its goal is
+`GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`; its loop is
+`LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`.
+
+Work Orders `WO-OWNER-OUTCOME-001` through `WO-OWNER-OUTCOME-008` are complete
+with the bounded feature delivery. `WO-OWNER-OUTCOME-009 - Rolling Owner
+Outcome Intake` remains `READY`, so the selected program stays active and can
+activate approved, dependency-cleared R0/R1 WilliamOS-native owner outcomes.
+
+Existing `/goal` persistence is the intake system of record. Persisting or
+classifying an owner outcome does not authorize execution by itself; activation
+still requires the standing program authority to cover the exact bounded Work
+Order. No new database, schema, runtime, command runner, scheduler, or
+background worker is introduced.
+
+The GitHub lifecycle is executed by supported hosted Codex sessions. The queue
+does not claim durable dispatch or unattended background execution, and the
+rejected local adapter associated with issue #357 remains terminal and disabled.
+
+Property Workbench, TerraPilot, county work, PACS access, production actions,
+secrets, paid overages, runtime activation, and any retry or reuse of issue #357
+remain blocked.
+
+Hard invariant: `NO_ACTIVE_PROGRAM` is invalid while an approved owner outcome
+has unfinished useful work. Once an outcome is accepted inside standing R0/R1
+authority, the queue keeps this program `SELECTED` until that useful work is
+complete or reaches a typed authority wall.
 
 Selection is deterministic: completed, blocked, deferred, superseded,
 dependency-blocked, and owner-gated programs are filtered out; remaining

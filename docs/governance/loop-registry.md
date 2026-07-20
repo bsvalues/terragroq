@@ -149,18 +149,52 @@ ratified backlog and activate the highest-priority dependency-cleared program
 inside standing authority. Stop only when no approved executable program
 exists or a typed authority wall is reached.
 
+### `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
+
+Status: `ACTIVE / STANDING / SELECTED`
+
+Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
+
+Program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
+
+Risk ceiling: `R1`
+
+Selection: use the existing persisted `/goal` records as owner-outcome intake,
+then activate only approved, dependency-cleared, reversible WilliamOS-native
+R0/R1 Work Orders covered by the standing authority. Goal persistence records
+intent and classification; it does not grant execution authority.
+
+Current transition: `WO-OWNER-OUTCOME-001` through
+`WO-OWNER-OUTCOME-008` are complete with the feature delivery.
+`WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake` is `READY`.
+
+Continuation: hosted Codex sessions own routine implementation, validation,
+branch and PR lifecycle, review remediation, eligible merge, verification, and
+evidence. The loop does not run as a durable WilliamOS runtime or background
+worker, and it adds no database or schema.
+
+Allowed: standing R0/R1 WilliamOS-native owner outcomes inside exact recorded
+authority and bounded repository reservations.
+
+Blocked: Property Workbench, TerraPilot, county work, PACS, production actions,
+secrets, paid overages, runtime activation, and issue #357 retry, reactivation,
+wrapping, renaming, or reuse.
+
+Hard invariant: do not transition to `NO_ACTIVE_PROGRAM` or `NO_ACTIVE_LOOP`
+while an approved owner outcome has unfinished useful work. Continue selection
+and delivery until completion or a typed authority wall.
+
 ### `NO_ACTIVE_LOOP`
 
-Status: `no active loop`
+Status: `inactive sentinel / not current`
 
 Goal: `NO_ACTIVE_GOAL`
 
 Active Work Order: `none`
 
-Continuation: the owner-authorized WOE Detail Surfaces lane completed and
-returned to the portfolio queue. Property Workbench, TerraPilot, and
-county-oriented placeholder programs remain owner-gated and nonselectable from
-the WilliamOS queue.
+Continuation: use this sentinel only when no approved executable program and no
+approved owner outcome with unfinished useful work exists. The standing owner-
+outcome loop is current; blocked programs do not become fallback work.
 
 ### `LOOP-WOE-DETAIL-SURFACES-001`
 
@@ -172,7 +206,7 @@ Active Work Order: `none`
 
 Continuation: closed after `WO-WILLIAMOS-WOE-DETAIL-SURFACES-001` through
 `WO-WILLIAMOS-WOE-DETAIL-SURFACES-003`; it is not the active continuation
-target while the queue says `NO_ACTIVE_LOOP`.
+target while the owner-outcome delivery loop is selected.
 
 The portfolio loop remains the default continuation path after each program.
 Routine implementation, review remediation, already-authorized or otherwise
