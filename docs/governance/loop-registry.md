@@ -149,18 +149,30 @@ ratified backlog and activate the highest-priority dependency-cleared program
 inside standing authority. Stop only when no approved executable program
 exists or a typed authority wall is reached.
 
+### `NO_ACTIVE_LOOP`
+
+Status: `no active loop`
+
+Goal: `NO_ACTIVE_GOAL`
+
+Active Work Order: `none`
+
+Continuation: the owner-authorized WOE Detail Surfaces lane completed and
+returned to the portfolio queue. Property Workbench, TerraPilot, and
+county-oriented placeholder programs remain owner-gated and nonselectable from
+the WilliamOS queue.
+
 ### `LOOP-WOE-DETAIL-SURFACES-001`
 
-Status: `complete`
+Status: `complete / closed evidence`
 
 Goal: `GOAL-WOE-DETAIL-SURFACES-001`
 
 Active Work Order: `none`
 
-Continuation: the owner-authorized WOE Detail Surfaces lane completed its three
-bounded Work Orders and returned to the portfolio queue. Property Workbench,
-TerraPilot, and county-oriented placeholder programs remain owner-gated and
-nonselectable from the WilliamOS queue.
+Continuation: closed after `WO-WILLIAMOS-WOE-DETAIL-SURFACES-001` through
+`WO-WILLIAMOS-WOE-DETAIL-SURFACES-003`; it is not the active continuation
+target while the queue says `NO_ACTIVE_LOOP`.
 
 The portfolio loop remains the default continuation path after each program.
 Routine implementation, review remediation, already-authorized or otherwise
