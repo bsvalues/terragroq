@@ -4,17 +4,17 @@ Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
 
 Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
-Active program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
+Active program: `NO_ACTIVE_PROGRAM` when no eligible persisted outcome exists
 
 Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
 Loop: `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
-Recorded selector baseline: `origin/main = 95cc12c2`
+Recorded selector baseline: `origin/main = 0a308fd2a932dbfb1feaa9d1ee26c02dcab1c12d`
 
 Risk ceiling: `R1` for WilliamOS-native, reversible owner outcomes
 
-Status: `SELECTED / DELIVERY CANDIDATE`; Work Orders 001-006 are complete, `WO-OWNER-OUTCOME-007` is `READY`, and merged-main proof is still required before the rolling intake can be released
+Status: `STANDING_AWAITING_OUTCOME`; Work Orders 001-008 are complete and `WO-OWNER-OUTCOME-009` is `READY`
 
 ## Purpose
 
@@ -141,15 +141,20 @@ owner-outcome delivery program described in
 
 ## Selected Owner Outcome Delivery Program
 
-`PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001` is the standing selected
+`PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001` is the standing ready
 WilliamOS-native program. Its goal is
 `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`; its loop is
 `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`.
 
-Work Orders `WO-OWNER-OUTCOME-001` through `WO-OWNER-OUTCOME-006` are complete.
-`WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` is `READY` and
-must not complete until the feature is reviewed, merged, and verified on main.
-`WO-OWNER-OUTCOME-008` and `WO-OWNER-OUTCOME-009` remain pending until that proof exists.
+Work Orders `WO-OWNER-OUTCOME-001` through `WO-OWNER-OUTCOME-008` are complete.
+PR #421 merged the real `/goal-console` Owner Outcome Delivery feature at
+`0a308fd2a932dbfb1feaa9d1ee26c02dcab1c12d`. `WO-OWNER-OUTCOME-009 - Rolling
+Owner Outcome Intake` is the standing `READY` node.
+
+When no eligible persisted outcome exists, the resolver truthfully returns
+`NO_ACTIVE_PROGRAM`. When one or more exist, it deterministically selects the
+first eligible persisted record and carries that exact outcome reference through
+the operator surface and delivery evidence.
 
 Existing `/goal` persistence is the intake system of record. Persisting or
 classifying an owner outcome does not authorize execution by itself; activation

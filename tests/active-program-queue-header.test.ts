@@ -3,18 +3,18 @@ import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 
 describe("active program queue header", () => {
-  it("activates owner outcome delivery after WOE detail surfaces completion", () => {
+  it("keeps owner outcome delivery standing without inventing active work", () => {
     const queue = readFileSync("docs/governance/active-program-queue.md", "utf8")
     const goalRegistry = readFileSync("docs/governance/goal-registry.md", "utf8")
     const loopRegistry = readFileSync("docs/governance/loop-registry.md", "utf8")
     const program = readFileSync("docs/governance/owner-outcome-delivery-program.md", "utf8")
 
-    expect(queue).toContain("Active program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`")
+    expect(queue).toContain("Active program: `NO_ACTIVE_PROGRAM` when no eligible persisted outcome exists")
     expect(queue).toContain("Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`")
     expect(queue).toContain("Loop: `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`")
     expect(queue).toContain("Risk ceiling: `R1`")
     expect(queue).toContain("WO-OWNER-OUTCOME-009")
-    expect(queue).toContain("WO-OWNER-OUTCOME-007` is `READY")
+    expect(queue).toContain("WO-OWNER-OUTCOME-009` is `READY")
     expect(goalRegistry).toContain("GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")
     expect(goalRegistry).toContain("PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")
     expect(goalRegistry).toContain("LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")
@@ -32,11 +32,11 @@ describe("active program queue header", () => {
     expect(queue).not.toContain("Active program: `PROGRAM-PROPERTY-WORKBENCH-001")
     expect(queue).not.toContain("Active program: `PROGRAM-TERRAPILOT-LIVE-001")
     expect(queue).not.toContain("Active program: `PROGRAM-COUNTY-RUNTIME-READINESS-001")
-    expect(queue).not.toContain("Active program: `NO_ACTIVE_PROGRAM`")
+    expect(queue).not.toContain("Active program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`")
     expect(queue).not.toContain("Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001`")
     expect(queue).not.toContain("Loop: `LOOP-WOS-MULTI-AGENT-OPERATOR-001`")
     expect(queue).not.toContain("Risk ceiling: `R3` for control-plane implementation")
-    expect(program).toContain("Status: `SELECTED / STANDING`")
+    expect(program).toContain("Status: `READY / STANDING_AWAITING_OUTCOME`")
     expect(program).toContain("NO_ACTIVE_PROGRAM` is forbidden")
   })
 })

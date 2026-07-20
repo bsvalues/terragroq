@@ -16,7 +16,9 @@ export function PortfolioOperatorPanel({ outcomes = [] }: { outcomes?: OwnerOutc
             <h2 className="mt-2 text-xl font-semibold">{surface.title}</h2>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{surface.description}</p>
           </div>
-          <Badge variant="outline" className="border-success/30 text-success">continuous selection active</Badge>
+          <Badge variant="outline" className={surface.selectedProgram ? "border-success/30 text-success" : undefined}>
+            {surface.selectedProgram ? "bounded outcome selected" : "standing intake ready"}
+          </Badge>
         </div>
       </div>
 
@@ -25,6 +27,9 @@ export function PortfolioOperatorPanel({ outcomes = [] }: { outcomes?: OwnerOutc
           <div className="flex items-center gap-2"><Route className="h-4 w-4 text-primary" aria-hidden /><p className="text-sm font-medium">Selected program</p></div>
           <p className="mt-2 text-sm font-semibold">{surface.selectedProgram?.title ?? "Owner decision required"}</p>
           <p className="mt-1 font-mono text-[10px] text-muted-foreground">{surface.selectedProgram?.programId ?? surface.selection.reasonCode}</p>
+          {surface.selectedOwnerOutcome && (
+            <p className="mt-1 font-mono text-[10px] text-muted-foreground">Outcome {surface.selection.ownerOutcomeRef}</p>
+          )}
         </div>
         <div className="bg-card p-4">
           <div className="flex items-center gap-2"><ArrowRight className="h-4 w-4 text-primary" aria-hidden /><p className="text-sm font-medium">Active Work Order</p></div>

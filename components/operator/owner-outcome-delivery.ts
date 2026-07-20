@@ -144,6 +144,10 @@ export function buildOwnerOutcomeDelivery(source: OwnerOutcomeSource | null) {
   }
 }
 
+export function findApprovedOwnerOutcome(outcomes: OwnerOutcomeSource[]) {
+  return outcomes.find((outcome) => buildOwnerOutcomeDelivery(outcome).state === "ACTIVE") ?? null
+}
+
 export const OWNER_OUTCOME_PROGRAM_WORK_ORDERS = [
   ["WO-OWNER-OUTCOME-001", "Program Activation and Authority Record", "COMPLETE", "docs/governance/owner-outcome-delivery-program.md"],
   ["WO-OWNER-OUTCOME-002", "Owner Outcome Contract", "COMPLETE", "docs/governance/owner-outcome-delivery-program.md"],
@@ -151,7 +155,7 @@ export const OWNER_OUTCOME_PROGRAM_WORK_ORDERS = [
   ["WO-OWNER-OUTCOME-004", "Generated Program, Goal, Loop, and Work Order Model", "COMPLETE", "components/operator/owner-outcome-delivery.ts"],
   ["WO-OWNER-OUTCOME-005", "Rolling Queue and No-Dead-End Invariant", "COMPLETE", "tests/portfolio-operator.test.ts"],
   ["WO-OWNER-OUTCOME-006", "Durable Session Handoff Evidence", "COMPLETE", "components/goal-console/owner-outcome-delivery-panel.tsx"],
-  ["WO-OWNER-OUTCOME-007", "Real WilliamOS Feature Delivery Proof", "READY", "tests/owner-outcome-delivery.test.ts"],
-  ["WO-OWNER-OUTCOME-008", "Safety, Validation, and Program Rollup", "PENDING", "docs/reports/WO-OWNER-OUTCOME-008-owner-outcome-delivery-rollup.md"],
-  ["WO-OWNER-OUTCOME-009", "Rolling Owner Outcome Intake", "PENDING", "docs/reports/WO-OWNER-OUTCOME-009.md"],
+  ["WO-OWNER-OUTCOME-007", "Real WilliamOS Feature Delivery Proof", "COMPLETE", "tests/owner-outcome-delivery.test.ts"],
+  ["WO-OWNER-OUTCOME-008", "Safety, Validation, and Program Rollup", "COMPLETE", "docs/reports/WO-OWNER-OUTCOME-008-owner-outcome-delivery-rollup.md"],
+  ["WO-OWNER-OUTCOME-009", "Rolling Owner Outcome Intake", "READY", "docs/reports/WO-OWNER-OUTCOME-009.md"],
 ] as const satisfies ReadonlyArray<readonly [string, string, "COMPLETE" | "READY" | "PENDING", string]>

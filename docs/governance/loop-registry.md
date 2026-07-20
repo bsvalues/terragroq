@@ -1,7 +1,7 @@
 # WilliamOS Loop Registry
 
 Work order: `WO-OWNER-OUTCOME-001 through WO-OWNER-OUTCOME-009`
-Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 (active)`
+Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 (standing awaiting outcome)`
 Type: Governance / Registry / Continuation
 Risk: `R1`
 
@@ -128,13 +128,13 @@ outcome remains incomplete and useful bounded WilliamOS-native work remains.
 
 ### `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
-Status: `ACTIVE / DELIVERY CANDIDATE / WO-OWNER-OUTCOME-007 READY`
+Status: `STANDING / AWAITING ELIGIBLE OUTCOME / WO-OWNER-OUTCOME-009 READY`
 
 Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
 Program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
-Active Work Order: `WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof`
+Active Work Order: `WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake`
 
 Ordered queue:
 
@@ -144,9 +144,9 @@ Ordered queue:
 4. `WO-OWNER-OUTCOME-004 - Generated Program, Goal, Loop, and Work Order Model` (`COMPLETE`)
 5. `WO-OWNER-OUTCOME-005 - Rolling Queue and No-Dead-End Invariant` (`COMPLETE`)
 6. `WO-OWNER-OUTCOME-006 - Durable Session Handoff Evidence` (`COMPLETE`)
-7. `WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` (`READY`)
-8. `WO-OWNER-OUTCOME-008 - Safety, Validation, and Program Rollup` (`PENDING`)
-9. `WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake` (`PENDING`)
+7. `WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` (`COMPLETE`)
+8. `WO-OWNER-OUTCOME-008 - Safety, Validation, and Program Rollup` (`COMPLETE`)
+9. `WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake` (`READY`)
 
 Continuation rule:
 

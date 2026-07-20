@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   buildOwnerOutcomeDelivery,
+  findApprovedOwnerOutcome,
   OWNER_OUTCOME_GOAL_ID,
   OWNER_OUTCOME_LOOP_ID,
   OWNER_OUTCOME_PROGRAM_ID,
@@ -72,6 +73,16 @@ describe("owner outcome delivery", () => {
       expect(delivery.workOrders.every((workOrder) => workOrder.ownerOperationsAllowed === false)).toBe(true)
     },
   )
+
+  it("selects the first eligible persisted outcome deterministically", () => {
+    const blockedLatest = {
+      ...eligibleSource,
+      ref: "GOAL-BLOCKED",
+      command: "Deploy TerraFusion to production",
+    }
+
+    expect(findApprovedOwnerOutcome([blockedLatest, eligibleSource])?.ref).toBe(eligibleSource.ref)
+  })
 
   it.each([
     "Deliver a TerraFusion status view.",

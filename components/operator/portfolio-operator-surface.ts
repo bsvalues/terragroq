@@ -98,6 +98,9 @@ export function getPortfolioOperatorSurface(
     title: "Portfolio Operator",
     description: "Completed programs route to the highest-priority approved executable program. The Primary is involved only at a true authority wall.",
     selection,
+    selectedOwnerOutcome: selection.ownerOutcomeRef
+      ? ownerOutcomes.find((outcome) => outcome.ref === selection.ownerOutcomeRef) ?? null
+      : null,
     selectedProgram: selected,
     activeWorkOrder,
     loop,

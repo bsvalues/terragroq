@@ -4,7 +4,7 @@ import {
 } from "@/components/operator/portfolio-operator-registry"
 import { MULTI_AGENT_OPERATOR_WORK_ORDERS } from "@/components/operator/multi-agent-operator-registry"
 import {
-  buildOwnerOutcomeDelivery,
+  findApprovedOwnerOutcome,
   OWNER_OUTCOME_PROGRAM_ID,
   OWNER_OUTCOME_PROGRAM_WORK_ORDERS,
   type OwnerOutcomeSource,
@@ -31,7 +31,7 @@ export function deriveOrderedWorkOrderStatuses(totalWorkOrders: number, complete
 }
 
 export function hasApprovedOwnerOutcome(outcomes: OwnerOutcomeSource[]) {
-  return outcomes.some((outcome) => buildOwnerOutcomeDelivery(outcome).state === "ACTIVE")
+  return findApprovedOwnerOutcome(outcomes) !== null
 }
 
 export function resolveNextPortfolioProgram(
@@ -67,6 +67,7 @@ export function resolveNextPortfolioProgram(
       reasonCode: "NO_APPROVED_EXECUTABLE_PROGRAM" as const,
       programId: null,
       goalId: null,
+      ownerOutcomeRef: null,
       ownerDecisionRequired: true as const,
     }
   }
@@ -78,6 +79,9 @@ export function resolveNextPortfolioProgram(
       : "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM" as const,
     programId: selected.programId,
     goalId: selected.nextGoalId,
+    ownerOutcomeRef: selected.programId === OWNER_OUTCOME_PROGRAM_ID
+      ? findApprovedOwnerOutcome(ownerOutcomes)?.ref ?? null
+      : null,
     ownerDecisionRequired: false as const,
   }
 }

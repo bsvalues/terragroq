@@ -12,6 +12,19 @@ import {
   resolveNextPortfolioProgram,
 } from "@/components/operator/portfolio-operator-resolver"
 
+const eligibleOwnerOutcome = {
+  ref: "GOAL-0099",
+  command: "Improve the WilliamOS goal console layout",
+  lane: "ui",
+  mode: "implement",
+  risk: "low",
+  authority: "A2_WRITE_OWN",
+  verdict: "allow",
+  requiresApproval: false,
+  matchedRules: [],
+  status: "classified",
+}
+
 describe("portfolio operator", () => {
   it("reconciles completed programs and keeps an ordered ratified backlog", () => {
     const portfolio = getPortfolioOperatorProgram()
@@ -68,6 +81,13 @@ describe("portfolio operator", () => {
     })
 
     expect(resolveNextPortfolioProgram([...portfolio.completedPrograms, ...portfolio.backlog])).toMatchObject({
+      decision: "OWNER_DECISION_REQUIRED",
+      reasonCode: "NO_APPROVED_EXECUTABLE_PROGRAM",
+    })
+    expect(resolveNextPortfolioProgram(
+      [...portfolio.completedPrograms, ...portfolio.backlog],
+      [eligibleOwnerOutcome],
+    )).toMatchObject({
       decision: "SELECT_PROGRAM",
       reasonCode: "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM",
       programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
@@ -86,12 +106,12 @@ describe("portfolio operator", () => {
     })
     expect(ownerOutcome).toMatchObject({
       authorityMode: "CODEX_ELIGIBLE",
-      state: "SELECTED",
+      state: "READY",
       riskClass: "R1",
     })
     expect(buildLoopPacket(ownerOutcome)).toMatchObject({
-      activeWorkOrder: "WO-OWNER-OUTCOME-007",
-      eligibleWorkOrders: ["WO-OWNER-OUTCOME-007"],
+      activeWorkOrder: "WO-OWNER-OUTCOME-009",
+      eligibleWorkOrders: ["WO-OWNER-OUTCOME-009"],
     })
     expect(buildWorkOrderChain(ownerOutcome)).toHaveLength(9)
     expect(portfolio.backlog.find((program) => program.programId === "PROGRAM-TERRAPILOT-LIVE-001")).toMatchObject({
@@ -111,7 +131,7 @@ describe("portfolio operator", () => {
     const result = resolveNextPortfolioProgram([
       ...portfolio.completedPrograms,
       { ...ownerOutcome, state: "SELECTED" as const },
-    ])
+    ], [eligibleOwnerOutcome])
 
     expect(result.reasonCode).not.toBe("NO_APPROVED_EXECUTABLE_PROGRAM")
     expect(result).toMatchObject({
@@ -125,24 +145,11 @@ describe("portfolio operator", () => {
   it("uses persisted classified outcomes before releasing the rolling intake node", () => {
     const portfolio = getPortfolioOperatorProgram()
     const ownerOutcomeProgram = portfolio.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")!
-    const source = {
-      ref: "GOAL-0099",
-      command: "Improve the WilliamOS goal console layout",
-      lane: "ui",
-      mode: "implement",
-      risk: "low",
-      authority: "A2_WRITE_OWN",
-      verdict: "allow",
-      requiresApproval: false,
-      matchedRules: [],
-      status: "classified",
-    }
-
     expect(resolveNextPortfolioProgram([ownerOutcomeProgram], [], 8)).toMatchObject({
       decision: "OWNER_DECISION_REQUIRED",
       reasonCode: "NO_APPROVED_EXECUTABLE_PROGRAM",
     })
-    expect(resolveNextPortfolioProgram([ownerOutcomeProgram], [source], 8)).toMatchObject({
+    expect(resolveNextPortfolioProgram([ownerOutcomeProgram], [eligibleOwnerOutcome], 8)).toMatchObject({
       decision: "SELECT_PROGRAM",
       programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
     })
@@ -165,7 +172,7 @@ describe("portfolio operator", () => {
         dependencies: [],
       }))
 
-    expect(resolveNextPortfolioProgram([...protectedPrograms, ownerOutcome])).toMatchObject({
+    expect(resolveNextPortfolioProgram([...protectedPrograms, ownerOutcome], [eligibleOwnerOutcome])).toMatchObject({
       decision: "SELECT_PROGRAM",
       programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
     })
