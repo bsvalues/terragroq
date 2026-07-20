@@ -8,31 +8,54 @@ import { getPortfolioOperatorProgram } from "@/components/operator/portfolio-ope
 import { getPortfolioOperatorSurface } from "@/components/operator/portfolio-operator-surface"
 
 describe("portfolio operator surface", () => {
-  it("shows continuous continuation without exposing execution controls", () => {
+  it("shows active owner-outcome continuation without exposing execution controls", () => {
     const surface = getPortfolioOperatorSurface()
 
     expect(surface.title).toBe("Portfolio Operator")
     expect(surface.selection).toMatchObject({
-      decision: "OWNER_DECISION_REQUIRED",
-      reasonCode: "NO_APPROVED_EXECUTABLE_PROGRAM",
-      programId: null,
+      decision: "SELECT_PROGRAM",
+      reasonCode: "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM",
+      programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
+      goalId: "GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
+      ownerDecisionRequired: false,
     })
-    expect(surface.selectedProgram).toBeNull()
-    expect(surface.activeWorkOrder).toBeNull()
+    expect(surface.selectedProgram).toMatchObject({
+      programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
+      state: "SELECTED",
+      authorityMode: "CODEX_ELIGIBLE",
+      riskClass: "R1",
+    })
+    expect(surface.activeWorkOrder).toMatchObject({
+      workOrderId: "WO-OWNER-OUTCOME-001",
+      status: "READY",
+      title: "Current Continuation Dead-End Reconciliation",
+    })
     expect(surface.statusCounts).toEqual({
-      total: 0,
+      total: 6,
       complete: 0,
-      ready: 0,
-      pending: 0,
+      ready: 1,
+      pending: 5,
       blocked: 0,
       deferred: 0,
     })
-    expect(surface.activeDependencyState).toBeNull()
-    expect(surface.activeReservation).toBeNull()
+    expect(surface.activeDependencyState).toEqual({
+      total: 0,
+      satisfied: 0,
+      dependencies: [],
+    })
+    expect(surface.activeReservation).toMatchObject({
+      evidencePath: "docs/reports/WO-OWNER-OUTCOME-001.md",
+      ownerOperationsAllowed: false,
+    })
     expect(surface.evidenceChain.map((entry) => entry.workOrderId)).toEqual([])
+    expect(surface.readyWorkOrders).toEqual(["WO-OWNER-OUTCOME-001"])
     expect(surface.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001")).toMatchObject({
       state: "COMPLETE",
       blockedReason: expect.stringContaining("completed as a WilliamOS-native"),
+    })
+    expect(surface.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")).toMatchObject({
+      state: "SELECTED",
+      blockedReason: expect.stringContaining("standing direction"),
     })
     expect(surface.ownerAuthorityWalls.map((wall) => wall.programId)).toEqual(expect.arrayContaining([
       "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001",
