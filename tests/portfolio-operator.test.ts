@@ -47,6 +47,7 @@ describe("portfolio operator", () => {
       "PROGRAM-BACKEND-OE-001",
       "PROGRAM-PROPERTY-WORKBENCH-001",
       "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001",
+      "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
       "PROGRAM-TERRAPILOT-LIVE-001",
       "PROGRAM-AI-BRAIN-OPS-001",
       "PROGRAM-COUNTY-RUNTIME-READINESS-001",
@@ -55,9 +56,10 @@ describe("portfolio operator", () => {
     ])
   })
 
-  it("closes the multi-agent operator after evidence-backed certification rejection", () => {
+  it("selects owner outcome delivery after evidence-backed certification rejection", () => {
     const portfolio = getPortfolioOperatorProgram()
     const multiAgentOperator = portfolio.backlog[0]
+    const ownerOutcome = portfolio.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")!
 
     expect(buildLoopPacket(multiAgentOperator)).toMatchObject({
       activeWorkOrder: null,
@@ -66,11 +68,11 @@ describe("portfolio operator", () => {
     })
 
     expect(resolveNextPortfolioProgram([...portfolio.completedPrograms, ...portfolio.backlog])).toMatchObject({
-      decision: "OWNER_DECISION_REQUIRED",
-      reasonCode: "NO_APPROVED_EXECUTABLE_PROGRAM",
-      programId: null,
-      goalId: null,
-      ownerDecisionRequired: true,
+      decision: "SELECT_PROGRAM",
+      reasonCode: "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM",
+      programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
+      goalId: "GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
+      ownerDecisionRequired: false,
     })
     expect(portfolio.backlog.find((program) => program.programId === "PROGRAM-PROPERTY-WORKBENCH-001")).toMatchObject({
       authorityMode: "OWNER_GATED",
@@ -82,7 +84,91 @@ describe("portfolio operator", () => {
       state: "COMPLETE",
       blockedReason: expect.stringContaining("completed as a WilliamOS-native"),
     })
+    expect(ownerOutcome).toMatchObject({
+      authorityMode: "CODEX_ELIGIBLE",
+      state: "SELECTED",
+      riskClass: "R1",
+    })
+    expect(buildLoopPacket(ownerOutcome)).toMatchObject({
+      activeWorkOrder: "WO-OWNER-OUTCOME-007",
+      eligibleWorkOrders: ["WO-OWNER-OUTCOME-007"],
+    })
+    expect(buildWorkOrderChain(ownerOutcome)).toHaveLength(9)
+    expect(portfolio.backlog.find((program) => program.programId === "PROGRAM-TERRAPILOT-LIVE-001")).toMatchObject({
+      authorityMode: "OWNER_GATED",
+      state: "BLOCKED",
+    })
+    expect(portfolio.backlog.find((program) => program.programId === "PROGRAM-COUNTY-RUNTIME-READINESS-001")).toMatchObject({
+      authorityMode: "OWNER_GATED",
+      state: "BLOCKED",
+    })
     expect(multiAgentOperator.state).toBe("COMPLETE")
+  })
+
+  it("never resolves an approved unfinished outcome program to no executable program", () => {
+    const portfolio = getPortfolioOperatorProgram()
+    const ownerOutcome = portfolio.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")!
+    const result = resolveNextPortfolioProgram([
+      ...portfolio.completedPrograms,
+      { ...ownerOutcome, state: "SELECTED" as const },
+    ])
+
+    expect(result.reasonCode).not.toBe("NO_APPROVED_EXECUTABLE_PROGRAM")
+    expect(result).toMatchObject({
+      decision: "SELECT_PROGRAM",
+      programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
+      goalId: "GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
+      ownerDecisionRequired: false,
+    })
+  })
+
+  it("uses persisted classified outcomes before releasing the rolling intake node", () => {
+    const portfolio = getPortfolioOperatorProgram()
+    const ownerOutcomeProgram = portfolio.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")!
+    const source = {
+      ref: "GOAL-0099",
+      command: "Improve the WilliamOS goal console layout",
+      lane: "ui",
+      mode: "implement",
+      risk: "low",
+      authority: "A2_WRITE_OWN",
+      verdict: "allow",
+      requiresApproval: false,
+      matchedRules: [],
+      status: "classified",
+    }
+
+    expect(resolveNextPortfolioProgram([ownerOutcomeProgram], [], 8)).toMatchObject({
+      decision: "OWNER_DECISION_REQUIRED",
+      reasonCode: "NO_APPROVED_EXECUTABLE_PROGRAM",
+    })
+    expect(resolveNextPortfolioProgram([ownerOutcomeProgram], [source], 8)).toMatchObject({
+      decision: "SELECT_PROGRAM",
+      programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
+    })
+  })
+
+  it("keeps protected placeholder programs nonselectable even when their state and priority are hostile", () => {
+    const portfolio = getPortfolioOperatorProgram()
+    const ownerOutcome = portfolio.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")!
+    const protectedPrograms = portfolio.backlog
+      .filter((program) => [
+        "PROGRAM-PROPERTY-WORKBENCH-001",
+        "PROGRAM-TERRAPILOT-LIVE-001",
+        "PROGRAM-COUNTY-RUNTIME-READINESS-001",
+        "PROGRAM-PRODUCTION-COUNTY-DEPLOYMENT-001",
+      ].includes(program.programId))
+      .map((program) => ({
+        ...program,
+        state: "SELECTED" as const,
+        priorityScore: Number.MAX_SAFE_INTEGER,
+        dependencies: [],
+      }))
+
+    expect(resolveNextPortfolioProgram([...protectedPrograms, ownerOutcome])).toMatchObject({
+      decision: "SELECT_PROGRAM",
+      programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001",
+    })
   })
 
   it("preserves deterministic priority and program-id ordering when higher-priority programs are unavailable", () => {

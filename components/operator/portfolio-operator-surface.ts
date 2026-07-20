@@ -1,5 +1,6 @@
 import { getPortfolioOperatorProgram } from "@/components/operator/portfolio-operator-registry"
 import { buildLoopPacket, buildWorkOrderChain, resolveNextPortfolioProgram } from "@/components/operator/portfolio-operator-resolver"
+import type { OwnerOutcomeSource } from "@/components/operator/owner-outcome-delivery"
 
 type ActiveDependencyState = {
   total: number
@@ -19,8 +20,11 @@ type ActiveReservation = {
   ownerOperationsAllowed: boolean
 }
 
-export function getPortfolioOperatorSurface(portfolio = getPortfolioOperatorProgram()) {
-  const selection = resolveNextPortfolioProgram([...portfolio.completedPrograms, ...portfolio.backlog])
+export function getPortfolioOperatorSurface(
+  portfolio = getPortfolioOperatorProgram(),
+  ownerOutcomes: OwnerOutcomeSource[] = [],
+) {
+  const selection = resolveNextPortfolioProgram([...portfolio.completedPrograms, ...portfolio.backlog], ownerOutcomes)
   const selected = portfolio.backlog.find((program) => program.programId === selection.programId) ?? null
   const workOrders = selected ? buildWorkOrderChain(selected) : []
   const loop = selected ? buildLoopPacket(selected) : null

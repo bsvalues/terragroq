@@ -72,6 +72,7 @@ const backlogSeeds: Array<{
   { programId: "PROGRAM-BACKEND-OE-001", title: "Backend Operational Excellence", goalId: "GOAL-BACKEND-OE-001", businessValue: 8, engineeringValue: 8, riskClass: "R1", stateOverride: "COMPLETE" },
   { programId: "PROGRAM-PROPERTY-WORKBENCH-001", title: "Property Workbench", goalId: "GOAL-PROPERTY-WORKBENCH-001", businessValue: 9, engineeringValue: 7, riskClass: "R1", authorityMode: "OWNER_GATED", stateOverride: "BLOCKED" },
   { programId: "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001", title: "Work Order Engine Detail Surfaces", goalId: "GOAL-WOE-DETAIL-SURFACES-001", businessValue: 8, engineeringValue: 9, riskClass: "R1", stateOverride: "COMPLETE" },
+  { programId: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001", title: "Owner Outcome Delivery", goalId: "GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001", businessValue: 10, engineeringValue: 10, riskClass: "R1", priorityOverride: 1000, stateOverride: "SELECTED" },
   { programId: "PROGRAM-TERRAPILOT-LIVE-001", title: "TerraPilot Live Integration", goalId: "GOAL-TERRAPILOT-LIVE-001", businessValue: 9, engineeringValue: 8, riskClass: "R2", authorityMode: "OWNER_GATED", dependencies: ["PROGRAM-BACKEND-OE-001"] },
   { programId: "PROGRAM-AI-BRAIN-OPS-001", title: "AI / Brain Operationalization", goalId: "GOAL-AI-BRAIN-OPS-001", businessValue: 8, engineeringValue: 8, riskClass: "R2", authorityMode: "OWNER_GATED" },
   { programId: "PROGRAM-COUNTY-RUNTIME-READINESS-001", title: "County Runtime Readiness", goalId: "GOAL-COUNTY-RUNTIME-READINESS-001", businessValue: 10, engineeringValue: 7, riskClass: "R3", authorityMode: "OWNER_GATED", dependencies: ["PROGRAM-PROPERTY-WORKBENCH-001"] },
@@ -109,6 +110,8 @@ export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((see
         ? "Owner-gated and nonselectable: property/TerraFusion/county placeholder work must not start from the WilliamOS portfolio queue."
       : seed.programId === "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001"
         ? "Activated by owner packet and completed as a WilliamOS-native read-only detail surface program."
+      : seed.programId === "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001"
+        ? "Selected from the Owner's standing direction to keep bounded useful WilliamOS-native R0/R1 work moving without routine reauthorization."
       : seed.authorityMode === "OWNER_GATED" ? "Protected authority is required before activation." : undefined,
 }))
 
