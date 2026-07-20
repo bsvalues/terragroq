@@ -1,9 +1,9 @@
 # WilliamOS Goal Registry
 
-Work order: `WO-MAO-001 through WO-MAO-062`
-Goal: `GOAL-WOS-MULTI-AGENT-OPERATOR-001 (closed; local runtime terminal and disabled)`
-Type: Governance / Registry
-Risk: Low, documentation only
+Work order: `WO-OWNER-OUTCOME-001 through WO-OWNER-OUTCOME-006`
+Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 (active; R1 WilliamOS-native continuation)`
+Type: Governance / Registry / Owner Outcome Delivery
+Risk: `R1`
 
 ## Purpose
 
@@ -12,7 +12,7 @@ authorized `/goal` and `/loop` work without making William act as the courier.
 
 The registry is not an execution engine. It does not mutate runtime state,
 databases, credentials, production, authority, or user access. It is a durable
-governance reference for the Codex Operator playbook.
+governance reference for the Codex Operator playbook and portfolio resolver.
 
 ## Registry Rules
 
@@ -20,10 +20,12 @@ governance reference for the Codex Operator playbook.
 - Goals do not grant unrestricted execution.
 - Each goal must name allowed work, blocked work, validation, evidence, and the
   first loop.
-- Codex may continue only through work already authorized by the active goal and
-  loop.
+- Codex may continue only through work authorized by the active goal, loop, or a
+  recorded standing owner direction that explicitly covers the bounded scope.
+- Plain-language owner direction is sufficient; no magic authorization keyword is
+  required when the bounded outcome is already clear.
 - Owner gates override registry sequence.
-- Any scope-expanding change requires a new owner-authorized packet.
+- Any protected scope expansion requires a concise new owner-decision packet.
 
 ## Canonical Completed Operator Goal
 
@@ -160,42 +162,16 @@ Work Orders: `WO-MAO-001` through `WO-MAO-062`. Dependencies and reservations,
 not numeric serialization, determine the eligible set. The executable registry
 is `components/operator/multi-agent-operator-registry.ts`.
 
-Current transition: `WO-MAO-001` through `WO-MAO-032` are complete, with `WO-MAO-033`
-remaining `DEFERRED / PROVIDER_UNAVAILABLE`.
-The local contracts now include the recoverable eligible-set scheduler and deterministic team
-topology/fan-in projection, bounded isolated-workspace lifecycle, durable one-writer handoff, and the
-deterministic hard-ceiling priority/fairness admission policy. WO-MAO-028 adds pure/static scheduler model
-checking without provider or runtime execution. WO-MAO-030 adds the current-session hosted Codex coordinator
-adapter for opaque host-trusted native assignments, bridge-backed operations, replay sealing, quarantine,
-and sanitized evidence without provider-contract dispatch. WO-MAO-031 has been re-proved against that
-hardened contract using opaque host plan handles and independently captured role evidence. WO-MAO-035
-is re-proved through a zero-input canonical provider-health registry, trusted observation, stateful
-breaker transition, and bounded static reroute selection. WO-MAO-036 is re-proved through a zero-input
-canonical provider-conformance suite that keeps hosted Codex session-only, Claude deferred, and the
-local nested adapter rejected. WO-MAO-037 proves governed branch/commit/push lifecycle planning with
-reserved paths, secret scan, attribution, rollback, and safety gates, without adding a command runner.
-WO-MAO-038 proves PR packet linkage from verified Work Order, authority, validation, and evidence
-records without creating a pull request from the model.
-WO-MAO-039 proves CI/review ingestion and failure classification without calling GitHub, rerunning
-checks, resolving threads, remediating, or merging.
-WO-MAO-040 proves bounded original-builder remediation routing and independent re-review requirements
-without mutating branches, resolving review threads, or merging.
-WO-MAO-041 proves bounded merge eligibility and bypass denial without calling GitHub or performing a
-merge.
-The exact deferred WO-MAO-033 edge
-into WO-MAO-034 is now independently settled through the canonical immutable version-2 record bound
-to WO-MAO-032, the consumer envelope, and source-assessment hash. WO-MAO-034 is `COMPLETE` through
-its zero-input canonical routing proof and independently approved exact implementation candidate.
-The separately ratified dependency-graph correction removes only WO-MAO-033's redundant direct
-edges from WO-MAO-035/036. WO-MAO-035 through WO-MAO-058 are `COMPLETE`.
-WO-MAO-059 is complete as an evidence-backed rejection because PR #414 satisfied
-the ten-useful-Work-Order gate but no durable unattended process continued
-between sessions for the 24-hour soak. WO-MAO-060 completed the zero-owner-touch
-audit, WO-MAO-061 rejected unattended multi-agent certification, and WO-MAO-062
-closed the program into portfolio continuation.
-WO-MAO-033 remains deferred and resumable, and the WO-MAO-034 settlement remains exact and
-unchanged. Claude remains unavailable and disabled. Durable provider dispatch
-and the sustained unattended builder certification remain unproven.
+WO-MAO-001 through WO-MAO-058 are complete. WO-MAO-059 is complete as an
+evidence-backed rejection because PR #414 satisfied the ten-useful-Work-Order
+gate but no durable unattended process continued between sessions for the
+required 24-hour interval. WO-MAO-060 completed the zero-owner-touch audit,
+WO-MAO-061 rejected unattended multi-agent certification, and WO-MAO-062 closed
+the program into portfolio continuation.
+
+`WO-MAO-033` remains `DEFERRED / PROVIDER_UNAVAILABLE` and resumable. Claude
+remains unavailable and disabled. Durable provider dispatch and sustained
+unattended builder certification remain unproven.
 
 Communication contract: routine implementation, diagnosis, retry, review,
 merge, verification, cleanup, and continuation remain agent-owned. William is
@@ -216,12 +192,65 @@ Loop: `LOOP-PORTFOLIO-OPERATOR-001`
 
 Evidence: `docs/reports/WO-PORTFOLIO-001-010-portfolio-operator-evidence.md`
 
-The standing portfolio resolver selected the highest-priority approved,
+The standing portfolio resolver selects the highest-priority approved,
 dependency-cleared program without returning routine planning to the Primary.
 
-### `NO_ACTIVE_GOAL - Awaiting WilliamOS-Native Selection`
+## Active WilliamOS-Native Goal
 
-Status: `no active goal`
+### `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 - Owner Outcome Delivery`
+
+Status: `ACTIVE / SELECTED / R1`
+
+Program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
+
+Loop: `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
+
+Active Work Order: `WO-OWNER-OUTCOME-001 - Current Continuation Dead-End Reconciliation`
+
+Purpose: convert plain-language owner outcomes into a rolling bounded WilliamOS-
+native program, goal, loop, and Work Order queue without making William repeat
+activation words or perform routine operator work.
+
+Allowed scope:
+
+- WilliamOS owner-outcome intake;
+- portfolio and queue selection code;
+- goal, loop, and Work Order generation;
+- bounded reversible WilliamOS-native R0/R1 product work;
+- tests, evidence, review remediation, and eligible merge.
+
+Blocked scope:
+
+- Property Workbench, TerraPilot, county, PACS, or TerraFusion auto-selection;
+- production mutation or deployment;
+- secrets, credentials, protected data, or identity inspection;
+- paid overages or automatic credit purchases;
+- runtime, command runner, background worker, Hermes, MCP, or rejected issue
+  `#357` activation;
+- destructive operations;
+- routine operational work assigned to William.
+
+Work Orders:
+
+1. `WO-OWNER-OUTCOME-001 - Current Continuation Dead-End Reconciliation`
+2. `WO-OWNER-OUTCOME-002 - Owner Outcome Intake Contract`
+3. `WO-OWNER-OUTCOME-003 - Rolling WilliamOS-Native Backlog`
+4. `WO-OWNER-OUTCOME-004 - No-Idle Resolver Invariant`
+5. `WO-OWNER-OUTCOME-005 - Useful WilliamOS Feature Delivery Proof`
+6. `WO-OWNER-OUTCOME-006 - Safety and Continuation Rollup`
+
+Success requires at least one real WilliamOS feature delivered through the
+generated chain. Governance-only completion is insufficient.
+
+The active invariant is:
+
+```text
+DO_NOT_RETURN_TO_NO_ACTIVE_PROGRAM_WHILE_APPROVED_USEFUL_WILLIAMOS_R0_R1_WORK_REMAINS
+```
+
+### `NO_ACTIVE_GOAL - Inactive Sentinel`
+
+Status: `dormant sentinel / not current`
 
 Program: `NO_ACTIVE_PROGRAM`
 
@@ -229,14 +258,12 @@ Loop: `NO_ACTIVE_LOOP`
 
 Active Work Order: `none`
 
-Property Workbench, TerraPilot, and county-oriented placeholder programs are
-owner-gated and nonselectable from the WilliamOS portfolio queue. They are not
-active WilliamOS continuation lanes and must not start without a future explicit
-owner decision.
+This sentinel is preserved for the truthful state where no approved owner
+outcome, executable WilliamOS-native program, remediation, or successor work
+remains. It is not the current goal while Owner Outcome Delivery is active.
 
-The WOE Detail Surfaces lane completed and returned the queue to
-`NO_ACTIVE_PROGRAM`. A future WilliamOS-native program requires an activation
-packet or standing authority that explicitly covers that program.
+Property Workbench, TerraPilot, and county-oriented placeholder programs remain
+owner-gated and nonselectable from the WilliamOS portfolio queue.
 
 ### `GOAL-WOE-DETAIL-SURFACES-001 - Work Order Engine Detail Surfaces`
 
@@ -248,7 +275,8 @@ Active Work Order: `none`
 
 The owner-authorized activation packet selected this WilliamOS-native lane after
 PR #417. Codex completed the bounded Work Orders as read-only/detail-surface
-work and returned the queue to `NO_ACTIVE_PROGRAM`.
+work through PRs #418-#420. The lane remains closed evidence and is not the
+active continuation target.
 
 ### Closed Goal Preservation Register
 
@@ -283,21 +311,19 @@ Success state:
 
 Owner authority:
 
-- Codex may implement docs/governance/report-only changes.
+- Codex may implement bounded authorized repository changes.
 - Codex may open PRs.
 - Codex may monitor checks and review threads.
-- Codex may remediate narrow docs-only review feedback.
-- Codex may merge when checks are green, review threads are resolved, scope
-  remains docs-only, and no runtime/product behavior changes occur.
+- Codex may remediate in-scope review feedback.
+- Codex may merge when the active authority and all merge gates allow it.
 
 Blocked:
 
-- no runtime code changes
-- no auth behavior or policy changes
+- no unauthorized runtime code or activation
+- no auth behavior or policy changes without authority
 - no public account-creation restoration
-- no DB, schema, data, env, package, or Vercel changes
-- no deploy, release, or tag beyond normal PR merge
-- no production-write behavior
+- no DB, schema, data, env, or package changes without authority
+- no deployment or production-write behavior without authority
 - no Hermes, MCP, autonomy, or worker activation
 - no secrets
 
@@ -322,6 +348,7 @@ Current loop:
 9. `GOAL-HERMES-001 - Hermes Sidecar Boundary`
 10. `GOAL-COUNTY-001 - County Ops Knowledge Pack`
 11. `GOAL-TF-COMMAND-001 - TerraFusion Project Command Layer`
+12. `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 - Owner Outcome Delivery`
 
 ## Goal Summaries
 
@@ -410,18 +437,32 @@ First loop: `WO-TF-COMMAND-001 - TerraFusion Project Card`
 
 Blocked: TerraFusion production mutation unless separately authorized.
 
+### `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 - Owner Outcome Delivery`
+
+Purpose: prevent bounded useful WilliamOS-native work from stopping merely
+because a finite static seed list was exhausted.
+
+First loop: `WO-OWNER-OUTCOME-001 - Current Continuation Dead-End Reconciliation`
+
+Blocked: protected external projects, production, secrets, spending, runtime
+activation, destructive operations, and R2+ expansion without a new decision.
+
 ## Registry Maintenance
 
-Every active goal records the five owner-operation/contact counters when evidence exists, an independent
-evidence reference when available, and one current lifecycle state: `NO_OWNER_OPERATION_EVIDENCE`,
+Every active goal records the five owner-operation/contact counters when evidence
+exists, an independent evidence reference when available, and one current
+lifecycle state: `NO_OWNER_OPERATION_EVIDENCE`,
 `UNVERIFIED_ZERO_OWNER_OPERATIONS`, `CERTIFIED_ZERO_OWNER_OPERATIONS`, or
-`FAILED_OWNER_BABYSITTING`. `CERTIFIED_ZERO_OWNER_OPERATIONS` requires the independent context-bound
-evidence verifier, signed assurance record, complete checkpoint and source-log chains, and current
-anchors sourced by the trusted host rather than passed through the operator CLI. Caller-supplied zeros
-cannot certify a goal. Genuine consequential owner authority decisions
-are excluded from routine-operation counts;
-owner courier, credential, diagnostic, routine implementation, and progress-contact actions are counted and disqualify
-certification with reason `FAIL_OWNER_BABYSITTING`.
+`FAILED_OWNER_BABYSITTING`.
 
-Update this registry when William authorizes a new goal, changes execution
-order, closes a goal, or explicitly pauses a lane.
+`CERTIFIED_ZERO_OWNER_OPERATIONS` requires independent context-bound evidence,
+complete checkpoint/source-log chains, and current trusted-host anchors.
+Caller-supplied zeros cannot certify a goal. Genuine consequential owner
+authority decisions are excluded from routine-operation counts; owner courier,
+credential, diagnostic, routine implementation, and progress-contact actions
+are counted and disqualify certification with reason `FAIL_OWNER_BABYSITTING`.
+
+Update this registry when William gives a new consequential direction, changes
+protected authority, closes an outcome, or explicitly pauses a lane. Routine
+bounded successor generation inside the active owner outcome does not require a
+new activation ritual.
