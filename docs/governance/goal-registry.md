@@ -219,11 +219,11 @@ Evidence: `docs/reports/WO-PORTFOLIO-001-010-portfolio-operator-evidence.md`
 The standing portfolio resolver selected the highest-priority approved,
 dependency-cleared program without returning routine planning to the Primary.
 
-### `NO_ACTIVE_PROGRAM - Awaiting WilliamOS-Native Selection`
+### `GOAL-WOE-DETAIL-SURFACES-001 - Work Order Engine Detail Surfaces`
 
-Status: `no active program`
+Status: `complete`
 
-Loop: `NO_ACTIVE_LOOP`
+Loop: `LOOP-WOE-DETAIL-SURFACES-001`
 
 Active Work Order: `none`
 
@@ -232,10 +232,9 @@ owner-gated and nonselectable from the WilliamOS portfolio queue. They are not
 active WilliamOS continuation lanes and must not start without a future explicit
 owner decision.
 
-The next WilliamOS-native candidate selected by the portfolio resolver is
-`GOAL-WOE-DETAIL-SURFACES-001 - Work Order Engine Detail Surfaces`. It remains a
-candidate, not an executable or active program, until activated by a follow-on
-operator packet.
+The owner-authorized activation packet selected this WilliamOS-native lane after
+PR #417. Codex completed the bounded Work Orders as read-only/detail-surface
+work and returned the queue to `NO_ACTIVE_PROGRAM`.
 
 ### Closed Goal Preservation Register
 

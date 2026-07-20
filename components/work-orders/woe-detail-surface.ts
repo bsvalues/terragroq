@@ -70,8 +70,16 @@ export type WoeProofGap = {
 }
 
 export type WoeDetailSurface = {
-  title: "Work Order Engine Integration"
+  title: "Work Order Engine Detail Surfaces"
   description: string
+  activation: {
+    programId: "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001"
+    goalId: "GOAL-WOE-DETAIL-SURFACES-001"
+    loopId: "LOOP-WOE-DETAIL-SURFACES-001"
+    authority: "OWNER_ACTIVATED_R0_R1_WILLIAMOS_NATIVE"
+    result: "COMPLETE"
+    workOrders: string[]
+  }
   polish: {
     batch: "WILLIAMOS-WOE-SHELL-POLISH-BATCH-001"
     posture: "read-only/static-first"
@@ -90,7 +98,7 @@ export type WoeDetailSurface = {
   }
   goal: {
     label: string
-    id: "GOAL-WOS-002"
+    id: "GOAL-WOE-DETAIL-SURFACES-001"
     purpose: string
     successState: string
     activeBatches: string[]
@@ -131,7 +139,7 @@ export type WoeDetailSurface = {
     goal: string
     allowedScope: string[]
     blockedScope: string[]
-    result: "planned"
+    result: "complete"
     validation: string[]
     evidence: WoeDetailLink[]
     safetyPosture: WoeSafetyBadge[]
@@ -248,9 +256,21 @@ export function getWoeDetailSurface(): WoeDetailSurface {
   ]
 
   return {
-    title: "Work Order Engine Integration",
+    title: "Work Order Engine Detail Surfaces",
     description:
-      "A read-only operating map for the Primary: current intent, loop boundary, active work, blockers, proof, completion, and next lane.",
+      "A read-only detail map for the Primary: activation, goal boundary, Work Order sequence, blockers, proof, completion, and next lane.",
+    activation: {
+      programId: "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001",
+      goalId: "GOAL-WOE-DETAIL-SURFACES-001",
+      loopId: "LOOP-WOE-DETAIL-SURFACES-001",
+      authority: "OWNER_ACTIVATED_R0_R1_WILLIAMOS_NATIVE",
+      result: "COMPLETE",
+      workOrders: [
+        "WO-WILLIAMOS-WOE-DETAIL-SURFACES-001",
+        "WO-WILLIAMOS-WOE-DETAIL-SURFACES-002",
+        "WO-WILLIAMOS-WOE-DETAIL-SURFACES-003",
+      ],
+    },
     polish: {
       batch: "WILLIAMOS-WOE-SHELL-POLISH-BATCH-001",
       posture: "read-only/static-first",
@@ -412,14 +432,18 @@ export function getWoeDetailSurface(): WoeDetailSurface {
       ],
     },
     goal: {
-      label: "Primary Shell Completion",
-      id: "GOAL-WOS-002",
+      label: "Work Order Engine Detail Surfaces",
+      id: "GOAL-WOE-DETAIL-SURFACES-001",
       purpose:
-        "Make Work Orders the central operating primitive inside WilliamOS without adding execution authority, command runners, background workers, or production-write behavior.",
+        "Make the Work Order Engine detail layer explicit after MAO closure without adding execution authority, command runners, background workers, or production-write behavior.",
       successState:
-        "WilliamOS can show active goals, active loops, ready Work Orders, blocked decisions, completion reports, evidence rollups, safety posture, and next recommended action.",
-      activeBatches: ["WILLIAMOS-WORK-ORDER-ENGINE-INTEGRATION-BATCH-001"],
-      completedWorkOrders: ["WO-WOE-009 through WO-WOE-022"],
+        "WilliamOS shows the activated WOE Detail Surfaces program, the three completed Work Orders, evidence links, safety posture, and blocked non-WilliamOS lanes.",
+      activeBatches: ["WILLIAMOS-WOE-DETAIL-SURFACES-ACTIVATION-BATCH-001"],
+      completedWorkOrders: [
+        "WO-WILLIAMOS-WOE-DETAIL-SURFACES-001",
+        "WO-WILLIAMOS-WOE-DETAIL-SURFACES-002",
+        "WO-WILLIAMOS-WOE-DETAIL-SURFACES-003",
+      ],
       blockedDecisions: [
         "Command runner",
         "Autonomous loop execution",
@@ -427,7 +451,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
         "Production-write behavior",
         "Hermes/MCP/runtime activation",
       ],
-      nextRecommendedWork: "GOAL-WOS-011 WOE evidence clarity makes proof chains easier to inspect without opening execution.",
+      nextRecommendedWork: "Return to the WilliamOS portfolio resolver for the next owner-authorized WilliamOS-native lane.",
     },
     batch: {
       name: "WILLIAMOS-WORK-ORDER-ENGINE-INTEGRATION-BATCH-001",
@@ -471,7 +495,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
         "No auth, DB, env, package, or Vercel setting change",
         "No Hermes, MCP, Brain Council, memory, vector, or ingestion activation",
       ],
-      nextRecommendedBatch: "GOAL-WOS-003 - Brain Council Advisory Layer",
+      nextRecommendedBatch: "WilliamOS portfolio resolver",
     },
     goalRegistry: {
       label: "Goal registry model",
@@ -562,8 +586,8 @@ export function getWoeDetailSurface(): WoeDetailSurface {
       { label: "Wiki", href: "/academy", description: "Static WOE concept definitions and boundary language." },
     ],
     workOrder: {
-      id: "WO-WOE-009..022",
-      title: "Work Order Engine Integration",
+      id: "WO-WILLIAMOS-WOE-DETAIL-SURFACES-001..003",
+      title: "Work Order Engine Detail Surfaces",
       mode: "read-only/static-first",
       goal: "Make WOE state native inside WilliamOS without adding execution authority.",
       allowedScope: [
@@ -585,7 +609,7 @@ export function getWoeDetailSurface(): WoeDetailSurface {
         "Auth, DB, env, package, or Vercel changes",
         "Hermes, MCP, Brain Council, memory, vector, RAG, or ingestion activation",
       ],
-      result: "planned",
+      result: "complete",
       validation: [
         "focused WOE tests",
         "Academy/Wiki registry tests",

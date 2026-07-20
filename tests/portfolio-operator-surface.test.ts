@@ -31,8 +31,8 @@ describe("portfolio operator surface", () => {
     expect(surface.activeReservation).toBeNull()
     expect(surface.evidenceChain.map((entry) => entry.workOrderId)).toEqual([])
     expect(surface.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001")).toMatchObject({
-      state: "DEFERRED",
-      blockedReason: expect.stringContaining("non-executable until a follow-on operator packet"),
+      state: "COMPLETE",
+      blockedReason: expect.stringContaining("completed as a WilliamOS-native"),
     })
     expect(surface.ownerAuthorityWalls.map((wall) => wall.programId)).toEqual(expect.arrayContaining([
       "PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001",
