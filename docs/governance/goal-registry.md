@@ -219,9 +219,11 @@ Evidence: `docs/reports/WO-PORTFOLIO-001-010-portfolio-operator-evidence.md`
 The standing portfolio resolver selected the highest-priority approved,
 dependency-cleared program without returning routine planning to the Primary.
 
-### `NO_ACTIVE_PROGRAM - Awaiting WilliamOS-Native Selection`
+### `NO_ACTIVE_GOAL - Awaiting WilliamOS-Native Selection`
 
-Status: `no active program`
+Status: `no active goal`
+
+Program: `NO_ACTIVE_PROGRAM`
 
 Loop: `NO_ACTIVE_LOOP`
 
