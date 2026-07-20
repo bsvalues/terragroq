@@ -48,7 +48,7 @@ describe("WO-MAO-059 through WO-MAO-062 final certification closure", () => {
     ])
     expect(MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE.portfolioContinuation).toEqual({
       multiAgentProgramState: "CLOSED_CERTIFICATION_REJECTED",
-      nextEligibleProgramId: "PROGRAM-PROPERTY-WORKBENCH-001",
+      nextEligibleProgramId: "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001",
       ownerDecisionRequired: false,
     })
   })
@@ -61,6 +61,29 @@ describe("WO-MAO-059 through WO-MAO-062 final certification closure", () => {
 
     expect(forged.recordContentHash).not.toBe(MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE.recordContentHash)
     expect(isVerifiedWoMao059Through062FinalCertificationEvidence(forged)).toBe(false)
+  })
+
+  it("accepts canonical nested claims regardless of object key insertion order", () => {
+    const reordered = structuredClone(MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE)
+    reordered.ownerCounters = {
+      OWNER_ROUTINE_CONTACT_COUNT: 0,
+      OWNER_ROUTINE_DECISION_COUNT: 0,
+      OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
+      OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+      OWNER_OPERATION_TOUCH_COUNT: 0,
+    }
+    reordered.blockedScope = {
+      destructiveCleanupPerformed: false,
+      runtimeActivated: false,
+      paidOverageUsed: false,
+      rejectedRuntimeRetried: false,
+      pacsCountyProtectedDataTouched: false,
+      secretOrCredentialInspected: false,
+      productionMutationPerformed: false,
+    }
+
+    expect(hashRecord(reordered)).toBe(hashRecord(MULTI_AGENT_FINAL_CERTIFICATION_EVIDENCE))
+    expect(isVerifiedWoMao059Through062FinalCertificationEvidence(reordered)).toBe(true)
   })
 
   it("rejects reordered or prefix-only final Work Order claims", () => {

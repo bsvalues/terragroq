@@ -4,17 +4,17 @@ Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
 
 Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
-Active program: `PROGRAM-PROPERTY-WORKBENCH-001 - Property Workbench`
+Active program: `NO_ACTIVE_PROGRAM`
 
-Goal: `GOAL-PROPERTY-WORKBENCH-001`
+Goal: `NO_ACTIVE_GOAL`
 
-Loop: `LOOP-PROPERTY-WORKBENCH-001`
+Loop: `NO_ACTIVE_LOOP`
 
-Merged selector baseline: `origin/main = 5e474a81` after PR #415
+Merged selector baseline: `origin/main = 4cb89860` after PR #416
 
-Risk ceiling: `R1` for static/read-only Property Workbench foundation; protected data, runtime activation, and production writes remain owner-gated
+Risk ceiling: `NONE` until the next WilliamOS-native program is deliberately activated
 
-Status: multi-agent program closed with rejected unattended certification; rejected local runtime terminal and disabled
+Status: multi-agent program closed with rejected unattended certification; rejected local runtime terminal and disabled; Property Workbench/TerraPilot/county placeholder programs are owner-gated and nonselectable
 
 ## Purpose
 
@@ -147,8 +147,12 @@ pure/static model behavior; it performs no provider dispatch or runtime executio
 `PROGRAM-WILLIAMOS-LOCAL-IDENTITY-RUNTIME-001` is terminal and non-selectable.
 Its rejected nested-Codex adapter cannot be retried or reused. Release
 Engineering, DevEx/Hook Tooling, and Backend OE are completed program evidence.
-The portfolio resolver now selects `PROGRAM-PROPERTY-WORKBENCH-001` as the next
-approved dependency-cleared R0/R1 program.
+Property Workbench, TerraPilot, and county runtime readiness are owner-gated and
+nonselectable from the WilliamOS queue. The portfolio registry now records
+`PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001` as the next WilliamOS-native
+approved dependency-cleared R0/R1 candidate, but the resolver must not execute
+it while this queue remains `NO_ACTIVE_PROGRAM`. It becomes selectable only
+after a follow-on operator packet explicitly activates that lane.
 
 Selection is deterministic: completed, blocked, deferred, superseded,
 dependency-blocked, and owner-gated programs are filtered out; remaining

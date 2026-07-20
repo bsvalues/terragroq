@@ -69,7 +69,8 @@ const backlogSeeds: Array<{
   { programId: "PROGRAM-RELEASE-ENGINEERING-001", title: "Release Engineering", goalId: "GOAL-RELEASE-ENGINEERING-001", businessValue: 9, engineeringValue: 9, riskClass: "R1", stateOverride: "COMPLETE" },
   { programId: "PROGRAM-DEVEX-HOOK-TOOLING-001", title: "DevEx / Hook Tooling", goalId: "GOAL-DEVEX-HOOK-TOOLING-001", businessValue: 7, engineeringValue: 9, riskClass: "R1", stateOverride: "COMPLETE" },
   { programId: "PROGRAM-BACKEND-OE-001", title: "Backend Operational Excellence", goalId: "GOAL-BACKEND-OE-001", businessValue: 8, engineeringValue: 8, riskClass: "R1", stateOverride: "COMPLETE" },
-  { programId: "PROGRAM-PROPERTY-WORKBENCH-001", title: "Property Workbench", goalId: "GOAL-PROPERTY-WORKBENCH-001", businessValue: 9, engineeringValue: 7, riskClass: "R1" },
+  { programId: "PROGRAM-PROPERTY-WORKBENCH-001", title: "Property Workbench", goalId: "GOAL-PROPERTY-WORKBENCH-001", businessValue: 9, engineeringValue: 7, riskClass: "R1", authorityMode: "OWNER_GATED", stateOverride: "BLOCKED" },
+  { programId: "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001", title: "Work Order Engine Detail Surfaces", goalId: "GOAL-WOE-DETAIL-SURFACES-001", businessValue: 8, engineeringValue: 9, riskClass: "R1", stateOverride: "DEFERRED" },
   { programId: "PROGRAM-TERRAPILOT-LIVE-001", title: "TerraPilot Live Integration", goalId: "GOAL-TERRAPILOT-LIVE-001", businessValue: 9, engineeringValue: 8, riskClass: "R2", authorityMode: "OWNER_GATED", dependencies: ["PROGRAM-BACKEND-OE-001"] },
   { programId: "PROGRAM-AI-BRAIN-OPS-001", title: "AI / Brain Operationalization", goalId: "GOAL-AI-BRAIN-OPS-001", businessValue: 8, engineeringValue: 8, riskClass: "R2", authorityMode: "OWNER_GATED" },
   { programId: "PROGRAM-COUNTY-RUNTIME-READINESS-001", title: "County Runtime Readiness", goalId: "GOAL-COUNTY-RUNTIME-READINESS-001", businessValue: 10, engineeringValue: 7, riskClass: "R3", authorityMode: "OWNER_GATED", dependencies: ["PROGRAM-PROPERTY-WORKBENCH-001"] },
@@ -103,6 +104,10 @@ export const PORTFOLIO_BACKLOG: PortfolioProgramRecord[] = backlogSeeds.map((see
     ? "Terminal and nonselectable: issue #357 failed at CODEX_NETWORK_WALL and must not be retried; issue #358 remains dependency-blocked; activation remains disabled."
     : seed.programId === "PROGRAM-WILLIAMOS-RUNTIME-OPERATOR-001"
       ? "Superseded by the local-identity runtime program; raw credential files and identity-bearing Docker hosting are prohibited."
+      : seed.programId === "PROGRAM-PROPERTY-WORKBENCH-001"
+        ? "Owner-gated and nonselectable: property/TerraFusion/county placeholder work must not start from the WilliamOS portfolio queue."
+      : seed.programId === "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001"
+        ? "WilliamOS-native next candidate only; non-executable until a follow-on operator packet activates a new program."
       : seed.authorityMode === "OWNER_GATED" ? "Protected authority is required before activation." : undefined,
 }))
 
