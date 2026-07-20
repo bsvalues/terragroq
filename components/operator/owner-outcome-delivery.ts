@@ -12,10 +12,17 @@ export type OwnerOutcomeSource = {
   authority: string
   verdict: string
   requiresApproval: boolean
+  matchedRules?: string[]
   status: string
 }
 
-export type OwnerOutcomeDeliveryState = "AWAITING_OUTCOME" | "ACTIVE" | "OWNER_DECISION_REQUIRED" | "REFUSED"
+export type OwnerOutcomeDeliveryState =
+  | "AWAITING_OUTCOME"
+  | "ACTIVE"
+  | "OWNER_DECISION_REQUIRED"
+  | "REFUSED"
+  | "DISMISSED"
+  | "HANDED_OFF"
 
 const STANDING_LANES = new Set(["docs", "ui", "read_model"])
 const BLOCKED_SCOPE = [
@@ -62,20 +69,37 @@ export function buildOwnerOutcomeDelivery(source: OwnerOutcomeSource | null) {
     }
   }
 
-  const blockedReasons = BLOCKED_SCOPE
+  const scopeBlockedReasons = BLOCKED_SCOPE
     .filter((boundary) => boundary.pattern.test(source.command))
     .map((boundary) => boundary.code)
   const refused = source.verdict === "refuse"
+  const dismissed = source.status === "dismissed"
+  const handedOff = source.status === "converted"
+  const doctrineApprovalRequired = source.verdict === "requires_approval"
+    && (source.matchedRules?.length ?? 0) > 0
+  const blockedReasons = doctrineApprovalRequired
+    ? [...scopeBlockedReasons, "DOCTRINE_APPROVAL_REQUIRED"]
+    : scopeBlockedReasons
+  const standingVerdict = source.verdict === "allow"
+    || (source.verdict === "requires_approval" && !doctrineApprovalRequired)
   const standingEligible = !refused
+    && !dismissed
+    && !handedOff
+    && !doctrineApprovalRequired
+    && standingVerdict
     && blockedReasons.length === 0
     && STANDING_LANES.has(source.lane)
     && source.risk === "low"
     && ["A0_READ_ONLY", "A1_DRAFT", "A2_WRITE_OWN"].includes(source.authority)
   const state: OwnerOutcomeDeliveryState = refused
     ? "REFUSED"
-    : standingEligible
-      ? "ACTIVE"
-      : "OWNER_DECISION_REQUIRED"
+    : dismissed
+      ? "DISMISSED"
+      : handedOff
+        ? "HANDED_OFF"
+        : standingEligible
+          ? "ACTIVE"
+          : "OWNER_DECISION_REQUIRED"
   const ref = deliveryRef(source)
   const workOrders = state === "ACTIVE"
     ? WORK_ORDER_TITLES.map((title, index) => ({
@@ -92,9 +116,13 @@ export function buildOwnerOutcomeDelivery(source: OwnerOutcomeSource | null) {
     state,
     authorityDecision: refused
       ? "DOCTRINE_REFUSED" as const
-      : standingEligible
-        ? "STANDING_R0_R1" as const
-        : "NEW_OWNER_AUTHORITY_REQUIRED" as const,
+      : dismissed
+        ? "OUTCOME_DISMISSED" as const
+        : handedOff
+          ? "DRAFT_ALREADY_HANDED_OFF" as const
+          : standingEligible
+            ? "STANDING_R0_R1" as const
+            : "NEW_OWNER_AUTHORITY_REQUIRED" as const,
     source: {
       ref: source.ref,
       outcome: source.command,
@@ -119,12 +147,12 @@ export function buildOwnerOutcomeDelivery(source: OwnerOutcomeSource | null) {
 
 export const OWNER_OUTCOME_PROGRAM_WORK_ORDERS = [
   ["WO-OWNER-OUTCOME-001", "Program Activation and Authority Record", "COMPLETE", "docs/governance/owner-outcome-delivery-program.md"],
-  ["WO-OWNER-OUTCOME-002", "Owner Outcome Contract", "COMPLETE", "docs/reports/WO-OWNER-OUTCOME-002-owner-outcome-intake-contract.md"],
+  ["WO-OWNER-OUTCOME-002", "Owner Outcome Contract", "COMPLETE", "docs/governance/owner-outcome-delivery-program.md"],
   ["WO-OWNER-OUTCOME-003", "Primary Outcome Intake Integration", "COMPLETE", "components/goal-console/goal-console-view.tsx"],
   ["WO-OWNER-OUTCOME-004", "Generated Program, Goal, Loop, and Work Order Model", "COMPLETE", "components/operator/owner-outcome-delivery.ts"],
   ["WO-OWNER-OUTCOME-005", "Rolling Queue and No-Dead-End Invariant", "COMPLETE", "tests/portfolio-operator.test.ts"],
   ["WO-OWNER-OUTCOME-006", "Durable Session Handoff Evidence", "COMPLETE", "components/goal-console/owner-outcome-delivery-panel.tsx"],
-  ["WO-OWNER-OUTCOME-007", "Real WilliamOS Feature Delivery Proof", "COMPLETE", "tests/owner-outcome-delivery.test.ts"],
-  ["WO-OWNER-OUTCOME-008", "Safety, Validation, and Program Rollup", "COMPLETE", "docs/reports/WO-OWNER-OUTCOME-001-owner-outcome-delivery-rollup.md"],
-  ["WO-OWNER-OUTCOME-009", "Rolling Owner Outcome Intake", "READY", "docs/reports/WO-OWNER-OUTCOME-009.md"],
-] as const satisfies ReadonlyArray<readonly [string, string, "COMPLETE" | "READY", string]>
+  ["WO-OWNER-OUTCOME-007", "Real WilliamOS Feature Delivery Proof", "READY", "tests/owner-outcome-delivery.test.ts"],
+  ["WO-OWNER-OUTCOME-008", "Safety, Validation, and Program Rollup", "PENDING", "docs/reports/WO-OWNER-OUTCOME-001-owner-outcome-delivery-rollup.md"],
+  ["WO-OWNER-OUTCOME-009", "Rolling Owner Outcome Intake", "PENDING", "docs/reports/WO-OWNER-OUTCOME-009.md"],
+] as const satisfies ReadonlyArray<readonly [string, string, "COMPLETE" | "READY" | "PENDING", string]>

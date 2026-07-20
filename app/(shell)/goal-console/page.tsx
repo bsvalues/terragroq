@@ -18,7 +18,7 @@ export default async function GoalConsolePage() {
         description="State the outcome. WilliamOS classifies it, checks authority, and prepares a bounded delivery chain for the operating Codex session."
       />
       <div className="flex flex-col gap-4 px-6 pb-2">
-        <PortfolioOperatorPanel />
+        <PortfolioOperatorPanel outcomes={goals} />
         <CodexOperatorPanel />
         <ProductionOperatingModePanel />
         <WorkTrainingCapturePanel />

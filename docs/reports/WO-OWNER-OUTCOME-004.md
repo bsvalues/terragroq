@@ -1,6 +1,6 @@
 # WO-OWNER-OUTCOME-004 — No-Idle Resolver Invariant
 
-Status: `PENDING_AFTER_WO_OWNER_OUTCOME_003`
+Status: `SUPERSEDED ACTIVATION DRAFT / INVARIANT INCORPORATED`
 
 Canonical detailed evidence:
 `docs/reports/WO-OWNER-OUTCOME-004-no-idle-resolver-invariant.md`

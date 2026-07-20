@@ -1,6 +1,6 @@
 # WilliamOS Loop Registry
 
-Work order: `WO-OWNER-OUTCOME-001 through WO-OWNER-OUTCOME-006`
+Work order: `WO-OWNER-OUTCOME-001 through WO-OWNER-OUTCOME-009`
 Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 (active)`
 Type: Governance / Registry / Continuation
 Risk: `R1`
@@ -128,22 +128,25 @@ outcome remains incomplete and useful bounded WilliamOS-native work remains.
 
 ### `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
-Status: `ACTIVE / ORDERED_QUEUE / R1`
+Status: `ACTIVE / DELIVERY CANDIDATE / WO-OWNER-OUTCOME-007 READY`
 
 Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
 Program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
-Active Work Order: `WO-OWNER-OUTCOME-001 - Current Continuation Dead-End Reconciliation`
+Active Work Order: `WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof`
 
 Ordered queue:
 
-1. `WO-OWNER-OUTCOME-001 - Current Continuation Dead-End Reconciliation`
-2. `WO-OWNER-OUTCOME-002 - Owner Outcome Intake Contract`
-3. `WO-OWNER-OUTCOME-003 - Rolling WilliamOS-Native Backlog`
-4. `WO-OWNER-OUTCOME-004 - No-Idle Resolver Invariant`
-5. `WO-OWNER-OUTCOME-005 - Useful WilliamOS Feature Delivery Proof`
-6. `WO-OWNER-OUTCOME-006 - Safety and Continuation Rollup`
+1. `WO-OWNER-OUTCOME-001 - Program Activation and Authority Record` (`COMPLETE`)
+2. `WO-OWNER-OUTCOME-002 - Owner Outcome Contract` (`COMPLETE`)
+3. `WO-OWNER-OUTCOME-003 - Primary Outcome Intake Integration` (`COMPLETE`)
+4. `WO-OWNER-OUTCOME-004 - Generated Program, Goal, Loop, and Work Order Model` (`COMPLETE`)
+5. `WO-OWNER-OUTCOME-005 - Rolling Queue and No-Dead-End Invariant` (`COMPLETE`)
+6. `WO-OWNER-OUTCOME-006 - Durable Session Handoff Evidence` (`COMPLETE`)
+7. `WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` (`READY`)
+8. `WO-OWNER-OUTCOME-008 - Safety, Validation, and Program Rollup` (`PENDING`)
+9. `WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake` (`PENDING`)
 
 Continuation rule:
 
@@ -177,41 +180,6 @@ Stop only for:
 - terminal evidence-backed safety rejection;
 - verified completion of the actual owner outcome with no useful bounded
   successor remaining.
-
-### `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
-
-Status: `ACTIVE / STANDING / SELECTED`
-
-Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
-
-Program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
-
-Risk ceiling: `R1`
-
-Selection: use the existing persisted `/goal` records as owner-outcome intake,
-then activate only approved, dependency-cleared, reversible WilliamOS-native
-R0/R1 Work Orders covered by the standing authority. Goal persistence records
-intent and classification; it does not grant execution authority.
-
-Current transition: `WO-OWNER-OUTCOME-001` through
-`WO-OWNER-OUTCOME-008` are complete with the feature delivery.
-`WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake` is `READY`.
-
-Continuation: hosted Codex sessions own routine implementation, validation,
-branch and PR lifecycle, review remediation, eligible merge, verification, and
-evidence. The loop does not run as a durable WilliamOS runtime or background
-worker, and it adds no database or schema.
-
-Allowed: standing R0/R1 WilliamOS-native owner outcomes inside exact recorded
-authority and bounded repository reservations.
-
-Blocked: Property Workbench, TerraPilot, county work, PACS, production actions,
-secrets, paid overages, runtime activation, and issue #357 retry, reactivation,
-wrapping, renaming, or reuse.
-
-Hard invariant: do not transition to `NO_ACTIVE_PROGRAM` or `NO_ACTIVE_LOOP`
-while an approved owner outcome has unfinished useful work. Continue selection
-and delivery until completion or a typed authority wall.
 
 ### `NO_ACTIVE_LOOP`
 

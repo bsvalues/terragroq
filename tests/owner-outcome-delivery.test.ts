@@ -15,9 +15,10 @@ const eligibleSource: OwnerOutcomeSource = {
   mode: "delivery",
   risk: "low",
   authority: "A2_WRITE_OWN",
-  verdict: "accept",
+  verdict: "requires_approval",
   requiresApproval: false,
-  status: "approved",
+  matchedRules: [],
+  status: "classified",
 }
 
 describe("owner outcome delivery", () => {
@@ -98,6 +99,34 @@ describe("owner outcome delivery", () => {
       state: "REFUSED",
       authorityDecision: "DOCTRINE_REFUSED",
       ownerDecisionRequired: false,
+      workOrders: [],
+      handoff: null,
+    })
+  })
+
+  it("does not use standing authority to bypass a live doctrine approval gate", () => {
+    const delivery = buildOwnerOutcomeDelivery({
+      ...eligibleSource,
+      matchedRules: ["RULE-PROTECTED-001"],
+      requiresApproval: true,
+    })
+
+    expect(delivery).toMatchObject({
+      state: "OWNER_DECISION_REQUIRED",
+      authorityDecision: "NEW_OWNER_AUTHORITY_REQUIRED",
+      ownerDecisionRequired: true,
+      workOrders: [],
+      handoff: null,
+    })
+  })
+
+  it.each([
+    ["dismissed", "DISMISSED", "OUTCOME_DISMISSED"],
+    ["converted", "HANDED_OFF", "DRAFT_ALREADY_HANDED_OFF"],
+  ])("does not regenerate work for a %s outcome", (status, state, authorityDecision) => {
+    expect(buildOwnerOutcomeDelivery({ ...eligibleSource, status })).toMatchObject({
+      state,
+      authorityDecision,
       workOrders: [],
       handoff: null,
     })

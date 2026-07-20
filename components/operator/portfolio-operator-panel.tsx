@@ -1,10 +1,11 @@
 import { ArrowRight, CheckCircle2, FileCheck2, GitBranch, LockKeyhole, Route, ShieldAlert } from "lucide-react"
 
 import { getPortfolioOperatorSurface } from "@/components/operator/portfolio-operator-surface"
+import type { OwnerOutcomeSource } from "@/components/operator/owner-outcome-delivery"
 import { Badge } from "@/components/ui/badge"
 
-export function PortfolioOperatorPanel() {
-  const surface = getPortfolioOperatorSurface()
+export function PortfolioOperatorPanel({ outcomes = [] }: { outcomes?: OwnerOutcomeSource[] }) {
+  const surface = getPortfolioOperatorSurface(undefined, outcomes)
 
   return (
     <section className="overflow-hidden rounded-lg border border-border bg-card">

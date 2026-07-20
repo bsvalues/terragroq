@@ -3,7 +3,12 @@ import {
   type PortfolioProgramRecord,
 } from "@/components/operator/portfolio-operator-registry"
 import { MULTI_AGENT_OPERATOR_WORK_ORDERS } from "@/components/operator/multi-agent-operator-registry"
-import { OWNER_OUTCOME_PROGRAM_WORK_ORDERS } from "@/components/operator/owner-outcome-delivery"
+import {
+  buildOwnerOutcomeDelivery,
+  OWNER_OUTCOME_PROGRAM_ID,
+  OWNER_OUTCOME_PROGRAM_WORK_ORDERS,
+  type OwnerOutcomeSource,
+} from "@/components/operator/owner-outcome-delivery"
 
 export const OWNER_OUTCOME_DELIVERY_COMPLETED_COUNT = OWNER_OUTCOME_PROGRAM_WORK_ORDERS
   .filter(([, , status]) => status === "COMPLETE").length
@@ -25,18 +30,35 @@ export function deriveOrderedWorkOrderStatuses(totalWorkOrders: number, complete
   )
 }
 
-export function resolveNextPortfolioProgram(programs: PortfolioProgramRecord[]) {
+export function hasApprovedOwnerOutcome(outcomes: OwnerOutcomeSource[]) {
+  return outcomes.some((outcome) => buildOwnerOutcomeDelivery(outcome).state === "ACTIVE")
+}
+
+export function resolveNextPortfolioProgram(
+  programs: PortfolioProgramRecord[],
+  ownerOutcomes: OwnerOutcomeSource[] = [],
+  ownerOutcomeCompletedCount?: number,
+) {
   const complete = new Set(programs.filter((program) => program.state === "COMPLETE").map((program) => program.programId))
   const candidates = programs
     .filter((program) => ["SELECTED", "READY"].includes(program.state))
     .filter((program) => program.authorityMode === "CODEX_ELIGIBLE")
     .filter((program) => program.dependencies.every((dependency) => complete.has(dependency)))
     .filter((program) => {
-      const loop = buildLoopPacket(program)
+      const loop = buildLoopPacket(program, ownerOutcomeCompletedCount)
+      if (
+        program.programId === OWNER_OUTCOME_PROGRAM_ID
+        && loop.activeWorkOrder === "WO-OWNER-OUTCOME-009"
+        && !hasApprovedOwnerOutcome(ownerOutcomes)
+      ) return false
       return loop.eligibleWorkOrders.length > 0
         || (program.state === "SELECTED" && loop.remediationTransition !== null)
     })
-    .sort((left, right) => right.priorityScore - left.priorityScore || left.programId.localeCompare(right.programId))
+    .sort((left, right) =>
+      Number(right.state === "SELECTED") - Number(left.state === "SELECTED")
+      || right.priorityScore - left.priorityScore
+      || left.programId.localeCompare(right.programId),
+    )
   const selected = candidates[0]
 
   if (!selected) {
@@ -51,7 +73,7 @@ export function resolveNextPortfolioProgram(programs: PortfolioProgramRecord[]) 
 
   return {
     decision: "SELECT_PROGRAM" as const,
-    reasonCode: selected.state === "SELECTED" && buildLoopPacket(selected).remediationTransition !== null
+    reasonCode: selected.state === "SELECTED" && buildLoopPacket(selected, ownerOutcomeCompletedCount).remediationTransition !== null
       ? "SELECTED_PROGRAM_REMEDIATION_REQUIRED" as const
       : "HIGHEST_PRIORITY_EXECUTABLE_PROGRAM" as const,
     programId: selected.programId,

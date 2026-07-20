@@ -94,6 +94,7 @@ export function GoalConsoleView({
         setLoopGoalId(null)
         setCommand("")
         toast.success(`${g.ref} classified: ${g.lane}/${g.mode}`)
+        router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Classification failed")
       }

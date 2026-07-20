@@ -1,6 +1,6 @@
 # WilliamOS Goal Registry
 
-Work order: `WO-OWNER-OUTCOME-001 through WO-OWNER-OUTCOME-006`
+Work order: `WO-OWNER-OUTCOME-001 through WO-OWNER-OUTCOME-009`
 Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 (active; R1 WilliamOS-native continuation)`
 Type: Governance / Registry / Owner Outcome Delivery
 Risk: `R1`
@@ -197,7 +197,7 @@ dependency-cleared program without returning routine planning to the Primary.
 
 ### `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 - Owner Outcome Delivery`
 
-Status: `ACTIVE / STANDING / WO-OWNER-OUTCOME-009 READY`
+Status: `ACTIVE / DELIVERY CANDIDATE / WO-OWNER-OUTCOME-007 READY`
 
 Program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
@@ -213,10 +213,10 @@ persistence path, convert only authority-matched outcomes into bounded Work
 Orders, and deliver useful repository outcomes without making William the Git,
 GitHub, test, diagnostic, or status operator.
 
-Work Orders `WO-OWNER-OUTCOME-001` through `WO-OWNER-OUTCOME-008` are complete
-with the feature delivery. `WO-OWNER-OUTCOME-009 - Rolling Owner Outcome
-Intake` is `READY` and keeps the standing goal active for the next approved,
-dependency-cleared outcome.
+Work Orders `WO-OWNER-OUTCOME-001` through `WO-OWNER-OUTCOME-006` are complete.
+`WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` is `READY`;
+WOs 008 and 009 remain pending until review, merge, and merged-main verification
+make their claims true.
 
 Existing `/goal` persistence is reused. A persisted goal is governed intent,
 not execution authority, and the existing Work Order and authority gates still

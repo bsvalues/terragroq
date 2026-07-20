@@ -14,6 +14,7 @@ describe("active program queue header", () => {
     expect(queue).toContain("Loop: `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`")
     expect(queue).toContain("Risk ceiling: `R1`")
     expect(queue).toContain("WO-OWNER-OUTCOME-009")
+    expect(queue).toContain("WO-OWNER-OUTCOME-007` is `READY")
     expect(goalRegistry).toContain("GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")
     expect(goalRegistry).toContain("PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")
     expect(goalRegistry).toContain("LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")

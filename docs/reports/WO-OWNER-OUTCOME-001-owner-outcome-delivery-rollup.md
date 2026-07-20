@@ -1,6 +1,6 @@
 # WO-OWNER-OUTCOME-001 - Owner Outcome Delivery Rollup
 
-Result: `COMPLETE / STANDING_CONTINUATION_READY`
+Result: `VALIDATED / MERGED_MAIN_PROOF_PENDING`
 
 Program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
@@ -10,7 +10,7 @@ Loop: `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
 Program state: `SELECTED / STANDING`
 
-Next Work Order: `WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake` (`READY`)
+Next Work Order: `WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` (`READY`)
 
 ## Authorization Evidence
 
@@ -18,7 +18,7 @@ The owner authorized the program, goal, and loop as the standing WilliamOS-nativ
 delivery lane for reversible R0/R1 owner outcomes. Routine delivery and GitHub
 lifecycle work remain agent-owned inside exact Work Orders and recorded scope.
 
-## Completed Delivery
+## Validated Delivery Candidate
 
 1. `WO-OWNER-OUTCOME-001 - Program Activation and Authority Record`
 2. `WO-OWNER-OUTCOME-002 - Owner Outcome Contract`
@@ -26,13 +26,12 @@ lifecycle work remain agent-owned inside exact Work Orders and recorded scope.
 4. `WO-OWNER-OUTCOME-004 - Generated Program, Goal, Loop, and Work Order Model`
 5. `WO-OWNER-OUTCOME-005 - Rolling Queue and No-Dead-End Invariant`
 6. `WO-OWNER-OUTCOME-006 - Durable Session Handoff Evidence`
-7. `WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof`
-8. `WO-OWNER-OUTCOME-008 - Safety, Validation, and Program Rollup`
+7. `WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` (`READY`)
+8. `WO-OWNER-OUTCOME-008 - Safety, Validation, and Program Rollup` (`PENDING`)
 
-Work Orders 001-008 are complete with the feature delivery. Work Order 009 is
-intentionally ready so future approved R0/R1 WilliamOS-native owner outcomes can
-enter the same governed loop without manufacturing a new persistence system or
-returning the queue to an inactive sentinel.
+Work Orders 001-006 are complete inside the reviewed candidate. Work Order 007
+cannot complete until this feature is merged and verified on main. WO-008 and
+the WO-009 rolling intake release remain pending until that evidence exists.
 
 ## Persistence and Execution Truth
 
@@ -65,8 +64,9 @@ paid overages, runtime activation, and issue #357 retry or reuse remain blocked.
 
 ```text
 OWNER_OUTCOME_PROGRAM_SELECTED: true
-WORK_ORDERS_001_THROUGH_008_COMPLETE: true
-WO_OWNER_OUTCOME_009_READY: true
+WORK_ORDERS_001_THROUGH_006_COMPLETE: true
+WO_OWNER_OUTCOME_007_READY: true
+WO_OWNER_OUTCOME_009_READY: false
 EXISTING_GOAL_PERSISTENCE_REUSED: true
 NEW_DATABASE_ADDED: false
 SCHEMA_CHANGED: false
@@ -85,6 +85,6 @@ ISSUE_357_RETRIED_OR_REUSED: false
 
 ## Continuation
 
-`WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake` remains `READY` under the
-standing program. Hosted Codex sessions continue only with approved,
-authority-matched R0/R1 outcomes and stop at any typed protected-scope wall.
+After merged-main proof, a follow-up evidence PR may complete WO-007/008 and
+release `WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake`. Until then the
+program remains selected on WO-007 and makes no durable-runtime claim.

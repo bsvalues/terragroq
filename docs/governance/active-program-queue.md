@@ -14,7 +14,7 @@ Recorded selector baseline: `origin/main = 95cc12c2`
 
 Risk ceiling: `R1` for WilliamOS-native, reversible owner outcomes
 
-Status: `SELECTED / STANDING`; owner-authorized outcome delivery is active, Work Orders 001-008 are complete with the feature delivery, and `WO-OWNER-OUTCOME-009` remains `READY` for rolling intake
+Status: `SELECTED / DELIVERY CANDIDATE`; Work Orders 001-006 are complete, `WO-OWNER-OUTCOME-007` is `READY`, and merged-main proof is still required before the rolling intake can be released
 
 ## Purpose
 
@@ -146,10 +146,10 @@ WilliamOS-native program. Its goal is
 `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`; its loop is
 `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`.
 
-Work Orders `WO-OWNER-OUTCOME-001` through `WO-OWNER-OUTCOME-008` are complete
-with the bounded feature delivery. `WO-OWNER-OUTCOME-009 - Rolling Owner
-Outcome Intake` remains `READY`, so the selected program stays active and can
-activate approved, dependency-cleared R0/R1 WilliamOS-native owner outcomes.
+Work Orders `WO-OWNER-OUTCOME-001` through `WO-OWNER-OUTCOME-006` are complete.
+`WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` is `READY` and
+must not complete until the feature is reviewed, merged, and verified on main.
+`WO-OWNER-OUTCOME-008` and `WO-OWNER-OUTCOME-009` remain pending until that proof exists.
 
 Existing `/goal` persistence is the intake system of record. Persisting or
 classifying an owner outcome does not authorize execution by itself; activation
@@ -173,10 +173,9 @@ PRs #418, #419, and #420 are merged. The completed lane remains closed evidence
 and is not reopened by the active continuation program.
 
 The standing program's ordered Work Orders are defined in
-`docs/governance/owner-outcome-delivery-program.md`. WOs 001-008 delivered the
-intake, generation, queue, handoff, product surface, and safety proof. WO-009 is
-the rolling intake sentinel for the next approved outcome; it is not a claim of
-background execution.
+`docs/governance/owner-outcome-delivery-program.md`. The intake, generation,
+queue, handoff, and product surface are implemented; merged-main verification
+and the rolling-intake release remain explicit downstream gates.
 
 The controlling invariant is:
 

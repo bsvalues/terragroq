@@ -65,13 +65,14 @@ and ineligible for reuse.
 4. `WO-OWNER-OUTCOME-004 - Generated Program, Goal, Loop, and Work Order Model` (`COMPLETE`)
 5. `WO-OWNER-OUTCOME-005 - Rolling Queue and No-Dead-End Invariant` (`COMPLETE`)
 6. `WO-OWNER-OUTCOME-006 - Durable Session Handoff Evidence` (`COMPLETE`)
-7. `WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` (`COMPLETE`)
-8. `WO-OWNER-OUTCOME-008 - Safety, Validation, and Program Rollup` (`COMPLETE`)
-9. `WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake` (`READY`)
+7. `WO-OWNER-OUTCOME-007 - Real WilliamOS Feature Delivery Proof` (`READY`)
+8. `WO-OWNER-OUTCOME-008 - Safety, Validation, and Program Rollup` (`PENDING`)
+9. `WO-OWNER-OUTCOME-009 - Rolling Owner Outcome Intake` (`PENDING`)
 
-Work Orders 001-008 complete the initial feature delivery. Work Order 009 stays
-ready as the standing intake and continuation node; it does not imply a local
-worker is continuously running.
+Work Orders 001-006 establish the bounded implementation candidate. Work Order
+007 remains ready until review, merge, and merged-main verification prove the
+real feature. Only then may a follow-up evidence PR complete WO-008 and release
+WO-009 as the standing intake node.
 
 ## Activation Rules
 

@@ -26,15 +26,15 @@ describe("portfolio operator surface", () => {
       riskClass: "R1",
     })
     expect(surface.activeWorkOrder).toMatchObject({
-      workOrderId: "WO-OWNER-OUTCOME-009",
+      workOrderId: "WO-OWNER-OUTCOME-007",
       status: "READY",
-      title: "Rolling Owner Outcome Intake",
+      title: "Real WilliamOS Feature Delivery Proof",
     })
     expect(surface.statusCounts).toEqual({
       total: 9,
-      complete: 8,
+      complete: 6,
       ready: 1,
-      pending: 0,
+      pending: 2,
       blocked: 0,
       deferred: 0,
     })
@@ -44,17 +44,17 @@ describe("portfolio operator surface", () => {
       dependencies: [],
     })
     expect(surface.activeReservation).toMatchObject({
-      evidencePath: "docs/reports/WO-OWNER-OUTCOME-009.md",
+      evidencePath: "tests/owner-outcome-delivery.test.ts",
       ownerOperationsAllowed: false,
     })
-    expect(surface.readyWorkOrders).toEqual(["WO-OWNER-OUTCOME-009"])
+    expect(surface.readyWorkOrders).toEqual(["WO-OWNER-OUTCOME-007"])
     expect(surface.evidenceChain.map((entry) => entry.workOrderId)).toEqual([
+      "WO-OWNER-OUTCOME-001",
+      "WO-OWNER-OUTCOME-002",
       "WO-OWNER-OUTCOME-003",
       "WO-OWNER-OUTCOME-004",
       "WO-OWNER-OUTCOME-005",
       "WO-OWNER-OUTCOME-006",
-      "WO-OWNER-OUTCOME-007",
-      "WO-OWNER-OUTCOME-008",
     ])
     expect(surface.backlog.find((program) => program.programId === "PROGRAM-WILLIAMOS-WOE-DETAIL-SURFACES-001")).toMatchObject({
       state: "COMPLETE",

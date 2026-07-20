@@ -11,6 +11,8 @@ export function OwnerOutcomeDeliveryPanel({ source }: { source: OwnerOutcomeSour
     ACTIVE: "standing authority matched",
     OWNER_DECISION_REQUIRED: "owner authority required",
     REFUSED: "outside doctrine",
+    DISMISSED: "dismissed",
+    HANDED_OFF: "draft handed off",
   }[delivery.state]
 
   return (
@@ -83,6 +85,10 @@ export function OwnerOutcomeDeliveryPanel({ source }: { source: OwnerOutcomeSour
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             {delivery.state === "REFUSED"
               ? "Doctrine refused the request as stated. Use the safe alternative on the goal record."
+              : delivery.state === "DISMISSED"
+                ? "This outcome is dismissed and cannot produce a new delivery chain."
+                : delivery.state === "HANDED_OFF"
+                  ? "This outcome already produced its draft Work Order. Continue from the recorded handoff."
               : `A new owner decision is required before this scope can proceed${delivery.blockedReasons.length ? `: ${delivery.blockedReasons.join(", ")}` : "."}`}
           </p>
         </div>

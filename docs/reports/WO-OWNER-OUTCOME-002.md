@@ -1,6 +1,6 @@
 # WO-OWNER-OUTCOME-002 — Owner Outcome Intake Contract
 
-Status: `PENDING_AFTER_WO_OWNER_OUTCOME_001`
+Status: `SUPERSEDED ACTIVATION DRAFT / CONTRACT INCORPORATED`
 
 Canonical detailed evidence:
 `docs/reports/WO-OWNER-OUTCOME-002-owner-outcome-intake-contract.md`
