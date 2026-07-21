@@ -34,7 +34,8 @@ describe("Hermes interactive-user supervisor", () => {
 
   it.skipIf(process.platform !== "win32")("returns from a direct one-shot Node cycle without a nested shell", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-direct-cycle-"))
-    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-direct-runtime-"))
+    const launchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-direct-launch-"))
+    const runtimeRoot = path.join(launchRoot, "runtime")
     const activationPath = path.join(runtimeRoot, "control", "activation")
     const cliDirectory = path.join(workspace, "scripts", "hermes-bridge")
     fs.mkdirSync(path.dirname(activationPath), { recursive: true })
@@ -47,10 +48,11 @@ describe("Hermes interactive-user supervisor", () => {
     const command = [
       `& ${quote(supervisorScript)}`,
       `-Workspace ${quote(workspace)}`,
-      `-RuntimeRoot ${quote(runtimeRoot)}`,
+      `-RuntimeRoot ${quote("runtime")}`,
       "-RunOnce",
     ].join(" ")
     const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
+      cwd: launchRoot,
       encoding: "utf8",
       timeout: 15_000,
     })
@@ -78,7 +80,9 @@ describe("Hermes interactive-user supervisor", () => {
   it("passes the selected runtime root through the resident cycle path", () => {
     const supervisor = fs.readFileSync(supervisorScript, "utf8")
     expect(supervisor).toContain("$env:WILLIAMOS_HERMES_RUNTIME_ROOT = $OwnedRuntimeRoot")
+    expect(supervisor).toContain("$runtimeRootPath = [IO.Path]::GetFullPath($RuntimeRoot)")
     expect(supervisor).toContain("$OwnedCliPath cycle")
+    expect(supervisor.indexOf('$cycleLogPath = Join-Path $logDir')).toBeGreaterThan(supervisor.indexOf("$CycleAction ="))
     expect(supervisor).not.toContain("& pwsh.exe")
     expect(supervisor).toContain("Global\\WilliamOSHermesCodexBridgeSupervisor")
     expect(supervisor).toContain("HERMES_SUPERVISOR_CYCLE_FAILED")

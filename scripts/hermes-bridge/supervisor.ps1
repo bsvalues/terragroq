@@ -9,15 +9,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 $workspacePath = [IO.Path]::GetFullPath($Workspace)
+$runtimeRootPath = [IO.Path]::GetFullPath($RuntimeRoot)
 $supervisorPath = [IO.Path]::GetFullPath($MyInvocation.MyCommand.Path)
-$activationPath = Join-Path $RuntimeRoot "control\activation"
-$stateDir = Join-Path $RuntimeRoot "state"
+$activationPath = Join-Path $runtimeRootPath "control\activation"
+$stateDir = Join-Path $runtimeRootPath "state"
 $supervisorStatePath = Join-Path $stateDir "supervisor.json"
-$logDir = Join-Path $RuntimeRoot "logs"
+$logDir = Join-Path $runtimeRootPath "logs"
 $supervisorLogPath = Join-Path $logDir ("supervisor-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 $cliPath = Join-Path $workspacePath "scripts\hermes-bridge\cli.mjs"
 $envPath = Join-Path $workspacePath ".env.local"
-$cycleLogPath = Join-Path $logDir ("cycle-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 $mutexName = "Global\WilliamOSHermesCodexBridgeSupervisor"
 $createdNew = $false
 $mutex = [Threading.Mutex]::new($true, $mutexName, [ref]$createdNew)
@@ -35,6 +35,7 @@ $CycleAction = if ($null -ne $CycleAction) { $CycleAction } else {
         $ownedCycleExitCode = 1
         Push-Location $OwnedWorkspace
         try {
+            $cycleLogPath = Join-Path $logDir ("cycle-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
             & node "--env-file=$envPath" $OwnedCliPath cycle *>> $cycleLogPath
             $ownedCycleExitCode = $LASTEXITCODE
         }
@@ -78,7 +79,7 @@ try {
         }
 
         try {
-            $cycleExitCode = [int](& $CycleAction $workspacePath $cliPath $RuntimeRoot)
+            $cycleExitCode = [int](& $CycleAction $workspacePath $cliPath $runtimeRootPath)
         }
         catch {
             $cycleExitCode = 1
