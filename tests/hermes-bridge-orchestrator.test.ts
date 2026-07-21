@@ -164,6 +164,18 @@ describe("Hermes bridge orchestrator", () => {
     expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.any(Object))
   })
 
+  it("abandons an App Server timeout for immediate fenced redispatch", async () => {
+    const value = fixture()
+    value.client.runTurn.mockRejectedValueOnce(Object.assign(new Error("timeout"), {
+      code: "APP_SERVER_TIMEOUT",
+    }))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "APP_SERVER_TIMEOUT" })
+    const timedOut = value.state.read().executions["77"]
+    expect(timedOut.checkpoint).toMatchObject({ state: "RETRYABLE_WALL", detail: "APP_SERVER_TIMEOUT" })
+    expect(Date.parse(timedOut.lease.expiresAt)).toBe(Date.parse("2026-07-21T01:00:00.000Z"))
+  })
+
   it("fails closed when a durable owner-touch counter changes during execution", async () => {
     const value = fixture()
     const original = value.client.runTurn.getMockImplementation()

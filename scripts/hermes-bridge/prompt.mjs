@@ -53,6 +53,9 @@ Operating contract:
 - Stay inside the exact owner outcome, Work Order, repository, branch, and reservations above.
 - Use bounded native Codex subagents in isolated worktrees when at least two dependency-cleared, non-overlapping implementation or assurance lanes exist.
 - Keep builder and reviewer reservations distinct. Independently review substantive changes before merge.
+- If a subagent or provider lane is unavailable, record that lane as provider-unavailable and continue the healthy coordinator lane inside the owned worktree. Do not wait indefinitely or turn provider availability into owner contact.
+- The owner outcome and standing R0/R1 grant are sufficient design authority. Do not invoke owner-interactive brainstorming or planning gates; make a bounded product decision and implement it.
+- Progress commentary is not an authority wall. Use OWNER_DECISION_REQUIRED only as the final result for a genuinely new authority boundary.
 - Request GitHub Codex review in a PR comment that includes the exact 40-character head SHA, then wait for its reviewed-commit evidence on that head.
 - Implement useful product behavior. Governance-only placeholders do not satisfy the outcome.
 - Own investigation, implementation, tests, commits, push, pull request, CI/review monitoring, and bounded remediation.
