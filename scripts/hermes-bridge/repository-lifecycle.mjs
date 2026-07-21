@@ -173,6 +173,10 @@ function checkState(check) {
   return String(check?.conclusion ?? check?.state ?? check?.status ?? "").toUpperCase()
 }
 
+function checkName(check) {
+  return String(check?.name ?? check?.context ?? "")
+}
+
 function unresolvedThreadCount(value) {
   const reviewThreads = value?.data?.repository?.pullRequest?.reviewThreads
   const nodes = reviewThreads?.nodes
@@ -314,7 +318,8 @@ export function createRepositoryLifecycle(options) {
     return {
       ...pr,
       checksGreen: checks.length > 0 && checks.every((check) => SUCCESSFUL_CHECKS.has(checkState(check))),
-      reviewed: pr.reviewDecision === "APPROVED",
+      reviewed: pr.reviewDecision === "APPROVED" || checks.some((check) =>
+        /coderabbit/i.test(checkName(check)) && SUCCESSFUL_CHECKS.has(checkState(check))),
       unresolvedThreadCount: unresolved,
     }
   }

@@ -39,7 +39,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     })),
     resumeOwnedWorktree: vi.fn(),
     inspectPullRequest: vi.fn(async () => ({
-      state: "MERGED", checksGreen: true, unresolvedThreadCount: 0,
+      state: "MERGED", checksGreen: true, reviewed: true, unresolvedThreadCount: 0,
       mergeCommit: { oid: "b".repeat(40) },
     })),
     inspectChangedPaths: vi.fn(async () => changedPaths),

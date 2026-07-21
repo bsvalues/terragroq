@@ -185,6 +185,20 @@ describe("Hermes repository lifecycle", () => {
     })
   })
 
+  it("recognizes a successful CodeRabbit check as independent review evidence", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { context: "CodeRabbit", state: "SUCCESS" },
+          { context: "Vercel", state: "SUCCESS" },
+        ],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: true, checksGreen: true })
+  })
+
   it("verifies origin/main and cleans only a recorded, clean, merged worktree once", async () => {
     const { lifecycle, calls, record } = await ownedFixture({
       "git -C C:\\workspace\\terragroq merge-base": () => ({ code: 0 }),

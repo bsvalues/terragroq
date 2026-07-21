@@ -244,7 +244,8 @@ export function createHermesOrchestrator(options = {}) {
       if (!Number.isSafeInteger(prNumber) || prNumber <= 0) throw Object.assign(new Error("Valid PR URL required"), { code: "HERMES_PR_WALL" })
       const pr = await lifecycle.inspectPullRequest(prNumber)
       const mergeSha = pr.mergeCommit?.oid ?? result.mergeCommit
-      if (pr.state !== "MERGED" || !pr.checksGreen || pr.unresolvedThreadCount !== 0 || !SHA.test(mergeSha ?? "")) {
+      if (pr.state !== "MERGED" || !pr.checksGreen || !pr.reviewed
+        || pr.unresolvedThreadCount !== 0 || !SHA.test(mergeSha ?? "")) {
         throw Object.assign(new Error("Merged PR failed independent verification"), { code: "HERMES_PR_VERIFICATION_WALL" })
       }
       const changedPaths = await lifecycle.inspectChangedPaths(record)
