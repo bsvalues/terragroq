@@ -147,13 +147,14 @@ export function createHermesOrchestrator(options = {}) {
     const reservations = RESERVATIONS[outcome.lane]
     if (!reservations) throw Object.assign(new Error("No reservation for outcome lane"), { code: "HERMES_RESERVATION_WALL" })
     const baseSha = lease.metadata?.baseSha ?? await lifecycle.refreshOriginMain()
-    const record = lease.metadata?.worktreePath
-      ? await lifecycle.resumeOwnedWorktree({ branch, worktreePath: lease.metadata.worktreePath })
-      : await lifecycle.createWorktree({ branch, name: branch.slice("codex/".length) })
-
-    let cp = await checkpoint(lease, sequence, "WORKTREE_READY", null, {
-      branch, worktreePath: record.worktreePath, baseSha,
+    const worktreePath = lease.metadata?.worktreePath
+      ?? path.join(runtimeRoot, "worktrees", branch.slice("codex/".length))
+    let cp = await checkpoint(lease, sequence, "WORKTREE_INTENT", null, { branch, worktreePath, baseSha })
+    sequence = cp.checkpointSequence
+    const record = await lifecycle.ensureOwnedWorktree({
+      branch, name: branch.slice("codex/".length), worktreePath: cp.metadata.worktreePath,
     })
+    cp = await checkpoint(lease, sequence, "WORKTREE_READY", null, { branch, worktreePath: record.worktreePath, baseSha })
     sequence = cp.checkpointSequence
 
     const client = clientFactory(record.worktreePath)

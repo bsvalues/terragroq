@@ -110,10 +110,10 @@ describe("Hermes repository lifecycle", () => {
   it("inspects tracked, untracked, renamed, and committed paths and runs configured validation", async () => {
     const { lifecycle, calls, record } = await ownedFixture({
       [`${ownedGit} status`]: () => ({ code: 0, stdout: " M src/a.ts\0?? src/new.ts\0R  src/old.ts\0src/moved.ts\0" }),
-      [`${ownedGit} diff`]: () => ({ code: 0, stdout: "src/a.ts\0tests/a.test.ts\0" }),
+      [`${ownedGit} diff`]: () => ({ code: 0, stdout: "M\0src/a.ts\0R100\0lib/db/old.ts\0tests/a.test.ts\0" }),
     })
     await expect(lifecycle.inspectChangedPaths(record)).resolves.toEqual([
-      "src/a.ts", "src/moved.ts", "src/new.ts", "src/old.ts", "tests/a.test.ts",
+      "lib/db/old.ts", "src/a.ts", "src/moved.ts", "src/new.ts", "src/old.ts", "tests/a.test.ts",
     ])
     await expect(lifecycle.runValidationCommands(record)).resolves.toEqual([
       { command: "npm", args: ["test", "--", "--run", "tests/unit.test.ts"], code: 0 },
@@ -146,14 +146,29 @@ describe("Hermes repository lifecycle", () => {
     ])
   })
 
+  it("adopts only a persisted worktree intent that exactly matches registered git state", async () => {
+    const { lifecycle } = fixture({
+      [`${rootGit} worktree list`]: () => ({
+        code: 0, stdout: `worktree ${ownedWorktree.replace(/\\/g, "/")}\nHEAD ${sha}\nbranch refs/heads/${branch}\n\n`,
+      }),
+      [`${ownedGit} branch --show-current`]: () => ({ code: 0, stdout: `${branch}\n` }),
+    })
+    await expect(lifecycle.ensureOwnedWorktree({
+      branch, name: "hermes-goal-77", worktreePath: ownedWorktree,
+    })).resolves.toMatchObject({ branch, worktreePath: ownedWorktree, resumed: true })
+  })
+
   it("reads immutable PR file names for post-merge scope verification", async () => {
     const { lifecycle, calls } = fixture({
-      "gh pr diff 77": () => ({ code: 0, stdout: "components/hermes/status.tsx\ntests/hermes-status.test.tsx\n" }),
+      "gh api --paginate --slurp repos/bsvalues/terragroq/pulls/77/files": () => ({ code: 0, stdout: JSON.stringify([[
+        { filename: "components/hermes/status.tsx", previous_filename: "lib/auth/old-status.tsx" },
+        { filename: "tests/hermes-status.test.tsx" },
+      ]]) }),
     })
     await expect(lifecycle.inspectPullRequestFiles(77)).resolves.toEqual([
-      "components/hermes/status.tsx", "tests/hermes-status.test.tsx",
+      "components/hermes/status.tsx", "lib/auth/old-status.tsx", "tests/hermes-status.test.tsx",
     ])
-    expect(calls.at(-1)?.args).toEqual(["pr", "diff", "77", "--repo", "bsvalues/terragroq", "--name-only"])
+    expect(calls.at(-1)?.args).toEqual(["api", "--paginate", "--slurp", "repos/bsvalues/terragroq/pulls/77/files?per_page=100"])
   })
 
   it("pushes an exact refspec and merges only an approved green PR with no unresolved threads", async () => {
@@ -165,6 +180,7 @@ describe("Hermes repository lifecycle", () => {
       isDraft: false,
       reviewDecision: "APPROVED",
       statusCheckRollup: [{ conclusion: "SUCCESS" }, { state: "SUCCESS" }],
+      reviews: [{ author: { login: "independent-reviewer" }, state: "APPROVED", commit: { oid: sha } }],
     }
     const { lifecycle, calls, record } = await ownedFixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify(pr) }),
@@ -196,6 +212,18 @@ describe("Hermes repository lifecycle", () => {
     await expect(lifecycle.mergePullRequest({ number: 77, branch })).rejects.toMatchObject({
       code: "HERMES_REPOSITORY_MERGE_GATE_WALL",
     })
+  })
+
+  it("does not accept a stale approval through reviewDecision", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
+        reviewDecision: "APPROVED", statusCheckRollup: [{ conclusion: "SUCCESS" }],
+        reviews: [{ author: { login: "independent-reviewer" }, state: "APPROVED", commit: { oid: mergeSha } }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: false })
   })
 
   it("recognizes a successful CodeRabbit check as independent review evidence", async () => {

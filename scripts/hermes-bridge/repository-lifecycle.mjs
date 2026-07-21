@@ -165,12 +165,33 @@ function statusPaths(output) {
   return paths
 }
 
-function diffPaths(output) {
-  return output.split("\0").filter(Boolean).map(safeRelativePath)
+function nameStatusPaths(output) {
+  const fields = output.split("\0")
+  const paths = []
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++]
+    if (!status) continue
+    if (!/^[ACDMRTUXB][0-9]*$/.test(status)) wall("HERMES_REPOSITORY_STATUS_WALL", "invalid name-status output")
+    const source = fields[index++]
+    if (!source) wall("HERMES_REPOSITORY_STATUS_WALL", "missing changed path")
+    paths.push(safeRelativePath(source))
+    if (/^[RC]/.test(status)) {
+      const destination = fields[index++]
+      if (!destination) wall("HERMES_REPOSITORY_STATUS_WALL", "missing rename destination")
+      paths.push(safeRelativePath(destination))
+    }
+  }
+  return paths
 }
 
-function linePaths(output) {
-  return output.split(/\r?\n/).filter(Boolean).map(safeRelativePath)
+function worktreeEntries(output) {
+  return output.split(/\r?\n\r?\n/).filter(Boolean).map((block) => {
+    const lines = block.split(/\r?\n/)
+    return {
+      worktreePath: lines.find((line) => line.startsWith("worktree "))?.slice(9) ?? null,
+      branch: lines.find((line) => line.startsWith("branch refs/heads/"))?.slice(18) ?? null,
+    }
+  })
 }
 
 function checkState(check) {
@@ -186,6 +207,13 @@ function exactHeadCodexReview(pr) {
     review?.author?.login === "chatgpt-codex-connector"
     && review?.commit?.oid === pr.headRefOid
     && ["APPROVED", "COMMENTED"].includes(String(review?.state ?? "").toUpperCase()))
+}
+
+function exactHeadApprovedReview(pr) {
+  return Array.isArray(pr?.reviews) && pr.reviews.some((review) =>
+    review?.author?.login && review.author.login !== "bsvalues"
+    && review?.commit?.oid === pr.headRefOid
+    && String(review?.state ?? "").toUpperCase() === "APPROVED")
 }
 
 function unresolvedThreadCount(value) {
@@ -268,15 +296,48 @@ export function createRepositoryLifecycle(options) {
     return { ...record }
   }
 
+  async function ensureOwnedWorktree({ branch, name, worktreePath } = {}) {
+    const safeBranch = branchName(branch)
+    const leaf = safeWorktreeName(name ?? safeBranch.slice("codex/".length))
+    const intendedPath = absolute(worktreePath, "worktreePath")
+    const computedPath = path.resolve(ownedWorktreeRoot, leaf)
+    if (!samePath(intendedPath, computedPath) || !inside(ownedWorktreeRoot, intendedPath)) {
+      wall("HERMES_REPOSITORY_PATH_WALL", "persisted worktree intent mismatch")
+    }
+    const existing = records.get(safeBranch)
+    if (existing) return { ...existing }
+    await verifyOrigin()
+    const listing = await run("git", ["-C", repositoryRoot, "worktree", "list", "--porcelain"])
+    const entries = worktreeEntries(listing.stdout)
+    const byPath = entries.find((entry) => entry.worktreePath && samePath(entry.worktreePath, intendedPath))
+    const byBranch = entries.find((entry) => entry.branch === safeBranch)
+    if (byPath || byBranch) {
+      if (byPath !== byBranch) wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "worktree intent conflicts with registered git state")
+      const currentBranch = await run("git", ["-C", intendedPath, "branch", "--show-current"])
+      if (currentBranch.stdout.trim() !== safeBranch) wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "worktree branch mismatch")
+      const record = Object.freeze({ repository, branch: safeBranch, worktreePath: intendedPath, ownedWorktreeRoot, cleaned: false })
+      records.set(safeBranch, record)
+      return { ...record, resumed: true }
+    }
+    const branchResult = await run("git", ["-C", repositoryRoot, "show-ref", "--verify", "--quiet", `refs/heads/${safeBranch}`], { allowFailure: true })
+    if (![0, 1].includes(branchResult.code)) wall("HERMES_REPOSITORY_COMMAND_FAILED", "git show-ref failed")
+    if (branchResult.code === 0) wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "persisted branch is not registered to its intended worktree")
+    await run("git", ["-C", repositoryRoot, "worktree", "add", "-b", safeBranch, intendedPath, "refs/remotes/origin/main"])
+    const record = Object.freeze({ repository, branch: safeBranch, worktreePath: intendedPath, ownedWorktreeRoot, cleaned: false })
+    records.set(safeBranch, record)
+    return { ...record, resumed: false }
+  }
+
   async function resumeOwnedWorktree({ branch, worktreePath } = {}) {
     const safeBranch = branchName(branch)
     const absoluteWorktree = absolute(worktreePath, "worktreePath")
     if (!inside(ownedWorktreeRoot, absoluteWorktree)) wall("HERMES_REPOSITORY_PATH_WALL", "worktree outside owned root")
     await verifyOrigin()
     const listing = await run("git", ["-C", repositoryRoot, "worktree", "list", "--porcelain"])
-    const normalized = listing.stdout.replace(/\\/g, "/").toLowerCase()
-    const expectedPath = absoluteWorktree.replace(/\\/g, "/").toLowerCase()
-    if (!normalized.includes(`worktree ${expectedPath}\n`) || !normalized.includes(`branch refs/heads/${safeBranch.toLowerCase()}\n`)) {
+    const entries = worktreeEntries(listing.stdout)
+    const byPath = entries.find((entry) => entry.worktreePath && samePath(entry.worktreePath, absoluteWorktree))
+    const byBranch = entries.find((entry) => entry.branch === safeBranch)
+    if (!byPath || byPath !== byBranch) {
       wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "persisted worktree is not registered to the expected branch")
     }
     const currentBranch = await run("git", ["-C", absoluteWorktree, "branch", "--show-current"])
@@ -289,8 +350,8 @@ export function createRepositoryLifecycle(options) {
   async function inspectChangedPaths({ worktreePath, branch } = {}) {
     const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
     const status = await run("git", ["-C", record.worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"])
-    const diff = await run("git", ["-C", record.worktreePath, "diff", "--name-only", "-z", "refs/remotes/origin/main...HEAD"])
-    return [...new Set([...statusPaths(status.stdout), ...diffPaths(diff.stdout)])].sort()
+    const diff = await run("git", ["-C", record.worktreePath, "diff", "--name-status", "-z", "--find-renames", "refs/remotes/origin/main...HEAD"])
+    return [...new Set([...statusPaths(status.stdout), ...nameStatusPaths(diff.stdout)])].sort()
   }
 
   async function runValidationCommands({ worktreePath, branch, commands = validationCommands } = {}) {
@@ -352,7 +413,7 @@ export function createRepositoryLifecycle(options) {
         || (typeof check?.context === "string"
           && checkState(check) === "FAILURE"
           && rateLimitedCodeRabbitContexts.has(check.context.toLowerCase()))),
-      reviewed: pr.reviewDecision === "APPROVED" || hasExactHeadCodexReview || checks.some((check) =>
+      reviewed: exactHeadApprovedReview(pr) || hasExactHeadCodexReview || checks.some((check) =>
         /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"),
       codeRabbitRateLimited,
       unresolvedThreadCount: unresolved,
@@ -362,8 +423,13 @@ export function createRepositoryLifecycle(options) {
   async function inspectPullRequestFiles(number) {
     if (!Number.isSafeInteger(number) || number <= 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "positive PR number required")
     await verifyOrigin()
-    const result = await run("gh", ["pr", "diff", String(number), "--repo", repository, "--name-only"])
-    const files = [...new Set(linePaths(result.stdout))].sort()
+    const result = await run("gh", ["api", "--paginate", "--slurp", `repos/${repository}/pulls/${number}/files?per_page=100`])
+    const pages = parseJson(result.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
+    if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
+      wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request files response missing")
+    }
+    const files = [...new Set(pages.flatMap((page) => page.flatMap((file) =>
+      [file?.filename, file?.previous_filename].filter(Boolean).map(safeRelativePath))))].sort()
     if (files.length === 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request file list is empty")
     return files
   }
@@ -428,6 +494,7 @@ export function createRepositoryLifecycle(options) {
     ownedWorktreeRoot,
     refreshOriginMain,
     createWorktree,
+    ensureOwnedWorktree,
     resumeOwnedWorktree,
     inspectChangedPaths,
     runValidationCommands,

@@ -36,7 +36,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
   let merged = false
   const lifecycle = {
     refreshOriginMain: vi.fn(async () => "a".repeat(40)),
-    createWorktree: vi.fn(async ({ branch }: { branch: string }) => ({
+    ensureOwnedWorktree: vi.fn(async ({ branch }: { branch: string }) => ({
       branch, worktreePath: path.join(root, "worktrees", "goal-77"),
     })),
     resumeOwnedWorktree: vi.fn(),
