@@ -19,6 +19,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query).toHaveBeenCalledOnce()
     expect(query.mock.calls[0][0]).toBe(OUTCOME_SELECTION_SQL)
     expect(OUTCOME_SELECTION_SQL).toMatch(/ORDER BY "createdAt" ASC, id ASC/)
+    expect(OUTCOME_SELECTION_SQL).toMatch(/provider_defer\."entityId"::text = goal\.id::text/)
     expect(OUTCOME_SELECTION_SQL).not.toMatch(/LIMIT\s+1/i)
     expect(query.mock.calls[0][1]).toEqual(expect.arrayContaining([
       "classified", ["allow", "requires_approval"], ["low", "R0", "R1"],
@@ -72,6 +73,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     await expect(completeOutcome({ query, outcomeId: 4, evidence: {} })).resolves.toBe(true)
     expect(query).toHaveBeenCalledTimes(2)
     expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_COMPLETED/)
+    expect(query.mock.calls[1][0]).toMatch(/e\."entityId"::text = g\.id::text/)
   })
 
   it("removes terminal outcomes from selection while retaining a governance event", async () => {
@@ -94,6 +96,9 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     })).resolves.toBe(true)
     expect(query.mock.calls[0][0]).toMatch(/status = 'classified'/)
     expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_PROVIDER_DEFERRED/)
+    expect(query.mock.calls[1][0]).toMatch(/"entityId"::text = \$6::text/)
+    expect(query.mock.calls[1][1][1]).toBe("4")
+    expect(query.mock.calls[1][1][5]).toBe("4")
     expect(query.mock.calls[1][1][3]).toContain('"result":"PROVIDER_UNAVAILABLE"')
     expect(OUTCOME_SELECTION_SQL).toMatch(/HERMES_OUTCOME_PROVIDER_DEFERRED/)
   })
@@ -106,6 +111,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       query, outcomeId: 4, result: "FAILED_TERMINAL", nextState: "POLICY_WALL",
     })).resolves.toBe(true)
     expect(query.mock.calls[1][1]).toEqual([4, "FAILED_TERMINAL", "POLICY_WALL"])
+    expect(query.mock.calls[1][0]).toMatch(/terminal\."entityId"::text = g\.id::text/)
   })
 
   it("recovers only the exact persisted transient native provider wall", async () => {
@@ -116,6 +122,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     await expect(recoverNativeProviderOutcome({ query, outcomeId: 4 })).resolves.toBe(true)
     expect(query.mock.calls[0][0]).toMatch(/HERMES_OUTCOME_TERMINAL/)
     expect(query.mock.calls[0][0]).toMatch(/status = 'dismissed'/)
+    expect(query.mock.calls[0][0]).toMatch(/"entityId"::text = \(\$1::integer\)::text/)
+    expect(query.mock.calls[0][0]).toMatch(/g\.id = \$1::integer/)
     expect(query.mock.calls[0][1]).toEqual([4, NATIVE_PROVIDER_RETRY_STATE])
     expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_PROVIDER_RECOVERED/)
   })

@@ -29,7 +29,7 @@ WHERE status = $1
     SELECT 1
     FROM governance_event provider_defer
     WHERE provider_defer."entityType" = 'goal'
-      AND provider_defer."entityId" = goal.id::text
+      AND provider_defer."entityId"::text = goal.id::text
       AND provider_defer."eventType" = 'HERMES_OUTCOME_PROVIDER_DEFERRED'
       AND (provider_defer.metadata->>'retryAfter')::timestamptz > NOW()
   )
@@ -125,7 +125,7 @@ export async function completeOutcome({ query, databaseUrl = process.env.DATABAS
       const prior = await runQuery(
         `SELECT EXISTS (
            SELECT 1 FROM goal g
-           JOIN governance_event e ON e."entityType" = 'goal' AND e."entityId" = g.id::text
+           JOIN governance_event e ON e."entityType" = 'goal' AND e."entityId"::text = g.id::text
            WHERE g.id = $1 AND g.status = 'converted' AND e."eventType" = 'HERMES_OUTCOME_COMPLETED'
          ) AS completed`,
         [outcomeId],
@@ -191,7 +191,7 @@ export async function terminalizeOutcome({
            SELECT 1
            FROM goal g
            JOIN governance_event terminal
-             ON terminal."entityType" = 'goal' AND terminal."entityId" = g.id::text
+             ON terminal."entityType" = 'goal' AND terminal."entityId"::text = g.id::text
                AND terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
                AND terminal.metadata->>'result' = $2
                AND (terminal.metadata->>'nextState') IS NOT DISTINCT FROM $3
@@ -267,13 +267,14 @@ export async function deferProviderOutcome({
        SELECT $1, 'HERMES_OUTCOME_PROVIDER_DEFERRED', 'goal', $2, 'hermes-codex-bridge', $3, $4::jsonb
        WHERE NOT EXISTS (
          SELECT 1 FROM governance_event
-         WHERE "entityType" = 'goal' AND "entityId" = $2
+         WHERE "entityType" = 'goal' AND "entityId"::text = $6::text
            AND "eventType" = 'HERMES_OUTCOME_PROVIDER_DEFERRED'
            AND metadata->>'retryAfter' = $5
        )
        RETURNING id`,
       [row.userId, String(row.id), `Deferred ${row.ref ?? `goal-${row.id}`} after bounded provider retries`,
-        JSON.stringify({ result: "PROVIDER_UNAVAILABLE", retryAfter: retryAt.toISOString() }), retryAt.toISOString()],
+        JSON.stringify({ result: "PROVIDER_UNAVAILABLE", retryAfter: retryAt.toISOString() }),
+        retryAt.toISOString(), String(row.id)],
     )
     if (client) await runQuery("COMMIT")
     return (inserted?.rows?.length ?? 0) === 1 || (inserted?.rowCount ?? 0) === 0
@@ -318,14 +319,14 @@ export async function recoverNativeProviderOutcome({
       `WITH latest_terminal AS (
          SELECT metadata
          FROM governance_event
-         WHERE "entityType" = 'goal' AND "entityId" = $1::text
+         WHERE "entityType" = 'goal' AND "entityId"::text = ($1::integer)::text
            AND "eventType" = 'HERMES_OUTCOME_TERMINAL'
          ORDER BY "createdAt" DESC, id DESC
          LIMIT 1
        )
        UPDATE goal g SET status = 'classified', "updatedAt" = NOW()
        FROM latest_terminal t
-       WHERE g.id = $1 AND g.status = 'dismissed'
+       WHERE g.id = $1::integer AND g.status = 'dismissed'
          AND t.metadata->>'result' = 'FAILED_TERMINAL'
          AND t.metadata->>'nextState' = $2
        RETURNING g.id, g."userId" AS "userId", g.ref`,
@@ -338,15 +339,15 @@ export async function recoverNativeProviderOutcome({
            SELECT 1
            FROM goal g
            JOIN governance_event terminal
-             ON terminal."entityType" = 'goal' AND terminal."entityId" = g.id::text
+             ON terminal."entityType" = 'goal' AND terminal."entityId"::text = g.id::text
                AND terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
                AND terminal.metadata->>'result' = 'FAILED_TERMINAL'
                AND terminal.metadata->>'nextState' = $2
            JOIN governance_event recovered
-             ON recovered."entityType" = 'goal' AND recovered."entityId" = g.id::text
+             ON recovered."entityType" = 'goal' AND recovered."entityId"::text = g.id::text
                AND recovered."eventType" = 'HERMES_OUTCOME_PROVIDER_RECOVERED'
                AND recovered.metadata->>'retryState' = $2
-           WHERE g.id = $1 AND g.status = 'classified'
+           WHERE g.id = $1::integer AND g.status = 'classified'
          ) AS recovered`,
         [outcomeId, NATIVE_PROVIDER_RETRY_STATE],
       )
