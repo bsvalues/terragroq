@@ -94,6 +94,12 @@ At the audited baseline:
 - issue #358 is dependency-blocked even though its stale GitHub label says ready;
 - the local nested-Codex adapter is not an accepted execution surface.
 
+The separately owner-authorized Hermes-to-Codex bridge is governed by
+`docs/governance/hermes-codex-live-bridge.md`. It uses the supported Codex App
+Server protocol and may become active only after its independent transport and
+end-to-end feature gates pass. It may not import, invoke, wrap, rename, or reuse
+the rejected issue `#357` path.
+
 This playbook is the active successor program. Phase 0 integrates its executable registry and
 preventive controls while the rejected adapter remains terminal. Historical evidence remains intact;
 historical runtime records do not retain selection or activation authority.
