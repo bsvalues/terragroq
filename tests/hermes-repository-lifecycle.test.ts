@@ -283,7 +283,7 @@ describe("Hermes repository lifecycle", () => {
       .resolves.toMatchObject({ reviewed: false })
   })
 
-  it("accepts an explicit CodeRabbit rate-limit only with an exact-head Codex review", async () => {
+  it("accepts an explicit CodeRabbit rate-limit only with clean exact-head review evidence", async () => {
     const { lifecycle } = fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
         number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
@@ -291,14 +291,19 @@ describe("Hermes repository lifecycle", () => {
           { context: "CodeRabbit", state: "FAILURE" },
           { context: "Vercel", state: "SUCCESS" },
         ],
-        reviews: [{
-          author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: sha },
-        }],
+        reviews: [],
       }) }),
       "gh api repos/bsvalues/terragroq/commits/": () => ({ code: 0, stdout: JSON.stringify({
         statuses: [{ context: "CodeRabbit", state: "failure", description: "Review rate limited" }],
       }) }),
-      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [{
+        body: `Final head ${sha}. @codex review`,
+        createdAt: "2026-07-21T10:00:00.000Z", updatedAt: "2026-07-21T10:00:00.000Z",
+        reactions: { nodes: [{
+          content: "THUMBS_UP", createdAt: "2026-07-21T10:01:00.000Z",
+          user: { login: "chatgpt-codex-connector" },
+        }] },
+      }])) }),
     })
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
       reviewed: true, checksGreen: true, codeRabbitRateLimited: true,
@@ -322,6 +327,18 @@ describe("Hermes repository lifecycle", () => {
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
       reviewed: false, checksGreen: false, codeRabbitRateLimited: false,
     })
+  })
+
+  it("does not count a current-head Codex commented review as clean evidence", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [{ context: "Vercel", state: "SUCCESS" }],
+        reviews: [{ author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: sha } }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: false })
   })
 
   it("does not exempt inexact rate-limit descriptions or separate CodeRabbit failures", async () => {

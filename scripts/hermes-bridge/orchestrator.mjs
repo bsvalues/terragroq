@@ -62,6 +62,13 @@ function allowedPath(changedPath, reservations) {
   })
 }
 
+function assertOwnerTouchCountersZero(value) {
+  const counters = value?.ownerTouchCounters
+  if (!counters || Object.values(counters).some((count) => count !== 0)) {
+    throw Object.assign(new Error("Durable owner-touch counters must remain zero"), { code: "HERMES_OWNER_TOUCH_WALL" })
+  }
+}
+
 export function assertChangedPathsAllowed(paths, reservations) {
   const blocked = paths.filter((changedPath) => !allowedPath(changedPath.replace(/\\/g, "/"), reservations))
   if (blocked.length > 0) {
@@ -107,6 +114,7 @@ export function createHermesOrchestrator(options = {}) {
     if (readControl(activationPath, "disabled") !== "enabled") return { result: "DISABLED" }
     const initialized = state.initialize()
     if (initialized.killSwitch.active) return { result: "KILL_SWITCH_ACTIVE" }
+    assertOwnerTouchCountersZero(initialized)
     const notBefore = readControl(notBeforePath, now().toISOString())
     const outcome = await selectOutcome({ enabled: true, killSwitch: false, standingAuthority: true, notBefore })
     if (!outcome) return { result: "NO_ELIGIBLE_OUTCOME" }
@@ -229,6 +237,7 @@ export function createHermesOrchestrator(options = {}) {
       })
       sequence = cp.checkpointSequence
       const result = parseTurnResult(turn.finalText)
+      assertOwnerTouchCountersZero(state.read())
 
       if (["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"].includes(result.result)) {
         cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null)

@@ -4,6 +4,7 @@ import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { createHermesOrchestrator } from "../scripts/hermes-bridge/orchestrator.mjs"
+import { createHermesStateStore } from "../scripts/hermes-bridge/state-store.mjs"
 
 const roots: string[] = []
 
@@ -118,6 +119,19 @@ describe("Hermes bridge orchestrator", () => {
   it("fails closed when Codex changes a path outside the lane reservation", async () => {
     const value = fixture(["components/hermes/live-status.tsx", "lib/db/schema.ts"])
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
+    expect(value.lifecycle.mergePullRequest).not.toHaveBeenCalled()
+    expect(value.markComplete).not.toHaveBeenCalled()
+  })
+
+  it("fails closed when a durable owner-touch counter changes during execution", async () => {
+    const value = fixture()
+    const original = value.client.runTurn.getMockImplementation()
+    value.client.runTurn.mockImplementationOnce(async (...args: unknown[]) => {
+      const store = createHermesStateStore(value.orchestrator.statePath)
+      store.recordOwnerTouch({ idempotencyKey: "owner-touch-during-run", counter: "ownerOperationTouchCount" })
+      return original!(...args)
+    })
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_OWNER_TOUCH_WALL" })
     expect(value.lifecycle.mergePullRequest).not.toHaveBeenCalled()
     expect(value.markComplete).not.toHaveBeenCalled()
   })
