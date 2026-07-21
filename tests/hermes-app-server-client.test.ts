@@ -182,6 +182,22 @@ describe("CodexAppServerClient", () => {
     vi.useRealTimers()
   })
 
+  it("uses one timeout budget across startup and execution", async () => {
+    vi.useFakeTimers()
+    const { client, process } = setup({ timeoutMs: 25, now: () => Date.now() })
+    await connect(client, process)
+    const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "wait" })
+    const request = process.messages().at(-1)
+    await vi.advanceTimersByTimeAsync(15)
+    process.send({ id: request.id, result: { turn: { id: "turn-budget", status: "inProgress" } } })
+    await Promise.resolve()
+    await Promise.resolve()
+    const rejection = expect(resultPromise).rejects.toBeInstanceOf(AppServerTimeoutError)
+    await vi.advanceTimersByTimeAsync(10)
+    await rejection
+    vi.useRealTimers()
+  })
+
   it("interrupts and rejects a turn when its abort signal is cancelled", async () => {
     const { client, process } = setup()
     await connect(client, process)

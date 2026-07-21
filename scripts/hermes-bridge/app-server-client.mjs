@@ -81,6 +81,7 @@ export class CodexAppServerClient {
     timeoutMs = 120_000,
     setTimer = setTimeout,
     clearTimer = clearTimeout,
+    now = Date.now,
     onNotification = () => {},
   } = {}) {
     this.spawn = spawn
@@ -92,6 +93,7 @@ export class CodexAppServerClient {
     this.timeoutMs = timeoutMs
     this.setTimer = setTimer
     this.clearTimer = clearTimer
+    this.now = now
     this.onNotification = onNotification
     this.nextId = 1
     this.pending = new Map()
@@ -168,6 +170,7 @@ export class CodexAppServerClient {
     if (signal?.aborted) throw new AppServerCancelledError()
 
     const turnInput = input ?? [{ type: "text", text: prompt ?? "", text_elements: [] }]
+    const deadline = Number.isFinite(timeoutMs) && timeoutMs >= 0 ? this.now() + timeoutMs : null
     this.startingThreadId = threadId
     let started
     try {
@@ -206,8 +209,9 @@ export class CodexAppServerClient {
         this.turnWaiter.resolve(completed)
         return
       }
-      if (Number.isFinite(timeoutMs) && timeoutMs >= 0) {
-        timer = this.setTimer(() => interrupt(new AppServerTimeoutError(timeoutMs)), timeoutMs)
+      if (deadline !== null) {
+        const remainingMs = Math.max(0, deadline - this.now())
+        timer = this.setTimer(() => interrupt(new AppServerTimeoutError(timeoutMs)), remainingMs)
       }
       signal?.addEventListener?.("abort", abort, { once: true })
     })

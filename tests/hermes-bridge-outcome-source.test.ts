@@ -12,6 +12,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[0][0]).toBe(OUTCOME_SELECTION_SQL)
     expect(OUTCOME_SELECTION_SQL).toMatch(/ORDER BY "createdAt" ASC, id ASC\s+LIMIT 1/)
     expect(query.mock.calls[0][1]).toEqual(expect.arrayContaining(["classified", ["allow", "requires_approval"], "low"]))
+    expect(String(query.mock.calls[0][1][5])).toMatch(/release.*tag/i)
   })
 
   it("returns null for no row or a policy-ineligible injected row", async () => {
