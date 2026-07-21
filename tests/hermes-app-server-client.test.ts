@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   AppServerTimeoutError,
   CodexAppServerClient,
+  createCodexChildEnvironment,
   sanitizeAppServerText,
 } from "@/scripts/hermes-bridge/app-server-client.mjs"
 
@@ -48,6 +49,17 @@ async function connect(client: CodexAppServerClient, process: FakeProcess) {
 }
 
 describe("CodexAppServerClient", () => {
+  it("passes only host and keyring discovery variables to the Codex child", () => {
+    expect(createCodexChildEnvironment({
+      PATH: "tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
+      CODEX_HOME: "C:/Users/owner/.codex", DATABASE_URL: "postgresql://secret", BETTER_AUTH_SECRET: "secret",
+      GH_TOKEN: "secret", OPENAI_API_KEY: "secret",
+    })).toEqual({
+      PATH: "tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
+      CODEX_HOME: "C:/Users/owner/.codex",
+    })
+  })
+
   it("redacts opaque Authorization bearer and basic credential values", () => {
     expect(sanitizeAppServerText("Authorization: Bearer opaque-value-123456")).toBe("[REDACTED]")
     expect(sanitizeAppServerText("Authorization: Basic Zm9vOmJhcg==")).toBe("[REDACTED]")
@@ -59,6 +71,7 @@ describe("CodexAppServerClient", () => {
     expect(spawn).toHaveBeenCalledWith("codex", ["app-server", "--stdio"], expect.objectContaining({
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      env: expect.any(Object),
     }))
     expect(process.writes.every((write) => write.endsWith("\n"))).toBe(true)
     expect(process.messages()).toEqual([

@@ -17,6 +17,13 @@ const USER_INPUT_METHODS = new Set([
 
 const FORBIDDEN_ITEM_TYPES = new Set(["mcpToolCall", "dynamicToolCall", "webSearch"])
 
+const CODEX_ENVIRONMENT_KEYS = new Set([
+  "APPDATA", "CODEX_HOME", "COLORTERM", "COMSPEC", "HOME", "HOMEDRIVE", "HOMEPATH",
+  "LOCALAPPDATA", "NUMBER_OF_PROCESSORS", "PATH", "PATHEXT", "PROCESSOR_ARCHITECTURE",
+  "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TERM", "TMP", "USERDOMAIN", "USERNAME",
+  "USERPROFILE", "WINDIR",
+])
+
 const SECRET_PATTERNS = [
   /\b(?:sk|sess|key|token)-[A-Za-z0-9._-]{8,}\b/gi,
   /\bauthorization\s*:\s*(?:bearer|basic)\s+[^\s,;]+/gi,
@@ -58,6 +65,10 @@ export function sanitizeAppServerText(value) {
   return text
 }
 
+export function createCodexChildEnvironment(source = process.env) {
+  return Object.fromEntries(Object.entries(source).filter(([key]) => CODEX_ENVIRONMENT_KEYS.has(key.toUpperCase())))
+}
+
 function defaultLaunch() {
   if (process.platform !== "win32") return { command: "codex", args: ["app-server", "--stdio"] }
   const entrypoint = path.join(
@@ -89,7 +100,7 @@ export class CodexAppServerClient {
     this.command = launch.command
     this.args = [...launch.args]
     this.cwd = cwd
-    this.env = env
+    this.env = createCodexChildEnvironment(env ?? process.env)
     this.timeoutMs = timeoutMs
     this.setTimer = setTimer
     this.clearTimer = clearTimer
