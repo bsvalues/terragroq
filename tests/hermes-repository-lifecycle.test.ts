@@ -275,6 +275,8 @@ describe("Hermes repository lifecycle", () => {
       .resolves.toMatchObject({ reviewed: true })
     await expect(create(`Final head ${mergeSha}. @codex review`).inspectPullRequest(77))
       .resolves.toMatchObject({ reviewed: false })
+    await expect(create(`Final head ${sha.slice(0, 12)}. @codex review`).inspectPullRequest(77))
+      .resolves.toMatchObject({ reviewed: false })
   })
 
   it("accepts an explicit CodeRabbit rate-limit only with an exact-head Codex review", async () => {

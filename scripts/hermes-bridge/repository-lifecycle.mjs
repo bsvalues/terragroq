@@ -221,8 +221,8 @@ function exactHeadCodexReaction(value, headRefOid) {
   if (!Array.isArray(comments)) wall("HERMES_REPOSITORY_GITHUB_WALL", "review request comments missing")
   return comments.some((comment) => {
     const body = String(comment?.body ?? "")
-    const namesHead = [...body.matchAll(/\b[0-9a-f]{8,40}\b/gi)]
-      .some((match) => headRefOid.startsWith(match[0].toLowerCase()))
+    const namesHead = [...body.matchAll(/\b[0-9a-f]{40}\b/gi)]
+      .some((match) => headRefOid === match[0].toLowerCase())
     const codexApproved = comment?.reactions?.nodes?.some((reaction) =>
       reaction?.content === "THUMBS_UP" && reaction?.user?.login === "chatgpt-codex-connector")
     return /@codex\s+review/i.test(body) && namesHead && codexApproved
