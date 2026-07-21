@@ -62,10 +62,18 @@ describe("CodexAppServerClient", () => {
 
   it("prefers the stable native PowerShell path without broadening the child environment", () => {
     expect(createCodexChildEnvironment({
-      PATH: "C:\\Windows\\System32", USERPROFILE: "C:/Users/owner", DATABASE_URL: "secret",
+      Path: "C:\\Windows\\System32", USERPROFILE: "C:/Users/owner", DATABASE_URL: "secret",
     }, { platform: "win32", existsSync: () => true })).toEqual({
-      PATH: "C:\\Program Files\\PowerShell\\7;C:\\Windows\\System32",
+      Path: "C:\\Program Files\\PowerShell\\7;C:\\Windows\\System32",
       USERPROFILE: "C:/Users/owner",
+    })
+  })
+
+  it("does not duplicate a differently cased stable PowerShell path with a trailing slash", () => {
+    expect(createCodexChildEnvironment({
+      Path: "c:\\program files\\powershell\\7\\;C:\\Windows\\System32",
+    }, { platform: "win32", existsSync: () => true })).toEqual({
+      Path: "c:\\program files\\powershell\\7\\;C:\\Windows\\System32",
     })
   })
 

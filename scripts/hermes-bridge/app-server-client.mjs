@@ -75,9 +75,14 @@ export function createCodexChildEnvironment(source = process.env, {
   if (platform === "win32") {
     const stablePowerShell = "C:\\Program Files\\PowerShell\\7"
     if (existsSync(path.join(stablePowerShell, "pwsh.exe"))) {
-      const entries = String(environment.PATH ?? "").split(";").filter(Boolean)
-      if (!entries.some((entry) => entry.toLowerCase() === stablePowerShell.toLowerCase())) {
-        environment.PATH = [stablePowerShell, ...entries].join(";")
+      const pathKey = Object.keys(environment).find((key) => key.toUpperCase() === "PATH") ?? "PATH"
+      const entries = String(environment[pathKey] ?? "").split(";").filter(Boolean)
+      const normalizedStablePath = path.win32.normalize(stablePowerShell).replace(/[\\/]+$/, "").toLowerCase()
+      const hasStablePowerShell = entries.some((entry) => (
+        path.win32.normalize(entry).replace(/[\\/]+$/, "").toLowerCase() === normalizedStablePath
+      ))
+      if (!hasStablePowerShell) {
+        environment[pathKey] = [stablePowerShell, ...entries].join(";")
       }
     }
   }
