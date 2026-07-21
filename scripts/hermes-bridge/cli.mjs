@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 import path from "node:path"
-import { CodexAppServerClient } from "./app-server-client.mjs"
+import { pathToFileURL } from "node:url"
+import { CodexAppServerClient, sanitizeAppServerText } from "./app-server-client.mjs"
 import { createHermesOrchestrator } from "./orchestrator.mjs"
 import { readHermesState } from "./state-store.mjs"
 
 function print(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`)
+}
+
+export function sanitizeBridgeMessage(value) {
+  return sanitizeAppServerText(String(value ?? ""))
+    .replace(/\bpostgres(?:ql)?:\/\/[^@\s]+@/gi, "postgresql://[REDACTED]@")
 }
 
 async function smoke() {
@@ -29,21 +35,23 @@ async function smoke() {
   }
 }
 
-const command = process.argv[2]
-
-try {
-  if (command === "cycle") {
-    const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
-    print(await orchestrator.cycle())
+export async function runCli(command = process.argv[2]) {
+  try {
+    if (command === "cycle") {
+      const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
+      print(await orchestrator.cycle())
+    }
+    else if (command === "smoke") print(await smoke())
+    else if (command === "status") {
+      const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
+      print(readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")))
+    } else {
+      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status"), { code: "HERMES_CLI_USAGE" })
+    }
+  } catch (error) {
+    print({ result: "WALL", code: error?.code ?? "HERMES_CLI_FAILED", message: sanitizeBridgeMessage(error?.message ?? "Hermes bridge failed") })
+    process.exitCode = 1
   }
-  else if (command === "smoke") print(await smoke())
-  else if (command === "status") {
-    const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
-    print(readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")))
-  } else {
-    throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status"), { code: "HERMES_CLI_USAGE" })
-  }
-} catch (error) {
-  print({ result: "WALL", code: error?.code ?? "HERMES_CLI_FAILED", message: String(error?.message ?? "Hermes bridge failed") })
-  process.exitCode = 1
 }
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await runCli()
