@@ -209,7 +209,7 @@ function exactHeadApprovedReview(pr) {
     && String(review?.state ?? "").toUpperCase() === "APPROVED")
 }
 
-function exactHeadCodexReaction(value, headRefOid) {
+function exactHeadCodexCleanComment(value, headRefOid) {
   const comments = value?.data?.repository?.pullRequest?.comments?.nodes
   if (!Array.isArray(comments)) wall("HERMES_REPOSITORY_GITHUB_WALL", "review request comments missing")
   return comments.some((comment) => {
@@ -217,12 +217,12 @@ function exactHeadCodexReaction(value, headRefOid) {
     const createdAt = Date.parse(comment?.createdAt ?? "")
     const updatedAt = Date.parse(comment?.updatedAt ?? "")
     const immutableRequest = Number.isFinite(createdAt) && createdAt === updatedAt
-    const namesHead = [...body.matchAll(/\b[0-9a-f]{40}\b/gi)]
-      .some((match) => headRefOid === match[0].toLowerCase())
-    const codexApproved = comment?.reactions?.nodes?.some((reaction) =>
-      reaction?.content === "THUMBS_UP" && reaction?.user?.login === "chatgpt-codex-connector"
-      && Date.parse(reaction?.createdAt ?? "") >= createdAt)
-    return immutableRequest && /@codex\s+review/i.test(body) && namesHead && codexApproved
+    const reviewedDigest = body.match(/\*\*Reviewed commit:\*\*\s*`([0-9a-f]{10,40})`/i)?.[1]?.toLowerCase()
+    return immutableRequest
+      && comment?.author?.login === "chatgpt-codex-connector"
+      && body.startsWith("Codex Review: Didn't find any major issues.")
+      && typeof reviewedDigest === "string"
+      && headRefOid.startsWith(reviewedDigest)
   })
 }
 
@@ -394,17 +394,17 @@ export function createRepositoryLifecycle(options) {
     const pr = parseJson(prResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
     branchName(pr.headRefName)
     if (!SHA.test(pr.headRefOid ?? "")) wall("HERMES_REPOSITORY_GITHUB_WALL", "PR head SHA required")
-    const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}} comments(last:100){nodes{body createdAt updatedAt reactions(first:20,content:THUMBS_UP){nodes{content createdAt user{login}}}}}}}}"
+    const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}} comments(last:100){nodes{author{login} body createdAt updatedAt}}}}}"
     const threadResult = await run("gh", ["api", "graphql", "-f", `query=${query}`, "-F", "owner=bsvalues", "-F", "name=terragroq", "-F", `number=${number}`])
     const checks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : []
     const reviewState = parseJson(threadResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
     const unresolved = unresolvedThreadCount(reviewState)
-    const hasExactHeadCodexReaction = exactHeadCodexReaction(reviewState, pr.headRefOid)
+    const hasExactHeadCodexCleanComment = exactHeadCodexCleanComment(reviewState, pr.headRefOid)
     const hasExactHeadApproval = exactHeadApprovedReview(pr)
     const failedCodeRabbit = checks.some((check) => /coderabbit/i.test(checkName(check))
       && !SUCCESSFUL_CHECKS.has(checkState(check)))
     const rateLimitedCodeRabbitContexts = new Set()
-    if (failedCodeRabbit && (hasExactHeadApproval || hasExactHeadCodexReaction)) {
+    if (failedCodeRabbit && (hasExactHeadApproval || hasExactHeadCodexCleanComment)) {
       const statusResult = await run("gh", ["api", `repos/${repository}/commits/${pr.headRefOid}/status`])
       const status = parseJson(statusResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
       if (Array.isArray(status?.statuses)) {
@@ -425,7 +425,7 @@ export function createRepositoryLifecycle(options) {
         || (typeof check?.context === "string"
           && checkState(check) === "FAILURE"
           && rateLimitedCodeRabbitContexts.has(check.context.toLowerCase()))),
-      reviewed: hasExactHeadApproval || hasExactHeadCodexReaction || checks.some((check) =>
+      reviewed: hasExactHeadApproval || hasExactHeadCodexCleanComment || checks.some((check) =>
         /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"),
       codeRabbitRateLimited,
       unresolvedThreadCount: unresolved,

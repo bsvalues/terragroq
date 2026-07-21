@@ -260,26 +260,26 @@ describe("Hermes repository lifecycle", () => {
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: false, checksGreen: true })
   })
 
-  it("accepts a clean Codex reaction only on a request pinned to the exact head", async () => {
-    const request = (body: string, updatedAt = "2026-07-21T10:00:00.000Z") => ({
-      body, createdAt: "2026-07-21T10:00:00.000Z", updatedAt, reactions: { nodes: [
-        { content: "THUMBS_UP", createdAt: "2026-07-21T10:01:00.000Z", user: { login: "chatgpt-codex-connector" } },
-      ] },
+  it("accepts only an immutable Codex-authored clean comment pinned to the current head", async () => {
+    const clean = (digest: string, updatedAt = "2026-07-21T10:00:00.000Z", author = "chatgpt-codex-connector") => ({
+      author: { login: author },
+      body: `Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** \`${digest}\``,
+      createdAt: "2026-07-21T10:00:00.000Z", updatedAt,
     })
-    const create = (body: string, updatedAt?: string) => fixture({
+    const create = (comment: unknown) => fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
         number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
         reviewDecision: "", statusCheckRollup: [{ context: "Vercel", state: "SUCCESS" }], reviews: [],
       }) }),
-      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [request(body, updatedAt)])) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [comment])) }),
     }).lifecycle
-    await expect(create(`Final head ${sha}. @codex review`).inspectPullRequest(77))
+    await expect(create(clean(sha.slice(0, 10))).inspectPullRequest(77))
       .resolves.toMatchObject({ reviewed: true })
-    await expect(create(`Final head ${mergeSha}. @codex review`).inspectPullRequest(77))
+    await expect(create(clean(mergeSha.slice(0, 10))).inspectPullRequest(77))
       .resolves.toMatchObject({ reviewed: false })
-    await expect(create(`Final head ${sha.slice(0, 12)}. @codex review`).inspectPullRequest(77))
+    await expect(create(clean(sha.slice(0, 10), "2026-07-21T10:02:00.000Z")).inspectPullRequest(77))
       .resolves.toMatchObject({ reviewed: false })
-    await expect(create(`Final head ${sha}. @codex review`, "2026-07-21T10:02:00.000Z").inspectPullRequest(77))
+    await expect(create(clean(sha.slice(0, 10), undefined, "bsvalues")).inspectPullRequest(77))
       .resolves.toMatchObject({ reviewed: false })
   })
 
@@ -297,12 +297,9 @@ describe("Hermes repository lifecycle", () => {
         statuses: [{ context: "CodeRabbit", state: "failure", description: "Review rate limited" }],
       }) }),
       "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [{
-        body: `Final head ${sha}. @codex review`,
+        author: { login: "chatgpt-codex-connector" },
+        body: `Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** \`${sha.slice(0, 10)}\``,
         createdAt: "2026-07-21T10:00:00.000Z", updatedAt: "2026-07-21T10:00:00.000Z",
-        reactions: { nodes: [{
-          content: "THUMBS_UP", createdAt: "2026-07-21T10:01:00.000Z",
-          user: { login: "chatgpt-codex-connector" },
-        }] },
       }])) }),
     })
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
