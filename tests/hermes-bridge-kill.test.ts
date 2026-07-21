@@ -91,6 +91,7 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
       "-ActivationPath", activationPath,
       "-OwnedCliPath", fixturePath,
       "-SkipScheduledTask",
+      "-SkipSupervisor",
     ], { encoding: "utf8" })
 
     expect(result.status, result.stderr).toBe(0)
@@ -125,6 +126,7 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
       "-ActivationPath", activationPath,
       "-OwnedCliPath", mentionedCliPath,
       "-SkipScheduledTask",
+      "-SkipSupervisor",
     ], { encoding: "utf8" })
 
     expect(result.status).not.toBe(0)
@@ -160,6 +162,7 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
       `-ActivationPath ${quote(activationPath)}`,
       `-OwnedCliPath ${quote(fixturePath)}`,
       "-SkipScheduledTask",
+      "-SkipSupervisor",
       "-StopProcessAction { param([int]$ProcessId) }",
     ].join(" ")
     const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8" })
@@ -195,6 +198,7 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
       `-ActivationPath ${quote(activationPath)}`,
       `-OwnedCliPath ${quote(fixturePath)}`,
       "-SkipScheduledTask",
+      "-SkipSupervisor",
       `-StopProcessAction { param([int]$ProcessId) if ($ProcessId -eq ${holder.pid}) { Start-Sleep -Milliseconds 400 }; Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue }`,
     ].join(" ")
     const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8" })
@@ -204,5 +208,86 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
     const childPid = Number(fs.readFileSync(childPidPath, "utf8"))
     spawnedPids.add(childPid)
     await waitFor(() => !isAlive(holder.pid!) && !isAlive(childPid))
+  }, 20_000)
+
+  it("stops only the supervisor named by the exact durable supervisor record", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-supervisor-kill-"))
+    const supervisorPath = path.join(tempRoot, "supervisor.ps1")
+    const supervisorStatePath = path.join(tempRoot, "supervisor.json")
+    const activationPath = path.join(tempRoot, "activation")
+    const statePath = path.join(tempRoot, "missing-state.json")
+    fs.writeFileSync(supervisorPath, "while ($true) { Start-Sleep -Seconds 1 }\n")
+    const supervisor = spawn("pwsh", [
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-File", supervisorPath,
+    ], { stdio: "ignore" })
+    if (!supervisor.pid) throw new Error("failed to spawn supervisor")
+    spawnedPids.add(supervisor.pid)
+    fs.writeFileSync(supervisorStatePath, JSON.stringify({
+      schemaVersion: 1,
+      hostName: os.hostname(),
+      processId: supervisor.pid,
+      nonce: "00000000-0000-0000-0000-000000000005",
+      supervisorPath,
+    }))
+
+    const result = spawnSync("pwsh", [
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-File", killScript,
+      "-Workspace", repoRoot,
+      "-StatePath", statePath,
+      "-SupervisorStatePath", supervisorStatePath,
+      "-ActivationPath", activationPath,
+      "-OwnedSupervisorPath", supervisorPath,
+      "-SkipScheduledTask",
+    ], { encoding: "utf8" })
+
+    expect(result.status, result.stderr).toBe(0)
+    await waitFor(() => !isAlive(supervisor.pid!))
+    expect(fs.existsSync(supervisorStatePath)).toBe(false)
+    expect(fs.readFileSync(activationPath, "utf8").trim()).toBe("disabled")
+  }, 20_000)
+
+  it("rescans and stops a supervisor descendant created during shutdown", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-supervisor-rescan-"))
+    const supervisorPath = path.join(tempRoot, "supervisor.ps1")
+    const childPath = path.join(tempRoot, "child.cjs")
+    const childPidPath = path.join(tempRoot, "child.pid")
+    const supervisorStatePath = path.join(tempRoot, "supervisor.json")
+    const activationPath = path.join(tempRoot, "activation")
+    fs.writeFileSync(childPath, "setInterval(() => {}, 1000)\n")
+    fs.writeFileSync(supervisorPath, [
+      "Start-Sleep -Milliseconds 150",
+      `$child = Start-Process -FilePath ${JSON.stringify(process.execPath)} -ArgumentList ${JSON.stringify(childPath)} -PassThru`,
+      `[IO.File]::WriteAllText(${JSON.stringify(childPidPath)}, [string]$child.Id)`,
+      "while ($true) { Start-Sleep -Seconds 1 }",
+    ].join("\n"))
+    const supervisor = spawn("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", supervisorPath], { stdio: "ignore" })
+    if (!supervisor.pid) throw new Error("failed to spawn supervisor")
+    spawnedPids.add(supervisor.pid)
+    fs.writeFileSync(supervisorStatePath, JSON.stringify({
+      schemaVersion: 1,
+      hostName: os.hostname(),
+      processId: supervisor.pid,
+      nonce: "00000000-0000-0000-0000-000000000006",
+      supervisorPath,
+    }))
+
+    const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
+    const command = [
+      `& ${quote(killScript)}`,
+      `-Workspace ${quote(repoRoot)}`,
+      `-StatePath ${quote(path.join(tempRoot, "missing-state.json"))}`,
+      `-SupervisorStatePath ${quote(supervisorStatePath)}`,
+      `-ActivationPath ${quote(activationPath)}`,
+      `-OwnedSupervisorPath ${quote(supervisorPath)}`,
+      "-SkipScheduledTask",
+      `-StopProcessAction { param([int]$ProcessId) if ($ProcessId -eq ${supervisor.pid}) { Start-Sleep -Milliseconds 400 }; Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue }`,
+    ].join(" ")
+    const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8" })
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.existsSync(childPidPath)).toBe(true)
+    const childPid = Number(fs.readFileSync(childPidPath, "utf8"))
+    spawnedPids.add(childPid)
+    await waitFor(() => !isAlive(supervisor.pid!) && !isAlive(childPid))
   }, 20_000)
 })

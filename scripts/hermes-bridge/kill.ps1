@@ -1,9 +1,12 @@
 param(
     [string]$Workspace = ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))),
     [string]$StatePath = (Join-Path $HOME ".williamos\hermes-bridge\state\state.json"),
+    [string]$SupervisorStatePath = (Join-Path $HOME ".williamos\hermes-bridge\state\supervisor.json"),
     [string]$ActivationPath = (Join-Path $HOME ".williamos\hermes-bridge\control\activation"),
     [string]$OwnedCliPath = ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot "cli.mjs"))),
+    [string]$OwnedSupervisorPath = ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot "supervisor.ps1"))),
     [switch]$SkipScheduledTask,
+    [switch]$SkipSupervisor,
     [scriptblock]$StopProcessAction
 )
 
@@ -138,6 +141,83 @@ if (Test-Path -LiteralPath $StatePath) {
             throw "HERMES_KILL_PROCESS_SURVIVED_WALL"
         }
     }
+}
+
+if (-not $SkipSupervisor -and (Test-Path -LiteralPath $SupervisorStatePath)) {
+    $supervisorState = Get-Content -LiteralPath $SupervisorStatePath -Raw | ConvertFrom-Json
+    if ($supervisorState.hostName -ne [System.Net.Dns]::GetHostName() -or
+        [string]$supervisorState.nonce -notmatch '^[0-9a-fA-F-]{36}$' -or
+        [int]$supervisorState.processId -le 0) {
+        throw "HERMES_KILL_SUPERVISOR_STATE_WALL"
+    }
+
+    $supervisorPid = [int]$supervisorState.processId
+    $ownedSupervisorPath = [IO.Path]::GetFullPath($OwnedSupervisorPath)
+    if (-not [IO.Path]::GetFullPath([string]$supervisorState.supervisorPath).Equals(
+        $ownedSupervisorPath, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "HERMES_KILL_SUPERVISOR_OWNERSHIP_WALL"
+    }
+
+    $processes = @(Get-CimInstance Win32_Process)
+    $supervisor = $processes | Where-Object ProcessId -eq $supervisorPid | Select-Object -First 1
+    if ($null -ne $supervisor) {
+        $arguments = [HermesNativeCommandLine]::Split([string]$supervisor.CommandLine)
+        $fileIndex = -1
+        for ($index = 0; $index -lt $arguments.Count; $index++) {
+            if ($arguments[$index].Equals("-File", [StringComparison]::OrdinalIgnoreCase)) {
+                $fileIndex = $index
+                break
+            }
+        }
+        if ($supervisor.Name -notin @("pwsh.exe", "pwsh") -or
+            $fileIndex -lt 0 -or $fileIndex + 1 -ge $arguments.Count -or
+            -not [IO.Path]::GetFullPath($arguments[$fileIndex + 1]).Equals(
+                $ownedSupervisorPath, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "HERMES_KILL_SUPERVISOR_OWNERSHIP_WALL"
+        }
+
+        $knownSupervisorPids = [Collections.Generic.HashSet[int]]::new()
+        [void]$knownSupervisorPids.Add($supervisorPid)
+        $supervisorTreeStopped = $false
+        for ($attempt = 0; $attempt -lt 20; $attempt++) {
+            $processes = @(Get-CimInstance Win32_Process)
+            $depthByPid = @{}
+            foreach ($knownPid in $knownSupervisorPids) { $depthByPid[$knownPid] = 0 }
+
+            $discovered = $true
+            while ($discovered) {
+                $discovered = $false
+                foreach ($process in $processes) {
+                    $processId = [int]$process.ProcessId
+                    $parentId = [int]$process.ParentProcessId
+                    if (-not $depthByPid.ContainsKey($processId) -and $depthByPid.ContainsKey($parentId)) {
+                        $depthByPid[$processId] = [int]$depthByPid[$parentId] + 1
+                        [void]$knownSupervisorPids.Add($processId)
+                        $discovered = $true
+                    }
+                }
+            }
+
+            $ownedTree = @($processes | Where-Object { $depthByPid.ContainsKey([int]$_.ProcessId) } | ForEach-Object {
+                [PSCustomObject]@{ Process = $_; Depth = [int]$depthByPid[[int]$_.ProcessId] }
+            })
+            if ($ownedTree.Count -eq 0) {
+                $supervisorTreeStopped = $true
+                break
+            }
+
+            foreach ($entry in $ownedTree | Sort-Object Depth -Descending) {
+                $pidToStop = [int]$entry.Process.ProcessId
+                & $StopProcessAction $pidToStop
+                $stoppedProcessIds += $pidToStop
+            }
+            Start-Sleep -Milliseconds 100
+        }
+        if (-not $supervisorTreeStopped) {
+            throw "HERMES_KILL_SUPERVISOR_SURVIVED_WALL"
+        }
+    }
+    Remove-Item -LiteralPath $SupervisorStatePath -Force -ErrorAction SilentlyContinue
 }
 
 [PSCustomObject]@{

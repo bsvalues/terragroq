@@ -81,7 +81,8 @@ export function assertChangedPathsAllowed(paths, reservations) {
 
 export function createHermesOrchestrator(options = {}) {
   const workspace = path.resolve(options.workspace ?? process.cwd())
-  const runtimeRoot = path.resolve(options.runtimeRoot ?? path.join(os.homedir(), ".williamos", "hermes-bridge"))
+  const runtimeRoot = path.resolve(options.runtimeRoot ?? process.env.WILLIAMOS_HERMES_RUNTIME_ROOT
+    ?? path.join(os.homedir(), ".williamos", "hermes-bridge"))
   const statePath = path.join(runtimeRoot, "state", "state.json")
   const activationPath = path.join(runtimeRoot, "control", "activation")
   const notBeforePath = path.join(runtimeRoot, "control", "authority-not-before")

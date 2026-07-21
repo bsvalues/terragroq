@@ -1,9 +1,10 @@
 param(
-    [string]$Workspace = "C:\Users\bsval\william-os-devops"
+    [string]$Workspace = "C:\Users\bsval\william-os-devops",
+    [string]$RuntimeRoot = (Join-Path $HOME ".williamos\hermes-bridge")
 )
 
 $ErrorActionPreference = "Stop"
-$root = Join-Path $HOME ".williamos\hermes-bridge"
+$root = [IO.Path]::GetFullPath($RuntimeRoot)
 $activationPath = Join-Path $root "control\activation"
 $logDir = Join-Path $root "logs"
 $cliPath = [IO.Path]::GetFullPath((Join-Path $Workspace "scripts\hermes-bridge\cli.mjs"))
@@ -17,6 +18,7 @@ $logPath = Join-Path $logDir ("cycle-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 
 Push-Location $Workspace
 try {
+    $env:WILLIAMOS_HERMES_RUNTIME_ROOT = $root
     & node "--env-file=$envPath" $cliPath cycle *>> $logPath
     exit $LASTEXITCODE
 }
