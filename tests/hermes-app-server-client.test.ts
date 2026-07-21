@@ -161,17 +161,37 @@ describe("CodexAppServerClient", () => {
     expect(JSON.stringify({ result, notifications })).not.toContain("sk-live-secret")
   })
 
-  it("assembles the terminal agent message from streamed deltas", async () => {
+  it("reconciles empty completion items to the final durable agent message", async () => {
     const { client, process } = setup()
     await connect(client, process)
     const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "work" })
     const request = process.messages().at(-1)
     process.send({ id: request.id, result: { turn: { id: "turn-delta", status: "inProgress" } } })
     await Promise.resolve()
+    await Promise.resolve()
     process.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-delta", delta: "HELLO" } })
     process.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-delta", delta: "_WORLD" } })
     process.send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-delta", status: "completed", items: [] } } })
-    await expect(resultPromise).resolves.toMatchObject({ finalText: "HELLO_WORLD" })
+    await vi.waitFor(() => {
+      expect(process.messages().findLast((message) => message.method === "thread/read")).toBeDefined()
+    })
+    const read = process.messages().findLast((message) => message.method === "thread/read")
+    process.send({
+      id: read.id,
+      result: {
+        thread: {
+          turns: [{
+            id: "turn-delta",
+            status: "completed",
+            items: [
+              { type: "agentMessage", text: "progress commentary" },
+              { type: "agentMessage", text: '{"result":"READY_FOR_MERGE"}' },
+            ],
+          }],
+        },
+      },
+    })
+    await expect(resultPromise).resolves.toMatchObject({ finalText: '{"result":"READY_FOR_MERGE"}' })
   })
 
   it("correlates a completion that omits the top-level threadId", async () => {
@@ -184,6 +204,14 @@ describe("CodexAppServerClient", () => {
     await Promise.resolve()
     process.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-no-thread", delta: "DONE" } })
     process.send({ method: "turn/completed", params: { turn: { id: "turn-no-thread", status: "completed", items: [] } } })
+    await vi.waitFor(() => {
+      expect(process.messages().findLast((message) => message.method === "thread/read")).toBeDefined()
+    })
+    const read = process.messages().findLast((message) => message.method === "thread/read")
+    process.send({
+      id: read.id,
+      result: { thread: { turns: [{ id: "turn-no-thread", status: "completed", items: [] }] } },
+    })
     await expect(resultPromise).resolves.toMatchObject({ threadId: "thread-1", finalText: "DONE" })
   })
 
