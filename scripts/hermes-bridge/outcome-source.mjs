@@ -151,7 +151,7 @@ export async function terminalizeOutcome({
   nextState,
 } = {}) {
   if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
-  if (!["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"].includes(result)) {
+  if (!["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL", "PROVIDER_UNAVAILABLE"].includes(result)) {
     throw Object.assign(new Error("terminal result is invalid"), { code: "OUTCOME_TERMINAL_RESULT_INVALID" })
   }
   let runQuery = normalizeQuery(query)
@@ -178,8 +178,22 @@ export async function terminalizeOutcome({
     )
     const row = updated?.rows?.[0]
     if (!row) {
-      if (client) await runQuery("ROLLBACK")
-      return false
+      const prior = await runQuery(
+        `SELECT EXISTS (
+           SELECT 1
+           FROM goal g
+           JOIN governance_event terminal
+             ON terminal."entityType" = 'goal' AND terminal."entityId" = g.id::text
+               AND terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
+               AND terminal.metadata->>'result' = $2
+               AND (terminal.metadata->>'nextState') IS NOT DISTINCT FROM $3
+           WHERE g.id = $1 AND g.status = 'dismissed'
+         ) AS terminalized`,
+        [outcomeId, result, nextState ?? null],
+      )
+      const alreadyTerminalized = prior?.rows?.[0]?.terminalized === true
+      if (client) await runQuery(alreadyTerminalized ? "COMMIT" : "ROLLBACK")
+      return alreadyTerminalized
     }
     await runQuery(
       `INSERT INTO governance_event ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)

@@ -84,6 +84,26 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_TERMINAL/)
   })
 
+  it("records bounded provider exhaustion without classifying it as an owner wall", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: 4, userId: "owner", ref: "GOAL-0004" }] })
+      .mockResolvedValueOnce({ rows: [] })
+    await expect(terminalizeOutcome({
+      query, outcomeId: 4, result: "PROVIDER_UNAVAILABLE", nextState: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED",
+    })).resolves.toBe(true)
+    expect(query.mock.calls[1][1][3]).toContain('"result":"PROVIDER_UNAVAILABLE"')
+  })
+
+  it("treats an exactly recorded terminal outcome as idempotent success", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ terminalized: true }] })
+    await expect(terminalizeOutcome({
+      query, outcomeId: 4, result: "PROVIDER_UNAVAILABLE", nextState: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED",
+    })).resolves.toBe(true)
+    expect(query.mock.calls[1][1]).toEqual([4, "PROVIDER_UNAVAILABLE", "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED"])
+  })
+
   it("recovers only the exact persisted transient native provider wall", async () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [{ id: 4, userId: "owner", ref: "GOAL-0004" }] })

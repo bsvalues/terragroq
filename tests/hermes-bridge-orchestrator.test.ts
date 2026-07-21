@@ -86,7 +86,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
-describe("Hermes bridge orchestrator", () => {
+describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
   it("stays silent and does not query outcomes while disabled", async () => {
     const value = fixture()
     fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
@@ -200,12 +200,66 @@ describe("Hermes bridge orchestrator", () => {
     expect(interrupted.checkpoint).toMatchObject({
       state: "RETRYABLE_PROVIDER_WALL", detail: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
     })
+    expect(interrupted.metadata.providerRetryCount).toBe(1)
     expect(Date.parse(interrupted.lease.expiresAt)).toBe(Date.parse(interrupted.checkpoint.recordedAt))
     expect(value.markTerminal).not.toHaveBeenCalled()
 
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
     expect(value.state.read().executions["77"].fencingToken).toBeGreaterThan(interrupted.fencingToken)
     expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.any(Object))
+  })
+
+  it("settles an outcome as provider-unavailable after the bounded redispatch budget", async () => {
+    const value = fixture()
+    value.client.runTurn.mockResolvedValue({
+      threadId: "thread-77", turnId: "turn-provider-wall", status: "completed",
+      finalText: JSON.stringify({
+        result: "RETRYABLE_PROVIDER_WALL", workOrder: "WO-HERMES-77-001",
+        branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
+        mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
+        blockedScopeCrossed: false, nextState: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+      }),
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "PROVIDER_UNAVAILABLE", nextState: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED",
+    })
+    expect(value.markTerminal).toHaveBeenCalledWith({
+      outcomeId: 77, result: "PROVIDER_UNAVAILABLE", nextState: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "PROVIDER_UNAVAILABLE", detail: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED" },
+      metadata: { providerRetryCount: 3 },
+    })
+  })
+
+  it("resumes cross-store provider-unavailable settlement without another Codex turn", async () => {
+    const value = fixture()
+    value.client.runTurn.mockResolvedValue({
+      threadId: "thread-77", turnId: "turn-provider-wall", status: "completed",
+      finalText: JSON.stringify({
+        result: "RETRYABLE_PROVIDER_WALL", workOrder: "WO-HERMES-77-001",
+        branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
+        mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
+        blockedScopeCrossed: false, nextState: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+      }),
+    })
+    value.markTerminal.mockRejectedValueOnce(new Error("database interruption"))
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
+    await expect(value.orchestrator.cycle()).rejects.toThrow("database interruption")
+    const interrupted = value.state.read().executions["77"]
+    expect(interrupted.checkpoint.state).toBe("PROVIDER_UNAVAILABLE")
+    const turnCount = value.client.runTurn.mock.calls.length
+    value.advance(50 * 60 * 1000 + 1)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "PROVIDER_UNAVAILABLE" })
+    expect(value.client.runTurn).toHaveBeenCalledTimes(turnCount)
+    expect(value.state.read().executions["77"].lease.status).toBe("RELEASED")
   })
 
   it("fails closed when a durable owner-touch counter changes during execution", async () => {

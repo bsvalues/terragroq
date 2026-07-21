@@ -12,6 +12,7 @@ import { createHermesStateStore } from "./state-store.mjs"
 
 const LEASE_DURATION_MS = 50 * 60 * 1000
 const TURN_TIMEOUT_MS = 45 * 60 * 1000
+const MAX_PROVIDER_REDISPATCHES = 3
 const SHA = /^[0-9a-f]{40}$/
 
 export const DEFAULT_VALIDATORS = Object.freeze([
@@ -189,6 +190,17 @@ export function createHermesOrchestrator(options = {}) {
     }
 
     let sequence = lease.checkpointSequence
+    if (current?.checkpoint?.state === "PROVIDER_UNAVAILABLE") {
+      const nextState = current.checkpoint.detail ?? "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED"
+      if (!await markTerminal({ outcomeId: outcome.id, result: "PROVIDER_UNAVAILABLE", nextState })) {
+        throw Object.assign(new Error("Provider-unavailable outcome could not be settled"), { code: "HERMES_PROVIDER_SETTLEMENT_WALL" })
+      }
+      state.releaseLease({
+        idempotencyKey: `${outcomeId}:release:PROVIDER_UNAVAILABLE`,
+        outcomeId, holderId, fencingToken: lease.fencingToken,
+      })
+      return { result: "PROVIDER_UNAVAILABLE", outcomeId, nextState }
+    }
     const branch = lease.metadata?.branch ?? `codex/hermes-${safeLeaf(outcomeRef(outcome))}-${outcome.id}`
     const reservations = RESERVATIONS[outcome.lane]
     if (!reservations) throw Object.assign(new Error("No reservation for outcome lane"), { code: "HERMES_RESERVATION_WALL" })
@@ -266,7 +278,7 @@ export function createHermesOrchestrator(options = {}) {
         workOrderId: `WO-HERMES-${outcome.id}-001`,
         branch,
         baseSha,
-        attempt: current ? 2 : 1,
+        attempt: (cp.metadata.providerRetryCount ?? 0) + 1,
         reservations,
         validators: DEFAULT_VALIDATORS,
       })
@@ -296,7 +308,20 @@ export function createHermesOrchestrator(options = {}) {
       assertOwnerTouchCountersZero(state.read())
 
       if (result.result === "RETRYABLE_PROVIDER_WALL") {
-        cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null)
+        const providerRetryCount = (cp.metadata.providerRetryCount ?? 0) + 1
+        if (providerRetryCount >= MAX_PROVIDER_REDISPATCHES) {
+          const nextState = "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED"
+          cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", nextState, { providerRetryCount })
+          if (!await markTerminal({ outcomeId: outcome.id, result: "PROVIDER_UNAVAILABLE", nextState })) {
+            throw Object.assign(new Error("Provider-unavailable outcome could not be settled"), { code: "HERMES_PROVIDER_SETTLEMENT_WALL" })
+          }
+          state.releaseLease({
+            idempotencyKey: `${outcomeId}:release:PROVIDER_UNAVAILABLE`,
+            outcomeId, holderId, fencingToken: lease.fencingToken,
+          })
+          return { result: "PROVIDER_UNAVAILABLE", outcomeId, nextState }
+        }
+        cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null, { providerRetryCount })
         state.abandonLease({
           idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${cp.checkpointSequence}`,
           outcomeId, holderId, fencingToken: lease.fencingToken,

@@ -145,6 +145,8 @@ function assertFence(current, holderId, fencingToken) {
 function metadata(input = {}, current = {}) {
   const prNumber = input.prNumber ?? current.prNumber ?? null
   if (prNumber !== null && (!Number.isInteger(prNumber) || prNumber < 1)) fail("INVALID_PR_NUMBER")
+  const providerRetryCount = input.providerRetryCount ?? current.providerRetryCount ?? 0
+  if (!Number.isInteger(providerRetryCount) || providerRetryCount < 0) fail("INVALID_PROVIDER_RETRY_COUNT")
   const outcome = input.outcome ?? current.outcome ?? null
   if (outcome !== null && (typeof outcome !== "object" || Array.isArray(outcome))) fail("INVALID_OUTCOME_SNAPSHOT")
   return {
@@ -156,6 +158,7 @@ function metadata(input = {}, current = {}) {
     baseSha: input.baseSha ?? current.baseSha ?? null,
     headRefOid: input.headRefOid ?? current.headRefOid ?? null,
     mergeSha: input.mergeSha ?? current.mergeSha ?? null,
+    providerRetryCount,
     outcome,
   }
 }
