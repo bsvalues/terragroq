@@ -10,4 +10,4 @@ The activated supervisor reclaimed outcome `5` with fencing token `9` and record
 
 ## Boundary
 
-The runtime was disabled with the owned-process kill switch before this remediation. No outcome content, feature worktree, credentials, blocked system, or foreign process was changed.
+The runtime was disabled with the owned-process kill switch before this remediation. No outcome content, feature worktree, credentials, blocked system, or foreign process were changed.
