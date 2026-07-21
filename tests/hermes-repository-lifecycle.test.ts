@@ -212,6 +212,47 @@ describe("Hermes repository lifecycle", () => {
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: true, checksGreen: true })
   })
 
+  it("accepts an explicit CodeRabbit rate-limit only with an exact-head Codex review", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { context: "CodeRabbit", state: "FAILURE" },
+          { context: "Vercel", state: "SUCCESS" },
+        ],
+        reviews: [{
+          author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: sha },
+        }],
+      }) }),
+      "gh api repos/bsvalues/terragroq/commits/": () => ({ code: 0, stdout: JSON.stringify({
+        statuses: [{ context: "CodeRabbit", state: "failure", description: "Review rate limited" }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      reviewed: true, checksGreen: true, codeRabbitRateLimited: true,
+    })
+  })
+
+  it("rejects a CodeRabbit failure when the alternate Codex review is stale", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { context: "CodeRabbit", state: "FAILURE" },
+          { context: "Vercel", state: "SUCCESS" },
+        ],
+        reviews: [{
+          author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: mergeSha },
+        }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      reviewed: false, checksGreen: false, codeRabbitRateLimited: false,
+    })
+  })
+
   it("verifies origin/main and cleans only a recorded, clean, merged worktree once", async () => {
     const { lifecycle, calls, record } = await ownedFixture({
       [`${rootGit} merge-base`]: () => ({ code: 0 }),

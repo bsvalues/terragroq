@@ -181,6 +181,13 @@ function checkName(check) {
   return String(check?.name ?? check?.context ?? "")
 }
 
+function exactHeadCodexReview(pr) {
+  return Array.isArray(pr?.reviews) && pr.reviews.some((review) =>
+    review?.author?.login === "chatgpt-codex-connector"
+    && review?.commit?.oid === pr.headRefOid
+    && ["APPROVED", "COMMENTED"].includes(String(review?.state ?? "").toUpperCase()))
+}
+
 function unresolvedThreadCount(value) {
   const reviewThreads = value?.data?.repository?.pullRequest?.reviewThreads
   const nodes = reviewThreads?.nodes
@@ -312,18 +319,33 @@ export function createRepositoryLifecycle(options) {
   async function inspectPullRequest(number) {
     if (!Number.isSafeInteger(number) || number <= 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "positive PR number required")
     await verifyOrigin()
-    const prResult = await run("gh", ["pr", "view", String(number), "--repo", repository, "--json", "number,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,mergeCommit,url"])
+    const prResult = await run("gh", ["pr", "view", String(number), "--repo", repository, "--json", "number,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,reviews,mergeCommit,url"])
     const pr = parseJson(prResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
     branchName(pr.headRefName)
+    if (!SHA.test(pr.headRefOid ?? "")) wall("HERMES_REPOSITORY_GITHUB_WALL", "PR head SHA required")
     const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}}}}}"
     const threadResult = await run("gh", ["api", "graphql", "-f", `query=${query}`, "-F", "owner=bsvalues", "-F", "name=terragroq", "-F", `number=${number}`])
     const checks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : []
     const unresolved = unresolvedThreadCount(parseJson(threadResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL"))
+    const hasExactHeadCodexReview = exactHeadCodexReview(pr)
+    const failedCodeRabbit = checks.some((check) => /coderabbit/i.test(checkName(check))
+      && !SUCCESSFUL_CHECKS.has(checkState(check)))
+    let codeRabbitRateLimited = false
+    if (failedCodeRabbit && hasExactHeadCodexReview) {
+      const statusResult = await run("gh", ["api", `repos/${repository}/commits/${pr.headRefOid}/status`])
+      const status = parseJson(statusResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
+      codeRabbitRateLimited = Array.isArray(status?.statuses) && status.statuses.some((entry) =>
+        /coderabbit/i.test(String(entry?.context ?? ""))
+        && String(entry?.state ?? "").toUpperCase() === "FAILURE"
+        && /review rate limited/i.test(String(entry?.description ?? "")))
+    }
     return {
       ...pr,
-      checksGreen: checks.length > 0 && checks.every((check) => SUCCESSFUL_CHECKS.has(checkState(check))),
-      reviewed: pr.reviewDecision === "APPROVED" || checks.some((check) =>
+      checksGreen: checks.length > 0 && checks.every((check) => SUCCESSFUL_CHECKS.has(checkState(check))
+        || (codeRabbitRateLimited && /coderabbit/i.test(checkName(check)))),
+      reviewed: pr.reviewDecision === "APPROVED" || hasExactHeadCodexReview || checks.some((check) =>
         /coderabbit/i.test(checkName(check)) && SUCCESSFUL_CHECKS.has(checkState(check))),
+      codeRabbitRateLimited,
       unresolvedThreadCount: unresolved,
     }
   }
