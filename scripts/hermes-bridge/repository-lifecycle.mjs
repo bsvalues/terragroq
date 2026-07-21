@@ -210,8 +210,12 @@ function exactHeadApprovedReview(pr) {
 }
 
 function exactHeadCodexCleanComment(value, headRefOid) {
-  const comments = value?.data?.repository?.pullRequest?.comments?.nodes
+  const connection = value?.data?.repository?.pullRequest?.comments
+  const comments = connection?.nodes
   if (!Array.isArray(comments)) wall("HERMES_REPOSITORY_GITHUB_WALL", "review request comments missing")
+  if (connection?.pageInfo?.hasPreviousPage === true || connection?.pageInfo?.hasNextPage === true) {
+    wall("HERMES_REPOSITORY_GITHUB_WALL", "review request comments are incomplete")
+  }
   return comments.some((comment) => {
     const body = String(comment?.body ?? "")
     const createdAt = Date.parse(comment?.createdAt ?? "")
@@ -315,7 +319,12 @@ export function createRepositoryLifecycle(options) {
       wall("HERMES_REPOSITORY_PATH_WALL", "persisted worktree intent mismatch")
     }
     const existing = records.get(safeBranch)
-    if (existing) return { ...existing }
+    if (existing) {
+      if (!samePath(existing.worktreePath, intendedPath)) {
+        wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "in-memory worktree record does not match persisted intent")
+      }
+      return { ...existing }
+    }
     await verifyOrigin()
     const listing = await run("git", ["-C", repositoryRoot, "worktree", "list", "--porcelain"])
     const entries = worktreeEntries(listing.stdout)
@@ -394,7 +403,7 @@ export function createRepositoryLifecycle(options) {
     const pr = parseJson(prResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
     branchName(pr.headRefName)
     if (!SHA.test(pr.headRefOid ?? "")) wall("HERMES_REPOSITORY_GITHUB_WALL", "PR head SHA required")
-    const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}} comments(last:100){nodes{author{login} body createdAt updatedAt}}}}}"
+    const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}} comments(last:100){nodes{author{login} body createdAt updatedAt} pageInfo{hasPreviousPage hasNextPage}}}}}"
     const threadResult = await run("gh", ["api", "graphql", "-f", `query=${query}`, "-F", "owner=bsvalues", "-F", "name=terragroq", "-F", `number=${number}`])
     const checks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : []
     const reviewState = parseJson(threadResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")

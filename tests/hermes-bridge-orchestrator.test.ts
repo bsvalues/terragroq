@@ -136,6 +136,14 @@ describe("Hermes bridge orchestrator", () => {
     expect(value.markComplete).not.toHaveBeenCalled()
   })
 
+  it("does not certify completion when the persisted outcome cannot be closed", async () => {
+    const value = fixture()
+    value.markComplete.mockResolvedValueOnce(false)
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_OUTCOME_COMPLETION_WALL" })
+    expect(value.lifecycle.mergePullRequest).toHaveBeenCalledOnce()
+    expect(createHermesStateStore(value.orchestrator.statePath).read().executions["77"].lease.status).toBe("ACTIVE")
+  })
+
   it("declassifies a terminal owner wall so it cannot starve later outcomes", async () => {
     const value = fixture()
     value.client.runTurn.mockResolvedValueOnce({

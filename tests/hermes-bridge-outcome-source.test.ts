@@ -12,7 +12,9 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[0][0]).toBe(OUTCOME_SELECTION_SQL)
     expect(OUTCOME_SELECTION_SQL).toMatch(/ORDER BY "createdAt" ASC, id ASC/)
     expect(OUTCOME_SELECTION_SQL).not.toMatch(/LIMIT\s+1/i)
-    expect(query.mock.calls[0][1]).toEqual(expect.arrayContaining(["classified", ["allow", "requires_approval"], "low"]))
+    expect(query.mock.calls[0][1]).toEqual(expect.arrayContaining([
+      "classified", ["allow", "requires_approval"], ["low", "R0", "R1"],
+    ]))
     expect(String(query.mock.calls[0][1][5])).toMatch(/release.*tag/i)
   })
 

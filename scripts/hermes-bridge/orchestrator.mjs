@@ -289,10 +289,13 @@ export function createHermesOrchestrator(options = {}) {
         mergeCommitSha: mergeSha,
         expectedHeadSha: pr.headRefOid,
       })
-      await markComplete({
+      const outcomeCompleted = await markComplete({
         outcomeId: outcome.id,
         evidence: { prNumber, mergeSha, branch, ownerTouchCount: 0, blockedScopeCrossed: false },
       })
+      if (!outcomeCompleted) {
+        throw Object.assign(new Error("Persisted outcome could not be closed after merge"), { code: "HERMES_OUTCOME_COMPLETION_WALL" })
+      }
       cp = await checkpoint(lease, sequence, "COMPLETE", `PR #${prNumber} merged and verified`, {
         prNumber, branch, threadId: turn.threadId, turnId: turn.turnId,
       })

@@ -41,10 +41,10 @@ function fixture(overrides: Record<string, (call: Call) => unknown> = {}) {
   return { lifecycle, calls }
 }
 
-function reviewState(reviewThreads: unknown[] = [], comments: unknown[] = []) {
+function reviewState(reviewThreads: unknown[] = [], comments: unknown[] = [], commentsPaginated = false) {
   return { data: { repository: { pullRequest: {
     reviewThreads: { nodes: reviewThreads, pageInfo: { hasNextPage: false } },
-    comments: { nodes: comments },
+    comments: { nodes: comments, pageInfo: { hasPreviousPage: commentsPaginated, hasNextPage: false } },
   } } } }
 }
 
@@ -163,6 +163,9 @@ describe("Hermes repository lifecycle", () => {
     await expect(lifecycle.ensureOwnedWorktree({
       branch, name: "hermes-goal-77", worktreePath: ownedWorktree,
     })).resolves.toMatchObject({ branch, worktreePath: ownedWorktree, resumed: true })
+    await expect(lifecycle.ensureOwnedWorktree({
+      branch, name: "hermes-goal-other", worktreePath: path.join(ownedRoot, "hermes-goal-other"),
+    })).rejects.toMatchObject({ code: "HERMES_REPOSITORY_OWNERSHIP_WALL" })
   })
 
   it("reads immutable PR file names for post-merge scope verification", async () => {
@@ -281,6 +284,14 @@ describe("Hermes repository lifecycle", () => {
       .resolves.toMatchObject({ reviewed: false })
     await expect(create(clean(sha.slice(0, 10), undefined, "bsvalues")).inspectPullRequest(77))
       .resolves.toMatchObject({ reviewed: false })
+    const paginated = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
+        statusCheckRollup: [{ context: "Vercel", state: "SUCCESS" }], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [clean(sha.slice(0, 10))], true)) }),
+    }).lifecycle
+    await expect(paginated.inspectPullRequest(77)).rejects.toMatchObject({ code: "HERMES_REPOSITORY_GITHUB_WALL" })
   })
 
   it("accepts an explicit CodeRabbit rate-limit only with clean exact-head review evidence", async () => {

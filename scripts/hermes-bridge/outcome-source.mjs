@@ -20,7 +20,7 @@ FROM goal
 WHERE status = $1
   AND verdict = ANY($2::text[])
   AND lane = ANY($3::text[])
-  AND risk = $4
+  AND risk = ANY($4::text[])
   AND authority = ANY($5::text[])
   AND command !~* $6
   AND NOT (command ~* $7 AND command ~* $8 AND command !~* $9)
@@ -32,7 +32,7 @@ export const OUTCOME_SELECTION_PARAMS = Object.freeze([
   "classified",
   Object.freeze(["allow", "requires_approval"]),
   Object.freeze(["docs", "ui", "read_model"]),
-  "low",
+  Object.freeze(["low", "R0", "R1"]),
   Object.freeze(["A0_READ_ONLY", "A1_DRAFT", "A2_WRITE_OWN"]),
   "\\m(terrafusion|terrapilot|property[[:space:]]+workbench|county|pacs|parcel|taxpayer|protected[[:space:]]+data|secret|password|credential|api[ -]?key|access[ -]?token|private[ -]?key|token|cookie|session|paid[[:space:]]+overage|destructive|force[ -]?push|reset[[:space:]]+--hard|issue[[:space:]]*#?357)\\M|#357\\M|\\m(create|publish|cut|push)[[:space:]]+(a[[:space:]]+)?(github[[:space:]]+)?release\\M|\\m(create|publish|push)[[:space:]]+(a[[:space:]]+)?(git[[:space:]]+)?tag\\M|\\mtag[[:space:]]+v?[0-9]",
   "\\mproduction\\M",
