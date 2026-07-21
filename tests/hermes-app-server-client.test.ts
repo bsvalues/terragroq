@@ -80,6 +80,13 @@ describe("CodexAppServerClient", () => {
     ])
   })
 
+  it("rejects pending RPCs when the App Server exits cleanly before replying", async () => {
+    const { client, process } = setup()
+    const pending = client.connect()
+    process.emit("exit", 0, null)
+    await expect(pending).rejects.toThrow("Codex App Server exited (0)")
+  })
+
   it("correlates requests once and ignores duplicate or unknown responses", async () => {
     const { client, process } = setup()
     await connect(client, process)

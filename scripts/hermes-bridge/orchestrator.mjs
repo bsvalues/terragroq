@@ -229,7 +229,7 @@ export function createHermesOrchestrator(options = {}) {
       sequence = cp.checkpointSequence
       const result = parseTurnResult(turn.finalText)
 
-      if (result.result !== "COMPLETE") {
+      if (["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"].includes(result.result)) {
         cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null)
         sequence = cp.checkpointSequence
         await markTerminal({
@@ -243,19 +243,32 @@ export function createHermesOrchestrator(options = {}) {
         })
         return { result: result.result, outcomeId, nextState: result.nextState ?? null }
       }
-      if (!result.merged || result.ownerTouchCount !== 0 || result.blockedScopeCrossed || result.reviewThreads !== 0) {
+      if (result.result !== "READY_FOR_MERGE" || result.merged || result.mergeCommit !== null
+        || result.ownerTouchCount !== 0 || result.blockedScopeCrossed || result.reviewThreads !== 0
+        || !SHA.test(result.commit ?? "")) {
         throw Object.assign(new Error("Codex result did not satisfy the completion contract"), { code: "HERMES_COMPLETION_GATE_WALL" })
       }
-      const prNumber = Number(new URL(result.prUrl).pathname.split("/").at(-1))
+      let prUrl
+      try { prUrl = new URL(result.prUrl) } catch {
+        throw Object.assign(new Error("Valid PR URL required"), { code: "HERMES_PR_WALL" })
+      }
+      const match = prUrl.origin === "https://github.com"
+        ? prUrl.pathname.match(/^\/bsvalues\/terragroq\/pull\/(\d+)\/?$/) : null
+      const prNumber = Number(match?.[1])
       if (!Number.isSafeInteger(prNumber) || prNumber <= 0) throw Object.assign(new Error("Valid PR URL required"), { code: "HERMES_PR_WALL" })
-      const pr = await lifecycle.inspectPullRequest(prNumber)
-      const mergeSha = pr.mergeCommit?.oid ?? result.mergeCommit
-      if (pr.state !== "MERGED" || !pr.checksGreen || !pr.reviewed
-        || pr.unresolvedThreadCount !== 0 || !SHA.test(mergeSha ?? "")) {
-        throw Object.assign(new Error("Merged PR failed independent verification"), { code: "HERMES_PR_VERIFICATION_WALL" })
+      const candidate = await lifecycle.inspectPullRequest(prNumber)
+      if (candidate.state !== "OPEN" || candidate.isDraft || !candidate.checksGreen || !candidate.reviewed
+        || candidate.unresolvedThreadCount !== 0 || candidate.headRefOid !== result.commit) {
+        throw Object.assign(new Error("Pull request failed the pre-merge verification gate"), { code: "HERMES_PR_VERIFICATION_WALL" })
       }
       const changedPaths = await lifecycle.inspectPullRequestFiles(prNumber)
       assertChangedPathsAllowed(changedPaths, reservations)
+      await lifecycle.mergePullRequest({ number: prNumber, branch })
+      const pr = await lifecycle.inspectPullRequest(prNumber)
+      const mergeSha = pr.mergeCommit?.oid
+      if (pr.state !== "MERGED" || pr.unresolvedThreadCount !== 0 || !SHA.test(mergeSha ?? "")) {
+        throw Object.assign(new Error("Merged PR failed independent verification"), { code: "HERMES_PR_VERIFICATION_WALL" })
+      }
       if (!await lifecycle.verifyOriginMainContains(mergeSha)) {
         throw Object.assign(new Error("Merge commit is absent from origin/main"), { code: "HERMES_MAIN_VERIFICATION_WALL" })
       }

@@ -26,7 +26,7 @@ WHERE status = $1
   AND NOT (command ~* $7 AND command ~* $8 AND command !~* $9)
   AND "createdAt" >= $10
 ORDER BY "createdAt" ASC, id ASC
-LIMIT 1`
+`
 
 export const OUTCOME_SELECTION_PARAMS = Object.freeze([
   "classified",
@@ -79,10 +79,10 @@ export async function selectNextOutcome({
     }
     params[9] = new Date(notBeforeMs).toISOString()
     const result = await runQuery(OUTCOME_SELECTION_SQL, params)
-    const row = result?.rows?.[0] ?? null
-    if (!row) return null
-    const decision = evaluateOutcomePolicy({ outcome: row, actor, repository, enabled, killSwitch, standingAuthority })
-    return decision.allowed ? row : null
+    const rows = Array.isArray(result?.rows) ? result.rows : []
+    return rows.find((row) => evaluateOutcomePolicy({
+      outcome: row, actor, repository, enabled, killSwitch, standingAuthority,
+    }).allowed) ?? null
   } finally {
     if (pool) await pool.end()
   }

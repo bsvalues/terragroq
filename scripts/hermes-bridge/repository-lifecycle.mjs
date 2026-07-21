@@ -353,7 +353,7 @@ export function createRepositoryLifecycle(options) {
           && checkState(check) === "FAILURE"
           && rateLimitedCodeRabbitContexts.has(check.context.toLowerCase()))),
       reviewed: pr.reviewDecision === "APPROVED" || hasExactHeadCodexReview || checks.some((check) =>
-        /coderabbit/i.test(checkName(check)) && SUCCESSFUL_CHECKS.has(checkState(check))),
+        /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"),
       codeRabbitRateLimited,
       unresolvedThreadCount: unresolved,
     }

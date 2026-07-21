@@ -33,6 +33,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
   }))
   const markComplete = vi.fn(async () => true)
   const markTerminal = vi.fn(async () => true)
+  let merged = false
   const lifecycle = {
     refreshOriginMain: vi.fn(async () => "a".repeat(40)),
     createWorktree: vi.fn(async ({ branch }: { branch: string }) => ({
@@ -40,10 +41,12 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     })),
     resumeOwnedWorktree: vi.fn(),
     inspectPullRequest: vi.fn(async () => ({
-      state: "MERGED", checksGreen: true, reviewed: true, unresolvedThreadCount: 0,
-      mergeCommit: { oid: "b".repeat(40) },
+      state: merged ? "MERGED" : "OPEN", isDraft: false, checksGreen: true, reviewed: true,
+      unresolvedThreadCount: 0, headRefOid: "c".repeat(40),
+      mergeCommit: merged ? { oid: "b".repeat(40) } : null,
     })),
     inspectPullRequestFiles: vi.fn(async () => changedPaths),
+    mergePullRequest: vi.fn(async () => { merged = true; return { merged: true } }),
     verifyOriginMainContains: vi.fn(async () => true),
     cleanupOwnedWorktree: vi.fn(async () => ({ cleaned: true })),
   }
@@ -54,10 +57,10 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     runTurn: vi.fn(async () => ({
       threadId: "thread-77", turnId: "turn-77", status: "completed",
       finalText: JSON.stringify({
-        result: "COMPLETE", workOrder: "WO-HERMES-77-001", branch: "codex/hermes-goal-77-77",
+        result: "READY_FOR_MERGE", workOrder: "WO-HERMES-77-001", branch: "codex/hermes-goal-77-77",
         commit: "c".repeat(40), prUrl: "https://github.com/bsvalues/terragroq/pull/500",
-        merged: true, mergeCommit: "b".repeat(40), validation: ["pass"], reviewThreads: 0,
-        ownerTouchCount: 0, blockedScopeCrossed: false, nextState: "OUTCOME_COMPLETE",
+        merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0,
+        ownerTouchCount: 0, blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE",
       }),
     })),
     close: vi.fn(),
@@ -83,7 +86,7 @@ describe("Hermes bridge orchestrator", () => {
     expect(value.selectOutcome).not.toHaveBeenCalled()
   })
 
-  it("dispatches a standing-authorized R0/R1 outcome and independently verifies its merge", async () => {
+  it("dispatches a standing-authorized R0/R1 outcome and merges only after independent scope verification", async () => {
     const value = fixture()
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
       result: "COMPLETE", outcomeId: "77", prNumber: 500, mergeSha: "b".repeat(40),
@@ -101,6 +104,8 @@ describe("Hermes bridge orchestrator", () => {
       }),
     }))
     expect(value.lifecycle.inspectPullRequest).toHaveBeenCalledWith(500)
+    expect(value.lifecycle.inspectPullRequestFiles.mock.invocationCallOrder[0])
+      .toBeLessThan(value.lifecycle.mergePullRequest.mock.invocationCallOrder[0])
     expect(value.lifecycle.cleanupOwnedWorktree).toHaveBeenCalledWith(expect.objectContaining({
       mergeCommitSha: "b".repeat(40),
     }))
@@ -110,6 +115,7 @@ describe("Hermes bridge orchestrator", () => {
   it("fails closed when Codex changes a path outside the lane reservation", async () => {
     const value = fixture(["components/hermes/live-status.tsx", "lib/db/schema.ts"])
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
+    expect(value.lifecycle.mergePullRequest).not.toHaveBeenCalled()
     expect(value.markComplete).not.toHaveBeenCalled()
   })
 

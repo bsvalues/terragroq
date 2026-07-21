@@ -54,7 +54,8 @@ Operating contract:
 - Use bounded native Codex subagents in isolated worktrees when at least two dependency-cleared, non-overlapping implementation or assurance lanes exist.
 - Keep builder and reviewer reservations distinct. Independently review substantive changes before merge.
 - Implement useful product behavior. Governance-only placeholders do not satisfy the outcome.
-- Own investigation, implementation, tests, commits, push, pull request, CI/review monitoring, bounded remediation, eligible merge, merged-main verification, and successor evidence.
+- Own investigation, implementation, tests, commits, push, pull request, CI/review monitoring, and bounded remediation.
+- Stop at a green, independently reviewed PR with zero unresolved threads. Hermes owns the reservation check, eligible merge, merged-main verification, cleanup, and successor release.
 - Never ask William to run commands, inspect diagnostics, manage GitHub, relay status, or approve routine R0/R1 work.
 - Stop only for a genuinely new authority boundary or terminal evidence-backed safety wall.
 - Do not use MCP connectors, dynamic tools, web search, browser control, or external product APIs. Use only the owned worktree, repository commands, GitHub CLI, validators, and native Codex subagents.
@@ -68,7 +69,7 @@ Git safety:
 - Stage only owned paths and verify the exact diff before every commit.
 
 Completion rule:
-Return only after the Work Order is merged and verified, or after a typed terminal wall. Your final response must truthfully state RESULT, WORK_ORDER, BRANCH, COMMIT, PR_URL, MERGED, MERGE_COMMIT, VALIDATION, REVIEW_THREADS, OWNER_TOUCH_COUNT, BLOCKED_SCOPE_CROSSED, and NEXT_STATE.`
+Return only when the Work Order PR is green and reviewed with zero unresolved threads, or after a typed terminal wall. Your final response must truthfully state RESULT, WORK_ORDER, BRANCH, COMMIT, PR_URL, MERGED, MERGE_COMMIT, VALIDATION, REVIEW_THREADS, OWNER_TOUCH_COUNT, BLOCKED_SCOPE_CROSSED, and NEXT_STATE.`
 }
 
 export const HERMES_TURN_OUTPUT_SCHEMA = Object.freeze({
@@ -79,7 +80,7 @@ export const HERMES_TURN_OUTPUT_SCHEMA = Object.freeze({
     "validation", "reviewThreads", "ownerTouchCount", "blockedScopeCrossed", "nextState",
   ],
   properties: {
-    result: { type: "string", enum: ["COMPLETE", "OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"] },
+    result: { type: "string", enum: ["READY_FOR_MERGE", "OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"] },
     workOrder: { type: "string" },
     branch: { type: "string" },
     commit: { type: ["string", "null"] },

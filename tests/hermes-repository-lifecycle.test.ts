@@ -98,7 +98,7 @@ describe("Hermes repository lifecycle", () => {
     const { lifecycle } = fixture({
       [`${rootGit} worktree list`]: () => ({
         code: 0,
-        stdout: `worktree ${worktreePath.replace(/\\\\/g, "/")}\nHEAD ${sha}\nbranch refs/heads/${branch}\n\n`,
+        stdout: `worktree ${worktreePath.replace(/\\/g, "/")}\nHEAD ${sha}\nbranch refs/heads/${branch}\n\n`,
       }),
       [`${ownedGit} branch --show-current`]: () => ({ code: 0, stdout: `${branch}\n` }),
     })
@@ -210,6 +210,19 @@ describe("Hermes repository lifecycle", () => {
       "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) }),
     })
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: true, checksGreen: true })
+  })
+
+  it("does not treat a skipped CodeRabbit check as review evidence", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { context: "CodeRabbit", state: "SKIPPED" }, { context: "Vercel", state: "SUCCESS" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: false, checksGreen: true })
   })
 
   it("accepts an explicit CodeRabbit rate-limit only with an exact-head Codex review", async () => {

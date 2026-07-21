@@ -10,7 +10,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     await expect(selectNextOutcome({ query })).resolves.toEqual(row)
     expect(query).toHaveBeenCalledOnce()
     expect(query.mock.calls[0][0]).toBe(OUTCOME_SELECTION_SQL)
-    expect(OUTCOME_SELECTION_SQL).toMatch(/ORDER BY "createdAt" ASC, id ASC\s+LIMIT 1/)
+    expect(OUTCOME_SELECTION_SQL).toMatch(/ORDER BY "createdAt" ASC, id ASC/)
+    expect(OUTCOME_SELECTION_SQL).not.toMatch(/LIMIT\s+1/i)
     expect(query.mock.calls[0][1]).toEqual(expect.arrayContaining(["classified", ["allow", "requires_approval"], "low"]))
     expect(String(query.mock.calls[0][1][5])).toMatch(/release.*tag/i)
   })
@@ -18,6 +19,11 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
   it("returns null for no row or a policy-ineligible injected row", async () => {
     await expect(selectNextOutcome({ query: async () => ({ rows: [] }) })).resolves.toBeNull()
     await expect(selectNextOutcome({ query: async () => ({ rows: [{ ...row, command: "Retry issue #357" }] }) })).resolves.toBeNull()
+  })
+
+  it("scans past an older policy-rejected row to the next eligible outcome", async () => {
+    const rejected = { ...row, id: 3, command: "Delete the WilliamOS status UI" }
+    await expect(selectNextOutcome({ query: async () => ({ rows: [rejected, row] }) })).resolves.toEqual(row)
   })
 
   it("fails closed on a malformed authority timestamp", async () => {

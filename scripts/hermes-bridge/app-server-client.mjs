@@ -131,7 +131,7 @@ export class CodexAppServerClient {
     this.process.stderr.resume?.()
     this.process.on("error", (error) => this.#fail(error))
     this.process.on("exit", (code, signal) => {
-      if (code !== 0 && !this.wall) {
+      if (!this.wall && (code !== 0 || this.pending.size > 0 || this.turnWaiter)) {
         this.#fail(new Error(`Codex App Server exited (${code ?? signal ?? "unknown"})`))
       }
     })
