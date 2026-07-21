@@ -318,14 +318,14 @@ export async function recoverNativeProviderOutcome({
       `WITH latest_terminal AS (
          SELECT metadata
          FROM governance_event
-         WHERE "entityType" = 'goal' AND "entityId"::text = $1::text
+         WHERE "entityType" = 'goal' AND "entityId"::text = ($1::integer)::text
            AND "eventType" = 'HERMES_OUTCOME_TERMINAL'
          ORDER BY "createdAt" DESC, id DESC
          LIMIT 1
        )
        UPDATE goal g SET status = 'classified', "updatedAt" = NOW()
        FROM latest_terminal t
-       WHERE g.id = $1 AND g.status = 'dismissed'
+       WHERE g.id = $1::integer AND g.status = 'dismissed'
          AND t.metadata->>'result' = 'FAILED_TERMINAL'
          AND t.metadata->>'nextState' = $2
        RETURNING g.id, g."userId" AS "userId", g.ref`,
@@ -346,7 +346,7 @@ export async function recoverNativeProviderOutcome({
              ON recovered."entityType" = 'goal' AND recovered."entityId"::text = g.id::text
                AND recovered."eventType" = 'HERMES_OUTCOME_PROVIDER_RECOVERED'
                AND recovered.metadata->>'retryState' = $2
-           WHERE g.id = $1 AND g.status = 'classified'
+           WHERE g.id = $1::integer AND g.status = 'classified'
          ) AS recovered`,
         [outcomeId, NATIVE_PROVIDER_RETRY_STATE],
       )
