@@ -148,6 +148,22 @@ describe("Hermes bridge orchestrator", () => {
     expect(resumeParams).not.toHaveProperty("dynamicTools")
   })
 
+  it("abandons an interrupted App Server turn for immediate fenced redispatch", async () => {
+    const value = fixture()
+    value.client.runTurn.mockRejectedValueOnce(Object.assign(new Error("interrupted"), {
+      code: "APP_SERVER_TURN_INTERRUPTED",
+    }))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "APP_SERVER_TURN_INTERRUPTED" })
+    const interrupted = value.state.read().executions["77"]
+    expect(interrupted.checkpoint).toMatchObject({ state: "RETRYABLE_WALL", detail: "APP_SERVER_TURN_INTERRUPTED" })
+    expect(Date.parse(interrupted.lease.expiresAt)).toBe(Date.parse("2026-07-21T01:00:00.000Z"))
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    expect(value.state.read().nextFencingToken).toBeGreaterThan(2)
+    expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.any(Object))
+  })
+
   it("fails closed when a durable owner-touch counter changes during execution", async () => {
     const value = fixture()
     const original = value.client.runTurn.getMockImplementation()

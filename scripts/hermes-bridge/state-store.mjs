@@ -256,6 +256,20 @@ export function releaseLease(filePath, request, options = {}) {
   })
 }
 
+export function abandonLease(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    const current = execution(state, request.outcomeId)
+    assertFence(current, request.holderId, request.fencingToken)
+    const abandoned = {
+      ...current,
+      lease: { ...current.lease, expiresAt: at.iso, abandonedAt: at.iso, abandonReason: request.reason ?? null },
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: abandoned }
+    return { outcomeId: request.outcomeId, fencingToken: current.fencingToken, leaseExpiresAt: at.iso }
+  })
+}
+
 export function setKillSwitch(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
@@ -285,6 +299,7 @@ export function createHermesStateStore(filePath, options = {}) {
     reclaimLease: (request) => reclaimLease(filePath, request, options),
     checkpoint: (request) => writeCheckpoint(filePath, request, options),
     renewLease: (request) => renewLease(filePath, request, options),
+    abandonLease: (request) => abandonLease(filePath, request, options),
     releaseLease: (request) => releaseLease(filePath, request, options),
     setKillSwitch: (request) => setKillSwitch(filePath, request, options),
     recordOwnerTouch: (request) => recordOwnerTouch(filePath, request, options),

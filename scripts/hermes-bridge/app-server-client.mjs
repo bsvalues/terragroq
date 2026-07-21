@@ -59,6 +59,15 @@ export class AppServerCancelledError extends Error {
   }
 }
 
+export class AppServerTurnEndedError extends Error {
+  constructor(status) {
+    super(`Codex App Server turn ended with ${status}`)
+    this.name = "AppServerTurnEndedError"
+    this.code = status === "failed" ? "APP_SERVER_TURN_FAILED" : "APP_SERVER_TURN_INTERRUPTED"
+    this.status = status
+  }
+}
+
 export function sanitizeAppServerText(value) {
   let text = typeof value === "string" ? value : ""
   for (const pattern of SECRET_PATTERNS) text = text.replace(pattern, "[REDACTED]")
@@ -110,6 +119,7 @@ export class CodexAppServerClient {
     cwd,
     env,
     timeoutMs = 120_000,
+    turnPollMs = 15_000,
     setTimer = setTimeout,
     clearTimer = clearTimeout,
     now = Date.now,
@@ -122,6 +132,7 @@ export class CodexAppServerClient {
     this.cwd = cwd
     this.env = createCodexChildEnvironment(env ?? process.env)
     this.timeoutMs = timeoutMs
+    this.turnPollMs = turnPollMs
     this.setTimer = setTimer
     this.clearTimer = clearTimer
     this.now = now
@@ -219,10 +230,12 @@ export class CodexAppServerClient {
 
     return new Promise((resolve, reject) => {
       let timer
+      let pollTimer
       const finish = (callback, value) => {
         if (!this.turnWaiter) return
         this.turnWaiter = null
         if (timer) this.clearTimer(timer)
+        if (pollTimer) this.clearTimer(pollTimer)
         signal?.removeEventListener?.("abort", abort)
         callback(value)
       }
@@ -234,10 +247,19 @@ export class CodexAppServerClient {
 
       this.turnWaiter = { threadId, turnId, resolve: (value) => finish(resolve, value), reject: (error) => finish(reject, error) }
       this.startingThreadId = null
+      const schedulePoll = () => {
+        pollTimer = this.setTimer(async () => {
+          await this.#reconcileTerminalTurn(threadId, turnId)
+          if (this.turnWaiter) schedulePoll()
+        }, this.turnPollMs)
+        pollTimer.unref?.()
+      }
+      schedulePoll()
       const completed = this.completedTurns.get(`${threadId}:${turnId}`)
       if (completed) {
         this.completedTurns.delete(`${threadId}:${turnId}`)
-        this.turnWaiter.resolve(completed)
+        if (completed.status === "completed") this.turnWaiter.resolve(completed)
+        else this.turnWaiter.reject(new AppServerTurnEndedError(completed.status))
         return
       }
       if (deadline !== null) {
@@ -356,14 +378,44 @@ export class CodexAppServerClient {
         }
         this.turnText.delete(`${threadId}:${turn.id}`)
         if (this.turnWaiter && threadId === this.turnWaiter.threadId && turn.id === this.turnWaiter.turnId) {
-          this.turnWaiter.resolve(result)
+          if (turn.status === "completed") this.turnWaiter.resolve(result)
+          else this.turnWaiter.reject(new AppServerTurnEndedError(turn.status))
         } else {
           this.completedTurns.clear()
           this.completedTurns.set(`${threadId}:${turn.id}`, result)
         }
       }
     }
+    if (message.method === "thread/status/changed"
+      && ["idle", "systemError"].includes(message.params?.status?.type)
+      && this.turnWaiter
+      && message.params?.threadId === this.turnWaiter.threadId) {
+      this.#reconcileTerminalTurn(this.turnWaiter.threadId, this.turnWaiter.turnId)
+    }
     this.onNotification({ method: message.method, params: this.#sanitizeNotification(message) })
+  }
+
+  async #reconcileTerminalTurn(threadId, turnId) {
+    if (!this.turnWaiter || this.turnWaiter.threadId !== threadId || this.turnWaiter.turnId !== turnId) return
+    try {
+      const response = await this.request("thread/read", { threadId, includeTurns: true })
+      if (!this.turnWaiter || this.turnWaiter.threadId !== threadId || this.turnWaiter.turnId !== turnId) return
+      const turn = response?.thread?.turns?.find((candidate) => candidate?.id === turnId)
+      if (!turn || turn.status === "inProgress") return
+      if (turn.status !== "completed") {
+        this.turnWaiter.reject(new AppServerTurnEndedError(turn.status))
+        return
+      }
+      this.turnWaiter.resolve({
+        threadId,
+        turnId,
+        status: turn.status,
+        finalText: this.#finalText(turn.items) || this.turnText.get(`${threadId}:${turnId}`) || "",
+        error: null,
+      })
+    } catch (error) {
+      if (error instanceof AppServerTurnEndedError) throw error
+    }
   }
 
   #sanitizeNotification(message) {

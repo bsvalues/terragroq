@@ -51,6 +51,22 @@ describe("Hermes bridge durable state store", () => {
     expect(Date.parse(renewed.leaseExpiresAt)).toBe(Date.parse("2026-07-21T00:00:01.500Z"))
   })
 
+  it("abandons an interrupted holder for immediate fenced reclaim", () => {
+    const { store } = fixture()
+    const first = store.acquireLease({ outcomeId: "GOAL-1", holderId: "one", leaseDurationMs: 1000, idempotencyKey: "a" })
+    const abandoned = store.abandonLease({
+      outcomeId: "GOAL-1", holderId: "one", fencingToken: first.fencingToken,
+      reason: "APP_SERVER_TURN_INTERRUPTED", idempotencyKey: "abandon",
+    })
+    expect(abandoned.leaseExpiresAt).toBe("2026-07-21T00:00:00.000Z")
+    const second = store.reclaimLease({
+      outcomeId: "GOAL-1", holderId: "two", leaseDurationMs: 1000,
+      expectedFencingToken: first.fencingToken, idempotencyKey: "reclaim",
+    })
+    expect(second.fencingToken).toBeGreaterThan(first.fencingToken)
+    expect(store.read().executions["GOAL-1"].lease).toMatchObject({ status: "ACTIVE", holderId: "two" })
+  })
+
   it("persists owner-touch counters and enforces the kill switch", () => {
     const { store } = fixture()
     expect(store.recordOwnerTouch({ counter: "ownerDiagnosticTouchCount", idempotencyKey: "touch" }).ownerTouchCounters.OWNER_DIAGNOSTIC_TOUCH_COUNT).toBe(1)
