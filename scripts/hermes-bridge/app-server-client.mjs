@@ -65,8 +65,28 @@ export function sanitizeAppServerText(value) {
   return text
 }
 
-export function createCodexChildEnvironment(source = process.env) {
-  return Object.fromEntries(Object.entries(source).filter(([key]) => CODEX_ENVIRONMENT_KEYS.has(key.toUpperCase())))
+export function createCodexChildEnvironment(source = process.env, {
+  platform = process.platform,
+  existsSync = fs.existsSync,
+} = {}) {
+  const environment = Object.fromEntries(
+    Object.entries(source).filter(([key]) => CODEX_ENVIRONMENT_KEYS.has(key.toUpperCase())),
+  )
+  if (platform === "win32") {
+    const stablePowerShell = "C:\\Program Files\\PowerShell\\7"
+    if (existsSync(path.join(stablePowerShell, "pwsh.exe"))) {
+      const pathKey = Object.keys(environment).find((key) => key.toUpperCase() === "PATH") ?? "PATH"
+      const entries = String(environment[pathKey] ?? "").split(";").filter(Boolean)
+      const normalizedStablePath = path.win32.normalize(stablePowerShell).replace(/[\\/]+$/, "").toLowerCase()
+      const hasStablePowerShell = entries.some((entry) => (
+        path.win32.normalize(entry).replace(/[\\/]+$/, "").toLowerCase() === normalizedStablePath
+      ))
+      if (!hasStablePowerShell) {
+        environment[pathKey] = [stablePowerShell, ...entries].join(";")
+      }
+    }
+  }
+  return environment
 }
 
 function defaultLaunch() {
