@@ -1,12 +1,20 @@
 param(
-    [string]$Workspace = "C:\Users\bsval\william-os-devops",
+    [string]$Workspace = ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))),
     [string]$StatePath = (Join-Path $HOME ".williamos\hermes-bridge\state\state.json"),
     [string]$ActivationPath = (Join-Path $HOME ".williamos\hermes-bridge\control\activation"),
-    [switch]$SkipScheduledTask
+    [switch]$SkipScheduledTask,
+    [scriptblock]$StopProcessAction,
+    [scriptblock]$ProcessAliveProbe
 )
 
 $ErrorActionPreference = "Stop"
 $taskName = "WilliamOS Hermes Codex Bridge"
+$StopProcessAction = if ($null -ne $StopProcessAction) { $StopProcessAction } else {
+    { param([int]$ProcessId) Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue }
+}
+$ProcessAliveProbe = if ($null -ne $ProcessAliveProbe) { $ProcessAliveProbe } else {
+    { param([int]$ProcessId) $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) }
+}
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ActivationPath) | Out-Null
 [IO.File]::WriteAllText($ActivationPath, "disabled`n", [Text.UTF8Encoding]::new($false))
@@ -42,6 +50,9 @@ if (Test-Path -LiteralPath $StatePath) {
         if ($null -eq $holder) { continue }
 
         $commandLine = [string]$holder.CommandLine
+        if ([string]::IsNullOrWhiteSpace($commandLine)) {
+            throw "HERMES_KILL_OWNERSHIP_WALL"
+        }
         $normalizedCommand = $commandLine.Replace('/', '\')
         $normalizedCliPath = $ownedCliPath.Replace('/', '\')
         $escapedCliPath = [Regex]::Escape($normalizedCliPath)
@@ -72,8 +83,8 @@ if (Test-Path -LiteralPath $StatePath) {
 
         foreach ($entry in $ownedTree | Sort-Object Depth -Descending) {
             $pidToStop = [int]$entry.Process.ProcessId
-            Stop-Process -Id $pidToStop -Force -ErrorAction SilentlyContinue
-            if (Get-Process -Id $pidToStop -ErrorAction SilentlyContinue) {
+            & $StopProcessAction $pidToStop
+            if (& $ProcessAliveProbe $pidToStop) {
                 throw "HERMES_KILL_PROCESS_SURVIVED_WALL"
             }
             $stoppedProcessIds += $pidToStop

@@ -112,4 +112,42 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
     expect(isAlive(unrelated.pid)).toBe(true)
     expect(fs.readFileSync(activationPath, "utf8").trim()).toBe("disabled")
   })
+
+  it("raises the survivor wall before touching unrelated processes", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-kill-survivor-"))
+    const activationPath = path.join(tempRoot, "activation")
+    const statePath = path.join(tempRoot, "state.json")
+    const holder = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", cliPath, "cycle"], { stdio: "ignore" })
+    const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
+    if (!holder.pid || !unrelated.pid) throw new Error("failed to spawn test processes")
+    spawnedPids.add(holder.pid)
+    spawnedPids.add(unrelated.pid)
+    fs.writeFileSync(statePath, JSON.stringify({
+      executions: {
+        test: {
+          lease: {
+            status: "ACTIVE",
+            holderId: `${os.hostname()}:${holder.pid}:00000000-0000-0000-0000-000000000003`,
+          },
+        },
+      },
+    }))
+
+    const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
+    const command = [
+      `& ${quote(killScript)}`,
+      `-Workspace ${quote(repoRoot)}`,
+      `-StatePath ${quote(statePath)}`,
+      `-ActivationPath ${quote(activationPath)}`,
+      "-SkipScheduledTask",
+      "-StopProcessAction { param([int]$ProcessId) }",
+    ].join(" ")
+    const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8" })
+
+    expect(result.status).not.toBe(0)
+    expect(`${result.stdout}\n${result.stderr}`).toContain("HERMES_KILL_PROCESS_SURVIVED_WALL")
+    expect(isAlive(holder.pid)).toBe(true)
+    expect(isAlive(unrelated.pid)).toBe(true)
+    expect(fs.readFileSync(activationPath, "utf8").trim()).toBe("disabled")
+  })
 })
