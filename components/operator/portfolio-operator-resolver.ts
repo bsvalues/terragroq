@@ -34,6 +34,14 @@ export function hasApprovedOwnerOutcome(outcomes: OwnerOutcomeSource[]) {
   return findApprovedOwnerOutcome(outcomes) !== null
 }
 
+export function getOwnerOutcomeReference(outcome: OwnerOutcomeSource | null) {
+  if (!outcome) return null
+
+  return (outcome.ref ?? `GOAL-${outcome.id ?? "UNRECORDED"}`)
+    .replace(/[^A-Z0-9-]/gi, "-")
+    .toUpperCase()
+}
+
 export function resolveNextPortfolioProgram(
   programs: PortfolioProgramRecord[],
   ownerOutcomes: OwnerOutcomeSource[] = [],
@@ -80,7 +88,7 @@ export function resolveNextPortfolioProgram(
     programId: selected.programId,
     goalId: selected.nextGoalId,
     ownerOutcomeRef: selected.programId === OWNER_OUTCOME_PROGRAM_ID
-      ? findApprovedOwnerOutcome(ownerOutcomes)?.ref ?? null
+      ? getOwnerOutcomeReference(findApprovedOwnerOutcome(ownerOutcomes))
       : null,
     ownerDecisionRequired: false as const,
   }
