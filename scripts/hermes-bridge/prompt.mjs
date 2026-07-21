@@ -56,6 +56,8 @@ Operating contract:
 - If a subagent or provider lane is unavailable, record that lane as provider-unavailable and continue the healthy coordinator lane inside the owned worktree. Do not wait indefinitely or turn provider availability into owner contact.
 - The owner outcome and standing R0/R1 grant are sufficient design authority. Do not invoke owner-interactive brainstorming or planning gates; make a bounded product decision and implement it.
 - Progress commentary is not an authority wall. Use OWNER_DECISION_REQUIRED only as the final result for a genuinely new authority boundary.
+- Treat CreateProcessAsUserW error 5 before process start as a transient provider condition. Retry the exact native command up to three times in this dispatch; do not infer failure from a prior dispatch.
+- If all three current-dispatch launches fail before process start, return RETRYABLE_PROVIDER_WALL. Do not return FAILED_TERMINAL for native process or provider availability.
 - Request GitHub Codex review in a PR comment that includes the exact 40-character head SHA, then wait for its reviewed-commit evidence on that head.
 - Implement useful product behavior. Governance-only placeholders do not satisfy the outcome.
 - Own investigation, implementation, tests, commits, push, pull request, CI/review monitoring, and bounded remediation.
@@ -84,7 +86,7 @@ export const HERMES_TURN_OUTPUT_SCHEMA = Object.freeze({
     "validation", "reviewThreads", "ownerTouchCount", "blockedScopeCrossed", "nextState",
   ],
   properties: {
-    result: { type: "string", enum: ["READY_FOR_MERGE", "OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"] },
+    result: { type: "string", enum: ["READY_FOR_MERGE", "RETRYABLE_PROVIDER_WALL", "OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"] },
     workOrder: { type: "string" },
     branch: { type: "string" },
     commit: { type: ["string", "null"] },

@@ -29,6 +29,8 @@ describe("Hermes Codex prompt", () => {
     expect(prompt).toContain("Never ask William")
     expect(prompt).toContain("issue #357")
     expect(prompt).toContain("Do not modify or stage .obsidian/")
+    expect(prompt).toContain("Retry the exact native command up to three times")
+    expect(prompt).toContain("return RETRYABLE_PROVIDER_WALL")
   })
 
   it("rejects missing authority and empty reservations", () => {
@@ -40,5 +42,6 @@ describe("Hermes Codex prompt", () => {
     expect(HERMES_TURN_OUTPUT_SCHEMA.additionalProperties).toBe(false)
     expect(HERMES_TURN_OUTPUT_SCHEMA.required).toContain("ownerTouchCount")
     expect(HERMES_TURN_OUTPUT_SCHEMA.required).toContain("blockedScopeCrossed")
+    expect(HERMES_TURN_OUTPUT_SCHEMA.properties.result.enum).toContain("RETRYABLE_PROVIDER_WALL")
   })
 })

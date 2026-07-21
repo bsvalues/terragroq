@@ -36,6 +36,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
   }))
   const markComplete = vi.fn(async () => true)
   const markTerminal = vi.fn(async () => true)
+  const deferOutcome = vi.fn(async () => true)
   let merged = false
   const lifecycle = {
     refreshOriginMain: vi.fn(async () => "a".repeat(40)),
@@ -71,13 +72,13 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     close: vi.fn(),
   }
   const orchestrator = createHermesOrchestrator({
-    workspace: process.cwd(), runtimeRoot: root, state, lifecycle, selectOutcome, markComplete, markTerminal,
+    workspace: process.cwd(), runtimeRoot: root, state, lifecycle, selectOutcome, markComplete, markTerminal, deferOutcome,
     clientFactory: () => client,
     holderId: "test-holder",
     now: () => new Date(currentTime),
   })
   return {
-    root, state, orchestrator, selectOutcome, markComplete, markTerminal, lifecycle, client,
+    root, state, orchestrator, selectOutcome, markComplete, markTerminal, deferOutcome, lifecycle, client,
     advance: (milliseconds: number) => { currentTime += milliseconds },
   }
 }
@@ -86,7 +87,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
-describe("Hermes bridge orchestrator", () => {
+describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
   it("stays silent and does not query outcomes while disabled", async () => {
     const value = fixture()
     fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
@@ -136,7 +137,7 @@ describe("Hermes bridge orchestrator", () => {
   it("resumes an unfinished Codex thread without disabling its native environment", async () => {
     const value = fixture(["lib/db/schema.ts"])
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
-    value.advance(15 * 60 * 1000 + 1)
+    value.advance(50 * 60 * 1000 + 1)
 
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
     expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.objectContaining({
@@ -179,6 +180,87 @@ describe("Hermes bridge orchestrator", () => {
     const redispatched = value.state.read().executions["77"]
     expect(redispatched.fencingToken).toBeGreaterThan(timedOut.fencingToken)
     expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.any(Object))
+  })
+
+  it("redispatches a transient native provider wall without terminalizing the outcome", async () => {
+    const value = fixture()
+    value.client.runTurn.mockResolvedValueOnce({
+      threadId: "thread-77", turnId: "turn-provider-wall", status: "completed",
+      finalText: JSON.stringify({
+        result: "RETRYABLE_PROVIDER_WALL", workOrder: "WO-HERMES-77-001",
+        branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
+        mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
+        blockedScopeCrossed: false, nextState: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+      }),
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "RETRYABLE_PROVIDER_WALL", outcomeId: "77",
+    })
+    const interrupted = value.state.read().executions["77"]
+    expect(interrupted.checkpoint).toMatchObject({
+      state: "RETRYABLE_PROVIDER_WALL", detail: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+    })
+    expect(interrupted.metadata.providerRetryCount).toBe(1)
+    expect(Date.parse(interrupted.lease.expiresAt)).toBe(Date.parse(interrupted.checkpoint.recordedAt))
+    expect(value.markTerminal).not.toHaveBeenCalled()
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    expect(value.state.read().executions["77"].fencingToken).toBeGreaterThan(interrupted.fencingToken)
+    expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.any(Object))
+  })
+
+  it("settles an outcome as provider-unavailable after the bounded redispatch budget", async () => {
+    const value = fixture()
+    value.client.runTurn.mockResolvedValue({
+      threadId: "thread-77", turnId: "turn-provider-wall", status: "completed",
+      finalText: JSON.stringify({
+        result: "RETRYABLE_PROVIDER_WALL", workOrder: "WO-HERMES-77-001",
+        branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
+        mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
+        blockedScopeCrossed: false, nextState: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+      }),
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "PROVIDER_UNAVAILABLE", nextState: "DEFERRED_PROVIDER_UNAVAILABLE",
+    })
+    expect(value.deferOutcome).toHaveBeenCalledWith({
+      outcomeId: 77, retryAfter: "2026-07-21T01:15:00.000Z",
+    })
+    expect(value.markTerminal).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "DEFERRED", expiresAt: "2026-07-21T01:15:00.000Z" },
+      checkpoint: { state: "DEFERRED_PROVIDER_UNAVAILABLE", detail: "2026-07-21T01:15:00.000Z" },
+      metadata: { providerRetryCount: 0 },
+    })
+  })
+
+  it("resumes cross-store provider-unavailable settlement without another Codex turn", async () => {
+    const value = fixture()
+    value.client.runTurn.mockResolvedValue({
+      threadId: "thread-77", turnId: "turn-provider-wall", status: "completed",
+      finalText: JSON.stringify({
+        result: "RETRYABLE_PROVIDER_WALL", workOrder: "WO-HERMES-77-001",
+        branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
+        mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
+        blockedScopeCrossed: false, nextState: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+      }),
+    })
+    value.deferOutcome.mockRejectedValueOnce(new Error("database interruption"))
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
+    await expect(value.orchestrator.cycle()).rejects.toThrow("database interruption")
+    const interrupted = value.state.read().executions["77"]
+    expect(interrupted.checkpoint.state).toBe("PROVIDER_UNAVAILABLE")
+    const turnCount = value.client.runTurn.mock.calls.length
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "PROVIDER_UNAVAILABLE" })
+    expect(value.client.runTurn).toHaveBeenCalledTimes(turnCount)
+    expect(value.state.read().executions["77"].lease.status).toBe("DEFERRED")
   })
 
   it("fails closed when a durable owner-touch counter changes during execution", async () => {

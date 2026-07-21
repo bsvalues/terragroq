@@ -145,6 +145,8 @@ function assertFence(current, holderId, fencingToken) {
 function metadata(input = {}, current = {}) {
   const prNumber = input.prNumber ?? current.prNumber ?? null
   if (prNumber !== null && (!Number.isInteger(prNumber) || prNumber < 1)) fail("INVALID_PR_NUMBER")
+  const providerRetryCount = input.providerRetryCount ?? current.providerRetryCount ?? 0
+  if (!Number.isInteger(providerRetryCount) || providerRetryCount < 0) fail("INVALID_PROVIDER_RETRY_COUNT")
   const outcome = input.outcome ?? current.outcome ?? null
   if (outcome !== null && (typeof outcome !== "object" || Array.isArray(outcome))) fail("INVALID_OUTCOME_SNAPSHOT")
   return {
@@ -156,6 +158,7 @@ function metadata(input = {}, current = {}) {
     baseSha: input.baseSha ?? current.baseSha ?? null,
     headRefOid: input.headRefOid ?? current.headRefOid ?? null,
     mergeSha: input.mergeSha ?? current.mergeSha ?? null,
+    providerRetryCount,
     outcome,
   }
 }
@@ -270,6 +273,80 @@ export function abandonLease(filePath, request, options = {}) {
   })
 }
 
+export function reopenProviderWall(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    if (current.fencingToken !== request.expectedFencingToken) fail("FENCING_TOKEN_CONFLICT")
+    if (current.lease.status !== "RELEASED" || current.checkpoint.state !== "FAILED_TERMINAL"
+      || current.checkpoint.detail !== request.expectedDetail) {
+      fail("PROVIDER_RECOVERY_STATE_WALL")
+    }
+    const reopened = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "ABANDONED",
+        expiresAt: at.iso,
+        recoveredAt: at.iso,
+        recoverReason: "TRANSIENT_NATIVE_PROVIDER_WALL",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "RETRYABLE_PROVIDER_WALL",
+        detail: request.expectedDetail,
+        recordedAt: at.iso,
+      },
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: reopened }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: reopened.fencingToken,
+      checkpointSequence: reopened.checkpoint.sequence,
+      leaseStatus: reopened.lease.status,
+    }
+  })
+}
+
+export function deferProviderWall(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    assertFence(current, request.holderId, request.fencingToken)
+    const retryAt = timestamp(request.retryAfter)
+    if (retryAt.milliseconds <= at.milliseconds || current.checkpoint.state !== "PROVIDER_UNAVAILABLE") {
+      fail("PROVIDER_DEFERRAL_STATE_WALL")
+    }
+    const deferred = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "DEFERRED",
+        expiresAt: retryAt.iso,
+        deferredAt: at.iso,
+        deferReason: "PROVIDER_UNAVAILABLE",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "DEFERRED_PROVIDER_UNAVAILABLE",
+        detail: retryAt.iso,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({ providerRetryCount: 0 }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: deferred }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: deferred.fencingToken,
+      checkpointSequence: deferred.checkpoint.sequence,
+      leaseStatus: deferred.lease.status,
+      retryAfter: retryAt.iso,
+    }
+  })
+}
+
 export function setKillSwitch(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
@@ -301,6 +378,8 @@ export function createHermesStateStore(filePath, options = {}) {
     renewLease: (request) => renewLease(filePath, request, options),
     abandonLease: (request) => abandonLease(filePath, request, options),
     releaseLease: (request) => releaseLease(filePath, request, options),
+    reopenProviderWall: (request) => reopenProviderWall(filePath, request, options),
+    deferProviderWall: (request) => deferProviderWall(filePath, request, options),
     setKillSwitch: (request) => setKillSwitch(filePath, request, options),
     recordOwnerTouch: (request) => recordOwnerTouch(filePath, request, options),
   })

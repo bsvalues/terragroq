@@ -4,14 +4,16 @@ import path from "node:path"
 import { randomUUID } from "node:crypto"
 
 import { CodexAppServerClient } from "./app-server-client.mjs"
-import { completeOutcome, selectNextOutcome, terminalizeOutcome } from "./outcome-source.mjs"
+import { completeOutcome, deferProviderOutcome, selectNextOutcome, terminalizeOutcome } from "./outcome-source.mjs"
 import { evaluateOutcomePolicy } from "./policy.mjs"
 import { buildHermesCodexPrompt, HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 import { createRepositoryLifecycle } from "./repository-lifecycle.mjs"
 import { createHermesStateStore } from "./state-store.mjs"
 
-const LEASE_DURATION_MS = 15 * 60 * 1000
-const TURN_TIMEOUT_MS = 12 * 60 * 1000
+const LEASE_DURATION_MS = 50 * 60 * 1000
+const TURN_TIMEOUT_MS = 45 * 60 * 1000
+const MAX_PROVIDER_REDISPATCHES = 3
+const PROVIDER_RETRY_COOLDOWN_MS = 15 * 60 * 1000
 const SHA = /^[0-9a-f]{40}$/
 
 export const DEFAULT_VALIDATORS = Object.freeze([
@@ -94,6 +96,7 @@ export function createHermesOrchestrator(options = {}) {
   const selectOutcome = options.selectOutcome ?? selectNextOutcome
   const markComplete = options.markComplete ?? completeOutcome
   const markTerminal = options.markTerminal ?? terminalizeOutcome
+  const deferOutcome = options.deferOutcome ?? deferProviderOutcome
   const clientFactory = options.clientFactory ?? ((cwd) => new CodexAppServerClient({ cwd, timeoutMs: TURN_TIMEOUT_MS }))
   const now = options.now ?? (() => new Date())
   const holderId = options.holderId ?? `${os.hostname()}:${process.pid}:${randomUUID()}`
@@ -148,7 +151,7 @@ export function createHermesOrchestrator(options = {}) {
     const initialized = state.initialize()
     if (initialized.killSwitch.active) return { result: "KILL_SWITCH_ACTIVE" }
     assertOwnerTouchCountersZero(initialized)
-    const unfinished = Object.values(initialized.executions).filter((execution) => execution?.lease?.status !== "RELEASED")
+    const unfinished = Object.values(initialized.executions).filter((execution) => execution?.lease?.status === "ACTIVE")
     if (unfinished.length > 1) throw Object.assign(new Error("Multiple unfinished executions found"), { code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
     const pendingExecution = unfinished[0] ?? null
     const notBefore = readControl(notBeforePath, now().toISOString())
@@ -189,6 +192,27 @@ export function createHermesOrchestrator(options = {}) {
     }
 
     let sequence = lease.checkpointSequence
+    if (current?.checkpoint?.state === "PROVIDER_UNAVAILABLE") {
+      const recordedRetryAt = Date.parse(current.checkpoint.detail ?? "")
+      const retryAfter = new Date(recordedRetryAt > now().getTime()
+        ? recordedRetryAt : now().getTime() + PROVIDER_RETRY_COOLDOWN_MS).toISOString()
+      try {
+        if (!await deferOutcome({ outcomeId: outcome.id, retryAfter })) {
+          throw Object.assign(new Error("Provider-unavailable outcome could not be deferred"), { code: "HERMES_PROVIDER_SETTLEMENT_WALL" })
+        }
+      } catch (error) {
+        state.abandonLease({
+          idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:provider-settlement`,
+          outcomeId, holderId, fencingToken: lease.fencingToken, reason: "HERMES_PROVIDER_SETTLEMENT_WALL",
+        })
+        throw error
+      }
+      state.deferProviderWall({
+        idempotencyKey: `${outcomeId}:defer:PROVIDER_UNAVAILABLE:${retryAfter}`,
+        outcomeId, holderId, fencingToken: lease.fencingToken, retryAfter,
+      })
+      return { result: "PROVIDER_UNAVAILABLE", outcomeId, nextState: "DEFERRED_PROVIDER_UNAVAILABLE", retryAfter }
+    }
     const branch = lease.metadata?.branch ?? `codex/hermes-${safeLeaf(outcomeRef(outcome))}-${outcome.id}`
     const reservations = RESERVATIONS[outcome.lane]
     if (!reservations) throw Object.assign(new Error("No reservation for outcome lane"), { code: "HERMES_RESERVATION_WALL" })
@@ -266,7 +290,7 @@ export function createHermesOrchestrator(options = {}) {
         workOrderId: `WO-HERMES-${outcome.id}-001`,
         branch,
         baseSha,
-        attempt: current ? 2 : 1,
+        attempt: (cp.metadata.providerRetryCount ?? 0) + 1,
         reservations,
         validators: DEFAULT_VALIDATORS,
       })
@@ -294,6 +318,29 @@ export function createHermesOrchestrator(options = {}) {
       sequence = cp.checkpointSequence
       const result = parseTurnResult(turn.finalText)
       assertOwnerTouchCountersZero(state.read())
+
+      if (result.result === "RETRYABLE_PROVIDER_WALL") {
+        const providerRetryCount = (cp.metadata.providerRetryCount ?? 0) + 1
+        if (providerRetryCount >= MAX_PROVIDER_REDISPATCHES) {
+          const retryAfter = new Date(now().getTime() + PROVIDER_RETRY_COOLDOWN_MS).toISOString()
+          cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", retryAfter, { providerRetryCount })
+          if (!await deferOutcome({ outcomeId: outcome.id, retryAfter })) {
+            throw Object.assign(new Error("Provider-unavailable outcome could not be deferred"), { code: "HERMES_PROVIDER_SETTLEMENT_WALL" })
+          }
+          state.deferProviderWall({
+            idempotencyKey: `${outcomeId}:defer:PROVIDER_UNAVAILABLE:${retryAfter}`,
+            outcomeId, holderId, fencingToken: lease.fencingToken, retryAfter,
+          })
+          return { result: "PROVIDER_UNAVAILABLE", outcomeId, nextState: "DEFERRED_PROVIDER_UNAVAILABLE", retryAfter }
+        }
+        cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null, { providerRetryCount })
+        state.abandonLease({
+          idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${cp.checkpointSequence}`,
+          outcomeId, holderId, fencingToken: lease.fencingToken,
+          reason: result.nextState ?? "RETRYABLE_PROVIDER_WALL",
+        })
+        return { result: result.result, outcomeId, nextState: result.nextState ?? null }
+      }
 
       if (["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"].includes(result.result)) {
         cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null)
@@ -347,15 +394,17 @@ export function createHermesOrchestrator(options = {}) {
         lease, sequence, outcome, branch, reservations, worktreePath: record.worktreePath, prNumber,
       })
     } catch (error) {
-      try {
-        await checkpoint(lease, sequence, "RETRYABLE_WALL", error?.code ?? "HERMES_CYCLE_FAILED")
-        if (["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT"].includes(error?.code)) {
+      try { await checkpoint(lease, sequence, "RETRYABLE_WALL", error?.code ?? "HERMES_CYCLE_FAILED") } catch {}
+      if (cp?.state === "PROVIDER_UNAVAILABLE"
+        || ["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT", "HERMES_PROVIDER_SETTLEMENT_WALL"].includes(error?.code)) {
+        try {
           state.abandonLease({
             idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${sequence}`,
-            outcomeId, holderId, fencingToken: lease.fencingToken, reason: error.code,
+            outcomeId, holderId, fencingToken: lease.fencingToken,
+            reason: error?.code ?? "HERMES_PROVIDER_SETTLEMENT_WALL",
           })
-        }
-      } catch {}
+        } catch {}
+      }
       throw error
     } finally {
       if (renewal) clearInterval(renewal)
@@ -363,5 +412,5 @@ export function createHermesOrchestrator(options = {}) {
     }
   }
 
-  return Object.freeze({ cycle, runtimeRoot, statePath, activationPath, notBeforePath })
+  return Object.freeze({ cycle, state, runtimeRoot, statePath, activationPath, notBeforePath })
 }
