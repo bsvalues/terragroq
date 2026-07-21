@@ -233,7 +233,6 @@ export function createHermesOrchestrator(options = {}) {
         try {
           await client.resumeThread(threadId, {
             cwd: record.worktreePath, approvalPolicy: "never", sandbox: "workspace-write",
-            environments: [], selectedCapabilityRoots: [], dynamicTools: [],
           })
         } catch {
           threadId = null
@@ -245,9 +244,6 @@ export function createHermesOrchestrator(options = {}) {
           approvalPolicy: "never",
           sandbox: "workspace-write",
           ephemeral: false,
-          environments: [],
-          selectedCapabilityRoots: [],
-          dynamicTools: [],
         })
       }
       cp = await checkpoint(lease, sequence, "CODEX_THREAD_READY", null, { threadId })

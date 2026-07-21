@@ -43,6 +43,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
       branch, worktreePath: path.join(root, "worktrees", "goal-77"),
     })),
     resumeOwnedWorktree: vi.fn(),
+    discoverPullRequest: vi.fn(async () => null),
     inspectPullRequest: vi.fn(async () => ({
       state: merged ? "MERGED" : "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
       unresolvedThreadCount: 0, headRefOid: "c".repeat(40),
@@ -104,6 +105,10 @@ describe("Hermes bridge orchestrator", () => {
     expect(value.client.startThread).toHaveBeenCalledWith(expect.objectContaining({
       approvalPolicy: "never", sandbox: "workspace-write", ephemeral: false,
     }))
+    const threadParams = value.client.startThread.mock.calls[0][0]
+    expect(threadParams).not.toHaveProperty("environments")
+    expect(threadParams).not.toHaveProperty("selectedCapabilityRoots")
+    expect(threadParams).not.toHaveProperty("dynamicTools")
     expect(value.client.runTurn).toHaveBeenCalledWith(expect.objectContaining({
       turn: expect.objectContaining({
         effort: "ultra",
@@ -126,6 +131,21 @@ describe("Hermes bridge orchestrator", () => {
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
     expect(value.lifecycle.mergePullRequest).not.toHaveBeenCalled()
     expect(value.markComplete).not.toHaveBeenCalled()
+  })
+
+  it("resumes an unfinished Codex thread without disabling its native environment", async () => {
+    const value = fixture(["lib/db/schema.ts"])
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
+    value.advance(15 * 60 * 1000 + 1)
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
+    expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.objectContaining({
+      approvalPolicy: "never", sandbox: "workspace-write",
+    }))
+    const resumeParams = value.client.resumeThread.mock.calls[0][1]
+    expect(resumeParams).not.toHaveProperty("environments")
+    expect(resumeParams).not.toHaveProperty("selectedCapabilityRoots")
+    expect(resumeParams).not.toHaveProperty("dynamicTools")
   })
 
   it("fails closed when a durable owner-touch counter changes during execution", async () => {
