@@ -22,7 +22,7 @@ describe("Hermes interactive-user supervisor", () => {
       `-Workspace ${quote(repoRoot)}`,
       `-RuntimeRoot ${quote(runtimeRoot)}`,
       "-RunOnce",
-      `-CycleAction { param([string]$OwnedWorkspace, [string]$OwnedRunner, [string]$OwnedRuntimeRoot) [IO.File]::WriteAllText(${quote(markerPath)}, "$OwnedWorkspace|$OwnedRuntimeRoot"); return 0 }`,
+      `-CycleAction { param([string]$OwnedWorkspace, [string]$OwnedCliPath, [string]$OwnedRuntimeRoot) [IO.File]::WriteAllText(${quote(markerPath)}, "$OwnedWorkspace|$OwnedRuntimeRoot"); return 0 }`,
     ].join(" ")
     const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8" })
 
@@ -30,6 +30,37 @@ describe("Hermes interactive-user supervisor", () => {
     expect(fs.readFileSync(markerPath, "utf8")).toBe(`${repoRoot}|${runtimeRoot}`)
     expect(fs.existsSync(path.join(runtimeRoot, "state", "supervisor.json"))).toBe(false)
     expect(result.stdout).toContain("INTERACTIVE_USER_RESIDENT")
+  })
+
+  it.skipIf(process.platform !== "win32")("returns from a direct one-shot Node cycle without a nested shell", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-direct-cycle-"))
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-direct-runtime-"))
+    const activationPath = path.join(runtimeRoot, "control", "activation")
+    const cliDirectory = path.join(workspace, "scripts", "hermes-bridge")
+    fs.mkdirSync(path.dirname(activationPath), { recursive: true })
+    fs.mkdirSync(cliDirectory, { recursive: true })
+    fs.writeFileSync(activationPath, "enabled\n")
+    fs.writeFileSync(path.join(workspace, ".env.local"), "")
+    fs.writeFileSync(path.join(cliDirectory, "cli.mjs"), 'process.stdout.write("{\\"result\\":\\"PASS\\"}\\n")\n')
+
+    const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
+    const command = [
+      `& ${quote(supervisorScript)}`,
+      `-Workspace ${quote(workspace)}`,
+      `-RuntimeRoot ${quote(runtimeRoot)}`,
+      "-RunOnce",
+    ].join(" ")
+    const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
+      encoding: "utf8",
+      timeout: 15_000,
+    })
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.error).toBeUndefined()
+    const cycleLog = fs.readdirSync(path.join(runtimeRoot, "logs")).find((name) => /^cycle-\d{8}\.log$/.test(name))
+    expect(cycleLog).toBeDefined()
+    expect(fs.readFileSync(path.join(runtimeRoot, "logs", cycleLog!), "utf8")).toContain('{"result":"PASS"}')
+    expect(fs.existsSync(path.join(runtimeRoot, "state", "supervisor.json"))).toBe(false)
   })
 
   it("installs a hidden Startup shortcut instead of a scheduled execution host", () => {
@@ -46,9 +77,9 @@ describe("Hermes interactive-user supervisor", () => {
 
   it("passes the selected runtime root through the resident cycle path", () => {
     const supervisor = fs.readFileSync(supervisorScript, "utf8")
-    const runner = fs.readFileSync(path.join(repoRoot, "scripts", "hermes-bridge", "run-cycle.ps1"), "utf8")
-    expect(supervisor).toContain("-RuntimeRoot $OwnedRuntimeRoot")
-    expect(runner).toContain("$env:WILLIAMOS_HERMES_RUNTIME_ROOT = $root")
+    expect(supervisor).toContain("$env:WILLIAMOS_HERMES_RUNTIME_ROOT = $OwnedRuntimeRoot")
+    expect(supervisor).toContain("$OwnedCliPath cycle")
+    expect(supervisor).not.toContain("& pwsh.exe")
     expect(supervisor).toContain("Global\\WilliamOSHermesCodexBridgeSupervisor")
     expect(supervisor).toContain("HERMES_SUPERVISOR_CYCLE_FAILED")
     expect(supervisor).toContain("HERMES_SUPERVISOR_STATE_CLEANUP_FAILED")
@@ -59,5 +90,12 @@ describe("Hermes interactive-user supervisor", () => {
       .map((file) => fs.readFileSync(file, "utf8"))
       .join("\n")
     expect(sources).not.toMatch(/codex\s+exec|scripts[\\/]runtime-operator/i)
+  })
+
+  it("does not put a nested PowerShell process between the resident supervisor and one-shot CLI", () => {
+    const source = fs.readFileSync(supervisorScript, "utf8")
+    expect(source).toContain("& node")
+    expect(source).not.toContain("run-cycle.ps1")
+    expect(source).not.toContain("& pwsh.exe")
   })
 })
