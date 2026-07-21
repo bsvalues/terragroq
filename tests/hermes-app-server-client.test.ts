@@ -215,6 +215,43 @@ describe("CodexAppServerClient", () => {
     await expect(resultPromise).resolves.toMatchObject({ threadId: "thread-1", finalText: "DONE" })
   })
 
+  it("defers an empty completion delivered in the turn-start response chunk", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+    const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "work" })
+    const start = process.messages().at(-1)
+    process.stdout.write([
+      JSON.stringify({ id: start.id, result: { turn: { id: "turn-same-chunk", status: "inProgress" } } }),
+      JSON.stringify({
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn: { id: "turn-same-chunk", status: "completed", items: [] } },
+      }),
+      "",
+    ].join("\n"))
+
+    await vi.waitFor(() => {
+      expect(process.messages().findLast((message) => message.method === "thread/read")).toBeDefined()
+    })
+    const read = process.messages().findLast((message) => message.method === "thread/read")
+    process.send({
+      id: read.id,
+      result: {
+        thread: {
+          turns: [{
+            id: "turn-same-chunk",
+            status: "completed",
+            items: [
+              { type: "agentMessage", text: "progress" },
+              { type: "agentMessage", text: '{"result":"FAILED_TERMINAL"}' },
+            ],
+          }],
+        },
+      },
+    })
+
+    await expect(resultPromise).resolves.toMatchObject({ finalText: '{"result":"FAILED_TERMINAL"}' })
+  })
+
   it("reconciles an interrupted turn when App Server omits turn/completed", async () => {
     const { client, process } = setup({ turnPollMs: 60_000 })
     await connect(client, process)

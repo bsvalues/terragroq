@@ -145,6 +145,7 @@ export class CodexAppServerClient {
     this.turnWaiter = null
     this.startingThreadId = null
     this.completedTurns = new Map()
+    this.terminalReconciliations = new Set()
     this.turnText = new Map()
     this.wall = null
   }
@@ -370,8 +371,7 @@ export class CodexAppServerClient {
       const threadId = message.params?.threadId ?? this.turnWaiter?.threadId ?? this.startingThreadId
       if (threadId && turn?.id) {
         const itemText = this.#finalText(turn.items)
-        if (turn.status === "completed" && !itemText
-          && this.turnWaiter && threadId === this.turnWaiter.threadId && turn.id === this.turnWaiter.turnId) {
+        if (turn.status === "completed" && !itemText) {
           this.#reconcileTerminalTurn(threadId, turn.id)
           this.onNotification({ method: message.method, params: this.#sanitizeNotification(message) })
           return
@@ -403,25 +403,40 @@ export class CodexAppServerClient {
   }
 
   async #reconcileTerminalTurn(threadId, turnId) {
-    if (!this.turnWaiter || this.turnWaiter.threadId !== threadId || this.turnWaiter.turnId !== turnId) return
+    const key = `${threadId}:${turnId}`
+    if (this.terminalReconciliations.has(key)) return
+    this.terminalReconciliations.add(key)
     try {
       const response = await this.request("thread/read", { threadId, includeTurns: true })
-      if (!this.turnWaiter || this.turnWaiter.threadId !== threadId || this.turnWaiter.turnId !== turnId) return
       const turn = response?.thread?.turns?.find((candidate) => candidate?.id === turnId)
       if (!turn || turn.status === "inProgress") return
-      if (turn.status !== "completed") {
-        this.turnWaiter.reject(new AppServerTurnEndedError(turn.status))
-        return
-      }
-      this.turnWaiter.resolve({
+      const result = {
         threadId,
         turnId,
         status: turn.status,
-        finalText: this.#finalText(turn.items) || this.turnText.get(`${threadId}:${turnId}`) || "",
-        error: null,
-      })
+        finalText: this.#finalText(turn.items) || this.turnText.get(key) || "",
+        error: turn.error ? { message: sanitizeAppServerText(turn.error.message) } : null,
+      }
+      this.turnText.delete(key)
+      const waiterMatches = this.turnWaiter
+        && this.turnWaiter.threadId === threadId && this.turnWaiter.turnId === turnId
+      if (turn.status !== "completed") {
+        if (waiterMatches) this.turnWaiter.reject(new AppServerTurnEndedError(turn.status))
+        else {
+          this.completedTurns.clear()
+          this.completedTurns.set(key, result)
+        }
+        return
+      }
+      if (waiterMatches) this.turnWaiter.resolve(result)
+      else {
+        this.completedTurns.clear()
+        this.completedTurns.set(key, result)
+      }
     } catch (error) {
       if (error instanceof AppServerTurnEndedError) throw error
+    } finally {
+      this.terminalReconciliations.delete(key)
     }
   }
 

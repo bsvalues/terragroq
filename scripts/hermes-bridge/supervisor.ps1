@@ -13,8 +13,10 @@ $supervisorPath = [IO.Path]::GetFullPath($MyInvocation.MyCommand.Path)
 $activationPath = Join-Path $RuntimeRoot "control\activation"
 $stateDir = Join-Path $RuntimeRoot "state"
 $supervisorStatePath = Join-Path $stateDir "supervisor.json"
+$logDir = Join-Path $RuntimeRoot "logs"
+$supervisorLogPath = Join-Path $logDir ("supervisor-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 $runner = Join-Path $workspacePath "scripts\hermes-bridge\run-cycle.ps1"
-$mutexName = "Local\WilliamOSHermesCodexBridgeSupervisor"
+$mutexName = "Global\WilliamOSHermesCodexBridgeSupervisor"
 $createdNew = $false
 $mutex = [Threading.Mutex]::new($true, $mutexName, [ref]$createdNew)
 
@@ -26,8 +28,8 @@ if (-not $createdNew) {
 
 $CycleAction = if ($null -ne $CycleAction) { $CycleAction } else {
     {
-        param([string]$OwnedWorkspace, [string]$OwnedRunner)
-        & pwsh.exe -NoLogo -NoProfile -NonInteractive -File $OwnedRunner -Workspace $OwnedWorkspace
+        param([string]$OwnedWorkspace, [string]$OwnedRunner, [string]$OwnedRuntimeRoot)
+        & pwsh.exe -NoLogo -NoProfile -NonInteractive -File $OwnedRunner -Workspace $OwnedWorkspace -RuntimeRoot $OwnedRuntimeRoot
         return $LASTEXITCODE
     }
 }
@@ -47,7 +49,7 @@ $record = [ordered]@{
     startedAt = [DateTimeOffset]::UtcNow.ToString("o")
 }
 
-New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+New-Item -ItemType Directory -Force -Path $stateDir, $logDir | Out-Null
 $temporaryStatePath = "$supervisorStatePath.$nonce.tmp"
 
 try {
@@ -64,7 +66,24 @@ try {
             break
         }
 
-        [void](& $CycleAction $workspacePath $runner)
+        try {
+            $cycleExitCode = [int](& $CycleAction $workspacePath $runner $RuntimeRoot)
+        }
+        catch {
+            $cycleExitCode = 1
+            [IO.File]::AppendAllText(
+                $supervisorLogPath,
+                "$( [DateTimeOffset]::UtcNow.ToString('o') ) HERMES_SUPERVISOR_CYCLE_EXCEPTION`n",
+                [Text.UTF8Encoding]::new($false)
+            )
+        }
+        if ($cycleExitCode -ne 0) {
+            [IO.File]::AppendAllText(
+                $supervisorLogPath,
+                "$( [DateTimeOffset]::UtcNow.ToString('o') ) HERMES_SUPERVISOR_CYCLE_FAILED exitCode=$cycleExitCode`n",
+                [Text.UTF8Encoding]::new($false)
+            )
+        }
         if ($RunOnce) { break }
 
         for ($elapsed = 0; $elapsed -lt $CycleIntervalSeconds; $elapsed++) {
@@ -86,7 +105,13 @@ finally {
                 Remove-Item -LiteralPath $supervisorStatePath -Force
             }
         }
-        catch {}
+        catch {
+            [IO.File]::AppendAllText(
+                $supervisorLogPath,
+                "$( [DateTimeOffset]::UtcNow.ToString('o') ) HERMES_SUPERVISOR_STATE_CLEANUP_FAILED`n",
+                [Text.UTF8Encoding]::new($false)
+            )
+        }
     }
     $mutex.ReleaseMutex()
     $mutex.Dispose()

@@ -22,12 +22,12 @@ describe("Hermes interactive-user supervisor", () => {
       `-Workspace ${quote(repoRoot)}`,
       `-RuntimeRoot ${quote(runtimeRoot)}`,
       "-RunOnce",
-      `-CycleAction { param([string]$OwnedWorkspace, [string]$OwnedRunner) [IO.File]::WriteAllText(${quote(markerPath)}, $OwnedWorkspace); return 0 }`,
+      `-CycleAction { param([string]$OwnedWorkspace, [string]$OwnedRunner, [string]$OwnedRuntimeRoot) [IO.File]::WriteAllText(${quote(markerPath)}, "$OwnedWorkspace|$OwnedRuntimeRoot"); return 0 }`,
     ].join(" ")
     const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8" })
 
     expect(result.status, result.stderr).toBe(0)
-    expect(fs.readFileSync(markerPath, "utf8")).toBe(repoRoot)
+    expect(fs.readFileSync(markerPath, "utf8")).toBe(`${repoRoot}|${runtimeRoot}`)
     expect(fs.existsSync(path.join(runtimeRoot, "state", "supervisor.json"))).toBe(false)
     expect(result.stdout).toContain("INTERACTIVE_USER_RESIDENT")
   })
@@ -38,9 +38,20 @@ describe("Hermes interactive-user supervisor", () => {
     expect(source).toContain("CreateShortcut")
     expect(source).toContain("-WindowStyle Hidden")
     expect(source).toContain("Start-Process")
+    expect(source).toContain("-WorkingDirectory")
     expect(source).toContain("INTERACTIVE_USER_RESIDENT")
     expect(source).not.toContain("Register-ScheduledTask")
     expect(source).not.toContain("Start-ScheduledTask")
+  })
+
+  it("passes the selected runtime root through the resident cycle path", () => {
+    const supervisor = fs.readFileSync(supervisorScript, "utf8")
+    const runner = fs.readFileSync(path.join(repoRoot, "scripts", "hermes-bridge", "run-cycle.ps1"), "utf8")
+    expect(supervisor).toContain("-RuntimeRoot $OwnedRuntimeRoot")
+    expect(runner).toContain("$env:WILLIAMOS_HERMES_RUNTIME_ROOT = $root")
+    expect(supervisor).toContain("Global\\WilliamOSHermesCodexBridgeSupervisor")
+    expect(supervisor).toContain("HERMES_SUPERVISOR_CYCLE_FAILED")
+    expect(supervisor).toContain("HERMES_SUPERVISOR_STATE_CLEANUP_FAILED")
   })
 
   it("does not reuse the rejected nested Codex execution adapter", () => {

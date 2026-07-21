@@ -176,32 +176,44 @@ if (-not $SkipSupervisor -and (Test-Path -LiteralPath $SupervisorStatePath)) {
             throw "HERMES_KILL_SUPERVISOR_OWNERSHIP_WALL"
         }
 
-        $depthByPid = @{ $supervisorPid = 0 }
-        $discovered = $true
-        while ($discovered) {
-            $discovered = $false
-            foreach ($process in $processes) {
-                $processId = [int]$process.ProcessId
-                $parentId = [int]$process.ParentProcessId
-                if (-not $depthByPid.ContainsKey($processId) -and $depthByPid.ContainsKey($parentId)) {
-                    $depthByPid[$processId] = [int]$depthByPid[$parentId] + 1
-                    $discovered = $true
+        $knownSupervisorPids = [Collections.Generic.HashSet[int]]::new()
+        [void]$knownSupervisorPids.Add($supervisorPid)
+        $supervisorTreeStopped = $false
+        for ($attempt = 0; $attempt -lt 20; $attempt++) {
+            $processes = @(Get-CimInstance Win32_Process)
+            $depthByPid = @{}
+            foreach ($knownPid in $knownSupervisorPids) { $depthByPid[$knownPid] = 0 }
+
+            $discovered = $true
+            while ($discovered) {
+                $discovered = $false
+                foreach ($process in $processes) {
+                    $processId = [int]$process.ProcessId
+                    $parentId = [int]$process.ParentProcessId
+                    if (-not $depthByPid.ContainsKey($processId) -and $depthByPid.ContainsKey($parentId)) {
+                        $depthByPid[$processId] = [int]$depthByPid[$parentId] + 1
+                        [void]$knownSupervisorPids.Add($processId)
+                        $discovered = $true
+                    }
                 }
             }
-        }
-        foreach ($entry in @($processes | Where-Object { $depthByPid.ContainsKey([int]$_.ProcessId) } | ForEach-Object {
-            [PSCustomObject]@{ Process = $_; Depth = [int]$depthByPid[[int]$_.ProcessId] }
-        }) | Sort-Object Depth -Descending) {
-            $pidToStop = [int]$entry.Process.ProcessId
-            & $StopProcessAction $pidToStop
-            $stoppedProcessIds += $pidToStop
-        }
 
-        for ($attempt = 0; $attempt -lt 20; $attempt++) {
-            if ($null -eq (Get-Process -Id $supervisorPid -ErrorAction SilentlyContinue)) { break }
+            $ownedTree = @($processes | Where-Object { $depthByPid.ContainsKey([int]$_.ProcessId) } | ForEach-Object {
+                [PSCustomObject]@{ Process = $_; Depth = [int]$depthByPid[[int]$_.ProcessId] }
+            })
+            if ($ownedTree.Count -eq 0) {
+                $supervisorTreeStopped = $true
+                break
+            }
+
+            foreach ($entry in $ownedTree | Sort-Object Depth -Descending) {
+                $pidToStop = [int]$entry.Process.ProcessId
+                & $StopProcessAction $pidToStop
+                $stoppedProcessIds += $pidToStop
+            }
             Start-Sleep -Milliseconds 100
         }
-        if ($null -ne (Get-Process -Id $supervisorPid -ErrorAction SilentlyContinue)) {
+        if (-not $supervisorTreeStopped) {
             throw "HERMES_KILL_SUPERVISOR_SURVIVED_WALL"
         }
     }

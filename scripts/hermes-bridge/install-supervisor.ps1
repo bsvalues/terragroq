@@ -51,7 +51,7 @@ if ($Enable) {
         $process = Start-Process -FilePath $pwsh -ArgumentList @(
             "-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
             "-File", $supervisor, "-Workspace", $Workspace, "-RuntimeRoot", $root
-        ) -WindowStyle Hidden -PassThru
+        ) -WorkingDirectory ([IO.Path]::GetFullPath($Workspace)) -WindowStyle Hidden -PassThru
     }
 }
 
