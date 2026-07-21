@@ -6,8 +6,9 @@ import {
 } from "@/components/operator/multi-agent-status-ux-registry"
 import { getPortfolioOperatorProgram } from "@/components/operator/portfolio-operator-registry"
 import { getPortfolioOperatorSurface } from "@/components/operator/portfolio-operator-surface"
+import type { OwnerOutcomeSource } from "@/components/operator/owner-outcome-delivery"
 
-const eligibleOwnerOutcome = {
+const eligibleOwnerOutcome: OwnerOutcomeSource = {
   ref: "GOAL-0099",
   command: "Improve the WilliamOS goal console layout",
   lane: "ui",
@@ -109,8 +110,27 @@ describe("portfolio operator surface", () => {
     expect(isVerifiedWoMao051StatusUxEvidence()).toBe(true)
   })
 
+  it("pins and re-identifies eligible outcomes through fallback IDs", () => {
+    const legacyOutcome: OwnerOutcomeSource = {
+      ...eligibleOwnerOutcome,
+      id: 77,
+      ref: null,
+    }
+    const surface = getPortfolioOperatorSurface(getPortfolioOperatorProgram(), [legacyOutcome])
+
+    expect(surface.selection).toMatchObject({
+      decision: "SELECT_PROGRAM",
+      ownerOutcomeRef: "GOAL-77",
+    })
+    expect(surface.selectedOwnerOutcome).toMatchObject({
+      id: 77,
+      ref: null,
+      command: "Improve the WilliamOS goal console layout",
+    })
+  })
+
   it("pins the same eligible outcome when a newer record is blocked", () => {
-    const blockedLatest = {
+    const blockedLatest: OwnerOutcomeSource = {
       ...eligibleOwnerOutcome,
       ref: "GOAL-0100",
       command: "Deploy TerraFusion to production",
