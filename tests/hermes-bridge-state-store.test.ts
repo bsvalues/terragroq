@@ -92,6 +92,33 @@ describe("Hermes bridge durable state store", () => {
     })
   })
 
+  it("defers provider-unavailable work without losing its resumable execution", () => {
+    const { store, advance } = fixture()
+    const first = store.acquireLease({ outcomeId: "5", holderId: "one", leaseDurationMs: 1000, idempotencyKey: "a" })
+    store.checkpoint({
+      outcomeId: "5", holderId: "one", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "PROVIDER_UNAVAILABLE",
+      detail: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED", metadata: { providerRetryCount: 3 },
+      idempotencyKey: "provider-unavailable",
+    })
+    expect(store.deferProviderWall({
+      outcomeId: "5", holderId: "one", fencingToken: first.fencingToken,
+      retryAfter: "2026-07-21T00:15:00.000Z", idempotencyKey: "defer",
+    })).toMatchObject({ leaseStatus: "DEFERRED", retryAfter: "2026-07-21T00:15:00.000Z" })
+    expect(store.read().executions["5"]).toMatchObject({
+      lease: { status: "DEFERRED", deferReason: "PROVIDER_UNAVAILABLE" },
+      checkpoint: { state: "DEFERRED_PROVIDER_UNAVAILABLE" },
+      metadata: { providerRetryCount: 0 },
+    })
+    advance(15 * 60 * 1000 + 1)
+    const resumed = store.reclaimLease({
+      outcomeId: "5", holderId: "two", expectedFencingToken: first.fencingToken,
+      leaseDurationMs: 1000, idempotencyKey: "resume",
+    })
+    expect(resumed.fencingToken).toBeGreaterThan(first.fencingToken)
+    expect(resumed.metadata.providerRetryCount).toBe(0)
+  })
+
   it("persists owner-touch counters and enforces the kill switch", () => {
     const { store } = fixture()
     expect(store.recordOwnerTouch({ counter: "ownerDiagnosticTouchCount", idempotencyKey: "touch" }).ownerTouchCounters.OWNER_DIAGNOSTIC_TOUCH_COUNT).toBe(1)

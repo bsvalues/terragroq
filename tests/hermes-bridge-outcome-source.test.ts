@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import {
   completeOutcome,
+  deferProviderOutcome,
   NATIVE_PROVIDER_RETRY_STATE,
   OUTCOME_SELECTION_SQL,
   recoverNativeProviderOutcome,
@@ -84,14 +85,17 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_TERMINAL/)
   })
 
-  it("records bounded provider exhaustion without classifying it as an owner wall", async () => {
+  it("records bounded provider exhaustion as a resumable classified deferral", async () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [{ id: 4, userId: "owner", ref: "GOAL-0004" }] })
-      .mockResolvedValueOnce({ rows: [] })
-    await expect(terminalizeOutcome({
-      query, outcomeId: 4, result: "PROVIDER_UNAVAILABLE", nextState: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED",
+      .mockResolvedValueOnce({ rows: [{ id: 99 }], rowCount: 1 })
+    await expect(deferProviderOutcome({
+      query, outcomeId: 4, retryAfter: "2026-07-21T01:15:00.000Z",
     })).resolves.toBe(true)
+    expect(query.mock.calls[0][0]).toMatch(/status = 'classified'/)
+    expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_PROVIDER_DEFERRED/)
     expect(query.mock.calls[1][1][3]).toContain('"result":"PROVIDER_UNAVAILABLE"')
+    expect(OUTCOME_SELECTION_SQL).toMatch(/HERMES_OUTCOME_PROVIDER_DEFERRED/)
   })
 
   it("treats an exactly recorded terminal outcome as idempotent success", async () => {
@@ -99,9 +103,9 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ terminalized: true }] })
     await expect(terminalizeOutcome({
-      query, outcomeId: 4, result: "PROVIDER_UNAVAILABLE", nextState: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED",
+      query, outcomeId: 4, result: "FAILED_TERMINAL", nextState: "POLICY_WALL",
     })).resolves.toBe(true)
-    expect(query.mock.calls[1][1]).toEqual([4, "PROVIDER_UNAVAILABLE", "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED"])
+    expect(query.mock.calls[1][1]).toEqual([4, "FAILED_TERMINAL", "POLICY_WALL"])
   })
 
   it("recovers only the exact persisted transient native provider wall", async () => {

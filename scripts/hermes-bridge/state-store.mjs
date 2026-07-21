@@ -309,6 +309,44 @@ export function reopenProviderWall(filePath, request, options = {}) {
   })
 }
 
+export function deferProviderWall(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    assertFence(current, request.holderId, request.fencingToken)
+    const retryAt = timestamp(request.retryAfter)
+    if (retryAt.milliseconds <= at.milliseconds || current.checkpoint.state !== "PROVIDER_UNAVAILABLE") {
+      fail("PROVIDER_DEFERRAL_STATE_WALL")
+    }
+    const deferred = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "DEFERRED",
+        expiresAt: retryAt.iso,
+        deferredAt: at.iso,
+        deferReason: "PROVIDER_UNAVAILABLE",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "DEFERRED_PROVIDER_UNAVAILABLE",
+        detail: retryAt.iso,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({ providerRetryCount: 0 }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: deferred }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: deferred.fencingToken,
+      checkpointSequence: deferred.checkpoint.sequence,
+      leaseStatus: deferred.lease.status,
+      retryAfter: retryAt.iso,
+    }
+  })
+}
+
 export function setKillSwitch(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
@@ -341,6 +379,7 @@ export function createHermesStateStore(filePath, options = {}) {
     abandonLease: (request) => abandonLease(filePath, request, options),
     releaseLease: (request) => releaseLease(filePath, request, options),
     reopenProviderWall: (request) => reopenProviderWall(filePath, request, options),
+    deferProviderWall: (request) => deferProviderWall(filePath, request, options),
     setKillSwitch: (request) => setKillSwitch(filePath, request, options),
     recordOwnerTouch: (request) => recordOwnerTouch(filePath, request, options),
   })

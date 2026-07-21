@@ -12,8 +12,9 @@ The failure was therefore transient provider availability, not an authority or p
 - Require up to three current-dispatch retries when a native command fails before process start.
 - Return `RETRYABLE_PROVIDER_WALL`, abandon the lease immediately, and preserve the durable thread
   and owned worktree when all three attempts fail.
-- Bound cross-dispatch retries to three durable attempts, then settle the affected outcome as
-  `PROVIDER_UNAVAILABLE` so later eligible outcomes cannot be starved.
+- Bound cross-dispatch retries to three durable attempts, then defer the affected outcome as
+  `PROVIDER_UNAVAILABLE` for a cooldown so later eligible outcomes cannot be starved and the
+  original outcome remains automatically resumable.
 - Never terminalize the persisted owner outcome for native process or provider availability.
 - Recover the one historical false terminal only when PostgreSQL evidence and the durable state
   independently match its exact outcome, fencing token, released lease, checkpoint, and reason.

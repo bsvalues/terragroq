@@ -36,6 +36,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
   }))
   const markComplete = vi.fn(async () => true)
   const markTerminal = vi.fn(async () => true)
+  const deferOutcome = vi.fn(async () => true)
   let merged = false
   const lifecycle = {
     refreshOriginMain: vi.fn(async () => "a".repeat(40)),
@@ -71,13 +72,13 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     close: vi.fn(),
   }
   const orchestrator = createHermesOrchestrator({
-    workspace: process.cwd(), runtimeRoot: root, state, lifecycle, selectOutcome, markComplete, markTerminal,
+    workspace: process.cwd(), runtimeRoot: root, state, lifecycle, selectOutcome, markComplete, markTerminal, deferOutcome,
     clientFactory: () => client,
     holderId: "test-holder",
     now: () => new Date(currentTime),
   })
   return {
-    root, state, orchestrator, selectOutcome, markComplete, markTerminal, lifecycle, client,
+    root, state, orchestrator, selectOutcome, markComplete, markTerminal, deferOutcome, lifecycle, client,
     advance: (milliseconds: number) => { currentTime += milliseconds },
   }
 }
@@ -224,15 +225,16 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
-      result: "PROVIDER_UNAVAILABLE", nextState: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED",
+      result: "PROVIDER_UNAVAILABLE", nextState: "DEFERRED_PROVIDER_UNAVAILABLE",
     })
-    expect(value.markTerminal).toHaveBeenCalledWith({
-      outcomeId: 77, result: "PROVIDER_UNAVAILABLE", nextState: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED",
+    expect(value.deferOutcome).toHaveBeenCalledWith({
+      outcomeId: 77, retryAfter: "2026-07-21T01:15:00.000Z",
     })
+    expect(value.markTerminal).not.toHaveBeenCalled()
     expect(value.state.read().executions["77"]).toMatchObject({
-      lease: { status: "RELEASED" },
-      checkpoint: { state: "PROVIDER_UNAVAILABLE", detail: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED" },
-      metadata: { providerRetryCount: 3 },
+      lease: { status: "DEFERRED", expiresAt: "2026-07-21T01:15:00.000Z" },
+      checkpoint: { state: "DEFERRED_PROVIDER_UNAVAILABLE", detail: "2026-07-21T01:15:00.000Z" },
+      metadata: { providerRetryCount: 0 },
     })
   })
 
@@ -247,7 +249,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         blockedScopeCrossed: false, nextState: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
       }),
     })
-    value.markTerminal.mockRejectedValueOnce(new Error("database interruption"))
+    value.deferOutcome.mockRejectedValueOnce(new Error("database interruption"))
 
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
@@ -255,11 +257,10 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     const interrupted = value.state.read().executions["77"]
     expect(interrupted.checkpoint.state).toBe("PROVIDER_UNAVAILABLE")
     const turnCount = value.client.runTurn.mock.calls.length
-    value.advance(50 * 60 * 1000 + 1)
 
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "PROVIDER_UNAVAILABLE" })
     expect(value.client.runTurn).toHaveBeenCalledTimes(turnCount)
-    expect(value.state.read().executions["77"].lease.status).toBe("RELEASED")
+    expect(value.state.read().executions["77"].lease.status).toBe("DEFERRED")
   })
 
   it("fails closed when a durable owner-touch counter changes during execution", async () => {

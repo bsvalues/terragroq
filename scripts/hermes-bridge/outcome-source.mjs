@@ -25,6 +25,14 @@ WHERE status = $1
   AND command !~* $6
   AND NOT (command ~* $7 AND command ~* $8 AND command !~* $9)
   AND "createdAt" >= $10
+  AND NOT EXISTS (
+    SELECT 1
+    FROM governance_event provider_defer
+    WHERE provider_defer."entityType" = 'goal'
+      AND provider_defer."entityId" = goal.id::text
+      AND provider_defer."eventType" = 'HERMES_OUTCOME_PROVIDER_DEFERRED'
+      AND (provider_defer.metadata->>'retryAfter')::timestamptz > NOW()
+  )
 ORDER BY "createdAt" ASC, id ASC
 `
 
@@ -151,7 +159,7 @@ export async function terminalizeOutcome({
   nextState,
 } = {}) {
   if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
-  if (!["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL", "PROVIDER_UNAVAILABLE"].includes(result)) {
+  if (!["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"].includes(result)) {
     throw Object.assign(new Error("terminal result is invalid"), { code: "OUTCOME_TERMINAL_RESULT_INVALID" })
   }
   let runQuery = normalizeQuery(query)
@@ -202,6 +210,73 @@ export async function terminalizeOutcome({
     )
     if (client) await runQuery("COMMIT")
     return true
+  } catch (error) {
+    if (client) {
+      try { await runQuery("ROLLBACK") } catch {}
+    }
+    throw error
+  } finally {
+    client?.release()
+    if (pool) await pool.end()
+  }
+}
+
+export async function deferProviderOutcome({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  retryAfter,
+} = {}) {
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) {
+    throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
+  }
+  const retryAt = new Date(retryAfter)
+  if (!Number.isFinite(retryAt.getTime())) {
+    throw Object.assign(new Error("retryAfter is invalid"), { code: "PROVIDER_RETRY_AFTER_INVALID" })
+  }
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = new Pool({ connectionString: databaseUrl })
+  }
+  try {
+    if (pool) {
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+      await runQuery("BEGIN")
+    }
+    const existing = await runQuery(
+      `SELECT id, "userId" AS "userId", ref
+       FROM goal
+       WHERE id = $1 AND status = 'classified'
+       FOR UPDATE`,
+      [outcomeId],
+    )
+    const row = existing?.rows?.[0]
+    if (!row) {
+      if (client) await runQuery("ROLLBACK")
+      return false
+    }
+    const inserted = await runQuery(
+      `INSERT INTO governance_event ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       SELECT $1, 'HERMES_OUTCOME_PROVIDER_DEFERRED', 'goal', $2, 'hermes-codex-bridge', $3, $4::jsonb
+       WHERE NOT EXISTS (
+         SELECT 1 FROM governance_event
+         WHERE "entityType" = 'goal' AND "entityId" = $2
+           AND "eventType" = 'HERMES_OUTCOME_PROVIDER_DEFERRED'
+           AND metadata->>'retryAfter' = $5
+       )
+       RETURNING id`,
+      [row.userId, String(row.id), `Deferred ${row.ref ?? `goal-${row.id}`} after bounded provider retries`,
+        JSON.stringify({ result: "PROVIDER_UNAVAILABLE", retryAfter: retryAt.toISOString() }), retryAt.toISOString()],
+    )
+    if (client) await runQuery("COMMIT")
+    return (inserted?.rows?.length ?? 0) === 1 || (inserted?.rowCount ?? 0) === 0
   } catch (error) {
     if (client) {
       try { await runQuery("ROLLBACK") } catch {}
