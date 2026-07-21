@@ -253,6 +253,40 @@ describe("Hermes repository lifecycle", () => {
     })
   })
 
+  it("does not exempt inexact rate-limit descriptions or separate CodeRabbit failures", async () => {
+    const exactHeadReview = [{
+      author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: sha },
+    }]
+    const threads = () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) })
+    const inexact = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [{ context: "CodeRabbit", state: "FAILURE" }], reviews: exactHeadReview,
+      }) }),
+      "gh api repos/bsvalues/terragroq/commits/": () => ({ code: 0, stdout: JSON.stringify({
+        statuses: [{ context: "CodeRabbit", state: "failure", description: "Review rate limited after provider error" }],
+      }) }),
+      "gh api graphql": threads,
+    })
+    await expect(inexact.lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ checksGreen: false })
+
+    const separateFailure = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { context: "CodeRabbit", state: "FAILURE" },
+          { name: "CodeRabbit security", conclusion: "FAILURE" },
+          { context: "Vercel", state: "SUCCESS" },
+        ], reviews: exactHeadReview,
+      }) }),
+      "gh api repos/bsvalues/terragroq/commits/": () => ({ code: 0, stdout: JSON.stringify({
+        statuses: [{ context: "CodeRabbit", state: "failure", description: "Review rate limited" }],
+      }) }),
+      "gh api graphql": threads,
+    })
+    await expect(separateFailure.lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ checksGreen: false })
+  })
+
   it("verifies origin/main and cleans only a recorded, clean, merged worktree once", async () => {
     const { lifecycle, calls, record } = await ownedFixture({
       [`${rootGit} merge-base`]: () => ({ code: 0 }),

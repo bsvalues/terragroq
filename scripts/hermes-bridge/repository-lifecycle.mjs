@@ -330,19 +330,28 @@ export function createRepositoryLifecycle(options) {
     const hasExactHeadCodexReview = exactHeadCodexReview(pr)
     const failedCodeRabbit = checks.some((check) => /coderabbit/i.test(checkName(check))
       && !SUCCESSFUL_CHECKS.has(checkState(check)))
-    let codeRabbitRateLimited = false
+    const rateLimitedCodeRabbitContexts = new Set()
     if (failedCodeRabbit && hasExactHeadCodexReview) {
       const statusResult = await run("gh", ["api", `repos/${repository}/commits/${pr.headRefOid}/status`])
       const status = parseJson(statusResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
-      codeRabbitRateLimited = Array.isArray(status?.statuses) && status.statuses.some((entry) =>
-        /coderabbit/i.test(String(entry?.context ?? ""))
-        && String(entry?.state ?? "").toUpperCase() === "FAILURE"
-        && /review rate limited/i.test(String(entry?.description ?? "")))
+      if (Array.isArray(status?.statuses)) {
+        for (const entry of status.statuses) {
+          const context = String(entry?.context ?? "")
+          if (/coderabbit/i.test(context)
+            && String(entry?.state ?? "").toUpperCase() === "FAILURE"
+            && String(entry?.description ?? "").trim().toLowerCase() === "review rate limited") {
+            rateLimitedCodeRabbitContexts.add(context.toLowerCase())
+          }
+        }
+      }
     }
+    const codeRabbitRateLimited = rateLimitedCodeRabbitContexts.size > 0
     return {
       ...pr,
       checksGreen: checks.length > 0 && checks.every((check) => SUCCESSFUL_CHECKS.has(checkState(check))
-        || (codeRabbitRateLimited && /coderabbit/i.test(checkName(check)))),
+        || (typeof check?.context === "string"
+          && checkState(check) === "FAILURE"
+          && rateLimitedCodeRabbitContexts.has(check.context.toLowerCase()))),
       reviewed: pr.reviewDecision === "APPROVED" || hasExactHeadCodexReview || checks.some((check) =>
         /coderabbit/i.test(checkName(check)) && SUCCESSFUL_CHECKS.has(checkState(check))),
       codeRabbitRateLimited,
