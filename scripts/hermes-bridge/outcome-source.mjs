@@ -267,13 +267,14 @@ export async function deferProviderOutcome({
        SELECT $1, 'HERMES_OUTCOME_PROVIDER_DEFERRED', 'goal', $2, 'hermes-codex-bridge', $3, $4::jsonb
        WHERE NOT EXISTS (
          SELECT 1 FROM governance_event
-         WHERE "entityType" = 'goal' AND "entityId"::text = $2::text
+         WHERE "entityType" = 'goal' AND "entityId"::text = $6::text
            AND "eventType" = 'HERMES_OUTCOME_PROVIDER_DEFERRED'
            AND metadata->>'retryAfter' = $5
        )
        RETURNING id`,
       [row.userId, String(row.id), `Deferred ${row.ref ?? `goal-${row.id}`} after bounded provider retries`,
-        JSON.stringify({ result: "PROVIDER_UNAVAILABLE", retryAfter: retryAt.toISOString() }), retryAt.toISOString()],
+        JSON.stringify({ result: "PROVIDER_UNAVAILABLE", retryAfter: retryAt.toISOString() }),
+        retryAt.toISOString(), String(row.id)],
     )
     if (client) await runQuery("COMMIT")
     return (inserted?.rows?.length ?? 0) === 1 || (inserted?.rowCount ?? 0) === 0
