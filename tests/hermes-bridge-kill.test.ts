@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest"
 
 const repoRoot = process.cwd()
 const killScript = path.join(repoRoot, "scripts", "hermes-bridge", "kill.ps1")
-const cliPath = path.join(repoRoot, "scripts", "hermes-bridge", "cli.mjs")
 const spawnedPids = new Set<number>()
 
 function isAlive(pid: number) {
@@ -27,6 +26,32 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000) {
   throw new Error("timed out waiting for process state")
 }
 
+function spawnOwnedHolder(tempRoot: string, childDelayMs?: number) {
+  const fixturePath = path.join(tempRoot, "owned-holder.cjs")
+  const childPidPath = path.join(tempRoot, "child.pid")
+  fs.writeFileSync(fixturePath, [
+    'const { spawn } = require("node:child_process")',
+    'const fs = require("node:fs")',
+    'const delay = Number(process.env.HERMES_TEST_CHILD_DELAY_MS ?? "-1")',
+    'if (delay >= 0) setTimeout(() => {',
+    '  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })',
+    '  fs.writeFileSync(process.env.HERMES_TEST_CHILD_PID_PATH, String(child.pid))',
+    '}, delay)',
+    'setInterval(() => {}, 1000)',
+  ].join("\n"))
+  const holder = spawn(process.execPath, [fixturePath, "cycle"], {
+    stdio: "ignore",
+    env: {
+      ...process.env,
+      HERMES_TEST_CHILD_DELAY_MS: childDelayMs === undefined ? "-1" : String(childDelayMs),
+      HERMES_TEST_CHILD_PID_PATH: childPidPath,
+    },
+  })
+  if (!holder.pid) throw new Error("failed to spawn holder")
+  spawnedPids.add(holder.pid)
+  return { holder, fixturePath, childPidPath }
+}
+
 afterEach(() => {
   for (const pid of spawnedPids) {
     if (isAlive(pid)) process.kill(pid)
@@ -40,17 +65,9 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
     const childPidPath = path.join(tempRoot, "child.pid")
     const activationPath = path.join(tempRoot, "activation")
     const statePath = path.join(tempRoot, "state.json")
-    const holderCode = [
-      'const { spawn } = require("node:child_process")',
-      'const fs = require("node:fs")',
-      'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })',
-      'fs.writeFileSync(process.argv[1], String(child.pid))',
-      'setInterval(() => {}, 1000)',
-    ].join(";")
-    const holder = spawn(process.execPath, ["-e", holderCode, childPidPath, cliPath, "cycle"], { stdio: "ignore" })
+    const { holder, fixturePath } = spawnOwnedHolder(tempRoot, 0)
     const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
-    if (!holder.pid || !unrelated.pid) throw new Error("failed to spawn test processes")
-    spawnedPids.add(holder.pid)
+    if (!unrelated.pid) throw new Error("failed to spawn unrelated process")
     spawnedPids.add(unrelated.pid)
 
     await waitFor(() => fs.existsSync(childPidPath))
@@ -72,6 +89,7 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
       "-Workspace", repoRoot,
       "-StatePath", statePath,
       "-ActivationPath", activationPath,
+      "-OwnedCliPath", fixturePath,
       "-SkipScheduledTask",
     ], { encoding: "utf8" })
 
@@ -79,11 +97,12 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
     await waitFor(() => !isAlive(holder.pid!) && !isAlive(childPid))
     expect(isAlive(unrelated.pid)).toBe(true)
     expect(fs.readFileSync(activationPath, "utf8").trim()).toBe("disabled")
-  })
+  }, 20_000)
 
   it("fails closed when the durable PID does not belong to the absolute bridge command", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-kill-wall-"))
-    const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
+    const mentionedCliPath = path.join(tempRoot, "mentioned-cli.mjs")
+    const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", mentionedCliPath, "cycle"], { stdio: "ignore" })
     if (!unrelated.pid) throw new Error("failed to spawn unrelated process")
     spawnedPids.add(unrelated.pid)
     const statePath = path.join(tempRoot, "state.json")
@@ -104,6 +123,7 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
       "-Workspace", repoRoot,
       "-StatePath", statePath,
       "-ActivationPath", activationPath,
+      "-OwnedCliPath", mentionedCliPath,
       "-SkipScheduledTask",
     ], { encoding: "utf8" })
 
@@ -117,10 +137,9 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-kill-survivor-"))
     const activationPath = path.join(tempRoot, "activation")
     const statePath = path.join(tempRoot, "state.json")
-    const holder = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", cliPath, "cycle"], { stdio: "ignore" })
+    const { holder, fixturePath } = spawnOwnedHolder(tempRoot)
     const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
-    if (!holder.pid || !unrelated.pid) throw new Error("failed to spawn test processes")
-    spawnedPids.add(holder.pid)
+    if (!unrelated.pid) throw new Error("failed to spawn unrelated process")
     spawnedPids.add(unrelated.pid)
     fs.writeFileSync(statePath, JSON.stringify({
       executions: {
@@ -139,6 +158,7 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
       `-Workspace ${quote(repoRoot)}`,
       `-StatePath ${quote(statePath)}`,
       `-ActivationPath ${quote(activationPath)}`,
+      `-OwnedCliPath ${quote(fixturePath)}`,
       "-SkipScheduledTask",
       "-StopProcessAction { param([int]$ProcessId) }",
     ].join(" ")
@@ -149,5 +169,40 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
     expect(isAlive(holder.pid)).toBe(true)
     expect(isAlive(unrelated.pid)).toBe(true)
     expect(fs.readFileSync(activationPath, "utf8").trim()).toBe("disabled")
-  })
+  }, 20_000)
+
+  it("rescans and stops a descendant created after the first tree snapshot", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-kill-rescan-"))
+    const activationPath = path.join(tempRoot, "activation")
+    const statePath = path.join(tempRoot, "state.json")
+    const { holder, fixturePath, childPidPath } = spawnOwnedHolder(tempRoot, 150)
+    fs.writeFileSync(statePath, JSON.stringify({
+      executions: {
+        test: {
+          lease: {
+            status: "ACTIVE",
+            holderId: `${os.hostname()}:${holder.pid}:00000000-0000-0000-0000-000000000004`,
+          },
+        },
+      },
+    }))
+
+    const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
+    const command = [
+      `& ${quote(killScript)}`,
+      `-Workspace ${quote(repoRoot)}`,
+      `-StatePath ${quote(statePath)}`,
+      `-ActivationPath ${quote(activationPath)}`,
+      `-OwnedCliPath ${quote(fixturePath)}`,
+      "-SkipScheduledTask",
+      `-StopProcessAction { param([int]$ProcessId) if ($ProcessId -eq ${holder.pid}) { Start-Sleep -Milliseconds 400 }; Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue }`,
+    ].join(" ")
+    const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8" })
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.existsSync(childPidPath)).toBe(true)
+    const childPid = Number(fs.readFileSync(childPidPath, "utf8"))
+    spawnedPids.add(childPid)
+    await waitFor(() => !isAlive(holder.pid!) && !isAlive(childPid))
+  }, 20_000)
 })

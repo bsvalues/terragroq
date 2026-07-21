@@ -2,9 +2,9 @@ param(
     [string]$Workspace = ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))),
     [string]$StatePath = (Join-Path $HOME ".williamos\hermes-bridge\state\state.json"),
     [string]$ActivationPath = (Join-Path $HOME ".williamos\hermes-bridge\control\activation"),
+    [string]$OwnedCliPath = ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot "cli.mjs"))),
     [switch]$SkipScheduledTask,
-    [scriptblock]$StopProcessAction,
-    [scriptblock]$ProcessAliveProbe
+    [scriptblock]$StopProcessAction
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,8 +12,37 @@ $taskName = "WilliamOS Hermes Codex Bridge"
 $StopProcessAction = if ($null -ne $StopProcessAction) { $StopProcessAction } else {
     { param([int]$ProcessId) Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue }
 }
-$ProcessAliveProbe = if ($null -ne $ProcessAliveProbe) { $ProcessAliveProbe } else {
-    { param([int]$ProcessId) $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) }
+
+if ($null -eq ("HermesNativeCommandLine" -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class HermesNativeCommandLine {
+    [DllImport("shell32.dll", SetLastError = true)]
+    private static extern IntPtr CommandLineToArgvW(
+        [MarshalAs(UnmanagedType.LPWStr)] string commandLine,
+        out int argumentCount);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr pointer);
+
+    public static string[] Split(string commandLine) {
+        int argumentCount;
+        IntPtr argumentPointer = CommandLineToArgvW(commandLine, out argumentCount);
+        if (argumentPointer == IntPtr.Zero) throw new Win32Exception();
+        try {
+            string[] arguments = new string[argumentCount];
+            for (int index = 0; index < argumentCount; index++) {
+                arguments[index] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argumentPointer, index * IntPtr.Size));
+            }
+            return arguments;
+        }
+        finally { LocalFree(argumentPointer); }
+    }
+}
+"@
 }
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ActivationPath) | Out-Null
@@ -27,7 +56,8 @@ if (-not $SkipScheduledTask) {
 }
 
 $stoppedProcessIds = @()
-$ownedCliPath = [IO.Path]::GetFullPath((Join-Path $Workspace "scripts\hermes-bridge\cli.mjs"))
+$ownedCliPath = [IO.Path]::GetFullPath($OwnedCliPath)
+$ownedEnvPath = [IO.Path]::GetFullPath((Join-Path $Workspace ".env.local"))
 
 if (Test-Path -LiteralPath $StatePath) {
     $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
@@ -53,41 +83,59 @@ if (Test-Path -LiteralPath $StatePath) {
         if ([string]::IsNullOrWhiteSpace($commandLine)) {
             throw "HERMES_KILL_OWNERSHIP_WALL"
         }
-        $normalizedCommand = $commandLine.Replace('/', '\')
-        $normalizedCliPath = $ownedCliPath.Replace('/', '\')
-        $escapedCliPath = [Regex]::Escape($normalizedCliPath)
+        $arguments = [HermesNativeCommandLine]::Split($commandLine)
+        $scriptIndex = 1
+        if ($arguments.Count -gt 1 -and $arguments[1] -eq "--env-file=$ownedEnvPath") {
+            $scriptIndex = 2
+        }
         if ($holder.Name -notin @("node.exe", "node") -or
-            $normalizedCommand -notmatch "(?i)(?:`"|\s)$escapedCliPath(?:`"|\s)" -or
-            $normalizedCommand -notmatch '(?i)\s+cycle(?:\s|$)') {
+            $arguments.Count -ne ($scriptIndex + 2) -or
+            -not [IO.Path]::GetFullPath($arguments[$scriptIndex]).Equals($ownedCliPath, [StringComparison]::OrdinalIgnoreCase) -or
+            $arguments[$scriptIndex + 1] -ne "cycle") {
             throw "HERMES_KILL_OWNERSHIP_WALL"
         }
 
-        $childrenByParent = @{}
-        foreach ($process in $processes) {
-            $parent = [int]$process.ParentProcessId
-            if (-not $childrenByParent.ContainsKey($parent)) { $childrenByParent[$parent] = @() }
-            $childrenByParent[$parent] += $process
+        $knownOwnedPids = [Collections.Generic.HashSet[int]]::new()
+        [void]$knownOwnedPids.Add($holderPid)
+        $treeStopped = $false
+
+        for ($attempt = 0; $attempt -lt 20; $attempt++) {
+            $processes = @(Get-CimInstance Win32_Process)
+            $depthByPid = @{}
+            foreach ($knownPid in $knownOwnedPids) { $depthByPid[$knownPid] = 0 }
+
+            $discovered = $true
+            while ($discovered) {
+                $discovered = $false
+                foreach ($process in $processes) {
+                    $processId = [int]$process.ProcessId
+                    $parentId = [int]$process.ParentProcessId
+                    if (-not $depthByPid.ContainsKey($processId) -and $depthByPid.ContainsKey($parentId)) {
+                        $depthByPid[$processId] = [int]$depthByPid[$parentId] + 1
+                        [void]$knownOwnedPids.Add($processId)
+                        $discovered = $true
+                    }
+                }
+            }
+
+            $ownedTree = @($processes | Where-Object { $depthByPid.ContainsKey([int]$_.ProcessId) } | ForEach-Object {
+                [PSCustomObject]@{ Process = $_; Depth = [int]$depthByPid[[int]$_.ProcessId] }
+            })
+            if ($ownedTree.Count -eq 0) {
+                $treeStopped = $true
+                break
+            }
+
+            foreach ($entry in $ownedTree | Sort-Object Depth -Descending) {
+                $pidToStop = [int]$entry.Process.ProcessId
+                & $StopProcessAction $pidToStop
+                $stoppedProcessIds += $pidToStop
+            }
+            Start-Sleep -Milliseconds 100
         }
 
-        $ownedTree = [Collections.Generic.List[object]]::new()
-        function Add-OwnedDescendants([int]$ParentPid, [int]$Depth) {
-            if (-not $childrenByParent.ContainsKey($ParentPid)) { return }
-            foreach ($child in $childrenByParent[$ParentPid]) {
-                $ownedTree.Add([PSCustomObject]@{ Process = $child; Depth = $Depth })
-                Add-OwnedDescendants -ParentPid ([int]$child.ProcessId) -Depth ($Depth + 1)
-            }
-        }
-
-        Add-OwnedDescendants -ParentPid $holderPid -Depth 1
-        $ownedTree.Add([PSCustomObject]@{ Process = $holder; Depth = 0 })
-
-        foreach ($entry in $ownedTree | Sort-Object Depth -Descending) {
-            $pidToStop = [int]$entry.Process.ProcessId
-            & $StopProcessAction $pidToStop
-            if (& $ProcessAliveProbe $pidToStop) {
-                throw "HERMES_KILL_PROCESS_SURVIVED_WALL"
-            }
-            $stoppedProcessIds += $pidToStop
+        if (-not $treeStopped) {
+            throw "HERMES_KILL_PROCESS_SURVIVED_WALL"
         }
     }
 }
