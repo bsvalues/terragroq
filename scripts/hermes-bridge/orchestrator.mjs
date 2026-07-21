@@ -11,7 +11,7 @@ import { createRepositoryLifecycle } from "./repository-lifecycle.mjs"
 import { createHermesStateStore } from "./state-store.mjs"
 
 const LEASE_DURATION_MS = 15 * 60 * 1000
-const TURN_TIMEOUT_MS = 5.5 * 60 * 60 * 1000
+const TURN_TIMEOUT_MS = 12 * 60 * 1000
 const SHA = /^[0-9a-f]{40}$/
 
 export const DEFAULT_VALIDATORS = Object.freeze([
@@ -348,7 +348,7 @@ export function createHermesOrchestrator(options = {}) {
     } catch (error) {
       try {
         await checkpoint(lease, sequence, "RETRYABLE_WALL", error?.code ?? "HERMES_CYCLE_FAILED")
-        if (["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED"].includes(error?.code)) {
+        if (["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT"].includes(error?.code)) {
           state.abandonLease({
             idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${sequence}`,
             outcomeId, holderId, fencingToken: lease.fencingToken, reason: error.code,
