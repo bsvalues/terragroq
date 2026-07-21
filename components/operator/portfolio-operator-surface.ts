@@ -1,5 +1,10 @@
 import { getPortfolioOperatorProgram } from "@/components/operator/portfolio-operator-registry"
-import { buildLoopPacket, buildWorkOrderChain, resolveNextPortfolioProgram } from "@/components/operator/portfolio-operator-resolver"
+import {
+  buildLoopPacket,
+  buildWorkOrderChain,
+  getOwnerOutcomeReference,
+  resolveNextPortfolioProgram,
+} from "@/components/operator/portfolio-operator-resolver"
 import type { OwnerOutcomeSource } from "@/components/operator/owner-outcome-delivery"
 
 type ActiveDependencyState = {
@@ -99,7 +104,7 @@ export function getPortfolioOperatorSurface(
     description: "Completed programs route to the highest-priority approved executable program. The Primary is involved only at a true authority wall.",
     selection,
     selectedOwnerOutcome: selection.ownerOutcomeRef
-      ? ownerOutcomes.find((outcome) => outcome.ref === selection.ownerOutcomeRef) ?? null
+      ? ownerOutcomes.find((outcome) => getOwnerOutcomeReference(outcome) === selection.ownerOutcomeRef) ?? null
       : null,
     selectedProgram: selected,
     activeWorkOrder,
