@@ -199,5 +199,90 @@ export async function terminalizeOutcome({
   }
 }
 
+export const NATIVE_PROVIDER_RETRY_STATE = "HERMES_REDISPATCH_REQUIRED_WITH_NATIVE_NODE_EXECUTION_AND_WRITABLE_GIT_METADATA; preserve the existing owned working-tree changes"
+
+export async function recoverNativeProviderOutcome({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+} = {}) {
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) {
+    throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
+  }
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = new Pool({ connectionString: databaseUrl })
+  }
+  try {
+    if (pool) {
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+      await runQuery("BEGIN")
+    }
+    const recovered = await runQuery(
+      `WITH latest_terminal AS (
+         SELECT metadata
+         FROM governance_event
+         WHERE "entityType" = 'goal' AND "entityId" = $1::text
+           AND "eventType" = 'HERMES_OUTCOME_TERMINAL'
+         ORDER BY "createdAt" DESC, id DESC
+         LIMIT 1
+       )
+       UPDATE goal g SET status = 'classified', "updatedAt" = NOW()
+       FROM latest_terminal t
+       WHERE g.id = $1 AND g.status = 'dismissed'
+         AND t.metadata->>'result' = 'FAILED_TERMINAL'
+         AND t.metadata->>'nextState' = $2
+       RETURNING g.id, g."userId" AS "userId", g.ref`,
+      [outcomeId, NATIVE_PROVIDER_RETRY_STATE],
+    )
+    const row = recovered?.rows?.[0]
+    if (!row) {
+      const prior = await runQuery(
+        `SELECT EXISTS (
+           SELECT 1
+           FROM goal g
+           JOIN governance_event terminal
+             ON terminal."entityType" = 'goal' AND terminal."entityId" = g.id::text
+               AND terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
+               AND terminal.metadata->>'result' = 'FAILED_TERMINAL'
+               AND terminal.metadata->>'nextState' = $2
+           JOIN governance_event recovered
+             ON recovered."entityType" = 'goal' AND recovered."entityId" = g.id::text
+               AND recovered."eventType" = 'HERMES_OUTCOME_PROVIDER_RECOVERED'
+               AND recovered.metadata->>'retryState' = $2
+           WHERE g.id = $1 AND g.status = 'classified'
+         ) AS recovered`,
+        [outcomeId, NATIVE_PROVIDER_RETRY_STATE],
+      )
+      const alreadyRecovered = prior?.rows?.[0]?.recovered === true
+      if (client) await runQuery(alreadyRecovered ? "COMMIT" : "ROLLBACK")
+      return alreadyRecovered
+    }
+    await runQuery(
+      `INSERT INTO governance_event ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       VALUES ($1, 'HERMES_OUTCOME_PROVIDER_RECOVERED', 'goal', $2, 'hermes-codex-bridge', $3, $4::jsonb)`,
+      [row.userId, String(row.id), `Recovered transient native provider wall for ${row.ref ?? `goal-${row.id}`}`,
+        JSON.stringify({ priorResult: "FAILED_TERMINAL", retryState: NATIVE_PROVIDER_RETRY_STATE })],
+    )
+    if (client) await runQuery("COMMIT")
+    return true
+  } catch (error) {
+    if (client) {
+      try { await runQuery("ROLLBACK") } catch {}
+    }
+    throw error
+  } finally {
+    client?.release()
+    if (pool) await pool.end()
+  }
+}
+
 export const fetchNextEligibleOutcome = selectNextOutcome
 export const readNextOutcome = selectNextOutcome

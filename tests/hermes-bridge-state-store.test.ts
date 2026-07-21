@@ -67,6 +67,31 @@ describe("Hermes bridge durable state store", () => {
     expect(store.read().executions["GOAL-1"].lease).toMatchObject({ status: "ACTIVE", holderId: "two" })
   })
 
+  it("reopens only an exact released transient provider terminal for fenced redispatch", () => {
+    const { store } = fixture()
+    const detail = "HERMES_REDISPATCH_REQUIRED_WITH_NATIVE_NODE_EXECUTION_AND_WRITABLE_GIT_METADATA; preserve the existing owned working-tree changes"
+    const first = store.acquireLease({ outcomeId: "5", holderId: "one", leaseDurationMs: 1000, idempotencyKey: "a" })
+    store.checkpoint({
+      outcomeId: "5", holderId: "one", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "FAILED_TERMINAL", detail, idempotencyKey: "failed",
+    })
+    store.releaseLease({ outcomeId: "5", holderId: "one", fencingToken: first.fencingToken, idempotencyKey: "released" })
+
+    expect(() => store.reopenProviderWall({
+      outcomeId: "5", expectedFencingToken: first.fencingToken,
+      expectedDetail: "different failure", idempotencyKey: "wrong",
+    })).toThrowError(expect.objectContaining({ code: "PROVIDER_RECOVERY_STATE_WALL" }))
+
+    expect(store.reopenProviderWall({
+      outcomeId: "5", expectedFencingToken: first.fencingToken,
+      expectedDetail: detail, idempotencyKey: "recover",
+    })).toMatchObject({ leaseStatus: "ABANDONED", checkpointSequence: 2 })
+    expect(store.read().executions["5"]).toMatchObject({
+      lease: { status: "ABANDONED", recoverReason: "TRANSIENT_NATIVE_PROVIDER_WALL" },
+      checkpoint: { state: "RETRYABLE_PROVIDER_WALL", detail },
+    })
+  })
+
   it("persists owner-touch counters and enforces the kill switch", () => {
     const { store } = fixture()
     expect(store.recordOwnerTouch({ counter: "ownerDiagnosticTouchCount", idempotencyKey: "touch" }).ownerTouchCounters.OWNER_DIAGNOSTIC_TOUCH_COUNT).toBe(1)

@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { completeOutcome, OUTCOME_SELECTION_SQL, selectNextOutcome, terminalizeOutcome } from "@/scripts/hermes-bridge/outcome-source.mjs"
+import {
+  completeOutcome,
+  NATIVE_PROVIDER_RETRY_STATE,
+  OUTCOME_SELECTION_SQL,
+  recoverNativeProviderOutcome,
+  selectNextOutcome,
+  terminalizeOutcome,
+} from "@/scripts/hermes-bridge/outcome-source.mjs"
 
 const row = { id: 4, ref: "GOAL-0004", command: "Build a WilliamOS status UI", lane: "ui", mode: "implement", risk: "low", authority: "A2_WRITE_OWN", verdict: "allow", requiresApproval: false, matchedRules: [], status: "classified" }
 
@@ -75,5 +82,33 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     })).resolves.toBe(true)
     expect(query.mock.calls[0][0]).toMatch(/status = 'dismissed'/)
     expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_TERMINAL/)
+  })
+
+  it("recovers only the exact persisted transient native provider wall", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: 4, userId: "owner", ref: "GOAL-0004" }] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recoverNativeProviderOutcome({ query, outcomeId: 4 })).resolves.toBe(true)
+    expect(query.mock.calls[0][0]).toMatch(/HERMES_OUTCOME_TERMINAL/)
+    expect(query.mock.calls[0][0]).toMatch(/status = 'dismissed'/)
+    expect(query.mock.calls[0][1]).toEqual([4, NATIVE_PROVIDER_RETRY_STATE])
+    expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_PROVIDER_RECOVERED/)
+  })
+
+  it("refuses recovery when persisted terminal evidence does not match", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ recovered: false }] })
+    await expect(recoverNativeProviderOutcome({ query, outcomeId: 4 })).resolves.toBe(false)
+    expect(query).toHaveBeenCalledTimes(2)
+  })
+
+  it("treats a fully recorded provider recovery as idempotent success", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ recovered: true }] })
+    await expect(recoverNativeProviderOutcome({ query, outcomeId: 4 })).resolves.toBe(true)
+    expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_PROVIDER_RECOVERED/)
   })
 })

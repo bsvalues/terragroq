@@ -270,6 +270,42 @@ export function abandonLease(filePath, request, options = {}) {
   })
 }
 
+export function reopenProviderWall(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    if (current.fencingToken !== request.expectedFencingToken) fail("FENCING_TOKEN_CONFLICT")
+    if (current.lease.status !== "RELEASED" || current.checkpoint.state !== "FAILED_TERMINAL"
+      || current.checkpoint.detail !== request.expectedDetail) {
+      fail("PROVIDER_RECOVERY_STATE_WALL")
+    }
+    const reopened = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "ABANDONED",
+        expiresAt: at.iso,
+        recoveredAt: at.iso,
+        recoverReason: "TRANSIENT_NATIVE_PROVIDER_WALL",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "RETRYABLE_PROVIDER_WALL",
+        detail: request.expectedDetail,
+        recordedAt: at.iso,
+      },
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: reopened }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: reopened.fencingToken,
+      checkpointSequence: reopened.checkpoint.sequence,
+      leaseStatus: reopened.lease.status,
+    }
+  })
+}
+
 export function setKillSwitch(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
@@ -301,6 +337,7 @@ export function createHermesStateStore(filePath, options = {}) {
     renewLease: (request) => renewLease(filePath, request, options),
     abandonLease: (request) => abandonLease(filePath, request, options),
     releaseLease: (request) => releaseLease(filePath, request, options),
+    reopenProviderWall: (request) => reopenProviderWall(filePath, request, options),
     setKillSwitch: (request) => setKillSwitch(filePath, request, options),
     recordOwnerTouch: (request) => recordOwnerTouch(filePath, request, options),
   })

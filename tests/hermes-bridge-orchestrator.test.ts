@@ -136,7 +136,7 @@ describe("Hermes bridge orchestrator", () => {
   it("resumes an unfinished Codex thread without disabling its native environment", async () => {
     const value = fixture(["lib/db/schema.ts"])
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
-    value.advance(15 * 60 * 1000 + 1)
+    value.advance(50 * 60 * 1000 + 1)
 
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
     expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.objectContaining({
@@ -178,6 +178,33 @@ describe("Hermes bridge orchestrator", () => {
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
     const redispatched = value.state.read().executions["77"]
     expect(redispatched.fencingToken).toBeGreaterThan(timedOut.fencingToken)
+    expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.any(Object))
+  })
+
+  it("redispatches a transient native provider wall without terminalizing the outcome", async () => {
+    const value = fixture()
+    value.client.runTurn.mockResolvedValueOnce({
+      threadId: "thread-77", turnId: "turn-provider-wall", status: "completed",
+      finalText: JSON.stringify({
+        result: "RETRYABLE_PROVIDER_WALL", workOrder: "WO-HERMES-77-001",
+        branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
+        mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
+        blockedScopeCrossed: false, nextState: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+      }),
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "RETRYABLE_PROVIDER_WALL", outcomeId: "77",
+    })
+    const interrupted = value.state.read().executions["77"]
+    expect(interrupted.checkpoint).toMatchObject({
+      state: "RETRYABLE_PROVIDER_WALL", detail: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+    })
+    expect(Date.parse(interrupted.lease.expiresAt)).toBe(Date.parse(interrupted.checkpoint.recordedAt))
+    expect(value.markTerminal).not.toHaveBeenCalled()
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    expect(value.state.read().executions["77"].fencingToken).toBeGreaterThan(interrupted.fencingToken)
     expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.any(Object))
   })
 

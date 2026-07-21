@@ -10,8 +10,8 @@ import { buildHermesCodexPrompt, HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 import { createRepositoryLifecycle } from "./repository-lifecycle.mjs"
 import { createHermesStateStore } from "./state-store.mjs"
 
-const LEASE_DURATION_MS = 15 * 60 * 1000
-const TURN_TIMEOUT_MS = 12 * 60 * 1000
+const LEASE_DURATION_MS = 50 * 60 * 1000
+const TURN_TIMEOUT_MS = 45 * 60 * 1000
 const SHA = /^[0-9a-f]{40}$/
 
 export const DEFAULT_VALIDATORS = Object.freeze([
@@ -295,6 +295,16 @@ export function createHermesOrchestrator(options = {}) {
       const result = parseTurnResult(turn.finalText)
       assertOwnerTouchCountersZero(state.read())
 
+      if (result.result === "RETRYABLE_PROVIDER_WALL") {
+        cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null)
+        state.abandonLease({
+          idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${cp.checkpointSequence}`,
+          outcomeId, holderId, fencingToken: lease.fencingToken,
+          reason: result.nextState ?? "RETRYABLE_PROVIDER_WALL",
+        })
+        return { result: result.result, outcomeId, nextState: result.nextState ?? null }
+      }
+
       if (["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"].includes(result.result)) {
         cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null)
         sequence = cp.checkpointSequence
@@ -363,5 +373,5 @@ export function createHermesOrchestrator(options = {}) {
     }
   }
 
-  return Object.freeze({ cycle, runtimeRoot, statePath, activationPath, notBeforePath })
+  return Object.freeze({ cycle, state, runtimeRoot, statePath, activationPath, notBeforePath })
 }
