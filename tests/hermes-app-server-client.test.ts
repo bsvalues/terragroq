@@ -208,6 +208,22 @@ describe("CodexAppServerClient", () => {
     await expect(resultPromise).rejects.toMatchObject({ code: "APP_SERVER_TURN_INTERRUPTED", status: "interrupted" })
   })
 
+  it("classifies interrupted turn/completed notifications as retryable terminal errors", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+    const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "work" })
+    const start = process.messages().at(-1)
+    process.send({ id: start.id, result: { turn: { id: "turn-notified-interrupted", status: "inProgress" } } })
+    await Promise.resolve()
+    await Promise.resolve()
+    process.send({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-notified-interrupted", status: "interrupted", items: [] } },
+    })
+
+    await expect(resultPromise).rejects.toMatchObject({ code: "APP_SERVER_TURN_INTERRUPTED", status: "interrupted" })
+  })
+
   it("polls durable turn history when no terminal notification arrives", async () => {
     vi.useFakeTimers()
     const { client, process } = setup({ turnPollMs: 25 })

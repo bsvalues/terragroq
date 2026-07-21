@@ -258,7 +258,8 @@ export class CodexAppServerClient {
       const completed = this.completedTurns.get(`${threadId}:${turnId}`)
       if (completed) {
         this.completedTurns.delete(`${threadId}:${turnId}`)
-        this.turnWaiter.resolve(completed)
+        if (completed.status === "completed") this.turnWaiter.resolve(completed)
+        else this.turnWaiter.reject(new AppServerTurnEndedError(completed.status))
         return
       }
       if (deadline !== null) {
@@ -377,7 +378,8 @@ export class CodexAppServerClient {
         }
         this.turnText.delete(`${threadId}:${turn.id}`)
         if (this.turnWaiter && threadId === this.turnWaiter.threadId && turn.id === this.turnWaiter.turnId) {
-          this.turnWaiter.resolve(result)
+          if (turn.status === "completed") this.turnWaiter.resolve(result)
+          else this.turnWaiter.reject(new AppServerTurnEndedError(turn.status))
         } else {
           this.completedTurns.clear()
           this.completedTurns.set(`${threadId}:${turn.id}`, result)
