@@ -186,6 +186,7 @@ describe("Hermes repository lifecycle", () => {
       number: 77,
       headRefName: branch,
       headRefOid: sha,
+      baseRefName: "main",
       state: "OPEN",
       isDraft: false,
       reviewDecision: "APPROVED",

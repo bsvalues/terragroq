@@ -57,6 +57,15 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[1][1][3]).toContain('"prNumber":500')
   })
 
+  it("treats an already recorded Hermes completion as idempotent success", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ completed: true }] })
+    await expect(completeOutcome({ query, outcomeId: 4, evidence: {} })).resolves.toBe(true)
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_COMPLETED/)
+  })
+
   it("removes terminal outcomes from selection while retaining a governance event", async () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [{ id: 4, userId: "owner", ref: "GOAL-0004" }] })

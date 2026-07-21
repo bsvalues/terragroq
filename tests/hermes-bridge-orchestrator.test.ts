@@ -19,6 +19,8 @@ function runtime() {
 
 function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/hermes-live-status.test.tsx"]) {
   const root = runtime()
+  let currentTime = Date.parse("2026-07-21T01:00:00.000Z")
+  const state = createHermesStateStore(path.join(root, "state", "state.json"), { now: () => currentTime })
   const selectOutcome = vi.fn(async () => ({
     id: 77,
     userId: "owner-id",
@@ -42,7 +44,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     })),
     resumeOwnedWorktree: vi.fn(),
     inspectPullRequest: vi.fn(async () => ({
-      state: merged ? "MERGED" : "OPEN", isDraft: false, checksGreen: true, reviewed: true,
+      state: merged ? "MERGED" : "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
       unresolvedThreadCount: 0, headRefOid: "c".repeat(40),
       mergeCommit: merged ? { oid: "b".repeat(40) } : null,
     })),
@@ -68,12 +70,15 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     close: vi.fn(),
   }
   const orchestrator = createHermesOrchestrator({
-    workspace: process.cwd(), runtimeRoot: root, lifecycle, selectOutcome, markComplete, markTerminal,
+    workspace: process.cwd(), runtimeRoot: root, state, lifecycle, selectOutcome, markComplete, markTerminal,
     clientFactory: () => client,
     holderId: "test-holder",
-    now: () => new Date("2026-07-21T01:00:00.000Z"),
+    now: () => new Date(currentTime),
   })
-  return { root, orchestrator, selectOutcome, markComplete, markTerminal, lifecycle, client }
+  return {
+    root, state, orchestrator, selectOutcome, markComplete, markTerminal, lifecycle, client,
+    advance: (milliseconds: number) => { currentTime += milliseconds },
+  }
 }
 
 afterEach(() => {
@@ -142,6 +147,34 @@ describe("Hermes bridge orchestrator", () => {
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_OUTCOME_COMPLETION_WALL" })
     expect(value.lifecycle.mergePullRequest).toHaveBeenCalledOnce()
     expect(createHermesStateStore(value.orchestrator.statePath).read().executions["77"].lease.status).toBe("ACTIVE")
+  })
+
+  it("resumes merged-PR finalization from durable state without redispatching Codex", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    value.state.initialize()
+    const lease = value.state.acquireLease({
+      idempotencyKey: "recover-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: {
+        outcome, branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "hermes-goal-77-77"),
+        baseSha: "a".repeat(40), prNumber: 500, mergeSha: "b".repeat(40), headRefOid: "c".repeat(40),
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "recover-merged", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: lease.fencingToken, expectedCheckpointSequence: 0, state: "PR_MERGED",
+    })
+    value.advance(1001)
+    value.lifecycle.inspectPullRequest.mockResolvedValue({
+      state: "MERGED", baseRefName: "main", unresolvedThreadCount: 0,
+      headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
+    })
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
+    expect(value.markComplete).toHaveBeenCalledOnce()
   })
 
   it("declassifies a terminal owner wall so it cannot starve later outcomes", async () => {

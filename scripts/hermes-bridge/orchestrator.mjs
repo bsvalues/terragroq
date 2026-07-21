@@ -110,13 +110,50 @@ export function createHermesOrchestrator(options = {}) {
     })
   }
 
+  async function finalizeMerged({ lease, sequence, outcome, branch, reservations, worktreePath, prNumber }) {
+    const pr = await lifecycle.inspectPullRequest(prNumber)
+    const mergeSha = pr.mergeCommit?.oid
+    if (pr.state !== "MERGED" || pr.baseRefName !== "main" || pr.unresolvedThreadCount !== 0
+      || !SHA.test(pr.headRefOid ?? "") || !SHA.test(mergeSha ?? "")) {
+      throw Object.assign(new Error("Merged PR failed independent verification"), { code: "HERMES_PR_VERIFICATION_WALL" })
+    }
+    const changedPaths = await lifecycle.inspectPullRequestFiles(prNumber)
+    assertChangedPathsAllowed(changedPaths, reservations)
+    if (!await lifecycle.verifyOriginMainContains(mergeSha)) {
+      throw Object.assign(new Error("Merge commit is absent from origin/main"), { code: "HERMES_MAIN_VERIFICATION_WALL" })
+    }
+    await lifecycle.cleanupOwnedWorktree({
+      branch, worktreePath, mergeCommitSha: mergeSha, expectedHeadSha: pr.headRefOid,
+    })
+    const outcomeCompleted = await markComplete({
+      outcomeId: outcome.id,
+      evidence: { prNumber, mergeSha, branch, ownerTouchCount: 0, blockedScopeCrossed: false },
+    })
+    if (!outcomeCompleted) {
+      throw Object.assign(new Error("Persisted outcome could not be closed after merge"), { code: "HERMES_OUTCOME_COMPLETION_WALL" })
+    }
+    await checkpoint(lease, sequence, "COMPLETE", `PR #${prNumber} merged and verified`, {
+      prNumber, branch, mergeSha, headRefOid: pr.headRefOid,
+    })
+    state.releaseLease({
+      idempotencyKey: `${lease.outcomeId}:release:complete`,
+      outcomeId: lease.outcomeId, holderId, fencingToken: lease.fencingToken,
+    })
+    return { result: "COMPLETE", outcomeId: lease.outcomeId, prNumber, mergeSha, changedPaths }
+  }
+
   async function cycle() {
     if (readControl(activationPath, "disabled") !== "enabled") return { result: "DISABLED" }
     const initialized = state.initialize()
     if (initialized.killSwitch.active) return { result: "KILL_SWITCH_ACTIVE" }
     assertOwnerTouchCountersZero(initialized)
+    const unfinished = Object.values(initialized.executions).filter((execution) => execution?.lease?.status !== "RELEASED")
+    if (unfinished.length > 1) throw Object.assign(new Error("Multiple unfinished executions found"), { code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
+    const pendingExecution = unfinished[0] ?? null
     const notBefore = readControl(notBeforePath, now().toISOString())
-    const outcome = await selectOutcome({ enabled: true, killSwitch: false, standingAuthority: true, notBefore })
+    const outcome = pendingExecution?.metadata?.outcome ?? await selectOutcome({
+      enabled: true, killSwitch: false, standingAuthority: true, notBefore,
+    })
     if (!outcome) return { result: "NO_ELIGIBLE_OUTCOME" }
 
     const decision = evaluateOutcomePolicy({
@@ -129,7 +166,7 @@ export function createHermesOrchestrator(options = {}) {
     if (!decision.allowed) return { result: "POLICY_WALL", reasonCode: decision.reasonCode }
 
     const outcomeId = String(outcome.id)
-    const current = state.read().executions[outcomeId]
+    const current = pendingExecution ?? state.read().executions[outcomeId]
     if (current?.lease?.status === "RELEASED") return { result: "ALREADY_FINALIZED", outcomeId }
 
     let lease
@@ -146,7 +183,7 @@ export function createHermesOrchestrator(options = {}) {
     } else {
       lease = state.acquireLease({
         idempotencyKey: `${outcomeId}:acquire:1`, outcomeId, holderId,
-        leaseDurationMs: LEASE_DURATION_MS,
+        leaseDurationMs: LEASE_DURATION_MS, metadata: { outcome },
       })
     }
 
@@ -157,6 +194,28 @@ export function createHermesOrchestrator(options = {}) {
     const baseSha = lease.metadata?.baseSha ?? await lifecycle.refreshOriginMain()
     const worktreePath = lease.metadata?.worktreePath
       ?? path.join(runtimeRoot, "worktrees", branch.slice("codex/".length))
+    if (lease.metadata?.prNumber && lease.metadata?.mergeSha) {
+      return finalizeMerged({
+        lease, sequence, outcome, branch, reservations, worktreePath,
+        prNumber: lease.metadata.prNumber,
+      })
+    }
+    if (current?.metadata?.branch === branch) {
+      const prior = await lifecycle.discoverPullRequest(branch)
+      if (prior?.state === "MERGED") {
+        const merged = await lifecycle.inspectPullRequest(prior.number)
+        const mergeSha = merged.mergeCommit?.oid
+        if (!SHA.test(mergeSha ?? "")) throw Object.assign(new Error("Merged PR SHA missing"), { code: "HERMES_PR_VERIFICATION_WALL" })
+        const recovered = await checkpoint(lease, sequence, "PR_MERGED", `Recovered PR #${prior.number}`, {
+          prNumber: prior.number, branch, worktreePath, baseSha,
+          mergeSha, headRefOid: merged.headRefOid,
+        })
+        return finalizeMerged({
+          lease, sequence: recovered.checkpointSequence, outcome, branch, reservations, worktreePath,
+          prNumber: prior.number,
+        })
+      }
+    }
     let cp = await checkpoint(lease, sequence, "WORKTREE_INTENT", null, { branch, worktreePath, baseSha })
     sequence = cp.checkpointSequence
     const record = await lifecycle.ensureOwnedWorktree({
@@ -267,7 +326,8 @@ export function createHermesOrchestrator(options = {}) {
       const prNumber = Number(match?.[1])
       if (!Number.isSafeInteger(prNumber) || prNumber <= 0) throw Object.assign(new Error("Valid PR URL required"), { code: "HERMES_PR_WALL" })
       const candidate = await lifecycle.inspectPullRequest(prNumber)
-      if (candidate.state !== "OPEN" || candidate.isDraft || !candidate.checksGreen || !candidate.reviewed
+      if (candidate.state !== "OPEN" || candidate.baseRefName !== "main"
+        || candidate.isDraft || !candidate.checksGreen || !candidate.reviewed
         || candidate.unresolvedThreadCount !== 0 || candidate.headRefOid !== result.commit) {
         throw Object.assign(new Error("Pull request failed the pre-merge verification gate"), { code: "HERMES_PR_VERIFICATION_WALL" })
       }
@@ -278,31 +338,17 @@ export function createHermesOrchestrator(options = {}) {
       await lifecycle.mergePullRequest({ number: prNumber, branch })
       const pr = await lifecycle.inspectPullRequest(prNumber)
       const mergeSha = pr.mergeCommit?.oid
-      if (pr.state !== "MERGED" || pr.unresolvedThreadCount !== 0 || !SHA.test(mergeSha ?? "")) {
+      if (pr.state !== "MERGED" || pr.baseRefName !== "main"
+        || pr.unresolvedThreadCount !== 0 || !SHA.test(mergeSha ?? "")) {
         throw Object.assign(new Error("Merged PR failed independent verification"), { code: "HERMES_PR_VERIFICATION_WALL" })
       }
-      if (!await lifecycle.verifyOriginMainContains(mergeSha)) {
-        throw Object.assign(new Error("Merge commit is absent from origin/main"), { code: "HERMES_MAIN_VERIFICATION_WALL" })
-      }
-      await lifecycle.cleanupOwnedWorktree({
-        ...record,
-        mergeCommitSha: mergeSha,
-        expectedHeadSha: pr.headRefOid,
+      cp = await checkpoint(lease, sequence, "PR_MERGED", `PR #${prNumber} merged`, {
+        prNumber, branch, mergeSha, headRefOid: pr.headRefOid,
       })
-      const outcomeCompleted = await markComplete({
-        outcomeId: outcome.id,
-        evidence: { prNumber, mergeSha, branch, ownerTouchCount: 0, blockedScopeCrossed: false },
+      sequence = cp.checkpointSequence
+      return finalizeMerged({
+        lease, sequence, outcome, branch, reservations, worktreePath: record.worktreePath, prNumber,
       })
-      if (!outcomeCompleted) {
-        throw Object.assign(new Error("Persisted outcome could not be closed after merge"), { code: "HERMES_OUTCOME_COMPLETION_WALL" })
-      }
-      cp = await checkpoint(lease, sequence, "COMPLETE", `PR #${prNumber} merged and verified`, {
-        prNumber, branch, threadId: turn.threadId, turnId: turn.turnId,
-      })
-      state.releaseLease({
-        idempotencyKey: `${outcomeId}:release:complete`, outcomeId, holderId, fencingToken: lease.fencingToken,
-      })
-      return { result: "COMPLETE", outcomeId, prNumber, mergeSha, changedPaths }
     } catch (error) {
       try {
         await checkpoint(lease, sequence, "RETRYABLE_WALL", error?.code ?? "HERMES_CYCLE_FAILED")

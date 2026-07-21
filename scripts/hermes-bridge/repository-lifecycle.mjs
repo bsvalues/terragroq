@@ -360,6 +360,10 @@ export function createRepositoryLifecycle(options) {
   async function resumeOwnedWorktree({ branch, worktreePath } = {}) {
     const safeBranch = branchName(branch)
     const absoluteWorktree = absolute(worktreePath, "worktreePath")
+    const expectedWorktree = path.resolve(ownedWorktreeRoot, safeBranch.slice("codex/".length))
+    if (!samePath(absoluteWorktree, expectedWorktree)) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup path does not match the owned branch")
+    }
     if (!inside(ownedWorktreeRoot, absoluteWorktree)) wall("HERMES_REPOSITORY_PATH_WALL", "worktree outside owned root")
     await verifyOrigin()
     const listing = await run("git", ["-C", repositoryRoot, "worktree", "list", "--porcelain"])
@@ -409,7 +413,7 @@ export function createRepositoryLifecycle(options) {
   async function inspectPullRequest(number) {
     if (!Number.isSafeInteger(number) || number <= 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "positive PR number required")
     await verifyOrigin()
-    const prResult = await run("gh", ["pr", "view", String(number), "--repo", repository, "--json", "number,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,reviews,mergeCommit,url"])
+    const prResult = await run("gh", ["pr", "view", String(number), "--repo", repository, "--json", "number,headRefName,headRefOid,baseRefName,state,isDraft,reviewDecision,statusCheckRollup,reviews,mergeCommit,url"])
     const pr = parseJson(prResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
     branchName(pr.headRefName)
     if (!SHA.test(pr.headRefOid ?? "")) wall("HERMES_REPOSITORY_GITHUB_WALL", "PR head SHA required")
@@ -486,7 +490,8 @@ export function createRepositoryLifecycle(options) {
   async function mergePullRequest({ number, branch } = {}) {
     const safeBranch = branchName(branch)
     const pr = await inspectPullRequest(number)
-    if (pr.headRefName !== safeBranch || pr.state !== "OPEN" || pr.isDraft || !pr.checksGreen
+    if (pr.headRefName !== safeBranch || pr.baseRefName !== HERMES_BASE_BRANCH
+      || pr.state !== "OPEN" || pr.isDraft || !pr.checksGreen
       || !pr.reviewed || pr.unresolvedThreadCount !== 0 || !SHA.test(pr.headRefOid ?? "")) {
       wall("HERMES_REPOSITORY_MERGE_GATE_WALL", "green checks, approval, and zero unresolved threads required")
     }
@@ -505,11 +510,37 @@ export function createRepositoryLifecycle(options) {
   async function cleanupOwnedWorktree({ worktreePath, branch, mergeCommitSha, expectedHeadSha } = {}) {
     const safeBranch = branchName(branch)
     const absoluteWorktree = absolute(worktreePath, "worktreePath")
-    const record = records.get(safeBranch)
+    const expectedWorktree = path.resolve(ownedWorktreeRoot, safeBranch.slice("codex/".length))
+    if (!samePath(absoluteWorktree, expectedWorktree)) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup path does not match the owned branch")
+    }
+    let record = records.get(safeBranch)
     if (record?.cleaned) return { branch: safeBranch, worktreePath: absoluteWorktree, cleaned: true, alreadyCleaned: true }
-    ownedRecord(absoluteWorktree, safeBranch)
+    if (!inside(ownedWorktreeRoot, absoluteWorktree)) wall("HERMES_REPOSITORY_PATH_WALL", "worktree outside owned root")
     if (!SHA.test(expectedHeadSha ?? "")) wall("HERMES_REPOSITORY_CLEANUP_WALL", "reviewed head SHA required")
     if (!await verifyOriginMainContains(mergeCommitSha)) wall("HERMES_REPOSITORY_CLEANUP_WALL", "merge not present on origin/main")
+    if (!record) {
+      const listing = await run("git", ["-C", repositoryRoot, "worktree", "list", "--porcelain"])
+      const entries = worktreeEntries(listing.stdout)
+      const byPath = entries.find((entry) => entry.worktreePath && samePath(entry.worktreePath, absoluteWorktree))
+      const byBranch = entries.find((entry) => entry.branch === safeBranch)
+      if (byPath || byBranch) {
+        if (byPath !== byBranch) wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup intent conflicts with registered git state")
+        record = Object.freeze({ repository, branch: safeBranch, worktreePath: absoluteWorktree, ownedWorktreeRoot, cleaned: false })
+        records.set(safeBranch, record)
+      } else {
+        const branchResult = await run("git", ["-C", repositoryRoot, "show-ref", "--verify", "--quiet", `refs/heads/${safeBranch}`], { allowFailure: true })
+        if (![0, 1].includes(branchResult.code)) wall("HERMES_REPOSITORY_COMMAND_FAILED", "git show-ref failed")
+        if (branchResult.code === 0) {
+          const branchHead = await run("git", ["-C", repositoryRoot, "rev-parse", `refs/heads/${safeBranch}`])
+          if (branchHead.stdout.trim() !== expectedHeadSha) wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup branch head mismatch")
+          await run("git", ["-C", repositoryRoot, "update-ref", "-d", `refs/heads/${safeBranch}`, expectedHeadSha])
+        }
+        records.set(safeBranch, Object.freeze({ repository, branch: safeBranch, worktreePath: absoluteWorktree, ownedWorktreeRoot, cleaned: true }))
+        return { branch: safeBranch, worktreePath: absoluteWorktree, cleaned: true, alreadyCleaned: true }
+      }
+    }
+    ownedRecord(absoluteWorktree, safeBranch)
     const status = await run("git", ["-C", absoluteWorktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"])
     if (status.stdout.length > 0) wall("HERMES_REPOSITORY_CLEANUP_WALL", "owned worktree is dirty")
     await run("git", ["-C", repositoryRoot, "worktree", "remove", absoluteWorktree])

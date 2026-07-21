@@ -19,12 +19,13 @@ function fixture() {
 describe("Hermes bridge durable state store", () => {
   it("atomically persists lease, metadata, checkpoint sequence, and idempotency", () => {
     const { dir, store } = fixture()
-    const request = { outcomeId: "GOAL-1", holderId: "thread-1", leaseDurationMs: 1000, metadata: { threadId: "thread-1", turnId: "turn-1", branch: "codex/work", prNumber: 42 }, idempotencyKey: "acquire-1" }
+    const snapshot = { id: 1, command: "Improve WilliamOS", lane: "ui", risk: "R1", authority: "A2_WRITE_OWN" }
+    const request = { outcomeId: "GOAL-1", holderId: "thread-1", leaseDurationMs: 1000, metadata: { threadId: "thread-1", turnId: "turn-1", branch: "codex/work", prNumber: 42, mergeSha: "a".repeat(40), outcome: snapshot }, idempotencyKey: "acquire-1" }
     const first = store.acquireLease(request)
     expect(store.acquireLease(request)).toMatchObject({ ...first, idempotent: true })
     const checkpoint = store.checkpoint({ outcomeId: "GOAL-1", holderId: "thread-1", fencingToken: first.fencingToken, expectedCheckpointSequence: 0, state: "EXECUTING", idempotencyKey: "checkpoint-1" })
     expect(checkpoint).toMatchObject({ checkpointSequence: 1, state: "EXECUTING" })
-    expect(store.read().executions["GOAL-1"].metadata).toMatchObject({ threadId: "thread-1", turnId: "turn-1", branch: "codex/work", prNumber: 42 })
+    expect(store.read().executions["GOAL-1"].metadata).toMatchObject({ threadId: "thread-1", turnId: "turn-1", branch: "codex/work", prNumber: 42, mergeSha: "a".repeat(40), outcome: snapshot })
     expect(JSON.parse(readFileSync(join(dir, "state.json"), "utf8"))).toMatchObject({ schemaVersion: 1 })
   })
 

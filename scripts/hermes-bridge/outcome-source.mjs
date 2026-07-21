@@ -114,8 +114,16 @@ export async function completeOutcome({ query, databaseUrl = process.env.DATABAS
     )
     const row = result?.rows?.[0]
     if (!row) {
-      if (client) await runQuery("ROLLBACK")
-      return false
+      const prior = await runQuery(
+        `SELECT EXISTS (
+           SELECT 1 FROM goal g
+           JOIN governance_event e ON e."entityType" = 'goal' AND e."entityId" = g.id::text
+           WHERE g.id = $1 AND g.status = 'converted' AND e."eventType" = 'HERMES_OUTCOME_COMPLETED'
+         ) AS completed`,
+        [outcomeId],
+      )
+      if (client) await runQuery("COMMIT")
+      return prior?.rows?.[0]?.completed === true
     }
     await runQuery(
       `INSERT INTO governance_event ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
