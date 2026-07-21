@@ -116,6 +116,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     await expect(recoverNativeProviderOutcome({ query, outcomeId: 4 })).resolves.toBe(true)
     expect(query.mock.calls[0][0]).toMatch(/HERMES_OUTCOME_TERMINAL/)
     expect(query.mock.calls[0][0]).toMatch(/status = 'dismissed'/)
+    expect(query.mock.calls[0][0]).toMatch(/"entityId"::text = \$1::text/)
     expect(query.mock.calls[0][1]).toEqual([4, NATIVE_PROVIDER_RETRY_STATE])
     expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_PROVIDER_RECOVERED/)
   })
