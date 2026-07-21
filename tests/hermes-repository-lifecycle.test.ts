@@ -41,6 +41,13 @@ function fixture(overrides: Record<string, (call: Call) => unknown> = {}) {
   return { lifecycle, calls }
 }
 
+function reviewState(reviewThreads: unknown[] = [], comments: unknown[] = []) {
+  return { data: { repository: { pullRequest: {
+    reviewThreads: { nodes: reviewThreads, pageInfo: { hasNextPage: false } },
+    comments: { nodes: comments },
+  } } } }
+}
+
 async function ownedFixture(overrides: Record<string, (call: Call) => unknown> = {}) {
   const value = fixture(overrides)
   const record = await value.lifecycle.createWorktree({ branch })
@@ -184,7 +191,7 @@ describe("Hermes repository lifecycle", () => {
     }
     const { lifecycle, calls, record } = await ownedFixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify(pr) }),
-      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
     })
     await lifecycle.pushBranch(record)
     expect(calls.at(-1)?.args).toEqual([
@@ -205,9 +212,9 @@ describe("Hermes repository lifecycle", () => {
         number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
         reviewDecision: "REVIEW_REQUIRED", statusCheckRollup: [{ conclusion: "FAILURE" }],
       }) }),
-      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([
         { isResolved: false, comments: { nodes: [{ body: "Fix this", isMinimized: false }] } },
-      ], pageInfo: { hasNextPage: false } } } } } }) }),
+      ])) }),
     })
     await expect(lifecycle.mergePullRequest({ number: 77, branch })).rejects.toMatchObject({
       code: "HERMES_REPOSITORY_MERGE_GATE_WALL",
@@ -221,7 +228,7 @@ describe("Hermes repository lifecycle", () => {
         reviewDecision: "APPROVED", statusCheckRollup: [{ conclusion: "SUCCESS" }],
         reviews: [{ author: { login: "independent-reviewer" }, state: "APPROVED", commit: { oid: mergeSha } }],
       }) }),
-      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
     })
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: false })
   })
@@ -235,7 +242,7 @@ describe("Hermes repository lifecycle", () => {
           { context: "Vercel", state: "SUCCESS" },
         ],
       }) }),
-      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
     })
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: true, checksGreen: true })
   })
@@ -248,9 +255,26 @@ describe("Hermes repository lifecycle", () => {
           { context: "CodeRabbit", state: "SKIPPED" }, { context: "Vercel", state: "SUCCESS" },
         ], reviews: [],
       }) }),
-      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
     })
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: false, checksGreen: true })
+  })
+
+  it("accepts a clean Codex reaction only on a request pinned to the exact head", async () => {
+    const request = (body: string) => ({ body, reactions: { nodes: [
+      { content: "THUMBS_UP", user: { login: "chatgpt-codex-connector" } },
+    ] } })
+    const create = (body: string) => fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [{ context: "Vercel", state: "SUCCESS" }], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [request(body)])) }),
+    }).lifecycle
+    await expect(create(`Final head ${sha}. @codex review`).inspectPullRequest(77))
+      .resolves.toMatchObject({ reviewed: true })
+    await expect(create(`Final head ${mergeSha}. @codex review`).inspectPullRequest(77))
+      .resolves.toMatchObject({ reviewed: false })
   })
 
   it("accepts an explicit CodeRabbit rate-limit only with an exact-head Codex review", async () => {
@@ -268,7 +292,7 @@ describe("Hermes repository lifecycle", () => {
       "gh api repos/bsvalues/terragroq/commits/": () => ({ code: 0, stdout: JSON.stringify({
         statuses: [{ context: "CodeRabbit", state: "failure", description: "Review rate limited" }],
       }) }),
-      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
     })
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
       reviewed: true, checksGreen: true, codeRabbitRateLimited: true,
@@ -287,7 +311,7 @@ describe("Hermes repository lifecycle", () => {
           author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: mergeSha },
         }],
       }) }),
-      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
     })
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
       reviewed: false, checksGreen: false, codeRabbitRateLimited: false,
@@ -298,7 +322,7 @@ describe("Hermes repository lifecycle", () => {
     const exactHeadReview = [{
       author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: sha },
     }]
-    const threads = () => ({ code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) })
+    const threads = () => ({ code: 0, stdout: JSON.stringify(reviewState()) })
     const inexact = fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
         number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,

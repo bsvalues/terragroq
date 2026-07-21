@@ -53,6 +53,7 @@ Operating contract:
 - Stay inside the exact owner outcome, Work Order, repository, branch, and reservations above.
 - Use bounded native Codex subagents in isolated worktrees when at least two dependency-cleared, non-overlapping implementation or assurance lanes exist.
 - Keep builder and reviewer reservations distinct. Independently review substantive changes before merge.
+- Request GitHub Codex review in a PR comment that includes the exact 40-character head SHA, so a clean-review reaction is tied to the reviewed commit.
 - Implement useful product behavior. Governance-only placeholders do not satisfy the outcome.
 - Own investigation, implementation, tests, commits, push, pull request, CI/review monitoring, and bounded remediation.
 - Stop at a green, independently reviewed PR with zero unresolved threads. Hermes owns the reservation check, eligible merge, merged-main verification, cleanup, and successor release.
