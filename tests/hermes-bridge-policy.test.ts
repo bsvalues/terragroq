@@ -14,6 +14,7 @@ describe("Hermes bridge outcome policy", () => {
     "Change TerraFusion docs", "Launch TerraPilot", "Update Property Workbench", "Read county PACS parcel data",
     "Deploy to production", "Inspect a secret credential", "Approve paid overage", "Delete all records",
     "Retry issue #357", "Retry #357",
+    "Create a GitHub release and tag v1", "Push git tag v2.0.0",
   ])("blocks protected scope: %s", (command) => {
     expect(evaluate({ ...outcome, command })).toMatchObject({ allowed: false, reasonCode: "PROTECTED_SCOPE" })
   })

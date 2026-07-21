@@ -11,6 +11,7 @@ const BLOCKED_SCOPE = Object.freeze([
   ["SECRET_SCOPE", /\b(?:secret|password|credential|api[ -]?key|access[ -]?token|private[ -]?key)\b/i],
   ["PAID_SCOPE", /\b(?:paid\s+overage|increase\s+(?:the\s+)?spend|new\s+spending|purchase|billing\s+upgrade)\b/i],
   ["DESTRUCTIVE_SCOPE", /\b(?:destructive|delete|drop\s+(?:table|database)|truncate|force[ -]?push|reset\s+--hard|wipe|purge)\b/i],
+  ["RELEASE_TAG_SCOPE", /\b(?:(?:create|publish|cut|push)\s+(?:a\s+)?(?:github\s+)?release|(?:create|publish|push)\s+(?:a\s+)?(?:git\s+)?tag|tag\s+v?\d)\b/i],
   ["REJECTED_ISSUE_357", /(?:\bissue\s*)?#?357\b/i],
 ])
 

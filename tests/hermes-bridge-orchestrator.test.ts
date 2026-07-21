@@ -32,6 +32,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     status: "classified",
   }))
   const markComplete = vi.fn(async () => true)
+  const markTerminal = vi.fn(async () => true)
   const lifecycle = {
     refreshOriginMain: vi.fn(async () => "a".repeat(40)),
     createWorktree: vi.fn(async ({ branch }: { branch: string }) => ({
@@ -62,12 +63,12 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     close: vi.fn(),
   }
   const orchestrator = createHermesOrchestrator({
-    workspace: process.cwd(), runtimeRoot: root, lifecycle, selectOutcome, markComplete,
+    workspace: process.cwd(), runtimeRoot: root, lifecycle, selectOutcome, markComplete, markTerminal,
     clientFactory: () => client,
     holderId: "test-holder",
     now: () => new Date("2026-07-21T01:00:00.000Z"),
   })
-  return { root, orchestrator, selectOutcome, markComplete, lifecycle, client }
+  return { root, orchestrator, selectOutcome, markComplete, markTerminal, lifecycle, client }
 }
 
 afterEach(() => {
@@ -109,6 +110,26 @@ describe("Hermes bridge orchestrator", () => {
   it("fails closed when Codex changes a path outside the lane reservation", async () => {
     const value = fixture(["components/hermes/live-status.tsx", "lib/db/schema.ts"])
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
+    expect(value.markComplete).not.toHaveBeenCalled()
+  })
+
+  it("declassifies a terminal owner wall so it cannot starve later outcomes", async () => {
+    const value = fixture()
+    value.client.runTurn.mockResolvedValueOnce({
+      threadId: "thread-77", turnId: "turn-wall", status: "completed",
+      finalText: JSON.stringify({
+        result: "OWNER_DECISION_REQUIRED", workOrder: "WO-HERMES-77-001",
+        branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
+        mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
+        blockedScopeCrossed: false, nextState: "NEW_AUTHORITY_REQUIRED",
+      }),
+    })
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "OWNER_DECISION_REQUIRED", outcomeId: "77",
+    })
+    expect(value.markTerminal).toHaveBeenCalledWith({
+      outcomeId: 77, result: "OWNER_DECISION_REQUIRED", nextState: "NEW_AUTHORITY_REQUIRED",
+    })
     expect(value.markComplete).not.toHaveBeenCalled()
   })
 })

@@ -135,5 +135,61 @@ export async function completeOutcome({ query, databaseUrl = process.env.DATABAS
   }
 }
 
+export async function terminalizeOutcome({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  result,
+  nextState,
+} = {}) {
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
+  if (!["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"].includes(result)) {
+    throw Object.assign(new Error("terminal result is invalid"), { code: "OUTCOME_TERMINAL_RESULT_INVALID" })
+  }
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = new Pool({ connectionString: databaseUrl })
+  }
+  try {
+    if (pool) {
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+      await runQuery("BEGIN")
+    }
+    const updated = await runQuery(
+      `UPDATE goal SET status = 'dismissed', "updatedAt" = NOW()
+       WHERE id = $1 AND status = 'classified'
+       RETURNING id, "userId" AS "userId", ref`,
+      [outcomeId],
+    )
+    const row = updated?.rows?.[0]
+    if (!row) {
+      if (client) await runQuery("ROLLBACK")
+      return false
+    }
+    await runQuery(
+      `INSERT INTO governance_event ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       VALUES ($1, 'HERMES_OUTCOME_TERMINAL', 'goal', $2, 'hermes-codex-bridge', $3, $4::jsonb)`,
+      [row.userId, String(row.id), `${result} for ${row.ref ?? `goal-${row.id}`}`, JSON.stringify({ result, nextState: nextState ?? null })],
+    )
+    if (client) await runQuery("COMMIT")
+    return true
+  } catch (error) {
+    if (client) {
+      try { await runQuery("ROLLBACK") } catch {}
+    }
+    throw error
+  } finally {
+    client?.release()
+    if (pool) await pool.end()
+  }
+}
+
 export const fetchNextEligibleOutcome = selectNextOutcome
 export const readNextOutcome = selectNextOutcome

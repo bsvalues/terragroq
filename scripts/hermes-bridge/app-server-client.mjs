@@ -99,6 +99,7 @@ export class CodexAppServerClient {
     this.buffer = ""
     this.process = null
     this.turnWaiter = null
+    this.startingThreadId = null
     this.completedTurns = new Map()
     this.turnText = new Map()
     this.wall = null
@@ -167,7 +168,18 @@ export class CodexAppServerClient {
     if (signal?.aborted) throw new AppServerCancelledError()
 
     const turnInput = input ?? [{ type: "text", text: prompt ?? "", text_elements: [] }]
-    const started = await this.request("turn/start", { ...turn, threadId, input: turnInput })
+    this.startingThreadId = threadId
+    let started
+    try {
+      started = await this.#awaitTurnStart(
+        this.request("turn/start", { ...turn, threadId, input: turnInput }),
+        timeoutMs,
+        signal,
+      )
+    } catch (error) {
+      this.startingThreadId = null
+      throw error
+    }
     const turnId = started.turn.id
     if (this.wall) throw this.wall
 
@@ -187,6 +199,7 @@ export class CodexAppServerClient {
       const abort = () => interrupt(new AppServerCancelledError())
 
       this.turnWaiter = { threadId, turnId, resolve: (value) => finish(resolve, value), reject: (error) => finish(reject, error) }
+      this.startingThreadId = null
       const completed = this.completedTurns.get(`${threadId}:${turnId}`)
       if (completed) {
         this.completedTurns.delete(`${threadId}:${turnId}`)
@@ -195,6 +208,26 @@ export class CodexAppServerClient {
       }
       if (Number.isFinite(timeoutMs) && timeoutMs >= 0) {
         timer = this.setTimer(() => interrupt(new AppServerTimeoutError(timeoutMs)), timeoutMs)
+      }
+      signal?.addEventListener?.("abort", abort, { once: true })
+    })
+  }
+
+  #awaitTurnStart(request, timeoutMs, signal) {
+    return new Promise((resolve, reject) => {
+      let settled = false
+      let timer
+      const finish = (callback, value) => {
+        if (settled) return
+        settled = true
+        if (timer) this.clearTimer(timer)
+        signal?.removeEventListener?.("abort", abort)
+        callback(value)
+      }
+      const abort = () => finish(reject, new AppServerCancelledError())
+      request.then((value) => finish(resolve, value), (error) => finish(reject, error))
+      if (Number.isFinite(timeoutMs) && timeoutMs >= 0) {
+        timer = this.setTimer(() => finish(reject, new AppServerTimeoutError(timeoutMs)), timeoutMs)
       }
       signal?.addEventListener?.("abort", abort, { once: true })
     })
@@ -277,7 +310,7 @@ export class CodexAppServerClient {
     }
     if (message.method === "turn/completed") {
       const { turn } = message.params ?? {}
-      const threadId = message.params?.threadId ?? this.turnWaiter?.threadId
+      const threadId = message.params?.threadId ?? this.turnWaiter?.threadId ?? this.startingThreadId
       if (threadId && turn?.id) {
         const result = {
           threadId,

@@ -144,6 +144,7 @@ describe("CodexAppServerClient", () => {
     const request = process.messages().at(-1)
     process.send({ id: request.id, result: { turn: { id: "turn-no-thread", status: "inProgress" } } })
     await Promise.resolve()
+    await Promise.resolve()
     process.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-no-thread", delta: "DONE" } })
     process.send({ method: "turn/completed", params: { turn: { id: "turn-no-thread", status: "completed", items: [] } } })
     await expect(resultPromise).resolves.toMatchObject({ threadId: "thread-1", finalText: "DONE" })
@@ -170,6 +171,17 @@ describe("CodexAppServerClient", () => {
     vi.useRealTimers()
   })
 
+  it("times out while awaiting the initial turn/start response", async () => {
+    vi.useFakeTimers()
+    const { client, process } = setup({ timeoutMs: 25 })
+    await connect(client, process)
+    const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "wait" })
+    const rejection = expect(resultPromise).rejects.toBeInstanceOf(AppServerTimeoutError)
+    await vi.advanceTimersByTimeAsync(25)
+    await rejection
+    vi.useRealTimers()
+  })
+
   it("interrupts and rejects a turn when its abort signal is cancelled", async () => {
     const { client, process } = setup()
     await connect(client, process)
@@ -178,6 +190,7 @@ describe("CodexAppServerClient", () => {
     const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "wait", signal: controller.signal })
     const turnRequest = process.messages().at(-1)
     process.send({ id: turnRequest.id, result: { turn: { id: "turn-cancel", status: "inProgress" } } })
+    await Promise.resolve()
     await Promise.resolve()
     const rejection = expect(resultPromise).rejects.toMatchObject({ code: "APP_SERVER_CANCELLED" })
     controller.abort()

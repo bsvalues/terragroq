@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { completeOutcome, OUTCOME_SELECTION_SQL, selectNextOutcome } from "@/scripts/hermes-bridge/outcome-source.mjs"
+import { completeOutcome, OUTCOME_SELECTION_SQL, selectNextOutcome, terminalizeOutcome } from "@/scripts/hermes-bridge/outcome-source.mjs"
 
 const row = { id: 4, ref: "GOAL-0004", command: "Build a WilliamOS status UI", lane: "ui", mode: "implement", risk: "low", authority: "A2_WRITE_OWN", verdict: "allow", requiresApproval: false, matchedRules: [], status: "classified" }
 
@@ -46,5 +46,16 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[0][0]).toMatch(/UPDATE goal SET status = 'converted'/)
     expect(query.mock.calls[1][0]).toMatch(/INSERT INTO governance_event/)
     expect(query.mock.calls[1][1][3]).toContain('"prNumber":500')
+  })
+
+  it("removes terminal outcomes from selection while retaining a governance event", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: 4, userId: "owner", ref: "GOAL-0004" }] })
+      .mockResolvedValueOnce({ rows: [] })
+    await expect(terminalizeOutcome({
+      query, outcomeId: 4, result: "OWNER_DECISION_REQUIRED", nextState: "AUTHORITY_WALL",
+    })).resolves.toBe(true)
+    expect(query.mock.calls[0][0]).toMatch(/status = 'dismissed'/)
+    expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_TERMINAL/)
   })
 })

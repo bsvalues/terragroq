@@ -4,7 +4,7 @@ import path from "node:path"
 import { randomUUID } from "node:crypto"
 
 import { CodexAppServerClient } from "./app-server-client.mjs"
-import { completeOutcome, selectNextOutcome } from "./outcome-source.mjs"
+import { completeOutcome, selectNextOutcome, terminalizeOutcome } from "./outcome-source.mjs"
 import { evaluateOutcomePolicy } from "./policy.mjs"
 import { buildHermesCodexPrompt, HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 import { createRepositoryLifecycle } from "./repository-lifecycle.mjs"
@@ -85,6 +85,7 @@ export function createHermesOrchestrator(options = {}) {
   })
   const selectOutcome = options.selectOutcome ?? selectNextOutcome
   const markComplete = options.markComplete ?? completeOutcome
+  const markTerminal = options.markTerminal ?? terminalizeOutcome
   const clientFactory = options.clientFactory ?? ((cwd) => new CodexAppServerClient({ cwd, timeoutMs: TURN_TIMEOUT_MS }))
   const now = options.now ?? (() => new Date())
   const holderId = options.holderId ?? `${os.hostname()}:${process.pid}:${randomUUID()}`
@@ -231,6 +232,11 @@ export function createHermesOrchestrator(options = {}) {
       if (result.result !== "COMPLETE") {
         cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null)
         sequence = cp.checkpointSequence
+        await markTerminal({
+          outcomeId: outcome.id,
+          result: result.result,
+          nextState: result.nextState ?? null,
+        })
         state.releaseLease({
           idempotencyKey: `${outcomeId}:release:${result.result}`,
           outcomeId, holderId, fencingToken: lease.fencingToken,
