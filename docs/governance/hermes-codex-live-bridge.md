@@ -77,6 +77,12 @@ The activation file is
 supervisor checks every five minutes and remains silent when no eligible owner
 outcome exists.
 
+The kill switch first disables dispatch and stops the scheduled task. It then
+reads the durable active lease, validates that the recorded holder PID is the
+Node process running the absolute repository `scripts/hermes-bridge/cli.mjs`
+`cycle` command, and stops only that verified process tree. A PID or command
+mismatch fails closed instead of terminating an unrelated process.
+
 ## Certification
 
 Infrastructure tests and a read-only App Server handshake are prerequisites,
