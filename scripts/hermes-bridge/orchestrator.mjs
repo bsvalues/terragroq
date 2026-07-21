@@ -348,6 +348,12 @@ export function createHermesOrchestrator(options = {}) {
     } catch (error) {
       try {
         await checkpoint(lease, sequence, "RETRYABLE_WALL", error?.code ?? "HERMES_CYCLE_FAILED")
+        if (["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED"].includes(error?.code)) {
+          state.abandonLease({
+            idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${sequence}`,
+            outcomeId, holderId, fencingToken: lease.fencingToken, reason: error.code,
+          })
+        }
       } catch {}
       throw error
     } finally {

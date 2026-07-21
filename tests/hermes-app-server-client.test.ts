@@ -187,6 +187,46 @@ describe("CodexAppServerClient", () => {
     await expect(resultPromise).resolves.toMatchObject({ threadId: "thread-1", finalText: "DONE" })
   })
 
+  it("reconciles an interrupted turn when App Server omits turn/completed", async () => {
+    const { client, process } = setup({ turnPollMs: 60_000 })
+    await connect(client, process)
+    const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "work" })
+    const start = process.messages().at(-1)
+    process.send({ id: start.id, result: { turn: { id: "turn-interrupted", status: "inProgress" } } })
+    await Promise.resolve()
+    await Promise.resolve()
+    process.send({ method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } } })
+    await vi.waitFor(() => {
+      expect(process.messages().findLast((message) => message.method === "thread/read")).toBeDefined()
+    })
+    const read = process.messages().findLast((message) => message.method === "thread/read")
+    process.send({
+      id: read.id,
+      result: { thread: { turns: [{ id: "turn-interrupted", status: "interrupted", items: [] }] } },
+    })
+
+    await expect(resultPromise).rejects.toMatchObject({ code: "APP_SERVER_TURN_INTERRUPTED", status: "interrupted" })
+  })
+
+  it("polls durable turn history when no terminal notification arrives", async () => {
+    vi.useFakeTimers()
+    const { client, process } = setup({ turnPollMs: 25 })
+    await connect(client, process)
+    const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "work", timeoutMs: 1_000 })
+    const start = process.messages().at(-1)
+    process.send({ id: start.id, result: { turn: { id: "turn-polled", status: "inProgress" } } })
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(25)
+    const read = process.messages().findLast((message) => message.method === "thread/read")
+    process.send({
+      id: read.id,
+      result: { thread: { turns: [{ id: "turn-polled", status: "completed", items: [{ type: "agentMessage", text: "POLLED_DONE" }] }] } },
+    })
+
+    await expect(resultPromise).resolves.toMatchObject({ status: "completed", finalText: "POLLED_DONE" })
+    vi.useRealTimers()
+  })
+
   it("interrupts and rejects a turn on timeout", async () => {
     vi.useFakeTimers()
     const { client, process } = setup({ timeoutMs: 25 })
