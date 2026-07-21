@@ -216,6 +216,15 @@ function exactHeadCodexCleanComment(value, headRefOid) {
   if (connection?.pageInfo?.hasPreviousPage === true || connection?.pageInfo?.hasNextPage === true) {
     wall("HERMES_REPOSITORY_GITHUB_WALL", "review request comments are incomplete")
   }
+  const requestTimes = comments.filter((comment) => {
+    const createdAt = Date.parse(comment?.createdAt ?? "")
+    const updatedAt = Date.parse(comment?.updatedAt ?? "")
+    return Number.isFinite(createdAt) && createdAt === updatedAt
+      && comment?.author?.login === "bsvalues"
+      && /@codex\s+review/i.test(String(comment?.body ?? ""))
+      && [...String(comment?.body ?? "").matchAll(/\b[0-9a-f]{40}\b/gi)]
+        .some((match) => match[0].toLowerCase() === headRefOid)
+  }).map((comment) => Date.parse(comment.createdAt))
   return comments.some((comment) => {
     const body = String(comment?.body ?? "")
     const createdAt = Date.parse(comment?.createdAt ?? "")
@@ -227,6 +236,7 @@ function exactHeadCodexCleanComment(value, headRefOid) {
       && body.startsWith("Codex Review: Didn't find any major issues.")
       && typeof reviewedDigest === "string"
       && headRefOid.startsWith(reviewedDigest)
+      && requestTimes.some((requestTime) => requestTime <= createdAt)
   })
 }
 
