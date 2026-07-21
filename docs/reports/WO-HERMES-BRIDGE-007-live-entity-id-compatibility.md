@@ -3,7 +3,7 @@
 ## Result
 
 The reviewed recovery command reached the live PostgreSQL store while activation remained disabled,
-then failed closed because the deployed `governance_event.entityId` column is integer while the
+then failed closed because the deployed `governance_event.entityId` column is an integer while the
 checked-in schema declares text. Neither the database outcome nor durable bridge state changed.
 
 ## Correction
