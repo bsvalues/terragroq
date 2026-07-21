@@ -2,7 +2,7 @@
 
 ## Result
 
-`IN_PROGRESS / ROUTINE_POST_MERGE_REMEDIATION`
+`PASS / REVIEWED_ROUTINE_REMEDIATION`
 
 ## Finding
 
@@ -14,6 +14,18 @@ PR #422 merged the standing owner-outcome intake, but a post-merge P2 found that
 - Made the resolver pin that fallback reference.
 - Made the portfolio surface re-identify outcomes through the same reference function.
 - Added focused coverage for a persisted outcome with `id = 77` and `ref = null`.
+- Carries the persisted outcome ID and recomputes the approved record through the
+  authority predicate, so a blocked row with a colliding display reference cannot
+  replace the selected outcome.
+
+## Validation
+
+- focused owner-outcome and portfolio tests: `37/37` passed;
+- full suite: `204` files and `1545` tests passed;
+- lint: passed;
+- production build: passed;
+- `git diff --check`: passed;
+- independent collision review: no findings.
 
 ## Safety
 

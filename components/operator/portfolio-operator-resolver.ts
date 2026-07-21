@@ -47,6 +47,7 @@ export function resolveNextPortfolioProgram(
   ownerOutcomes: OwnerOutcomeSource[] = [],
   ownerOutcomeCompletedCount?: number,
 ) {
+  const approvedOwnerOutcome = findApprovedOwnerOutcome(ownerOutcomes)
   const complete = new Set(programs.filter((program) => program.state === "COMPLETE").map((program) => program.programId))
   const candidates = programs
     .filter((program) => ["SELECTED", "READY"].includes(program.state))
@@ -76,6 +77,7 @@ export function resolveNextPortfolioProgram(
       programId: null,
       goalId: null,
       ownerOutcomeRef: null,
+      ownerOutcomeId: null,
       ownerDecisionRequired: true as const,
     }
   }
@@ -88,7 +90,10 @@ export function resolveNextPortfolioProgram(
     programId: selected.programId,
     goalId: selected.nextGoalId,
     ownerOutcomeRef: selected.programId === OWNER_OUTCOME_PROGRAM_ID
-      ? getOwnerOutcomeReference(findApprovedOwnerOutcome(ownerOutcomes))
+      ? getOwnerOutcomeReference(approvedOwnerOutcome)
+      : null,
+    ownerOutcomeId: selected.programId === OWNER_OUTCOME_PROGRAM_ID
+      ? approvedOwnerOutcome?.id ?? null
       : null,
     ownerDecisionRequired: false as const,
   }

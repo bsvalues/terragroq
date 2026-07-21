@@ -2,10 +2,13 @@ import { getPortfolioOperatorProgram } from "@/components/operator/portfolio-ope
 import {
   buildLoopPacket,
   buildWorkOrderChain,
-  getOwnerOutcomeReference,
   resolveNextPortfolioProgram,
 } from "@/components/operator/portfolio-operator-resolver"
-import type { OwnerOutcomeSource } from "@/components/operator/owner-outcome-delivery"
+import {
+  findApprovedOwnerOutcome,
+  OWNER_OUTCOME_PROGRAM_ID,
+  type OwnerOutcomeSource,
+} from "@/components/operator/owner-outcome-delivery"
 
 type ActiveDependencyState = {
   total: number
@@ -30,6 +33,7 @@ export function getPortfolioOperatorSurface(
   ownerOutcomes: OwnerOutcomeSource[] = [],
 ) {
   const selection = resolveNextPortfolioProgram([...portfolio.completedPrograms, ...portfolio.backlog], ownerOutcomes)
+  const approvedOwnerOutcome = findApprovedOwnerOutcome(ownerOutcomes)
   const selected = portfolio.backlog.find((program) => program.programId === selection.programId) ?? null
   const workOrders = selected ? buildWorkOrderChain(selected) : []
   const loop = selected ? buildLoopPacket(selected) : null
@@ -103,8 +107,8 @@ export function getPortfolioOperatorSurface(
     title: "Portfolio Operator",
     description: "Completed programs route to the highest-priority approved executable program. The Primary is involved only at a true authority wall.",
     selection,
-    selectedOwnerOutcome: selection.ownerOutcomeRef
-      ? ownerOutcomes.find((outcome) => getOwnerOutcomeReference(outcome) === selection.ownerOutcomeRef) ?? null
+    selectedOwnerOutcome: selection.programId === OWNER_OUTCOME_PROGRAM_ID
+      ? approvedOwnerOutcome
       : null,
     selectedProgram: selected,
     activeWorkOrder,

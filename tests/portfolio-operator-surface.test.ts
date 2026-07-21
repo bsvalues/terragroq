@@ -121,11 +121,39 @@ describe("portfolio operator surface", () => {
     expect(surface.selection).toMatchObject({
       decision: "SELECT_PROGRAM",
       ownerOutcomeRef: "GOAL-77",
+      ownerOutcomeId: 77,
     })
     expect(surface.selectedOwnerOutcome).toMatchObject({
       id: 77,
       ref: null,
       command: "Improve the WilliamOS goal console layout",
+    })
+  })
+
+  it("does not reselect a blocked row whose ref collides with the approved fallback", () => {
+    const blockedCollision: OwnerOutcomeSource = {
+      ...eligibleOwnerOutcome,
+      id: 1001,
+      ref: "GOAL-1000",
+      command: "Deploy TerraFusion to production",
+    }
+    const approvedLegacy: OwnerOutcomeSource = {
+      ...eligibleOwnerOutcome,
+      id: 1000,
+      ref: null,
+    }
+    const surface = getPortfolioOperatorSurface(
+      getPortfolioOperatorProgram(),
+      [blockedCollision, approvedLegacy],
+    )
+
+    expect(surface.selection).toMatchObject({
+      ownerOutcomeRef: "GOAL-1000",
+      ownerOutcomeId: 1000,
+    })
+    expect(surface.selectedOwnerOutcome).toMatchObject({
+      id: 1000,
+      ref: null,
     })
   })
 
