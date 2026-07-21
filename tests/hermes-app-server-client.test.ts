@@ -54,9 +54,18 @@ describe("CodexAppServerClient", () => {
       PATH: "tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
       CODEX_HOME: "C:/Users/owner/.codex", DATABASE_URL: "postgresql://secret", BETTER_AUTH_SECRET: "secret",
       GH_TOKEN: "secret", OPENAI_API_KEY: "secret",
-    })).toEqual({
+    }, { platform: "linux" })).toEqual({
       PATH: "tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
       CODEX_HOME: "C:/Users/owner/.codex",
+    })
+  })
+
+  it("prefers the stable native PowerShell path without broadening the child environment", () => {
+    expect(createCodexChildEnvironment({
+      PATH: "C:\\Windows\\System32", USERPROFILE: "C:/Users/owner", DATABASE_URL: "secret",
+    }, { platform: "win32", existsSync: () => true })).toEqual({
+      PATH: "C:\\Program Files\\PowerShell\\7;C:\\Windows\\System32",
+      USERPROFILE: "C:/Users/owner",
     })
   })
 
