@@ -261,21 +261,25 @@ describe("Hermes repository lifecycle", () => {
   })
 
   it("accepts a clean Codex reaction only on a request pinned to the exact head", async () => {
-    const request = (body: string) => ({ body, reactions: { nodes: [
-      { content: "THUMBS_UP", user: { login: "chatgpt-codex-connector" } },
-    ] } })
-    const create = (body: string) => fixture({
+    const request = (body: string, updatedAt = "2026-07-21T10:00:00.000Z") => ({
+      body, createdAt: "2026-07-21T10:00:00.000Z", updatedAt, reactions: { nodes: [
+        { content: "THUMBS_UP", createdAt: "2026-07-21T10:01:00.000Z", user: { login: "chatgpt-codex-connector" } },
+      ] },
+    })
+    const create = (body: string, updatedAt?: string) => fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
         number: 77, headRefName: branch, headRefOid: sha, state: "OPEN", isDraft: false,
         reviewDecision: "", statusCheckRollup: [{ context: "Vercel", state: "SUCCESS" }], reviews: [],
       }) }),
-      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [request(body)])) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [request(body, updatedAt)])) }),
     }).lifecycle
     await expect(create(`Final head ${sha}. @codex review`).inspectPullRequest(77))
       .resolves.toMatchObject({ reviewed: true })
     await expect(create(`Final head ${mergeSha}. @codex review`).inspectPullRequest(77))
       .resolves.toMatchObject({ reviewed: false })
     await expect(create(`Final head ${sha.slice(0, 12)}. @codex review`).inspectPullRequest(77))
+      .resolves.toMatchObject({ reviewed: false })
+    await expect(create(`Final head ${sha}. @codex review`, "2026-07-21T10:02:00.000Z").inspectPullRequest(77))
       .resolves.toMatchObject({ reviewed: false })
   })
 

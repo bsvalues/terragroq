@@ -221,11 +221,15 @@ function exactHeadCodexReaction(value, headRefOid) {
   if (!Array.isArray(comments)) wall("HERMES_REPOSITORY_GITHUB_WALL", "review request comments missing")
   return comments.some((comment) => {
     const body = String(comment?.body ?? "")
+    const createdAt = Date.parse(comment?.createdAt ?? "")
+    const updatedAt = Date.parse(comment?.updatedAt ?? "")
+    const immutableRequest = Number.isFinite(createdAt) && createdAt === updatedAt
     const namesHead = [...body.matchAll(/\b[0-9a-f]{40}\b/gi)]
       .some((match) => headRefOid === match[0].toLowerCase())
     const codexApproved = comment?.reactions?.nodes?.some((reaction) =>
-      reaction?.content === "THUMBS_UP" && reaction?.user?.login === "chatgpt-codex-connector")
-    return /@codex\s+review/i.test(body) && namesHead && codexApproved
+      reaction?.content === "THUMBS_UP" && reaction?.user?.login === "chatgpt-codex-connector"
+      && Date.parse(reaction?.createdAt ?? "") >= createdAt)
+    return immutableRequest && /@codex\s+review/i.test(body) && namesHead && codexApproved
   })
 }
 
@@ -397,7 +401,7 @@ export function createRepositoryLifecycle(options) {
     const pr = parseJson(prResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
     branchName(pr.headRefName)
     if (!SHA.test(pr.headRefOid ?? "")) wall("HERMES_REPOSITORY_GITHUB_WALL", "PR head SHA required")
-    const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}} comments(last:100){nodes{body reactions(first:20,content:THUMBS_UP){nodes{content user{login}}}}}}}}"
+    const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}} comments(last:100){nodes{body createdAt updatedAt reactions(first:20,content:THUMBS_UP){nodes{content createdAt user{login}}}}}}}}"
     const threadResult = await run("gh", ["api", "graphql", "-f", `query=${query}`, "-F", "owner=bsvalues", "-F", "name=terragroq", "-F", `number=${number}`])
     const checks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : []
     const reviewState = parseJson(threadResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
