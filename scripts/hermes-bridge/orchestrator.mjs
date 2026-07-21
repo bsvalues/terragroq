@@ -253,6 +253,11 @@ export function createHermesOrchestrator(options = {}) {
       if (!await lifecycle.verifyOriginMainContains(mergeSha)) {
         throw Object.assign(new Error("Merge commit is absent from origin/main"), { code: "HERMES_MAIN_VERIFICATION_WALL" })
       }
+      await lifecycle.cleanupOwnedWorktree({
+        ...record,
+        mergeCommitSha: mergeSha,
+        expectedHeadSha: pr.headRefOid,
+      })
       await markComplete({
         outcomeId: outcome.id,
         evidence: { prNumber, mergeSha, branch, ownerTouchCount: 0, blockedScopeCrossed: false },

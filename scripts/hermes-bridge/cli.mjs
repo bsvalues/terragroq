@@ -30,12 +30,15 @@ async function smoke() {
 }
 
 const command = process.argv[2]
-const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
 
 try {
-  if (command === "cycle") print(await orchestrator.cycle())
+  if (command === "cycle") {
+    const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
+    print(await orchestrator.cycle())
+  }
   else if (command === "smoke") print(await smoke())
   else if (command === "status") {
+    const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
     print(readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")))
   } else {
     throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status"), { code: "HERMES_CLI_USAGE" })

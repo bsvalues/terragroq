@@ -19,6 +19,11 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     await expect(selectNextOutcome({ query: async () => ({ rows: [{ ...row, command: "Retry issue #357" }] }) })).resolves.toBeNull()
   })
 
+  it("fails closed on a malformed authority timestamp", async () => {
+    await expect(selectNextOutcome({ query: async () => ({ rows: [row] }), notBefore: "not-a-date" }))
+      .rejects.toMatchObject({ code: "NOT_BEFORE_INVALID" })
+  })
+
   it("does not require or expose DATABASE_URL when query is injected", async () => {
     const original = process.env.DATABASE_URL
     delete process.env.DATABASE_URL

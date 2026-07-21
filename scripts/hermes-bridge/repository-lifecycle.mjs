@@ -374,17 +374,18 @@ export function createRepositoryLifecycle(options) {
     return result.code === 0
   }
 
-  async function cleanupOwnedWorktree({ worktreePath, branch, mergeCommitSha } = {}) {
+  async function cleanupOwnedWorktree({ worktreePath, branch, mergeCommitSha, expectedHeadSha } = {}) {
     const safeBranch = branchName(branch)
     const absoluteWorktree = absolute(worktreePath, "worktreePath")
     const record = records.get(safeBranch)
     if (record?.cleaned) return { branch: safeBranch, worktreePath: absoluteWorktree, cleaned: true, alreadyCleaned: true }
     ownedRecord(absoluteWorktree, safeBranch)
+    if (!SHA.test(expectedHeadSha ?? "")) wall("HERMES_REPOSITORY_CLEANUP_WALL", "reviewed head SHA required")
     if (!await verifyOriginMainContains(mergeCommitSha)) wall("HERMES_REPOSITORY_CLEANUP_WALL", "merge not present on origin/main")
     const status = await run("git", ["-C", absoluteWorktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"])
     if (status.stdout.length > 0) wall("HERMES_REPOSITORY_CLEANUP_WALL", "owned worktree is dirty")
     await run("git", ["-C", repositoryRoot, "worktree", "remove", absoluteWorktree])
-    await run("git", ["-C", repositoryRoot, "branch", "--delete", safeBranch])
+    await run("git", ["-C", repositoryRoot, "update-ref", "-d", `refs/heads/${safeBranch}`, expectedHeadSha])
     records.set(safeBranch, Object.freeze({ ...record, cleaned: true }))
     return { branch: safeBranch, worktreePath: absoluteWorktree, cleaned: true, alreadyCleaned: false }
   }

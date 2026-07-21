@@ -19,6 +19,8 @@ const FORBIDDEN_ITEM_TYPES = new Set(["mcpToolCall", "dynamicToolCall", "webSear
 
 const SECRET_PATTERNS = [
   /\b(?:sk|sess|key|token)-[A-Za-z0-9._-]{8,}\b/gi,
+  /\bauthorization\s*:\s*(?:bearer|basic)\s+[^\s,;]+/gi,
+  /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}\b/gi,
   /\b(?:bearer|token|api[_-]?key|authorization|password|secret)\s*[:=]\s*[^\s,;]+/gi,
   /\b(?:gh[opsu]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/gi,
   /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,

@@ -11,6 +11,9 @@ const sha = "a".repeat(40)
 const mergeSha = "b".repeat(40)
 const root = path.resolve("C:/workspace/terragroq")
 const ownedRoot = path.resolve("C:/workspace-owned/hermes")
+const ownedWorktree = path.join(ownedRoot, "hermes-goal-77")
+const rootGit = `git -C ${root}`
+const ownedGit = `git -C ${ownedWorktree}`
 const branch = "codex/hermes-goal-77"
 
 type Call = { command: string; args: string[]; cwd: string }
@@ -82,7 +85,7 @@ describe("Hermes repository lifecycle", () => {
 
   it("does not adopt a pre-existing branch as Hermes-owned", async () => {
     const { lifecycle, calls } = fixture({
-      "git -C C:\\workspace\\terragroq show-ref": () => ({ code: 0 }),
+      [`${rootGit} show-ref`]: () => ({ code: 0 }),
     })
     await expect(lifecycle.createWorktree({ branch })).rejects.toMatchObject({
       code: "HERMES_REPOSITORY_OWNERSHIP_WALL",
@@ -91,13 +94,13 @@ describe("Hermes repository lifecycle", () => {
   })
 
   it("rehydrates only a persisted worktree registered to the exact owned branch", async () => {
-    const worktreePath = path.join(ownedRoot, "hermes-goal-77")
+    const worktreePath = ownedWorktree
     const { lifecycle } = fixture({
-      "git -C C:\\workspace\\terragroq worktree list": () => ({
+      [`${rootGit} worktree list`]: () => ({
         code: 0,
         stdout: `worktree ${worktreePath.replace(/\\\\/g, "/")}\nHEAD ${sha}\nbranch refs/heads/${branch}\n\n`,
       }),
-      "git -C C:\\workspace-owned\\hermes\\hermes-goal-77 branch --show-current": () => ({ code: 0, stdout: `${branch}\n` }),
+      [`${ownedGit} branch --show-current`]: () => ({ code: 0, stdout: `${branch}\n` }),
     })
     await expect(lifecycle.resumeOwnedWorktree({ branch, worktreePath })).resolves.toMatchObject({
       branch, worktreePath, resumed: true,
@@ -106,8 +109,8 @@ describe("Hermes repository lifecycle", () => {
 
   it("inspects tracked, untracked, renamed, and committed paths and runs configured validation", async () => {
     const { lifecycle, calls, record } = await ownedFixture({
-      "git -C C:\\workspace-owned\\hermes\\hermes-goal-77 status": () => ({ code: 0, stdout: " M src/a.ts\0?? src/new.ts\0R  src/old.ts\0src/moved.ts\0" }),
-      "git -C C:\\workspace-owned\\hermes\\hermes-goal-77 diff": () => ({ code: 0, stdout: "src/a.ts\0tests/a.test.ts\0" }),
+      [`${ownedGit} status`]: () => ({ code: 0, stdout: " M src/a.ts\0?? src/new.ts\0R  src/old.ts\0src/moved.ts\0" }),
+      [`${ownedGit} diff`]: () => ({ code: 0, stdout: "src/a.ts\0tests/a.test.ts\0" }),
     })
     await expect(lifecycle.inspectChangedPaths(record)).resolves.toEqual([
       "src/a.ts", "src/moved.ts", "src/new.ts", "src/old.ts", "tests/a.test.ts",
@@ -211,15 +214,15 @@ describe("Hermes repository lifecycle", () => {
 
   it("verifies origin/main and cleans only a recorded, clean, merged worktree once", async () => {
     const { lifecycle, calls, record } = await ownedFixture({
-      "git -C C:\\workspace\\terragroq merge-base": () => ({ code: 0 }),
-      "git -C C:\\workspace-owned\\hermes\\hermes-goal-77 status": () => ({ code: 0, stdout: "" }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+      [`${ownedGit} status`]: () => ({ code: 0, stdout: "" }),
     })
-    const first = await lifecycle.cleanupOwnedWorktree({ ...record, mergeCommitSha: mergeSha })
-    const second = await lifecycle.cleanupOwnedWorktree({ ...record, mergeCommitSha: mergeSha })
+    const first = await lifecycle.cleanupOwnedWorktree({ ...record, mergeCommitSha: mergeSha, expectedHeadSha: sha })
+    const second = await lifecycle.cleanupOwnedWorktree({ ...record, mergeCommitSha: mergeSha, expectedHeadSha: sha })
     expect(first).toMatchObject({ cleaned: true, alreadyCleaned: false })
     expect(second).toMatchObject({ cleaned: true, alreadyCleaned: true })
     expect(calls.filter(({ args }) => args.includes("remove"))).toHaveLength(1)
-    expect(calls.filter(({ args }) => args.includes("--delete"))).toHaveLength(1)
+    expect(calls.filter(({ args }) => args.includes("update-ref"))).toHaveLength(1)
   })
 
   it("fails closed on foreign repositories, unsafe branches and paths, destructive validation, and unowned cleanup", async () => {
@@ -248,7 +251,7 @@ describe("Hermes repository lifecycle", () => {
     const { lifecycle } = fixture()
     await expect(lifecycle.createWorktree({ branch: "main" })).rejects.toMatchObject({ code: "HERMES_REPOSITORY_BRANCH_WALL" })
     await expect(lifecycle.cleanupOwnedWorktree({
-      branch, worktreePath: path.join(ownedRoot, "not-recorded"), mergeCommitSha: mergeSha,
+      branch, worktreePath: path.join(ownedRoot, "not-recorded"), mergeCommitSha: mergeSha, expectedHeadSha: sha,
     })).rejects.toMatchObject({ code: "HERMES_REPOSITORY_OWNERSHIP_WALL" })
   })
 })

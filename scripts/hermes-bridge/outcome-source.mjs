@@ -73,7 +73,11 @@ export async function selectNextOutcome({
 
   try {
     const params = [...OUTCOME_SELECTION_PARAMS]
-    params[9] = new Date(notBefore).toISOString()
+    const notBeforeMs = Date.parse(notBefore)
+    if (!Number.isFinite(notBeforeMs)) {
+      throw Object.assign(new Error("notBefore is invalid"), { code: "NOT_BEFORE_INVALID" })
+    }
+    params[9] = new Date(notBeforeMs).toISOString()
     const result = await runQuery(OUTCOME_SELECTION_SQL, params)
     const row = result?.rows?.[0] ?? null
     if (!row) return null
@@ -95,10 +99,12 @@ export async function completeOutcome({ query, databaseUrl = process.env.DATABAS
     }
     const { Pool } = await import("pg")
     pool = new Pool({ connectionString: databaseUrl })
-    client = await pool.connect()
-    runQuery = client.query.bind(client)
   }
   try {
+    if (pool) {
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+    }
     if (client) await runQuery("BEGIN")
     const result = await runQuery(
       `UPDATE goal SET status = 'converted', "updatedAt" = NOW()
