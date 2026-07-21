@@ -9,6 +9,12 @@ function print(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`)
 }
 
+function flushStdout() {
+  return new Promise((resolve, reject) => {
+    process.stdout.write("", (error) => error ? reject(error) : resolve())
+  })
+}
+
 export function sanitizeBridgeMessage(value) {
   return sanitizeAppServerText(String(value ?? ""))
     .replace(/\bpostgres(?:ql)?:\/\/[^@\s]+@/gi, "postgresql://[REDACTED]@")
@@ -79,8 +85,18 @@ export async function runCli(command = process.argv[2]) {
     }
   } catch (error) {
     print({ result: "WALL", code: error?.code ?? "HERMES_CLI_FAILED", message: sanitizeBridgeMessage(error?.message ?? "Hermes bridge failed") })
-    process.exitCode = 1
+    return 1
   }
+  return 0
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await runCli()
+export async function runCliEntrypoint(command = process.argv[2], options = {}) {
+  const run = options.run ?? runCli
+  const flush = options.flush ?? flushStdout
+  const exit = options.exit ?? process.exit
+  const exitCode = await run(command)
+  await flush()
+  exit(exitCode)
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await runCliEntrypoint()
