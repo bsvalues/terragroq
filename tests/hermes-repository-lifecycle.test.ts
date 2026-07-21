@@ -143,6 +143,16 @@ describe("Hermes repository lifecycle", () => {
     ])
   })
 
+  it("reads immutable PR file names for post-merge scope verification", async () => {
+    const { lifecycle, calls } = fixture({
+      "gh pr diff 77": () => ({ code: 0, stdout: "components/hermes/status.tsx\ntests/hermes-status.test.tsx\n" }),
+    })
+    await expect(lifecycle.inspectPullRequestFiles(77)).resolves.toEqual([
+      "components/hermes/status.tsx", "tests/hermes-status.test.tsx",
+    ])
+    expect(calls.at(-1)?.args).toEqual(["pr", "diff", "77", "--repo", "bsvalues/terragroq", "--name-only"])
+  })
+
   it("pushes an exact refspec and merges only an approved green PR with no unresolved threads", async () => {
     const pr = {
       number: 77,

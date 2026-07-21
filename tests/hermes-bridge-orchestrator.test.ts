@@ -42,7 +42,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
       state: "MERGED", checksGreen: true, reviewed: true, unresolvedThreadCount: 0,
       mergeCommit: { oid: "b".repeat(40) },
     })),
-    inspectChangedPaths: vi.fn(async () => changedPaths),
+    inspectPullRequestFiles: vi.fn(async () => changedPaths),
     verifyOriginMainContains: vi.fn(async () => true),
   }
   const client = {

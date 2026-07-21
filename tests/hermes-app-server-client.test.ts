@@ -132,6 +132,18 @@ describe("CodexAppServerClient", () => {
     await expect(resultPromise).resolves.toMatchObject({ finalText: "HELLO_WORLD" })
   })
 
+  it("correlates a completion that omits the top-level threadId", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+    const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "work" })
+    const request = process.messages().at(-1)
+    process.send({ id: request.id, result: { turn: { id: "turn-no-thread", status: "inProgress" } } })
+    await Promise.resolve()
+    process.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-no-thread", delta: "DONE" } })
+    process.send({ method: "turn/completed", params: { turn: { id: "turn-no-thread", status: "completed", items: [] } } })
+    await expect(resultPromise).resolves.toMatchObject({ threadId: "thread-1", finalText: "DONE" })
+  })
+
   it("interrupts and rejects a turn on timeout", async () => {
     vi.useFakeTimers()
     const { client, process } = setup({ timeoutMs: 25 })

@@ -274,7 +274,8 @@ export class CodexAppServerClient {
       }
     }
     if (message.method === "turn/completed") {
-      const { threadId, turn } = message.params ?? {}
+      const { turn } = message.params ?? {}
+      const threadId = message.params?.threadId ?? this.turnWaiter?.threadId
       if (threadId && turn?.id) {
         const result = {
           threadId,

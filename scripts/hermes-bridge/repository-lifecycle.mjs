@@ -169,6 +169,10 @@ function diffPaths(output) {
   return output.split("\0").filter(Boolean).map(safeRelativePath)
 }
 
+function linePaths(output) {
+  return output.split(/\r?\n/).filter(Boolean).map(safeRelativePath)
+}
+
 function checkState(check) {
   return String(check?.conclusion ?? check?.state ?? check?.status ?? "").toUpperCase()
 }
@@ -324,6 +328,15 @@ export function createRepositoryLifecycle(options) {
     }
   }
 
+  async function inspectPullRequestFiles(number) {
+    if (!Number.isSafeInteger(number) || number <= 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "positive PR number required")
+    await verifyOrigin()
+    const result = await run("gh", ["pr", "diff", String(number), "--repo", repository, "--name-only"])
+    const files = [...new Set(linePaths(result.stdout))].sort()
+    if (files.length === 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request file list is empty")
+    return files
+  }
+
   async function pushBranch({ worktreePath, branch } = {}) {
     const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
     await verifyOrigin()
@@ -388,6 +401,7 @@ export function createRepositoryLifecycle(options) {
     runValidationCommands,
     discoverPullRequest,
     inspectPullRequest,
+    inspectPullRequestFiles,
     pushBranch,
     createPullRequest,
     mergePullRequest,

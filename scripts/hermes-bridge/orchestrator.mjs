@@ -248,7 +248,7 @@ export function createHermesOrchestrator(options = {}) {
         || pr.unresolvedThreadCount !== 0 || !SHA.test(mergeSha ?? "")) {
         throw Object.assign(new Error("Merged PR failed independent verification"), { code: "HERMES_PR_VERIFICATION_WALL" })
       }
-      const changedPaths = await lifecycle.inspectChangedPaths(record)
+      const changedPaths = await lifecycle.inspectPullRequestFiles(prNumber)
       assertChangedPathsAllowed(changedPaths, reservations)
       if (!await lifecycle.verifyOriginMainContains(mergeSha)) {
         throw Object.assign(new Error("Merge commit is absent from origin/main"), { code: "HERMES_MAIN_VERIFICATION_WALL" })
