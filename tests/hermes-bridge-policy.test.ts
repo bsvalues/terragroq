@@ -12,7 +12,8 @@ describe("Hermes bridge outcome policy", () => {
 
   it.each([
     "Change TerraFusion docs", "Launch TerraPilot", "Update Property Workbench", "Read county PACS parcel data",
-    "Deploy to production", "Inspect a secret credential", "Approve paid overage", "Delete all records",
+    "Deploy to production", "Inspect a secret credential", "Inspect the session cookie handling in the UI",
+    "Read a generic token", "Approve paid overage", "Delete all records",
     "Retry issue #357", "Retry #357",
     "Create a GitHub release and tag v1", "Push git tag v2.0.0",
   ])("blocks protected scope: %s", (command) => {

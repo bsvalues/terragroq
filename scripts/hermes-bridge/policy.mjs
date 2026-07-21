@@ -8,7 +8,7 @@ const BLOCKED_SCOPE = Object.freeze([
   ["EXTERNAL_PRODUCT_SCOPE", /\b(?:terrafusion|terrapilot|property\s+workbench)\b/i],
   ["COUNTY_PROTECTED_SCOPE", /\b(?:county|pacs|parcel|taxpayer|protected\s+data)\b/i],
   ["PRODUCTION_SCOPE", /\b(?:(?:deploy|deployment|release|cutover|mutat(?:e|ion)|write|change)\w*\s+(?:to\s+)?production|production\s+(?:deploy|deployment|release|cutover|mutat(?:e|ion)|write|change)\w*)\b/i],
-  ["SECRET_SCOPE", /\b(?:secret|password|credential|api[ -]?key|access[ -]?token|private[ -]?key)\b/i],
+  ["SECRET_SCOPE", /\b(?:secret|password|credential|api[ -]?key|access[ -]?token|private[ -]?key|token|cookie|session)\b/i],
   ["PAID_SCOPE", /\b(?:paid\s+overage|increase\s+(?:the\s+)?spend|new\s+spending|purchase|billing\s+upgrade)\b/i],
   ["DESTRUCTIVE_SCOPE", /\b(?:destructive|delete|drop\s+(?:table|database)|truncate|force[ -]?push|reset\s+--hard|wipe|purge)\b/i],
   ["RELEASE_TAG_SCOPE", /\b(?:(?:create|publish|cut|push)\s+(?:a\s+)?(?:github\s+)?release|(?:create|publish|push)\s+(?:a\s+)?(?:git\s+)?tag|tag\s+v?\d)\b/i],

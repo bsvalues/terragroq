@@ -261,6 +261,8 @@ export function createHermesOrchestrator(options = {}) {
         || candidate.unresolvedThreadCount !== 0 || candidate.headRefOid !== result.commit) {
         throw Object.assign(new Error("Pull request failed the pre-merge verification gate"), { code: "HERMES_PR_VERIFICATION_WALL" })
       }
+      const worktreeChangedPaths = await lifecycle.inspectChangedPaths(record)
+      assertChangedPathsAllowed(worktreeChangedPaths, reservations)
       const changedPaths = await lifecycle.inspectPullRequestFiles(prNumber)
       assertChangedPathsAllowed(changedPaths, reservations)
       await lifecycle.mergePullRequest({ number: prNumber, branch })

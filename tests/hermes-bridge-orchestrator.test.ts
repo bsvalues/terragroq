@@ -45,6 +45,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
       unresolvedThreadCount: 0, headRefOid: "c".repeat(40),
       mergeCommit: merged ? { oid: "b".repeat(40) } : null,
     })),
+    inspectChangedPaths: vi.fn(async () => changedPaths),
     inspectPullRequestFiles: vi.fn(async () => changedPaths),
     mergePullRequest: vi.fn(async () => { merged = true; return { merged: true } }),
     verifyOriginMainContains: vi.fn(async () => true),
@@ -104,6 +105,8 @@ describe("Hermes bridge orchestrator", () => {
       }),
     }))
     expect(value.lifecycle.inspectPullRequest).toHaveBeenCalledWith(500)
+    expect(value.lifecycle.inspectChangedPaths.mock.invocationCallOrder[0])
+      .toBeLessThan(value.lifecycle.mergePullRequest.mock.invocationCallOrder[0])
     expect(value.lifecycle.inspectPullRequestFiles.mock.invocationCallOrder[0])
       .toBeLessThan(value.lifecycle.mergePullRequest.mock.invocationCallOrder[0])
     expect(value.lifecycle.cleanupOwnedWorktree).toHaveBeenCalledWith(expect.objectContaining({
