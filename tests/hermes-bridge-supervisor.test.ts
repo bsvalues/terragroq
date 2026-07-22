@@ -9,7 +9,9 @@ const supervisorScript = path.join(repoRoot, "scripts", "hermes-bridge", "superv
 const installScript = path.join(repoRoot, "scripts", "hermes-bridge", "install-supervisor.ps1")
 
 describe("Hermes interactive-user supervisor", () => {
-  it.skipIf(process.platform !== "win32")("runs one enabled cycle and removes its owned process record", () => {
+  const hostOnly = process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1"
+
+  it.skipIf(hostOnly)("runs one enabled cycle and removes its owned process record", () => {
     const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-supervisor-"))
     const activationPath = path.join(runtimeRoot, "control", "activation")
     const markerPath = path.join(runtimeRoot, "cycle.marker")
@@ -32,7 +34,7 @@ describe("Hermes interactive-user supervisor", () => {
     expect(result.stdout).toContain("INTERACTIVE_USER_RESIDENT")
   })
 
-  it.skipIf(process.platform !== "win32")("returns from a direct one-shot Node cycle without a nested shell", () => {
+  it.skipIf(hostOnly)("returns from a direct one-shot Node cycle without a nested shell", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-direct-cycle-"))
     const launchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-direct-launch-"))
     const runtimeRoot = path.join(launchRoot, "runtime")

@@ -59,7 +59,9 @@ afterEach(() => {
   spawnedPids.clear()
 })
 
-describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () => {
+describe.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1")(
+  "Hermes bridge kill switch",
+  () => {
   it("stops only the verified durable holder process tree", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-kill-"))
     const childPidPath = path.join(tempRoot, "child.pid")
@@ -290,4 +292,5 @@ describe.skipIf(process.platform !== "win32")("Hermes bridge kill switch", () =>
     spawnedPids.add(childPid)
     await waitFor(() => !isAlive(supervisor.pid!) && !isAlive(childPid))
   }, 20_000)
-})
+  },
+)
