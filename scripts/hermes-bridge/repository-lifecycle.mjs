@@ -593,16 +593,27 @@ export function createRepositoryLifecycle(options) {
     return { removed: true }
   }
 
-  function removeValidationArtifacts(record) {
-    removeValidationDependencies(record)
+  function removeGeneratedNextOutput(record) {
+    const worktreeStat = fs.lstatSync(record.worktreePath, { throwIfNoEntry: false })
+    if (!worktreeStat) return { removed: false }
+    if (!worktreeStat?.isDirectory() || worktreeStat.isSymbolicLink()
+      || !samePath(fs.realpathSync(record.worktreePath), record.worktreePath)
+      || !inside(fs.realpathSync(record.ownedWorktreeRoot), fs.realpathSync(record.worktreePath))) {
+      wall("HERMES_REPOSITORY_CLEANUP_WALL", "owned worktree root is no longer an ordinary contained directory")
+    }
     const nextOutput = path.join(record.worktreePath, ".next")
     const nextStat = fs.lstatSync(nextOutput, { throwIfNoEntry: false })
-    if (nextStat) {
-      if (!nextStat.isDirectory() || nextStat.isSymbolicLink()) {
-        wall("HERMES_REPOSITORY_CLEANUP_WALL", "generated Next output is not an owned directory")
-      }
-      fs.rmSync(nextOutput, { recursive: true, force: true })
+    if (!nextStat) return { removed: false }
+    if (!nextStat.isDirectory() || nextStat.isSymbolicLink()) {
+      wall("HERMES_REPOSITORY_CLEANUP_WALL", "generated Next output is not an owned directory")
     }
+    fs.rmSync(nextOutput, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 })
+    return { removed: true }
+  }
+
+  function removeValidationArtifacts(record) {
+    removeValidationDependencies(record)
+    removeGeneratedNextOutput(record)
   }
 
   async function runValidationCommands({ worktreePath, branch, commands = validationCommands } = {}) {
@@ -611,6 +622,10 @@ export function createRepositoryLifecycle(options) {
     if (normalized.length === 0) wall("HERMES_REPOSITORY_VALIDATION_WALL", "at least one validation command required")
     const results = []
     for (const command of normalized) {
+      const executable = path.basename(command.command).replace(/\.(?:cmd|exe)$/i, "")
+      if (executable === "npm" && command.args[0] === "run" && command.args[1] === "build") {
+        removeGeneratedNextOutput(record)
+      }
       const validationEnvironment = {
         ...command.env,
         WILLIAMOS_HERMES_VALIDATION_ISOLATED: "1",
