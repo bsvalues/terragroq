@@ -315,6 +315,34 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Vercel concluded FAILURE")
   })
 
+  it("routes substantive Codex review summaries through bounded remediation", async () => {
+    const value = fixture()
+    value.lifecycle.inspectPullRequest
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true,
+        checksComplete: true, failedChecks: [], reviewed: false, reviewCompleted: true,
+        codexReviewFindings: ["Preserve the authority predicate before merge."],
+        reviewRequested: true, unresolvedThreadCount: 0,
+        headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true,
+        checksComplete: true, failedChecks: [], reviewed: true, reviewCompleted: true,
+        codexReviewFindings: [], reviewRequested: true, unresolvedThreadCount: 0,
+        headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "MERGED", baseRefName: "main", isDraft: false, checksGreen: true,
+        checksComplete: true, failedChecks: [], reviewed: true, unresolvedThreadCount: 0,
+        headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
+      })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+    expect(value.client.runTurn).toHaveBeenCalledTimes(2)
+    expect(value.client.runTurn.mock.calls[1][0].prompt)
+      .toContain("Preserve the authority predicate before merge.")
+  })
+
   it("fails closed when Codex changes a path outside the lane reservation", async () => {
     const value = fixture(["components/hermes/live-status.tsx", "lib/db/schema.ts"])
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })

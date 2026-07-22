@@ -255,6 +255,16 @@ export function createHermesOrchestrator(options = {}) {
         findings = await lifecycle.inspectReviewFindings(prNumber)
         break
       }
+      if (candidate.reviewCompleted && candidate.codexReviewFindings?.length > 0) {
+        findings = candidate.codexReviewFindings.map((body) => ({
+          threadId: null,
+          isOutdated: false,
+          path: "pull-request review",
+          line: null,
+          body,
+        }))
+        break
+      }
       if (candidate.reviewCompleted && candidate.checksComplete && candidate.failedChecks?.length > 0) {
         findings = candidate.failedChecks.map((check) => ({
           threadId: null,

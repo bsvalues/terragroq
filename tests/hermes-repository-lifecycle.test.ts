@@ -470,23 +470,42 @@ describe("Hermes repository lifecycle", () => {
     await expect(paginated.inspectPullRequest(77)).rejects.toMatchObject({ code: "HERMES_REPOSITORY_GITHUB_WALL" })
   })
 
-  it("accepts a completed exact-head Codex review only when it leaves no unresolved findings", async () => {
+  it("records an exact-head Codex review response without treating generic commentary as clean", async () => {
     const create = (threads: unknown[]) => fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
         number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
         reviewDecision: "", statusCheckRollup: [{ context: "Vercel", state: "SUCCESS" }],
         reviews: [{
           author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: sha },
-          body: `Codex Review suggestions.\n\n**Reviewed commit:** \`${sha.slice(0, 10)}\``,
+          body: `### Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** \`${sha.slice(0, 10)}\`\n\n<details>About Codex</details>`,
         }],
       }) }),
       "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState(threads)) }),
     }).lifecycle
     await expect(create([]).inspectPullRequest(77)).resolves.toMatchObject({
-      reviewCompleted: true, reviewed: true,
+      reviewCompleted: true, reviewed: false, codexReviewFindings: [],
     })
     await expect(create([{ isResolved: false, comments: { nodes: [{ body: "Finding", isMinimized: false }] } }])
       .inspectPullRequest(77)).resolves.toMatchObject({ reviewCompleted: true, reviewed: false })
+  })
+
+  it("returns substantive exact-head Codex review summaries as remediation findings", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        statusCheckRollup: [{ context: "Vercel", state: "SUCCESS" }],
+        reviews: [{
+          author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: sha },
+          body: `### Codex Review\n\nPreserve the authority predicate before merge.\n\n**Reviewed commit:** \`${sha.slice(0, 10)}\``,
+        }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      reviewed: false,
+      reviewCompleted: true,
+      codexReviewFindings: ["Preserve the authority predicate before merge."],
+    })
   })
 
   it("accepts an explicit CodeRabbit rate-limit only with clean exact-head review evidence", async () => {

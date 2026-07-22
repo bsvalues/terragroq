@@ -302,14 +302,30 @@ function exactHeadCodexRequestTimes(value, headRefOid) {
   }).map((comment) => Date.parse(comment.createdAt))
 }
 
-function exactHeadCodexCompletedReview(pr) {
-  return Array.isArray(pr?.reviews) && pr.reviews.some((review) => {
+function exactHeadCodexReviews(pr) {
+  if (!Array.isArray(pr?.reviews)) return []
+  return pr.reviews.filter((review) => {
     const body = String(review?.body ?? "")
     const digest = body.match(/\*\*Reviewed commit:\*\*\s*`([0-9a-f]{10,40})`/i)?.[1]?.toLowerCase()
     return review?.author?.login === "chatgpt-codex-connector"
       && review?.commit?.oid === pr.headRefOid
       && ["COMMENTED", "APPROVED"].includes(String(review?.state ?? "").toUpperCase())
       && typeof digest === "string" && pr.headRefOid.startsWith(digest)
+  })
+}
+
+function exactHeadCodexReviewFindings(pr) {
+  return exactHeadCodexReviews(pr).flatMap((review) => {
+    if (String(review.state).toUpperCase() !== "COMMENTED") return []
+    const summary = String(review.body ?? "")
+      .replace(/<details>[\s\S]*$/i, "")
+      .replace(/^\s*###\s*[^\r\n]*Codex Review[^\r\n]*\r?\n?/i, "")
+      .replace(/^\s*Here are some automated review suggestions for this pull request\.\s*$/gim, "")
+      .replace(/^\s*\*\*Reviewed commit:\*\*\s*`[0-9a-f]{10,40}`\s*$/gim, "")
+      .trim()
+    if (!summary || summary.startsWith("Codex Review: Didn't find any major issues.")) return []
+    if (SECRET_LIKE.test(summary)) wall("HERMES_REPOSITORY_REVIEW_WALL", "secret-like review text refused")
+    return [summary.slice(0, 4_000)]
   })
 }
 
@@ -615,7 +631,12 @@ export function createRepositoryLifecycle(options) {
     const requestTimes = exactHeadCodexRequestTimes(reviewState, pr.headRefOid)
     const hasExactHeadCodexCleanComment = exactHeadCodexCleanComment(reviewState, pr.headRefOid, requestTimes)
     const hasExactHeadApproval = exactHeadApprovedReview(pr)
-    const hasExactHeadCodexCompletedReview = exactHeadCodexCompletedReview(pr)
+    const exactHeadCodexReviewsForCommit = exactHeadCodexReviews(pr)
+    const codexReviewFindings = exactHeadCodexReviewFindings(pr)
+    const hasExactHeadCodexCompletedReview = exactHeadCodexReviewsForCommit.length > 0
+    const hasExactHeadCodexCleanReview = exactHeadCodexReviewsForCommit.some((review) =>
+      String(review.state).toUpperCase() === "APPROVED"
+        || String(review.body ?? "").startsWith("Codex Review: Didn't find any major issues."))
     const rateLimitedCodeRabbitContexts = new Set()
     if (checks.some((check) => /coderabbit/i.test(checkName(check)))) {
       const statusResult = await run("gh", ["api", `repos/${repository}/commits/${pr.headRefOid}/status`])
@@ -632,7 +653,7 @@ export function createRepositoryLifecycle(options) {
     }
     const codeRabbitRateLimited = rateLimitedCodeRabbitContexts.size > 0
     const hasExactHeadReview = hasExactHeadApproval || hasExactHeadCodexCleanComment
-      || (hasExactHeadCodexCompletedReview && unresolved === 0)
+      || (hasExactHeadCodexCleanReview && unresolved === 0 && codexReviewFindings.length === 0)
     const hasCodeRabbitReview = checks.some((check) =>
       /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"
         && !rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase()))
@@ -653,6 +674,7 @@ export function createRepositoryLifecycle(options) {
       checksGreen: checks.length > 0 && checks.every((check) => SUCCESSFUL_CHECKS.has(effectiveCheckState(check))),
       checksComplete: checks.length > 0 && checks.every((check) => !PENDING_CHECKS.has(effectiveCheckState(check))),
       failedChecks,
+      codexReviewFindings,
       reviewed: hasExactHeadReview || hasCodeRabbitReview,
       reviewCompleted: hasExactHeadApproval || hasExactHeadCodexCompletedReview || hasCodeRabbitReview,
       codeRabbitRateLimited,
