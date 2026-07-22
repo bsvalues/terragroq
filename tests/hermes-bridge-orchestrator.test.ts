@@ -51,6 +51,15 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
       mergeCommit: merged ? { oid: "b".repeat(40) } : null,
     })),
     inspectChangedPaths: vi.fn(async () => changedPaths),
+    inspectWorkingTreePaths: vi.fn(async () => changedPaths),
+    ensureValidationDependencies: vi.fn(() => ({ linked: true })),
+    runValidationCommands: vi.fn(async () => [{ command: "npm", args: ["test"], code: 0 }]),
+    commitChanges: vi.fn(async () => ({ commit: "c".repeat(40), branch: "codex/hermes-goal-77-77", paths: changedPaths })),
+    pushBranch: vi.fn(async () => ({ pushed: true })),
+    createPullRequest: vi.fn(async () => ({ number: 500, url: "https://github.com/bsvalues/terragroq/pull/500" })),
+    requestCodexReview: vi.fn(async () => ({ requested: true })),
+    inspectReviewFindings: vi.fn(async () => []),
+    resolveReviewThreads: vi.fn(async () => ({ resolved: 0 })),
     inspectPullRequestFiles: vi.fn(async () => changedPaths),
     mergePullRequest: vi.fn(async () => { merged = true; return { merged: true } }),
     verifyOriginMainContains: vi.fn(async () => true),
@@ -63,8 +72,8 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     runTurn: vi.fn(async () => ({
       threadId: "thread-77", turnId: "turn-77", status: "completed",
       finalText: JSON.stringify({
-        result: "READY_FOR_MERGE", workOrder: "WO-HERMES-77-001", branch: "codex/hermes-goal-77-77",
-        commit: "c".repeat(40), prUrl: "https://github.com/bsvalues/terragroq/pull/500",
+        result: "READY_FOR_VALIDATION", workOrder: "WO-HERMES-77-001", branch: "codex/hermes-goal-77-77",
+        commit: null, prUrl: null,
         merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0,
         ownerTouchCount: 0, blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE",
       }),
@@ -117,6 +126,11 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       }),
     }))
     expect(value.lifecycle.inspectPullRequest).toHaveBeenCalledWith(500)
+    expect(value.lifecycle.runValidationCommands).toHaveBeenCalled()
+    expect(value.lifecycle.commitChanges).toHaveBeenCalled()
+    expect(value.lifecycle.pushBranch).toHaveBeenCalled()
+    expect(value.lifecycle.createPullRequest).toHaveBeenCalled()
+    expect(value.lifecycle.requestCodexReview).toHaveBeenCalledWith({ number: 500, headRefOid: "c".repeat(40) })
     expect(value.lifecycle.inspectChangedPaths.mock.invocationCallOrder[0])
       .toBeLessThan(value.lifecycle.mergePullRequest.mock.invocationCallOrder[0])
     expect(value.lifecycle.inspectPullRequestFiles.mock.invocationCallOrder[0])
@@ -125,6 +139,39 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       mergeCommitSha: "b".repeat(40),
     }))
     expect(value.markComplete).toHaveBeenCalledWith(expect.objectContaining({ outcomeId: 77 }))
+  })
+
+  it("dispatches actionable review findings back to Codex and revalidates before merge", async () => {
+    const value = fixture()
+    value.lifecycle.commitChanges
+      .mockResolvedValueOnce({ commit: "c".repeat(40), branch: "codex/hermes-goal-77-77" })
+      .mockResolvedValueOnce({ commit: "d".repeat(40), branch: "codex/hermes-goal-77-77" })
+    value.lifecycle.inspectPullRequest
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        unresolvedThreadCount: 1, headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        unresolvedThreadCount: 0, headRefOid: "d".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "MERGED", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        unresolvedThreadCount: 0, headRefOid: "d".repeat(40), mergeCommit: { oid: "b".repeat(40) },
+      })
+    value.lifecycle.inspectReviewFindings.mockResolvedValueOnce([{
+      threadId: "PRRT_review_1", path: "components/hermes/live-status.tsx", line: 12,
+      body: "Handle the empty state explicitly.",
+    }])
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+    expect(value.client.runTurn).toHaveBeenCalledTimes(2)
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Handle the empty state explicitly")
+    expect(value.lifecycle.runValidationCommands).toHaveBeenCalledTimes(2)
+    expect(value.lifecycle.resolveReviewThreads).toHaveBeenCalledWith(["PRRT_review_1"])
+    expect(value.lifecycle.requestCodexReview).toHaveBeenNthCalledWith(2, {
+      number: 500, headRefOid: "d".repeat(40),
+    })
   })
 
   it("fails closed when Codex changes a path outside the lane reservation", async () => {

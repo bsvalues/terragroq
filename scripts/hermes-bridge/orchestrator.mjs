@@ -14,13 +14,24 @@ const LEASE_DURATION_MS = 50 * 60 * 1000
 const TURN_TIMEOUT_MS = 45 * 60 * 1000
 const MAX_PROVIDER_REDISPATCHES = 3
 const PROVIDER_RETRY_COOLDOWN_MS = 15 * 60 * 1000
+const MAX_REMEDIATION_ROUNDS = 3
+const REVIEW_POLL_INTERVAL_MS = 15_000
+const REVIEW_POLL_ATTEMPTS = 80
 const SHA = /^[0-9a-f]{40}$/
 
+export const DEFAULT_VALIDATION_COMMANDS = Object.freeze([
+  Object.freeze({ command: "npm", args: Object.freeze(["run", "lint"]) }),
+  Object.freeze({ command: "npm", args: Object.freeze(["test", "--", "--run"]) }),
+  Object.freeze({
+    command: "npm",
+    args: Object.freeze(["run", "build"]),
+    env: Object.freeze({ NEXT_PRIVATE_BUILD_WORKER: "0", NEXT_TELEMETRY_DISABLED: "1" }),
+  }),
+])
+
 export const DEFAULT_VALIDATORS = Object.freeze([
-  "npx vitest run focused tests for changed behavior",
-  "npm run lint",
-  "npm test -- --run",
-  "NEXT_PRIVATE_BUILD_WORKER=0 NEXT_TELEMETRY_DISABLED=1 npm run build",
+  "npx vitest run focused changed tests",
+  ...DEFAULT_VALIDATION_COMMANDS.map((entry) => `${entry.command} ${entry.args.join(" ")}`),
 ])
 
 const RESERVATIONS = Object.freeze({
@@ -54,6 +65,27 @@ function parseTurnResult(text) {
     }
     throw Object.assign(new Error("App Server terminal result was not valid JSON"), { code: "HERMES_RESULT_FORMAT_WALL" })
   }
+}
+
+function pullRequestNumber(value) {
+  if (Number.isSafeInteger(value?.number) && value.number > 0) return value.number
+  try {
+    const url = new URL(value?.url)
+    const match = url.origin === "https://github.com"
+      ? url.pathname.match(/^\/bsvalues\/terragroq\/pull\/(\d+)\/?$/) : null
+    const number = Number(match?.[1])
+    if (Number.isSafeInteger(number) && number > 0) return number
+  } catch {}
+  throw Object.assign(new Error("Valid PR URL required"), { code: "HERMES_PR_WALL" })
+}
+
+function buildRemediationPrompt({ workOrderId, branch, findings }) {
+  return `Continue ${workOrderId} on ${branch}.
+
+Hermes completed native validation, commit, push, PR creation, and review monitoring. Independent review produced these actionable findings:
+${findings.map((finding, index) => `${index + 1}. ${finding.path}${finding.line ? `:${finding.line}` : ""} - ${finding.body}`).join("\n")}
+
+Remediate every valid finding using only repository file reads and edits inside the existing reserved paths. Do not run native commands, Git, or GitHub CLI. Independently review the resulting file changes. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
 }
 
 function allowedPath(changedPath, reservations) {
@@ -92,6 +124,7 @@ export function createHermesOrchestrator(options = {}) {
   const lifecycle = options.lifecycle ?? createRepositoryLifecycle({
     workspaceRoot: workspace,
     ownedWorktreeRoot: path.join(runtimeRoot, "worktrees"),
+    validationCommands: DEFAULT_VALIDATION_COMMANDS,
   })
   const selectOutcome = options.selectOutcome ?? selectNextOutcome
   const markComplete = options.markComplete ?? completeOutcome
@@ -99,6 +132,9 @@ export function createHermesOrchestrator(options = {}) {
   const deferOutcome = options.deferOutcome ?? deferProviderOutcome
   const clientFactory = options.clientFactory ?? ((cwd) => new CodexAppServerClient({ cwd, timeoutMs: TURN_TIMEOUT_MS }))
   const now = options.now ?? (() => new Date())
+  const sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)))
+  const reviewPollIntervalMs = options.reviewPollIntervalMs ?? REVIEW_POLL_INTERVAL_MS
+  const reviewPollAttempts = options.reviewPollAttempts ?? REVIEW_POLL_ATTEMPTS
   const holderId = options.holderId ?? `${os.hostname()}:${process.pid}:${randomUUID()}`
 
   async function checkpoint(lease, sequence, checkpointState, detail, metadata = {}) {
@@ -284,7 +320,7 @@ export function createHermesOrchestrator(options = {}) {
       }, 5 * 60 * 1000)
       renewal.unref?.()
 
-      const prompt = buildHermesCodexPrompt({
+      let deliveryPrompt = buildHermesCodexPrompt({
         outcome: outcome.command,
         outcomeRef: outcomeRef(outcome),
         workOrderId: `WO-HERMES-${outcome.id}-001`,
@@ -294,105 +330,163 @@ export function createHermesOrchestrator(options = {}) {
         reservations,
         validators: DEFAULT_VALIDATORS,
       })
-      const turn = await client.runTurn({
-        threadId,
-        prompt,
-        turn: {
-          outputSchema: HERMES_TURN_OUTPUT_SCHEMA,
-          effort: "ultra",
-          approvalPolicy: "never",
-          runtimeWorkspaceRoots: [record.worktreePath],
-          sandboxPolicy: {
-            type: "workspaceWrite",
-            writableRoots: [record.worktreePath],
-            networkAccess: true,
-            excludeTmpdirEnvVar: true,
-            excludeSlashTmp: true,
+      let pendingFindings = []
+      for (let remediationRound = 0; remediationRound <= MAX_REMEDIATION_ROUNDS; remediationRound += 1) {
+        const turn = await client.runTurn({
+          threadId,
+          prompt: deliveryPrompt,
+          turn: {
+            outputSchema: HERMES_TURN_OUTPUT_SCHEMA,
+            effort: "ultra",
+            approvalPolicy: "never",
+            runtimeWorkspaceRoots: [record.worktreePath],
+            sandboxPolicy: {
+              type: "workspaceWrite",
+              writableRoots: [record.worktreePath],
+              networkAccess: true,
+              excludeTmpdirEnvVar: true,
+              excludeSlashTmp: true,
+            },
           },
-        },
-        timeoutMs: TURN_TIMEOUT_MS,
-      })
-      cp = await checkpoint(lease, sequence, "CODEX_TURN_COMPLETED", turn.status, {
-        threadId: turn.threadId, turnId: turn.turnId,
-      })
-      sequence = cp.checkpointSequence
-      const result = parseTurnResult(turn.finalText)
-      assertOwnerTouchCountersZero(state.read())
-
-      if (result.result === "RETRYABLE_PROVIDER_WALL") {
-        const providerRetryCount = (cp.metadata.providerRetryCount ?? 0) + 1
-        if (providerRetryCount >= MAX_PROVIDER_REDISPATCHES) {
-          const retryAfter = new Date(now().getTime() + PROVIDER_RETRY_COOLDOWN_MS).toISOString()
-          cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", retryAfter, { providerRetryCount })
-          if (!await deferOutcome({ outcomeId: outcome.id, retryAfter })) {
-            throw Object.assign(new Error("Provider-unavailable outcome could not be deferred"), { code: "HERMES_PROVIDER_SETTLEMENT_WALL" })
-          }
-          state.deferProviderWall({
-            idempotencyKey: `${outcomeId}:defer:PROVIDER_UNAVAILABLE:${retryAfter}`,
-            outcomeId, holderId, fencingToken: lease.fencingToken, retryAfter,
-          })
-          return { result: "PROVIDER_UNAVAILABLE", outcomeId, nextState: "DEFERRED_PROVIDER_UNAVAILABLE", retryAfter }
-        }
-        cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null, { providerRetryCount })
-        state.abandonLease({
-          idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${cp.checkpointSequence}`,
-          outcomeId, holderId, fencingToken: lease.fencingToken,
-          reason: result.nextState ?? "RETRYABLE_PROVIDER_WALL",
+          timeoutMs: TURN_TIMEOUT_MS,
         })
-        return { result: result.result, outcomeId, nextState: result.nextState ?? null }
-      }
-
-      if (["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"].includes(result.result)) {
-        cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null)
+        cp = await checkpoint(lease, sequence, "CODEX_TURN_COMPLETED", turn.status, {
+          threadId: turn.threadId, turnId: turn.turnId, remediationRound,
+        })
         sequence = cp.checkpointSequence
-        await markTerminal({
-          outcomeId: outcome.id,
-          result: result.result,
-          nextState: result.nextState ?? null,
+        const result = parseTurnResult(turn.finalText)
+        assertOwnerTouchCountersZero(state.read())
+
+        if (result.result === "RETRYABLE_PROVIDER_WALL") {
+          const providerRetryCount = (cp.metadata.providerRetryCount ?? 0) + 1
+          if (providerRetryCount >= MAX_PROVIDER_REDISPATCHES) {
+            const retryAfter = new Date(now().getTime() + PROVIDER_RETRY_COOLDOWN_MS).toISOString()
+            cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", retryAfter, { providerRetryCount })
+            if (!await deferOutcome({ outcomeId: outcome.id, retryAfter })) {
+              throw Object.assign(new Error("Provider-unavailable outcome could not be deferred"), { code: "HERMES_PROVIDER_SETTLEMENT_WALL" })
+            }
+            state.deferProviderWall({
+              idempotencyKey: `${outcomeId}:defer:PROVIDER_UNAVAILABLE:${retryAfter}`,
+              outcomeId, holderId, fencingToken: lease.fencingToken, retryAfter,
+            })
+            return { result: "PROVIDER_UNAVAILABLE", outcomeId, nextState: "DEFERRED_PROVIDER_UNAVAILABLE", retryAfter }
+          }
+          cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null, { providerRetryCount })
+          state.abandonLease({
+            idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${cp.checkpointSequence}`,
+            outcomeId, holderId, fencingToken: lease.fencingToken,
+            reason: result.nextState ?? "RETRYABLE_PROVIDER_WALL",
+          })
+          return { result: result.result, outcomeId, nextState: result.nextState ?? null }
+        }
+
+        if (["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"].includes(result.result)) {
+          cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null)
+          sequence = cp.checkpointSequence
+          await markTerminal({ outcomeId: outcome.id, result: result.result, nextState: result.nextState ?? null })
+          state.releaseLease({
+            idempotencyKey: `${outcomeId}:release:${result.result}`,
+            outcomeId, holderId, fencingToken: lease.fencingToken,
+          })
+          return { result: result.result, outcomeId, nextState: result.nextState ?? null }
+        }
+        if (result.result !== "READY_FOR_VALIDATION" || result.commit !== null || result.prUrl !== null
+          || result.merged || result.mergeCommit !== null || result.ownerTouchCount !== 0
+          || result.blockedScopeCrossed || result.reviewThreads !== 0) {
+          throw Object.assign(new Error("Codex result did not satisfy the file handoff contract"), { code: "HERMES_COMPLETION_GATE_WALL" })
+        }
+
+        const workingPaths = await lifecycle.inspectWorkingTreePaths(record)
+        if (workingPaths.length === 0) {
+          throw Object.assign(new Error("Codex handoff contained no file changes"), { code: "HERMES_COMPLETION_GATE_WALL" })
+        }
+        assertChangedPathsAllowed(workingPaths, reservations)
+        lifecycle.ensureValidationDependencies(record)
+        const focusedTests = workingPaths.filter((changedPath) =>
+          changedPath.startsWith("tests/") && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(changedPath))
+        const validationCommands = [
+          ...(focusedTests.length > 0 ? [{ command: "npx", args: ["vitest", "run", ...focusedTests] }] : []),
+          ...DEFAULT_VALIDATION_COMMANDS,
+        ]
+        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_STARTED", null, { remediationRound })
+        sequence = cp.checkpointSequence
+        const validation = await lifecycle.runValidationCommands({ ...record, commands: validationCommands })
+        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_PASSED", null, { validation, remediationRound })
+        sequence = cp.checkpointSequence
+
+        const committed = await lifecycle.commitChanges({
+          ...record,
+          paths: workingPaths,
+          message: `feat(williamos): deliver ${safeLeaf(outcomeRef(outcome))}`,
         })
-        state.releaseLease({
-          idempotencyKey: `${outcomeId}:release:${result.result}`,
-          outcomeId, holderId, fencingToken: lease.fencingToken,
+        cp = await checkpoint(lease, sequence, "COMMIT_CREATED", committed.commit, {
+          headRefOid: committed.commit, remediationRound,
         })
-        return { result: result.result, outcomeId, nextState: result.nextState ?? null }
+        sequence = cp.checkpointSequence
+        await lifecycle.pushBranch(record)
+        const pullRequest = await lifecycle.createPullRequest({
+          branch,
+          title: `feat(williamos): deliver ${safeLeaf(outcomeRef(outcome))}`,
+          body: `Hermes-delivered bounded WilliamOS-native R0/R1 feature for ${outcomeRef(outcome)}.\n\nOwner touch count: 0. Blocked scope crossed: false.`,
+        })
+        const prNumber = pullRequestNumber(pullRequest)
+        if (pendingFindings.length > 0) {
+          await lifecycle.resolveReviewThreads(pendingFindings.map((finding) => finding.threadId))
+          pendingFindings = []
+        }
+        await lifecycle.requestCodexReview({ number: prNumber, headRefOid: committed.commit })
+        cp = await checkpoint(lease, sequence, "PR_REVIEW_REQUESTED", `PR #${prNumber}`, {
+          prNumber, branch, headRefOid: committed.commit, remediationRound,
+        })
+        sequence = cp.checkpointSequence
+
+        let candidate
+        for (let pollAttempt = 0; pollAttempt < reviewPollAttempts; pollAttempt += 1) {
+          candidate = await lifecycle.inspectPullRequest(prNumber)
+          if (candidate.state !== "OPEN" || candidate.baseRefName !== "main"
+            || candidate.isDraft || candidate.headRefOid !== committed.commit) {
+            throw Object.assign(new Error("Pull request identity changed during review"), { code: "HERMES_PR_VERIFICATION_WALL" })
+          }
+          if (candidate.unresolvedThreadCount > 0 || (candidate.checksGreen && candidate.reviewed)) break
+          await sleep(reviewPollIntervalMs)
+        }
+        if (candidate?.unresolvedThreadCount > 0) {
+          pendingFindings = await lifecycle.inspectReviewFindings(prNumber)
+          if (pendingFindings.length === 0 || remediationRound >= MAX_REMEDIATION_ROUNDS) {
+            throw Object.assign(new Error("Review remediation budget exhausted"), { code: "HERMES_REVIEW_REMEDIATION_WALL" })
+          }
+          cp = await checkpoint(lease, sequence, "REVIEW_REMEDIATION_REQUIRED", `PR #${prNumber}`, {
+            prNumber, branch, headRefOid: committed.commit, remediationRound,
+          })
+          sequence = cp.checkpointSequence
+          deliveryPrompt = buildRemediationPrompt({
+            workOrderId: `WO-HERMES-${outcome.id}-001`, branch, findings: pendingFindings,
+          })
+          continue
+        }
+        if (!candidate?.checksGreen || !candidate?.reviewed || candidate.unresolvedThreadCount !== 0) {
+          throw Object.assign(new Error("Pull request did not reach a green reviewed state"), { code: "HERMES_PR_VERIFICATION_WALL" })
+        }
+        const worktreeChangedPaths = await lifecycle.inspectChangedPaths(record)
+        assertChangedPathsAllowed(worktreeChangedPaths, reservations)
+        const changedPaths = await lifecycle.inspectPullRequestFiles(prNumber)
+        assertChangedPathsAllowed(changedPaths, reservations)
+        await lifecycle.mergePullRequest({ number: prNumber, branch })
+        const pr = await lifecycle.inspectPullRequest(prNumber)
+        const mergeSha = pr.mergeCommit?.oid
+        if (pr.state !== "MERGED" || pr.baseRefName !== "main"
+          || pr.unresolvedThreadCount !== 0 || !SHA.test(mergeSha ?? "")) {
+          throw Object.assign(new Error("Merged PR failed independent verification"), { code: "HERMES_PR_VERIFICATION_WALL" })
+        }
+        cp = await checkpoint(lease, sequence, "PR_MERGED", `PR #${prNumber} merged`, {
+          prNumber, branch, mergeSha, headRefOid: pr.headRefOid,
+        })
+        sequence = cp.checkpointSequence
+        return finalizeMerged({
+          lease, sequence, outcome, branch, reservations, worktreePath: record.worktreePath, prNumber,
+        })
       }
-      if (result.result !== "READY_FOR_MERGE" || result.merged || result.mergeCommit !== null
-        || result.ownerTouchCount !== 0 || result.blockedScopeCrossed || result.reviewThreads !== 0
-        || !SHA.test(result.commit ?? "")) {
-        throw Object.assign(new Error("Codex result did not satisfy the completion contract"), { code: "HERMES_COMPLETION_GATE_WALL" })
-      }
-      let prUrl
-      try { prUrl = new URL(result.prUrl) } catch {
-        throw Object.assign(new Error("Valid PR URL required"), { code: "HERMES_PR_WALL" })
-      }
-      const match = prUrl.origin === "https://github.com"
-        ? prUrl.pathname.match(/^\/bsvalues\/terragroq\/pull\/(\d+)\/?$/) : null
-      const prNumber = Number(match?.[1])
-      if (!Number.isSafeInteger(prNumber) || prNumber <= 0) throw Object.assign(new Error("Valid PR URL required"), { code: "HERMES_PR_WALL" })
-      const candidate = await lifecycle.inspectPullRequest(prNumber)
-      if (candidate.state !== "OPEN" || candidate.baseRefName !== "main"
-        || candidate.isDraft || !candidate.checksGreen || !candidate.reviewed
-        || candidate.unresolvedThreadCount !== 0 || candidate.headRefOid !== result.commit) {
-        throw Object.assign(new Error("Pull request failed the pre-merge verification gate"), { code: "HERMES_PR_VERIFICATION_WALL" })
-      }
-      const worktreeChangedPaths = await lifecycle.inspectChangedPaths(record)
-      assertChangedPathsAllowed(worktreeChangedPaths, reservations)
-      const changedPaths = await lifecycle.inspectPullRequestFiles(prNumber)
-      assertChangedPathsAllowed(changedPaths, reservations)
-      await lifecycle.mergePullRequest({ number: prNumber, branch })
-      const pr = await lifecycle.inspectPullRequest(prNumber)
-      const mergeSha = pr.mergeCommit?.oid
-      if (pr.state !== "MERGED" || pr.baseRefName !== "main"
-        || pr.unresolvedThreadCount !== 0 || !SHA.test(mergeSha ?? "")) {
-        throw Object.assign(new Error("Merged PR failed independent verification"), { code: "HERMES_PR_VERIFICATION_WALL" })
-      }
-      cp = await checkpoint(lease, sequence, "PR_MERGED", `PR #${prNumber} merged`, {
-        prNumber, branch, mergeSha, headRefOid: pr.headRefOid,
-      })
-      sequence = cp.checkpointSequence
-      return finalizeMerged({
-        lease, sequence, outcome, branch, reservations, worktreePath: record.worktreePath, prNumber,
-      })
+      throw Object.assign(new Error("Review remediation budget exhausted"), { code: "HERMES_REVIEW_REMEDIATION_WALL" })
     } catch (error) {
       try { await checkpoint(lease, sequence, "RETRYABLE_WALL", error?.code ?? "HERMES_CYCLE_FAILED") } catch {}
       if (cp?.state === "PROVIDER_UNAVAILABLE"

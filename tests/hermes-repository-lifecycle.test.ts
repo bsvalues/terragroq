@@ -132,6 +132,58 @@ describe("Hermes repository lifecycle", () => {
     })
   })
 
+  it("passes only allowlisted validator environment overrides", async () => {
+    const calls: Call[] = []
+    const lifecycle = createRepositoryLifecycle({
+      workspaceRoot: root,
+      ownedWorktreeRoot: ownedRoot,
+      validationCommands: [{
+        command: "npm", args: ["run", "build"],
+        env: { NEXT_PRIVATE_BUILD_WORKER: "0", NEXT_TELEMETRY_DISABLED: "1" },
+      }],
+      runner: async (call: Call) => {
+        calls.push(call)
+        if (call.args.includes("remote") && call.args.includes("get-url")) {
+          return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
+        }
+        if (call.args.includes("show-ref")) return { code: 1, stdout: "" }
+        return { code: 0, stdout: "" }
+      },
+    })
+    await lifecycle.createWorktree({ branch })
+    calls.length = 0
+    await lifecycle.runValidationCommands({ worktreePath: ownedWorktree, branch })
+    expect(calls.at(-1)).toEqual({
+      command: "npm", args: ["run", "build"], cwd: ownedWorktree,
+      env: { NEXT_PRIVATE_BUILD_WORKER: "0", NEXT_TELEMETRY_DISABLED: "1" },
+    })
+    expect(() => createRepositoryLifecycle({
+      workspaceRoot: root, ownedWorktreeRoot: ownedRoot,
+      validationCommands: [{ command: "npm", args: ["run", "build"], env: { DATABASE_URL: "forbidden" } }],
+      runner: async () => ({ code: 0 }),
+    })).toThrow(HermesRepositoryLifecycleError)
+  })
+
+  it("commits exactly the owned working-tree paths and requests exact-head Codex review", async () => {
+    const changed = ["components/dashboard/radar.tsx", "tests/radar.test.ts"]
+    const { lifecycle, calls, record } = await ownedFixture({
+      [`${ownedGit} status`]: () => ({ code: 0, stdout: changed.map((item) => ` M ${item}\0`).join("") }),
+      [`${ownedGit} diff --cached --quiet`]: () => ({ code: 1, stdout: "" }),
+      [`${ownedGit} rev-parse HEAD`]: () => ({ code: 0, stdout: `${sha}\n` }),
+    })
+    await expect(lifecycle.commitChanges({
+      ...record, paths: changed, message: "feat(williamos): deliver goal-77",
+    })).resolves.toEqual({ branch, commit: sha, paths: changed })
+    expect(calls.some(({ args }) => JSON.stringify(args) === JSON.stringify([
+      "-C", ownedWorktree, "add", "--", ...changed,
+    ]))).toBe(true)
+    await lifecycle.requestCodexReview({ number: 77, headRefOid: sha })
+    expect(calls.at(-1)?.args).toEqual([
+      "pr", "comment", "77", "--repo", "bsvalues/terragroq", "--body",
+      `@codex review Exact-head review requested for ${sha}.`,
+    ])
+  })
+
   it("discovers an exact-head PR and creates only when absent", async () => {
     const existing = { number: 77, headRefName: branch, state: "OPEN", url: "https://github.test/pr/77" }
     const present = fixture({

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import fs from "node:fs"
 import path from "node:path"
 
 export const HERMES_REPOSITORY = "bsvalues/terragroq"
@@ -9,6 +10,7 @@ const BRANCH = /^codex\/hermes-[a-z0-9](?:[a-z0-9._-]{0,119}[a-z0-9])?$/
 const SAFE_NAME = /^[a-z0-9](?:[a-z0-9._-]{0,119}[a-z0-9])?$/
 const SUCCESSFUL_CHECKS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"])
 const VALIDATION_EXECUTABLES = new Set(["node", "npm", "npx", "pnpm", "yarn", "bun", "cargo", "dotnet"])
+const VALIDATION_ENVIRONMENT = new Set(["NEXT_PRIVATE_BUILD_WORKER", "NEXT_TELEMETRY_DISABLED"])
 const PROHIBITED_WORD = /(^|[-_:])(deploy|production|release|tag)([-_:]|$)/i
 const SECRET_LIKE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+)/i
 
@@ -79,11 +81,32 @@ function normalizeResult(result) {
   }
 }
 
+function resolveNativeInvocation(command, args) {
+  if (process.platform === "win32" && /^(?:npm|npx)$/.test(command)) {
+    const cli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", `${command}-cli.js`)
+    if (fs.statSync(cli, { throwIfNoEntry: false })?.isFile()) {
+      return { command: process.execPath, args: [cli, ...args] }
+    }
+  }
+  if (process.platform !== "win32" || path.isAbsolute(command) || path.extname(command)) {
+    return { command, args }
+  }
+  const searchPath = process.env.PATH ?? process.env.Path ?? ""
+  for (const directory of searchPath.split(path.delimiter).filter(Boolean)) {
+    for (const extension of [".exe", ".com"]) {
+      const candidate = path.join(directory, `${command}${extension}`)
+      if (fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) return { command: candidate, args }
+    }
+  }
+  return { command, args }
+}
+
 export function createCommandRunner() {
-  return ({ command, args, cwd }) => new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+  return ({ command, args, cwd, env }) => new Promise((resolve, reject) => {
+    const invocation = resolveNativeInvocation(command, args)
+    const child = spawn(invocation.command, invocation.args, {
       cwd,
-      env: process.env,
+      env: { ...process.env, ...env },
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -139,13 +162,22 @@ function normalizeValidation(command, index) {
   if (!command || typeof command !== "object" || Array.isArray(command)) {
     wall("HERMES_REPOSITORY_VALIDATION_WALL", `validationCommands[${index}]`)
   }
-  const normalized = { command: command.command, args: command.args ?? [] }
+  const normalized = { command: command.command, args: command.args ?? [], env: command.env ?? {} }
   assertSafeInvocation(normalized.command, normalized.args)
   const executable = path.basename(normalized.command).toLowerCase().replace(/\.(cmd|exe)$/i, "")
   if (!VALIDATION_EXECUTABLES.has(executable)) {
     wall("HERMES_REPOSITORY_VALIDATION_WALL", `validationCommands[${index}] executable is not allowed`)
   }
-  return Object.freeze({ command: normalized.command, args: Object.freeze([...normalized.args]) })
+  if (!normalized.env || typeof normalized.env !== "object" || Array.isArray(normalized.env)
+    || Object.entries(normalized.env).some(([key, value]) =>
+      !VALIDATION_ENVIRONMENT.has(key) || !["0", "1"].includes(value))) {
+    wall("HERMES_REPOSITORY_VALIDATION_WALL", `validationCommands[${index}] environment`)
+  }
+  return Object.freeze({
+    command: normalized.command,
+    args: Object.freeze([...normalized.args]),
+    env: Object.freeze({ ...normalized.env }),
+  })
 }
 
 function statusPaths(output) {
@@ -266,11 +298,13 @@ export function createRepositoryLifecycle(options) {
   const validationCommands = (options.validationCommands ?? []).map(normalizeValidation)
   const records = new Map()
 
-  async function run(command, args, { cwd = workspaceRoot, allowFailure = false } = {}) {
+  async function run(command, args, { cwd = workspaceRoot, allowFailure = false, env = {} } = {}) {
     assertSafeInvocation(command, args)
     let result
     try {
-      result = normalizeResult(await runner({ command, args: [...args], cwd }))
+      const invocation = { command, args: [...args], cwd }
+      if (Object.keys(env).length > 0) invocation.env = { ...env }
+      result = normalizeResult(await runner(invocation))
     } catch {
       wall("HERMES_REPOSITORY_RUNNER_WALL", `${path.basename(command)} failed to start`)
     }
@@ -387,16 +421,83 @@ export function createRepositoryLifecycle(options) {
     return [...new Set([...statusPaths(status.stdout), ...nameStatusPaths(diff.stdout)])].sort()
   }
 
+  async function inspectWorkingTreePaths({ worktreePath, branch } = {}) {
+    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
+    const status = await run("git", ["-C", record.worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"])
+    return [...new Set(statusPaths(status.stdout))].sort()
+  }
+
+  function ensureValidationDependencies({ worktreePath, branch } = {}) {
+    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
+    const source = path.join(workspaceRoot, "node_modules")
+    const target = path.join(record.worktreePath, "node_modules")
+    if (!fs.statSync(source, { throwIfNoEntry: false })?.isDirectory()) {
+      wall("HERMES_REPOSITORY_VALIDATION_WALL", "workspace dependencies are unavailable")
+    }
+    const targetStat = fs.lstatSync(target, { throwIfNoEntry: false })
+    if (targetStat) {
+      if (!targetStat.isSymbolicLink() || !samePath(fs.realpathSync(target), source)) {
+        wall("HERMES_REPOSITORY_VALIDATION_WALL", "worktree dependency path is not the owned workspace junction")
+      }
+      return { linked: true, existing: true }
+    }
+    fs.symlinkSync(source, target, "junction")
+    return { linked: true, existing: false }
+  }
+
+  function removeValidationArtifacts(record) {
+    const dependencies = path.join(record.worktreePath, "node_modules")
+    const dependencyStat = fs.lstatSync(dependencies, { throwIfNoEntry: false })
+    if (dependencyStat) {
+      const source = path.join(workspaceRoot, "node_modules")
+      if (!dependencyStat.isSymbolicLink() || !samePath(fs.realpathSync(dependencies), source)) {
+        wall("HERMES_REPOSITORY_CLEANUP_WALL", "validation dependency path is not the owned junction")
+      }
+      fs.unlinkSync(dependencies)
+    }
+    const nextOutput = path.join(record.worktreePath, ".next")
+    const nextStat = fs.lstatSync(nextOutput, { throwIfNoEntry: false })
+    if (nextStat) {
+      if (!nextStat.isDirectory() || nextStat.isSymbolicLink()) {
+        wall("HERMES_REPOSITORY_CLEANUP_WALL", "generated Next output is not an owned directory")
+      }
+      fs.rmSync(nextOutput, { recursive: true, force: true })
+    }
+  }
+
   async function runValidationCommands({ worktreePath, branch, commands = validationCommands } = {}) {
     const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
     const normalized = commands === validationCommands ? validationCommands : commands.map(normalizeValidation)
     if (normalized.length === 0) wall("HERMES_REPOSITORY_VALIDATION_WALL", "at least one validation command required")
     const results = []
     for (const command of normalized) {
-      const result = await run(command.command, command.args, { cwd: record.worktreePath })
+      const result = await run(command.command, command.args, { cwd: record.worktreePath, env: command.env })
       results.push({ command: command.command, args: [...command.args], code: result.code })
     }
     return results
+  }
+
+  async function commitChanges({ worktreePath, branch, paths, message } = {}) {
+    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
+    if (!Array.isArray(paths) || paths.length === 0) wall("HERMES_REPOSITORY_COMMIT_WALL", "changed paths required")
+    const normalizedPaths = [...new Set(paths.map(safeRelativePath))].sort()
+    const workingPaths = await inspectWorkingTreePaths(record)
+    if (JSON.stringify(normalizedPaths) !== JSON.stringify(workingPaths)) {
+      wall("HERMES_REPOSITORY_COMMIT_WALL", "commit paths must exactly match the owned working tree")
+    }
+    if (typeof message !== "string" || !message.trim() || SECRET_LIKE.test(message)
+      || /\b(?:deploy|production|release|tag)\b/i.test(message)) {
+      wall("HERMES_REPOSITORY_COMMIT_WALL", "safe commit message required")
+    }
+    await run("git", ["-C", record.worktreePath, "add", "--", ...normalizedPaths])
+    await run("git", ["-C", record.worktreePath, "diff", "--cached", "--check"])
+    const staged = await run("git", ["-C", record.worktreePath, "diff", "--cached", "--quiet"], { allowFailure: true })
+    if (staged.code !== 1) wall("HERMES_REPOSITORY_COMMIT_WALL", "nonempty staged diff required")
+    await run("git", ["-C", record.worktreePath, "commit", "-m", message.trim()])
+    const head = await run("git", ["-C", record.worktreePath, "rev-parse", "HEAD"])
+    const commit = head.stdout.trim()
+    if (!SHA.test(commit)) wall("HERMES_REPOSITORY_COMMIT_WALL", "40-character commit required")
+    return { branch: record.branch, commit, paths: normalizedPaths }
   }
 
   async function discoverPullRequest(branch) {
@@ -487,6 +588,55 @@ export function createRepositoryLifecycle(options) {
     return { branch: safeBranch, url: result.stdout.trim(), created: true }
   }
 
+  async function inspectReviewFindings(number) {
+    if (!Number.isSafeInteger(number) || number <= 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "positive PR number required")
+    const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}}}}}"
+    const result = await run("gh", ["api", "graphql", "-f", `query=${query}`, "-F", "owner=bsvalues", "-F", "name=terragroq", "-F", `number=${number}`])
+    const value = parseJson(result.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
+    const threads = value?.data?.repository?.pullRequest?.reviewThreads
+    if (!Array.isArray(threads?.nodes) || threads?.pageInfo?.hasNextPage === true) {
+      wall("HERMES_REPOSITORY_GITHUB_WALL", "review findings are incomplete")
+    }
+    return threads.nodes.filter((thread) => !thread.isResolved).flatMap((thread) => {
+      const comment = thread?.comments?.nodes?.findLast((entry) =>
+        !entry?.isMinimized && String(entry?.body ?? "").trim())
+      if (!comment) return []
+      const body = String(comment.body).trim()
+      if (SECRET_LIKE.test(body)) wall("HERMES_REPOSITORY_REVIEW_WALL", "secret-like review text refused")
+      return [{
+        threadId: String(thread.id),
+        path: safeRelativePath(String(thread.path)),
+        line: Number.isSafeInteger(thread.line) && thread.line > 0 ? thread.line : null,
+        body: body.slice(0, 4_000),
+      }]
+    })
+  }
+
+  async function resolveReviewThreads(threadIds = []) {
+    if (!Array.isArray(threadIds) || threadIds.length === 0
+      || threadIds.some((id) => typeof id !== "string" || !/^PRRT_[A-Za-z0-9_-]+$/.test(id))) {
+      wall("HERMES_REPOSITORY_REVIEW_WALL", "review thread ids required")
+    }
+    const mutation = "mutation($threadId:ID!){resolveReviewThread(input:{threadId:$threadId}){thread{isResolved}}}"
+    for (const threadId of [...new Set(threadIds)]) {
+      const result = await run("gh", ["api", "graphql", "-f", `query=${mutation}`, "-F", `threadId=${threadId}`])
+      const value = parseJson(result.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
+      if (value?.data?.resolveReviewThread?.thread?.isResolved !== true) {
+        wall("HERMES_REPOSITORY_REVIEW_WALL", "review thread did not resolve")
+      }
+    }
+    return { resolved: [...new Set(threadIds)].length }
+  }
+
+  async function requestCodexReview({ number, headRefOid } = {}) {
+    if (!Number.isSafeInteger(number) || number <= 0 || !SHA.test(headRefOid ?? "")) {
+      wall("HERMES_REPOSITORY_REVIEW_WALL", "PR number and exact head required")
+    }
+    await run("gh", ["pr", "comment", String(number), "--repo", repository, "--body",
+      `@codex review Exact-head review requested for ${headRefOid}.`])
+    return { number, headRefOid, requested: true }
+  }
+
   async function mergePullRequest({ number, branch } = {}) {
     const safeBranch = branchName(branch)
     const pr = await inspectPullRequest(number)
@@ -541,6 +691,7 @@ export function createRepositoryLifecycle(options) {
       }
     }
     ownedRecord(absoluteWorktree, safeBranch)
+    removeValidationArtifacts(record)
     const status = await run("git", ["-C", absoluteWorktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"])
     if (status.stdout.length > 0) wall("HERMES_REPOSITORY_CLEANUP_WALL", "owned worktree is dirty")
     await run("git", ["-C", repositoryRoot, "worktree", "remove", absoluteWorktree])
@@ -559,12 +710,18 @@ export function createRepositoryLifecycle(options) {
     ensureOwnedWorktree,
     resumeOwnedWorktree,
     inspectChangedPaths,
+    inspectWorkingTreePaths,
+    ensureValidationDependencies,
     runValidationCommands,
+    commitChanges,
     discoverPullRequest,
     inspectPullRequest,
     inspectPullRequestFiles,
+    inspectReviewFindings,
+    resolveReviewThreads,
     pushBranch,
     createPullRequest,
+    requestCodexReview,
     mergePullRequest,
     verifyOriginMainContains,
     cleanupOwnedWorktree,
