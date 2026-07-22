@@ -179,7 +179,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.runTurn).toHaveBeenCalledTimes(2)
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Handle the empty state explicitly")
     expect(value.lifecycle.runValidationCommands).toHaveBeenCalledTimes(2)
-    expect(value.lifecycle.resolveReviewThreads).toHaveBeenCalledWith(["PRRT_review_1"])
+    expect(value.lifecycle.resolveReviewThreads).not.toHaveBeenCalled()
     expect(createHermesStateStore(value.orchestrator.statePath).read().executions["77"].metadata.remediationRound)
       .toBe(1)
   })
@@ -204,6 +204,33 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.lifecycle.requestCodexReview).toHaveBeenCalledWith({
       number: 500, headRefOid: "c".repeat(40),
     })
+  })
+
+  it("resolves only outdated findings after exact-head re-review completes", async () => {
+    const value = fixture()
+    value.lifecycle.inspectPullRequest
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: false, reviewed: false,
+        reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 1,
+        headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 0,
+        headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "MERGED", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        unresolvedThreadCount: 0, headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
+      })
+    value.lifecycle.inspectReviewFindings.mockResolvedValueOnce([{
+      threadId: "PRRT_old", isOutdated: true, path: "components/hermes/live-status.tsx", line: 12,
+      body: "Prior-head finding.",
+    }])
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+    expect(value.client.runTurn).toHaveBeenCalledOnce()
+    expect(value.lifecycle.resolveReviewThreads).toHaveBeenCalledWith(["PRRT_old"])
   })
 
   it("fails closed when Codex changes a path outside the lane reservation", async () => {

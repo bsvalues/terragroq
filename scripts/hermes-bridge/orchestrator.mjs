@@ -220,12 +220,21 @@ export function createHermesOrchestrator(options = {}) {
         || candidate.isDraft || candidate.headRefOid !== commit) {
         throw Object.assign(new Error("Pull request identity changed during review"), { code: "HERMES_PR_VERIFICATION_WALL" })
       }
-      if (candidate.unresolvedThreadCount > 0 || (candidate.checksGreen && candidate.reviewed)) break
+      if (candidate.reviewCompleted || (candidate.checksGreen && candidate.reviewed)) break
       await sleep(reviewPollIntervalMs)
       candidate = await lifecycle.inspectPullRequest(prNumber)
     }
     if (candidate.unresolvedThreadCount > 0) {
-      const findings = await lifecycle.inspectReviewFindings(prNumber)
+      let findings = await lifecycle.inspectReviewFindings(prNumber)
+      if (candidate.reviewCompleted && findings.length > 0 && findings.every((finding) => finding.isOutdated)) {
+        await lifecycle.resolveReviewThreads(findings.map((finding) => finding.threadId))
+        candidate = await lifecycle.inspectPullRequest(prNumber)
+        findings = []
+      }
+      if (findings.length === 0 && candidate.checksGreen && candidate.reviewed
+        && candidate.unresolvedThreadCount === 0) {
+        // The exact-head reviewer superseded only outdated prior findings.
+      } else {
       if (findings.length === 0 || remediationRound >= MAX_REMEDIATION_ROUNDS) {
         throw Object.assign(new Error("Review remediation budget exhausted"), { code: "HERMES_REVIEW_REMEDIATION_WALL" })
       }
@@ -235,6 +244,7 @@ export function createHermesOrchestrator(options = {}) {
       return {
         kind: "REMEDIATION", sequence: remediation.checkpointSequence, prNumber, findings,
         nextRemediationRound: remediationRound + 1,
+      }
       }
     }
     if (!candidate.checksGreen || !candidate.reviewed || candidate.unresolvedThreadCount !== 0) {
@@ -529,10 +539,7 @@ export function createHermesOrchestrator(options = {}) {
           headRefOid: committed.commit, remediationRound,
         })
         sequence = cp.checkpointSequence
-        if (pendingFindings.length > 0) {
-          await lifecycle.resolveReviewThreads(pendingFindings.map((finding) => finding.threadId))
-          pendingFindings = []
-        }
+        pendingFindings = []
         const advanced = await advanceCommittedHead({
           lease, sequence, outcome, branch, reservations, record,
           commit: committed.commit, remediationRound,

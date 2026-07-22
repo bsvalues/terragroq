@@ -377,6 +377,25 @@ describe("Hermes repository lifecycle", () => {
     await expect(paginated.inspectPullRequest(77)).rejects.toMatchObject({ code: "HERMES_REPOSITORY_GITHUB_WALL" })
   })
 
+  it("accepts a completed exact-head Codex review only when it leaves no unresolved findings", async () => {
+    const create = (threads: unknown[]) => fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [{ context: "Vercel", state: "SUCCESS" }],
+        reviews: [{
+          author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: sha },
+          body: `Codex Review suggestions.\n\n**Reviewed commit:** \`${sha.slice(0, 10)}\``,
+        }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState(threads)) }),
+    }).lifecycle
+    await expect(create([]).inspectPullRequest(77)).resolves.toMatchObject({
+      reviewCompleted: true, reviewed: true,
+    })
+    await expect(create([{ isResolved: false, comments: { nodes: [{ body: "Finding", isMinimized: false }] } }])
+      .inspectPullRequest(77)).resolves.toMatchObject({ reviewCompleted: true, reviewed: false })
+  })
+
   it("accepts an explicit CodeRabbit rate-limit only with clean exact-head review evidence", async () => {
     const { lifecycle } = fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({

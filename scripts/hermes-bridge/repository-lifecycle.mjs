@@ -259,6 +259,17 @@ function exactHeadCodexRequestTimes(value, headRefOid) {
   }).map((comment) => Date.parse(comment.createdAt))
 }
 
+function exactHeadCodexCompletedReview(pr) {
+  return Array.isArray(pr?.reviews) && pr.reviews.some((review) => {
+    const body = String(review?.body ?? "")
+    const digest = body.match(/\*\*Reviewed commit:\*\*\s*`([0-9a-f]{10,40})`/i)?.[1]?.toLowerCase()
+    return review?.author?.login === "chatgpt-codex-connector"
+      && review?.commit?.oid === pr.headRefOid
+      && ["COMMENTED", "APPROVED"].includes(String(review?.state ?? "").toUpperCase())
+      && typeof digest === "string" && pr.headRefOid.startsWith(digest)
+  })
+}
+
 function exactHeadCodexCleanComment(value, headRefOid, requestTimes = exactHeadCodexRequestTimes(value, headRefOid)) {
   const comments = value.data.repository.pullRequest.comments.nodes
   return comments.some((comment) => {
@@ -538,6 +549,7 @@ export function createRepositoryLifecycle(options) {
     const requestTimes = exactHeadCodexRequestTimes(reviewState, pr.headRefOid)
     const hasExactHeadCodexCleanComment = exactHeadCodexCleanComment(reviewState, pr.headRefOid, requestTimes)
     const hasExactHeadApproval = exactHeadApprovedReview(pr)
+    const hasExactHeadCodexCompletedReview = exactHeadCodexCompletedReview(pr)
     const rateLimitedCodeRabbitContexts = new Set()
     if (checks.some((check) => /coderabbit/i.test(checkName(check)))) {
       const statusResult = await run("gh", ["api", `repos/${repository}/commits/${pr.headRefOid}/status`])
@@ -554,15 +566,18 @@ export function createRepositoryLifecycle(options) {
     }
     const codeRabbitRateLimited = rateLimitedCodeRabbitContexts.size > 0
     const hasExactHeadReview = hasExactHeadApproval || hasExactHeadCodexCleanComment
+      || (hasExactHeadCodexCompletedReview && unresolved === 0)
+    const hasCodeRabbitReview = checks.some((check) =>
+      /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"
+        && !rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase()))
     return {
       ...pr,
       checksGreen: checks.length > 0 && checks.every((check) => {
         const rateLimited = rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase())
         return rateLimited ? hasExactHeadReview : SUCCESSFUL_CHECKS.has(checkState(check))
       }),
-      reviewed: hasExactHeadReview || checks.some((check) =>
-        /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"
-          && !rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase())),
+      reviewed: hasExactHeadReview || hasCodeRabbitReview,
+      reviewCompleted: hasExactHeadApproval || hasExactHeadCodexCompletedReview || hasCodeRabbitReview,
       codeRabbitRateLimited,
       reviewRequested: requestTimes.length > 0,
       unresolvedThreadCount: unresolved,
@@ -603,7 +618,7 @@ export function createRepositoryLifecycle(options) {
 
   async function inspectReviewFindings(number) {
     if (!Number.isSafeInteger(number) || number <= 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "positive PR number required")
-    const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}}}}}"
+    const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved isOutdated path line comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}}}}}"
     const result = await run("gh", ["api", "graphql", "-f", `query=${query}`, "-F", "owner=bsvalues", "-F", "name=terragroq", "-F", `number=${number}`])
     const value = parseJson(result.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
     const threads = value?.data?.repository?.pullRequest?.reviewThreads
@@ -618,6 +633,7 @@ export function createRepositoryLifecycle(options) {
       if (SECRET_LIKE.test(body)) wall("HERMES_REPOSITORY_REVIEW_WALL", "secret-like review text refused")
       return [{
         threadId: String(thread.id),
+        isOutdated: thread.isOutdated === true,
         path: safeRelativePath(String(thread.path)),
         line: Number.isSafeInteger(thread.line) && thread.line > 0 ? thread.line : null,
         body: body.slice(0, 4_000),
