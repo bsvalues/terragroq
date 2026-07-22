@@ -213,6 +213,41 @@ describe("Hermes repository lifecycle", () => {
     })).toThrow(HermesRepositoryLifecycleError)
   })
 
+  it("removes only owned generated Next output immediately before a build", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-next-validation-"))
+    const workspaceRoot = path.join(tempRoot, "repository")
+    const worktreeRoot = path.join(tempRoot, "worktrees")
+    let nextOutputPresentDuringBuild = true
+    try {
+      const lifecycle = createRepositoryLifecycle({
+        workspaceRoot,
+        repositoryRoot: workspaceRoot,
+        ownedWorktreeRoot: worktreeRoot,
+        validationCommands: [{ command: "npm", args: ["run", "build"] }],
+        runner: async ({ command, args, cwd }: Call) => {
+          if (args.includes("remote") && args.includes("get-url")) {
+            return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
+          }
+          if (args.includes("show-ref")) return { code: 1, stdout: "" }
+          if (command === "npm" && args[0] === "run" && args[1] === "build") {
+            nextOutputPresentDuringBuild = fs.existsSync(path.join(cwd, ".next"))
+          }
+          return { code: 0, stdout: "" }
+        },
+      })
+      const record = await lifecycle.createWorktree({ branch })
+      fs.mkdirSync(path.join(record.worktreePath, ".next", "standalone"), { recursive: true })
+      fs.writeFileSync(path.join(record.worktreePath, ".next", "standalone", "generated.txt"), "generated")
+
+      await lifecycle.runValidationCommands(record)
+
+      expect(nextOutputPresentDuringBuild).toBe(false)
+      expect(fs.existsSync(path.join(record.worktreePath, ".next"))).toBe(false)
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+    }
+  })
+
   it("removes the owned validation dependency junction before agent work resumes", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-validation-deps-"))
     const workspaceRoot = path.join(tempRoot, "repository")
