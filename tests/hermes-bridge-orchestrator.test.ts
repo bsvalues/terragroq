@@ -256,7 +256,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
   })
 
-  it("remediates but never auto-resolves outdated review findings", async () => {
+  it("does not resolve outdated review findings before remediation and clean re-review", async () => {
     const value = fixture()
     value.lifecycle.inspectPullRequest
       .mockResolvedValueOnce({
@@ -287,6 +287,45 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.runTurn).toHaveBeenCalledTimes(2)
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Prior-head finding")
     expect(value.lifecycle.resolveReviewThreads).not.toHaveBeenCalled()
+  })
+
+  it("resolves remediated outdated threads only after clean exact-head re-review", async () => {
+    const value = fixture()
+    value.lifecycle.inspectPullRequest
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: false, reviewed: false,
+        reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 1,
+        cleanReviewEvidence: false, headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: false,
+        reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 1,
+        cleanReviewEvidence: true, codexReviewFindings: [],
+        headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 0,
+        cleanReviewEvidence: true, codexReviewFindings: [],
+        headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "MERGED", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        unresolvedThreadCount: 0, headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
+      })
+    value.lifecycle.inspectReviewFindings
+      .mockResolvedValueOnce([{
+        threadId: "PRRT_old", isOutdated: true, path: "components/hermes/live-status.tsx",
+        line: 12, body: "Prior-head finding.",
+      }])
+      .mockResolvedValueOnce([{
+        threadId: "PRRT_old", isOutdated: true, path: "components/hermes/live-status.tsx",
+        line: 12, body: "Prior-head finding.",
+      }])
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+    expect(value.client.runTurn).toHaveBeenCalledTimes(2)
+    expect(value.lifecycle.resolveReviewThreads).toHaveBeenCalledWith(["PRRT_old"])
   })
 
   it("routes completed red PR checks through bounded Codex remediation", async () => {

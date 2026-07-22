@@ -251,10 +251,6 @@ export function createHermesOrchestrator(options = {}) {
         || candidate.isDraft || candidate.headRefOid !== commit) {
         throw Object.assign(new Error("Pull request identity changed during review"), { code: "HERMES_PR_VERIFICATION_WALL" })
       }
-      if (candidate.reviewCompleted && candidate.unresolvedThreadCount > 0) {
-        findings = await lifecycle.inspectReviewFindings(prNumber)
-        break
-      }
       if (candidate.reviewCompleted && candidate.codexReviewFindings?.length > 0) {
         findings = candidate.codexReviewFindings.map((body) => ({
           threadId: null,
@@ -263,6 +259,18 @@ export function createHermesOrchestrator(options = {}) {
           line: null,
           body,
         }))
+        break
+      }
+      if (candidate.reviewCompleted && candidate.unresolvedThreadCount > 0) {
+        findings = await lifecycle.inspectReviewFindings(prNumber)
+        const reReviewedOutdatedFindings = remediationRound > 0 && candidate.cleanReviewEvidence
+          && findings.length > 0 && findings.every((finding) => finding.isOutdated)
+        if (reReviewedOutdatedFindings) {
+          await lifecycle.resolveReviewThreads(findings.map((finding) => finding.threadId))
+          candidate = await lifecycle.inspectPullRequest(prNumber)
+          findings = []
+          continue
+        }
         break
       }
       if (candidate.checksComplete && candidate.failedChecks?.length > 0) {

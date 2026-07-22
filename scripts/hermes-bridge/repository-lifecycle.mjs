@@ -675,6 +675,8 @@ export function createRepositoryLifecycle(options) {
       checksComplete: checks.length > 0 && checks.every((check) => !PENDING_CHECKS.has(effectiveCheckState(check))),
       failedChecks,
       codexReviewFindings,
+      cleanReviewEvidence: hasExactHeadApproval || hasExactHeadCodexCleanComment
+        || hasExactHeadCodexCleanReview || hasCodeRabbitReview,
       reviewed: hasExactHeadReview || hasCodeRabbitReview,
       reviewCompleted: hasExactHeadApproval || hasExactHeadCodexCleanComment
         || hasExactHeadCodexCompletedReview || hasCodeRabbitReview,
