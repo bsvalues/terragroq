@@ -14,7 +14,6 @@ const VALIDATION_ENVIRONMENT = new Set(["NEXT_PRIVATE_BUILD_WORKER", "NEXT_TELEM
 const MAX_VALIDATION_TIMEOUT_MS = 20 * 60 * 1000
 const PROHIBITED_WORD = /(^|[-_:])(deploy|production|release|tag)([-_:]|$)/i
 const SECRET_LIKE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+)/i
-const PROTECTED_REVIEW_FINDING = /\b(?:authority|authorization|credential|permission|security|secret|trust[- ]boundary|prompt[- ]injection|access[- ]control)\b/i
 
 export class HermesRepositoryLifecycleError extends Error {
   constructor(code, detail) {
@@ -111,6 +110,7 @@ export function createCommandRunner() {
       cwd,
       env: { ...process.env, ...env },
       shell: false,
+      detached: process.platform !== "win32",
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     })
@@ -128,7 +128,13 @@ export function createCommandRunner() {
             })
             killer.on("error", () => child.kill())
           } else child.kill()
-        } else child.kill("SIGKILL")
+        } else {
+          try {
+            process.kill(-child.pid, "SIGKILL")
+          } catch {
+            child.kill("SIGKILL")
+          }
+        }
       }, timeoutMs)
       : null
     child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk })
@@ -694,8 +700,6 @@ export function createRepositoryLifecycle(options) {
       return [{
         threadId: String(thread.id),
         isOutdated: thread.isOutdated === true,
-        requiresExplicitResolution: activeComments.some((entry) =>
-          PROTECTED_REVIEW_FINDING.test(String(entry.body))),
         path: safeRelativePath(String(thread.path)),
         line: Number.isSafeInteger(thread.line) && thread.line > 0 ? thread.line : null,
         body: body.slice(0, 4_000),

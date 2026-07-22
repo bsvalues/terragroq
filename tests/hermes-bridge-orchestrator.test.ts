@@ -256,7 +256,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
   })
 
-  it("resolves only outdated findings after exact-head re-review completes", async () => {
+  it("remediates but never auto-resolves outdated review findings", async () => {
     const value = fixture()
     value.lifecycle.inspectPullRequest
       .mockResolvedValueOnce({
@@ -284,8 +284,9 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     }])
 
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
-    expect(value.client.runTurn).toHaveBeenCalledOnce()
-    expect(value.lifecycle.resolveReviewThreads).toHaveBeenCalledWith(["PRRT_old"])
+    expect(value.client.runTurn).toHaveBeenCalledTimes(2)
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Prior-head finding")
+    expect(value.lifecycle.resolveReviewThreads).not.toHaveBeenCalled()
   })
 
   it("fails closed when Codex changes a path outside the lane reservation", async () => {
@@ -564,6 +565,39 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       branch: "codex/hermes-goal-77-77",
     }))
     expect(value.state.read().executions["77"].metadata.headRefOid).toBe("d".repeat(40))
+    expect(value.lifecycle.mergePullRequest).toHaveBeenCalledOnce()
+  })
+
+  it("recovers validated dirty work without redispatching Codex after a checkpoint crash", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    value.state.initialize()
+    const lease = value.state.acquireLease({
+      idempotencyKey: "recover-validated-dirty-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: {
+        outcome, branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "hermes-goal-77-77"),
+        baseSha: "a".repeat(40), headRefOid: null,
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "recover-validated-dirty", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: lease.fencingToken, expectedCheckpointSequence: 0, state: "HOST_VALIDATION_PASSED",
+      metadata: { headRefOid: null },
+    })
+    value.lifecycle.inspectWorkingTreePaths
+      .mockResolvedValueOnce([
+        "components/hermes/live-status.tsx", "tests/hermes-live-status.test.tsx",
+      ])
+      .mockResolvedValueOnce([])
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
+    expect(value.lifecycle.commitChanges).toHaveBeenCalledOnce()
+    expect(value.lifecycle.pushBranch).toHaveBeenCalled()
     expect(value.lifecycle.mergePullRequest).toHaveBeenCalledOnce()
   })
 

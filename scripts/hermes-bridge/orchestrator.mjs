@@ -253,14 +253,6 @@ export function createHermesOrchestrator(options = {}) {
       }
       if (candidate.reviewCompleted && candidate.unresolvedThreadCount > 0) {
         findings = await lifecycle.inspectReviewFindings(prNumber)
-        const autoResolvable = findings.filter((finding) =>
-          finding.isOutdated && finding.requiresExplicitResolution !== true)
-        if (autoResolvable.length > 0) {
-          await lifecycle.resolveReviewThreads(autoResolvable.map((finding) => finding.threadId))
-          candidate = await lifecycle.inspectPullRequest(prNumber)
-          findings = []
-          continue
-        }
         break
       }
       if (candidate.checksGreen && candidate.reviewed) break
@@ -425,7 +417,19 @@ export function createHermesOrchestrator(options = {}) {
     if (!durableHeadRefOid && recoveryCheckpointState === "HOST_VALIDATION_PASSED") {
       const workingPaths = await lifecycle.inspectWorkingTreePaths(record)
       const worktreeHead = await lifecycle.inspectWorktreeHead(record)
-      if (workingPaths.length === 0 && worktreeHead !== baseSha) {
+      if (workingPaths.length > 0) {
+        assertChangedPathsAllowed(workingPaths, reservations)
+        const recoveredCommit = await lifecycle.commitChanges({
+          ...record,
+          paths: workingPaths,
+          message: `feat(williamos): deliver ${safeLeaf(outcomeRef(outcome))}`,
+        })
+        cp = await checkpoint(lease, sequence, "COMMIT_RECOVERED", recoveredCommit.commit, {
+          branch, worktreePath: record.worktreePath, baseSha, headRefOid: recoveredCommit.commit,
+        })
+        sequence = cp.checkpointSequence
+        durableHeadRefOid = recoveredCommit.commit
+      } else if (worktreeHead !== baseSha) {
         const changedPaths = await lifecycle.inspectChangedPaths(record)
         assertChangedPathsAllowed(changedPaths, reservations)
         cp = await checkpoint(lease, sequence, "COMMIT_RECOVERED", worktreeHead, {

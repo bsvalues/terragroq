@@ -218,7 +218,7 @@ describe("Hermes repository lifecycle", () => {
     })
   })
 
-  it("classifies security and authority review threads as explicitly resolved only", async () => {
+  it("returns the latest active comment without making a resolution-policy guess", async () => {
     const { lifecycle } = fixture({
       "gh api graphql": () => ({
         code: 0,
@@ -234,10 +234,11 @@ describe("Hermes repository lifecycle", () => {
     })
     await expect(lifecycle.inspectReviewFindings(77)).resolves.toEqual([
       expect.objectContaining({
-        threadId: "PRRT_security", isOutdated: true, requiresExplicitResolution: true,
+        threadId: "PRRT_security", isOutdated: true,
         body: "Fixed in the latest commit.",
       }),
     ])
+    expect((await lifecycle.inspectReviewFindings(77))[0]).not.toHaveProperty("requiresExplicitResolution")
   })
 
   it("commits exactly the owned working-tree paths and requests exact-head Codex review", async () => {
