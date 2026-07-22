@@ -496,6 +496,51 @@ export function recoverExternalToolWall(filePath, request, options = {}) {
   })
 }
 
+export function recoverPostMergeCleanupWall(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    const ownerTouchesRemainZero = COUNTER_NAMES.every(
+      (counter) => state.ownerTouchCounters[counter] === 0,
+    )
+    if (request.activationDisabled !== true
+      || current.fencingToken !== request.expectedFencingToken
+      || current.lease.status !== "ACTIVE"
+      || current.lease.holderId !== request.expectedHolderId
+      || current.checkpoint.state !== "PR_MERGED"
+      || !Number.isInteger(current.metadata.prNumber)
+      || !SHA.test(current.metadata.headRefOid ?? "")
+      || !SHA.test(current.metadata.mergeSha ?? "")
+      || !ownerTouchesRemainZero) {
+      fail("POST_MERGE_CLEANUP_RECOVERY_STATE_WALL")
+    }
+    const recovered = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "ABANDONED",
+        expiresAt: at.iso,
+        recoveredAt: at.iso,
+        recoverReason: "POST_MERGE_CLEANUP_INTERRUPTED",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "POST_MERGE_CLEANUP_RECOVERED",
+        detail: `PR #${current.metadata.prNumber}`,
+        recordedAt: at.iso,
+      },
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: recovered }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: recovered.fencingToken,
+      checkpointSequence: recovered.checkpoint.sequence,
+      leaseStatus: recovered.lease.status,
+    }
+  })
+}
+
 export function deferProviderWall(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
@@ -568,6 +613,7 @@ export function createHermesStateStore(filePath, options = {}) {
     reopenProviderWall: (request) => reopenProviderWall(filePath, request, options),
     reopenValidationInfrastructureWall: (request) => reopenValidationInfrastructureWall(filePath, request, options),
     recoverExternalToolWall: (request) => recoverExternalToolWall(filePath, request, options),
+    recoverPostMergeCleanupWall: (request) => recoverPostMergeCleanupWall(filePath, request, options),
     deferProviderWall: (request) => deferProviderWall(filePath, request, options),
     setKillSwitch: (request) => setKillSwitch(filePath, request, options),
     recordOwnerTouch: (request) => recordOwnerTouch(filePath, request, options),

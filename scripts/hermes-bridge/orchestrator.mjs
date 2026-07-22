@@ -721,6 +721,8 @@ export function createHermesOrchestrator(options = {}) {
       throw Object.assign(new Error("Review remediation budget exhausted"), { code: "HERMES_REVIEW_REMEDIATION_WALL" })
     } catch (error) {
       const externalToolWall = error?.code === "APP_SERVER_EXTERNAL_TOOL_WALL"
+      const postMergeCleanupWall = cp?.state === "PR_MERGED"
+        || state.read().executions[outcomeId]?.checkpoint?.state === "PR_MERGED"
       const externalToolRetryCount = externalToolWall
         ? (cp?.metadata?.externalToolRetryCount ?? 0) + 1
         : cp?.metadata?.externalToolRetryCount ?? 0
@@ -746,6 +748,7 @@ export function createHermesOrchestrator(options = {}) {
         sequence = cp.checkpointSequence
       } catch {}
       if (cp?.state === "PROVIDER_UNAVAILABLE"
+        || postMergeCleanupWall
         || ["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT", "APP_SERVER_EXTERNAL_TOOL_WALL", "HERMES_PROVIDER_SETTLEMENT_WALL"].includes(error?.code)) {
         try {
           state.abandonLease({

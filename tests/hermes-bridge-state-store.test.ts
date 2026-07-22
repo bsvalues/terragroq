@@ -293,6 +293,29 @@ describe("Hermes bridge durable state store", () => {
     })
   })
 
+  it("recovers only an exact zero-touch post-merge cleanup interruption", () => {
+    const { store } = fixture()
+    const first = store.acquireLease({
+      outcomeId: "5", holderId: "stopped-holder", leaseDurationMs: 1000,
+      metadata: { prNumber: 440, headRefOid: "a".repeat(40), mergeSha: "b".repeat(40) },
+      idempotencyKey: "post-merge-acquire",
+    })
+    store.checkpoint({
+      outcomeId: "5", holderId: "stopped-holder", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "PR_MERGED", detail: "PR #440 merged",
+      idempotencyKey: "post-merge-checkpoint",
+    })
+    expect(store.recoverPostMergeCleanupWall({
+      outcomeId: "5", expectedFencingToken: first.fencingToken,
+      expectedHolderId: "stopped-holder", activationDisabled: true,
+      idempotencyKey: "post-merge-recover",
+    })).toMatchObject({ leaseStatus: "ABANDONED", checkpointSequence: 2 })
+    expect(store.read().executions["5"]).toMatchObject({
+      lease: { status: "ABANDONED", recoverReason: "POST_MERGE_CLEANUP_INTERRUPTED" },
+      checkpoint: { state: "POST_MERGE_CLEANUP_RECOVERED", detail: "PR #440" },
+    })
+  })
+
   it("defers provider-unavailable work without losing its resumable execution", () => {
     const { store, advance } = fixture()
     const first = store.acquireLease({ outcomeId: "5", holderId: "one", leaseDurationMs: 1000, idempotencyKey: "a" })

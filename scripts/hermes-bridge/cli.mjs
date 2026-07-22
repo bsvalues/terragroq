@@ -164,6 +164,35 @@ export function recoverExternalToolWall(options = {}) {
   return { result: "RECOVERED", outcomeId: candidate.outcomeId, checkpointSequence: recovered.checkpointSequence }
 }
 
+export function recoverPostMergeCleanupWall(options = {}) {
+  const orchestrator = options.orchestrator ?? createHermesOrchestrator({ workspace: process.cwd() })
+  const activationPath = path.join(orchestrator.runtimeRoot, "control", "activation")
+  const supervisorPath = path.join(orchestrator.runtimeRoot, "state", "supervisor.json")
+  const activation = fs.existsSync(activationPath) ? fs.readFileSync(activationPath, "utf8").trim() : "disabled"
+  if (activation !== "disabled" || fs.existsSync(supervisorPath)) {
+    throw Object.assign(new Error("Supervisor must be stopped before post-merge recovery"), { code: "HERMES_POST_MERGE_RECOVERY_SUPERVISOR_WALL" })
+  }
+  const candidates = Object.values(orchestrator.state.read().executions).filter((execution) => (
+    execution?.lease?.status === "ACTIVE"
+    && execution?.checkpoint?.state === "PR_MERGED"
+    && Number.isInteger(execution?.metadata?.prNumber)
+    && /^[0-9a-f]{40}$/.test(execution?.metadata?.headRefOid ?? "")
+    && /^[0-9a-f]{40}$/.test(execution?.metadata?.mergeSha ?? "")
+  ))
+  if (candidates.length !== 1) {
+    throw Object.assign(new Error("Exactly one post-merge cleanup wall is required"), { code: "HERMES_POST_MERGE_RECOVERY_CANDIDATE_WALL" })
+  }
+  const candidate = candidates[0]
+  const recovered = orchestrator.state.recoverPostMergeCleanupWall({
+    idempotencyKey: `${candidate.outcomeId}:recover-post-merge:${candidate.fencingToken}`,
+    outcomeId: candidate.outcomeId,
+    expectedFencingToken: candidate.fencingToken,
+    expectedHolderId: candidate.lease.holderId,
+    activationDisabled: true,
+  })
+  return { result: "RECOVERED", outcomeId: candidate.outcomeId, checkpointSequence: recovered.checkpointSequence }
+}
+
 export async function runCli(command = process.argv[2]) {
   try {
     if (command === "cycle") {
@@ -174,11 +203,12 @@ export async function runCli(command = process.argv[2]) {
     else if (command === "recover-native-provider-wall") print(await recoverNativeProviderWall())
     else if (command === "recover-validation-infrastructure-wall") print(await recoverValidationInfrastructureWall())
     else if (command === "recover-external-tool-wall") print(recoverExternalToolWall())
+    else if (command === "recover-post-merge-cleanup-wall") print(recoverPostMergeCleanupWall())
     else if (command === "status") {
       const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
       print(readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")))
     } else {
-      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-external-tool-wall"), { code: "HERMES_CLI_USAGE" })
+      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-external-tool-wall|recover-post-merge-cleanup-wall"), { code: "HERMES_CLI_USAGE" })
     }
   } catch (error) {
     print({ result: "WALL", code: error?.code ?? "HERMES_CLI_FAILED", message: sanitizeBridgeMessage(error?.message ?? "Hermes bridge failed") })
