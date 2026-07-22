@@ -11,6 +11,7 @@ const COUNTER_ALIASES = Object.freeze({
 })
 const COUNTER_NAMES = Object.freeze(Object.values(COUNTER_ALIASES))
 const STALE_LOCK_MS = 10 * 60 * 1000
+const SHA = /^[0-9a-f]{40}$/
 
 function fail(code, message = code) {
   const error = new Error(message)
@@ -163,6 +164,10 @@ function metadata(input = {}, current = {}) {
     && (!Number.isInteger(validationRemediationRound) || validationRemediationRound < 0)) {
     fail("INVALID_VALIDATION_REMEDIATION_ROUND")
   }
+  const headRefOid = Object.hasOwn(input, "headRefOid")
+    ? input.headRefOid
+    : current.headRefOid ?? null
+  if (headRefOid !== null && !SHA.test(headRefOid)) fail("INVALID_HEAD_REF_OID")
   return {
     threadId: input.threadId ?? current.threadId ?? null,
     turnId: input.turnId ?? current.turnId ?? null,
@@ -170,7 +175,7 @@ function metadata(input = {}, current = {}) {
     prNumber,
     worktreePath: input.worktreePath ?? current.worktreePath ?? null,
     baseSha: input.baseSha ?? current.baseSha ?? null,
-    headRefOid: input.headRefOid ?? current.headRefOid ?? null,
+    headRefOid,
     mergeSha: input.mergeSha ?? current.mergeSha ?? null,
     providerRetryCount,
     remediationRound,

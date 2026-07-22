@@ -605,7 +605,7 @@ export function createHermesOrchestrator(options = {}) {
           lifecycle.removeValidationDependencies(record)
         }
         cp = await checkpoint(lease, sequence, "HOST_VALIDATION_PASSED", null, {
-          validation, validationFailure: "", validationRemediationRound: 0,
+          validation, validationFailure: "", validationRemediationRound: 0, headRefOid: null,
         })
         sequence = cp.checkpointSequence
 

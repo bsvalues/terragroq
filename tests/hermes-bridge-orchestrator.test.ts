@@ -514,18 +514,29 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       leaseDurationMs: 1000, metadata: {
         outcome, branch: "codex/hermes-goal-77-77",
         worktreePath: path.join(value.root, "worktrees", "hermes-goal-77-77"),
-        baseSha: "a".repeat(40),
+        baseSha: "a".repeat(40), headRefOid: "c".repeat(40), prNumber: 500,
       },
     })
     value.state.checkpoint({
       idempotencyKey: "recover-uncheckpointed-commit", outcomeId: "77", holderId: "crashed-holder",
       fencingToken: lease.fencingToken, expectedCheckpointSequence: 0, state: "HOST_VALIDATION_PASSED",
+      metadata: { headRefOid: null },
     })
     value.lifecycle.inspectWorkingTreePaths.mockResolvedValue([])
     value.lifecycle.inspectChangedPaths.mockResolvedValue([
       "components/hermes/live-status.tsx", "tests/hermes-live-status.test.tsx",
     ])
-    value.lifecycle.inspectWorktreeHead.mockResolvedValue("c".repeat(40))
+    value.lifecycle.inspectWorktreeHead.mockResolvedValue("d".repeat(40))
+    let recoveredMerged = false
+    value.lifecycle.inspectPullRequest.mockImplementation(async () => ({
+      state: recoveredMerged ? "MERGED" : "OPEN", baseRefName: "main", isDraft: false,
+      checksGreen: true, reviewed: true, unresolvedThreadCount: 0, headRefOid: "d".repeat(40),
+      mergeCommit: recoveredMerged ? { oid: "b".repeat(40) } : null,
+    }))
+    value.lifecycle.mergePullRequest.mockImplementation(async () => {
+      recoveredMerged = true
+      return { merged: true }
+    })
     value.advance(1001)
 
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
@@ -536,6 +547,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.lifecycle.pushBranch).toHaveBeenCalledWith(expect.objectContaining({
       branch: "codex/hermes-goal-77-77",
     }))
+    expect(value.state.read().executions["77"].metadata.headRefOid).toBe("d".repeat(40))
     expect(value.lifecycle.mergePullRequest).toHaveBeenCalledOnce()
   })
 

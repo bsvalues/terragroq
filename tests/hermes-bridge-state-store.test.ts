@@ -29,6 +29,20 @@ describe("Hermes bridge durable state store", () => {
     expect(JSON.parse(readFileSync(join(dir, "state.json"), "utf8"))).toMatchObject({ schemaVersion: 1 })
   })
 
+  it("explicitly clears a stale reviewed head for pre-commit recovery", () => {
+    const { store } = fixture()
+    const lease = store.acquireLease({
+      outcomeId: "GOAL-1", holderId: "thread-1", leaseDurationMs: 1000,
+      metadata: { headRefOid: "a".repeat(40) }, idempotencyKey: "acquire-clear-head",
+    })
+    store.checkpoint({
+      outcomeId: "GOAL-1", holderId: "thread-1", fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0, state: "HOST_VALIDATION_PASSED",
+      metadata: { headRefOid: null }, idempotencyKey: "clear-head",
+    })
+    expect(store.read().executions["GOAL-1"].metadata.headRefOid).toBeNull()
+  })
+
   it("reclaims only expired leases and fences stale writers", () => {
     const { store, advance } = fixture()
     const first = store.acquireLease({ outcomeId: "GOAL-1", holderId: "one", leaseDurationMs: 100, idempotencyKey: "a" })
