@@ -597,6 +597,12 @@ export function createRepositoryLifecycle(options) {
     const nextOutput = path.join(record.worktreePath, ".next")
     const nextStat = fs.lstatSync(nextOutput, { throwIfNoEntry: false })
     if (!nextStat) return { removed: false }
+    const worktreeStat = fs.lstatSync(record.worktreePath, { throwIfNoEntry: false })
+    if (!worktreeStat?.isDirectory() || worktreeStat.isSymbolicLink()
+      || !samePath(fs.realpathSync(record.worktreePath), record.worktreePath)
+      || !inside(fs.realpathSync(record.ownedWorktreeRoot), fs.realpathSync(record.worktreePath))) {
+      wall("HERMES_REPOSITORY_CLEANUP_WALL", "owned worktree root is no longer an ordinary contained directory")
+    }
     if (!nextStat.isDirectory() || nextStat.isSymbolicLink()) {
       wall("HERMES_REPOSITORY_CLEANUP_WALL", "generated Next output is not an owned directory")
     }

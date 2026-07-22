@@ -248,6 +248,45 @@ describe("Hermes repository lifecycle", () => {
     }
   })
 
+  it("refuses generated-output cleanup when the recorded worktree root becomes a junction", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-next-junction-wall-"))
+    const workspaceRoot = path.join(tempRoot, "repository")
+    const worktreeRoot = path.join(tempRoot, "worktrees")
+    const foreignRoot = path.join(tempRoot, "foreign")
+    let worktreePath = ""
+    try {
+      const lifecycle = createRepositoryLifecycle({
+        workspaceRoot,
+        repositoryRoot: workspaceRoot,
+        ownedWorktreeRoot: worktreeRoot,
+        validationCommands: [{ command: "npm", args: ["run", "build"] }],
+        runner: async ({ args }: Call) => {
+          if (args.includes("remote") && args.includes("get-url")) {
+            return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
+          }
+          if (args.includes("show-ref")) return { code: 1, stdout: "" }
+          return { code: 0, stdout: "" }
+        },
+      })
+      const record = await lifecycle.createWorktree({ branch })
+      worktreePath = record.worktreePath
+      fs.mkdirSync(path.join(foreignRoot, ".next"), { recursive: true })
+      fs.writeFileSync(path.join(foreignRoot, ".next", "retain.txt"), "retain")
+      fs.mkdirSync(path.dirname(record.worktreePath), { recursive: true })
+      fs.symlinkSync(foreignRoot, record.worktreePath, "junction")
+
+      await expect(lifecycle.runValidationCommands(record)).rejects.toMatchObject({
+        code: "HERMES_REPOSITORY_CLEANUP_WALL",
+      })
+      expect(fs.readFileSync(path.join(foreignRoot, ".next", "retain.txt"), "utf8")).toBe("retain")
+    } finally {
+      if (worktreePath && fs.lstatSync(worktreePath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        fs.unlinkSync(worktreePath)
+      }
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+    }
+  })
+
   it("removes the owned validation dependency junction before agent work resumes", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-validation-deps-"))
     const workspaceRoot = path.join(tempRoot, "repository")
