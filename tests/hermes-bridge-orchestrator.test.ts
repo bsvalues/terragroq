@@ -352,6 +352,9 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
     expect(value.client.runTurn).toHaveBeenCalledTimes(2)
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Vercel concluded FAILURE")
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Improve the Hermes page")
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("- components/**")
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("rejected issue #357 adapter")
   })
 
   it("routes substantive Codex review summaries through bounded remediation", async () => {

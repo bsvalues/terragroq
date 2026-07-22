@@ -1,4 +1,4 @@
-const BLOCKED_SCOPE = Object.freeze([
+export const HERMES_BLOCKED_SCOPE = Object.freeze([
   "Property Workbench, TerraPilot, TerraFusion, county/PACS systems or data",
   "production deployment or unrelated production mutation",
   "secret, credential, token, cookie, session, or password inspection",
@@ -65,7 +65,7 @@ Operating contract:
 - Do not use MCP connectors, dynamic tools, web search, browser control, or external product APIs. Use only repository file operations inside the owned worktree and native Codex subagents.
 
 Blocked throughout:
-${BLOCKED_SCOPE.map((item) => `- ${item}`).join("\n")}
+${HERMES_BLOCKED_SCOPE.map((item) => `- ${item}`).join("\n")}
 
 File safety:
 - Do not modify .obsidian/ or unrelated user changes.

@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto"
 import { CodexAppServerClient } from "./app-server-client.mjs"
 import { completeOutcome, deferProviderOutcome, selectNextOutcome, terminalizeOutcome } from "./outcome-source.mjs"
 import { evaluateOutcomePolicy } from "./policy.mjs"
-import { buildHermesCodexPrompt, HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
+import { buildHermesCodexPrompt, HERMES_BLOCKED_SCOPE, HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 import { createRepositoryLifecycle } from "./repository-lifecycle.mjs"
 import { createHermesStateStore } from "./state-store.mjs"
 
@@ -80,8 +80,14 @@ function pullRequestNumber(value) {
   throw Object.assign(new Error("Valid PR URL required"), { code: "HERMES_PR_WALL" })
 }
 
-function buildRemediationPrompt({ workOrderId, branch, findings }) {
+function remediationContext({ outcome, reservations }) {
+  return `Owner outcome:\n${outcome}\n\nReserved paths:\n${reservations.map((item) => `- ${item}`).join("\n")}\n\nBlocked throughout:\n${HERMES_BLOCKED_SCOPE.map((item) => `- ${item}`).join("\n")}`
+}
+
+function buildRemediationPrompt({ workOrderId, branch, outcome, reservations, findings }) {
   return `Continue ${workOrderId} on ${branch}.
+
+${remediationContext({ outcome, reservations })}
 
 Hermes completed native validation, commit, push, PR creation, and review monitoring. Independent review produced these actionable findings:
 ${findings.map((finding, index) => `${index + 1}. ${finding.path}${finding.line ? `:${finding.line}` : ""} - ${finding.body}`).join("\n")}
@@ -89,8 +95,10 @@ ${findings.map((finding, index) => `${index + 1}. ${finding.path}${finding.line 
 Remediate every valid finding using only repository file reads and edits inside the existing reserved paths. Do not run native commands, Git, or GitHub CLI. Independently review the resulting file changes. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
 }
 
-function buildValidationRemediationPrompt({ workOrderId, branch, validation }) {
+function buildValidationRemediationPrompt({ workOrderId, branch, outcome, reservations, validation }) {
   return `Continue ${workOrderId} on ${branch}.
+
+${remediationContext({ outcome, reservations })}
 
 Hermes native-host validation rejected the current file handoff:
 ${validation}
@@ -546,10 +554,14 @@ export function createHermesOrchestrator(options = {}) {
 
       let deliveryPrompt = pendingValidationFailure
         ? buildValidationRemediationPrompt({
-          workOrderId: `WO-HERMES-${outcome.id}-001`, branch, validation: pendingValidationFailure,
+          workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
+          outcome: outcome.command, reservations, validation: pendingValidationFailure,
         })
         : pendingFindings.length > 0
-          ? buildRemediationPrompt({ workOrderId: `WO-HERMES-${outcome.id}-001`, branch, findings: pendingFindings })
+          ? buildRemediationPrompt({
+            workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
+            outcome: outcome.command, reservations, findings: pendingFindings,
+          })
         : buildHermesCodexPrompt({
         outcome: outcome.command,
         outcomeRef: outcomeRef(outcome),
@@ -662,7 +674,8 @@ export function createHermesOrchestrator(options = {}) {
           sequence = cp.checkpointSequence
           pendingValidationFailure = detail
           deliveryPrompt = buildValidationRemediationPrompt({
-            workOrderId: `WO-HERMES-${outcome.id}-001`, branch, validation: detail,
+            workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
+            outcome: outcome.command, reservations, validation: detail,
           })
           continue
         } finally {
@@ -692,7 +705,8 @@ export function createHermesOrchestrator(options = {}) {
           pendingFindings = advanced.findings
           sequence = advanced.sequence
           deliveryPrompt = buildRemediationPrompt({
-            workOrderId: `WO-HERMES-${outcome.id}-001`, branch, findings: pendingFindings,
+            workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
+            outcome: outcome.command, reservations, findings: pendingFindings,
           })
           continue
         }
