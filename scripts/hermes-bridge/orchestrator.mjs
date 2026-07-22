@@ -187,9 +187,16 @@ export function createHermesOrchestrator(options = {}) {
     if (!await lifecycle.verifyOriginMainContains(mergeSha)) {
       throw Object.assign(new Error("Merge commit is absent from origin/main"), { code: "HERMES_MAIN_VERIFICATION_WALL" })
     }
-    await lifecycle.cleanupOwnedWorktree({
-      branch, worktreePath, mergeCommitSha: mergeSha, expectedHeadSha: pr.headRefOid,
-    })
+    try {
+      await lifecycle.cleanupOwnedWorktree({
+        branch, worktreePath, mergeCommitSha: mergeSha, expectedHeadSha: pr.headRefOid,
+      })
+    } catch (error) {
+      throw Object.assign(new Error("Owned post-merge cleanup failed"), {
+        code: "HERMES_POST_MERGE_CLEANUP_WALL",
+        causeCode: error?.code ?? "HERMES_REPOSITORY_CLEANUP_WALL",
+      })
+    }
     const outcomeCompleted = await markComplete({
       outcomeId: outcome.id,
       evidence: { prNumber, mergeSha, branch, ownerTouchCount: 0, blockedScopeCrossed: false },
@@ -207,8 +214,8 @@ export function createHermesOrchestrator(options = {}) {
     return { result: "COMPLETE", outcomeId: lease.outcomeId, prNumber, mergeSha, changedPaths }
   }
 
-  async function finalizeTerminal({ lease, sequence, outcome, nextState }) {
-    const terminal = await checkpoint(lease, sequence, "FAILED_TERMINAL", nextState)
+  async function finalizeTerminal({ lease, sequence, outcome, nextState, metadata = {} }) {
+    const terminal = await checkpoint(lease, sequence, "FAILED_TERMINAL", nextState, metadata)
     const outcomeTerminalized = await markTerminal({
       outcomeId: outcome.id, result: "FAILED_TERMINAL", nextState,
     })
@@ -225,6 +232,29 @@ export function createHermesOrchestrator(options = {}) {
       result: "FAILED_TERMINAL", outcomeId: lease.outcomeId, nextState,
       checkpointSequence: terminal.checkpointSequence,
     }
+  }
+
+  async function settlePostMergeCleanupFailure({ lease, outcome, error }) {
+    const current = state.read().executions[lease.outcomeId]
+    const retryCount = (current?.metadata?.postMergeCleanupRetryCount ?? 0) + 1
+    if (retryCount >= MAX_PROVIDER_REDISPATCHES) {
+      const nextState = "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
+      return finalizeTerminal({
+        lease, sequence: current.checkpoint.sequence, outcome, nextState,
+        metadata: { postMergeCleanupRetryCount: retryCount },
+      })
+    }
+    const retry = await checkpoint(
+      lease, current.checkpoint.sequence, "POST_MERGE_CLEANUP_RETRY",
+      error?.code ?? "HERMES_POST_MERGE_CLEANUP_WALL",
+      { postMergeCleanupRetryCount: retryCount },
+    )
+    state.abandonLease({
+      idempotencyKey: `${lease.outcomeId}:abandon-post-merge:${lease.fencingToken}:${retry.checkpointSequence}`,
+      outcomeId: lease.outcomeId, holderId, fencingToken: lease.fencingToken,
+      reason: error?.code ?? "HERMES_POST_MERGE_CLEANUP_WALL",
+    })
+    return null
   }
 
   async function advanceCommittedHead({
@@ -437,10 +467,18 @@ export function createHermesOrchestrator(options = {}) {
     const worktreePath = lease.metadata?.worktreePath
       ?? path.join(runtimeRoot, "worktrees", branch.slice("codex/".length))
     if (lease.metadata?.prNumber && lease.metadata?.mergeSha) {
-      return finalizeMerged({
-        lease, sequence, outcome, branch, reservations, worktreePath,
-        prNumber: lease.metadata.prNumber,
-      })
+      try {
+        return await finalizeMerged({
+          lease, sequence, outcome, branch, reservations, worktreePath,
+          prNumber: lease.metadata.prNumber,
+        })
+      } catch (error) {
+        if (error?.code === "HERMES_POST_MERGE_CLEANUP_WALL") {
+          const terminal = await settlePostMergeCleanupFailure({ lease, outcome, error })
+          if (terminal) return terminal
+        }
+        throw error
+      }
     }
     if (current?.metadata?.branch === branch) {
       const prior = await lifecycle.discoverPullRequest(branch)
@@ -721,6 +759,12 @@ export function createHermesOrchestrator(options = {}) {
       throw Object.assign(new Error("Review remediation budget exhausted"), { code: "HERMES_REVIEW_REMEDIATION_WALL" })
     } catch (error) {
       const externalToolWall = error?.code === "APP_SERVER_EXTERNAL_TOOL_WALL"
+      const postMergeCleanupWall = error?.code === "HERMES_POST_MERGE_CLEANUP_WALL"
+      if (postMergeCleanupWall) {
+        const terminal = await settlePostMergeCleanupFailure({ lease, outcome, error })
+        if (terminal) return terminal
+        throw error
+      }
       const externalToolRetryCount = externalToolWall
         ? (cp?.metadata?.externalToolRetryCount ?? 0) + 1
         : cp?.metadata?.externalToolRetryCount ?? 0

@@ -150,6 +150,66 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.markComplete).toHaveBeenCalledWith(expect.objectContaining({ outcomeId: 77 }))
   })
 
+  it("abandons a post-merge cleanup failure for immediate fenced recovery", async () => {
+    const value = fixture()
+    value.lifecycle.cleanupOwnedWorktree.mockRejectedValueOnce(Object.assign(new Error("git exited 255"), {
+      code: "HERMES_REPOSITORY_COMMAND_FAILED",
+    })).mockRejectedValueOnce(Object.assign(new Error("git exited 255 again"), {
+      code: "HERMES_REPOSITORY_COMMAND_FAILED",
+    }))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_POST_MERGE_CLEANUP_WALL" })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "ACTIVE", abandonReason: "HERMES_POST_MERGE_CLEANUP_WALL" },
+      checkpoint: { state: "POST_MERGE_CLEANUP_RETRY", detail: "HERMES_POST_MERGE_CLEANUP_WALL" },
+      metadata: { prNumber: 500, mergeSha: "b".repeat(40), postMergeCleanupRetryCount: 1 },
+    })
+    const firstFence = value.state.read().executions["77"].fencingToken
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_POST_MERGE_CLEANUP_WALL" })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "ACTIVE", abandonReason: "HERMES_POST_MERGE_CLEANUP_WALL" },
+      checkpoint: { state: "POST_MERGE_CLEANUP_RETRY", detail: "HERMES_POST_MERGE_CLEANUP_WALL" },
+      metadata: { postMergeCleanupRetryCount: 2 },
+    })
+    expect(value.state.read().executions["77"].fencingToken).toBeGreaterThan(firstFence)
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+  })
+
+  it("terminalizes post-merge cleanup after the bounded retry budget", async () => {
+    const value = fixture()
+    value.lifecycle.cleanupOwnedWorktree.mockRejectedValue(Object.assign(new Error("deterministic cleanup wall"), {
+      code: "HERMES_REPOSITORY_CLEANUP_WALL",
+    }))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_POST_MERGE_CLEANUP_WALL" })
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_POST_MERGE_CLEANUP_WALL" })
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "FAILED_TERMINAL", nextState: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "FAILED_TERMINAL", detail: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED" },
+      metadata: { postMergeCleanupRetryCount: 3 },
+    })
+    expect(value.markTerminal).toHaveBeenCalledWith({
+      outcomeId: 77, result: "FAILED_TERMINAL",
+      nextState: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
+    })
+  })
+
+  it("does not charge outcome-completion settlement failures to the cleanup budget", async () => {
+    const value = fixture()
+    value.markComplete.mockResolvedValueOnce(false)
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_OUTCOME_COMPLETION_WALL" })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "ACTIVE" },
+      checkpoint: { state: "PR_MERGED", detail: "PR #500 merged" },
+      metadata: { postMergeCleanupRetryCount: 0 },
+    })
+    expect(value.state.read().executions["77"].lease).not.toHaveProperty("abandonReason")
+  })
+
   it("dispatches actionable review findings back to Codex and revalidates before merge", async () => {
     const value = fixture()
     value.lifecycle.commitChanges
