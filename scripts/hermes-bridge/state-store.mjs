@@ -447,6 +447,50 @@ export function reopenValidationInfrastructureWall(filePath, request, options = 
   })
 }
 
+export function recoverExternalToolWall(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    const ownerTouchesRemainZero = COUNTER_NAMES.every(
+      (counter) => state.ownerTouchCounters[counter] === 0,
+    )
+    if (request.activationDisabled !== true
+      || current.fencingToken !== request.expectedFencingToken
+      || current.lease.status !== "ACTIVE"
+      || current.lease.holderId !== request.expectedHolderId
+      || current.checkpoint.state !== "RETRYABLE_WALL"
+      || current.checkpoint.detail !== "APP_SERVER_EXTERNAL_TOOL_WALL"
+      || !ownerTouchesRemainZero) {
+      fail("EXTERNAL_TOOL_RECOVERY_STATE_WALL")
+    }
+    const recovered = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "ABANDONED",
+        expiresAt: at.iso,
+        recoveredAt: at.iso,
+        recoverReason: "APP_SERVER_EXTERNAL_TOOL_WALL",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "EXTERNAL_TOOL_WALL_RECOVERED",
+        detail: "APP_SERVER_EXTERNAL_TOOL_WALL",
+        recordedAt: at.iso,
+      },
+      metadata: metadata({ threadId: null, turnId: null }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: recovered }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: recovered.fencingToken,
+      checkpointSequence: recovered.checkpoint.sequence,
+      leaseStatus: recovered.lease.status,
+    }
+  })
+}
+
 export function deferProviderWall(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
@@ -518,6 +562,7 @@ export function createHermesStateStore(filePath, options = {}) {
     releaseLease: (request) => releaseLease(filePath, request, options),
     reopenProviderWall: (request) => reopenProviderWall(filePath, request, options),
     reopenValidationInfrastructureWall: (request) => reopenValidationInfrastructureWall(filePath, request, options),
+    recoverExternalToolWall: (request) => recoverExternalToolWall(filePath, request, options),
     deferProviderWall: (request) => deferProviderWall(filePath, request, options),
     setKillSwitch: (request) => setKillSwitch(filePath, request, options),
     recordOwnerTouch: (request) => recordOwnerTouch(filePath, request, options),

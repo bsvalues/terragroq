@@ -1,6 +1,7 @@
+import fs from "node:fs"
 import { describe, expect, it, vi } from "vitest"
 
-import { recoverValidationInfrastructureWall, runCliEntrypoint, sanitizeBridgeMessage } from "../scripts/hermes-bridge/cli.mjs"
+import { recoverExternalToolWall, recoverValidationInfrastructureWall, runCliEntrypoint, sanitizeBridgeMessage } from "../scripts/hermes-bridge/cli.mjs"
 
 describe("Hermes bridge CLI", () => {
   it("redacts credential-bearing database URLs from structured wall output", () => {
@@ -65,5 +66,31 @@ describe("Hermes bridge CLI", () => {
     expect(calls).toEqual(["state", "proof", "database"])
     expect(recordProof.mock.calls[0][0]).toMatchObject({ outcomeId: 5, fencingToken: 14 })
     expect(recoverOutcome.mock.calls[0][0].proofDigest).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it("recovers one contained external-tool wall through the supported CLI path", () => {
+    const recover = vi.fn(() => ({ checkpointSequence: 8 }))
+    const root = process.cwd()
+    const orchestrator = {
+      runtimeRoot: root,
+      state: {
+        read: () => ({ executions: { "5": {
+          outcomeId: "5", fencingToken: 20,
+          lease: { status: "ACTIVE", holderId: "stopped-holder" },
+          checkpoint: { state: "RETRYABLE_WALL", detail: "APP_SERVER_EXTERNAL_TOOL_WALL" },
+        } } }),
+        recoverExternalToolWall: recover,
+      },
+    }
+    const read = vi.spyOn(fs, "existsSync")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+    expect(recoverExternalToolWall({ orchestrator })).toMatchObject({
+      result: "RECOVERED", outcomeId: "5", checkpointSequence: 8,
+    })
+    expect(recover).toHaveBeenCalledWith(expect.objectContaining({
+      expectedFencingToken: 20, expectedHolderId: "stopped-holder", activationDisabled: true,
+    }))
+    read.mockRestore()
   })
 })

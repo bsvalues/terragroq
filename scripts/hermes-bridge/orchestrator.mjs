@@ -92,7 +92,7 @@ ${remediationContext({ outcome, reservations })}
 Hermes completed native validation, commit, push, PR creation, and review monitoring. Independent review produced these actionable findings:
 ${findings.map((finding, index) => `${index + 1}. ${finding.path}${finding.line ? `:${finding.line}` : ""} - ${finding.body}`).join("\n")}
 
-Remediate every valid finding using only repository file reads and edits inside the existing reserved paths. Do not run native commands, Git, or GitHub CLI. Independently review the resulting file changes. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
+Remediate every valid finding using only repository file reads and edits inside the existing reserved paths. Do not run native commands, Git, or GitHub CLI. This is one bounded remediation lane: do not invoke subagents, MCP, dynamic tools, web search, or external connectors. Review the resulting file changes directly. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
 }
 
 function buildValidationRemediationPrompt({ workOrderId, branch, outcome, reservations, validation }) {
@@ -720,9 +720,14 @@ export function createHermesOrchestrator(options = {}) {
       }
       throw Object.assign(new Error("Review remediation budget exhausted"), { code: "HERMES_REVIEW_REMEDIATION_WALL" })
     } catch (error) {
-      try { await checkpoint(lease, sequence, "RETRYABLE_WALL", error?.code ?? "HERMES_CYCLE_FAILED") } catch {}
+      const externalToolWall = error?.code === "APP_SERVER_EXTERNAL_TOOL_WALL"
+      try {
+        cp = await checkpoint(lease, sequence, "RETRYABLE_WALL", error?.code ?? "HERMES_CYCLE_FAILED",
+          externalToolWall ? { threadId: null, turnId: null } : {})
+        sequence = cp.checkpointSequence
+      } catch {}
       if (cp?.state === "PROVIDER_UNAVAILABLE"
-        || ["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT", "HERMES_PROVIDER_SETTLEMENT_WALL"].includes(error?.code)) {
+        || ["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT", "APP_SERVER_EXTERNAL_TOOL_WALL", "HERMES_PROVIDER_SETTLEMENT_WALL"].includes(error?.code)) {
         try {
           state.abandonLease({
             idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${sequence}`,

@@ -450,6 +450,24 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.any(Object))
   })
 
+  it("abandons a blocked external tool and clears its App Server identity", async () => {
+    const value = fixture()
+    value.client.runTurn.mockRejectedValueOnce(Object.assign(new Error("mcpToolCall"), {
+      code: "APP_SERVER_EXTERNAL_TOOL_WALL",
+    }))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "APP_SERVER_EXTERNAL_TOOL_WALL" })
+    const interrupted = value.state.read().executions["77"]
+    expect(interrupted).toMatchObject({
+      lease: { status: "ACTIVE", abandonReason: "APP_SERVER_EXTERNAL_TOOL_WALL" },
+      checkpoint: { state: "RETRYABLE_WALL", detail: "APP_SERVER_EXTERNAL_TOOL_WALL" },
+      metadata: { threadId: null, turnId: null },
+    })
+    expect(Date.parse(interrupted.lease.expiresAt)).toBe(Date.parse(interrupted.checkpoint.recordedAt))
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    expect(value.client.startThread).toHaveBeenCalledTimes(2)
+  })
+
   it("redispatches a transient native provider wall without terminalizing the outcome", async () => {
     const value = fixture()
     value.client.runTurn.mockResolvedValueOnce({
