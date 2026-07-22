@@ -143,6 +143,31 @@ function assertFence(current, holderId, fencingToken) {
   if (current.lease.status !== "ACTIVE" || current.lease.holderId !== holderId) fail("LEASE_NOT_HELD")
 }
 
+function normalizedValidationEvidence(input, current) {
+  const value = Object.hasOwn(input, "validationEvidence")
+    ? input.validationEvidence
+    : current.validationEvidence ?? null
+  if (value === null) return null
+  if (!Array.isArray(value) || value.length === 0 || value.length > 20) {
+    fail("INVALID_VALIDATION_EVIDENCE")
+  }
+  return value.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)
+      || typeof entry.command !== "string" || entry.command.length === 0 || entry.command.length > 100
+      || !Array.isArray(entry.args) || entry.args.length > 100
+      || entry.args.some((arg) => typeof arg !== "string" || arg.length > 500)
+      || !Number.isInteger(entry.code)) {
+      fail("INVALID_VALIDATION_EVIDENCE")
+    }
+    return {
+      command: entry.command,
+      args: [...entry.args],
+      code: entry.code,
+      timedOut: entry.timedOut === true,
+    }
+  })
+}
+
 function metadata(input = {}, current = {}) {
   const prNumber = input.prNumber ?? current.prNumber ?? null
   if (prNumber !== null && (!Number.isInteger(prNumber) || prNumber < 1)) fail("INVALID_PR_NUMBER")
@@ -168,6 +193,7 @@ function metadata(input = {}, current = {}) {
     ? input.headRefOid
     : current.headRefOid ?? null
   if (headRefOid !== null && !SHA.test(headRefOid)) fail("INVALID_HEAD_REF_OID")
+  const validationEvidence = normalizedValidationEvidence(input, current)
   return {
     threadId: input.threadId ?? current.threadId ?? null,
     turnId: input.turnId ?? current.turnId ?? null,
@@ -181,6 +207,7 @@ function metadata(input = {}, current = {}) {
     remediationRound,
     validationFailure,
     validationRemediationRound,
+    validationEvidence,
     outcome,
   }
 }

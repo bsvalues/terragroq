@@ -246,8 +246,10 @@ export function createHermesOrchestrator(options = {}) {
       }
       if (candidate.reviewCompleted && candidate.unresolvedThreadCount > 0) {
         findings = await lifecycle.inspectReviewFindings(prNumber)
-        if (findings.length > 0 && findings.every((finding) => finding.isOutdated)) {
-          await lifecycle.resolveReviewThreads(findings.map((finding) => finding.threadId))
+        const autoResolvable = findings.filter((finding) =>
+          finding.isOutdated && finding.requiresExplicitResolution !== true)
+        if (autoResolvable.length > 0) {
+          await lifecycle.resolveReviewThreads(autoResolvable.map((finding) => finding.threadId))
           candidate = await lifecycle.inspectPullRequest(prNumber)
           findings = []
           continue
@@ -578,7 +580,7 @@ export function createHermesOrchestrator(options = {}) {
           }] : []),
           ...DEFAULT_VALIDATION_COMMANDS,
         ]
-        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_STARTED", null)
+        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_STARTED", null, { validationEvidence: null })
         sequence = cp.checkpointSequence
         let validation
         try {
@@ -594,6 +596,7 @@ export function createHermesOrchestrator(options = {}) {
             .slice(0, 4_000)
           cp = await checkpoint(lease, sequence, "VALIDATION_REMEDIATION_REQUIRED", null, {
             validationFailure: detail, validationRemediationRound: remediationRound + 1,
+            validationEvidence: null,
           })
           sequence = cp.checkpointSequence
           pendingValidationFailure = detail
@@ -605,7 +608,8 @@ export function createHermesOrchestrator(options = {}) {
           lifecycle.removeValidationDependencies(record)
         }
         cp = await checkpoint(lease, sequence, "HOST_VALIDATION_PASSED", null, {
-          validation, validationFailure: "", validationRemediationRound: 0, headRefOid: null,
+          validationEvidence: validation, validationFailure: "", validationRemediationRound: 0,
+          headRefOid: null,
         })
         sequence = cp.checkpointSequence
 

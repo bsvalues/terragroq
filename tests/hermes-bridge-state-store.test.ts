@@ -43,6 +43,23 @@ describe("Hermes bridge durable state store", () => {
     expect(store.read().executions["GOAL-1"].metadata.headRefOid).toBeNull()
   })
 
+  it("persists bounded host validation evidence across state-store reads", () => {
+    const { store } = fixture()
+    const lease = store.acquireLease({
+      outcomeId: "GOAL-1", holderId: "thread-1", leaseDurationMs: 1000,
+      idempotencyKey: "acquire-validation-evidence",
+    })
+    store.checkpoint({
+      outcomeId: "GOAL-1", holderId: "thread-1", fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0, state: "HOST_VALIDATION_PASSED",
+      metadata: { validationEvidence: [{ command: "npm", args: ["test", "--", "--run"], code: 0 }] },
+      idempotencyKey: "validation-evidence",
+    })
+    expect(store.read().executions["GOAL-1"].metadata.validationEvidence).toEqual([
+      { command: "npm", args: ["test", "--", "--run"], code: 0, timedOut: false },
+    ])
+  })
+
   it("reclaims only expired leases and fences stale writers", () => {
     const { store, advance } = fixture()
     const first = store.acquireLease({ outcomeId: "GOAL-1", holderId: "one", leaseDurationMs: 100, idempotencyKey: "a" })

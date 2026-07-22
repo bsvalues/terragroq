@@ -218,6 +218,24 @@ describe("Hermes repository lifecycle", () => {
     })
   })
 
+  it("classifies security and authority review threads as explicitly resolved only", async () => {
+    const { lifecycle } = fixture({
+      "gh api graphql": () => ({
+        code: 0,
+        stdout: JSON.stringify(reviewState([{
+          id: "PRRT_security", isResolved: false, isOutdated: true,
+          path: "scripts/hermes-bridge/orchestrator.mjs", line: 42,
+          comments: { nodes: [{ body: "Preserve the authority boundary before merge.", isMinimized: false }] },
+        }])),
+      }),
+    })
+    await expect(lifecycle.inspectReviewFindings(77)).resolves.toEqual([
+      expect.objectContaining({
+        threadId: "PRRT_security", isOutdated: true, requiresExplicitResolution: true,
+      }),
+    ])
+  })
+
   it("commits exactly the owned working-tree paths and requests exact-head Codex review", async () => {
     const changed = ["components/dashboard/radar.tsx", "tests/radar.test.ts"]
     const { lifecycle, calls, record } = await ownedFixture({
