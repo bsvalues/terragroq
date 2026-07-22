@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 export const HERMES_REPOSITORY = "bsvalues/terragroq"
@@ -15,11 +16,11 @@ const VALIDATION_ENVIRONMENT = new Set(["NEXT_PRIVATE_BUILD_WORKER", "NEXT_TELEM
 const CHILD_ENVIRONMENT = new Set([
   "APPDATA", "COMSPEC", "HOME", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PATHEXT",
   "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP",
-  "USERPROFILE", "WINDIR", "SSH_AUTH_SOCK",
+  "USERPROFILE", "WINDIR", "SSH_AUTH_SOCK", "TMPDIR",
 ])
 const VALIDATION_CHILD_ENVIRONMENT = new Set([
   "COMSPEC", "PATH", "PATHEXT", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
-  "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "WINDIR",
+  "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "WINDIR",
 ])
 const MAX_VALIDATION_TIMEOUT_MS = 20 * 60 * 1000
 const PROHIBITED_WORD = /(^|[-_:])(deploy|production|release|tag)([-_:]|$)/i
@@ -118,7 +119,10 @@ export function createCommandRunner() {
     const invocation = resolveNativeInvocation(command, args)
     const validationHome = credentialAccess
       ? null
-      : fs.mkdtempSync(path.join(process.env.TEMP ?? process.env.TMP ?? path.parse(cwd).root, "hermes-validation-"))
+      : fs.mkdtempSync(path.join(
+        process.env.TEMP ?? process.env.TMP ?? process.env.TMPDIR ?? os.tmpdir(),
+        "hermes-validation-",
+      ))
     if (validationHome) {
       fs.mkdirSync(path.join(validationHome, "AppData", "Roaming"), { recursive: true })
       fs.mkdirSync(path.join(validationHome, "AppData", "Local"), { recursive: true })
@@ -186,7 +190,10 @@ export function createCommandEnvironment(source = process.env, overrides = {}, {
     if (value !== undefined && VALIDATION_ENVIRONMENT.has(key)) result[key] = String(value)
   }
   if (!credentialAccess) {
-    const isolatedHome = path.resolve(validationHome ?? path.join(result.TEMP ?? result.TMP ?? path.parse(process.cwd()).root, "hermes-validation-home"))
+    const isolatedHome = path.resolve(validationHome ?? path.join(
+      result.TEMP ?? result.TMP ?? result.TMPDIR ?? os.tmpdir(),
+      "hermes-validation-home",
+    ))
     result.USERPROFILE = isolatedHome
     result.HOME = isolatedHome
     result.APPDATA = path.join(isolatedHome, "AppData", "Roaming")

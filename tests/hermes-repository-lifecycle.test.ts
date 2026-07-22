@@ -83,7 +83,7 @@ describe("Hermes repository lifecycle", () => {
     const source = {
       Path: "C:/tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
       SSH_AUTH_SOCK: "C:/Users/owner/.ssh/agent.sock",
-      SystemRoot: "C:/Windows", TEMP: "C:/Temp",
+      SystemRoot: "C:/Windows", TEMP: "C:/Temp", TMPDIR: "C:/Temp/posix",
       DATABASE_URL: "postgresql://owner:secret@database.invalid/app", OPENAI_API_KEY: "secret",
       GH_TOKEN: "secret", BETTER_AUTH_SECRET: "secret",
     }
@@ -92,13 +92,14 @@ describe("Hermes repository lifecycle", () => {
     })).toEqual({
       Path: "C:/tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
       SSH_AUTH_SOCK: "C:/Users/owner/.ssh/agent.sock",
-      SystemRoot: "C:/Windows", TEMP: "C:/Temp",
+      SystemRoot: "C:/Windows", TEMP: "C:/Temp", TMPDIR: "C:/Temp/posix",
       NEXT_TELEMETRY_DISABLED: "1",
     })
     expect(createCommandEnvironment(source, { NEXT_TELEMETRY_DISABLED: "1" }, {
       credentialAccess: false, validationHome: "C:/Temp/isolated-validation",
     })).toEqual({
-      Path: "C:/tools", SystemRoot: "C:/Windows", TEMP: "C:/Temp", NEXT_TELEMETRY_DISABLED: "1",
+      Path: "C:/tools", SystemRoot: "C:/Windows", TEMP: "C:/Temp", TMPDIR: "C:/Temp/posix",
+      NEXT_TELEMETRY_DISABLED: "1",
       USERPROFILE: path.resolve("C:/Temp/isolated-validation"),
       HOME: path.resolve("C:/Temp/isolated-validation"),
       APPDATA: path.resolve("C:/Temp/isolated-validation/AppData/Roaming"),
