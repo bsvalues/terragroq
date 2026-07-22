@@ -25,6 +25,7 @@ type Call = {
   cwd: string
   env?: Record<string, string>
   timeoutMs?: number
+  credentialAccess?: boolean
 }
 
 function fixture(overrides: Record<string, (call: Call) => unknown> = {}) {
@@ -79,15 +80,29 @@ function expectWall(callback: () => unknown, code: string) {
 
 describe("Hermes repository lifecycle", () => {
   it("removes repository and provider secrets from child command environments", () => {
-    expect(createCommandEnvironment({
+    const source = {
       Path: "C:/tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
       SSH_AUTH_SOCK: "C:/Users/owner/.ssh/agent.sock",
+      SystemRoot: "C:/Windows", TEMP: "C:/Temp",
       DATABASE_URL: "postgresql://owner:secret@database.invalid/app", OPENAI_API_KEY: "secret",
       GH_TOKEN: "secret", BETTER_AUTH_SECRET: "secret",
-    }, { NEXT_TELEMETRY_DISABLED: "1", DATABASE_URL: "still-forbidden" })).toEqual({
+    }
+    expect(createCommandEnvironment(source, {
+      NEXT_TELEMETRY_DISABLED: "1", DATABASE_URL: "still-forbidden",
+    })).toEqual({
       Path: "C:/tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
       SSH_AUTH_SOCK: "C:/Users/owner/.ssh/agent.sock",
+      SystemRoot: "C:/Windows", TEMP: "C:/Temp",
       NEXT_TELEMETRY_DISABLED: "1",
+    })
+    expect(createCommandEnvironment(source, { NEXT_TELEMETRY_DISABLED: "1" }, {
+      credentialAccess: false, validationHome: "C:/Temp/isolated-validation",
+    })).toEqual({
+      Path: "C:/tools", SystemRoot: "C:/Windows", TEMP: "C:/Temp", NEXT_TELEMETRY_DISABLED: "1",
+      USERPROFILE: path.resolve("C:/Temp/isolated-validation"),
+      HOME: path.resolve("C:/Temp/isolated-validation"),
+      APPDATA: path.resolve("C:/Temp/isolated-validation/AppData/Roaming"),
+      LOCALAPPDATA: path.resolve("C:/Temp/isolated-validation/AppData/Local"),
     })
   })
 
@@ -155,6 +170,7 @@ describe("Hermes repository lifecycle", () => {
       args: ["test", "--", "--run", "tests/unit.test.ts"],
       cwd: record.worktreePath,
       timeoutMs: 10 * 60 * 1000,
+      credentialAccess: false,
     })
   })
 
@@ -183,6 +199,7 @@ describe("Hermes repository lifecycle", () => {
       command: "npm", args: ["run", "build"], cwd: ownedWorktree,
       env: { NEXT_PRIVATE_BUILD_WORKER: "0", NEXT_TELEMETRY_DISABLED: "1" },
       timeoutMs: 10 * 60 * 1000,
+      credentialAccess: false,
     })
     expect(() => createRepositoryLifecycle({
       workspaceRoot: root, ownedWorktreeRoot: ownedRoot,

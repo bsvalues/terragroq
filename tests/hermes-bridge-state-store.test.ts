@@ -100,6 +100,16 @@ describe("Hermes bridge durable state store", () => {
     expect(() => store.read()).toThrowError(expect.objectContaining({ code: "VALIDATION_FAILURE_SECRET_WALL" }))
   })
 
+  it("refuses secret-bearing historical idempotency entries", () => {
+    const { dir, store } = fixture()
+    const statePath = join(dir, "state.json")
+    const state = JSON.parse(readFileSync(statePath, "utf8"))
+    state.idempotency.injected = { result: { validationFailure: "redis://:credential@cache.invalid/0" } }
+    writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8")
+
+    expect(() => store.read()).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_SECRET_WALL" }))
+  })
+
   it("reclaims only expired leases and fences stale writers", () => {
     const { store, advance } = fixture()
     const first = store.acquireLease({ outcomeId: "GOAL-1", holderId: "one", leaseDurationMs: 100, idempotencyKey: "a" })

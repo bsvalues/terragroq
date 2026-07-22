@@ -76,6 +76,9 @@ function validateState(state, storeId) {
       fail("VALIDATION_FAILURE_SECRET_WALL")
     }
   }
+  if (SENSITIVE_EVIDENCE.test(JSON.stringify(state.idempotency))) {
+    fail("IDEMPOTENCY_SECRET_WALL")
+  }
   return state
 }
 
@@ -84,7 +87,9 @@ export function readHermesState(filePath, storeId = "hermes-bridge") {
   try {
     return validateState(JSON.parse(fs.readFileSync(filePath, "utf8")), storeId)
   } catch (error) {
-    if (["HERMES_STATE_CORRUPT", "VALIDATION_FAILURE_SECRET_WALL"].includes(error?.code)) throw error
+    if (["HERMES_STATE_CORRUPT", "VALIDATION_FAILURE_SECRET_WALL", "IDEMPOTENCY_SECRET_WALL"].includes(error?.code)) {
+      throw error
+    }
     fail("HERMES_STATE_CORRUPT", `Unable to read Hermes state: ${error.message}`)
   }
 }
