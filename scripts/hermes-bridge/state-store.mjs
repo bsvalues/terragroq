@@ -12,6 +12,7 @@ const COUNTER_ALIASES = Object.freeze({
 const COUNTER_NAMES = Object.freeze(Object.values(COUNTER_ALIASES))
 const STALE_LOCK_MS = 10 * 60 * 1000
 const SHA = /^[0-9a-f]{40}$/
+const SENSITIVE_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 
 function fail(code, message = code) {
   const error = new Error(message)
@@ -69,6 +70,15 @@ function validateState(state, storeId) {
     || typeof state.idempotency !== "object" || typeof state.ownerTouchCounters !== "object") {
     fail("HERMES_STATE_CORRUPT")
   }
+  for (const execution of Object.values(state.executions)) {
+    const validationFailure = execution?.metadata?.validationFailure
+    if (typeof validationFailure === "string" && validationFailure && SENSITIVE_EVIDENCE.test(validationFailure)) {
+      fail("VALIDATION_FAILURE_SECRET_WALL")
+    }
+  }
+  if (SENSITIVE_EVIDENCE.test(JSON.stringify(state.idempotency))) {
+    fail("IDEMPOTENCY_SECRET_WALL")
+  }
   return state
 }
 
@@ -77,7 +87,9 @@ export function readHermesState(filePath, storeId = "hermes-bridge") {
   try {
     return validateState(JSON.parse(fs.readFileSync(filePath, "utf8")), storeId)
   } catch (error) {
-    if (error?.code === "HERMES_STATE_CORRUPT") throw error
+    if (["HERMES_STATE_CORRUPT", "VALIDATION_FAILURE_SECRET_WALL", "IDEMPOTENCY_SECRET_WALL"].includes(error?.code)) {
+      throw error
+    }
     fail("HERMES_STATE_CORRUPT", `Unable to read Hermes state: ${error.message}`)
   }
 }
@@ -182,6 +194,9 @@ function metadata(input = {}, current = {}) {
   const validationFailure = input.validationFailure ?? current.validationFailure ?? null
   if (validationFailure !== null && (typeof validationFailure !== "string" || validationFailure.length > 4_000)) {
     fail("INVALID_VALIDATION_FAILURE")
+  }
+  if (validationFailure && SENSITIVE_EVIDENCE.test(validationFailure)) {
+    fail("VALIDATION_FAILURE_SECRET_WALL")
   }
   const validationRemediationRound = input.validationRemediationRound
     ?? current.validationRemediationRound ?? null

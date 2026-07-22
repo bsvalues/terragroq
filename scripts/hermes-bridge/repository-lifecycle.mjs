@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 export const HERMES_REPOSITORY = "bsvalues/terragroq"
@@ -12,9 +13,18 @@ const SUCCESSFUL_CHECKS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"])
 const PENDING_CHECKS = new Set(["", "EXPECTED", "IN_PROGRESS", "PENDING", "QUEUED", "REQUESTED", "WAITING"])
 const VALIDATION_EXECUTABLES = new Set(["node", "npm", "npx", "pnpm", "yarn", "bun", "cargo", "dotnet"])
 const VALIDATION_ENVIRONMENT = new Set(["NEXT_PRIVATE_BUILD_WORKER", "NEXT_TELEMETRY_DISABLED"])
+const CHILD_ENVIRONMENT = new Set([
+  "APPDATA", "COMSPEC", "HOME", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PATHEXT",
+  "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP",
+  "USERPROFILE", "WINDIR", "SSH_AUTH_SOCK", "TMPDIR",
+])
+const VALIDATION_CHILD_ENVIRONMENT = new Set([
+  "COMSPEC", "PATH", "PATHEXT", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
+  "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "WINDIR",
+])
 const MAX_VALIDATION_TIMEOUT_MS = 20 * 60 * 1000
 const PROHIBITED_WORD = /(^|[-_:])(deploy|production|release|tag)([-_:]|$)/i
-const SECRET_LIKE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+)/i
+const SECRET_LIKE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 
 export class HermesRepositoryLifecycleError extends Error {
   constructor(code, detail) {
@@ -105,11 +115,21 @@ function resolveNativeInvocation(command, args) {
 }
 
 export function createCommandRunner() {
-  return ({ command, args, cwd, env, timeoutMs }) => new Promise((resolve, reject) => {
+  return ({ command, args, cwd, env, timeoutMs, credentialAccess = true }) => new Promise((resolve, reject) => {
     const invocation = resolveNativeInvocation(command, args)
+    const validationHome = credentialAccess
+      ? null
+      : fs.mkdtempSync(path.join(
+        process.env.TEMP ?? process.env.TMP ?? process.env.TMPDIR ?? os.tmpdir(),
+        "hermes-validation-",
+      ))
+    if (validationHome) {
+      fs.mkdirSync(path.join(validationHome, "AppData", "Roaming"), { recursive: true })
+      fs.mkdirSync(path.join(validationHome, "AppData", "Local"), { recursive: true })
+    }
     const child = spawn(invocation.command, invocation.args, {
       cwd,
-      env: { ...process.env, ...env },
+      env: createCommandEnvironment(process.env, env, { credentialAccess, validationHome }),
       shell: false,
       detached: process.platform !== "win32",
       windowsHide: true,
@@ -142,10 +162,12 @@ export function createCommandRunner() {
     child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk })
     child.on("error", (error) => {
       if (timer) clearTimeout(timer)
+      if (validationHome) fs.rmSync(validationHome, { recursive: true, force: true })
       reject(error)
     })
     child.on("close", (code) => {
       if (timer) clearTimeout(timer)
+      if (validationHome) fs.rmSync(validationHome, { recursive: true, force: true })
       resolve({
         code: timedOut ? 124 : (code ?? 1), stdout,
         stderr: timedOut ? `${stderr}\nHERMES_VALIDATION_TIMEOUT`.trim() : stderr,
@@ -153,6 +175,31 @@ export function createCommandRunner() {
       })
     })
   })
+}
+
+export function createCommandEnvironment(source = process.env, overrides = {}, {
+  credentialAccess = true,
+  validationHome,
+} = {}) {
+  const result = {}
+  const allowed = credentialAccess ? CHILD_ENVIRONMENT : VALIDATION_CHILD_ENVIRONMENT
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined && allowed.has(key.toUpperCase())) result[key] = String(value)
+  }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value !== undefined && VALIDATION_ENVIRONMENT.has(key)) result[key] = String(value)
+  }
+  if (!credentialAccess) {
+    const isolatedHome = path.resolve(validationHome ?? path.join(
+      result.TEMP ?? result.TMP ?? result.TMPDIR ?? os.tmpdir(),
+      "hermes-validation-home",
+    ))
+    result.USERPROFILE = isolatedHome
+    result.HOME = isolatedHome
+    result.APPDATA = path.join(isolatedHome, "AppData", "Roaming")
+    result.LOCALAPPDATA = path.join(isolatedHome, "AppData", "Local")
+  }
+  return result
 }
 
 function assertSafeInvocation(command, args) {
@@ -373,7 +420,7 @@ export function createRepositoryLifecycle(options) {
   const records = new Map()
 
   async function run(command, args, {
-    cwd = workspaceRoot, allowFailure = false, env = {}, timeoutMs,
+    cwd = workspaceRoot, allowFailure = false, env = {}, timeoutMs, credentialAccess = true,
   } = {}) {
     assertSafeInvocation(command, args)
     let result
@@ -381,6 +428,7 @@ export function createRepositoryLifecycle(options) {
       const invocation = { command, args: [...args], cwd }
       if (Object.keys(env).length > 0) invocation.env = { ...env }
       if (timeoutMs !== undefined) invocation.timeoutMs = timeoutMs
+      if (!credentialAccess) invocation.credentialAccess = false
       result = normalizeResult(await runner(invocation))
     } catch {
       wall("HERMES_REPOSITORY_RUNNER_WALL", `${path.basename(command)} failed to start`)
@@ -563,6 +611,7 @@ export function createRepositoryLifecycle(options) {
     for (const command of normalized) {
       const result = await run(command.command, command.args, {
         cwd: record.worktreePath, env: command.env, timeoutMs: command.timeoutMs, allowFailure: true,
+        credentialAccess: false,
       })
       if (result.code !== 0) {
         const output = `${result.stdout}\n${result.stderr}`.trim().slice(-4_000)

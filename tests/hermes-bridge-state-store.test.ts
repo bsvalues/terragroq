@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -66,6 +66,48 @@ describe("Hermes bridge durable state store", () => {
     expect(store.read().executions["GOAL-1"].metadata.validationEvidence).toEqual([
       { command: "npm", args: ["test", "--", "--run"], code: 0, timedOut: false },
     ])
+  })
+
+  it("refuses secret-bearing validation failure evidence", () => {
+    for (const [index, validationFailure] of [
+      "postgresql://owner:credential@database.invalid/app",
+      "redis://:credential@cache.invalid/0",
+    ].entries()) {
+      const { store } = fixture()
+      const lease = store.acquireLease({
+        outcomeId: "GOAL-1", holderId: "thread-1", leaseDurationMs: 1000,
+        idempotencyKey: `acquire-secret-evidence-${index}`,
+      })
+      expect(() => store.checkpoint({
+        outcomeId: "GOAL-1", holderId: "thread-1", fencingToken: lease.fencingToken,
+        expectedCheckpointSequence: 0, state: "VALIDATION_REMEDIATION_REQUIRED",
+        metadata: { validationFailure }, idempotencyKey: `secret-evidence-${index}`,
+      })).toThrowError(expect.objectContaining({ code: "VALIDATION_FAILURE_SECRET_WALL" }))
+    }
+  })
+
+  it("refuses secret-bearing validation failure evidence already persisted on disk", () => {
+    const { dir, store } = fixture()
+    store.acquireLease({
+      outcomeId: "GOAL-1", holderId: "thread-1", leaseDurationMs: 1000,
+      metadata: { validationFailure: "ordinary test failure" }, idempotencyKey: "acquire-persisted-secret",
+    })
+    const statePath = join(dir, "state.json")
+    const state = JSON.parse(readFileSync(statePath, "utf8"))
+    state.executions["GOAL-1"].metadata.validationFailure = "redis://:credential@cache.invalid/0"
+    writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8")
+
+    expect(() => store.read()).toThrowError(expect.objectContaining({ code: "VALIDATION_FAILURE_SECRET_WALL" }))
+  })
+
+  it("refuses secret-bearing historical idempotency entries", () => {
+    const { dir, store } = fixture()
+    const statePath = join(dir, "state.json")
+    const state = JSON.parse(readFileSync(statePath, "utf8"))
+    state.idempotency.injected = { result: { validationFailure: "redis://:credential@cache.invalid/0" } }
+    writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8")
+
+    expect(() => store.read()).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_SECRET_WALL" }))
   })
 
   it("reclaims only expired leases and fences stale writers", () => {

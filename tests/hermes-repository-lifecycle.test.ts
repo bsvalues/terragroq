@@ -5,6 +5,7 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 
 import {
+  createCommandEnvironment,
   createRepositoryLifecycle,
   HermesRepositoryLifecycleError,
 } from "../scripts/hermes-bridge/repository-lifecycle.mjs"
@@ -24,6 +25,7 @@ type Call = {
   cwd: string
   env?: Record<string, string>
   timeoutMs?: number
+  credentialAccess?: boolean
 }
 
 function fixture(overrides: Record<string, (call: Call) => unknown> = {}) {
@@ -77,6 +79,34 @@ function expectWall(callback: () => unknown, code: string) {
 }
 
 describe("Hermes repository lifecycle", () => {
+  it("removes repository and provider secrets from child command environments", () => {
+    const source = {
+      Path: "C:/tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
+      SSH_AUTH_SOCK: "C:/Users/owner/.ssh/agent.sock",
+      SystemRoot: "C:/Windows", TEMP: "C:/Temp", TMPDIR: "C:/Temp/posix",
+      DATABASE_URL: "postgresql://owner:secret@database.invalid/app", OPENAI_API_KEY: "secret",
+      GH_TOKEN: "secret", BETTER_AUTH_SECRET: "secret",
+    }
+    expect(createCommandEnvironment(source, {
+      NEXT_TELEMETRY_DISABLED: "1", DATABASE_URL: "still-forbidden",
+    })).toEqual({
+      Path: "C:/tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
+      SSH_AUTH_SOCK: "C:/Users/owner/.ssh/agent.sock",
+      SystemRoot: "C:/Windows", TEMP: "C:/Temp", TMPDIR: "C:/Temp/posix",
+      NEXT_TELEMETRY_DISABLED: "1",
+    })
+    expect(createCommandEnvironment(source, { NEXT_TELEMETRY_DISABLED: "1" }, {
+      credentialAccess: false, validationHome: "C:/Temp/isolated-validation",
+    })).toEqual({
+      Path: "C:/tools", SystemRoot: "C:/Windows", TEMP: "C:/Temp", TMPDIR: "C:/Temp/posix",
+      NEXT_TELEMETRY_DISABLED: "1",
+      USERPROFILE: path.resolve("C:/Temp/isolated-validation"),
+      HOME: path.resolve("C:/Temp/isolated-validation"),
+      APPDATA: path.resolve("C:/Temp/isolated-validation/AppData/Roaming"),
+      LOCALAPPDATA: path.resolve("C:/Temp/isolated-validation/AppData/Local"),
+    })
+  })
+
   it("refreshes only the verified terragroq origin/main ref", async () => {
     const { lifecycle, calls } = fixture()
     await expect(lifecycle.refreshOriginMain()).resolves.toBe(sha)
@@ -141,6 +171,7 @@ describe("Hermes repository lifecycle", () => {
       args: ["test", "--", "--run", "tests/unit.test.ts"],
       cwd: record.worktreePath,
       timeoutMs: 10 * 60 * 1000,
+      credentialAccess: false,
     })
   })
 
@@ -169,6 +200,7 @@ describe("Hermes repository lifecycle", () => {
       command: "npm", args: ["run", "build"], cwd: ownedWorktree,
       env: { NEXT_PRIVATE_BUILD_WORKER: "0", NEXT_TELEMETRY_DISABLED: "1" },
       timeoutMs: 10 * 60 * 1000,
+      credentialAccess: false,
     })
     expect(() => createRepositoryLifecycle({
       workspaceRoot: root, ownedWorktreeRoot: ownedRoot,
@@ -216,6 +248,20 @@ describe("Hermes repository lifecycle", () => {
       code: "HERMES_VALIDATION_FAILED",
       validation: expect.objectContaining({ code: 1, output: expect.stringContaining("expected READY") }),
     })
+  })
+
+  it("refuses credential-bearing connection URLs in validator evidence", async () => {
+    for (const connectionUrl of [
+      "postgresql://owner:credential@database.invalid/app",
+      "redis://:credential@cache.invalid/0",
+    ]) {
+      const { lifecycle, record } = await ownedFixture({
+        npm: () => ({ code: 1, stdout: "", stderr: connectionUrl }),
+      })
+      await expect(lifecycle.runValidationCommands({ ...record })).rejects.toMatchObject({
+        code: "HERMES_REPOSITORY_SECRET_WALL",
+      })
+    }
   })
 
   it("returns the latest active comment without making a resolution-policy guess", async () => {
