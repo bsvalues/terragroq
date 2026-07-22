@@ -36,25 +36,34 @@ export type HomeWorkRadarItem = {
   status: string
   result: string | null
   detail: string
-  href: "/work-orders"
+  actionLabel: string
+  href: "/work-orders" | "/decisions"
+  evidence: {
+    count: number
+    label: "Open supporting evidence" | "Evidence not linked"
+    href: "/audit" | null
+  }
 }
 
 export type HomeWorkRadarLane = {
-  label: "Now" | "Held" | "Landed"
-  title: "Active work" | "Blockers" | "Recent outcomes"
+  label: "Now" | "Held" | "Decide" | "Landed"
+  title: "Active work" | "Blockers" | "Needs your decision" | "Recent outcomes"
   description: string
-  tone: "active" | "blocked" | "complete"
+  tone: "active" | "blocked" | "decision" | "complete"
   count: number
   items: HomeWorkRadarItem[]
   emptyState: string
+  href: "/work-orders" | "/decisions"
+  ctaLabel: string
 }
 
 export type HomeWorkRadar = {
   eyebrow: "Operational radar"
-  title: "Now, held, landed"
+  title: "Now, held, decide, landed"
   description: string
   activeWork: HomeWorkRadarLane
   blockers: HomeWorkRadarLane
+  ownerDecisions: HomeWorkRadarLane
   recentOutcomes: HomeWorkRadarLane
 }
 
@@ -66,19 +75,28 @@ type HomeWorkRadarIdentity = {
 }
 
 export type HomeWorkRadarActiveItem = HomeWorkRadarIdentity & {
+  evidence: string[]
   updatedAt: Date
 }
 
 export type HomeWorkRadarBlockedItem = HomeWorkRadarIdentity & {
   description: string | null
+  evidence: string[]
   stopConditions: string[]
 }
 
 export type HomeWorkRadarOutcomeItem = HomeWorkRadarIdentity & {
+  evidence: string[]
   result: string | null
   closedAt: Date | null
   completedAt: Date | null
   updatedAt: Date
+}
+
+export type HomeWorkRadarDecisionItem = HomeWorkRadarIdentity & {
+  decisionText: string
+  rationale: string | null
+  evidence: string[]
 }
 
 export type HomeWorkRadarSource = {
@@ -89,6 +107,10 @@ export type HomeWorkRadarSource = {
   blockers: {
     count: number
     items: HomeWorkRadarBlockedItem[]
+  }
+  ownerDecisions: {
+    count: number
+    items: HomeWorkRadarDecisionItem[]
   }
   recentOutcomes: {
     count: number
@@ -146,6 +168,7 @@ export const HOME_RADAR_LIMIT = 3
 const EMPTY_HOME_WORK_RADAR_SOURCE: HomeWorkRadarSource = {
   activeWork: { count: 0, items: [] },
   blockers: { count: 0, items: [] },
+  ownerDecisions: { count: 0, items: [] },
   recentOutcomes: { count: 0, items: [] },
 }
 
@@ -159,16 +182,36 @@ function workOrderRef(order: HomeWorkRadarIdentity) {
   return order.ref ?? `WO-${order.id}`
 }
 
+function decisionRef(item: HomeWorkRadarDecisionItem) {
+  return item.ref ?? `DECISION-${item.id}`
+}
+
 function outcomeRecordedAt(order: HomeWorkRadarOutcomeItem) {
   return order.completedAt ?? order.closedAt ?? order.updatedAt
+}
+
+function workRadarEvidence(evidence: string[]): HomeWorkRadarItem["evidence"] {
+  if (evidence.length > 0) {
+    return {
+      count: evidence.length,
+      label: "Open supporting evidence",
+      href: "/audit",
+    }
+  }
+
+  return {
+    count: 0,
+    label: "Evidence not linked",
+    href: null,
+  }
 }
 
 function buildHomeWorkRadar(source: HomeWorkRadarSource): HomeWorkRadar {
   return {
     eyebrow: "Operational radar",
-    title: "Now, held, landed",
+    title: "Now, held, decide, landed",
     description:
-      "The current governed queue, recorded blockers, and newest completed outcomes in one owner briefing.",
+      "The current governed queue, recorded blockers, owner decisions, and newest completed outcomes in one briefing.",
     activeWork: {
       label: "Now",
       title: "Active work",
@@ -181,9 +224,13 @@ function buildHomeWorkRadar(source: HomeWorkRadarSource): HomeWorkRadar {
         status: order.status,
         result: null,
         detail: `Updated ${RADAR_DATE_FORMATTER.format(order.updatedAt)}`,
+        actionLabel: "Open work order",
         href: "/work-orders",
+        evidence: workRadarEvidence(order.evidence),
       })),
       emptyState: "No active work is requesting attention.",
+      href: "/work-orders",
+      ctaLabel: "Review active work",
     },
     blockers: {
       label: "Held",
@@ -200,9 +247,36 @@ function buildHomeWorkRadar(source: HomeWorkRadarSource): HomeWorkRadar {
           order.stopConditions[0]
           ?? order.description
           ?? "Waiting on an authority gate or missing evidence.",
+        actionLabel: "Open work order",
         href: "/work-orders",
+        evidence: workRadarEvidence(order.evidence),
       })),
       emptyState: "No Work Order blockers are recorded.",
+      href: "/work-orders",
+      ctaLabel: "Review blockers",
+    },
+    ownerDecisions: {
+      label: "Decide",
+      title: "Needs your decision",
+      description: "Proposed decisions that require owner review before governed work can advance.",
+      tone: "decision",
+      count: source.ownerDecisions.count,
+      items: source.ownerDecisions.items.slice(0, HOME_RADAR_LIMIT).map((decision) => ({
+        ref: decisionRef(decision),
+        title: decision.title,
+        status: decision.status,
+        result: null,
+        detail:
+          decision.rationale
+          || decision.decisionText
+          || "Review the recorded authority decision.",
+        actionLabel: "Review decision",
+        href: "/decisions",
+        evidence: workRadarEvidence(decision.evidence),
+      })),
+      emptyState: "No owner decision is waiting for you.",
+      href: "/decisions",
+      ctaLabel: "Review owner decisions",
     },
     recentOutcomes: {
       label: "Landed",
@@ -217,9 +291,13 @@ function buildHomeWorkRadar(source: HomeWorkRadarSource): HomeWorkRadar {
         result:
           order.result ?? (order.status === "aborted" ? "ABORTED" : "NO RESULT"),
         detail: `Recorded ${RADAR_DATE_FORMATTER.format(outcomeRecordedAt(order))}`,
+        actionLabel: "Open work order",
         href: "/work-orders",
+        evidence: workRadarEvidence(order.evidence),
       })),
       emptyState: "Completed outcomes will appear here with their recorded result.",
+      href: "/work-orders",
+      ctaLabel: "Review recent outcomes",
     },
   }
 }

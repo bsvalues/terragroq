@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { Activity, AlertTriangle, ArrowRight, CheckCircle2 } from "lucide-react"
+import { Activity, AlertTriangle, ArrowRight, CheckCircle2, Gavel } from "lucide-react"
 import type {
   HomeWorkRadar,
   HomeWorkRadarLane,
@@ -21,6 +21,12 @@ const TONE_STYLES: Record<
     rail: "bg-warning",
     badge: "border-warning/25 bg-warning/10 text-warning",
   },
+  decision: {
+    border: "border-violet-500/30",
+    icon: "text-violet-600 dark:text-violet-400",
+    rail: "bg-violet-500",
+    badge: "border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300",
+  },
   complete: {
     border: "border-success/30",
     icon: "text-success",
@@ -31,8 +37,16 @@ const TONE_STYLES: Record<
 
 function LaneIcon({ tone }: { tone: HomeWorkRadarLane["tone"] }) {
   if (tone === "blocked") return <AlertTriangle className="h-4 w-4" aria-hidden />
+  if (tone === "decision") return <Gavel className="h-4 w-4" aria-hidden />
   if (tone === "complete") return <CheckCircle2 className="h-4 w-4" aria-hidden />
   return <Activity className="h-4 w-4" aria-hidden />
+}
+
+function laneDivider(index: number) {
+  if (index === 0) return ""
+  if (index === 1) return "border-t border-border md:border-l md:border-t-0"
+  if (index === 2) return "border-t border-border xl:border-l xl:border-t-0"
+  return "border-t border-border md:border-l xl:border-t-0"
 }
 
 function resultTone(result: string) {
@@ -43,7 +57,7 @@ function resultTone(result: string) {
 }
 
 export function HomeWorkRadarPanel({ radar }: { radar: HomeWorkRadar }) {
-  const lanes = [radar.activeWork, radar.blockers, radar.recentOutcomes]
+  const lanes = [radar.activeWork, radar.blockers, radar.ownerDecisions, radar.recentOutcomes]
 
   return (
     <section
@@ -63,20 +77,21 @@ export function HomeWorkRadarPanel({ radar }: { radar: HomeWorkRadar }) {
           </p>
         </div>
 
-        <div className="grid w-full max-w-xs grid-cols-3 gap-1" aria-hidden>
+        <div className="grid w-full max-w-xs grid-cols-4 gap-1" aria-hidden>
           <span className="h-1.5 rounded-full bg-primary" />
           <span className="h-1.5 rounded-full bg-warning" />
+          <span className="h-1.5 rounded-full bg-violet-500" />
           <span className="h-1.5 rounded-full bg-success" />
         </div>
       </div>
 
-      <div className="grid lg:grid-cols-3">
+      <div className="grid md:grid-cols-2 xl:grid-cols-4">
         {lanes.map((lane, index) => {
           const tone = TONE_STYLES[lane.tone]
           return (
             <article
               key={lane.label}
-              className={`relative p-5 ${index > 0 ? "border-t border-border lg:border-l lg:border-t-0" : ""}`}
+              className={`relative p-5 ${laneDivider(index)}`}
             >
               <div className={`absolute inset-x-5 top-0 h-0.5 ${tone.rail}`} aria-hidden />
               <div className="flex items-start justify-between gap-4 pt-2">
@@ -103,31 +118,59 @@ export function HomeWorkRadarPanel({ radar }: { radar: HomeWorkRadar }) {
               <div className="mt-4 grid gap-2">
                 {lane.items.length > 0 ? (
                   lane.items.map((item) => (
-                    <Link
+                    <div
                       key={`${lane.label}-${item.ref}`}
-                      href={item.href}
-                      className="group rounded-xl border border-border bg-background p-3 transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      className="rounded-xl border border-border bg-background p-3"
                     >
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                          {item.ref}
-                        </span>
-                        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                          {item.status}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-sm font-medium leading-snug">{item.title}</p>
-                      <div className="mt-3 flex items-end justify-between gap-3">
-                        <p className="text-[11px] leading-relaxed text-muted-foreground">
-                          {item.detail}
-                        </p>
-                        {item.result ? (
-                          <span className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider ${resultTone(item.result)}`}>
-                            {item.result}
+                      <Link
+                        href={item.href}
+                        className="group block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                            {item.ref}
                           </span>
-                        ) : null}
+                          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                            {item.status}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-sm font-medium leading-snug group-hover:text-primary">
+                          {item.title}
+                        </p>
+                        <div className="mt-3 flex items-end justify-between gap-3">
+                          <p className="text-[11px] leading-relaxed text-muted-foreground">
+                            {item.detail}
+                          </p>
+                          {item.result ? (
+                            <span className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider ${resultTone(item.result)}`}>
+                              {item.result}
+                            </span>
+                          ) : null}
+                        </div>
+                        <span className="mt-3 inline-flex items-center gap-1.5 text-[11px] font-medium text-primary">
+                          {item.actionLabel}
+                          <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" aria-hidden />
+                        </span>
+                      </Link>
+
+                      <div className="mt-3 border-t border-border pt-3">
+                        {item.evidence.href ? (
+                          <Link
+                            href={item.evidence.href}
+                            className="inline-flex items-center gap-2 rounded text-[11px] font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                          >
+                            {item.evidence.label}
+                            <span className="rounded-full border border-border bg-muted/40 px-1.5 py-0.5 font-mono text-[9px]">
+                              {item.evidence.count}
+                            </span>
+                          </Link>
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground">
+                            {item.evidence.label}
+                          </span>
+                        )}
                       </div>
-                    </Link>
+                    </div>
                   ))
                 ) : (
                   <div className="rounded-xl border border-dashed border-border bg-background/60 p-4">
@@ -137,10 +180,10 @@ export function HomeWorkRadarPanel({ radar }: { radar: HomeWorkRadar }) {
               </div>
 
               <Link
-                href="/work-orders"
+                href={lane.href}
                 className="mt-4 inline-flex items-center gap-2 text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >
-                Review Work Orders
+                {lane.ctaLabel}
                 <ArrowRight className="h-3.5 w-3.5" aria-hidden />
               </Link>
             </article>

@@ -3,6 +3,7 @@ import {
   getHomeCommandCenter,
   type HomeWorkRadarActiveItem,
   type HomeWorkRadarBlockedItem,
+  type HomeWorkRadarDecisionItem,
   type HomeWorkRadarOutcomeItem,
 } from "@/components/dashboard/home-command-center"
 import type { DashboardStats } from "@/components/dashboard/operator-start"
@@ -23,6 +24,7 @@ function radarIdentity(id: number, status: string, title: string) {
     ref: `WO-${String(id).padStart(4, "0")}`,
     title,
     status,
+    evidence: [],
   }
 }
 
@@ -31,10 +33,12 @@ function activeWorkOrder(
   status: string,
   title: string,
   updatedAt: string,
+  overrides: Partial<HomeWorkRadarActiveItem> = {},
 ): HomeWorkRadarActiveItem {
   return {
     ...radarIdentity(id, status, title),
     updatedAt: new Date(updatedAt),
+    ...overrides,
   }
 }
 
@@ -47,6 +51,23 @@ function blockedWorkOrder(
     ...radarIdentity(id, "blocked", title),
     description: null,
     stopConditions: [],
+    ...overrides,
+  }
+}
+
+function ownerDecision(
+  id: number,
+  title: string,
+  overrides: Partial<HomeWorkRadarDecisionItem> = {},
+): HomeWorkRadarDecisionItem {
+  return {
+    id,
+    ref: `ADR-${String(id).padStart(4, "0")}`,
+    title,
+    status: "proposed",
+    decisionText: "Choose the bounded next move.",
+    rationale: null,
+    evidence: [],
     ...overrides,
   }
 }
@@ -74,9 +95,12 @@ describe("WilliamOS Home Command Center", () => {
       activeWork: {
         count: 4,
         items: [
-          activeWorkOrder(1, "active", "Ship the owner briefing", "2026-07-08T12:00:00.000Z"),
+          activeWorkOrder(1, "active", "Ship the owner briefing", "2026-07-08T12:00:00.000Z", {
+            evidence: ["EV-0042", "docs/reports/WO-0001.md"],
+          }),
           activeWorkOrder(2, "active", "Verify the queue", "2026-07-07T12:00:00.000Z"),
           activeWorkOrder(3, "review", "Review delivery evidence", "2026-07-09T12:00:00.000Z"),
+          activeWorkOrder(4, "approved", "Queue the next bounded lane", "2026-07-06T12:00:00.000Z"),
         ],
       },
       blockers: {
@@ -86,7 +110,21 @@ describe("WilliamOS Home Command Center", () => {
           blockedWorkOrder(7, "Clear the reservation"),
           blockedWorkOrder(5, "Resolve the policy gate", {
             stopConditions: ["Owner authority is not recorded."],
+            evidence: ["EV-0043"],
           }),
+          blockedWorkOrder(8, "Wait for the dependency"),
+        ],
+      },
+      ownerDecisions: {
+        count: 4,
+        items: [
+          ownerDecision(12, "Choose the release boundary", {
+            rationale: "The next mutation crosses the recorded release authority boundary.",
+            evidence: ["EV-0044", "EV-0045"],
+          }),
+          ownerDecision(13, "Choose the retention window"),
+          ownerDecision(14, "Approve the production cutover"),
+          ownerDecision(15, "Choose the migration window"),
         ],
       },
       recentOutcomes: {
@@ -95,6 +133,7 @@ describe("WilliamOS Home Command Center", () => {
           outcomeWorkOrder(9, "closed", "Home shell foundation", "2026-07-02T12:00:00.000Z", {
             result: "PASS",
             completedAt: new Date("2026-07-10T12:00:00.000Z"),
+            evidence: ["EV-0046"],
           }),
           outcomeWorkOrder(10, "aborted", "Retired adapter lane", "2026-07-09T12:00:00.000Z", {
             closedAt: new Date("2026-07-09T12:00:00.000Z"),
@@ -102,13 +141,14 @@ describe("WilliamOS Home Command Center", () => {
           outcomeWorkOrder(11, "closed", "Evidence surface", "2026-07-08T12:00:00.000Z", {
             result: "PASS",
           }),
+          outcomeWorkOrder(16, "closed", "Older completed lane", "2026-07-07T12:00:00.000Z"),
         ],
       },
     })
 
     expect(home.workRadar).toMatchObject({
       eyebrow: "Operational radar",
-      title: "Now, held, landed",
+      title: "Now, held, decide, landed",
     })
     expect(home.workRadar.activeWork.count).toBe(4)
     expect(home.workRadar.activeWork.items.map((item) => item.ref)).toEqual([
@@ -117,6 +157,16 @@ describe("WilliamOS Home Command Center", () => {
       "WO-0003",
     ])
     expect(home.workRadar.activeWork.items.every((item) => item.href === "/work-orders")).toBe(true)
+    expect(home.workRadar.activeWork.items[0].evidence).toEqual({
+      count: 2,
+      label: "Open supporting evidence",
+      href: "/audit",
+    })
+    expect(home.workRadar.activeWork.items[1].evidence).toEqual({
+      count: 0,
+      label: "Evidence not linked",
+      href: null,
+    })
 
     expect(home.workRadar.blockers.count).toBe(4)
     expect(home.workRadar.blockers.items.map((item) => item.ref)).toEqual([
@@ -127,6 +177,28 @@ describe("WilliamOS Home Command Center", () => {
     expect(home.workRadar.blockers.items[2]).toMatchObject({
       status: "blocked",
       detail: "Owner authority is not recorded.",
+    })
+
+    expect(home.workRadar.ownerDecisions).toMatchObject({
+      label: "Decide",
+      title: "Needs your decision",
+      tone: "decision",
+      count: 4,
+    })
+    expect(home.workRadar.ownerDecisions.items.map((item) => item.ref)).toEqual([
+      "ADR-0012",
+      "ADR-0013",
+      "ADR-0014",
+    ])
+    expect(home.workRadar.ownerDecisions.items[0]).toMatchObject({
+      href: "/decisions",
+      actionLabel: "Review decision",
+      detail: "The next mutation crosses the recorded release authority boundary.",
+      evidence: {
+        count: 2,
+        label: "Open supporting evidence",
+        href: "/audit",
+      },
     })
 
     expect(home.workRadar.recentOutcomes.count).toBe(4)
@@ -147,6 +219,7 @@ describe("WilliamOS Home Command Center", () => {
     const home = getHomeCommandCenter(initializedStats, {
       activeWork: { count: 0, items: [] },
       blockers: { count: 0, items: [] },
+      ownerDecisions: { count: 0, items: [] },
       recentOutcomes: { count: 0, items: [] },
     })
 
@@ -159,6 +232,11 @@ describe("WilliamOS Home Command Center", () => {
       count: 0,
       items: [],
       emptyState: "No Work Order blockers are recorded.",
+    })
+    expect(home.workRadar.ownerDecisions).toMatchObject({
+      count: 0,
+      items: [],
+      emptyState: "No owner decision is waiting for you.",
     })
     expect(home.workRadar.recentOutcomes).toMatchObject({
       count: 0,
