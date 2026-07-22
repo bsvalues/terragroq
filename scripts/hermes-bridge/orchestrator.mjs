@@ -220,7 +220,8 @@ export function createHermesOrchestrator(options = {}) {
         || candidate.isDraft || candidate.headRefOid !== commit) {
         throw Object.assign(new Error("Pull request identity changed during review"), { code: "HERMES_PR_VERIFICATION_WALL" })
       }
-      if (candidate.reviewCompleted || (candidate.checksGreen && candidate.reviewed)) break
+      if ((candidate.reviewCompleted && candidate.unresolvedThreadCount > 0)
+        || (candidate.checksGreen && candidate.reviewed)) break
       await sleep(reviewPollIntervalMs)
       candidate = await lifecycle.inspectPullRequest(prNumber)
     }

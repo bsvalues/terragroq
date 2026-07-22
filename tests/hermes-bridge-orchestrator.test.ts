@@ -192,6 +192,11 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         reviewRequested: false, unresolvedThreadCount: 0, headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: false, reviewed: true,
+        reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 0,
+        headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
         state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
         reviewRequested: true, unresolvedThreadCount: 0, headRefOid: "c".repeat(40), mergeCommit: null,
       })
