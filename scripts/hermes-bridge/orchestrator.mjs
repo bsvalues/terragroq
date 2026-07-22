@@ -265,7 +265,7 @@ export function createHermesOrchestrator(options = {}) {
         }))
         break
       }
-      if (candidate.reviewCompleted && candidate.checksComplete && candidate.failedChecks?.length > 0) {
+      if (candidate.checksComplete && candidate.failedChecks?.length > 0) {
         findings = candidate.failedChecks.map((check) => ({
           threadId: null,
           isOutdated: false,

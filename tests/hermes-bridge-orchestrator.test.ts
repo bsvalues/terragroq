@@ -295,7 +295,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       .mockResolvedValueOnce({
         state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: false,
         checksComplete: true, failedChecks: [{ name: "Vercel", state: "FAILURE" }],
-        reviewed: true, reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 0,
+        reviewed: false, reviewCompleted: false, reviewRequested: true, unresolvedThreadCount: 0,
         headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({

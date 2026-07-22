@@ -718,7 +718,7 @@ export function createRepositoryLifecycle(options) {
 
   async function inspectReviewFindings(number) {
     if (!Number.isSafeInteger(number) || number <= 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "positive PR number required")
-    const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved isOutdated path line comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}}}}}"
+    const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved isOutdated path line comments(last:100){nodes{body isMinimized} pageInfo{hasPreviousPage}}} pageInfo{hasNextPage}}}}}"
     const result = await run("gh", ["api", "graphql", "-f", `query=${query}`, "-F", "owner=bsvalues", "-F", "name=terragroq", "-F", `number=${number}`])
     const value = parseJson(result.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
     const threads = value?.data?.repository?.pullRequest?.reviewThreads
@@ -726,6 +726,9 @@ export function createRepositoryLifecycle(options) {
       wall("HERMES_REPOSITORY_GITHUB_WALL", "review findings are incomplete")
     }
     return threads.nodes.filter((thread) => !thread.isResolved).flatMap((thread) => {
+      if (thread?.comments?.pageInfo?.hasPreviousPage === true) {
+        wall("HERMES_REPOSITORY_GITHUB_WALL", "review finding comments are incomplete")
+      }
       const activeComments = thread?.comments?.nodes?.filter((entry) =>
         !entry?.isMinimized && String(entry?.body ?? "").trim()) ?? []
       const comment = activeComments.at(-1)

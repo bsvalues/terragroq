@@ -241,6 +241,25 @@ describe("Hermes repository lifecycle", () => {
     expect((await lifecycle.inspectReviewFindings(77))[0]).not.toHaveProperty("requiresExplicitResolution")
   })
 
+  it("rejects incomplete review-thread comment history", async () => {
+    const { lifecycle } = fixture({
+      "gh api graphql": () => ({
+        code: 0,
+        stdout: JSON.stringify(reviewState([{
+          id: "PRRT_long", isResolved: false, isOutdated: false,
+          path: "scripts/hermes-bridge/orchestrator.mjs", line: 42,
+          comments: {
+            nodes: [{ body: "Potentially stale finding.", isMinimized: false }],
+            pageInfo: { hasPreviousPage: true },
+          },
+        }])),
+      }),
+    })
+    await expect(lifecycle.inspectReviewFindings(77)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_GITHUB_WALL",
+    })
+  })
+
   it("commits exactly the owned working-tree paths and requests exact-head Codex review", async () => {
     const changed = ["components/dashboard/radar.tsx", "tests/radar.test.ts"]
     const { lifecycle, calls, record } = await ownedFixture({
