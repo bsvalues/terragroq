@@ -685,15 +685,17 @@ export function createRepositoryLifecycle(options) {
       wall("HERMES_REPOSITORY_GITHUB_WALL", "review findings are incomplete")
     }
     return threads.nodes.filter((thread) => !thread.isResolved).flatMap((thread) => {
-      const comment = thread?.comments?.nodes?.findLast((entry) =>
-        !entry?.isMinimized && String(entry?.body ?? "").trim())
+      const activeComments = thread?.comments?.nodes?.filter((entry) =>
+        !entry?.isMinimized && String(entry?.body ?? "").trim()) ?? []
+      const comment = activeComments.at(-1)
       if (!comment) return []
       const body = String(comment.body).trim()
       if (SECRET_LIKE.test(body)) wall("HERMES_REPOSITORY_REVIEW_WALL", "secret-like review text refused")
       return [{
         threadId: String(thread.id),
         isOutdated: thread.isOutdated === true,
-        requiresExplicitResolution: PROTECTED_REVIEW_FINDING.test(body),
+        requiresExplicitResolution: activeComments.some((entry) =>
+          PROTECTED_REVIEW_FINDING.test(String(entry.body))),
         path: safeRelativePath(String(thread.path)),
         line: Number.isSafeInteger(thread.line) && thread.line > 0 ? thread.line : null,
         body: body.slice(0, 4_000),

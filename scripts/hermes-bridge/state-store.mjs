@@ -192,7 +192,9 @@ function metadata(input = {}, current = {}) {
   const headRefOid = Object.hasOwn(input, "headRefOid")
     ? input.headRefOid
     : current.headRefOid ?? null
-  if (headRefOid !== null && !SHA.test(headRefOid)) fail("INVALID_HEAD_REF_OID")
+  if (headRefOid !== null && (typeof headRefOid !== "string" || !SHA.test(headRefOid))) {
+    fail("INVALID_HEAD_REF_OID")
+  }
   const validationEvidence = normalizedValidationEvidence(input, current)
   return {
     threadId: input.threadId ?? current.threadId ?? null,

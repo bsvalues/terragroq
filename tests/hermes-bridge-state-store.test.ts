@@ -43,6 +43,14 @@ describe("Hermes bridge durable state store", () => {
     expect(store.read().executions["GOAL-1"].metadata.headRefOid).toBeNull()
   })
 
+  it("rejects non-string exact-head metadata", () => {
+    const { store } = fixture()
+    expect(() => store.acquireLease({
+      outcomeId: "GOAL-1", holderId: "thread-1", leaseDurationMs: 1000,
+      metadata: { headRefOid: ["a".repeat(40)] }, idempotencyKey: "invalid-head",
+    })).toThrowError(expect.objectContaining({ code: "INVALID_HEAD_REF_OID" }))
+  })
+
   it("persists bounded host validation evidence across state-store reads", () => {
     const { store } = fixture()
     const lease = store.acquireLease({
