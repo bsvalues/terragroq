@@ -582,7 +582,6 @@ export function createHermesOrchestrator(options = {}) {
           throw Object.assign(new Error("Codex handoff contained no file changes"), { code: "HERMES_COMPLETION_GATE_WALL" })
         }
         assertChangedPathsAllowed(workingPaths, reservations)
-        lifecycle.ensureValidationDependencies(record)
         const focusedTests = workingPaths.filter((changedPath) =>
           changedPath.startsWith("tests/") && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(changedPath))
         const validationCommands = [
@@ -595,6 +594,7 @@ export function createHermesOrchestrator(options = {}) {
         sequence = cp.checkpointSequence
         let validation
         try {
+          lifecycle.ensureValidationDependencies(record)
           validation = await lifecycle.runValidationCommands({ ...record, commands: validationCommands })
         } catch (error) {
           if (error?.code !== "HERMES_VALIDATION_FAILED" || !error?.validation) throw error
