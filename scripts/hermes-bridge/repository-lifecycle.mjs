@@ -676,7 +676,8 @@ export function createRepositoryLifecycle(options) {
       failedChecks,
       codexReviewFindings,
       reviewed: hasExactHeadReview || hasCodeRabbitReview,
-      reviewCompleted: hasExactHeadApproval || hasExactHeadCodexCompletedReview || hasCodeRabbitReview,
+      reviewCompleted: hasExactHeadApproval || hasExactHeadCodexCleanComment
+        || hasExactHeadCodexCompletedReview || hasCodeRabbitReview,
       codeRabbitRateLimited,
       reviewRequested: requestTimes.length > 0,
       unresolvedThreadCount: unresolved,

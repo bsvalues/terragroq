@@ -449,7 +449,7 @@ describe("Hermes repository lifecycle", () => {
       "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], comments)) }),
     }).lifecycle
     await expect(create([request(sha), clean(sha.slice(0, 10))]).inspectPullRequest(77))
-      .resolves.toMatchObject({ reviewed: true })
+      .resolves.toMatchObject({ reviewed: true, reviewCompleted: true })
     await expect(create([request(sha), clean(mergeSha.slice(0, 10))]).inspectPullRequest(77))
       .resolves.toMatchObject({ reviewed: false })
     await expect(create([request(sha), clean(sha.slice(0, 10), "2026-07-21T10:02:00.000Z")]).inspectPullRequest(77))
