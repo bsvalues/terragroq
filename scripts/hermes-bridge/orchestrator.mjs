@@ -721,9 +721,28 @@ export function createHermesOrchestrator(options = {}) {
       throw Object.assign(new Error("Review remediation budget exhausted"), { code: "HERMES_REVIEW_REMEDIATION_WALL" })
     } catch (error) {
       const externalToolWall = error?.code === "APP_SERVER_EXTERNAL_TOOL_WALL"
+      const externalToolRetryCount = externalToolWall
+        ? (cp?.metadata?.externalToolRetryCount ?? 0) + 1
+        : cp?.metadata?.externalToolRetryCount ?? 0
+      if (externalToolWall && externalToolRetryCount >= MAX_PROVIDER_REDISPATCHES) {
+        const retryAfter = new Date(now().getTime() + PROVIDER_RETRY_COOLDOWN_MS).toISOString()
+        cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", retryAfter, {
+          externalToolRetryCount, threadId: null, turnId: null,
+        })
+        if (!await deferOutcome({ outcomeId: outcome.id, retryAfter })) {
+          throw Object.assign(new Error("External-tool wall outcome could not be deferred"), {
+            code: "HERMES_PROVIDER_SETTLEMENT_WALL",
+          })
+        }
+        state.deferProviderWall({
+          idempotencyKey: `${outcomeId}:defer:EXTERNAL_TOOL_WALL:${retryAfter}`,
+          outcomeId, holderId, fencingToken: lease.fencingToken, retryAfter,
+        })
+        return { result: "PROVIDER_UNAVAILABLE", outcomeId, nextState: "DEFERRED_PROVIDER_UNAVAILABLE", retryAfter }
+      }
       try {
         cp = await checkpoint(lease, sequence, "RETRYABLE_WALL", error?.code ?? "HERMES_CYCLE_FAILED",
-          externalToolWall ? { threadId: null, turnId: null } : {})
+          externalToolWall ? { externalToolRetryCount, threadId: null, turnId: null } : {})
         sequence = cp.checkpointSequence
       } catch {}
       if (cp?.state === "PROVIDER_UNAVAILABLE"

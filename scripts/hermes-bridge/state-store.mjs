@@ -192,6 +192,10 @@ function metadata(input = {}, current = {}) {
   if (prNumber !== null && (!Number.isInteger(prNumber) || prNumber < 1)) fail("INVALID_PR_NUMBER")
   const providerRetryCount = input.providerRetryCount ?? current.providerRetryCount ?? 0
   if (!Number.isInteger(providerRetryCount) || providerRetryCount < 0) fail("INVALID_PROVIDER_RETRY_COUNT")
+  const externalToolRetryCount = input.externalToolRetryCount ?? current.externalToolRetryCount ?? 0
+  if (!Number.isInteger(externalToolRetryCount) || externalToolRetryCount < 0) {
+    fail("INVALID_EXTERNAL_TOOL_RETRY_COUNT")
+  }
   const outcome = input.outcome ?? current.outcome ?? null
   if (outcome !== null && (typeof outcome !== "object" || Array.isArray(outcome))) fail("INVALID_OUTCOME_SNAPSHOT")
   const remediationRound = input.remediationRound ?? current.remediationRound ?? null
@@ -237,6 +241,7 @@ function metadata(input = {}, current = {}) {
     headRefOid,
     mergeSha: input.mergeSha ?? current.mergeSha ?? null,
     providerRetryCount,
+    externalToolRetryCount,
     remediationRound,
     validationFailure,
     validationRemediationRound,

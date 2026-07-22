@@ -471,6 +471,26 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.startThread).toHaveBeenCalledTimes(2)
   })
 
+  it("defers an outcome after the bounded external-tool redispatch budget", async () => {
+    const value = fixture()
+    value.client.runTurn.mockRejectedValue(Object.assign(new Error("mcpToolCall"), {
+      code: "APP_SERVER_EXTERNAL_TOOL_WALL",
+    }))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "APP_SERVER_EXTERNAL_TOOL_WALL" })
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "APP_SERVER_EXTERNAL_TOOL_WALL" })
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "PROVIDER_UNAVAILABLE", nextState: "DEFERRED_PROVIDER_UNAVAILABLE",
+    })
+    expect(value.deferOutcome).toHaveBeenCalledOnce()
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "DEFERRED" },
+      checkpoint: { state: "DEFERRED_PROVIDER_UNAVAILABLE" },
+      metadata: { externalToolRetryCount: 3, threadId: null, turnId: null },
+    })
+    expect(value.client.startThread).toHaveBeenCalledTimes(3)
+  })
+
   it("redispatches a transient native provider wall without terminalizing the outcome", async () => {
     const value = fixture()
     value.client.runTurn.mockResolvedValueOnce({
