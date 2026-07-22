@@ -8,8 +8,28 @@ const repoRoot = process.cwd()
 const supervisorScript = path.join(repoRoot, "scripts", "hermes-bridge", "supervisor.ps1")
 const installScript = path.join(repoRoot, "scripts", "hermes-bridge", "install-supervisor.ps1")
 
+function isGlobalSupervisorMutexHeld() {
+  if (process.platform !== "win32") return false
+  const command = [
+    "$createdNew = $false",
+    '$mutex = [Threading.Mutex]::new($false, "Global\\WilliamOSHermesCodexBridgeSupervisor", [ref]$createdNew)',
+    "$acquired = $false",
+    'try { try { $acquired = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $acquired = $true }; if ($acquired) { $mutex.ReleaseMutex(); [Console]::Write("free") } else { [Console]::Write("held") } } finally { $mutex.Dispose() }',
+  ].join("; ")
+  const probe = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
+    encoding: "utf8",
+  })
+  if (probe.error || probe.status !== 0) throw new Error("HERMES_SUPERVISOR_MUTEX_PROBE_FAILED")
+  const result = probe.stdout.trim()
+  if (result !== "free" && result !== "held") throw new Error("HERMES_SUPERVISOR_MUTEX_PROBE_INVALID")
+  return result === "held"
+}
+
 describe("Hermes interactive-user supervisor", () => {
-  const hostOnly = process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1"
+  const hostOnly =
+    process.platform !== "win32" ||
+    process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1" ||
+    isGlobalSupervisorMutexHeld()
 
   it.skipIf(hostOnly)("runs one enabled cycle and removes its owned process record", () => {
     const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-supervisor-"))
@@ -87,6 +107,7 @@ describe("Hermes interactive-user supervisor", () => {
     expect(supervisor.indexOf('$cycleLogPath = Join-Path $logDir')).toBeGreaterThan(supervisor.indexOf("$CycleAction ="))
     expect(supervisor).not.toContain("& pwsh.exe")
     expect(supervisor).toContain("Global\\WilliamOSHermesCodexBridgeSupervisor")
+    expect(supervisor).not.toContain("[string]$MutexName")
     expect(supervisor).toContain("HERMES_SUPERVISOR_CYCLE_FAILED")
     expect(supervisor).toContain("HERMES_SUPERVISOR_STATE_CLEANUP_FAILED")
   })
