@@ -196,6 +196,11 @@ function metadata(input = {}, current = {}) {
   if (!Number.isInteger(externalToolRetryCount) || externalToolRetryCount < 0) {
     fail("INVALID_EXTERNAL_TOOL_RETRY_COUNT")
   }
+  const postMergeCleanupRetryCount = input.postMergeCleanupRetryCount
+    ?? current.postMergeCleanupRetryCount ?? 0
+  if (!Number.isInteger(postMergeCleanupRetryCount) || postMergeCleanupRetryCount < 0) {
+    fail("INVALID_POST_MERGE_CLEANUP_RETRY_COUNT")
+  }
   const outcome = input.outcome ?? current.outcome ?? null
   if (outcome !== null && (typeof outcome !== "object" || Array.isArray(outcome))) fail("INVALID_OUTCOME_SNAPSHOT")
   const remediationRound = input.remediationRound ?? current.remediationRound ?? null
@@ -242,6 +247,7 @@ function metadata(input = {}, current = {}) {
     mergeSha: input.mergeSha ?? current.mergeSha ?? null,
     providerRetryCount,
     externalToolRetryCount,
+    postMergeCleanupRetryCount,
     remediationRound,
     validationFailure,
     validationRemediationRound,

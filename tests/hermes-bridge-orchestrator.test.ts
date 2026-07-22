@@ -161,17 +161,40 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_REPOSITORY_COMMAND_FAILED" })
     expect(value.state.read().executions["77"]).toMatchObject({
       lease: { status: "ACTIVE", abandonReason: "HERMES_REPOSITORY_COMMAND_FAILED" },
-      checkpoint: { state: "PR_MERGED", detail: "PR #500 merged" },
-      metadata: { prNumber: 500, mergeSha: "b".repeat(40) },
+      checkpoint: { state: "POST_MERGE_CLEANUP_RETRY", detail: "HERMES_REPOSITORY_COMMAND_FAILED" },
+      metadata: { prNumber: 500, mergeSha: "b".repeat(40), postMergeCleanupRetryCount: 1 },
     })
     const firstFence = value.state.read().executions["77"].fencingToken
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_REPOSITORY_COMMAND_FAILED" })
     expect(value.state.read().executions["77"]).toMatchObject({
       lease: { status: "ACTIVE", abandonReason: "HERMES_REPOSITORY_COMMAND_FAILED" },
-      checkpoint: { state: "PR_MERGED", detail: "PR #500 merged" },
+      checkpoint: { state: "POST_MERGE_CLEANUP_RETRY", detail: "HERMES_REPOSITORY_COMMAND_FAILED" },
+      metadata: { postMergeCleanupRetryCount: 2 },
     })
     expect(value.state.read().executions["77"].fencingToken).toBeGreaterThan(firstFence)
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+  })
+
+  it("terminalizes post-merge cleanup after the bounded retry budget", async () => {
+    const value = fixture()
+    value.lifecycle.cleanupOwnedWorktree.mockRejectedValue(Object.assign(new Error("deterministic cleanup wall"), {
+      code: "HERMES_REPOSITORY_CLEANUP_WALL",
+    }))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_REPOSITORY_CLEANUP_WALL" })
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_REPOSITORY_CLEANUP_WALL" })
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "FAILED_TERMINAL", nextState: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "FAILED_TERMINAL", detail: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED" },
+      metadata: { postMergeCleanupRetryCount: 3 },
+    })
+    expect(value.markTerminal).toHaveBeenCalledWith({
+      outcomeId: 77, result: "FAILED_TERMINAL",
+      nextState: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
+    })
   })
 
   it("dispatches actionable review findings back to Codex and revalidates before merge", async () => {

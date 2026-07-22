@@ -207,8 +207,8 @@ export function createHermesOrchestrator(options = {}) {
     return { result: "COMPLETE", outcomeId: lease.outcomeId, prNumber, mergeSha, changedPaths }
   }
 
-  async function finalizeTerminal({ lease, sequence, outcome, nextState }) {
-    const terminal = await checkpoint(lease, sequence, "FAILED_TERMINAL", nextState)
+  async function finalizeTerminal({ lease, sequence, outcome, nextState, metadata = {} }) {
+    const terminal = await checkpoint(lease, sequence, "FAILED_TERMINAL", nextState, metadata)
     const outcomeTerminalized = await markTerminal({
       outcomeId: outcome.id, result: "FAILED_TERMINAL", nextState,
     })
@@ -225,6 +225,29 @@ export function createHermesOrchestrator(options = {}) {
       result: "FAILED_TERMINAL", outcomeId: lease.outcomeId, nextState,
       checkpointSequence: terminal.checkpointSequence,
     }
+  }
+
+  async function settlePostMergeCleanupFailure({ lease, outcome, error }) {
+    const current = state.read().executions[lease.outcomeId]
+    const retryCount = (current?.metadata?.postMergeCleanupRetryCount ?? 0) + 1
+    if (retryCount >= MAX_PROVIDER_REDISPATCHES) {
+      const nextState = "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
+      return finalizeTerminal({
+        lease, sequence: current.checkpoint.sequence, outcome, nextState,
+        metadata: { postMergeCleanupRetryCount: retryCount },
+      })
+    }
+    const retry = await checkpoint(
+      lease, current.checkpoint.sequence, "POST_MERGE_CLEANUP_RETRY",
+      error?.code ?? "HERMES_POST_MERGE_CLEANUP_WALL",
+      { postMergeCleanupRetryCount: retryCount },
+    )
+    state.abandonLease({
+      idempotencyKey: `${lease.outcomeId}:abandon-post-merge:${lease.fencingToken}:${retry.checkpointSequence}`,
+      outcomeId: lease.outcomeId, holderId, fencingToken: lease.fencingToken,
+      reason: error?.code ?? "HERMES_POST_MERGE_CLEANUP_WALL",
+    })
+    return null
   }
 
   async function advanceCommittedHead({
@@ -443,11 +466,8 @@ export function createHermesOrchestrator(options = {}) {
           prNumber: lease.metadata.prNumber,
         })
       } catch (error) {
-        state.abandonLease({
-          idempotencyKey: `${outcomeId}:abandon-post-merge:${lease.fencingToken}:${sequence}`,
-          outcomeId, holderId, fencingToken: lease.fencingToken,
-          reason: error?.code ?? "HERMES_POST_MERGE_CLEANUP_WALL",
-        })
+        const terminal = await settlePostMergeCleanupFailure({ lease, outcome, error })
+        if (terminal) return terminal
         throw error
       }
     }
@@ -732,6 +752,11 @@ export function createHermesOrchestrator(options = {}) {
       const externalToolWall = error?.code === "APP_SERVER_EXTERNAL_TOOL_WALL"
       const postMergeCleanupWall = cp?.state === "PR_MERGED"
         || state.read().executions[outcomeId]?.checkpoint?.state === "PR_MERGED"
+      if (postMergeCleanupWall) {
+        const terminal = await settlePostMergeCleanupFailure({ lease, outcome, error })
+        if (terminal) return terminal
+        throw error
+      }
       const externalToolRetryCount = externalToolWall
         ? (cp?.metadata?.externalToolRetryCount ?? 0) + 1
         : cp?.metadata?.externalToolRetryCount ?? 0
@@ -757,7 +782,6 @@ export function createHermesOrchestrator(options = {}) {
         sequence = cp.checkpointSequence
       } catch {}
       if (cp?.state === "PROVIDER_UNAVAILABLE"
-        || postMergeCleanupWall
         || ["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT", "APP_SERVER_EXTERNAL_TOOL_WALL", "HERMES_PROVIDER_SETTLEMENT_WALL"].includes(error?.code)) {
         try {
           state.abandonLease({
