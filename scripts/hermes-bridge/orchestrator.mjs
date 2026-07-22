@@ -187,9 +187,16 @@ export function createHermesOrchestrator(options = {}) {
     if (!await lifecycle.verifyOriginMainContains(mergeSha)) {
       throw Object.assign(new Error("Merge commit is absent from origin/main"), { code: "HERMES_MAIN_VERIFICATION_WALL" })
     }
-    await lifecycle.cleanupOwnedWorktree({
-      branch, worktreePath, mergeCommitSha: mergeSha, expectedHeadSha: pr.headRefOid,
-    })
+    try {
+      await lifecycle.cleanupOwnedWorktree({
+        branch, worktreePath, mergeCommitSha: mergeSha, expectedHeadSha: pr.headRefOid,
+      })
+    } catch (error) {
+      throw Object.assign(new Error("Owned post-merge cleanup failed"), {
+        code: "HERMES_POST_MERGE_CLEANUP_WALL",
+        causeCode: error?.code ?? "HERMES_REPOSITORY_CLEANUP_WALL",
+      })
+    }
     const outcomeCompleted = await markComplete({
       outcomeId: outcome.id,
       evidence: { prNumber, mergeSha, branch, ownerTouchCount: 0, blockedScopeCrossed: false },
@@ -466,8 +473,10 @@ export function createHermesOrchestrator(options = {}) {
           prNumber: lease.metadata.prNumber,
         })
       } catch (error) {
-        const terminal = await settlePostMergeCleanupFailure({ lease, outcome, error })
-        if (terminal) return terminal
+        if (error?.code === "HERMES_POST_MERGE_CLEANUP_WALL") {
+          const terminal = await settlePostMergeCleanupFailure({ lease, outcome, error })
+          if (terminal) return terminal
+        }
         throw error
       }
     }
@@ -750,8 +759,7 @@ export function createHermesOrchestrator(options = {}) {
       throw Object.assign(new Error("Review remediation budget exhausted"), { code: "HERMES_REVIEW_REMEDIATION_WALL" })
     } catch (error) {
       const externalToolWall = error?.code === "APP_SERVER_EXTERNAL_TOOL_WALL"
-      const postMergeCleanupWall = cp?.state === "PR_MERGED"
-        || state.read().executions[outcomeId]?.checkpoint?.state === "PR_MERGED"
+      const postMergeCleanupWall = error?.code === "HERMES_POST_MERGE_CLEANUP_WALL"
       if (postMergeCleanupWall) {
         const terminal = await settlePostMergeCleanupFailure({ lease, outcome, error })
         if (terminal) return terminal
