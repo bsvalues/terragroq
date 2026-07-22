@@ -170,6 +170,7 @@ describe("Hermes repository lifecycle", () => {
       command: "npm",
       args: ["test", "--", "--run", "tests/unit.test.ts"],
       cwd: record.worktreePath,
+      env: { WILLIAMOS_HERMES_VALIDATION_ISOLATED: "1" },
       timeoutMs: 10 * 60 * 1000,
       credentialAccess: false,
     })
@@ -198,7 +199,10 @@ describe("Hermes repository lifecycle", () => {
     await lifecycle.runValidationCommands({ worktreePath: ownedWorktree, branch })
     expect(calls.at(-1)).toEqual({
       command: "npm", args: ["run", "build"], cwd: ownedWorktree,
-      env: { NEXT_PRIVATE_BUILD_WORKER: "0", NEXT_TELEMETRY_DISABLED: "1" },
+      env: {
+        NEXT_PRIVATE_BUILD_WORKER: "0", NEXT_TELEMETRY_DISABLED: "1",
+        WILLIAMOS_HERMES_VALIDATION_ISOLATED: "1",
+      },
       timeoutMs: 10 * 60 * 1000,
       credentialAccess: false,
     })

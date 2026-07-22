@@ -12,7 +12,9 @@ const SAFE_NAME = /^[a-z0-9](?:[a-z0-9._-]{0,119}[a-z0-9])?$/
 const SUCCESSFUL_CHECKS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"])
 const PENDING_CHECKS = new Set(["", "EXPECTED", "IN_PROGRESS", "PENDING", "QUEUED", "REQUESTED", "WAITING"])
 const VALIDATION_EXECUTABLES = new Set(["node", "npm", "npx", "pnpm", "yarn", "bun", "cargo", "dotnet"])
-const VALIDATION_ENVIRONMENT = new Set(["NEXT_PRIVATE_BUILD_WORKER", "NEXT_TELEMETRY_DISABLED"])
+const VALIDATION_ENVIRONMENT = new Set([
+  "NEXT_PRIVATE_BUILD_WORKER", "NEXT_TELEMETRY_DISABLED", "WILLIAMOS_HERMES_VALIDATION_ISOLATED",
+])
 const CHILD_ENVIRONMENT = new Set([
   "APPDATA", "COMSPEC", "HOME", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PATHEXT",
   "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP",
@@ -609,8 +611,13 @@ export function createRepositoryLifecycle(options) {
     if (normalized.length === 0) wall("HERMES_REPOSITORY_VALIDATION_WALL", "at least one validation command required")
     const results = []
     for (const command of normalized) {
+      const validationEnvironment = {
+        ...command.env,
+        WILLIAMOS_HERMES_VALIDATION_ISOLATED: "1",
+      }
       const result = await run(command.command, command.args, {
-        cwd: record.worktreePath, env: command.env, timeoutMs: command.timeoutMs, allowFailure: true,
+        cwd: record.worktreePath, env: validationEnvironment,
+        timeoutMs: command.timeoutMs, allowFailure: true,
         credentialAccess: false,
       })
       if (result.code !== 0) {
