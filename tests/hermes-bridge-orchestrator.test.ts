@@ -205,6 +205,26 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       .toBe("")
   })
 
+  it("terminalizes deterministic validation failures after the bounded remediation budget", async () => {
+    const value = fixture()
+    const validationError = Object.assign(new Error("validation failed"), {
+      code: "HERMES_VALIDATION_FAILED",
+      validation: { command: "npm", args: ["test"], code: 1, output: "deterministic failure" },
+    })
+    value.lifecycle.runValidationCommands.mockRejectedValue(validationError)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "FAILED_TERMINAL", nextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    expect(value.client.runTurn).toHaveBeenCalledTimes(4)
+    expect(value.lifecycle.commitChanges).not.toHaveBeenCalled()
+    expect(value.markTerminal).toHaveBeenCalledWith({
+      outcomeId: 77, result: "FAILED_TERMINAL", nextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    expect(createHermesStateStore(value.orchestrator.statePath).read().executions["77"].lease.status)
+      .toBe("RELEASED")
+  })
+
   it("requests exact-head review when the committed PR has no review evidence", async () => {
     const value = fixture()
     value.lifecycle.inspectPullRequest
@@ -478,6 +498,46 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.lifecycle.pushBranch).toHaveBeenCalled()
     expect(value.lifecycle.createPullRequest).toHaveBeenCalled()
     expect(value.lifecycle.mergePullRequest).toHaveBeenCalledOnce()
+  })
+
+  it("terminalizes persisted review findings when the remediation budget is exhausted", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    value.state.initialize()
+    const lease = value.state.acquireLease({
+      idempotencyKey: "review-exhausted-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: {
+        outcome, branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "hermes-goal-77-77"),
+        baseSha: "a".repeat(40), headRefOid: "c".repeat(40), prNumber: 500,
+        remediationRound: 3,
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "review-exhausted", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: lease.fencingToken, expectedCheckpointSequence: 0,
+      state: "REVIEW_REMEDIATION_REQUIRED", metadata: { remediationRound: 3 },
+    })
+    value.lifecycle.inspectWorkingTreePaths.mockResolvedValueOnce([])
+    value.lifecycle.inspectPullRequest.mockResolvedValueOnce({
+      state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+      reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 1,
+      headRefOid: "c".repeat(40), mergeCommit: null,
+    })
+    value.lifecycle.inspectReviewFindings.mockResolvedValueOnce([{
+      threadId: "PRRT_current", isOutdated: false, path: "app/page.tsx", line: 10,
+      body: "Current-head authority finding.",
+    }])
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "FAILED_TERMINAL", nextState: "REVIEW_REMEDIATION_EXHAUSTED",
+    })
+    expect(value.client.connect).not.toHaveBeenCalled()
+    expect(value.markTerminal).toHaveBeenCalledWith({
+      outcomeId: 77, result: "FAILED_TERMINAL", nextState: "REVIEW_REMEDIATION_EXHAUSTED",
+    })
   })
 
   it("declassifies a terminal owner wall so it cannot starve later outcomes", async () => {

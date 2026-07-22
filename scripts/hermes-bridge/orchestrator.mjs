@@ -198,6 +198,19 @@ export function createHermesOrchestrator(options = {}) {
     return { result: "COMPLETE", outcomeId: lease.outcomeId, prNumber, mergeSha, changedPaths }
   }
 
+  async function finalizeTerminal({ lease, sequence, outcome, nextState }) {
+    const terminal = await checkpoint(lease, sequence, "FAILED_TERMINAL", nextState)
+    await markTerminal({ outcomeId: outcome.id, result: "FAILED_TERMINAL", nextState })
+    state.releaseLease({
+      idempotencyKey: `${lease.outcomeId}:release:FAILED_TERMINAL:${nextState}`,
+      outcomeId: lease.outcomeId, holderId, fencingToken: lease.fencingToken,
+    })
+    return {
+      result: "FAILED_TERMINAL", outcomeId: lease.outcomeId, nextState,
+      checkpointSequence: terminal.checkpointSequence,
+    }
+  }
+
   async function advanceCommittedHead({
     lease, sequence, outcome, branch, reservations, record, commit, remediationRound = 0,
   }) {
@@ -247,7 +260,12 @@ export function createHermesOrchestrator(options = {}) {
     if (findings.length > 0 || candidate.unresolvedThreadCount > 0) {
       if (findings.length === 0) findings = await lifecycle.inspectReviewFindings(prNumber)
       if (findings.length === 0 || remediationRound >= MAX_REMEDIATION_ROUNDS) {
-        throw Object.assign(new Error("Review remediation budget exhausted"), { code: "HERMES_REVIEW_REMEDIATION_WALL" })
+        return {
+          kind: "TERMINAL",
+          result: await finalizeTerminal({
+            lease, sequence: nextSequence, outcome, nextState: "REVIEW_REMEDIATION_EXHAUSTED",
+          }),
+        }
       }
       const remediation = await checkpoint(lease, nextSequence, "REVIEW_REMEDIATION_REQUIRED", `PR #${prNumber}`, {
         prNumber, branch, headRefOid: commit, remediationRound,
@@ -400,7 +418,7 @@ export function createHermesOrchestrator(options = {}) {
           lease, sequence, outcome, branch, reservations, record,
           commit: lease.metadata.headRefOid, remediationRound: recoveredRemediationRound,
         })
-        if (recovered.kind === "COMPLETE") return recovered.result
+        if (recovered.kind !== "REMEDIATION") return recovered.result
         sequence = recovered.sequence
         pendingFindings = recovered.findings
         initialRemediationRound = Math.max(initialRemediationRound, recovered.nextRemediationRound)
@@ -548,8 +566,12 @@ export function createHermesOrchestrator(options = {}) {
         try {
           validation = await lifecycle.runValidationCommands({ ...record, commands: validationCommands })
         } catch (error) {
-          if (error?.code !== "HERMES_VALIDATION_FAILED" || !error?.validation
-            || remediationRound >= MAX_REMEDIATION_ROUNDS) throw error
+          if (error?.code !== "HERMES_VALIDATION_FAILED" || !error?.validation) throw error
+          if (remediationRound >= MAX_REMEDIATION_ROUNDS) {
+            return finalizeTerminal({
+              lease, sequence, outcome, nextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+            })
+          }
           const detail = `${error.validation.command} ${error.validation.args.join(" ")} exited ${error.validation.code}\n${error.validation.output}`
             .slice(0, 4_000)
           cp = await checkpoint(lease, sequence, "VALIDATION_REMEDIATION_REQUIRED", null, {
