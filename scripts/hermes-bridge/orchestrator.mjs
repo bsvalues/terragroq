@@ -224,27 +224,28 @@ export function createHermesOrchestrator(options = {}) {
       })
       nextSequence = requested.checkpointSequence
     }
+    let findings = []
     for (let pollAttempt = 0; pollAttempt < reviewPollAttempts; pollAttempt += 1) {
       if (candidate.state !== "OPEN" || candidate.baseRefName !== "main"
         || candidate.isDraft || candidate.headRefOid !== commit) {
         throw Object.assign(new Error("Pull request identity changed during review"), { code: "HERMES_PR_VERIFICATION_WALL" })
       }
-      if ((candidate.reviewCompleted && candidate.unresolvedThreadCount > 0)
-        || (candidate.checksGreen && candidate.reviewed)) break
+      if (candidate.reviewCompleted && candidate.unresolvedThreadCount > 0) {
+        findings = await lifecycle.inspectReviewFindings(prNumber)
+        if (findings.length > 0 && findings.every((finding) => finding.isOutdated)) {
+          await lifecycle.resolveReviewThreads(findings.map((finding) => finding.threadId))
+          candidate = await lifecycle.inspectPullRequest(prNumber)
+          findings = []
+          continue
+        }
+        break
+      }
+      if (candidate.checksGreen && candidate.reviewed) break
       await sleep(reviewPollIntervalMs)
       candidate = await lifecycle.inspectPullRequest(prNumber)
     }
-    if (candidate.unresolvedThreadCount > 0) {
-      let findings = await lifecycle.inspectReviewFindings(prNumber)
-      if (candidate.reviewCompleted && findings.length > 0 && findings.every((finding) => finding.isOutdated)) {
-        await lifecycle.resolveReviewThreads(findings.map((finding) => finding.threadId))
-        candidate = await lifecycle.inspectPullRequest(prNumber)
-        findings = []
-      }
-      if (findings.length === 0 && candidate.checksGreen && candidate.reviewed
-        && candidate.unresolvedThreadCount === 0) {
-        // The exact-head reviewer superseded only outdated prior findings.
-      } else {
+    if (findings.length > 0 || candidate.unresolvedThreadCount > 0) {
+      if (findings.length === 0) findings = await lifecycle.inspectReviewFindings(prNumber)
       if (findings.length === 0 || remediationRound >= MAX_REMEDIATION_ROUNDS) {
         throw Object.assign(new Error("Review remediation budget exhausted"), { code: "HERMES_REVIEW_REMEDIATION_WALL" })
       }
@@ -254,7 +255,6 @@ export function createHermesOrchestrator(options = {}) {
       return {
         kind: "REMEDIATION", sequence: remediation.checkpointSequence, prNumber, findings,
         nextRemediationRound: remediationRound + 1,
-      }
       }
     }
     if (!candidate.checksGreen || !candidate.reviewed || candidate.unresolvedThreadCount !== 0) {
@@ -389,6 +389,9 @@ export function createHermesOrchestrator(options = {}) {
     let pendingFindings = []
     let pendingValidationFailure = lease.metadata?.validationFailure || null
     let initialRemediationRound = 0
+    initialRemediationRound = Math.max(
+      initialRemediationRound, lease.metadata?.validationRemediationRound ?? 0,
+    )
     if (SHA.test(lease.metadata?.headRefOid ?? "")) {
       const recoveredRemediationRound = lease.metadata.remediationRound ?? 0
       const workingPaths = await lifecycle.inspectWorkingTreePaths(record)
@@ -400,12 +403,12 @@ export function createHermesOrchestrator(options = {}) {
         if (recovered.kind === "COMPLETE") return recovered.result
         sequence = recovered.sequence
         pendingFindings = recovered.findings
-        initialRemediationRound = recovered.nextRemediationRound
+        initialRemediationRound = Math.max(initialRemediationRound, recovered.nextRemediationRound)
       } else if (lease.metadata?.prNumber) {
         const candidate = await lifecycle.inspectPullRequest(lease.metadata.prNumber)
         if (candidate.unresolvedThreadCount > 0) {
           pendingFindings = await lifecycle.inspectReviewFindings(lease.metadata.prNumber)
-          initialRemediationRound = recoveredRemediationRound + 1
+          initialRemediationRound = Math.max(initialRemediationRound, recoveredRemediationRound + 1)
         }
       }
     }
@@ -445,12 +448,12 @@ export function createHermesOrchestrator(options = {}) {
       }, 5 * 60 * 1000)
       renewal.unref?.()
 
-      let deliveryPrompt = pendingFindings.length > 0
-        ? buildRemediationPrompt({ workOrderId: `WO-HERMES-${outcome.id}-001`, branch, findings: pendingFindings })
-        : pendingValidationFailure
-          ? buildValidationRemediationPrompt({
-            workOrderId: `WO-HERMES-${outcome.id}-001`, branch, validation: pendingValidationFailure,
-          })
+      let deliveryPrompt = pendingValidationFailure
+        ? buildValidationRemediationPrompt({
+          workOrderId: `WO-HERMES-${outcome.id}-001`, branch, validation: pendingValidationFailure,
+        })
+        : pendingFindings.length > 0
+          ? buildRemediationPrompt({ workOrderId: `WO-HERMES-${outcome.id}-001`, branch, findings: pendingFindings })
         : buildHermesCodexPrompt({
         outcome: outcome.command,
         outcomeRef: outcomeRef(outcome),
@@ -550,7 +553,7 @@ export function createHermesOrchestrator(options = {}) {
           const detail = `${error.validation.command} ${error.validation.args.join(" ")} exited ${error.validation.code}\n${error.validation.output}`
             .slice(0, 4_000)
           cp = await checkpoint(lease, sequence, "VALIDATION_REMEDIATION_REQUIRED", null, {
-            validationFailure: detail,
+            validationFailure: detail, validationRemediationRound: remediationRound + 1,
           })
           sequence = cp.checkpointSequence
           pendingValidationFailure = detail
@@ -560,7 +563,7 @@ export function createHermesOrchestrator(options = {}) {
           continue
         }
         cp = await checkpoint(lease, sequence, "HOST_VALIDATION_PASSED", null, {
-          validation, validationFailure: "",
+          validation, validationFailure: "", validationRemediationRound: 0,
         })
         sequence = cp.checkpointSequence
 
