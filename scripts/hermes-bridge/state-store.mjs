@@ -12,6 +12,7 @@ const COUNTER_ALIASES = Object.freeze({
 const COUNTER_NAMES = Object.freeze(Object.values(COUNTER_ALIASES))
 const STALE_LOCK_MS = 10 * 60 * 1000
 const SHA = /^[0-9a-f]{40}$/
+const SENSITIVE_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s:@/]+:[^@\s/]+@)/i
 
 function fail(code, message = code) {
   const error = new Error(message)
@@ -182,6 +183,9 @@ function metadata(input = {}, current = {}) {
   const validationFailure = input.validationFailure ?? current.validationFailure ?? null
   if (validationFailure !== null && (typeof validationFailure !== "string" || validationFailure.length > 4_000)) {
     fail("INVALID_VALIDATION_FAILURE")
+  }
+  if (validationFailure && SENSITIVE_EVIDENCE.test(validationFailure)) {
+    fail("VALIDATION_FAILURE_SECRET_WALL")
   }
   const validationRemediationRound = input.validationRemediationRound
     ?? current.validationRemediationRound ?? null

@@ -12,9 +12,14 @@ const SUCCESSFUL_CHECKS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"])
 const PENDING_CHECKS = new Set(["", "EXPECTED", "IN_PROGRESS", "PENDING", "QUEUED", "REQUESTED", "WAITING"])
 const VALIDATION_EXECUTABLES = new Set(["node", "npm", "npx", "pnpm", "yarn", "bun", "cargo", "dotnet"])
 const VALIDATION_ENVIRONMENT = new Set(["NEXT_PRIVATE_BUILD_WORKER", "NEXT_TELEMETRY_DISABLED"])
+const CHILD_ENVIRONMENT = new Set([
+  "APPDATA", "COMSPEC", "HOME", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PATHEXT",
+  "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP",
+  "USERPROFILE", "WINDIR",
+])
 const MAX_VALIDATION_TIMEOUT_MS = 20 * 60 * 1000
 const PROHIBITED_WORD = /(^|[-_:])(deploy|production|release|tag)([-_:]|$)/i
-const SECRET_LIKE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+)/i
+const SECRET_LIKE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s:@/]+:[^@\s/]+@)/i
 
 export class HermesRepositoryLifecycleError extends Error {
   constructor(code, detail) {
@@ -109,7 +114,7 @@ export function createCommandRunner() {
     const invocation = resolveNativeInvocation(command, args)
     const child = spawn(invocation.command, invocation.args, {
       cwd,
-      env: { ...process.env, ...env },
+      env: createCommandEnvironment(process.env, env),
       shell: false,
       detached: process.platform !== "win32",
       windowsHide: true,
@@ -153,6 +158,17 @@ export function createCommandRunner() {
       })
     })
   })
+}
+
+export function createCommandEnvironment(source = process.env, overrides = {}) {
+  const result = {}
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined && CHILD_ENVIRONMENT.has(key.toUpperCase())) result[key] = String(value)
+  }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value !== undefined && VALIDATION_ENVIRONMENT.has(key)) result[key] = String(value)
+  }
+  return result
 }
 
 function assertSafeInvocation(command, args) {

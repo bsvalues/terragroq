@@ -5,6 +5,7 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 
 import {
+  createCommandEnvironment,
   createRepositoryLifecycle,
   HermesRepositoryLifecycleError,
 } from "../scripts/hermes-bridge/repository-lifecycle.mjs"
@@ -77,6 +78,17 @@ function expectWall(callback: () => unknown, code: string) {
 }
 
 describe("Hermes repository lifecycle", () => {
+  it("removes repository and provider secrets from child command environments", () => {
+    expect(createCommandEnvironment({
+      Path: "C:/tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
+      DATABASE_URL: "postgresql://owner:secret@database.invalid/app", OPENAI_API_KEY: "secret",
+      GH_TOKEN: "secret", BETTER_AUTH_SECRET: "secret",
+    }, { NEXT_TELEMETRY_DISABLED: "1", DATABASE_URL: "still-forbidden" })).toEqual({
+      Path: "C:/tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
+      NEXT_TELEMETRY_DISABLED: "1",
+    })
+  })
+
   it("refreshes only the verified terragroq origin/main ref", async () => {
     const { lifecycle, calls } = fixture()
     await expect(lifecycle.refreshOriginMain()).resolves.toBe(sha)
@@ -215,6 +227,15 @@ describe("Hermes repository lifecycle", () => {
     await expect(lifecycle.runValidationCommands({ ...record })).rejects.toMatchObject({
       code: "HERMES_VALIDATION_FAILED",
       validation: expect.objectContaining({ code: 1, output: expect.stringContaining("expected READY") }),
+    })
+  })
+
+  it("refuses credential-bearing connection URLs in validator evidence", async () => {
+    const { lifecycle, record } = await ownedFixture({
+      npm: () => ({ code: 1, stdout: "", stderr: "postgresql://owner:credential@database.invalid/app" }),
+    })
+    await expect(lifecycle.runValidationCommands({ ...record })).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_SECRET_WALL",
     })
   })
 
