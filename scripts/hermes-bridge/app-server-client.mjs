@@ -371,7 +371,8 @@ export class CodexAppServerClient {
       const threadId = message.params?.threadId ?? this.turnWaiter?.threadId ?? this.startingThreadId
       if (threadId && turn?.id) {
         const itemText = this.#finalText(turn.items)
-        if (turn.status === "completed" && !itemText) {
+        const bufferedText = this.turnText.get(`${threadId}:${turn.id}`) || ""
+        if (turn.status === "completed" && !itemText && !bufferedText) {
           this.#reconcileTerminalTurn(threadId, turn.id)
           this.onNotification({ method: message.method, params: this.#sanitizeNotification(message) })
           return
@@ -380,7 +381,7 @@ export class CodexAppServerClient {
           threadId,
           turnId: turn.id,
           status: turn.status,
-          finalText: itemText || this.turnText.get(`${threadId}:${turn.id}`) || "",
+          finalText: itemText || bufferedText,
           error: turn.error ? { message: sanitizeAppServerText(turn.error.message) } : null,
         }
         this.turnText.delete(`${threadId}:${turn.id}`)
