@@ -1,3 +1,5 @@
+import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 import { describe, expect, it } from "vitest"
@@ -173,6 +175,37 @@ describe("Hermes repository lifecycle", () => {
       validationCommands: [{ command: "npm", args: ["run", "build"], env: { DATABASE_URL: "forbidden" } }],
       runner: async () => ({ code: 0 }),
     })).toThrow(HermesRepositoryLifecycleError)
+  })
+
+  it("removes the owned validation dependency junction before agent work resumes", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-validation-deps-"))
+    const workspaceRoot = path.join(tempRoot, "repository")
+    const worktreeRoot = path.join(tempRoot, "worktrees")
+    fs.mkdirSync(path.join(workspaceRoot, "node_modules"), { recursive: true })
+    try {
+      const lifecycle = createRepositoryLifecycle({
+        workspaceRoot,
+        repositoryRoot: workspaceRoot,
+        ownedWorktreeRoot: worktreeRoot,
+        runner: async ({ args }: Call) => {
+          if (args.includes("remote") && args.includes("get-url")) {
+            return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
+          }
+          if (args.includes("show-ref")) return { code: 1, stdout: "" }
+          if (args.includes("rev-parse")) return { code: 0, stdout: `${sha}\n` }
+          return { code: 0, stdout: "" }
+        },
+      })
+      const record = await lifecycle.createWorktree({ branch })
+      fs.mkdirSync(record.worktreePath, { recursive: true })
+      expect(lifecycle.ensureValidationDependencies(record)).toEqual({ linked: true, existing: false })
+      expect(fs.realpathSync(path.join(record.worktreePath, "node_modules")))
+        .toBe(fs.realpathSync(path.join(workspaceRoot, "node_modules")))
+      expect(lifecycle.removeValidationDependencies(record)).toEqual({ removed: true })
+      expect(fs.existsSync(path.join(record.worktreePath, "node_modules"))).toBe(false)
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+    }
   })
 
   it("returns bounded secret-screened validator evidence for Codex remediation", async () => {

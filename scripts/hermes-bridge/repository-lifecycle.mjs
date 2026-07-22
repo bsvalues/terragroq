@@ -506,16 +506,21 @@ export function createRepositoryLifecycle(options) {
     return { linked: true, existing: false }
   }
 
-  function removeValidationArtifacts(record) {
+  function removeValidationDependencies({ worktreePath, branch } = {}) {
+    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
     const dependencies = path.join(record.worktreePath, "node_modules")
     const dependencyStat = fs.lstatSync(dependencies, { throwIfNoEntry: false })
-    if (dependencyStat) {
-      const source = path.join(workspaceRoot, "node_modules")
-      if (!dependencyStat.isSymbolicLink() || !samePath(fs.realpathSync(dependencies), source)) {
-        wall("HERMES_REPOSITORY_CLEANUP_WALL", "validation dependency path is not the owned junction")
-      }
-      fs.unlinkSync(dependencies)
+    if (!dependencyStat) return { removed: false }
+    const source = path.join(workspaceRoot, "node_modules")
+    if (!dependencyStat.isSymbolicLink() || !samePath(fs.realpathSync(dependencies), source)) {
+      wall("HERMES_REPOSITORY_CLEANUP_WALL", "validation dependency path is not the owned junction")
     }
+    fs.unlinkSync(dependencies)
+    return { removed: true }
+  }
+
+  function removeValidationArtifacts(record) {
+    removeValidationDependencies(record)
     const nextOutput = path.join(record.worktreePath, ".next")
     const nextStat = fs.lstatSync(nextOutput, { throwIfNoEntry: false })
     if (nextStat) {
@@ -795,6 +800,7 @@ export function createRepositoryLifecycle(options) {
     inspectWorkingTreePaths,
     inspectWorktreeHead,
     ensureValidationDependencies,
+    removeValidationDependencies,
     runValidationCommands,
     commitChanges,
     discoverPullRequest,

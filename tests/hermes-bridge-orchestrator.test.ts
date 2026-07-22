@@ -54,6 +54,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     inspectWorkingTreePaths: vi.fn(async () => changedPaths),
     inspectWorktreeHead: vi.fn(async () => "c".repeat(40)),
     ensureValidationDependencies: vi.fn(() => ({ linked: true })),
+    removeValidationDependencies: vi.fn(() => ({ removed: true })),
     runValidationCommands: vi.fn(async () => [{ command: "npm", args: ["test"], code: 0 }]),
     commitChanges: vi.fn(async () => ({ commit: "c".repeat(40), branch: "codex/hermes-goal-77-77", paths: changedPaths })),
     pushBranch: vi.fn(async () => ({ pushed: true })),
@@ -200,6 +201,9 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
     expect(value.client.runTurn).toHaveBeenCalledTimes(2)
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("expected active work")
+    expect(value.lifecycle.removeValidationDependencies).toHaveBeenCalledTimes(2)
+    expect(value.lifecycle.removeValidationDependencies.mock.invocationCallOrder[0])
+      .toBeLessThan(value.client.runTurn.mock.invocationCallOrder[1])
     expect(value.lifecycle.commitChanges).toHaveBeenCalledOnce()
     expect(createHermesStateStore(value.orchestrator.statePath).read().executions["77"].metadata.validationFailure)
       .toBe("")
