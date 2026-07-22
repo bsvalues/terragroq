@@ -12,7 +12,10 @@ const COUNTER_ALIASES = Object.freeze({
 const COUNTER_NAMES = Object.freeze(Object.values(COUNTER_ALIASES))
 const STALE_LOCK_MS = 10 * 60 * 1000
 const SHA = /^[0-9a-f]{40}$/
+const SHA256 = /^[0-9a-f]{64}$/
 const SENSITIVE_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
+const VALIDATION_INFRASTRUCTURE_DETAIL = "VALIDATION_REMEDIATION_EXHAUSTED"
+const VALIDATION_INFRASTRUCTURE_FAILURE = /\bspawn EPERM\b/i
 
 function fail(code, message = code) {
   const error = new Error(message)
@@ -29,6 +32,10 @@ function timestamp(now) {
 
 function digest(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex")
+}
+
+function textDigest(value) {
+  return createHash("sha256").update(value).digest("hex")
 }
 
 function initialState(storeId, now) {
@@ -191,7 +198,9 @@ function metadata(input = {}, current = {}) {
   if (remediationRound !== null && (!Number.isInteger(remediationRound) || remediationRound < 0)) {
     fail("INVALID_REMEDIATION_ROUND")
   }
-  const validationFailure = input.validationFailure ?? current.validationFailure ?? null
+  const validationFailure = Object.hasOwn(input, "validationFailure")
+    ? input.validationFailure
+    : current.validationFailure ?? null
   if (validationFailure !== null && (typeof validationFailure !== "string" || validationFailure.length > 4_000)) {
     fail("INVALID_VALIDATION_FAILURE")
   }
@@ -203,6 +212,13 @@ function metadata(input = {}, current = {}) {
   if (validationRemediationRound !== null
     && (!Number.isInteger(validationRemediationRound) || validationRemediationRound < 0)) {
     fail("INVALID_VALIDATION_REMEDIATION_ROUND")
+  }
+  const validationRecoveryProofDigest = Object.hasOwn(input, "validationRecoveryProofDigest")
+    ? input.validationRecoveryProofDigest
+    : current.validationRecoveryProofDigest ?? null
+  if (validationRecoveryProofDigest !== null
+    && (typeof validationRecoveryProofDigest !== "string" || !SHA256.test(validationRecoveryProofDigest))) {
+    fail("INVALID_VALIDATION_RECOVERY_PROOF_DIGEST")
   }
   const headRefOid = Object.hasOwn(input, "headRefOid")
     ? input.headRefOid
@@ -224,6 +240,7 @@ function metadata(input = {}, current = {}) {
     remediationRound,
     validationFailure,
     validationRemediationRound,
+    validationRecoveryProofDigest,
     validationEvidence,
     outcome,
   }
@@ -375,6 +392,60 @@ export function reopenProviderWall(filePath, request, options = {}) {
   })
 }
 
+export function reopenValidationInfrastructureWall(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    if (current.fencingToken !== request.expectedFencingToken) fail("FENCING_TOKEN_CONFLICT")
+    const ownerTouchesRemainZero = COUNTER_NAMES.every(
+      (counter) => state.ownerTouchCounters[counter] === 0,
+    )
+    if (current.lease.status !== "RELEASED"
+      || current.checkpoint.state !== "FAILED_TERMINAL"
+      || current.checkpoint.detail !== VALIDATION_INFRASTRUCTURE_DETAIL
+      || request.expectedDetail !== VALIDATION_INFRASTRUCTURE_DETAIL
+      || typeof current.metadata.validationFailure !== "string"
+      || !VALIDATION_INFRASTRUCTURE_FAILURE.test(current.metadata.validationFailure)
+      || textDigest(current.metadata.validationFailure) !== request.expectedValidationFailureDigest
+      || typeof request.proofDigest !== "string"
+      || !SHA256.test(request.proofDigest)
+      || !ownerTouchesRemainZero) {
+      fail("VALIDATION_INFRASTRUCTURE_RECOVERY_STATE_WALL")
+    }
+    const reopened = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "ABANDONED",
+        expiresAt: at.iso,
+        recoveredAt: at.iso,
+        recoverReason: "VALIDATION_INFRASTRUCTURE_REMEDIATED",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+        detail: VALIDATION_INFRASTRUCTURE_DETAIL,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({
+        validationFailure: null,
+        validationEvidence: null,
+        validationRemediationRound: 0,
+        validationRecoveryProofDigest: request.proofDigest,
+      }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: reopened }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: reopened.fencingToken,
+      checkpointSequence: reopened.checkpoint.sequence,
+      leaseStatus: reopened.lease.status,
+      state: reopened.checkpoint.state,
+    }
+  })
+}
+
 export function deferProviderWall(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
@@ -445,6 +516,7 @@ export function createHermesStateStore(filePath, options = {}) {
     abandonLease: (request) => abandonLease(filePath, request, options),
     releaseLease: (request) => releaseLease(filePath, request, options),
     reopenProviderWall: (request) => reopenProviderWall(filePath, request, options),
+    reopenValidationInfrastructureWall: (request) => reopenValidationInfrastructureWall(filePath, request, options),
     deferProviderWall: (request) => deferProviderWall(filePath, request, options),
     setKillSwitch: (request) => setKillSwitch(filePath, request, options),
     recordOwnerTouch: (request) => recordOwnerTouch(filePath, request, options),
