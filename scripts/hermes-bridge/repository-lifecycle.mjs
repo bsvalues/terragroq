@@ -634,9 +634,10 @@ export function createRepositoryLifecycle(options) {
     const exactHeadCodexReviewsForCommit = exactHeadCodexReviews(pr)
     const codexReviewFindings = exactHeadCodexReviewFindings(pr)
     const hasExactHeadCodexCompletedReview = exactHeadCodexReviewsForCommit.length > 0
-    const hasExactHeadCodexCleanReview = exactHeadCodexReviewsForCommit.some((review) =>
-      String(review.state).toUpperCase() === "APPROVED"
-        || String(review.body ?? "").startsWith("Codex Review: Didn't find any major issues."))
+    const hasExactHeadCodexCleanReview = codexReviewFindings.length === 0
+      && exactHeadCodexReviewsForCommit.some((review) =>
+        String(review.state).toUpperCase() === "APPROVED"
+          || String(review.state).toUpperCase() === "COMMENTED")
     const rateLimitedCodeRabbitContexts = new Set()
     if (checks.some((check) => /coderabbit/i.test(checkName(check)))) {
       const statusResult = await run("gh", ["api", `repos/${repository}/commits/${pr.headRefOid}/status`])

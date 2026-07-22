@@ -489,7 +489,7 @@ describe("Hermes repository lifecycle", () => {
     await expect(paginated.inspectPullRequest(77)).rejects.toMatchObject({ code: "HERMES_REPOSITORY_GITHUB_WALL" })
   })
 
-  it("records an exact-head Codex review response without treating generic commentary as clean", async () => {
+  it("accepts exact-head Codex boilerplate only when no summary or inline finding remains", async () => {
     const create = (threads: unknown[]) => fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
         number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
@@ -502,7 +502,7 @@ describe("Hermes repository lifecycle", () => {
       "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState(threads)) }),
     }).lifecycle
     await expect(create([]).inspectPullRequest(77)).resolves.toMatchObject({
-      reviewCompleted: true, reviewed: false, codexReviewFindings: [],
+      reviewCompleted: true, reviewed: true, codexReviewFindings: [],
     })
     await expect(create([{ isResolved: false, comments: { nodes: [{ body: "Finding", isMinimized: false }] } }])
       .inspectPullRequest(77)).resolves.toMatchObject({ reviewCompleted: true, reviewed: false })
