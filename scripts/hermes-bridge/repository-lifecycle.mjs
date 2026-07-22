@@ -19,7 +19,7 @@ const CHILD_ENVIRONMENT = new Set([
 ])
 const MAX_VALIDATION_TIMEOUT_MS = 20 * 60 * 1000
 const PROHIBITED_WORD = /(^|[-_:])(deploy|production|release|tag)([-_:]|$)/i
-const SECRET_LIKE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s:@/]+:[^@\s/]+@)/i
+const SECRET_LIKE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 
 export class HermesRepositoryLifecycleError extends Error {
   constructor(code, detail) {

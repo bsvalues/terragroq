@@ -69,17 +69,21 @@ describe("Hermes bridge durable state store", () => {
   })
 
   it("refuses secret-bearing validation failure evidence", () => {
-    const { store } = fixture()
-    const lease = store.acquireLease({
-      outcomeId: "GOAL-1", holderId: "thread-1", leaseDurationMs: 1000,
-      idempotencyKey: "acquire-secret-evidence",
-    })
-    expect(() => store.checkpoint({
-      outcomeId: "GOAL-1", holderId: "thread-1", fencingToken: lease.fencingToken,
-      expectedCheckpointSequence: 0, state: "VALIDATION_REMEDIATION_REQUIRED",
-      metadata: { validationFailure: "postgresql://owner:credential@database.invalid/app" },
-      idempotencyKey: "secret-evidence",
-    })).toThrowError(expect.objectContaining({ code: "VALIDATION_FAILURE_SECRET_WALL" }))
+    for (const [index, validationFailure] of [
+      "postgresql://owner:credential@database.invalid/app",
+      "redis://:credential@cache.invalid/0",
+    ].entries()) {
+      const { store } = fixture()
+      const lease = store.acquireLease({
+        outcomeId: "GOAL-1", holderId: "thread-1", leaseDurationMs: 1000,
+        idempotencyKey: `acquire-secret-evidence-${index}`,
+      })
+      expect(() => store.checkpoint({
+        outcomeId: "GOAL-1", holderId: "thread-1", fencingToken: lease.fencingToken,
+        expectedCheckpointSequence: 0, state: "VALIDATION_REMEDIATION_REQUIRED",
+        metadata: { validationFailure }, idempotencyKey: `secret-evidence-${index}`,
+      })).toThrowError(expect.objectContaining({ code: "VALIDATION_FAILURE_SECRET_WALL" }))
+    }
   })
 
   it("reclaims only expired leases and fences stale writers", () => {

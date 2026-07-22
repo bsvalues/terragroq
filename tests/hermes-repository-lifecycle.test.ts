@@ -231,12 +231,17 @@ describe("Hermes repository lifecycle", () => {
   })
 
   it("refuses credential-bearing connection URLs in validator evidence", async () => {
-    const { lifecycle, record } = await ownedFixture({
-      npm: () => ({ code: 1, stdout: "", stderr: "postgresql://owner:credential@database.invalid/app" }),
-    })
-    await expect(lifecycle.runValidationCommands({ ...record })).rejects.toMatchObject({
-      code: "HERMES_REPOSITORY_SECRET_WALL",
-    })
+    for (const connectionUrl of [
+      "postgresql://owner:credential@database.invalid/app",
+      "redis://:credential@cache.invalid/0",
+    ]) {
+      const { lifecycle, record } = await ownedFixture({
+        npm: () => ({ code: 1, stdout: "", stderr: connectionUrl }),
+      })
+      await expect(lifecycle.runValidationCommands({ ...record })).rejects.toMatchObject({
+        code: "HERMES_REPOSITORY_SECRET_WALL",
+      })
+    }
   })
 
   it("returns the latest active comment without making a resolution-policy guess", async () => {

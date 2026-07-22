@@ -12,7 +12,7 @@ const COUNTER_ALIASES = Object.freeze({
 const COUNTER_NAMES = Object.freeze(Object.values(COUNTER_ALIASES))
 const STALE_LOCK_MS = 10 * 60 * 1000
 const SHA = /^[0-9a-f]{40}$/
-const SENSITIVE_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s:@/]+:[^@\s/]+@)/i
+const SENSITIVE_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 
 function fail(code, message = code) {
   const error = new Error(message)
