@@ -16,6 +16,8 @@ Validation runs in the owned worktree with a junction to the workspace's existin
 
 On Windows, allowlisted tools are resolved to native executables without a command shell. `npm` and `npx` run through the installed Node.js CLI entry points, preserving separated arguments and the command allowlist.
 
+Exact-head review identified a post-commit recovery gap. The orchestrator now resumes a clean worktree from its durably recorded commit, verifies the worktree head, idempotently continues push and PR handling, avoids duplicate review requests, and either dispatches actionable review remediation or completes the verified merge without rerunning Codex implementation.
+
 ## Safety
 
 TerraFusion, Property Workbench, TerraPilot, county/PACS systems, protected data, production mutation, secrets, paid overages, destructive Git, releases, tags, and foreign cleanup remain blocked. Owner-touch counters remain authoritative and must stay zero.

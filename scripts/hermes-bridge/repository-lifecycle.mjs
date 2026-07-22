@@ -241,14 +241,14 @@ function exactHeadApprovedReview(pr) {
     && String(review?.state ?? "").toUpperCase() === "APPROVED")
 }
 
-function exactHeadCodexCleanComment(value, headRefOid) {
+function exactHeadCodexRequestTimes(value, headRefOid) {
   const connection = value?.data?.repository?.pullRequest?.comments
   const comments = connection?.nodes
   if (!Array.isArray(comments)) wall("HERMES_REPOSITORY_GITHUB_WALL", "review request comments missing")
   if (connection?.pageInfo?.hasPreviousPage === true || connection?.pageInfo?.hasNextPage === true) {
     wall("HERMES_REPOSITORY_GITHUB_WALL", "review request comments are incomplete")
   }
-  const requestTimes = comments.filter((comment) => {
+  return comments.filter((comment) => {
     const createdAt = Date.parse(comment?.createdAt ?? "")
     const updatedAt = Date.parse(comment?.updatedAt ?? "")
     return Number.isFinite(createdAt) && createdAt === updatedAt
@@ -257,6 +257,10 @@ function exactHeadCodexCleanComment(value, headRefOid) {
       && [...String(comment?.body ?? "").matchAll(/\b[0-9a-f]{40}\b/gi)]
         .some((match) => match[0].toLowerCase() === headRefOid)
   }).map((comment) => Date.parse(comment.createdAt))
+}
+
+function exactHeadCodexCleanComment(value, headRefOid, requestTimes = exactHeadCodexRequestTimes(value, headRefOid)) {
+  const comments = value.data.repository.pullRequest.comments.nodes
   return comments.some((comment) => {
     const body = String(comment?.body ?? "")
     const createdAt = Date.parse(comment?.createdAt ?? "")
@@ -427,6 +431,14 @@ export function createRepositoryLifecycle(options) {
     return [...new Set(statusPaths(status.stdout))].sort()
   }
 
+  async function inspectWorktreeHead({ worktreePath, branch } = {}) {
+    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
+    const result = await run("git", ["-C", record.worktreePath, "rev-parse", "HEAD"])
+    const headRefOid = result.stdout.trim()
+    if (!SHA.test(headRefOid)) wall("HERMES_REPOSITORY_GIT_WALL", "40-character worktree head required")
+    return headRefOid
+  }
+
   function ensureValidationDependencies({ worktreePath, branch } = {}) {
     const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
     const source = path.join(workspaceRoot, "node_modules")
@@ -523,7 +535,8 @@ export function createRepositoryLifecycle(options) {
     const checks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : []
     const reviewState = parseJson(threadResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
     const unresolved = unresolvedThreadCount(reviewState)
-    const hasExactHeadCodexCleanComment = exactHeadCodexCleanComment(reviewState, pr.headRefOid)
+    const requestTimes = exactHeadCodexRequestTimes(reviewState, pr.headRefOid)
+    const hasExactHeadCodexCleanComment = exactHeadCodexCleanComment(reviewState, pr.headRefOid, requestTimes)
     const hasExactHeadApproval = exactHeadApprovedReview(pr)
     const rateLimitedCodeRabbitContexts = new Set()
     if (checks.some((check) => /coderabbit/i.test(checkName(check)))) {
@@ -551,6 +564,7 @@ export function createRepositoryLifecycle(options) {
         /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"
           && !rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase())),
       codeRabbitRateLimited,
+      reviewRequested: requestTimes.length > 0,
       unresolvedThreadCount: unresolved,
     }
   }
@@ -710,6 +724,7 @@ export function createRepositoryLifecycle(options) {
     resumeOwnedWorktree,
     inspectChangedPaths,
     inspectWorkingTreePaths,
+    inspectWorktreeHead,
     ensureValidationDependencies,
     runValidationCommands,
     commitChanges,

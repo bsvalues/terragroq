@@ -52,6 +52,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     })),
     inspectChangedPaths: vi.fn(async () => changedPaths),
     inspectWorkingTreePaths: vi.fn(async () => changedPaths),
+    inspectWorktreeHead: vi.fn(async () => "c".repeat(40)),
     ensureValidationDependencies: vi.fn(() => ({ linked: true })),
     runValidationCommands: vi.fn(async () => [{ command: "npm", args: ["test"], code: 0 }]),
     commitChanges: vi.fn(async () => ({ commit: "c".repeat(40), branch: "codex/hermes-goal-77-77", paths: changedPaths })),
@@ -85,6 +86,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
     clientFactory: () => client,
     holderId: "test-holder",
     now: () => new Date(currentTime),
+    sleep: async () => {},
   })
   return {
     root, state, orchestrator, selectOutcome, markComplete, markTerminal, deferOutcome, lifecycle, client,
@@ -130,7 +132,6 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.lifecycle.commitChanges).toHaveBeenCalled()
     expect(value.lifecycle.pushBranch).toHaveBeenCalled()
     expect(value.lifecycle.createPullRequest).toHaveBeenCalled()
-    expect(value.lifecycle.requestCodexReview).toHaveBeenCalledWith({ number: 500, headRefOid: "c".repeat(40) })
     expect(value.lifecycle.inspectChangedPaths.mock.invocationCallOrder[0])
       .toBeLessThan(value.lifecycle.mergePullRequest.mock.invocationCallOrder[0])
     expect(value.lifecycle.inspectPullRequestFiles.mock.invocationCallOrder[0])
@@ -146,6 +147,9 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     value.lifecycle.commitChanges
       .mockResolvedValueOnce({ commit: "c".repeat(40), branch: "codex/hermes-goal-77-77" })
       .mockResolvedValueOnce({ commit: "d".repeat(40), branch: "codex/hermes-goal-77-77" })
+    value.lifecycle.inspectWorktreeHead
+      .mockResolvedValueOnce("c".repeat(40))
+      .mockResolvedValueOnce("d".repeat(40))
     value.lifecycle.inspectPullRequest
       .mockResolvedValueOnce({
         state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
@@ -169,8 +173,27 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Handle the empty state explicitly")
     expect(value.lifecycle.runValidationCommands).toHaveBeenCalledTimes(2)
     expect(value.lifecycle.resolveReviewThreads).toHaveBeenCalledWith(["PRRT_review_1"])
-    expect(value.lifecycle.requestCodexReview).toHaveBeenNthCalledWith(2, {
-      number: 500, headRefOid: "d".repeat(40),
+  })
+
+  it("requests exact-head review when the committed PR has no review evidence", async () => {
+    const value = fixture()
+    value.lifecycle.inspectPullRequest
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: false, reviewed: false,
+        reviewRequested: false, unresolvedThreadCount: 0, headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        reviewRequested: true, unresolvedThreadCount: 0, headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "MERGED", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        unresolvedThreadCount: 0, headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
+      })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+    expect(value.lifecycle.requestCodexReview).toHaveBeenCalledWith({
+      number: 500, headRefOid: "c".repeat(40),
     })
   })
 
@@ -357,6 +380,36 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.selectOutcome).not.toHaveBeenCalled()
     expect(value.client.connect).not.toHaveBeenCalled()
     expect(value.markComplete).toHaveBeenCalledOnce()
+  })
+
+  it("resumes the native delivery lifecycle from a durable committed head without redispatching Codex", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    value.state.initialize()
+    const lease = value.state.acquireLease({
+      idempotencyKey: "recover-commit-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: {
+        outcome, branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "hermes-goal-77-77"),
+        baseSha: "a".repeat(40), headRefOid: "c".repeat(40),
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "recover-commit", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: lease.fencingToken, expectedCheckpointSequence: 0, state: "COMMIT_CREATED",
+      metadata: { headRefOid: "c".repeat(40) },
+    })
+    value.lifecycle.inspectWorkingTreePaths.mockResolvedValueOnce([])
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
+    expect(value.lifecycle.inspectWorktreeHead).toHaveBeenCalled()
+    expect(value.lifecycle.pushBranch).toHaveBeenCalled()
+    expect(value.lifecycle.createPullRequest).toHaveBeenCalled()
+    expect(value.lifecycle.mergePullRequest).toHaveBeenCalledOnce()
   })
 
   it("declassifies a terminal owner wall so it cannot starve later outcomes", async () => {
