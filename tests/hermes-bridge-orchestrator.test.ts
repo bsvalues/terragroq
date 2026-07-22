@@ -201,6 +201,9 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
     expect(value.client.runTurn).toHaveBeenCalledTimes(2)
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("expected active work")
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain(
+      "do not invoke subagents, MCP, dynamic tools, web search, or external connectors",
+    )
     expect(value.lifecycle.removeValidationDependencies).toHaveBeenCalledTimes(2)
     expect(value.lifecycle.removeValidationDependencies.mock.invocationCallOrder[0])
       .toBeLessThan(value.client.runTurn.mock.invocationCallOrder[1])

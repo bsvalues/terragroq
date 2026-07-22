@@ -103,7 +103,7 @@ ${remediationContext({ outcome, reservations })}
 Hermes native-host validation rejected the current file handoff:
 ${validation}
 
-Use only repository file reads and edits inside the existing reserved paths. Correct the validation failure, independently review the resulting file changes, and do not run native commands, Git, or GitHub CLI. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
+Use only repository file reads and edits inside the existing reserved paths. Correct the validation failure, independently review the resulting file changes, and do not run native commands, Git, or GitHub CLI. This is one bounded remediation lane: do not invoke subagents, MCP, dynamic tools, web search, or external connectors. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
 }
 
 function allowedPath(changedPath, reservations) {
