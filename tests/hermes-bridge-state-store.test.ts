@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
+import { createHash } from "node:crypto"
 
 import { createHermesStateStore } from "@/scripts/hermes-bridge/state-store.mjs"
 
@@ -171,6 +172,84 @@ describe("Hermes bridge durable state store", () => {
       lease: { status: "ABANDONED", recoverReason: "TRANSIENT_NATIVE_PROVIDER_WALL" },
       checkpoint: { state: "RETRYABLE_PROVIDER_WALL", detail },
     })
+  })
+
+  it("reopens only the exact zero-touch validation infrastructure terminal", () => {
+    const { store } = fixture()
+    const first = store.acquireLease({
+      outcomeId: "5", holderId: "one", leaseDurationMs: 1000,
+      metadata: {
+        validationFailure: "Error: spawn EPERM while starting an isolated host-only test",
+        validationRemediationRound: 3,
+        validationEvidence: [{ command: "npm", args: ["test", "--", "--run"], code: 1 }],
+      },
+      idempotencyKey: "validation-acquire",
+    })
+    store.checkpoint({
+      outcomeId: "5", holderId: "one", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED", idempotencyKey: "validation-failed",
+    })
+    store.releaseLease({
+      outcomeId: "5", holderId: "one", fencingToken: first.fencingToken,
+      idempotencyKey: "validation-released",
+    })
+    const validationFailure = "Error: spawn EPERM while starting an isolated host-only test"
+    const validationFailureDigest = createHash("sha256").update(validationFailure).digest("hex")
+    const proofDigest = "b".repeat(64)
+
+    expect(store.reopenValidationInfrastructureWall({
+      outcomeId: "5", expectedFencingToken: first.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED", validationFailure,
+      expectedValidationFailureDigest: validationFailureDigest, proofDigest,
+      idempotencyKey: "validation-recover",
+    })).toMatchObject({
+      leaseStatus: "ABANDONED", checkpointSequence: 2,
+      state: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+    })
+    expect(store.read().executions["5"]).toMatchObject({
+      lease: { status: "ABANDONED", recoverReason: "VALIDATION_INFRASTRUCTURE_REMEDIATED" },
+      checkpoint: { state: "VALIDATION_INFRASTRUCTURE_RECOVERED" },
+      metadata: {
+        validationFailure: null, validationEvidence: null, validationRemediationRound: 0,
+        validationRecoveryProofDigest: proofDigest,
+      },
+    })
+  })
+
+  it("refuses validation infrastructure recovery outside its exact boundary", () => {
+    for (const invalid of ["detail", "failure", "owner-touch", "fence"] as const) {
+      const { store } = fixture()
+      const first = store.acquireLease({
+        outcomeId: "5", holderId: "one", leaseDurationMs: 1000,
+        metadata: { validationFailure: invalid === "failure" ? "ordinary assertion failure" : "spawn EPERM" },
+        idempotencyKey: `${invalid}-acquire`,
+      })
+      store.checkpoint({
+        outcomeId: "5", holderId: "one", fencingToken: first.fencingToken,
+        expectedCheckpointSequence: 0, state: "FAILED_TERMINAL",
+        detail: invalid === "detail" ? "OTHER_TERMINAL" : "VALIDATION_REMEDIATION_EXHAUSTED",
+        idempotencyKey: `${invalid}-failed`,
+      })
+      store.releaseLease({
+        outcomeId: "5", holderId: "one", fencingToken: first.fencingToken,
+        idempotencyKey: `${invalid}-released`,
+      })
+      if (invalid === "owner-touch") {
+        store.recordOwnerTouch({ counter: "ownerRoutineContactCount", idempotencyKey: "touch-owner" })
+      }
+      expect(() => store.reopenValidationInfrastructureWall({
+        outcomeId: "5",
+        expectedFencingToken: invalid === "fence" ? first.fencingToken + 1 : first.fencingToken,
+        expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+        expectedValidationFailureDigest: createHash("sha256")
+          .update(invalid === "failure" ? "ordinary assertion failure" : "spawn EPERM").digest("hex"),
+        proofDigest: "b".repeat(64),
+        idempotencyKey: `${invalid}-recover`,
+      })).toThrowError(expect.objectContaining({
+        code: invalid === "fence" ? "FENCING_TOKEN_CONFLICT" : "VALIDATION_INFRASTRUCTURE_RECOVERY_STATE_WALL",
+      }))
+    }
   })
 
   it("defers provider-unavailable work without losing its resumable execution", () => {

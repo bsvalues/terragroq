@@ -5,7 +5,9 @@ import {
   deferProviderOutcome,
   NATIVE_PROVIDER_RETRY_STATE,
   OUTCOME_SELECTION_SQL,
+  recordValidationInfrastructureRecoveryProof,
   recoverNativeProviderOutcome,
+  recoverValidationInfrastructureOutcome,
   selectNextOutcome,
   terminalizeOutcome,
 } from "@/scripts/hermes-bridge/outcome-source.mjs"
@@ -142,5 +144,46 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       .mockResolvedValueOnce({ rows: [{ recovered: true }] })
     await expect(recoverNativeProviderOutcome({ query, outcomeId: 4 })).resolves.toBe(true)
     expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_PROVIDER_RECOVERED/)
+  })
+
+  it("recovers only the exact validation infrastructure terminal", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: 4, userId: "owner", ref: "GOAL-0004" }] })
+      .mockResolvedValueOnce({ rows: [] })
+    await expect(recoverValidationInfrastructureOutcome({
+      query, outcomeId: 4, expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED", proofDigest: "b".repeat(64),
+    })).resolves.toBe(true)
+    expect(query.mock.calls[0][0]).toMatch(/eligible_terminal/)
+    expect(query.mock.calls[0][0]).toMatch(/status = 'dismissed'/)
+    expect(query.mock.calls[0][0]).toMatch(/NOT EXISTS/)
+    expect(query.mock.calls[0][0]).toMatch(/eligible_proof/)
+    expect(query.mock.calls[0][0]).not.toMatch(/\)\s*\),\s*eligible_proof/)
+    expect(query.mock.calls[0][1]).toEqual([4, "VALIDATION_REMEDIATION_EXHAUSTED", "b".repeat(64)])
+    expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED/)
+  })
+
+  it("refuses a mismatched validation infrastructure terminal", async () => {
+    await expect(recoverValidationInfrastructureOutcome({
+      query: vi.fn(), outcomeId: 4, expectedNextState: "OTHER_STATE",
+    })).rejects.toMatchObject({ code: "VALIDATION_RECOVERY_STATE_INVALID" })
+  })
+
+  it("treats an exactly recorded validation infrastructure recovery as idempotent", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ recovered: true }] })
+    await expect(recoverValidationInfrastructureOutcome({
+      query, outcomeId: 4, proofDigest: "b".repeat(64),
+    })).resolves.toBe(true)
+    expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED/)
+  })
+
+  it("persists exact infrastructure proof before outcome recovery", async () => {
+    const query = vi.fn().mockResolvedValueOnce({ rows: [{ id: 99 }] })
+    await expect(recordValidationInfrastructureRecoveryProof({
+      query, outcomeId: 4, proofDigest: "b".repeat(64), fencingToken: 14,
+    })).resolves.toBe(true)
+    expect(query.mock.calls[0][0]).toMatch(/HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED/)
+    expect(query.mock.calls[0][1][2]).toContain('"fencingToken":14')
   })
 })

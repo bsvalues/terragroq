@@ -1,8 +1,15 @@
+import { createHash } from "node:crypto"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { CodexAppServerClient, sanitizeAppServerText } from "./app-server-client.mjs"
 import { createHermesOrchestrator } from "./orchestrator.mjs"
-import { NATIVE_PROVIDER_RETRY_STATE, recoverNativeProviderOutcome } from "./outcome-source.mjs"
+import {
+  NATIVE_PROVIDER_RETRY_STATE,
+  VALIDATION_INFRASTRUCTURE_RETRY_STATE,
+  recordValidationInfrastructureRecoveryProof,
+  recoverNativeProviderOutcome,
+  recoverValidationInfrastructureOutcome,
+} from "./outcome-source.mjs"
 import { readHermesState } from "./state-store.mjs"
 
 function print(value) {
@@ -69,6 +76,65 @@ async function recoverNativeProviderWall() {
   return { result: "RECOVERED", outcomeId: candidate.outcomeId, checkpointSequence: reopened.checkpointSequence }
 }
 
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex")
+}
+
+export async function recoverValidationInfrastructureWall(options = {}) {
+  const orchestrator = options.orchestrator ?? createHermesOrchestrator({ workspace: process.cwd() })
+  const recordProof = options.recordProof ?? recordValidationInfrastructureRecoveryProof
+  const recoverOutcome = options.recoverOutcome ?? recoverValidationInfrastructureOutcome
+  const state = orchestrator.state.read()
+  const ownerTouchesRemainZero = Object.values(state.ownerTouchCounters).every((value) => value === 0)
+  if (!ownerTouchesRemainZero) {
+    throw Object.assign(new Error("Owner-touch counters must remain zero"), { code: "HERMES_VALIDATION_RECOVERY_OWNER_TOUCH_WALL" })
+  }
+  const candidates = Object.values(state.executions).filter((execution) => (
+    (execution?.lease?.status === "RELEASED"
+      && execution?.checkpoint?.state === "FAILED_TERMINAL"
+      && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
+      && /\bspawn EPERM\b/i.test(String(execution?.metadata?.validationFailure ?? "")))
+    || (execution?.lease?.status === "ABANDONED"
+      && execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
+      && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
+      && /^[0-9a-f]{64}$/.test(String(execution?.metadata?.validationRecoveryProofDigest ?? "")))
+  ))
+  if (candidates.length !== 1) {
+    throw Object.assign(new Error("Exactly one validation infrastructure wall is required"), { code: "HERMES_VALIDATION_RECOVERY_CANDIDATE_WALL" })
+  }
+  const candidate = candidates[0]
+  const outcomeId = Number(candidate.outcomeId)
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) {
+    throw Object.assign(new Error("Validation infrastructure outcome id is invalid"), { code: "HERMES_VALIDATION_RECOVERY_OUTCOME_WALL" })
+  }
+  let proofDigest = candidate.metadata.validationRecoveryProofDigest
+  if (candidate.checkpoint.state === "FAILED_TERMINAL") {
+    const validationFailureDigest = sha256(candidate.metadata.validationFailure)
+    proofDigest = sha256(JSON.stringify({
+      outcomeId: candidate.outcomeId,
+      fencingToken: candidate.fencingToken,
+      checkpointSequence: candidate.checkpoint.sequence,
+      checkpointDetail: candidate.checkpoint.detail,
+      validationFailureDigest,
+    }))
+    orchestrator.state.reopenValidationInfrastructureWall({
+      idempotencyKey: `${candidate.outcomeId}:recover-validation-infrastructure:${candidate.fencingToken}`,
+      outcomeId: candidate.outcomeId,
+      expectedFencingToken: candidate.fencingToken,
+      expectedDetail: VALIDATION_INFRASTRUCTURE_RETRY_STATE,
+      expectedValidationFailureDigest: validationFailureDigest,
+      proofDigest,
+    })
+  }
+  if (!await recordProof({ outcomeId, proofDigest, fencingToken: candidate.fencingToken })) {
+    throw Object.assign(new Error("Validation infrastructure proof was not persisted"), { code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL" })
+  }
+  if (!await recoverOutcome({ outcomeId, proofDigest })) {
+    throw Object.assign(new Error("Persisted validation infrastructure outcome did not match recovery evidence"), { code: "HERMES_VALIDATION_RECOVERY_DATABASE_WALL" })
+  }
+  return { result: "RECOVERED", outcomeId: candidate.outcomeId, proofRecorded: true }
+}
+
 export async function runCli(command = process.argv[2]) {
   try {
     if (command === "cycle") {
@@ -77,11 +143,12 @@ export async function runCli(command = process.argv[2]) {
     }
     else if (command === "smoke") print(await smoke())
     else if (command === "recover-native-provider-wall") print(await recoverNativeProviderWall())
+    else if (command === "recover-validation-infrastructure-wall") print(await recoverValidationInfrastructureWall())
     else if (command === "status") {
       const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
       print(readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")))
     } else {
-      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall"), { code: "HERMES_CLI_USAGE" })
+      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall|recover-validation-infrastructure-wall"), { code: "HERMES_CLI_USAGE" })
     }
   } catch (error) {
     print({ result: "WALL", code: error?.code ?? "HERMES_CLI_FAILED", message: sanitizeBridgeMessage(error?.message ?? "Hermes bridge failed") })
