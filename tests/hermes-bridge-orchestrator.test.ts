@@ -486,7 +486,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.state.read().executions["77"]).toMatchObject({
       lease: { status: "DEFERRED" },
       checkpoint: { state: "DEFERRED_PROVIDER_UNAVAILABLE" },
-      metadata: { externalToolRetryCount: 3, threadId: null, turnId: null },
+      metadata: { externalToolRetryCount: 0, threadId: null, turnId: null },
     })
     expect(value.client.startThread).toHaveBeenCalledTimes(3)
   })

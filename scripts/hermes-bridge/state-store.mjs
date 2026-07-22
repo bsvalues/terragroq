@@ -521,7 +521,7 @@ export function deferProviderWall(filePath, request, options = {}) {
         detail: retryAt.iso,
         recordedAt: at.iso,
       },
-      metadata: metadata({ providerRetryCount: 0 }, current.metadata),
+      metadata: metadata({ providerRetryCount: 0, externalToolRetryCount: 0 }, current.metadata),
     }
     state.executions = { ...state.executions, [request.outcomeId]: deferred }
     return {
