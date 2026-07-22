@@ -161,7 +161,7 @@ describe("CodexAppServerClient", () => {
     expect(JSON.stringify({ result, notifications })).not.toContain("sk-live-secret")
   })
 
-  it("uses buffered terminal text when completion items are omitted", async () => {
+  it("prefers durable terminal text when completion items are omitted", async () => {
     const { client, process } = setup()
     await connect(client, process)
     const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "work" })
@@ -172,22 +172,45 @@ describe("CodexAppServerClient", () => {
     process.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-delta", delta: "HELLO" } })
     process.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-delta", delta: "_WORLD" } })
     process.send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-delta", status: "completed", items: [] } } })
-    await expect(resultPromise).resolves.toMatchObject({ finalText: "HELLO_WORLD" })
-    expect(process.messages().findLast((message) => message.method === "thread/read")).toBeUndefined()
+    await vi.waitFor(() => expect(process.messages().findLast((message) => message.method === "thread/read")).toBeDefined())
+    const read = process.messages().findLast((message) => message.method === "thread/read")
+    process.send({
+      id: read.id,
+      result: { thread: { turns: [{ id: "turn-delta", status: "completed", items: [{ type: "agentMessage", text: '{"result":"READY_FOR_MERGE"}' }] }] } },
+    })
+    await expect(resultPromise).resolves.toMatchObject({ finalText: '{"result":"READY_FOR_MERGE"}' })
   })
 
-  it("correlates a completion that omits the top-level threadId", async () => {
-    const { client, process } = setup()
+  it("falls back to the latest buffered agent message when durable reconciliation is unavailable", async () => {
+    const { client, process } = setup({ reconcileTimeoutMs: 10 })
     await connect(client, process)
     const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "work" })
     const request = process.messages().at(-1)
     process.send({ id: request.id, result: { turn: { id: "turn-no-thread", status: "inProgress" } } })
     await Promise.resolve()
     await Promise.resolve()
+    process.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-no-thread", delta: "PROGRESS" } })
+    process.send({ method: "item/started", params: { threadId: "thread-1", turnId: "turn-no-thread", item: { type: "agentMessage", id: "final-message" } } })
     process.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-no-thread", delta: "DONE" } })
     process.send({ method: "turn/completed", params: { turn: { id: "turn-no-thread", status: "completed", items: [] } } })
     await expect(resultPromise).resolves.toMatchObject({ threadId: "thread-1", finalText: "DONE" })
-    expect(process.messages().findLast((message) => message.method === "thread/read")).toBeUndefined()
+    expect(process.messages().findLast((message) => message.method === "thread/read")).toBeDefined()
+  })
+
+  it("preserves buffered fallback authority when idle reconciliation starts before completion", async () => {
+    const { client, process } = setup({ reconcileTimeoutMs: 10, turnPollMs: 60_000 })
+    await connect(client, process)
+    const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "work" })
+    const request = process.messages().at(-1)
+    process.send({ id: request.id, result: { turn: { id: "turn-race", status: "inProgress" } } })
+    await Promise.resolve()
+    await Promise.resolve()
+    process.send({ method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } } })
+    await vi.waitFor(() => expect(process.messages().findLast((message) => message.method === "thread/read")).toBeDefined())
+    process.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-race", delta: "RACE_DONE" } })
+    process.send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-race", status: "completed", items: [] } } })
+
+    await expect(resultPromise).resolves.toMatchObject({ finalText: "RACE_DONE" })
   })
 
   it("defers an empty completion delivered in the turn-start response chunk", async () => {

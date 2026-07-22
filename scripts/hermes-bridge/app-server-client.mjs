@@ -120,6 +120,7 @@ export class CodexAppServerClient {
     env,
     timeoutMs = 120_000,
     turnPollMs = 15_000,
+    reconcileTimeoutMs = 5_000,
     setTimer = setTimeout,
     clearTimer = clearTimeout,
     now = Date.now,
@@ -133,6 +134,7 @@ export class CodexAppServerClient {
     this.env = createCodexChildEnvironment(env ?? process.env)
     this.timeoutMs = timeoutMs
     this.turnPollMs = turnPollMs
+    this.reconcileTimeoutMs = reconcileTimeoutMs
     this.setTimer = setTimer
     this.clearTimer = clearTimer
     this.now = now
@@ -145,6 +147,7 @@ export class CodexAppServerClient {
     this.turnWaiter = null
     this.startingThreadId = null
     this.completedTurns = new Map()
+    this.completedNotifications = new Set()
     this.terminalReconciliations = new Set()
     this.turnText = new Map()
     this.wall = null
@@ -358,6 +361,11 @@ export class CodexAppServerClient {
       }
       return
     }
+    if (message.method === "item/started" && message.params?.item?.type === "agentMessage") {
+      const threadId = message.params?.threadId ?? this.turnWaiter?.threadId ?? this.startingThreadId
+      const turnId = message.params?.turnId ?? this.turnWaiter?.turnId
+      if (threadId && turnId) this.turnText.set(`${threadId}:${turnId}`, "")
+    }
     if (message.method === "item/agentMessage/delta") {
       const { threadId, turnId } = message.params ?? {}
       if (threadId && turnId) {
@@ -371,9 +379,9 @@ export class CodexAppServerClient {
       const threadId = message.params?.threadId ?? this.turnWaiter?.threadId ?? this.startingThreadId
       if (threadId && turn?.id) {
         const itemText = this.#finalText(turn.items)
-        const bufferedText = this.turnText.get(`${threadId}:${turn.id}`) || ""
-        if (turn.status === "completed" && !itemText && !bufferedText) {
-          this.#reconcileTerminalTurn(threadId, turn.id)
+        if (turn.status === "completed" && !itemText) {
+          this.completedNotifications.add(`${threadId}:${turn.id}`)
+          this.#reconcileTerminalTurn(threadId, turn.id, { allowBufferedFallback: true })
           this.onNotification({ method: message.method, params: this.#sanitizeNotification(message) })
           return
         }
@@ -381,7 +389,7 @@ export class CodexAppServerClient {
           threadId,
           turnId: turn.id,
           status: turn.status,
-          finalText: itemText || bufferedText,
+          finalText: itemText,
           error: turn.error ? { message: sanitizeAppServerText(turn.error.message) } : null,
         }
         this.turnText.delete(`${threadId}:${turn.id}`)
@@ -403,21 +411,52 @@ export class CodexAppServerClient {
     this.onNotification({ method: message.method, params: this.#sanitizeNotification(message) })
   }
 
-  async #reconcileTerminalTurn(threadId, turnId) {
+  async #boundedThreadRead(threadId) {
+    const request = this.request("thread/read", { threadId, includeTurns: true })
+    return new Promise((resolve) => {
+      let settled = false
+      const finish = (value) => {
+        if (settled) return
+        settled = true
+        this.clearTimer(timer)
+        resolve(value)
+      }
+      const timer = this.setTimer(() => finish(null), this.reconcileTimeoutMs)
+      timer.unref?.()
+      request.then(finish, () => finish(null))
+    })
+  }
+
+  async #reconcileTerminalTurn(threadId, turnId, { allowBufferedFallback = false } = {}) {
     const key = `${threadId}:${turnId}`
     if (this.terminalReconciliations.has(key)) return
     this.terminalReconciliations.add(key)
     try {
-      const response = await this.request("thread/read", { threadId, includeTurns: true })
+      const response = await this.#boundedThreadRead(threadId)
       const turn = response?.thread?.turns?.find((candidate) => candidate?.id === turnId)
-      if (!turn || turn.status === "inProgress") return
+      const bufferedText = this.turnText.get(key) || ""
+      if (!turn || turn.status === "inProgress") {
+        if (!(allowBufferedFallback || this.completedNotifications.has(key)) || !bufferedText) return
+        const result = { threadId, turnId, status: "completed", finalText: bufferedText, error: null }
+        this.completedNotifications.delete(key)
+        this.turnText.delete(key)
+        const waiterMatches = this.turnWaiter
+          && this.turnWaiter.threadId === threadId && this.turnWaiter.turnId === turnId
+        if (waiterMatches) this.turnWaiter.resolve(result)
+        else {
+          this.completedTurns.clear()
+          this.completedTurns.set(key, result)
+        }
+        return
+      }
       const result = {
         threadId,
         turnId,
         status: turn.status,
-        finalText: this.#finalText(turn.items) || this.turnText.get(key) || "",
+        finalText: this.#finalText(turn.items) || bufferedText,
         error: turn.error ? { message: sanitizeAppServerText(turn.error.message) } : null,
       }
+      this.completedNotifications.delete(key)
       this.turnText.delete(key)
       const waiterMatches = this.turnWaiter
         && this.turnWaiter.threadId === threadId && this.turnWaiter.turnId === turnId
