@@ -149,6 +149,10 @@ function metadata(input = {}, current = {}) {
   if (!Number.isInteger(providerRetryCount) || providerRetryCount < 0) fail("INVALID_PROVIDER_RETRY_COUNT")
   const outcome = input.outcome ?? current.outcome ?? null
   if (outcome !== null && (typeof outcome !== "object" || Array.isArray(outcome))) fail("INVALID_OUTCOME_SNAPSHOT")
+  const remediationRound = input.remediationRound ?? current.remediationRound ?? null
+  if (remediationRound !== null && (!Number.isInteger(remediationRound) || remediationRound < 0)) {
+    fail("INVALID_REMEDIATION_ROUND")
+  }
   return {
     threadId: input.threadId ?? current.threadId ?? null,
     turnId: input.turnId ?? current.turnId ?? null,
@@ -159,6 +163,7 @@ function metadata(input = {}, current = {}) {
     headRefOid: input.headRefOid ?? current.headRefOid ?? null,
     mergeSha: input.mergeSha ?? current.mergeSha ?? null,
     providerRetryCount,
+    remediationRound,
     outcome,
   }
 }

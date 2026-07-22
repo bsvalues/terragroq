@@ -225,7 +225,10 @@ export function createHermesOrchestrator(options = {}) {
       const remediation = await checkpoint(lease, nextSequence, "REVIEW_REMEDIATION_REQUIRED", `PR #${prNumber}`, {
         prNumber, branch, headRefOid: commit, remediationRound,
       })
-      return { kind: "REMEDIATION", sequence: remediation.checkpointSequence, prNumber, findings }
+      return {
+        kind: "REMEDIATION", sequence: remediation.checkpointSequence, prNumber, findings,
+        nextRemediationRound: remediationRound + 1,
+      }
     }
     if (!candidate.checksGreen || !candidate.reviewed || candidate.unresolvedThreadCount !== 0) {
       throw Object.assign(new Error("Pull request did not reach a green reviewed state"), { code: "HERMES_PR_VERIFICATION_WALL" })
@@ -357,20 +360,24 @@ export function createHermesOrchestrator(options = {}) {
     sequence = cp.checkpointSequence
 
     let pendingFindings = []
+    let initialRemediationRound = 0
     if (SHA.test(lease.metadata?.headRefOid ?? "")) {
+      const recoveredRemediationRound = lease.metadata.remediationRound ?? 0
       const workingPaths = await lifecycle.inspectWorkingTreePaths(record)
       if (workingPaths.length === 0) {
         const recovered = await advanceCommittedHead({
           lease, sequence, outcome, branch, reservations, record,
-          commit: lease.metadata.headRefOid,
+          commit: lease.metadata.headRefOid, remediationRound: recoveredRemediationRound,
         })
         if (recovered.kind === "COMPLETE") return recovered.result
         sequence = recovered.sequence
         pendingFindings = recovered.findings
+        initialRemediationRound = recovered.nextRemediationRound
       } else if (lease.metadata?.prNumber) {
         const candidate = await lifecycle.inspectPullRequest(lease.metadata.prNumber)
         if (candidate.unresolvedThreadCount > 0) {
           pendingFindings = await lifecycle.inspectReviewFindings(lease.metadata.prNumber)
+          initialRemediationRound = recoveredRemediationRound + 1
         }
       }
     }
@@ -422,7 +429,8 @@ export function createHermesOrchestrator(options = {}) {
         reservations,
         validators: DEFAULT_VALIDATORS,
         })
-      for (let remediationRound = 0; remediationRound <= MAX_REMEDIATION_ROUNDS; remediationRound += 1) {
+      for (let remediationRound = initialRemediationRound;
+        remediationRound <= MAX_REMEDIATION_ROUNDS; remediationRound += 1) {
         const turn = await client.runTurn({
           threadId,
           prompt: deliveryPrompt,

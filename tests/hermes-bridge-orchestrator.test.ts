@@ -173,6 +173,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Handle the empty state explicitly")
     expect(value.lifecycle.runValidationCommands).toHaveBeenCalledTimes(2)
     expect(value.lifecycle.resolveReviewThreads).toHaveBeenCalledWith(["PRRT_review_1"])
+    expect(createHermesStateStore(value.orchestrator.statePath).read().executions["77"].metadata.remediationRound)
+      .toBe(1)
   })
 
   it("requests exact-head review when the committed PR has no review evidence", async () => {
