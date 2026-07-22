@@ -1,3 +1,5 @@
+import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 import { describe, expect, it } from "vitest"
@@ -16,7 +18,13 @@ const rootGit = `git -C ${root}`
 const ownedGit = `git -C ${ownedWorktree}`
 const branch = "codex/hermes-goal-77"
 
-type Call = { command: string; args: string[]; cwd: string }
+type Call = {
+  command: string
+  args: string[]
+  cwd: string
+  env?: Record<string, string>
+  timeoutMs?: number
+}
 
 function fixture(overrides: Record<string, (call: Call) => unknown> = {}) {
   const calls: Call[] = []
@@ -28,6 +36,9 @@ function fixture(overrides: Record<string, (call: Call) => unknown> = {}) {
     if (key.includes("remote get-url origin")) return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
     if (key.includes("rev-parse refs/remotes/origin/main")) return { code: 0, stdout: `${sha}\n` }
     if (key.includes("show-ref --verify --quiet")) return { code: 1 }
+    if (key.includes("gh api repos/bsvalues/terragroq/commits/")) {
+      return { code: 0, stdout: JSON.stringify({ statuses: [] }) }
+    }
     return { code: 0, stdout: "" }
   }
   const lifecycle = createRepositoryLifecycle({
@@ -129,7 +140,144 @@ describe("Hermes repository lifecycle", () => {
       command: "npm",
       args: ["test", "--", "--run", "tests/unit.test.ts"],
       cwd: record.worktreePath,
+      timeoutMs: 10 * 60 * 1000,
     })
+  })
+
+  it("passes only allowlisted validator environment overrides", async () => {
+    const calls: Call[] = []
+    const lifecycle = createRepositoryLifecycle({
+      workspaceRoot: root,
+      ownedWorktreeRoot: ownedRoot,
+      validationCommands: [{
+        command: "npm", args: ["run", "build"],
+        env: { NEXT_PRIVATE_BUILD_WORKER: "0", NEXT_TELEMETRY_DISABLED: "1" },
+      }],
+      runner: async (call: Call) => {
+        calls.push(call)
+        if (call.args.includes("remote") && call.args.includes("get-url")) {
+          return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
+        }
+        if (call.args.includes("show-ref")) return { code: 1, stdout: "" }
+        return { code: 0, stdout: "" }
+      },
+    })
+    await lifecycle.createWorktree({ branch })
+    calls.length = 0
+    await lifecycle.runValidationCommands({ worktreePath: ownedWorktree, branch })
+    expect(calls.at(-1)).toEqual({
+      command: "npm", args: ["run", "build"], cwd: ownedWorktree,
+      env: { NEXT_PRIVATE_BUILD_WORKER: "0", NEXT_TELEMETRY_DISABLED: "1" },
+      timeoutMs: 10 * 60 * 1000,
+    })
+    expect(() => createRepositoryLifecycle({
+      workspaceRoot: root, ownedWorktreeRoot: ownedRoot,
+      validationCommands: [{ command: "npm", args: ["run", "build"], env: { DATABASE_URL: "forbidden" } }],
+      runner: async () => ({ code: 0 }),
+    })).toThrow(HermesRepositoryLifecycleError)
+  })
+
+  it("removes the owned validation dependency junction before agent work resumes", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-validation-deps-"))
+    const workspaceRoot = path.join(tempRoot, "repository")
+    const worktreeRoot = path.join(tempRoot, "worktrees")
+    fs.mkdirSync(path.join(workspaceRoot, "node_modules"), { recursive: true })
+    try {
+      const lifecycle = createRepositoryLifecycle({
+        workspaceRoot,
+        repositoryRoot: workspaceRoot,
+        ownedWorktreeRoot: worktreeRoot,
+        runner: async ({ args }: Call) => {
+          if (args.includes("remote") && args.includes("get-url")) {
+            return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
+          }
+          if (args.includes("show-ref")) return { code: 1, stdout: "" }
+          if (args.includes("rev-parse")) return { code: 0, stdout: `${sha}\n` }
+          return { code: 0, stdout: "" }
+        },
+      })
+      const record = await lifecycle.createWorktree({ branch })
+      fs.mkdirSync(record.worktreePath, { recursive: true })
+      expect(lifecycle.ensureValidationDependencies(record)).toEqual({ linked: true, existing: false })
+      expect(fs.realpathSync(path.join(record.worktreePath, "node_modules")))
+        .toBe(fs.realpathSync(path.join(workspaceRoot, "node_modules")))
+      expect(lifecycle.removeValidationDependencies(record)).toEqual({ removed: true })
+      expect(fs.existsSync(path.join(record.worktreePath, "node_modules"))).toBe(false)
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+    }
+  })
+
+  it("returns bounded secret-screened validator evidence for Codex remediation", async () => {
+    const { lifecycle, record } = await ownedFixture({
+      npm: () => ({ code: 1, stdout: "", stderr: "tests/radar.test.ts: expected READY but received BLOCKED" }),
+    })
+    await expect(lifecycle.runValidationCommands({ ...record })).rejects.toMatchObject({
+      code: "HERMES_VALIDATION_FAILED",
+      validation: expect.objectContaining({ code: 1, output: expect.stringContaining("expected READY") }),
+    })
+  })
+
+  it("returns the latest active comment without making a resolution-policy guess", async () => {
+    const { lifecycle } = fixture({
+      "gh api graphql": () => ({
+        code: 0,
+        stdout: JSON.stringify(reviewState([{
+          id: "PRRT_security", isResolved: false, isOutdated: true,
+          path: "scripts/hermes-bridge/orchestrator.mjs", line: 42,
+          comments: { nodes: [
+            { body: "Preserve the authority boundary before merge.", isMinimized: false },
+            { body: "Fixed in the latest commit.", isMinimized: false },
+          ] },
+        }])),
+      }),
+    })
+    await expect(lifecycle.inspectReviewFindings(77)).resolves.toEqual([
+      expect.objectContaining({
+        threadId: "PRRT_security", isOutdated: true,
+        body: "Fixed in the latest commit.",
+      }),
+    ])
+    expect((await lifecycle.inspectReviewFindings(77))[0]).not.toHaveProperty("requiresExplicitResolution")
+  })
+
+  it("rejects incomplete review-thread comment history", async () => {
+    const { lifecycle } = fixture({
+      "gh api graphql": () => ({
+        code: 0,
+        stdout: JSON.stringify(reviewState([{
+          id: "PRRT_long", isResolved: false, isOutdated: false,
+          path: "scripts/hermes-bridge/orchestrator.mjs", line: 42,
+          comments: {
+            nodes: [{ body: "Potentially stale finding.", isMinimized: false }],
+            pageInfo: { hasPreviousPage: true },
+          },
+        }])),
+      }),
+    })
+    await expect(lifecycle.inspectReviewFindings(77)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_GITHUB_WALL",
+    })
+  })
+
+  it("commits exactly the owned working-tree paths and requests exact-head Codex review", async () => {
+    const changed = ["components/dashboard/radar.tsx", "tests/radar.test.ts"]
+    const { lifecycle, calls, record } = await ownedFixture({
+      [`${ownedGit} status`]: () => ({ code: 0, stdout: changed.map((item) => ` M ${item}\0`).join("") }),
+      [`${ownedGit} diff --cached --quiet`]: () => ({ code: 1, stdout: "" }),
+      [`${ownedGit} rev-parse HEAD`]: () => ({ code: 0, stdout: `${sha}\n` }),
+    })
+    await expect(lifecycle.commitChanges({
+      ...record, paths: changed, message: "feat(williamos): deliver goal-77",
+    })).resolves.toEqual({ branch, commit: sha, paths: changed })
+    expect(calls.some(({ args }) => JSON.stringify(args) === JSON.stringify([
+      "-C", ownedWorktree, "add", "--", ...changed,
+    ]))).toBe(true)
+    await lifecycle.requestCodexReview({ number: 77, headRefOid: sha })
+    expect(calls.at(-1)?.args).toEqual([
+      "pr", "comment", "77", "--repo", "bsvalues/terragroq", "--body",
+      `@codex review Exact-head review requested for ${sha}.`,
+    ])
   })
 
   it("discovers an exact-head PR and creates only when absent", async () => {
@@ -225,6 +373,25 @@ describe("Hermes repository lifecycle", () => {
     })
   })
 
+  it("reports completed red checks as bounded remediation evidence", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "APPROVED", statusCheckRollup: [
+          { context: "Vercel", state: "FAILURE" },
+          { context: "Unit tests", state: "SUCCESS" },
+        ],
+        reviews: [{ author: { login: "independent-reviewer" }, state: "APPROVED", commit: { oid: sha } }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: false,
+      checksComplete: true,
+      failedChecks: [{ name: "Vercel", state: "FAILURE" }],
+    })
+  })
+
   it("does not accept a stale approval through reviewDecision", async () => {
     const { lifecycle } = fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
@@ -249,6 +416,25 @@ describe("Hermes repository lifecycle", () => {
       "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
     })
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: true, checksGreen: true })
+  })
+
+  it("does not accept a green-but-rate-limited CodeRabbit context without exact-head review", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { context: "CodeRabbit", state: "SUCCESS" },
+          { context: "Vercel", state: "SUCCESS" },
+        ], reviews: [],
+      }) }),
+      "gh api repos/bsvalues/terragroq/commits/": () => ({ code: 0, stdout: JSON.stringify({
+        statuses: [{ context: "CodeRabbit", state: "success", description: "Review rate limited" }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      reviewed: false, checksGreen: false, codeRabbitRateLimited: true,
+    })
   })
 
   it("does not treat a skipped CodeRabbit check as review evidence", async () => {
@@ -282,7 +468,7 @@ describe("Hermes repository lifecycle", () => {
       "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], comments)) }),
     }).lifecycle
     await expect(create([request(sha), clean(sha.slice(0, 10))]).inspectPullRequest(77))
-      .resolves.toMatchObject({ reviewed: true })
+      .resolves.toMatchObject({ reviewed: true, reviewCompleted: true })
     await expect(create([request(sha), clean(mergeSha.slice(0, 10))]).inspectPullRequest(77))
       .resolves.toMatchObject({ reviewed: false })
     await expect(create([request(sha), clean(sha.slice(0, 10), "2026-07-21T10:02:00.000Z")]).inspectPullRequest(77))
@@ -301,6 +487,44 @@ describe("Hermes repository lifecycle", () => {
       "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [request(sha), clean(sha.slice(0, 10))], true)) }),
     }).lifecycle
     await expect(paginated.inspectPullRequest(77)).rejects.toMatchObject({ code: "HERMES_REPOSITORY_GITHUB_WALL" })
+  })
+
+  it("accepts exact-head Codex boilerplate only when no summary or inline finding remains", async () => {
+    const create = (threads: unknown[]) => fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [{ context: "Vercel", state: "SUCCESS" }],
+        reviews: [{
+          author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: sha },
+          body: `### Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** \`${sha.slice(0, 10)}\`\n\n<details>About Codex</details>`,
+        }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState(threads)) }),
+    }).lifecycle
+    await expect(create([]).inspectPullRequest(77)).resolves.toMatchObject({
+      reviewCompleted: true, reviewed: true, codexReviewFindings: [],
+    })
+    await expect(create([{ isResolved: false, comments: { nodes: [{ body: "Finding", isMinimized: false }] } }])
+      .inspectPullRequest(77)).resolves.toMatchObject({ reviewCompleted: true, reviewed: false })
+  })
+
+  it("returns substantive exact-head Codex review summaries as remediation findings", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        statusCheckRollup: [{ context: "Vercel", state: "SUCCESS" }],
+        reviews: [{
+          author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: sha },
+          body: `### Codex Review\n\nPreserve the authority predicate before merge.\n\n**Reviewed commit:** \`${sha.slice(0, 10)}\``,
+        }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      reviewed: false,
+      reviewCompleted: true,
+      codexReviewFindings: ["Preserve the authority predicate before merge."],
+    })
   })
 
   it("accepts an explicit CodeRabbit rate-limit only with clean exact-head review evidence", async () => {

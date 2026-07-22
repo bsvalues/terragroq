@@ -11,6 +11,7 @@ const COUNTER_ALIASES = Object.freeze({
 })
 const COUNTER_NAMES = Object.freeze(Object.values(COUNTER_ALIASES))
 const STALE_LOCK_MS = 10 * 60 * 1000
+const SHA = /^[0-9a-f]{40}$/
 
 function fail(code, message = code) {
   const error = new Error(message)
@@ -142,6 +143,31 @@ function assertFence(current, holderId, fencingToken) {
   if (current.lease.status !== "ACTIVE" || current.lease.holderId !== holderId) fail("LEASE_NOT_HELD")
 }
 
+function normalizedValidationEvidence(input, current) {
+  const value = Object.hasOwn(input, "validationEvidence")
+    ? input.validationEvidence
+    : current.validationEvidence ?? null
+  if (value === null) return null
+  if (!Array.isArray(value) || value.length === 0 || value.length > 20) {
+    fail("INVALID_VALIDATION_EVIDENCE")
+  }
+  return value.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)
+      || typeof entry.command !== "string" || entry.command.length === 0 || entry.command.length > 100
+      || !Array.isArray(entry.args) || entry.args.length > 100
+      || entry.args.some((arg) => typeof arg !== "string" || arg.length > 500)
+      || !Number.isInteger(entry.code)) {
+      fail("INVALID_VALIDATION_EVIDENCE")
+    }
+    return {
+      command: entry.command,
+      args: [...entry.args],
+      code: entry.code,
+      timedOut: entry.timedOut === true,
+    }
+  })
+}
+
 function metadata(input = {}, current = {}) {
   const prNumber = input.prNumber ?? current.prNumber ?? null
   if (prNumber !== null && (!Number.isInteger(prNumber) || prNumber < 1)) fail("INVALID_PR_NUMBER")
@@ -149,6 +175,27 @@ function metadata(input = {}, current = {}) {
   if (!Number.isInteger(providerRetryCount) || providerRetryCount < 0) fail("INVALID_PROVIDER_RETRY_COUNT")
   const outcome = input.outcome ?? current.outcome ?? null
   if (outcome !== null && (typeof outcome !== "object" || Array.isArray(outcome))) fail("INVALID_OUTCOME_SNAPSHOT")
+  const remediationRound = input.remediationRound ?? current.remediationRound ?? null
+  if (remediationRound !== null && (!Number.isInteger(remediationRound) || remediationRound < 0)) {
+    fail("INVALID_REMEDIATION_ROUND")
+  }
+  const validationFailure = input.validationFailure ?? current.validationFailure ?? null
+  if (validationFailure !== null && (typeof validationFailure !== "string" || validationFailure.length > 4_000)) {
+    fail("INVALID_VALIDATION_FAILURE")
+  }
+  const validationRemediationRound = input.validationRemediationRound
+    ?? current.validationRemediationRound ?? null
+  if (validationRemediationRound !== null
+    && (!Number.isInteger(validationRemediationRound) || validationRemediationRound < 0)) {
+    fail("INVALID_VALIDATION_REMEDIATION_ROUND")
+  }
+  const headRefOid = Object.hasOwn(input, "headRefOid")
+    ? input.headRefOid
+    : current.headRefOid ?? null
+  if (headRefOid !== null && (typeof headRefOid !== "string" || !SHA.test(headRefOid))) {
+    fail("INVALID_HEAD_REF_OID")
+  }
+  const validationEvidence = normalizedValidationEvidence(input, current)
   return {
     threadId: input.threadId ?? current.threadId ?? null,
     turnId: input.turnId ?? current.turnId ?? null,
@@ -156,9 +203,13 @@ function metadata(input = {}, current = {}) {
     prNumber,
     worktreePath: input.worktreePath ?? current.worktreePath ?? null,
     baseSha: input.baseSha ?? current.baseSha ?? null,
-    headRefOid: input.headRefOid ?? current.headRefOid ?? null,
+    headRefOid,
     mergeSha: input.mergeSha ?? current.mergeSha ?? null,
     providerRetryCount,
+    remediationRound,
+    validationFailure,
+    validationRemediationRound,
+    validationEvidence,
     outcome,
   }
 }
