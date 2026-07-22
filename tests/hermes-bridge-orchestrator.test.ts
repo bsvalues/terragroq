@@ -99,6 +99,13 @@ afterEach(() => {
 })
 
 describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
+  it("rejects review polling budgets that can outlive the lease", () => {
+    expect(() => createHermesOrchestrator({
+      reviewPollIntervalMs: 10 * 60 * 1000,
+      reviewPollAttempts: 5,
+    })).toThrow(expect.objectContaining({ code: "HERMES_REVIEW_POLL_BUDGET_WALL" }))
+  })
+
   it("stays silent and does not query outcomes while disabled", async () => {
     const value = fixture()
     fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
@@ -274,6 +281,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       state: "RETRYABLE_PROVIDER_WALL", detail: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
     })
     expect(interrupted.metadata.providerRetryCount).toBe(1)
+    expect(interrupted.metadata.remediationRound).toBeNull()
     expect(Date.parse(interrupted.lease.expiresAt)).toBe(Date.parse(interrupted.checkpoint.recordedAt))
     expect(value.markTerminal).not.toHaveBeenCalled()
 

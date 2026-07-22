@@ -135,6 +135,13 @@ export function createHermesOrchestrator(options = {}) {
   const sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)))
   const reviewPollIntervalMs = options.reviewPollIntervalMs ?? REVIEW_POLL_INTERVAL_MS
   const reviewPollAttempts = options.reviewPollAttempts ?? REVIEW_POLL_ATTEMPTS
+  if (!Number.isFinite(reviewPollIntervalMs) || reviewPollIntervalMs <= 0
+    || !Number.isInteger(reviewPollAttempts) || reviewPollAttempts <= 0
+    || reviewPollIntervalMs * reviewPollAttempts >= LEASE_DURATION_MS - 5 * 60 * 1000) {
+    throw Object.assign(new Error("Review polling must remain inside the lease window"), {
+      code: "HERMES_REVIEW_POLL_BUDGET_WALL",
+    })
+  }
   const holderId = options.holderId ?? `${os.hostname()}:${process.pid}:${randomUUID()}`
 
   async function checkpoint(lease, sequence, checkpointState, detail, metadata = {}) {
@@ -450,7 +457,7 @@ export function createHermesOrchestrator(options = {}) {
           timeoutMs: TURN_TIMEOUT_MS,
         })
         cp = await checkpoint(lease, sequence, "CODEX_TURN_COMPLETED", turn.status, {
-          threadId: turn.threadId, turnId: turn.turnId, remediationRound,
+          threadId: turn.threadId, turnId: turn.turnId,
         })
         sequence = cp.checkpointSequence
         const result = parseTurnResult(turn.finalText)
@@ -507,10 +514,10 @@ export function createHermesOrchestrator(options = {}) {
           ...(focusedTests.length > 0 ? [{ command: "npx", args: ["vitest", "run", ...focusedTests] }] : []),
           ...DEFAULT_VALIDATION_COMMANDS,
         ]
-        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_STARTED", null, { remediationRound })
+        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_STARTED", null)
         sequence = cp.checkpointSequence
         const validation = await lifecycle.runValidationCommands({ ...record, commands: validationCommands })
-        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_PASSED", null, { validation, remediationRound })
+        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_PASSED", null, { validation })
         sequence = cp.checkpointSequence
 
         const committed = await lifecycle.commitChanges({
