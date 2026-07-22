@@ -525,17 +525,14 @@ export function createRepositoryLifecycle(options) {
     const unresolved = unresolvedThreadCount(reviewState)
     const hasExactHeadCodexCleanComment = exactHeadCodexCleanComment(reviewState, pr.headRefOid)
     const hasExactHeadApproval = exactHeadApprovedReview(pr)
-    const failedCodeRabbit = checks.some((check) => /coderabbit/i.test(checkName(check))
-      && !SUCCESSFUL_CHECKS.has(checkState(check)))
     const rateLimitedCodeRabbitContexts = new Set()
-    if (failedCodeRabbit && (hasExactHeadApproval || hasExactHeadCodexCleanComment)) {
+    if (checks.some((check) => /coderabbit/i.test(checkName(check)))) {
       const statusResult = await run("gh", ["api", `repos/${repository}/commits/${pr.headRefOid}/status`])
       const status = parseJson(statusResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
       if (Array.isArray(status?.statuses)) {
         for (const entry of status.statuses) {
           const context = String(entry?.context ?? "")
           if (/coderabbit/i.test(context)
-            && String(entry?.state ?? "").toUpperCase() === "FAILURE"
             && String(entry?.description ?? "").trim().toLowerCase() === "review rate limited") {
             rateLimitedCodeRabbitContexts.add(context.toLowerCase())
           }
@@ -543,14 +540,16 @@ export function createRepositoryLifecycle(options) {
       }
     }
     const codeRabbitRateLimited = rateLimitedCodeRabbitContexts.size > 0
+    const hasExactHeadReview = hasExactHeadApproval || hasExactHeadCodexCleanComment
     return {
       ...pr,
-      checksGreen: checks.length > 0 && checks.every((check) => SUCCESSFUL_CHECKS.has(checkState(check))
-        || (typeof check?.context === "string"
-          && checkState(check) === "FAILURE"
-          && rateLimitedCodeRabbitContexts.has(check.context.toLowerCase()))),
-      reviewed: hasExactHeadApproval || hasExactHeadCodexCleanComment || checks.some((check) =>
-        /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"),
+      checksGreen: checks.length > 0 && checks.every((check) => {
+        const rateLimited = rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase())
+        return rateLimited ? hasExactHeadReview : SUCCESSFUL_CHECKS.has(checkState(check))
+      }),
+      reviewed: hasExactHeadReview || checks.some((check) =>
+        /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"
+          && !rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase())),
       codeRabbitRateLimited,
       unresolvedThreadCount: unresolved,
     }

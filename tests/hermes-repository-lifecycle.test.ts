@@ -28,6 +28,9 @@ function fixture(overrides: Record<string, (call: Call) => unknown> = {}) {
     if (key.includes("remote get-url origin")) return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
     if (key.includes("rev-parse refs/remotes/origin/main")) return { code: 0, stdout: `${sha}\n` }
     if (key.includes("show-ref --verify --quiet")) return { code: 1 }
+    if (key.includes("gh api repos/bsvalues/terragroq/commits/")) {
+      return { code: 0, stdout: JSON.stringify({ statuses: [] }) }
+    }
     return { code: 0, stdout: "" }
   }
   const lifecycle = createRepositoryLifecycle({
@@ -301,6 +304,25 @@ describe("Hermes repository lifecycle", () => {
       "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
     })
     await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: true, checksGreen: true })
+  })
+
+  it("does not accept a green-but-rate-limited CodeRabbit context without exact-head review", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { context: "CodeRabbit", state: "SUCCESS" },
+          { context: "Vercel", state: "SUCCESS" },
+        ], reviews: [],
+      }) }),
+      "gh api repos/bsvalues/terragroq/commits/": () => ({ code: 0, stdout: JSON.stringify({
+        statuses: [{ context: "CodeRabbit", state: "success", description: "Review rate limited" }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      reviewed: false, checksGreen: false, codeRabbitRateLimited: true,
+    })
   })
 
   it("does not treat a skipped CodeRabbit check as review evidence", async () => {
