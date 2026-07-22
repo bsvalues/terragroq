@@ -20,12 +20,13 @@ const REVIEW_POLL_ATTEMPTS = 80
 const SHA = /^[0-9a-f]{40}$/
 
 export const DEFAULT_VALIDATION_COMMANDS = Object.freeze([
-  Object.freeze({ command: "npm", args: Object.freeze(["run", "lint"]) }),
-  Object.freeze({ command: "npm", args: Object.freeze(["test", "--", "--run"]) }),
+  Object.freeze({ command: "npm", args: Object.freeze(["run", "lint"]), timeoutMs: 10 * 60 * 1000 }),
+  Object.freeze({ command: "npm", args: Object.freeze(["test", "--", "--run"]), timeoutMs: 15 * 60 * 1000 }),
   Object.freeze({
     command: "npm",
     args: Object.freeze(["run", "build"]),
     env: Object.freeze({ NEXT_PRIVATE_BUILD_WORKER: "0", NEXT_TELEMETRY_DISABLED: "1" }),
+    timeoutMs: 15 * 60 * 1000,
   }),
 ])
 
@@ -372,6 +373,7 @@ export function createHermesOrchestrator(options = {}) {
     const reservations = RESERVATIONS[outcome.lane]
     if (!reservations) throw Object.assign(new Error("No reservation for outcome lane"), { code: "HERMES_RESERVATION_WALL" })
     const baseSha = lease.metadata?.baseSha ?? await lifecycle.refreshOriginMain()
+    const recoveryCheckpointState = current?.checkpoint?.state ?? null
     const worktreePath = lease.metadata?.worktreePath
       ?? path.join(runtimeRoot, "worktrees", branch.slice("codex/".length))
     if (lease.metadata?.prNumber && lease.metadata?.mergeSha) {
@@ -410,13 +412,27 @@ export function createHermesOrchestrator(options = {}) {
     initialRemediationRound = Math.max(
       initialRemediationRound, lease.metadata?.validationRemediationRound ?? 0,
     )
-    if (SHA.test(lease.metadata?.headRefOid ?? "")) {
+    let durableHeadRefOid = lease.metadata?.headRefOid ?? null
+    if (!durableHeadRefOid && recoveryCheckpointState === "HOST_VALIDATION_PASSED") {
+      const workingPaths = await lifecycle.inspectWorkingTreePaths(record)
+      const worktreeHead = await lifecycle.inspectWorktreeHead(record)
+      if (workingPaths.length === 0 && worktreeHead !== baseSha) {
+        const changedPaths = await lifecycle.inspectChangedPaths(record)
+        assertChangedPathsAllowed(changedPaths, reservations)
+        cp = await checkpoint(lease, sequence, "COMMIT_RECOVERED", worktreeHead, {
+          branch, worktreePath: record.worktreePath, baseSha, headRefOid: worktreeHead,
+        })
+        sequence = cp.checkpointSequence
+        durableHeadRefOid = worktreeHead
+      }
+    }
+    if (SHA.test(durableHeadRefOid ?? "")) {
       const recoveredRemediationRound = lease.metadata.remediationRound ?? 0
       const workingPaths = await lifecycle.inspectWorkingTreePaths(record)
       if (workingPaths.length === 0) {
         const recovered = await advanceCommittedHead({
           lease, sequence, outcome, branch, reservations, record,
-          commit: lease.metadata.headRefOid, remediationRound: recoveredRemediationRound,
+          commit: durableHeadRefOid, remediationRound: recoveredRemediationRound,
         })
         if (recovered.kind !== "REMEDIATION") return recovered.result
         sequence = recovered.sequence
@@ -557,7 +573,9 @@ export function createHermesOrchestrator(options = {}) {
         const focusedTests = workingPaths.filter((changedPath) =>
           changedPath.startsWith("tests/") && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(changedPath))
         const validationCommands = [
-          ...(focusedTests.length > 0 ? [{ command: "npx", args: ["vitest", "run", ...focusedTests] }] : []),
+          ...(focusedTests.length > 0 ? [{
+            command: "npx", args: ["vitest", "run", ...focusedTests], timeoutMs: 5 * 60 * 1000,
+          }] : []),
           ...DEFAULT_VALIDATION_COMMANDS,
         ]
         cp = await checkpoint(lease, sequence, "HOST_VALIDATION_STARTED", null)

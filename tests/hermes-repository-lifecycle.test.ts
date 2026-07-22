@@ -16,7 +16,13 @@ const rootGit = `git -C ${root}`
 const ownedGit = `git -C ${ownedWorktree}`
 const branch = "codex/hermes-goal-77"
 
-type Call = { command: string; args: string[]; cwd: string }
+type Call = {
+  command: string
+  args: string[]
+  cwd: string
+  env?: Record<string, string>
+  timeoutMs?: number
+}
 
 function fixture(overrides: Record<string, (call: Call) => unknown> = {}) {
   const calls: Call[] = []
@@ -132,6 +138,7 @@ describe("Hermes repository lifecycle", () => {
       command: "npm",
       args: ["test", "--", "--run", "tests/unit.test.ts"],
       cwd: record.worktreePath,
+      timeoutMs: 10 * 60 * 1000,
     })
   })
 
@@ -159,6 +166,7 @@ describe("Hermes repository lifecycle", () => {
     expect(calls.at(-1)).toEqual({
       command: "npm", args: ["run", "build"], cwd: ownedWorktree,
       env: { NEXT_PRIVATE_BUILD_WORKER: "0", NEXT_TELEMETRY_DISABLED: "1" },
+      timeoutMs: 10 * 60 * 1000,
     })
     expect(() => createRepositoryLifecycle({
       workspaceRoot: root, ownedWorktreeRoot: ownedRoot,

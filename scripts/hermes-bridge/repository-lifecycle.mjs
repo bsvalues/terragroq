@@ -11,6 +11,7 @@ const SAFE_NAME = /^[a-z0-9](?:[a-z0-9._-]{0,119}[a-z0-9])?$/
 const SUCCESSFUL_CHECKS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"])
 const VALIDATION_EXECUTABLES = new Set(["node", "npm", "npx", "pnpm", "yarn", "bun", "cargo", "dotnet"])
 const VALIDATION_ENVIRONMENT = new Set(["NEXT_PRIVATE_BUILD_WORKER", "NEXT_TELEMETRY_DISABLED"])
+const MAX_VALIDATION_TIMEOUT_MS = 20 * 60 * 1000
 const PROHIBITED_WORD = /(^|[-_:])(deploy|production|release|tag)([-_:]|$)/i
 const SECRET_LIKE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+)/i
 
@@ -78,6 +79,7 @@ function normalizeResult(result) {
     code: result.code ?? result.status ?? 0,
     stdout: String(result.stdout ?? ""),
     stderr: String(result.stderr ?? ""),
+    timedOut: result.timedOut === true,
   }
 }
 
@@ -102,7 +104,7 @@ function resolveNativeInvocation(command, args) {
 }
 
 export function createCommandRunner() {
-  return ({ command, args, cwd, env }) => new Promise((resolve, reject) => {
+  return ({ command, args, cwd, env, timeoutMs }) => new Promise((resolve, reject) => {
     const invocation = resolveNativeInvocation(command, args)
     const child = spawn(invocation.command, invocation.args, {
       cwd,
@@ -113,10 +115,35 @@ export function createCommandRunner() {
     })
     let stdout = ""
     let stderr = ""
+    let timedOut = false
+    const timer = Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? setTimeout(() => {
+        timedOut = true
+        if (process.platform === "win32" && Number.isInteger(child.pid)) {
+          const taskkill = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe")
+          if (fs.statSync(taskkill, { throwIfNoEntry: false })?.isFile()) {
+            const killer = spawn(taskkill, ["/pid", String(child.pid), "/T", "/F"], {
+              shell: false, windowsHide: true, stdio: "ignore",
+            })
+            killer.on("error", () => child.kill())
+          } else child.kill()
+        } else child.kill("SIGKILL")
+      }, timeoutMs)
+      : null
     child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk })
     child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk })
-    child.on("error", reject)
-    child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }))
+    child.on("error", (error) => {
+      if (timer) clearTimeout(timer)
+      reject(error)
+    })
+    child.on("close", (code) => {
+      if (timer) clearTimeout(timer)
+      resolve({
+        code: timedOut ? 124 : (code ?? 1), stdout,
+        stderr: timedOut ? `${stderr}\nHERMES_VALIDATION_TIMEOUT`.trim() : stderr,
+        timedOut,
+      })
+    })
   })
 }
 
@@ -162,7 +189,10 @@ function normalizeValidation(command, index) {
   if (!command || typeof command !== "object" || Array.isArray(command)) {
     wall("HERMES_REPOSITORY_VALIDATION_WALL", `validationCommands[${index}]`)
   }
-  const normalized = { command: command.command, args: command.args ?? [], env: command.env ?? {} }
+  const normalized = {
+    command: command.command, args: command.args ?? [], env: command.env ?? {},
+    timeoutMs: command.timeoutMs ?? 10 * 60 * 1000,
+  }
   assertSafeInvocation(normalized.command, normalized.args)
   const executable = path.basename(normalized.command).toLowerCase().replace(/\.(cmd|exe)$/i, "")
   if (!VALIDATION_EXECUTABLES.has(executable)) {
@@ -173,10 +203,15 @@ function normalizeValidation(command, index) {
       !VALIDATION_ENVIRONMENT.has(key) || !["0", "1"].includes(value))) {
     wall("HERMES_REPOSITORY_VALIDATION_WALL", `validationCommands[${index}] environment`)
   }
+  if (!Number.isInteger(normalized.timeoutMs) || normalized.timeoutMs < 1_000
+    || normalized.timeoutMs > MAX_VALIDATION_TIMEOUT_MS) {
+    wall("HERMES_REPOSITORY_VALIDATION_WALL", `validationCommands[${index}] timeout`)
+  }
   return Object.freeze({
     command: normalized.command,
     args: Object.freeze([...normalized.args]),
     env: Object.freeze({ ...normalized.env }),
+    timeoutMs: normalized.timeoutMs,
   })
 }
 
@@ -313,12 +348,15 @@ export function createRepositoryLifecycle(options) {
   const validationCommands = (options.validationCommands ?? []).map(normalizeValidation)
   const records = new Map()
 
-  async function run(command, args, { cwd = workspaceRoot, allowFailure = false, env = {} } = {}) {
+  async function run(command, args, {
+    cwd = workspaceRoot, allowFailure = false, env = {}, timeoutMs,
+  } = {}) {
     assertSafeInvocation(command, args)
     let result
     try {
       const invocation = { command, args: [...args], cwd }
       if (Object.keys(env).length > 0) invocation.env = { ...env }
+      if (timeoutMs !== undefined) invocation.timeoutMs = timeoutMs
       result = normalizeResult(await runner(invocation))
     } catch {
       wall("HERMES_REPOSITORY_RUNNER_WALL", `${path.basename(command)} failed to start`)
@@ -495,7 +533,7 @@ export function createRepositoryLifecycle(options) {
     const results = []
     for (const command of normalized) {
       const result = await run(command.command, command.args, {
-        cwd: record.worktreePath, env: command.env, allowFailure: true,
+        cwd: record.worktreePath, env: command.env, timeoutMs: command.timeoutMs, allowFailure: true,
       })
       if (result.code !== 0) {
         const output = `${result.stdout}\n${result.stderr}`.trim().slice(-4_000)
@@ -505,6 +543,7 @@ export function createRepositoryLifecycle(options) {
         )
         error.validation = {
           command: command.command, args: [...command.args], code: result.code,
+          timedOut: result.timedOut,
           output: output || "Validator exited without output.",
         }
         throw error

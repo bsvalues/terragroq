@@ -500,6 +500,41 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.lifecycle.mergePullRequest).toHaveBeenCalledOnce()
   })
 
+  it("recovers a clean commit created after validation but before its durable checkpoint", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    value.state.initialize()
+    const lease = value.state.acquireLease({
+      idempotencyKey: "recover-uncheckpointed-commit-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: {
+        outcome, branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "hermes-goal-77-77"),
+        baseSha: "a".repeat(40),
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "recover-uncheckpointed-commit", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: lease.fencingToken, expectedCheckpointSequence: 0, state: "HOST_VALIDATION_PASSED",
+    })
+    value.lifecycle.inspectWorkingTreePaths.mockResolvedValue([])
+    value.lifecycle.inspectChangedPaths.mockResolvedValue([
+      "components/hermes/live-status.tsx", "tests/hermes-live-status.test.tsx",
+    ])
+    value.lifecycle.inspectWorktreeHead.mockResolvedValue("c".repeat(40))
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
+    expect(value.lifecycle.commitChanges).not.toHaveBeenCalled()
+    expect(value.lifecycle.inspectWorktreeHead).toHaveBeenCalled()
+    expect(value.lifecycle.pushBranch).toHaveBeenCalledWith(expect.objectContaining({
+      branch: "codex/hermes-goal-77-77",
+    }))
+    expect(value.lifecycle.mergePullRequest).toHaveBeenCalledOnce()
+  })
+
   it("terminalizes persisted review findings when the remediation budget is exhausted", async () => {
     const value = fixture()
     const outcome = await value.selectOutcome()
