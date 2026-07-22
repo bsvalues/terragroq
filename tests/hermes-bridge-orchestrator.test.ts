@@ -289,6 +289,32 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.lifecycle.resolveReviewThreads).not.toHaveBeenCalled()
   })
 
+  it("routes completed red PR checks through bounded Codex remediation", async () => {
+    const value = fixture()
+    value.lifecycle.inspectPullRequest
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: false,
+        checksComplete: true, failedChecks: [{ name: "Vercel", state: "FAILURE" }],
+        reviewed: true, reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 0,
+        headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true,
+        checksComplete: true, failedChecks: [], reviewed: true, reviewCompleted: true,
+        reviewRequested: true, unresolvedThreadCount: 0,
+        headRefOid: "c".repeat(40), mergeCommit: null,
+      })
+      .mockResolvedValueOnce({
+        state: "MERGED", baseRefName: "main", isDraft: false, checksGreen: true,
+        checksComplete: true, failedChecks: [], reviewed: true, unresolvedThreadCount: 0,
+        headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
+      })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+    expect(value.client.runTurn).toHaveBeenCalledTimes(2)
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Vercel concluded FAILURE")
+  })
+
   it("fails closed when Codex changes a path outside the lane reservation", async () => {
     const value = fixture(["components/hermes/live-status.tsx", "lib/db/schema.ts"])
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })

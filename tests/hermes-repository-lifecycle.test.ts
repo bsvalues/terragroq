@@ -354,6 +354,25 @@ describe("Hermes repository lifecycle", () => {
     })
   })
 
+  it("reports completed red checks as bounded remediation evidence", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "APPROVED", statusCheckRollup: [
+          { context: "Vercel", state: "FAILURE" },
+          { context: "Unit tests", state: "SUCCESS" },
+        ],
+        reviews: [{ author: { login: "independent-reviewer" }, state: "APPROVED", commit: { oid: sha } }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: false,
+      checksComplete: true,
+      failedChecks: [{ name: "Vercel", state: "FAILURE" }],
+    })
+  })
+
   it("does not accept a stale approval through reviewDecision", async () => {
     const { lifecycle } = fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({

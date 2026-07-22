@@ -255,6 +255,16 @@ export function createHermesOrchestrator(options = {}) {
         findings = await lifecycle.inspectReviewFindings(prNumber)
         break
       }
+      if (candidate.reviewCompleted && candidate.checksComplete && candidate.failedChecks?.length > 0) {
+        findings = candidate.failedChecks.map((check) => ({
+          threadId: null,
+          isOutdated: false,
+          path: "pull-request checks",
+          line: null,
+          body: `${check.name} concluded ${check.state}`,
+        }))
+        break
+      }
       if (candidate.checksGreen && candidate.reviewed) break
       await sleep(reviewPollIntervalMs)
       candidate = await lifecycle.inspectPullRequest(prNumber)

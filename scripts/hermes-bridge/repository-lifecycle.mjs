@@ -9,6 +9,7 @@ const SHA = /^[0-9a-f]{40}$/
 const BRANCH = /^codex\/hermes-[a-z0-9](?:[a-z0-9._-]{0,119}[a-z0-9])?$/
 const SAFE_NAME = /^[a-z0-9](?:[a-z0-9._-]{0,119}[a-z0-9])?$/
 const SUCCESSFUL_CHECKS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"])
+const PENDING_CHECKS = new Set(["", "EXPECTED", "IN_PROGRESS", "PENDING", "QUEUED", "REQUESTED", "WAITING"])
 const VALIDATION_EXECUTABLES = new Set(["node", "npm", "npx", "pnpm", "yarn", "bun", "cargo", "dotnet"])
 const VALIDATION_ENVIRONMENT = new Set(["NEXT_PRIVATE_BUILD_WORKER", "NEXT_TELEMETRY_DISABLED"])
 const MAX_VALIDATION_TIMEOUT_MS = 20 * 60 * 1000
@@ -635,12 +636,23 @@ export function createRepositoryLifecycle(options) {
     const hasCodeRabbitReview = checks.some((check) =>
       /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"
         && !rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase()))
+    const effectiveCheckState = (check) => {
+      const rateLimited = rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase())
+      if (rateLimited) return hasExactHeadReview ? "SUCCESS" : "PENDING"
+      return checkState(check)
+    }
+    const failedChecks = checks.flatMap((check) => {
+      const state = effectiveCheckState(check)
+      if (SUCCESSFUL_CHECKS.has(state) || PENDING_CHECKS.has(state)) return []
+      const name = checkName(check).trim() || "Unnamed check"
+      if (SECRET_LIKE.test(name)) wall("HERMES_REPOSITORY_SECRET_WALL", "secret-like check name refused")
+      return [{ name: name.slice(0, 200), state: state.slice(0, 80) }]
+    })
     return {
       ...pr,
-      checksGreen: checks.length > 0 && checks.every((check) => {
-        const rateLimited = rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase())
-        return rateLimited ? hasExactHeadReview : SUCCESSFUL_CHECKS.has(checkState(check))
-      }),
+      checksGreen: checks.length > 0 && checks.every((check) => SUCCESSFUL_CHECKS.has(effectiveCheckState(check))),
+      checksComplete: checks.length > 0 && checks.every((check) => !PENDING_CHECKS.has(effectiveCheckState(check))),
+      failedChecks,
       reviewed: hasExactHeadReview || hasCodeRabbitReview,
       reviewCompleted: hasExactHeadApproval || hasExactHeadCodexCompletedReview || hasCodeRabbitReview,
       codeRabbitRateLimited,
