@@ -70,6 +70,12 @@ function validateState(state, storeId) {
     || typeof state.idempotency !== "object" || typeof state.ownerTouchCounters !== "object") {
     fail("HERMES_STATE_CORRUPT")
   }
+  for (const execution of Object.values(state.executions)) {
+    const validationFailure = execution?.metadata?.validationFailure
+    if (typeof validationFailure === "string" && validationFailure && SENSITIVE_EVIDENCE.test(validationFailure)) {
+      fail("VALIDATION_FAILURE_SECRET_WALL")
+    }
+  }
   return state
 }
 
@@ -78,7 +84,7 @@ export function readHermesState(filePath, storeId = "hermes-bridge") {
   try {
     return validateState(JSON.parse(fs.readFileSync(filePath, "utf8")), storeId)
   } catch (error) {
-    if (error?.code === "HERMES_STATE_CORRUPT") throw error
+    if (["HERMES_STATE_CORRUPT", "VALIDATION_FAILURE_SECRET_WALL"].includes(error?.code)) throw error
     fail("HERMES_STATE_CORRUPT", `Unable to read Hermes state: ${error.message}`)
   }
 }

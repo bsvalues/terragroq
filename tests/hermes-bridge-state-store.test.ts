@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -84,6 +84,20 @@ describe("Hermes bridge durable state store", () => {
         metadata: { validationFailure }, idempotencyKey: `secret-evidence-${index}`,
       })).toThrowError(expect.objectContaining({ code: "VALIDATION_FAILURE_SECRET_WALL" }))
     }
+  })
+
+  it("refuses secret-bearing validation failure evidence already persisted on disk", () => {
+    const { dir, store } = fixture()
+    store.acquireLease({
+      outcomeId: "GOAL-1", holderId: "thread-1", leaseDurationMs: 1000,
+      metadata: { validationFailure: "ordinary test failure" }, idempotencyKey: "acquire-persisted-secret",
+    })
+    const statePath = join(dir, "state.json")
+    const state = JSON.parse(readFileSync(statePath, "utf8"))
+    state.executions["GOAL-1"].metadata.validationFailure = "redis://:credential@cache.invalid/0"
+    writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8")
+
+    expect(() => store.read()).toThrowError(expect.objectContaining({ code: "VALIDATION_FAILURE_SECRET_WALL" }))
   })
 
   it("reclaims only expired leases and fences stale writers", () => {

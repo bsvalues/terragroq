@@ -81,10 +81,12 @@ describe("Hermes repository lifecycle", () => {
   it("removes repository and provider secrets from child command environments", () => {
     expect(createCommandEnvironment({
       Path: "C:/tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
+      SSH_AUTH_SOCK: "C:/Users/owner/.ssh/agent.sock",
       DATABASE_URL: "postgresql://owner:secret@database.invalid/app", OPENAI_API_KEY: "secret",
       GH_TOKEN: "secret", BETTER_AUTH_SECRET: "secret",
     }, { NEXT_TELEMETRY_DISABLED: "1", DATABASE_URL: "still-forbidden" })).toEqual({
       Path: "C:/tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
+      SSH_AUTH_SOCK: "C:/Users/owner/.ssh/agent.sock",
       NEXT_TELEMETRY_DISABLED: "1",
     })
   })
