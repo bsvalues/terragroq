@@ -270,13 +270,37 @@ describe("Hermes bridge durable state store", () => {
     }
   })
 
+  it("recovers only an exact zero-touch external-tool wall after supervisor containment", () => {
+    const { store } = fixture()
+    const first = store.acquireLease({
+      outcomeId: "5", holderId: "contained-holder", leaseDurationMs: 1000,
+      metadata: { threadId: "blocked-thread", turnId: "blocked-turn" }, idempotencyKey: "external-acquire",
+    })
+    store.checkpoint({
+      outcomeId: "5", holderId: "contained-holder", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "RETRYABLE_WALL", detail: "APP_SERVER_EXTERNAL_TOOL_WALL",
+      idempotencyKey: "external-wall",
+    })
+    expect(store.recoverExternalToolWall({
+      outcomeId: "5", expectedFencingToken: first.fencingToken,
+      expectedHolderId: "contained-holder", activationDisabled: true,
+      idempotencyKey: "external-recover",
+    })).toMatchObject({ leaseStatus: "ABANDONED", checkpointSequence: 2 })
+    expect(store.read().executions["5"]).toMatchObject({
+      lease: { status: "ABANDONED", recoverReason: "APP_SERVER_EXTERNAL_TOOL_WALL" },
+      checkpoint: { state: "EXTERNAL_TOOL_WALL_RECOVERED" },
+      metadata: { threadId: null, turnId: null },
+    })
+  })
+
   it("defers provider-unavailable work without losing its resumable execution", () => {
     const { store, advance } = fixture()
     const first = store.acquireLease({ outcomeId: "5", holderId: "one", leaseDurationMs: 1000, idempotencyKey: "a" })
     store.checkpoint({
       outcomeId: "5", holderId: "one", fencingToken: first.fencingToken,
       expectedCheckpointSequence: 0, state: "PROVIDER_UNAVAILABLE",
-      detail: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED", metadata: { providerRetryCount: 3 },
+      detail: "BOUNDED_PROVIDER_REDISPATCH_EXHAUSTED",
+      metadata: { providerRetryCount: 3, externalToolRetryCount: 3 },
       idempotencyKey: "provider-unavailable",
     })
     expect(store.deferProviderWall({
@@ -286,7 +310,7 @@ describe("Hermes bridge durable state store", () => {
     expect(store.read().executions["5"]).toMatchObject({
       lease: { status: "DEFERRED", deferReason: "PROVIDER_UNAVAILABLE" },
       checkpoint: { state: "DEFERRED_PROVIDER_UNAVAILABLE" },
-      metadata: { providerRetryCount: 0 },
+      metadata: { providerRetryCount: 0, externalToolRetryCount: 0 },
     })
     advance(15 * 60 * 1000 + 1)
     const resumed = store.reclaimLease({
@@ -295,6 +319,7 @@ describe("Hermes bridge durable state store", () => {
     })
     expect(resumed.fencingToken).toBeGreaterThan(first.fencingToken)
     expect(resumed.metadata.providerRetryCount).toBe(0)
+    expect(resumed.metadata.externalToolRetryCount).toBe(0)
   })
 
   it("persists owner-touch counters and enforces the kill switch", () => {

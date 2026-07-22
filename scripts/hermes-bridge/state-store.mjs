@@ -192,6 +192,10 @@ function metadata(input = {}, current = {}) {
   if (prNumber !== null && (!Number.isInteger(prNumber) || prNumber < 1)) fail("INVALID_PR_NUMBER")
   const providerRetryCount = input.providerRetryCount ?? current.providerRetryCount ?? 0
   if (!Number.isInteger(providerRetryCount) || providerRetryCount < 0) fail("INVALID_PROVIDER_RETRY_COUNT")
+  const externalToolRetryCount = input.externalToolRetryCount ?? current.externalToolRetryCount ?? 0
+  if (!Number.isInteger(externalToolRetryCount) || externalToolRetryCount < 0) {
+    fail("INVALID_EXTERNAL_TOOL_RETRY_COUNT")
+  }
   const outcome = input.outcome ?? current.outcome ?? null
   if (outcome !== null && (typeof outcome !== "object" || Array.isArray(outcome))) fail("INVALID_OUTCOME_SNAPSHOT")
   const remediationRound = input.remediationRound ?? current.remediationRound ?? null
@@ -237,6 +241,7 @@ function metadata(input = {}, current = {}) {
     headRefOid,
     mergeSha: input.mergeSha ?? current.mergeSha ?? null,
     providerRetryCount,
+    externalToolRetryCount,
     remediationRound,
     validationFailure,
     validationRemediationRound,
@@ -447,6 +452,50 @@ export function reopenValidationInfrastructureWall(filePath, request, options = 
   })
 }
 
+export function recoverExternalToolWall(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    const ownerTouchesRemainZero = COUNTER_NAMES.every(
+      (counter) => state.ownerTouchCounters[counter] === 0,
+    )
+    if (request.activationDisabled !== true
+      || current.fencingToken !== request.expectedFencingToken
+      || current.lease.status !== "ACTIVE"
+      || current.lease.holderId !== request.expectedHolderId
+      || current.checkpoint.state !== "RETRYABLE_WALL"
+      || current.checkpoint.detail !== "APP_SERVER_EXTERNAL_TOOL_WALL"
+      || !ownerTouchesRemainZero) {
+      fail("EXTERNAL_TOOL_RECOVERY_STATE_WALL")
+    }
+    const recovered = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "ABANDONED",
+        expiresAt: at.iso,
+        recoveredAt: at.iso,
+        recoverReason: "APP_SERVER_EXTERNAL_TOOL_WALL",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "EXTERNAL_TOOL_WALL_RECOVERED",
+        detail: "APP_SERVER_EXTERNAL_TOOL_WALL",
+        recordedAt: at.iso,
+      },
+      metadata: metadata({ threadId: null, turnId: null }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: recovered }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: recovered.fencingToken,
+      checkpointSequence: recovered.checkpoint.sequence,
+      leaseStatus: recovered.lease.status,
+    }
+  })
+}
+
 export function deferProviderWall(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
@@ -472,7 +521,7 @@ export function deferProviderWall(filePath, request, options = {}) {
         detail: retryAt.iso,
         recordedAt: at.iso,
       },
-      metadata: metadata({ providerRetryCount: 0 }, current.metadata),
+      metadata: metadata({ providerRetryCount: 0, externalToolRetryCount: 0 }, current.metadata),
     }
     state.executions = { ...state.executions, [request.outcomeId]: deferred }
     return {
@@ -518,6 +567,7 @@ export function createHermesStateStore(filePath, options = {}) {
     releaseLease: (request) => releaseLease(filePath, request, options),
     reopenProviderWall: (request) => reopenProviderWall(filePath, request, options),
     reopenValidationInfrastructureWall: (request) => reopenValidationInfrastructureWall(filePath, request, options),
+    recoverExternalToolWall: (request) => recoverExternalToolWall(filePath, request, options),
     deferProviderWall: (request) => deferProviderWall(filePath, request, options),
     setKillSwitch: (request) => setKillSwitch(filePath, request, options),
     recordOwnerTouch: (request) => recordOwnerTouch(filePath, request, options),

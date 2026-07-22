@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import fs from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { CodexAppServerClient, sanitizeAppServerText } from "./app-server-client.mjs"
@@ -135,6 +136,34 @@ export async function recoverValidationInfrastructureWall(options = {}) {
   return { result: "RECOVERED", outcomeId: candidate.outcomeId, proofRecorded: true }
 }
 
+export function recoverExternalToolWall(options = {}) {
+  const orchestrator = options.orchestrator ?? createHermesOrchestrator({ workspace: process.cwd() })
+  const activationPath = path.join(orchestrator.runtimeRoot, "control", "activation")
+  const supervisorPath = path.join(orchestrator.runtimeRoot, "state", "supervisor.json")
+  const activation = fs.existsSync(activationPath) ? fs.readFileSync(activationPath, "utf8").trim() : "disabled"
+  if (activation !== "disabled" || fs.existsSync(supervisorPath)) {
+    throw Object.assign(new Error("Supervisor must be stopped before external-tool recovery"), { code: "HERMES_EXTERNAL_TOOL_RECOVERY_SUPERVISOR_WALL" })
+  }
+  const state = orchestrator.state.read()
+  const candidates = Object.values(state.executions).filter((execution) => (
+    execution?.lease?.status === "ACTIVE"
+    && execution?.checkpoint?.state === "RETRYABLE_WALL"
+    && execution?.checkpoint?.detail === "APP_SERVER_EXTERNAL_TOOL_WALL"
+  ))
+  if (candidates.length !== 1) {
+    throw Object.assign(new Error("Exactly one external-tool wall is required"), { code: "HERMES_EXTERNAL_TOOL_RECOVERY_CANDIDATE_WALL" })
+  }
+  const candidate = candidates[0]
+  const recovered = orchestrator.state.recoverExternalToolWall({
+    idempotencyKey: `${candidate.outcomeId}:recover-external-tool:${candidate.fencingToken}`,
+    outcomeId: candidate.outcomeId,
+    expectedFencingToken: candidate.fencingToken,
+    expectedHolderId: candidate.lease.holderId,
+    activationDisabled: true,
+  })
+  return { result: "RECOVERED", outcomeId: candidate.outcomeId, checkpointSequence: recovered.checkpointSequence }
+}
+
 export async function runCli(command = process.argv[2]) {
   try {
     if (command === "cycle") {
@@ -144,11 +173,12 @@ export async function runCli(command = process.argv[2]) {
     else if (command === "smoke") print(await smoke())
     else if (command === "recover-native-provider-wall") print(await recoverNativeProviderWall())
     else if (command === "recover-validation-infrastructure-wall") print(await recoverValidationInfrastructureWall())
+    else if (command === "recover-external-tool-wall") print(recoverExternalToolWall())
     else if (command === "status") {
       const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
       print(readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")))
     } else {
-      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall|recover-validation-infrastructure-wall"), { code: "HERMES_CLI_USAGE" })
+      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-external-tool-wall"), { code: "HERMES_CLI_USAGE" })
     }
   } catch (error) {
     print({ result: "WALL", code: error?.code ?? "HERMES_CLI_FAILED", message: sanitizeBridgeMessage(error?.message ?? "Hermes bridge failed") })
