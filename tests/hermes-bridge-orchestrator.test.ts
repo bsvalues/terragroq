@@ -564,6 +564,14 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       lease: { status: "ACTIVE" },
       checkpoint: { state: "FAILED_TERMINAL", detail: "VALIDATION_REMEDIATION_EXHAUSTED" },
     })
+    const turnCount = value.client.runTurn.mock.calls.length
+    value.advance(50 * 60 * 1000 + 1)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "FAILED_TERMINAL", nextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    expect(value.client.runTurn).toHaveBeenCalledTimes(turnCount)
+    expect(value.state.read().executions["77"].lease.status).toBe("RELEASED")
   })
 
   it("resumes merged-PR finalization from durable state without redispatching Codex", async () => {

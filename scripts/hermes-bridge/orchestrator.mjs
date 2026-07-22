@@ -398,6 +398,27 @@ export function createHermesOrchestrator(options = {}) {
       })
       return { result: "PROVIDER_UNAVAILABLE", outcomeId, nextState: "DEFERRED_PROVIDER_UNAVAILABLE", retryAfter }
     }
+    if (current?.checkpoint?.state === "FAILED_TERMINAL") {
+      const nextState = current.checkpoint.detail
+      if (typeof nextState !== "string" || !nextState) {
+        throw Object.assign(new Error("Persisted terminal checkpoint is incomplete"), {
+          code: "HERMES_OUTCOME_TERMINAL_WALL",
+        })
+      }
+      const outcomeTerminalized = await markTerminal({
+        outcomeId: outcome.id, result: "FAILED_TERMINAL", nextState,
+      })
+      if (!outcomeTerminalized) {
+        throw Object.assign(new Error("Persisted outcome could not be terminalized"), {
+          code: "HERMES_OUTCOME_TERMINAL_WALL",
+        })
+      }
+      state.releaseLease({
+        idempotencyKey: `${outcomeId}:release:FAILED_TERMINAL:${nextState}`,
+        outcomeId, holderId, fencingToken: lease.fencingToken,
+      })
+      return { result: "FAILED_TERMINAL", outcomeId, nextState }
+    }
     const branch = lease.metadata?.branch ?? `codex/hermes-${safeLeaf(outcomeRef(outcome))}-${outcome.id}`
     const reservations = RESERVATIONS[outcome.lane]
     if (!reservations) throw Object.assign(new Error("No reservation for outcome lane"), { code: "HERMES_RESERVATION_WALL" })
