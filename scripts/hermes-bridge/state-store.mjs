@@ -228,8 +228,8 @@ function metadata(input = {}, current = {}) {
   }
   const validationEvidence = normalizedValidationEvidence(input, current)
   return {
-    threadId: input.threadId ?? current.threadId ?? null,
-    turnId: input.turnId ?? current.turnId ?? null,
+    threadId: Object.hasOwn(input, "threadId") ? input.threadId : current.threadId ?? null,
+    turnId: Object.hasOwn(input, "turnId") ? input.turnId : current.turnId ?? null,
     branch: input.branch ?? current.branch ?? null,
     prNumber,
     worktreePath: input.worktreePath ?? current.worktreePath ?? null,
@@ -381,6 +381,7 @@ export function reopenProviderWall(filePath, request, options = {}) {
         detail: request.expectedDetail,
         recordedAt: at.iso,
       },
+      metadata: metadata({ threadId: null, turnId: null }, current.metadata),
     }
     state.executions = { ...state.executions, [request.outcomeId]: reopened }
     return {

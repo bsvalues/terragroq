@@ -470,13 +470,15 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       state: "RETRYABLE_PROVIDER_WALL", detail: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
     })
     expect(interrupted.metadata.providerRetryCount).toBe(1)
+    expect(interrupted.metadata.threadId).toBeNull()
+    expect(interrupted.metadata.turnId).toBeNull()
     expect(interrupted.metadata.remediationRound).toBeNull()
     expect(Date.parse(interrupted.lease.expiresAt)).toBe(Date.parse(interrupted.checkpoint.recordedAt))
     expect(value.markTerminal).not.toHaveBeenCalled()
 
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
     expect(value.state.read().executions["77"].fencingToken).toBeGreaterThan(interrupted.fencingToken)
-    expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.any(Object))
+    expect(value.client.startThread).toHaveBeenCalledTimes(2)
   })
 
   it("settles an outcome as provider-unavailable after the bounded redispatch budget", async () => {
@@ -505,6 +507,22 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       checkpoint: { state: "DEFERRED_PROVIDER_UNAVAILABLE", detail: "2026-07-21T01:15:00.000Z" },
       metadata: { providerRetryCount: 0 },
     })
+    expect(value.state.read().executions["77"].metadata.threadId).toBeNull()
+    expect(value.state.read().executions["77"].metadata.turnId).toBeNull()
+
+    value.client.runTurn.mockResolvedValueOnce({
+      threadId: "thread-fresh", turnId: "turn-fresh", status: "completed",
+      finalText: JSON.stringify({
+        result: "READY_FOR_VALIDATION", workOrder: "WO-HERMES-77-001",
+        branch: "codex/hermes-goal-77-77", commit: null, prUrl: null,
+        merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0,
+        ownerTouchCount: 0, blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE",
+      }),
+    })
+    value.advance(15 * 60 * 1000 + 1)
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    expect(value.client.startThread).toHaveBeenCalledTimes(4)
+    expect(value.client.resumeThread).not.toHaveBeenCalled()
   })
 
   it("resumes cross-store provider-unavailable settlement without another Codex turn", async () => {

@@ -375,7 +375,9 @@ export function createHermesOrchestrator(options = {}) {
         expectedFencingToken: current.fencingToken,
         holderId,
         leaseDurationMs: LEASE_DURATION_MS,
-        metadata: current.metadata,
+        metadata: current.checkpoint.state === "DEFERRED_PROVIDER_UNAVAILABLE"
+          ? { ...current.metadata, threadId: null, turnId: null }
+          : current.metadata,
       })
     } else {
       lease = state.acquireLease({
@@ -603,7 +605,9 @@ export function createHermesOrchestrator(options = {}) {
           const providerRetryCount = (cp.metadata.providerRetryCount ?? 0) + 1
           if (providerRetryCount >= MAX_PROVIDER_REDISPATCHES) {
             const retryAfter = new Date(now().getTime() + PROVIDER_RETRY_COOLDOWN_MS).toISOString()
-            cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", retryAfter, { providerRetryCount })
+            cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", retryAfter, {
+              providerRetryCount, threadId: null, turnId: null,
+            })
             if (!await deferOutcome({ outcomeId: outcome.id, retryAfter })) {
               throw Object.assign(new Error("Provider-unavailable outcome could not be deferred"), { code: "HERMES_PROVIDER_SETTLEMENT_WALL" })
             }
@@ -613,7 +617,9 @@ export function createHermesOrchestrator(options = {}) {
             })
             return { result: "PROVIDER_UNAVAILABLE", outcomeId, nextState: "DEFERRED_PROVIDER_UNAVAILABLE", retryAfter }
           }
-          cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null, { providerRetryCount })
+          cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null, {
+            providerRetryCount, threadId: null, turnId: null,
+          })
           state.abandonLease({
             idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${cp.checkpointSequence}`,
             outcomeId, holderId, fencingToken: lease.fencingToken,
