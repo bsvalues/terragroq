@@ -603,7 +603,8 @@ export function createHermesOrchestrator(options = {}) {
         }
         assertChangedPathsAllowed(workingPaths, reservations)
         const focusedTests = workingPaths.filter((changedPath) =>
-          changedPath.startsWith("tests/") && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(changedPath))
+          changedPath.startsWith("tests/") && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(changedPath)
+            && fs.statSync(path.join(record.worktreePath, changedPath), { throwIfNoEntry: false })?.isFile())
         const validationCommands = [
           ...(focusedTests.length > 0 ? [{
             command: "npx", args: ["vitest", "run", ...focusedTests], timeoutMs: 5 * 60 * 1000,

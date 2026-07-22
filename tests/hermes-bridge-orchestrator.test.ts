@@ -350,6 +350,16 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.markComplete).not.toHaveBeenCalled()
   })
 
+  it("does not pass deleted test paths to focused validation", async () => {
+    const value = fixture([
+      "components/hermes/live-status.tsx", "tests/deleted-hermes-status.test.tsx",
+    ])
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    const commands = value.lifecycle.runValidationCommands.mock.calls[0][0].commands
+    expect(commands).not.toContainEqual(expect.objectContaining({ command: "npx" }))
+  })
+
   it("resumes an unfinished Codex thread without disabling its native environment", async () => {
     const value = fixture(["lib/db/schema.ts"])
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
