@@ -201,7 +201,14 @@ export function createHermesOrchestrator(options = {}) {
 
   async function finalizeTerminal({ lease, sequence, outcome, nextState }) {
     const terminal = await checkpoint(lease, sequence, "FAILED_TERMINAL", nextState)
-    await markTerminal({ outcomeId: outcome.id, result: "FAILED_TERMINAL", nextState })
+    const outcomeTerminalized = await markTerminal({
+      outcomeId: outcome.id, result: "FAILED_TERMINAL", nextState,
+    })
+    if (!outcomeTerminalized) {
+      throw Object.assign(new Error("Persisted outcome could not be terminalized"), {
+        code: "HERMES_OUTCOME_TERMINAL_WALL",
+      })
+    }
     state.releaseLease({
       idempotencyKey: `${lease.outcomeId}:release:FAILED_TERMINAL:${nextState}`,
       outcomeId: lease.outcomeId, holderId, fencingToken: lease.fencingToken,

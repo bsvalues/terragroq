@@ -446,6 +446,22 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(createHermesStateStore(value.orchestrator.statePath).read().executions["77"].lease.status).toBe("ACTIVE")
   })
 
+  it("retains the lease when persisted terminal settlement fails", async () => {
+    const value = fixture()
+    const validationError = Object.assign(new Error("validation failed"), {
+      code: "HERMES_VALIDATION_FAILED",
+      validation: { command: "npm", args: ["test"], code: 1, output: "deterministic failure" },
+    })
+    value.lifecycle.runValidationCommands.mockRejectedValue(validationError)
+    value.markTerminal.mockResolvedValueOnce(false)
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_OUTCOME_TERMINAL_WALL" })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "ACTIVE" },
+      checkpoint: { state: "FAILED_TERMINAL", detail: "VALIDATION_REMEDIATION_EXHAUSTED" },
+    })
+  })
+
   it("resumes merged-PR finalization from durable state without redispatching Codex", async () => {
     const value = fixture()
     const outcome = await value.selectOutcome()
