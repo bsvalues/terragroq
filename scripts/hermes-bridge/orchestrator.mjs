@@ -88,6 +88,15 @@ ${findings.map((finding, index) => `${index + 1}. ${finding.path}${finding.line 
 Remediate every valid finding using only repository file reads and edits inside the existing reserved paths. Do not run native commands, Git, or GitHub CLI. Independently review the resulting file changes. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
 }
 
+function buildValidationRemediationPrompt({ workOrderId, branch, validation }) {
+  return `Continue ${workOrderId} on ${branch}.
+
+Hermes native-host validation rejected the current file handoff:
+${validation}
+
+Use only repository file reads and edits inside the existing reserved paths. Correct the validation failure, independently review the resulting file changes, and do not run native commands, Git, or GitHub CLI. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
+}
+
 function allowedPath(changedPath, reservations) {
   if (FORBIDDEN_CHANGED_PATH.test(changedPath)) return false
   return reservations.some((reservation) => {
@@ -378,6 +387,7 @@ export function createHermesOrchestrator(options = {}) {
     sequence = cp.checkpointSequence
 
     let pendingFindings = []
+    let pendingValidationFailure = lease.metadata?.validationFailure || null
     let initialRemediationRound = 0
     if (SHA.test(lease.metadata?.headRefOid ?? "")) {
       const recoveredRemediationRound = lease.metadata.remediationRound ?? 0
@@ -437,6 +447,10 @@ export function createHermesOrchestrator(options = {}) {
 
       let deliveryPrompt = pendingFindings.length > 0
         ? buildRemediationPrompt({ workOrderId: `WO-HERMES-${outcome.id}-001`, branch, findings: pendingFindings })
+        : pendingValidationFailure
+          ? buildValidationRemediationPrompt({
+            workOrderId: `WO-HERMES-${outcome.id}-001`, branch, validation: pendingValidationFailure,
+          })
         : buildHermesCodexPrompt({
         outcome: outcome.command,
         outcomeRef: outcomeRef(outcome),
@@ -527,8 +541,27 @@ export function createHermesOrchestrator(options = {}) {
         ]
         cp = await checkpoint(lease, sequence, "HOST_VALIDATION_STARTED", null)
         sequence = cp.checkpointSequence
-        const validation = await lifecycle.runValidationCommands({ ...record, commands: validationCommands })
-        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_PASSED", null, { validation })
+        let validation
+        try {
+          validation = await lifecycle.runValidationCommands({ ...record, commands: validationCommands })
+        } catch (error) {
+          if (error?.code !== "HERMES_VALIDATION_FAILED" || !error?.validation
+            || remediationRound >= MAX_REMEDIATION_ROUNDS) throw error
+          const detail = `${error.validation.command} ${error.validation.args.join(" ")} exited ${error.validation.code}\n${error.validation.output}`
+            .slice(0, 4_000)
+          cp = await checkpoint(lease, sequence, "VALIDATION_REMEDIATION_REQUIRED", null, {
+            validationFailure: detail,
+          })
+          sequence = cp.checkpointSequence
+          pendingValidationFailure = detail
+          deliveryPrompt = buildValidationRemediationPrompt({
+            workOrderId: `WO-HERMES-${outcome.id}-001`, branch, validation: detail,
+          })
+          continue
+        }
+        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_PASSED", null, {
+          validation, validationFailure: "",
+        })
         sequence = cp.checkpointSequence
 
         const committed = await lifecycle.commitChanges({

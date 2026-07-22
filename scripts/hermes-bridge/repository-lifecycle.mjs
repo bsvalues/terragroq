@@ -494,7 +494,21 @@ export function createRepositoryLifecycle(options) {
     if (normalized.length === 0) wall("HERMES_REPOSITORY_VALIDATION_WALL", "at least one validation command required")
     const results = []
     for (const command of normalized) {
-      const result = await run(command.command, command.args, { cwd: record.worktreePath, env: command.env })
+      const result = await run(command.command, command.args, {
+        cwd: record.worktreePath, env: command.env, allowFailure: true,
+      })
+      if (result.code !== 0) {
+        const output = `${result.stdout}\n${result.stderr}`.trim().slice(-4_000)
+        if (SECRET_LIKE.test(output)) wall("HERMES_REPOSITORY_SECRET_WALL", "validation output refused")
+        const error = new HermesRepositoryLifecycleError(
+          "HERMES_VALIDATION_FAILED", `${path.basename(command.command)} exited ${result.code}`,
+        )
+        error.validation = {
+          command: command.command, args: [...command.args], code: result.code,
+          output: output || "Validator exited without output.",
+        }
+        throw error
+      }
       results.push({ command: command.command, args: [...command.args], code: result.code })
     }
     return results

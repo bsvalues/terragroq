@@ -184,6 +184,27 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       .toBe(1)
   })
 
+  it("routes native validation failures back to the same Codex thread before committing", async () => {
+    const value = fixture()
+    const validationError = Object.assign(new Error("validation failed"), {
+      code: "HERMES_VALIDATION_FAILED",
+      validation: {
+        command: "npm", args: ["test", "--", "--run"], code: 1,
+        output: "tests/home.test.ts: expected active work",
+      },
+    })
+    value.lifecycle.runValidationCommands
+      .mockRejectedValueOnce(validationError)
+      .mockResolvedValueOnce([{ command: "npm", args: ["test"], code: 0 }])
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+    expect(value.client.runTurn).toHaveBeenCalledTimes(2)
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("expected active work")
+    expect(value.lifecycle.commitChanges).toHaveBeenCalledOnce()
+    expect(createHermesStateStore(value.orchestrator.statePath).read().executions["77"].metadata.validationFailure)
+      .toBe("")
+  })
+
   it("requests exact-head review when the committed PR has no review evidence", async () => {
     const value = fixture()
     value.lifecycle.inspectPullRequest

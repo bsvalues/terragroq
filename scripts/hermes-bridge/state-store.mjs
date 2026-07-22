@@ -153,6 +153,10 @@ function metadata(input = {}, current = {}) {
   if (remediationRound !== null && (!Number.isInteger(remediationRound) || remediationRound < 0)) {
     fail("INVALID_REMEDIATION_ROUND")
   }
+  const validationFailure = input.validationFailure ?? current.validationFailure ?? null
+  if (validationFailure !== null && (typeof validationFailure !== "string" || validationFailure.length > 4_000)) {
+    fail("INVALID_VALIDATION_FAILURE")
+  }
   return {
     threadId: input.threadId ?? current.threadId ?? null,
     turnId: input.turnId ?? current.turnId ?? null,
@@ -164,6 +168,7 @@ function metadata(input = {}, current = {}) {
     mergeSha: input.mergeSha ?? current.mergeSha ?? null,
     providerRetryCount,
     remediationRound,
+    validationFailure,
     outcome,
   }
 }

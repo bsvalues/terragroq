@@ -167,6 +167,16 @@ describe("Hermes repository lifecycle", () => {
     })).toThrow(HermesRepositoryLifecycleError)
   })
 
+  it("returns bounded secret-screened validator evidence for Codex remediation", async () => {
+    const { lifecycle, record } = await ownedFixture({
+      npm: () => ({ code: 1, stdout: "", stderr: "tests/radar.test.ts: expected READY but received BLOCKED" }),
+    })
+    await expect(lifecycle.runValidationCommands({ ...record })).rejects.toMatchObject({
+      code: "HERMES_VALIDATION_FAILED",
+      validation: expect.objectContaining({ code: 1, output: expect.stringContaining("expected READY") }),
+    })
+  })
+
   it("commits exactly the owned working-tree paths and requests exact-head Codex review", async () => {
     const changed = ["components/dashboard/radar.tsx", "tests/radar.test.ts"]
     const { lifecycle, calls, record } = await ownedFixture({
