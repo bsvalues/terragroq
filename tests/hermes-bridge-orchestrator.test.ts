@@ -154,6 +154,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     const value = fixture()
     value.lifecycle.cleanupOwnedWorktree.mockRejectedValueOnce(Object.assign(new Error("git exited 255"), {
       code: "HERMES_REPOSITORY_COMMAND_FAILED",
+    })).mockRejectedValueOnce(Object.assign(new Error("git exited 255 again"), {
+      code: "HERMES_REPOSITORY_COMMAND_FAILED",
     }))
 
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_REPOSITORY_COMMAND_FAILED" })
@@ -162,6 +164,13 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       checkpoint: { state: "PR_MERGED", detail: "PR #500 merged" },
       metadata: { prNumber: 500, mergeSha: "b".repeat(40) },
     })
+    const firstFence = value.state.read().executions["77"].fencingToken
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_REPOSITORY_COMMAND_FAILED" })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "ACTIVE", abandonReason: "HERMES_REPOSITORY_COMMAND_FAILED" },
+      checkpoint: { state: "PR_MERGED", detail: "PR #500 merged" },
+    })
+    expect(value.state.read().executions["77"].fencingToken).toBeGreaterThan(firstFence)
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
   })
 

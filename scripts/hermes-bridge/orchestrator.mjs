@@ -437,10 +437,19 @@ export function createHermesOrchestrator(options = {}) {
     const worktreePath = lease.metadata?.worktreePath
       ?? path.join(runtimeRoot, "worktrees", branch.slice("codex/".length))
     if (lease.metadata?.prNumber && lease.metadata?.mergeSha) {
-      return finalizeMerged({
-        lease, sequence, outcome, branch, reservations, worktreePath,
-        prNumber: lease.metadata.prNumber,
-      })
+      try {
+        return await finalizeMerged({
+          lease, sequence, outcome, branch, reservations, worktreePath,
+          prNumber: lease.metadata.prNumber,
+        })
+      } catch (error) {
+        state.abandonLease({
+          idempotencyKey: `${outcomeId}:abandon-post-merge:${lease.fencingToken}:${sequence}`,
+          outcomeId, holderId, fencingToken: lease.fencingToken,
+          reason: error?.code ?? "HERMES_POST_MERGE_CLEANUP_WALL",
+        })
+        throw error
+      }
     }
     if (current?.metadata?.branch === branch) {
       const prior = await lifecycle.discoverPullRequest(branch)
