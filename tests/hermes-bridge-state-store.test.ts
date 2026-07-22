@@ -44,6 +44,20 @@ describe("Hermes bridge durable state store", () => {
     expect(store.read().executions["GOAL-1"].metadata.headRefOid).toBeNull()
   })
 
+  it("explicitly clears stale App Server identity for provider reroute", () => {
+    const { store } = fixture()
+    const lease = store.acquireLease({
+      outcomeId: "GOAL-1", holderId: "thread-1", leaseDurationMs: 1000,
+      metadata: { threadId: "thread-1", turnId: "turn-1" }, idempotencyKey: "acquire-clear-thread",
+    })
+    store.checkpoint({
+      outcomeId: "GOAL-1", holderId: "thread-1", fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0, state: "RETRYABLE_PROVIDER_WALL",
+      metadata: { threadId: null, turnId: null }, idempotencyKey: "clear-thread",
+    })
+    expect(store.read().executions["GOAL-1"].metadata).toMatchObject({ threadId: null, turnId: null })
+  })
+
   it("rejects non-string exact-head metadata", () => {
     const { store } = fixture()
     expect(() => store.acquireLease({
@@ -152,7 +166,10 @@ describe("Hermes bridge durable state store", () => {
   it("reopens only an exact released transient provider terminal for fenced redispatch", () => {
     const { store } = fixture()
     const detail = "HERMES_REDISPATCH_REQUIRED_WITH_NATIVE_NODE_EXECUTION_AND_WRITABLE_GIT_METADATA; preserve the existing owned working-tree changes"
-    const first = store.acquireLease({ outcomeId: "5", holderId: "one", leaseDurationMs: 1000, idempotencyKey: "a" })
+    const first = store.acquireLease({
+      outcomeId: "5", holderId: "one", leaseDurationMs: 1000,
+      metadata: { threadId: "stale-thread", turnId: "stale-turn" }, idempotencyKey: "a",
+    })
     store.checkpoint({
       outcomeId: "5", holderId: "one", fencingToken: first.fencingToken,
       expectedCheckpointSequence: 0, state: "FAILED_TERMINAL", detail, idempotencyKey: "failed",
@@ -171,6 +188,7 @@ describe("Hermes bridge durable state store", () => {
     expect(store.read().executions["5"]).toMatchObject({
       lease: { status: "ABANDONED", recoverReason: "TRANSIENT_NATIVE_PROVIDER_WALL" },
       checkpoint: { state: "RETRYABLE_PROVIDER_WALL", detail },
+      metadata: { threadId: null, turnId: null },
     })
   })
 
