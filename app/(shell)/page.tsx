@@ -1,9 +1,11 @@
 import Link from "next/link"
 import { getDashboardData } from "@/app/actions/dashboard"
+import { getWorkOrders } from "@/app/actions/work-orders"
 import { PageHeader } from "@/components/shell/page-header"
 import { StatGrid } from "@/components/dashboard/stat-grid"
 import { EventFeed } from "@/components/dashboard/event-feed"
 import { getHomeCommandCenter } from "@/components/dashboard/home-command-center"
+import { HomeWorkRadarPanel } from "@/components/dashboard/home-work-radar-panel"
 import { OperatorStartPanel } from "@/components/dashboard/operator-start-panel"
 import { ResearchModeSummaryPanel } from "@/components/dashboard/research-mode-summary-panel"
 import { RUNTIME } from "@/lib/ai/config"
@@ -11,8 +13,11 @@ import { ArrowRight, CircleDot, Plus, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 export default async function DashboardPage() {
-  const { stats, events } = await getDashboardData()
-  const home = getHomeCommandCenter(stats)
+  const [{ stats, events }, orders] = await Promise.all([
+    getDashboardData(),
+    getWorkOrders(),
+  ])
+  const home = getHomeCommandCenter(stats, orders)
 
   return (
     <>
@@ -30,6 +35,8 @@ export default async function DashboardPage() {
       />
 
       <div className="flex flex-col gap-8 p-6">
+        <HomeWorkRadarPanel radar={home.workRadar} />
+
         <section className="overflow-hidden rounded-3xl border border-border bg-card">
           <div className="grid lg:grid-cols-[1.15fr_0.85fr]">
             <div className="relative overflow-hidden border-b border-border bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.16),transparent_38%),linear-gradient(135deg,hsl(var(--card)),hsl(var(--muted)/0.32))] p-6 lg:border-b-0 lg:border-r">
