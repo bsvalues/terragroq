@@ -1,5 +1,4 @@
 import type { DashboardStats } from "@/components/dashboard/operator-start"
-import type { WorkOrder } from "@/lib/db/schema"
 import { getLocalOperatorSurface } from "@/components/local/local-operator-surface"
 import {
   LOCAL_OMEN_PHASE_ROLLUP,
@@ -59,6 +58,44 @@ export type HomeWorkRadar = {
   recentOutcomes: HomeWorkRadarLane
 }
 
+type HomeWorkRadarIdentity = {
+  id: number
+  ref: string | null
+  title: string
+  status: string
+}
+
+export type HomeWorkRadarActiveItem = HomeWorkRadarIdentity & {
+  updatedAt: Date
+}
+
+export type HomeWorkRadarBlockedItem = HomeWorkRadarIdentity & {
+  description: string | null
+  stopConditions: string[]
+}
+
+export type HomeWorkRadarOutcomeItem = HomeWorkRadarIdentity & {
+  result: string | null
+  closedAt: Date | null
+  completedAt: Date | null
+  updatedAt: Date
+}
+
+export type HomeWorkRadarSource = {
+  activeWork: {
+    count: number
+    items: HomeWorkRadarActiveItem[]
+  }
+  blockers: {
+    count: number
+    items: HomeWorkRadarBlockedItem[]
+  }
+  recentOutcomes: {
+    count: number
+    items: HomeWorkRadarOutcomeItem[]
+  }
+}
+
 export type HomeCommandCenter = {
   title: "WilliamOS Home"
   eyebrow: "Primary Operator Command Center"
@@ -104,11 +141,12 @@ export type HomeCommandCenter = {
   }
 }
 
-const HOME_RADAR_LIMIT = 3
-const ACTIVE_STATUS_ORDER: Record<string, number> = {
-  active: 0,
-  review: 1,
-  approved: 2,
+export const HOME_RADAR_LIMIT = 3
+
+const EMPTY_HOME_WORK_RADAR_SOURCE: HomeWorkRadarSource = {
+  activeWork: { count: 0, items: [] },
+  blockers: { count: 0, items: [] },
+  recentOutcomes: { count: 0, items: [] },
 }
 
 const RADAR_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
@@ -117,32 +155,15 @@ const RADAR_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
   timeZone: "UTC",
 })
 
-function workOrderRef(order: WorkOrder) {
+function workOrderRef(order: HomeWorkRadarIdentity) {
   return order.ref ?? `WO-${order.id}`
 }
 
-function byNewestUpdate(a: WorkOrder, b: WorkOrder) {
-  return b.updatedAt.getTime() - a.updatedAt.getTime()
-}
-
-function outcomeRecordedAt(order: WorkOrder) {
+function outcomeRecordedAt(order: HomeWorkRadarOutcomeItem) {
   return order.completedAt ?? order.closedAt ?? order.updatedAt
 }
 
-function buildHomeWorkRadar(orders: WorkOrder[]): HomeWorkRadar {
-  const activeOrders = orders
-    .filter((order) => order.status === "approved" || order.status === "active" || order.status === "review")
-    .sort((a, b) => {
-      const statusDifference = ACTIVE_STATUS_ORDER[a.status] - ACTIVE_STATUS_ORDER[b.status]
-      return statusDifference === 0 ? byNewestUpdate(a, b) : statusDifference
-    })
-  const blockedOrders = orders
-    .filter((order) => order.status === "blocked")
-    .sort(byNewestUpdate)
-  const recentOutcomes = orders
-    .filter((order) => order.status === "closed" || order.status === "aborted")
-    .sort((a, b) => outcomeRecordedAt(b).getTime() - outcomeRecordedAt(a).getTime())
-
+function buildHomeWorkRadar(source: HomeWorkRadarSource): HomeWorkRadar {
   return {
     eyebrow: "Operational radar",
     title: "Now, held, landed",
@@ -153,8 +174,8 @@ function buildHomeWorkRadar(orders: WorkOrder[]): HomeWorkRadar {
       title: "Active work",
       description: "Approved, active, and review-state Work Orders currently moving through the governed loop.",
       tone: "active",
-      count: activeOrders.length,
-      items: activeOrders.slice(0, HOME_RADAR_LIMIT).map((order) => ({
+      count: source.activeWork.count,
+      items: source.activeWork.items.slice(0, HOME_RADAR_LIMIT).map((order) => ({
         ref: workOrderRef(order),
         title: order.title,
         status: order.status,
@@ -169,8 +190,8 @@ function buildHomeWorkRadar(orders: WorkOrder[]): HomeWorkRadar {
       title: "Blockers",
       description: "Work Orders held at an authority, dependency, reservation, validation, or evidence boundary.",
       tone: "blocked",
-      count: blockedOrders.length,
-      items: blockedOrders.slice(0, HOME_RADAR_LIMIT).map((order) => ({
+      count: source.blockers.count,
+      items: source.blockers.items.slice(0, HOME_RADAR_LIMIT).map((order) => ({
         ref: workOrderRef(order),
         title: order.title,
         status: order.status,
@@ -188,13 +209,13 @@ function buildHomeWorkRadar(orders: WorkOrder[]): HomeWorkRadar {
       title: "Recent outcomes",
       description: "The newest closed or aborted outcomes, ordered by their recorded completion signal.",
       tone: "complete",
-      count: recentOutcomes.length,
-      items: recentOutcomes.slice(0, HOME_RADAR_LIMIT).map((order) => ({
+      count: source.recentOutcomes.count,
+      items: source.recentOutcomes.items.slice(0, HOME_RADAR_LIMIT).map((order) => ({
         ref: workOrderRef(order),
         title: order.title,
         status: order.status,
-      result:
-        order.result ?? (order.status === "aborted" ? "ABORTED" : "NO RESULT"),
+        result:
+          order.result ?? (order.status === "aborted" ? "ABORTED" : "NO RESULT"),
         detail: `Recorded ${RADAR_DATE_FORMATTER.format(outcomeRecordedAt(order))}`,
         href: "/work-orders",
       })),
@@ -205,7 +226,7 @@ function buildHomeWorkRadar(orders: WorkOrder[]): HomeWorkRadar {
 
 export function getHomeCommandCenter(
   stats: DashboardStats,
-  orders: WorkOrder[] = [],
+  radarSource: HomeWorkRadarSource = EMPTY_HOME_WORK_RADAR_SOURCE,
 ): HomeCommandCenter {
   const localOperatorSurface = getLocalOperatorSurface()
   const blockedWork =
@@ -268,7 +289,7 @@ export function getHomeCommandCenter(
         tone: "authority",
       },
     ],
-    workRadar: buildHomeWorkRadar(orders),
+    workRadar: buildHomeWorkRadar(radarSource),
     statusCards: [
       {
         label: "Active Work",

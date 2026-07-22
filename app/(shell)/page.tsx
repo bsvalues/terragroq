@@ -1,6 +1,6 @@
 import Link from "next/link"
 import { getDashboardData } from "@/app/actions/dashboard"
-import { getWorkOrders } from "@/app/actions/work-orders"
+import { getHomeWorkRadarSource } from "@/app/(shell)/home-work-radar-query"
 import { PageHeader } from "@/components/shell/page-header"
 import { StatGrid } from "@/components/dashboard/stat-grid"
 import { EventFeed } from "@/components/dashboard/event-feed"
@@ -13,11 +13,11 @@ import { ArrowRight, CircleDot, Plus, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 export default async function DashboardPage() {
-  const [{ stats, events }, orders] = await Promise.all([
+  const [{ stats, events }, radarSource] = await Promise.all([
     getDashboardData(),
-    getWorkOrders(),
+    getHomeWorkRadarSource(),
   ])
-  const home = getHomeCommandCenter(stats, orders)
+  const home = getHomeCommandCenter(stats, radarSource)
 
   return (
     <>

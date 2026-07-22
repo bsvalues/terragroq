@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { getHomeCommandCenter } from "@/components/dashboard/home-command-center"
+import {
+  getHomeCommandCenter,
+  type HomeWorkRadarActiveItem,
+  type HomeWorkRadarBlockedItem,
+  type HomeWorkRadarOutcomeItem,
+} from "@/components/dashboard/home-command-center"
 import type { DashboardStats } from "@/components/dashboard/operator-start"
-import type { WorkOrder } from "@/lib/db/schema"
 
 const initializedStats: DashboardStats = {
   memory: 3,
@@ -13,87 +17,94 @@ const initializedStats: DashboardStats = {
   docs: 5,
 }
 
-function workOrder(
-  id: number,
-  status: WorkOrder["status"],
-  title: string,
-  updatedAt: string,
-  overrides: Partial<WorkOrder> = {},
-): WorkOrder {
+function radarIdentity(id: number, status: string, title: string) {
   return {
     id,
-    userId: "user",
     ref: `WO-${String(id).padStart(4, "0")}`,
     title,
-    description: null,
-    goal: null,
-    loop: null,
-    scope: null,
-    nonGoals: [],
-    allowedFiles: [],
-    forbiddenFiles: [],
-    validators: [],
-    stopConditions: [],
-    lane: null,
-    phase: null,
     status,
-    priority: "medium",
-    assignee: null,
-    authorityLevel: "A0_READ_ONLY",
-    authorityGranted: null,
-    authorityGrantId: null,
-    acceptanceCriteria: [],
-    agent: null,
-    approvedBy: null,
-    approvedAt: null,
-    linkedDecisionId: null,
-    evidence: [],
+  }
+}
+
+function activeWorkOrder(
+  id: number,
+  status: string,
+  title: string,
+  updatedAt: string,
+): HomeWorkRadarActiveItem {
+  return {
+    ...radarIdentity(id, status, title),
+    updatedAt: new Date(updatedAt),
+  }
+}
+
+function blockedWorkOrder(
+  id: number,
+  title: string,
+  overrides: Partial<HomeWorkRadarBlockedItem> = {},
+): HomeWorkRadarBlockedItem {
+  return {
+    ...radarIdentity(id, "blocked", title),
+    description: null,
+    stopConditions: [],
+    ...overrides,
+  }
+}
+
+function outcomeWorkOrder(
+  id: number,
+  status: "closed" | "aborted",
+  title: string,
+  updatedAt: string,
+  overrides: Partial<HomeWorkRadarOutcomeItem> = {},
+): HomeWorkRadarOutcomeItem {
+  return {
+    ...radarIdentity(id, status, title),
     result: null,
-    commitRef: null,
-    tagRef: null,
-    commitAllowed: false,
-    tagAllowed: false,
-    pushAllowed: false,
-    supersedesId: null,
-    supersededById: null,
-    dueAt: null,
     closedAt: null,
     completedAt: null,
-    createdAt: new Date("2026-07-01T00:00:00.000Z"),
     updatedAt: new Date(updatedAt),
     ...overrides,
   }
 }
 
 describe("WilliamOS Home Command Center", () => {
-  it("separates current work, blockers, and the newest completed outcomes", () => {
-    const home = getHomeCommandCenter(initializedStats, [
-      workOrder(1, "active", "Ship the owner briefing", "2026-07-08T12:00:00.000Z"),
-      workOrder(2, "active", "Verify the queue", "2026-07-07T12:00:00.000Z"),
-      workOrder(3, "review", "Review delivery evidence", "2026-07-09T12:00:00.000Z"),
-      workOrder(4, "approved", "Prepare the next lane", "2026-07-10T12:00:00.000Z"),
-      workOrder(5, "blocked", "Resolve the policy gate", "2026-07-06T12:00:00.000Z", {
-        stopConditions: ["Owner authority is not recorded."],
-      }),
-      workOrder(6, "blocked", "Restore required evidence", "2026-07-08T12:00:00.000Z"),
-      workOrder(7, "blocked", "Clear the reservation", "2026-07-07T12:00:00.000Z"),
-      workOrder(8, "blocked", "Wait for the dependency", "2026-07-05T12:00:00.000Z"),
-      workOrder(9, "closed", "Home shell foundation", "2026-07-02T12:00:00.000Z", {
-        result: "PASS",
-        completedAt: new Date("2026-07-10T12:00:00.000Z"),
-      }),
-      workOrder(10, "aborted", "Retired adapter lane", "2026-07-09T12:00:00.000Z", {
-        closedAt: new Date("2026-07-09T12:00:00.000Z"),
-      }),
-      workOrder(11, "closed", "Evidence surface", "2026-07-08T12:00:00.000Z", {
-        result: "PASS",
-      }),
-      workOrder(12, "closed", "Older completion", "2026-07-01T12:00:00.000Z", {
-        result: "PASS",
-        completedAt: new Date("2026-07-03T12:00:00.000Z"),
-      }),
-      workOrder(13, "draft", "Unapproved idea", "2026-07-11T12:00:00.000Z"),
-    ])
+  it("renders bounded radar projections with complete lane counts", () => {
+    const home = getHomeCommandCenter(initializedStats, {
+      activeWork: {
+        count: 4,
+        items: [
+          activeWorkOrder(1, "active", "Ship the owner briefing", "2026-07-08T12:00:00.000Z"),
+          activeWorkOrder(2, "active", "Verify the queue", "2026-07-07T12:00:00.000Z"),
+          activeWorkOrder(3, "review", "Review delivery evidence", "2026-07-09T12:00:00.000Z"),
+        ],
+      },
+      blockers: {
+        count: 4,
+        items: [
+          blockedWorkOrder(6, "Restore required evidence"),
+          blockedWorkOrder(7, "Clear the reservation"),
+          blockedWorkOrder(5, "Resolve the policy gate", {
+            stopConditions: ["Owner authority is not recorded."],
+          }),
+        ],
+      },
+      recentOutcomes: {
+        count: 4,
+        items: [
+          outcomeWorkOrder(9, "closed", "Home shell foundation", "2026-07-02T12:00:00.000Z", {
+            result: "PASS",
+            completedAt: new Date("2026-07-10T12:00:00.000Z"),
+          }),
+          outcomeWorkOrder(10, "aborted", "Retired adapter lane", "2026-07-09T12:00:00.000Z", {
+            closedAt: new Date("2026-07-09T12:00:00.000Z"),
+          }),
+          outcomeWorkOrder(11, "closed", "Evidence surface", "2026-07-08T12:00:00.000Z", {
+            result: "PASS",
+          }),
+        ],
+      },
+    })
 
     expect(home.workRadar).toMatchObject({
       eyebrow: "Operational radar",
@@ -126,14 +137,18 @@ describe("WilliamOS Home Command Center", () => {
     ])
     expect(home.workRadar.recentOutcomes.items.map((item) => item.result)).toEqual([
       "PASS",
-        "ABORTED",
+      "ABORTED",
       "PASS",
     ])
     expect(home.workRadar.recentOutcomes.items.every((item) => item.href === "/work-orders")).toBe(true)
   })
 
   it("provides useful independent empty states for the operational radar", () => {
-    const home = getHomeCommandCenter(initializedStats, [])
+    const home = getHomeCommandCenter(initializedStats, {
+      activeWork: { count: 0, items: [] },
+      blockers: { count: 0, items: [] },
+      recentOutcomes: { count: 0, items: [] },
+    })
 
     expect(home.workRadar.activeWork).toMatchObject({
       count: 0,
