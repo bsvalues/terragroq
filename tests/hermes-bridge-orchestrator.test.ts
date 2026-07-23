@@ -317,6 +317,9 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
       result: "COMPLETE", outcomeId: "77",
     })
+    expect(value.projectLease).toHaveBeenCalledWith(expect.objectContaining({
+      lease: expect.objectContaining({ status: "ABANDONED" }),
+    }))
   })
 
   it("fails the active cycle when a renewed lease cannot be projected", async () => {

@@ -206,20 +206,24 @@ export function createHermesOrchestrator(options = {}) {
     }
   }
 
-  async function projectCurrentLease(outcomeId) {
+  async function projectCurrentLease(outcomeId, explicitStatus = null) {
     const execution = state.read().executions[String(outcomeId)]
     if (!execution) {
       throw Object.assign(new Error("Runtime execution is absent after lease mutation"), {
         code: "HERMES_RUNTIME_PROJECTION_STATE_WALL",
       })
     }
+    const projectedStatus = explicitStatus
+      ?? (execution.lease.status === "ACTIVE" && execution.lease.abandonedAt
+        ? "ABANDONED"
+        : execution.lease.status)
     try {
       return await projectLease({
         outcomeId: Number(outcomeId),
         attempt: execution.fencingToken,
         checkpointSequence: execution.checkpoint.sequence,
         lease: {
-          status: execution.lease.status,
+          status: projectedStatus,
           expiresAt: execution.lease.expiresAt,
         },
       })
@@ -232,20 +236,20 @@ export function createHermesOrchestrator(options = {}) {
 
   async function abandonLease(request) {
     const result = state.abandonLease(request)
-    await projectCurrentLease(request.outcomeId)
+    await projectCurrentLease(request.outcomeId, "ABANDONED")
     return result
   }
 
   async function releaseLease(request) {
     const result = state.releaseLease(request)
-    await projectCurrentLease(request.outcomeId)
+    await projectCurrentLease(request.outcomeId, "RELEASED")
     return result
   }
 
   async function deferLease(request) {
     const result = state.deferProviderWall(request)
     await projectCurrentExecution(request.outcomeId)
-    await projectCurrentLease(request.outcomeId)
+    await projectCurrentLease(request.outcomeId, "DEFERRED")
     return result
   }
 
