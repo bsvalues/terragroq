@@ -29,7 +29,10 @@ describe("Hermes Codex prompt", () => {
     expect(prompt).toContain("Never ask William")
     expect(prompt).toContain("issue #357")
     expect(prompt).toContain("Do not modify .obsidian/")
-    expect(prompt).toContain("Do not launch native commands")
+    expect(prompt).toContain("Repository inspection may use only read-only commands")
+    expect(prompt).toContain("rg, Get-Content, Get-ChildItem, and Select-String")
+    expect(prompt).toContain("Do not use shell redirection")
+    expect(prompt).toContain("native Hermes host owns validators, Git/GitHub operations")
     expect(prompt).toContain("return READY_FOR_VALIDATION")
   })
 

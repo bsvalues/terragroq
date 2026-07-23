@@ -1,27 +1,67 @@
 import { getUserId } from "@/lib/session"
 import { getRecentEvents } from "@/lib/registers/events"
+import { getPersistedEvidenceTruth } from "@/app/actions/evidence"
+import { getRuntimeExecutionQuery } from "@/app/actions/runtime-executions"
 import { PageHeader } from "@/components/shell/page-header"
 import { getEventEmptyStateActions } from "@/components/dashboard/event-empty-state"
 import { EvidenceCommandPanel } from "@/components/evidence/evidence-command-panel"
 import { EvidenceRollupPanel } from "@/components/evidence/evidence-rollup-panel"
 import { EvidenceSpinePanel } from "@/components/evidence/evidence-spine-panel"
+import { RuntimeEvidencePanel } from "@/components/runtime/runtime-evidence-panel"
+import { RuntimeExecutionPanel } from "@/components/runtime/runtime-execution-panel"
 import { Activity } from "lucide-react"
 import Link from "next/link"
 
 export default async function AuditPage() {
   const userId = await getUserId()
-  const events = await getRecentEvents(userId, 200)
+  const [persistedEvidence, runtimeTruth, events] = await Promise.all([
+    getPersistedEvidenceTruth(25),
+    getRuntimeExecutionQuery(),
+    getRecentEvents(userId, 200),
+  ])
 
   return (
     <>
       <PageHeader
         title="Evidence"
-        description="Primary proof layer for validation, production verification, safety posture, sources, timestamps, blockers, Work Orders, and governed decisions. Evidence records reality; it does not execute or authorize."
+        description="User-scoped persisted evidence and Hermes runtime execution truth, followed by retained historical/static Evidence Spine context. Read-only; evidence does not execute or authorize."
       />
       <div className="flex flex-col gap-6 p-6">
+        <section aria-labelledby="persisted-evidence-truth-title" className="flex flex-col gap-4">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Current persisted truth
+            </p>
+            <h2 id="persisted-evidence-truth-title" className="mt-1 text-lg font-semibold">
+              User-scoped evidence and runtime execution
+            </h2>
+            <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+              Database-backed evidence records and persisted Hermes checkpoints, leases, failure
+              evaluations, and provenance for the current user. These panels are read-only and do
+              not imply a currently live host process.
+            </p>
+          </div>
+          <RuntimeEvidencePanel records={persistedEvidence.records} />
+          <RuntimeExecutionPanel truth={runtimeTruth} />
+        </section>
+
         <EvidenceCommandPanel />
-        <EvidenceSpinePanel />
         <EvidenceRollupPanel events={events} />
+        <section aria-labelledby="historical-evidence-spine-title" className="flex flex-col gap-3">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Retained historical/static records
+            </p>
+            <h2 id="historical-evidence-spine-title" className="text-base font-semibold">
+              Evidence Spine archive
+            </h2>
+            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+              The Evidence Spine below is retained governance context from earlier batches. It is
+              not current runtime telemetry and does not override the persisted truth above.
+            </p>
+          </div>
+          <EvidenceSpinePanel />
+        </section>
         {events.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border bg-card p-6">
             <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 text-center">

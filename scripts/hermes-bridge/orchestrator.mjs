@@ -99,7 +99,7 @@ ${remediationContext({ outcome, reservations })}
 Hermes completed native validation, commit, push, PR creation, and review monitoring. Independent review produced these actionable findings:
 ${findings.map((finding, index) => `${index + 1}. ${finding.path}${finding.line ? `:${finding.line}` : ""} - ${finding.body}`).join("\n")}
 
-Remediate every valid finding using only repository file reads and edits inside the existing reserved paths. Do not run native commands, Git, or GitHub CLI. This is one bounded remediation lane: do not invoke subagents, MCP, dynamic tools, web search, or external connectors. Review the resulting file changes directly. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
+Remediate every valid finding using only repository file reads and edits inside the existing reserved paths. Read-only shell inspection is limited to rg, Get-Content, Get-ChildItem, and Select-String; do not use shell writes, interpreters, package managers, validators, Git, or GitHub CLI. This is one bounded remediation lane: do not invoke subagents, MCP, dynamic tools, web search, or external connectors. Review the resulting file changes directly. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
 }
 
 function buildValidationRemediationPrompt({ workOrderId, branch, outcome, reservations, validation }) {
@@ -110,7 +110,7 @@ ${remediationContext({ outcome, reservations })}
 Hermes native-host validation rejected the current file handoff:
 ${validation}
 
-Use only repository file reads and edits inside the existing reserved paths. Correct the validation failure, independently review the resulting file changes, and do not run native commands, Git, or GitHub CLI. This is one bounded remediation lane: do not invoke subagents, MCP, dynamic tools, web search, or external connectors. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
+Use only repository file reads and edits inside the existing reserved paths. Read-only shell inspection is limited to rg, Get-Content, Get-ChildItem, and Select-String. Correct the validation failure, independently review the resulting file changes, and do not use shell writes, interpreters, package managers, validators, Git, or GitHub CLI. This is one bounded remediation lane: do not invoke subagents, MCP, dynamic tools, web search, or external connectors. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
 }
 
 function allowedPath(changedPath, reservations) {

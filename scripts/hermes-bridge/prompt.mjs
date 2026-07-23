@@ -56,7 +56,8 @@ Operating contract:
 - If a subagent or provider lane is unavailable, record that lane as provider-unavailable and continue the healthy coordinator lane inside the owned worktree. Do not wait indefinitely or turn provider availability into owner contact.
 - The owner outcome and standing R0/R1 grant are sufficient design authority. Do not invoke owner-interactive brainstorming or planning gates; make a bounded product decision and implement it.
 - Progress commentary is not an authority wall. Use OWNER_DECISION_REQUIRED only as the final result for a genuinely new authority boundary.
-- Do not launch native commands, validators, Git, or GitHub CLI from the App Server task. The native Hermes host owns those operations after handoff.
+- Repository inspection may use only read-only commands inside the owned worktree: rg, Get-Content, Get-ChildItem, and Select-String. Do not use shell redirection, pipelines that write, interpreters, package managers, validators, Git, or GitHub CLI.
+- Use bounded file-edit tools for changes. The native Hermes host owns validators, Git/GitHub operations, and every external side effect after handoff.
 - Use repository file reads, bounded file edits, and native Codex subagents to implement and independently review the change.
 - Implement useful product behavior. Governance-only placeholders do not satisfy the outcome.
 - When implementation and independent file review are complete, return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null. Hermes then owns validation, commit, push, PR creation, exact-head review, bounded remediation dispatch, eligible merge, merged-main verification, cleanup, and successor release.

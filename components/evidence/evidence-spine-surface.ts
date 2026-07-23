@@ -54,6 +54,12 @@ export type BlockedDecisionEvidenceLink = {
 }
 
 export type EvidenceSpineSurface = {
+  truthReconciliation: {
+    currentTruthSource: "USER_SCOPED_PERSISTED_EVIDENCE_AND_RUNTIME"
+    retainedRecordMode: "HISTORICAL_STATIC"
+    readOnly: true
+    excludedScope: readonly string[]
+  }
   doctrine: {
     title: string
     statements: readonly string[]
@@ -134,7 +140,7 @@ export const EVIDENCE_CATEGORIES: EvidenceCategoryRecord[] = [
   {
     id: "SAFETY_PROOF",
     label: "Safety Proof",
-    description: "Evidence that execution, metadata, persistence, LAN exposure, secrets, and autonomy remained blocked.",
+    description: "Historical proof that this static surface did not itself add command/control paths, metadata collection, LAN exposure, secret handling, or authority.",
   },
   {
     id: "PR_PROOF",
@@ -354,7 +360,7 @@ export const EVIDENCE_RECORDS: EvidenceRecord[] = [
     originMain: "658426f8424225c58ad1ac9beaac26bed6ffa08c",
     validationSummary: "Safety regression coverage asserts blocked controls remain absent.",
     proofSummary:
-      "The Evidence Spine classifies and links proof without import, edit, delete, scan, command, metadata, persistence, scheduler, LAN, or autonomy paths.",
+      "This historical Evidence Spine batch classified and linked proof without import, edit, delete, scan, command, metadata, service control, scheduler control, LAN, or autonomy paths.",
     safetySummary: "Evidence remains read-only and owner authority remains outside the evidence record itself.",
     sourcePath: "docs/reports/WO-EVIDENCE-012-evidence-spine-safety-regression-sweep.md",
     status: "recorded",
@@ -375,7 +381,7 @@ export const EVIDENCE_RECORDS: EvidenceRecord[] = [
     originMain: "dcebc87c13a1194cfadc13ce2079c35fb5e4739d",
     validationSummary: "The metadata gate remained closed after local runtime authority was frozen.",
     proofSummary:
-      "Docker metadata, backup metadata, port checks, runtime control, persistence, LAN exposure, and autonomy remain blocked until owner authority opens a specific gate.",
+      "Docker metadata, backup metadata, port checks, runtime control, LAN exposure, and autonomy remain excluded from this historical Evidence Spine until a specific authority gate applies.",
     safetySummary: "No metadata expansion or runtime control was authorized.",
     sourcePath: "docs/reports/WO-LOCAL-121-metadata-expansion-blocker-registry.md",
     status: "blocked",
@@ -595,9 +601,9 @@ export const SAFETY_PROOF_CARDS: EvidenceProofCard[] = [
     category: "SAFETY_PROOF",
   },
   {
-    label: "No persistence or service/schedule",
-    value: "Visible",
-    description: "No persistent service, scheduled task, or background worker is added.",
+    label: "No persistence control in static spine",
+    value: "Excluded here",
+    description: "Persisted Hermes/runtime truth is shown by the current user-scoped panels. This historical Evidence Spine neither creates nor controls services, schedules, or background workers.",
     category: "SAFETY_PROOF",
   },
   {
@@ -621,7 +627,7 @@ export const SAFETY_PROOF_CARDS: EvidenceProofCard[] = [
   {
     label: "No autonomy",
     value: "Visible",
-    description: "Hermes, MCP, Brain Council action, and autonomy remain blocked.",
+    description: "This historical Evidence Spine grants no MCP, Brain Council action, worker control, or autonomy authority.",
     category: "SAFETY_PROOF",
   },
 ]
@@ -660,13 +666,26 @@ export const BLOCKED_DECISION_EVIDENCE_LINKS: BlockedDecisionEvidenceLink[] = [
   {
     blocker: "Autonomy not authorized",
     evidenceId: "evidence-safety-boundary",
-    whyBlocked: "Hermes, MCP, Brain Council action, and autonomy remain advisory or blocked.",
+    whyBlocked: "This historical Evidence Spine cannot grant MCP, Brain Council action, worker control, or autonomy authority.",
     safeNextAction: "Use an autonomy doctrine gate before considering autonomous execution.",
   },
 ]
 
 export function getEvidenceSpineSurface(): EvidenceSpineSurface {
   return {
+    truthReconciliation: {
+      currentTruthSource: "USER_SCOPED_PERSISTED_EVIDENCE_AND_RUNTIME",
+      retainedRecordMode: "HISTORICAL_STATIC",
+      readOnly: true,
+      excludedScope: [
+        "command execution",
+        "runtime control",
+        "production mutation",
+        "secret disclosure",
+        "LAN exposure",
+        "authority creation",
+      ],
+    },
     doctrine: EVIDENCE_DOCTRINE,
     categories: EVIDENCE_CATEGORIES,
     records: EVIDENCE_RECORDS,
