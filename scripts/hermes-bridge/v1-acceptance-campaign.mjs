@@ -763,10 +763,10 @@ export function evaluateAcceptance({
 }
 
 export async function runCampaign(options, dependencies = {}) {
-  const now = dependencies.now?.() ?? Date.now()
   const repoRoot = dependencies.repoRoot ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
   const runner = dependencies.runner ?? run
   const unitResults = dependencies.unitResults ?? runUnitTests(repoRoot, runner)
+  const now = dependencies.now?.() ?? Date.now()
   const expectedInventory = dependencies.expectedInventory ?? readExpectedInventory(repoRoot)
   const revisionProbe = runner("git", ["rev-parse", "HEAD"], { cwd: repoRoot })
   const currentRevision = revisionProbe.ok ? revisionProbe.stdout.trim() : null
