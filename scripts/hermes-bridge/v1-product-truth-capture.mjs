@@ -40,7 +40,7 @@ export function buildProductTruthEvidence({ workOrder, events, evidenceRecords }
   const checkpoints = events.filter((row) => row.eventType === EVENT_TYPES[0])
   const failureEvaluations = events.filter((row) => row.eventType === EVENT_TYPES[1])
   const leases = events.filter((row) => row.eventType === EVENT_TYPES[2])
-  if (checkpoints.length === 0 || leases.length === 0
+  if (checkpoints.length === 0 || leases.length === 0 || evidenceRecords.length === 0
     || events.some((row) => !EVENT_TYPES.includes(row.eventType))
     || evidenceRecords.some((row) => row.workOrderId !== workOrder.id)) {
     throw new Error("PRODUCT_TRUTH_RELATION_INVALID")
