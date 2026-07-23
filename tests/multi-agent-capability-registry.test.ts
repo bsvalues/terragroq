@@ -7,8 +7,43 @@ import {
   capability,
   evaluateCapabilityDispatch,
   validateCapabilityInventory,
+  type CapabilityRuntimeReality,
   type MultiAgentCapabilityRecord,
 } from "@/components/operator/multi-agent-capability-registry"
+
+type ProofClassification = "RUNTIME_PROVEN" | "STATIC_READ_ONLY" | "EXCLUDED"
+
+const VALID_PROOF_COMBINATIONS = {
+  NON_RUNTIME: {
+    statuses: ["PROVEN"],
+    executionClass: "NON_EXECUTABLE",
+    proofClassification: "STATIC_READ_ONLY",
+    coordinationEligible: false,
+  },
+  HOSTED_SESSION_ONLY: {
+    statuses: ["PROVEN"],
+    executionClass: "WORKER_CANDIDATE",
+    proofClassification: "RUNTIME_PROVEN",
+    coordinationEligible: true,
+  },
+  LIVE_BOUNDED_RESIDENT: {
+    statuses: ["PROVEN", "PILOT_AUTHORIZED"],
+    executionClass: "EXECUTABLE_WORKER",
+    proofClassification: "RUNTIME_PROVEN",
+    coordinationEligible: true,
+  },
+  EXCLUDED: {
+    statuses: ["UNAVAILABLE", "REJECTED"],
+    executionClass: "WORKER_CANDIDATE",
+    proofClassification: "EXCLUDED",
+    coordinationEligible: false,
+  },
+} as const satisfies Record<CapabilityRuntimeReality, {
+  statuses: readonly MultiAgentCapabilityRecord["status"][]
+  executionClass: MultiAgentCapabilityRecord["executionClass"]
+  proofClassification: ProofClassification
+  coordinationEligible: boolean
+}>
 
 function executable(overrides: Partial<MultiAgentCapabilityRecord> = {}): MultiAgentCapabilityRecord {
   return {
@@ -35,6 +70,25 @@ describe("multi-agent executable capability inventory", () => {
     expect(new Set(MULTI_AGENT_CAPABILITY_INVENTORY.map((entry) => entry.capabilityId)).size)
       .toBe(MULTI_AGENT_CAPABILITY_INVENTORY.length)
     expect(MULTI_AGENT_CAPABILITY_INVENTORY.every((entry) => entry.evidence.length > 0)).toBe(true)
+  })
+
+  it("uses only valid AC-12 proof classification combinations", () => {
+    for (const entry of MULTI_AGENT_CAPABILITY_INVENTORY) {
+      const combination = VALID_PROOF_COMBINATIONS[entry.runtimeReality]
+
+      expect(combination.statuses, entry.capabilityId).toContain(entry.status)
+      expect(entry.executionClass, entry.capabilityId).toBe(combination.executionClass)
+      expect(Boolean(entry.coordinationEligible), entry.capabilityId)
+        .toBe(combination.coordinationEligible)
+    }
+
+    expect(new Set(MULTI_AGENT_CAPABILITY_INVENTORY.map((entry) => (
+      VALID_PROOF_COMBINATIONS[entry.runtimeReality].proofClassification
+    )))).toEqual(new Set<ProofClassification>([
+      "RUNTIME_PROVEN",
+      "STATIC_READ_ONLY",
+      "EXCLUDED",
+    ]))
   })
 
   it("distinguishes proven surfaces from executable workers", () => {

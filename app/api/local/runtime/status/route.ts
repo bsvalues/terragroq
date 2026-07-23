@@ -5,6 +5,7 @@ import {
 } from "@/lib/local-runtime-status"
 
 export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
 
 function methodNotAllowed() {
   return NextResponse.json(

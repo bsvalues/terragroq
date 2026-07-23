@@ -99,12 +99,16 @@ describe("runtime evidence bounded history", () => {
 describe("runtime evidence page contract", () => {
   it("requests a sentinel record and passes the projected history to the panel", () => {
     const page = readFileSync("app/(shell)/runtime/page.tsx", "utf8")
+    const auditPage = readFileSync("app/(shell)/audit/page.tsx", "utf8")
 
     expect(page).toContain("RUNTIME_EVIDENCE_HISTORY_LIMIT + 1")
     expect(page).toContain("projectRuntimeEvidenceHistory")
     expect(page).toMatch(/records=\{[^}]+\.records\}/)
     expect(page).toMatch(/limit=\{[^}]+\.limit\}/)
     expect(page).toMatch(/truncated=\{[^}]+\.truncated\}/)
+    expect(auditPage).toContain("RUNTIME_EVIDENCE_HISTORY_LIMIT + 1")
+    expect(auditPage).toContain("projectRuntimeEvidenceHistory(persistedEvidence.records)")
+    expect(auditPage).toContain("<RuntimeEvidencePanel {...evidenceHistory} />")
   })
 
   it("labels complete and bounded evidence histories without adding controls", () => {

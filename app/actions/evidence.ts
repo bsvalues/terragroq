@@ -7,6 +7,8 @@ import { logEvent } from "@/lib/registers/events"
 import { and, desc, eq } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
+const MAX_PERSISTED_EVIDENCE_RECORDS = 100
+
 function splitList(v?: string | string[]): string[] {
   if (!v) return []
   const arr = Array.isArray(v) ? v : v.split(/[\n,]/)
@@ -40,13 +42,35 @@ export async function getEvidenceForWorkOrder(workOrderId: number): Promise<Evid
 }
 
 export async function getRecentEvidence(limit = 25): Promise<EvidenceRecord[]> {
+  return (await getPersistedEvidenceTruth(limit)).records
+}
+
+export type PersistedEvidenceTruth = {
+  source: "evidence_record"
+  scope: "CURRENT_USER"
+  readOnly: true
+  records: EvidenceRecord[]
+}
+
+export async function getPersistedEvidenceTruth(limit = 25): Promise<PersistedEvidenceTruth> {
   const userId = await getUserId()
-  return db
+  const boundedLimit = Math.min(
+    MAX_PERSISTED_EVIDENCE_RECORDS,
+    Math.max(0, Number.isSafeInteger(limit) ? limit : 25),
+  )
+  const records = await db
     .select()
     .from(evidenceRecord)
     .where(eq(evidenceRecord.userId, userId))
     .orderBy(desc(evidenceRecord.createdAt))
-    .limit(limit)
+    .limit(boundedLimit)
+
+  return {
+    source: "evidence_record",
+    scope: "CURRENT_USER",
+    readOnly: true,
+    records,
+  }
 }
 
 /* ------------------------------------------------------------------ */
