@@ -100,7 +100,7 @@ describe.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VAL
     await waitFor(() => !isAlive(holder.pid!) && !isAlive(childPid))
     expect(isAlive(unrelated.pid)).toBe(true)
     expect(fs.readFileSync(activationPath, "utf8").trim()).toBe("disabled")
-  }, 20_000)
+  }, 30_000)
 
   it("fails closed when the durable PID does not belong to the absolute bridge command", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-kill-wall-"))

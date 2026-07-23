@@ -7,10 +7,13 @@ import { createHermesOrchestrator } from "./orchestrator.mjs"
 import {
   NATIVE_PROVIDER_RETRY_STATE,
   VALIDATION_INFRASTRUCTURE_RETRY_STATE,
+  projectOutcomeRuntimeCheckpoint,
   recordValidationInfrastructureRecoveryProof,
   recoverNativeProviderOutcome,
+  recoverReviewedOutcome,
   recoverValidationInfrastructureOutcome,
 } from "./outcome-source.mjs"
+import { createHermesRepositoryLifecycle } from "./repository-lifecycle.mjs"
 import { readHermesState } from "./state-store.mjs"
 
 function print(value) {
@@ -193,6 +196,111 @@ export function recoverPostMergeCleanupWall(options = {}) {
   return { result: "RECOVERED", outcomeId: candidate.outcomeId, checkpointSequence: recovered.checkpointSequence }
 }
 
+export async function recoverReviewedMerge(options = {}) {
+  const orchestrator = options.orchestrator ?? createHermesOrchestrator({ workspace: process.cwd() })
+  const lifecycle = options.lifecycle ?? createHermesRepositoryLifecycle({
+    workspaceRoot: process.cwd(),
+    ownedWorktreeRoot: path.join(orchestrator.runtimeRoot, "worktrees"),
+  })
+  const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
+  const recoverOutcome = options.recoverOutcome ?? recoverReviewedOutcome
+  const state = orchestrator.state.read()
+  const ownerTouchesRemainZero = Object.values(state.ownerTouchCounters).every((value) => value === 0)
+  const candidates = Object.values(state.executions).filter((execution) => (
+    ((execution?.lease?.status === "RELEASED"
+      && execution?.checkpoint?.state === "FAILED_TERMINAL"
+      && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED")
+    || (execution?.lease?.status === "ABANDONED"
+      && execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
+      && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED"))
+    && Number.isInteger(execution?.metadata?.prNumber)
+  ))
+  if (!ownerTouchesRemainZero || candidates.length !== 1) {
+    throw Object.assign(new Error("Exactly one zero-touch review recovery candidate is required"), {
+      code: "HERMES_REVIEW_RECOVERY_CANDIDATE_WALL",
+    })
+  }
+  const candidate = candidates[0]
+  const outcomeId = Number(candidate.outcomeId)
+  const recoveredOutcome = candidate.metadata?.outcome
+  if (!recoveredOutcome || String(recoveredOutcome.id) !== String(candidate.outcomeId)) {
+    throw Object.assign(new Error("Recovery candidate is missing its exact outcome"), {
+      code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+    })
+  }
+  const pr = await lifecycle.inspectPullRequest(candidate.metadata.prNumber)
+  const reviewedHeadSha = pr.headRefOid
+  const mergeSha = pr.mergeCommit?.oid
+  if (pr.state !== "MERGED" || pr.baseRefName !== "main" || pr.unresolvedThreadCount !== 0
+    || pr.checksGreen !== true || pr.reviewed !== true
+    || pr.headRefName !== candidate.metadata.branch
+    || reviewedHeadSha !== candidate.metadata.headRefOid
+    || !/^[0-9a-f]{40}$/.test(reviewedHeadSha ?? "")
+    || !/^[0-9a-f]{40}$/.test(mergeSha ?? "")
+    || !await lifecycle.verifyOriginMainContains(mergeSha)) {
+    throw Object.assign(new Error("Reviewed merge proof is incomplete"), {
+      code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+    })
+  }
+  const proofDigest = sha256(JSON.stringify({
+    outcomeId,
+    prNumber: candidate.metadata.prNumber,
+    reviewedHeadSha,
+    mergeSha,
+    unresolvedThreadCount: pr.unresolvedThreadCount,
+    checksGreen: pr.checksGreen,
+    reviewed: pr.reviewed,
+  }))
+  const alreadyReopened = candidate.checkpoint.state === "REVIEW_REMEDIATION_RECOVERED"
+  if (alreadyReopened && (candidate.metadata.reviewRecoveryProofDigest !== proofDigest
+    || candidate.metadata.mergeSha !== mergeSha)) {
+    throw Object.assign(new Error("Reopened review recovery proof changed"), {
+      code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+    })
+  }
+  if (!alreadyReopened) {
+    await projectCheckpoint({
+      outcomeId,
+      attempt: candidate.fencingToken,
+      checkpoint: {
+        sequence: candidate.checkpoint.sequence + 1,
+        state: "PR_MERGED",
+        detail: `Recovered reviewed PR #${candidate.metadata.prNumber}`,
+        metadata: { prNumber: candidate.metadata.prNumber, headRefOid: reviewedHeadSha, mergeSha },
+      },
+    })
+    if (!await recoverOutcome({
+      outcomeId,
+      prNumber: candidate.metadata.prNumber,
+      reviewedHeadSha,
+      mergeSha,
+    })) {
+      throw Object.assign(new Error("Persisted review outcome did not match recovery proof"), {
+        code: "HERMES_REVIEW_RECOVERY_DATABASE_WALL",
+      })
+    }
+  }
+  const reopened = alreadyReopened
+    ? { checkpointSequence: candidate.checkpoint.sequence }
+    : orchestrator.state.reopenReviewRemediationExhausted({
+      idempotencyKey: `${candidate.outcomeId}:recover-reviewed-merge:${candidate.fencingToken}`,
+      outcomeId: candidate.outcomeId,
+      expectedFencingToken: candidate.fencingToken,
+      prNumber: candidate.metadata.prNumber,
+      headRefOid: reviewedHeadSha,
+      mergeSha,
+      proofDigest,
+    })
+  const result = await orchestrator.cycle({ outcome: recoveredOutcome })
+  return {
+    result: result.result,
+    outcomeId: candidate.outcomeId,
+    prNumber: candidate.metadata.prNumber,
+    mergeSha,
+    checkpointSequence: reopened.checkpointSequence,
+  }
+}
+
 export async function runCli(command = process.argv[2]) {
   try {
     if (command === "cycle") {
@@ -204,11 +312,12 @@ export async function runCli(command = process.argv[2]) {
     else if (command === "recover-validation-infrastructure-wall") print(await recoverValidationInfrastructureWall())
     else if (command === "recover-external-tool-wall") print(recoverExternalToolWall())
     else if (command === "recover-post-merge-cleanup-wall") print(recoverPostMergeCleanupWall())
+    else if (command === "recover-reviewed-merge") print(await recoverReviewedMerge())
     else if (command === "status") {
       const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
       print(readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")))
     } else {
-      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-external-tool-wall|recover-post-merge-cleanup-wall"), { code: "HERMES_CLI_USAGE" })
+      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-external-tool-wall|recover-post-merge-cleanup-wall|recover-reviewed-merge"), { code: "HERMES_CLI_USAGE" })
     }
   } catch (error) {
     print({ result: "WALL", code: error?.code ?? "HERMES_CLI_FAILED", message: sanitizeBridgeMessage(error?.message ?? "Hermes bridge failed") })
