@@ -1,6 +1,6 @@
 "use server"
 
-import { and, asc, desc, eq, inArray, like } from "drizzle-orm"
+import { and, desc, eq, inArray, like } from "drizzle-orm"
 
 import {
   buildRuntimeExecutionTruth,
@@ -15,6 +15,9 @@ import type {
 import { db } from "@/lib/db"
 import { governanceEvent, workOrder } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
+
+const RUNTIME_EXECUTION_LIMIT = 50
+const RUNTIME_EVENT_LIMIT = 2_000
 
 async function readRuntimeExecutionTruth(): Promise<RuntimeExecutionQueryResult> {
   const userId = await getUserId()
@@ -41,6 +44,7 @@ async function readRuntimeExecutionTruth(): Promise<RuntimeExecutionQueryResult>
       like(workOrder.ref, "WO-HERMES-OUTCOME-%"),
     ))
     .orderBy(desc(workOrder.updatedAt), desc(workOrder.id))
+    .limit(RUNTIME_EXECUTION_LIMIT)
 
   if (workOrders.length === 0) return projectRuntimeExecutionQuery([])
 
@@ -68,7 +72,8 @@ async function readRuntimeExecutionTruth(): Promise<RuntimeExecutionQueryResult>
         "HERMES_RUNTIME_LEASE",
       ]),
     ))
-    .orderBy(asc(governanceEvent.createdAt), asc(governanceEvent.id))
+    .orderBy(desc(governanceEvent.createdAt), desc(governanceEvent.id))
+    .limit(RUNTIME_EVENT_LIMIT)
 
   return projectRuntimeExecutionQuery(
     buildRuntimeExecutionTruth(
@@ -77,10 +82,6 @@ async function readRuntimeExecutionTruth(): Promise<RuntimeExecutionQueryResult>
       events as RuntimeExecutionGovernanceEventRecord[],
     ),
   )
-}
-
-export async function getRuntimeExecutionTruth(): Promise<RuntimeExecutionTruth[]> {
-  return (await readRuntimeExecutionTruth()).executions
 }
 
 export async function getRuntimeExecutions(): Promise<RuntimeExecutionTruth[]> {

@@ -119,6 +119,8 @@ export type RuntimeExecutionTraceEntry =
       detail: string | null
       failureClass: string
       disposition: string
+      sourceCheckpointId: number | null
+      sourceCheckpointKey: string | null
       evidenceDigest: string | null
       recordedAt: Date
     }
@@ -424,6 +426,8 @@ export function buildRuntimeExecutionTruth(
           detail: failure.detail,
           failureClass: failure.failureClass,
           disposition: failure.disposition,
+          sourceCheckpointId: failure.sourceCheckpointId,
+          sourceCheckpointKey: failure.sourceCheckpointKey,
           evidenceDigest: failure.evidenceDigest ?? null,
           recordedAt: failure.recordedAt,
         })
@@ -579,6 +583,12 @@ export function projectRuntimeExecutionQuery(
           checkpointState: entry.state,
           failureClass: entry.failureClass,
           disposition: entry.disposition,
+          ...(entry.sourceCheckpointId !== null
+            ? { sourceCheckpointId: entry.sourceCheckpointId }
+            : {}),
+          ...(entry.sourceCheckpointKey
+            ? { sourceCheckpointKey: entry.sourceCheckpointKey }
+            : {}),
           ...(entry.evidenceDigest ? { evidenceDigest: entry.evidenceDigest } : {}),
         },
       }

@@ -1,10 +1,10 @@
-import { getRuntimeExecutions as getRuntimeExecutionTruth } from "@/app/actions/runtime-executions"
+import { getRuntimeExecutions } from "@/app/actions/runtime-executions"
 import { PageHeader } from "@/components/shell/page-header"
 import { RuntimeTracePanel } from "@/components/trace/runtime-trace-panel"
 import { TraceLedgerPanel } from "@/components/trace/trace-ledger-panel"
 
 export default async function TraceLedgerPage() {
-  const runtimeTruth = await getRuntimeExecutionTruth()
+  const runtimeTruth = await getRuntimeExecutions()
 
   return (
     <>

@@ -1,232 +1,27 @@
-import { createHash } from "node:crypto"
 import { Activity, Database, ShieldCheck, TriangleAlert } from "lucide-react"
 
+import {
+  RUNTIME_CHECKPOINT_EVENT,
+  RUNTIME_FAILURE_EVENT,
+  type RuntimeExecutionQueryResult,
+  type RuntimeExecutionTruth,
+} from "@/components/runtime/runtime-execution-model"
+import {
+  projectRuntimeExecutionTruth,
+  type RuntimeTraceProjection,
+} from "@/components/trace/runtime-trace-projection"
 import { Badge } from "@/components/ui/badge"
 
-const CHECKPOINT_EVENT = "HERMES_RUNTIME_CHECKPOINT"
-const FAILURE_EVAL_EVENT = "HERMES_RUNTIME_FAILURE_EVAL"
-const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,159}$/
-const SAFE_DIGEST = /^(?:sha256:)?[a-f0-9]{64}$/i
+type RuntimeEventType = typeof RUNTIME_CHECKPOINT_EVENT | typeof RUNTIME_FAILURE_EVENT
 
-type RuntimeEventType = typeof CHECKPOINT_EVENT | typeof FAILURE_EVAL_EVENT
-
-export interface RuntimeTraceProjection {
-  id: string
-  eventType: RuntimeEventType
-  provenance: {
-    actor: string
-    entity: string
-    sourceCheckpoint: string | null
-  }
-  sequence: number | null
-  attempt: number | null
-  timestamp: string | null
-  evidenceDigest: string | null
-  state: string | null
-  failureClass: string | null
-  disposition: string | null
-}
-
-function objectValue(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
-}
-
-function safeIdentifier(value: unknown): string | null {
-  return typeof value === "string" && SAFE_IDENTIFIER.test(value) ? value : null
-}
-
-function safeInteger(value: unknown): number | null {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value
-  if (typeof value === "string" && /^\d+$/.test(value)) {
-    const parsed = Number(value)
-    return Number.isSafeInteger(parsed) ? parsed : null
-  }
-  return null
-}
-
-function safeTimestamp(value: unknown): string | null {
-  const date = value instanceof Date
-    ? value
-    : typeof value === "string" || typeof value === "number"
-      ? new Date(value)
-      : null
-  return date && Number.isFinite(date.getTime()) ? date.toISOString() : null
-}
-
-function safeDigest(value: unknown): string | null {
-  return typeof value === "string" && SAFE_DIGEST.test(value) ? value.toLowerCase() : null
-}
-
-function projectedEvidenceDigest(value: unknown): string | null {
-  const evidence = objectValue(value)
-  const prNumber = safeInteger(evidence.prNumber)
-  const commitFields = ["commit", "priorHeadRefOid", "headRefOid", "mergeSha"]
-    .map((key) => evidence[key])
-    .filter((entry): entry is string => typeof entry === "string" && /^[a-f0-9]{40,64}$/i.test(entry))
-    .map((entry) => entry.toLowerCase())
-  if (prNumber === null && commitFields.length === 0) return null
-  return createHash("sha256")
-    .update(JSON.stringify({ prNumber, commits: commitFields }))
-    .digest("hex")
-}
-
-function executionCandidates(value: unknown): Array<{ value: unknown; eventType: RuntimeEventType }> {
-  const execution = objectValue(value)
-  if (!Array.isArray(execution.attempts)) return []
-  const entityId = safeIdentifier(execution.workOrderRef)
-  const candidates: Array<{ value: unknown; eventType: RuntimeEventType }> = []
-
-  for (const attemptValue of execution.attempts) {
-    const attempt = objectValue(attemptValue)
-    if (Array.isArray(attempt.checkpoints)) {
-      for (const checkpointValue of attempt.checkpoints) {
-        const checkpoint = objectValue(checkpointValue)
-        candidates.push({
-          eventType: CHECKPOINT_EVENT,
-          value: {
-            ...checkpoint,
-            id: checkpoint.eventId,
-            entityType: "work_order",
-            entityId,
-            actor: "hermes-codex-bridge",
-            createdAt: checkpoint.recordedAt,
-            checkpointSequence: checkpoint.sequence,
-            checkpointState: checkpoint.state,
-            evidenceDigest: projectedEvidenceDigest(checkpoint.evidence),
-          },
-        })
-      }
-    }
-    if (Array.isArray(attempt.failureEvaluations)) {
-      for (const failureValue of attempt.failureEvaluations) {
-        const failure = objectValue(failureValue)
-        const checkpoint = Array.isArray(attempt.checkpoints)
-          ? attempt.checkpoints
-            .map(objectValue)
-            .find((candidate) => safeInteger(candidate.sequence) === safeInteger(failure.sequence))
-          : undefined
-        candidates.push({
-          eventType: FAILURE_EVAL_EVENT,
-          value: {
-            ...failure,
-            id: failure.eventId,
-            entityType: "work_order",
-            entityId,
-            actor: "hermes-codex-bridge",
-            createdAt: failure.recordedAt,
-            checkpointSequence: failure.sequence,
-            state: failure.checkpointState,
-            evidenceDigest: projectedEvidenceDigest(checkpoint?.evidence),
-          },
-        })
-      }
-    }
-  }
-  return candidates
-}
-
-function eventCandidates(truth: unknown): Array<{ value: unknown; eventType?: RuntimeEventType }> {
-  if (Array.isArray(truth)) {
-    return truth.flatMap((value) => {
-      const projected = executionCandidates(value)
-      return projected.length > 0 ? projected : [{ value }]
-    })
-  }
-
-  const root = objectValue(truth)
-  const candidates: Array<{ value: unknown; eventType?: RuntimeEventType }> = []
-  for (const key of ["events", "records", "runtimeEvents"]) {
-    if (Array.isArray(root[key])) {
-      candidates.push(...(root[key] as unknown[]).map((value) => ({ value })))
-    }
-  }
-  if (Array.isArray(root.checkpoints)) {
-    candidates.push(...root.checkpoints.map(
-      (value): { value: unknown; eventType: RuntimeEventType } => ({ value, eventType: CHECKPOINT_EVENT }),
-    ))
-  }
-  if (Array.isArray(root.failureEvals)) {
-    candidates.push(...root.failureEvals.map(
-      (value): { value: unknown; eventType: RuntimeEventType } => ({ value, eventType: FAILURE_EVAL_EVENT }),
-    ))
-  }
-  if (Array.isArray(root.failureEvaluations)) {
-    candidates.push(...root.failureEvaluations.map(
-      (value): { value: unknown; eventType: RuntimeEventType } => ({ value, eventType: FAILURE_EVAL_EVENT }),
-    ))
-  }
-  return candidates
-}
-
-function projectEvent(
-  value: unknown,
-  fallbackEventType?: RuntimeEventType,
-): RuntimeTraceProjection | null {
-  const event = objectValue(value)
-  const metadata = objectValue(event.metadata)
-  const provenance = objectValue(event.provenance)
-  const eventType = safeIdentifier(event.eventType ?? event.type) ?? fallbackEventType
-  if (eventType !== CHECKPOINT_EVENT && eventType !== FAILURE_EVAL_EVENT) return null
-
-  const actor = safeIdentifier(event.actor ?? provenance.actor ?? event.source) ?? "hermes-codex-bridge"
-  const entityType = safeIdentifier(event.entityType ?? provenance.entityType) ?? "work_order"
-  const entityId = safeIdentifier(event.entityId ?? provenance.entityId ?? metadata.workOrderRef)
-  const eventId = safeInteger(event.id)
-  const sourceCheckpointValue = event.sourceCheckpointId
-    ?? provenance.sourceCheckpoint
-    ?? metadata.sourceCheckpointId
-    ?? metadata.sourceCheckpointKey
-  const sourceCheckpoint = safeIdentifier(sourceCheckpointValue)
-    ?? (safeInteger(sourceCheckpointValue) !== null ? String(safeInteger(sourceCheckpointValue)) : null)
-
-  return {
-    id: safeIdentifier(event.ref)
-      ?? (eventId !== null ? `GEV-${eventId}` : `${eventType}-${safeInteger(metadata.checkpointSequence) ?? 0}`),
-    eventType,
-    provenance: {
-      actor,
-      entity: entityId ? `${entityType}:${entityId}` : entityType,
-      sourceCheckpoint,
-    },
-    sequence: safeInteger(event.sequence ?? event.checkpointSequence ?? metadata.checkpointSequence),
-    attempt: safeInteger(event.attempt ?? metadata.attempt),
-    timestamp: safeTimestamp(event.timestamp ?? event.createdAt ?? metadata.recordedAt),
-    evidenceDigest: safeDigest(
-      event.evidenceDigest
-        ?? event.payloadDigest
-        ?? metadata.evidenceDigest
-        ?? metadata.payloadDigest,
-    ),
-    state: safeIdentifier(event.state ?? event.checkpointState ?? metadata.checkpointState),
-    failureClass: safeIdentifier(event.failureClass ?? metadata.failureClass),
-    disposition: safeIdentifier(event.disposition ?? metadata.disposition),
-  }
-}
-
-export function projectRuntimeExecutionTruth(truth: unknown): RuntimeTraceProjection[] {
-  const seen = new Set<string>()
-  return eventCandidates(truth)
-    .map(({ value, eventType }) => projectEvent(value, eventType))
-    .filter((record): record is RuntimeTraceProjection => {
-      if (!record) return false
-      const key = `${record.eventType}:${record.id}`
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-    .sort((left, right) => {
-      const timestampOrder = (right.timestamp ?? "").localeCompare(left.timestamp ?? "")
-      if (timestampOrder !== 0) return timestampOrder
-      return (right.sequence ?? -1) - (left.sequence ?? -1)
-    })
-}
-
-export function RuntimeTracePanel({ truth }: { truth: unknown }) {
+export function RuntimeTracePanel({
+  truth,
+}: {
+  truth: RuntimeExecutionTruth[] | RuntimeExecutionQueryResult
+}) {
   const records = projectRuntimeExecutionTruth(truth)
-  const checkpoints = records.filter((record) => record.eventType === CHECKPOINT_EVENT)
-  const failureEvals = records.filter((record) => record.eventType === FAILURE_EVAL_EVENT)
+  const checkpoints = records.filter((record) => record.eventType === RUNTIME_CHECKPOINT_EVENT)
+  const failureEvals = records.filter((record) => record.eventType === RUNTIME_FAILURE_EVENT)
 
   return (
     <section className="overflow-hidden rounded-lg border border-border bg-card">
@@ -250,14 +45,14 @@ export function RuntimeTracePanel({ truth }: { truth: unknown }) {
       <div className="grid gap-4 p-4 xl:grid-cols-2">
         <RuntimeEventList
           title="Runtime checkpoints"
-          eventType={CHECKPOINT_EVENT}
+          eventType={RUNTIME_CHECKPOINT_EVENT}
           records={checkpoints}
           icon={Database}
           emptyText="No persisted Hermes runtime checkpoints were returned."
         />
         <RuntimeEventList
           title="Failure evaluations"
-          eventType={FAILURE_EVAL_EVENT}
+          eventType={RUNTIME_FAILURE_EVENT}
           records={failureEvals}
           icon={TriangleAlert}
           emptyText="No persisted Hermes runtime failure evaluations were returned."
@@ -315,7 +110,7 @@ function RuntimeEventList({
               <RuntimeField label="Attempt" value={formatNumber(record.attempt)} />
               <RuntimeField label="Evidence digest" value={record.evidenceDigest ?? "not recorded"} mono />
               <RuntimeField
-                label={record.eventType === FAILURE_EVAL_EVENT ? "Disposition" : "Checkpoint state"}
+                label={record.eventType === RUNTIME_FAILURE_EVENT ? "Disposition" : "Checkpoint state"}
                 value={record.disposition ?? record.state ?? "not recorded"}
               />
               {record.provenance.sourceCheckpoint ? (

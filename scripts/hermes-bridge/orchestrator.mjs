@@ -227,9 +227,10 @@ export function createHermesOrchestrator(options = {}) {
           expiresAt: execution.lease.expiresAt,
         },
       })
-    } catch {
+    } catch (error) {
       throw Object.assign(new Error("Persisted runtime lease projection failed"), {
         code: "HERMES_RUNTIME_PROJECTION_WALL",
+        cause: error,
       })
     }
   }

@@ -211,7 +211,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         tone: "ready",
         description:
           "The native Windows supervisor has retained Codex App Server and durable lease/checkpoint proof. The production web app reads persisted execution state but does not claim current host liveness or host the worker.",
-        href: "/work-orders",
+        href: "/runtime",
       },
       {
         label: "Agent Forge / Skills",

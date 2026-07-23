@@ -9,14 +9,14 @@ import { ReadinessNativeAreaPanel } from "@/components/runtime/readiness-native-
 import { SystemsStatusPanel } from "@/components/systems/systems-status-panel"
 import { LocalOperatorPanel } from "@/components/local/local-operator-panel"
 import { LocalRuntimeLiveStatusPanel } from "@/components/local/local-runtime-live-status-panel"
-import { getRuntimeExecutionTruth } from "@/app/actions/runtime-executions"
+import { getRuntimeExecutions } from "@/app/actions/runtime-executions"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
 
 export default async function RuntimePage() {
   const rt = buildRuntimeStatus()
   const [evidence, executionTruth] = await Promise.all([
     getRecentEvidence(5),
-    getRuntimeExecutionTruth(),
+    getRuntimeExecutions(),
   ])
 
   const rows: { icon: typeof Cpu; label: string; value: string; mono?: boolean }[] = [

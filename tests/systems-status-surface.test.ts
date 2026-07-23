@@ -47,9 +47,11 @@ describe("Systems status surface", () => {
   it("distinguishes advisory surfaces from the bounded resident Hermes worker", () => {
     const surface = getSystemsStatusSurface()
     const statuses = new Map(surface.categories.map((category) => [category.label, category.status]))
+    const hermes = surface.categories.find((category) => category.label === "Hermes Resident Worker")
 
     expect(statuses.get("Brain Council")).toBe("Read-only")
     expect(statuses.get("Hermes Resident Worker")).toBe("Runtime-proven")
+    expect(hermes?.href).toBe("/runtime")
     expect(statuses.get("Access Grants")).toBe("Disabled")
   })
 

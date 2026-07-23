@@ -91,12 +91,13 @@ WilliamOS product outcomes:
 
 - `GOAL-0001` reached merged PR `#440` at
   `c01751e3d0717952e93c550dfbbc2f7c3672cd2a`.
-- Supervisor validation-isolation remediation reached merged PR `#445` at
-  `6b37ceafbfd4b7d9443d09e86efa56fb8345bbc0`.
 - `GOAL-0002` reached exact-head Codex review, green Vercel verification, and
   merged PR `#446` at `d4db455eefaecc2413668b9949f51a7a1e4130a7`.
 
-Both outcome PRs record owner touch count `0` and blocked-scope crossing
-`false`. This proves the bounded resident Hermes-to-Codex lifecycle; it does
-not prove current host liveness, unrestricted autonomy, or authority outside
-the standing WilliamOS-native R0/R1 envelope.
+The two outcome PRs, `#440` and `#446`, record owner touch count `0` and
+blocked-scope crossing `false`. Separately, supervisor validation-isolation
+remediation reached merged PR `#445` at
+`6b37ceafbfd4b7d9443d09e86efa56fb8345bbc0`. Together this proves the bounded
+resident Hermes-to-Codex lifecycle; it does not prove current host liveness,
+unrestricted autonomy, or authority outside the standing WilliamOS-native
+R0/R1 envelope.
