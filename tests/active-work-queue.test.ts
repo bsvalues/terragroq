@@ -66,6 +66,7 @@ describe("Work Orders Hermes delivery radar", () => {
       workOrder(5, "closed", {
         result: "FAIL",
         completedAt: new Date("2026-07-08T00:00:00.000Z"),
+        updatedAt: new Date("2026-07-09T00:00:00.000Z"),
         evidence: ["validation failure"],
       }),
       workOrder(6, "aborted", { result: "PARTIAL" }),
@@ -159,6 +160,44 @@ describe("Work Orders Hermes delivery radar", () => {
     expect(surface.failed.items).toHaveLength(WORK_ORDER_BRIEFING_LIMIT)
     expect(surface.hermesNext.count).toBe(5)
     expect(surface.hermesNext.items).toHaveLength(WORK_ORDER_BRIEFING_LIMIT)
+  })
+
+  it("keeps a newly recorded terminal failure inside the bounded briefing", () => {
+    const surface = getActiveWorkQueueSurface([
+      workOrder(1, "closed", {
+        result: "FAIL",
+        completedAt: new Date("2026-07-07T00:00:00.000Z"),
+        updatedAt: new Date("2026-07-08T00:00:00.000Z"),
+      }),
+      workOrder(2, "closed", {
+        result: "FAIL",
+        completedAt: new Date("2026-07-09T00:00:00.000Z"),
+        updatedAt: new Date("2026-07-10T00:00:00.000Z"),
+      }),
+      workOrder(3, "closed", {
+        result: "FAIL",
+        completedAt: new Date("2026-07-11T00:00:00.000Z"),
+        updatedAt: new Date("2026-07-12T00:00:00.000Z"),
+      }),
+      workOrder(4, "closed", {
+        result: "FAIL",
+        completedAt: new Date("2026-07-13T00:00:00.000Z"),
+        updatedAt: new Date("2026-07-14T00:00:00.000Z"),
+      }),
+      workOrder(5, "closed", {
+        result: "FAIL",
+        completedAt: new Date("2026-07-06T00:00:00.000Z"),
+        updatedAt: new Date("2026-07-20T00:00:00.000Z"),
+      }),
+    ])
+
+    expect(surface.failed.count).toBe(5)
+    expect(surface.failed.items.map((item) => item.ref)).toEqual([
+      "WO-0005",
+      "WO-0004",
+      "WO-0003",
+      "WO-0002",
+    ])
   })
 
   it("provides independent empty states when no recorded work fits a lane", () => {

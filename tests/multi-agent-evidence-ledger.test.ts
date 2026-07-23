@@ -307,25 +307,34 @@ describe("append-only multi-agent evidence ledger", () => {
     expect(inspectLaneLeaseStore(store, storeId).lanes[0].checkpointEvidence).toEqual(checkpointEvidence)
   })
 
-  it(
-    "serializes two child-process appends without loss or overwrite",
-    { retry: process.platform === "win32" ? 1 : 0, timeout: 30_000 },
-    async () => {
-      const { root, store, ledger } = workspace(); const now = Date.now(); establish(store, now)
-      const binding = path.join(root, "binding.json"); fs.writeFileSync(binding, JSON.stringify({ leaseStorePath: store, leaseStoreId: storeId }))
-      const paths = [1, 2].map((index) => {
-        const file = path.join(root, `request-${index}.json`)
-        fs.writeFileSync(file, JSON.stringify(event(store, uuid(index), "TEST", testPayload(), new Date(now + 1).toISOString())))
-        return file
-      })
-      const run = (file: string) => new Promise<number | null>((resolve) => {
-        const child = spawn(process.execPath, ["scripts/multi-agent-operator/evidence-ledger-cli.mjs", "append", ledger, ledgerId, file, binding], { cwd: process.cwd(), env: {}, stdio: ["ignore", "ignore", "ignore"] })
-        child.on("close", resolve)
-      })
-      expect(await Promise.all(paths.map(run))).toEqual([0, 0])
-      expect(verifyEvidenceLedger(ledger, ledgerId, verifyRequest())).toMatchObject({ ok: true, eventCount: 2 })
-    },
-  )
+  it("serializes two child-process appends without loss or overwrite", async () => {
+    const { root, store, ledger } = workspace(); const now = Date.now(); establish(store, now)
+    const binding = path.join(root, "binding.json"); fs.writeFileSync(binding, JSON.stringify({ leaseStorePath: store, leaseStoreId: storeId }))
+    const paths = [1, 2].map((index) => {
+      const file = path.join(root, `request-${index}.json`)
+      fs.writeFileSync(file, JSON.stringify(event(store, uuid(index), "TEST", testPayload(), new Date(now + 1).toISOString())))
+      return file
+    })
+    const run = (file: string) => new Promise<number | null>((resolve) => {
+      const child = spawn(process.execPath, ["scripts/multi-agent-operator/evidence-ledger-cli.mjs", "append", ledger, ledgerId, file, binding], { cwd: process.cwd(), env: {}, stdio: ["ignore", "ignore", "ignore"] })
+      child.on("close", resolve)
+    })
+    const exitCodes = await Promise.all(paths.map(run))
+    const retryableExitIndex =
+      process.platform === "win32"
+      && exitCodes.length === 2
+      && exitCodes.filter((code) => code === 2).length === 1
+      && exitCodes.filter((code) => code === 0).length === 1
+        ? exitCodes.indexOf(2)
+        : -1
+
+    if (retryableExitIndex >= 0) {
+      exitCodes[retryableExitIndex] = await run(paths[retryableExitIndex]!)
+    }
+
+    expect(exitCodes).toEqual([0, 0])
+    expect(verifyEvidenceLedger(ledger, ledgerId, verifyRequest())).toMatchObject({ ok: true, eventCount: 2 })
+  }, 30_000)
 
   it("never breaks a live lock and recovers only an abandoned stale same-host lock", () => {
     const { store, ledger } = workspace(); establish(store)

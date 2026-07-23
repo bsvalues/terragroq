@@ -11,7 +11,7 @@ Make the Work Orders area show what is currently moving, what failed, and what H
 The Work Orders page now leads with a bounded three-lane delivery radar:
 
 - **Moving / Currently moving** shows `active` and `review` Work Orders, ordered by the newest recorded activity.
-- **Failed / Recorded failures** shows only records with an explicit `FAIL` result. A blocked or aborted lifecycle state is not silently relabeled as failure.
+- **Failed / Recorded failures** shows only records with an explicit `FAIL` result, ordered by `updatedAt` so a result recorded after terminal closure appears as the newest failure. A blocked or aborted lifecycle state is not silently relabeled as failure.
 - **Next / Hermes next** shows expected continuation for open `approved`, `active`, `blocked`, and `review` Work Orders. Recovery is ordered before blocked, review, active, and approved continuation.
 
 Each lane preserves its complete count while displaying at most four rows. The full Work Orders register and existing detail surfaces remain below the radar.
@@ -67,24 +67,35 @@ The first Hermes native-host full-suite run rejected the handoff after four proc
 - three CLI/workspace tests exceeded Vitest's default five-second timeout;
 - one two-child evidence-ledger serialization attempt returned one transient nonzero child exit.
 
+The next native-host run cleared those four cases and exposed one adjacent isolated-workspace rollback test that still used the five-second default. It now uses the same local process-test timeout precedent.
+
 The bounded remediation changes test execution tolerance only:
 
-- the four named process-heavy tests now have an explicit 30-second timeout, matching existing process-heavy suite precedent;
-- the concurrent evidence-ledger serialization test permits one classified retry on the observed Windows host only;
-- no ledger, workspace, reservation, Work Orders product, runtime, or production behavior changed.
+- the five named process-heavy tests now have an explicit 30-second timeout, matching existing process-heavy suite precedent;
+- the concurrent evidence-ledger serialization test retries only the one child request in the observed Windows `[2, 0]` or `[0, 2]` exit pattern;
+- no ledger, workspace, reservation, runtime, or production behavior changed by the test-harness correction.
 
-The retry is limited to the Windows test that produced the transient child exit. Deterministic assertion failures still fail after that single retry, non-Windows runs receive no retry, and every other affected test receives timeout headroom without retry.
+The test body is never retried. Only one Windows child exit is retried when exactly one child succeeds and exactly one returns the observed typed exit `2`. Both-child failures, other exit codes, non-Windows runs, and the final exit-code and ledger-integrity assertions receive no retry.
 
 ### Remediation file review
 
 A separate file-only review of the bounded remediation found no remaining issue:
 
 - all original assertions and child-process coverage remain intact;
-- timeout changes are local to the four reported failures and use the suite's existing 30-second process-test precedent;
-- the single retry is platform-bound, count-bound, and limited to the concurrent serialization case;
+- timeout changes are local to the five reported process-heavy failures and use the suite's existing 30-second process-test precedent;
+- the single child retry is platform-bound, exit-pattern-bound, and cannot rerun or erase a failed ledger-integrity assertion;
 - no skip, weakened expected value, global timeout, production mutation, or runtime behavior was introduced.
 
 Native execution remains deliberately unclaimed until Hermes reruns validation.
+
+## Pull-request review remediation
+
+Two actionable review findings were accepted and corrected:
+
+- failed Work Orders now sort by `updatedAt`, rather than preferring an older terminal timestamp, with a five-row regression fixture proving a newly recorded terminal failure remains inside the four-row briefing;
+- the evidence-ledger test no longer retries the Vitest case. It can retry only the one Windows child request in the classified one-success/one-exit-2 pattern, after which the original exit-code and ledger-integrity assertions run exactly once.
+
+Direct file review found no remaining issue in either remediation.
 
 ## Validation handoff
 

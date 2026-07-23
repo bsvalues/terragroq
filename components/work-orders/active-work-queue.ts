@@ -110,6 +110,13 @@ function compareMostRecent(a: RecordedWorkOrder, b: RecordedWorkOrder): number {
   return recordedAt(b.order) - recordedAt(a.order) || b.order.id - a.order.id
 }
 
+function compareMostRecentlyUpdated(a: RecordedWorkOrder, b: RecordedWorkOrder): number {
+  return (
+    b.order.updatedAt.getTime() - a.order.updatedAt.getTime()
+    || b.order.id - a.order.id
+  )
+}
+
 function movingDetail(status: MovingStatus): string {
   if (status === "review") {
     return "Delivery reached independent review and is waiting for findings or clearance."
@@ -202,7 +209,7 @@ export function getActiveWorkQueueSurface(orders: WorkOrder[]): ActiveWorkQueueS
 
   const failed = recordedOrders
     .filter((item) => isExplicitFailure(item.order))
-    .sort(compareMostRecent)
+    .sort(compareMostRecentlyUpdated)
 
   const hermesNext = recordedOrders
     .filter(

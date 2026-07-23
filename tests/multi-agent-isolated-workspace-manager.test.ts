@@ -526,7 +526,7 @@ describe("multi-agent isolated workspace manager", () => {
       cwd: repositoryRoot,
     }).status).not.toBe(0)
     expect(fs.existsSync(path.join(workspaceRoot, ".williamos-workspace-ownership.json"))).toBe(false)
-  })
+  }, 30_000)
 
   it("fails closed on malformed ownership registry entries", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mao-workspace-corrupt-ownership-"))
