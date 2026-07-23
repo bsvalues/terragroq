@@ -185,8 +185,9 @@ function scenarioEvidenceValid(requirement, evidence) {
       && exactStringArray(evidence.checkpointEventIds)
       && exactStringArray(evidence.leaseEventIds)
       && Array.isArray(evidence.failureEvalEventIds)
-      && Array.isArray(evidence.evidenceRecordIds)
+      && exactStringArray(evidence.evidenceRecordIds)
       && Array.isArray(evidence.evidenceWorkOrderIds)
+      && evidence.evidenceWorkOrderIds.length > 0
       && evidence.evidenceWorkOrderIds.every((id) => id === evidence.workOrderId)
       && Array.isArray(evidence.evalEventIds)
       && JSON.stringify(evidence.evalEventIds) === JSON.stringify(evidence.failureEvalEventIds)
