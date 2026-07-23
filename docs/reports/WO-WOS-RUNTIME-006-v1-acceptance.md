@@ -2,7 +2,7 @@
 
 ## Result
 
-`PASS_CANDIDATE / EXACT_HEAD_CAMPAIGN_REQUIRED`
+`PASS / WILLIAMOS_V1_RUNTIME_COMPLETE`
 
 Controlling issue: [#448](https://github.com/bsvalues/terragroq/issues/448)
 
@@ -10,6 +10,11 @@ Baseline: `33142e8e05428da307a152918e19b5ada58cc62f`
 
 Latest merged product outcome before this packet:
 `ec96f020f2aa47c69bc6146439c81ccc9ba7ea62`
+
+First complete exact-head campaign:
+`da7756fd498b7a3da27039966b54fe52fdcf66ea`
+
+Campaign result: `14/14 PASS`
 
 The exact acceptance-packet revision and final merged-main revision are recorded by the external,
 digest-verified campaign result and the controlling issue's closure evidence. They cannot be
@@ -111,6 +116,5 @@ fenced leases, exact-head delivery, and the local kill switch.
 - The external campaign result and host artifacts remain authoritative for the exact final revision,
   current process identity, endpoint health, lease state, and owner counters.
 
-Issue #448 may close only after this packet is merged, the exact merged-main campaign reports
-`PASS / WILLIAMOS_V1_RUNTIME_COMPLETE`, all leases are released, and live application and worker
-proof remain current.
+Issue #448 may close only after this packet is merged, the campaign is rerun against exact merged
+main, all leases remain released, and live application and worker proof remain current.

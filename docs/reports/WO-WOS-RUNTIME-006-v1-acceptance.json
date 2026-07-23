@@ -3,9 +3,12 @@
   "issueNumber": 448,
   "goal": "GOAL-WOS-RUNTIME-001",
   "workOrder": "WO-WOS-RUNTIME-006",
-  "result": "PASS_CANDIDATE_EXACT_HEAD_CAMPAIGN_REQUIRED",
+  "result": "PASS_WILLIAMOS_V1_RUNTIME_COMPLETE",
   "baselineRevision": "33142e8e05428da307a152918e19b5ada58cc62f",
   "latestMergedProductRevision": "ec96f020f2aa47c69bc6146439c81ccc9ba7ea62",
+  "firstCompleteCampaignRevision": "da7756fd498b7a3da27039966b54fe52fdcf66ea",
+  "acceptancePassed": 14,
+  "acceptanceTotal": 14,
   "deliveryPullRequests": [
     449,
     450,
@@ -48,5 +51,5 @@
     "OWNER_ROUTINE_CONTACT_COUNT": 0
   },
   "blockedScopeCrossed": false,
-  "finalGate": "MERGED_MAIN_EXACT_REVISION_CAMPAIGN"
+  "finalGate": "FINAL_REVIEW_MERGE_AND_MERGED_MAIN_REPROOF"
 }
