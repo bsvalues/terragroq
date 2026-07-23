@@ -154,7 +154,9 @@ describe("AC-11 evidence truth consistency", () => {
     const action = readFileSync("app/actions/evidence.ts", "utf8")
     const workOrdersAction = readFileSync("app/actions/work-orders.ts", "utf8")
 
-    expect(page).toContain("getPersistedEvidenceTruth(25)")
+    expect(page).toContain("getPersistedEvidenceTruth(RUNTIME_EVIDENCE_HISTORY_LIMIT + 1)")
+    expect(page).toContain("projectRuntimeEvidenceHistory(persistedEvidence.records)")
+    expect(page).toContain("<RuntimeEvidencePanel {...evidenceHistory} />")
     expect(page).toContain("getRuntimeExecutionQuery()")
     expect(page).toContain("Current persisted truth")
     expect(page).toContain("Retained historical/static records")

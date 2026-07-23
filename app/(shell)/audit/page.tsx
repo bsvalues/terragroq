@@ -8,6 +8,10 @@ import { EvidenceCommandPanel } from "@/components/evidence/evidence-command-pan
 import { EvidenceRollupPanel } from "@/components/evidence/evidence-rollup-panel"
 import { EvidenceSpinePanel } from "@/components/evidence/evidence-spine-panel"
 import { RuntimeEvidencePanel } from "@/components/runtime/runtime-evidence-panel"
+import {
+  projectRuntimeEvidenceHistory,
+  RUNTIME_EVIDENCE_HISTORY_LIMIT,
+} from "@/components/runtime/runtime-evidence"
 import { RuntimeExecutionPanel } from "@/components/runtime/runtime-execution-panel"
 import { Activity } from "lucide-react"
 import Link from "next/link"
@@ -15,10 +19,11 @@ import Link from "next/link"
 export default async function AuditPage() {
   const userId = await getUserId()
   const [persistedEvidence, runtimeTruth, events] = await Promise.all([
-    getPersistedEvidenceTruth(25),
+    getPersistedEvidenceTruth(RUNTIME_EVIDENCE_HISTORY_LIMIT + 1),
     getRuntimeExecutionQuery(),
     getRecentEvents(userId, 200),
   ])
+  const evidenceHistory = projectRuntimeEvidenceHistory(persistedEvidence.records)
 
   return (
     <>
@@ -41,7 +46,7 @@ export default async function AuditPage() {
               not imply a currently live host process.
             </p>
           </div>
-          <RuntimeEvidencePanel records={persistedEvidence.records} />
+          <RuntimeEvidencePanel {...evidenceHistory} />
           <RuntimeExecutionPanel truth={runtimeTruth} />
         </section>
 
