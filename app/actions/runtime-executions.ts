@@ -17,7 +17,7 @@ import { governanceEvent, workOrder } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 
 const RUNTIME_EXECUTION_LIMIT = 50
-const RUNTIME_EVENT_LIMIT = 2_000
+const RUNTIME_EVENTS_PER_EXECUTION_LIMIT = 500
 
 async function readRuntimeExecutionTruth(): Promise<RuntimeExecutionQueryResult> {
   const userId = await getUserId()
@@ -49,31 +49,34 @@ async function readRuntimeExecutionTruth(): Promise<RuntimeExecutionQueryResult>
   if (workOrders.length === 0) return projectRuntimeExecutionQuery([])
 
   const workOrderIds = workOrders.map((row) => String(row.id))
-  const events = await db
-    .select({
-      id: governanceEvent.id,
-      userId: governanceEvent.userId,
-      eventType: governanceEvent.eventType,
-      entityType: governanceEvent.entityType,
-      entityId: governanceEvent.entityId,
-      actor: governanceEvent.actor,
-      reason: governanceEvent.reason,
-      metadata: governanceEvent.metadata,
-      createdAt: governanceEvent.createdAt,
-    })
-    .from(governanceEvent)
-    .where(and(
-      eq(governanceEvent.userId, userId),
-      eq(governanceEvent.entityType, "work_order"),
-      inArray(governanceEvent.entityId, workOrderIds),
-      inArray(governanceEvent.eventType, [
-        "HERMES_RUNTIME_CHECKPOINT",
-        "HERMES_RUNTIME_FAILURE_EVAL",
-        "HERMES_RUNTIME_LEASE",
-      ]),
-    ))
-    .orderBy(desc(governanceEvent.createdAt), desc(governanceEvent.id))
-    .limit(RUNTIME_EVENT_LIMIT)
+  const eventGroups = await Promise.all(workOrderIds.map((workOrderId) => (
+    db
+      .select({
+        id: governanceEvent.id,
+        userId: governanceEvent.userId,
+        eventType: governanceEvent.eventType,
+        entityType: governanceEvent.entityType,
+        entityId: governanceEvent.entityId,
+        actor: governanceEvent.actor,
+        reason: governanceEvent.reason,
+        metadata: governanceEvent.metadata,
+        createdAt: governanceEvent.createdAt,
+      })
+      .from(governanceEvent)
+      .where(and(
+        eq(governanceEvent.userId, userId),
+        eq(governanceEvent.entityType, "work_order"),
+        eq(governanceEvent.entityId, workOrderId),
+        inArray(governanceEvent.eventType, [
+          "HERMES_RUNTIME_CHECKPOINT",
+          "HERMES_RUNTIME_FAILURE_EVAL",
+          "HERMES_RUNTIME_LEASE",
+        ]),
+      ))
+      .orderBy(desc(governanceEvent.createdAt), desc(governanceEvent.id))
+      .limit(RUNTIME_EVENTS_PER_EXECUTION_LIMIT)
+  )))
+  const events = eventGroups.flat()
 
   return projectRuntimeExecutionQuery(
     buildRuntimeExecutionTruth(

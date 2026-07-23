@@ -100,13 +100,16 @@ describe("runtime trace panel contract", () => {
     expect(page).toContain("TraceLedgerPanel")
   })
 
-  it("uses one bounded user-scoped runtime action", () => {
+  it("uses a bounded user-scoped runtime action without cross-execution starvation", () => {
     const action = readFileSync("app/actions/runtime-executions.ts", "utf8")
     const runtimePage = readFileSync("app/(shell)/runtime/page.tsx", "utf8")
     const tracePage = readFileSync("app/(shell)/trace/page.tsx", "utf8")
 
     expect(action).toContain("RUNTIME_EXECUTION_LIMIT = 50")
-    expect(action).toContain("RUNTIME_EVENT_LIMIT = 2_000")
+    expect(action).toContain("RUNTIME_EVENTS_PER_EXECUTION_LIMIT = 500")
+    expect(action).toContain("Promise.all(workOrderIds.map")
+    expect(action).toContain("eq(governanceEvent.entityId, workOrderId)")
+    expect(action).not.toContain("inArray(governanceEvent.entityId, workOrderIds)")
     expect(action.match(/\.limit\(/g)).toHaveLength(2)
     expect(action).not.toContain("function getRuntimeExecutionTruth")
     expect(runtimePage).toContain("getRuntimeExecutions")
