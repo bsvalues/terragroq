@@ -840,6 +840,147 @@ export async function projectOutcomeRuntimeCheckpoint({
   }
 }
 
+const RUNTIME_LEASE_STATUSES = new Set([
+  "ACTIVE",
+  "ABANDONED",
+  "DEFERRED",
+  "RELEASED",
+])
+
+/**
+ * Appends the durable local lease posture to the existing governance ledger.
+ * Lease events are separate from checkpoints so releasing or abandoning a
+ * lease cannot mutate or conflict with checkpoint evidence.
+ */
+export async function projectOutcomeRuntimeLease({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  attempt,
+  checkpointSequence,
+  lease,
+} = {}) {
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) {
+    throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
+  }
+  if (!Number.isSafeInteger(attempt) || attempt <= 0
+    || !Number.isSafeInteger(checkpointSequence) || checkpointSequence < 0
+    || !lease || !RUNTIME_LEASE_STATUSES.has(lease.status)
+    || typeof lease.expiresAt !== "string"
+    || !Number.isFinite(Date.parse(lease.expiresAt))) {
+    throw Object.assign(new Error("runtime lease is invalid"), {
+      code: "OUTCOME_PROJECTION_LEASE_INVALID",
+    })
+  }
+
+  const ref = outcomeWorkOrderRef(outcomeId)
+  const leaseExpiresAt = new Date(lease.expiresAt).toISOString()
+  const idempotencyKey = [
+    `hermes-outcome:${outcomeId}`,
+    `attempt:${attempt}`,
+    `lease:${lease.status}`,
+    `checkpoint:${checkpointSequence}`,
+    `expires:${Date.parse(leaseExpiresAt)}`,
+  ].join(":")
+  const eventMetadata = {
+    idempotencyKey,
+    outcomeId,
+    workOrderRef: ref,
+    attempt,
+    checkpointSequence,
+    leaseStatus: lease.status,
+    leaseExpiresAt,
+  }
+  eventMetadata.payloadDigest = projectionPayloadDigest(eventMetadata)
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = new Pool({ connectionString: databaseUrl })
+  }
+
+  try {
+    if (pool) {
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+    }
+    await runQuery("BEGIN")
+    await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [ref])
+    const workOrders = await runQuery(
+      `SELECT wo.id, wo."userId" AS "userId", wo.ref
+       FROM work_order wo
+       JOIN goal g ON g."userId" = wo."userId"
+       WHERE g.id = $1::integer AND wo.ref = $2
+       ORDER BY wo.id
+       FOR UPDATE OF wo`,
+      [outcomeId, ref],
+    )
+    if (workOrders?.rows?.length !== 1) {
+      throw Object.assign(new Error("Hermes outcome Work Order cardinality is invalid"), {
+        code: "OUTCOME_WORK_ORDER_CARDINALITY_WALL",
+      })
+    }
+    const workOrder = workOrders.rows[0]
+    const insertedEvent = await runQuery(
+      `INSERT INTO governance_event
+         ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       SELECT $1, 'HERMES_RUNTIME_LEASE', 'work_order', $2, 'hermes-codex-bridge',
+         $3, $4::jsonb
+       WHERE NOT EXISTS (
+         SELECT 1 FROM governance_event prior
+         WHERE prior."entityType" = 'work_order' AND prior."entityId"::text = $2::text
+           AND prior."eventType" = 'HERMES_RUNTIME_LEASE'
+           AND prior.metadata->>'idempotencyKey' = $5
+       )
+       RETURNING id`,
+      [
+        workOrder.userId,
+        String(workOrder.id),
+        `Projected ${lease.status} lease for ${ref}`,
+        JSON.stringify(eventMetadata),
+        idempotencyKey,
+      ],
+    )
+    const eventInserted = (insertedEvent?.rows?.length ?? insertedEvent?.rowCount ?? 0) > 0
+    if (!eventInserted) {
+      const prior = await runQuery(
+        `SELECT metadata->>'payloadDigest' AS "payloadDigest"
+         FROM governance_event
+         WHERE "entityType" = 'work_order' AND "entityId"::text = $1::text
+           AND "eventType" = 'HERMES_RUNTIME_LEASE'
+           AND metadata->>'idempotencyKey' = $2`,
+        [String(workOrder.id), idempotencyKey],
+      )
+      if (prior?.rows?.length !== 1
+        || prior.rows[0].payloadDigest !== eventMetadata.payloadDigest) {
+        throw Object.assign(new Error("Runtime lease replay conflicts with persisted evidence"), {
+          code: "OUTCOME_PROJECTION_IDEMPOTENCY_CONFLICT",
+        })
+      }
+    }
+    await runQuery("COMMIT")
+    return {
+      workOrderId: workOrder.id,
+      workOrderRef: ref,
+      idempotencyKey,
+      leaseStatus: lease.status,
+      checkpointSequence,
+    }
+  } catch (error) {
+    if (runQuery) {
+      try { await runQuery("ROLLBACK") } catch {}
+    }
+    throw error
+  } finally {
+    client?.release()
+    if (pool) await pool.end()
+  }
+}
+
 /**
  * Converts only a dismissed review-remediation terminal whose later projected
  * PR_MERGED checkpoint exactly matches the supplied reviewed head and merge.

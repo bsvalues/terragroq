@@ -12,7 +12,7 @@ describe("Systems status surface", () => {
       "Work Orders",
       "Evidence",
       "Brain Council",
-      "Hermes Preview / Worker Dock",
+      "Hermes Resident Worker",
       "Agent Forge / Skills",
       "Access Grants",
       "Memory / Knowledge",
@@ -22,7 +22,7 @@ describe("Systems status surface", () => {
     ])
   })
 
-  it("summarizes ready, read-only, preview-only, and disabled posture", () => {
+  it("summarizes ready, read-only, bounded-worker, and disabled posture", () => {
     const surface = getSystemsStatusSurface()
     const summary = new Map(surface.postureSummary.map((item) => [item.label, item]))
 
@@ -34,9 +34,9 @@ describe("Systems status surface", () => {
       value: "4 surfaces",
       tone: "read-only",
     })
-    expect(summary.get("Preview-only")).toMatchObject({
-      value: "1 dock",
-      tone: "preview-only",
+    expect(summary.get("Bounded worker")).toMatchObject({
+      value: "1 proven",
+      tone: "ready",
     })
     expect(summary.get("Disabled")).toMatchObject({
       value: "access grants",
@@ -44,12 +44,12 @@ describe("Systems status surface", () => {
     })
   })
 
-  it("keeps Brain Council, Hermes, and Access Grants in non-runtime postures", () => {
+  it("distinguishes advisory surfaces from the bounded resident Hermes worker", () => {
     const surface = getSystemsStatusSurface()
     const statuses = new Map(surface.categories.map((category) => [category.label, category.status]))
 
     expect(statuses.get("Brain Council")).toBe("Read-only")
-    expect(statuses.get("Hermes Preview / Worker Dock")).toBe("Preview-only")
+    expect(statuses.get("Hermes Resident Worker")).toBe("Runtime-proven")
     expect(statuses.get("Access Grants")).toBe("Disabled")
   })
 
@@ -63,7 +63,7 @@ describe("Systems status surface", () => {
       }),
       expect.objectContaining({
         label: "Execution",
-        state: "Not active",
+        state: "Runtime-proven",
       }),
       expect.objectContaining({
         label: "Production",
@@ -77,6 +77,7 @@ describe("Systems status surface", () => {
 
     expect(surface.statusSequence.map((item) => item.value)).toEqual([
       "Pre-action",
+      "Proven / liveness separate",
       "Read-only",
       "Observed",
       "Owner-gated",
@@ -85,7 +86,7 @@ describe("Systems status surface", () => {
       "No background polling",
       "No repair controls",
       "No metadata expansion",
-      "No runtime activation",
+      "No unrestricted runtime",
     ])
   })
 
@@ -159,6 +160,11 @@ describe("Systems status surface", () => {
     expect(text).toContain("disabled-by-design")
     expect(text).toContain("No background polling")
     expect(text).toContain("No repair controls")
+    expect(text).toContain("Codex App Server")
+    expect(text).toContain("persisted execution projection")
+    expect(text).toContain("production web app")
+    expect(text).toContain("issue #357")
+    expect(text).toMatch(/TerraFusion.*county.*PACS/i)
     expect(text).not.toMatch(
       /admin dashboard|ops dashboard|SaaS status page|team monitoring|observability marketing|always-on automation/i,
     )

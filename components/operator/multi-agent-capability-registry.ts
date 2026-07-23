@@ -15,12 +15,19 @@ export type CapabilityKind =
 
 export type ExecutionClass = "NON_EXECUTABLE" | "WORKER_CANDIDATE" | "EXECUTABLE_WORKER"
 
+export type CapabilityRuntimeReality =
+  | "NON_RUNTIME"
+  | "HOSTED_SESSION_ONLY"
+  | "LIVE_BOUNDED_RESIDENT"
+  | "EXCLUDED"
+
 export type MultiAgentCapabilityRecord = {
   capabilityId: string
   label: string
   kind: CapabilityKind
   status: CapabilityStatus
   executionClass: ExecutionClass
+  runtimeReality: CapabilityRuntimeReality
   coordinationEligible?: boolean
   claim: string
   reasonCode: string
@@ -34,8 +41,22 @@ export type MultiAgentCapabilityRecord = {
 export const PREVENTIVE_TRUST_GATE_V2_REF =
   "control-center/backend/workers.py#validate_preventive_trust_gate_v2"
 
-const record = (value: MultiAgentCapabilityRecord) => Object.freeze({
+export const HERMES_RESIDENT_POLICY_GATE_REF = "scripts/hermes-bridge/policy.mjs"
+
+type CapabilityRecordInput =
+  Omit<MultiAgentCapabilityRecord, "runtimeReality"> &
+  Partial<Pick<MultiAgentCapabilityRecord, "runtimeReality">>
+
+const record = (value: CapabilityRecordInput): Readonly<MultiAgentCapabilityRecord> => Object.freeze({
   ...value,
+  runtimeReality: value.runtimeReality
+    ?? (["UNAVAILABLE", "REJECTED"].includes(value.status)
+      ? "EXCLUDED"
+      : value.executionClass === "EXECUTABLE_WORKER"
+        ? "LIVE_BOUNDED_RESIDENT"
+        : value.coordinationEligible
+          ? "HOSTED_SESSION_ONLY"
+          : "NON_RUNTIME"),
   authorityGrantRefs: Object.freeze([...value.authorityGrantRefs]),
   evidence: Object.freeze([...value.evidence]),
   restrictions: Object.freeze([...value.restrictions]),
@@ -1051,20 +1072,34 @@ export const MULTI_AGENT_CAPABILITY_INVENTORY = Object.freeze([
   }),
   record({
     capabilityId: "hermes-worker-sidecar",
-    label: "Hermes worker sidecar",
-    kind: "PROVIDER_SURFACE",
-    status: "UNAVAILABLE",
-    executionClass: "WORKER_CANDIDATE",
-    claim: "Hermes exists as a governed boundary and packet concept; no worker process or conformant adapter exists.",
-    reasonCode: "PROVIDER_UNAVAILABLE",
-    adapterRef: null,
-    authorityGrantRefs: [],
-    trustGateRef: null,
+    label: "Hermes resident Codex worker",
+    kind: "PROVIDER_ADAPTER",
+    status: "PROVEN",
+    executionClass: "EXECUTABLE_WORKER",
+    runtimeReality: "LIVE_BOUNDED_RESIDENT",
+    coordinationEligible: true,
+    claim: "A native non-elevated Windows supervisor has proven one fenced WilliamOS-native R0/R1 outcome at a time through Codex App Server with persisted execution projection; current host liveness is verified separately.",
+    reasonCode: "HERMES_RESIDENT_BOUNDED_WORKER_PROVEN",
+    adapterRef: "scripts/hermes-bridge/orchestrator.mjs",
+    authorityGrantRefs: ["docs/governance/hermes-codex-live-bridge.md#standing-authority"],
+    trustGateRef: HERMES_RESIDENT_POLICY_GATE_REF,
     evidence: [
-      "components/hermes/hermes-boundary-registry.ts",
-      "docs/governance/hermes-sidecar-boundary-doctrine.md",
+      "docs/governance/hermes-codex-live-bridge.md",
+      "scripts/hermes-bridge/supervisor.ps1",
+      "scripts/hermes-bridge/app-server-client.mjs",
+      "scripts/hermes-bridge/state-store.mjs",
+      "scripts/hermes-bridge/outcome-source.mjs",
+      "docs/reports/WO-HERMES-BRIDGE-010-native-host-delivery-lifecycle.md",
+      "docs/reports/WO-HERMES-6-001-home-operational-command-center.md",
     ],
-    restrictions: ["No worker process", "No scheduler or queue", "No MCP or tool activation"],
+    restrictions: [
+      "Native current-user Windows resident only; the production web app does not host the worker",
+      "Codex transport is App Server stdio; the rejected issue #357 codex exec adapter remains terminal",
+      "Only bsvalues/terragroq WilliamOS-native docs, UI, and read-model R0/R1 outcomes inside standing A0-A2 authority",
+      "Durable leases, fencing, checkpoints, kill switch, and persisted execution projection remain mandatory",
+      "No unrestricted runtime, MCP, arbitrary command execution, authority minting, or autonomous scope expansion",
+      "No TerraFusion, TerraPilot, Property Workbench, county/PACS, protected data, secrets, production mutation or deployment, paid overage, release, tag, or destructive operation",
+    ],
   }),
   record({
     capabilityId: "ollama-local-model",
@@ -1110,7 +1145,12 @@ export function evaluateCapabilityDispatch(entry: MultiAgentCapabilityRecord | u
   if (!entry.adapterRef) return { allowed: false, reasonCode: "ADAPTER_NOT_CONFORMANT" }
   if (entry.authorityGrantRefs.length === 0) return { allowed: false, reasonCode: "AUTHORITY_GRANT_MISSING" }
   if (!entry.trustGateRef) return { allowed: false, reasonCode: "PREVENTIVE_TRUST_GATE_MISSING" }
-  if (entry.trustGateRef !== PREVENTIVE_TRUST_GATE_V2_REF) {
+  if (![PREVENTIVE_TRUST_GATE_V2_REF, HERMES_RESIDENT_POLICY_GATE_REF].includes(entry.trustGateRef)) {
+    return { allowed: false, reasonCode: "PREVENTIVE_TRUST_GATE_UNRECOGNIZED" }
+  }
+  if (entry.trustGateRef === HERMES_RESIDENT_POLICY_GATE_REF
+    && (entry.capabilityId !== "hermes-worker-sidecar"
+      || entry.adapterRef !== "scripts/hermes-bridge/orchestrator.mjs")) {
     return { allowed: false, reasonCode: "PREVENTIVE_TRUST_GATE_UNRECOGNIZED" }
   }
   return { allowed: true, reasonCode: "EXECUTABLE_CAPABILITY_ELIGIBLE" }

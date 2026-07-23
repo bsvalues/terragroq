@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   MULTI_AGENT_CAPABILITY_INVENTORY,
+  HERMES_RESIDENT_POLICY_GATE_REF,
   PREVENTIVE_TRUST_GATE_V2_REF,
   capability,
   evaluateCapabilityDispatch,
@@ -16,6 +17,7 @@ function executable(overrides: Partial<MultiAgentCapabilityRecord> = {}): MultiA
     kind: "PROVIDER_ADAPTER",
     status: "PILOT_AUTHORIZED",
     executionClass: "EXECUTABLE_WORKER",
+    runtimeReality: "LIVE_BOUNDED_RESIDENT",
     claim: "Fixture-only executable claim.",
     reasonCode: "FIXTURE",
     adapterRef: "fixture-adapter",
@@ -142,7 +144,7 @@ describe("multi-agent executable capability inventory", () => {
     })
     expect(MULTI_AGENT_CAPABILITY_INVENTORY.filter((entry) => entry.executionClass === "EXECUTABLE_WORKER")
       .map((entry) => entry.capabilityId))
-      .toEqual([])
+      .toEqual(["hermes-worker-sidecar"])
   })
 
   it("records provider and adapter truth without architecture inflation", () => {
@@ -539,15 +541,30 @@ describe("multi-agent executable capability inventory", () => {
       reasonCode: "PROVIDER_UNAVAILABLE",
     })
     expect(capability("hermes-worker-sidecar")).toMatchObject({
-      status: "UNAVAILABLE",
-      reasonCode: "PROVIDER_UNAVAILABLE",
+      status: "PROVEN",
+      executionClass: "EXECUTABLE_WORKER",
+      runtimeReality: "LIVE_BOUNDED_RESIDENT",
+      reasonCode: "HERMES_RESIDENT_BOUNDED_WORKER_PROVEN",
+      adapterRef: "scripts/hermes-bridge/orchestrator.mjs",
+      trustGateRef: HERMES_RESIDENT_POLICY_GATE_REF,
+      restrictions: expect.arrayContaining([
+        "Native current-user Windows resident only; the production web app does not host the worker",
+        "Codex transport is App Server stdio; the rejected issue #357 codex exec adapter remains terminal",
+        "Durable leases, fencing, checkpoints, kill switch, and persisted execution projection remain mandatory",
+        "No unrestricted runtime, MCP, arbitrary command execution, authority minting, or autonomous scope expansion",
+        "No TerraFusion, TerraPilot, Property Workbench, county/PACS, protected data, secrets, production mutation or deployment, paid overage, release, tag, or destructive operation",
+      ]),
     })
+    expect(capability("local-nested-codex-adapter")?.runtimeReality).toBe("EXCLUDED")
+    expect(capability("claude-code-provider")?.runtimeReality).toBe("EXCLUDED")
   })
 
-  it("keeps hosted coordination available without claiming dispatch eligibility", () => {
+  it("allows only the proven bounded resident worker to dispatch", () => {
     for (const entry of MULTI_AGENT_CAPABILITY_INVENTORY) {
       const decision = evaluateCapabilityDispatch(entry)
-      expect(decision).toEqual({ allowed: false, reasonCode: "NOT_EXECUTABLE_WORKER" })
+      expect(decision).toEqual(entry.capabilityId === "hermes-worker-sidecar"
+        ? { allowed: true, reasonCode: "EXECUTABLE_CAPABILITY_ELIGIBLE" }
+        : { allowed: false, reasonCode: "NOT_EXECUTABLE_WORKER" })
     }
     expect(evaluateCapabilityDispatch(undefined)).toEqual({
       allowed: false,
@@ -555,7 +572,7 @@ describe("multi-agent executable capability inventory", () => {
     })
     expect(MULTI_AGENT_CAPABILITY_INVENTORY.filter((entry) => entry.coordinationEligible)
       .map((entry) => entry.capabilityId))
-      .toEqual(["hosted-codex-session", "codex-native-subagent-team", "hosted-codex-coordinator-adapter", "hosted-codex-role-adapters"])
+      .toEqual(["hosted-codex-session", "codex-native-subagent-team", "hosted-codex-coordinator-adapter", "hosted-codex-role-adapters", "hermes-worker-sidecar"])
   })
 
   it("requires status, adapter, authority, and preventive trust proof for an executable worker", () => {
@@ -580,6 +597,12 @@ describe("multi-agent executable capability inventory", () => {
       reasonCode: "PREVENTIVE_TRUST_GATE_MISSING",
     })
     expect(evaluateCapabilityDispatch(executable({ trustGateRef: "fictional-gate" }))).toMatchObject({
+      allowed: false,
+      reasonCode: "PREVENTIVE_TRUST_GATE_UNRECOGNIZED",
+    })
+    expect(evaluateCapabilityDispatch(executable({
+      trustGateRef: HERMES_RESIDENT_POLICY_GATE_REF,
+    }))).toMatchObject({
       allowed: false,
       reasonCode: "PREVENTIVE_TRUST_GATE_UNRECOGNIZED",
     })

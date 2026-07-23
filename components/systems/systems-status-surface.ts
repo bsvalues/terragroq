@@ -66,7 +66,7 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
     description:
       "Systems is the Primary Operator's native status view for WilliamOS systems under command: readiness, stable areas, disabled-by-design capabilities, blocked states, advisory layers, local runtime posture, verified production health, and safe-state boundaries.",
     operatorPosture:
-      "This page observes and explains status. It does not poll in the background, start repairs, change endpoints, deploy, grant authority, or activate runtime workers.",
+      "This production web page reads persisted status and explains boundaries. It does not host the resident Hermes worker, poll in the background, start repairs, change endpoints, deploy, grant authority, or activate runtime workers.",
     postureSummary: [
       {
         label: "Ready",
@@ -82,10 +82,11 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         tone: "read-only",
       },
       {
-        label: "Preview-only",
-        value: "1 dock",
-        description: "Hermes can be reviewed, but no worker runtime or automation is active.",
-        tone: "preview-only",
+        label: "Bounded worker",
+        value: "1 proven",
+        description:
+          "The native non-elevated Windows Hermes supervisor has retained end-to-end proof with Codex App Server transport; current host state is verified separately.",
+        tone: "ready",
       },
       {
         label: "Disabled",
@@ -102,8 +103,9 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
       },
       {
         label: "Execution",
-        state: "Not active",
-        description: "No Hermes, MCP, scheduler, worker dispatch, or loop execution is enabled.",
+        state: "Runtime-proven",
+        description:
+          "Hermes has proven one fenced WilliamOS-native R0/R1 delivery at a time with persisted execution projection; current host liveness is not inferred here.",
       },
       {
         label: "Production",
@@ -118,17 +120,23 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         description: "Health, auth readiness, and disabled-by-design states are checked before claims move forward.",
       },
       {
-        label: "2. Local status",
-        value: "Read-only",
-        description: "Local OMEN status remains manual-only, localhost-only, and separated from runtime control.",
+        label: "2. Resident worker",
+        value: "Proven / liveness separate",
+        description:
+          "A native non-elevated Windows supervisor has delegated bounded file work through Codex App Server. The localhost host-live probe reports whether it is currently enabled and healthy.",
       },
       {
-        label: "3. Production health",
+        label: "3. Local status",
+        value: "Read-only",
+        description: "Local OMEN status remains localhost-only and separated from Hermes runtime control.",
+      },
+      {
+        label: "4. Production health",
         value: "Observed",
         description: "Production health and readiness are verification evidence, not deploy authority.",
       },
       {
-        label: "4. Authority boundary",
+        label: "5. Authority boundary",
         value: "Owner-gated",
         description: "Higher-risk actions stay blocked until a specific owner-authorized Work Order opens them.",
       },
@@ -150,9 +158,10 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         description: "Docker metadata, backup metadata, port checks, and LAN exposure remain closed gates.",
       },
       {
-        label: "No runtime activation",
+        label: "No unrestricted runtime",
         state: "Blocked",
-        description: "Hermes, MCP, schedulers, background workers, and autonomy remain inactive.",
+        description:
+          "Only the fenced resident Hermes bridge is live. MCP, arbitrary workers, autonomous loops, and issue #357 remain inactive and terminally excluded.",
       },
     ],
     categories: [
@@ -197,12 +206,12 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
         href: "/brain-council",
       },
       {
-        label: "Hermes Preview / Worker Dock",
-        status: "Preview-only",
-        tone: "preview-only",
+        label: "Hermes Resident Worker",
+        status: "Runtime-proven",
+        tone: "ready",
         description:
-          "Hermes concepts may be reviewed, but no runtime, scheduler, worker dispatch, or MCP activation is enabled.",
-        href: "/brain-council",
+          "The native Windows supervisor has retained Codex App Server and durable lease/checkpoint proof. The production web app reads persisted execution state but does not claim current host liveness or host the worker.",
+        href: "/work-orders",
       },
       {
         label: "Agent Forge / Skills",
@@ -246,10 +255,10 @@ export function getSystemsStatusSurface(): SystemsStatusSurface {
       },
       {
         label: "TerraFusion OS Project",
-        status: "Governed project",
-        tone: "needs-authority",
+        status: "Excluded from worker",
+        tone: "disabled",
         description:
-          "TerraFusion OS is treated as a project system under WilliamOS, not as a separate command environment.",
+          "Hermes cannot select or execute TerraFusion, TerraPilot, Property Workbench, county, PACS, or protected-data work.",
         href: "/work-orders",
       },
     ],

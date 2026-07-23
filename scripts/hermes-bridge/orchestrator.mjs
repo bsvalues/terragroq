@@ -8,6 +8,7 @@ import {
   completeOutcome,
   deferProviderOutcome,
   projectOutcomeRuntimeCheckpoint,
+  projectOutcomeRuntimeLease,
   selectNextOutcome,
   terminalizeOutcome,
 } from "./outcome-source.mjs"
@@ -155,6 +156,8 @@ export function createHermesOrchestrator(options = {}) {
   const markTerminal = options.markTerminal ?? terminalizeOutcome
   const deferOutcome = options.deferOutcome ?? deferProviderOutcome
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
+  const projectLease = options.projectLease ?? projectOutcomeRuntimeLease
+  const leaseRenewalIntervalMs = options.leaseRenewalIntervalMs ?? 5 * 60 * 1000
   const clientFactory = options.clientFactory ?? ((cwd) => new CodexAppServerClient({ cwd, timeoutMs: TURN_TIMEOUT_MS }))
   const now = options.now ?? (() => new Date())
   const sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)))
@@ -201,6 +204,49 @@ export function createHermesOrchestrator(options = {}) {
         code: "HERMES_RUNTIME_PROJECTION_WALL",
       })
     }
+  }
+
+  async function projectCurrentLease(outcomeId) {
+    const execution = state.read().executions[String(outcomeId)]
+    if (!execution) {
+      throw Object.assign(new Error("Runtime execution is absent after lease mutation"), {
+        code: "HERMES_RUNTIME_PROJECTION_STATE_WALL",
+      })
+    }
+    try {
+      return await projectLease({
+        outcomeId: Number(outcomeId),
+        attempt: execution.fencingToken,
+        checkpointSequence: execution.checkpoint.sequence,
+        lease: {
+          status: execution.lease.status,
+          expiresAt: execution.lease.expiresAt,
+        },
+      })
+    } catch {
+      throw Object.assign(new Error("Persisted runtime lease projection failed"), {
+        code: "HERMES_RUNTIME_PROJECTION_WALL",
+      })
+    }
+  }
+
+  async function abandonLease(request) {
+    const result = state.abandonLease(request)
+    await projectCurrentLease(request.outcomeId)
+    return result
+  }
+
+  async function releaseLease(request) {
+    const result = state.releaseLease(request)
+    await projectCurrentLease(request.outcomeId)
+    return result
+  }
+
+  async function deferLease(request) {
+    const result = state.deferProviderWall(request)
+    await projectCurrentExecution(request.outcomeId)
+    await projectCurrentLease(request.outcomeId)
+    return result
   }
 
   async function checkpoint(lease, sequence, checkpointState, detail, metadata = {}) {
@@ -261,7 +307,7 @@ export function createHermesOrchestrator(options = {}) {
     await checkpoint(lease, sequence, "COMPLETE", `PR #${prNumber} merged and verified`, {
       prNumber, branch, mergeSha, headRefOid: pr.headRefOid,
     })
-    state.releaseLease({
+    await releaseLease({
       idempotencyKey: `${lease.outcomeId}:release:complete`,
       outcomeId: lease.outcomeId, holderId, fencingToken: lease.fencingToken,
     })
@@ -278,7 +324,7 @@ export function createHermesOrchestrator(options = {}) {
         code: "HERMES_OUTCOME_TERMINAL_WALL",
       })
     }
-    state.releaseLease({
+    await releaseLease({
       idempotencyKey: `${lease.outcomeId}:release:FAILED_TERMINAL:${nextState}`,
       outcomeId: lease.outcomeId, holderId, fencingToken: lease.fencingToken,
     })
@@ -303,7 +349,7 @@ export function createHermesOrchestrator(options = {}) {
       error?.code ?? "HERMES_POST_MERGE_CLEANUP_WALL",
       { postMergeCleanupRetryCount: retryCount },
     )
-    state.abandonLease({
+    await abandonLease({
       idempotencyKey: `${lease.outcomeId}:abandon-post-merge:${lease.fencingToken}:${retry.checkpointSequence}`,
       outcomeId: lease.outcomeId, holderId, fencingToken: lease.fencingToken,
       reason: error?.code ?? "HERMES_POST_MERGE_CLEANUP_WALL",
@@ -313,11 +359,15 @@ export function createHermesOrchestrator(options = {}) {
 
   async function advanceCommittedHead({
     lease, sequence, outcome, branch, reservations, record, commit, remediationRound = 0,
+    assertLeaseProjectionHealthy = async () => {},
+    quiesceLeaseRenewal = async () => {},
   }) {
+    await assertLeaseProjectionHealthy()
     if (await lifecycle.inspectWorktreeHead(record) !== commit) {
       throw Object.assign(new Error("Recorded commit no longer matches the owned worktree"), { code: "HERMES_COMMIT_RECOVERY_WALL" })
     }
     await lifecycle.pushBranch(record)
+    await assertLeaseProjectionHealthy()
     const pullRequest = await lifecycle.createPullRequest({
       branch,
       title: `feat(williamos): deliver ${safeLeaf(outcomeRef(outcome))}`,
@@ -325,6 +375,7 @@ export function createHermesOrchestrator(options = {}) {
     })
     const prNumber = pullRequestNumber(pullRequest)
     let candidate = await lifecycle.inspectPullRequest(prNumber)
+    await assertLeaseProjectionHealthy()
     if (candidate.state !== "OPEN" || candidate.baseRefName !== "main"
       || candidate.isDraft || candidate.headRefOid !== commit) {
       throw Object.assign(new Error("Pull request identity changed during delivery"), { code: "HERMES_PR_VERIFICATION_WALL" })
@@ -378,6 +429,7 @@ export function createHermesOrchestrator(options = {}) {
       if (candidate.checksGreen && candidate.reviewed) break
       await sleep(reviewPollIntervalMs)
       candidate = await lifecycle.inspectPullRequest(prNumber)
+      await assertLeaseProjectionHealthy()
     }
     if (findings.length > 0 || candidate.unresolvedThreadCount > 0) {
       if (findings.length === 0) findings = await lifecycle.inspectReviewFindings(prNumber)
@@ -404,8 +456,10 @@ export function createHermesOrchestrator(options = {}) {
     assertChangedPathsAllowed(worktreeChangedPaths, reservations)
     const changedPaths = await lifecycle.inspectPullRequestFiles(prNumber)
     assertChangedPathsAllowed(changedPaths, reservations)
+    await quiesceLeaseRenewal()
     await lifecycle.mergePullRequest({ number: prNumber, branch })
     const pr = await lifecycle.inspectPullRequest(prNumber)
+    await assertLeaseProjectionHealthy()
     const mergeSha = pr.mergeCommit?.oid
     if (pr.state !== "MERGED" || pr.baseRefName !== "main"
       || pr.unresolvedThreadCount !== 0 || !SHA.test(mergeSha ?? "")) {
@@ -428,6 +482,13 @@ export function createHermesOrchestrator(options = {}) {
     const initialized = state.initialize()
     if (initialized.killSwitch.active) return { result: "KILL_SWITCH_ACTIVE" }
     assertOwnerTouchCountersZero(initialized)
+    for (const execution of Object.values(initialized.executions)) {
+      if (execution?.metadata?.outcome
+        && String(execution.metadata.outcome.id) === String(execution.outcomeId)) {
+        await projectCurrentExecution(execution.outcomeId)
+        await projectCurrentLease(execution.outcomeId)
+      }
+    }
     const unfinished = Object.values(initialized.executions).filter((execution) => execution?.lease?.status === "ACTIVE")
     if (unfinished.length > 1) throw Object.assign(new Error("Multiple unfinished executions found"), { code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
     const pendingExecution = unfinished[0] ?? null
@@ -496,6 +557,7 @@ export function createHermesOrchestrator(options = {}) {
     }
     try {
       await projectCurrentExecution(outcomeId)
+      await projectCurrentLease(outcomeId)
     } catch (error) {
       state.abandonLease({
         idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:runtime-projection`,
@@ -515,13 +577,13 @@ export function createHermesOrchestrator(options = {}) {
           throw Object.assign(new Error("Provider-unavailable outcome could not be deferred"), { code: "HERMES_PROVIDER_SETTLEMENT_WALL" })
         }
       } catch (error) {
-        state.abandonLease({
+        await abandonLease({
           idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:provider-settlement`,
           outcomeId, holderId, fencingToken: lease.fencingToken, reason: "HERMES_PROVIDER_SETTLEMENT_WALL",
         })
         throw error
       }
-      state.deferProviderWall({
+      await deferLease({
         idempotencyKey: `${outcomeId}:defer:PROVIDER_UNAVAILABLE:${retryAfter}`,
         outcomeId, holderId, fencingToken: lease.fencingToken, retryAfter,
       })
@@ -542,7 +604,7 @@ export function createHermesOrchestrator(options = {}) {
           code: "HERMES_OUTCOME_TERMINAL_WALL",
         })
       }
-      state.releaseLease({
+      await releaseLease({
         idempotencyKey: `${outcomeId}:release:FAILED_TERMINAL:${nextState}`,
         outcomeId, holderId, fencingToken: lease.fencingToken,
       })
@@ -648,6 +710,41 @@ export function createHermesOrchestrator(options = {}) {
 
     const client = clientFactory(record.worktreePath)
     let renewal
+    let renewalProjection = Promise.resolve()
+    let renewalFailure = null
+    const renewLeaseAndProject = () => {
+      if (renewalFailure) return
+      try {
+        state.renewLease({
+          idempotencyKey: `${outcomeId}:renew:${Date.now()}`,
+          outcomeId, holderId, fencingToken: lease.fencingToken, leaseDurationMs: LEASE_DURATION_MS,
+        })
+        renewalProjection = projectCurrentLease(outcomeId).catch((error) => {
+          renewalFailure = Object.assign(
+            new Error("Renewed lease could not be projected to persisted runtime truth"),
+            { code: "HERMES_RUNTIME_PROJECTION_WALL", cause: error },
+          )
+        })
+      } catch (error) {
+        renewalFailure = Object.assign(
+          new Error("Resident lease renewal failed"),
+          { code: "HERMES_RUNTIME_PROJECTION_WALL", cause: error },
+        )
+      }
+    }
+    const assertLeaseProjectionHealthy = async () => {
+      await renewalProjection
+      if (renewalFailure) throw renewalFailure
+    }
+    const quiesceLeaseRenewal = async () => {
+      if (renewal) {
+        clearInterval(renewal)
+        renewal = undefined
+      }
+      await assertLeaseProjectionHealthy()
+      renewLeaseAndProject()
+      await assertLeaseProjectionHealthy()
+    }
     try {
       await client.connect()
       let threadId = cp.metadata.threadId
@@ -671,14 +768,7 @@ export function createHermesOrchestrator(options = {}) {
       cp = await checkpoint(lease, sequence, "CODEX_THREAD_READY", null, { threadId })
       sequence = cp.checkpointSequence
 
-      renewal = setInterval(() => {
-        try {
-          state.renewLease({
-            idempotencyKey: `${outcomeId}:renew:${Date.now()}`,
-            outcomeId, holderId, fencingToken: lease.fencingToken, leaseDurationMs: LEASE_DURATION_MS,
-          })
-        } catch {}
-      }, 5 * 60 * 1000)
+      renewal = setInterval(renewLeaseAndProject, leaseRenewalIntervalMs)
       renewal.unref?.()
 
       let deliveryPrompt = pendingValidationFailure
@@ -721,6 +811,7 @@ export function createHermesOrchestrator(options = {}) {
           },
           timeoutMs: TURN_TIMEOUT_MS,
         })
+        await assertLeaseProjectionHealthy()
         cp = await checkpoint(lease, sequence, "CODEX_TURN_COMPLETED", turn.status, {
           threadId: turn.threadId, turnId: turn.turnId,
         })
@@ -738,7 +829,7 @@ export function createHermesOrchestrator(options = {}) {
             if (!await deferOutcome({ outcomeId: outcome.id, retryAfter })) {
               throw Object.assign(new Error("Provider-unavailable outcome could not be deferred"), { code: "HERMES_PROVIDER_SETTLEMENT_WALL" })
             }
-            state.deferProviderWall({
+            await deferLease({
               idempotencyKey: `${outcomeId}:defer:PROVIDER_UNAVAILABLE:${retryAfter}`,
               outcomeId, holderId, fencingToken: lease.fencingToken, retryAfter,
             })
@@ -747,7 +838,7 @@ export function createHermesOrchestrator(options = {}) {
           cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null, {
             providerRetryCount, threadId: null, turnId: null,
           })
-          state.abandonLease({
+          await abandonLease({
             idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${cp.checkpointSequence}`,
             outcomeId, holderId, fencingToken: lease.fencingToken,
             reason: result.nextState ?? "RETRYABLE_PROVIDER_WALL",
@@ -759,7 +850,7 @@ export function createHermesOrchestrator(options = {}) {
           cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null)
           sequence = cp.checkpointSequence
           await markTerminal({ outcomeId: outcome.id, result: result.result, nextState: result.nextState ?? null })
-          state.releaseLease({
+          await releaseLease({
             idempotencyKey: `${outcomeId}:release:${result.result}`,
             outcomeId, holderId, fencingToken: lease.fencingToken,
           })
@@ -791,6 +882,7 @@ export function createHermesOrchestrator(options = {}) {
         try {
           lifecycle.ensureValidationDependencies(record)
           validation = await lifecycle.runValidationCommands({ ...record, commands: validationCommands })
+          await assertLeaseProjectionHealthy()
         } catch (error) {
           if (error?.code !== "HERMES_VALIDATION_FAILED" || !error?.validation) throw error
           if (remediationRound >= MAX_REMEDIATION_ROUNDS) {
@@ -833,6 +925,7 @@ export function createHermesOrchestrator(options = {}) {
         const advanced = await advanceCommittedHead({
           lease, sequence, outcome, branch, reservations, record,
           commit: committed.commit, remediationRound,
+          assertLeaseProjectionHealthy, quiesceLeaseRenewal,
         })
         if (advanced.kind === "REMEDIATION") {
           pendingFindings = advanced.findings
@@ -868,7 +961,7 @@ export function createHermesOrchestrator(options = {}) {
             code: "HERMES_PROVIDER_SETTLEMENT_WALL",
           })
         }
-        state.deferProviderWall({
+        await deferLease({
           idempotencyKey: `${outcomeId}:defer:EXTERNAL_TOOL_WALL:${retryAfter}`,
           outcomeId, holderId, fencingToken: lease.fencingToken, retryAfter,
         })
@@ -883,7 +976,7 @@ export function createHermesOrchestrator(options = {}) {
         || runtimeProjectionWall
         || ["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT", "APP_SERVER_EXTERNAL_TOOL_WALL", "HERMES_PROVIDER_SETTLEMENT_WALL"].includes(error?.code)) {
         try {
-          state.abandonLease({
+          await abandonLease({
             idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${sequence}`,
             outcomeId, holderId, fencingToken: lease.fencingToken,
             reason: error?.code ?? "HERMES_PROVIDER_SETTLEMENT_WALL",

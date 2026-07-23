@@ -17,7 +17,10 @@ function runtime() {
   return root
 }
 
-function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/hermes-live-status.test.tsx"]) {
+function fixture(
+  changedPaths = ["components/hermes/live-status.tsx", "tests/hermes-live-status.test.tsx"],
+  orchestratorOptions: Record<string, unknown> = {},
+) {
   const root = runtime()
   let currentTime = Date.parse("2026-07-21T01:00:00.000Z")
   const state = createHermesStateStore(path.join(root, "state", "state.json"), { now: () => currentTime })
@@ -38,6 +41,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
   const markTerminal = vi.fn(async () => true)
   const deferOutcome = vi.fn(async () => true)
   const projectCheckpoint = vi.fn(async () => ({ workOrderId: 77 }))
+  const projectLease = vi.fn(async () => ({ workOrderId: 77 }))
   let merged = false
   const lifecycle = {
     refreshOriginMain: vi.fn(async () => "a".repeat(40)),
@@ -85,15 +89,16 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
   }
   const orchestrator = createHermesOrchestrator({
     workspace: process.cwd(), runtimeRoot: root, state, lifecycle, selectOutcome, markComplete, markTerminal, deferOutcome,
-    projectCheckpoint,
+    projectCheckpoint, projectLease,
     clientFactory: () => client,
     holderId: "test-holder",
     now: () => new Date(currentTime),
     sleep: async () => {},
+    ...orchestratorOptions,
   })
   return {
     root, state, orchestrator, selectOutcome, markComplete, markTerminal, deferOutcome,
-    projectCheckpoint, lifecycle, client,
+    projectCheckpoint, projectLease, lifecycle, client,
     advance: (milliseconds: number) => { currentTime += milliseconds },
   }
 }
@@ -257,6 +262,16 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       outcomeId: 77,
       checkpoint: expect.objectContaining({ state: "COMPLETE" }),
     }))
+    expect(value.projectLease).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 77,
+      attempt: 1,
+      lease: expect.objectContaining({ status: "ACTIVE" }),
+    }))
+    expect(value.projectLease).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 77,
+      attempt: 1,
+      lease: expect.objectContaining({ status: "RELEASED" }),
+    }))
     expect(value.client.startThread).toHaveBeenCalledWith(expect.objectContaining({
       approvalPolicy: "never", sandbox: "workspace-write", ephemeral: false,
     }))
@@ -302,6 +317,59 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
       result: "COMPLETE", outcomeId: "77",
     })
+  })
+
+  it("fails the active cycle when a renewed lease cannot be projected", async () => {
+    const value = fixture(undefined, { leaseRenewalIntervalMs: 5 })
+    const finalText = JSON.stringify({
+      result: "READY_FOR_VALIDATION", workOrder: "WO-HERMES-77-001",
+      branch: "codex/hermes-goal-77-77", commit: null, prUrl: null,
+      merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0,
+      ownerTouchCount: 0, blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE",
+    })
+    value.client.runTurn.mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      return { threadId: "thread-77", turnId: "turn-77", status: "completed", finalText }
+    })
+    value.projectLease
+      .mockResolvedValueOnce({ workOrderId: 77 })
+      .mockRejectedValue(Object.assign(new Error("database unavailable"), {
+        code: "DATABASE_UNAVAILABLE",
+      }))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_RUNTIME_PROJECTION_WALL",
+    })
+    expect(value.lifecycle.runValidationCommands).not.toHaveBeenCalled()
+    expect(value.lifecycle.mergePullRequest).not.toHaveBeenCalled()
+  })
+
+  it("quiesces and projects a final lease renewal before merge", async () => {
+    const value = fixture(undefined, { leaseRenewalIntervalMs: 100 })
+    value.lifecycle.mergePullRequest.mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      value.lifecycle.inspectPullRequest.mockResolvedValue({
+        state: "MERGED", baseRefName: "main", isDraft: false,
+        checksGreen: true, reviewed: true, unresolvedThreadCount: 0,
+        headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
+      })
+      return { merged: true }
+    })
+    value.projectLease
+      .mockResolvedValueOnce({ workOrderId: 77 })
+      .mockResolvedValueOnce({ workOrderId: 77 })
+      .mockResolvedValueOnce({ workOrderId: 77 })
+      .mockRejectedValue(Object.assign(new Error("late projection"), {
+        code: "DATABASE_UNAVAILABLE",
+      }))
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "77",
+    })
+    expect(value.projectLease).toHaveBeenCalledTimes(3)
+    expect(value.projectLease).toHaveBeenLastCalledWith(expect.objectContaining({
+      lease: expect.objectContaining({ status: "RELEASED" }),
+    }))
   })
 
   it("abandons a post-merge cleanup failure for immediate fenced recovery", async () => {

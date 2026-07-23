@@ -3,16 +3,21 @@ import { PageHeader } from "@/components/shell/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { getRecentEvidence } from "@/app/actions/evidence"
 import { RuntimeEvidencePanel } from "@/components/runtime/runtime-evidence-panel"
+import { RuntimeExecutionPanel } from "@/components/runtime/runtime-execution-panel"
 import { RuntimeProbe } from "@/components/runtime/runtime-probe"
 import { ReadinessNativeAreaPanel } from "@/components/runtime/readiness-native-area-panel"
 import { SystemsStatusPanel } from "@/components/systems/systems-status-panel"
 import { LocalOperatorPanel } from "@/components/local/local-operator-panel"
 import { LocalRuntimeLiveStatusPanel } from "@/components/local/local-runtime-live-status-panel"
+import { getRuntimeExecutionTruth } from "@/app/actions/runtime-executions"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
 
 export default async function RuntimePage() {
   const rt = buildRuntimeStatus()
-  const evidence = await getRecentEvidence(5)
+  const [evidence, executionTruth] = await Promise.all([
+    getRecentEvidence(5),
+    getRuntimeExecutionTruth(),
+  ])
 
   const rows: { icon: typeof Cpu; label: string; value: string; mono?: boolean }[] = [
     { icon: Cpu, label: "Chat model", value: rt.chatModel, mono: true },
@@ -30,6 +35,7 @@ export default async function RuntimePage() {
       />
       <div className="flex flex-col gap-6 p-6">
         <SystemsStatusPanel />
+        <RuntimeExecutionPanel truth={executionTruth} />
         <LocalRuntimeLiveStatusPanel />
         <LocalOperatorPanel />
         <ReadinessNativeAreaPanel />
