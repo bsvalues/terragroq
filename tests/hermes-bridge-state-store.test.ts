@@ -273,12 +273,16 @@ describe("Hermes bridge durable state store", () => {
   it("reopens an exact zero-touch review remediation terminal for immediate fenced reclaim", () => {
     const { store } = fixture()
     const prNumber = 448
-    const headRefOid = "a".repeat(40)
+    const terminalHeadRefOid = "a".repeat(40)
+    const headRefOid = "d".repeat(40)
     const mergeSha = "b".repeat(40)
     const proofDigest = "c".repeat(64)
     const first = store.acquireLease({
       outcomeId: "5", holderId: "review-holder", leaseDurationMs: 1000,
-      metadata: { threadId: "review-thread", turnId: "review-turn", prNumber, headRefOid, mergeSha },
+      metadata: {
+        threadId: "review-thread", turnId: "review-turn", prNumber,
+        headRefOid: terminalHeadRefOid, mergeSha: null,
+      },
       idempotencyKey: "review-acquire",
     })
     store.checkpoint({
@@ -337,7 +341,7 @@ describe("Hermes bridge durable state store", () => {
       const mergeSha = "b".repeat(40)
       const first = store.acquireLease({
         outcomeId: "5", holderId: "review-holder", leaseDurationMs: 1000,
-        metadata: { prNumber, headRefOid, mergeSha },
+        metadata: { prNumber, headRefOid: "d".repeat(40), mergeSha: null },
         idempotencyKey: `${invalid}-review-acquire`,
       })
       store.checkpoint({
@@ -361,8 +365,8 @@ describe("Hermes bridge durable state store", () => {
         outcomeId: "5",
         expectedFencingToken: invalid === "fence" ? first.fencingToken + 1 : first.fencingToken,
         prNumber: invalid === "pr" ? prNumber + 1 : prNumber,
-        headRefOid: invalid === "head" ? "d".repeat(40) : headRefOid,
-        mergeSha: invalid === "merge" ? "e".repeat(40) : mergeSha,
+        headRefOid: invalid === "head" ? "not-a-sha" : headRefOid,
+        mergeSha: invalid === "merge" ? "not-a-sha" : mergeSha,
         proofDigest: invalid === "proof" ? "not-a-digest" : "c".repeat(64),
         idempotencyKey: `${invalid}-review-recover`,
       })).toThrowError(expect.objectContaining({

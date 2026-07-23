@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 
 import {
@@ -212,7 +213,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     })).resolves.toEqual({
       workOrderId: 42,
       workOrderRef: "WO-HERMES-OUTCOME-4",
-      idempotencyKey: "hermes-outcome:4:attempt:2:checkpoint:7:COMMIT_CREATED",
+      idempotencyKey: "hermes-outcome:4:attempt:2:checkpoint:7",
       status: "active",
       result: null,
       commitRef: "a".repeat(40),
@@ -246,23 +247,54 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       query, outcomeId: 4, attempt: 1, checkpoint: { sequence: 3, state },
     })).resolves.toMatchObject({ status, result })
     expect(query.mock.calls[5][1].slice(0, 3)).toEqual([42, status, result])
+    if (state === "FAILED_TERMINAL") {
+      expect(query.mock.calls.some(([sql]) => /HERMES_RUNTIME_FAILURE_EVAL/.test(sql))).toBe(true)
+      const evalCall = query.mock.calls.find(([sql]) => /HERMES_RUNTIME_FAILURE_EVAL/.test(sql))
+      expect(evalCall?.[1]?.[3]).toContain('"failureClass":"TERMINAL_RUNTIME_FAILURE"')
+    }
   })
 
   it("does not regress the Work Order when an exact checkpoint is replayed", async () => {
+    const payloadDigest = createHash("sha256").update(JSON.stringify({
+      idempotencyKey: "hermes-outcome:4:attempt:1:checkpoint:3",
+      outcomeId: 4,
+      workOrderRef: "WO-HERMES-OUTCOME-4",
+      attempt: 1,
+      checkpointSequence: 3,
+      checkpointState: "LEASED",
+      checkpointDetail: null,
+    })).digest("hex")
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ id: 42, userId: "owner" }] })
       .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ payloadDigest }] })
       .mockResolvedValueOnce({ rows: [] })
     await expect(projectOutcomeRuntimeCheckpoint({
       query, outcomeId: 4, attempt: 1, checkpoint: { sequence: 3, state: "LEASED" },
     })).resolves.toMatchObject({
-      idempotencyKey: "hermes-outcome:4:attempt:1:checkpoint:3:LEASED",
+      idempotencyKey: "hermes-outcome:4:attempt:1:checkpoint:3",
     })
     expect(query.mock.calls.some(([sql]) => /UPDATE work_order/.test(sql))).toBe(false)
     expect(query.mock.calls.at(-1)?.[0]).toBe("COMMIT")
+  })
+
+  it("rejects an idempotency-key replay with different checkpoint evidence", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 42, userId: "owner" }] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ payloadDigest: "f".repeat(64) }] })
+      .mockResolvedValueOnce({ rows: [] })
+    await expect(projectOutcomeRuntimeCheckpoint({
+      query, outcomeId: 4, attempt: 1,
+      checkpoint: { sequence: 3, state: "FAILED_TERMINAL", detail: "conflicting replay" },
+    })).rejects.toMatchObject({ code: "OUTCOME_PROJECTION_IDEMPOTENCY_CONFLICT" })
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
   })
 
   it("fails closed when a deterministic outcome Work Order is duplicated", async () => {
@@ -289,6 +321,17 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query).not.toHaveBeenCalled()
   })
 
+  it("rejects secret-bearing checkpoint detail before persistence", async () => {
+    const query = vi.fn()
+    await expect(projectOutcomeRuntimeCheckpoint({
+      query,
+      outcomeId: 4,
+      attempt: 1,
+      checkpoint: { sequence: 1, state: "RETRYABLE_WALL", detail: "token=opaque-value" },
+    })).rejects.toMatchObject({ code: "OUTCOME_PROJECTION_CHECKPOINT_INVALID" })
+    expect(query).not.toHaveBeenCalled()
+  })
+
   it("recovers review exhaustion only from exact post-terminal PR/head/merge evidence", async () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [] })
@@ -296,7 +339,6 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       .mockResolvedValueOnce({ rows: [{
         id: 4, userId: "owner", workOrderId: 42, mergeEventId: 99,
       }] })
-      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
     const head = "b".repeat(40)
@@ -309,8 +351,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[2][1]).toEqual([
       4, "WO-HERMES-OUTCOME-4", "REVIEW_REMEDIATION_EXHAUSTED", 448, head, merge,
     ])
-    expect(query.mock.calls[3][0]).toMatch(/status = 'closed', result = 'PASS'/)
-    expect(query.mock.calls[4][0]).toMatch(/HERMES_OUTCOME_REVIEW_RECOVERED/)
+    expect(query.mock.calls[2][0]).toMatch(/status = 'classified'/)
+    expect(query.mock.calls[3][0]).toMatch(/HERMES_OUTCOME_REVIEW_RECOVERED/)
   })
 
   it("refuses review exhaustion recovery without matching persisted evidence", async () => {

@@ -4,7 +4,13 @@ import path from "node:path"
 import { randomUUID } from "node:crypto"
 
 import { CodexAppServerClient } from "./app-server-client.mjs"
-import { completeOutcome, deferProviderOutcome, selectNextOutcome, terminalizeOutcome } from "./outcome-source.mjs"
+import {
+  completeOutcome,
+  deferProviderOutcome,
+  projectOutcomeRuntimeCheckpoint,
+  selectNextOutcome,
+  terminalizeOutcome,
+} from "./outcome-source.mjs"
 import { evaluateOutcomePolicy } from "./policy.mjs"
 import { buildHermesCodexPrompt, HERMES_BLOCKED_SCOPE, HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 import { createRepositoryLifecycle } from "./repository-lifecycle.mjs"
@@ -148,6 +154,7 @@ export function createHermesOrchestrator(options = {}) {
   const markComplete = options.markComplete ?? completeOutcome
   const markTerminal = options.markTerminal ?? terminalizeOutcome
   const deferOutcome = options.deferOutcome ?? deferProviderOutcome
+  const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const clientFactory = options.clientFactory ?? ((cwd) => new CodexAppServerClient({ cwd, timeoutMs: TURN_TIMEOUT_MS }))
   const now = options.now ?? (() => new Date())
   const sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)))
@@ -162,8 +169,42 @@ export function createHermesOrchestrator(options = {}) {
   }
   const holderId = options.holderId ?? `${os.hostname()}:${process.pid}:${randomUUID()}`
 
+  function projectionMetadata(value = {}) {
+    return Object.fromEntries([
+      ["prNumber", value.prNumber],
+      ["commit", value.commit],
+      ["headRefOid", value.headRefOid],
+      ["mergeSha", value.mergeSha],
+    ].filter(([, fieldValue]) => fieldValue !== null && fieldValue !== undefined))
+  }
+
+  async function projectCurrentExecution(outcomeId) {
+    const execution = state.read().executions[String(outcomeId)]
+    if (!execution) {
+      throw Object.assign(new Error("Runtime execution is absent after durable mutation"), {
+        code: "HERMES_RUNTIME_PROJECTION_STATE_WALL",
+      })
+    }
+    try {
+      return await projectCheckpoint({
+        outcomeId: Number(outcomeId),
+        attempt: execution.fencingToken,
+        checkpoint: {
+          sequence: execution.checkpoint.sequence,
+          state: execution.checkpoint.state,
+          detail: execution.checkpoint.detail,
+          metadata: projectionMetadata(execution.metadata),
+        },
+      })
+    } catch {
+      throw Object.assign(new Error("Persisted runtime projection failed"), {
+        code: "HERMES_RUNTIME_PROJECTION_WALL",
+      })
+    }
+  }
+
   async function checkpoint(lease, sequence, checkpointState, detail, metadata = {}) {
-    return state.checkpoint({
+    const recorded = state.checkpoint({
       idempotencyKey: `${lease.outcomeId}:checkpoint:${sequence + 1}:${checkpointState}`,
       outcomeId: lease.outcomeId,
       holderId,
@@ -173,6 +214,19 @@ export function createHermesOrchestrator(options = {}) {
       detail,
       metadata,
     })
+    try {
+      await projectCurrentExecution(lease.outcomeId)
+    } catch (error) {
+      state.abandonLease({
+        idempotencyKey: `${lease.outcomeId}:abandon:${lease.fencingToken}:runtime-projection:${recorded.checkpointSequence}`,
+        outcomeId: lease.outcomeId,
+        holderId,
+        fencingToken: lease.fencingToken,
+        reason: "HERMES_RUNTIME_PROJECTION_WALL",
+      })
+      throw error
+    }
+    return recorded
   }
 
   async function finalizeMerged({ lease, sequence, outcome, branch, reservations, worktreePath, prNumber }) {
@@ -414,6 +468,16 @@ export function createHermesOrchestrator(options = {}) {
         idempotencyKey: `${outcomeId}:acquire:1`, outcomeId, holderId,
         leaseDurationMs: LEASE_DURATION_MS, metadata: { outcome },
       })
+    }
+    try {
+      await projectCurrentExecution(outcomeId)
+    } catch (error) {
+      state.abandonLease({
+        idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:runtime-projection`,
+        outcomeId, holderId, fencingToken: lease.fencingToken,
+        reason: error?.code ?? "HERMES_RUNTIME_PROJECTION_WALL",
+      })
+      throw error
     }
 
     let sequence = lease.checkpointSequence
@@ -760,6 +824,7 @@ export function createHermesOrchestrator(options = {}) {
     } catch (error) {
       const externalToolWall = error?.code === "APP_SERVER_EXTERNAL_TOOL_WALL"
       const postMergeCleanupWall = error?.code === "HERMES_POST_MERGE_CLEANUP_WALL"
+      const runtimeProjectionWall = error?.code === "HERMES_RUNTIME_PROJECTION_WALL"
       if (postMergeCleanupWall) {
         const terminal = await settlePostMergeCleanupFailure({ lease, outcome, error })
         if (terminal) return terminal
@@ -790,6 +855,7 @@ export function createHermesOrchestrator(options = {}) {
         sequence = cp.checkpointSequence
       } catch {}
       if (cp?.state === "PROVIDER_UNAVAILABLE"
+        || runtimeProjectionWall
         || ["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT", "APP_SERVER_EXTERNAL_TOOL_WALL", "HERMES_PROVIDER_SETTLEMENT_WALL"].includes(error?.code)) {
         try {
           state.abandonLease({

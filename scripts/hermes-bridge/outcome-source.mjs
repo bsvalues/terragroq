@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import { evaluateOutcomePolicy } from "./policy.mjs"
 
 export const OUTCOME_SELECTION_SQL = `
@@ -574,6 +576,7 @@ export async function recordValidationInfrastructureRecoveryProof({
 const COMMIT_SHA = /^[0-9a-f]{40}$/
 const PROJECTION_STATE = /^[A-Z][A-Z0-9_]{1,79}$/
 const REVIEW_REMEDIATION_EXHAUSTED = "REVIEW_REMEDIATION_EXHAUSTED"
+const SENSITIVE_RUNTIME_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 
 function outcomeWorkOrderRef(outcomeId) {
   return `WO-HERMES-OUTCOME-${outcomeId}`
@@ -598,7 +601,7 @@ function checkpointEvidence(metadata) {
     throw Object.assign(new Error("checkpoint PR number is invalid"), { code: "OUTCOME_PROJECTION_EVIDENCE_INVALID" })
   }
   const hashes = {}
-  for (const field of ["commit", "headRefOid", "mergeSha"]) {
+  for (const field of ["commit", "priorHeadRefOid", "headRefOid", "mergeSha"]) {
     const value = metadata?.[field]
     if (value !== undefined && (typeof value !== "string" || !COMMIT_SHA.test(value))) {
       throw Object.assign(new Error(`checkpoint ${field} is invalid`), { code: "OUTCOME_PROJECTION_EVIDENCE_INVALID" })
@@ -612,9 +615,31 @@ function projectionEvidenceLabels(evidence) {
   return [
     ...(evidence.prNumber === undefined ? [] : [`pull-request:#${evidence.prNumber}`]),
     ...(evidence.commit === undefined ? [] : [`commit:${evidence.commit}`]),
+    ...(evidence.priorHeadRefOid === undefined ? [] : [`prior-reviewed-head:${evidence.priorHeadRefOid}`]),
     ...(evidence.headRefOid === undefined ? [] : [`reviewed-head:${evidence.headRefOid}`]),
     ...(evidence.mergeSha === undefined ? [] : [`merge:${evidence.mergeSha}`]),
   ]
+}
+
+function projectionPayloadDigest(value) {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex")
+}
+
+function failureEvalForCheckpoint(checkpoint) {
+  const state = checkpoint.state
+  if (state === "FAILED_TERMINAL") {
+    return { failureClass: "TERMINAL_RUNTIME_FAILURE", disposition: "terminal" }
+  }
+  if (state === "PROVIDER_UNAVAILABLE") {
+    return { failureClass: "PROVIDER_UNAVAILABLE", disposition: "deferred" }
+  }
+  if (state === "RETRYABLE_WALL" || state.endsWith("_RETRY")) {
+    return { failureClass: "RETRYABLE_RUNTIME_FAILURE", disposition: "bounded-retry" }
+  }
+  if (state.includes("VALIDATION") && checkpoint.detail) {
+    return { failureClass: "VALIDATION_FAILURE", disposition: "bounded-remediation" }
+  }
+  return null
 }
 
 /**
@@ -639,12 +664,13 @@ export async function projectOutcomeRuntimeCheckpoint({
     throw Object.assign(new Error("runtime checkpoint is invalid"), { code: "OUTCOME_PROJECTION_CHECKPOINT_INVALID" })
   }
   if (checkpoint.detail !== undefined && checkpoint.detail !== null
-    && (typeof checkpoint.detail !== "string" || checkpoint.detail.length > 1000)) {
+    && (typeof checkpoint.detail !== "string" || checkpoint.detail.length > 1000
+      || SENSITIVE_RUNTIME_EVIDENCE.test(checkpoint.detail))) {
     throw Object.assign(new Error("runtime checkpoint detail is invalid"), { code: "OUTCOME_PROJECTION_CHECKPOINT_INVALID" })
   }
 
   const ref = outcomeWorkOrderRef(outcomeId)
-  const idempotencyKey = `hermes-outcome:${outcomeId}:attempt:${attempt}:checkpoint:${checkpoint.sequence}:${checkpoint.state}`
+  const idempotencyKey = `hermes-outcome:${outcomeId}:attempt:${attempt}:checkpoint:${checkpoint.sequence}`
   const evidence = checkpointEvidence(checkpoint.metadata)
   const projection = projectionForCheckpoint(checkpoint.state)
   const commitRef = evidence.mergeSha ?? evidence.commit ?? evidence.headRefOid ?? null
@@ -707,6 +733,7 @@ export async function projectOutcomeRuntimeCheckpoint({
       checkpointDetail: checkpoint.detail ?? null,
       ...evidence,
     }
+    eventMetadata.payloadDigest = projectionPayloadDigest(eventMetadata)
     const insertedEvent = await runQuery(
       `INSERT INTO governance_event
          ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
@@ -722,7 +749,24 @@ export async function projectOutcomeRuntimeCheckpoint({
       [workOrder.userId, String(workOrder.id),
         `Projected ${checkpoint.state} for ${ref}`, JSON.stringify(eventMetadata), idempotencyKey],
     )
-    if ((insertedEvent?.rows?.length ?? insertedEvent?.rowCount ?? 0) > 0) {
+    const eventInserted = (insertedEvent?.rows?.length ?? insertedEvent?.rowCount ?? 0) > 0
+    if (!eventInserted) {
+      const prior = await runQuery(
+        `SELECT metadata->>'payloadDigest' AS "payloadDigest"
+         FROM governance_event
+         WHERE "entityType" = 'work_order' AND "entityId"::text = $1::text
+           AND "eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+           AND metadata->>'idempotencyKey' = $2`,
+        [String(workOrder.id), idempotencyKey],
+      )
+      if (prior?.rows?.length !== 1
+        || prior.rows[0].payloadDigest !== eventMetadata.payloadDigest) {
+        throw Object.assign(new Error("Runtime checkpoint replay conflicts with persisted evidence"), {
+          code: "OUTCOME_PROJECTION_IDEMPOTENCY_CONFLICT",
+        })
+      }
+    }
+    if (eventInserted) {
       await runQuery(
         `UPDATE work_order
          SET status = $2,
@@ -734,6 +778,7 @@ export async function projectOutcomeRuntimeCheckpoint({
              ORDER BY item
            ),
            "closedAt" = CASE WHEN $2 = 'closed' THEN COALESCE("closedAt", NOW()) ELSE NULL END,
+           "completedAt" = CASE WHEN $2 = 'closed' THEN COALESCE("completedAt", NOW()) ELSE NULL END,
            "updatedAt" = NOW()
          WHERE id = $1
            AND NOT EXISTS (
@@ -751,6 +796,29 @@ export async function projectOutcomeRuntimeCheckpoint({
            )`,
         [workOrder.id, projection.status, projection.result, commitRef, labels, attempt, checkpoint.sequence],
       )
+      const failureEval = failureEvalForCheckpoint(checkpoint)
+      if (failureEval) {
+        await runQuery(
+          `INSERT INTO governance_event
+             ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+           VALUES ($1, 'HERMES_RUNTIME_FAILURE_EVAL', 'work_order', $2,
+             'hermes-codex-bridge', $3, $4::jsonb)`,
+          [workOrder.userId, String(workOrder.id),
+            `Recorded ${failureEval.failureClass} for ${ref}`,
+            JSON.stringify({
+              sourceCheckpointId: insertedEvent.rows[0]?.id ?? null,
+              sourceCheckpointKey: idempotencyKey,
+              outcomeId,
+              workOrderRef: ref,
+              attempt,
+              checkpointSequence: checkpoint.sequence,
+              checkpointState: checkpoint.state,
+              failureClass: failureEval.failureClass,
+              disposition: failureEval.disposition,
+              detail: checkpoint.detail ?? null,
+            })],
+        )
+      }
     }
     await runQuery("COMMIT")
     return {
@@ -842,7 +910,7 @@ export async function recoverReviewedOutcome({
           AND merged.metadata->>'mergeSha' = $6
           AND merged.id > candidate."terminalId"
        )
-       UPDATE goal g SET status = 'converted', "updatedAt" = NOW()
+       UPDATE goal g SET status = 'classified', "updatedAt" = NOW()
        FROM exact_merge exact
        WHERE g.id = exact.id
        RETURNING g.id, exact."userId", exact."workOrderId", exact."mergeEventId"`,
@@ -857,7 +925,7 @@ export async function recoverReviewedOutcome({
              ON recovered."entityType" = 'goal' AND recovered."entityId"::text = g.id::text
             AND recovered."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERED'
             AND recovered.metadata->>'idempotencyKey' = $2
-           WHERE g.id = $1::integer AND g.status = 'converted'
+           WHERE g.id = $1::integer AND g.status = 'classified'
          ) AS recovered`,
         [outcomeId, idempotencyKey],
       )
@@ -866,25 +934,11 @@ export async function recoverReviewedOutcome({
       return alreadyRecovered
     }
     await runQuery(
-      `UPDATE work_order
-       SET status = 'closed', result = 'PASS', "commitRef" = $2,
-         evidence = ARRAY(
-           SELECT DISTINCT item
-           FROM unnest(COALESCE(evidence, ARRAY[]::text[]) || $3::text[]) item
-           ORDER BY item
-         ),
-         "closedAt" = COALESCE("closedAt", NOW()), "updatedAt" = NOW()
-       WHERE id = $1`,
-      [row.workOrderId, mergeSha, [
-        `pull-request:#${prNumber}`, `reviewed-head:${reviewedHeadSha}`, `merge:${mergeSha}`,
-      ]],
-    )
-    await runQuery(
       `INSERT INTO governance_event
          ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
        VALUES ($1, 'HERMES_OUTCOME_REVIEW_RECOVERED', 'goal', $2,
          'hermes-codex-bridge', $3, $4::jsonb)`,
-      [row.userId, String(outcomeId), `Recovered exact reviewed and merged PR #${prNumber}`,
+      [row.userId, String(outcomeId), `Released exact reviewed and merged PR #${prNumber} for normal finalization`,
         JSON.stringify({ idempotencyKey, workOrderRef: ref, prNumber, reviewedHeadSha, mergeSha })],
     )
     await runQuery("COMMIT")

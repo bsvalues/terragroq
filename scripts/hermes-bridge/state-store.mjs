@@ -484,10 +484,8 @@ export function reopenReviewRemediationExhausted(filePath, request, options = {}
       || request.prNumber !== current.metadata.prNumber
       || typeof request.headRefOid !== "string"
       || !SHA.test(request.headRefOid)
-      || request.headRefOid !== current.metadata.headRefOid
       || typeof request.mergeSha !== "string"
       || !SHA.test(request.mergeSha)
-      || request.mergeSha !== current.metadata.mergeSha
       || typeof request.proofDigest !== "string"
       || !SHA256.test(request.proofDigest)
       || !ownerTouchesRemainZero) {
@@ -511,6 +509,8 @@ export function reopenReviewRemediationExhausted(filePath, request, options = {}
       metadata: metadata({
         threadId: null,
         turnId: null,
+        headRefOid: request.headRefOid,
+        mergeSha: request.mergeSha,
         reviewRecoveryProofDigest: request.proofDigest,
       }, current.metadata),
     }

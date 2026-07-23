@@ -37,6 +37,7 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
   const markComplete = vi.fn(async () => true)
   const markTerminal = vi.fn(async () => true)
   const deferOutcome = vi.fn(async () => true)
+  const projectCheckpoint = vi.fn(async () => ({ workOrderId: 77 }))
   let merged = false
   const lifecycle = {
     refreshOriginMain: vi.fn(async () => "a".repeat(40)),
@@ -84,13 +85,15 @@ function fixture(changedPaths = ["components/hermes/live-status.tsx", "tests/her
   }
   const orchestrator = createHermesOrchestrator({
     workspace: process.cwd(), runtimeRoot: root, state, lifecycle, selectOutcome, markComplete, markTerminal, deferOutcome,
+    projectCheckpoint,
     clientFactory: () => client,
     holderId: "test-holder",
     now: () => new Date(currentTime),
     sleep: async () => {},
   })
   return {
-    root, state, orchestrator, selectOutcome, markComplete, markTerminal, deferOutcome, lifecycle, client,
+    root, state, orchestrator, selectOutcome, markComplete, markTerminal, deferOutcome,
+    projectCheckpoint, lifecycle, client,
     advance: (milliseconds: number) => { currentTime += milliseconds },
   }
 }
@@ -122,6 +125,15 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.selectOutcome).toHaveBeenCalledWith(expect.objectContaining({
       standingAuthority: true, notBefore: "2026-07-21T00:00:00.000Z",
     }))
+    expect(value.projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 77,
+      attempt: 1,
+      checkpoint: expect.objectContaining({ sequence: 0, state: "LEASED" }),
+    }))
+    expect(value.projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 77,
+      checkpoint: expect.objectContaining({ state: "COMPLETE" }),
+    }))
     expect(value.client.startThread).toHaveBeenCalledWith(expect.objectContaining({
       approvalPolicy: "never", sandbox: "workspace-write", ephemeral: false,
     }))
@@ -148,6 +160,25 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       mergeCommitSha: "b".repeat(40),
     }))
     expect(value.markComplete).toHaveBeenCalledWith(expect.objectContaining({ outcomeId: 77 }))
+  })
+
+  it("keeps a projected execution recoverable when persisted projection fails", async () => {
+    const value = fixture()
+    value.projectCheckpoint.mockRejectedValueOnce(
+      Object.assign(new Error("projection unavailable"), { code: "HERMES_RUNTIME_PROJECTION_WALL" }),
+    )
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_RUNTIME_PROJECTION_WALL",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "ACTIVE", abandonReason: "HERMES_RUNTIME_PROJECTION_WALL" },
+      checkpoint: { sequence: 0, state: "LEASED" },
+    })
+    expect(value.client.connect).not.toHaveBeenCalled()
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "77",
+    })
   })
 
   it("abandons a post-merge cleanup failure for immediate fenced recovery", async () => {

@@ -1,7 +1,14 @@
 import fs from "node:fs"
 import { describe, expect, it, vi } from "vitest"
 
-import { recoverExternalToolWall, recoverPostMergeCleanupWall, recoverValidationInfrastructureWall, runCliEntrypoint, sanitizeBridgeMessage } from "../scripts/hermes-bridge/cli.mjs"
+import {
+  recoverExternalToolWall,
+  recoverPostMergeCleanupWall,
+  recoverReviewedMerge,
+  recoverValidationInfrastructureWall,
+  runCliEntrypoint,
+  sanitizeBridgeMessage,
+} from "../scripts/hermes-bridge/cli.mjs"
 
 describe("Hermes bridge CLI", () => {
   it("redacts credential-bearing database URLs from structured wall output", () => {
@@ -117,5 +124,88 @@ describe("Hermes bridge CLI", () => {
       expectedFencingToken: 21, expectedHolderId: "stopped-holder", activationDisabled: true,
     }))
     read.mockRestore()
+  })
+
+  it("verifies and finalizes one exact reviewed merge after remediation exhaustion", async () => {
+    const candidate = {
+      outcomeId: "7",
+      fencingToken: 28,
+      lease: { status: "RELEASED" },
+      checkpoint: {
+        sequence: 31,
+        state: "FAILED_TERMINAL",
+        detail: "REVIEW_REMEDIATION_EXHAUSTED",
+      },
+      metadata: {
+        branch: "codex/hermes-goal-0003-7",
+        prNumber: 447, headRefOid: "a".repeat(40), mergeSha: null,
+      },
+    }
+    const reopen = vi.fn(() => ({ checkpointSequence: 32 }))
+    const cycle = vi.fn(async () => ({ result: "COMPLETE" }))
+    const orchestrator = {
+      state: {
+        read: () => ({
+          ownerTouchCounters: {
+            OWNER_OPERATION_TOUCH_COUNT: 0, OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+            OWNER_DIAGNOSTIC_TOUCH_COUNT: 0, OWNER_ROUTINE_DECISION_COUNT: 0,
+            OWNER_ROUTINE_CONTACT_COUNT: 0,
+          },
+          executions: { "7": candidate },
+        }),
+        reopenReviewRemediationExhausted: reopen,
+      },
+      cycle,
+    }
+    const lifecycle = {
+      inspectPullRequest: vi.fn(async () => ({
+        state: "MERGED", baseRefName: "main",
+        headRefName: "codex/hermes-goal-0003-7", unresolvedThreadCount: 0,
+        checksGreen: true, reviewed: true, headRefOid: "b".repeat(40),
+        mergeCommit: { oid: "c".repeat(40) },
+      })),
+      verifyOriginMainContains: vi.fn(async () => true),
+    }
+    const projectCheckpoint = vi.fn(async () => ({ workOrderId: 77 }))
+    const recoverOutcome = vi.fn(async () => true)
+
+    await expect(recoverReviewedMerge({
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+    })).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "7", prNumber: 447, mergeSha: "c".repeat(40),
+    })
+    expect(projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 7,
+      attempt: 28,
+      checkpoint: expect.objectContaining({
+        sequence: 32, state: "PR_MERGED",
+        metadata: expect.objectContaining({
+          priorHeadRefOid: "a".repeat(40),
+          headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
+        }),
+      }),
+    }))
+    expect(recoverOutcome).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 7, prNumber: 447,
+      reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
+    }))
+    expect(reopen).toHaveBeenCalledWith(expect.objectContaining({
+      expectedFencingToken: 28, proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+    }))
+    expect(cycle).toHaveBeenCalledOnce()
+
+    candidate.lease.status = "ABANDONED"
+    candidate.checkpoint = {
+      sequence: 32,
+      state: "REVIEW_REMEDIATION_RECOVERED",
+      detail: "REVIEW_REMEDIATION_EXHAUSTED",
+    }
+    candidate.metadata.headRefOid = "b".repeat(40)
+    candidate.metadata.mergeSha = "c".repeat(40)
+    await expect(recoverReviewedMerge({
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+    })).resolves.toMatchObject({ result: "COMPLETE", checkpointSequence: 32 })
+    expect(reopen).toHaveBeenCalledOnce()
+    expect(cycle).toHaveBeenCalledTimes(2)
   })
 })
