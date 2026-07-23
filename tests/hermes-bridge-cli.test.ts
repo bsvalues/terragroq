@@ -138,7 +138,8 @@ describe("Hermes bridge CLI", () => {
       },
       metadata: {
         branch: "codex/hermes-goal-0003-7",
-        prNumber: 447, headRefOid: "a".repeat(40), mergeSha: null,
+        prNumber: 447, headRefOid: "b".repeat(40), mergeSha: null as string | null,
+        reviewRecoveryProofDigest: null as string | null,
       },
     }
     const reopen = vi.fn(() => ({ checkpointSequence: 32 }))
@@ -180,7 +181,6 @@ describe("Hermes bridge CLI", () => {
       checkpoint: expect.objectContaining({
         sequence: 32, state: "PR_MERGED",
         metadata: expect.objectContaining({
-          priorHeadRefOid: "a".repeat(40),
           headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
         }),
       }),
@@ -202,10 +202,13 @@ describe("Hermes bridge CLI", () => {
     }
     candidate.metadata.headRefOid = "b".repeat(40)
     candidate.metadata.mergeSha = "c".repeat(40)
+    candidate.metadata.reviewRecoveryProofDigest = reopen.mock.calls[0][0].proofDigest
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
     })).resolves.toMatchObject({ result: "COMPLETE", checkpointSequence: 32 })
     expect(reopen).toHaveBeenCalledOnce()
     expect(cycle).toHaveBeenCalledTimes(2)
+    expect(projectCheckpoint).toHaveBeenCalledOnce()
+    expect(recoverOutcome).toHaveBeenCalledOnce()
   })
 })

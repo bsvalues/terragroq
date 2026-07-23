@@ -228,6 +228,7 @@ export async function recoverReviewedMerge(options = {}) {
   if (pr.state !== "MERGED" || pr.baseRefName !== "main" || pr.unresolvedThreadCount !== 0
     || pr.checksGreen !== true || pr.reviewed !== true
     || pr.headRefName !== candidate.metadata.branch
+    || reviewedHeadSha !== candidate.metadata.headRefOid
     || !/^[0-9a-f]{40}$/.test(reviewedHeadSha ?? "")
     || !/^[0-9a-f]{40}$/.test(mergeSha ?? "")
     || !await lifecycle.verifyOriginMainContains(mergeSha)) {
@@ -244,32 +245,36 @@ export async function recoverReviewedMerge(options = {}) {
     checksGreen: pr.checksGreen,
     reviewed: pr.reviewed,
   }))
-  await projectCheckpoint({
-    outcomeId,
-    attempt: candidate.fencingToken,
-    checkpoint: {
-      sequence: candidate.checkpoint.sequence + 1,
-      state: "PR_MERGED",
-      detail: `Recovered reviewed PR #${candidate.metadata.prNumber}`,
-      metadata: {
-        prNumber: candidate.metadata.prNumber,
-        priorHeadRefOid: candidate.metadata.headRefOid,
-        headRefOid: reviewedHeadSha,
-        mergeSha,
-      },
-    },
-  })
-  if (!await recoverOutcome({
-    outcomeId,
-    prNumber: candidate.metadata.prNumber,
-    reviewedHeadSha,
-    mergeSha,
-  })) {
-    throw Object.assign(new Error("Persisted review outcome did not match recovery proof"), {
-      code: "HERMES_REVIEW_RECOVERY_DATABASE_WALL",
+  const alreadyReopened = candidate.checkpoint.state === "REVIEW_REMEDIATION_RECOVERED"
+  if (alreadyReopened && (candidate.metadata.reviewRecoveryProofDigest !== proofDigest
+    || candidate.metadata.mergeSha !== mergeSha)) {
+    throw Object.assign(new Error("Reopened review recovery proof changed"), {
+      code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
     })
   }
-  const reopened = candidate.checkpoint.state === "REVIEW_REMEDIATION_RECOVERED"
+  if (!alreadyReopened) {
+    await projectCheckpoint({
+      outcomeId,
+      attempt: candidate.fencingToken,
+      checkpoint: {
+        sequence: candidate.checkpoint.sequence + 1,
+        state: "PR_MERGED",
+        detail: `Recovered reviewed PR #${candidate.metadata.prNumber}`,
+        metadata: { prNumber: candidate.metadata.prNumber, headRefOid: reviewedHeadSha, mergeSha },
+      },
+    })
+    if (!await recoverOutcome({
+      outcomeId,
+      prNumber: candidate.metadata.prNumber,
+      reviewedHeadSha,
+      mergeSha,
+    })) {
+      throw Object.assign(new Error("Persisted review outcome did not match recovery proof"), {
+        code: "HERMES_REVIEW_RECOVERY_DATABASE_WALL",
+      })
+    }
+  }
+  const reopened = alreadyReopened
     ? { checkpointSequence: candidate.checkpoint.sequence }
     : orchestrator.state.reopenReviewRemediationExhausted({
       idempotencyKey: `${candidate.outcomeId}:recover-reviewed-merge:${candidate.fencingToken}`,

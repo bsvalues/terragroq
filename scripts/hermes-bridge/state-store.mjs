@@ -484,6 +484,7 @@ export function reopenReviewRemediationExhausted(filePath, request, options = {}
       || request.prNumber !== current.metadata.prNumber
       || typeof request.headRefOid !== "string"
       || !SHA.test(request.headRefOid)
+      || request.headRefOid !== current.metadata.headRefOid
       || typeof request.mergeSha !== "string"
       || !SHA.test(request.mergeSha)
       || typeof request.proofDigest !== "string"
