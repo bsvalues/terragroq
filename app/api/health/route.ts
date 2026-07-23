@@ -2,6 +2,8 @@ import { NextResponse } from "next/server"
 import { getAuthReadiness } from "@/lib/auth-readiness"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
 
+export const dynamic = "force-dynamic"
+
 type Check = {
   ok: boolean
   latencyMs?: number

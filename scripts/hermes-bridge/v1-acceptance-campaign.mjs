@@ -30,9 +30,9 @@ export const AC_CATALOG = Object.freeze([
   ac("AC-08", "Cancellation/timeout", "EXECUTABLE_SCENARIO", ["hermes-app-server-client.test.ts", "hermes-bridge-orchestrator.test.ts"], ["cancellation-trace", "timeout-trace", "preserved-evidence"]),
   ac("AC-09", "Evidence integrity", "EXECUTABLE_SCENARIO", ["hermes-bridge-state-store.test.ts", "runtime-execution-truth.test.ts", "runtime-trace-panel.test.ts"], ["integrity-trace", "corruption-detection", "restart-trace"]),
   ac("AC-10", "Cleanup recovery", "EXECUTABLE_SCENARIO", ["hermes-bridge-state-store.test.ts", "hermes-bridge-orchestrator.test.ts"], ["cleanup-interruption-trace", "cleanup-result", "owned-resource-proof"]),
-  ac("AC-11", "Product truth", "LIVE", ["runtime-execution-panel.test.ts", "runtime-trace-panel.test.ts", "runtime-evidence-panel.test.ts", "runtime-evidence-truth-consistency.test.ts", "v1-product-truth-capture.test.ts", "local-runtime-status-api.test.ts"], ["product-truth-snapshot", "persisted-state-snapshot"]),
+  ac("AC-11", "Product truth", "LIVE", ["runtime-execution-panel.test.ts", "runtime-trace-panel.test.ts", "runtime-evidence-panel.test.ts", "runtime-evidence-truth-consistency.test.ts", "v1-product-truth-capture.test.ts", "local-runtime-status-api.test.ts", "runtime-health-route-dynamic.test.ts"], ["product-truth-snapshot", "persisted-state-snapshot"]),
   ac("AC-12", "V1 inventory", "VERIFIED_STATIC", ["systems-status-surface.test.ts", "multi-agent-capability-registry.test.ts", "executable-capability-inventory.test.ts"], ["v1-inventory"]),
-  ac("AC-13", "Live proof", "LIVE", ["local-runtime-status-api.test.ts", "hermes-bridge-supervisor.test.ts"], ["application-health", "worker-runtime-health"]),
+  ac("AC-13", "Live proof", "LIVE", ["local-runtime-status-api.test.ts", "runtime-health-route-dynamic.test.ts", "hermes-bridge-supervisor.test.ts"], ["application-health", "worker-runtime-health"]),
   ac("AC-14", "No relay", "LIVE", ["hermes-bridge-state-store.test.ts", "hermes-bridge-orchestrator.test.ts"], ["owner-counter-snapshot"]),
 ])
 
