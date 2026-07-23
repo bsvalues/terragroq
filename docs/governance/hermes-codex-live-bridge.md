@@ -1,6 +1,6 @@
 # Hermes-to-Codex Live Bridge
 
-Status: owner-authorized, bounded activation candidate
+Status: owner-authorized, bounded resident worker; current host liveness verified separately
 
 ## Purpose
 
@@ -86,7 +86,18 @@ mismatch fails closed instead of terminating an unrelated process.
 ## Certification
 
 Infrastructure tests and a read-only App Server handshake are prerequisites,
-not completion. Certification requires a newly entered ordinary-language
-WilliamOS feature to pass through persisted intake, automatic dispatch,
-implementation, validation, independent review, remediation when applicable,
-merge, origin/main verification, and outcome closure without owner operation.
+not completion. The bounded lifecycle was certified by two ordinary-language
+WilliamOS product outcomes:
+
+- `GOAL-0001` reached merged PR `#440` at
+  `c01751e3d0717952e93c550dfbbc2f7c3672cd2a`.
+- `GOAL-0002` reached exact-head Codex review, green Vercel verification, and
+  merged PR `#446` at `d4db455eefaecc2413668b9949f51a7a1e4130a7`.
+
+The two outcome PRs, `#440` and `#446`, record owner touch count `0` and
+blocked-scope crossing `false`. Separately, supervisor validation-isolation
+remediation reached merged PR `#445` at
+`6b37ceafbfd4b7d9443d09e86efa56fb8345bbc0`. Together this proves the bounded
+resident Hermes-to-Codex lifecycle; it does not prove current host liveness,
+unrestricted autonomy, or authority outside the standing WilliamOS-native
+R0/R1 envelope.

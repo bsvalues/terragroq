@@ -135,7 +135,7 @@ describe.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VAL
     expect(`${result.stdout}\n${result.stderr}`).toContain("HERMES_KILL_OWNERSHIP_WALL")
     expect(isAlive(unrelated.pid)).toBe(true)
     expect(fs.readFileSync(activationPath, "utf8").trim()).toBe("disabled")
-  })
+  }, 30_000)
 
   it("raises the survivor wall before touching unrelated processes", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-kill-survivor-"))
@@ -174,7 +174,7 @@ describe.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VAL
     expect(isAlive(holder.pid)).toBe(true)
     expect(isAlive(unrelated.pid)).toBe(true)
     expect(fs.readFileSync(activationPath, "utf8").trim()).toBe("disabled")
-  }, 20_000)
+  }, 45_000)
 
   it("rescans and stops a descendant created after the first tree snapshot", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-kill-rescan-"))

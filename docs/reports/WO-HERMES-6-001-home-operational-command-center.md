@@ -49,3 +49,16 @@ Two minor findings were remediated before handoff: every focused lane fixture no
 ## Validation handoff
 
 The App Server task did not run native validators, Git, or GitHub commands. Hermes owns focused Vitest validation, lint, the full test run, and the production build after file handoff. Until that host evidence exists, this report records implementation and file review only; it does not claim passing execution validation.
+
+## Hermes host completion
+
+Hermes subsequently completed the native-host lifecycle for this exact handoff:
+
+- focused and repository validation completed under the resident supervisor;
+- exact head `100b383c26801cc827d95dbb146bb2f41d4cd548` received a clean Codex review;
+- Vercel completed successfully;
+- PR `#446` merged as `d4db455eefaecc2413668b9949f51a7a1e4130a7`;
+- the PR records owner touch count `0` and blocked-scope crossing `false`.
+
+The earlier handoff paragraph remains as phase-specific provenance. This
+completion record is the later authoritative lifecycle result.

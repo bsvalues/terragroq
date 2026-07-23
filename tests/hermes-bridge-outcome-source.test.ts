@@ -7,6 +7,7 @@ import {
   NATIVE_PROVIDER_RETRY_STATE,
   OUTCOME_SELECTION_SQL,
   projectOutcomeRuntimeCheckpoint,
+  projectOutcomeRuntimeLease,
   recordValidationInfrastructureRecoveryProof,
   recoverNativeProviderOutcome,
   recoverReviewedOutcome,
@@ -252,6 +253,43 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       const evalCall = query.mock.calls.find(([sql]) => /HERMES_RUNTIME_FAILURE_EVAL/.test(sql))
       expect(evalCall?.[1]?.[3]).toContain('"failureClass":"TERMINAL_RUNTIME_FAILURE"')
     }
+  })
+
+  it("appends a secret-free idempotent runtime lease event", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 42, userId: "owner" }] })
+      .mockResolvedValueOnce({ rows: [{ id: 92 }] })
+      .mockResolvedValueOnce({ rows: [] })
+    await expect(projectOutcomeRuntimeLease({
+      query,
+      outcomeId: 4,
+      attempt: 3,
+      checkpointSequence: 9,
+      lease: { status: "RELEASED", expiresAt: "2026-07-23T10:00:00.000Z" },
+    })).resolves.toEqual({
+      workOrderId: 42,
+      workOrderRef: "WO-HERMES-OUTCOME-4",
+      idempotencyKey: "hermes-outcome:4:attempt:3:lease:RELEASED:checkpoint:9:expires:1784800800000",
+      leaseStatus: "RELEASED",
+      checkpointSequence: 9,
+    })
+    expect(query.mock.calls[3][0]).toMatch(/HERMES_RUNTIME_LEASE/)
+    expect(query.mock.calls[3][1][3]).toContain('"leaseStatus":"RELEASED"')
+    expect(query.mock.calls[3][1][3]).not.toMatch(/holder|token|secret/i)
+  })
+
+  it("rejects malformed runtime lease evidence before persistence", async () => {
+    const query = vi.fn()
+    await expect(projectOutcomeRuntimeLease({
+      query,
+      outcomeId: 4,
+      attempt: 1,
+      checkpointSequence: 0,
+      lease: { status: "OWNED", expiresAt: "not-a-date" },
+    })).rejects.toMatchObject({ code: "OUTCOME_PROJECTION_LEASE_INVALID" })
+    expect(query).not.toHaveBeenCalled()
   })
 
   it("does not regress the Work Order when an exact checkpoint is replayed", async () => {
