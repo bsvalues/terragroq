@@ -222,6 +222,12 @@ export async function recoverReviewedMerge(options = {}) {
   }
   const candidate = candidates[0]
   const outcomeId = Number(candidate.outcomeId)
+  const recoveredOutcome = candidate.metadata?.outcome
+  if (!recoveredOutcome || String(recoveredOutcome.id) !== String(candidate.outcomeId)) {
+    throw Object.assign(new Error("Recovery candidate is missing its exact outcome"), {
+      code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+    })
+  }
   const pr = await lifecycle.inspectPullRequest(candidate.metadata.prNumber)
   const reviewedHeadSha = pr.headRefOid
   const mergeSha = pr.mergeCommit?.oid
@@ -285,7 +291,7 @@ export async function recoverReviewedMerge(options = {}) {
       mergeSha,
       proofDigest,
     })
-  const result = await orchestrator.cycle()
+  const result = await orchestrator.cycle({ outcome: recoveredOutcome })
   return {
     result: result.result,
     outcomeId: candidate.outcomeId,

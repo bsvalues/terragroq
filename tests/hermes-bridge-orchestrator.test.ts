@@ -117,6 +117,28 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.selectOutcome).not.toHaveBeenCalled()
   })
 
+  it("targets an explicitly recovered outcome without selecting from the queue", async () => {
+    const value = fixture()
+    const recoveredOutcome = {
+      id: 77,
+      userId: "owner-id",
+      ref: "GOAL-0077",
+      command: "Complete the exact recovered WilliamOS outcome.",
+      lane: "ui",
+      mode: "implement",
+      risk: "low",
+      authority: "A2_WRITE_OWN",
+      verdict: "requires_approval",
+      requiresApproval: true,
+      status: "classified",
+    }
+
+    await expect(value.orchestrator.cycle({ outcome: recoveredOutcome })).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "77", prNumber: 500,
+    })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+  })
+
   it("dispatches a standing-authorized R0/R1 outcome and merges only after independent scope verification", async () => {
     const value = fixture()
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({

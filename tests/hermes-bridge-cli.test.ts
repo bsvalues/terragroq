@@ -137,6 +137,16 @@ describe("Hermes bridge CLI", () => {
         detail: "REVIEW_REMEDIATION_EXHAUSTED",
       },
       metadata: {
+        outcome: {
+          id: 7,
+          ref: "GOAL-0007",
+          command: "Finish the exact recovered WilliamOS outcome.",
+          lane: "ui",
+          mode: "implement",
+          risk: "low",
+          authority: "A2_WRITE_OWN",
+          status: "classified",
+        },
         branch: "codex/hermes-goal-0003-7",
         prNumber: 447, headRefOid: "b".repeat(40), mergeSha: null as string | null,
         reviewRecoveryProofDigest: null as string | null,
@@ -192,7 +202,9 @@ describe("Hermes bridge CLI", () => {
     expect(reopen).toHaveBeenCalledWith(expect.objectContaining({
       expectedFencingToken: 28, proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
     }))
-    expect(cycle).toHaveBeenCalledOnce()
+    expect(cycle).toHaveBeenCalledWith({
+      outcome: expect.objectContaining({ id: 7, ref: "GOAL-0007" }),
+    })
 
     candidate.lease.status = "ABANDONED"
     candidate.checkpoint = {
@@ -208,6 +220,9 @@ describe("Hermes bridge CLI", () => {
     })).resolves.toMatchObject({ result: "COMPLETE", checkpointSequence: 32 })
     expect(reopen).toHaveBeenCalledOnce()
     expect(cycle).toHaveBeenCalledTimes(2)
+    expect(cycle).toHaveBeenLastCalledWith({
+      outcome: expect.objectContaining({ id: 7, ref: "GOAL-0007" }),
+    })
     expect(projectCheckpoint).toHaveBeenCalledOnce()
     expect(recoverOutcome).toHaveBeenCalledOnce()
   })

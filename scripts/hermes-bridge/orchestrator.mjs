@@ -423,7 +423,7 @@ export function createHermesOrchestrator(options = {}) {
     }
   }
 
-  async function cycle() {
+  async function cycle(options = {}) {
     if (readControl(activationPath, "disabled") !== "enabled") return { result: "DISABLED" }
     const initialized = state.initialize()
     if (initialized.killSwitch.active) return { result: "KILL_SWITCH_ACTIVE" }
@@ -431,8 +431,15 @@ export function createHermesOrchestrator(options = {}) {
     const unfinished = Object.values(initialized.executions).filter((execution) => execution?.lease?.status === "ACTIVE")
     if (unfinished.length > 1) throw Object.assign(new Error("Multiple unfinished executions found"), { code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
     const pendingExecution = unfinished[0] ?? null
+    const requestedOutcome = options.outcome ?? null
+    if (requestedOutcome && pendingExecution
+      && String(requestedOutcome.id) !== String(pendingExecution.outcomeId)) {
+      throw Object.assign(new Error("Requested outcome conflicts with the active execution"), {
+        code: "HERMES_EXECUTION_CONCURRENCY_WALL",
+      })
+    }
     const notBefore = readControl(notBeforePath, now().toISOString())
-    const outcome = pendingExecution?.metadata?.outcome ?? await selectOutcome({
+    const outcome = pendingExecution?.metadata?.outcome ?? requestedOutcome ?? await selectOutcome({
       enabled: true, killSwitch: false, standingAuthority: true, notBefore,
     })
     if (!outcome) return { result: "NO_ELIGIBLE_OUTCOME" }
