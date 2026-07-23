@@ -317,19 +317,21 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
   })
 
   it("validates the resident supervisor independently from application health", () => {
+    const workspace = path.resolve("repo")
+    const supervisorPath = path.join(workspace, "scripts", "hermes-bridge", "supervisor.ps1")
     const state = {
       schemaVersion: 1,
       processId: 123,
       nonce: "nonce",
-      workspace: "C:\\repo",
-      supervisorPath: "C:\\repo\\scripts\\hermes-bridge\\supervisor.ps1",
+      workspace,
+      supervisorPath,
       hostMode: "INTERACTIVE_USER_RESIDENT",
       startedAt: fresh,
     }
     const posture = {
       now,
-      expectedWorkspace: "C:\\repo",
-      expectedSupervisorPath: "C:\\repo\\scripts\\hermes-bridge\\supervisor.ps1",
+      expectedWorkspace: workspace,
+      expectedSupervisorPath: supervisorPath,
     }
     let probedState: typeof state | null = null
     expect(validateSupervisorState(state, {
@@ -347,7 +349,7 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
     expect(validateSupervisorState(state, { ...posture, processProbe: () => true }).ok).toBe(true)
     expect(validateSupervisorState(state, {
       ...posture,
-      expectedWorkspace: "C:\\other",
+      expectedWorkspace: path.resolve("other"),
       processProbe: () => true,
     }).code).toBe("SUPERVISOR_POSTURE_MISMATCH")
   })
