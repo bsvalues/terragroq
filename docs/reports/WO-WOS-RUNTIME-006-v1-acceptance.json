@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "issueNumber": 448,
+  "goal": "GOAL-WOS-RUNTIME-001",
+  "workOrder": "WO-WOS-RUNTIME-006",
+  "result": "PASS_CANDIDATE_EXACT_HEAD_CAMPAIGN_REQUIRED",
+  "baselineRevision": "33142e8e05428da307a152918e19b5ada58cc62f",
+  "latestMergedProductRevision": "ec96f020f2aa47c69bc6146439c81ccc9ba7ea62",
+  "deliveryPullRequests": [
+    449,
+    450,
+    451
+  ],
+  "acceptanceCriteria": {
+    "AC-01": "LIVE",
+    "AC-02": "EXECUTABLE_SCENARIO",
+    "AC-03": "EXECUTABLE_SCENARIO",
+    "AC-04": "EXECUTABLE_SCENARIO",
+    "AC-05": "EXECUTABLE_SCENARIO",
+    "AC-06": "EXECUTABLE_SCENARIO",
+    "AC-07": "EXECUTABLE_SCENARIO",
+    "AC-08": "EXECUTABLE_SCENARIO",
+    "AC-09": "EXECUTABLE_SCENARIO",
+    "AC-10": "EXECUTABLE_SCENARIO",
+    "AC-11": "LIVE",
+    "AC-12": "VERIFIED_STATIC",
+    "AC-13": "LIVE",
+    "AC-14": "LIVE"
+  },
+  "proofPolicy": "UNIT_SIMULATED_NEVER_SUBSTITUTES_FOR_LIVE",
+  "freshOutcome": {
+    "goal": "GOAL-0004",
+    "outcomeId": "8",
+    "workOrder": "WO-HERMES-8-001",
+    "pullRequest": 451,
+    "reviewedHead": "6f4b8b7395a89286d74662fdc408abc5c16fdb91",
+    "mergeRevision": "ec96f020f2aa47c69bc6146439c81ccc9ba7ea62",
+    "checkpointState": "COMPLETE",
+    "leaseState": "RELEASED",
+    "providerRetryCount": 2,
+    "postMergeCleanupRetryCount": 1
+  },
+  "ownerTouchCounters": {
+    "OWNER_OPERATION_TOUCH_COUNT": 0,
+    "OWNER_CREDENTIAL_TOUCH_COUNT": 0,
+    "OWNER_DIAGNOSTIC_TOUCH_COUNT": 0,
+    "OWNER_ROUTINE_DECISION_COUNT": 0,
+    "OWNER_ROUTINE_CONTACT_COUNT": 0
+  },
+  "blockedScopeCrossed": false,
+  "finalGate": "MERGED_MAIN_EXACT_REVISION_CAMPAIGN"
+}
