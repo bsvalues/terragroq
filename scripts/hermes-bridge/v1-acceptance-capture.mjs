@@ -68,6 +68,7 @@ function parseArgs(argv) {
     output: path.join(runtimeRoot, "evidence", "v1-acceptance.json"),
     appUrl: process.env.WILLIAMOS_APP_URL ?? "http://localhost:3000",
     workOrderRef: "WO-HERMES-OUTCOME-8",
+    maxAgeMs: 60 * 60 * 1000,
   }
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index]
@@ -77,10 +78,14 @@ function parseArgs(argv) {
     else if (flag === "--output") options.output = path.resolve(value)
     else if (flag === "--app-url") options.appUrl = value.replace(/\/+$/, "")
     else if (flag === "--work-order-ref") options.workOrderRef = value
+    else if (flag === "--max-age-ms") options.maxAgeMs = Number(value)
     else throw new Error(`UNKNOWN_ARGUMENT:${flag}`)
   }
   if (!options.workOrderRef.startsWith("WO-HERMES-OUTCOME-")) {
     throw new Error("WORK_ORDER_REF_REQUIRED")
+  }
+  if (!Number.isSafeInteger(options.maxAgeMs) || options.maxAgeMs < 1) {
+    throw new Error("MAX_AGE_MS_INVALID")
   }
   return options
 }
@@ -212,7 +217,7 @@ async function main() {
   const state = JSON.parse(fs.readFileSync(statePath, "utf8"))
   const supervisor = JSON.parse(fs.readFileSync(supervisorPath, "utf8"))
   const now = Date.now()
-  const host = validateHostState(state, { now })
+  const host = validateHostState(state, { now, maxAgeMs: options.maxAgeMs })
   if (!host.ok) throw new Error(`${host.code}:${host.detail}`)
   const supervisorResult = validateSupervisorState(supervisor, {
     now,
