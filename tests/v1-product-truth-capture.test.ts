@@ -47,6 +47,15 @@ describe("Issue #448 persisted product truth capture", () => {
         { id: 101, eventType: "HERMES_RUNTIME_CHECKPOINT" },
         { id: 103, eventType: "HERMES_RUNTIME_LEASE" },
       ],
+      evidenceRecords: [],
+    })).toThrow("PRODUCT_TRUTH_RELATION_INVALID")
+
+    expect(() => buildProductTruthEvidence({
+      workOrder: { id: 42, ref: "WO-HERMES-OUTCOME-8" },
+      events: [
+        { id: 101, eventType: "HERMES_RUNTIME_CHECKPOINT" },
+        { id: 103, eventType: "HERMES_RUNTIME_LEASE" },
+      ],
       evidenceRecords: [{ id: 9, workOrderId: 77 }],
     })).toThrow("PRODUCT_TRUTH_RELATION_INVALID")
   })
