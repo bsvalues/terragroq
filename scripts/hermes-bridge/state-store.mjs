@@ -16,6 +16,7 @@ const SHA256 = /^[0-9a-f]{64}$/
 const SENSITIVE_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 const VALIDATION_INFRASTRUCTURE_DETAIL = "VALIDATION_REMEDIATION_EXHAUSTED"
 const VALIDATION_INFRASTRUCTURE_FAILURE = /\bspawn EPERM\b/i
+const REVIEW_REMEDIATION_DETAIL = "REVIEW_REMEDIATION_EXHAUSTED"
 
 function fail(code, message = code) {
   const error = new Error(message)
@@ -229,6 +230,13 @@ function metadata(input = {}, current = {}) {
     && (typeof validationRecoveryProofDigest !== "string" || !SHA256.test(validationRecoveryProofDigest))) {
     fail("INVALID_VALIDATION_RECOVERY_PROOF_DIGEST")
   }
+  const reviewRecoveryProofDigest = Object.hasOwn(input, "reviewRecoveryProofDigest")
+    ? input.reviewRecoveryProofDigest
+    : current.reviewRecoveryProofDigest ?? null
+  if (reviewRecoveryProofDigest !== null
+    && (typeof reviewRecoveryProofDigest !== "string" || !SHA256.test(reviewRecoveryProofDigest))) {
+    fail("INVALID_REVIEW_RECOVERY_PROOF_DIGEST")
+  }
   const headRefOid = Object.hasOwn(input, "headRefOid")
     ? input.headRefOid
     : current.headRefOid ?? null
@@ -252,6 +260,7 @@ function metadata(input = {}, current = {}) {
     validationFailure,
     validationRemediationRound,
     validationRecoveryProofDigest,
+    reviewRecoveryProofDigest,
     validationEvidence,
     outcome,
   }
@@ -458,6 +467,64 @@ export function reopenValidationInfrastructureWall(filePath, request, options = 
   })
 }
 
+export function reopenReviewRemediationExhausted(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    if (current.fencingToken !== request.expectedFencingToken) fail("FENCING_TOKEN_CONFLICT")
+    const ownerTouchesRemainZero = COUNTER_NAMES.every(
+      (counter) => state.ownerTouchCounters[counter] === 0,
+    )
+    if (current.lease.status !== "RELEASED"
+      || current.checkpoint.state !== "FAILED_TERMINAL"
+      || current.checkpoint.detail !== REVIEW_REMEDIATION_DETAIL
+      || !Number.isInteger(request.prNumber)
+      || request.prNumber < 1
+      || request.prNumber !== current.metadata.prNumber
+      || typeof request.headRefOid !== "string"
+      || !SHA.test(request.headRefOid)
+      || request.headRefOid !== current.metadata.headRefOid
+      || typeof request.mergeSha !== "string"
+      || !SHA.test(request.mergeSha)
+      || request.mergeSha !== current.metadata.mergeSha
+      || typeof request.proofDigest !== "string"
+      || !SHA256.test(request.proofDigest)
+      || !ownerTouchesRemainZero) {
+      fail("REVIEW_REMEDIATION_RECOVERY_STATE_WALL")
+    }
+    const reopened = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "ABANDONED",
+        expiresAt: at.iso,
+        recoveredAt: at.iso,
+        recoverReason: "REVIEW_REMEDIATION_PROOF_ACCEPTED",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "REVIEW_REMEDIATION_RECOVERED",
+        detail: REVIEW_REMEDIATION_DETAIL,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({
+        threadId: null,
+        turnId: null,
+        reviewRecoveryProofDigest: request.proofDigest,
+      }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: reopened }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: reopened.fencingToken,
+      checkpointSequence: reopened.checkpoint.sequence,
+      leaseStatus: reopened.lease.status,
+      state: reopened.checkpoint.state,
+    }
+  })
+}
+
 export function recoverExternalToolWall(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
@@ -618,6 +685,7 @@ export function createHermesStateStore(filePath, options = {}) {
     releaseLease: (request) => releaseLease(filePath, request, options),
     reopenProviderWall: (request) => reopenProviderWall(filePath, request, options),
     reopenValidationInfrastructureWall: (request) => reopenValidationInfrastructureWall(filePath, request, options),
+    reopenReviewRemediationExhausted: (request) => reopenReviewRemediationExhausted(filePath, request, options),
     recoverExternalToolWall: (request) => recoverExternalToolWall(filePath, request, options),
     recoverPostMergeCleanupWall: (request) => recoverPostMergeCleanupWall(filePath, request, options),
     deferProviderWall: (request) => deferProviderWall(filePath, request, options),

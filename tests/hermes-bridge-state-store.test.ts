@@ -270,6 +270,113 @@ describe("Hermes bridge durable state store", () => {
     }
   })
 
+  it("reopens an exact zero-touch review remediation terminal for immediate fenced reclaim", () => {
+    const { store } = fixture()
+    const prNumber = 448
+    const headRefOid = "a".repeat(40)
+    const mergeSha = "b".repeat(40)
+    const proofDigest = "c".repeat(64)
+    const first = store.acquireLease({
+      outcomeId: "5", holderId: "review-holder", leaseDurationMs: 1000,
+      metadata: { threadId: "review-thread", turnId: "review-turn", prNumber, headRefOid, mergeSha },
+      idempotencyKey: "review-acquire",
+    })
+    store.checkpoint({
+      outcomeId: "5", holderId: "review-holder", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "FAILED_TERMINAL",
+      detail: "REVIEW_REMEDIATION_EXHAUSTED", idempotencyKey: "review-failed",
+    })
+    store.releaseLease({
+      outcomeId: "5", holderId: "review-holder", fencingToken: first.fencingToken,
+      idempotencyKey: "review-released",
+    })
+    const request = {
+      outcomeId: "5", expectedFencingToken: first.fencingToken,
+      prNumber, headRefOid, mergeSha, proofDigest,
+      idempotencyKey: "review-recover",
+    }
+
+    const reopened = store.reopenReviewRemediationExhausted(request)
+    expect(reopened).toMatchObject({
+      leaseStatus: "ABANDONED", checkpointSequence: 2,
+      state: "REVIEW_REMEDIATION_RECOVERED", idempotent: false,
+    })
+    expect(store.reopenReviewRemediationExhausted(request)).toMatchObject({
+      ...reopened, idempotent: true,
+    })
+    expect(store.read().executions["5"]).toMatchObject({
+      lease: { status: "ABANDONED", recoverReason: "REVIEW_REMEDIATION_PROOF_ACCEPTED" },
+      checkpoint: {
+        sequence: 2, state: "REVIEW_REMEDIATION_RECOVERED",
+        detail: "REVIEW_REMEDIATION_EXHAUSTED",
+      },
+      metadata: {
+        threadId: null, turnId: null, prNumber, headRefOid, mergeSha,
+        reviewRecoveryProofDigest: proofDigest,
+      },
+    })
+
+    const reclaimed = store.reclaimLease({
+      outcomeId: "5", holderId: "recovery-holder", leaseDurationMs: 1000,
+      expectedFencingToken: first.fencingToken, idempotencyKey: "review-reclaim",
+    })
+    expect(reclaimed.fencingToken).toBeGreaterThan(first.fencingToken)
+    expect(() => store.checkpoint({
+      outcomeId: "5", holderId: "review-holder", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 2, state: "STALE", idempotencyKey: "review-stale",
+    })).toThrowError(expect.objectContaining({ code: "FENCING_TOKEN_CONFLICT" }))
+  })
+
+  it("preserves terminal review remediation outside the exact recovery boundary", () => {
+    for (const invalid of [
+      "lease", "state", "detail", "pr", "head", "merge", "proof", "owner-touch", "fence",
+    ] as const) {
+      const { store } = fixture()
+      const prNumber = 448
+      const headRefOid = "a".repeat(40)
+      const mergeSha = "b".repeat(40)
+      const first = store.acquireLease({
+        outcomeId: "5", holderId: "review-holder", leaseDurationMs: 1000,
+        metadata: { prNumber, headRefOid, mergeSha },
+        idempotencyKey: `${invalid}-review-acquire`,
+      })
+      store.checkpoint({
+        outcomeId: "5", holderId: "review-holder", fencingToken: first.fencingToken,
+        expectedCheckpointSequence: 0,
+        state: invalid === "state" ? "REMEDIATING" : "FAILED_TERMINAL",
+        detail: invalid === "detail" ? "OTHER_TERMINAL" : "REVIEW_REMEDIATION_EXHAUSTED",
+        idempotencyKey: `${invalid}-review-failed`,
+      })
+      if (invalid !== "lease") {
+        store.releaseLease({
+          outcomeId: "5", holderId: "review-holder", fencingToken: first.fencingToken,
+          idempotencyKey: `${invalid}-review-released`,
+        })
+      }
+      if (invalid === "owner-touch") {
+        store.recordOwnerTouch({ counter: "ownerRoutineContactCount", idempotencyKey: "review-owner-touch" })
+      }
+
+      expect(() => store.reopenReviewRemediationExhausted({
+        outcomeId: "5",
+        expectedFencingToken: invalid === "fence" ? first.fencingToken + 1 : first.fencingToken,
+        prNumber: invalid === "pr" ? prNumber + 1 : prNumber,
+        headRefOid: invalid === "head" ? "d".repeat(40) : headRefOid,
+        mergeSha: invalid === "merge" ? "e".repeat(40) : mergeSha,
+        proofDigest: invalid === "proof" ? "not-a-digest" : "c".repeat(64),
+        idempotencyKey: `${invalid}-review-recover`,
+      })).toThrowError(expect.objectContaining({
+        code: invalid === "fence"
+          ? "FENCING_TOKEN_CONFLICT"
+          : "REVIEW_REMEDIATION_RECOVERY_STATE_WALL",
+      }))
+      expect(store.read().executions["5"]).toMatchObject({
+        lease: { status: invalid === "lease" ? "ACTIVE" : "RELEASED" },
+        checkpoint: { state: invalid === "state" ? "REMEDIATING" : "FAILED_TERMINAL" },
+      })
+    }
+  })
+
   it("recovers only an exact zero-touch external-tool wall after supervisor containment", () => {
     const { store } = fixture()
     const first = store.acquireLease({
