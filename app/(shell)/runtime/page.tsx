@@ -3,6 +3,10 @@ import { PageHeader } from "@/components/shell/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { getRecentEvidence } from "@/app/actions/evidence"
 import { RuntimeEvidencePanel } from "@/components/runtime/runtime-evidence-panel"
+import {
+  projectRuntimeEvidenceHistory,
+  RUNTIME_EVIDENCE_HISTORY_LIMIT,
+} from "@/components/runtime/runtime-evidence"
 import { RuntimeExecutionPanel } from "@/components/runtime/runtime-execution-panel"
 import { RuntimeProbe } from "@/components/runtime/runtime-probe"
 import { ReadinessNativeAreaPanel } from "@/components/runtime/readiness-native-area-panel"
@@ -14,10 +18,11 @@ import { buildRuntimeStatus } from "@/lib/ai/runtime"
 
 export default async function RuntimePage() {
   const rt = buildRuntimeStatus()
-  const [evidence, executionTruth] = await Promise.all([
-    getRecentEvidence(5),
+  const [evidenceRecords, executionTruth] = await Promise.all([
+    getRecentEvidence(RUNTIME_EVIDENCE_HISTORY_LIMIT + 1),
     getRuntimeExecutions(),
   ])
+  const evidenceHistory = projectRuntimeEvidenceHistory(evidenceRecords)
 
   const rows: { icon: typeof Cpu; label: string; value: string; mono?: boolean }[] = [
     { icon: Cpu, label: "Chat model", value: rt.chatModel, mono: true },
@@ -85,7 +90,11 @@ export default async function RuntimePage() {
           <RuntimeProbe />
         </div>
 
-        <RuntimeEvidencePanel records={evidence} />
+        <RuntimeEvidencePanel
+          records={evidenceHistory.records}
+          limit={evidenceHistory.limit}
+          truncated={evidenceHistory.truncated}
+        />
       </div>
     </>
   )
