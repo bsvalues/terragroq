@@ -571,5 +571,336 @@ export async function recordValidationInfrastructureRecoveryProof({
   }
 }
 
+const COMMIT_SHA = /^[0-9a-f]{40}$/
+const PROJECTION_STATE = /^[A-Z][A-Z0-9_]{1,79}$/
+const REVIEW_REMEDIATION_EXHAUSTED = "REVIEW_REMEDIATION_EXHAUSTED"
+
+function outcomeWorkOrderRef(outcomeId) {
+  return `WO-HERMES-OUTCOME-${outcomeId}`
+}
+
+function projectionForCheckpoint(state) {
+  if (state === "COMPLETE") return { status: "closed", result: "PASS" }
+  if (state === "FAILED_TERMINAL") return { status: "blocked", result: "FAIL" }
+  if (state === "OWNER_DECISION_REQUIRED" || state === "PROVIDER_UNAVAILABLE"
+    || state === "RETRYABLE_WALL" || state.startsWith("DEFERRED_")) {
+    return { status: "blocked", result: "PARTIAL" }
+  }
+  if (state.startsWith("PR_") || state.startsWith("REVIEW_") || state.startsWith("MERGE_")) {
+    return { status: "review", result: null }
+  }
+  return { status: "active", result: null }
+}
+
+function checkpointEvidence(metadata) {
+  const prNumber = metadata?.prNumber
+  if (prNumber !== undefined && (!Number.isSafeInteger(prNumber) || prNumber <= 0)) {
+    throw Object.assign(new Error("checkpoint PR number is invalid"), { code: "OUTCOME_PROJECTION_EVIDENCE_INVALID" })
+  }
+  const hashes = {}
+  for (const field of ["commit", "headRefOid", "mergeSha"]) {
+    const value = metadata?.[field]
+    if (value !== undefined && (typeof value !== "string" || !COMMIT_SHA.test(value))) {
+      throw Object.assign(new Error(`checkpoint ${field} is invalid`), { code: "OUTCOME_PROJECTION_EVIDENCE_INVALID" })
+    }
+    if (value !== undefined) hashes[field] = value
+  }
+  return { ...(prNumber === undefined ? {} : { prNumber }), ...hashes }
+}
+
+function projectionEvidenceLabels(evidence) {
+  return [
+    ...(evidence.prNumber === undefined ? [] : [`pull-request:#${evidence.prNumber}`]),
+    ...(evidence.commit === undefined ? [] : [`commit:${evidence.commit}`]),
+    ...(evidence.headRefOid === undefined ? [] : [`reviewed-head:${evidence.headRefOid}`]),
+    ...(evidence.mergeSha === undefined ? [] : [`merge:${evidence.mergeSha}`]),
+  ]
+}
+
+/**
+ * Projects one durable Hermes runtime checkpoint into the existing Work Order
+ * and append-only governance event tables. The transaction advisory lock makes
+ * the deterministic Work Order reference a cardinality boundary without a new
+ * schema constraint.
+ */
+export async function projectOutcomeRuntimeCheckpoint({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  attempt,
+  checkpoint,
+} = {}) {
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) {
+    throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
+  }
+  if (!Number.isSafeInteger(attempt) || attempt <= 0
+    || !Number.isSafeInteger(checkpoint?.sequence) || checkpoint.sequence < 0
+    || typeof checkpoint?.state !== "string" || !PROJECTION_STATE.test(checkpoint.state)) {
+    throw Object.assign(new Error("runtime checkpoint is invalid"), { code: "OUTCOME_PROJECTION_CHECKPOINT_INVALID" })
+  }
+  if (checkpoint.detail !== undefined && checkpoint.detail !== null
+    && (typeof checkpoint.detail !== "string" || checkpoint.detail.length > 1000)) {
+    throw Object.assign(new Error("runtime checkpoint detail is invalid"), { code: "OUTCOME_PROJECTION_CHECKPOINT_INVALID" })
+  }
+
+  const ref = outcomeWorkOrderRef(outcomeId)
+  const idempotencyKey = `hermes-outcome:${outcomeId}:attempt:${attempt}:checkpoint:${checkpoint.sequence}:${checkpoint.state}`
+  const evidence = checkpointEvidence(checkpoint.metadata)
+  const projection = projectionForCheckpoint(checkpoint.state)
+  const commitRef = evidence.mergeSha ?? evidence.commit ?? evidence.headRefOid ?? null
+  const labels = projectionEvidenceLabels(evidence)
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = new Pool({ connectionString: databaseUrl })
+  }
+
+  try {
+    if (pool) {
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+    }
+    await runQuery("BEGIN")
+    await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [ref])
+    await runQuery(
+      `INSERT INTO work_order
+         ("userId", ref, title, description, goal, lane, status, assignee, agent, "updatedAt")
+       SELECT g."userId", $2, COALESCE(NULLIF(g.command, ''), 'Hermes outcome ' || g.id::text),
+         'Durable runtime projection for ' || COALESCE(g.ref, 'goal-' || g.id::text),
+         g.ref, g.lane, 'active', 'hermes-codex-bridge', 'codex', NOW()
+       FROM goal g
+       WHERE g.id = $1::integer
+         AND NOT EXISTS (
+           SELECT 1 FROM work_order existing
+           WHERE existing."userId" = g."userId" AND existing.ref = $2
+         )
+       RETURNING id`,
+      [outcomeId, ref],
+    )
+    const workOrders = await runQuery(
+      `SELECT wo.id, wo."userId" AS "userId", wo.ref
+       FROM work_order wo
+       JOIN goal g ON g."userId" = wo."userId"
+       WHERE g.id = $1::integer AND wo.ref = $2
+       ORDER BY wo.id
+       FOR UPDATE OF wo`,
+      [outcomeId, ref],
+    )
+    if (workOrders?.rows?.length !== 1) {
+      throw Object.assign(new Error("Hermes outcome Work Order cardinality is invalid"), {
+        code: "OUTCOME_WORK_ORDER_CARDINALITY_WALL",
+      })
+    }
+    const workOrder = workOrders.rows[0]
+    const eventMetadata = {
+      idempotencyKey,
+      outcomeId,
+      workOrderRef: ref,
+      attempt,
+      checkpointSequence: checkpoint.sequence,
+      checkpointState: checkpoint.state,
+      checkpointDetail: checkpoint.detail ?? null,
+      ...evidence,
+    }
+    const insertedEvent = await runQuery(
+      `INSERT INTO governance_event
+         ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       SELECT $1, 'HERMES_RUNTIME_CHECKPOINT', 'work_order', $2, 'hermes-codex-bridge',
+         $3, $4::jsonb
+       WHERE NOT EXISTS (
+         SELECT 1 FROM governance_event prior
+         WHERE prior."entityType" = 'work_order' AND prior."entityId"::text = $2::text
+           AND prior."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+           AND prior.metadata->>'idempotencyKey' = $5
+       )
+       RETURNING id`,
+      [workOrder.userId, String(workOrder.id),
+        `Projected ${checkpoint.state} for ${ref}`, JSON.stringify(eventMetadata), idempotencyKey],
+    )
+    if ((insertedEvent?.rows?.length ?? insertedEvent?.rowCount ?? 0) > 0) {
+      await runQuery(
+        `UPDATE work_order
+         SET status = $2,
+           result = $3,
+           "commitRef" = COALESCE($4, "commitRef"),
+           evidence = ARRAY(
+             SELECT DISTINCT item
+             FROM unnest(COALESCE(evidence, ARRAY[]::text[]) || $5::text[]) item
+             ORDER BY item
+           ),
+           "closedAt" = CASE WHEN $2 = 'closed' THEN COALESCE("closedAt", NOW()) ELSE NULL END,
+           "updatedAt" = NOW()
+         WHERE id = $1
+           AND NOT EXISTS (
+             SELECT 1 FROM governance_event newer
+             WHERE newer."entityType" = 'work_order'
+               AND newer."entityId"::text = $1::text
+               AND newer."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+               AND (
+                 (newer.metadata->>'attempt')::integer > $6
+                 OR (
+                   (newer.metadata->>'attempt')::integer = $6
+                   AND (newer.metadata->>'checkpointSequence')::integer > $7
+                 )
+               )
+           )`,
+        [workOrder.id, projection.status, projection.result, commitRef, labels, attempt, checkpoint.sequence],
+      )
+    }
+    await runQuery("COMMIT")
+    return {
+      workOrderId: workOrder.id,
+      workOrderRef: ref,
+      idempotencyKey,
+      status: projection.status,
+      result: projection.result,
+      commitRef,
+    }
+  } catch (error) {
+    if (runQuery) {
+      try { await runQuery("ROLLBACK") } catch {}
+    }
+    throw error
+  } finally {
+    client?.release()
+    if (pool) await pool.end()
+  }
+}
+
+/**
+ * Converts only a dismissed review-remediation terminal whose later projected
+ * PR_MERGED checkpoint exactly matches the supplied reviewed head and merge.
+ */
+export async function recoverReviewedOutcome({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  prNumber,
+  reviewedHeadSha,
+  mergeSha,
+} = {}) {
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) {
+    throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
+  }
+  if (!Number.isSafeInteger(prNumber) || prNumber <= 0
+    || typeof reviewedHeadSha !== "string" || !COMMIT_SHA.test(reviewedHeadSha)
+    || typeof mergeSha !== "string" || !COMMIT_SHA.test(mergeSha)) {
+    throw Object.assign(new Error("review recovery evidence is invalid"), { code: "OUTCOME_REVIEW_RECOVERY_EVIDENCE_INVALID" })
+  }
+
+  const ref = outcomeWorkOrderRef(outcomeId)
+  const idempotencyKey = `hermes-outcome:${outcomeId}:review-recovery:pr:${prNumber}:head:${reviewedHeadSha}:merge:${mergeSha}`
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = new Pool({ connectionString: databaseUrl })
+  }
+
+  try {
+    if (pool) {
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+    }
+    await runQuery("BEGIN")
+    await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [ref])
+    const recovered = await runQuery(
+      `WITH latest_terminal AS (
+         SELECT id, metadata
+         FROM governance_event
+         WHERE "entityType" = 'goal' AND "entityId"::text = ($1::integer)::text
+           AND "eventType" = 'HERMES_OUTCOME_TERMINAL'
+         ORDER BY "createdAt" DESC, id DESC
+         LIMIT 1
+       ), candidate AS (
+         SELECT g.id, g."userId" AS "userId", wo.id AS "workOrderId", terminal.id AS "terminalId"
+         FROM goal g
+         JOIN work_order wo ON wo."userId" = g."userId" AND wo.ref = $2
+         JOIN latest_terminal terminal
+           ON terminal.metadata->>'result' = 'FAILED_TERMINAL'
+          AND terminal.metadata->>'nextState' = $3
+         WHERE g.id = $1::integer AND g.status = 'dismissed'
+       ), exact_merge AS (
+         SELECT candidate.*, merged.id AS "mergeEventId"
+         FROM candidate
+         JOIN governance_event merged
+           ON merged."entityType" = 'work_order'
+          AND merged."entityId"::text = candidate."workOrderId"::text
+          AND merged."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+          AND merged.metadata->>'checkpointState' = 'PR_MERGED'
+          AND merged.metadata->>'prNumber' = ($4::integer)::text
+          AND merged.metadata->>'headRefOid' = $5
+          AND merged.metadata->>'mergeSha' = $6
+          AND merged.id > candidate."terminalId"
+       )
+       UPDATE goal g SET status = 'converted', "updatedAt" = NOW()
+       FROM exact_merge exact
+       WHERE g.id = exact.id
+       RETURNING g.id, exact."userId", exact."workOrderId", exact."mergeEventId"`,
+      [outcomeId, ref, REVIEW_REMEDIATION_EXHAUSTED, prNumber, reviewedHeadSha, mergeSha],
+    )
+    const row = recovered?.rows?.[0]
+    if (!row) {
+      const prior = await runQuery(
+        `SELECT EXISTS (
+           SELECT 1 FROM goal g
+           JOIN governance_event recovered
+             ON recovered."entityType" = 'goal' AND recovered."entityId"::text = g.id::text
+            AND recovered."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERED'
+            AND recovered.metadata->>'idempotencyKey' = $2
+           WHERE g.id = $1::integer AND g.status = 'converted'
+         ) AS recovered`,
+        [outcomeId, idempotencyKey],
+      )
+      const alreadyRecovered = prior?.rows?.[0]?.recovered === true
+      await runQuery(alreadyRecovered ? "COMMIT" : "ROLLBACK")
+      return alreadyRecovered
+    }
+    await runQuery(
+      `UPDATE work_order
+       SET status = 'closed', result = 'PASS', "commitRef" = $2,
+         evidence = ARRAY(
+           SELECT DISTINCT item
+           FROM unnest(COALESCE(evidence, ARRAY[]::text[]) || $3::text[]) item
+           ORDER BY item
+         ),
+         "closedAt" = COALESCE("closedAt", NOW()), "updatedAt" = NOW()
+       WHERE id = $1`,
+      [row.workOrderId, mergeSha, [
+        `pull-request:#${prNumber}`, `reviewed-head:${reviewedHeadSha}`, `merge:${mergeSha}`,
+      ]],
+    )
+    await runQuery(
+      `INSERT INTO governance_event
+         ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       VALUES ($1, 'HERMES_OUTCOME_REVIEW_RECOVERED', 'goal', $2,
+         'hermes-codex-bridge', $3, $4::jsonb)`,
+      [row.userId, String(outcomeId), `Recovered exact reviewed and merged PR #${prNumber}`,
+        JSON.stringify({ idempotencyKey, workOrderRef: ref, prNumber, reviewedHeadSha, mergeSha })],
+    )
+    await runQuery("COMMIT")
+    return true
+  } catch (error) {
+    if (runQuery) {
+      try { await runQuery("ROLLBACK") } catch {}
+    }
+    throw error
+  } finally {
+    client?.release()
+    if (pool) await pool.end()
+  }
+}
+
+export const persistOutcomeRuntimeProjection = projectOutcomeRuntimeCheckpoint
+export const recoverReviewRemediationOutcome = recoverReviewedOutcome
 export const fetchNextEligibleOutcome = selectNextOutcome
 export const readNextOutcome = selectNextOutcome
