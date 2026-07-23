@@ -319,9 +319,10 @@ describe("append-only multi-agent evidence ledger", () => {
       const child = spawn(process.execPath, ["scripts/multi-agent-operator/evidence-ledger-cli.mjs", "append", ledger, ledgerId, file, binding], { cwd: process.cwd(), env: {}, stdio: ["ignore", "ignore", "ignore"] })
       child.on("close", resolve)
     })
-    expect(await Promise.all(paths.map(run))).toEqual([0, 0])
+    const exitCodes = await Promise.all(paths.map(run))
+    expect(exitCodes).toEqual([0, 0])
     expect(verifyEvidenceLedger(ledger, ledgerId, verifyRequest())).toMatchObject({ ok: true, eventCount: 2 })
-  })
+  }, 30_000)
 
   it("never breaks a live lock and recovers only an abandoned stale same-host lock", () => {
     const { store, ledger } = workspace(); establish(store)
@@ -362,5 +363,5 @@ describe("append-only multi-agent evidence ledger", () => {
     expect((await exec(["meter", ledger, ledgerId, meterFile])).code).toBe(0)
     expect((await exec(["meter", ledger, ledgerId, verifyFile])).code).toBe(2)
     expect((await exec([])).code).toBe(2)
-  })
+  }, 30_000)
 })

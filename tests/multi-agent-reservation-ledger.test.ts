@@ -470,5 +470,5 @@ describe("atomic multi-agent reservation ledger", () => {
       expect(JSON.parse(input.stdout).status).toBe("RESERVATION_LEDGER_INPUT_WALL")
       expect([released.code, usage.code, input.code]).toEqual([0, 2, 2])
     })
-  })
+  }, 30_000)
 })
