@@ -139,6 +139,107 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.selectOutcome).not.toHaveBeenCalled()
   })
 
+  it("adopts a durable reviewed-merge recovery before queue selection after restart", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    value.state.initialize()
+    const lease = value.state.acquireLease({
+      idempotencyKey: "review-recovery-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: {
+        outcome,
+        branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "hermes-goal-77-77"),
+        baseSha: "a".repeat(40),
+        headRefOid: "c".repeat(40),
+        prNumber: 500,
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "review-recovery-terminal",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "FAILED_TERMINAL",
+      detail: "REVIEW_REMEDIATION_EXHAUSTED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "review-recovery-release",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+    })
+    value.state.reopenReviewRemediationExhausted({
+      idempotencyKey: "review-recovery-reopen",
+      outcomeId: "77",
+      expectedFencingToken: lease.fencingToken,
+      prNumber: 500,
+      headRefOid: "c".repeat(40),
+      mergeSha: "b".repeat(40),
+      proofDigest: "d".repeat(64),
+    })
+    value.lifecycle.inspectPullRequest.mockResolvedValue({
+      state: "MERGED",
+      baseRefName: "main",
+      isDraft: false,
+      checksGreen: true,
+      reviewed: true,
+      unresolvedThreadCount: 0,
+      headRefOid: "c".repeat(40),
+      mergeCommit: { oid: "b".repeat(40) },
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "77", prNumber: 500,
+    })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"]).toMatchObject({
+      fencingToken: lease.fencingToken + 1,
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "COMPLETE" },
+    })
+  })
+
+  it("fails closed when an active execution has no exact outcome snapshot", async () => {
+    const value = fixture()
+    value.state.initialize()
+    value.state.acquireLease({
+      idempotencyKey: "missing-outcome-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: { branch: "codex/hermes-goal-77-77" },
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_EXECUTION_STATE_WALL",
+    })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+  })
+
+  it("rejects a requested outcome that conflicts with a durable active execution", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    value.state.initialize()
+    value.state.acquireLease({
+      idempotencyKey: "conflicting-outcome-acquire",
+      outcomeId: "77",
+      holderId: "active-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome },
+    })
+
+    await expect(value.orchestrator.cycle({
+      outcome: { ...outcome, id: 88, ref: "GOAL-0088" },
+    })).rejects.toMatchObject({ code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+  })
+
   it("dispatches a standing-authorized R0/R1 outcome and merges only after independent scope verification", async () => {
     const value = fixture()
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({

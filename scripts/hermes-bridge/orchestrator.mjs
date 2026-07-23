@@ -431,15 +431,33 @@ export function createHermesOrchestrator(options = {}) {
     const unfinished = Object.values(initialized.executions).filter((execution) => execution?.lease?.status === "ACTIVE")
     if (unfinished.length > 1) throw Object.assign(new Error("Multiple unfinished executions found"), { code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
     const pendingExecution = unfinished[0] ?? null
+    const recoveredExecutions = Object.values(initialized.executions).filter((execution) => (
+      execution?.lease?.status === "ABANDONED"
+      && execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
+      && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED"
+    ))
+    if (recoveredExecutions.length > 1 || (pendingExecution && recoveredExecutions.length > 0)) {
+      throw Object.assign(new Error("Multiple recoverable executions found"), {
+        code: "HERMES_EXECUTION_CONCURRENCY_WALL",
+      })
+    }
+    const durableExecution = pendingExecution ?? recoveredExecutions[0] ?? null
+    const durableOutcome = durableExecution?.metadata?.outcome ?? null
+    if (durableExecution && (!durableOutcome
+      || String(durableOutcome.id) !== String(durableExecution.outcomeId))) {
+      throw Object.assign(new Error("Durable execution is missing its exact outcome"), {
+        code: "HERMES_EXECUTION_STATE_WALL",
+      })
+    }
     const requestedOutcome = options.outcome ?? null
-    if (requestedOutcome && pendingExecution
-      && String(requestedOutcome.id) !== String(pendingExecution.outcomeId)) {
+    if (requestedOutcome && durableExecution
+      && String(requestedOutcome.id) !== String(durableExecution.outcomeId)) {
       throw Object.assign(new Error("Requested outcome conflicts with the active execution"), {
         code: "HERMES_EXECUTION_CONCURRENCY_WALL",
       })
     }
     const notBefore = readControl(notBeforePath, now().toISOString())
-    const outcome = pendingExecution?.metadata?.outcome ?? requestedOutcome ?? await selectOutcome({
+    const outcome = durableOutcome ?? requestedOutcome ?? await selectOutcome({
       enabled: true, killSwitch: false, standingAuthority: true, notBefore,
     })
     if (!outcome) return { result: "NO_ELIGIBLE_OUTCOME" }
@@ -454,7 +472,7 @@ export function createHermesOrchestrator(options = {}) {
     if (!decision.allowed) return { result: "POLICY_WALL", reasonCode: decision.reasonCode }
 
     const outcomeId = String(outcome.id)
-    const current = pendingExecution ?? state.read().executions[outcomeId]
+    const current = durableExecution ?? state.read().executions[outcomeId]
     if (current?.lease?.status === "RELEASED") return { result: "ALREADY_FINALIZED", outcomeId }
 
     let lease
