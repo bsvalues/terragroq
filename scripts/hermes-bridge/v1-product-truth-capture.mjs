@@ -125,6 +125,17 @@ async function readPersistedTruth(client, workOrderRef) {
   }
 }
 
+export async function captureProductTruthEvidence(connectionString, workOrderRef) {
+  if (!connectionString) throw new Error("DATABASE_URL_REQUIRED")
+  const client = new pg.Client({ connectionString })
+  await client.connect()
+  try {
+    return buildProductTruthEvidence(await readPersistedTruth(client, workOrderRef))
+  } finally {
+    await client.end()
+  }
+}
+
 function writeJson(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   const temporary = `${filePath}.${process.pid}.tmp`
@@ -139,27 +150,19 @@ async function main() {
   const options = parseArgs(process.argv.slice(2))
   const connectionString = process.env.DATABASE_URL
   if (!connectionString) throw new Error("DATABASE_URL_REQUIRED")
-  const client = new pg.Client({ connectionString })
-  await client.connect()
-  try {
-    const evidence = buildProductTruthEvidence(
-      await readPersistedTruth(client, options.workOrderRef),
-    )
-    const observedAt = new Date().toISOString()
-    writeJson(options.output, {
-      schemaVersion: 1,
-      issueNumber: ISSUE_NUMBER,
-      acceptanceCriterion: "AC-11",
-      kind: options.kind,
-      proofClass: "LIVE",
-      observedAt,
-      sourceRevision: options.revision,
-      status: "PASS",
-      evidence,
-    })
-  } finally {
-    await client.end()
-  }
+  const evidence = await captureProductTruthEvidence(connectionString, options.workOrderRef)
+  const observedAt = new Date().toISOString()
+  writeJson(options.output, {
+    schemaVersion: 1,
+    issueNumber: ISSUE_NUMBER,
+    acceptanceCriterion: "AC-11",
+    kind: options.kind,
+    proofClass: "LIVE",
+    observedAt,
+    sourceRevision: options.revision,
+    status: "PASS",
+    evidence,
+  })
 }
 
 if (path.resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
