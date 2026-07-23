@@ -58,6 +58,8 @@ describe("runtime trace panel contract", () => {
         id: "GEV-12",
         eventType: RUNTIME_FAILURE_EVENT,
         evidenceDigest: "b".repeat(64),
+        state: "RETRYABLE_WALL",
+        failureClass: "TRANSIENT_RUNTIME_FAILURE",
         provenance: expect.objectContaining({
           sourceCheckpoint: "hermes-outcome:7:attempt:1:checkpoint:4",
         }),
@@ -66,6 +68,7 @@ describe("runtime trace panel contract", () => {
         id: "GEV-11",
         eventType: RUNTIME_CHECKPOINT_EVENT,
         evidenceDigest: "a".repeat(64),
+        state: "HOST_VALIDATION_PASSED",
       }),
     ])
   })

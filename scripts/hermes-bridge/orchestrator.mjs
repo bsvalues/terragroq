@@ -487,13 +487,6 @@ export function createHermesOrchestrator(options = {}) {
     const initialized = state.initialize()
     if (initialized.killSwitch.active) return { result: "KILL_SWITCH_ACTIVE" }
     assertOwnerTouchCountersZero(initialized)
-    for (const execution of Object.values(initialized.executions)) {
-      if (execution?.metadata?.outcome
-        && String(execution.metadata.outcome.id) === String(execution.outcomeId)) {
-        await projectCurrentExecution(execution.outcomeId)
-        await projectCurrentLease(execution.outcomeId)
-      }
-    }
     const unfinished = Object.values(initialized.executions).filter((execution) => execution?.lease?.status === "ACTIVE")
     if (unfinished.length > 1) throw Object.assign(new Error("Multiple unfinished executions found"), { code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
     const pendingExecution = unfinished[0] ?? null
@@ -521,6 +514,13 @@ export function createHermesOrchestrator(options = {}) {
       throw Object.assign(new Error("Requested outcome conflicts with the active execution"), {
         code: "HERMES_EXECUTION_CONCURRENCY_WALL",
       })
+    }
+    for (const execution of Object.values(initialized.executions)) {
+      if (execution?.metadata?.outcome
+        && String(execution.metadata.outcome.id) === String(execution.outcomeId)) {
+        await projectCurrentExecution(execution.outcomeId)
+        await projectCurrentLease(execution.outcomeId)
+      }
     }
     const notBefore = readControl(notBeforePath, now().toISOString())
     const outcome = durableOutcome ?? requestedOutcome ?? await selectOutcome({

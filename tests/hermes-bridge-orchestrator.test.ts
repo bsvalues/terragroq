@@ -245,6 +245,34 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.selectOutcome).not.toHaveBeenCalled()
   })
 
+  it("fails closed before projecting corrupt multi-active execution state", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    value.state.initialize()
+    value.state.acquireLease({
+      idempotencyKey: "first-active-acquire",
+      outcomeId: "77",
+      holderId: "first-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome },
+    })
+    value.state.acquireLease({
+      idempotencyKey: "second-active-acquire",
+      outcomeId: "88",
+      holderId: "second-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome: { ...outcome, id: 88, ref: "GOAL-0088" } },
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_EXECUTION_CONCURRENCY_WALL",
+    })
+    expect(value.projectCheckpoint).not.toHaveBeenCalled()
+    expect(value.projectLease).not.toHaveBeenCalled()
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+  })
+
   it("dispatches a standing-authorized R0/R1 outcome and merges only after independent scope verification", async () => {
     const value = fixture()
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
