@@ -1,6 +1,9 @@
-import { ClipboardCheck, Clock3, FileText, GitBranch, ShieldCheck } from "lucide-react"
+import { ClipboardCheck, Clock3, FileText, GitBranch, ShieldCheck, TriangleAlert } from "lucide-react"
 import { StatusBadge } from "@/components/status-badge"
-import { summarizeRuntimeEvidence, type RuntimeEvidence } from "./runtime-evidence"
+import {
+  summarizeRuntimeEvidence,
+  type RuntimeEvidenceHistoryProjection,
+} from "./runtime-evidence"
 
 function formatHead(head?: string | null) {
   return head ? head.slice(0, 7) : "not recorded"
@@ -15,7 +18,11 @@ function formatTimestamp(date: Date) {
   }).format(date)
 }
 
-export function RuntimeEvidencePanel({ records }: { records: RuntimeEvidence[] }) {
+export function RuntimeEvidencePanel({
+  records,
+  limit,
+  truncated,
+}: RuntimeEvidenceHistoryProjection) {
   const summary = summarizeRuntimeEvidence(records)
   const latest = summary.latest
 
@@ -35,10 +42,46 @@ export function RuntimeEvidencePanel({ records }: { records: RuntimeEvidence[] }
           {latest ? <StatusBadge value={latest.result.toLowerCase()} label={`Latest: ${latest.result}`} /> : null}
         </div>
 
+        <div
+          className={`rounded-md border p-3 ${
+            truncated
+              ? "border-warning/30 bg-warning/10"
+              : "border-success/30 bg-success/10"
+          }`}
+          role="status"
+        >
+          <div className="flex items-start gap-2">
+            {truncated ? (
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
+            ) : (
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden />
+            )}
+            <div>
+              <p className="text-sm font-medium">
+                {truncated ? "Bounded history window reached" : "Complete persisted history"}
+              </p>
+              {truncated ? (
+                <>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    Earlier persisted evidence may be omitted.
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    Only the latest {limit} records feed the totals and timeline below.
+                  </p>
+                </>
+              ) : (
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  All persisted evidence is included in the totals and timeline below.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
         {latest ? (
           <>
             <div className="grid gap-3 md:grid-cols-4">
-              <EvidenceMetric label="Records" value={String(summary.total)} />
+              <EvidenceMetric label="Records shown" value={String(summary.total)} />
               <EvidenceMetric label="Passed" value={String(summary.passCount)} tone="success" />
               <EvidenceMetric label="Validators" value={String(summary.validatorCount)} />
               <EvidenceMetric label="Files" value={String(summary.changedFileCount)} />
@@ -74,7 +117,7 @@ export function RuntimeEvidencePanel({ records }: { records: RuntimeEvidence[] }
                 </h3>
               </div>
               <div className="divide-y divide-border">
-                {summary.timeline.slice(0, 5).map((record) => (
+                {summary.timeline.map((record) => (
                   <div key={`${record.ref}-${record.createdAt.toISOString()}`} className="grid gap-2 p-3 md:grid-cols-[9rem_1fr]">
                     <div className="flex items-center gap-2">
                       <Clock3 className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
