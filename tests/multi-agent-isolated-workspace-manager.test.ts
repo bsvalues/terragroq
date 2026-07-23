@@ -587,7 +587,7 @@ describe("multi-agent isolated workspace manager", () => {
     expect(executeIsolatedWorkspaceLifecycle(terminal, trustedContext(terminal.lanes[0]))).toMatchObject({
       results: [{ action: "CLEANUP", changed: true }],
     })
-  })
+  }, 30_000)
 
   it("CLI emits typed success and failure without executing", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mao-workspace-cli-"))

@@ -12,11 +12,11 @@ export default async function WorkOrdersPage() {
     <>
       <PageHeader
         title="Work Orders"
-        description="Primary Operator work control. /goal defines intent, /loop governs progress, Work Orders hold authority boundaries, and Evidence proves reality."
+        description="See what is moving, what explicitly failed, and the next governed action Hermes is expected to take from recorded Work Order state."
       />
       <div className="flex flex-col gap-6 p-6">
-        <WorkOrdersCommandPanel orders={orders} />
         <ActiveWorkQueuePanel orders={orders} />
+        <WorkOrdersCommandPanel orders={orders} />
         <WoeDetailSurfacePanel />
         <CompletionReportPanel orders={orders} />
         <WorkOrdersView initial={orders} />
