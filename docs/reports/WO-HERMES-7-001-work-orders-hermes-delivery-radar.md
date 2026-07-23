@@ -65,17 +65,17 @@ A backup assurance lane was provider-unavailable at the Windows process-spawn bo
 The first Hermes native-host full-suite run rejected the handoff after four process-heavy tests failed under host contention:
 
 - three CLI/workspace tests exceeded Vitest's default five-second timeout;
-- one two-child evidence-ledger serialization attempt returned one transient nonzero child exit.
+- one two-child evidence-ledger serialization attempt returned one nonzero child exit.
 
 The next native-host run cleared those four cases and exposed one adjacent isolated-workspace rollback test that still used the five-second default. It now uses the same local process-test timeout precedent.
 
 The bounded remediation changes test execution tolerance only:
 
 - the five named process-heavy tests now have an explicit 30-second timeout, matching existing process-heavy suite precedent;
-- the concurrent evidence-ledger serialization test retries only the one child request in the observed Windows `[2, 0]` or `[0, 2]` exit pattern;
+- the concurrent evidence-ledger serialization test preserves both child exits exactly as observed;
 - no ledger, workspace, reservation, runtime, or production behavior changed by the test-harness correction.
 
-The test body is never retried. Only one Windows child exit is retried when exactly one child succeeds and exactly one returns the observed typed exit `2`. Both-child failures, other exit codes, non-Windows runs, and the final exit-code and ledger-integrity assertions receive no retry.
+The test body and child appends are never retried. Both child exit codes and the final ledger-integrity assertion remain directly observable, so a lock, no-clobber, head-conflict, or serialization regression cannot be converted into a passing serial retry.
 
 ### Remediation file review
 
@@ -83,23 +83,27 @@ A separate file-only review of the bounded remediation found no remaining issue:
 
 - all original assertions and child-process coverage remain intact;
 - timeout changes are local to the five reported process-heavy failures and use the suite's existing 30-second process-test precedent;
-- the single child retry is platform-bound, exit-pattern-bound, and cannot rerun or erase a failed ledger-integrity assertion;
+- concurrent child failures remain visible and cannot be replaced by a later serial append;
 - no skip, weakened expected value, global timeout, production mutation, or runtime behavior was introduced.
 
-Native execution remains deliberately unclaimed until Hermes reruns validation.
+The final exact-head remediation was validated after removing the child retry.
 
 ## Pull-request review remediation
 
 Two actionable review findings were accepted and corrected:
 
 - failed Work Orders now sort by `updatedAt`, rather than preferring an older terminal timestamp, with a five-row regression fixture proving a newly recorded terminal failure remains inside the four-row briefing;
-- the evidence-ledger test no longer retries the Vitest case. It can retry only the one Windows child request in the classified one-success/one-exit-2 pattern, after which the original exit-code and ledger-integrity assertions run exactly once.
+- the evidence-ledger test retries neither the Vitest case nor either child append; the original exit-code and ledger-integrity assertions run exactly once.
 
 Direct file review found no remaining issue in either remediation.
 
-## Validation handoff
+## Final validation
 
-The App Server task did not run native validators, Git, or GitHub commands. Hermes owns the focused Vitest run, lint, full test run, and production build after file handoff. Passing native execution validation is not claimed in this report.
+- `npx vitest run tests/active-work-queue.test.ts tests/multi-agent-evidence-ledger.test.ts tests/multi-agent-isolated-workspace-manager.test.ts tests/multi-agent-reservation-ledger.test.ts`: 4 files, 71 tests passed.
+- `npm run lint`: passed with no warnings or errors.
+- `npm test -- --run`: 214 files passed; 1,714 tests passed and 2 skipped.
+- `NEXT_PRIVATE_BUILD_WORKER=0 NEXT_TELEMETRY_DISABLED=1 npm run build`: passed after removing only stale generated `.next` output and restoring the lockfile-pinned validation dependencies.
+- `git diff --check`: passed.
 
 ## Safety
 

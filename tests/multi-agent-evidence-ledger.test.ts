@@ -320,18 +320,6 @@ describe("append-only multi-agent evidence ledger", () => {
       child.on("close", resolve)
     })
     const exitCodes = await Promise.all(paths.map(run))
-    const retryableExitIndex =
-      process.platform === "win32"
-      && exitCodes.length === 2
-      && exitCodes.filter((code) => code === 2).length === 1
-      && exitCodes.filter((code) => code === 0).length === 1
-        ? exitCodes.indexOf(2)
-        : -1
-
-    if (retryableExitIndex >= 0) {
-      exitCodes[retryableExitIndex] = await run(paths[retryableExitIndex]!)
-    }
-
     expect(exitCodes).toEqual([0, 0])
     expect(verifyEvidenceLedger(ledger, ledgerId, verifyRequest())).toMatchObject({ ok: true, eventCount: 2 })
   }, 30_000)
