@@ -306,4 +306,34 @@ describe("persisted runtime execution truth", () => {
     })
     expect(projectRuntimeExecutionQuery(truth).completedAttempts[0].leaseStatus).toBe("RELEASED")
   })
+
+  it("classifies historical attempts by their own checkpoint instead of the final work-order status", () => {
+    const truth = buildRuntimeExecutionTruth(owner, [workOrder({
+      status: "closed",
+      result: "PASS",
+    })], [
+      checkpoint({
+        id: 41,
+        attempt: 1,
+        sequence: 3,
+        state: "RETRYABLE_WALL",
+        at: "2026-07-23T00:30:00.000Z",
+      }),
+      checkpoint({
+        id: 42,
+        attempt: 2,
+        sequence: 9,
+        state: "COMPLETE",
+        at: "2026-07-23T01:30:00.000Z",
+      }),
+    ])
+
+    const projected = projectRuntimeExecutionQuery(truth)
+    expect(projected.activeAttempts).toEqual([
+      expect.objectContaining({ attempt: 1, checkpointState: "RETRYABLE_WALL" }),
+    ])
+    expect(projected.completedAttempts).toEqual([
+      expect.objectContaining({ attempt: 2, checkpointState: "COMPLETE" }),
+    ])
+  })
 })

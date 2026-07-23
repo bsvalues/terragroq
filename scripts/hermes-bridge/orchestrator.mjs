@@ -714,7 +714,7 @@ export function createHermesOrchestrator(options = {}) {
 
     const client = clientFactory(record.worktreePath)
     let renewal
-    let renewalProjection = Promise.resolve()
+    const renewalProjections = new Set()
     let renewalFailure = null
     const renewLeaseAndProject = () => {
       if (renewalFailure) return
@@ -723,12 +723,14 @@ export function createHermesOrchestrator(options = {}) {
           idempotencyKey: `${outcomeId}:renew:${Date.now()}`,
           outcomeId, holderId, fencingToken: lease.fencingToken, leaseDurationMs: LEASE_DURATION_MS,
         })
-        renewalProjection = projectCurrentLease(outcomeId).catch((error) => {
+        const projection = projectCurrentLease(outcomeId).catch((error) => {
           renewalFailure = Object.assign(
             new Error("Renewed lease could not be projected to persisted runtime truth"),
             { code: "HERMES_RUNTIME_PROJECTION_WALL", cause: error },
           )
         })
+        renewalProjections.add(projection)
+        void projection.then(() => renewalProjections.delete(projection))
       } catch (error) {
         renewalFailure = Object.assign(
           new Error("Resident lease renewal failed"),
@@ -737,7 +739,9 @@ export function createHermesOrchestrator(options = {}) {
       }
     }
     const assertLeaseProjectionHealthy = async () => {
-      await renewalProjection
+      while (renewalProjections.size > 0) {
+        await Promise.all([...renewalProjections])
+      }
       if (renewalFailure) throw renewalFailure
     }
     const quiesceLeaseRenewal = async () => {

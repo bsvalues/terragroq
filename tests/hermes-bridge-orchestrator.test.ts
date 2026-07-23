@@ -347,6 +347,39 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.lifecycle.mergePullRequest).not.toHaveBeenCalled()
   })
 
+  it("retains an earlier failed projection when a later renewal projects first", async () => {
+    const value = fixture(undefined, { leaseRenewalIntervalMs: 5 })
+    value.projectLease
+      .mockResolvedValueOnce({ workOrderId: 77 })
+      .mockImplementationOnce(() => new Promise((_, reject) => {
+        setTimeout(() => reject(
+          Object.assign(new Error("earlier projection failed"), {
+            code: "DATABASE_UNAVAILABLE",
+          }),
+        ), 20)
+      }))
+      .mockResolvedValue({ workOrderId: 77 })
+    value.client.runTurn.mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      return {
+        threadId: "thread-77", turnId: "turn-77", status: "completed",
+        finalText: JSON.stringify({
+          result: "READY_FOR_VALIDATION", workOrder: "WO-HERMES-77-001",
+          branch: "codex/hermes-goal-77-77", commit: null, prUrl: null,
+          merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0,
+          ownerTouchCount: 0, blockedScopeCrossed: false,
+          nextState: "READY_FOR_HERMES_MERGE",
+        }),
+      }
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_RUNTIME_PROJECTION_WALL",
+    })
+    expect(value.lifecycle.runValidationCommands).not.toHaveBeenCalled()
+    expect(value.lifecycle.mergePullRequest).not.toHaveBeenCalled()
+  })
+
   it("quiesces and projects a final lease renewal before merge", async () => {
     const value = fixture(undefined, { leaseRenewalIntervalMs: 100 })
     value.lifecycle.mergePullRequest.mockImplementationOnce(async () => {

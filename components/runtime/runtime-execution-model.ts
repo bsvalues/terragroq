@@ -513,8 +513,11 @@ export function buildRuntimeExecutionTruth(
 function panelAttemptKind(
   attempt: RuntimeExecutionPanelAttempt,
 ): "active" | "terminal" | "completed" {
-  if (attempt.checkpointState === "COMPLETE" || attempt.status === "closed") return "completed"
-  if (attempt.checkpointState === "FAILED_TERMINAL" || attempt.status === "aborted") return "terminal"
+  if (attempt.checkpointState === "COMPLETE") return "completed"
+  if (attempt.checkpointState === "FAILED_TERMINAL") return "terminal"
+  if (attempt.checkpointState) return "active"
+  if (attempt.status === "closed") return "completed"
+  if (attempt.status === "aborted") return "terminal"
   return "active"
 }
 
