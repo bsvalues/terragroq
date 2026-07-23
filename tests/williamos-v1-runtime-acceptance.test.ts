@@ -8,6 +8,7 @@ import {
   AC_CATALOG,
   evaluateAcceptance,
   parseArgs,
+  probeJson,
   readExpectedInventory,
   validateEvidenceManifest,
   validateHostState,
@@ -260,6 +261,24 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
       capability: "local-nested-codex-adapter",
       classification: "EXCLUDED",
     })
+  })
+
+  it("evaluates endpoint freshness with a clock sampled after the response", async () => {
+    const responseTimestamp = "2026-07-23T20:00:01.000Z"
+    const result = await probeJson("http://localhost/api/health", {
+      fetchImpl: async () => new Response(JSON.stringify({
+        status: "ok",
+        timestamp: responseTimestamp,
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+      clock: () => Date.parse("2026-07-23T20:00:02.000Z"),
+      maxAgeMs: 60_000,
+      timestampField: "timestamp",
+    })
+
+    expect(result.ok).toBe(true)
   })
 
   it("accepts a fresh schema-valid host state with zero owner counters and released terminal leases", () => {

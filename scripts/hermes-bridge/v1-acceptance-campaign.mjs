@@ -640,7 +640,12 @@ function runUnitTests(repoRoot, runner = run) {
   return results
 }
 
-async function probeJson(url, { fetchImpl = fetch, now, maxAgeMs, timestampField }) {
+export async function probeJson(url, {
+  fetchImpl = fetch,
+  clock = () => Date.now(),
+  maxAgeMs,
+  timestampField,
+}) {
   if (!url) return failure("APP_URL_REQUIRED", "Set --app-url or WILLIAMOS_APP_URL.")
   try {
     const response = await fetchImpl(url, {
@@ -650,8 +655,9 @@ async function probeJson(url, { fetchImpl = fetch, now, maxAgeMs, timestampField
       cache: "no-store",
     })
     const body = await response.json()
+    const observedAt = clock()
     if (!response.ok) return failure("APP_ENDPOINT_UNHEALTHY", `${url}:HTTP_${response.status}`)
-    if (timestampField && !isFresh(body[timestampField], now, maxAgeMs)) {
+    if (timestampField && !isFresh(body[timestampField], observedAt, maxAgeMs)) {
       return failure("APP_ENDPOINT_EVIDENCE_STALE", url)
     }
     return success({ url, status: response.status, body })
@@ -763,10 +769,11 @@ export function evaluateAcceptance({
 }
 
 export async function runCampaign(options, dependencies = {}) {
+  const clock = dependencies.now ?? (() => Date.now())
   const repoRoot = dependencies.repoRoot ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
   const runner = dependencies.runner ?? run
   const unitResults = dependencies.unitResults ?? runUnitTests(repoRoot, runner)
-  const now = dependencies.now?.() ?? Date.now()
+  const now = clock()
   const expectedInventory = dependencies.expectedInventory ?? readExpectedInventory(repoRoot)
   const revisionProbe = runner("git", ["rev-parse", "HEAD"], { cwd: repoRoot })
   const currentRevision = revisionProbe.ok ? revisionProbe.stdout.trim() : null
@@ -798,14 +805,14 @@ export async function runCampaign(options, dependencies = {}) {
     : supervisorRead
   const healthResult = await probeJson(
     options.appUrl ? `${options.appUrl}/api/health` : null,
-    { fetchImpl: dependencies.fetchImpl, now, maxAgeMs: options.maxAgeMs, timestampField: "timestamp" },
+    { fetchImpl: dependencies.fetchImpl, clock, maxAgeMs: options.maxAgeMs, timestampField: "timestamp" },
   )
   if (healthResult.ok && healthResult.detail.body.status !== "ok") {
     Object.assign(healthResult, failure("APP_HEALTH_STATUS_NOT_OK", healthResult.detail.url))
   }
   const runtimeStatusResult = await probeJson(
     options.appUrl ? `${options.appUrl}/api/local/runtime/status` : null,
-    { fetchImpl: dependencies.fetchImpl, now, maxAgeMs: options.maxAgeMs, timestampField: "checkedAt" },
+    { fetchImpl: dependencies.fetchImpl, clock, maxAgeMs: options.maxAgeMs, timestampField: "checkedAt" },
   )
   if (runtimeStatusResult.ok && (
     runtimeStatusResult.detail.body.ok !== true
