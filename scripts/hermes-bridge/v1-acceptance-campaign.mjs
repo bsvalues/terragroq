@@ -345,11 +345,13 @@ export function validateHostState(state, { now = Date.now(), maxAgeMs = DEFAULT_
   }
   if (!state.killSwitch || typeof state.killSwitch.active !== "boolean"
     || ![null, "string"].includes(state.killSwitch.reason === null ? null : typeof state.killSwitch.reason)
-    || (state.killSwitch.updatedAt !== null && !timestamp(state.killSwitch.updatedAt))) {
+    || (state.killSwitch.updatedAt !== null
+      && (!timestamp(state.killSwitch.updatedAt) || timestamp(state.killSwitch.updatedAt) > now))) {
     return failure("HOST_KILL_SWITCH_SCHEMA_INVALID", "killSwitch does not match the state-store contract.")
   }
-  if (!isFresh(state.updatedAt, now, maxAgeMs)) {
-    return failure("HOST_STATE_STALE", "Host state updatedAt is missing, future-dated, or stale.")
+  const stateUpdatedAt = timestamp(state.updatedAt)
+  if (stateUpdatedAt === null || stateUpdatedAt > now) {
+    return failure("HOST_STATE_TIMESTAMP_INVALID", "Host state updatedAt is missing, invalid, or future-dated.")
   }
   const counterKeys = Object.keys(state.ownerTouchCounters).sort()
   if (JSON.stringify(counterKeys) !== JSON.stringify([...OWNER_COUNTERS].sort())) {
@@ -362,18 +364,20 @@ export function validateHostState(state, { now = Date.now(), maxAgeMs = DEFAULT_
 
   const fencingTokens = new Set()
   const leases = []
-  for (const [outcomeId, execution] of Object.entries(state.executions)) {
+  const executionEntries = Object.entries(state.executions)
+  for (const [outcomeId, execution] of executionEntries) {
     if (!execution || execution.outcomeId !== outcomeId
       || !Number.isSafeInteger(execution.fencingToken) || execution.fencingToken < 1
       || fencingTokens.has(execution.fencingToken)
       || !execution.lease || !["ACTIVE", "RELEASED", "ABANDONED", "DEFERRED"].includes(execution.lease.status)
       || !execution.checkpoint || !Number.isSafeInteger(execution.checkpoint.sequence)
       || execution.checkpoint.sequence < 0 || typeof execution.checkpoint.state !== "string"
-      || !timestamp(execution.checkpoint.recordedAt)
+      || !timestamp(execution.checkpoint.recordedAt) || timestamp(execution.checkpoint.recordedAt) > now
       || (execution.checkpoint.detail !== null && typeof execution.checkpoint.detail !== "string")
       || !execution.metadata || typeof execution.metadata !== "object" || Array.isArray(execution.metadata)
       || typeof execution.lease.holderId !== "string" || !execution.lease.holderId
-      || !timestamp(execution.lease.acquiredAt) || !timestamp(execution.lease.expiresAt)) {
+      || !timestamp(execution.lease.acquiredAt) || timestamp(execution.lease.acquiredAt) > now
+      || !timestamp(execution.lease.expiresAt)) {
       return failure("LEASE_OR_CHECKPOINT_SCHEMA_INVALID", outcomeId)
     }
     fencingTokens.add(execution.fencingToken)
@@ -382,15 +386,18 @@ export function validateHostState(state, { now = Date.now(), maxAgeMs = DEFAULT_
         return failure("ACTIVE_LEASE_INVALID_OR_STALE", outcomeId)
       }
     }
-    if (execution.lease.status === "RELEASED" && !timestamp(execution.lease.releasedAt)) {
+    if (execution.lease.status === "RELEASED"
+      && (!timestamp(execution.lease.releasedAt) || timestamp(execution.lease.releasedAt) > now)) {
       return failure("RELEASED_LEASE_SCHEMA_INVALID", outcomeId)
     }
     if (execution.lease.status === "ABANDONED"
-      && !timestamp(execution.lease.abandonedAt ?? execution.lease.recoveredAt)) {
+      && (!timestamp(execution.lease.abandonedAt ?? execution.lease.recoveredAt)
+        || timestamp(execution.lease.abandonedAt ?? execution.lease.recoveredAt) > now)) {
       return failure("ABANDONED_LEASE_SCHEMA_INVALID", outcomeId)
     }
     if (execution.lease.status === "DEFERRED"
-      && (!timestamp(execution.lease.deferredAt) || execution.lease.deferReason !== "PROVIDER_UNAVAILABLE")) {
+      && (!timestamp(execution.lease.deferredAt) || timestamp(execution.lease.deferredAt) > now
+        || execution.lease.deferReason !== "PROVIDER_UNAVAILABLE")) {
       return failure("DEFERRED_LEASE_SCHEMA_INVALID", outcomeId)
     }
     if (["COMPLETE", "FAILED_TERMINAL"].includes(execution.checkpoint.state)
@@ -407,6 +414,14 @@ export function validateHostState(state, { now = Date.now(), maxAgeMs = DEFAULT_
   }
   if ([...fencingTokens].some((token) => token >= state.nextFencingToken)) {
     return failure("FENCING_SEQUENCE_INVALID", "nextFencingToken must exceed all issued tokens.")
+  }
+  const historicalTerminalState = executionEntries.length > 0
+    && executionEntries.every(([, execution]) => (
+      ["COMPLETE", "FAILED_TERMINAL"].includes(execution.checkpoint.state)
+      && execution.lease.status === "RELEASED"
+    ))
+  if (!historicalTerminalState && !isFresh(state.updatedAt, now, maxAgeMs)) {
+    return failure("HOST_STATE_STALE", "Nonterminal host state is stale.")
   }
   return success({ revision: state.revision, ownerTouchCounters: state.ownerTouchCounters, leases })
 }

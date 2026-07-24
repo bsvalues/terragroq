@@ -233,10 +233,32 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
 
   it.each([
     ["PR_MERGED", "review", null],
+    ["OWNER_DECISION_REQUIRED", "blocked", "PARTIAL"],
     ["FAILED_TERMINAL", "blocked", "FAIL"],
     ["COMPLETE", "closed", "PASS"],
   ])("projects %s to truthful Work Order status/result", async (state, status, result) => {
-    const query = vi.fn()
+    const eventMetadata = {
+      idempotencyKey: "hermes-outcome:4:attempt:1:checkpoint:3",
+      outcomeId: 4,
+      workOrderRef: "WO-HERMES-OUTCOME-4",
+      attempt: 1,
+      checkpointSequence: 3,
+      checkpointState: state,
+      checkpointDetail: null,
+    }
+    const contentHash = createHash("sha256").update(JSON.stringify(eventMetadata)).digest("hex")
+    const persistedEvidence = {
+      result,
+      repo: "bsvalues/terragroq",
+      head: null,
+      notes: "Persisted Hermes runtime evidence for hermes-outcome:4:attempt:1:checkpoint:3.",
+      contentHash,
+    }
+    const query = vi.fn(async (sql) => (
+      /SELECT result, repo, head, notes/.test(sql)
+        ? { rows: [persistedEvidence] }
+        : { rows: [] }
+    ))
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
@@ -253,6 +275,114 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       const evalCall = query.mock.calls.find(([sql]) => /HERMES_RUNTIME_FAILURE_EVAL/.test(sql))
       expect(evalCall?.[1]?.[3]).toContain('"failureClass":"TERMINAL_RUNTIME_FAILURE"')
     }
+    if (["FAILED_TERMINAL", "COMPLETE"].includes(state)) {
+      const evidenceCall = query.mock.calls.find(([sql]) => /INSERT INTO evidence_record/.test(sql))
+      expect(evidenceCall?.[1]).toEqual([
+        "owner",
+        "EV-HERMES-4-1-3",
+        42,
+        result,
+        null,
+        "Persisted Hermes runtime evidence for hermes-outcome:4:attempt:1:checkpoint:3.",
+        expect.stringMatching(/^[0-9a-f]{64}$/),
+      ])
+    } else {
+      expect(query.mock.calls.some(([sql]) => /INSERT INTO evidence_record/.test(sql))).toBe(false)
+    }
+  })
+
+  it("backfills one deterministic evidence record when a terminal checkpoint is replayed", async () => {
+    const eventMetadata = {
+      idempotencyKey: "hermes-outcome:4:attempt:1:checkpoint:3",
+      outcomeId: 4,
+      workOrderRef: "WO-HERMES-OUTCOME-4",
+      attempt: 1,
+      checkpointSequence: 3,
+      checkpointState: "COMPLETE",
+      checkpointDetail: null,
+      mergeSha: "c".repeat(40),
+    }
+    const payloadDigest = createHash("sha256").update(JSON.stringify(eventMetadata)).digest("hex")
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 42, userId: "owner" }] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ payloadDigest }] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({
+        rows: [{
+          result: "PASS",
+          repo: "bsvalues/terragroq",
+          head: "c".repeat(40),
+          notes: "Persisted Hermes runtime evidence for hermes-outcome:4:attempt:1:checkpoint:3.",
+          contentHash: payloadDigest,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpoint({
+      query,
+      outcomeId: 4,
+      attempt: 1,
+      checkpoint: {
+        sequence: 3,
+        state: "COMPLETE",
+        metadata: { mergeSha: "c".repeat(40) },
+      },
+    })).resolves.toMatchObject({ status: "closed", result: "PASS" })
+
+    expect(query.mock.calls.some(([sql]) => /UPDATE work_order/.test(sql))).toBe(false)
+    const evidenceCall = query.mock.calls.find(([sql]) => /INSERT INTO evidence_record/.test(sql))
+    expect(evidenceCall?.[1]).toEqual([
+      "owner",
+      "EV-HERMES-4-1-3",
+      42,
+      "PASS",
+      "c".repeat(40),
+      "Persisted Hermes runtime evidence for hermes-outcome:4:attempt:1:checkpoint:3.",
+      payloadDigest,
+    ])
+  })
+
+  it("rejects a terminal evidence replay that conflicts with the persisted row", async () => {
+    const eventMetadata = {
+      idempotencyKey: "hermes-outcome:4:attempt:1:checkpoint:3",
+      outcomeId: 4,
+      workOrderRef: "WO-HERMES-OUTCOME-4",
+      attempt: 1,
+      checkpointSequence: 3,
+      checkpointState: "COMPLETE",
+      checkpointDetail: null,
+    }
+    const payloadDigest = createHash("sha256").update(JSON.stringify(eventMetadata)).digest("hex")
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 42, userId: "owner" }] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ payloadDigest }] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({
+        rows: [{
+          result: "FAIL",
+          repo: "bsvalues/terragroq",
+          head: null,
+          notes: "conflicting evidence",
+          contentHash: "f".repeat(64),
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpoint({
+      query,
+      outcomeId: 4,
+      attempt: 1,
+      checkpoint: { sequence: 3, state: "COMPLETE" },
+    })).rejects.toMatchObject({ code: "OUTCOME_PROJECTION_EVIDENCE_CONFLICT" })
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
   })
 
   it("appends a secret-free idempotent runtime lease event", async () => {

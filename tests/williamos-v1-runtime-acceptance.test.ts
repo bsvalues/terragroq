@@ -294,10 +294,31 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
     ])
   })
 
-  it("fails closed on stale state, owner relay, duplicate fencing, and unreleased terminal work", () => {
-    const stale = hostState()
-    stale.updatedAt = "2026-07-23T16:00:00.000Z"
-    expect(validateHostState(stale, { now, maxAgeMs: 5 * 60 * 1000 }).code).toBe("HOST_STATE_STALE")
+  it("accepts historical terminal state but fails closed on invalid time, owner relay, duplicate fencing, and unreleased work", () => {
+    const historical = hostState()
+    historical.updatedAt = "2026-07-01T16:00:00.000Z"
+    expect(validateHostState(historical, { now, maxAgeMs: 5 * 60 * 1000 }).code).toBe("PASS")
+
+    const future = hostState()
+    future.updatedAt = "2026-07-23T18:00:01.000Z"
+    expect(validateHostState(future, { now }).code).toBe("HOST_STATE_TIMESTAMP_INVALID")
+
+    const malformed = hostState()
+    malformed.updatedAt = "not-a-timestamp"
+    expect(validateHostState(malformed, { now }).code).toBe("HOST_STATE_TIMESTAMP_INVALID")
+
+    const staleNonterminal = hostState()
+    staleNonterminal.updatedAt = "2026-07-01T16:00:00.000Z"
+    staleNonterminal.executions["outcome-1"].checkpoint.state = "REVIEW_PENDING"
+    expect(validateHostState(staleNonterminal, { now, maxAgeMs: 5 * 60 * 1000 }).code).toBe("HOST_STATE_STALE")
+
+    const futureCheckpoint = hostState()
+    futureCheckpoint.executions["outcome-1"].checkpoint.recordedAt = "2026-07-23T18:00:01.000Z"
+    expect(validateHostState(futureCheckpoint, { now }).code).toBe("LEASE_OR_CHECKPOINT_SCHEMA_INVALID")
+
+    const futureRelease = hostState()
+    futureRelease.executions["outcome-1"].lease.releasedAt = "2026-07-23T18:00:01.000Z"
+    expect(validateHostState(futureRelease, { now }).code).toBe("RELEASED_LEASE_SCHEMA_INVALID")
 
     const touched = hostState()
     touched.ownerTouchCounters.OWNER_ROUTINE_CONTACT_COUNT = 1

@@ -625,6 +625,10 @@ function projectionPayloadDigest(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex")
 }
 
+function terminalEvidenceRef(outcomeId, attempt, checkpointSequence) {
+  return `EV-HERMES-${outcomeId}-${attempt}-${checkpointSequence}`
+}
+
 function failureEvalForCheckpoint(checkpoint) {
   const state = checkpoint.state
   if (state === "FAILED_TERMINAL") {
@@ -818,6 +822,47 @@ export async function projectOutcomeRuntimeCheckpoint({
               detail: checkpoint.detail ?? null,
             })],
         )
+      }
+    }
+    if (["COMPLETE", "FAILED_TERMINAL"].includes(checkpoint.state)) {
+      const evidenceRef = terminalEvidenceRef(outcomeId, attempt, checkpoint.sequence)
+      const expectedEvidence = {
+        result: projection.result,
+        repo: "bsvalues/terragroq",
+        head: commitRef,
+        notes: `Persisted Hermes runtime evidence for ${idempotencyKey}.`,
+        contentHash: eventMetadata.payloadDigest,
+      }
+      await runQuery(
+        `INSERT INTO evidence_record
+           ("userId", ref, "workOrderId", result, repo, head, notes, "contentHash")
+         SELECT $1, $2, $3, $4, 'bsvalues/terragroq', $5, $6, $7
+         WHERE NOT EXISTS (
+           SELECT 1 FROM evidence_record prior
+           WHERE prior."userId" = $1 AND prior.ref = $2 AND prior."workOrderId" = $3
+         )`,
+        [
+          workOrder.userId,
+          evidenceRef,
+          workOrder.id,
+          expectedEvidence.result,
+          expectedEvidence.head,
+          expectedEvidence.notes,
+          expectedEvidence.contentHash,
+        ],
+      )
+      const persistedEvidence = await runQuery(
+        `SELECT result, repo, head, notes, "contentHash"
+         FROM evidence_record
+         WHERE "userId" = $1 AND ref = $2 AND "workOrderId" = $3
+         ORDER BY id`,
+        [workOrder.userId, evidenceRef, workOrder.id],
+      )
+      if (persistedEvidence?.rows?.length !== 1
+        || JSON.stringify(persistedEvidence.rows[0]) !== JSON.stringify(expectedEvidence)) {
+        throw Object.assign(new Error("Terminal evidence replay conflicts with persisted evidence"), {
+          code: "OUTCOME_PROJECTION_EVIDENCE_CONFLICT",
+        })
       }
     }
     await runQuery("COMMIT")
