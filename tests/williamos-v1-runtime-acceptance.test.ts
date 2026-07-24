@@ -317,19 +317,21 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
   })
 
   it("validates the resident supervisor independently from application health", () => {
+    const workspace = path.resolve("repo")
+    const supervisorPath = path.join(workspace, "scripts", "hermes-bridge", "supervisor.ps1")
     const state = {
       schemaVersion: 1,
       processId: 123,
       nonce: "nonce",
-      workspace: "C:\\repo",
-      supervisorPath: "C:\\repo\\scripts\\hermes-bridge\\supervisor.ps1",
+      workspace,
+      supervisorPath,
       hostMode: "INTERACTIVE_USER_RESIDENT",
       startedAt: fresh,
     }
     const posture = {
       now,
-      expectedWorkspace: "C:\\repo",
-      expectedSupervisorPath: "C:\\repo\\scripts\\hermes-bridge\\supervisor.ps1",
+      expectedWorkspace: workspace,
+      expectedSupervisorPath: supervisorPath,
     }
     let probedState: typeof state | null = null
     expect(validateSupervisorState(state, {
@@ -347,7 +349,7 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
     expect(validateSupervisorState(state, { ...posture, processProbe: () => true }).ok).toBe(true)
     expect(validateSupervisorState(state, {
       ...posture,
-      expectedWorkspace: "C:\\other",
+      expectedWorkspace: path.resolve("other"),
       processProbe: () => true,
     }).code).toBe("SUPERVISOR_POSTURE_MISMATCH")
   })
@@ -403,6 +405,53 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
       now,
       expectedInventory,
     }).code).toBe("LIVE_ARTIFACT_MISSING_OR_DIGEST_MISMATCH")
+  })
+
+  it("rejects AC-11 artifacts with empty persisted Evidence relations", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "v1-empty-evidence-"))
+    const scenarios = writeProofArtifacts(root)
+    const manifest = {
+      schemaVersion: 1,
+      issueNumber: 448,
+      observedAt: fresh,
+      scenarios,
+      inventory: [{
+        capability: "Runtime",
+        classification: "RUNTIME_PROVEN",
+        revision,
+        evidence: ["AC-12-v1-inventory.json"],
+      }],
+      githubPullRequests: [{
+        repo: "bsvalues/terragroq",
+        number: 449,
+        headSha: "a".repeat(40),
+        mergeSha: "b".repeat(40),
+      }],
+    }
+    const artifact = scenarios["AC-11"].artifacts[0]
+    const artifactPath = path.join(root, artifact.path)
+    const document = JSON.parse(fs.readFileSync(artifactPath, "utf8"))
+    document.evidence.evidenceRecordIds = []
+    document.evidence.evidenceWorkOrderIds = []
+    const identity = { ...document.evidence }
+    delete identity.consistencyDigest
+    delete identity.consistent
+    delete identity.querySource
+    delete identity.capturedBy
+    document.evidence.consistencyDigest = createHash("sha256")
+      .update(JSON.stringify(Object.fromEntries(Object.entries(identity).sort())))
+      .digest("hex")
+    fs.writeFileSync(artifactPath, `${JSON.stringify(document)}\n`)
+    fs.utimesSync(artifactPath, new Date(fresh), new Date(fresh))
+    artifact.sha256 = createHash("sha256").update(fs.readFileSync(artifactPath)).digest("hex")
+
+    expect(validateEvidenceManifest(manifest, {
+      manifestPath: path.join(root, "manifest.json"),
+      currentRevision: revision,
+      now,
+      maxAgeMs: 5 * 60 * 1000,
+      expectedInventory,
+    }).code).toBe("PROOF_ARTIFACT_CONTRACT_INVALID")
   })
 
   it("rejects LIVE claims for executable scenarios and stale revision inventory", () => {
