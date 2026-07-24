@@ -294,10 +294,102 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
     ])
   })
 
+  it("validates high-cardinality mutation histories without spreading an unbounded timestamp array", () => {
+    const state = hostState()
+    state.executions = Object.fromEntries(Array.from({ length: 50_000 }, (_, index) => {
+      const outcomeId = `outcome-${index + 1}`
+      const execution = structuredClone(state.executions["outcome-1"])
+      execution.outcomeId = outcomeId
+      execution.fencingToken = index + 1
+      return [outcomeId, execution]
+    }))
+    state.nextFencingToken = 50_001
+
+    expect(validateHostState(state, { now }).code).toBe("PASS")
+  })
+
   it("accepts historical terminal state but fails closed on invalid time, owner relay, duplicate fencing, and unreleased work", () => {
     const historical = hostState()
-    historical.updatedAt = "2026-07-01T16:00:00.000Z"
-    expect(validateHostState(historical, { now, maxAgeMs: 5 * 60 * 1000 }).code).toBe("PASS")
+    expect(validateHostState(historical, {
+      now: Date.parse("2026-07-24T18:00:00.000Z"),
+      maxAgeMs: 5 * 60 * 1000,
+    }).code).toBe("PASS")
+
+    const causalBoundary = hostState()
+    Object.assign(causalBoundary.killSwitch, { updatedAt: causalBoundary.updatedAt })
+    Object.assign(causalBoundary.executions["outcome-1"].lease, {
+      renewedAt: causalBoundary.updatedAt,
+    })
+    expect(validateHostState(causalBoundary, { now }).code).toBe("PASS")
+
+    const causalMutations = [
+      ["killSwitch.updatedAt", (state: ReturnType<typeof hostState>) => {
+        state.killSwitch.updatedAt = fresh
+      }],
+      ["checkpoint.recordedAt", (state: ReturnType<typeof hostState>) => {
+        state.executions["outcome-1"].checkpoint.recordedAt = fresh
+      }],
+      ["lease.acquiredAt", (state: ReturnType<typeof hostState>) => {
+        state.executions["outcome-1"].lease.acquiredAt = fresh
+      }],
+      ["lease.renewedAt", (state: ReturnType<typeof hostState>) => {
+        Object.assign(state.executions["outcome-1"].lease, { renewedAt: fresh })
+      }],
+      ["lease.releasedAt", (state: ReturnType<typeof hostState>) => {
+        state.executions["outcome-1"].lease.releasedAt = fresh
+      }],
+      ["lease.abandonedAt", (state: ReturnType<typeof hostState>) => {
+        Object.assign(state.executions["outcome-1"].lease, { abandonedAt: fresh })
+      }],
+      ["lease.recoveredAt", (state: ReturnType<typeof hostState>) => {
+        Object.assign(state.executions["outcome-1"].lease, { recoveredAt: fresh })
+      }],
+      ["lease.deferredAt", (state: ReturnType<typeof hostState>) => {
+        Object.assign(state.executions["outcome-1"].lease, { deferredAt: fresh })
+      }],
+      ["released lease.expiresAt", (state: ReturnType<typeof hostState>) => {
+        state.executions["outcome-1"].lease.expiresAt = fresh
+      }],
+      ["abandoned lease.expiresAt", (state: ReturnType<typeof hostState>) => {
+        state.executions["outcome-1"].checkpoint.state = "REVIEW_PENDING"
+        state.executions["outcome-1"].lease.status = "ABANDONED"
+        state.executions["outcome-1"].lease.expiresAt = fresh
+        Object.assign(state.executions["outcome-1"].lease, {
+          recoveredAt: "2026-07-23T17:58:00.000Z",
+        })
+      }],
+      ["multiple nested timestamps", (state: ReturnType<typeof hostState>) => {
+        state.executions["outcome-1"].checkpoint.recordedAt = "2026-07-23T17:59:30.000Z"
+        state.executions["outcome-1"].lease.acquiredAt = "2026-07-23T17:59:15.000Z"
+        Object.assign(state.executions["outcome-1"].lease, { renewedAt: fresh })
+      }],
+    ] as const
+    for (const [field, mutate] of causalMutations) {
+      const causallyInvalid = hostState()
+      causallyInvalid.updatedAt = "2026-07-23T17:58:59.999Z"
+      causallyInvalid.executions["outcome-1"].checkpoint.recordedAt = "2026-07-23T17:58:00.000Z"
+      causallyInvalid.executions["outcome-1"].lease.acquiredAt = "2026-07-23T17:58:00.000Z"
+      causallyInvalid.executions["outcome-1"].lease.releasedAt = "2026-07-23T17:58:00.000Z"
+      mutate(causallyInvalid)
+      expect(validateHostState(causallyInvalid, { now }).code, field)
+        .toBe("HOST_STATE_CAUSALITY_INVALID")
+    }
+
+    const invalidLeaseMutation = hostState()
+    Object.assign(invalidLeaseMutation.executions["outcome-1"].lease, { renewedAt: "not-a-timestamp" })
+    expect(validateHostState(invalidLeaseMutation, { now }).code).toBe("LEASE_MUTATION_TIMESTAMP_INVALID")
+
+    const futureLeaseMutation = hostState()
+    Object.assign(futureLeaseMutation.executions["outcome-1"].lease, {
+      renewedAt: "2026-07-23T18:00:01.000Z",
+    })
+    expect(validateHostState(futureLeaseMutation, { now }).code).toBe("LEASE_MUTATION_TIMESTAMP_INVALID")
+
+    const futureExpiry = hostState()
+    futureExpiry.executions["outcome-1"].checkpoint.state = "REVIEW_PENDING"
+    futureExpiry.executions["outcome-1"].lease.status = "ACTIVE"
+    futureExpiry.executions["outcome-1"].lease.expiresAt = "2026-07-23T18:05:00.000Z"
+    expect(validateHostState(futureExpiry, { now }).code).toBe("PASS")
 
     const future = hostState()
     future.updatedAt = "2026-07-23T18:00:01.000Z"
@@ -310,6 +402,10 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
     const staleNonterminal = hostState()
     staleNonterminal.updatedAt = "2026-07-01T16:00:00.000Z"
     staleNonterminal.executions["outcome-1"].checkpoint.state = "REVIEW_PENDING"
+    staleNonterminal.executions["outcome-1"].checkpoint.recordedAt = staleNonterminal.updatedAt
+    staleNonterminal.executions["outcome-1"].lease.acquiredAt = staleNonterminal.updatedAt
+    staleNonterminal.executions["outcome-1"].lease.expiresAt = staleNonterminal.updatedAt
+    staleNonterminal.executions["outcome-1"].lease.releasedAt = staleNonterminal.updatedAt
     expect(validateHostState(staleNonterminal, { now, maxAgeMs: 5 * 60 * 1000 }).code).toBe("HOST_STATE_STALE")
 
     const futureCheckpoint = hostState()
