@@ -136,11 +136,16 @@ function mutate(filePath, storeId, idempotencyKey, request, now, operation) {
       if (prior.requestHash !== requestHash) fail("IDEMPOTENCY_CONFLICT")
       return { ...prior.result, idempotent: true }
     }
-    const result = operation(state, timestamp(now))
+    const requestedAt = timestamp(now)
+    const priorUpdatedAt = timestamp(state.updatedAt)
+    const mutationAt = requestedAt.milliseconds < priorUpdatedAt.milliseconds
+      ? priorUpdatedAt
+      : requestedAt
+    const result = operation(state, mutationAt)
     const next = {
       ...state,
       revision: state.revision + 1,
-      updatedAt: timestamp(now).iso,
+      updatedAt: mutationAt.iso,
       idempotency: { ...state.idempotency, [idempotencyKey]: { requestHash, result } },
     }
     atomicWrite(filePath, validateState(next, storeId))

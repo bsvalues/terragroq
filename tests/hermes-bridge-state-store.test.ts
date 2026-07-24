@@ -14,7 +14,12 @@ function fixture() {
   let now = Date.parse("2026-07-21T00:00:00.000Z")
   const store = createHermesStateStore(join(dir, "state.json"), { now: () => now })
   store.initialize()
-  return { dir, store, advance: (milliseconds: number) => { now += milliseconds } }
+  return {
+    dir,
+    store,
+    advance: (milliseconds: number) => { now += milliseconds },
+    setNow: (value: number) => { now = value },
+  }
 }
 
 describe("Hermes bridge durable state store", () => {
@@ -145,6 +150,28 @@ describe("Hermes bridge durable state store", () => {
     })
     expect(renewed.fencingToken).toBe(first.fencingToken)
     expect(Date.parse(renewed.leaseExpiresAt)).toBe(Date.parse("2026-07-21T00:00:01.500Z"))
+  })
+
+  it("keeps root and nested mutation timestamps monotonic across a host clock rollback", () => {
+    const { store, advance, setNow } = fixture()
+    const first = store.acquireLease({
+      outcomeId: "GOAL-1", holderId: "one", leaseDurationMs: 2000, idempotencyKey: "rollback-acquire",
+    })
+    advance(1000)
+    store.renewLease({
+      outcomeId: "GOAL-1", holderId: "one", fencingToken: first.fencingToken,
+      leaseDurationMs: 2000, idempotencyKey: "rollback-renew",
+    })
+    setNow(Date.parse("2026-07-21T00:00:00.500Z"))
+    store.checkpoint({
+      outcomeId: "GOAL-1", holderId: "one", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "EXECUTING", idempotencyKey: "rollback-checkpoint",
+    })
+
+    const state = store.read()
+    expect(state.updatedAt).toBe("2026-07-21T00:00:01.000Z")
+    expect(state.executions["GOAL-1"].lease.renewedAt).toBe(state.updatedAt)
+    expect(state.executions["GOAL-1"].checkpoint.recordedAt).toBe(state.updatedAt)
   })
 
   it("abandons an interrupted holder for immediate fenced reclaim", () => {

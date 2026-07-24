@@ -941,8 +941,10 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     const value = fixture()
     const original = value.client.runTurn.getMockImplementation()
     value.client.runTurn.mockImplementationOnce(async (...args: unknown[]) => {
-      const store = createHermesStateStore(value.orchestrator.statePath)
-      store.recordOwnerTouch({ idempotencyKey: "owner-touch-during-run", counter: "ownerOperationTouchCount" })
+      value.state.recordOwnerTouch({
+        idempotencyKey: "owner-touch-during-run",
+        counter: "ownerOperationTouchCount",
+      })
       return original!(...args)
     })
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_OWNER_TOUCH_WALL" })

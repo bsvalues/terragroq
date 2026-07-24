@@ -343,16 +343,20 @@ export function validateHostState(state, { now = Date.now(), maxAgeMs = DEFAULT_
     || JSON.stringify(Object.keys(state).sort()) !== JSON.stringify(rootKeys)) {
     return failure("HOST_STATE_SCHEMA_INVALID", "Expected Hermes state schemaVersion 1.")
   }
+  const killSwitchUpdatedAt = state?.killSwitch?.updatedAt === null
+    ? null
+    : timestamp(state?.killSwitch?.updatedAt)
   if (!state.killSwitch || typeof state.killSwitch.active !== "boolean"
     || ![null, "string"].includes(state.killSwitch.reason === null ? null : typeof state.killSwitch.reason)
     || (state.killSwitch.updatedAt !== null
-      && (!timestamp(state.killSwitch.updatedAt) || timestamp(state.killSwitch.updatedAt) > now))) {
+      && (killSwitchUpdatedAt === null || killSwitchUpdatedAt > now))) {
     return failure("HOST_KILL_SWITCH_SCHEMA_INVALID", "killSwitch does not match the state-store contract.")
   }
   const stateUpdatedAt = timestamp(state.updatedAt)
   if (stateUpdatedAt === null || stateUpdatedAt > now) {
     return failure("HOST_STATE_TIMESTAMP_INVALID", "Host state updatedAt is missing, invalid, or future-dated.")
   }
+  let latestNestedMutationAt = killSwitchUpdatedAt ?? -Infinity
   const counterKeys = Object.keys(state.ownerTouchCounters).sort()
   if (JSON.stringify(counterKeys) !== JSON.stringify([...OWNER_COUNTERS].sort())) {
     return failure("OWNER_COUNTER_SCHEMA_INVALID", "Owner counter keys do not match the V1 contract.")
@@ -400,6 +404,25 @@ export function validateHostState(state, { now = Date.now(), maxAgeMs = DEFAULT_
         || execution.lease.deferReason !== "PROVIDER_UNAVAILABLE")) {
       return failure("DEFERRED_LEASE_SCHEMA_INVALID", outcomeId)
     }
+    const executionMutationTimes = [
+      execution.checkpoint.recordedAt,
+      execution.lease.acquiredAt,
+      execution.lease.renewedAt,
+      execution.lease.releasedAt,
+      execution.lease.abandonedAt,
+      execution.lease.recoveredAt,
+      execution.lease.deferredAt,
+    ].filter((value) => value !== undefined && value !== null)
+      .map((value) => timestamp(value))
+    if (["RELEASED", "ABANDONED"].includes(execution.lease.status)) {
+      executionMutationTimes.push(timestamp(execution.lease.expiresAt))
+    }
+    if (executionMutationTimes.some((value) => value === null || value > now)) {
+      return failure("LEASE_MUTATION_TIMESTAMP_INVALID", outcomeId)
+    }
+    for (const mutationAt of executionMutationTimes) {
+      latestNestedMutationAt = Math.max(latestNestedMutationAt, mutationAt)
+    }
     if (["COMPLETE", "FAILED_TERMINAL"].includes(execution.checkpoint.state)
       && execution.lease.status !== "RELEASED") {
       return failure("TERMINAL_LEASE_NOT_RELEASED", outcomeId)
@@ -414,6 +437,9 @@ export function validateHostState(state, { now = Date.now(), maxAgeMs = DEFAULT_
   }
   if ([...fencingTokens].some((token) => token >= state.nextFencingToken)) {
     return failure("FENCING_SEQUENCE_INVALID", "nextFencingToken must exceed all issued tokens.")
+  }
+  if (stateUpdatedAt < latestNestedMutationAt) {
+    return failure("HOST_STATE_CAUSALITY_INVALID", "Host state updatedAt precedes a nested mutation.")
   }
   const historicalTerminalState = executionEntries.length > 0
     && executionEntries.every(([, execution]) => (
