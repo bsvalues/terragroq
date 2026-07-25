@@ -543,7 +543,10 @@ export function createHermesOrchestrator(options = {}) {
 
     let lease
     if (current) {
-      if (Date.parse(current.lease.expiresAt) > now().getTime()) return { result: "LEASE_HELD", outcomeId }
+      const abandoned = current.lease.status === "ABANDONED" || Boolean(current.lease.abandonedAt)
+      if (!abandoned && Date.parse(current.lease.expiresAt) > now().getTime()) {
+        return { result: "LEASE_HELD", outcomeId }
+      }
       lease = state.reclaimLease({
         idempotencyKey: `${outcomeId}:reclaim:${current.fencingToken + 1}`,
         outcomeId,
