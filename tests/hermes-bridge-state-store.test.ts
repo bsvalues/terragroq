@@ -188,14 +188,37 @@ describe("Hermes bridge durable state store", () => {
     expect(state.executions["GOAL-1"].checkpoint.recordedAt).toBe(state.updatedAt)
   })
 
-  it("abandons an interrupted holder for immediate fenced reclaim", () => {
-    const { store } = fixture()
-    const first = store.acquireLease({ outcomeId: "GOAL-1", holderId: "one", leaseDurationMs: 1000, idempotencyKey: "a" })
+  it("abandons an interrupted holder for immediate fenced reclaim across a clock rollback", () => {
+    const { store, advance, setNow } = fixture()
+    const first = store.acquireLease({
+      outcomeId: "GOAL-1", holderId: "one", leaseDurationMs: 10_000, idempotencyKey: "a",
+    })
+    advance(5000)
+    store.setKillSwitch({
+      active: false, reason: "advance mutation clock", idempotencyKey: "abandon-clock-advance",
+    })
+    setNow(Date.parse("2026-07-21T00:00:00.500Z"))
     const abandoned = store.abandonLease({
       outcomeId: "GOAL-1", holderId: "one", fencingToken: first.fencingToken,
       reason: "APP_SERVER_TURN_INTERRUPTED", idempotencyKey: "abandon",
     })
-    expect(abandoned.leaseExpiresAt).toBe("2026-07-21T00:00:00.000Z")
+    expect(abandoned.leaseExpiresAt).toBe("2026-07-21T00:00:05.000Z")
+    expect(() => store.checkpoint({
+      outcomeId: "GOAL-1", holderId: "one", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "STALE", idempotencyKey: "abandoned-checkpoint",
+    })).toThrowError(expect.objectContaining({ code: "LEASE_NOT_HELD" }))
+    expect(() => store.renewLease({
+      outcomeId: "GOAL-1", holderId: "one", fencingToken: first.fencingToken,
+      leaseDurationMs: 1000, idempotencyKey: "abandoned-renew",
+    })).toThrowError(expect.objectContaining({ code: "LEASE_NOT_HELD" }))
+    expect(() => store.releaseLease({
+      outcomeId: "GOAL-1", holderId: "one", fencingToken: first.fencingToken,
+      idempotencyKey: "abandoned-release",
+    })).toThrowError(expect.objectContaining({ code: "LEASE_NOT_HELD" }))
+    expect(() => store.abandonLease({
+      outcomeId: "GOAL-1", holderId: "one", fencingToken: first.fencingToken,
+      reason: "STALE_ABANDON", idempotencyKey: "abandoned-again",
+    })).toThrowError(expect.objectContaining({ code: "LEASE_NOT_HELD" }))
     const second = store.reclaimLease({
       outcomeId: "GOAL-1", holderId: "two", leaseDurationMs: 1000,
       expectedFencingToken: first.fencingToken, idempotencyKey: "reclaim",

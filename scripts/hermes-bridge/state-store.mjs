@@ -165,7 +165,10 @@ function execution(state, outcomeId) {
 
 function assertFence(current, holderId, fencingToken) {
   if (current.fencingToken !== fencingToken) fail("FENCING_TOKEN_CONFLICT")
-  if (current.lease.status !== "ACTIVE" || current.lease.holderId !== holderId) fail("LEASE_NOT_HELD")
+  if (current.lease.status !== "ACTIVE" || current.lease.abandonedAt
+    || current.lease.holderId !== holderId) {
+    fail("LEASE_NOT_HELD")
+  }
 }
 
 function normalizedValidationEvidence(input, current) {
@@ -315,7 +318,10 @@ export function reclaimLease(filePath, request, options = {}) {
     assertRunning(state)
     const current = execution(state, request.outcomeId)
     if (current.fencingToken !== request.expectedFencingToken) fail("FENCING_TOKEN_CONFLICT")
-    if (Date.parse(current.lease.expiresAt) > requestedAt.milliseconds) fail("LEASE_NOT_EXPIRED")
+    if (current.lease.status !== "ABANDONED" && !current.lease.abandonedAt
+      && Date.parse(current.lease.expiresAt) > requestedAt.milliseconds) {
+      fail("LEASE_NOT_EXPIRED")
+    }
     if (!request.holderId || !Number.isFinite(request.leaseDurationMs) || request.leaseDurationMs <= 0) fail("LEASE_REQUEST_INVALID")
     const fencingToken = state.nextFencingToken++
     const reclaimed = {

@@ -209,6 +209,45 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
   })
 
+  it("immediately reclaims an abandoned execution after a host clock rollback", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    value.state.initialize()
+    const lease = value.state.acquireLease({
+      idempotencyKey: "rollback-abandon-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 10_000,
+      metadata: { outcome },
+    })
+    value.advance(5000)
+    value.state.setKillSwitch({
+      active: false,
+      reason: "advance mutation clock",
+      idempotencyKey: "rollback-abandon-clock-advance",
+    })
+    value.advance(-4500)
+    value.state.abandonLease({
+      idempotencyKey: "rollback-abandon",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      reason: "APP_SERVER_TURN_INTERRUPTED",
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"]).toMatchObject({
+      fencingToken: lease.fencingToken + 1,
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "COMPLETE" },
+    })
+  })
+
   it("fails closed when an active execution has no exact outcome snapshot", async () => {
     const value = fixture()
     value.state.initialize()
