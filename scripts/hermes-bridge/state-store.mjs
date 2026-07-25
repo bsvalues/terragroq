@@ -141,7 +141,7 @@ function mutate(filePath, storeId, idempotencyKey, request, now, operation) {
     const mutationAt = requestedAt.milliseconds < priorUpdatedAt.milliseconds
       ? priorUpdatedAt
       : requestedAt
-    const result = operation(state, mutationAt)
+    const result = operation(state, mutationAt, requestedAt)
     const next = {
       ...state,
       revision: state.revision + 1,
@@ -282,16 +282,25 @@ export function initializeHermesState(filePath, { storeId = "hermes-bridge", now
 
 export function acquireLease(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
-  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at, requestedAt) => {
     assertRunning(state)
     if (!request.outcomeId || !request.holderId || !Number.isFinite(request.leaseDurationMs) || request.leaseDurationMs <= 0) fail("LEASE_REQUEST_INVALID")
     const existing = state.executions[request.outcomeId]
-    if (existing) fail(Date.parse(existing.lease.expiresAt) <= at.milliseconds ? "LEASE_RECLAIM_REQUIRED" : "LEASE_ALREADY_HELD")
+    if (existing) {
+      fail(Date.parse(existing.lease.expiresAt) <= requestedAt.milliseconds
+        ? "LEASE_RECLAIM_REQUIRED"
+        : "LEASE_ALREADY_HELD")
+    }
     const fencingToken = state.nextFencingToken++
     const current = {
       outcomeId: request.outcomeId,
       fencingToken,
-      lease: { status: "ACTIVE", holderId: request.holderId, acquiredAt: at.iso, expiresAt: new Date(at.milliseconds + request.leaseDurationMs).toISOString() },
+      lease: {
+        status: "ACTIVE",
+        holderId: request.holderId,
+        acquiredAt: at.iso,
+        expiresAt: new Date(requestedAt.milliseconds + request.leaseDurationMs).toISOString(),
+      },
       checkpoint: { sequence: 0, state: "LEASED", detail: null, recordedAt: at.iso },
       metadata: metadata(request.metadata),
     }
@@ -302,17 +311,22 @@ export function acquireLease(filePath, request, options = {}) {
 
 export function reclaimLease(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
-  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at, requestedAt) => {
     assertRunning(state)
     const current = execution(state, request.outcomeId)
     if (current.fencingToken !== request.expectedFencingToken) fail("FENCING_TOKEN_CONFLICT")
-    if (Date.parse(current.lease.expiresAt) > at.milliseconds) fail("LEASE_NOT_EXPIRED")
+    if (Date.parse(current.lease.expiresAt) > requestedAt.milliseconds) fail("LEASE_NOT_EXPIRED")
     if (!request.holderId || !Number.isFinite(request.leaseDurationMs) || request.leaseDurationMs <= 0) fail("LEASE_REQUEST_INVALID")
     const fencingToken = state.nextFencingToken++
     const reclaimed = {
       ...current,
       fencingToken,
-      lease: { status: "ACTIVE", holderId: request.holderId, acquiredAt: at.iso, expiresAt: new Date(at.milliseconds + request.leaseDurationMs).toISOString() },
+      lease: {
+        status: "ACTIVE",
+        holderId: request.holderId,
+        acquiredAt: at.iso,
+        expiresAt: new Date(requestedAt.milliseconds + request.leaseDurationMs).toISOString(),
+      },
       metadata: metadata(request.metadata, current.metadata),
     }
     state.executions = { ...state.executions, [request.outcomeId]: reclaimed }
@@ -322,11 +336,11 @@ export function reclaimLease(filePath, request, options = {}) {
 
 export function writeCheckpoint(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
-  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at, requestedAt) => {
     assertRunning(state)
     const current = execution(state, request.outcomeId)
     assertFence(current, request.holderId, request.fencingToken)
-    if (Date.parse(current.lease.expiresAt) <= at.milliseconds) fail("LEASE_EXPIRED")
+    if (Date.parse(current.lease.expiresAt) <= requestedAt.milliseconds) fail("LEASE_EXPIRED")
     if (request.expectedCheckpointSequence !== current.checkpoint.sequence) fail("CHECKPOINT_SEQUENCE_CONFLICT")
     if (typeof request.state !== "string" || request.state.trim() === "") fail("CHECKPOINT_STATE_INVALID")
     const updated = {
@@ -341,15 +355,19 @@ export function writeCheckpoint(filePath, request, options = {}) {
 
 export function renewLease(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
-  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at, requestedAt) => {
     assertRunning(state)
     const current = execution(state, request.outcomeId)
     assertFence(current, request.holderId, request.fencingToken)
-    if (Date.parse(current.lease.expiresAt) <= at.milliseconds) fail("LEASE_EXPIRED")
+    if (Date.parse(current.lease.expiresAt) <= requestedAt.milliseconds) fail("LEASE_EXPIRED")
     if (!Number.isFinite(request.leaseDurationMs) || request.leaseDurationMs <= 0) fail("LEASE_REQUEST_INVALID")
     const renewed = {
       ...current,
-      lease: { ...current.lease, expiresAt: new Date(at.milliseconds + request.leaseDurationMs).toISOString(), renewedAt: at.iso },
+      lease: {
+        ...current.lease,
+        expiresAt: new Date(requestedAt.milliseconds + request.leaseDurationMs).toISOString(),
+        renewedAt: at.iso,
+      },
     }
     state.executions = { ...state.executions, [request.outcomeId]: renewed }
     return { outcomeId: request.outcomeId, fencingToken: current.fencingToken, leaseExpiresAt: renewed.lease.expiresAt }
@@ -622,12 +640,13 @@ export function recoverPostMergeCleanupWall(filePath, request, options = {}) {
 
 export function deferProviderWall(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
-  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at, requestedAt) => {
     assertRunning(state)
     const current = execution(state, request.outcomeId)
     assertFence(current, request.holderId, request.fencingToken)
     const retryAt = timestamp(request.retryAfter)
-    if (retryAt.milliseconds <= at.milliseconds || current.checkpoint.state !== "PROVIDER_UNAVAILABLE") {
+    if (retryAt.milliseconds <= requestedAt.milliseconds
+      || current.checkpoint.state !== "PROVIDER_UNAVAILABLE") {
       fail("PROVIDER_DEFERRAL_STATE_WALL")
     }
     const deferred = {

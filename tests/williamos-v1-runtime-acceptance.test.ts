@@ -372,6 +372,7 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
       causallyInvalid.executions["outcome-1"].checkpoint.recordedAt = "2026-07-23T17:58:00.000Z"
       causallyInvalid.executions["outcome-1"].lease.acquiredAt = "2026-07-23T17:58:00.000Z"
       causallyInvalid.executions["outcome-1"].lease.releasedAt = "2026-07-23T17:58:00.000Z"
+      causallyInvalid.executions["outcome-1"].lease.expiresAt = "2026-07-23T17:58:00.000Z"
       mutate(causallyInvalid)
       expect(validateHostState(causallyInvalid, { now }).code, field)
         .toBe("HOST_STATE_CAUSALITY_INVALID")

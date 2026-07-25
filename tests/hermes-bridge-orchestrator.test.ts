@@ -912,6 +912,50 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.resumeThread).not.toHaveBeenCalled()
   })
 
+  it("uses wall-clock time for provider deadlines while preserving monotonic mutation timestamps", async () => {
+    const value = fixture()
+    let turn = 0
+    value.client.runTurn.mockImplementation(async () => {
+      turn += 1
+      if (turn === 3) value.advance(-30 * 60 * 1000)
+      return {
+        threadId: "thread-77", turnId: "turn-provider-wall", status: "completed",
+        finalText: JSON.stringify({
+          result: "RETRYABLE_PROVIDER_WALL", workOrder: "WO-HERMES-77-001",
+          branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
+          mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
+          blockedScopeCrossed: false, nextState: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+        }),
+      }
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
+    value.advance(20 * 60 * 1000)
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "RETRYABLE_PROVIDER_WALL" })
+    const priorUpdatedAt = value.state.read().updatedAt
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "PROVIDER_UNAVAILABLE",
+      nextState: "DEFERRED_PROVIDER_UNAVAILABLE",
+      retryAfter: "2026-07-21T01:05:00.000Z",
+    })
+
+    const settled = value.state.read()
+    expect(settled.updatedAt).toBe(priorUpdatedAt)
+    expect(settled.executions["77"]).toMatchObject({
+      lease: { status: "DEFERRED", expiresAt: "2026-07-21T01:05:00.000Z" },
+      checkpoint: {
+        state: "DEFERRED_PROVIDER_UNAVAILABLE",
+        detail: "2026-07-21T01:05:00.000Z",
+        recordedAt: priorUpdatedAt,
+      },
+    })
+    expect(value.deferOutcome).toHaveBeenCalledWith({
+      outcomeId: 77,
+      retryAfter: "2026-07-21T01:05:00.000Z",
+    })
+  })
+
   it("resumes cross-store provider-unavailable settlement without another Codex turn", async () => {
     const value = fixture()
     value.client.runTurn.mockResolvedValue({

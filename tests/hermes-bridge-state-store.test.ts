@@ -152,24 +152,38 @@ describe("Hermes bridge durable state store", () => {
     expect(Date.parse(renewed.leaseExpiresAt)).toBe(Date.parse("2026-07-21T00:00:01.500Z"))
   })
 
-  it("keeps root and nested mutation timestamps monotonic across a host clock rollback", () => {
+  it("separates wall-clock lease deadlines from monotonic mutation evidence across a clock rollback", () => {
     const { store, advance, setNow } = fixture()
     const first = store.acquireLease({
       outcomeId: "GOAL-1", holderId: "one", leaseDurationMs: 2000, idempotencyKey: "rollback-acquire",
     })
-    advance(1000)
-    store.renewLease({
+    advance(5000)
+    store.setKillSwitch({
+      active: false, reason: "advance mutation clock", idempotencyKey: "rollback-clock-advance",
+    })
+    setNow(Date.parse("2026-07-21T00:00:01.000Z"))
+
+    expect(() => store.acquireLease({
+      outcomeId: "GOAL-1", holderId: "two", leaseDurationMs: 2000,
+      idempotencyKey: "rollback-duplicate-acquire",
+    })).toThrowError(expect.objectContaining({ code: "LEASE_ALREADY_HELD" }))
+    expect(() => store.reclaimLease({
+      outcomeId: "GOAL-1", holderId: "two", leaseDurationMs: 2000,
+      expectedFencingToken: first.fencingToken, idempotencyKey: "rollback-premature-reclaim",
+    })).toThrowError(expect.objectContaining({ code: "LEASE_NOT_EXPIRED" }))
+
+    const renewed = store.renewLease({
       outcomeId: "GOAL-1", holderId: "one", fencingToken: first.fencingToken,
       leaseDurationMs: 2000, idempotencyKey: "rollback-renew",
     })
-    setNow(Date.parse("2026-07-21T00:00:00.500Z"))
     store.checkpoint({
       outcomeId: "GOAL-1", holderId: "one", fencingToken: first.fencingToken,
       expectedCheckpointSequence: 0, state: "EXECUTING", idempotencyKey: "rollback-checkpoint",
     })
 
     const state = store.read()
-    expect(state.updatedAt).toBe("2026-07-21T00:00:01.000Z")
+    expect(renewed.leaseExpiresAt).toBe("2026-07-21T00:00:03.000Z")
+    expect(state.updatedAt).toBe("2026-07-21T00:00:05.000Z")
     expect(state.executions["GOAL-1"].lease.renewedAt).toBe(state.updatedAt)
     expect(state.executions["GOAL-1"].checkpoint.recordedAt).toBe(state.updatedAt)
   })
