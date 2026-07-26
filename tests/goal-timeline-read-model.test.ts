@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -13,6 +14,16 @@ import type { RuntimeExecutionGovernanceEventRecord } from "@/components/runtime
 
 const owner = "owner"
 const observedAt = new Date("2026-07-26T12:00:00.000Z")
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value) ?? "null"
+}
 
 function goal(overrides: Partial<GoalTimelineGoalRecord> = {}): GoalTimelineGoalRecord {
   return {
@@ -124,6 +135,7 @@ function terminalGoalEvent(input: {
   result: "OWNER_DECISION_REQUIRED" | "FAILED_TERMINAL"
   nextState: string
   at: string
+  metadata?: Record<string, unknown>
 }): RuntimeExecutionGovernanceEventRecord {
   return {
     id: input.id,
@@ -133,7 +145,7 @@ function terminalGoalEvent(input: {
     entityId: "7",
     actor: "hermes-codex-bridge",
     reason: input.result,
-    metadata: { result: input.result, nextState: input.nextState },
+    metadata: { result: input.result, nextState: input.nextState, ...input.metadata },
     createdAt: new Date(input.at),
   }
 }
@@ -144,6 +156,7 @@ function recoveredGoalEvent(input: {
     | "HERMES_OUTCOME_PROVIDER_RECOVERED"
     | "HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED"
     | "HERMES_OUTCOME_REVIEW_RECOVERED"
+    | "HERMES_OWNER_AUTHORITY_DECISION"
   at: string
   metadata?: Record<string, unknown>
 }): RuntimeExecutionGovernanceEventRecord {
@@ -205,6 +218,96 @@ function decision(
     updatedAt: new Date("2026-07-26T11:59:00.000Z"),
     ...overrides,
   }
+}
+
+function authorityPacket() {
+  return {
+    blockedAction: "Resume the exact blocked action.",
+    authorityBoundary: "Primary authority is required.",
+    minimumChoice: "APPROVE_OR_DENY",
+    approveConsequence: "Resume only the blocked action.",
+    denyConsequence: "Keep the Work Order blocked.",
+  }
+}
+
+function ownerReceiptFixture(
+  terminalEventId: number,
+  nextState: string,
+  choice: "APPROVE" | "DENY" = "APPROVE",
+  packet = authorityPacket(),
+) {
+  const packetDigest = createHash("sha256").update(JSON.stringify(packet)).digest("hex")
+  const requestKey = `hermes-owner-decision:7:70:${terminalEventId}:${owner}:${choice}:${nextState}`
+  const decisionRef = `OWNER-DECISION-7-${terminalEventId}`
+  const evidenceLabels = [
+    "outcome:7",
+    "work-order:70",
+    `terminal-event:${terminalEventId}`,
+    `next-state:${nextState}`,
+    `request:${requestKey}`,
+    `terminal-binding:hermes-owner-decision-terminal:7:70:${terminalEventId}`,
+    `choice:${choice}`,
+    `decision-packet:${packetDigest}`,
+  ]
+  const recordedAt = new Date("2026-07-26T11:59:00.000Z")
+  const decisionRecord = decision({
+    ref: decisionRef,
+    decision: choice,
+    status: choice === "APPROVE" ? "accepted" : "rejected",
+    scope: `goal:7|work-order:70|terminal:${terminalEventId}|next-state:${nextState}`,
+    evidence: evidenceLabels,
+    decidedAt: recordedAt,
+    updatedAt: recordedAt,
+  })
+  const payload = {
+    outcomeId: 7,
+    workOrderId: 70,
+    terminalEventId,
+    ownerUserId: owner,
+    choice,
+    expectedNextState: nextState,
+    decisionId: 9,
+    decisionRef,
+    requestKey,
+    decisionPacket: packet,
+    decisionPacketDigest: packetDigest,
+  }
+  const notes = canonicalJson(payload)
+  const evidenceRecord = evidence({
+    id: 709,
+    ref: `EV-OWNER-DECISION-7-${terminalEventId}`,
+    result: choice === "APPROVE" ? "PASS" : "FAIL",
+    notes,
+    contentHash: createHash("sha256").update(notes).digest("hex"),
+  })
+  const receiptMetadata = {
+    ...payload,
+    status: choice === "APPROVE" ? "accepted" : "rejected",
+    authority: "binding",
+    evidenceId: evidenceRecord.id,
+    recordedAt: recordedAt.toISOString(),
+  }
+  const receiptEvent: RuntimeExecutionGovernanceEventRecord = {
+    id: terminalEventId + 1,
+    userId: owner,
+    eventType: "HERMES_OWNER_AUTHORITY_DECISION",
+    entityType: "goal",
+    entityId: "7",
+    actor: owner,
+    reason: `Recorded ${choice} owner authority decision`,
+    evidenceId: evidenceRecord.id,
+    metadata: receiptMetadata,
+    createdAt: recordedAt,
+  }
+  const auditRecord = audit({
+    id: 809,
+    type: "owner.decision.recorded",
+    register: "goals",
+    refId: 7,
+    metadata: receiptMetadata,
+    createdAt: recordedAt,
+  })
+  return { packet, decisionRecord, evidenceRecord, receiptEvent, auditRecord }
 }
 
 function audit(overrides: Partial<GoalTimelineAuditRecord> = {}): GoalTimelineAuditRecord {
@@ -523,6 +626,7 @@ describe("persisted Goal timeline read model", () => {
 
   it("uses each terminal event's recorded result and a Work Order revision consistently", () => {
     const revision = "f".repeat(40)
+    const receipt = ownerReceiptFixture(460, "OWNER_AUTHORITY_REQUIRED")
     const [timeline] = buildGoalTimelineReadModel(input({
       workOrders: [workOrder({
         status: "closed",
@@ -536,21 +640,22 @@ describe("persisted Goal timeline read model", () => {
           result: "OWNER_DECISION_REQUIRED",
           nextState: "OWNER_AUTHORITY_REQUIRED",
           at: "2026-07-26T11:50:00.000Z",
+          metadata: receipt.packet,
         }),
+        receipt.receiptEvent,
         checkpoint({
-          id: 461,
+          id: 462,
           sequence: 6,
           state: "COMPLETE",
-          at: "2026-07-26T11:59:00.000Z",
+          at: "2026-07-26T12:00:00.000Z",
           metadata: { mergeSha: revision },
         }),
       ],
       decisions: [decision({
-        createdAt: new Date("2026-07-26T11:51:00.000Z"),
-        updatedAt: new Date("2026-07-26T11:52:00.000Z"),
-        decidedAt: new Date("2026-07-26T11:52:00.000Z"),
-        evidence: ["trace:460", "OWNER_AUTHORITY_REQUIRED"],
+        ...receipt.decisionRecord,
       })],
+      evidenceRecords: [receipt.evidenceRecord],
+      auditRecords: [receipt.auditRecord],
     }))
 
     expect(timeline.entries.find((entry) => entry.id === "trace:460")?.state)
@@ -563,6 +668,7 @@ describe("persisted Goal timeline read model", () => {
   })
 
   it("clears an older terminal Goal event when a newer persisted checkpoint resumes execution", () => {
+    const receipt = ownerReceiptFixture(480, "OWNER_AUTHORITY_REQUIRED")
     const [timeline] = buildGoalTimelineReadModel(input({
       workOrders: [workOrder({ status: "active", result: null, linkedDecisionId: 9 })],
       governanceEvents: [
@@ -571,20 +677,21 @@ describe("persisted Goal timeline read model", () => {
           result: "OWNER_DECISION_REQUIRED",
           nextState: "OWNER_AUTHORITY_REQUIRED",
           at: "2026-07-26T11:50:00.000Z",
+          metadata: receipt.packet,
         }),
+        receipt.receiptEvent,
         checkpoint({
-          id: 481,
+          id: 482,
           sequence: 4,
           state: "EXECUTING",
-          at: "2026-07-26T11:55:00.000Z",
+          at: "2026-07-26T12:00:00.000Z",
         }),
       ],
       decisions: [decision({
-        createdAt: new Date("2026-07-26T11:51:00.000Z"),
-        updatedAt: new Date("2026-07-26T11:52:00.000Z"),
-        decidedAt: new Date("2026-07-26T11:52:00.000Z"),
-        evidence: ["trace:480", "OWNER_AUTHORITY_REQUIRED"],
+        ...receipt.decisionRecord,
       })],
+      evidenceRecords: [receipt.evidenceRecord],
+      auditRecords: [receipt.auditRecord],
     }))
 
     expect(timeline.current.runtime.checkpointState).toBe("EXECUTING")
@@ -914,6 +1021,7 @@ describe("persisted Goal timeline read model", () => {
   })
 
   it("projects OWNER_DECISION_REQUIRED and only resumes from an accepted binding link", () => {
+    const receipt = ownerReceiptFixture(502, "PRODUCTION_MUTATION_AUTHORIZED")
     const ownerWall = checkpoint({
       id: 501,
       sequence: 3,
@@ -926,6 +1034,7 @@ describe("persisted Goal timeline read model", () => {
       result: "OWNER_DECISION_REQUIRED",
       nextState: "PRODUCTION_MUTATION_AUTHORIZED",
       at: "2026-07-26T11:58:01.000Z",
+      metadata: receipt.packet,
     })
     const [missing] = buildGoalTimelineReadModel(input({
       workOrders: [workOrder({ status: "blocked", result: "OWNER_DECISION_REQUIRED" })],
@@ -956,13 +1065,15 @@ describe("persisted Goal timeline read model", () => {
         result: "OWNER_DECISION_REQUIRED",
         linkedDecisionId: 9,
       })],
-      governanceEvents: [ownerWall, persistedTerminal],
-      decisions: [decision()],
+      governanceEvents: [ownerWall, persistedTerminal, receipt.receiptEvent],
+      decisions: [receipt.decisionRecord],
+      evidenceRecords: [receipt.evidenceRecord],
+      auditRecords: [receipt.auditRecord],
     }))
     expect(authorized.resume).toEqual({
       state: "AUTHORIZED_TO_RESUME",
       decisionId: 9,
-      decisionRef: "ADR-0009",
+      decisionRef: "OWNER-DECISION-7-502",
       governedNextState: "PRODUCTION_MUTATION_AUTHORIZED",
     })
     expect(authorized.references.decisions).toEqual([
@@ -1021,6 +1132,198 @@ describe("persisted Goal timeline read model", () => {
 
     expect(unbound.terminal.state).toBe("OWNER_DECISION_REQUIRED")
     expect(unbound.resume.state).toBe("AWAITING_OWNER_DECISION")
+  })
+
+  it("projects a fully bound decision request and truthful receipt state", () => {
+    const packet = {
+      blockedAction: "Resume validation after the recorded provider wall.",
+      authorityBoundary: "Owner authority is required to resume this Work Order.",
+      minimumChoice: "APPROVE_OR_DENY",
+      approveConsequence: "Resume the Work Order in RESUME_VALIDATION.",
+      denyConsequence: "Keep the Work Order blocked and record the denial.",
+    }
+    const denialReceipt = ownerReceiptFixture(505, "RESUME_VALIDATION", "DENY", packet)
+    const terminal = terminalGoalEvent({
+      id: 505,
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "RESUME_VALIDATION",
+      at: "2026-07-26T11:58:01.000Z",
+      metadata: packet,
+    })
+    const [actionable] = buildGoalTimelineReadModel(input({
+      workOrders: [workOrder({ status: "blocked", result: "OWNER_DECISION_REQUIRED" })],
+      governanceEvents: [terminal],
+    }))
+
+    expect(actionable.decisionRequest).toEqual(expect.objectContaining({
+      status: "ACTIONABLE",
+      blockedAction: "Resume validation after the recorded provider wall.",
+      authorityBoundary: "Owner authority is required to resume this Work Order.",
+      choices: ["APPROVE", "DENY"],
+      goalId: 7,
+      outcomeId: 7,
+      workOrderId: 70,
+      terminalEventId: 505,
+      expectedNextState: "RESUME_VALIDATION",
+      ownerUserId: owner,
+      receipt: expect.objectContaining({ status: "NOT_RECORDED" }),
+      resume: expect.objectContaining({ state: "MISSING_DECISION_RECORD" }),
+    }))
+
+    const [recorded] = buildGoalTimelineReadModel(input({
+      workOrders: [workOrder({
+        status: "blocked",
+        result: "OWNER_DECISION_REQUIRED",
+        linkedDecisionId: 9,
+      })],
+      governanceEvents: [terminal, denialReceipt.receiptEvent],
+      decisions: [denialReceipt.decisionRecord],
+      evidenceRecords: [denialReceipt.evidenceRecord],
+      auditRecords: [denialReceipt.auditRecord],
+    }))
+
+    expect(recorded.decisionRequest).toEqual(expect.objectContaining({
+      status: "RECEIPT_RECORDED",
+      receipt: expect.objectContaining({ status: "RECORDED", choice: "DENY", decisionId: 9 }),
+      resume: expect.objectContaining({ state: "DECISION_REJECTED" }),
+    }))
+  })
+
+  it("does not synthesize an actionable request from incomplete terminal evidence", () => {
+    const [timeline] = buildGoalTimelineReadModel(input({
+      workOrders: [workOrder({ status: "blocked", result: "OWNER_DECISION_REQUIRED" })],
+      governanceEvents: [terminalGoalEvent({
+        id: 509,
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: "RESUME_VALIDATION",
+        at: "2026-07-26T11:58:01.000Z",
+        metadata: {
+          blockedAction: "Resume validation.",
+          authorityBoundary: "Primary authority is required.",
+          approveConsequence: "Resume validation.",
+          denyConsequence: "Keep validation blocked.",
+        },
+      })],
+    }))
+
+    expect(timeline.decisionRequest).toMatchObject({
+      status: "CONFLICTING",
+      blockedAction: "Resume validation.",
+      authorityBoundary: "Primary authority is required.",
+    })
+  })
+
+  it("rejects a decision request whose next state is not canonical", () => {
+    const [timeline] = buildGoalTimelineReadModel(input({
+      workOrders: [workOrder({ status: "blocked", result: "OWNER_DECISION_REQUIRED" })],
+      governanceEvents: [terminalGoalEvent({
+        id: 510,
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: "resume validation",
+        at: "2026-07-26T11:58:01.000Z",
+        metadata: authorityPacket(),
+      })],
+    }))
+
+    expect(timeline.decisionRequest.status).toBe("CONFLICTING")
+    expect(timeline.resume.state).not.toBe("AUTHORIZED_TO_RESUME")
+  })
+
+  it("recognizes the runtime owner-decision receipt binding for approved resume", () => {
+    const receipt = ownerReceiptFixture(506, "RESUME_VALIDATION")
+    const terminal = terminalGoalEvent({
+      id: 506,
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "RESUME_VALIDATION",
+      at: "2026-07-26T11:58:01.000Z",
+      metadata: receipt.packet,
+    })
+    const [timeline] = buildGoalTimelineReadModel(input({
+      workOrders: [workOrder({
+        status: "blocked",
+        result: "OWNER_DECISION_REQUIRED",
+        linkedDecisionId: 9,
+      })],
+      governanceEvents: [terminal, receipt.receiptEvent],
+      decisions: [receipt.decisionRecord],
+      evidenceRecords: [receipt.evidenceRecord],
+      auditRecords: [receipt.auditRecord],
+    }))
+
+    expect(timeline.resume.state).toBe("AUTHORIZED_TO_RESUME")
+    expect(timeline.decisionRequest.receipt.choice).toBe("APPROVE")
+
+    expect(timeline.entries).toContainEqual(expect.objectContaining({
+      id: "trace:507",
+      label: "Primary authority decision",
+    }))
+  })
+
+  it("matches canonical decision evidence regardless of persisted key insertion order", () => {
+    const receipt = ownerReceiptFixture(511, "RESUME_VALIDATION")
+    const reorderedNotes = JSON.stringify(Object.fromEntries(
+      Object.entries(JSON.parse(receipt.evidenceRecord.notes ?? "{}")).reverse(),
+    ))
+    const terminal = terminalGoalEvent({
+      id: 511,
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "RESUME_VALIDATION",
+      at: "2026-07-26T11:58:01.000Z",
+      metadata: receipt.packet,
+    })
+    const [timeline] = buildGoalTimelineReadModel(input({
+      workOrders: [workOrder({
+        status: "blocked",
+        result: "OWNER_DECISION_REQUIRED",
+        linkedDecisionId: 9,
+      })],
+      governanceEvents: [terminal, receipt.receiptEvent],
+      decisions: [receipt.decisionRecord],
+      evidenceRecords: [{
+        ...receipt.evidenceRecord,
+        notes: reorderedNotes,
+        contentHash: createHash("sha256").update(reorderedNotes).digest("hex"),
+      }],
+      auditRecords: [receipt.auditRecord],
+    }))
+
+    expect(timeline.resume.state).toBe("AUTHORIZED_TO_RESUME")
+    expect(timeline.decisionRequest.receipt.status).toBe("RECORDED")
+  })
+
+  it("fails closed when decision status and recorded choice conflict", () => {
+    const terminal = terminalGoalEvent({
+      id: 508,
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "RESUME_VALIDATION",
+      at: "2026-07-26T11:58:01.000Z",
+    })
+    const [timeline] = buildGoalTimelineReadModel(input({
+      workOrders: [workOrder({
+        status: "blocked",
+        result: "OWNER_DECISION_REQUIRED",
+        linkedDecisionId: 9,
+      })],
+      governanceEvents: [terminal],
+      decisions: [decision({
+        status: "accepted",
+        decision: "DENY",
+        scope: "goal:7|work-order:70|terminal:508|next-state:RESUME_VALIDATION",
+        evidence: [
+          "outcome:7",
+          "work-order:70",
+          "terminal-event:508",
+          "next-state:RESUME_VALIDATION",
+          "choice:DENY",
+        ],
+      })],
+    }))
+
+    expect(timeline.resume.state).toBe("AWAITING_OWNER_DECISION")
+    expect(timeline.decisionRequest.receipt).toMatchObject({
+      status: "CONFLICTING",
+      choice: null,
+    })
   })
 
   it("keeps every source current-user scoped", () => {

@@ -7,9 +7,15 @@ import {
   GitPullRequestArrow,
   ListTree,
   ShieldAlert,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react"
 
-import type { GoalTimelineProjection } from "@/components/goal-console/goal-timeline-read-model"
+import type {
+  GoalAuthorityDecisionChoice,
+  GoalTimelineProjection,
+} from "@/components/goal-console/goal-timeline-read-model"
+import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
 
 function formatTimestamp(value: Date) {
@@ -37,8 +43,12 @@ function terminalTone(state: string | null) {
 
 export function GoalTimelinePanel({
   timeline,
+  onAuthorityDecision,
+  decisionPending = false,
 }: {
   timeline: GoalTimelineProjection | null
+  onAuthorityDecision?: (choice: GoalAuthorityDecisionChoice) => void
+  decisionPending?: boolean
 }) {
   if (!timeline) {
     return (
@@ -56,6 +66,8 @@ export function GoalTimelinePanel({
 
   const runtime = timeline.current.runtime
   const ownerDecisionRequired = timeline.terminal.state === "OWNER_DECISION_REQUIRED"
+  const decisionRequest = timeline.decisionRequest
+  const decisionActionable = ownerDecisionRequired && decisionRequest.status === "ACTIONABLE"
   const githubBase = "https://github.com/bsvalues/terragroq"
 
   return (
@@ -141,9 +153,62 @@ export function GoalTimelinePanel({
             <StatusBadge value="warning" label={timeline.resume.state.toLowerCase().replaceAll("_", " ")} />
           </div>
           <p className="mt-2 text-sm">{timeline.terminal.ownerAction}</p>
+          <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+            <DecisionDetail label="Blocked action" value={decisionRequest.blockedAction} />
+            <DecisionDetail label="Authority boundary" value={decisionRequest.authorityBoundary} />
+            <DecisionDetail label="Approve consequence" value={decisionRequest.consequences.approve} />
+            <DecisionDetail label="Deny consequence" value={decisionRequest.consequences.deny} />
+          </dl>
+          <p className="mt-3 font-mono text-[10px] text-muted-foreground">
+            Goal {decisionRequest.goalRef} · Outcome {decisionRequest.outcomeRef} · Work Order {decisionRequest.workOrderRef ?? "not recorded"}
+            {" · "}terminal {decisionRequest.terminalEventId ?? "not recorded"}
+          </p>
           <p className="mt-1 font-mono text-xs text-muted-foreground">
             Resume state: {timeline.resume.governedNextState ?? "not recorded"}
           </p>
+          {decisionActionable && onAuthorityDecision ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                disabled={decisionPending}
+                onClick={() => onAuthorityDecision("APPROVE")}
+              >
+                <CheckCircle2 aria-hidden />
+                Approve resume
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={decisionPending}
+                onClick={() => onAuthorityDecision("DENY")}
+              >
+                <XCircle aria-hidden />
+                Deny keep blocked
+              </Button>
+            </div>
+          ) : null}
+          {decisionRequest.status === "RECEIPT_RECORDED" ? (
+            <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+              {decisionRequest.receipt.choice === "APPROVE" ? (
+                <CheckCircle2 className="h-3.5 w-3.5 text-success" aria-hidden />
+              ) : (
+                <XCircle className="h-3.5 w-3.5 text-warning" aria-hidden />
+              )}
+              Decision receipt recorded: {decisionRequest.receipt.choice?.toLowerCase() ?? "unknown"}; resume state is {timeline.resume.state.toLowerCase().replaceAll("_", " ")}.
+            </p>
+          ) : null}
+          {decisionRequest.status === "CONFLICTING" ? (
+            <p className="mt-3 text-xs text-destructive">
+              The persisted decision request is conflicting or incomplete; no authority action is available.
+            </p>
+          ) : null}
+          {decisionRequest.status === "STALE" ? (
+            <p className="mt-3 text-xs text-warning">
+              The persisted terminal context is stale; no authority action is available until the projection is current.
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -251,6 +316,15 @@ function SummaryCell({
     <div className="min-w-0 bg-card px-4 py-3">
       <dt className="font-mono text-[10px] uppercase text-muted-foreground">{label}</dt>
       <dd className={`mt-1 break-words text-sm ${mono ? "font-mono text-xs" : ""}`}>{value}</dd>
+    </div>
+  )
+}
+
+function DecisionDetail({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div className="min-w-0">
+      <dt className="font-mono uppercase text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 break-words text-foreground">{value ?? "not recorded"}</dd>
     </div>
   )
 }

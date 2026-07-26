@@ -8,6 +8,8 @@ import {
   OUTCOME_SELECTION_SQL,
   projectOutcomeRuntimeCheckpoint,
   projectOutcomeRuntimeLease,
+  readApprovedOwnerDecision,
+  recordOwnerAuthorityDecision,
   recordValidationInfrastructureRecoveryProof,
   recoverNativeProviderOutcome,
   recoverReviewedOutcome,
@@ -17,6 +19,72 @@ import {
 } from "@/scripts/hermes-bridge/outcome-source.mjs"
 
 const row = { id: 4, ref: "GOAL-0004", command: "Build a WilliamOS status UI", lane: "ui", mode: "implement", risk: "low", authority: "A2_WRITE_OWN", verdict: "allow", requiresApproval: false, matchedRules: [], status: "classified" }
+const ownerDecisionPacket = {
+  blockedAction: "Resume the exact blocked validation.",
+  authorityBoundary: "Primary authority is required.",
+  minimumChoice: "APPROVE_OR_DENY",
+  approveConsequence: "Resume only the blocked validation.",
+  denyConsequence: "Keep the Work Order blocked.",
+}
+const ownerDecisionPacketHash = createHash("sha256")
+  .update(JSON.stringify(ownerDecisionPacket))
+  .digest("hex")
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value) ?? "null"
+}
+
+function reorderedJson(value: string): string {
+  return JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(value)).reverse()))
+}
+
+function ownerDecisionReceipt(choice: "APPROVE" | "DENY", decisionId: number, evidenceId: number) {
+  const requestKey = `hermes-owner-decision:4:42:88:owner:${choice}:EXACT_NEXT_STATE`
+  const decisionRef = "OWNER-DECISION-4-88"
+  const evidence = [
+    "outcome:4",
+    "work-order:42",
+    "terminal-event:88",
+    "next-state:EXACT_NEXT_STATE",
+    `request:${requestKey}`,
+    "terminal-binding:hermes-owner-decision-terminal:4:42:88",
+    `choice:${choice}`,
+    `decision-packet:${ownerDecisionPacketHash}`,
+  ]
+  const payload = {
+    outcomeId: 4,
+    workOrderId: 42,
+    terminalEventId: 88,
+    ownerUserId: "owner",
+    choice,
+    expectedNextState: "EXACT_NEXT_STATE",
+    decisionId,
+    decisionRef,
+    requestKey,
+    decisionPacket: ownerDecisionPacket,
+    decisionPacketDigest: ownerDecisionPacketHash,
+  }
+  const notes = canonicalJson(payload)
+  const audit = {
+    ...payload,
+    status: choice === "APPROVE" ? "accepted" : "rejected",
+    authority: "binding",
+    evidenceId,
+    recordedAt: "2026-07-26T12:00:00.000Z",
+  }
+  return {
+    evidence,
+    notes,
+    contentHash: createHash("sha256").update(notes).digest("hex"),
+    audit,
+  }
+}
 
 describe("Hermes bridge PostgreSQL outcome source", () => {
   it("uses one deterministic parameterized row selection", async () => {
@@ -88,6 +156,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       .mockResolvedValueOnce({ rows: [] })
     await expect(terminalizeOutcome({
       query, outcomeId: 4, result: "OWNER_DECISION_REQUIRED", nextState: "AUTHORITY_WALL",
+      metadata: ownerDecisionPacket,
     })).resolves.toBe(true)
     expect(query.mock.calls[0][0]).toMatch(/status = 'dismissed'/)
     expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_TERMINAL/)
@@ -116,8 +185,300 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     await expect(terminalizeOutcome({
       query, outcomeId: 4, result: "FAILED_TERMINAL", nextState: "POLICY_WALL",
     })).resolves.toBe(true)
-    expect(query.mock.calls[1][1]).toEqual([4, "FAILED_TERMINAL", "POLICY_WALL"])
+    expect(query.mock.calls[1][1]).toEqual([
+      4, "FAILED_TERMINAL", "POLICY_WALL",
+      JSON.stringify({ result: "FAILED_TERMINAL", nextState: "POLICY_WALL" }),
+    ])
     expect(query.mock.calls[1][0]).toMatch(/terminal\."entityId"::text = g\.id::text/)
+  })
+
+  const ownerDecisionBinding = {
+    goalId: 4,
+    goalUserId: "owner",
+    goalStatus: "dismissed",
+    workOrderId: 42,
+    workOrderUserId: "owner",
+    latestTerminalId: 88,
+    latestTerminalMetadata: {
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "EXACT_NEXT_STATE",
+      ...ownerDecisionPacket,
+    },
+    requestedTerminalId: 88,
+    requestedTerminalUserId: "owner",
+    requestedTerminalMetadata: {
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "EXACT_NEXT_STATE",
+      ...ownerDecisionPacket,
+    },
+    terminalUserId: "owner",
+    latestLeaseMetadata: { leaseStatus: "RELEASED", leaseExpiresAt: "2026-07-21T00:00:00.000Z" },
+  }
+
+  it("records an approving owner decision and releases only its exact resume scope", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ ...ownerDecisionBinding, latestTerminalId: "88" }] })
+      .mockResolvedValueOnce({ rows: [{ id: 19, ref: "OWNER-DECISION-4-88", status: "accepted", decision: "APPROVE", decidedAt: "2026-07-26T12:00:00.000000Z" }] })
+      .mockResolvedValueOnce({ rows: [{ id: 4 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 90 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 42 }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recordOwnerAuthorityDecision({
+      query, outcomeId: 4, workOrderId: 42, terminalEventId: 88,
+      ownerUserId: "owner", choice: "APPROVE", expectedNextState: "EXACT_NEXT_STATE",
+    })).resolves.toEqual(expect.objectContaining({
+      status: "accepted", choice: "APPROVE", decisionId: 19,
+      decisionRef: "OWNER-DECISION-4-88", resumeReleased: true,
+    }))
+    expect(query.mock.calls[1][0]).toMatch(/pg_advisory_xact_lock/)
+    expect(query.mock.calls[2][0]).toMatch(/ORDER BY id DESC\s+LIMIT 1/)
+    expect(query.mock.calls[2][0]).toMatch(/"linkedDecisionId" AS "workOrderLinkedDecisionId"/)
+    expect(query.mock.calls[2][0]).toMatch(/FROM goal WHERE id = \$1::integer\s+FOR UPDATE/)
+    expect(query.mock.calls[2][0]).toMatch(/FROM work_order[\s\S]+FOR UPDATE/)
+    expect(query.mock.calls[2][0].match(/AND "userId" = \$4/g)).toHaveLength(3)
+    expect(query.mock.calls.some(([sql]) =>
+      /INSERT INTO decision[\s\S]+tags, "decidedAt"\)/.test(sql))).toBe(true)
+    expect(query.mock.calls.some(([sql]) => /UPDATE goal SET status = 'classified'/.test(sql))).toBe(true)
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO evidence_record/.test(sql))).toBe(true)
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO governance_event/.test(sql))).toBe(true)
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO event_log/.test(sql))).toBe(true)
+    expect(query.mock.calls.some(([sql]) =>
+      /"linkedDecisionId" IS NOT DISTINCT FROM \$4::integer/.test(sql))).toBe(true)
+    const receiptCall = query.mock.calls.find(([sql]) =>
+      /INSERT INTO governance_event[\s\S]+HERMES_OWNER_AUTHORITY_DECISION/.test(sql))
+    expect(JSON.parse(receiptCall?.[1]?.[4] as string)).toMatchObject({
+      recordedAt: "2026-07-26T12:00:00.000Z",
+    })
+  })
+
+  it("rebinds the Work Order when a later terminal wall receives its own decision", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        ...ownerDecisionBinding,
+        workOrderLinkedDecisionId: 11,
+        linkedDecisionUserId: "owner",
+        linkedDecisionEvidence: [
+          "work-order:42",
+          "terminal-binding:hermes-owner-decision-terminal:4:42:77",
+        ],
+      }] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 19,
+        ref: "OWNER-DECISION-4-88",
+        status: "accepted",
+        decision: "APPROVE",
+        decidedAt: "2026-07-26T12:00:00.000Z",
+      }] })
+      .mockResolvedValueOnce({ rows: [{ id: 4 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 90 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 42 }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recordOwnerAuthorityDecision({
+      query,
+      outcomeId: 4,
+      workOrderId: 42,
+      terminalEventId: 88,
+      ownerUserId: "owner",
+      choice: "APPROVE",
+      expectedNextState: "EXACT_NEXT_STATE",
+    })).resolves.toMatchObject({
+      status: "accepted",
+      decisionId: 19,
+      resumeReleased: true,
+    })
+
+    const linkCall = query.mock.calls.find(([sql]) =>
+      /UPDATE work_order[\s\S]+linkedDecisionId/.test(sql))
+    expect(linkCall?.[1]).toEqual([42, 19, "owner", 11])
+  })
+
+  it("records denial without reclassifying the goal and replays an identical request", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [ownerDecisionBinding] })
+      .mockResolvedValueOnce({ rows: [{ id: 20, ref: "OWNER-DECISION-4-88", status: "rejected", decision: "DENY" }] })
+      .mockResolvedValueOnce({ rows: [{ id: 91 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 42 }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recordOwnerAuthorityDecision({
+      query, outcomeId: 4, workOrderId: 42, terminalEventId: 88,
+      ownerUserId: "owner", choice: "DENY", expectedNextState: "EXACT_NEXT_STATE",
+    })).resolves.toMatchObject({ status: "rejected", choice: "DENY", resumeReleased: false })
+    expect(query.mock.calls.some(([sql]) => /UPDATE goal SET status = 'classified'/.test(sql))).toBe(false)
+
+    const denialReceipt = ownerDecisionReceipt("DENY", 20, 91)
+    const replay = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        ...ownerDecisionBinding,
+        decisionId: 20,
+        decisionRef: "OWNER-DECISION-4-88",
+        priorStatus: "rejected",
+        priorChoice: "DENY",
+        priorAuthority: "binding",
+        priorScope: "goal:4|work-order:42|terminal:88|next-state:EXACT_NEXT_STATE",
+        priorEvidence: denialReceipt.evidence,
+        priorDecidedAt: "2026-07-26T12:00:00.000Z",
+      }] })
+      .mockResolvedValueOnce({ rows: [{
+        evidenceId: 91,
+        notes: reorderedJson(denialReceipt.notes),
+        contentHash: denialReceipt.contentHash,
+        receiptMetadata: denialReceipt.audit,
+        auditMetadata: denialReceipt.audit,
+      }] })
+      .mockResolvedValueOnce({ rows: [] })
+    await expect(recordOwnerAuthorityDecision({
+      query: replay, outcomeId: 4, workOrderId: 42, terminalEventId: 88,
+      ownerUserId: "owner", choice: "DENY", expectedNextState: "EXACT_NEXT_STATE",
+    })).resolves.toMatchObject({
+      status: "rejected", choice: "DENY", decisionId: 20, resumeReleased: false,
+      replayed: true,
+    })
+    expect(replay.mock.calls.some(([sql]) => /INSERT INTO decision/.test(sql))).toBe(false)
+  })
+
+  it("replays an approved receipt after classification and lease reclaim", async () => {
+    const approvalReceipt = ownerDecisionReceipt("APPROVE", 19, 90)
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        ...ownerDecisionBinding,
+        goalStatus: "classified",
+        latestLeaseMetadata: { leaseStatus: "ACTIVE" },
+        workOrderLinkedDecisionId: 19,
+        decisionId: 19,
+        decisionRef: "OWNER-DECISION-4-88",
+        priorStatus: "accepted",
+        priorChoice: "APPROVE",
+        priorAuthority: "binding",
+        priorScope: "goal:4|work-order:42|terminal:88|next-state:EXACT_NEXT_STATE",
+        priorEvidence: approvalReceipt.evidence,
+        priorDecidedAt: "2026-07-26T12:00:00.000Z",
+      }] })
+      .mockResolvedValueOnce({ rows: [{
+        evidenceId: 90,
+        notes: approvalReceipt.notes,
+        contentHash: approvalReceipt.contentHash,
+        receiptMetadata: approvalReceipt.audit,
+        auditMetadata: approvalReceipt.audit,
+      }] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recordOwnerAuthorityDecision({
+      query,
+      outcomeId: 4,
+      workOrderId: 42,
+      terminalEventId: 88,
+      ownerUserId: "owner",
+      choice: "APPROVE",
+      expectedNextState: "EXACT_NEXT_STATE",
+    })).resolves.toMatchObject({
+      status: "accepted",
+      choice: "APPROVE",
+      decisionId: 19,
+      replayed: true,
+      resumeReleased: true,
+    })
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO decision/.test(sql))).toBe(false)
+  })
+
+  it.each([
+    ["unauthorized", { goalUserId: "other" }, "OWNER_DECISION_UNAUTHORIZED"],
+    ["stale terminal", { latestTerminalId: 87 }, "OWNER_DECISION_STALE"],
+    ["active lease", { latestLeaseMetadata: { leaseStatus: "ACTIVE", leaseExpiresAt: "2099-01-01T00:00:00.000Z" } }, "OWNER_DECISION_ACTIVE_LEASE"],
+    ["expired active lease", { latestLeaseMetadata: { leaseStatus: "ACTIVE", leaseExpiresAt: "2020-01-01T00:00:00.000Z" } }, "OWNER_DECISION_ACTIVE_LEASE"],
+    ["conflicting terminal", { consumedDecisionId: 21 }, "OWNER_DECISION_CONFLICT"],
+    ["opposite decision after approval", {
+      consumedDecisionId: 21,
+      consumedChoice: "APPROVE",
+      goalStatus: "classified",
+    }, "OWNER_DECISION_CONFLICT"],
+    ["conflicting Work Order link", { workOrderLinkedDecisionId: 21 }, "OWNER_DECISION_CONFLICT"],
+  ])("rejects %s owner decisions", async (_label, overrides, code) => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ ...ownerDecisionBinding, ...overrides }] })
+    await expect(recordOwnerAuthorityDecision({
+      query, outcomeId: 4, workOrderId: 42, terminalEventId: 88,
+      ownerUserId: "owner", choice: "APPROVE", expectedNextState: "EXACT_NEXT_STATE",
+    })).rejects.toMatchObject({ code })
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it("returns only an exact approved database proof", async () => {
+    const approvalReceipt = ownerDecisionReceipt("APPROVE", 19, 90)
+    const legacyNotes = reorderedJson(approvalReceipt.notes)
+    const query = vi.fn(async () => ({ rows: [{
+      decisionId: 19, decisionRef: "OWNER-DECISION-4-88", status: "accepted",
+      choice: "APPROVE", authority: "binding", outcomeId: 4, workOrderId: 42,
+      terminalEventId: 88, decidedAt: "2026-07-26T12:00:00.000Z",
+      receiptEventId: 92, evidenceRecordId: 90, auditEventId: 93,
+      terminalMetadata: {
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: "EXACT_NEXT_STATE",
+        ...ownerDecisionPacket,
+      },
+      evidence: approvalReceipt.evidence,
+      evidenceNotes: legacyNotes,
+      evidenceContentHash: createHash("sha256").update(legacyNotes).digest("hex"),
+      receiptMetadata: approvalReceipt.audit,
+      auditMetadata: approvalReceipt.audit,
+    }] }))
+    await expect(readApprovedOwnerDecision({
+      query, outcomeId: 4, workOrderId: 42, terminalEventId: 88,
+      ownerUserId: "owner", expectedNextState: "EXACT_NEXT_STATE",
+    })).resolves.toMatchObject({
+      approved: true, status: "accepted", choice: "APPROVE", decisionId: 19,
+      decisionRef: "OWNER-DECISION-4-88", workOrderId: 42, terminalEventId: 88,
+    })
+    expect(query.mock.calls[0][0]).toMatch(/status = 'accepted'/)
+    expect(query.mock.calls[0][0]).toMatch(/OWNER_DECISION_REQUIRED/)
+    expect(query.mock.calls[0][0]).toMatch(/"linkedDecisionId" = d\.id/)
+    expect(query.mock.calls[0][0]).toMatch(/HERMES_OWNER_AUTHORITY_DECISION/)
+    expect(query.mock.calls[0][0]).toMatch(/owner\.decision\.recorded/)
+    expect(query.mock.calls[0][0]).toMatch(
+      /latest_terminal[\s\S]+AND "userId" = \$4[\s\S]+HERMES_OUTCOME_TERMINAL/,
+    )
+  })
+
+  it("rejects an approval without its complete evidence, trace, and audit receipt", async () => {
+    const query = vi.fn(async () => ({ rows: [{
+      decisionId: 19, decisionRef: "OWNER-DECISION-4-88", status: "accepted",
+      choice: "APPROVE", authority: "binding", outcomeId: 4, workOrderId: 42,
+      terminalEventId: 88,
+      evidence: ["request:hermes-owner-decision:4:42:88:owner:APPROVE:EXACT_NEXT_STATE"],
+    }] }))
+    await expect(readApprovedOwnerDecision({
+      query, outcomeId: 4, workOrderId: 42, terminalEventId: 88,
+      ownerUserId: "owner", expectedNextState: "EXACT_NEXT_STATE",
+    })).resolves.toBeNull()
+  })
+
+  it("rejects a noncanonical approved next state before reading authority evidence", async () => {
+    const query = vi.fn()
+    await expect(readApprovedOwnerDecision({
+      query, outcomeId: 4, workOrderId: 42, terminalEventId: 88,
+      ownerUserId: "owner", expectedNextState: "invalid next state",
+    })).resolves.toBeNull()
+    expect(query).not.toHaveBeenCalled()
   })
 
   it("recovers only the exact persisted transient native provider wall", async () => {

@@ -7,6 +7,7 @@ import { CodexAppServerClient } from "./app-server-client.mjs"
 import {
   completeOutcome,
   deferProviderOutcome,
+  readApprovedOwnerDecision,
   projectOutcomeRuntimeCheckpoint,
   projectOutcomeRuntimeLease,
   selectNextOutcome,
@@ -25,6 +26,10 @@ const MAX_REMEDIATION_ROUNDS = 3
 const REVIEW_POLL_INTERVAL_MS = 15_000
 const REVIEW_POLL_ATTEMPTS = 80
 const SHA = /^[0-9a-f]{40}$/
+const OWNER_DECISION_RESUME_STATES = new Set([
+  "OWNER_DECISION_ACCEPTED",
+  "OWNER_DECISION_THREAD_RECOVERY_WALL",
+])
 
 export const DEFAULT_VALIDATION_COMMANDS = Object.freeze([
   Object.freeze({ command: "npm", args: Object.freeze(["run", "lint"]), timeoutMs: 10 * 60 * 1000 }),
@@ -113,6 +118,63 @@ ${validation}
 Use only repository file reads and edits inside the existing reserved paths. Read-only shell inspection is limited to rg, Get-Content, Get-ChildItem, and Select-String. Correct the validation failure, independently review the resulting file changes, and do not use shell writes, interpreters, package managers, validators, Git, or GitHub CLI. This is one bounded remediation lane: do not invoke subagents, MCP, dynamic tools, web search, or external connectors. Return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null, merged false, ownerTouchCount 0, blockedScopeCrossed false, and reviewThreads 0. Do not contact William.`
 }
 
+function ownerDecisionPacket(result) {
+  const packet = {
+    blockedAction: result.blockedAction,
+    authorityBoundary: result.authorityBoundary,
+    minimumChoice: result.minimumChoice,
+    approveConsequence: result.approveConsequence,
+    denyConsequence: result.denyConsequence,
+  }
+  if (typeof result.nextState !== "string"
+    || !/^[A-Z][A-Z0-9_]{1,79}$/.test(result.nextState)
+    || Object.values(packet).some((value) => typeof value !== "string" || value.trim() === "")
+    || packet.minimumChoice !== "APPROVE_OR_DENY") {
+    throw Object.assign(new Error("Owner decision result omitted its exact authority packet"), {
+      code: "HERMES_OWNER_DECISION_PACKET_WALL",
+    })
+  }
+  return packet
+}
+
+function buildOwnerDecisionResumePrompt({ workOrderId, branch, outcome, reservations, packet, nextState }) {
+  return `Resume only the previously blocked action for ${workOrderId} on ${branch}.
+
+${remediationContext({ outcome, reservations })}
+
+The Primary Operator approved this exact persisted authority request:
+- Blocked action: ${packet.blockedAction}
+- Authority boundary: ${packet.authorityBoundary}
+- Minimum choice: ${packet.minimumChoice}
+- Approved consequence: ${packet.approveConsequence}
+- Denied consequence: ${packet.denyConsequence}
+- Governed next state: ${nextState}
+
+Continue from the existing worktree and Codex thread. Do not replay completed implementation, validation, review, Git, or delivery work. Perform only the blocked action and its dependency-required continuation. Return the standard structured result with ownerTouchCount 0 and blockedScopeCrossed false. Do not contact William.`
+}
+
+function hasOwnerDecisionResume(metadata) {
+  return Number.isSafeInteger(Number(metadata?.ownerDecisionId))
+    && Number(metadata.ownerDecisionId) > 0
+    && metadata?.ownerDecisionPacket !== null
+    && typeof metadata?.ownerDecisionNextState === "string"
+    && metadata?.ownerDecisionResumePhase === "PENDING"
+}
+
+function hasConsumedOwnerDecisionResume(metadata) {
+  return Number.isSafeInteger(Number(metadata?.ownerDecisionId))
+    && Number(metadata.ownerDecisionId) > 0
+    && metadata?.ownerDecisionResumePhase === "CONSUMED"
+}
+
+function buildOwnerDecisionPostResumePrompt({ workOrderId, branch, outcome, reservations }) {
+  return `Continue ${workOrderId} on ${branch} after the recorded owner-authorized resume turn.
+
+${remediationContext({ outcome, reservations })}
+
+The exact blocked action was already dispatched and completed in the existing Codex thread. Do not repeat that action. Inspect the current worktree and thread state, preserve completed work, and continue only with dependency-required validation, review, delivery, or truthful terminal reporting. Return the standard structured result with ownerTouchCount 0 and blockedScopeCrossed false. Do not contact William.`
+}
+
 function allowedPath(changedPath, reservations) {
   if (FORBIDDEN_CHANGED_PATH.test(changedPath)) return false
   return reservations.some((reservation) => {
@@ -155,6 +217,7 @@ export function createHermesOrchestrator(options = {}) {
   const markComplete = options.markComplete ?? completeOutcome
   const markTerminal = options.markTerminal ?? terminalizeOutcome
   const deferOutcome = options.deferOutcome ?? deferProviderOutcome
+  const readApprovedDecision = options.readApprovedOwnerDecision ?? readApprovedOwnerDecision
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const projectLease = options.projectLease ?? projectOutcomeRuntimeLease
   const leaseRenewalIntervalMs = options.leaseRenewalIntervalMs ?? 5 * 60 * 1000
@@ -490,17 +553,49 @@ export function createHermesOrchestrator(options = {}) {
     const unfinished = Object.values(initialized.executions).filter((execution) => execution?.lease?.status === "ACTIVE")
     if (unfinished.length > 1) throw Object.assign(new Error("Multiple unfinished executions found"), { code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
     const pendingExecution = unfinished[0] ?? null
+    const approvedReleasedExecutions = []
+    const releasedDecisionProofs = new Map()
+    for (const execution of Object.values(initialized.executions)) {
+      if (execution?.lease?.status !== "RELEASED"
+        || execution?.checkpoint?.state !== "OWNER_DECISION_REQUIRED") continue
+      const outcome = execution.metadata?.outcome
+      if (!outcome || String(outcome.id) !== String(execution.outcomeId)) {
+        throw Object.assign(new Error("Released owner wall is missing its exact outcome"), {
+          code: "HERMES_EXECUTION_STATE_WALL",
+        })
+      }
+      const proof = await readApprovedDecision({
+        outcomeId: Number(outcome.id),
+        workOrderId: execution.metadata?.ownerDecisionWorkOrderId ?? null,
+        terminalEventId: execution.metadata?.ownerDecisionTerminalEventId ?? null,
+        ownerUserId: outcome.userId,
+        expectedNextState: execution.checkpoint.detail,
+      })
+      releasedDecisionProofs.set(String(execution.outcomeId), proof)
+      if (proof?.approved === true) approvedReleasedExecutions.push({ execution, proof })
+    }
+    approvedReleasedExecutions.sort((left, right) =>
+      Number(left.proof.decisionId) - Number(right.proof.decisionId)
+        || String(left.execution.outcomeId).localeCompare(String(right.execution.outcomeId)))
     const recoveredExecutions = Object.values(initialized.executions).filter((execution) => (
       execution?.lease?.status === "ABANDONED"
-      && execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
-      && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED"
+      && (
+        (execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
+          && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED")
+        || OWNER_DECISION_RESUME_STATES.has(execution?.checkpoint?.state)
+        || hasOwnerDecisionResume(execution?.metadata)
+      )
     ))
-    if (recoveredExecutions.length > 1 || (pendingExecution && recoveredExecutions.length > 0)) {
+    if (recoveredExecutions.length > 1
+      || [pendingExecution, recoveredExecutions[0]].filter(Boolean).length > 1) {
       throw Object.assign(new Error("Multiple recoverable executions found"), {
         code: "HERMES_EXECUTION_CONCURRENCY_WALL",
       })
     }
-    const durableExecution = pendingExecution ?? recoveredExecutions[0] ?? null
+    const approvedReleased = pendingExecution || recoveredExecutions.length > 0
+      ? null
+      : approvedReleasedExecutions[0] ?? null
+    const durableExecution = pendingExecution ?? recoveredExecutions[0] ?? approvedReleased?.execution ?? null
     const durableOutcome = durableExecution?.metadata?.outcome ?? null
     if (durableExecution && (!durableOutcome
       || String(durableOutcome.id) !== String(durableExecution.outcomeId))) {
@@ -538,7 +633,43 @@ export function createHermesOrchestrator(options = {}) {
     if (!decision.allowed) return { result: "POLICY_WALL", reasonCode: decision.reasonCode }
 
     const outcomeId = String(outcome.id)
-    const current = durableExecution ?? state.read().executions[outcomeId]
+    let current = durableExecution ?? state.read().executions[outcomeId]
+    if (current?.lease?.status === "RELEASED"
+      && current.checkpoint?.state === "OWNER_DECISION_REQUIRED") {
+      const expectedNextState = current.checkpoint.detail
+      if (typeof expectedNextState !== "string" || expectedNextState.length === 0) {
+        throw Object.assign(new Error("Persisted owner decision wall is incomplete"), {
+          code: "HERMES_OWNER_DECISION_STATE_WALL",
+        })
+      }
+      const proof = releasedDecisionProofs.has(outcomeId)
+        ? releasedDecisionProofs.get(outcomeId)
+        : await readApprovedDecision({
+          outcomeId: Number(outcome.id),
+          workOrderId: current.metadata?.ownerDecisionWorkOrderId ?? null,
+          terminalEventId: current.metadata?.ownerDecisionTerminalEventId ?? null,
+          ownerUserId: outcome.userId,
+          expectedNextState,
+        })
+      if (proof?.approved === true) {
+        state.reopenOwnerDecisionWall({
+          idempotencyKey: `${outcomeId}:owner-decision-reopen:${proof.decisionId}`,
+          outcomeId,
+          expectedFencingToken: current.fencingToken,
+          expectedNextState,
+          ownerDecisionId: proof.decisionId,
+          ownerDecisionRef: proof.decisionRef,
+          requestKey: proof.requestKey,
+          decisionPacket: proof.decisionPacket,
+          decisionPacketDigest: proof.decisionPacketDigest,
+          workOrderId: proof.workOrderId,
+          terminalEventId: proof.terminalEventId,
+        })
+        await projectCurrentExecution(outcomeId)
+        await projectCurrentLease(outcomeId, "ABANDONED")
+        current = state.read().executions[outcomeId]
+      }
+    }
     if (current?.lease?.status === "RELEASED") return { result: "ALREADY_FINALIZED", outcomeId }
 
     let lease
@@ -617,6 +748,41 @@ export function createHermesOrchestrator(options = {}) {
         outcomeId, holderId, fencingToken: lease.fencingToken,
       })
       return { result: "FAILED_TERMINAL", outcomeId, nextState }
+    }
+    if (current?.checkpoint?.state === "OWNER_DECISION_REQUIRED") {
+      const nextState = current.checkpoint.detail
+      let decisionPacket
+      try {
+        decisionPacket = ownerDecisionPacket({
+          ...(current.metadata.ownerDecisionPacket ?? {}),
+          nextState,
+        })
+      } catch (error) {
+        await abandonLease({
+          idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:owner-decision-packet`,
+          outcomeId,
+          holderId,
+          fencingToken: lease.fencingToken,
+          reason: error?.code ?? "HERMES_OWNER_DECISION_PACKET_WALL",
+        })
+        throw error
+      }
+      const outcomeTerminalized = await markTerminal({
+        outcomeId: outcome.id,
+        result: "OWNER_DECISION_REQUIRED",
+        nextState,
+        metadata: decisionPacket,
+      })
+      if (!outcomeTerminalized) {
+        throw Object.assign(new Error("Persisted owner wall could not be terminalized"), {
+          code: "HERMES_OUTCOME_TERMINAL_WALL",
+        })
+      }
+      await releaseLease({
+        idempotencyKey: `${outcomeId}:release:OWNER_DECISION_REQUIRED`,
+        outcomeId, holderId, fencingToken: lease.fencingToken,
+      })
+      return { result: "OWNER_DECISION_REQUIRED", outcomeId, nextState }
     }
     const branch = lease.metadata?.branch ?? `codex/hermes-${safeLeaf(outcomeRef(outcome))}-${outcome.id}`
     const reservations = RESERVATIONS[outcome.lane]
@@ -760,12 +926,44 @@ export function createHermesOrchestrator(options = {}) {
     try {
       await client.connect()
       let threadId = cp.metadata.threadId
+      const ownerDecisionResume = hasOwnerDecisionResume(cp.metadata)
+      const consumedOwnerDecisionResume = hasConsumedOwnerDecisionResume(cp.metadata)
+      if (ownerDecisionResume) {
+        const proof = await readApprovedDecision({
+          outcomeId: Number(outcome.id),
+          workOrderId: cp.metadata.ownerDecisionWorkOrderId,
+          terminalEventId: cp.metadata.ownerDecisionTerminalEventId,
+          ownerUserId: outcome.userId,
+          expectedNextState: cp.metadata.ownerDecisionNextState,
+        })
+        if (proof?.approved !== true
+          || Number(proof.decisionId) !== Number(cp.metadata.ownerDecisionId)
+          || proof.decisionRef !== cp.metadata.ownerDecisionRef
+          || proof.requestKey !== cp.metadata.ownerDecisionRequestKey
+          || proof.decisionPacketDigest !== cp.metadata.ownerDecisionPacketDigest
+          || JSON.stringify(proof.decisionPacket) !== JSON.stringify(cp.metadata.ownerDecisionPacket)) {
+          throw Object.assign(new Error("Approved owner resume no longer matches canonical authority proof"), {
+            code: "HERMES_OWNER_DECISION_AUTHORITY_WALL",
+          })
+        }
+      }
+      if (ownerDecisionResume && !threadId) {
+        throw Object.assign(new Error("Approved owner resume is missing its original Codex thread"), {
+          code: "HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL",
+        })
+      }
       if (threadId) {
         try {
           await client.resumeThread(threadId, {
             cwd: record.worktreePath, approvalPolicy: "never", sandbox: "workspace-write",
           })
-        } catch {
+        } catch (error) {
+          if (ownerDecisionResume) {
+            throw Object.assign(new Error("Approved owner resume could not restore its original Codex thread"), {
+              code: "HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL",
+              cause: error,
+            })
+          }
           threadId = null
         }
       }
@@ -793,7 +991,23 @@ export function createHermesOrchestrator(options = {}) {
             workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
             outcome: outcome.command, reservations, findings: pendingFindings,
           })
-        : buildHermesCodexPrompt({
+        : ownerDecisionResume
+          ? buildOwnerDecisionResumePrompt({
+            workOrderId: `WO-HERMES-${outcome.id}-001`,
+            branch,
+            outcome: outcome.command,
+            reservations,
+            packet: cp.metadata.ownerDecisionPacket,
+            nextState: cp.metadata.ownerDecisionNextState,
+          })
+          : consumedOwnerDecisionResume
+            ? buildOwnerDecisionPostResumePrompt({
+              workOrderId: `WO-HERMES-${outcome.id}-001`,
+              branch,
+              outcome: outcome.command,
+              reservations,
+            })
+          : buildHermesCodexPrompt({
         outcome: outcome.command,
         outcomeRef: outcomeRef(outcome),
         workOrderId: `WO-HERMES-${outcome.id}-001`,
@@ -823,11 +1037,13 @@ export function createHermesOrchestrator(options = {}) {
           },
           timeoutMs: TURN_TIMEOUT_MS,
         })
-        await assertLeaseProjectionHealthy()
         cp = await checkpoint(lease, sequence, "CODEX_TURN_COMPLETED", turn.status, {
-          threadId: turn.threadId, turnId: turn.turnId,
+          threadId: turn.threadId,
+          turnId: turn.turnId,
+          ...(ownerDecisionResume ? { ownerDecisionResumePhase: "CONSUMED" } : {}),
         })
         sequence = cp.checkpointSequence
+        await assertLeaseProjectionHealthy()
         const result = parseTurnResult(turn.finalText)
         assertOwnerTouchCountersZero(state.read())
 
@@ -859,9 +1075,27 @@ export function createHermesOrchestrator(options = {}) {
         }
 
         if (["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"].includes(result.result)) {
-          cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null)
+          const decisionPacket = result.result === "OWNER_DECISION_REQUIRED"
+            ? ownerDecisionPacket(result)
+            : null
+          cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null, {
+            ownerDecisionPacket: decisionPacket,
+            ownerDecisionId: null,
+            ownerDecisionRef: null,
+            ownerDecisionRequestKey: null,
+            ownerDecisionNextState: null,
+            ownerDecisionResumePhase: null,
+            ownerDecisionWorkOrderId: null,
+            ownerDecisionTerminalEventId: null,
+            ownerDecisionPacketDigest: null,
+          })
           sequence = cp.checkpointSequence
-          await markTerminal({ outcomeId: outcome.id, result: result.result, nextState: result.nextState ?? null })
+          await markTerminal({
+            outcomeId: outcome.id,
+            result: result.result,
+            nextState: result.nextState ?? null,
+            ...(decisionPacket ? { metadata: decisionPacket } : {}),
+          })
           await releaseLease({
             idempotencyKey: `${outcomeId}:release:${result.result}`,
             outcomeId, holderId, fencingToken: lease.fencingToken,
@@ -955,9 +1189,35 @@ export function createHermesOrchestrator(options = {}) {
       const externalToolWall = error?.code === "APP_SERVER_EXTERNAL_TOOL_WALL"
       const postMergeCleanupWall = error?.code === "HERMES_POST_MERGE_CLEANUP_WALL"
       const runtimeProjectionWall = error?.code === "HERMES_RUNTIME_PROJECTION_WALL"
+      const consumedOwnerDecisionParseWall = [
+        "HERMES_EMPTY_RESULT_WALL",
+        "HERMES_RESULT_PARSE_WALL",
+        "HERMES_RESULT_FORMAT_WALL",
+      ].includes(error?.code)
+        && cp?.metadata?.ownerDecisionResumePhase === "CONSUMED"
+      const ownerDecisionPacketWall = error?.code === "HERMES_OWNER_DECISION_PACKET_WALL"
       if (postMergeCleanupWall) {
         const terminal = await settlePostMergeCleanupFailure({ lease, outcome, error })
         if (terminal) return terminal
+        throw error
+      }
+      if (error?.code === "HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL") {
+        try {
+          cp = await checkpoint(
+            lease,
+            sequence,
+            "OWNER_DECISION_THREAD_RECOVERY_WALL",
+            cp?.metadata?.threadId ?? null,
+          )
+          sequence = cp.checkpointSequence
+          await abandonLease({
+            idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:owner-thread-recovery:${sequence}`,
+            outcomeId,
+            holderId,
+            fencingToken: lease.fencingToken,
+            reason: error.code,
+          })
+        } catch {}
         throw error
       }
       const externalToolRetryCount = externalToolWall
@@ -986,6 +1246,8 @@ export function createHermesOrchestrator(options = {}) {
       } catch {}
       if (cp?.state === "PROVIDER_UNAVAILABLE"
         || runtimeProjectionWall
+        || consumedOwnerDecisionParseWall
+        || ownerDecisionPacketWall
         || ["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT", "APP_SERVER_EXTERNAL_TOOL_WALL", "HERMES_PROVIDER_SETTLEMENT_WALL"].includes(error?.code)) {
         try {
           await abandonLease({

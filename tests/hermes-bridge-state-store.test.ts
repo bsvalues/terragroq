@@ -7,6 +7,13 @@ import { createHash } from "node:crypto"
 import { createHermesStateStore } from "@/scripts/hermes-bridge/state-store.mjs"
 
 const dirs: string[] = []
+const ownerDecisionPacket = {
+  blockedAction: "Resume the exact blocked validation.",
+  authorityBoundary: "Primary authority is required.",
+  minimumChoice: "APPROVE_OR_DENY",
+  approveConsequence: "Resume only the blocked validation.",
+  denyConsequence: "Keep the Work Order blocked.",
+}
 afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })))
 
 function fixture() {
@@ -518,6 +525,157 @@ describe("Hermes bridge durable state store", () => {
     expect(resumed.fencingToken).toBeGreaterThan(first.fencingToken)
     expect(resumed.metadata.providerRetryCount).toBe(0)
     expect(resumed.metadata.externalToolRetryCount).toBe(0)
+  })
+
+  it("reopens an approved owner wall exactly once and preserves the fence", () => {
+    const { store } = fixture()
+    const first = store.acquireLease({
+      outcomeId: "5", holderId: "owner-wall-holder", leaseDurationMs: 1000,
+      idempotencyKey: "owner-wall-acquire",
+      metadata: { threadId: "thread-owner-wall", ownerDecisionPacket },
+    })
+    store.checkpoint({
+      outcomeId: "5", holderId: "owner-wall-holder", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "OWNER_DECISION_REQUIRED", detail: "EXACT_NEXT_STATE",
+      idempotencyKey: "owner-wall-checkpoint",
+    })
+    store.releaseLease({
+      outcomeId: "5", holderId: "owner-wall-holder", fencingToken: first.fencingToken,
+      idempotencyKey: "owner-wall-release",
+    })
+
+    const request = {
+      outcomeId: "5", expectedFencingToken: first.fencingToken,
+      expectedNextState: "EXACT_NEXT_STATE", ownerDecisionId: 19,
+      ownerDecisionRef: "OWNER-DECISION-5-88", requestKey: "owner-request",
+      workOrderId: 55, terminalEventId: 88,
+      decisionPacket: ownerDecisionPacket,
+      decisionPacketDigest: createHash("sha256")
+        .update(JSON.stringify(ownerDecisionPacket))
+        .digest("hex"),
+      idempotencyKey: "owner-wall-reopen",
+    }
+    expect(store.reopenOwnerDecisionWall(request)).toMatchObject({
+      fencingToken: first.fencingToken, checkpointSequence: 2,
+      leaseStatus: "ABANDONED", state: "OWNER_DECISION_ACCEPTED",
+    })
+    expect(store.reopenOwnerDecisionWall(request)).toMatchObject({
+      idempotent: true, checkpointSequence: 2, leaseStatus: "ABANDONED",
+    })
+    expect(store.read().executions["5"]).toMatchObject({
+      fencingToken: first.fencingToken,
+      lease: { status: "ABANDONED", recoverReason: "OWNER_DECISION_ACCEPTED" },
+      checkpoint: { state: "OWNER_DECISION_ACCEPTED", detail: "EXACT_NEXT_STATE" },
+      metadata: {
+        threadId: "thread-owner-wall",
+        ownerDecisionId: 19,
+        ownerDecisionRef: "OWNER-DECISION-5-88",
+        ownerDecisionNextState: "EXACT_NEXT_STATE",
+        ownerDecisionResumePhase: "PENDING",
+        ownerDecisionWorkOrderId: 55,
+        ownerDecisionTerminalEventId: 88,
+        ownerDecisionPacketDigest: request.decisionPacketDigest,
+        ownerDecisionPacket,
+      },
+    })
+    expect(store.reclaimLease({
+      outcomeId: "5", holderId: "resumed-holder", expectedFencingToken: first.fencingToken,
+      leaseDurationMs: 1000, idempotencyKey: "owner-wall-reclaim",
+    }).fencingToken).toBeGreaterThan(first.fencingToken)
+  })
+
+  it("rejects owner-wall reopen for stale state or a stale fence", () => {
+    const { store } = fixture()
+    const first = store.acquireLease({
+      outcomeId: "5", holderId: "owner-wall-holder", leaseDurationMs: 1000,
+      idempotencyKey: "owner-wall-invalid-acquire",
+      metadata: { ownerDecisionPacket },
+    })
+    store.checkpoint({
+      outcomeId: "5", holderId: "owner-wall-holder", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "OWNER_DECISION_REQUIRED", detail: "EXACT_NEXT_STATE",
+      idempotencyKey: "owner-wall-invalid-checkpoint",
+    })
+    store.releaseLease({
+      outcomeId: "5", holderId: "owner-wall-holder", fencingToken: first.fencingToken,
+      idempotencyKey: "owner-wall-invalid-release",
+    })
+    expect(() => store.reopenOwnerDecisionWall({
+      outcomeId: "5", expectedFencingToken: first.fencingToken + 1,
+      expectedNextState: "EXACT_NEXT_STATE", idempotencyKey: "owner-wall-stale-fence",
+    })).toThrowError(expect.objectContaining({ code: "FENCING_TOKEN_CONFLICT" }))
+    expect(() => store.reopenOwnerDecisionWall({
+      outcomeId: "5", expectedFencingToken: first.fencingToken,
+      expectedNextState: "OTHER_NEXT_STATE", idempotencyKey: "owner-wall-stale-state",
+    })).toThrowError(expect.objectContaining({ code: "OWNER_DECISION_REOPEN_STATE_WALL" }))
+  })
+
+  it("rejects malformed owner decision packets with a typed state wall", () => {
+    const { store } = fixture()
+    expect(() => store.acquireLease({
+      outcomeId: "5",
+      holderId: "owner-wall-holder",
+      leaseDurationMs: 1000,
+      idempotencyKey: "owner-wall-malformed-packet",
+      metadata: { ownerDecisionPacket: "not-a-packet" },
+    })).toThrowError(expect.objectContaining({ code: "INVALID_OWNER_DECISION_PACKET" }))
+  })
+
+  it.each([
+    [{ ownerDecisionId: 0, ownerDecisionRef: "OWNER-DECISION-5-88", ownerDecisionRequestKey: "request" }, "INVALID_OWNER_DECISION_ID"],
+    [{ ownerDecisionId: 19, ownerDecisionRef: "invalid", ownerDecisionRequestKey: "request" }, "INVALID_OWNER_DECISION_REF"],
+    [{ ownerDecisionId: 19, ownerDecisionRef: "OWNER-DECISION-5-88", ownerDecisionRequestKey: "" }, "INVALID_OWNER_DECISION_REQUEST_KEY"],
+    [{ ownerDecisionId: 19 }, "INVALID_OWNER_DECISION_BINDING"],
+  ])("rejects malformed owner decision binding metadata", (metadata, code) => {
+    const { store } = fixture()
+    expect(() => store.acquireLease({
+      outcomeId: "5",
+      holderId: "owner-wall-holder",
+      leaseDurationMs: 1000,
+      idempotencyKey: `owner-wall-invalid-binding-${code}`,
+      metadata,
+    })).toThrowError(expect.objectContaining({ code }))
+  })
+
+  it("rejects a database approval bound to a different local authority packet", () => {
+    const { store } = fixture()
+    const first = store.acquireLease({
+      outcomeId: "5",
+      holderId: "owner-wall-holder",
+      leaseDurationMs: 1000,
+      idempotencyKey: "owner-wall-packet-acquire",
+      metadata: { ownerDecisionPacket },
+    })
+    store.checkpoint({
+      outcomeId: "5",
+      holderId: "owner-wall-holder",
+      fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED",
+      detail: "EXACT_NEXT_STATE",
+      idempotencyKey: "owner-wall-packet-checkpoint",
+    })
+    store.releaseLease({
+      outcomeId: "5",
+      holderId: "owner-wall-holder",
+      fencingToken: first.fencingToken,
+      idempotencyKey: "owner-wall-packet-release",
+    })
+    const conflictingPacket = {
+      ...ownerDecisionPacket,
+      blockedAction: "Resume a different action.",
+    }
+    expect(() => store.reopenOwnerDecisionWall({
+      outcomeId: "5",
+      expectedFencingToken: first.fencingToken,
+      expectedNextState: "EXACT_NEXT_STATE",
+      ownerDecisionId: 19,
+      decisionPacket: conflictingPacket,
+      decisionPacketDigest: createHash("sha256")
+        .update(JSON.stringify(conflictingPacket))
+        .digest("hex"),
+      idempotencyKey: "owner-wall-packet-reopen",
+    })).toThrowError(expect.objectContaining({ code: "OWNER_DECISION_REOPEN_STATE_WALL" }))
   })
 
   it("persists owner-touch counters and enforces the kill switch", () => {

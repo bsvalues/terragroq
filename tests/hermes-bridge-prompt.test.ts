@@ -48,5 +48,11 @@ describe("Hermes Codex prompt", () => {
     expect(HERMES_TURN_OUTPUT_SCHEMA.properties.result.enum).toContain("RETRYABLE_PROVIDER_WALL")
     expect(HERMES_TURN_OUTPUT_SCHEMA.properties.result.enum).toContain("READY_FOR_VALIDATION")
     expect(HERMES_TURN_OUTPUT_SCHEMA.properties.result.enum).not.toContain("READY_FOR_MERGE")
+    expect(HERMES_TURN_OUTPUT_SCHEMA.required).toContain("blockedAction")
+    expect(HERMES_TURN_OUTPUT_SCHEMA.properties.nextState.pattern).toBe("^[A-Z][A-Z0-9_]{1,79}$")
+    expect(HERMES_TURN_OUTPUT_SCHEMA.properties.minimumChoice.enum).toEqual([
+      "APPROVE_OR_DENY",
+      null,
+    ])
   })
 })

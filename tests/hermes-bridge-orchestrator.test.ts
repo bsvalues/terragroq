@@ -1,4 +1,5 @@
 import fs from "node:fs"
+import { createHash } from "node:crypto"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -7,6 +8,16 @@ import { createHermesOrchestrator } from "../scripts/hermes-bridge/orchestrator.
 import { createHermesStateStore } from "../scripts/hermes-bridge/state-store.mjs"
 
 const roots: string[] = []
+const ownerDecisionPacket = {
+  blockedAction: "Resume the exact blocked validation.",
+  authorityBoundary: "Primary authority is required.",
+  minimumChoice: "APPROVE_OR_DENY",
+  approveConsequence: "Resume only the blocked validation.",
+  denyConsequence: "Keep the Work Order blocked.",
+}
+const ownerDecisionPacketDigest = createHash("sha256")
+  .update(JSON.stringify(ownerDecisionPacket))
+  .digest("hex")
 
 function runtime() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-orchestrator-"))
@@ -42,6 +53,7 @@ function fixture(
   const deferOutcome = vi.fn(async () => true)
   const projectCheckpoint = vi.fn(async () => ({ workOrderId: 77 }))
   const projectLease = vi.fn(async () => ({ workOrderId: 77 }))
+  const readApprovedOwnerDecision = vi.fn(async () => null)
   let merged = false
   const lifecycle = {
     refreshOriginMain: vi.fn(async () => "a".repeat(40)),
@@ -89,7 +101,7 @@ function fixture(
   }
   const orchestrator = createHermesOrchestrator({
     workspace: process.cwd(), runtimeRoot: root, state, lifecycle, selectOutcome, markComplete, markTerminal, deferOutcome,
-    projectCheckpoint, projectLease,
+    projectCheckpoint, projectLease, readApprovedOwnerDecision,
     clientFactory: () => client,
     holderId: "test-holder",
     now: () => new Date(currentTime),
@@ -98,7 +110,8 @@ function fixture(
   })
   return {
     root, state, orchestrator, selectOutcome, markComplete, markTerminal, deferOutcome,
-    projectCheckpoint, projectLease, lifecycle, client,
+    projectCheckpoint, projectLease, readApprovedOwnerDecision, lifecycle, client,
+    resetMerged: () => { merged = false },
     advance: (milliseconds: number) => { currentTime += milliseconds },
   }
 }
@@ -1245,6 +1258,514 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
   })
 
+  it("reconciles one approved owner proof, reopens once, and reclaims one fenced lease", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-resume-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: { outcome },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-resume-wall", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken, expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED", detail: "NEW_AUTHORITY_REQUIRED",
+      metadata: { threadId: "thread-owner-wall", ownerDecisionPacket },
+    })
+    value.state.releaseLease({
+      idempotencyKey: "owner-resume-release", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+    })
+    value.readApprovedOwnerDecision.mockResolvedValue({
+      approved: true, status: "accepted", choice: "APPROVE", decisionId: 19,
+      decisionRef: "OWNER-DECISION-77-500", requestKey: "owner-request",
+      workOrderId: 77, terminalEventId: 500,
+      decisionPacket: ownerDecisionPacket, decisionPacketDigest: ownerDecisionPacketDigest,
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", outcomeId: "77" })
+    expect(value.readApprovedOwnerDecision).toHaveBeenCalledTimes(2)
+    expect(value.readApprovedOwnerDecision.mock.calls[1][0]).toMatchObject({
+      workOrderId: 77,
+      terminalEventId: 500,
+    })
+    expect(value.selectOutcome).toHaveBeenCalledOnce()
+    expect(value.client.runTurn).toHaveBeenCalledOnce()
+    expect(value.client.resumeThread).toHaveBeenCalledWith(
+      "thread-owner-wall",
+      expect.any(Object),
+    )
+    expect(value.client.runTurn.mock.calls[0][0].prompt).toContain(
+      "Resume only the previously blocked action",
+    )
+    expect(value.client.runTurn.mock.calls[0][0].prompt).toContain(
+      "Governed next state: NEW_AUTHORITY_REQUIRED",
+    )
+    expect(value.state.read().executions["77"]).toMatchObject({
+      fencingToken: first.fencingToken + 1,
+      lease: { status: "RELEASED" }, checkpoint: { state: "COMPLETE" },
+      metadata: { ownerDecisionResumePhase: "CONSUMED" },
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "ALREADY_FINALIZED", outcomeId: "77" })
+    expect(value.readApprovedOwnerDecision).toHaveBeenCalledTimes(2)
+    expect(value.client.runTurn).toHaveBeenCalledOnce()
+  })
+
+  it("abandons a reclaimed owner wall whose persisted packet is malformed", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-packet-wall-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome, threadId: "thread-owner-packet-wall" },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-packet-wall-checkpoint",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED",
+      detail: "NEW_AUTHORITY_REQUIRED",
+    })
+    value.state.abandonLease({
+      idempotencyKey: "owner-packet-wall-crash",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+      reason: "PROCESS_CRASH",
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_OWNER_DECISION_PACKET_WALL",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { abandonReason: "HERMES_OWNER_DECISION_PACKET_WALL" },
+    })
+    expect(value.client.connect).not.toHaveBeenCalled()
+  })
+
+  it("revalidates canonical authority immediately before an approved resume dispatch", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-revoked-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: { outcome },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-revoked-wall", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken, expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED", detail: "NEW_AUTHORITY_REQUIRED",
+      metadata: { threadId: "thread-owner-revoked", ownerDecisionPacket },
+    })
+    value.state.releaseLease({
+      idempotencyKey: "owner-revoked-release", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+    })
+    value.readApprovedOwnerDecision
+      .mockResolvedValueOnce({
+        approved: true, status: "accepted", choice: "APPROVE", decisionId: 19,
+        decisionRef: "OWNER-DECISION-77-500", requestKey: "owner-request",
+        workOrderId: 77, terminalEventId: 500,
+        decisionPacket: ownerDecisionPacket, decisionPacketDigest: ownerDecisionPacketDigest,
+      })
+      .mockResolvedValueOnce(null)
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_OWNER_DECISION_AUTHORITY_WALL",
+    })
+    expect(value.readApprovedOwnerDecision).toHaveBeenCalledTimes(2)
+    expect(value.client.runTurn).not.toHaveBeenCalled()
+  })
+
+  it("serializes multiple approved owner resumes by their persisted decision order", async () => {
+    const value = fixture()
+    const firstOutcome = await value.selectOutcome()
+    const secondOutcome = { ...firstOutcome, id: 78, ref: "OUTCOME-78" }
+    for (const [outcome, decisionId] of [[firstOutcome, 19], [secondOutcome, 18]] as const) {
+      const outcomeId = String(outcome.id)
+      const lease = value.state.acquireLease({
+        idempotencyKey: `owner-queue-acquire-${outcomeId}`,
+        outcomeId,
+        holderId: `crashed-${outcomeId}`,
+        leaseDurationMs: 1000,
+        metadata: { outcome },
+      })
+      value.state.checkpoint({
+        idempotencyKey: `owner-queue-wall-${outcomeId}`,
+        outcomeId,
+        holderId: `crashed-${outcomeId}`,
+        fencingToken: lease.fencingToken,
+        expectedCheckpointSequence: 0,
+        state: "OWNER_DECISION_REQUIRED",
+        detail: "NEW_AUTHORITY_REQUIRED",
+        metadata: { threadId: `thread-${outcomeId}`, ownerDecisionPacket },
+      })
+      value.state.releaseLease({
+        idempotencyKey: `owner-queue-release-${outcomeId}`,
+        outcomeId,
+        holderId: `crashed-${outcomeId}`,
+        fencingToken: lease.fencingToken,
+      })
+      expect(decisionId).toBeGreaterThan(0)
+    }
+    value.readApprovedOwnerDecision.mockImplementation(async ({ outcomeId }) => {
+      const decisionId = Number(outcomeId) === 78 ? 18 : 19
+      return {
+        approved: true,
+        status: "accepted",
+        choice: "APPROVE",
+        decisionId,
+        decisionRef: `OWNER-DECISION-${outcomeId}-500`,
+        requestKey: `owner-request-${outcomeId}`,
+        workOrderId: Number(outcomeId),
+        terminalEventId: 500,
+        decisionPacket: ownerDecisionPacket,
+        decisionPacketDigest: ownerDecisionPacketDigest,
+      }
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "78",
+    })
+    expect(value.state.read().executions["78"].lease.status).toBe("RELEASED")
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "OWNER_DECISION_REQUIRED" },
+    })
+    value.resetMerged()
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(value.state.read().executions["77"].lease.status).toBe("RELEASED")
+  })
+
+  it("does not repeat the approved action after its resume turn was durably consumed", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-consumed-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome, threadId: "thread-owner-consumed", ownerDecisionPacket },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-consumed-wall", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken, expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED", detail: "NEW_AUTHORITY_REQUIRED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "owner-consumed-release", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+    })
+    value.state.reopenOwnerDecisionWall({
+      idempotencyKey: "owner-consumed-reopen", outcomeId: "77",
+      expectedFencingToken: first.fencingToken,
+      expectedNextState: "NEW_AUTHORITY_REQUIRED",
+      ownerDecisionId: 19,
+      ownerDecisionRef: "OWNER-DECISION-77-500",
+      requestKey: "owner-request",
+      workOrderId: 77,
+      terminalEventId: 500,
+      decisionPacket: ownerDecisionPacket,
+      decisionPacketDigest: ownerDecisionPacketDigest,
+    })
+    const resumed = value.state.reclaimLease({
+      idempotencyKey: "owner-consumed-reclaim", outcomeId: "77",
+      expectedFencingToken: first.fencingToken,
+      holderId: "test-holder", leaseDurationMs: 1000,
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-consumed-turn", outcomeId: "77", holderId: "test-holder",
+      fencingToken: resumed.fencingToken,
+      expectedCheckpointSequence: resumed.checkpointSequence,
+      state: "CODEX_TURN_COMPLETED",
+      detail: "completed",
+      metadata: { ownerDecisionResumePhase: "CONSUMED" },
+    })
+    value.state.abandonLease({
+      idempotencyKey: "owner-consumed-crash", outcomeId: "77", holderId: "test-holder",
+      fencingToken: resumed.fencingToken, reason: "PROCESS_CRASH",
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "77",
+    })
+    const prompt = value.client.runTurn.mock.calls[0][0].prompt
+    expect(prompt).toContain("already dispatched and completed")
+    expect(prompt).not.toContain("Resume only the previously blocked action")
+  })
+
+  it.each([
+    ["malformed", "not-json", "HERMES_RESULT_FORMAT_WALL"],
+    ["empty", "", "HERMES_EMPTY_RESULT_WALL"],
+  ])("consumes an approved resume before parsing %s Codex output", async (
+    _label,
+    finalText,
+    errorCode,
+  ) => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-malformed-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: { outcome },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-malformed-wall", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken, expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED", detail: "NEW_AUTHORITY_REQUIRED",
+      metadata: { threadId: "thread-owner-malformed", ownerDecisionPacket },
+    })
+    value.state.releaseLease({
+      idempotencyKey: "owner-malformed-release", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+    })
+    value.readApprovedOwnerDecision.mockResolvedValue({
+      approved: true, status: "accepted", choice: "APPROVE", decisionId: 19,
+      decisionRef: "OWNER-DECISION-77-500", requestKey: "owner-request",
+      workOrderId: 77, terminalEventId: 500,
+      decisionPacket: ownerDecisionPacket, decisionPacketDigest: ownerDecisionPacketDigest,
+    })
+    value.client.runTurn.mockResolvedValueOnce({
+      threadId: "thread-owner-malformed",
+      turnId: "turn-owner-malformed",
+      status: "completed",
+      finalText,
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: errorCode,
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      metadata: { ownerDecisionResumePhase: "CONSUMED" },
+      lease: { abandonReason: errorCode },
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "77",
+    })
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain(
+      "already dispatched and completed",
+    )
+    expect(value.client.runTurn.mock.calls[1][0].prompt).not.toContain(
+      "Resume only the previously blocked action",
+    )
+  })
+
+  it("durably consumes an approved resume before a failed runtime projection check", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-projection-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: { outcome },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-projection-wall", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken, expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED", detail: "NEW_AUTHORITY_REQUIRED",
+      metadata: { threadId: "thread-owner-projection", ownerDecisionPacket },
+    })
+    value.state.releaseLease({
+      idempotencyKey: "owner-projection-release", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+    })
+    value.readApprovedOwnerDecision.mockResolvedValue({
+      approved: true, status: "accepted", choice: "APPROVE", decisionId: 19,
+      decisionRef: "OWNER-DECISION-77-500", requestKey: "owner-request",
+      workOrderId: 77, terminalEventId: 500,
+      decisionPacket: ownerDecisionPacket, decisionPacketDigest: ownerDecisionPacketDigest,
+    })
+    let failedProjection = false
+    value.projectCheckpoint.mockImplementation(async ({ checkpoint }) => {
+      if (checkpoint.state === "CODEX_TURN_COMPLETED" && !failedProjection) {
+        failedProjection = true
+        throw Object.assign(new Error("projection unavailable"), {
+          code: "DATABASE_UNAVAILABLE",
+        })
+      }
+      return { workOrderId: 77 }
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_RUNTIME_PROJECTION_WALL",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      checkpoint: { state: "CODEX_TURN_COMPLETED" },
+      metadata: { ownerDecisionResumePhase: "CONSUMED" },
+      lease: {
+        status: "ACTIVE",
+        abandonReason: "HERMES_RUNTIME_PROJECTION_WALL",
+        abandonedAt: expect.any(String),
+      },
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "77",
+    })
+    expect(value.client.runTurn).toHaveBeenCalledTimes(2)
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain(
+      "already dispatched and completed",
+    )
+    expect(value.client.runTurn.mock.calls[1][0].prompt).not.toContain(
+      "Resume only the previously blocked action",
+    )
+  })
+
+  it("settles a recovered owner-wall checkpoint before any Codex redispatch", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-settlement-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: { outcome, threadId: "thread-owner-wall", ownerDecisionPacket },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-settlement-checkpoint", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken, expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED", detail: "NEW_AUTHORITY_REQUIRED",
+    })
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "OWNER_DECISION_REQUIRED",
+      outcomeId: "77",
+      nextState: "NEW_AUTHORITY_REQUIRED",
+    })
+    expect(value.markTerminal).toHaveBeenCalledWith({
+      outcomeId: 77,
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "NEW_AUTHORITY_REQUIRED",
+      metadata: ownerDecisionPacket,
+    })
+    expect(value.client.connect).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"].lease.status).toBe("RELEASED")
+  })
+
+  it("fails closed and retries the original thread when owner-resume restoration fails", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-thread-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: { outcome, threadId: "thread-owner-wall", ownerDecisionPacket },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-thread-wall", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken, expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED", detail: "NEW_AUTHORITY_REQUIRED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "owner-thread-release", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+    })
+    value.readApprovedOwnerDecision.mockResolvedValue({
+      approved: true, status: "accepted", choice: "APPROVE", decisionId: 19,
+      decisionRef: "OWNER-DECISION-77-500", requestKey: "owner-request",
+      workOrderId: 77, terminalEventId: 500,
+      decisionPacket: ownerDecisionPacket, decisionPacketDigest: ownerDecisionPacketDigest,
+    })
+    value.client.resumeThread.mockRejectedValueOnce(new Error("thread transport unavailable"))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL",
+    })
+    expect(value.client.startThread).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "ACTIVE", abandonedAt: expect.any(String) },
+      checkpoint: { state: "OWNER_DECISION_THREAD_RECOVERY_WALL" },
+      metadata: { threadId: "thread-owner-wall", ownerDecisionPacket },
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(value.client.resumeThread).toHaveBeenLastCalledWith(
+      "thread-owner-wall",
+      expect.any(Object),
+    )
+    expect(value.client.startThread).not.toHaveBeenCalled()
+  })
+
+  it("recovers an approved owner decision after a crash before lease reclaim", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-crash-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: { outcome, threadId: "thread-owner-crash", ownerDecisionPacket },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-crash-wall", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken, expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED", detail: "NEW_AUTHORITY_REQUIRED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "owner-crash-release", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+    })
+    value.state.reopenOwnerDecisionWall({
+      idempotencyKey: "owner-crash-reopen", outcomeId: "77",
+      expectedFencingToken: first.fencingToken,
+      expectedNextState: "NEW_AUTHORITY_REQUIRED",
+      ownerDecisionId: 19,
+      ownerDecisionRef: "OWNER-DECISION-77-500",
+      requestKey: "owner-request",
+      workOrderId: 77,
+      terminalEventId: 500,
+      decisionPacket: ownerDecisionPacket,
+      decisionPacketDigest: ownerDecisionPacketDigest,
+    })
+    value.readApprovedOwnerDecision.mockResolvedValue({
+      approved: true, status: "accepted", choice: "APPROVE", decisionId: 19,
+      decisionRef: "OWNER-DECISION-77-500", requestKey: "owner-request",
+      workOrderId: 77, terminalEventId: 500,
+      decisionPacket: ownerDecisionPacket, decisionPacketDigest: ownerDecisionPacketDigest,
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(value.selectOutcome).toHaveBeenCalledOnce()
+    expect(value.readApprovedOwnerDecision).toHaveBeenCalledOnce()
+    expect(value.client.resumeThread).toHaveBeenCalledWith(
+      "thread-owner-crash",
+      expect.any(Object),
+    )
+    expect(value.state.read().executions["77"]).toMatchObject({
+      fencingToken: first.fencingToken + 1,
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "COMPLETE" },
+    })
+  })
+
+  it("does not resume a denied or missing owner proof", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-deny-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: { outcome },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-deny-wall", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken, expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED", detail: "NEW_AUTHORITY_REQUIRED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "owner-deny-release", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "ALREADY_FINALIZED", outcomeId: "77" })
+    expect(value.readApprovedOwnerDecision).toHaveBeenCalledOnce()
+    expect(value.client.runTurn).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"]).toMatchObject({
+      fencingToken: first.fencingToken,
+      lease: { status: "RELEASED" }, checkpoint: { state: "OWNER_DECISION_REQUIRED" },
+    })
+  })
+
   it("declassifies a terminal owner wall so it cannot starve later outcomes", async () => {
     const value = fixture()
     value.client.runTurn.mockResolvedValueOnce({
@@ -1254,6 +1775,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
         mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
         blockedScopeCrossed: false, nextState: "NEW_AUTHORITY_REQUIRED",
+        ...ownerDecisionPacket,
       }),
     })
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
@@ -1261,7 +1783,128 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(value.markTerminal).toHaveBeenCalledWith({
       outcomeId: 77, result: "OWNER_DECISION_REQUIRED", nextState: "NEW_AUTHORITY_REQUIRED",
+      metadata: ownerDecisionPacket,
     })
     expect(value.markComplete).not.toHaveBeenCalled()
+  })
+
+  it("abandons a completed turn that returns a malformed owner decision packet", async () => {
+    const value = fixture()
+    value.client.runTurn.mockResolvedValueOnce({
+      threadId: "thread-77",
+      turnId: "turn-malformed-owner-wall",
+      status: "completed",
+      finalText: JSON.stringify({
+        result: "OWNER_DECISION_REQUIRED",
+        workOrder: "WO-HERMES-77-001",
+        branch: "codex/hermes-goal-77-77",
+        commit: null,
+        prUrl: null,
+        merged: false,
+        mergeCommit: null,
+        validation: [],
+        reviewThreads: 0,
+        ownerTouchCount: 0,
+        blockedScopeCrossed: false,
+        nextState: "NEW_AUTHORITY_REQUIRED",
+        blockedAction: ownerDecisionPacket.blockedAction,
+        authorityBoundary: ownerDecisionPacket.authorityBoundary,
+        minimumChoice: ownerDecisionPacket.minimumChoice,
+        approveConsequence: ownerDecisionPacket.approveConsequence,
+      }),
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_OWNER_DECISION_PACKET_WALL",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { abandonReason: "HERMES_OWNER_DECISION_PACKET_WALL" },
+    })
+    expect(value.markTerminal).not.toHaveBeenCalled()
+  })
+
+  it("clears prior authority binding metadata when an approved resume reaches a successor wall", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-successor-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-successor-wall",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED",
+      detail: "NEW_AUTHORITY_REQUIRED",
+      metadata: { threadId: "thread-owner-successor", ownerDecisionPacket },
+    })
+    value.state.releaseLease({
+      idempotencyKey: "owner-successor-release",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+    })
+    value.readApprovedOwnerDecision.mockResolvedValue({
+      approved: true,
+      status: "accepted",
+      choice: "APPROVE",
+      decisionId: 19,
+      decisionRef: "OWNER-DECISION-77-500",
+      requestKey: "owner-request",
+      workOrderId: 77,
+      terminalEventId: 500,
+      decisionPacket: ownerDecisionPacket,
+      decisionPacketDigest: ownerDecisionPacketDigest,
+    })
+    const successorPacket = {
+      ...ownerDecisionPacket,
+      blockedAction: "Perform the newly blocked action.",
+      approveConsequence: "Perform only the newly blocked action.",
+    }
+    value.client.runTurn.mockResolvedValueOnce({
+      threadId: "thread-owner-successor",
+      turnId: "turn-owner-successor",
+      status: "completed",
+      finalText: JSON.stringify({
+        result: "OWNER_DECISION_REQUIRED",
+        workOrder: "WO-HERMES-77-001",
+        branch: "codex/hermes-goal-77-77",
+        commit: null,
+        prUrl: null,
+        merged: false,
+        mergeCommit: null,
+        validation: [],
+        reviewThreads: 0,
+        ownerTouchCount: 0,
+        blockedScopeCrossed: false,
+        nextState: "SECOND_AUTHORITY_REQUIRED",
+        ...successorPacket,
+      }),
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "SECOND_AUTHORITY_REQUIRED",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "OWNER_DECISION_REQUIRED", detail: "SECOND_AUTHORITY_REQUIRED" },
+      metadata: {
+        ownerDecisionPacket: successorPacket,
+        ownerDecisionId: null,
+        ownerDecisionRef: null,
+        ownerDecisionRequestKey: null,
+        ownerDecisionNextState: null,
+        ownerDecisionResumePhase: null,
+        ownerDecisionWorkOrderId: null,
+        ownerDecisionTerminalEventId: null,
+        ownerDecisionPacketDigest: null,
+      },
+    })
   })
 })

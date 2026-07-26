@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import {
   buildRuntimeExecutionTruth,
   type RuntimeExecutionGovernanceEventRecord,
@@ -114,6 +116,51 @@ export type GoalTimelineValidationCheckpoint = {
   references: string[]
 }
 
+export type GoalAuthorityDecisionChoice = "APPROVE" | "DENY"
+
+export type GoalTimelineResumeState =
+  | "NOT_REQUIRED"
+  | "AWAITING_OWNER_DECISION"
+  | "MISSING_DECISION_RECORD"
+  | "DECISION_REJECTED"
+  | "DECISION_CONFLICT"
+  | "AUTHORIZED_TO_RESUME"
+
+export type GoalTimelineDecisionRequest = {
+  status: "NOT_REQUIRED" | "ACTIONABLE" | "RECEIPT_RECORDED" | "STALE" | "CONFLICTING"
+  blockedAction: string | null
+  authorityBoundary: string | null
+  choices: GoalAuthorityDecisionChoice[]
+  consequences: {
+    approve: string | null
+    deny: string | null
+  }
+  goalId: number
+  goalRef: string
+  outcomeId: number
+  outcomeRef: string
+  workOrderId: number | null
+  workOrderRef: string | null
+  terminalEventId: number | null
+  terminalState: string | null
+  terminalResult: string | null
+  ownerUserId: string
+  expectedNextState: string | null
+  receipt: {
+    status: "NOT_RECORDED" | "RECORDED" | "CONFLICTING"
+    choice: GoalAuthorityDecisionChoice | null
+    decisionId: number | null
+    decisionRef: string | null
+    ownerUserId: string | null
+    terminalEventId: number | null
+    recordedAt: Date | null
+  }
+  resume: {
+    state: GoalTimelineResumeState
+    governedNextState: string | null
+  }
+}
+
 export type GoalTimelineProjection = {
   id: string
   goal: {
@@ -185,17 +232,12 @@ export type GoalTimelineProjection = {
     ownerAction: string | null
   }
   resume: {
-    state:
-      | "NOT_REQUIRED"
-      | "AWAITING_OWNER_DECISION"
-      | "MISSING_DECISION_RECORD"
-      | "DECISION_REJECTED"
-      | "DECISION_CONFLICT"
-      | "AUTHORIZED_TO_RESUME"
+    state: GoalTimelineResumeState
     decisionId: number | null
     decisionRef: string | null
     governedNextState: string | null
   }
+  decisionRequest: GoalTimelineDecisionRequest
   entries: GoalTimelineEntry[]
 }
 
@@ -226,6 +268,149 @@ function metadata(value: unknown): Metadata | null {
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record).sort().map((key) => (
+      `${JSON.stringify(key)}:${canonicalJson(record[key])}`
+    )).join(",")}}`
+  }
+  return JSON.stringify(value) ?? "null"
+}
+
+function canonicalPersistedJson(value: string | null): string | null {
+  if (typeof value !== "string") return null
+  try {
+    return canonicalJson(JSON.parse(value))
+  } catch {
+    return null
+  }
+}
+
+function persistedEvidenceHashMatches(
+  notes: string | null,
+  contentHash: string | null,
+  canonicalNotes: string,
+): boolean {
+  if (typeof notes !== "string" || typeof contentHash !== "string") return false
+  return [
+    createHash("sha256").update(notes).digest("hex"),
+    createHash("sha256").update(canonicalNotes).digest("hex"),
+  ].includes(contentHash)
+}
+
+function exactOwnerDecisionPacket(value: unknown) {
+  const record = metadata(value)
+  if (!record) return null
+  const packet = {
+    blockedAction: text(record.blockedAction),
+    authorityBoundary: text(record.authorityBoundary),
+    minimumChoice: text(record.minimumChoice),
+    approveConsequence: text(record.approveConsequence),
+    denyConsequence: text(record.denyConsequence),
+  }
+  if (Object.values(packet).some((entry) => entry === null)
+    || packet.minimumChoice !== "APPROVE_OR_DENY") return null
+  return packet as {
+    blockedAction: string
+    authorityBoundary: string
+    minimumChoice: string
+    approveConsequence: string
+    denyConsequence: string
+  }
+}
+
+function ownerDecisionReceiptValid(
+  goalId: number,
+  record: GoalTimelineDecisionRecord,
+  workOrder: GoalTimelineWorkOrderRecord | null,
+  terminalEvent: RuntimeExecutionGovernanceEventRecord | null,
+  evidenceRecords: GoalTimelineEvidenceRecord[],
+  goalEvents: RuntimeExecutionGovernanceEventRecord[],
+  audits: GoalTimelineAuditRecord[],
+): boolean {
+  if (!workOrder || !terminalEvent || !record.decidedAt
+    || !["APPROVE", "DENY"].includes(record.decision)) return false
+  const packet = exactOwnerDecisionPacket(terminalEvent.metadata)
+  const nextState = text(metadata(terminalEvent.metadata)?.nextState)
+  if (!packet || !nextState || !/^[A-Z][A-Z0-9_]{1,79}$/.test(nextState)) return false
+  const choice = record.decision as GoalAuthorityDecisionChoice
+  const expectedStatus = choice === "APPROVE" ? "accepted" : "rejected"
+  const decisionRef = `OWNER-DECISION-${goalId}-${terminalEvent.id}`
+  const requestKey = [
+    "hermes-owner-decision",
+    goalId,
+    workOrder.id,
+    terminalEvent.id,
+    record.userId,
+    choice,
+    nextState,
+  ].join(":")
+  const packetDigest = createHash("sha256").update(JSON.stringify(packet)).digest("hex")
+  const expectedEvidence = [
+    `outcome:${goalId}`,
+    `work-order:${workOrder.id}`,
+    `terminal-event:${terminalEvent.id}`,
+    `next-state:${nextState}`,
+    `request:${requestKey}`,
+    `terminal-binding:hermes-owner-decision-terminal:${goalId}:${workOrder.id}:${terminalEvent.id}`,
+    `choice:${choice}`,
+    `decision-packet:${packetDigest}`,
+  ]
+  if (record.ref !== decisionRef || record.status !== expectedStatus
+    || record.authority !== "binding"
+    || record.scope !== `goal:${goalId}|work-order:${workOrder.id}|terminal:${terminalEvent.id}|next-state:${nextState}`
+    || JSON.stringify(record.evidence) !== JSON.stringify(expectedEvidence)) return false
+  const payload = {
+    outcomeId: goalId,
+    workOrderId: workOrder.id,
+    terminalEventId: terminalEvent.id,
+    ownerUserId: record.userId,
+    choice,
+    expectedNextState: nextState,
+    decisionId: record.id,
+    decisionRef,
+    requestKey,
+    decisionPacket: packet,
+    decisionPacketDigest: packetDigest,
+  }
+  const notes = canonicalJson(payload)
+  const evidenceMatches = evidenceRecords.filter((candidate) => (
+    candidate.userId === record.userId
+    && candidate.ref === `EV-OWNER-DECISION-${goalId}-${terminalEvent.id}`
+    && candidate.workOrderId === workOrder.id
+    && candidate.result === (choice === "APPROVE" ? "PASS" : "FAIL")
+    && canonicalPersistedJson(candidate.notes) === notes
+    && persistedEvidenceHashMatches(candidate.notes, candidate.contentHash, notes)
+  ))
+  if (evidenceMatches.length !== 1) return false
+  const evidenceRecord = evidenceMatches[0]
+  const expectedAudit = {
+    ...payload,
+    status: expectedStatus,
+    authority: "binding",
+    evidenceId: evidenceRecord.id,
+    recordedAt: record.decidedAt.toISOString(),
+  }
+  const receiptMatches = goalEvents.filter((event) => (
+    event.userId === record.userId
+    && event.eventType === "HERMES_OWNER_AUTHORITY_DECISION"
+    && event.entityType === "goal"
+    && event.entityId === String(goalId)
+    && event.evidenceId === evidenceRecord.id
+    && canonicalJson(event.metadata) === canonicalJson(expectedAudit)
+  ))
+  const auditMatches = audits.filter((audit) => (
+    audit.userId === record.userId
+    && audit.type === "owner.decision.recorded"
+    && audit.register === "goals"
+    && audit.refId === goalId
+    && canonicalJson(audit.metadata) === canonicalJson(expectedAudit)
+  ))
+  return receiptMatches.length === 1 && auditMatches.length === 1
 }
 
 function goalRef(goal: GoalTimelineGoalRecord): string {
@@ -263,20 +448,27 @@ function decisionAuthorizesResume(
   workOrder: GoalTimelineWorkOrderRecord | null,
   terminalEvent: RuntimeExecutionGovernanceEventRecord | null,
   noLaterThan?: Date,
+  goalId?: number,
+  receiptValid = false,
 ): boolean {
   if (!workOrder?.ref || !terminalEvent || !record.decidedAt) return false
   const decidedAt = record.decidedAt.getTime()
   const nextState = text(metadata(terminalEvent.metadata)?.nextState)
   const terminalBinding = record.evidence.includes(`trace:${terminalEvent.id}`)
+    || record.evidence.includes(`terminal-event:${terminalEvent.id}`)
   const nextStateBinding = nextState !== null && (
     record.evidence.includes(nextState)
     || record.evidence.includes(`next-state:${nextState}`)
   )
+  const runtimeScope = goalId !== undefined && nextState !== null
+    && record.scope === `goal:${goalId}|work-order:${workOrder.id}|terminal:${terminalEvent.id}|next-state:${nextState}`
   return record.status === "accepted"
+    && record.decision === "APPROVE"
     && record.authority === "binding"
-    && record.scope === workOrder.ref
+    && (record.scope === workOrder.ref || runtimeScope)
     && terminalBinding
     && nextStateBinding
+    && receiptValid
     && decidedAt > terminalEvent.createdAt.getTime()
     && (noLaterThan === undefined || decidedAt <= noLaterThan.getTime())
 }
@@ -315,11 +507,13 @@ function recoveryMatchesTerminal(
 }
 
 function terminalState(
+  goalId: number,
   workOrder: GoalTimelineWorkOrderRecord | null,
   execution: RuntimeExecutionTruth | null,
   goalTerminalEvent: RuntimeExecutionGovernanceEventRecord | null,
   terminalRecoveryProven: boolean,
   linkedDecisions: GoalTimelineDecisionRecord[],
+  linkedReceiptValid: boolean,
 ): string | null {
   const checkpointState = execution?.currentCheckpoint?.state ?? null
   const persistedGoalResult = text(metadata(goalTerminalEvent?.metadata)?.result)
@@ -336,6 +530,8 @@ function terminalState(
           workOrder,
           goalTerminalEvent,
           execution.currentCheckpoint!.recordedAt,
+          goalId,
+          linkedReceiptValid,
         )
       ))
     if (!ownerResumeAuthorized && !terminalRecoveryProven) return persistedGoalResult
@@ -427,10 +623,12 @@ function validationCheckpoints(
 }
 
 function resumeProjection(
+  goalId: number,
   terminal: string | null,
   workOrder: GoalTimelineWorkOrderRecord | null,
   linkedDecisions: GoalTimelineDecisionRecord[],
   terminalEvent: RuntimeExecutionGovernanceEventRecord | null,
+  linkedReceiptValid: boolean,
 ): GoalTimelineProjection["resume"] {
   if (terminal !== "OWNER_DECISION_REQUIRED") {
     return {
@@ -458,9 +656,16 @@ function resumeProjection(
     }
   }
   const linked = linkedDecisions[0]
-  const state = linked.status === "rejected"
+  const state = linked.status === "rejected" && linked.decision === "DENY" && linkedReceiptValid
     ? "DECISION_REJECTED"
-    : decisionAuthorizesResume(linked, workOrder, terminalEvent)
+    : decisionAuthorizesResume(
+        linked,
+        workOrder,
+        terminalEvent,
+        undefined,
+        goalId,
+        linkedReceiptValid,
+      )
       ? "AUTHORIZED_TO_RESUME"
       : "AWAITING_OWNER_DECISION"
   return {
@@ -468,6 +673,88 @@ function resumeProjection(
     decisionId: linked.id,
     decisionRef: linked.ref,
     governedNextState: nextState,
+  }
+}
+
+function decisionRequestProjection(
+  goal: GoalTimelineGoalRecord,
+  workOrder: GoalTimelineWorkOrderRecord | null,
+  terminal: string | null,
+  terminalEvent: RuntimeExecutionGovernanceEventRecord | null,
+  linkedDecisions: GoalTimelineDecisionRecord[],
+  linkedReceiptValid: boolean,
+  resume: GoalTimelineProjection["resume"],
+  truthBlocked: "STALE" | "CONFLICTING" | null,
+): GoalTimelineDecisionRequest {
+  const terminalMetadata = metadata(terminalEvent?.metadata)
+  const nextState = text(terminalMetadata?.nextState)
+  const blockedAction = text(terminalMetadata?.blockedAction)
+  const authorityBoundary = text(terminalMetadata?.authorityBoundary)
+  const minimumChoice = text(terminalMetadata?.minimumChoice)
+  const approve = text(terminalMetadata?.approveConsequence)
+  const deny = text(terminalMetadata?.denyConsequence)
+  const linked = linkedDecisions.length === 1 ? linkedDecisions[0] : null
+  const recordedChoice = linked?.status === "accepted" && linked.decision === "APPROVE"
+    ? "APPROVE"
+    : linked?.status === "rejected" && linked.decision === "DENY"
+      ? "DENY"
+      : null
+  const receiptStatus = linked && recordedChoice && linkedReceiptValid
+    ? "RECORDED"
+    : linkedDecisions.length > 1 || linked !== null
+      ? "CONFLICTING"
+      : "NOT_RECORDED"
+  const identityComplete = workOrder !== null
+    && terminalEvent !== null
+    && nextState !== null
+    && /^[A-Z][A-Z0-9_]{1,79}$/.test(nextState)
+    && blockedAction !== null
+    && authorityBoundary !== null
+    && minimumChoice === "APPROVE_OR_DENY"
+    && approve !== null
+    && deny !== null
+  const status = terminal !== "OWNER_DECISION_REQUIRED"
+    ? "NOT_REQUIRED"
+    : truthBlocked !== null
+      ? truthBlocked
+    : receiptStatus === "CONFLICTING"
+      ? "CONFLICTING"
+      : linked && recordedChoice && linkedReceiptValid
+        ? "RECEIPT_RECORDED"
+        : identityComplete
+          ? "ACTIONABLE"
+          : "CONFLICTING"
+
+  return {
+    status,
+    blockedAction,
+    authorityBoundary,
+    choices: ["APPROVE", "DENY"],
+    consequences: { approve, deny },
+    goalId: goal.id,
+    goalRef: goalRef(goal),
+    outcomeId: goal.id,
+    outcomeRef: runtimeRef(goal),
+    workOrderId: workOrder?.id ?? null,
+    workOrderRef: workOrder?.ref ?? null,
+    terminalEventId: terminalEvent?.id ?? null,
+    terminalState: terminal,
+    terminalResult: text(terminalMetadata?.result) ?? workOrder?.result ?? null,
+    ownerUserId: goal.userId,
+    expectedNextState: nextState,
+    receipt: {
+      status: receiptStatus,
+      choice: recordedChoice,
+      decisionId: linked?.id ?? null,
+      decisionRef: linked?.ref ?? null,
+      ownerUserId: linked?.userId ?? null,
+      terminalEventId: linked && recordedChoice ? terminalEvent?.id ?? null : null,
+      recordedAt: linked && recordedChoice ? linked.decidedAt ?? linked.updatedAt : null,
+    },
+    resume: {
+      state: resume.state,
+      governedNextState: resume.governedNextState,
+    },
   }
 }
 
@@ -517,6 +804,7 @@ export function buildGoalTimelineReadModel(
           "HERMES_OUTCOME_PROVIDER_RECOVERED",
           "HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED",
           "HERMES_OUTCOME_REVIEW_RECOVERED",
+          "HERMES_OWNER_AUTHORITY_DECISION",
         ].includes(event.eventType)
       ))
       .sort((left, right) => left.id - right.id)
@@ -548,13 +836,26 @@ export function buildGoalTimelineReadModel(
       .sort((left, right) => (
         left.createdAt.getTime() - right.createdAt.getTime() || left.id - right.id
       ))
+    const resumeTerminalEvent = goalTerminalEvent ?? currentEvent
+    const linkedReceiptValid = linkedDecisions.length === 1
+      && ownerDecisionReceiptValid(
+        goal.id,
+        linkedDecisions[0],
+        currentWorkOrder,
+        resumeTerminalEvent,
+        workOrderEvidence,
+        goalRecoveryEvents,
+        goalAudits,
+      )
     const issues: GoalTimelineTruthIssue[] = []
     const terminal = terminalState(
+      goal.id,
       currentWorkOrder,
       execution,
       goalTerminalEvent,
       terminalRecoveryProven,
       linkedDecisions,
+      linkedReceiptValid,
     )
     const delivery = latestDelivery(execution)
     // WorkOrder.commitRef is sticky across retries; once runtime attempts exist,
@@ -746,10 +1047,12 @@ export function buildGoalTimelineReadModel(
     }
 
     const resume = resumeProjection(
+      goal.id,
       terminal,
       currentWorkOrder,
       linkedDecisions,
-      goalTerminalEvent ?? currentEvent,
+      resumeTerminalEvent,
+      linkedReceiptValid,
     )
     if (terminal === "OWNER_DECISION_REQUIRED" && (
       resume.state === "MISSING_DECISION_RECORD" || resume.state === "DECISION_CONFLICT"
@@ -763,6 +1066,20 @@ export function buildGoalTimelineReadModel(
         references: currentWorkOrder ? [`work-order:${currentWorkOrder.id}`] : [],
       })
     }
+    const decisionRequest = decisionRequestProjection(
+      goal,
+      currentWorkOrder,
+      terminal,
+      resumeTerminalEvent,
+      linkedDecisions,
+      linkedReceiptValid,
+      resume,
+      issues.some((issue) => issue.state === "CONFLICTING")
+        ? "CONFLICTING"
+        : issues.some((issue) => issue.state === "STALE")
+          ? "STALE"
+          : null,
+    )
 
     const truthState: GoalTimelineTruthState = issues.some((issue) => issue.state === "CONFLICTING")
       ? "CONFLICTING"
@@ -817,11 +1134,12 @@ export function buildGoalTimelineReadModel(
       })
     }
     for (const recoveryEvent of goalRecoveryEvents) {
+      const isAuthorityDecision = recoveryEvent.eventType === "HERMES_OWNER_AUTHORITY_DECISION"
       entries.push({
         id: `trace:${recoveryEvent.id}`,
         kind: "CHECKPOINT",
         state: recoveryEvent.eventType,
-        label: "Hermes governed recovery",
+        label: isAuthorityDecision ? "Primary authority decision" : "Hermes governed recovery",
         detail: recoveryEvent.reason,
         occurredAt: recoveryEvent.createdAt,
         references: [`trace:${recoveryEvent.id}`],
@@ -1025,6 +1343,7 @@ export function buildGoalTimelineReadModel(
         ownerAction,
       },
       resume,
+      decisionRequest,
       entries: entries.sort(byDateAndId),
     }
   }).sort((left, right) => (

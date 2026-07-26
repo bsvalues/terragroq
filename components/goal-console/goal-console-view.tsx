@@ -10,6 +10,7 @@ import {
   dismissGoal,
 } from "@/app/actions/goals"
 import { getGoalTimeline } from "@/app/actions/goal-timeline"
+import { recordGoalAuthorityDecision } from "@/app/actions/goal-authority-decision"
 import type { LoopReport } from "@/lib/goal/loop"
 import type { CurrentTruth } from "@/lib/goal/current-truth"
 import { truthLines } from "@/lib/goal/current-truth"
@@ -20,7 +21,10 @@ import { getGoalEmptyStatePrompts } from "@/components/goal-console/goal-empty-s
 import { getGoalJourneyStep } from "@/components/goal-console/goal-journey"
 import { OwnerOutcomeDeliveryPanel } from "@/components/goal-console/owner-outcome-delivery-panel"
 import { GoalTimelinePanel } from "@/components/goal-console/goal-timeline-panel"
-import type { GoalTimelineProjection } from "@/components/goal-console/goal-timeline-read-model"
+import type {
+  GoalAuthorityDecisionChoice,
+  GoalTimelineProjection,
+} from "@/components/goal-console/goal-timeline-read-model"
 import { findApprovedOwnerOutcome } from "@/components/operator/owner-outcome-delivery"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -88,6 +92,7 @@ export function GoalConsoleView({
   const [goalTimelines, setGoalTimelines] = useState(
     () => new Map(timelines.map((timeline) => [timeline.goal.id, timeline])),
   )
+  const [decisionPending, setDecisionPending] = useState(false)
   const [pending, startTransition] = useTransition()
   const emptyStatePrompts = getGoalEmptyStatePrompts()
   const selectedTimeline = latest
@@ -126,6 +131,42 @@ export function GoalConsoleView({
       const next = new Map(current)
       next.set(goalId, timeline)
       return next
+    })
+  }
+
+  function handleAuthorityDecision(
+    timeline: GoalTimelineProjection,
+    choice: GoalAuthorityDecisionChoice,
+  ) {
+    setDecisionPending(true)
+    startTransition(async () => {
+      try {
+        const result = await recordGoalAuthorityDecision({
+          request: timeline.decisionRequest,
+          choice,
+        })
+        try {
+          await refreshGoalTimeline(timeline.goal.id)
+        } catch {
+          toast.error(
+            result.status === "RECORDED" || result.status === "REPLAYED"
+              ? "Authority decision persisted; timeline refresh failed"
+              : "Authority decision was not accepted; timeline refresh failed",
+          )
+        }
+        if (result.status === "RECORDED") {
+          toast.success(result.message)
+        } else if (result.status === "REPLAYED") {
+          toast.success(result.message)
+        } else {
+          toast.error(result.message)
+        }
+        router.refresh()
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Authority decision failed")
+      } finally {
+        setDecisionPending(false)
+      }
     })
   }
 
@@ -257,7 +298,15 @@ export function GoalConsoleView({
           {/* Slice 1 (cont): Classification card */}
           {latest && <ClassificationCard goal={latest} />}
 
-          {latest && <GoalTimelinePanel timeline={selectedTimeline} />}
+          {latest && (
+            <GoalTimelinePanel
+              timeline={selectedTimeline}
+              decisionPending={decisionPending}
+              onAuthorityDecision={(choice) => {
+                if (selectedTimeline) handleAuthorityDecision(selectedTimeline, choice)
+              }}
+            />
+          )}
 
           {/* Slice 2: Read-only loop verifier */}
           {latest && (

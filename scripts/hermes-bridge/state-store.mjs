@@ -251,7 +251,93 @@ function metadata(input = {}, current = {}) {
   if (headRefOid !== null && (typeof headRefOid !== "string" || !SHA.test(headRefOid))) {
     fail("INVALID_HEAD_REF_OID")
   }
+  const ownerDecisionPacket = Object.hasOwn(input, "ownerDecisionPacket")
+    ? input.ownerDecisionPacket
+    : current.ownerDecisionPacket ?? null
+  if (ownerDecisionPacket !== null) {
+    if (typeof ownerDecisionPacket !== "object" || Array.isArray(ownerDecisionPacket)) {
+      fail("INVALID_OWNER_DECISION_PACKET")
+    }
+    const fields = [
+      ownerDecisionPacket.blockedAction,
+      ownerDecisionPacket.authorityBoundary,
+      ownerDecisionPacket.minimumChoice,
+      ownerDecisionPacket.approveConsequence,
+      ownerDecisionPacket.denyConsequence,
+    ]
+    if (fields.some((value) => typeof value !== "string" || value.trim() === "" || value.length > 1_000)
+      || ownerDecisionPacket.minimumChoice !== "APPROVE_OR_DENY"
+      || SENSITIVE_EVIDENCE.test(JSON.stringify(ownerDecisionPacket))) {
+      fail("INVALID_OWNER_DECISION_PACKET")
+    }
+  }
+  const ownerDecisionPacketDigest = Object.hasOwn(input, "ownerDecisionPacketDigest")
+    ? input.ownerDecisionPacketDigest
+    : current.ownerDecisionPacketDigest ?? null
+  if (ownerDecisionPacketDigest !== null
+    && (typeof ownerDecisionPacketDigest !== "string" || !SHA256.test(ownerDecisionPacketDigest))) {
+    fail("INVALID_OWNER_DECISION_PACKET_DIGEST")
+  }
   const validationEvidence = normalizedValidationEvidence(input, current)
+  const ownerDecisionNextState = Object.hasOwn(input, "ownerDecisionNextState")
+    ? input.ownerDecisionNextState
+    : current.ownerDecisionNextState ?? null
+  if (ownerDecisionNextState !== null
+    && (typeof ownerDecisionNextState !== "string"
+      || !/^[A-Z][A-Z0-9_]{1,79}$/.test(ownerDecisionNextState))) {
+    fail("INVALID_OWNER_DECISION_NEXT_STATE")
+  }
+  const ownerDecisionResumePhase = Object.hasOwn(input, "ownerDecisionResumePhase")
+    ? input.ownerDecisionResumePhase
+    : current.ownerDecisionResumePhase ?? null
+  if (ownerDecisionResumePhase !== null
+    && !["PENDING", "CONSUMED"].includes(ownerDecisionResumePhase)) {
+    fail("INVALID_OWNER_DECISION_RESUME_PHASE")
+  }
+  const ownerDecisionWorkOrderId = Object.hasOwn(input, "ownerDecisionWorkOrderId")
+    ? input.ownerDecisionWorkOrderId
+    : current.ownerDecisionWorkOrderId ?? null
+  const ownerDecisionTerminalEventId = Object.hasOwn(input, "ownerDecisionTerminalEventId")
+    ? input.ownerDecisionTerminalEventId
+    : current.ownerDecisionTerminalEventId ?? null
+  if (ownerDecisionWorkOrderId !== null
+    && (!Number.isSafeInteger(ownerDecisionWorkOrderId) || ownerDecisionWorkOrderId <= 0)) {
+    fail("INVALID_OWNER_DECISION_WORK_ORDER_ID")
+  }
+  if (ownerDecisionTerminalEventId !== null
+    && (!Number.isSafeInteger(ownerDecisionTerminalEventId) || ownerDecisionTerminalEventId <= 0)) {
+    fail("INVALID_OWNER_DECISION_TERMINAL_EVENT_ID")
+  }
+  const ownerDecisionId = Object.hasOwn(input, "ownerDecisionId")
+    ? input.ownerDecisionId
+    : current.ownerDecisionId ?? null
+  const ownerDecisionRef = Object.hasOwn(input, "ownerDecisionRef")
+    ? input.ownerDecisionRef
+    : current.ownerDecisionRef ?? null
+  const ownerDecisionRequestKey = Object.hasOwn(input, "ownerDecisionRequestKey")
+    ? input.ownerDecisionRequestKey
+    : current.ownerDecisionRequestKey ?? null
+  if (ownerDecisionId !== null
+    && (!Number.isSafeInteger(ownerDecisionId) || ownerDecisionId <= 0)) {
+    fail("INVALID_OWNER_DECISION_ID")
+  }
+  if (ownerDecisionRef !== null
+    && (typeof ownerDecisionRef !== "string"
+      || !/^OWNER-DECISION-\d+-\d+$/.test(ownerDecisionRef))) {
+    fail("INVALID_OWNER_DECISION_REF")
+  }
+  if (ownerDecisionRequestKey !== null
+    && (typeof ownerDecisionRequestKey !== "string"
+      || ownerDecisionRequestKey.trim() === ""
+      || ownerDecisionRequestKey.length > 1_000)) {
+    fail("INVALID_OWNER_DECISION_REQUEST_KEY")
+  }
+  if ([ownerDecisionId, ownerDecisionRef, ownerDecisionRequestKey]
+    .filter((value) => value !== null).length > 0
+    && [ownerDecisionId, ownerDecisionRef, ownerDecisionRequestKey]
+      .some((value) => value === null)) {
+    fail("INVALID_OWNER_DECISION_BINDING")
+  }
   return {
     threadId: Object.hasOwn(input, "threadId") ? input.threadId : current.threadId ?? null,
     turnId: Object.hasOwn(input, "turnId") ? input.turnId : current.turnId ?? null,
@@ -269,6 +355,15 @@ function metadata(input = {}, current = {}) {
     validationRemediationRound,
     validationRecoveryProofDigest,
     reviewRecoveryProofDigest,
+    ownerDecisionId,
+    ownerDecisionRef,
+    ownerDecisionRequestKey,
+    ownerDecisionNextState,
+    ownerDecisionResumePhase,
+    ownerDecisionWorkOrderId,
+    ownerDecisionTerminalEventId,
+    ownerDecisionPacket,
+    ownerDecisionPacketDigest,
     validationEvidence,
     outcome,
   }
@@ -438,6 +533,59 @@ export function reopenProviderWall(filePath, request, options = {}) {
       fencingToken: reopened.fencingToken,
       checkpointSequence: reopened.checkpoint.sequence,
       leaseStatus: reopened.lease.status,
+    }
+  })
+}
+
+export function reopenOwnerDecisionWall(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    if (current.fencingToken !== request.expectedFencingToken) fail("FENCING_TOKEN_CONFLICT")
+    if (current.lease.status !== "RELEASED"
+      || current.checkpoint.state !== "OWNER_DECISION_REQUIRED"
+      || typeof request.expectedNextState !== "string"
+      || current.checkpoint.detail !== request.expectedNextState
+      || current.metadata.ownerDecisionPacket === null
+      || request.decisionPacketDigest !== textDigest(JSON.stringify(current.metadata.ownerDecisionPacket))
+      || request.decisionPacketDigest !== textDigest(JSON.stringify(request.decisionPacket))
+      || JSON.stringify(request.decisionPacket) !== JSON.stringify(current.metadata.ownerDecisionPacket)) {
+      fail("OWNER_DECISION_REOPEN_STATE_WALL")
+    }
+    const reopened = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "ABANDONED",
+        expiresAt: at.iso,
+        recoveredAt: at.iso,
+        recoverReason: "OWNER_DECISION_ACCEPTED",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "OWNER_DECISION_ACCEPTED",
+        detail: request.expectedNextState,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({
+        ownerDecisionId: request.ownerDecisionId ?? null,
+        ownerDecisionRef: request.ownerDecisionRef ?? null,
+        ownerDecisionRequestKey: request.requestKey ?? null,
+        ownerDecisionNextState: request.expectedNextState,
+        ownerDecisionResumePhase: "PENDING",
+        ownerDecisionWorkOrderId: request.workOrderId,
+        ownerDecisionTerminalEventId: request.terminalEventId,
+        ownerDecisionPacketDigest: request.decisionPacketDigest,
+      }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: reopened }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: reopened.fencingToken,
+      checkpointSequence: reopened.checkpoint.sequence,
+      leaseStatus: reopened.lease.status,
+      state: reopened.checkpoint.state,
     }
   })
 }
@@ -715,6 +863,7 @@ export function createHermesStateStore(filePath, options = {}) {
     abandonLease: (request) => abandonLease(filePath, request, options),
     releaseLease: (request) => releaseLease(filePath, request, options),
     reopenProviderWall: (request) => reopenProviderWall(filePath, request, options),
+    reopenOwnerDecisionWall: (request) => reopenOwnerDecisionWall(filePath, request, options),
     reopenValidationInfrastructureWall: (request) => reopenValidationInfrastructureWall(filePath, request, options),
     reopenReviewRemediationExhausted: (request) => reopenReviewRemediationExhausted(filePath, request, options),
     recoverExternalToolWall: (request) => recoverExternalToolWall(filePath, request, options),
