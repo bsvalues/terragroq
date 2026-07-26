@@ -103,6 +103,24 @@ function canonicalJson(value) {
   return JSON.stringify(value)
 }
 
+function canonicalPersistedJson(value) {
+  if (typeof value !== "string") return null
+  try {
+    return canonicalJson(JSON.parse(value))
+  } catch {
+    return null
+  }
+}
+
+function persistedEvidenceHashMatches(notes, contentHash, canonicalNotes) {
+  if (typeof notes !== "string" || typeof contentHash !== "string") return false
+  const hashes = [
+    createHash("sha256").update(notes).digest("hex"),
+    createHash("sha256").update(canonicalNotes).digest("hex"),
+  ]
+  return hashes.includes(contentHash)
+}
+
 function ownerDecisionPacketDigest(packet) {
   return createHash("sha256").update(JSON.stringify(packet)).digest("hex")
 }
@@ -231,12 +249,6 @@ export async function recordOwnerAuthorityDecision({
           WHERE "userId" = $4 AND evidence @> ARRAY[$6]::text[]
           ORDER BY id DESC
           LIMIT 1
-        ), consumed_request AS (
-          SELECT id AS "consumedRequestId"
-          FROM decision
-          WHERE "userId" = $4 AND evidence @> ARRAY[$5]::text[]
-          ORDER BY id DESC
-          LIMIT 1
         ), linked_work_order_decision AS (
           SELECT d.id AS "linkedDecisionId", d."userId" AS "linkedDecisionUserId",
             d.evidence AS "linkedDecisionEvidence"
@@ -259,17 +271,16 @@ export async function recordOwnerAuthorityDecision({
          prior_request."decidedAt" AS "priorDecidedAt",
          consumed_binding."consumedDecisionId", consumed_binding."consumedDecisionRef",
           consumed_binding."consumedStatus", consumed_binding."consumedChoice",
-          consumed_binding."consumedAuthority", consumed_request."consumedRequestId",
+          consumed_binding."consumedAuthority",
           linked_work_order_decision."linkedDecisionUserId",
           linked_work_order_decision."linkedDecisionEvidence"
        FROM goal_any
        FULL OUTER JOIN work_order_any ON TRUE
        LEFT JOIN latest_terminal ON TRUE
        LEFT JOIN requested_terminal ON TRUE
-       LEFT JOIN latest_lease ON TRUE
+        LEFT JOIN latest_lease ON TRUE
         LEFT JOIN prior_request ON TRUE
         LEFT JOIN consumed_binding ON TRUE
-        LEFT JOIN consumed_request ON TRUE
         LEFT JOIN linked_work_order_decision ON TRUE`,
       [outcomeId, workOrderId, terminalEventId, ownerUserId, requestKey, terminalKey],
     )
@@ -288,7 +299,7 @@ export async function recordOwnerAuthorityDecision({
       })
     }
     if (row.goalId == null || row.workOrderId == null || row.requestedTerminalId == null
-      || row.latestTerminalId !== terminalEventId
+      || Number(row.latestTerminalId) !== terminalEventId
       || row.latestTerminalMetadata?.result !== "OWNER_DECISION_REQUIRED"
       || row.latestTerminalMetadata?.nextState !== expectedNextState
       || row.requestedTerminalMetadata?.result !== "OWNER_DECISION_REQUIRED"
@@ -337,7 +348,7 @@ export async function recordOwnerAuthorityDecision({
         outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState,
         decisionId: prior.decisionId, decisionRef, requestKey, decisionPacket, decisionPacketDigest,
       }
-      const priorNotes = JSON.stringify(priorPayload)
+      const priorNotes = canonicalJson(priorPayload)
       const priorEvidenceHash = createHash("sha256").update(priorNotes).digest("hex")
       const priorReceipt = await runQuery(
         `SELECT ev.id AS "evidenceId", ev.notes, ev."contentHash",
@@ -368,7 +379,7 @@ export async function recordOwnerAuthorityDecision({
         ...priorPayload, status, authority: "binding", evidenceId: receiptRow?.evidenceId ?? null,
         recordedAt: normalizedTimestamp(row.priorDecidedAt),
       }
-      if (!receiptRow || receiptRow.notes !== priorNotes
+      if (!receiptRow || canonicalPersistedJson(receiptRow.notes) !== priorNotes
         || receiptRow.contentHash !== priorEvidenceHash
         || canonicalJson(receiptRow.receiptMetadata) !== canonicalJson(expectedAudit)
         || canonicalJson(receiptRow.auditMetadata) !== canonicalJson(expectedAudit)) {
@@ -378,11 +389,6 @@ export async function recordOwnerAuthorityDecision({
       }
       await runQuery("COMMIT")
       return { ...prior, replayed: true }
-    }
-    if (row.consumedRequestId != null) {
-      throw Object.assign(new Error("owner decision request has already been consumed"), {
-        code: "OWNER_DECISION_CONSUMED",
-      })
     }
     if (row.consumedDecisionId != null) {
       throw Object.assign(new Error("owner decision terminal has a conflicting binding"), {
@@ -458,8 +464,8 @@ export async function recordOwnerAuthorityDecision({
         `EV-OWNER-DECISION-${outcomeId}-${terminalEventId}`,
         workOrderId,
         choice === "APPROVE" ? "PASS" : "FAIL",
-        JSON.stringify(evidencePayload),
-        createHash("sha256").update(JSON.stringify(evidencePayload)).digest("hex"),
+        canonicalJson(evidencePayload),
+        createHash("sha256").update(canonicalJson(evidencePayload)).digest("hex"),
       ],
     )
     const evidenceId = evidenceInserted?.rows?.[0]?.id ?? null
@@ -483,7 +489,7 @@ export async function recordOwnerAuthorityDecision({
     }
     const auditMetadata = JSON.stringify({
       ...evidencePayload, status, authority: "binding", evidenceId,
-      recordedAt: decisionRow.decidedAt ?? null,
+      recordedAt: normalizedTimestamp(decisionRow.decidedAt),
     })
     await runQuery(
       `INSERT INTO governance_event
@@ -649,7 +655,7 @@ export async function readApprovedOwnerDecision({
       decisionPacket,
       decisionPacketDigest,
     } : null
-    const evidenceNotes = evidencePayload ? JSON.stringify(evidencePayload) : null
+    const evidenceNotes = evidencePayload ? canonicalJson(evidencePayload) : null
     const expectedAudit = evidencePayload ? {
       ...evidencePayload,
       status: "accepted",
@@ -668,8 +674,12 @@ export async function readApprovedOwnerDecision({
       || !Number.isSafeInteger(Number(row.auditEventId))
       || !decisionPacket || !requestKey || !expectedEvidence || !evidencePayload || !expectedAudit
       || JSON.stringify(row.evidence) !== JSON.stringify(expectedEvidence)
-      || row.evidenceNotes !== evidenceNotes
-      || row.evidenceContentHash !== createHash("sha256").update(evidenceNotes).digest("hex")
+      || canonicalPersistedJson(row.evidenceNotes) !== evidenceNotes
+      || !persistedEvidenceHashMatches(
+        row.evidenceNotes,
+        row.evidenceContentHash,
+        evidenceNotes,
+      )
       || canonicalJson(row.receiptMetadata) !== canonicalJson(expectedAudit)
       || canonicalJson(row.auditMetadata) !== canonicalJson(expectedAudit)
       || !Number.isSafeInteger(Number(row.decisionId))) return null

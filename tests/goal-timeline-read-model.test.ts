@@ -15,6 +15,16 @@ import type { RuntimeExecutionGovernanceEventRecord } from "@/components/runtime
 const owner = "owner"
 const observedAt = new Date("2026-07-26T12:00:00.000Z")
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value) ?? "null"
+}
+
 function goal(overrides: Partial<GoalTimelineGoalRecord> = {}): GoalTimelineGoalRecord {
   return {
     id: 7,
@@ -262,7 +272,7 @@ function ownerReceiptFixture(
     decisionPacket: packet,
     decisionPacketDigest: packetDigest,
   }
-  const notes = JSON.stringify(payload)
+  const notes = canonicalJson(payload)
   const evidenceRecord = evidence({
     id: 709,
     ref: `EV-OWNER-DECISION-7-${terminalEventId}`,
@@ -1247,6 +1257,38 @@ describe("persisted Goal timeline read model", () => {
       id: "trace:507",
       label: "Primary authority decision",
     }))
+  })
+
+  it("matches canonical decision evidence regardless of persisted key insertion order", () => {
+    const receipt = ownerReceiptFixture(511, "RESUME_VALIDATION")
+    const reorderedNotes = JSON.stringify(Object.fromEntries(
+      Object.entries(JSON.parse(receipt.evidenceRecord.notes ?? "{}")).reverse(),
+    ))
+    const terminal = terminalGoalEvent({
+      id: 511,
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "RESUME_VALIDATION",
+      at: "2026-07-26T11:58:01.000Z",
+      metadata: receipt.packet,
+    })
+    const [timeline] = buildGoalTimelineReadModel(input({
+      workOrders: [workOrder({
+        status: "blocked",
+        result: "OWNER_DECISION_REQUIRED",
+        linkedDecisionId: 9,
+      })],
+      governanceEvents: [terminal, receipt.receiptEvent],
+      decisions: [receipt.decisionRecord],
+      evidenceRecords: [{
+        ...receipt.evidenceRecord,
+        notes: reorderedNotes,
+        contentHash: createHash("sha256").update(reorderedNotes).digest("hex"),
+      }],
+      auditRecords: [receipt.auditRecord],
+    }))
+
+    expect(timeline.resume.state).toBe("AUTHORIZED_TO_RESUME")
+    expect(timeline.decisionRequest.receipt.status).toBe("RECORDED")
   })
 
   it("fails closed when decision status and recorded choice conflict", () => {

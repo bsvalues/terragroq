@@ -30,6 +30,20 @@ const ownerDecisionPacketHash = createHash("sha256")
   .update(JSON.stringify(ownerDecisionPacket))
   .digest("hex")
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value) ?? "null"
+}
+
+function reorderedJson(value: string): string {
+  return JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(value)).reverse()))
+}
+
 function ownerDecisionReceipt(choice: "APPROVE" | "DENY", decisionId: number, evidenceId: number) {
   const requestKey = `hermes-owner-decision:4:42:88:owner:${choice}:EXACT_NEXT_STATE`
   const decisionRef = "OWNER-DECISION-4-88"
@@ -56,7 +70,7 @@ function ownerDecisionReceipt(choice: "APPROVE" | "DENY", decisionId: number, ev
     decisionPacket: ownerDecisionPacket,
     decisionPacketDigest: ownerDecisionPacketHash,
   }
-  const notes = JSON.stringify(payload)
+  const notes = canonicalJson(payload)
   const audit = {
     ...payload,
     status: choice === "APPROVE" ? "accepted" : "rejected",
@@ -205,8 +219,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [ownerDecisionBinding] })
-      .mockResolvedValueOnce({ rows: [{ id: 19, ref: "OWNER-DECISION-4-88", status: "accepted", decision: "APPROVE", decidedAt: "2026-07-26T12:00:00.000Z" }] })
+      .mockResolvedValueOnce({ rows: [{ ...ownerDecisionBinding, latestTerminalId: "88" }] })
+      .mockResolvedValueOnce({ rows: [{ id: 19, ref: "OWNER-DECISION-4-88", status: "accepted", decision: "APPROVE", decidedAt: "2026-07-26T12:00:00.000000Z" }] })
       .mockResolvedValueOnce({ rows: [{ id: 4 }] })
       .mockResolvedValueOnce({ rows: [{ id: 90 }] })
       .mockResolvedValueOnce({ rows: [{ id: 42 }] })
@@ -235,6 +249,11 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls.some(([sql]) => /INSERT INTO event_log/.test(sql))).toBe(true)
     expect(query.mock.calls.some(([sql]) =>
       /"linkedDecisionId" IS NOT DISTINCT FROM \$4::integer/.test(sql))).toBe(true)
+    const receiptCall = query.mock.calls.find(([sql]) =>
+      /INSERT INTO governance_event[\s\S]+HERMES_OWNER_AUTHORITY_DECISION/.test(sql))
+    expect(JSON.parse(receiptCall?.[1]?.[4] as string)).toMatchObject({
+      recordedAt: "2026-07-26T12:00:00.000Z",
+    })
   })
 
   it("rebinds the Work Order when a later terminal wall receives its own decision", async () => {
@@ -318,7 +337,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       }] })
       .mockResolvedValueOnce({ rows: [{
         evidenceId: 91,
-        notes: denialReceipt.notes,
+        notes: reorderedJson(denialReceipt.notes),
         contentHash: denialReceipt.contentHash,
         receiptMetadata: denialReceipt.audit,
         auditMetadata: denialReceipt.audit,
@@ -392,7 +411,6 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       goalStatus: "classified",
     }, "OWNER_DECISION_CONFLICT"],
     ["conflicting Work Order link", { workOrderLinkedDecisionId: 21 }, "OWNER_DECISION_CONFLICT"],
-    ["consumed request", { consumedRequestId: 21 }, "OWNER_DECISION_CONSUMED"],
   ])("rejects %s owner decisions", async (_label, overrides, code) => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [] })
@@ -407,6 +425,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
 
   it("returns only an exact approved database proof", async () => {
     const approvalReceipt = ownerDecisionReceipt("APPROVE", 19, 90)
+    const legacyNotes = reorderedJson(approvalReceipt.notes)
     const query = vi.fn(async () => ({ rows: [{
       decisionId: 19, decisionRef: "OWNER-DECISION-4-88", status: "accepted",
       choice: "APPROVE", authority: "binding", outcomeId: 4, workOrderId: 42,
@@ -418,8 +437,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         ...ownerDecisionPacket,
       },
       evidence: approvalReceipt.evidence,
-      evidenceNotes: approvalReceipt.notes,
-      evidenceContentHash: approvalReceipt.contentHash,
+      evidenceNotes: legacyNotes,
+      evidenceContentHash: createHash("sha256").update(legacyNotes).digest("hex"),
       receiptMetadata: approvalReceipt.audit,
       auditMetadata: approvalReceipt.audit,
     }] }))

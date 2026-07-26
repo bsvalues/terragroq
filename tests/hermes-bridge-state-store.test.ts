@@ -621,6 +621,22 @@ describe("Hermes bridge durable state store", () => {
     })).toThrowError(expect.objectContaining({ code: "INVALID_OWNER_DECISION_PACKET" }))
   })
 
+  it.each([
+    [{ ownerDecisionId: 0, ownerDecisionRef: "OWNER-DECISION-5-88", ownerDecisionRequestKey: "request" }, "INVALID_OWNER_DECISION_ID"],
+    [{ ownerDecisionId: 19, ownerDecisionRef: "invalid", ownerDecisionRequestKey: "request" }, "INVALID_OWNER_DECISION_REF"],
+    [{ ownerDecisionId: 19, ownerDecisionRef: "OWNER-DECISION-5-88", ownerDecisionRequestKey: "" }, "INVALID_OWNER_DECISION_REQUEST_KEY"],
+    [{ ownerDecisionId: 19 }, "INVALID_OWNER_DECISION_BINDING"],
+  ])("rejects malformed owner decision binding metadata", (metadata, code) => {
+    const { store } = fixture()
+    expect(() => store.acquireLease({
+      outcomeId: "5",
+      holderId: "owner-wall-holder",
+      leaseDurationMs: 1000,
+      idempotencyKey: `owner-wall-invalid-binding-${code}`,
+      metadata,
+    })).toThrowError(expect.objectContaining({ code }))
+  })
+
   it("rejects a database approval bound to a different local authority packet", () => {
     const { store } = fixture()
     const first = store.acquireLease({

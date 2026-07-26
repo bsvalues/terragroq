@@ -92,6 +92,7 @@ export function GoalConsoleView({
   const [goalTimelines, setGoalTimelines] = useState(
     () => new Map(timelines.map((timeline) => [timeline.goal.id, timeline])),
   )
+  const [decisionPending, setDecisionPending] = useState(false)
   const [pending, startTransition] = useTransition()
   const emptyStatePrompts = getGoalEmptyStatePrompts()
   const selectedTimeline = latest
@@ -137,6 +138,7 @@ export function GoalConsoleView({
     timeline: GoalTimelineProjection,
     choice: GoalAuthorityDecisionChoice,
   ) {
+    setDecisionPending(true)
     startTransition(async () => {
       try {
         const result = await recordGoalAuthorityDecision({
@@ -146,20 +148,24 @@ export function GoalConsoleView({
         try {
           await refreshGoalTimeline(timeline.goal.id)
         } catch {
-          toast.error("Authority decision recorded; persisted timeline refresh failed")
+          toast.error(
+            result.status === "RECORDED" || result.status === "REPLAYED"
+              ? "Authority decision persisted; timeline refresh failed"
+              : "Authority decision was not accepted; timeline refresh failed",
+          )
         }
         if (result.status === "RECORDED") {
-          toast.success(choice === "APPROVE" ? "Resume approval recorded" : "Deny decision recorded")
+          toast.success(result.message)
         } else if (result.status === "REPLAYED") {
-          toast.success("Authority decision was already recorded")
-        } else if (result.status === "STALE") {
-          toast.error("Decision request is stale; the timeline was refreshed")
-        } else if (result.status === "CONFLICT") {
-          toast.error("Decision request conflicts with current persisted truth")
+          toast.success(result.message)
+        } else {
+          toast.error(result.message)
         }
         router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Authority decision failed")
+      } finally {
+        setDecisionPending(false)
       }
     })
   }
@@ -295,7 +301,7 @@ export function GoalConsoleView({
           {latest && (
             <GoalTimelinePanel
               timeline={selectedTimeline}
-              decisionPending={pending}
+              decisionPending={decisionPending}
               onAuthorityDecision={(choice) => {
                 if (selectedTimeline) handleAuthorityDecision(selectedTimeline, choice)
               }}

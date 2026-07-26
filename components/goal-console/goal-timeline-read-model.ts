@@ -281,6 +281,27 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? "null"
 }
 
+function canonicalPersistedJson(value: string | null): string | null {
+  if (typeof value !== "string") return null
+  try {
+    return canonicalJson(JSON.parse(value))
+  } catch {
+    return null
+  }
+}
+
+function persistedEvidenceHashMatches(
+  notes: string | null,
+  contentHash: string | null,
+  canonicalNotes: string,
+): boolean {
+  if (typeof notes !== "string" || typeof contentHash !== "string") return false
+  return [
+    createHash("sha256").update(notes).digest("hex"),
+    createHash("sha256").update(canonicalNotes).digest("hex"),
+  ].includes(contentHash)
+}
+
 function exactOwnerDecisionPacket(value: unknown) {
   const record = metadata(value)
   if (!record) return null
@@ -356,14 +377,14 @@ function ownerDecisionReceiptValid(
     decisionPacket: packet,
     decisionPacketDigest: packetDigest,
   }
-  const notes = JSON.stringify(payload)
+  const notes = canonicalJson(payload)
   const evidenceMatches = evidenceRecords.filter((candidate) => (
     candidate.userId === record.userId
     && candidate.ref === `EV-OWNER-DECISION-${goalId}-${terminalEvent.id}`
     && candidate.workOrderId === workOrder.id
     && candidate.result === (choice === "APPROVE" ? "PASS" : "FAIL")
-    && candidate.notes === notes
-    && candidate.contentHash === createHash("sha256").update(notes).digest("hex")
+    && canonicalPersistedJson(candidate.notes) === notes
+    && persistedEvidenceHashMatches(candidate.notes, candidate.contentHash, notes)
   ))
   if (evidenceMatches.length !== 1) return false
   const evidenceRecord = evidenceMatches[0]

@@ -8,7 +8,7 @@ const viewSource = readFileSync("components/goal-console/goal-console-view.tsx",
 
 describe("Goal Console owner authority decision surface", () => {
   it("authenticates and forwards only the fully bound projection request", () => {
-    expect(actionSource).toContain("const ownerUserId = await getUserId()")
+    expect(actionSource).toContain("ownerUserId = await getUserId()")
     expect(actionSource).toContain("const timeline = await getGoalTimeline(submitted.goalId)")
     expect(actionSource).toContain("requestBindingMatches(submitted, current)")
     expect(actionSource).toContain("current.outcomeId")
@@ -18,7 +18,20 @@ describe("Goal Console owner authority decision surface", () => {
     expect(actionSource).toContain("current.expectedNextState")
     expect(actionSource).toContain("recordOwnerAuthorityDecision({")
     expect(actionSource).not.toContain("actor:")
-    expect(actionSource).toContain('"RECORDED" | "REPLAYED" | "STALE" | "CONFLICT"')
+    expect(actionSource).toContain('"RECORDED" | "REPLAYED" | "STALE" | "CONFLICT" | "INVALID" | "UNAUTHORIZED"')
+    expect(actionSource).toContain("message: string")
+  })
+
+  it("returns expected validation and business failures without throwing server-action errors", () => {
+    expect(actionSource).toContain('status: "INVALID"')
+    expect(actionSource).toContain('status: "UNAUTHORIZED"')
+    expect(actionSource).toContain('error.message === "Unauthorized"')
+    expect(actionSource).toContain('code?.includes("UNAUTHORIZED")')
+    expect(actionSource).toContain('code?.includes("INVALID")')
+    expect(actionSource).toContain('code?.includes("STALE") || code?.includes("ACTIVE_LEASE")')
+    expect(actionSource).toContain('code?.includes("CONFLICT") || code?.includes("CONSUMED")')
+    expect(actionSource).not.toContain("function actionError(")
+    expect(actionSource).toContain("throw error")
   })
 
   it("offers deliberate actions only for an actionable owner wall", () => {
@@ -29,8 +42,8 @@ describe("Goal Console owner authority decision surface", () => {
     expect(panelSource).toContain('decisionRequest.status === "CONFLICTING"')
     expect(viewSource).toContain("recordGoalAuthorityDecision({")
     expect(viewSource).toContain('result.status === "REPLAYED"')
-    expect(viewSource).toContain('result.status === "STALE"')
-    expect(viewSource).toContain('result.status === "CONFLICT"')
+    expect(viewSource).toContain("toast.success(result.message)")
+    expect(viewSource).toContain("toast.error(result.message)")
     expect(viewSource).toContain("refreshGoalTimeline(timeline.goal.id)")
   })
 })

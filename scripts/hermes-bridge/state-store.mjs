@@ -271,35 +271,35 @@ function metadata(input = {}, current = {}) {
       fail("INVALID_OWNER_DECISION_PACKET")
     }
   }
-  const ownerDecisionPacketDigest = input.ownerDecisionPacketDigest
-    ?? current.ownerDecisionPacketDigest
-    ?? null
+  const ownerDecisionPacketDigest = Object.hasOwn(input, "ownerDecisionPacketDigest")
+    ? input.ownerDecisionPacketDigest
+    : current.ownerDecisionPacketDigest ?? null
   if (ownerDecisionPacketDigest !== null
     && (typeof ownerDecisionPacketDigest !== "string" || !SHA256.test(ownerDecisionPacketDigest))) {
     fail("INVALID_OWNER_DECISION_PACKET_DIGEST")
   }
   const validationEvidence = normalizedValidationEvidence(input, current)
-  const ownerDecisionNextState = input.ownerDecisionNextState
-    ?? current.ownerDecisionNextState
-    ?? null
+  const ownerDecisionNextState = Object.hasOwn(input, "ownerDecisionNextState")
+    ? input.ownerDecisionNextState
+    : current.ownerDecisionNextState ?? null
   if (ownerDecisionNextState !== null
     && (typeof ownerDecisionNextState !== "string"
       || !/^[A-Z][A-Z0-9_]{1,79}$/.test(ownerDecisionNextState))) {
     fail("INVALID_OWNER_DECISION_NEXT_STATE")
   }
-  const ownerDecisionResumePhase = input.ownerDecisionResumePhase
-    ?? current.ownerDecisionResumePhase
-    ?? null
+  const ownerDecisionResumePhase = Object.hasOwn(input, "ownerDecisionResumePhase")
+    ? input.ownerDecisionResumePhase
+    : current.ownerDecisionResumePhase ?? null
   if (ownerDecisionResumePhase !== null
     && !["PENDING", "CONSUMED"].includes(ownerDecisionResumePhase)) {
     fail("INVALID_OWNER_DECISION_RESUME_PHASE")
   }
-  const ownerDecisionWorkOrderId = input.ownerDecisionWorkOrderId
-    ?? current.ownerDecisionWorkOrderId
-    ?? null
-  const ownerDecisionTerminalEventId = input.ownerDecisionTerminalEventId
-    ?? current.ownerDecisionTerminalEventId
-    ?? null
+  const ownerDecisionWorkOrderId = Object.hasOwn(input, "ownerDecisionWorkOrderId")
+    ? input.ownerDecisionWorkOrderId
+    : current.ownerDecisionWorkOrderId ?? null
+  const ownerDecisionTerminalEventId = Object.hasOwn(input, "ownerDecisionTerminalEventId")
+    ? input.ownerDecisionTerminalEventId
+    : current.ownerDecisionTerminalEventId ?? null
   if (ownerDecisionWorkOrderId !== null
     && (!Number.isSafeInteger(ownerDecisionWorkOrderId) || ownerDecisionWorkOrderId <= 0)) {
     fail("INVALID_OWNER_DECISION_WORK_ORDER_ID")
@@ -307,6 +307,36 @@ function metadata(input = {}, current = {}) {
   if (ownerDecisionTerminalEventId !== null
     && (!Number.isSafeInteger(ownerDecisionTerminalEventId) || ownerDecisionTerminalEventId <= 0)) {
     fail("INVALID_OWNER_DECISION_TERMINAL_EVENT_ID")
+  }
+  const ownerDecisionId = Object.hasOwn(input, "ownerDecisionId")
+    ? input.ownerDecisionId
+    : current.ownerDecisionId ?? null
+  const ownerDecisionRef = Object.hasOwn(input, "ownerDecisionRef")
+    ? input.ownerDecisionRef
+    : current.ownerDecisionRef ?? null
+  const ownerDecisionRequestKey = Object.hasOwn(input, "ownerDecisionRequestKey")
+    ? input.ownerDecisionRequestKey
+    : current.ownerDecisionRequestKey ?? null
+  if (ownerDecisionId !== null
+    && (!Number.isSafeInteger(ownerDecisionId) || ownerDecisionId <= 0)) {
+    fail("INVALID_OWNER_DECISION_ID")
+  }
+  if (ownerDecisionRef !== null
+    && (typeof ownerDecisionRef !== "string"
+      || !/^OWNER-DECISION-\d+-\d+$/.test(ownerDecisionRef))) {
+    fail("INVALID_OWNER_DECISION_REF")
+  }
+  if (ownerDecisionRequestKey !== null
+    && (typeof ownerDecisionRequestKey !== "string"
+      || ownerDecisionRequestKey.trim() === ""
+      || ownerDecisionRequestKey.length > 1_000)) {
+    fail("INVALID_OWNER_DECISION_REQUEST_KEY")
+  }
+  if ([ownerDecisionId, ownerDecisionRef, ownerDecisionRequestKey]
+    .filter((value) => value !== null).length > 0
+    && [ownerDecisionId, ownerDecisionRef, ownerDecisionRequestKey]
+      .some((value) => value === null)) {
+    fail("INVALID_OWNER_DECISION_BINDING")
   }
   return {
     threadId: Object.hasOwn(input, "threadId") ? input.threadId : current.threadId ?? null,
@@ -325,9 +355,9 @@ function metadata(input = {}, current = {}) {
     validationRemediationRound,
     validationRecoveryProofDigest,
     reviewRecoveryProofDigest,
-    ownerDecisionId: input.ownerDecisionId ?? current.ownerDecisionId ?? null,
-    ownerDecisionRef: input.ownerDecisionRef ?? current.ownerDecisionRef ?? null,
-    ownerDecisionRequestKey: input.ownerDecisionRequestKey ?? current.ownerDecisionRequestKey ?? null,
+    ownerDecisionId,
+    ownerDecisionRef,
+    ownerDecisionRequestKey,
     ownerDecisionNextState,
     ownerDecisionResumePhase,
     ownerDecisionWorkOrderId,

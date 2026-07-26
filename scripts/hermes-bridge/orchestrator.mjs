@@ -566,8 +566,8 @@ export function createHermesOrchestrator(options = {}) {
       }
       const proof = await readApprovedDecision({
         outcomeId: Number(outcome.id),
-        workOrderId: execution.metadata?.workOrderId ?? null,
-        terminalEventId: execution.metadata?.terminalEventId ?? null,
+        workOrderId: execution.metadata?.ownerDecisionWorkOrderId ?? null,
+        terminalEventId: execution.metadata?.ownerDecisionTerminalEventId ?? null,
         ownerUserId: outcome.userId,
         expectedNextState: execution.checkpoint.detail,
       })
@@ -646,8 +646,8 @@ export function createHermesOrchestrator(options = {}) {
         ? releasedDecisionProofs.get(outcomeId)
         : await readApprovedDecision({
           outcomeId: Number(outcome.id),
-          workOrderId: current.metadata?.workOrderId ?? null,
-          terminalEventId: current.metadata?.terminalEventId ?? null,
+          workOrderId: current.metadata?.ownerDecisionWorkOrderId ?? null,
+          terminalEventId: current.metadata?.ownerDecisionTerminalEventId ?? null,
           ownerUserId: outcome.userId,
           expectedNextState,
         })
@@ -751,10 +751,22 @@ export function createHermesOrchestrator(options = {}) {
     }
     if (current?.checkpoint?.state === "OWNER_DECISION_REQUIRED") {
       const nextState = current.checkpoint.detail
-      const decisionPacket = ownerDecisionPacket({
-        ...(current.metadata.ownerDecisionPacket ?? {}),
-        nextState,
-      })
+      let decisionPacket
+      try {
+        decisionPacket = ownerDecisionPacket({
+          ...(current.metadata.ownerDecisionPacket ?? {}),
+          nextState,
+        })
+      } catch (error) {
+        await abandonLease({
+          idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:owner-decision-packet`,
+          outcomeId,
+          holderId,
+          fencingToken: lease.fencingToken,
+          reason: error?.code ?? "HERMES_OWNER_DECISION_PACKET_WALL",
+        })
+        throw error
+      }
       const outcomeTerminalized = await markTerminal({
         outcomeId: outcome.id,
         result: "OWNER_DECISION_REQUIRED",
@@ -1025,13 +1037,13 @@ export function createHermesOrchestrator(options = {}) {
           },
           timeoutMs: TURN_TIMEOUT_MS,
         })
-        await assertLeaseProjectionHealthy()
         cp = await checkpoint(lease, sequence, "CODEX_TURN_COMPLETED", turn.status, {
           threadId: turn.threadId,
           turnId: turn.turnId,
           ...(ownerDecisionResume ? { ownerDecisionResumePhase: "CONSUMED" } : {}),
         })
         sequence = cp.checkpointSequence
+        await assertLeaseProjectionHealthy()
         const result = parseTurnResult(turn.finalText)
         assertOwnerTouchCountersZero(state.read())
 
@@ -1068,6 +1080,14 @@ export function createHermesOrchestrator(options = {}) {
             : null
           cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null, {
             ownerDecisionPacket: decisionPacket,
+            ownerDecisionId: null,
+            ownerDecisionRef: null,
+            ownerDecisionRequestKey: null,
+            ownerDecisionNextState: null,
+            ownerDecisionResumePhase: null,
+            ownerDecisionWorkOrderId: null,
+            ownerDecisionTerminalEventId: null,
+            ownerDecisionPacketDigest: null,
           })
           sequence = cp.checkpointSequence
           await markTerminal({
@@ -1175,6 +1195,7 @@ export function createHermesOrchestrator(options = {}) {
         "HERMES_RESULT_FORMAT_WALL",
       ].includes(error?.code)
         && cp?.metadata?.ownerDecisionResumePhase === "CONSUMED"
+      const ownerDecisionPacketWall = error?.code === "HERMES_OWNER_DECISION_PACKET_WALL"
       if (postMergeCleanupWall) {
         const terminal = await settlePostMergeCleanupFailure({ lease, outcome, error })
         if (terminal) return terminal
@@ -1226,6 +1247,7 @@ export function createHermesOrchestrator(options = {}) {
       if (cp?.state === "PROVIDER_UNAVAILABLE"
         || runtimeProjectionWall
         || consumedOwnerDecisionParseWall
+        || ownerDecisionPacketWall
         || ["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT", "APP_SERVER_EXTERNAL_TOOL_WALL", "HERMES_PROVIDER_SETTLEMENT_WALL"].includes(error?.code)) {
         try {
           await abandonLease({

@@ -33,14 +33,9 @@ export type GoalAuthorityDecisionActionInput = {
 }
 
 export type GoalAuthorityDecisionActionResult = {
-  status: "RECORDED" | "REPLAYED" | "STALE" | "CONFLICT"
-  choice: GoalAuthorityDecisionChoice
-}
-
-function actionError(code: string, message: string): never {
-  const error = new Error(message) as Error & { code?: string }
-  error.code = code
-  throw error
+  status: "RECORDED" | "REPLAYED" | "STALE" | "CONFLICT" | "INVALID" | "UNAUTHORIZED"
+  choice: GoalAuthorityDecisionChoice | null
+  message: string
 }
 
 function isChoice(value: unknown): value is GoalAuthorityDecisionChoice {
@@ -81,12 +76,32 @@ function runtimeErrorCode(error: unknown): string | null {
 export async function recordGoalAuthorityDecision(
   input: GoalAuthorityDecisionActionInput,
 ): Promise<GoalAuthorityDecisionActionResult> {
-  const ownerUserId = await getUserId()
+  let ownerUserId: string
+  try {
+    ownerUserId = await getUserId()
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return {
+        status: "UNAUTHORIZED",
+        choice: null,
+        message: "Sign in as the decision owner before recording an authority decision.",
+      }
+    }
+    throw error
+  }
   if (!input || typeof input !== "object" || !input.request) {
-    actionError("GOAL_AUTHORITY_DECISION_REQUEST_INVALID", "A persisted decision request is required.")
+    return {
+      status: "INVALID",
+      choice: null,
+      message: "A persisted decision request is required.",
+    }
   }
   if (!isChoice(input.choice)) {
-    actionError("GOAL_AUTHORITY_DECISION_CHOICE_INVALID", "Choose approve or deny.")
+    return {
+      status: "INVALID",
+      choice: null,
+      message: "Choose approve or deny.",
+    }
   }
 
   const submitted = input.request
@@ -97,34 +112,60 @@ export async function recordGoalAuthorityDecision(
     || typeof submitted.consequences !== "object"
     || submitted.consequences === null
   ) {
-    actionError("GOAL_AUTHORITY_DECISION_REQUEST_INVALID", "The decision request binding is incomplete.")
+    return {
+      status: "INVALID",
+      choice: input.choice,
+      message: "The decision request binding is incomplete.",
+    }
   }
   if (submitted.ownerUserId !== ownerUserId) {
-    actionError("GOAL_AUTHORITY_DECISION_ACTOR_MISMATCH", "The decision actor must be the authenticated user.")
+    return {
+      status: "UNAUTHORIZED",
+      choice: input.choice,
+      message: "The decision actor must be the authenticated user.",
+    }
   }
   if (!Number.isSafeInteger(submitted.goalId) || submitted.goalId < 1) {
-    actionError("GOAL_AUTHORITY_DECISION_GOAL_INVALID", "The decision is not bound to a valid Goal.")
+    return {
+      status: "INVALID",
+      choice: input.choice,
+      message: "The decision is not bound to a valid Goal.",
+    }
   }
 
   const timeline = await getGoalTimeline(submitted.goalId)
   if (!timeline) {
-    return { status: "STALE", choice: input.choice }
+    return {
+      status: "STALE",
+      choice: input.choice,
+      message: "Decision request is stale; the Goal timeline no longer exists.",
+    }
   }
   const current = timeline.decisionRequest
 
   if (submitted.status !== "ACTIONABLE" || !requestBindingMatches(submitted, current)) {
-    return { status: "STALE", choice: input.choice }
+    return {
+      status: "STALE",
+      choice: input.choice,
+      message: "Decision request is stale; the persisted timeline has changed.",
+    }
   }
   if (current.status === "RECEIPT_RECORDED") {
     return {
       status: current.receipt.choice === input.choice ? "REPLAYED" : "CONFLICT",
       choice: input.choice,
+      message: current.receipt.choice === input.choice
+        ? "Authority decision was already recorded."
+        : "Decision request conflicts with the recorded authority decision.",
     }
   }
   if (current.status !== "ACTIONABLE") {
     return {
       status: current.status === "CONFLICTING" ? "CONFLICT" : "STALE",
       choice: input.choice,
+      message: current.status === "CONFLICTING"
+        ? "Decision request conflicts with current persisted truth."
+        : "Decision request is stale; the persisted timeline has changed.",
     }
   }
   if (
@@ -132,7 +173,11 @@ export async function recordGoalAuthorityDecision(
     || current.terminalEventId === null
     || current.expectedNextState === null
   ) {
-    return { status: "CONFLICT", choice: input.choice }
+    return {
+      status: "CONFLICT",
+      choice: input.choice,
+      message: "Decision request is missing its persisted Work Order, terminal event, or next state.",
+    }
   }
 
   try {
@@ -145,20 +190,58 @@ export async function recordGoalAuthorityDecision(
       expectedNextState: current.expectedNextState,
     })
     if (recorded.replayed === true) {
-      return { status: "REPLAYED", choice: input.choice }
+      return {
+        status: "REPLAYED",
+        choice: input.choice,
+        message: "Authority decision was already recorded.",
+      }
     }
   } catch (error) {
     const code = runtimeErrorCode(error)
-    if (code?.includes("REPLAY")) return { status: "REPLAYED", choice: input.choice }
+    if (code?.includes("REPLAY")) {
+      return {
+        status: "REPLAYED",
+        choice: input.choice,
+        message: "Authority decision was already recorded.",
+      }
+    }
+    if (code?.includes("UNAUTHORIZED")) {
+      return {
+        status: "UNAUTHORIZED",
+        choice: input.choice,
+        message: "The decision is outside the authenticated user's authority scope.",
+      }
+    }
+    if (code?.includes("INVALID")) {
+      return {
+        status: "INVALID",
+        choice: input.choice,
+        message: "The persisted authority decision binding is invalid.",
+      }
+    }
     if (code?.includes("STALE") || code?.includes("ACTIVE_LEASE")) {
-      return { status: "STALE", choice: input.choice }
+      return {
+        status: "STALE",
+        choice: input.choice,
+        message: code.includes("ACTIVE_LEASE")
+          ? "Decision cannot be recorded while the Work Order has an active lease."
+          : "Decision request is stale; the persisted terminal wall has changed.",
+      }
     }
     if (code?.includes("CONFLICT") || code?.includes("CONSUMED")) {
-      return { status: "CONFLICT", choice: input.choice }
+      return {
+        status: "CONFLICT",
+        choice: input.choice,
+        message: "Decision request conflicts with an existing persisted authority decision.",
+      }
     }
     throw error
   }
 
   revalidatePath("/goal-console")
-  return { status: "RECORDED", choice: input.choice }
+  return {
+    status: "RECORDED",
+    choice: input.choice,
+    message: input.choice === "APPROVE" ? "Resume approval recorded." : "Deny decision recorded.",
+  }
 }
