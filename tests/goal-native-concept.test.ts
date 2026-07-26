@@ -11,7 +11,7 @@ describe("/goal native concept surface", () => {
     expect(surface.cards.map((card) => card.title)).toEqual([
       "Intent layer",
       "Authority checkpoint",
-      "Work Order handoff",
+      "Governed continuation",
     ])
   })
 
@@ -21,7 +21,7 @@ describe("/goal native concept surface", () => {
     expect(surface.boundaries).toContain("A goal does not execute work.")
     expect(surface.boundaries).toContain("A goal does not grant authority.")
     expect(surface.boundaries).toContain("A goal does not create background loops.")
-    expect(surface.boundaries).toContain("A goal must hand off to a Work Order before mutation.")
+    expect(surface.boundaries).toContain("A goal must link to governed work before mutation.")
   })
 
   it("routes the next step toward Work Orders instead of execution", () => {

@@ -23,10 +23,10 @@ describe("goal journey continuity", () => {
     })
   })
 
-  it("routes converted goals to work order review", () => {
+  it("keeps converted goals on their persisted timeline", () => {
     expect(getGoalJourneyStep({ status: "converted", verdict: "allow", linkedWorkOrderId: 7 })).toMatchObject({
       label: "Work order drafted",
-      action: "Review drafted work order",
+      action: "Review goal timeline",
     })
   })
 })

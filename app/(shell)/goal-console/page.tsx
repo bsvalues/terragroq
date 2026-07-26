@@ -7,15 +7,20 @@ import { WorkTrainingCapturePanel } from "@/components/dogfood/work-training-cap
 import { CodexOperatorPanel } from "@/components/operator/codex-operator-panel"
 import { PortfolioOperatorPanel } from "@/components/operator/portfolio-operator-panel"
 import { getGoals, getCurrentTruth } from "@/app/actions/goals"
+import { getGoalTimelines } from "@/app/actions/goal-timeline"
 
 export default async function GoalConsolePage() {
-  const [goals, truth] = await Promise.all([getGoals(), getCurrentTruth()])
+  const [goals, truth, timelines] = await Promise.all([
+    getGoals(),
+    getCurrentTruth(),
+    getGoalTimelines(),
+  ])
 
   return (
     <>
       <PageHeader
         title="Goal Console"
-        description="State the outcome. WilliamOS classifies it, checks authority, and prepares a bounded delivery chain for the operating Codex session."
+        description="State the outcome once, then follow persisted Hermes and Codex delivery truth through completion or a genuine authority wall."
       />
       <div className="flex flex-col gap-4 px-6 pb-2">
         <PortfolioOperatorPanel outcomes={goals} />
@@ -25,7 +30,7 @@ export default async function GoalConsolePage() {
         <GoalNativeConceptPanel />
         <LoopNativeConceptPanel />
       </div>
-      <GoalConsoleView initialGoals={goals} truth={truth} />
+      <GoalConsoleView initialGoals={goals} truth={truth} timelines={timelines} />
     </>
   )
 }

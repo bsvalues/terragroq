@@ -7,13 +7,13 @@ import { formatOwnerOperationCounter, OWNER_OPERATION_COUNTER_NAMES } from "@/li
 
 function postureLabel(posture: GoalNativeConceptCard["posture"]) {
   if (posture === "authority-gated") return "authority-gated"
-  if (posture === "handoff") return "handoff"
+  if (posture === "continuation") return "continuation"
   return "read-only"
 }
 
 function postureIcon(posture: GoalNativeConceptCard["posture"]) {
   if (posture === "authority-gated") return LockKeyhole
-  if (posture === "handoff") return Route
+  if (posture === "continuation") return Route
   return Crosshair
 }
 
