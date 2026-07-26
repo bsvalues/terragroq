@@ -111,6 +111,7 @@ function fixture(
   return {
     root, state, orchestrator, selectOutcome, markComplete, markTerminal, deferOutcome,
     projectCheckpoint, projectLease, readApprovedOwnerDecision, lifecycle, client,
+    resetMerged: () => { merged = false },
     advance: (milliseconds: number) => { currentTime += milliseconds },
   }
 }
@@ -1339,6 +1340,70 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.runTurn).not.toHaveBeenCalled()
   })
 
+  it("serializes multiple approved owner resumes by their persisted decision order", async () => {
+    const value = fixture()
+    const firstOutcome = await value.selectOutcome()
+    const secondOutcome = { ...firstOutcome, id: 78, ref: "OUTCOME-78" }
+    for (const [outcome, decisionId] of [[firstOutcome, 19], [secondOutcome, 18]] as const) {
+      const outcomeId = String(outcome.id)
+      const lease = value.state.acquireLease({
+        idempotencyKey: `owner-queue-acquire-${outcomeId}`,
+        outcomeId,
+        holderId: `crashed-${outcomeId}`,
+        leaseDurationMs: 1000,
+        metadata: { outcome },
+      })
+      value.state.checkpoint({
+        idempotencyKey: `owner-queue-wall-${outcomeId}`,
+        outcomeId,
+        holderId: `crashed-${outcomeId}`,
+        fencingToken: lease.fencingToken,
+        expectedCheckpointSequence: 0,
+        state: "OWNER_DECISION_REQUIRED",
+        detail: "NEW_AUTHORITY_REQUIRED",
+        metadata: { threadId: `thread-${outcomeId}`, ownerDecisionPacket },
+      })
+      value.state.releaseLease({
+        idempotencyKey: `owner-queue-release-${outcomeId}`,
+        outcomeId,
+        holderId: `crashed-${outcomeId}`,
+        fencingToken: lease.fencingToken,
+      })
+      expect(decisionId).toBeGreaterThan(0)
+    }
+    value.readApprovedOwnerDecision.mockImplementation(async ({ outcomeId }) => {
+      const decisionId = Number(outcomeId) === 78 ? 18 : 19
+      return {
+        approved: true,
+        status: "accepted",
+        choice: "APPROVE",
+        decisionId,
+        decisionRef: `OWNER-DECISION-${outcomeId}-500`,
+        requestKey: `owner-request-${outcomeId}`,
+        workOrderId: Number(outcomeId),
+        terminalEventId: 500,
+        decisionPacket: ownerDecisionPacket,
+        decisionPacketDigest: ownerDecisionPacketDigest,
+      }
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "78",
+    })
+    expect(value.state.read().executions["78"].lease.status).toBe("RELEASED")
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "OWNER_DECISION_REQUIRED" },
+    })
+    value.resetMerged()
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(value.state.read().executions["77"].lease.status).toBe("RELEASED")
+  })
+
   it("does not repeat the approved action after its resume turn was durably consumed", async () => {
     const value = fixture()
     const outcome = await value.selectOutcome()
@@ -1392,6 +1457,62 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     const prompt = value.client.runTurn.mock.calls[0][0].prompt
     expect(prompt).toContain("already dispatched and completed")
     expect(prompt).not.toContain("Resume only the previously blocked action")
+  })
+
+  it.each([
+    ["malformed", "not-json", "HERMES_RESULT_FORMAT_WALL"],
+    ["empty", "", "HERMES_EMPTY_RESULT_WALL"],
+  ])("consumes an approved resume before parsing %s Codex output", async (
+    _label,
+    finalText,
+    errorCode,
+  ) => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-malformed-acquire", outcomeId: "77", holderId: "crashed-holder",
+      leaseDurationMs: 1000, metadata: { outcome },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-malformed-wall", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken, expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED", detail: "NEW_AUTHORITY_REQUIRED",
+      metadata: { threadId: "thread-owner-malformed", ownerDecisionPacket },
+    })
+    value.state.releaseLease({
+      idempotencyKey: "owner-malformed-release", outcomeId: "77", holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+    })
+    value.readApprovedOwnerDecision.mockResolvedValue({
+      approved: true, status: "accepted", choice: "APPROVE", decisionId: 19,
+      decisionRef: "OWNER-DECISION-77-500", requestKey: "owner-request",
+      workOrderId: 77, terminalEventId: 500,
+      decisionPacket: ownerDecisionPacket, decisionPacketDigest: ownerDecisionPacketDigest,
+    })
+    value.client.runTurn.mockResolvedValueOnce({
+      threadId: "thread-owner-malformed",
+      turnId: "turn-owner-malformed",
+      status: "completed",
+      finalText,
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: errorCode,
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      metadata: { ownerDecisionResumePhase: "CONSUMED" },
+      lease: { abandonReason: errorCode },
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "77",
+    })
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain(
+      "already dispatched and completed",
+    )
+    expect(value.client.runTurn.mock.calls[1][0].prompt).not.toContain(
+      "Resume only the previously blocked action",
+    )
   })
 
   it("settles a recovered owner-wall checkpoint before any Codex redispatch", async () => {

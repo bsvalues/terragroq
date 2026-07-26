@@ -574,12 +574,9 @@ export function createHermesOrchestrator(options = {}) {
       releasedDecisionProofs.set(String(execution.outcomeId), proof)
       if (proof?.approved === true) approvedReleasedExecutions.push({ execution, proof })
     }
-    if (approvedReleasedExecutions.length > 1) {
-      throw Object.assign(new Error("Multiple approved owner resumes found"), {
-        code: "HERMES_EXECUTION_CONCURRENCY_WALL",
-      })
-    }
-    const approvedReleased = approvedReleasedExecutions[0] ?? null
+    approvedReleasedExecutions.sort((left, right) =>
+      Number(left.proof.decisionId) - Number(right.proof.decisionId)
+        || String(left.execution.outcomeId).localeCompare(String(right.execution.outcomeId)))
     const recoveredExecutions = Object.values(initialized.executions).filter((execution) => (
       execution?.lease?.status === "ABANDONED"
       && (
@@ -590,11 +587,14 @@ export function createHermesOrchestrator(options = {}) {
       )
     ))
     if (recoveredExecutions.length > 1
-      || [pendingExecution, recoveredExecutions[0], approvedReleased?.execution].filter(Boolean).length > 1) {
+      || [pendingExecution, recoveredExecutions[0]].filter(Boolean).length > 1) {
       throw Object.assign(new Error("Multiple recoverable executions found"), {
         code: "HERMES_EXECUTION_CONCURRENCY_WALL",
       })
     }
+    const approvedReleased = pendingExecution || recoveredExecutions.length > 0
+      ? null
+      : approvedReleasedExecutions[0] ?? null
     const durableExecution = pendingExecution ?? recoveredExecutions[0] ?? approvedReleased?.execution ?? null
     const durableOutcome = durableExecution?.metadata?.outcome ?? null
     if (durableExecution && (!durableOutcome
@@ -1025,7 +1025,6 @@ export function createHermesOrchestrator(options = {}) {
           },
           timeoutMs: TURN_TIMEOUT_MS,
         })
-        const result = parseTurnResult(turn.finalText)
         await assertLeaseProjectionHealthy()
         cp = await checkpoint(lease, sequence, "CODEX_TURN_COMPLETED", turn.status, {
           threadId: turn.threadId,
@@ -1033,6 +1032,7 @@ export function createHermesOrchestrator(options = {}) {
           ...(ownerDecisionResume ? { ownerDecisionResumePhase: "CONSUMED" } : {}),
         })
         sequence = cp.checkpointSequence
+        const result = parseTurnResult(turn.finalText)
         assertOwnerTouchCountersZero(state.read())
 
         if (result.result === "RETRYABLE_PROVIDER_WALL") {
@@ -1169,6 +1169,12 @@ export function createHermesOrchestrator(options = {}) {
       const externalToolWall = error?.code === "APP_SERVER_EXTERNAL_TOOL_WALL"
       const postMergeCleanupWall = error?.code === "HERMES_POST_MERGE_CLEANUP_WALL"
       const runtimeProjectionWall = error?.code === "HERMES_RUNTIME_PROJECTION_WALL"
+      const consumedOwnerDecisionParseWall = [
+        "HERMES_EMPTY_RESULT_WALL",
+        "HERMES_RESULT_PARSE_WALL",
+        "HERMES_RESULT_FORMAT_WALL",
+      ].includes(error?.code)
+        && cp?.metadata?.ownerDecisionResumePhase === "CONSUMED"
       if (postMergeCleanupWall) {
         const terminal = await settlePostMergeCleanupFailure({ lease, outcome, error })
         if (terminal) return terminal
@@ -1219,6 +1225,7 @@ export function createHermesOrchestrator(options = {}) {
       } catch {}
       if (cp?.state === "PROVIDER_UNAVAILABLE"
         || runtimeProjectionWall
+        || consumedOwnerDecisionParseWall
         || ["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT", "APP_SERVER_EXTERNAL_TOOL_WALL", "HERMES_PROVIDER_SETTLEMENT_WALL"].includes(error?.code)) {
         try {
           await abandonLease({

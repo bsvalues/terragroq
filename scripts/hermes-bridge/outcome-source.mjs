@@ -237,6 +237,11 @@ export async function recordOwnerAuthorityDecision({
           WHERE "userId" = $4 AND evidence @> ARRAY[$5]::text[]
           ORDER BY id DESC
           LIMIT 1
+        ), linked_work_order_decision AS (
+          SELECT d.id AS "linkedDecisionId", d."userId" AS "linkedDecisionUserId",
+            d.evidence AS "linkedDecisionEvidence"
+          FROM work_order_any wo
+          JOIN decision d ON d.id = wo."linkedDecisionId"
         )
        SELECT goal_any.id AS "goalId", goal_any."goalUserId", goal_any.status AS "goalStatus",
          goal_any.ref AS "goalRef", work_order_any.id AS "workOrderId",
@@ -254,15 +259,18 @@ export async function recordOwnerAuthorityDecision({
          prior_request."decidedAt" AS "priorDecidedAt",
          consumed_binding."consumedDecisionId", consumed_binding."consumedDecisionRef",
           consumed_binding."consumedStatus", consumed_binding."consumedChoice",
-          consumed_binding."consumedAuthority", consumed_request."consumedRequestId"
+          consumed_binding."consumedAuthority", consumed_request."consumedRequestId",
+          linked_work_order_decision."linkedDecisionUserId",
+          linked_work_order_decision."linkedDecisionEvidence"
        FROM goal_any
        FULL OUTER JOIN work_order_any ON TRUE
        LEFT JOIN latest_terminal ON TRUE
        LEFT JOIN requested_terminal ON TRUE
        LEFT JOIN latest_lease ON TRUE
-       LEFT JOIN prior_request ON TRUE
+        LEFT JOIN prior_request ON TRUE
         LEFT JOIN consumed_binding ON TRUE
-        LEFT JOIN consumed_request ON TRUE`,
+        LEFT JOIN consumed_request ON TRUE
+        LEFT JOIN linked_work_order_decision ON TRUE`,
       [outcomeId, workOrderId, terminalEventId, ownerUserId, requestKey, terminalKey],
     )
     const row = binding?.rows?.[0] ?? {}
@@ -382,9 +390,20 @@ export async function recordOwnerAuthorityDecision({
       })
     }
     if (row.workOrderLinkedDecisionId != null) {
-      throw Object.assign(new Error("owner decision Work Order already has a conflicting binding"), {
-        code: "OWNER_DECISION_CONFLICT",
-      })
+      const linkedEvidence = Array.isArray(row.linkedDecisionEvidence)
+        ? row.linkedDecisionEvidence
+        : []
+      const priorTerminalPrefix =
+        `terminal-binding:hermes-owner-decision-terminal:${outcomeId}:${workOrderId}:`
+      if (row.linkedDecisionUserId !== ownerUserId
+        || !linkedEvidence.includes(`work-order:${workOrderId}`)
+        || !linkedEvidence.some((entry) =>
+          typeof entry === "string" && entry.startsWith(priorTerminalPrefix))
+        || linkedEvidence.includes(`terminal-binding:${terminalKey}`)) {
+        throw Object.assign(new Error("owner decision Work Order already has a conflicting binding"), {
+          code: "OWNER_DECISION_CONFLICT",
+        })
+      }
     }
 
     const recorded = await runQuery(
@@ -452,9 +471,10 @@ export async function recordOwnerAuthorityDecision({
     const linked = await runQuery(
       `UPDATE work_order
        SET "linkedDecisionId" = $2, "updatedAt" = NOW()
-       WHERE id = $1::integer AND "userId" = $3 AND "linkedDecisionId" IS NULL
+       WHERE id = $1::integer AND "userId" = $3
+         AND "linkedDecisionId" IS NOT DISTINCT FROM $4::integer
        RETURNING id`,
-      [workOrderId, decisionRow.id, ownerUserId],
+      [workOrderId, decisionRow.id, ownerUserId, row.workOrderLinkedDecisionId ?? null],
     )
     if ((linked?.rows?.length ?? linked?.rowCount ?? 0) !== 1) {
       throw Object.assign(new Error("owner decision Work Order link was not persisted"), {

@@ -233,7 +233,54 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls.some(([sql]) => /INSERT INTO evidence_record/.test(sql))).toBe(true)
     expect(query.mock.calls.some(([sql]) => /INSERT INTO governance_event/.test(sql))).toBe(true)
     expect(query.mock.calls.some(([sql]) => /INSERT INTO event_log/.test(sql))).toBe(true)
-    expect(query.mock.calls.some(([sql]) => /"linkedDecisionId" IS NULL/.test(sql))).toBe(true)
+    expect(query.mock.calls.some(([sql]) =>
+      /"linkedDecisionId" IS NOT DISTINCT FROM \$4::integer/.test(sql))).toBe(true)
+  })
+
+  it("rebinds the Work Order when a later terminal wall receives its own decision", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        ...ownerDecisionBinding,
+        workOrderLinkedDecisionId: 11,
+        linkedDecisionUserId: "owner",
+        linkedDecisionEvidence: [
+          "work-order:42",
+          "terminal-binding:hermes-owner-decision-terminal:4:42:77",
+        ],
+      }] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 19,
+        ref: "OWNER-DECISION-4-88",
+        status: "accepted",
+        decision: "APPROVE",
+        decidedAt: "2026-07-26T12:00:00.000Z",
+      }] })
+      .mockResolvedValueOnce({ rows: [{ id: 4 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 90 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 42 }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recordOwnerAuthorityDecision({
+      query,
+      outcomeId: 4,
+      workOrderId: 42,
+      terminalEventId: 88,
+      ownerUserId: "owner",
+      choice: "APPROVE",
+      expectedNextState: "EXACT_NEXT_STATE",
+    })).resolves.toMatchObject({
+      status: "accepted",
+      decisionId: 19,
+      resumeReleased: true,
+    })
+
+    const linkCall = query.mock.calls.find(([sql]) =>
+      /UPDATE work_order[\s\S]+linkedDecisionId/.test(sql))
+    expect(linkCall?.[1]).toEqual([42, 19, "owner", 11])
   })
 
   it("records denial without reclassifying the goal and replays an identical request", async () => {
