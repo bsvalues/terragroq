@@ -6,7 +6,7 @@ import {
 export type GoalNativeConceptCard = {
   title: string
   description: string
-  posture: "read-only" | "authority-gated" | "handoff"
+  posture: "read-only" | "authority-gated" | "continuation"
 }
 
 export type GoalNativeConceptSurface = {
@@ -40,16 +40,16 @@ export function getGoalNativeConceptSurface(): GoalNativeConceptSurface {
         posture: "authority-gated",
       },
       {
-        title: "Work Order handoff",
-        description: "Convert safe intent into a scoped draft with validators, evidence requirements, and blocked actions.",
-        posture: "handoff",
+        title: "Governed continuation",
+        description: "Link safe intent to scoped work while keeping delivery progress and evidence visible on the goal.",
+        posture: "continuation",
       },
     ],
     boundaries: [
       "A goal does not execute work.",
       "A goal does not grant authority.",
       "A goal does not create background loops.",
-      "A goal must hand off to a Work Order before mutation.",
+      "A goal must link to governed work before mutation.",
     ],
     ownerOperationEvidence: createOwnerOperationEvidencePlaceholder({
       surface: "goal",

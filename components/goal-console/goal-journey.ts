@@ -14,8 +14,8 @@ export function getGoalJourneyStep(goal: GoalJourneyInput): GoalJourneyStep {
   if (goal.status === "converted" || goal.linkedWorkOrderId) {
     return {
       label: "Work order drafted",
-      description: "Continue in Work Orders to review authority, validators, and evidence requirements.",
-      action: "Review drafted work order",
+      description: "The draft is linked. Runtime progress, validation, delivery, and evidence remain visible on this goal.",
+      action: "Review goal timeline",
     }
   }
 

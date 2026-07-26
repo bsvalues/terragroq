@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useEffect, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import type { Goal } from "@/lib/db/schema"
 import {
@@ -9,6 +9,7 @@ import {
   convertGoalToWorkOrder,
   dismissGoal,
 } from "@/app/actions/goals"
+import { getGoalTimeline } from "@/app/actions/goal-timeline"
 import type { LoopReport } from "@/lib/goal/loop"
 import type { CurrentTruth } from "@/lib/goal/current-truth"
 import { truthLines } from "@/lib/goal/current-truth"
@@ -18,6 +19,8 @@ import { lane as findLane, mode as findMode, authority as findAuthority } from "
 import { getGoalEmptyStatePrompts } from "@/components/goal-console/goal-empty-state"
 import { getGoalJourneyStep } from "@/components/goal-console/goal-journey"
 import { OwnerOutcomeDeliveryPanel } from "@/components/goal-console/owner-outcome-delivery-panel"
+import { GoalTimelinePanel } from "@/components/goal-console/goal-timeline-panel"
+import type { GoalTimelineProjection } from "@/components/goal-console/goal-timeline-read-model"
 import { findApprovedOwnerOutcome } from "@/components/operator/owner-outcome-delivery"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -70,9 +73,11 @@ const toneText: Record<string, string> = {
 export function GoalConsoleView({
   initialGoals,
   truth,
+  timelines,
 }: {
   initialGoals: Goal[]
   truth: CurrentTruth
+  timelines: GoalTimelineProjection[]
 }) {
   const router = useRouter()
   const [goals, setGoals] = useState<Goal[]>(initialGoals)
@@ -80,8 +85,49 @@ export function GoalConsoleView({
   const [latest, setLatest] = useState<Goal | null>(initialGoals[0] ?? null)
   const [loopReport, setLoopReport] = useState<LoopReport | null>(null)
   const [loopGoalId, setLoopGoalId] = useState<number | null>(null)
+  const [goalTimelines, setGoalTimelines] = useState(
+    () => new Map(timelines.map((timeline) => [timeline.goal.id, timeline])),
+  )
   const [pending, startTransition] = useTransition()
   const emptyStatePrompts = getGoalEmptyStatePrompts()
+  const selectedTimeline = latest
+    ? goalTimelines.get(latest.id) ?? null
+    : null
+
+  useEffect(() => {
+    setGoalTimelines(new Map(timelines.map((timeline) => [timeline.goal.id, timeline])))
+  }, [timelines])
+
+  useEffect(() => {
+    const goalId = latest?.id
+    if (!goalId) return
+    const timer = window.setInterval(() => {
+      startTransition(async () => {
+        try {
+          const timeline = await getGoalTimeline(goalId)
+          if (!timeline) return
+          setGoalTimelines((current) => {
+            const next = new Map(current)
+            next.set(goalId, timeline)
+            return next
+          })
+        } catch {
+          // Keep the last persisted projection visible until the next refresh.
+        }
+      })
+    }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [latest?.id])
+
+  async function refreshGoalTimeline(goalId: number) {
+    const timeline = await getGoalTimeline(goalId)
+    if (!timeline) return
+    setGoalTimelines((current) => {
+      const next = new Map(current)
+      next.set(goalId, timeline)
+      return next
+    })
+  }
 
   function handleSubmit() {
     const text = command.trim()
@@ -95,6 +141,11 @@ export function GoalConsoleView({
         setLoopGoalId(null)
         setCommand("")
         toast.success(`${g.ref} classified: ${g.lane}/${g.mode}`)
+        try {
+          await refreshGoalTimeline(g.id)
+        } catch {
+          toast.error("Goal saved; persisted timeline refresh failed")
+        }
         router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Classification failed")
@@ -124,7 +175,12 @@ export function GoalConsoleView({
         )
         if (latest?.id === goalId) setLatest({ ...latest, status: "converted", linkedWorkOrderId: workOrderId })
         toast.success("Draft work order created")
-        router.push("/work-orders")
+        try {
+          await refreshGoalTimeline(goalId)
+        } catch {
+          toast.error("Work order saved; persisted timeline refresh failed")
+        }
+        router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Conversion failed")
       }
@@ -138,6 +194,12 @@ export function GoalConsoleView({
         setGoals((prev) => prev.map((g) => (g.id === goalId ? { ...g, status: "dismissed" } : g)))
         if (latest?.id === goalId) setLatest({ ...latest, status: "dismissed" })
         toast.success("Goal dismissed")
+        try {
+          await refreshGoalTimeline(goalId)
+        } catch {
+          toast.error("Goal dismissed; persisted timeline refresh failed")
+        }
+        router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Dismiss failed")
       }
@@ -148,18 +210,18 @@ export function GoalConsoleView({
     <div className="flex flex-col gap-6 p-6">
       <OwnerOutcomeDeliveryPanel source={findApprovedOwnerOutcome(goals) ?? latest} />
 
-      {/* Slice 5: Handoff Authority Banner */}
+      {/* Resident execution authority boundary */}
       <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-4">
         <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-warning" aria-hidden />
         <div className="flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium">Handoff boundary</span>
-            <StatusBadge value="active" label="console does not execute" />
+            <span className="text-sm font-medium">Execution boundary</span>
+            <StatusBadge value="active" label="persisted truth only" />
           </div>
           <p className="mt-1.5 text-sm text-pretty text-muted-foreground">
-            This console persists outcomes, classifies authority, and drafts work orders. The hosted Codex session owns
-            delivery only when the recorded standing R0/R1 authority matches; higher-risk, protected, or production
-            scope remains a genuine owner decision.
+            This console persists outcomes and presents resident Hermes and Codex delivery evidence. It does not infer
+            progress or completion from chat. Higher-risk, protected, or production scope remains a genuine owner
+            decision.
           </p>
         </div>
       </div>
@@ -194,6 +256,8 @@ export function GoalConsoleView({
 
           {/* Slice 1 (cont): Classification card */}
           {latest && <ClassificationCard goal={latest} />}
+
+          {latest && <GoalTimelinePanel timeline={selectedTimeline} />}
 
           {/* Slice 2: Read-only loop verifier */}
           {latest && (
@@ -235,8 +299,8 @@ export function GoalConsoleView({
                 <div className="mx-auto max-w-2xl text-center">
                   <p className="text-sm font-medium">No goals classified yet</p>
                   <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                    Start with a goal statement. The console classifies intent, verifies
-                    current truth, and can draft a work order; it does not execute work.
+                    Start with a goal statement. The console classifies intent, verifies current truth, and keeps the
+                    resulting delivery timeline on this surface.
                   </p>
                 </div>
                 <div className="mt-4 grid gap-2">
@@ -267,6 +331,13 @@ export function GoalConsoleView({
                       setLatest(g)
                       setLoopReport(null)
                       setLoopGoalId(null)
+                      startTransition(async () => {
+                        try {
+                          await refreshGoalTimeline(g.id)
+                        } catch (err) {
+                          toast.error(err instanceof Error ? err.message : "Timeline refresh failed")
+                        }
+                      })
                     }}
                     onConvert={() => handleConvert(g.id)}
                     onDismiss={() => handleDismiss(g.id)}
@@ -534,7 +605,11 @@ function GoalRow({
         active ? "border-primary/40" : "border-border hover:border-muted-foreground/30",
       )}
     >
-      <button onClick={onSelect} className="flex flex-1 items-center gap-3 text-left">
+      <button
+        onClick={onSelect}
+        aria-pressed={active}
+        className="flex flex-1 items-center gap-3 text-left"
+      >
         <CircleDot
           className={cn("h-4 w-4 shrink-0", active ? "text-primary" : "text-muted-foreground")}
           aria-hidden

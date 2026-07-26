@@ -12,7 +12,7 @@ export function OwnerOutcomeDeliveryPanel({ source }: { source: OwnerOutcomeSour
     OWNER_DECISION_REQUIRED: "owner authority required",
     REFUSED: "outside doctrine",
     DISMISSED: "dismissed",
-    HANDED_OFF: "draft handed off",
+    HANDED_OFF: "draft delivery recorded",
   }[delivery.state]
 
   return (
@@ -25,7 +25,7 @@ export function OwnerOutcomeDeliveryPanel({ source }: { source: OwnerOutcomeSour
           </div>
           <h2 id="owner-outcome-title" className="mt-2 text-xl font-semibold">Owner Outcome Delivery</h2>
           <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            State the result below in normal language. WilliamOS keeps the persisted goal as the source record and derives a bounded delivery chain for the operating Codex session.
+            State the result below in normal language. WilliamOS keeps the persisted goal as the source record and derives bounded delivery guidance for resident Hermes and Codex operators.
           </p>
         </div>
         <div className="border-t border-border bg-muted/20 px-5 py-5 lg:border-l lg:border-t-0">
@@ -74,8 +74,11 @@ export function OwnerOutcomeDeliveryPanel({ source }: { source: OwnerOutcomeSour
             <p className="mt-2 font-mono text-[10px] text-muted-foreground">{delivery.handoff.nextWorkOrderId}</p>
           </div>
           <div className="bg-card p-5">
-            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Session handoff</p>
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Persisted delivery</p>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{delivery.handoff.continuationRule}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              The persisted goal record and evidence anchor guide resident Hermes and Codex delivery; they do not establish completion or live runtime state.
+            </p>
             <p className="mt-2 font-mono text-[10px] text-muted-foreground">{delivery.handoff.evidenceAnchor}</p>
           </div>
         </div>
@@ -88,7 +91,7 @@ export function OwnerOutcomeDeliveryPanel({ source }: { source: OwnerOutcomeSour
               : delivery.state === "DISMISSED"
                 ? "This outcome is dismissed and cannot produce a new delivery chain."
                 : delivery.state === "HANDED_OFF"
-                  ? "This outcome already produced its draft Work Order. Continue from the recorded handoff."
+                  ? "A draft Work Order delivery is recorded for this outcome. Continue from that persisted record; this panel does not establish completion or live runtime state."
               : `A new owner decision is required before this scope can proceed${delivery.blockedReasons.length ? `: ${delivery.blockedReasons.join(", ")}` : "."}`}
           </p>
         </div>

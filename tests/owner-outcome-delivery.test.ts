@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs"
+
 import { describe, expect, it } from "vitest"
 
 import {
@@ -22,7 +24,26 @@ const eligibleSource: OwnerOutcomeSource = {
   status: "classified",
 }
 
+const deliveryPanelSource = readFileSync(
+  "components/goal-console/owner-outcome-delivery-panel.tsx",
+  "utf8",
+)
+
 describe("owner outcome delivery", () => {
+  it("uses persisted resident delivery language on the operator-facing panel", () => {
+    const operatorCopy = deliveryPanelSource.toLowerCase()
+
+    expect(deliveryPanelSource).toContain("Persisted delivery")
+    expect(deliveryPanelSource).toContain("resident Hermes and Codex operators")
+    expect(deliveryPanelSource).toContain("do not establish completion or live runtime state")
+    expect(operatorCopy).not.toContain("operating codex session")
+    expect(operatorCopy).not.toContain("hosted session")
+    expect(operatorCopy).not.toContain("hosted-session")
+    expect(operatorCopy).not.toContain("session handoff")
+    expect(operatorCopy).not.toContain("recorded handoff")
+    expect(operatorCopy).not.toContain("draft handed off")
+  })
+
   it("keeps fixed standing identities while awaiting an outcome", () => {
     expect(buildOwnerOutcomeDelivery(null)).toEqual(expect.objectContaining({
       programId: OWNER_OUTCOME_PROGRAM_ID,
