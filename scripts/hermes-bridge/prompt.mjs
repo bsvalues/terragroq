@@ -73,7 +73,7 @@ File safety:
 - Modify only the reserved paths and preserve all unrelated worktree content.
 
 Completion rule:
-Return READY_FOR_VALIDATION only after useful implementation and independent file review, or return a typed terminal wall. Your final response must truthfully state RESULT, WORK_ORDER, BRANCH, COMMIT, PR_URL, MERGED, MERGE_COMMIT, VALIDATION, REVIEW_THREADS, OWNER_TOUCH_COUNT, BLOCKED_SCOPE_CROSSED, and NEXT_STATE.`
+Return READY_FOR_VALIDATION only after useful implementation and independent file review, or return a typed terminal wall. For OWNER_DECISION_REQUIRED, also return the exact blocked action, authority boundary, minimum choice, and approve/deny consequences. Your final response must truthfully state RESULT, WORK_ORDER, BRANCH, COMMIT, PR_URL, MERGED, MERGE_COMMIT, VALIDATION, REVIEW_THREADS, OWNER_TOUCH_COUNT, BLOCKED_SCOPE_CROSSED, NEXT_STATE, BLOCKED_ACTION, AUTHORITY_BOUNDARY, MINIMUM_CHOICE, APPROVE_CONSEQUENCE, and DENY_CONSEQUENCE.`
 }
 
 export const HERMES_TURN_OUTPUT_SCHEMA = Object.freeze({
@@ -82,6 +82,8 @@ export const HERMES_TURN_OUTPUT_SCHEMA = Object.freeze({
   required: [
     "result", "workOrder", "branch", "commit", "prUrl", "merged", "mergeCommit",
     "validation", "reviewThreads", "ownerTouchCount", "blockedScopeCrossed", "nextState",
+    "blockedAction", "authorityBoundary", "minimumChoice", "approveConsequence",
+    "denyConsequence",
   ],
   properties: {
     result: { type: "string", enum: ["READY_FOR_VALIDATION", "RETRYABLE_PROVIDER_WALL", "OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"] },
@@ -95,6 +97,11 @@ export const HERMES_TURN_OUTPUT_SCHEMA = Object.freeze({
     reviewThreads: { type: "integer", minimum: 0 },
     ownerTouchCount: { type: "integer", minimum: 0 },
     blockedScopeCrossed: { type: "boolean" },
-    nextState: { type: "string" },
+    nextState: { type: "string", pattern: "^[A-Z][A-Z0-9_]{1,79}$" },
+    blockedAction: { type: ["string", "null"] },
+    authorityBoundary: { type: ["string", "null"] },
+    minimumChoice: { enum: ["APPROVE_OR_DENY", null] },
+    approveConsequence: { type: ["string", "null"] },
+    denyConsequence: { type: ["string", "null"] },
   },
 })

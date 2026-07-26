@@ -122,6 +122,7 @@ async function readGoalTimelines(goalId?: number): Promise<GoalTimelineProjectio
             entityId: governanceEvent.entityId,
             actor: governanceEvent.actor,
             reason: governanceEvent.reason,
+            evidenceId: governanceEvent.evidenceId,
             metadata: governanceEvent.metadata,
             createdAt: governanceEvent.createdAt,
           })
@@ -148,6 +149,7 @@ async function readGoalTimelines(goalId?: number): Promise<GoalTimelineProjectio
           entityId: governanceEvent.entityId,
           actor: governanceEvent.actor,
           reason: governanceEvent.reason,
+          evidenceId: governanceEvent.evidenceId,
           metadata: governanceEvent.metadata,
           createdAt: governanceEvent.createdAt,
         })
@@ -161,6 +163,7 @@ async function readGoalTimelines(goalId?: number): Promise<GoalTimelineProjectio
             "HERMES_OUTCOME_PROVIDER_RECOVERED",
             "HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED",
             "HERMES_OUTCOME_REVIEW_RECOVERED",
+            "HERMES_OWNER_AUTHORITY_DECISION",
           ]),
         ))
         .orderBy(desc(governanceEvent.id))

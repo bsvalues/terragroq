@@ -36,6 +36,7 @@ export type RuntimeExecutionGovernanceEventRecord = {
   entityId: string | null
   actor: string | null
   reason: string | null
+  evidenceId?: number | null
   metadata: unknown
   createdAt: Date
 }

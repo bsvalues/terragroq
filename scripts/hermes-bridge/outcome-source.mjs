@@ -57,6 +57,622 @@ function normalizeQuery(query) {
   return null
 }
 
+const OWNER_DECISION_CHOICES = new Set(["APPROVE", "DENY"])
+
+function ownerDecisionRequestKey({ outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState }) {
+  return [
+    "hermes-owner-decision",
+    outcomeId,
+    workOrderId,
+    terminalEventId,
+    ownerUserId,
+    choice,
+    expectedNextState,
+  ].join(":")
+}
+
+function ownerDecisionTerminalKey({ outcomeId, workOrderId, terminalEventId }) {
+  return `hermes-owner-decision-terminal:${outcomeId}:${workOrderId}:${terminalEventId}`
+}
+
+function ownerDecisionScope({ outcomeId, workOrderId, terminalEventId, expectedNextState }) {
+  return `goal:${outcomeId}|work-order:${workOrderId}|terminal:${terminalEventId}|next-state:${expectedNextState}`
+}
+
+function persistedOwnerDecisionPacket(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const packet = {
+    blockedAction: value.blockedAction,
+    authorityBoundary: value.authorityBoundary,
+    minimumChoice: value.minimumChoice,
+    approveConsequence: value.approveConsequence,
+    denyConsequence: value.denyConsequence,
+  }
+  if (Object.values(packet).some((entry) => typeof entry !== "string" || entry.trim() === "")
+    || packet.minimumChoice !== "APPROVE_OR_DENY") return null
+  return packet
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => (
+      `${JSON.stringify(key)}:${canonicalJson(value[key])}`
+    )).join(",")}}`
+  }
+  return JSON.stringify(value)
+}
+
+function ownerDecisionPacketDigest(packet) {
+  return createHash("sha256").update(JSON.stringify(packet)).digest("hex")
+}
+
+function normalizedTimestamp(value) {
+  const milliseconds = value instanceof Date ? value.getTime() : Date.parse(String(value ?? ""))
+  return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : null
+}
+
+function validateOwnerDecisionInput({ outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState }) {
+  if (![outcomeId, workOrderId, terminalEventId].every((value) => Number.isSafeInteger(value) && value > 0)) {
+    throw Object.assign(new Error("owner decision identity is invalid"), { code: "OWNER_DECISION_IDENTITY_INVALID" })
+  }
+  if (typeof ownerUserId !== "string" || ownerUserId.trim() === "") {
+    throw Object.assign(new Error("owner decision user is invalid"), { code: "OWNER_DECISION_USER_INVALID" })
+  }
+  if (!OWNER_DECISION_CHOICES.has(choice)) {
+    throw Object.assign(new Error("owner decision choice is invalid"), { code: "OWNER_DECISION_CHOICE_INVALID" })
+  }
+  if (typeof expectedNextState !== "string" || !/^[A-Z][A-Z0-9_]{1,79}$/.test(expectedNextState)) {
+    throw Object.assign(new Error("owner decision next state is invalid"), { code: "OWNER_DECISION_NEXT_STATE_INVALID" })
+  }
+}
+
+function ownerDecisionResult(row, requestKey, fallback = {}) {
+  const choice = row.choice ?? row.decision ?? fallback.choice
+  const status = row.status ?? (choice === "APPROVE" ? "accepted" : "rejected")
+  return {
+    status,
+    choice,
+    decisionId: Number(row.decisionId ?? row.id ?? fallback.decisionId),
+    decisionRef: row.decisionRef ?? row.ref ?? fallback.decisionRef,
+    requestKey: row.requestKey ?? requestKey,
+    resumeReleased: status === "accepted" && choice === "APPROVE",
+    replayed: fallback.replayed === true,
+  }
+}
+
+export async function recordOwnerAuthorityDecision({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  workOrderId,
+  terminalEventId,
+  ownerUserId,
+  choice,
+  expectedNextState,
+} = {}) {
+  validateOwnerDecisionInput({ outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState })
+  const requestKey = ownerDecisionRequestKey({ outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState })
+  const terminalKey = ownerDecisionTerminalKey({ outcomeId, workOrderId, terminalEventId })
+  const decisionRef = `OWNER-DECISION-${outcomeId}-${terminalEventId}`
+  const scope = ownerDecisionScope({ outcomeId, workOrderId, terminalEventId, expectedNextState })
+  const evidenceBase = [
+    `outcome:${outcomeId}`,
+    `work-order:${workOrderId}`,
+    `terminal-event:${terminalEventId}`,
+    `next-state:${expectedNextState}`,
+    `request:${requestKey}`,
+    `terminal-binding:${terminalKey}`,
+    `choice:${choice}`,
+  ]
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = new Pool({ connectionString: databaseUrl })
+  }
+
+  try {
+    if (pool) {
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+    }
+    await runQuery("BEGIN")
+    await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [terminalKey])
+    const binding = await runQuery(
+       `WITH goal_any AS (
+         SELECT id, "userId" AS "goalUserId", status, ref
+         FROM goal WHERE id = $1::integer
+         FOR UPDATE
+       ), work_order_any AS (
+         SELECT id, "userId" AS "workOrderUserId", ref, status,
+           "linkedDecisionId"
+         FROM work_order
+         WHERE id = $2::integer AND ref = 'WO-HERMES-OUTCOME-' || $1::text
+         FOR UPDATE
+        ), latest_terminal AS (
+          SELECT id, "userId" AS "terminalUserId", metadata
+          FROM governance_event
+          WHERE "entityType" = 'goal' AND "entityId"::text = $1::text
+            AND "userId" = $4
+            AND "eventType" = 'HERMES_OUTCOME_TERMINAL'
+         ORDER BY id DESC
+         LIMIT 1
+       ), requested_terminal AS (
+         SELECT id, "userId" AS "requestedTerminalUserId", metadata
+          FROM governance_event
+          WHERE id = $3::integer AND "entityType" = 'goal'
+            AND "entityId"::text = $1::text
+            AND "userId" = $4
+            AND "eventType" = 'HERMES_OUTCOME_TERMINAL'
+       ), latest_lease AS (
+         SELECT metadata
+          FROM governance_event
+          WHERE "entityType" = 'work_order' AND "entityId"::text = $2::text
+            AND "userId" = $4
+            AND "eventType" = 'HERMES_RUNTIME_LEASE'
+         ORDER BY id DESC
+         LIMIT 1
+       ), prior_request AS (
+         SELECT id AS "decisionId", ref AS "decisionRef", status, decision,
+           authority, scope, evidence, "decidedAt"
+         FROM decision
+         WHERE "userId" = $4 AND evidence @> ARRAY[$5]::text[]
+         ORDER BY id DESC
+         LIMIT 1
+        ), consumed_binding AS (
+          SELECT id AS "consumedDecisionId", ref AS "consumedDecisionRef", status AS "consumedStatus",
+            decision AS "consumedChoice", authority AS "consumedAuthority", evidence AS "consumedEvidence"
+          FROM decision
+          WHERE "userId" = $4 AND evidence @> ARRAY[$6]::text[]
+          ORDER BY id DESC
+          LIMIT 1
+        ), consumed_request AS (
+          SELECT id AS "consumedRequestId"
+          FROM decision
+          WHERE "userId" = $4 AND evidence @> ARRAY[$5]::text[]
+          ORDER BY id DESC
+          LIMIT 1
+        )
+       SELECT goal_any.id AS "goalId", goal_any."goalUserId", goal_any.status AS "goalStatus",
+         goal_any.ref AS "goalRef", work_order_any.id AS "workOrderId",
+         work_order_any."workOrderUserId", work_order_any.ref AS "workOrderRef",
+         work_order_any.status AS "workOrderStatus",
+         work_order_any."linkedDecisionId" AS "workOrderLinkedDecisionId",
+         latest_terminal.id AS "latestTerminalId",
+         latest_terminal."terminalUserId", latest_terminal.metadata AS "latestTerminalMetadata",
+         requested_terminal.id AS "requestedTerminalId", requested_terminal."requestedTerminalUserId",
+         requested_terminal.metadata AS "requestedTerminalMetadata",
+         latest_lease.metadata AS "latestLeaseMetadata",
+         prior_request."decisionId", prior_request."decisionRef", prior_request.status AS "priorStatus",
+         prior_request.decision AS "priorChoice", prior_request.authority AS "priorAuthority",
+         prior_request.scope AS "priorScope", prior_request.evidence AS "priorEvidence",
+         prior_request."decidedAt" AS "priorDecidedAt",
+         consumed_binding."consumedDecisionId", consumed_binding."consumedDecisionRef",
+          consumed_binding."consumedStatus", consumed_binding."consumedChoice",
+          consumed_binding."consumedAuthority", consumed_request."consumedRequestId"
+       FROM goal_any
+       FULL OUTER JOIN work_order_any ON TRUE
+       LEFT JOIN latest_terminal ON TRUE
+       LEFT JOIN requested_terminal ON TRUE
+       LEFT JOIN latest_lease ON TRUE
+       LEFT JOIN prior_request ON TRUE
+        LEFT JOIN consumed_binding ON TRUE
+        LEFT JOIN consumed_request ON TRUE`,
+      [outcomeId, workOrderId, terminalEventId, ownerUserId, requestKey, terminalKey],
+    )
+    const row = binding?.rows?.[0] ?? {}
+    if (row.goalUserId != null && row.goalUserId !== ownerUserId
+      || row.workOrderUserId != null && row.workOrderUserId !== ownerUserId
+      || row.terminalUserId != null && row.terminalUserId !== ownerUserId
+      || row.requestedTerminalUserId != null && row.requestedTerminalUserId !== ownerUserId) {
+      throw Object.assign(new Error("owner decision is outside the current-user scope"), {
+        code: "OWNER_DECISION_UNAUTHORIZED",
+      })
+    }
+    if (row.decisionId == null && row.consumedDecisionId != null) {
+      throw Object.assign(new Error("owner decision terminal has a conflicting binding"), {
+        code: "OWNER_DECISION_CONFLICT",
+      })
+    }
+    if (row.goalId == null || row.workOrderId == null || row.requestedTerminalId == null
+      || row.latestTerminalId !== terminalEventId
+      || row.latestTerminalMetadata?.result !== "OWNER_DECISION_REQUIRED"
+      || row.latestTerminalMetadata?.nextState !== expectedNextState
+      || row.requestedTerminalMetadata?.result !== "OWNER_DECISION_REQUIRED"
+      || row.requestedTerminalMetadata?.nextState !== expectedNextState
+      || (
+        row.decisionId == null
+          ? row.goalStatus !== "dismissed"
+          : row.priorChoice === "APPROVE"
+            ? row.goalStatus !== "classified"
+            : row.goalStatus !== "dismissed"
+      )) {
+      throw Object.assign(new Error("owner decision does not match the latest terminal wall"), {
+        code: "OWNER_DECISION_STALE",
+      })
+    }
+    if (row.decisionId == null && row.latestLeaseMetadata?.leaseStatus === "ACTIVE") {
+      throw Object.assign(new Error("owner decision cannot consume an active lease"), {
+        code: "OWNER_DECISION_ACTIVE_LEASE",
+      })
+    }
+
+    const decisionPacket = persistedOwnerDecisionPacket(row.latestTerminalMetadata)
+    const requestedDecisionPacket = persistedOwnerDecisionPacket(row.requestedTerminalMetadata)
+    if (!decisionPacket || canonicalJson(requestedDecisionPacket) !== canonicalJson(decisionPacket)) {
+      throw Object.assign(new Error("owner decision terminal packet is missing or conflicting"), {
+        code: "OWNER_DECISION_STALE",
+      })
+    }
+    const decisionPacketDigest = ownerDecisionPacketDigest(decisionPacket)
+    const evidence = [...evidenceBase, `decision-packet:${decisionPacketDigest}`]
+    const status = choice === "APPROVE" ? "accepted" : "rejected"
+    if (row.decisionId != null) {
+      const prior = ownerDecisionResult({
+        decisionId: row.decisionId, decisionRef: row.decisionRef, status: row.priorStatus,
+        choice: row.priorChoice,
+      }, requestKey, { choice, decisionRef })
+      if (prior.choice !== choice || prior.decisionRef !== decisionRef
+        || prior.status !== status || row.priorAuthority !== "binding"
+        || row.priorScope !== scope
+        || JSON.stringify(row.priorEvidence) !== JSON.stringify(evidence)) {
+        throw Object.assign(new Error("owner decision replay conflicts with persisted binding"), {
+          code: "OWNER_DECISION_CONFLICT",
+        })
+      }
+      const priorPayload = {
+        outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState,
+        decisionId: prior.decisionId, decisionRef, requestKey, decisionPacket, decisionPacketDigest,
+      }
+      const priorNotes = JSON.stringify(priorPayload)
+      const priorEvidenceHash = createHash("sha256").update(priorNotes).digest("hex")
+      const priorReceipt = await runQuery(
+        `SELECT ev.id AS "evidenceId", ev.notes, ev."contentHash",
+           receipt.metadata AS "receiptMetadata", audit.metadata AS "auditMetadata"
+         FROM work_order wo
+         JOIN evidence_record ev ON ev."userId" = $1
+           AND ev.ref = $2 AND ev."workOrderId" = wo.id AND ev.result = $3
+         JOIN governance_event receipt ON receipt."userId" = $1
+           AND receipt."eventType" = 'HERMES_OWNER_AUTHORITY_DECISION'
+           AND receipt."entityType" = 'goal' AND receipt."entityId"::text = $4::text
+           AND receipt."evidenceId" = ev.id
+         JOIN event_log audit ON audit."userId" = $1
+           AND audit.type = 'owner.decision.recorded'
+           AND audit.register = 'goals' AND audit."refId" = $4::integer
+         WHERE wo.id = $5::integer AND wo."userId" = $1
+           AND wo."linkedDecisionId" = $6::integer`,
+        [
+          ownerUserId,
+          `EV-OWNER-DECISION-${outcomeId}-${terminalEventId}`,
+          choice === "APPROVE" ? "PASS" : "FAIL",
+          outcomeId,
+          workOrderId,
+          prior.decisionId,
+        ],
+      )
+      const receiptRow = priorReceipt?.rows?.length === 1 ? priorReceipt.rows[0] : null
+      const expectedAudit = {
+        ...priorPayload, status, authority: "binding", evidenceId: receiptRow?.evidenceId ?? null,
+        recordedAt: normalizedTimestamp(row.priorDecidedAt),
+      }
+      if (!receiptRow || receiptRow.notes !== priorNotes
+        || receiptRow.contentHash !== priorEvidenceHash
+        || canonicalJson(receiptRow.receiptMetadata) !== canonicalJson(expectedAudit)
+        || canonicalJson(receiptRow.auditMetadata) !== canonicalJson(expectedAudit)) {
+        throw Object.assign(new Error("owner decision replay receipt is incomplete or conflicting"), {
+          code: "OWNER_DECISION_CONFLICT",
+        })
+      }
+      await runQuery("COMMIT")
+      return { ...prior, replayed: true }
+    }
+    if (row.consumedRequestId != null) {
+      throw Object.assign(new Error("owner decision request has already been consumed"), {
+        code: "OWNER_DECISION_CONSUMED",
+      })
+    }
+    if (row.consumedDecisionId != null) {
+      throw Object.assign(new Error("owner decision terminal has a conflicting binding"), {
+        code: "OWNER_DECISION_CONFLICT",
+      })
+    }
+    if (row.workOrderLinkedDecisionId != null) {
+      throw Object.assign(new Error("owner decision Work Order already has a conflicting binding"), {
+        code: "OWNER_DECISION_CONFLICT",
+      })
+    }
+
+    const recorded = await runQuery(
+      `INSERT INTO decision
+         ("userId", ref, title, context, decision, rationale, status, authority, owner, scope, evidence, tags, "decidedAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'binding', $1, $8, $9::text[], $10::text[], NOW())
+       RETURNING id, ref, status, decision, "decidedAt"`,
+      [
+        ownerUserId,
+        decisionRef,
+        `Owner authority decision for ${terminalKey}`,
+        JSON.stringify({
+          outcomeId, workOrderId, terminalEventId, expectedNextState, requestKey,
+          decisionPacket, decisionPacketDigest,
+        }),
+        choice,
+        choice === "APPROVE" ? "Owner approved the exact persisted terminal scope." : "Owner denied the exact persisted terminal scope.",
+        status,
+        scope,
+        evidence,
+        ["HERMES_OWNER_AUTHORITY_DECISION", choice],
+      ],
+    )
+    const decisionRow = recorded?.rows?.[0]
+    if (!decisionRow?.id) {
+      throw Object.assign(new Error("owner decision record was not created"), { code: "OWNER_DECISION_RECORD_WALL" })
+    }
+    if (choice === "APPROVE") {
+      const reclassified = await runQuery(
+        `UPDATE goal SET status = 'classified', "updatedAt" = NOW()
+         WHERE id = $1::integer AND "userId" = $2 AND status = 'dismissed'
+         RETURNING id`,
+        [outcomeId, ownerUserId],
+      )
+      if ((reclassified?.rows?.length ?? reclassified?.rowCount ?? 0) !== 1) {
+        throw Object.assign(new Error("approved owner decision could not release the goal"), {
+          code: "OWNER_DECISION_RESUME_WALL",
+        })
+      }
+    }
+    const evidencePayload = {
+      outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState,
+      decisionId: decisionRow.id, decisionRef, requestKey, decisionPacket, decisionPacketDigest,
+    }
+    const evidenceInserted = await runQuery(
+      `INSERT INTO evidence_record
+         ("userId", ref, "workOrderId", result, repo, notes, "contentHash")
+       VALUES ($1, $2, $3, $4, 'bsvalues/terragroq', $5, $6)
+       RETURNING id`,
+      [
+        ownerUserId,
+        `EV-OWNER-DECISION-${outcomeId}-${terminalEventId}`,
+        workOrderId,
+        choice === "APPROVE" ? "PASS" : "FAIL",
+        JSON.stringify(evidencePayload),
+        createHash("sha256").update(JSON.stringify(evidencePayload)).digest("hex"),
+      ],
+    )
+    const evidenceId = evidenceInserted?.rows?.[0]?.id ?? null
+    if (!Number.isSafeInteger(Number(evidenceId))) {
+      throw Object.assign(new Error("owner decision evidence record was not created"), {
+        code: "OWNER_DECISION_EVIDENCE_WALL",
+      })
+    }
+    const linked = await runQuery(
+      `UPDATE work_order
+       SET "linkedDecisionId" = $2, "updatedAt" = NOW()
+       WHERE id = $1::integer AND "userId" = $3 AND "linkedDecisionId" IS NULL
+       RETURNING id`,
+      [workOrderId, decisionRow.id, ownerUserId],
+    )
+    if ((linked?.rows?.length ?? linked?.rowCount ?? 0) !== 1) {
+      throw Object.assign(new Error("owner decision Work Order link was not persisted"), {
+        code: "OWNER_DECISION_LINK_WALL",
+      })
+    }
+    const auditMetadata = JSON.stringify({
+      ...evidencePayload, status, authority: "binding", evidenceId,
+      recordedAt: decisionRow.decidedAt ?? null,
+    })
+    await runQuery(
+      `INSERT INTO governance_event
+         ("userId", "eventType", "entityType", "entityId", actor, reason, "evidenceId", metadata)
+       VALUES ($1, 'HERMES_OWNER_AUTHORITY_DECISION', 'goal', $2,
+         $1, $3, $4, $5::jsonb)`,
+      [ownerUserId, String(outcomeId), `Recorded ${choice} owner authority decision`, evidenceId, auditMetadata],
+    )
+    await runQuery(
+      `INSERT INTO event_log ("userId", type, summary, register, "refId", metadata)
+       VALUES ($1, 'owner.decision.recorded', $2, 'goals', $3, $4::jsonb)`,
+      [ownerUserId, `${decisionRef}: ${choice} for ${terminalKey}`, outcomeId, auditMetadata],
+    )
+    await runQuery("COMMIT")
+    return ownerDecisionResult({
+      decisionId: decisionRow.id, decisionRef: decisionRow.ref ?? decisionRef,
+      status: decisionRow.status ?? status, choice: decisionRow.decision ?? choice,
+    }, requestKey, { choice, decisionRef })
+  } catch (error) {
+    try { await runQuery("ROLLBACK") } catch {}
+    throw error
+  } finally {
+    client?.release()
+    if (pool) await pool.end()
+  }
+}
+
+export async function readApprovedOwnerDecision({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  workOrderId = null,
+  terminalEventId = null,
+  ownerUserId,
+  expectedNextState,
+} = {}) {
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0
+    || (workOrderId !== null && (!Number.isSafeInteger(workOrderId) || workOrderId <= 0))
+    || (terminalEventId !== null && (!Number.isSafeInteger(terminalEventId) || terminalEventId <= 0))
+    || typeof ownerUserId !== "string" || ownerUserId.trim() === ""
+    || typeof expectedNextState !== "string"
+    || !/^[A-Z][A-Z0-9_]{1,79}$/.test(expectedNextState)) return null
+  let runQuery = normalizeQuery(query)
+  let pool
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = new Pool({ connectionString: databaseUrl })
+    runQuery = pool.query.bind(pool)
+  }
+  try {
+    const result = await runQuery(
+      `WITH latest_terminal AS (
+       SELECT id, metadata
+         , "userId" AS "terminalUserId"
+       FROM governance_event
+         WHERE "entityType" = 'goal' AND "entityId"::text = $1::text
+           AND "userId" = $4
+           AND "eventType" = 'HERMES_OUTCOME_TERMINAL'
+         ORDER BY id DESC
+         LIMIT 1
+       ), candidate_work_order AS (
+         SELECT id, ref, "userId", "linkedDecisionId"
+         FROM work_order
+         WHERE "userId" = $4 AND ref = $6
+           AND (($2::integer IS NOT NULL AND id = $2::integer)
+             OR ($2::integer IS NULL))
+       )
+       SELECT d.id AS "decisionId", d.ref AS "decisionRef", d.status,
+         d.decision AS choice, d.authority, d.scope, d.evidence,
+         d."decidedAt", g.id AS "outcomeId", wo.id AS "workOrderId",
+         terminal.id AS "terminalEventId", terminal.metadata AS "terminalMetadata",
+         receipt.id AS "receiptEventId", ev.id AS "evidenceRecordId",
+         ev.notes AS "evidenceNotes", ev."contentHash" AS "evidenceContentHash",
+         receipt.metadata AS "receiptMetadata",
+         audit.id AS "auditEventId", audit.metadata AS "auditMetadata"
+       FROM decision d
+       JOIN goal g ON g.id = $1::integer AND g."userId" = $4 AND g.status = 'classified'
+       JOIN candidate_work_order wo ON wo."userId" = g."userId"
+         AND wo."linkedDecisionId" = d.id
+       JOIN latest_terminal terminal ON terminal.id = COALESCE($3::integer, terminal.id)
+         AND terminal."terminalUserId" = $4
+         AND terminal.metadata->>'result' = 'OWNER_DECISION_REQUIRED'
+         AND terminal.metadata->>'nextState' = $5
+       JOIN evidence_record ev ON ev."userId" = $4
+         AND ev.ref = 'EV-OWNER-DECISION-' || $1::text || '-' || terminal.id::text
+         AND ev."workOrderId" = wo.id AND ev.result = 'PASS'
+         AND ev."contentHash" ~ '^[a-f0-9]{64}$'
+       JOIN governance_event receipt ON receipt."userId" = $4
+         AND receipt."eventType" = 'HERMES_OWNER_AUTHORITY_DECISION'
+         AND receipt."entityType" = 'goal' AND receipt."entityId"::text = $1::text
+         AND receipt."evidenceId" = ev.id
+         AND receipt.metadata->>'decisionId' = d.id::text
+         AND receipt.metadata->>'terminalEventId' = terminal.id::text
+       JOIN event_log audit ON audit."userId" = $4
+         AND audit.type = 'owner.decision.recorded'
+         AND audit.register = 'goals' AND audit."refId" = $1::integer
+         AND audit.metadata->>'decisionId' = d.id::text
+         AND audit.metadata->>'evidenceId' = ev.id::text
+       WHERE d."userId" = $4 AND d.status = 'accepted' AND d.authority = 'binding'
+         AND d.decision = 'APPROVE'
+         AND d.ref = 'OWNER-DECISION-' || $1::text || '-' || terminal.id::text
+         AND d.scope = 'goal:' || $1::text || '|work-order:' || wo.id::text
+           || '|terminal:' || terminal.id::text || '|next-state:' || $5
+         AND d.evidence @> ARRAY[
+           'outcome:' || $1::text,
+           'work-order:' || wo.id::text,
+           'terminal-event:' || terminal.id::text,
+           'next-state:' || $5,
+           'choice:APPROVE'
+         ]::text[]
+         AND d.evidence @> ARRAY[
+           'request:hermes-owner-decision:' || $1::text || ':' || wo.id::text
+             || ':' || terminal.id::text || ':' || $4 || ':APPROVE:' || $5
+         ]::text[]`,
+      [
+        outcomeId,
+        workOrderId,
+        terminalEventId,
+        ownerUserId,
+        expectedNextState,
+        `WO-HERMES-OUTCOME-${outcomeId}`,
+      ],
+    )
+    const rows = Array.isArray(result?.rows) ? result.rows : []
+    const row = rows.length === 1 ? rows[0] : null
+    const resolvedWorkOrderId = Number(row?.workOrderId ?? workOrderId)
+    const resolvedTerminalEventId = Number(row?.terminalEventId ?? terminalEventId)
+    const decisionPacket = persistedOwnerDecisionPacket(row?.terminalMetadata)
+    const decisionPacketDigest = decisionPacket ? ownerDecisionPacketDigest(decisionPacket) : null
+    const requestKey = decisionPacket ? ownerDecisionRequestKey({
+      outcomeId,
+      workOrderId: resolvedWorkOrderId,
+      terminalEventId: resolvedTerminalEventId,
+      ownerUserId,
+      choice: "APPROVE",
+      expectedNextState,
+    }) : null
+    const expectedEvidence = decisionPacketDigest ? [
+      `outcome:${outcomeId}`,
+      `work-order:${resolvedWorkOrderId}`,
+      `terminal-event:${resolvedTerminalEventId}`,
+      `next-state:${expectedNextState}`,
+      `request:${requestKey}`,
+      `terminal-binding:${ownerDecisionTerminalKey({
+        outcomeId, workOrderId: resolvedWorkOrderId, terminalEventId: resolvedTerminalEventId,
+      })}`,
+      "choice:APPROVE",
+      `decision-packet:${decisionPacketDigest}`,
+    ] : null
+    const evidencePayload = decisionPacket ? {
+      outcomeId,
+      workOrderId: resolvedWorkOrderId,
+      terminalEventId: resolvedTerminalEventId,
+      ownerUserId,
+      choice: "APPROVE",
+      expectedNextState,
+      decisionId: Number(row?.decisionId),
+      decisionRef: row?.decisionRef,
+      requestKey,
+      decisionPacket,
+      decisionPacketDigest,
+    } : null
+    const evidenceNotes = evidencePayload ? JSON.stringify(evidencePayload) : null
+    const expectedAudit = evidencePayload ? {
+      ...evidencePayload,
+      status: "accepted",
+      authority: "binding",
+      evidenceId: Number(row?.evidenceRecordId),
+      recordedAt: normalizedTimestamp(row?.decidedAt),
+    } : null
+    if (!row || row.status !== "accepted" || row.choice !== "APPROVE"
+      || row.authority !== "binding" || row.outcomeId !== undefined && Number(row.outcomeId) !== outcomeId
+      || row.workOrderId !== undefined && workOrderId !== null && Number(row.workOrderId) !== workOrderId
+      || row.terminalEventId !== undefined && terminalEventId !== null && Number(row.terminalEventId) !== terminalEventId
+      || row.terminalUserId !== undefined && row.terminalUserId !== ownerUserId
+      || row.decisionRef !== undefined && row.decisionRef !== `OWNER-DECISION-${outcomeId}-${Number(row.terminalEventId ?? terminalEventId)}`
+      || !Number.isSafeInteger(Number(row.receiptEventId))
+      || !Number.isSafeInteger(Number(row.evidenceRecordId))
+      || !Number.isSafeInteger(Number(row.auditEventId))
+      || !decisionPacket || !requestKey || !expectedEvidence || !evidencePayload || !expectedAudit
+      || JSON.stringify(row.evidence) !== JSON.stringify(expectedEvidence)
+      || row.evidenceNotes !== evidenceNotes
+      || row.evidenceContentHash !== createHash("sha256").update(evidenceNotes).digest("hex")
+      || canonicalJson(row.receiptMetadata) !== canonicalJson(expectedAudit)
+      || canonicalJson(row.auditMetadata) !== canonicalJson(expectedAudit)
+      || !Number.isSafeInteger(Number(row.decisionId))) return null
+    return {
+      approved: true,
+      status: "accepted",
+      choice: "APPROVE",
+      decisionId: Number(row.decisionId),
+      decisionRef: row.decisionRef,
+      requestKey,
+      outcomeId,
+      workOrderId: resolvedWorkOrderId,
+      terminalEventId: resolvedTerminalEventId,
+      expectedNextState,
+      decidedAt: row.decidedAt ?? null,
+      decisionPacket,
+      decisionPacketDigest,
+    }
+  } finally {
+    if (pool) await pool.end()
+  }
+}
+
 export async function selectNextOutcome({
   query,
   databaseUrl = process.env.DATABASE_URL,
@@ -159,10 +775,33 @@ export async function terminalizeOutcome({
   outcomeId,
   result,
   nextState,
+  metadata = null,
 } = {}) {
   if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
   if (!["OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"].includes(result)) {
     throw Object.assign(new Error("terminal result is invalid"), { code: "OUTCOME_TERMINAL_RESULT_INVALID" })
+  }
+  const terminalMetadata = {
+    result,
+    nextState: nextState ?? null,
+    ...(result === "OWNER_DECISION_REQUIRED" ? metadata ?? {} : {}),
+  }
+  if (result === "OWNER_DECISION_REQUIRED") {
+    const fields = [
+      terminalMetadata.blockedAction,
+      terminalMetadata.authorityBoundary,
+      terminalMetadata.minimumChoice,
+      terminalMetadata.approveConsequence,
+      terminalMetadata.denyConsequence,
+    ]
+    if (typeof terminalMetadata.nextState !== "string"
+      || !/^[A-Z][A-Z0-9_]{1,79}$/.test(terminalMetadata.nextState)
+      || fields.some((value) => typeof value !== "string" || value.trim() === "")
+      || terminalMetadata.minimumChoice !== "APPROVE_OR_DENY") {
+      throw Object.assign(new Error("owner decision terminal packet is invalid"), {
+        code: "OUTCOME_TERMINAL_DECISION_PACKET_INVALID",
+      })
+    }
   }
   let runQuery = normalizeQuery(query)
   let pool
@@ -197,9 +836,10 @@ export async function terminalizeOutcome({
                AND terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
                AND terminal.metadata->>'result' = $2
                AND (terminal.metadata->>'nextState') IS NOT DISTINCT FROM $3
+               AND terminal.metadata = $4::jsonb
            WHERE g.id = $1 AND g.status = 'dismissed'
          ) AS terminalized`,
-        [outcomeId, result, nextState ?? null],
+        [outcomeId, result, nextState ?? null, JSON.stringify(terminalMetadata)],
       )
       const alreadyTerminalized = prior?.rows?.[0]?.terminalized === true
       if (client) await runQuery(alreadyTerminalized ? "COMMIT" : "ROLLBACK")
@@ -208,7 +848,7 @@ export async function terminalizeOutcome({
     await runQuery(
       `INSERT INTO governance_event ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
        VALUES ($1, 'HERMES_OUTCOME_TERMINAL', 'goal', $2, 'hermes-codex-bridge', $3, $4::jsonb)`,
-      [row.userId, String(row.id), `${result} for ${row.ref ?? `goal-${row.id}`}`, JSON.stringify({ result, nextState: nextState ?? null })],
+      [row.userId, String(row.id), `${result} for ${row.ref ?? `goal-${row.id}`}`, JSON.stringify(terminalMetadata)],
     )
     if (client) await runQuery("COMMIT")
     return true

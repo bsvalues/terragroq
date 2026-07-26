@@ -8,7 +8,9 @@ const pageSource = readFileSync("app/(shell)/goal-console/page.tsx", "utf8")
 
 describe("Goal Console persisted timeline surface", () => {
   it("keeps converted goals on the same surface", () => {
-    expect(viewSource).toContain("<GoalTimelinePanel timeline={selectedTimeline} />")
+    expect(viewSource).toContain("<GoalTimelinePanel")
+    expect(viewSource).toContain("timeline={selectedTimeline}")
+    expect(viewSource).toContain("onAuthorityDecision={(choice)")
     expect(viewSource).toContain("getGoalTimeline")
     expect(viewSource).toContain("await refreshGoalTimeline(g.id)")
     expect(viewSource).toContain("window.setInterval")
