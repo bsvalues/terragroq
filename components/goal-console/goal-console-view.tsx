@@ -20,6 +20,7 @@ import { lane as findLane, mode as findMode, authority as findAuthority } from "
 import { getGoalEmptyStatePrompts } from "@/components/goal-console/goal-empty-state"
 import { getGoalJourneyStep } from "@/components/goal-console/goal-journey"
 import { OwnerOutcomeDeliveryPanel } from "@/components/goal-console/owner-outcome-delivery-panel"
+import { NeedsMyDecisionPanel } from "@/components/goal-console/needs-my-decision-panel"
 import { GoalTimelinePanel } from "@/components/goal-console/goal-timeline-panel"
 import type { GoalTimelineConnection } from "@/components/goal-console/goal-timeline-panel"
 import type {
@@ -401,6 +402,12 @@ export function GoalConsoleView({
           </p>
         </div>
       </div>
+
+      <NeedsMyDecisionPanel
+        timelines={goalTimelines.values()}
+        decisionPending={decisionPending}
+        onAuthorityDecision={handleAuthorityDecision}
+      />
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left / main column */}
