@@ -243,6 +243,93 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
   })
 
+  it("adopts a durable terminal cleanup recovery before queue selection after restart", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    value.state.initialize()
+    const branch = "codex/hermes-goal-77-77"
+    const worktreePath = path.join(value.root, "worktrees", "hermes-goal-77-77")
+    const lease = value.state.acquireLease({
+      idempotencyKey: "cleanup-recovery-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: {
+        outcome,
+        branch,
+        worktreePath,
+        baseSha: "a".repeat(40),
+        headRefOid: "c".repeat(40),
+        mergeSha: "b".repeat(40),
+        prNumber: 500,
+        postMergeCleanupRetryCount: 3,
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "cleanup-recovery-terminal",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "FAILED_TERMINAL",
+      detail: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "cleanup-recovery-release",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+    })
+    const pending = value.state.beginTerminalPostMergeCleanupRecovery({
+      idempotencyKey: "cleanup-recovery-begin",
+      outcomeId: "77",
+      expectedFencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 1,
+      activationDisabled: true,
+      prNumber: 500,
+      branch,
+      worktreePath,
+      headRefOid: "c".repeat(40),
+      mergeSha: "b".repeat(40),
+      proofDigest: "d".repeat(64),
+    })
+    value.state.finalizeTerminalPostMergeCleanupRecovery({
+      idempotencyKey: "cleanup-recovery-finalize",
+      outcomeId: "77",
+      expectedFencingToken: lease.fencingToken,
+      expectedCheckpointSequence: pending.checkpointSequence,
+      activationDisabled: true,
+      prNumber: 500,
+      branch,
+      worktreePath,
+      headRefOid: "c".repeat(40),
+      mergeSha: "b".repeat(40),
+      proofDigest: "d".repeat(64),
+    })
+    value.lifecycle.inspectPullRequest.mockResolvedValue({
+      state: "MERGED",
+      baseRefName: "main",
+      isDraft: false,
+      checksGreen: true,
+      reviewed: true,
+      unresolvedThreadCount: 0,
+      headRefOid: "c".repeat(40),
+      mergeCommit: { oid: "b".repeat(40) },
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "77", prNumber: 500,
+    })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"]).toMatchObject({
+      fencingToken: lease.fencingToken + 1,
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "COMPLETE" },
+    })
+  })
+
   it("immediately reclaims an abandoned execution after a host clock rollback", async () => {
     const value = fixture()
     const outcome = await value.selectOutcome()

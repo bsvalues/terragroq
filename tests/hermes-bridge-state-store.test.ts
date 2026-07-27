@@ -551,6 +551,76 @@ describe("Hermes bridge durable state store", () => {
     })
   })
 
+  it("reopens only an exact zero-touch exhausted terminal cleanup after external proof", () => {
+    const { store } = fixture()
+    const first = store.acquireLease({
+      outcomeId: "5", holderId: "cleanup-holder", leaseDurationMs: 1000,
+      metadata: {
+        outcome: { id: 5 },
+        branch: "codex/hermes-goal-0005-5",
+        worktreePath: "C:\\owned\\hermes-goal-0005-5",
+        prNumber: 440,
+        headRefOid: "a".repeat(40),
+        mergeSha: "b".repeat(40),
+        postMergeCleanupRetryCount: 3,
+      },
+      idempotencyKey: "terminal-cleanup-acquire",
+    })
+    store.checkpoint({
+      outcomeId: "5", holderId: "cleanup-holder", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "FAILED_TERMINAL",
+      detail: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
+      idempotencyKey: "terminal-cleanup-wall",
+    })
+    store.releaseLease({
+      outcomeId: "5", holderId: "cleanup-holder", fencingToken: first.fencingToken,
+      idempotencyKey: "terminal-cleanup-release",
+    })
+
+    const pending = store.beginTerminalPostMergeCleanupRecovery({
+      outcomeId: "5",
+      expectedFencingToken: first.fencingToken,
+      expectedCheckpointSequence: 1,
+      activationDisabled: true,
+      prNumber: 440,
+      branch: "codex/hermes-goal-0005-5",
+      worktreePath: "C:\\owned\\hermes-goal-0005-5",
+      headRefOid: "a".repeat(40),
+      mergeSha: "b".repeat(40),
+      proofDigest: "c".repeat(64),
+      idempotencyKey: "terminal-cleanup-recover",
+    })
+    expect(pending).toMatchObject({ leaseStatus: "RELEASED", checkpointSequence: 2 })
+    expect(store.read().executions["5"]).toMatchObject({
+      lease: { status: "RELEASED" },
+      checkpoint: {
+        state: "POST_MERGE_CLEANUP_TERMINAL_RECOVERY_PENDING",
+        detail: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
+      },
+    })
+    expect(store.finalizeTerminalPostMergeCleanupRecovery({
+      outcomeId: "5",
+      expectedFencingToken: first.fencingToken,
+      expectedCheckpointSequence: 2,
+      activationDisabled: true,
+      prNumber: 440,
+      branch: "codex/hermes-goal-0005-5",
+      worktreePath: "C:\\owned\\hermes-goal-0005-5",
+      headRefOid: "a".repeat(40),
+      mergeSha: "b".repeat(40),
+      proofDigest: "c".repeat(64),
+      idempotencyKey: "terminal-cleanup-finalize",
+    })).toMatchObject({ leaseStatus: "ABANDONED", checkpointSequence: 3 })
+    expect(store.read().executions["5"]).toMatchObject({
+      lease: { status: "ABANDONED", recoverReason: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED" },
+      checkpoint: { sequence: 3, state: "POST_MERGE_CLEANUP_RECOVERED", detail: "PR #440" },
+      metadata: {
+        postMergeCleanupRetryCount: 0,
+        terminalCleanupRecoveryProofDigest: "c".repeat(64),
+      },
+    })
+  })
+
   it("defers provider-unavailable work without losing its resumable execution", () => {
     const { store, advance } = fixture()
     const first = store.acquireLease({ outcomeId: "5", holderId: "one", leaseDurationMs: 1000, idempotencyKey: "a" })

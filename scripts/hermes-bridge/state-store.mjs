@@ -245,6 +245,13 @@ function metadata(input = {}, current = {}) {
     && (typeof reviewRecoveryProofDigest !== "string" || !SHA256.test(reviewRecoveryProofDigest))) {
     fail("INVALID_REVIEW_RECOVERY_PROOF_DIGEST")
   }
+  const terminalCleanupRecoveryProofDigest = Object.hasOwn(input, "terminalCleanupRecoveryProofDigest")
+    ? input.terminalCleanupRecoveryProofDigest
+    : current.terminalCleanupRecoveryProofDigest ?? null
+  if (terminalCleanupRecoveryProofDigest !== null
+    && (typeof terminalCleanupRecoveryProofDigest !== "string" || !SHA256.test(terminalCleanupRecoveryProofDigest))) {
+    fail("INVALID_TERMINAL_CLEANUP_RECOVERY_PROOF_DIGEST")
+  }
   const headRefOid = Object.hasOwn(input, "headRefOid")
     ? input.headRefOid
     : current.headRefOid ?? null
@@ -371,6 +378,7 @@ function metadata(input = {}, current = {}) {
     validationRemediationRound,
     validationRecoveryProofDigest,
     reviewRecoveryProofDigest,
+    terminalCleanupRecoveryProofDigest,
     reviewRecoveryPriorHeadRefOid,
     reviewProjectionReconciledFromSequence,
     ownerDecisionId,
@@ -936,6 +944,107 @@ export function recoverPostMergeCleanupWall(filePath, request, options = {}) {
   })
 }
 
+export function beginTerminalPostMergeCleanupRecovery(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    const ownerTouchesRemainZero = COUNTER_NAMES.every(
+      (counter) => state.ownerTouchCounters[counter] === 0,
+    )
+    if (request.activationDisabled !== true
+      || current.fencingToken !== request.expectedFencingToken
+      || current.lease.status !== "RELEASED"
+      || current.checkpoint.state !== "FAILED_TERMINAL"
+      || current.checkpoint.detail !== "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
+      || current.checkpoint.sequence !== request.expectedCheckpointSequence
+      || current.metadata.postMergeCleanupRetryCount !== 3
+      || current.metadata.prNumber !== request.prNumber
+      || current.metadata.branch !== request.branch
+      || current.metadata.worktreePath !== request.worktreePath
+      || current.metadata.headRefOid !== request.headRefOid
+      || current.metadata.mergeSha !== request.mergeSha
+      || typeof request.proofDigest !== "string"
+      || !SHA256.test(request.proofDigest)
+      || !Number.isInteger(current.metadata.prNumber)
+      || !SHA.test(current.metadata.headRefOid ?? "")
+      || !SHA.test(current.metadata.mergeSha ?? "")
+      || String(current.metadata.outcome?.id ?? "") !== String(request.outcomeId)
+      || !ownerTouchesRemainZero) {
+      fail("TERMINAL_POST_MERGE_CLEANUP_RECOVERY_STATE_WALL")
+    }
+    const recovered = {
+      ...current,
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "POST_MERGE_CLEANUP_TERMINAL_RECOVERY_PENDING",
+        detail: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
+        recordedAt: at.iso,
+      },
+      metadata: metadata({
+        terminalCleanupRecoveryProofDigest: request.proofDigest,
+      }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: recovered }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: recovered.fencingToken,
+      checkpointSequence: recovered.checkpoint.sequence,
+      leaseStatus: recovered.lease.status,
+    }
+  })
+}
+
+export function finalizeTerminalPostMergeCleanupRecovery(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    const ownerTouchesRemainZero = COUNTER_NAMES.every(
+      (counter) => state.ownerTouchCounters[counter] === 0,
+    )
+    if (request.activationDisabled !== true
+      || current.fencingToken !== request.expectedFencingToken
+      || current.lease.status !== "RELEASED"
+      || current.checkpoint.state !== "POST_MERGE_CLEANUP_TERMINAL_RECOVERY_PENDING"
+      || current.checkpoint.detail !== "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
+      || current.checkpoint.sequence !== request.expectedCheckpointSequence
+      || current.metadata.prNumber !== request.prNumber
+      || current.metadata.branch !== request.branch
+      || current.metadata.worktreePath !== request.worktreePath
+      || current.metadata.headRefOid !== request.headRefOid
+      || current.metadata.mergeSha !== request.mergeSha
+      || current.metadata.terminalCleanupRecoveryProofDigest !== request.proofDigest
+      || !ownerTouchesRemainZero) {
+      fail("TERMINAL_POST_MERGE_CLEANUP_RECOVERY_FINALIZE_WALL")
+    }
+    const recovered = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "ABANDONED",
+        expiresAt: at.iso,
+        recoveredAt: at.iso,
+        recoverReason: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "POST_MERGE_CLEANUP_RECOVERED",
+        detail: `PR #${current.metadata.prNumber}`,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({ postMergeCleanupRetryCount: 0 }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: recovered }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: recovered.fencingToken,
+      checkpointSequence: recovered.checkpoint.sequence,
+      leaseStatus: recovered.lease.status,
+    }
+  })
+}
+
 export function deferProviderWall(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at, requestedAt) => {
@@ -1015,6 +1124,8 @@ export function createHermesStateStore(filePath, options = {}) {
     reconcileReviewRemediationProjection: (request) => reconcileReviewRemediationProjection(filePath, request, options),
     recoverExternalToolWall: (request) => recoverExternalToolWall(filePath, request, options),
     recoverPostMergeCleanupWall: (request) => recoverPostMergeCleanupWall(filePath, request, options),
+    beginTerminalPostMergeCleanupRecovery: (request) => beginTerminalPostMergeCleanupRecovery(filePath, request, options),
+    finalizeTerminalPostMergeCleanupRecovery: (request) => finalizeTerminalPostMergeCleanupRecovery(filePath, request, options),
     deferProviderWall: (request) => deferProviderWall(filePath, request, options),
     setKillSwitch: (request) => setKillSwitch(filePath, request, options),
     recordOwnerTouch: (request) => recordOwnerTouch(filePath, request, options),

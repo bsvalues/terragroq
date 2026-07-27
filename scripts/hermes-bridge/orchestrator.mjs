@@ -589,6 +589,8 @@ export function createHermesOrchestrator(options = {}) {
       && (
         (execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
           && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED")
+        || (execution?.checkpoint?.state === "POST_MERGE_CLEANUP_RECOVERED"
+          && /^PR #\d+$/.test(execution?.checkpoint?.detail ?? ""))
         || OWNER_DECISION_RESUME_STATES.has(execution?.checkpoint?.state)
         || hasOwnerDecisionResume(execution?.metadata)
       )

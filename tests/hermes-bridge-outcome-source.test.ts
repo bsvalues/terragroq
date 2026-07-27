@@ -13,6 +13,7 @@ import {
   recordValidationInfrastructureRecoveryProof,
   recoverNativeProviderOutcome,
   recoverReviewedOutcome,
+  recoverTerminalPostMergeCleanupOutcome,
   recoverValidationInfrastructureOutcome,
   selectNextOutcome,
   terminalizeOutcome,
@@ -905,6 +906,30 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     ])
     expect(query.mock.calls[2][0]).toMatch(/status = 'classified'/)
     expect(query.mock.calls[3][0]).toMatch(/HERMES_OUTCOME_REVIEW_RECOVERED/)
+  })
+
+  it("recovers cleanup exhaustion only from exact post-terminal cleanup evidence", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 4, userId: "owner", workOrderId: 42, recoveryEventId: 100,
+      }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+    const head = "d".repeat(40)
+    const merge = "e".repeat(40)
+    const proof = "f".repeat(64)
+
+    await expect(recoverTerminalPostMergeCleanupOutcome({
+      query, outcomeId: 4, prNumber: 464, reviewedHeadSha: head, mergeSha: merge, proofDigest: proof,
+    })).resolves.toBe(true)
+    expect(query.mock.calls[2][0]).toMatch(/recovered\.id > candidate\."terminalId"/)
+    expect(query.mock.calls[2][1]).toEqual([
+      4, "WO-HERMES-OUTCOME-4", "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED", 464, head, merge, proof,
+    ])
+    expect(query.mock.calls[2][0]).toMatch(/checkpointState' = 'POST_MERGE_CLEANUP_RECOVERED'/)
+    expect(query.mock.calls[3][0]).toMatch(/HERMES_OUTCOME_POST_MERGE_CLEANUP_RECOVERED/)
   })
 
   it("verifies only the exact legacy PR_MERGED projection collision", async () => {
