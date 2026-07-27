@@ -8,12 +8,14 @@ import { CodexOperatorPanel } from "@/components/operator/codex-operator-panel"
 import { PortfolioOperatorPanel } from "@/components/operator/portfolio-operator-panel"
 import { getGoals, getCurrentTruth } from "@/app/actions/goals"
 import { getGoalTimelines } from "@/app/actions/goal-timeline"
+import { getActiveGoalAuthorityRequestTimelines } from "@/app/(shell)/goal-console/authority-request-timelines"
 
 export default async function GoalConsolePage() {
-  const [goals, truth, timelines] = await Promise.all([
+  const [goals, truth, timelines, authorityRequests] = await Promise.all([
     getGoals(),
     getCurrentTruth(),
     getGoalTimelines(),
+    getActiveGoalAuthorityRequestTimelines(),
   ])
 
   return (
@@ -30,7 +32,12 @@ export default async function GoalConsolePage() {
         <GoalNativeConceptPanel />
         <LoopNativeConceptPanel />
       </div>
-      <GoalConsoleView initialGoals={goals} truth={truth} timelines={timelines} />
+      <GoalConsoleView
+        initialGoals={goals}
+        truth={truth}
+        timelines={timelines}
+        initialAuthorityRequests={authorityRequests}
+      />
     </>
   )
 }
