@@ -893,6 +893,48 @@ describe("Hermes repository lifecycle", () => {
     fs.rmSync(temporary, { recursive: true, force: true })
   })
 
+  it("removes the exact owned validation junction during terminal cleanup recovery", async () => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-terminal-junction-cleanup-"))
+    const workspaceRoot = path.join(temporary, "workspace")
+    const recoveryRoot = path.join(temporary, "owned")
+    const recoveryBranch = "codex/hermes-goal-100"
+    const recoveryWorktree = path.join(recoveryRoot, "hermes-goal-100")
+    fs.mkdirSync(path.join(workspaceRoot, "node_modules"), { recursive: true })
+    fs.mkdirSync(recoveryRoot, { recursive: true })
+    const runner = async ({ args }: Call) => {
+      const command = args.join(" ")
+      if (command.includes("remote get-url origin")) {
+        return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
+      }
+      if (command.includes("show-ref --verify --quiet")) return { code: 1, stdout: "" }
+      if (command.includes("rev-parse HEAD")) return { code: 0, stdout: `${sha}\n` }
+      if (command.includes("check-ignore -q node_modules/")) return { code: 0, stdout: "" }
+      return { code: 0, stdout: "" }
+    }
+    const lifecycle = createRepositoryLifecycle({
+      repository: "bsvalues/terragroq",
+      workspaceRoot,
+      repositoryRoot: workspaceRoot,
+      ownedWorktreeRoot: recoveryRoot,
+      runner,
+    })
+
+    try {
+      const record = await lifecycle.createWorktree({ branch: recoveryBranch })
+      fs.mkdirSync(recoveryWorktree, { recursive: true })
+      expect(lifecycle.ensureValidationDependencies(record)).toEqual({ linked: true, existing: false })
+
+      await expect(lifecycle.removeTerminalRecoveryDependencies({
+        branch: recoveryBranch,
+        worktreePath: record.worktreePath,
+        expectedHeadSha: sha,
+      })).resolves.toEqual({ removed: true, headRefOid: sha })
+      expect(fs.existsSync(path.join(recoveryWorktree, "node_modules"))).toBe(false)
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true })
+    }
+  })
+
   it("fails closed on foreign repositories, unsafe branches and paths, destructive validation, and unowned cleanup", async () => {
     expectWall(() => createRepositoryLifecycle({
       repository: "other/repo", workspaceRoot: root, ownedWorktreeRoot: ownedRoot, runner: async () => ({ code: 0 }),

@@ -660,10 +660,13 @@ export function createRepositoryLifecycle(options) {
     const dependencies = path.join(record.worktreePath, "node_modules")
     const dependencyStat = fs.lstatSync(dependencies, { throwIfNoEntry: false })
     if (!dependencyStat) return { removed: false, headRefOid: expectedHeadSha }
+    if (dependencyStat.isSymbolicLink()) {
+      removeValidationDependencies(record)
+      return { removed: true, headRefOid: expectedHeadSha }
+    }
     const canonicalWorktree = fs.realpathSync(record.worktreePath)
     const canonicalDependencies = fs.realpathSync(dependencies)
     if (!dependencyStat.isDirectory()
-      || dependencyStat.isSymbolicLink()
       || !samePath(canonicalDependencies, dependencies)
       || !samePath(path.dirname(canonicalDependencies), canonicalWorktree)
       || !inside(canonicalWorktree, canonicalDependencies)) {

@@ -198,46 +198,49 @@ describe("Hermes bridge CLI", () => {
     const read = vi.spyOn(fs, "existsSync").mockImplementation((target) =>
       target === candidate.metadata.worktreePath)
 
-    await expect(recoverTerminalPostMergeCleanupWall({
-      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
-    })).resolves.toMatchObject({
-      result: "RECOVERED",
-      outcomeId: "5",
-      prNumber: 440,
-      mergeSha: "b".repeat(40),
-      checkpointSequence: 14,
-    })
-    expect(lifecycle.cleanupOwnedWorktree).toHaveBeenCalledWith({
-      branch: candidate.metadata.branch,
-      worktreePath: candidate.metadata.worktreePath,
-      mergeCommitSha: candidate.metadata.mergeSha,
-      expectedHeadSha: candidate.metadata.headRefOid,
-    })
-    expect(beginRecovery).toHaveBeenCalledBefore(lifecycle.cleanupOwnedWorktree)
-    expect(finalizeRecovery).toHaveBeenCalledAfter(lifecycle.cleanupOwnedWorktree)
-    expect(projectCheckpoint).toHaveBeenCalledWith({
-      outcomeId: 5,
-      attempt: 22,
-      checkpoint: {
-        sequence: 14,
-        state: "POST_MERGE_CLEANUP_RECOVERED",
-        detail: "PR #440",
-        metadata: {
-          prNumber: 440,
-          headRefOid: candidate.metadata.headRefOid,
-          mergeSha: candidate.metadata.mergeSha,
-          terminalCleanupRecoveryProofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+    try {
+      await expect(recoverTerminalPostMergeCleanupWall({
+        orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+      })).resolves.toMatchObject({
+        result: "RECOVERED",
+        outcomeId: "5",
+        prNumber: 440,
+        mergeSha: "b".repeat(40),
+        checkpointSequence: 14,
+      })
+      expect(lifecycle.cleanupOwnedWorktree).toHaveBeenCalledWith({
+        branch: candidate.metadata.branch,
+        worktreePath: candidate.metadata.worktreePath,
+        mergeCommitSha: candidate.metadata.mergeSha,
+        expectedHeadSha: candidate.metadata.headRefOid,
+      })
+      expect(beginRecovery).toHaveBeenCalledBefore(lifecycle.cleanupOwnedWorktree)
+      expect(finalizeRecovery).toHaveBeenCalledAfter(lifecycle.cleanupOwnedWorktree)
+      expect(projectCheckpoint).toHaveBeenCalledWith({
+        outcomeId: 5,
+        attempt: 22,
+        checkpoint: {
+          sequence: 14,
+          state: "POST_MERGE_CLEANUP_RECOVERED",
+          detail: "PR #440",
+          metadata: {
+            prNumber: 440,
+            headRefOid: candidate.metadata.headRefOid,
+            mergeSha: candidate.metadata.mergeSha,
+            terminalCleanupRecoveryProofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+          },
         },
-      },
-    })
-    expect(recoverOutcome).toHaveBeenCalledWith({
-      outcomeId: 5,
-      prNumber: 440,
-      reviewedHeadSha: candidate.metadata.headRefOid,
-      mergeSha: candidate.metadata.mergeSha,
-      proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
-    })
-    read.mockRestore()
+      })
+      expect(recoverOutcome).toHaveBeenCalledWith({
+        outcomeId: 5,
+        prNumber: 440,
+        reviewedHeadSha: candidate.metadata.headRefOid,
+        mergeSha: candidate.metadata.mergeSha,
+        proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      })
+    } finally {
+      read.mockRestore()
+    }
   })
 
   it("verifies and finalizes one exact reviewed merge after remediation exhaustion", async () => {
