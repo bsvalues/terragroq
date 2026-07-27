@@ -50,7 +50,14 @@ export const DEFAULT_VALIDATORS = Object.freeze([
 const RESERVATIONS = Object.freeze({
   docs: Object.freeze(["docs/**", "tests/**"]),
   ui: Object.freeze(["app/(shell)/**", "components/**", "tests/**", "docs/reports/**"]),
-  read_model: Object.freeze(["app/(shell)/**", "components/**", "lib/**", "tests/**", "docs/reports/**"]),
+  read_model: Object.freeze([
+    "app/(shell)/**",
+    "app/actions/goal-timeline.ts",
+    "components/**",
+    "lib/**",
+    "tests/**",
+    "docs/reports/**",
+  ]),
 })
 
 const FORBIDDEN_CHANGED_PATH = /^(?:\.obsidian\/|scripts\/runtime-operator\/|scripts\/local\/williamos-codex-exec\.ps1$|lib\/auth|app\/api\/auth|lib\/db\/schema\.ts$|drizzle\/)/i
@@ -178,8 +185,8 @@ The exact blocked action was already dispatched and completed in the existing Co
 function allowedPath(changedPath, reservations) {
   if (FORBIDDEN_CHANGED_PATH.test(changedPath)) return false
   return reservations.some((reservation) => {
-    const prefix = reservation.replace(/\*\*$/, "")
-    return changedPath.startsWith(prefix)
+    if (!reservation.endsWith("/**")) return changedPath === reservation
+    return changedPath.startsWith(reservation.slice(0, -2))
   })
 }
 
