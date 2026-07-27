@@ -151,10 +151,14 @@ describe("Hermes bridge CLI", () => {
         branch: "codex/hermes-goal-0003-7",
         prNumber: 447, headRefOid: "a".repeat(40), mergeSha: null as string | null,
         reviewRecoveryProofDigest: null as string | null,
+        reviewProjectionReconciledFromSequence: null as number | null,
       },
     }
     const beginRecovery = vi.fn(() => ({ checkpointSequence: 32 }))
-    const finalizeRecovery = vi.fn(() => ({ checkpointSequence: 33 }))
+    const recordMerge = vi.fn(() => ({ checkpointSequence: 33 }))
+    const finalizeRecovery = vi.fn(() => ({ checkpointSequence: 34 }))
+    const reconcileRecoveryProjection = vi.fn(() => ({ checkpointSequence: 35 }))
+    const verifyProjectionCollision = vi.fn(async () => true)
     const cycle = vi.fn(async () => ({ result: "COMPLETE" }))
     const orchestrator = {
       state: {
@@ -167,7 +171,9 @@ describe("Hermes bridge CLI", () => {
           executions: { "7": candidate },
         }),
         beginReviewRemediationRecovery: beginRecovery,
+        recordReviewRemediationMerge: recordMerge,
         finalizeReviewRemediationRecovery: finalizeRecovery,
+        reconcileReviewRemediationProjection: reconcileRecoveryProjection,
       },
       cycle,
     }
@@ -187,7 +193,7 @@ describe("Hermes bridge CLI", () => {
       throw Object.assign(new Error("stale fence"), { code: "FENCING_TOKEN_CONFLICT" })
     })
     await expect(recoverReviewedMerge({
-      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
     })).rejects.toMatchObject({ code: "FENCING_TOKEN_CONFLICT" })
     expect(projectCheckpoint).not.toHaveBeenCalled()
     expect(recoverOutcome).not.toHaveBeenCalled()
@@ -195,25 +201,24 @@ describe("Hermes bridge CLI", () => {
 
     projectCheckpoint.mockRejectedValueOnce(new Error("simulated projection crash"))
     await expect(recoverReviewedMerge({
-      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
     })).rejects.toThrow("simulated projection crash")
     expect(recoverOutcome).not.toHaveBeenCalled()
     expect(finalizeRecovery).not.toHaveBeenCalled()
     candidate.checkpoint = {
-      sequence: 32,
-      state: "REVIEW_REMEDIATION_RECOVERY_PENDING",
-      detail: "REVIEW_REMEDIATION_EXHAUSTED",
+      sequence: 33,
+      state: "PR_MERGED",
+      detail: "Recovered reviewed PR #447",
     }
     candidate.metadata.headRefOid = "b".repeat(40)
     candidate.metadata.mergeSha = "c".repeat(40)
     candidate.metadata.reviewRecoveryPriorHeadRefOid = "a".repeat(40)
     candidate.metadata.reviewRecoveryProofDigest = beginRecovery.mock.calls[1][0].proofDigest
 
+    cycle.mockRejectedValueOnce(new Error("simulated cycle crash"))
     await expect(recoverReviewedMerge({
-      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
-    })).resolves.toMatchObject({
-      result: "COMPLETE", outcomeId: "7", prNumber: 447, mergeSha: "c".repeat(40),
-    })
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+    })).rejects.toThrow("simulated cycle crash")
     expect(projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
       outcomeId: 7,
       attempt: 28,
@@ -242,26 +247,82 @@ describe("Hermes bridge CLI", () => {
     expect(cycle).toHaveBeenCalledWith({
       outcome: expect.objectContaining({ id: 7, ref: "GOAL-0007" }),
     })
+    expect(projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      checkpoint: expect.objectContaining({
+        sequence: 34,
+        state: "REVIEW_REMEDIATION_RECOVERED",
+        detail: "REVIEW_REMEDIATION_EXHAUSTED",
+      }),
+    }))
 
     candidate.lease.status = "ABANDONED"
     candidate.checkpoint = {
-      sequence: 33,
+      sequence: 34,
       state: "REVIEW_REMEDIATION_RECOVERED",
       detail: "REVIEW_REMEDIATION_EXHAUSTED",
     }
     candidate.metadata.headRefOid = "b".repeat(40)
     candidate.metadata.mergeSha = "c".repeat(40)
     candidate.metadata.reviewRecoveryPriorHeadRefOid = "a".repeat(40)
+    candidate.metadata.reviewProjectionReconciledFromSequence = null
     await expect(recoverReviewedMerge({
-      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
-    })).resolves.toMatchObject({ result: "COMPLETE", checkpointSequence: 33 })
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+    })).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "7", prNumber: 447,
+      mergeSha: "c".repeat(40), checkpointSequence: 34,
+    })
+    expect(projectCheckpoint).toHaveBeenLastCalledWith(expect.objectContaining({
+      checkpoint: expect.objectContaining({
+        sequence: 34,
+        state: "REVIEW_REMEDIATION_RECOVERED",
+        detail: "REVIEW_REMEDIATION_EXHAUSTED",
+      }),
+    }))
+
+    projectCheckpoint.mockRejectedValueOnce(Object.assign(
+      new Error("non-legacy sequence collision"),
+      { code: "OUTCOME_PROJECTION_IDEMPOTENCY_CONFLICT" },
+    ))
+    verifyProjectionCollision.mockResolvedValueOnce(false)
+    await expect(recoverReviewedMerge({
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+    })).rejects.toMatchObject({ code: "OUTCOME_PROJECTION_IDEMPOTENCY_CONFLICT" })
+    expect(reconcileRecoveryProjection).not.toHaveBeenCalled()
+
+    projectCheckpoint.mockRejectedValueOnce(Object.assign(
+      new Error("verified legacy sequence collision"),
+      { code: "OUTCOME_PROJECTION_IDEMPOTENCY_CONFLICT" },
+    ))
+    await expect(recoverReviewedMerge({
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+    })).resolves.toMatchObject({ result: "COMPLETE", checkpointSequence: 35 })
     expect(beginRecovery).toHaveBeenCalledTimes(2)
+    expect(recordMerge).toHaveBeenCalledOnce()
     expect(finalizeRecovery).toHaveBeenCalledOnce()
-    expect(cycle).toHaveBeenCalledTimes(2)
+    expect(reconcileRecoveryProjection).toHaveBeenCalledWith(expect.objectContaining({
+      expectedCheckpointSequence: 34,
+      expectedFencingToken: 28,
+      proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+    }))
+    expect(verifyProjectionCollision).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 7,
+      attempt: 28,
+      checkpointSequence: 34,
+      checkpointDetail: "Recovered reviewed PR #447",
+    }))
+    expect(cycle).toHaveBeenCalledTimes(3)
     expect(cycle).toHaveBeenLastCalledWith({
       outcome: expect.objectContaining({ id: 7, ref: "GOAL-0007" }),
     })
-    expect(projectCheckpoint).toHaveBeenCalledTimes(2)
+
+    candidate.checkpoint.sequence = 35
+    candidate.metadata.reviewProjectionReconciledFromSequence = 34
+    await expect(recoverReviewedMerge({
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+    })).resolves.toMatchObject({ result: "COMPLETE", checkpointSequence: 35 })
+    expect(reconcileRecoveryProjection).toHaveBeenCalledOnce()
+    expect(cycle).toHaveBeenCalledTimes(4)
+    expect(projectCheckpoint).toHaveBeenCalledTimes(8)
     expect(recoverOutcome).toHaveBeenCalledOnce()
   })
 
@@ -291,10 +352,12 @@ describe("Hermes bridge CLI", () => {
         headRefOid: "a".repeat(40),
         mergeSha: null,
         reviewRecoveryProofDigest: null,
+        reviewRecoveryPriorHeadRefOid: null as string | null,
       },
     }
     const beginRecovery = vi.fn(() => ({ checkpointSequence: 29 }))
-    const finalizeRecovery = vi.fn(() => ({ checkpointSequence: 30 }))
+    const recordMerge = vi.fn(() => ({ checkpointSequence: 30 }))
+    const finalizeRecovery = vi.fn(() => ({ checkpointSequence: 31 }))
     const cycle = vi.fn(async () => ({ result: "COMPLETE" }))
     const orchestrator = {
       state: {
@@ -307,6 +370,7 @@ describe("Hermes bridge CLI", () => {
           executions: { "9": candidate },
         }),
         beginReviewRemediationRecovery: beginRecovery,
+        recordReviewRemediationMerge: recordMerge,
         finalizeReviewRemediationRecovery: finalizeRecovery,
       },
       cycle,
@@ -346,11 +410,10 @@ describe("Hermes bridge CLI", () => {
     })).rejects.toMatchObject({ code: "HERMES_REVIEW_RECOVERY_PROOF_WALL" })
     expect(beginRecovery).not.toHaveBeenCalled()
 
+    cycle.mockRejectedValueOnce(new Error("simulated chained cycle crash"))
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
-    })).resolves.toMatchObject({
-      result: "COMPLETE", outcomeId: "9", prNumber: 464, mergeSha: "c".repeat(40),
-    })
+    })).rejects.toThrow("simulated chained cycle crash")
     expect(beginRecovery).toHaveBeenCalledWith(expect.objectContaining({
       expectedFencingToken: 37,
       expectedPriorHeadRefOid: "a".repeat(40),
@@ -358,12 +421,56 @@ describe("Hermes bridge CLI", () => {
       mergeSha: "c".repeat(40),
       proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
     }))
+    expect(recordMerge).toHaveBeenCalledWith(expect.objectContaining({
+      expectedFencingToken: 37,
+      headRefOid: "b".repeat(40),
+      mergeSha: "c".repeat(40),
+      mergeDetail: "Recovered PR #464 through reviewed remediation chain",
+      proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+    }))
+    expect(finalizeRecovery).toHaveBeenCalledWith(expect.objectContaining({
+      expectedFencingToken: 37,
+      mergeDetail: "Recovered PR #464 through reviewed remediation chain",
+    }))
     expect(projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
       checkpoint: expect.objectContaining({
+        sequence: 30,
         state: "PR_MERGED",
         metadata: expect.objectContaining({ remediationPullRequests: [466] }),
       }),
     }))
+    expect(projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      checkpoint: expect.objectContaining({
+        sequence: 31,
+        state: "REVIEW_REMEDIATION_RECOVERED",
+        detail: "REVIEW_REMEDIATION_EXHAUSTED",
+      }),
+    }))
+    candidate.lease.status = "ABANDONED"
+    candidate.checkpoint = {
+      sequence: 31,
+      state: "REVIEW_REMEDIATION_RECOVERED",
+      detail: "REVIEW_REMEDIATION_EXHAUSTED",
+    }
+    candidate.metadata.headRefOid = "b".repeat(40)
+    candidate.metadata.mergeSha = "c".repeat(40)
+    candidate.metadata.reviewRecoveryPriorHeadRefOid = "a".repeat(40)
+    candidate.metadata.reviewRecoveryProofDigest = beginRecovery.mock.calls[0][0].proofDigest
+    await expect(recoverReviewedMerge({
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+    })).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "9", prNumber: 464,
+      mergeSha: "c".repeat(40), checkpointSequence: 31,
+    })
+    expect(projectCheckpoint).toHaveBeenLastCalledWith(expect.objectContaining({
+      checkpoint: expect.objectContaining({
+        sequence: 31,
+        state: "REVIEW_REMEDIATION_RECOVERED",
+        detail: "REVIEW_REMEDIATION_EXHAUSTED",
+      }),
+    }))
+    expect(cycle).toHaveBeenCalledTimes(2)
+    expect(recoverOutcome).toHaveBeenCalledOnce()
     expect(lifecycle.verifyOriginMainContains).toHaveBeenCalledWith("c".repeat(40))
     expect(lifecycle.verifyOriginMainContains).toHaveBeenCalledWith(remediationMerge)
     expect(lifecycle.verifyCommitAncestor).toHaveBeenCalledWith("c".repeat(40), remediationMerge)

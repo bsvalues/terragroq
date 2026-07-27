@@ -259,6 +259,14 @@ function metadata(input = {}, current = {}) {
       || !SHA.test(reviewRecoveryPriorHeadRefOid))) {
     fail("INVALID_REVIEW_RECOVERY_PRIOR_HEAD_REF_OID")
   }
+  const reviewProjectionReconciledFromSequence = Object.hasOwn(input, "reviewProjectionReconciledFromSequence")
+    ? input.reviewProjectionReconciledFromSequence
+    : current.reviewProjectionReconciledFromSequence ?? null
+  if (reviewProjectionReconciledFromSequence !== null
+    && (!Number.isSafeInteger(reviewProjectionReconciledFromSequence)
+      || reviewProjectionReconciledFromSequence < 0)) {
+    fail("INVALID_REVIEW_PROJECTION_RECONCILIATION_SEQUENCE")
+  }
   const ownerDecisionPacket = Object.hasOwn(input, "ownerDecisionPacket")
     ? input.ownerDecisionPacket
     : current.ownerDecisionPacket ?? null
@@ -364,6 +372,7 @@ function metadata(input = {}, current = {}) {
     validationRecoveryProofDigest,
     reviewRecoveryProofDigest,
     reviewRecoveryPriorHeadRefOid,
+    reviewProjectionReconciledFromSequence,
     ownerDecisionId,
     ownerDecisionRef,
     ownerDecisionRequestKey,
@@ -706,6 +715,48 @@ export function beginReviewRemediationRecovery(filePath, request, options = {}) 
   })
 }
 
+export function recordReviewRemediationMerge(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    if (current.fencingToken !== request.expectedFencingToken) fail("FENCING_TOKEN_CONFLICT")
+    const ownerTouchesRemainZero = COUNTER_NAMES.every(
+      (counter) => state.ownerTouchCounters[counter] === 0,
+    )
+    const expectedDirectDetail = `Recovered reviewed PR #${current.metadata.prNumber}`
+    const expectedChainDetail = `Recovered PR #${current.metadata.prNumber} through reviewed remediation chain`
+    if (current.lease.status !== "RELEASED"
+      || current.checkpoint.state !== "REVIEW_REMEDIATION_RECOVERY_PENDING"
+      || current.checkpoint.detail !== REVIEW_REMEDIATION_DETAIL
+      || request.prNumber !== current.metadata.prNumber
+      || request.headRefOid !== current.metadata.headRefOid
+      || request.mergeSha !== current.metadata.mergeSha
+      || request.proofDigest !== current.metadata.reviewRecoveryProofDigest
+      || ![expectedDirectDetail, expectedChainDetail].includes(request.mergeDetail)
+      || !ownerTouchesRemainZero) {
+      fail("REVIEW_REMEDIATION_MERGE_STATE_WALL")
+    }
+    const merged = {
+      ...current,
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "PR_MERGED",
+        detail: request.mergeDetail,
+        recordedAt: at.iso,
+      },
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: merged }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: merged.fencingToken,
+      checkpointSequence: merged.checkpoint.sequence,
+      leaseStatus: merged.lease.status,
+      state: merged.checkpoint.state,
+    }
+  })
+}
+
 export function finalizeReviewRemediationRecovery(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
@@ -716,8 +767,8 @@ export function finalizeReviewRemediationRecovery(filePath, request, options = {
       (counter) => state.ownerTouchCounters[counter] === 0,
     )
     if (current.lease.status !== "RELEASED"
-      || current.checkpoint.state !== "REVIEW_REMEDIATION_RECOVERY_PENDING"
-      || current.checkpoint.detail !== REVIEW_REMEDIATION_DETAIL
+      || current.checkpoint.state !== "PR_MERGED"
+      || current.checkpoint.detail !== request.mergeDetail
       || request.prNumber !== current.metadata.prNumber
       || request.headRefOid !== current.metadata.headRefOid
       || request.mergeSha !== current.metadata.mergeSha
@@ -749,6 +800,49 @@ export function finalizeReviewRemediationRecovery(filePath, request, options = {
       checkpointSequence: reopened.checkpoint.sequence,
       leaseStatus: reopened.lease.status,
       state: reopened.checkpoint.state,
+    }
+  })
+}
+
+export function reconcileReviewRemediationProjection(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    const ownerTouchesRemainZero = COUNTER_NAMES.every(
+      (counter) => state.ownerTouchCounters[counter] === 0,
+    )
+    if (current.fencingToken !== request.expectedFencingToken) fail("FENCING_TOKEN_CONFLICT")
+    if (current.lease.status !== "ABANDONED"
+      || current.checkpoint.state !== "REVIEW_REMEDIATION_RECOVERED"
+      || current.checkpoint.detail !== REVIEW_REMEDIATION_DETAIL
+      || current.checkpoint.sequence !== request.expectedCheckpointSequence
+      || request.prNumber !== current.metadata.prNumber
+      || request.headRefOid !== current.metadata.headRefOid
+      || request.mergeSha !== current.metadata.mergeSha
+      || request.proofDigest !== current.metadata.reviewRecoveryProofDigest
+      || (current.metadata.reviewProjectionReconciledFromSequence ?? null) !== null
+      || !ownerTouchesRemainZero) {
+      fail("REVIEW_REMEDIATION_PROJECTION_RECOVERY_STATE_WALL")
+    }
+    const reconciled = {
+      ...current,
+      checkpoint: {
+        ...current.checkpoint,
+        sequence: current.checkpoint.sequence + 1,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({
+        reviewProjectionReconciledFromSequence: current.checkpoint.sequence,
+      }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: reconciled }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: reconciled.fencingToken,
+      checkpointSequence: reconciled.checkpoint.sequence,
+      leaseStatus: reconciled.lease.status,
+      state: reconciled.checkpoint.state,
     }
   })
 }
@@ -916,7 +1010,9 @@ export function createHermesStateStore(filePath, options = {}) {
     reopenOwnerDecisionWall: (request) => reopenOwnerDecisionWall(filePath, request, options),
     reopenValidationInfrastructureWall: (request) => reopenValidationInfrastructureWall(filePath, request, options),
     beginReviewRemediationRecovery: (request) => beginReviewRemediationRecovery(filePath, request, options),
+    recordReviewRemediationMerge: (request) => recordReviewRemediationMerge(filePath, request, options),
     finalizeReviewRemediationRecovery: (request) => finalizeReviewRemediationRecovery(filePath, request, options),
+    reconcileReviewRemediationProjection: (request) => reconcileReviewRemediationProjection(filePath, request, options),
     recoverExternalToolWall: (request) => recoverExternalToolWall(filePath, request, options),
     recoverPostMergeCleanupWall: (request) => recoverPostMergeCleanupWall(filePath, request, options),
     deferProviderWall: (request) => deferProviderWall(filePath, request, options),

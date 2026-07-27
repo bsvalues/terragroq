@@ -11,6 +11,7 @@ import {
   recordValidationInfrastructureRecoveryProof,
   recoverNativeProviderOutcome,
   recoverReviewedOutcome,
+  verifyReviewRecoveryProjectionCollision,
   recoverValidationInfrastructureOutcome,
 } from "./outcome-source.mjs"
 import { createHermesRepositoryLifecycle } from "./repository-lifecycle.mjs"
@@ -215,6 +216,8 @@ export async function recoverReviewedMerge(options = {}) {
   })
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const recoverOutcome = options.recoverOutcome ?? recoverReviewedOutcome
+  const verifyProjectionCollision = options.verifyProjectionCollision
+    ?? verifyReviewRecoveryProjectionCollision
   const state = orchestrator.state.read()
   const ownerTouchesRemainZero = Object.values(state.ownerTouchCounters).every((value) => value === 0)
   const candidates = Object.values(state.executions).filter((execution) => (
@@ -224,6 +227,10 @@ export async function recoverReviewedMerge(options = {}) {
     || (execution?.lease?.status === "RELEASED"
       && execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERY_PENDING"
       && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED")
+    || (execution?.lease?.status === "RELEASED"
+      && execution?.checkpoint?.state === "PR_MERGED"
+      && /^Recovered (?:reviewed )?PR #\d+(?: through reviewed remediation chain)?$/
+        .test(execution?.checkpoint?.detail ?? ""))
     || (execution?.lease?.status === "ABANDONED"
       && execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
       && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED"))
@@ -246,8 +253,9 @@ export async function recoverReviewedMerge(options = {}) {
   const reviewedHeadSha = pr.headRefOid
   const mergeSha = pr.mergeCommit?.oid
   const recoveryPending = candidate.checkpoint.state === "REVIEW_REMEDIATION_RECOVERY_PENDING"
+  const mergeRecorded = candidate.checkpoint.state === "PR_MERGED"
   const alreadyReopened = candidate.checkpoint.state === "REVIEW_REMEDIATION_RECOVERED"
-  const expectedPriorHeadRefOid = recoveryPending || alreadyReopened
+  const expectedPriorHeadRefOid = recoveryPending || mergeRecorded || alreadyReopened
     ? candidate.metadata.reviewRecoveryPriorHeadRefOid
     : candidate.metadata.headRefOid
   if (pr.state !== "MERGED" || pr.baseRefName !== "main" || pr.unresolvedThreadCount !== 0
@@ -322,7 +330,7 @@ export async function recoverReviewedMerge(options = {}) {
     reviewed: useRemediationChain ? null : pr.reviewed,
     remediationProof,
   }))
-  if ((recoveryPending || alreadyReopened)
+  if ((recoveryPending || mergeRecorded || alreadyReopened)
     && (candidate.metadata.reviewRecoveryProofDigest !== proofDigest
       || candidate.metadata.mergeSha !== mergeSha
       || candidate.metadata.headRefOid !== reviewedHeadSha)) {
@@ -330,7 +338,7 @@ export async function recoverReviewedMerge(options = {}) {
       code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
     })
   }
-  const reservation = recoveryPending || alreadyReopened
+  const reservation = recoveryPending || mergeRecorded || alreadyReopened
     ? { checkpointSequence: candidate.checkpoint.sequence }
     : orchestrator.state.beginReviewRemediationRecovery({
       idempotencyKey: `${candidate.outcomeId}:begin-reviewed-merge-recovery:${candidate.fencingToken}`,
@@ -342,16 +350,31 @@ export async function recoverReviewedMerge(options = {}) {
       mergeSha,
       proofDigest,
     })
+  const reviewedMergeDetail = remediationProof.length > 0
+    ? `Recovered PR #${candidate.metadata.prNumber} through reviewed remediation chain`
+    : `Recovered reviewed PR #${candidate.metadata.prNumber}`
+  const mergedReservation = alreadyReopened
+    ? null
+    : mergeRecorded
+      ? reservation
+      : orchestrator.state.recordReviewRemediationMerge({
+          idempotencyKey: `${candidate.outcomeId}:record-reviewed-merge:${candidate.fencingToken}`,
+          outcomeId: candidate.outcomeId,
+          expectedFencingToken: candidate.fencingToken,
+          prNumber: candidate.metadata.prNumber,
+          headRefOid: reviewedHeadSha,
+          mergeSha,
+          proofDigest,
+          mergeDetail: reviewedMergeDetail,
+        })
   if (!alreadyReopened) {
     await projectCheckpoint({
       outcomeId,
       attempt: candidate.fencingToken,
       checkpoint: {
-        sequence: reservation.checkpointSequence + 1,
+        sequence: mergedReservation.checkpointSequence,
         state: "PR_MERGED",
-        detail: remediationProof.length > 0
-          ? `Recovered PR #${candidate.metadata.prNumber} through reviewed remediation chain`
-          : `Recovered reviewed PR #${candidate.metadata.prNumber}`,
+        detail: reviewedMergeDetail,
         metadata: {
           prNumber: candidate.metadata.prNumber,
           headRefOid: reviewedHeadSha,
@@ -381,7 +404,54 @@ export async function recoverReviewedMerge(options = {}) {
       headRefOid: reviewedHeadSha,
       mergeSha,
       proofDigest,
+      mergeDetail: reviewedMergeDetail,
     })
+  const recoveredProjection = {
+    outcomeId,
+    attempt: candidate.fencingToken,
+    checkpoint: {
+      sequence: reopened.checkpointSequence,
+      state: "REVIEW_REMEDIATION_RECOVERED",
+      detail: "REVIEW_REMEDIATION_EXHAUSTED",
+      metadata: {
+        prNumber: candidate.metadata.prNumber,
+        headRefOid: reviewedHeadSha,
+        mergeSha,
+        remediationPullRequests: remediationProof.map((proof) => proof.prNumber),
+      },
+    },
+  }
+  try {
+    await projectCheckpoint(recoveredProjection)
+  } catch (error) {
+    if (!alreadyReopened || error?.code !== "OUTCOME_PROJECTION_IDEMPOTENCY_CONFLICT"
+      || typeof orchestrator.state.reconcileReviewRemediationProjection !== "function"
+      || !await verifyProjectionCollision({
+        outcomeId,
+        attempt: candidate.fencingToken,
+        checkpointSequence: reopened.checkpointSequence,
+        checkpointDetail: reviewedMergeDetail,
+        prNumber: candidate.metadata.prNumber,
+        reviewedHeadSha,
+        mergeSha,
+      })) {
+      throw error
+    }
+    const reconciled = orchestrator.state.reconcileReviewRemediationProjection({
+      idempotencyKey: `${candidate.outcomeId}:reconcile-reviewed-merge-projection:${candidate.fencingToken}:${reopened.checkpointSequence}`,
+      outcomeId: candidate.outcomeId,
+      expectedFencingToken: candidate.fencingToken,
+      expectedCheckpointSequence: reopened.checkpointSequence,
+      prNumber: candidate.metadata.prNumber,
+      headRefOid: reviewedHeadSha,
+      mergeSha,
+      proofDigest,
+      mergeDetail: reviewedMergeDetail,
+    })
+    recoveredProjection.checkpoint.sequence = reconciled.checkpointSequence
+    await projectCheckpoint(recoveredProjection)
+    reopened.checkpointSequence = reconciled.checkpointSequence
+  }
   const result = await orchestrator.cycle({ outcome: recoveredOutcome })
   return {
     result: result.result,
