@@ -324,16 +324,17 @@ describe("Hermes bridge CLI", () => {
         failedChecks: [], pendingChecks: [{ name: "CodeRabbit", state: "PENDING" }],
         headRefOid: "b".repeat(40), mergeCommit: { oid: "c".repeat(40) },
       })),
-      inspectReviewRemediationClaims: vi.fn(async () => [{
+      inspectReviewRemediationClaims: vi.fn(async (number: number) => number === 464 ? [{
         threadIds: ["PRRT_review"], prNumber: 466,
         headRefOid: remediationHead, mergeSha: remediationMerge, filesDigest,
-      }]),
+      }] : []),
       inspectRemediationPullRequest: vi.fn(async () => ({
         state: "MERGED", baseRefName: "main", unresolvedThreadCount: 0,
         checksGreen: true, reviewed: true, headRefOid: remediationHead,
         mergeCommit: { oid: remediationMerge },
       })),
       inspectPullRequestFiles: remediationFiles,
+      verifyCommitAncestor: vi.fn(async () => true),
       verifyOriginMainContains: vi.fn(async () => true),
     }
     const projectCheckpoint = vi.fn(async () => ({ workOrderId: 99 }))
@@ -365,5 +366,6 @@ describe("Hermes bridge CLI", () => {
     }))
     expect(lifecycle.verifyOriginMainContains).toHaveBeenCalledWith("c".repeat(40))
     expect(lifecycle.verifyOriginMainContains).toHaveBeenCalledWith(remediationMerge)
+    expect(lifecycle.verifyCommitAncestor).toHaveBeenCalledWith("c".repeat(40), remediationMerge)
   })
 })

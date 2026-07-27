@@ -965,6 +965,22 @@ export function createRepositoryLifecycle(options) {
     return result.code === 0
   }
 
+  async function verifyCommitAncestor(ancestorSha, descendantSha) {
+    if (!SHA.test(ancestorSha) || !SHA.test(descendantSha)) {
+      wall("HERMES_REPOSITORY_GIT_WALL", "two 40-character commit SHAs required")
+    }
+    await refreshOriginMain()
+    const result = await run(
+      "git",
+      ["-C", repositoryRoot, "merge-base", "--is-ancestor", ancestorSha, descendantSha],
+      { allowFailure: true },
+    )
+    if (![0, 1].includes(result.code)) {
+      wall("HERMES_REPOSITORY_COMMAND_FAILED", "git merge-base failed")
+    }
+    return result.code === 0
+  }
+
   async function cleanupOwnedWorktree({ worktreePath, branch, mergeCommitSha, expectedHeadSha } = {}) {
     const safeBranch = branchName(branch)
     const absoluteWorktree = absolute(worktreePath, "worktreePath")
@@ -1036,6 +1052,7 @@ export function createRepositoryLifecycle(options) {
     requestCodexReview,
     mergePullRequest,
     verifyOriginMainContains,
+    verifyCommitAncestor,
     cleanupOwnedWorktree,
   })
 }

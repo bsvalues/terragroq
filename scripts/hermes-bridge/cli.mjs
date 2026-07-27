@@ -281,6 +281,7 @@ export async function recoverReviewedMerge(options = {}) {
     for (const claim of claims) {
       const remediation = await lifecycle.inspectRemediationPullRequest(claim.prNumber)
       const files = await lifecycle.inspectPullRequestFiles(claim.prNumber)
+      const nestedClaims = await lifecycle.inspectReviewRemediationClaims(claim.prNumber)
       if (claim.prNumber <= candidate.metadata.prNumber
         || remediation.state !== "MERGED" || remediation.baseRefName !== "main"
         || remediation.headRefOid !== claim.headRefOid
@@ -288,6 +289,9 @@ export async function recoverReviewedMerge(options = {}) {
         || remediation.unresolvedThreadCount !== 0
         || remediation.checksGreen !== true || remediation.reviewed !== true
         || !boundedReviewRemediationFiles(files, claim.filesDigest)
+        || !Array.isArray(nestedClaims) || nestedClaims.length !== 0
+        || typeof lifecycle.verifyCommitAncestor !== "function"
+        || !await lifecycle.verifyCommitAncestor(mergeSha, claim.mergeSha)
         || !await lifecycle.verifyOriginMainContains(claim.mergeSha)) {
         throw Object.assign(new Error("Reviewed remediation chain proof is incomplete"), {
           code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",

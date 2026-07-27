@@ -367,6 +367,21 @@ describe("Hermes repository lifecycle", () => {
     expect((await lifecycle.inspectReviewFindings(77))[0]).not.toHaveProperty("requiresExplicitResolution")
   })
 
+  it("verifies immutable commit ancestry without accepting a non-ancestor", async () => {
+    const ancestor = "c".repeat(40)
+    const descendant = "d".repeat(40)
+    const { lifecycle, calls } = fixture({
+      [`${rootGit} merge-base --is-ancestor ${ancestor} ${descendant}`]: () => ({
+        code: 1,
+        stdout: "",
+      }),
+    })
+    await expect(lifecycle.verifyCommitAncestor(ancestor, descendant)).resolves.toBe(false)
+    expect(calls.some(({ args }) => JSON.stringify(args) === JSON.stringify([
+      "-C", root, "merge-base", "--is-ancestor", ancestor, descendant,
+    ]))).toBe(true)
+  })
+
   it("extracts only immutable owner-pinned remediation proof from resolved review findings", async () => {
     const findingAt = "2026-07-27T20:00:00.000Z"
     const proofAt = "2026-07-27T20:05:00.000Z"
