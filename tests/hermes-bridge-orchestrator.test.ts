@@ -814,6 +814,42 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.markComplete).not.toHaveBeenCalled()
   })
 
+  it("allows only the bounded Goal Timeline action in the read-model reservation", async () => {
+    const readModelOutcome = {
+      id: 77,
+      userId: "owner-id",
+      ref: "GOAL-0077",
+      command: "Show the bounded Goal Timeline read model.",
+      lane: "read_model",
+      mode: "implement",
+      risk: "low",
+      authority: "A0_READ_ONLY",
+      verdict: "allow",
+      requiresApproval: false,
+      status: "classified",
+    }
+    const allowed = fixture(["app/actions/goal-timeline.ts"], {
+      selectOutcome: vi.fn(async () => readModelOutcome),
+    })
+    await expect(allowed.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+
+    const blocked = fixture([
+      "app/actions/goal-timeline.ts.backup",
+      "app/actions/goal-authority-decision.ts",
+    ], {
+      selectOutcome: vi.fn(async () => readModelOutcome),
+    })
+    await expect(blocked.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_CHANGED_PATH_WALL",
+      blocked: [
+        "app/actions/goal-timeline.ts.backup",
+        "app/actions/goal-authority-decision.ts",
+      ],
+    })
+    expect(blocked.lifecycle.mergePullRequest).not.toHaveBeenCalled()
+    expect(blocked.markComplete).not.toHaveBeenCalled()
+  })
+
   it("does not pass deleted test paths to focused validation", async () => {
     const value = fixture([
       "components/hermes/live-status.tsx", "tests/deleted-hermes-status.test.tsx",
