@@ -251,6 +251,14 @@ function metadata(input = {}, current = {}) {
   if (headRefOid !== null && (typeof headRefOid !== "string" || !SHA.test(headRefOid))) {
     fail("INVALID_HEAD_REF_OID")
   }
+  const reviewRecoveryPriorHeadRefOid = Object.hasOwn(input, "reviewRecoveryPriorHeadRefOid")
+    ? input.reviewRecoveryPriorHeadRefOid
+    : current.reviewRecoveryPriorHeadRefOid ?? null
+  if (reviewRecoveryPriorHeadRefOid !== null
+    && (typeof reviewRecoveryPriorHeadRefOid !== "string"
+      || !SHA.test(reviewRecoveryPriorHeadRefOid))) {
+    fail("INVALID_REVIEW_RECOVERY_PRIOR_HEAD_REF_OID")
+  }
   const ownerDecisionPacket = Object.hasOwn(input, "ownerDecisionPacket")
     ? input.ownerDecisionPacket
     : current.ownerDecisionPacket ?? null
@@ -355,6 +363,7 @@ function metadata(input = {}, current = {}) {
     validationRemediationRound,
     validationRecoveryProofDigest,
     reviewRecoveryProofDigest,
+    reviewRecoveryPriorHeadRefOid,
     ownerDecisionId,
     ownerDecisionRef,
     ownerDecisionRequestKey,
@@ -644,7 +653,7 @@ export function reopenValidationInfrastructureWall(filePath, request, options = 
   })
 }
 
-export function reopenReviewRemediationExhausted(filePath, request, options = {}) {
+export function beginReviewRemediationRecovery(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
     assertRunning(state)
@@ -659,13 +668,60 @@ export function reopenReviewRemediationExhausted(filePath, request, options = {}
       || !Number.isInteger(request.prNumber)
       || request.prNumber < 1
       || request.prNumber !== current.metadata.prNumber
+      || typeof request.expectedPriorHeadRefOid !== "string"
+      || !SHA.test(request.expectedPriorHeadRefOid)
+      || request.expectedPriorHeadRefOid !== current.metadata.headRefOid
       || typeof request.headRefOid !== "string"
       || !SHA.test(request.headRefOid)
-      || request.headRefOid !== current.metadata.headRefOid
       || typeof request.mergeSha !== "string"
       || !SHA.test(request.mergeSha)
       || typeof request.proofDigest !== "string"
       || !SHA256.test(request.proofDigest)
+      || !ownerTouchesRemainZero) {
+      fail("REVIEW_REMEDIATION_RECOVERY_STATE_WALL")
+    }
+    const reopened = {
+      ...current,
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "REVIEW_REMEDIATION_RECOVERY_PENDING",
+        detail: REVIEW_REMEDIATION_DETAIL,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({
+        reviewRecoveryPriorHeadRefOid: request.expectedPriorHeadRefOid,
+        headRefOid: request.headRefOid,
+        mergeSha: request.mergeSha,
+        reviewRecoveryProofDigest: request.proofDigest,
+      }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: reopened }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: reopened.fencingToken,
+      checkpointSequence: reopened.checkpoint.sequence,
+      leaseStatus: reopened.lease.status,
+      state: reopened.checkpoint.state,
+    }
+  })
+}
+
+export function finalizeReviewRemediationRecovery(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    if (current.fencingToken !== request.expectedFencingToken) fail("FENCING_TOKEN_CONFLICT")
+    const ownerTouchesRemainZero = COUNTER_NAMES.every(
+      (counter) => state.ownerTouchCounters[counter] === 0,
+    )
+    if (current.lease.status !== "RELEASED"
+      || current.checkpoint.state !== "REVIEW_REMEDIATION_RECOVERY_PENDING"
+      || current.checkpoint.detail !== REVIEW_REMEDIATION_DETAIL
+      || request.prNumber !== current.metadata.prNumber
+      || request.headRefOid !== current.metadata.headRefOid
+      || request.mergeSha !== current.metadata.mergeSha
+      || request.proofDigest !== current.metadata.reviewRecoveryProofDigest
       || !ownerTouchesRemainZero) {
       fail("REVIEW_REMEDIATION_RECOVERY_STATE_WALL")
     }
@@ -684,13 +740,7 @@ export function reopenReviewRemediationExhausted(filePath, request, options = {}
         detail: REVIEW_REMEDIATION_DETAIL,
         recordedAt: at.iso,
       },
-      metadata: metadata({
-        threadId: null,
-        turnId: null,
-        headRefOid: request.headRefOid,
-        mergeSha: request.mergeSha,
-        reviewRecoveryProofDigest: request.proofDigest,
-      }, current.metadata),
+      metadata: metadata({ threadId: null, turnId: null }, current.metadata),
     }
     state.executions = { ...state.executions, [request.outcomeId]: reopened }
     return {
@@ -865,7 +915,8 @@ export function createHermesStateStore(filePath, options = {}) {
     reopenProviderWall: (request) => reopenProviderWall(filePath, request, options),
     reopenOwnerDecisionWall: (request) => reopenOwnerDecisionWall(filePath, request, options),
     reopenValidationInfrastructureWall: (request) => reopenValidationInfrastructureWall(filePath, request, options),
-    reopenReviewRemediationExhausted: (request) => reopenReviewRemediationExhausted(filePath, request, options),
+    beginReviewRemediationRecovery: (request) => beginReviewRemediationRecovery(filePath, request, options),
+    finalizeReviewRemediationRecovery: (request) => finalizeReviewRemediationRecovery(filePath, request, options),
     recoverExternalToolWall: (request) => recoverExternalToolWall(filePath, request, options),
     recoverPostMergeCleanupWall: (request) => recoverPostMergeCleanupWall(filePath, request, options),
     deferProviderWall: (request) => deferProviderWall(filePath, request, options),

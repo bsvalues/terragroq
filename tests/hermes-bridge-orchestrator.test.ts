@@ -191,8 +191,18 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       holderId: "crashed-holder",
       fencingToken: lease.fencingToken,
     })
-    value.state.reopenReviewRemediationExhausted({
-      idempotencyKey: "review-recovery-reopen",
+    value.state.beginReviewRemediationRecovery({
+      idempotencyKey: "review-recovery-begin",
+      outcomeId: "77",
+      expectedFencingToken: lease.fencingToken,
+      prNumber: 500,
+      expectedPriorHeadRefOid: "c".repeat(40),
+      headRefOid: "c".repeat(40),
+      mergeSha: "b".repeat(40),
+      proofDigest: "d".repeat(64),
+    })
+    value.state.finalizeReviewRemediationRecovery({
+      idempotencyKey: "review-recovery-finalize",
       outcomeId: "77",
       expectedFencingToken: lease.fencingToken,
       prNumber: 500,

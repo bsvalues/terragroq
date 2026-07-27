@@ -210,6 +210,9 @@ export async function recoverReviewedMerge(options = {}) {
     ((execution?.lease?.status === "RELEASED"
       && execution?.checkpoint?.state === "FAILED_TERMINAL"
       && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED")
+    || (execution?.lease?.status === "RELEASED"
+      && execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERY_PENDING"
+      && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED")
     || (execution?.lease?.status === "ABANDONED"
       && execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
       && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED"))
@@ -231,10 +234,15 @@ export async function recoverReviewedMerge(options = {}) {
   const pr = await lifecycle.inspectPullRequest(candidate.metadata.prNumber)
   const reviewedHeadSha = pr.headRefOid
   const mergeSha = pr.mergeCommit?.oid
+  const recoveryPending = candidate.checkpoint.state === "REVIEW_REMEDIATION_RECOVERY_PENDING"
+  const alreadyReopened = candidate.checkpoint.state === "REVIEW_REMEDIATION_RECOVERED"
+  const expectedPriorHeadRefOid = recoveryPending || alreadyReopened
+    ? candidate.metadata.reviewRecoveryPriorHeadRefOid
+    : candidate.metadata.headRefOid
   if (pr.state !== "MERGED" || pr.baseRefName !== "main" || pr.unresolvedThreadCount !== 0
     || pr.checksGreen !== true || pr.reviewed !== true
     || pr.headRefName !== candidate.metadata.branch
-    || reviewedHeadSha !== candidate.metadata.headRefOid
+    || !/^[0-9a-f]{40}$/.test(expectedPriorHeadRefOid ?? "")
     || !/^[0-9a-f]{40}$/.test(reviewedHeadSha ?? "")
     || !/^[0-9a-f]{40}$/.test(mergeSha ?? "")
     || !await lifecycle.verifyOriginMainContains(mergeSha)) {
@@ -251,19 +259,32 @@ export async function recoverReviewedMerge(options = {}) {
     checksGreen: pr.checksGreen,
     reviewed: pr.reviewed,
   }))
-  const alreadyReopened = candidate.checkpoint.state === "REVIEW_REMEDIATION_RECOVERED"
-  if (alreadyReopened && (candidate.metadata.reviewRecoveryProofDigest !== proofDigest
-    || candidate.metadata.mergeSha !== mergeSha)) {
+  if ((recoveryPending || alreadyReopened)
+    && (candidate.metadata.reviewRecoveryProofDigest !== proofDigest
+      || candidate.metadata.mergeSha !== mergeSha
+      || candidate.metadata.headRefOid !== reviewedHeadSha)) {
     throw Object.assign(new Error("Reopened review recovery proof changed"), {
       code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
     })
   }
+  const reservation = recoveryPending || alreadyReopened
+    ? { checkpointSequence: candidate.checkpoint.sequence }
+    : orchestrator.state.beginReviewRemediationRecovery({
+      idempotencyKey: `${candidate.outcomeId}:begin-reviewed-merge-recovery:${candidate.fencingToken}`,
+      outcomeId: candidate.outcomeId,
+      expectedFencingToken: candidate.fencingToken,
+      prNumber: candidate.metadata.prNumber,
+      expectedPriorHeadRefOid,
+      headRefOid: reviewedHeadSha,
+      mergeSha,
+      proofDigest,
+    })
   if (!alreadyReopened) {
     await projectCheckpoint({
       outcomeId,
       attempt: candidate.fencingToken,
       checkpoint: {
-        sequence: candidate.checkpoint.sequence + 1,
+        sequence: reservation.checkpointSequence + 1,
         state: "PR_MERGED",
         detail: `Recovered reviewed PR #${candidate.metadata.prNumber}`,
         metadata: { prNumber: candidate.metadata.prNumber, headRefOid: reviewedHeadSha, mergeSha },
@@ -282,8 +303,8 @@ export async function recoverReviewedMerge(options = {}) {
   }
   const reopened = alreadyReopened
     ? { checkpointSequence: candidate.checkpoint.sequence }
-    : orchestrator.state.reopenReviewRemediationExhausted({
-      idempotencyKey: `${candidate.outcomeId}:recover-reviewed-merge:${candidate.fencingToken}`,
+    : orchestrator.state.finalizeReviewRemediationRecovery({
+      idempotencyKey: `${candidate.outcomeId}:finalize-reviewed-merge-recovery:${candidate.fencingToken}`,
       outcomeId: candidate.outcomeId,
       expectedFencingToken: candidate.fencingToken,
       prNumber: candidate.metadata.prNumber,

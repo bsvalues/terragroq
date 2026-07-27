@@ -345,7 +345,7 @@ describe("Hermes bridge durable state store", () => {
     const { store } = fixture()
     const prNumber = 448
     const terminalHeadRefOid = "a".repeat(40)
-    const headRefOid = terminalHeadRefOid
+    const headRefOid = "d".repeat(40)
     const mergeSha = "b".repeat(40)
     const proofDigest = "c".repeat(64)
     const first = store.acquireLease({
@@ -367,26 +367,43 @@ describe("Hermes bridge durable state store", () => {
     })
     const request = {
       outcomeId: "5", expectedFencingToken: first.fencingToken,
-      prNumber, headRefOid, mergeSha, proofDigest,
+      prNumber, expectedPriorHeadRefOid: terminalHeadRefOid,
+      headRefOid, mergeSha, proofDigest,
       idempotencyKey: "review-recover",
     }
 
-    const reopened = store.reopenReviewRemediationExhausted(request)
+    const pending = store.beginReviewRemediationRecovery({
+      ...request,
+      idempotencyKey: "review-recover-begin",
+    })
+    expect(pending).toMatchObject({
+      leaseStatus: "RELEASED", checkpointSequence: 2,
+      state: "REVIEW_REMEDIATION_RECOVERY_PENDING",
+    })
+    const reopened = store.finalizeReviewRemediationRecovery({
+      ...request,
+      idempotencyKey: "review-recover-finalize",
+    })
     expect(reopened).toMatchObject({
-      leaseStatus: "ABANDONED", checkpointSequence: 2,
+      leaseStatus: "ABANDONED", checkpointSequence: 3,
       state: "REVIEW_REMEDIATION_RECOVERED", idempotent: false,
     })
-    expect(store.reopenReviewRemediationExhausted(request)).toMatchObject({
+    expect(store.finalizeReviewRemediationRecovery({
+      ...request,
+      idempotencyKey: "review-recover-finalize",
+    })).toMatchObject({
       ...reopened, idempotent: true,
     })
     expect(store.read().executions["5"]).toMatchObject({
       lease: { status: "ABANDONED", recoverReason: "REVIEW_REMEDIATION_PROOF_ACCEPTED" },
       checkpoint: {
-        sequence: 2, state: "REVIEW_REMEDIATION_RECOVERED",
+        sequence: 3, state: "REVIEW_REMEDIATION_RECOVERED",
         detail: "REVIEW_REMEDIATION_EXHAUSTED",
       },
       metadata: {
-        threadId: null, turnId: null, prNumber, headRefOid, mergeSha,
+        threadId: null, turnId: null, prNumber,
+        reviewRecoveryPriorHeadRefOid: terminalHeadRefOid,
+        headRefOid, mergeSha,
         reviewRecoveryProofDigest: proofDigest,
       },
     })
@@ -398,13 +415,14 @@ describe("Hermes bridge durable state store", () => {
     expect(reclaimed.fencingToken).toBeGreaterThan(first.fencingToken)
     expect(() => store.checkpoint({
       outcomeId: "5", holderId: "review-holder", fencingToken: first.fencingToken,
-      expectedCheckpointSequence: 2, state: "STALE", idempotencyKey: "review-stale",
+      expectedCheckpointSequence: 3, state: "STALE", idempotencyKey: "review-stale",
     })).toThrowError(expect.objectContaining({ code: "FENCING_TOKEN_CONFLICT" }))
   })
 
   it("preserves terminal review remediation outside the exact recovery boundary", () => {
     for (const invalid of [
-      "lease", "state", "detail", "pr", "head", "merge", "proof", "owner-touch", "fence",
+      "lease", "state", "detail", "pr", "prior-head", "head", "merge", "proof",
+      "owner-touch", "fence",
     ] as const) {
       const { store } = fixture()
       const prNumber = 448
@@ -432,10 +450,11 @@ describe("Hermes bridge durable state store", () => {
         store.recordOwnerTouch({ counter: "ownerRoutineContactCount", idempotencyKey: "review-owner-touch" })
       }
 
-      expect(() => store.reopenReviewRemediationExhausted({
+      expect(() => store.beginReviewRemediationRecovery({
         outcomeId: "5",
         expectedFencingToken: invalid === "fence" ? first.fencingToken + 1 : first.fencingToken,
         prNumber: invalid === "pr" ? prNumber + 1 : prNumber,
+        expectedPriorHeadRefOid: invalid === "prior-head" ? "e".repeat(40) : "d".repeat(40),
         headRefOid: invalid === "head" ? "not-a-sha" : headRefOid,
         mergeSha: invalid === "merge" ? "not-a-sha" : mergeSha,
         proofDigest: invalid === "proof" ? "not-a-digest" : "c".repeat(64),
