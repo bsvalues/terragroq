@@ -24,10 +24,11 @@ import {
 import { getUserId } from "@/lib/session"
 
 const GOAL_TIMELINE_LIMIT = 25
+const GOAL_TIMELINE_BATCH_LIMIT = 25
 const EVENTS_PER_RUNTIME_LIMIT = 250
 const RELATED_RECORD_LIMIT = 500
 
-async function readGoalTimelines(goalId?: number): Promise<GoalTimelineProjection[]> {
+async function readGoalTimelines(goalIds?: number[]): Promise<GoalTimelineProjection[]> {
   const userId = await getUserId()
   const goals = await db
     .select({
@@ -49,11 +50,11 @@ async function readGoalTimelines(goalId?: number): Promise<GoalTimelineProjectio
       updatedAt: goal.updatedAt,
     })
     .from(goal)
-    .where(goalId === undefined
+    .where(goalIds === undefined
       ? eq(goal.userId, userId)
-      : and(eq(goal.userId, userId), eq(goal.id, goalId)))
+      : and(eq(goal.userId, userId), inArray(goal.id, goalIds)))
     .orderBy(desc(goal.updatedAt), desc(goal.id))
-    .limit(goalId === undefined ? GOAL_TIMELINE_LIMIT : 1)
+    .limit(goalIds === undefined ? GOAL_TIMELINE_LIMIT : goalIds.length)
 
   if (goals.length === 0) {
     return buildGoalTimelineReadModel({
@@ -299,5 +300,18 @@ export async function getGoalTimelines(): Promise<GoalTimelineProjection[]> {
 
 export async function getGoalTimeline(goalId: number): Promise<GoalTimelineProjection | null> {
   if (!Number.isSafeInteger(goalId) || goalId < 1) return null
-  return (await readGoalTimelines(goalId))[0] ?? null
+  return (await readGoalTimelines([goalId]))[0] ?? null
+}
+
+export async function getGoalTimelinesByIds(
+  goalIds: number[],
+): Promise<GoalTimelineProjection[]> {
+  if (goalIds.length > GOAL_TIMELINE_BATCH_LIMIT) {
+    throw new Error("GOAL_TIMELINE_BATCH_LIMIT_EXCEEDED")
+  }
+  const validGoalIds = [...new Set(goalIds)].filter(
+    (goalId) => Number.isSafeInteger(goalId) && goalId > 0,
+  )
+  if (validGoalIds.length === 0) return []
+  return readGoalTimelines(validGoalIds)
 }

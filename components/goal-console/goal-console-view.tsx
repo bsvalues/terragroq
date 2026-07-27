@@ -11,6 +11,7 @@ import {
 } from "@/app/actions/goals"
 import { getGoalTimeline } from "@/app/actions/goal-timeline"
 import { recordGoalAuthorityDecision } from "@/app/actions/goal-authority-decision"
+import { getActiveGoalAuthorityRequestTimelines } from "@/app/(shell)/goal-console/authority-request-timelines"
 import type { LoopReport } from "@/lib/goal/loop"
 import type { CurrentTruth } from "@/lib/goal/current-truth"
 import { truthLines } from "@/lib/goal/current-truth"
@@ -20,6 +21,7 @@ import { lane as findLane, mode as findMode, authority as findAuthority } from "
 import { getGoalEmptyStatePrompts } from "@/components/goal-console/goal-empty-state"
 import { getGoalJourneyStep } from "@/components/goal-console/goal-journey"
 import { OwnerOutcomeDeliveryPanel } from "@/components/goal-console/owner-outcome-delivery-panel"
+import { NeedsMyDecisionPanel } from "@/components/goal-console/needs-my-decision-panel"
 import { GoalTimelinePanel } from "@/components/goal-console/goal-timeline-panel"
 import type { GoalTimelineConnection } from "@/components/goal-console/goal-timeline-panel"
 import type {
@@ -72,6 +74,8 @@ const toneText: Record<string, string> = {
 }
 
 const GOAL_TIMELINE_REFRESH_TIMEOUT_MS = 15_000
+const AUTHORITY_REQUEST_REFRESH_TIMEOUT_MS = 15_000
+const AUTHORITY_REQUEST_REFRESH_INTERVAL_MS = 60_000
 
 function observationTime(timeline: GoalTimelineProjection) {
   return new Date(timeline.truth.observedAt).getTime()
@@ -97,10 +101,12 @@ export function GoalConsoleView({
   initialGoals,
   truth,
   timelines,
+  initialAuthorityRequests,
 }: {
   initialGoals: Goal[]
   truth: CurrentTruth
   timelines: GoalTimelineProjection[]
+  initialAuthorityRequests: GoalTimelineProjection[]
 }) {
   const router = useRouter()
   const [goals, setGoals] = useState<Goal[]>(initialGoals)
@@ -111,10 +117,14 @@ export function GoalConsoleView({
   const [goalTimelines, setGoalTimelines] = useState(
     () => new Map(timelines.map((timeline) => [timeline.goal.id, timeline])),
   )
+  const [authorityRequestTimelines, setAuthorityRequestTimelines] = useState(
+    initialAuthorityRequests,
+  )
   const [goalTimelineConnections, setGoalTimelineConnections] = useState(
     () => timelineConnections(timelines),
   )
   const goalTimelineRefreshSequences = useRef(new Map<number, number>())
+  const authorityRequestRefreshSequence = useRef(0)
   const goalTimelineLatestObservations = useRef(
     new Map(timelines.map((timeline) => [timeline.goal.id, observationTime(timeline)])),
   )
@@ -167,6 +177,11 @@ export function GoalConsoleView({
       return next
     })
   }, [timelines])
+
+  useEffect(() => {
+    authorityRequestRefreshSequence.current += 1
+    setAuthorityRequestTimelines(initialAuthorityRequests)
+  }, [initialAuthorityRequests])
 
   const refreshGoalTimeline = useCallback(async (goalId: number) => {
     const refreshSequence =
@@ -244,6 +259,31 @@ export function GoalConsoleView({
     }
   }, [])
 
+  const refreshAuthorityRequestTimelines = useCallback(async () => {
+    const refreshSequence = authorityRequestRefreshSequence.current + 1
+    authorityRequestRefreshSequence.current = refreshSequence
+    let timeoutId: number | null = null
+
+    try {
+      const refreshedTimelines = await Promise.race([
+        getActiveGoalAuthorityRequestTimelines(),
+        new Promise<never>((_, reject) => {
+          timeoutId = window.setTimeout(
+            () => reject(new Error("Authority request refresh timed out")),
+            AUTHORITY_REQUEST_REFRESH_TIMEOUT_MS,
+          )
+        }),
+      ])
+      if (authorityRequestRefreshSequence.current !== refreshSequence) {
+        return refreshedTimelines
+      }
+      setAuthorityRequestTimelines(refreshedTimelines)
+      return refreshedTimelines
+    } finally {
+      if (timeoutId !== null) window.clearTimeout(timeoutId)
+    }
+  }, [])
+
   useEffect(() => {
     const goalId = latest?.id
     if (!goalId) return
@@ -258,6 +298,15 @@ export function GoalConsoleView({
     }, 60_000)
     return () => window.clearInterval(timer)
   }, [latest?.id, refreshGoalTimeline, startTransition])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void refreshAuthorityRequestTimelines().catch(() => {
+        // Preserve the last successful inbox while the dedicated source is unavailable.
+      })
+    }, AUTHORITY_REQUEST_REFRESH_INTERVAL_MS)
+    return () => window.clearInterval(timer)
+  }, [refreshAuthorityRequestTimelines])
 
   function handleTimelineRefresh(goalId: number) {
     startTransition(async () => {
@@ -287,6 +336,15 @@ export function GoalConsoleView({
             result.status === "RECORDED" || result.status === "REPLAYED"
               ? "Authority decision persisted; timeline refresh failed"
               : "Authority decision was not accepted; timeline refresh failed",
+          )
+        }
+        try {
+          await refreshAuthorityRequestTimelines()
+        } catch {
+          toast.error(
+            result.status === "RECORDED" || result.status === "REPLAYED"
+              ? "Authority decision persisted; decision inbox refresh failed"
+              : "Authority decision was not accepted; decision inbox refresh failed",
           )
         }
         if (result.status === "RECORDED") {
@@ -401,6 +459,12 @@ export function GoalConsoleView({
           </p>
         </div>
       </div>
+
+      <NeedsMyDecisionPanel
+        timelines={authorityRequestTimelines}
+        decisionPending={decisionPending}
+        onAuthorityDecision={handleAuthorityDecision}
+      />
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left / main column */}
