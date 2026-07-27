@@ -1,4 +1,5 @@
 import fs from "node:fs"
+import { createHash } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 
 import {
@@ -262,5 +263,109 @@ describe("Hermes bridge CLI", () => {
     })
     expect(projectCheckpoint).toHaveBeenCalledTimes(2)
     expect(recoverOutcome).toHaveBeenCalledOnce()
+  })
+
+  it("accepts a bounded exact-head-reviewed remediation chain for a rate-limited original review", async () => {
+    const candidate = {
+      outcomeId: "9",
+      fencingToken: 37,
+      lease: { status: "RELEASED" },
+      checkpoint: {
+        sequence: 28,
+        state: "FAILED_TERMINAL",
+        detail: "REVIEW_REMEDIATION_EXHAUSTED",
+      },
+      metadata: {
+        outcome: {
+          id: 9,
+          ref: "GOAL-0005",
+          command: "Add a bounded decision surface.",
+          lane: "read_model",
+          mode: "implement",
+          risk: "low",
+          authority: "A0_READ_ONLY",
+          status: "classified",
+        },
+        branch: "codex/hermes-goal-0005-9",
+        prNumber: 464,
+        headRefOid: "a".repeat(40),
+        mergeSha: null,
+        reviewRecoveryProofDigest: null,
+      },
+    }
+    const beginRecovery = vi.fn(() => ({ checkpointSequence: 29 }))
+    const finalizeRecovery = vi.fn(() => ({ checkpointSequence: 30 }))
+    const cycle = vi.fn(async () => ({ result: "COMPLETE" }))
+    const orchestrator = {
+      state: {
+        read: () => ({
+          ownerTouchCounters: {
+            OWNER_OPERATION_TOUCH_COUNT: 0, OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+            OWNER_DIAGNOSTIC_TOUCH_COUNT: 0, OWNER_ROUTINE_DECISION_COUNT: 0,
+            OWNER_ROUTINE_CONTACT_COUNT: 0,
+          },
+          executions: { "9": candidate },
+        }),
+        beginReviewRemediationRecovery: beginRecovery,
+        finalizeReviewRemediationRecovery: finalizeRecovery,
+      },
+      cycle,
+    }
+    const remediationHead = "d".repeat(40)
+    const remediationMerge = "e".repeat(40)
+    const remediationPath = "scripts/hermes-bridge/outcome-source.mjs"
+    const filesDigest = createHash("sha256").update(JSON.stringify([remediationPath])).digest("hex")
+    const remediationFiles = vi.fn(async () => ["scripts/hermes-bridge/outcome-source.mjs"])
+    const lifecycle = {
+      inspectPullRequest: vi.fn(async () => ({
+        state: "MERGED", baseRefName: "main",
+        headRefName: "codex/hermes-goal-0005-9", unresolvedThreadCount: 0,
+        checksGreen: false, reviewed: false, codeRabbitRateLimited: true,
+        failedChecks: [], pendingChecks: [{ name: "CodeRabbit", state: "PENDING" }],
+        headRefOid: "b".repeat(40), mergeCommit: { oid: "c".repeat(40) },
+      })),
+      inspectReviewRemediationClaims: vi.fn(async (number: number) => number === 464 ? [{
+        threadIds: ["PRRT_review"], prNumber: 466,
+        headRefOid: remediationHead, mergeSha: remediationMerge, filesDigest,
+      }] : []),
+      inspectRemediationPullRequest: vi.fn(async () => ({
+        state: "MERGED", baseRefName: "main", unresolvedThreadCount: 0,
+        checksGreen: true, reviewed: true, headRefOid: remediationHead,
+        mergeCommit: { oid: remediationMerge },
+      })),
+      inspectPullRequestFiles: remediationFiles,
+      verifyCommitAncestor: vi.fn(async () => true),
+      verifyOriginMainContains: vi.fn(async () => true),
+    }
+    const projectCheckpoint = vi.fn(async () => ({ workOrderId: 99 }))
+    const recoverOutcome = vi.fn(async () => true)
+
+    remediationFiles.mockResolvedValueOnce(["package.json"])
+    await expect(recoverReviewedMerge({
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+    })).rejects.toMatchObject({ code: "HERMES_REVIEW_RECOVERY_PROOF_WALL" })
+    expect(beginRecovery).not.toHaveBeenCalled()
+
+    await expect(recoverReviewedMerge({
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+    })).resolves.toMatchObject({
+      result: "COMPLETE", outcomeId: "9", prNumber: 464, mergeSha: "c".repeat(40),
+    })
+    expect(beginRecovery).toHaveBeenCalledWith(expect.objectContaining({
+      expectedFencingToken: 37,
+      expectedPriorHeadRefOid: "a".repeat(40),
+      headRefOid: "b".repeat(40),
+      mergeSha: "c".repeat(40),
+      proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+    }))
+    expect(projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      checkpoint: expect.objectContaining({
+        state: "PR_MERGED",
+        metadata: expect.objectContaining({ remediationPullRequests: [466] }),
+      }),
+    }))
+    expect(lifecycle.verifyOriginMainContains).toHaveBeenCalledWith("c".repeat(40))
+    expect(lifecycle.verifyOriginMainContains).toHaveBeenCalledWith(remediationMerge)
+    expect(lifecycle.verifyCommitAncestor).toHaveBeenCalledWith("c".repeat(40), remediationMerge)
   })
 })

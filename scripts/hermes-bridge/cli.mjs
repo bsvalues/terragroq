@@ -26,6 +26,17 @@ function flushStdout() {
   })
 }
 
+function boundedReviewRemediationFiles(files, expectedDigest) {
+  if (!Array.isArray(files) || files.length === 0 || files.length > 20) return false
+  const allowed = /^(?:app\/|components\/|lib\/|scripts\/hermes-bridge\/|tests\/)/
+  const blocked = /(?:^|\/)(?:\.github|prisma|migrations?|runtime-operator|multi-agent-operator|terraform|terrafusion|pacs|county)(?:\/|$)|(?:^|\/)(?:package(?:-lock)?\.json|vercel\.json|\.env(?:\.|$))/i
+  const normalized = [...files].sort()
+  return typeof expectedDigest === "string"
+    && /^[0-9a-f]{64}$/.test(expectedDigest)
+    && sha256(JSON.stringify(normalized)) === expectedDigest
+    && normalized.every((file) => typeof file === "string" && allowed.test(file) && !blocked.test(file))
+}
+
 export function sanitizeBridgeMessage(value) {
   return sanitizeAppServerText(String(value ?? ""))
     .replace(/\bpostgres(?:ql)?:\/\/[^@\s]+@/gi, "postgresql://[REDACTED]@")
@@ -240,12 +251,62 @@ export async function recoverReviewedMerge(options = {}) {
     ? candidate.metadata.reviewRecoveryPriorHeadRefOid
     : candidate.metadata.headRefOid
   if (pr.state !== "MERGED" || pr.baseRefName !== "main" || pr.unresolvedThreadCount !== 0
-    || pr.checksGreen !== true || pr.reviewed !== true
     || pr.headRefName !== candidate.metadata.branch
     || !/^[0-9a-f]{40}$/.test(expectedPriorHeadRefOid ?? "")
     || !/^[0-9a-f]{40}$/.test(reviewedHeadSha ?? "")
     || !/^[0-9a-f]{40}$/.test(mergeSha ?? "")
     || !await lifecycle.verifyOriginMainContains(mergeSha)) {
+    throw Object.assign(new Error("Reviewed merge proof is incomplete"), {
+      code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+    })
+  }
+  const directReviewProof = pr.checksGreen === true && pr.reviewed === true
+  const rateLimitedReviewOnly = pr.codeRabbitRateLimited === true
+    && Array.isArray(pr.failedChecks) && pr.failedChecks.length === 0
+    && Array.isArray(pr.pendingChecks) && pr.pendingChecks.length > 0
+    && pr.pendingChecks.every((check) => /coderabbit/i.test(check.name))
+  const remediationProof = []
+  const claims = typeof lifecycle.inspectReviewRemediationClaims === "function"
+    ? await lifecycle.inspectReviewRemediationClaims(candidate.metadata.prNumber)
+    : []
+  const useRemediationChain = Array.isArray(claims) && claims.length > 0
+  if (useRemediationChain) {
+    if ((!directReviewProof && !rateLimitedReviewOnly)
+      || typeof lifecycle.inspectRemediationPullRequest !== "function"
+      || typeof lifecycle.inspectPullRequestFiles !== "function") {
+      throw Object.assign(new Error("Reviewed merge proof is incomplete"), {
+        code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+      })
+    }
+    for (const claim of claims) {
+      const remediation = await lifecycle.inspectRemediationPullRequest(claim.prNumber)
+      const files = await lifecycle.inspectPullRequestFiles(claim.prNumber)
+      const nestedClaims = await lifecycle.inspectReviewRemediationClaims(claim.prNumber)
+      if (claim.prNumber <= candidate.metadata.prNumber
+        || remediation.state !== "MERGED" || remediation.baseRefName !== "main"
+        || remediation.headRefOid !== claim.headRefOid
+        || remediation.mergeCommit?.oid !== claim.mergeSha
+        || remediation.unresolvedThreadCount !== 0
+        || remediation.checksGreen !== true || remediation.reviewed !== true
+        || !boundedReviewRemediationFiles(files, claim.filesDigest)
+        || !Array.isArray(nestedClaims) || nestedClaims.length !== 0
+        || typeof lifecycle.verifyCommitAncestor !== "function"
+        || !await lifecycle.verifyCommitAncestor(mergeSha, claim.mergeSha)
+        || !await lifecycle.verifyOriginMainContains(claim.mergeSha)) {
+        throw Object.assign(new Error("Reviewed remediation chain proof is incomplete"), {
+          code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+        })
+      }
+      remediationProof.push({
+        threadIds: claim.threadIds,
+        prNumber: claim.prNumber,
+        headRefOid: claim.headRefOid,
+        mergeSha: claim.mergeSha,
+        filesDigest: claim.filesDigest,
+        files,
+      })
+    }
+  } else if (!directReviewProof) {
     throw Object.assign(new Error("Reviewed merge proof is incomplete"), {
       code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
     })
@@ -256,8 +317,10 @@ export async function recoverReviewedMerge(options = {}) {
     reviewedHeadSha,
     mergeSha,
     unresolvedThreadCount: pr.unresolvedThreadCount,
-    checksGreen: pr.checksGreen,
-    reviewed: pr.reviewed,
+    reviewMode: useRemediationChain ? "REMEDIATION_CHAIN" : "DIRECT",
+    checksGreen: useRemediationChain ? null : pr.checksGreen,
+    reviewed: useRemediationChain ? null : pr.reviewed,
+    remediationProof,
   }))
   if ((recoveryPending || alreadyReopened)
     && (candidate.metadata.reviewRecoveryProofDigest !== proofDigest
@@ -286,8 +349,15 @@ export async function recoverReviewedMerge(options = {}) {
       checkpoint: {
         sequence: reservation.checkpointSequence + 1,
         state: "PR_MERGED",
-        detail: `Recovered reviewed PR #${candidate.metadata.prNumber}`,
-        metadata: { prNumber: candidate.metadata.prNumber, headRefOid: reviewedHeadSha, mergeSha },
+        detail: remediationProof.length > 0
+          ? `Recovered PR #${candidate.metadata.prNumber} through reviewed remediation chain`
+          : `Recovered reviewed PR #${candidate.metadata.prNumber}`,
+        metadata: {
+          prNumber: candidate.metadata.prNumber,
+          headRefOid: reviewedHeadSha,
+          mergeSha,
+          remediationPullRequests: remediationProof.map((proof) => proof.prNumber),
+        },
       },
     })
     if (!await recoverOutcome({

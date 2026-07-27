@@ -63,6 +63,14 @@ function branchName(value) {
   return value
 }
 
+function remediationBranchName(value) {
+  if (typeof value !== "string" || !/^codex\/[A-Za-z0-9._/-]+$/.test(value)
+    || value.includes("..") || value.endsWith(".lock")) {
+    wall("HERMES_REPOSITORY_BRANCH_WALL", "codex/* remediation branch required")
+  }
+  return value
+}
+
 function repositoryName(value) {
   if (value !== HERMES_REPOSITORY) wall("HERMES_REPOSITORY_SCOPE_WALL", "bsvalues/terragroq required")
   return value
@@ -333,7 +341,7 @@ function exactHeadApprovedReview(pr) {
     && String(review?.state ?? "").toUpperCase() === "APPROVED")
 }
 
-function exactHeadCodexRequestTimes(value, headRefOid) {
+function exactHeadCodexRequestTimes(value, headRefOid, { allowGeneric = false } = {}) {
   const connection = value?.data?.repository?.pullRequest?.comments
   const comments = connection?.nodes
   if (!Array.isArray(comments)) wall("HERMES_REPOSITORY_GITHUB_WALL", "review request comments missing")
@@ -346,8 +354,8 @@ function exactHeadCodexRequestTimes(value, headRefOid) {
     return Number.isFinite(createdAt) && createdAt === updatedAt
       && comment?.author?.login === "bsvalues"
       && /@codex\s+review/i.test(String(comment?.body ?? ""))
-      && [...String(comment?.body ?? "").matchAll(/\b[0-9a-f]{40}\b/gi)]
-        .some((match) => match[0].toLowerCase() === headRefOid)
+      && (allowGeneric || [...String(comment?.body ?? "").matchAll(/\b[0-9a-f]{40}\b/gi)]
+        .some((match) => match[0].toLowerCase() === headRefOid))
   }).map((comment) => Date.parse(comment.createdAt))
 }
 
@@ -687,12 +695,13 @@ export function createRepositoryLifecycle(options) {
     return matches[0] ?? null
   }
 
-  async function inspectPullRequest(number) {
+  async function inspectPullRequest(number, { allowRemediationBranch = false } = {}) {
     if (!Number.isSafeInteger(number) || number <= 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "positive PR number required")
     await verifyOrigin()
     const prResult = await run("gh", ["pr", "view", String(number), "--repo", repository, "--json", "number,headRefName,headRefOid,baseRefName,state,isDraft,reviewDecision,statusCheckRollup,reviews,mergeCommit,url"])
     const pr = parseJson(prResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
-    branchName(pr.headRefName)
+    if (allowRemediationBranch) remediationBranchName(pr.headRefName)
+    else branchName(pr.headRefName)
     if (!SHA.test(pr.headRefOid ?? "")) wall("HERMES_REPOSITORY_GITHUB_WALL", "PR head SHA required")
     const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}} comments(last:100){nodes{author{login} body createdAt updatedAt} pageInfo{hasPreviousPage hasNextPage}}}}}"
     const threadResult = await run("gh", ["api", "graphql", "-f", `query=${query}`, "-F", "owner=bsvalues", "-F", "name=terragroq", "-F", `number=${number}`])
@@ -700,7 +709,14 @@ export function createRepositoryLifecycle(options) {
     const reviewState = parseJson(threadResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
     const unresolved = unresolvedThreadCount(reviewState)
     const requestTimes = exactHeadCodexRequestTimes(reviewState, pr.headRefOid)
-    const hasExactHeadCodexCleanComment = exactHeadCodexCleanComment(reviewState, pr.headRefOid, requestTimes)
+    const cleanReviewRequestTimes = pr.state === "MERGED"
+      ? exactHeadCodexRequestTimes(reviewState, pr.headRefOid, { allowGeneric: true })
+      : requestTimes
+    const hasExactHeadCodexCleanComment = exactHeadCodexCleanComment(
+      reviewState,
+      pr.headRefOid,
+      cleanReviewRequestTimes,
+    )
     const hasExactHeadApproval = exactHeadApprovedReview(pr)
     const exactHeadCodexReviewsForCommit = exactHeadCodexReviews(pr)
     const codexReviewFindings = exactHeadCodexReviewFindings(pr)
@@ -741,11 +757,19 @@ export function createRepositoryLifecycle(options) {
       if (SECRET_LIKE.test(name)) wall("HERMES_REPOSITORY_SECRET_WALL", "secret-like check name refused")
       return [{ name: name.slice(0, 200), state: state.slice(0, 80) }]
     })
+    const pendingChecks = checks.flatMap((check) => {
+      const state = effectiveCheckState(check)
+      if (!PENDING_CHECKS.has(state)) return []
+      const name = checkName(check).trim() || "Unnamed check"
+      if (SECRET_LIKE.test(name)) wall("HERMES_REPOSITORY_SECRET_WALL", "secret-like check name refused")
+      return [{ name: name.slice(0, 200), state: state.slice(0, 80) }]
+    })
     return {
       ...pr,
       checksGreen: checks.length > 0 && checks.every((check) => SUCCESSFUL_CHECKS.has(effectiveCheckState(check))),
       checksComplete: checks.length > 0 && checks.every((check) => !PENDING_CHECKS.has(effectiveCheckState(check))),
       failedChecks,
+      pendingChecks,
       codexReviewFindings,
       cleanReviewEvidence: hasExactHeadApproval || hasExactHeadCodexCleanComment
         || hasExactHeadCodexCleanReview || hasCodeRabbitReview,
@@ -756,6 +780,83 @@ export function createRepositoryLifecycle(options) {
       reviewRequested: requestTimes.length > 0,
       unresolvedThreadCount: unresolved,
     }
+  }
+
+  async function inspectReviewRemediationClaims(number) {
+    if (!Number.isSafeInteger(number) || number <= 0) {
+      wall("HERMES_REPOSITORY_GITHUB_WALL", "positive PR number required")
+    }
+    await verifyOrigin()
+    const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){mergedAt reviewThreads(first:100){nodes{id isResolved comments(first:100){nodes{author{login} body isMinimized createdAt updatedAt} pageInfo{hasPreviousPage hasNextPage}}} pageInfo{hasNextPage}}}}}"
+    const result = await run("gh", ["api", "graphql", "-f", `query=${query}`,
+      "-F", "owner=bsvalues", "-F", "name=terragroq", "-F", `number=${number}`])
+    const value = parseJson(result.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
+    const threads = value?.data?.repository?.pullRequest?.reviewThreads
+    if (!Array.isArray(threads?.nodes) || threads?.pageInfo?.hasNextPage === true) {
+      wall("HERMES_REPOSITORY_GITHUB_WALL", "review remediation claims are incomplete")
+    }
+    const mergedAt = Date.parse(value?.data?.repository?.pullRequest?.mergedAt ?? "")
+    if (!Number.isFinite(mergedAt)) {
+      wall("HERMES_REPOSITORY_REVIEW_WALL", "merged review timestamp is missing")
+    }
+    const claims = []
+    for (const thread of threads.nodes) {
+      if (thread?.comments?.pageInfo?.hasPreviousPage === true
+        || thread?.comments?.pageInfo?.hasNextPage === true
+        || !Array.isArray(thread?.comments?.nodes)) {
+        wall("HERMES_REPOSITORY_GITHUB_WALL", "review remediation thread comments are incomplete")
+      }
+      const findings = thread.comments.nodes.filter((comment) => {
+        const createdAt = Date.parse(comment?.createdAt ?? "")
+        return Number.isFinite(createdAt) && createdAt > mergedAt
+          && !comment?.isMinimized
+          && ["chatgpt-codex-connector", "coderabbitai", "sourcery-ai"].includes(comment?.author?.login)
+          && String(comment?.body ?? "").trim()
+      })
+      if (findings.length === 0) continue
+      if (thread?.isResolved !== true) {
+        wall("HERMES_REPOSITORY_REVIEW_WALL", "post-merge review finding is unresolved")
+      }
+      const latestFindingAt = Math.max(...findings.map((comment) => Date.parse(comment.createdAt ?? ""))
+        .filter(Number.isFinite))
+      const threadClaims = []
+      for (const comment of thread.comments.nodes) {
+        const body = String(comment?.body ?? "").trim()
+        const match = body.match(/^HERMES_REVIEW_REMEDIATION_PROOF v2 pr=(\d+) head=([0-9a-f]{40}) merge=([0-9a-f]{40}) files=([0-9a-f]{64})$/)
+        const createdAt = Date.parse(comment?.createdAt ?? "")
+        const updatedAt = Date.parse(comment?.updatedAt ?? "")
+        if (!match || comment?.author?.login !== "bsvalues" || comment?.isMinimized
+          || !Number.isFinite(createdAt) || createdAt !== updatedAt || createdAt <= latestFindingAt) continue
+        threadClaims.push({
+          threadId: String(thread.id),
+          prNumber: Number(match[1]),
+          headRefOid: match[2],
+          mergeSha: match[3],
+          filesDigest: match[4],
+        })
+      }
+      if (threadClaims.length !== 1) {
+        wall("HERMES_REPOSITORY_REVIEW_WALL", "post-merge review finding lacks one exact remediation proof")
+      }
+      claims.push(threadClaims[0])
+    }
+    const unique = new Map()
+    for (const claim of claims) {
+      const prior = unique.get(claim.prNumber)
+      if (prior && (prior.headRefOid !== claim.headRefOid || prior.mergeSha !== claim.mergeSha
+        || prior.filesDigest !== claim.filesDigest)) {
+        wall("HERMES_REPOSITORY_REVIEW_WALL", "conflicting review remediation claims")
+      }
+      unique.set(claim.prNumber, prior
+        ? { ...prior, threadIds: [...prior.threadIds, claim.threadId].sort() }
+        : { ...claim, threadIds: [claim.threadId] })
+    }
+    return [...unique.values()].map(({ threadId: _threadId, ...claim }) => claim)
+      .sort((left, right) => left.prNumber - right.prNumber)
+  }
+
+  async function inspectRemediationPullRequest(number) {
+    return inspectPullRequest(number, { allowRemediationBranch: true })
   }
 
   async function inspectPullRequestFiles(number) {
@@ -864,6 +965,22 @@ export function createRepositoryLifecycle(options) {
     return result.code === 0
   }
 
+  async function verifyCommitAncestor(ancestorSha, descendantSha) {
+    if (!SHA.test(ancestorSha) || !SHA.test(descendantSha)) {
+      wall("HERMES_REPOSITORY_GIT_WALL", "two 40-character commit SHAs required")
+    }
+    await refreshOriginMain()
+    const result = await run(
+      "git",
+      ["-C", repositoryRoot, "merge-base", "--is-ancestor", ancestorSha, descendantSha],
+      { allowFailure: true },
+    )
+    if (![0, 1].includes(result.code)) {
+      wall("HERMES_REPOSITORY_COMMAND_FAILED", "git merge-base failed")
+    }
+    return result.code === 0
+  }
+
   async function cleanupOwnedWorktree({ worktreePath, branch, mergeCommitSha, expectedHeadSha } = {}) {
     const safeBranch = branchName(branch)
     const absoluteWorktree = absolute(worktreePath, "worktreePath")
@@ -925,6 +1042,8 @@ export function createRepositoryLifecycle(options) {
     commitChanges,
     discoverPullRequest,
     inspectPullRequest,
+    inspectReviewRemediationClaims,
+    inspectRemediationPullRequest,
     inspectPullRequestFiles,
     inspectReviewFindings,
     resolveReviewThreads,
@@ -933,6 +1052,7 @@ export function createRepositoryLifecycle(options) {
     requestCodexReview,
     mergePullRequest,
     verifyOriginMainContains,
+    verifyCommitAncestor,
     cleanupOwnedWorktree,
   })
 }
