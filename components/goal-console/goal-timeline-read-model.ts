@@ -563,14 +563,18 @@ function unique(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))]
 }
 
-function terminalEvidenceAttempt(
+function runtimeEvidencePosition(
   record: GoalTimelineEvidenceRecord,
   outcomeId: number,
-): number | null {
-  const match = record.ref?.match(new RegExp(`^EV-HERMES-${outcomeId}-(\\d+)-\\d+$`))
+): { attempt: number; sequence: number } | null {
+  const match = record.ref?.match(new RegExp(`^EV-HERMES-${outcomeId}-(\\d+)-(\\d+)$`))
   if (!match) return null
   const attempt = Number(match[1])
-  return Number.isSafeInteger(attempt) && attempt > 0 ? attempt : null
+  const sequence = Number(match[2])
+  return Number.isSafeInteger(attempt) && attempt > 0
+    && Number.isSafeInteger(sequence) && sequence >= 0
+    ? { attempt, sequence }
+    : null
 }
 
 function latestDelivery(execution: RuntimeExecutionTruth | null): {
@@ -804,6 +808,7 @@ export function buildGoalTimelineReadModel(
           "HERMES_OUTCOME_PROVIDER_RECOVERED",
           "HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED",
           "HERMES_OUTCOME_REVIEW_RECOVERED",
+          "HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED",
           "HERMES_OWNER_AUTHORITY_DECISION",
         ].includes(event.eventType)
       ))
@@ -1012,10 +1017,13 @@ export function buildGoalTimelineReadModel(
       })
     }
     const currentAttempt = execution?.currentAttempt?.attempt ?? null
+    const currentSequence = currentCheckpoint?.sequence ?? null
     const evidenceResults = unique(workOrderEvidence
       .filter((record) => (
         currentAttempt !== null
-        && terminalEvidenceAttempt(record, goal.id) === currentAttempt
+        && currentSequence !== null
+        && runtimeEvidencePosition(record, goal.id)?.attempt === currentAttempt
+        && runtimeEvidencePosition(record, goal.id)?.sequence === currentSequence
       ))
       .map((record) => record.result))
     if (
@@ -1135,11 +1143,17 @@ export function buildGoalTimelineReadModel(
     }
     for (const recoveryEvent of goalRecoveryEvents) {
       const isAuthorityDecision = recoveryEvent.eventType === "HERMES_OWNER_AUTHORITY_DECISION"
+      const isRecoveryProof = recoveryEvent.eventType
+        === "HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED"
       entries.push({
         id: `trace:${recoveryEvent.id}`,
         kind: "CHECKPOINT",
         state: recoveryEvent.eventType,
-        label: isAuthorityDecision ? "Primary authority decision" : "Hermes governed recovery",
+        label: isAuthorityDecision
+          ? "Primary authority decision"
+          : isRecoveryProof
+            ? "Hermes recovery proof confirmed"
+            : "Hermes governed recovery",
         detail: recoveryEvent.reason,
         occurredAt: recoveryEvent.createdAt,
         references: [`trace:${recoveryEvent.id}`],

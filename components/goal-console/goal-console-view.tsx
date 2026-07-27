@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useTransition } from "react"
+import { useCallback, useEffect, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import type { Goal } from "@/lib/db/schema"
 import {
@@ -21,6 +21,7 @@ import { getGoalEmptyStatePrompts } from "@/components/goal-console/goal-empty-s
 import { getGoalJourneyStep } from "@/components/goal-console/goal-journey"
 import { OwnerOutcomeDeliveryPanel } from "@/components/goal-console/owner-outcome-delivery-panel"
 import { GoalTimelinePanel } from "@/components/goal-console/goal-timeline-panel"
+import type { GoalTimelineConnection } from "@/components/goal-console/goal-timeline-panel"
 import type {
   GoalAuthorityDecisionChoice,
   GoalTimelineProjection,
@@ -70,6 +71,24 @@ const toneText: Record<string, string> = {
   danger: "text-destructive",
 }
 
+const GOAL_TIMELINE_REFRESH_TIMEOUT_MS = 15_000
+
+function observationTime(timeline: GoalTimelineProjection) {
+  return new Date(timeline.truth.observedAt).getTime()
+}
+
+function timelineConnections(timelines: GoalTimelineProjection[]) {
+  return new Map<number, GoalTimelineConnection>(
+    timelines.map((timeline) => [
+      timeline.goal.id,
+      {
+        state: "current",
+        lastSuccessfulObservation: timeline.truth.observedAt,
+      },
+    ]),
+  )
+}
+
 /* ------------------------------------------------------------------ */
 /* Main view                                                         */
 /* ------------------------------------------------------------------ */
@@ -92,16 +111,138 @@ export function GoalConsoleView({
   const [goalTimelines, setGoalTimelines] = useState(
     () => new Map(timelines.map((timeline) => [timeline.goal.id, timeline])),
   )
+  const [goalTimelineConnections, setGoalTimelineConnections] = useState(
+    () => timelineConnections(timelines),
+  )
+  const goalTimelineRefreshSequences = useRef(new Map<number, number>())
+  const goalTimelineLatestObservations = useRef(
+    new Map(timelines.map((timeline) => [timeline.goal.id, observationTime(timeline)])),
+  )
   const [decisionPending, setDecisionPending] = useState(false)
   const [pending, startTransition] = useTransition()
   const emptyStatePrompts = getGoalEmptyStatePrompts()
   const selectedTimeline = latest
     ? goalTimelines.get(latest.id) ?? null
     : null
+  const selectedTimelineConnection: GoalTimelineConnection = latest
+    ? goalTimelineConnections.get(latest.id) ?? {
+        state: "stale",
+        lastSuccessfulObservation: null,
+      }
+    : {
+        state: "stale",
+        lastSuccessfulObservation: null,
+      }
 
   useEffect(() => {
-    setGoalTimelines(new Map(timelines.map((timeline) => [timeline.goal.id, timeline])))
+    const acceptedTimelines: GoalTimelineProjection[] = []
+    const confirmedTimelines: GoalTimelineProjection[] = []
+    timelines.forEach((timeline) => {
+      const goalId = timeline.goal.id
+      const observedAt = observationTime(timeline)
+      const latestObservedAt = goalTimelineLatestObservations.current.get(goalId)
+      if (latestObservedAt !== undefined && observedAt < latestObservedAt) return
+      goalTimelineRefreshSequences.current.set(
+        goalId,
+        (goalTimelineRefreshSequences.current.get(goalId) ?? 0) + 1,
+      )
+      confirmedTimelines.push(timeline)
+      if (latestObservedAt !== undefined && observedAt === latestObservedAt) return
+      goalTimelineLatestObservations.current.set(goalId, observedAt)
+      acceptedTimelines.push(timeline)
+    })
+    if (acceptedTimelines.length > 0) {
+      setGoalTimelines((current) => {
+        const next = new Map(current)
+        acceptedTimelines.forEach((timeline) => next.set(timeline.goal.id, timeline))
+        return next
+      })
+    }
+    if (confirmedTimelines.length === 0) return
+    setGoalTimelineConnections((current) => {
+      const next = new Map(current)
+      timelineConnections(confirmedTimelines).forEach((connection, goalId) => {
+        next.set(goalId, connection)
+      })
+      return next
+    })
   }, [timelines])
+
+  const refreshGoalTimeline = useCallback(async (goalId: number) => {
+    const refreshSequence =
+      (goalTimelineRefreshSequences.current.get(goalId) ?? 0) + 1
+    goalTimelineRefreshSequences.current.set(goalId, refreshSequence)
+    const isLatestRefresh = () =>
+      goalTimelineRefreshSequences.current.get(goalId) === refreshSequence
+    let timeoutId: number | null = null
+
+    setGoalTimelineConnections((current) => {
+      const next = new Map(current)
+      next.set(goalId, {
+        state: "refreshing",
+        lastSuccessfulObservation: current.get(goalId)?.lastSuccessfulObservation ?? null,
+      })
+      return next
+    })
+
+    try {
+      const timeline = await Promise.race([
+        getGoalTimeline(goalId),
+        new Promise<never>((_, reject) => {
+          timeoutId = window.setTimeout(
+            () => reject(new Error("Goal timeline refresh timed out")),
+            GOAL_TIMELINE_REFRESH_TIMEOUT_MS,
+          )
+        }),
+      ])
+      if (!timeline) {
+        throw new Error("No persisted Goal projection was returned")
+      }
+      if (!isLatestRefresh()) return timeline
+      const observedAt = observationTime(timeline)
+      const latestObservedAt = goalTimelineLatestObservations.current.get(goalId)
+      if (latestObservedAt !== undefined && observedAt <= latestObservedAt) {
+        setGoalTimelineConnections((current) => {
+          const next = new Map(current)
+          next.set(goalId, {
+            state: "current",
+            lastSuccessfulObservation:
+              current.get(goalId)?.lastSuccessfulObservation ?? timeline.truth.observedAt,
+          })
+          return next
+        })
+        return timeline
+      }
+      goalTimelineLatestObservations.current.set(goalId, observedAt)
+      setGoalTimelines((current) => {
+        const next = new Map(current)
+        next.set(goalId, timeline)
+        return next
+      })
+      setGoalTimelineConnections((current) => {
+        const next = new Map(current)
+        next.set(goalId, {
+          state: "current",
+          lastSuccessfulObservation: timeline.truth.observedAt,
+        })
+        return next
+      })
+      return timeline
+    } catch (error) {
+      if (!isLatestRefresh()) return null
+      setGoalTimelineConnections((current) => {
+        const next = new Map(current)
+        next.set(goalId, {
+          state: "stale",
+          lastSuccessfulObservation: current.get(goalId)?.lastSuccessfulObservation ?? null,
+        })
+        return next
+      })
+      throw error
+    } finally {
+      if (timeoutId !== null) window.clearTimeout(timeoutId)
+    }
+  }, [])
 
   useEffect(() => {
     const goalId = latest?.id
@@ -109,28 +250,22 @@ export function GoalConsoleView({
     const timer = window.setInterval(() => {
       startTransition(async () => {
         try {
-          const timeline = await getGoalTimeline(goalId)
-          if (!timeline) return
-          setGoalTimelines((current) => {
-            const next = new Map(current)
-            next.set(goalId, timeline)
-            return next
-          })
+          await refreshGoalTimeline(goalId)
         } catch {
-          // Keep the last persisted projection visible until the next refresh.
+          // The refresh helper marks the projection stale and preserves the last successful value.
         }
       })
     }, 60_000)
     return () => window.clearInterval(timer)
-  }, [latest?.id])
+  }, [latest?.id, refreshGoalTimeline, startTransition])
 
-  async function refreshGoalTimeline(goalId: number) {
-    const timeline = await getGoalTimeline(goalId)
-    if (!timeline) return
-    setGoalTimelines((current) => {
-      const next = new Map(current)
-      next.set(goalId, timeline)
-      return next
+  function handleTimelineRefresh(goalId: number) {
+    startTransition(async () => {
+      try {
+        await refreshGoalTimeline(goalId)
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Timeline refresh failed")
+      }
     })
   }
 
@@ -301,7 +436,9 @@ export function GoalConsoleView({
           {latest && (
             <GoalTimelinePanel
               timeline={selectedTimeline}
+              connection={selectedTimelineConnection}
               decisionPending={decisionPending}
+              onRefresh={() => handleTimelineRefresh(latest.id)}
               onAuthorityDecision={(choice) => {
                 if (selectedTimeline) handleAuthorityDecision(selectedTimeline, choice)
               }}
@@ -380,13 +517,7 @@ export function GoalConsoleView({
                       setLatest(g)
                       setLoopReport(null)
                       setLoopGoalId(null)
-                      startTransition(async () => {
-                        try {
-                          await refreshGoalTimeline(g.id)
-                        } catch (err) {
-                          toast.error(err instanceof Error ? err.message : "Timeline refresh failed")
-                        }
-                      })
+                      handleTimelineRefresh(g.id)
                     }}
                     onConvert={() => handleConvert(g.id)}
                     onDismiss={() => handleDismiss(g.id)}

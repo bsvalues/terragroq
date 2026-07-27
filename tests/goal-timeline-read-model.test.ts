@@ -156,6 +156,7 @@ function recoveredGoalEvent(input: {
     | "HERMES_OUTCOME_PROVIDER_RECOVERED"
     | "HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED"
     | "HERMES_OUTCOME_REVIEW_RECOVERED"
+    | "HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED"
     | "HERMES_OWNER_AUTHORITY_DECISION"
   at: string
   metadata?: Record<string, unknown>
@@ -766,6 +767,44 @@ describe("persisted Goal timeline read model", () => {
       eventType: "HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED",
       eventId: 485,
     })
+  })
+
+  it("retains validation recovery proof as trace without treating proof alone as recovery", () => {
+    const terminalEvent = terminalGoalEvent({
+      id: 490,
+      result: "FAILED_TERMINAL",
+      nextState: "VALIDATION_INFRASTRUCTURE_WALL",
+      at: "2026-07-26T11:50:00.000Z",
+    })
+    const proofEvent = recoveredGoalEvent({
+      id: 491,
+      eventType: "HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED",
+      at: "2026-07-26T11:52:00.000Z",
+      metadata: { proofDigest: "a".repeat(64) },
+    })
+    const [timeline] = buildGoalTimelineReadModel(input({
+      governanceEvents: [
+        terminalEvent,
+        proofEvent,
+        checkpoint({
+          id: 492,
+          sequence: 4,
+          state: "EXECUTING",
+          at: "2026-07-26T11:55:00.000Z",
+        }),
+      ],
+    }))
+
+    expect(timeline.terminal.state).toBe("FAILED_TERMINAL")
+    expect(timeline.references.trace).toContainEqual({
+      id: "trace:491",
+      eventType: "HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED",
+      eventId: 491,
+    })
+    expect(timeline.entries).toContainEqual(expect.objectContaining({
+      id: "trace:491",
+      label: "Hermes recovery proof confirmed",
+    }))
   })
 
   it("rejects recovery evidence that does not bind to the terminal state", () => {

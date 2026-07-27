@@ -1256,7 +1256,8 @@ function projectionForCheckpoint(state) {
   if (state === "COMPLETE") return { status: "closed", result: "PASS" }
   if (state === "FAILED_TERMINAL") return { status: "blocked", result: "FAIL" }
   if (state === "OWNER_DECISION_REQUIRED" || state === "PROVIDER_UNAVAILABLE"
-    || state === "RETRYABLE_WALL" || state.startsWith("DEFERRED_")) {
+    || state === "RETRYABLE_WALL" || state.startsWith("DEFERRED_")
+    || state.endsWith("_RETRY")) {
     return { status: "blocked", result: "PARTIAL" }
   }
   if (state.startsWith("PR_") || state.startsWith("REVIEW_") || state.startsWith("MERGE_")) {
@@ -1295,7 +1296,7 @@ function projectionPayloadDigest(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex")
 }
 
-function terminalEvidenceRef(outcomeId, attempt, checkpointSequence) {
+function runtimeEvidenceRef(outcomeId, attempt, checkpointSequence) {
   return `EV-HERMES-${outcomeId}-${attempt}-${checkpointSequence}`
 }
 
@@ -1408,6 +1409,7 @@ export async function projectOutcomeRuntimeCheckpoint({
       ...evidence,
     }
     eventMetadata.payloadDigest = projectionPayloadDigest(eventMetadata)
+    const failureEval = failureEvalForCheckpoint(checkpoint)
     const insertedEvent = await runQuery(
       `INSERT INTO governance_event
          ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
@@ -1470,7 +1472,6 @@ export async function projectOutcomeRuntimeCheckpoint({
            )`,
         [workOrder.id, projection.status, projection.result, commitRef, labels, attempt, checkpoint.sequence],
       )
-      const failureEval = failureEvalForCheckpoint(checkpoint)
       if (failureEval) {
         await runQuery(
           `INSERT INTO governance_event
@@ -1494,10 +1495,10 @@ export async function projectOutcomeRuntimeCheckpoint({
         )
       }
     }
-    if (["COMPLETE", "FAILED_TERMINAL"].includes(checkpoint.state)) {
-      const evidenceRef = terminalEvidenceRef(outcomeId, attempt, checkpoint.sequence)
+    if (failureEval || ["COMPLETE", "FAILED_TERMINAL"].includes(checkpoint.state)) {
+      const evidenceRef = runtimeEvidenceRef(outcomeId, attempt, checkpoint.sequence)
       const expectedEvidence = {
-        result: projection.result,
+        result: projection.result ?? "PARTIAL",
         repo: "bsvalues/terragroq",
         head: commitRef,
         notes: `Persisted Hermes runtime evidence for ${idempotencyKey}.`,

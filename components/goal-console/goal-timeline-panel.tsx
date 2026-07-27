@@ -6,6 +6,7 @@ import {
   GitCommit,
   GitPullRequestArrow,
   ListTree,
+  RefreshCw,
   ShieldAlert,
   CheckCircle2,
   XCircle,
@@ -41,21 +42,90 @@ function terminalTone(state: string | null) {
   return "warning"
 }
 
+export type GoalTimelineConnection = {
+  state: "current" | "refreshing" | "stale"
+  lastSuccessfulObservation: Date | null
+}
+
+function ProjectionConnectionStatus({
+  connection,
+  onRefresh,
+}: {
+  connection: GoalTimelineConnection
+  onRefresh?: () => void
+}) {
+  const lastObserved = connection.lastSuccessfulObservation
+    ? formatTimestamp(connection.lastSuccessfulObservation)
+    : "not yet observed"
+  const statusCopy = connection.state === "current"
+    ? `Projection current. Last successful observation ${lastObserved}.`
+    : connection.state === "refreshing"
+      ? `Refreshing persisted projection. Last successful observation ${lastObserved}.`
+      : `Projection stale and disconnected. Last successful observation ${lastObserved}. The last persisted projection remains visible.`
+  const tone = connection.state === "current"
+    ? "success"
+    : connection.state === "refreshing"
+      ? "info"
+      : "warning"
+
+  return (
+    <div className="grid min-h-14 w-full grid-cols-[minmax(0,1fr)_2.25rem] items-center gap-2 sm:w-auto sm:min-w-[24rem]">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        aria-busy={connection.state === "refreshing"}
+        className="min-w-0"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge value={tone} label={connection.state} />
+          <span className="text-xs font-medium">Projection connection</span>
+        </div>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          {statusCopy} Resident host liveness is not inferred.
+        </p>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="size-9"
+        disabled={connection.state === "refreshing" || !onRefresh}
+        onClick={onRefresh}
+        aria-label="Refresh persisted Goal projection"
+        title="Refresh persisted Goal projection"
+      >
+        <RefreshCw
+          className={connection.state === "refreshing" ? "animate-spin" : undefined}
+          aria-hidden
+        />
+      </Button>
+    </div>
+  )
+}
+
 export function GoalTimelinePanel({
   timeline,
+  connection,
+  onRefresh,
   onAuthorityDecision,
   decisionPending = false,
 }: {
   timeline: GoalTimelineProjection | null
+  connection: GoalTimelineConnection
+  onRefresh?: () => void
   onAuthorityDecision?: (choice: GoalAuthorityDecisionChoice) => void
   decisionPending?: boolean
 }) {
   if (!timeline) {
     return (
       <section className="border-y border-border bg-muted/20 px-4 py-5" aria-labelledby="goal-timeline-title">
-        <div className="flex items-center gap-2">
-          <ListTree className="h-4 w-4 text-primary" aria-hidden />
-          <h2 id="goal-timeline-title" className="text-sm font-medium">Goal delivery timeline</h2>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <ListTree className="h-4 w-4 text-primary" aria-hidden />
+            <h2 id="goal-timeline-title" className="text-sm font-medium">Goal delivery timeline</h2>
+          </div>
+          <ProjectionConnectionStatus connection={connection} onRefresh={onRefresh} />
         </div>
         <p className="mt-2 text-sm text-muted-foreground">
           No persisted Goal projection is available for this selection. WilliamOS is not inferring runtime progress.
@@ -85,10 +155,13 @@ export function GoalTimelinePanel({
             Persisted execution, validation, delivery, and evidence for {timeline.goal.ref}.
           </p>
         </div>
-        <StatusBadge
-          value={truthTone(timeline.truth.state)}
-          label={`${timeline.truth.state.toLowerCase()} truth`}
-        />
+        <div className="flex w-full flex-col items-end gap-2 xl:w-auto">
+          <ProjectionConnectionStatus connection={connection} onRefresh={onRefresh} />
+          <StatusBadge
+            value={truthTone(timeline.truth.state)}
+            label={`${timeline.truth.state.toLowerCase()} truth`}
+          />
+        </div>
       </div>
 
       {timeline.truth.issues.length > 0 ? (

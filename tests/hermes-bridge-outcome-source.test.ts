@@ -595,6 +595,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
   it.each([
     ["PR_MERGED", "review", null],
     ["OWNER_DECISION_REQUIRED", "blocked", "PARTIAL"],
+    ["RETRYABLE_WALL", "blocked", "PARTIAL"],
+    ["POST_MERGE_CLEANUP_RETRY", "blocked", "PARTIAL"],
     ["FAILED_TERMINAL", "blocked", "FAIL"],
     ["COMPLETE", "closed", "PASS"],
   ])("projects %s to truthful Work Order status/result", async (state, status, result) => {
@@ -631,12 +633,21 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       query, outcomeId: 4, attempt: 1, checkpoint: { sequence: 3, state },
     })).resolves.toMatchObject({ status, result })
     expect(query.mock.calls[5][1].slice(0, 3)).toEqual([42, status, result])
-    if (state === "FAILED_TERMINAL") {
+    if (["RETRYABLE_WALL", "POST_MERGE_CLEANUP_RETRY", "FAILED_TERMINAL"].includes(state)) {
       expect(query.mock.calls.some(([sql]) => /HERMES_RUNTIME_FAILURE_EVAL/.test(sql))).toBe(true)
       const evalCall = query.mock.calls.find(([sql]) => /HERMES_RUNTIME_FAILURE_EVAL/.test(sql))
-      expect(evalCall?.[1]?.[3]).toContain('"failureClass":"TERMINAL_RUNTIME_FAILURE"')
+      expect(evalCall?.[1]?.[3]).toContain(
+        state === "FAILED_TERMINAL"
+          ? '"failureClass":"TERMINAL_RUNTIME_FAILURE"'
+          : '"failureClass":"RETRYABLE_RUNTIME_FAILURE"',
+      )
     }
-    if (["FAILED_TERMINAL", "COMPLETE"].includes(state)) {
+    if ([
+      "RETRYABLE_WALL",
+      "POST_MERGE_CLEANUP_RETRY",
+      "FAILED_TERMINAL",
+      "COMPLETE",
+    ].includes(state)) {
       const evidenceCall = query.mock.calls.find(([sql]) => /INSERT INTO evidence_record/.test(sql))
       expect(evidenceCall?.[1]).toEqual([
         "owner",

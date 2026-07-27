@@ -163,6 +163,7 @@ async function readGoalTimelines(goalId?: number): Promise<GoalTimelineProjectio
             "HERMES_OUTCOME_PROVIDER_RECOVERED",
             "HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED",
             "HERMES_OUTCOME_REVIEW_RECOVERED",
+            "HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED",
             "HERMES_OWNER_AUTHORITY_DECISION",
           ]),
         ))
