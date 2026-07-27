@@ -201,6 +201,16 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       mergeSha: "b".repeat(40),
       proofDigest: "d".repeat(64),
     })
+    value.state.recordReviewRemediationMerge({
+      idempotencyKey: "review-recovery-merged",
+      outcomeId: "77",
+      expectedFencingToken: lease.fencingToken,
+      prNumber: 500,
+      headRefOid: "c".repeat(40),
+      mergeSha: "b".repeat(40),
+      proofDigest: "d".repeat(64),
+      mergeDetail: "Recovered reviewed PR #500",
+    })
     value.state.finalizeReviewRemediationRecovery({
       idempotencyKey: "review-recovery-finalize",
       outcomeId: "77",
@@ -209,6 +219,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       headRefOid: "c".repeat(40),
       mergeSha: "b".repeat(40),
       proofDigest: "d".repeat(64),
+      mergeDetail: "Recovered reviewed PR #500",
     })
     value.lifecycle.inspectPullRequest.mockResolvedValue({
       state: "MERGED",

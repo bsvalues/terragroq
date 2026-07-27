@@ -16,6 +16,7 @@ import {
   recoverValidationInfrastructureOutcome,
   selectNextOutcome,
   terminalizeOutcome,
+  verifyReviewRecoveryProjectionCollision,
 } from "@/scripts/hermes-bridge/outcome-source.mjs"
 
 const row = { id: 4, ref: "GOAL-0004", command: "Build a WilliamOS status UI", lane: "ui", mode: "implement", risk: "low", authority: "A2_WRITE_OWN", verdict: "allow", requiresApproval: false, matchedRules: [], status: "classified" }
@@ -904,6 +905,62 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     ])
     expect(query.mock.calls[2][0]).toMatch(/status = 'classified'/)
     expect(query.mock.calls[3][0]).toMatch(/HERMES_OUTCOME_REVIEW_RECOVERED/)
+  })
+
+  it("verifies only the exact legacy PR_MERGED projection collision", async () => {
+    const head = "b".repeat(40)
+    const merge = "c".repeat(40)
+    const expected = {
+      idempotencyKey: "hermes-outcome:4:attempt:9:checkpoint:30",
+      outcomeId: 4,
+      workOrderRef: "WO-HERMES-OUTCOME-4",
+      attempt: 9,
+      checkpointSequence: 30,
+      checkpointState: "PR_MERGED",
+      checkpointDetail: "Recovered reviewed PR #448",
+      prNumber: 448,
+      headRefOid: head,
+      mergeSha: merge,
+    }
+    const metadata = {
+      ...expected,
+      payloadDigest: createHash("sha256").update(JSON.stringify(expected)).digest("hex"),
+    }
+    const query = vi.fn().mockResolvedValueOnce({ rows: [{ metadata }] })
+    await expect(verifyReviewRecoveryProjectionCollision({
+      query,
+      outcomeId: 4,
+      attempt: 9,
+      checkpointSequence: 30,
+      checkpointDetail: "Recovered reviewed PR #448",
+      prNumber: 448,
+      reviewedHeadSha: head,
+      mergeSha: merge,
+    })).resolves.toBe(true)
+    expect(query.mock.calls[0][1]).toEqual([
+      4, "WO-HERMES-OUTCOME-4", "hermes-outcome:4:attempt:9:checkpoint:30",
+    ])
+  })
+
+  it("rejects a non-legacy or altered projection collision", async () => {
+    const query = vi.fn().mockResolvedValueOnce({
+      rows: [{
+        metadata: {
+          idempotencyKey: "hermes-outcome:4:attempt:9:checkpoint:30",
+          checkpointState: "REVIEW_REMEDIATION_RECOVERED",
+        },
+      }],
+    })
+    await expect(verifyReviewRecoveryProjectionCollision({
+      query,
+      outcomeId: 4,
+      attempt: 9,
+      checkpointSequence: 30,
+      checkpointDetail: "Recovered reviewed PR #448",
+      prNumber: 448,
+      reviewedHeadSha: "b".repeat(40),
+      mergeSha: "c".repeat(40),
+    })).resolves.toBe(false)
   })
 
   it("refuses review exhaustion recovery without matching persisted evidence", async () => {

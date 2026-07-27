@@ -342,7 +342,7 @@ describe("Hermes bridge durable state store", () => {
   })
 
   it("reopens an exact zero-touch review remediation terminal for immediate fenced reclaim", () => {
-    const { store } = fixture()
+    const { dir, store } = fixture()
     const prNumber = 448
     const terminalHeadRefOid = "a".repeat(40)
     const headRefOid = "d".repeat(40)
@@ -369,6 +369,7 @@ describe("Hermes bridge durable state store", () => {
       outcomeId: "5", expectedFencingToken: first.fencingToken,
       prNumber, expectedPriorHeadRefOid: terminalHeadRefOid,
       headRefOid, mergeSha, proofDigest,
+      mergeDetail: `Recovered reviewed PR #${prNumber}`,
       idempotencyKey: "review-recover",
     }
 
@@ -380,12 +381,19 @@ describe("Hermes bridge durable state store", () => {
       leaseStatus: "RELEASED", checkpointSequence: 2,
       state: "REVIEW_REMEDIATION_RECOVERY_PENDING",
     })
+    const merged = store.recordReviewRemediationMerge({
+      ...request,
+      idempotencyKey: "review-recover-merged",
+    })
+    expect(merged).toMatchObject({
+      leaseStatus: "RELEASED", checkpointSequence: 3, state: "PR_MERGED",
+    })
     const reopened = store.finalizeReviewRemediationRecovery({
       ...request,
       idempotencyKey: "review-recover-finalize",
     })
     expect(reopened).toMatchObject({
-      leaseStatus: "ABANDONED", checkpointSequence: 3,
+      leaseStatus: "ABANDONED", checkpointSequence: 4,
       state: "REVIEW_REMEDIATION_RECOVERED", idempotent: false,
     })
     expect(store.finalizeReviewRemediationRecovery({
@@ -397,7 +405,7 @@ describe("Hermes bridge durable state store", () => {
     expect(store.read().executions["5"]).toMatchObject({
       lease: { status: "ABANDONED", recoverReason: "REVIEW_REMEDIATION_PROOF_ACCEPTED" },
       checkpoint: {
-        sequence: 3, state: "REVIEW_REMEDIATION_RECOVERED",
+        sequence: 4, state: "REVIEW_REMEDIATION_RECOVERED",
         detail: "REVIEW_REMEDIATION_EXHAUSTED",
       },
       metadata: {
@@ -407,6 +415,32 @@ describe("Hermes bridge durable state store", () => {
         reviewRecoveryProofDigest: proofDigest,
       },
     })
+    const legacyStatePath = join(dir, "state.json")
+    const legacyState = JSON.parse(readFileSync(legacyStatePath, "utf8"))
+    delete legacyState.executions["5"].metadata.reviewProjectionReconciledFromSequence
+    writeFileSync(legacyStatePath, JSON.stringify(legacyState))
+
+    const reconciled = store.reconcileReviewRemediationProjection({
+      ...request,
+      expectedCheckpointSequence: 4,
+      idempotencyKey: "review-recover-projection",
+    })
+    expect(reconciled).toMatchObject({
+      leaseStatus: "ABANDONED", checkpointSequence: 5,
+      state: "REVIEW_REMEDIATION_RECOVERED",
+    })
+    expect(store.reconcileReviewRemediationProjection({
+      ...request,
+      expectedCheckpointSequence: 4,
+      idempotencyKey: "review-recover-projection",
+    })).toMatchObject({ ...reconciled, idempotent: true })
+    expect(() => store.reconcileReviewRemediationProjection({
+      ...request,
+      expectedCheckpointSequence: 5,
+      idempotencyKey: "review-recover-projection-again",
+    })).toThrowError(expect.objectContaining({
+      code: "REVIEW_REMEDIATION_PROJECTION_RECOVERY_STATE_WALL",
+    }))
 
     const reclaimed = store.reclaimLease({
       outcomeId: "5", holderId: "recovery-holder", leaseDurationMs: 1000,
@@ -415,7 +449,7 @@ describe("Hermes bridge durable state store", () => {
     expect(reclaimed.fencingToken).toBeGreaterThan(first.fencingToken)
     expect(() => store.checkpoint({
       outcomeId: "5", holderId: "review-holder", fencingToken: first.fencingToken,
-      expectedCheckpointSequence: 3, state: "STALE", idempotencyKey: "review-stale",
+      expectedCheckpointSequence: 5, state: "STALE", idempotencyKey: "review-stale",
     })).toThrowError(expect.objectContaining({ code: "FENCING_TOKEN_CONFLICT" }))
   })
 

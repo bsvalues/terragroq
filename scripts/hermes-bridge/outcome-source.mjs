@@ -1589,6 +1589,79 @@ export async function projectOutcomeRuntimeCheckpoint({
   }
 }
 
+export async function verifyReviewRecoveryProjectionCollision({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  attempt,
+  checkpointSequence,
+  checkpointDetail,
+  prNumber,
+  reviewedHeadSha,
+  mergeSha,
+} = {}) {
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0
+    || !Number.isSafeInteger(attempt) || attempt <= 0
+    || !Number.isSafeInteger(checkpointSequence) || checkpointSequence < 0
+    || typeof checkpointDetail !== "string" || checkpointDetail.length === 0
+    || !Number.isSafeInteger(prNumber) || prNumber <= 0
+    || typeof reviewedHeadSha !== "string" || !COMMIT_SHA.test(reviewedHeadSha)
+    || typeof mergeSha !== "string" || !COMMIT_SHA.test(mergeSha)) {
+    return false
+  }
+  const ref = outcomeWorkOrderRef(outcomeId)
+  const idempotencyKey = `hermes-outcome:${outcomeId}:attempt:${attempt}:checkpoint:${checkpointSequence}`
+  const expected = {
+    idempotencyKey,
+    outcomeId,
+    workOrderRef: ref,
+    attempt,
+    checkpointSequence,
+    checkpointState: "PR_MERGED",
+    checkpointDetail,
+    prNumber,
+    headRefOid: reviewedHeadSha,
+    mergeSha,
+  }
+  expected.payloadDigest = projectionPayloadDigest(expected)
+  let runQuery = normalizeQuery(query)
+  let pool
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") return false
+    const { Pool } = await import("pg")
+    pool = new Pool({ connectionString: databaseUrl })
+    runQuery = pool.query.bind(pool)
+  }
+  try {
+    const result = await runQuery(
+      `SELECT ge.metadata
+       FROM governance_event ge
+       JOIN work_order wo ON wo.id::text = ge."entityId"::text
+       JOIN goal g ON g."userId" = wo."userId"
+       WHERE g.id = $1::integer
+         AND wo.ref = $2
+         AND ge."entityType" = 'work_order'
+         AND ge."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+         AND ge.metadata->>'idempotencyKey' = $3`,
+      [outcomeId, ref, idempotencyKey],
+    )
+    if (result?.rows?.length !== 1) return false
+    const actual = result.rows[0]?.metadata
+    const expectedKeys = Object.keys(expected).sort()
+    return actual && typeof actual === "object" && !Array.isArray(actual)
+      && JSON.stringify(Object.keys(actual).sort()) === JSON.stringify(expectedKeys)
+      && expectedKeys.every((key) => actual[key] === expected[key])
+  } catch {
+    return false
+  } finally {
+    if (pool) {
+      try {
+        await pool.end()
+      } catch {}
+    }
+  }
+}
+
 const RUNTIME_LEASE_STATUSES = new Set([
   "ACTIVE",
   "ABANDONED",
