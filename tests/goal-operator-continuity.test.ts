@@ -1,0 +1,675 @@
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+import {
+  buildGoalTimelineReadModel,
+  type GoalTimelineEvidenceRecord,
+  type GoalTimelineGoalRecord,
+  type GoalTimelineWorkOrderRecord,
+} from "@/components/goal-console/goal-timeline-read-model"
+import {
+  buildRuntimeExecutionTruth,
+  projectRuntimeExecutionQuery,
+  type RuntimeExecutionWorkOrderRecord,
+  RuntimeExecutionGovernanceEventRecord,
+} from "@/components/runtime/runtime-execution-model"
+import { projectRuntimeEvidenceHistory } from "@/components/runtime/runtime-evidence"
+import { projectRuntimeExecutionTruth } from "@/components/trace/runtime-trace-projection"
+import { AppServerTurnEndedError } from "../scripts/hermes-bridge/app-server-client.mjs"
+import { createHermesOrchestrator } from "../scripts/hermes-bridge/orchestrator.mjs"
+import {
+  projectOutcomeRuntimeCheckpoint,
+  projectOutcomeRuntimeLease,
+} from "../scripts/hermes-bridge/outcome-source.mjs"
+import { createHermesStateStore } from "../scripts/hermes-bridge/state-store.mjs"
+
+const roots: string[] = []
+const owner = "owner-461"
+const outcomeId = 461
+const workOrderId = 1_461
+const workOrderRef = "WO-HERMES-OUTCOME-461"
+const prNumber = 461
+const commit = "c".repeat(40)
+const mergeSha = "d".repeat(40)
+
+type EvidenceRow = {
+  id: number
+  userId: string
+  ref: string
+  workOrderId: number
+  result: string
+  repo: string
+  head: string | null
+  notes: string
+  contentHash: string
+  createdAt: Date
+}
+
+function sqlText(value: unknown): string {
+  return String(value).replace(/\s+/g, " ").trim()
+}
+
+function metadata(value: unknown): Record<string, unknown> {
+  return JSON.parse(String(value)) as Record<string, unknown>
+}
+
+class PersistedRuntimeLedger {
+  readonly events: RuntimeExecutionGovernanceEventRecord[] = []
+  readonly evidence: EvidenceRow[] = []
+  readonly workOrder: GoalTimelineWorkOrderRecord
+  private nextEventId = 2_000
+  private nextEvidenceId = 3_000
+
+  constructor(
+    private readonly recordedAt: () => Date,
+  ) {
+    const createdAt = new Date("2026-07-26T16:00:01.000Z")
+    this.workOrder = {
+      id: workOrderId,
+      userId: owner,
+      ref: workOrderRef,
+      title: "Resident continuity and cross-surface recovery",
+      description: "Durable runtime projection for GOAL-WOS-V1.1-003",
+      goal: "GOAL-WOS-V1.1-003",
+      lane: "read_model",
+      phase: null,
+      status: "active",
+      result: null,
+      commitRef: null,
+      evidence: [],
+      assignee: "hermes-codex-bridge",
+      validators: ["npx vitest run tests/goal-operator-continuity.test.ts"],
+      stopConditions: [],
+      linkedDecisionId: null,
+      createdAt,
+      updatedAt: createdAt,
+      closedAt: null,
+      completedAt: null,
+    }
+  }
+
+  readonly query = async (statement: unknown, params: unknown[] = []) => {
+    const sql = sqlText(statement)
+    if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)
+      || sql.startsWith("SELECT pg_advisory_xact_lock")
+      || sql.startsWith("INSERT INTO work_order")) {
+      return { rows: [], rowCount: 0 }
+    }
+    if (sql.startsWith('SELECT wo.id, wo."userId" AS "userId", wo.ref')) {
+      return {
+        rows: [{ id: workOrderId, userId: owner, ref: workOrderRef }],
+        rowCount: 1,
+      }
+    }
+    if (sql.includes("INSERT INTO governance_event")
+      && sql.includes("'HERMES_RUNTIME_CHECKPOINT'")) {
+      return this.insertRuntimeEvent("HERMES_RUNTIME_CHECKPOINT", params)
+    }
+    if (sql.includes("INSERT INTO governance_event")
+      && sql.includes("'HERMES_RUNTIME_LEASE'")) {
+      return this.insertRuntimeEvent("HERMES_RUNTIME_LEASE", params)
+    }
+    if (sql.includes("INSERT INTO governance_event")
+      && sql.includes("'HERMES_RUNTIME_FAILURE_EVAL'")) {
+      const event = this.appendEvent(
+        "HERMES_RUNTIME_FAILURE_EVAL",
+        String(params[2]),
+        metadata(params[3]),
+      )
+      return { rows: [{ id: event.id }], rowCount: 1 }
+    }
+    if (sql.startsWith("SELECT metadata->>'payloadDigest' AS")) {
+      const prior = this.events.find((event) => (
+        event.entityId === String(params[0])
+        && (event.metadata as Record<string, unknown>).idempotencyKey === params[1]
+      ))
+      return {
+        rows: prior
+          ? [{ payloadDigest: (prior.metadata as Record<string, unknown>).payloadDigest }]
+          : [],
+        rowCount: prior ? 1 : 0,
+      }
+    }
+    if (sql.startsWith("UPDATE work_order")) {
+      this.workOrder.status = String(params[1])
+      this.workOrder.result = params[2] === null ? null : String(params[2])
+      if (params[3]) this.workOrder.commitRef = String(params[3])
+      this.workOrder.evidence = [...new Set([
+        ...this.workOrder.evidence,
+        ...(params[4] as string[]),
+      ])].sort()
+      this.workOrder.updatedAt = this.recordedAt()
+      if (this.workOrder.status === "closed") {
+        this.workOrder.closedAt ??= this.recordedAt()
+        this.workOrder.completedAt ??= this.recordedAt()
+      }
+      return { rows: [], rowCount: 1 }
+    }
+    if (sql.startsWith("INSERT INTO evidence_record")) {
+      const ref = String(params[1])
+      if (!this.evidence.some((row) => row.ref === ref)) {
+        this.evidence.push({
+          id: this.nextEvidenceId++,
+          userId: String(params[0]),
+          ref,
+          workOrderId: Number(params[2]),
+          result: String(params[3]),
+          repo: "bsvalues/terragroq",
+          head: params[4] === null ? null : String(params[4]),
+          notes: String(params[5]),
+          contentHash: String(params[6]),
+          createdAt: this.recordedAt(),
+        })
+      }
+      return { rows: [], rowCount: 1 }
+    }
+    if (sql.startsWith('SELECT result, repo, head, notes, "contentHash"')) {
+      const row = this.evidence.find((candidate) => (
+        candidate.userId === params[0]
+        && candidate.ref === params[1]
+        && candidate.workOrderId === params[2]
+      ))
+      return {
+        rows: row ? [{
+          result: row.result,
+          repo: row.repo,
+          head: row.head,
+          notes: row.notes,
+          contentHash: row.contentHash,
+        }] : [],
+        rowCount: row ? 1 : 0,
+      }
+    }
+    throw new Error(`Unhandled acceptance-ledger SQL: ${sql}`)
+  }
+
+  private insertRuntimeEvent(
+    eventType: "HERMES_RUNTIME_CHECKPOINT" | "HERMES_RUNTIME_LEASE",
+    params: unknown[],
+  ) {
+    const eventMetadata = metadata(params[3])
+    const duplicate = this.events.find((event) => (
+      event.eventType === eventType
+      && (event.metadata as Record<string, unknown>).idempotencyKey
+        === eventMetadata.idempotencyKey
+    ))
+    if (duplicate) return { rows: [], rowCount: 0 }
+    const event = this.appendEvent(eventType, String(params[2]), eventMetadata)
+    return { rows: [{ id: event.id }], rowCount: 1 }
+  }
+
+  private appendEvent(
+    eventType: string,
+    reason: string,
+    eventMetadata: Record<string, unknown>,
+  ): RuntimeExecutionGovernanceEventRecord {
+    const event: RuntimeExecutionGovernanceEventRecord = {
+      id: this.nextEventId++,
+      userId: owner,
+      eventType,
+      entityType: "work_order",
+      entityId: String(workOrderId),
+      actor: "hermes-codex-bridge",
+      reason,
+      metadata: eventMetadata,
+      createdAt: this.recordedAt(),
+    }
+    this.events.push(event)
+    return event
+  }
+}
+
+function runtimeRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "goal-operator-continuity-"))
+  roots.push(root)
+  fs.mkdirSync(path.join(root, "control"), { recursive: true })
+  fs.writeFileSync(path.join(root, "control", "activation"), "enabled\n")
+  fs.writeFileSync(
+    path.join(root, "control", "authority-not-before"),
+    "2026-07-26T15:00:00.000Z\n",
+  )
+  return root
+}
+
+function outcome() {
+  return {
+    id: outcomeId,
+    userId: owner,
+    ref: "GOAL-WOS-V1.1-003",
+    command: "Prove resident continuity through a recoverable App Server interruption.",
+    lane: "read_model",
+    mode: "implement",
+    risk: "low",
+    authority: "A2_WRITE_OWN",
+    verdict: "requires_approval",
+    requiresApproval: true,
+    status: "classified",
+  }
+}
+
+function successfulTurn() {
+  return {
+    threadId: "thread-461",
+    turnId: "turn-461-recovered",
+    status: "completed",
+    finalText: JSON.stringify({
+      result: "READY_FOR_VALIDATION",
+      workOrder: "WO-WOS-V1.1-003",
+      branch: "codex/wos-v1-1-continuity-recovery",
+      commit: null,
+      prUrl: null,
+      merged: false,
+      mergeCommit: null,
+      validation: ["pass"],
+      reviewThreads: 0,
+      ownerTouchCount: 0,
+      blockedScopeCrossed: false,
+      nextState: "READY_FOR_HERMES_MERGE",
+    }),
+  }
+}
+
+afterEach(() => {
+  for (const root of roots.splice(0)) {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+describe("WO #461 executable goal/operator continuity", { timeout: 30_000 }, () => {
+  it("reconstructs after App Server interruption and projects one fenced completion", async () => {
+    const root = runtimeRoot()
+    const statePath = path.join(root, "state", "state.json")
+    let clock = Date.parse("2026-07-26T16:00:00.000Z")
+    const now = () => new Date(clock)
+    const ledger = new PersistedRuntimeLedger(now)
+    const checkpointProjector = projectOutcomeRuntimeCheckpoint as unknown as (
+      input: Record<string, unknown>,
+    ) => Promise<unknown>
+    const leaseProjector = projectOutcomeRuntimeLease as unknown as (
+      input: Record<string, unknown>,
+    ) => Promise<unknown>
+    const projectCheckpoint = (input: Record<string, unknown>) =>
+      checkpointProjector({ ...input, query: ledger.query })
+    const projectLease = (input: Record<string, unknown>) =>
+      leaseProjector({ ...input, query: ledger.query })
+    const changedPaths = ["components/goal-console/goal-timeline-read-model.ts"]
+    let merged = false
+    const lifecycle = {
+      refreshOriginMain: vi.fn(async () => "a".repeat(40)),
+      ensureOwnedWorktree: vi.fn(async ({ branch }: { branch: string }) => ({
+        branch,
+        worktreePath: process.cwd(),
+      })),
+      discoverPullRequest: vi.fn(async () => null),
+      inspectPullRequest: vi.fn(async () => ({
+        state: merged ? "MERGED" : "OPEN",
+        baseRefName: "main",
+        isDraft: false,
+        checksGreen: true,
+        checksComplete: true,
+        failedChecks: [],
+        reviewed: true,
+        reviewCompleted: true,
+        reviewRequested: true,
+        codexReviewFindings: [],
+        unresolvedThreadCount: 0,
+        headRefOid: commit,
+        mergeCommit: merged ? { oid: mergeSha } : null,
+      })),
+      inspectChangedPaths: vi.fn(async () => changedPaths),
+      inspectWorkingTreePaths: vi.fn(async () => changedPaths),
+      inspectWorktreeHead: vi.fn(async () => commit),
+      ensureValidationDependencies: vi.fn(() => ({ linked: true })),
+      removeValidationDependencies: vi.fn(() => ({ removed: true })),
+      runValidationCommands: vi.fn(async () => [{
+        command: "npx",
+        args: ["vitest", "run", "tests/goal-operator-continuity.test.ts"],
+        code: 0,
+      }]),
+      commitChanges: vi.fn(async () => ({
+        commit,
+        branch: "codex/wos-v1-1-continuity-recovery",
+        paths: changedPaths,
+      })),
+      pushBranch: vi.fn(async () => ({ pushed: true })),
+      createPullRequest: vi.fn(async () => ({
+        number: prNumber,
+        url: `https://github.com/bsvalues/terragroq/pull/${prNumber}`,
+      })),
+      requestCodexReview: vi.fn(async () => ({ requested: true })),
+      inspectReviewFindings: vi.fn(async () => []),
+      resolveReviewThreads: vi.fn(async () => ({ resolved: 0 })),
+      inspectPullRequestFiles: vi.fn(async () => changedPaths),
+      mergePullRequest: vi.fn(async () => {
+        merged = true
+        return { merged: true }
+      }),
+      verifyOriginMainContains: vi.fn(async () => true),
+      cleanupOwnedWorktree: vi.fn(async () => ({ cleaned: true })),
+    }
+    const markComplete = vi.fn(async () => true)
+    const firstClient = {
+      connect: vi.fn(async () => {}),
+      startThread: vi.fn(async () => "thread-461"),
+      resumeThread: vi.fn(async () => "thread-461"),
+      runTurn: vi.fn(async () => {
+        throw new AppServerTurnEndedError("interrupted")
+      }),
+      close: vi.fn(),
+    }
+    const firstStore = createHermesStateStore(statePath, { now: () => clock })
+    const firstOrchestrator = createHermesOrchestrator({
+      workspace: process.cwd(),
+      runtimeRoot: root,
+      state: firstStore,
+      lifecycle,
+      selectOutcome: vi.fn(async () => outcome()),
+      markComplete,
+      markTerminal: vi.fn(async () => true),
+      deferOutcome: vi.fn(async () => true),
+      projectCheckpoint,
+      projectLease,
+      clientFactory: () => firstClient,
+      holderId: "resident-before-restart",
+      now,
+      sleep: async () => {},
+      leaseRenewalIntervalMs: 60 * 60 * 1_000,
+    })
+
+    await expect(firstOrchestrator.cycle()).rejects.toMatchObject({
+      code: "APP_SERVER_TURN_INTERRUPTED",
+    })
+    const interrupted = firstStore.read().executions[String(outcomeId)]
+    const interruptedFence = interrupted.fencingToken
+    expect(interrupted).toMatchObject({
+      outcomeId: String(outcomeId),
+      fencingToken: 1,
+      lease: {
+        status: "ACTIVE",
+        holderId: "resident-before-restart",
+        abandonedAt: "2026-07-26T16:00:00.000Z",
+        abandonReason: "APP_SERVER_TURN_INTERRUPTED",
+      },
+      checkpoint: {
+        state: "RETRYABLE_WALL",
+        detail: "APP_SERVER_TURN_INTERRUPTED",
+      },
+      metadata: {
+        threadId: "thread-461",
+        outcome: { id: outcomeId, ref: "GOAL-WOS-V1.1-003" },
+      },
+    })
+    expect(fs.existsSync(statePath)).toBe(true)
+
+    clock += 60_000
+    const recoveredClient = {
+      connect: vi.fn(async () => {}),
+      startThread: vi.fn(async () => "unexpected-new-thread"),
+      resumeThread: vi.fn(async () => "thread-461"),
+      runTurn: vi.fn(async () => successfulTurn()),
+      close: vi.fn(),
+    }
+    const recoveredStore = createHermesStateStore(statePath, { now: () => clock })
+    const selectRecoveredOutcome = vi.fn(async () => null)
+    const recoveredOrchestrator = createHermesOrchestrator({
+      workspace: process.cwd(),
+      runtimeRoot: root,
+      state: recoveredStore,
+      lifecycle,
+      selectOutcome: selectRecoveredOutcome,
+      markComplete,
+      markTerminal: vi.fn(async () => true),
+      deferOutcome: vi.fn(async () => true),
+      projectCheckpoint,
+      projectLease,
+      clientFactory: () => recoveredClient,
+      holderId: "resident-after-restart",
+      now,
+      sleep: async () => {},
+      leaseRenewalIntervalMs: 60 * 60 * 1_000,
+    })
+
+    await expect(recoveredOrchestrator.cycle()).resolves.toEqual({
+      result: "COMPLETE",
+      outcomeId: String(outcomeId),
+      prNumber,
+      mergeSha,
+      changedPaths,
+    })
+    const completed = recoveredStore.read().executions[String(outcomeId)]
+    expect(completed.fencingToken).toBeGreaterThan(interruptedFence)
+    expect(completed).toMatchObject({
+      lease: { status: "RELEASED", holderId: "resident-after-restart" },
+      checkpoint: { state: "COMPLETE" },
+      metadata: { prNumber, headRefOid: commit, mergeSha },
+    })
+    expect(recoveredClient.resumeThread).toHaveBeenCalledWith("thread-461", expect.any(Object))
+    expect(recoveredClient.startThread).not.toHaveBeenCalled()
+    expect(selectRecoveredOutcome).not.toHaveBeenCalled()
+    expect(markComplete).toHaveBeenCalledOnce()
+    expect(lifecycle.createPullRequest).toHaveBeenCalledOnce()
+    expect(lifecycle.mergePullRequest).toHaveBeenCalledOnce()
+
+    await expect(recoveredOrchestrator.cycle()).resolves.toEqual({
+      result: "NO_ELIGIBLE_OUTCOME",
+    })
+    expect(selectRecoveredOutcome).toHaveBeenCalledOnce()
+    expect(markComplete).toHaveBeenCalledOnce()
+    expect(lifecycle.createPullRequest).toHaveBeenCalledOnce()
+    expect(lifecycle.mergePullRequest).toHaveBeenCalledOnce()
+
+    expect(() => recoveredStore.checkpoint({
+      idempotencyKey: "wo-461-stale-holder-delivery",
+      outcomeId: String(outcomeId),
+      holderId: "resident-before-restart",
+      fencingToken: interruptedFence,
+      expectedCheckpointSequence: interrupted.checkpoint.sequence,
+      state: "COMPLETE",
+      metadata: { prNumber, mergeSha },
+    })).toThrow(expect.objectContaining({ code: "FENCING_TOKEN_CONFLICT" }))
+
+    const completeEvents = ledger.events.filter((event) => (
+      event.eventType === "HERMES_RUNTIME_CHECKPOINT"
+      && (event.metadata as Record<string, unknown>).checkpointState === "COMPLETE"
+    ))
+    const failureEvents = ledger.events.filter((event) =>
+      event.eventType === "HERMES_RUNTIME_FAILURE_EVAL")
+    const terminalEvidence = ledger.evidence.find((row) =>
+      row.ref.startsWith(`EV-HERMES-${outcomeId}-${completed.fencingToken}-`)
+      && row.result === "PASS"
+      && row.head === mergeSha)
+    expect(completeEvents).toHaveLength(1)
+    expect(failureEvents).toContainEqual(expect.objectContaining({
+      metadata: expect.objectContaining({
+        attempt: interruptedFence,
+        checkpointState: "RETRYABLE_WALL",
+        detail: "APP_SERVER_TURN_INTERRUPTED",
+      }),
+    }))
+    expect(terminalEvidence).toMatchObject({
+      workOrderId,
+      result: "PASS",
+      head: mergeSha,
+    })
+
+    const goal: GoalTimelineGoalRecord = {
+      id: outcomeId,
+      userId: owner,
+      ref: "GOAL-WOS-V1.1-003",
+      command: outcome().command,
+      lane: "read_model",
+      mode: "implement",
+      risk: "low",
+      authority: "A2_WRITE_OWN",
+      verdict: "allow",
+      rationale: null,
+      recommendedMove: null,
+      requiresApproval: false,
+      linkedWorkOrderId: workOrderId,
+      status: "converted",
+      createdAt: new Date("2026-07-26T16:00:00.000Z"),
+      updatedAt: now(),
+    }
+    const projectedEvidence: GoalTimelineEvidenceRecord[] = ledger.evidence.map((row) => ({
+      ...row,
+      branch: "codex/wos-v1-1-continuity-recovery",
+      validators: row.result === "PASS"
+        ? ["npx vitest run tests/goal-operator-continuity.test.ts"]
+        : [],
+      knownFailures: [],
+      outOfScopeChanges: [],
+      deferredItems: [],
+      nextValidMove: null,
+      artifactPath: null,
+    }))
+    const projectionInput = {
+      userId: owner,
+      goals: [goal],
+      workOrders: [ledger.workOrder],
+      decisions: [],
+      auditRecords: [],
+      observedAt: now(),
+    }
+    const [canonicalTimeline] = buildGoalTimelineReadModel({
+      ...projectionInput,
+      governanceEvents: ledger.events,
+      evidenceRecords: projectedEvidence,
+    })
+    const [timeline] = buildGoalTimelineReadModel({
+      ...projectionInput,
+      governanceEvents: [...ledger.events].reverse(),
+      evidenceRecords: [...projectedEvidence].reverse(),
+    })
+    expect(timeline).toEqual(canonicalTimeline)
+
+    const runtimeExecutions = buildRuntimeExecutionTruth(
+      owner,
+      [ledger.workOrder as RuntimeExecutionWorkOrderRecord],
+      ledger.events,
+    )
+    const runtimeProjection = projectRuntimeExecutionQuery(runtimeExecutions)
+    const traceProjection = projectRuntimeExecutionTruth(runtimeProjection)
+    const evidenceProjection = projectRuntimeEvidenceHistory(
+      projectedEvidence.map((record) => ({
+        ref: record.ref,
+        result: record.result,
+        branch: record.branch,
+        head: record.head,
+        filesChanged: changedPaths,
+        validators: record.validators,
+        nextValidMove: record.nextValidMove,
+        createdAt: record.createdAt,
+      })),
+    )
+    const completeEvent = completeEvents[0]
+    const completeMetadata = completeEvent.metadata as Record<string, unknown>
+    const runtimeCompletion = runtimeProjection.completedAttempts.at(-1)
+    const traceCompletion = traceProjection.find((entry) => (
+      entry.eventType === "HERMES_RUNTIME_CHECKPOINT"
+      && entry.state === "COMPLETE"
+    ))
+    const auditRuntimeProjection = runtimeProjection
+    const auditEvidenceProjection = evidenceProjection
+
+    expect(timeline.truth).toMatchObject({ state: "CURRENT", issues: [] })
+    expect(timeline.goal).toMatchObject({ id: outcomeId, ref: goal.ref })
+    expect(timeline.current.workOrder).toMatchObject({
+      id: workOrderId,
+      ref: workOrderRef,
+      status: "closed",
+      result: "PASS",
+    })
+    expect(timeline.current.runtime).toMatchObject({
+      attempt: completed.fencingToken,
+      leaseStatus: "RELEASED",
+      checkpointId: `trace:${completeEvent.id}`,
+      checkpointState: "COMPLETE",
+    })
+    expect(timeline.terminal).toMatchObject({ state: "COMPLETE", result: "PASS" })
+    expect(timeline.delivery).toEqual({
+      prNumber,
+      finalRevision: mergeSha,
+      status: "DELIVERED",
+    })
+    expect(timeline.references.evidence).toContainEqual(expect.objectContaining({
+      id: `evidence:${terminalEvidence!.id}`,
+      result: "PASS",
+      contentHash: completeMetadata.payloadDigest,
+    }))
+    expect(timeline.references.audit).toEqual([])
+    expect(timeline.entries).toContainEqual(expect.objectContaining({
+      id: `trace:${failureEvents[0].id}`,
+      state: failureEvents[0].metadata
+        ? (failureEvents[0].metadata as Record<string, unknown>).failureClass
+        : null,
+    }))
+    expect(timeline.references.evidence.map((record) => record.result)).toEqual([
+      "PARTIAL",
+      "PARTIAL",
+      "PASS",
+    ])
+
+    // These are the same production projections rendered by Work Orders, Evidence/Audit, and Trace.
+    expect(ledger.workOrder).toMatchObject({
+      id: workOrderId,
+      ref: workOrderRef,
+      status: "closed",
+      result: "PASS",
+      commitRef: mergeSha,
+    })
+    expect(runtimeCompletion).toMatchObject({
+      workOrderId,
+      workOrderRef,
+      attempt: completed.fencingToken,
+      checkpointState: "COMPLETE",
+      leaseStatus: "RELEASED",
+      commitRef: mergeSha,
+    })
+    expect(traceCompletion).toMatchObject({
+      provenance: { entity: `work_order:${workOrderRef}` },
+      attempt: completed.fencingToken,
+      state: "COMPLETE",
+      evidenceDigest: completeMetadata.payloadDigest,
+    })
+    expect(evidenceProjection.records[0]).toMatchObject({
+      ref: terminalEvidence!.ref,
+      result: "PASS",
+      head: mergeSha,
+    })
+    expect(evidenceProjection.records).toContainEqual(expect.objectContaining({
+      ref: `EV-HERMES-${outcomeId}-${interruptedFence}-${interrupted.checkpoint.sequence}`,
+      result: "PARTIAL",
+      head: null,
+    }))
+    expect(auditRuntimeProjection).toBe(runtimeProjection)
+    expect(auditEvidenceProjection).toBe(evidenceProjection)
+    expect(auditRuntimeProjection.completedAttempts.at(-1)?.commitRef).toBe(mergeSha)
+    expect(auditEvidenceProjection.records[0]?.head).toBe(mergeSha)
+
+    const mismatchedCurrentAttemptEvidence: GoalTimelineEvidenceRecord = {
+      ...projectedEvidence[0],
+      id: 4_002,
+      ref: `EV-HERMES-${outcomeId}-${completed.fencingToken}-${completed.checkpoint.sequence}`,
+      result: "FAIL",
+      knownFailures: ["Mismatched current-attempt delivery evidence."],
+      createdAt: now(),
+    }
+    const [conflicting] = buildGoalTimelineReadModel({
+      userId: owner,
+      goals: [goal],
+      workOrders: [ledger.workOrder],
+      governanceEvents: ledger.events,
+      evidenceRecords: [...projectedEvidence, mismatchedCurrentAttemptEvidence],
+      decisions: [],
+      auditRecords: [],
+      observedAt: now(),
+    })
+    expect(conflicting.truth.state).toBe("CONFLICTING")
+    expect(conflicting.truth.issues).toContainEqual(expect.objectContaining({
+      code: "EVIDENCE_RESULT_CONFLICT",
+    }))
+  })
+})

@@ -31,6 +31,30 @@ export type RuntimeEvidenceSummary = {
   changedFileCount: number
 }
 
+function runtimeEvidencePosition(ref: string | null): { attempt: number; sequence: number } | null {
+  if (!ref) return null
+  const match = ref.match(/^EV-HERMES-\d+-(\d+)-(\d+)$/)
+  if (!match) return null
+  const attempt = Number(match[1])
+  const sequence = Number(match[2])
+  return Number.isSafeInteger(attempt) && Number.isSafeInteger(sequence)
+    ? { attempt, sequence }
+    : null
+}
+
+function byNewestEvidence(left: RuntimeEvidence, right: RuntimeEvidence): number {
+  const timeOrder = right.createdAt.getTime() - left.createdAt.getTime()
+  if (timeOrder !== 0) return timeOrder
+  const leftPosition = runtimeEvidencePosition(left.ref)
+  const rightPosition = runtimeEvidencePosition(right.ref)
+  if (leftPosition && rightPosition) {
+    const positionOrder = rightPosition.attempt - leftPosition.attempt
+      || rightPosition.sequence - leftPosition.sequence
+    if (positionOrder !== 0) return positionOrder
+  }
+  return (right.ref ?? "").localeCompare(left.ref ?? "")
+}
+
 export function projectRuntimeEvidenceHistory(
   records: RuntimeEvidence[],
   limit = RUNTIME_EVIDENCE_HISTORY_LIMIT,
@@ -38,7 +62,7 @@ export function projectRuntimeEvidenceHistory(
   const configuredLimit = Number.isFinite(limit)
     ? Math.max(0, Math.trunc(limit))
     : RUNTIME_EVIDENCE_HISTORY_LIMIT
-  const timeline = [...records].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+  const timeline = [...records].sort(byNewestEvidence)
 
   return {
     records: timeline.slice(0, configuredLimit),
@@ -48,7 +72,7 @@ export function projectRuntimeEvidenceHistory(
 }
 
 export function summarizeRuntimeEvidence(records: RuntimeEvidence[]): RuntimeEvidenceSummary {
-  const timeline = [...records].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+  const timeline = [...records].sort(byNewestEvidence)
   const latest = timeline[0]
 
   return timeline.reduce<RuntimeEvidenceSummary>(

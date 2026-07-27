@@ -94,6 +94,32 @@ describe("runtime evidence bounded history", () => {
       "EV-0002",
     ])
   })
+
+  it("orders equal-time Hermes evidence by numeric attempt and checkpoint sequence", () => {
+    const createdAt = new Date("2026-07-26T17:00:00.000Z")
+    const history = projectRuntimeEvidenceHistory([
+      record({ ref: "EV-HERMES-461-2-4", result: "PARTIAL", createdAt }),
+      record({ ref: "EV-HERMES-461-2-13", result: "PASS", createdAt }),
+    ])
+
+    expect(history.records.map((entry) => entry.ref)).toEqual([
+      "EV-HERMES-461-2-13",
+      "EV-HERMES-461-2-4",
+    ])
+  })
+
+  it("uses the full reference to break equal-time cross-outcome ties", () => {
+    const createdAt = new Date("2026-07-26T17:00:00.000Z")
+    const history = projectRuntimeEvidenceHistory([
+      record({ ref: "EV-HERMES-461-1-3", createdAt }),
+      record({ ref: "EV-HERMES-462-1-3", createdAt }),
+    ])
+
+    expect(history.records.map((entry) => entry.ref)).toEqual([
+      "EV-HERMES-462-1-3",
+      "EV-HERMES-461-1-3",
+    ])
+  })
 })
 
 describe("runtime evidence page contract", () => {
