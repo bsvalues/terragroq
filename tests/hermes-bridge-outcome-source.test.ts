@@ -250,7 +250,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls.some(([sql]) =>
       /"linkedDecisionId" IS NOT DISTINCT FROM \$4::integer/.test(sql))).toBe(true)
     expect(query.mock.calls.some(([sql]) =>
-      /result = \$5[\s\S]+result = 'OWNER_DECISION_REQUIRED'[\s\S]+result = 'PARTIAL'/.test(sql))).toBe(true)
+      /result = \$5[\s\S]+result IN \('OWNER_DECISION_REQUIRED', 'PARTIAL'\)/.test(sql))).toBe(true)
     expect(query.mock.calls.some(([sql]) =>
       /terminal\.id = \$6::integer[\s\S]+terminal\.metadata->>'result' = 'OWNER_DECISION_REQUIRED'[\s\S]+terminal\.metadata->>'nextState' = \$8[\s\S]+newer_terminal\.id > terminal\.id/.test(sql))).toBe(true)
     const receiptCall = query.mock.calls.find(([sql]) =>
