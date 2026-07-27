@@ -323,6 +323,21 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(value.selectOutcome).not.toHaveBeenCalled()
     expect(value.client.connect).not.toHaveBeenCalled()
+    expect(value.projectCheckpoint).toHaveBeenCalledWith({
+      outcomeId: 77,
+      attempt: lease.fencingToken,
+      checkpoint: {
+        sequence: 3,
+        state: "POST_MERGE_CLEANUP_RECOVERED",
+        detail: "PR #500",
+        metadata: {
+          prNumber: 500,
+          headRefOid: "c".repeat(40),
+          mergeSha: "b".repeat(40),
+          terminalCleanupRecoveryProofDigest: "d".repeat(64),
+        },
+      },
+    })
     expect(value.state.read().executions["77"]).toMatchObject({
       fencingToken: lease.fencingToken + 1,
       lease: { status: "RELEASED" },

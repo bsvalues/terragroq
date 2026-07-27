@@ -649,6 +649,13 @@ export function createRepositoryLifecycle(options) {
     if (trackedDependencies.stdout.length > 0) {
       wall("HERMES_REPOSITORY_CLEANUP_WALL", "terminal recovery dependencies contain tracked files")
     }
+    const dependencies = path.join(record.worktreePath, "node_modules")
+    const dependencyStat = fs.lstatSync(dependencies, { throwIfNoEntry: false })
+    if (!dependencyStat) return { removed: false, headRefOid: expectedHeadSha }
+    if (dependencyStat.isSymbolicLink()) {
+      removeValidationDependencies(record)
+      return { removed: true, headRefOid: expectedHeadSha }
+    }
     const ignored = await run(
       "git",
       ["-C", record.worktreePath, "check-ignore", "-q", "node_modules/"],
@@ -656,13 +663,6 @@ export function createRepositoryLifecycle(options) {
     )
     if (ignored.code !== 0) {
       wall("HERMES_REPOSITORY_CLEANUP_WALL", "terminal recovery dependencies are not ignored")
-    }
-    const dependencies = path.join(record.worktreePath, "node_modules")
-    const dependencyStat = fs.lstatSync(dependencies, { throwIfNoEntry: false })
-    if (!dependencyStat) return { removed: false, headRefOid: expectedHeadSha }
-    if (dependencyStat.isSymbolicLink()) {
-      removeValidationDependencies(record)
-      return { removed: true, headRefOid: expectedHeadSha }
     }
     const canonicalWorktree = fs.realpathSync(record.worktreePath)
     const canonicalDependencies = fs.realpathSync(dependencies)

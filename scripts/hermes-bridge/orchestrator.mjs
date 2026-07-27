@@ -248,6 +248,7 @@ export function createHermesOrchestrator(options = {}) {
       ["commit", value.commit],
       ["headRefOid", value.headRefOid],
       ["mergeSha", value.mergeSha],
+      ["terminalCleanupRecoveryProofDigest", value.terminalCleanupRecoveryProofDigest],
     ].filter(([, fieldValue]) => fieldValue !== null && fieldValue !== undefined))
   }
 
