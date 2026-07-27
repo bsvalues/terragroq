@@ -301,16 +301,12 @@ export function GoalConsoleView({
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      startTransition(async () => {
-        try {
-          await refreshAuthorityRequestTimelines()
-        } catch {
-          // Preserve the last successful inbox while the dedicated source is unavailable.
-        }
+      void refreshAuthorityRequestTimelines().catch(() => {
+        // Preserve the last successful inbox while the dedicated source is unavailable.
       })
     }, AUTHORITY_REQUEST_REFRESH_INTERVAL_MS)
     return () => window.clearInterval(timer)
-  }, [refreshAuthorityRequestTimelines, startTransition])
+  }, [refreshAuthorityRequestTimelines])
 
   function handleTimelineRefresh(goalId: number) {
     startTransition(async () => {

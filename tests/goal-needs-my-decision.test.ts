@@ -5,8 +5,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   buildNeedsMyDecisionView,
   getActiveGoalAuthorityRequests,
-  getAuthorityRequestGoalIds,
-  getLatestOwnerDecisionGoalIds,
+  getUnresolvedAuthorityRequestGoalIds,
 } from "@/components/goal-console/active-goal-authority-requests"
 import type {
   GoalTimelineDecisionRequest,
@@ -54,42 +53,126 @@ function timeline(
 }
 
 describe("Goal Console Needs My Decision view", () => {
-  it("discovers every authority-request candidate outside the recent-goal limit", () => {
+  it("discovers every unresolved authority request outside the recent-goal limit", () => {
     const workOrders = [
       ...Array.from({ length: 30 }, (_, index) => ({
+        id: index + 1,
         ref: `WO-HERMES-OUTCOME-${index + 1}`,
+        updatedAt: new Date(2026, 0, index + 1),
       })),
-      { ref: "WO-HERMES-OUTCOME-1" },
-      { ref: "WO-HERMES-OUTCOME-0" },
-      { ref: "WO-OTHER-31" },
-      { ref: null },
+      {
+        id: 31,
+        ref: "WO-HERMES-OUTCOME-1",
+        updatedAt: new Date(2025, 0, 1),
+      },
+      {
+        id: 32,
+        ref: "WO-HERMES-OUTCOME-0",
+        updatedAt: new Date(2026, 1, 1),
+      },
+      {
+        id: 33,
+        ref: "WO-OTHER-31",
+        updatedAt: new Date(2026, 1, 1),
+      },
+      {
+        id: 34,
+        ref: null,
+        updatedAt: new Date(2026, 1, 1),
+      },
+    ]
+    const lifecycleEvents = [
+      {
+        id: 101,
+        eventType: "HERMES_OWNER_AUTHORITY_DECISION",
+        entityId: "1",
+        metadata: {
+          outcomeId: 1,
+          workOrderId: 1,
+          terminalEventId: 100,
+          decisionId: 91,
+          choice: "APPROVE",
+          ownerUserId: "owner-1",
+          expectedNextState: "RESUME_AUTHORIZED",
+        },
+      },
+      {
+        id: 100,
+        eventType: "HERMES_OUTCOME_TERMINAL",
+        entityId: "1",
+        metadata: { result: "OWNER_DECISION_REQUIRED" },
+      },
+      {
+        id: 200,
+        eventType: "HERMES_OUTCOME_TERMINAL",
+        entityId: "2",
+        metadata: { result: "OWNER_DECISION_REQUIRED" },
+      },
+      {
+        id: 301,
+        eventType: "HERMES_OUTCOME_COMPLETED",
+        entityId: "3",
+        metadata: {},
+      },
+      {
+        id: 300,
+        eventType: "HERMES_OUTCOME_TERMINAL",
+        entityId: "3",
+        metadata: { result: "OWNER_DECISION_REQUIRED" },
+      },
+      {
+        id: 402,
+        eventType: "HERMES_OUTCOME_TERMINAL",
+        entityId: "4",
+        metadata: { result: "OWNER_DECISION_REQUIRED" },
+      },
+      {
+        id: 401,
+        eventType: "HERMES_OWNER_AUTHORITY_DECISION",
+        entityId: "4",
+        metadata: {
+          outcomeId: 4,
+          workOrderId: 4,
+          terminalEventId: 400,
+          decisionId: 94,
+          choice: "DENY",
+          ownerUserId: "owner-1",
+          expectedNextState: "KEEP_BLOCKED",
+        },
+      },
+      {
+        id: 400,
+        eventType: "HERMES_OUTCOME_TERMINAL",
+        entityId: "4",
+        metadata: { result: "OWNER_DECISION_REQUIRED" },
+      },
+      {
+        id: 501,
+        eventType: "HERMES_OWNER_AUTHORITY_DECISION",
+        entityId: "5",
+        metadata: {
+          outcomeId: 5,
+          terminalEventId: 500,
+          decisionId: 95,
+          choice: "APPROVE",
+        },
+      },
+      {
+        id: 500,
+        eventType: "HERMES_OUTCOME_TERMINAL",
+        entityId: "5",
+        metadata: { result: "OWNER_DECISION_REQUIRED" },
+      },
     ]
 
-    expect(getAuthorityRequestGoalIds(workOrders)).toEqual(
-      Array.from({ length: 30 }, (_, index) => index + 1),
-    )
-    expect(getLatestOwnerDecisionGoalIds([
-      {
-        id: 2,
-        entityId: "31",
-        metadata: { result: "COMPLETE" },
-      },
-      {
-        id: 1,
-        entityId: "31",
-        metadata: { result: "OWNER_DECISION_REQUIRED" },
-      },
-      {
-        id: 3,
-        entityId: "32",
-        metadata: { result: "OWNER_DECISION_REQUIRED" },
-      },
-      {
-        id: 4,
-        entityId: "not-a-goal",
-        metadata: { result: "OWNER_DECISION_REQUIRED" },
-      },
-    ])).toEqual([32])
+    expect(
+      getUnresolvedAuthorityRequestGoalIds(workOrders, lifecycleEvents)
+        .sort((left, right) => left - right),
+    ).toEqual([
+      2,
+      4,
+      ...Array.from({ length: 26 }, (_, index) => index + 5),
+    ])
 
     const actionBody = authoritySource.slice(
       authoritySource.indexOf(
@@ -99,14 +182,15 @@ describe("Goal Console Needs My Decision view", () => {
     expect(actionBody).toContain(
       'eq(workOrder.result, "OWNER_DECISION_REQUIRED")',
     )
+    expect(actionBody).toContain("isNull(workOrder.linkedDecisionId)")
     expect(actionBody).toContain(
-      "getAuthorityRequestGoalIds(candidateWorkOrders)",
+      "getUnresolvedAuthorityRequestGoalIds(",
     )
     expect(actionBody).toContain(
-      "getLatestOwnerDecisionGoalIds(terminalEvents)",
+      '"HERMES_OWNER_AUTHORITY_DECISION"',
     )
     expect(actionBody).toContain(
-      'eq(governanceEvent.eventType, "HERMES_OUTCOME_TERMINAL")',
+      '"HERMES_OUTCOME_COMPLETED"',
     )
     expect(actionBody).toContain(
       "index += AUTHORITY_REQUEST_PROJECTION_BATCH_SIZE",
@@ -246,6 +330,14 @@ describe("Goal Console Needs My Decision view", () => {
     expect(viewSource).toContain(
       "await refreshAuthorityRequestTimelines()",
     )
+    const backgroundPoll = viewSource.slice(
+      viewSource.indexOf("void refreshAuthorityRequestTimelines().catch"),
+      viewSource.indexOf("function handleTimelineRefresh"),
+    )
+    expect(backgroundPoll).toContain(
+      "void refreshAuthorityRequestTimelines().catch",
+    )
+    expect(backgroundPoll).not.toContain("startTransition")
     expect(viewSource).toContain("timelines={authorityRequestTimelines}")
     expect(viewSource).not.toContain("timelines={goalTimelines.values()}")
   })

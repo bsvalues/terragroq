@@ -1,12 +1,11 @@
 "use server"
 
-import { and, desc, eq } from "drizzle-orm"
+import { and, desc, eq, inArray, isNull } from "drizzle-orm"
 
 import { getGoalTimeline } from "@/app/actions/goal-timeline"
 import {
   getActiveGoalAuthorityRequests,
-  getAuthorityRequestGoalIds,
-  getLatestOwnerDecisionGoalIds,
+  getUnresolvedAuthorityRequestGoalIds,
 } from "@/components/goal-console/active-goal-authority-requests"
 import type { GoalTimelineProjection } from "@/components/goal-console/goal-timeline-read-model"
 import { db } from "@/lib/db"
@@ -17,18 +16,24 @@ const AUTHORITY_REQUEST_PROJECTION_BATCH_SIZE = 25
 
 export async function getActiveGoalAuthorityRequestTimelines() {
   const userId = await getUserId()
-  const [candidateWorkOrders, terminalEvents] = await Promise.all([
+  const [candidateWorkOrders, lifecycleEvents] = await Promise.all([
     db
-      .select({ ref: workOrder.ref })
+      .select({
+        id: workOrder.id,
+        ref: workOrder.ref,
+        updatedAt: workOrder.updatedAt,
+      })
       .from(workOrder)
       .where(and(
         eq(workOrder.userId, userId),
         eq(workOrder.result, "OWNER_DECISION_REQUIRED"),
+        isNull(workOrder.linkedDecisionId),
       ))
       .orderBy(desc(workOrder.updatedAt), desc(workOrder.id)),
     db
       .select({
         id: governanceEvent.id,
+        eventType: governanceEvent.eventType,
         entityId: governanceEvent.entityId,
         metadata: governanceEvent.metadata,
       })
@@ -36,14 +41,18 @@ export async function getActiveGoalAuthorityRequestTimelines() {
       .where(and(
         eq(governanceEvent.userId, userId),
         eq(governanceEvent.entityType, "goal"),
-        eq(governanceEvent.eventType, "HERMES_OUTCOME_TERMINAL"),
+        inArray(governanceEvent.eventType, [
+          "HERMES_OUTCOME_TERMINAL",
+          "HERMES_OWNER_AUTHORITY_DECISION",
+          "HERMES_OUTCOME_COMPLETED",
+        ]),
       ))
       .orderBy(desc(governanceEvent.id)),
   ])
-  const goalIds = Array.from(new Set([
-    ...getLatestOwnerDecisionGoalIds(terminalEvents),
-    ...getAuthorityRequestGoalIds(candidateWorkOrders),
-  ]))
+  const goalIds = getUnresolvedAuthorityRequestGoalIds(
+    candidateWorkOrders,
+    lifecycleEvents,
+  )
   const candidates: GoalTimelineProjection[] = []
 
   for (
