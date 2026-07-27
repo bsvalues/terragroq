@@ -36,8 +36,8 @@ describe("Goal Console owner authority decision surface", () => {
 
   it("offers deliberate actions only for an actionable owner wall", () => {
     expect(panelSource).toContain('decisionRequest.status === "ACTIONABLE"')
-    expect(panelSource).toContain("Approve resume")
-    expect(panelSource).toContain("Deny keep blocked")
+    expect(panelSource).toContain("Approve and resume")
+    expect(panelSource).toContain("Deny and keep blocked")
     expect(panelSource).toContain('decisionRequest.status === "RECEIPT_RECORDED"')
     expect(panelSource).toContain('decisionRequest.status === "CONFLICTING"')
     expect(viewSource).toContain("recordGoalAuthorityDecision({")

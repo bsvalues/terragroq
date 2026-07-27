@@ -248,7 +248,7 @@ export function GoalTimelinePanel({
                 onClick={() => onAuthorityDecision("APPROVE")}
               >
                 <CheckCircle2 aria-hidden />
-                Approve resume
+                Approve and resume
               </Button>
               <Button
                 type="button"
@@ -258,7 +258,7 @@ export function GoalTimelinePanel({
                 onClick={() => onAuthorityDecision("DENY")}
               >
                 <XCircle aria-hidden />
-                Deny keep blocked
+                Deny and keep blocked
               </Button>
             </div>
           ) : null}

@@ -16,6 +16,10 @@ const authoritySource = readFileSync(
   "app/(shell)/goal-console/authority-request-timelines.ts",
   "utf8",
 )
+const timelineActionSource = readFileSync(
+  "app/actions/goal-timeline.ts",
+  "utf8",
+)
 const pageSource = readFileSync(
   "app/(shell)/goal-console/page.tsx",
   "utf8",
@@ -169,6 +173,7 @@ describe("Goal Console Needs My Decision view", () => {
       getUnresolvedAuthorityRequestGoalIds(workOrders, lifecycleEvents)
         .sort((left, right) => left - right),
     ).toEqual([
+      1,
       2,
       4,
       ...Array.from({ length: 26 }, (_, index) => index + 5),
@@ -182,7 +187,7 @@ describe("Goal Console Needs My Decision view", () => {
     expect(actionBody).toContain(
       'eq(workOrder.result, "OWNER_DECISION_REQUIRED")',
     )
-    expect(actionBody).toContain("isNull(workOrder.linkedDecisionId)")
+    expect(actionBody).not.toContain("isNull(workOrder.linkedDecisionId)")
     expect(actionBody).toContain(
       "getUnresolvedAuthorityRequestGoalIds(",
     )
@@ -195,10 +200,61 @@ describe("Goal Console Needs My Decision view", () => {
     expect(actionBody).toContain(
       "index += AUTHORITY_REQUEST_PROJECTION_BATCH_SIZE",
     )
-    expect(actionBody).toContain("getGoalTimeline(goalId)")
+    expect(actionBody).toContain("getGoalTimelinesByIds(")
+    expect(actionBody).toContain("ownerDecisionReceiptValid(")
+    expect(actionBody).toContain("const unresolvedBatchGoalIds")
+    expect(actionBody).toContain(
+      "index += AUTHORITY_REQUEST_PROJECTION_BATCH_SIZE",
+    )
+    expect(actionBody).not.toContain("getGoalTimeline(goalId)")
+    expect(actionBody).not.toContain("resolvedAuthorityRequestVersions")
     expect(actionBody).toContain("getActiveGoalAuthorityRequests(candidates)")
     expect(actionBody).not.toContain("GOAL_TIMELINE_LIMIT")
-    expect(actionBody).not.toContain(".limit(")
+    expect(actionBody).toContain(".limit(WORK_ORDER_DUPLICATE_SENTINEL_LIMIT)")
+    expect(actionBody).toContain(".limit(DUPLICATE_SENTINEL_LIMIT)")
+    expect(timelineActionSource).toContain(
+      "goalIds.length > GOAL_TIMELINE_BATCH_LIMIT",
+    )
+    expect(timelineActionSource).toContain(
+      'throw new Error("GOAL_TIMELINE_BATCH_LIMIT_EXCEEDED")',
+    )
+  })
+
+  it("keeps a request discoverable when a receipt-shaped event is not fully validated", () => {
+    const workOrders = [{
+      id: 70,
+      ref: "WO-HERMES-OUTCOME-7",
+      updatedAt: new Date("2026-07-27T15:00:00.000Z"),
+    }]
+    const lifecycleEvents = [
+      {
+        id: 701,
+        eventType: "HERMES_OWNER_AUTHORITY_DECISION",
+        entityId: "7",
+        metadata: {
+          outcomeId: 7,
+          workOrderId: 70,
+          terminalEventId: 700,
+          decisionId: 9,
+          choice: "APPROVE",
+          ownerUserId: "owner",
+          expectedNextState: "RESUME_VALIDATION",
+        },
+      },
+      {
+        id: 700,
+        eventType: "HERMES_OUTCOME_TERMINAL",
+        entityId: "7",
+        metadata: {
+          result: "OWNER_DECISION_REQUIRED",
+          nextState: "RESUME_VALIDATION",
+        },
+      },
+    ]
+
+    expect(
+      getUnresolvedAuthorityRequestGoalIds(workOrders, lifecycleEvents),
+    ).toEqual([7])
   })
 
   it("returns only active authority requests", () => {
@@ -250,12 +306,12 @@ describe("Goal Console Needs My Decision view", () => {
     ).toEqual([
       {
         choice: "APPROVE",
-        label: "Approve resume",
+        label: "Approve and resume",
         consequence: "Approve consequence 1",
       },
       {
         choice: "DENY",
-        label: "Deny keep blocked",
+        label: "Deny and keep blocked",
         consequence: "Deny consequence 1",
       },
     ])

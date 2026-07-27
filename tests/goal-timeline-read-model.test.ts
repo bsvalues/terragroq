@@ -1228,6 +1228,99 @@ describe("persisted Goal timeline read model", () => {
     }))
   })
 
+  it("treats a fully proven prior decision as historical at a successor authority wall", () => {
+    const priorReceipt = ownerReceiptFixture(505, "RESUME_VALIDATION")
+    const priorTerminal = terminalGoalEvent({
+      id: 505,
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "RESUME_VALIDATION",
+      at: "2026-07-26T11:58:01.000Z",
+      metadata: priorReceipt.packet,
+    })
+    const successorPacket = {
+      ...authorityPacket(),
+      blockedAction: "Resume the successor validation step.",
+      approveConsequence: "Resume only the successor validation step.",
+    }
+    const successorTerminal = terminalGoalEvent({
+      id: 507,
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "RESUME_SUCCESSOR_VALIDATION",
+      at: "2026-07-26T12:01:00.000Z",
+      metadata: successorPacket,
+    })
+    const [timeline] = buildGoalTimelineReadModel(input({
+      workOrders: [workOrder({
+        status: "blocked",
+        result: "OWNER_DECISION_REQUIRED",
+        linkedDecisionId: 9,
+      })],
+      governanceEvents: [
+        priorTerminal,
+        priorReceipt.receiptEvent,
+        successorTerminal,
+      ],
+      decisions: [priorReceipt.decisionRecord],
+      evidenceRecords: [priorReceipt.evidenceRecord],
+      auditRecords: [priorReceipt.auditRecord],
+    }))
+
+    expect(timeline.decisionRequest).toEqual(expect.objectContaining({
+      status: "ACTIONABLE",
+      blockedAction: "Resume the successor validation step.",
+      expectedNextState: "RESUME_SUCCESSOR_VALIDATION",
+      receipt: expect.objectContaining({
+        status: "NOT_RECORDED",
+        decisionId: null,
+      }),
+    }))
+    expect(timeline.resume).toEqual({
+      state: "AWAITING_OWNER_DECISION",
+      decisionId: null,
+      decisionRef: null,
+      governedNextState: "RESUME_SUCCESSOR_VALIDATION",
+    })
+  })
+
+  it("keeps an invalid prior decision conflicting at a successor authority wall", () => {
+    const priorReceipt = ownerReceiptFixture(505, "RESUME_VALIDATION")
+    const priorTerminal = terminalGoalEvent({
+      id: 505,
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "RESUME_VALIDATION",
+      at: "2026-07-26T11:58:01.000Z",
+      metadata: priorReceipt.packet,
+    })
+    const successorTerminal = terminalGoalEvent({
+      id: 507,
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "RESUME_SUCCESSOR_VALIDATION",
+      at: "2026-07-26T12:01:00.000Z",
+      metadata: authorityPacket(),
+    })
+    const [timeline] = buildGoalTimelineReadModel(input({
+      workOrders: [workOrder({
+        status: "blocked",
+        result: "OWNER_DECISION_REQUIRED",
+        linkedDecisionId: 9,
+      })],
+      governanceEvents: [
+        priorTerminal,
+        priorReceipt.receiptEvent,
+        successorTerminal,
+      ],
+      decisions: [priorReceipt.decisionRecord],
+      evidenceRecords: [{
+        ...priorReceipt.evidenceRecord,
+        contentHash: "0".repeat(64),
+      }],
+      auditRecords: [priorReceipt.auditRecord],
+    }))
+
+    expect(timeline.decisionRequest.status).toBe("CONFLICTING")
+    expect(timeline.resume.state).toBe("AWAITING_OWNER_DECISION")
+  })
+
   it("does not synthesize an actionable request from incomplete terminal evidence", () => {
     const [timeline] = buildGoalTimelineReadModel(input({
       workOrders: [workOrder({ status: "blocked", result: "OWNER_DECISION_REQUIRED" })],

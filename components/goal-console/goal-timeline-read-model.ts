@@ -323,7 +323,7 @@ function exactOwnerDecisionPacket(value: unknown) {
   }
 }
 
-function ownerDecisionReceiptValid(
+export function ownerDecisionReceiptValid(
   goalId: number,
   record: GoalTimelineDecisionRecord,
   workOrder: GoalTimelineWorkOrderRecord | null,
@@ -633,6 +633,7 @@ function resumeProjection(
   linkedDecisions: GoalTimelineDecisionRecord[],
   terminalEvent: RuntimeExecutionGovernanceEventRecord | null,
   linkedReceiptValid: boolean,
+  linkedDecisionSuperseded: boolean,
 ): GoalTimelineProjection["resume"] {
   if (terminal !== "OWNER_DECISION_REQUIRED") {
     return {
@@ -646,6 +647,14 @@ function resumeProjection(
   if (workOrder?.linkedDecisionId === null || workOrder?.linkedDecisionId === undefined) {
     return {
       state: "MISSING_DECISION_RECORD",
+      decisionId: null,
+      decisionRef: null,
+      governedNextState: nextState,
+    }
+  }
+  if (linkedDecisionSuperseded && linkedDecisions.length === 0) {
+    return {
+      state: "AWAITING_OWNER_DECISION",
       decisionId: null,
       decisionRef: null,
       governedNextState: nextState,
@@ -792,14 +801,14 @@ export function buildGoalTimelineReadModel(
     const currentEvent = currentCheckpoint
       ? events.find((event) => event.id === currentCheckpoint.eventId) ?? null
       : null
-    const goalTerminalEvent = events
+    const goalTerminalEvents = events
       .filter((event) => (
         event.entityType === "goal"
         && event.entityId === String(goal.id)
         && event.eventType === "HERMES_OUTCOME_TERMINAL"
       ))
       .sort((left, right) => left.id - right.id)
-      .at(-1) ?? null
+    const goalTerminalEvent = goalTerminalEvents.at(-1) ?? null
     const goalRecoveryEvents = events
       .filter((event) => (
         event.entityType === "goal"
@@ -842,10 +851,36 @@ export function buildGoalTimelineReadModel(
         left.createdAt.getTime() - right.createdAt.getTime() || left.id - right.id
       ))
     const resumeTerminalEvent = goalTerminalEvent ?? currentEvent
-    const linkedReceiptValid = linkedDecisions.length === 1
+    const supersededLinkedDecisionIds = new Set(
+      linkedDecisions.flatMap((record) => {
+        const match = new RegExp(`^OWNER-DECISION-${goal.id}-([1-9]\\d*)$`)
+          .exec(record.ref ?? "")
+        const priorTerminal = match
+          ? goalTerminalEvents.find((event) => event.id === Number(match[1])) ?? null
+          : null
+        if (!priorTerminal
+          || !resumeTerminalEvent
+          || priorTerminal.id === resumeTerminalEvent.id
+          || !ownerDecisionReceiptValid(
+            goal.id,
+            record,
+            currentWorkOrder,
+            priorTerminal,
+            workOrderEvidence,
+            goalRecoveryEvents,
+            goalAudits,
+          )) return []
+        return [record.id]
+      }),
+    )
+    const currentLinkedDecisions = linkedDecisions.filter(
+      (record) => !supersededLinkedDecisionIds.has(record.id),
+    )
+    const linkedDecisionSuperseded = supersededLinkedDecisionIds.size > 0
+    const linkedReceiptValid = currentLinkedDecisions.length === 1
       && ownerDecisionReceiptValid(
         goal.id,
-        linkedDecisions[0],
+        currentLinkedDecisions[0],
         currentWorkOrder,
         resumeTerminalEvent,
         workOrderEvidence,
@@ -859,7 +894,7 @@ export function buildGoalTimelineReadModel(
       execution,
       goalTerminalEvent,
       terminalRecoveryProven,
-      linkedDecisions,
+      currentLinkedDecisions,
       linkedReceiptValid,
     )
     const delivery = latestDelivery(execution)
@@ -1058,9 +1093,10 @@ export function buildGoalTimelineReadModel(
       goal.id,
       terminal,
       currentWorkOrder,
-      linkedDecisions,
+      currentLinkedDecisions,
       resumeTerminalEvent,
       linkedReceiptValid,
+      linkedDecisionSuperseded,
     )
     if (terminal === "OWNER_DECISION_REQUIRED" && (
       resume.state === "MISSING_DECISION_RECORD" || resume.state === "DECISION_CONFLICT"
@@ -1079,7 +1115,7 @@ export function buildGoalTimelineReadModel(
       currentWorkOrder,
       terminal,
       resumeTerminalEvent,
-      linkedDecisions,
+      currentLinkedDecisions,
       linkedReceiptValid,
       resume,
       issues.some((issue) => issue.state === "CONFLICTING")
@@ -1238,7 +1274,7 @@ export function buildGoalTimelineReadModel(
       terminal === "OWNER_DECISION_REQUIRED" ? currentCheckpoint?.detail : null,
     ])
     const ownerAction = terminal === "OWNER_DECISION_REQUIRED"
-      ? linkedDecisions[0]?.decision
+      ? currentLinkedDecisions[0]?.decision
         ?? currentCheckpoint?.detail
         ?? currentWorkOrder?.stopConditions[0]
         ?? "Record and link the required owner decision."

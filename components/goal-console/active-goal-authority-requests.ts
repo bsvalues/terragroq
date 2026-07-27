@@ -9,7 +9,6 @@ export type GoalAuthorityDecisionHandler = (
 ) => void
 
 const HERMES_OUTCOME_WORK_ORDER_PREFIX = "WO-HERMES-OUTCOME-"
-const AUTHORITY_DECISION_EVENT = "HERMES_OWNER_AUTHORITY_DECISION"
 const OUTCOME_COMPLETED_EVENT = "HERMES_OUTCOME_COMPLETED"
 const OUTCOME_TERMINAL_EVENT = "HERMES_OUTCOME_TERMINAL"
 
@@ -17,13 +16,6 @@ function positiveGoalId(value: string) {
   if (!/^[1-9]\d*$/.test(value)) return null
   const goalId = Number(value)
   return Number.isSafeInteger(goalId) ? goalId : null
-}
-
-function positiveMetadataId(value: unknown) {
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) && value > 0 ? value : null
-  }
-  return typeof value === "string" ? positiveGoalId(value) : null
 }
 
 function eventMetadata(value: unknown): Record<string, unknown> | null {
@@ -37,38 +29,6 @@ function goalIdFromWorkOrderRef(ref: string | null) {
   return positiveGoalId(ref.slice(HERMES_OUTCOME_WORK_ORDER_PREFIX.length))
 }
 
-function receiptResolves(
-  event: {
-    id: number
-    eventType: string
-    entityId: string | null
-    metadata: unknown
-  },
-  goalId: number,
-  binding: { terminalEventId?: number; workOrderId?: number },
-) {
-  if (event.eventType !== AUTHORITY_DECISION_EVENT
-    || event.entityId !== String(goalId)) return false
-  const metadata = eventMetadata(event.metadata)
-  const terminalEventId = positiveMetadataId(metadata?.terminalEventId)
-  const workOrderId = positiveMetadataId(metadata?.workOrderId)
-  if (!metadata
-    || positiveMetadataId(metadata.outcomeId) !== goalId
-    || positiveMetadataId(metadata.decisionId) === null
-    || terminalEventId === null
-    || workOrderId === null
-    || typeof metadata.ownerUserId !== "string"
-    || metadata.ownerUserId.length === 0
-    || typeof metadata.expectedNextState !== "string"
-    || !/^[A-Z][A-Z0-9_]{1,79}$/.test(metadata.expectedNextState)
-    || !["APPROVE", "DENY"].includes(String(metadata.choice))) return false
-  if (binding.terminalEventId !== undefined
-    && terminalEventId !== binding.terminalEventId) return false
-  if (binding.workOrderId !== undefined
-    && workOrderId !== binding.workOrderId) return false
-  return true
-}
-
 export function getUnresolvedAuthorityRequestGoalIds(
   workOrders: Iterable<{
     id: number
@@ -79,7 +39,8 @@ export function getUnresolvedAuthorityRequestGoalIds(
     id: number
     eventType: string
     entityId: string | null
-    metadata: unknown
+    metadata?: unknown
+    result?: string | null
   }>,
 ) {
   const newestEvents = Array.from(lifecycleEvents)
@@ -103,12 +64,11 @@ export function getUnresolvedAuthorityRequestGoalIds(
     if (!latestState) continue
     goalIdsWithPersistedState.add(goalId)
     if (latestState.eventType === OUTCOME_COMPLETED_EVENT) continue
-    if (eventMetadata(latestState.metadata)?.result !== "OWNER_DECISION_REQUIRED") continue
-    const resolved = goalEvents.some((event) => (
-      event.id > latestState.id
-      && receiptResolves(event, goalId, { terminalEventId: latestState.id })
-    ))
-    if (!resolved) unresolvedGoalIds.add(goalId)
+    const result = eventMetadata(latestState.metadata)?.result ?? latestState.result
+    if (result !== "OWNER_DECISION_REQUIRED") continue
+    // Discovery is intentionally conservative. Only the full timeline projection
+    // can validate the linked decision, evidence hash, receipt, and audit binding.
+    unresolvedGoalIds.add(goalId)
   }
 
   const newestWorkOrders = Array.from(workOrders).sort((left, right) => (
@@ -121,12 +81,7 @@ export function getUnresolvedAuthorityRequestGoalIds(
       || goalIdsWithPersistedState.has(goalId)
       || seenFallbackGoalIds.has(goalId)) continue
     seenFallbackGoalIds.add(goalId)
-    const resolved = eventsByGoal.get(goalId)?.some((event) => (
-      receiptResolves(event, goalId, { workOrderId: workOrder.id })
-    )) ?? false
-    if (!resolved) {
-      unresolvedGoalIds.add(goalId)
-    }
+    unresolvedGoalIds.add(goalId)
   }
 
   return Array.from(unresolvedGoalIds)
@@ -158,7 +113,7 @@ export function buildNeedsMyDecisionView(
       expectedNextState: request.expectedNextState,
       choices: request.choices.map((choice) => ({
         choice,
-        label: choice === "APPROVE" ? "Approve resume" : "Deny keep blocked",
+        label: choice === "APPROVE" ? "Approve and resume" : "Deny and keep blocked",
         consequence: choice === "APPROVE"
           ? request.consequences.approve
           : request.consequences.deny,
