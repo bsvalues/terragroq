@@ -56,6 +56,7 @@ function fixture(overrides: Record<string, (call: Call) => unknown> = {}) {
 
 function reviewState(reviewThreads: unknown[] = [], comments: unknown[] = [], commentsPaginated = false) {
   return { data: { repository: { pullRequest: {
+    mergedAt: "2026-07-27T19:00:00.000Z",
     reviewThreads: { nodes: reviewThreads, pageInfo: { hasNextPage: false } },
     comments: { nodes: comments, pageInfo: { hasPreviousPage: commentsPaginated, hasNextPage: false } },
   } } } }
@@ -364,6 +365,88 @@ describe("Hermes repository lifecycle", () => {
       }),
     ])
     expect((await lifecycle.inspectReviewFindings(77))[0]).not.toHaveProperty("requiresExplicitResolution")
+  })
+
+  it("extracts only immutable owner-pinned remediation proof from resolved review findings", async () => {
+    const findingAt = "2026-07-27T20:00:00.000Z"
+    const proofAt = "2026-07-27T20:05:00.000Z"
+    const filesDigest = "c".repeat(64)
+    const { lifecycle } = fixture({
+      "gh api graphql": () => ({
+        code: 0,
+        stdout: JSON.stringify(reviewState([{
+          id: "PRRT_review",
+          isResolved: true,
+          comments: {
+            nodes: [
+              {
+                author: { login: "chatgpt-codex-connector" },
+                body: "Fix the decision projection.",
+                isMinimized: false,
+                createdAt: findingAt,
+                updatedAt: findingAt,
+              },
+              {
+                author: { login: "bsvalues" },
+                body: `HERMES_REVIEW_REMEDIATION_PROOF v2 pr=466 head=${sha} merge=${mergeSha} files=${filesDigest}`,
+                isMinimized: false,
+                createdAt: proofAt,
+                updatedAt: proofAt,
+              },
+            ],
+            pageInfo: { hasPreviousPage: false },
+          },
+        }])),
+      }),
+    })
+    await expect(lifecycle.inspectReviewRemediationClaims(77)).resolves.toEqual([{
+      threadIds: ["PRRT_review"],
+      prNumber: 466,
+      headRefOid: sha,
+      mergeSha,
+      filesDigest,
+    }])
+  })
+
+  it("rejects any unproved or incompletely paginated post-merge review finding", async () => {
+    const finding = {
+      author: { login: "chatgpt-codex-connector" },
+      body: "Post-merge defect.",
+      isMinimized: false,
+      createdAt: "2026-07-27T20:00:00.000Z",
+      updatedAt: "2026-07-27T20:00:00.000Z",
+    }
+    const missingProof = fixture({
+      "gh api graphql": () => ({
+        code: 0,
+        stdout: JSON.stringify(reviewState([{
+          id: "PRRT_unproved",
+          isResolved: true,
+          comments: {
+            nodes: [finding],
+            pageInfo: { hasPreviousPage: false, hasNextPage: false },
+          },
+        }])),
+      }),
+    })
+    await expect(missingProof.lifecycle.inspectReviewRemediationClaims(77))
+      .rejects.toMatchObject({ code: "HERMES_REPOSITORY_REVIEW_WALL" })
+
+    const paginated = fixture({
+      "gh api graphql": () => ({
+        code: 0,
+        stdout: JSON.stringify(reviewState([{
+          id: "PRRT_paginated",
+          isResolved: true,
+          comments: {
+            nodes: [finding],
+            pageInfo: { hasPreviousPage: false, hasNextPage: true },
+          },
+        }])),
+      }),
+    })
+    await expect(paginated.lifecycle.inspectReviewRemediationClaims(77))
+      .rejects.toMatchObject({ code: "HERMES_REPOSITORY_GITHUB_WALL" })
   })
 
   it("rejects incomplete review-thread comment history", async () => {
