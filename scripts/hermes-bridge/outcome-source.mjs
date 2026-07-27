@@ -476,11 +476,41 @@ export async function recordOwnerAuthorityDecision({
     }
     const linked = await runQuery(
       `UPDATE work_order
-       SET "linkedDecisionId" = $2, "updatedAt" = NOW()
+       SET "linkedDecisionId" = $2, result = $5, "updatedAt" = NOW()
        WHERE id = $1::integer AND "userId" = $3
          AND "linkedDecisionId" IS NOT DISTINCT FROM $4::integer
+         AND result IN ('OWNER_DECISION_REQUIRED', 'PARTIAL')
+         AND EXISTS (
+           SELECT 1
+           FROM governance_event terminal
+           WHERE terminal.id = $6::integer
+             AND terminal."userId" = $3
+             AND terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
+             AND terminal."entityType" = 'goal'
+             AND terminal."entityId"::text = $7::text
+             AND terminal.metadata->>'result' = 'OWNER_DECISION_REQUIRED'
+             AND terminal.metadata->>'nextState' = $8
+             AND NOT EXISTS (
+               SELECT 1
+               FROM governance_event newer_terminal
+               WHERE newer_terminal."userId" = $3
+                 AND newer_terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
+                 AND newer_terminal."entityType" = 'goal'
+                 AND newer_terminal."entityId"::text = $7::text
+                 AND newer_terminal.id > terminal.id
+             )
+         )
        RETURNING id`,
-      [workOrderId, decisionRow.id, ownerUserId, row.workOrderLinkedDecisionId ?? null],
+      [
+        workOrderId,
+        decisionRow.id,
+        ownerUserId,
+        row.workOrderLinkedDecisionId ?? null,
+        choice === "APPROVE" ? "OWNER_DECISION_APPROVED" : "OWNER_DECISION_DENIED",
+        terminalEventId,
+        outcomeId,
+        expectedNextState,
+      ],
     )
     if ((linked?.rows?.length ?? linked?.rowCount ?? 0) !== 1) {
       throw Object.assign(new Error("owner decision Work Order link was not persisted"), {
@@ -1255,8 +1285,11 @@ function outcomeWorkOrderRef(outcomeId) {
 function projectionForCheckpoint(state) {
   if (state === "COMPLETE") return { status: "closed", result: "PASS" }
   if (state === "FAILED_TERMINAL") return { status: "blocked", result: "FAIL" }
-  if (state === "OWNER_DECISION_REQUIRED" || state === "PROVIDER_UNAVAILABLE"
-    || state === "RETRYABLE_WALL" || state.startsWith("DEFERRED_")
+  if (state === "OWNER_DECISION_REQUIRED") {
+    return { status: "blocked", result: "OWNER_DECISION_REQUIRED" }
+  }
+  if (state === "PROVIDER_UNAVAILABLE" || state === "RETRYABLE_WALL"
+    || state.startsWith("DEFERRED_")
     || state.endsWith("_RETRY")) {
     return { status: "blocked", result: "PARTIAL" }
   }

@@ -249,6 +249,10 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls.some(([sql]) => /INSERT INTO event_log/.test(sql))).toBe(true)
     expect(query.mock.calls.some(([sql]) =>
       /"linkedDecisionId" IS NOT DISTINCT FROM \$4::integer/.test(sql))).toBe(true)
+    expect(query.mock.calls.some(([sql]) =>
+      /result = \$5[\s\S]+result IN \('OWNER_DECISION_REQUIRED', 'PARTIAL'\)/.test(sql))).toBe(true)
+    expect(query.mock.calls.some(([sql]) =>
+      /terminal\.id = \$6::integer[\s\S]+terminal\.metadata->>'result' = 'OWNER_DECISION_REQUIRED'[\s\S]+terminal\.metadata->>'nextState' = \$8[\s\S]+newer_terminal\.id > terminal\.id/.test(sql))).toBe(true)
     const receiptCall = query.mock.calls.find(([sql]) =>
       /INSERT INTO governance_event[\s\S]+HERMES_OWNER_AUTHORITY_DECISION/.test(sql))
     expect(JSON.parse(receiptCall?.[1]?.[4] as string)).toMatchObject({
@@ -299,7 +303,9 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
 
     const linkCall = query.mock.calls.find(([sql]) =>
       /UPDATE work_order[\s\S]+linkedDecisionId/.test(sql))
-    expect(linkCall?.[1]).toEqual([42, 19, "owner", 11])
+    expect(linkCall?.[1]).toEqual([
+      42, 19, "owner", 11, "OWNER_DECISION_APPROVED", 88, 4, "EXACT_NEXT_STATE",
+    ])
   })
 
   it("records denial without reclassifying the goal and replays an identical request", async () => {
@@ -319,6 +325,11 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       ownerUserId: "owner", choice: "DENY", expectedNextState: "EXACT_NEXT_STATE",
     })).resolves.toMatchObject({ status: "rejected", choice: "DENY", resumeReleased: false })
     expect(query.mock.calls.some(([sql]) => /UPDATE goal SET status = 'classified'/.test(sql))).toBe(false)
+    const denialLinkCall = query.mock.calls.find(([sql]) =>
+      /UPDATE work_order[\s\S]+linkedDecisionId/.test(sql))
+    expect(denialLinkCall?.[1]).toEqual([
+      42, 20, "owner", null, "OWNER_DECISION_DENIED", 88, 4, "EXACT_NEXT_STATE",
+    ])
 
     const denialReceipt = ownerDecisionReceipt("DENY", 20, 91)
     const replay = vi.fn()
@@ -594,7 +605,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
 
   it.each([
     ["PR_MERGED", "review", null],
-    ["OWNER_DECISION_REQUIRED", "blocked", "PARTIAL"],
+    ["OWNER_DECISION_REQUIRED", "blocked", "OWNER_DECISION_REQUIRED"],
     ["RETRYABLE_WALL", "blocked", "PARTIAL"],
     ["POST_MERGE_CLEANUP_RETRY", "blocked", "PARTIAL"],
     ["FAILED_TERMINAL", "blocked", "FAIL"],
