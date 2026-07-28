@@ -887,6 +887,81 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision).not.toContain("$1::timestamptz")
   })
 
+  it("exact-replays a committed owner-decision resume with live authority and its fresh fence", async () => {
+    const resumed = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "OWNER_DECISION_RESUMED",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    })
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [resumed] })
+
+    await expect(resumeOutcomeQueueAfterDecision({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 5,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      ownerDecisionId: 91,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).resolves.toEqual(resumed)
+    expect(query).toHaveBeenNthCalledWith(2, OUTCOME_QUEUE_SQL.replayResumeAfterDecision, [
+      userId,
+      "goal:GOAL-1000",
+      5,
+      "execution-a",
+      "acquire-a",
+      3,
+      91,
+      "resident-hermes",
+      "lease-a",
+      "2026-07-28T12:50:00.000Z",
+      now,
+    ])
+    expect(OUTCOME_QUEUE_SQL.replayResumeAfterDecision)
+      .toContain(`q."version" = $3::integer + 1`)
+    expect(OUTCOME_QUEUE_SQL.replayResumeAfterDecision)
+      .toContain(`q."fencingToken" = $6::integer + 1`)
+    expect(OUTCOME_QUEUE_SQL.replayResumeAfterDecision)
+      .toContain(`approval.id = $7`)
+    expect(OUTCOME_QUEUE_SQL.replayResumeAfterDecision)
+      .toContain(`q."leaseExpiresAt" > $11::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.replayResumeAfterDecision)
+      .toContain(`live_approval."status" = 'accepted'`)
+    expect(OUTCOME_QUEUE_SQL.replayResumeAfterDecision)
+      .toContain(`live_grant."status" = 'active'`)
+  })
+
+  it("rejects a mismatched owner-decision resume replay", async () => {
+    const query = vi.fn(async () => ({ rows: [] }))
+
+    await expect(resumeOutcomeQueueAfterDecision({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 5,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      ownerDecisionId: 91,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL" })
+    expect(query).toHaveBeenCalledTimes(2)
+  })
+
   it("keeps GOAL-0001 through GOAL-0005 user-scoped and history-only", async () => {
     const query = vi.fn(async () => ({
       rows: [{

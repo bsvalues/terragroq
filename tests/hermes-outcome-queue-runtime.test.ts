@@ -362,6 +362,53 @@ describe("Hermes durable outcome queue runtime", () => {
     })).resolves.toBe(outcome)
   })
 
+  it("accepts an exact owner-decision blocked settlement for split replay", async () => {
+    const acquire = vi.fn(async () => ({
+      outcome: null,
+      acquired: false,
+      replayed: false,
+      reason: "ONLY_BLOCKED_OUTCOMES",
+    }))
+    const readQueue = vi.fn(async () => [{
+      ...queueItem,
+      lifecycleState: "blocked",
+      lifecycleReason: "NEW_AUTHORITY_REQUIRED",
+      version: 5,
+      leaseToken: null,
+    }])
+    const bridge = runtime({ acquire, readQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.refreshOutcome(outcome, {
+      state: "OWNER_DECISION_REQUIRED",
+      nextState: "NEW_AUTHORITY_REQUIRED",
+    })).resolves.toBe(outcome)
+  })
+
+  it("rejects an owner-decision split settlement with a mismatched fence", async () => {
+    const bridge = runtime({
+      acquire: vi.fn(async () => ({
+        outcome: null,
+        acquired: false,
+        reason: "ONLY_BLOCKED_OUTCOMES",
+      })),
+      readQueue: vi.fn(async () => [{
+        ...queueItem,
+        lifecycleState: "blocked",
+        lifecycleReason: "NEW_AUTHORITY_REQUIRED",
+        version: 5,
+        fencingToken: 4,
+        leaseToken: null,
+      }]),
+    })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.refreshOutcome(outcome, {
+      state: "OWNER_DECISION_REQUIRED",
+      nextState: "NEW_AUTHORITY_REQUIRED",
+    })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REFRESH_WALL" })
+  })
+
   it.each([
     ["completed version", { version: 6 }],
     ["completed fence", { fencingToken: 4 }],
@@ -429,15 +476,20 @@ describe("Hermes durable outcome queue runtime", () => {
     const resumeQueue = vi.fn(async () => ({
       ...queueItem,
       lifecycleState: "active",
-      version: 5,
+      lifecycleReason: "OWNER_DECISION_RESUMED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 6,
       fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
     }))
     const bridge = runtime({ resumeQueue })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
 
     await expect(bridge.resumeAfterOwnerDecision(outcome, { decisionId: 91 }))
       .resolves.toMatchObject({
-        queueBinding: { expectedVersion: 5, fencingToken: 4 },
+        queueBinding: { expectedVersion: 6, fencingToken: 4 },
       })
     expect(resumeQueue).toHaveBeenCalledWith(expect.objectContaining({
       expectedVersion: 5,
@@ -446,6 +498,54 @@ describe("Hermes durable outcome queue runtime", () => {
       leaseHolder: "resident-hermes",
       leaseToken: "lease-77",
     }))
+  })
+
+  it("reconstructs the fresh queue fence from an exact committed resume replay", async () => {
+    const resumeQueue = vi.fn(async () => ({
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "OWNER_DECISION_RESUMED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }))
+    const bridge = runtime({ resumeQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.resumeAfterOwnerDecision(outcome, { decisionId: 91 }))
+      .resolves.toMatchObject({
+        queueBinding: {
+          expectedVersion: 6,
+          fencingToken: 4,
+          executionBinding: "execution-77",
+          acquisitionKey: "acquisition-77",
+          leaseToken: "lease-77",
+        },
+      })
+  })
+
+  it("rejects a reconstructed owner-decision resume with a mismatched fresh fence", async () => {
+    const resumeQueue = vi.fn(async () => ({
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "OWNER_DECISION_RESUMED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 6,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }))
+    const bridge = runtime({ resumeQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.resumeAfterOwnerDecision(outcome, { decisionId: 91 }))
+      .rejects.toMatchObject({
+        code: "HERMES_OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL",
+      })
   })
 
   it("preserves legacy goal settlement while rejecting a malformed queue binding", async () => {

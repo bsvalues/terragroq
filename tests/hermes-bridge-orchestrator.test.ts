@@ -2178,6 +2178,149 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       .toBeLessThan(value.client.runTurn.mock.invocationCallOrder[0])
   })
 
+  it("replays a committed queue resume after a crash before local owner-wall reopen", async () => {
+    const baseOutcome = await fixture().selectOutcome()
+    const queuedOutcome = {
+      ...baseOutcome,
+      queueBinding: {
+        userId: "owner-id",
+        outcomeKey: "outcome:77",
+        expectedVersion: 4,
+        executionBinding: "execution-77",
+        leaseToken: "lease-77",
+        fencingToken: 3,
+        acquisitionKey: "acquisition-77",
+      },
+    }
+    const resumedOutcome = {
+      ...queuedOutcome,
+      queueBinding: {
+        ...queuedOutcome.queueBinding,
+        expectedVersion: 6,
+        fencingToken: 4,
+      },
+    }
+    const committedCrash = Object.assign(new Error("process exited after queue commit"), {
+      code: "SIMULATED_POST_COMMIT_CRASH",
+    })
+    const resumeQueueAfterDecision = vi.fn()
+      .mockRejectedValueOnce(committedCrash)
+      .mockResolvedValueOnce(resumedOutcome)
+    const value = fixture(undefined, {
+      resumeQueueAfterDecision,
+      refreshQueueOutcome: vi.fn(async (outcome) => outcome),
+    })
+    const first = value.state.acquireLease({
+      idempotencyKey: "queue-resume-crash-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome: queuedOutcome, threadId: "thread-owner-wall", ownerDecisionPacket },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "queue-resume-crash-wall",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED",
+      detail: "NEW_AUTHORITY_REQUIRED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "queue-resume-crash-release",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+    })
+    value.readApprovedOwnerDecision.mockResolvedValue({
+      approved: true,
+      status: "accepted",
+      choice: "APPROVE",
+      decisionId: 19,
+      decisionRef: "OWNER-DECISION-77-500",
+      requestKey: "owner-request",
+      workOrderId: 77,
+      terminalEventId: 500,
+      decisionPacket: ownerDecisionPacket,
+      decisionPacketDigest: ownerDecisionPacketDigest,
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "SIMULATED_POST_COMMIT_CRASH",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "OWNER_DECISION_REQUIRED" },
+      metadata: { outcome: queuedOutcome },
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(resumeQueueAfterDecision).toHaveBeenCalledTimes(2)
+    expect(value.state.read().executions["77"].metadata.outcome.queueBinding)
+      .toEqual(resumedOutcome.queueBinding)
+  })
+
+  it("replays a committed owner-wall transition after a crash before local release", async () => {
+    const baseOutcome = await fixture().selectOutcome()
+    const queuedOutcome = {
+      ...baseOutcome,
+      queueBinding: {
+        userId: "owner-id",
+        outcomeKey: "outcome:77",
+        expectedVersion: 4,
+        executionBinding: "execution-77",
+        leaseToken: "lease-77",
+        fencingToken: 3,
+        acquisitionKey: "acquisition-77",
+      },
+    }
+    const refreshQueueOutcome = vi.fn(async () => queuedOutcome)
+    const bindQueueWorkOrder = vi.fn(async () => {
+      throw new Error("settled owner wall must not bind an active Work Order")
+    })
+    const value = fixture(undefined, { refreshQueueOutcome, bindQueueWorkOrder })
+    const first = value.state.acquireLease({
+      idempotencyKey: "owner-transition-crash-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome: queuedOutcome, threadId: "thread-owner-wall", ownerDecisionPacket },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "owner-transition-crash-wall",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED",
+      detail: "NEW_AUTHORITY_REQUIRED",
+    })
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toEqual({
+      result: "OWNER_DECISION_REQUIRED",
+      outcomeId: "77",
+      nextState: "NEW_AUTHORITY_REQUIRED",
+    })
+    expect(refreshQueueOutcome).toHaveBeenCalledWith(queuedOutcome, {
+      state: "OWNER_DECISION_REQUIRED",
+      nextState: "NEW_AUTHORITY_REQUIRED",
+    })
+    expect(value.markTerminal).toHaveBeenCalledWith({
+      outcomeId: 77,
+      outcome: queuedOutcome,
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: "NEW_AUTHORITY_REQUIRED",
+      metadata: ownerDecisionPacket,
+    })
+    expect(bindQueueWorkOrder).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"].lease.status).toBe("RELEASED")
+    expect(value.client.connect).not.toHaveBeenCalled()
+  })
+
   it("fails closed and retries the original thread when owner-resume restoration fails", async () => {
     const value = fixture()
     const outcome = await value.selectOutcome()

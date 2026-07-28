@@ -203,7 +203,7 @@ function isExactTerminalSettlement(item, binding, terminalReplay) {
       && item.terminalKey === `hermes:${binding.outcomeKey}:${binding.fencingToken}:${terminalReplay.evidence?.mergeSha}`
       && sameStrings(item.terminalEvidenceRefs, refs)
   }
-  if (terminalReplay?.state === "FAILED_TERMINAL") {
+  if (["FAILED_TERMINAL", "OWNER_DECISION_REQUIRED"].includes(terminalReplay?.state)) {
     return typeof terminalReplay.nextState === "string"
       && terminalReplay.nextState.length > 0
       && item.lifecycleState === "blocked"
@@ -215,6 +215,22 @@ function isExactTerminalSettlement(item, binding, terminalReplay) {
       && item.terminalAt == null
   }
   return false
+}
+
+function isExactOwnerDecisionResume(item, binding, holderId, at) {
+  return item?.userId === binding.userId
+    && item.outcomeKey === binding.outcomeKey
+    && item.lifecycleState === "active"
+    && item.lifecycleReason === "OWNER_DECISION_RESUMED"
+    && item.approvalState === "approved"
+    && item.authorityState === "matched"
+    && Number(item.version) === binding.expectedVersion + 2
+    && item.executionBinding === binding.executionBinding
+    && item.acquisitionKey === binding.acquisitionKey
+    && Number(item.fencingToken) === binding.fencingToken + 1
+    && item.leaseHolder === holderId
+    && item.leaseToken === binding.leaseToken
+    && Date.parse(String(item.leaseExpiresAt)) > at.getTime()
 }
 
 export function createHermesOutcomeQueueRuntime(options = {}) {
@@ -415,6 +431,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   async function resumeAfterOwnerDecision(outcome, proof) {
     if (!outcome?.queueBinding) return outcome
     const binding = queueBinding(outcome)
+    const resumeAt = now()
     const resumed = await resumeQueue({
       databaseUrl,
       userId: binding.userId,
@@ -427,8 +444,14 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       leaseHolder: holderId,
       leaseToken: binding.leaseToken,
       leaseDurationMs: QUEUE_LEASE_DURATION_MS,
-      now: now(),
+      now: resumeAt,
     })
+    if (!isExactOwnerDecisionResume(resumed, binding, holderId, resumeAt)) {
+      wall(
+        "Owner-decision resume did not return its exact fresh queue fence",
+        "HERMES_OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL",
+      )
+    }
     return withPersistedBinding(outcome, resumed)
   }
 

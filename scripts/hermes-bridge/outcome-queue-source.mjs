@@ -620,6 +620,31 @@ WHERE q."userId" = $1
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$11::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
+  replayResumeAfterDecision: `
+SELECT ${QUEUE_COLUMNS}
+FROM "outcome_queue_item" AS q
+JOIN decision AS approval
+  ON approval.id = $7
+  AND approval."userId" = q."userId"
+  AND approval.status = 'accepted'
+  AND approval.authority = 'binding'
+  AND approval."scope" IN (q."outcomeKey", q."goalRef")
+  AND approval.decision = 'APPROVE'
+  AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."lifecycleReason" = 'OWNER_DECISION_RESUMED'
+  AND q."version" = $3::integer + 1
+  AND q."executionBinding" = $4
+  AND q."acquisitionKey" = $5
+  AND q."fencingToken" = $6::integer + 1
+  AND q."leaseHolder" = $8
+  AND q."leaseToken" = $9
+  AND q."leaseExpiresAt" > $11::timestamptz
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$11::timestamptz")}
+`,
   approve: `
 UPDATE "outcome_queue_item" AS q
 SET "lifecycleState" = 'approved',
@@ -1482,8 +1507,22 @@ export async function resumeOutcomeQueueAfterDecision({
       expiresAt,
       at,
     ])
-    if (result?.rows?.length !== 1) fail("OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL")
-    return result.rows[0]
+    if (result?.rows?.length === 1) return result.rows[0]
+    const replay = await connection.query(OUTCOME_QUEUE_SQL.replayResumeAfterDecision, [
+      user,
+      key,
+      version,
+      binding,
+      acquisition,
+      fence,
+      decisionId,
+      holder,
+      token,
+      expiresAt,
+      at,
+    ])
+    if (replay?.rows?.length !== 1) fail("OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL")
+    return replay.rows[0]
   } finally {
     await connection.close()
   }

@@ -722,6 +722,8 @@ export function createHermesOrchestrator(options = {}) {
         }
       : current?.checkpoint?.state === "FAILED_TERMINAL"
         ? { state: "FAILED_TERMINAL", nextState: current.checkpoint.detail }
+        : current?.checkpoint?.state === "OWNER_DECISION_REQUIRED"
+          ? { state: "OWNER_DECISION_REQUIRED", nextState: current.checkpoint.detail }
         : null
     outcome = terminalReplay
       ? await refreshQueueOutcome(outcome, terminalReplay)
