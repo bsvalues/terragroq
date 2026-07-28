@@ -744,10 +744,10 @@ SET "lifecycleState" = 'approved',
     "approvedAt" = $6::timestamptz,
     "approvalDecisionId" = approval."id",
     "authorityState" = 'matched',
-    "authorityGrantRef" = grant."ref",
+    "authorityGrantRef" = auth_grant."ref",
     "version" = q."version" + 1,
     "updatedAt" = $6::timestamptz
-FROM "decision" AS approval, "authority_grant" AS grant
+FROM "decision" AS approval, "authority_grant" AS auth_grant
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2
   AND q."version" = $3
@@ -759,26 +759,26 @@ WHERE q."userId" = $1
   AND upper(trim(approval."decision")) = 'APPROVE'
   AND approval."scope" = q."outcomeKey"
   AND ${OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL}
-  AND grant."userId" = q."userId"
-  AND grant."ref" = $5
-  AND grant."status" = 'active'
-  AND grant."revokedAt" IS NULL
-  AND (grant."expiresAt" IS NULL OR grant."expiresAt" > $6::timestamptz)
-  AND grant."authorityLevel" = q."authorityLevel"
-  AND grant."grantedTo" = q."authoritySubject"
-  AND grant."scope" = q."outcomeKey"
+  AND auth_grant."userId" = q."userId"
+  AND auth_grant."ref" = $5
+  AND auth_grant."status" = 'active'
+  AND auth_grant."revokedAt" IS NULL
+  AND (auth_grant."expiresAt" IS NULL OR auth_grant."expiresAt" > $6::timestamptz)
+  AND auth_grant."authorityLevel" = q."authorityLevel"
+  AND auth_grant."grantedTo" = q."authoritySubject"
+  AND auth_grant."scope" = q."outcomeKey"
   AND NOT EXISTS (
-    SELECT 1 FROM unnest(grant."blockedActions") AS blocked(action)
+    SELECT 1 FROM unnest(auth_grant."blockedActions") AS blocked(action)
     WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
   )
   AND (
-    cardinality(grant."allowedActions") = 0
+    cardinality(auth_grant."allowedActions") = 0
     OR EXISTS (
-      SELECT 1 FROM unnest(grant."allowedActions") AS allowed(action)
+      SELECT 1 FROM unnest(auth_grant."allowedActions") AS allowed(action)
       WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
     )
   )
-  AND (grant."workOrderId" IS NULL OR q."activeWorkOrderId" = grant."workOrderId")
+  AND (auth_grant."workOrderId" IS NULL OR q."activeWorkOrderId" = auth_grant."workOrderId")
 RETURNING ${QUEUE_COLUMNS}
 `,
   declineMutation: `
@@ -1256,39 +1256,39 @@ RETURNING ${QUEUE_COLUMNS}
   matchAuthority: `
 UPDATE "outcome_queue_item" AS q
 SET "authorityState" = 'matched',
-    "authorityGrantRef" = grant."ref",
+    "authorityGrantRef" = auth_grant."ref",
     "version" = q."version" + 1,
     "updatedAt" = $5::timestamptz
-FROM "authority_grant" AS grant
+FROM "authority_grant" AS auth_grant
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2
   AND q."version" = $3
   AND q."lifecycleState" IN ('suggested', 'approved', 'blocked')
-  AND grant."userId" = q."userId"
-  AND grant."ref" = $4
-  AND grant."status" = 'active'
-  AND grant."revokedAt" IS NULL
-  AND (grant."expiresAt" IS NULL OR grant."expiresAt" > $5::timestamptz)
-  AND grant."authorityLevel" = q."authorityLevel"
-  AND grant."grantedTo" = q."authoritySubject"
-  AND grant."scope" = q."outcomeKey"
+  AND auth_grant."userId" = q."userId"
+  AND auth_grant."ref" = $4
+  AND auth_grant."status" = 'active'
+  AND auth_grant."revokedAt" IS NULL
+  AND (auth_grant."expiresAt" IS NULL OR auth_grant."expiresAt" > $5::timestamptz)
+  AND auth_grant."authorityLevel" = q."authorityLevel"
+  AND auth_grant."grantedTo" = q."authoritySubject"
+  AND auth_grant."scope" = q."outcomeKey"
   AND ${OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL}
   AND NOT EXISTS (
     SELECT 1
-    FROM unnest(grant."blockedActions") AS blocked(action)
+    FROM unnest(auth_grant."blockedActions") AS blocked(action)
     WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
   )
   AND (
-    cardinality(grant."allowedActions") = 0
+    cardinality(auth_grant."allowedActions") = 0
     OR EXISTS (
       SELECT 1
-      FROM unnest(grant."allowedActions") AS allowed(action)
+      FROM unnest(auth_grant."allowedActions") AS allowed(action)
       WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
     )
   )
   AND (
-    grant."workOrderId" IS NULL
-    OR q."activeWorkOrderId" = grant."workOrderId"
+    auth_grant."workOrderId" IS NULL
+    OR q."activeWorkOrderId" = auth_grant."workOrderId"
   )
 RETURNING ${QUEUE_COLUMNS}
 `,
