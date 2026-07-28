@@ -86,11 +86,93 @@ function runtime(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Hermes durable outcome queue runtime", () => {
-  it("rejects an unscoped resident runtime before it can certify acquisition evidence", () => {
-    expect(() => createHermesOutcomeQueueRuntime({
+  it("allows read-only runtime construction without resident proof context", async () => {
+    const bridge = createHermesOutcomeQueueRuntime({
+      databaseUrl: "postgresql://not-used",
       campaignWindowId: "",
       processIdentity: "",
-    })).toThrowError(expect.objectContaining({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" }))
+      createPool: vi.fn(() => {
+        throw new Error("read-only construction must not open the database")
+      }),
+    })
+
+    await expect(bridge.close()).resolves.toBeUndefined()
+  })
+
+  it("rejects unscoped acquisition before schema or queue mutation", async () => {
+    const ensureQueueSchema = vi.fn()
+    const acquire = vi.fn()
+    const missingCampaign = runtime({
+      campaignWindowId: "",
+      processIdentity: "",
+      ensureQueueSchema,
+      acquire,
+    })
+
+    await expect(missingCampaign.selectOutcome())
+      .rejects.toMatchObject({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" })
+    const missingProcess = runtime({
+      campaignWindowId: "campaign-v1-2",
+      processIdentity: "",
+      ensureQueueSchema,
+      acquire,
+    })
+    await expect(missingProcess.selectOutcome())
+      .rejects.toMatchObject({ code: "HERMES_PROCESS_IDENTITY_REQUIRED" })
+    expect(ensureQueueSchema).not.toHaveBeenCalled()
+    expect(acquire).not.toHaveBeenCalled()
+  })
+
+  it("rejects every unscoped execution entry point before queue mutation", async () => {
+    const renewQueue = vi.fn()
+    const acquire = vi.fn()
+    const completeGoal = vi.fn()
+    const terminalizeGoal = vi.fn()
+    const deferGoal = vi.fn()
+    const bindQueueWorkOrder = vi.fn()
+    const resumeQueue = vi.fn()
+    const bridge = runtime({
+      campaignWindowId: "",
+      processIdentity: "",
+      renewQueue,
+      acquire,
+      completeGoal,
+      terminalizeGoal,
+      deferGoal,
+      bindQueueWorkOrder,
+      resumeQueue,
+    })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.completeOutcome({ outcomeId: "77", outcome: goal, evidence: {} }))
+      .rejects.toMatchObject({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" })
+    await expect(bridge.terminalizeOutcome({
+      outcomeId: "77",
+      outcome: goal,
+      result: "FAILED_TERMINAL",
+      nextState: "FAILED_TERMINAL",
+      metadata: {},
+    })).rejects.toMatchObject({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" })
+    await expect(bridge.deferOutcome({
+      outcomeId: "77",
+      outcome: goal,
+      retryAfter: new Date("2026-07-28T12:05:00.000Z"),
+    })).rejects.toMatchObject({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" })
+    await expect(bridge.renewOutcomeLease(outcome))
+      .rejects.toMatchObject({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" })
+    await expect(bridge.bindWorkOrder(outcome, 472))
+      .rejects.toMatchObject({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" })
+    await expect(bridge.refreshOutcome(outcome))
+      .rejects.toMatchObject({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" })
+    await expect(bridge.resumeAfterOwnerDecision(outcome, {}))
+      .rejects.toMatchObject({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" })
+    expect(renewQueue).not.toHaveBeenCalled()
+    expect(acquire).not.toHaveBeenCalled()
+    expect(completeGoal).not.toHaveBeenCalled()
+    expect(terminalizeGoal).not.toHaveBeenCalled()
+    expect(deferGoal).not.toHaveBeenCalled()
+    expect(bindQueueWorkOrder).not.toHaveBeenCalled()
+    expect(resumeQueue).not.toHaveBeenCalled()
   })
 
   it("supplies canonical fresh and durable checkpoint context to the acquisition producer", async () => {

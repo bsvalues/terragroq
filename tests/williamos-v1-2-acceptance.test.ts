@@ -22,6 +22,7 @@ import {
 const revision = "a".repeat(40)
 const now = Date.parse("2026-07-28T19:00:00.000Z")
 const fresh = "2026-07-28T18:59:00.000Z"
+const productionAuthCookie = "better-auth.session_token=opaque-test-value"
 const roots: string[] = []
 
 function digest(value: unknown) {
@@ -648,11 +649,12 @@ function campaignQuery(bundle: ReturnType<typeof liveBundle>) {
 }
 
 function productionFetch() {
-  return vi.fn(async (url: string) => {
+  return vi.fn(async (url: string, init?: { headers?: Record<string, string> }) => {
     if (url.endsWith("/api/health")) return response({ status: "ok", timestamp: fresh })
     if (url.endsWith("/api/auth/readiness")) {
       return response({ ready: true, authReady: true, signup: { mode: "closed", open: false } })
     }
+    if (init?.headers?.Cookie !== productionAuthCookie) return response("", 302)
     const route = new URL(url).pathname
     return response(`content:${route} WO-HERMES-OUTCOME-81 WO-HERMES-OUTCOME-82`)
   })
@@ -905,6 +907,7 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
         fetchImpl: productionFetch(),
         now: () => now,
         processProbe: () => true,
+        productionAuthCookie,
         repoRoot: root,
         runner: githubRunner(bundle),
       },
@@ -918,13 +921,16 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
 
   it("derives and pins product route digests from live response bodies", async () => {
     const document = liveBundle().document
-    expect(await probeProduction("https://william.example", {
+    const fetchImpl = productionFetch()
+    const verified = await probeProduction("https://william.example", {
+      authCookie: productionAuthCookie,
       clock: () => now,
       expectedOutcomes: document.outcomes,
       expectedSurfaces: document.surfaceAgreement.routes,
-      fetchImpl: productionFetch(),
+      fetchImpl,
       maxAgeMs: 5 * 60 * 1000,
-    })).toMatchObject({
+    })
+    expect(verified).toMatchObject({
       ok: true,
       detail: {
         surfaces: {
@@ -936,14 +942,135 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
         },
       },
     })
+    const publicCalls = fetchImpl.mock.calls.filter(([url]) => (
+      url.endsWith("/api/health") || url.endsWith("/api/auth/readiness")
+    ))
+    const protectedCalls = fetchImpl.mock.calls.filter(([url]) => (
+      !url.endsWith("/api/health") && !url.endsWith("/api/auth/readiness")
+    ))
+    expect(publicCalls).toHaveLength(2)
+    expect(publicCalls.every(([, init]) => init?.headers?.Cookie === undefined)).toBe(true)
+    expect(protectedCalls).toHaveLength(4)
+    expect(protectedCalls.every(([, init]) => (
+      init?.headers?.Cookie === productionAuthCookie
+      && init?.redirect === "manual"
+    ))).toBe(true)
+    expect(JSON.stringify(verified)).not.toContain(productionAuthCookie)
+
     document.surfaceAgreement.routes[0].evidenceDigest = digest("caller-authored")
     expect((await probeProduction("https://william.example", {
+      authCookie: productionAuthCookie,
       clock: () => now,
       expectedOutcomes: document.outcomes,
       expectedSurfaces: document.surfaceAgreement.routes,
       fetchImpl: productionFetch(),
       maxAgeMs: 5 * 60 * 1000,
     })).code).toBe("PRODUCTION_VERIFICATION_FAILED")
+  })
+
+  it("fails closed when authenticated proof is absent or redirected without reporting it", async () => {
+    const document = liveBundle().document
+    const absent = await probeProduction("https://william.example", {
+      clock: () => now,
+      expectedOutcomes: document.outcomes,
+      expectedSurfaces: document.surfaceAgreement.routes,
+      fetchImpl: productionFetch(),
+      maxAgeMs: 5 * 60 * 1000,
+    })
+    expect(absent).toMatchObject({
+      code: "PRODUCTION_VERIFICATION_FAILED",
+      detail: {
+        surfaces: {
+          "/goal-console": { code: "PRODUCTION_AUTH_PROOF_REQUIRED" },
+          "/work-orders": { code: "PRODUCTION_AUTH_PROOF_REQUIRED" },
+          "/audit": { code: "PRODUCTION_AUTH_PROOF_REQUIRED" },
+          "/trace": { code: "PRODUCTION_AUTH_PROOF_REQUIRED" },
+        },
+      },
+    })
+
+    const rejectedCookie = "better-auth.session_token=rejected-opaque-value"
+    const fetchImpl = productionFetch()
+    const redirected = await probeProduction("https://william.example", {
+      authCookie: rejectedCookie,
+      clock: () => now,
+      expectedOutcomes: document.outcomes,
+      expectedSurfaces: document.surfaceAgreement.routes,
+      fetchImpl,
+      maxAgeMs: 5 * 60 * 1000,
+    })
+    expect(redirected).toMatchObject({
+      code: "PRODUCTION_VERIFICATION_FAILED",
+      detail: {
+        surfaces: {
+          "/goal-console": { code: "PRODUCTION_ROUTE_UNHEALTHY" },
+          "/work-orders": { code: "PRODUCTION_ROUTE_UNHEALTHY" },
+          "/audit": { code: "PRODUCTION_ROUTE_UNHEALTHY" },
+          "/trace": { code: "PRODUCTION_ROUTE_UNHEALTHY" },
+        },
+      },
+    })
+    const protectedCalls = fetchImpl.mock.calls.filter(([url]) => (
+      !url.endsWith("/api/health") && !url.endsWith("/api/auth/readiness")
+    ))
+    expect(protectedCalls).toHaveLength(4)
+    expect(protectedCalls.every(([, init]) => (
+      init?.headers?.Cookie === rejectedCookie
+      && init?.redirect === "manual"
+    ))).toBe(true)
+    const serialized = JSON.stringify(redirected)
+    expect(serialized).not.toContain(rejectedCookie)
+    expect(serialized).not.toContain(productionAuthCookie)
+    expect(serialized).not.toContain("session_token")
+  })
+
+  it("consumes CLI authentication only from the environment and sanitizes redirect failure", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "v1-2-cli-auth-"))
+    roots.push(root)
+    const rejectedCookie = "better-auth.session_token=cli-rejected-opaque-value"
+    const fetchImpl = productionFetch()
+    const previous = process.env.WILLIAMOS_PRODUCTION_AUTH_COOKIE
+    process.env.WILLIAMOS_PRODUCTION_AUTH_COOKIE = rejectedCookie
+    try {
+      const result = await runCampaign(
+        parseArgs([], {
+          WILLIAMOS_HERMES_RUNTIME_ROOT: path.join(root, "runtime"),
+          WILLIAMOS_HERMES_WORKSPACE: root,
+          WILLIAMOS_APP_URL: "https://william.example",
+        }),
+        {
+          agreementProducer: async () => ({
+            schemaVersion: 1,
+            observedAt: fresh,
+            mode: "HEALTHY_IDLE",
+            queue: null,
+            local: null,
+            workOrder: null,
+          }),
+          fetchImpl,
+          now: () => now,
+          processProbe: () => true,
+          repoRoot: root,
+          runner: vi.fn(() => ({ ok: true, status: 0, stdout: `${revision}\n` })),
+        },
+      )
+      expect(result.acceptanceCriteria).toContainEqual(expect.objectContaining({
+        name: "production",
+        status: "FAIL",
+        code: "PRODUCTION_VERIFICATION_FAILED",
+      }))
+      const protectedCalls = fetchImpl.mock.calls.filter(([url]) => (
+        !url.endsWith("/api/health") && !url.endsWith("/api/auth/readiness")
+      ))
+      expect(protectedCalls).toHaveLength(4)
+      expect(protectedCalls.every(([, init]) => init?.headers?.Cookie === rejectedCookie)).toBe(true)
+      const serialized = JSON.stringify(result)
+      expect(serialized).not.toContain(rejectedCookie)
+      expect(serialized).not.toContain("session_token")
+    } finally {
+      if (previous === undefined) delete process.env.WILLIAMOS_PRODUCTION_AUTH_COOKIE
+      else process.env.WILLIAMOS_PRODUCTION_AUTH_COOKIE = previous
+    }
   })
 
   it("pins GitHub PR identity and useful files to the live database result", () => {
@@ -1009,6 +1136,7 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
         fetchImpl: productionFetch(),
         now: () => now,
         processProbe: () => true,
+        productionAuthCookie,
         repoRoot: workspace,
         runner: githubRunner(bundle),
       },
@@ -1052,5 +1180,7 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
     })
     expect(() => parseArgs(["--repo", "other/repository"], {}))
       .toThrow("UNKNOWN_ARGUMENT:--repo")
+    expect(() => parseArgs(["--auth-cookie", productionAuthCookie], {}))
+      .toThrow("UNKNOWN_ARGUMENT:--auth-cookie")
   })
 })

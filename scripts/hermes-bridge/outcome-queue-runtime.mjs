@@ -320,15 +320,18 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   )
   const campaignWindowId = options.campaignWindowId ?? process.env.HERMES_CAMPAIGN_WINDOW_ID
   const processIdentity = options.processIdentity ?? process.env.HERMES_PROCESS_IDENTITY
-  if (typeof campaignWindowId !== "string" || campaignWindowId.trim() === "") {
-    wall("Trusted resident campaign window is required", "HERMES_CAMPAIGN_WINDOW_REQUIRED")
-  }
-  if (typeof processIdentity !== "string" || processIdentity.trim() === "") {
-    wall("Trusted resident process identity is required", "HERMES_PROCESS_IDENTITY_REQUIRED")
-  }
   const checkpointProofProvider = options.checkpointProofProvider
     ?? residentCheckpointProvider({ runtimeRoot, readState: options.readHermesState })
   let schemaReady = null
+
+  function requireExecutionProofContext() {
+    if (typeof campaignWindowId !== "string" || campaignWindowId.trim() === "") {
+      wall("Trusted resident campaign window is required", "HERMES_CAMPAIGN_WINDOW_REQUIRED")
+    }
+    if (typeof processIdentity !== "string" || processIdentity.trim() === "") {
+      wall("Trusted resident process identity is required", "HERMES_PROCESS_IDENTITY_REQUIRED")
+    }
+  }
 
   async function ensureReady() {
     if (!schemaReady) {
@@ -342,6 +345,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   }
 
   async function selectOutcome() {
+    requireExecutionProofContext()
     await ensureReady()
     const primary = await resolvePrimary()
     for (let rejected = 0; rejected < 100; rejected += 1) {
@@ -400,6 +404,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   }
 
   async function completeOutcome({ outcomeId, outcome, evidence }) {
+    requireExecutionProofContext()
     if (!outcome?.queueBinding) {
       return completeGoal({ databaseUrl, outcomeId, evidence })
     }
@@ -432,6 +437,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   }
 
   async function terminalizeOutcome({ outcomeId, outcome, result, nextState, metadata }) {
+    requireExecutionProofContext()
     if (!outcome?.queueBinding) {
       return terminalizeGoal({ databaseUrl, outcomeId, result, nextState, metadata })
     }
@@ -467,6 +473,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   }
 
   async function deferOutcome({ outcomeId, outcome, retryAfter }) {
+    requireExecutionProofContext()
     if (outcome?.queueBinding) {
       const binding = queueBinding(outcome)
       try {
@@ -489,6 +496,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   }
 
   async function renewOutcomeLease(outcome) {
+    requireExecutionProofContext()
     if (!outcome?.queueBinding) return null
     return renewQueue({
       databaseUrl,
@@ -502,6 +510,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   }
 
   async function bindWorkOrder(outcome, activeWorkOrderId, expectedWorkOrderStatus = "active") {
+    requireExecutionProofContext()
     if (!outcome?.queueBinding) return outcome
     const binding = queueBinding(outcome)
     if (!Number.isSafeInteger(activeWorkOrderId) || activeWorkOrderId <= 0) {
@@ -545,6 +554,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   }
 
   async function refreshOutcome(outcome, terminalReplay = null) {
+    requireExecutionProofContext()
     if (!outcome?.queueBinding) return outcome
     const binding = queueBinding(outcome)
     const refreshed = await acquire({
@@ -578,6 +588,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   }
 
   async function resumeAfterOwnerDecision(outcome, proof) {
+    requireExecutionProofContext()
     if (!outcome?.queueBinding) return outcome
     const binding = queueBinding(outcome)
     const resumeAt = now()

@@ -9,6 +9,7 @@ const harness = vi.hoisted(() => {
     governance: [] as Record<string, unknown>[],
     events: [] as Record<string, unknown>[],
     failAfterCommit: false,
+    classifierVerdict: "allow",
   }
   return {
     state,
@@ -38,7 +39,7 @@ vi.mock("@/lib/goal/classifier", () => ({
     mode: "EXECUTE",
     risk: "low",
     authority: "A2_WRITE_OWN",
-    verdict: "allow",
+    verdict: harness.state.classifierVerdict,
     rationale: command,
     mistakePatterns: [],
     doctrineViolations: [],
@@ -189,6 +190,7 @@ beforeEach(() => {
   harness.state.governance.length = 0
   harness.state.events.length = 0
   harness.state.failAfterCommit = false
+  harness.state.classifierVerdict = "allow"
   harness.revalidatePath.mockClear()
   let prior = Promise.resolve()
   harness.transaction.mockImplementation((callback: (transaction: unknown) => Promise<unknown>) => {
@@ -242,5 +244,48 @@ describe("authenticated goal outcome intake idempotency", () => {
 
     expect(harness.state.goals).toHaveLength(1)
     expect(harness.state.outcomes).toHaveLength(1)
+  })
+
+  it("never queues a refused goal and replays its refusal receipt exactly once", async () => {
+    harness.state.classifierVerdict = "refuse"
+
+    const first = await submitGoal(
+      "Cross a forbidden boundary",
+      "goal-intake:refused-0001",
+    )
+    const replay = await submitGoal(
+      "Cross a forbidden boundary",
+      "goal-intake:refused-0001",
+    )
+
+    expect(first.id).toBe(replay.id)
+    expect(first.verdict).toBe("refuse")
+    expect(harness.state.goals).toHaveLength(1)
+    expect(harness.state.outcomes).toHaveLength(0)
+    expect(harness.state.receipts).toHaveLength(1)
+    expect(harness.state.receipts[0]).toMatchObject({
+      goalId: 1,
+      outcomeKey: "refused:goal:1",
+      replayCount: 1,
+    })
+    expect(harness.state.governance).toHaveLength(1)
+    expect(harness.state.events).toHaveLength(1)
+  })
+
+  it("fails closed when a refused goal receipt is rebound to an executable outcome key", async () => {
+    harness.state.classifierVerdict = "refuse"
+    await submitGoal(
+      "Cross a forbidden boundary",
+      "goal-intake:refused-binding-0001",
+    )
+    harness.state.receipts[0].outcomeKey = "goal:GOAL-9999"
+
+    await expect(submitGoal(
+      "Cross a forbidden boundary",
+      "goal-intake:refused-binding-0001",
+    )).rejects.toThrow("GOAL_INTAKE_BINDING_WALL")
+
+    expect(harness.state.outcomes).toHaveLength(0)
+    expect(harness.state.receipts[0].replayCount).toBe(0)
   })
 })

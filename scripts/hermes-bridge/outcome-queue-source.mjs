@@ -377,6 +377,59 @@ WHERE constraint_record.conrelid IN (
   )
 ORDER BY table_class.relname ASC, constraint_record.conname ASC
 `,
+  readLegacyMutationReceiptUniqueIndex: `
+SELECT table_class.relname AS "tableName",
+       index_class.relname AS "indexName",
+       index_record.indisunique AS "unique",
+       index_record.indisvalid AS "valid",
+       index_record.indisready AS "ready",
+       index_record.indisprimary AS "primary",
+       index_record.indisexclusion AS "exclusion",
+       index_record.indimmediate AS "immediate",
+       index_record.indnatts = index_record.indnkeyatts AS "noIncludedColumns",
+       index_record.indexprs IS NULL AS "noExpressions",
+       access_method.amname AS "accessMethod",
+       ARRAY(
+         SELECT pg_get_indexdef(index_record.indexrelid, ordinal, true)
+         FROM generate_series(1, index_record.indnkeyatts) AS ordinal
+         ORDER BY ordinal
+       ) AS "keyColumns",
+       pg_get_expr(index_record.indpred, index_record.indrelid, true) AS "predicate",
+       EXISTS (
+         SELECT 1
+         FROM pg_constraint AS index_constraint
+         WHERE index_constraint.conindid = index_record.indexrelid
+       ) AS "constraintBacked"
+FROM pg_index AS index_record
+JOIN pg_class AS table_class
+  ON table_class.oid = index_record.indrelid
+JOIN pg_class AS index_class
+  ON index_class.oid = index_record.indexrelid
+JOIN pg_am AS access_method
+  ON access_method.oid = index_class.relam
+WHERE table_class.oid = '"outcome_queue_mutation_receipt"'::regclass
+  AND index_class.relname = 'outcome_queue_mutation_receipt_user_key_idx'
+ORDER BY index_class.relname ASC
+`,
+  migrateLegacyMutationReceiptUniqueIndex: `
+ALTER TABLE "outcome_queue_mutation_receipt"
+  ADD CONSTRAINT "outcome_queue_mutation_receipt_user_key_unique"
+  UNIQUE USING INDEX "outcome_queue_mutation_receipt_user_key_idx"
+`,
+  migrateLegacyAcquisitionReceiptFenceChecks: `
+ALTER TABLE "outcome_queue_acquisition_receipt"
+  DROP CONSTRAINT "outcome_queue_acquisition_receipt_firstFencingToken_check",
+  DROP CONSTRAINT "outcome_queue_acquisition_receipt_latestFencingToken_check",
+  ADD CONSTRAINT "outcome_queue_acquisition_receipt_fence_check"
+    CHECK (
+      "firstFencingToken" > 0
+      AND "latestFencingToken" >= "firstFencingToken"
+    ) NOT VALID
+`,
+  validateAcquisitionReceiptFenceConstraint: `
+ALTER TABLE "outcome_queue_acquisition_receipt"
+  VALIDATE CONSTRAINT "outcome_queue_acquisition_receipt_fence_check"
+`,
   readReceiptIndexes: `
 SELECT table_class.relname AS "tableName",
        index_class.relname AS "indexName",
@@ -1557,6 +1610,24 @@ const RECEIPT_CONSTRAINT_CONTRACTS = Object.freeze({
   }),
 })
 
+const LEGACY_RECEIPT_CONSTRAINT_CONTRACTS = Object.freeze({
+  ...RECEIPT_CONSTRAINT_CONTRACTS,
+  outcome_queue_acquisition_receipt: Object.freeze({
+    outcome_queue_acquisition_receipt_pkey:
+      ["p", "primarykeyid"],
+    outcome_queue_acquisition_receipt_user_key_unique:
+      ["u", "uniqueuserid,acquisitionkey"],
+    outcome_queue_acquisition_receipt_firstFencingToken_check:
+      ["c", "checkfirstfencingtoken>0"],
+    outcome_queue_acquisition_receipt_latestFencingToken_check:
+      ["c", "checklatestfencingtoken>=firstfencingtoken"],
+  }),
+  outcome_queue_mutation_receipt: Object.freeze({
+    outcome_queue_mutation_receipt_pkey:
+      ["p", "primarykeyid"],
+  }),
+})
+
 const RECEIPT_INDEX_CONTRACTS = Object.freeze({
   outcome_queue_acquisition_attempt_campaign_idx:
     ["outcome_queue_acquisition_attempt", ["userId", "campaignWindowId", "attemptedAt"]],
@@ -1607,20 +1678,53 @@ function receiptColumnsMatch(rows) {
   })
 }
 
-function receiptConstraintsMatch(rows) {
-  const expectedCount = Object.values(RECEIPT_CONSTRAINT_CONTRACTS)
+function receiptConstraintsMatchContract(rows, contracts) {
+  const expectedCount = Object.values(contracts)
     .reduce((count, contracts) => count + Object.keys(contracts).length, 0)
   if (rows.length !== expectedCount) return false
-  return Object.entries(RECEIPT_CONSTRAINT_CONTRACTS).every(([tableName, contracts]) => {
+  return Object.entries(contracts).every(([tableName, tableContracts]) => {
     const observed = rows.filter((row) => row?.tableName === tableName)
-    return observed.length === Object.keys(contracts).length
-      && Object.entries(contracts).every(([constraintName, [constraintType, definition]]) => {
+    return observed.length === Object.keys(tableContracts).length
+      && Object.entries(tableContracts).every(([constraintName, [constraintType, definition]]) => {
         const row = observed.find((candidate) => candidate?.constraintName === constraintName)
         return row?.constraintType === constraintType
           && row?.validated === true
           && canonicalCatalogExpression(row?.definition) === definition
       })
   })
+}
+
+function receiptConstraintsMatch(rows) {
+  return receiptConstraintsMatchContract(rows, RECEIPT_CONSTRAINT_CONTRACTS)
+}
+
+function legacyReceiptConstraintsMatch(rows) {
+  return receiptConstraintsMatchContract(
+    rows,
+    LEGACY_RECEIPT_CONSTRAINT_CONTRACTS,
+  )
+}
+
+function legacyMutationReceiptUniqueIndexMatches(rows) {
+  if (rows.length !== 1) return false
+  const row = rows[0]
+  return row?.tableName === "outcome_queue_mutation_receipt"
+    && row?.indexName === "outcome_queue_mutation_receipt_user_key_idx"
+    && row?.unique === true
+    && row?.valid === true
+    && row?.ready === true
+    && row?.primary === false
+    && row?.exclusion === false
+    && row?.immediate === true
+    && row?.noIncludedColumns === true
+    && row?.noExpressions === true
+    && row?.accessMethod === "btree"
+    && row?.constraintBacked === false
+    && row?.predicate == null
+    && Array.isArray(row?.keyColumns)
+    && row.keyColumns.length === 2
+    && canonicalCatalogExpression(row.keyColumns[0]) === "userid"
+    && canonicalCatalogExpression(row.keyColumns[1]) === "idempotencykey"
 }
 
 function receiptIndexesMatch(rows) {
@@ -1689,13 +1793,45 @@ export async function ensureOutcomeQueueHardeningSchema({
       })
     }
     phase = "receipt-constraints"
-    const receiptConstraints = await connection.query(
+    let receiptConstraints = await connection.query(
       OUTCOME_QUEUE_SQL.readReceiptConstraints,
     )
     if (!receiptConstraintsMatch(receiptConstraints?.rows ?? [])) {
-      hardeningWall("OUTCOME_QUEUE_HARDENING_RECEIPT_CONSTRAINT_WALL", {
-        observed: receiptConstraints?.rows ?? [],
-      })
+      const observedConstraints = receiptConstraints?.rows ?? []
+      if (!legacyReceiptConstraintsMatch(observedConstraints)) {
+        hardeningWall("OUTCOME_QUEUE_HARDENING_RECEIPT_CONSTRAINT_WALL", {
+          observed: observedConstraints,
+        })
+      }
+      phase = "receipt-legacy-index"
+      const legacyIndex = await connection.query(
+        OUTCOME_QUEUE_SQL.readLegacyMutationReceiptUniqueIndex,
+      )
+      if (!legacyMutationReceiptUniqueIndexMatches(legacyIndex?.rows ?? [])) {
+        hardeningWall("OUTCOME_QUEUE_HARDENING_RECEIPT_MIGRATION_WALL", {
+          observed: legacyIndex?.rows ?? [],
+        })
+      }
+      phase = "receipt-migration"
+      await connection.query(
+        OUTCOME_QUEUE_SQL.migrateLegacyMutationReceiptUniqueIndex,
+      )
+      await connection.query(
+        OUTCOME_QUEUE_SQL.migrateLegacyAcquisitionReceiptFenceChecks,
+      )
+      await connection.query(
+        OUTCOME_QUEUE_SQL.validateAcquisitionReceiptFenceConstraint,
+      )
+      phase = "receipt-constraints"
+      receiptConstraints = await connection.query(
+        OUTCOME_QUEUE_SQL.readReceiptConstraints,
+      )
+      if (!receiptConstraintsMatch(receiptConstraints?.rows ?? [])) {
+        hardeningWall("OUTCOME_QUEUE_HARDENING_RECEIPT_CONSTRAINT_WALL", {
+          observed: receiptConstraints?.rows ?? [],
+          migratedFrom: "known-parent-receipt-schema",
+        })
+      }
     }
     phase = "receipt-indexes"
     await connection.query(OUTCOME_QUEUE_SQL.ensureMutationReceiptOutcomeIndex)

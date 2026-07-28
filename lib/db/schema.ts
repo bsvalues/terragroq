@@ -373,7 +373,7 @@ export const outcomeQueueAcquisitionReceipt = pgTable(
     updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("outcome_queue_acquisition_receipt_user_key_idx").on(
+    unique("outcome_queue_acquisition_receipt_user_key_unique").on(
       table.userId,
       table.acquisitionKey,
     ),
@@ -406,7 +406,7 @@ export const outcomeQueueMutationReceipt = pgTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("outcome_queue_mutation_receipt_user_key_idx").on(
+    unique("outcome_queue_mutation_receipt_user_key_unique").on(
       table.userId,
       table.idempotencyKey,
     ),

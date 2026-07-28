@@ -101,6 +101,10 @@ function normalizeIntakeKey(command: string, idempotencyKey?: string): string {
   return key
 }
 
+function refusedGoalBinding(goalId: number): string {
+  return `refused:goal:${goalId}`
+}
+
 /* ------------------------------------------------------------------ */
 /* Submit + classify                                                  */
 /* ------------------------------------------------------------------ */
@@ -162,25 +166,36 @@ export async function submitGoal(command: string, idempotencyKey?: string): Prom
         .from(goal)
         .where(and(eq(goal.userId, userId), eq(goal.id, existingReceipt.goalId)))
         .limit(1)
-      const [existingOutcome] = await transaction
-        .select({
-          outcomeKey: outcomeQueueItem.outcomeKey,
-          goalId: outcomeQueueItem.goalId,
-        })
-        .from(outcomeQueueItem)
-        .where(and(
-          eq(outcomeQueueItem.userId, userId),
-          eq(outcomeQueueItem.outcomeKey, existingReceipt.outcomeKey),
-        ))
-        .limit(1)
+      if (!existingGoal) throw new Error("GOAL_INTAKE_BINDING_WALL")
+      let outcomeBinding: string
+      if (existingGoal.verdict === "refuse") {
+        outcomeBinding = refusedGoalBinding(existingGoal.id)
+        if (existingReceipt.outcomeKey !== outcomeBinding) {
+          throw new Error("GOAL_INTAKE_BINDING_WALL")
+        }
+      } else {
+        const [existingOutcome] = await transaction
+          .select({
+            outcomeKey: outcomeQueueItem.outcomeKey,
+            goalId: outcomeQueueItem.goalId,
+          })
+          .from(outcomeQueueItem)
+          .where(and(
+            eq(outcomeQueueItem.userId, userId),
+            eq(outcomeQueueItem.outcomeKey, existingReceipt.outcomeKey),
+          ))
+          .limit(1)
+        if (existingOutcome?.goalId !== existingGoal.id) {
+          throw new Error("GOAL_INTAKE_BINDING_WALL")
+        }
+        outcomeBinding = existingOutcome.outcomeKey
+      }
       const expectedDigest = hashRecord({
         requestHash: intakeRequestHash,
-        goalId: existingGoal?.id,
-        outcomeKey: existingOutcome?.outcomeKey,
+        goalId: existingGoal.id,
+        outcomeKey: outcomeBinding,
       })
-      if (!existingGoal
-        || existingOutcome?.goalId !== existingGoal.id
-        || expectedDigest !== existingReceipt.resultDigest) {
+      if (expectedDigest !== existingReceipt.resultDigest) {
         throw new Error("GOAL_INTAKE_BINDING_WALL")
       }
       const [replayedReceipt] = await transaction
@@ -224,31 +239,37 @@ export async function submitGoal(command: string, idempotencyKey?: string): Prom
         status: "classified",
       })
       .returning()
-    const queued = mapLegacyGoalToOutcome(created)
-    await transaction.insert(outcomeQueueItem).values({
-      userId: queued.userId,
-      outcomeKey: queued.outcomeKey,
-      goalId: queued.goalId,
-      goalRef: queued.goalRef,
-      title: queued.title,
-      objective: queued.objective,
-      queueOrder: queued.queueOrder,
-      dependencyKeys: [...queued.dependencyKeys],
-      riskClass: queued.riskClass,
-      approvalState: queued.approvalState,
-      authorityState: queued.authorityState,
-      authorityLevel: queued.authorityLevel,
-      authoritySubject: queued.authoritySubject,
-      authorityAction: queued.authorityAction,
-      lifecycleState: queued.lifecycleState,
-      lifecycleReason: queued.lifecycleReason,
-      terminalEvidenceRefs: [],
-      suggestedAt: new Date(queued.suggestedAt!),
-    })
+    let outcomeBinding: string
+    if (created.verdict === "refuse") {
+      outcomeBinding = refusedGoalBinding(created.id)
+    } else {
+      const queued = mapLegacyGoalToOutcome(created)
+      await transaction.insert(outcomeQueueItem).values({
+        userId: queued.userId,
+        outcomeKey: queued.outcomeKey,
+        goalId: queued.goalId,
+        goalRef: queued.goalRef,
+        title: queued.title,
+        objective: queued.objective,
+        queueOrder: queued.queueOrder,
+        dependencyKeys: [...queued.dependencyKeys],
+        riskClass: queued.riskClass,
+        approvalState: queued.approvalState,
+        authorityState: queued.authorityState,
+        authorityLevel: queued.authorityLevel,
+        authoritySubject: queued.authoritySubject,
+        authorityAction: queued.authorityAction,
+        lifecycleState: queued.lifecycleState,
+        lifecycleReason: queued.lifecycleReason,
+        terminalEvidenceRefs: [],
+        suggestedAt: new Date(queued.suggestedAt!),
+      })
+      outcomeBinding = queued.outcomeKey
+    }
     const resultDigest = hashRecord({
       requestHash: intakeRequestHash,
       goalId: created.id,
-      outcomeKey: queued.outcomeKey,
+      outcomeKey: outcomeBinding,
     })
     const [receipt] = await transaction
       .insert(goalOutcomeIntakeReceipt)
@@ -257,7 +278,7 @@ export async function submitGoal(command: string, idempotencyKey?: string): Prom
         idempotencyKey: intakeKey,
         requestHash: intakeRequestHash,
         goalId: created.id,
-        outcomeKey: queued.outcomeKey,
+        outcomeKey: outcomeBinding,
         resultDigest,
         replayCount: 0,
         firstSubmittedAt: submittedAt,

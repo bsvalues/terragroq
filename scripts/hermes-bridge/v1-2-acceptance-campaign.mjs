@@ -1438,12 +1438,27 @@ export function verifyMergedPullRequests(outcomes, runner = run, liveOutcomes = 
   return success(verified)
 }
 
-async function probeRoute(url, { expectedIdentities = [], fetchImpl = fetch } = {}) {
+function validOpaqueCookie(value) {
+  return typeof value === "string"
+    && value.trim().length > 0
+    && value.length <= 8192
+    && !/[\r\n]/.test(value)
+}
+
+async function probeRoute(url, {
+  authCookie,
+  expectedIdentities = [],
+  fetchImpl = fetch,
+} = {}) {
   if (!url) return failure("APP_URL_REQUIRED")
+  if (!validOpaqueCookie(authCookie)) return failure("PRODUCTION_AUTH_PROOF_REQUIRED")
   try {
     const response = await fetchImpl(url, {
       method: "GET",
-      headers: { Accept: "text/html,application/json" },
+      headers: {
+        Accept: "text/html,application/json",
+        Cookie: authCookie,
+      },
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
       cache: "no-store",
@@ -1461,6 +1476,7 @@ async function probeRoute(url, { expectedIdentities = [], fetchImpl = fetch } = 
 }
 
 export async function probeProduction(appUrl, {
+  authCookie,
   clock = () => Date.now(),
   expectedOutcomes = [],
   expectedSurfaces = [],
@@ -1484,7 +1500,7 @@ export async function probeProduction(appUrl, {
   for (const route of REQUIRED_SURFACES) {
     surfaces[route] = await probeRoute(
       normalized ? `${normalized}${route}` : null,
-      { expectedIdentities, fetchImpl },
+      { authCookie, expectedIdentities, fetchImpl },
     )
   }
   const expectedByRoute = new Map(
@@ -1685,6 +1701,8 @@ export async function runCampaign(options, dependencies = {}) {
       )
     : failure("GITHUB_EVIDENCE_BLOCKED", evidence.ok ? liveRecords.code : evidence.code)
   const production = await probeProduction(options.appUrl, {
+    authCookie: dependencies.productionAuthCookie
+      ?? process.env.WILLIAMOS_PRODUCTION_AUTH_COOKIE,
     clock,
     expectedOutcomes: evidence.ok ? evidenceRead.detail.outcomes : [],
     expectedSurfaces: evidence.ok ? evidenceRead.detail.surfaceAgreement.routes : [],

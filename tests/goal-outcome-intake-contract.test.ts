@@ -28,6 +28,15 @@ describe("authenticated goal-to-outcome intake contract", () => {
     expect(source).not.toContain("await appendGovernanceEvent")
   })
 
+  it("binds refused intake receipts without creating an executable queue item", () => {
+    expect(source).toContain('return `refused:goal:${goalId}`')
+    expect(source).toContain('if (created.verdict === "refuse")')
+    expect(source).toContain("outcomeBinding = refusedGoalBinding(created.id)")
+    expect(source).toMatch(/if \(created\.verdict === "refuse"\)[\s\S]+?else \{[\s\S]+?transaction\.insert\(outcomeQueueItem\)/)
+    expect(source).toContain('if (existingGoal.verdict === "refuse")')
+    expect(source).toContain("existingReceipt.outcomeKey !== outcomeBinding")
+  })
+
   it("uses a caller-stable key and retains it until the response succeeds", () => {
     expect(caller).toContain("pendingGoalSubmission")
     expect(caller).toContain("crypto.randomUUID()")

@@ -207,6 +207,47 @@ const receiptConstraintRows = [
   definition,
 }))
 
+const legacyReceiptConstraintRows = receiptConstraintRows.flatMap((row) => {
+  if (row.constraintName === "outcome_queue_mutation_receipt_user_key_unique") {
+    return []
+  }
+  if (row.constraintName === "outcome_queue_acquisition_receipt_fence_check") {
+    return [
+      {
+        ...row,
+        constraintName:
+          "outcome_queue_acquisition_receipt_firstFencingToken_check",
+        definition: `CHECK ("firstFencingToken" > 0)`,
+      },
+      {
+        ...row,
+        constraintName:
+          "outcome_queue_acquisition_receipt_latestFencingToken_check",
+        definition:
+          `CHECK ("latestFencingToken" >= "firstFencingToken")`,
+      },
+    ]
+  }
+  return [row]
+})
+
+const legacyMutationReceiptUniqueIndexRows = [{
+  tableName: "outcome_queue_mutation_receipt",
+  indexName: "outcome_queue_mutation_receipt_user_key_idx",
+  unique: true,
+  valid: true,
+  ready: true,
+  primary: false,
+  exclusion: false,
+  immediate: true,
+  noIncludedColumns: true,
+  noExpressions: true,
+  accessMethod: "btree",
+  keyColumns: [`"userId"`, `"idempotencyKey"`],
+  predicate: null,
+  constraintBacked: false,
+}]
+
 const receiptIndexRows = [
   {
     tableName: "outcome_queue_acquisition_attempt",
@@ -607,6 +648,118 @@ describe("transactional durable outcome queue source", () => {
     ])
   })
 
+  it("transactionally upgrades the exact parent receipt schema before strict verification", async () => {
+    let constraintReadCount = 0
+    const constraintNames = [
+      "outcome_queue_item_active_binding_check",
+      "outcome_queue_item_approval_state_check",
+      "outcome_queue_item_authority_state_check",
+      "outcome_queue_item_lifecycle_state_check",
+      "outcome_queue_item_nonnegative_fence_check",
+    ]
+    const run = vi.fn(async (sql: string) => {
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptColumns) {
+        return { rows: receiptColumnRows }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptConstraints) {
+        constraintReadCount += 1
+        return {
+          rows: constraintReadCount === 1
+            ? legacyReceiptConstraintRows
+            : receiptConstraintRows,
+        }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readLegacyMutationReceiptUniqueIndex) {
+        return { rows: legacyMutationReceiptUniqueIndexRows }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptIndexes) {
+        return { rows: receiptIndexRows }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations) {
+        return {
+          rows: [{
+            lifecycleViolationCount: 0,
+            approvalViolationCount: 0,
+            authorityViolationCount: 0,
+            nonnegativeViolationCount: 0,
+            activeBindingViolationCount: 0,
+            multipleActiveUserCount: 0,
+          }],
+        }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readOutcomeQueueHardeningConstraints) {
+        return {
+          rows: constraintNames.map((constraintName) => ({
+            constraintName,
+            validated: true,
+            definition: "CHECK (true)",
+          })),
+        }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readOneActiveOutcomeIndex) {
+        return {
+          rows: [{
+            unique: true,
+            valid: true,
+            ready: true,
+            keyColumn: `"userId"`,
+            predicate: `"lifecycleState" = 'active'`,
+          }],
+        }
+      }
+      return { rows: [] }
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(ensureOutcomeQueueHardeningSchema({ query })).resolves.toBe(true)
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual(expect.arrayContaining([
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.readLegacyMutationReceiptUniqueIndex,
+      OUTCOME_QUEUE_SQL.migrateLegacyMutationReceiptUniqueIndex,
+      OUTCOME_QUEUE_SQL.migrateLegacyAcquisitionReceiptFenceChecks,
+      OUTCOME_QUEUE_SQL.validateAcquisitionReceiptFenceConstraint,
+      "COMMIT",
+    ]))
+    expect(constraintReadCount).toBe(2)
+    expect(run.mock.calls.map(([sql]) => sql).indexOf(
+      OUTCOME_QUEUE_SQL.acquireLock,
+    )).toBeLessThan(run.mock.calls.map(([sql]) => sql).indexOf(
+      OUTCOME_QUEUE_SQL.migrateLegacyMutationReceiptUniqueIndex,
+    ))
+  })
+
+  it("rolls back before alteration when the parent receipt index shape is unknown", async () => {
+    const run = vi.fn(async (sql: string) => {
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptColumns) {
+        return { rows: receiptColumnRows }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptConstraints) {
+        return { rows: legacyReceiptConstraintRows }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readLegacyMutationReceiptUniqueIndex) {
+        return {
+          rows: legacyMutationReceiptUniqueIndexRows.map((row) => ({
+            ...row,
+            keyColumns: [`"userId"`, `"outcomeKey"`],
+          })),
+        }
+      }
+      return { rows: [] }
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(ensureOutcomeQueueHardeningSchema({ query })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_HARDENING_RECEIPT_MIGRATION_WALL",
+    })
+    expect(run.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+    expect(run).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.migrateLegacyMutationReceiptUniqueIndex,
+    )
+    expect(run).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.migrateLegacyAcquisitionReceiptFenceChecks,
+    )
+  })
+
   it.each([
     {
       drift: "type",
@@ -684,6 +837,12 @@ describe("transactional durable outcome queue source", () => {
       code: "OUTCOME_QUEUE_HARDENING_RECEIPT_CONSTRAINT_WALL",
     })
     expect(run.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+    expect(run).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.migrateLegacyMutationReceiptUniqueIndex,
+    )
+    expect(run).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.migrateLegacyAcquisitionReceiptFenceChecks,
+    )
   })
 
   it("fails closed when a receipt supporting index has the wrong shape", async () => {
@@ -1945,9 +2104,8 @@ describe("governed outcome queue mutations", () => {
       "firstFencingToken",
       "latestFencingToken",
     ]))
-    expect(config.indexes.some((index) => (
-      index.config.name === "outcome_queue_acquisition_receipt_user_key_idx"
-      && index.config.unique === true
+    expect(config.uniqueConstraints.some((constraint) => (
+      constraint.name === "outcome_queue_acquisition_receipt_user_key_unique"
     ))).toBe(true)
   })
 
@@ -1962,9 +2120,8 @@ describe("governed outcome queue mutations", () => {
       "requestBinding",
       "resultBinding",
     ]))
-    expect(config.indexes.some((index) => (
-      index.config.name === "outcome_queue_mutation_receipt_user_key_idx"
-      && index.config.unique === true
+    expect(config.uniqueConstraints.some((constraint) => (
+      constraint.name === "outcome_queue_mutation_receipt_user_key_unique"
     ))).toBe(true)
   })
 
