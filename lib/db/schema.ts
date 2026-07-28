@@ -277,6 +277,8 @@ export const outcomeQueueItem = pgTable(
     authorityState: text("authorityState").default("unverified").notNull(),
     authorityLevel: text("authorityLevel").default("A0_READ_ONLY").notNull(),
     authorityGrantRef: text("authorityGrantRef"),
+    authoritySubject: text("authoritySubject").default("operator").notNull(),
+    authorityAction: text("authorityAction").default("outcome:execute").notNull(),
     lifecycleState: text("lifecycleState").default("suggested").notNull(),
     lifecycleReason: text("lifecycleReason"),
     activeWorkOrderId: integer("activeWorkOrderId").references(() => workOrder.id, {

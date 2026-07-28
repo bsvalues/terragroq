@@ -42,6 +42,8 @@ function outcome(
     authorityState: "matched",
     authorityLevel: "A2_WRITE_OWN",
     authorityGrantRef: "GRANT-WOS-V1.2",
+    authoritySubject: "operator",
+    authorityAction: "outcome:execute",
     lifecycleState: "approved",
     lifecycleReason: null,
     activeWorkOrderId: 472,
@@ -77,6 +79,9 @@ function acquire(
     executionBinding: "execution-a",
     acquisitionKey: "acquire-a",
     expectedVersion: item.version,
+    queue: [item],
+    validApprovalDecisionIds: [100],
+    validAuthorityGrantRefs: ["GRANT-WOS-V1.2"],
     ...overrides,
   })
 }
@@ -157,6 +162,13 @@ describe("outcome lifecycle", () => {
         leaseHolder: null,
         version: 2,
       },
+    })
+    expect(transitionOutcome(acquired.item, "completed", {
+      now: NOW,
+      fence: fence(acquired.item),
+    })).toMatchObject({
+      ok: false,
+      reason: "TERMINAL_EVIDENCE_REQUIRED",
     })
   })
 })
@@ -268,6 +280,19 @@ describe("deterministic selection and eligibility", () => {
 })
 
 describe("contention, fencing, and idempotency", () => {
+  it("rechecks eligibility before direct acquisition", () => {
+    expect(acquire(outcome({ riskClass: "R2" }))).toMatchObject({
+      ok: false,
+      reason: "OUTCOME_INELIGIBLE",
+    })
+    expect(acquire(outcome({
+      dependencyKeys: ["goal:missing"],
+    }))).toMatchObject({
+      ok: false,
+      reason: "OUTCOME_INELIGIBLE",
+    })
+  })
+
   it("allows one contender from a shared snapshot", () => {
     const snapshot = outcome()
     const winner = acquire(snapshot)
@@ -281,6 +306,9 @@ describe("contention, fencing, and idempotency", () => {
       executionBinding: "execution-b",
       acquisitionKey: "acquire-b",
       expectedVersion: snapshot.version,
+      queue: [winner.item],
+      validApprovalDecisionIds: [100],
+      validAuthorityGrantRefs: ["GRANT-WOS-V1.2"],
     })
     expect(winner.item).toMatchObject({ lifecycleState: "active", fencingToken: 1, version: 1 })
     expect(loser).toMatchObject({ ok: false, reason: "VERSION_CONFLICT" })
@@ -318,6 +346,9 @@ describe("contention, fencing, and idempotency", () => {
       executionBinding: "execution-recovered",
       acquisitionKey: "acquire-recovered",
       expectedVersion: old.item.version,
+      queue: [old.item],
+      validApprovalDecisionIds: [100],
+      validAuthorityGrantRefs: ["GRANT-WOS-V1.2"],
     })
     if (!recovered.ok) throw new Error("recovery failed")
     expect(recovered.item).toMatchObject({
@@ -352,6 +383,9 @@ describe("contention, fencing, and idempotency", () => {
       executionBinding: "execution-after-restart",
       acquisitionKey: "acquire-a",
       expectedVersion: expired.item.version,
+      queue: [expired.item],
+      validApprovalDecisionIds: [100],
+      validAuthorityGrantRefs: ["GRANT-WOS-V1.2"],
     })
 
     expect(recovered).toMatchObject({

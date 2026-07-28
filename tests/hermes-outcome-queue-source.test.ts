@@ -34,7 +34,9 @@ function queueRow(overrides: Record<string, unknown> = {}) {
     approvalDecisionId: 100,
     authorityState: "matched",
     authorityLevel: "A2_WRITE_OWN",
-    authorityGrantRef: "DECISION-WOS-V1.2",
+    authorityGrantRef: "GRANT-WOS-V1.2",
+    authoritySubject: "operator",
+    authorityAction: "outcome:execute",
     lifecycleState: "active",
     lifecycleReason: null,
     activeWorkOrderId: 472,
@@ -114,6 +116,14 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`FROM "authority_grant" AS live_grant`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`live_grant."status" = 'active'`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`live_grant."revokedAt" IS NULL`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(
+      `live_grant."grantedTo" = q."authoritySubject"`,
+    )
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(
+      `live_grant."scope" IN (q."outcomeKey", q."goalRef")`,
+    )
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`live_grant."blockedActions"`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`live_grant."allowedActions"`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`q."riskClass" IN ('R0', 'R1')`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`q."fencingToken" + 1`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`q."version" + 1`)
@@ -158,7 +168,8 @@ describe("transactional durable outcome queue source", () => {
     expect(query.mock.calls[0][1]).toEqual([
       userId, "goal:GOAL-1000", 1000, "GOAL-1000", "Deliver a bounded outcome",
       "Deliver a bounded outcome", 10, [], "R1", "unapproved", null, null,
-      "unverified", "A2_WRITE_OWN", null, "suggested", null, null, null, null,
+      "unverified", "A2_WRITE_OWN", null, "operator", "outcome:execute",
+      "suggested", null, null, null, null,
       [], null, now, null, now,
     ])
     expect(query.mock.calls[1]).toEqual([OUTCOME_QUEUE_SQL.read, [userId]])
@@ -431,6 +442,9 @@ describe("transactional durable outcome queue source", () => {
     ])
     expect(OUTCOME_QUEUE_SQL.reclaimAcquisition).toContain(`q."fencingToken" + 1`)
     expect(OUTCOME_QUEUE_SQL.reclaimAcquisition).toContain(`q."version" + 1`)
+    expect(OUTCOME_QUEUE_SQL.reclaimAcquisition).toContain(
+      `live."id" <> q."id"`,
+    )
   })
 
   it("guards transitions by user, version, and live fence", async () => {
@@ -516,6 +530,10 @@ describe("transactional durable outcome queue source", () => {
         ref: "GOAL-0001",
         command: "Historical bootstrap",
         status: "converted",
+        linkedWorkOrderId: 451,
+        workOrderStatus: "closed",
+        workOrderResult: "PASS",
+        workOrderCompletedAt: "2026-01-02T00:00:00.000Z",
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-02T00:00:00.000Z",
       }],
@@ -539,5 +557,32 @@ describe("transactional durable outcome queue source", () => {
       executionAuthority: false,
     })])
     expect(OUTCOME_QUEUE_SQL.acquire).not.toMatch(/FROM "goal"/)
+  })
+
+  it("keeps a converted legacy draft nonterminal and nonselectable", async () => {
+    const query = vi.fn(async () => ({
+      rows: [{
+        legacyGoalId: 5,
+        userId,
+        ref: "GOAL-0005",
+        command: "Historical draft conversion",
+        status: "converted",
+        linkedWorkOrderId: 455,
+        workOrderStatus: "draft",
+        workOrderResult: null,
+        workOrderCompletedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      }],
+    }))
+
+    await expect(readLegacyOutcomeHistory({ query, userId })).resolves.toEqual([
+      expect.objectContaining({
+        lifecycleState: "blocked",
+        lifecycleReason: "LEGACY_CONVERSION_REQUIRES_TERMINAL_WORK_ORDER",
+        historyOnly: true,
+        selectable: false,
+      }),
+    ])
   })
 })

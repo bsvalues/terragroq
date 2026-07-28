@@ -31,6 +31,8 @@ export interface OutcomeQueueRecord {
   authorityState: OutcomeAuthorityState
   authorityLevel: string
   authorityGrantRef: string | null
+  authoritySubject: string
+  authorityAction: string
   lifecycleState: OutcomeLifecycleState
   lifecycleReason: string | null
   activeWorkOrderId: number | null
@@ -125,6 +127,7 @@ export type OutcomeMutationError =
   | "LEASE_ALREADY_HELD"
   | "ACQUISITION_KEY_CONFLICT"
   | "ACQUISITION_INPUT_INVALID"
+  | "OUTCOME_INELIGIBLE"
   | "TERMINAL_EVIDENCE_REQUIRED"
   | "TERMINAL_KEY_CONFLICT"
 
@@ -337,6 +340,7 @@ export function transitionOutcome(
     return { ok: false, reason: "ILLEGAL_TRANSITION", item }
   }
   if (to === "active") return { ok: false, reason: "ACQUISITION_REQUIRED", item }
+  if (to === "completed") return { ok: false, reason: "TERMINAL_EVIDENCE_REQUIRED", item }
   if (
     item.lifecycleState === "active"
     && (!input.fence || !fenceMatches(item, input.fence, input.now))
@@ -383,6 +387,10 @@ export interface AcquireOutcomeInput {
   acquisitionKey: string
   expectedVersion: number
   activeWorkOrderId?: number | null
+  queue: readonly OutcomeQueueRecord[]
+  allowedRiskClasses?: readonly string[]
+  validApprovalDecisionIds: readonly number[]
+  validAuthorityGrantRefs: readonly string[]
 }
 
 export function acquireOutcome(
@@ -409,6 +417,18 @@ export function acquireOutcome(
   }
   if (input.expectedVersion !== item.version) {
     return { ok: false, reason: "VERSION_CONFLICT", item }
+  }
+  const selection = selectNextOutcome(input.queue, {
+    now: input.now,
+    allowedRiskClasses: input.allowedRiskClasses,
+    validApprovalDecisionIds: input.validApprovalDecisionIds,
+    validAuthorityGrantRefs: input.validAuthorityGrantRefs,
+  })
+  if (
+    !selection.selected
+    || selection.item !== item
+  ) {
+    return { ok: false, reason: "OUTCOME_INELIGIBLE", item }
   }
 
   const recovering = item.lifecycleState === "active"
@@ -564,6 +584,8 @@ export function mapLegacyGoalToOutcome(
     authorityState: "unverified",
     authorityLevel: goal.authority,
     authorityGrantRef: null,
+    authoritySubject: "operator",
+    authorityAction: "outcome:execute",
     lifecycleState,
     lifecycleReason: convertedWithoutTerminal
       ? "LEGACY_CONVERSION_REQUIRES_DURABLE_BINDING"

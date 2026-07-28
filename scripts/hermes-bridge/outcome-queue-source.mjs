@@ -46,6 +46,8 @@ const QUEUE_COLUMNS = `
   q."authorityState",
   q."authorityLevel",
   q."authorityGrantRef",
+  q."authoritySubject",
+  q."authorityAction",
   q."lifecycleState",
   q."lifecycleReason",
   q."activeWorkOrderId",
@@ -97,6 +99,21 @@ const LIVE_AUTHORITY_PREDICATE = `
       AND live_grant."revokedAt" IS NULL
       AND (live_grant."expiresAt" IS NULL OR live_grant."expiresAt" > $1::timestamptz)
       AND live_grant."authorityLevel" = q."authorityLevel"
+      AND live_grant."grantedTo" = q."authoritySubject"
+      AND live_grant."scope" IN (q."outcomeKey", q."goalRef")
+      AND NOT EXISTS (
+        SELECT 1
+        FROM unnest(live_grant."blockedActions") AS blocked(action)
+        WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
+      )
+      AND (
+        cardinality(live_grant."allowedActions") = 0
+        OR EXISTS (
+          SELECT 1
+          FROM unnest(live_grant."allowedActions") AS allowed(action)
+          WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
+        )
+      )
       AND (
         live_grant."workOrderId" IS NULL
         OR q."activeWorkOrderId" = live_grant."workOrderId"
@@ -140,14 +157,15 @@ INSERT INTO "outcome_queue_item" (
   "userId", "outcomeKey", "goalId", "goalRef", "title", "objective",
   "queueOrder", "dependencyKeys", "riskClass", "approvalState", "approvedBy",
   "approvedAt", "authorityState", "authorityLevel", "authorityGrantRef",
-  "lifecycleState", "lifecycleReason", "activeWorkOrderId", "terminalResult",
+  "authoritySubject", "authorityAction", "lifecycleState", "lifecycleReason",
+  "activeWorkOrderId", "terminalResult",
   "terminalEvidenceId", "terminalEvidenceRefs", "terminalKey", "suggestedAt",
   "terminalAt", "createdAt", "updatedAt"
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7, $8::text[], $9, $10, $11,
   $12::timestamptz, $13, $14, $15, $16, $17, $18, $19, $20,
-  $21::text[], $22, $23::timestamptz, $24::timestamptz,
-  $25::timestamptz, $25::timestamptz
+  $21, $22, $23::text[], $24, $25::timestamptz, $26::timestamptz,
+  $27::timestamptz, $27::timestamptz
 )
 ON CONFLICT ("userId", "outcomeKey") DO UPDATE SET
   "goalId" = EXCLUDED."goalId",
@@ -158,6 +176,8 @@ ON CONFLICT ("userId", "outcomeKey") DO UPDATE SET
   "dependencyKeys" = EXCLUDED."dependencyKeys",
   "riskClass" = EXCLUDED."riskClass",
   "authorityLevel" = EXCLUDED."authorityLevel",
+  "authoritySubject" = EXCLUDED."authoritySubject",
+  "authorityAction" = EXCLUDED."authorityAction",
   "lifecycleReason" = EXCLUDED."lifecycleReason",
   "version" = "outcome_queue_item"."version" + 1,
   "updatedAt" = EXCLUDED."updatedAt"
@@ -212,6 +232,14 @@ WHERE q."userId" = $2
       ON completed_dependency."userId" = q."userId"
       AND completed_dependency."outcomeKey" = dependency."outcomeKey"
     WHERE completed_dependency."lifecycleState" IS DISTINCT FROM 'completed'
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM "outcome_queue_item" AS live
+    WHERE live."userId" = q."userId"
+      AND live."id" <> q."id"
+      AND live."lifecycleState" = 'active'
+      AND live."leaseExpiresAt" > $1::timestamptz
   )
 RETURNING ${QUEUE_COLUMNS}
 `,
@@ -358,6 +386,21 @@ WHERE q."userId" = $1
   AND grant."revokedAt" IS NULL
   AND (grant."expiresAt" IS NULL OR grant."expiresAt" > $5::timestamptz)
   AND grant."authorityLevel" = q."authorityLevel"
+  AND grant."grantedTo" = q."authoritySubject"
+  AND grant."scope" IN (q."outcomeKey", q."goalRef")
+  AND NOT EXISTS (
+    SELECT 1
+    FROM unnest(grant."blockedActions") AS blocked(action)
+    WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
+  )
+  AND (
+    cardinality(grant."allowedActions") = 0
+    OR EXISTS (
+      SELECT 1
+      FROM unnest(grant."allowedActions") AS allowed(action)
+      WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
+    )
+  )
   AND (
     grant."workOrderId" IS NULL
     OR q."activeWorkOrderId" = grant."workOrderId"
@@ -396,9 +439,16 @@ SELECT
   g."ref",
   g."command",
   g."status",
+  g."linkedWorkOrderId",
+  linked_work."status" AS "workOrderStatus",
+  linked_work."result" AS "workOrderResult",
+  linked_work."completedAt" AS "workOrderCompletedAt",
   g."createdAt",
   g."updatedAt"
 FROM "goal" AS g
+LEFT JOIN "work_order" AS linked_work
+  ON linked_work."id" = g."linkedWorkOrderId"
+  AND linked_work."userId" = g."userId"
 WHERE g."userId" = $1
   AND g."ref" = ANY($2::text[])
 ORDER BY g."ref" ASC, g."id" ASC
@@ -533,6 +583,14 @@ function normalizeItem(item) {
       item.authorityGrantRef,
       "OUTCOME_QUEUE_AUTHORITY_GRANT_INVALID",
     ),
+    authoritySubject: nonempty(
+      item.authoritySubject ?? "operator",
+      "OUTCOME_QUEUE_AUTHORITY_SUBJECT_INVALID",
+    ),
+    authorityAction: nonempty(
+      item.authorityAction ?? "outcome:execute",
+      "OUTCOME_QUEUE_AUTHORITY_ACTION_INVALID",
+    ),
     lifecycleState,
     lifecycleReason: optionalString(item.lifecycleReason, "OUTCOME_QUEUE_REASON_INVALID"),
     activeWorkOrderId: integer(
@@ -571,6 +629,12 @@ function noSelectionReason(row = {}) {
 }
 
 function compatibilityProjection(row) {
+  const converted = row.status === "converted"
+  const completed = converted && (
+    row.workOrderStatus === "closed"
+    || ["PASS", "FAIL", "PARTIAL"].includes(row.workOrderResult)
+    || row.workOrderCompletedAt != null
+  )
   return Object.freeze({
     userId: row.userId,
     outcomeKey: `goal:${row.ref}`,
@@ -578,9 +642,21 @@ function compatibilityProjection(row) {
     goalRef: row.ref,
     title: row.command,
     objective: row.command,
-    lifecycleState: row.status === "converted" ? "completed" : "superseded",
+    lifecycleState: completed
+      ? "completed"
+      : converted
+        ? "blocked"
+        : row.status === "dismissed"
+          ? "declined"
+          : "suggested",
+    lifecycleReason: converted && !completed
+      ? "LEGACY_CONVERSION_REQUIRES_TERMINAL_WORK_ORDER"
+      : null,
+    activeWorkOrderId: row.linkedWorkOrderId ?? null,
     approvalState: "unapproved",
     authorityState: "unverified",
+    authoritySubject: "operator",
+    authorityAction: "outcome:execute",
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     compatibility: "LEGACY_GOAL_HISTORY",
@@ -618,6 +694,8 @@ export async function persistOutcomeQueueItem({
       value.authorityState,
       value.authorityLevel,
       value.authorityGrantRef,
+      value.authoritySubject,
+      value.authorityAction,
       value.lifecycleState,
       value.lifecycleReason,
       value.activeWorkOrderId,

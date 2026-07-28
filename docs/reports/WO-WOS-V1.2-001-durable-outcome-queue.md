@@ -30,9 +30,9 @@ Neither cached state nor caller-supplied labels can grant execution authority.
 ## Validation
 
 ```text
-focused queue tests: 34 passed
+focused queue tests: 36 passed
 npm run lint: passed
-npm test -- --run: 1,928 passed, 2 skipped
+npm test -- --run: 1,930 passed, 2 skipped
 NEXT_PRIVATE_BUILD_WORKER=0 NEXT_TELEMETRY_DISABLED=1 npm run build: passed
 git diff --check: passed
 ```
