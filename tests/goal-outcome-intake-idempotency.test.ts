@@ -10,10 +10,12 @@ const harness = vi.hoisted(() => {
     events: [] as Record<string, unknown>[],
     failAfterCommit: false,
     classifierVerdict: "allow",
+    mutateBeforeReplayUpdate: null as null | ((receipts: Record<string, unknown>[]) => void),
   }
   return {
     state,
     transaction: vi.fn(),
+    bootstrap: vi.fn(async () => true),
     revalidatePath: vi.fn((path: string) => {
       if (path === "/goal-console" && state.failAfterCommit) {
         state.failAfterCommit = false
@@ -56,11 +58,38 @@ vi.mock("@/lib/registers/events", () => ({
   logEvent: vi.fn(),
 }))
 vi.mock("@/scripts/hermes-bridge/outcome-queue-source.mjs", () => ({
-  ensureOutcomeQueueHardeningSchema: async () => true,
+  ensureOutcomeQueueHardeningSchema: (...args: unknown[]) => harness.bootstrap(...args),
 }))
 vi.mock("next/cache", () => ({ revalidatePath: harness.revalidatePath }))
 
-import { submitGoal } from "@/app/actions/goals"
+let submitGoal: (command: string, idempotencyKey?: string) => Promise<Record<string, unknown>>
+
+function equalityPredicates(condition: unknown) {
+  const predicates: Array<[string, unknown]> = []
+  const visited = new Set<unknown>()
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== "object" || visited.has(value)) return
+    visited.add(value)
+    const candidate = value as {
+      constructor?: { name?: string }
+      encoder?: { name?: string }
+      queryChunks?: unknown[]
+      value?: unknown
+    }
+    if (candidate.constructor?.name === "Param"
+      && typeof candidate.encoder?.name === "string") {
+      predicates.push([candidate.encoder.name, candidate.value])
+      return
+    }
+    candidate.queryChunks?.forEach(visit)
+  }
+  visit(condition)
+  return predicates
+}
+
+function matchesWhere(row: Record<string, unknown>, condition: unknown) {
+  return equalityPredicates(condition).every(([column, value]) => row[column] === value)
+}
 
 function tableRows(table: unknown) {
   switch (getTableName(table as never)) {
@@ -80,8 +109,9 @@ function transactionAdapter() {
     execute: vi.fn(async () => ({ rows: [] })),
     select: vi.fn((projection?: Record<string, unknown>) => {
       let table: unknown
+      let condition: unknown
       const read = () => {
-        const rows = tableRows(table)
+        const rows = tableRows(table).filter((row) => matchesWhere(row, condition))
         if (!projection) return rows.map((row) => ({ ...row }))
         return rows.map((row) => Object.fromEntries(
           Object.keys(projection).map((key) => [key, row[key]]),
@@ -92,7 +122,8 @@ function transactionAdapter() {
           table = value
           return chain
         },
-        where() {
+        where(value: unknown) {
+          condition = value
           return chain
         },
         limit(count: number) {
@@ -163,16 +194,23 @@ function transactionAdapter() {
     }),
     update: vi.fn(() => {
       let update: Record<string, unknown>
+      let condition: unknown
       const chain = {
         set(value: Record<string, unknown>) {
           update = value
           return chain
         },
-        where() {
+        where(value: unknown) {
+          condition = value
           return chain
         },
         returning() {
-          const receipt = harness.state.receipts[0]
+          harness.state.mutateBeforeReplayUpdate?.(harness.state.receipts)
+          harness.state.mutateBeforeReplayUpdate = null
+          const receipt = harness.state.receipts.find(
+            (candidate) => matchesWhere(candidate, condition),
+          )
+          if (!receipt) return Promise.resolve([])
           receipt.replayCount = Number(receipt.replayCount) + 1
           receipt.lastReplayedAt = update.lastReplayedAt
           return Promise.resolve([{ id: receipt.id }])
@@ -183,7 +221,7 @@ function transactionAdapter() {
   }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   harness.state.goals.length = 0
   harness.state.outcomes.length = 0
   harness.state.receipts.length = 0
@@ -191,13 +229,18 @@ beforeEach(() => {
   harness.state.events.length = 0
   harness.state.failAfterCommit = false
   harness.state.classifierVerdict = "allow"
+  harness.state.mutateBeforeReplayUpdate = null
   harness.revalidatePath.mockClear()
+  harness.bootstrap.mockReset()
+  harness.bootstrap.mockResolvedValue(true)
   let prior = Promise.resolve()
   harness.transaction.mockImplementation((callback: (transaction: unknown) => Promise<unknown>) => {
     const current = prior.then(() => callback(transactionAdapter()))
     prior = current.then(() => undefined, () => undefined)
     return current
   })
+  vi.resetModules()
+  ;({ submitGoal } = await import("@/app/actions/goals"))
 })
 
 describe("authenticated goal outcome intake idempotency", () => {
@@ -244,6 +287,60 @@ describe("authenticated goal outcome intake idempotency", () => {
 
     expect(harness.state.goals).toHaveLength(1)
     expect(harness.state.outcomes).toHaveLength(1)
+  })
+
+  it("shares one process bootstrap across concurrent submissions", async () => {
+    await Promise.all([
+      submitGoal("First bounded outcome", "goal-intake:bootstrap-0001"),
+      submitGoal("Second bounded outcome", "goal-intake:bootstrap-0002"),
+    ])
+
+    expect(harness.bootstrap).toHaveBeenCalledOnce()
+    expect(harness.state.goals).toHaveLength(2)
+    expect(harness.state.outcomes).toHaveLength(2)
+  })
+
+  it("resets the cached bootstrap after failure", async () => {
+    harness.bootstrap
+      .mockRejectedValueOnce(new Error("BOOTSTRAP_FAILED"))
+      .mockResolvedValueOnce(true)
+
+    await expect(submitGoal(
+      "Retry bootstrap",
+      "goal-intake:bootstrap-retry-0001",
+    )).rejects.toThrow("BOOTSTRAP_FAILED")
+    await expect(submitGoal(
+      "Retry bootstrap",
+      "goal-intake:bootstrap-retry-0001",
+    )).resolves.toMatchObject({ id: 1 })
+
+    expect(harness.bootstrap).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps distinct stable keys for the same command and updates only the replay target", async () => {
+    const first = await submitGoal("Same requested outcome", "goal-intake:distinct-0001")
+    const second = await submitGoal("Same requested outcome", "goal-intake:distinct-0002")
+    const replay = await submitGoal("Same requested outcome", "goal-intake:distinct-0002")
+
+    expect(first.id).not.toBe(second.id)
+    expect(replay.id).toBe(second.id)
+    expect(harness.state.goals).toHaveLength(2)
+    expect(harness.state.outcomes).toHaveLength(2)
+    expect(harness.state.receipts).toHaveLength(2)
+    expect(harness.state.receipts.map((receipt) => receipt.replayCount)).toEqual([0, 1])
+  })
+
+  it("reaches the replay-write wall when the exact receipt changes before update", async () => {
+    await submitGoal("Replay race", "goal-intake:replay-wall-0001")
+    harness.state.mutateBeforeReplayUpdate = (receipts) => {
+      receipts[0].resultDigest = "concurrent-result-digest"
+    }
+
+    await expect(submitGoal(
+      "Replay race",
+      "goal-intake:replay-wall-0001",
+    )).rejects.toThrow("GOAL_INTAKE_REPLAY_WRITE_WALL")
+    expect(harness.state.receipts[0].replayCount).toBe(0)
   })
 
   it("never queues a refused goal and replays its refusal receipt exactly once", async () => {

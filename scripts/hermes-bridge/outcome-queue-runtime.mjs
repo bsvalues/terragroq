@@ -34,18 +34,17 @@ function residentCheckpointProvider({ runtimeRoot, readState = readHermesState }
   return async ({ outcome }) => {
     const state = readState(statePath)
     const outcomeId = String(outcome.goalId)
-    const execution = state.executions?.[outcomeId] ?? null
-    const queueBinding = execution?.metadata?.outcome?.queueBinding ?? null
-    if (execution && queueBinding?.outcomeKey !== outcome.outcomeKey) {
-      wall(
-        "Durable checkpoint outcome does not match the queue acquisition",
-        "HERMES_OUTCOME_QUEUE_CHECKPOINT_IDENTITY_WALL",
-      )
-    }
+    const candidate = state.executions?.[outcomeId] ?? null
+    const execution = candidate?.metadata?.outcome?.queueBinding?.outcomeKey === outcome.outcomeKey
+      ? candidate
+      : null
+    const activeWorkOrderId = Number(outcome.activeWorkOrderId)
     return {
       outcomeId,
       outcomeKey: outcome.outcomeKey,
-      workOrderId: outcome.activeWorkOrderId ?? queueBinding?.activeWorkOrderId ?? null,
+      workOrderId: Number.isSafeInteger(activeWorkOrderId) && activeWorkOrderId > 0
+        ? activeWorkOrderId
+        : null,
       fencingToken: Number(outcome.fencingToken),
       sequence: execution?.checkpoint?.sequence ?? 0,
       state: execution?.checkpoint?.state ?? "LEASED",

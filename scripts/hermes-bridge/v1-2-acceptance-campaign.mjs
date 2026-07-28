@@ -90,9 +90,9 @@ SELECT
   approval.ref AS "approvalDecisionRef",
   approval.status AS "approvalDecisionStatus",
   approval.authority AS "approvalDecisionAuthority",
-  grant.ref AS "liveAuthorityGrantRef",
-  grant.status AS "authorityGrantStatus",
-  grant."revokedAt" AS "authorityGrantRevokedAt",
+  authority.ref AS "liveAuthorityGrantRef",
+  authority.status AS "authorityGrantStatus",
+  authority."revokedAt" AS "authorityGrantRevokedAt",
   wo.id AS "workOrderId",
   wo.ref AS "workOrderRef",
   wo.status AS "workOrderStatus",
@@ -106,31 +106,31 @@ JOIN decision AS approval
   AND approval.status = 'accepted'
   AND approval.authority = 'binding'
   AND approval.scope IN (q."outcomeKey", q."goalRef")
-JOIN authority_grant AS grant
-  ON grant."userId" = q."userId"
-  AND grant.ref = q."authorityGrantRef"
-  AND grant.status = 'active'
-  AND grant."revokedAt" IS NULL
-  AND (grant."expiresAt" IS NULL OR grant."expiresAt" > $2::timestamptz)
-  AND grant."authorityLevel" = q."authorityLevel"
-  AND grant."grantedTo" = q."authoritySubject"
-  AND grant.scope IN (q."outcomeKey", q."goalRef")
+JOIN authority_grant AS authority
+  ON authority."userId" = q."userId"
+  AND authority.ref = q."authorityGrantRef"
+  AND authority.status = 'active'
+  AND authority."revokedAt" IS NULL
+  AND (authority."expiresAt" IS NULL OR authority."expiresAt" > $2::timestamptz)
+  AND authority."authorityLevel" = q."authorityLevel"
+  AND authority."grantedTo" = q."authoritySubject"
+  AND authority.scope IN (q."outcomeKey", q."goalRef")
   AND NOT EXISTS (
     SELECT 1
-    FROM unnest(grant."blockedActions") blocked(action)
+    FROM unnest(authority."blockedActions") blocked(action)
     WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
   )
   AND (
-    cardinality(grant."allowedActions") = 0
+    cardinality(authority."allowedActions") = 0
     OR EXISTS (
       SELECT 1
-      FROM unnest(grant."allowedActions") allowed(action)
+      FROM unnest(authority."allowedActions") allowed(action)
       WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
     )
   )
   AND (
-    grant."workOrderId" IS NULL
-    OR grant."workOrderId" = q."activeWorkOrderId"
+    authority."workOrderId" IS NULL
+    OR authority."workOrderId" = q."activeWorkOrderId"
   )
 JOIN work_order AS wo
   ON wo.id = q."activeWorkOrderId"
@@ -216,31 +216,31 @@ SELECT
     )
     AND EXISTS (
       SELECT 1
-      FROM authority_grant grant
-      WHERE grant."userId" = q."userId"
-        AND grant.ref = q."authorityGrantRef"
-        AND grant.status = 'active'
-        AND grant."revokedAt" IS NULL
-        AND (grant."expiresAt" IS NULL OR grant."expiresAt" > $3::timestamptz)
-        AND grant."authorityLevel" = q."authorityLevel"
-        AND grant."grantedTo" = q."authoritySubject"
-        AND grant.scope IN (q."outcomeKey", q."goalRef")
+      FROM authority_grant authority
+      WHERE authority."userId" = q."userId"
+        AND authority.ref = q."authorityGrantRef"
+        AND authority.status = 'active'
+        AND authority."revokedAt" IS NULL
+        AND (authority."expiresAt" IS NULL OR authority."expiresAt" > $3::timestamptz)
+        AND authority."authorityLevel" = q."authorityLevel"
+        AND authority."grantedTo" = q."authoritySubject"
+        AND authority.scope IN (q."outcomeKey", q."goalRef")
         AND NOT EXISTS (
           SELECT 1
-          FROM unnest(grant."blockedActions") blocked(action)
+          FROM unnest(authority."blockedActions") blocked(action)
           WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
         )
         AND (
-          cardinality(grant."allowedActions") = 0
+          cardinality(authority."allowedActions") = 0
           OR EXISTS (
             SELECT 1
-            FROM unnest(grant."allowedActions") allowed(action)
+            FROM unnest(authority."allowedActions") allowed(action)
             WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
           )
         )
         AND (
-          grant."workOrderId" IS NULL
-          OR grant."workOrderId" = q."activeWorkOrderId"
+          authority."workOrderId" IS NULL
+          OR authority."workOrderId" = q."activeWorkOrderId"
         )
     )
   ) AS "authorityEligible"
@@ -633,6 +633,12 @@ function validateSurfaceAgreement(agreement, outcomes, now, maxAgeMs) {
   if (JSON.stringify(agreement.outcomes) !== JSON.stringify(expectedOutcomes)) {
     return failure("PRODUCT_SURFACE_OUTCOME_MISMATCH")
   }
+  if (agreement.routes.some((route) => (
+    !isRecord(route)
+    || typeof route.route !== "string"
+  ))) {
+    return failure("PRODUCT_SURFACE_ROUTE_MISMATCH")
+  }
   const routes = [...agreement.routes].sort((left, right) => left.route.localeCompare(right.route))
   if (routes.some((route) => !exactKeys(route, ["evidenceDigest", "route", "status"])
       || route.status !== 200
@@ -770,7 +776,17 @@ async function openReadOnly({ databaseUrl, query, createPool }) {
       code: "V1_2_DATABASE_POOL_WALL",
     })
   }
-  const client = await pool.connect()
+  let client
+  try {
+    client = await pool.connect()
+  } catch (error) {
+    try {
+      await pool.end()
+    } catch {
+      // Preserve the connection failure while still attempting pool cleanup.
+    }
+    throw error
+  }
   return {
     query: client.query.bind(client),
     close: async () => {
@@ -1445,6 +1461,23 @@ function validOpaqueCookie(value) {
     && !/[\r\n]/.test(value)
 }
 
+function validateExpectedProductionSurfaces(expectedSurfaces) {
+  if (!Array.isArray(expectedSurfaces)
+    || expectedSurfaces.length !== REQUIRED_SURFACES.length
+    || expectedSurfaces.some((entry) => (
+      !exactKeys(entry, ["evidenceDigest", "route", "status"])
+      || typeof entry.route !== "string"
+      || entry.status !== 200
+      || !SHA256.test(entry.evidenceDigest ?? "")
+    ))) {
+    return failure("PRODUCTION_SURFACE_EXPECTATION_INVALID")
+  }
+  const routes = expectedSurfaces.map((entry) => entry.route).sort()
+  return JSON.stringify(routes) === JSON.stringify([...REQUIRED_SURFACES].sort())
+    ? success(new Map(expectedSurfaces.map((entry) => [entry.route, entry.evidenceDigest])))
+    : failure("PRODUCTION_SURFACE_EXPECTATION_INVALID")
+}
+
 async function probeRoute(url, {
   authCookie,
   expectedIdentities = [],
@@ -1503,14 +1536,15 @@ export async function probeProduction(appUrl, {
       { authCookie, expectedIdentities, fetchImpl },
     )
   }
-  const expectedByRoute = new Map(
-    expectedSurfaces.map((entry) => [entry.route, entry.evidenceDigest]),
-  )
-  if (expectedByRoute.size !== REQUIRED_SURFACES.length
-    || REQUIRED_SURFACES.some((route) => (
-      !SHA256.test(expectedByRoute.get(route) ?? "")
-      || surfaces[route]?.detail?.contentDigest !== expectedByRoute.get(route)
-    ))) {
+  const expectedSurfaceSet = validateExpectedProductionSurfaces(expectedSurfaces)
+  if (!expectedSurfaceSet.ok) {
+    for (const route of REQUIRED_SURFACES) {
+      if (surfaces[route]?.ok) {
+        Object.assign(surfaces[route], failure(expectedSurfaceSet.code))
+      }
+    }
+  } else {
+    const expectedByRoute = expectedSurfaceSet.detail
     for (const route of REQUIRED_SURFACES) {
       if (surfaces[route]?.ok
         && surfaces[route].detail.contentDigest !== expectedByRoute.get(route)) {
@@ -1631,6 +1665,9 @@ export function parseArgs(argv, env = process.env) {
 export async function runCampaign(options, dependencies = {}) {
   const clock = dependencies.now ?? (() => Date.now())
   const now = clock()
+  const databaseUrl = Object.hasOwn(dependencies, "databaseUrl")
+    ? dependencies.databaseUrl
+    : process.env.DATABASE_URL
   const repoRoot = dependencies.repoRoot
     ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
   const runner = dependencies.runner ?? run
@@ -1663,7 +1700,7 @@ export async function runCampaign(options, dependencies = {}) {
   const liveRecords = evidence.ok && host.ok && supervisor.ok
     ? await verifyLiveCampaignRecords({
         claims: evidenceRead.detail,
-        databaseUrl: dependencies.databaseUrl ?? process.env.DATABASE_URL,
+        databaseUrl,
         query: dependencies.campaignQuery,
         createPool: dependencies.createCampaignPool,
         localState: hostRead.detail,
@@ -1681,7 +1718,7 @@ export async function runCampaign(options, dependencies = {}) {
     const snapshot = await producer({
       statePath: options.state,
       outputPath: options.agreement,
-      databaseUrl: dependencies.databaseUrl ?? process.env.DATABASE_URL,
+      databaseUrl,
       query: dependencies.agreementQuery,
       createPool: dependencies.createAgreementPool,
       now: clock,

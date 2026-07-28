@@ -274,6 +274,49 @@ describe("Hermes durable outcome queue runtime", () => {
         state: "COMMIT_CREATED",
         commit: { headSha: "a".repeat(40), mergeSha: null, prNumber: 472 },
       })
+      await expect(durableProvider({
+        disposition: "WINNER",
+        outcome: {
+          activeWorkOrderId: null,
+          fencingToken: 4,
+          goalId: 77,
+          outcomeKey: "outcome:superseding-home-radar",
+        },
+      })).resolves.toEqual({
+        outcomeId: "77",
+        outcomeKey: "outcome:superseding-home-radar",
+        workOrderId: null,
+        fencingToken: 4,
+        sequence: 0,
+        state: "LEASED",
+        commit: { headSha: null, mergeSha: null, prNumber: null },
+      })
+      await expect(durableProvider({
+        disposition: "REPLAY_WINNER",
+        outcome: {
+          activeWorkOrderId: null,
+          fencingToken: 3,
+          goalId: 77,
+          outcomeKey: queueItem.outcomeKey,
+        },
+      })).resolves.toEqual({
+        outcomeId: "77",
+        outcomeKey: queueItem.outcomeKey,
+        workOrderId: null,
+        fencingToken: 3,
+        sequence: 6,
+        state: "COMMIT_CREATED",
+        commit: { headSha: "a".repeat(40), mergeSha: null, prNumber: 472 },
+      })
+      await expect(durableProvider({
+        disposition: "REPLAY_WINNER",
+        outcome: {
+          activeWorkOrderId: 0,
+          fencingToken: 3,
+          goalId: 77,
+          outcomeKey: queueItem.outcomeKey,
+        },
+      })).resolves.toMatchObject({ workOrderId: null })
     } finally {
       await bridge.close()
       fs.rmSync(runtimeRoot, { recursive: true, force: true })

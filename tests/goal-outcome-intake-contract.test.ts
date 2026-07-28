@@ -18,7 +18,9 @@ const schema = fs.readFileSync(
 
 describe("authenticated goal-to-outcome intake contract", () => {
   it("bootstraps the durable queue and records the goal plus unapproved outcome atomically", () => {
-    expect(source).toContain("await ensureOutcomeQueueHardeningSchema()")
+    expect(source).toContain("await ensureGoalOutcomeQueueSchema()")
+    expect(source).toContain("let outcomeQueueSchemaReady: Promise<void> | null = null")
+    expect(source).toContain("if (outcomeQueueSchemaReady === pending) outcomeQueueSchemaReady = null")
     expect(source).toContain("await db.transaction(async (transaction) =>")
     expect(source).toContain("transaction.insert(outcomeQueueItem)")
     expect(source).toContain("mapLegacyGoalToOutcome(created)")

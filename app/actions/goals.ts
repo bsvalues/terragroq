@@ -105,6 +105,21 @@ function refusedGoalBinding(goalId: number): string {
   return `refused:goal:${goalId}`
 }
 
+let outcomeQueueSchemaReady: Promise<void> | null = null
+
+async function ensureGoalOutcomeQueueSchema(): Promise<void> {
+  if (!outcomeQueueSchemaReady) {
+    const pending = Promise.resolve(ensureOutcomeQueueHardeningSchema())
+      .then(() => undefined)
+      .catch((error) => {
+        if (outcomeQueueSchemaReady === pending) outcomeQueueSchemaReady = null
+        throw error
+      })
+    outcomeQueueSchemaReady = pending
+  }
+  await outcomeQueueSchemaReady
+}
+
 /* ------------------------------------------------------------------ */
 /* Submit + classify                                                  */
 /* ------------------------------------------------------------------ */
@@ -138,7 +153,7 @@ export async function submitGoal(command: string, idempotencyKey?: string): Prom
   ]
 
   const requiresApproval = verdict === "requires_approval"
-  await ensureOutcomeQueueHardeningSchema()
+  await ensureGoalOutcomeQueueSchema()
 
   const submittedAt = new Date()
   const row = await db.transaction(async (transaction) => {

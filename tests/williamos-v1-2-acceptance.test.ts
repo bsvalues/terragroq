@@ -701,6 +701,9 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
     ["manual successor", (value: CampaignClaims) => { value.automaticSuccessor.ownerContactCount = 1 }, "AUTOMATIC_SUCCESSOR_EVIDENCE_INVALID"],
     ["duplicate writers", (value: CampaignClaims) => { value.contention.activeWriterCount = 2 }, "CONTENTION_EVIDENCE_INVALID"],
     ["missing mutation", (value: CampaignClaims) => value.mutations.pop(), "MUTATION_EVIDENCE_INCOMPLETE"],
+    ["malformed surface route", (value: CampaignClaims) => {
+      value.surfaceAgreement.routes[0] = null as never
+    }, "PRODUCT_SURFACE_ROUTE_MISMATCH"],
     ["capability key", (value: CampaignClaims) => { value.leaseToken = "not-allowed" }, "CAMPAIGN_EVIDENCE_CONTRACT_INVALID"],
   ])("rejects invalid caller claims: %s", (_name, mutate, code) => {
     const value = liveBundle().document
@@ -749,13 +752,13 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
       `approval.scope IN (q."outcomeKey", q."goalRef")`,
     ))
     expect(authoritySql).toEqual(expect.stringContaining(
-      `grant."expiresAt" IS NULL OR grant."expiresAt" > $2::timestamptz`,
+      `authority."expiresAt" IS NULL OR authority."expiresAt" > $2::timestamptz`,
     ))
     expect(authoritySql).toEqual(expect.stringContaining(
-      `grant."authorityLevel" = q."authorityLevel"`,
+      `authority."authorityLevel" = q."authorityLevel"`,
     ))
     expect(authoritySql).toEqual(expect.stringContaining(
-      `grant."grantedTo" = q."authoritySubject"`,
+      `authority."grantedTo" = q."authoritySubject"`,
     ))
     expect(authoritySql).toEqual(expect.stringContaining(
       `position(lower(blocked.action) IN lower(q."authorityAction")) > 0`,
@@ -764,11 +767,19 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
       `position(lower(allowed.action) IN lower(q."authorityAction")) > 0`,
     ))
     expect(authoritySql).toEqual(expect.stringContaining(
-      `grant."workOrderId" IS NULL`,
+      `authority."workOrderId" IS NULL`,
     ))
     expect(authoritySql).toEqual(expect.stringContaining(
-      `OR grant."workOrderId" = q."activeWorkOrderId"`,
+      `OR authority."workOrderId" = q."activeWorkOrderId"`,
     ))
+    expect(authoritySql).not.toMatch(/\bgrant\./)
+    const blockedAuthoritySql = query.mock.calls
+      .map(([sql]) => sql)
+      .find((sql) => /FROM "outcome_queue_item" q/.test(sql))
+    expect(blockedAuthoritySql).toEqual(expect.stringContaining(
+      "FROM authority_grant authority",
+    ))
+    expect(blockedAuthoritySql).not.toMatch(/\bgrant\./)
     expect(query).toHaveBeenCalledWith("COMMIT")
   })
 
@@ -873,6 +884,30 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
     expect(result.code).toBe("V1_2_LIVE_OUTCOME_CARDINALITY_WALL")
   })
 
+  it("ends the database pool when connection acquisition rejects", async () => {
+    const bundle = liveBundle()
+    const end = vi.fn(async () => {})
+    const connectionError = new Error("connection rejected")
+    const createPool = vi.fn(async () => ({
+      connect: vi.fn(async () => {
+        throw connectionError
+      }),
+      end,
+    }))
+    const result = await verifyLiveCampaignRecords({
+      claims: bundle.document,
+      createPool,
+      databaseUrl: "opaque-test-database",
+      localState: bundle.state,
+      supervisorState: supervisorState(path.resolve("workspace")),
+      rereadLocalState: () => structuredClone(bundle.state),
+      now,
+    })
+    expect(result).toMatchObject({ code: "V1_2_LIVE_DATABASE_WALL" })
+    expect(createPool).toHaveBeenCalledWith("opaque-test-database")
+    expect(end).toHaveBeenCalledOnce()
+  })
+
   it("does not accept caller-authored JSON when live database verification is absent", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "v1-2-json-only-"))
     roots.push(root)
@@ -904,6 +939,7 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
           local: null,
           workOrder: null,
         }),
+        databaseUrl: null,
         fetchImpl: productionFetch(),
         now: () => now,
         processProbe: () => true,
@@ -1024,6 +1060,51 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
     expect(serialized).not.toContain("session_token")
   })
 
+  it("rejects extra or malformed production surface expectations", async () => {
+    const document = liveBundle().document
+    const extra = structuredClone(document.surfaceAgreement.routes)
+    extra.push({
+      evidenceDigest: digest("extra"),
+      route: "/extra",
+      status: 200,
+    })
+    const extraResult = await probeProduction("https://william.example", {
+      authCookie: productionAuthCookie,
+      clock: () => now,
+      expectedOutcomes: document.outcomes,
+      expectedSurfaces: extra,
+      fetchImpl: productionFetch(),
+      maxAgeMs: 5 * 60 * 1000,
+    })
+    expect(extraResult).toMatchObject({
+      code: "PRODUCTION_VERIFICATION_FAILED",
+      detail: {
+        surfaces: {
+          "/goal-console": { code: "PRODUCTION_SURFACE_EXPECTATION_INVALID" },
+        },
+      },
+    })
+
+    const malformed = structuredClone(document.surfaceAgreement.routes)
+    malformed[0] = null as never
+    const malformedResult = await probeProduction("https://william.example", {
+      authCookie: productionAuthCookie,
+      clock: () => now,
+      expectedOutcomes: document.outcomes,
+      expectedSurfaces: malformed,
+      fetchImpl: productionFetch(),
+      maxAgeMs: 5 * 60 * 1000,
+    })
+    expect(malformedResult).toMatchObject({
+      code: "PRODUCTION_VERIFICATION_FAILED",
+      detail: {
+        surfaces: {
+          "/goal-console": { code: "PRODUCTION_SURFACE_EXPECTATION_INVALID" },
+        },
+      },
+    })
+  })
+
   it("consumes CLI authentication only from the environment and sanitizes redirect failure", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "v1-2-cli-auth-"))
     roots.push(root)
@@ -1047,6 +1128,7 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
             local: null,
             workOrder: null,
           }),
+          databaseUrl: null,
           fetchImpl,
           now: () => now,
           processProbe: () => true,
@@ -1133,6 +1215,7 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
           workOrder: null,
         }),
         campaignQuery: campaignQuery(bundle),
+        databaseUrl: null,
         fetchImpl: productionFetch(),
         now: () => now,
         processProbe: () => true,

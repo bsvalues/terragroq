@@ -143,6 +143,10 @@ describe("Hermes interactive-user supervisor", () => {
       path.join(runtimeRoot, "state", "campaign-window"),
       "utf8",
     )).toBe(cycleEvidence.campaign)
+    fs.writeFileSync(
+      path.join(runtimeRoot, "state", "campaign-window"),
+      `${cycleEvidence.campaign}\r\n`,
+    )
     fs.writeFileSync(activationPath, "enabled\n")
     const second = spawnSync(
       "pwsh",
@@ -173,7 +177,7 @@ describe("Hermes interactive-user supervisor", () => {
       fs.mkdirSync(path.dirname(campaignPath), { recursive: true })
       fs.mkdirSync(path.dirname(cliPath), { recursive: true })
       fs.writeFileSync(activationPath, "enabled\n")
-      fs.writeFileSync(campaignPath, "campaign:INVALID\n")
+      fs.writeFileSync(campaignPath, `campaign:${"a".repeat(16)} ${"b".repeat(16)}\n`)
       fs.writeFileSync(cliPath, 'process.stdout.write("should-not-run")')
       fs.writeFileSync(path.join(workspace, ".env.local"), "")
       const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
@@ -307,6 +311,8 @@ describe("Hermes interactive-user supervisor", () => {
     expect(supervisor).toContain('$startInfo.Environment["HERMES_CAMPAIGN_WINDOW_ID"]')
     expect(supervisor).toContain('$startInfo.Environment["HERMES_PROCESS_IDENTITY"]')
     expect(supervisor).toContain('Join-Path $stateDir "campaign-window"')
+    expect(supervisor).toContain("::ReadAllText($Path, [Text.UTF8Encoding]::new($false)).Trim()")
+    expect(supervisor).toContain("'\\Acampaign:[0-9a-f]{32}\\z'")
     expect(supervisor).toContain("[IO.File]::Move($temporary, $Path)")
     expect(supervisor).toContain("HERMES_CAMPAIGN_WINDOW_INVALID")
     expect(supervisor).toContain("$runtimeRootPath = [IO.Path]::GetFullPath($RuntimeRoot)")

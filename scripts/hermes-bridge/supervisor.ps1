@@ -72,8 +72,8 @@ function Read-CampaignWindowId {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "HERMES_CAMPAIGN_WINDOW_MISSING"
     }
-    $value = [IO.File]::ReadAllText($Path, [Text.UTF8Encoding]::new($false))
-    if ($value -cnotmatch '^campaign:[0-9a-f]{32}$') {
+    $value = [IO.File]::ReadAllText($Path, [Text.UTF8Encoding]::new($false)).Trim()
+    if ($value -cnotmatch '\Acampaign:[0-9a-f]{32}\z') {
         throw "HERMES_CAMPAIGN_WINDOW_INVALID"
     }
     return $value
