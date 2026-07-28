@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 
 import { createHermesOutcomeQueueRuntime } from "../scripts/hermes-bridge/outcome-queue-runtime.mjs"
+import {
+  acquireNextEligibleOutcome,
+  OUTCOME_QUEUE_SQL,
+} from "../scripts/hermes-bridge/outcome-queue-source.mjs"
+import {
+  checkpointRecordMatchesAttempt,
+} from "../scripts/hermes-bridge/v1-2-acceptance-campaign.mjs"
 
 const queueItem = {
   userId: "primary-user",
@@ -33,6 +43,17 @@ function runtime(overrides: Record<string, unknown> = {}) {
   return createHermesOutcomeQueueRuntime({
     databaseUrl: "postgresql://not-used",
     holderId: "resident-hermes",
+    campaignWindowId: "campaign-v1-2",
+    processIdentity: "supervisor-nonce-1",
+    checkpointProofProvider: vi.fn(async ({ outcome }) => ({
+      outcomeId: String(outcome.goalId),
+      outcomeKey: outcome.outcomeKey,
+      workOrderId: outcome.activeWorkOrderId ?? null,
+      fencingToken: outcome.fencingToken,
+      sequence: 0,
+      state: "LEASED",
+      commit: { headSha: null, mergeSha: null, prNumber: null },
+    })),
     now: () => new Date("2026-07-28T12:00:00.000Z"),
     resolvePrimary: vi.fn(async () => ({ id: "primary-user" })),
     resolveGoal: vi.fn(async () => goal),
@@ -65,6 +86,253 @@ function runtime(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Hermes durable outcome queue runtime", () => {
+  it("rejects an unscoped resident runtime before it can certify acquisition evidence", () => {
+    expect(() => createHermesOutcomeQueueRuntime({
+      campaignWindowId: "",
+      processIdentity: "",
+    })).toThrowError(expect.objectContaining({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" }))
+  })
+
+  it("supplies canonical fresh and durable checkpoint context to the acquisition producer", async () => {
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-queue-runtime-proof-"))
+    const statePath = path.join(runtimeRoot, "state", "state.json")
+    fs.mkdirSync(path.dirname(statePath), { recursive: true })
+    const observed: unknown[] = []
+    const acquire = vi.fn(async (input) => {
+      observed.push(await input.checkpointProofProvider({
+        disposition: "WINNER",
+        outcome: {
+          activeWorkOrderId: null,
+          fencingToken: 3,
+          goalId: 77,
+          outcomeKey: queueItem.outcomeKey,
+        },
+        processIdentity: input.processIdentity,
+      }))
+      return { outcome: queueItem, acquired: true }
+    })
+    const bridge = runtime({
+      acquire,
+      runtimeRoot,
+      checkpointProofProvider: undefined,
+    })
+    try {
+      await bridge.selectOutcome()
+      expect(observed[0]).toEqual({
+        outcomeId: "77",
+        outcomeKey: queueItem.outcomeKey,
+        workOrderId: null,
+        fencingToken: 3,
+        sequence: 0,
+        state: "LEASED",
+        commit: { headSha: null, mergeSha: null, prNumber: null },
+      })
+
+      fs.writeFileSync(statePath, JSON.stringify({
+        schemaVersion: 1,
+        storeId: "hermes-bridge",
+        revision: 1,
+        updatedAt: "2026-07-28T12:00:00.000Z",
+        nextFencingToken: 4,
+        killSwitch: { active: false, reason: null, updatedAt: null },
+        ownerTouchCounters: {
+          OWNER_OPERATION_TOUCH_COUNT: 0,
+          OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+          OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
+          OWNER_ROUTINE_DECISION_COUNT: 0,
+          OWNER_ROUTINE_CONTACT_COUNT: 0,
+        },
+        executions: {
+          77: {
+            outcomeId: "77",
+            fencingToken: 3,
+            lease: {
+              status: "ACTIVE",
+              holderId: "resident-hermes",
+              acquiredAt: "2026-07-28T12:00:00.000Z",
+              expiresAt: "2026-07-28T12:50:00.000Z",
+              releasedAt: null,
+            },
+            checkpoint: {
+              sequence: 6,
+              state: "COMMIT_CREATED",
+              detail: null,
+              recordedAt: "2026-07-28T12:10:00.000Z",
+            },
+            metadata: {
+              headRefOid: "a".repeat(40),
+              mergeSha: null,
+              prNumber: 472,
+              outcome: {
+                queueBinding: {
+                  outcomeKey: queueItem.outcomeKey,
+                  activeWorkOrderId: 472,
+                },
+              },
+            },
+          },
+        },
+        idempotency: {},
+      }))
+      const durableProvider = acquire.mock.calls[0][0].checkpointProofProvider
+      await expect(durableProvider({
+        disposition: "REPLAY_WINNER",
+        outcome: {
+          activeWorkOrderId: 472,
+          fencingToken: 3,
+          goalId: 77,
+          outcomeKey: queueItem.outcomeKey,
+        },
+      })).resolves.toEqual({
+        outcomeId: "77",
+        outcomeKey: queueItem.outcomeKey,
+        workOrderId: 472,
+        fencingToken: 3,
+        sequence: 6,
+        state: "COMMIT_CREATED",
+        commit: { headSha: "a".repeat(40), mergeSha: null, prNumber: 472 },
+      })
+    } finally {
+      await bridge.close()
+      fs.rmSync(runtimeRoot, { recursive: true, force: true })
+    }
+  })
+
+  it("carries resident identity through the real acquisition producer into checkpoint verification", async () => {
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-queue-runtime-integration-"))
+    const statePath = path.join(runtimeRoot, "state", "state.json")
+    fs.mkdirSync(path.dirname(statePath), { recursive: true })
+    const active = {
+      ...queueItem,
+      activeWorkOrderId: 472,
+      lifecycleState: "active",
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const state = {
+      schemaVersion: 1,
+      storeId: "hermes-bridge",
+      revision: 1,
+      updatedAt: "2026-07-28T12:00:00.000Z",
+      nextFencingToken: 4,
+      killSwitch: { active: false, reason: null, updatedAt: null },
+      ownerTouchCounters: {
+        OWNER_OPERATION_TOUCH_COUNT: 0,
+        OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+        OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
+        OWNER_ROUTINE_DECISION_COUNT: 0,
+        OWNER_ROUTINE_CONTACT_COUNT: 0,
+      },
+      executions: {
+        77: {
+          outcomeId: "77",
+          fencingToken: 3,
+          lease: {
+            status: "ACTIVE",
+            holderId: "resident-hermes",
+            acquiredAt: "2026-07-28T12:00:00.000Z",
+            expiresAt: "2026-07-28T12:50:00.000Z",
+            releasedAt: null,
+          },
+          checkpoint: {
+            sequence: 6,
+            state: "COMMIT_CREATED",
+            detail: null,
+            recordedAt: "2026-07-28T12:10:00.000Z",
+          },
+          metadata: {
+            headRefOid: "a".repeat(40),
+            mergeSha: null,
+            prNumber: 472,
+            outcome: {
+              queueBinding: {
+                outcomeKey: queueItem.outcomeKey,
+                activeWorkOrderId: 472,
+              },
+            },
+          },
+        },
+      },
+      idempotency: {},
+    }
+    fs.writeFileSync(statePath, JSON.stringify(state))
+    const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK"
+        || sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt
+        || sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.acquire) {
+        Object.assign(active, {
+          acquisitionKey: values[2],
+          executionBinding: values[3],
+          leaseHolder: values[4],
+          leaseToken: values[5],
+          leaseExpiresAt: values[6],
+        })
+        return { rows: [active] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionReceipt) return { rows: [{ id: 90 }] }
+      if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt) return { rows: [{ id: 91 }] }
+      throw new Error(`unexpected query: ${sql}`)
+    })
+    const bridge = runtime({
+      runtimeRoot,
+      checkpointProofProvider: undefined,
+      acquire: (input: Record<string, unknown>) => acquireNextEligibleOutcome({
+        ...input,
+        query: Object.assign(query, {
+          connect: async () => ({ query, release: vi.fn() }),
+        }),
+      }),
+    })
+    try {
+      await expect(bridge.selectOutcome()).resolves.toMatchObject({
+        queueBinding: {
+          outcomeKey: active.outcomeKey,
+          activeWorkOrderId: 472,
+          fencingToken: 3,
+        },
+      })
+      const values = query.mock.calls.find(
+        ([sql]) => sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
+      )?.[1] as unknown[]
+      const attempt = {
+        id: 91,
+        campaignWindowId: values[1],
+        processIdentity: values[2],
+        leaseHolder: values[3],
+        acquisitionKeyDigest: values[4],
+        leaseIdentityDigest: values[5],
+        checkpointDigest: values[6],
+        checkpointOutcomeId: values[7],
+        checkpointSequence: values[8],
+        checkpointState: values[9],
+        checkpointHeadSha: values[10],
+        checkpointMergeSha: values[11],
+        checkpointPrNumber: values[12],
+        outcomeKey: values[13],
+        fencingToken: values[14],
+        leaseExpiresAt: values[15],
+        activeWorkOrderId: values[16],
+        disposition: values[17],
+        reason: values[18],
+        attemptedAt: values[19],
+      }
+      expect(attempt).toMatchObject({
+        campaignWindowId: "campaign-v1-2",
+        processIdentity: "supervisor-nonce-1",
+        disposition: "WINNER",
+      })
+      expect(checkpointRecordMatchesAttempt(attempt, [], state)).toBe(true)
+      expect(JSON.stringify(attempt)).not.toContain(active.leaseToken)
+      expect(JSON.stringify(attempt)).not.toContain(active.executionBinding)
+      expect(JSON.stringify(attempt)).not.toContain(active.acquisitionKey)
+    } finally {
+      await bridge.close()
+      fs.rmSync(runtimeRoot, { recursive: true, force: true })
+    }
+  })
+
   it("acquires the deterministic queue candidate and binds it to its governed goal", async () => {
     const acquire = vi.fn(async () => ({
       outcome: queueItem,
@@ -94,6 +362,9 @@ describe("Hermes durable outcome queue runtime", () => {
       userId: "primary-user",
       leaseHolder: "resident-hermes",
       leaseDurationMs: 50 * 60 * 1000,
+      campaignWindowId: "campaign-v1-2",
+      processIdentity: "supervisor-nonce-1",
+      checkpointProofProvider: expect.any(Function),
     }))
   })
 
@@ -424,13 +695,29 @@ describe("Hermes durable outcome queue runtime", () => {
   })
 
   it("refreshes an expired persisted binding through its original acquisition identity", async () => {
-    const acquire = vi.fn(async () => ({
-      outcome: { ...queueItem, version: 5, fencingToken: 4 },
-      acquired: true,
-      replayed: false,
-      reclaimed: true,
-    }))
-    const bridge = runtime({ acquire })
+    const checkpointProofProvider = vi.fn()
+    const acquire = vi.fn(async (input) => {
+      expect(input).toEqual({
+        databaseUrl: "postgresql://not-used",
+        userId: "primary-user",
+        acquisitionKey: "acquisition-77",
+        leaseHolder: "resident-hermes",
+        leaseToken: "lease-77",
+        executionBinding: "execution-77",
+        leaseDurationMs: 50 * 60 * 1000,
+        campaignWindowId: "campaign-v1-2",
+        processIdentity: "supervisor-nonce-1",
+        checkpointProofProvider,
+        now: new Date("2026-07-28T12:00:00.000Z"),
+      })
+      return {
+        outcome: { ...queueItem, version: 5, fencingToken: 4 },
+        acquired: true,
+        replayed: false,
+        reclaimed: true,
+      }
+    })
+    const bridge = runtime({ acquire, checkpointProofProvider })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
 
     await expect(bridge.refreshOutcome(outcome)).resolves.toMatchObject({
@@ -724,6 +1011,9 @@ describe("Hermes durable outcome queue runtime", () => {
     const bridge = createHermesOutcomeQueueRuntime({
       databaseUrl: "postgresql://not-used",
       holderId: "resident-hermes",
+      campaignWindowId: "campaign-v1-2",
+      processIdentity: "supervisor-nonce-1",
+      checkpointProofProvider: vi.fn(),
       createPool,
       acquire: vi.fn(async () => ({
         outcome: queueItem,
@@ -773,6 +1063,9 @@ describe("Hermes durable outcome queue runtime", () => {
       .mockResolvedValueOnce(secondPool)
     const bridge = createHermesOutcomeQueueRuntime({
       databaseUrl: "postgresql://not-used",
+      campaignWindowId: "campaign-v1-2",
+      processIdentity: "supervisor-nonce-1",
+      checkpointProofProvider: vi.fn(),
       createPool,
       acquire: vi.fn(async () => ({ outcome: queueItem, acquired: true })),
     })

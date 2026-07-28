@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import os from "node:os"
+import path from "node:path"
 
 import {
   acquireNextEligibleOutcome,
@@ -13,6 +14,7 @@ import {
   transitionOutcomeQueueItem,
   verifyOutcomeQueueWorkOrderBinding,
 } from "./outcome-queue-source.mjs"
+import { readHermesState } from "./state-store.mjs"
 import {
   completeOutcome as completeGoalOutcome,
   deferProviderOutcome as deferGoalOutcome,
@@ -25,6 +27,35 @@ const QUEUE_LEASE_DURATION_MS = 50 * 60 * 1000
 
 function wall(message, code) {
   throw Object.assign(new Error(message), { code })
+}
+
+function residentCheckpointProvider({ runtimeRoot, readState = readHermesState }) {
+  const statePath = path.join(runtimeRoot, "state", "state.json")
+  return async ({ outcome }) => {
+    const state = readState(statePath)
+    const outcomeId = String(outcome.goalId)
+    const execution = state.executions?.[outcomeId] ?? null
+    const queueBinding = execution?.metadata?.outcome?.queueBinding ?? null
+    if (execution && queueBinding?.outcomeKey !== outcome.outcomeKey) {
+      wall(
+        "Durable checkpoint outcome does not match the queue acquisition",
+        "HERMES_OUTCOME_QUEUE_CHECKPOINT_IDENTITY_WALL",
+      )
+    }
+    return {
+      outcomeId,
+      outcomeKey: outcome.outcomeKey,
+      workOrderId: outcome.activeWorkOrderId ?? queueBinding?.activeWorkOrderId ?? null,
+      fencingToken: Number(outcome.fencingToken),
+      sequence: execution?.checkpoint?.sequence ?? 0,
+      state: execution?.checkpoint?.state ?? "LEASED",
+      commit: {
+        headSha: execution?.metadata?.headRefOid ?? null,
+        mergeSha: execution?.metadata?.mergeSha ?? null,
+        prNumber: execution?.metadata?.prNumber ?? null,
+      },
+    }
+  }
 }
 
 function queueBinding(outcome) {
@@ -282,6 +313,21 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   const resolveGoal = options.resolveGoal ?? ((item) => loadLinkedGoal(database.withPool, item))
   const now = options.now ?? (() => new Date())
   const holderId = options.holderId ?? `${os.hostname()}:hermes-outcome-queue`
+  const runtimeRoot = path.resolve(
+    options.runtimeRoot
+      ?? process.env.WILLIAMOS_HERMES_RUNTIME_ROOT
+      ?? path.join(os.homedir(), ".williamos", "hermes-bridge"),
+  )
+  const campaignWindowId = options.campaignWindowId ?? process.env.HERMES_CAMPAIGN_WINDOW_ID
+  const processIdentity = options.processIdentity ?? process.env.HERMES_PROCESS_IDENTITY
+  if (typeof campaignWindowId !== "string" || campaignWindowId.trim() === "") {
+    wall("Trusted resident campaign window is required", "HERMES_CAMPAIGN_WINDOW_REQUIRED")
+  }
+  if (typeof processIdentity !== "string" || processIdentity.trim() === "") {
+    wall("Trusted resident process identity is required", "HERMES_PROCESS_IDENTITY_REQUIRED")
+  }
+  const checkpointProofProvider = options.checkpointProofProvider
+    ?? residentCheckpointProvider({ runtimeRoot, readState: options.readHermesState })
   let schemaReady = null
 
   async function ensureReady() {
@@ -307,6 +353,9 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         leaseToken: randomUUID(),
         executionBinding: randomUUID(),
         leaseDurationMs: QUEUE_LEASE_DURATION_MS,
+        campaignWindowId,
+        processIdentity,
+        checkpointProofProvider,
         now: now(),
       })
       if (!acquired?.outcome || !acquired.acquired) return null
@@ -445,6 +494,9 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       databaseUrl,
       ...queueBinding(outcome),
       leaseDurationMs: QUEUE_LEASE_DURATION_MS,
+      campaignWindowId,
+      processIdentity,
+      checkpointProofProvider,
       now: now(),
     })
   }
@@ -503,6 +555,9 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       leaseToken: binding.leaseToken,
       executionBinding: binding.executionBinding,
       leaseDurationMs: QUEUE_LEASE_DURATION_MS,
+      campaignWindowId,
+      processIdentity,
+      checkpointProofProvider,
       now: now(),
     })
     if (refreshed?.outcome && refreshed.acquired) {

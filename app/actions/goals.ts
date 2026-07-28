@@ -1,7 +1,16 @@
 "use server"
 
 import { db } from "@/lib/db"
-import { goal, doctrine, workOrder, type Goal } from "@/lib/db/schema"
+import {
+  doctrine,
+  eventLog,
+  goal,
+  goalOutcomeIntakeReceipt,
+  governanceEvent,
+  outcomeQueueItem,
+  workOrder,
+  type Goal,
+} from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { logEvent, getRecentEvents } from "@/lib/registers/events"
 import { validateAction } from "@/app/actions/doctrine"
@@ -11,9 +20,11 @@ import { runLoopVerifier, refuseExecution, type LoopReport } from "@/lib/goal/lo
 import type { CurrentTruth } from "@/lib/goal/current-truth"
 import { lane as findLane } from "@/lib/goal/taxonomy"
 import { getActiveLocks } from "@/app/actions/locks"
-import { appendGovernanceEvent } from "@/lib/governance/events"
-import { and, desc, eq } from "drizzle-orm"
+import { hashRecord } from "@/lib/governance/hash"
+import { and, desc, eq, sql } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
+import { mapLegacyGoalToOutcome } from "@/lib/outcome-queue/engine"
+import { ensureOutcomeQueueHardeningSchema } from "@/scripts/hermes-bridge/outcome-queue-source.mjs"
 
 /* ------------------------------------------------------------------ */
 /* Reads                                                              */
@@ -68,8 +79,7 @@ export async function getCurrentTruth(): Promise<CurrentTruth> {
 /* Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-async function nextRef(userId: string): Promise<string> {
-  const rows = await db.select({ ref: goal.ref }).from(goal).where(eq(goal.userId, userId))
+function nextGoalRef(rows: { ref: string | null }[]): string {
   let max = 0
   for (const r of rows) {
     const m = r.ref?.match(/GOAL-(\d+)/)
@@ -78,14 +88,29 @@ async function nextRef(userId: string): Promise<string> {
   return `GOAL-${String(max + 1).padStart(4, "0")}`
 }
 
+function normalizeIntakeKey(command: string, idempotencyKey?: string): string {
+  if (idempotencyKey == null) {
+    // Legacy callers remain fail-safe: retrying the same command cannot create
+    // another goal. The Goal Console always supplies a fresh stable UUID.
+    return `legacy-goal:${hashRecord({ command })}`
+  }
+  const key = idempotencyKey.trim()
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,199}$/.test(key)) {
+    throw new Error("GOAL_INTAKE_IDEMPOTENCY_KEY_INVALID")
+  }
+  return key
+}
+
 /* ------------------------------------------------------------------ */
 /* Submit + classify                                                  */
 /* ------------------------------------------------------------------ */
 
-export async function submitGoal(command: string): Promise<Goal> {
+export async function submitGoal(command: string, idempotencyKey?: string): Promise<Goal> {
   const userId = await getUserId()
   const trimmed = command.trim()
   if (!trimmed) throw new Error("A goal command is required.")
+  const intakeKey = normalizeIntakeKey(trimmed, idempotencyKey)
+  const intakeRequestHash = hashRecord({ command: trimmed })
 
   // 1. Deterministic classification, evaluated against the live lock posture so
   //    machine-checkable doctrine (WO-015) can fire (e.g. STOP/HOLD conflicts).
@@ -109,45 +134,176 @@ export async function submitGoal(command: string): Promise<Goal> {
   ]
 
   const requiresApproval = verdict === "requires_approval"
-  const ref = await nextRef(userId)
+  await ensureOutcomeQueueHardeningSchema()
 
-  const [row] = await db
-    .insert(goal)
-    .values({
-      userId,
-      ref,
-      command: trimmed,
-      lane: cls.lane,
-      mode: cls.mode,
-      risk: cls.risk,
-      authority: cls.authority,
-      verdict,
-      rationale: cls.rationale,
-      mistakePatterns: cls.mistakePatterns.map((m) => m.id),
-      matchedRules,
-      recommendedMove: cls.recommendedMove,
-      requiresApproval,
-      status: "classified",
+  const submittedAt = new Date()
+  const row = await db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${`${userId}:goal-outcome-intake`}))`,
+    )
+    const existingReceipts = await transaction
+      .select()
+      .from(goalOutcomeIntakeReceipt)
+      .where(and(
+        eq(goalOutcomeIntakeReceipt.userId, userId),
+        eq(goalOutcomeIntakeReceipt.idempotencyKey, intakeKey),
+      ))
+      .limit(2)
+    if (existingReceipts.length > 1) {
+      throw new Error("GOAL_INTAKE_RECEIPT_DUPLICATED")
+    }
+    const existingReceipt = existingReceipts[0]
+    if (existingReceipt) {
+      if (existingReceipt.requestHash !== intakeRequestHash) {
+        throw new Error("GOAL_INTAKE_IDEMPOTENCY_CONFLICT")
+      }
+      const [existingGoal] = await transaction
+        .select()
+        .from(goal)
+        .where(and(eq(goal.userId, userId), eq(goal.id, existingReceipt.goalId)))
+        .limit(1)
+      const [existingOutcome] = await transaction
+        .select({
+          outcomeKey: outcomeQueueItem.outcomeKey,
+          goalId: outcomeQueueItem.goalId,
+        })
+        .from(outcomeQueueItem)
+        .where(and(
+          eq(outcomeQueueItem.userId, userId),
+          eq(outcomeQueueItem.outcomeKey, existingReceipt.outcomeKey),
+        ))
+        .limit(1)
+      const expectedDigest = hashRecord({
+        requestHash: intakeRequestHash,
+        goalId: existingGoal?.id,
+        outcomeKey: existingOutcome?.outcomeKey,
+      })
+      if (!existingGoal
+        || existingOutcome?.goalId !== existingGoal.id
+        || expectedDigest !== existingReceipt.resultDigest) {
+        throw new Error("GOAL_INTAKE_BINDING_WALL")
+      }
+      const [replayedReceipt] = await transaction
+        .update(goalOutcomeIntakeReceipt)
+        .set({
+          replayCount: sql`${goalOutcomeIntakeReceipt.replayCount} + 1`,
+          lastReplayedAt: submittedAt,
+        })
+        .where(and(
+          eq(goalOutcomeIntakeReceipt.userId, userId),
+          eq(goalOutcomeIntakeReceipt.idempotencyKey, intakeKey),
+          eq(goalOutcomeIntakeReceipt.requestHash, intakeRequestHash),
+          eq(goalOutcomeIntakeReceipt.resultDigest, expectedDigest),
+        ))
+        .returning({ id: goalOutcomeIntakeReceipt.id })
+      if (!replayedReceipt) throw new Error("GOAL_INTAKE_REPLAY_WRITE_WALL")
+      return existingGoal
+    }
+
+    const refs = await transaction
+      .select({ ref: goal.ref })
+      .from(goal)
+      .where(eq(goal.userId, userId))
+    const ref = nextGoalRef(refs)
+    const [created] = await transaction
+      .insert(goal)
+      .values({
+        userId,
+        ref,
+        command: trimmed,
+        lane: cls.lane,
+        mode: cls.mode,
+        risk: cls.risk,
+        authority: cls.authority,
+        verdict,
+        rationale: cls.rationale,
+        mistakePatterns: cls.mistakePatterns.map((m) => m.id),
+        matchedRules,
+        recommendedMove: cls.recommendedMove,
+        requiresApproval,
+        status: "classified",
+      })
+      .returning()
+    const queued = mapLegacyGoalToOutcome(created)
+    await transaction.insert(outcomeQueueItem).values({
+      userId: queued.userId,
+      outcomeKey: queued.outcomeKey,
+      goalId: queued.goalId,
+      goalRef: queued.goalRef,
+      title: queued.title,
+      objective: queued.objective,
+      queueOrder: queued.queueOrder,
+      dependencyKeys: [...queued.dependencyKeys],
+      riskClass: queued.riskClass,
+      approvalState: queued.approvalState,
+      authorityState: queued.authorityState,
+      authorityLevel: queued.authorityLevel,
+      authoritySubject: queued.authoritySubject,
+      authorityAction: queued.authorityAction,
+      lifecycleState: queued.lifecycleState,
+      lifecycleReason: queued.lifecycleReason,
+      terminalEvidenceRefs: [],
+      suggestedAt: new Date(queued.suggestedAt!),
     })
-    .returning()
-
-  await appendGovernanceEvent({
-    userId,
-    eventType: "GOAL_CREATED",
-    entityType: "goal",
-    entityId: row.id,
-    reason: `Classified ${cls.lane}/${cls.mode} → ${verdict}`,
-    after: { verdict, authority: cls.authority, doctrine: cls.doctrineViolations.map((v) => v.ruleId) },
-  })
-  await logEvent({
-    userId,
-    type: "goal.classified",
-    summary: `${ref} classified as ${cls.lane}/${cls.mode} -> ${verdict}`,
-    register: "goals",
-    refId: row.id,
-    metadata: { verdict, authority: cls.authority, mistakePatterns: row.mistakePatterns },
+    const resultDigest = hashRecord({
+      requestHash: intakeRequestHash,
+      goalId: created.id,
+      outcomeKey: queued.outcomeKey,
+    })
+    const [receipt] = await transaction
+      .insert(goalOutcomeIntakeReceipt)
+      .values({
+        userId,
+        idempotencyKey: intakeKey,
+        requestHash: intakeRequestHash,
+        goalId: created.id,
+        outcomeKey: queued.outcomeKey,
+        resultDigest,
+        replayCount: 0,
+        firstSubmittedAt: submittedAt,
+      })
+      .returning({ id: goalOutcomeIntakeReceipt.id })
+    const [governance] = await transaction
+      .insert(governanceEvent)
+      .values({
+        userId,
+        eventType: "GOAL_CREATED",
+        entityType: "goal",
+        entityId: String(created.id),
+        actor: "operator",
+        reason: `Classified ${cls.lane}/${cls.mode} -> ${verdict}`,
+        afterHash: hashRecord({
+          verdict,
+          authority: cls.authority,
+          doctrine: cls.doctrineViolations.map((violation) => violation.ruleId),
+        }),
+        metadata: {
+          intakeReceiptId: receipt.id,
+          requestHash: intakeRequestHash,
+          resultDigest,
+        },
+      })
+      .returning({ id: governanceEvent.id })
+    await transaction.insert(eventLog).values({
+      userId,
+      type: "goal.classified",
+      summary: `${ref} classified as ${cls.lane}/${cls.mode} -> ${verdict}`,
+      register: "goals",
+      refId: created.id,
+      metadata: {
+        verdict,
+        authority: cls.authority,
+        mistakePatterns: created.mistakePatterns,
+        intakeReceiptId: receipt.id,
+        governanceEventId: governance.id,
+        requestHash: intakeRequestHash,
+        resultDigest,
+      },
+    })
+    return created
   })
   revalidatePath("/goal-console")
+  revalidatePath("/work-orders")
   return row
 }
 

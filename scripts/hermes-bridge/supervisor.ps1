@@ -16,6 +16,7 @@ $supervisorPath = [IO.Path]::GetFullPath($MyInvocation.MyCommand.Path)
 $activationPath = Join-Path $runtimeRootPath "control\activation"
 $stateDir = Join-Path $runtimeRootPath "state"
 $supervisorStatePath = Join-Path $stateDir "supervisor.json"
+$campaignWindowPath = Join-Path $stateDir "campaign-window"
 $logDir = Join-Path $runtimeRootPath "logs"
 $supervisorLogPath = Join-Path $logDir ("supervisor-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 $cliPath = Join-Path $workspacePath "scripts\hermes-bridge\cli.mjs"
@@ -62,6 +63,47 @@ function Write-SupervisorState {
     }
     finally {
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Read-CampaignWindowId {
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "HERMES_CAMPAIGN_WINDOW_MISSING"
+    }
+    $value = [IO.File]::ReadAllText($Path, [Text.UTF8Encoding]::new($false))
+    if ($value -cnotmatch '^campaign:[0-9a-f]{32}$') {
+        throw "HERMES_CAMPAIGN_WINDOW_INVALID"
+    }
+    return $value
+}
+
+function Get-OrCreate-CampaignWindowId {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Nonce
+    )
+
+    if (Test-Path -LiteralPath $Path) {
+        return Read-CampaignWindowId -Path $Path
+    }
+    $candidate = "campaign:$([Guid]::NewGuid().ToString('N'))"
+    $temporary = "$Path.$Nonce.$([Guid]::NewGuid().ToString('N')).tmp"
+    try {
+        [IO.File]::WriteAllText($temporary, $candidate, [Text.UTF8Encoding]::new($false))
+        try {
+            [IO.File]::Move($temporary, $Path)
+        }
+        catch [IO.IOException] {
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw }
+        }
+        return Read-CampaignWindowId -Path $Path
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporary) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
     }
 }
 
@@ -114,13 +156,14 @@ function Invoke-OwnedNodeCycle {
         [Parameter(Mandatory)][string]$OwnedCliPath,
         [Parameter(Mandatory)][string]$OwnedRuntimeRoot,
         [Parameter(Mandatory)][string]$OwnedEnvPath,
+        [Parameter(Mandatory)][string]$CampaignWindowId,
+        [Parameter(Mandatory)][string]$ProcessIdentity,
         [Parameter(Mandatory)][string]$CycleLogPath,
         [Parameter(Mandatory)][int]$BudgetMilliseconds,
         [Parameter(Mandatory)][int]$PulseMilliseconds,
         [Parameter(Mandatory)][scriptblock]$Pulse
     )
 
-    $env:WILLIAMOS_HERMES_RUNTIME_ROOT = $OwnedRuntimeRoot
     $process = $null
     $processStarted = $false
     try {
@@ -131,6 +174,9 @@ function Invoke-OwnedNodeCycle {
         $startInfo.CreateNoWindow = $true
         $startInfo.RedirectStandardOutput = $true
         $startInfo.RedirectStandardError = $true
+        $startInfo.Environment["WILLIAMOS_HERMES_RUNTIME_ROOT"] = $OwnedRuntimeRoot
+        $startInfo.Environment["HERMES_CAMPAIGN_WINDOW_ID"] = $CampaignWindowId
+        $startInfo.Environment["HERMES_PROCESS_IDENTITY"] = $ProcessIdentity
         $startInfo.ArgumentList.Add("--env-file=$OwnedEnvPath")
         $startInfo.ArgumentList.Add($OwnedCliPath)
         $startInfo.ArgumentList.Add("cycle")
@@ -242,12 +288,16 @@ $SleepAction = if ($null -ne $SleepAction) { $SleepAction } else {
     { param([int]$Seconds) Start-Sleep -Seconds $Seconds }
 }
 
+New-Item -ItemType Directory -Force -Path $stateDir, $logDir | Out-Null
+
 $nonce = [Guid]::NewGuid().ToString()
+$campaignWindowId = Get-OrCreate-CampaignWindowId -Path $campaignWindowPath -Nonce $nonce
 $record = [ordered]@{
     schemaVersion = 2
     hostName = [System.Net.Dns]::GetHostName()
     processId = $PID
     nonce = $nonce
+    campaignWindowId = $campaignWindowId
     workspace = $workspacePath
     supervisorPath = $supervisorPath
     hostMode = "INTERACTIVE_USER_RESIDENT"
@@ -265,8 +315,6 @@ $record = [ordered]@{
         consecutiveFailures = 0
     }
 }
-
-New-Item -ItemType Directory -Force -Path $stateDir, $logDir | Out-Null
 
 try {
     Write-SupervisorState -Record $record -Destination $supervisorStatePath -Nonce $nonce
@@ -297,7 +345,7 @@ try {
             if ($null -ne $customCycleAction) {
                 $cycleEnvelope = Invoke-OwnedCustomCycle `
                     -Action $customCycleAction `
-                    -Arguments @($workspacePath, $cliPath, $runtimeRootPath) `
+                    -Arguments @($workspacePath, $cliPath, $runtimeRootPath, $campaignWindowId, $nonce) `
                     -BudgetMilliseconds ($CycleBudgetSeconds * 1000) `
                     -PulseMilliseconds ($HeartbeatIntervalSeconds * 1000) `
                     -Pulse $pulseAction
@@ -308,6 +356,8 @@ try {
                     -OwnedCliPath $cliPath `
                     -OwnedRuntimeRoot $runtimeRootPath `
                     -OwnedEnvPath $envPath `
+                    -CampaignWindowId $campaignWindowId `
+                    -ProcessIdentity $nonce `
                     -CycleLogPath $cycleLogPath `
                     -BudgetMilliseconds ($CycleBudgetSeconds * 1000) `
                     -PulseMilliseconds ($HeartbeatIntervalSeconds * 1000) `

@@ -4,7 +4,10 @@ import { getTableName } from "drizzle-orm"
 import { getTableConfig } from "drizzle-orm/pg-core"
 
 import {
+  goalOutcomeIntakeReceipt,
+  outcomeQueueAcquisitionAttempt,
   outcomeQueueAcquisitionReceipt,
+  outcomeQueueMutationAttempt,
   outcomeQueueMutationReceipt,
 } from "@/lib/db/schema"
 import {
@@ -15,6 +18,8 @@ import {
   bindOutcomeQueueWorkOrder,
   completeQueuedOutcome,
   completeOutcomeQueueItem,
+  canonicalOutcomeQueueCheckpointProof,
+  digestOutcomeQueueCheckpointProof,
   deferOutcomeLease as deferOutcomeLeaseCompatibility,
   deferOutcomeQueueLease,
   enqueueOutcome,
@@ -26,6 +31,7 @@ import {
   OUTCOME_QUEUE_LEGAL_TRANSITIONS,
   OUTCOME_QUEUE_LEGACY_GOAL_REFS,
   OUTCOME_QUEUE_NO_SELECTION_REASONS,
+  OUTCOME_QUEUE_MUTATION_ATTEMPT_DISPOSITIONS,
   OUTCOME_QUEUE_SQL,
   persistOutcomeQueueItem,
   readLegacyOutcomeHistory,
@@ -37,6 +43,7 @@ import {
   transitionOutcomeQueueItem,
   verifyOutcomeQueueWorkOrderBinding,
 } from "@/scripts/hermes-bridge/outcome-queue-source.mjs"
+import { verifyMutationRows } from "@/scripts/hermes-bridge/v1-2-acceptance-campaign.mjs"
 
 const now = "2026-07-28T12:00:00.000Z"
 const userId = "owner"
@@ -108,6 +115,155 @@ function dedicatedQuery(run: ReturnType<typeof vi.fn>) {
   })
 }
 
+const receiptColumnRows = [
+  ["goal_outcome_intake_receipt", "id", "integer", true, "nextval('goal_outcome_intake_receipt_id_seq'::regclass)"],
+  ["goal_outcome_intake_receipt", "userId", "text", true, null],
+  ["goal_outcome_intake_receipt", "idempotencyKey", "text", true, null],
+  ["goal_outcome_intake_receipt", "requestHash", "text", true, null],
+  ["goal_outcome_intake_receipt", "goalId", "integer", true, null],
+  ["goal_outcome_intake_receipt", "outcomeKey", "text", true, null],
+  ["goal_outcome_intake_receipt", "resultDigest", "text", true, null],
+  ["goal_outcome_intake_receipt", "replayCount", "integer", true, "0"],
+  ["goal_outcome_intake_receipt", "firstSubmittedAt", "timestamp with time zone", true, "now()"],
+  ["goal_outcome_intake_receipt", "lastReplayedAt", "timestamp with time zone", false, null],
+  ["outcome_queue_acquisition_attempt", "id", "integer", true, "nextval('outcome_queue_acquisition_attempt_id_seq'::regclass)"],
+  ["outcome_queue_acquisition_attempt", "userId", "text", true, null],
+  ["outcome_queue_acquisition_attempt", "campaignWindowId", "text", true, null],
+  ["outcome_queue_acquisition_attempt", "processIdentity", "text", true, null],
+  ["outcome_queue_acquisition_attempt", "leaseHolder", "text", true, null],
+  ["outcome_queue_acquisition_attempt", "acquisitionKeyDigest", "text", true, null],
+  ["outcome_queue_acquisition_attempt", "leaseIdentityDigest", "text", true, null],
+  ["outcome_queue_acquisition_attempt", "checkpointDigest", "text", true, null],
+  ["outcome_queue_acquisition_attempt", "checkpointOutcomeId", "text", true, null],
+  ["outcome_queue_acquisition_attempt", "checkpointSequence", "integer", true, null],
+  ["outcome_queue_acquisition_attempt", "checkpointState", "text", true, null],
+  ["outcome_queue_acquisition_attempt", "checkpointHeadSha", "text", false, null],
+  ["outcome_queue_acquisition_attempt", "checkpointMergeSha", "text", false, null],
+  ["outcome_queue_acquisition_attempt", "checkpointPrNumber", "integer", false, null],
+  ["outcome_queue_acquisition_attempt", "outcomeKey", "text", false, null],
+  ["outcome_queue_acquisition_attempt", "fencingToken", "integer", false, null],
+  ["outcome_queue_acquisition_attempt", "leaseExpiresAt", "timestamp with time zone", false, null],
+  ["outcome_queue_acquisition_attempt", "activeWorkOrderId", "integer", false, null],
+  ["outcome_queue_acquisition_attempt", "disposition", "text", true, null],
+  ["outcome_queue_acquisition_attempt", "reason", "text", false, null],
+  ["outcome_queue_acquisition_attempt", "attemptedAt", "timestamp with time zone", true, "now()"],
+  ["outcome_queue_acquisition_receipt", "id", "integer", true, "nextval('outcome_queue_acquisition_receipt_id_seq'::regclass)"],
+  ["outcome_queue_acquisition_receipt", "userId", "text", true, null],
+  ["outcome_queue_acquisition_receipt", "acquisitionKey", "text", true, null],
+  ["outcome_queue_acquisition_receipt", "outcomeKey", "text", true, null],
+  ["outcome_queue_acquisition_receipt", "firstFencingToken", "integer", true, null],
+  ["outcome_queue_acquisition_receipt", "latestFencingToken", "integer", true, null],
+  ["outcome_queue_acquisition_receipt", "createdAt", "timestamp with time zone", true, "now()"],
+  ["outcome_queue_acquisition_receipt", "updatedAt", "timestamp with time zone", true, "now()"],
+  ["outcome_queue_mutation_receipt", "id", "integer", true, "nextval('outcome_queue_mutation_receipt_id_seq'::regclass)"],
+  ["outcome_queue_mutation_receipt", "userId", "text", true, null],
+  ["outcome_queue_mutation_receipt", "idempotencyKey", "text", true, null],
+  ["outcome_queue_mutation_receipt", "operation", "text", true, null],
+  ["outcome_queue_mutation_receipt", "outcomeKey", "text", false, null],
+  ["outcome_queue_mutation_receipt", "requestHash", "text", true, null],
+  ["outcome_queue_mutation_receipt", "requestBinding", "jsonb", true, null],
+  ["outcome_queue_mutation_receipt", "resultBinding", "jsonb", true, null],
+  ["outcome_queue_mutation_receipt", "createdAt", "timestamp with time zone", true, "now()"],
+  ["outcome_queue_mutation_attempt", "id", "integer", true, "nextval('outcome_queue_mutation_attempt_id_seq'::regclass)"],
+  ["outcome_queue_mutation_attempt", "userId", "text", true, null],
+  ["outcome_queue_mutation_attempt", "idempotencyKey", "text", true, null],
+  ["outcome_queue_mutation_attempt", "requestHash", "text", true, null],
+  ["outcome_queue_mutation_attempt", "resultDigest", "text", true, null],
+  ["outcome_queue_mutation_attempt", "attemptOrdinal", "integer", true, null],
+  ["outcome_queue_mutation_attempt", "disposition", "text", true, null],
+  ["outcome_queue_mutation_attempt", "attemptedAt", "timestamp with time zone", true, "now()"],
+].map(([tableName, columnName, dataType, notNull, defaultExpression]) => ({
+  tableName,
+  columnName,
+  dataType,
+  notNull,
+  defaultExpression,
+}))
+
+const receiptConstraintRows = [
+  ["goal_outcome_intake_receipt", "goal_outcome_intake_receipt_pkey", "p", "PRIMARY KEY (id)"],
+  ["goal_outcome_intake_receipt", "goal_outcome_intake_receipt_goalId_fkey", "f", `FOREIGN KEY ("goalId") REFERENCES goal(id) ON DELETE RESTRICT`],
+  ["goal_outcome_intake_receipt", "goal_outcome_intake_receipt_user_key_unique", "u", `UNIQUE ("userId", "idempotencyKey")`],
+  ["goal_outcome_intake_receipt", "goal_outcome_intake_receipt_user_goal_unique", "u", `UNIQUE ("userId", "goalId")`],
+  ["goal_outcome_intake_receipt", "goal_outcome_intake_receipt_user_outcome_unique", "u", `UNIQUE ("userId", "outcomeKey")`],
+  ["goal_outcome_intake_receipt", "goal_outcome_intake_receipt_replay_count_check", "c", `CHECK ("replayCount" >= 0)`],
+  ["outcome_queue_acquisition_attempt", "outcome_queue_acquisition_attempt_pkey", "p", "PRIMARY KEY (id)"],
+  ["outcome_queue_acquisition_attempt", "outcome_queue_acquisition_attempt_fence_check", "c", `CHECK ("fencingToken" IS NULL OR "fencingToken" > 0)`],
+  ["outcome_queue_acquisition_attempt", "outcome_queue_acquisition_attempt_checkpoint_check", "c", `CHECK ("checkpointSequence" >= 0 AND ("checkpointPrNumber" IS NULL OR "checkpointPrNumber" > 0))`],
+  ["outcome_queue_acquisition_receipt", "outcome_queue_acquisition_receipt_pkey", "p", "PRIMARY KEY (id)"],
+  ["outcome_queue_acquisition_receipt", "outcome_queue_acquisition_receipt_user_key_unique", "u", `UNIQUE ("userId", "acquisitionKey")`],
+  ["outcome_queue_acquisition_receipt", "outcome_queue_acquisition_receipt_fence_check", "c", `CHECK ("firstFencingToken" > 0 AND "latestFencingToken" >= "firstFencingToken")`],
+  ["outcome_queue_mutation_receipt", "outcome_queue_mutation_receipt_pkey", "p", "PRIMARY KEY (id)"],
+  ["outcome_queue_mutation_receipt", "outcome_queue_mutation_receipt_user_key_unique", "u", `UNIQUE ("userId", "idempotencyKey")`],
+  ["outcome_queue_mutation_attempt", "outcome_queue_mutation_attempt_pkey", "p", "PRIMARY KEY (id)"],
+  ["outcome_queue_mutation_attempt", "outcome_queue_mutation_attempt_user_ordinal_unique", "u", `UNIQUE ("userId", "idempotencyKey", "attemptOrdinal")`],
+  ["outcome_queue_mutation_attempt", "outcome_queue_mutation_attempt_ordinal_check", "c", `CHECK ("attemptOrdinal" > 0)`],
+  ["outcome_queue_mutation_attempt", "outcome_queue_mutation_attempt_disposition_check", "c", `CHECK ("disposition" IN ('COMMITTED', 'REPLAY'))`],
+].map(([tableName, constraintName, constraintType, definition]) => ({
+  tableName,
+  constraintName,
+  constraintType,
+  validated: true,
+  definition,
+}))
+
+const receiptIndexRows = [
+  {
+    tableName: "outcome_queue_acquisition_attempt",
+    indexName: "outcome_queue_acquisition_attempt_campaign_idx",
+    unique: false,
+    valid: true,
+    ready: true,
+    keyColumns: [`"userId"`, `"campaignWindowId"`, `"attemptedAt"`],
+    predicate: null,
+  },
+  {
+    tableName: "outcome_queue_acquisition_attempt",
+    indexName: "outcome_queue_acquisition_attempt_identity_idx",
+    unique: false,
+    valid: true,
+    ready: true,
+    keyColumns: [`"userId"`, `"acquisitionKeyDigest"`, `"attemptedAt"`],
+    predicate: null,
+  },
+  {
+    tableName: "outcome_queue_acquisition_receipt",
+    indexName: "outcome_queue_acquisition_receipt_user_outcome_idx",
+    unique: false,
+    valid: true,
+    ready: true,
+    keyColumns: [`"userId"`, `"outcomeKey"`],
+    predicate: null,
+  },
+  {
+    tableName: "outcome_queue_mutation_receipt",
+    indexName: "outcome_queue_mutation_receipt_user_outcome_idx",
+    unique: false,
+    valid: true,
+    ready: true,
+    keyColumns: [`"userId"`, `"outcomeKey"`, `"createdAt"`],
+    predicate: null,
+  },
+  {
+    tableName: "outcome_queue_mutation_attempt",
+    indexName: "outcome_queue_mutation_attempt_request_idx",
+    unique: false,
+    valid: true,
+    ready: true,
+    keyColumns: [`"userId"`, `"requestHash"`, `"attemptedAt"`],
+    predicate: null,
+  },
+]
+
+function receiptCatalogResult(sql: string) {
+  if (sql === OUTCOME_QUEUE_SQL.readReceiptColumns) return { rows: receiptColumnRows }
+  if (sql === OUTCOME_QUEUE_SQL.readReceiptConstraints) {
+    return { rows: receiptConstraintRows }
+  }
+  if (sql === OUTCOME_QUEUE_SQL.readReceiptIndexes) return { rows: receiptIndexRows }
+  return null
+}
+
 function acquisitionQuery({
   receipt = [],
   receiptOutcome,
@@ -156,7 +312,19 @@ function acquisitionQuery({
         }],
       }
     }
+    if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt) {
+      return { rows: [{ id: 61 }] }
+    }
     if (sql === OUTCOME_QUEUE_SQL.noSelectionReason) return { rows: counts }
+    if (sql === OUTCOME_QUEUE_SQL.readActiveAcquisitionProof) {
+      return {
+        rows: [queueRow({
+          outcomeKey: "goal:CONTENDED",
+          fencingToken: 7,
+          activeWorkOrderId: 478,
+        })],
+      }
+    }
     throw new Error(`unexpected query: ${sql}`)
   })
   return Object.assign(run, {
@@ -172,6 +340,17 @@ const acquireInput = {
   executionBinding: "execution-a",
   leaseDurationMs: 60_000,
   activeWorkOrderId: 472,
+  campaignWindowId: "campaign-v1-2",
+  processIdentity: "supervisor-nonce-1",
+  checkpointProofProvider: vi.fn(async ({ outcome }) => ({
+    outcomeId: String(outcome.goalId),
+    outcomeKey: outcome.outcomeKey,
+    workOrderId: outcome.activeWorkOrderId,
+    fencingToken: outcome.fencingToken,
+    sequence: 4,
+    state: "HOST_VALIDATION_PASSED",
+    commit: { headSha: "a".repeat(40), mergeSha: null, prNumber: null },
+  })),
   now,
 }
 
@@ -189,6 +368,7 @@ function mutationQuery({
   governed?: boolean
 } = {}) {
   const receipts = new Map<string, Record<string, unknown>>()
+  const attemptCounts = new Map<string, number>()
   const run = vi.fn(async (sql: string, values: unknown[] = []) => {
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] }
     if (sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
@@ -240,6 +420,15 @@ function mutationQuery({
       })
       return { rows: [{ id: 41 }] }
     }
+    if (sql === OUTCOME_QUEUE_SQL.nextMutationAttemptOrdinal) {
+      const key = String(values[1])
+      return { rows: [{ attemptOrdinal: (attemptCounts.get(key) ?? 0) + 1 }] }
+    }
+    if (sql === OUTCOME_QUEUE_SQL.insertMutationAttempt) {
+      const key = String(values[1])
+      attemptCounts.set(key, Number(values[4]))
+      return { rows: [{ id: 43 + Number(values[4]) }] }
+    }
     if (sql === OUTCOME_QUEUE_SQL.insertMutationAudit) return { rows: [{ id: 42 }] }
     if (sql === OUTCOME_QUEUE_SQL.insertMutationEvent) return { rows: [{ id: 43 }] }
     throw new Error(`unexpected query: ${sql}`)
@@ -271,6 +460,8 @@ describe("transactional durable outcome queue source", () => {
         `CHECK ("fencingToken" >= 0 AND "version" >= 0)`,
     }
     const run = vi.fn(async (sql: string) => {
+      const receiptCatalog = receiptCatalogResult(sql)
+      if (receiptCatalog) return receiptCatalog
       if (sql === OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations) {
         return {
           rows: [{
@@ -314,8 +505,19 @@ describe("transactional durable outcome queue source", () => {
     expect(run.mock.calls.map(([sql]) => sql)).toEqual([
       "BEGIN",
       OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemTable,
+      OUTCOME_QUEUE_SQL.ensureMutationReceiptTable,
       OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptTable,
+      OUTCOME_QUEUE_SQL.ensureGoalOutcomeIntakeReceiptTable,
+      OUTCOME_QUEUE_SQL.ensureAcquisitionAttemptTable,
+      OUTCOME_QUEUE_SQL.ensureMutationAttemptTable,
+      OUTCOME_QUEUE_SQL.readReceiptColumns,
+      OUTCOME_QUEUE_SQL.readReceiptConstraints,
+      OUTCOME_QUEUE_SQL.ensureMutationReceiptOutcomeIndex,
       OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptOutcomeIndex,
+      OUTCOME_QUEUE_SQL.ensureAcquisitionAttemptIndexes,
+      OUTCOME_QUEUE_SQL.ensureMutationAttemptRequestIndex,
+      OUTCOME_QUEUE_SQL.readReceiptIndexes,
       OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations,
       OUTCOME_QUEUE_SQL.ensureOneActiveOutcomeIndex,
       OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemCheckConstraints,
@@ -329,6 +531,14 @@ describe("transactional durable outcome queue source", () => {
       "COMMIT",
     ])
     expect(run.mock.calls[1][1]).toEqual(["williamos:outcome-queue:hardening-schema"])
+    expect(OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemTable)
+      .toContain(`CREATE TABLE IF NOT EXISTS "outcome_queue_item"`)
+    expect(OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemTable)
+      .toContain(`REFERENCES "goal"("id") ON DELETE SET NULL`)
+    expect(OUTCOME_QUEUE_SQL.ensureMutationReceiptTable)
+      .toContain(`CREATE TABLE IF NOT EXISTS "outcome_queue_mutation_receipt"`)
+    expect(OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptTable)
+      .toContain(`CONSTRAINT "outcome_queue_acquisition_receipt_fence_check"`)
     expect(run).toHaveBeenCalledWith(
       OUTCOME_QUEUE_SQL.readOutcomeQueueHardeningConstraints,
       [constraintNames],
@@ -366,8 +576,147 @@ describe("transactional durable outcome queue source", () => {
     expect(release).toHaveBeenCalledOnce()
   })
 
+  it("fails closed under the advisory transaction when a receipt table is partial", async () => {
+    const run = vi.fn(async (sql: string) => {
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptColumns) {
+        return {
+          rows: receiptColumnRows.filter((row) => !(
+            row.tableName === "outcome_queue_mutation_receipt"
+            && row.columnName === "requestHash"
+          )),
+        }
+      }
+      return { rows: [] }
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(ensureOutcomeQueueHardeningSchema({ query })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_HARDENING_RECEIPT_COLUMN_WALL",
+    })
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemTable,
+      OUTCOME_QUEUE_SQL.ensureMutationReceiptTable,
+      OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptTable,
+      OUTCOME_QUEUE_SQL.ensureGoalOutcomeIntakeReceiptTable,
+      OUTCOME_QUEUE_SQL.ensureAcquisitionAttemptTable,
+      OUTCOME_QUEUE_SQL.ensureMutationAttemptTable,
+      OUTCOME_QUEUE_SQL.readReceiptColumns,
+      "ROLLBACK",
+    ])
+  })
+
+  it.each([
+    {
+      drift: "type",
+      columnName: "requestBinding",
+      replacement: { dataType: "text" },
+    },
+    {
+      drift: "nullability",
+      columnName: "requestHash",
+      replacement: { notNull: false },
+    },
+    {
+      drift: "default",
+      columnName: "createdAt",
+      replacement: { defaultExpression: null },
+    },
+  ])("fails closed when receipt column $drift drifts", async ({
+    columnName,
+    replacement,
+  }) => {
+    const run = vi.fn(async (sql: string) => {
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptColumns) {
+        return {
+          rows: receiptColumnRows.map((row) => (
+            row.tableName === "outcome_queue_mutation_receipt"
+              && row.columnName === columnName
+              ? { ...row, ...replacement }
+              : row
+          )),
+        }
+      }
+      return { rows: [] }
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(ensureOutcomeQueueHardeningSchema({ query })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_HARDENING_RECEIPT_COLUMN_WALL",
+    })
+    expect(run.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it.each([
+    {
+      drift: "unique key",
+      constraintName: "outcome_queue_mutation_receipt_user_key_unique",
+      definition: `UNIQUE ("userId", "outcomeKey")`,
+    },
+    {
+      drift: "fence check",
+      constraintName: "outcome_queue_acquisition_receipt_fence_check",
+      definition: `CHECK ("latestFencingToken" > 0)`,
+    },
+  ])("fails closed when a receipt $drift drifts", async ({
+    constraintName,
+    definition,
+  }) => {
+    const run = vi.fn(async (sql: string) => {
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptColumns) {
+        return { rows: receiptColumnRows }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptConstraints) {
+        return {
+          rows: receiptConstraintRows.map((row) => (
+            row.constraintName === constraintName
+              ? { ...row, definition }
+              : row
+          )),
+        }
+      }
+      return { rows: [] }
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(ensureOutcomeQueueHardeningSchema({ query })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_HARDENING_RECEIPT_CONSTRAINT_WALL",
+    })
+    expect(run.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it("fails closed when a receipt supporting index has the wrong shape", async () => {
+    const run = vi.fn(async (sql: string) => {
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptColumns) {
+        return { rows: receiptColumnRows }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptConstraints) {
+        return { rows: receiptConstraintRows }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptIndexes) {
+        return {
+          rows: receiptIndexRows.map((row) => (
+            row.indexName === "outcome_queue_mutation_receipt_user_outcome_idx"
+              ? { ...row, keyColumns: [`"userId"`, `"createdAt"`] }
+              : row
+          )),
+        }
+      }
+      return { rows: [] }
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(ensureOutcomeQueueHardeningSchema({ query })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_HARDENING_RECEIPT_INDEX_WALL",
+    })
+    expect(run.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
   it("rolls back with a typed wall when the one-active catalog index is not canonical", async () => {
     const run = vi.fn(async (sql: string) => {
+      const receiptCatalog = receiptCatalogResult(sql)
+      if (receiptCatalog) return receiptCatalog
       if (sql === OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations) {
         return {
           rows: [{
@@ -417,6 +766,8 @@ describe("transactional durable outcome queue source", () => {
 
   it("rolls back with a typed wall when existing rows violate declared invariants", async () => {
     const run = vi.fn(async (sql: string) => {
+      const receiptCatalog = receiptCatalogResult(sql)
+      if (receiptCatalog) return receiptCatalog
       if (sql === OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations) {
         return {
           rows: [{
@@ -442,8 +793,19 @@ describe("transactional durable outcome queue source", () => {
     expect(run.mock.calls.map(([sql]) => sql)).toEqual([
       "BEGIN",
       OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemTable,
+      OUTCOME_QUEUE_SQL.ensureMutationReceiptTable,
       OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptTable,
+      OUTCOME_QUEUE_SQL.ensureGoalOutcomeIntakeReceiptTable,
+      OUTCOME_QUEUE_SQL.ensureAcquisitionAttemptTable,
+      OUTCOME_QUEUE_SQL.ensureMutationAttemptTable,
+      OUTCOME_QUEUE_SQL.readReceiptColumns,
+      OUTCOME_QUEUE_SQL.readReceiptConstraints,
+      OUTCOME_QUEUE_SQL.ensureMutationReceiptOutcomeIndex,
       OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptOutcomeIndex,
+      OUTCOME_QUEUE_SQL.ensureAcquisitionAttemptIndexes,
+      OUTCOME_QUEUE_SQL.ensureMutationAttemptRequestIndex,
+      OUTCOME_QUEUE_SQL.readReceiptIndexes,
       OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations,
       "ROLLBACK",
     ])
@@ -722,12 +1084,37 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.readAcquisition,
       OUTCOME_QUEUE_SQL.acquire,
       OUTCOME_QUEUE_SQL.noSelectionReason,
+      ...(reason === "ACTIVE_LEASE_HELD"
+        ? [OUTCOME_QUEUE_SQL.readActiveAcquisitionProof]
+        : []),
+      ...(reason === "ACTIVE_LEASE_HELD"
+        ? [OUTCOME_QUEUE_SQL.insertAcquisitionAttempt]
+        : []),
       "COMMIT",
     ])
     expect(query.mock.calls[1][1]).toEqual([`${userId}:outcome-queue`])
     expect(query.mock.calls[2][1]).toEqual([userId, "acquire-none"])
     expect(query.mock.calls[3][1]).toEqual([userId, "acquire-none"])
     expect(query.mock.calls[5][1]).toEqual([now, userId])
+    const proofCall = query.mock.calls.find(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
+    )
+    expect(proofCall?.[1]?.[17] ?? null).toBe(
+      reason === "ACTIVE_LEASE_HELD" ? "LOSER" : null,
+    )
+    if (reason === "ACTIVE_LEASE_HELD") {
+      expect(proofCall?.[1]?.slice(1, 4)).toEqual([
+        "campaign-v1-2",
+        "supervisor-nonce-1",
+        "supervisor-a",
+      ])
+      expect(proofCall?.[1]?.slice(13, 17)).toEqual([
+        "goal:CONTENDED",
+        7,
+        queueRow().leaseExpiresAt,
+        478,
+      ])
+    }
   })
 
   it("acquires transactionally and replays the same live binding", async () => {
@@ -754,6 +1141,14 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.insertAcquisitionReceipt,
       [userId, "acquire-a", acquired.outcomeKey, acquired.fencingToken, now],
     )
+    const freshProof = firstQuery.mock.calls.find(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
+    )
+    expect(freshProof?.[1]?.slice(1, 4)).toEqual([
+      "campaign-v1-2",
+      "supervisor-nonce-1",
+      "supervisor-a",
+    ])
 
     const replayQuery = acquisitionQuery({
       receipt: [{ outcomeKey: acquired.outcomeKey }],
@@ -769,8 +1164,58 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
       OUTCOME_QUEUE_SQL.readReceiptOutcome,
       OUTCOME_QUEUE_SQL.revalidateAcquisition,
+      OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
       "COMMIT",
     ])
+    const proofCall = replayQuery.mock.calls.find(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
+    )
+    expect(proofCall?.[1]?.slice(13, 19)).toEqual([
+      acquired.outcomeKey,
+      acquired.fencingToken,
+      acquired.leaseExpiresAt,
+      acquired.activeWorkOrderId,
+      "REPLAY_WINNER",
+      null,
+    ])
+    const checkpointProof = canonicalOutcomeQueueCheckpointProof({
+      outcomeId: String(acquired.goalId),
+      outcomeKey: acquired.outcomeKey,
+      workOrderId: acquired.activeWorkOrderId,
+      fencingToken: acquired.fencingToken,
+      sequence: 4,
+      state: "HOST_VALIDATION_PASSED",
+      commit: { headSha: "a".repeat(40), mergeSha: null, prNumber: null },
+    })
+    expect(proofCall?.[1]?.[6]).toBe(digestOutcomeQueueCheckpointProof(checkpointProof))
+    expect(proofCall?.[1]?.slice(7, 13)).toEqual([
+      String(acquired.goalId),
+      4,
+      "HOST_VALIDATION_PASSED",
+      "a".repeat(40),
+      null,
+      null,
+    ])
+    const serializedProof = JSON.stringify(proofCall?.[1])
+    expect(serializedProof).not.toContain(String(acquireInput.acquisitionKey))
+    expect(serializedProof).not.toContain(String(acquireInput.leaseToken))
+    expect(serializedProof).not.toContain(String(acquireInput.executionBinding))
+  })
+
+  it("rejects acquisition evidence without trusted resident scope and checkpoint context", async () => {
+    const query = acquisitionQuery({ selected: [queueRow()] })
+    for (const [override, code] of [
+      [{ campaignWindowId: "" }, "OUTCOME_QUEUE_CAMPAIGN_WINDOW_INVALID"],
+      [{ processIdentity: "" }, "OUTCOME_QUEUE_PROCESS_IDENTITY_INVALID"],
+      [{ checkpointProofProvider: undefined }, "OUTCOME_QUEUE_CHECKPOINT_PROVIDER_REQUIRED"],
+    ] as const) {
+      await expect(acquireNextEligibleOutcome({
+        query,
+        ...acquireInput,
+        ...override,
+      })).rejects.toMatchObject({ code })
+    }
+    expect(query).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -841,6 +1286,7 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.acquireLock,
       OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
       OUTCOME_QUEUE_SQL.readReceiptOutcome,
+      OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
       "COMMIT",
     ])
   })
@@ -904,6 +1350,7 @@ describe("transactional durable outcome queue source", () => {
       leaseHolder: "supervisor-after-restart",
       leaseToken: "lease-after-restart",
       executionBinding: "execution-after-restart",
+      processIdentity: "supervisor-nonce-2",
     })).resolves.toEqual({
       outcome: reclaimed,
       acquired: true,
@@ -931,6 +1378,12 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.advanceAcquisitionReceipt,
       [userId, "acquire-a", reclaimed.fencingToken, now, reclaimed.outcomeKey],
     )
+    const reclaimProof = query.mock.calls.find(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
+    )
+    expect(reclaimProof?.[1]?.[2]).toBe("supervisor-nonce-2")
+    expect(reclaimProof?.[1]?.[14]).toBe(4)
+    expect(reclaimProof?.[1]?.[17]).toBe("RECLAIMED")
   })
 
   it("guards transitions by user, version, and live fence", async () => {
@@ -1515,6 +1968,63 @@ describe("governed outcome queue mutations", () => {
     ))).toBe(true)
   })
 
+  it("defines durable sanitized intake, mutation, and acquisition proof registers", () => {
+    const intake = getTableConfig(goalOutcomeIntakeReceipt)
+    expect(intake.uniqueConstraints).toHaveLength(3)
+    expect(intake.columns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      "idempotencyKey",
+      "requestHash",
+      "goalId",
+      "outcomeKey",
+      "resultDigest",
+      "replayCount",
+      "lastReplayedAt",
+    ]))
+
+    const mutations = getTableConfig(outcomeQueueMutationAttempt)
+    expect(mutations.columns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      "idempotencyKey",
+      "requestHash",
+      "resultDigest",
+      "attemptOrdinal",
+      "disposition",
+      "attemptedAt",
+    ]))
+
+    const acquisitions = getTableConfig(outcomeQueueAcquisitionAttempt)
+    const acquisitionColumns = acquisitions.columns.map((column) => column.name)
+    expect(acquisitionColumns).toEqual(expect.arrayContaining([
+      "campaignWindowId",
+      "processIdentity",
+      "leaseHolder",
+      "acquisitionKeyDigest",
+      "leaseIdentityDigest",
+      "checkpointDigest",
+      "checkpointOutcomeId",
+      "checkpointSequence",
+      "checkpointState",
+      "checkpointHeadSha",
+      "checkpointMergeSha",
+      "checkpointPrNumber",
+      "outcomeKey",
+      "fencingToken",
+      "leaseExpiresAt",
+      "activeWorkOrderId",
+      "disposition",
+    ]))
+    expect(acquisitionColumns).not.toEqual(expect.arrayContaining([
+      "acquisitionKey",
+      "leaseToken",
+      "executionBinding",
+    ]))
+    expect(OUTCOME_QUEUE_SQL.readAcquisitionAttemptEvidence).not.toMatch(
+      /"acquisitionKey"|"leaseToken"|"executionBinding"/,
+    )
+    expect(OUTCOME_QUEUE_SQL.readMutationAttemptEvidence).toContain(
+      `"requestHash", "resultDigest"`,
+    )
+  })
+
   it("pauses under a user lock, clears the active lease, and records receipt/audit/event atomically", async () => {
     const paused = queueRow({
       lifecycleState: "blocked",
@@ -1552,6 +2062,8 @@ describe("governed outcome queue mutations", () => {
       OUTCOME_QUEUE_SQL.readMutationItem,
       OUTCOME_QUEUE_SQL.pauseMutation,
       OUTCOME_QUEUE_SQL.insertMutationReceipt,
+      OUTCOME_QUEUE_SQL.nextMutationAttemptOrdinal,
+      OUTCOME_QUEUE_SQL.insertMutationAttempt,
       OUTCOME_QUEUE_SQL.insertMutationAudit,
       OUTCOME_QUEUE_SQL.insertMutationEvent,
       "COMMIT",
@@ -1904,6 +2416,67 @@ describe("governed outcome queue mutations", () => {
     })
     expect(query.mock.calls.filter(([sql]) => sql === OUTCOME_QUEUE_SQL.declineMutation))
       .toHaveLength(1)
+    const proofCalls = query.mock.calls.filter(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.insertMutationAttempt,
+    )
+    expect(proofCalls).toHaveLength(2)
+    expect(proofCalls.map(([, values]) => values?.slice(1, 6))).toEqual([
+      [
+        "decline-1",
+        expect.any(String),
+        expect.any(String),
+        1,
+        OUTCOME_QUEUE_MUTATION_ATTEMPT_DISPOSITIONS.COMMITTED,
+      ],
+      [
+        "decline-1",
+        expect.any(String),
+        expect.any(String),
+        2,
+        OUTCOME_QUEUE_MUTATION_ATTEMPT_DISPOSITIONS.REPLAY,
+      ],
+    ])
+    expect(proofCalls[0]?.[1]?.[2]).toBe(proofCalls[1]?.[1]?.[2])
+    expect(proofCalls[0]?.[1]?.[3]).toBe(proofCalls[1]?.[1]?.[3])
+
+    const receiptValues = query.mock.calls.find(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.insertMutationReceipt,
+    )?.[1] as unknown[]
+    const receipt = {
+      id: 41,
+      idempotencyKey: receiptValues[1],
+      operation: receiptValues[2],
+      outcomeKey: receiptValues[3],
+      requestHash: receiptValues[4],
+      requestBinding: JSON.parse(String(receiptValues[5])),
+      resultBinding: JSON.parse(String(receiptValues[6])),
+      auditCount: 1,
+      eventCount: 1,
+    }
+    const attempts = proofCalls.map(([, values], index) => ({
+      id: 44 + index,
+      idempotencyKey: values?.[1],
+      requestHash: values?.[2],
+      resultDigest: values?.[3],
+      attemptOrdinal: values?.[4],
+      disposition: values?.[5],
+      attemptedAt: values?.[6],
+    }))
+    const digest = (value: unknown) => createHash("sha256")
+      .update(typeof value === "string" ? value : JSON.stringify(value))
+      .digest("hex")
+    expect(verifyMutationRows([{
+      action: "DECLINE",
+      targetOutcomeKey: receipt.outcomeKey,
+      receiptId: receipt.id,
+      requestHash: receipt.requestHash,
+      idempotencyKeyDigest: digest(String(receipt.idempotencyKey)),
+      resultDigest: digest(receipt.resultBinding),
+      firstAttemptId: 44,
+      replayAttemptId: 45,
+      mutationCount: 1,
+      mutationCountAfterReplay: 1,
+    }], [receipt], attempts)).toMatchObject({ ok: true })
 
     await expect(mutateOutcomeQueueItem({
       ...input,
