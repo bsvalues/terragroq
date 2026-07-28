@@ -9,6 +9,7 @@ import {
   CirclePause,
   CirclePlay,
   GitBranch,
+  GitFork,
   Loader2,
   ShieldCheck,
   X,
@@ -90,6 +91,9 @@ export function OperatorOutcomeQueuePanel({
   const router = useRouter()
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(() => new Set())
   const [superseding, setSuperseding] = useState<OutcomeQueueOperatorRow | null>(null)
+  const [editingDependencies, setEditingDependencies] =
+    useState<OutcomeQueueOperatorRow | null>(null)
+  const [dependencyKeys, setDependencyKeys] = useState<Set<string>>(() => new Set())
   const [replacementTitle, setReplacementTitle] = useState("")
   const [pending, startTransition] = useTransition()
   const attemptKeys = useRef(new Map<string, string>())
@@ -184,6 +188,21 @@ export function OperatorOutcomeQueuePanel({
     }))
     setSuperseding(null)
     setReplacementTitle("")
+  }
+
+  function openDependencies(row: OutcomeQueueOperatorRow) {
+    setEditingDependencies(row)
+    setDependencyKeys(new Set(row.dependencyKeys))
+  }
+
+  function submitDependencies() {
+    if (!editingDependencies) return
+    run(inputFor(editingDependencies, "dependencies", {
+      reason: "Primary Operator updated outcome dependencies.",
+      dependencyKeys: [...dependencyKeys].sort(),
+    }))
+    setEditingDependencies(null)
+    setDependencyKeys(new Set())
   }
 
   return (
@@ -359,6 +378,16 @@ export function OperatorOutcomeQueuePanel({
                           size="icon"
                           variant="ghost"
                           disabled={rowPending}
+                          title="Set dependencies"
+                          aria-label={`Set dependencies for ${row.title}`}
+                          onClick={() => openDependencies(row)}
+                        >
+                          <GitFork className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          disabled={rowPending}
                           title="Supersede outcome"
                           aria-label={`Supersede ${row.title}`}
                           onClick={() => {
@@ -419,6 +448,61 @@ export function OperatorOutcomeQueuePanel({
             <Button variant="outline" onClick={() => setSuperseding(null)}>Cancel</Button>
             <Button disabled={replacementTitle.trim() === "" || pending} onClick={submitSupersede}>
               Supersede
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editingDependencies !== null} onOpenChange={(open) => {
+        if (!open) setEditingDependencies(null)
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Set outcome dependencies</DialogTitle>
+            <DialogDescription>
+              This outcome remains ineligible until every selected outcome completes.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            {surface.rows.filter((candidate) => (
+              candidate.outcomeKey !== editingDependencies?.outcomeKey
+              && !["declined", "superseded"].includes(candidate.lifecycleState)
+            )).map((candidate) => {
+              const checked = dependencyKeys.has(candidate.outcomeKey)
+              return (
+                <label
+                  key={candidate.outcomeKey}
+                  className="flex items-start gap-3 border-b border-border py-2 text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4"
+                    checked={checked}
+                    onChange={(event) => {
+                      setDependencyKeys((current) => {
+                        const next = new Set(current)
+                        if (event.target.checked) next.add(candidate.outcomeKey)
+                        else next.delete(candidate.outcomeKey)
+                        return next
+                      })
+                    }}
+                  />
+                  <span>
+                    <span className="block font-medium">{candidate.title}</span>
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      {candidate.outcomeKey} · {candidate.lifecycleLabel}
+                    </span>
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingDependencies(null)}>
+              Cancel
+            </Button>
+            <Button disabled={pending} onClick={submitDependencies}>
+              Save dependencies
             </Button>
           </DialogFooter>
         </DialogContent>

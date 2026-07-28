@@ -2,6 +2,7 @@ export type QueueMutationAction =
   | "pause"
   | "resume"
   | "reorder"
+  | "dependencies"
   | "approve"
   | "decline"
   | "supersede"
@@ -15,6 +16,7 @@ export type OutcomeQueueMutationInput = {
   approvalDecisionId?: number
   authorityGrantRef?: string
   orderedOutcomes?: Array<{ outcomeKey: string; expectedVersion: number }>
+  dependencyKeys?: string[]
   replacement?: {
     title: string
     objective?: string
@@ -112,7 +114,7 @@ export function shouldOfferOutcomeAuthorityBinding(
 }
 
 const ACTIONS = new Set<QueueMutationAction>([
-  "pause", "resume", "reorder", "approve", "decline", "supersede",
+  "pause", "resume", "reorder", "dependencies", "approve", "decline", "supersede",
 ])
 const EXACT_STATUS_BY_CODE: Record<string, OutcomeQueueMutationActionResult["status"]> = {
   OUTCOME_QUEUE_ORDERED_SNAPSHOT_INCOMPLETE: "STALE",
@@ -120,6 +122,8 @@ const EXACT_STATUS_BY_CODE: Record<string, OutcomeQueueMutationActionResult["sta
   OUTCOME_QUEUE_IDEMPOTENCY_CONFLICT: "CONFLICT",
   OUTCOME_QUEUE_APPROVAL_AUTHORITY_REQUIRED: "INVALID",
   OUTCOME_QUEUE_APPROVAL_AUTHORITY_INVALID: "UNAUTHORIZED",
+  OUTCOME_QUEUE_DEPENDENCY_CYCLE: "INVALID",
+  OUTCOME_QUEUE_DEPENDENCY_INVALID: "INVALID",
 }
 
 export function validateOutcomeQueueMutationInput(
@@ -153,6 +157,19 @@ export function validateOutcomeQueueMutationInput(
       || !Number.isSafeInteger((entry as Record<string, unknown>).expectedVersion)
     ))) return null
   }
+  if (input.dependencyKeys !== undefined) {
+    if (
+      !Array.isArray(input.dependencyKeys)
+      || input.dependencyKeys.length > 100
+      || input.dependencyKeys.some((entry) => (
+        typeof entry !== "string"
+        || entry.trim() === ""
+        || entry.length > 300
+      ))
+      || new Set(input.dependencyKeys.map((entry) => entry.trim())).size
+        !== input.dependencyKeys.length
+    ) return null
+  }
   if (input.replacement !== undefined) {
     if (!input.replacement || typeof input.replacement !== "object"
       || Array.isArray(input.replacement)) return null
@@ -167,6 +184,7 @@ export function validateOutcomeQueueMutationInput(
     ) return null
   }
   if (input.action === "reorder" && input.orderedOutcomes === undefined) return null
+  if (input.action === "dependencies" && input.dependencyKeys === undefined) return null
   if (input.action === "supersede" && input.replacement === undefined) return null
   return input as OutcomeQueueMutationInput
 }
@@ -187,6 +205,7 @@ export function buildOutcomeQueueRuntimeMutation(
     approvalDecisionId: input.approvalDecisionId,
     authorityGrantRef: input.authorityGrantRef,
     orderedOutcomes: input.orderedOutcomes,
+    dependencyKeys: input.dependencyKeys,
     replacement: input.replacement,
   }
 }

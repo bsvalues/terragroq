@@ -55,6 +55,7 @@ describe("outcome queue server-action boundary", () => {
       approvalDecisionId: undefined,
       authorityGrantRef: undefined,
       orderedOutcomes: undefined,
+      dependencyKeys: undefined,
       replacement: undefined,
     })
   })
@@ -69,6 +70,8 @@ describe("outcome queue server-action boundary", () => {
     expect(classifyOutcomeQueueMutationError("OUTCOME_QUEUE_AUTHORITY_EXPIRED"))
       .toBe("UNAUTHORIZED")
     expect(classifyOutcomeQueueMutationError("OUTCOME_QUEUE_TRANSITION_ILLEGAL"))
+      .toBe("INVALID")
+    expect(classifyOutcomeQueueMutationError("OUTCOME_QUEUE_DEPENDENCY_CYCLE"))
       .toBe("INVALID")
     expect(classifyOutcomeQueueMutationError("UNRELATED_DATABASE_ERROR")).toBeNull()
   })
@@ -198,5 +201,25 @@ describe("outcome queue server-action boundary", () => {
         expectedVersion: 1,
       })),
     })).toBeNull()
+    expect(validateOutcomeQueueMutationInput({
+      action: "dependencies",
+      outcomeKey: "goal:1",
+      expectedVersion: 1,
+      idempotencyKey: "key",
+    })).toBeNull()
+    expect(validateOutcomeQueueMutationInput({
+      action: "dependencies",
+      outcomeKey: "goal:1",
+      expectedVersion: 1,
+      idempotencyKey: "key",
+      dependencyKeys: ["goal:2", "goal:2"],
+    })).toBeNull()
+    expect(validateOutcomeQueueMutationInput({
+      action: "dependencies",
+      outcomeKey: "goal:1",
+      expectedVersion: 1,
+      idempotencyKey: "key",
+      dependencyKeys: ["goal:2"],
+    })).toMatchObject({ action: "dependencies", dependencyKeys: ["goal:2"] })
   })
 })

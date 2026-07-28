@@ -714,6 +714,13 @@ WHERE q."userId" = $1
 ORDER BY ${ORDER_BY}
 FOR UPDATE OF q
 `,
+  readDependencyMutationSnapshot: `
+SELECT ${QUEUE_COLUMNS}
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+ORDER BY ${ORDER_BY}
+FOR UPDATE OF q
+`,
   pauseMutation: `
 UPDATE "outcome_queue_item" AS q
 SET "lifecycleState" = 'blocked',
@@ -844,6 +851,17 @@ RETURNING ${QUEUE_COLUMNS}
   reorderMutation: `
 UPDATE "outcome_queue_item" AS q
 SET "queueOrder" = $4,
+    "version" = q."version" + 1,
+    "updatedAt" = $5::timestamptz
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."version" = $3
+  AND q."lifecycleState" IN ('suggested', 'approved', 'blocked')
+RETURNING ${QUEUE_COLUMNS}
+`,
+  dependencyMutation: `
+UPDATE "outcome_queue_item" AS q
+SET "dependencyKeys" = $4::text[],
     "version" = q."version" + 1,
     "updatedAt" = $5::timestamptz
 WHERE q."userId" = $1
@@ -3058,6 +3076,7 @@ const MUTATION_ACTIONS = new Set([
   "pause",
   "resume",
   "reorder",
+  "dependencies",
   "approve",
   "decline",
   "supersede",
@@ -3102,6 +3121,19 @@ function normalizeReplacement(value, sourceKey, user, idempotencyKey) {
   }
 }
 
+function normalizeDependencyKeys(value) {
+  if (!Array.isArray(value) || value.length > 100) {
+    fail("OUTCOME_QUEUE_DEPENDENCIES_INVALID")
+  }
+  const dependencies = value.map((entry) => (
+    nonempty(entry, "OUTCOME_QUEUE_DEPENDENCIES_INVALID")
+  ))
+  if (new Set(dependencies).size !== dependencies.length) {
+    fail("OUTCOME_QUEUE_DEPENDENCIES_INVALID")
+  }
+  return dependencies.sort()
+}
+
 function mutationRequest(input, user) {
   const action = enumValue(input.action, MUTATION_ACTIONS, "OUTCOME_QUEUE_MUTATION_ACTION_INVALID")
   const outcomeKey = nonempty(input.outcomeKey, "OUTCOME_QUEUE_KEY_INVALID")
@@ -3116,6 +3148,9 @@ function mutationRequest(input, user) {
   if (action === "reorder" && orderedOutcomes === null) {
     fail("OUTCOME_QUEUE_ORDERED_SNAPSHOT_REQUIRED")
   }
+  const dependencyKeys = action === "dependencies"
+    ? normalizeDependencyKeys(input.dependencyKeys)
+    : null
   const approvalDecisionId = input.approvalDecisionId == null
     ? null
     : integer(input.approvalDecisionId, "OUTCOME_QUEUE_APPROVAL_DECISION_INVALID", { minimum: 1 })
@@ -3139,6 +3174,7 @@ function mutationRequest(input, user) {
     approvalDecisionId,
     authorityGrantRef,
     orderedOutcomes,
+    dependencyKeys,
     replacement,
   }
 }
@@ -3226,6 +3262,65 @@ async function reorderMutation(connection, request, user, at) {
   return { outcome, affectedOutcomes }
 }
 
+function dependencyMutationCycle(snapshot, outcomeKey, dependencyKeys) {
+  const byKey = new Map(snapshot.map((row) => [row.outcomeKey, row]))
+  const dependenciesFor = (key) => (
+    key === outcomeKey ? dependencyKeys : (byKey.get(key)?.dependencyKeys ?? [])
+  )
+  const visiting = new Set()
+  const visited = new Set()
+
+  function visit(key) {
+    if (visiting.has(key)) return true
+    if (visited.has(key)) return false
+    visiting.add(key)
+    for (const dependencyKey of dependenciesFor(key)) {
+      if (visit(dependencyKey)) return true
+    }
+    visiting.delete(key)
+    visited.add(key)
+    return false
+  }
+
+  return visit(outcomeKey)
+}
+
+async function dependenciesMutation(connection, request, user, at) {
+  const snapshotResult = await connection.query(
+    OUTCOME_QUEUE_SQL.readDependencyMutationSnapshot,
+    [user],
+  )
+  const snapshot = snapshotResult?.rows ?? []
+  const target = snapshot.find((row) => row.outcomeKey === request.outcomeKey)
+  if (!target) fail("OUTCOME_QUEUE_OUTCOME_NOT_FOUND")
+  assertVersion(target, request.expectedVersion)
+  if (!["suggested", "approved", "blocked"].includes(target.lifecycleState)) {
+    fail("OUTCOME_QUEUE_DEPENDENCIES_ILLEGAL")
+  }
+  if (request.dependencyKeys.includes(request.outcomeKey)) {
+    fail("OUTCOME_QUEUE_DEPENDENCY_CYCLE")
+  }
+  const byKey = new Map(snapshot.map((row) => [row.outcomeKey, row]))
+  for (const dependencyKey of request.dependencyKeys) {
+    const dependency = byKey.get(dependencyKey)
+    if (!dependency || ["declined", "superseded"].includes(dependency.lifecycleState)) {
+      fail("OUTCOME_QUEUE_DEPENDENCY_INVALID")
+    }
+  }
+  if (dependencyMutationCycle(snapshot, request.outcomeKey, request.dependencyKeys)) {
+    fail("OUTCOME_QUEUE_DEPENDENCY_CYCLE")
+  }
+  const updated = await connection.query(OUTCOME_QUEUE_SQL.dependencyMutation, [
+    user,
+    request.outcomeKey,
+    request.expectedVersion,
+    request.dependencyKeys,
+    at,
+  ])
+  if (updated?.rows?.length !== 1) fail("OUTCOME_QUEUE_VERSION_CONFLICT")
+  return updated.rows[0]
+}
+
 /**
  * Canonical exactly-once operator mutation boundary used by app/actions/outcome-queue.ts.
  */
@@ -3283,6 +3378,9 @@ export async function mutateOutcomeQueueItem({
       const reordered = await reorderMutation(connection, request, user, at)
       outcome = reordered.outcome
       affectedOutcomes = reordered.affectedOutcomes
+    } else if (request.action === "dependencies") {
+      outcome = await dependenciesMutation(connection, request, user, at)
+      affectedOutcomes = [outcome]
     } else {
       const currentResult = await connection.query(
         OUTCOME_QUEUE_SQL.readMutationItem,

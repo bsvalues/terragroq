@@ -406,12 +406,14 @@ function mutationQuery({
   snapshot = [],
   rebound = [],
   governed = true,
+  dependencySnapshot = [],
 }: {
   current?: Record<string, unknown>
   mutated?: Record<string, unknown>
   snapshot?: Record<string, unknown>[]
   rebound?: Record<string, unknown>[]
   governed?: boolean
+  dependencySnapshot?: Record<string, unknown>[]
 } = {}) {
   const receipts = new Map<string, Record<string, unknown>>()
   const attemptCounts = new Map<string, number>()
@@ -424,6 +426,9 @@ function mutationQuery({
     }
     if (sql === OUTCOME_QUEUE_SQL.readMutationItem) return { rows: [current] }
     if (sql === OUTCOME_QUEUE_SQL.readMutationSnapshot) return { rows: snapshot }
+    if (sql === OUTCOME_QUEUE_SQL.readDependencyMutationSnapshot) {
+      return { rows: dependencySnapshot }
+    }
     if (sql === OUTCOME_QUEUE_SQL.governedApprovalMutation) {
       return { rows: governed ? [mutated] : [] }
     }
@@ -431,6 +436,7 @@ function mutationQuery({
       OUTCOME_QUEUE_SQL.pauseMutation,
       OUTCOME_QUEUE_SQL.declineMutation,
       OUTCOME_QUEUE_SQL.supersedeMutation,
+      OUTCOME_QUEUE_SQL.dependencyMutation,
     ].includes(sql)) {
       return { rows: [mutated] }
     }
@@ -2412,6 +2418,87 @@ describe("governed outcome queue mutations", () => {
       orderedOutcomes: [{ outcomeKey: target.outcomeKey, expectedVersion: 3 }],
       now,
     })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_ORDERED_SNAPSHOT_INCOMPLETE" })
+  })
+
+  it("updates dependencies under the queue lock and rejects missing references and cycles", async () => {
+    const target = queueRow({
+      lifecycleState: "suggested",
+      version: 3,
+      dependencyKeys: [],
+    })
+    const predecessor = queueRow({
+      id: 2,
+      outcomeKey: "goal:GOAL-0999",
+      lifecycleState: "approved",
+      version: 4,
+      dependencyKeys: [],
+    })
+    const updated = {
+      ...target,
+      dependencyKeys: [predecessor.outcomeKey],
+      version: 4,
+    }
+    const query = mutationQuery({
+      current: target,
+      mutated: updated,
+      dependencySnapshot: [target, predecessor],
+    })
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "dependencies",
+      outcomeKey: target.outcomeKey,
+      expectedVersion: 3,
+      idempotencyKey: "dependencies-1",
+      dependencyKeys: [predecessor.outcomeKey],
+      now,
+    })).resolves.toMatchObject({
+      outcome: {
+        outcomeKey: target.outcomeKey,
+        dependencyKeys: [predecessor.outcomeKey],
+        version: 4,
+      },
+      replayed: false,
+    })
+    expect(OUTCOME_QUEUE_SQL.dependencyMutation).toContain(
+      `q."lifecycleState" IN ('suggested', 'approved', 'blocked')`,
+    )
+    expect(query.mock.calls.find(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.dependencyMutation,
+    )?.[1]).toEqual([
+      userId,
+      target.outcomeKey,
+      3,
+      [predecessor.outcomeKey],
+      now,
+    ])
+
+    await expect(mutateOutcomeQueueItem({
+      query: mutationQuery({ dependencySnapshot: [target] }),
+      userId,
+      action: "dependencies",
+      outcomeKey: target.outcomeKey,
+      expectedVersion: 3,
+      idempotencyKey: "dependencies-missing",
+      dependencyKeys: ["goal:missing"],
+      now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_DEPENDENCY_INVALID" })
+
+    await expect(mutateOutcomeQueueItem({
+      query: mutationQuery({
+        dependencySnapshot: [
+          target,
+          { ...predecessor, dependencyKeys: [target.outcomeKey] },
+        ],
+      }),
+      userId,
+      action: "dependencies",
+      outcomeKey: target.outcomeKey,
+      expectedVersion: 3,
+      idempotencyKey: "dependencies-cycle",
+      dependencyKeys: [predecessor.outcomeKey],
+      now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_DEPENDENCY_CYCLE" })
   })
 
   it("does not let decline or supersede directly terminate an active outcome", async () => {
