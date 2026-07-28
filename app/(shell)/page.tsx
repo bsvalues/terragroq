@@ -1,10 +1,13 @@
 import Link from "next/link"
 import { getDashboardData } from "@/app/actions/dashboard"
+import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
 import { getHomeWorkRadarSource } from "@/app/(shell)/home-work-radar-query"
 import { PageHeader } from "@/components/shell/page-header"
 import { StatGrid } from "@/components/dashboard/stat-grid"
 import { EventFeed } from "@/components/dashboard/event-feed"
 import { getHomeCommandCenter } from "@/components/dashboard/home-command-center"
+import { projectHomeQueueContinuity } from "@/components/dashboard/home-queue-continuity"
+import { HomeQueueContinuityPanel } from "@/components/dashboard/home-queue-continuity-panel"
 import { HomeWorkRadarPanel } from "@/components/dashboard/home-work-radar-panel"
 import { OperatorStartPanel } from "@/components/dashboard/operator-start-panel"
 import { ResearchModeSummaryPanel } from "@/components/dashboard/research-mode-summary-panel"
@@ -13,11 +16,13 @@ import { ArrowRight, CircleDot, Plus, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 export default async function DashboardPage() {
-  const [{ stats, events }, radarSource] = await Promise.all([
+  const [{ stats, events }, radarSource, outcomeQueueSurface] = await Promise.all([
     getDashboardData(),
     getHomeWorkRadarSource(),
+    getOutcomeQueueSurface(),
   ])
   const home = getHomeCommandCenter(stats, radarSource)
+  const queueContinuity = projectHomeQueueContinuity(outcomeQueueSurface)
 
   return (
     <>
@@ -35,6 +40,7 @@ export default async function DashboardPage() {
       />
 
       <div className="flex flex-col gap-8 p-6">
+        <HomeQueueContinuityPanel continuity={queueContinuity} />
         <HomeWorkRadarPanel radar={home.workRadar} />
 
         <section className="overflow-hidden rounded-3xl border border-border bg-card">
