@@ -19,18 +19,36 @@ import type { OutcomeQueueRecord } from "@/lib/outcome-queue/engine"
 import {
   buildOutcomeQueueRuntimeMutation,
   classifyOutcomeQueueMutationError,
-  scopeMatchesOutcome,
+  isOutcomeAuthorityBindingAllowed,
+  isOutcomeAuthorityLifecycleEligible,
+  outcomeAuthorityGrantResult,
+  shouldRebindOutcomeAuthority,
   validateOutcomeQueueMutationInput,
   type OutcomeQueueMutationActionResult,
   type OutcomeQueueMutationInput,
 } from "@/lib/outcome-queue/operator-mutations"
 import { getUserId } from "@/lib/session"
+import { createAuthorityGrantWithResult } from "@/app/actions/authority"
 
 type QueueMutationRuntimeResult = {
   replayed?: boolean
   outcome?: { outcomeKey?: string; version?: number }
   code?: string
 }
+
+const OUTCOME_GRANT_BLOCKED_ACTIONS = [
+  "production mutation",
+  "TerraFusion",
+  "Property Workbench",
+  "TerraPilot",
+  "county/PACS",
+  "protected data",
+  "paid overage",
+  "destructive action",
+  "secret inspection",
+  "authority expansion",
+  "issue #357",
+] as const
 
 function asRecord(row: OutcomeQueueItem): OutcomeQueueRecord {
   return {
@@ -59,7 +77,7 @@ function grantMatches(
     || (grant.expiresAt !== null && grant.expiresAt.getTime() <= now.getTime())
     || grant.authorityLevel !== item.authorityLevel
     || grant.grantedTo !== item.authoritySubject
-    || !scopeMatchesOutcome(grant.scope, item.outcomeKey, item.goalRef)
+    || grant.scope !== item.outcomeKey
     || (grant.workOrderId !== null && grant.workOrderId !== item.activeWorkOrderId)
     || actionCovered(grant.blockedActions, item.authorityAction)
   ) {
@@ -95,13 +113,14 @@ export async function getOutcomeQueueSurface(): Promise<OutcomeQueueOperatorSurf
   const validApprovalDecisionIds = queue.flatMap((item) => {
     if (item.approvalDecisionId === null) return []
     const approval = byDecisionId.get(item.approvalDecisionId)
-    return approval
-      && scopeMatchesOutcome(approval.scope, item.outcomeKey, item.goalRef)
+    return approval && isOutcomeAuthorityBindingAllowed(item, approval)
       ? [approval.id]
       : []
   })
   const validAuthorityGrantRefs = queue.flatMap((item) => (
-    grants.some((grant) => grantMatches(item, grant, now)) && item.authorityGrantRef
+    decisions.some((approval) => isOutcomeAuthorityBindingAllowed(item, approval))
+      && grants.some((grant) => grantMatches(item, grant, now))
+      && item.authorityGrantRef
       ? [item.authorityGrantRef]
       : []
   ))
@@ -109,20 +128,18 @@ export async function getOutcomeQueueSurface(): Promise<OutcomeQueueOperatorSurf
     queue.map((item) => [
       item.outcomeKey,
       decisions
-        .filter((approval) => scopeMatchesOutcome(
-          approval.scope,
-          item.outcomeKey,
-          item.goalRef,
-        ))
+        .filter((approval) => isOutcomeAuthorityBindingAllowed(item, approval))
         .map((approval) => approval.id),
     ]),
   )
   const availableAuthorityGrantRefsByOutcomeKey = Object.fromEntries(
     queue.map((item) => [
       item.outcomeKey,
-      grants
-        .filter((grant) => grantMatches(item, grant, now, false))
-        .flatMap((grant) => grant.ref ? [grant.ref] : []),
+      decisions.some((approval) => isOutcomeAuthorityBindingAllowed(item, approval))
+        ? grants
+          .filter((grant) => grantMatches(item, grant, now, false))
+          .flatMap((grant) => grant.ref ? [grant.ref] : [])
+        : [],
     ]),
   )
 
@@ -135,6 +152,97 @@ export async function getOutcomeQueueSurface(): Promise<OutcomeQueueOperatorSurf
     availableApprovalDecisionIdsByOutcomeKey,
     availableAuthorityGrantRefsByOutcomeKey,
   })
+}
+
+export async function recordOutcomeAuthorityGrant(input: {
+  outcomeKey: string
+  approvalDecisionId: number
+}): Promise<{
+  status: "RECORDED" | "REPLAYED" | "INVALID" | "UNAUTHORIZED"
+  message: string
+  grantRef: string | null
+}> {
+  const userId = await getUserId()
+  if (
+    typeof input.outcomeKey !== "string"
+    || input.outcomeKey.trim() === ""
+    || input.outcomeKey.length > 300
+    || !Number.isSafeInteger(input.approvalDecisionId)
+    || input.approvalDecisionId <= 0
+  ) {
+    return { status: "INVALID", message: "The authority binding is invalid.", grantRef: null }
+  }
+
+  const outcomeKey = input.outcomeKey.trim()
+  const [item, approval] = await Promise.all([
+    db
+      .select()
+      .from(outcomeQueueItem)
+      .where(and(
+        eq(outcomeQueueItem.userId, userId),
+        eq(outcomeQueueItem.outcomeKey, outcomeKey),
+      ))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
+    db
+      .select()
+      .from(decision)
+      .where(and(
+        eq(decision.userId, userId),
+        eq(decision.id, input.approvalDecisionId),
+      ))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
+  ])
+  if (
+    item === null
+    || approval === null
+    || !isOutcomeAuthorityLifecycleEligible(item.lifecycleState)
+    || !isOutcomeAuthorityBindingAllowed(item, approval)
+  ) {
+    return {
+      status: "UNAUTHORIZED",
+      message: "An accepted exact-scope owner decision is required.",
+      grantRef: null,
+    }
+  }
+
+  const created = await createAuthorityGrantWithResult({
+    grantedTo: item.authoritySubject,
+    authorityLevel: item.authorityLevel,
+    scope: item.outcomeKey,
+    allowedActions: [item.authorityAction],
+    blockedActions: [...OUTCOME_GRANT_BLOCKED_ACTIONS],
+    reason: `${approval.ref ?? `Decision #${approval.id}`} authorizes only ${item.outcomeKey}.`,
+    expiresInHours: 72,
+    reuseActiveScope: true,
+  })
+  if (created.grant.ref === null) {
+    throw new Error("Outcome authority grant is missing its durable reference.")
+  }
+  if (shouldRebindOutcomeAuthority(
+    item.lifecycleState,
+    item.authorityGrantRef,
+    created.grant.ref,
+  )) {
+    const adapter = await import("@/scripts/hermes-bridge/outcome-queue-source.mjs") as {
+      matchOutcomeAuthorityGrant?: (input: Record<string, unknown>) => Promise<unknown>
+    }
+    if (!adapter.matchOutcomeAuthorityGrant) {
+      throw new Error("Outcome authority binding adapter is unavailable.")
+    }
+    await adapter.matchOutcomeAuthorityGrant({
+      query: pool,
+      userId,
+      outcomeKey: item.outcomeKey,
+      expectedVersion: item.version,
+      authorityGrantRef: created.grant.ref,
+      now: new Date(),
+    })
+  }
+  revalidatePath("/goal-console")
+  revalidatePath("/governance")
+  return outcomeAuthorityGrantResult(created.grant.ref, created.replayed)
 }
 
 async function runtimeMutation(input: OutcomeQueueMutationInput, userId: string) {

@@ -10,14 +10,19 @@ import {
   CirclePlay,
   GitBranch,
   Loader2,
+  ShieldCheck,
   X,
 } from "lucide-react"
 import { toast } from "sonner"
 
 import {
   mutateOutcomeQueue,
+  recordOutcomeAuthorityGrant,
 } from "@/app/actions/outcome-queue"
-import type { OutcomeQueueMutationInput } from "@/lib/outcome-queue/operator-mutations"
+import {
+  shouldOfferOutcomeAuthorityBinding,
+  type OutcomeQueueMutationInput,
+} from "@/lib/outcome-queue/operator-mutations"
 import type {
   OutcomeQueueOperatorRow,
   OutcomeQueueOperatorSurface,
@@ -134,6 +139,34 @@ export function OperatorOutcomeQueuePanel({
         setPendingKeys((current) => {
           const next = new Set(current)
           next.delete(input.outcomeKey)
+          return next
+        })
+      }
+    })
+  }
+
+  function recordAuthority(row: OutcomeQueueOperatorRow) {
+    if (row.availableApprovalDecisionId === null) return
+    setPendingKeys((current) => new Set(current).add(row.outcomeKey))
+    startTransition(async () => {
+      try {
+        const result = await recordOutcomeAuthorityGrant({
+          outcomeKey: row.outcomeKey,
+          approvalDecisionId: row.availableApprovalDecisionId!,
+        })
+        if (result.status === "RECORDED" || result.status === "REPLAYED") {
+          toast.success(result.message)
+          router.refresh()
+          return
+        }
+        toast.error(result.message)
+        if (result.status === "UNAUTHORIZED") router.refresh()
+      } catch {
+        toast.error("Scoped authority could not be recorded.")
+      } finally {
+        setPendingKeys((current) => {
+          const next = new Set(current)
+          next.delete(row.outcomeKey)
           return next
         })
       }
@@ -287,6 +320,23 @@ export function OperatorOutcomeQueuePanel({
                         Resume
                       </Button>
                     ) : null}
+                    {row.availableApprovalDecisionId !== null
+                      && shouldOfferOutcomeAuthorityBinding(
+                        row.lifecycleState,
+                        row.authorityGrantRef,
+                        row.availableAuthorityGrantRef,
+                      ) ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={rowPending}
+                          title="Record or renew authority scoped to this accepted owner decision"
+                          onClick={() => recordAuthority(row)}
+                        >
+                          <ShieldCheck className="mr-2 h-4 w-4" />
+                          Record authority
+                        </Button>
+                      ) : null}
                     {row.lifecycleState === "suggested" ? (
                       <Button
                         size="sm"

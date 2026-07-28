@@ -28,6 +28,89 @@ export type OutcomeQueueMutationActionResult = {
   version: number | null
 }
 
+type OutcomeAuthorityCandidate = {
+  outcomeKey: string
+  title: string
+  objective: string | null
+  riskClass: string
+  authorityLevel: string
+  authoritySubject: string
+  authorityAction: string
+}
+
+type OutcomeApprovalCandidate = {
+  status: string
+  authority: string
+  decision: string
+  scope: string | null
+}
+
+const OUTCOME_AUTHORITY_LEVELS = new Set([
+  "A0_READ_ONLY",
+  "A1_DRAFT",
+  "A2_WRITE_OWN",
+])
+const PROTECTED_OUTCOME_SCOPE = [
+  /\b(?:terrafusion|terrapilot|property\s+workbench)\b/i,
+  /\b(?:county|pacs|parcel|taxpayer|protected\s+data)\b/i,
+  /\b(?:(?:deploy|release|cutover|mutat|writ|chang|updat|configur)\w*\b[\s\S]{0,40}\bproduction|production\b[\s\S]{0,40}\b(?:deploy|release|cutover|mutat|writ|chang|updat|configur)\w*)\b/i,
+  /\b(?:(?:create|publish|cut|push)\s+(?:a\s+)?(?:github\s+)?release|(?:create|publish|push)\s+(?:a\s+)?(?:git\s+)?tag|tag\s+v?\d)\b/i,
+  /\b(?:secret|password|credential|api[ -]?key|access[ -]?token|cookie|session)\b/i,
+  /\b(?:paid\s+overage|increase\s+(?:the\s+)?spend|new\s+spending|purchase|billing\s+upgrade)\b/i,
+  /\b(?:destructive|delete|drop\s+(?:table|database)|truncate|force[ -]?push|reset\s+--hard|wipe|purge)\b/i,
+  /(?:\bissue\s*)?#?357\b/i,
+]
+
+export function isOutcomeAuthorityBindingAllowed(
+  item: OutcomeAuthorityCandidate,
+  approval: OutcomeApprovalCandidate,
+): boolean {
+  const scopeText = [item.outcomeKey, item.title, item.objective ?? ""].join("\n")
+  return ["R0", "R1"].includes(item.riskClass)
+    && OUTCOME_AUTHORITY_LEVELS.has(item.authorityLevel)
+    && item.authoritySubject === "operator"
+    && item.authorityAction === "outcome:execute"
+    && !PROTECTED_OUTCOME_SCOPE.some((pattern) => pattern.test(scopeText))
+    && approval.status === "accepted"
+    && approval.authority === "binding"
+    && approval.decision.trim().toUpperCase() === "APPROVE"
+    && approval.scope === item.outcomeKey
+}
+
+export function outcomeAuthorityGrantResult(grantRef: string | null, replayed: boolean) {
+  return {
+    status: replayed ? "REPLAYED" as const : "RECORDED" as const,
+    message: replayed
+      ? "The scoped authority grant is already recorded."
+      : "Exact-scope outcome authority recorded.",
+    grantRef,
+  }
+}
+
+export function shouldRebindOutcomeAuthority(
+  lifecycleState: string,
+  currentGrantRef: string | null,
+  nextGrantRef: string,
+): boolean {
+  return lifecycleState === "approved" && currentGrantRef !== nextGrantRef
+}
+
+export function isOutcomeAuthorityLifecycleEligible(lifecycleState: string): boolean {
+  return ["suggested", "approved", "blocked"].includes(lifecycleState)
+}
+
+export function shouldOfferOutcomeAuthorityBinding(
+  lifecycleState: string,
+  boundGrantRef: string | null,
+  availableGrantRef: string | null,
+): boolean {
+  return isOutcomeAuthorityLifecycleEligible(lifecycleState)
+    && (
+      availableGrantRef === null
+      || (lifecycleState === "approved" && boundGrantRef !== availableGrantRef)
+    )
+}
+
 const ACTIONS = new Set<QueueMutationAction>([
   "pause", "resume", "reorder", "approve", "decline", "supersede",
 ])

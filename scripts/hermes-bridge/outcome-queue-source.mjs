@@ -69,6 +69,15 @@ const ORDER_BY = `
   q."outcomeKey" ASC
 `
 
+export const OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL = `
+  q."riskClass" IN ('R0', 'R1')
+  AND q."authorityLevel" IN ('A0_READ_ONLY', 'A1_DRAFT', 'A2_WRITE_OWN')
+  AND q."authoritySubject" = 'operator'
+  AND q."authorityAction" = 'outcome:execute'
+  AND concat_ws(' ', q."outcomeKey", q."title", COALESCE(q."objective", '')) !~*
+    '(terrafusion|terrapilot|property[[:space:]]+workbench|county|pacs|parcel|taxpayer|protected[[:space:]]+data|(deploy|release|cutover|mutat|writ|chang|updat|configur)[[:alnum:]_]*.{0,40}production|production.{0,40}(deploy|release|cutover|mutat|writ|chang|updat|configur)[[:alnum:]_]*|(create|publish|cut|push)[[:space:]]+(a[[:space:]]+)?(github[[:space:]]+)?release|(create|publish|push)[[:space:]]+(a[[:space:]]+)?(git[[:space:]]+)?tag|tag[[:space:]]+v?[0-9]|secret|password|credential|api[ -]?key|access[ -]?token|cookie|session|paid[[:space:]]+overage|increase[[:space:]]+(the[[:space:]]+)?spend|new[[:space:]]+spending|purchase|billing[[:space:]]+upgrade|destructive|delete|drop[[:space:]]+(table|database)|truncate|force[ -]?push|reset[[:space:]]+--hard|wipe|purge|issue[[:space:]]*#?357)'
+`
+
 const LIVE_APPROVAL_PREDICATE = `
   q."approvalState" = 'approved'
   AND EXISTS (
@@ -78,12 +87,14 @@ const LIVE_APPROVAL_PREDICATE = `
       AND live_approval."userId" = q."userId"
       AND live_approval."status" = 'accepted'
       AND live_approval."authority" = 'binding'
-      AND live_approval."scope" IN (q."outcomeKey", q."goalRef")
+      AND upper(trim(live_approval."decision")) = 'APPROVE'
+      AND live_approval."scope" = q."outcomeKey"
   )
 `
 
 const LIVE_AUTHORITY_PREDICATE = `
-  q."authorityState" = 'matched'
+  ${OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL}
+  AND q."authorityState" = 'matched'
   AND EXISTS (
     SELECT 1
     FROM "authority_grant" AS live_grant
@@ -94,7 +105,7 @@ const LIVE_AUTHORITY_PREDICATE = `
       AND (live_grant."expiresAt" IS NULL OR live_grant."expiresAt" > $1::timestamptz)
       AND live_grant."authorityLevel" = q."authorityLevel"
       AND live_grant."grantedTo" = q."authoritySubject"
-      AND live_grant."scope" IN (q."outcomeKey", q."goalRef")
+      AND live_grant."scope" = q."outcomeKey"
       AND NOT EXISTS (
         SELECT 1
         FROM unnest(live_grant."blockedActions") AS blocked(action)
@@ -745,7 +756,9 @@ WHERE q."userId" = $1
   AND approval."userId" = q."userId"
   AND approval."status" = 'accepted'
   AND approval."authority" = 'binding'
-  AND approval."scope" IN (q."outcomeKey", q."goalRef")
+  AND upper(trim(approval."decision")) = 'APPROVE'
+  AND approval."scope" = q."outcomeKey"
+  AND ${OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL}
   AND grant."userId" = q."userId"
   AND grant."ref" = $5
   AND grant."status" = 'active'
@@ -753,7 +766,7 @@ WHERE q."userId" = $1
   AND (grant."expiresAt" IS NULL OR grant."expiresAt" > $6::timestamptz)
   AND grant."authorityLevel" = q."authorityLevel"
   AND grant."grantedTo" = q."authoritySubject"
-  AND grant."scope" IN (q."outcomeKey", q."goalRef")
+  AND grant."scope" = q."outcomeKey"
   AND NOT EXISTS (
     SELECT 1 FROM unnest(grant."blockedActions") AS blocked(action)
     WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
@@ -1144,8 +1157,8 @@ WHERE q."userId" = $1
   AND approval."userId" = q."userId"
   AND approval.status = 'accepted'
   AND approval.authority = 'binding'
-  AND approval."scope" IN (q."outcomeKey", q."goalRef")
-  AND approval.decision = 'APPROVE'
+  AND approval."scope" = q."outcomeKey"
+  AND upper(trim(approval.decision)) = 'APPROVE'
   AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$11::timestamptz")}
@@ -1199,8 +1212,8 @@ JOIN decision AS approval
   AND approval."userId" = q."userId"
   AND approval.status = 'accepted'
   AND approval.authority = 'binding'
-  AND approval."scope" IN (q."outcomeKey", q."goalRef")
-  AND approval.decision = 'APPROVE'
+  AND approval."scope" = q."outcomeKey"
+  AND upper(trim(approval.decision)) = 'APPROVE'
   AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2
@@ -1235,7 +1248,9 @@ WHERE q."userId" = $1
   AND approval."userId" = q."userId"
   AND approval."status" = 'accepted'
   AND approval."authority" = 'binding'
-  AND approval."scope" IN (q."outcomeKey", q."goalRef")
+  AND upper(trim(approval."decision")) = 'APPROVE'
+  AND approval."scope" = q."outcomeKey"
+  AND ${OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL}
 RETURNING ${QUEUE_COLUMNS}
 `,
   matchAuthority: `
@@ -1256,7 +1271,8 @@ WHERE q."userId" = $1
   AND (grant."expiresAt" IS NULL OR grant."expiresAt" > $5::timestamptz)
   AND grant."authorityLevel" = q."authorityLevel"
   AND grant."grantedTo" = q."authoritySubject"
-  AND grant."scope" IN (q."outcomeKey", q."goalRef")
+  AND grant."scope" = q."outcomeKey"
+  AND ${OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL}
   AND NOT EXISTS (
     SELECT 1
     FROM unnest(grant."blockedActions") AS blocked(action)

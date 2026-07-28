@@ -8,6 +8,14 @@ const source = readFileSync(
   ),
   "utf8",
 )
+const actionSource = readFileSync(
+  new URL("../app/actions/outcome-queue.ts", import.meta.url),
+  "utf8",
+)
+const authoritySource = readFileSync(
+  new URL("../app/actions/authority.ts", import.meta.url),
+  "utf8",
+)
 
 describe("operator outcome queue panel accessibility contract", () => {
   it("labels the queue region and every icon-only queue control", () => {
@@ -25,5 +33,28 @@ describe("operator outcome queue panel accessibility contract", () => {
 
   it("refreshes current truth after a typed stale mutation result", () => {
     expect(source).toContain('if (result.status === "STALE") router.refresh()')
+    expect(source).toContain('if (result.status === "UNAUTHORIZED") router.refresh()')
+  })
+
+  it("records authority only from an accepted exact-scope approve decision", () => {
+    expect(source).toContain("recordOutcomeAuthorityGrant")
+    expect(source).toContain("Record authority")
+    expect(source).toContain("shouldOfferOutcomeAuthorityBinding")
+    expect(actionSource).toContain("isOutcomeAuthorityBindingAllowed(item, approval)")
+    expect(authoritySource).toContain("pg_advisory_xact_lock")
+    expect(authoritySource).toContain("authority-grant-allocation")
+    expect(authoritySource).toContain("ensureDbEvidence")
+    expect(authoritySource).toContain("transaction.insert(governanceEvent)")
+    expect(authoritySource).toContain("transaction.insert(eventLog)")
+    expect(actionSource).toContain("reuseActiveScope: true")
+    expect(actionSource).toContain("shouldRebindOutcomeAuthority")
+    expect(actionSource).toContain("matchOutcomeAuthorityGrant")
+    expect(actionSource).toContain("expectedVersion: item.version")
+    expect(actionSource).toContain("scope: item.outcomeKey")
+    expect(actionSource).toContain("allowedActions: [item.authorityAction]")
+    expect(actionSource).toContain('"authority expansion"')
+    expect(actionSource).toContain('"issue #357"')
+    expect(authoritySource).toContain("reason: draft.reason")
+    expect(authoritySource).toContain("draft.expiresAt.toISOString()")
   })
 })
