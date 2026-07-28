@@ -15,6 +15,7 @@ import { produceRuntimeAgreement } from "./runtime-agreement.mjs"
 import {
   canonicalOutcomeQueueCheckpointProof,
   digestOutcomeQueueCheckpointProof,
+  OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL,
   OUTCOME_QUEUE_MUTATION_ATTEMPT_DISPOSITIONS,
 } from "./outcome-queue-source.mjs"
 
@@ -66,6 +67,7 @@ WITH latest AS (
     AND q."lifecycleState" = 'completed'
     AND q."terminalResult" = 'COMPLETE'
     AND q."riskClass" IN ('R0', 'R1')
+    AND ${OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL}
     AND q."terminalAt" IS NOT NULL
   ORDER BY q."terminalAt" DESC, q."queueOrder" DESC, q."outcomeKey" DESC
   LIMIT 2
@@ -79,6 +81,9 @@ SELECT
   q."riskClass",
   q."approvalState",
   q."authorityState",
+  q."authorityLevel",
+  q."authoritySubject",
+  q."authorityAction",
   q."authorityGrantRef",
   q."lifecycleState",
   q."activeWorkOrderId",
@@ -105,7 +110,8 @@ JOIN decision AS approval
   AND approval."userId" = q."userId"
   AND approval.status = 'accepted'
   AND approval.authority = 'binding'
-  AND approval.scope IN (q."outcomeKey", q."goalRef")
+  AND upper(trim(approval.decision)) = 'APPROVE'
+  AND approval.scope = q."outcomeKey"
 JOIN authority_grant AS authority
   ON authority."userId" = q."userId"
   AND authority.ref = q."authorityGrantRef"
@@ -114,7 +120,7 @@ JOIN authority_grant AS authority
   AND (authority."expiresAt" IS NULL OR authority."expiresAt" > $2::timestamptz)
   AND authority."authorityLevel" = q."authorityLevel"
   AND authority."grantedTo" = q."authoritySubject"
-  AND authority.scope IN (q."outcomeKey", q."goalRef")
+  AND authority.scope = q."outcomeKey"
   AND NOT EXISTS (
     SELECT 1
     FROM unnest(authority."blockedActions") blocked(action)
@@ -205,6 +211,7 @@ SELECT
   (
     q."approvalState" = 'approved'
     AND q."authorityState" = 'matched'
+    AND ${OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL}
     AND EXISTS (
       SELECT 1
       FROM decision approval
@@ -212,7 +219,8 @@ SELECT
         AND approval."userId" = q."userId"
         AND approval.status = 'accepted'
         AND approval.authority = 'binding'
-        AND approval.scope IN (q."outcomeKey", q."goalRef")
+        AND upper(trim(approval.decision)) = 'APPROVE'
+        AND approval.scope = q."outcomeKey"
     )
     AND EXISTS (
       SELECT 1
@@ -224,7 +232,7 @@ SELECT
         AND (authority."expiresAt" IS NULL OR authority."expiresAt" > $3::timestamptz)
         AND authority."authorityLevel" = q."authorityLevel"
         AND authority."grantedTo" = q."authoritySubject"
-        AND authority.scope IN (q."outcomeKey", q."goalRef")
+        AND authority.scope = q."outcomeKey"
         AND NOT EXISTS (
           SELECT 1
           FROM unnest(authority."blockedActions") blocked(action)
@@ -438,9 +446,19 @@ function validateOutcome(outcome, expectedOrdinal) {
   if (!exactKeys(outcome.approval, ["decisionRef", "state"])
     || outcome.approval.state !== "approved"
     || !nonempty(outcome.approval.decisionRef)
-    || !exactKeys(outcome.authority, ["grantRef", "riskClass", "state"])
+    || !exactKeys(outcome.authority, [
+      "action",
+      "grantRef",
+      "level",
+      "riskClass",
+      "state",
+      "subject",
+    ])
     || outcome.authority.state !== "matched"
     || outcome.authority.riskClass !== outcome.riskClass
+    || !["A0_READ_ONLY", "A1_DRAFT", "A2_WRITE_OWN"].includes(outcome.authority.level)
+    || outcome.authority.subject !== "operator"
+    || outcome.authority.action !== "outcome:execute"
     || !nonempty(outcome.authority.grantRef)) {
     return failure("OUTCOME_AUTHORITY_INVALID", outcome.outcomeKey)
   }
@@ -882,6 +900,9 @@ function verifyLiveOutcome(claim, row, receipt, checkpoints, evidenceRecords, lo
     || row.approvalDecisionStatus !== "accepted"
     || row.approvalDecisionAuthority !== "binding"
     || row.authorityState !== "matched"
+    || row.authorityLevel !== claim.authority.level
+    || row.authoritySubject !== claim.authority.subject
+    || row.authorityAction !== claim.authority.action
     || row.authorityGrantRef !== claim.authority.grantRef
     || row.liveAuthorityGrantRef !== claim.authority.grantRef
     || row.authorityGrantStatus !== "active"

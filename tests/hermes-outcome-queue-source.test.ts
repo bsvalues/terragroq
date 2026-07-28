@@ -992,7 +992,10 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`FROM "decision" AS live_approval`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(
-      `live_approval."scope" IN (q."outcomeKey", q."goalRef")`,
+      `live_approval."scope" = q."outcomeKey"`,
+    )
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(
+      `upper(trim(live_approval."decision")) = 'APPROVE'`,
     )
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`q."authorityState" = 'matched'`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`FROM "authority_grant" AS live_grant`)
@@ -1005,7 +1008,15 @@ describe("transactional durable outcome queue source", () => {
       `live_grant."grantedTo" = q."authoritySubject"`,
     )
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(
-      `live_grant."scope" IN (q."outcomeKey", q."goalRef")`,
+      `live_grant."scope" = q."outcomeKey"`,
+    )
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(
+      `q."authorityLevel" IN ('A0_READ_ONLY', 'A1_DRAFT', 'A2_WRITE_OWN')`,
+    )
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`q."authoritySubject" = 'operator'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`q."authorityAction" = 'outcome:execute'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(
+      "(deploy|release|cutover|mutat|writ|chang|updat|configur)",
     )
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`live_grant."blockedActions"`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`live_grant."allowedActions"`)
@@ -1196,7 +1207,10 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.approve).toContain(`approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.approve).toContain(`approval."authority" = 'binding'`)
     expect(OUTCOME_QUEUE_SQL.approve).toContain(
-      `approval."scope" IN (q."outcomeKey", q."goalRef")`,
+      `approval."scope" = q."outcomeKey"`,
+    )
+    expect(OUTCOME_QUEUE_SQL.approve).toContain(
+      `upper(trim(approval."decision")) = 'APPROVE'`,
     )
   })
 
@@ -1803,7 +1817,7 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
       .toContain(`(approval.context::jsonb)->>'outcomeId' = q."goalId"::text`)
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
-      .toContain(`approval."scope" IN (q."outcomeKey", q."goalRef")`)
+      .toContain(`approval."scope" = q."outcomeKey"`)
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
       .toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
@@ -2273,7 +2287,19 @@ describe("governed outcome queue mutations", () => {
       `approval."authority" = 'binding'`,
     )
     expect(OUTCOME_QUEUE_SQL.governedApprovalMutation).toContain(
+      `upper(trim(approval."decision")) = 'APPROVE'`,
+    )
+    expect(OUTCOME_QUEUE_SQL.governedApprovalMutation).toContain(
+      `approval."scope" = q."outcomeKey"`,
+    )
+    expect(OUTCOME_QUEUE_SQL.governedApprovalMutation).toContain(
       `grant."status" = 'active'`,
+    )
+    expect(OUTCOME_QUEUE_SQL.governedApprovalMutation).toContain(
+      `grant."scope" = q."outcomeKey"`,
+    )
+    expect(OUTCOME_QUEUE_SQL.governedApprovalMutation).toContain(
+      `q."authorityLevel" IN ('A0_READ_ONLY', 'A1_DRAFT', 'A2_WRITE_OWN')`,
     )
     expect(OUTCOME_QUEUE_SQL.governedApprovalMutation).toContain(
       `grant."allowedActions"`,

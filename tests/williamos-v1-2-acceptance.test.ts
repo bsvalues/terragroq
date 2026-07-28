@@ -24,6 +24,10 @@ const now = Date.parse("2026-07-28T19:00:00.000Z")
 const fresh = "2026-07-28T18:59:00.000Z"
 const productionAuthCookie = "better-auth.session_token=opaque-test-value"
 const roots: string[] = []
+const campaignSource = fs.readFileSync(
+  new URL("../scripts/hermes-bridge/v1-2-acceptance-campaign.mjs", import.meta.url),
+  "utf8",
+)
 
 function digest(value: unknown) {
   const canonical = (entry: unknown): unknown => {
@@ -57,7 +61,14 @@ function outcome(id: number, ordinal: number, acquiredAt: string, completedAt: s
   return {
     acquiredAt,
     approval: { decisionRef: `DECISION-${id}`, state: "approved" },
-    authority: { grantRef: `GRANT-${id}`, riskClass: ordinal === 1 ? "R0" : "R1", state: "matched" },
+    authority: {
+      action: "outcome:execute",
+      grantRef: `GRANT-${id}`,
+      level: "A2_WRITE_OWN",
+      riskClass: ordinal === 1 ? "R0" : "R1",
+      state: "matched",
+      subject: "operator",
+    },
     campaignOrdinal: ordinal,
     completedAt,
     goalRef: `GOAL-${id}`,
@@ -209,6 +220,9 @@ function liveBundle() {
       riskClass: entry.riskClass,
       approvalState: "approved",
       authorityState: "matched",
+      authorityLevel: entry.authority.level,
+      authoritySubject: entry.authority.subject,
+      authorityAction: entry.authority.action,
       authorityGrantRef: entry.authority.grantRef,
       lifecycleState: "completed",
       activeWorkOrderId: 181 + index,
@@ -686,6 +700,18 @@ afterEach(() => {
 })
 
 describe("WilliamOS V1.2 two-outcome acceptance", () => {
+  it("requires an explicit APPROVE decision in both live authority queries", () => {
+    expect(
+      campaignSource.match(/upper\(trim\(approval\.decision\)\) = 'APPROVE'/g),
+    ).toHaveLength(2)
+    expect(campaignSource).not.toContain(
+      `approval.scope IN (q."outcomeKey", q."goalRef")`,
+    )
+    expect(campaignSource).not.toContain(
+      `authority.scope IN (q."outcomeKey", q."goalRef")`,
+    )
+  })
+
   it("validates the bounded claim schema before consulting live sources", () => {
     const bundle = liveBundle()
     expect(validateCampaignEvidence(bundle.document, {
@@ -749,7 +775,10 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
       .map(([sql]) => sql)
       .find((sql) => /WITH latest/.test(sql))
     expect(authoritySql).toEqual(expect.stringContaining(
-      `approval.scope IN (q."outcomeKey", q."goalRef")`,
+      `approval.scope = q."outcomeKey"`,
+    ))
+    expect(authoritySql).toEqual(expect.stringContaining(
+      `authority.scope = q."outcomeKey"`,
     ))
     expect(authoritySql).toEqual(expect.stringContaining(
       `authority."expiresAt" IS NULL OR authority."expiresAt" > $2::timestamptz`,

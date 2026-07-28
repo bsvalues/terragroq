@@ -3,12 +3,33 @@ import { describe, expect, it } from "vitest"
 import {
   buildOutcomeQueueRuntimeMutation,
   classifyOutcomeQueueMutationError,
+  isOutcomeAuthorityBindingAllowed,
+  isOutcomeAuthorityLifecycleEligible,
+  outcomeAuthorityGrantResult,
+  shouldOfferOutcomeAuthorityBinding,
+  shouldRebindOutcomeAuthority,
   scopeMatchesOutcome,
   validateOutcomeQueueMutationInput,
   type OutcomeQueueMutationInput,
 } from "@/lib/outcome-queue/operator-mutations"
 
 describe("outcome queue server-action boundary", () => {
+  const authorityItem = {
+    outcomeKey: "goal:GOAL-1000",
+    title: "Improve the WilliamOS queue",
+    objective: "Add a bounded operator surface",
+    riskClass: "R1",
+    authorityLevel: "A2_WRITE_OWN",
+    authoritySubject: "operator",
+    authorityAction: "outcome:execute",
+  }
+  const approval = {
+    status: "accepted",
+    authority: "binding",
+    decision: "APPROVE",
+    scope: authorityItem.outcomeKey,
+  }
+
   it("forwards only allowlisted mutation fields and preserves trusted scope", () => {
     const query = { trusted: true }
     const input = {
@@ -57,6 +78,100 @@ describe("outcome queue server-action boundary", () => {
     expect(scopeMatchesOutcome("outcome:successor:1", "outcome:successor:1", null))
       .toBe(true)
     expect(scopeMatchesOutcome("GOAL-1000", "outcome:1", "GOAL-1000")).toBe(true)
+  })
+
+  it("permits only exact-scope, bounded WilliamOS outcome authority", () => {
+    expect(isOutcomeAuthorityBindingAllowed(authorityItem, approval)).toBe(true)
+    expect(isOutcomeAuthorityBindingAllowed(authorityItem, {
+      ...approval,
+      decision: "DENY",
+    })).toBe(false)
+    expect(isOutcomeAuthorityBindingAllowed(authorityItem, {
+      ...approval,
+      scope: "GOAL-1000",
+    })).toBe(false)
+    expect(isOutcomeAuthorityBindingAllowed({
+      ...authorityItem,
+      authorityLevel: "A3_WRITE_SHARED",
+    }, approval)).toBe(false)
+    expect(isOutcomeAuthorityBindingAllowed({
+      ...authorityItem,
+      authoritySubject: "codex",
+    }, approval)).toBe(false)
+    expect(isOutcomeAuthorityBindingAllowed({
+      ...authorityItem,
+      authorityAction: "production:deploy",
+    }, approval)).toBe(false)
+    expect(isOutcomeAuthorityBindingAllowed({
+      ...authorityItem,
+      title: "Deploy TerraFusion to production",
+    }, approval)).toBe(false)
+    for (const title of [
+      "Update production configuration",
+      "Deploy on production",
+      "Mutating production records",
+    ]) {
+      expect(isOutcomeAuthorityBindingAllowed({
+        ...authorityItem,
+        title,
+      }, approval)).toBe(false)
+    }
+    expect(isOutcomeAuthorityBindingAllowed({
+      ...authorityItem,
+      objective: "Retry rejected issue #357",
+    }, approval)).toBe(false)
+    expect(isOutcomeAuthorityBindingAllowed({
+      ...authorityItem,
+      objective: "Release the next eligible Work Order after completion",
+    }, approval)).toBe(true)
+    expect(isOutcomeAuthorityBindingAllowed({
+      ...authorityItem,
+      objective: "Improve billing status visibility and the decision dropdown",
+    }, approval)).toBe(true)
+  })
+
+  it("permits authority recording only before execution or in a blocked state", () => {
+    for (const lifecycleState of ["suggested", "approved", "blocked"]) {
+      expect(isOutcomeAuthorityLifecycleEligible(lifecycleState)).toBe(true)
+    }
+    for (const lifecycleState of ["active", "completed", "declined", "superseded"]) {
+      expect(isOutcomeAuthorityLifecycleEligible(lifecycleState)).toBe(false)
+    }
+  })
+
+  it("reports shared grant replay without claiming a new grant", () => {
+    expect(outcomeAuthorityGrantResult("GRANT-0007", false)).toEqual({
+      status: "RECORDED",
+      message: "Exact-scope outcome authority recorded.",
+      grantRef: "GRANT-0007",
+    })
+    expect(outcomeAuthorityGrantResult("GRANT-0007", true)).toEqual({
+      status: "REPLAYED",
+      message: "The scoped authority grant is already recorded.",
+      grantRef: "GRANT-0007",
+    })
+  })
+
+  it("rebinds renewed authority only for an approved row with a changed grant", () => {
+    expect(shouldRebindOutcomeAuthority("approved", "GRANT-0001", "GRANT-0002"))
+      .toBe(true)
+    expect(shouldRebindOutcomeAuthority("approved", "GRANT-0002", "GRANT-0002"))
+      .toBe(false)
+    expect(shouldRebindOutcomeAuthority("suggested", null, "GRANT-0002"))
+      .toBe(false)
+    expect(shouldRebindOutcomeAuthority("blocked", "GRANT-0001", "GRANT-0002"))
+      .toBe(false)
+  })
+
+  it("keeps approved-row authority repair available after a failed rebind", () => {
+    expect(shouldOfferOutcomeAuthorityBinding("approved", "GRANT-0001", "GRANT-0002"))
+      .toBe(true)
+    expect(shouldOfferOutcomeAuthorityBinding("approved", "GRANT-0002", "GRANT-0002"))
+      .toBe(false)
+    expect(shouldOfferOutcomeAuthorityBinding("approved", "GRANT-0001", null))
+      .toBe(true)
+    expect(shouldOfferOutcomeAuthorityBinding("blocked", "GRANT-0001", "GRANT-0002"))
+      .toBe(false)
   })
 
   it("rejects malformed or unbounded public mutation payloads", () => {
