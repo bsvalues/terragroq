@@ -622,6 +622,21 @@ describe("transactional durable outcome queue source", () => {
     expect(release).toHaveBeenCalledOnce()
   })
 
+  it("uses a PostgreSQL-safe alias for governed authority approval", () => {
+    expect(OUTCOME_QUEUE_SQL.governedApprovalMutation)
+      .toContain(`"authority_grant" AS auth_grant`)
+    expect(OUTCOME_QUEUE_SQL.governedApprovalMutation)
+      .not.toMatch(/\bAS grant\b/)
+    expect(OUTCOME_QUEUE_SQL.governedApprovalMutation)
+      .toContain(`auth_grant."ref" = $5`)
+    expect(OUTCOME_QUEUE_SQL.governedApprovalMutation)
+      .not.toMatch(/\bgrant\./)
+    expect(OUTCOME_QUEUE_SQL.matchAuthority)
+      .toContain(`"authority_grant" AS auth_grant`)
+    expect(OUTCOME_QUEUE_SQL.matchAuthority)
+      .not.toMatch(/\b(?:AS grant|grant\.)/)
+  })
+
   it("fails closed under the advisory transaction when a receipt table is partial", async () => {
     const run = vi.fn(async (sql: string) => {
       if (sql === OUTCOME_QUEUE_SQL.readReceiptColumns) {
