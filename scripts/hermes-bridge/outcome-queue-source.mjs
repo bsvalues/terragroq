@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import {
   LEGAL_OUTCOME_TRANSITIONS,
   mapLegacyLifecycleState,
@@ -52,6 +54,8 @@ const QUEUE_COLUMNS = `
   q."terminalEvidenceId",
   q."terminalEvidenceRefs",
   q."terminalKey",
+  q."supersedesOutcomeKey",
+  q."supersededByOutcomeKey",
   q."suggestedAt",
   q."activatedAt",
   q."terminalAt",
@@ -142,6 +146,192 @@ const ELIGIBILITY_PREDICATE = `
 
 export const OUTCOME_QUEUE_SQL = Object.freeze({
   acquireLock: `SELECT pg_advisory_xact_lock(hashtext($1))`,
+  readSupersededDependencies: `
+SELECT q."outcomeKey", q."supersededByOutcomeKey"
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+  AND q."outcomeKey" = ANY($2::text[])
+  AND q."lifecycleState" = 'superseded'
+ORDER BY q."outcomeKey" ASC
+`,
+  readMutationReceipt: `
+SELECT "id", "userId", "idempotencyKey", "operation", "outcomeKey",
+       "requestHash", "requestBinding", "resultBinding", "createdAt"
+FROM "outcome_queue_mutation_receipt"
+WHERE "userId" = $1
+  AND "idempotencyKey" = $2
+FOR UPDATE
+`,
+  readMutationItem: `
+SELECT ${QUEUE_COLUMNS}
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+FOR UPDATE OF q
+`,
+  readMutationSnapshot: `
+SELECT ${QUEUE_COLUMNS}
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+  AND q."lifecycleState" IN ('suggested', 'approved', 'blocked')
+ORDER BY ${ORDER_BY}
+FOR UPDATE OF q
+`,
+  pauseMutation: `
+UPDATE "outcome_queue_item" AS q
+SET "lifecycleState" = 'blocked',
+    "lifecycleReason" = COALESCE($4, 'OPERATOR_PAUSED'),
+    "executionBinding" = NULL,
+    "leaseHolder" = NULL,
+    "leaseToken" = NULL,
+    "leaseExpiresAt" = NULL,
+    "acquisitionKey" = NULL,
+    "fencingToken" = CASE
+      WHEN q."lifecycleState" = 'active' THEN q."fencingToken" + 1
+      ELSE q."fencingToken"
+    END,
+    "version" = q."version" + 1,
+    "updatedAt" = $5::timestamptz
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."version" = $3
+  AND q."lifecycleState" IN ('approved', 'active')
+RETURNING ${QUEUE_COLUMNS}
+`,
+  governedApprovalMutation: `
+UPDATE "outcome_queue_item" AS q
+SET "lifecycleState" = 'approved',
+    "lifecycleReason" = NULL,
+    "approvalState" = 'approved',
+    "approvedBy" = approval."owner",
+    "approvedAt" = $6::timestamptz,
+    "approvalDecisionId" = approval."id",
+    "authorityState" = 'matched',
+    "authorityGrantRef" = grant."ref",
+    "version" = q."version" + 1,
+    "updatedAt" = $6::timestamptz
+FROM "decision" AS approval, "authority_grant" AS grant
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."version" = $3
+  AND q."lifecycleState" = $7
+  AND approval."id" = $4
+  AND approval."userId" = q."userId"
+  AND approval."status" = 'accepted'
+  AND approval."authority" = 'binding'
+  AND approval."scope" IN (q."outcomeKey", q."goalRef")
+  AND grant."userId" = q."userId"
+  AND grant."ref" = $5
+  AND grant."status" = 'active'
+  AND grant."revokedAt" IS NULL
+  AND (grant."expiresAt" IS NULL OR grant."expiresAt" > $6::timestamptz)
+  AND grant."authorityLevel" = q."authorityLevel"
+  AND grant."grantedTo" = q."authoritySubject"
+  AND grant."scope" IN (q."outcomeKey", q."goalRef")
+  AND NOT EXISTS (
+    SELECT 1 FROM unnest(grant."blockedActions") AS blocked(action)
+    WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
+  )
+  AND (
+    cardinality(grant."allowedActions") = 0
+    OR EXISTS (
+      SELECT 1 FROM unnest(grant."allowedActions") AS allowed(action)
+      WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
+    )
+  )
+  AND (grant."workOrderId" IS NULL OR q."activeWorkOrderId" = grant."workOrderId")
+RETURNING ${QUEUE_COLUMNS}
+`,
+  declineMutation: `
+UPDATE "outcome_queue_item" AS q
+SET "lifecycleState" = 'declined',
+    "lifecycleReason" = COALESCE($4, 'OPERATOR_DECLINED'),
+    "terminalResult" = 'DECLINED',
+    "terminalAt" = $5::timestamptz,
+    "version" = q."version" + 1,
+    "updatedAt" = $5::timestamptz
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."version" = $3
+  AND q."lifecycleState" IN ('suggested', 'approved', 'blocked')
+RETURNING ${QUEUE_COLUMNS}
+`,
+  supersedeMutation: `
+UPDATE "outcome_queue_item" AS q
+SET "lifecycleState" = 'superseded',
+    "lifecycleReason" = COALESCE($4, 'OPERATOR_SUPERSEDED'),
+    "terminalResult" = 'SUPERSEDED',
+    "supersededByOutcomeKey" = $5,
+    "terminalAt" = $6::timestamptz,
+    "version" = q."version" + 1,
+    "updatedAt" = $6::timestamptz
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."version" = $3
+  AND q."lifecycleState" IN ('suggested', 'approved', 'blocked')
+RETURNING ${QUEUE_COLUMNS}
+`,
+  insertSupersedingOutcome: `
+INSERT INTO "outcome_queue_item" AS q (
+  "userId", "outcomeKey", "title", "objective", "queueOrder",
+  "dependencyKeys", "riskClass", "approvalState", "authorityState",
+  "authorityLevel", "authoritySubject", "authorityAction", "lifecycleState",
+  "supersedesOutcomeKey", "suggestedAt", "createdAt", "updatedAt"
+) VALUES (
+  $1, $2, $3, $4, $5, $6::text[], $7, 'unapproved', 'unverified',
+  $8, $9, $10, 'suggested', $11, $12::timestamptz,
+  $12::timestamptz, $12::timestamptz
+)
+RETURNING ${QUEUE_COLUMNS}
+`,
+  rebindSupersededDependents: `
+UPDATE "outcome_queue_item" AS q
+SET "dependencyKeys" = ARRAY(
+      SELECT CASE WHEN dependency."outcomeKey" = $2
+        THEN $3
+        ELSE dependency."outcomeKey"
+      END
+      FROM unnest(q."dependencyKeys") WITH ORDINALITY
+        AS dependency("outcomeKey", position)
+      ORDER BY dependency.position
+    ),
+    "version" = q."version" + 1,
+    "updatedAt" = $4::timestamptz
+WHERE q."userId" = $1
+  AND $2 = ANY(q."dependencyKeys")
+  AND q."lifecycleState" IN ('suggested', 'approved', 'blocked')
+RETURNING ${QUEUE_COLUMNS}
+`,
+  reorderMutation: `
+UPDATE "outcome_queue_item" AS q
+SET "queueOrder" = $4,
+    "version" = q."version" + 1,
+    "updatedAt" = $5::timestamptz
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."version" = $3
+  AND q."lifecycleState" IN ('suggested', 'approved', 'blocked')
+RETURNING ${QUEUE_COLUMNS}
+`,
+  insertMutationReceipt: `
+INSERT INTO "outcome_queue_mutation_receipt" (
+  "userId", "idempotencyKey", "operation", "outcomeKey",
+  "requestHash", "requestBinding", "resultBinding", "createdAt"
+) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::timestamptz)
+RETURNING "id"
+`,
+  insertMutationAudit: `
+INSERT INTO "governance_event" (
+  "userId", "eventType", "entityType", "entityId", "actor", "reason", "metadata", "createdAt"
+) VALUES ($1, $2, 'outcome_queue_item', $3, 'operator', $4, $5::jsonb, $6::timestamptz)
+RETURNING "id"
+`,
+  insertMutationEvent: `
+INSERT INTO "event_log" (
+  "userId", "type", "summary", "register", "refId", "metadata", "createdAt"
+) VALUES ($1, $2, $3, 'outcome_queue', $4, $5::jsonb, $6::timestamptz)
+RETURNING "id"
+`,
   persist: `
 INSERT INTO "outcome_queue_item" (
   "userId", "outcomeKey", "goalId", "goalRef", "title", "objective",
@@ -567,6 +757,37 @@ function userScope(userId) {
   return nonempty(userId, "OUTCOME_QUEUE_USER_ID_INVALID")
 }
 
+function canonicalValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalValue)
+  if (value instanceof Date) return value.toISOString()
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, canonicalValue(value[key])]),
+    )
+  }
+  return value
+}
+
+function canonicalJson(value) {
+  return JSON.stringify(canonicalValue(value))
+}
+
+function requestHash(value) {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex")
+}
+
+function jsonValue(value, code) {
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value)
+    } catch {
+      fail(code)
+    }
+  }
+  if (!value || typeof value !== "object") fail(code)
+  return value
+}
+
 function normalizeItem(item) {
   if (!item || typeof item !== "object" || Array.isArray(item)) fail("OUTCOME_QUEUE_ITEM_INVALID")
   const outcomeKey = nonempty(item.outcomeKey, "OUTCOME_QUEUE_KEY_INVALID")
@@ -703,8 +924,21 @@ export async function persistOutcomeQueueItem({
   const user = userScope(userId)
   const value = normalizeItem(item)
   const at = timestamp(now)
-  const connection = await openQuery(query, databaseUrl)
+  const connection = await openQuery(query, databaseUrl, true)
+  let begun = false
   try {
+    await connection.query("BEGIN")
+    begun = true
+    await connection.query(OUTCOME_QUEUE_SQL.acquireLock, [`${user}:outcome-queue`])
+    if (value.dependencyKeys.length > 0) {
+      const superseded = await connection.query(
+        OUTCOME_QUEUE_SQL.readSupersededDependencies,
+        [user, value.dependencyKeys],
+      )
+      if ((superseded?.rows?.length ?? 0) > 0) {
+        fail("OUTCOME_QUEUE_DEPENDENCY_SUPERSEDED")
+      }
+    }
     const result = await connection.query(OUTCOME_QUEUE_SQL.persist, [
       user,
       value.outcomeKey,
@@ -735,7 +969,18 @@ export async function persistOutcomeQueueItem({
       at,
     ])
     if (result?.rows?.length !== 1) fail("OUTCOME_QUEUE_PERSIST_CONFLICT")
+    await connection.query("COMMIT")
+    begun = false
     return result.rows[0]
+  } catch (error) {
+    if (begun) {
+      try {
+        await connection.query("ROLLBACK")
+      } catch {
+        // Preserve the primary persistence error.
+      }
+    }
+    throw error
   } finally {
     await connection.close()
   }
@@ -954,6 +1199,7 @@ export async function transitionOutcomeQueueItem({
   if (!LEGAL_OUTCOME_TRANSITIONS[from].includes(to)) fail("OUTCOME_QUEUE_TRANSITION_ILLEGAL")
   if (to === "active") fail("OUTCOME_QUEUE_ACTIVE_REQUIRES_ACQUISITION")
   if (to === "approved") fail("OUTCOME_QUEUE_APPROVAL_DECISION_REQUIRED")
+  if (to === "superseded") fail("OUTCOME_QUEUE_SUPERSEDE_REQUIRES_MUTATION")
   const version = integer(expectedVersion, "OUTCOME_QUEUE_VERSION_INVALID")
   let binding = executionBinding
   let token = leaseToken
@@ -1122,6 +1368,336 @@ export async function completeOutcomeQueueItem({
       return { outcome: row, replayed: true }
     }
     fail("OUTCOME_QUEUE_STALE_FENCE")
+  } finally {
+    await connection.close()
+  }
+}
+
+const MUTATION_ACTIONS = new Set([
+  "pause",
+  "resume",
+  "reorder",
+  "approve",
+  "decline",
+  "supersede",
+])
+
+function normalizeOrderedOutcomes(value) {
+  if (value == null) return null
+  if (!Array.isArray(value) || value.length === 0) {
+    fail("OUTCOME_QUEUE_ORDERED_SNAPSHOT_INVALID")
+  }
+  const ordered = value.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      fail("OUTCOME_QUEUE_ORDERED_SNAPSHOT_INVALID")
+    }
+    return {
+      outcomeKey: nonempty(entry.outcomeKey, "OUTCOME_QUEUE_KEY_INVALID"),
+      expectedVersion: integer(
+        entry.expectedVersion,
+        "OUTCOME_QUEUE_VERSION_INVALID",
+      ),
+    }
+  })
+  if (new Set(ordered.map((entry) => entry.outcomeKey)).size !== ordered.length) {
+    fail("OUTCOME_QUEUE_ORDERED_SNAPSHOT_INVALID")
+  }
+  return ordered
+}
+
+function normalizeReplacement(value, sourceKey, user, idempotencyKey) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    fail("OUTCOME_QUEUE_REPLACEMENT_REQUIRED")
+  }
+  const outcomeKey = `outcome:successor:${createHash("sha256")
+    .update(`${user}:${idempotencyKey}`)
+    .digest("hex")
+    .slice(0, 24)}`
+  if (outcomeKey === sourceKey) fail("OUTCOME_QUEUE_REPLACEMENT_KEY_INVALID")
+  return {
+    outcomeKey,
+    title: nonempty(value.title, "OUTCOME_QUEUE_REPLACEMENT_TITLE_INVALID"),
+    objective: optionalString(value.objective, "OUTCOME_QUEUE_REPLACEMENT_OBJECTIVE_INVALID"),
+  }
+}
+
+function mutationRequest(input, user) {
+  const action = enumValue(input.action, MUTATION_ACTIONS, "OUTCOME_QUEUE_MUTATION_ACTION_INVALID")
+  const outcomeKey = nonempty(input.outcomeKey, "OUTCOME_QUEUE_KEY_INVALID")
+  const expectedVersion = integer(input.expectedVersion, "OUTCOME_QUEUE_VERSION_INVALID")
+  const idempotencyKey = nonempty(
+    input.idempotencyKey,
+    "OUTCOME_QUEUE_IDEMPOTENCY_KEY_INVALID",
+  )
+  const orderedOutcomes = action === "reorder"
+    ? normalizeOrderedOutcomes(input.orderedOutcomes)
+    : null
+  if (action === "reorder" && orderedOutcomes === null) {
+    fail("OUTCOME_QUEUE_ORDERED_SNAPSHOT_REQUIRED")
+  }
+  const approvalDecisionId = input.approvalDecisionId == null
+    ? null
+    : integer(input.approvalDecisionId, "OUTCOME_QUEUE_APPROVAL_DECISION_INVALID", { minimum: 1 })
+  const authorityGrantRef = optionalString(
+    input.authorityGrantRef,
+    "OUTCOME_QUEUE_AUTHORITY_GRANT_INVALID",
+  )
+  if (["approve", "resume"].includes(action)
+    && (approvalDecisionId === null || authorityGrantRef === null)) {
+    fail("OUTCOME_QUEUE_APPROVAL_AUTHORITY_REQUIRED")
+  }
+  const replacement = action === "supersede"
+    ? normalizeReplacement(input.replacement, outcomeKey, user, idempotencyKey)
+    : null
+  return {
+    action,
+    outcomeKey,
+    expectedVersion,
+    idempotencyKey,
+    reason: optionalString(input.reason, "OUTCOME_QUEUE_REASON_INVALID"),
+    approvalDecisionId,
+    authorityGrantRef,
+    orderedOutcomes,
+    replacement,
+  }
+}
+
+function assertVersion(row, expectedVersion) {
+  if (row.version !== expectedVersion) fail("OUTCOME_QUEUE_VERSION_CONFLICT")
+}
+
+async function reorderMutation(connection, request, user, at) {
+  const snapshotResult = await connection.query(OUTCOME_QUEUE_SQL.readMutationSnapshot, [user])
+  const snapshot = snapshotResult?.rows ?? []
+  const target = snapshot.find((row) => row.outcomeKey === request.outcomeKey)
+  if (!target) fail("OUTCOME_QUEUE_OUTCOME_NOT_FOUND")
+  assertVersion(target, request.expectedVersion)
+  if (target.lifecycleState === "active") fail("OUTCOME_QUEUE_REORDER_ACTIVE_ILLEGAL")
+
+  if (request.orderedOutcomes.length !== snapshot.length) {
+    fail("OUTCOME_QUEUE_ORDERED_SNAPSHOT_INCOMPLETE")
+  }
+  const byKey = new Map(snapshot.map((row) => [row.outcomeKey, row]))
+  const ordered = request.orderedOutcomes.map((entry) => {
+    const row = byKey.get(entry.outcomeKey)
+    if (!row) fail("OUTCOME_QUEUE_ORDERED_SNAPSHOT_INCOMPLETE")
+    assertVersion(row, entry.expectedVersion)
+    return row
+  })
+
+  let outcome = target
+  const affectedOutcomes = []
+  for (const [queueOrder, row] of ordered.entries()) {
+    // Active work owns its version until it pauses or terminalizes.
+    if (row.lifecycleState === "active") continue
+    if (row.queueOrder === queueOrder) continue
+    const updated = await connection.query(OUTCOME_QUEUE_SQL.reorderMutation, [
+      user,
+      row.outcomeKey,
+      row.version,
+      queueOrder,
+      at,
+    ])
+    if (updated?.rows?.length !== 1) fail("OUTCOME_QUEUE_VERSION_CONFLICT")
+    affectedOutcomes.push(updated.rows[0])
+    if (row.outcomeKey === request.outcomeKey) outcome = updated.rows[0]
+  }
+  return { outcome, affectedOutcomes }
+}
+
+/**
+ * Canonical exactly-once operator mutation boundary used by app/actions/outcome-queue.ts.
+ */
+export async function mutateOutcomeQueueItem({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  userId,
+  now = new Date(),
+  ...input
+} = {}) {
+  const user = userScope(userId)
+  const request = mutationRequest(input, user)
+  const at = timestamp(now)
+  const binding = canonicalValue(request)
+  const hash = requestHash(binding)
+  const connection = await openQuery(query, databaseUrl, true)
+  let begun = false
+  try {
+    await connection.query("BEGIN")
+    begun = true
+    await connection.query(OUTCOME_QUEUE_SQL.acquireLock, [`${user}:outcome-queue`])
+    const prior = await connection.query(
+      OUTCOME_QUEUE_SQL.readMutationReceipt,
+      [user, request.idempotencyKey],
+    )
+    if (prior?.rows?.length === 1) {
+      const receipt = prior.rows[0]
+      if (receipt.requestHash !== hash
+        || canonicalJson(jsonValue(
+          receipt.requestBinding,
+          "OUTCOME_QUEUE_RECEIPT_INVALID",
+        )) !== canonicalJson(binding)) {
+        fail("OUTCOME_QUEUE_IDEMPOTENCY_CONFLICT")
+      }
+      const recorded = jsonValue(receipt.resultBinding, "OUTCOME_QUEUE_RECEIPT_INVALID")
+      await connection.query("COMMIT")
+      begun = false
+      return { ...recorded, replayed: true }
+    }
+
+    let outcome
+    let affectedOutcomes = []
+    let successor = null
+    let reboundDependents = []
+    if (request.action === "reorder") {
+      const reordered = await reorderMutation(connection, request, user, at)
+      outcome = reordered.outcome
+      affectedOutcomes = reordered.affectedOutcomes
+    } else {
+      const currentResult = await connection.query(
+        OUTCOME_QUEUE_SQL.readMutationItem,
+        [user, request.outcomeKey],
+      )
+      if (currentResult?.rows?.length !== 1) fail("OUTCOME_QUEUE_OUTCOME_NOT_FOUND")
+      const current = currentResult.rows[0]
+      assertVersion(current, request.expectedVersion)
+
+      let result
+      if (request.action === "pause") {
+        if (!["approved", "active"].includes(current.lifecycleState)) {
+          fail("OUTCOME_QUEUE_PAUSE_ILLEGAL")
+        }
+        result = await connection.query(OUTCOME_QUEUE_SQL.pauseMutation, [
+          user, request.outcomeKey, request.expectedVersion, request.reason, at,
+        ])
+      } else if (request.action === "approve" || request.action === "resume") {
+        const expectedState = request.action === "resume" ? "blocked" : "suggested"
+        if (current.lifecycleState !== expectedState) {
+          fail(`OUTCOME_QUEUE_${request.action.toUpperCase()}_ILLEGAL`)
+        }
+        result = await connection.query(OUTCOME_QUEUE_SQL.governedApprovalMutation, [
+          user,
+          request.outcomeKey,
+          request.expectedVersion,
+          request.approvalDecisionId,
+          request.authorityGrantRef,
+          at,
+          expectedState,
+        ])
+        if (result?.rows?.length !== 1) {
+          fail("OUTCOME_QUEUE_APPROVAL_AUTHORITY_INVALID")
+        }
+      } else if (request.action === "decline") {
+        if (current.lifecycleState === "active") {
+          fail("OUTCOME_QUEUE_ACTIVE_TERMINATION_ILLEGAL")
+        }
+        result = await connection.query(OUTCOME_QUEUE_SQL.declineMutation, [
+          user, request.outcomeKey, request.expectedVersion, request.reason, at,
+        ])
+      } else {
+        if (current.lifecycleState === "active") {
+          fail("OUTCOME_QUEUE_ACTIVE_TERMINATION_ILLEGAL")
+        }
+        const replacement = request.replacement
+        result = await connection.query(OUTCOME_QUEUE_SQL.supersedeMutation, [
+          user,
+          request.outcomeKey,
+          request.expectedVersion,
+          request.reason,
+          replacement.outcomeKey,
+          at,
+        ])
+        if (result?.rows?.length === 1) {
+          const inserted = await connection.query(OUTCOME_QUEUE_SQL.insertSupersedingOutcome, [
+            user,
+            replacement.outcomeKey,
+            replacement.title,
+            replacement.objective,
+            current.queueOrder,
+            current.dependencyKeys,
+            current.riskClass,
+            current.authorityLevel,
+            current.authoritySubject,
+            current.authorityAction,
+            request.outcomeKey,
+            at,
+          ])
+          if (inserted?.rows?.length !== 1) fail("OUTCOME_QUEUE_REPLACEMENT_CONFLICT")
+          successor = inserted.rows[0]
+          const rebound = await connection.query(
+            OUTCOME_QUEUE_SQL.rebindSupersededDependents,
+            [user, request.outcomeKey, replacement.outcomeKey, at],
+          )
+          reboundDependents = rebound?.rows ?? []
+        }
+      }
+      if (result?.rows?.length !== 1) fail("OUTCOME_QUEUE_VERSION_CONFLICT")
+      outcome = result.rows[0]
+      affectedOutcomes = successor
+        ? [outcome, successor, ...reboundDependents]
+        : [outcome]
+    }
+
+    const recorded = canonicalValue({ outcome, affectedOutcomes, successor })
+    const receiptResult = await connection.query(OUTCOME_QUEUE_SQL.insertMutationReceipt, [
+      user,
+      request.idempotencyKey,
+      request.action,
+      request.outcomeKey,
+      hash,
+      canonicalJson(binding),
+      canonicalJson(recorded),
+      at,
+    ])
+    if (receiptResult?.rows?.length !== 1) fail("OUTCOME_QUEUE_RECEIPT_WRITE_FAILED")
+    const metadata = {
+      idempotencyKey: request.idempotencyKey,
+      operation: request.action,
+      receiptId: receiptResult.rows[0].id,
+      requestHash: hash,
+      resultVersion: recorded.outcome.version,
+      affectedOutcomes: recorded.affectedOutcomes.map((item) => ({
+        outcomeKey: item.outcomeKey,
+        version: item.version,
+      })),
+      successor: recorded.successor
+        ? {
+            outcomeKey: recorded.successor.outcomeKey,
+            version: recorded.successor.version,
+          }
+        : null,
+    }
+    const eventType = `OUTCOME_QUEUE_${request.action.toUpperCase()}`
+    const audit = await connection.query(OUTCOME_QUEUE_SQL.insertMutationAudit, [
+      user,
+      eventType,
+      request.outcomeKey,
+      request.reason,
+      canonicalJson(metadata),
+      at,
+    ])
+    if (audit?.rows?.length !== 1) fail("OUTCOME_QUEUE_AUDIT_WRITE_FAILED")
+    const event = await connection.query(OUTCOME_QUEUE_SQL.insertMutationEvent, [
+      user,
+      eventType,
+      `Outcome queue ${request.action}: ${request.outcomeKey}`,
+      recorded.outcome.id ?? null,
+      canonicalJson({ ...metadata, governanceEventId: audit.rows[0].id }),
+      at,
+    ])
+    if (event?.rows?.length !== 1) fail("OUTCOME_QUEUE_EVENT_WRITE_FAILED")
+    await connection.query("COMMIT")
+    begun = false
+    return { ...recorded, replayed: false }
+  } catch (error) {
+    if (begun) {
+      try {
+        await connection.query("ROLLBACK")
+      } catch {
+        // Preserve the primary mutation error.
+      }
+    }
+    throw error
   } finally {
     await connection.close()
   }
