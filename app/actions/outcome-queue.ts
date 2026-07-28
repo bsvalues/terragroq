@@ -20,6 +20,7 @@ import {
   buildOutcomeQueueRuntimeMutation,
   classifyOutcomeQueueMutationError,
   scopeMatchesOutcome,
+  validateOutcomeQueueMutationInput,
   type OutcomeQueueMutationActionResult,
   type OutcomeQueueMutationInput,
 } from "@/lib/outcome-queue/operator-mutations"
@@ -175,8 +176,18 @@ export async function mutateOutcomeQueue(
     throw error
   }
 
+  const validated = validateOutcomeQueueMutationInput(input)
+  if (validated === null) {
+    return {
+      status: "INVALID",
+      message: "The queue decision payload is invalid.",
+      outcomeKey: null,
+      version: null,
+    }
+  }
+
   try {
-    const result = await runtimeMutation(input, userId)
+    const result = await runtimeMutation(validated, userId)
     revalidatePath("/goal-console")
     revalidatePath("/work-orders")
     return {
@@ -184,7 +195,7 @@ export async function mutateOutcomeQueue(
       message: result.replayed
         ? "This queue decision was already recorded."
         : "Queue decision recorded.",
-      outcomeKey: result.outcome?.outcomeKey ?? input.outcomeKey,
+      outcomeKey: result.outcome?.outcomeKey ?? validated.outcomeKey,
       version: result.outcome?.version ?? null,
     }
   } catch (error) {
@@ -194,7 +205,7 @@ export async function mutateOutcomeQueue(
       return {
         status: "STALE",
         message: "The queue changed before this decision was recorded. Refresh and review current truth.",
-        outcomeKey: input.outcomeKey,
+        outcomeKey: validated.outcomeKey,
         version: null,
       }
     }
@@ -202,7 +213,7 @@ export async function mutateOutcomeQueue(
       return {
         status: "CONFLICT",
         message: "This request key is already bound to a different queue decision.",
-        outcomeKey: input.outcomeKey,
+        outcomeKey: validated.outcomeKey,
         version: null,
       }
     }
@@ -210,7 +221,7 @@ export async function mutateOutcomeQueue(
       return {
         status: "UNAUTHORIZED",
         message: "A current binding decision and live scoped authority are required.",
-        outcomeKey: input.outcomeKey,
+        outcomeKey: validated.outcomeKey,
         version: null,
       }
     }
@@ -218,7 +229,7 @@ export async function mutateOutcomeQueue(
       return {
         status: "INVALID",
         message: "The queue decision is invalid for the current outcome state.",
-        outcomeKey: input.outcomeKey,
+        outcomeKey: validated.outcomeKey,
         version: null,
       }
     }

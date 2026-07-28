@@ -81,6 +81,16 @@ function queueRow(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function safeMutationRow(row: Record<string, unknown>) {
+  const safe = { ...row }
+  delete safe.executionBinding
+  delete safe.leaseToken
+  delete safe.fencingToken
+  delete safe.acquisitionKey
+  delete safe.terminalKey
+  return safe
+}
+
 function acquisitionQuery({
   prior = [],
   replayEligibility = [{ approvalLive: true, authorityLive: true }],
@@ -133,11 +143,14 @@ function mutationQuery({
   rebound?: Record<string, unknown>[]
   governed?: boolean
 } = {}) {
-  let receipt: Record<string, unknown> | null = null
+  const receipts = new Map<string, Record<string, unknown>>()
   const run = vi.fn(async (sql: string, values: unknown[] = []) => {
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] }
     if (sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
-    if (sql === OUTCOME_QUEUE_SQL.readMutationReceipt) return { rows: receipt ? [receipt] : [] }
+    if (sql === OUTCOME_QUEUE_SQL.readMutationReceipt) {
+      const receipt = receipts.get(String(values[1]))
+      return { rows: receipt ? [receipt] : [] }
+    }
     if (sql === OUTCOME_QUEUE_SQL.readMutationItem) return { rows: [current] }
     if (sql === OUTCOME_QUEUE_SQL.readMutationSnapshot) return { rows: snapshot }
     if (sql === OUTCOME_QUEUE_SQL.governedApprovalMutation) {
@@ -169,7 +182,7 @@ function mutationQuery({
       }] }
     }
     if (sql === OUTCOME_QUEUE_SQL.insertMutationReceipt) {
-      receipt = {
+      receipts.set(String(values[1]), {
         id: 41,
         userId: values[0],
         idempotencyKey: values[1],
@@ -179,7 +192,7 @@ function mutationQuery({
         requestBinding: JSON.parse(String(values[5])),
         resultBinding: JSON.parse(String(values[6])),
         createdAt: values[7],
-      }
+      })
       return { rows: [{ id: 41 }] }
     }
     if (sql === OUTCOME_QUEUE_SQL.insertMutationAudit) return { rows: [{ id: 42 }] }
@@ -856,8 +869,8 @@ describe("governed outcome queue mutations", () => {
       reason: "Operator pause",
       now,
     })).resolves.toEqual({
-      outcome: paused,
-      affectedOutcomes: [paused],
+      outcome: safeMutationRow(paused),
+      affectedOutcomes: [safeMutationRow(paused)],
       successor: null,
       replayed: false,
     })
@@ -904,8 +917,8 @@ describe("governed outcome queue mutations", () => {
       authorityGrantRef: "GRANT-WOS-V1.2",
       now,
     })).resolves.toEqual({
-      outcome: approved,
-      affectedOutcomes: [approved],
+      outcome: safeMutationRow(approved),
+      affectedOutcomes: [safeMutationRow(approved)],
       successor: null,
       replayed: false,
     })
@@ -1059,6 +1072,7 @@ describe("governed outcome queue mutations", () => {
       id: 3,
       outcomeKey: "goal:GOAL-1002",
       dependencyKeys: [replacementKey],
+      lifecycleState: "approved",
       version: 5,
     })
     const query = mutationQuery({
@@ -1086,16 +1100,16 @@ describe("governed outcome queue mutations", () => {
       now,
     })
     expect(result).toMatchObject({
-      outcome: superseded,
+      outcome: safeMutationRow(superseded),
       affectedOutcomes: [
-        superseded,
+        safeMutationRow(superseded),
         expect.objectContaining({
           outcomeKey: replacementKey,
           lifecycleState: "suggested",
           approvalState: "unapproved",
           authorityState: "unverified",
         }),
-        dependent,
+        safeMutationRow(dependent),
       ],
       successor: expect.objectContaining({ outcomeKey: replacementKey }),
       replayed: false,
@@ -1113,13 +1127,21 @@ describe("governed outcome queue mutations", () => {
     const insertCall = query.mock.calls.find(
       ([sql]) => sql === OUTCOME_QUEUE_SQL.insertSupersedingOutcome,
     )
-    expect(insertCall?.[1]?.slice(4, 10)).toEqual([
+    expect(insertCall?.[1]).toEqual([
+      userId,
+      replacementKey,
+      current.goalId,
+      current.goalRef,
+      "Replacement",
+      "Revised outcome",
       current.queueOrder,
       current.dependencyKeys,
       current.riskClass,
       current.authorityLevel,
       current.authoritySubject,
       current.authorityAction,
+      current.outcomeKey,
+      now,
     ])
     const receiptCall = query.mock.calls.find(
       ([sql]) => sql === OUTCOME_QUEUE_SQL.insertMutationReceipt,
@@ -1127,6 +1149,13 @@ describe("governed outcome queue mutations", () => {
     const receiptBinding = JSON.parse(String(receiptCall?.[1]?.[6]))
     expect(receiptBinding.affectedOutcomes).toHaveLength(3)
     expect(receiptBinding.successor.outcomeKey).toBe(replacementKey)
+    for (const item of receiptBinding.affectedOutcomes) {
+      expect(item).not.toHaveProperty("executionBinding")
+      expect(item).not.toHaveProperty("leaseToken")
+      expect(item).not.toHaveProperty("fencingToken")
+      expect(item).not.toHaveProperty("acquisitionKey")
+      expect(item).not.toHaveProperty("terminalKey")
+    }
     const rebindCall = query.mock.calls.find(
       ([sql]) => sql === OUTCOME_QUEUE_SQL.rebindSupersededDependents,
     )
@@ -1192,14 +1221,14 @@ describe("governed outcome queue mutations", () => {
       now,
     }
     await expect(mutateOutcomeQueueItem(input)).resolves.toEqual({
-      outcome: declined,
-      affectedOutcomes: [declined],
+      outcome: safeMutationRow(declined),
+      affectedOutcomes: [safeMutationRow(declined)],
       successor: null,
       replayed: false,
     })
     await expect(mutateOutcomeQueueItem(input)).resolves.toEqual({
-      outcome: declined,
-      affectedOutcomes: [declined],
+      outcome: safeMutationRow(declined),
+      affectedOutcomes: [safeMutationRow(declined)],
       successor: null,
       replayed: true,
     })

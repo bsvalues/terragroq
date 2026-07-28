@@ -273,14 +273,14 @@ RETURNING ${QUEUE_COLUMNS}
 `,
   insertSupersedingOutcome: `
 INSERT INTO "outcome_queue_item" AS q (
-  "userId", "outcomeKey", "title", "objective", "queueOrder",
+  "userId", "outcomeKey", "goalId", "goalRef", "title", "objective", "queueOrder",
   "dependencyKeys", "riskClass", "approvalState", "authorityState",
   "authorityLevel", "authoritySubject", "authorityAction", "lifecycleState",
   "supersedesOutcomeKey", "suggestedAt", "createdAt", "updatedAt"
 ) VALUES (
-  $1, $2, $3, $4, $5, $6::text[], $7, 'unapproved', 'unverified',
-  $8, $9, $10, 'suggested', $11, $12::timestamptz,
-  $12::timestamptz, $12::timestamptz
+  $1, $2, $3, $4, $5, $6, $7, $8::text[], $9, 'unapproved', 'unverified',
+  $10, $11, $12, 'suggested', $13, $14::timestamptz,
+  $14::timestamptz, $14::timestamptz
 )
 RETURNING ${QUEUE_COLUMNS}
 `,
@@ -1466,6 +1466,19 @@ function assertVersion(row, expectedVersion) {
   if (row.version !== expectedVersion) fail("OUTCOME_QUEUE_VERSION_CONFLICT")
 }
 
+function safeMutationOutcome(row) {
+  if (row == null) return null
+  const {
+    executionBinding: _executionBinding,
+    leaseToken: _leaseToken,
+    fencingToken: _fencingToken,
+    acquisitionKey: _acquisitionKey,
+    terminalKey: _terminalKey,
+    ...safe
+  } = row
+  return safe
+}
+
 async function reorderMutation(connection, request, user, at) {
   const snapshotResult = await connection.query(OUTCOME_QUEUE_SQL.readMutationSnapshot, [user])
   const snapshot = snapshotResult?.rows ?? []
@@ -1611,6 +1624,8 @@ export async function mutateOutcomeQueueItem({
           const inserted = await connection.query(OUTCOME_QUEUE_SQL.insertSupersedingOutcome, [
             user,
             replacement.outcomeKey,
+            current.goalId,
+            current.goalRef,
             replacement.title,
             replacement.objective,
             current.queueOrder,
@@ -1638,7 +1653,11 @@ export async function mutateOutcomeQueueItem({
         : [outcome]
     }
 
-    const recorded = canonicalValue({ outcome, affectedOutcomes, successor })
+    const recorded = canonicalValue({
+      outcome: safeMutationOutcome(outcome),
+      affectedOutcomes: affectedOutcomes.map(safeMutationOutcome),
+      successor: safeMutationOutcome(successor),
+    })
     const receiptResult = await connection.query(OUTCOME_QUEUE_SQL.insertMutationReceipt, [
       user,
       request.idempotencyKey,

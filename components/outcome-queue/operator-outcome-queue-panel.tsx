@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import {
   ArrowDown,
@@ -35,16 +35,20 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { StatusBadge } from "@/components/status-badge"
 
+const REORDERABLE_STATES = new Set(["suggested", "approved", "blocked"])
+const TERMINAL_STATES = new Set(["completed", "declined", "superseded"])
+
 function actionInput(
   row: OutcomeQueueOperatorRow,
   action: OutcomeQueueMutationInput["action"],
+  idempotencyKey: string,
   extra: Partial<OutcomeQueueMutationInput> = {},
 ): OutcomeQueueMutationInput {
   return {
     action,
     outcomeKey: row.outcomeKey,
     expectedVersion: row.version,
-    idempotencyKey: crypto.randomUUID(),
+    idempotencyKey,
     ...extra,
   }
 }
@@ -53,16 +57,17 @@ function reorderInput(
   surface: OutcomeQueueOperatorSurface,
   row: OutcomeQueueOperatorRow,
   direction: -1 | 1,
+  idempotencyKey: string,
 ): OutcomeQueueMutationInput | null {
   const ordered = surface.rows.filter((item) => (
-    ["suggested", "approved", "blocked"].includes(item.lifecycleState)
+    REORDERABLE_STATES.has(item.lifecycleState)
   ))
   const currentIndex = ordered.findIndex((item) => item.outcomeKey === row.outcomeKey)
   const destination = currentIndex + direction
   if (currentIndex < 0 || destination < 0 || destination >= ordered.length) return null
   const next = [...ordered]
   ;[next[currentIndex], next[destination]] = [next[destination], next[currentIndex]]
-  return actionInput(row, "reorder", {
+  return actionInput(row, "reorder", idempotencyKey, {
     orderedOutcomes: next.map((item) => ({
       outcomeKey: item.outcomeKey,
       expectedVersion: item.version,
@@ -78,18 +83,45 @@ export function OperatorOutcomeQueuePanel({
   compact?: boolean
 }) {
   const router = useRouter()
-  const [pendingKey, setPendingKey] = useState<string | null>(null)
+  const [pendingKeys, setPendingKeys] = useState<Set<string>>(() => new Set())
   const [superseding, setSuperseding] = useState<OutcomeQueueOperatorRow | null>(null)
   const [replacementTitle, setReplacementTitle] = useState("")
   const [pending, startTransition] = useTransition()
+  const attemptKeys = useRef(new Map<string, string>())
   const visibleRows = compact ? surface.rows.slice(0, 4) : surface.rows
+  const movableRows = surface.rows.filter((item) => (
+    REORDERABLE_STATES.has(item.lifecycleState)
+  ))
+
+  function attemptKey(
+    row: OutcomeQueueOperatorRow,
+    action: OutcomeQueueMutationInput["action"],
+  ) {
+    const key = `${row.outcomeKey}:${action}:${row.version}`
+    const existing = attemptKeys.current.get(key)
+    if (existing) return existing
+    const created = crypto.randomUUID()
+    attemptKeys.current.set(key, created)
+    return created
+  }
+
+  function inputFor(
+    row: OutcomeQueueOperatorRow,
+    action: OutcomeQueueMutationInput["action"],
+    extra: Partial<OutcomeQueueMutationInput> = {},
+  ) {
+    return actionInput(row, action, attemptKey(row, action), extra)
+  }
 
   function run(input: OutcomeQueueMutationInput) {
-    setPendingKey(input.outcomeKey)
+    setPendingKeys((current) => new Set(current).add(input.outcomeKey))
     startTransition(async () => {
       try {
         const result = await mutateOutcomeQueue(input)
         if (result.status === "RECORDED" || result.status === "REPLAYED") {
+          attemptKeys.current.delete(
+            `${input.outcomeKey}:${input.action}:${input.expectedVersion}`,
+          )
           toast.success(result.message)
           router.refresh()
           return
@@ -99,14 +131,18 @@ export function OperatorOutcomeQueuePanel({
       } catch {
         toast.error("Queue decision could not be recorded.")
       } finally {
-        setPendingKey(null)
+        setPendingKeys((current) => {
+          const next = new Set(current)
+          next.delete(input.outcomeKey)
+          return next
+        })
       }
     })
   }
 
   function submitSupersede() {
     if (!superseding || replacementTitle.trim() === "") return
-    run(actionInput(superseding, "supersede", {
+    run(inputFor(superseding, "supersede", {
       reason: "Primary Operator replaced this outcome from the queue surface.",
       replacement: {
         title: replacementTitle.trim(),
@@ -146,18 +182,12 @@ export function OperatorOutcomeQueuePanel({
       ) : (
         <ol className="divide-y divide-border">
           {visibleRows.map((row, index) => {
-            const rowPending = pending && pendingKey === row.outcomeKey
-            const movable = !row.isActive
-              && !["completed", "declined", "superseded"].includes(row.lifecycleState)
-            const terminal = ["completed", "declined", "superseded"].includes(
-              row.lifecycleState,
-            )
-            const movableRows = surface.rows.filter((item) => (
-              ["suggested", "approved", "blocked"].includes(item.lifecycleState)
-            ))
+            const rowPending = pendingKeys.has(row.outcomeKey)
+            const terminal = TERMINAL_STATES.has(row.lifecycleState)
             const movableIndex = movableRows.findIndex(
               (item) => item.outcomeKey === row.outcomeKey,
             )
+            const movable = !row.isActive && movableIndex >= 0
             return (
               <li key={row.outcomeKey} className="grid gap-4 px-5 py-4 lg:grid-cols-[1fr_auto]">
                 <div className="min-w-0">
@@ -196,7 +226,12 @@ export function OperatorOutcomeQueuePanel({
                           title="Move outcome earlier"
                           aria-label={`Move ${row.title} earlier`}
                           onClick={() => {
-                            const input = reorderInput(surface, row, -1)
+                            const input = reorderInput(
+                              surface,
+                              row,
+                              -1,
+                              attemptKey(row, "reorder"),
+                            )
                             if (input) run(input)
                           }}
                         >
@@ -209,7 +244,12 @@ export function OperatorOutcomeQueuePanel({
                           title="Move outcome later"
                           aria-label={`Move ${row.title} later`}
                           onClick={() => {
-                            const input = reorderInput(surface, row, 1)
+                            const input = reorderInput(
+                              surface,
+                              row,
+                              1,
+                              attemptKey(row, "reorder"),
+                            )
                             if (input) run(input)
                           }}
                         >
@@ -221,8 +261,8 @@ export function OperatorOutcomeQueuePanel({
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={pending}
-                        onClick={() => run(actionInput(row, "pause", {
+                        disabled={rowPending}
+                        onClick={() => run(inputFor(row, "pause", {
                           reason: "Primary Operator paused this outcome.",
                         }))}
                       >
@@ -234,11 +274,11 @@ export function OperatorOutcomeQueuePanel({
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={pending || row.availableApprovalDecisionId === null || row.availableAuthorityGrantRef === null}
+                        disabled={rowPending || row.availableApprovalDecisionId === null || row.availableAuthorityGrantRef === null}
                         title={row.availableApprovalDecisionId === null || row.availableAuthorityGrantRef === null
                           ? "A binding decision and live authority are required"
                           : "Resume outcome"}
-                        onClick={() => run(actionInput(row, "resume", {
+                        onClick={() => run(inputFor(row, "resume", {
                           approvalDecisionId: row.availableApprovalDecisionId ?? undefined,
                           authorityGrantRef: row.availableAuthorityGrantRef ?? undefined,
                         }))}
@@ -250,11 +290,11 @@ export function OperatorOutcomeQueuePanel({
                     {row.lifecycleState === "suggested" ? (
                       <Button
                         size="sm"
-                        disabled={pending || row.availableApprovalDecisionId === null || row.availableAuthorityGrantRef === null}
+                        disabled={rowPending || row.availableApprovalDecisionId === null || row.availableAuthorityGrantRef === null}
                         title={row.availableApprovalDecisionId === null || row.availableAuthorityGrantRef === null
                           ? "Record a binding decision and scoped authority before approval"
                           : "Approve outcome"}
-                        onClick={() => run(actionInput(row, "approve", {
+                        onClick={() => run(inputFor(row, "approve", {
                           approvalDecisionId: row.availableApprovalDecisionId ?? undefined,
                           authorityGrantRef: row.availableAuthorityGrantRef ?? undefined,
                         }))}
@@ -268,7 +308,7 @@ export function OperatorOutcomeQueuePanel({
                         <Button
                           size="icon"
                           variant="ghost"
-                          disabled={pending}
+                          disabled={rowPending}
                           title="Supersede outcome"
                           aria-label={`Supersede ${row.title}`}
                           onClick={() => {
@@ -281,10 +321,10 @@ export function OperatorOutcomeQueuePanel({
                         <Button
                           size="icon"
                           variant="ghost"
-                          disabled={pending}
+                          disabled={rowPending}
                           title="Decline outcome"
                           aria-label={`Decline ${row.title}`}
-                          onClick={() => run(actionInput(row, "decline", {
+                          onClick={() => run(inputFor(row, "decline", {
                             reason: "Primary Operator declined this outcome.",
                           }))}
                         >

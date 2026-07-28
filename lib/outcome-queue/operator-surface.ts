@@ -264,12 +264,12 @@ export function projectOutcomeQueueOperatorSurface(
     (item) => item.lifecycleState === "active" && !isLeaseStale(item, input.now),
   )
   const selection = selectNextOutcome(ordered, input)
-  const nextItem = selection.selected ? selection.item : null
+  const nextKey = selection.selected ? selection.item.outcomeKey : null
   const nextMode = selection.selected ? selection.mode : null
 
   const rows = ordered.map((item): OutcomeQueueOperatorRow => {
     const { reasons, dependencyGaps } = blockersFor(item, byKey, liveActive, input)
-    const isNextEligible = nextItem === item
+    const isNextEligible = nextKey !== null && item.outcomeKey === nextKey
     const staleLease = isLeaseStale(item, input.now)
 
     return {
