@@ -4,6 +4,7 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { CodexAppServerClient, sanitizeAppServerText } from "./app-server-client.mjs"
 import { createHermesOrchestrator } from "./orchestrator.mjs"
+import { createHermesOutcomeQueueRuntime } from "./outcome-queue-runtime.mjs"
 import {
   NATIVE_PROVIDER_RETRY_STATE,
   VALIDATION_INFRASTRUCTURE_RETRY_STATE,
@@ -44,6 +45,72 @@ export function sanitizeBridgeMessage(value) {
     .replace(/\bpostgres(?:ql)?:\/\/[^@\s]+@/gi, "postgresql://[REDACTED]@")
 }
 
+const STATUS_CAPABILITY_FIELDS = new Set([
+  "leaseToken",
+  "executionBinding",
+  "acquisitionKey",
+])
+
+export function redactHermesStatus(value) {
+  if (Array.isArray(value)) return value.map(redactHermesStatus)
+  if (!value || typeof value !== "object") return value
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !STATUS_CAPABILITY_FIELDS.has(key))
+    .map(([key, entry]) => [key, redactHermesStatus(entry)]))
+}
+
+export function createResidentHermesOrchestrator(options = {}) {
+  const queueRuntime = options.queueRuntime ?? createHermesOutcomeQueueRuntime()
+  const orchestrator = createHermesOrchestrator({
+    workspace: options.workspace ?? process.cwd(),
+    ...(options.orchestratorOptions ?? {}),
+    selectOutcome: queueRuntime.selectOutcome,
+    markComplete: queueRuntime.completeOutcome,
+    markTerminal: queueRuntime.terminalizeOutcome,
+    deferOutcome: queueRuntime.deferOutcome,
+    renewQueueLease: queueRuntime.renewOutcomeLease,
+    bindQueueWorkOrder: queueRuntime.bindWorkOrder,
+    refreshQueueOutcome: queueRuntime.refreshOutcome,
+    resumeQueueAfterDecision: queueRuntime.resumeAfterOwnerDecision,
+  })
+  return Object.freeze({
+    ...orchestrator,
+    close: queueRuntime.close,
+  })
+}
+
+export async function runHermesQueueDrain({ orchestrator, maxOutcomes = 100 } = {}) {
+  if (!orchestrator || !Number.isInteger(maxOutcomes) || maxOutcomes <= 0) {
+    throw Object.assign(new Error("Hermes queue drain input is invalid"), {
+      code: "HERMES_QUEUE_DRAIN_INPUT_WALL",
+    })
+  }
+  const settled = []
+  for (let index = 0; index < maxOutcomes; index += 1) {
+    const result = await orchestrator.cycle()
+    if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {
+      if (settled.length === 0) return result
+      return {
+        result: "QUEUE_DRAINED",
+        settled,
+        stopReason: result.result,
+        ...(result.reasonCode ? { reasonCode: result.reasonCode } : {}),
+      }
+    }
+    settled.push({
+      result: result.result,
+      outcomeId: result.outcomeId,
+      ...(result.prNumber ? { prNumber: result.prNumber } : {}),
+      ...(result.mergeSha ? { mergeSha: result.mergeSha } : {}),
+      ...(result.nextState ? { nextState: result.nextState } : {}),
+    })
+  }
+  throw Object.assign(new Error("Hermes queue drain exceeded its bounded outcome budget"), {
+    code: "HERMES_QUEUE_DRAIN_BUDGET_WALL",
+    settled,
+  })
+}
+
 async function smoke() {
   const client = new CodexAppServerClient({ cwd: process.cwd(), timeoutMs: 180_000 })
   try {
@@ -66,7 +133,7 @@ async function smoke() {
 }
 
 async function recoverNativeProviderWall() {
-  const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
+  const orchestrator = createResidentHermesOrchestrator()
   const state = orchestrator.state.read()
   const candidates = Object.values(state.executions).filter((execution) => (
     execution?.lease?.status === "RELEASED"
@@ -98,7 +165,7 @@ function sha256(value) {
 }
 
 export async function recoverValidationInfrastructureWall(options = {}) {
-  const orchestrator = options.orchestrator ?? createHermesOrchestrator({ workspace: process.cwd() })
+  const orchestrator = options.orchestrator ?? createResidentHermesOrchestrator()
   const recordProof = options.recordProof ?? recordValidationInfrastructureRecoveryProof
   const recoverOutcome = options.recoverOutcome ?? recoverValidationInfrastructureOutcome
   const state = orchestrator.state.read()
@@ -153,7 +220,7 @@ export async function recoverValidationInfrastructureWall(options = {}) {
 }
 
 export function recoverExternalToolWall(options = {}) {
-  const orchestrator = options.orchestrator ?? createHermesOrchestrator({ workspace: process.cwd() })
+  const orchestrator = options.orchestrator ?? createResidentHermesOrchestrator()
   const activationPath = path.join(orchestrator.runtimeRoot, "control", "activation")
   const supervisorPath = path.join(orchestrator.runtimeRoot, "state", "supervisor.json")
   const activation = fs.existsSync(activationPath) ? fs.readFileSync(activationPath, "utf8").trim() : "disabled"
@@ -181,7 +248,7 @@ export function recoverExternalToolWall(options = {}) {
 }
 
 export function recoverPostMergeCleanupWall(options = {}) {
-  const orchestrator = options.orchestrator ?? createHermesOrchestrator({ workspace: process.cwd() })
+  const orchestrator = options.orchestrator ?? createResidentHermesOrchestrator()
   const activationPath = path.join(orchestrator.runtimeRoot, "control", "activation")
   const supervisorPath = path.join(orchestrator.runtimeRoot, "state", "supervisor.json")
   const activation = fs.existsSync(activationPath) ? fs.readFileSync(activationPath, "utf8").trim() : "disabled"
@@ -210,7 +277,7 @@ export function recoverPostMergeCleanupWall(options = {}) {
 }
 
 export async function recoverTerminalPostMergeCleanupWall(options = {}) {
-  const orchestrator = options.orchestrator ?? createHermesOrchestrator({ workspace: process.cwd() })
+  const orchestrator = options.orchestrator ?? createResidentHermesOrchestrator()
   const lifecycle = options.lifecycle ?? createHermesRepositoryLifecycle({
     workspaceRoot: process.cwd(),
     ownedWorktreeRoot: path.join(orchestrator.runtimeRoot, "worktrees"),
@@ -378,7 +445,7 @@ export async function recoverTerminalPostMergeCleanupWall(options = {}) {
 }
 
 export async function recoverReviewedMerge(options = {}) {
-  const orchestrator = options.orchestrator ?? createHermesOrchestrator({ workspace: process.cwd() })
+  const orchestrator = options.orchestrator ?? createResidentHermesOrchestrator()
   const lifecycle = options.lifecycle ?? createHermesRepositoryLifecycle({
     workspaceRoot: process.cwd(),
     ownedWorktreeRoot: path.join(orchestrator.runtimeRoot, "worktrees"),
@@ -632,10 +699,11 @@ export async function recoverReviewedMerge(options = {}) {
 }
 
 export async function runCli(command = process.argv[2]) {
+  let orchestrator = null
   try {
     if (command === "cycle") {
-      const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
-      print(await orchestrator.cycle())
+      orchestrator = createResidentHermesOrchestrator()
+      print(await runHermesQueueDrain({ orchestrator }))
     }
     else if (command === "smoke") print(await smoke())
     else if (command === "recover-native-provider-wall") print(await recoverNativeProviderWall())
@@ -645,14 +713,23 @@ export async function runCli(command = process.argv[2]) {
     else if (command === "recover-terminal-post-merge-cleanup-wall") print(await recoverTerminalPostMergeCleanupWall())
     else if (command === "recover-reviewed-merge") print(await recoverReviewedMerge())
     else if (command === "status") {
-      const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
-      print(readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")))
+      orchestrator = createResidentHermesOrchestrator()
+      print(redactHermesStatus(
+        readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")),
+      ))
     } else {
       throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-external-tool-wall|recover-post-merge-cleanup-wall|recover-terminal-post-merge-cleanup-wall|recover-reviewed-merge"), { code: "HERMES_CLI_USAGE" })
     }
   } catch (error) {
-    print({ result: "WALL", code: error?.code ?? "HERMES_CLI_FAILED", message: sanitizeBridgeMessage(error?.message ?? "Hermes bridge failed") })
+    print({
+      result: "WALL",
+      code: error?.code ?? "HERMES_CLI_FAILED",
+      message: sanitizeBridgeMessage(error?.message ?? "Hermes bridge failed"),
+      ...(Array.isArray(error?.settled) ? { settled: error.settled } : {}),
+    })
     return 1
+  } finally {
+    await orchestrator?.close?.()
   }
   return 0
 }

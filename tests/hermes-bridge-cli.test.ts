@@ -8,11 +8,86 @@ import {
   recoverReviewedMerge,
   recoverTerminalPostMergeCleanupWall,
   recoverValidationInfrastructureWall,
+  redactHermesStatus,
+  runHermesQueueDrain,
   runCliEntrypoint,
   sanitizeBridgeMessage,
 } from "../scripts/hermes-bridge/cli.mjs"
 
 describe("Hermes bridge CLI", () => {
+  it("redacts durable queue capabilities from status projections at every depth", () => {
+    const status = redactHermesStatus({
+      executions: {
+        "77": {
+          metadata: {
+            outcome: {
+              queueBinding: {
+                outcomeKey: "outcome:77",
+                leaseToken: "lease-secret",
+                executionBinding: "execution-secret",
+                acquisitionKey: "acquisition-secret",
+                fencingToken: 3,
+              },
+            },
+          },
+        },
+      },
+      idempotency: {
+        acquire: {
+          result: {
+            metadata: {
+              outcome: {
+                queueBinding: {
+                  leaseToken: "receipt-lease",
+                  acquisitionKey: "receipt-acquisition",
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    expect(JSON.stringify(status)).not.toMatch(/lease-secret|execution-secret|acquisition-secret|receipt-lease|receipt-acquisition/)
+    expect(status.executions["77"].metadata.outcome.queueBinding).toEqual({
+      outcomeKey: "outcome:77",
+      fencingToken: 3,
+    })
+  })
+
+  it("continues immediately through settled queue outcomes until the queue is drained", async () => {
+    const cycle = vi.fn()
+      .mockResolvedValueOnce({ result: "COMPLETE", outcomeId: "77", prNumber: 475, mergeSha: "a".repeat(40) })
+      .mockResolvedValueOnce({ result: "FAILED_TERMINAL", outcomeId: "78", nextState: "VALIDATION_FAILED" })
+      .mockResolvedValueOnce({ result: "NO_ELIGIBLE_OUTCOME" })
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, maxOutcomes: 3 }))
+      .resolves.toEqual({
+        result: "QUEUE_DRAINED",
+        settled: [
+          { result: "COMPLETE", outcomeId: "77", prNumber: 475, mergeSha: "a".repeat(40) },
+          { result: "FAILED_TERMINAL", outcomeId: "78", nextState: "VALIDATION_FAILED" },
+        ],
+        stopReason: "NO_ELIGIBLE_OUTCOME",
+      })
+    expect(cycle).toHaveBeenCalledTimes(3)
+  })
+
+  it("preserves settled outcomes when the bounded drain budget is exhausted", async () => {
+    const cycle = vi.fn()
+      .mockResolvedValueOnce({ result: "COMPLETE", outcomeId: "77", mergeSha: "a".repeat(40) })
+      .mockResolvedValueOnce({ result: "FAILED_TERMINAL", outcomeId: "78", nextState: "VALIDATION_FAILED" })
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, maxOutcomes: 2 }))
+      .rejects.toMatchObject({
+        code: "HERMES_QUEUE_DRAIN_BUDGET_WALL",
+        settled: [
+          { result: "COMPLETE", outcomeId: "77", mergeSha: "a".repeat(40) },
+          { result: "FAILED_TERMINAL", outcomeId: "78", nextState: "VALIDATION_FAILED" },
+        ],
+      })
+  })
+
   it("redacts credential-bearing database URLs from structured wall output", () => {
     expect(sanitizeBridgeMessage("connect failed for postgresql://owner:opaque-password@db.example.test/app"))
       .toBe("connect failed for postgresql://[REDACTED]@db.example.test/app")

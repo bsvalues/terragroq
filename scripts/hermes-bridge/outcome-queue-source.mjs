@@ -535,6 +535,116 @@ WHERE q."userId" = $1
   ))
 RETURNING ${QUEUE_COLUMNS}
 `,
+  renewLease: `
+UPDATE "outcome_queue_item" AS q
+SET "leaseExpiresAt" = $8::timestamptz,
+    "updatedAt" = $7::timestamptz
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."version" = $3
+  AND q."executionBinding" = $4
+  AND q."leaseToken" = $5
+  AND q."fencingToken" = $6
+  AND q."leaseExpiresAt" > $7::timestamptz
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$7::timestamptz")}
+RETURNING ${QUEUE_COLUMNS}
+`,
+  deferLease: `
+UPDATE "outcome_queue_item" AS q
+SET "leaseExpiresAt" = $7::timestamptz,
+    "lifecycleReason" = $8,
+    "updatedAt" = $9::timestamptz
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."version" = $3
+  AND q."executionBinding" = $4
+  AND q."leaseToken" = $5
+  AND q."fencingToken" = $6
+  AND q."leaseExpiresAt" > $9::timestamptz
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
+RETURNING ${QUEUE_COLUMNS}
+`,
+  bindWorkOrder: `
+UPDATE "outcome_queue_item" AS q
+SET "activeWorkOrderId" = $7,
+    "updatedAt" = $8::timestamptz
+FROM work_order AS projected_work
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."version" = $3
+  AND q."executionBinding" = $4
+  AND q."leaseToken" = $5
+  AND q."fencingToken" = $6
+  AND q."leaseExpiresAt" > $8::timestamptz
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$8::timestamptz")}
+  AND projected_work.id = $7
+  AND projected_work."userId" = q."userId"
+  AND projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
+  AND projected_work.goal = q."goalRef"
+  AND projected_work.status = 'active'
+  AND (q."activeWorkOrderId" IS NULL OR q."activeWorkOrderId" = $7)
+RETURNING ${QUEUE_COLUMNS}
+`,
+  resumeAfterDecision: `
+UPDATE "outcome_queue_item" AS q
+SET "lifecycleState" = 'active',
+    "lifecycleReason" = 'OWNER_DECISION_RESUMED',
+    "leaseHolder" = $8,
+    "leaseToken" = $9,
+    "leaseExpiresAt" = $10::timestamptz,
+    "fencingToken" = q."fencingToken" + 1,
+    "version" = q."version" + 1,
+    "updatedAt" = $11::timestamptz
+FROM decision AS approval
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'blocked'
+  AND q."version" = $3
+  AND q."executionBinding" = $4
+  AND q."acquisitionKey" = $5
+  AND q."fencingToken" = $6
+  AND approval.id = $7
+  AND approval."userId" = q."userId"
+  AND approval.status = 'accepted'
+  AND approval.authority = 'binding'
+  AND approval."scope" IN (q."outcomeKey", q."goalRef")
+  AND approval.decision = 'APPROVE'
+  AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$11::timestamptz")}
+RETURNING ${QUEUE_COLUMNS}
+`,
+  replayResumeAfterDecision: `
+SELECT ${QUEUE_COLUMNS}
+FROM "outcome_queue_item" AS q
+JOIN decision AS approval
+  ON approval.id = $7
+  AND approval."userId" = q."userId"
+  AND approval.status = 'accepted'
+  AND approval.authority = 'binding'
+  AND approval."scope" IN (q."outcomeKey", q."goalRef")
+  AND approval.decision = 'APPROVE'
+  AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."lifecycleReason" = 'OWNER_DECISION_RESUMED'
+  AND q."version" = $3::integer + 1
+  AND q."executionBinding" = $4
+  AND q."acquisitionKey" = $5
+  AND q."fencingToken" = $6::integer + 1
+  AND q."leaseHolder" = $8
+  AND q."leaseToken" = $9
+  AND q."leaseExpiresAt" > $11::timestamptz
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$11::timestamptz")}
+`,
   approve: `
 UPDATE "outcome_queue_item" AS q
 SET "lifecycleState" = 'approved',
@@ -1233,6 +1343,191 @@ export async function transitionOutcomeQueueItem({
   }
 }
 
+export async function renewOutcomeQueueLease({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  userId,
+  outcomeKey,
+  expectedVersion,
+  executionBinding,
+  leaseToken,
+  fencingToken,
+  leaseDurationMs,
+  now = new Date(),
+} = {}) {
+  const user = userScope(userId)
+  const key = nonempty(outcomeKey, "OUTCOME_QUEUE_KEY_INVALID")
+  const version = integer(expectedVersion, "OUTCOME_QUEUE_VERSION_INVALID")
+  const binding = nonempty(executionBinding, "OUTCOME_QUEUE_EXECUTION_BINDING_INVALID")
+  const token = nonempty(leaseToken, "OUTCOME_QUEUE_LEASE_TOKEN_INVALID")
+  const fence = integer(fencingToken, "OUTCOME_QUEUE_FENCING_TOKEN_INVALID", { minimum: 1 })
+  integer(leaseDurationMs, "OUTCOME_QUEUE_LEASE_DURATION_INVALID", { minimum: 1 })
+  const at = timestamp(now)
+  const expiresAt = timestamp(new Date(Date.parse(at) + leaseDurationMs))
+  const connection = await openQuery(query, databaseUrl)
+  try {
+    const result = await connection.query(OUTCOME_QUEUE_SQL.renewLease, [
+      user,
+      key,
+      version,
+      binding,
+      token,
+      fence,
+      at,
+      expiresAt,
+    ])
+    if (result?.rows?.length !== 1) fail("OUTCOME_QUEUE_STALE_FENCE")
+    return result.rows[0]
+  } finally {
+    await connection.close()
+  }
+}
+
+export async function deferOutcomeQueueLease({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  userId,
+  outcomeKey,
+  expectedVersion,
+  executionBinding,
+  leaseToken,
+  fencingToken,
+  retryAfter,
+  lifecycleReason = "PROVIDER_UNAVAILABLE",
+  now = new Date(),
+} = {}) {
+  const user = userScope(userId)
+  const key = nonempty(outcomeKey, "OUTCOME_QUEUE_KEY_INVALID")
+  const version = integer(expectedVersion, "OUTCOME_QUEUE_VERSION_INVALID")
+  const binding = nonempty(executionBinding, "OUTCOME_QUEUE_EXECUTION_BINDING_INVALID")
+  const token = nonempty(leaseToken, "OUTCOME_QUEUE_LEASE_TOKEN_INVALID")
+  const fence = integer(fencingToken, "OUTCOME_QUEUE_FENCING_TOKEN_INVALID", { minimum: 1 })
+  const retryAt = timestamp(retryAfter)
+  const at = timestamp(now)
+  if (Date.parse(retryAt) <= Date.parse(at)) fail("OUTCOME_QUEUE_RETRY_AFTER_INVALID")
+  const reason = nonempty(lifecycleReason, "OUTCOME_QUEUE_REASON_INVALID")
+  const connection = await openQuery(query, databaseUrl)
+  try {
+    const result = await connection.query(OUTCOME_QUEUE_SQL.deferLease, [
+      user,
+      key,
+      version,
+      binding,
+      token,
+      fence,
+      retryAt,
+      reason,
+      at,
+    ])
+    if (result?.rows?.length !== 1) fail("OUTCOME_QUEUE_STALE_FENCE")
+    return result.rows[0]
+  } finally {
+    await connection.close()
+  }
+}
+
+export async function bindOutcomeQueueWorkOrder({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  userId,
+  outcomeKey,
+  expectedVersion,
+  executionBinding,
+  leaseToken,
+  fencingToken,
+  activeWorkOrderId,
+  now = new Date(),
+} = {}) {
+  const user = userScope(userId)
+  const key = nonempty(outcomeKey, "OUTCOME_QUEUE_KEY_INVALID")
+  const version = integer(expectedVersion, "OUTCOME_QUEUE_VERSION_INVALID")
+  const binding = nonempty(executionBinding, "OUTCOME_QUEUE_EXECUTION_BINDING_INVALID")
+  const token = nonempty(leaseToken, "OUTCOME_QUEUE_LEASE_TOKEN_INVALID")
+  const fence = integer(fencingToken, "OUTCOME_QUEUE_FENCING_TOKEN_INVALID", { minimum: 1 })
+  const workOrderId = integer(activeWorkOrderId, "OUTCOME_QUEUE_WORK_ORDER_ID_INVALID", { minimum: 1 })
+  const at = timestamp(now)
+  const connection = await openQuery(query, databaseUrl)
+  try {
+    const result = await connection.query(OUTCOME_QUEUE_SQL.bindWorkOrder, [
+      user,
+      key,
+      version,
+      binding,
+      token,
+      fence,
+      workOrderId,
+      at,
+    ])
+    if (result?.rows?.length !== 1) fail("OUTCOME_QUEUE_STALE_FENCE")
+    return result.rows[0]
+  } finally {
+    await connection.close()
+  }
+}
+
+export async function resumeOutcomeQueueAfterDecision({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  userId,
+  outcomeKey,
+  expectedVersion,
+  executionBinding,
+  acquisitionKey,
+  fencingToken,
+  ownerDecisionId,
+  leaseHolder,
+  leaseToken,
+  leaseDurationMs,
+  now = new Date(),
+} = {}) {
+  const user = userScope(userId)
+  const key = nonempty(outcomeKey, "OUTCOME_QUEUE_KEY_INVALID")
+  const version = integer(expectedVersion, "OUTCOME_QUEUE_VERSION_INVALID")
+  const binding = nonempty(executionBinding, "OUTCOME_QUEUE_EXECUTION_BINDING_INVALID")
+  const acquisition = nonempty(acquisitionKey, "OUTCOME_QUEUE_ACQUISITION_KEY_INVALID")
+  const fence = integer(fencingToken, "OUTCOME_QUEUE_FENCING_TOKEN_INVALID", { minimum: 1 })
+  const decisionId = integer(ownerDecisionId, "OUTCOME_QUEUE_APPROVAL_DECISION_REQUIRED", { minimum: 1 })
+  const holder = nonempty(leaseHolder, "OUTCOME_QUEUE_LEASE_HOLDER_INVALID")
+  const token = nonempty(leaseToken, "OUTCOME_QUEUE_LEASE_TOKEN_INVALID")
+  integer(leaseDurationMs, "OUTCOME_QUEUE_LEASE_DURATION_INVALID", { minimum: 1 })
+  const at = timestamp(now)
+  const expiresAt = timestamp(new Date(Date.parse(at) + leaseDurationMs))
+  const connection = await openQuery(query, databaseUrl)
+  try {
+    const result = await connection.query(OUTCOME_QUEUE_SQL.resumeAfterDecision, [
+      user,
+      key,
+      version,
+      binding,
+      acquisition,
+      fence,
+      decisionId,
+      holder,
+      token,
+      expiresAt,
+      at,
+    ])
+    if (result?.rows?.length === 1) return result.rows[0]
+    const replay = await connection.query(OUTCOME_QUEUE_SQL.replayResumeAfterDecision, [
+      user,
+      key,
+      version,
+      binding,
+      acquisition,
+      fence,
+      decisionId,
+      holder,
+      token,
+      expiresAt,
+      at,
+    ])
+    if (replay?.rows?.length !== 1) fail("OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL")
+    return replay.rows[0]
+  } finally {
+    await connection.close()
+  }
+}
+
 export async function approveOutcomeQueueItem({
   query,
   databaseUrl = process.env.DATABASE_URL,
@@ -1468,14 +1763,14 @@ function assertVersion(row, expectedVersion) {
 
 function safeMutationOutcome(row) {
   if (row == null) return null
-  const {
-    executionBinding: _executionBinding,
-    leaseToken: _leaseToken,
-    fencingToken: _fencingToken,
-    acquisitionKey: _acquisitionKey,
-    terminalKey: _terminalKey,
-    ...safe
-  } = row
+  const safe = { ...row }
+  for (const field of [
+    "executionBinding",
+    "leaseToken",
+    "fencingToken",
+    "acquisitionKey",
+    "terminalKey",
+  ]) delete safe[field]
   return safe
 }
 
@@ -1725,6 +2020,10 @@ export async function mutateOutcomeQueueItem({
 export const enqueueOutcome = persistOutcomeQueueItem
 export const listOutcomeQueue = readOutcomeQueue
 export const acquireOutcome = acquireNextEligibleOutcome
+export const renewOutcomeLease = renewOutcomeQueueLease
+export const deferOutcomeLease = deferOutcomeQueueLease
+export const bindOutcomeWorkOrder = bindOutcomeQueueWorkOrder
+export const resumeOutcomeAfterDecision = resumeOutcomeQueueAfterDecision
 export const approveOutcome = approveOutcomeQueueItem
 export const transitionOutcome = transitionOutcomeQueueItem
 export const matchOutcomeAuthority = matchOutcomeAuthorityGrant
