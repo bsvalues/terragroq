@@ -1606,7 +1606,7 @@ const RECEIPT_CONSTRAINT_CONTRACTS = Object.freeze({
     outcome_queue_mutation_attempt_ordinal_check:
       ["c", "checkattemptordinal>0"],
     outcome_queue_mutation_attempt_disposition_check:
-      ["c", "checkdispositionin'committed','replay'"],
+      ["c", "checkdisposition=anyarray['committed','replay']"],
   }),
 })
 
