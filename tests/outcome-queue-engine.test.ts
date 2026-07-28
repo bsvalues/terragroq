@@ -168,7 +168,7 @@ describe("outcome lifecycle", () => {
       fence: fence(acquired.item),
     })).toMatchObject({
       ok: false,
-      reason: "TERMINAL_EVIDENCE_REQUIRED",
+      reason: "ILLEGAL_TRANSITION",
     })
   })
 })
@@ -290,6 +290,16 @@ describe("contention, fencing, and idempotency", () => {
     }))).toMatchObject({
       ok: false,
       reason: "OUTCOME_INELIGIBLE",
+    })
+  })
+
+  it("accepts an equivalent queue snapshot without relying on object identity", () => {
+    const item = outcome()
+    expect(acquire(item, {
+      queue: [{ ...item }],
+    })).toMatchObject({
+      ok: true,
+      item: { lifecycleState: "active" },
     })
   })
 
@@ -483,12 +493,35 @@ describe("legacy Goal compatibility", () => {
         approvalState: "unapproved",
         authorityState: "unverified",
         authorityGrantRef: null,
+        riskClass: "R1",
       })
       expect(selectNextOutcome([mapped], { now: NOW })).toMatchObject({
         selected: false,
         reason: "AWAITING_APPROVAL",
       })
     }
+  })
+
+  it.each([
+    ["medium", "R2"],
+    ["high", "R2"],
+    ["critical", "R2"],
+  ] as const)("normalizes legacy %s risk to %s", (risk, riskClass) => {
+    const mapped = mapLegacyGoalToOutcome({
+      id: 6,
+      userId: "owner",
+      ref: "GOAL-0006",
+      command: "Historical elevated-risk outcome",
+      risk,
+      authority: "A3_EXTERNAL_WRITE",
+      verdict: "deny",
+      requiresApproval: true,
+      recommendedMove: null,
+      status: "classified",
+      createdAt: "2026-07-06T00:00:00.000Z",
+    })
+
+    expect(mapped.riskClass).toBe(riskClass)
   })
 
   it("maps terminal legacy evidence without re-authorizing historical work", () => {

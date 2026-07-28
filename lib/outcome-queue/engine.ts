@@ -1,4 +1,12 @@
-export const OUTCOME_LIFECYCLE_STATES = [
+import {
+  LEGAL_OUTCOME_TRANSITIONS as SHARED_LEGAL_OUTCOME_TRANSITIONS,
+  mapLegacyLifecycleState,
+  mapLegacyRiskClass,
+  OUTCOME_LIFECYCLE_STATES as SHARED_OUTCOME_LIFECYCLE_STATES,
+  TERMINAL_OUTCOME_STATES as SHARED_TERMINAL_OUTCOME_STATES,
+} from "./contract.mjs"
+
+export const OUTCOME_LIFECYCLE_STATES = SHARED_OUTCOME_LIFECYCLE_STATES as readonly [
   "suggested",
   "approved",
   "blocked",
@@ -6,7 +14,7 @@ export const OUTCOME_LIFECYCLE_STATES = [
   "completed",
   "declined",
   "superseded",
-] as const
+]
 
 export type OutcomeLifecycleState = (typeof OUTCOME_LIFECYCLE_STATES)[number]
 export type OutcomeApprovalState = "unapproved" | "approved" | "revoked"
@@ -54,23 +62,15 @@ export interface OutcomeQueueRecord {
   updatedAt: OutcomeTime
 }
 
-export const LEGAL_OUTCOME_TRANSITIONS = Object.freeze({
-  suggested: Object.freeze(["approved", "declined", "superseded"] as const),
-  approved: Object.freeze(["blocked", "active", "declined", "superseded"] as const),
-  blocked: Object.freeze(["approved", "declined", "superseded"] as const),
-  active: Object.freeze(["blocked", "completed"] as const),
-  completed: Object.freeze([] as const),
-  declined: Object.freeze([] as const),
-  superseded: Object.freeze([] as const),
-}) satisfies Readonly<
+export const LEGAL_OUTCOME_TRANSITIONS = SHARED_LEGAL_OUTCOME_TRANSITIONS as Readonly<
   Record<OutcomeLifecycleState, readonly OutcomeLifecycleState[]>
 >
 
-export const TERMINAL_OUTCOME_STATES = Object.freeze([
+export const TERMINAL_OUTCOME_STATES = SHARED_TERMINAL_OUTCOME_STATES as readonly [
   "completed",
   "declined",
   "superseded",
-] as const)
+]
 
 export type NoSelectionReason =
   | "EMPTY_QUEUE"
@@ -426,7 +426,9 @@ export function acquireOutcome(
   })
   if (
     !selection.selected
-    || selection.item !== item
+    || selection.item.userId !== item.userId
+    || selection.item.outcomeKey !== item.outcomeKey
+    || selection.item.version !== item.version
   ) {
     return { ok: false, reason: "OUTCOME_INELIGIBLE", item }
   }
@@ -555,15 +557,11 @@ export function mapLegacyGoalToOutcome(
   const updatedAt = iso(goal.updatedAt ?? goal.createdAt ?? "1970-01-01T00:00:00.000Z")
   const completed = goal.status === "converted"
     && (options.workOrderStatus === "closed" || options.terminalResult != null)
-  const declined = goal.status === "dismissed"
   const convertedWithoutTerminal = goal.status === "converted" && !completed
-  const lifecycleState: OutcomeLifecycleState = completed
-    ? "completed"
-    : declined
-      ? "declined"
-      : convertedWithoutTerminal
-        ? "blocked"
-        : "suggested"
+  const lifecycleState = mapLegacyLifecycleState(
+    goal.status,
+    completed,
+  ) as OutcomeLifecycleState
 
   return {
     id: undefined,
@@ -575,7 +573,7 @@ export function mapLegacyGoalToOutcome(
     objective: goal.command,
     queueOrder: options.queueOrder ?? goal.id,
     dependencyKeys: [...new Set(options.dependencyKeys ?? [])].sort(),
-    riskClass: goal.risk,
+    riskClass: mapLegacyRiskClass(goal.risk),
     // Legacy verdicts and recommendations are classification, never approval.
     approvalState: "unapproved",
     approvedBy: null,
@@ -604,7 +602,7 @@ export function mapLegacyGoalToOutcome(
     terminalKey: completed ? `legacy-terminal:${goal.ref ?? goal.id}` : null,
     suggestedAt: createdAt,
     activatedAt: null,
-    terminalAt: completed || declined ? updatedAt : null,
+    terminalAt: completed || lifecycleState === "declined" ? updatedAt : null,
     createdAt,
     updatedAt,
   }

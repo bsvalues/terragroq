@@ -312,7 +312,11 @@ export const outcomeQueueItem = pgTable(
       table.authorityState,
       table.queueOrder,
     ),
-    index("outcome_queue_item_lease_idx").on(table.lifecycleState, table.leaseExpiresAt),
+    index("outcome_queue_item_lease_idx").on(
+      table.userId,
+      table.lifecycleState,
+      table.leaseExpiresAt,
+    ),
     index("outcome_queue_item_goal_idx").on(table.goalId),
     index("outcome_queue_item_approval_decision_idx").on(table.approvalDecisionId),
     index("outcome_queue_item_work_order_idx").on(table.activeWorkOrderId),

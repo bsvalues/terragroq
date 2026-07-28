@@ -18,6 +18,8 @@ Work Order: `#472 - Durable Outcome Queue + Eligibility Engine`
 - Added transaction-scoped advisory locking, row locking, idempotency keys,
   versions, lease expiry, and monotonically increasing fencing tokens.
 - Added exact terminal replay and stale-lease recovery.
+- Added one shared queue contract for the TypeScript engine and resident Hermes
+  adapter, plus reusable PostgreSQL pools with explicit shutdown.
 - Preserved `GOAL-0001` through `GOAL-0005` as nonselectable history.
 
 ## Authority Boundary
@@ -30,11 +32,12 @@ Neither cached state nor caller-supplied labels can grant execution authority.
 ## Validation
 
 ```text
-focused queue tests: 36 passed
+focused queue tests: 42 passed
 npm run lint: passed
-npm test -- --run: 1,930 passed, 2 skipped
+npm test -- --run: 1,936 passed, 2 skipped
 NEXT_PRIVATE_BUILD_WORKER=0 NEXT_TELEMETRY_DISABLED=1 npm run build: passed
 git diff --check: passed
+independent assurance: zero blockers
 ```
 
 ## Safety

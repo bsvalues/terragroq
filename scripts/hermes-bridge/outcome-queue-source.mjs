@@ -1,15 +1,15 @@
-const QUEUE_STATES = new Set([
-  "suggested",
-  "approved",
-  "blocked",
-  "active",
-  "completed",
-  "declined",
-  "superseded",
-])
+import {
+  LEGAL_OUTCOME_TRANSITIONS,
+  mapLegacyLifecycleState,
+  NO_SELECTION_REASONS,
+  OUTCOME_LIFECYCLE_STATES,
+  TERMINAL_OUTCOME_STATES,
+} from "../../lib/outcome-queue/contract.mjs"
+
+const QUEUE_STATES = new Set(OUTCOME_LIFECYCLE_STATES)
 const APPROVAL_STATES = new Set(["approved", "unapproved", "revoked"])
 const AUTHORITY_STATES = new Set(["matched", "unverified", "denied", "expired", "revoked"])
-const TERMINAL_STATES = new Set(["completed", "declined", "superseded"])
+const TERMINAL_STATES = new Set(TERMINAL_OUTCOME_STATES)
 const LEGACY_GOAL_REFS = Object.freeze([
   "GOAL-0001",
   "GOAL-0002",
@@ -17,16 +17,6 @@ const LEGACY_GOAL_REFS = Object.freeze([
   "GOAL-0004",
   "GOAL-0005",
 ])
-
-const LEGAL_TRANSITIONS = Object.freeze({
-  suggested: Object.freeze(["approved", "declined", "superseded"]),
-  approved: Object.freeze(["blocked", "declined", "superseded"]),
-  blocked: Object.freeze(["approved", "declined", "superseded"]),
-  active: Object.freeze(["blocked"]),
-  completed: Object.freeze([]),
-  declined: Object.freeze([]),
-  superseded: Object.freeze([]),
-})
 
 const QUEUE_COLUMNS = `
   q."id",
@@ -203,7 +193,15 @@ SELECT ${QUEUE_COLUMNS}
 FROM "outcome_queue_item" AS q
 WHERE q."userId" = $1
   AND q."acquisitionKey" = $2
-FOR UPDATE OF q SKIP LOCKED
+FOR UPDATE OF q
+`,
+  revalidateAcquisition: `
+SELECT
+  (${LIVE_APPROVAL_PREDICATE}) AS "approvalLive",
+  (${LIVE_AUTHORITY_PREDICATE}) AS "authorityLive"
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $2
+  AND q."outcomeKey" = $3
 `,
   reclaimAcquisition: `
 UPDATE "outcome_queue_item" AS q
@@ -430,6 +428,8 @@ WHERE q."userId" = $1
   AND q."fencingToken" = $6
   AND q."leaseExpiresAt" > $12::timestamptz
   AND q."acquisitionKey" = $7
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$12::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   legacyHistory: `
@@ -456,8 +456,34 @@ ORDER BY g."ref" ASC, g."id" ASC
 })
 
 export const OUTCOME_QUEUE_STATES = Object.freeze([...QUEUE_STATES])
-export const OUTCOME_QUEUE_LEGAL_TRANSITIONS = LEGAL_TRANSITIONS
+export const OUTCOME_QUEUE_LEGAL_TRANSITIONS = LEGAL_OUTCOME_TRANSITIONS
 export const OUTCOME_QUEUE_LEGACY_GOAL_REFS = LEGACY_GOAL_REFS
+export const OUTCOME_QUEUE_NO_SELECTION_REASONS = NO_SELECTION_REASONS
+
+const poolByConnectionString = new Map()
+
+function poolFor(databaseUrl) {
+  let poolPromise = poolByConnectionString.get(databaseUrl)
+  if (!poolPromise) {
+    poolPromise = import("pg")
+      .then(({ Pool }) => {
+        const pool = new Pool({ connectionString: databaseUrl })
+        pool.on("error", () => {
+          if (poolByConnectionString.get(databaseUrl) === poolPromise) {
+            poolByConnectionString.delete(databaseUrl)
+          }
+          void pool.end().catch(() => {})
+        })
+        return pool
+      })
+      .catch((error) => {
+        poolByConnectionString.delete(databaseUrl)
+        throw error
+      })
+    poolByConnectionString.set(databaseUrl, poolPromise)
+  }
+  return poolPromise
+}
 
 function fail(code, message = code) {
   throw Object.assign(new Error(message), { code })
@@ -484,17 +510,22 @@ async function openQuery(query, databaseUrl, transactional = false) {
   if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
     fail("DATABASE_URL_REQUIRED", "DATABASE_URL is required")
   }
-  const { Pool } = await import("pg")
-  const pool = new Pool({ connectionString: databaseUrl })
-  if (!transactional) return { query: pool.query.bind(pool), close: async () => pool.end() }
+  const pool = await poolFor(databaseUrl)
+  if (!transactional) return { query: pool.query.bind(pool), close: async () => {} }
   const client = await pool.connect()
   return {
     query: client.query.bind(client),
-    close: async () => {
-      client.release()
-      await pool.end()
-    },
+    close: async () => client.release(),
   }
+}
+
+export async function closeOutcomeQueuePools() {
+  const poolPromises = [...poolByConnectionString.values()]
+  poolByConnectionString.clear()
+  const pools = await Promise.allSettled(poolPromises)
+  await Promise.allSettled(pools.flatMap((result) => (
+    result.status === "fulfilled" ? [result.value.end()] : []
+  )))
 }
 
 function timestamp(value, code = "OUTCOME_QUEUE_TIME_INVALID") {
@@ -552,7 +583,6 @@ function normalizeItem(item) {
     AUTHORITY_STATES,
     "OUTCOME_QUEUE_AUTHORITY_INVALID",
   )
-  if (lifecycleState === "active") fail("OUTCOME_QUEUE_ACTIVE_REQUIRES_ACQUISITION")
   if (lifecycleState !== "suggested"
     || approvalState !== "unapproved"
     || authorityState !== "unverified"
@@ -561,9 +591,12 @@ function normalizeItem(item) {
     || item.authorityGrantRef != null) {
     fail("OUTCOME_QUEUE_INTAKE_MUST_BE_UNAUTHORIZED_SUGGESTION")
   }
-  if (lifecycleState === "completed"
-    && (!item.terminalResult || (!item.terminalEvidenceId && !item.terminalEvidenceRefs?.length))) {
-    fail("OUTCOME_QUEUE_TERMINAL_EVIDENCE_REQUIRED")
+  if (item.terminalResult != null
+    || item.terminalEvidenceId != null
+    || (item.terminalEvidenceRefs?.length ?? 0) > 0
+    || item.terminalKey != null
+    || item.terminalAt != null) {
+    fail("OUTCOME_QUEUE_INTAKE_MUST_NOT_BE_TERMINAL")
   }
   return {
     outcomeKey,
@@ -625,7 +658,7 @@ function noSelectionReason(row = {}) {
   if (count("dependencyEligibleCount") === 0) return "DEPENDENCIES_UNSATISFIED"
   if (count("activeLeaseCount") > 0) return "ACTIVE_LEASE_HELD"
   if (count("blockedCount") > 0) return "ONLY_BLOCKED_OUTCOMES"
-  return "CONTENDED"
+  return "NO_ELIGIBLE_OUTCOME"
 }
 
 function compatibilityProjection(row) {
@@ -642,13 +675,7 @@ function compatibilityProjection(row) {
     goalRef: row.ref,
     title: row.command,
     objective: row.command,
-    lifecycleState: completed
-      ? "completed"
-      : converted
-        ? "blocked"
-        : row.status === "dismissed"
-          ? "declined"
-          : "suggested",
+    lifecycleState: mapLegacyLifecycleState(row.status, completed),
     lifecycleReason: converted && !completed
       ? "LEGACY_CONVERSION_REQUIRES_TERMINAL_WORK_ORDER"
       : null,
@@ -808,13 +835,33 @@ export async function acquireNextEligibleOutcome({
       const live = row.lifecycleState === "active"
         && Date.parse(String(row.leaseExpiresAt)) > Date.parse(at)
       if (live) {
-        await connection.query("COMMIT")
-        begun = false
         if (row.leaseHolder === holder
           && row.leaseToken === token
           && row.executionBinding === binding) {
+          const eligibility = await connection.query(
+            OUTCOME_QUEUE_SQL.revalidateAcquisition,
+            [at, user, row.outcomeKey],
+          )
+          const liveState = eligibility?.rows?.[0]
+          if (!liveState?.approvalLive || !liveState?.authorityLive) {
+            await connection.query("COMMIT")
+            begun = false
+            return {
+              outcome: row,
+              acquired: false,
+              replayed: false,
+              reclaimed: false,
+              reason: !liveState?.approvalLive
+                ? "AWAITING_APPROVAL"
+                : "AUTHORITY_INELIGIBLE",
+            }
+          }
+          await connection.query("COMMIT")
+          begun = false
           return acquisitionResult(row, { replayed: true })
         }
+        await connection.query("COMMIT")
+        begun = false
         return {
           outcome: row,
           acquired: false,
@@ -904,7 +951,8 @@ export async function transitionOutcomeQueueItem({
   const key = nonempty(outcomeKey, "OUTCOME_QUEUE_KEY_INVALID")
   const from = enumValue(fromState, QUEUE_STATES, "OUTCOME_QUEUE_STATE_INVALID")
   const to = enumValue(toState, QUEUE_STATES, "OUTCOME_QUEUE_STATE_INVALID")
-  if (!LEGAL_TRANSITIONS[from].includes(to)) fail("OUTCOME_QUEUE_TRANSITION_ILLEGAL")
+  if (!LEGAL_OUTCOME_TRANSITIONS[from].includes(to)) fail("OUTCOME_QUEUE_TRANSITION_ILLEGAL")
+  if (to === "active") fail("OUTCOME_QUEUE_ACTIVE_REQUIRES_ACQUISITION")
   if (to === "approved") fail("OUTCOME_QUEUE_APPROVAL_DECISION_REQUIRED")
   const version = integer(expectedVersion, "OUTCOME_QUEUE_VERSION_INVALID")
   let binding = executionBinding

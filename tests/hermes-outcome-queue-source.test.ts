@@ -2,14 +2,23 @@ import { describe, expect, it, vi } from "vitest"
 
 import {
   acquireNextEligibleOutcome,
+  acquireOutcome as acquireOutcomeCompatibility,
   approveOutcomeQueueItem,
+  approveOutcome as approveOutcomeCompatibility,
+  completeQueuedOutcome,
   completeOutcomeQueueItem,
+  enqueueOutcome,
+  listOutcomeQueue,
   matchOutcomeAuthorityGrant,
+  matchOutcomeAuthority as matchOutcomeAuthorityCompatibility,
+  OUTCOME_QUEUE_LEGAL_TRANSITIONS,
   OUTCOME_QUEUE_LEGACY_GOAL_REFS,
+  OUTCOME_QUEUE_NO_SELECTION_REASONS,
   OUTCOME_QUEUE_SQL,
   persistOutcomeQueueItem,
   readLegacyOutcomeHistory,
   readOutcomeQueue,
+  transitionOutcome as transitionOutcomeCompatibility,
   transitionOutcomeQueueItem,
 } from "@/scripts/hermes-bridge/outcome-queue-source.mjs"
 
@@ -62,11 +71,13 @@ function queueRow(overrides: Record<string, unknown> = {}) {
 
 function acquisitionQuery({
   prior = [],
+  replayEligibility = [{ approvalLive: true, authorityLive: true }],
   reclaimed = [],
   selected = [],
   counts = [],
 }: {
   prior?: unknown[]
+  replayEligibility?: unknown[]
   reclaimed?: unknown[]
   selected?: unknown[]
   counts?: unknown[]
@@ -75,6 +86,7 @@ function acquisitionQuery({
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] }
     if (sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
     if (sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: prior }
+    if (sql === OUTCOME_QUEUE_SQL.revalidateAcquisition) return { rows: replayEligibility }
     if (sql === OUTCOME_QUEUE_SQL.reclaimAcquisition) return { rows: reclaimed }
     if (sql === OUTCOME_QUEUE_SQL.acquire) return { rows: selected }
     if (sql === OUTCOME_QUEUE_SQL.noSelectionReason) return { rows: counts }
@@ -106,6 +118,10 @@ describe("transactional durable outcome queue source", () => {
       /q\."queueOrder" ASC,\s*q\."createdAt" ASC,\s*q\."outcomeKey" ASC/,
     )
     expect(OUTCOME_QUEUE_SQL.acquire).toMatch(/FOR UPDATE OF q SKIP LOCKED/)
+    expect(OUTCOME_QUEUE_SQL.readAcquisition).toMatch(/FOR UPDATE OF q\s*$/)
+    expect(OUTCOME_QUEUE_SQL.readAcquisition).not.toContain("SKIP LOCKED")
+    expect(OUTCOME_QUEUE_LEGAL_TRANSITIONS.active).toEqual(["blocked"])
+    expect(OUTCOME_QUEUE_NO_SELECTION_REASONS).toContain("NO_ELIGIBLE_OUTCOME")
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`q."approvalState" = 'approved'`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`FROM "decision" AS live_approval`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`live_approval."status" = 'accepted'`)
@@ -128,6 +144,16 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`q."fencingToken" + 1`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`q."version" + 1`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`live."leaseExpiresAt" > $1::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_approval."status" = 'accepted'`)
+    expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_grant."status" = 'active'`)
+    expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_grant."expiresAt" > $12::timestamptz`)
+    expect(enqueueOutcome).toBe(persistOutcomeQueueItem)
+    expect(listOutcomeQueue).toBe(readOutcomeQueue)
+    expect(acquireOutcomeCompatibility).toBe(acquireNextEligibleOutcome)
+    expect(approveOutcomeCompatibility).toBe(approveOutcomeQueueItem)
+    expect(transitionOutcomeCompatibility).toBe(transitionOutcomeQueueItem)
+    expect(matchOutcomeAuthorityCompatibility).toBe(matchOutcomeAuthorityGrant)
+    expect(completeQueuedOutcome).toBe(completeOutcomeQueueItem)
   })
 
   it("persists and reads all data in one user scope", async () => {
@@ -201,6 +227,25 @@ describe("transactional durable outcome queue source", () => {
       },
     })).rejects.toMatchObject({
       code: "OUTCOME_QUEUE_INTAKE_MUST_BE_UNAUTHORIZED_SUGGESTION",
+    })
+    await expect(persistOutcomeQueueItem({
+      query,
+      userId,
+      item: {
+        outcomeKey: "goal:GOAL-TERMINAL-INJECTION",
+        title: "Attempt terminal evidence injection",
+        queueOrder: 12,
+        dependencyKeys: [],
+        riskClass: "R1",
+        approvalState: "unapproved",
+        authorityState: "unverified",
+        authorityLevel: "A0_READ_ONLY",
+        lifecycleState: "suggested",
+        terminalResult: "PASS",
+        terminalEvidenceRefs: ["EV-FORGED"],
+      },
+    })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_INTAKE_MUST_NOT_BE_TERMINAL",
     })
   })
 
@@ -306,7 +351,7 @@ describe("transactional durable outcome queue source", () => {
       totalCount: 3, candidateStateCount: 2, approvalEligibleCount: 2,
       authorityEligibleCount: 2, riskEligibleCount: 2,
       dependencyEligibleCount: 2, activeLeaseCount: 0,
-    }, "CONTENDED"],
+    }, "NO_ELIGIBLE_OUTCOME"],
   ])("returns typed no-selection reason %#", async (counts, reason) => {
     const query = acquisitionQuery({ counts: [counts] })
     await expect(acquireNextEligibleOutcome({
@@ -354,8 +399,31 @@ describe("transactional durable outcome queue source", () => {
       ...acquireInput,
     })).resolves.toMatchObject({ outcome: acquired, acquired: true, replayed: true })
     expect(replayQuery.mock.calls.map(([sql]) => sql)).toEqual([
-      "BEGIN", OUTCOME_QUEUE_SQL.acquireLock, OUTCOME_QUEUE_SQL.readAcquisition, "COMMIT",
+      "BEGIN",
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.readAcquisition,
+      OUTCOME_QUEUE_SQL.revalidateAcquisition,
+      "COMMIT",
     ])
+  })
+
+  it.each([
+    [{ approvalLive: false, authorityLive: true }, "AWAITING_APPROVAL"],
+    [{ approvalLive: true, authorityLive: false }, "AUTHORITY_INELIGIBLE"],
+  ])("rejects same-key replay when live authority changes %#", async (live, reason) => {
+    const query = acquisitionQuery({
+      prior: [queueRow()],
+      replayEligibility: [live],
+    })
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      replayed: false,
+      reason,
+    })
+    expect(query.mock.calls.at(-1)?.[0]).toBe("COMMIT")
   })
 
   it("returns not-acquired for live same-key contention", async () => {
@@ -479,6 +547,15 @@ describe("transactional durable outcome queue source", () => {
       expectedVersion: 2,
       now,
     })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_APPROVAL_DECISION_REQUIRED" })
+    await expect(transitionOutcomeQueueItem({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      fromState: "approved",
+      toState: "active",
+      expectedVersion: 2,
+      now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_ACTIVE_REQUIRES_ACQUISITION" })
   })
 
   it("guards completion and makes only an exact terminal replay idempotent", async () => {
