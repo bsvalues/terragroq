@@ -68,3 +68,11 @@ export function classifyOutcomeQueueMutationError(
   }
   return null
 }
+
+export function scopeMatchesOutcome(
+  scope: string | null,
+  outcomeKey: string,
+  goalRef: string | null,
+): boolean {
+  return scope === outcomeKey || (goalRef !== null && scope === goalRef)
+}

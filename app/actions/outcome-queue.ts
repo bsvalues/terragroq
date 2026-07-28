@@ -19,6 +19,7 @@ import type { OutcomeQueueRecord } from "@/lib/outcome-queue/engine"
 import {
   buildOutcomeQueueRuntimeMutation,
   classifyOutcomeQueueMutationError,
+  scopeMatchesOutcome,
   type OutcomeQueueMutationActionResult,
   type OutcomeQueueMutationInput,
 } from "@/lib/outcome-queue/operator-mutations"
@@ -57,7 +58,7 @@ function grantMatches(
     || (grant.expiresAt !== null && grant.expiresAt.getTime() <= now.getTime())
     || grant.authorityLevel !== item.authorityLevel
     || grant.grantedTo !== item.authoritySubject
-    || (grant.scope !== item.outcomeKey && grant.scope !== item.goalRef)
+    || !scopeMatchesOutcome(grant.scope, item.outcomeKey, item.goalRef)
     || (grant.workOrderId !== null && grant.workOrderId !== item.activeWorkOrderId)
     || actionCovered(grant.blockedActions, item.authorityAction)
   ) {
@@ -94,7 +95,7 @@ export async function getOutcomeQueueSurface(): Promise<OutcomeQueueOperatorSurf
     if (item.approvalDecisionId === null) return []
     const approval = byDecisionId.get(item.approvalDecisionId)
     return approval
-      && (approval.scope === item.outcomeKey || approval.scope === item.goalRef)
+      && scopeMatchesOutcome(approval.scope, item.outcomeKey, item.goalRef)
       ? [approval.id]
       : []
   })
@@ -107,7 +108,11 @@ export async function getOutcomeQueueSurface(): Promise<OutcomeQueueOperatorSurf
     queue.map((item) => [
       item.outcomeKey,
       decisions
-        .filter((approval) => approval.scope === item.outcomeKey || approval.scope === item.goalRef)
+        .filter((approval) => scopeMatchesOutcome(
+          approval.scope,
+          item.outcomeKey,
+          item.goalRef,
+        ))
         .map((approval) => approval.id),
     ]),
   )

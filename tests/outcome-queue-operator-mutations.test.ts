@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   buildOutcomeQueueRuntimeMutation,
   classifyOutcomeQueueMutationError,
+  scopeMatchesOutcome,
   type OutcomeQueueMutationInput,
 } from "@/lib/outcome-queue/operator-mutations"
 
@@ -43,5 +44,12 @@ describe("outcome queue server-action boundary", () => {
     expect(classifyOutcomeQueueMutationError("OUTCOME_QUEUE_OUTCOME_NOT_FOUND")).toBe("STALE")
     expect(classifyOutcomeQueueMutationError("OUTCOME_QUEUE_IDEMPOTENCY_CONFLICT"))
       .toBe("CONFLICT")
+  })
+
+  it("never treats two null scopes as an authority match", () => {
+    expect(scopeMatchesOutcome(null, "outcome:successor:1", null)).toBe(false)
+    expect(scopeMatchesOutcome("outcome:successor:1", "outcome:successor:1", null))
+      .toBe(true)
+    expect(scopeMatchesOutcome("GOAL-1000", "outcome:1", "GOAL-1000")).toBe(true)
   })
 })
