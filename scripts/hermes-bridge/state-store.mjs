@@ -212,6 +212,25 @@ function metadata(input = {}, current = {}) {
   }
   const outcome = input.outcome ?? current.outcome ?? null
   if (outcome !== null && (typeof outcome !== "object" || Array.isArray(outcome))) fail("INVALID_OUTCOME_SNAPSHOT")
+  if (outcome?.queueBinding !== undefined) {
+    const binding = outcome.queueBinding
+    if (!binding || typeof binding !== "object" || Array.isArray(binding)
+      || typeof binding.userId !== "string" || binding.userId.trim() === ""
+      || typeof binding.outcomeKey !== "string" || binding.outcomeKey.trim() === ""
+      || !Number.isSafeInteger(binding.expectedVersion) || binding.expectedVersion < 0
+      || typeof binding.executionBinding !== "string" || binding.executionBinding.trim() === ""
+      || typeof binding.leaseToken !== "string" || binding.leaseToken.trim() === ""
+      || !Number.isSafeInteger(binding.fencingToken) || binding.fencingToken <= 0
+      || typeof binding.acquisitionKey !== "string" || binding.acquisitionKey.trim() === "") {
+      fail("INVALID_OUTCOME_QUEUE_BINDING")
+    }
+  }
+  const runtimeEvidenceRef = input.runtimeEvidenceRef ?? current.runtimeEvidenceRef ?? null
+  if (runtimeEvidenceRef !== null
+    && (typeof runtimeEvidenceRef !== "string"
+      || !/^EV-HERMES-\d+-\d+-\d+$/.test(runtimeEvidenceRef))) {
+    fail("INVALID_RUNTIME_EVIDENCE_REF")
+  }
   const remediationRound = input.remediationRound ?? current.remediationRound ?? null
   if (remediationRound !== null && (!Number.isInteger(remediationRound) || remediationRound < 0)) {
     fail("INVALID_REMEDIATION_ROUND")
@@ -391,6 +410,7 @@ function metadata(input = {}, current = {}) {
     ownerDecisionPacket,
     ownerDecisionPacketDigest,
     validationEvidence,
+    runtimeEvidenceRef,
     outcome,
   }
 }
@@ -595,6 +615,7 @@ export function reopenOwnerDecisionWall(filePath, request, options = {}) {
         recordedAt: at.iso,
       },
       metadata: metadata({
+        outcome: request.outcome ?? current.metadata.outcome,
         ownerDecisionId: request.ownerDecisionId ?? null,
         ownerDecisionRef: request.ownerDecisionRef ?? null,
         ownerDecisionRequestKey: request.requestKey ?? null,

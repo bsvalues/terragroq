@@ -197,6 +197,10 @@ function assertOwnerTouchCountersZero(value) {
   }
 }
 
+function queueSettlementContext(outcome) {
+  return outcome?.queueBinding ? { outcome } : {}
+}
+
 export function assertChangedPathsAllowed(paths, reservations) {
   const blocked = paths.filter((changedPath) => !allowedPath(changedPath.replace(/\\/g, "/"), reservations))
   if (blocked.length > 0) {
@@ -224,6 +228,10 @@ export function createHermesOrchestrator(options = {}) {
   const markComplete = options.markComplete ?? completeOutcome
   const markTerminal = options.markTerminal ?? terminalizeOutcome
   const deferOutcome = options.deferOutcome ?? deferProviderOutcome
+  const renewQueueLease = options.renewQueueLease ?? (async () => null)
+  const bindQueueWorkOrder = options.bindQueueWorkOrder ?? (async () => null)
+  const refreshQueueOutcome = options.refreshQueueOutcome ?? (async (outcome) => outcome)
+  const resumeQueueAfterDecision = options.resumeQueueAfterDecision ?? (async (outcome) => outcome)
   const readApprovedDecision = options.readApprovedOwnerDecision ?? readApprovedOwnerDecision
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const projectLease = options.projectLease ?? projectOutcomeRuntimeLease
@@ -373,16 +381,25 @@ export function createHermesOrchestrator(options = {}) {
         causeCode: error?.code ?? "HERMES_REPOSITORY_CLEANUP_WALL",
       })
     }
+    const runtimeEvidenceRef = `EV-HERMES-${outcome.id}-${lease.fencingToken}-${sequence + 1}`
+    const completed = await checkpoint(lease, sequence, "COMPLETE", `PR #${prNumber} merged and verified`, {
+      prNumber, branch, mergeSha, headRefOid: pr.headRefOid, runtimeEvidenceRef,
+    })
     const outcomeCompleted = await markComplete({
       outcomeId: outcome.id,
-      evidence: { prNumber, mergeSha, branch, ownerTouchCount: 0, blockedScopeCrossed: false },
+      ...queueSettlementContext(outcome),
+      evidence: {
+        prNumber,
+        mergeSha,
+        branch,
+        runtimeEvidenceRef,
+        ownerTouchCount: 0,
+        blockedScopeCrossed: false,
+      },
     })
     if (!outcomeCompleted) {
       throw Object.assign(new Error("Persisted outcome could not be closed after merge"), { code: "HERMES_OUTCOME_COMPLETION_WALL" })
     }
-    await checkpoint(lease, sequence, "COMPLETE", `PR #${prNumber} merged and verified`, {
-      prNumber, branch, mergeSha, headRefOid: pr.headRefOid,
-    })
     await releaseLease({
       idempotencyKey: `${lease.outcomeId}:release:complete`,
       outcomeId: lease.outcomeId, holderId, fencingToken: lease.fencingToken,
@@ -393,7 +410,8 @@ export function createHermesOrchestrator(options = {}) {
   async function finalizeTerminal({ lease, sequence, outcome, nextState, metadata = {} }) {
     const terminal = await checkpoint(lease, sequence, "FAILED_TERMINAL", nextState, metadata)
     const outcomeTerminalized = await markTerminal({
-      outcomeId: outcome.id, result: "FAILED_TERMINAL", nextState,
+      outcomeId: outcome.id, ...queueSettlementContext(outcome),
+      result: "FAILED_TERMINAL", nextState,
     })
     if (!outcomeTerminalized) {
       throw Object.assign(new Error("Persisted outcome could not be terminalized"), {
@@ -596,16 +614,26 @@ export function createHermesOrchestrator(options = {}) {
         || hasOwnerDecisionResume(execution?.metadata)
       )
     ))
+    const deferredExecutions = Object.values(initialized.executions).filter((execution) => (
+      execution?.lease?.status === "DEFERRED"
+      && execution?.checkpoint?.state === "DEFERRED_PROVIDER_UNAVAILABLE"
+    ))
     if (recoveredExecutions.length > 1
-      || [pendingExecution, recoveredExecutions[0]].filter(Boolean).length > 1) {
+      || deferredExecutions.length > 1
+      || [pendingExecution, recoveredExecutions[0], deferredExecutions[0]].filter(Boolean).length > 1) {
       throw Object.assign(new Error("Multiple recoverable executions found"), {
         code: "HERMES_EXECUTION_CONCURRENCY_WALL",
       })
     }
     const approvedReleased = pendingExecution || recoveredExecutions.length > 0
+      || deferredExecutions.length > 0
       ? null
       : approvedReleasedExecutions[0] ?? null
-    const durableExecution = pendingExecution ?? recoveredExecutions[0] ?? approvedReleased?.execution ?? null
+    const durableExecution = pendingExecution
+      ?? recoveredExecutions[0]
+      ?? deferredExecutions[0]
+      ?? approvedReleased?.execution
+      ?? null
     const durableOutcome = durableExecution?.metadata?.outcome ?? null
     if (durableExecution && (!durableOutcome
       || String(durableOutcome.id) !== String(durableExecution.outcomeId))) {
@@ -628,7 +656,7 @@ export function createHermesOrchestrator(options = {}) {
       }
     }
     const notBefore = readControl(notBeforePath, now().toISOString())
-    const outcome = durableOutcome ?? requestedOutcome ?? await selectOutcome({
+    let outcome = durableOutcome ?? requestedOutcome ?? await selectOutcome({
       enabled: true, killSwitch: false, standingAuthority: true, notBefore,
     })
     if (!outcome) return { result: "NO_ELIGIBLE_OUTCOME" }
@@ -662,6 +690,7 @@ export function createHermesOrchestrator(options = {}) {
           expectedNextState,
         })
       if (proof?.approved === true) {
+        outcome = await resumeQueueAfterDecision(outcome, proof)
         state.reopenOwnerDecisionWall({
           idempotencyKey: `${outcomeId}:owner-decision-reopen:${proof.decisionId}`,
           outcomeId,
@@ -674,6 +703,7 @@ export function createHermesOrchestrator(options = {}) {
           decisionPacketDigest: proof.decisionPacketDigest,
           workOrderId: proof.workOrderId,
           terminalEventId: proof.terminalEventId,
+          outcome,
         })
         await projectCurrentExecution(outcomeId)
         await projectCurrentLease(outcomeId, "ABANDONED")
@@ -681,6 +711,7 @@ export function createHermesOrchestrator(options = {}) {
       }
     }
     if (current?.lease?.status === "RELEASED") return { result: "ALREADY_FINALIZED", outcomeId }
+    outcome = await refreshQueueOutcome(outcome)
 
     let lease
     if (current) {
@@ -694,9 +725,13 @@ export function createHermesOrchestrator(options = {}) {
         expectedFencingToken: current.fencingToken,
         holderId,
         leaseDurationMs: LEASE_DURATION_MS,
-        metadata: current.checkpoint.state === "DEFERRED_PROVIDER_UNAVAILABLE"
-          ? { ...current.metadata, threadId: null, turnId: null }
-          : current.metadata,
+        metadata: {
+          ...current.metadata,
+          outcome,
+          ...(current.checkpoint.state === "DEFERRED_PROVIDER_UNAVAILABLE"
+            ? { threadId: null, turnId: null }
+            : {}),
+        },
       })
     } else {
       lease = state.acquireLease({
@@ -705,7 +740,8 @@ export function createHermesOrchestrator(options = {}) {
       })
     }
     try {
-      await projectCurrentExecution(outcomeId)
+      const projection = await projectCurrentExecution(outcomeId)
+      await bindQueueWorkOrder(outcome, projection?.workOrderId)
       await projectCurrentLease(outcomeId)
     } catch (error) {
       state.abandonLease({
@@ -717,12 +753,44 @@ export function createHermesOrchestrator(options = {}) {
     }
 
     let sequence = lease.checkpointSequence
+    if (current?.checkpoint?.state === "COMPLETE") {
+      const evidence = {
+        prNumber: current.metadata.prNumber,
+        mergeSha: current.metadata.mergeSha,
+        branch: current.metadata.branch,
+        runtimeEvidenceRef: current.metadata.runtimeEvidenceRef,
+        ownerTouchCount: 0,
+        blockedScopeCrossed: false,
+      }
+      if (!await markComplete({
+        outcomeId: outcome.id,
+        ...queueSettlementContext(outcome),
+        evidence,
+      })) {
+        throw Object.assign(new Error("Persisted outcome could not be closed after merge"), {
+          code: "HERMES_OUTCOME_COMPLETION_WALL",
+        })
+      }
+      await releaseLease({
+        idempotencyKey: `${outcomeId}:release:complete`,
+        outcomeId, holderId, fencingToken: lease.fencingToken,
+      })
+      return {
+        result: "COMPLETE",
+        outcomeId,
+        prNumber: evidence.prNumber,
+        mergeSha: evidence.mergeSha,
+        recovered: true,
+      }
+    }
     if (current?.checkpoint?.state === "PROVIDER_UNAVAILABLE") {
       const recordedRetryAt = Date.parse(current.checkpoint.detail ?? "")
       const retryAfter = new Date(recordedRetryAt > now().getTime()
         ? recordedRetryAt : now().getTime() + PROVIDER_RETRY_COOLDOWN_MS).toISOString()
       try {
-        if (!await deferOutcome({ outcomeId: outcome.id, retryAfter })) {
+        if (!await deferOutcome({
+          outcomeId: outcome.id, ...queueSettlementContext(outcome), retryAfter,
+        })) {
           throw Object.assign(new Error("Provider-unavailable outcome could not be deferred"), { code: "HERMES_PROVIDER_SETTLEMENT_WALL" })
         }
       } catch (error) {
@@ -746,7 +814,8 @@ export function createHermesOrchestrator(options = {}) {
         })
       }
       const outcomeTerminalized = await markTerminal({
-        outcomeId: outcome.id, result: "FAILED_TERMINAL", nextState,
+        outcomeId: outcome.id, ...queueSettlementContext(outcome),
+        result: "FAILED_TERMINAL", nextState,
       })
       if (!outcomeTerminalized) {
         throw Object.assign(new Error("Persisted outcome could not be terminalized"), {
@@ -779,6 +848,7 @@ export function createHermesOrchestrator(options = {}) {
       }
       const outcomeTerminalized = await markTerminal({
         outcomeId: outcome.id,
+        ...queueSettlementContext(outcome),
         result: "OWNER_DECISION_REQUIRED",
         nextState,
         metadata: decisionPacket,
@@ -903,7 +973,10 @@ export function createHermesOrchestrator(options = {}) {
           idempotencyKey: `${outcomeId}:renew:${Date.now()}`,
           outcomeId, holderId, fencingToken: lease.fencingToken, leaseDurationMs: LEASE_DURATION_MS,
         })
-        const projection = projectCurrentLease(outcomeId).catch((error) => {
+        const projection = Promise.all([
+          projectCurrentLease(outcomeId),
+          renewQueueLease(outcome),
+        ]).catch((error) => {
           renewalFailure = Object.assign(
             new Error("Renewed lease could not be projected to persisted runtime truth"),
             { code: "HERMES_RUNTIME_PROJECTION_WALL", cause: error },
@@ -1064,7 +1137,9 @@ export function createHermesOrchestrator(options = {}) {
             cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", retryAfter, {
               providerRetryCount, threadId: null, turnId: null,
             })
-            if (!await deferOutcome({ outcomeId: outcome.id, retryAfter })) {
+            if (!await deferOutcome({
+              outcomeId: outcome.id, ...queueSettlementContext(outcome), retryAfter,
+            })) {
               throw Object.assign(new Error("Provider-unavailable outcome could not be deferred"), { code: "HERMES_PROVIDER_SETTLEMENT_WALL" })
             }
             await deferLease({
@@ -1102,6 +1177,7 @@ export function createHermesOrchestrator(options = {}) {
           sequence = cp.checkpointSequence
           await markTerminal({
             outcomeId: outcome.id,
+            ...queueSettlementContext(outcome),
             result: result.result,
             nextState: result.nextState ?? null,
             ...(decisionPacket ? { metadata: decisionPacket } : {}),
@@ -1238,7 +1314,9 @@ export function createHermesOrchestrator(options = {}) {
         cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", retryAfter, {
           externalToolRetryCount, threadId: null, turnId: null,
         })
-        if (!await deferOutcome({ outcomeId: outcome.id, retryAfter })) {
+        if (!await deferOutcome({
+          outcomeId: outcome.id, ...queueSettlementContext(outcome), retryAfter,
+        })) {
           throw Object.assign(new Error("External-tool wall outcome could not be deferred"), {
             code: "HERMES_PROVIDER_SETTLEMENT_WALL",
           })

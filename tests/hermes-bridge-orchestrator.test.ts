@@ -550,6 +550,135 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.lifecycle.mergePullRequest).not.toHaveBeenCalled()
   })
 
+  it("renews a queue-bound outcome alongside the resident Hermes lease", async () => {
+    const renewQueueLease = vi.fn(async () => ({ leaseExpiresAt: "2026-07-21T01:50:00.000Z" }))
+    const queuedOutcome = {
+      id: 77,
+      userId: "owner-id",
+      ref: "GOAL-0077",
+      command: "Improve the Hermes page with bounded live bridge status.",
+      lane: "ui",
+      mode: "implement",
+      risk: "low",
+      authority: "A2_WRITE_OWN",
+      verdict: "requires_approval",
+      requiresApproval: true,
+      status: "classified",
+      queueBinding: {
+        userId: "owner-id",
+        outcomeKey: "outcome:77",
+        expectedVersion: 2,
+        executionBinding: "execution-77",
+        leaseToken: "lease-77",
+        fencingToken: 1,
+        acquisitionKey: "acquisition-77",
+      },
+    }
+    const value = fixture(undefined, {
+      leaseRenewalIntervalMs: 5,
+      renewQueueLease,
+      selectOutcome: vi.fn(async () => queuedOutcome),
+    })
+    value.client.runTurn.mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      return {
+        threadId: "thread-77",
+        turnId: "turn-77",
+        status: "completed",
+        finalText: JSON.stringify({
+          result: "READY_FOR_VALIDATION",
+          workOrder: "WO-HERMES-77-001",
+          branch: "codex/hermes-goal-77-77",
+          commit: null,
+          prUrl: null,
+          merged: false,
+          mergeCommit: null,
+          validation: ["pass"],
+          reviewThreads: 0,
+          ownerTouchCount: 0,
+          blockedScopeCrossed: false,
+          nextState: "READY_FOR_HERMES_MERGE",
+        }),
+      }
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    expect(renewQueueLease).toHaveBeenCalledWith(queuedOutcome)
+  })
+
+  it("replays queue settlement from a persisted COMPLETE checkpoint after a crash", async () => {
+    const queuedOutcome = {
+      id: 77,
+      userId: "owner-id",
+      ref: "GOAL-0077",
+      command: "Improve the Hermes page with bounded live bridge status.",
+      lane: "ui",
+      mode: "implement",
+      risk: "low",
+      authority: "A2_WRITE_OWN",
+      verdict: "requires_approval",
+      requiresApproval: true,
+      status: "classified",
+      queueBinding: {
+        userId: "owner-id",
+        outcomeKey: "outcome:77",
+        expectedVersion: 2,
+        executionBinding: "execution-77",
+        leaseToken: "lease-77",
+        fencingToken: 1,
+        acquisitionKey: "acquisition-77",
+      },
+    }
+    const refreshedOutcome = {
+      ...queuedOutcome,
+      queueBinding: {
+        ...queuedOutcome.queueBinding,
+        expectedVersion: 3,
+        fencingToken: 2,
+      },
+    }
+    const refreshQueueOutcome = vi.fn(async () => refreshedOutcome)
+    const value = fixture(undefined, { refreshQueueOutcome })
+    const lease = value.state.acquireLease({
+      idempotencyKey: "77:acquire:split-settlement",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome: queuedOutcome },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "77:checkpoint:complete",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "COMPLETE",
+      detail: "PR #500 merged and verified",
+      metadata: {
+        prNumber: 500,
+        branch: "codex/hermes-goal-77-77",
+        mergeSha: "b".repeat(40),
+        runtimeEvidenceRef: `EV-HERMES-77-${lease.fencingToken}-1`,
+      },
+    })
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+      recovered: true,
+    })
+    expect(value.markComplete).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 77,
+      outcome: refreshedOutcome,
+      evidence: expect.objectContaining({
+        runtimeEvidenceRef: `EV-HERMES-77-${lease.fencingToken}-1`,
+      }),
+    }))
+    expect(refreshQueueOutcome).toHaveBeenCalledWith(queuedOutcome)
+    expect(value.client.connect).not.toHaveBeenCalled()
+  })
+
   it("retains an earlier failed projection when a later renewal projects first", async () => {
     const value = fixture(undefined, { leaseRenewalIntervalMs: 5 })
     value.projectLease
@@ -665,7 +794,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_OUTCOME_COMPLETION_WALL" })
     expect(value.state.read().executions["77"]).toMatchObject({
       lease: { status: "ACTIVE" },
-      checkpoint: { state: "PR_MERGED", detail: "PR #500 merged" },
+      checkpoint: { state: "COMPLETE", detail: "PR #500 merged and verified" },
       metadata: { postMergeCleanupRetryCount: 0 },
     })
     expect(value.state.read().executions["77"].lease).not.toHaveProperty("abandonReason")
@@ -1121,6 +1250,65 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
     expect(value.client.startThread).toHaveBeenCalledTimes(4)
     expect(value.client.resumeThread).not.toHaveBeenCalled()
+  })
+
+  it("persists the fresh queue fence when a deferred outcome resumes after restart", async () => {
+    const baseOutcome = await fixture().selectOutcome()
+    const queuedOutcome = {
+      ...baseOutcome,
+      queueBinding: {
+        userId: "owner-id",
+        outcomeKey: "outcome:77",
+        expectedVersion: 4,
+        executionBinding: "execution-77",
+        leaseToken: "lease-77",
+        fencingToken: 3,
+        acquisitionKey: "acquisition-77",
+      },
+    }
+    const refreshedOutcome = {
+      ...queuedOutcome,
+      queueBinding: {
+        ...queuedOutcome.queueBinding,
+        expectedVersion: 5,
+        fencingToken: 4,
+      },
+    }
+    const refreshQueueOutcome = vi.fn(async () => refreshedOutcome)
+    const value = fixture(undefined, { refreshQueueOutcome })
+    const first = value.state.acquireLease({
+      idempotencyKey: "queue-deferred-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome: queuedOutcome },
+    })
+    const provider = value.state.checkpoint({
+      idempotencyKey: "queue-deferred-provider",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "PROVIDER_UNAVAILABLE",
+      detail: "2026-07-21T01:15:00.000Z",
+    })
+    value.state.deferProviderWall({
+      idempotencyKey: "queue-deferred-settle",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+      expectedCheckpointSequence: provider.checkpointSequence,
+      retryAfter: "2026-07-21T01:15:00.000Z",
+    })
+    value.advance(15 * 60 * 1000 + 1)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(refreshQueueOutcome).toHaveBeenCalledWith(queuedOutcome)
+    expect(value.state.read().executions["77"].metadata.outcome.queueBinding)
+      .toEqual(refreshedOutcome.queueBinding)
   })
 
   it("uses wall-clock time for provider deadlines while preserving monotonic mutation timestamps", async () => {
@@ -1800,6 +1988,83 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(value.client.connect).not.toHaveBeenCalled()
     expect(value.state.read().executions["77"].lease.status).toBe("RELEASED")
+  })
+
+  it("reacquires and persists a fresh queue fence before owner-decision resume", async () => {
+    const baseOutcome = await fixture().selectOutcome()
+    const queuedOutcome = {
+      ...baseOutcome,
+      queueBinding: {
+        userId: "owner-id",
+        outcomeKey: "outcome:77",
+        expectedVersion: 4,
+        executionBinding: "execution-77",
+        leaseToken: "lease-77",
+        fencingToken: 3,
+        acquisitionKey: "acquisition-77",
+      },
+    }
+    const resumedOutcome = {
+      ...queuedOutcome,
+      queueBinding: {
+        ...queuedOutcome.queueBinding,
+        expectedVersion: 6,
+        fencingToken: 4,
+      },
+    }
+    const resumeQueueAfterDecision = vi.fn(async () => resumedOutcome)
+    const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
+    const value = fixture(undefined, { resumeQueueAfterDecision, refreshQueueOutcome })
+    const first = value.state.acquireLease({
+      idempotencyKey: "queue-owner-resume-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: {
+        outcome: queuedOutcome,
+        threadId: "thread-owner-wall",
+        ownerDecisionPacket,
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "queue-owner-resume-wall",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "OWNER_DECISION_REQUIRED",
+      detail: "NEW_AUTHORITY_REQUIRED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "queue-owner-resume-release",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: first.fencingToken,
+    })
+    const proof = {
+      approved: true,
+      status: "accepted",
+      choice: "APPROVE",
+      decisionId: 19,
+      decisionRef: "OWNER-DECISION-77-500",
+      requestKey: "owner-request",
+      workOrderId: 77,
+      terminalEventId: 500,
+      decisionPacket: ownerDecisionPacket,
+      decisionPacketDigest: ownerDecisionPacketDigest,
+    }
+    value.readApprovedOwnerDecision.mockResolvedValue(proof)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(resumeQueueAfterDecision).toHaveBeenCalledWith(queuedOutcome, proof)
+    expect(refreshQueueOutcome).toHaveBeenCalledWith(resumedOutcome)
+    expect(value.state.read().executions["77"].metadata.outcome.queueBinding)
+      .toEqual(resumedOutcome.queueBinding)
+    expect(resumeQueueAfterDecision.mock.invocationCallOrder[0])
+      .toBeLessThan(value.client.runTurn.mock.invocationCallOrder[0])
   })
 
   it("fails closed and retries the original thread when owner-resume restoration fails", async () => {

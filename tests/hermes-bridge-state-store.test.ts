@@ -42,6 +42,35 @@ describe("Hermes bridge durable state store", () => {
     expect(JSON.parse(readFileSync(join(dir, "state.json"), "utf8"))).toMatchObject({ schemaVersion: 1 })
   })
 
+  it("persists an exact queue fence and rejects corrupted restart bindings", () => {
+    const { store } = fixture()
+    const queueBinding = {
+      userId: "primary-user",
+      outcomeKey: "outcome:77",
+      expectedVersion: 4,
+      executionBinding: "execution-77",
+      leaseToken: "lease-77",
+      fencingToken: 3,
+      acquisitionKey: "acquisition-77",
+    }
+    store.acquireLease({
+      outcomeId: "77",
+      holderId: "resident-hermes",
+      leaseDurationMs: 1000,
+      metadata: { outcome: { id: 77, queueBinding } },
+      idempotencyKey: "queue-binding-valid",
+    })
+    expect(store.read().executions["77"].metadata.outcome.queueBinding).toEqual(queueBinding)
+
+    expect(() => store.acquireLease({
+      outcomeId: "78",
+      holderId: "resident-hermes",
+      leaseDurationMs: 1000,
+      metadata: { outcome: { id: 78, queueBinding: { ...queueBinding, leaseToken: "" } } },
+      idempotencyKey: "queue-binding-invalid",
+    })).toThrowError(expect.objectContaining({ code: "INVALID_OUTCOME_QUEUE_BINDING" }))
+  })
+
   it("explicitly clears a stale reviewed head for pre-commit recovery", () => {
     const { store } = fixture()
     const lease = store.acquireLease({

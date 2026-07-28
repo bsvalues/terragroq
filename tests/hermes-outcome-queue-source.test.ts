@@ -9,8 +9,11 @@ import {
   acquireOutcome as acquireOutcomeCompatibility,
   approveOutcomeQueueItem,
   approveOutcome as approveOutcomeCompatibility,
+  bindOutcomeQueueWorkOrder,
   completeQueuedOutcome,
   completeOutcomeQueueItem,
+  deferOutcomeLease as deferOutcomeLeaseCompatibility,
+  deferOutcomeQueueLease,
   enqueueOutcome,
   listOutcomeQueue,
   matchOutcomeAuthorityGrant,
@@ -23,6 +26,9 @@ import {
   persistOutcomeQueueItem,
   readLegacyOutcomeHistory,
   readOutcomeQueue,
+  renewOutcomeLease as renewOutcomeLeaseCompatibility,
+  renewOutcomeQueueLease,
+  resumeOutcomeQueueAfterDecision,
   transitionOutcome as transitionOutcomeCompatibility,
   transitionOutcomeQueueItem,
 } from "@/scripts/hermes-bridge/outcome-queue-source.mjs"
@@ -715,6 +721,151 @@ describe("transactional durable outcome queue source", () => {
     ])
     expect(OUTCOME_QUEUE_SQL.complete).toContain(`q."version" = $3`)
     expect(OUTCOME_QUEUE_SQL.complete).toContain(`q."leaseExpiresAt" > $12::timestamptz`)
+  })
+
+  it("renews only the exact live queue fence without changing its version", async () => {
+    const renewed = queueRow({
+      lifecycleState: "active",
+      version: 4,
+      fencingToken: 3,
+      executionBinding: "execution-a",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    })
+    const query = vi.fn(async () => ({ rows: [renewed] }))
+
+    await expect(renewOutcomeQueueLease({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 4,
+      executionBinding: "execution-a",
+      leaseToken: "lease-a",
+      fencingToken: 3,
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).resolves.toEqual(renewed)
+
+    expect(query).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.renewLease, [
+      userId,
+      "goal:GOAL-1000",
+      4,
+      "execution-a",
+      "lease-a",
+      3,
+      now,
+      "2026-07-28T12:50:00.000Z",
+    ])
+    expect(renewOutcomeLeaseCompatibility).toBe(renewOutcomeQueueLease)
+    expect(OUTCOME_QUEUE_SQL.renewLease).not.toContain(`"version" = q."version" + 1`)
+    expect(OUTCOME_QUEUE_SQL.renewLease).toContain(`live_approval."status" = 'accepted'`)
+    expect(OUTCOME_QUEUE_SQL.renewLease).toContain(`live_grant."status" = 'active'`)
+  })
+
+  it("defers the exact live queue fence until the provider retry time", async () => {
+    const deferred = queueRow({
+      lifecycleState: "active",
+      version: 4,
+      fencingToken: 3,
+      executionBinding: "execution-a",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:15:00.000Z",
+      lifecycleReason: "PROVIDER_UNAVAILABLE",
+    })
+    const query = vi.fn(async () => ({ rows: [deferred] }))
+
+    await expect(deferOutcomeQueueLease({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 4,
+      executionBinding: "execution-a",
+      leaseToken: "lease-a",
+      fencingToken: 3,
+      retryAfter: "2026-07-28T12:15:00.000Z",
+      now,
+    })).resolves.toEqual(deferred)
+    expect(query).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.deferLease, [
+      userId,
+      "goal:GOAL-1000",
+      4,
+      "execution-a",
+      "lease-a",
+      3,
+      "2026-07-28T12:15:00.000Z",
+      "PROVIDER_UNAVAILABLE",
+      now,
+    ])
+    expect(deferOutcomeLeaseCompatibility).toBe(deferOutcomeQueueLease)
+  })
+
+  it("binds the exact active queue fence to its projected Hermes Work Order", async () => {
+    const bound = queueRow({ lifecycleState: "active", activeWorkOrderId: 472, version: 4 })
+    const query = vi.fn(async () => ({ rows: [bound] }))
+
+    await expect(bindOutcomeQueueWorkOrder({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 4,
+      executionBinding: "execution-a",
+      leaseToken: "lease-a",
+      fencingToken: 1,
+      activeWorkOrderId: 472,
+      now,
+    })).resolves.toEqual(bound)
+    expect(query).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.bindWorkOrder, [
+      userId, "goal:GOAL-1000", 4, "execution-a", "lease-a", 1, 472, now,
+    ])
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`q."leaseExpiresAt" > $8::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`projected_work."userId" = q."userId"`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`projected_work.goal = q."goalRef"`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`live_approval."status" = 'accepted'`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`live_grant."status" = 'active'`)
+  })
+
+  it("resumes a blocked queue item only through its exact accepted owner decision", async () => {
+    const resumed = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "OWNER_DECISION_RESUMED",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    })
+    const query = vi.fn(async () => ({ rows: [resumed] }))
+
+    await expect(resumeOutcomeQueueAfterDecision({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 5,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      ownerDecisionId: 91,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).resolves.toEqual(resumed)
+    expect(query).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.resumeAfterDecision, [
+      userId,
+      "goal:GOAL-1000",
+      5,
+      "execution-a",
+      "acquire-a",
+      3,
+      91,
+      "resident-hermes",
+      "lease-a",
+      "2026-07-28T12:50:00.000Z",
+      now,
+    ])
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision).toContain(`approval.context->>'outcomeId' = q."goalId"::text`)
   })
 
   it("keeps GOAL-0001 through GOAL-0005 user-scoped and history-only", async () => {
