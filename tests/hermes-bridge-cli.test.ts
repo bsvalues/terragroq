@@ -1,8 +1,10 @@
 import fs from "node:fs"
 import { createHash } from "node:crypto"
+import path from "node:path"
 import { describe, expect, it, vi } from "vitest"
 
 import {
+  captureRuntimeAgreement,
   recoverExternalToolWall,
   recoverPostMergeCleanupWall,
   recoverReviewedMerge,
@@ -15,6 +17,36 @@ import {
 } from "../scripts/hermes-bridge/cli.mjs"
 
 describe("Hermes bridge CLI", () => {
+  it("captures the production agreement through sanitized runtime-owned paths", async () => {
+    const producer = vi.fn(async () => ({
+      schemaVersion: 1,
+      observedAt: "2026-07-28T18:00:00.000Z",
+      mode: "HEALTHY_IDLE",
+      queue: null,
+      local: null,
+      workOrder: null,
+    }))
+    const root = "C:\\runtime-agreement"
+
+    await expect(captureRuntimeAgreement({
+      runtimeRoot: root,
+      databaseUrl: "configured-outside-output",
+      producer,
+      now: () => 1,
+    })).resolves.toMatchObject({ mode: "HEALTHY_IDLE" })
+    expect(producer).toHaveBeenCalledWith({
+      statePath: path.join(root, "state", "state.json"),
+      outputPath: path.join(root, "evidence", "queue-runtime-agreement.json"),
+      databaseUrl: "configured-outside-output",
+      query: undefined,
+      createPool: undefined,
+      now: expect.any(Function),
+    })
+    expect(JSON.stringify(await producer.mock.results[0].value)).not.toMatch(
+      /leaseToken|executionBinding|acquisitionKey/,
+    )
+  })
+
   it("redacts durable queue capabilities from status projections at every depth", () => {
     const status = redactHermesStatus({
       executions: {

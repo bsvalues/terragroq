@@ -1,4 +1,6 @@
+import { sql } from "drizzle-orm"
 import {
+  check,
   pgTable,
   text,
   timestamp,
@@ -307,6 +309,9 @@ export const outcomeQueueItem = pgTable(
     uniqueIndex("outcome_queue_item_user_key_idx").on(table.userId, table.outcomeKey),
     uniqueIndex("outcome_queue_item_user_acquisition_idx").on(table.userId, table.acquisitionKey),
     uniqueIndex("outcome_queue_item_user_terminal_idx").on(table.userId, table.terminalKey),
+    uniqueIndex("outcome_queue_item_one_active_per_user_idx")
+      .on(table.userId)
+      .where(sql`${table.lifecycleState} = 'active'`),
     index("outcome_queue_item_selection_idx").on(
       table.userId,
       table.lifecycleState,
@@ -322,6 +327,64 @@ export const outcomeQueueItem = pgTable(
     index("outcome_queue_item_goal_idx").on(table.goalId),
     index("outcome_queue_item_approval_decision_idx").on(table.approvalDecisionId),
     index("outcome_queue_item_work_order_idx").on(table.activeWorkOrderId),
+    check(
+      "outcome_queue_item_lifecycle_state_check",
+      sql`${table.lifecycleState} IN ('suggested', 'approved', 'blocked', 'active', 'completed', 'declined', 'superseded')`,
+    ),
+    check(
+      "outcome_queue_item_approval_state_check",
+      sql`${table.approvalState} IN ('unapproved', 'approved', 'revoked')`,
+    ),
+    check(
+      "outcome_queue_item_authority_state_check",
+      sql`${table.authorityState} IN ('unverified', 'matched', 'denied', 'expired', 'revoked')`,
+    ),
+    check(
+      "outcome_queue_item_nonnegative_fence_check",
+      sql`${table.fencingToken} >= 0 AND ${table.version} >= 0`,
+    ),
+    check(
+      "outcome_queue_item_active_binding_check",
+      sql`${table.lifecycleState} <> 'active' OR (
+        ${table.executionBinding} IS NOT NULL
+        AND ${table.leaseHolder} IS NOT NULL
+        AND ${table.leaseToken} IS NOT NULL
+        AND ${table.leaseExpiresAt} IS NOT NULL
+        AND ${table.acquisitionKey} IS NOT NULL
+        AND ${table.fencingToken} > 0
+      )`,
+    ),
+  ],
+)
+
+// Acquisition identities are permanent even after a queue row pauses or is
+// acquired again. This prevents a delayed retry from selecting another outcome.
+export const outcomeQueueAcquisitionReceipt = pgTable(
+  "outcome_queue_acquisition_receipt",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    acquisitionKey: text("acquisitionKey").notNull(),
+    outcomeKey: text("outcomeKey").notNull(),
+    firstFencingToken: integer("firstFencingToken").notNull(),
+    latestFencingToken: integer("latestFencingToken").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("outcome_queue_acquisition_receipt_user_key_idx").on(
+      table.userId,
+      table.acquisitionKey,
+    ),
+    index("outcome_queue_acquisition_receipt_user_outcome_idx").on(
+      table.userId,
+      table.outcomeKey,
+    ),
+    check(
+      "outcome_queue_acquisition_receipt_fence_check",
+      sql`${table.firstFencingToken} > 0
+        AND ${table.latestFencingToken} >= ${table.firstFencingToken}`,
+    ),
   ],
 )
 
@@ -671,6 +734,8 @@ export type EventLog = typeof eventLog.$inferSelect
 export type Goal = typeof goal.$inferSelect
 export type OutcomeQueueItem = typeof outcomeQueueItem.$inferSelect
 export type NewOutcomeQueueItem = typeof outcomeQueueItem.$inferInsert
+export type OutcomeQueueAcquisitionReceipt =
+  typeof outcomeQueueAcquisitionReceipt.$inferSelect
 export type OutcomeQueueMutationReceipt = typeof outcomeQueueMutationReceipt.$inferSelect
 export type LoopRun = typeof loopRun.$inferSelect
 export type EvidenceRecord = typeof evidenceRecord.$inferSelect

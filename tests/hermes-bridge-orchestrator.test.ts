@@ -5,7 +5,11 @@ import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { createHermesOrchestrator } from "../scripts/hermes-bridge/orchestrator.mjs"
-import { createHermesStateStore } from "../scripts/hermes-bridge/state-store.mjs"
+import {
+  createHermesStateStore,
+  hermesTurnResultDigest,
+  normalizeHermesTurnResult,
+} from "../scripts/hermes-bridge/state-store.mjs"
 
 const roots: string[] = []
 const ownerDecisionPacket = {
@@ -18,6 +22,25 @@ const ownerDecisionPacket = {
 const ownerDecisionPacketDigest = createHash("sha256")
   .update(JSON.stringify(ownerDecisionPacket))
   .digest("hex")
+const readyTurnResult = {
+  result: "READY_FOR_VALIDATION",
+  workOrder: "WO-HERMES-77-001",
+  branch: "codex/hermes-goal-77-77",
+  commit: null,
+  prUrl: null,
+  merged: false,
+  mergeCommit: null,
+  validation: ["pass"],
+  reviewThreads: 0,
+  ownerTouchCount: 0,
+  blockedScopeCrossed: false,
+  nextState: "READY_FOR_HERMES_MERGE",
+  blockedAction: null,
+  authorityBoundary: null,
+  minimumChoice: null,
+  approveConsequence: null,
+  denyConsequence: null,
+}
 
 function runtime() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-orchestrator-"))
@@ -88,15 +111,21 @@ function fixture(
     connect: vi.fn(async () => {}),
     startThread: vi.fn(async () => "thread-77"),
     resumeThread: vi.fn(async () => "thread-77"),
-    runTurn: vi.fn(async () => ({
-      threadId: "thread-77", turnId: "turn-77", status: "completed",
-      finalText: JSON.stringify({
-        result: "READY_FOR_VALIDATION", workOrder: "WO-HERMES-77-001", branch: "codex/hermes-goal-77-77",
+    runTurn: vi.fn(async ({ prompt }: { prompt: string }) => {
+      const workOrder = prompt.match(/\bWO-HERMES-\d+-001\b/)?.[0] ?? "WO-HERMES-77-001"
+      const branch = prompt.match(/\bcodex\/[a-z0-9-]+\b/)?.[0] ?? "codex/hermes-goal-77-77"
+      return {
+        threadId: "thread-77", turnId: "turn-77", status: "completed",
+        finalText: JSON.stringify({
+        result: "READY_FOR_VALIDATION", workOrder, branch,
         commit: null, prUrl: null,
         merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0,
         ownerTouchCount: 0, blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE",
+        blockedAction: null, authorityBoundary: null, minimumChoice: null,
+        approveConsequence: null, denyConsequence: null,
       }),
-    })),
+      }
+    }),
     close: vi.fn(),
   }
   const orchestrator = createHermesOrchestrator({
@@ -155,6 +184,392 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       result: "COMPLETE", outcomeId: "77", prNumber: 500,
     })
     expect(value.selectOutcome).not.toHaveBeenCalled()
+  })
+
+  it("replays a durable validated Codex result after a crash without redispatch", async () => {
+    const value = fixture()
+    const outcome = await value.selectOutcome()
+    const result = normalizeHermesTurnResult(readyTurnResult)
+    const lease = value.state.acquireLease({
+      idempotencyKey: "turn-replay-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: {
+        outcome,
+        branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "goal-77"),
+        baseSha: "a".repeat(40),
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "turn-replay-completed",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "CODEX_TURN_COMPLETED",
+      detail: "completed",
+      metadata: {
+        threadId: "thread-77",
+        turnId: "turn-77",
+        turnResult: result,
+        turnResultDigest: hermesTurnResultDigest(result),
+      },
+    })
+    value.state.abandonLease({
+      idempotencyKey: "turn-replay-crash",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      reason: "PROCESS_CRASH",
+    })
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(value.client.connect).not.toHaveBeenCalled()
+    expect(value.client.runTurn).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"].metadata.turnResult).toBeNull()
+  })
+
+  it("reruns interrupted host validation deterministically before any Codex redispatch", async () => {
+    const value = fixture()
+    value.lifecycle.inspectWorkingTreePaths
+      .mockResolvedValueOnce(["components/hermes/live-status.tsx", "tests/hermes-live-status.test.tsx"])
+      .mockResolvedValue([])
+    const outcome = await value.selectOutcome()
+    const lease = value.state.acquireLease({
+      idempotencyKey: "validation-replay-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: {
+        outcome,
+        branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "goal-77"),
+        baseSha: "a".repeat(40),
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "validation-replay-started",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "HOST_VALIDATION_STARTED",
+    })
+    value.state.abandonLease({
+      idempotencyKey: "validation-replay-crash",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      reason: "PROCESS_CRASH",
+    })
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(value.lifecycle.runValidationCommands).toHaveBeenCalledOnce()
+    expect(value.client.runTurn).not.toHaveBeenCalled()
+  })
+
+  it("terminalizes a failed recovered host validation at the final remediation round", async () => {
+    const value = fixture()
+    const validationError = Object.assign(new Error("validation failed"), {
+      code: "HERMES_VALIDATION_FAILED",
+      validation: { command: "npm", args: ["test"], code: 1, output: "deterministic failure" },
+    })
+    value.lifecycle.runValidationCommands.mockRejectedValueOnce(validationError)
+    const outcome = await value.selectOutcome()
+    const lease = value.state.acquireLease({
+      idempotencyKey: "validation-final-round-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: {
+        outcome,
+        branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "goal-77"),
+        baseSha: "a".repeat(40),
+        validationRemediationRound: 3,
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "validation-final-round-started",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "HOST_VALIDATION_STARTED",
+    })
+    value.state.abandonLease({
+      idempotencyKey: "validation-final-round-crash",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      reason: "PROCESS_CRASH",
+    })
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "FAILED_TERMINAL",
+      outcomeId: "77",
+      nextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    expect(value.markTerminal).toHaveBeenCalledWith({
+      outcomeId: 77,
+      result: "FAILED_TERMINAL",
+      nextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "RELEASED" },
+      checkpoint: {
+        state: "FAILED_TERMINAL",
+        detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      },
+    })
+    expect(value.client.runTurn).not.toHaveBeenCalled()
+    expect(value.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+  })
+
+  it("continues remediation after a failed recovered host validation below the final round", async () => {
+    const value = fixture()
+    const validationError = Object.assign(new Error("validation failed"), {
+      code: "HERMES_VALIDATION_FAILED",
+      validation: { command: "npm", args: ["test"], code: 1, output: "deterministic failure" },
+    })
+    value.lifecycle.runValidationCommands
+      .mockRejectedValueOnce(validationError)
+      .mockResolvedValueOnce([{ command: "npm", args: ["test"], code: 0 }])
+    const outcome = await value.selectOutcome()
+    const lease = value.state.acquireLease({
+      idempotencyKey: "validation-lower-round-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: {
+        outcome,
+        branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "goal-77"),
+        baseSha: "a".repeat(40),
+        validationRemediationRound: 2,
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "validation-lower-round-started",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "HOST_VALIDATION_STARTED",
+    })
+    value.state.abandonLease({
+      idempotencyKey: "validation-lower-round-crash",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      reason: "PROCESS_CRASH",
+    })
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(value.lifecycle.runValidationCommands).toHaveBeenCalledTimes(2)
+    expect(value.client.runTurn).toHaveBeenCalledOnce()
+    expect(value.client.runTurn.mock.calls[0][0].prompt).toContain("deterministic failure")
+    expect(value.markTerminal).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"].lease.status).toBe("RELEASED")
+  })
+
+  it.each([
+    "PR_REVIEW_REQUESTED",
+    "RETRYABLE_WALL",
+    "PR_MERGED",
+    "POST_MERGE_CLEANUP_RETRY",
+  ])("continues %s under its exact existing Work Order binding", async (checkpointState) => {
+    const base = fixture()
+    const outcome = {
+      ...(await base.selectOutcome()),
+      queueBinding: {
+        userId: "owner-id",
+        outcomeKey: "outcome:77",
+        expectedVersion: 4,
+        executionBinding: "execution-77",
+        leaseToken: "lease-77",
+        fencingToken: 3,
+        acquisitionKey: "acquisition-77",
+        activeWorkOrderId: 77,
+      },
+    }
+    const refreshQueueOutcome = vi.fn(async () => outcome)
+    const bindQueueWorkOrder = vi.fn(async (candidate, workOrderId) => {
+      if (candidate.queueBinding.activeWorkOrderId !== workOrderId) {
+        throw new Error("mismatched recovery binding")
+      }
+      return candidate
+    })
+    const value = fixture(undefined, { refreshQueueOutcome, bindQueueWorkOrder })
+    const lease = value.state.acquireLease({
+      idempotencyKey: `binding-${checkpointState}-acquire`,
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: {
+        outcome,
+        branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "goal-77"),
+        baseSha: "a".repeat(40),
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: `binding-${checkpointState}-checkpoint`,
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: checkpointState,
+      detail: "RECOVERABLE_WALL",
+    })
+    value.state.abandonLease({
+      idempotencyKey: `binding-${checkpointState}-crash`,
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      reason: "PROCESS_CRASH",
+    })
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(bindQueueWorkOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueBinding: expect.objectContaining({ activeWorkOrderId: 77 }),
+      }),
+      77,
+    )
+  })
+
+  it("settles a blocked provider checkpoint under its exact existing Work Order binding", async () => {
+    const baseOutcome = await fixture().selectOutcome()
+    const outcome = {
+      ...baseOutcome,
+      queueBinding: {
+        userId: "owner-id",
+        outcomeKey: "outcome:77",
+        expectedVersion: 4,
+        executionBinding: "execution-77",
+        leaseToken: "lease-77",
+        fencingToken: 3,
+        acquisitionKey: "acquisition-77",
+        activeWorkOrderId: 77,
+      },
+    }
+    const refreshQueueOutcome = vi.fn(async () => outcome)
+    const bindQueueWorkOrder = vi.fn(async (candidate) => candidate)
+    const value = fixture(undefined, { refreshQueueOutcome, bindQueueWorkOrder })
+    const lease = value.state.acquireLease({
+      idempotencyKey: "provider-binding-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "provider-binding-checkpoint",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "PROVIDER_UNAVAILABLE",
+      detail: "2026-07-21T01:15:00.000Z",
+    })
+    value.state.abandonLease({
+      idempotencyKey: "provider-binding-crash",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      reason: "PROCESS_CRASH",
+    })
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "PROVIDER_UNAVAILABLE",
+      nextState: "DEFERRED_PROVIDER_UNAVAILABLE",
+    })
+    expect(bindQueueWorkOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueBinding: expect.objectContaining({ activeWorkOrderId: 77 }),
+      }),
+      77,
+    )
+    expect(value.client.runTurn).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"].lease.status).toBe("DEFERRED")
+  })
+
+  it("defers both queue and local leases for a recoverable GitHub continuity wall", async () => {
+    const baseOutcome = await fixture().selectOutcome()
+    const queuedOutcome = {
+      ...baseOutcome,
+      queueBinding: {
+        userId: "owner-id",
+        outcomeKey: "outcome:77",
+        expectedVersion: 4,
+        executionBinding: "execution-77",
+        leaseToken: "lease-77",
+        fencingToken: 3,
+        acquisitionKey: "acquisition-77",
+      },
+    }
+    const boundOutcome = {
+      ...queuedOutcome,
+      queueBinding: { ...queuedOutcome.queueBinding, activeWorkOrderId: 77 },
+    }
+    const deferOutcome = vi.fn(async () => true)
+    const value = fixture(undefined, {
+      selectOutcome: vi.fn(async () => queuedOutcome),
+      refreshQueueOutcome: vi.fn(async (outcome) => outcome),
+      bindQueueWorkOrder: vi.fn(async () => boundOutcome),
+      deferOutcome,
+    })
+    value.lifecycle.inspectWorkingTreePaths
+      .mockResolvedValueOnce(["components/hermes/live-status.tsx", "tests/hermes-live-status.test.tsx"])
+      .mockResolvedValue([])
+    value.lifecycle.inspectPullRequest.mockRejectedValueOnce(Object.assign(
+      new Error("GitHub response unavailable"),
+      { code: "HERMES_REPOSITORY_GITHUB_WALL" },
+    ))
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "PROVIDER_UNAVAILABLE",
+      nextState: "DEFERRED_PROVIDER_UNAVAILABLE",
+      reasonCode: "HERMES_REPOSITORY_GITHUB_WALL",
+    })
+    expect(deferOutcome).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 77,
+      outcome: expect.objectContaining({
+        queueBinding: expect.objectContaining({ activeWorkOrderId: 77 }),
+      }),
+    }))
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "DEFERRED" },
+      checkpoint: { state: "DEFERRED_PROVIDER_UNAVAILABLE" },
+    })
+    const turnCount = value.client.runTurn.mock.calls.length
+    value.advance(15 * 60 * 1000 + 1)
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(value.client.runTurn).toHaveBeenCalledTimes(turnCount)
   })
 
   it("adopts a durable reviewed-merge recovery before queue selection after restart", async () => {
@@ -532,6 +947,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       branch: "codex/hermes-goal-77-77", commit: null, prUrl: null,
       merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0,
       ownerTouchCount: 0, blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE",
+      blockedAction: null, authorityBoundary: null, minimumChoice: null,
+      approveConsequence: null, denyConsequence: null,
     })
     value.client.runTurn.mockImplementationOnce(async () => {
       await new Promise((resolve) => setTimeout(resolve, 30))
@@ -588,7 +1005,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         finalText: JSON.stringify({
           result: "READY_FOR_VALIDATION",
           workOrder: "WO-HERMES-77-001",
-          branch: "codex/hermes-goal-77-77",
+          branch: "codex/hermes-goal-0077-77",
           commit: null,
           prUrl: null,
           merged: false,
@@ -598,6 +1015,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
           ownerTouchCount: 0,
           blockedScopeCrossed: false,
           nextState: "READY_FOR_HERMES_MERGE",
+          blockedAction: null, authorityBoundary: null, minimumChoice: null,
+          approveConsequence: null, denyConsequence: null,
         }),
       }
     })
@@ -812,6 +1231,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
           merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0,
           ownerTouchCount: 0, blockedScopeCrossed: false,
           nextState: "READY_FOR_HERMES_MERGE",
+          blockedAction: null, authorityBoundary: null, minimumChoice: null,
+          approveConsequence: null, denyConsequence: null,
         }),
       }
     })
@@ -1202,19 +1623,14 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(commands).not.toContainEqual(expect.objectContaining({ command: "npx" }))
   })
 
-  it("resumes an unfinished Codex thread without disabling its native environment", async () => {
+  it("replays an unfinished handoff failure without redispatching its Codex thread", async () => {
     const value = fixture(["lib/db/schema.ts"])
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
     value.advance(50 * 60 * 1000 + 1)
 
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_CHANGED_PATH_WALL" })
-    expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.objectContaining({
-      approvalPolicy: "never", sandbox: "workspace-write",
-    }))
-    const resumeParams = value.client.resumeThread.mock.calls[0][1]
-    expect(resumeParams).not.toHaveProperty("environments")
-    expect(resumeParams).not.toHaveProperty("selectedCapabilityRoots")
-    expect(resumeParams).not.toHaveProperty("dynamicTools")
+    expect(value.client.runTurn).toHaveBeenCalledOnce()
+    expect(value.client.resumeThread).not.toHaveBeenCalled()
   })
 
   it("abandons an interrupted App Server turn for immediate fenced redispatch", async () => {
@@ -1297,6 +1713,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
         mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
         blockedScopeCrossed: false, nextState: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+        blockedAction: null, authorityBoundary: null, minimumChoice: null,
+        approveConsequence: null, denyConsequence: null,
       }),
     })
 
@@ -1328,6 +1746,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
         mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
         blockedScopeCrossed: false, nextState: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+        blockedAction: null, authorityBoundary: null, minimumChoice: null,
+        approveConsequence: null, denyConsequence: null,
       }),
     })
 
@@ -1355,6 +1775,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         branch: "codex/hermes-goal-77-77", commit: null, prUrl: null,
         merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0,
         ownerTouchCount: 0, blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE",
+        blockedAction: null, authorityBoundary: null, minimumChoice: null,
+        approveConsequence: null, denyConsequence: null,
       }),
     })
     value.advance(15 * 60 * 1000 + 1)
@@ -1435,6 +1857,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
           branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
           mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
           blockedScopeCrossed: false, nextState: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+          blockedAction: null, authorityBoundary: null, minimumChoice: null,
+          approveConsequence: null, denyConsequence: null,
         }),
       }
     })
@@ -1475,6 +1899,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         branch: "codex/hermes-goal-77-77", commit: null, prUrl: null, merged: false,
         mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0,
         blockedScopeCrossed: false, nextState: "TRANSIENT_NATIVE_PROCESS_LAUNCH_WALL",
+        blockedAction: null, authorityBoundary: null, minimumChoice: null,
+        approveConsequence: null, denyConsequence: null,
       }),
     })
     value.deferOutcome.mockRejectedValueOnce(new Error("database interruption"))
@@ -2063,13 +2489,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
       result: "COMPLETE", outcomeId: "77",
     })
-    expect(value.client.runTurn).toHaveBeenCalledTimes(2)
-    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain(
-      "already dispatched and completed",
-    )
-    expect(value.client.runTurn.mock.calls[1][0].prompt).not.toContain(
-      "Resume only the previously blocked action",
-    )
+    expect(value.client.runTurn).toHaveBeenCalledOnce()
+    expect(value.client.connect).toHaveBeenCalledOnce()
   })
 
   it("settles a recovered owner-wall checkpoint before any Codex redispatch", async () => {
@@ -2489,6 +2910,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         authorityBoundary: ownerDecisionPacket.authorityBoundary,
         minimumChoice: ownerDecisionPacket.minimumChoice,
         approveConsequence: ownerDecisionPacket.approveConsequence,
+        denyConsequence: null,
       }),
     })
 

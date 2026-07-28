@@ -186,6 +186,42 @@ function dependencyState(
   return { satisfied: missing.length === 0, missing }
 }
 
+export function findOutcomeDependencyCycle(
+  queue: readonly OutcomeQueueRecord[],
+): readonly string[] | null {
+  const byKey = new Map(queue.map((item) => [item.outcomeKey, item]))
+  const visited = new Set<string>()
+  const visiting = new Set<string>()
+  const path: string[] = []
+
+  function visit(key: string): readonly string[] | null {
+    if (visiting.has(key)) {
+      const start = path.indexOf(key)
+      return [...path.slice(start), key]
+    }
+    if (visited.has(key)) return null
+    const item = byKey.get(key)
+    if (!item) return null
+
+    visiting.add(key)
+    path.push(key)
+    for (const dependencyKey of [...new Set(item.dependencyKeys)].sort()) {
+      const cycle = visit(dependencyKey)
+      if (cycle) return cycle
+    }
+    path.pop()
+    visiting.delete(key)
+    visited.add(key)
+    return null
+  }
+
+  for (const key of [...byKey.keys()].sort()) {
+    const cycle = visit(key)
+    if (cycle) return cycle
+  }
+  return null
+}
+
 function primaryNoSelectionReason(
   queue: readonly OutcomeQueueRecord[],
   blockers: readonly OutcomeSelectionBlocker[],
@@ -248,7 +284,6 @@ export function selectNextOutcome(
   const validApprovalDecisionIds = new Set(options.validApprovalDecisionIds ?? [])
   const validAuthorityGrantRefs = new Set(options.validAuthorityGrantRefs ?? [])
   const blockers: OutcomeSelectionBlocker[] = []
-
   const liveActive = ordered.find(
     (item) => item.lifecycleState === "active" && !isLeaseStale(item, options.now),
   )

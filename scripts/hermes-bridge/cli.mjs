@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { CodexAppServerClient, sanitizeAppServerText } from "./app-server-client.mjs"
@@ -17,6 +18,7 @@ import {
   recoverValidationInfrastructureOutcome,
 } from "./outcome-source.mjs"
 import { createHermesRepositoryLifecycle } from "./repository-lifecycle.mjs"
+import { produceRuntimeAgreement } from "./runtime-agreement.mjs"
 import { readHermesState } from "./state-store.mjs"
 
 function print(value) {
@@ -108,6 +110,23 @@ export async function runHermesQueueDrain({ orchestrator, maxOutcomes = 100 } = 
   throw Object.assign(new Error("Hermes queue drain exceeded its bounded outcome budget"), {
     code: "HERMES_QUEUE_DRAIN_BUDGET_WALL",
     settled,
+  })
+}
+
+export async function captureRuntimeAgreement(options = {}) {
+  const runtimeRoot = path.resolve(
+    options.runtimeRoot
+      ?? process.env.WILLIAMOS_HERMES_RUNTIME_ROOT
+      ?? path.join(os.homedir(), ".williamos", "hermes-bridge"),
+  )
+  const producer = options.producer ?? produceRuntimeAgreement
+  return producer({
+    statePath: path.join(runtimeRoot, "state", "state.json"),
+    outputPath: path.join(runtimeRoot, "evidence", "queue-runtime-agreement.json"),
+    databaseUrl: options.databaseUrl ?? process.env.DATABASE_URL,
+    query: options.query,
+    createPool: options.createPool,
+    now: options.now,
   })
 }
 
@@ -712,13 +731,14 @@ export async function runCli(command = process.argv[2]) {
     else if (command === "recover-post-merge-cleanup-wall") print(recoverPostMergeCleanupWall())
     else if (command === "recover-terminal-post-merge-cleanup-wall") print(await recoverTerminalPostMergeCleanupWall())
     else if (command === "recover-reviewed-merge") print(await recoverReviewedMerge())
+    else if (command === "agreement") print(await captureRuntimeAgreement())
     else if (command === "status") {
       orchestrator = createResidentHermesOrchestrator()
       print(redactHermesStatus(
         readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")),
       ))
     } else {
-      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-external-tool-wall|recover-post-merge-cleanup-wall|recover-terminal-post-merge-cleanup-wall|recover-reviewed-merge"), { code: "HERMES_CLI_USAGE" })
+      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|agreement|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-external-tool-wall|recover-post-merge-cleanup-wall|recover-terminal-post-merge-cleanup-wall|recover-reviewed-merge"), { code: "HERMES_CLI_USAGE" })
     }
   } catch (error) {
     print({
