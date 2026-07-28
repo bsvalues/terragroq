@@ -493,6 +493,64 @@ describe("Hermes durable outcome queue runtime", () => {
     }))
   })
 
+  it("dispatches the durable queue objective instead of the stale linked-goal command", async () => {
+    const bridge = runtime({
+      acquire: vi.fn(async () => ({
+        outcome: {
+          ...queueItem,
+          title: "Add the Runtime outcome timeline",
+          objective: "Show recent completed outcomes and merge evidence on Runtime.",
+        },
+        acquired: true,
+      })),
+    })
+
+    await expect(bridge.selectOutcome()).resolves.toMatchObject({
+      id: 77,
+      title: "Add the Runtime outcome timeline",
+      command: "Show recent completed outcomes and merge evidence on Runtime.",
+      queueBinding: { outcomeKey: "outcome:home-radar" },
+    })
+  })
+
+  it("uses the durable queue title when its objective is absent", async () => {
+    const bridge = runtime({
+      acquire: vi.fn(async () => ({
+        outcome: {
+          ...queueItem,
+          title: "Add the Runtime outcome timeline",
+          objective: null,
+        },
+        acquired: true,
+      })),
+    })
+
+    await expect(bridge.selectOutcome()).resolves.toMatchObject({
+      command: "Add the Runtime outcome timeline",
+    })
+  })
+
+  it("applies protected-scope policy to the effective durable queue command", async () => {
+    const protectedItem = {
+      ...queueItem,
+      outcomeKey: "outcome:protected",
+      title: "Deploy TerraFusion to production",
+      objective: "Improve the operator read model.",
+      version: 8,
+    }
+    const acquire = vi.fn()
+      .mockResolvedValueOnce({ outcome: protectedItem, acquired: true })
+      .mockResolvedValueOnce({ outcome: null, acquired: false })
+    const transitionQueue = vi.fn(async () => ({ lifecycleState: "blocked" }))
+    const bridge = runtime({ acquire, transitionQueue })
+
+    await expect(bridge.selectOutcome()).resolves.toBeNull()
+    expect(transitionQueue).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeKey: "outcome:protected",
+      lifecycleReason: "HERMES_OUTCOME_QUEUE_POLICY_PROTECTED_SCOPE",
+    }))
+  })
+
   it("returns no work when the queue has no eligible acquisition", async () => {
     const bridge = runtime({
       acquire: vi.fn(async () => ({

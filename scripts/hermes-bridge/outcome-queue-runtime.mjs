@@ -29,6 +29,15 @@ function wall(message, code) {
   throw Object.assign(new Error(message), { code })
 }
 
+function effectiveQueueCommand(item, goal) {
+  for (const candidate of [item?.objective, item?.title, goal?.command]) {
+    if (typeof candidate === "string" && candidate.trim() !== "") {
+      return candidate.trim()
+    }
+  }
+  wall("Durable queue outcome is missing an executable command", "HERMES_OUTCOME_QUEUE_COMMAND_WALL")
+}
+
 function residentCheckpointProvider({ runtimeRoot, readState = readHermesState }) {
   const statePath = path.join(runtimeRoot, "state", "state.json")
   return async ({ outcome }) => {
@@ -365,8 +374,15 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       const item = acquired.outcome
       try {
         const goal = await resolveGoal(item)
+        const governedOutcome = {
+          ...goal,
+          ...(typeof item.title === "string" && item.title.trim() !== ""
+            ? { title: item.title.trim() }
+            : {}),
+          command: effectiveQueueCommand(item, goal),
+        }
         const decision = evaluateOutcomePolicy({
-          outcome: goal,
+          outcome: governedOutcome,
           actor: "bsvalues",
           repository: "bsvalues/terragroq",
           enabled: true,
@@ -376,7 +392,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
           wall(decision.reasonCode, `HERMES_OUTCOME_QUEUE_POLICY_${decision.reasonCode}`)
         }
         return {
-          ...goal,
+          ...governedOutcome,
           queueBinding: persistedBinding(item),
         }
       } catch (error) {
