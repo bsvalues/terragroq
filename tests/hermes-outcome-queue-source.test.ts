@@ -198,7 +198,12 @@ const receiptConstraintRows = [
   ["outcome_queue_mutation_attempt", "outcome_queue_mutation_attempt_pkey", "p", "PRIMARY KEY (id)"],
   ["outcome_queue_mutation_attempt", "outcome_queue_mutation_attempt_user_ordinal_unique", "u", `UNIQUE ("userId", "idempotencyKey", "attemptOrdinal")`],
   ["outcome_queue_mutation_attempt", "outcome_queue_mutation_attempt_ordinal_check", "c", `CHECK ("attemptOrdinal" > 0)`],
-  ["outcome_queue_mutation_attempt", "outcome_queue_mutation_attempt_disposition_check", "c", `CHECK ("disposition" IN ('COMMITTED', 'REPLAY'))`],
+  [
+    "outcome_queue_mutation_attempt",
+    "outcome_queue_mutation_attempt_disposition_check",
+    "c",
+    `CHECK (disposition = ANY (ARRAY['COMMITTED'::text, 'REPLAY'::text]))`,
+  ],
 ].map(([tableName, constraintName, constraintType, definition]) => ({
   tableName,
   constraintName,
