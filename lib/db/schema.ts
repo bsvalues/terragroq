@@ -249,6 +249,75 @@ export const goal = pgTable("goal", {
 })
 
 /* ------------------------------------------------------------------ */
+/* Durable outcome queue (WO-WOS-V1.2-001)                            */
+/* ------------------------------------------------------------------ */
+
+// Suggestions are intake only. An item is selectable only when its lifecycle,
+// approval, current authority, dependencies, and lease state all independently
+// satisfy the outcome-queue engine.
+export const outcomeQueueItem = pgTable(
+  "outcome_queue_item",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    outcomeKey: text("outcomeKey").notNull(),
+    goalId: integer("goalId").references(() => goal.id, { onDelete: "set null" }),
+    goalRef: text("goalRef"),
+    title: text("title").notNull(),
+    objective: text("objective"),
+    queueOrder: integer("queueOrder").default(0).notNull(),
+    dependencyKeys: text("dependencyKeys").array().default([]).notNull(),
+    riskClass: text("riskClass").default("R1").notNull(),
+    approvalState: text("approvalState").default("unapproved").notNull(),
+    approvedBy: text("approvedBy"),
+    approvedAt: timestamp("approvedAt"),
+    approvalDecisionId: integer("approvalDecisionId").references(() => decision.id, {
+      onDelete: "set null",
+    }),
+    authorityState: text("authorityState").default("unverified").notNull(),
+    authorityLevel: text("authorityLevel").default("A0_READ_ONLY").notNull(),
+    authorityGrantRef: text("authorityGrantRef"),
+    lifecycleState: text("lifecycleState").default("suggested").notNull(),
+    lifecycleReason: text("lifecycleReason"),
+    activeWorkOrderId: integer("activeWorkOrderId").references(() => workOrder.id, {
+      onDelete: "set null",
+    }),
+    executionBinding: text("executionBinding"),
+    leaseHolder: text("leaseHolder"),
+    leaseToken: text("leaseToken"),
+    leaseExpiresAt: timestamp("leaseExpiresAt"),
+    fencingToken: integer("fencingToken").default(0).notNull(),
+    version: integer("version").default(0).notNull(),
+    acquisitionKey: text("acquisitionKey"),
+    terminalResult: text("terminalResult"),
+    terminalEvidenceId: integer("terminalEvidenceId"),
+    terminalEvidenceRefs: text("terminalEvidenceRefs").array().default([]).notNull(),
+    terminalKey: text("terminalKey"),
+    suggestedAt: timestamp("suggestedAt").defaultNow().notNull(),
+    activatedAt: timestamp("activatedAt"),
+    terminalAt: timestamp("terminalAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("outcome_queue_item_user_key_idx").on(table.userId, table.outcomeKey),
+    uniqueIndex("outcome_queue_item_user_acquisition_idx").on(table.userId, table.acquisitionKey),
+    uniqueIndex("outcome_queue_item_user_terminal_idx").on(table.userId, table.terminalKey),
+    index("outcome_queue_item_selection_idx").on(
+      table.userId,
+      table.lifecycleState,
+      table.approvalState,
+      table.authorityState,
+      table.queueOrder,
+    ),
+    index("outcome_queue_item_lease_idx").on(table.lifecycleState, table.leaseExpiresAt),
+    index("outcome_queue_item_goal_idx").on(table.goalId),
+    index("outcome_queue_item_approval_decision_idx").on(table.approvalDecisionId),
+    index("outcome_queue_item_work_order_idx").on(table.activeWorkOrderId),
+  ],
+)
+
+/* ------------------------------------------------------------------ */
 /* Loop register (§8 — governed /loop iterations)                      */
 /* ------------------------------------------------------------------ */
 
@@ -563,6 +632,8 @@ export type WorkOrder = typeof workOrder.$inferSelect
 export type Document = typeof document.$inferSelect
 export type EventLog = typeof eventLog.$inferSelect
 export type Goal = typeof goal.$inferSelect
+export type OutcomeQueueItem = typeof outcomeQueueItem.$inferSelect
+export type NewOutcomeQueueItem = typeof outcomeQueueItem.$inferInsert
 export type LoopRun = typeof loopRun.$inferSelect
 export type EvidenceRecord = typeof evidenceRecord.$inferSelect
 export type GovernanceEvent = typeof governanceEvent.$inferSelect
