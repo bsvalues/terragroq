@@ -5,9 +5,14 @@ import { CompletionReportPanel } from "@/components/work-orders/completion-repor
 import { WorkOrdersCommandPanel } from "@/components/work-orders/work-orders-command-panel"
 import { WoeDetailSurfacePanel } from "@/components/work-orders/woe-detail-surface-panel"
 import { WorkOrdersView } from "@/components/work-orders/work-orders-view"
+import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
+import { OperatorOutcomeQueuePanel } from "@/components/outcome-queue/operator-outcome-queue-panel"
 
 export default async function WorkOrdersPage() {
-  const orders = await getWorkOrders()
+  const [orders, outcomeQueue] = await Promise.all([
+    getWorkOrders(),
+    getOutcomeQueueSurface(),
+  ])
   return (
     <>
       <PageHeader
@@ -15,6 +20,7 @@ export default async function WorkOrdersPage() {
         description="See what is moving, what explicitly failed, and the next governed action Hermes is expected to take from recorded Work Order state."
       />
       <div className="flex flex-col gap-6 p-6">
+        <OperatorOutcomeQueuePanel surface={outcomeQueue} compact />
         <ActiveWorkQueuePanel orders={orders} />
         <WorkOrdersCommandPanel orders={orders} />
         <WoeDetailSurfacePanel />

@@ -9,13 +9,16 @@ import { PortfolioOperatorPanel } from "@/components/operator/portfolio-operator
 import { getGoals, getCurrentTruth } from "@/app/actions/goals"
 import { getGoalTimelines } from "@/app/actions/goal-timeline"
 import { getActiveGoalAuthorityRequestTimelines } from "@/app/(shell)/goal-console/authority-request-timelines"
+import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
+import { OperatorOutcomeQueuePanel } from "@/components/outcome-queue/operator-outcome-queue-panel"
 
 export default async function GoalConsolePage() {
-  const [goals, truth, timelines, authorityRequests] = await Promise.all([
+  const [goals, truth, timelines, authorityRequests, outcomeQueue] = await Promise.all([
     getGoals(),
     getCurrentTruth(),
     getGoalTimelines(),
     getActiveGoalAuthorityRequestTimelines(),
+    getOutcomeQueueSurface(),
   ])
 
   return (
@@ -25,6 +28,7 @@ export default async function GoalConsolePage() {
         description="State the outcome once, then follow persisted Hermes and Codex delivery truth through completion or a genuine authority wall."
       />
       <div className="flex flex-col gap-4 px-6 pb-2">
+        <OperatorOutcomeQueuePanel surface={outcomeQueue} />
         <PortfolioOperatorPanel outcomes={goals} />
         <CodexOperatorPanel />
         <ProductionOperatingModePanel />

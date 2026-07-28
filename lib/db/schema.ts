@@ -295,6 +295,8 @@ export const outcomeQueueItem = pgTable(
     terminalEvidenceId: integer("terminalEvidenceId"),
     terminalEvidenceRefs: text("terminalEvidenceRefs").array().default([]).notNull(),
     terminalKey: text("terminalKey"),
+    supersedesOutcomeKey: text("supersedesOutcomeKey"),
+    supersededByOutcomeKey: text("supersededByOutcomeKey"),
     suggestedAt: timestamp("suggestedAt").defaultNow().notNull(),
     activatedAt: timestamp("activatedAt"),
     terminalAt: timestamp("terminalAt"),
@@ -320,6 +322,35 @@ export const outcomeQueueItem = pgTable(
     index("outcome_queue_item_goal_idx").on(table.goalId),
     index("outcome_queue_item_approval_decision_idx").on(table.approvalDecisionId),
     index("outcome_queue_item_work_order_idx").on(table.activeWorkOrderId),
+  ],
+)
+
+// Exactly-once operator mutation receipts. The request hash and complete
+// request/result bindings distinguish an exact replay from idempotency-key
+// reuse with different intent.
+export const outcomeQueueMutationReceipt = pgTable(
+  "outcome_queue_mutation_receipt",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    idempotencyKey: text("idempotencyKey").notNull(),
+    operation: text("operation").notNull(),
+    outcomeKey: text("outcomeKey"),
+    requestHash: text("requestHash").notNull(),
+    requestBinding: jsonb("requestBinding").notNull(),
+    resultBinding: jsonb("resultBinding").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("outcome_queue_mutation_receipt_user_key_idx").on(
+      table.userId,
+      table.idempotencyKey,
+    ),
+    index("outcome_queue_mutation_receipt_user_outcome_idx").on(
+      table.userId,
+      table.outcomeKey,
+      table.createdAt,
+    ),
   ],
 )
 
@@ -640,6 +671,7 @@ export type EventLog = typeof eventLog.$inferSelect
 export type Goal = typeof goal.$inferSelect
 export type OutcomeQueueItem = typeof outcomeQueueItem.$inferSelect
 export type NewOutcomeQueueItem = typeof outcomeQueueItem.$inferInsert
+export type OutcomeQueueMutationReceipt = typeof outcomeQueueMutationReceipt.$inferSelect
 export type LoopRun = typeof loopRun.$inferSelect
 export type EvidenceRecord = typeof evidenceRecord.$inferSelect
 export type GovernanceEvent = typeof governanceEvent.$inferSelect
