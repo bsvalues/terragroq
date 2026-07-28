@@ -613,6 +613,7 @@ WHERE q."userId" = $1
   AND approval."userId" = q."userId"
   AND approval.status = 'accepted'
   AND approval.authority = 'binding'
+  AND approval."scope" IN (q."outcomeKey", q."goalRef")
   AND approval.decision = 'APPROVE'
   AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
   AND ${LIVE_APPROVAL_PREDICATE}

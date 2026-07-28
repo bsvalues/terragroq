@@ -755,7 +755,9 @@ export function createHermesOrchestrator(options = {}) {
     }
     try {
       const projection = await projectCurrentExecution(outcomeId)
-      if (!terminalReplay) await bindQueueWorkOrder(outcome, projection?.workOrderId)
+      if (!terminalReplay && projection?.workOrderId) {
+        await bindQueueWorkOrder(outcome, projection.workOrderId)
+      }
       await projectCurrentLease(outcomeId)
     } catch (error) {
       state.abandonLease({

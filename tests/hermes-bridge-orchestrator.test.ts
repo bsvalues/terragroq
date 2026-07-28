@@ -606,6 +606,40 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(renewQueueLease).toHaveBeenCalledWith(queuedOutcome)
   })
 
+  it("preserves a queue lease when the runtime projection has no Work Order id", async () => {
+    const queuedOutcome = {
+      id: 77,
+      userId: "owner-id",
+      ref: "GOAL-0077",
+      command: "Improve the Hermes page with bounded live bridge status.",
+      lane: "ui",
+      mode: "implement",
+      risk: "low",
+      authority: "A2_WRITE_OWN",
+      verdict: "requires_approval",
+      requiresApproval: true,
+      status: "classified",
+      queueBinding: {
+        userId: "owner-id",
+        outcomeKey: "outcome:77",
+        expectedVersion: 2,
+        executionBinding: "execution-77",
+        leaseToken: "lease-77",
+        fencingToken: 1,
+        acquisitionKey: "acquisition-77",
+      },
+    }
+    const bindQueueWorkOrder = vi.fn(async () => true)
+    const value = fixture(undefined, {
+      selectOutcome: vi.fn(async () => queuedOutcome),
+      bindQueueWorkOrder,
+      projectCheckpoint: vi.fn(async () => ({})),
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    expect(bindQueueWorkOrder).not.toHaveBeenCalled()
+  })
+
   it("replays queue settlement from a persisted COMPLETE checkpoint after a crash", async () => {
     const queuedOutcome = {
       id: 77,

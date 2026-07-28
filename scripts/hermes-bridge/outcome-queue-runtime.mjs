@@ -40,21 +40,62 @@ function queueBinding(outcome) {
   return binding
 }
 
-async function withPool(databaseUrl, action) {
-  if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
-    wall("DATABASE_URL is required", "DATABASE_URL_REQUIRED")
+function createLazyPool(databaseUrl, createPool) {
+  let poolPromise = null
+  let closed = false
+
+  async function pool() {
+    if (closed) {
+      wall("Hermes outcome queue runtime is closed", "HERMES_OUTCOME_QUEUE_RUNTIME_CLOSED")
+    }
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      wall("DATABASE_URL is required", "DATABASE_URL_REQUIRED")
+    }
+    if (!poolPromise) {
+      const pending = Promise.resolve()
+        .then(async () => createPool
+          ? createPool(databaseUrl)
+          : new (await import("pg")).Pool({
+              connectionString: databaseUrl,
+              allowExitOnIdle: true,
+            }))
+        .then((candidate) => {
+          if (!candidate || typeof candidate.query !== "function" || typeof candidate.end !== "function") {
+            wall("Hermes outcome queue database pool is invalid", "HERMES_OUTCOME_QUEUE_POOL_WALL")
+          }
+          candidate.on?.("error", () => {
+            if (poolPromise === pending) {
+              poolPromise = null
+              void candidate.end().catch(() => {})
+            }
+          })
+          return candidate
+        })
+        .catch((error) => {
+          if (poolPromise === pending) poolPromise = null
+          throw error
+        })
+      poolPromise = pending
+    }
+    return poolPromise
   }
-  const { Pool } = await import("pg")
-  const pool = new Pool({ connectionString: databaseUrl })
-  try {
-    return await action(pool)
-  } finally {
-    await pool.end()
+
+  return {
+    async withPool(action) {
+      return action(await pool())
+    },
+    async close() {
+      if (closed) return
+      closed = true
+      const pending = poolPromise
+      poolPromise = null
+      if (pending) await (await pending).end()
+    },
   }
 }
 
-async function loadDeclaredPrimary(databaseUrl) {
-  return withPool(databaseUrl, async (pool) => {
+async function loadDeclaredPrimary(withPool) {
+  return withPool(async (pool) => {
     const result = await pool.query(
       `SELECT id, email
        FROM "user"
@@ -70,11 +111,11 @@ async function loadDeclaredPrimary(databaseUrl) {
   })
 }
 
-async function loadLinkedGoal(databaseUrl, queueItem) {
+async function loadLinkedGoal(withPool, queueItem) {
   if (!Number.isSafeInteger(Number(queueItem?.goalId)) || Number(queueItem.goalId) <= 0) {
     wall("Acquired queue item is not linked to a governed goal", "HERMES_OUTCOME_QUEUE_GOAL_WALL")
   }
-  return withPool(databaseUrl, async (pool) => {
+  return withPool(async (pool) => {
     const result = await pool.query(
       `SELECT id, "userId" AS "userId", ref, command, lane, mode, risk,
               authority, verdict, "requiresApproval" AS "requiresApproval",
@@ -104,6 +145,17 @@ function completionEvidence(evidence) {
     refs.push(`merge:${evidence.mergeSha}`)
   }
   return refs
+}
+
+function requiredMergeSha(evidence) {
+  const mergeSha = evidence?.mergeSha
+  if (typeof mergeSha !== "string" || !/^[0-9a-f]{40}$/.test(mergeSha)) {
+    wall(
+      "Queue completion requires an exact 40-hex merge SHA",
+      "HERMES_OUTCOME_QUEUE_MERGE_SHA_WALL",
+    )
+  }
+  return mergeSha
 }
 
 function persistedBinding(item) {
@@ -141,6 +193,7 @@ function isExactTerminalSettlement(item, binding, terminalReplay) {
     || item.leaseExpiresAt != null) return false
 
   if (terminalReplay?.state === "COMPLETE") {
+    if (!/^[0-9a-f]{40}$/.test(String(terminalReplay.evidence?.mergeSha ?? ""))) return false
     const refs = completionEvidence(terminalReplay.evidence)
     return refs.length > 0
       && item.lifecycleState === "completed"
@@ -166,6 +219,7 @@ function isExactTerminalSettlement(item, binding, terminalReplay) {
 
 export function createHermesOutcomeQueueRuntime(options = {}) {
   const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL
+  const database = createLazyPool(databaseUrl, options.createPool)
   const acquire = options.acquire ?? acquireNextEligibleOutcome
   const bindQueueWorkOrder = options.bindQueueWorkOrder ?? bindOutcomeQueueWorkOrder
   const completeQueue = options.completeQueue ?? completeOutcomeQueueItem
@@ -177,8 +231,8 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   const completeGoal = options.completeGoal ?? completeGoalOutcome
   const terminalizeGoal = options.terminalizeGoal ?? terminalizeGoalOutcome
   const deferGoal = options.deferGoal ?? deferGoalOutcome
-  const resolvePrimary = options.resolvePrimary ?? (() => loadDeclaredPrimary(databaseUrl))
-  const resolveGoal = options.resolveGoal ?? ((item) => loadLinkedGoal(databaseUrl, item))
+  const resolvePrimary = options.resolvePrimary ?? (() => loadDeclaredPrimary(database.withPool))
+  const resolveGoal = options.resolveGoal ?? ((item) => loadLinkedGoal(database.withPool, item))
   const now = options.now ?? (() => new Date())
   const holderId = options.holderId ?? `${os.hostname()}:hermes-outcome-queue`
 
@@ -241,6 +295,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       return completeGoal({ databaseUrl, outcomeId, evidence })
     }
     const binding = queueBinding(outcome)
+    const mergeSha = requiredMergeSha(evidence)
     const refs = completionEvidence(evidence)
     if (refs.length === 0) {
       wall("Queue completion requires reviewed delivery evidence", "HERMES_OUTCOME_QUEUE_EVIDENCE_WALL")
@@ -249,7 +304,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     await completeQueue({
       databaseUrl,
       ...binding,
-      terminalKey: `hermes:${binding.outcomeKey}:${binding.fencingToken}:${evidence.mergeSha}`,
+      terminalKey: `hermes:${binding.outcomeKey}:${binding.fencingToken}:${mergeSha}`,
       terminalResult: "COMPLETE",
       terminalEvidenceRefs: refs,
       now: now(),
@@ -386,5 +441,6 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     bindWorkOrder,
     refreshOutcome,
     resumeAfterOwnerDecision,
+    close: database.close,
   }
 }

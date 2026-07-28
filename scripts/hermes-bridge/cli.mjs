@@ -61,7 +61,7 @@ export function redactHermesStatus(value) {
 
 export function createResidentHermesOrchestrator(options = {}) {
   const queueRuntime = options.queueRuntime ?? createHermesOutcomeQueueRuntime()
-  return createHermesOrchestrator({
+  const orchestrator = createHermesOrchestrator({
     workspace: options.workspace ?? process.cwd(),
     ...(options.orchestratorOptions ?? {}),
     selectOutcome: queueRuntime.selectOutcome,
@@ -72,6 +72,10 @@ export function createResidentHermesOrchestrator(options = {}) {
     bindQueueWorkOrder: queueRuntime.bindWorkOrder,
     refreshQueueOutcome: queueRuntime.refreshOutcome,
     resumeQueueAfterDecision: queueRuntime.resumeAfterOwnerDecision,
+  })
+  return Object.freeze({
+    ...orchestrator,
+    close: queueRuntime.close,
   })
 }
 
@@ -103,6 +107,7 @@ export async function runHermesQueueDrain({ orchestrator, maxOutcomes = 100 } = 
   }
   throw Object.assign(new Error("Hermes queue drain exceeded its bounded outcome budget"), {
     code: "HERMES_QUEUE_DRAIN_BUDGET_WALL",
+    settled,
   })
 }
 
@@ -694,9 +699,10 @@ export async function recoverReviewedMerge(options = {}) {
 }
 
 export async function runCli(command = process.argv[2]) {
+  let orchestrator = null
   try {
     if (command === "cycle") {
-      const orchestrator = createResidentHermesOrchestrator()
+      orchestrator = createResidentHermesOrchestrator()
       print(await runHermesQueueDrain({ orchestrator }))
     }
     else if (command === "smoke") print(await smoke())
@@ -707,7 +713,7 @@ export async function runCli(command = process.argv[2]) {
     else if (command === "recover-terminal-post-merge-cleanup-wall") print(await recoverTerminalPostMergeCleanupWall())
     else if (command === "recover-reviewed-merge") print(await recoverReviewedMerge())
     else if (command === "status") {
-      const orchestrator = createResidentHermesOrchestrator()
+      orchestrator = createResidentHermesOrchestrator()
       print(redactHermesStatus(
         readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")),
       ))
@@ -715,8 +721,15 @@ export async function runCli(command = process.argv[2]) {
       throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-external-tool-wall|recover-post-merge-cleanup-wall|recover-terminal-post-merge-cleanup-wall|recover-reviewed-merge"), { code: "HERMES_CLI_USAGE" })
     }
   } catch (error) {
-    print({ result: "WALL", code: error?.code ?? "HERMES_CLI_FAILED", message: sanitizeBridgeMessage(error?.message ?? "Hermes bridge failed") })
+    print({
+      result: "WALL",
+      code: error?.code ?? "HERMES_CLI_FAILED",
+      message: sanitizeBridgeMessage(error?.message ?? "Hermes bridge failed"),
+      ...(Array.isArray(error?.settled) ? { settled: error.settled } : {}),
+    })
     return 1
+  } finally {
+    await orchestrator?.close?.()
   }
   return 0
 }

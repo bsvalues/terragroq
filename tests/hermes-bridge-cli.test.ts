@@ -73,6 +73,21 @@ describe("Hermes bridge CLI", () => {
     expect(cycle).toHaveBeenCalledTimes(3)
   })
 
+  it("preserves settled outcomes when the bounded drain budget is exhausted", async () => {
+    const cycle = vi.fn()
+      .mockResolvedValueOnce({ result: "COMPLETE", outcomeId: "77", mergeSha: "a".repeat(40) })
+      .mockResolvedValueOnce({ result: "FAILED_TERMINAL", outcomeId: "78", nextState: "VALIDATION_FAILED" })
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, maxOutcomes: 2 }))
+      .rejects.toMatchObject({
+        code: "HERMES_QUEUE_DRAIN_BUDGET_WALL",
+        settled: [
+          { result: "COMPLETE", outcomeId: "77", mergeSha: "a".repeat(40) },
+          { result: "FAILED_TERMINAL", outcomeId: "78", nextState: "VALIDATION_FAILED" },
+        ],
+      })
+  })
+
   it("redacts credential-bearing database URLs from structured wall output", () => {
     expect(sanitizeBridgeMessage("connect failed for postgresql://owner:opaque-password@db.example.test/app"))
       .toBe("connect failed for postgresql://[REDACTED]@db.example.test/app")

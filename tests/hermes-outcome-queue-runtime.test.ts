@@ -164,9 +164,34 @@ describe("Hermes durable outcome queue runtime", () => {
       leaseToken: "lease-77",
       fencingToken: 3,
       acquisitionKey: "acquisition-77",
+      terminalKey: `hermes:outcome:home-radar:3:${"a".repeat(40)}`,
       terminalResult: "COMPLETE",
       terminalEvidenceRefs: ["EV-HERMES-77-3-14", "pr:475", `merge:${"a".repeat(40)}`],
     }))
+  })
+
+  it.each([
+    ["missing", undefined],
+    ["short", "a".repeat(39)],
+    ["non-hex", `${"a".repeat(39)}g`],
+    ["non-canonical uppercase", "A".repeat(40)],
+  ])("rejects a %s merge SHA before any completion settlement", async (_label, mergeSha) => {
+    const completeGoal = vi.fn(async () => true)
+    const completeQueue = vi.fn()
+    const bridge = runtime({ completeGoal, completeQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.completeOutcome({
+      outcomeId: 77,
+      outcome,
+      evidence: {
+        prNumber: 475,
+        mergeSha,
+        runtimeEvidenceRef: "EV-HERMES-77-3-14",
+      },
+    })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_MERGE_SHA_WALL" })
+    expect(completeGoal).not.toHaveBeenCalled()
+    expect(completeQueue).not.toHaveBeenCalled()
   })
 
   it("moves a terminal Hermes result to a blocked queue state under the exact fence", async () => {
@@ -438,5 +463,80 @@ describe("Hermes durable outcome queue runtime", () => {
       outcome: { ...goal, queueBinding: {} },
       evidence: { prNumber: 475, mergeSha: "a".repeat(40) },
     })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_BINDING_WALL" })
+  })
+
+  it("lazily reuses one database pool and closes it exactly once", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+      .mockResolvedValueOnce({ rows: [goal] })
+      .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+      .mockResolvedValueOnce({ rows: [goal] })
+    const end = vi.fn(async () => {})
+    const on = vi.fn()
+    const createPool = vi.fn(async () => ({ query, end, on }))
+    const bridge = createHermesOutcomeQueueRuntime({
+      databaseUrl: "postgresql://not-used",
+      holderId: "resident-hermes",
+      createPool,
+      acquire: vi.fn(async () => ({
+        outcome: queueItem,
+        acquired: true,
+        replayed: false,
+        reclaimed: false,
+        reason: null,
+      })),
+    })
+
+    expect(createPool).not.toHaveBeenCalled()
+    await bridge.selectOutcome()
+    await bridge.selectOutcome()
+    expect(createPool).toHaveBeenCalledOnce()
+    expect(query).toHaveBeenCalledTimes(4)
+    expect(end).not.toHaveBeenCalled()
+
+    await bridge.close()
+    await bridge.close()
+    expect(end).toHaveBeenCalledOnce()
+    await expect(bridge.selectOutcome())
+      .rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_RUNTIME_CLOSED" })
+  })
+
+  it("evicts and closes an errored pool before lazily replacing it", async () => {
+    const handlers: Array<(error: Error) => void> = []
+    const firstEnd = vi.fn(async () => {})
+    const secondEnd = vi.fn(async () => {})
+    const firstPool = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+        .mockResolvedValueOnce({ rows: [goal] }),
+      end: firstEnd,
+      on: vi.fn((event: string, handler: (error: Error) => void) => {
+        if (event === "error") handlers.push(handler)
+      }),
+    }
+    const secondPool = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+        .mockResolvedValueOnce({ rows: [goal] }),
+      end: secondEnd,
+      on: vi.fn(),
+    }
+    const createPool = vi.fn()
+      .mockResolvedValueOnce(firstPool)
+      .mockResolvedValueOnce(secondPool)
+    const bridge = createHermesOutcomeQueueRuntime({
+      databaseUrl: "postgresql://not-used",
+      createPool,
+      acquire: vi.fn(async () => ({ outcome: queueItem, acquired: true })),
+    })
+
+    await bridge.selectOutcome()
+    handlers[0](new Error("idle client failed"))
+    await vi.waitFor(() => expect(firstEnd).toHaveBeenCalledOnce())
+    await bridge.selectOutcome()
+    expect(createPool).toHaveBeenCalledTimes(2)
+
+    await bridge.close()
+    expect(secondEnd).toHaveBeenCalledOnce()
   })
 })
