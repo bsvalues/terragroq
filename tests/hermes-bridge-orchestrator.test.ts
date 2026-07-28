@@ -638,7 +638,10 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       },
     }
     const refreshQueueOutcome = vi.fn(async () => refreshedOutcome)
-    const value = fixture(undefined, { refreshQueueOutcome })
+    const bindQueueWorkOrder = vi.fn(async () => {
+      throw new Error("terminal replay must not bind an active Work Order")
+    })
+    const value = fixture(undefined, { refreshQueueOutcome, bindQueueWorkOrder })
     const lease = value.state.acquireLease({
       idempotencyKey: "77:acquire:split-settlement",
       outcomeId: "77",
@@ -675,7 +678,81 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         runtimeEvidenceRef: `EV-HERMES-77-${lease.fencingToken}-1`,
       }),
     }))
-    expect(refreshQueueOutcome).toHaveBeenCalledWith(queuedOutcome)
+    expect(refreshQueueOutcome).toHaveBeenCalledWith(queuedOutcome, {
+      state: "COMPLETE",
+      evidence: {
+        prNumber: 500,
+        mergeSha: "b".repeat(40),
+        runtimeEvidenceRef: `EV-HERMES-77-${lease.fencingToken}-1`,
+      },
+    })
+    expect(bindQueueWorkOrder).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
+  })
+
+  it("replays a persisted terminal failure without rebinding its closed Work Order", async () => {
+    const queuedOutcome = {
+      id: 77,
+      userId: "owner-id",
+      ref: "GOAL-0077",
+      command: "Improve the Hermes page with bounded live bridge status.",
+      lane: "ui",
+      mode: "implement",
+      risk: "low",
+      authority: "A2_WRITE_OWN",
+      verdict: "requires_approval",
+      requiresApproval: true,
+      status: "classified",
+      queueBinding: {
+        userId: "owner-id",
+        outcomeKey: "outcome:77",
+        expectedVersion: 2,
+        executionBinding: "execution-77",
+        leaseToken: "lease-77",
+        fencingToken: 1,
+        acquisitionKey: "acquisition-77",
+      },
+    }
+    const refreshQueueOutcome = vi.fn(async () => queuedOutcome)
+    const bindQueueWorkOrder = vi.fn(async () => {
+      throw new Error("terminal replay must not bind an active Work Order")
+    })
+    const value = fixture(undefined, { refreshQueueOutcome, bindQueueWorkOrder })
+    const lease = value.state.acquireLease({
+      idempotencyKey: "77:acquire:terminal-split",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome: queuedOutcome },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "77:checkpoint:terminal-split",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toEqual({
+      result: "FAILED_TERMINAL",
+      outcomeId: "77",
+      nextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    expect(refreshQueueOutcome).toHaveBeenCalledWith(queuedOutcome, {
+      state: "FAILED_TERMINAL",
+      nextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    expect(value.markTerminal).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 77,
+      outcome: queuedOutcome,
+      result: "FAILED_TERMINAL",
+      nextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+    }))
+    expect(bindQueueWorkOrder).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"].lease.status).toBe("RELEASED")
     expect(value.client.connect).not.toHaveBeenCalled()
   })
 

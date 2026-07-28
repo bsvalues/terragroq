@@ -711,7 +711,21 @@ export function createHermesOrchestrator(options = {}) {
       }
     }
     if (current?.lease?.status === "RELEASED") return { result: "ALREADY_FINALIZED", outcomeId }
-    outcome = await refreshQueueOutcome(outcome)
+    const terminalReplay = current?.checkpoint?.state === "COMPLETE"
+      ? {
+          state: "COMPLETE",
+          evidence: {
+            prNumber: current.metadata.prNumber,
+            mergeSha: current.metadata.mergeSha,
+            runtimeEvidenceRef: current.metadata.runtimeEvidenceRef,
+          },
+        }
+      : current?.checkpoint?.state === "FAILED_TERMINAL"
+        ? { state: "FAILED_TERMINAL", nextState: current.checkpoint.detail }
+        : null
+    outcome = terminalReplay
+      ? await refreshQueueOutcome(outcome, terminalReplay)
+      : await refreshQueueOutcome(outcome)
 
     let lease
     if (current) {
@@ -741,7 +755,7 @@ export function createHermesOrchestrator(options = {}) {
     }
     try {
       const projection = await projectCurrentExecution(outcomeId)
-      await bindQueueWorkOrder(outcome, projection?.workOrderId)
+      if (!terminalReplay) await bindQueueWorkOrder(outcome, projection?.workOrderId)
       await projectCurrentLease(outcomeId)
     } catch (error) {
       state.abandonLease({

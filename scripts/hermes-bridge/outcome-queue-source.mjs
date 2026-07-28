@@ -548,7 +548,7 @@ WHERE q."userId" = $1
   AND q."fencingToken" = $6
   AND q."leaseExpiresAt" > $7::timestamptz
   AND ${LIVE_APPROVAL_PREDICATE}
-  AND ${LIVE_AUTHORITY_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$7::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   deferLease: `
@@ -565,7 +565,7 @@ WHERE q."userId" = $1
   AND q."fencingToken" = $6
   AND q."leaseExpiresAt" > $9::timestamptz
   AND ${LIVE_APPROVAL_PREDICATE}
-  AND ${LIVE_AUTHORITY_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   bindWorkOrder: `
@@ -582,7 +582,7 @@ WHERE q."userId" = $1
   AND q."fencingToken" = $6
   AND q."leaseExpiresAt" > $8::timestamptz
   AND ${LIVE_APPROVAL_PREDICATE}
-  AND ${LIVE_AUTHORITY_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$8::timestamptz")}
   AND projected_work.id = $7
   AND projected_work."userId" = q."userId"
   AND projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
@@ -614,7 +614,9 @@ WHERE q."userId" = $1
   AND approval.status = 'accepted'
   AND approval.authority = 'binding'
   AND approval.decision = 'APPROVE'
-  AND approval.context->>'outcomeId' = q."goalId"::text
+  AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$11::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   approve: `
@@ -1721,14 +1723,14 @@ function assertVersion(row, expectedVersion) {
 
 function safeMutationOutcome(row) {
   if (row == null) return null
-  const {
-    executionBinding: _executionBinding,
-    leaseToken: _leaseToken,
-    fencingToken: _fencingToken,
-    acquisitionKey: _acquisitionKey,
-    terminalKey: _terminalKey,
-    ...safe
-  } = row
+  const safe = { ...row }
+  for (const field of [
+    "executionBinding",
+    "leaseToken",
+    "fencingToken",
+    "acquisitionKey",
+    "terminalKey",
+  ]) delete safe[field]
   return safe
 }
 

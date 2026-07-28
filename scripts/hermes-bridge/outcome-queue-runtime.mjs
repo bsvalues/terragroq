@@ -122,6 +122,48 @@ function withPersistedBinding(outcome, item) {
   return { ...outcome, queueBinding: persistedBinding(item) }
 }
 
+function sameStrings(left, right) {
+  return Array.isArray(left)
+    && Array.isArray(right)
+    && JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
+}
+
+function isExactTerminalSettlement(item, binding, terminalReplay) {
+  if (!item
+    || item.userId !== binding.userId
+    || item.outcomeKey !== binding.outcomeKey
+    || Number(item.version) !== binding.expectedVersion + 1
+    || item.executionBinding !== binding.executionBinding
+    || Number(item.fencingToken) !== binding.fencingToken
+    || item.acquisitionKey !== binding.acquisitionKey
+    || item.leaseHolder != null
+    || item.leaseToken != null
+    || item.leaseExpiresAt != null) return false
+
+  if (terminalReplay?.state === "COMPLETE") {
+    const refs = completionEvidence(terminalReplay.evidence)
+    return refs.length > 0
+      && item.lifecycleState === "completed"
+      && item.lifecycleReason == null
+      && item.terminalResult === "COMPLETE"
+      && item.terminalEvidenceId == null
+      && item.terminalKey === `hermes:${binding.outcomeKey}:${binding.fencingToken}:${terminalReplay.evidence?.mergeSha}`
+      && sameStrings(item.terminalEvidenceRefs, refs)
+  }
+  if (terminalReplay?.state === "FAILED_TERMINAL") {
+    return typeof terminalReplay.nextState === "string"
+      && terminalReplay.nextState.length > 0
+      && item.lifecycleState === "blocked"
+      && item.lifecycleReason === terminalReplay.nextState
+      && item.terminalResult == null
+      && item.terminalEvidenceId == null
+      && sameStrings(item.terminalEvidenceRefs ?? [], [])
+      && item.terminalKey == null
+      && item.terminalAt == null
+  }
+  return false
+}
+
 export function createHermesOutcomeQueueRuntime(options = {}) {
   const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL
   const acquire = options.acquire ?? acquireNextEligibleOutcome
@@ -285,7 +327,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     })
   }
 
-  async function refreshOutcome(outcome) {
+  async function refreshOutcome(outcome, terminalReplay = null) {
     if (!outcome?.queueBinding) return outcome
     const binding = queueBinding(outcome)
     const refreshed = await acquire({
@@ -298,13 +340,21 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       leaseDurationMs: QUEUE_LEASE_DURATION_MS,
       now: now(),
     })
-    if (!refreshed?.outcome || !refreshed.acquired) {
-      wall(
-        refreshed?.reason ?? "Queue binding could not be refreshed",
-        "HERMES_OUTCOME_QUEUE_REFRESH_WALL",
-      )
+    if (refreshed?.outcome && refreshed.acquired) {
+      return withPersistedBinding(outcome, refreshed.outcome)
     }
-    return withPersistedBinding(outcome, refreshed.outcome)
+    const current = refreshed?.outcome ?? (await readQueue({
+      databaseUrl,
+      userId: binding.userId,
+    })).find((item) => item.outcomeKey === binding.outcomeKey)
+    if (isExactTerminalSettlement(current, binding, terminalReplay)) {
+      // Preserve the pre-settlement capability so the settlement API can verify its idempotent replay.
+      return outcome
+    }
+    wall(
+      refreshed?.reason ?? "Queue binding could not be refreshed",
+      "HERMES_OUTCOME_QUEUE_REFRESH_WALL",
+    )
   }
 
   async function resumeAfterOwnerDecision(outcome, proof) {

@@ -278,6 +278,128 @@ describe("Hermes durable outcome queue runtime", () => {
     }))
   })
 
+  it("accepts an exact completed queue settlement for terminal checkpoint replay", async () => {
+    const mergeSha = "a".repeat(40)
+    const completed = {
+      ...queueItem,
+      lifecycleState: "completed",
+      lifecycleReason: null,
+      version: 5,
+      leaseToken: null,
+      terminalResult: "COMPLETE",
+      terminalEvidenceId: null,
+      terminalEvidenceRefs: [
+        "EV-HERMES-77-3-14",
+        `merge:${mergeSha}`,
+        "pr:475",
+      ],
+      terminalKey: `hermes:${queueItem.outcomeKey}:3:${mergeSha}`,
+    }
+    const acquire = vi.fn(async () => ({
+      outcome: completed,
+      acquired: false,
+      replayed: true,
+      reason: "OUTCOME_ALREADY_COMPLETED",
+    }))
+    const bridge = runtime({ acquire })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.refreshOutcome(outcome, {
+      state: "COMPLETE",
+      evidence: {
+        prNumber: 475,
+        mergeSha,
+        runtimeEvidenceRef: "EV-HERMES-77-3-14",
+      },
+    })).resolves.toBe(outcome)
+  })
+
+  it("accepts an exact blocked queue settlement for terminal checkpoint replay", async () => {
+    const acquire = vi.fn(async () => ({
+      outcome: null,
+      acquired: false,
+      replayed: false,
+      reason: "ONLY_BLOCKED_OUTCOMES",
+    }))
+    const readQueue = vi.fn(async () => [{
+      ...queueItem,
+      lifecycleState: "blocked",
+      lifecycleReason: "VALIDATION_FAILED",
+      version: 5,
+      leaseToken: null,
+    }])
+    const bridge = runtime({ acquire, readQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.refreshOutcome(outcome, {
+      state: "FAILED_TERMINAL",
+      nextState: "VALIDATION_FAILED",
+    })).resolves.toBe(outcome)
+  })
+
+  it.each([
+    ["completed version", { version: 6 }],
+    ["completed fence", { fencingToken: 4 }],
+    ["completed acquisition", { acquisitionKey: "other-acquisition" }],
+    ["completed evidence", { terminalEvidenceRefs: ["pr:475"] }],
+  ])("rejects a mismatched %s during terminal checkpoint refresh", async (_label, mismatch) => {
+    const mergeSha = "a".repeat(40)
+    const acquire = vi.fn(async () => ({
+      outcome: {
+        ...queueItem,
+        lifecycleState: "completed",
+        lifecycleReason: null,
+        version: 5,
+        leaseToken: null,
+        terminalResult: "COMPLETE",
+        terminalEvidenceId: null,
+        terminalEvidenceRefs: [
+          "EV-HERMES-77-3-14",
+          `merge:${mergeSha}`,
+          "pr:475",
+        ],
+        terminalKey: `hermes:${queueItem.outcomeKey}:3:${mergeSha}`,
+        ...mismatch,
+      },
+      acquired: false,
+      replayed: true,
+      reason: "OUTCOME_ALREADY_COMPLETED",
+    }))
+    const bridge = runtime({ acquire })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.refreshOutcome(outcome, {
+      state: "COMPLETE",
+      evidence: {
+        prNumber: 475,
+        mergeSha,
+        runtimeEvidenceRef: "EV-HERMES-77-3-14",
+      },
+    })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REFRESH_WALL" })
+  })
+
+  it("rejects a blocked settlement with a different terminal reason", async () => {
+    const bridge = runtime({
+      acquire: vi.fn(async () => ({
+        outcome: null,
+        acquired: false,
+        reason: "ONLY_BLOCKED_OUTCOMES",
+      })),
+      readQueue: vi.fn(async () => [{
+        ...queueItem,
+        lifecycleState: "blocked",
+        lifecycleReason: "REVIEW_FAILED",
+        version: 5,
+      }]),
+    })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.refreshOutcome(outcome, {
+      state: "FAILED_TERMINAL",
+      nextState: "VALIDATION_FAILED",
+    })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REFRESH_WALL" })
+  })
+
   it("reactivates an owner-blocked queue item under the accepted exact decision", async () => {
     const resumeQueue = vi.fn(async () => ({
       ...queueItem,

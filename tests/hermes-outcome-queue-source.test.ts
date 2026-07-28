@@ -760,6 +760,10 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.renewLease).not.toContain(`"version" = q."version" + 1`)
     expect(OUTCOME_QUEUE_SQL.renewLease).toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.renewLease).toContain(`live_grant."status" = 'active'`)
+    expect(OUTCOME_QUEUE_SQL.renewLease)
+      .toContain(`live_grant."expiresAt" > $7::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.renewLease)
+      .not.toContain(`live_grant."expiresAt" > $1::timestamptz`)
   })
 
   it("defers the exact live queue fence until the provider retry time", async () => {
@@ -797,6 +801,10 @@ describe("transactional durable outcome queue source", () => {
       now,
     ])
     expect(deferOutcomeLeaseCompatibility).toBe(deferOutcomeQueueLease)
+    expect(OUTCOME_QUEUE_SQL.deferLease)
+      .toContain(`live_grant."expiresAt" > $9::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.deferLease)
+      .not.toContain(`live_grant."expiresAt" > $1::timestamptz`)
   })
 
   it("binds the exact active queue fence to its projected Hermes Work Order", async () => {
@@ -824,6 +832,10 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`projected_work.goal = q."goalRef"`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`live_grant."status" = 'active'`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`live_grant."expiresAt" > $8::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .not.toContain(`live_grant."expiresAt" > $1::timestamptz`)
   })
 
   it("resumes a blocked queue item only through its exact accepted owner decision", async () => {
@@ -865,7 +877,16 @@ describe("transactional durable outcome queue source", () => {
       "2026-07-28T12:50:00.000Z",
       now,
     ])
-    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision).toContain(`approval.context->>'outcomeId' = q."goalId"::text`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`(approval.context::jsonb)->>'outcomeId' = q."goalId"::text`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`live_approval."status" = 'accepted'`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`live_grant."status" = 'active'`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`live_grant."expiresAt" > $11::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .not.toContain(`live_grant."expiresAt" > $1::timestamptz`)
   })
 
   it("keeps GOAL-0001 through GOAL-0005 user-scoped and history-only", async () => {
