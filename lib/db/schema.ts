@@ -10,6 +10,7 @@ import {
   jsonb,
   vector,
   index,
+  unique,
   uniqueIndex,
 } from "drizzle-orm/pg-core"
 
@@ -372,7 +373,7 @@ export const outcomeQueueAcquisitionReceipt = pgTable(
     updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("outcome_queue_acquisition_receipt_user_key_idx").on(
+    unique("outcome_queue_acquisition_receipt_user_key_unique").on(
       table.userId,
       table.acquisitionKey,
     ),
@@ -405,7 +406,7 @@ export const outcomeQueueMutationReceipt = pgTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("outcome_queue_mutation_receipt_user_key_idx").on(
+    unique("outcome_queue_mutation_receipt_user_key_unique").on(
       table.userId,
       table.idempotencyKey,
     ),
@@ -413,6 +414,132 @@ export const outcomeQueueMutationReceipt = pgTable(
       table.userId,
       table.outcomeKey,
       table.createdAt,
+    ),
+  ],
+)
+
+// Authenticated ordinary-language intake is exactly-once by a caller-stable
+// key. The receipt binds the original request to one goal and one queue item.
+export const goalOutcomeIntakeReceipt = pgTable(
+  "goal_outcome_intake_receipt",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    idempotencyKey: text("idempotencyKey").notNull(),
+    requestHash: text("requestHash").notNull(),
+    goalId: integer("goalId")
+      .notNull()
+      .references(() => goal.id, { onDelete: "restrict" }),
+    outcomeKey: text("outcomeKey").notNull(),
+    resultDigest: text("resultDigest").notNull(),
+    replayCount: integer("replayCount").default(0).notNull(),
+    firstSubmittedAt: timestamp("firstSubmittedAt", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lastReplayedAt: timestamp("lastReplayedAt", { withTimezone: true }),
+  },
+  (table) => [
+    unique("goal_outcome_intake_receipt_user_key_unique").on(
+      table.userId,
+      table.idempotencyKey,
+    ),
+    unique("goal_outcome_intake_receipt_user_goal_unique").on(
+      table.userId,
+      table.goalId,
+    ),
+    unique("goal_outcome_intake_receipt_user_outcome_unique").on(
+      table.userId,
+      table.outcomeKey,
+    ),
+    check(
+      "goal_outcome_intake_receipt_replay_count_check",
+      sql`${table.replayCount} >= 0`,
+    ),
+  ],
+)
+
+// Sanitized append-only acquisition proof. Raw lease tokens, execution
+// bindings, and acquisition keys never enter this verifier-facing projection.
+export const outcomeQueueAcquisitionAttempt = pgTable(
+  "outcome_queue_acquisition_attempt",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    campaignWindowId: text("campaignWindowId").notNull(),
+    processIdentity: text("processIdentity").notNull(),
+    leaseHolder: text("leaseHolder").notNull(),
+    acquisitionKeyDigest: text("acquisitionKeyDigest").notNull(),
+    leaseIdentityDigest: text("leaseIdentityDigest").notNull(),
+    checkpointDigest: text("checkpointDigest").notNull(),
+    checkpointOutcomeId: text("checkpointOutcomeId").notNull(),
+    checkpointSequence: integer("checkpointSequence").notNull(),
+    checkpointState: text("checkpointState").notNull(),
+    checkpointHeadSha: text("checkpointHeadSha"),
+    checkpointMergeSha: text("checkpointMergeSha"),
+    checkpointPrNumber: integer("checkpointPrNumber"),
+    outcomeKey: text("outcomeKey"),
+    fencingToken: integer("fencingToken"),
+    leaseExpiresAt: timestamp("leaseExpiresAt", { withTimezone: true }),
+    activeWorkOrderId: integer("activeWorkOrderId"),
+    disposition: text("disposition").notNull(),
+    reason: text("reason"),
+    attemptedAt: timestamp("attemptedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("outcome_queue_acquisition_attempt_campaign_idx").on(
+      table.userId,
+      table.campaignWindowId,
+      table.attemptedAt,
+    ),
+    index("outcome_queue_acquisition_attempt_identity_idx").on(
+      table.userId,
+      table.acquisitionKeyDigest,
+      table.attemptedAt,
+    ),
+    check(
+      "outcome_queue_acquisition_attempt_fence_check",
+      sql`${table.fencingToken} IS NULL OR ${table.fencingToken} > 0`,
+    ),
+    check(
+      "outcome_queue_acquisition_attempt_checkpoint_check",
+      sql`${table.checkpointSequence} >= 0
+        AND (${table.checkpointPrNumber} IS NULL OR ${table.checkpointPrNumber} > 0)`,
+    ),
+  ],
+)
+
+// Append-only, independently queryable proof of committed and replayed queue
+// mutations. The result itself remains in the canonical mutation receipt.
+export const outcomeQueueMutationAttempt = pgTable(
+  "outcome_queue_mutation_attempt",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    idempotencyKey: text("idempotencyKey").notNull(),
+    requestHash: text("requestHash").notNull(),
+    resultDigest: text("resultDigest").notNull(),
+    attemptOrdinal: integer("attemptOrdinal").notNull(),
+    disposition: text("disposition").notNull(),
+    attemptedAt: timestamp("attemptedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("outcome_queue_mutation_attempt_user_ordinal_unique").on(
+      table.userId,
+      table.idempotencyKey,
+      table.attemptOrdinal,
+    ),
+    index("outcome_queue_mutation_attempt_request_idx").on(
+      table.userId,
+      table.requestHash,
+      table.attemptedAt,
+    ),
+    check(
+      "outcome_queue_mutation_attempt_ordinal_check",
+      sql`${table.attemptOrdinal} > 0`,
+    ),
+    check(
+      "outcome_queue_mutation_attempt_disposition_check",
+      sql`${table.disposition} IN ('COMMITTED', 'REPLAY')`,
     ),
   ],
 )
@@ -737,6 +864,10 @@ export type NewOutcomeQueueItem = typeof outcomeQueueItem.$inferInsert
 export type OutcomeQueueAcquisitionReceipt =
   typeof outcomeQueueAcquisitionReceipt.$inferSelect
 export type OutcomeQueueMutationReceipt = typeof outcomeQueueMutationReceipt.$inferSelect
+export type GoalOutcomeIntakeReceipt = typeof goalOutcomeIntakeReceipt.$inferSelect
+export type OutcomeQueueAcquisitionAttempt =
+  typeof outcomeQueueAcquisitionAttempt.$inferSelect
+export type OutcomeQueueMutationAttempt = typeof outcomeQueueMutationAttempt.$inferSelect
 export type LoopRun = typeof loopRun.$inferSelect
 export type EvidenceRecord = typeof evidenceRecord.$inferSelect
 export type GovernanceEvent = typeof governanceEvent.$inferSelect

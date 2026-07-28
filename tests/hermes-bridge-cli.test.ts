@@ -1,5 +1,7 @@
 import fs from "node:fs"
 import { createHash } from "node:crypto"
+import { spawnSync } from "node:child_process"
+import os from "node:os"
 import path from "node:path"
 import { describe, expect, it, vi } from "vitest"
 
@@ -15,8 +17,42 @@ import {
   runCliEntrypoint,
   sanitizeBridgeMessage,
 } from "../scripts/hermes-bridge/cli.mjs"
+import { initializeHermesState } from "../scripts/hermes-bridge/state-store.mjs"
 
 describe("Hermes bridge CLI", () => {
+  it("runs the real read-only status command without supervisor proof context", () => {
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-cli-status-"))
+    const statePath = path.join(runtimeRoot, "state", "state.json")
+    initializeHermesState(statePath, { now: () => new Date("2026-07-28T12:00:00.000Z") })
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/hermes-bridge/cli.mjs", "status"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            WILLIAMOS_HERMES_RUNTIME_ROOT: runtimeRoot,
+            HERMES_CAMPAIGN_WINDOW_ID: "",
+            HERMES_PROCESS_IDENTITY: "",
+          },
+        },
+      )
+
+      expect(result.status).toBe(0)
+      expect(result.stderr).toBe("")
+      expect(JSON.parse(result.stdout.trim())).toMatchObject({
+        schemaVersion: 1,
+        storeId: "hermes-bridge",
+        revision: 0,
+      })
+    } finally {
+      fs.rmSync(runtimeRoot, { recursive: true, force: true })
+    }
+  })
+
   it("captures the production agreement through sanitized runtime-owned paths", async () => {
     const producer = vi.fn(async () => ({
       schemaVersion: 1,

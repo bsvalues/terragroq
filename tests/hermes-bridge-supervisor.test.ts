@@ -73,6 +73,7 @@ describe("Hermes interactive-user supervisor", () => {
     expect(fs.readFileSync(markerPath, "utf8")).toBe(`${repoRoot}|${runtimeRoot}`)
     expect(JSON.parse(fs.readFileSync(inFlightPath, "utf8"))).toMatchObject({
       schemaVersion: 2,
+      campaignWindowId: expect.stringMatching(/^campaign:[0-9a-f]{32}$/),
       cycle: {
         sequence: 1,
         status: "IN_FLIGHT",
@@ -108,7 +109,10 @@ describe("Hermes interactive-user supervisor", () => {
     fs.mkdirSync(cliDirectory, { recursive: true })
     fs.writeFileSync(activationPath, "enabled\n")
     fs.writeFileSync(path.join(workspace, ".env.local"), "")
-    fs.writeFileSync(path.join(cliDirectory, "cli.mjs"), 'process.stdout.write("{\\"result\\":\\"PASS\\"}\\n")\n')
+    fs.writeFileSync(
+      path.join(cliDirectory, "cli.mjs"),
+      'process.stdout.write(JSON.stringify({result:"PASS",campaign:process.env.HERMES_CAMPAIGN_WINDOW_ID,processIdentity:process.env.HERMES_PROCESS_IDENTITY})+"\\n")\n',
+    )
 
     const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
     const command = [
@@ -127,9 +131,67 @@ describe("Hermes interactive-user supervisor", () => {
     expect(result.error).toBeUndefined()
     const cycleLog = fs.readdirSync(path.join(runtimeRoot, "logs")).find((name) => /^cycle-\d{8}\.log$/.test(name))
     expect(cycleLog).toBeDefined()
-    expect(fs.readFileSync(path.join(runtimeRoot, "logs", cycleLog!), "utf8")).toContain('{"result":"PASS"}')
+    const cycleEvidence = JSON.parse(
+      fs.readFileSync(path.join(runtimeRoot, "logs", cycleLog!), "utf8").trim(),
+    )
+    expect(cycleEvidence).toMatchObject({
+      result: "PASS",
+      campaign: expect.stringMatching(/^campaign:[0-9a-f]{32}$/),
+      processIdentity: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    })
+    expect(fs.readFileSync(
+      path.join(runtimeRoot, "state", "campaign-window"),
+      "utf8",
+    )).toBe(cycleEvidence.campaign)
+    fs.writeFileSync(
+      path.join(runtimeRoot, "state", "campaign-window"),
+      `${cycleEvidence.campaign}\r\n`,
+    )
+    fs.writeFileSync(activationPath, "enabled\n")
+    const second = spawnSync(
+      "pwsh",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+      { cwd: launchRoot, encoding: "utf8", timeout: 15_000 },
+    )
+    expect(second.status, second.stderr).toBe(0)
+    const cycles = fs.readFileSync(
+      path.join(runtimeRoot, "logs", cycleLog!),
+      "utf8",
+    ).trim().split(/\r?\n/).map((line) => JSON.parse(line))
+    expect(cycles).toHaveLength(2)
+    expect(cycles[1].campaign).toBe(cycles[0].campaign)
+    expect(cycles[1].processIdentity).not.toBe(cycles[0].processIdentity)
     expect(fs.existsSync(path.join(runtimeRoot, "state", "supervisor.json"))).toBe(false)
   })
+
+  it.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1")(
+    "fails closed on a malformed persisted campaign window",
+    () => {
+      const { root, script } = isolatedSupervisor()
+      const workspace = path.join(root, "workspace")
+      const runtimeRoot = path.join(root, "runtime")
+      const activationPath = path.join(runtimeRoot, "control", "activation")
+      const campaignPath = path.join(runtimeRoot, "state", "campaign-window")
+      const cliPath = path.join(workspace, "scripts", "hermes-bridge", "cli.mjs")
+      fs.mkdirSync(path.dirname(activationPath), { recursive: true })
+      fs.mkdirSync(path.dirname(campaignPath), { recursive: true })
+      fs.mkdirSync(path.dirname(cliPath), { recursive: true })
+      fs.writeFileSync(activationPath, "enabled\n")
+      fs.writeFileSync(campaignPath, `campaign:${"a".repeat(16)} ${"b".repeat(16)}\n`)
+      fs.writeFileSync(cliPath, 'process.stdout.write("should-not-run")')
+      fs.writeFileSync(path.join(workspace, ".env.local"), "")
+      const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
+      const result = spawnSync(
+        "pwsh",
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+          `& ${quote(script)} -Workspace ${quote(workspace)} -RuntimeRoot ${quote(runtimeRoot)} -RunOnce`],
+        { encoding: "utf8", timeout: 15_000 },
+      )
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain("HERMES_CAMPAIGN_WINDOW_INVALID")
+      expect(result.stdout).not.toContain("should-not-run")
+    },
+  )
 
   it.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1")(
     "keeps a long owned cycle fresh with independent heartbeat pulses",
@@ -245,7 +307,14 @@ describe("Hermes interactive-user supervisor", () => {
 
   it("passes the selected runtime root through the resident cycle path", () => {
     const supervisor = fs.readFileSync(supervisorScript, "utf8")
-    expect(supervisor).toContain("$env:WILLIAMOS_HERMES_RUNTIME_ROOT = $OwnedRuntimeRoot")
+    expect(supervisor).toContain('$startInfo.Environment["WILLIAMOS_HERMES_RUNTIME_ROOT"]')
+    expect(supervisor).toContain('$startInfo.Environment["HERMES_CAMPAIGN_WINDOW_ID"]')
+    expect(supervisor).toContain('$startInfo.Environment["HERMES_PROCESS_IDENTITY"]')
+    expect(supervisor).toContain('Join-Path $stateDir "campaign-window"')
+    expect(supervisor).toContain("::ReadAllText($Path, [Text.UTF8Encoding]::new($false)).Trim()")
+    expect(supervisor).toContain("'\\Acampaign:[0-9a-f]{32}\\z'")
+    expect(supervisor).toContain("[IO.File]::Move($temporary, $Path)")
+    expect(supervisor).toContain("HERMES_CAMPAIGN_WINDOW_INVALID")
     expect(supervisor).toContain("$runtimeRootPath = [IO.Path]::GetFullPath($RuntimeRoot)")
     expect(supervisor).toContain('$startInfo.ArgumentList.Add($OwnedCliPath)')
     expect(supervisor).toContain('$startInfo.ArgumentList.Add("cycle")')
@@ -274,5 +343,12 @@ describe("Hermes interactive-user supervisor", () => {
     expect(source).not.toContain("Start-Job")
     expect(source).not.toContain("run-cycle.ps1")
     expect(source).not.toContain("& pwsh.exe")
+    const cliSource = fs.readFileSync(
+      path.join(repoRoot, "scripts", "hermes-bridge", "cli.mjs"),
+      "utf8",
+    )
+    expect(cliSource).toContain(
+      "const queueRuntime = options.queueRuntime ?? createHermesOutcomeQueueRuntime()",
+    )
   })
 })

@@ -73,6 +73,39 @@ const toneText: Record<string, string> = {
   danger: "text-destructive",
 }
 
+const GOAL_SUBMISSION_STORAGE_KEY = "williamos:goal-console:pending-submission"
+
+function storedGoalSubmission(command: string) {
+  try {
+    const stored = sessionStorage.getItem(GOAL_SUBMISSION_STORAGE_KEY)
+    if (!stored) return null
+    const parsed = JSON.parse(stored) as { command?: unknown; idempotencyKey?: unknown }
+    return parsed.command === command
+      && typeof parsed.idempotencyKey === "string"
+      && parsed.idempotencyKey.length > 0
+      ? { command, idempotencyKey: parsed.idempotencyKey }
+      : null
+  } catch {
+    return null
+  }
+}
+
+function rememberGoalSubmission(submission: { command: string; idempotencyKey: string }) {
+  try {
+    sessionStorage.setItem(GOAL_SUBMISSION_STORAGE_KEY, JSON.stringify(submission))
+  } catch {
+    // The in-memory key still fences retries while this view remains mounted.
+  }
+}
+
+function clearGoalSubmission() {
+  try {
+    sessionStorage.removeItem(GOAL_SUBMISSION_STORAGE_KEY)
+  } catch {
+    // A stale matching key is safe: the server returns the original binding.
+  }
+}
+
 const GOAL_TIMELINE_REFRESH_TIMEOUT_MS = 15_000
 const AUTHORITY_REQUEST_REFRESH_TIMEOUT_MS = 15_000
 const AUTHORITY_REQUEST_REFRESH_INTERVAL_MS = 60_000
@@ -125,6 +158,7 @@ export function GoalConsoleView({
   )
   const goalTimelineRefreshSequences = useRef(new Map<number, number>())
   const authorityRequestRefreshSequence = useRef(0)
+  const pendingGoalSubmission = useRef<{ command: string; idempotencyKey: string } | null>(null)
   const goalTimelineLatestObservations = useRef(
     new Map(timelines.map((timeline) => [timeline.goal.id, observationTime(timeline)])),
   )
@@ -366,13 +400,24 @@ export function GoalConsoleView({
   function handleSubmit() {
     const text = command.trim()
     if (!text) return
+    const priorSubmission = pendingGoalSubmission.current
+    const submission = priorSubmission?.command === text
+      ? priorSubmission
+      : storedGoalSubmission(text)
+        ?? { command: text, idempotencyKey: crypto.randomUUID() }
+    pendingGoalSubmission.current = submission
+    rememberGoalSubmission(submission)
     startTransition(async () => {
       try {
-        const g = await submitGoal(text)
-        setGoals((prev) => [g, ...prev])
+        const g = await submitGoal(text, submission.idempotencyKey)
+        setGoals((prev) => (
+          prev.some((existing) => existing.id === g.id) ? prev : [g, ...prev]
+        ))
         setLatest(g)
         setLoopReport(null)
         setLoopGoalId(null)
+        pendingGoalSubmission.current = null
+        clearGoalSubmission()
         setCommand("")
         toast.success(`${g.ref} classified: ${g.lane}/${g.mode}`)
         try {

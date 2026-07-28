@@ -150,24 +150,311 @@ const ELIGIBILITY_PREDICATE = `
 `
 
 export const OUTCOME_QUEUE_SQL = Object.freeze({
+  ensureOutcomeQueueItemTable: `
+CREATE TABLE IF NOT EXISTS "outcome_queue_item" (
+  "id" serial PRIMARY KEY,
+  "userId" text NOT NULL,
+  "outcomeKey" text NOT NULL,
+  "goalId" integer REFERENCES "goal"("id") ON DELETE SET NULL,
+  "goalRef" text,
+  "title" text NOT NULL,
+  "objective" text,
+  "queueOrder" integer NOT NULL DEFAULT 0,
+  "dependencyKeys" text[] NOT NULL DEFAULT ARRAY[]::text[],
+  "riskClass" text NOT NULL DEFAULT 'R1',
+  "approvalState" text NOT NULL DEFAULT 'unapproved',
+  "approvedBy" text,
+  "approvedAt" timestamptz,
+  "approvalDecisionId" integer REFERENCES "decision"("id") ON DELETE SET NULL,
+  "authorityState" text NOT NULL DEFAULT 'unverified',
+  "authorityLevel" text NOT NULL DEFAULT 'A0_READ_ONLY',
+  "authorityGrantRef" text,
+  "authoritySubject" text NOT NULL DEFAULT 'operator',
+  "authorityAction" text NOT NULL DEFAULT 'outcome:execute',
+  "lifecycleState" text NOT NULL DEFAULT 'suggested',
+  "lifecycleReason" text,
+  "activeWorkOrderId" integer REFERENCES "work_order"("id") ON DELETE SET NULL,
+  "executionBinding" text,
+  "leaseHolder" text,
+  "leaseToken" text,
+  "leaseExpiresAt" timestamptz,
+  "fencingToken" integer NOT NULL DEFAULT 0,
+  "version" integer NOT NULL DEFAULT 0,
+  "acquisitionKey" text,
+  "terminalResult" text,
+  "terminalEvidenceId" integer,
+  "terminalEvidenceRefs" text[] NOT NULL DEFAULT ARRAY[]::text[],
+  "terminalKey" text,
+  "supersedesOutcomeKey" text,
+  "supersededByOutcomeKey" text,
+  "suggestedAt" timestamptz NOT NULL DEFAULT NOW(),
+  "activatedAt" timestamptz,
+  "terminalAt" timestamptz,
+  "createdAt" timestamptz NOT NULL DEFAULT NOW(),
+  "updatedAt" timestamptz NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "outcome_queue_item_user_key_idx"
+  ON "outcome_queue_item" ("userId", "outcomeKey");
+CREATE UNIQUE INDEX IF NOT EXISTS "outcome_queue_item_user_acquisition_idx"
+  ON "outcome_queue_item" ("userId", "acquisitionKey");
+CREATE UNIQUE INDEX IF NOT EXISTS "outcome_queue_item_user_terminal_idx"
+  ON "outcome_queue_item" ("userId", "terminalKey");
+CREATE INDEX IF NOT EXISTS "outcome_queue_item_selection_idx"
+  ON "outcome_queue_item" (
+    "userId", "lifecycleState", "approvalState", "authorityState", "queueOrder"
+  );
+CREATE INDEX IF NOT EXISTS "outcome_queue_item_lease_idx"
+  ON "outcome_queue_item" ("userId", "lifecycleState", "leaseExpiresAt");
+CREATE INDEX IF NOT EXISTS "outcome_queue_item_goal_idx"
+  ON "outcome_queue_item" ("goalId");
+CREATE INDEX IF NOT EXISTS "outcome_queue_item_approval_decision_idx"
+  ON "outcome_queue_item" ("approvalDecisionId");
+CREATE INDEX IF NOT EXISTS "outcome_queue_item_work_order_idx"
+  ON "outcome_queue_item" ("activeWorkOrderId")
+`,
+  ensureMutationReceiptTable: `
+CREATE TABLE IF NOT EXISTS "outcome_queue_mutation_receipt" (
+  "id" serial PRIMARY KEY,
+  "userId" text NOT NULL,
+  "idempotencyKey" text NOT NULL,
+  "operation" text NOT NULL,
+  "outcomeKey" text,
+  "requestHash" text NOT NULL,
+  "requestBinding" jsonb NOT NULL,
+  "resultBinding" jsonb NOT NULL,
+  "createdAt" timestamptz NOT NULL DEFAULT NOW(),
+  CONSTRAINT "outcome_queue_mutation_receipt_user_key_unique"
+    UNIQUE ("userId", "idempotencyKey")
+)
+`,
+  ensureMutationReceiptOutcomeIndex: `
+CREATE INDEX IF NOT EXISTS "outcome_queue_mutation_receipt_user_outcome_idx"
+  ON "outcome_queue_mutation_receipt" ("userId", "outcomeKey", "createdAt")
+`,
   ensureAcquisitionReceiptTable: `
 CREATE TABLE IF NOT EXISTS "outcome_queue_acquisition_receipt" (
   "id" serial PRIMARY KEY,
   "userId" text NOT NULL,
   "acquisitionKey" text NOT NULL,
   "outcomeKey" text NOT NULL,
-  "firstFencingToken" integer NOT NULL CHECK ("firstFencingToken" > 0),
-  "latestFencingToken" integer NOT NULL
-    CHECK ("latestFencingToken" >= "firstFencingToken"),
+  "firstFencingToken" integer NOT NULL,
+  "latestFencingToken" integer NOT NULL,
   "createdAt" timestamptz NOT NULL DEFAULT NOW(),
   "updatedAt" timestamptz NOT NULL DEFAULT NOW(),
   CONSTRAINT "outcome_queue_acquisition_receipt_user_key_unique"
-    UNIQUE ("userId", "acquisitionKey")
+    UNIQUE ("userId", "acquisitionKey"),
+  CONSTRAINT "outcome_queue_acquisition_receipt_fence_check"
+    CHECK (
+      "firstFencingToken" > 0
+      AND "latestFencingToken" >= "firstFencingToken"
+    )
 )
 `,
   ensureAcquisitionReceiptOutcomeIndex: `
 CREATE INDEX IF NOT EXISTS "outcome_queue_acquisition_receipt_user_outcome_idx"
   ON "outcome_queue_acquisition_receipt" ("userId", "outcomeKey")
+`,
+  ensureGoalOutcomeIntakeReceiptTable: `
+CREATE TABLE IF NOT EXISTS "goal_outcome_intake_receipt" (
+  "id" serial PRIMARY KEY,
+  "userId" text NOT NULL,
+  "idempotencyKey" text NOT NULL,
+  "requestHash" text NOT NULL,
+  "goalId" integer NOT NULL REFERENCES "goal"("id") ON DELETE RESTRICT,
+  "outcomeKey" text NOT NULL,
+  "resultDigest" text NOT NULL,
+  "replayCount" integer NOT NULL DEFAULT 0,
+  "firstSubmittedAt" timestamptz NOT NULL DEFAULT NOW(),
+  "lastReplayedAt" timestamptz,
+  CONSTRAINT "goal_outcome_intake_receipt_user_key_unique"
+    UNIQUE ("userId", "idempotencyKey"),
+  CONSTRAINT "goal_outcome_intake_receipt_user_goal_unique"
+    UNIQUE ("userId", "goalId"),
+  CONSTRAINT "goal_outcome_intake_receipt_user_outcome_unique"
+    UNIQUE ("userId", "outcomeKey"),
+  CONSTRAINT "goal_outcome_intake_receipt_replay_count_check"
+    CHECK ("replayCount" >= 0)
+)
+`,
+  ensureAcquisitionAttemptTable: `
+CREATE TABLE IF NOT EXISTS "outcome_queue_acquisition_attempt" (
+  "id" serial PRIMARY KEY,
+  "userId" text NOT NULL,
+  "campaignWindowId" text NOT NULL,
+  "processIdentity" text NOT NULL,
+  "leaseHolder" text NOT NULL,
+  "acquisitionKeyDigest" text NOT NULL,
+  "leaseIdentityDigest" text NOT NULL,
+  "checkpointDigest" text NOT NULL,
+  "checkpointOutcomeId" text NOT NULL,
+  "checkpointSequence" integer NOT NULL,
+  "checkpointState" text NOT NULL,
+  "checkpointHeadSha" text,
+  "checkpointMergeSha" text,
+  "checkpointPrNumber" integer,
+  "outcomeKey" text,
+  "fencingToken" integer,
+  "leaseExpiresAt" timestamptz,
+  "activeWorkOrderId" integer,
+  "disposition" text NOT NULL,
+  "reason" text,
+  "attemptedAt" timestamptz NOT NULL DEFAULT NOW(),
+  CONSTRAINT "outcome_queue_acquisition_attempt_fence_check"
+    CHECK ("fencingToken" IS NULL OR "fencingToken" > 0),
+  CONSTRAINT "outcome_queue_acquisition_attempt_checkpoint_check"
+    CHECK (
+      "checkpointSequence" >= 0
+      AND ("checkpointPrNumber" IS NULL OR "checkpointPrNumber" > 0)
+    )
+)
+`,
+  ensureMutationAttemptTable: `
+CREATE TABLE IF NOT EXISTS "outcome_queue_mutation_attempt" (
+  "id" serial PRIMARY KEY,
+  "userId" text NOT NULL,
+  "idempotencyKey" text NOT NULL,
+  "requestHash" text NOT NULL,
+  "resultDigest" text NOT NULL,
+  "attemptOrdinal" integer NOT NULL,
+  "disposition" text NOT NULL,
+  "attemptedAt" timestamptz NOT NULL DEFAULT NOW(),
+  CONSTRAINT "outcome_queue_mutation_attempt_user_ordinal_unique"
+    UNIQUE ("userId", "idempotencyKey", "attemptOrdinal"),
+  CONSTRAINT "outcome_queue_mutation_attempt_ordinal_check"
+    CHECK ("attemptOrdinal" > 0),
+  CONSTRAINT "outcome_queue_mutation_attempt_disposition_check"
+    CHECK ("disposition" IN ('COMMITTED', 'REPLAY'))
+)
+`,
+  ensureAcquisitionAttemptIndexes: `
+CREATE INDEX IF NOT EXISTS "outcome_queue_acquisition_attempt_campaign_idx"
+  ON "outcome_queue_acquisition_attempt" ("userId", "campaignWindowId", "attemptedAt");
+CREATE INDEX IF NOT EXISTS "outcome_queue_acquisition_attempt_identity_idx"
+  ON "outcome_queue_acquisition_attempt" ("userId", "acquisitionKeyDigest", "attemptedAt")
+`,
+  ensureMutationAttemptRequestIndex: `
+CREATE INDEX IF NOT EXISTS "outcome_queue_mutation_attempt_request_idx"
+  ON "outcome_queue_mutation_attempt" ("userId", "requestHash", "attemptedAt")
+`,
+  readReceiptColumns: `
+SELECT table_class.relname AS "tableName",
+       attribute.attname AS "columnName",
+       format_type(attribute.atttypid, attribute.atttypmod) AS "dataType",
+       attribute.attnotnull AS "notNull",
+       pg_get_expr(column_default.adbin, column_default.adrelid, true) AS "defaultExpression"
+FROM pg_class AS table_class
+JOIN pg_attribute AS attribute
+  ON attribute.attrelid = table_class.oid
+LEFT JOIN pg_attrdef AS column_default
+  ON column_default.adrelid = attribute.attrelid
+  AND column_default.adnum = attribute.attnum
+WHERE table_class.oid IN (
+    '"outcome_queue_mutation_receipt"'::regclass,
+    '"outcome_queue_acquisition_receipt"'::regclass,
+    '"goal_outcome_intake_receipt"'::regclass,
+    '"outcome_queue_acquisition_attempt"'::regclass,
+    '"outcome_queue_mutation_attempt"'::regclass
+  )
+  AND attribute.attnum > 0
+  AND NOT attribute.attisdropped
+ORDER BY table_class.relname ASC, attribute.attnum ASC
+`,
+  readReceiptConstraints: `
+SELECT table_class.relname AS "tableName",
+       constraint_record.conname AS "constraintName",
+       constraint_record.contype AS "constraintType",
+       constraint_record.convalidated AS "validated",
+       pg_get_constraintdef(constraint_record.oid, true) AS "definition"
+FROM pg_constraint AS constraint_record
+JOIN pg_class AS table_class
+  ON table_class.oid = constraint_record.conrelid
+WHERE constraint_record.conrelid IN (
+    '"outcome_queue_mutation_receipt"'::regclass,
+    '"outcome_queue_acquisition_receipt"'::regclass,
+    '"goal_outcome_intake_receipt"'::regclass,
+    '"outcome_queue_acquisition_attempt"'::regclass,
+    '"outcome_queue_mutation_attempt"'::regclass
+  )
+ORDER BY table_class.relname ASC, constraint_record.conname ASC
+`,
+  readLegacyMutationReceiptUniqueIndex: `
+SELECT table_class.relname AS "tableName",
+       index_class.relname AS "indexName",
+       index_record.indisunique AS "unique",
+       index_record.indisvalid AS "valid",
+       index_record.indisready AS "ready",
+       index_record.indisprimary AS "primary",
+       index_record.indisexclusion AS "exclusion",
+       index_record.indimmediate AS "immediate",
+       index_record.indnatts = index_record.indnkeyatts AS "noIncludedColumns",
+       index_record.indexprs IS NULL AS "noExpressions",
+       access_method.amname AS "accessMethod",
+       ARRAY(
+         SELECT pg_get_indexdef(index_record.indexrelid, ordinal, true)
+         FROM generate_series(1, index_record.indnkeyatts) AS ordinal
+         ORDER BY ordinal
+       ) AS "keyColumns",
+       pg_get_expr(index_record.indpred, index_record.indrelid, true) AS "predicate",
+       EXISTS (
+         SELECT 1
+         FROM pg_constraint AS index_constraint
+         WHERE index_constraint.conindid = index_record.indexrelid
+       ) AS "constraintBacked"
+FROM pg_index AS index_record
+JOIN pg_class AS table_class
+  ON table_class.oid = index_record.indrelid
+JOIN pg_class AS index_class
+  ON index_class.oid = index_record.indexrelid
+JOIN pg_am AS access_method
+  ON access_method.oid = index_class.relam
+WHERE table_class.oid = '"outcome_queue_mutation_receipt"'::regclass
+  AND index_class.relname = 'outcome_queue_mutation_receipt_user_key_idx'
+ORDER BY index_class.relname ASC
+`,
+  migrateLegacyMutationReceiptUniqueIndex: `
+ALTER TABLE "outcome_queue_mutation_receipt"
+  ADD CONSTRAINT "outcome_queue_mutation_receipt_user_key_unique"
+  UNIQUE USING INDEX "outcome_queue_mutation_receipt_user_key_idx"
+`,
+  migrateLegacyAcquisitionReceiptFenceChecks: `
+ALTER TABLE "outcome_queue_acquisition_receipt"
+  DROP CONSTRAINT "outcome_queue_acquisition_receipt_firstFencingToken_check",
+  DROP CONSTRAINT "outcome_queue_acquisition_receipt_latestFencingToken_check",
+  ADD CONSTRAINT "outcome_queue_acquisition_receipt_fence_check"
+    CHECK (
+      "firstFencingToken" > 0
+      AND "latestFencingToken" >= "firstFencingToken"
+    ) NOT VALID
+`,
+  validateAcquisitionReceiptFenceConstraint: `
+ALTER TABLE "outcome_queue_acquisition_receipt"
+  VALIDATE CONSTRAINT "outcome_queue_acquisition_receipt_fence_check"
+`,
+  readReceiptIndexes: `
+SELECT table_class.relname AS "tableName",
+       index_class.relname AS "indexName",
+       index_record.indisunique AS "unique",
+       index_record.indisvalid AS "valid",
+       index_record.indisready AS "ready",
+       ARRAY(
+         SELECT pg_get_indexdef(index_record.indexrelid, ordinal, true)
+         FROM generate_series(1, index_record.indnkeyatts) AS ordinal
+         ORDER BY ordinal
+       ) AS "keyColumns",
+       pg_get_expr(index_record.indpred, index_record.indrelid, true) AS "predicate"
+FROM pg_index AS index_record
+JOIN pg_class AS table_class
+  ON table_class.oid = index_record.indrelid
+JOIN pg_class AS index_class
+  ON index_class.oid = index_record.indexrelid
+  WHERE index_class.relname IN (
+    'outcome_queue_mutation_receipt_user_outcome_idx',
+    'outcome_queue_acquisition_receipt_user_outcome_idx',
+    'outcome_queue_acquisition_attempt_campaign_idx',
+    'outcome_queue_acquisition_attempt_identity_idx',
+    'outcome_queue_mutation_attempt_request_idx'
+  )
+ORDER BY index_class.relname ASC
 `,
   inspectHardeningInvariantViolations: `
 SELECT
@@ -330,12 +617,47 @@ WHERE "userId" = $1
   AND "outcomeKey" = $5
 RETURNING "id", "outcomeKey", "firstFencingToken", "latestFencingToken"
 `,
+  insertAcquisitionAttempt: `
+INSERT INTO "outcome_queue_acquisition_attempt" (
+  "userId", "campaignWindowId", "processIdentity", "leaseHolder",
+  "acquisitionKeyDigest", "leaseIdentityDigest", "checkpointDigest",
+  "checkpointOutcomeId", "checkpointSequence", "checkpointState",
+  "checkpointHeadSha", "checkpointMergeSha", "checkpointPrNumber",
+  "outcomeKey", "fencingToken", "leaseExpiresAt", "activeWorkOrderId",
+  "disposition", "reason", "attemptedAt"
+) VALUES (
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+  $14, $15, $16::timestamptz, $17, $18, $19, $20::timestamptz
+)
+RETURNING "id"
+`,
+  readAcquisitionAttemptEvidence: `
+SELECT "id", "userId", "campaignWindowId", "processIdentity", "leaseHolder",
+       "acquisitionKeyDigest", "leaseIdentityDigest", "checkpointDigest",
+       "checkpointOutcomeId", "checkpointSequence", "checkpointState",
+       "checkpointHeadSha", "checkpointMergeSha", "checkpointPrNumber",
+       "outcomeKey", "fencingToken", "leaseExpiresAt", "activeWorkOrderId",
+       "disposition", "reason", "attemptedAt"
+FROM "outcome_queue_acquisition_attempt"
+WHERE "userId" = $1
+  AND "campaignWindowId" = $2
+ORDER BY "attemptedAt" ASC, "id" ASC
+`,
   readReceiptOutcome: `
 SELECT ${QUEUE_COLUMNS}
 FROM "outcome_queue_item" AS q
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2
 FOR UPDATE OF q
+`,
+  readActiveAcquisitionProof: `
+SELECT q."outcomeKey", q."goalId", q."fencingToken", q."leaseExpiresAt", q."activeWorkOrderId"
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+  AND q."lifecycleState" = 'active'
+  AND q."leaseExpiresAt" > $2::timestamptz
+ORDER BY q."outcomeKey" ASC
+LIMIT 2
 `,
   readMutationReceipt: `
 SELECT "id", "userId", "idempotencyKey", "operation", "outcomeKey",
@@ -344,6 +666,27 @@ FROM "outcome_queue_mutation_receipt"
 WHERE "userId" = $1
   AND "idempotencyKey" = $2
 FOR UPDATE
+`,
+  nextMutationAttemptOrdinal: `
+SELECT COALESCE(MAX("attemptOrdinal"), 0)::integer + 1 AS "attemptOrdinal"
+FROM "outcome_queue_mutation_attempt"
+WHERE "userId" = $1
+  AND "idempotencyKey" = $2
+`,
+  insertMutationAttempt: `
+INSERT INTO "outcome_queue_mutation_attempt" (
+  "userId", "idempotencyKey", "requestHash", "resultDigest",
+  "attemptOrdinal", "disposition", "attemptedAt"
+) VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)
+RETURNING "id"
+`,
+  readMutationAttemptEvidence: `
+SELECT "id", "userId", "idempotencyKey", "requestHash", "resultDigest",
+       "attemptOrdinal", "disposition", "attemptedAt"
+FROM "outcome_queue_mutation_attempt"
+WHERE "userId" = $1
+  AND "idempotencyKey" = $2
+ORDER BY "attemptOrdinal" ASC
 `,
   readMutationItem: `
 SELECT ${QUEUE_COLUMNS}
@@ -987,6 +1330,56 @@ export const OUTCOME_QUEUE_STATES = Object.freeze([...QUEUE_STATES])
 export const OUTCOME_QUEUE_LEGAL_TRANSITIONS = LEGAL_OUTCOME_TRANSITIONS
 export const OUTCOME_QUEUE_LEGACY_GOAL_REFS = LEGACY_GOAL_REFS
 export const OUTCOME_QUEUE_NO_SELECTION_REASONS = NO_SELECTION_REASONS
+export const OUTCOME_QUEUE_MUTATION_ATTEMPT_DISPOSITIONS = Object.freeze({
+  COMMITTED: "COMMITTED",
+  REPLAY: "REPLAY",
+})
+
+export function canonicalOutcomeQueueCheckpointProof(input) {
+  const outcomeId = nonempty(String(input?.outcomeId ?? ""), "OUTCOME_QUEUE_CHECKPOINT_OUTCOME_INVALID")
+  const outcomeKey = nonempty(input?.outcomeKey, "OUTCOME_QUEUE_CHECKPOINT_OUTCOME_INVALID")
+  const fencingToken = integer(
+    input?.fencingToken,
+    "OUTCOME_QUEUE_CHECKPOINT_FENCE_INVALID",
+    { minimum: 1 },
+  )
+  const sequence = integer(
+    input?.sequence,
+    "OUTCOME_QUEUE_CHECKPOINT_SEQUENCE_INVALID",
+    { minimum: 0 },
+  )
+  const state = nonempty(input?.state, "OUTCOME_QUEUE_CHECKPOINT_STATE_INVALID")
+  const workOrderId = integer(
+    input?.workOrderId,
+    "OUTCOME_QUEUE_CHECKPOINT_WORK_ORDER_INVALID",
+    { nullable: true, minimum: 1 },
+  )
+  const commit = input?.commit ?? {}
+  const headSha = optionalString(commit.headSha, "OUTCOME_QUEUE_CHECKPOINT_COMMIT_INVALID")
+  const mergeSha = optionalString(commit.mergeSha, "OUTCOME_QUEUE_CHECKPOINT_COMMIT_INVALID")
+  const prNumber = integer(
+    commit.prNumber,
+    "OUTCOME_QUEUE_CHECKPOINT_COMMIT_INVALID",
+    { nullable: true, minimum: 1 },
+  )
+  if ((headSha !== null && !/^[0-9a-f]{40}$/i.test(headSha))
+    || (mergeSha !== null && !/^[0-9a-f]{40}$/i.test(mergeSha))) {
+    fail("OUTCOME_QUEUE_CHECKPOINT_COMMIT_INVALID")
+  }
+  return canonicalValue({
+    commit: { headSha, mergeSha, prNumber },
+    fencingToken,
+    outcomeId,
+    outcomeKey,
+    sequence,
+    state,
+    workOrderId,
+  })
+}
+
+export function digestOutcomeQueueCheckpointProof(input) {
+  return requestHash(canonicalOutcomeQueueCheckpointProof(input))
+}
 
 const poolByConnectionString = new Map()
 
@@ -1099,6 +1492,155 @@ const OUTCOME_QUEUE_HARDENING_CONSTRAINT_NAMES = Object.freeze([
   "outcome_queue_item_nonnegative_fence_check",
 ])
 
+const RECEIPT_COLUMN_CONTRACTS = Object.freeze({
+  goal_outcome_intake_receipt: Object.freeze([
+    ["id", "integer", true, "sequence"],
+    ["userId", "text", true, null],
+    ["idempotencyKey", "text", true, null],
+    ["requestHash", "text", true, null],
+    ["goalId", "integer", true, null],
+    ["outcomeKey", "text", true, null],
+    ["resultDigest", "text", true, null],
+    ["replayCount", "integer", true, "0"],
+    ["firstSubmittedAt", "timestamp with time zone", true, "now()"],
+    ["lastReplayedAt", "timestamp with time zone", false, null],
+  ]),
+  outcome_queue_acquisition_attempt: Object.freeze([
+    ["id", "integer", true, "sequence"],
+    ["userId", "text", true, null],
+    ["campaignWindowId", "text", true, null],
+    ["processIdentity", "text", true, null],
+    ["leaseHolder", "text", true, null],
+    ["acquisitionKeyDigest", "text", true, null],
+    ["leaseIdentityDigest", "text", true, null],
+    ["checkpointDigest", "text", true, null],
+    ["checkpointOutcomeId", "text", true, null],
+    ["checkpointSequence", "integer", true, null],
+    ["checkpointState", "text", true, null],
+    ["checkpointHeadSha", "text", false, null],
+    ["checkpointMergeSha", "text", false, null],
+    ["checkpointPrNumber", "integer", false, null],
+    ["outcomeKey", "text", false, null],
+    ["fencingToken", "integer", false, null],
+    ["leaseExpiresAt", "timestamp with time zone", false, null],
+    ["activeWorkOrderId", "integer", false, null],
+    ["disposition", "text", true, null],
+    ["reason", "text", false, null],
+    ["attemptedAt", "timestamp with time zone", true, "now()"],
+  ]),
+  outcome_queue_acquisition_receipt: Object.freeze([
+    ["id", "integer", true, "sequence"],
+    ["userId", "text", true, null],
+    ["acquisitionKey", "text", true, null],
+    ["outcomeKey", "text", true, null],
+    ["firstFencingToken", "integer", true, null],
+    ["latestFencingToken", "integer", true, null],
+    ["createdAt", "timestamp with time zone", true, "now()"],
+    ["updatedAt", "timestamp with time zone", true, "now()"],
+  ]),
+  outcome_queue_mutation_receipt: Object.freeze([
+    ["id", "integer", true, "sequence"],
+    ["userId", "text", true, null],
+    ["idempotencyKey", "text", true, null],
+    ["operation", "text", true, null],
+    ["outcomeKey", "text", false, null],
+    ["requestHash", "text", true, null],
+    ["requestBinding", "jsonb", true, null],
+    ["resultBinding", "jsonb", true, null],
+    ["createdAt", "timestamp with time zone", true, "now()"],
+  ]),
+  outcome_queue_mutation_attempt: Object.freeze([
+    ["id", "integer", true, "sequence"],
+    ["userId", "text", true, null],
+    ["idempotencyKey", "text", true, null],
+    ["requestHash", "text", true, null],
+    ["resultDigest", "text", true, null],
+    ["attemptOrdinal", "integer", true, null],
+    ["disposition", "text", true, null],
+    ["attemptedAt", "timestamp with time zone", true, "now()"],
+  ]),
+})
+
+const RECEIPT_CONSTRAINT_CONTRACTS = Object.freeze({
+  goal_outcome_intake_receipt: Object.freeze({
+    goal_outcome_intake_receipt_pkey:
+      ["p", "primarykeyid"],
+    goal_outcome_intake_receipt_goalId_fkey:
+      ["f", "foreignkeygoalidreferencesgoalidondeleterestrict"],
+    goal_outcome_intake_receipt_user_key_unique:
+      ["u", "uniqueuserid,idempotencykey"],
+    goal_outcome_intake_receipt_user_goal_unique:
+      ["u", "uniqueuserid,goalid"],
+    goal_outcome_intake_receipt_user_outcome_unique:
+      ["u", "uniqueuserid,outcomekey"],
+    goal_outcome_intake_receipt_replay_count_check:
+      ["c", "checkreplaycount>=0"],
+  }),
+  outcome_queue_acquisition_attempt: Object.freeze({
+    outcome_queue_acquisition_attempt_pkey:
+      ["p", "primarykeyid"],
+    outcome_queue_acquisition_attempt_fence_check:
+      ["c", "checkfencingtokenisnullorfencingtoken>0"],
+    outcome_queue_acquisition_attempt_checkpoint_check:
+      ["c", "checkcheckpointsequence>=0andcheckpointprnumberisnullorcheckpointprnumber>0"],
+  }),
+  outcome_queue_acquisition_receipt: Object.freeze({
+    outcome_queue_acquisition_receipt_pkey:
+      ["p", "primarykeyid"],
+    outcome_queue_acquisition_receipt_user_key_unique:
+      ["u", "uniqueuserid,acquisitionkey"],
+    outcome_queue_acquisition_receipt_fence_check:
+      ["c", "checkfirstfencingtoken>0andlatestfencingtoken>=firstfencingtoken"],
+  }),
+  outcome_queue_mutation_receipt: Object.freeze({
+    outcome_queue_mutation_receipt_pkey:
+      ["p", "primarykeyid"],
+    outcome_queue_mutation_receipt_user_key_unique:
+      ["u", "uniqueuserid,idempotencykey"],
+  }),
+  outcome_queue_mutation_attempt: Object.freeze({
+    outcome_queue_mutation_attempt_pkey:
+      ["p", "primarykeyid"],
+    outcome_queue_mutation_attempt_user_ordinal_unique:
+      ["u", "uniqueuserid,idempotencykey,attemptordinal"],
+    outcome_queue_mutation_attempt_ordinal_check:
+      ["c", "checkattemptordinal>0"],
+    outcome_queue_mutation_attempt_disposition_check:
+      ["c", "checkdispositionin'committed','replay'"],
+  }),
+})
+
+const LEGACY_RECEIPT_CONSTRAINT_CONTRACTS = Object.freeze({
+  ...RECEIPT_CONSTRAINT_CONTRACTS,
+  outcome_queue_acquisition_receipt: Object.freeze({
+    outcome_queue_acquisition_receipt_pkey:
+      ["p", "primarykeyid"],
+    outcome_queue_acquisition_receipt_user_key_unique:
+      ["u", "uniqueuserid,acquisitionkey"],
+    outcome_queue_acquisition_receipt_firstFencingToken_check:
+      ["c", "checkfirstfencingtoken>0"],
+    outcome_queue_acquisition_receipt_latestFencingToken_check:
+      ["c", "checklatestfencingtoken>=firstfencingtoken"],
+  }),
+  outcome_queue_mutation_receipt: Object.freeze({
+    outcome_queue_mutation_receipt_pkey:
+      ["p", "primarykeyid"],
+  }),
+})
+
+const RECEIPT_INDEX_CONTRACTS = Object.freeze({
+  outcome_queue_acquisition_attempt_campaign_idx:
+    ["outcome_queue_acquisition_attempt", ["userId", "campaignWindowId", "attemptedAt"]],
+  outcome_queue_acquisition_attempt_identity_idx:
+    ["outcome_queue_acquisition_attempt", ["userId", "acquisitionKeyDigest", "attemptedAt"]],
+  outcome_queue_acquisition_receipt_user_outcome_idx:
+    ["outcome_queue_acquisition_receipt", ["userId", "outcomeKey"]],
+  outcome_queue_mutation_receipt_user_outcome_idx:
+    ["outcome_queue_mutation_receipt", ["userId", "outcomeKey", "createdAt"]],
+  outcome_queue_mutation_attempt_request_idx:
+    ["outcome_queue_mutation_attempt", ["userId", "requestHash", "attemptedAt"]],
+})
+
 function hardeningConstraintMatches(row) {
   return row?.validated === true
     && OUTCOME_QUEUE_HARDENING_CONSTRAINT_NAMES.includes(row.constraintName)
@@ -1109,6 +1651,100 @@ function canonicalCatalogExpression(value) {
     .toLowerCase()
     .replaceAll("::text", "")
     .replace(/[()"`\s]/g, "")
+}
+
+function receiptDefaultMatches(observed, expected) {
+  const canonical = String(observed ?? "").toLowerCase().replace(/\s/g, "")
+  if (expected === null) return observed == null
+  if (expected === "sequence") {
+    return /^nextval\('.+_id_seq'::regclass\)$/.test(canonical)
+  }
+  return canonical === expected
+}
+
+function receiptColumnsMatch(rows) {
+  const observedTables = new Set(rows.map((row) => row?.tableName))
+  if (observedTables.size !== Object.keys(RECEIPT_COLUMN_CONTRACTS).length) return false
+  return Object.entries(RECEIPT_COLUMN_CONTRACTS).every(([tableName, columns]) => {
+    const observed = rows.filter((row) => row?.tableName === tableName)
+    return observed.length === columns.length
+      && columns.every(([columnName, dataType, notNull, defaultExpression], index) => {
+        const row = observed[index]
+        return row?.columnName === columnName
+          && row?.dataType === dataType
+          && row?.notNull === notNull
+          && receiptDefaultMatches(row?.defaultExpression, defaultExpression)
+      })
+  })
+}
+
+function receiptConstraintsMatchContract(rows, contracts) {
+  const expectedCount = Object.values(contracts)
+    .reduce((count, contracts) => count + Object.keys(contracts).length, 0)
+  if (rows.length !== expectedCount) return false
+  return Object.entries(contracts).every(([tableName, tableContracts]) => {
+    const observed = rows.filter((row) => row?.tableName === tableName)
+    return observed.length === Object.keys(tableContracts).length
+      && Object.entries(tableContracts).every(([constraintName, [constraintType, definition]]) => {
+        const row = observed.find((candidate) => candidate?.constraintName === constraintName)
+        return row?.constraintType === constraintType
+          && row?.validated === true
+          && canonicalCatalogExpression(row?.definition) === definition
+      })
+  })
+}
+
+function receiptConstraintsMatch(rows) {
+  return receiptConstraintsMatchContract(rows, RECEIPT_CONSTRAINT_CONTRACTS)
+}
+
+function legacyReceiptConstraintsMatch(rows) {
+  return receiptConstraintsMatchContract(
+    rows,
+    LEGACY_RECEIPT_CONSTRAINT_CONTRACTS,
+  )
+}
+
+function legacyMutationReceiptUniqueIndexMatches(rows) {
+  if (rows.length !== 1) return false
+  const row = rows[0]
+  return row?.tableName === "outcome_queue_mutation_receipt"
+    && row?.indexName === "outcome_queue_mutation_receipt_user_key_idx"
+    && row?.unique === true
+    && row?.valid === true
+    && row?.ready === true
+    && row?.primary === false
+    && row?.exclusion === false
+    && row?.immediate === true
+    && row?.noIncludedColumns === true
+    && row?.noExpressions === true
+    && row?.accessMethod === "btree"
+    && row?.constraintBacked === false
+    && row?.predicate == null
+    && Array.isArray(row?.keyColumns)
+    && row.keyColumns.length === 2
+    && canonicalCatalogExpression(row.keyColumns[0]) === "userid"
+    && canonicalCatalogExpression(row.keyColumns[1]) === "idempotencykey"
+}
+
+function receiptIndexesMatch(rows) {
+  if (rows.length !== Object.keys(RECEIPT_INDEX_CONTRACTS).length) return false
+  return Object.entries(RECEIPT_INDEX_CONTRACTS).every((
+    [indexName, [tableName, keyColumns]],
+  ) => {
+    const row = rows.find((candidate) => candidate?.indexName === indexName)
+    return row?.tableName === tableName
+      && row?.unique === false
+      && row?.valid === true
+      && row?.ready === true
+      && row?.predicate == null
+      && Array.isArray(row?.keyColumns)
+      && row.keyColumns.length === keyColumns.length
+      && row.keyColumns.every((column, index) => (
+        canonicalCatalogExpression(column)
+          === canonicalCatalogExpression(keyColumns[index])
+      ))
+  })
 }
 
 function oneActiveIndexMatches(row) {
@@ -1143,8 +1779,71 @@ export async function ensureOutcomeQueueHardeningSchema({
       ["williamos:outcome-queue:hardening-schema"],
     )
     phase = "receipt-table"
+    await connection.query(OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemTable)
+    await connection.query(OUTCOME_QUEUE_SQL.ensureMutationReceiptTable)
     await connection.query(OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptTable)
+    await connection.query(OUTCOME_QUEUE_SQL.ensureGoalOutcomeIntakeReceiptTable)
+    await connection.query(OUTCOME_QUEUE_SQL.ensureAcquisitionAttemptTable)
+    await connection.query(OUTCOME_QUEUE_SQL.ensureMutationAttemptTable)
+    phase = "receipt-columns"
+    const receiptColumns = await connection.query(OUTCOME_QUEUE_SQL.readReceiptColumns)
+    if (!receiptColumnsMatch(receiptColumns?.rows ?? [])) {
+      hardeningWall("OUTCOME_QUEUE_HARDENING_RECEIPT_COLUMN_WALL", {
+        observed: receiptColumns?.rows ?? [],
+      })
+    }
+    phase = "receipt-constraints"
+    let receiptConstraints = await connection.query(
+      OUTCOME_QUEUE_SQL.readReceiptConstraints,
+    )
+    if (!receiptConstraintsMatch(receiptConstraints?.rows ?? [])) {
+      const observedConstraints = receiptConstraints?.rows ?? []
+      if (!legacyReceiptConstraintsMatch(observedConstraints)) {
+        hardeningWall("OUTCOME_QUEUE_HARDENING_RECEIPT_CONSTRAINT_WALL", {
+          observed: observedConstraints,
+        })
+      }
+      phase = "receipt-legacy-index"
+      const legacyIndex = await connection.query(
+        OUTCOME_QUEUE_SQL.readLegacyMutationReceiptUniqueIndex,
+      )
+      if (!legacyMutationReceiptUniqueIndexMatches(legacyIndex?.rows ?? [])) {
+        hardeningWall("OUTCOME_QUEUE_HARDENING_RECEIPT_MIGRATION_WALL", {
+          observed: legacyIndex?.rows ?? [],
+        })
+      }
+      phase = "receipt-migration"
+      await connection.query(
+        OUTCOME_QUEUE_SQL.migrateLegacyMutationReceiptUniqueIndex,
+      )
+      await connection.query(
+        OUTCOME_QUEUE_SQL.migrateLegacyAcquisitionReceiptFenceChecks,
+      )
+      await connection.query(
+        OUTCOME_QUEUE_SQL.validateAcquisitionReceiptFenceConstraint,
+      )
+      phase = "receipt-constraints"
+      receiptConstraints = await connection.query(
+        OUTCOME_QUEUE_SQL.readReceiptConstraints,
+      )
+      if (!receiptConstraintsMatch(receiptConstraints?.rows ?? [])) {
+        hardeningWall("OUTCOME_QUEUE_HARDENING_RECEIPT_CONSTRAINT_WALL", {
+          observed: receiptConstraints?.rows ?? [],
+          migratedFrom: "known-parent-receipt-schema",
+        })
+      }
+    }
+    phase = "receipt-indexes"
+    await connection.query(OUTCOME_QUEUE_SQL.ensureMutationReceiptOutcomeIndex)
     await connection.query(OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptOutcomeIndex)
+    await connection.query(OUTCOME_QUEUE_SQL.ensureAcquisitionAttemptIndexes)
+    await connection.query(OUTCOME_QUEUE_SQL.ensureMutationAttemptRequestIndex)
+    const receiptIndexes = await connection.query(OUTCOME_QUEUE_SQL.readReceiptIndexes)
+    if (!receiptIndexesMatch(receiptIndexes?.rows ?? [])) {
+      hardeningWall("OUTCOME_QUEUE_HARDENING_RECEIPT_INDEX_WALL", {
+        observed: receiptIndexes?.rows ?? [],
+      })
+    }
     phase = "preflight"
     const inspection = await connection.query(
       OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations,
@@ -1594,6 +2293,72 @@ async function ensureAcquisitionReceipt(connection, user, key, row, at, receiptE
   return advanced.rows[0]
 }
 
+async function appendAcquisitionAttempt(
+  connection,
+  context,
+  result,
+  disposition,
+  at,
+  proofOutcome = result?.outcome ?? null,
+) {
+  const outcome = proofOutcome
+  if (!outcome) return
+  const checkpointProof = canonicalOutcomeQueueCheckpointProof(
+    await context.checkpointProofProvider({
+      disposition,
+      outcome: {
+        activeWorkOrderId: outcome.activeWorkOrderId ?? null,
+        fencingToken: Number(outcome.fencingToken),
+        goalId: outcome.goalId,
+        outcomeKey: outcome.outcomeKey,
+      },
+      processIdentity: context.processIdentity,
+    }),
+  )
+  if (checkpointProof.outcomeKey !== outcome.outcomeKey
+    || checkpointProof.outcomeId !== String(outcome.goalId)
+    || checkpointProof.fencingToken !== Number(outcome.fencingToken)
+    || checkpointProof.workOrderId !== (
+      Number.isSafeInteger(Number(outcome.activeWorkOrderId))
+        && Number(outcome.activeWorkOrderId) > 0
+        ? Number(outcome.activeWorkOrderId)
+        : null
+    )) {
+    fail("OUTCOME_QUEUE_CHECKPOINT_BINDING_WALL")
+  }
+  const inserted = await connection.query(OUTCOME_QUEUE_SQL.insertAcquisitionAttempt, [
+    context.user,
+    context.campaignWindowId,
+    context.processIdentity,
+    context.leaseHolder,
+    context.acquisitionKeyDigest,
+    context.leaseIdentityDigest,
+    digestOutcomeQueueCheckpointProof(checkpointProof),
+    checkpointProof.outcomeId,
+    checkpointProof.sequence,
+    checkpointProof.state,
+    checkpointProof.commit.headSha,
+    checkpointProof.commit.mergeSha,
+    checkpointProof.commit.prNumber,
+    outcome?.outcomeKey ?? null,
+    Number.isSafeInteger(Number(outcome?.fencingToken))
+      && Number(outcome?.fencingToken) > 0
+      ? Number(outcome.fencingToken)
+      : null,
+    outcome?.leaseExpiresAt ?? null,
+    Number.isSafeInteger(Number(outcome?.activeWorkOrderId))
+      && Number(outcome?.activeWorkOrderId) > 0
+      ? Number(outcome.activeWorkOrderId)
+      : null,
+    disposition,
+    result?.reason ?? null,
+    at,
+  ])
+  if (inserted?.rows?.length !== 1) {
+    fail("OUTCOME_QUEUE_ACQUISITION_ATTEMPT_WRITE_WALL")
+  }
+}
+
 export async function acquireNextEligibleOutcome({
   query,
   databaseUrl = process.env.DATABASE_URL,
@@ -1604,6 +2369,9 @@ export async function acquireNextEligibleOutcome({
   executionBinding,
   leaseDurationMs,
   activeWorkOrderId = null,
+  campaignWindowId,
+  processIdentity,
+  checkpointProofProvider,
   now = new Date(),
 } = {}) {
   const user = userScope(userId)
@@ -1611,6 +2379,17 @@ export async function acquireNextEligibleOutcome({
   const holder = nonempty(leaseHolder, "OUTCOME_QUEUE_LEASE_HOLDER_INVALID")
   const token = nonempty(leaseToken, "OUTCOME_QUEUE_LEASE_TOKEN_INVALID")
   const binding = nonempty(executionBinding, "OUTCOME_QUEUE_EXECUTION_BINDING_INVALID")
+  const campaign = nonempty(
+    campaignWindowId,
+    "OUTCOME_QUEUE_CAMPAIGN_WINDOW_INVALID",
+  )
+  const processId = nonempty(
+    processIdentity,
+    "OUTCOME_QUEUE_PROCESS_IDENTITY_INVALID",
+  )
+  if (typeof checkpointProofProvider !== "function") {
+    fail("OUTCOME_QUEUE_CHECKPOINT_PROVIDER_REQUIRED")
+  }
   integer(leaseDurationMs, "OUTCOME_QUEUE_LEASE_DURATION_INVALID", { minimum: 1 })
   const workOrderId = integer(
     activeWorkOrderId,
@@ -1619,12 +2398,34 @@ export async function acquireNextEligibleOutcome({
   )
   const at = timestamp(now)
   const expiresAt = timestamp(new Date(Date.parse(at) + leaseDurationMs))
+  const attemptContext = {
+    user,
+    campaignWindowId: campaign,
+    processIdentity: processId,
+    leaseHolder: holder,
+    acquisitionKeyDigest: requestHash({ acquisitionKey: key }),
+    leaseIdentityDigest: requestHash({ leaseHolder: holder, leaseToken: token }),
+    checkpointProofProvider,
+  }
   const connection = await openQuery(query, databaseUrl, true)
   let begun = false
   try {
     await connection.query("BEGIN")
     begun = true
     await connection.query(OUTCOME_QUEUE_SQL.acquireLock, [`${user}:outcome-queue`])
+    const finish = async (result, disposition, proofOutcome = result?.outcome ?? null) => {
+      await appendAcquisitionAttempt(
+        connection,
+        attemptContext,
+        result,
+        disposition,
+        at,
+        proofOutcome,
+      )
+      await connection.query("COMMIT")
+      begun = false
+      return result
+    }
     const receiptResult = await connection.query(
       OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
       [user, key],
@@ -1648,20 +2449,16 @@ export async function acquireNextEligibleOutcome({
         receiptEstablished = true
       }
       if (row.acquisitionKey !== key) {
-        await connection.query("COMMIT")
-        begun = false
-        return {
+        return await finish({
           outcome: row,
           acquired: false,
           replayed: true,
           reclaimed: false,
           reason: "ACQUISITION_KEY_RETIRED",
-        }
+        }, "REPLAY_RETIRED")
       }
       if (TERMINAL_STATES.has(row.lifecycleState)) {
-        await connection.query("COMMIT")
-        begun = false
-        return {
+        return await finish({
           outcome: row,
           acquired: false,
           replayed: true,
@@ -1669,7 +2466,7 @@ export async function acquireNextEligibleOutcome({
           reason: row.lifecycleState === "completed"
             ? "OUTCOME_ALREADY_COMPLETED"
             : "OUTCOME_ALREADY_TERMINAL",
-        }
+        }, "REPLAY_TERMINAL")
       }
       const live = row.lifecycleState === "active"
         && Date.parse(String(row.leaseExpiresAt)) > Date.parse(at)
@@ -1683,9 +2480,7 @@ export async function acquireNextEligibleOutcome({
           )
           const liveState = eligibility?.rows?.[0]
           if (!liveState?.approvalLive || !liveState?.authorityLive) {
-            await connection.query("COMMIT")
-            begun = false
-            return {
+            return await finish({
               outcome: row,
               acquired: false,
               replayed: false,
@@ -1693,21 +2488,20 @@ export async function acquireNextEligibleOutcome({
               reason: !liveState?.approvalLive
                 ? "AWAITING_APPROVAL"
                 : "AUTHORITY_INELIGIBLE",
-            }
+            }, "REPLAY_INELIGIBLE")
           }
-          await connection.query("COMMIT")
-          begun = false
-          return acquisitionResult(row, { replayed: true })
+          return await finish(
+            acquisitionResult(row, { replayed: true }),
+            "REPLAY_WINNER",
+          )
         }
-        await connection.query("COMMIT")
-        begun = false
-        return {
+        return await finish({
           outcome: row,
           acquired: false,
           replayed: false,
           reclaimed: false,
           reason: "ACQUISITION_KEY_CONFLICT",
-        }
+        }, "LOSER")
       }
       if (row.lifecycleState === "active") {
         const reclaimed = await connection.query(OUTCOME_QUEUE_SQL.reclaimAcquisition, [
@@ -1730,20 +2524,19 @@ export async function acquireNextEligibleOutcome({
             at,
             receiptEstablished,
           )
-          await connection.query("COMMIT")
-          begun = false
-          return acquisitionResult(reclaimed.rows[0], { reclaimed: true })
+          return await finish(
+            acquisitionResult(reclaimed.rows[0], { reclaimed: true }),
+            "RECLAIMED",
+          )
         }
       }
-      await connection.query("COMMIT")
-      begun = false
-      return {
+      return await finish({
         outcome: row,
         acquired: false,
         replayed: true,
         reclaimed: false,
         reason: "ACQUISITION_KEY_INELIGIBLE",
-      }
+      }, "REPLAY_INELIGIBLE")
     }
     const selected = await connection.query(OUTCOME_QUEUE_SQL.acquire, [
       at,
@@ -1757,25 +2550,35 @@ export async function acquireNextEligibleOutcome({
     ])
     if (selected?.rows?.length === 1) {
       await ensureAcquisitionReceipt(connection, user, key, selected.rows[0], at)
-      await connection.query("COMMIT")
-      begun = false
-      return acquisitionResult(selected.rows[0], {
-        reclaimed: selected.rows[0].lifecycleReason === "STALE_LEASE_RECOVERED",
-      })
+      const reclaimed = selected.rows[0].lifecycleReason === "STALE_LEASE_RECOVERED"
+      return await finish(
+        acquisitionResult(selected.rows[0], { reclaimed }),
+        reclaimed ? "RECLAIMED" : "WINNER",
+      )
     }
     const reasonResult = await connection.query(
       OUTCOME_QUEUE_SQL.noSelectionReason,
       [at, user],
     )
-    await connection.query("COMMIT")
-    begun = false
-    return {
+    const reason = noSelectionReason(reasonResult?.rows?.[0])
+    let contentionOutcome = null
+    if (reason === "ACTIVE_LEASE_HELD") {
+      const contention = await connection.query(
+        OUTCOME_QUEUE_SQL.readActiveAcquisitionProof,
+        [user, at],
+      )
+      if (contention?.rows?.length !== 1) {
+        fail("OUTCOME_QUEUE_ACQUISITION_CONTENTION_PROOF_WALL")
+      }
+      contentionOutcome = contention.rows[0]
+    }
+    return await finish({
       outcome: null,
       acquired: false,
       replayed: false,
       reclaimed: false,
-      reason: noSelectionReason(reasonResult?.rows?.[0]),
-    }
+      reason,
+    }, reason === "ACTIVE_LEASE_HELD" ? "LOSER" : "NO_SELECTION", contentionOutcome)
   } catch (error) {
     if (begun) {
       try {
@@ -2341,6 +3144,33 @@ function safeMutationOutcome(row) {
   return safe
 }
 
+async function appendMutationAttempt(
+  connection,
+  { user, idempotencyKey, requestDigest, resultDigest, disposition, at },
+) {
+  const ordinalResult = await connection.query(
+    OUTCOME_QUEUE_SQL.nextMutationAttemptOrdinal,
+    [user, idempotencyKey],
+  )
+  const attemptOrdinal = Number(ordinalResult?.rows?.[0]?.attemptOrdinal)
+  if (!Number.isSafeInteger(attemptOrdinal) || attemptOrdinal <= 0) {
+    fail("OUTCOME_QUEUE_MUTATION_ATTEMPT_ORDINAL_WALL")
+  }
+  const inserted = await connection.query(OUTCOME_QUEUE_SQL.insertMutationAttempt, [
+    user,
+    idempotencyKey,
+    requestDigest,
+    resultDigest,
+    attemptOrdinal,
+    disposition,
+    at,
+  ])
+  if (inserted?.rows?.length !== 1) {
+    fail("OUTCOME_QUEUE_MUTATION_ATTEMPT_WRITE_WALL")
+  }
+  return inserted.rows[0]
+}
+
 async function reorderMutation(connection, request, user, at) {
   const snapshotResult = await connection.query(OUTCOME_QUEUE_SQL.readMutationSnapshot, [user])
   const snapshot = snapshotResult?.rows ?? []
@@ -2415,6 +3245,15 @@ export async function mutateOutcomeQueueItem({
         fail("OUTCOME_QUEUE_IDEMPOTENCY_CONFLICT")
       }
       const recorded = jsonValue(receipt.resultBinding, "OUTCOME_QUEUE_RECEIPT_INVALID")
+      const resultDigest = requestHash(canonicalValue(recorded))
+      await appendMutationAttempt(connection, {
+        user,
+        idempotencyKey: request.idempotencyKey,
+        requestDigest: hash,
+        resultDigest,
+        disposition: OUTCOME_QUEUE_MUTATION_ATTEMPT_DISPOSITIONS.REPLAY,
+        at,
+      })
       await connection.query("COMMIT")
       begun = false
       return { ...recorded, replayed: true }
@@ -2520,6 +3359,7 @@ export async function mutateOutcomeQueueItem({
       affectedOutcomes: affectedOutcomes.map(safeMutationOutcome),
       successor: safeMutationOutcome(successor),
     })
+    const resultDigest = requestHash(recorded)
     const receiptResult = await connection.query(OUTCOME_QUEUE_SQL.insertMutationReceipt, [
       user,
       request.idempotencyKey,
@@ -2531,11 +3371,21 @@ export async function mutateOutcomeQueueItem({
       at,
     ])
     if (receiptResult?.rows?.length !== 1) fail("OUTCOME_QUEUE_RECEIPT_WRITE_FAILED")
+    const mutationAttempt = await appendMutationAttempt(connection, {
+      user,
+      idempotencyKey: request.idempotencyKey,
+      requestDigest: hash,
+      resultDigest,
+      disposition: OUTCOME_QUEUE_MUTATION_ATTEMPT_DISPOSITIONS.COMMITTED,
+      at,
+    })
     const metadata = {
       idempotencyKey: request.idempotencyKey,
       operation: request.action,
       receiptId: receiptResult.rows[0].id,
       requestHash: hash,
+      resultDigest,
+      mutationAttemptId: mutationAttempt.id,
       resultVersion: recorded.outcome.version,
       affectedOutcomes: recorded.affectedOutcomes.map((item) => ({
         outcomeKey: item.outcomeKey,
