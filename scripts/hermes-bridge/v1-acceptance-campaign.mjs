@@ -5,9 +5,13 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
+import { produceRuntimeAgreement } from "./runtime-agreement.mjs"
+
 const ISSUE_NUMBER = 448
 const SCHEMA_VERSION = 1
 const DEFAULT_MAX_AGE_MS = 15 * 60 * 1000
+const MAX_SUPERVISOR_CYCLE_BUDGET_MS = 4 * 60 * 60 * 1000
+const MAX_CONSECUTIVE_CYCLE_FAILURES = 2
 const SHA = /^[0-9a-f]{40}$/i
 const SHA256 = /^[0-9a-f]{64}$/i
 const AUTHORIZED_REPOSITORY = "bsvalues/terragroq"
@@ -295,6 +299,7 @@ export function parseArgs(argv, env = process.env) {
     issue: ISSUE_NUMBER,
     state: path.join(runtimeRoot, "state", "state.json"),
     supervisorState: path.join(runtimeRoot, "state", "supervisor.json"),
+    agreement: path.join(runtimeRoot, "evidence", "queue-runtime-agreement.json"),
     evidence: path.join(runtimeRoot, "evidence", "v1-acceptance.json"),
     appUrl: env.WILLIAMOS_APP_URL ?? null,
     workspace: env.WILLIAMOS_HERMES_WORKSPACE ? path.resolve(env.WILLIAMOS_HERMES_WORKSPACE) : null,
@@ -302,7 +307,7 @@ export function parseArgs(argv, env = process.env) {
     maxAgeMs: DEFAULT_MAX_AGE_MS,
   }
   const valued = new Set([
-    "--repo", "--issue", "--state", "--supervisor-state", "--evidence",
+    "--repo", "--issue", "--state", "--supervisor-state", "--agreement", "--evidence",
     "--app-url", "--workspace", "--output", "--max-age-ms",
   ])
   for (let index = 0; index < argv.length; index += 1) {
@@ -315,6 +320,7 @@ export function parseArgs(argv, env = process.env) {
     else if (flag === "--issue") options.issue = Number(value)
     else if (flag === "--state") options.state = path.resolve(value)
     else if (flag === "--supervisor-state") options.supervisorState = path.resolve(value)
+    else if (flag === "--agreement") options.agreement = path.resolve(value)
     else if (flag === "--evidence") options.evidence = path.resolve(value)
     else if (flag === "--app-url") options.appUrl = value.replace(/\/+$/, "")
     else if (flag === "--workspace") options.workspace = path.resolve(value)
@@ -456,17 +462,31 @@ export function validateSupervisorState(
   state,
   {
     now = Date.now(),
+    maxAgeMs = DEFAULT_MAX_AGE_MS,
     expectedWorkspace,
     expectedSupervisorPath,
     processProbe = defaultProcessProbe,
   } = {},
 ) {
   const startedAt = timestamp(state?.startedAt)
-  if (!state || state.schemaVersion !== 1 || state.hostMode !== "INTERACTIVE_USER_RESIDENT"
+  const heartbeatAt = timestamp(state?.heartbeatAt)
+  const cycle = state?.cycle
+  const cycleStartedAt = timestamp(cycle?.startedAt)
+  const cycleCompletedAt = cycle?.completedAt === null ? null : timestamp(cycle?.completedAt)
+  if (!state || state.schemaVersion !== 2 || state.hostMode !== "INTERACTIVE_USER_RESIDENT"
     || !Number.isSafeInteger(state.processId) || state.processId < 1
     || typeof state.nonce !== "string" || !state.nonce
     || !path.isAbsolute(state.workspace) || !path.isAbsolute(state.supervisorPath)
-    || startedAt === null || startedAt > now) {
+    || startedAt === null || startedAt > now
+    || heartbeatAt === null || heartbeatAt < startedAt || heartbeatAt > now
+    || !Number.isSafeInteger(state.cycleBudgetMs) || state.cycleBudgetMs < 1
+    || state.cycleBudgetMs > MAX_SUPERVISOR_CYCLE_BUDGET_MS
+    || !isRecord(cycle) || !Number.isSafeInteger(cycle.sequence) || cycle.sequence < 1
+    || !["IDLE", "IN_FLIGHT"].includes(cycle.status)
+    || cycleStartedAt === null || cycleStartedAt < startedAt || cycleStartedAt > now
+    || !Number.isSafeInteger(cycle.consecutiveFailures) || cycle.consecutiveFailures < 0
+    || (cycle.result !== null && !/^[A-Z][A-Z0-9_]{0,63}$/.test(cycle.result))
+    || (cycle.stopReason !== null && !/^[A-Z][A-Z0-9_]{0,63}$/.test(cycle.stopReason))) {
     return failure("SUPERVISOR_STATE_SCHEMA_INVALID", "Resident supervisor record is invalid.")
   }
   if (!expectedWorkspace || !expectedSupervisorPath
@@ -477,10 +497,103 @@ export function validateSupervisorState(
   if (!processProbe(state)) {
     return failure("SUPERVISOR_PROCESS_NOT_LIVE", `PID ${state.processId} is not live.`)
   }
+  if (!isFresh(state.heartbeatAt, now, maxAgeMs)) {
+    return failure("SUPERVISOR_HEARTBEAT_STALE", "Resident supervisor heartbeat is stale.")
+  }
+  if (cycle.status === "IN_FLIGHT") {
+    if (cycle.completedAt !== null || cycle.exitCode !== null || cycle.result !== null
+      || cycle.stopReason !== null) {
+      return failure("SUPERVISOR_STATE_SCHEMA_INVALID", "In-flight cycle has terminal fields.")
+    }
+    if (now - cycleStartedAt > state.cycleBudgetMs) {
+      return failure("SUPERVISOR_CYCLE_OVER_BUDGET", `Cycle ${cycle.sequence} exceeded its budget.`)
+    }
+  } else {
+    if (cycleCompletedAt === null || cycleCompletedAt < cycleStartedAt || cycleCompletedAt > now
+      || heartbeatAt < cycleCompletedAt || !Number.isSafeInteger(cycle.exitCode)
+      || cycle.exitCode < 0 || cycle.exitCode > 255 || cycle.result === null
+      || (cycle.exitCode === 0 && cycle.consecutiveFailures !== 0)
+      || (cycle.exitCode !== 0 && cycle.consecutiveFailures < 1)) {
+      return failure("SUPERVISOR_STATE_SCHEMA_INVALID", "Idle cycle completion record is invalid.")
+    }
+    if (cycle.stopReason === "CYCLE_BUDGET_EXCEEDED") {
+      return failure(
+        "SUPERVISOR_CYCLE_BUDGET_TERMINATION",
+        `Cycle ${cycle.sequence} was terminated at its owned execution budget.`,
+      )
+    }
+  }
+  if (cycle.consecutiveFailures > MAX_CONSECUTIVE_CYCLE_FAILURES) {
+    return failure(
+      "SUPERVISOR_REPEATED_CYCLE_FAILURES",
+      `${cycle.consecutiveFailures} consecutive resident cycles failed.`,
+    )
+  }
   return success({
     processId: state.processId,
     hostMode: state.hostMode,
     startedAt: state.startedAt,
+    heartbeatAt: state.heartbeatAt,
+    cycle: {
+      sequence: cycle.sequence,
+      status: cycle.status,
+      startedAt: cycle.startedAt,
+      completedAt: cycle.completedAt,
+      result: cycle.result,
+      stopReason: cycle.stopReason,
+      exitCode: cycle.exitCode,
+      consecutiveFailures: cycle.consecutiveFailures,
+    },
+  })
+}
+
+function hasExactKeys(value, keys) {
+  return isRecord(value)
+    && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort())
+}
+
+export function validateRuntimeAgreement(
+  snapshot,
+  { now = Date.now(), maxAgeMs = DEFAULT_MAX_AGE_MS } = {},
+) {
+  if (!hasExactKeys(snapshot, ["schemaVersion", "observedAt", "mode", "queue", "local", "workOrder"])
+    || snapshot.schemaVersion !== 1
+    || !["ACTIVE", "HEALTHY_IDLE"].includes(snapshot.mode)
+    || !isFresh(snapshot.observedAt, now, maxAgeMs)) {
+    return failure("QUEUE_RUNTIME_AGREEMENT_INVALID", "Agreement snapshot is missing, stale, or invalid.")
+  }
+  if (snapshot.mode === "HEALTHY_IDLE") {
+    if (snapshot.queue !== null || snapshot.local !== null || snapshot.workOrder !== null) {
+      return failure("QUEUE_RUNTIME_AGREEMENT_MISMATCH", "Idle agreement contains active records.")
+    }
+    return success({ mode: snapshot.mode, observedAt: snapshot.observedAt })
+  }
+  const queue = snapshot.queue
+  const local = snapshot.local
+  const workOrder = snapshot.workOrder
+  const activeAgrees = queue?.status === "active"
+    && ["ACTIVE", "DEFERRED"].includes(local?.leaseStatus)
+    && ["ACTIVE", "IN_PROGRESS", "REVIEW"].includes(workOrder?.status)
+  const blockedAgrees = queue?.status === "blocked"
+    && local?.leaseStatus === "RELEASED"
+    && workOrder?.status === "BLOCKED"
+  if (!hasExactKeys(queue, ["outcomeId", "status", "workOrderRef"])
+    || !hasExactKeys(local, ["outcomeId", "leaseStatus", "checkpointState", "workOrderRef"])
+    || !hasExactKeys(workOrder, ["ref", "status"])
+    || !Number.isSafeInteger(queue.outcomeId) || queue.outcomeId < 1
+    || queue.outcomeId !== local.outcomeId
+    || typeof queue.workOrderRef !== "string" || !queue.workOrderRef
+    || queue.workOrderRef !== local.workOrderRef
+    || queue.workOrderRef !== workOrder.ref
+    || typeof local.checkpointState !== "string" || !local.checkpointState
+    || (!activeAgrees && !blockedAgrees)) {
+    return failure("QUEUE_RUNTIME_AGREEMENT_MISMATCH", "Queue, local state, and Work Order disagree.")
+  }
+  return success({
+    mode: snapshot.mode,
+    observedAt: snapshot.observedAt,
+    outcomeId: queue.outcomeId,
+    workOrderRef: queue.workOrderRef,
   })
 }
 
@@ -759,6 +872,7 @@ export function evaluateAcceptance({
   healthResult,
   runtimeStatusResult,
   githubResult,
+  agreementResult,
 }) {
   const results = AC_CATALOG.map((requirement) => {
     const checks = requirement.tests.map((file) => ({
@@ -781,11 +895,13 @@ export function evaluateAcceptance({
     }
     if (requirement.id === "AC-11") {
       checks.push({ name: "runtime-status-endpoint", proofClass: "LIVE", ...runtimeStatusResult })
+      checks.push({ name: "queue-runtime-work-order-agreement", proofClass: "LIVE", ...agreementResult })
     }
     if (requirement.id === "AC-13") {
       checks.push({ name: "application-health", proofClass: "LIVE", ...healthResult })
       checks.push({ name: "runtime-status-endpoint", proofClass: "LIVE", ...runtimeStatusResult })
       checks.push({ name: "resident-supervisor", proofClass: "LIVE", ...supervisorResult })
+      checks.push({ name: "queue-runtime-work-order-agreement", proofClass: "LIVE", ...agreementResult })
     }
     if (requirement.id === "AC-14") {
       checks.push({
@@ -838,6 +954,7 @@ export async function runCampaign(options, dependencies = {}) {
   const supervisorResult = supervisorRead.ok
     ? validateSupervisorState(supervisorRead.value, {
       now,
+      maxAgeMs: options.maxAgeMs,
       expectedWorkspace: options.workspace,
       expectedSupervisorPath: options.workspace
         ? path.join(options.workspace, "scripts", "hermes-bridge", "supervisor.ps1")
@@ -845,6 +962,28 @@ export async function runCampaign(options, dependencies = {}) {
       processProbe: dependencies.processProbe,
     })
     : supervisorRead
+  let agreementResult
+  if (dependencies.agreementProbe) {
+    agreementResult = await dependencies.agreementProbe({ now, maxAgeMs: options.maxAgeMs })
+  } else {
+    try {
+      const agreementProducer = dependencies.agreementProducer ?? produceRuntimeAgreement
+      const snapshot = await agreementProducer({
+        statePath: options.state,
+        outputPath: options.agreement,
+        databaseUrl: dependencies.databaseUrl ?? process.env.DATABASE_URL,
+        query: dependencies.agreementQuery,
+        createPool: dependencies.createAgreementPool,
+        now: clock,
+      })
+      agreementResult = validateRuntimeAgreement(snapshot, { now, maxAgeMs: options.maxAgeMs })
+    } catch (error) {
+      agreementResult = failure(
+        error?.code ?? "QUEUE_RUNTIME_AGREEMENT_PRODUCER_WALL",
+        "Production queue/runtime/Work Order agreement could not be established.",
+      )
+    }
+  }
   const healthResult = await probeJson(
     options.appUrl ? `${options.appUrl}/api/health` : null,
     { fetchImpl: dependencies.fetchImpl, clock, maxAgeMs: options.maxAgeMs, timestampField: "timestamp" },
@@ -874,6 +1013,7 @@ export async function runCampaign(options, dependencies = {}) {
     healthResult,
     runtimeStatusResult,
     githubResult,
+    agreementResult,
   })
   return {
     schemaVersion: SCHEMA_VERSION,

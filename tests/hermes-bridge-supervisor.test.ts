@@ -1,12 +1,30 @@
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 
 const repoRoot = process.cwd()
 const supervisorScript = path.join(repoRoot, "scripts", "hermes-bridge", "supervisor.ps1")
 const installScript = path.join(repoRoot, "scripts", "hermes-bridge", "install-supervisor.ps1")
+const isolatedRoots: string[] = []
+
+afterEach(() => {
+  isolatedRoots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true }))
+})
+
+function isolatedSupervisor() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-isolated-supervisor-"))
+  isolatedRoots.push(root)
+  const script = path.join(root, "supervisor.ps1")
+  const mutex = `Global\\WilliamOSHermesSupervisorTest${Date.now()}${Math.random()}`
+  fs.writeFileSync(
+    script,
+    fs.readFileSync(supervisorScript, "utf8")
+      .replace("Global\\WilliamOSHermesCodexBridgeSupervisor", mutex),
+  )
+  return { root, script }
+}
 
 function isGlobalSupervisorMutexHeld() {
   if (process.platform !== "win32") return false
@@ -35,6 +53,8 @@ describe("Hermes interactive-user supervisor", () => {
     const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-supervisor-"))
     const activationPath = path.join(runtimeRoot, "control", "activation")
     const markerPath = path.join(runtimeRoot, "cycle.marker")
+    const inFlightPath = path.join(runtimeRoot, "in-flight.json")
+    const completedPath = path.join(runtimeRoot, "completed.json")
     fs.mkdirSync(path.dirname(activationPath), { recursive: true })
     fs.writeFileSync(activationPath, "enabled\n")
 
@@ -43,13 +63,37 @@ describe("Hermes interactive-user supervisor", () => {
       `& ${quote(supervisorScript)}`,
       `-Workspace ${quote(repoRoot)}`,
       `-RuntimeRoot ${quote(runtimeRoot)}`,
-      "-RunOnce",
-      `-CycleAction { param([string]$OwnedWorkspace, [string]$OwnedCliPath, [string]$OwnedRuntimeRoot) [IO.File]::WriteAllText(${quote(markerPath)}, "$OwnedWorkspace|$OwnedRuntimeRoot"); return 0 }`,
+      "-CycleIntervalSeconds 1",
+      `-CycleAction { param([string]$OwnedWorkspace, [string]$OwnedCliPath, [string]$OwnedRuntimeRoot) [IO.File]::WriteAllText(${quote(markerPath)}, "$OwnedWorkspace|$OwnedRuntimeRoot"); Copy-Item -LiteralPath (Join-Path $OwnedRuntimeRoot "state\\supervisor.json") -Destination ${quote(inFlightPath)}; return [PSCustomObject]@{ ExitCode = 0; Result = "QUEUE_DRAINED"; StopReason = "NO_OUTCOME" } }`,
+      `-SleepAction { param([int]$Seconds) Copy-Item -LiteralPath (Join-Path ${quote(runtimeRoot)} 'state\\supervisor.json') -Destination ${quote(completedPath)}; Set-Content -LiteralPath ${quote(activationPath)} -Value disabled }`,
     ].join(" ")
     const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8" })
 
     expect(result.status, result.stderr).toBe(0)
     expect(fs.readFileSync(markerPath, "utf8")).toBe(`${repoRoot}|${runtimeRoot}`)
+    expect(JSON.parse(fs.readFileSync(inFlightPath, "utf8"))).toMatchObject({
+      schemaVersion: 2,
+      cycle: {
+        sequence: 1,
+        status: "IN_FLIGHT",
+        completedAt: null,
+        result: null,
+        stopReason: null,
+        exitCode: null,
+        consecutiveFailures: 0,
+      },
+    })
+    expect(JSON.parse(fs.readFileSync(completedPath, "utf8"))).toMatchObject({
+      schemaVersion: 2,
+      cycle: {
+        sequence: 1,
+        status: "IDLE",
+        result: "QUEUE_DRAINED",
+        stopReason: "NO_OUTCOME",
+        exitCode: 0,
+        consecutiveFailures: 0,
+      },
+    })
     expect(fs.existsSync(path.join(runtimeRoot, "state", "supervisor.json"))).toBe(false)
     expect(result.stdout).toContain("INTERACTIVE_USER_RESIDENT")
   })
@@ -87,6 +131,106 @@ describe("Hermes interactive-user supervisor", () => {
     expect(fs.existsSync(path.join(runtimeRoot, "state", "supervisor.json"))).toBe(false)
   })
 
+  it.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1")(
+    "keeps a long owned cycle fresh with independent heartbeat pulses",
+    async () => {
+      const { root, script } = isolatedSupervisor()
+      const runtimeRoot = path.join(root, "runtime")
+      const activationPath = path.join(runtimeRoot, "control", "activation")
+      const completedPath = path.join(root, "completed.json")
+      fs.mkdirSync(path.dirname(activationPath), { recursive: true })
+      fs.writeFileSync(activationPath, "enabled\n")
+      const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
+      const action = [
+        "param([string]$OwnedWorkspace,[string]$OwnedCliPath,[string]$OwnedRuntimeRoot)",
+        "Start-Sleep -Milliseconds 3200",
+        '[PSCustomObject]@{ ExitCode=0; Result="QUEUE_DRAINED"; StopReason="NO_OUTCOME" }',
+      ].join("; ")
+      const sleep = [
+        "param([int]$Seconds)",
+        `Copy-Item -LiteralPath (Join-Path ${quote(runtimeRoot)} 'state\\supervisor.json') -Destination ${quote(completedPath)}`,
+        `Set-Content -LiteralPath ${quote(activationPath)} -Value disabled`,
+      ].join("; ")
+      const child = spawn("pwsh", [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+        `& ${quote(script)} -Workspace ${quote(repoRoot)} -RuntimeRoot ${quote(runtimeRoot)} -CycleIntervalSeconds 1 -CycleBudgetSeconds 6 -HeartbeatIntervalSeconds 1 -CycleAction { ${action} } -SleepAction { ${sleep} }`,
+      ])
+      let stderr = ""
+      child.stderr.on("data", (chunk) => { stderr += String(chunk) })
+      const statePath = path.join(runtimeRoot, "state", "supervisor.json")
+      let before: { heartbeatAt: string; cycle: { status: string } } | null = null
+      for (let attempt = 0; attempt < 40 && before === null; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        try {
+          const candidate = JSON.parse(fs.readFileSync(statePath, "utf8"))
+          if (candidate.cycle.status === "IN_FLIGHT") before = candidate
+        } catch {
+          // Atomic replacement can race the open; retry the observer only.
+        }
+      }
+      expect(before?.cycle.status).toBe("IN_FLIGHT")
+      await new Promise((resolve) => setTimeout(resolve, 2200))
+      const pulsed = JSON.parse(fs.readFileSync(statePath, "utf8"))
+      expect(Date.parse(pulsed.heartbeatAt)).toBeGreaterThan(Date.parse(before!.heartbeatAt))
+      const exitCode = await new Promise<number | null>((resolve) => child.on("close", resolve))
+      expect(exitCode, stderr).toBe(0)
+      const logs = fs.readdirSync(path.join(runtimeRoot, "logs"))
+        .map((file) => fs.readFileSync(path.join(runtimeRoot, "logs", file), "utf8"))
+        .join("\n")
+      expect(JSON.parse(fs.readFileSync(completedPath, "utf8")), logs).toMatchObject({
+        cycle: {
+          status: "IDLE",
+          result: "QUEUE_DRAINED",
+          stopReason: "NO_OUTCOME",
+          exitCode: 0,
+          consecutiveFailures: 0,
+        },
+      })
+    },
+    15_000,
+  )
+
+  it.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1")(
+    "terminates only an over-budget owned cycle and records the wall before stopping",
+    () => {
+      const { root, script } = isolatedSupervisor()
+      const runtimeRoot = path.join(root, "runtime")
+      const activationPath = path.join(runtimeRoot, "control", "activation")
+      const forbiddenMarker = path.join(root, "cycle-finished.txt")
+      const completedPath = path.join(root, "completed.json")
+      fs.mkdirSync(path.dirname(activationPath), { recursive: true })
+      fs.writeFileSync(activationPath, "enabled\n")
+      const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
+      const action = [
+        "param([string]$OwnedWorkspace,[string]$OwnedCliPath,[string]$OwnedRuntimeRoot)",
+        "Start-Sleep -Seconds 10",
+        `[IO.File]::WriteAllText(${quote(forbiddenMarker)}, "unsafe")`,
+        "return 0",
+      ].join("; ")
+      const sleep = [
+        "param([int]$Seconds)",
+        `Copy-Item -LiteralPath (Join-Path ${quote(runtimeRoot)} 'state\\supervisor.json') -Destination ${quote(completedPath)}`,
+        `Set-Content -LiteralPath ${quote(activationPath)} -Value disabled`,
+      ].join("; ")
+      const result = spawnSync("pwsh", [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+        `& ${quote(script)} -Workspace ${quote(repoRoot)} -RuntimeRoot ${quote(runtimeRoot)} -CycleIntervalSeconds 1 -CycleBudgetSeconds 1 -HeartbeatIntervalSeconds 1 -CycleAction { ${action} } -SleepAction { ${sleep} }`,
+      ], { encoding: "utf8", timeout: 10_000 })
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(fs.existsSync(forbiddenMarker)).toBe(false)
+      const completed = JSON.parse(fs.readFileSync(completedPath, "utf8"))
+      expect(completed.processId).toBeGreaterThan(0)
+      expect(completed.cycle).toMatchObject({
+        status: "IDLE",
+        result: "WALL",
+        stopReason: "CYCLE_BUDGET_EXCEEDED",
+        exitCode: 124,
+        consecutiveFailures: 1,
+      })
+    },
+  )
+
   it("installs a hidden Startup shortcut instead of a scheduled execution host", () => {
     const source = fs.readFileSync(installScript, "utf8")
     expect(source).toContain('[Environment]::GetFolderPath("Startup")')
@@ -103,13 +247,17 @@ describe("Hermes interactive-user supervisor", () => {
     const supervisor = fs.readFileSync(supervisorScript, "utf8")
     expect(supervisor).toContain("$env:WILLIAMOS_HERMES_RUNTIME_ROOT = $OwnedRuntimeRoot")
     expect(supervisor).toContain("$runtimeRootPath = [IO.Path]::GetFullPath($RuntimeRoot)")
-    expect(supervisor).toContain("$OwnedCliPath cycle")
-    expect(supervisor.indexOf('$cycleLogPath = Join-Path $logDir')).toBeGreaterThan(supervisor.indexOf("$CycleAction ="))
+    expect(supervisor).toContain('$startInfo.ArgumentList.Add($OwnedCliPath)')
+    expect(supervisor).toContain('$startInfo.ArgumentList.Add("cycle")')
     expect(supervisor).not.toContain("& pwsh.exe")
     expect(supervisor).toContain("Global\\WilliamOSHermesCodexBridgeSupervisor")
     expect(supervisor).not.toContain("[string]$MutexName")
     expect(supervisor).toContain("HERMES_SUPERVISOR_CYCLE_FAILED")
     expect(supervisor).toContain("HERMES_SUPERVISOR_STATE_CLEANUP_FAILED")
+    expect(supervisor).toContain("Write-SupervisorState")
+    expect(supervisor).toContain('$record.cycle.status = "IN_FLIGHT"')
+    expect(supervisor).toContain('$record.cycle.status = "IDLE"')
+    expect(supervisor).toContain("ConvertTo-SupervisorToken")
   })
 
   it("does not reuse the rejected nested Codex execution adapter", () => {
@@ -121,7 +269,9 @@ describe("Hermes interactive-user supervisor", () => {
 
   it("does not put a nested PowerShell process between the resident supervisor and one-shot CLI", () => {
     const source = fs.readFileSync(supervisorScript, "utf8")
-    expect(source).toContain("& node")
+    expect(source).toContain("[Diagnostics.ProcessStartInfo]::new()")
+    expect(source).toContain("$process.Kill($true)")
+    expect(source).not.toContain("Start-Job")
     expect(source).not.toContain("run-cycle.ps1")
     expect(source).not.toContain("& pwsh.exe")
   })

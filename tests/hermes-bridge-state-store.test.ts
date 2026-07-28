@@ -4,7 +4,11 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { createHash } from "node:crypto"
 
-import { createHermesStateStore } from "@/scripts/hermes-bridge/state-store.mjs"
+import {
+  createHermesStateStore,
+  hermesTurnResultDigest,
+  normalizeHermesTurnResult,
+} from "@/scripts/hermes-bridge/state-store.mjs"
 
 const dirs: string[] = []
 const ownerDecisionPacket = {
@@ -13,6 +17,25 @@ const ownerDecisionPacket = {
   minimumChoice: "APPROVE_OR_DENY",
   approveConsequence: "Resume only the blocked validation.",
   denyConsequence: "Keep the Work Order blocked.",
+}
+const turnResult = {
+  result: "READY_FOR_VALIDATION",
+  workOrder: "WO-HERMES-5-001",
+  branch: "codex/hermes-goal-5-5",
+  commit: null,
+  prUrl: null,
+  merged: false,
+  mergeCommit: null,
+  validation: ["reviewed"],
+  reviewThreads: 0,
+  ownerTouchCount: 0,
+  blockedScopeCrossed: false,
+  nextState: "READY_FOR_HERMES_MERGE",
+  blockedAction: null,
+  authorityBoundary: null,
+  minimumChoice: null,
+  approveConsequence: null,
+  denyConsequence: null,
 }
 afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })))
 
@@ -30,6 +53,51 @@ function fixture() {
 }
 
 describe("Hermes bridge durable state store", () => {
+  it("persists a canonical secret-screened turn result only with its exact digest", () => {
+    const { store } = fixture()
+    const first = store.acquireLease({
+      outcomeId: "5",
+      holderId: "turn-holder",
+      leaseDurationMs: 1000,
+      idempotencyKey: "turn-result-acquire",
+    })
+    const canonical = normalizeHermesTurnResult(turnResult)
+    const resultDigest = hermesTurnResultDigest(canonical)
+    store.checkpoint({
+      outcomeId: "5",
+      holderId: "turn-holder",
+      fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "CODEX_TURN_COMPLETED",
+      metadata: { turnResult: canonical, turnResultDigest: resultDigest },
+      idempotencyKey: "turn-result-checkpoint",
+    })
+    expect(store.read().executions["5"].metadata).toMatchObject({
+      turnResult: canonical,
+      turnResultDigest: resultDigest,
+    })
+    expect(() => store.checkpoint({
+      outcomeId: "5",
+      holderId: "turn-holder",
+      fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 1,
+      state: "HOST_VALIDATION_STARTED",
+      metadata: { turnResult: canonical, turnResultDigest: "a".repeat(64) },
+      idempotencyKey: "turn-result-bad-digest",
+    })).toThrowError(expect.objectContaining({ code: "INVALID_TURN_RESULT_DIGEST" }))
+  })
+
+  it("rejects secret-like or schema-expanded turn results before persistence", () => {
+    expect(() => normalizeHermesTurnResult({
+      ...turnResult,
+      validation: ["token=opaque-value"],
+    })).toThrowError(expect.objectContaining({ code: "TURN_RESULT_SECRET_WALL" }))
+    expect(() => normalizeHermesTurnResult({
+      ...turnResult,
+      unexpected: "field",
+    })).toThrowError(expect.objectContaining({ code: "INVALID_TURN_RESULT" }))
+  })
+
   it("atomically persists lease, metadata, checkpoint sequence, and idempotency", () => {
     const { dir, store } = fixture()
     const snapshot = { id: 1, command: "Improve WilliamOS", lane: "ui", risk: "R1", authority: "A2_WRITE_OWN" }

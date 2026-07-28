@@ -17,6 +17,32 @@ const SENSITIVE_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY---
 const VALIDATION_INFRASTRUCTURE_DETAIL = "VALIDATION_REMEDIATION_EXHAUSTED"
 const VALIDATION_INFRASTRUCTURE_FAILURE = /\bspawn EPERM\b/i
 const REVIEW_REMEDIATION_DETAIL = "REVIEW_REMEDIATION_EXHAUSTED"
+const TURN_RESULTS = new Set([
+  "READY_FOR_VALIDATION",
+  "RETRYABLE_PROVIDER_WALL",
+  "OWNER_DECISION_REQUIRED",
+  "FAILED_TERMINAL",
+])
+const TURN_RESULT_KEYS = Object.freeze([
+  "result",
+  "workOrder",
+  "branch",
+  "commit",
+  "prUrl",
+  "merged",
+  "mergeCommit",
+  "validation",
+  "reviewThreads",
+  "ownerTouchCount",
+  "blockedScopeCrossed",
+  "nextState",
+  "blockedAction",
+  "authorityBoundary",
+  "minimumChoice",
+  "approveConsequence",
+  "denyConsequence",
+])
+const TURN_RESULT_REQUIRED_KEYS = Object.freeze(TURN_RESULT_KEYS.slice(0, 12))
 
 function fail(code, message = code) {
   const error = new Error(message)
@@ -37,6 +63,61 @@ function digest(value) {
 
 function textDigest(value) {
   return createHash("sha256").update(value).digest("hex")
+}
+
+function boundedString(value, field, { nullable = false, maximum = 1_000 } = {}) {
+  if (nullable && value === null) return null
+  if (typeof value !== "string" || value.length === 0 || value.length > maximum) {
+    fail("INVALID_TURN_RESULT", field)
+  }
+  return value
+}
+
+export function normalizeHermesTurnResult(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || TURN_RESULT_REQUIRED_KEYS.some((key) => !Object.hasOwn(value, key))
+    || Object.keys(value).some((key) => !TURN_RESULT_KEYS.includes(key))) {
+    fail("INVALID_TURN_RESULT")
+  }
+  if (!TURN_RESULTS.has(value.result)
+    || typeof value.merged !== "boolean"
+    || !Number.isSafeInteger(value.reviewThreads) || value.reviewThreads < 0
+    || !Number.isSafeInteger(value.ownerTouchCount) || value.ownerTouchCount < 0
+    || typeof value.blockedScopeCrossed !== "boolean"
+    || !Array.isArray(value.validation) || value.validation.length > 20
+    || value.validation.some((entry) => typeof entry !== "string" || entry.length > 1_000)
+    || typeof value.nextState !== "string"
+    || !/^[A-Z][A-Z0-9_]{1,79}$/.test(value.nextState)
+    || !["APPROVE_OR_DENY", null].includes(value.minimumChoice ?? null)) {
+    fail("INVALID_TURN_RESULT")
+  }
+  const normalized = {
+    result: value.result,
+    workOrder: boundedString(value.workOrder, "workOrder", { maximum: 200 }),
+    branch: boundedString(value.branch, "branch", { maximum: 200 }),
+    commit: boundedString(value.commit, "commit", { nullable: true, maximum: 200 }),
+    prUrl: boundedString(value.prUrl, "prUrl", { nullable: true, maximum: 500 }),
+    merged: value.merged,
+    mergeCommit: boundedString(value.mergeCommit, "mergeCommit", { nullable: true, maximum: 200 }),
+    validation: [...value.validation],
+    reviewThreads: value.reviewThreads,
+    ownerTouchCount: value.ownerTouchCount,
+    blockedScopeCrossed: value.blockedScopeCrossed,
+    nextState: value.nextState,
+    blockedAction: boundedString(value.blockedAction ?? null, "blockedAction", { nullable: true }),
+    authorityBoundary: boundedString(value.authorityBoundary ?? null, "authorityBoundary", { nullable: true }),
+    minimumChoice: value.minimumChoice ?? null,
+    approveConsequence: boundedString(value.approveConsequence ?? null, "approveConsequence", { nullable: true }),
+    denyConsequence: boundedString(value.denyConsequence ?? null, "denyConsequence", { nullable: true }),
+  }
+  if (SENSITIVE_EVIDENCE.test(JSON.stringify(normalized))) {
+    fail("TURN_RESULT_SECRET_WALL")
+  }
+  return normalized
+}
+
+export function hermesTurnResultDigest(value) {
+  return digest(normalizeHermesTurnResult(value))
 }
 
 function initialState(storeId, now) {
@@ -83,6 +164,13 @@ function validateState(state, storeId) {
     if (typeof validationFailure === "string" && validationFailure && SENSITIVE_EVIDENCE.test(validationFailure)) {
       fail("VALIDATION_FAILURE_SECRET_WALL")
     }
+    const turnResult = execution?.metadata?.turnResult ?? null
+    const turnResultDigest = execution?.metadata?.turnResultDigest ?? null
+    if ((turnResult === null) !== (turnResultDigest === null)
+      || (turnResult !== null
+        && hermesTurnResultDigest(turnResult) !== turnResultDigest)) {
+      fail("INVALID_TURN_RESULT_DIGEST")
+    }
   }
   if (SENSITIVE_EVIDENCE.test(JSON.stringify(state.idempotency))) {
     fail("IDEMPOTENCY_SECRET_WALL")
@@ -95,7 +183,13 @@ export function readHermesState(filePath, storeId = "hermes-bridge") {
   try {
     return validateState(JSON.parse(fs.readFileSync(filePath, "utf8")), storeId)
   } catch (error) {
-    if (["HERMES_STATE_CORRUPT", "VALIDATION_FAILURE_SECRET_WALL", "IDEMPOTENCY_SECRET_WALL"].includes(error?.code)) {
+    if ([
+      "HERMES_STATE_CORRUPT",
+      "VALIDATION_FAILURE_SECRET_WALL",
+      "IDEMPOTENCY_SECRET_WALL",
+      "TURN_RESULT_SECRET_WALL",
+      "INVALID_TURN_RESULT_DIGEST",
+    ].includes(error?.code)) {
       throw error
     }
     fail("HERMES_STATE_CORRUPT", `Unable to read Hermes state: ${error.message}`)
@@ -221,7 +315,9 @@ function metadata(input = {}, current = {}) {
       || typeof binding.executionBinding !== "string" || binding.executionBinding.trim() === ""
       || typeof binding.leaseToken !== "string" || binding.leaseToken.trim() === ""
       || !Number.isSafeInteger(binding.fencingToken) || binding.fencingToken <= 0
-      || typeof binding.acquisitionKey !== "string" || binding.acquisitionKey.trim() === "") {
+      || typeof binding.acquisitionKey !== "string" || binding.acquisitionKey.trim() === ""
+      || (binding.activeWorkOrderId !== undefined
+        && (!Number.isSafeInteger(binding.activeWorkOrderId) || binding.activeWorkOrderId <= 0))) {
       fail("INVALID_OUTCOME_QUEUE_BINDING")
     }
   }
@@ -320,6 +416,19 @@ function metadata(input = {}, current = {}) {
     && (typeof ownerDecisionPacketDigest !== "string" || !SHA256.test(ownerDecisionPacketDigest))) {
     fail("INVALID_OWNER_DECISION_PACKET_DIGEST")
   }
+  const turnResult = Object.hasOwn(input, "turnResult")
+    ? input.turnResult
+    : current.turnResult ?? null
+  const turnResultDigest = Object.hasOwn(input, "turnResultDigest")
+    ? input.turnResultDigest
+    : current.turnResultDigest ?? null
+  const normalizedTurnResult = turnResult === null ? null : normalizeHermesTurnResult(turnResult)
+  if ((normalizedTurnResult === null) !== (turnResultDigest === null)
+    || (turnResultDigest !== null
+      && (!SHA256.test(turnResultDigest)
+        || turnResultDigest !== hermesTurnResultDigest(normalizedTurnResult)))) {
+    fail("INVALID_TURN_RESULT_DIGEST")
+  }
   const validationEvidence = normalizedValidationEvidence(input, current)
   const ownerDecisionNextState = Object.hasOwn(input, "ownerDecisionNextState")
     ? input.ownerDecisionNextState
@@ -409,6 +518,8 @@ function metadata(input = {}, current = {}) {
     ownerDecisionTerminalEventId,
     ownerDecisionPacket,
     ownerDecisionPacketDigest,
+    turnResult: normalizedTurnResult,
+    turnResultDigest,
     validationEvidence,
     runtimeEvidenceRef,
     outcome,

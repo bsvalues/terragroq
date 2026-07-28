@@ -1,4 +1,5 @@
 import { getTableName } from "drizzle-orm"
+import { getTableConfig } from "drizzle-orm/pg-core"
 import { describe, expect, it } from "vitest"
 
 import { outcomeQueueItem } from "@/lib/db/schema"
@@ -7,6 +8,7 @@ import {
   canTransitionOutcome,
   completeOutcome,
   fenceMatches,
+  findOutcomeDependencyCycle,
   isLeaseStale,
   mapLegacyGoalToOutcome,
   selectNextOutcome,
@@ -97,6 +99,18 @@ function fence(item: OutcomeQueueRecord) {
 describe("outcome lifecycle", () => {
   it("binds the engine to the additive durable queue table", () => {
     expect(getTableName(outcomeQueueItem)).toBe("outcome_queue_item")
+    const config = getTableConfig(outcomeQueueItem)
+    expect(config.indexes.some((index) => (
+      index.config.name === "outcome_queue_item_one_active_per_user_idx"
+      && index.config.unique === true
+    ))).toBe(true)
+    expect(config.checks.map((check) => check.name)).toEqual(expect.arrayContaining([
+      "outcome_queue_item_lifecycle_state_check",
+      "outcome_queue_item_approval_state_check",
+      "outcome_queue_item_authority_state_check",
+      "outcome_queue_item_nonnegative_fence_check",
+      "outcome_queue_item_active_binding_check",
+    ]))
   })
 
   it("allows only explicit legal transitions and requires approval evidence", () => {
@@ -226,6 +240,39 @@ describe("deterministic selection and eligibility", () => {
     expect(selectNextOutcome([completedPrerequisite, dependent], CURRENT_SELECTION)).toMatchObject({
       selected: true,
       item: { outcomeKey: "goal:dependent" },
+    })
+  })
+
+  it("detects deterministic dependency cycles before they enter selection", () => {
+    const first = outcome({
+      outcomeKey: "goal:A",
+      dependencyKeys: ["goal:B"],
+    })
+    const second = outcome({
+      id: 2,
+      outcomeKey: "goal:B",
+      dependencyKeys: ["goal:A"],
+      queueOrder: 101,
+    })
+    expect(findOutcomeDependencyCycle([second, first])).toEqual([
+      "goal:A",
+      "goal:B",
+      "goal:A",
+    ])
+    const selection = selectNextOutcome([first, second], CURRENT_SELECTION)
+    expect(selection).toMatchObject({
+      selected: false,
+      reason: "DEPENDENCIES_UNSATISFIED",
+      blockers: [
+        expect.objectContaining({
+          outcomeKey: "goal:A",
+          reasons: expect.arrayContaining(["DEPENDENCY_NOT_COMPLETED"]),
+        }),
+        expect.objectContaining({
+          outcomeKey: "goal:B",
+          reasons: expect.arrayContaining(["DEPENDENCY_NOT_COMPLETED"]),
+        }),
+      ],
     })
   })
 

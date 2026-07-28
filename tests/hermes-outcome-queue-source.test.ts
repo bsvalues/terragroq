@@ -3,7 +3,10 @@ import { createHash } from "node:crypto"
 import { getTableName } from "drizzle-orm"
 import { getTableConfig } from "drizzle-orm/pg-core"
 
-import { outcomeQueueMutationReceipt } from "@/lib/db/schema"
+import {
+  outcomeQueueAcquisitionReceipt,
+  outcomeQueueMutationReceipt,
+} from "@/lib/db/schema"
 import {
   acquireNextEligibleOutcome,
   acquireOutcome as acquireOutcomeCompatibility,
@@ -15,6 +18,7 @@ import {
   deferOutcomeLease as deferOutcomeLeaseCompatibility,
   deferOutcomeQueueLease,
   enqueueOutcome,
+  ensureOutcomeQueueHardeningSchema,
   listOutcomeQueue,
   matchOutcomeAuthorityGrant,
   matchOutcomeAuthority as matchOutcomeAuthorityCompatibility,
@@ -31,6 +35,7 @@ import {
   resumeOutcomeQueueAfterDecision,
   transitionOutcome as transitionOutcomeCompatibility,
   transitionOutcomeQueueItem,
+  verifyOutcomeQueueWorkOrderBinding,
 } from "@/scripts/hermes-bridge/outcome-queue-source.mjs"
 
 const now = "2026-07-28T12:00:00.000Z"
@@ -97,26 +102,60 @@ function safeMutationRow(row: Record<string, unknown>) {
   return safe
 }
 
+function dedicatedQuery(run: ReturnType<typeof vi.fn>) {
+  return Object.assign(run, {
+    connect: async () => ({ query: run, release: vi.fn() }),
+  })
+}
+
 function acquisitionQuery({
+  receipt = [],
+  receiptOutcome,
   prior = [],
   replayEligibility = [{ approvalLive: true, authorityLive: true }],
   reclaimed = [],
   selected = [],
   counts = [],
 }: {
+  receipt?: unknown[]
+  receiptOutcome?: unknown[]
   prior?: unknown[]
   replayEligibility?: unknown[]
   reclaimed?: unknown[]
   selected?: unknown[]
   counts?: unknown[]
 }) {
-  const run = vi.fn(async (sql: string) => {
+  const run = vi.fn(async (sql: string, values: unknown[] = []) => {
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] }
     if (sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
+    if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt) return { rows: receipt }
+    if (sql === OUTCOME_QUEUE_SQL.readReceiptOutcome) {
+      return { rows: receiptOutcome ?? prior }
+    }
     if (sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: prior }
     if (sql === OUTCOME_QUEUE_SQL.revalidateAcquisition) return { rows: replayEligibility }
     if (sql === OUTCOME_QUEUE_SQL.reclaimAcquisition) return { rows: reclaimed }
     if (sql === OUTCOME_QUEUE_SQL.acquire) return { rows: selected }
+    if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionReceipt) {
+      return {
+        rows: [{
+          id: 51,
+          outcomeKey: values?.[2],
+          firstFencingToken: values?.[3],
+          latestFencingToken: values?.[3],
+        }],
+      }
+    }
+    if (sql === OUTCOME_QUEUE_SQL.advanceAcquisitionReceipt) {
+      return {
+        rows: [{
+          id: 51,
+          outcomeKey: values?.[4],
+          firstFencingToken: 1,
+          latestFencingToken: values?.[2],
+        }],
+      }
+    }
     if (sql === OUTCOME_QUEUE_SQL.noSelectionReason) return { rows: counts }
     throw new Error(`unexpected query: ${sql}`)
   })
@@ -211,6 +250,205 @@ function mutationQuery({
 }
 
 describe("transactional durable outcome queue source", () => {
+  it("bootstraps and verifies every additive queue invariant under one transaction lock", async () => {
+    const constraintNames = [
+      "outcome_queue_item_active_binding_check",
+      "outcome_queue_item_approval_state_check",
+      "outcome_queue_item_authority_state_check",
+      "outcome_queue_item_lifecycle_state_check",
+      "outcome_queue_item_nonnegative_fence_check",
+    ]
+    const constraintDefinitions: Record<string, string> = {
+      outcome_queue_item_active_binding_check:
+        `CHECK ("lifecycleState" <> 'active' OR ("executionBinding" IS NOT NULL AND "leaseHolder" IS NOT NULL AND "leaseToken" IS NOT NULL AND "leaseExpiresAt" IS NOT NULL AND "acquisitionKey" IS NOT NULL AND "fencingToken" > 0))`,
+      outcome_queue_item_approval_state_check:
+        `CHECK ("approvalState" IN ('unapproved', 'approved', 'revoked'))`,
+      outcome_queue_item_authority_state_check:
+        `CHECK ("authorityState" IN ('unverified', 'matched', 'denied', 'expired', 'revoked'))`,
+      outcome_queue_item_lifecycle_state_check:
+        `CHECK ("lifecycleState" IN ('suggested', 'approved', 'blocked', 'active', 'completed', 'declined', 'superseded'))`,
+      outcome_queue_item_nonnegative_fence_check:
+        `CHECK ("fencingToken" >= 0 AND "version" >= 0)`,
+    }
+    const run = vi.fn(async (sql: string) => {
+      if (sql === OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations) {
+        return {
+          rows: [{
+            lifecycleViolationCount: 0,
+            approvalViolationCount: 0,
+            authorityViolationCount: 0,
+            nonnegativeViolationCount: 0,
+            activeBindingViolationCount: 0,
+            multipleActiveUserCount: 0,
+          }],
+        }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readOutcomeQueueHardeningConstraints) {
+        return {
+          rows: constraintNames.map((constraintName) => ({
+            constraintName,
+            validated: true,
+            definition: constraintDefinitions[constraintName],
+          })),
+        }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readOneActiveOutcomeIndex) {
+        return {
+          rows: [{
+            unique: true,
+            valid: true,
+            ready: true,
+            keyColumn: '"userId"',
+            predicate: `("lifecycleState" = 'active'::text)`,
+          }],
+        }
+      }
+      return { rows: [] }
+    })
+    const release = vi.fn()
+    const query = Object.assign(run, {
+      connect: vi.fn(async () => ({ query: run, release })),
+    })
+
+    await expect(ensureOutcomeQueueHardeningSchema({ query })).resolves.toBe(true)
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptTable,
+      OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptOutcomeIndex,
+      OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations,
+      OUTCOME_QUEUE_SQL.ensureOneActiveOutcomeIndex,
+      OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemCheckConstraints,
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueLifecycleConstraint,
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueApprovalConstraint,
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueAuthorityConstraint,
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueNonnegativeFenceConstraint,
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueActiveBindingConstraint,
+      OUTCOME_QUEUE_SQL.readOutcomeQueueHardeningConstraints,
+      OUTCOME_QUEUE_SQL.readOneActiveOutcomeIndex,
+      "COMMIT",
+    ])
+    expect(run.mock.calls[1][1]).toEqual(["williamos:outcome-queue:hardening-schema"])
+    expect(run).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.readOutcomeQueueHardeningConstraints,
+      [constraintNames],
+    )
+    for (const constraintName of constraintNames) {
+      expect(OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemCheckConstraints)
+        .toContain(`ADD CONSTRAINT "${constraintName}"`)
+      expect(OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemCheckConstraints)
+        .toContain(`DROP CONSTRAINT IF EXISTS "${constraintName}"`)
+    }
+    expect(OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemCheckConstraints)
+      .toContain(`CHECK ("fencingToken" >= 0 AND "version" >= 0) NOT VALID`)
+    expect(OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemCheckConstraints)
+      .toContain(`AND "acquisitionKey" IS NOT NULL`)
+    expect([
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueLifecycleConstraint.trim(),
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueApprovalConstraint.trim(),
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueAuthorityConstraint.trim(),
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueNonnegativeFenceConstraint.trim(),
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueActiveBindingConstraint.trim(),
+    ]).toEqual([
+      `ALTER TABLE "outcome_queue_item"
+  VALIDATE CONSTRAINT "outcome_queue_item_lifecycle_state_check"`,
+      `ALTER TABLE "outcome_queue_item"
+  VALIDATE CONSTRAINT "outcome_queue_item_approval_state_check"`,
+      `ALTER TABLE "outcome_queue_item"
+  VALIDATE CONSTRAINT "outcome_queue_item_authority_state_check"`,
+      `ALTER TABLE "outcome_queue_item"
+  VALIDATE CONSTRAINT "outcome_queue_item_nonnegative_fence_check"`,
+      `ALTER TABLE "outcome_queue_item"
+  VALIDATE CONSTRAINT "outcome_queue_item_active_binding_check"`,
+    ])
+    expect(OUTCOME_QUEUE_SQL.readOutcomeQueueHardeningConstraints)
+      .toContain(`pg_get_constraintdef(oid, true) AS "definition"`)
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it("rolls back with a typed wall when the one-active catalog index is not canonical", async () => {
+    const run = vi.fn(async (sql: string) => {
+      if (sql === OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations) {
+        return {
+          rows: [{
+            lifecycleViolationCount: 0,
+            approvalViolationCount: 0,
+            authorityViolationCount: 0,
+            nonnegativeViolationCount: 0,
+            activeBindingViolationCount: 0,
+            multipleActiveUserCount: 0,
+          }],
+        }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readOutcomeQueueHardeningConstraints) {
+        return {
+          rows: [
+            "outcome_queue_item_active_binding_check",
+            "outcome_queue_item_approval_state_check",
+            "outcome_queue_item_authority_state_check",
+            "outcome_queue_item_lifecycle_state_check",
+            "outcome_queue_item_nonnegative_fence_check",
+          ].map((constraintName) => ({
+            constraintName,
+            validated: true,
+          })),
+        }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readOneActiveOutcomeIndex) {
+        return {
+          rows: [{
+            unique: false,
+            valid: true,
+            ready: true,
+            keyColumn: '"userId"',
+            predicate: `("lifecycleState" = 'active'::text)`,
+          }],
+        }
+      }
+      return { rows: [] }
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(ensureOutcomeQueueHardeningSchema({ query })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_HARDENING_INDEX_WALL",
+    })
+    expect(run.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it("rolls back with a typed wall when existing rows violate declared invariants", async () => {
+    const run = vi.fn(async (sql: string) => {
+      if (sql === OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations) {
+        return {
+          rows: [{
+            lifecycleViolationCount: 0,
+            approvalViolationCount: 0,
+            authorityViolationCount: 0,
+            nonnegativeViolationCount: 0,
+            activeBindingViolationCount: 1,
+            multipleActiveUserCount: 0,
+          }],
+        }
+      }
+      return { rows: [] }
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(ensureOutcomeQueueHardeningSchema({ query })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_HARDENING_EXISTING_ROWS_INVALID",
+      details: {
+        activeBindingViolationCount: 1,
+      },
+    })
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptTable,
+      OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptOutcomeIndex,
+      OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations,
+      "ROLLBACK",
+    ])
+  })
+
   it("uses the exact quoted schema contract and deterministic ordering", () => {
     expect(Object.isFrozen(OUTCOME_QUEUE_SQL)).toBe(true)
     for (const sql of Object.values(OUTCOME_QUEUE_SQL)) {
@@ -233,6 +471,9 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`q."authorityState" = 'matched'`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`FROM "authority_grant" AS live_grant`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`live_grant."status" = 'active'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(
+      `COALESCE($8, q."activeWorkOrderId") = live_grant."workOrderId"`,
+    )
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`live_grant."revokedAt" IS NULL`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(
       `live_grant."grantedTo" = q."authoritySubject"`,
@@ -477,6 +718,7 @@ describe("transactional durable outcome queue source", () => {
     expect(query.mock.calls.map(([sql]) => sql)).toEqual([
       "BEGIN",
       OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
       OUTCOME_QUEUE_SQL.readAcquisition,
       OUTCOME_QUEUE_SQL.acquire,
       OUTCOME_QUEUE_SQL.noSelectionReason,
@@ -484,7 +726,8 @@ describe("transactional durable outcome queue source", () => {
     ])
     expect(query.mock.calls[1][1]).toEqual([`${userId}:outcome-queue`])
     expect(query.mock.calls[2][1]).toEqual([userId, "acquire-none"])
-    expect(query.mock.calls[4][1]).toEqual([now, userId])
+    expect(query.mock.calls[3][1]).toEqual([userId, "acquire-none"])
+    expect(query.mock.calls[5][1]).toEqual([now, userId])
   })
 
   it("acquires transactionally and replays the same live binding", async () => {
@@ -500,15 +743,22 @@ describe("transactional durable outcome queue source", () => {
       reclaimed: false,
       reason: null,
     })
-    expect(firstQuery.mock.calls[3]).toEqual([
+    expect(firstQuery.mock.calls[4]).toEqual([
       OUTCOME_QUEUE_SQL.acquire,
       [
         now, userId, "acquire-a", "execution-a", "supervisor-a", "lease-a",
         "2026-07-28T12:01:00.000Z", 472,
       ],
     ])
+    expect(firstQuery).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.insertAcquisitionReceipt,
+      [userId, "acquire-a", acquired.outcomeKey, acquired.fencingToken, now],
+    )
 
-    const replayQuery = acquisitionQuery({ prior: [acquired] })
+    const replayQuery = acquisitionQuery({
+      receipt: [{ outcomeKey: acquired.outcomeKey }],
+      receiptOutcome: [acquired],
+    })
     await expect(acquireNextEligibleOutcome({
       query: replayQuery,
       ...acquireInput,
@@ -516,7 +766,8 @@ describe("transactional durable outcome queue source", () => {
     expect(replayQuery.mock.calls.map(([sql]) => sql)).toEqual([
       "BEGIN",
       OUTCOME_QUEUE_SQL.acquireLock,
-      OUTCOME_QUEUE_SQL.readAcquisition,
+      OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
+      OUTCOME_QUEUE_SQL.readReceiptOutcome,
       OUTCOME_QUEUE_SQL.revalidateAcquisition,
       "COMMIT",
     ])
@@ -527,7 +778,8 @@ describe("transactional durable outcome queue source", () => {
     [{ approvalLive: true, authorityLive: false }, "AUTHORITY_INELIGIBLE"],
   ])("rejects same-key replay when live authority changes %#", async (live, reason) => {
     const query = acquisitionQuery({
-      prior: [queueRow()],
+      receipt: [{ outcomeKey: "goal:GOAL-1000" }],
+      receiptOutcome: [queueRow()],
       replayEligibility: [live],
     })
     await expect(acquireNextEligibleOutcome({
@@ -543,7 +795,10 @@ describe("transactional durable outcome queue source", () => {
 
   it("returns not-acquired for live same-key contention", async () => {
     const query = acquisitionQuery({
-      prior: [queueRow({ leaseToken: "other-token", executionBinding: "other-execution" })],
+      receipt: [{ outcomeKey: "goal:GOAL-1000" }],
+      receiptOutcome: [
+        queueRow({ leaseToken: "other-token", executionBinding: "other-execution" }),
+      ],
     })
     await expect(acquireNextEligibleOutcome({
       query,
@@ -566,7 +821,10 @@ describe("transactional durable outcome queue source", () => {
       terminalEvidenceRefs: ["EV-1"],
       terminalKey: "complete-a",
     })
-    const query = acquisitionQuery({ prior: [completed] })
+    const query = acquisitionQuery({
+      receipt: [{ outcomeKey: completed.outcomeKey }],
+      receiptOutcome: [completed],
+    })
 
     await expect(acquireNextEligibleOutcome({
       query,
@@ -581,9 +839,43 @@ describe("transactional durable outcome queue source", () => {
     expect(query.mock.calls.map(([sql]) => sql)).toEqual([
       "BEGIN",
       OUTCOME_QUEUE_SQL.acquireLock,
-      OUTCOME_QUEUE_SQL.readAcquisition,
+      OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
+      OUTCOME_QUEUE_SQL.readReceiptOutcome,
       "COMMIT",
     ])
+  })
+
+  it("keeps a retired acquisition key bound to its original outcome", async () => {
+    const paused = queueRow({
+      lifecycleState: "blocked",
+      acquisitionKey: null,
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 2,
+      version: 2,
+    })
+    const query = acquisitionQuery({
+      receipt: [{ outcomeKey: paused.outcomeKey }],
+      receiptOutcome: [paused],
+      selected: [queueRow({ outcomeKey: "goal:GOAL-OTHER" })],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toEqual({
+      outcome: paused,
+      acquired: false,
+      replayed: true,
+      reclaimed: false,
+      reason: "ACQUISITION_KEY_RETIRED",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.acquire,
+      expect.anything(),
+    )
   })
 
   it("reclaims a stale same-key lease with a higher fence and version", async () => {
@@ -601,7 +893,11 @@ describe("transactional durable outcome queue source", () => {
       version: 9,
       lifecycleReason: "STALE_LEASE_RECOVERED",
     })
-    const query = acquisitionQuery({ prior: [stale], reclaimed: [reclaimed] })
+    const query = acquisitionQuery({
+      receipt: [{ outcomeKey: stale.outcomeKey }],
+      receiptOutcome: [stale],
+      reclaimed: [reclaimed],
+    })
     await expect(acquireNextEligibleOutcome({
       query,
       ...acquireInput,
@@ -615,7 +911,7 @@ describe("transactional durable outcome queue source", () => {
       reclaimed: true,
       reason: null,
     })
-    expect(query.mock.calls[3]).toEqual([
+    expect(query.mock.calls[4]).toEqual([
       OUTCOME_QUEUE_SQL.reclaimAcquisition,
       [
         now, userId, "goal:GOAL-1000", "execution-after-restart",
@@ -627,6 +923,13 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.reclaimAcquisition).toContain(`q."version" + 1`)
     expect(OUTCOME_QUEUE_SQL.reclaimAcquisition).toContain(
       `live."id" <> q."id"`,
+    )
+    expect(OUTCOME_QUEUE_SQL.reclaimAcquisition).toContain(
+      `COALESCE($8, q."activeWorkOrderId") = live_grant."workOrderId"`,
+    )
+    expect(query).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.advanceAcquisitionReceipt,
+      [userId, "acquire-a", reclaimed.fencingToken, now, reclaimed.outcomeKey],
     )
   })
 
@@ -830,6 +1133,9 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`projected_work.goal = q."goalRef"`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`live_grant."status" = 'active'`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(
+      `$7 = live_grant."workOrderId"`,
+    )
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
       .toContain(`live_grant."expiresAt" > $8::timestamptz`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).not.toContain("$1::timestamptz")
@@ -845,7 +1151,10 @@ describe("transactional durable outcome queue source", () => {
       leaseToken: "lease-a",
       leaseExpiresAt: "2026-07-28T12:50:00.000Z",
     })
-    const query = vi.fn(async () => ({ rows: [resumed] }))
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.resumeAfterDecision ? [resumed] : [],
+    }))
+    const query = dedicatedQuery(run)
 
     await expect(resumeOutcomeQueueAfterDecision({
       query,
@@ -861,7 +1170,7 @@ describe("transactional durable outcome queue source", () => {
       leaseDurationMs: 50 * 60 * 1000,
       now,
     })).resolves.toEqual(resumed)
-    expect(query).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.resumeAfterDecision, [
+    expect(run).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.resumeAfterDecision, [
       userId,
       "goal:GOAL-1000",
       5,
@@ -884,7 +1193,56 @@ describe("transactional durable outcome queue source", () => {
       .toContain(`live_grant."status" = 'active'`)
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
       .toContain(`live_grant."expiresAt" > $11::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`q."riskClass" IN ('R0', 'R1')`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`completed_dependency."lifecycleState" IS DISTINCT FROM 'completed'`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`live."id" <> q."id"`)
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision).not.toContain("$1::timestamptz")
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.resumeAfterDecision,
+      "COMMIT",
+    ])
+  })
+
+  it("verifies an existing canonical Work Order binding at the exact projected status", async () => {
+    const verified = queueRow({
+      lifecycleState: "active",
+      activeWorkOrderId: 472,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    })
+    const query = vi.fn(async () => ({ rows: [verified] }))
+
+    await expect(verifyOutcomeQueueWorkOrderBinding({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 1,
+      executionBinding: "execution-a",
+      leaseToken: "lease-a",
+      fencingToken: 1,
+      activeWorkOrderId: 472,
+      expectedWorkOrderStatus: "review",
+      now,
+    })).resolves.toEqual(verified)
+    expect(query).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder, [
+      userId,
+      "goal:GOAL-1000",
+      1,
+      "execution-a",
+      "lease-a",
+      1,
+      472,
+      "review",
+      now,
+    ])
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`projected_work.status = $8`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`q."leaseExpiresAt" > $9::timestamptz`)
   })
 
   it("exact-replays a committed owner-decision resume with live authority and its fresh fence", async () => {
@@ -897,9 +1255,11 @@ describe("transactional durable outcome queue source", () => {
       leaseToken: "lease-a",
       leaseExpiresAt: "2026-07-28T12:50:00.000Z",
     })
-    const query = vi.fn()
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [resumed] })
+    const run = vi.fn(async (sql: string) => {
+      if (sql === OUTCOME_QUEUE_SQL.replayResumeAfterDecision) return { rows: [resumed] }
+      return { rows: [] }
+    })
+    const query = dedicatedQuery(run)
 
     await expect(resumeOutcomeQueueAfterDecision({
       query,
@@ -915,7 +1275,7 @@ describe("transactional durable outcome queue source", () => {
       leaseDurationMs: 50 * 60 * 1000,
       now,
     })).resolves.toEqual(resumed)
-    expect(query).toHaveBeenNthCalledWith(2, OUTCOME_QUEUE_SQL.replayResumeAfterDecision, [
+    expect(run).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.replayResumeAfterDecision, [
       userId,
       "goal:GOAL-1000",
       5,
@@ -943,7 +1303,8 @@ describe("transactional durable outcome queue source", () => {
   })
 
   it("rejects a mismatched owner-decision resume replay", async () => {
-    const query = vi.fn(async () => ({ rows: [] }))
+    const run = vi.fn(async () => ({ rows: [] }))
+    const query = dedicatedQuery(run)
 
     await expect(resumeOutcomeQueueAfterDecision({
       query,
@@ -959,7 +1320,13 @@ describe("transactional durable outcome queue source", () => {
       leaseDurationMs: 50 * 60 * 1000,
       now,
     })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL" })
-    expect(query).toHaveBeenCalledTimes(2)
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.resumeAfterDecision,
+      OUTCOME_QUEUE_SQL.replayResumeAfterDecision,
+      "ROLLBACK",
+    ])
   })
 
   it("keeps GOAL-0001 through GOAL-0005 user-scoped and history-only", async () => {
@@ -1070,9 +1437,67 @@ describe("transactional durable outcome queue source", () => {
       `q."lifecycleState" = 'superseded'`,
     )
   })
+
+  it("rejects a dependency cycle under the same serialized intake lock", async () => {
+    const run = vi.fn(async (sql: string) => {
+      if (sql === "BEGIN" || sql === "ROLLBACK") return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.readSupersededDependencies) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.readDependencyGraph) {
+        return {
+          rows: [{
+            outcomeKey: "goal:GOAL-B",
+            dependencyKeys: ["goal:GOAL-A"],
+          }],
+        }
+      }
+      throw new Error(`unexpected query: ${sql}`)
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(persistOutcomeQueueItem({
+      query,
+      userId,
+      now,
+      item: {
+        outcomeKey: "goal:GOAL-A",
+        title: "Cycle A",
+        dependencyKeys: ["goal:GOAL-B"],
+        riskClass: "R1",
+        approvalState: "unapproved",
+        authorityState: "unverified",
+        authorityLevel: "A2_WRITE_OWN",
+        lifecycleState: "suggested",
+      },
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_DEPENDENCY_DEADLOCK" })
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.readSupersededDependencies,
+      OUTCOME_QUEUE_SQL.readDependencyGraph,
+      "ROLLBACK",
+    ])
+  })
 })
 
 describe("governed outcome queue mutations", () => {
+  it("defines a permanent user-scoped acquisition-key receipt", () => {
+    const config = getTableConfig(outcomeQueueAcquisitionReceipt)
+    expect(getTableName(outcomeQueueAcquisitionReceipt))
+      .toBe("outcome_queue_acquisition_receipt")
+    expect(config.columns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      "userId",
+      "acquisitionKey",
+      "outcomeKey",
+      "firstFencingToken",
+      "latestFencingToken",
+    ]))
+    expect(config.indexes.some((index) => (
+      index.config.name === "outcome_queue_acquisition_receipt_user_key_idx"
+      && index.config.unique === true
+    ))).toBe(true)
+  })
+
   it("defines an additive user-scoped exactly-once receipt register", () => {
     const config = getTableConfig(outcomeQueueMutationReceipt)
     expect(getTableName(outcomeQueueMutationReceipt)).toBe("outcome_queue_mutation_receipt")

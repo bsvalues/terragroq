@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import {
   AC_CATALOG,
@@ -10,8 +10,10 @@ import {
   parseArgs,
   probeJson,
   readExpectedInventory,
+  runCampaign,
   validateEvidenceManifest,
   validateHostState,
+  validateRuntimeAgreement,
   validateSupervisorState,
 } from "@/scripts/hermes-bridge/v1-acceptance-campaign.mjs"
 
@@ -21,6 +23,31 @@ const revision = "c".repeat(40)
 
 function pass(detail: unknown = null) {
   return { ok: true, code: "PASS", detail }
+}
+
+function supervisorState() {
+  const workspace = path.resolve("repo")
+  return {
+    schemaVersion: 2,
+    processId: 123,
+    nonce: "nonce",
+    workspace,
+    supervisorPath: path.join(workspace, "scripts", "hermes-bridge", "supervisor.ps1"),
+    hostMode: "INTERACTIVE_USER_RESIDENT",
+    startedAt: "2026-07-23T17:50:00.000Z",
+    heartbeatAt: fresh,
+    cycleBudgetMs: 60 * 60 * 1000,
+    cycle: {
+      sequence: 7,
+      status: "IDLE",
+      startedAt: "2026-07-23T17:58:00.000Z",
+      completedAt: fresh,
+      result: "QUEUE_DRAINED",
+      stopReason: "NO_OUTCOME",
+      exitCode: 0,
+      consecutiveFailures: 0,
+    },
+  }
 }
 
 function hostState() {
@@ -447,19 +474,11 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
   })
 
   it("validates the resident supervisor independently from application health", () => {
-    const workspace = path.resolve("repo")
-    const supervisorPath = path.join(workspace, "scripts", "hermes-bridge", "supervisor.ps1")
-    const state = {
-      schemaVersion: 1,
-      processId: 123,
-      nonce: "nonce",
-      workspace,
-      supervisorPath,
-      hostMode: "INTERACTIVE_USER_RESIDENT",
-      startedAt: fresh,
-    }
+    const state = supervisorState()
+    const { workspace, supervisorPath } = state
     const posture = {
       now,
+      maxAgeMs: 5 * 60 * 1000,
       expectedWorkspace: workspace,
       expectedSupervisorPath: supervisorPath,
     }
@@ -482,6 +501,157 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
       expectedWorkspace: path.resolve("other"),
       processProbe: () => true,
     }).code).toBe("SUPERVISOR_POSTURE_MISMATCH")
+  })
+
+  it("rejects stale, over-budget, and repeatedly failing resident cycles", () => {
+    const posture = {
+      now,
+      maxAgeMs: 5 * 60 * 1000,
+      expectedWorkspace: path.resolve("repo"),
+      expectedSupervisorPath: path.join(path.resolve("repo"), "scripts", "hermes-bridge", "supervisor.ps1"),
+      processProbe: () => true,
+    }
+
+    const stale = supervisorState()
+    stale.heartbeatAt = "2026-07-23T17:50:00.000Z"
+    expect(validateSupervisorState(stale, posture).code).toBe("SUPERVISOR_HEARTBEAT_STALE")
+
+    const overBudget = supervisorState()
+    overBudget.cycle.status = "IN_FLIGHT"
+    overBudget.cycleBudgetMs = 60 * 1000
+    overBudget.cycle.startedAt = "2026-07-23T17:58:00.000Z"
+    overBudget.cycle.completedAt = null
+    overBudget.cycle.result = null
+    overBudget.cycle.stopReason = null
+    overBudget.cycle.exitCode = null
+    expect(validateSupervisorState(overBudget, posture).code).toBe("SUPERVISOR_CYCLE_OVER_BUDGET")
+
+    const budgetTerminated = supervisorState()
+    budgetTerminated.cycle.exitCode = 124
+    budgetTerminated.cycle.result = "WALL"
+    budgetTerminated.cycle.stopReason = "CYCLE_BUDGET_EXCEEDED"
+    budgetTerminated.cycle.consecutiveFailures = 1
+    expect(validateSupervisorState(budgetTerminated, posture).code)
+      .toBe("SUPERVISOR_CYCLE_BUDGET_TERMINATION")
+
+    const repeated = supervisorState()
+    repeated.cycle.exitCode = 1
+    repeated.cycle.result = "WALL"
+    repeated.cycle.stopReason = "CYCLE_EXCEPTION"
+    repeated.cycle.consecutiveFailures = 3
+    expect(validateSupervisorState(repeated, posture).code).toBe("SUPERVISOR_REPEATED_CYCLE_FAILURES")
+
+    expect(validateSupervisorState(supervisorState(), posture)).toMatchObject({
+      ok: true,
+      detail: {
+        cycle: {
+          status: "IDLE",
+          result: "QUEUE_DRAINED",
+          consecutiveFailures: 0,
+        },
+      },
+    })
+  })
+
+  it("validates a sanitized read-only queue, local runtime, and Work Order agreement snapshot", () => {
+    const active = {
+      schemaVersion: 1,
+      observedAt: fresh,
+      mode: "ACTIVE",
+      queue: { outcomeId: 77, status: "active", workOrderRef: "WO-HERMES-OUTCOME-77" },
+      local: {
+        outcomeId: 77,
+        leaseStatus: "ACTIVE",
+        checkpointState: "IMPLEMENTING",
+        workOrderRef: "WO-HERMES-OUTCOME-77",
+      },
+      workOrder: { ref: "WO-HERMES-OUTCOME-77", status: "IN_PROGRESS" },
+    }
+    expect(validateRuntimeAgreement(active, { now })).toMatchObject({
+      ok: true,
+      detail: { mode: "ACTIVE", outcomeId: 77, workOrderRef: "WO-HERMES-OUTCOME-77" },
+    })
+
+    const mismatch = structuredClone(active)
+    mismatch.local.outcomeId = 78
+    expect(validateRuntimeAgreement(mismatch, { now }).code).toBe("QUEUE_RUNTIME_AGREEMENT_MISMATCH")
+
+    const hiddenCapability = structuredClone(active) as typeof active & { leaseToken?: string }
+    hiddenCapability.leaseToken = "must-not-be-accepted"
+    expect(validateRuntimeAgreement(hiddenCapability, { now }).code)
+      .toBe("QUEUE_RUNTIME_AGREEMENT_INVALID")
+
+    const stale = structuredClone(active)
+    stale.observedAt = "2026-07-23T17:00:00.000Z"
+    expect(validateRuntimeAgreement(stale, { now, maxAgeMs: 5 * 60 * 1000 }).code)
+      .toBe("QUEUE_RUNTIME_AGREEMENT_INVALID")
+
+    expect(validateRuntimeAgreement({
+      schemaVersion: 1,
+      observedAt: fresh,
+      mode: "HEALTHY_IDLE",
+      queue: null,
+      local: null,
+      workOrder: null,
+    }, { now })).toMatchObject({ ok: true, detail: { mode: "HEALTHY_IDLE" } })
+  })
+
+  it("uses the production agreement producer during a normal campaign without a fixture", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "v1-agreement-campaign-"))
+    const runtimeRoot = path.join(root, "runtime")
+    const workspace = path.join(root, "workspace")
+    fs.mkdirSync(path.join(runtimeRoot, "state"), { recursive: true })
+    fs.mkdirSync(workspace, { recursive: true })
+    const statePath = path.join(runtimeRoot, "state", "state.json")
+    const supervisorPath = path.join(runtimeRoot, "state", "supervisor.json")
+    fs.writeFileSync(statePath, JSON.stringify(hostState()))
+    const resident = supervisorState()
+    resident.workspace = workspace
+    resident.supervisorPath = path.join(workspace, "scripts", "hermes-bridge", "supervisor.ps1")
+    fs.writeFileSync(supervisorPath, JSON.stringify(resident))
+    const options = {
+      ...parseArgs([], { WILLIAMOS_HERMES_RUNTIME_ROOT: runtimeRoot }),
+      state: statePath,
+      supervisorState: supervisorPath,
+      evidence: path.join(root, "missing-manifest.json"),
+      agreement: path.join(runtimeRoot, "evidence", "queue-runtime-agreement.json"),
+      workspace,
+    }
+    const agreementQuery = vi.fn(async (sql: string) => {
+      if (/^BEGIN/.test(sql) || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] }
+      if (/FROM "user"/.test(sql)) return { rows: [{ id: "primary-1" }] }
+      if (/FROM "outcome_queue_item"/.test(sql)) return { rows: [] }
+      throw new Error(`unexpected agreement SQL: ${sql}`)
+    })
+    try {
+      const result = await runCampaign(options, {
+        now: () => now,
+        expectedInventory: [],
+        unitResults: Object.fromEntries(
+          [...new Set(AC_CATALOG.flatMap((entry) => entry.tests))].map((file) => [file, pass()]),
+        ),
+        runner: () => ({ ok: true, status: 0, stdout: revision, stderr: "" }),
+        processProbe: () => true,
+        agreementQuery,
+      })
+      expect(agreementQuery).toHaveBeenCalledWith(
+        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      )
+      expect(JSON.parse(fs.readFileSync(options.agreement, "utf8"))).toMatchObject({
+        mode: "HEALTHY_IDLE",
+        queue: null,
+        local: null,
+        workOrder: null,
+      })
+      expect(result.acceptanceCriteria.find((entry) => entry.id === "AC-11")?.checks)
+        .toContainEqual(expect.objectContaining({
+          name: "queue-runtime-work-order-agreement",
+          ok: true,
+          proofClass: "LIVE",
+        }))
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it("verifies typed fresh artifacts and file digests instead of trusting manifest labels", () => {
@@ -697,6 +867,7 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
       healthResult: missingLive,
       runtimeStatusResult: missingLive,
       githubResult: missingLive,
+      agreementResult: missingLive,
     })
     expect(result.status).toBe("FAIL")
     expect(result.result).toBe("WILLIAMOS_V1_RUNTIME_NOT_PROVEN")
@@ -717,11 +888,13 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
     const defaults = parseArgs([], { WILLIAMOS_HERMES_RUNTIME_ROOT: "C:\\runtime" })
     expect(defaults.output).toBeNull()
     expect(defaults.issue).toBe(448)
+    expect(defaults.agreement).toBe(path.join("C:\\runtime", "evidence", "queue-runtime-agreement.json"))
 
-    const explicit = parseArgs(["--output", "acceptance.json"], {
+    const explicit = parseArgs(["--output", "acceptance.json", "--agreement", "agreement.json"], {
       WILLIAMOS_HERMES_RUNTIME_ROOT: "C:\\runtime",
     })
     expect(explicit.output).toBe(path.resolve("acceptance.json"))
+    expect(explicit.agreement).toBe(path.resolve("agreement.json"))
     expect(() => parseArgs(["--issue", "447"], {})).toThrow("ISSUE_448_REQUIRED")
     expect(() => parseArgs(["--repo", "other/repository"], {}))
       .toThrow("AUTHORIZED_REPOSITORY_REQUIRED")

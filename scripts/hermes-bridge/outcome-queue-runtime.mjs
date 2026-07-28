@@ -6,10 +6,12 @@ import {
   bindOutcomeQueueWorkOrder,
   completeOutcomeQueueItem,
   deferOutcomeQueueLease,
+  ensureOutcomeQueueHardeningSchema,
   readOutcomeQueue,
   renewOutcomeQueueLease,
   resumeOutcomeQueueAfterDecision,
   transitionOutcomeQueueItem,
+  verifyOutcomeQueueWorkOrderBinding,
 } from "./outcome-queue-source.mjs"
 import {
   completeOutcome as completeGoalOutcome,
@@ -34,7 +36,9 @@ function queueBinding(outcome) {
     || typeof binding.executionBinding !== "string" || binding.executionBinding.trim() === ""
     || typeof binding.leaseToken !== "string" || binding.leaseToken.trim() === ""
     || !Number.isSafeInteger(binding.fencingToken) || binding.fencingToken <= 0
-    || typeof binding.acquisitionKey !== "string" || binding.acquisitionKey.trim() === "") {
+    || typeof binding.acquisitionKey !== "string" || binding.acquisitionKey.trim() === ""
+    || (binding.activeWorkOrderId !== undefined
+      && (!Number.isSafeInteger(binding.activeWorkOrderId) || binding.activeWorkOrderId <= 0))) {
     wall("Hermes outcome is missing its durable queue binding", "HERMES_OUTCOME_QUEUE_BINDING_WALL")
   }
   return binding
@@ -159,6 +163,7 @@ function requiredMergeSha(evidence) {
 }
 
 function persistedBinding(item) {
+  const activeWorkOrderId = Number(item.activeWorkOrderId)
   return {
     userId: item.userId,
     outcomeKey: item.outcomeKey,
@@ -167,6 +172,9 @@ function persistedBinding(item) {
     leaseToken: item.leaseToken,
     fencingToken: Number(item.fencingToken),
     acquisitionKey: item.acquisitionKey,
+    ...(Number.isSafeInteger(activeWorkOrderId) && activeWorkOrderId > 0
+      ? { activeWorkOrderId }
+      : {}),
   }
 }
 
@@ -217,6 +225,25 @@ function isExactTerminalSettlement(item, binding, terminalReplay) {
   return false
 }
 
+function isExactLiveBinding(item, binding, activeWorkOrderId) {
+  return item?.userId === binding.userId
+    && item.outcomeKey === binding.outcomeKey
+    && item.lifecycleState === "active"
+    && Number(item.version) === binding.expectedVersion
+    && item.executionBinding === binding.executionBinding
+    && item.leaseToken === binding.leaseToken
+    && Number(item.fencingToken) === binding.fencingToken
+    && item.acquisitionKey === binding.acquisitionKey
+    && Number(item.activeWorkOrderId) === activeWorkOrderId
+}
+
+function isExactProviderDeferral(item, binding, retryAfter, holderId) {
+  return isExactLiveBinding(item, binding, Number(binding.activeWorkOrderId))
+    && item.leaseHolder === holderId
+    && item.lifecycleReason === "PROVIDER_UNAVAILABLE"
+    && new Date(item.leaseExpiresAt).toISOString() === new Date(retryAfter).toISOString()
+}
+
 function isExactOwnerDecisionResume(item, binding, holderId, at) {
   return item?.userId === binding.userId
     && item.outcomeKey === binding.outcomeKey
@@ -238,6 +265,10 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   const database = createLazyPool(databaseUrl, options.createPool)
   const acquire = options.acquire ?? acquireNextEligibleOutcome
   const bindQueueWorkOrder = options.bindQueueWorkOrder ?? bindOutcomeQueueWorkOrder
+  const verifyQueueWorkOrder = options.verifyQueueWorkOrder
+    ?? verifyOutcomeQueueWorkOrderBinding
+  const ensureQueueSchema = options.ensureQueueSchema
+    ?? (options.acquire ? async () => true : ensureOutcomeQueueHardeningSchema)
   const completeQueue = options.completeQueue ?? completeOutcomeQueueItem
   const renewQueue = options.renewQueue ?? renewOutcomeQueueLease
   const deferQueue = options.deferQueue ?? deferOutcomeQueueLease
@@ -251,8 +282,21 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   const resolveGoal = options.resolveGoal ?? ((item) => loadLinkedGoal(database.withPool, item))
   const now = options.now ?? (() => new Date())
   const holderId = options.holderId ?? `${os.hostname()}:hermes-outcome-queue`
+  let schemaReady = null
+
+  async function ensureReady() {
+    if (!schemaReady) {
+      schemaReady = Promise.resolve(ensureQueueSchema({ databaseUrl }))
+        .catch((error) => {
+          schemaReady = null
+          throw error
+        })
+    }
+    await schemaReady
+  }
 
   async function selectOutcome() {
+    await ensureReady()
     const primary = await resolvePrimary()
     for (let rejected = 0; rejected < 100; rejected += 1) {
       const acquired = await acquire({
@@ -316,16 +360,26 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     if (refs.length === 0) {
       wall("Queue completion requires reviewed delivery evidence", "HERMES_OUTCOME_QUEUE_EVIDENCE_WALL")
     }
-    if (!await completeGoal({ databaseUrl, outcomeId, evidence })) return false
-    await completeQueue({
-      databaseUrl,
-      ...binding,
-      terminalKey: `hermes:${binding.outcomeKey}:${binding.fencingToken}:${mergeSha}`,
-      terminalResult: "COMPLETE",
-      terminalEvidenceRefs: refs,
-      now: now(),
-    })
-    return true
+    try {
+      await completeQueue({
+        databaseUrl,
+        ...binding,
+        terminalKey: `hermes:${binding.outcomeKey}:${binding.fencingToken}:${mergeSha}`,
+        terminalResult: "COMPLETE",
+        terminalEvidenceRefs: refs,
+        now: now(),
+      })
+    } catch (error) {
+      const current = (await readQueue({
+        databaseUrl,
+        userId: binding.userId,
+      })).find((item) => item.outcomeKey === binding.outcomeKey)
+      if (!isExactTerminalSettlement(current, binding, {
+        state: "COMPLETE",
+        evidence,
+      })) throw error
+    }
+    return completeGoal({ databaseUrl, outcomeId, evidence })
   }
 
   async function terminalizeOutcome({ outcomeId, outcome, result, nextState, metadata }) {
@@ -333,7 +387,6 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       return terminalizeGoal({ databaseUrl, outcomeId, result, nextState, metadata })
     }
     const binding = queueBinding(outcome)
-    if (!await terminalizeGoal({ databaseUrl, outcomeId, result, nextState, metadata })) return false
     const lifecycleReason = nextState ?? result
     try {
       await transitionQueue({
@@ -361,21 +414,29 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         || Number(current.fencingToken) !== binding.fencingToken
         || current.acquisitionKey !== binding.acquisitionKey) throw error
     }
-    return true
+    return terminalizeGoal({ databaseUrl, outcomeId, result, nextState, metadata })
   }
 
   async function deferOutcome({ outcomeId, outcome, retryAfter }) {
-    if (!await deferGoal({ databaseUrl, outcomeId, retryAfter })) return false
     if (outcome?.queueBinding) {
-      await deferQueue({
-        databaseUrl,
-        ...queueBinding(outcome),
-        retryAfter,
-        lifecycleReason: "PROVIDER_UNAVAILABLE",
-        now: now(),
-      })
+      const binding = queueBinding(outcome)
+      try {
+        await deferQueue({
+          databaseUrl,
+          ...binding,
+          retryAfter,
+          lifecycleReason: "PROVIDER_UNAVAILABLE",
+          now: now(),
+        })
+      } catch (error) {
+        const current = (await readQueue({
+          databaseUrl,
+          userId: binding.userId,
+        })).find((item) => item.outcomeKey === binding.outcomeKey)
+        if (!isExactProviderDeferral(current, binding, retryAfter, holderId)) throw error
+      }
     }
-    return true
+    return deferGoal({ databaseUrl, outcomeId, retryAfter })
   }
 
   async function renewOutcomeLease(outcome) {
@@ -388,14 +449,47 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     })
   }
 
-  async function bindWorkOrder(outcome, activeWorkOrderId) {
-    if (!outcome?.queueBinding) return null
-    return bindQueueWorkOrder({
+  async function bindWorkOrder(outcome, activeWorkOrderId, expectedWorkOrderStatus = "active") {
+    if (!outcome?.queueBinding) return outcome
+    const binding = queueBinding(outcome)
+    if (!Number.isSafeInteger(activeWorkOrderId) || activeWorkOrderId <= 0) {
+      wall("Projected Work Order identity is invalid", "HERMES_OUTCOME_QUEUE_WORK_ORDER_WALL")
+    }
+    if (binding.activeWorkOrderId !== undefined) {
+      if (binding.activeWorkOrderId !== activeWorkOrderId) {
+        wall(
+          "Persisted queue Work Order binding does not match the canonical projection",
+          "HERMES_OUTCOME_QUEUE_WORK_ORDER_WALL",
+        )
+      }
+      const verified = await verifyQueueWorkOrder({
+        databaseUrl,
+        ...binding,
+        activeWorkOrderId,
+        expectedWorkOrderStatus,
+        now: now(),
+      })
+      if (!isExactLiveBinding(verified, binding, activeWorkOrderId)) {
+        wall(
+          "Persisted queue Work Order binding did not match the live queue fence",
+          "HERMES_OUTCOME_QUEUE_WORK_ORDER_WALL",
+        )
+      }
+      return withPersistedBinding(outcome, verified)
+    }
+    const bound = await bindQueueWorkOrder({
       databaseUrl,
-      ...queueBinding(outcome),
+      ...binding,
       activeWorkOrderId,
       now: now(),
     })
+    if (!isExactLiveBinding(bound, binding, activeWorkOrderId)) {
+      wall(
+        "Initial queue Work Order binding did not return its exact live fence",
+        "HERMES_OUTCOME_QUEUE_WORK_ORDER_WALL",
+      )
+    }
+    return withPersistedBinding(outcome, bound)
   }
 
   async function refreshOutcome(outcome, terminalReplay = null) {

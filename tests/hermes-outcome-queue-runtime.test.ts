@@ -44,6 +44,13 @@ function runtime(overrides: Record<string, unknown> = {}) {
       reason: null,
     })),
     bindQueueWorkOrder: vi.fn(async () => queueItem),
+    verifyQueueWorkOrder: vi.fn(async ({ activeWorkOrderId }) => ({
+      ...queueItem,
+      lifecycleState: "active",
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      activeWorkOrderId,
+    })),
     completeGoal: vi.fn(async () => true),
     completeQueue: vi.fn(async () => ({ outcome: { lifecycleState: "completed" }, replayed: false })),
     terminalizeGoal: vi.fn(async () => true),
@@ -102,6 +109,79 @@ describe("Hermes durable outcome queue runtime", () => {
     })
 
     await expect(bridge.selectOutcome()).resolves.toBeNull()
+  })
+
+  it("uses the active-only source contract for an initial Work Order binding", async () => {
+    const bindQueueWorkOrder = vi.fn(async () => ({
+      ...queueItem,
+      lifecycleState: "active",
+      leaseHolder: "resident-hermes",
+      activeWorkOrderId: 472,
+    }))
+    const bridge = runtime({ bindQueueWorkOrder })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.bindWorkOrder(outcome, 472)).resolves.toMatchObject({
+      queueBinding: {
+        activeWorkOrderId: 472,
+        expectedVersion: 4,
+        fencingToken: 3,
+      },
+    })
+    expect(bindQueueWorkOrder).toHaveBeenCalledOnce()
+  })
+
+  it("accepts only the exact existing canonical Work Order binding during recovery", async () => {
+    const bindQueueWorkOrder = vi.fn()
+    const verifyQueueWorkOrder = vi.fn(async ({ activeWorkOrderId }) => ({
+      ...queueItem,
+      lifecycleState: "active",
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      activeWorkOrderId,
+    }))
+    const bridge = runtime({ bindQueueWorkOrder, verifyQueueWorkOrder })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: queueItem.version,
+        activeWorkOrderId: 472,
+      },
+    }
+
+    await expect(bridge.bindWorkOrder(outcome, 472, "review")).resolves.toMatchObject({
+      queueBinding: { activeWorkOrderId: 472 },
+    })
+    expect(bindQueueWorkOrder).not.toHaveBeenCalled()
+    expect(verifyQueueWorkOrder).toHaveBeenCalledWith(expect.objectContaining({
+      activeWorkOrderId: 472,
+      expectedWorkOrderStatus: "review",
+    }))
+    await expect(bridge.bindWorkOrder(outcome, 473)).rejects.toMatchObject({
+      code: "HERMES_OUTCOME_QUEUE_WORK_ORDER_WALL",
+    })
+  })
+
+  it("preserves an existing Work Order binding reconstructed by exact queue refresh", async () => {
+    const acquire = vi.fn(async () => ({
+      outcome: {
+        ...queueItem,
+        lifecycleState: "active",
+        leaseHolder: "resident-hermes",
+        activeWorkOrderId: 472,
+      },
+      acquired: true,
+      replayed: true,
+      reclaimed: false,
+      reason: null,
+    }))
+    const bridge = runtime({ acquire })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.refreshOutcome(outcome)).resolves.toMatchObject({
+      queueBinding: { activeWorkOrderId: 472 },
+    })
   })
 
   it("blocks an invalid linked candidate and continues to the next eligible outcome", async () => {
@@ -168,6 +248,8 @@ describe("Hermes durable outcome queue runtime", () => {
       terminalResult: "COMPLETE",
       terminalEvidenceRefs: ["EV-HERMES-77-3-14", "pr:475", `merge:${"a".repeat(40)}`],
     }))
+    expect(completeQueue.mock.invocationCallOrder[0])
+      .toBeLessThan(completeGoal.mock.invocationCallOrder[0])
   })
 
   it.each([
@@ -194,9 +276,44 @@ describe("Hermes durable outcome queue runtime", () => {
     expect(completeQueue).not.toHaveBeenCalled()
   })
 
+  it("reconciles an exact queue-only completion after the queue write loses its response", async () => {
+    const mergeSha = "a".repeat(40)
+    const evidence = {
+      prNumber: 475,
+      mergeSha,
+      runtimeEvidenceRef: "EV-HERMES-77-3-14",
+    }
+    const completeQueue = vi.fn(async () => {
+      throw new Error("connection lost after commit")
+    })
+    const readQueue = vi.fn(async () => [{
+      ...queueItem,
+      lifecycleState: "completed",
+      lifecycleReason: null,
+      version: 5,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      terminalResult: "COMPLETE",
+      terminalEvidenceId: null,
+      terminalEvidenceRefs: [
+        "EV-HERMES-77-3-14",
+        `merge:${mergeSha}`,
+        "pr:475",
+      ],
+      terminalKey: `hermes:${queueItem.outcomeKey}:3:${mergeSha}`,
+      terminalAt: "2026-07-28T12:00:00.000Z",
+    }])
+    const bridge = runtime({ completeQueue, readQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.completeOutcome({ outcomeId: 77, outcome, evidence })).resolves.toBe(true)
+  })
+
   it("moves a terminal Hermes result to a blocked queue state under the exact fence", async () => {
     const transitionQueue = vi.fn(async () => ({ lifecycleState: "blocked" }))
-    const bridge = runtime({ transitionQueue })
+    const terminalizeGoal = vi.fn(async () => true)
+    const bridge = runtime({ transitionQueue, terminalizeGoal })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
 
     await expect(bridge.terminalizeOutcome({
@@ -217,6 +334,8 @@ describe("Hermes durable outcome queue runtime", () => {
       fencingToken: 3,
       lifecycleReason: "VALIDATION_FAILED",
     }))
+    expect(transitionQueue.mock.invocationCallOrder[0])
+      .toBeLessThan(terminalizeGoal.mock.invocationCallOrder[0])
   })
 
   it("accepts an exact replay after terminal queue settlement completed before restart", async () => {
@@ -256,6 +375,34 @@ describe("Hermes durable outcome queue runtime", () => {
       retryAfter: "2026-07-28T12:15:00.000Z",
       lifecycleReason: "PROVIDER_UNAVAILABLE",
     }))
+    expect(deferQueue.mock.invocationCallOrder[0])
+      .toBeLessThan(deferGoal.mock.invocationCallOrder[0])
+  })
+
+  it("reconciles an exact queue-only provider deferral after the queue write loses its response", async () => {
+    const retryAfter = "2026-07-28T12:15:00.000Z"
+    const boundItem = {
+      ...queueItem,
+      activeWorkOrderId: 472,
+    }
+    const deferQueue = vi.fn(async () => {
+      throw new Error("connection lost after commit")
+    })
+    const readQueue = vi.fn(async () => [{
+      ...boundItem,
+      lifecycleState: "active",
+      lifecycleReason: "PROVIDER_UNAVAILABLE",
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: retryAfter,
+    }])
+    const bridge = runtime({ deferQueue, readQueue })
+    const outcome = {
+      ...goal,
+      queueBinding: { ...boundItem, expectedVersion: boundItem.version },
+    }
+
+    await expect(bridge.deferOutcome({ outcomeId: 77, outcome, retryAfter }))
+      .resolves.toBe(true)
   })
 
   it("renews the exact persisted queue lease alongside the resident Hermes lease", async () => {

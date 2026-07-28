@@ -115,10 +115,15 @@ const LIVE_AUTHORITY_PREDICATE = `
   )
 `
 
+const ACQUISITION_AUTHORITY_PREDICATE = LIVE_AUTHORITY_PREDICATE.replaceAll(
+  `q."activeWorkOrderId" = live_grant."workOrderId"`,
+  `COALESCE($8, q."activeWorkOrderId") = live_grant."workOrderId"`,
+)
+
 const ELIGIBILITY_PREDICATE = `
   q."userId" = $2
   AND ${LIVE_APPROVAL_PREDICATE}
-  AND ${LIVE_AUTHORITY_PREDICATE}
+  AND ${ACQUISITION_AUTHORITY_PREDICATE}
   AND q."riskClass" IN ('R0', 'R1')
   AND (
     q."lifecycleState" = 'approved'
@@ -145,7 +150,153 @@ const ELIGIBILITY_PREDICATE = `
 `
 
 export const OUTCOME_QUEUE_SQL = Object.freeze({
+  ensureAcquisitionReceiptTable: `
+CREATE TABLE IF NOT EXISTS "outcome_queue_acquisition_receipt" (
+  "id" serial PRIMARY KEY,
+  "userId" text NOT NULL,
+  "acquisitionKey" text NOT NULL,
+  "outcomeKey" text NOT NULL,
+  "firstFencingToken" integer NOT NULL CHECK ("firstFencingToken" > 0),
+  "latestFencingToken" integer NOT NULL
+    CHECK ("latestFencingToken" >= "firstFencingToken"),
+  "createdAt" timestamptz NOT NULL DEFAULT NOW(),
+  "updatedAt" timestamptz NOT NULL DEFAULT NOW(),
+  CONSTRAINT "outcome_queue_acquisition_receipt_user_key_unique"
+    UNIQUE ("userId", "acquisitionKey")
+)
+`,
+  ensureAcquisitionReceiptOutcomeIndex: `
+CREATE INDEX IF NOT EXISTS "outcome_queue_acquisition_receipt_user_outcome_idx"
+  ON "outcome_queue_acquisition_receipt" ("userId", "outcomeKey")
+`,
+  inspectHardeningInvariantViolations: `
+SELECT
+  count(*) FILTER (
+    WHERE "lifecycleState" NOT IN (
+      'suggested', 'approved', 'blocked', 'active',
+      'completed', 'declined', 'superseded'
+    )
+  )::integer AS "lifecycleViolationCount",
+  count(*) FILTER (
+    WHERE "approvalState" NOT IN ('unapproved', 'approved', 'revoked')
+  )::integer AS "approvalViolationCount",
+  count(*) FILTER (
+    WHERE "authorityState" NOT IN (
+      'unverified', 'matched', 'denied', 'expired', 'revoked'
+    )
+  )::integer AS "authorityViolationCount",
+  count(*) FILTER (
+    WHERE "fencingToken" < 0 OR "version" < 0
+  )::integer AS "nonnegativeViolationCount",
+  count(*) FILTER (
+    WHERE "lifecycleState" = 'active'
+      AND (
+        "executionBinding" IS NULL
+        OR "leaseHolder" IS NULL
+        OR "leaseToken" IS NULL
+        OR "leaseExpiresAt" IS NULL
+        OR "acquisitionKey" IS NULL
+        OR "fencingToken" <= 0
+      )
+  )::integer AS "activeBindingViolationCount",
+  (
+    SELECT count(*)::integer
+    FROM (
+      SELECT "userId"
+      FROM "outcome_queue_item"
+      WHERE "lifecycleState" = 'active'
+      GROUP BY "userId"
+      HAVING count(*) > 1
+    ) AS duplicate_active_users
+  ) AS "multipleActiveUserCount"
+FROM "outcome_queue_item"
+`,
+  ensureOneActiveOutcomeIndex: `
+DROP INDEX IF EXISTS "outcome_queue_item_one_active_per_user_idx";
+CREATE UNIQUE INDEX "outcome_queue_item_one_active_per_user_idx"
+  ON "outcome_queue_item" ("userId")
+  WHERE "lifecycleState" = 'active'
+`,
+  ensureOutcomeQueueItemCheckConstraints: `
+ALTER TABLE "outcome_queue_item"
+  DROP CONSTRAINT IF EXISTS "outcome_queue_item_lifecycle_state_check",
+  DROP CONSTRAINT IF EXISTS "outcome_queue_item_approval_state_check",
+  DROP CONSTRAINT IF EXISTS "outcome_queue_item_authority_state_check",
+  DROP CONSTRAINT IF EXISTS "outcome_queue_item_nonnegative_fence_check",
+  DROP CONSTRAINT IF EXISTS "outcome_queue_item_active_binding_check";
+ALTER TABLE "outcome_queue_item"
+  ADD CONSTRAINT "outcome_queue_item_lifecycle_state_check"
+    CHECK ("lifecycleState" IN (
+      'suggested', 'approved', 'blocked', 'active',
+      'completed', 'declined', 'superseded'
+    )) NOT VALID,
+  ADD CONSTRAINT "outcome_queue_item_approval_state_check"
+    CHECK ("approvalState" IN ('unapproved', 'approved', 'revoked')) NOT VALID,
+  ADD CONSTRAINT "outcome_queue_item_authority_state_check"
+    CHECK ("authorityState" IN (
+      'unverified', 'matched', 'denied', 'expired', 'revoked'
+    )) NOT VALID,
+  ADD CONSTRAINT "outcome_queue_item_nonnegative_fence_check"
+    CHECK ("fencingToken" >= 0 AND "version" >= 0) NOT VALID,
+  ADD CONSTRAINT "outcome_queue_item_active_binding_check"
+    CHECK ("lifecycleState" <> 'active' OR (
+      "executionBinding" IS NOT NULL
+      AND "leaseHolder" IS NOT NULL
+      AND "leaseToken" IS NOT NULL
+      AND "leaseExpiresAt" IS NOT NULL
+      AND "acquisitionKey" IS NOT NULL
+      AND "fencingToken" > 0
+    )) NOT VALID
+`,
+  validateOutcomeQueueLifecycleConstraint: `
+ALTER TABLE "outcome_queue_item"
+  VALIDATE CONSTRAINT "outcome_queue_item_lifecycle_state_check"
+`,
+  validateOutcomeQueueApprovalConstraint: `
+ALTER TABLE "outcome_queue_item"
+  VALIDATE CONSTRAINT "outcome_queue_item_approval_state_check"
+`,
+  validateOutcomeQueueAuthorityConstraint: `
+ALTER TABLE "outcome_queue_item"
+  VALIDATE CONSTRAINT "outcome_queue_item_authority_state_check"
+`,
+  validateOutcomeQueueNonnegativeFenceConstraint: `
+ALTER TABLE "outcome_queue_item"
+  VALIDATE CONSTRAINT "outcome_queue_item_nonnegative_fence_check"
+`,
+  validateOutcomeQueueActiveBindingConstraint: `
+ALTER TABLE "outcome_queue_item"
+  VALIDATE CONSTRAINT "outcome_queue_item_active_binding_check"
+`,
+  readOutcomeQueueHardeningConstraints: `
+SELECT conname AS "constraintName",
+       convalidated AS "validated",
+       pg_get_constraintdef(oid, true) AS "definition"
+FROM pg_constraint
+WHERE conrelid = '"outcome_queue_item"'::regclass
+  AND contype = 'c'
+  AND conname = ANY($1::text[])
+ORDER BY conname ASC
+`,
+  readOneActiveOutcomeIndex: `
+SELECT i.indisunique AS "unique",
+       i.indisvalid AS "valid",
+       i.indisready AS "ready",
+       pg_get_indexdef(i.indexrelid, 1, true) AS "keyColumn",
+       pg_get_expr(i.indpred, i.indrelid, true) AS "predicate"
+FROM pg_index AS i
+JOIN pg_class AS index_class ON index_class.oid = i.indexrelid
+WHERE i.indrelid = '"outcome_queue_item"'::regclass
+  AND index_class.relname = 'outcome_queue_item_one_active_per_user_idx'
+`,
   acquireLock: `SELECT pg_advisory_xact_lock(hashtext($1))`,
+  readDependencyGraph: `
+SELECT q."outcomeKey", q."dependencyKeys"
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+ORDER BY q."outcomeKey" ASC
+FOR UPDATE OF q
+`,
   readSupersededDependencies: `
 SELECT q."outcomeKey", q."supersededByOutcomeKey"
 FROM "outcome_queue_item" AS q
@@ -153,6 +304,38 @@ WHERE q."userId" = $1
   AND q."outcomeKey" = ANY($2::text[])
   AND q."lifecycleState" = 'superseded'
 ORDER BY q."outcomeKey" ASC
+`,
+  readAcquisitionReceipt: `
+SELECT "id", "userId", "acquisitionKey", "outcomeKey",
+       "firstFencingToken", "latestFencingToken", "createdAt", "updatedAt"
+FROM "outcome_queue_acquisition_receipt"
+WHERE "userId" = $1
+  AND "acquisitionKey" = $2
+FOR UPDATE
+`,
+  insertAcquisitionReceipt: `
+INSERT INTO "outcome_queue_acquisition_receipt" (
+  "userId", "acquisitionKey", "outcomeKey",
+  "firstFencingToken", "latestFencingToken", "createdAt", "updatedAt"
+) VALUES ($1, $2, $3, $4, $4, $5::timestamptz, $5::timestamptz)
+ON CONFLICT ("userId", "acquisitionKey") DO NOTHING
+RETURNING "id", "outcomeKey", "firstFencingToken", "latestFencingToken"
+`,
+  advanceAcquisitionReceipt: `
+UPDATE "outcome_queue_acquisition_receipt"
+SET "latestFencingToken" = GREATEST("latestFencingToken", $3),
+    "updatedAt" = $4::timestamptz
+WHERE "userId" = $1
+  AND "acquisitionKey" = $2
+  AND "outcomeKey" = $5
+RETURNING "id", "outcomeKey", "firstFencingToken", "latestFencingToken"
+`,
+  readReceiptOutcome: `
+SELECT ${QUEUE_COLUMNS}
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+FOR UPDATE OF q
 `,
   readMutationReceipt: `
 SELECT "id", "userId", "idempotencyKey", "operation", "outcomeKey",
@@ -412,7 +595,7 @@ WHERE q."userId" = $2
   AND q."version" = $9
   AND ${LIVE_APPROVAL_PREDICATE}
   AND q."riskClass" IN ('R0', 'R1')
-  AND ${LIVE_AUTHORITY_PREDICATE}
+  AND ${ACQUISITION_AUTHORITY_PREDICATE}
   AND NOT EXISTS (
     SELECT 1
     FROM unnest(q."dependencyKeys") AS dependency("outcomeKey")
@@ -582,7 +765,12 @@ WHERE q."userId" = $1
   AND q."fencingToken" = $6
   AND q."leaseExpiresAt" > $8::timestamptz
   AND ${LIVE_APPROVAL_PREDICATE}
-  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$8::timestamptz")}
+  AND ${LIVE_AUTHORITY_PREDICATE
+    .replaceAll("$1::timestamptz", "$8::timestamptz")
+    .replaceAll(
+      `q."activeWorkOrderId" = live_grant."workOrderId"`,
+      `$7 = live_grant."workOrderId"`,
+    )}
   AND projected_work.id = $7
   AND projected_work."userId" = q."userId"
   AND projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
@@ -618,7 +806,47 @@ WHERE q."userId" = $1
   AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$11::timestamptz")}
+  AND q."riskClass" IN ('R0', 'R1')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM unnest(q."dependencyKeys") AS dependency("outcomeKey")
+    LEFT JOIN "outcome_queue_item" AS completed_dependency
+      ON completed_dependency."userId" = q."userId"
+      AND completed_dependency."outcomeKey" = dependency."outcomeKey"
+    WHERE completed_dependency."lifecycleState" IS DISTINCT FROM 'completed'
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM "outcome_queue_item" AS live
+    WHERE live."userId" = q."userId"
+      AND live."id" <> q."id"
+      AND live."lifecycleState" = 'active'
+      AND live."leaseExpiresAt" > $11::timestamptz
+  )
 RETURNING ${QUEUE_COLUMNS}
+`,
+  verifyBoundWorkOrder: `
+SELECT ${QUEUE_COLUMNS}
+FROM "outcome_queue_item" AS q
+JOIN work_order AS projected_work
+  ON projected_work.id = q."activeWorkOrderId"
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."version" = $3
+  AND q."executionBinding" = $4
+  AND q."leaseToken" = $5
+  AND q."fencingToken" = $6
+  AND q."activeWorkOrderId" = $7
+  AND q."leaseExpiresAt" > $9::timestamptz
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${ACQUISITION_AUTHORITY_PREDICATE
+    .replaceAll("$8", "$7")
+    .replaceAll("$1::timestamptz", "$9::timestamptz")}
+  AND projected_work."userId" = q."userId"
+  AND projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
+  AND projected_work.goal = q."goalRef"
+  AND projected_work.status = $8
 `,
   replayResumeAfterDecision: `
 SELECT ${QUEUE_COLUMNS}
@@ -863,6 +1091,179 @@ function stringArray(value, code) {
   return [...new Set(value.map((entry) => entry.trim()))].sort()
 }
 
+const OUTCOME_QUEUE_HARDENING_CONSTRAINT_NAMES = Object.freeze([
+  "outcome_queue_item_active_binding_check",
+  "outcome_queue_item_approval_state_check",
+  "outcome_queue_item_authority_state_check",
+  "outcome_queue_item_lifecycle_state_check",
+  "outcome_queue_item_nonnegative_fence_check",
+])
+
+function hardeningConstraintMatches(row) {
+  return row?.validated === true
+    && OUTCOME_QUEUE_HARDENING_CONSTRAINT_NAMES.includes(row.constraintName)
+}
+
+function canonicalCatalogExpression(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replaceAll("::text", "")
+    .replace(/[()"`\s]/g, "")
+}
+
+function oneActiveIndexMatches(row) {
+  return row?.unique === true
+    && row?.valid === true
+    && row?.ready === true
+    && canonicalCatalogExpression(row.keyColumn) === "userid"
+    && canonicalCatalogExpression(row.predicate) === "lifecyclestate='active'"
+}
+
+function hardeningWall(code, details = null, cause = null) {
+  throw Object.assign(new Error(code), {
+    code,
+    details,
+    ...(cause ? { cause } : {}),
+  })
+}
+
+export async function ensureOutcomeQueueHardeningSchema({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+} = {}) {
+  const connection = await openQuery(query, databaseUrl, true)
+  let begun = false
+  let phase = "open"
+  try {
+    await connection.query("BEGIN")
+    begun = true
+    phase = "lock"
+    await connection.query(
+      OUTCOME_QUEUE_SQL.acquireLock,
+      ["williamos:outcome-queue:hardening-schema"],
+    )
+    phase = "receipt-table"
+    await connection.query(OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptTable)
+    await connection.query(OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptOutcomeIndex)
+    phase = "preflight"
+    const inspection = await connection.query(
+      OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations,
+    )
+    const violations = inspection?.rows?.[0]
+    const violationCounts = Object.fromEntries([
+      "lifecycleViolationCount",
+      "approvalViolationCount",
+      "authorityViolationCount",
+      "nonnegativeViolationCount",
+      "activeBindingViolationCount",
+      "multipleActiveUserCount",
+    ].map((name) => [name, Number(violations?.[name] ?? Number.NaN)]))
+    if (Object.values(violationCounts).some((count) => (
+      !Number.isSafeInteger(count) || count < 0
+    ))) {
+      hardeningWall("OUTCOME_QUEUE_HARDENING_PREFLIGHT_WALL")
+    }
+    if (Object.values(violationCounts).some((count) => count > 0)) {
+      hardeningWall(
+        "OUTCOME_QUEUE_HARDENING_EXISTING_ROWS_INVALID",
+        violationCounts,
+      )
+    }
+    phase = "constraints"
+    await connection.query(OUTCOME_QUEUE_SQL.ensureOneActiveOutcomeIndex)
+    await connection.query(OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemCheckConstraints)
+    for (const sql of [
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueLifecycleConstraint,
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueApprovalConstraint,
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueAuthorityConstraint,
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueNonnegativeFenceConstraint,
+      OUTCOME_QUEUE_SQL.validateOutcomeQueueActiveBindingConstraint,
+    ]) {
+      await connection.query(sql)
+    }
+    phase = "verify"
+    const verified = await connection.query(
+      OUTCOME_QUEUE_SQL.readOutcomeQueueHardeningConstraints,
+      [OUTCOME_QUEUE_HARDENING_CONSTRAINT_NAMES],
+    )
+    const verifiedRows = verified?.rows ?? []
+    const verifiedNames = new Set(verifiedRows
+      .filter(hardeningConstraintMatches)
+      .map((row) => row.constraintName))
+    if (OUTCOME_QUEUE_HARDENING_CONSTRAINT_NAMES.some((name) => (
+      !verifiedNames.has(name)
+    ))) {
+      hardeningWall("OUTCOME_QUEUE_HARDENING_CONSTRAINT_WALL", {
+        expected: OUTCOME_QUEUE_HARDENING_CONSTRAINT_NAMES,
+        verified: [...verifiedNames].sort(),
+        observed: verifiedRows.map((row) => ({
+          constraintName: row.constraintName,
+          validated: row.validated,
+        })),
+      })
+    }
+    const indexVerification = await connection.query(
+      OUTCOME_QUEUE_SQL.readOneActiveOutcomeIndex,
+    )
+    if (indexVerification?.rows?.length !== 1
+      || !oneActiveIndexMatches(indexVerification.rows[0])) {
+      hardeningWall("OUTCOME_QUEUE_HARDENING_INDEX_WALL")
+    }
+    phase = "commit"
+    await connection.query("COMMIT")
+    begun = false
+    return true
+  } catch (error) {
+    if (begun) {
+      try {
+        await connection.query("ROLLBACK")
+      } catch {
+        // Preserve the schema bootstrap error.
+      }
+    }
+    if (String(error?.code ?? "").startsWith("OUTCOME_QUEUE_HARDENING_")) {
+      throw error
+    }
+    hardeningWall("OUTCOME_QUEUE_HARDENING_SCHEMA_WALL", { phase }, error)
+  } finally {
+    await connection.close()
+  }
+}
+
+function findDependencyCycle(rows) {
+  const graph = new Map(rows.map((row) => [
+    row.outcomeKey,
+    [...new Set(row.dependencyKeys ?? [])].sort(),
+  ]))
+  const visited = new Set()
+  const visiting = new Set()
+  const path = []
+
+  function visit(key) {
+    if (visiting.has(key)) {
+      const start = path.indexOf(key)
+      return [...path.slice(start), key]
+    }
+    if (visited.has(key) || !graph.has(key)) return null
+    visiting.add(key)
+    path.push(key)
+    for (const dependencyKey of graph.get(key)) {
+      const cycle = visit(dependencyKey)
+      if (cycle) return cycle
+    }
+    path.pop()
+    visiting.delete(key)
+    visited.add(key)
+    return null
+  }
+
+  for (const key of [...graph.keys()].sort()) {
+    const cycle = visit(key)
+    if (cycle) return cycle
+  }
+  return null
+}
+
 function userScope(userId) {
   return nonempty(userId, "OUTCOME_QUEUE_USER_ID_INVALID")
 }
@@ -1048,6 +1449,16 @@ export async function persistOutcomeQueueItem({
       if ((superseded?.rows?.length ?? 0) > 0) {
         fail("OUTCOME_QUEUE_DEPENDENCY_SUPERSEDED")
       }
+      const graphResult = await connection.query(OUTCOME_QUEUE_SQL.readDependencyGraph, [user])
+      const graph = (graphResult?.rows ?? [])
+        .filter((row) => row.outcomeKey !== value.outcomeKey)
+      graph.push({
+        outcomeKey: value.outcomeKey,
+        dependencyKeys: value.dependencyKeys,
+      })
+      if (findDependencyCycle(graph)) {
+        fail("OUTCOME_QUEUE_DEPENDENCY_DEADLOCK")
+      }
     }
     const result = await connection.query(OUTCOME_QUEUE_SQL.persist, [
       user,
@@ -1139,6 +1550,50 @@ function acquisitionResult(outcome, { replayed = false, reclaimed = false } = {}
   return { outcome, acquired: true, replayed, reclaimed, reason: null }
 }
 
+async function ensureAcquisitionReceipt(connection, user, key, row, at, receiptExists = false) {
+  const fence = Number(row.fencingToken)
+  if (!Number.isSafeInteger(fence) || fence <= 0) {
+    fail("OUTCOME_QUEUE_ACQUISITION_RECEIPT_INVALID")
+  }
+  if (receiptExists) {
+    const advanced = await connection.query(OUTCOME_QUEUE_SQL.advanceAcquisitionReceipt, [
+      user,
+      key,
+      fence,
+      at,
+      row.outcomeKey,
+    ])
+    if (advanced?.rows?.length !== 1) {
+      fail("OUTCOME_QUEUE_ACQUISITION_RECEIPT_INVALID")
+    }
+    return advanced.rows[0]
+  }
+  const inserted = await connection.query(OUTCOME_QUEUE_SQL.insertAcquisitionReceipt, [
+    user,
+    key,
+    row.outcomeKey,
+    fence,
+    at,
+  ])
+  if (inserted?.rows?.length === 1) return inserted.rows[0]
+
+  const existing = await connection.query(OUTCOME_QUEUE_SQL.readAcquisitionReceipt, [user, key])
+  if (existing?.rows?.length !== 1 || existing.rows[0].outcomeKey !== row.outcomeKey) {
+    fail("OUTCOME_QUEUE_ACQUISITION_KEY_CONFLICT")
+  }
+  const advanced = await connection.query(OUTCOME_QUEUE_SQL.advanceAcquisitionReceipt, [
+    user,
+    key,
+    fence,
+    at,
+    row.outcomeKey,
+  ])
+  if (advanced?.rows?.length !== 1) {
+    fail("OUTCOME_QUEUE_ACQUISITION_RECEIPT_INVALID")
+  }
+  return advanced.rows[0]
+}
+
 export async function acquireNextEligibleOutcome({
   query,
   databaseUrl = process.env.DATABASE_URL,
@@ -1170,10 +1625,39 @@ export async function acquireNextEligibleOutcome({
     await connection.query("BEGIN")
     begun = true
     await connection.query(OUTCOME_QUEUE_SQL.acquireLock, [`${user}:outcome-queue`])
-    const prior = await connection.query(OUTCOME_QUEUE_SQL.readAcquisition, [user, key])
+    const receiptResult = await connection.query(
+      OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
+      [user, key],
+    )
+    if ((receiptResult?.rows?.length ?? 0) > 1) {
+      fail("OUTCOME_QUEUE_ACQUISITION_RECEIPT_DUPLICATED")
+    }
+    const receipt = receiptResult?.rows?.[0] ?? null
+    let receiptEstablished = receipt !== null
+    const prior = receipt
+      ? await connection.query(OUTCOME_QUEUE_SQL.readReceiptOutcome, [user, receipt.outcomeKey])
+      : await connection.query(OUTCOME_QUEUE_SQL.readAcquisition, [user, key])
     if ((prior?.rows?.length ?? 0) > 1) fail("OUTCOME_QUEUE_ACQUISITION_DUPLICATED")
+    if (receipt && prior?.rows?.length !== 1) {
+      fail("OUTCOME_QUEUE_ACQUISITION_RECEIPT_INVALID")
+    }
     if (prior?.rows?.length === 1) {
       const row = prior.rows[0]
+      if (!receipt) {
+        await ensureAcquisitionReceipt(connection, user, key, row, at)
+        receiptEstablished = true
+      }
+      if (row.acquisitionKey !== key) {
+        await connection.query("COMMIT")
+        begun = false
+        return {
+          outcome: row,
+          acquired: false,
+          replayed: true,
+          reclaimed: false,
+          reason: "ACQUISITION_KEY_RETIRED",
+        }
+      }
       if (TERMINAL_STATES.has(row.lifecycleState)) {
         await connection.query("COMMIT")
         begun = false
@@ -1238,10 +1722,27 @@ export async function acquireNextEligibleOutcome({
           row.version,
         ])
         if (reclaimed?.rows?.length === 1) {
+          await ensureAcquisitionReceipt(
+            connection,
+            user,
+            key,
+            reclaimed.rows[0],
+            at,
+            receiptEstablished,
+          )
           await connection.query("COMMIT")
           begun = false
           return acquisitionResult(reclaimed.rows[0], { reclaimed: true })
         }
+      }
+      await connection.query("COMMIT")
+      begun = false
+      return {
+        outcome: row,
+        acquired: false,
+        replayed: true,
+        reclaimed: false,
+        reason: "ACQUISITION_KEY_INELIGIBLE",
       }
     }
     const selected = await connection.query(OUTCOME_QUEUE_SQL.acquire, [
@@ -1255,6 +1756,7 @@ export async function acquireNextEligibleOutcome({
       workOrderId,
     ])
     if (selected?.rows?.length === 1) {
+      await ensureAcquisitionReceipt(connection, user, key, selected.rows[0], at)
       await connection.query("COMMIT")
       begun = false
       return acquisitionResult(selected.rows[0], {
@@ -1465,6 +1967,52 @@ export async function bindOutcomeQueueWorkOrder({
   }
 }
 
+export async function verifyOutcomeQueueWorkOrderBinding({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  userId,
+  outcomeKey,
+  expectedVersion,
+  executionBinding,
+  leaseToken,
+  fencingToken,
+  activeWorkOrderId,
+  expectedWorkOrderStatus,
+  now = new Date(),
+} = {}) {
+  const user = userScope(userId)
+  const key = nonempty(outcomeKey, "OUTCOME_QUEUE_KEY_INVALID")
+  const version = integer(expectedVersion, "OUTCOME_QUEUE_VERSION_INVALID")
+  const binding = nonempty(executionBinding, "OUTCOME_QUEUE_EXECUTION_BINDING_INVALID")
+  const token = nonempty(leaseToken, "OUTCOME_QUEUE_LEASE_TOKEN_INVALID")
+  const fence = integer(fencingToken, "OUTCOME_QUEUE_FENCING_TOKEN_INVALID", { minimum: 1 })
+  const workOrderId = integer(activeWorkOrderId, "OUTCOME_QUEUE_WORK_ORDER_ID_INVALID", { minimum: 1 })
+  const status = enumValue(
+    expectedWorkOrderStatus,
+    new Set(["active", "review", "blocked", "closed"]),
+    "OUTCOME_QUEUE_WORK_ORDER_STATUS_INVALID",
+  )
+  const at = timestamp(now)
+  const connection = await openQuery(query, databaseUrl)
+  try {
+    const result = await connection.query(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder, [
+      user,
+      key,
+      version,
+      binding,
+      token,
+      fence,
+      workOrderId,
+      status,
+      at,
+    ])
+    if (result?.rows?.length !== 1) fail("OUTCOME_QUEUE_WORK_ORDER_BINDING_WALL")
+    return result.rows[0]
+  } finally {
+    await connection.close()
+  }
+}
+
 export async function resumeOutcomeQueueAfterDecision({
   query,
   databaseUrl = process.env.DATABASE_URL,
@@ -1492,8 +2040,12 @@ export async function resumeOutcomeQueueAfterDecision({
   integer(leaseDurationMs, "OUTCOME_QUEUE_LEASE_DURATION_INVALID", { minimum: 1 })
   const at = timestamp(now)
   const expiresAt = timestamp(new Date(Date.parse(at) + leaseDurationMs))
-  const connection = await openQuery(query, databaseUrl)
+  const connection = await openQuery(query, databaseUrl, true)
+  let begun = false
   try {
+    await connection.query("BEGIN")
+    begun = true
+    await connection.query(OUTCOME_QUEUE_SQL.acquireLock, [`${user}:outcome-queue`])
     const result = await connection.query(OUTCOME_QUEUE_SQL.resumeAfterDecision, [
       user,
       key,
@@ -1507,7 +2059,11 @@ export async function resumeOutcomeQueueAfterDecision({
       expiresAt,
       at,
     ])
-    if (result?.rows?.length === 1) return result.rows[0]
+    if (result?.rows?.length === 1) {
+      await connection.query("COMMIT")
+      begun = false
+      return result.rows[0]
+    }
     const replay = await connection.query(OUTCOME_QUEUE_SQL.replayResumeAfterDecision, [
       user,
       key,
@@ -1522,7 +2078,18 @@ export async function resumeOutcomeQueueAfterDecision({
       at,
     ])
     if (replay?.rows?.length !== 1) fail("OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL")
+    await connection.query("COMMIT")
+    begun = false
     return replay.rows[0]
+  } catch (error) {
+    if (begun) {
+      try {
+        await connection.query("ROLLBACK")
+      } catch {
+        // Preserve the primary resume error.
+      }
+    }
+    throw error
   } finally {
     await connection.close()
   }
@@ -2023,6 +2590,7 @@ export const acquireOutcome = acquireNextEligibleOutcome
 export const renewOutcomeLease = renewOutcomeQueueLease
 export const deferOutcomeLease = deferOutcomeQueueLease
 export const bindOutcomeWorkOrder = bindOutcomeQueueWorkOrder
+export const verifyOutcomeWorkOrderBinding = verifyOutcomeQueueWorkOrderBinding
 export const resumeOutcomeAfterDecision = resumeOutcomeQueueAfterDecision
 export const approveOutcome = approveOutcomeQueueItem
 export const transitionOutcome = transitionOutcomeQueueItem

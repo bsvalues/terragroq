@@ -16,7 +16,11 @@ import {
 import { evaluateOutcomePolicy } from "./policy.mjs"
 import { buildHermesCodexPrompt, HERMES_BLOCKED_SCOPE, HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 import { createRepositoryLifecycle } from "./repository-lifecycle.mjs"
-import { createHermesStateStore } from "./state-store.mjs"
+import {
+  createHermesStateStore,
+  hermesTurnResultDigest,
+  normalizeHermesTurnResult,
+} from "./state-store.mjs"
 
 const LEASE_DURATION_MS = 50 * 60 * 1000
 const TURN_TIMEOUT_MS = 45 * 60 * 1000
@@ -29,6 +33,12 @@ const SHA = /^[0-9a-f]{40}$/
 const OWNER_DECISION_RESUME_STATES = new Set([
   "OWNER_DECISION_ACCEPTED",
   "OWNER_DECISION_THREAD_RECOVERY_WALL",
+])
+const RECOVERABLE_DELIVERY_WALLS = new Set([
+  "HERMES_REPOSITORY_COMMAND_FAILED",
+  "HERMES_REPOSITORY_GITHUB_WALL",
+  "HERMES_REPOSITORY_RUNNER_WALL",
+  "HERMES_REVIEW_CONTINUITY_WALL",
 ])
 
 export const DEFAULT_VALIDATION_COMMANDS = Object.freeze([
@@ -85,6 +95,21 @@ function parseTurnResult(text) {
     }
     throw Object.assign(new Error("App Server terminal result was not valid JSON"), { code: "HERMES_RESULT_FORMAT_WALL" })
   }
+}
+
+function validatedTurnResult(text) {
+  const result = normalizeHermesTurnResult(parseTurnResult(text))
+  if (result.ownerTouchCount !== 0
+    || result.blockedScopeCrossed) {
+    throw Object.assign(new Error("Codex result crossed the owner or blocked-scope boundary"), {
+      code: "HERMES_COMPLETION_GATE_WALL",
+    })
+  }
+  return result
+}
+
+function consumedTurnResultMetadata() {
+  return { turnResult: null, turnResultDigest: null }
 }
 
 function pullRequestNumber(value) {
@@ -544,7 +569,9 @@ export function createHermesOrchestrator(options = {}) {
       }
     }
     if (!candidate.checksGreen || !candidate.reviewed || candidate.unresolvedThreadCount !== 0) {
-      throw Object.assign(new Error("Pull request did not reach a green reviewed state"), { code: "HERMES_PR_VERIFICATION_WALL" })
+      throw Object.assign(new Error("Pull request did not reach a green reviewed state"), {
+        code: "HERMES_REVIEW_CONTINUITY_WALL",
+      })
     }
     const worktreeChangedPaths = await lifecycle.inspectChangedPaths(record)
     assertChangedPathsAllowed(worktreeChangedPaths, reservations)
@@ -755,10 +782,26 @@ export function createHermesOrchestrator(options = {}) {
         leaseDurationMs: LEASE_DURATION_MS, metadata: { outcome },
       })
     }
+    let sequence = lease.checkpointSequence
     try {
       const projection = await projectCurrentExecution(outcomeId)
       if (!terminalReplay && projection?.workOrderId) {
-        await bindQueueWorkOrder(outcome, projection.workOrderId)
+        const needsDurableBinding = Boolean(outcome?.queueBinding)
+          && outcome.queueBinding.activeWorkOrderId === undefined
+        const boundOutcome = projection.status
+          ? await bindQueueWorkOrder(outcome, projection.workOrderId, projection.status)
+          : await bindQueueWorkOrder(outcome, projection.workOrderId)
+        if (boundOutcome?.queueBinding) outcome = boundOutcome
+        if (needsDurableBinding && outcome?.queueBinding?.activeWorkOrderId === projection.workOrderId) {
+          const bound = await checkpoint(
+            lease,
+            sequence,
+            "QUEUE_WORK_ORDER_BOUND",
+            `Work Order ${projection.workOrderId}`,
+            { outcome },
+          )
+          sequence = bound.checkpointSequence
+        }
       }
       await projectCurrentLease(outcomeId)
     } catch (error) {
@@ -770,7 +813,6 @@ export function createHermesOrchestrator(options = {}) {
       throw error
     }
 
-    let sequence = lease.checkpointSequence
     if (current?.checkpoint?.state === "COMPLETE") {
       const evidence = {
         prNumber: current.metadata.prNumber,
@@ -933,7 +975,78 @@ export function createHermesOrchestrator(options = {}) {
     initialRemediationRound = Math.max(
       initialRemediationRound, lease.metadata?.validationRemediationRound ?? 0,
     )
+    const validationCommandsFor = (workingPaths) => {
+      const focusedTests = workingPaths.filter((changedPath) =>
+        changedPath.startsWith("tests/") && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(changedPath)
+          && fs.statSync(path.join(record.worktreePath, changedPath), { throwIfNoEntry: false })?.isFile())
+      return [
+        ...(focusedTests.length > 0 ? [{
+          command: "npx", args: ["vitest", "run", ...focusedTests], timeoutMs: 5 * 60 * 1000,
+        }] : []),
+        ...DEFAULT_VALIDATION_COMMANDS,
+      ]
+    }
+    const runDeterministicValidation = async (workingPaths) => {
+      lifecycle.ensureValidationDependencies(record)
+      try {
+        return await lifecycle.runValidationCommands({
+          ...record,
+          commands: validationCommandsFor(workingPaths),
+        })
+      } finally {
+        lifecycle.removeValidationDependencies(record)
+      }
+    }
     let durableHeadRefOid = lease.metadata?.headRefOid ?? null
+    if (!durableHeadRefOid && recoveryCheckpointState === "HOST_VALIDATION_STARTED") {
+      const workingPaths = await lifecycle.inspectWorkingTreePaths(record)
+      if (workingPaths.length === 0) {
+        throw Object.assign(new Error("Interrupted host validation has no owned file changes"), {
+          code: "HERMES_VALIDATION_RECOVERY_WALL",
+        })
+      }
+      assertChangedPathsAllowed(workingPaths, reservations)
+      try {
+        const validation = await runDeterministicValidation(workingPaths)
+        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_PASSED", "Recovered deterministic validation", {
+          validationEvidence: validation,
+          validationFailure: "",
+          validationRemediationRound: 0,
+          headRefOid: null,
+          ...consumedTurnResultMetadata(),
+        })
+        sequence = cp.checkpointSequence
+        const committed = await lifecycle.commitChanges({
+          ...record,
+          paths: workingPaths,
+          message: `feat(williamos): deliver ${safeLeaf(outcomeRef(outcome))}`,
+        })
+        cp = await checkpoint(lease, sequence, "COMMIT_CREATED", committed.commit, {
+          headRefOid: committed.commit,
+          remediationRound: initialRemediationRound,
+        })
+        sequence = cp.checkpointSequence
+        durableHeadRefOid = committed.commit
+      } catch (error) {
+        if (error?.code !== "HERMES_VALIDATION_FAILED" || !error?.validation) throw error
+        if (initialRemediationRound >= MAX_REMEDIATION_ROUNDS) {
+          return finalizeTerminal({
+            lease, sequence, outcome, nextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+          })
+        }
+        const detail = `${error.validation.command} ${error.validation.args.join(" ")} exited ${error.validation.code}\n${error.validation.output}`
+          .slice(0, 4_000)
+        cp = await checkpoint(lease, sequence, "VALIDATION_REMEDIATION_REQUIRED", null, {
+          validationFailure: detail,
+          validationRemediationRound: initialRemediationRound + 1,
+          validationEvidence: null,
+          ...consumedTurnResultMetadata(),
+        })
+        sequence = cp.checkpointSequence
+        pendingValidationFailure = detail
+        initialRemediationRound += 1
+      }
+    }
     if (!durableHeadRefOid && recoveryCheckpointState === "HOST_VALIDATION_PASSED") {
       const workingPaths = await lifecycle.inspectWorkingTreePaths(record)
       const worktreeHead = await lifecycle.inspectWorktreeHead(record)
@@ -981,6 +1094,11 @@ export function createHermesOrchestrator(options = {}) {
     }
 
     const client = clientFactory(record.worktreePath)
+    let replayedTurnResult = cp.metadata.turnResult
+      ? normalizeHermesTurnResult(cp.metadata.turnResult)
+      : null
+    const ownerDecisionResume = hasOwnerDecisionResume(cp.metadata)
+    const consumedOwnerDecisionResume = hasConsumedOwnerDecisionResume(cp.metadata)
     let renewal
     const renewalProjections = new Set()
     let renewalFailure = null
@@ -1025,59 +1143,63 @@ export function createHermesOrchestrator(options = {}) {
       await assertLeaseProjectionHealthy()
     }
     try {
-      await client.connect()
       let threadId = cp.metadata.threadId
-      const ownerDecisionResume = hasOwnerDecisionResume(cp.metadata)
-      const consumedOwnerDecisionResume = hasConsumedOwnerDecisionResume(cp.metadata)
-      if (ownerDecisionResume) {
-        const proof = await readApprovedDecision({
-          outcomeId: Number(outcome.id),
-          workOrderId: cp.metadata.ownerDecisionWorkOrderId,
-          terminalEventId: cp.metadata.ownerDecisionTerminalEventId,
-          ownerUserId: outcome.userId,
-          expectedNextState: cp.metadata.ownerDecisionNextState,
-        })
-        if (proof?.approved !== true
-          || Number(proof.decisionId) !== Number(cp.metadata.ownerDecisionId)
-          || proof.decisionRef !== cp.metadata.ownerDecisionRef
-          || proof.requestKey !== cp.metadata.ownerDecisionRequestKey
-          || proof.decisionPacketDigest !== cp.metadata.ownerDecisionPacketDigest
-          || JSON.stringify(proof.decisionPacket) !== JSON.stringify(cp.metadata.ownerDecisionPacket)) {
-          throw Object.assign(new Error("Approved owner resume no longer matches canonical authority proof"), {
-            code: "HERMES_OWNER_DECISION_AUTHORITY_WALL",
+      let clientReady = false
+      const ensureClientReady = async () => {
+        if (clientReady) return
+        await client.connect()
+        if (ownerDecisionResume) {
+          const proof = await readApprovedDecision({
+            outcomeId: Number(outcome.id),
+            workOrderId: cp.metadata.ownerDecisionWorkOrderId,
+            terminalEventId: cp.metadata.ownerDecisionTerminalEventId,
+            ownerUserId: outcome.userId,
+            expectedNextState: cp.metadata.ownerDecisionNextState,
           })
-        }
-      }
-      if (ownerDecisionResume && !threadId) {
-        throw Object.assign(new Error("Approved owner resume is missing its original Codex thread"), {
-          code: "HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL",
-        })
-      }
-      if (threadId) {
-        try {
-          await client.resumeThread(threadId, {
-            cwd: record.worktreePath, approvalPolicy: "never", sandbox: "workspace-write",
-          })
-        } catch (error) {
-          if (ownerDecisionResume) {
-            throw Object.assign(new Error("Approved owner resume could not restore its original Codex thread"), {
-              code: "HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL",
-              cause: error,
+          if (proof?.approved !== true
+            || Number(proof.decisionId) !== Number(cp.metadata.ownerDecisionId)
+            || proof.decisionRef !== cp.metadata.ownerDecisionRef
+            || proof.requestKey !== cp.metadata.ownerDecisionRequestKey
+            || proof.decisionPacketDigest !== cp.metadata.ownerDecisionPacketDigest
+            || JSON.stringify(proof.decisionPacket) !== JSON.stringify(cp.metadata.ownerDecisionPacket)) {
+            throw Object.assign(new Error("Approved owner resume no longer matches canonical authority proof"), {
+              code: "HERMES_OWNER_DECISION_AUTHORITY_WALL",
             })
           }
-          threadId = null
         }
+        if (ownerDecisionResume && !threadId) {
+          throw Object.assign(new Error("Approved owner resume is missing its original Codex thread"), {
+            code: "HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL",
+          })
+        }
+        if (threadId) {
+          try {
+            await client.resumeThread(threadId, {
+              cwd: record.worktreePath, approvalPolicy: "never", sandbox: "workspace-write",
+            })
+          } catch (error) {
+            if (ownerDecisionResume) {
+              throw Object.assign(new Error("Approved owner resume could not restore its original Codex thread"), {
+                code: "HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL",
+                cause: error,
+              })
+            }
+            threadId = null
+          }
+        }
+        if (!threadId) {
+          threadId = await client.startThread({
+            cwd: record.worktreePath,
+            approvalPolicy: "never",
+            sandbox: "workspace-write",
+            ephemeral: false,
+          })
+        }
+        cp = await checkpoint(lease, sequence, "CODEX_THREAD_READY", null, { threadId })
+        sequence = cp.checkpointSequence
+        clientReady = true
       }
-      if (!threadId) {
-        threadId = await client.startThread({
-          cwd: record.worktreePath,
-          approvalPolicy: "never",
-          sandbox: "workspace-write",
-          ephemeral: false,
-        })
-      }
-      cp = await checkpoint(lease, sequence, "CODEX_THREAD_READY", null, { threadId })
-      sequence = cp.checkpointSequence
+      if (!replayedTurnResult) await ensureClientReady()
 
       renewal = setInterval(renewLeaseAndProject, leaseRenewalIntervalMs)
       renewal.unref?.()
@@ -1120,32 +1242,41 @@ export function createHermesOrchestrator(options = {}) {
         })
       for (let remediationRound = initialRemediationRound;
         remediationRound <= MAX_REMEDIATION_ROUNDS; remediationRound += 1) {
-        const turn = await client.runTurn({
-          threadId,
-          prompt: deliveryPrompt,
-          turn: {
-            outputSchema: HERMES_TURN_OUTPUT_SCHEMA,
-            effort: "ultra",
-            approvalPolicy: "never",
-            runtimeWorkspaceRoots: [record.worktreePath],
-            sandboxPolicy: {
-              type: "workspaceWrite",
-              writableRoots: [record.worktreePath],
-              networkAccess: true,
-              excludeTmpdirEnvVar: true,
-              excludeSlashTmp: true,
+        let result
+        if (replayedTurnResult) {
+          result = replayedTurnResult
+          replayedTurnResult = null
+        } else {
+          await ensureClientReady()
+          const turn = await client.runTurn({
+            threadId,
+            prompt: deliveryPrompt,
+            turn: {
+              outputSchema: HERMES_TURN_OUTPUT_SCHEMA,
+              effort: "ultra",
+              approvalPolicy: "never",
+              runtimeWorkspaceRoots: [record.worktreePath],
+              sandboxPolicy: {
+                type: "workspaceWrite",
+                writableRoots: [record.worktreePath],
+                networkAccess: true,
+                excludeTmpdirEnvVar: true,
+                excludeSlashTmp: true,
+              },
             },
-          },
-          timeoutMs: TURN_TIMEOUT_MS,
-        })
-        cp = await checkpoint(lease, sequence, "CODEX_TURN_COMPLETED", turn.status, {
-          threadId: turn.threadId,
-          turnId: turn.turnId,
-          ...(ownerDecisionResume ? { ownerDecisionResumePhase: "CONSUMED" } : {}),
-        })
-        sequence = cp.checkpointSequence
-        await assertLeaseProjectionHealthy()
-        const result = parseTurnResult(turn.finalText)
+            timeoutMs: TURN_TIMEOUT_MS,
+          })
+          result = validatedTurnResult(turn.finalText)
+          cp = await checkpoint(lease, sequence, "CODEX_TURN_COMPLETED", turn.status, {
+            threadId: turn.threadId,
+            turnId: turn.turnId,
+            turnResult: result,
+            turnResultDigest: hermesTurnResultDigest(result),
+            ...(ownerDecisionResume ? { ownerDecisionResumePhase: "CONSUMED" } : {}),
+          })
+          sequence = cp.checkpointSequence
+          await assertLeaseProjectionHealthy()
+        }
         assertOwnerTouchCountersZero(state.read())
 
         if (result.result === "RETRYABLE_PROVIDER_WALL") {
@@ -1154,6 +1285,7 @@ export function createHermesOrchestrator(options = {}) {
             const retryAfter = new Date(now().getTime() + PROVIDER_RETRY_COOLDOWN_MS).toISOString()
             cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", retryAfter, {
               providerRetryCount, threadId: null, turnId: null,
+              ...consumedTurnResultMetadata(),
             })
             if (!await deferOutcome({
               outcomeId: outcome.id, ...queueSettlementContext(outcome), retryAfter,
@@ -1168,6 +1300,7 @@ export function createHermesOrchestrator(options = {}) {
           }
           cp = await checkpoint(lease, sequence, result.result, result.nextState ?? null, {
             providerRetryCount, threadId: null, turnId: null,
+            ...consumedTurnResultMetadata(),
           })
           await abandonLease({
             idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:${cp.checkpointSequence}`,
@@ -1191,6 +1324,7 @@ export function createHermesOrchestrator(options = {}) {
             ownerDecisionWorkOrderId: null,
             ownerDecisionTerminalEventId: null,
             ownerDecisionPacketDigest: null,
+            ...consumedTurnResultMetadata(),
           })
           sequence = cp.checkpointSequence
           await markTerminal({
@@ -1217,21 +1351,14 @@ export function createHermesOrchestrator(options = {}) {
           throw Object.assign(new Error("Codex handoff contained no file changes"), { code: "HERMES_COMPLETION_GATE_WALL" })
         }
         assertChangedPathsAllowed(workingPaths, reservations)
-        const focusedTests = workingPaths.filter((changedPath) =>
-          changedPath.startsWith("tests/") && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(changedPath)
-            && fs.statSync(path.join(record.worktreePath, changedPath), { throwIfNoEntry: false })?.isFile())
-        const validationCommands = [
-          ...(focusedTests.length > 0 ? [{
-            command: "npx", args: ["vitest", "run", ...focusedTests], timeoutMs: 5 * 60 * 1000,
-          }] : []),
-          ...DEFAULT_VALIDATION_COMMANDS,
-        ]
-        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_STARTED", null, { validationEvidence: null })
+        cp = await checkpoint(lease, sequence, "HOST_VALIDATION_STARTED", null, {
+          validationEvidence: null,
+          ...consumedTurnResultMetadata(),
+        })
         sequence = cp.checkpointSequence
         let validation
         try {
-          lifecycle.ensureValidationDependencies(record)
-          validation = await lifecycle.runValidationCommands({ ...record, commands: validationCommands })
+          validation = await runDeterministicValidation(workingPaths)
           await assertLeaseProjectionHealthy()
         } catch (error) {
           if (error?.code !== "HERMES_VALIDATION_FAILED" || !error?.validation) throw error
@@ -1253,8 +1380,6 @@ export function createHermesOrchestrator(options = {}) {
             outcome: outcome.command, reservations, validation: detail,
           })
           continue
-        } finally {
-          lifecycle.removeValidationDependencies(record)
         }
         cp = await checkpoint(lease, sequence, "HOST_VALIDATION_PASSED", null, {
           validationEvidence: validation, validationFailure: "", validationRemediationRound: 0,
@@ -1290,14 +1415,34 @@ export function createHermesOrchestrator(options = {}) {
       }
       throw Object.assign(new Error("Review remediation budget exhausted"), { code: "HERMES_REVIEW_REMEDIATION_WALL" })
     } catch (error) {
-      const externalToolWall = error?.code === "APP_SERVER_EXTERNAL_TOOL_WALL"
-      const postMergeCleanupWall = error?.code === "HERMES_POST_MERGE_CLEANUP_WALL"
-      const runtimeProjectionWall = error?.code === "HERMES_RUNTIME_PROJECTION_WALL"
-      const consumedOwnerDecisionParseWall = [
+      const rejectedTurnResult = [
         "HERMES_EMPTY_RESULT_WALL",
         "HERMES_RESULT_PARSE_WALL",
         "HERMES_RESULT_FORMAT_WALL",
+        "INVALID_TURN_RESULT",
+        "TURN_RESULT_SECRET_WALL",
+        "HERMES_COMPLETION_GATE_WALL",
       ].includes(error?.code)
+      if (ownerDecisionResume && rejectedTurnResult
+        && cp?.metadata?.ownerDecisionResumePhase === "PENDING") {
+        try {
+          cp = await checkpoint(
+            lease,
+            sequence,
+            "CODEX_TURN_RESULT_REJECTED",
+            error.code,
+            {
+              ownerDecisionResumePhase: "CONSUMED",
+              ...consumedTurnResultMetadata(),
+            },
+          )
+          sequence = cp.checkpointSequence
+        } catch {}
+      }
+      const externalToolWall = error?.code === "APP_SERVER_EXTERNAL_TOOL_WALL"
+      const postMergeCleanupWall = error?.code === "HERMES_POST_MERGE_CLEANUP_WALL"
+      const runtimeProjectionWall = error?.code === "HERMES_RUNTIME_PROJECTION_WALL"
+      const consumedOwnerDecisionParseWall = rejectedTurnResult
         && cp?.metadata?.ownerDecisionResumePhase === "CONSUMED"
       const ownerDecisionPacketWall = error?.code === "HERMES_OWNER_DECISION_PACKET_WALL"
       if (postMergeCleanupWall) {
@@ -1323,6 +1468,51 @@ export function createHermesOrchestrator(options = {}) {
           })
         } catch {}
         throw error
+      }
+      if (RECOVERABLE_DELIVERY_WALLS.has(error?.code)) {
+        const retryAfter = new Date(now().getTime() + PROVIDER_RETRY_COOLDOWN_MS).toISOString()
+        cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", retryAfter, {
+          threadId: null,
+          turnId: null,
+          ...consumedTurnResultMetadata(),
+        })
+        sequence = cp.checkpointSequence
+        try {
+          if (!await deferOutcome({
+            outcomeId: outcome.id,
+            ...queueSettlementContext(outcome),
+            retryAfter,
+          })) {
+            throw Object.assign(new Error("Delivery-continuity outcome could not be deferred"), {
+              code: "HERMES_PROVIDER_SETTLEMENT_WALL",
+            })
+          }
+          await deferLease({
+            idempotencyKey: `${outcomeId}:defer:${error.code}:${retryAfter}`,
+            outcomeId,
+            holderId,
+            fencingToken: lease.fencingToken,
+            retryAfter,
+          })
+        } catch (settlementError) {
+          try {
+            await abandonLease({
+              idempotencyKey: `${outcomeId}:abandon:${lease.fencingToken}:delivery-continuity`,
+              outcomeId,
+              holderId,
+              fencingToken: lease.fencingToken,
+              reason: "HERMES_PROVIDER_SETTLEMENT_WALL",
+            })
+          } catch {}
+          throw settlementError
+        }
+        return {
+          result: "PROVIDER_UNAVAILABLE",
+          outcomeId,
+          nextState: "DEFERRED_PROVIDER_UNAVAILABLE",
+          reasonCode: error.code,
+          retryAfter,
+        }
       }
       const externalToolRetryCount = externalToolWall
         ? (cp?.metadata?.externalToolRetryCount ?? 0) + 1
@@ -1352,6 +1542,7 @@ export function createHermesOrchestrator(options = {}) {
       } catch {}
       if (cp?.state === "PROVIDER_UNAVAILABLE"
         || runtimeProjectionWall
+        || rejectedTurnResult
         || consumedOwnerDecisionParseWall
         || ownerDecisionPacketWall
         || ["APP_SERVER_TURN_INTERRUPTED", "APP_SERVER_TURN_FAILED", "APP_SERVER_TIMEOUT", "APP_SERVER_EXTERNAL_TOOL_WALL", "HERMES_PROVIDER_SETTLEMENT_WALL"].includes(error?.code)) {
