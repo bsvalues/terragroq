@@ -11,6 +11,7 @@ import {
   recordValidationInfrastructureRecoveryProof,
   recoverNativeProviderOutcome,
   recoverReviewedOutcome,
+  recoverTerminalPostMergeCleanupOutcome,
   verifyReviewRecoveryProjectionCollision,
   recoverValidationInfrastructureOutcome,
 } from "./outcome-source.mjs"
@@ -206,6 +207,174 @@ export function recoverPostMergeCleanupWall(options = {}) {
     activationDisabled: true,
   })
   return { result: "RECOVERED", outcomeId: candidate.outcomeId, checkpointSequence: recovered.checkpointSequence }
+}
+
+export async function recoverTerminalPostMergeCleanupWall(options = {}) {
+  const orchestrator = options.orchestrator ?? createHermesOrchestrator({ workspace: process.cwd() })
+  const lifecycle = options.lifecycle ?? createHermesRepositoryLifecycle({
+    workspaceRoot: process.cwd(),
+    ownedWorktreeRoot: path.join(orchestrator.runtimeRoot, "worktrees"),
+  })
+  const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
+  const recoverOutcome = options.recoverOutcome ?? recoverTerminalPostMergeCleanupOutcome
+  const activationPath = path.join(orchestrator.runtimeRoot, "control", "activation")
+  const supervisorPath = path.join(orchestrator.runtimeRoot, "state", "supervisor.json")
+  const assertContained = () => {
+    const activation = fs.existsSync(activationPath) ? fs.readFileSync(activationPath, "utf8").trim() : "disabled"
+    if (activation !== "disabled" || fs.existsSync(supervisorPath)) {
+      throw Object.assign(new Error("Supervisor must be stopped before terminal post-merge recovery"), {
+        code: "HERMES_TERMINAL_POST_MERGE_RECOVERY_SUPERVISOR_WALL",
+      })
+    }
+  }
+  assertContained()
+  const state = orchestrator.state.read()
+  const ownerTouchesRemainZero = Object.values(state.ownerTouchCounters).every((value) => value === 0)
+  const candidates = Object.values(state.executions).filter((execution) => (
+    ((execution?.lease?.status === "RELEASED"
+      && execution?.checkpoint?.state === "FAILED_TERMINAL"
+      && execution?.checkpoint?.detail === "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
+      && execution?.metadata?.postMergeCleanupRetryCount === 3)
+    || (execution?.lease?.status === "RELEASED"
+      && execution?.checkpoint?.state === "POST_MERGE_CLEANUP_TERMINAL_RECOVERY_PENDING"
+      && execution?.checkpoint?.detail === "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED")
+    || (execution?.lease?.status === "ABANDONED"
+      && execution?.checkpoint?.state === "POST_MERGE_CLEANUP_RECOVERED"
+      && /^PR #\d+$/.test(execution?.checkpoint?.detail ?? "")))
+    && Number.isInteger(execution?.metadata?.prNumber)
+    && /^[0-9a-f]{40}$/.test(execution?.metadata?.headRefOid ?? "")
+    && /^[0-9a-f]{40}$/.test(execution?.metadata?.mergeSha ?? "")
+    && typeof execution?.metadata?.branch === "string"
+    && typeof execution?.metadata?.worktreePath === "string"
+  ))
+  if (!ownerTouchesRemainZero || candidates.length !== 1) {
+    throw Object.assign(new Error("Exactly one zero-touch terminal post-merge cleanup wall is required"), {
+      code: "HERMES_TERMINAL_POST_MERGE_RECOVERY_CANDIDATE_WALL",
+    })
+  }
+  const candidate = candidates[0]
+  const recoveredOutcome = candidate.metadata.outcome
+  if (!recoveredOutcome || String(recoveredOutcome.id) !== String(candidate.outcomeId)) {
+    throw Object.assign(new Error("Persisted outcome snapshot does not match terminal cleanup evidence"), {
+      code: "HERMES_TERMINAL_POST_MERGE_RECOVERY_OUTCOME_WALL",
+    })
+  }
+  const pr = await lifecycle.inspectPullRequest(candidate.metadata.prNumber)
+  if (pr.state !== "MERGED"
+    || pr.baseRefName !== "main"
+    || pr.headRefName !== candidate.metadata.branch
+    || pr.headRefOid !== candidate.metadata.headRefOid
+    || pr.mergeCommit?.oid !== candidate.metadata.mergeSha
+    || pr.unresolvedThreadCount !== 0
+    || !await lifecycle.verifyOriginMainContains(candidate.metadata.mergeSha)) {
+    throw Object.assign(new Error("Merged PR identity does not match terminal cleanup evidence"), {
+      code: "HERMES_TERMINAL_POST_MERGE_RECOVERY_PR_WALL",
+    })
+  }
+  const proofDigest = sha256(JSON.stringify({
+    repository: "bsvalues/terragroq",
+    outcomeId: String(candidate.outcomeId),
+    prNumber: candidate.metadata.prNumber,
+    branch: candidate.metadata.branch,
+    worktreePath: path.resolve(candidate.metadata.worktreePath),
+    headRefOid: candidate.metadata.headRefOid,
+    mergeSha: candidate.metadata.mergeSha,
+    unresolvedThreadCount: pr.unresolvedThreadCount,
+    originMainContainsMerge: true,
+    recoveryMode: "TERMINAL_POST_MERGE_CLEANUP",
+  }))
+  const pending = candidate.checkpoint.state === "POST_MERGE_CLEANUP_TERMINAL_RECOVERY_PENDING"
+  const alreadyRecovered = candidate.checkpoint.state === "POST_MERGE_CLEANUP_RECOVERED"
+  if ((pending || alreadyRecovered)
+    && candidate.metadata.terminalCleanupRecoveryProofDigest !== proofDigest) {
+    throw Object.assign(new Error("Terminal cleanup recovery proof changed"), {
+      code: "HERMES_TERMINAL_POST_MERGE_RECOVERY_PROOF_WALL",
+    })
+  }
+  const reservation = pending || alreadyRecovered
+    ? { checkpointSequence: candidate.checkpoint.sequence }
+    : orchestrator.state.beginTerminalPostMergeCleanupRecovery({
+        idempotencyKey: `${candidate.outcomeId}:begin-terminal-post-merge:${candidate.fencingToken}`,
+        outcomeId: candidate.outcomeId,
+        expectedFencingToken: candidate.fencingToken,
+        expectedCheckpointSequence: candidate.checkpoint.sequence,
+        activationDisabled: true,
+        prNumber: candidate.metadata.prNumber,
+        branch: candidate.metadata.branch,
+        worktreePath: candidate.metadata.worktreePath,
+        headRefOid: candidate.metadata.headRefOid,
+        mergeSha: candidate.metadata.mergeSha,
+        proofDigest,
+      })
+  assertContained()
+  if (!alreadyRecovered) {
+    if (fs.existsSync(candidate.metadata.worktreePath)) {
+      await lifecycle.resumeOwnedWorktree({
+        branch: candidate.metadata.branch,
+        worktreePath: candidate.metadata.worktreePath,
+      })
+      await lifecycle.removeTerminalRecoveryDependencies({
+        branch: candidate.metadata.branch,
+        worktreePath: candidate.metadata.worktreePath,
+        expectedHeadSha: candidate.metadata.headRefOid,
+      })
+    }
+    await lifecycle.cleanupOwnedWorktree({
+      branch: candidate.metadata.branch,
+      worktreePath: candidate.metadata.worktreePath,
+      mergeCommitSha: candidate.metadata.mergeSha,
+      expectedHeadSha: candidate.metadata.headRefOid,
+    })
+  }
+  assertContained()
+  const reopened = alreadyRecovered
+    ? reservation
+    : orchestrator.state.finalizeTerminalPostMergeCleanupRecovery({
+        idempotencyKey: `${candidate.outcomeId}:finalize-terminal-post-merge:${candidate.fencingToken}`,
+        outcomeId: candidate.outcomeId,
+        expectedFencingToken: candidate.fencingToken,
+        expectedCheckpointSequence: reservation.checkpointSequence,
+        activationDisabled: true,
+        prNumber: candidate.metadata.prNumber,
+        branch: candidate.metadata.branch,
+        worktreePath: candidate.metadata.worktreePath,
+        headRefOid: candidate.metadata.headRefOid,
+        mergeSha: candidate.metadata.mergeSha,
+        proofDigest,
+      })
+  await projectCheckpoint({
+    outcomeId: Number(candidate.outcomeId),
+    attempt: candidate.fencingToken,
+    checkpoint: {
+      sequence: reopened.checkpointSequence,
+      state: "POST_MERGE_CLEANUP_RECOVERED",
+      detail: `PR #${candidate.metadata.prNumber}`,
+      metadata: {
+        prNumber: candidate.metadata.prNumber,
+        headRefOid: candidate.metadata.headRefOid,
+        mergeSha: candidate.metadata.mergeSha,
+        terminalCleanupRecoveryProofDigest: proofDigest,
+      },
+    },
+  })
+  if (!await recoverOutcome({
+    outcomeId: Number(candidate.outcomeId),
+    prNumber: candidate.metadata.prNumber,
+    reviewedHeadSha: candidate.metadata.headRefOid,
+    mergeSha: candidate.metadata.mergeSha,
+    proofDigest,
+  })) {
+    throw Object.assign(new Error("Persisted terminal cleanup outcome did not match recovery evidence"), {
+      code: "HERMES_TERMINAL_POST_MERGE_RECOVERY_DATABASE_WALL",
+    })
+  }
+  return {
+    result: "RECOVERED",
+    outcomeId: candidate.outcomeId,
+    prNumber: candidate.metadata.prNumber,
+    mergeSha: candidate.metadata.mergeSha,
+    checkpointSequence: reopened.checkpointSequence,
+  }
 }
 
 export async function recoverReviewedMerge(options = {}) {
@@ -473,12 +642,13 @@ export async function runCli(command = process.argv[2]) {
     else if (command === "recover-validation-infrastructure-wall") print(await recoverValidationInfrastructureWall())
     else if (command === "recover-external-tool-wall") print(recoverExternalToolWall())
     else if (command === "recover-post-merge-cleanup-wall") print(recoverPostMergeCleanupWall())
+    else if (command === "recover-terminal-post-merge-cleanup-wall") print(await recoverTerminalPostMergeCleanupWall())
     else if (command === "recover-reviewed-merge") print(await recoverReviewedMerge())
     else if (command === "status") {
       const orchestrator = createHermesOrchestrator({ workspace: process.cwd() })
       print(readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")))
     } else {
-      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-external-tool-wall|recover-post-merge-cleanup-wall|recover-reviewed-merge"), { code: "HERMES_CLI_USAGE" })
+      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-external-tool-wall|recover-post-merge-cleanup-wall|recover-terminal-post-merge-cleanup-wall|recover-reviewed-merge"), { code: "HERMES_CLI_USAGE" })
     }
   } catch (error) {
     print({ result: "WALL", code: error?.code ?? "HERMES_CLI_FAILED", message: sanitizeBridgeMessage(error?.message ?? "Hermes bridge failed") })

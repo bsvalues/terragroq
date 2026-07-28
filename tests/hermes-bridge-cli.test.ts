@@ -6,6 +6,7 @@ import {
   recoverExternalToolWall,
   recoverPostMergeCleanupWall,
   recoverReviewedMerge,
+  recoverTerminalPostMergeCleanupWall,
   recoverValidationInfrastructureWall,
   runCliEntrypoint,
   sanitizeBridgeMessage,
@@ -125,6 +126,121 @@ describe("Hermes bridge CLI", () => {
       expectedFencingToken: 21, expectedHolderId: "stopped-holder", activationDisabled: true,
     }))
     read.mockRestore()
+  })
+
+  it("verifies cleanup before reopening one exhausted terminal post-merge wall", async () => {
+    const candidate = {
+      outcomeId: "5",
+      fencingToken: 22,
+      lease: { status: "RELEASED" },
+      checkpoint: {
+        sequence: 12,
+        state: "FAILED_TERMINAL",
+        detail: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
+      },
+      metadata: {
+        outcome: {
+          id: 5,
+          ref: "GOAL-0005",
+          command: "Deliver the bounded WilliamOS feature.",
+          lane: "read_model",
+          mode: "implement",
+          risk: "low",
+          authority: "A0_READ_ONLY",
+          status: "classified",
+        },
+        branch: "codex/hermes-goal-0005-5",
+        worktreePath: "C:\\owned\\hermes-goal-0005-5",
+        prNumber: 440,
+        headRefOid: "a".repeat(40),
+        mergeSha: "b".repeat(40),
+        postMergeCleanupRetryCount: 3,
+      },
+    }
+    const beginRecovery = vi.fn(() => ({ checkpointSequence: 13 }))
+    const finalizeRecovery = vi.fn(() => ({ checkpointSequence: 14 }))
+    const orchestrator = {
+      runtimeRoot: process.cwd(),
+      state: {
+        read: vi.fn().mockReturnValue({
+          ownerTouchCounters: {
+            OWNER_OPERATION_TOUCH_COUNT: 0,
+            OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+            OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
+            OWNER_ROUTINE_DECISION_COUNT: 0,
+            OWNER_ROUTINE_CONTACT_COUNT: 0,
+          },
+          executions: { "5": candidate },
+        }),
+        beginTerminalPostMergeCleanupRecovery: beginRecovery,
+        finalizeTerminalPostMergeCleanupRecovery: finalizeRecovery,
+      },
+    }
+    const lifecycle = {
+      inspectPullRequest: vi.fn(async () => ({
+        state: "MERGED",
+        baseRefName: "main",
+        headRefName: candidate.metadata.branch,
+        headRefOid: candidate.metadata.headRefOid,
+        mergeCommit: { oid: candidate.metadata.mergeSha },
+        unresolvedThreadCount: 0,
+      })),
+      verifyOriginMainContains: vi.fn(async () => true),
+      resumeOwnedWorktree: vi.fn(async () => ({ resumed: true })),
+      removeTerminalRecoveryDependencies: vi.fn(async () => ({
+        removed: true,
+        headRefOid: candidate.metadata.headRefOid,
+      })),
+      cleanupOwnedWorktree: vi.fn(async () => ({ cleaned: true })),
+    }
+    const projectCheckpoint = vi.fn(async () => true)
+    const recoverOutcome = vi.fn(async () => true)
+    const read = vi.spyOn(fs, "existsSync").mockImplementation((target) =>
+      target === candidate.metadata.worktreePath)
+
+    try {
+      await expect(recoverTerminalPostMergeCleanupWall({
+        orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+      })).resolves.toMatchObject({
+        result: "RECOVERED",
+        outcomeId: "5",
+        prNumber: 440,
+        mergeSha: "b".repeat(40),
+        checkpointSequence: 14,
+      })
+      expect(lifecycle.cleanupOwnedWorktree).toHaveBeenCalledWith({
+        branch: candidate.metadata.branch,
+        worktreePath: candidate.metadata.worktreePath,
+        mergeCommitSha: candidate.metadata.mergeSha,
+        expectedHeadSha: candidate.metadata.headRefOid,
+      })
+      expect(beginRecovery).toHaveBeenCalledBefore(lifecycle.cleanupOwnedWorktree)
+      expect(finalizeRecovery).toHaveBeenCalledAfter(lifecycle.cleanupOwnedWorktree)
+      expect(projectCheckpoint).toHaveBeenCalledWith({
+        outcomeId: 5,
+        attempt: 22,
+        checkpoint: {
+          sequence: 14,
+          state: "POST_MERGE_CLEANUP_RECOVERED",
+          detail: "PR #440",
+          metadata: {
+            prNumber: 440,
+            headRefOid: candidate.metadata.headRefOid,
+            mergeSha: candidate.metadata.mergeSha,
+            terminalCleanupRecoveryProofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+          },
+        },
+      })
+      expect(recoverOutcome).toHaveBeenCalledWith({
+        outcomeId: 5,
+        prNumber: 440,
+        reviewedHeadSha: candidate.metadata.headRefOid,
+        mergeSha: candidate.metadata.mergeSha,
+        proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      })
+    } finally {
+      read.mockRestore()
+    }
   })
 
   it("verifies and finalizes one exact reviewed merge after remediation exhaustion", async () => {

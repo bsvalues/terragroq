@@ -594,7 +594,10 @@ export function createRepositoryLifecycle(options) {
     const dependencyStat = fs.lstatSync(dependencies, { throwIfNoEntry: false })
     if (!dependencyStat) return { removed: false }
     const source = path.join(workspaceRoot, "node_modules")
-    if (!dependencyStat.isSymbolicLink() || !samePath(fs.realpathSync(dependencies), source)) {
+    const linkTarget = dependencyStat.isSymbolicLink()
+      ? path.resolve(path.dirname(dependencies), fs.readlinkSync(dependencies))
+      : null
+    if (!dependencyStat.isSymbolicLink() || !samePath(linkTarget, source)) {
       wall("HERMES_REPOSITORY_CLEANUP_WALL", "validation dependency path is not the owned junction")
     }
     fs.unlinkSync(dependencies)
@@ -622,6 +625,58 @@ export function createRepositoryLifecycle(options) {
   function removeValidationArtifacts(record) {
     removeValidationDependencies(record)
     removeGeneratedNextOutput(record)
+  }
+
+  async function removeTerminalRecoveryDependencies({ worktreePath, branch, expectedHeadSha } = {}) {
+    const safeBranch = branchName(branch)
+    const absoluteWorktree = absolute(worktreePath, "worktreePath")
+    const record = ownedRecord(absoluteWorktree, safeBranch)
+    if (!SHA.test(expectedHeadSha ?? "")) {
+      wall("HERMES_REPOSITORY_CLEANUP_WALL", "reviewed head SHA required")
+    }
+    const head = await run("git", ["-C", record.worktreePath, "rev-parse", "HEAD"])
+    if (head.stdout.trim() !== expectedHeadSha) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "terminal recovery worktree head mismatch")
+    }
+    const status = await run(
+      "git",
+      ["-C", record.worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )
+    if (status.stdout.length > 0) {
+      wall("HERMES_REPOSITORY_CLEANUP_WALL", "terminal recovery worktree is dirty")
+    }
+    const trackedDependencies = await run(
+      "git",
+      ["-C", record.worktreePath, "ls-files", "-z", "--", "node_modules"],
+    )
+    if (trackedDependencies.stdout.length > 0) {
+      wall("HERMES_REPOSITORY_CLEANUP_WALL", "terminal recovery dependencies contain tracked files")
+    }
+    const dependencies = path.join(record.worktreePath, "node_modules")
+    const dependencyStat = fs.lstatSync(dependencies, { throwIfNoEntry: false })
+    if (!dependencyStat) return { removed: false, headRefOid: expectedHeadSha }
+    if (dependencyStat.isSymbolicLink()) {
+      removeValidationDependencies(record)
+      return { removed: true, headRefOid: expectedHeadSha }
+    }
+    const ignored = await run(
+      "git",
+      ["-C", record.worktreePath, "check-ignore", "-q", "node_modules/"],
+      { allowFailure: true },
+    )
+    if (ignored.code !== 0) {
+      wall("HERMES_REPOSITORY_CLEANUP_WALL", "terminal recovery dependencies are not ignored")
+    }
+    const canonicalWorktree = fs.realpathSync(record.worktreePath)
+    const canonicalDependencies = fs.realpathSync(dependencies)
+    if (!dependencyStat.isDirectory()
+      || !samePath(canonicalDependencies, dependencies)
+      || !samePath(path.dirname(canonicalDependencies), canonicalWorktree)
+      || !inside(canonicalWorktree, canonicalDependencies)) {
+      wall("HERMES_REPOSITORY_CLEANUP_WALL", "terminal recovery dependencies are not an ordinary contained directory")
+    }
+    fs.rmSync(dependencies, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 })
+    return { removed: true, headRefOid: expectedHeadSha }
   }
 
   async function runValidationCommands({ worktreePath, branch, commands = validationCommands } = {}) {
@@ -1038,6 +1093,7 @@ export function createRepositoryLifecycle(options) {
     inspectWorktreeHead,
     ensureValidationDependencies,
     removeValidationDependencies,
+    removeTerminalRecoveryDependencies,
     runValidationCommands,
     commitChanges,
     discoverPullRequest,

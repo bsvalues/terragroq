@@ -1276,6 +1276,7 @@ export async function recordValidationInfrastructureRecoveryProof({
 const COMMIT_SHA = /^[0-9a-f]{40}$/
 const PROJECTION_STATE = /^[A-Z][A-Z0-9_]{1,79}$/
 const REVIEW_REMEDIATION_EXHAUSTED = "REVIEW_REMEDIATION_EXHAUSTED"
+const POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED = "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
 const SENSITIVE_RUNTIME_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 
 function outcomeWorkOrderRef(outcomeId) {
@@ -1312,7 +1313,19 @@ function checkpointEvidence(metadata) {
     }
     if (value !== undefined) hashes[field] = value
   }
-  return { ...(prNumber === undefined ? {} : { prNumber }), ...hashes }
+  const terminalCleanupRecoveryProofDigest = metadata?.terminalCleanupRecoveryProofDigest
+  if (terminalCleanupRecoveryProofDigest !== undefined
+    && (typeof terminalCleanupRecoveryProofDigest !== "string"
+      || !/^[0-9a-f]{64}$/.test(terminalCleanupRecoveryProofDigest))) {
+    throw Object.assign(new Error("checkpoint terminal cleanup proof digest is invalid"), {
+      code: "OUTCOME_PROJECTION_EVIDENCE_INVALID",
+    })
+  }
+  return {
+    ...(prNumber === undefined ? {} : { prNumber }),
+    ...hashes,
+    ...(terminalCleanupRecoveryProofDigest === undefined ? {} : { terminalCleanupRecoveryProofDigest }),
+  }
 }
 
 function projectionEvidenceLabels(evidence) {
@@ -1903,6 +1916,133 @@ export async function recoverReviewedOutcome({
          'hermes-codex-bridge', $3, $4::jsonb)`,
       [row.userId, String(outcomeId), `Released exact reviewed and merged PR #${prNumber} for normal finalization`,
         JSON.stringify({ idempotencyKey, workOrderRef: ref, prNumber, reviewedHeadSha, mergeSha })],
+    )
+    await runQuery("COMMIT")
+    return true
+  } catch (error) {
+    if (runQuery) {
+      try { await runQuery("ROLLBACK") } catch {}
+    }
+    throw error
+  } finally {
+    client?.release()
+    if (pool) await pool.end()
+  }
+}
+
+export async function recoverTerminalPostMergeCleanupOutcome({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  prNumber,
+  reviewedHeadSha,
+  mergeSha,
+  proofDigest,
+} = {}) {
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) {
+    throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
+  }
+  if (!Number.isSafeInteger(prNumber) || prNumber <= 0
+    || typeof reviewedHeadSha !== "string" || !COMMIT_SHA.test(reviewedHeadSha)
+    || typeof mergeSha !== "string" || !COMMIT_SHA.test(mergeSha)
+    || typeof proofDigest !== "string" || !/^[0-9a-f]{64}$/.test(proofDigest)) {
+    throw Object.assign(new Error("post-merge cleanup recovery evidence is invalid"), {
+      code: "OUTCOME_POST_MERGE_CLEANUP_RECOVERY_EVIDENCE_INVALID",
+    })
+  }
+
+  const ref = outcomeWorkOrderRef(outcomeId)
+  const idempotencyKey = `hermes-outcome:${outcomeId}:post-merge-cleanup-recovery:pr:${prNumber}:head:${reviewedHeadSha}:merge:${mergeSha}:proof:${proofDigest}`
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = new Pool({ connectionString: databaseUrl })
+  }
+
+  try {
+    if (pool) {
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+    }
+    await runQuery("BEGIN")
+    await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [ref])
+    const recovered = await runQuery(
+      `WITH latest_terminal AS (
+         SELECT id, metadata
+         FROM governance_event
+         WHERE "entityType" = 'goal' AND "entityId"::text = ($1::integer)::text
+           AND "eventType" = 'HERMES_OUTCOME_TERMINAL'
+         ORDER BY "createdAt" DESC, id DESC
+         LIMIT 1
+       ), candidate AS (
+         SELECT g.id, g."userId" AS "userId", wo.id AS "workOrderId", terminal.id AS "terminalId"
+         FROM goal g
+         JOIN work_order wo ON wo."userId" = g."userId" AND wo.ref = $2
+         JOIN latest_terminal terminal
+           ON terminal.metadata->>'result' = 'FAILED_TERMINAL'
+          AND terminal.metadata->>'nextState' = $3
+         WHERE g.id = $1::integer AND g.status = 'dismissed'
+       ), exact_cleanup AS (
+         SELECT candidate.*, recovered.id AS "recoveryEventId"
+         FROM candidate
+         JOIN governance_event recovered
+           ON recovered."entityType" = 'work_order'
+          AND recovered."entityId"::text = candidate."workOrderId"::text
+          AND recovered."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+          AND recovered.metadata->>'checkpointState' = 'POST_MERGE_CLEANUP_RECOVERED'
+          AND recovered.metadata->>'prNumber' = ($4::integer)::text
+          AND recovered.metadata->>'headRefOid' = $5
+          AND recovered.metadata->>'mergeSha' = $6
+          AND recovered.metadata->>'terminalCleanupRecoveryProofDigest' = $7
+          AND recovered.id > candidate."terminalId"
+       )
+       UPDATE goal g SET status = 'classified', "updatedAt" = NOW()
+       FROM exact_cleanup exact
+       WHERE g.id = exact.id
+       RETURNING g.id, exact."userId", exact."workOrderId", exact."recoveryEventId"`,
+      [
+        outcomeId,
+        ref,
+        POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED,
+        prNumber,
+        reviewedHeadSha,
+        mergeSha,
+        proofDigest,
+      ],
+    )
+    const row = recovered?.rows?.[0]
+    if (!row) {
+      const prior = await runQuery(
+        `SELECT EXISTS (
+           SELECT 1 FROM goal g
+           JOIN governance_event recovered
+             ON recovered."entityType" = 'goal' AND recovered."entityId"::text = g.id::text
+            AND recovered."eventType" = 'HERMES_OUTCOME_POST_MERGE_CLEANUP_RECOVERED'
+            AND recovered.metadata->>'idempotencyKey' = $2
+           WHERE g.id = $1::integer AND g.status = 'classified'
+         ) AS recovered`,
+        [outcomeId, idempotencyKey],
+      )
+      const alreadyRecovered = prior?.rows?.[0]?.recovered === true
+      await runQuery(alreadyRecovered ? "COMMIT" : "ROLLBACK")
+      return alreadyRecovered
+    }
+    await runQuery(
+      `INSERT INTO governance_event
+         ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       VALUES ($1, 'HERMES_OUTCOME_POST_MERGE_CLEANUP_RECOVERED', 'goal', $2,
+         'hermes-codex-bridge', $3, $4::jsonb)`,
+      [
+        row.userId,
+        String(outcomeId),
+        `Released exact cleaned and merged PR #${prNumber} for normal finalization`,
+        JSON.stringify({ idempotencyKey, workOrderRef: ref, prNumber, reviewedHeadSha, mergeSha, proofDigest }),
+      ],
     )
     await runQuery("COMMIT")
     return true
