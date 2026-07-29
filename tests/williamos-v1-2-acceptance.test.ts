@@ -492,7 +492,6 @@ function liveBundle() {
       metadata: {
         checkpointSequence: document.restart.preRestartSequence,
         checkpointState: "HOST_VALIDATION_STARTED",
-        fencingToken: rows[0].fencingToken,
         headRefOid: null,
         mergeSha: null,
         outcomeId: rows[0].outcomeId,
@@ -506,7 +505,6 @@ function liveBundle() {
       metadata: {
         checkpointSequence: document.restart.postRestartSequence,
         checkpointState: "HOST_VALIDATION_PASSED",
-        fencingToken: rows[0].fencingToken,
         headRefOid: null,
         mergeSha: null,
         outcomeId: rows[0].outcomeId,
@@ -563,25 +561,28 @@ function hostState(
   rows: ReturnType<typeof liveBundle>["rows"] | null = null,
   checkpoints: ReturnType<typeof liveBundle>["checkpoints"] | null = null,
 ) {
+  const after = (value: string, milliseconds: number) => (
+    new Date(Date.parse(value) + milliseconds).toISOString()
+  )
   return {
     schemaVersion: 1,
     storeId: "hermes-bridge",
     revision: 4,
     updatedAt: fresh,
-    nextFencingToken: 3,
+    nextFencingToken: 102,
     killSwitch: { active: false, reason: null, updatedAt: null },
     ownerTouchCounters: counters(),
     executions: Object.fromEntries(document.outcomes.map((entry, index) => [
       String(entry.outcomeId),
       {
         outcomeId: String(entry.outcomeId),
-        fencingToken: index + 1,
+        fencingToken: 100 + index,
         lease: {
           status: "RELEASED",
           holderId: "resident-a",
-          acquiredAt: entry.acquiredAt,
+          acquiredAt: after(entry.acquiredAt, 1_000),
           expiresAt: entry.completedAt,
-          releasedAt: entry.completedAt,
+          releasedAt: after(entry.completedAt, 1_000),
         },
         checkpoint: {
           sequence: checkpoints?.[index].metadata.checkpointSequence ?? 10 + index,
@@ -597,6 +598,7 @@ function hostState(
             queueBinding: {
               outcomeKey: entry.outcomeKey,
               activeWorkOrderId: rows?.[index].workOrderId ?? 181 + index,
+              fencingToken: index + 1,
             },
           },
         },
@@ -712,13 +714,15 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
     )
   })
 
-  it("normalizes legacy Work Order completion timestamps to UTC", () => {
-    const normalized =
-      `wo."completedAt" AT TIME ZONE 'UTC' AS "workOrderCompletedAt"`
+  it("normalizes legacy acceptance timestamps to UTC", () => {
+    const normalized = [
+      `wo."completedAt" AT TIME ZONE 'UTC' AS "workOrderCompletedAt"`,
+      `"createdAt" AT TIME ZONE 'UTC' AS "createdAt"`,
+    ]
     expect(campaignSource.match(
-      /wo\."completedAt" AT TIME ZONE 'UTC' AS "workOrderCompletedAt"/g,
-    )).toHaveLength(1)
-    expect(campaignSource).toContain(normalized)
+      /"createdAt" AT TIME ZONE 'UTC' AS "createdAt"/g,
+    )).toHaveLength(2)
+    for (const clause of normalized) expect(campaignSource).toContain(clause)
     expect(campaignSource).not.toContain(
       `wo."completedAt" AS "workOrderCompletedAt"`,
     )

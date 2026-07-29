@@ -339,7 +339,7 @@ describe("Hermes durable outcome queue runtime", () => {
       storeId: "hermes-bridge",
       revision: 1,
       updatedAt: "2026-07-28T12:00:00.000Z",
-      nextFencingToken: 4,
+      nextFencingToken: 31,
       killSwitch: { active: false, reason: null, updatedAt: null },
       ownerTouchCounters: {
         OWNER_OPERATION_TOUCH_COUNT: 0,
@@ -351,7 +351,7 @@ describe("Hermes durable outcome queue runtime", () => {
       executions: {
         77: {
           outcomeId: "77",
-          fencingToken: 3,
+          fencingToken: 30,
           lease: {
             status: "ACTIVE",
             holderId: "resident-hermes",
@@ -373,6 +373,7 @@ describe("Hermes durable outcome queue runtime", () => {
               queueBinding: {
                 outcomeKey: queueItem.outcomeKey,
                 activeWorkOrderId: 472,
+                fencingToken: 3,
               },
             },
           },
