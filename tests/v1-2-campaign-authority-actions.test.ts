@@ -428,6 +428,85 @@ describe("V1.2 campaign server authority boundaries", () => {
     }))
   })
 
+  it("renews an expired exact grant for a resumed campaign", async () => {
+    const now = new Date("2026-08-01T02:00:00.000Z")
+    const priorIssuedAt = new Date(
+      now.getTime() - V1_2_CAMPAIGN_GRANT_DURATION_MS - 1,
+    )
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    const priorDraft = v12CampaignGrant(campaignScope, "primary-1", priorIssuedAt)
+    const approval = {
+      id: 71,
+      userId: "primary-1",
+      ...v12CampaignDecision(campaignScope),
+      decidedAt: priorIssuedAt,
+      createdAt: priorIssuedAt,
+      updatedAt: priorIssuedAt,
+    }
+    const priorGrant = {
+      id: 72,
+      ...priorDraft,
+      createdAt: new Date(priorDraft.createdAt),
+      expiresAt: new Date(priorDraft.expiresAt),
+    }
+    const item = {
+      id: 31,
+      userId: "primary-1",
+      outcomeKey: campaignScope,
+      title: "Add supporting evidence drill-down links to each Goal Console outcome queue row.",
+      objective: "Show the linked Goal, Work Order, Evidence, Trace, and Audit records when those durable references exist.",
+      dependencyKeys: [],
+      riskClass: "R1",
+      lifecycleState: "approved",
+      lifecycleReason: null,
+      approvalState: "approved",
+      approvedBy: "William",
+      authorityState: "matched",
+      authorityLevel: "A2_WRITE_OWN",
+      approvalDecisionId: 71,
+      authorityGrantRef: priorGrant.ref,
+      authoritySubject: "operator",
+      authorityAction: "outcome:execute",
+      version: 7,
+      activeWorkOrderId: 91,
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 4,
+      acquisitionKey: null,
+      terminalResult: null,
+      terminalEvidenceId: null,
+      terminalEvidenceRefs: [],
+      terminalKey: null,
+      activatedAt: priorIssuedAt,
+      terminalAt: null,
+    }
+    const harness = transactionHarness([
+      [item],
+      [approval],
+      [priorGrant],
+      [],
+    ])
+    boundary.dbTransaction.mockImplementation(
+      async (callback: (transaction: unknown) => Promise<unknown>) => (
+        callback(harness.transaction)
+      ),
+    )
+
+    await expect(recordV12CampaignOutcomeAuthority({
+      outcomeKey: campaignScope,
+      expectedVersion: 7,
+    })).resolves.toMatchObject({
+      status: "RECORDED",
+      version: 8,
+    })
+    expect(harness.inserts).toContainEqual(expect.objectContaining({
+      table: "authority_grant",
+    }))
+  })
+
   it("does not renew authority for a drifted campaign contract", async () => {
     const item = {
       id: 31,

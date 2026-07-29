@@ -2510,6 +2510,43 @@ describe("transactional durable outcome queue source", () => {
     expect(query.mock.calls.at(-1)?.[0]).toBe("COMMIT")
   })
 
+  it("rejects owner-decision renewal with a drifted approval owner", async () => {
+    const expired = expiredCampaignAuthorityRow({
+      approvedBy: "untrusted-owner",
+      lifecycleState: "blocked",
+      lifecycleReason: "OWNER_DECISION_REQUIRED",
+      activeWorkOrderId: 472,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      version: 5,
+      activatedAt: "2026-07-27T12:00:00.000Z",
+    })
+    const query = acquisitionQuery({ renewable: [expired] })
+
+    await expect(resumeOutcomeQueueAfterDecision({
+      query,
+      userId,
+      outcomeKey: expired.outcomeKey as string,
+      expectedVersion: 5,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      ownerDecisionId: 91,
+      expectedLifecycleReason: "OWNER_DECISION_REQUIRED",
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-after-renewal",
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).rejects.toMatchObject({
+      code: "V1_2_CAMPAIGN_AUTHORITY_AUTO_RENEWAL_WALL",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.insertRenewedV12CampaignGrant,
+      expect.anything(),
+    )
+  })
+
   it("does not let renewal bypass a stale resume version", async () => {
     const expired = expiredCampaignAuthorityRow({
       lifecycleState: "blocked",

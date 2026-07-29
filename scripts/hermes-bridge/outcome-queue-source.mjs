@@ -2458,6 +2458,7 @@ function exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason 
       && row.acquisitionKey == null
   }
   const authorityPaused = lifecycle === "OWNER_DECISION_BLOCKED"
+    && (row.approvedBy === userId || row.approvedBy === "William")
     && typeof row.executionBinding === "string"
     && row.executionBinding !== ""
     && typeof row.acquisitionKey === "string"
