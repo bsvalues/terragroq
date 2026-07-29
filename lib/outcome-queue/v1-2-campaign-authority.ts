@@ -228,6 +228,68 @@ export function isCanonicalV12CampaignCandidate(item: Candidate): boolean {
     && item.terminalAt === null
 }
 
+export function isExactRenewableV12CampaignQueueRow(
+  item: Candidate & { userId: string },
+  userId: string,
+): boolean {
+  const spec = v12CampaignAuthoritySpec(item.outcomeKey)
+  const manuallyPaused = item.lifecycleState === "blocked"
+    && (
+      item.lifecycleReason === "OPERATOR_PAUSED"
+      || item.lifecycleReason === "Primary Operator paused this outcome."
+    )
+  const approvedUnstarted = item.lifecycleState === "approved"
+  const shared = spec !== null
+    && item.userId === userId
+    && item.title === spec.title
+    && item.objective === spec.objective
+    && Array.isArray(item.dependencyKeys)
+    && sameStrings(item.dependencyKeys, spec.dependencyKeys)
+    && item.riskClass === "R1"
+    && item.approvalState === "approved"
+    && item.approvedBy === userId
+    && Number.isSafeInteger(Number(item.approvalDecisionId))
+    && Number(item.approvalDecisionId) > 0
+    && item.authorityState === "matched"
+    && item.authorityLevel === "A2_WRITE_OWN"
+    && typeof item.authorityGrantRef === "string"
+    && item.authorityGrantRef !== ""
+    && item.authoritySubject === "operator"
+    && item.authorityAction === "outcome:execute"
+    && (approvedUnstarted || manuallyPaused)
+    && item.terminalResult === null
+    && item.terminalEvidenceId === null
+    && Array.isArray(item.terminalEvidenceRefs)
+    && item.terminalEvidenceRefs.length === 0
+    && item.terminalKey === null
+    && item.terminalAt === null
+  if (!shared) return false
+  if (approvedUnstarted) {
+    return item.activeWorkOrderId === null
+      && item.executionBinding === null
+      && item.leaseHolder === null
+      && item.leaseToken === null
+      && item.leaseExpiresAt === null
+      && item.acquisitionKey === null
+      && item.fencingToken === 0
+      && item.activatedAt === null
+  }
+  const fence = Number(item.fencingToken)
+  const workOrderValid = item.activeWorkOrderId === null
+    || (
+      Number.isSafeInteger(Number(item.activeWorkOrderId))
+      && Number(item.activeWorkOrderId) > 0
+    )
+  return workOrderValid
+    && Number.isSafeInteger(fence)
+    && fence >= 0
+    && item.executionBinding === null
+    && item.leaseHolder === null
+    && item.leaseToken === null
+    && item.leaseExpiresAt === null
+    && item.acquisitionKey === null
+}
+
 export function buildV12CampaignMaterializationProvenance(
   userId: string,
   item: Candidate,

@@ -49,6 +49,7 @@ import {
   exactV12CampaignGrant,
   exactV12CampaignRevokedGrant,
   isCanonicalV12CampaignCandidate,
+  isExactRenewableV12CampaignQueueRow,
   isExactV12CampaignMaterialization,
   isV12CampaignAuthorityScope,
   V1_2_CAMPAIGN_PARENT_BODY_SHA256,
@@ -607,7 +608,8 @@ export async function recordV12CampaignOutcomeAuthority(input: {
       && item.leaseToken === null
       && item.leaseExpiresAt === null
       && item.acquisitionKey === null
-    if ((item.lifecycleState === "approved" || pausedCampaign)
+    if (isExactRenewableV12CampaignQueueRow(item, userId)
+      && (item.lifecycleState === "approved" || pausedCampaign)
       && item.approvalState === "approved"
       && item.authorityState === "matched"
       && item.approvalDecisionId !== null

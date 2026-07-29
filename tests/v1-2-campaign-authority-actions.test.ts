@@ -327,19 +327,29 @@ describe("V1.2 campaign server authority boundaries", () => {
     }
     const item = {
       id: 31,
+      userId: "primary-1",
       outcomeKey: campaignScope,
+      title: "Add supporting evidence drill-down links to each Goal Console outcome queue row.",
+      objective: "Show the linked Goal, Work Order, Evidence, Trace, and Audit records when those durable references exist.",
+      dependencyKeys: [],
+      riskClass: "R1",
       lifecycleState: "blocked",
       lifecycleReason: "Primary Operator paused this outcome.",
       approvalState: "approved",
+      approvedBy: "primary-1",
       authorityState: "matched",
+      authorityLevel: "A2_WRITE_OWN",
       approvalDecisionId: 71,
       authorityGrantRef: priorGrant.ref,
+      authoritySubject: "operator",
+      authorityAction: "outcome:execute",
       version: 1,
       activeWorkOrderId: 91,
       executionBinding: null,
       leaseHolder: null,
       leaseToken: null,
       leaseExpiresAt: null,
+      fencingToken: 1,
       acquisitionKey: null,
       terminalResult: null,
       terminalEvidenceId: null,
@@ -402,6 +412,58 @@ describe("V1.2 campaign server authority boundaries", () => {
         summary: expect.stringContaining("renewed A2_WRITE_OWN for 48 hours"),
       }),
     }))
+  })
+
+  it("does not renew authority for a drifted campaign contract", async () => {
+    const item = {
+      id: 31,
+      userId: "primary-1",
+      outcomeKey: campaignScope,
+      title: "Add supporting evidence drill-down links to each Goal Console outcome queue row.",
+      objective: "Show the linked Goal, Work Order, Evidence, Trace, and Audit records when those durable references exist.",
+      dependencyKeys: ["campaign:v1-2:runtime-continuity-status"],
+      riskClass: "R1",
+      lifecycleState: "approved",
+      lifecycleReason: "PRIMARY_V1_2_CAMPAIGN_AUTHORITY_RECORDED",
+      approvalState: "approved",
+      approvedBy: "primary-1",
+      authorityState: "matched",
+      authorityLevel: "A2_WRITE_OWN",
+      approvalDecisionId: 71,
+      authorityGrantRef: "GRANT-V12-CAMPAIGN",
+      authoritySubject: "operator",
+      authorityAction: "outcome:execute",
+      version: 1,
+      activeWorkOrderId: null,
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 0,
+      acquisitionKey: null,
+      terminalResult: null,
+      terminalEvidenceId: null,
+      terminalEvidenceRefs: [],
+      terminalKey: null,
+      activatedAt: null,
+      terminalAt: null,
+    }
+    const harness = transactionHarness([[item]])
+    boundary.dbTransaction.mockImplementation(
+      async (callback: (transaction: unknown) => Promise<unknown>) => (
+        callback(harness.transaction)
+      ),
+    )
+
+    await expect(recordV12CampaignOutcomeAuthority({
+      outcomeKey: campaignScope,
+      expectedVersion: 1,
+    })).resolves.toMatchObject({
+      status: "STALE",
+      version: 1,
+    })
+    expect(harness.inserts).toHaveLength(0)
+    expect(harness.updates).toHaveLength(0)
   })
 
   it("does not renew a cleared campaign blocked for a non-pause reason", async () => {
