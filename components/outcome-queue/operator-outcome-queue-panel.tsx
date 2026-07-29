@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import {
   ArrowDown,
   ArrowUp,
+  Ban,
   Check,
   CirclePause,
   CirclePlay,
@@ -19,6 +20,8 @@ import { toast } from "sonner"
 import {
   mutateOutcomeQueue,
   recordOutcomeAuthorityGrant,
+  recordV12AcceptanceAuthority,
+  revokeV12AcceptanceAuthority,
 } from "@/app/actions/outcome-queue"
 import {
   shouldOfferOutcomeAuthorityBinding,
@@ -43,6 +46,10 @@ import { StatusBadge } from "@/components/status-badge"
 
 const REORDERABLE_STATES = new Set(["suggested", "approved", "blocked"])
 const TERMINAL_STATES = new Set(["completed", "declined", "superseded"])
+const V1_2_ACCEPTANCE_AUTHORITY_SCOPES = new Set([
+  "acceptance:v1-2:authority-blocked",
+  "acceptance:v1-2:dependency-blocked",
+])
 
 function actionInput(
   row: OutcomeQueueOperatorRow,
@@ -100,6 +107,7 @@ export function OperatorOutcomeQueuePanel({
   const visibleRows = compact ? surface.rows.slice(0, 4) : surface.rows
   const movableRows = surface.rows.filter((item) => (
     REORDERABLE_STATES.has(item.lifecycleState)
+    && !V1_2_ACCEPTANCE_AUTHORITY_SCOPES.has(item.outcomeKey)
   ))
 
   function attemptKey(
@@ -177,6 +185,59 @@ export function OperatorOutcomeQueuePanel({
     })
   }
 
+  function recordAcceptanceAuthority(row: OutcomeQueueOperatorRow) {
+    setPendingKeys((current) => new Set(current).add(row.outcomeKey))
+    startTransition(async () => {
+      try {
+        const result = await recordV12AcceptanceAuthority({
+          outcomeKey: row.outcomeKey,
+          expectedVersion: row.version,
+        })
+        if (result.status === "RECORDED" || result.status === "REPLAYED") {
+          toast.success(result.message)
+          router.refresh()
+          return
+        }
+        toast.error(result.message)
+        router.refresh()
+      } catch {
+        toast.error("Acceptance authority could not be recorded.")
+      } finally {
+        setPendingKeys((current) => {
+          const next = new Set(current)
+          next.delete(row.outcomeKey)
+          return next
+        })
+      }
+    })
+  }
+
+  function revokeAcceptanceAuthority(row: OutcomeQueueOperatorRow) {
+    setPendingKeys((current) => new Set(current).add(row.outcomeKey))
+    startTransition(async () => {
+      try {
+        const result = await revokeV12AcceptanceAuthority({
+          outcomeKey: row.outcomeKey,
+        })
+        if (result.status === "RECORDED" || result.status === "REPLAYED") {
+          toast.success(result.message)
+          router.refresh()
+          return
+        }
+        toast.error(result.message)
+        router.refresh()
+      } catch {
+        toast.error("Acceptance authority could not be revoked.")
+      } finally {
+        setPendingKeys((current) => {
+          const next = new Set(current)
+          next.delete(row.outcomeKey)
+          return next
+        })
+      }
+    })
+  }
+
   function submitSupersede() {
     if (!superseding || replacementTitle.trim() === "") return
     run(inputFor(superseding, "supersede", {
@@ -236,10 +297,14 @@ export function OperatorOutcomeQueuePanel({
           {visibleRows.map((row, index) => {
             const rowPending = pendingKeys.has(row.outcomeKey)
             const terminal = TERMINAL_STATES.has(row.lifecycleState)
+            const acceptanceAuthorityProof =
+              V1_2_ACCEPTANCE_AUTHORITY_SCOPES.has(row.outcomeKey)
             const movableIndex = movableRows.findIndex(
               (item) => item.outcomeKey === row.outcomeKey,
             )
-            const movable = !row.isActive && movableIndex >= 0
+            const movable = !acceptanceAuthorityProof
+              && !row.isActive
+              && movableIndex >= 0
             return (
               <li key={row.outcomeKey} className="grid gap-4 px-5 py-4 lg:grid-cols-[1fr_auto]">
                 <div className="min-w-0">
@@ -309,7 +374,7 @@ export function OperatorOutcomeQueuePanel({
                         </Button>
                       </>
                     ) : null}
-                    {row.lifecycleState === "active" ? (
+                    {row.lifecycleState === "active" && !acceptanceAuthorityProof ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -322,7 +387,7 @@ export function OperatorOutcomeQueuePanel({
                         Pause
                       </Button>
                     ) : null}
-                    {row.lifecycleState === "blocked" ? (
+                    {row.lifecycleState === "blocked" && !acceptanceAuthorityProof ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -340,6 +405,7 @@ export function OperatorOutcomeQueuePanel({
                       </Button>
                     ) : null}
                     {row.availableApprovalDecisionId !== null
+                      && !acceptanceAuthorityProof
                       && shouldOfferOutcomeAuthorityBinding(
                         row.lifecycleState,
                         row.authorityGrantRef,
@@ -356,7 +422,35 @@ export function OperatorOutcomeQueuePanel({
                           Record authority
                         </Button>
                       ) : null}
+                    {row.lifecycleState === "suggested"
+                      && V1_2_ACCEPTANCE_AUTHORITY_SCOPES.has(row.outcomeKey) ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={rowPending}
+                          title="Approve and bind only this exact A0 acceptance proof scope"
+                          onClick={() => recordAcceptanceAuthority(row)}
+                        >
+                          <ShieldCheck className="mr-2 h-4 w-4" />
+                          Approve proof
+                        </Button>
+                      ) : null}
+                    {row.outcomeKey === "acceptance:v1-2:authority-blocked"
+                      && row.lifecycleState === "approved"
+                      && row.authorityGrantRef !== null ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={rowPending}
+                          title="Revoke only this exact acceptance proof grant"
+                          onClick={() => revokeAcceptanceAuthority(row)}
+                        >
+                          <Ban className="mr-2 h-4 w-4" />
+                          Revoke proof authority
+                        </Button>
+                      ) : null}
                     {row.lifecycleState === "suggested" ? (
+                      acceptanceAuthorityProof ? null : (
                       <Button
                         size="sm"
                         disabled={rowPending || row.availableApprovalDecisionId === null || row.availableAuthorityGrantRef === null}
@@ -371,8 +465,9 @@ export function OperatorOutcomeQueuePanel({
                         <Check className="mr-2 h-4 w-4" />
                         Approve
                       </Button>
+                      )
                     ) : null}
-                    {row.lifecycleState !== "active" ? (
+                    {row.lifecycleState !== "active" && !acceptanceAuthorityProof ? (
                       <>
                         <Button
                           size="icon"
