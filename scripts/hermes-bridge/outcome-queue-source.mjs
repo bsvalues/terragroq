@@ -2273,7 +2273,7 @@ function exactNewV12CampaignGrantRecord(value, draft) {
 
 function exactRenewableV12CampaignQueueRow(row, userId) {
   const spec = V1_2_CAMPAIGN_SPECS[row?.outcomeKey]
-  return Boolean(spec)
+  const shared = Boolean(spec)
     && row.userId === userId
     && row.title === spec.title
     && row.objective === spec.objective
@@ -2296,6 +2296,39 @@ function exactRenewableV12CampaignQueueRow(row, userId) {
     && row.terminalEvidenceRefs.length === 0
     && row.terminalKey == null
     && row.terminalAt == null
+  if (!shared) return false
+  if (row.lifecycleState === "approved") {
+    return row.activeWorkOrderId == null
+      && row.executionBinding == null
+      && row.leaseHolder == null
+      && row.leaseToken == null
+      && row.leaseExpiresAt == null
+      && row.acquisitionKey == null
+      && row.fencingToken === 0
+      && row.activatedAt == null
+  }
+  if (row.lifecycleState !== "blocked"
+    || row.leaseHolder != null
+    || row.leaseToken != null
+    || row.leaseExpiresAt != null) return false
+  const fence = Number(row.fencingToken)
+  if (!Number.isSafeInteger(fence) || fence < 0) return false
+  const workOrderValid = row.activeWorkOrderId == null
+    || (
+      Number.isSafeInteger(Number(row.activeWorkOrderId))
+      && Number(row.activeWorkOrderId) > 0
+    )
+  if (!workOrderValid) return false
+  const manuallyPaused = row.executionBinding == null
+    && row.acquisitionKey == null
+  const authorityPaused = typeof row.executionBinding === "string"
+    && row.executionBinding !== ""
+    && typeof row.acquisitionKey === "string"
+    && row.acquisitionKey !== ""
+    && row.activeWorkOrderId != null
+    && fence > 0
+    && row.activatedAt != null
+  return manuallyPaused || authorityPaused
 }
 
 async function renewExpiredV12CampaignAuthorities(
@@ -2303,6 +2336,7 @@ async function renewExpiredV12CampaignAuthorities(
   userId,
   at,
   targetOutcomeKey = null,
+  expectedVersion = null,
 ) {
   const candidates = await connection.query(
     OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities,
@@ -2315,6 +2349,9 @@ async function renewExpiredV12CampaignAuthorities(
   const renewedVersions = new Map()
   for (const row of rows) {
     if (targetOutcomeKey !== null && row.outcomeKey !== targetOutcomeKey) continue
+    if (expectedVersion !== null && row.version !== expectedVersion) {
+      fail("V1_2_CAMPAIGN_AUTHORITY_RENEWAL_VERSION_WALL")
+    }
     if (!V1_2_CAMPAIGN_OUTCOME_KEYS.has(row.outcomeKey)
       || !exactRenewableV12CampaignQueueRow(row, userId)
       || !exactV12CampaignDecisionRecord(row.approval, row.outcomeKey)
@@ -2980,39 +3017,32 @@ export async function acquireNextEligibleOutcome({
         reclaimed ? "RECLAIMED" : "WINNER",
       )
     }
-    let reasonResult = await connection.query(
+    const renewed = await renewExpiredV12CampaignAuthorities(connection, user, at)
+    if (renewed.size > 0) {
+      const retried = await connection.query(OUTCOME_QUEUE_SQL.acquire, [
+        at,
+        user,
+        key,
+        binding,
+        holder,
+        token,
+        expiresAt,
+        workOrderId,
+      ])
+      if (retried?.rows?.length === 1) {
+        await ensureAcquisitionReceipt(connection, user, key, retried.rows[0], at)
+        const reclaimed = retried.rows[0].lifecycleReason === "STALE_LEASE_RECOVERED"
+        return await finish(
+          acquisitionResult(retried.rows[0], { reclaimed }),
+          reclaimed ? "RECLAIMED" : "WINNER",
+        )
+      }
+    }
+    const reasonResult = await connection.query(
       OUTCOME_QUEUE_SQL.noSelectionReason,
       [at, user],
     )
-    let reason = noSelectionReason(reasonResult?.rows?.[0])
-    if (reason === "AUTHORITY_INELIGIBLE") {
-      const renewed = await renewExpiredV12CampaignAuthorities(connection, user, at)
-      if (renewed.size > 0) {
-        const retried = await connection.query(OUTCOME_QUEUE_SQL.acquire, [
-          at,
-          user,
-          key,
-          binding,
-          holder,
-          token,
-          expiresAt,
-          workOrderId,
-        ])
-        if (retried?.rows?.length === 1) {
-          await ensureAcquisitionReceipt(connection, user, key, retried.rows[0], at)
-          const reclaimed = retried.rows[0].lifecycleReason === "STALE_LEASE_RECOVERED"
-          return await finish(
-            acquisitionResult(retried.rows[0], { reclaimed }),
-            reclaimed ? "RECLAIMED" : "WINNER",
-          )
-        }
-        reasonResult = await connection.query(
-          OUTCOME_QUEUE_SQL.noSelectionReason,
-          [at, user],
-        )
-        reason = noSelectionReason(reasonResult?.rows?.[0])
-      }
-    }
+    const reason = noSelectionReason(reasonResult?.rows?.[0])
     let contentionOutcome = null
     if (reason === "ACTIVE_LEASE_HELD") {
       const contention = await connection.query(
@@ -3324,6 +3354,7 @@ export async function resumeOutcomeQueueAfterDecision({
       user,
       at,
       key,
+      version,
     )
     if (renewed.has(key)) {
       const renewedResult = await connection.query(OUTCOME_QUEUE_SQL.resumeAfterDecision, [
