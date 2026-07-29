@@ -105,6 +105,8 @@ describe("operator outcome queue panel accessibility contract", () => {
     expect(source).toContain("revokeV12CampaignOutcomeAuthority")
     expect(source).toContain("campaignAuthorityProposal")
     expect(source).toContain("protectedAuthorityProposal")
+    expect(source).toContain('campaignAuthorityProposal\n                      && row.lifecycleState !== "active"')
+    expect(source.match(/\{campaignAuthorityProposal \? null : \(/g)).toHaveLength(2)
     expect(actionSource).toContain("isCanonicalV12CampaignCandidate")
     expect(actionSource).toContain("exactV12CampaignDecision")
     expect(actionSource).toContain("exactV12CampaignGrant")

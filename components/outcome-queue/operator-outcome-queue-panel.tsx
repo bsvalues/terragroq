@@ -533,6 +533,7 @@ export function OperatorOutcomeQueuePanel({
                         </Button>
                       ) : null}
                     {campaignAuthorityProposal
+                      && row.lifecycleState !== "active"
                       && row.authorityState === "matched"
                       && row.authorityGrantRef !== null
                       && row.availableAuthorityGrantRef === row.authorityGrantRef ? (
@@ -593,19 +594,21 @@ export function OperatorOutcomeQueuePanel({
                             <GitFork className="h-4 w-4" />
                           </Button>
                         )}
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          disabled={rowPending}
-                          title="Supersede outcome"
-                          aria-label={`Supersede ${row.title}`}
-                          onClick={() => {
-                            setSuperseding(row)
-                            setReplacementTitle("")
-                          }}
-                        >
-                          <GitBranch className="h-4 w-4" />
-                        </Button>
+                        {campaignAuthorityProposal ? null : (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            disabled={rowPending}
+                            title="Supersede outcome"
+                            aria-label={`Supersede ${row.title}`}
+                            onClick={() => {
+                              setSuperseding(row)
+                              setReplacementTitle("")
+                            }}
+                          >
+                            <GitBranch className="h-4 w-4" />
+                          </Button>
+                        )}
                         <Button
                           size="icon"
                           variant="ghost"
