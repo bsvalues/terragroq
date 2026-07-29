@@ -1,6 +1,6 @@
 "use server"
 
-import { and, desc, eq, inArray, or } from "drizzle-orm"
+import { and, arrayOverlaps, asc, desc, eq, inArray, or, sql } from "drizzle-orm"
 
 import {
   buildGoalTimelineReadModel,
@@ -11,6 +11,13 @@ import {
   type GoalTimelineProjection,
   type GoalTimelineWorkOrderRecord,
 } from "@/components/goal-console/goal-timeline-read-model"
+import {
+  projectRecentOutcomeCompletionTimeline,
+  RECENT_OUTCOME_COMPLETION_LIMIT,
+  type OutcomeCompletionAcquisitionReceipt,
+  type OutcomeCompletionQueueRecord,
+  type RecentOutcomeCompletionTimeline,
+} from "@/components/runtime/outcome-completion-timeline"
 import type { RuntimeExecutionGovernanceEventRecord } from "@/components/runtime/runtime-execution-model"
 import { db } from "@/lib/db"
 import {
@@ -19,6 +26,8 @@ import {
   evidenceRecord,
   goal,
   governanceEvent,
+  outcomeQueueAcquisitionReceipt,
+  outcomeQueueItem,
   workOrder,
 } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
@@ -27,6 +36,30 @@ const GOAL_TIMELINE_LIMIT = 25
 const GOAL_TIMELINE_BATCH_LIMIT = 25
 const EVENTS_PER_RUNTIME_LIMIT = 250
 const RELATED_RECORD_LIMIT = 500
+
+const OUTCOME_COMPLETION_SELECT = {
+  id: outcomeQueueItem.id,
+  userId: outcomeQueueItem.userId,
+  outcomeKey: outcomeQueueItem.outcomeKey,
+  title: outcomeQueueItem.title,
+  queueOrder: outcomeQueueItem.queueOrder,
+  dependencyKeys: outcomeQueueItem.dependencyKeys,
+  lifecycleState: outcomeQueueItem.lifecycleState,
+  terminalResult: outcomeQueueItem.terminalResult,
+  terminalEvidenceRefs: outcomeQueueItem.terminalEvidenceRefs,
+  terminalAt: outcomeQueueItem.terminalAt,
+  updatedAt: outcomeQueueItem.updatedAt,
+} as const
+
+const OUTCOME_ACQUISITION_RECEIPT_SELECT = {
+  id: outcomeQueueAcquisitionReceipt.id,
+  userId: outcomeQueueAcquisitionReceipt.userId,
+  outcomeKey: outcomeQueueAcquisitionReceipt.outcomeKey,
+  firstFencingToken: outcomeQueueAcquisitionReceipt.firstFencingToken,
+  latestFencingToken: outcomeQueueAcquisitionReceipt.latestFencingToken,
+  createdAt: outcomeQueueAcquisitionReceipt.createdAt,
+  updatedAt: outcomeQueueAcquisitionReceipt.updatedAt,
+} as const
 
 async function readGoalTimelines(goalIds?: number[]): Promise<GoalTimelineProjection[]> {
   const userId = await getUserId()
@@ -314,4 +347,129 @@ export async function getGoalTimelinesByIds(
   )
   if (validGoalIds.length === 0) return []
   return readGoalTimelines(validGoalIds)
+}
+
+function serializeOutcomeCompletionRow(row: {
+  id: number
+  userId: string
+  outcomeKey: string
+  title: string
+  queueOrder: number
+  dependencyKeys: string[]
+  lifecycleState: string
+  terminalResult: string | null
+  terminalEvidenceRefs: string[]
+  terminalAt: Date | null
+  updatedAt: Date
+}): OutcomeCompletionQueueRecord {
+  return {
+    id: String(row.id),
+    userId: row.userId,
+    outcomeKey: row.outcomeKey,
+    title: row.title,
+    queueOrder: row.queueOrder,
+    dependencyKeys: row.dependencyKeys,
+    lifecycleState: row.lifecycleState,
+    terminalResult: row.terminalResult,
+    terminalEvidenceRefs: row.terminalEvidenceRefs,
+    terminalAt: row.terminalAt?.toISOString() ?? null,
+    updatedAt: row.updatedAt.toISOString(),
+  }
+}
+
+function serializeOutcomeAcquisitionReceipt(row: {
+  id: number
+  userId: string
+  outcomeKey: string
+  firstFencingToken: number
+  latestFencingToken: number
+  createdAt: Date
+  updatedAt: Date
+}): OutcomeCompletionAcquisitionReceipt {
+  return {
+    id: String(row.id),
+    userId: row.userId,
+    outcomeKey: row.outcomeKey,
+    firstFencingToken: row.firstFencingToken,
+    latestFencingToken: row.latestFencingToken,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  }
+}
+
+export async function getRecentOutcomeCompletionTimeline():
+Promise<RecentOutcomeCompletionTimeline> {
+  const userId = await getUserId()
+  const completedRows = await db
+    .select(OUTCOME_COMPLETION_SELECT)
+    .from(outcomeQueueItem)
+    .where(and(
+      eq(outcomeQueueItem.userId, userId),
+      eq(outcomeQueueItem.lifecycleState, "completed"),
+    ))
+    .orderBy(
+      sql`${outcomeQueueItem.terminalAt} DESC NULLS LAST`,
+      desc(outcomeQueueItem.id),
+    )
+    .limit(RECENT_OUTCOME_COMPLETION_LIMIT + 1)
+
+  if (completedRows.length === 0) {
+    return projectRecentOutcomeCompletionTimeline(userId, [], [])
+  }
+
+  const completedRecords = completedRows.map(serializeOutcomeCompletionRow)
+  const predecessorKeys = [
+    ...new Set(projectRecentOutcomeCompletionTimeline(
+      userId,
+      completedRecords,
+      [],
+    ).rows.map((row) => row.outcomeKey)),
+  ]
+
+  const candidateRows = predecessorKeys.length === 0
+    ? []
+    : await db
+      .select(OUTCOME_COMPLETION_SELECT)
+      .from(outcomeQueueItem)
+      .where(and(
+        eq(outcomeQueueItem.userId, userId),
+        arrayOverlaps(outcomeQueueItem.dependencyKeys, predecessorKeys),
+      ))
+      .orderBy(asc(outcomeQueueItem.id))
+
+  const candidatesByKey = new Map<string, OutcomeCompletionQueueRecord>()
+  for (const candidate of candidateRows.map(serializeOutcomeCompletionRow)) {
+    if (!candidatesByKey.has(candidate.outcomeKey)) {
+      candidatesByKey.set(candidate.outcomeKey, candidate)
+    }
+  }
+  const candidateOutcomeKeys = [...candidatesByKey.keys()]
+
+  const receiptGroups = await Promise.all(candidateOutcomeKeys.map((outcomeKey) => db
+    .select(OUTCOME_ACQUISITION_RECEIPT_SELECT)
+    .from(outcomeQueueAcquisitionReceipt)
+    .where(and(
+      eq(outcomeQueueAcquisitionReceipt.userId, userId),
+      eq(outcomeQueueAcquisitionReceipt.outcomeKey, outcomeKey),
+    ))
+    .orderBy(
+      asc(outcomeQueueAcquisitionReceipt.createdAt),
+      asc(outcomeQueueAcquisitionReceipt.id),
+    )
+    .limit(1)))
+
+  const outcomesByKey = new Map(
+    completedRecords.map((record) => [record.outcomeKey, record]),
+  )
+  for (const candidate of candidatesByKey.values()) {
+    if (!outcomesByKey.has(candidate.outcomeKey)) {
+      outcomesByKey.set(candidate.outcomeKey, candidate)
+    }
+  }
+
+  return projectRecentOutcomeCompletionTimeline(
+    userId,
+    [...outcomesByKey.values()],
+    receiptGroups.flat().map(serializeOutcomeAcquisitionReceipt),
+  )
 }
