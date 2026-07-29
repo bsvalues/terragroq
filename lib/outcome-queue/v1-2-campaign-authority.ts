@@ -202,7 +202,7 @@ export function isCanonicalV12CampaignCandidate(item: Candidate): boolean {
     && item.approvedAt === null
     && item.approvalDecisionId === null
     && item.authorityState === "unverified"
-    && item.authorityLevel === "A0_READ_ONLY"
+    && item.authorityLevel === "A2_WRITE_OWN"
     && item.authorityGrantRef === null
     && item.authoritySubject === "operator"
     && item.authorityAction === "outcome:execute"
@@ -253,10 +253,10 @@ export function buildV12CampaignMaterializationProvenance(
       id: Number(item.goalId),
       ref: item.goalRef,
       command: item.title,
-      lane: "read_model",
+      lane: "ui",
       mode: "implement",
       risk: "low",
-      authority: "A0_READ_ONLY",
+      authority: "A2_WRITE_OWN",
       verdict: "requires_approval",
       rationale: GOAL_RATIONALE,
       mistakePatterns: [],
@@ -281,7 +281,7 @@ export function buildV12CampaignMaterializationProvenance(
       approvedAt: null,
       approvalDecisionId: null,
       authorityState: "unverified",
-      authorityLevel: "A0_READ_ONLY",
+      authorityLevel: "A2_WRITE_OWN",
       authorityGrantRef: null,
       authoritySubject: "operator",
       authorityAction: "outcome:execute",
@@ -338,10 +338,10 @@ export function isExactV12CampaignMaterialization(input: {
     && goal.userId === userId
     && goal.ref === item.goalRef
     && goal.command === item.title
-    && goal.lane === "read_model"
+    && goal.lane === "ui"
     && goal.mode === "implement"
     && goal.risk === "low"
-    && goal.authority === "A0_READ_ONLY"
+    && goal.authority === "A2_WRITE_OWN"
     && goal.verdict === "requires_approval"
     && goal.rationale === GOAL_RATIONALE
     && sameStrings(goal.mistakePatterns, [])
@@ -390,7 +390,7 @@ export function v12CampaignDecision(scope: CampaignScope) {
     title: `Approve ${spec.title}`,
     context: "The Primary reviewed one fixed WilliamOS-native product proposal for the #471 continuous V1.2 campaign.",
     decision: "APPROVE",
-    rationale: "This exact R1 read-model outcome is useful product work inside #471 and requires explicit Primary approval before Hermes may acquire it.",
+    rationale: "This exact R1 UI/read-model outcome is useful product work inside #471 and requires explicit Primary approval before Hermes may acquire it.",
     consequences: "Hermes may execute only this exact queued outcome. The second outcome remains dependency-blocked until the first completes, and every #471 blocked boundary remains enforced.",
     status: "accepted",
     authority: "binding",
@@ -422,7 +422,7 @@ export function v12CampaignGrant(scope: CampaignScope, userId: string, issuedAt:
     workOrderId: null,
     grantedBy: userId,
     grantedTo: "operator",
-    authorityLevel: "A0_READ_ONLY",
+    authorityLevel: "A2_WRITE_OWN",
     scope,
     allowedActions: ["outcome:execute"],
     blockedActions: [...V1_2_CAMPAIGN_BLOCKED_ACTIONS],

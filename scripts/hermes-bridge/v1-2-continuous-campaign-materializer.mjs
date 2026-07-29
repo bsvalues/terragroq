@@ -108,10 +108,10 @@ export function buildV12CampaignMaterializerProvenance({
       id: Number(goalId),
       ref: item.goalRef,
       command: item.title,
-      lane: "read_model",
+      lane: "ui",
       mode: "implement",
       risk: "low",
-      authority: "A0_READ_ONLY",
+      authority: "A2_WRITE_OWN",
       verdict: "requires_approval",
       rationale: GOAL_RATIONALE,
       mistakePatterns: [],
@@ -136,7 +136,7 @@ export function buildV12CampaignMaterializerProvenance({
       approvedAt: null,
       approvalDecisionId: null,
       authorityState: "unverified",
-      authorityLevel: "A0_READ_ONLY",
+      authorityLevel: "A2_WRITE_OWN",
       authorityGrantRef: null,
       authoritySubject: "operator",
       authorityAction: "outcome:execute",
@@ -241,10 +241,10 @@ export function isExactV12CampaignReplay(rows, plan, userId) {
       && row.goalRef === expected.goalRef
       && row.materializedGoalRef === expected.goalRef
       && row.goalCommand === expected.title
-      && row.goalLane === "read_model"
+      && row.goalLane === "ui"
       && row.goalMode === "implement"
       && row.goalRisk === "low"
-      && row.goalAuthority === "A0_READ_ONLY"
+      && row.goalAuthority === "A2_WRITE_OWN"
       && row.goalVerdict === "requires_approval"
       && row.goalRationale === GOAL_RATIONALE
       && sameStrings(row.goalMistakePatterns, [])
@@ -266,7 +266,7 @@ export function isExactV12CampaignReplay(rows, plan, userId) {
       && row.approvedAt == null
       && row.approvalDecisionId == null
       && row.authorityState === "unverified"
-      && row.authorityLevel === "A0_READ_ONLY"
+      && row.authorityLevel === "A2_WRITE_OWN"
       && row.authorityGrantRef == null
       && row.authoritySubject === "operator"
       && row.authorityAction === "outcome:execute"
@@ -567,7 +567,7 @@ export async function materializeV12ContinuousCampaign({
            rationale, "mistakePatterns", "matchedRules", "recommendedMove",
            "requiresApproval", status, "createdAt", "updatedAt"
          ) VALUES (
-           $1, $2, $3, 'read_model', 'implement', 'low', 'A0_READ_ONLY',
+           $1, $2, $3, 'ui', 'implement', 'low', 'A2_WRITE_OWN',
            'requires_approval', $4, '{}', '{}', $5, true, 'classified', $6, $6
          ) RETURNING id`,
         [
@@ -594,7 +594,7 @@ export async function materializeV12ContinuousCampaign({
            "suggestedAt", "activatedAt", "terminalAt", "createdAt", "updatedAt"
          ) VALUES (
            $1, $2, $3, $4, $5, $6, $7, $8, 'R1', 'unapproved',
-           NULL, NULL, NULL, 'unverified', 'A0_READ_ONLY', NULL, 'operator',
+           NULL, NULL, NULL, 'unverified', 'A2_WRITE_OWN', NULL, 'operator',
            'outcome:execute', 'suggested', $9,
            NULL, NULL, NULL, NULL, NULL, 0, 0, NULL,
            NULL, NULL, '{}', NULL, NULL, NULL,
