@@ -48,6 +48,10 @@ import {
   acceptanceCampaignIdempotencyKey,
   acceptanceCampaignOutcomeKey,
 } from "@/scripts/hermes-bridge/v1-2-acceptance-exercise.mjs"
+import {
+  v12CampaignDecision,
+  v12CampaignGrant,
+} from "@/lib/outcome-queue/v1-2-campaign-authority"
 
 const now = "2026-07-28T12:00:00.000Z"
 const userId = "owner"
@@ -101,6 +105,45 @@ function queueRow(overrides: Record<string, unknown> = {}) {
     updatedAt: now,
     ...overrides,
   }
+}
+
+function expiredCampaignAuthorityRow(
+  overrides: Record<string, unknown> = {},
+) {
+  const outcomeKey = "campaign:v1-2:queue-evidence-drilldown"
+  const issuedAt = new Date("2026-07-26T12:00:00.000Z")
+  const grant = v12CampaignGrant(outcomeKey, userId, issuedAt)
+  return queueRow({
+    outcomeKey,
+    goalId: 2001,
+    goalRef: "GOAL-2001",
+    title: "Add supporting evidence drill-down links to each Goal Console outcome queue row.",
+    objective: "Show the linked Goal, Work Order, Evidence, Trace, and Audit records when those durable references exist.",
+    dependencyKeys: [],
+    approvedBy: userId,
+    approvalDecisionId: 201,
+    authorityGrantRef: grant.ref,
+    lifecycleState: "approved",
+    activeWorkOrderId: null,
+    executionBinding: null,
+    leaseHolder: null,
+    leaseToken: null,
+    leaseExpiresAt: null,
+    fencingToken: 0,
+    version: 1,
+    acquisitionKey: null,
+    activatedAt: null,
+    approval: {
+      id: 201,
+      userId,
+      ...v12CampaignDecision(outcomeKey),
+    },
+    expiredGrant: {
+      id: 202,
+      ...grant,
+    },
+    ...overrides,
+  })
 }
 
 function safeMutationRow(row: Record<string, unknown>) {
@@ -321,7 +364,11 @@ function acquisitionQuery({
   replayEligibility = [{ approvalLive: true, authorityLive: true }],
   reclaimed = [],
   selected = [],
+  selectedAfterRenewal,
   counts = [],
+  renewable = [],
+  rebound = [],
+  resumeAfterRenewal,
 }: {
   receipt?: unknown[]
   receiptOutcome?: unknown[]
@@ -329,8 +376,14 @@ function acquisitionQuery({
   replayEligibility?: unknown[]
   reclaimed?: unknown[]
   selected?: unknown[]
+  selectedAfterRenewal?: unknown[]
   counts?: unknown[]
+  renewable?: unknown[]
+  rebound?: unknown[]
+  resumeAfterRenewal?: unknown[]
 }) {
+  let acquireCalls = 0
+  let resumeCalls = 0
   const run = vi.fn(async (sql: string, values: unknown[] = []) => {
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] }
     if (sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
@@ -341,7 +394,58 @@ function acquisitionQuery({
     if (sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: prior }
     if (sql === OUTCOME_QUEUE_SQL.revalidateAcquisition) return { rows: replayEligibility }
     if (sql === OUTCOME_QUEUE_SQL.reclaimAcquisition) return { rows: reclaimed }
-    if (sql === OUTCOME_QUEUE_SQL.acquire) return { rows: selected }
+    if (sql === OUTCOME_QUEUE_SQL.acquire) {
+      const rows = acquireCalls > 0 && selectedAfterRenewal !== undefined
+        ? selectedAfterRenewal
+        : selected
+      acquireCalls += 1
+      return { rows }
+    }
+    if (sql === OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities) {
+      return { rows: renewable }
+    }
+    if (sql === OUTCOME_QUEUE_SQL.readV12CampaignGrantCollision) return { rows: [] }
+    if (sql === OUTCOME_QUEUE_SQL.insertRenewedV12CampaignGrant) {
+      return {
+        rows: [{
+          id: 81,
+          userId: values[0],
+          ref: values[1],
+          workOrderId: null,
+          grantedBy: values[0],
+          grantedTo: "operator",
+          authorityLevel: "A2_WRITE_OWN",
+          scope: values[2],
+          allowedActions: values[3],
+          blockedActions: values[4],
+          reason: values[5],
+          status: "active",
+          expiresAt: values[6],
+          revokedAt: null,
+          revokedBy: null,
+          revokeReason: null,
+          contentHash: values[7],
+          createdAt: values[8],
+        }],
+      }
+    }
+    if (sql === OUTCOME_QUEUE_SQL.rebindRenewedV12CampaignGrant) {
+      return { rows: rebound }
+    }
+    if (sql === OUTCOME_QUEUE_SQL.insertV12CampaignAuthorityRenewalAudit) {
+      return { rows: [{ id: 82 }] }
+    }
+    if (sql === OUTCOME_QUEUE_SQL.insertV12CampaignAuthorityRenewalEvent) {
+      return { rows: [{ id: 83 }] }
+    }
+    if (sql === OUTCOME_QUEUE_SQL.resumeAfterDecision) {
+      const rows = resumeCalls > 0 && resumeAfterRenewal !== undefined
+        ? resumeAfterRenewal
+        : []
+      resumeCalls += 1
+      return { rows }
+    }
+    if (sql === OUTCOME_QUEUE_SQL.replayResumeAfterDecision) return { rows: [] }
     if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionReceipt) {
       return {
         rows: [{
@@ -1295,6 +1399,9 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.readAcquisition,
       OUTCOME_QUEUE_SQL.acquire,
       OUTCOME_QUEUE_SQL.noSelectionReason,
+      ...(reason === "AUTHORITY_INELIGIBLE"
+        ? [OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities]
+        : []),
       ...(reason === "ACTIVE_LEASE_HELD"
         ? [OUTCOME_QUEUE_SQL.readActiveAcquisitionProof]
         : []),
@@ -1326,6 +1433,113 @@ describe("transactional durable outcome queue source", () => {
         478,
       ])
     }
+  })
+
+  it("automatically renews only an exact expired campaign grant before acquisition", async () => {
+    const expired = expiredCampaignAuthorityRow()
+    const renewedDraft = v12CampaignGrant(
+      expired.outcomeKey as "campaign:v1-2:queue-evidence-drilldown",
+      userId,
+      new Date(now),
+    )
+    const rebound = {
+      ...expired,
+      authorityGrantRef: renewedDraft.ref,
+      lifecycleReason: "HERMES_V1_2_CAMPAIGN_AUTHORITY_AUTO_RENEWAL",
+      version: 2,
+    }
+    const acquired = queueRow({
+      ...rebound,
+      lifecycleState: "active",
+      activeWorkOrderId: 472,
+      executionBinding: "execution-a",
+      leaseHolder: "supervisor-a",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:01:00.000Z",
+      fencingToken: 1,
+      version: 3,
+      acquisitionKey: "acquire-a",
+      activatedAt: now,
+    })
+    const query = acquisitionQuery({
+      counts: [{
+        totalCount: 1,
+        candidateStateCount: 1,
+        approvalEligibleCount: 1,
+        authorityEligibleCount: 0,
+      }],
+      renewable: [expired],
+      rebound: [rebound],
+      selectedAfterRenewal: [acquired],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: true,
+      outcome: expect.objectContaining({
+        outcomeKey: expired.outcomeKey,
+        authorityGrantRef: renewedDraft.ref,
+      }),
+    })
+
+    expect(query).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.readV12CampaignGrantCollision,
+      [userId, renewedDraft.ref],
+    )
+    expect(query).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.rebindRenewedV12CampaignGrant,
+      [
+        expired.id,
+        userId,
+        expired.outcomeKey,
+        1,
+        renewedDraft.ref,
+        now,
+        expired.authorityGrantRef,
+      ],
+    )
+    const auditCall = query.mock.calls.find(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.insertV12CampaignAuthorityRenewalAudit,
+    )
+    expect(auditCall?.[1]?.[2]).toContain("unchanged, accepted V1.2 campaign scope")
+    expect(String(auditCall?.[1]?.[5])).toContain('"automated":true')
+    expect(String(auditCall?.[1]?.[5])).not.toContain("lease-a")
+    expect(OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities)
+      .toContain(`expired_grant."revokedAt" IS NULL`)
+  })
+
+  it("fails closed instead of renewing a tampered campaign grant", async () => {
+    const expired = expiredCampaignAuthorityRow()
+    const tampered = {
+      ...expired,
+      expiredGrant: {
+        ...(expired.expiredGrant as Record<string, unknown>),
+        blockedActions: ["production mutation"],
+      },
+    }
+    const query = acquisitionQuery({
+      counts: [{
+        totalCount: 1,
+        candidateStateCount: 1,
+        approvalEligibleCount: 1,
+        authorityEligibleCount: 0,
+      }],
+      renewable: [tampered],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).rejects.toMatchObject({
+      code: "V1_2_CAMPAIGN_AUTHORITY_AUTO_RENEWAL_WALL",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.insertRenewedV12CampaignGrant,
+      expect.anything(),
+    )
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
   })
 
   it("acquires transactionally and replays the same live binding", async () => {
@@ -1988,9 +2202,70 @@ describe("transactional durable outcome queue source", () => {
       "BEGIN",
       OUTCOME_QUEUE_SQL.acquireLock,
       OUTCOME_QUEUE_SQL.resumeAfterDecision,
+      OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities,
       OUTCOME_QUEUE_SQL.replayResumeAfterDecision,
       "ROLLBACK",
     ])
+  })
+
+  it("renews an exact paused campaign grant before decision resume", async () => {
+    const expired = expiredCampaignAuthorityRow({
+      lifecycleState: "blocked",
+      lifecycleReason: "OWNER_DECISION_REQUIRED",
+      activeWorkOrderId: 472,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      version: 5,
+      activatedAt: "2026-07-27T12:00:00.000Z",
+    })
+    const renewedDraft = v12CampaignGrant(
+      expired.outcomeKey as "campaign:v1-2:queue-evidence-drilldown",
+      userId,
+      new Date(now),
+    )
+    const rebound = {
+      ...expired,
+      authorityGrantRef: renewedDraft.ref,
+      version: 6,
+    }
+    const resumed = queueRow({
+      ...rebound,
+      lifecycleState: "active",
+      lifecycleReason: "OWNER_DECISION_RESUMED",
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-after-renewal",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      fencingToken: 4,
+      version: 7,
+    })
+    const query = acquisitionQuery({
+      renewable: [expired],
+      rebound: [rebound],
+      resumeAfterRenewal: [resumed],
+    })
+
+    await expect(resumeOutcomeQueueAfterDecision({
+      query,
+      userId,
+      outcomeKey: expired.outcomeKey as string,
+      expectedVersion: 5,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      ownerDecisionId: 91,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-after-renewal",
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).resolves.toEqual(resumed)
+
+    const resumeCalls = query.mock.calls.filter(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.resumeAfterDecision,
+    )
+    expect(resumeCalls).toHaveLength(2)
+    expect(resumeCalls[1][1]?.[2]).toBe(6)
+    expect(query.mock.calls.at(-1)?.[0]).toBe("COMMIT")
   })
 
   it("keeps GOAL-0001 through GOAL-0005 user-scoped and history-only", async () => {

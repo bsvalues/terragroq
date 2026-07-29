@@ -18,6 +18,35 @@ const PROTECTED_V1_2_OUTCOME_KEYS = new Set([
   "campaign:v1-2:queue-evidence-drilldown",
   "campaign:v1-2:runtime-continuity-status",
 ])
+const V1_2_CAMPAIGN_GRANT_DURATION_MS = 48 * 60 * 60 * 1000
+const V1_2_CAMPAIGN_BLOCKED_ACTIONS = Object.freeze([
+  "production mutation",
+  "TerraFusion",
+  "Property Workbench",
+  "TerraPilot",
+  "county/PACS",
+  "protected data",
+  "paid overage",
+  "destructive action",
+  "secret inspection",
+  "authority expansion",
+  "issue #357",
+])
+const V1_2_CAMPAIGN_SPECS = Object.freeze({
+  "campaign:v1-2:queue-evidence-drilldown": Object.freeze({
+    suffix: "EVIDENCE-DRILLDOWN",
+    title: "Add supporting evidence drill-down links to each Goal Console outcome queue row.",
+    objective: "Show the linked Goal, Work Order, Evidence, Trace, and Audit records when those durable references exist.",
+    dependencyKeys: Object.freeze([]),
+  }),
+  "campaign:v1-2:runtime-continuity-status": Object.freeze({
+    suffix: "CONTINUITY-STATUS",
+    title: "Add a compact continuous outcome campaign status panel to the WilliamOS Runtime page.",
+    objective: "Show the live campaign window, acquisition and settlement sequence, automatic successor handoff, and truthful evidence gaps.",
+    dependencyKeys: Object.freeze(["campaign:v1-2:queue-evidence-drilldown"]),
+  }),
+})
+const V1_2_CAMPAIGN_OUTCOME_KEYS = new Set(Object.keys(V1_2_CAMPAIGN_SPECS))
 const PROTECTED_V1_2_OUTCOME_SQL = [...PROTECTED_V1_2_OUTCOME_KEYS]
   .map((outcomeKey) => `'${outcomeKey.replaceAll("'", "''")}'`)
   .join(", ")
@@ -963,6 +992,86 @@ FROM "outcome_queue_item" AS q
 WHERE q."userId" = $1
   AND q."acquisitionKey" = $2
 FOR UPDATE OF q
+`,
+  readRenewableV12CampaignAuthorities: `
+SELECT ${QUEUE_COLUMNS},
+       row_to_json(approval) AS "approval",
+       row_to_json(expired_grant) AS "expiredGrant"
+FROM "outcome_queue_item" AS q
+JOIN "decision" AS approval
+  ON approval."id" = q."approvalDecisionId"
+  AND approval."userId" = q."userId"
+JOIN "authority_grant" AS expired_grant
+  ON expired_grant."userId" = q."userId"
+  AND expired_grant."ref" = q."authorityGrantRef"
+WHERE q."userId" = $1
+  AND q."outcomeKey" IN (
+    'campaign:v1-2:queue-evidence-drilldown',
+    'campaign:v1-2:runtime-continuity-status'
+  )
+  AND q."lifecycleState" IN ('approved', 'blocked')
+  AND q."approvalState" = 'approved'
+  AND q."authorityState" = 'matched'
+  AND expired_grant."status" IN ('active', 'expired')
+  AND expired_grant."revokedAt" IS NULL
+  AND expired_grant."expiresAt" <= $2::timestamptz
+ORDER BY ${ORDER_BY}
+FOR UPDATE OF q, expired_grant
+`,
+  readV12CampaignGrantCollision: `
+SELECT "id"
+FROM "authority_grant"
+WHERE "userId" = $1
+  AND "ref" = $2
+LIMIT 1
+`,
+  insertRenewedV12CampaignGrant: `
+INSERT INTO "authority_grant" (
+  "userId", "ref", "workOrderId", "grantedBy", "grantedTo",
+  "authorityLevel", "scope", "allowedActions", "blockedActions", "reason",
+  "status", "expiresAt", "revokedAt", "revokedBy", "revokeReason",
+  "contentHash", "createdAt"
+) VALUES (
+  $1, $2, NULL, $1, 'operator',
+  'A2_WRITE_OWN', $3, $4::text[], $5::text[], $6,
+  'active', $7::timestamptz, NULL, NULL, NULL,
+  $8, $9::timestamptz
+)
+RETURNING *
+`,
+  rebindRenewedV12CampaignGrant: `
+UPDATE "outcome_queue_item" AS q
+SET "authorityGrantRef" = $5,
+    "lifecycleReason" = 'HERMES_V1_2_CAMPAIGN_AUTHORITY_AUTO_RENEWAL',
+    "version" = q."version" + 1,
+    "updatedAt" = $6::timestamptz
+WHERE q."id" = $1
+  AND q."userId" = $2
+  AND q."outcomeKey" = $3
+  AND q."version" = $4
+  AND q."authorityGrantRef" = $7
+  AND q."approvalState" = 'approved'
+  AND q."authorityState" = 'matched'
+  AND q."lifecycleState" IN ('approved', 'blocked')
+RETURNING ${QUEUE_COLUMNS}
+`,
+  insertV12CampaignAuthorityRenewalAudit: `
+INSERT INTO "governance_event" (
+  "userId", "eventType", "entityType", "entityId", "actor", "reason",
+  "beforeHash", "afterHash", "metadata", "createdAt"
+) VALUES (
+  $1, 'AUTHORITY_RENEWED', 'authority_grant', $2, 'hermes', $3,
+  $4, $5, $6::jsonb, $7::timestamptz
+)
+RETURNING "id"
+`,
+  insertV12CampaignAuthorityRenewalEvent: `
+INSERT INTO "event_log" (
+  "userId", "type", "summary", "register", "refId", "metadata", "createdAt"
+) VALUES (
+  $1, 'authority.renewed', $2, 'authority', $3, $4::jsonb, $5::timestamptz
+)
+RETURNING "id"
 `,
   revalidateAcquisition: `
 SELECT
@@ -2042,6 +2151,265 @@ function requestHash(value) {
   return createHash("sha256").update(canonicalJson(value)).digest("hex")
 }
 
+function sameOrderedStrings(left, right) {
+  return Array.isArray(left)
+    && Array.isArray(right)
+    && left.length === right.length
+    && left.every((value, index) => value === right[index])
+}
+
+function v12CampaignGrantGeneration(issuedAt) {
+  return issuedAt.replaceAll(/[-:.]/g, "")
+}
+
+function v12CampaignGrantDraft(scope, userId, issuedAt) {
+  const spec = V1_2_CAMPAIGN_SPECS[scope]
+  if (!spec) fail("V1_2_CAMPAIGN_AUTHORITY_SCOPE_WALL")
+  const expiresAt = timestamp(
+    new Date(Date.parse(issuedAt) + V1_2_CAMPAIGN_GRANT_DURATION_MS),
+    "V1_2_CAMPAIGN_GRANT_TIME_WALL",
+  )
+  const draft = {
+    userId,
+    ref: `GRANT-V12-${spec.suffix}-${v12CampaignGrantGeneration(issuedAt)}`,
+    workOrderId: null,
+    grantedBy: userId,
+    grantedTo: "operator",
+    authorityLevel: "A2_WRITE_OWN",
+    scope,
+    allowedActions: ["outcome:execute"],
+    blockedActions: [...V1_2_CAMPAIGN_BLOCKED_ACTIONS],
+    reason: `ADR-V12-${spec.suffix} authorizes only ${scope}.`,
+    status: "active",
+    expiresAt,
+    createdAt: issuedAt,
+    revokedAt: null,
+    revokedBy: null,
+    revokeReason: null,
+  }
+  return { ...draft, contentHash: requestHash(draft) }
+}
+
+function exactV12CampaignDecisionRecord(value, scope) {
+  const spec = V1_2_CAMPAIGN_SPECS[scope]
+  if (!spec || !value || typeof value !== "object") return false
+  return value.ref === `ADR-V12-${spec.suffix}`
+    && value.title === `Approve ${spec.title}`
+    && value.context
+      === "The Primary reviewed one fixed WilliamOS-native product proposal for the #471 continuous V1.2 campaign."
+    && value.decision === "APPROVE"
+    && value.rationale
+      === "This exact R1 UI/read-model outcome is useful product work inside #471 and requires explicit Primary approval before Hermes may acquire it."
+    && value.consequences
+      === "Hermes may execute only this exact queued outcome. The second outcome remains dependency-blocked until the first completes, and every #471 blocked boundary remains enforced."
+    && value.status === "accepted"
+    && value.authority === "binding"
+    && value.owner === "William"
+    && value.scope === scope
+    && sameOrderedStrings(value.evidence, [
+      "https://github.com/bsvalues/terragroq/issues/471",
+      "issue-body-sha256:3771f688ee4c5d2f7e4ff22dbb09c45062a75d503fea5931912b98d1270db73a",
+      "https://github.com/bsvalues/terragroq/issues/480",
+    ])
+    && sameOrderedStrings(value.tags, ["v1.2", "continuous-campaign", "primary-approved"])
+    && value.locked === true
+}
+
+function exactExpiredV12CampaignGrantRecord(value, scope, userId, at) {
+  if (!value || typeof value !== "object") return false
+  let createdAt
+  let expiresAt
+  try {
+    createdAt = timestamp(value.createdAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL")
+    expiresAt = timestamp(value.expiresAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL")
+  } catch {
+    return false
+  }
+  const expected = v12CampaignGrantDraft(scope, userId, createdAt)
+  return Date.parse(createdAt) <= Date.parse(at)
+    && Date.parse(expiresAt) <= Date.parse(at)
+    && value.userId === userId
+    && value.ref === expected.ref
+    && value.workOrderId == null
+    && value.grantedBy === userId
+    && value.grantedTo === expected.grantedTo
+    && value.authorityLevel === expected.authorityLevel
+    && value.scope === scope
+    && sameOrderedStrings(value.allowedActions, expected.allowedActions)
+    && sameOrderedStrings(value.blockedActions, expected.blockedActions)
+    && value.reason === expected.reason
+    && (value.status === "active" || value.status === "expired")
+    && expiresAt === expected.expiresAt
+    && createdAt === expected.createdAt
+    && value.revokedAt == null
+    && value.revokedBy == null
+    && value.revokeReason == null
+    && value.contentHash === expected.contentHash
+}
+
+function exactNewV12CampaignGrantRecord(value, draft) {
+  if (!value || typeof value !== "object") return false
+  const actual = {
+    userId: value.userId,
+    ref: value.ref,
+    workOrderId: value.workOrderId,
+    grantedBy: value.grantedBy,
+    grantedTo: value.grantedTo,
+    authorityLevel: value.authorityLevel,
+    scope: value.scope,
+    allowedActions: value.allowedActions,
+    blockedActions: value.blockedActions,
+    reason: value.reason,
+    status: value.status,
+    expiresAt: timestamp(value.expiresAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL"),
+    createdAt: timestamp(value.createdAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL"),
+    revokedAt: value.revokedAt,
+    revokedBy: value.revokedBy,
+    revokeReason: value.revokeReason,
+    contentHash: value.contentHash,
+  }
+  return canonicalJson(actual) === canonicalJson(draft)
+}
+
+function exactRenewableV12CampaignQueueRow(row, userId) {
+  const spec = V1_2_CAMPAIGN_SPECS[row?.outcomeKey]
+  return Boolean(spec)
+    && row.userId === userId
+    && row.title === spec.title
+    && row.objective === spec.objective
+    && sameOrderedStrings(row.dependencyKeys, spec.dependencyKeys)
+    && row.riskClass === "R1"
+    && row.approvalState === "approved"
+    && row.approvedBy === userId
+    && Number.isSafeInteger(Number(row.approvalDecisionId))
+    && Number(row.approvalDecisionId) > 0
+    && row.authorityState === "matched"
+    && row.authorityLevel === "A2_WRITE_OWN"
+    && typeof row.authorityGrantRef === "string"
+    && row.authorityGrantRef !== ""
+    && row.authoritySubject === "operator"
+    && row.authorityAction === "outcome:execute"
+    && ["approved", "blocked"].includes(row.lifecycleState)
+    && row.terminalResult == null
+    && row.terminalEvidenceId == null
+    && Array.isArray(row.terminalEvidenceRefs)
+    && row.terminalEvidenceRefs.length === 0
+    && row.terminalKey == null
+    && row.terminalAt == null
+}
+
+async function renewExpiredV12CampaignAuthorities(
+  connection,
+  userId,
+  at,
+  targetOutcomeKey = null,
+) {
+  const candidates = await connection.query(
+    OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities,
+    [userId, at],
+  )
+  const rows = candidates?.rows ?? []
+  if (rows.length > V1_2_CAMPAIGN_OUTCOME_KEYS.size) {
+    fail("V1_2_CAMPAIGN_AUTHORITY_CARDINALITY_WALL")
+  }
+  const renewedVersions = new Map()
+  for (const row of rows) {
+    if (targetOutcomeKey !== null && row.outcomeKey !== targetOutcomeKey) continue
+    if (!V1_2_CAMPAIGN_OUTCOME_KEYS.has(row.outcomeKey)
+      || !exactRenewableV12CampaignQueueRow(row, userId)
+      || !exactV12CampaignDecisionRecord(row.approval, row.outcomeKey)
+      || row.approval.id !== row.approvalDecisionId
+      || !exactExpiredV12CampaignGrantRecord(
+        row.expiredGrant,
+        row.outcomeKey,
+        userId,
+        at,
+      )
+      || row.expiredGrant.ref !== row.authorityGrantRef) {
+      fail("V1_2_CAMPAIGN_AUTHORITY_AUTO_RENEWAL_WALL")
+    }
+    const draft = v12CampaignGrantDraft(row.outcomeKey, userId, at)
+    const collision = await connection.query(
+      OUTCOME_QUEUE_SQL.readV12CampaignGrantCollision,
+      [userId, draft.ref],
+    )
+    if ((collision?.rows?.length ?? 0) !== 0) {
+      fail("V1_2_CAMPAIGN_AUTHORITY_RENEWAL_COLLISION")
+    }
+    const inserted = await connection.query(
+      OUTCOME_QUEUE_SQL.insertRenewedV12CampaignGrant,
+      [
+        userId,
+        draft.ref,
+        row.outcomeKey,
+        draft.allowedActions,
+        draft.blockedActions,
+        draft.reason,
+        draft.expiresAt,
+        draft.contentHash,
+        draft.createdAt,
+      ],
+    )
+    const renewedGrant = inserted?.rows?.[0]
+    if ((inserted?.rows?.length ?? 0) !== 1
+      || !exactNewV12CampaignGrantRecord(renewedGrant, draft)) {
+      fail("V1_2_CAMPAIGN_AUTHORITY_RENEWAL_INSERT_WALL")
+    }
+    const rebound = await connection.query(
+      OUTCOME_QUEUE_SQL.rebindRenewedV12CampaignGrant,
+      [
+        row.id,
+        userId,
+        row.outcomeKey,
+        row.version,
+        draft.ref,
+        at,
+        row.authorityGrantRef,
+      ],
+    )
+    if ((rebound?.rows?.length ?? 0) !== 1) {
+      fail("V1_2_CAMPAIGN_AUTHORITY_RENEWAL_REBIND_WALL")
+    }
+    const metadata = {
+      authorityLevel: draft.authorityLevel,
+      automated: true,
+      decisionRef: row.approval.ref,
+      grantRef: draft.ref,
+      outcomeKey: row.outcomeKey,
+      parentIssue: 471,
+      replacesGrantRef: row.expiredGrant.ref,
+      unchangedAcceptedScope: true,
+    }
+    const audit = await connection.query(
+      OUTCOME_QUEUE_SQL.insertV12CampaignAuthorityRenewalAudit,
+      [
+        userId,
+        String(renewedGrant.id),
+        "Hermes renewed only the unchanged, accepted V1.2 campaign scope for bounded continuation.",
+        row.expiredGrant.contentHash,
+        draft.contentHash,
+        canonicalJson(metadata),
+        at,
+      ],
+    )
+    const event = await connection.query(
+      OUTCOME_QUEUE_SQL.insertV12CampaignAuthorityRenewalEvent,
+      [
+        userId,
+        `${draft.ref}: Hermes renewed exact A2_WRITE_OWN authority for 48 hours`,
+        renewedGrant.id,
+        canonicalJson(metadata),
+        at,
+      ],
+    )
+    if ((audit?.rows?.length ?? 0) !== 1 || (event?.rows?.length ?? 0) !== 1) {
+      fail("V1_2_CAMPAIGN_AUTHORITY_RENEWAL_EVIDENCE_WALL")
+    }
+    renewedVersions.set(row.outcomeKey, rebound.rows[0].version)
+  }
+  return renewedVersions
+}
+
 function jsonValue(value, code) {
   if (typeof value === "string") {
     try {
@@ -2612,11 +2980,39 @@ export async function acquireNextEligibleOutcome({
         reclaimed ? "RECLAIMED" : "WINNER",
       )
     }
-    const reasonResult = await connection.query(
+    let reasonResult = await connection.query(
       OUTCOME_QUEUE_SQL.noSelectionReason,
       [at, user],
     )
-    const reason = noSelectionReason(reasonResult?.rows?.[0])
+    let reason = noSelectionReason(reasonResult?.rows?.[0])
+    if (reason === "AUTHORITY_INELIGIBLE") {
+      const renewed = await renewExpiredV12CampaignAuthorities(connection, user, at)
+      if (renewed.size > 0) {
+        const retried = await connection.query(OUTCOME_QUEUE_SQL.acquire, [
+          at,
+          user,
+          key,
+          binding,
+          holder,
+          token,
+          expiresAt,
+          workOrderId,
+        ])
+        if (retried?.rows?.length === 1) {
+          await ensureAcquisitionReceipt(connection, user, key, retried.rows[0], at)
+          const reclaimed = retried.rows[0].lifecycleReason === "STALE_LEASE_RECOVERED"
+          return await finish(
+            acquisitionResult(retried.rows[0], { reclaimed }),
+            reclaimed ? "RECLAIMED" : "WINNER",
+          )
+        }
+        reasonResult = await connection.query(
+          OUTCOME_QUEUE_SQL.noSelectionReason,
+          [at, user],
+        )
+        reason = noSelectionReason(reasonResult?.rows?.[0])
+      }
+    }
     let contentionOutcome = null
     if (reason === "ACTIVE_LEASE_HELD") {
       const contention = await connection.query(
@@ -2923,10 +3319,36 @@ export async function resumeOutcomeQueueAfterDecision({
       begun = false
       return result.rows[0]
     }
+    const renewed = await renewExpiredV12CampaignAuthorities(
+      connection,
+      user,
+      at,
+      key,
+    )
+    if (renewed.has(key)) {
+      const renewedResult = await connection.query(OUTCOME_QUEUE_SQL.resumeAfterDecision, [
+        user,
+        key,
+        renewed.get(key),
+        binding,
+        acquisition,
+        fence,
+        decisionId,
+        holder,
+        token,
+        expiresAt,
+        at,
+      ])
+      if (renewedResult?.rows?.length === 1) {
+        await connection.query("COMMIT")
+        begun = false
+        return renewedResult.rows[0]
+      }
+    }
     const replay = await connection.query(OUTCOME_QUEUE_SQL.replayResumeAfterDecision, [
       user,
       key,
-      version,
+      renewed.get(key) ?? version,
       binding,
       acquisition,
       fence,
