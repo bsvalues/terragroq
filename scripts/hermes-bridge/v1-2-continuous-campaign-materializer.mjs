@@ -419,7 +419,16 @@ async function fetchParentIssue(fetchImpl) {
     throw new Error("V1_2_CAMPAIGN_PARENT_RATE_LIMIT_WALL")
   }
   if (!response?.ok) throw new Error("V1_2_CAMPAIGN_PARENT_READ_WALL")
-  const issue = await response.json()
+  let issue
+  try {
+    issue = await response.json()
+  } catch (error) {
+    if (error instanceof Error
+      && (error.name === "AbortError" || error.name === "TimeoutError")) {
+      throw new Error("V1_2_CAMPAIGN_PARENT_TIMEOUT_WALL")
+    }
+    throw new Error("V1_2_CAMPAIGN_PARENT_READ_WALL")
+  }
   if (!validateV12ParentIssue(issue)) {
     throw new Error("V1_2_CAMPAIGN_PARENT_AUTHORITY_WALL")
   }

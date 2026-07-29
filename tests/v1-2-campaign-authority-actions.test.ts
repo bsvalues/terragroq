@@ -283,7 +283,7 @@ describe("V1.2 campaign server authority boundaries", () => {
     })
   })
 
-  it("renews an expired exact grant as a new deterministic 48-hour generation", async () => {
+  it("renews an expired exact grant for a paused campaign", async () => {
     const now = new Date("2026-08-01T02:00:00.000Z")
     const priorIssuedAt = new Date(
       now.getTime() - V1_2_CAMPAIGN_GRANT_DURATION_MS - 1,
@@ -312,13 +312,13 @@ describe("V1.2 campaign server authority boundaries", () => {
     const item = {
       id: 31,
       outcomeKey: campaignScope,
-      lifecycleState: "approved",
+      lifecycleState: "blocked",
       approvalState: "approved",
       authorityState: "matched",
       approvalDecisionId: 71,
       authorityGrantRef: priorGrant.ref,
       version: 1,
-      activeWorkOrderId: null,
+      activeWorkOrderId: 91,
       executionBinding: null,
       leaseHolder: null,
       leaseToken: null,
@@ -328,7 +328,7 @@ describe("V1.2 campaign server authority boundaries", () => {
       terminalEvidenceId: null,
       terminalEvidenceRefs: [],
       terminalKey: null,
-      activatedAt: null,
+      activatedAt: priorIssuedAt,
       terminalAt: null,
     }
     const harness = transactionHarness([

@@ -2461,10 +2461,10 @@ describe("governed outcome queue mutations", () => {
       ],
       now,
     })).resolves.toMatchObject({
-      outcome: { outcomeKey: first.outcomeKey, queueOrder: 30, version: 4 },
+      outcome: { outcomeKey: first.outcomeKey, queueOrder: 21, version: 4 },
       affectedOutcomes: [
-        { outcomeKey: second.outcomeKey, queueOrder: 10, version: 8 },
-        { outcomeKey: first.outcomeKey, queueOrder: 30, version: 4 },
+        { outcomeKey: second.outcomeKey, queueOrder: 19, version: 8 },
+        { outcomeKey: first.outcomeKey, queueOrder: 21, version: 4 },
       ],
     })
     expect(query.mock.calls.filter(([sql]) => sql === OUTCOME_QUEUE_SQL.reorderMutation))
@@ -2484,6 +2484,51 @@ describe("governed outcome queue mutations", () => {
       ],
       now,
     })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_PROTECTED_REORDER_ILLEGAL" })
+  })
+
+  it("persists ordinary reorder intent when protected slots contain tied queue orders", async () => {
+    const first = queueRow({
+      outcomeKey: "goal:GOAL-1200",
+      lifecycleState: "approved",
+      queueOrder: 10,
+      version: 3,
+    })
+    const second = queueRow({
+      id: 2,
+      outcomeKey: "goal:GOAL-1201",
+      lifecycleState: "approved",
+      queueOrder: 10,
+      version: 7,
+    })
+    const protectedRow = queueRow({
+      id: 3,
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      lifecycleState: "suggested",
+      queueOrder: 20,
+      version: 0,
+    })
+    const query = mutationQuery({ snapshot: [first, second, protectedRow] })
+
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "reorder",
+      outcomeKey: first.outcomeKey,
+      expectedVersion: 3,
+      idempotencyKey: "reorder-tied-around-protected",
+      orderedOutcomes: [
+        { outcomeKey: second.outcomeKey, expectedVersion: 7 },
+        { outcomeKey: first.outcomeKey, expectedVersion: 3 },
+        { outcomeKey: protectedRow.outcomeKey, expectedVersion: 0 },
+      ],
+      now,
+    })).resolves.toMatchObject({
+      outcome: { outcomeKey: first.outcomeKey, queueOrder: 19, version: 4 },
+      affectedOutcomes: [
+        { outcomeKey: second.outcomeKey, queueOrder: 18, version: 8 },
+        { outcomeKey: first.outcomeKey, queueOrder: 19, version: 4 },
+      ],
+    })
   })
 
   it("updates dependencies under the queue lock and rejects missing references and cycles", async () => {

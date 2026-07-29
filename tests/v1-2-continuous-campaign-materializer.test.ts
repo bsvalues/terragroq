@@ -367,6 +367,22 @@ describe("V1.2 continuous campaign materializer", () => {
     })).rejects.toThrow("V1_2_CAMPAIGN_PARENT_TIMEOUT_WALL")
   })
 
+  it("translates malformed parent response bodies into a stable read wall", async () => {
+    await expect(materializeV12ContinuousCampaign({
+      databaseUrl: "postgres://test",
+      fetchImpl: vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("truncated JSON")
+        },
+      })),
+      now,
+      pool: createMockDatabase().pool,
+      ensureSchema: vi.fn(async () => undefined),
+    })).rejects.toThrow("V1_2_CAMPAIGN_PARENT_READ_WALL")
+  })
+
   it("recognizes a GitHub primary-rate-limit 403 from its response headers", async () => {
     await expect(materializeV12ContinuousCampaign({
       databaseUrl: "postgres://test",

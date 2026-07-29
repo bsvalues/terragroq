@@ -3229,6 +3229,58 @@ async function appendMutationAttempt(
   return inserted.rows[0]
 }
 
+function protectedDestinationOrders(snapshot, ordered) {
+  const destinations = snapshot.map((row) => row.queueOrder)
+  const protectedIndexes = snapshot
+    .map((row, index) => (
+      PROTECTED_V1_2_OUTCOME_KEYS.has(row.outcomeKey) ? index : -1
+    ))
+    .filter((index) => index >= 0)
+  const boundaries = [-1, ...protectedIndexes, snapshot.length]
+
+  for (let boundaryIndex = 0; boundaryIndex < boundaries.length - 1; boundaryIndex += 1) {
+    const leftIndex = boundaries[boundaryIndex]
+    const rightIndex = boundaries[boundaryIndex + 1]
+    const segmentIndexes = Array.from(
+      { length: rightIndex - leftIndex - 1 },
+      (_value, offset) => leftIndex + offset + 1,
+    )
+    if (segmentIndexes.length === 0) continue
+    const leftOrder = leftIndex >= 0 ? snapshot[leftIndex].queueOrder : null
+    const rightOrder = rightIndex < snapshot.length ? snapshot[rightIndex].queueOrder : null
+    const requestedOrders = segmentIndexes.map((index) => (
+      snapshot.find((row) => row.outcomeKey === ordered[index].outcomeKey)?.queueOrder
+    ))
+    const strictlyOrdered = requestedOrders.every((order, index) => (
+      Number.isInteger(order)
+      && (index === 0 || order > requestedOrders[index - 1])
+      && (leftOrder === null || order > leftOrder)
+      && (rightOrder === null || order < rightOrder)
+    ))
+    if (strictlyOrdered) {
+      segmentIndexes.forEach((index, offset) => {
+        destinations[index] = requestedOrders[offset]
+      })
+      continue
+    }
+
+    if (leftOrder !== null
+      && rightOrder !== null
+      && rightOrder - leftOrder - 1 < segmentIndexes.length) {
+      fail("OUTCOME_QUEUE_PROTECTED_REORDER_CAPACITY_WALL")
+    }
+    const start = leftOrder !== null
+      ? leftOrder + 1
+      : rightOrder !== null
+        ? rightOrder - segmentIndexes.length
+        : 0
+    segmentIndexes.forEach((index, offset) => {
+      destinations[index] = start + offset
+    })
+  }
+  return destinations
+}
+
 async function reorderMutation(connection, request, user, at) {
   const snapshotResult = await connection.query(OUTCOME_QUEUE_SQL.readMutationSnapshot, [user])
   const snapshot = snapshotResult?.rows ?? []
@@ -3259,6 +3311,9 @@ async function reorderMutation(connection, request, user, at) {
   const preserveProtectedSlots = snapshot.some((row) => (
     PROTECTED_V1_2_OUTCOME_KEYS.has(row.outcomeKey)
   ))
+  const destinationOrders = preserveProtectedSlots
+    ? protectedDestinationOrders(snapshot, ordered)
+    : ordered.map((_row, index) => index)
 
   let outcome = target
   const affectedOutcomes = []
@@ -3266,7 +3321,7 @@ async function reorderMutation(connection, request, user, at) {
     // Active work owns its version until it pauses or terminalizes.
     if (row.lifecycleState === "active") continue
     if (PROTECTED_V1_2_OUTCOME_KEYS.has(row.outcomeKey)) continue
-    const queueOrder = preserveProtectedSlots ? snapshot[index].queueOrder : index
+    const queueOrder = destinationOrders[index]
     if (row.queueOrder === queueOrder) continue
     const updated = await connection.query(OUTCOME_QUEUE_SQL.reorderMutation, [
       user,

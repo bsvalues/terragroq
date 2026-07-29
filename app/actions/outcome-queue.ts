@@ -571,7 +571,8 @@ export async function recordV12CampaignOutcomeAuthority(input: {
     if (!item) return { status: "STALE" as const, version: null }
     const now = new Date()
 
-    if (item.lifecycleState === "approved"
+    const pausedCampaign = item.lifecycleState === "blocked"
+    if ((item.lifecycleState === "approved" || pausedCampaign)
       && item.approvalState === "approved"
       && item.authorityState === "matched"
       && item.approvalDecisionId !== null
@@ -613,7 +614,7 @@ export async function recordV12CampaignOutcomeAuthority(input: {
         || grant.expiresAt === null
         || grant.expiresAt.getTime() > now.getTime()
         || item.version !== input.expectedVersion
-        || item.activeWorkOrderId !== null
+        || (!pausedCampaign && item.activeWorkOrderId !== null)
         || item.executionBinding !== null
         || item.leaseHolder !== null
         || item.leaseToken !== null
@@ -623,7 +624,7 @@ export async function recordV12CampaignOutcomeAuthority(input: {
         || item.terminalEvidenceId !== null
         || item.terminalEvidenceRefs.length !== 0
         || item.terminalKey !== null
-        || item.activatedAt !== null
+        || (!pausedCampaign && item.activatedAt !== null)
         || item.terminalAt !== null) {
         return { status: "STALE" as const, version: item.version, renewed: false }
       }
