@@ -60,6 +60,7 @@ import {
   V1_2_CAMPAIGN_GRANT_DURATION_MS,
   V1_2_CAMPAIGN_PARENT_ISSUE_URL,
 } from "@/lib/outcome-queue/v1-2-campaign-authority"
+import { hashRecord } from "@/lib/governance/hash"
 
 type FluentQuery<T> = PromiseLike<T[]> & {
   from: ReturnType<typeof vi.fn>
@@ -82,6 +83,7 @@ const campaignScope = "campaign:v1-2:queue-evidence-drilldown"
 
 function transactionHarness(selectRows: unknown[][], updateRows: unknown[] = []) {
   const inserts: Array<{ table: string; values: unknown }> = []
+  const updates: Array<{ table: string; values: Record<string, unknown> }> = []
   const source = [...selectRows]
   const transaction = {
     execute: vi.fn(async () => ({ rows: [] })),
@@ -108,11 +110,15 @@ function transactionHarness(selectRows: unknown[][], updateRows: unknown[] = [])
       }
       return chain
     }),
-    update: vi.fn(() => {
+    update: vi.fn((table: unknown) => {
       let values: Record<string, unknown>
       const chain = {
         set(next: Record<string, unknown>) {
           values = next
+          updates.push({
+            table: getTableName(table as never),
+            values: next,
+          })
           return chain
         },
         where() {
@@ -129,7 +135,7 @@ function transactionHarness(selectRows: unknown[][], updateRows: unknown[] = [])
       return chain
     }),
   }
-  return { inserts, transaction }
+  return { inserts, transaction, updates }
 }
 
 describe("V1.2 campaign server authority boundaries", () => {
@@ -323,6 +329,7 @@ describe("V1.2 campaign server authority boundaries", () => {
       id: 31,
       outcomeKey: campaignScope,
       lifecycleState: "blocked",
+      lifecycleReason: "Primary Operator paused this outcome.",
       approvalState: "approved",
       authorityState: "matched",
       approvalDecisionId: 71,
@@ -373,6 +380,12 @@ describe("V1.2 campaign server authority boundaries", () => {
     expect(renewed.ref).not.toBe(priorGrant.ref)
     expect(renewed.expiresAt.getTime() - renewed.createdAt.getTime())
       .toBe(V1_2_CAMPAIGN_GRANT_DURATION_MS)
+    expect(harness.updates).toContainEqual({
+      table: "outcome_queue_item",
+      values: expect.objectContaining({
+        lifecycleReason: "Primary Operator paused this outcome.",
+      }),
+    })
     expect(harness.inserts).toContainEqual(expect.objectContaining({
       table: "governance_event",
       values: expect.objectContaining({
@@ -711,6 +724,99 @@ describe("V1.2 campaign server authority boundaries", () => {
       },
     })).resolves.toMatchObject({ status: "INVALID" })
     expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
+  })
+
+  it("replays a committed manual campaign resume after the row is approved", async () => {
+    const requestBinding = {
+      action: "resume",
+      outcomeKey: campaignScope,
+      expectedVersion: 2,
+      idempotencyKey: "campaign:resume:lost-response",
+      reason: null,
+      approvalDecisionId: 71,
+      authorityGrantRef: "GRANT-V12-CAMPAIGN",
+      orderedOutcomes: null,
+      dependencyKeys: null,
+      replacement: null,
+    }
+    boundary.dbSelect
+      .mockReturnValueOnce(fluentQuery([{
+        lifecycleState: "approved",
+        lifecycleReason: "OWNER_DECISION_RESUMED",
+        executionBinding: "execution-1",
+        leaseHolder: "hermes-1",
+        leaseToken: "lease-1",
+        leaseExpiresAt: new Date("2099-01-01T00:00:00.000Z"),
+        acquisitionKey: "acquisition-1",
+      }]))
+      .mockReturnValueOnce(fluentQuery([{
+        operation: "resume",
+        outcomeKey: campaignScope,
+        requestHash: hashRecord(requestBinding),
+        requestBinding,
+      }]))
+    boundary.mutateOutcomeQueueItem.mockResolvedValue({
+      replayed: true,
+      outcome: { outcomeKey: campaignScope, version: 3 },
+    })
+
+    await expect(mutateOutcomeQueue({
+      action: "resume",
+      outcomeKey: campaignScope,
+      expectedVersion: 2,
+      idempotencyKey: "campaign:resume:lost-response",
+      approvalDecisionId: 71,
+      authorityGrantRef: "GRANT-V12-CAMPAIGN",
+    })).resolves.toMatchObject({
+      status: "REPLAYED",
+      outcomeKey: campaignScope,
+      version: 3,
+    })
+    expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
+  })
+
+  it("does not let a mismatched resume receipt bypass the manual-pause gate", async () => {
+    const requestBinding = {
+      action: "resume",
+      outcomeKey: campaignScope,
+      expectedVersion: 2,
+      idempotencyKey: "campaign:resume:collision",
+      reason: null,
+      approvalDecisionId: 71,
+      authorityGrantRef: "GRANT-V12-OTHER",
+      orderedOutcomes: null,
+      dependencyKeys: null,
+      replacement: null,
+    }
+    boundary.dbSelect
+      .mockReturnValueOnce(fluentQuery([{
+        lifecycleState: "approved",
+        lifecycleReason: "OWNER_DECISION_RESUMED",
+        executionBinding: "execution-1",
+        leaseHolder: "hermes-1",
+        leaseToken: "lease-1",
+        leaseExpiresAt: new Date("2099-01-01T00:00:00.000Z"),
+        acquisitionKey: "acquisition-1",
+      }]))
+      .mockReturnValueOnce(fluentQuery([{
+        operation: "resume",
+        outcomeKey: campaignScope,
+        requestHash: hashRecord(requestBinding),
+        requestBinding,
+      }]))
+
+    await expect(mutateOutcomeQueue({
+      action: "resume",
+      outcomeKey: campaignScope,
+      expectedVersion: 2,
+      idempotencyKey: "campaign:resume:collision",
+      approvalDecisionId: 71,
+      authorityGrantRef: "GRANT-V12-CAMPAIGN",
+    })).resolves.toMatchObject({
+      status: "INVALID",
+      message: "Owner-decision campaign recovery must resume through the retained runtime binding.",
+    })
+    expect(boundary.mutateOutcomeQueueItem).not.toHaveBeenCalled()
   })
 
   it("requires campaign authority revocation before decline", async () => {

@@ -11,6 +11,7 @@ import {
   goal,
   governanceEvent,
   outcomeQueueItem,
+  outcomeQueueMutationReceipt,
   type AuthorityGrant,
   type OutcomeQueueItem,
 } from "@/lib/db/schema"
@@ -680,7 +681,9 @@ export async function recordV12CampaignOutcomeAuthority(input: {
         .update(outcomeQueueItem)
         .set({
           authorityGrantRef: renewedGrant.ref,
-          lifecycleReason: "PRIMARY_V1_2_CAMPAIGN_AUTHORITY_RENEWAL",
+          lifecycleReason: pausedCampaign
+            ? item.lifecycleReason
+            : "PRIMARY_V1_2_CAMPAIGN_AUTHORITY_RENEWAL",
           version: item.version + 1,
           updatedAt: now,
         })
@@ -1343,6 +1346,47 @@ async function genericCampaignResumeIsManualPause(
     && item.acquisitionKey === null
 }
 
+async function exactCampaignResumeReplayExists(
+  input: OutcomeQueueMutationInput,
+  userId: string,
+): Promise<boolean> {
+  if (input.action !== "resume" || !isV12CampaignAuthorityScope(input.outcomeKey)) {
+    return false
+  }
+  const requestBinding = {
+    action: input.action,
+    outcomeKey: input.outcomeKey.trim(),
+    expectedVersion: input.expectedVersion,
+    idempotencyKey: input.idempotencyKey.trim(),
+    reason: input.reason?.trim() ?? null,
+    approvalDecisionId: input.approvalDecisionId ?? null,
+    authorityGrantRef: input.authorityGrantRef?.trim() ?? null,
+    orderedOutcomes: null,
+    dependencyKeys: null,
+    replacement: null,
+  }
+  const requestHash = hashRecord(requestBinding)
+  const [receipt] = await db
+    .select({
+      operation: outcomeQueueMutationReceipt.operation,
+      outcomeKey: outcomeQueueMutationReceipt.outcomeKey,
+      requestHash: outcomeQueueMutationReceipt.requestHash,
+      requestBinding: outcomeQueueMutationReceipt.requestBinding,
+    })
+    .from(outcomeQueueMutationReceipt)
+    .where(and(
+      eq(outcomeQueueMutationReceipt.userId, userId),
+      eq(outcomeQueueMutationReceipt.idempotencyKey, requestBinding.idempotencyKey),
+    ))
+    .limit(1)
+
+  return receipt !== undefined
+    && receipt.operation === "resume"
+    && receipt.outcomeKey === requestBinding.outcomeKey
+    && receipt.requestHash === requestHash
+    && hashRecord(receipt.requestBinding) === requestHash
+}
+
 function runtimeCode(error: unknown): string {
   return error !== null && typeof error === "object" && "code" in error
     && typeof error.code === "string"
@@ -1423,7 +1467,10 @@ export async function mutateOutcomeQueue(
       version: null,
     }
   }
-  if (!await genericCampaignResumeIsManualPause(validated, userId)) {
+  const manualCampaignResume =
+    await genericCampaignResumeIsManualPause(validated, userId)
+  if (!manualCampaignResume
+    && !await exactCampaignResumeReplayExists(validated, userId)) {
     return {
       status: "INVALID",
       message: "Owner-decision campaign recovery must resume through the retained runtime binding.",
