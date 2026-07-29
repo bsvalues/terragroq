@@ -161,7 +161,8 @@ ORDER BY min("createdAt") ASC, "outcomeKey" ASC
 `
 
 const CHECKPOINTS_SQL = `
-SELECT id, "entityId" AS "workOrderId", metadata, "createdAt"
+SELECT id, "entityId" AS "workOrderId", metadata,
+       "createdAt" AT TIME ZONE 'UTC' AS "createdAt"
 FROM governance_event
 WHERE "userId" = $1
   AND "entityType" = 'work_order'
@@ -183,7 +184,7 @@ SELECT
   "knownFailures",
   "outOfScopeChanges",
   "contentHash",
-  "createdAt"
+  "createdAt" AT TIME ZONE 'UTC' AS "createdAt"
 FROM evidence_record
 WHERE "userId" = $1
   AND "workOrderId" = ANY($2::integer[])
@@ -848,7 +849,8 @@ function verifyLocalExecution(localState, claim, row, receipt, checkpoint) {
   const binding = execution?.metadata?.outcome?.queueBinding
   if (execution?.lease?.status !== "RELEASED"
     || execution?.checkpoint?.state !== "COMPLETE"
-    || Number(execution.fencingToken) !== Number(receipt.latestFencingToken)
+    || !positiveInteger(Number(execution.fencingToken))
+    || Number(binding?.fencingToken) !== Number(receipt.latestFencingToken)
     || Number(row.fencingToken) !== Number(receipt.latestFencingToken)
     || execution.checkpoint.sequence !== Number(checkpoint.metadata.checkpointSequence)
     || execution.metadata?.prNumber !== Number(checkpoint.metadata.prNumber)
@@ -858,14 +860,16 @@ function verifyLocalExecution(localState, claim, row, receipt, checkpoint) {
     || Number(binding?.activeWorkOrderId) !== Number(row.workOrderId)
     || timestamp(execution.lease.acquiredAt) === null
     || timestamp(execution.lease.releasedAt) === null
-    || timestamp(execution.lease.acquiredAt) > timestamp(claim.acquiredAt)
-    || timestamp(execution.lease.releasedAt) > timestamp(claim.completedAt)) {
+    || timestamp(execution.lease.acquiredAt) < timestamp(claim.acquiredAt)
+    || timestamp(execution.lease.acquiredAt) > timestamp(claim.completedAt)
+    || timestamp(execution.lease.releasedAt) < timestamp(claim.completedAt)) {
     return failure("LOCAL_OUTCOME_STATE_MISMATCH", claim.outcomeKey)
   }
   return success({
     checkpointSequence: execution.checkpoint.sequence,
-    fencingToken: execution.fencingToken,
+    localFencingToken: execution.fencingToken,
     outcomeId: claim.outcomeId,
+    queueFencingToken: binding.fencingToken,
   })
 }
 
@@ -1012,7 +1016,6 @@ export function checkpointRecordMatchesAttempt(attempt, checkpoints, localState)
   const historical = checkpoints.some((event) => (
     Number(event.workOrderId) === proof.workOrderId
     && String(event.metadata?.outcomeId) === proof.outcomeId
-    && Number(event.metadata?.fencingToken) === proof.fencingToken
     && Number(event.metadata?.checkpointSequence) === proof.sequence
     && event.metadata?.checkpointState === proof.state
     && (event.metadata?.headRefOid ?? null) === proof.commit.headSha
@@ -1027,7 +1030,7 @@ export function checkpointRecordMatchesAttempt(attempt, checkpoints, localState)
   const current = execution
     && binding?.outcomeKey === proof.outcomeKey
     && Number(binding?.activeWorkOrderId ?? null) === proof.workOrderId
-    && Number(execution.fencingToken) === proof.fencingToken
+    && Number(binding?.fencingToken) === proof.fencingToken
     && Number(execution.checkpoint?.sequence) === proof.sequence
     && execution.checkpoint?.state === proof.state
     && (execution.metadata?.headRefOid ?? null) === proof.commit.headSha
@@ -1145,6 +1148,7 @@ function verifyAcquisitionAttempts(
   const restartExecution = Object.values(localState.executions ?? {}).find(
     (execution) => String(execution?.outcomeId) === String(restartClaim.outcomeId),
   )
+  const restartBinding = restartExecution?.metadata?.outcome?.queueBinding
   const restartPre = attempts.find((attempt) => Number(attempt.id) === restartClaim.preAttemptId)
   const restartPost = attempts.find((attempt) => Number(attempt.id) === restartClaim.postAttemptId)
   if (!restartRow
@@ -1172,7 +1176,7 @@ function verifyAcquisitionAttempts(
     || restartPre.disposition !== "REPLAY_WINNER"
     || restartPost.disposition !== "REPLAY_WINNER"
     || restartClaim.fencingToken !== Number(restartRow.fencingToken)
-    || restartClaim.fencingToken !== Number(restartExecution?.fencingToken)
+    || restartClaim.fencingToken !== Number(restartBinding?.fencingToken)
     || restartClaim.leaseHolder !== restartExecution?.lease?.holderId
     || restartClaim.postRestartSequence >= Number(restartExecution?.checkpoint?.sequence)
     || restartClaim.mutationCount !== 1) {
@@ -1186,6 +1190,7 @@ function verifyAcquisitionAttempts(
   const contentionExecution = Object.values(localState.executions ?? {}).find(
     (execution) => String(execution?.outcomeId) === String(contentionClaim.outcomeId),
   )
+  const contentionBinding = contentionExecution?.metadata?.outcome?.queueBinding
   const winner = attempts.find(
     (attempt) => Number(attempt.id) === contentionClaim.winnerAttemptId,
   )
@@ -1220,7 +1225,7 @@ function verifyAcquisitionAttempts(
     || loser.disposition !== "LOSER"
     || loser.reason !== "ACQUISITION_KEY_CONFLICT"
     || contentionClaim.fencingToken !== Number(contentionRow.fencingToken)
-    || contentionClaim.fencingToken !== Number(contentionExecution?.fencingToken)
+    || contentionClaim.fencingToken !== Number(contentionBinding?.fencingToken)
     || contentionClaim.checkpointSequence !== Number(contentionExecution?.checkpoint?.sequence)
     || contentionClaim.leaseHolder !== contentionExecution?.lease?.holderId
     || contentionClaim.winnerId !== contentionClaim.leaseHolder) {
