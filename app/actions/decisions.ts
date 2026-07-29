@@ -6,6 +6,7 @@ import { getUserId } from "@/lib/session"
 import { logEvent } from "@/lib/registers/events"
 import { and, desc, eq, ilike, or } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
+import { isProtectedV12AuthorityScope } from "@/lib/outcome-queue/v1-2-protected-authority"
 
 /* ------------------------------------------------------------------ */
 /* Reads                                                              */
@@ -75,6 +76,20 @@ function splitList(v?: string): string[] {
     .filter(Boolean)
 }
 
+function assertGenericDecisionScope(scope: string | null | undefined) {
+  if (scope && isProtectedV12AuthorityScope(scope)) {
+    throw new Error("V1_2_BOUND_AUTHORITY_ACTION_REQUIRED")
+  }
+}
+
+async function getDecisionScope(userId: string, id: number) {
+  const [row] = await db
+    .select({ scope: decision.scope })
+    .from(decision)
+    .where(and(eq(decision.id, id), eq(decision.userId, userId)))
+  return row?.scope ?? null
+}
+
 /* ------------------------------------------------------------------ */
 /* Writes                                                             */
 /* ------------------------------------------------------------------ */
@@ -94,6 +109,7 @@ export async function createDecision(input: {
   reviewAt?: string
 }): Promise<Decision> {
   const userId = await getUserId()
+  assertGenericDecisionScope(input.scope)
   const ref = await nextRef(userId)
   const status = input.status ?? "proposed"
   const [row] = await db
@@ -130,6 +146,7 @@ export async function createDecision(input: {
 
 export async function updateDecisionStatus(id: number, status: string) {
   const userId = await getUserId()
+  assertGenericDecisionScope(await getDecisionScope(userId, id))
   await db
     .update(decision)
     .set({
@@ -150,6 +167,7 @@ export async function updateDecisionStatus(id: number, status: string) {
 
 export async function setDecisionAuthority(id: number, authority: string) {
   const userId = await getUserId()
+  assertGenericDecisionScope(await getDecisionScope(userId, id))
   await db
     .update(decision)
     .set({ authority, updatedAt: new Date() })
@@ -167,10 +185,11 @@ export async function setDecisionAuthority(id: number, authority: string) {
 export async function linkEvidence(id: number, evidence: string) {
   const userId = await getUserId()
   const [current] = await db
-    .select({ evidence: decision.evidence })
+    .select({ evidence: decision.evidence, scope: decision.scope })
     .from(decision)
     .where(and(eq(decision.id, id), eq(decision.userId, userId)))
   if (!current) return
+  assertGenericDecisionScope(current.scope)
   const merged = Array.from(new Set([...current.evidence, ...splitList(evidence)]))
   await db
     .update(decision)
@@ -202,11 +221,13 @@ export async function supersedeDecision(
   },
 ): Promise<Decision> {
   const userId = await getUserId()
+  assertGenericDecisionScope(input.scope)
   const [old] = await db
     .select()
     .from(decision)
     .where(and(eq(decision.id, oldId), eq(decision.userId, userId)))
   if (!old) throw new Error("Decision not found")
+  assertGenericDecisionScope(old.scope)
 
   const ref = await nextRef(userId)
   const [replacement] = await db
@@ -254,9 +275,10 @@ export async function supersedeDecision(
 export async function deleteDecision(id: number) {
   const userId = await getUserId()
   const [row] = await db
-    .select({ locked: decision.locked })
+    .select({ locked: decision.locked, scope: decision.scope })
     .from(decision)
     .where(and(eq(decision.id, id), eq(decision.userId, userId)))
+  assertGenericDecisionScope(row?.scope)
   if (row?.locked) {
     throw new Error("This is a locked governance decision and cannot be deleted.")
   }

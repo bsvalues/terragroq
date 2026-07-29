@@ -21,6 +21,7 @@ import {
   mutateOutcomeQueue,
   recordOutcomeAuthorityGrant,
   recordV12AcceptanceAuthority,
+  recordV12CampaignOutcomeAuthority,
   revokeV12AcceptanceAuthority,
 } from "@/app/actions/outcome-queue"
 import {
@@ -43,6 +44,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { StatusBadge } from "@/components/status-badge"
+import { buildProtectedOutcomeReorderSnapshot } from "@/lib/outcome-queue/protected-reorder-snapshot"
 
 const REORDERABLE_STATES = new Set(["suggested", "approved", "blocked"])
 const TERMINAL_STATES = new Set(["completed", "declined", "superseded"])
@@ -50,6 +52,18 @@ const V1_2_ACCEPTANCE_AUTHORITY_SCOPES = new Set([
   "acceptance:v1-2:authority-blocked",
   "acceptance:v1-2:dependency-blocked",
 ])
+const V1_2_CAMPAIGN_AUTHORITY_SCOPES = new Set([
+  "campaign:v1-2:queue-evidence-drilldown",
+  "campaign:v1-2:runtime-continuity-status",
+])
+const PROTECTED_V1_2_AUTHORITY_SCOPES = new Set([
+  ...V1_2_ACCEPTANCE_AUTHORITY_SCOPES,
+  ...V1_2_CAMPAIGN_AUTHORITY_SCOPES,
+])
+
+function protectedV12AuthorityScope(outcomeKey: string): boolean {
+  return PROTECTED_V1_2_AUTHORITY_SCOPES.has(outcomeKey)
+}
 
 function actionInput(
   row: OutcomeQueueOperatorRow,
@@ -72,19 +86,15 @@ function reorderInput(
   direction: -1 | 1,
   idempotencyKey: string,
 ): OutcomeQueueMutationInput | null {
-  const ordered = surface.rows.filter((item) => (
-    REORDERABLE_STATES.has(item.lifecycleState)
-  ))
-  const currentIndex = ordered.findIndex((item) => item.outcomeKey === row.outcomeKey)
-  const destination = currentIndex + direction
-  if (currentIndex < 0 || destination < 0 || destination >= ordered.length) return null
-  const next = [...ordered]
-  ;[next[currentIndex], next[destination]] = [next[destination], next[currentIndex]]
+  const orderedOutcomes = buildProtectedOutcomeReorderSnapshot({
+    rows: surface.rows,
+    outcomeKey: row.outcomeKey,
+    direction,
+    protectedOutcomeKeys: PROTECTED_V1_2_AUTHORITY_SCOPES,
+  })
+  if (!orderedOutcomes) return null
   return actionInput(row, "reorder", idempotencyKey, {
-    orderedOutcomes: next.map((item) => ({
-      outcomeKey: item.outcomeKey,
-      expectedVersion: item.version,
-    })),
+    orderedOutcomes,
   })
 }
 
@@ -107,7 +117,7 @@ export function OperatorOutcomeQueuePanel({
   const visibleRows = compact ? surface.rows.slice(0, 4) : surface.rows
   const movableRows = surface.rows.filter((item) => (
     REORDERABLE_STATES.has(item.lifecycleState)
-    && !V1_2_ACCEPTANCE_AUTHORITY_SCOPES.has(item.outcomeKey)
+    && !protectedV12AuthorityScope(item.outcomeKey)
   ))
 
   function attemptKey(
@@ -212,6 +222,33 @@ export function OperatorOutcomeQueuePanel({
     })
   }
 
+  function recordCampaignAuthority(row: OutcomeQueueOperatorRow) {
+    setPendingKeys((current) => new Set(current).add(row.outcomeKey))
+    startTransition(async () => {
+      try {
+        const result = await recordV12CampaignOutcomeAuthority({
+          outcomeKey: row.outcomeKey,
+          expectedVersion: row.version,
+        })
+        if (result.status === "RECORDED" || result.status === "REPLAYED") {
+          toast.success(result.message)
+          router.refresh()
+          return
+        }
+        toast.error(result.message)
+        router.refresh()
+      } catch {
+        toast.error("Campaign outcome authority could not be recorded.")
+      } finally {
+        setPendingKeys((current) => {
+          const next = new Set(current)
+          next.delete(row.outcomeKey)
+          return next
+        })
+      }
+    })
+  }
+
   function revokeAcceptanceAuthority(row: OutcomeQueueOperatorRow) {
     setPendingKeys((current) => new Set(current).add(row.outcomeKey))
     startTransition(async () => {
@@ -299,10 +336,14 @@ export function OperatorOutcomeQueuePanel({
             const terminal = TERMINAL_STATES.has(row.lifecycleState)
             const acceptanceAuthorityProof =
               V1_2_ACCEPTANCE_AUTHORITY_SCOPES.has(row.outcomeKey)
+            const campaignAuthorityProposal =
+              V1_2_CAMPAIGN_AUTHORITY_SCOPES.has(row.outcomeKey)
+            const protectedAuthorityProposal =
+              acceptanceAuthorityProof || campaignAuthorityProposal
             const movableIndex = movableRows.findIndex(
               (item) => item.outcomeKey === row.outcomeKey,
             )
-            const movable = !acceptanceAuthorityProof
+            const movable = !protectedAuthorityProposal
               && !row.isActive
               && movableIndex >= 0
             return (
@@ -374,7 +415,7 @@ export function OperatorOutcomeQueuePanel({
                         </Button>
                       </>
                     ) : null}
-                    {row.lifecycleState === "active" && !acceptanceAuthorityProof ? (
+                    {row.lifecycleState === "active" && !protectedAuthorityProposal ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -387,7 +428,7 @@ export function OperatorOutcomeQueuePanel({
                         Pause
                       </Button>
                     ) : null}
-                    {row.lifecycleState === "blocked" && !acceptanceAuthorityProof ? (
+                    {row.lifecycleState === "blocked" && !protectedAuthorityProposal ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -405,7 +446,7 @@ export function OperatorOutcomeQueuePanel({
                       </Button>
                     ) : null}
                     {row.availableApprovalDecisionId !== null
-                      && !acceptanceAuthorityProof
+                      && !protectedAuthorityProposal
                       && shouldOfferOutcomeAuthorityBinding(
                         row.lifecycleState,
                         row.authorityGrantRef,
@@ -435,6 +476,34 @@ export function OperatorOutcomeQueuePanel({
                           Approve proof
                         </Button>
                       ) : null}
+                    {row.lifecycleState === "suggested"
+                      && campaignAuthorityProposal ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={rowPending}
+                          title="Approve and bind only this exact V1.2 product outcome"
+                          onClick={() => recordCampaignAuthority(row)}
+                        >
+                          <ShieldCheck className="mr-2 h-4 w-4" />
+                          Approve product outcome
+                        </Button>
+                      ) : null}
+                    {row.lifecycleState === "approved"
+                      && campaignAuthorityProposal
+                      && row.authorityGrantRef !== null
+                      && row.availableAuthorityGrantRef === null ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={rowPending}
+                          title="Renew authority for this exact approved V1.2 product outcome"
+                          onClick={() => recordCampaignAuthority(row)}
+                        >
+                          <ShieldCheck className="mr-2 h-4 w-4" />
+                          Renew product authority
+                        </Button>
+                      ) : null}
                     {row.outcomeKey === "acceptance:v1-2:authority-blocked"
                       && row.lifecycleState === "approved"
                       && row.authorityGrantRef !== null ? (
@@ -450,7 +519,7 @@ export function OperatorOutcomeQueuePanel({
                         </Button>
                       ) : null}
                     {row.lifecycleState === "suggested" ? (
-                      acceptanceAuthorityProof ? null : (
+                      protectedAuthorityProposal ? null : (
                       <Button
                         size="sm"
                         disabled={rowPending || row.availableApprovalDecisionId === null || row.availableAuthorityGrantRef === null}
@@ -467,7 +536,7 @@ export function OperatorOutcomeQueuePanel({
                       </Button>
                       )
                     ) : null}
-                    {row.lifecycleState !== "active" && !acceptanceAuthorityProof ? (
+                    {row.lifecycleState !== "active" && !protectedAuthorityProposal ? (
                       <>
                         <Button
                           size="icon"

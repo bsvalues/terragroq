@@ -12,6 +12,12 @@ const QUEUE_STATES = new Set(OUTCOME_LIFECYCLE_STATES)
 const APPROVAL_STATES = new Set(["approved", "unapproved", "revoked"])
 const AUTHORITY_STATES = new Set(["matched", "unverified", "denied", "expired", "revoked"])
 const TERMINAL_STATES = new Set(TERMINAL_OUTCOME_STATES)
+const PROTECTED_V1_2_OUTCOME_KEYS = new Set([
+  "acceptance:v1-2:authority-blocked",
+  "acceptance:v1-2:dependency-blocked",
+  "campaign:v1-2:queue-evidence-drilldown",
+  "campaign:v1-2:runtime-continuity-status",
+])
 const LEGACY_GOAL_REFS = Object.freeze([
   "GOAL-0001",
   "GOAL-0002",
@@ -3230,6 +3236,9 @@ async function reorderMutation(connection, request, user, at) {
   if (!target) fail("OUTCOME_QUEUE_OUTCOME_NOT_FOUND")
   assertVersion(target, request.expectedVersion)
   if (target.lifecycleState === "active") fail("OUTCOME_QUEUE_REORDER_ACTIVE_ILLEGAL")
+  if (PROTECTED_V1_2_OUTCOME_KEYS.has(target.outcomeKey)) {
+    fail("OUTCOME_QUEUE_PROTECTED_REORDER_ILLEGAL")
+  }
 
   if (request.orderedOutcomes.length !== snapshot.length) {
     fail("OUTCOME_QUEUE_ORDERED_SNAPSHOT_INCOMPLETE")
@@ -3241,12 +3250,23 @@ async function reorderMutation(connection, request, user, at) {
     assertVersion(row, entry.expectedVersion)
     return row
   })
+  for (const [index, row] of snapshot.entries()) {
+    if (PROTECTED_V1_2_OUTCOME_KEYS.has(row.outcomeKey)
+      && ordered[index]?.outcomeKey !== row.outcomeKey) {
+      fail("OUTCOME_QUEUE_PROTECTED_REORDER_ILLEGAL")
+    }
+  }
+  const preserveProtectedSlots = snapshot.some((row) => (
+    PROTECTED_V1_2_OUTCOME_KEYS.has(row.outcomeKey)
+  ))
 
   let outcome = target
   const affectedOutcomes = []
-  for (const [queueOrder, row] of ordered.entries()) {
+  for (const [index, row] of ordered.entries()) {
     // Active work owns its version until it pauses or terminalizes.
     if (row.lifecycleState === "active") continue
+    if (PROTECTED_V1_2_OUTCOME_KEYS.has(row.outcomeKey)) continue
+    const queueOrder = preserveProtectedSlots ? snapshot[index].queueOrder : index
     if (row.queueOrder === queueOrder) continue
     const updated = await connection.query(OUTCOME_QUEUE_SQL.reorderMutation, [
       user,

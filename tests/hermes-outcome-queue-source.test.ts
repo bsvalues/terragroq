@@ -2424,6 +2424,68 @@ describe("governed outcome queue mutations", () => {
     })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_ORDERED_SNAPSHOT_INCOMPLETE" })
   })
 
+  it("preserves protected V1.2 order slots while ordinary outcomes reorder", async () => {
+    const first = queueRow({
+      outcomeKey: "goal:GOAL-1100",
+      lifecycleState: "approved",
+      queueOrder: 10,
+      version: 3,
+    })
+    const protectedRow = queueRow({
+      id: 2,
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      lifecycleState: "suggested",
+      queueOrder: 20,
+      version: 0,
+    })
+    const second = queueRow({
+      id: 3,
+      outcomeKey: "goal:GOAL-1101",
+      lifecycleState: "approved",
+      queueOrder: 30,
+      version: 7,
+    })
+    const query = mutationQuery({ snapshot: [first, protectedRow, second] })
+
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "reorder",
+      outcomeKey: first.outcomeKey,
+      expectedVersion: 3,
+      idempotencyKey: "reorder-around-protected",
+      orderedOutcomes: [
+        { outcomeKey: second.outcomeKey, expectedVersion: 7 },
+        { outcomeKey: protectedRow.outcomeKey, expectedVersion: 0 },
+        { outcomeKey: first.outcomeKey, expectedVersion: 3 },
+      ],
+      now,
+    })).resolves.toMatchObject({
+      outcome: { outcomeKey: first.outcomeKey, queueOrder: 30, version: 4 },
+      affectedOutcomes: [
+        { outcomeKey: second.outcomeKey, queueOrder: 10, version: 8 },
+        { outcomeKey: first.outcomeKey, queueOrder: 30, version: 4 },
+      ],
+    })
+    expect(query.mock.calls.filter(([sql]) => sql === OUTCOME_QUEUE_SQL.reorderMutation))
+      .toHaveLength(2)
+
+    await expect(mutateOutcomeQueueItem({
+      query: mutationQuery({ snapshot: [first, protectedRow, second] }),
+      userId,
+      action: "reorder",
+      outcomeKey: first.outcomeKey,
+      expectedVersion: 3,
+      idempotencyKey: "move-protected",
+      orderedOutcomes: [
+        { outcomeKey: protectedRow.outcomeKey, expectedVersion: 0 },
+        { outcomeKey: first.outcomeKey, expectedVersion: 3 },
+        { outcomeKey: second.outcomeKey, expectedVersion: 7 },
+      ],
+      now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_PROTECTED_REORDER_ILLEGAL" })
+  })
+
   it("updates dependencies under the queue lock and rejects missing references and cycles", async () => {
     const target = queueRow({
       lifecycleState: "suggested",
