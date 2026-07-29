@@ -93,14 +93,16 @@ describe("operator outcome queue panel accessibility contract", () => {
     )
     expect(actionSource).toContain('status: "UNAUTHORIZED"')
     expect(source).toContain("protectedAuthorityProposal")
-    expect(source).toContain('row.lifecycleState === "active" && !protectedAuthorityProposal')
-    expect(source).toContain('row.lifecycleState === "blocked" && !protectedAuthorityProposal')
+    expect(source).toContain('row.lifecycleState === "active" && !acceptanceAuthorityProof')
+    expect(source).toContain('row.lifecycleState === "blocked" && !acceptanceAuthorityProof')
   })
 
   it("requires an authenticated Primary click for the two fixed V1.2 product proposals", () => {
     expect(source).toContain("recordV12CampaignOutcomeAuthority")
     expect(source).toContain("Approve product outcome")
     expect(source).toContain("Renew product authority")
+    expect(source).toContain("Revoke product authority")
+    expect(source).toContain("revokeV12CampaignOutcomeAuthority")
     expect(source).toContain("campaignAuthorityProposal")
     expect(source).toContain("protectedAuthorityProposal")
     expect(actionSource).toContain("isCanonicalV12CampaignCandidate")

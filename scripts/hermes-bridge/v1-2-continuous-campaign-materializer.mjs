@@ -6,8 +6,10 @@ import { ensureOutcomeQueueHardeningSchema } from "./outcome-queue-source.mjs"
 
 const REPOSITORY = "bsvalues/terragroq"
 const PRIMARY_EMAIL = "bsvalues@gmail.com"
+const PARENT_AUTHOR_ID = 179160703
 const PARENT_ISSUE = 471
 const PARENT_GOAL = "GOAL-WOS-V1.2-001"
+// Any parent-body edit requires an intentional digest review and re-pin here.
 const PARENT_BODY_SHA256 = "3771f688ee4c5d2f7e4ff22dbb09c45062a75d503fea5931912b98d1270db73a"
 const CAMPAIGN_QUEUE_PARTITION_LIMIT = 90
 export const V1_2_CAMPAIGN_MATERIALIZER_PROVENANCE_CONTRACT = "WILLIAMOS_V1_2_CAMPAIGN_SUGGESTION_V1"
@@ -16,8 +18,10 @@ const SUGGESTION_REASON = "Suggested from the exact owner-authored and still-ope
 const GOAL_RATIONALE = "Suggested as fixed WilliamOS-native R1 work from pinned live parent #471; this record conveys no approval or execution authority."
 const GOAL_RECOMMENDED_MOVE = "Await an explicit owner approval and independently verified authority match."
 const LIFECYCLE_REASON = "V1_2_CAMPAIGN_SUGGESTION_REQUIRES_OWNER_APPROVAL"
-const AUTHORITY_MUTATION_SQL = /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO)\s+(?:ONLY\s+)?(?:(?:"?[a-z_][\w$]*"?\s*\.\s*)?)"?(?:decision|authority_grant)"?(?=\s|\(|$)/i
-const AUTHORITY_DESTRUCTIVE_SQL = /\b(?:TRUNCATE(?:\s+TABLE)?|ALTER\s+TABLE|DROP\s+TABLE)\b[\s\S]{0,256}?(?:(?:"?[a-z_][\w$]*"?\s*\.\s*)?)"?(?:decision|authority_grant)"?(?=\s|,|\(|;|$)/i
+const AUTHORITY_MUTATION_SQL = /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|COPY)\s+(?:ONLY\s+)?(?:(?:"?[a-z_][\w$]*"?\s*\.\s*)?)"?(?:decision|authority_grant)"?(?=\s|\(|$)/i
+const AUTHORITY_DESTRUCTIVE_SQL = /\b(?:TRUNCATE(?:\s+TABLE)?|ALTER\s+TABLE|DROP\s+TABLE)\b[\s\S]*?(?:(?:"?[a-z_][\w$]*"?\s*\.\s*)?)"?(?:decision|authority_grant)"?(?=\s|,|\(|;|$)/i
+const AUTHORITY_INDIRECT_SQL = /\b(?:CREATE|ALTER|DROP)\s+(?:OR\s+REPLACE\s+)?(?:RULE|(?:CONSTRAINT\s+)?TRIGGER)\b[\s\S]*?\b(?:ON|TO)\s+(?:(?:"?[a-z_][\w$]*"?\s*\.\s*)?)"?(?:decision|authority_grant)"?(?=\s|,|\(|;|$)/i
+const AUTHORITY_PERMISSION_SQL = /\b(?:GRANT|REVOKE)\b[\s\S]*?\bON(?:\s+TABLE)?\s+(?:(?:"?[a-z_][\w$]*"?\s*\.\s*)?)"?(?:decision|authority_grant)"?(?=\s|,|\(|;|$)/i
 
 export const V1_2_CONTINUOUS_CAMPAIGN_OUTCOMES = Object.freeze([
   Object.freeze({
@@ -64,7 +68,9 @@ function iso(value) {
 
 export function assertV12CampaignSuggestionOnlySql(sqlValue) {
   if (AUTHORITY_MUTATION_SQL.test(String(sqlValue))
-    || AUTHORITY_DESTRUCTIVE_SQL.test(String(sqlValue))) {
+    || AUTHORITY_DESTRUCTIVE_SQL.test(String(sqlValue))
+    || AUTHORITY_INDIRECT_SQL.test(String(sqlValue))
+    || AUTHORITY_PERMISSION_SQL.test(String(sqlValue))) {
     throw new Error("V1_2_CAMPAIGN_AUTHORITY_MUTATION_WALL")
   }
   return true
@@ -163,6 +169,7 @@ export function buildV12CampaignMaterializerProvenance({
 export function validateV12ParentIssue(issue) {
   return issue?.number === PARENT_ISSUE
     && issue?.state === "open"
+    && issue?.user?.id === PARENT_AUTHOR_ID
     && issue?.user?.login === "bsvalues"
     && issue?.user?.type === "User"
     && issue?.title === "GOAL-WOS-V1.2-001 — Continuous Approved Outcome Queue"
@@ -380,10 +387,28 @@ ORDER BY q."queueOrder", q."outcomeKey"
 `
 
 async function fetchParentIssue(fetchImpl) {
+  const token = process.env.GITHUB_TOKEN
   const response = await fetchImpl(
     `https://api.github.com/repos/${REPOSITORY}/issues/${PARENT_ISSUE}`,
-    { headers: { accept: "application/vnd.github+json" } },
+    {
+      headers: {
+        accept: "application/vnd.github+json",
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      signal: AbortSignal.timeout(10_000),
+    },
   )
+  const rateLimited = response?.status === 429
+    || (
+      response?.status === 403
+      && (
+        response.headers?.get?.("x-ratelimit-remaining") === "0"
+        || response.headers?.has?.("retry-after") === true
+      )
+    )
+  if (rateLimited) {
+    throw new Error("V1_2_CAMPAIGN_PARENT_RATE_LIMIT_WALL")
+  }
   if (!response?.ok) throw new Error("V1_2_CAMPAIGN_PARENT_READ_WALL")
   const issue = await response.json()
   if (!validateV12ParentIssue(issue)) {
@@ -418,7 +443,13 @@ export async function materializeV12ContinuousCampaign({
   }
   if (typeof pool?.connect !== "function") throw new Error("V1_2_CAMPAIGN_POOL_WALL")
 
-  const client = await pool.connect()
+  let client
+  try {
+    client = await pool.connect()
+  } catch (error) {
+    if (ownsPool) await pool.end()
+    throw error
+  }
   const query = (sql, params = []) => {
     assertV12CampaignSuggestionOnlySql(sql)
     return client.query(sql, params)
@@ -493,17 +524,21 @@ export async function materializeV12ContinuousCampaign({
     const allocationCollision = await query(
       `SELECT
          (SELECT count(*)::integer FROM goal
-          WHERE "userId" = $1 AND ref = ANY($2::text[])) AS goals,
+           WHERE "userId" = $1 AND ref = ANY($2::text[])) AS goals,
          (SELECT count(*)::integer FROM "outcome_queue_item"
-          WHERE "userId" = $1 AND "queueOrder" = ANY($3::integer[])) AS queue_rows`,
+           WHERE "userId" = $1 AND "queueOrder" = ANY($3::integer[])) AS queue_rows,
+         (SELECT count(*)::integer FROM "outcome_queue_item"
+           WHERE "userId" = $1 AND "outcomeKey" = ANY($4::text[])) AS outcome_rows`,
       [
         userId,
         plan.map((item) => item.goalRef),
         plan.map((item) => item.queueOrder),
+        plan.map((item) => item.outcomeKey),
       ],
     )
     if (Number(allocationCollision.rows[0]?.goals) !== 0
-      || Number(allocationCollision.rows[0]?.queue_rows) !== 0) {
+      || Number(allocationCollision.rows[0]?.queue_rows) !== 0
+      || Number(allocationCollision.rows[0]?.outcome_rows) !== 0) {
       throw new Error("V1_2_CAMPAIGN_ALLOCATION_COLLISION_WALL")
     }
 
@@ -521,8 +556,8 @@ export async function materializeV12ContinuousCampaign({
           userId,
           item.goalRef,
           item.title,
-          "Suggested as fixed WilliamOS-native R1 work from pinned live parent #471; this record conveys no approval or execution authority.",
-          "Await an explicit owner approval and independently verified authority match.",
+          GOAL_RATIONALE,
+          GOAL_RECOMMENDED_MOVE,
           now,
         ],
       )

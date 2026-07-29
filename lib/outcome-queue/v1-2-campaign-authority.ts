@@ -319,11 +319,14 @@ export function isExactV12CampaignMaterialization(input: {
   audit: MaterializationAuditEvent
 }): boolean {
   const { userId, item, goal, governance, audit } = input
-  if (!isCanonicalV12CampaignCandidate(item)) return false
-  const expectedGovernanceMetadata = {
+  if (typeof userId !== "string"
+    || userId.trim() === ""
+    || !isCanonicalV12CampaignCandidate(item)) {
+    return false
+  }
+  const provenance = {
     ...buildV12CampaignMaterializationProvenance(userId, item),
   }
-  const provenance = expectedGovernanceMetadata
   const expectedAuditMetadata = {
     governanceEventId: governance.id,
     outcomeKey: item.outcomeKey,
@@ -465,8 +468,14 @@ export function exactV12CampaignGrant(
   options: { allowExpired?: boolean } = {},
 ): boolean {
   if (!isV12CampaignAuthorityScope(scope)) return false
-  if (!(value.createdAt instanceof Date)
+  if (typeof userId !== "string"
+    || userId.trim() === ""
+    || !(now instanceof Date)
+    || !(value.createdAt instanceof Date)
     || !(value.expiresAt instanceof Date)
+    || !Number.isFinite(value.createdAt.getTime())
+    || !Number.isFinite(value.expiresAt.getTime())
+    || !Number.isFinite(now.getTime())
     || value.createdAt.getTime() > now.getTime()
     || (!options.allowExpired && value.expiresAt.getTime() <= now.getTime())) {
     return false
@@ -498,4 +507,30 @@ export function exactV12CampaignGrant(
     && value.revokedBy == null
     && value.revokeReason == null
     && value.contentHash === expected.contentHash
+}
+
+export function exactV12CampaignRevokedGrant(
+  value: Record<string, unknown>,
+  scope: string,
+  userId: string,
+  revokedAt: Date,
+  reason: string,
+): boolean {
+  if (!(revokedAt instanceof Date)
+    || !(value.revokedAt instanceof Date)
+    || !Number.isFinite(value.revokedAt.getTime())
+    || !Number.isFinite(revokedAt.getTime())
+    || !sameInstant(value.revokedAt, revokedAt)
+    || value.status !== "revoked"
+    || value.revokedBy !== userId
+    || value.revokeReason !== reason) {
+    return false
+  }
+  return exactV12CampaignGrant({
+    ...value,
+    status: "active",
+    revokedAt: null,
+    revokedBy: null,
+    revokeReason: null,
+  }, scope, userId, revokedAt, { allowExpired: true })
 }

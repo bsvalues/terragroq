@@ -22,6 +22,7 @@ import {
   recordOutcomeAuthorityGrant,
   recordV12AcceptanceAuthority,
   recordV12CampaignOutcomeAuthority,
+  revokeV12CampaignOutcomeAuthority,
   revokeV12AcceptanceAuthority,
 } from "@/app/actions/outcome-queue"
 import {
@@ -249,6 +250,32 @@ export function OperatorOutcomeQueuePanel({
     })
   }
 
+  function revokeCampaignAuthority(row: OutcomeQueueOperatorRow) {
+    setPendingKeys((current) => new Set(current).add(row.outcomeKey))
+    startTransition(async () => {
+      try {
+        const result = await revokeV12CampaignOutcomeAuthority({
+          outcomeKey: row.outcomeKey,
+          expectedVersion: row.version,
+        })
+        if (result.status === "RECORDED" || result.status === "REPLAYED") {
+          toast.success(result.message)
+        } else {
+          toast.error(result.message)
+        }
+        router.refresh()
+      } catch {
+        toast.error("Campaign outcome authority could not be revoked.")
+      } finally {
+        setPendingKeys((current) => {
+          const next = new Set(current)
+          next.delete(row.outcomeKey)
+          return next
+        })
+      }
+    })
+  }
+
   function revokeAcceptanceAuthority(row: OutcomeQueueOperatorRow) {
     setPendingKeys((current) => new Set(current).add(row.outcomeKey))
     startTransition(async () => {
@@ -415,7 +442,7 @@ export function OperatorOutcomeQueuePanel({
                         </Button>
                       </>
                     ) : null}
-                    {row.lifecycleState === "active" && !protectedAuthorityProposal ? (
+                    {row.lifecycleState === "active" && !acceptanceAuthorityProof ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -428,7 +455,7 @@ export function OperatorOutcomeQueuePanel({
                         Pause
                       </Button>
                     ) : null}
-                    {row.lifecycleState === "blocked" && !protectedAuthorityProposal ? (
+                    {row.lifecycleState === "blocked" && !acceptanceAuthorityProof ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -491,6 +518,7 @@ export function OperatorOutcomeQueuePanel({
                       ) : null}
                     {row.lifecycleState === "approved"
                       && campaignAuthorityProposal
+                      && row.authorityState === "matched"
                       && row.authorityGrantRef !== null
                       && row.availableAuthorityGrantRef === null ? (
                         <Button
@@ -502,6 +530,21 @@ export function OperatorOutcomeQueuePanel({
                         >
                           <ShieldCheck className="mr-2 h-4 w-4" />
                           Renew product authority
+                        </Button>
+                      ) : null}
+                    {campaignAuthorityProposal
+                      && row.authorityState === "matched"
+                      && row.authorityGrantRef !== null
+                      && row.availableAuthorityGrantRef === row.authorityGrantRef ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={rowPending}
+                          title="Revoke authority for only this exact V1.2 product outcome"
+                          onClick={() => revokeCampaignAuthority(row)}
+                        >
+                          <Ban className="mr-2 h-4 w-4" />
+                          Revoke product authority
                         </Button>
                       ) : null}
                     {row.outcomeKey === "acceptance:v1-2:authority-blocked"
@@ -536,18 +579,20 @@ export function OperatorOutcomeQueuePanel({
                       </Button>
                       )
                     ) : null}
-                    {row.lifecycleState !== "active" && !protectedAuthorityProposal ? (
+                    {row.lifecycleState !== "active" && !acceptanceAuthorityProof ? (
                       <>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          disabled={rowPending}
-                          title="Set dependencies"
-                          aria-label={`Set dependencies for ${row.title}`}
-                          onClick={() => openDependencies(row)}
-                        >
-                          <GitFork className="h-4 w-4" />
-                        </Button>
+                        {campaignAuthorityProposal ? null : (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            disabled={rowPending}
+                            title="Set dependencies"
+                            aria-label={`Set dependencies for ${row.title}`}
+                            onClick={() => openDependencies(row)}
+                          >
+                            <GitFork className="h-4 w-4" />
+                          </Button>
+                        )}
                         <Button
                           size="icon"
                           variant="ghost"

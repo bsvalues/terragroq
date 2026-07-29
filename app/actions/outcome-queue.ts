@@ -45,6 +45,7 @@ import {
 import {
   exactV12CampaignDecision,
   exactV12CampaignGrant,
+  exactV12CampaignRevokedGrant,
   isCanonicalV12CampaignCandidate,
   isExactV12CampaignMaterialization,
   isV12CampaignAuthorityScope,
@@ -872,6 +873,180 @@ export async function recordV12CampaignOutcomeAuthority(input: {
   }
 }
 
+export async function revokeV12CampaignOutcomeAuthority(input: {
+  outcomeKey: string
+  expectedVersion: number
+}): Promise<OutcomeQueueMutationActionResult> {
+  let userId: string
+  try {
+    userId = await getDeclaredPrimaryUserId()
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return {
+        status: "UNAUTHORIZED",
+        message: "Primary Operator authentication is required.",
+        outcomeKey: input.outcomeKey,
+        version: null,
+      }
+    }
+    throw error
+  }
+  if (!isV12CampaignAuthorityScope(input.outcomeKey)
+    || !Number.isSafeInteger(input.expectedVersion)
+    || input.expectedVersion < 0) {
+    return {
+      status: "INVALID",
+      message: "This owner action is limited to the two fixed V1.2 product outcomes.",
+      outcomeKey: input.outcomeKey,
+      version: null,
+    }
+  }
+  const campaignScope = input.outcomeKey
+  const result = await db.transaction(async (transaction) => {
+    for (const lock of [
+      `${userId}:authority-grant-allocation`,
+      `${userId}:outcome-queue`,
+      `${userId}:v1-2-continuous-campaign`,
+    ]) {
+      await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lock}))`)
+    }
+    const [item] = await transaction
+      .select()
+      .from(outcomeQueueItem)
+      .where(and(
+        eq(outcomeQueueItem.userId, userId),
+        eq(outcomeQueueItem.outcomeKey, campaignScope),
+      ))
+      .limit(1)
+    if (!item
+      || item.approvalDecisionId === null
+      || item.authorityGrantRef === null) {
+      return { status: "STALE" as const, version: item?.version ?? null }
+    }
+    const [[approval], [grant]] = await Promise.all([
+      transaction
+        .select()
+        .from(decision)
+        .where(and(
+          eq(decision.userId, userId),
+          eq(decision.id, item.approvalDecisionId),
+        ))
+        .limit(1),
+      transaction
+        .select()
+        .from(authorityGrant)
+        .where(and(
+          eq(authorityGrant.userId, userId),
+          eq(authorityGrant.ref, item.authorityGrantRef),
+        ))
+        .limit(1),
+    ])
+    if (!approval || !grant || !exactV12CampaignDecision(approval, campaignScope)) {
+      return { status: "STALE" as const, version: item.version }
+    }
+    const reason = "Primary Operator revoked this exact V1.2 campaign outcome authority."
+    if (grant.revokedAt instanceof Date
+      && exactV12CampaignRevokedGrant(
+        grant,
+        campaignScope,
+        userId,
+        grant.revokedAt,
+        reason,
+      )
+      && item.authorityState === "revoked") {
+      return { status: "REPLAYED" as const, version: item.version }
+    }
+    if (item.version !== input.expectedVersion) {
+      return { status: "STALE" as const, version: item.version }
+    }
+    const now = new Date()
+    if (!exactV12CampaignGrant(grant, campaignScope, userId, now, {
+      allowExpired: true,
+    })) {
+      return { status: "STALE" as const, version: item.version }
+    }
+    const [revokedGrant] = await transaction
+      .update(authorityGrant)
+      .set({
+        status: "revoked",
+        revokedAt: now,
+        revokedBy: userId,
+        revokeReason: reason,
+      })
+      .where(and(
+        eq(authorityGrant.id, grant.id),
+        eq(authorityGrant.status, grant.status),
+      ))
+      .returning()
+    const [revokedItem] = await transaction
+      .update(outcomeQueueItem)
+      .set({
+        authorityState: "revoked",
+        lifecycleReason: "PRIMARY_V1_2_CAMPAIGN_AUTHORITY_REVOKED",
+        version: item.version + 1,
+        updatedAt: now,
+      })
+      .where(and(
+        eq(outcomeQueueItem.id, item.id),
+        eq(outcomeQueueItem.userId, userId),
+        eq(outcomeQueueItem.version, item.version),
+      ))
+      .returning()
+    if (!revokedGrant
+      || !revokedItem
+      || !exactV12CampaignRevokedGrant(
+        revokedGrant,
+        campaignScope,
+        userId,
+        now,
+        reason,
+      )) {
+      throw new Error("V1_2_CAMPAIGN_AUTHORITY_REVOCATION_ATOMICITY_WALL")
+    }
+    await transaction.insert(governanceEvent).values({
+      userId,
+      eventType: "AUTHORITY_REVOKED",
+      entityType: "authority_grant",
+      entityId: String(revokedGrant.id),
+      actor: "operator",
+      reason,
+      beforeHash: grant.contentHash,
+      afterHash: hashRecord({
+        status: "revoked",
+        revokedAt: now.toISOString(),
+        revokedBy: userId,
+        revokeReason: reason,
+      }),
+      metadata: {
+        decisionRef: approval.ref,
+        grantRef: revokedGrant.ref,
+        outcomeKey: campaignScope,
+        parentIssue: 471,
+      },
+    })
+    await transaction.insert(eventLog).values({
+      userId,
+      type: "authority.revoked",
+      summary: `${revokedGrant.ref}: REVOKED — ${reason}`,
+      register: "authority",
+      refId: revokedGrant.id,
+    })
+    return { status: "RECORDED" as const, version: revokedItem.version }
+  })
+  revalidatePath("/goal-console")
+  revalidatePath("/governance")
+  return {
+    status: result.status,
+    message: result.status === "RECORDED"
+      ? "This exact V1.2 product outcome authority is revoked."
+      : result.status === "REPLAYED"
+        ? "This exact V1.2 product outcome authority is already revoked."
+        : "The V1.2 product outcome authority changed. Review current truth.",
+    outcomeKey: campaignScope,
+    version: result.version,
+  }
+}
+
 export async function revokeV12AcceptanceAuthority(input: {
   outcomeKey: string
 }): Promise<{
@@ -1009,6 +1184,12 @@ function isProtectedV12Outcome(outcomeKey: string): boolean {
   return isV12AcceptanceAuthorityScope(outcomeKey)
     || isV12CampaignAuthorityScope(outcomeKey)
 }
+const V1_2_CAMPAIGN_RECOVERY_ACTIONS = new Set([
+  "pause",
+  "resume",
+  "decline",
+  "supersede",
+])
 
 async function protectedReorderSnapshotIsImmutable(
   input: OutcomeQueueMutationInput,
@@ -1079,14 +1260,31 @@ export async function mutateOutcomeQueue(
       version: null,
     }
   }
-  if (
-    isProtectedV12Outcome(validated.outcomeKey)
-  ) {
+  if (isV12AcceptanceAuthorityScope(validated.outcomeKey)
+    || (
+      isV12CampaignAuthorityScope(validated.outcomeKey)
+      && !V1_2_CAMPAIGN_RECOVERY_ACTIONS.has(validated.action)
+    )) {
     return {
       status: "INVALID",
       message: "Use the bounded V1.2 authority controls.",
       outcomeKey: validated.outcomeKey,
       version: null,
+    }
+  }
+  if (isV12CampaignAuthorityScope(validated.outcomeKey)) {
+    try {
+      userId = await getDeclaredPrimaryUserId()
+    } catch (error) {
+      if (error instanceof Error && error.message === "Unauthorized") {
+        return {
+          status: "UNAUTHORIZED",
+          message: "Primary Operator authentication is required.",
+          outcomeKey: validated.outcomeKey,
+          version: null,
+        }
+      }
+      throw error
     }
   }
   if (

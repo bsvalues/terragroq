@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   exactV12CampaignDecision,
   exactV12CampaignGrant,
+  exactV12CampaignRevokedGrant,
   buildV12CampaignMaterializationProvenance,
   isCanonicalV12CampaignCandidate,
   isExactV12CampaignMaterialization,
@@ -122,6 +123,15 @@ describe("V1.2 campaign owner authority contract", () => {
       ...persistedGrant,
       expiresAt: new Date(now.getTime() + V1_2_CAMPAIGN_GRANT_DURATION_MS + 1),
     }, firstScope, "primary-1", now)).toBe(false)
+    const revokeReason =
+      "Primary Operator revoked this exact V1.2 campaign outcome authority."
+    expect(exactV12CampaignRevokedGrant({
+      ...persistedGrant,
+      status: "revoked",
+      revokedAt: now,
+      revokedBy: "primary-1",
+      revokeReason,
+    }, firstScope, "primary-1", now, revokeReason)).toBe(true)
     expect(exactV12CampaignGrant({
       ...persistedGrant,
       blockedActions: V1_2_CAMPAIGN_BLOCKED_ACTIONS.slice(1),
@@ -157,6 +167,16 @@ describe("V1.2 campaign owner authority contract", () => {
       createdAt: new Date(futureGrant.createdAt),
       expiresAt: new Date(futureGrant.expiresAt),
     }, firstScope, "primary-1", now)).toBe(false)
+    expect(exactV12CampaignGrant({
+      ...persistedGrant,
+      expiresAt: new Date("invalid"),
+    }, firstScope, "primary-1", now)).toBe(false)
+    expect(exactV12CampaignGrant(
+      persistedGrant,
+      firstScope,
+      " ",
+      now,
+    )).toBe(false)
   })
 
   it("binds approval eligibility to the exact goal and Hermes audit provenance", () => {
@@ -252,6 +272,10 @@ describe("V1.2 campaign owner authority contract", () => {
         ...proof.audit,
         metadata: { ...proof.audit.metadata, governanceEventId: 42 },
       },
+    })).toBe(false)
+    expect(isExactV12CampaignMaterialization({
+      ...proof,
+      userId: " ",
     })).toBe(false)
   })
 })

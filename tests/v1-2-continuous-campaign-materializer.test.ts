@@ -74,7 +74,7 @@ Close only after the two-outcome campaign proves automatic continuation from one
 const parentIssue = {
   number: 471,
   state: "open",
-  user: { login: "bsvalues", type: "User" },
+  user: { id: 179160703, login: "bsvalues", type: "User" },
   title: "GOAL-WOS-V1.2-001 — Continuous Approved Outcome Queue",
   html_url: "https://github.com/bsvalues/terragroq/issues/471",
   body: parentBody,
@@ -181,7 +181,7 @@ function replayRows(
 
 type MockDatabaseOptions = {
   existingRows?: ReturnType<typeof replayRows>
-  allocationCollision?: { goals: number; queue_rows: number }
+  allocationCollision?: { goals: number; queue_rows: number; outcome_rows: number }
   failCreatedVerification?: boolean
 }
 
@@ -208,7 +208,11 @@ function createMockDatabase(options: MockDatabaseOptions = {}) {
       if (sql.includes('max("queueOrder")')) return { rows: [{ value: 11 }] }
       if (sql.includes("AS goals") && sql.includes("AS queue_rows")) {
         return {
-          rows: [options.allocationCollision ?? { goals: 0, queue_rows: 0 }],
+          rows: [options.allocationCollision ?? {
+            goals: 0,
+            queue_rows: 0,
+            outcome_rows: 0,
+          }],
         }
       }
       if (sql.includes("INSERT INTO goal")) {
@@ -303,12 +307,92 @@ describe("V1.2 continuous campaign materializer", () => {
     expect(validateV12ParentIssue({ ...parentIssue, state: "closed" })).toBe(false)
     expect(validateV12ParentIssue({
       ...parentIssue,
-      user: { login: "someone-else", type: "User" },
+      user: { id: 1, login: "someone-else", type: "User" },
+    })).toBe(false)
+    expect(validateV12ParentIssue({
+      ...parentIssue,
+      user: { ...parentIssue.user, id: 1 },
     })).toBe(false)
     expect(validateV12ParentIssue({
       ...parentIssue,
       body: `${parentBody}\nExpanded authority.`,
     })).toBe(false)
+  })
+
+  it("classifies parent issue throttling separately from authority failure", async () => {
+    const database = createMockDatabase()
+    const fetchImpl = vi.fn(async (_url: string, options?: RequestInit) => {
+      expect(options?.signal).toBeInstanceOf(AbortSignal)
+      return {
+        ok: false,
+        status: 429,
+        json: async () => ({}),
+      }
+    })
+
+    await expect(materializeV12ContinuousCampaign({
+      databaseUrl: "postgres://test",
+      fetchImpl,
+      now,
+      pool: database.pool,
+      ensureSchema: vi.fn(async () => undefined),
+    })).rejects.toThrow("V1_2_CAMPAIGN_PARENT_RATE_LIMIT_WALL")
+    expect(database.pool.connect).not.toHaveBeenCalled()
+  })
+
+  it("does not classify an unqualified GitHub 403 as rate limiting", async () => {
+    await expect(materializeV12ContinuousCampaign({
+      databaseUrl: "postgres://test",
+      fetchImpl: vi.fn(async () => ({
+        ok: false,
+        status: 403,
+        headers: new Headers(),
+        json: async () => ({}),
+      })),
+      now,
+      pool: createMockDatabase().pool,
+      ensureSchema: vi.fn(async () => undefined),
+    })).rejects.toThrow("V1_2_CAMPAIGN_PARENT_READ_WALL")
+  })
+
+  it("recognizes a GitHub primary-rate-limit 403 from its response headers", async () => {
+    await expect(materializeV12ContinuousCampaign({
+      databaseUrl: "postgres://test",
+      fetchImpl: vi.fn(async () => ({
+        ok: false,
+        status: 403,
+        headers: new Headers({ "x-ratelimit-remaining": "0" }),
+        json: async () => ({}),
+      })),
+      now,
+      pool: createMockDatabase().pool,
+      ensureSchema: vi.fn(async () => undefined),
+    })).rejects.toThrow("V1_2_CAMPAIGN_PARENT_RATE_LIMIT_WALL")
+  })
+
+  it("closes an owned pool when its initial connection fails", async () => {
+    const end = vi.fn(async () => undefined)
+    const connect = vi.fn(async () => {
+      throw new Error("connect failed")
+    })
+    class FailingPool {
+      connect = connect
+      end = end
+    }
+
+    await expect(materializeV12ContinuousCampaign({
+      databaseUrl: "postgres://test",
+      fetchImpl: vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => parentIssue,
+      })),
+      now,
+      createPool: FailingPool,
+      ensureSchema: vi.fn(async () => undefined),
+    })).rejects.toThrow("connect failed")
+    expect(connect).toHaveBeenCalledOnce()
+    expect(end).toHaveBeenCalledOnce()
   })
 
   it("builds exactly two fixed suggestions in the reserved queue partition", () => {
@@ -445,6 +529,13 @@ describe("V1.2 continuous campaign materializer", () => {
     'DELETE FROM ONLY "authority_grant" WHERE id = $1',
     'DELETE FROM public."authority_grant" WHERE id = $1',
     'MERGE INTO "authority_grant" AS target USING source ON true WHEN MATCHED THEN UPDATE SET status = \'active\'',
+    'WITH forged AS (INSERT INTO "decision" ("userId") VALUES ($1) RETURNING id) SELECT * FROM forged',
+    'COPY "authority_grant" FROM STDIN',
+    'CREATE RULE forged AS ON INSERT TO "decision" DO INSTEAD NOTHING',
+    'CREATE TRIGGER forged BEFORE INSERT ON "authority_grant" EXECUTE FUNCTION forged()',
+    'CREATE CONSTRAINT TRIGGER forged AFTER INSERT ON "authority_grant" EXECUTE FUNCTION forged()',
+    'GRANT UPDATE ON TABLE "decision" TO forged',
+    'REVOKE ALL ON "authority_grant" FROM PUBLIC',
     'TRUNCATE TABLE "decision"',
     'TRUNCATE public.safe_table, public."authority_grant"',
     'ALTER TABLE "authority_grant" ADD COLUMN forged text',
@@ -551,7 +642,18 @@ describe("V1.2 continuous campaign materializer", () => {
 
   it("rolls back an allocation collision before creating either outcome", async () => {
     const database = createMockDatabase({
-      allocationCollision: { goals: 1, queue_rows: 0 },
+      allocationCollision: { goals: 1, queue_rows: 0, outcome_rows: 0 },
+    })
+    await expect(materializeWith(database.pool))
+      .rejects.toThrow("V1_2_CAMPAIGN_ALLOCATION_COLLISION_WALL")
+    expect(database.statements.filter((sql) => sql.includes("INSERT INTO"))).toHaveLength(0)
+    expect(database.statements).toContain("ROLLBACK")
+    expect(database.statements).not.toContain("COMMIT")
+  })
+
+  it("rolls back an orphan outcome-key collision before creating either outcome", async () => {
+    const database = createMockDatabase({
+      allocationCollision: { goals: 0, queue_rows: 0, outcome_rows: 1 },
     })
     await expect(materializeWith(database.pool))
       .rejects.toThrow("V1_2_CAMPAIGN_ALLOCATION_COLLISION_WALL")

@@ -27,6 +27,9 @@ vi.mock("@/lib/session", () => ({
   getSession: boundary.getSession,
   getUserId: boundary.getUserId,
 }))
+vi.mock("@/lib/primary-identity", () => ({
+  isDeclaredPrimaryEmail: (email: string) => email === "primary@example.test",
+}))
 vi.mock("@/app/actions/authority", () => ({
   createAuthorityGrantWithResult: boundary.createAuthorityGrantWithResult,
 }))
@@ -44,6 +47,7 @@ import {
   mutateOutcomeQueue,
   recordOutcomeAuthorityGrant,
   recordV12CampaignOutcomeAuthority,
+  revokeV12CampaignOutcomeAuthority,
 } from "@/app/actions/outcome-queue"
 import {
   createDecision,
@@ -76,7 +80,7 @@ function fluentQuery<T>(rows: T[]): FluentQuery<T> {
 
 const campaignScope = "campaign:v1-2:queue-evidence-drilldown"
 
-function transactionHarness(selectRows: unknown[][]) {
+function transactionHarness(selectRows: unknown[][], updateRows: unknown[] = []) {
   const inserts: Array<{ table: string; values: unknown }> = []
   const source = [...selectRows]
   const transaction = {
@@ -115,7 +119,11 @@ function transactionHarness(selectRows: unknown[][]) {
           return chain
         },
         returning() {
-          return Promise.resolve([{ id: 31, ...values }])
+          return Promise.resolve([{
+            id: 31,
+            ...((updateRows.shift() ?? {}) as Record<string, unknown>),
+            ...values,
+          }])
         },
       }
       return chain
@@ -130,7 +138,7 @@ describe("V1.2 campaign server authority boundaries", () => {
     Object.values(boundary).forEach((mock) => mock.mockReset())
     boundary.getUserId.mockResolvedValue("primary-1")
     boundary.getSession.mockResolvedValue({
-      user: { id: "primary-1", email: "bsvalues@gmail.com" },
+      user: { id: "primary-1", email: "primary@example.test" },
     })
   })
 
@@ -366,6 +374,104 @@ describe("V1.2 campaign server authority boundaries", () => {
     }))
   })
 
+  it("revokes only the exact campaign grant and marks queue authority revoked", async () => {
+    const now = new Date("2026-07-29T22:00:00.000Z")
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    const grantDraft = v12CampaignGrant(
+      campaignScope,
+      "primary-1",
+      new Date(now.getTime() - 60_000),
+    )
+    const grant = {
+      id: 72,
+      ...grantDraft,
+      createdAt: new Date(grantDraft.createdAt),
+      expiresAt: new Date(grantDraft.expiresAt),
+    }
+    const approval = {
+      id: 71,
+      userId: "primary-1",
+      ...v12CampaignDecision(campaignScope),
+    }
+    const item = {
+      id: 31,
+      outcomeKey: campaignScope,
+      version: 1,
+      approvalDecisionId: 71,
+      authorityGrantRef: grant.ref,
+      authorityState: "matched",
+    }
+    const harness = transactionHarness(
+      [[item], [approval], [grant]],
+      [grant, item],
+    )
+    boundary.dbTransaction.mockImplementation(
+      async (callback: (transaction: unknown) => Promise<unknown>) => (
+        callback(harness.transaction)
+      ),
+    )
+
+    await expect(revokeV12CampaignOutcomeAuthority({
+      outcomeKey: campaignScope,
+      expectedVersion: 1,
+    })).resolves.toMatchObject({
+      status: "RECORDED",
+      version: 2,
+    })
+    expect(harness.inserts).toContainEqual(expect.objectContaining({
+      table: "governance_event",
+      values: expect.objectContaining({ eventType: "AUTHORITY_REVOKED" }),
+    }))
+  })
+
+  it("replays an exact completed revocation after the queue version advances", async () => {
+    const revokedAt = new Date("2026-07-29T22:00:00.000Z")
+    const grantDraft = v12CampaignGrant(
+      campaignScope,
+      "primary-1",
+      new Date(revokedAt.getTime() - 60_000),
+    )
+    const grant = {
+      id: 72,
+      ...grantDraft,
+      status: "revoked",
+      createdAt: new Date(grantDraft.createdAt),
+      expiresAt: new Date(grantDraft.expiresAt),
+      revokedAt,
+      revokedBy: "primary-1",
+      revokeReason: "Primary Operator revoked this exact V1.2 campaign outcome authority.",
+    }
+    const approval = {
+      id: 71,
+      userId: "primary-1",
+      ...v12CampaignDecision(campaignScope),
+    }
+    const item = {
+      id: 31,
+      outcomeKey: campaignScope,
+      version: 2,
+      approvalDecisionId: 71,
+      authorityGrantRef: grant.ref,
+      authorityState: "revoked",
+    }
+    const harness = transactionHarness([[item], [approval], [grant]])
+    boundary.dbTransaction.mockImplementation(
+      async (callback: (transaction: unknown) => Promise<unknown>) => (
+        callback(harness.transaction)
+      ),
+    )
+
+    await expect(revokeV12CampaignOutcomeAuthority({
+      outcomeKey: campaignScope,
+      expectedVersion: 1,
+    })).resolves.toMatchObject({
+      status: "REPLAYED",
+      version: 2,
+    })
+    expect(harness.transaction.update).not.toHaveBeenCalled()
+  })
+
   it("rejects an authenticated non-Primary session before opening a transaction", async () => {
     boundary.getSession.mockResolvedValue({
       user: { id: "diagnostic-1", email: "test+wo@example.com" },
@@ -459,6 +565,46 @@ describe("V1.2 campaign server authority boundaries", () => {
       outcomeKey: "goal:ordinary-a",
     })
     expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
+  })
+
+  it("allows campaign recovery mutations but rejects authority and topology mutations", async () => {
+    boundary.mutateOutcomeQueueItem.mockResolvedValue({
+      replayed: false,
+      outcome: { outcomeKey: campaignScope, version: 2 },
+    })
+    await expect(mutateOutcomeQueue({
+      action: "pause",
+      outcomeKey: campaignScope,
+      expectedVersion: 1,
+      idempotencyKey: "campaign:pause:1",
+      reason: "Bounded recovery.",
+    })).resolves.toMatchObject({ status: "RECORDED" })
+    await expect(mutateOutcomeQueue({
+      action: "dependencies",
+      outcomeKey: campaignScope,
+      expectedVersion: 2,
+      idempotencyKey: "campaign:dependencies:1",
+      dependencyKeys: [],
+    })).resolves.toMatchObject({ status: "INVALID" })
+    expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
+  })
+
+  it("rejects campaign recovery from an authenticated non-Primary session", async () => {
+    boundary.getSession.mockResolvedValue({
+      user: { id: "diagnostic-1", email: "test+wo@example.com" },
+    })
+
+    await expect(mutateOutcomeQueue({
+      action: "pause",
+      outcomeKey: campaignScope,
+      expectedVersion: 1,
+      idempotencyKey: "campaign:pause:non-primary",
+      reason: "Attempted recovery.",
+    })).resolves.toMatchObject({
+      status: "UNAUTHORIZED",
+      outcomeKey: campaignScope,
+    })
+    expect(boundary.mutateOutcomeQueueItem).not.toHaveBeenCalled()
   })
 
   it("rejects a complete reorder that moves or version-rebinds a protected row", async () => {
