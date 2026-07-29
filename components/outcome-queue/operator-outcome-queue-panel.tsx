@@ -24,6 +24,7 @@ import {
   recordV12CampaignOutcomeAuthority,
   revokeV12CampaignOutcomeAuthority,
   revokeV12AcceptanceAuthority,
+  type OutcomeQueueActionSurface,
 } from "@/app/actions/outcome-queue"
 import {
   shouldOfferOutcomeAuthorityBinding,
@@ -31,7 +32,6 @@ import {
 } from "@/lib/outcome-queue/operator-mutations"
 import type {
   OutcomeQueueOperatorRow,
-  OutcomeQueueOperatorSurface,
 } from "@/lib/outcome-queue/operator-surface"
 import { Button } from "@/components/ui/button"
 import {
@@ -61,6 +61,7 @@ const PROTECTED_V1_2_AUTHORITY_SCOPES = new Set([
   ...V1_2_ACCEPTANCE_AUTHORITY_SCOPES,
   ...V1_2_CAMPAIGN_AUTHORITY_SCOPES,
 ])
+const MANUAL_OUTCOME_PAUSE_REASON = "Primary Operator paused this outcome."
 
 function protectedV12AuthorityScope(outcomeKey: string): boolean {
   return PROTECTED_V1_2_AUTHORITY_SCOPES.has(outcomeKey)
@@ -82,7 +83,7 @@ function actionInput(
 }
 
 function reorderInput(
-  surface: OutcomeQueueOperatorSurface,
+  surface: OutcomeQueueActionSurface,
   row: OutcomeQueueOperatorRow,
   direction: -1 | 1,
   idempotencyKey: string,
@@ -103,7 +104,7 @@ export function OperatorOutcomeQueuePanel({
   surface,
   compact = false,
 }: {
-  surface: OutcomeQueueOperatorSurface
+  surface: OutcomeQueueActionSurface
   compact?: boolean
 }) {
   const router = useRouter()
@@ -367,6 +368,10 @@ export function OperatorOutcomeQueuePanel({
               V1_2_CAMPAIGN_AUTHORITY_SCOPES.has(row.outcomeKey)
             const protectedAuthorityProposal =
               acceptanceAuthorityProof || campaignAuthorityProposal
+            const manuallyPausedCampaign = campaignAuthorityProposal
+              && row.lifecycleState === "blocked"
+              && row.lifecycleReason === MANUAL_OUTCOME_PAUSE_REASON
+              && !row.hasRetainedRuntimeBindings
             const movableIndex = movableRows.findIndex(
               (item) => item.outcomeKey === row.outcomeKey,
             )
@@ -455,7 +460,9 @@ export function OperatorOutcomeQueuePanel({
                         Pause
                       </Button>
                     ) : null}
-                    {row.lifecycleState === "blocked" && !acceptanceAuthorityProof ? (
+                    {row.lifecycleState === "blocked"
+                      && !acceptanceAuthorityProof
+                      && (!campaignAuthorityProposal || manuallyPausedCampaign) ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -534,6 +541,7 @@ export function OperatorOutcomeQueuePanel({
                       ) : null}
                     {campaignAuthorityProposal
                       && row.lifecycleState !== "active"
+                      && !row.hasRetainedRuntimeBindings
                       && row.authorityState === "matched"
                       && row.authorityGrantRef !== null
                       && row.availableAuthorityGrantRef === row.authorityGrantRef ? (

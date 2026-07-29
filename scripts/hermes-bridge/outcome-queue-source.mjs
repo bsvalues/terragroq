@@ -164,6 +164,109 @@ const LIVE_AUTHORITY_PREDICATE = `
   )
 `
 
+const OWNER_DECISION_RESUME_PREDICATE = `
+  approval.id = $7
+  AND approval."userId" = q."userId"
+  AND approval.status = 'accepted'
+  AND approval.authority = 'binding'
+  AND approval.decision = 'APPROVE'
+  AND approval.owner = q."userId"
+  AND approval.ref = 'OWNER-DECISION-' || q."goalId"::text || '-'
+    || ((approval.context::jsonb)->>'terminalEventId')
+  AND approval.scope = 'goal:' || q."goalId"::text
+    || '|work-order:' || q."activeWorkOrderId"::text
+    || '|terminal:' || ((approval.context::jsonb)->>'terminalEventId')
+    || '|next-state:' || $12
+  AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
+  AND (approval.context::jsonb)->>'workOrderId' = q."activeWorkOrderId"::text
+  AND (approval.context::jsonb)->>'expectedNextState' = $12
+  AND (approval.context::jsonb)->>'requestKey' =
+    'hermes-owner-decision:' || q."goalId"::text || ':'
+      || q."activeWorkOrderId"::text || ':'
+      || ((approval.context::jsonb)->>'terminalEventId') || ':'
+      || q."userId" || ':APPROVE:' || $12
+  AND approval.evidence @> ARRAY[
+    'outcome:' || q."goalId"::text,
+    'work-order:' || q."activeWorkOrderId"::text,
+    'terminal-event:' || ((approval.context::jsonb)->>'terminalEventId'),
+    'next-state:' || $12,
+    'choice:APPROVE'
+  ]::text[]
+  AND approval.evidence @> ARRAY[
+    'request:hermes-owner-decision:' || q."goalId"::text || ':'
+      || q."activeWorkOrderId"::text || ':'
+      || ((approval.context::jsonb)->>'terminalEventId') || ':'
+      || q."userId" || ':APPROVE:' || $12
+  ]::text[]
+  AND approval.evidence @> ARRAY[
+    'terminal-binding:hermes-owner-decision-terminal:'
+      || q."goalId"::text || ':' || q."activeWorkOrderId"::text || ':'
+      || ((approval.context::jsonb)->>'terminalEventId')
+  ]::text[]
+  AND EXISTS (
+    SELECT 1
+    FROM work_order AS decision_work
+    WHERE decision_work.id = q."activeWorkOrderId"
+      AND decision_work."userId" = q."userId"
+      AND decision_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
+      AND decision_work.goal = q."goalRef"
+      AND decision_work."linkedDecisionId" = approval.id
+      AND decision_work.result = 'OWNER_DECISION_APPROVED'
+  )
+  AND EXISTS (
+    SELECT 1
+    FROM governance_event AS terminal
+    WHERE terminal.id = ((approval.context::jsonb)->>'terminalEventId')::integer
+      AND terminal."userId" = q."userId"
+      AND terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
+      AND terminal."entityType" = 'goal'
+      AND terminal."entityId"::text = q."goalId"::text
+      AND terminal.metadata->>'result' = 'OWNER_DECISION_REQUIRED'
+      AND terminal.metadata->>'nextState' = $12
+      AND NOT EXISTS (
+        SELECT 1
+        FROM governance_event AS newer_terminal
+        WHERE newer_terminal."userId" = q."userId"
+          AND newer_terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
+          AND newer_terminal."entityType" = 'goal'
+          AND newer_terminal."entityId"::text = q."goalId"::text
+          AND newer_terminal.id > terminal.id
+      )
+  )
+`
+
+const V1_2_CAMPAIGN_RENEWAL_APPLIED_SQL = `
+  EXISTS (
+    SELECT 1
+    FROM "governance_event" AS renewal_event
+    JOIN "authority_grant" AS renewed_grant
+      ON renewed_grant."userId" = q."userId"
+      AND renewed_grant."id"::text = renewal_event."entityId"
+      AND renewed_grant."ref" = q."authorityGrantRef"
+      AND renewed_grant."scope" = q."outcomeKey"
+      AND renewed_grant."contentHash" = renewal_event."afterHash"
+      AND renewed_grant."createdAt" = renewal_event."createdAt"
+    WHERE renewal_event."userId" = q."userId"
+      AND renewal_event."eventType" = 'AUTHORITY_RENEWED'
+      AND renewal_event."entityType" = 'authority_grant'
+      AND renewal_event."actor" = 'hermes'
+      AND renewal_event."createdAt" = q."updatedAt"
+      AND renewal_event.metadata->>'automated' = 'true'
+      AND renewal_event.metadata->>'decisionRef' = (
+        SELECT campaign_approval.ref
+        FROM decision AS campaign_approval
+        WHERE campaign_approval.id = q."approvalDecisionId"
+          AND campaign_approval."userId" = q."userId"
+      )
+      AND renewal_event.metadata->>'grantRef' = q."authorityGrantRef"
+      AND renewal_event.metadata->>'outcomeKey' = q."outcomeKey"
+      AND renewal_event.metadata->>'parentIssue' = '471'
+      AND renewal_event.metadata->>'unchangedAcceptedScope' = 'true'
+      AND renewal_event.metadata->>'replacesGrantRef' IS NOT NULL
+      AND renewal_event.metadata->>'replacesGrantRef' <> q."authorityGrantRef"
+  )
+`
+
 const ACQUISITION_AUTHORITY_PREDICATE = LIVE_AUTHORITY_PREDICATE.replaceAll(
   `q."activeWorkOrderId" = live_grant."workOrderId"`,
   `COALESCE($8, q."activeWorkOrderId") = live_grant."workOrderId"`,
@@ -1042,7 +1145,10 @@ RETURNING *
   rebindRenewedV12CampaignGrant: `
 UPDATE "outcome_queue_item" AS q
 SET "authorityGrantRef" = $5,
-    "lifecycleReason" = 'HERMES_V1_2_CAMPAIGN_AUTHORITY_AUTO_RENEWAL',
+    "lifecycleReason" = CASE
+      WHEN q."lifecycleState" = 'blocked' THEN q."lifecycleReason"
+      ELSE 'HERMES_V1_2_CAMPAIGN_AUTHORITY_AUTO_RENEWAL'
+    END,
     "version" = q."version" + 1,
     "updatedAt" = $6::timestamptz
 WHERE q."id" = $1
@@ -1298,17 +1404,12 @@ FROM decision AS approval
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2
   AND q."lifecycleState" = 'blocked'
+  AND q."lifecycleReason" = $12
   AND q."version" = $3
   AND q."executionBinding" = $4
   AND q."acquisitionKey" = $5
   AND q."fencingToken" = $6
-  AND approval.id = $7
-  AND approval."userId" = q."userId"
-  AND approval.status = 'accepted'
-  AND approval.authority = 'binding'
-  AND approval."scope" = q."outcomeKey"
-  AND upper(trim(approval.decision)) = 'APPROVE'
-  AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
+  AND ${OWNER_DECISION_RESUME_PREDICATE}
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$11::timestamptz")}
   AND q."riskClass" IN ('R0', 'R1')
@@ -1354,27 +1455,34 @@ WHERE q."userId" = $1
   AND projected_work.status = $8
 `,
   replayResumeAfterDecision: `
-SELECT ${QUEUE_COLUMNS}
+SELECT ${QUEUE_COLUMNS},
+       CASE
+         WHEN q."version" = $3::integer + 2
+           AND ${V1_2_CAMPAIGN_RENEWAL_APPLIED_SQL}
+         THEN TRUE
+         ELSE FALSE
+       END AS "authorityRenewalApplied"
 FROM "outcome_queue_item" AS q
 JOIN decision AS approval
   ON approval.id = $7
-  AND approval."userId" = q."userId"
-  AND approval.status = 'accepted'
-  AND approval.authority = 'binding'
-  AND approval."scope" = q."outcomeKey"
-  AND upper(trim(approval.decision)) = 'APPROVE'
-  AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2
   AND q."lifecycleState" = 'active'
   AND q."lifecycleReason" = 'OWNER_DECISION_RESUMED'
-  AND q."version" = $3::integer + 1
+  AND (
+    q."version" = $3::integer + 1
+    OR (
+      q."version" = $3::integer + 2
+      AND ${V1_2_CAMPAIGN_RENEWAL_APPLIED_SQL}
+    )
+  )
   AND q."executionBinding" = $4
   AND q."acquisitionKey" = $5
   AND q."fencingToken" = $6::integer + 1
   AND q."leaseHolder" = $8
   AND q."leaseToken" = $9
   AND q."leaseExpiresAt" > $11::timestamptz
+  AND ${OWNER_DECISION_RESUME_PREDICATE}
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$11::timestamptz")}
 `,
@@ -2271,8 +2379,23 @@ function exactNewV12CampaignGrantRecord(value, draft) {
   return canonicalJson(actual) === canonicalJson(draft)
 }
 
+function v12CampaignRenewalLifecycle(row, expectedLifecycleReason) {
+  if (row?.lifecycleState === "approved") return "APPROVED_UNSTARTED"
+  if (row?.lifecycleState !== "blocked") return "INELIGIBLE"
+  if (expectedLifecycleReason !== null
+    && row.lifecycleReason === expectedLifecycleReason) {
+    return "OWNER_DECISION_BLOCKED"
+  }
+  if (row.lifecycleReason === "OPERATOR_PAUSED"
+    || row.lifecycleReason === "Primary Operator paused this outcome.") {
+    return "MANUALLY_PAUSED"
+  }
+  return "NON_RENEWABLE_BLOCKED"
+}
+
 function exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason = null) {
   const spec = V1_2_CAMPAIGN_SPECS[row?.outcomeKey]
+  const lifecycle = v12CampaignRenewalLifecycle(row, expectedLifecycleReason)
   const shared = Boolean(spec)
     && row.userId === userId
     && row.title === spec.title
@@ -2289,7 +2412,7 @@ function exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason 
     && row.authorityGrantRef !== ""
     && row.authoritySubject === "operator"
     && row.authorityAction === "outcome:execute"
-    && ["approved", "blocked"].includes(row.lifecycleState)
+    && lifecycle !== "INELIGIBLE"
     && row.terminalResult == null
     && row.terminalEvidenceId == null
     && Array.isArray(row.terminalEvidenceRefs)
@@ -2297,7 +2420,7 @@ function exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason 
     && row.terminalKey == null
     && row.terminalAt == null
   if (!shared) return false
-  if (row.lifecycleState === "approved") {
+  if (lifecycle === "APPROVED_UNSTARTED") {
     return row.activeWorkOrderId == null
       && row.executionBinding == null
       && row.leaseHolder == null
@@ -2307,8 +2430,7 @@ function exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason 
       && row.fencingToken === 0
       && row.activatedAt == null
   }
-  if (row.lifecycleState !== "blocked"
-    || row.leaseHolder != null
+  if (row.leaseHolder != null
     || row.leaseToken != null
     || row.leaseExpiresAt != null) return false
   const fence = Number(row.fencingToken)
@@ -2319,7 +2441,12 @@ function exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason 
       && Number(row.activeWorkOrderId) > 0
     )
   if (!workOrderValid) return false
-  const authorityPaused = typeof row.executionBinding === "string"
+  if (lifecycle === "MANUALLY_PAUSED") {
+    return row.executionBinding == null
+      && row.acquisitionKey == null
+  }
+  const authorityPaused = lifecycle === "OWNER_DECISION_BLOCKED"
+    && typeof row.executionBinding === "string"
     && row.executionBinding !== ""
     && typeof row.acquisitionKey === "string"
     && row.acquisitionKey !== ""
@@ -2351,7 +2478,8 @@ async function renewExpiredV12CampaignAuthorities(
   for (const row of rows) {
     if (targetOutcomeKey !== null && row.outcomeKey !== targetOutcomeKey) continue
     if (targetOutcomeKey === null
-      && row.lifecycleState === "blocked") continue
+      && row.lifecycleState === "blocked"
+      && v12CampaignRenewalLifecycle(row, null) !== "MANUALLY_PAUSED") continue
     if (expectedVersion !== null && row.version !== expectedVersion) {
       fail("V1_2_CAMPAIGN_AUTHORITY_RENEWAL_VERSION_WALL")
     }
@@ -3311,7 +3439,7 @@ export async function resumeOutcomeQueueAfterDecision({
   acquisitionKey,
   fencingToken,
   ownerDecisionId,
-  expectedLifecycleReason = null,
+  expectedLifecycleReason,
   leaseHolder,
   leaseToken,
   leaseDurationMs,
@@ -3324,10 +3452,11 @@ export async function resumeOutcomeQueueAfterDecision({
   const acquisition = nonempty(acquisitionKey, "OUTCOME_QUEUE_ACQUISITION_KEY_INVALID")
   const fence = integer(fencingToken, "OUTCOME_QUEUE_FENCING_TOKEN_INVALID", { minimum: 1 })
   const decisionId = integer(ownerDecisionId, "OUTCOME_QUEUE_APPROVAL_DECISION_REQUIRED", { minimum: 1 })
-  const lifecycleReason = expectedLifecycleReason === null
-    ? null
-    : nonempty(expectedLifecycleReason, "OUTCOME_QUEUE_OWNER_DECISION_STATE_WALL")
-  if (lifecycleReason !== null && !/^[A-Z][A-Z0-9_]{1,79}$/.test(lifecycleReason)) {
+  const lifecycleReason = nonempty(
+    expectedLifecycleReason,
+    "OUTCOME_QUEUE_OWNER_DECISION_STATE_WALL",
+  )
+  if (!/^[A-Z][A-Z0-9_]{1,79}$/.test(lifecycleReason)) {
     fail("OUTCOME_QUEUE_OWNER_DECISION_STATE_WALL")
   }
   const holder = nonempty(leaseHolder, "OUTCOME_QUEUE_LEASE_HOLDER_INVALID")
@@ -3353,6 +3482,7 @@ export async function resumeOutcomeQueueAfterDecision({
       token,
       expiresAt,
       at,
+      lifecycleReason,
     ])
     if (result?.rows?.length === 1) {
       await connection.query("COMMIT")
@@ -3380,6 +3510,7 @@ export async function resumeOutcomeQueueAfterDecision({
         token,
         expiresAt,
         at,
+        lifecycleReason,
       ])
       if (renewedResult?.rows?.length === 1) {
         await connection.query("COMMIT")
@@ -3390,10 +3521,11 @@ export async function resumeOutcomeQueueAfterDecision({
         }
       }
     }
+    const replayVersion = renewed.get(key) ?? version
     const replay = await connection.query(OUTCOME_QUEUE_SQL.replayResumeAfterDecision, [
       user,
       key,
-      renewed.get(key) ?? version,
+      replayVersion,
       binding,
       acquisition,
       fence,
@@ -3402,13 +3534,26 @@ export async function resumeOutcomeQueueAfterDecision({
       token,
       expiresAt,
       at,
+      lifecycleReason,
     ])
     if (replay?.rows?.length !== 1) fail("OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL")
+    const {
+      authorityRenewalApplied: replayRenewalApplied,
+      ...replayedOutcome
+    } = replay.rows[0]
+    const committedVersion = Number(replayedOutcome.version)
+    const exactOrdinaryReplay = committedVersion === replayVersion + 1
+      && replayRenewalApplied !== true
+    const exactRenewedReplay = committedVersion === replayVersion + 2
+      && replayRenewalApplied === true
+    if (!exactOrdinaryReplay && !exactRenewedReplay) {
+      fail("OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL")
+    }
     await connection.query("COMMIT")
     begun = false
-    return renewed.has(key)
-      ? { ...replay.rows[0], authorityRenewalApplied: true }
-      : replay.rows[0]
+    return renewed.has(key) || replayRenewalApplied === true
+      ? { ...replayedOutcome, authorityRenewalApplied: true }
+      : replayedOutcome
   } catch (error) {
     if (begun) {
       try {

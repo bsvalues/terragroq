@@ -94,7 +94,8 @@ describe("operator outcome queue panel accessibility contract", () => {
     expect(actionSource).toContain('status: "UNAUTHORIZED"')
     expect(source).toContain("protectedAuthorityProposal")
     expect(source).toContain('row.lifecycleState === "active" && !acceptanceAuthorityProof')
-    expect(source).toContain('row.lifecycleState === "blocked" && !acceptanceAuthorityProof')
+    expect(source).toContain('row.lifecycleState === "blocked"')
+    expect(source).toContain("&& !acceptanceAuthorityProof")
   })
 
   it("requires an authenticated Primary click for the two fixed V1.2 product proposals", () => {
@@ -105,6 +106,24 @@ describe("operator outcome queue panel accessibility contract", () => {
     expect(source).toContain("revokeV12CampaignOutcomeAuthority")
     expect(source).toContain("campaignAuthorityProposal")
     expect(source).toContain("protectedAuthorityProposal")
+    expect(source).toContain("manuallyPausedCampaign")
+    expect(source).toContain(
+      "&& (!campaignAuthorityProposal || manuallyPausedCampaign)",
+    )
+    expect(source).toContain("&& !row.hasRetainedRuntimeBindings")
+    expect(actionSource).toContain("genericCampaignResumeIsManualPause")
+    expect(actionSource).toContain(
+      "item.lifecycleReason === MANUAL_OUTCOME_PAUSE_REASON",
+    )
+    expect(actionSource).toContain("item.executionBinding === null")
+    expect(actionSource).toContain("item.leaseHolder === null")
+    expect(actionSource).toContain("item.leaseToken === null")
+    expect(actionSource).toContain("item.leaseExpiresAt === null")
+    expect(actionSource).toContain("item.acquisitionKey === null")
+    expect(actionSource).toContain(
+      "Owner-decision campaign recovery must resume through the retained runtime binding.",
+    )
+    expect(actionSource).toContain("hasRetainedRuntimeBindings:")
     expect(source).toContain('campaignAuthorityProposal\n                      && row.lifecycleState !== "active"')
     expect(source.match(/\{campaignAuthorityProposal \? null : \(/g)).toHaveLength(2)
     expect(source).toContain("&& row.authorityGrantRef !== null")

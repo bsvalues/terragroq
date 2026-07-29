@@ -16,6 +16,7 @@ import {
 } from "@/lib/db/schema"
 import {
   projectOutcomeQueueOperatorSurface,
+  type OutcomeQueueOperatorRow,
   type OutcomeQueueOperatorSurface,
 } from "@/lib/outcome-queue/operator-surface"
 import type { OutcomeQueueRecord } from "@/lib/outcome-queue/engine"
@@ -61,6 +62,14 @@ type QueueMutationRuntimeResult = {
   outcome?: { outcomeKey?: string; version?: number }
   code?: string
 }
+
+export type OutcomeQueueActionSurface = Omit<OutcomeQueueOperatorSurface, "rows"> & {
+  rows: readonly (OutcomeQueueOperatorRow & {
+    hasRetainedRuntimeBindings: boolean
+  })[]
+}
+
+const MANUAL_OUTCOME_PAUSE_REASON = "Primary Operator paused this outcome."
 
 const OUTCOME_GRANT_BLOCKED_ACTIONS = [
   "production mutation",
@@ -123,7 +132,7 @@ function grantMatches(
     || actionCovered(grant.allowedActions, item.authorityAction)
 }
 
-export async function getOutcomeQueueSurface(): Promise<OutcomeQueueOperatorSurface> {
+export async function getOutcomeQueueSurface(): Promise<OutcomeQueueActionSurface> {
   const userId = await getUserId()
   const now = new Date()
   const [rows, decisions, grants] = await Promise.all([
@@ -179,7 +188,7 @@ export async function getOutcomeQueueSurface(): Promise<OutcomeQueueOperatorSurf
     ]),
   )
 
-  return projectOutcomeQueueOperatorSurface({
+  const surface = projectOutcomeQueueOperatorSurface({
     queue,
     now,
     allowedRiskClasses: ["R0", "R1"],
@@ -188,6 +197,22 @@ export async function getOutcomeQueueSurface(): Promise<OutcomeQueueOperatorSurf
     availableApprovalDecisionIdsByOutcomeKey,
     availableAuthorityGrantRefsByOutcomeKey,
   })
+  const retainedRuntimeBindings = new Map(rows.map((row) => [
+    row.outcomeKey,
+    row.executionBinding !== null
+      || row.leaseHolder !== null
+      || row.leaseToken !== null
+      || row.acquisitionKey !== null,
+  ]))
+
+  return {
+    ...surface,
+    rows: surface.rows.map((row) => ({
+      ...row,
+      hasRetainedRuntimeBindings:
+        retainedRuntimeBindings.get(row.outcomeKey) ?? true,
+    })),
+  }
 }
 
 export async function recordOutcomeAuthorityGrant(input: {
@@ -1284,6 +1309,40 @@ async function campaignDeclineAuthorityIsInactive(
     })())
 }
 
+async function genericCampaignResumeIsManualPause(
+  input: OutcomeQueueMutationInput,
+  userId: string,
+): Promise<boolean> {
+  if (input.action !== "resume" || !isV12CampaignAuthorityScope(input.outcomeKey)) {
+    return true
+  }
+  const [item] = await db
+    .select({
+      lifecycleState: outcomeQueueItem.lifecycleState,
+      lifecycleReason: outcomeQueueItem.lifecycleReason,
+      executionBinding: outcomeQueueItem.executionBinding,
+      leaseHolder: outcomeQueueItem.leaseHolder,
+      leaseToken: outcomeQueueItem.leaseToken,
+      leaseExpiresAt: outcomeQueueItem.leaseExpiresAt,
+      acquisitionKey: outcomeQueueItem.acquisitionKey,
+    })
+    .from(outcomeQueueItem)
+    .where(and(
+      eq(outcomeQueueItem.userId, userId),
+      eq(outcomeQueueItem.outcomeKey, input.outcomeKey),
+    ))
+    .limit(1)
+
+  return item !== undefined
+    && item.lifecycleState === "blocked"
+    && item.lifecycleReason === MANUAL_OUTCOME_PAUSE_REASON
+    && item.executionBinding === null
+    && item.leaseHolder === null
+    && item.leaseToken === null
+    && item.leaseExpiresAt === null
+    && item.acquisitionKey === null
+}
+
 function runtimeCode(error: unknown): string {
   return error !== null && typeof error === "object" && "code" in error
     && typeof error.code === "string"
@@ -1360,6 +1419,14 @@ export async function mutateOutcomeQueue(
     return {
       status: "INVALID",
       message: "Revoke this product outcome authority before declining it.",
+      outcomeKey: validated.outcomeKey,
+      version: null,
+    }
+  }
+  if (!await genericCampaignResumeIsManualPause(validated, userId)) {
+    return {
+      status: "INVALID",
+      message: "Owner-decision campaign recovery must resume through the retained runtime binding.",
       outcomeKey: validated.outcomeKey,
       version: null,
     }

@@ -369,6 +369,7 @@ function acquisitionQuery({
   renewable = [],
   rebound = [],
   resumeAfterRenewal,
+  replayResume = [],
 }: {
   receipt?: unknown[]
   receiptOutcome?: unknown[]
@@ -381,6 +382,7 @@ function acquisitionQuery({
   renewable?: unknown[]
   rebound?: unknown[]
   resumeAfterRenewal?: unknown[]
+  replayResume?: unknown[]
 }) {
   let acquireCalls = 0
   let resumeCalls = 0
@@ -445,7 +447,9 @@ function acquisitionQuery({
       resumeCalls += 1
       return { rows }
     }
-    if (sql === OUTCOME_QUEUE_SQL.replayResumeAfterDecision) return { rows: [] }
+    if (sql === OUTCOME_QUEUE_SQL.replayResumeAfterDecision) {
+      return { rows: replayResume }
+    }
     if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionReceipt) {
       return {
         rows: [{
@@ -1514,6 +1518,59 @@ describe("transactional durable outcome queue source", () => {
     )
   })
 
+  it("renews a manually paused campaign without reacquiring it", async () => {
+    const expired = expiredCampaignAuthorityRow({
+      lifecycleState: "blocked",
+      lifecycleReason: "Primary Operator paused this outcome.",
+      activeWorkOrderId: 472,
+      fencingToken: 3,
+      version: 5,
+      activatedAt: "2026-07-27T12:00:00.000Z",
+    })
+    const renewedDraft = v12CampaignGrant(
+      expired.outcomeKey as "campaign:v1-2:queue-evidence-drilldown",
+      userId,
+      new Date(now),
+    )
+    const rebound = {
+      ...expired,
+      authorityGrantRef: renewedDraft.ref,
+      lifecycleReason: "Primary Operator paused this outcome.",
+      version: 6,
+    }
+    const query = acquisitionQuery({
+      renewable: [expired],
+      rebound: [rebound],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      outcome: null,
+      reason: "EMPTY_QUEUE",
+    })
+    expect(query).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.insertRenewedV12CampaignGrant,
+      expect.anything(),
+    )
+    expect(query).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.rebindRenewedV12CampaignGrant,
+      [
+        expired.id,
+        userId,
+        expired.outcomeKey,
+        5,
+        renewedDraft.ref,
+        now,
+        expired.authorityGrantRef,
+      ],
+    )
+    expect(OUTCOME_QUEUE_SQL.rebindRenewedV12CampaignGrant)
+      .toContain(`WHEN q."lifecycleState" = 'blocked' THEN q."lifecycleReason"`)
+  })
+
   it("fails closed instead of renewing a tampered campaign grant", async () => {
     const expired = expiredCampaignAuthorityRow()
     const tampered = {
@@ -2067,6 +2124,7 @@ describe("transactional durable outcome queue source", () => {
       acquisitionKey: "acquire-a",
       fencingToken: 3,
       ownerDecisionId: 91,
+      expectedLifecycleReason: "OWNER_DECISION_REQUIRED",
       leaseHolder: "resident-hermes",
       leaseToken: "lease-a",
       leaseDurationMs: 50 * 60 * 1000,
@@ -2084,11 +2142,22 @@ describe("transactional durable outcome queue source", () => {
       "lease-a",
       "2026-07-28T12:50:00.000Z",
       now,
+      "OWNER_DECISION_REQUIRED",
     ])
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
       .toContain(`(approval.context::jsonb)->>'outcomeId' = q."goalId"::text`)
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
-      .toContain(`approval."scope" = q."outcomeKey"`)
+      .toContain(`approval.scope = 'goal:' || q."goalId"::text`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`decision_work."linkedDecisionId" = approval.id`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`approval.owner = q."userId"`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`'terminal-binding:hermes-owner-decision-terminal:'`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`terminal.metadata->>'nextState' = $12`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`q."lifecycleReason" = $12`)
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
       .toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
@@ -2172,6 +2241,7 @@ describe("transactional durable outcome queue source", () => {
       acquisitionKey: "acquire-a",
       fencingToken: 3,
       ownerDecisionId: 91,
+      expectedLifecycleReason: "OWNER_DECISION_REQUIRED",
       leaseHolder: "resident-hermes",
       leaseToken: "lease-a",
       leaseDurationMs: 50 * 60 * 1000,
@@ -2189,6 +2259,7 @@ describe("transactional durable outcome queue source", () => {
       "lease-a",
       "2026-07-28T12:50:00.000Z",
       now,
+      "OWNER_DECISION_REQUIRED",
     ])
     expect(OUTCOME_QUEUE_SQL.replayResumeAfterDecision)
       .toContain(`q."version" = $3::integer + 1`)
@@ -2202,6 +2273,102 @@ describe("transactional durable outcome queue source", () => {
       .toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.replayResumeAfterDecision)
       .toContain(`live_grant."status" = 'active'`)
+    expect(OUTCOME_QUEUE_SQL.replayResumeAfterDecision)
+      .toContain(`terminal.metadata->>'nextState' = $12`)
+  })
+
+  it("exact-replays a lost renewed resume response at source version plus two", async () => {
+    const resumed = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "OWNER_DECISION_RESUMED",
+      version: 7,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      authorityRenewalApplied: true,
+    })
+    const query = acquisitionQuery({ replayResume: [resumed] })
+
+    await expect(resumeOutcomeQueueAfterDecision({
+      query,
+      userId,
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      expectedVersion: 5,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      ownerDecisionId: 91,
+      expectedLifecycleReason: "OWNER_DECISION_REQUIRED",
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).resolves.toEqual(resumed)
+    expect(OUTCOME_QUEUE_SQL.replayResumeAfterDecision)
+      .toContain(`q."version" = $3::integer + 2`)
+    expect(OUTCOME_QUEUE_SQL.replayResumeAfterDecision)
+      .toContain(`renewal_event."eventType" = 'AUTHORITY_RENEWED'`)
+    expect(OUTCOME_QUEUE_SQL.replayResumeAfterDecision)
+      .toContain(`renewal_event.metadata->>'grantRef' = q."authorityGrantRef"`)
+  })
+
+  it("rejects unmarked source-version-plus-two resume drift", async () => {
+    const foreign = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "OWNER_DECISION_RESUMED",
+      version: 7,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      authorityRenewalApplied: false,
+    })
+    const query = acquisitionQuery({ replayResume: [foreign] })
+
+    await expect(resumeOutcomeQueueAfterDecision({
+      query,
+      userId,
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      expectedVersion: 5,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      ownerDecisionId: 91,
+      expectedLifecycleReason: "OWNER_DECISION_REQUIRED",
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL" })
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it("does not resume a live grant from a different blocked lifecycle reason", async () => {
+    const run = vi.fn(async () => ({ rows: [] }))
+    const query = dedicatedQuery(run)
+
+    await expect(resumeOutcomeQueueAfterDecision({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 5,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      ownerDecisionId: 91,
+      expectedLifecycleReason: "OWNER_DECISION_REQUIRED",
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL" })
+    expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
+      .toContain(`q."lifecycleReason" = $12`)
+    expect(run).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.resumeAfterDecision,
+      expect.arrayContaining(["OWNER_DECISION_REQUIRED"]),
+    )
   })
 
   it("rejects a mismatched owner-decision resume replay", async () => {
@@ -2217,6 +2384,7 @@ describe("transactional durable outcome queue source", () => {
       acquisitionKey: "acquire-a",
       fencingToken: 3,
       ownerDecisionId: 91,
+      expectedLifecycleReason: "OWNER_DECISION_REQUIRED",
       leaseHolder: "resident-hermes",
       leaseToken: "lease-a",
       leaseDurationMs: 50 * 60 * 1000,
@@ -2397,6 +2565,31 @@ describe("transactional durable outcome queue source", () => {
       acquired: false,
       outcome: null,
       reason: "NO_ELIGIBLE_OUTCOME",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.insertRenewedV12CampaignGrant,
+      expect.anything(),
+    )
+  })
+
+  it("does not auto-renew a cleared owner-decision campaign row", async () => {
+    const ownerDecision = expiredCampaignAuthorityRow({
+      lifecycleState: "blocked",
+      lifecycleReason: "OWNER_DECISION_REQUIRED",
+      activeWorkOrderId: 472,
+      fencingToken: 3,
+      version: 5,
+      activatedAt: "2026-07-27T12:00:00.000Z",
+    })
+    const query = acquisitionQuery({ renewable: [ownerDecision] })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      outcome: null,
+      reason: "EMPTY_QUEUE",
     })
     expect(query).not.toHaveBeenCalledWith(
       OUTCOME_QUEUE_SQL.insertRenewedV12CampaignGrant,
