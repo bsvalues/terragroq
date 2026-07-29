@@ -523,7 +523,7 @@ export function OperatorOutcomeQueuePanel({
                           Approve product outcome
                         </Button>
                       ) : null}
-                    {(row.lifecycleState === "approved" || row.lifecycleState === "blocked")
+                    {(row.lifecycleState === "approved" || manuallyPausedCampaign)
                       && campaignAuthorityProposal
                       && row.authorityState === "matched"
                       && row.authorityGrantRef !== null

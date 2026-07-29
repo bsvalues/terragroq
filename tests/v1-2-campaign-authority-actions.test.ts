@@ -404,6 +404,69 @@ describe("V1.2 campaign server authority boundaries", () => {
     }))
   })
 
+  it("does not renew a cleared campaign blocked for a non-pause reason", async () => {
+    const now = new Date("2026-08-01T02:00:00.000Z")
+    const priorIssuedAt = new Date(
+      now.getTime() - V1_2_CAMPAIGN_GRANT_DURATION_MS - 1,
+    )
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    const priorDraft = v12CampaignGrant(campaignScope, "primary-1", priorIssuedAt)
+    const approval = {
+      id: 71,
+      userId: "primary-1",
+      ...v12CampaignDecision(campaignScope),
+      decidedAt: priorIssuedAt,
+      createdAt: priorIssuedAt,
+      updatedAt: priorIssuedAt,
+    }
+    const priorGrant = {
+      id: 72,
+      ...priorDraft,
+      createdAt: new Date(priorDraft.createdAt),
+      expiresAt: new Date(priorDraft.expiresAt),
+    }
+    const item = {
+      id: 31,
+      outcomeKey: campaignScope,
+      lifecycleState: "blocked",
+      lifecycleReason: "VALIDATION_FAILED",
+      approvalState: "approved",
+      authorityState: "matched",
+      approvalDecisionId: 71,
+      authorityGrantRef: priorGrant.ref,
+      version: 1,
+      activeWorkOrderId: 91,
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      acquisitionKey: null,
+      terminalResult: null,
+      terminalEvidenceId: null,
+      terminalEvidenceRefs: [],
+      terminalKey: null,
+      activatedAt: priorIssuedAt,
+      terminalAt: null,
+    }
+    const harness = transactionHarness([[item]])
+    boundary.dbTransaction.mockImplementation(
+      async (callback: (transaction: unknown) => Promise<unknown>) => (
+        callback(harness.transaction)
+      ),
+    )
+
+    await expect(recordV12CampaignOutcomeAuthority({
+      outcomeKey: campaignScope,
+      expectedVersion: 1,
+    })).resolves.toMatchObject({
+      status: "STALE",
+      version: 1,
+    })
+    expect(harness.inserts).toHaveLength(0)
+    expect(harness.updates).toHaveLength(0)
+  })
+
   it("revokes only the exact campaign grant and marks queue authority revoked", async () => {
     const now = new Date("2026-07-29T22:00:00.000Z")
     vi.useFakeTimers()

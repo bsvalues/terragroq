@@ -108,6 +108,9 @@ describe("operator outcome queue panel accessibility contract", () => {
     expect(source).toContain("protectedAuthorityProposal")
     expect(source).toContain("manuallyPausedCampaign")
     expect(source).toContain(
+      '(row.lifecycleState === "approved" || manuallyPausedCampaign)',
+    )
+    expect(source).toContain(
       "&& (!campaignAuthorityProposal || manuallyPausedCampaign)",
     )
     expect(source).toContain("&& !row.hasRetainedRuntimeBindings")

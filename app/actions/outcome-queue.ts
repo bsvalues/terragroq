@@ -598,6 +598,12 @@ export async function recordV12CampaignOutcomeAuthority(input: {
     const now = new Date()
 
     const pausedCampaign = item.lifecycleState === "blocked"
+      && item.lifecycleReason === MANUAL_OUTCOME_PAUSE_REASON
+      && item.executionBinding === null
+      && item.leaseHolder === null
+      && item.leaseToken === null
+      && item.leaseExpiresAt === null
+      && item.acquisitionKey === null
     if ((item.lifecycleState === "approved" || pausedCampaign)
       && item.approvalState === "approved"
       && item.authorityState === "matched"
