@@ -4053,6 +4053,9 @@ async function dependenciesMutation(connection, request, user, at) {
   const target = snapshot.find((row) => row.outcomeKey === request.outcomeKey)
   if (!target) fail("OUTCOME_QUEUE_OUTCOME_NOT_FOUND")
   assertVersion(target, request.expectedVersion)
+  if (PROTECTED_V1_2_OUTCOME_KEYS.has(target.outcomeKey)) {
+    fail("OUTCOME_QUEUE_PROTECTED_DEPENDENCIES_ILLEGAL")
+  }
   if (!["suggested", "approved", "blocked"].includes(target.lifecycleState)) {
     fail("OUTCOME_QUEUE_DEPENDENCIES_ILLEGAL")
   }
@@ -4151,6 +4154,22 @@ export async function mutateOutcomeQueueItem({
       if (request.action === "supersede"
         && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)) {
         fail("OUTCOME_QUEUE_PROTECTED_SUPERSESSION_ILLEGAL")
+      }
+      if (request.action === "resume"
+        && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)
+        && !(
+          current.lifecycleState === "blocked"
+          && (
+            current.lifecycleReason === "OPERATOR_PAUSED"
+            || current.lifecycleReason === "Primary Operator paused this outcome."
+          )
+          && current.executionBinding == null
+          && current.leaseHolder == null
+          && current.leaseToken == null
+          && current.leaseExpiresAt == null
+          && current.acquisitionKey == null
+        )) {
+        fail("OUTCOME_QUEUE_PROTECTED_RESUME_RUNTIME_BOUND")
       }
       if (request.action === "decline"
         && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)

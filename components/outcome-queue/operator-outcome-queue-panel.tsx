@@ -375,6 +375,12 @@ export function OperatorOutcomeQueuePanel({
               && row.lifecycleState === "blocked"
               && MANUAL_OUTCOME_PAUSE_REASONS.has(row.lifecycleReason ?? "")
               && !row.hasRetainedRuntimeBindings
+            const declineAvailable = !row.hasRetainedRuntimeBindings
+              && (
+                !campaignAuthorityProposal
+                || row.authorityGrantRef === null
+                || row.availableAuthorityGrantRef !== row.authorityGrantRef
+              )
             const movableIndex = movableRows.findIndex(
               (item) => item.outcomeKey === row.outcomeKey,
             )
@@ -621,10 +627,7 @@ export function OperatorOutcomeQueuePanel({
                             <GitBranch className="h-4 w-4" />
                           </Button>
                         )}
-                        {campaignAuthorityProposal
-                          && !row.hasRetainedRuntimeBindings
-                          && row.authorityGrantRef !== null
-                          && row.availableAuthorityGrantRef === row.authorityGrantRef ? null : (
+                        {declineAvailable ? (
                           <Button
                             size="icon"
                             variant="ghost"
@@ -637,7 +640,7 @@ export function OperatorOutcomeQueuePanel({
                           >
                             <X className="h-4 w-4" />
                           </Button>
-                        )}
+                        ) : null}
                       </>
                     ) : null}
                   </div>

@@ -3231,6 +3231,33 @@ describe("governed outcome queue mutations", () => {
     })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_ORDERED_SNAPSHOT_INCOMPLETE" })
   })
 
+  it("rejects generic resume for a protected owner-decision campaign binding", async () => {
+    const protectedRow = queueRow({
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      lifecycleState: "blocked",
+      lifecycleReason: "OWNER_DECISION_REQUIRED",
+      version: 4,
+    })
+    const query = mutationQuery({ current: protectedRow })
+
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "resume",
+      outcomeKey: protectedRow.outcomeKey,
+      expectedVersion: 4,
+      idempotencyKey: "resume-protected-owner-decision",
+      reason: "Attempt generic owner-decision resume.",
+      approvalDecisionId: 100,
+      authorityGrantRef: "GRANT-WOS-V1.2",
+      now,
+    })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_PROTECTED_RESUME_RUNTIME_BOUND",
+    })
+    expect(query.mock.calls.some(([sql]) => sql === OUTCOME_QUEUE_SQL.governedApprovalMutation))
+      .toBe(false)
+  })
+
   it("preserves protected V1.2 order slots while ordinary outcomes reorder", async () => {
     const first = queueRow({
       outcomeKey: "goal:GOAL-1100",
@@ -3751,6 +3778,31 @@ describe("governed outcome queue mutations", () => {
       dependencyKeys: [predecessor.outcomeKey],
       now,
     })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_DEPENDENCY_CYCLE" })
+  })
+
+  it("rejects dependency edits for a protected campaign contract", async () => {
+    const protectedRow = queueRow({
+      outcomeKey: "campaign:v1-2:runtime-continuity-status",
+      lifecycleState: "approved",
+      dependencyKeys: ["campaign:v1-2:queue-evidence-drilldown"],
+      version: 3,
+    })
+    const query = mutationQuery({ dependencySnapshot: [protectedRow] })
+
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "dependencies",
+      outcomeKey: protectedRow.outcomeKey,
+      expectedVersion: 3,
+      idempotencyKey: "dependencies-protected-campaign",
+      dependencyKeys: [],
+      now,
+    })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_PROTECTED_DEPENDENCIES_ILLEGAL",
+    })
+    expect(query.mock.calls.some(([sql]) => sql === OUTCOME_QUEUE_SQL.dependencyMutation))
+      .toBe(false)
   })
 
   it("does not let decline or supersede directly terminate an active outcome", async () => {
