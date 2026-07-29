@@ -894,7 +894,13 @@ describe("Hermes durable outcome queue runtime", () => {
         now: new Date("2026-07-28T12:00:00.000Z"),
       })
       return {
-        outcome: { ...queueItem, version: 5, fencingToken: 4 },
+        outcome: {
+          ...queueItem,
+          title: "Add the Runtime outcome timeline",
+          objective: "Show recent completed outcomes and merge evidence on Runtime.",
+          version: 5,
+          fencingToken: 4,
+        },
         acquired: true,
         replayed: false,
         reclaimed: true,
@@ -904,6 +910,8 @@ describe("Hermes durable outcome queue runtime", () => {
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
 
     await expect(bridge.refreshOutcome(outcome)).resolves.toMatchObject({
+      title: "Add the Runtime outcome timeline",
+      command: "Show recent completed outcomes and merge evidence on Runtime.",
       queueBinding: {
         expectedVersion: 5,
         fencingToken: 4,
@@ -918,6 +926,27 @@ describe("Hermes durable outcome queue runtime", () => {
       leaseToken: "lease-77",
       leaseHolder: "resident-hermes",
     }))
+  })
+
+  it("reapplies protected-scope policy while reconciling a recovered queue command", async () => {
+    const bridge = runtime({
+      acquire: vi.fn(async () => ({
+        outcome: {
+          ...queueItem,
+          title: "Deploy TerraFusion to production",
+          objective: "Improve the operator read model.",
+          version: 5,
+          fencingToken: 4,
+        },
+        acquired: true,
+        reclaimed: true,
+      })),
+    })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.refreshOutcome(outcome)).rejects.toMatchObject({
+      code: "HERMES_OUTCOME_QUEUE_POLICY_PROTECTED_SCOPE",
+    })
   })
 
   it("accepts an exact completed queue settlement for terminal checkpoint replay", async () => {

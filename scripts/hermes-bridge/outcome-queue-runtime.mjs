@@ -38,6 +38,16 @@ function effectiveQueueCommand(item, goal) {
   wall("Durable queue outcome is missing an executable command", "HERMES_OUTCOME_QUEUE_COMMAND_WALL")
 }
 
+function governedQueueOutcome(item, goal) {
+  return {
+    ...goal,
+    ...(typeof item?.title === "string" && item.title.trim() !== ""
+      ? { title: item.title.trim() }
+      : {}),
+    command: effectiveQueueCommand(item, goal),
+  }
+}
+
 function residentCheckpointProvider({ runtimeRoot, readState = readHermesState }) {
   const statePath = path.join(runtimeRoot, "state", "state.json")
   return async ({ outcome }) => {
@@ -374,13 +384,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       const item = acquired.outcome
       try {
         const goal = await resolveGoal(item)
-        const governedOutcome = {
-          ...goal,
-          ...(typeof item.title === "string" && item.title.trim() !== ""
-            ? { title: item.title.trim() }
-            : {}),
-          command: effectiveQueueCommand(item, goal),
-        }
+        const governedOutcome = governedQueueOutcome(item, goal)
         const decision = evaluateOutcomePolicy({
           outcome: governedOutcome,
           actor: "bsvalues",
@@ -586,7 +590,18 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       now: now(),
     })
     if (refreshed?.outcome && refreshed.acquired) {
-      return withPersistedBinding(outcome, refreshed.outcome)
+      const governedOutcome = governedQueueOutcome(refreshed.outcome, outcome)
+      const decision = evaluateOutcomePolicy({
+        outcome: governedOutcome,
+        actor: "bsvalues",
+        repository: "bsvalues/terragroq",
+        enabled: true,
+        standingAuthority: true,
+      })
+      if (!decision.allowed) {
+        wall(decision.reasonCode, `HERMES_OUTCOME_QUEUE_POLICY_${decision.reasonCode}`)
+      }
+      return withPersistedBinding(governedOutcome, refreshed.outcome)
     }
     const current = refreshed?.outcome ?? (await readQueue({
       databaseUrl,
