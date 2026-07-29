@@ -1,12 +1,14 @@
 "use server"
 
-import { and, eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
 import { db, pool } from "@/lib/db"
 import {
   authorityGrant,
   decision,
+  eventLog,
+  governanceEvent,
   outcomeQueueItem,
   type AuthorityGrant,
   type OutcomeQueueItem,
@@ -29,6 +31,15 @@ import {
 } from "@/lib/outcome-queue/operator-mutations"
 import { getUserId } from "@/lib/session"
 import { createAuthorityGrantWithResult } from "@/app/actions/authority"
+import { hashRecord } from "@/lib/governance/hash"
+import {
+  isCanonicalV12AcceptanceCandidate,
+  isExactV12AcceptanceDecision,
+  isExactV12AcceptanceGrant,
+  isV12AcceptanceAuthorityScope,
+  v12AcceptanceAuthorityRefs,
+  V1_2_ACCEPTANCE_BLOCKED_ACTIONS,
+} from "@/lib/outcome-queue/v1-2-acceptance-authority"
 
 type QueueMutationRuntimeResult = {
   replayed?: boolean
@@ -245,6 +256,349 @@ export async function recordOutcomeAuthorityGrant(input: {
   return outcomeAuthorityGrantResult(created.grant.ref, created.replayed)
 }
 
+export async function recordV12AcceptanceAuthority(input: {
+  outcomeKey: string
+  expectedVersion: number
+}): Promise<OutcomeQueueMutationActionResult> {
+  let userId: string
+  try {
+    userId = await getUserId()
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return {
+        status: "UNAUTHORIZED",
+        message: "Primary Operator authentication is required.",
+        outcomeKey: input.outcomeKey,
+        version: null,
+      }
+    }
+    throw error
+  }
+  if (
+    !isV12AcceptanceAuthorityScope(input.outcomeKey)
+    || !Number.isSafeInteger(input.expectedVersion)
+    || input.expectedVersion < 0
+  ) {
+    return {
+      status: "INVALID",
+      message: "This owner action is limited to the V1.2 acceptance authority proof.",
+      outcomeKey: input.outcomeKey,
+      version: null,
+    }
+  }
+
+  const result = await db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${`${userId}:outcome-queue`}))`,
+    )
+    await transaction.execute(
+      sql`SELECT id
+          FROM "outcome_queue_item"
+          WHERE "userId" = ${userId}
+            AND "outcomeKey" = ${input.outcomeKey}
+          FOR UPDATE`,
+    )
+    const [item] = await transaction
+      .select()
+      .from(outcomeQueueItem)
+      .where(and(
+        eq(outcomeQueueItem.userId, userId),
+        eq(outcomeQueueItem.outcomeKey, input.outcomeKey),
+      ))
+      .limit(1)
+    if (!item) return { status: "STALE" as const, version: null }
+
+    if (item.lifecycleState === "approved"
+      && item.approvalState === "approved"
+      && item.authorityState === "matched"
+      && item.approvalDecisionId !== null
+      && item.authorityGrantRef !== null) {
+      const [[approval], [grant]] = await Promise.all([
+        transaction
+          .select()
+          .from(decision)
+          .where(and(
+            eq(decision.userId, userId),
+            eq(decision.id, item.approvalDecisionId),
+          ))
+          .limit(1),
+        transaction
+          .select()
+          .from(authorityGrant)
+          .where(and(
+            eq(authorityGrant.userId, userId),
+            eq(authorityGrant.ref, item.authorityGrantRef),
+          ))
+          .limit(1),
+      ])
+      if (approval
+        && grant
+        && isOutcomeAuthorityBindingAllowed(asRecord(item), approval)
+        && isExactV12AcceptanceDecision(approval, item.outcomeKey)
+        && isExactV12AcceptanceGrant(grant, item.outcomeKey, "active", userId)) {
+        return { status: "REPLAYED" as const, version: item.version }
+      }
+      return { status: "STALE" as const, version: item.version }
+    }
+    if (!isCanonicalV12AcceptanceCandidate(item, input.expectedVersion)) {
+      return { status: "STALE" as const, version: item.version }
+    }
+
+    const refs = v12AcceptanceAuthorityRefs(item.outcomeKey)
+    if (!refs) throw new Error("V1_2_ACCEPTANCE_AUTHORITY_SCOPE_WALL")
+    const { decisionRef, grantRef } = refs
+    const [existingDecisionRef, existingGrantRef] = await Promise.all([
+      transaction
+        .select({ id: decision.id })
+        .from(decision)
+        .where(and(
+          eq(decision.userId, userId),
+          eq(decision.ref, decisionRef),
+        ))
+        .limit(1),
+      transaction
+        .select({ id: authorityGrant.id })
+        .from(authorityGrant)
+        .where(and(
+          eq(authorityGrant.userId, userId),
+          eq(authorityGrant.ref, grantRef),
+        ))
+        .limit(1),
+    ])
+    if (existingDecisionRef.length > 0 || existingGrantRef.length > 0) {
+      throw new Error("V1_2_ACCEPTANCE_AUTHORITY_REFERENCE_COLLISION_WALL")
+    }
+    const [approval] = await transaction
+      .insert(decision)
+      .values({
+        userId,
+        ref: decisionRef,
+        title: `Approve ${item.title}`,
+        context: "WO #480 requires a bounded live authority and revocation proof.",
+        decision: "APPROVE",
+        rationale: "The authenticated Primary explicitly approved this exact A0 acceptance scope.",
+        consequences: item.outcomeKey.endsWith("authority-blocked")
+          ? "The grant will be revoked before the acceptance exercise continues."
+          : "The grant permits only the bounded pause/resume acceptance exercise.",
+        status: "accepted",
+        authority: "binding",
+        owner: "Bill",
+        scope: item.outcomeKey,
+        evidence: ["WO #480", "PR #494"],
+        tags: ["v1.2", "acceptance", "owner-approved"],
+        decidedAt: new Date(),
+      })
+      .returning()
+
+    const grantDraft = {
+      userId,
+      ref: grantRef,
+      workOrderId: null,
+      grantedBy: userId,
+      grantedTo: "operator",
+      authorityLevel: "A0_READ_ONLY",
+      scope: item.outcomeKey,
+      allowedActions: ["outcome:execute"],
+      blockedActions: [...V1_2_ACCEPTANCE_BLOCKED_ACTIONS],
+      reason: `${approval.ref} authorizes only ${item.outcomeKey}.`,
+      status: "active" as const,
+      expiresAt: null,
+    }
+    const [grant] = await transaction
+      .insert(authorityGrant)
+      .values({ ...grantDraft, contentHash: hashRecord(grantDraft) })
+      .returning()
+    const now = new Date()
+    const [approved] = await transaction
+      .update(outcomeQueueItem)
+      .set({
+        approvalState: "approved",
+        approvedBy: userId,
+        approvedAt: now,
+        approvalDecisionId: approval.id,
+        authorityState: "matched",
+        authorityGrantRef: grantRef,
+        lifecycleState: "approved",
+        lifecycleReason: "PRIMARY_V1_2_ACCEPTANCE_APPROVAL",
+        version: item.version + 1,
+        updatedAt: now,
+      })
+      .where(and(
+        eq(outcomeQueueItem.id, item.id),
+        eq(outcomeQueueItem.userId, userId),
+        eq(outcomeQueueItem.version, item.version),
+      ))
+      .returning()
+    if (!approved || !isExactV12AcceptanceGrant(
+      grant,
+      item.outcomeKey,
+      "active",
+      userId,
+    )) {
+      throw new Error("V1_2_ACCEPTANCE_AUTHORITY_ATOMICITY_WALL")
+    }
+    await transaction.insert(governanceEvent).values({
+      userId,
+      eventType: "AUTHORITY_GRANTED",
+      entityType: "authority_grant",
+      entityId: String(grant.id),
+      actor: "operator",
+      reason: grantDraft.reason,
+      afterHash: hashRecord({ ...grantDraft, contentHash: grant.contentHash }),
+      metadata: { authorityLevel: grant.authorityLevel, ref: grantRef },
+    })
+    await transaction.insert(eventLog).values([
+      {
+        userId,
+        type: "decision.created",
+        summary: `Logged ${approval.ref}: ${approval.title}`,
+        register: "decisions",
+        refId: approval.id,
+      },
+      {
+        userId,
+        type: "authority.granted",
+        summary: `${grantRef}: granted A0_READ_ONLY to operator`,
+        register: "authority",
+        refId: grant.id,
+      },
+    ])
+    return { status: "RECORDED" as const, version: approved.version }
+  })
+  revalidatePath("/goal-console")
+  revalidatePath("/decisions")
+  revalidatePath("/governance")
+  return {
+    status: result.status,
+    message: result.status === "RECORDED"
+      ? "Exact V1.2 acceptance authority approved and bound."
+      : result.status === "REPLAYED"
+        ? "This exact V1.2 acceptance authority is already bound."
+        : "The acceptance authority request changed. Review current truth.",
+    outcomeKey: input.outcomeKey,
+    version: result.version,
+  }
+}
+
+export async function revokeV12AcceptanceAuthority(input: {
+  outcomeKey: string
+}): Promise<{
+  status: "RECORDED" | "REPLAYED" | "INVALID" | "STALE" | "UNAUTHORIZED"
+  message: string
+}> {
+  let userId: string
+  try {
+    userId = await getUserId()
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return {
+        status: "UNAUTHORIZED",
+        message: "Primary Operator authentication is required.",
+      }
+    }
+    throw error
+  }
+  if (input.outcomeKey !== "acceptance:v1-2:authority-blocked") {
+    return { status: "INVALID", message: "Only the revocation proof scope may be revoked here." }
+  }
+  const result = await db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${`${userId}:outcome-queue`}))`,
+    )
+    await transaction.execute(
+      sql`SELECT id
+          FROM "outcome_queue_item"
+          WHERE "userId" = ${userId}
+            AND "outcomeKey" = ${input.outcomeKey}
+          FOR UPDATE`,
+    )
+    const [item] = await transaction
+      .select()
+      .from(outcomeQueueItem)
+      .where(and(
+        eq(outcomeQueueItem.userId, userId),
+        eq(outcomeQueueItem.outcomeKey, input.outcomeKey),
+      ))
+      .limit(1)
+    if (!item?.authorityGrantRef || item.lifecycleState !== "approved") {
+      return "STALE" as const
+    }
+    await transaction.execute(
+      sql`SELECT id
+          FROM "authority_grant"
+          WHERE "userId" = ${userId}
+            AND ref = ${item.authorityGrantRef}
+          FOR UPDATE`,
+    )
+    const [grant] = await transaction
+      .select()
+      .from(authorityGrant)
+      .where(and(
+        eq(authorityGrant.userId, userId),
+        eq(authorityGrant.ref, item.authorityGrantRef),
+      ))
+      .limit(1)
+    if (!grant) return "STALE" as const
+    if (isExactV12AcceptanceGrant(grant, item.outcomeKey, "revoked", userId)) {
+      return "REPLAYED" as const
+    }
+    if (!isExactV12AcceptanceGrant(grant, item.outcomeKey, "active", userId)) {
+      return "STALE" as const
+    }
+    const now = new Date()
+    const reason = "Primary Operator revoked the exact V1.2 acceptance proof grant."
+    const [revoked] = await transaction
+      .update(authorityGrant)
+      .set({
+        status: "revoked",
+        revokedAt: now,
+        revokedBy: userId,
+        revokeReason: reason,
+      })
+      .where(and(
+        eq(authorityGrant.id, grant.id),
+        eq(authorityGrant.status, "active"),
+      ))
+      .returning()
+    if (!revoked || !isExactV12AcceptanceGrant(
+      revoked,
+      item.outcomeKey,
+      "revoked",
+      userId,
+    )) {
+      throw new Error("V1_2_ACCEPTANCE_REVOCATION_ATOMICITY_WALL")
+    }
+    await transaction.insert(governanceEvent).values({
+      userId,
+      eventType: "AUTHORITY_REVOKED",
+      entityType: "authority_grant",
+      entityId: String(grant.id),
+      actor: "operator",
+      reason,
+      beforeHash: hashRecord({ status: "active" }),
+      afterHash: hashRecord({ status: "revoked", revokeReason: reason }),
+    })
+    await transaction.insert(eventLog).values({
+      userId,
+      type: "authority.revoked",
+      summary: `${grant.ref}: REVOKED — ${reason}`,
+      register: "authority",
+      refId: grant.id,
+    })
+    return "RECORDED" as const
+  })
+  revalidatePath("/goal-console")
+  revalidatePath("/governance")
+  return {
+    status: result,
+    message: result === "RECORDED"
+      ? "Acceptance proof authority revoked."
+      : result === "REPLAYED"
+        ? "The acceptance authority is already revoked."
+        : "The revocation proof is not ready.",
+  }
+}
+
 async function runtimeMutation(input: OutcomeQueueMutationInput, userId: string) {
   const adapter = await import("@/scripts/hermes-bridge/outcome-queue-source.mjs") as {
     mutateOutcomeQueueItem?: (input: Record<string, unknown>) => Promise<QueueMutationRuntimeResult>
@@ -290,6 +644,27 @@ export async function mutateOutcomeQueue(
       status: "INVALID",
       message: "The queue decision payload is invalid.",
       outcomeKey: null,
+      version: null,
+    }
+  }
+  if (isV12AcceptanceAuthorityScope(validated.outcomeKey)) {
+    return {
+      status: "INVALID",
+      message: "Use the bounded V1.2 acceptance authority controls.",
+      outcomeKey: validated.outcomeKey,
+      version: null,
+    }
+  }
+  if (
+    validated.action === "reorder"
+    && validated.orderedOutcomes?.some((entry) => (
+      isV12AcceptanceAuthorityScope(entry.outcomeKey)
+    ))
+  ) {
+    return {
+      status: "INVALID",
+      message: "V1.2 acceptance proof rows cannot be reordered.",
+      outcomeKey: validated.outcomeKey,
       version: null,
     }
   }
