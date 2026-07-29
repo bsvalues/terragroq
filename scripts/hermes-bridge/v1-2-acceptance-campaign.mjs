@@ -195,6 +195,9 @@ const BLOCKED_CANDIDATES_SQL = `
 SELECT
   q."outcomeKey",
   q."lifecycleState",
+  q."approvalState",
+  q."authorityState",
+  q."riskClass",
   (
     SELECT count(*)::integer
     FROM "outcome_queue_acquisition_receipt" receipt
@@ -481,7 +484,7 @@ function validateOutcome(outcome, expectedOrdinal) {
 }
 
 function validateBlockedCandidates(candidates) {
-  if (!Array.isArray(candidates) || candidates.length < 2) {
+  if (!Array.isArray(candidates) || candidates.length < 3) {
     return failure("BLOCKED_NONSELECTION_EVIDENCE_MISSING")
   }
   const reasons = new Set()
@@ -493,14 +496,23 @@ function validateBlockedCandidates(candidates) {
       "reason",
     ])
       || !nonempty(candidate.outcomeKey)
-      || !["BLOCKED_DEPENDENCY", "BLOCKED_AUTHORITY"].includes(candidate.reason)
+      || ![
+        "BLOCKED_DEPENDENCY",
+        "BLOCKED_AUTHORITY",
+        "BLOCKED_NON_R0_R1_POLICY",
+      ].includes(candidate.reason)
       || !["approved", "blocked", "paused"].includes(candidate.lifecycleState)
       || candidate.acquisitionCount !== 0) {
       return failure("BLOCKED_NONSELECTION_EVIDENCE_INVALID", candidate?.outcomeKey ?? null)
     }
     reasons.add(candidate.reason)
   }
-  return ["BLOCKED_DEPENDENCY", "BLOCKED_AUTHORITY"].every((reason) => reasons.has(reason))
+  return [
+    "BLOCKED_DEPENDENCY",
+    "BLOCKED_AUTHORITY",
+    "BLOCKED_NON_R0_R1_POLICY",
+  ]
+    .every((reason) => reasons.has(reason))
     ? success()
     : failure("BLOCKED_NONSELECTION_CLASS_INCOMPLETE")
 }
@@ -982,12 +994,16 @@ function verifyBlockedRows(claims, rows) {
     const row = rows.find((candidate) => candidate.outcomeKey === claim.outcomeKey)
     const blockedByDependency = Number(row?.blockedDependencyCount) > 0
     const blockedByAuthority = row?.authorityEligible !== true
+    const blockedByRiskPolicy = !["R0", "R1"].includes(row?.riskClass)
+      && row?.approvalState === "unapproved"
+      && row?.authorityState === "unverified"
     if (!row
       || row.lifecycleState !== claim.lifecycleState
       || Number(row.acquisitionCount) !== 0
       || claim.acquisitionCount !== 0
       || (claim.reason === "BLOCKED_DEPENDENCY" && !blockedByDependency)
-      || (claim.reason === "BLOCKED_AUTHORITY" && !blockedByAuthority)) {
+      || (claim.reason === "BLOCKED_AUTHORITY" && !blockedByAuthority)
+      || (claim.reason === "BLOCKED_NON_R0_R1_POLICY" && !blockedByRiskPolicy)) {
       return failure("LIVE_BLOCKED_NONSELECTION_MISMATCH", claim.outcomeKey)
     }
   }

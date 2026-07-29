@@ -124,6 +124,12 @@ function claims() {
         outcomeKey: "blocked-authority",
         reason: "BLOCKED_AUTHORITY",
       },
+      {
+        acquisitionCount: 0,
+        lifecycleState: "blocked",
+        outcomeKey: "blocked-risk",
+        reason: "BLOCKED_NON_R0_R1_POLICY",
+      },
     ],
     campaign: "WILLIAMOS-V1.2-TWO-OUTCOME",
     campaignRunId: "v1-2-campaign-run-001",
@@ -294,6 +300,9 @@ function liveBundle() {
       acquisitionCount: 0,
       blockedDependencyCount: 0,
       authorityEligible: false,
+      approvalState: "approved",
+      authorityState: "matched",
+      riskClass: "R0",
     },
     {
       outcomeKey: "blocked-dependency",
@@ -301,6 +310,19 @@ function liveBundle() {
       acquisitionCount: 0,
       blockedDependencyCount: 1,
       authorityEligible: true,
+      approvalState: "approved",
+      authorityState: "matched",
+      riskClass: "R0",
+    },
+    {
+      outcomeKey: "blocked-risk",
+      lifecycleState: "blocked",
+      acquisitionCount: 0,
+      blockedDependencyCount: 0,
+      authorityEligible: false,
+      approvalState: "unapproved",
+      authorityState: "unverified",
+      riskClass: "R2",
     },
   ]
   const mutationRows = document.mutations.map((mutation) => {
