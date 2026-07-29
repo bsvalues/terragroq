@@ -3248,6 +3248,15 @@ function protectedDestinationOrders(snapshot, ordered) {
     if (segmentIndexes.length === 0) continue
     const leftOrder = leftIndex >= 0 ? snapshot[leftIndex].queueOrder : null
     const rightOrder = rightIndex < snapshot.length ? snapshot[rightIndex].queueOrder : null
+    const segmentIsUnchanged = segmentIndexes.every((index) => (
+      ordered[index].outcomeKey === snapshot[index].outcomeKey
+    ))
+    if (segmentIsUnchanged) {
+      segmentIndexes.forEach((index) => {
+        destinations[index] = snapshot[index].queueOrder
+      })
+      continue
+    }
     const requestedOrders = segmentIndexes.map((index) => (
       snapshot.find((row) => row.outcomeKey === ordered[index].outcomeKey)?.queueOrder
     ))

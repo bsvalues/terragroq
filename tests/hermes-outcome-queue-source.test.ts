@@ -2531,6 +2531,71 @@ describe("governed outcome queue mutations", () => {
     })
   })
 
+  it("preserves an unchanged tied segment while unrelated rows reorder", async () => {
+    const first = queueRow({
+      outcomeKey: "goal:GOAL-1300",
+      lifecycleState: "approved",
+      queueOrder: 0,
+      version: 3,
+    })
+    const firstProtected = queueRow({
+      id: 2,
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      lifecycleState: "suggested",
+      queueOrder: 10,
+      version: 0,
+    })
+    const tied = queueRow({
+      id: 3,
+      outcomeKey: "goal:GOAL-1301",
+      lifecycleState: "approved",
+      queueOrder: 10,
+      version: 5,
+    })
+    const secondProtected = queueRow({
+      id: 4,
+      outcomeKey: "campaign:v1-2:runtime-continuity-status",
+      lifecycleState: "suggested",
+      queueOrder: 11,
+      version: 0,
+    })
+    const last = queueRow({
+      id: 5,
+      outcomeKey: "goal:GOAL-1302",
+      lifecycleState: "approved",
+      queueOrder: 20,
+      version: 7,
+    })
+    const query = mutationQuery({
+      snapshot: [first, firstProtected, tied, secondProtected, last],
+    })
+
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "reorder",
+      outcomeKey: first.outcomeKey,
+      expectedVersion: 3,
+      idempotencyKey: "reorder-around-unchanged-tied-segment",
+      orderedOutcomes: [
+        { outcomeKey: last.outcomeKey, expectedVersion: 7 },
+        { outcomeKey: firstProtected.outcomeKey, expectedVersion: 0 },
+        { outcomeKey: tied.outcomeKey, expectedVersion: 5 },
+        { outcomeKey: secondProtected.outcomeKey, expectedVersion: 0 },
+        { outcomeKey: first.outcomeKey, expectedVersion: 3 },
+      ],
+      now,
+    })).resolves.toMatchObject({
+      outcome: { outcomeKey: first.outcomeKey, queueOrder: 12, version: 4 },
+      affectedOutcomes: [
+        { outcomeKey: last.outcomeKey, queueOrder: 9, version: 8 },
+        { outcomeKey: first.outcomeKey, queueOrder: 12, version: 4 },
+      ],
+    })
+    expect(query.mock.calls.filter(([sql]) => sql === OUTCOME_QUEUE_SQL.reorderMutation))
+      .toHaveLength(2)
+  })
+
   it("updates dependencies under the queue lock and rejects missing references and cycles", async () => {
     const target = queueRow({
       lifecycleState: "suggested",
