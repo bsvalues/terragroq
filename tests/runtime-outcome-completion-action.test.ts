@@ -1,15 +1,20 @@
-import { sql, type SQL } from "drizzle-orm"
+import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm"
+import { drizzle } from "drizzle-orm/node-postgres"
 import { PgDialect } from "drizzle-orm/pg-core"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+
+import { outcomeQueueAcquisitionReceipt } from "@/lib/db/schema"
 
 const boundary = vi.hoisted(() => ({
   getUserId: vi.fn(),
   select: vi.fn(),
+  selectDistinctOn: vi.fn(),
 }))
 
 vi.mock("@/lib/db", () => ({
   db: {
     select: boundary.select,
+    selectDistinctOn: boundary.selectDistinctOn,
   },
 }))
 
@@ -46,14 +51,14 @@ function renderSql(expression: SQL): {
 }
 
 function renderOrderBy(call: unknown[]): string {
-  const [first, second] = call as [SQL, SQL]
-  return renderSql(sql`${first}, ${second}`).sql
+  return renderSql(sql.join(call as SQL[], sql`, `)).sql
 }
 
 describe("recent outcome completion action boundary", () => {
   beforeEach(() => {
     boundary.getUserId.mockReset()
     boundary.select.mockReset()
+    boundary.selectDistinctOn.mockReset()
   })
 
   it("reads and binds one user-owned completion continuity chain", async () => {
@@ -97,14 +102,6 @@ describe("recent outcome completion action boundary", () => {
       latestFencingToken: 9,
       createdAt: acquiredAt,
       updatedAt: acquiredAt,
-    }, {
-      id: 28,
-      userId,
-      outcomeKey: successorKey,
-      firstFencingToken: 10,
-      latestFencingToken: 10,
-      createdAt: new Date("2026-07-28T12:07:00.000Z"),
-      updatedAt: new Date("2026-07-28T12:07:00.000Z"),
     }])
     const dependencyMutationQuery = fluentQuery([])
 
@@ -112,8 +109,8 @@ describe("recent outcome completion action boundary", () => {
     boundary.select
       .mockReturnValueOnce(completionQuery)
       .mockReturnValueOnce(candidateQuery)
-      .mockReturnValueOnce(receiptQuery)
       .mockReturnValueOnce(dependencyMutationQuery)
+    boundary.selectDistinctOn.mockReturnValueOnce(receiptQuery)
 
     const timeline = await getRecentOutcomeCompletionTimeline()
 
@@ -134,12 +131,22 @@ describe("recent outcome completion action boundary", () => {
 
     expect(receiptQuery.orderBy).toHaveBeenCalledOnce()
     expect(renderOrderBy(receiptQuery.orderBy.mock.calls[0]))
-      .toMatch(/"createdAt"\s+ASC.+?"id"\s+ASC/i)
+      .toMatch(
+        /"userId"\s+ASC.+?"outcomeKey"\s+ASC.+?"createdAt"\s+ASC.+?"id"\s+ASC/i,
+      )
     expect(receiptQuery.limit).not.toHaveBeenCalled()
     const receiptBoundary = renderSql(receiptQuery.where.mock.calls[0][0] as SQL)
     expect(receiptBoundary.params[0]).toBe(userId)
     expect(receiptBoundary.params).toContain(successorKey)
-    expect(Object.keys(boundary.select.mock.calls[2][0])).toEqual([
+    expect(boundary.selectDistinctOn.mock.calls[0][0]).toEqual([
+      expect.objectContaining({
+        name: "userId",
+      }),
+      expect.objectContaining({
+        name: "outcomeKey",
+      }),
+    ])
+    expect(Object.keys(boundary.selectDistinctOn.mock.calls[0][1])).toEqual([
       "id",
       "userId",
       "outcomeKey",
@@ -158,12 +165,13 @@ describe("recent outcome completion action boundary", () => {
       "dependencies",
       successorKey,
     ])
-    expect(Object.keys(boundary.select.mock.calls[3][0])).toEqual([
+    expect(Object.keys(boundary.select.mock.calls[2][0])).toEqual([
       "id",
       "outcomeKey",
       "createdAt",
     ])
-    expect(boundary.select).toHaveBeenCalledTimes(4)
+    expect(boundary.select).toHaveBeenCalledTimes(3)
+    expect(boundary.selectDistinctOn).toHaveBeenCalledOnce()
 
     expect(timeline).toMatchObject({
       truncated: false,
@@ -189,6 +197,58 @@ describe("recent outcome completion action boundary", () => {
         },
       }],
     })
+  })
+
+  it("generates one deterministic earliest receipt per user-owned outcome", () => {
+    const query = drizzle.mock()
+      .selectDistinctOn(
+        [
+          outcomeQueueAcquisitionReceipt.userId,
+          outcomeQueueAcquisitionReceipt.outcomeKey,
+        ],
+        {
+          id: outcomeQueueAcquisitionReceipt.id,
+          userId: outcomeQueueAcquisitionReceipt.userId,
+          outcomeKey: outcomeQueueAcquisitionReceipt.outcomeKey,
+          firstFencingToken:
+            outcomeQueueAcquisitionReceipt.firstFencingToken,
+          latestFencingToken:
+            outcomeQueueAcquisitionReceipt.latestFencingToken,
+          createdAt: outcomeQueueAcquisitionReceipt.createdAt,
+          updatedAt: outcomeQueueAcquisitionReceipt.updatedAt,
+        },
+      )
+      .from(outcomeQueueAcquisitionReceipt)
+      .where(and(
+        eq(outcomeQueueAcquisitionReceipt.userId, "user-runtime-11"),
+        inArray(outcomeQueueAcquisitionReceipt.outcomeKey, [
+          "outcome:first",
+          "outcome:second",
+        ]),
+      ))
+      .orderBy(
+        asc(outcomeQueueAcquisitionReceipt.userId),
+        asc(outcomeQueueAcquisitionReceipt.outcomeKey),
+        asc(outcomeQueueAcquisitionReceipt.createdAt),
+        asc(outcomeQueueAcquisitionReceipt.id),
+      )
+      .toSQL()
+
+    expect(query.sql).toMatch(
+      /^select distinct on \("outcome_queue_acquisition_receipt"\."userId", "outcome_queue_acquisition_receipt"\."outcomeKey"\).+from "outcome_queue_acquisition_receipt"/i,
+    )
+    expect(query.sql).toMatch(
+      /where \("outcome_queue_acquisition_receipt"\."userId" = \$1 and "outcome_queue_acquisition_receipt"\."outcomeKey" in \(\$2, \$3\)\)/i,
+    )
+    expect(query.sql).toMatch(
+      /order by "outcome_queue_acquisition_receipt"\."userId" asc, "outcome_queue_acquisition_receipt"\."outcomeKey" asc, "outcome_queue_acquisition_receipt"\."createdAt" asc, "outcome_queue_acquisition_receipt"\."id" asc$/i,
+    )
+    expect(query.params).toEqual([
+      "user-runtime-11",
+      "outcome:first",
+      "outcome:second",
+    ])
+    expect(query.sql).not.toContain("acquisitionKey")
   })
 
   it("fails closed when dependency audit changed after acquisition", async () => {
@@ -242,8 +302,8 @@ describe("recent outcome completion action boundary", () => {
     boundary.select
       .mockReturnValueOnce(completionQuery)
       .mockReturnValueOnce(candidateQuery)
-      .mockReturnValueOnce(receiptQuery)
       .mockReturnValueOnce(dependencyMutationQuery)
+    boundary.selectDistinctOn.mockReturnValueOnce(receiptQuery)
 
     const timeline = await getRecentOutcomeCompletionTimeline()
 
@@ -255,7 +315,8 @@ describe("recent outcome completion action boundary", () => {
       acquiredAt: null,
       fencingTokenRange: null,
     })
-    expect(boundary.select).toHaveBeenCalledTimes(4)
+    expect(boundary.select).toHaveBeenCalledTimes(3)
+    expect(boundary.selectDistinctOn).toHaveBeenCalledOnce()
   })
 
   it("does not read dependency audits for candidates without receipts", async () => {
@@ -294,12 +355,13 @@ describe("recent outcome completion action boundary", () => {
     boundary.select
       .mockReturnValueOnce(completionQuery)
       .mockReturnValueOnce(candidateQuery)
-      .mockReturnValueOnce(receiptQuery)
+    boundary.selectDistinctOn.mockReturnValueOnce(receiptQuery)
 
     const timeline = await getRecentOutcomeCompletionTimeline()
 
     expect(timeline.rows[0].successorEvidence.status).toBe("MISSING")
-    expect(boundary.select).toHaveBeenCalledTimes(3)
+    expect(boundary.select).toHaveBeenCalledTimes(2)
+    expect(boundary.selectDistinctOn).toHaveBeenCalledOnce()
   })
 
   it("returns the projector empty state without dependent or receipt reads", async () => {
@@ -313,6 +375,7 @@ describe("recent outcome completion action boundary", () => {
     })
     expect(boundary.getUserId).toHaveBeenCalledOnce()
     expect(boundary.select).toHaveBeenCalledOnce()
+    expect(boundary.selectDistinctOn).not.toHaveBeenCalled()
     expect(completionQuery.limit).toHaveBeenCalledWith(6)
   })
 })

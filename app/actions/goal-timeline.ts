@@ -460,7 +460,13 @@ Promise<RecentOutcomeCompletionTimeline> {
   const receiptRows = candidateOutcomeKeys.length === 0
     ? []
     : await db
-      .select(OUTCOME_ACQUISITION_RECEIPT_SELECT)
+      .selectDistinctOn(
+        [
+          outcomeQueueAcquisitionReceipt.userId,
+          outcomeQueueAcquisitionReceipt.outcomeKey,
+        ],
+        OUTCOME_ACQUISITION_RECEIPT_SELECT,
+      )
       .from(outcomeQueueAcquisitionReceipt)
       .where(and(
         eq(outcomeQueueAcquisitionReceipt.userId, userId),
@@ -470,19 +476,15 @@ Promise<RecentOutcomeCompletionTimeline> {
         ),
       ))
       .orderBy(
+        asc(outcomeQueueAcquisitionReceipt.userId),
+        asc(outcomeQueueAcquisitionReceipt.outcomeKey),
         asc(outcomeQueueAcquisitionReceipt.createdAt),
         asc(outcomeQueueAcquisitionReceipt.id),
       )
 
-  const earliestReceiptByOutcomeKey = new Map<
-    string,
-    (typeof receiptRows)[number]
-  >()
-  for (const receipt of receiptRows) {
-    if (!earliestReceiptByOutcomeKey.has(receipt.outcomeKey)) {
-      earliestReceiptByOutcomeKey.set(receipt.outcomeKey, receipt)
-    }
-  }
+  const earliestReceiptByOutcomeKey = new Map(
+    receiptRows.map((receipt) => [receipt.outcomeKey, receipt]),
+  )
   const acquiredOutcomeKeys = [...earliestReceiptByOutcomeKey.keys()]
 
   const dependencyMutationRows = acquiredOutcomeKeys.length === 0
