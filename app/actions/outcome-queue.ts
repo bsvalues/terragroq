@@ -998,10 +998,14 @@ export async function revokeV12CampaignOutcomeAuthority(input: {
       return { status: "STALE" as const, version: item.version }
     }
     if (item.lifecycleState === "active"
+      || item.activeWorkOrderId != null
       || item.executionBinding != null
       || item.leaseHolder != null
       || item.leaseToken != null
-      || item.acquisitionKey != null) {
+      || item.leaseExpiresAt != null
+      || Number(item.fencingToken ?? 0) !== 0
+      || item.acquisitionKey != null
+      || item.activatedAt != null) {
       return { status: "ACTIVE" as const, version: item.version }
     }
     const now = new Date()

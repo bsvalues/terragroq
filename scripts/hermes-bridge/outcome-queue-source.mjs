@@ -4156,7 +4156,7 @@ export async function mutateOutcomeQueueItem({
         fail("OUTCOME_QUEUE_PROTECTED_SUPERSESSION_ILLEGAL")
       }
       if (request.action === "resume"
-        && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)
+        && V1_2_CAMPAIGN_OUTCOME_KEYS.has(current.outcomeKey)
         && !(
           current.lifecycleState === "blocked"
           && (

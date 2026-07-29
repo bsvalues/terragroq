@@ -771,6 +771,62 @@ describe("V1.2 campaign server authority boundaries", () => {
     expect(harness.transaction.update).not.toHaveBeenCalled()
   })
 
+  it("does not revoke a paused campaign with retained execution history", async () => {
+    const now = new Date("2026-07-29T22:00:00.000Z")
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    const grantDraft = v12CampaignGrant(
+      campaignScope,
+      "primary-1",
+      new Date(now.getTime() - 60_000),
+    )
+    const grant = {
+      id: 72,
+      ...grantDraft,
+      createdAt: new Date(grantDraft.createdAt),
+      expiresAt: new Date(grantDraft.expiresAt),
+    }
+    const approval = {
+      id: 71,
+      userId: "primary-1",
+      ...v12CampaignDecision(campaignScope),
+    }
+    const item = {
+      id: 31,
+      outcomeKey: campaignScope,
+      version: 2,
+      approvalDecisionId: 71,
+      authorityGrantRef: grant.ref,
+      authorityState: "matched",
+      lifecycleState: "blocked",
+      lifecycleReason: "Primary Operator paused this outcome.",
+      activeWorkOrderId: 472,
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 3,
+      acquisitionKey: null,
+      activatedAt: new Date("2026-07-29T21:00:00.000Z"),
+    }
+    const harness = transactionHarness([[item], [approval], [grant]])
+    boundary.dbTransaction.mockImplementation(
+      async (callback: (transaction: unknown) => Promise<unknown>) => (
+        callback(harness.transaction)
+      ),
+    )
+
+    await expect(revokeV12CampaignOutcomeAuthority({
+      outcomeKey: campaignScope,
+      expectedVersion: 2,
+    })).resolves.toMatchObject({
+      status: "INVALID",
+      message: "Pause this active outcome before revoking its authority.",
+      version: 2,
+    })
+    expect(harness.transaction.update).not.toHaveBeenCalled()
+  })
+
   it("rejects an authenticated non-Primary session before opening a transaction", async () => {
     boundary.getSession.mockResolvedValue({
       user: { id: "diagnostic-1", email: "test+wo@example.com" },
