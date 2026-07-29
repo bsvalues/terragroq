@@ -138,6 +138,9 @@ describe("operator outcome queue panel accessibility contract", () => {
     expect(source).toContain("&& row.availableAuthorityGrantRef === row.authorityGrantRef")
     expect(source).toContain("const declineAvailable = !row.hasRetainedRuntimeHistory")
     expect(source).toContain("&& !row.hasRetainedRuntimeHistory")
+    expect(source).toContain(
+      'campaignAuthorityProposal\n                      && row.lifecycleState !== "active"\n                      && !row.hasRetainedRuntimeHistory',
+    )
     expect(source).toContain("|| row.availableAuthorityGrantRef !== row.authorityGrantRef")
     expect(source).toContain("{declineAvailable ? (")
     expect(actionSource).toContain("isCanonicalV12CampaignCandidate")

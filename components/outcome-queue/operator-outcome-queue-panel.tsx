@@ -534,7 +534,7 @@ export function OperatorOutcomeQueuePanel({
                       ) : null}
                     {(row.lifecycleState === "approved" || manuallyPausedCampaign)
                       && campaignAuthorityProposal
-                      && !row.hasRetainedRuntimeHistory
+                      && !row.hasRetainedRuntimeBindings
                       && row.authorityState === "matched"
                       && row.authorityGrantRef !== null
                       && row.availableAuthorityGrantRef === null ? (
@@ -551,7 +551,7 @@ export function OperatorOutcomeQueuePanel({
                       ) : null}
                     {campaignAuthorityProposal
                       && row.lifecycleState !== "active"
-                      && !row.hasRetainedRuntimeBindings
+                      && !row.hasRetainedRuntimeHistory
                       && row.authorityState === "matched"
                       && row.authorityGrantRef !== null
                       && row.availableAuthorityGrantRef === row.authorityGrantRef ? (
