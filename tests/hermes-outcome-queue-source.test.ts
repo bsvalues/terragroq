@@ -2282,7 +2282,10 @@ describe("transactional durable outcome queue source", () => {
       leaseToken: "lease-after-renewal",
       leaseDurationMs: 50 * 60 * 1000,
       now,
-    })).resolves.toEqual(resumed)
+    })).resolves.toEqual({
+      ...resumed,
+      authorityRenewalApplied: true,
+    })
 
     const resumeCalls = query.mock.calls.filter(
       ([sql]) => sql === OUTCOME_QUEUE_SQL.resumeAfterDecision,

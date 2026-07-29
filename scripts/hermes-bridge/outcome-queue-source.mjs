@@ -3373,7 +3373,10 @@ export async function resumeOutcomeQueueAfterDecision({
       if (renewedResult?.rows?.length === 1) {
         await connection.query("COMMIT")
         begun = false
-        return renewedResult.rows[0]
+        return {
+          ...renewedResult.rows[0],
+          authorityRenewalApplied: true,
+        }
       }
     }
     const replay = await connection.query(OUTCOME_QUEUE_SQL.replayResumeAfterDecision, [
@@ -3392,7 +3395,9 @@ export async function resumeOutcomeQueueAfterDecision({
     if (replay?.rows?.length !== 1) fail("OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL")
     await connection.query("COMMIT")
     begun = false
-    return replay.rows[0]
+    return renewed.has(key)
+      ? { ...replay.rows[0], authorityRenewalApplied: true }
+      : replay.rows[0]
   } catch (error) {
     if (begun) {
       try {

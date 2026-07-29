@@ -294,13 +294,14 @@ function isExactProviderDeferral(item, binding, retryAfter, holderId) {
 }
 
 function isExactOwnerDecisionResume(item, binding, holderId, at) {
+  const renewalIncrement = item?.authorityRenewalApplied === true ? 1 : 0
   return item?.userId === binding.userId
     && item.outcomeKey === binding.outcomeKey
     && item.lifecycleState === "active"
     && item.lifecycleReason === "OWNER_DECISION_RESUMED"
     && item.approvalState === "approved"
     && item.authorityState === "matched"
-    && Number(item.version) === binding.expectedVersion + 2
+    && Number(item.version) === binding.expectedVersion + 2 + renewalIncrement
     && item.executionBinding === binding.executionBinding
     && item.acquisitionKey === binding.acquisitionKey
     && Number(item.fencingToken) === binding.fencingToken + 1
