@@ -22,6 +22,7 @@ import {
   ACCEPTANCE_OUTCOME_KEYS,
   acceptanceCampaignIdempotencyKey,
   acceptanceCampaignOutcomeKey,
+  acceptanceCampaignSuccessorKey,
 } from "./v1-2-acceptance-exercise.mjs"
 
 const SCHEMA_VERSION = 1
@@ -408,6 +409,32 @@ function sameStrings(left, right) {
   return Array.isArray(left)
     && Array.isArray(right)
     && JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
+}
+
+function sameCanonical(left, right) {
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right))
+}
+
+function mutationOutcomeProjection(row) {
+  return {
+    activeWorkOrderId: row?.activeWorkOrderId ?? null,
+    approvalDecisionId: row?.approvalDecisionId ?? null,
+    approvalState: row?.approvalState ?? null,
+    authorityGrantRef: row?.authorityGrantRef ?? null,
+    authorityState: row?.authorityState ?? null,
+    dependencyKeys: [...(row?.dependencyKeys ?? [])].sort(),
+    lifecycleState: row?.lifecycleState ?? null,
+    outcomeKey: row?.outcomeKey ?? null,
+    queueOrder: Number(row?.queueOrder),
+    supersededByOutcomeKey: row?.supersededByOutcomeKey ?? null,
+    supersedesOutcomeKey: row?.supersedesOutcomeKey ?? null,
+    terminalAt: row?.terminalAt ?? null,
+    terminalEvidenceId: row?.terminalEvidenceId ?? null,
+    terminalEvidenceRefs: [...(row?.terminalEvidenceRefs ?? [])].sort(),
+    terminalKey: row?.terminalKey ?? null,
+    terminalResult: row?.terminalResult ?? null,
+    version: Number(row?.version),
+  }
 }
 
 function isUsefulProductFile(file) {
@@ -1262,7 +1289,7 @@ function verifyAcquisitionAttempts(
   })
 }
 
-export function verifyMutationRows(claims, rows, attempts, campaignRunId) {
+export function verifyMutationRows(claims, rows, attempts, campaignRunId, userId) {
   if (rows.length !== claims.length) return failure("LIVE_MUTATION_RECEIPT_CARDINALITY_WALL")
   if (attempts.length !== claims.length * 2) {
     return failure("LIVE_MUTATION_ATTEMPT_CARDINALITY_WALL")
@@ -1287,6 +1314,45 @@ export function verifyMutationRows(claims, rows, attempts, campaignRunId) {
     )
     const first = matchingAttempts.find((attempt) => Number(attempt.attemptOrdinal) === 1)
     const replay = matchingAttempts.find((attempt) => Number(attempt.attemptOrdinal) === 2)
+    const expectedSuccessorKey = operation === "supersede"
+      ? acceptanceCampaignSuccessorKey(userId, campaignRunId)
+      : null
+    const resultOutcome = mutationOutcomeProjection(row?.resultBinding?.outcome)
+    const resultSuccessor = mutationOutcomeProjection(row?.resultBinding?.successor)
+    const affectedOutcomes = row?.resultBinding?.affectedOutcomes ?? []
+    const supersedeBindingValid = operation !== "supersede" || (
+      resultOutcome.outcomeKey === expectedOutcomeKey
+      && resultOutcome.supersededByOutcomeKey === expectedSuccessorKey
+      && resultOutcome.lifecycleState === "superseded"
+      && resultOutcome.terminalResult === "SUPERSEDED"
+      && resultOutcome.terminalAt !== null
+      && Number.isSafeInteger(resultOutcome.version)
+      && resultOutcome.version > 0
+      && resultSuccessor.outcomeKey === expectedSuccessorKey
+      && resultSuccessor.supersedesOutcomeKey === expectedOutcomeKey
+      && resultSuccessor.supersededByOutcomeKey === null
+      && resultSuccessor.lifecycleState === "suggested"
+      && resultSuccessor.approvalDecisionId === null
+      && resultSuccessor.approvalState === "unapproved"
+      && resultSuccessor.authorityGrantRef === null
+      && resultSuccessor.authorityState === "unverified"
+      && resultSuccessor.activeWorkOrderId === null
+      && resultSuccessor.terminalAt === null
+      && resultSuccessor.terminalResult === null
+      && resultSuccessor.terminalEvidenceId === null
+      && resultSuccessor.terminalEvidenceRefs.length === 0
+      && resultSuccessor.terminalKey === null
+      && resultSuccessor.version === 0
+      && sameStrings(
+        resultSuccessor.dependencyKeys,
+        [ACCEPTANCE_OUTCOME_KEYS.safetyBlocker],
+      )
+      && affectedOutcomes.length === 2
+      && sameCanonical(
+        affectedOutcomes.map(mutationOutcomeProjection),
+        [resultOutcome, resultSuccessor],
+      )
+    )
     if (claim.targetOutcomeKey !== expectedOutcomeKey
       || !row
       || matchingAttempts.length !== 2
@@ -1300,6 +1366,7 @@ export function verifyMutationRows(claims, rows, attempts, campaignRunId) {
       || row.requestBinding?.action !== operation
       || row.requestBinding?.outcomeKey !== claim.targetOutcomeKey
       || row.resultBinding?.outcome?.outcomeKey !== claim.targetOutcomeKey
+      || !supersedeBindingValid
       || Number(first.id) !== claim.firstAttemptId
       || Number(replay.id) !== claim.replayAttemptId
       || first.requestHash !== row.requestHash
@@ -1433,6 +1500,7 @@ export async function verifyLiveCampaignRecords({
       mutationsResult.rows ?? [],
       mutationAttemptsResult.rows ?? [],
       claims.campaignRunId,
+      userId,
     )
     if (!mutations.ok) return mutations
     const localAfter = typeof rereadLocalState === "function" ? rereadLocalState() : localState

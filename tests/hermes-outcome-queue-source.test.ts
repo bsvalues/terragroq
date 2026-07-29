@@ -2777,7 +2777,7 @@ describe("governed outcome queue mutations", () => {
       replayAttemptId: 45,
       mutationCount: 1,
       mutationCountAfterReplay: 1,
-    }], [receipt], attempts, campaignRunId)).toMatchObject({ ok: true })
+    }], [receipt], attempts, campaignRunId, userId)).toMatchObject({ ok: true })
 
     await expect(mutateOutcomeQueueItem({
       ...input,

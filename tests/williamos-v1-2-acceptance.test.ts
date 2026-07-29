@@ -22,6 +22,7 @@ import {
   ACCEPTANCE_OUTCOME_KEYS,
   acceptanceCampaignIdempotencyKey,
   acceptanceCampaignOutcomeKey,
+  acceptanceCampaignSuccessorKey,
 } from "../scripts/hermes-bridge/v1-2-acceptance-exercise.mjs"
 
 const revision = "a".repeat(40)
@@ -30,6 +31,7 @@ const fresh = "2026-07-28T18:59:00.000Z"
 const productionAuthCookie = "better-auth.session_token=opaque-test-value"
 const roots: string[] = []
 const campaignRunId = "v1-2-campaign-run-001"
+const primaryUserId = "primary-1"
 const campaignSource = fs.readFileSync(
   new URL("../scripts/hermes-bridge/v1-2-acceptance-campaign.mjs", import.meta.url),
   "utf8",
@@ -60,6 +62,50 @@ function counters() {
     OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
     OWNER_ROUTINE_DECISION_COUNT: 0,
     OWNER_ROUTINE_CONTACT_COUNT: 0,
+  }
+}
+
+function mutationResultBinding(action: string, outcomeKey: string) {
+  if (action.toLowerCase() !== "supersede") {
+    return {
+      affectedOutcomes: [{ outcomeKey, version: 2 }],
+      outcome: { outcomeKey, version: 2 },
+      successor: null,
+    }
+  }
+  const successorKey = acceptanceCampaignSuccessorKey(
+    primaryUserId,
+    campaignRunId,
+  )
+  const outcome = {
+    lifecycleState: "superseded",
+    outcomeKey,
+    supersededByOutcomeKey: successorKey,
+    terminalAt: "2026-07-28T18:40:00.000Z",
+    terminalResult: "SUPERSEDED",
+    version: 2,
+  }
+  const successor = {
+    activeWorkOrderId: null,
+    approvalDecisionId: null,
+    approvalState: "unapproved",
+    authorityGrantRef: null,
+    authorityState: "unverified",
+    dependencyKeys: [ACCEPTANCE_OUTCOME_KEYS.safetyBlocker],
+    lifecycleState: "suggested",
+    outcomeKey: successorKey,
+    supersedesOutcomeKey: outcomeKey,
+    terminalAt: null,
+    terminalEvidenceId: null,
+    terminalEvidenceRefs: [],
+    terminalKey: null,
+    terminalResult: null,
+    version: 0,
+  }
+  return {
+    affectedOutcomes: [outcome, successor],
+    outcome,
+    successor,
   }
 }
 
@@ -110,11 +156,6 @@ function claims() {
       ? ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked
       : acceptanceCampaignOutcomeKey(action.toLowerCase(), campaignRunId)
   )
-  const mutationResult = (action: string) => ({
-    affectedOutcomes: [{ outcomeKey: mutationTarget(action), version: 2 }],
-    outcome: { outcomeKey: mutationTarget(action), version: 2 },
-    successor: null,
-  })
   return {
     automaticSuccessor: {
       acquiredOutcomeId: 82,
@@ -179,7 +220,7 @@ function claims() {
         replayAttemptId: 802 + (index * 2),
         requestHash: digest(`request-${action}`),
         result: "PASS",
-        resultDigest: digest(mutationResult(action)),
+        resultDigest: digest(mutationResultBinding(action, mutationTarget(action))),
         targetOutcomeKey: mutationTarget(action),
       }),
     ),
@@ -340,11 +381,10 @@ function liveBundle() {
     },
   ]
   const mutationRows = document.mutations.map((mutation) => {
-    const resultBinding = {
-      affectedOutcomes: [{ outcomeKey: mutation.targetOutcomeKey, version: 2 }],
-      outcome: { outcomeKey: mutation.targetOutcomeKey, version: 2 },
-      successor: null,
-    }
+    const resultBinding = mutationResultBinding(
+      mutation.action,
+      mutation.targetOutcomeKey,
+    )
     return {
       id: mutation.receiptId,
       idempotencyKey: acceptanceCampaignIdempotencyKey(
@@ -941,6 +981,42 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
       query: campaignQuery(bundle),
     })
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true })
+  })
+
+  it("rejects a self-consistent but noncanonical supersede successor lineage", async () => {
+    const bundle = liveBundle()
+    const claim = bundle.document.mutations.find(
+      (mutation) => mutation.action === "SUPERSEDE",
+    )
+    const row = bundle.mutationRows.find(
+      (mutation) => mutation.operation === "supersede",
+    )
+    if (!claim || !row) throw new Error("missing supersede proof")
+
+    const forgedSuccessorKey = "outcome:successor:forged"
+    row.resultBinding.outcome.supersededByOutcomeKey = forgedSuccessorKey
+    row.resultBinding.successor.outcomeKey = forgedSuccessorKey
+    row.resultBinding.successor.supersedesOutcomeKey = "outcome:forged-source"
+    row.resultBinding.affectedOutcomes[0].supersededByOutcomeKey = forgedSuccessorKey
+    row.resultBinding.affectedOutcomes[1].outcomeKey = forgedSuccessorKey
+    row.resultBinding.affectedOutcomes[1].supersedesOutcomeKey = "outcome:forged-source"
+    const forgedDigest = digest(row.resultBinding)
+    claim.resultDigest = forgedDigest
+    bundle.mutationAttempts
+      .filter((attempt) => attempt.idempotencyKey === row.idempotencyKey)
+      .forEach((attempt) => {
+        attempt.resultDigest = forgedDigest
+      })
+
+    const result = await verifyLiveCampaignRecords({
+      claims: bundle.document,
+      localState: bundle.state,
+      supervisorState: supervisorState(path.resolve("workspace")),
+      rereadLocalState: () => structuredClone(bundle.state),
+      now,
+      query: campaignQuery(bundle),
+    })
+    expect(result.code).toBe("LIVE_MUTATION_REPLAY_MISMATCH")
   })
 
   it("fails when the supervisor campaign identity is not the persisted campaign window", async () => {

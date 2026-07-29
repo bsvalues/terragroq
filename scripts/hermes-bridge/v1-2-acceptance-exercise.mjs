@@ -142,6 +142,14 @@ export function acceptanceCampaignIdempotencyKey(action, campaignWindowId) {
   return `${IDEMPOTENCY_PREFIX}:${digest(campaignWindowId).slice(0, 24)}:${action}`
 }
 
+export function acceptanceCampaignSuccessorKey(userId, campaignWindowId) {
+  const idempotency = acceptanceCampaignIdempotencyKey(
+    "supersede",
+    campaignWindowId,
+  )
+  return `outcome:successor:${digest(`${userId}:${idempotency}`).slice(0, 24)}`
+}
+
 function mutationSummary(action, evidence) {
   const receipt = evidence.receipt
   const attempts = evidence.attempts
@@ -229,7 +237,112 @@ function authorityReady(row) {
     && row.authorityGrantRef.length > 0
 }
 
-function topologyMatches(row, candidate) {
+function canonical(value) {
+  if (value instanceof Date) return value.toISOString()
+  if (Array.isArray(value)) return value.map(canonical)
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, canonical(value[key])]),
+    )
+  }
+  return value
+}
+
+function sameValue(left, right) {
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right))
+}
+
+function mutationOutcomeProjection(row) {
+  return {
+    activeWorkOrderId: row?.activeWorkOrderId ?? null,
+    approvalDecisionId: row?.approvalDecisionId ?? null,
+    approvalState: row?.approvalState ?? null,
+    authorityGrantRef: row?.authorityGrantRef ?? null,
+    authorityState: row?.authorityState ?? null,
+    dependencyKeys: [...(row?.dependencyKeys ?? [])].sort(),
+    lifecycleState: row?.lifecycleState ?? null,
+    outcomeKey: row?.outcomeKey ?? null,
+    queueOrder: Number(row?.queueOrder),
+    supersededByOutcomeKey: row?.supersededByOutcomeKey ?? null,
+    supersedesOutcomeKey: row?.supersedesOutcomeKey ?? null,
+    terminalAt: row?.terminalAt ?? null,
+    terminalEvidenceId: row?.terminalEvidenceId ?? null,
+    terminalEvidenceRefs: [...(row?.terminalEvidenceRefs ?? [])].sort(),
+    terminalKey: row?.terminalKey ?? null,
+    terminalResult: row?.terminalResult ?? null,
+    version: Number(row?.version),
+  }
+}
+
+function receiptMatchesCandidate(
+  receipt,
+  candidate,
+  campaignWindowId,
+  userId,
+) {
+  if (!receipt || !campaignWindowId
+    || !MUTATION_CANDIDATE_TEMPLATES.some(
+      (template) => template.name === candidate.name,
+    )) return false
+  const result = receipt.resultBinding
+  if (receipt.idempotencyKey !== acceptanceCampaignIdempotencyKey(
+    candidate.name,
+    campaignWindowId,
+  )
+    || receipt.operation !== candidate.name
+    || receipt.outcomeKey !== candidate.key
+    || receipt.requestBinding?.action !== candidate.name
+    || receipt.requestBinding?.outcomeKey !== candidate.key
+    || result?.outcome?.outcomeKey !== candidate.key) return false
+
+  if (candidate.name === "decline") {
+    return result.successor === null
+      && Array.isArray(result.affectedOutcomes)
+      && result.affectedOutcomes.length === 1
+      && sameValue(
+        mutationOutcomeProjection(result.affectedOutcomes[0]),
+        mutationOutcomeProjection(result.outcome),
+      )
+  }
+  if (candidate.name !== "supersede") return true
+
+  const successorKey = acceptanceCampaignSuccessorKey(
+    userId,
+    campaignWindowId,
+  )
+  const successor = mutationOutcomeProjection(result.successor)
+  return result.outcome?.supersededByOutcomeKey === successorKey
+    && successor.outcomeKey === successorKey
+    && successor.supersedesOutcomeKey === candidate.key
+    && successor.lifecycleState === "suggested"
+    && successor.approvalDecisionId === null
+    && successor.approvalState === "unapproved"
+    && successor.authorityGrantRef === null
+    && successor.authorityState === "unverified"
+    && successor.activeWorkOrderId === null
+    && successor.terminalAt === null
+    && successor.terminalResult === null
+    && successor.terminalEvidenceId === null
+    && successor.terminalEvidenceRefs.length === 0
+    && successor.terminalKey === null
+    && successor.supersededByOutcomeKey === null
+    && successor.version === 0
+    && sameValue(successor.dependencyKeys, [...candidate.dependencyKeys].sort())
+    && Array.isArray(result.affectedOutcomes)
+    && result.affectedOutcomes.length === 2
+    && sameValue(
+      result.affectedOutcomes.map(mutationOutcomeProjection),
+      [result.outcome, result.successor].map(mutationOutcomeProjection),
+    )
+}
+
+function topologyMatches(
+  row,
+  candidate,
+  receipt = null,
+  campaignWindowId = null,
+  userId = null,
+) {
   if (row === null
     || JSON.stringify([...(row.dependencyKeys ?? [])].sort())
       !== JSON.stringify([...candidate.dependencyKeys].sort())
@@ -257,7 +370,41 @@ function topologyMatches(row, candidate) {
     return ["suggested", "approved", "blocked"].includes(row.lifecycleState)
       && row.terminalAt === null
   }
-  return true
+  const canonicalSuggestion = row.lifecycleState === "suggested"
+    && row.approvalState === "unapproved"
+    && row.authorityState === "unverified"
+    && row.approvalDecisionId == null
+    && row.authorityGrantRef == null
+    && row.activeWorkOrderId == null
+    && row.terminalAt === null
+    && row.terminalResult == null
+    && row.terminalEvidenceId == null
+    && (row.terminalEvidenceRefs?.length ?? 0) === 0
+    && row.terminalKey == null
+    && row.supersedesOutcomeKey == null
+    && row.supersededByOutcomeKey == null
+  if (canonicalSuggestion) return true
+  if (!receiptMatchesCandidate(
+    receipt,
+    candidate,
+    campaignWindowId,
+    userId,
+  )) return false
+  if (!sameValue(
+    mutationOutcomeProjection(row),
+    mutationOutcomeProjection(receipt.resultBinding.outcome),
+  )) return false
+  if (candidate.name === "decline") {
+    return row.lifecycleState === "declined"
+      && row.terminalResult === "DECLINED"
+      && row.terminalAt !== null
+  }
+  if (candidate.name === "supersede") {
+    return row.lifecycleState === "superseded"
+      && row.terminalResult === "SUPERSEDED"
+      && row.terminalAt !== null
+  }
+  return false
 }
 
 export async function runAcceptanceExercise({
@@ -301,14 +448,33 @@ export async function runAcceptanceExercise({
       throw new Error(`V1_2_ACCEPTANCE_TOPOLOGY_WALL:${candidate.key}`)
     }
   }
-  const assertAcceptanceSafety = async (candidates, query) => {
+  const assertAcceptanceSafety = async (
+    candidates,
+    query,
+    campaignWindowId = null,
+  ) => {
     const current = await list({ userId, query })
     const counts = await readAcquisitionCounts(
       candidates.map((candidate) => candidate.key),
       query,
     )
     for (const candidate of candidates) {
-      if (!topologyMatches(byKey(current, candidate.key), candidate)
+      const evidence = campaignWindowId
+        && MUTATION_CANDIDATE_TEMPLATES.some(
+          (template) => template.name === candidate.name,
+        )
+        ? await readEvidence(
+            acceptanceCampaignIdempotencyKey(candidate.name, campaignWindowId),
+            query,
+          )
+        : null
+      if (!topologyMatches(
+        byKey(current, candidate.key),
+        candidate,
+        evidence?.receipt ?? null,
+        campaignWindowId,
+        userId,
+      )
         || Number(counts[candidate.key] ?? 0) !== 0) {
         throw new Error(`V1_2_ACCEPTANCE_SAFETY_WALL:${candidate.key}`)
       }
@@ -371,11 +537,29 @@ export async function runAcceptanceExercise({
       await persist({ userId, item: suggestion(candidate, now), now })
       queue = await list({ userId })
     }
-    if (!topologyMatches(byKey(queue, candidate.key), candidate)) {
+    const evidence = MUTATION_CANDIDATE_TEMPLATES.some(
+      (template) => template.name === candidate.name,
+    )
+      ? await readEvidence(acceptanceCampaignIdempotencyKey(
+          candidate.name,
+          campaignWindow.campaignWindowId,
+        ))
+      : null
+    if (!topologyMatches(
+      byKey(queue, candidate.key),
+      candidate,
+      evidence?.receipt ?? null,
+      campaignWindow.campaignWindowId,
+      userId,
+    )) {
       throw new Error(`V1_2_ACCEPTANCE_TOPOLOGY_WALL:${candidate.key}`)
     }
   }
-  await assertAcceptanceSafety(candidates)
+  await assertAcceptanceSafety(
+    candidates,
+    undefined,
+    campaignWindow.campaignWindowId,
+  )
   const candidateKey = (name) => {
     const candidate = candidates.find((entry) => entry.name === name)
     if (!candidate) throw new Error("V1_2_CAMPAIGN_CANDIDATE_NAME_WALL")
@@ -392,7 +576,11 @@ export async function runAcceptanceExercise({
   })
   let complete = false
   try {
-    const guard = () => assertAcceptanceSafety(candidates, locked.query)
+    const guard = () => assertAcceptanceSafety(
+      candidates,
+      locked.query,
+      campaignWindow.campaignWindowId,
+    )
     const lockedList = () => list({ userId, query: locked.query })
     const lockedMutate = (request) => mutate({
       userId,
