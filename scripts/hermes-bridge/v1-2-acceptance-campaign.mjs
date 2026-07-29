@@ -103,7 +103,7 @@ SELECT
   wo.status AS "workOrderStatus",
   wo.result AS "workOrderResult",
   wo."commitRef" AS "workOrderCommitRef",
-  wo."completedAt" AS "workOrderCompletedAt"
+  wo."completedAt" AT TIME ZONE 'UTC' AS "workOrderCompletedAt"
 FROM latest AS q
 JOIN decision AS approval
   ON approval.id = q."approvalDecisionId"

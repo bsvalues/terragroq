@@ -712,6 +712,18 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
     )
   })
 
+  it("normalizes legacy Work Order completion timestamps to UTC", () => {
+    const normalized =
+      `wo."completedAt" AT TIME ZONE 'UTC' AS "workOrderCompletedAt"`
+    expect(campaignSource.match(
+      /wo\."completedAt" AT TIME ZONE 'UTC' AS "workOrderCompletedAt"/g,
+    )).toHaveLength(1)
+    expect(campaignSource).toContain(normalized)
+    expect(campaignSource).not.toContain(
+      `wo."completedAt" AS "workOrderCompletedAt"`,
+    )
+  })
+
   it("validates the bounded claim schema before consulting live sources", () => {
     const bundle = liveBundle()
     expect(validateCampaignEvidence(bundle.document, {
