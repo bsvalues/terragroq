@@ -44,6 +44,10 @@ import {
   verifyOutcomeQueueWorkOrderBinding,
 } from "@/scripts/hermes-bridge/outcome-queue-source.mjs"
 import { verifyMutationRows } from "@/scripts/hermes-bridge/v1-2-acceptance-campaign.mjs"
+import {
+  acceptanceCampaignIdempotencyKey,
+  acceptanceCampaignOutcomeKey,
+} from "@/scripts/hermes-bridge/v1-2-acceptance-exercise.mjs"
 
 const now = "2026-07-28T12:00:00.000Z"
 const userId = "owner"
@@ -2673,22 +2677,29 @@ describe("governed outcome queue mutations", () => {
   })
 
   it("returns the recorded result for exact replay and rejects conflicting key reuse", async () => {
+    const campaignRunId = "campaign:mutation-verifier"
+    const outcomeKey = acceptanceCampaignOutcomeKey("decline", campaignRunId)
+    const idempotencyKey = acceptanceCampaignIdempotencyKey(
+      "decline",
+      campaignRunId,
+    )
     const declined = queueRow({
       lifecycleState: "declined",
+      outcomeKey,
       terminalResult: "DECLINED",
       version: 2,
     })
     const query = mutationQuery({
-      current: queueRow({ lifecycleState: "approved" }),
+      current: queueRow({ lifecycleState: "approved", outcomeKey }),
       mutated: declined,
     })
     const input = {
       query,
       userId,
       action: "decline" as const,
-      outcomeKey: "goal:GOAL-1000",
+      outcomeKey,
       expectedVersion: 1,
-      idempotencyKey: "decline-1",
+      idempotencyKey,
       reason: "No longer wanted",
       now,
     }
@@ -2712,14 +2723,14 @@ describe("governed outcome queue mutations", () => {
     expect(proofCalls).toHaveLength(2)
     expect(proofCalls.map(([, values]) => values?.slice(1, 6))).toEqual([
       [
-        "decline-1",
+        idempotencyKey,
         expect.any(String),
         expect.any(String),
         1,
         OUTCOME_QUEUE_MUTATION_ATTEMPT_DISPOSITIONS.COMMITTED,
       ],
       [
-        "decline-1",
+        idempotencyKey,
         expect.any(String),
         expect.any(String),
         2,
@@ -2766,7 +2777,7 @@ describe("governed outcome queue mutations", () => {
       replayAttemptId: 45,
       mutationCount: 1,
       mutationCountAfterReplay: 1,
-    }], [receipt], attempts)).toMatchObject({ ok: true })
+    }], [receipt], attempts, campaignRunId)).toMatchObject({ ok: true })
 
     await expect(mutateOutcomeQueueItem({
       ...input,

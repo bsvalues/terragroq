@@ -20,6 +20,13 @@ function acceptanceIdempotencyKey(action: string) {
   return `v1-2-acceptance:${campaignDigest}:${action}`
 }
 
+function successorKey(userId: string, idempotencyKey: string) {
+  return `outcome:successor:${createHash("sha256")
+    .update(`${userId}:${idempotencyKey}`)
+    .digest("hex")
+    .slice(0, 24)}`
+}
+
 type QueueRow = Record<string, unknown> & {
   approvalDecisionId: number | null
   authorityGrantRef: string | null
@@ -59,6 +66,7 @@ function harness({
   acquiredCandidate = null as string | null,
   failAction = null as string | null,
   unrelatedQueueOrder = null as number | null,
+  unrelatedSupersedeDependent = false,
   unsafeTopology = false,
 } = {}) {
   const queue: QueueRow[] = []
@@ -70,14 +78,16 @@ function harness({
     id: "campaign:v1-2-final",
     open: campaignOpen,
   }
-  if (unrelatedQueueOrder !== null) {
+  if (unrelatedQueueOrder !== null || unrelatedSupersedeDependent) {
     queue.push({
       approvalDecisionId: null,
       authorityGrantRef: null,
-      dependencyKeys: [],
+      dependencyKeys: unrelatedSupersedeDependent
+        ? [acceptanceCampaignOutcomeKey("supersede", "campaign:v1-2-final")]
+        : [],
       lifecycleState: "suggested",
       outcomeKey: "goal:unrelated-product-outcome",
-      queueOrder: unrelatedQueueOrder,
+      queueOrder: unrelatedQueueOrder ?? 0,
       version: 1,
     })
   }
@@ -127,6 +137,7 @@ function harness({
     }
     const row = queue.find((entry) => entry.outcomeKey === request.outcomeKey)
     if (!row) throw new Error("missing target")
+    let successor: QueueRow | null = null
     if (request.action === "reorder") {
       if (!request.orderedOutcomes) throw new Error("missing reorder outcomes")
       request.orderedOutcomes.forEach((entry, index) => {
@@ -142,6 +153,17 @@ function harness({
     } else if (request.action === "supersede") {
       row.lifecycleState = "superseded"
       row.version += 1
+      successor = {
+        approvalDecisionId: null,
+        authorityGrantRef: null,
+        dependencyKeys: structuredClone(row.dependencyKeys),
+        lifecycleState: "suggested",
+        outcomeKey: successorKey("primary-1", request.idempotencyKey),
+        queueOrder: row.queueOrder,
+        supersedesOutcomeKey: row.outcomeKey,
+        version: 0,
+      }
+      queue.push(successor)
     } else if (request.action === "pause") {
       row.lifecycleState = "blocked"
       row.version += 1
@@ -151,8 +173,11 @@ function harness({
     }
     const resultBinding = {
       outcome: structuredClone(row),
-      affectedOutcomes: [structuredClone(row)],
-      successor: null,
+      affectedOutcomes: [
+        structuredClone(row),
+        ...(successor ? [structuredClone(successor)] : []),
+      ],
+      successor: structuredClone(successor),
     }
     const requestHash = hash(request)
     const resultDigest = hash(resultBinding)
@@ -393,6 +418,7 @@ describe("V1.2 live acceptance exercise", () => {
     adapter.evidence.set(key, {
       receipt: {
         idempotencyKey: key,
+        operation: "pause",
         outcomeKey: ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked,
         requestBinding: {
           action: "pause",
@@ -424,6 +450,37 @@ describe("V1.2 live acceptance exercise", () => {
     expect(adapter.lockState).toEqual({ commits: 0, rollbacks: 1 })
   })
 
+  it("rejects a receipt whose persisted target is not the campaign target", async () => {
+    const adapter = harness({ authorityReady: true })
+    const key = acceptanceIdempotencyKey("pause")
+    adapter.evidence.set(key, {
+      receipt: {
+        idempotencyKey: key,
+        operation: "pause",
+        outcomeKey: "goal:unrelated",
+        requestBinding: {
+          action: "pause",
+          expectedVersion: 1,
+          idempotencyKey: key,
+          outcomeKey: "goal:unrelated",
+        },
+        requestHash: "request-hash",
+        resultBinding: {
+          affectedOutcomes: [],
+          outcome: { outcomeKey: "goal:unrelated", version: 2 },
+          successor: null,
+        },
+      },
+      attempts: [],
+    })
+
+    await expect(runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })).rejects.toThrow("V1_2_PAUSE_RECEIPT_BINDING_WALL")
+    expect(adapter.lockState).toEqual({ commits: 0, rollbacks: 1 })
+  })
+
   it("refuses to renumber an unrelated product outcome during the reorder drill", async () => {
     const adapter = harness({ authorityReady: true, unrelatedQueueOrder: 50 })
     await expect(runAcceptanceExercise({
@@ -435,6 +492,35 @@ describe("V1.2 live acceptance exercise", () => {
     expect(adapter.queue.find(
       (row) => row.outcomeKey === "goal:unrelated-product-outcome",
     )?.queueOrder).toBe(50)
+  })
+
+  it("refuses to supersede when an unrelated outcome depends on the drill target", async () => {
+    const adapter = harness({
+      authorityReady: true,
+      unrelatedSupersedeDependent: true,
+    })
+    await expect(runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })).rejects.toThrow("V1_2_SUPERSEDE_REVERSE_DEPENDENCY_WALL")
+    expect(adapter.lockState).toEqual({ commits: 0, rollbacks: 1 })
+  })
+
+  it("rejects a retained R2 sentinel that is no longer unauthorized", async () => {
+    const adapter = harness()
+    await runAcceptanceExercise({ userId: "primary-1", ...adapter })
+    const risk = adapter.queue.find(
+      (row) => row.outcomeKey === ACCEPTANCE_OUTCOME_KEYS.riskBlocked,
+    )
+    if (!risk) throw new Error("missing risk sentinel")
+    risk.approvalState = "approved"
+
+    await expect(runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })).rejects.toThrow(
+      `V1_2_ACCEPTANCE_TOPOLOGY_WALL:${ACCEPTANCE_OUTCOME_KEYS.riskBlocked}`,
+    )
   })
 
   it("uses fresh terminal mutation targets when a new campaign is required", async () => {

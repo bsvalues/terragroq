@@ -138,7 +138,7 @@ function suggestion(candidate, now) {
   }
 }
 
-function idempotencyKey(action, campaignWindowId) {
+export function acceptanceCampaignIdempotencyKey(action, campaignWindowId) {
   return `${IDEMPOTENCY_PREFIX}:${digest(campaignWindowId).slice(0, 24)}:${action}`
 }
 
@@ -167,11 +167,24 @@ async function applyExactlyOnceMutation({
   campaignWindow,
   guard,
   mutate,
+  outcomeKey,
   readEvidence,
 }) {
   await guard()
-  const key = idempotencyKey(action, campaignWindow.campaignWindowId)
+  const key = acceptanceCampaignIdempotencyKey(
+    action,
+    campaignWindow.campaignWindowId,
+  )
   let evidence = await readEvidence(key)
+  if (evidence && (
+    evidence.receipt?.operation !== action
+    || evidence.receipt?.outcomeKey !== outcomeKey
+    || evidence.receipt?.requestBinding?.action !== action
+    || evidence.receipt?.requestBinding?.outcomeKey !== outcomeKey
+    || evidence.receipt?.resultBinding?.outcome?.outcomeKey !== outcomeKey
+  )) {
+    throw new Error(`V1_2_${action.toUpperCase()}_RECEIPT_BINDING_WALL`)
+  }
   let request = evidence?.receipt?.requestBinding ?? await buildRequest()
   if (!evidence) {
     await mutate({ ...request, idempotencyKey: key })
@@ -226,6 +239,12 @@ function topologyMatches(row, candidate) {
     || row.authorityAction !== "outcome:execute") return false
   if (row.activeWorkOrderId !== null) return false
   if (candidate.key === ACCEPTANCE_OUTCOME_KEYS.safetyBlocker) {
+    return row.lifecycleState === "suggested"
+      && row.approvalState === "unapproved"
+      && row.authorityState === "unverified"
+      && row.terminalAt === null
+  }
+  if (candidate.key === ACCEPTANCE_OUTCOME_KEYS.riskBlocked) {
     return row.lifecycleState === "suggested"
       && row.approvalState === "unapproved"
       && row.authorityState === "unverified"
@@ -387,6 +406,7 @@ export async function runAcceptanceExercise({
       action: "pause",
       campaignWindow,
       guard,
+      outcomeKey: ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked,
       readEvidence: lockedReadEvidence,
       mutate: lockedMutate,
       buildRequest: async () => {
@@ -403,6 +423,7 @@ export async function runAcceptanceExercise({
       action: "resume",
       campaignWindow,
       guard,
+      outcomeKey: ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked,
       readEvidence: lockedReadEvidence,
       mutate: lockedMutate,
       buildRequest: async () => {
@@ -421,6 +442,7 @@ export async function runAcceptanceExercise({
       action: "reorder",
       campaignWindow,
       guard,
+      outcomeKey: candidateKey("reorder"),
       readEvidence: lockedReadEvidence,
       mutate: lockedMutate,
       buildRequest: async () => {
@@ -430,15 +452,19 @@ export async function runAcceptanceExercise({
             || left.outcomeKey.localeCompare(right.outcomeKey))
         const target = byKey(rows, candidateKey("reorder"))
         if (!target) throw new Error("V1_2_REORDER_TARGET_WALL")
+        const acceptanceOwned = (row) => (
+          row.outcomeKey.startsWith("acceptance:v1-2:")
+          || row.supersedesOutcomeKey?.startsWith("acceptance:v1-2:")
+        )
         if (rows.some((row, index) => (
-          !row.outcomeKey.startsWith("acceptance:v1-2:")
+          !acceptanceOwned(row)
           && row.queueOrder !== index
         ))) {
           throw new Error("V1_2_REORDER_ISOLATION_WALL")
         }
         const partnerIndex = rows.findIndex((row) => (
           row.outcomeKey !== target.outcomeKey
-          && row.outcomeKey.startsWith("acceptance:v1-2:")
+          && acceptanceOwned(row)
         ))
         const targetIndex = rows.findIndex((row) => row.outcomeKey === target.outcomeKey)
         if (partnerIndex < 0 || targetIndex < 0) {
@@ -468,11 +494,21 @@ export async function runAcceptanceExercise({
         action,
         campaignWindow,
         guard,
+        outcomeKey,
         readEvidence: lockedReadEvidence,
         mutate: lockedMutate,
         buildRequest: async () => {
-          const row = byKey(await lockedList(), outcomeKey)
+          const rows = await lockedList()
+          const row = byKey(rows, outcomeKey)
           if (!row) throw new Error(`V1_2_${action.toUpperCase()}_TARGET_WALL`)
+          if (action === "supersede" && rows.some((candidate) => (
+            ["suggested", "approved", "blocked"].includes(candidate.lifecycleState)
+            && !candidate.outcomeKey.startsWith("acceptance:v1-2:")
+            && !candidate.supersedesOutcomeKey?.startsWith("acceptance:v1-2:")
+            && candidate.dependencyKeys?.includes(outcomeKey)
+          ))) {
+            throw new Error("V1_2_SUPERSEDE_REVERSE_DEPENDENCY_WALL")
+          }
           return {
             action,
             outcomeKey,

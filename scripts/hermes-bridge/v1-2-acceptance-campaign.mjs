@@ -18,6 +18,11 @@ import {
   OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL,
   OUTCOME_QUEUE_MUTATION_ATTEMPT_DISPOSITIONS,
 } from "./outcome-queue-source.mjs"
+import {
+  ACCEPTANCE_OUTCOME_KEYS,
+  acceptanceCampaignIdempotencyKey,
+  acceptanceCampaignOutcomeKey,
+} from "./v1-2-acceptance-exercise.mjs"
 
 const SCHEMA_VERSION = 1
 const CAMPAIGN = "WILLIAMOS-V1.2-TWO-OUTCOME"
@@ -1257,24 +1262,33 @@ function verifyAcquisitionAttempts(
   })
 }
 
-export function verifyMutationRows(claims, rows, attempts) {
+export function verifyMutationRows(claims, rows, attempts, campaignRunId) {
   if (rows.length !== claims.length) return failure("LIVE_MUTATION_RECEIPT_CARDINALITY_WALL")
   if (attempts.length !== claims.length * 2) {
     return failure("LIVE_MUTATION_ATTEMPT_CARDINALITY_WALL")
   }
   for (const claim of claims) {
     const operation = claim.action.toLowerCase()
+    const expectedOutcomeKey = ["pause", "resume"].includes(operation)
+      ? ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked
+      : acceptanceCampaignOutcomeKey(operation, campaignRunId)
+    const expectedIdempotencyKey = acceptanceCampaignIdempotencyKey(
+      operation,
+      campaignRunId,
+    )
     const row = rows.find((receipt) => (
       Number(receipt.id) === claim.receiptId
       && receipt.operation === operation
-      && receipt.outcomeKey === claim.targetOutcomeKey
+      && receipt.outcomeKey === expectedOutcomeKey
+      && receipt.idempotencyKey === expectedIdempotencyKey
     ))
     const matchingAttempts = attempts.filter(
       (attempt) => attempt.idempotencyKey === row?.idempotencyKey,
     )
     const first = matchingAttempts.find((attempt) => Number(attempt.attemptOrdinal) === 1)
     const replay = matchingAttempts.find((attempt) => Number(attempt.attemptOrdinal) === 2)
-    if (!row
+    if (claim.targetOutcomeKey !== expectedOutcomeKey
+      || !row
       || matchingAttempts.length !== 2
       || !first
       || !replay
@@ -1418,6 +1432,7 @@ export async function verifyLiveCampaignRecords({
       claims.mutations,
       mutationsResult.rows ?? [],
       mutationAttemptsResult.rows ?? [],
+      claims.campaignRunId,
     )
     if (!mutations.ok) return mutations
     const localAfter = typeof rereadLocalState === "function" ? rereadLocalState() : localState
