@@ -355,6 +355,18 @@ describe("V1.2 continuous campaign materializer", () => {
     })).rejects.toThrow("V1_2_CAMPAIGN_PARENT_READ_WALL")
   })
 
+  it("translates parent issue timeouts into a stable wall", async () => {
+    await expect(materializeV12ContinuousCampaign({
+      databaseUrl: "postgres://test",
+      fetchImpl: vi.fn(async () => {
+        throw new DOMException("timed out", "TimeoutError")
+      }),
+      now,
+      pool: createMockDatabase().pool,
+      ensureSchema: vi.fn(async () => undefined),
+    })).rejects.toThrow("V1_2_CAMPAIGN_PARENT_TIMEOUT_WALL")
+  })
+
   it("recognizes a GitHub primary-rate-limit 403 from its response headers", async () => {
     await expect(materializeV12ContinuousCampaign({
       databaseUrl: "postgres://test",

@@ -43,10 +43,16 @@ async function expireStaleGrants(userId: string): Promise<void> {
   const now = Date.now()
   for (const g of rows) {
     if (g.expiresAt && g.expiresAt.getTime() <= now) {
-      await db
+      const [expired] = await db
         .update(authorityGrant)
         .set({ status: "expired" })
-        .where(eq(authorityGrant.id, g.id))
+        .where(and(
+          eq(authorityGrant.id, g.id),
+          eq(authorityGrant.userId, userId),
+          eq(authorityGrant.status, "active"),
+        ))
+        .returning({ id: authorityGrant.id })
+      if (!expired) continue
       await appendGovernanceEvent({
         userId,
         eventType: "AUTHORITY_EXPIRED",

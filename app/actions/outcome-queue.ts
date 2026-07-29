@@ -959,6 +959,13 @@ export async function revokeV12CampaignOutcomeAuthority(input: {
     if (item.version !== input.expectedVersion) {
       return { status: "STALE" as const, version: item.version }
     }
+    if (item.lifecycleState === "active"
+      || item.executionBinding != null
+      || item.leaseHolder != null
+      || item.leaseToken != null
+      || item.acquisitionKey != null) {
+      return { status: "ACTIVE" as const, version: item.version }
+    }
     const now = new Date()
     if (!exactV12CampaignGrant(grant, campaignScope, userId, now, {
       allowExpired: true,
@@ -1036,11 +1043,13 @@ export async function revokeV12CampaignOutcomeAuthority(input: {
   revalidatePath("/goal-console")
   revalidatePath("/governance")
   return {
-    status: result.status,
+    status: result.status === "ACTIVE" ? "INVALID" : result.status,
     message: result.status === "RECORDED"
       ? "This exact V1.2 product outcome authority is revoked."
       : result.status === "REPLAYED"
         ? "This exact V1.2 product outcome authority is already revoked."
+        : result.status === "ACTIVE"
+          ? "Pause this active outcome before revoking its authority."
         : "The V1.2 product outcome authority changed. Review current truth.",
     outcomeKey: campaignScope,
     version: result.version,

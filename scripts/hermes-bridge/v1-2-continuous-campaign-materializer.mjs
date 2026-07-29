@@ -388,16 +388,25 @@ ORDER BY q."queueOrder", q."outcomeKey"
 
 async function fetchParentIssue(fetchImpl) {
   const token = process.env.GITHUB_TOKEN
-  const response = await fetchImpl(
-    `https://api.github.com/repos/${REPOSITORY}/issues/${PARENT_ISSUE}`,
-    {
-      headers: {
-        accept: "application/vnd.github+json",
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
+  let response
+  try {
+    response = await fetchImpl(
+      `https://api.github.com/repos/${REPOSITORY}/issues/${PARENT_ISSUE}`,
+      {
+        headers: {
+          accept: "application/vnd.github+json",
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        signal: AbortSignal.timeout(10_000),
       },
-      signal: AbortSignal.timeout(10_000),
-    },
-  )
+    )
+  } catch (error) {
+    if (error instanceof Error
+      && (error.name === "AbortError" || error.name === "TimeoutError")) {
+      throw new Error("V1_2_CAMPAIGN_PARENT_TIMEOUT_WALL")
+    }
+    throw new Error("V1_2_CAMPAIGN_PARENT_TRANSPORT_WALL")
+  }
   const rateLimited = response?.status === 429
     || (
       response?.status === 403

@@ -73,6 +73,7 @@ describe("V1.2 campaign generic authority boundary", () => {
     }]))
     await expect(revokeAuthorityGrant(7, "generic revoke"))
       .rejects.toThrow("V1_2_BOUND_AUTHORITY_ACTION_REQUIRED")
+    expect(boundary.transaction).not.toHaveBeenCalled()
     expect(boundary.update).not.toHaveBeenCalled()
   })
 })

@@ -472,6 +472,57 @@ describe("V1.2 campaign server authority boundaries", () => {
     expect(harness.transaction.update).not.toHaveBeenCalled()
   })
 
+  it("requires an active campaign outcome to be paused before revocation", async () => {
+    const now = new Date("2026-07-29T22:00:00.000Z")
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    const grantDraft = v12CampaignGrant(
+      campaignScope,
+      "primary-1",
+      new Date(now.getTime() - 60_000),
+    )
+    const grant = {
+      id: 72,
+      ...grantDraft,
+      createdAt: new Date(grantDraft.createdAt),
+      expiresAt: new Date(grantDraft.expiresAt),
+    }
+    const approval = {
+      id: 71,
+      userId: "primary-1",
+      ...v12CampaignDecision(campaignScope),
+    }
+    const item = {
+      id: 31,
+      outcomeKey: campaignScope,
+      version: 1,
+      approvalDecisionId: 71,
+      authorityGrantRef: grant.ref,
+      authorityState: "matched",
+      lifecycleState: "active",
+      executionBinding: "hermes:goal-21",
+      leaseHolder: "hermes",
+      leaseToken: "lease-21",
+      acquisitionKey: "acquire-21",
+    }
+    const harness = transactionHarness([[item], [approval], [grant]])
+    boundary.dbTransaction.mockImplementation(
+      async (callback: (transaction: unknown) => Promise<unknown>) => (
+        callback(harness.transaction)
+      ),
+    )
+
+    await expect(revokeV12CampaignOutcomeAuthority({
+      outcomeKey: campaignScope,
+      expectedVersion: 1,
+    })).resolves.toMatchObject({
+      status: "INVALID",
+      message: "Pause this active outcome before revoking its authority.",
+      version: 1,
+    })
+    expect(harness.transaction.update).not.toHaveBeenCalled()
+  })
+
   it("rejects an authenticated non-Primary session before opening a transaction", async () => {
     boundary.getSession.mockResolvedValue({
       user: { id: "diagnostic-1", email: "test+wo@example.com" },
