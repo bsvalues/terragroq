@@ -622,6 +622,7 @@ export function OperatorOutcomeQueuePanel({
                           </Button>
                         )}
                         {campaignAuthorityProposal
+                          && !row.hasRetainedRuntimeBindings
                           && row.authorityGrantRef !== null
                           && row.availableAuthorityGrantRef === row.authorityGrantRef ? null : (
                           <Button

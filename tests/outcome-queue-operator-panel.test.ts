@@ -132,6 +132,9 @@ describe("operator outcome queue panel accessibility contract", () => {
     expect(source.match(/\{campaignAuthorityProposal \? null : \(/g)).toHaveLength(2)
     expect(source).toContain("&& row.authorityGrantRef !== null")
     expect(source).toContain("&& row.availableAuthorityGrantRef === row.authorityGrantRef")
+    expect(source).toContain(
+      "campaignAuthorityProposal\n                          && !row.hasRetainedRuntimeBindings\n                          && row.authorityGrantRef !== null",
+    )
     expect(actionSource).toContain("isCanonicalV12CampaignCandidate")
     expect(actionSource).toContain("exactV12CampaignDecision")
     expect(actionSource).toContain("exactV12CampaignGrant")

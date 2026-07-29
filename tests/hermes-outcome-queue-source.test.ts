@@ -1568,7 +1568,7 @@ describe("transactional durable outcome queue source", () => {
       ],
     )
     expect(OUTCOME_QUEUE_SQL.rebindRenewedV12CampaignGrant)
-      .toContain(`WHEN q."lifecycleState" = 'blocked' THEN q."lifecycleReason"`)
+      .toContain(`WHEN q."lifecycleState" IN ('active', 'blocked') THEN q."lifecycleReason"`)
   })
 
   it("renews an exact resumed campaign before reacquisition", async () => {
@@ -1577,7 +1577,7 @@ describe("transactional durable outcome queue source", () => {
       activeWorkOrderId: 472,
       fencingToken: 4,
       version: 7,
-      activatedAt: "2026-07-27T12:00:00.000Z",
+      activatedAt: new Date("2026-07-27T12:00:00.000Z"),
     })
     const renewedDraft = v12CampaignGrant(
       expired.outcomeKey as "campaign:v1-2:queue-evidence-drilldown",
@@ -1617,6 +1617,75 @@ describe("transactional durable outcome queue source", () => {
     )
   })
 
+  it("renews an exact stale active campaign before reclaiming it", async () => {
+    const expired = expiredCampaignAuthorityRow({
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_HELD",
+      activeWorkOrderId: 472,
+      executionBinding: "execution-old",
+      leaseHolder: "supervisor-old",
+      leaseToken: "lease-old",
+      leaseExpiresAt: new Date("2026-07-28T11:59:00.000Z"),
+      fencingToken: 3,
+      version: 5,
+      acquisitionKey: "acquire-old",
+      activatedAt: new Date("2026-07-27T12:00:00.000Z"),
+    })
+    const renewedDraft = v12CampaignGrant(
+      expired.outcomeKey as "campaign:v1-2:queue-evidence-drilldown",
+      userId,
+      new Date(now),
+    )
+    const rebound = {
+      ...expired,
+      authorityGrantRef: renewedDraft.ref,
+      version: 6,
+    }
+    const reclaimed = queueRow({
+      ...rebound,
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      executionBinding: "execution-a",
+      leaseHolder: "supervisor-a",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:01:00.000Z",
+      fencingToken: 4,
+      version: 7,
+      acquisitionKey: "acquire-a",
+    })
+    const query = acquisitionQuery({
+      renewable: [expired],
+      rebound: [rebound],
+      selectedAfterRenewal: [reclaimed],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: true,
+      reclaimed: true,
+      outcome: expect.objectContaining({
+        outcomeKey: expired.outcomeKey,
+        authorityGrantRef: renewedDraft.ref,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+      }),
+    })
+    expect(query).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.rebindRenewedV12CampaignGrant,
+      [
+        expired.id,
+        userId,
+        expired.outcomeKey,
+        5,
+        renewedDraft.ref,
+        now,
+        expired.authorityGrantRef,
+      ],
+    )
+    expect(OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities)
+      .toContain(`q."lifecycleState" IN ('approved', 'active', 'blocked')`)
+  })
+
   it("fails closed instead of renewing a tampered campaign grant", async () => {
     const expired = expiredCampaignAuthorityRow()
     const tampered = {
@@ -1652,7 +1721,7 @@ describe("transactional durable outcome queue source", () => {
   it("fails closed instead of renewing an inconsistent approved queue row", async () => {
     const inconsistent = expiredCampaignAuthorityRow({
       activeWorkOrderId: 999,
-      fencingToken: 4,
+      fencingToken: 0,
       activatedAt: "2026-07-27T12:00:00.000Z",
     })
     const query = acquisitionQuery({ renewable: [inconsistent] })
@@ -3414,6 +3483,14 @@ describe("governed outcome queue mutations", () => {
       lifecycleState: "approved",
       authorityState: "matched",
       authorityGrantRef: "GRANT-V12-CAMPAIGN",
+      activeWorkOrderId: null,
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 0,
+      acquisitionKey: null,
+      activatedAt: null,
       version: 1,
     })
     const query = mutationQuery({ current: protectedRow })
@@ -3438,6 +3515,14 @@ describe("governed outcome queue mutations", () => {
       lifecycleState: "approved",
       authorityState: "matched",
       authorityGrantRef: "GRANT-V12-CAMPAIGN",
+      activeWorkOrderId: null,
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 0,
+      acquisitionKey: null,
+      activatedAt: null,
       version: 1,
     })
     const declined = {
@@ -3477,6 +3562,14 @@ describe("governed outcome queue mutations", () => {
       lifecycleState: "approved",
       authorityState: "matched",
       authorityGrantRef: "GRANT-V12-CAMPAIGN",
+      activeWorkOrderId: null,
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 0,
+      acquisitionKey: null,
+      activatedAt: null,
       version: 1,
     })
     const query = mutationQuery({
@@ -3504,6 +3597,14 @@ describe("governed outcome queue mutations", () => {
       lifecycleState: "approved",
       authorityState: "revoked",
       authorityGrantRef: "GRANT-V12-CAMPAIGN",
+      activeWorkOrderId: null,
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 0,
+      acquisitionKey: null,
+      activatedAt: null,
       version: 1,
     })
     const declined = {
@@ -3530,6 +3631,45 @@ describe("governed outcome queue mutations", () => {
     })).resolves.toMatchObject({
       outcome: { lifecycleState: "declined" },
     })
+  })
+
+  it("rejects decline of a protected campaign with retained runtime history", async () => {
+    const protectedRow = queueRow({
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      lifecycleState: "approved",
+      authorityState: "revoked",
+      authorityGrantRef: "GRANT-V12-CAMPAIGN",
+      activeWorkOrderId: 472,
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 3,
+      acquisitionKey: null,
+      activatedAt: new Date("2026-07-27T12:00:00.000Z"),
+      version: 4,
+    })
+    const query = mutationQuery({
+      current: protectedRow,
+      boundGrant: { status: "revoked", expiresAt: null },
+    })
+
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "decline",
+      outcomeKey: protectedRow.outcomeKey,
+      expectedVersion: 4,
+      idempotencyKey: "decline-protected-runtime-bound",
+      reason: "Attempt to decline retained campaign execution.",
+      now,
+    })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_PROTECTED_DECLINE_RUNTIME_BOUND",
+    })
+    expect(query.mock.calls.some(([sql]) => sql === OUTCOME_QUEUE_SQL.readMutationAuthorityGrant))
+      .toBe(false)
+    expect(query.mock.calls.some(([sql]) => sql === OUTCOME_QUEUE_SQL.declineMutation))
+      .toBe(false)
   })
 
   it("updates dependencies under the queue lock and rejects missing references and cycles", async () => {

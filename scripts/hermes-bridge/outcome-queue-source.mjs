@@ -1112,7 +1112,7 @@ WHERE q."userId" = $1
     'campaign:v1-2:queue-evidence-drilldown',
     'campaign:v1-2:runtime-continuity-status'
   )
-  AND q."lifecycleState" IN ('approved', 'blocked')
+  AND q."lifecycleState" IN ('approved', 'active', 'blocked')
   AND q."approvalState" = 'approved'
   AND q."authorityState" = 'matched'
   AND expired_grant."status" IN ('active', 'expired')
@@ -1146,7 +1146,7 @@ RETURNING *
 UPDATE "outcome_queue_item" AS q
 SET "authorityGrantRef" = $5,
     "lifecycleReason" = CASE
-      WHEN q."lifecycleState" = 'blocked' THEN q."lifecycleReason"
+      WHEN q."lifecycleState" IN ('active', 'blocked') THEN q."lifecycleReason"
       ELSE 'HERMES_V1_2_CAMPAIGN_AUTHORITY_AUTO_RENEWAL'
     END,
     "version" = q."version" + 1,
@@ -1158,7 +1158,7 @@ WHERE q."id" = $1
   AND q."authorityGrantRef" = $7
   AND q."approvalState" = 'approved'
   AND q."authorityState" = 'matched'
-  AND q."lifecycleState" IN ('approved', 'blocked')
+  AND q."lifecycleState" IN ('approved', 'active', 'blocked')
 RETURNING ${QUEUE_COLUMNS}
 `,
   insertV12CampaignAuthorityRenewalAudit: `
@@ -2266,6 +2266,14 @@ function sameOrderedStrings(left, right) {
     && left.every((value, index) => value === right[index])
 }
 
+function validTimestampValue(value) {
+  if (value == null) return false
+  const milliseconds = value instanceof Date
+    ? value.getTime()
+    : Date.parse(String(value))
+  return Number.isFinite(milliseconds)
+}
+
 function v12CampaignGrantGeneration(issuedAt) {
   return issuedAt.replaceAll(/[-:.]/g, "")
 }
@@ -2381,6 +2389,7 @@ function exactNewV12CampaignGrantRecord(value, draft) {
 
 function v12CampaignRenewalLifecycle(row, expectedLifecycleReason) {
   if (row?.lifecycleState === "approved") return "APPROVED"
+  if (row?.lifecycleState === "active") return "ACTIVE"
   if (row?.lifecycleState !== "blocked") return "INELIGIBLE"
   if (expectedLifecycleReason !== null
     && row.lifecycleReason === expectedLifecycleReason) {
@@ -2433,13 +2442,31 @@ function exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason 
     }
     const fence = Number(row.fencingToken)
     const workOrder = Number(row.activeWorkOrderId)
-    return row.approvedBy === "William"
+    return (row.approvedBy === userId || row.approvedBy === "William")
       && Number.isSafeInteger(workOrder)
       && workOrder > 0
       && Number.isSafeInteger(fence)
       && fence > 0
-      && typeof row.activatedAt === "string"
-      && Number.isFinite(Date.parse(row.activatedAt))
+      && validTimestampValue(row.activatedAt)
+  }
+  if (lifecycle === "ACTIVE") {
+    const fence = Number(row.fencingToken)
+    const workOrder = Number(row.activeWorkOrderId)
+    return (row.approvedBy === userId || row.approvedBy === "William")
+      && Number.isSafeInteger(workOrder)
+      && workOrder > 0
+      && typeof row.executionBinding === "string"
+      && row.executionBinding !== ""
+      && typeof row.leaseHolder === "string"
+      && row.leaseHolder !== ""
+      && typeof row.leaseToken === "string"
+      && row.leaseToken !== ""
+      && validTimestampValue(row.leaseExpiresAt)
+      && Number.isSafeInteger(fence)
+      && fence > 0
+      && typeof row.acquisitionKey === "string"
+      && row.acquisitionKey !== ""
+      && validTimestampValue(row.activatedAt)
   }
   if (row.leaseHolder != null
     || row.leaseToken != null
@@ -4124,6 +4151,20 @@ export async function mutateOutcomeQueueItem({
       if (request.action === "supersede"
         && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)) {
         fail("OUTCOME_QUEUE_PROTECTED_SUPERSESSION_ILLEGAL")
+      }
+      if (request.action === "decline"
+        && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)
+        && (
+          current.activeWorkOrderId != null
+          || current.executionBinding != null
+          || current.leaseHolder != null
+          || current.leaseToken != null
+          || current.leaseExpiresAt != null
+          || Number(current.fencingToken) !== 0
+          || current.acquisitionKey != null
+          || current.activatedAt != null
+        )) {
+        fail("OUTCOME_QUEUE_PROTECTED_DECLINE_RUNTIME_BOUND")
       }
       if (request.action === "decline"
         && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)
