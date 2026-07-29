@@ -68,6 +68,7 @@ function harness({
   unrelatedQueueOrder = null as number | null,
   unrelatedSupersedeDependent = false,
   unsafeTopology = false,
+  contaminatedMutation = false,
 } = {}) {
   const queue: QueueRow[] = []
   const evidence = new Map<string, MutationEvidence>()
@@ -103,6 +104,13 @@ function harness({
     if (unsafeTopology
       && row.outcomeKey === ACCEPTANCE_OUTCOME_KEYS.authorityBlocked) {
       row.dependencyKeys = []
+    }
+    if (contaminatedMutation
+      && row.outcomeKey === acceptanceCampaignOutcomeKey(
+        "decline",
+        campaignState.id,
+      )) {
+      row.approvalDecisionId = 777
     }
     if (authorityReady && [
       ACCEPTANCE_OUTCOME_KEYS.authorityBlocked,
@@ -149,16 +157,24 @@ function harness({
       })
     } else if (request.action === "decline") {
       row.lifecycleState = "declined"
+      row.terminalAt = "2026-07-29T06:00:01.000Z"
+      row.terminalResult = "DECLINED"
       row.version += 1
     } else if (request.action === "supersede") {
       row.lifecycleState = "superseded"
+      row.terminalAt = "2026-07-29T06:00:01.000Z"
+      row.terminalResult = "SUPERSEDED"
       row.version += 1
+      const generatedSuccessorKey = successorKey("primary-1", request.idempotencyKey)
+      row.supersededByOutcomeKey = generatedSuccessorKey
       successor = {
         approvalDecisionId: null,
+        approvalState: "unapproved",
         authorityGrantRef: null,
+        authorityState: "unverified",
         dependencyKeys: structuredClone(row.dependencyKeys),
         lifecycleState: "suggested",
-        outcomeKey: successorKey("primary-1", request.idempotencyKey),
+        outcomeKey: generatedSuccessorKey,
         queueOrder: row.queueOrder,
         supersedesOutcomeKey: row.outcomeKey,
         version: 0,
@@ -521,6 +537,94 @@ describe("V1.2 live acceptance exercise", () => {
     })).rejects.toThrow(
       `V1_2_ACCEPTANCE_TOPOLOGY_WALL:${ACCEPTANCE_OUTCOME_KEYS.riskBlocked}`,
     )
+  })
+
+  it("rejects a terminal mutation candidate without its matching campaign receipt", async () => {
+    const adapter = harness({ authorityReady: true })
+    const result = await runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })
+    expect(result.status).toBe("PASS")
+
+    adapter.evidence.delete(acceptanceIdempotencyKey("decline"))
+
+    await expect(runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })).rejects.toThrow(
+      `V1_2_ACCEPTANCE_TOPOLOGY_WALL:${acceptanceCampaignOutcomeKey(
+        "decline",
+        "campaign:v1-2-final",
+      )}`,
+    )
+  })
+
+  it("rejects a contaminated mutation candidate before applying any mutation", async () => {
+    const adapter = harness({
+      authorityReady: true,
+      contaminatedMutation: true,
+    })
+
+    await expect(runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })).rejects.toThrow(
+      `V1_2_ACCEPTANCE_TOPOLOGY_WALL:${acceptanceCampaignOutcomeKey(
+        "decline",
+        "campaign:v1-2-final",
+      )}`,
+    )
+  })
+
+  it("rejects terminal row lineage that differs from its matching receipt", async () => {
+    const adapter = harness({ authorityReady: true })
+    const result = await runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })
+    expect(result.status).toBe("PASS")
+    const supersede = adapter.queue.find(
+      (row) => row.outcomeKey === acceptanceCampaignOutcomeKey(
+        "supersede",
+        "campaign:v1-2-final",
+      ),
+    )
+    if (!supersede) throw new Error("missing supersede candidate")
+    supersede.supersededByOutcomeKey = "outcome:successor:corrupt"
+
+    await expect(runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })).rejects.toThrow(
+      `V1_2_ACCEPTANCE_TOPOLOGY_WALL:${supersede.outcomeKey}`,
+    )
+  })
+
+  it("accepts PostgreSQL Date values when the matching receipt stores ISO timestamps", async () => {
+    const adapter = harness({ authorityReady: true })
+    const result = await runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })
+    expect(result.status).toBe("PASS")
+    for (const action of ["decline", "supersede"]) {
+      const row = adapter.queue.find(
+        (entry) => entry.outcomeKey === acceptanceCampaignOutcomeKey(
+          action,
+          "campaign:v1-2-final",
+        ),
+      )
+      if (!row || typeof row.terminalAt !== "string") {
+        throw new Error(`missing terminal ${action} candidate`)
+      }
+      row.terminalAt = new Date(row.terminalAt)
+    }
+
+    await expect(runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })).resolves.toMatchObject({ status: "PASS" })
   })
 
   it("uses fresh terminal mutation targets when a new campaign is required", async () => {
