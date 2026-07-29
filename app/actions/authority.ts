@@ -17,6 +17,7 @@ import { isGrantActive, strongestActiveGrant } from "@/lib/governance/authority"
 import { authorityRank } from "@/lib/goal/taxonomy"
 import { and, desc, eq, isNull, sql } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
+import { isProtectedV12AuthorityScope } from "@/lib/outcome-queue/v1-2-protected-authority"
 
 /* ------------------------------------------------------------------ */
 /* Reads                                                              */
@@ -42,10 +43,16 @@ async function expireStaleGrants(userId: string): Promise<void> {
   const now = Date.now()
   for (const g of rows) {
     if (g.expiresAt && g.expiresAt.getTime() <= now) {
-      await db
+      const [expired] = await db
         .update(authorityGrant)
         .set({ status: "expired" })
-        .where(eq(authorityGrant.id, g.id))
+        .where(and(
+          eq(authorityGrant.id, g.id),
+          eq(authorityGrant.userId, userId),
+          eq(authorityGrant.status, "active"),
+        ))
+        .returning({ id: authorityGrant.id })
+      if (!expired) continue
       await appendGovernanceEvent({
         userId,
         eventType: "AUTHORITY_EXPIRED",
@@ -121,6 +128,9 @@ export async function createAuthorityGrantWithResult(
   const blockedActions = input.blockedActions ?? []
   const grantedTo = input.grantedTo ?? "operator"
   const scope = input.scope ?? null
+  if (scope && isProtectedV12AuthorityScope(scope)) {
+    throw new Error("V1_2_BOUND_AUTHORITY_ACTION_REQUIRED")
+  }
   const workOrderId = input.workOrderId ?? null
   const created = await db.transaction(async (transaction) => {
     await transaction.execute(
@@ -280,6 +290,9 @@ export async function revokeAuthorityGrant(id: number, reason: string): Promise<
     .where(and(eq(authorityGrant.id, id), eq(authorityGrant.userId, userId)))
     .limit(1)
   if (!grant) throw new Error("Authority grant not found")
+  if (grant.scope && isProtectedV12AuthorityScope(grant.scope)) {
+    throw new Error("V1_2_BOUND_AUTHORITY_ACTION_REQUIRED")
+  }
   const active = isGrantActive(grant)
   if (!active.ok) throw new Error(`Cannot revoke: ${active.reason}`)
 

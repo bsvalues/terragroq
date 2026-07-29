@@ -294,13 +294,14 @@ function isExactProviderDeferral(item, binding, retryAfter, holderId) {
 }
 
 function isExactOwnerDecisionResume(item, binding, holderId, at) {
+  const renewalIncrement = item?.authorityRenewalApplied === true ? 1 : 0
   return item?.userId === binding.userId
     && item.outcomeKey === binding.outcomeKey
     && item.lifecycleState === "active"
     && item.lifecycleReason === "OWNER_DECISION_RESUMED"
     && item.approvalState === "approved"
     && item.authorityState === "matched"
-    && Number(item.version) === binding.expectedVersion + 2
+    && Number(item.version) === binding.expectedVersion + 2 + renewalIncrement
     && item.executionBinding === binding.executionBinding
     && item.acquisitionKey === binding.acquisitionKey
     && Number(item.fencingToken) === binding.fencingToken + 1
@@ -634,6 +635,14 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     requireExecutionProofContext()
     if (!outcome?.queueBinding) return outcome
     const binding = queueBinding(outcome)
+    const expectedLifecycleReason = proof?.expectedNextState
+    if (typeof expectedLifecycleReason !== "string"
+      || !/^[A-Z][A-Z0-9_]{1,79}$/.test(expectedLifecycleReason)) {
+      wall(
+        "Owner-decision proof did not preserve its exact next state",
+        "HERMES_OUTCOME_QUEUE_OWNER_DECISION_STATE_WALL",
+      )
+    }
     const resumeAt = now()
     const resumed = await resumeQueue({
       databaseUrl,
@@ -644,6 +653,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       acquisitionKey: binding.acquisitionKey,
       fencingToken: binding.fencingToken,
       ownerDecisionId: proof?.decisionId,
+      expectedLifecycleReason,
       leaseHolder: holderId,
       leaseToken: binding.leaseToken,
       leaseDurationMs: QUEUE_LEASE_DURATION_MS,

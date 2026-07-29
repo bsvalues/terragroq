@@ -12,6 +12,44 @@ const QUEUE_STATES = new Set(OUTCOME_LIFECYCLE_STATES)
 const APPROVAL_STATES = new Set(["approved", "unapproved", "revoked"])
 const AUTHORITY_STATES = new Set(["matched", "unverified", "denied", "expired", "revoked"])
 const TERMINAL_STATES = new Set(TERMINAL_OUTCOME_STATES)
+const PROTECTED_V1_2_OUTCOME_KEYS = new Set([
+  "acceptance:v1-2:authority-blocked",
+  "acceptance:v1-2:dependency-blocked",
+  "campaign:v1-2:queue-evidence-drilldown",
+  "campaign:v1-2:runtime-continuity-status",
+])
+const V1_2_CAMPAIGN_GRANT_DURATION_MS = 48 * 60 * 60 * 1000
+const V1_2_CAMPAIGN_BLOCKED_ACTIONS = Object.freeze([
+  "production mutation",
+  "TerraFusion",
+  "Property Workbench",
+  "TerraPilot",
+  "county/PACS",
+  "protected data",
+  "paid overage",
+  "destructive action",
+  "secret inspection",
+  "authority expansion",
+  "issue #357",
+])
+const V1_2_CAMPAIGN_SPECS = Object.freeze({
+  "campaign:v1-2:queue-evidence-drilldown": Object.freeze({
+    suffix: "EVIDENCE-DRILLDOWN",
+    title: "Add supporting evidence drill-down links to each Goal Console outcome queue row.",
+    objective: "Show the linked Goal, Work Order, Evidence, Trace, and Audit records when those durable references exist.",
+    dependencyKeys: Object.freeze([]),
+  }),
+  "campaign:v1-2:runtime-continuity-status": Object.freeze({
+    suffix: "CONTINUITY-STATUS",
+    title: "Add a compact continuous outcome campaign status panel to the WilliamOS Runtime page.",
+    objective: "Show the live campaign window, acquisition and settlement sequence, automatic successor handoff, and truthful evidence gaps.",
+    dependencyKeys: Object.freeze(["campaign:v1-2:queue-evidence-drilldown"]),
+  }),
+})
+const V1_2_CAMPAIGN_OUTCOME_KEYS = new Set(Object.keys(V1_2_CAMPAIGN_SPECS))
+const PROTECTED_V1_2_OUTCOME_SQL = [...PROTECTED_V1_2_OUTCOME_KEYS]
+  .map((outcomeKey) => `'${outcomeKey.replaceAll("'", "''")}'`)
+  .join(", ")
 const LEGACY_GOAL_REFS = Object.freeze([
   "GOAL-0001",
   "GOAL-0002",
@@ -123,6 +161,109 @@ const LIVE_AUTHORITY_PREDICATE = `
         live_grant."workOrderId" IS NULL
         OR q."activeWorkOrderId" = live_grant."workOrderId"
       )
+  )
+`
+
+const OWNER_DECISION_RESUME_PREDICATE = `
+  approval.id = $7
+  AND approval."userId" = q."userId"
+  AND approval.status = 'accepted'
+  AND approval.authority = 'binding'
+  AND approval.decision = 'APPROVE'
+  AND approval.owner = q."userId"
+  AND approval.ref = 'OWNER-DECISION-' || q."goalId"::text || '-'
+    || ((approval.context::jsonb)->>'terminalEventId')
+  AND approval.scope = 'goal:' || q."goalId"::text
+    || '|work-order:' || q."activeWorkOrderId"::text
+    || '|terminal:' || ((approval.context::jsonb)->>'terminalEventId')
+    || '|next-state:' || $12
+  AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
+  AND (approval.context::jsonb)->>'workOrderId' = q."activeWorkOrderId"::text
+  AND (approval.context::jsonb)->>'expectedNextState' = $12
+  AND (approval.context::jsonb)->>'requestKey' =
+    'hermes-owner-decision:' || q."goalId"::text || ':'
+      || q."activeWorkOrderId"::text || ':'
+      || ((approval.context::jsonb)->>'terminalEventId') || ':'
+      || q."userId" || ':APPROVE:' || $12
+  AND approval.evidence @> ARRAY[
+    'outcome:' || q."goalId"::text,
+    'work-order:' || q."activeWorkOrderId"::text,
+    'terminal-event:' || ((approval.context::jsonb)->>'terminalEventId'),
+    'next-state:' || $12,
+    'choice:APPROVE'
+  ]::text[]
+  AND approval.evidence @> ARRAY[
+    'request:hermes-owner-decision:' || q."goalId"::text || ':'
+      || q."activeWorkOrderId"::text || ':'
+      || ((approval.context::jsonb)->>'terminalEventId') || ':'
+      || q."userId" || ':APPROVE:' || $12
+  ]::text[]
+  AND approval.evidence @> ARRAY[
+    'terminal-binding:hermes-owner-decision-terminal:'
+      || q."goalId"::text || ':' || q."activeWorkOrderId"::text || ':'
+      || ((approval.context::jsonb)->>'terminalEventId')
+  ]::text[]
+  AND EXISTS (
+    SELECT 1
+    FROM work_order AS decision_work
+    WHERE decision_work.id = q."activeWorkOrderId"
+      AND decision_work."userId" = q."userId"
+      AND decision_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
+      AND decision_work.goal = q."goalRef"
+      AND decision_work."linkedDecisionId" = approval.id
+      AND decision_work.result = 'OWNER_DECISION_APPROVED'
+  )
+  AND EXISTS (
+    SELECT 1
+    FROM governance_event AS terminal
+    WHERE terminal.id = ((approval.context::jsonb)->>'terminalEventId')::integer
+      AND terminal."userId" = q."userId"
+      AND terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
+      AND terminal."entityType" = 'goal'
+      AND terminal."entityId"::text = q."goalId"::text
+      AND terminal.metadata->>'result' = 'OWNER_DECISION_REQUIRED'
+      AND terminal.metadata->>'nextState' = $12
+      AND NOT EXISTS (
+        SELECT 1
+        FROM governance_event AS newer_terminal
+        WHERE newer_terminal."userId" = q."userId"
+          AND newer_terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
+          AND newer_terminal."entityType" = 'goal'
+          AND newer_terminal."entityId"::text = q."goalId"::text
+          AND newer_terminal.id > terminal.id
+      )
+  )
+`
+
+const V1_2_CAMPAIGN_RENEWAL_APPLIED_SQL = `
+  EXISTS (
+    SELECT 1
+    FROM "governance_event" AS renewal_event
+    JOIN "authority_grant" AS renewed_grant
+      ON renewed_grant."userId" = q."userId"
+      AND renewed_grant."id"::text = renewal_event."entityId"
+      AND renewed_grant."ref" = q."authorityGrantRef"
+      AND renewed_grant."scope" = q."outcomeKey"
+      AND renewed_grant."contentHash" = renewal_event."afterHash"
+      AND renewed_grant."createdAt" = renewal_event."createdAt"
+    WHERE renewal_event."userId" = q."userId"
+      AND renewal_event."eventType" = 'AUTHORITY_RENEWED'
+      AND renewal_event."entityType" = 'authority_grant'
+      AND renewal_event."actor" = 'hermes'
+      AND renewal_event."createdAt" = q."updatedAt"
+      AND renewal_event.metadata->>'automated' = 'true'
+      AND renewal_event.metadata->>'decisionRef' = (
+        SELECT campaign_approval.ref
+        FROM decision AS campaign_approval
+        WHERE campaign_approval.id = q."approvalDecisionId"
+          AND campaign_approval."userId" = q."userId"
+      )
+      AND renewal_event.metadata->>'grantRef' = q."authorityGrantRef"
+      AND renewal_event.metadata->>'outcomeKey' = q."outcomeKey"
+      AND renewal_event.metadata->>'parentIssue' = '471'
+      AND renewal_event.metadata->>'unchangedAcceptedScope' = 'true'
+      AND renewal_event.metadata->>'replacesGrantRef' IS NOT NULL
+      AND renewal_event.metadata->>'replacesGrantRef' <> q."authorityGrantRef"
   )
 `
 
@@ -706,11 +847,24 @@ WHERE q."userId" = $1
   AND q."outcomeKey" = $2
 FOR UPDATE OF q
 `,
+  readMutationAuthorityGrant: `
+SELECT "status", "expiresAt"
+FROM "authority_grant"
+WHERE "userId" = $1
+  AND "ref" = $2
+FOR UPDATE
+`,
   readMutationSnapshot: `
 SELECT ${QUEUE_COLUMNS}
 FROM "outcome_queue_item" AS q
 WHERE q."userId" = $1
-  AND q."lifecycleState" IN ('suggested', 'approved', 'blocked')
+  AND (
+    q."lifecycleState" IN ('suggested', 'approved', 'blocked')
+    OR (
+      q."lifecycleState" = 'active'
+      AND q."outcomeKey" IN (${PROTECTED_V1_2_OUTCOME_SQL})
+    )
+  )
 ORDER BY ${ORDER_BY}
 FOR UPDATE OF q
 `,
@@ -942,6 +1096,89 @@ WHERE q."userId" = $1
   AND q."acquisitionKey" = $2
 FOR UPDATE OF q
 `,
+  readRenewableV12CampaignAuthorities: `
+SELECT ${QUEUE_COLUMNS},
+       row_to_json(approval) AS "approval",
+       row_to_json(expired_grant) AS "expiredGrant"
+FROM "outcome_queue_item" AS q
+JOIN "decision" AS approval
+  ON approval."id" = q."approvalDecisionId"
+  AND approval."userId" = q."userId"
+JOIN "authority_grant" AS expired_grant
+  ON expired_grant."userId" = q."userId"
+  AND expired_grant."ref" = q."authorityGrantRef"
+WHERE q."userId" = $1
+  AND q."outcomeKey" IN (
+    'campaign:v1-2:queue-evidence-drilldown',
+    'campaign:v1-2:runtime-continuity-status'
+  )
+  AND q."lifecycleState" IN ('approved', 'active', 'blocked')
+  AND q."approvalState" = 'approved'
+  AND q."authorityState" = 'matched'
+  AND expired_grant."status" IN ('active', 'expired')
+  AND expired_grant."revokedAt" IS NULL
+  AND expired_grant."expiresAt" <= $2::timestamptz
+ORDER BY ${ORDER_BY}
+FOR UPDATE OF q, expired_grant
+`,
+  readV12CampaignGrantCollision: `
+SELECT "id"
+FROM "authority_grant"
+WHERE "userId" = $1
+  AND "ref" = $2
+LIMIT 1
+`,
+  insertRenewedV12CampaignGrant: `
+INSERT INTO "authority_grant" (
+  "userId", "ref", "workOrderId", "grantedBy", "grantedTo",
+  "authorityLevel", "scope", "allowedActions", "blockedActions", "reason",
+  "status", "expiresAt", "revokedAt", "revokedBy", "revokeReason",
+  "contentHash", "createdAt"
+) VALUES (
+  $1, $2, NULL, $1, 'operator',
+  'A2_WRITE_OWN', $3, $4::text[], $5::text[], $6,
+  'active', $7::timestamptz, NULL, NULL, NULL,
+  $8, $9::timestamptz
+)
+RETURNING *
+`,
+  rebindRenewedV12CampaignGrant: `
+UPDATE "outcome_queue_item" AS q
+SET "authorityGrantRef" = $5,
+    "lifecycleReason" = CASE
+      WHEN q."lifecycleState" IN ('active', 'blocked') THEN q."lifecycleReason"
+      ELSE 'HERMES_V1_2_CAMPAIGN_AUTHORITY_AUTO_RENEWAL'
+    END,
+    "version" = q."version" + 1,
+    "updatedAt" = $6::timestamptz
+WHERE q."id" = $1
+  AND q."userId" = $2
+  AND q."outcomeKey" = $3
+  AND q."version" = $4
+  AND q."authorityGrantRef" = $7
+  AND q."approvalState" = 'approved'
+  AND q."authorityState" = 'matched'
+  AND q."lifecycleState" IN ('approved', 'active', 'blocked')
+RETURNING ${QUEUE_COLUMNS}
+`,
+  insertV12CampaignAuthorityRenewalAudit: `
+INSERT INTO "governance_event" (
+  "userId", "eventType", "entityType", "entityId", "actor", "reason",
+  "beforeHash", "afterHash", "metadata", "createdAt"
+) VALUES (
+  $1, 'AUTHORITY_RENEWED', 'authority_grant', $2, 'hermes', $3,
+  $4, $5, $6::jsonb, $7::timestamptz
+)
+RETURNING "id"
+`,
+  insertV12CampaignAuthorityRenewalEvent: `
+INSERT INTO "event_log" (
+  "userId", "type", "summary", "register", "refId", "metadata", "createdAt"
+) VALUES (
+  $1, 'authority.renewed', $2, 'authority', $3, $4::jsonb, $5::timestamptz
+)
+RETURNING "id"
+`,
   revalidateAcquisition: `
 SELECT
   (${LIVE_APPROVAL_PREDICATE}) AS "approvalLive",
@@ -1167,17 +1404,12 @@ FROM decision AS approval
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2
   AND q."lifecycleState" = 'blocked'
+  AND q."lifecycleReason" = $12
   AND q."version" = $3
   AND q."executionBinding" = $4
   AND q."acquisitionKey" = $5
   AND q."fencingToken" = $6
-  AND approval.id = $7
-  AND approval."userId" = q."userId"
-  AND approval.status = 'accepted'
-  AND approval.authority = 'binding'
-  AND approval."scope" = q."outcomeKey"
-  AND upper(trim(approval.decision)) = 'APPROVE'
-  AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
+  AND ${OWNER_DECISION_RESUME_PREDICATE}
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$11::timestamptz")}
   AND q."riskClass" IN ('R0', 'R1')
@@ -1223,27 +1455,34 @@ WHERE q."userId" = $1
   AND projected_work.status = $8
 `,
   replayResumeAfterDecision: `
-SELECT ${QUEUE_COLUMNS}
+SELECT ${QUEUE_COLUMNS},
+       CASE
+         WHEN q."version" = $3::integer + 2
+           AND ${V1_2_CAMPAIGN_RENEWAL_APPLIED_SQL}
+         THEN TRUE
+         ELSE FALSE
+       END AS "authorityRenewalApplied"
 FROM "outcome_queue_item" AS q
 JOIN decision AS approval
   ON approval.id = $7
-  AND approval."userId" = q."userId"
-  AND approval.status = 'accepted'
-  AND approval.authority = 'binding'
-  AND approval."scope" = q."outcomeKey"
-  AND upper(trim(approval.decision)) = 'APPROVE'
-  AND (approval.context::jsonb)->>'outcomeId' = q."goalId"::text
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2
   AND q."lifecycleState" = 'active'
   AND q."lifecycleReason" = 'OWNER_DECISION_RESUMED'
-  AND q."version" = $3::integer + 1
+  AND (
+    q."version" = $3::integer + 1
+    OR (
+      q."version" = $3::integer + 2
+      AND ${V1_2_CAMPAIGN_RENEWAL_APPLIED_SQL}
+    )
+  )
   AND q."executionBinding" = $4
   AND q."acquisitionKey" = $5
   AND q."fencingToken" = $6::integer + 1
   AND q."leaseHolder" = $8
   AND q."leaseToken" = $9
   AND q."leaseExpiresAt" > $11::timestamptz
+  AND ${OWNER_DECISION_RESUME_PREDICATE}
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$11::timestamptz")}
 `,
@@ -2020,6 +2259,365 @@ function requestHash(value) {
   return createHash("sha256").update(canonicalJson(value)).digest("hex")
 }
 
+function sameOrderedStrings(left, right) {
+  return Array.isArray(left)
+    && Array.isArray(right)
+    && left.length === right.length
+    && left.every((value, index) => value === right[index])
+}
+
+function validTimestampValue(value) {
+  if (value == null) return false
+  const milliseconds = value instanceof Date
+    ? value.getTime()
+    : Date.parse(String(value))
+  return Number.isFinite(milliseconds)
+}
+
+function v12CampaignGrantGeneration(issuedAt) {
+  return issuedAt.replaceAll(/[-:.]/g, "")
+}
+
+function v12CampaignGrantDraft(scope, userId, issuedAt) {
+  const spec = V1_2_CAMPAIGN_SPECS[scope]
+  if (!spec) fail("V1_2_CAMPAIGN_AUTHORITY_SCOPE_WALL")
+  const expiresAt = timestamp(
+    new Date(Date.parse(issuedAt) + V1_2_CAMPAIGN_GRANT_DURATION_MS),
+    "V1_2_CAMPAIGN_GRANT_TIME_WALL",
+  )
+  const draft = {
+    userId,
+    ref: `GRANT-V12-${spec.suffix}-${v12CampaignGrantGeneration(issuedAt)}`,
+    workOrderId: null,
+    grantedBy: userId,
+    grantedTo: "operator",
+    authorityLevel: "A2_WRITE_OWN",
+    scope,
+    allowedActions: ["outcome:execute"],
+    blockedActions: [...V1_2_CAMPAIGN_BLOCKED_ACTIONS],
+    reason: `ADR-V12-${spec.suffix} authorizes only ${scope}.`,
+    status: "active",
+    expiresAt,
+    createdAt: issuedAt,
+    revokedAt: null,
+    revokedBy: null,
+    revokeReason: null,
+  }
+  return { ...draft, contentHash: requestHash(draft) }
+}
+
+function exactV12CampaignDecisionRecord(value, scope) {
+  const spec = V1_2_CAMPAIGN_SPECS[scope]
+  if (!spec || !value || typeof value !== "object") return false
+  return value.ref === `ADR-V12-${spec.suffix}`
+    && value.title === `Approve ${spec.title}`
+    && value.context
+      === "The Primary reviewed one fixed WilliamOS-native product proposal for the #471 continuous V1.2 campaign."
+    && value.decision === "APPROVE"
+    && value.rationale
+      === "This exact R1 UI/read-model outcome is useful product work inside #471 and requires explicit Primary approval before Hermes may acquire it."
+    && value.consequences
+      === "Hermes may execute only this exact queued outcome. The second outcome remains dependency-blocked until the first completes, and every #471 blocked boundary remains enforced."
+    && value.status === "accepted"
+    && value.authority === "binding"
+    && value.owner === "William"
+    && value.scope === scope
+    && sameOrderedStrings(value.evidence, [
+      "https://github.com/bsvalues/terragroq/issues/471",
+      "issue-body-sha256:3771f688ee4c5d2f7e4ff22dbb09c45062a75d503fea5931912b98d1270db73a",
+      "https://github.com/bsvalues/terragroq/issues/480",
+    ])
+    && sameOrderedStrings(value.tags, ["v1.2", "continuous-campaign", "primary-approved"])
+    && value.locked === true
+}
+
+function exactExpiredV12CampaignGrantRecord(value, scope, userId, at) {
+  if (!value || typeof value !== "object") return false
+  let createdAt
+  let expiresAt
+  try {
+    createdAt = timestamp(value.createdAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL")
+    expiresAt = timestamp(value.expiresAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL")
+  } catch {
+    return false
+  }
+  const expected = v12CampaignGrantDraft(scope, userId, createdAt)
+  return Date.parse(createdAt) <= Date.parse(at)
+    && Date.parse(expiresAt) <= Date.parse(at)
+    && value.userId === userId
+    && value.ref === expected.ref
+    && value.workOrderId == null
+    && value.grantedBy === userId
+    && value.grantedTo === expected.grantedTo
+    && value.authorityLevel === expected.authorityLevel
+    && value.scope === scope
+    && sameOrderedStrings(value.allowedActions, expected.allowedActions)
+    && sameOrderedStrings(value.blockedActions, expected.blockedActions)
+    && value.reason === expected.reason
+    && (value.status === "active" || value.status === "expired")
+    && expiresAt === expected.expiresAt
+    && createdAt === expected.createdAt
+    && value.revokedAt == null
+    && value.revokedBy == null
+    && value.revokeReason == null
+    && value.contentHash === expected.contentHash
+}
+
+function exactNewV12CampaignGrantRecord(value, draft) {
+  if (!value || typeof value !== "object") return false
+  const actual = {
+    userId: value.userId,
+    ref: value.ref,
+    workOrderId: value.workOrderId,
+    grantedBy: value.grantedBy,
+    grantedTo: value.grantedTo,
+    authorityLevel: value.authorityLevel,
+    scope: value.scope,
+    allowedActions: value.allowedActions,
+    blockedActions: value.blockedActions,
+    reason: value.reason,
+    status: value.status,
+    expiresAt: timestamp(value.expiresAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL"),
+    createdAt: timestamp(value.createdAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL"),
+    revokedAt: value.revokedAt,
+    revokedBy: value.revokedBy,
+    revokeReason: value.revokeReason,
+    contentHash: value.contentHash,
+  }
+  return canonicalJson(actual) === canonicalJson(draft)
+}
+
+function v12CampaignRenewalLifecycle(row, expectedLifecycleReason) {
+  if (row?.lifecycleState === "approved") return "APPROVED"
+  if (row?.lifecycleState === "active") return "ACTIVE"
+  if (row?.lifecycleState !== "blocked") return "INELIGIBLE"
+  if (expectedLifecycleReason !== null
+    && row.lifecycleReason === expectedLifecycleReason) {
+    return "OWNER_DECISION_BLOCKED"
+  }
+  if (row.lifecycleReason === "OPERATOR_PAUSED"
+    || row.lifecycleReason === "Primary Operator paused this outcome.") {
+    return "MANUALLY_PAUSED"
+  }
+  return "NON_RENEWABLE_BLOCKED"
+}
+
+function exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason = null) {
+  const spec = V1_2_CAMPAIGN_SPECS[row?.outcomeKey]
+  const lifecycle = v12CampaignRenewalLifecycle(row, expectedLifecycleReason)
+  const shared = Boolean(spec)
+    && row.userId === userId
+    && row.title === spec.title
+    && row.objective === spec.objective
+    && sameOrderedStrings(row.dependencyKeys, spec.dependencyKeys)
+    && row.riskClass === "R1"
+    && row.approvalState === "approved"
+    && Number.isSafeInteger(Number(row.approvalDecisionId))
+    && Number(row.approvalDecisionId) > 0
+    && row.authorityState === "matched"
+    && row.authorityLevel === "A2_WRITE_OWN"
+    && typeof row.authorityGrantRef === "string"
+    && row.authorityGrantRef !== ""
+    && row.authoritySubject === "operator"
+    && row.authorityAction === "outcome:execute"
+    && lifecycle !== "INELIGIBLE"
+    && row.terminalResult == null
+    && row.terminalEvidenceId == null
+    && Array.isArray(row.terminalEvidenceRefs)
+    && row.terminalEvidenceRefs.length === 0
+    && row.terminalKey == null
+    && row.terminalAt == null
+  if (!shared) return false
+  if (lifecycle === "APPROVED") {
+    const clearedRuntime = row.executionBinding == null
+      && row.leaseHolder == null
+      && row.leaseToken == null
+      && row.leaseExpiresAt == null
+      && row.acquisitionKey == null
+    if (!clearedRuntime) return false
+    if (row.activeWorkOrderId == null) {
+      return row.approvedBy === userId
+        && Number(row.fencingToken) === 0
+        && row.activatedAt == null
+    }
+    const fence = Number(row.fencingToken)
+    const workOrder = Number(row.activeWorkOrderId)
+    return (row.approvedBy === userId || row.approvedBy === "William")
+      && Number.isSafeInteger(workOrder)
+      && workOrder > 0
+      && Number.isSafeInteger(fence)
+      && fence > 0
+      && validTimestampValue(row.activatedAt)
+  }
+  if (lifecycle === "ACTIVE") {
+    const fence = Number(row.fencingToken)
+    const workOrder = Number(row.activeWorkOrderId)
+    return (row.approvedBy === userId || row.approvedBy === "William")
+      && Number.isSafeInteger(workOrder)
+      && workOrder > 0
+      && typeof row.executionBinding === "string"
+      && row.executionBinding !== ""
+      && typeof row.leaseHolder === "string"
+      && row.leaseHolder !== ""
+      && typeof row.leaseToken === "string"
+      && row.leaseToken !== ""
+      && validTimestampValue(row.leaseExpiresAt)
+      && Number.isSafeInteger(fence)
+      && fence > 0
+      && typeof row.acquisitionKey === "string"
+      && row.acquisitionKey !== ""
+      && validTimestampValue(row.activatedAt)
+  }
+  if (row.leaseHolder != null
+    || row.leaseToken != null
+    || row.leaseExpiresAt != null) return false
+  const fence = Number(row.fencingToken)
+  if (!Number.isSafeInteger(fence) || fence < 0) return false
+  const workOrderValid = row.activeWorkOrderId == null
+    || (
+      Number.isSafeInteger(Number(row.activeWorkOrderId))
+      && Number(row.activeWorkOrderId) > 0
+    )
+  if (!workOrderValid) return false
+  if (lifecycle === "MANUALLY_PAUSED") {
+    return (row.approvedBy === userId || row.approvedBy === "William")
+      && row.executionBinding == null
+      && row.acquisitionKey == null
+  }
+  const authorityPaused = lifecycle === "OWNER_DECISION_BLOCKED"
+    && (row.approvedBy === userId || row.approvedBy === "William")
+    && typeof row.executionBinding === "string"
+    && row.executionBinding !== ""
+    && typeof row.acquisitionKey === "string"
+    && row.acquisitionKey !== ""
+    && row.activeWorkOrderId != null
+    && fence > 0
+    && row.activatedAt != null
+    && expectedLifecycleReason !== null
+    && row.lifecycleReason === expectedLifecycleReason
+  return authorityPaused
+}
+
+async function renewExpiredV12CampaignAuthorities(
+  connection,
+  userId,
+  at,
+  targetOutcomeKey = null,
+  expectedVersion = null,
+  expectedLifecycleReason = null,
+) {
+  const candidates = await connection.query(
+    OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities,
+    [userId, at],
+  )
+  const rows = candidates?.rows ?? []
+  if (rows.length > V1_2_CAMPAIGN_OUTCOME_KEYS.size) {
+    fail("V1_2_CAMPAIGN_AUTHORITY_CARDINALITY_WALL")
+  }
+  const renewedVersions = new Map()
+  for (const row of rows) {
+    if (targetOutcomeKey !== null && row.outcomeKey !== targetOutcomeKey) continue
+    if (targetOutcomeKey === null
+      && row.lifecycleState === "blocked"
+      && v12CampaignRenewalLifecycle(row, null) !== "MANUALLY_PAUSED") continue
+    if (expectedVersion !== null && row.version !== expectedVersion) {
+      fail("V1_2_CAMPAIGN_AUTHORITY_RENEWAL_VERSION_WALL")
+    }
+    if (!V1_2_CAMPAIGN_OUTCOME_KEYS.has(row.outcomeKey)
+      || !exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason)
+      || !exactV12CampaignDecisionRecord(row.approval, row.outcomeKey)
+      || row.approval.id !== row.approvalDecisionId
+      || !exactExpiredV12CampaignGrantRecord(
+        row.expiredGrant,
+        row.outcomeKey,
+        userId,
+        at,
+      )
+      || row.expiredGrant.ref !== row.authorityGrantRef) {
+      fail("V1_2_CAMPAIGN_AUTHORITY_AUTO_RENEWAL_WALL")
+    }
+    const draft = v12CampaignGrantDraft(row.outcomeKey, userId, at)
+    const collision = await connection.query(
+      OUTCOME_QUEUE_SQL.readV12CampaignGrantCollision,
+      [userId, draft.ref],
+    )
+    if ((collision?.rows?.length ?? 0) !== 0) {
+      fail("V1_2_CAMPAIGN_AUTHORITY_RENEWAL_COLLISION")
+    }
+    const inserted = await connection.query(
+      OUTCOME_QUEUE_SQL.insertRenewedV12CampaignGrant,
+      [
+        userId,
+        draft.ref,
+        row.outcomeKey,
+        draft.allowedActions,
+        draft.blockedActions,
+        draft.reason,
+        draft.expiresAt,
+        draft.contentHash,
+        draft.createdAt,
+      ],
+    )
+    const renewedGrant = inserted?.rows?.[0]
+    if ((inserted?.rows?.length ?? 0) !== 1
+      || !exactNewV12CampaignGrantRecord(renewedGrant, draft)) {
+      fail("V1_2_CAMPAIGN_AUTHORITY_RENEWAL_INSERT_WALL")
+    }
+    const rebound = await connection.query(
+      OUTCOME_QUEUE_SQL.rebindRenewedV12CampaignGrant,
+      [
+        row.id,
+        userId,
+        row.outcomeKey,
+        row.version,
+        draft.ref,
+        at,
+        row.authorityGrantRef,
+      ],
+    )
+    if ((rebound?.rows?.length ?? 0) !== 1) {
+      fail("V1_2_CAMPAIGN_AUTHORITY_RENEWAL_REBIND_WALL")
+    }
+    const metadata = {
+      authorityLevel: draft.authorityLevel,
+      automated: true,
+      decisionRef: row.approval.ref,
+      grantRef: draft.ref,
+      outcomeKey: row.outcomeKey,
+      parentIssue: 471,
+      replacesGrantRef: row.expiredGrant.ref,
+      unchangedAcceptedScope: true,
+    }
+    const audit = await connection.query(
+      OUTCOME_QUEUE_SQL.insertV12CampaignAuthorityRenewalAudit,
+      [
+        userId,
+        String(renewedGrant.id),
+        "Hermes renewed only the unchanged, accepted V1.2 campaign scope for bounded continuation.",
+        row.expiredGrant.contentHash,
+        draft.contentHash,
+        canonicalJson(metadata),
+        at,
+      ],
+    )
+    const event = await connection.query(
+      OUTCOME_QUEUE_SQL.insertV12CampaignAuthorityRenewalEvent,
+      [
+        userId,
+        `${draft.ref}: Hermes renewed exact A2_WRITE_OWN authority for 48 hours`,
+        renewedGrant.id,
+        canonicalJson(metadata),
+        at,
+      ],
+    )
+    if ((audit?.rows?.length ?? 0) !== 1 || (event?.rows?.length ?? 0) !== 1) {
+      fail("V1_2_CAMPAIGN_AUTHORITY_RENEWAL_EVIDENCE_WALL")
+    }
+    renewedVersions.set(row.outcomeKey, rebound.rows[0].version)
+  }
+  return renewedVersions
+}
+
 function jsonValue(value, code) {
   if (typeof value === "string") {
     try {
@@ -2590,6 +3188,27 @@ export async function acquireNextEligibleOutcome({
         reclaimed ? "RECLAIMED" : "WINNER",
       )
     }
+    const renewed = await renewExpiredV12CampaignAuthorities(connection, user, at)
+    if (renewed.size > 0) {
+      const retried = await connection.query(OUTCOME_QUEUE_SQL.acquire, [
+        at,
+        user,
+        key,
+        binding,
+        holder,
+        token,
+        expiresAt,
+        workOrderId,
+      ])
+      if (retried?.rows?.length === 1) {
+        await ensureAcquisitionReceipt(connection, user, key, retried.rows[0], at)
+        const reclaimed = retried.rows[0].lifecycleReason === "STALE_LEASE_RECOVERED"
+        return await finish(
+          acquisitionResult(retried.rows[0], { reclaimed }),
+          reclaimed ? "RECLAIMED" : "WINNER",
+        )
+      }
+    }
     const reasonResult = await connection.query(
       OUTCOME_QUEUE_SQL.noSelectionReason,
       [at, user],
@@ -2860,6 +3479,7 @@ export async function resumeOutcomeQueueAfterDecision({
   acquisitionKey,
   fencingToken,
   ownerDecisionId,
+  expectedLifecycleReason,
   leaseHolder,
   leaseToken,
   leaseDurationMs,
@@ -2872,6 +3492,13 @@ export async function resumeOutcomeQueueAfterDecision({
   const acquisition = nonempty(acquisitionKey, "OUTCOME_QUEUE_ACQUISITION_KEY_INVALID")
   const fence = integer(fencingToken, "OUTCOME_QUEUE_FENCING_TOKEN_INVALID", { minimum: 1 })
   const decisionId = integer(ownerDecisionId, "OUTCOME_QUEUE_APPROVAL_DECISION_REQUIRED", { minimum: 1 })
+  const lifecycleReason = nonempty(
+    expectedLifecycleReason,
+    "OUTCOME_QUEUE_OWNER_DECISION_STATE_WALL",
+  )
+  if (!/^[A-Z][A-Z0-9_]{1,79}$/.test(lifecycleReason)) {
+    fail("OUTCOME_QUEUE_OWNER_DECISION_STATE_WALL")
+  }
   const holder = nonempty(leaseHolder, "OUTCOME_QUEUE_LEASE_HOLDER_INVALID")
   const token = nonempty(leaseToken, "OUTCOME_QUEUE_LEASE_TOKEN_INVALID")
   integer(leaseDurationMs, "OUTCOME_QUEUE_LEASE_DURATION_INVALID", { minimum: 1 })
@@ -2895,16 +3522,50 @@ export async function resumeOutcomeQueueAfterDecision({
       token,
       expiresAt,
       at,
+      lifecycleReason,
     ])
     if (result?.rows?.length === 1) {
       await connection.query("COMMIT")
       begun = false
       return result.rows[0]
     }
+    const renewed = await renewExpiredV12CampaignAuthorities(
+      connection,
+      user,
+      at,
+      key,
+      version,
+      lifecycleReason,
+    )
+    if (renewed.has(key)) {
+      const renewedResult = await connection.query(OUTCOME_QUEUE_SQL.resumeAfterDecision, [
+        user,
+        key,
+        renewed.get(key),
+        binding,
+        acquisition,
+        fence,
+        decisionId,
+        holder,
+        token,
+        expiresAt,
+        at,
+        lifecycleReason,
+      ])
+      if (renewedResult?.rows?.length === 1) {
+        await connection.query("COMMIT")
+        begun = false
+        return {
+          ...renewedResult.rows[0],
+          authorityRenewalApplied: true,
+        }
+      }
+    }
+    const replayVersion = renewed.get(key) ?? version
     const replay = await connection.query(OUTCOME_QUEUE_SQL.replayResumeAfterDecision, [
       user,
       key,
-      version,
+      replayVersion,
       binding,
       acquisition,
       fence,
@@ -2913,11 +3574,26 @@ export async function resumeOutcomeQueueAfterDecision({
       token,
       expiresAt,
       at,
+      lifecycleReason,
     ])
     if (replay?.rows?.length !== 1) fail("OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL")
+    const {
+      authorityRenewalApplied: replayRenewalApplied,
+      ...replayedOutcome
+    } = replay.rows[0]
+    const committedVersion = Number(replayedOutcome.version)
+    const exactOrdinaryReplay = committedVersion === replayVersion + 1
+      && replayRenewalApplied !== true
+    const exactRenewedReplay = committedVersion === replayVersion + 2
+      && replayRenewalApplied === true
+    if (!exactOrdinaryReplay && !exactRenewedReplay) {
+      fail("OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL")
+    }
     await connection.query("COMMIT")
     begun = false
-    return replay.rows[0]
+    return renewed.has(key) || replayRenewalApplied === true
+      ? { ...replayedOutcome, authorityRenewalApplied: true }
+      : replayedOutcome
   } catch (error) {
     if (begun) {
       try {
@@ -3223,6 +3899,72 @@ async function appendMutationAttempt(
   return inserted.rows[0]
 }
 
+function protectedDestinationOrders(snapshot, ordered) {
+  const destinations = snapshot.map((row) => row.queueOrder)
+  const protectedIndexes = snapshot
+    .map((row, index) => (
+      PROTECTED_V1_2_OUTCOME_KEYS.has(row.outcomeKey) ? index : -1
+    ))
+    .filter((index) => index >= 0)
+  const boundaries = [-1, ...protectedIndexes, snapshot.length]
+
+  for (let boundaryIndex = 0; boundaryIndex < boundaries.length - 1; boundaryIndex += 1) {
+    const leftIndex = boundaries[boundaryIndex]
+    const rightIndex = boundaries[boundaryIndex + 1]
+    const segmentIndexes = Array.from(
+      { length: rightIndex - leftIndex - 1 },
+      (_value, offset) => leftIndex + offset + 1,
+    )
+    if (segmentIndexes.length === 0) continue
+    const leftOrder = leftIndex >= 0 ? snapshot[leftIndex].queueOrder : null
+    const rightOrder = rightIndex < snapshot.length ? snapshot[rightIndex].queueOrder : null
+    const segmentIsUnchanged = segmentIndexes.every((index) => (
+      ordered[index].outcomeKey === snapshot[index].outcomeKey
+    ))
+    if (segmentIsUnchanged) {
+      segmentIndexes.forEach((index) => {
+        destinations[index] = snapshot[index].queueOrder
+      })
+      continue
+    }
+    const requestedOrders = segmentIndexes.map((index) => (
+      snapshot.find((row) => row.outcomeKey === ordered[index].outcomeKey)?.queueOrder
+    ))
+    const strictlyOrdered = requestedOrders.every((order, index) => (
+      Number.isInteger(order)
+      && (index === 0 || order > requestedOrders[index - 1])
+      && (leftOrder === null || order > leftOrder)
+      && (rightOrder === null || order < rightOrder)
+    ))
+    if (strictlyOrdered) {
+      segmentIndexes.forEach((index, offset) => {
+        destinations[index] = requestedOrders[offset]
+      })
+      continue
+    }
+
+    if (leftOrder !== null
+      && rightOrder !== null
+      && rightOrder - leftOrder - 1 < segmentIndexes.length) {
+      fail("OUTCOME_QUEUE_PROTECTED_REORDER_CAPACITY_WALL")
+    }
+    if (leftOrder === null
+      && rightOrder !== null
+      && rightOrder < segmentIndexes.length) {
+      fail("OUTCOME_QUEUE_PROTECTED_REORDER_CAPACITY_WALL")
+    }
+    const start = leftOrder !== null
+      ? leftOrder + 1
+      : rightOrder !== null
+        ? rightOrder - segmentIndexes.length
+        : 0
+    segmentIndexes.forEach((index, offset) => {
+      destinations[index] = start + offset
+    })
+  }
+  return destinations
+}
+
 async function reorderMutation(connection, request, user, at) {
   const snapshotResult = await connection.query(OUTCOME_QUEUE_SQL.readMutationSnapshot, [user])
   const snapshot = snapshotResult?.rows ?? []
@@ -3230,6 +3972,9 @@ async function reorderMutation(connection, request, user, at) {
   if (!target) fail("OUTCOME_QUEUE_OUTCOME_NOT_FOUND")
   assertVersion(target, request.expectedVersion)
   if (target.lifecycleState === "active") fail("OUTCOME_QUEUE_REORDER_ACTIVE_ILLEGAL")
+  if (PROTECTED_V1_2_OUTCOME_KEYS.has(target.outcomeKey)) {
+    fail("OUTCOME_QUEUE_PROTECTED_REORDER_ILLEGAL")
+  }
 
   if (request.orderedOutcomes.length !== snapshot.length) {
     fail("OUTCOME_QUEUE_ORDERED_SNAPSHOT_INCOMPLETE")
@@ -3241,12 +3986,26 @@ async function reorderMutation(connection, request, user, at) {
     assertVersion(row, entry.expectedVersion)
     return row
   })
+  for (const [index, row] of snapshot.entries()) {
+    if (PROTECTED_V1_2_OUTCOME_KEYS.has(row.outcomeKey)
+      && ordered[index]?.outcomeKey !== row.outcomeKey) {
+      fail("OUTCOME_QUEUE_PROTECTED_REORDER_ILLEGAL")
+    }
+  }
+  const preserveProtectedSlots = snapshot.some((row) => (
+    PROTECTED_V1_2_OUTCOME_KEYS.has(row.outcomeKey)
+  ))
+  const destinationOrders = preserveProtectedSlots
+    ? protectedDestinationOrders(snapshot, ordered)
+    : ordered.map((_row, index) => index)
 
   let outcome = target
   const affectedOutcomes = []
-  for (const [queueOrder, row] of ordered.entries()) {
+  for (const [index, row] of ordered.entries()) {
     // Active work owns its version until it pauses or terminalizes.
     if (row.lifecycleState === "active") continue
+    if (PROTECTED_V1_2_OUTCOME_KEYS.has(row.outcomeKey)) continue
+    const queueOrder = destinationOrders[index]
     if (row.queueOrder === queueOrder) continue
     const updated = await connection.query(OUTCOME_QUEUE_SQL.reorderMutation, [
       user,
@@ -3294,6 +4053,9 @@ async function dependenciesMutation(connection, request, user, at) {
   const target = snapshot.find((row) => row.outcomeKey === request.outcomeKey)
   if (!target) fail("OUTCOME_QUEUE_OUTCOME_NOT_FOUND")
   assertVersion(target, request.expectedVersion)
+  if (PROTECTED_V1_2_OUTCOME_KEYS.has(target.outcomeKey)) {
+    fail("OUTCOME_QUEUE_PROTECTED_DEPENDENCIES_ILLEGAL")
+  }
   if (!["suggested", "approved", "blocked"].includes(target.lifecycleState)) {
     fail("OUTCOME_QUEUE_DEPENDENCIES_ILLEGAL")
   }
@@ -3389,6 +4151,63 @@ export async function mutateOutcomeQueueItem({
       if (currentResult?.rows?.length !== 1) fail("OUTCOME_QUEUE_OUTCOME_NOT_FOUND")
       const current = currentResult.rows[0]
       assertVersion(current, request.expectedVersion)
+      if (request.action === "supersede"
+        && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)) {
+        fail("OUTCOME_QUEUE_PROTECTED_SUPERSESSION_ILLEGAL")
+      }
+      if (request.action === "resume"
+        && V1_2_CAMPAIGN_OUTCOME_KEYS.has(current.outcomeKey)
+        && !(
+          current.lifecycleState === "blocked"
+          && (
+            current.lifecycleReason === "OPERATOR_PAUSED"
+            || current.lifecycleReason === "Primary Operator paused this outcome."
+          )
+          && current.executionBinding == null
+          && current.leaseHolder == null
+          && current.leaseToken == null
+          && current.leaseExpiresAt == null
+          && current.acquisitionKey == null
+        )) {
+        fail("OUTCOME_QUEUE_PROTECTED_RESUME_RUNTIME_BOUND")
+      }
+      if (request.action === "decline"
+        && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)
+        && (
+          current.activeWorkOrderId != null
+          || current.executionBinding != null
+          || current.leaseHolder != null
+          || current.leaseToken != null
+          || current.leaseExpiresAt != null
+          || Number(current.fencingToken) !== 0
+          || current.acquisitionKey != null
+          || current.activatedAt != null
+        )) {
+        fail("OUTCOME_QUEUE_PROTECTED_DECLINE_RUNTIME_BOUND")
+      }
+      if (request.action === "decline"
+        && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)
+        && current.authorityGrantRef != null) {
+        const grantResult = await connection.query(
+          OUTCOME_QUEUE_SQL.readMutationAuthorityGrant,
+          [user, current.authorityGrantRef],
+        )
+        if (grantResult?.rows?.length !== 1) {
+          fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_INVALID")
+        }
+        const grant = grantResult.rows[0]
+        if (!["active", "revoked", "expired"].includes(grant.status)) {
+          fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_INVALID")
+        }
+        const expiresAt = grant.expiresAt == null ? null : Date.parse(grant.expiresAt)
+        if (expiresAt !== null && !Number.isFinite(expiresAt)) {
+          fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_INVALID")
+        }
+        if (grant.status === "active"
+          && (expiresAt === null || expiresAt > Date.parse(at))) {
+          fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_ACTIVE")
+        }
+      }
 
       let result
       if (request.action === "pause") {
