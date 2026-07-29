@@ -411,6 +411,10 @@ function mutationQuery({
   rebound = [],
   governed = true,
   dependencySnapshot = [],
+  boundGrant = {
+    status: "active",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  },
 }: {
   current?: Record<string, unknown>
   mutated?: Record<string, unknown>
@@ -418,6 +422,7 @@ function mutationQuery({
   rebound?: Record<string, unknown>[]
   governed?: boolean
   dependencySnapshot?: Record<string, unknown>[]
+  boundGrant?: Record<string, unknown> | null
 } = {}) {
   const receipts = new Map<string, Record<string, unknown>>()
   const attemptCounts = new Map<string, number>()
@@ -429,6 +434,9 @@ function mutationQuery({
       return { rows: receipt ? [receipt] : [] }
     }
     if (sql === OUTCOME_QUEUE_SQL.readMutationItem) return { rows: [current] }
+    if (sql === OUTCOME_QUEUE_SQL.readMutationAuthorityGrant) {
+      return { rows: boundGrant ? [boundGrant] : [] }
+    }
     if (sql === OUTCOME_QUEUE_SQL.readMutationSnapshot) return { rows: snapshot }
     if (sql === OUTCOME_QUEUE_SQL.readDependencyMutationSnapshot) {
       return { rows: dependencySnapshot }
@@ -2698,6 +2706,45 @@ describe("governed outcome queue mutations", () => {
     })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_ACTIVE" })
     expect(query.mock.calls.some(([sql]) => sql === OUTCOME_QUEUE_SQL.declineMutation))
       .toBe(false)
+  })
+
+  it("allows decline when the protected campaign grant is expired by time", async () => {
+    const protectedRow = queueRow({
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      lifecycleState: "approved",
+      authorityState: "matched",
+      authorityGrantRef: "GRANT-V12-CAMPAIGN",
+      version: 1,
+    })
+    const declined = {
+      ...protectedRow,
+      lifecycleState: "declined",
+      terminalResult: "DECLINED",
+      version: 2,
+    }
+    const query = mutationQuery({
+      current: protectedRow,
+      mutated: declined,
+      boundGrant: {
+        status: "active",
+        expiresAt: "2026-07-28T11:59:59.000Z",
+      },
+    })
+
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "decline",
+      outcomeKey: protectedRow.outcomeKey,
+      expectedVersion: 1,
+      idempotencyKey: "decline-protected-expired-authority",
+      reason: "Decline after authority expiry.",
+      now,
+    })).resolves.toMatchObject({
+      outcome: { outcomeKey: protectedRow.outcomeKey, lifecycleState: "declined" },
+    })
+    expect(query.mock.calls.some(([sql]) => sql === OUTCOME_QUEUE_SQL.declineMutation))
+      .toBe(true)
   })
 
   it("updates dependencies under the queue lock and rejects missing references and cycles", async () => {

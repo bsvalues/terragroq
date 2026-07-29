@@ -611,7 +611,7 @@ export function OperatorOutcomeQueuePanel({
                         )}
                         {campaignAuthorityProposal
                           && row.authorityGrantRef !== null
-                          && !["revoked", "expired"].includes(row.authorityState) ? null : (
+                          && row.availableAuthorityGrantRef === row.authorityGrantRef ? null : (
                           <Button
                             size="icon"
                             variant="ghost"

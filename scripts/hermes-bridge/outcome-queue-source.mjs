@@ -715,6 +715,13 @@ WHERE q."userId" = $1
   AND q."outcomeKey" = $2
 FOR UPDATE OF q
 `,
+  readMutationAuthorityGrant: `
+SELECT "status", "expiresAt"
+FROM "authority_grant"
+WHERE "userId" = $1
+  AND "ref" = $2
+FOR UPDATE
+`,
   readMutationSnapshot: `
 SELECT ${QUEUE_COLUMNS}
 FROM "outcome_queue_item" AS q
@@ -3493,9 +3500,25 @@ export async function mutateOutcomeQueueItem({
       }
       if (request.action === "decline"
         && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)
-        && current.authorityGrantRef != null
-        && !["revoked", "expired"].includes(current.authorityState)) {
-        fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_ACTIVE")
+        && current.authorityGrantRef != null) {
+        const grantResult = await connection.query(
+          OUTCOME_QUEUE_SQL.readMutationAuthorityGrant,
+          [user, current.authorityGrantRef],
+        )
+        if (grantResult?.rows?.length !== 1) {
+          fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_INVALID")
+        }
+        const grant = grantResult.rows[0]
+        const expiresAt = Date.parse(grant.expiresAt)
+        if (!Number.isFinite(expiresAt)) {
+          fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_INVALID")
+        }
+        if (grant.status === "active" && expiresAt > Date.parse(at)) {
+          fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_ACTIVE")
+        }
+        if (!["active", "revoked", "expired"].includes(grant.status)) {
+          fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_INVALID")
+        }
       }
 
       let result

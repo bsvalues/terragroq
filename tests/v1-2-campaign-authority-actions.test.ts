@@ -720,8 +720,16 @@ describe("V1.2 campaign server authority boundaries", () => {
         authorityState: "matched",
       }]))
       .mockReturnValueOnce(fluentQuery([{
+        status: "active",
+        expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      }]))
+      .mockReturnValueOnce(fluentQuery([{
         authorityGrantRef: "GRANT-V12-CAMPAIGN",
         authorityState: "revoked",
+      }]))
+      .mockReturnValueOnce(fluentQuery([{
+        status: "revoked",
+        expiresAt: new Date("2099-01-01T00:00:00.000Z"),
       }]))
     boundary.mutateOutcomeQueueItem.mockResolvedValue({
       replayed: false,
@@ -744,6 +752,31 @@ describe("V1.2 campaign server authority boundaries", () => {
     await expect(mutateOutcomeQueue({
       ...input,
       idempotencyKey: "campaign:decline:revoked-grant",
+    })).resolves.toMatchObject({ status: "RECORDED" })
+    expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
+  })
+
+  it("allows campaign decline after the linked grant expires by time", async () => {
+    boundary.dbSelect
+      .mockReturnValueOnce(fluentQuery([{
+        authorityGrantRef: "GRANT-V12-CAMPAIGN",
+        authorityState: "matched",
+      }]))
+      .mockReturnValueOnce(fluentQuery([{
+        status: "active",
+        expiresAt: new Date("2020-01-01T00:00:00.000Z"),
+      }]))
+    boundary.mutateOutcomeQueueItem.mockResolvedValue({
+      replayed: false,
+      outcome: { outcomeKey: campaignScope, version: 3 },
+    })
+
+    await expect(mutateOutcomeQueue({
+      action: "decline",
+      outcomeKey: campaignScope,
+      expectedVersion: 2,
+      idempotencyKey: "campaign:decline:expired-by-time",
+      reason: "Primary declined after authority expiry.",
     })).resolves.toMatchObject({ status: "RECORDED" })
     expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
   })
