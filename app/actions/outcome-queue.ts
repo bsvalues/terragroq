@@ -260,7 +260,20 @@ export async function recordV12AcceptanceAuthority(input: {
   outcomeKey: string
   expectedVersion: number
 }): Promise<OutcomeQueueMutationActionResult> {
-  const userId = await getUserId()
+  let userId: string
+  try {
+    userId = await getUserId()
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return {
+        status: "UNAUTHORIZED",
+        message: "Primary Operator authentication is required.",
+        outcomeKey: input.outcomeKey,
+        version: null,
+      }
+    }
+    throw error
+  }
   if (
     !isV12AcceptanceAuthorityScope(input.outcomeKey)
     || !Number.isSafeInteger(input.expectedVersion)
@@ -470,10 +483,21 @@ export async function recordV12AcceptanceAuthority(input: {
 export async function revokeV12AcceptanceAuthority(input: {
   outcomeKey: string
 }): Promise<{
-  status: "RECORDED" | "REPLAYED" | "INVALID" | "STALE"
+  status: "RECORDED" | "REPLAYED" | "INVALID" | "STALE" | "UNAUTHORIZED"
   message: string
 }> {
-  const userId = await getUserId()
+  let userId: string
+  try {
+    userId = await getUserId()
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return {
+        status: "UNAUTHORIZED",
+        message: "Primary Operator authentication is required.",
+      }
+    }
+    throw error
+  }
   if (input.outcomeKey !== "acceptance:v1-2:authority-blocked") {
     return { status: "INVALID", message: "Only the revocation proof scope may be revoked here." }
   }
@@ -627,6 +651,19 @@ export async function mutateOutcomeQueue(
     return {
       status: "INVALID",
       message: "Use the bounded V1.2 acceptance authority controls.",
+      outcomeKey: validated.outcomeKey,
+      version: null,
+    }
+  }
+  if (
+    validated.action === "reorder"
+    && validated.orderedOutcomes?.some((entry) => (
+      isV12AcceptanceAuthorityScope(entry.outcomeKey)
+    ))
+  ) {
+    return {
+      status: "INVALID",
+      message: "V1.2 acceptance proof rows cannot be reordered.",
       outcomeKey: validated.outcomeKey,
       version: null,
     }
