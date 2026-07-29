@@ -2596,6 +2596,80 @@ describe("governed outcome queue mutations", () => {
       .toHaveLength(2)
   })
 
+  it("rejects a leading protected segment that cannot remain nonnegative", async () => {
+    const first = queueRow({
+      outcomeKey: "goal:GOAL-1400",
+      lifecycleState: "approved",
+      queueOrder: 0,
+      version: 3,
+    })
+    const second = queueRow({
+      id: 2,
+      outcomeKey: "goal:GOAL-1401",
+      lifecycleState: "approved",
+      queueOrder: 0,
+      version: 5,
+    })
+    const third = queueRow({
+      id: 3,
+      outcomeKey: "goal:GOAL-1402",
+      lifecycleState: "approved",
+      queueOrder: 0,
+      version: 7,
+    })
+    const protectedRow = queueRow({
+      id: 4,
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      lifecycleState: "suggested",
+      queueOrder: 1,
+      version: 0,
+    })
+    const query = mutationQuery({ snapshot: [first, second, third, protectedRow] })
+
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "reorder",
+      outcomeKey: first.outcomeKey,
+      expectedVersion: 3,
+      idempotencyKey: "reorder-leading-capacity-wall",
+      orderedOutcomes: [
+        { outcomeKey: third.outcomeKey, expectedVersion: 7 },
+        { outcomeKey: second.outcomeKey, expectedVersion: 5 },
+        { outcomeKey: first.outcomeKey, expectedVersion: 3 },
+        { outcomeKey: protectedRow.outcomeKey, expectedVersion: 0 },
+      ],
+      now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_PROTECTED_REORDER_CAPACITY_WALL" })
+    expect(query.mock.calls.some(([sql]) => sql === OUTCOME_QUEUE_SQL.reorderMutation))
+      .toBe(false)
+  })
+
+  it("rejects generic supersession of a protected campaign outcome", async () => {
+    const protectedRow = queueRow({
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      lifecycleState: "suggested",
+      version: 0,
+    })
+    const query = mutationQuery({ current: protectedRow })
+
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "supersede",
+      outcomeKey: protectedRow.outcomeKey,
+      expectedVersion: 0,
+      idempotencyKey: "supersede-protected-campaign",
+      reason: "Attempt to replace the fixed campaign contract.",
+      replacement: {
+        title: "Replacement campaign outcome",
+      },
+      now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_PROTECTED_SUPERSESSION_ILLEGAL" })
+    expect(query.mock.calls.some(([sql]) => sql === OUTCOME_QUEUE_SQL.supersedeMutation))
+      .toBe(false)
+  })
+
   it("updates dependencies under the queue lock and rejects missing references and cycles", async () => {
     const target = queueRow({
       lifecycleState: "suggested",

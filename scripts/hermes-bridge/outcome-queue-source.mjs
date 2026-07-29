@@ -3278,6 +3278,11 @@ function protectedDestinationOrders(snapshot, ordered) {
       && rightOrder - leftOrder - 1 < segmentIndexes.length) {
       fail("OUTCOME_QUEUE_PROTECTED_REORDER_CAPACITY_WALL")
     }
+    if (leftOrder === null
+      && rightOrder !== null
+      && rightOrder < segmentIndexes.length) {
+      fail("OUTCOME_QUEUE_PROTECTED_REORDER_CAPACITY_WALL")
+    }
     const start = leftOrder !== null
       ? leftOrder + 1
       : rightOrder !== null
@@ -3473,6 +3478,10 @@ export async function mutateOutcomeQueueItem({
       if (currentResult?.rows?.length !== 1) fail("OUTCOME_QUEUE_OUTCOME_NOT_FOUND")
       const current = currentResult.rows[0]
       assertVersion(current, request.expectedVersion)
+      if (request.action === "supersede"
+        && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)) {
+        fail("OUTCOME_QUEUE_PROTECTED_SUPERSESSION_ILLEGAL")
+      }
 
       let result
       if (request.action === "pause") {

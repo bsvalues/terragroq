@@ -1198,7 +1198,6 @@ const V1_2_CAMPAIGN_RECOVERY_ACTIONS = new Set([
   "pause",
   "resume",
   "decline",
-  "supersede",
 ])
 
 async function protectedReorderSnapshotIsImmutable(

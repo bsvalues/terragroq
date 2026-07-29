@@ -640,6 +640,16 @@ describe("V1.2 campaign server authority boundaries", () => {
       idempotencyKey: "campaign:dependencies:1",
       dependencyKeys: [],
     })).resolves.toMatchObject({ status: "INVALID" })
+    await expect(mutateOutcomeQueue({
+      action: "supersede",
+      outcomeKey: campaignScope,
+      expectedVersion: 2,
+      idempotencyKey: "campaign:supersede:1",
+      reason: "Attempt to replace the fixed campaign contract.",
+      replacement: {
+        title: "Replacement campaign outcome",
+      },
+    })).resolves.toMatchObject({ status: "INVALID" })
     expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
   })
 
