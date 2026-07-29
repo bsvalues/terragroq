@@ -18,12 +18,18 @@ import {
   digestOutcomeQueueCheckpointProof,
   OUTCOME_QUEUE_MUTATION_ATTEMPT_DISPOSITIONS,
 } from "../scripts/hermes-bridge/outcome-queue-source.mjs"
+import {
+  ACCEPTANCE_OUTCOME_KEYS,
+  acceptanceCampaignIdempotencyKey,
+  acceptanceCampaignOutcomeKey,
+} from "../scripts/hermes-bridge/v1-2-acceptance-exercise.mjs"
 
 const revision = "a".repeat(40)
 const now = Date.parse("2026-07-28T19:00:00.000Z")
 const fresh = "2026-07-28T18:59:00.000Z"
 const productionAuthCookie = "better-auth.session_token=opaque-test-value"
 const roots: string[] = []
+const campaignRunId = "v1-2-campaign-run-001"
 const campaignSource = fs.readFileSync(
   new URL("../scripts/hermes-bridge/v1-2-acceptance-campaign.mjs", import.meta.url),
   "utf8",
@@ -99,9 +105,14 @@ function claims() {
     outcome(81, 1, "2026-07-28T18:00:00.000Z", "2026-07-28T18:20:00.000Z"),
     outcome(82, 2, "2026-07-28T18:20:00.000Z", "2026-07-28T18:50:00.000Z"),
   ]
+  const mutationTarget = (action: string) => (
+    ["pause", "resume"].includes(action.toLowerCase())
+      ? ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked
+      : acceptanceCampaignOutcomeKey(action.toLowerCase(), campaignRunId)
+  )
   const mutationResult = (action: string) => ({
-    affectedOutcomes: [{ outcomeKey: `mutation-${action.toLowerCase()}`, version: 2 }],
-    outcome: { outcomeKey: `mutation-${action.toLowerCase()}`, version: 2 },
+    affectedOutcomes: [{ outcomeKey: mutationTarget(action), version: 2 }],
+    outcome: { outcomeKey: mutationTarget(action), version: 2 },
     successor: null,
   })
   return {
@@ -124,9 +135,15 @@ function claims() {
         outcomeKey: "blocked-authority",
         reason: "BLOCKED_AUTHORITY",
       },
+      {
+        acquisitionCount: 0,
+        lifecycleState: "suggested",
+        outcomeKey: "blocked-risk",
+        reason: "BLOCKED_NON_R0_R1_POLICY",
+      },
     ],
     campaign: "WILLIAMOS-V1.2-TWO-OUTCOME",
-    campaignRunId: "v1-2-campaign-run-001",
+    campaignRunId,
     contention: {
       acquisitionKeyDigest: digest({ acquisitionKey: "acquire-82" }),
       activeWriterCount: 1,
@@ -152,7 +169,10 @@ function claims() {
         action,
         firstAttemptId: 801 + (index * 2),
         idempotentReplay: true,
-        idempotencyKeyDigest: digest(`idempotency-${action}`),
+        idempotencyKeyDigest: digest(acceptanceCampaignIdempotencyKey(
+          action.toLowerCase(),
+          campaignRunId,
+        )),
         mutationCount: 1,
         mutationCountAfterReplay: 1,
         receiptId: 301 + index,
@@ -160,7 +180,7 @@ function claims() {
         requestHash: digest(`request-${action}`),
         result: "PASS",
         resultDigest: digest(mutationResult(action)),
-        targetOutcomeKey: `mutation-${action.toLowerCase()}`,
+        targetOutcomeKey: mutationTarget(action),
       }),
     ),
     observedAt: fresh,
@@ -294,6 +314,9 @@ function liveBundle() {
       acquisitionCount: 0,
       blockedDependencyCount: 0,
       authorityEligible: false,
+      approvalState: "approved",
+      authorityState: "matched",
+      riskClass: "R0",
     },
     {
       outcomeKey: "blocked-dependency",
@@ -301,6 +324,19 @@ function liveBundle() {
       acquisitionCount: 0,
       blockedDependencyCount: 1,
       authorityEligible: true,
+      approvalState: "approved",
+      authorityState: "matched",
+      riskClass: "R0",
+    },
+    {
+      outcomeKey: "blocked-risk",
+      lifecycleState: "suggested",
+      acquisitionCount: 0,
+      blockedDependencyCount: 0,
+      authorityEligible: false,
+      approvalState: "unapproved",
+      authorityState: "unverified",
+      riskClass: "R2",
     },
   ]
   const mutationRows = document.mutations.map((mutation) => {
@@ -311,7 +347,10 @@ function liveBundle() {
     }
     return {
       id: mutation.receiptId,
-      idempotencyKey: `idempotency-${mutation.action}`,
+      idempotencyKey: acceptanceCampaignIdempotencyKey(
+        mutation.action.toLowerCase(),
+        campaignRunId,
+      ),
       operation: mutation.action.toLowerCase(),
       outcomeKey: mutation.targetOutcomeKey,
       requestHash: mutation.requestHash,
@@ -515,7 +554,10 @@ function liveBundle() {
   const mutationAttempts = document.mutations.flatMap((mutation, index) => [
     {
       id: mutation.firstAttemptId,
-      idempotencyKey: `idempotency-${mutation.action}`,
+      idempotencyKey: acceptanceCampaignIdempotencyKey(
+        mutation.action.toLowerCase(),
+        campaignRunId,
+      ),
       requestHash: mutation.requestHash,
       resultDigest: mutation.resultDigest,
       attemptOrdinal: 1,
@@ -524,7 +566,10 @@ function liveBundle() {
     },
     {
       id: mutation.replayAttemptId,
-      idempotencyKey: `idempotency-${mutation.action}`,
+      idempotencyKey: acceptanceCampaignIdempotencyKey(
+        mutation.action.toLowerCase(),
+        campaignRunId,
+      ),
       requestHash: mutation.requestHash,
       resultDigest: mutation.resultDigest,
       attemptOrdinal: 2,

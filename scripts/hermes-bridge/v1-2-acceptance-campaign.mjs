@@ -18,6 +18,11 @@ import {
   OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL,
   OUTCOME_QUEUE_MUTATION_ATTEMPT_DISPOSITIONS,
 } from "./outcome-queue-source.mjs"
+import {
+  ACCEPTANCE_OUTCOME_KEYS,
+  acceptanceCampaignIdempotencyKey,
+  acceptanceCampaignOutcomeKey,
+} from "./v1-2-acceptance-exercise.mjs"
 
 const SCHEMA_VERSION = 1
 const CAMPAIGN = "WILLIAMOS-V1.2-TWO-OUTCOME"
@@ -195,6 +200,9 @@ const BLOCKED_CANDIDATES_SQL = `
 SELECT
   q."outcomeKey",
   q."lifecycleState",
+  q."approvalState",
+  q."authorityState",
+  q."riskClass",
   (
     SELECT count(*)::integer
     FROM "outcome_queue_acquisition_receipt" receipt
@@ -481,11 +489,14 @@ function validateOutcome(outcome, expectedOrdinal) {
 }
 
 function validateBlockedCandidates(candidates) {
-  if (!Array.isArray(candidates) || candidates.length < 2) {
+  if (!Array.isArray(candidates) || candidates.length < 3) {
     return failure("BLOCKED_NONSELECTION_EVIDENCE_MISSING")
   }
   const reasons = new Set()
   for (const candidate of candidates) {
+    const lifecycleAllowed = candidate?.reason === "BLOCKED_NON_R0_R1_POLICY"
+      ? candidate.lifecycleState === "suggested"
+      : ["approved", "blocked", "paused"].includes(candidate?.lifecycleState)
     if (!exactKeys(candidate, [
       "acquisitionCount",
       "lifecycleState",
@@ -493,14 +504,23 @@ function validateBlockedCandidates(candidates) {
       "reason",
     ])
       || !nonempty(candidate.outcomeKey)
-      || !["BLOCKED_DEPENDENCY", "BLOCKED_AUTHORITY"].includes(candidate.reason)
-      || !["approved", "blocked", "paused"].includes(candidate.lifecycleState)
+      || ![
+        "BLOCKED_DEPENDENCY",
+        "BLOCKED_AUTHORITY",
+        "BLOCKED_NON_R0_R1_POLICY",
+      ].includes(candidate.reason)
+      || !lifecycleAllowed
       || candidate.acquisitionCount !== 0) {
       return failure("BLOCKED_NONSELECTION_EVIDENCE_INVALID", candidate?.outcomeKey ?? null)
     }
     reasons.add(candidate.reason)
   }
-  return ["BLOCKED_DEPENDENCY", "BLOCKED_AUTHORITY"].every((reason) => reasons.has(reason))
+  return [
+    "BLOCKED_DEPENDENCY",
+    "BLOCKED_AUTHORITY",
+    "BLOCKED_NON_R0_R1_POLICY",
+  ]
+    .every((reason) => reasons.has(reason))
     ? success()
     : failure("BLOCKED_NONSELECTION_CLASS_INCOMPLETE")
 }
@@ -982,12 +1002,16 @@ function verifyBlockedRows(claims, rows) {
     const row = rows.find((candidate) => candidate.outcomeKey === claim.outcomeKey)
     const blockedByDependency = Number(row?.blockedDependencyCount) > 0
     const blockedByAuthority = row?.authorityEligible !== true
+    const blockedByRiskPolicy = !["R0", "R1"].includes(row?.riskClass)
+      && row?.approvalState === "unapproved"
+      && row?.authorityState === "unverified"
     if (!row
       || row.lifecycleState !== claim.lifecycleState
       || Number(row.acquisitionCount) !== 0
       || claim.acquisitionCount !== 0
       || (claim.reason === "BLOCKED_DEPENDENCY" && !blockedByDependency)
-      || (claim.reason === "BLOCKED_AUTHORITY" && !blockedByAuthority)) {
+      || (claim.reason === "BLOCKED_AUTHORITY" && !blockedByAuthority)
+      || (claim.reason === "BLOCKED_NON_R0_R1_POLICY" && !blockedByRiskPolicy)) {
       return failure("LIVE_BLOCKED_NONSELECTION_MISMATCH", claim.outcomeKey)
     }
   }
@@ -1238,24 +1262,33 @@ function verifyAcquisitionAttempts(
   })
 }
 
-export function verifyMutationRows(claims, rows, attempts) {
+export function verifyMutationRows(claims, rows, attempts, campaignRunId) {
   if (rows.length !== claims.length) return failure("LIVE_MUTATION_RECEIPT_CARDINALITY_WALL")
   if (attempts.length !== claims.length * 2) {
     return failure("LIVE_MUTATION_ATTEMPT_CARDINALITY_WALL")
   }
   for (const claim of claims) {
     const operation = claim.action.toLowerCase()
+    const expectedOutcomeKey = ["pause", "resume"].includes(operation)
+      ? ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked
+      : acceptanceCampaignOutcomeKey(operation, campaignRunId)
+    const expectedIdempotencyKey = acceptanceCampaignIdempotencyKey(
+      operation,
+      campaignRunId,
+    )
     const row = rows.find((receipt) => (
       Number(receipt.id) === claim.receiptId
       && receipt.operation === operation
-      && receipt.outcomeKey === claim.targetOutcomeKey
+      && receipt.outcomeKey === expectedOutcomeKey
+      && receipt.idempotencyKey === expectedIdempotencyKey
     ))
     const matchingAttempts = attempts.filter(
       (attempt) => attempt.idempotencyKey === row?.idempotencyKey,
     )
     const first = matchingAttempts.find((attempt) => Number(attempt.attemptOrdinal) === 1)
     const replay = matchingAttempts.find((attempt) => Number(attempt.attemptOrdinal) === 2)
-    if (!row
+    if (claim.targetOutcomeKey !== expectedOutcomeKey
+      || !row
       || matchingAttempts.length !== 2
       || !first
       || !replay
@@ -1399,6 +1432,7 @@ export async function verifyLiveCampaignRecords({
       claims.mutations,
       mutationsResult.rows ?? [],
       mutationAttemptsResult.rows ?? [],
+      claims.campaignRunId,
     )
     if (!mutations.ok) return mutations
     const localAfter = typeof rereadLocalState === "function" ? rereadLocalState() : localState
