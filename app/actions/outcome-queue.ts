@@ -691,7 +691,7 @@ export async function recordV12CampaignOutcomeAuthority(input: {
       await transaction.insert(eventLog).values({
         userId,
         type: "authority.renewed",
-        summary: `${renewedGrant.ref}: renewed A0_READ_ONLY for 48 hours`,
+        summary: `${renewedGrant.ref}: renewed ${renewedGrant.authorityLevel} for 48 hours`,
         register: "authority",
         refId: renewedGrant.id,
       })
@@ -849,7 +849,7 @@ export async function recordV12CampaignOutcomeAuthority(input: {
       {
         userId,
         type: "authority.granted",
-        summary: `${grant.ref}: granted A0_READ_ONLY to operator`,
+        summary: `${grant.ref}: granted ${grant.authorityLevel} to operator`,
         register: "authority",
         refId: grant.id,
       },
@@ -1243,6 +1243,30 @@ async function protectedReorderSnapshotIsImmutable(
   })
 }
 
+async function campaignDeclineAuthorityIsInactive(
+  input: OutcomeQueueMutationInput,
+  userId: string,
+): Promise<boolean> {
+  if (input.action !== "decline" || !isV12CampaignAuthorityScope(input.outcomeKey)) {
+    return true
+  }
+  const [row] = await db
+    .select({
+      authorityGrantRef: outcomeQueueItem.authorityGrantRef,
+      authorityState: outcomeQueueItem.authorityState,
+    })
+    .from(outcomeQueueItem)
+    .where(and(
+      eq(outcomeQueueItem.userId, userId),
+      eq(outcomeQueueItem.outcomeKey, input.outcomeKey),
+    ))
+    .limit(1)
+  return row !== undefined
+    && (row.authorityGrantRef === null
+      || row.authorityState === "revoked"
+      || row.authorityState === "expired")
+}
+
 function runtimeCode(error: unknown): string {
   return error !== null && typeof error === "object" && "code" in error
     && typeof error.code === "string"
@@ -1311,6 +1335,14 @@ export async function mutateOutcomeQueue(
     return {
       status: "INVALID",
       message: "Protected V1.2 rows must remain at their exact position and version.",
+      outcomeKey: validated.outcomeKey,
+      version: null,
+    }
+  }
+  if (!await campaignDeclineAuthorityIsInactive(validated, userId)) {
+    return {
+      status: "INVALID",
+      message: "Revoke this product outcome authority before declining it.",
       outcomeKey: validated.outcomeKey,
       version: null,
     }

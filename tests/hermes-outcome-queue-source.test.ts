@@ -2676,6 +2676,30 @@ describe("governed outcome queue mutations", () => {
       .toBe(false)
   })
 
+  it("rejects decline of a protected campaign outcome while authority is live", async () => {
+    const protectedRow = queueRow({
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      lifecycleState: "approved",
+      authorityState: "matched",
+      authorityGrantRef: "GRANT-V12-CAMPAIGN",
+      version: 1,
+    })
+    const query = mutationQuery({ current: protectedRow })
+
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "decline",
+      outcomeKey: protectedRow.outcomeKey,
+      expectedVersion: 1,
+      idempotencyKey: "decline-protected-live-authority",
+      reason: "Attempt to decline before revocation.",
+      now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_ACTIVE" })
+    expect(query.mock.calls.some(([sql]) => sql === OUTCOME_QUEUE_SQL.declineMutation))
+      .toBe(false)
+  })
+
   it("updates dependencies under the queue lock and rejects missing references and cycles", async () => {
     const target = queueRow({
       lifecycleState: "suggested",

@@ -609,18 +609,22 @@ export function OperatorOutcomeQueuePanel({
                             <GitBranch className="h-4 w-4" />
                           </Button>
                         )}
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          disabled={rowPending}
-                          title="Decline outcome"
-                          aria-label={`Decline ${row.title}`}
-                          onClick={() => run(inputFor(row, "decline", {
-                            reason: "Primary Operator declined this outcome.",
-                          }))}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
+                        {campaignAuthorityProposal
+                          && row.authorityGrantRef !== null
+                          && !["revoked", "expired"].includes(row.authorityState) ? null : (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            disabled={rowPending}
+                            title="Decline outcome"
+                            aria-label={`Decline ${row.title}`}
+                            onClick={() => run(inputFor(row, "decline", {
+                              reason: "Primary Operator declined this outcome.",
+                            }))}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        )}
                       </>
                     ) : null}
                   </div>

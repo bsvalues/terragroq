@@ -3491,6 +3491,12 @@ export async function mutateOutcomeQueueItem({
         && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)) {
         fail("OUTCOME_QUEUE_PROTECTED_SUPERSESSION_ILLEGAL")
       }
+      if (request.action === "decline"
+        && PROTECTED_V1_2_OUTCOME_KEYS.has(current.outcomeKey)
+        && current.authorityGrantRef != null
+        && !["revoked", "expired"].includes(current.authorityState)) {
+        fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_ACTIVE")
+      }
 
       let result
       if (request.action === "pause") {

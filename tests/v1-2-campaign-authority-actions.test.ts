@@ -275,12 +275,22 @@ describe("V1.2 campaign server authority boundaries", () => {
         && (entry.values as { eventType?: string }).eventType === "AUTHORITY_GRANTED",
     )?.values as { metadata: Record<string, unknown> }
     expect(authorityEvent.metadata).toMatchObject({
+      authorityLevel: "A2_WRITE_OWN",
       parentBodySha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       materializationEventId: 41,
       materializationAfterHash: materialization.afterHash,
       goalId: 21,
       goalRef: "GOAL-0021",
     })
+    expect(harness.inserts).toContainEqual(expect.objectContaining({
+      table: "event_log",
+      values: expect.arrayContaining([
+        expect.objectContaining({
+          type: "authority.granted",
+          summary: expect.stringContaining("granted A2_WRITE_OWN to operator"),
+        }),
+      ]),
+    }))
   })
 
   it("renews an expired exact grant for a paused campaign", async () => {
@@ -370,6 +380,13 @@ describe("V1.2 campaign server authority boundaries", () => {
         metadata: expect.objectContaining({
           replacesGrantRef: priorGrant.ref,
         }),
+      }),
+    }))
+    expect(harness.inserts).toContainEqual(expect.objectContaining({
+      table: "event_log",
+      values: expect.objectContaining({
+        type: "authority.renewed",
+        summary: expect.stringContaining("renewed A2_WRITE_OWN for 48 hours"),
       }),
     }))
   })
@@ -693,6 +710,41 @@ describe("V1.2 campaign server authority boundaries", () => {
         title: "Replacement campaign outcome",
       },
     })).resolves.toMatchObject({ status: "INVALID" })
+    expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
+  })
+
+  it("requires campaign authority revocation before decline", async () => {
+    boundary.dbSelect
+      .mockReturnValueOnce(fluentQuery([{
+        authorityGrantRef: "GRANT-V12-CAMPAIGN",
+        authorityState: "matched",
+      }]))
+      .mockReturnValueOnce(fluentQuery([{
+        authorityGrantRef: "GRANT-V12-CAMPAIGN",
+        authorityState: "revoked",
+      }]))
+    boundary.mutateOutcomeQueueItem.mockResolvedValue({
+      replayed: false,
+      outcome: { outcomeKey: campaignScope, version: 3 },
+    })
+    const input = {
+      action: "decline" as const,
+      outcomeKey: campaignScope,
+      expectedVersion: 2,
+      reason: "Primary declined the bounded proposal.",
+    }
+
+    await expect(mutateOutcomeQueue({
+      ...input,
+      idempotencyKey: "campaign:decline:active-grant",
+    })).resolves.toMatchObject({
+      status: "INVALID",
+      message: "Revoke this product outcome authority before declining it.",
+    })
+    await expect(mutateOutcomeQueue({
+      ...input,
+      idempotencyKey: "campaign:decline:revoked-grant",
+    })).resolves.toMatchObject({ status: "RECORDED" })
     expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
   })
 
