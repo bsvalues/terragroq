@@ -929,6 +929,7 @@ describe("Hermes durable outcome queue runtime", () => {
   })
 
   it("reapplies protected-scope policy while reconciling a recovered queue command", async () => {
+    const transitionQueue = vi.fn(async () => ({ lifecycleState: "blocked" }))
     const bridge = runtime({
       acquire: vi.fn(async () => ({
         outcome: {
@@ -941,12 +942,21 @@ describe("Hermes durable outcome queue runtime", () => {
         acquired: true,
         reclaimed: true,
       })),
+      transitionQueue,
     })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
 
     await expect(bridge.refreshOutcome(outcome)).rejects.toMatchObject({
       code: "HERMES_OUTCOME_QUEUE_POLICY_PROTECTED_SCOPE",
     })
+    expect(transitionQueue).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeKey: "outcome:home-radar",
+      fromState: "active",
+      toState: "blocked",
+      expectedVersion: 5,
+      fencingToken: 4,
+      lifecycleReason: "HERMES_OUTCOME_QUEUE_POLICY_PROTECTED_SCOPE",
+    }))
   })
 
   it("accepts an exact completed queue settlement for terminal checkpoint replay", async () => {

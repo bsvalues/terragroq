@@ -599,6 +599,19 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         standingAuthority: true,
       })
       if (!decision.allowed) {
+        await transitionQueue({
+          databaseUrl,
+          userId: refreshed.outcome.userId,
+          outcomeKey: refreshed.outcome.outcomeKey,
+          fromState: "active",
+          toState: "blocked",
+          expectedVersion: Number(refreshed.outcome.version),
+          executionBinding: refreshed.outcome.executionBinding,
+          leaseToken: refreshed.outcome.leaseToken,
+          fencingToken: Number(refreshed.outcome.fencingToken),
+          lifecycleReason: `HERMES_OUTCOME_QUEUE_POLICY_${decision.reasonCode}`,
+          now: now(),
+        })
         wall(decision.reasonCode, `HERMES_OUTCOME_QUEUE_POLICY_${decision.reasonCode}`)
       }
       return withPersistedBinding(governedOutcome, refreshed.outcome)
