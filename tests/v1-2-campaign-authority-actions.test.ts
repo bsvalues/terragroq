@@ -980,6 +980,31 @@ describe("V1.2 campaign server authority boundaries", () => {
     expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
   })
 
+  it("allows campaign decline for a revoked grant with no expiry", async () => {
+    boundary.dbSelect
+      .mockReturnValueOnce(fluentQuery([{
+        authorityGrantRef: "GRANT-V12-CAMPAIGN",
+        authorityState: "revoked",
+      }]))
+      .mockReturnValueOnce(fluentQuery([{
+        status: "revoked",
+        expiresAt: null,
+      }]))
+    boundary.mutateOutcomeQueueItem.mockResolvedValue({
+      replayed: false,
+      outcome: { outcomeKey: campaignScope, version: 3 },
+    })
+
+    await expect(mutateOutcomeQueue({
+      action: "decline",
+      outcomeKey: campaignScope,
+      expectedVersion: 2,
+      idempotencyKey: "campaign:decline:revoked-no-expiry",
+      reason: "Primary declined after revoking authority.",
+    })).resolves.toMatchObject({ status: "RECORDED" })
+    expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
+  })
+
   it("rejects campaign recovery from an authenticated non-Primary session", async () => {
     boundary.getSession.mockResolvedValue({
       user: { id: "diagnostic-1", email: "test+wo@example.com" },

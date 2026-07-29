@@ -1311,13 +1311,16 @@ async function campaignDeclineAuthorityIsInactive(
           eq(authorityGrant.ref, row.authorityGrantRef!),
         ))
         .limit(1)
-      if (!grant || !(grant.expiresAt instanceof Date)
-        || !Number.isFinite(grant.expiresAt.getTime())) {
+      if (!grant || (grant.expiresAt !== null
+        && (!(grant.expiresAt instanceof Date)
+          || !Number.isFinite(grant.expiresAt.getTime())))) {
         return false
       }
       return grant.status === "revoked"
         || grant.status === "expired"
-        || (grant.status === "active" && grant.expiresAt.getTime() <= Date.now())
+        || (grant.status === "active"
+          && grant.expiresAt instanceof Date
+          && grant.expiresAt.getTime() <= Date.now())
     })())
 }
 
