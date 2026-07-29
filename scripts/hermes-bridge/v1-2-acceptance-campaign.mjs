@@ -489,6 +489,9 @@ function validateBlockedCandidates(candidates) {
   }
   const reasons = new Set()
   for (const candidate of candidates) {
+    const lifecycleAllowed = candidate?.reason === "BLOCKED_NON_R0_R1_POLICY"
+      ? candidate.lifecycleState === "suggested"
+      : ["approved", "blocked", "paused"].includes(candidate?.lifecycleState)
     if (!exactKeys(candidate, [
       "acquisitionCount",
       "lifecycleState",
@@ -501,7 +504,7 @@ function validateBlockedCandidates(candidates) {
         "BLOCKED_AUTHORITY",
         "BLOCKED_NON_R0_R1_POLICY",
       ].includes(candidate.reason)
-      || !["approved", "blocked", "paused"].includes(candidate.lifecycleState)
+      || !lifecycleAllowed
       || candidate.acquisitionCount !== 0) {
       return failure("BLOCKED_NONSELECTION_EVIDENCE_INVALID", candidate?.outcomeKey ?? null)
     }

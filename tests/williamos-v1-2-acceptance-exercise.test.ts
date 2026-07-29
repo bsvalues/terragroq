@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   ACCEPTANCE_OUTCOME_KEYS,
+  acceptanceCampaignOutcomeKey,
   runAcceptanceExercise,
 } from "../scripts/hermes-bridge/v1-2-acceptance-exercise.mjs"
 
@@ -65,6 +66,10 @@ function harness({
   let nextReceiptId = 1
   let nextAttemptId = 1
   const lockState = { commits: 0, rollbacks: 0 }
+  const campaignState = {
+    id: "campaign:v1-2-final",
+    open: campaignOpen,
+  }
   if (unrelatedQueueOrder !== null) {
     queue.push({
       approvalDecisionId: null,
@@ -191,6 +196,7 @@ function harness({
         },
       }
     },
+    campaignState,
     evidence,
     list,
     lockState,
@@ -204,12 +210,12 @@ function harness({
     readAcquisitionCounts: async (keys: string[]) => Object.fromEntries(
       keys.map((key) => [key, key === acquiredCandidate ? 1 : 0]),
     ),
-    readCampaignWindow: async () => campaignOpen
+    readCampaignWindow: async () => campaignState.open
       ? {
           acquiredAt: "2026-07-29T06:00:00.000Z",
           activeGrantRef: "GRANT-0100",
           activeOutcomeKey: "goal:GOAL-0008",
-          campaignWindowId: "campaign:v1-2-final",
+          campaignWindowId: campaignState.id,
         }
       : null,
     readEvidence,
@@ -251,7 +257,6 @@ describe("V1.2 live acceptance exercise", () => {
     for (const key of [
       ACCEPTANCE_OUTCOME_KEYS.authorityBlocked,
       ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked,
-      ACCEPTANCE_OUTCOME_KEYS.supersede,
     ]) {
       expect(adapter.queue.find((row) => row.outcomeKey === key)?.dependencyKeys)
         .toContain(ACCEPTANCE_OUTCOME_KEYS.safetyBlocker)
@@ -277,6 +282,12 @@ describe("V1.2 live acceptance exercise", () => {
     expect([...adapter.evidence.values()].every(
       (entry) => entry.attempts.length === 2,
     )).toBe(true)
+    expect(adapter.queue.find(
+      (row) => row.outcomeKey === acceptanceCampaignOutcomeKey(
+        "supersede",
+        "campaign:v1-2-final",
+      ),
+    )?.dependencyKeys).toContain(ACCEPTANCE_OUTCOME_KEYS.safetyBlocker)
     expect(adapter.lockState).toEqual({ commits: 1, rollbacks: 0 })
 
     const replayedRun = await runAcceptanceExercise({
@@ -424,5 +435,35 @@ describe("V1.2 live acceptance exercise", () => {
     expect(adapter.queue.find(
       (row) => row.outcomeKey === "goal:unrelated-product-outcome",
     )?.queueOrder).toBe(50)
+  })
+
+  it("uses fresh terminal mutation targets when a new campaign is required", async () => {
+    const adapter = harness({ authorityReady: true })
+    const first = await runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })
+    expect(first.status).toBe("PASS")
+    const firstDecline = acceptanceCampaignOutcomeKey(
+      "decline",
+      "campaign:v1-2-final",
+    )
+
+    adapter.campaignState.id = "campaign:v1-2-recovery"
+    const second = await runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })
+    const secondDecline = acceptanceCampaignOutcomeKey(
+      "decline",
+      "campaign:v1-2-recovery",
+    )
+
+    expect(second.status).toBe("PASS")
+    expect(secondDecline).not.toBe(firstDecline)
+    expect(adapter.queue.find((row) => row.outcomeKey === firstDecline)?.lifecycleState)
+      .toBe("declined")
+    expect(adapter.queue.find((row) => row.outcomeKey === secondDecline)?.lifecycleState)
+      .toBe("declined")
   })
 })

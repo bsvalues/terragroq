@@ -24,8 +24,9 @@ export const ACCEPTANCE_OUTCOME_KEYS = Object.freeze({
   supersede: "acceptance:v1-2:supersede",
 })
 
-const CANDIDATES = Object.freeze([
+const STANDING_CANDIDATES = Object.freeze([
   {
+    name: "safetyBlocker",
     key: ACCEPTANCE_OUTCOME_KEYS.safetyBlocker,
     title: "V1.2 acceptance acquisition safety sentinel",
     objective: "Remain unfinished so acceptance-only candidates cannot be acquired.",
@@ -33,6 +34,7 @@ const CANDIDATES = Object.freeze([
     dependencyKeys: [],
   },
   {
+    name: "authorityBlocked",
     key: ACCEPTANCE_OUTCOME_KEYS.authorityBlocked,
     title: "V1.2 revoked-authority nonselection proof",
     objective: "Remain unselected after an exact-scope authority grant is revoked.",
@@ -40,6 +42,7 @@ const CANDIDATES = Object.freeze([
     dependencyKeys: [ACCEPTANCE_OUTCOME_KEYS.safetyBlocker],
   },
   {
+    name: "dependencyBlocked",
     key: ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked,
     title: "V1.2 dependency and pause/resume proof",
     objective: "Exercise pause/resume exactly once while an unfinished dependency prevents selection.",
@@ -47,36 +50,60 @@ const CANDIDATES = Object.freeze([
     dependencyKeys: [ACCEPTANCE_OUTCOME_KEYS.safetyBlocker],
   },
   {
-    key: ACCEPTANCE_OUTCOME_KEYS.decline,
+    name: "riskBlocked",
+    key: ACCEPTANCE_OUTCOME_KEYS.riskBlocked,
+    title: "V1.2 non-R0/R1 nonselection proof",
+    objective: "Remain unselected because the bounded resident queue excludes R2 work.",
+    queueOrder: 103,
+    dependencyKeys: [],
+    riskClass: "R2",
+  },
+])
+
+const MUTATION_CANDIDATE_TEMPLATES = Object.freeze([
+  {
+    name: "decline",
+    keyPrefix: ACCEPTANCE_OUTCOME_KEYS.decline,
     title: "V1.2 decline idempotency proof",
     objective: "Exercise one durable decline and one exact replay.",
     queueOrder: 102,
     dependencyKeys: [],
   },
   {
-    key: ACCEPTANCE_OUTCOME_KEYS.riskBlocked,
-    title: "V1.2 non-R0/R1 nonselection proof",
-    objective: "Remain unselected because the bounded resident queue excludes R2 work.",
-    queueOrder: 103,
-    dependencyKeys: [],
-    lifecycleState: "blocked",
-    riskClass: "R2",
-  },
-  {
-    key: ACCEPTANCE_OUTCOME_KEYS.reorder,
+    name: "reorder",
+    keyPrefix: ACCEPTANCE_OUTCOME_KEYS.reorder,
     title: "V1.2 reorder idempotency proof",
     objective: "Exercise one durable queue reorder and one exact replay.",
     queueOrder: 104,
     dependencyKeys: [],
   },
   {
-    key: ACCEPTANCE_OUTCOME_KEYS.supersede,
+    name: "supersede",
+    keyPrefix: ACCEPTANCE_OUTCOME_KEYS.supersede,
     title: "V1.2 supersede idempotency proof",
     objective: "Exercise one durable supersede and one exact replay.",
     queueOrder: 105,
     dependencyKeys: [ACCEPTANCE_OUTCOME_KEYS.safetyBlocker],
   },
 ])
+
+export function acceptanceCampaignOutcomeKey(name, campaignWindowId) {
+  const template = MUTATION_CANDIDATE_TEMPLATES.find(
+    (candidate) => candidate.name === name,
+  )
+  if (!template) throw new Error("V1_2_CAMPAIGN_CANDIDATE_NAME_WALL")
+  return `${template.keyPrefix}:${digest(campaignWindowId).slice(0, 24)}`
+}
+
+function candidatesForCampaign(campaignWindowId) {
+  return [
+    ...STANDING_CANDIDATES,
+    ...MUTATION_CANDIDATE_TEMPLATES.map((candidate) => ({
+      ...candidate,
+      key: acceptanceCampaignOutcomeKey(candidate.name, campaignWindowId),
+    })),
+  ]
+}
 
 function digest(value) {
   return createHash("sha256").update(
@@ -246,7 +273,7 @@ export async function runAcceptanceExercise({
   }
 
   let queue = await list({ userId })
-  for (const candidate of CANDIDATES) {
+  for (const candidate of STANDING_CANDIDATES) {
     if (!byKey(queue, candidate.key)) {
       await persist({ userId, item: suggestion(candidate, now), now })
       queue = await list({ userId })
@@ -255,20 +282,20 @@ export async function runAcceptanceExercise({
       throw new Error(`V1_2_ACCEPTANCE_TOPOLOGY_WALL:${candidate.key}`)
     }
   }
-  const assertAcceptanceSafety = async (query) => {
+  const assertAcceptanceSafety = async (candidates, query) => {
     const current = await list({ userId, query })
     const counts = await readAcquisitionCounts(
-      CANDIDATES.map((candidate) => candidate.key),
+      candidates.map((candidate) => candidate.key),
       query,
     )
-    for (const candidate of CANDIDATES) {
+    for (const candidate of candidates) {
       if (!topologyMatches(byKey(current, candidate.key), candidate)
         || Number(counts[candidate.key] ?? 0) !== 0) {
         throw new Error(`V1_2_ACCEPTANCE_SAFETY_WALL:${candidate.key}`)
       }
     }
   }
-  await assertAcceptanceSafety()
+  await assertAcceptanceSafety(STANDING_CANDIDATES)
 
   const dependency = byKey(queue, ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked)
   const authority = byKey(queue, ACCEPTANCE_OUTCOME_KEYS.authorityBlocked)
@@ -319,17 +346,34 @@ export async function runAcceptanceExercise({
     }
   }
 
+  const candidates = candidatesForCampaign(campaignWindow.campaignWindowId)
+  for (const candidate of candidates) {
+    if (!byKey(queue, candidate.key)) {
+      await persist({ userId, item: suggestion(candidate, now), now })
+      queue = await list({ userId })
+    }
+    if (!topologyMatches(byKey(queue, candidate.key), candidate)) {
+      throw new Error(`V1_2_ACCEPTANCE_TOPOLOGY_WALL:${candidate.key}`)
+    }
+  }
+  await assertAcceptanceSafety(candidates)
+  const candidateKey = (name) => {
+    const candidate = candidates.find((entry) => entry.name === name)
+    if (!candidate) throw new Error("V1_2_CAMPAIGN_CANDIDATE_NAME_WALL")
+    return candidate.key
+  }
+
   const locked = await acquireExerciseLock(userId, {
     activeGrantRef: campaignWindow.activeGrantRef,
     activeOutcomeKey: campaignWindow.activeOutcomeKey,
     authorityGrantRef: authority.authorityGrantRef,
     campaignWindowId: campaignWindow.campaignWindowId,
     dependencyGrantRef: dependency.authorityGrantRef,
-    outcomeKeys: CANDIDATES.map((candidate) => candidate.key),
+    outcomeKeys: candidates.map((candidate) => candidate.key),
   })
   let complete = false
   try {
-    const guard = () => assertAcceptanceSafety(locked.query)
+    const guard = () => assertAcceptanceSafety(candidates, locked.query)
     const lockedList = () => list({ userId, query: locked.query })
     const lockedMutate = (request) => mutate({
       userId,
@@ -384,16 +428,17 @@ export async function runAcceptanceExercise({
           .filter((row) => ["suggested", "approved", "blocked"].includes(row.lifecycleState))
           .sort((left, right) => left.queueOrder - right.queueOrder
             || left.outcomeKey.localeCompare(right.outcomeKey))
-        const target = byKey(rows, ACCEPTANCE_OUTCOME_KEYS.reorder)
+        const target = byKey(rows, candidateKey("reorder"))
         if (!target) throw new Error("V1_2_REORDER_TARGET_WALL")
-        const acceptanceKeys = new Set(CANDIDATES.map((candidate) => candidate.key))
         if (rows.some((row, index) => (
-          !acceptanceKeys.has(row.outcomeKey) && row.queueOrder !== index
+          !row.outcomeKey.startsWith("acceptance:v1-2:")
+          && row.queueOrder !== index
         ))) {
           throw new Error("V1_2_REORDER_ISOLATION_WALL")
         }
         const partnerIndex = rows.findIndex((row) => (
-          row.outcomeKey !== target.outcomeKey && acceptanceKeys.has(row.outcomeKey)
+          row.outcomeKey !== target.outcomeKey
+          && row.outcomeKey.startsWith("acceptance:v1-2:")
         ))
         const targetIndex = rows.findIndex((row) => row.outcomeKey === target.outcomeKey)
         if (partnerIndex < 0 || targetIndex < 0) {
@@ -418,7 +463,7 @@ export async function runAcceptanceExercise({
     }))
 
     for (const action of ["decline", "supersede"]) {
-      const outcomeKey = ACCEPTANCE_OUTCOME_KEYS[action]
+      const outcomeKey = candidateKey(action)
       mutations.push(await applyExactlyOnceMutation({
         action,
         campaignWindow,

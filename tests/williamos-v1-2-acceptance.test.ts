@@ -126,7 +126,7 @@ function claims() {
       },
       {
         acquisitionCount: 0,
-        lifecycleState: "blocked",
+        lifecycleState: "suggested",
         outcomeKey: "blocked-risk",
         reason: "BLOCKED_NON_R0_R1_POLICY",
       },
@@ -316,7 +316,7 @@ function liveBundle() {
     },
     {
       outcomeKey: "blocked-risk",
-      lifecycleState: "blocked",
+      lifecycleState: "suggested",
       acquisitionCount: 0,
       blockedDependencyCount: 0,
       authorityEligible: false,
