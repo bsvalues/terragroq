@@ -1282,17 +1282,24 @@ async function protectedReorderSnapshotIsImmutable(
   })
 }
 
-async function campaignDeclineAuthorityIsInactive(
+async function campaignDeclinePreflight(
   input: OutcomeQueueMutationInput,
   userId: string,
-): Promise<boolean> {
+): Promise<"OK" | "AUTHORITY_ACTIVE" | "RUNTIME_BOUND"> {
   if (input.action !== "decline" || !isV12CampaignAuthorityScope(input.outcomeKey)) {
-    return true
+    return "OK"
   }
   const [row] = await db
     .select({
+      activeWorkOrderId: outcomeQueueItem.activeWorkOrderId,
       authorityGrantRef: outcomeQueueItem.authorityGrantRef,
-      authorityState: outcomeQueueItem.authorityState,
+      executionBinding: outcomeQueueItem.executionBinding,
+      leaseHolder: outcomeQueueItem.leaseHolder,
+      leaseToken: outcomeQueueItem.leaseToken,
+      leaseExpiresAt: outcomeQueueItem.leaseExpiresAt,
+      fencingToken: outcomeQueueItem.fencingToken,
+      acquisitionKey: outcomeQueueItem.acquisitionKey,
+      activatedAt: outcomeQueueItem.activatedAt,
     })
     .from(outcomeQueueItem)
     .where(and(
@@ -1300,30 +1307,41 @@ async function campaignDeclineAuthorityIsInactive(
       eq(outcomeQueueItem.outcomeKey, input.outcomeKey),
     ))
     .limit(1)
-  return row !== undefined
-    && (row.authorityGrantRef === null || await (async () => {
-      const [grant] = await db
-        .select({
-          status: authorityGrant.status,
-          expiresAt: authorityGrant.expiresAt,
-        })
-        .from(authorityGrant)
-        .where(and(
-          eq(authorityGrant.userId, userId),
-          eq(authorityGrant.ref, row.authorityGrantRef!),
-        ))
-        .limit(1)
-      if (!grant || (grant.expiresAt !== null
-        && (!(grant.expiresAt instanceof Date)
-          || !Number.isFinite(grant.expiresAt.getTime())))) {
-        return false
-      }
-      return grant.status === "revoked"
-        || grant.status === "expired"
-        || (grant.status === "active"
-          && grant.expiresAt instanceof Date
-          && grant.expiresAt.getTime() <= Date.now())
-    })())
+  if (!row) return "AUTHORITY_ACTIVE"
+  if (row.activeWorkOrderId !== null
+    || row.executionBinding !== null
+    || row.leaseHolder !== null
+    || row.leaseToken !== null
+    || row.leaseExpiresAt !== null
+    || row.fencingToken !== 0
+    || row.acquisitionKey !== null
+    || row.activatedAt !== null) {
+    return "RUNTIME_BOUND"
+  }
+  if (row.authorityGrantRef === null) return "OK"
+  const [grant] = await db
+    .select({
+      status: authorityGrant.status,
+      expiresAt: authorityGrant.expiresAt,
+    })
+    .from(authorityGrant)
+    .where(and(
+      eq(authorityGrant.userId, userId),
+      eq(authorityGrant.ref, row.authorityGrantRef),
+    ))
+    .limit(1)
+  if (!grant || (grant.expiresAt !== null
+    && (!(grant.expiresAt instanceof Date)
+      || !Number.isFinite(grant.expiresAt.getTime())))) {
+    return "AUTHORITY_ACTIVE"
+  }
+  return grant.status === "revoked"
+    || grant.status === "expired"
+    || (grant.status === "active"
+      && grant.expiresAt instanceof Date
+      && grant.expiresAt.getTime() <= Date.now())
+    ? "OK"
+    : "AUTHORITY_ACTIVE"
 }
 
 async function genericCampaignResumeIsManualPause(
@@ -1473,10 +1491,13 @@ export async function mutateOutcomeQueue(
       version: null,
     }
   }
-  if (!await campaignDeclineAuthorityIsInactive(validated, userId)) {
+  const campaignDeclineState = await campaignDeclinePreflight(validated, userId)
+  if (campaignDeclineState !== "OK") {
     return {
       status: "INVALID",
-      message: "Revoke this product outcome authority before declining it.",
+      message: campaignDeclineState === "RUNTIME_BOUND"
+        ? "Runtime-bound campaign outcomes must complete through Hermes."
+        : "Revoke this product outcome authority before declining it.",
       outcomeKey: validated.outcomeKey,
       version: null,
     }

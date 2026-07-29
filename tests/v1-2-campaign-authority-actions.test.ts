@@ -81,6 +81,20 @@ function fluentQuery<T>(rows: T[]): FluentQuery<T> {
 
 const campaignScope = "campaign:v1-2:queue-evidence-drilldown"
 
+function declinableCampaignRow(authorityGrantRef = "GRANT-V12-CAMPAIGN") {
+  return {
+    activeWorkOrderId: null,
+    authorityGrantRef,
+    executionBinding: null,
+    leaseHolder: null,
+    leaseToken: null,
+    leaseExpiresAt: null,
+    fencingToken: 0,
+    acquisitionKey: null,
+    activatedAt: null,
+  }
+}
+
 function transactionHarness(selectRows: unknown[][], updateRows: unknown[] = []) {
   const inserts: Array<{ table: string; values: unknown }> = []
   const updates: Array<{ table: string; values: Record<string, unknown> }> = []
@@ -976,18 +990,12 @@ describe("V1.2 campaign server authority boundaries", () => {
 
   it("requires campaign authority revocation before decline", async () => {
     boundary.dbSelect
-      .mockReturnValueOnce(fluentQuery([{
-        authorityGrantRef: "GRANT-V12-CAMPAIGN",
-        authorityState: "matched",
-      }]))
+      .mockReturnValueOnce(fluentQuery([declinableCampaignRow()]))
       .mockReturnValueOnce(fluentQuery([{
         status: "active",
         expiresAt: new Date("2099-01-01T00:00:00.000Z"),
       }]))
-      .mockReturnValueOnce(fluentQuery([{
-        authorityGrantRef: "GRANT-V12-CAMPAIGN",
-        authorityState: "revoked",
-      }]))
+      .mockReturnValueOnce(fluentQuery([declinableCampaignRow()]))
       .mockReturnValueOnce(fluentQuery([{
         status: "revoked",
         expiresAt: new Date("2099-01-01T00:00:00.000Z"),
@@ -1019,10 +1027,7 @@ describe("V1.2 campaign server authority boundaries", () => {
 
   it("allows campaign decline after the linked grant expires by time", async () => {
     boundary.dbSelect
-      .mockReturnValueOnce(fluentQuery([{
-        authorityGrantRef: "GRANT-V12-CAMPAIGN",
-        authorityState: "matched",
-      }]))
+      .mockReturnValueOnce(fluentQuery([declinableCampaignRow()]))
       .mockReturnValueOnce(fluentQuery([{
         status: "active",
         expiresAt: new Date("2020-01-01T00:00:00.000Z"),
@@ -1044,10 +1049,7 @@ describe("V1.2 campaign server authority boundaries", () => {
 
   it("allows campaign decline for a revoked grant with no expiry", async () => {
     boundary.dbSelect
-      .mockReturnValueOnce(fluentQuery([{
-        authorityGrantRef: "GRANT-V12-CAMPAIGN",
-        authorityState: "revoked",
-      }]))
+      .mockReturnValueOnce(fluentQuery([declinableCampaignRow()]))
       .mockReturnValueOnce(fluentQuery([{
         status: "revoked",
         expiresAt: null,
@@ -1065,6 +1067,29 @@ describe("V1.2 campaign server authority boundaries", () => {
       reason: "Primary declined after revoking authority.",
     })).resolves.toMatchObject({ status: "RECORDED" })
     expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
+  })
+
+  it("rejects campaign decline while a runtime binding is retained", async () => {
+    boundary.dbSelect.mockReturnValueOnce(fluentQuery([{
+      ...declinableCampaignRow(),
+      activeWorkOrderId: 91,
+      executionBinding: "execution-91",
+      fencingToken: 4,
+      acquisitionKey: "acquisition-91",
+      activatedAt: new Date("2026-07-29T20:00:00.000Z"),
+    }]))
+
+    await expect(mutateOutcomeQueue({
+      action: "decline",
+      outcomeKey: campaignScope,
+      expectedVersion: 4,
+      idempotencyKey: "campaign:decline:runtime-bound",
+      reason: "Attempted direct decline.",
+    })).resolves.toMatchObject({
+      status: "INVALID",
+      message: "Runtime-bound campaign outcomes must complete through Hermes.",
+    })
+    expect(boundary.mutateOutcomeQueueItem).not.toHaveBeenCalled()
   })
 
   it("rejects campaign recovery from an authenticated non-Primary session", async () => {
