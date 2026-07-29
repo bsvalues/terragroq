@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { buildProtectedOutcomeReorderSnapshot } from "@/lib/outcome-queue/protected-reorder-snapshot"
 
-const protectedKeys = new Set(["proof", "campaign"])
+const protectedKeys = new Set(["proof", "campaign", "active-campaign"])
 
 describe("protected outcome reorder snapshots", () => {
   const rows = [
@@ -10,7 +10,8 @@ describe("protected outcome reorder snapshots", () => {
     { outcomeKey: "proof", lifecycleState: "blocked", version: 4 },
     { outcomeKey: "ordinary-b", lifecycleState: "approved", version: 5 },
     { outcomeKey: "campaign", lifecycleState: "suggested", version: 0 },
-    { outcomeKey: "active", lifecycleState: "active", version: 8 },
+    { outcomeKey: "active-campaign", lifecycleState: "active", version: 7 },
+    { outcomeKey: "ordinary-active", lifecycleState: "active", version: 8 },
   ]
 
   it("sends a complete reorderable snapshot while preserving protected positions", () => {
@@ -24,6 +25,7 @@ describe("protected outcome reorder snapshots", () => {
       { outcomeKey: "proof", expectedVersion: 4 },
       { outcomeKey: "ordinary-a", expectedVersion: 2 },
       { outcomeKey: "campaign", expectedVersion: 0 },
+      { outcomeKey: "active-campaign", expectedVersion: 7 },
     ])
   })
 

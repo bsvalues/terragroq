@@ -621,6 +621,49 @@ describe("V1.2 campaign server authority boundaries", () => {
     expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
   })
 
+  it("retains an active protected campaign row as an immutable reorder boundary", async () => {
+    boundary.dbSelect.mockReturnValueOnce(fluentQuery([
+      {
+        outcomeKey: "goal:ordinary-a",
+        queueOrder: 87,
+        lifecycleState: "suggested",
+        version: 2,
+        createdAt: new Date("2026-07-29T20:00:00.000Z"),
+      },
+      {
+        outcomeKey: campaignScope,
+        queueOrder: 88,
+        lifecycleState: "active",
+        version: 3,
+        createdAt: new Date("2026-07-29T20:01:00.000Z"),
+      },
+      {
+        outcomeKey: "goal:ordinary-b",
+        queueOrder: 90,
+        lifecycleState: "approved",
+        version: 4,
+        createdAt: new Date("2026-07-29T20:02:00.000Z"),
+      },
+    ]))
+    boundary.mutateOutcomeQueueItem.mockResolvedValue({
+      replayed: false,
+      outcome: { outcomeKey: "goal:ordinary-a", version: 3 },
+    })
+
+    await expect(mutateOutcomeQueue({
+      action: "reorder",
+      outcomeKey: "goal:ordinary-a",
+      expectedVersion: 2,
+      idempotencyKey: "reorder:active-protected-boundary",
+      orderedOutcomes: [
+        { outcomeKey: "goal:ordinary-b", expectedVersion: 4 },
+        { outcomeKey: campaignScope, expectedVersion: 3 },
+        { outcomeKey: "goal:ordinary-a", expectedVersion: 2 },
+      ],
+    })).resolves.toMatchObject({ status: "RECORDED" })
+    expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
+  })
+
   it("allows campaign recovery mutations but rejects authority and topology mutations", async () => {
     boundary.mutateOutcomeQueueItem.mockResolvedValue({
       replayed: false,

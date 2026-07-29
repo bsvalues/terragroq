@@ -18,6 +18,9 @@ const PROTECTED_V1_2_OUTCOME_KEYS = new Set([
   "campaign:v1-2:queue-evidence-drilldown",
   "campaign:v1-2:runtime-continuity-status",
 ])
+const PROTECTED_V1_2_OUTCOME_SQL = [...PROTECTED_V1_2_OUTCOME_KEYS]
+  .map((outcomeKey) => `'${outcomeKey.replaceAll("'", "''")}'`)
+  .join(", ")
 const LEGACY_GOAL_REFS = Object.freeze([
   "GOAL-0001",
   "GOAL-0002",
@@ -716,7 +719,13 @@ FOR UPDATE OF q
 SELECT ${QUEUE_COLUMNS}
 FROM "outcome_queue_item" AS q
 WHERE q."userId" = $1
-  AND q."lifecycleState" IN ('suggested', 'approved', 'blocked')
+  AND (
+    q."lifecycleState" IN ('suggested', 'approved', 'blocked')
+    OR (
+      q."lifecycleState" = 'active'
+      AND q."outcomeKey" IN (${PROTECTED_V1_2_OUTCOME_SQL})
+    )
+  )
 ORDER BY ${ORDER_BY}
 FOR UPDATE OF q
 `,

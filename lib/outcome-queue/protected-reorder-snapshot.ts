@@ -17,7 +17,10 @@ export function buildProtectedOutcomeReorderSnapshot({
   direction: -1 | 1
   protectedOutcomeKeys: ReadonlySet<string>
 }): Array<{ outcomeKey: string; expectedVersion: number }> | null {
-  const snapshot = rows.filter((item) => REORDERABLE_STATES.has(item.lifecycleState))
+  const snapshot = rows.filter((item) => (
+    REORDERABLE_STATES.has(item.lifecycleState)
+    || (item.lifecycleState === "active" && protectedOutcomeKeys.has(item.outcomeKey))
+  ))
   const movable = snapshot.filter((item) => !protectedOutcomeKeys.has(item.outcomeKey))
   const currentIndex = movable.findIndex((item) => item.outcomeKey === outcomeKey)
   const destination = currentIndex + direction

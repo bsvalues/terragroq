@@ -2352,6 +2352,12 @@ describe("governed outcome queue mutations", () => {
     expect(OUTCOME_QUEUE_SQL.readMutationSnapshot).toContain(
       `q."lifecycleState" IN ('suggested', 'approved', 'blocked')`,
     )
+    expect(OUTCOME_QUEUE_SQL.readMutationSnapshot).toContain(
+      `q."lifecycleState" = 'active'`,
+    )
+    expect(OUTCOME_QUEUE_SQL.readMutationSnapshot).toContain(
+      `'campaign:v1-2:queue-evidence-drilldown'`,
+    )
     expect(OUTCOME_QUEUE_SQL.reorderMutation).toContain(
       `q."lifecycleState" IN ('suggested', 'approved', 'blocked')`,
     )
