@@ -8,19 +8,22 @@ import {
   RUNTIME_EVIDENCE_HISTORY_LIMIT,
 } from "@/components/runtime/runtime-evidence"
 import { RuntimeExecutionPanel } from "@/components/runtime/runtime-execution-panel"
+import { OutcomeCompletionTimelinePanel } from "@/components/runtime/outcome-completion-timeline-panel"
 import { RuntimeProbe } from "@/components/runtime/runtime-probe"
 import { ReadinessNativeAreaPanel } from "@/components/runtime/readiness-native-area-panel"
 import { SystemsStatusPanel } from "@/components/systems/systems-status-panel"
 import { LocalOperatorPanel } from "@/components/local/local-operator-panel"
 import { LocalRuntimeLiveStatusPanel } from "@/components/local/local-runtime-live-status-panel"
 import { getRuntimeExecutions } from "@/app/actions/runtime-executions"
+import { getRecentOutcomeCompletionTimeline } from "@/app/actions/goal-timeline"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
 
 export default async function RuntimePage() {
   const rt = buildRuntimeStatus()
-  const [evidenceRecords, executionTruth] = await Promise.all([
+  const [evidenceRecords, executionTruth, outcomeCompletionTimeline] = await Promise.all([
     getRecentEvidence(RUNTIME_EVIDENCE_HISTORY_LIMIT + 1),
     getRuntimeExecutions(),
+    getRecentOutcomeCompletionTimeline(),
   ])
   const evidenceHistory = projectRuntimeEvidenceHistory(evidenceRecords)
 
@@ -41,6 +44,7 @@ export default async function RuntimePage() {
       <div className="flex flex-col gap-6 p-6">
         <SystemsStatusPanel />
         <RuntimeExecutionPanel truth={executionTruth} />
+        <OutcomeCompletionTimelinePanel timeline={outcomeCompletionTimeline} />
         <LocalRuntimeLiveStatusPanel />
         <LocalOperatorPanel />
         <ReadinessNativeAreaPanel />
