@@ -497,9 +497,13 @@ async function main() {
          WHERE "userId" = $1 AND ref = $2`,
         [userId, grantRef],
       )
-      return result.rows.length === 1 && result.rows[0].revokedAt !== null
+      if (result.rows.length === 0) return null
+      if (result.rows.length !== 1) {
+        throw new Error("V1_2_AUTHORITY_GRANT_CARDINALITY_WALL")
+      }
+      return result.rows[0].revokedAt !== null
         ? "revoked"
-        : result.rows[0]?.status ?? null
+        : result.rows[0].status ?? null
     }
     const readAcquisitionCounts = async (outcomeKeys, query) => {
       const result = await queryRunner(query)(
@@ -561,9 +565,15 @@ async function main() {
            ON wo.id = q."activeWorkOrderId"
           AND wo."userId" = q."userId"
           AND wo.goal = q."goalRef"
-         JOIN outcome_queue_acquisition_receipt receipt
-           ON receipt."userId" = q."userId"
-          AND receipt."outcomeKey" = q."outcomeKey"
+         JOIN LATERAL (
+           SELECT r."createdAt"
+           FROM outcome_queue_acquisition_receipt r
+           WHERE r."userId" = q."userId"
+             AND r."outcomeKey" = q."outcomeKey"
+             AND r."latestFencingToken" = q."fencingToken"
+           ORDER BY r."updatedAt" DESC, r.id DESC
+           LIMIT 1
+         ) receipt ON true
          JOIN LATERAL (
            SELECT a."campaignWindowId"
            FROM outcome_queue_acquisition_attempt a
@@ -834,9 +844,12 @@ async function main() {
       }
       const finish = async (action) => {
         if (finished) return
-        if (savepoint !== null) {
+        if (action === "COMMIT" && savepoint !== null) {
+          finished = true
+          await lockClient.query("ROLLBACK")
           throw new Error("V1_2_OPEN_SAVEPOINT_WALL")
         }
+        savepoint = null
         finished = true
         await lockClient.query(action)
       }

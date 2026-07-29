@@ -11,6 +11,14 @@ function hash(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex")
 }
 
+function acceptanceIdempotencyKey(action: string) {
+  const campaignDigest = createHash("sha256")
+    .update("campaign:v1-2-final")
+    .digest("hex")
+    .slice(0, 24)
+  return `v1-2-acceptance:${campaignDigest}:${action}`
+}
+
 type QueueRow = Record<string, unknown> & {
   approvalDecisionId: number | null
   authorityGrantRef: string | null
@@ -346,6 +354,63 @@ describe("V1.2 live acceptance exercise", () => {
     expect(adapter.queue.find(
       (row) => row.outcomeKey === ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked,
     )?.lifecycleState).toBe("approved")
+  })
+
+  it.each([
+    ["invalid disposition", [{
+      disposition: "PENDING",
+      requestHash: "request-hash",
+      resultDigest: "result-digest",
+    }, {
+      disposition: "REPLAY",
+      requestHash: "request-hash",
+      resultDigest: "result-digest",
+    }]],
+    ["mismatched replay digest", [{
+      disposition: "COMMITTED",
+      requestHash: "request-hash",
+      resultDigest: "result-digest",
+    }, {
+      disposition: "REPLAY",
+      requestHash: "request-hash",
+      resultDigest: "other-digest",
+    }]],
+    ["missing attempts", []],
+  ])("rolls back malformed pause replay evidence: %s", async (_label, attempts) => {
+    const adapter = harness({ authorityReady: true })
+    const key = acceptanceIdempotencyKey("pause")
+    adapter.evidence.set(key, {
+      receipt: {
+        idempotencyKey: key,
+        outcomeKey: ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked,
+        requestBinding: {
+          action: "pause",
+          expectedVersion: 1,
+          idempotencyKey: key,
+          outcomeKey: ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked,
+          reason: "V1.2 acceptance pause exercise",
+        },
+        requestHash: "request-hash",
+        resultBinding: {
+          affectedOutcomes: [],
+          outcome: {
+            outcomeKey: ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked,
+            version: 2,
+          },
+          successor: null,
+        },
+      },
+      attempts: attempts.map((attempt, index) => ({
+        ...attempt,
+        attemptedAt: `2026-07-29T06:00:0${index + 1}.000Z`,
+      })),
+    })
+
+    await expect(runAcceptanceExercise({
+      userId: "primary-1",
+      ...adapter,
+    })).rejects.toThrow("V1_2_PAUSE_REPLAY_WALL")
+    expect(adapter.lockState).toEqual({ commits: 0, rollbacks: 1 })
   })
 
   it("refuses to renumber an unrelated product outcome during the reorder drill", async () => {
