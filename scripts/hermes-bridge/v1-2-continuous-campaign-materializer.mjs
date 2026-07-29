@@ -43,7 +43,7 @@ function canonical(value) {
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
         .map(([key, entry]) => [key, canonical(entry)]),
     )
   }
@@ -512,8 +512,8 @@ export async function materializeV12ContinuousCampaign({
     const queueOrderResult = await query(
       `SELECT COALESCE(max("queueOrder"), -1)::integer AS value
        FROM "outcome_queue_item"
-       WHERE "userId" = $1 AND "queueOrder" < 90`,
-      [userId],
+       WHERE "userId" = $1 AND "queueOrder" < $2`,
+      [userId, CAMPAIGN_QUEUE_PARTITION_LIMIT],
     )
     const plan = buildV12ContinuousCampaignPlan({
       userId,

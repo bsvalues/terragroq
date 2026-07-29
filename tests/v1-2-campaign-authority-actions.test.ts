@@ -531,18 +531,21 @@ describe("V1.2 campaign server authority boundaries", () => {
         queueOrder: 0,
         lifecycleState: "suggested",
         version: 2,
+        createdAt: new Date("2026-07-29T20:00:00.000Z"),
       },
       {
         outcomeKey: campaignScope,
         queueOrder: 1,
         lifecycleState: "suggested",
         version: 0,
+        createdAt: new Date("2026-07-29T20:01:00.000Z"),
       },
       {
         outcomeKey: "goal:ordinary-b",
         queueOrder: 2,
         lifecycleState: "approved",
         version: 4,
+        createdAt: new Date("2026-07-29T20:02:00.000Z"),
       },
     ]))
     boundary.mutateOutcomeQueueItem.mockResolvedValue({
@@ -614,18 +617,21 @@ describe("V1.2 campaign server authority boundaries", () => {
         queueOrder: 0,
         lifecycleState: "suggested",
         version: 2,
+        createdAt: new Date("2026-07-29T20:00:00.000Z"),
       },
       {
         outcomeKey: campaignScope,
         queueOrder: 1,
         lifecycleState: "suggested",
         version: 0,
+        createdAt: new Date("2026-07-29T20:01:00.000Z"),
       },
       {
         outcomeKey: "goal:ordinary-b",
         queueOrder: 2,
         lifecycleState: "approved",
         version: 4,
+        createdAt: new Date("2026-07-29T20:02:00.000Z"),
       },
     ]
     boundary.dbSelect

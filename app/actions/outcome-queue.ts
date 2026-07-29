@@ -1202,6 +1202,7 @@ async function protectedReorderSnapshotIsImmutable(
       queueOrder: outcomeQueueItem.queueOrder,
       lifecycleState: outcomeQueueItem.lifecycleState,
       version: outcomeQueueItem.version,
+      createdAt: outcomeQueueItem.createdAt,
     })
     .from(outcomeQueueItem)
     .where(eq(outcomeQueueItem.userId, userId))
@@ -1209,10 +1210,14 @@ async function protectedReorderSnapshotIsImmutable(
     .filter((row) => ["suggested", "approved", "blocked"].includes(row.lifecycleState))
     .sort((left, right) => (
       left.queueOrder - right.queueOrder
+      || left.createdAt.getTime() - right.createdAt.getTime()
       || left.outcomeKey.localeCompare(right.outcomeKey)
     ))
   const orderedKeys = input.orderedOutcomes.map((entry) => entry.outcomeKey)
-  if (new Set(orderedKeys).size !== orderedKeys.length) return false
+  if (input.orderedOutcomes.length !== snapshot.length
+    || new Set(orderedKeys).size !== orderedKeys.length) {
+    return false
+  }
 
   return snapshot.every((row, currentIndex) => {
     if (!isProtectedV12Outcome(row.outcomeKey)) return true
