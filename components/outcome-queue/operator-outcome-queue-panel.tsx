@@ -375,7 +375,7 @@ export function OperatorOutcomeQueuePanel({
               && row.lifecycleState === "blocked"
               && MANUAL_OUTCOME_PAUSE_REASONS.has(row.lifecycleReason ?? "")
               && !row.hasRetainedRuntimeBindings
-            const declineAvailable = !row.hasRetainedRuntimeBindings
+            const declineAvailable = !row.hasRetainedRuntimeHistory
               && (
                 !campaignAuthorityProposal
                 || row.authorityGrantRef === null
@@ -534,7 +534,7 @@ export function OperatorOutcomeQueuePanel({
                       ) : null}
                     {(row.lifecycleState === "approved" || manuallyPausedCampaign)
                       && campaignAuthorityProposal
-                      && !row.hasRetainedRuntimeBindings
+                      && !row.hasRetainedRuntimeHistory
                       && row.authorityState === "matched"
                       && row.authorityGrantRef !== null
                       && row.availableAuthorityGrantRef === null ? (

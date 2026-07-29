@@ -68,6 +68,7 @@ type QueueMutationRuntimeResult = {
 export type OutcomeQueueActionSurface = Omit<OutcomeQueueOperatorSurface, "rows"> & {
   rows: readonly (OutcomeQueueOperatorRow & {
     hasRetainedRuntimeBindings: boolean
+    hasRetainedRuntimeHistory: boolean
   })[]
 }
 
@@ -209,6 +210,17 @@ export async function getOutcomeQueueSurface(): Promise<OutcomeQueueActionSurfac
       || row.leaseToken !== null
       || row.acquisitionKey !== null,
   ]))
+  const retainedRuntimeHistory = new Map(rows.map((row) => [
+    row.outcomeKey,
+    row.activeWorkOrderId !== null
+      || row.executionBinding !== null
+      || row.leaseHolder !== null
+      || row.leaseToken !== null
+      || row.leaseExpiresAt !== null
+      || row.fencingToken !== 0
+      || row.acquisitionKey !== null
+      || row.activatedAt !== null,
+  ]))
 
   return {
     ...surface,
@@ -216,6 +228,8 @@ export async function getOutcomeQueueSurface(): Promise<OutcomeQueueActionSurfac
       ...row,
       hasRetainedRuntimeBindings:
         retainedRuntimeBindings.get(row.outcomeKey) ?? true,
+      hasRetainedRuntimeHistory:
+        retainedRuntimeHistory.get(row.outcomeKey) ?? true,
     })),
   }
 }
