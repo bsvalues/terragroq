@@ -2278,6 +2278,7 @@ describe("transactional durable outcome queue source", () => {
       acquisitionKey: "acquire-a",
       fencingToken: 3,
       ownerDecisionId: 91,
+      expectedLifecycleReason: "OWNER_DECISION_REQUIRED",
       leaseHolder: "resident-hermes",
       leaseToken: "lease-after-renewal",
       leaseDurationMs: 50 * 60 * 1000,
@@ -2317,12 +2318,121 @@ describe("transactional durable outcome queue source", () => {
       acquisitionKey: "acquire-a",
       fencingToken: 3,
       ownerDecisionId: 91,
+      expectedLifecycleReason: "OWNER_DECISION_REQUIRED",
       leaseHolder: "resident-hermes",
       leaseToken: "lease-after-renewal",
       leaseDurationMs: 50 * 60 * 1000,
       now,
     })).rejects.toMatchObject({
       code: "V1_2_CAMPAIGN_AUTHORITY_RENEWAL_VERSION_WALL",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.insertRenewedV12CampaignGrant,
+      expect.anything(),
+    )
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it("does not auto-renew a retained blocked campaign row outside exact decision resume", async () => {
+    const failed = expiredCampaignAuthorityRow({
+      lifecycleState: "blocked",
+      lifecycleReason: "VALIDATION_FAILED",
+      activeWorkOrderId: 472,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      version: 5,
+      activatedAt: "2026-07-27T12:00:00.000Z",
+    })
+    const query = acquisitionQuery({
+      counts: [{
+        totalCount: 1,
+        candidateStateCount: 0,
+        approvalEligibleCount: 0,
+        authorityEligibleCount: 0,
+        riskEligibleCount: 0,
+        dependencyEligibleCount: 0,
+        activeLeaseCount: 0,
+      }],
+      renewable: [failed],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      outcome: null,
+      reason: "NO_ELIGIBLE_OUTCOME",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.insertRenewedV12CampaignGrant,
+      expect.anything(),
+    )
+  })
+
+  it("does not auto-renew a blocked terminal reason after execution fields are cleared", async () => {
+    const failed = expiredCampaignAuthorityRow({
+      lifecycleState: "blocked",
+      lifecycleReason: "VALIDATION_FAILED",
+      version: 5,
+    })
+    const query = acquisitionQuery({
+      counts: [{
+        totalCount: 1,
+        candidateStateCount: 0,
+        approvalEligibleCount: 0,
+        authorityEligibleCount: 0,
+        riskEligibleCount: 0,
+        dependencyEligibleCount: 0,
+        activeLeaseCount: 0,
+      }],
+      renewable: [failed],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      outcome: null,
+      reason: "NO_ELIGIBLE_OUTCOME",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.insertRenewedV12CampaignGrant,
+      expect.anything(),
+    )
+  })
+
+  it("rejects campaign renewal when the accepted decision state does not match the row", async () => {
+    const failed = expiredCampaignAuthorityRow({
+      lifecycleState: "blocked",
+      lifecycleReason: "VALIDATION_FAILED",
+      activeWorkOrderId: 472,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      version: 5,
+      activatedAt: "2026-07-27T12:00:00.000Z",
+    })
+    const query = acquisitionQuery({ renewable: [failed] })
+
+    await expect(resumeOutcomeQueueAfterDecision({
+      query,
+      userId,
+      outcomeKey: failed.outcomeKey as string,
+      expectedVersion: 5,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      ownerDecisionId: 91,
+      expectedLifecycleReason: "OWNER_DECISION_REQUIRED",
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-after-renewal",
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).rejects.toMatchObject({
+      code: "V1_2_CAMPAIGN_AUTHORITY_AUTO_RENEWAL_WALL",
     })
     expect(query).not.toHaveBeenCalledWith(
       OUTCOME_QUEUE_SQL.insertRenewedV12CampaignGrant,

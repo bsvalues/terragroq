@@ -2271,7 +2271,7 @@ function exactNewV12CampaignGrantRecord(value, draft) {
   return canonicalJson(actual) === canonicalJson(draft)
 }
 
-function exactRenewableV12CampaignQueueRow(row, userId) {
+function exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason = null) {
   const spec = V1_2_CAMPAIGN_SPECS[row?.outcomeKey]
   const shared = Boolean(spec)
     && row.userId === userId
@@ -2319,8 +2319,6 @@ function exactRenewableV12CampaignQueueRow(row, userId) {
       && Number(row.activeWorkOrderId) > 0
     )
   if (!workOrderValid) return false
-  const manuallyPaused = row.executionBinding == null
-    && row.acquisitionKey == null
   const authorityPaused = typeof row.executionBinding === "string"
     && row.executionBinding !== ""
     && typeof row.acquisitionKey === "string"
@@ -2328,7 +2326,9 @@ function exactRenewableV12CampaignQueueRow(row, userId) {
     && row.activeWorkOrderId != null
     && fence > 0
     && row.activatedAt != null
-  return manuallyPaused || authorityPaused
+    && expectedLifecycleReason !== null
+    && row.lifecycleReason === expectedLifecycleReason
+  return authorityPaused
 }
 
 async function renewExpiredV12CampaignAuthorities(
@@ -2337,6 +2337,7 @@ async function renewExpiredV12CampaignAuthorities(
   at,
   targetOutcomeKey = null,
   expectedVersion = null,
+  expectedLifecycleReason = null,
 ) {
   const candidates = await connection.query(
     OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities,
@@ -2349,11 +2350,13 @@ async function renewExpiredV12CampaignAuthorities(
   const renewedVersions = new Map()
   for (const row of rows) {
     if (targetOutcomeKey !== null && row.outcomeKey !== targetOutcomeKey) continue
+    if (targetOutcomeKey === null
+      && row.lifecycleState === "blocked") continue
     if (expectedVersion !== null && row.version !== expectedVersion) {
       fail("V1_2_CAMPAIGN_AUTHORITY_RENEWAL_VERSION_WALL")
     }
     if (!V1_2_CAMPAIGN_OUTCOME_KEYS.has(row.outcomeKey)
-      || !exactRenewableV12CampaignQueueRow(row, userId)
+      || !exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason)
       || !exactV12CampaignDecisionRecord(row.approval, row.outcomeKey)
       || row.approval.id !== row.approvalDecisionId
       || !exactExpiredV12CampaignGrantRecord(
@@ -3308,6 +3311,7 @@ export async function resumeOutcomeQueueAfterDecision({
   acquisitionKey,
   fencingToken,
   ownerDecisionId,
+  expectedLifecycleReason = null,
   leaseHolder,
   leaseToken,
   leaseDurationMs,
@@ -3320,6 +3324,12 @@ export async function resumeOutcomeQueueAfterDecision({
   const acquisition = nonempty(acquisitionKey, "OUTCOME_QUEUE_ACQUISITION_KEY_INVALID")
   const fence = integer(fencingToken, "OUTCOME_QUEUE_FENCING_TOKEN_INVALID", { minimum: 1 })
   const decisionId = integer(ownerDecisionId, "OUTCOME_QUEUE_APPROVAL_DECISION_REQUIRED", { minimum: 1 })
+  const lifecycleReason = expectedLifecycleReason === null
+    ? null
+    : nonempty(expectedLifecycleReason, "OUTCOME_QUEUE_OWNER_DECISION_STATE_WALL")
+  if (lifecycleReason !== null && !/^[A-Z][A-Z0-9_]{1,79}$/.test(lifecycleReason)) {
+    fail("OUTCOME_QUEUE_OWNER_DECISION_STATE_WALL")
+  }
   const holder = nonempty(leaseHolder, "OUTCOME_QUEUE_LEASE_HOLDER_INVALID")
   const token = nonempty(leaseToken, "OUTCOME_QUEUE_LEASE_TOKEN_INVALID")
   integer(leaseDurationMs, "OUTCOME_QUEUE_LEASE_DURATION_INVALID", { minimum: 1 })
@@ -3355,6 +3365,7 @@ export async function resumeOutcomeQueueAfterDecision({
       at,
       key,
       version,
+      lifecycleReason,
     )
     if (renewed.has(key)) {
       const renewedResult = await connection.query(OUTCOME_QUEUE_SQL.resumeAfterDecision, [

@@ -1144,17 +1144,32 @@ describe("Hermes durable outcome queue runtime", () => {
     const bridge = runtime({ resumeQueue })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
 
-    await expect(bridge.resumeAfterOwnerDecision(outcome, { decisionId: 91 }))
-      .resolves.toMatchObject({
+    await expect(bridge.resumeAfterOwnerDecision(outcome, {
+      decisionId: 91,
+      expectedNextState: "OWNER_DECISION_REQUIRED",
+    })).resolves.toMatchObject({
         queueBinding: { expectedVersion: 6, fencingToken: 4 },
       })
     expect(resumeQueue).toHaveBeenCalledWith(expect.objectContaining({
       expectedVersion: 5,
       fencingToken: 3,
       ownerDecisionId: 91,
+      expectedLifecycleReason: "OWNER_DECISION_REQUIRED",
       leaseHolder: "resident-hermes",
       leaseToken: "lease-77",
     }))
+  })
+
+  it("rejects an owner-decision resume proof without its authenticated next state", async () => {
+    const resumeQueue = vi.fn()
+    const bridge = runtime({ resumeQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.resumeAfterOwnerDecision(outcome, { decisionId: 91 }))
+      .rejects.toMatchObject({
+        code: "HERMES_OUTCOME_QUEUE_OWNER_DECISION_STATE_WALL",
+      })
+    expect(resumeQueue).not.toHaveBeenCalled()
   })
 
   it("reconstructs the fresh queue fence from an exact committed resume replay", async () => {
@@ -1172,8 +1187,10 @@ describe("Hermes durable outcome queue runtime", () => {
     const bridge = runtime({ resumeQueue })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
 
-    await expect(bridge.resumeAfterOwnerDecision(outcome, { decisionId: 91 }))
-      .resolves.toMatchObject({
+    await expect(bridge.resumeAfterOwnerDecision(outcome, {
+      decisionId: 91,
+      expectedNextState: "OWNER_DECISION_REQUIRED",
+    })).resolves.toMatchObject({
         queueBinding: {
           expectedVersion: 6,
           fencingToken: 4,
@@ -1200,8 +1217,10 @@ describe("Hermes durable outcome queue runtime", () => {
     const bridge = runtime({ resumeQueue })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
 
-    await expect(bridge.resumeAfterOwnerDecision(outcome, { decisionId: 91 }))
-      .resolves.toMatchObject({
+    await expect(bridge.resumeAfterOwnerDecision(outcome, {
+      decisionId: 91,
+      expectedNextState: "OWNER_DECISION_REQUIRED",
+    })).resolves.toMatchObject({
         queueBinding: { expectedVersion: 7, fencingToken: 4 },
       })
   })
@@ -1221,8 +1240,10 @@ describe("Hermes durable outcome queue runtime", () => {
     const bridge = runtime({ resumeQueue })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
 
-    await expect(bridge.resumeAfterOwnerDecision(outcome, { decisionId: 91 }))
-      .rejects.toMatchObject({
+    await expect(bridge.resumeAfterOwnerDecision(outcome, {
+      decisionId: 91,
+      expectedNextState: "OWNER_DECISION_REQUIRED",
+    })).rejects.toMatchObject({
         code: "HERMES_OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL",
       })
   })
@@ -1242,8 +1263,10 @@ describe("Hermes durable outcome queue runtime", () => {
     const bridge = runtime({ resumeQueue })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
 
-    await expect(bridge.resumeAfterOwnerDecision(outcome, { decisionId: 91 }))
-      .rejects.toMatchObject({
+    await expect(bridge.resumeAfterOwnerDecision(outcome, {
+      decisionId: 91,
+      expectedNextState: "OWNER_DECISION_REQUIRED",
+    })).rejects.toMatchObject({
         code: "HERMES_OUTCOME_QUEUE_OWNER_DECISION_RESUME_WALL",
       })
   })
