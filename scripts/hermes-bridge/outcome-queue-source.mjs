@@ -2380,7 +2380,7 @@ function exactNewV12CampaignGrantRecord(value, draft) {
 }
 
 function v12CampaignRenewalLifecycle(row, expectedLifecycleReason) {
-  if (row?.lifecycleState === "approved") return "APPROVED_UNSTARTED"
+  if (row?.lifecycleState === "approved") return "APPROVED"
   if (row?.lifecycleState !== "blocked") return "INELIGIBLE"
   if (expectedLifecycleReason !== null
     && row.lifecycleReason === expectedLifecycleReason) {
@@ -2403,7 +2403,6 @@ function exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason 
     && sameOrderedStrings(row.dependencyKeys, spec.dependencyKeys)
     && row.riskClass === "R1"
     && row.approvalState === "approved"
-    && row.approvedBy === userId
     && Number.isSafeInteger(Number(row.approvalDecisionId))
     && Number(row.approvalDecisionId) > 0
     && row.authorityState === "matched"
@@ -2420,15 +2419,27 @@ function exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason 
     && row.terminalKey == null
     && row.terminalAt == null
   if (!shared) return false
-  if (lifecycle === "APPROVED_UNSTARTED") {
-    return row.activeWorkOrderId == null
-      && row.executionBinding == null
+  if (lifecycle === "APPROVED") {
+    const clearedRuntime = row.executionBinding == null
       && row.leaseHolder == null
       && row.leaseToken == null
       && row.leaseExpiresAt == null
       && row.acquisitionKey == null
-      && row.fencingToken === 0
-      && row.activatedAt == null
+    if (!clearedRuntime) return false
+    if (row.activeWorkOrderId == null) {
+      return row.approvedBy === userId
+        && Number(row.fencingToken) === 0
+        && row.activatedAt == null
+    }
+    const fence = Number(row.fencingToken)
+    const workOrder = Number(row.activeWorkOrderId)
+    return row.approvedBy === "William"
+      && Number.isSafeInteger(workOrder)
+      && workOrder > 0
+      && Number.isSafeInteger(fence)
+      && fence > 0
+      && typeof row.activatedAt === "string"
+      && Number.isFinite(Date.parse(row.activatedAt))
   }
   if (row.leaseHolder != null
     || row.leaseToken != null
@@ -2442,7 +2453,8 @@ function exactRenewableV12CampaignQueueRow(row, userId, expectedLifecycleReason 
     )
   if (!workOrderValid) return false
   if (lifecycle === "MANUALLY_PAUSED") {
-    return row.executionBinding == null
+    return (row.approvedBy === userId || row.approvedBy === "William")
+      && row.executionBinding == null
       && row.acquisitionKey == null
   }
   const authorityPaused = lifecycle === "OWNER_DECISION_BLOCKED"

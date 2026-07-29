@@ -247,7 +247,6 @@ export function isExactRenewableV12CampaignQueueRow(
     && sameStrings(item.dependencyKeys, spec.dependencyKeys)
     && item.riskClass === "R1"
     && item.approvalState === "approved"
-    && item.approvedBy === userId
     && Number.isSafeInteger(Number(item.approvalDecisionId))
     && Number(item.approvalDecisionId) > 0
     && item.authorityState === "matched"
@@ -265,14 +264,24 @@ export function isExactRenewableV12CampaignQueueRow(
     && item.terminalAt === null
   if (!shared) return false
   if (approvedUnstarted) {
-    return item.activeWorkOrderId === null
-      && item.executionBinding === null
+    const clearedRuntime = item.executionBinding === null
       && item.leaseHolder === null
       && item.leaseToken === null
       && item.leaseExpiresAt === null
       && item.acquisitionKey === null
-      && item.fencingToken === 0
-      && item.activatedAt === null
+    if (!clearedRuntime) return false
+    if (item.activeWorkOrderId === null) {
+      return item.approvedBy === userId
+        && item.fencingToken === 0
+        && item.activatedAt === null
+    }
+    return item.approvedBy === v12CampaignDecision(item.outcomeKey).owner
+      && Number.isSafeInteger(Number(item.activeWorkOrderId))
+      && Number(item.activeWorkOrderId) > 0
+      && Number.isSafeInteger(Number(item.fencingToken))
+      && Number(item.fencingToken) > 0
+      && item.activatedAt instanceof Date
+      && Number.isFinite(item.activatedAt.getTime())
   }
   const fence = Number(item.fencingToken)
   const workOrderValid = item.activeWorkOrderId === null
@@ -280,7 +289,11 @@ export function isExactRenewableV12CampaignQueueRow(
       Number.isSafeInteger(Number(item.activeWorkOrderId))
       && Number(item.activeWorkOrderId) > 0
     )
-  return workOrderValid
+  return (
+    item.approvedBy === userId
+      || item.approvedBy === v12CampaignDecision(item.outcomeKey).owner
+  )
+    && workOrderValid
     && Number.isSafeInteger(fence)
     && fence >= 0
     && item.executionBinding === null

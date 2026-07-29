@@ -6,6 +6,7 @@ import {
   exactV12CampaignRevokedGrant,
   buildV12CampaignMaterializationProvenance,
   isCanonicalV12CampaignCandidate,
+  isExactRenewableV12CampaignQueueRow,
   isExactV12CampaignMaterialization,
   isV12CampaignAuthorityScope,
   v12CampaignAuthorityRefs,
@@ -177,6 +178,36 @@ describe("V1.2 campaign owner authority contract", () => {
       " ",
       now,
     )).toBe(false)
+  })
+
+  it("accepts only the exact resumed campaign shape for authority renewal", () => {
+    const resumed = candidate({
+      userId: "primary-1",
+      approvalState: "approved",
+      approvedBy: "William",
+      approvalDecisionId: 71,
+      authorityState: "matched",
+      authorityGrantRef: "GRANT-V12-EVIDENCE-DRILLDOWN-EXPIRED",
+      lifecycleState: "approved",
+      lifecycleReason: null,
+      activeWorkOrderId: 472,
+      fencingToken: 4,
+      activatedAt: new Date("2026-07-29T20:00:00.000Z"),
+      version: 7,
+    })
+
+    expect(isExactRenewableV12CampaignQueueRow(
+      resumed as never,
+      "primary-1",
+    )).toBe(true)
+    expect(isExactRenewableV12CampaignQueueRow({
+      ...resumed,
+      dependencyKeys: [secondScope],
+    } as never, "primary-1")).toBe(false)
+    expect(isExactRenewableV12CampaignQueueRow({
+      ...resumed,
+      executionBinding: "retained-execution",
+    } as never, "primary-1")).toBe(false)
   })
 
   it("binds approval eligibility to the exact goal and Hermes audit provenance", () => {

@@ -1571,6 +1571,52 @@ describe("transactional durable outcome queue source", () => {
       .toContain(`WHEN q."lifecycleState" = 'blocked' THEN q."lifecycleReason"`)
   })
 
+  it("renews an exact resumed campaign before reacquisition", async () => {
+    const expired = expiredCampaignAuthorityRow({
+      approvedBy: "William",
+      activeWorkOrderId: 472,
+      fencingToken: 4,
+      version: 7,
+      activatedAt: "2026-07-27T12:00:00.000Z",
+    })
+    const renewedDraft = v12CampaignGrant(
+      expired.outcomeKey as "campaign:v1-2:queue-evidence-drilldown",
+      userId,
+      new Date(now),
+    )
+    const rebound = {
+      ...expired,
+      authorityGrantRef: renewedDraft.ref,
+      lifecycleReason: "HERMES_V1_2_CAMPAIGN_AUTHORITY_AUTO_RENEWAL",
+      version: 8,
+    }
+    const query = acquisitionQuery({
+      renewable: [expired],
+      rebound: [rebound],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      outcome: null,
+      reason: "EMPTY_QUEUE",
+    })
+    expect(query).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.rebindRenewedV12CampaignGrant,
+      [
+        expired.id,
+        userId,
+        expired.outcomeKey,
+        7,
+        renewedDraft.ref,
+        now,
+        expired.authorityGrantRef,
+      ],
+    )
+  })
+
   it("fails closed instead of renewing a tampered campaign grant", async () => {
     const expired = expiredCampaignAuthorityRow()
     const tampered = {
