@@ -275,7 +275,7 @@ export function isExactRenewableV12CampaignQueueRow(
         && item.fencingToken === 0
         && item.activatedAt === null
     }
-    return item.approvedBy === v12CampaignDecision(item.outcomeKey).owner
+    return item.approvedBy === v12CampaignDecision(item.outcomeKey as CampaignScope).owner
       && Number.isSafeInteger(Number(item.activeWorkOrderId))
       && Number(item.activeWorkOrderId) > 0
       && Number.isSafeInteger(Number(item.fencingToken))
@@ -291,7 +291,7 @@ export function isExactRenewableV12CampaignQueueRow(
     )
   return (
     item.approvedBy === userId
-      || item.approvedBy === v12CampaignDecision(item.outcomeKey).owner
+      || item.approvedBy === v12CampaignDecision(item.outcomeKey as CampaignScope).owner
   )
     && workOrderValid
     && Number.isSafeInteger(fence)
