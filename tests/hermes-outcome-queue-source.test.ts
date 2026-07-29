@@ -3388,6 +3388,67 @@ describe("governed outcome queue mutations", () => {
       .toBe(true)
   })
 
+  it("treats a null-expiry active protected grant as still live", async () => {
+    const protectedRow = queueRow({
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      lifecycleState: "approved",
+      authorityState: "matched",
+      authorityGrantRef: "GRANT-V12-CAMPAIGN",
+      version: 1,
+    })
+    const query = mutationQuery({
+      current: protectedRow,
+      boundGrant: { status: "active", expiresAt: null },
+    })
+
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "decline",
+      outcomeKey: protectedRow.outcomeKey,
+      expectedVersion: 1,
+      idempotencyKey: "decline-protected-never-expiring-authority",
+      reason: "Attempt to decline before revocation.",
+      now,
+    })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_ACTIVE",
+    })
+  })
+
+  it("allows decline of a revoked protected grant with no expiry", async () => {
+    const protectedRow = queueRow({
+      outcomeKey: "campaign:v1-2:queue-evidence-drilldown",
+      lifecycleState: "approved",
+      authorityState: "revoked",
+      authorityGrantRef: "GRANT-V12-CAMPAIGN",
+      version: 1,
+    })
+    const declined = {
+      ...protectedRow,
+      lifecycleState: "declined",
+      terminalResult: "DECLINED",
+      version: 2,
+    }
+    const query = mutationQuery({
+      current: protectedRow,
+      mutated: declined,
+      boundGrant: { status: "revoked", expiresAt: null },
+    })
+
+    await expect(mutateOutcomeQueueItem({
+      query,
+      userId,
+      action: "decline",
+      outcomeKey: protectedRow.outcomeKey,
+      expectedVersion: 1,
+      idempotencyKey: "decline-protected-revoked-no-expiry",
+      reason: "Decline after authority revocation.",
+      now,
+    })).resolves.toMatchObject({
+      outcome: { lifecycleState: "declined" },
+    })
+  })
+
   it("updates dependencies under the queue lock and rejects missing references and cycles", async () => {
     const target = queueRow({
       lifecycleState: "suggested",

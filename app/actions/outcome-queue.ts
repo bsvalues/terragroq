@@ -70,7 +70,10 @@ export type OutcomeQueueActionSurface = Omit<OutcomeQueueOperatorSurface, "rows"
   })[]
 }
 
-const MANUAL_OUTCOME_PAUSE_REASON = "Primary Operator paused this outcome."
+const MANUAL_OUTCOME_PAUSE_REASONS = new Set([
+  "OPERATOR_PAUSED",
+  "Primary Operator paused this outcome.",
+])
 
 const OUTCOME_GRANT_BLOCKED_ACTIONS = [
   "production mutation",
@@ -598,7 +601,7 @@ export async function recordV12CampaignOutcomeAuthority(input: {
     const now = new Date()
 
     const pausedCampaign = item.lifecycleState === "blocked"
-      && item.lifecycleReason === MANUAL_OUTCOME_PAUSE_REASON
+      && MANUAL_OUTCOME_PAUSE_REASONS.has(item.lifecycleReason ?? "")
       && item.executionBinding === null
       && item.leaseHolder === null
       && item.leaseToken === null
@@ -1344,7 +1347,7 @@ async function genericCampaignResumeIsManualPause(
 
   return item !== undefined
     && item.lifecycleState === "blocked"
-    && item.lifecycleReason === MANUAL_OUTCOME_PAUSE_REASON
+    && MANUAL_OUTCOME_PAUSE_REASONS.has(item.lifecycleReason ?? "")
     && item.executionBinding === null
     && item.leaseHolder === null
     && item.leaseToken === null

@@ -115,9 +115,10 @@ describe("operator outcome queue panel accessibility contract", () => {
     )
     expect(source).toContain("&& !row.hasRetainedRuntimeBindings")
     expect(actionSource).toContain("genericCampaignResumeIsManualPause")
-    expect(actionSource).toContain(
-      "item.lifecycleReason === MANUAL_OUTCOME_PAUSE_REASON",
-    )
+    expect(actionSource).toContain("MANUAL_OUTCOME_PAUSE_REASONS.has")
+    expect(actionSource).toContain('"OPERATOR_PAUSED"')
+    expect(source).toContain("MANUAL_OUTCOME_PAUSE_REASONS.has")
+    expect(source).toContain("&& !row.hasRetainedRuntimeBindings")
     expect(actionSource).toContain("item.executionBinding === null")
     expect(actionSource).toContain("item.leaseHolder === null")
     expect(actionSource).toContain("item.leaseToken === null")

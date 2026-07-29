@@ -789,6 +789,36 @@ describe("V1.2 campaign server authority boundaries", () => {
     expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
   })
 
+  it("resumes a campaign paused with the runtime default marker", async () => {
+    boundary.dbSelect.mockReturnValueOnce(fluentQuery([{
+      lifecycleState: "blocked",
+      lifecycleReason: "OPERATOR_PAUSED",
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      acquisitionKey: null,
+    }]))
+    boundary.mutateOutcomeQueueItem.mockResolvedValue({
+      replayed: false,
+      outcome: { outcomeKey: campaignScope, version: 3 },
+    })
+
+    await expect(mutateOutcomeQueue({
+      action: "resume",
+      outcomeKey: campaignScope,
+      expectedVersion: 2,
+      idempotencyKey: "campaign:resume:runtime-default-pause",
+      approvalDecisionId: 71,
+      authorityGrantRef: "GRANT-V12-CAMPAIGN",
+    })).resolves.toMatchObject({
+      status: "RECORDED",
+      outcomeKey: campaignScope,
+      version: 3,
+    })
+    expect(boundary.mutateOutcomeQueueItem).toHaveBeenCalledOnce()
+  })
+
   it("replays a committed manual campaign resume after the row is approved", async () => {
     const requestBinding = {
       action: "resume",

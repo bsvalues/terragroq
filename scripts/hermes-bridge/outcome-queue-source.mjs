@@ -4123,15 +4123,16 @@ export async function mutateOutcomeQueueItem({
           fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_INVALID")
         }
         const grant = grantResult.rows[0]
-        const expiresAt = Date.parse(grant.expiresAt)
-        if (!Number.isFinite(expiresAt)) {
-          fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_INVALID")
-        }
-        if (grant.status === "active" && expiresAt > Date.parse(at)) {
-          fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_ACTIVE")
-        }
         if (!["active", "revoked", "expired"].includes(grant.status)) {
           fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_INVALID")
+        }
+        const expiresAt = grant.expiresAt == null ? null : Date.parse(grant.expiresAt)
+        if (expiresAt !== null && !Number.isFinite(expiresAt)) {
+          fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_INVALID")
+        }
+        if (grant.status === "active"
+          && (expiresAt === null || expiresAt > Date.parse(at))) {
+          fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_ACTIVE")
         }
       }
 

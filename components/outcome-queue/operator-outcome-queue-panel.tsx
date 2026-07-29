@@ -61,7 +61,10 @@ const PROTECTED_V1_2_AUTHORITY_SCOPES = new Set([
   ...V1_2_ACCEPTANCE_AUTHORITY_SCOPES,
   ...V1_2_CAMPAIGN_AUTHORITY_SCOPES,
 ])
-const MANUAL_OUTCOME_PAUSE_REASON = "Primary Operator paused this outcome."
+const MANUAL_OUTCOME_PAUSE_REASONS = new Set([
+  "OPERATOR_PAUSED",
+  "Primary Operator paused this outcome.",
+])
 
 function protectedV12AuthorityScope(outcomeKey: string): boolean {
   return PROTECTED_V1_2_AUTHORITY_SCOPES.has(outcomeKey)
@@ -370,7 +373,7 @@ export function OperatorOutcomeQueuePanel({
               acceptanceAuthorityProof || campaignAuthorityProposal
             const manuallyPausedCampaign = campaignAuthorityProposal
               && row.lifecycleState === "blocked"
-              && row.lifecycleReason === MANUAL_OUTCOME_PAUSE_REASON
+              && MANUAL_OUTCOME_PAUSE_REASONS.has(row.lifecycleReason ?? "")
               && !row.hasRetainedRuntimeBindings
             const movableIndex = movableRows.findIndex(
               (item) => item.outcomeKey === row.outcomeKey,
@@ -525,6 +528,7 @@ export function OperatorOutcomeQueuePanel({
                       ) : null}
                     {(row.lifecycleState === "approved" || manuallyPausedCampaign)
                       && campaignAuthorityProposal
+                      && !row.hasRetainedRuntimeBindings
                       && row.authorityState === "matched"
                       && row.authorityGrantRef !== null
                       && row.availableAuthorityGrantRef === null ? (
