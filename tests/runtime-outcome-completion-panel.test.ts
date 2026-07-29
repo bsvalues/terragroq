@@ -39,7 +39,7 @@ describe("outcome completion timeline panel contract", () => {
       "Conflicting — multiple merge SHA or PR references recorded.",
     )
     expect(panel).toContain(
-      "Conflicting — a dependent acquisition predates completion.",
+      "Conflicting — dependency-at-acquisition or completion timing does not align.",
     )
   })
 

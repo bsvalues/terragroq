@@ -35,6 +35,7 @@ function receipt(
     id: "receipt-1",
     userId: USER_ID,
     outcomeKey: "goal:two",
+    dependencyKeysAtAcquisition: ["goal:one"],
     firstFencingToken: 4,
     latestFencingToken: 7,
     createdAt: "2026-07-28T10:00:00.000Z",
@@ -203,6 +204,37 @@ describe("projectRecentOutcomeCompletionTimeline", () => {
     })
   })
 
+  it("does not bind a current dependency absent from the acquisition snapshot", () => {
+    const predecessor = outcome({
+      lifecycleState: "completed",
+      terminalAt: "2026-07-28T10:00:00.000Z",
+    })
+    const mutatedSuccessor = outcome({
+      id: "outcome-mutated",
+      outcomeKey: "goal:mutated",
+      dependencyKeys: [predecessor.outcomeKey],
+    })
+
+    const result = projectRecentOutcomeCompletionTimeline(
+      USER_ID,
+      [predecessor, mutatedSuccessor],
+      [receipt({
+        outcomeKey: mutatedSuccessor.outcomeKey,
+        dependencyKeysAtAcquisition: [],
+        createdAt: "2026-07-28T10:01:00.000Z",
+      })],
+    )
+
+    expect(result.rows[0].successorEvidence).toEqual({
+      status: "CONFLICTING",
+      outcomeKey: null,
+      title: null,
+      receiptId: null,
+      acquiredAt: null,
+      fencingTokenRange: null,
+    })
+  })
+
   it("ignores nondependent acquisitions and records owned by other users", () => {
     const predecessor = outcome({
       lifecycleState: "completed",
@@ -241,7 +273,10 @@ describe("projectRecentOutcomeCompletionTimeline", () => {
         noOwnedReceipt,
       ],
       [
-        receipt({ outcomeKey: nondependent.outcomeKey }),
+        receipt({
+          outcomeKey: nondependent.outcomeKey,
+          dependencyKeysAtAcquisition: [],
+        }),
         receipt({
           id: "receipt-other-user-successor",
           userId: "user-2",

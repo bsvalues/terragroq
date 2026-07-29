@@ -28,6 +28,7 @@ import {
   governanceEvent,
   outcomeQueueAcquisitionReceipt,
   outcomeQueueItem,
+  outcomeQueueMutationReceipt,
   workOrder,
 } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
@@ -59,6 +60,12 @@ const OUTCOME_ACQUISITION_RECEIPT_SELECT = {
   latestFencingToken: outcomeQueueAcquisitionReceipt.latestFencingToken,
   createdAt: outcomeQueueAcquisitionReceipt.createdAt,
   updatedAt: outcomeQueueAcquisitionReceipt.updatedAt,
+} as const
+
+const OUTCOME_DEPENDENCY_MUTATION_SELECT = {
+  id: outcomeQueueMutationReceipt.id,
+  outcomeKey: outcomeQueueMutationReceipt.outcomeKey,
+  createdAt: outcomeQueueMutationReceipt.createdAt,
 } as const
 
 async function readGoalTimelines(goalIds?: number[]): Promise<GoalTimelineProjection[]> {
@@ -377,19 +384,24 @@ function serializeOutcomeCompletionRow(row: {
   }
 }
 
-function serializeOutcomeAcquisitionReceipt(row: {
-  id: number
-  userId: string
-  outcomeKey: string
-  firstFencingToken: number
-  latestFencingToken: number
-  createdAt: Date
-  updatedAt: Date
-}): OutcomeCompletionAcquisitionReceipt {
+function serializeOutcomeAcquisitionReceipt(
+  row: {
+    id: number
+    userId: string
+    outcomeKey: string
+    firstFencingToken: number
+    latestFencingToken: number
+    createdAt: Date
+    updatedAt: Date
+  },
+  dependencyKeysAtAcquisition: readonly string[] | null,
+): OutcomeCompletionAcquisitionReceipt {
   return {
     id: String(row.id),
     userId: row.userId,
     outcomeKey: row.outcomeKey,
+    dependencyKeysAtAcquisition:
+      dependencyKeysAtAcquisition === null ? null : [...dependencyKeysAtAcquisition],
     firstFencingToken: row.firstFencingToken,
     latestFencingToken: row.latestFencingToken,
     createdAt: row.createdAt.toISOString(),
@@ -445,18 +457,68 @@ Promise<RecentOutcomeCompletionTimeline> {
   }
   const candidateOutcomeKeys = [...candidatesByKey.keys()]
 
-  const receiptGroups = await Promise.all(candidateOutcomeKeys.map((outcomeKey) => db
-    .select(OUTCOME_ACQUISITION_RECEIPT_SELECT)
-    .from(outcomeQueueAcquisitionReceipt)
-    .where(and(
-      eq(outcomeQueueAcquisitionReceipt.userId, userId),
-      eq(outcomeQueueAcquisitionReceipt.outcomeKey, outcomeKey),
+  const receiptRows = candidateOutcomeKeys.length === 0
+    ? []
+    : await db
+      .select(OUTCOME_ACQUISITION_RECEIPT_SELECT)
+      .from(outcomeQueueAcquisitionReceipt)
+      .where(and(
+        eq(outcomeQueueAcquisitionReceipt.userId, userId),
+        inArray(
+          outcomeQueueAcquisitionReceipt.outcomeKey,
+          candidateOutcomeKeys,
+        ),
+      ))
+      .orderBy(
+        asc(outcomeQueueAcquisitionReceipt.createdAt),
+        asc(outcomeQueueAcquisitionReceipt.id),
+      )
+
+  const earliestReceiptByOutcomeKey = new Map<
+    string,
+    (typeof receiptRows)[number]
+  >()
+  for (const receipt of receiptRows) {
+    if (!earliestReceiptByOutcomeKey.has(receipt.outcomeKey)) {
+      earliestReceiptByOutcomeKey.set(receipt.outcomeKey, receipt)
+    }
+  }
+  const acquiredOutcomeKeys = [...earliestReceiptByOutcomeKey.keys()]
+
+  const dependencyMutationRows = acquiredOutcomeKeys.length === 0
+    ? []
+    : await db
+      .select(OUTCOME_DEPENDENCY_MUTATION_SELECT)
+      .from(outcomeQueueMutationReceipt)
+      .where(and(
+        eq(outcomeQueueMutationReceipt.userId, userId),
+        eq(outcomeQueueMutationReceipt.operation, "dependencies"),
+        inArray(outcomeQueueMutationReceipt.outcomeKey, acquiredOutcomeKeys),
+      ))
+      .orderBy(
+        asc(outcomeQueueMutationReceipt.createdAt),
+        asc(outcomeQueueMutationReceipt.id),
+      )
+
+  const dependencyMutatedAfterAcquisition = new Set<string>()
+  for (const mutation of dependencyMutationRows) {
+    if (mutation.outcomeKey === null) continue
+    const receipt = earliestReceiptByOutcomeKey.get(mutation.outcomeKey)
+    if (
+      receipt
+      && mutation.createdAt.getTime() >= receipt.createdAt.getTime()
+    ) {
+      dependencyMutatedAfterAcquisition.add(mutation.outcomeKey)
+    }
+  }
+
+  const acquisitionReceipts = [...earliestReceiptByOutcomeKey.values()]
+    .map((receipt) => serializeOutcomeAcquisitionReceipt(
+      receipt,
+      dependencyMutatedAfterAcquisition.has(receipt.outcomeKey)
+        ? null
+        : candidatesByKey.get(receipt.outcomeKey)?.dependencyKeys ?? null,
     ))
-    .orderBy(
-      asc(outcomeQueueAcquisitionReceipt.createdAt),
-      asc(outcomeQueueAcquisitionReceipt.id),
-    )
-    .limit(1)))
 
   const outcomesByKey = new Map(
     completedRecords.map((record) => [record.outcomeKey, record]),
@@ -470,6 +532,6 @@ Promise<RecentOutcomeCompletionTimeline> {
   return projectRecentOutcomeCompletionTimeline(
     userId,
     [...outcomesByKey.values()],
-    receiptGroups.flat().map(serializeOutcomeAcquisitionReceipt),
+    acquisitionReceipts,
   )
 }

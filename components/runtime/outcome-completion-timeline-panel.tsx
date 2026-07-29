@@ -47,7 +47,11 @@ function SuccessorEvidence({
     return <span>Missing — no qualifying dependent acquisition recorded.</span>
   }
   if (evidence.status === "CONFLICTING") {
-    return <span>Conflicting — a dependent acquisition predates completion.</span>
+    return (
+      <span>
+        Conflicting — dependency-at-acquisition or completion timing does not align.
+      </span>
+    )
   }
   if (
     evidence.outcomeKey === null

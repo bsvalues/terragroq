@@ -23,6 +23,7 @@ export type OutcomeCompletionAcquisitionReceipt = Readonly<{
   id: string
   userId: string
   outcomeKey: string
+  dependencyKeysAtAcquisition: readonly string[] | null
   firstFencingToken: number
   latestFencingToken: number
   createdAt: string
@@ -187,7 +188,6 @@ function projectSuccessorEvidence(
     .filter((candidate) => (
       candidate.userId === userId
       && candidate.id !== predecessor.id
-      && candidate.dependencyKeys.includes(predecessor.outcomeKey)
     ))
     .map((candidate) => {
       const earliestReceipt = receipts
@@ -207,13 +207,24 @@ function projectSuccessorEvidence(
     })
     .filter((acquisition): acquisition is NonNullable<typeof acquisition> => acquisition !== null)
 
-  if (acquisitions.some(({ acquiredAt }) => (
+  if (acquisitions.some(({ outcome, receipt }) => (
+    outcome.dependencyKeys.includes(predecessor.outcomeKey)
+    && !receipt.dependencyKeysAtAcquisition?.includes(predecessor.outcomeKey)
+  ))) {
+    return emptySuccessorEvidence("CONFLICTING")
+  }
+
+  const dependentAcquisitions = acquisitions.filter(({ receipt }) => (
+    receipt.dependencyKeysAtAcquisition?.includes(predecessor.outcomeKey)
+  ))
+
+  if (dependentAcquisitions.some(({ acquiredAt }) => (
     acquiredAt !== null && acquiredAt < completedAt
   ))) {
     return emptySuccessorEvidence("CONFLICTING")
   }
 
-  const successor = acquisitions
+  const successor = dependentAcquisitions
     .filter((acquisition) => (
       acquisition.acquiredAt !== null && acquisition.acquiredAt >= completedAt
     ))
