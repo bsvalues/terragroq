@@ -13,13 +13,15 @@
 - Unmistakably grounded in TerraFusion
 - Human augmentation, clarity, sovereignty, evidence, and controlled action
 - Progressive depth for technical detail
-- Decision, reason, recommendation, consequences, Approve, and Decline kept together
+- Decision, reason, recommendation, consequences, **Approve single-parcel first**, and **Request batch-first plan** kept together
 
 ## Findings and Remediation
 
 The first review identified contradictory decision-mode briefing copy, unsupported mock evidence detail, and recommendation evidence placed outside the decision context. The prototype was remediated so each scenario has truthful mode-specific briefing copy, the technical disclosure states its static Issue #497 provenance without unsupported hashes or validation claims, and a subordinate **Why this recommendation** disclosure sits inside the decision surface.
 
 The regenerated default and decision screenshots were then reviewed again. No blocking findings remained. Both states were judged internally consistent, readable within ten seconds, progressively disclosed, and confined to the prototype-only file boundary.
+
+The founder refinement on draft PR #498 was independently re-reviewed against the prior prototype head. The operational headline, blocked CI status, Codex/WilliamOS attribution, and explicit decision labels were judged direct, truthful, internally consistent, and visually readable. No findings remained, and no layout, architecture, production behavior, dependency, or protected-state change was introduced.
 
 ## Safety Confirmation
 
