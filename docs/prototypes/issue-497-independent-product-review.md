@@ -4,7 +4,9 @@
 
 **Scope:** Prototype-only WilliamOS Primary Home
 
-**Disposition:** PASS
+**Disposition:** SUPERSEDED / FOUNDER VISUAL REJECTION
+
+> This review established wording and internal-consistency quality only. The founder subsequently rejected the complete visual identity as generic enterprise SaaS. It does not approve implementation and must not be cited as founder design acceptance. The replacement originality review is recorded in `issue-497-khlo-visual-direction-review.md`.
 
 ## Review Criteria
 
