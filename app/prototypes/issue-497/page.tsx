@@ -78,8 +78,8 @@ export default async function PrimaryHomePrototype({ searchParams }: PrototypePa
 
         <section className={styles.briefing} aria-labelledby="briefing-title">
           <div>
-            <p className={styles.kicker}>Sunday briefing</p>
-            <h1 id="briefing-title">TerraFusion is moving forward.</h1>
+            <p className={styles.kicker}>Founder briefing</p>
+            <h1 id="briefing-title">Atlas is built. One CI repair remains.</h1>
           </div>
           <p>
             {decisionMode
@@ -95,7 +95,7 @@ export default async function PrimaryHomePrototype({ searchParams }: PrototypePa
             <p className={styles.sectionLabel}>Working now</p>
             <div className={styles.healthLine}>
               <span className={styles.healthPulse} aria-hidden />
-              Execution is healthy · merge is held
+              Blocked by CI repair · contained and in progress
             </div>
             <h2 id="working-title">Atlas process-host implementation is complete.</h2>
             <p>
@@ -104,7 +104,8 @@ export default async function PrimaryHomePrototype({ searchParams }: PrototypePa
             </p>
             <div className={styles.actorLine}>
               <ShieldCheck aria-hidden />
-              WilliamOS is coordinating the repair and will re-verify the exact head.
+              Codex is repairing CI and will rerun the required checks. WilliamOS is
+              presenting the authoritative operational picture.
             </div>
           </div>
 
@@ -143,7 +144,7 @@ export default async function PrimaryHomePrototype({ searchParams }: PrototypePa
           <div className={styles.completedHeading}>
             <div>
               <p className={styles.sectionLabel}>Recently completed</p>
-              <h2 id="completed-title">Meaningful outcomes, not mechanics.</h2>
+              <h2 id="completed-title">Recent progress</h2>
             </div>
             <FileCheck2 aria-hidden />
           </div>
@@ -243,8 +244,8 @@ function DecisionAttention() {
       </details>
 
       <div className={styles.decisionActions} aria-label="Prototype decision actions">
-        <button type="button" className={styles.approveButton}>Approve recommendation</button>
-        <button type="button" className={styles.declineButton}>Decline</button>
+        <button type="button" className={styles.approveButton}>Approve single-parcel first</button>
+        <button type="button" className={styles.declineButton}>Request batch-first plan</button>
         <small>Prototype only. These controls do not submit or mutate authority.</small>
       </div>
     </section>
