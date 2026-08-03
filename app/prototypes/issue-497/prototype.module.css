@@ -1,0 +1,761 @@
+.canvas {
+  min-height: 100vh;
+  background: #eef2f0;
+  color: #101414;
+  letter-spacing: 0;
+}
+
+.shell {
+  width: min(100%, 1440px);
+  min-height: 100vh;
+  margin: 0 auto;
+  background: #f8faf9;
+  border-inline: 1px solid #d5ddda;
+}
+
+.masthead {
+  height: 64px;
+  padding: 0 28px;
+  border-bottom: 1px solid #d5ddda;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  background: #ffffff;
+}
+
+.brand,
+.headerRight,
+.privateSignal,
+.actorLine,
+.healthLine,
+.clearAttention,
+.nextOutcome,
+.completedHeading,
+.technicalDetails summary,
+.decisionActions {
+  display: flex;
+  align-items: center;
+}
+
+.brand {
+  gap: 12px;
+}
+
+.brandMark {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #16795b;
+  border-radius: 6px;
+  color: #16795b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.brand strong,
+.brand small {
+  display: block;
+}
+
+.brand strong {
+  font-size: 14px;
+}
+
+.brand small {
+  margin-top: 2px;
+  color: #66726e;
+  font-size: 11px;
+}
+
+.headerRight {
+  gap: 18px;
+}
+
+.privateSignal {
+  gap: 7px;
+  color: #58635f;
+  font-size: 12px;
+}
+
+.privateSignal svg {
+  width: 14px;
+  height: 14px;
+  color: #16795b;
+}
+
+.scenarioSwitch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-width: 190px;
+  border: 1px solid #cbd5d1;
+  border-radius: 7px;
+  overflow: hidden;
+  background: #eef2f0;
+}
+
+.scenarioSwitch a {
+  min-height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0 14px;
+  color: #58635f;
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.scenarioSwitch a[aria-current="page"] {
+  background: #ffffff;
+  color: #101414;
+  box-shadow: inset 0 0 0 1px #ffffff;
+}
+
+.briefing {
+  min-height: 106px;
+  padding: 22px 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(380px, 0.82fr);
+  align-items: end;
+  gap: 64px;
+}
+
+.kicker,
+.sectionLabel {
+  margin: 0 0 7px;
+  color: #16795b;
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.briefing h1 {
+  margin: 0;
+  font-size: clamp(28px, 3vw, 42px);
+  line-height: 1.05;
+  font-weight: 700;
+}
+
+.briefing > p {
+  margin: 0;
+  color: #58635f;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.workingNow {
+  position: relative;
+  min-height: 250px;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
+  align-items: stretch;
+  color: #ffffff;
+  background: #12201c;
+}
+
+.mapBackdrop,
+.mapShade {
+  position: absolute;
+  inset: 0;
+}
+
+.mapBackdrop {
+  background-image: url("/prototypes/issue-497-atlas-parcels.png");
+  background-size: cover;
+  background-position: center 47%;
+  opacity: 0.58;
+}
+
+.mapShade {
+  background: rgba(7, 19, 16, 0.72);
+}
+
+.workingStory,
+.executionPath {
+  position: relative;
+  z-index: 1;
+}
+
+.workingStory {
+  padding: 28px 34px;
+  align-self: end;
+}
+
+.workingStory .sectionLabel {
+  color: #86d8bd;
+}
+
+.healthLine {
+  width: fit-content;
+  gap: 8px;
+  margin-bottom: 18px;
+  color: #d7e8e2;
+  font-size: 12px;
+}
+
+.healthPulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e4a841;
+  box-shadow: 0 0 0 4px rgba(228, 168, 65, 0.18);
+}
+
+.workingStory h2 {
+  max-width: 720px;
+  margin: 0;
+  font-size: clamp(25px, 3vw, 38px);
+  line-height: 1.08;
+}
+
+.workingStory > p {
+  max-width: 690px;
+  margin: 12px 0 0;
+  color: #d7e1de;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.actorLine {
+  gap: 8px;
+  margin-top: 18px;
+  color: #b7d8cd;
+  font-size: 12px;
+}
+
+.actorLine svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.executionPath {
+  margin: 0;
+  padding: 30px 28px;
+  list-style: none;
+  background: rgba(5, 13, 11, 0.7);
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  display: grid;
+  align-content: center;
+}
+
+.executionPath li {
+  position: relative;
+  min-height: 55px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 11px;
+  padding: 8px 0;
+  color: #93a29d;
+}
+
+.executionPath li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 38px;
+  bottom: -9px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.executionPath svg {
+  width: 22px;
+  height: 22px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+}
+
+.executionPath strong,
+.executionPath small {
+  display: block;
+}
+
+.executionPath strong {
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.executionPath small {
+  margin-top: 3px;
+  font-size: 11px;
+}
+
+.executionPath .doneStep svg {
+  color: #8fd8bf;
+  border-color: #8fd8bf;
+}
+
+.executionPath .currentStep svg {
+  color: #f0b858;
+  border-color: #f0b858;
+}
+
+.clearAttention {
+  min-height: 72px;
+  padding: 15px 28px;
+  gap: 14px;
+  border-bottom: 1px solid #d5ddda;
+  background: #f1f8f5;
+}
+
+.clearAttention > svg {
+  width: 23px;
+  height: 23px;
+  color: #16795b;
+  flex: 0 0 auto;
+}
+
+.clearAttention .sectionLabel {
+  margin-bottom: 3px;
+}
+
+.clearAttention h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.clearAttention > p {
+  margin: 0 0 0 auto;
+  color: #58635f;
+  font-size: 12px;
+}
+
+.decisionAttention {
+  padding: 22px 28px;
+  border-bottom: 1px solid #d5a44f;
+  background: #fff7e7;
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr);
+  gap: 20px 38px;
+}
+
+.decisionAttention .sectionLabel {
+  color: #965500;
+}
+
+.decisionLead h2 {
+  max-width: 760px;
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.18;
+}
+
+.decisionLead > p,
+.recommendation p,
+.consequences p {
+  color: #695944;
+  line-height: 1.45;
+}
+
+.decisionLead > p {
+  max-width: 760px;
+  margin: 9px 0 0;
+  font-size: 13px;
+}
+
+.recommendation {
+  align-self: start;
+  padding-left: 18px;
+  border-left: 3px solid #16795b;
+}
+
+.recommendation span,
+.recommendation strong {
+  display: block;
+}
+
+.recommendation span {
+  color: #16795b;
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.recommendation strong {
+  margin-top: 6px;
+  font-size: 16px;
+}
+
+.recommendation p {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.consequences {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-block: 1px solid #e7c98d;
+}
+
+.consequences > div {
+  padding: 12px 16px 12px 0;
+}
+
+.consequences > div + div {
+  padding-left: 16px;
+  border-left: 1px solid #e7c98d;
+}
+
+.consequences strong {
+  font-size: 12px;
+}
+
+.consequences p {
+  margin: 4px 0 0;
+  font-size: 11px;
+}
+
+.decisionEvidence {
+  grid-column: 1 / -1;
+  color: #695944;
+  font-size: 11px;
+}
+
+.decisionEvidence summary {
+  width: fit-content;
+  color: #16795b;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.decisionEvidence p {
+  max-width: 880px;
+  margin: 7px 0 0;
+  line-height: 1.45;
+}
+
+.decisionActions {
+  grid-column: 1 / -1;
+  gap: 10px;
+}
+
+.decisionActions button {
+  min-height: 38px;
+  padding: 0 16px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: default;
+}
+
+.approveButton {
+  border: 1px solid #16795b;
+  background: #16795b;
+  color: #ffffff;
+}
+
+.declineButton {
+  border: 1px solid #a44b3f;
+  background: transparent;
+  color: #8a352c;
+}
+
+.decisionActions small {
+  margin-left: auto;
+  color: #806e55;
+  font-size: 10px;
+}
+
+.nextOutcome {
+  min-height: 96px;
+  padding: 16px 28px;
+  gap: 18px;
+  border-bottom: 1px solid #d5ddda;
+  background: #ffffff;
+}
+
+.nextIcon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #9cb8af;
+  border-radius: 7px;
+  color: #16795b;
+}
+
+.nextIcon svg {
+  width: 21px;
+  height: 21px;
+}
+
+.nextOutcome .sectionLabel {
+  margin-bottom: 3px;
+}
+
+.nextOutcome h2 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.nextOutcome > p {
+  max-width: 600px;
+  margin: 0 0 0 auto;
+  color: #58635f;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.nextArrow {
+  width: 20px;
+  height: 20px;
+  color: #2457d6;
+}
+
+.completed {
+  min-height: 172px;
+  padding: 20px 28px;
+  display: grid;
+  grid-template-columns: minmax(250px, 0.65fr) minmax(0, 1.35fr);
+  gap: 36px;
+  border-bottom: 1px solid #d5ddda;
+}
+
+.completedHeading {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.completedHeading h2 {
+  max-width: 290px;
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.completedHeading > svg {
+  width: 28px;
+  height: 28px;
+  color: #16795b;
+}
+
+.completed ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.completed li {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-content: start;
+  gap: 10px;
+  padding: 5px 18px;
+}
+
+.completed li + li {
+  border-left: 1px solid #d5ddda;
+}
+
+.completed li > svg {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: #16795b;
+}
+
+.completed strong,
+.completed small {
+  display: block;
+}
+
+.completed strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.completed small {
+  margin-top: 6px;
+  color: #66726e;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.technicalDetails {
+  background: #ffffff;
+  border-bottom: 1px solid #d5ddda;
+}
+
+.technicalDetails summary {
+  min-height: 50px;
+  padding: 0 28px;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.technicalDetails summary::-webkit-details-marker {
+  display: none;
+}
+
+.technicalHint {
+  color: #74807c;
+  font-weight: 450;
+}
+
+.technicalDetails summary svg {
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+}
+
+.technicalDetails[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.technicalGrid {
+  padding: 0 28px 22px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.technicalGrid dl {
+  margin: 0;
+  border-top: 1px solid #d5ddda;
+}
+
+.technicalGrid dl > div {
+  padding: 9px 0;
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  border-bottom: 1px solid #e5eae8;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+}
+
+.technicalGrid dt {
+  color: #74807c;
+}
+
+.technicalGrid dd {
+  margin: 0;
+}
+
+.footer {
+  min-height: 34px;
+  padding: 0 28px;
+  display: flex;
+  align-items: center;
+  color: #7c8783;
+  font-size: 10px;
+}
+
+@media (max-width: 900px) {
+  .masthead,
+  .briefing,
+  .clearAttention,
+  .nextOutcome,
+  .decisionAttention,
+  .completed,
+  .technicalDetails summary,
+  .technicalGrid,
+  .footer {
+    padding-inline: 18px;
+  }
+
+  .privateSignal {
+    display: none;
+  }
+
+  .briefing,
+  .workingNow,
+  .completed {
+    grid-template-columns: 1fr;
+  }
+
+  .briefing {
+    gap: 12px;
+  }
+
+  .executionPath {
+    border-left: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.18);
+  }
+
+  .clearAttention,
+  .nextOutcome {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .clearAttention > p,
+  .nextOutcome > p {
+    width: 100%;
+    margin-left: 40px;
+  }
+
+  .decisionAttention {
+    grid-template-columns: 1fr;
+  }
+
+  .recommendation,
+  .consequences,
+  .decisionEvidence,
+  .decisionActions {
+    grid-column: auto;
+  }
+
+  .consequences,
+  .completed ol,
+  .technicalGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .consequences > div + div,
+  .completed li + li {
+    padding-left: 0;
+    border-left: 0;
+    border-top: 1px solid #d5ddda;
+  }
+
+  .decisionActions small {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .masthead {
+    height: auto;
+    min-height: 70px;
+    align-items: flex-start;
+    padding-block: 14px;
+  }
+
+  .headerRight {
+    width: min(190px, 48vw);
+  }
+
+  .scenarioSwitch {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .brand small {
+    max-width: 130px;
+  }
+
+  .workingStory {
+    padding: 24px 18px;
+  }
+
+  .executionPath {
+    padding: 20px 18px;
+  }
+
+  .decisionActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
