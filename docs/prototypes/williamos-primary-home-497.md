@@ -18,9 +18,9 @@ The Home surface tells one continuous operational story from top to bottom. It i
 
 **Outcome:** Atlas process-host implementation is complete in PR #1393.
 
-**Actor:** The TerraFusion delivery team is completing the remaining governed delivery work.
+**Actor:** Codex is repairing CI and will rerun the required checks. WilliamOS presents the authoritative operational picture without claiming to perform the repair.
 
-**Health:** Progress is healthy, with one bounded CI governance repair still in progress.
+**Health:** Delivery is blocked by one bounded CI governance repair. The implementation is complete, and the contained repair is in progress.
 
 **Next step:** Repair the CI governance check, rerun the required checks, and merge the validated implementation when those checks pass.
 
@@ -86,7 +86,7 @@ This is an alternate prototype state, shown only when a genuine product-directio
 
 1. **Present:** Expand **Your attention** in place with the exact decision, timing rationale, consequences, risks, and recommendation visible before any action.
 2. **Inspect evidence:** A subordinate **Technical evidence** action reveals the evidence supporting the recommendation without navigating away from the decision or exposing Hermes internals.
-3. **Act:** Place **Approve** and **Decline** directly beneath the decision content, with equal clarity and no detached global approval control.
+3. **Act:** Place **Approve single-parcel first** and **Request batch-first plan** directly beneath the decision content, with equal clarity and no detached global approval control.
 4. **Confirm intent:** Selecting either action opens a concise confirmation that repeats the chosen consequence in ordinary language; **Back** returns without recording a choice.
 5. **Prototype response:** Confirming shows a nonpersistent prototype acknowledgement: **Prototype only - no decision was recorded and no system state changed.**
 6. **Production requirement:** A future implementation would require authenticated authority capture, attributable evidence, and a new explicit implementation approval; those behaviors are outside #497.
@@ -111,7 +111,7 @@ Every outcome and status sentence in this artifact is static mock content ground
 
 - This artifact specifies one isolated, nonfunctional desktop prototype for founder review under #497.
 - It does not implement or replace a production route, component, API, service, schema, database, queue, lifecycle, authority, Goal Console, Hermes, or runtime behavior.
-- **Approve**, **Decline**, **View details**, confirmations, and evidence views are presentation specifications only; they perform no command, write, dispatch, retry, merge, mutation, persistence, or external call.
+- **Approve single-parcel first**, **Request batch-first plan**, **View details**, confirmations, and evidence views are presentation specifications only; they perform no command, write, dispatch, retry, merge, mutation, persistence, or external call.
 
 ## Screenshot Artifacts
 
