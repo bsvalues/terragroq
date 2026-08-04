@@ -66,6 +66,19 @@ export type PrimaryHomeProject = Readonly<{
   }> | null
 }>
 
+export type PrimaryHomeArtifact = Readonly<{
+  title: string
+  phase: string
+  status: string
+  deliveryStatus: GoalTimelineProjection["delivery"]["status"]
+  actor: string | null
+  checkpoints: readonly Readonly<{
+    state: string
+    result: string | null
+  }>[]
+  detailHref: "/work-orders"
+}>
+
 export type PrimaryHomeModel = Readonly<{
   founderBriefing: Readonly<{
     outcome: string | null
@@ -75,6 +88,7 @@ export type PrimaryHomeModel = Readonly<{
     nextAutomaticStep: string
     summary: string
   }>
+  activeArtifact: PrimaryHomeArtifact | null
   needsWilliam: PrimaryHomeDecision | null
   nextWithoutWilliam: PrimaryHomeNextWithoutWilliam
   recentOutcomes: readonly PrimaryHomeRecentOutcome[]
@@ -159,12 +173,26 @@ function projectHealth(
   timeline: GoalTimelineProjection | null,
   queue: OutcomeQueueOperatorSurface,
 ): PrimaryHomeHealth {
-  if (queue.state === "BLOCKED") {
-    const blockedRow = queue.rows.find((row) => row.blockerLabels.length > 0)
+  const timelineRow = timeline === null
+    ? null
+    : queue.rows.find((row) => rowMatchesTimeline(row, timeline)) ?? null
+  const blockedRow = timelineRow !== null
+    && (
+      timelineRow.lifecycleState === "blocked"
+      || (timelineRow.lifecycleState !== "active" && queue.state === "BLOCKED" && timelineRow.blockerLabels.length > 0)
+    )
+    ? timelineRow
+    : timeline === null && queue.state === "BLOCKED"
+      ? queue.rows.find((row) => row.lifecycleState === "blocked" || row.blockerLabels.length > 0) ?? null
+      : null
+
+  if (blockedRow !== null) {
     return {
       state: "BLOCKED",
       label: "Blocked",
-      detail: blockedRow?.blockerLabels.join(". ") ?? queue.reasonLabel,
+      detail: blockedRow.blockerLabels.length > 0
+        ? blockedRow.blockerLabels.join(". ")
+        : blockedRow.lifecycleReason ?? queue.reasonLabel,
     }
   }
 
@@ -331,6 +359,8 @@ function recommendationFor(
         choice: match[1].toUpperCase() as "APPROVE" | "DENY",
         statement,
         evidenceRef: evidenceRef(record),
+        createdAt: record.createdAt,
+        id: record.id,
       } : null
     })
     .filter((item): item is NonNullable<typeof item> => item !== null)
@@ -339,7 +369,11 @@ function recommendationFor(
   if (recommendations.length === 0 || choices.size !== 1) return null
 
   const newest = recommendations
-    .sort((left, right) => left.evidenceRef.localeCompare(right.evidenceRef))[0]
+    .sort((left, right) => (
+      right.createdAt.getTime() - left.createdAt.getTime()
+      || right.id - left.id
+      || left.evidenceRef.localeCompare(right.evidenceRef)
+    ))[0]
   return {
     choice: newest.choice,
     statement: newest.statement,
@@ -515,12 +549,29 @@ export function projectPrimaryHomeModel(input: PrimaryHomeModelInput): PrimaryHo
     ?? input.currentTimeline?.goal.outcome
     ?? null
   const actor = input.currentTimeline?.truth.state === "CURRENT"
+    && input.queue.activeItem !== null
+    && rowMatchesTimeline(input.queue.activeItem, input.currentTimeline)
     && input.currentTimeline.current.runtime.recordedAt !== null
     && input.currentTimeline.current.runtime.leaseStatus === "ACTIVE"
     ? input.currentTimeline.current.runtime.worker
     : null
   const { decision: needsWilliam, timeline: decisionTimeline } = projectNeedsWilliam(input)
   const recentOutcomes = projectRecentOutcomes(input.recentCompletions)
+  const activeArtifact = input.currentTimeline?.truth.state === "CURRENT"
+    && input.currentTimeline.current.workOrder !== null
+    ? {
+        title: input.currentTimeline.current.workOrder.title,
+        phase: input.currentTimeline.current.phase,
+        status: input.currentTimeline.current.workOrder.status,
+        deliveryStatus: input.currentTimeline.delivery.status,
+        actor,
+        checkpoints: input.currentTimeline.validationCheckpoints.slice(0, 4).map((checkpoint) => ({
+          state: checkpoint.state,
+          result: checkpoint.result,
+        })),
+        detailHref: "/work-orders" as const,
+      }
+    : null
 
   return {
     founderBriefing: {
@@ -531,6 +582,7 @@ export function projectPrimaryHomeModel(input: PrimaryHomeModelInput): PrimaryHo
       nextAutomaticStep: nextWithoutWilliam.label,
       summary: briefingSummary(outcome, project, actor, health, nextWithoutWilliam),
     },
+    activeArtifact,
     needsWilliam,
     nextWithoutWilliam,
     recentOutcomes,

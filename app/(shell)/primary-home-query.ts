@@ -17,12 +17,13 @@ export type PrimaryHomeReadModel = Readonly<{
 }>
 
 export async function getPrimaryHomeReadModel(): Promise<PrimaryHomeReadModel> {
-  const [queue, actionableTimelines, recentCompletions, evidenceTruth] = await Promise.all([
-    getOutcomeQueueSurface(),
-    getActiveGoalAuthorityRequestTimelines(),
-    getRecentOutcomeCompletionTimeline(),
-    getPersistedEvidenceTruth(100),
-  ])
+  // Each read action resolves the authenticated Primary session. Keep these
+  // reads ordered so Home does not create a burst of duplicate auth/database
+  // lookups while the shell layout is resolving the same session.
+  const queue = await getOutcomeQueueSurface()
+  const actionableTimelines = await getActiveGoalAuthorityRequestTimelines()
+  const recentCompletions = await getRecentOutcomeCompletionTimeline()
+  const evidenceTruth = await getPersistedEvidenceTruth(100)
   const currentRow = queue.activeItem
     ?? queue.nextEligibleItem
     ?? queue.rows.find((row) => ![

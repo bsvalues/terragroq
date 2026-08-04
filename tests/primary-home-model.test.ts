@@ -254,6 +254,14 @@ describe("Primary Home read model", () => {
       nextAutomaticStep: "Continue Ship the founder briefing",
     })
     expect(model.needsWilliam).toBeNull()
+    expect(model.activeArtifact).toMatchObject({
+      title: "Build Primary Home",
+      phase: "EXECUTING",
+      status: "active",
+      deliveryStatus: "MISSING",
+      actor: "Codex",
+      detailHref: "/work-orders",
+    })
     expect(model.nextWithoutWilliam).toMatchObject({
       mode: "CONTINUE_ACTIVE",
       reason: "The active outcome holds a live lease",
@@ -348,6 +356,34 @@ describe("Primary Home read model", () => {
     }))
 
     expect(model.needsWilliam?.recommendation).toBeNull()
+  })
+
+  it("uses the newest matching recommendation by timestamp and id", () => {
+    const current = timeline({ actionable: true })
+    const model = projectPrimaryHomeModel(input({
+      currentTimeline: current,
+      actionableTimelines: [current],
+      evidenceRecords: [
+        evidence({
+          id: 9,
+          ref: "EV-Z",
+          nextValidMove: "APPROVE: use the older recommendation",
+          createdAt: new Date("2026-08-03T09:00:00.000Z"),
+        }),
+        evidence({
+          id: 2,
+          ref: "EV-A",
+          nextValidMove: "APPROVE: use the current recommendation",
+          createdAt: new Date("2026-08-03T11:00:00.000Z"),
+        }),
+      ],
+    }))
+
+    expect(model.needsWilliam?.recommendation).toMatchObject({
+      choice: "APPROVE",
+      statement: "APPROVE: use the current recommendation",
+      evidenceRefs: ["EV-A", "EV-Z"],
+    })
   })
 
   it("uses the exact queue reason for an empty queue", () => {
@@ -506,6 +542,32 @@ describe("Primary Home read model", () => {
       outcomeKey: "goal:GOAL-1",
     })
     expect(JSON.stringify(model.nextWithoutWilliam)).not.toContain("A later queued outcome")
+  })
+
+  it("does not attribute a worker from a timeline that is not the active queue row", () => {
+    const model = projectPrimaryHomeModel(input({
+      queue: queue([
+        queueRecord(),
+        queueRecord({
+          id: 2,
+          goalId: 2,
+          goalRef: "GOAL-2",
+          outcomeKey: "goal:GOAL-2",
+          title: "Eligible next outcome",
+          lifecycleState: "approved",
+          activeWorkOrderId: 202,
+          executionBinding: null,
+          leaseHolder: null,
+          leaseToken: null,
+          leaseExpiresAt: null,
+          acquisitionKey: null,
+          queueOrder: 20,
+        }),
+      ]),
+      currentTimeline: timeline({ goalId: 2, workOrderId: 202, worker: "Codex" }),
+    }))
+
+    expect(model.founderBriefing.actor).toBeNull()
   })
 
   it("does not infer a static project when evidence attribution is missing", () => {

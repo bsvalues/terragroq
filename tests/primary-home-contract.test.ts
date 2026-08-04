@@ -23,18 +23,33 @@ describe("Primary Home product contract", () => {
     expect(query).toContain("getActiveGoalAuthorityRequestTimelines")
     expect(query).toContain("getRecentOutcomeCompletionTimeline")
     expect(query).toContain("getPersistedEvidenceTruth")
+    expect(query).not.toContain("Promise.all")
   })
 
   it("keeps project identity live and project-neutral", () => {
     const home = source("components/primary-home/primary-home.tsx")
+    const technicalDetails = source("components/primary-home/primary-home-technical-details.tsx")
     const model = source("components/primary-home/primary-home-model.ts")
 
-    expect(home).toContain("Project not recorded")
-    expect(home).toContain("Nothing needs William")
+    expect(home).toContain("No project identity is proven")
+    expect(home).toContain("Nothing needs you")
     expect(home).toContain("Next without William")
-    expect(home).toContain("Technical details")
+    expect(technicalDetails).toContain("Technical details")
     expect(home).not.toMatch(/TerraFusion|Property Workbench|TerraPilot|PACS/)
     expect(model).not.toMatch(/TerraFusion|Property Workbench|TerraPilot|PACS/)
+  })
+
+  it("makes the active outcome the operating surface instead of a dashboard briefing", () => {
+    const home = source("components/primary-home/primary-home.tsx")
+
+    expect(home).toContain("Active outcome")
+    expect(home).toContain("Work artifact")
+    expect(home).toContain("Recent continuity")
+    expect(home).toContain("Project horizon")
+    expect(home).toContain("OutcomeFieldBackground")
+    expect(home).not.toContain("Primary briefing")
+    expect(home).not.toContain("Recently completed")
+    expect(home).not.toContain("grid max-w-5xl gap-8 lg:grid-cols")
   })
 
   it("records decisions only through the exact-bound authority action", () => {
@@ -45,5 +60,19 @@ describe("Primary Home product contract", () => {
     expect(decision).toContain("Cancel")
     expect(decision).toContain("Technical evidence basis")
     expect(decision).not.toContain("Approve recommendation")
+  })
+
+  it("uses compact Home chrome without changing navigation destinations", () => {
+    const shell = source("components/shell/app-shell.tsx")
+    const frame = source("components/shell/app-shell-frame.tsx")
+
+    expect(shell).toContain("AppShellFrame")
+    expect(frame).toContain('const compactHome = pathname === "/"')
+    expect(frame).toContain("HOME_RAIL_DESTINATIONS")
+    expect(frame).toContain('"/work-orders"')
+    expect(frame).toContain('"/projects"')
+    expect(frame).toContain('"/audit"')
+    expect(frame).toContain('"/runtime"')
+    expect(frame).toContain("<SidebarNav />")
   })
 })

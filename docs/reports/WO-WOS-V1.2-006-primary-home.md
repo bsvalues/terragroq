@@ -4,19 +4,21 @@
 
 - GitHub Issue: `#499`
 - Branch: `codex/issue-499-primary-home`
-- Base: `origin/main` at `f1d007277e0657339e657dd1a0e1b6ba1f27f9b2`
+- Base: `origin/main` at `bcee6d8067228a79c2ade852fc21d938a7e43f5c`
 - Delivery posture: working preview only; founder approval is required before merge
 
 ## Product outcome
 
-The authenticated root route now presents one founder workflow backed by live WilliamOS records:
+The authenticated root route now presents an artifact-first operating field backed by live WilliamOS records:
 
-1. Primary briefing: current outcome, proven project identity, proven worker, health, and next automatic step.
-2. Needs William: at most one current `ACTIONABLE` authority request with exact choices and consequences.
-3. Next without William: the canonical outcome-queue continuation, activation, recovery, or truthful no-work state.
-4. Recently completed: bounded completed-outcome history with evidence navigation.
-5. Project horizon: repository identities proven by persisted Work Order evidence only.
-6. Technical details: queue, Goal, Work Order, timeline, and generated-at mechanics behind deliberate disclosure.
+1. Current outcome: one dominant focal point that identifies whether work is active, ready, recovering, held, complete, or unavailable.
+2. Work artifact: the actual active Work Order, delivery phase, proven worker, and validation checkpoints when those records exist.
+3. Needs William: at most one current `ACTIONABLE` authority request with the exact decision, recommendation, consequences, and concrete choices together.
+4. Next without William: canonical outcome-queue continuation, activation, recovery, or truthful no-work state.
+5. Recent continuity and project horizon: bounded completion history and evidence-backed project identities below the operating field.
+6. Technical details: queue keys, Goal identifiers, Work Order identifiers, lifecycle state, authority state, and timestamps behind a deliberate drawer.
+
+Home alone receives compact route-aware shell chrome so the current operating artifact owns the viewport. Existing navigation and health surfaces remain unchanged on every non-Home route.
 
 The prior dashboard composition, static TerraFusion project claim, proposed-decision count, runtime configuration panel, and competing command-center cards no longer appear on the Primary Home path.
 
@@ -24,19 +26,23 @@ The prior dashboard composition, static TerraFusion project claim, proposed-deci
 
 - Outcome and successor truth comes from `getOutcomeQueueSurface()`.
 - Current execution truth comes from the persisted Goal timeline.
+- A queued or blocked outcome is never presented as active execution.
 - A worker is named only when the timeline is current and its lease is active.
 - Only a current `ACTIONABLE` authority request can enter `Needs William`.
 - Project identity comes only from persisted `evidence_record.repo` values linked to the relevant Work Order.
 - Missing or conflicting truth is labeled unavailable; it is not inferred from product context.
 - The existing exact-bound authority-decision action remains the only mutation path.
+- Home read actions remain read-only and are sequenced to avoid duplicate authenticated database bursts during shell resolution.
 
 ## Validation
 
-- Focused model and product-contract tests: `14 passed`.
-- Full lint: passed with zero warnings or errors.
+- Focused model and product-contract tests: `18 passed`.
+- Scoped lint for all changed Home, shell, and test files: passed with zero warnings or errors.
+- Repository-wide lint remains blocked by unrelated legacy test violations outside this Work Order.
 - Production build with `NEXT_PRIVATE_BUILD_WORKER=0` and telemetry disabled: passed.
-- Full Vitest run: `2,325 passed`, `2 skipped`, `1 pre-existing Windows CRLF-sensitive source assertion failed` in `tests/outcome-queue-operator-panel.test.ts`; the failing file and asserted component were untouched by this Work Order.
+- Full Vitest run: `2,329 passed`, `2 skipped`, `1 pre-existing Windows CRLF-sensitive source assertion failed` in `tests/outcome-queue-operator-panel.test.ts`; the failing file and asserted component were untouched by this Work Order.
 - `git diff --check`: passed.
+- Authenticated browser proof: passed at `1280x720`, `1440x900`, and `390x844`; no horizontal overflow was observed, and repeated authenticated refreshes returned the governed Home state without the prior database-connection termination.
 
 ## Safety posture
 
