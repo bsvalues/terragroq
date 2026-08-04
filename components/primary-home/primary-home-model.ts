@@ -27,6 +27,19 @@ export type PrimaryHomeNextWithoutWilliam = Readonly<{
   reason: string
 }>
 
+export function resolvePrimaryHomeGoalId(
+  row: Pick<OutcomeQueueOperatorRow, "goalId" | "outcomeKey"> | null,
+): number | null {
+  if (row?.goalId !== null && row?.goalId !== undefined
+    && Number.isSafeInteger(row.goalId) && row.goalId > 0) {
+    return row.goalId
+  }
+  const match = /^goal:(\d+)$/.exec(row?.outcomeKey ?? "")
+  if (match === null) return null
+  const goalId = Number(match[1])
+  return Number.isSafeInteger(goalId) && goalId > 0 ? goalId : null
+}
+
 export type PrimaryHomeDecision = Readonly<{
   timelineId: string
   question: string
@@ -169,6 +182,15 @@ function rowMatchesTimeline(
 function containsState(value: string | null | undefined, pattern: RegExp): boolean {
   return typeof value === "string" && pattern.test(value)
 }
+function queueBlockerDetail(
+  row: Pick<OutcomeQueueOperatorRow, "blockerLabels" | "lifecycleReason">,
+  fallback: string,
+): string {
+  const labels = row.blockerLabels.map((label) => label.trim()).filter(Boolean)
+  if (labels.length > 0) return labels.join(". ")
+  const reason = row.lifecycleReason?.trim()
+  return reason || fallback
+}
 
 function projectHealth(
   timeline: GoalTimelineProjection | null,
@@ -191,9 +213,7 @@ function projectHealth(
     return {
       state: "BLOCKED",
       label: "Blocked",
-      detail: blockedRow.blockerLabels.length > 0
-        ? blockedRow.blockerLabels.join(". ")
-        : blockedRow.lifecycleReason ?? queue.reasonLabel,
+      detail: queueBlockerDetail(blockedRow, queue.reasonLabel),
     }
   }
 
@@ -534,10 +554,7 @@ function projectHorizon(
         ? {
             state: "BLOCKED" as const,
             label: "Blocked",
-            detail: (queueRow?.blockerLabels.length ?? 0) > 0
-              ? queueRow!.blockerLabels.join(". ")
-              : queueRow?.lifecycleReason
-                ?? "The project queue records a blocker.",
+            detail: queueBlockerDetail(queueRow!, "The project queue records a blocker."),
           }
         : UNKNOWN_HEALTH
     return {
@@ -638,5 +655,3 @@ export function projectPrimaryHomeModel(input: PrimaryHomeModelInput): PrimaryHo
     },
   }
 }
-
-export const buildPrimaryHomeModel = projectPrimaryHomeModel

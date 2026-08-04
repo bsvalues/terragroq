@@ -36,11 +36,11 @@ The prior dashboard composition, static TerraFusion project claim, proposed-deci
 
 ## Validation
 
-- Focused model and product-contract tests: `25 passed`.
+- Focused model and product-contract tests: `27 passed`.
 - Scoped lint for all changed Home, shell, and test files: passed with zero warnings or errors.
 - Repository-wide lint: passed with zero warnings or errors.
 - Production build with `NEXT_PRIVATE_BUILD_WORKER=0` and telemetry disabled: passed.
-- Full Vitest run: `2,336 passed`, `2 skipped`, `1 failed`; the only failure is the pre-existing Windows CRLF-sensitive source assertion in untouched `tests/outcome-queue-operator-panel.test.ts`. The previously observed scheduler heartbeat timing test passed in this serial run.
+- Full Vitest run: `2,338 passed`, `2 skipped`, `1 failed`; the only failure is the pre-existing Windows CRLF-sensitive source assertion in untouched `tests/outcome-queue-operator-panel.test.ts`. The previously observed scheduler heartbeat timing test passed in this serial run.
 - `git diff --check`: passed.
 - Authenticated browser proof: passed at `1280x720`, `1440x900`, and `390x844`; no horizontal overflow was observed, and repeated authenticated refreshes returned the governed Home state without the prior database-connection termination.
 - Technical-detail drawer browser proof: passed for modal dialog semantics, initial focus, background inertness, close, and trigger-focus restoration.

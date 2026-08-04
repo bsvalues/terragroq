@@ -11,6 +11,7 @@ import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
 import type { GoalTimelineDecisionRequest } from "@/components/goal-console/goal-timeline-read-model"
 import {
   projectPrimaryHomeModel,
+  resolvePrimaryHomeGoalId,
   type PrimaryHomeModel,
 } from "@/components/primary-home/primary-home-model"
 
@@ -33,8 +34,7 @@ export async function getPrimaryHomeReadModel(): Promise<PrimaryHomeReadModel> {
     ?? queue.nextEligibleItem
     ?? queue.rows.find((row) => !TERMINAL_OUTCOME_STATES.has(row.lifecycleState))
     ?? null
-  const currentGoalId = currentRow?.goalId
-    ?? null
+  const currentGoalId = resolvePrimaryHomeGoalId(currentRow)
   const currentTimeline = currentGoalId === null
     ? null
     : await getGoalTimeline(currentGoalId)

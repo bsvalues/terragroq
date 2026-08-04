@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import type { GoalTimelineProjection } from "@/components/goal-console/goal-timeline-read-model"
 import {
   projectPrimaryHomeModel,
+  resolvePrimaryHomeGoalId,
   type PrimaryHomeModelInput,
 } from "@/components/primary-home/primary-home-model"
 import { formatPrimaryHomeTime } from "@/components/primary-home/primary-home-format"
@@ -458,6 +459,33 @@ describe("Primary Home read model", () => {
 
     expect(model.founderBriefing.health.state).toBe("ADVANCING")
     expect(model.founderBriefing.actor).toBe("Codex")
+  })
+
+  it("resolves the live timeline id from a numeric fallback outcome key", () => {
+    expect(resolvePrimaryHomeGoalId({ goalId: null, outcomeKey: "goal:17" })).toBe(17)
+    expect(resolvePrimaryHomeGoalId({ goalId: 23, outcomeKey: "goal:17" })).toBe(23)
+    expect(resolvePrimaryHomeGoalId({ goalId: null, outcomeKey: "goal:0" })).toBeNull()
+    expect(resolvePrimaryHomeGoalId({ goalId: null, outcomeKey: "goal:GOAL-17" })).toBeNull()
+  })
+
+  it("uses a nonempty fallback when a blocked lifecycle reason is blank", () => {
+    const model = projectPrimaryHomeModel(input({
+      queue: queue([queueRecord({
+        lifecycleState: "blocked",
+        lifecycleReason: "   ",
+        leaseHolder: null,
+        leaseToken: null,
+        leaseExpiresAt: null,
+        acquisitionKey: null,
+        activatedAt: null,
+      })]),
+      currentTimeline: null,
+    }))
+
+    expect(model.founderBriefing.health).toMatchObject({
+      state: "BLOCKED",
+      detail: "Lifecycle is not eligible",
+    })
   })
 
   it("guards invalid Home timestamps", () => {
