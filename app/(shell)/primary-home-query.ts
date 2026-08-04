@@ -26,21 +26,6 @@ export async function getPrimaryHomeReadModel(): Promise<PrimaryHomeReadModel> {
   const queue = await getOutcomeQueueSurface()
   const actionableTimelines = await getActiveGoalAuthorityRequestTimelines()
   const recentCompletions = await getRecentOutcomeCompletionTimeline()
-  const evidenceTruth = await getPersistedEvidenceTruth(100)
-  const decisionWorkOrderIds = [...new Set(actionableTimelines
-    .filter((timeline) => (
-      timeline.truth.state === "CURRENT"
-      && timeline.decisionRequest.status === "ACTIONABLE"
-      && timeline.decisionRequest.workOrderId !== null
-    ))
-    .map((timeline) => timeline.decisionRequest.workOrderId as number))]
-  const decisionEvidence: typeof evidenceTruth.records = []
-  for (const workOrderId of decisionWorkOrderIds) {
-    decisionEvidence.push(...await getEvidenceForWorkOrder(workOrderId))
-  }
-  const evidenceRecords = [...new Map(
-    [...evidenceTruth.records, ...decisionEvidence].map((record) => [record.id, record]),
-  ).values()]
   const currentRow = queue.activeItem
     ?? queue.nextEligibleItem
     ?? queue.rows.find((row) => ![
@@ -54,6 +39,34 @@ export async function getPrimaryHomeReadModel(): Promise<PrimaryHomeReadModel> {
   const currentTimeline = currentGoalId === null
     ? null
     : await getGoalTimeline(currentGoalId)
+  const evidenceTruth = await getPersistedEvidenceTruth(100)
+  const relevantWorkOrderIds = new Set<number>()
+  for (const row of queue.rows) {
+    if (!["completed", "declined", "superseded"].includes(row.lifecycleState)
+      && row.activeWorkOrderId !== null) {
+      relevantWorkOrderIds.add(row.activeWorkOrderId)
+    }
+  }
+  if (currentTimeline?.current.workOrder?.id !== undefined) {
+    relevantWorkOrderIds.add(currentTimeline.current.workOrder.id)
+  }
+  for (const timeline of actionableTimelines) {
+    if (timeline.truth.state !== "CURRENT") continue
+    if (timeline.current.workOrder !== null) {
+      relevantWorkOrderIds.add(timeline.current.workOrder.id)
+    }
+    if (timeline.decisionRequest.status === "ACTIONABLE"
+      && timeline.decisionRequest.workOrderId !== null) {
+      relevantWorkOrderIds.add(timeline.decisionRequest.workOrderId)
+    }
+  }
+  const exactEvidence: typeof evidenceTruth.records = []
+  for (const workOrderId of relevantWorkOrderIds) {
+    exactEvidence.push(...await getEvidenceForWorkOrder(workOrderId))
+  }
+  const evidenceRecords = [...new Map(
+    [...evidenceTruth.records, ...exactEvidence].map((record) => [record.id, record]),
+  ).values()]
   const model = projectPrimaryHomeModel({
     queue,
     currentTimeline,

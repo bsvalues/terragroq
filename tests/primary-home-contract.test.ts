@@ -24,7 +24,8 @@ describe("Primary Home product contract", () => {
     expect(query).toContain("getRecentOutcomeCompletionTimeline")
     expect(query).toContain("getPersistedEvidenceTruth")
     expect(query).toContain("getEvidenceForWorkOrder")
-    expect(query).toContain("decisionWorkOrderIds")
+    expect(query).toContain("relevantWorkOrderIds")
+    expect(query).toContain("row.activeWorkOrderId")
     expect(query).not.toContain("Promise.all")
   })
 
