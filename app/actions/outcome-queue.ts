@@ -783,17 +783,88 @@ export async function recordV12CampaignOutcomeAuthority(input: {
             eq(eventLog.refId, item.goalId!),
           )),
       ])
+    const timestampState = await transaction.execute(sql`
+      SELECT CASE
+        WHEN q."createdAt" = q."suggestedAt"
+          AND q."updatedAt" = q."suggestedAt"
+          AND g."createdAt" = q."suggestedAt" AT TIME ZONE 'UTC'
+          AND g."updatedAt" = q."suggestedAt" AT TIME ZONE 'UTC'
+          AND ge."createdAt" = q."suggestedAt" AT TIME ZONE 'UTC'
+          AND el."createdAt" = q."suggestedAt" AT TIME ZONE 'UTC'
+          THEN 'canonical'
+        WHEN q."createdAt" = q."suggestedAt"
+          AND q."updatedAt" = q."suggestedAt"
+          AND g."createdAt" = q."suggestedAt" AT TIME ZONE 'America/Los_Angeles'
+          AND g."updatedAt" = q."suggestedAt" AT TIME ZONE 'America/Los_Angeles'
+          AND ge."createdAt" = q."suggestedAt" AT TIME ZONE 'America/Los_Angeles'
+          AND el."createdAt" = q."suggestedAt" AT TIME ZONE 'America/Los_Angeles'
+          THEN 'legacy_pacific'
+        ELSE 'mismatch'
+      END AS mode
+      FROM "outcome_queue_item" q
+      JOIN goal g ON g.id = q."goalId" AND g."userId" = q."userId"
+      JOIN governance_event ge
+        ON ge."userId" = q."userId"
+       AND ge."eventType" = 'V1_2_CHILD_OUTCOME_SUGGESTED'
+       AND ge."entityType" = 'outcome_queue_item'
+       AND ge."entityId" = q."outcomeKey"
+      JOIN event_log el
+        ON el."userId" = q."userId"
+       AND el.type = 'outcome.suggested'
+       AND el.register = 'outcome-queue'
+       AND el."refId" = q."goalId"
+      WHERE q.id = ${item.id}
+        AND q."userId" = ${userId}
+        AND q."outcomeKey" = ${item.outcomeKey}
+    `)
+    const timestampMode = timestampState.rows.length === 1
+      ? timestampState.rows[0]?.mode
+      : "mismatch"
+    const timestampsAreExact = timestampMode === "canonical"
+      || timestampMode === "legacy_pacific"
+    const normalizedMaterialization = Boolean(materializedGoal)
+      && materializationEvents.length === 1
+      && materializationAudits.length === 1
+      && timestampsAreExact
+      && isExactV12CampaignMaterialization({
+        userId,
+        item,
+        goal: {
+          ...materializedGoal!,
+          createdAt: item.suggestedAt,
+          updatedAt: item.suggestedAt,
+        },
+        governance: {
+          ...materializationEvents[0],
+          createdAt: item.suggestedAt,
+        },
+        audit: {
+          ...materializationAudits[0],
+          createdAt: item.suggestedAt,
+        },
+      })
     if (!materializedGoal
       || materializationEvents.length !== 1
       || materializationAudits.length !== 1
-      || !isExactV12CampaignMaterialization({
-        userId,
-        item,
-        goal: materializedGoal,
-        governance: materializationEvents[0],
-        audit: materializationAudits[0],
-      })) {
+      || !normalizedMaterialization) {
       return { status: "STALE" as const, version: item.version, renewed: false }
+    }
+
+    if (timestampMode === "legacy_pacific") {
+      await transaction.insert(eventLog).values({
+        userId,
+        type: "outcome.materialization_timestamp_interpreted",
+        summary: `${item.goalRef}: recorded the exact legacy Pacific campaign timestamp interpretation without rewriting evidence.`,
+        register: "outcome-queue",
+        refId: item.goalId,
+        metadata: {
+          outcomeKey: item.outcomeKey,
+          sourceTimezone: "America/Los_Angeles",
+          canonicalInstant: item.suggestedAt.toISOString(),
+          materializationEventId: materializationEvents[0].id,
+          materializationAfterHash: materializationEvents[0].afterHash,
+        },
+      })
     }
 
     const refs = v12CampaignAuthorityRefs(campaignScope)

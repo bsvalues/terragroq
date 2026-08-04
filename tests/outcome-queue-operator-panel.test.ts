@@ -132,14 +132,16 @@ describe("operator outcome queue panel accessibility contract", () => {
     expect(actionSource).toContain("row.activeWorkOrderId !== null")
     expect(actionSource).toContain("row.fencingToken !== 0")
     expect(actionSource).toContain("row.activatedAt !== null")
-    expect(source).toContain('campaignAuthorityProposal\n                      && row.lifecycleState !== "active"')
+    expect(source).toMatch(
+      /campaignAuthorityProposal\r?\n\s+&& row\.lifecycleState !== "active"/,
+    )
     expect(source.match(/\{campaignAuthorityProposal \? null : \(/g)).toHaveLength(2)
     expect(source).toContain("&& row.authorityGrantRef !== null")
     expect(source).toContain("&& row.availableAuthorityGrantRef === row.authorityGrantRef")
     expect(source).toContain("const declineAvailable = !row.hasRetainedRuntimeHistory")
     expect(source).toContain("&& !row.hasRetainedRuntimeHistory")
-    expect(source).toContain(
-      'campaignAuthorityProposal\n                      && row.lifecycleState !== "active"\n                      && !row.hasRetainedRuntimeHistory',
+    expect(source).toMatch(
+      /campaignAuthorityProposal\r?\n\s+&& row\.lifecycleState !== "active"\r?\n\s+&& !row\.hasRetainedRuntimeHistory/,
     )
     expect(source).toContain("|| row.availableAuthorityGrantRef !== row.authorityGrantRef")
     expect(source).toContain("{declineAvailable ? (")

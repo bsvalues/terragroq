@@ -111,6 +111,20 @@ describe("outcome lifecycle", () => {
       "outcome_queue_item_nonnegative_fence_check",
       "outcome_queue_item_active_binding_check",
     ]))
+    const timestampColumns = new Map(
+      config.columns.map((column) => [column.name, column.getSQLType()]),
+    )
+    for (const name of [
+      "approvedAt",
+      "leaseExpiresAt",
+      "suggestedAt",
+      "activatedAt",
+      "terminalAt",
+      "createdAt",
+      "updatedAt",
+    ]) {
+      expect(timestampColumns.get(name)).toBe("timestamp with time zone")
+    }
   })
 
   it("allows only explicit legal transitions and requires approval evidence", () => {

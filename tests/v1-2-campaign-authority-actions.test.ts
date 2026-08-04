@@ -95,12 +95,21 @@ function declinableCampaignRow(authorityGrantRef = "GRANT-V12-CAMPAIGN") {
   }
 }
 
-function transactionHarness(selectRows: unknown[][], updateRows: unknown[] = []) {
+function transactionHarness(
+  selectRows: unknown[][],
+  updateRows: unknown[] = [],
+  timestampMode: "canonical" | "legacy_pacific" | "mismatch" = "canonical",
+) {
   const inserts: Array<{ table: string; values: unknown }> = []
   const updates: Array<{ table: string; values: Record<string, unknown> }> = []
   const source = [...selectRows]
+  let executeCount = 0
   const transaction = {
-    execute: vi.fn(async () => ({ rows: [] })),
+    execute: vi.fn(async () => {
+      executeCount += 1
+      if (executeCount === 6) return { rows: [{ mode: timestampMode }] }
+      return { rows: [] }
+    }),
     select: vi.fn(() => fluentQuery(source.shift() ?? [])),
     insert: vi.fn((table: unknown) => {
       const tableName = getTableName(table as never)
@@ -164,6 +173,7 @@ describe("V1.2 campaign server authority boundaries", () => {
 
   it("records authority only when the exact materializer goal and audit chain are present", async () => {
     const suggestedAt = new Date("2026-07-29T20:00:00.000Z")
+    const storedAt = new Date("2026-07-29T13:00:00.000Z")
     const approvalAt = new Date("2026-07-29T22:00:00.000Z")
     vi.useFakeTimers()
     vi.setSystemTime(approvalAt)
@@ -226,8 +236,8 @@ describe("V1.2 campaign server authority boundaries", () => {
       requiresApproval: true,
       linkedWorkOrderId: null,
       status: "classified",
-      createdAt: suggestedAt,
-      updatedAt: suggestedAt,
+      createdAt: storedAt,
+      updatedAt: storedAt,
     }
     const provenance = buildV12CampaignMaterializationProvenance(
       "primary-1",
@@ -245,7 +255,7 @@ describe("V1.2 campaign server authority boundaries", () => {
       afterHash: provenance.contentHash,
       evidenceId: null,
       metadata: provenance,
-      createdAt: suggestedAt,
+      createdAt: storedAt,
     }
     const audit = {
       userId: "primary-1",
@@ -260,7 +270,7 @@ describe("V1.2 campaign server authority boundaries", () => {
         provenanceContract: provenance.contract,
         provenanceHash: provenance.contentHash,
       },
-      createdAt: suggestedAt,
+      createdAt: storedAt,
     }
     const harness = transactionHarness([
       [item],
@@ -269,7 +279,7 @@ describe("V1.2 campaign server authority boundaries", () => {
       [audit],
       [],
       [],
-    ])
+    ], [], "legacy_pacific")
     boundary.dbTransaction.mockImplementation(
       async (callback: (transaction: unknown) => Promise<unknown>) => (
         callback(harness.transaction)
@@ -311,6 +321,35 @@ describe("V1.2 campaign server authority boundaries", () => {
         }),
       ]),
     }))
+    expect(harness.inserts).toContainEqual(expect.objectContaining({
+      table: "event_log",
+      values: expect.objectContaining({
+        type: "outcome.materialization_timestamp_interpreted",
+        refId: 21,
+      }),
+    }))
+    expect(harness.transaction.execute).toHaveBeenCalledTimes(6)
+
+    const mismatchHarness = transactionHarness([
+      [item],
+      [materializedGoal],
+      [materialization],
+      [audit],
+    ], [], "mismatch")
+    boundary.dbTransaction.mockImplementation(
+      async (callback: (transaction: unknown) => Promise<unknown>) => (
+        callback(mismatchHarness.transaction)
+      ),
+    )
+
+    await expect(recordV12CampaignOutcomeAuthority({
+      outcomeKey: campaignScope,
+      expectedVersion: 0,
+    })).resolves.toMatchObject({
+      status: "STALE",
+      version: 0,
+    })
+    expect(mismatchHarness.inserts).toHaveLength(0)
   })
 
   it("renews an expired exact grant for a paused campaign", async () => {
