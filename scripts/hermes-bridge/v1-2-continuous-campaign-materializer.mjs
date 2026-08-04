@@ -568,7 +568,9 @@ export async function materializeV12ContinuousCampaign({
            "requiresApproval", status, "createdAt", "updatedAt"
          ) VALUES (
            $1, $2, $3, 'ui', 'implement', 'low', 'A2_WRITE_OWN',
-           'requires_approval', $4, '{}', '{}', $5, true, 'classified', $6, $6
+           'requires_approval', $4, '{}', '{}', $5, true, 'classified',
+           $6::timestamptz AT TIME ZONE 'UTC',
+           $6::timestamptz AT TIME ZONE 'UTC'
          ) RETURNING id`,
         [
           userId,
@@ -598,7 +600,7 @@ export async function materializeV12ContinuousCampaign({
            'outcome:execute', 'suggested', $9,
            NULL, NULL, NULL, NULL, NULL, 0, 0, NULL,
            NULL, NULL, '{}', NULL, NULL, NULL,
-           $10, NULL, NULL, $10, $10
+           $10::timestamptz, NULL, NULL, $10::timestamptz, $10::timestamptz
          )`,
         [
           userId,
@@ -624,7 +626,8 @@ export async function materializeV12ContinuousCampaign({
            "afterHash", metadata, "createdAt"
          ) VALUES (
            $1, 'V1_2_CHILD_OUTCOME_SUGGESTED', 'outcome_queue_item', $2,
-           'hermes', $3, $4, $5::jsonb, $6
+           'hermes', $3, $4, $5::jsonb,
+           $6::timestamptz AT TIME ZONE 'UTC'
          ) RETURNING id`,
         [
            userId,
@@ -639,7 +642,8 @@ export async function materializeV12ContinuousCampaign({
         `INSERT INTO event_log (
            "userId", type, summary, register, "refId", metadata, "createdAt"
          ) VALUES (
-           $1, 'outcome.suggested', $2, 'outcome-queue', $3, $4::jsonb, $5
+           $1, 'outcome.suggested', $2, 'outcome-queue', $3, $4::jsonb,
+           $5::timestamptz AT TIME ZONE 'UTC'
          )`,
         [
           userId,

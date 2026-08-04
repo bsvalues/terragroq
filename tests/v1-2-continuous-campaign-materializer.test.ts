@@ -631,6 +631,18 @@ describe("V1.2 continuous campaign materializer", () => {
     expect(database.statements.filter((sql) => (
       sql.includes("INSERT INTO event_log")
     ))).toHaveLength(2)
+    expect(database.statements.filter((sql) => sql.includes("INSERT INTO goal"))
+      .every((sql) => sql.includes("$6::timestamptz AT TIME ZONE 'UTC'")))
+      .toBe(true)
+    expect(database.statements.filter((sql) => (
+      sql.includes('INSERT INTO "outcome_queue_item"')
+    )).every((sql) => sql.includes("$10::timestamptz"))).toBe(true)
+    expect(database.statements.filter((sql) => (
+      sql.includes("INSERT INTO governance_event")
+        || sql.includes("INSERT INTO event_log")
+    )).every((sql) => (
+      sql.includes("::timestamptz AT TIME ZONE 'UTC'")
+    ))).toBe(true)
     expect(() => database.statements.forEach(assertV12CampaignSuggestionOnlySql))
       .not.toThrow()
   })
