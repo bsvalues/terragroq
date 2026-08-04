@@ -139,7 +139,7 @@ export function PrimaryHomeDecisionPanel({
               </Button>
             ))}
           </div>
-          <p className="mt-4 text-xs leading-5 text-[#66716c]">
+          <p className="mt-4 text-xs leading-5 text-[#a2aca7]">
             Your confirmed choice becomes the binding authority record for this outcome.
           </p>
         </div>

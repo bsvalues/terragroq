@@ -1,5 +1,8 @@
 import { getActiveGoalAuthorityRequestTimelines } from "@/app/(shell)/goal-console/authority-request-timelines"
-import { getPersistedEvidenceTruth } from "@/app/actions/evidence"
+import {
+  getEvidenceForWorkOrder,
+  getPersistedEvidenceTruth,
+} from "@/app/actions/evidence"
 import {
   getGoalTimeline,
   getRecentOutcomeCompletionTimeline,
@@ -24,6 +27,20 @@ export async function getPrimaryHomeReadModel(): Promise<PrimaryHomeReadModel> {
   const actionableTimelines = await getActiveGoalAuthorityRequestTimelines()
   const recentCompletions = await getRecentOutcomeCompletionTimeline()
   const evidenceTruth = await getPersistedEvidenceTruth(100)
+  const decisionWorkOrderIds = [...new Set(actionableTimelines
+    .filter((timeline) => (
+      timeline.truth.state === "CURRENT"
+      && timeline.decisionRequest.status === "ACTIONABLE"
+      && timeline.decisionRequest.workOrderId !== null
+    ))
+    .map((timeline) => timeline.decisionRequest.workOrderId as number))]
+  const decisionEvidence: typeof evidenceTruth.records = []
+  for (const workOrderId of decisionWorkOrderIds) {
+    decisionEvidence.push(...await getEvidenceForWorkOrder(workOrderId))
+  }
+  const evidenceRecords = [...new Map(
+    [...evidenceTruth.records, ...decisionEvidence].map((record) => [record.id, record]),
+  ).values()]
   const currentRow = queue.activeItem
     ?? queue.nextEligibleItem
     ?? queue.rows.find((row) => ![
@@ -42,7 +59,7 @@ export async function getPrimaryHomeReadModel(): Promise<PrimaryHomeReadModel> {
     currentTimeline,
     actionableTimelines,
     recentCompletions,
-    evidenceRecords: evidenceTruth.records,
+    evidenceRecords,
   })
   const decisionTimeline = model.needsWilliam === null
     ? null

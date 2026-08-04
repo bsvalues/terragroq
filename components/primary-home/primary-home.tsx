@@ -198,7 +198,7 @@ export function PrimaryHome({
                         <p className="mt-1 line-clamp-1 text-xs text-[#8e9994]">
                           {project.currentOutcome ?? project.latestResult?.result ?? "No current outcome recorded"}
                         </p>
-                        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[#626c68]">
+                        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[#8e9994]">
                           <span className={project.williamNeeded ? "text-[#ff725f]" : undefined}>
                             {project.williamNeeded ? "Needs William" : "No owner action"}
                           </span>
@@ -281,7 +281,7 @@ function OperatingField({ model, mode }: { model: PrimaryHomeModel; mode: Primar
                 </p>
               </div>
               <div className="border-t border-[#3c4745] pt-4 sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0">
-                <p className="font-mono text-[10px] uppercase text-[#626c68]">Continuity</p>
+                <p className="font-mono text-[10px] uppercase text-[#8e9994]">Continuity</p>
                 {artifact?.checkpoints.length ? (
                   <ol className="mt-4 space-y-3">
                     {artifact.checkpoints.map((checkpoint, index) => (
@@ -289,13 +289,13 @@ function OperatingField({ model, mode }: { model: PrimaryHomeModel; mode: Primar
                         <span className="mt-1 size-1.5 shrink-0 rounded-full bg-[#59b8df]" />
                         <span>
                           <span className="block text-[#d8dfd9]">{checkpoint.state}</span>
-                          {checkpoint.result && <span className="text-[#626c68]">{checkpoint.result}</span>}
+                          {checkpoint.result && <span className="text-[#8e9994]">{checkpoint.result}</span>}
                         </span>
                       </li>
                     ))}
                   </ol>
                 ) : (
-                  <p className="mt-4 text-xs leading-5 text-[#626c68]">No validation checkpoint is recorded yet.</p>
+                  <p className="mt-4 text-xs leading-5 text-[#8e9994]">No validation checkpoint is recorded yet.</p>
                 )}
               </div>
             </div>
@@ -304,7 +304,7 @@ function OperatingField({ model, mode }: { model: PrimaryHomeModel; mode: Primar
               <div className="flex w-fit items-center gap-2 border border-[#3c4745] bg-[#0c0f10] px-3 py-2 text-xs">
                 <span className="size-1.5 rounded-full bg-[#54e0a3] shadow-[0_0_12px_rgba(84,224,163,0.48)]" />
                 <span>{artifact.actor}</span>
-                <span className="text-[#626c68]">operating</span>
+                <span className="text-[#8e9994]">operating</span>
               </div>
             )}
           </div>
@@ -328,14 +328,17 @@ function OperatingField({ model, mode }: { model: PrimaryHomeModel; mode: Primar
 }
 
 function ReadyField({ model, mode }: { model: PrimaryHomeModel; mode: PrimaryHomeFieldMode }) {
-  const readyOutcome = mode === "READY" ? model.founderBriefing.outcome : null
+  const ready = mode === "READY"
+  const readyOutcome = ready ? model.founderBriefing.outcome : null
   return (
     <section className="mx-auto flex min-h-[36rem] max-w-5xl flex-col items-center justify-center px-5 py-16 text-center">
       <div className="relative mb-9 size-20 rotate-45 border border-[#3c4745]" aria-hidden>
         <span className="absolute inset-3 border border-[#2a3232]" />
-        <span className="absolute inset-7 bg-[#54e0a3]" />
+        <span className={cn("absolute inset-7", ready ? "bg-[#54e0a3]" : "bg-[#8e9994]")} />
       </div>
-      <p className="text-xs text-[#54e0a3]">WilliamOS is ready</p>
+      <p className={cn("text-xs", ready ? "text-[#54e0a3]" : "text-[#8e9994]")}>
+        {ready ? "Ready to begin" : "No active outcome is proven"}
+      </p>
       <h1 className="mt-3 max-w-3xl text-4xl font-medium leading-none sm:text-6xl">
         {readyOutcome ?? "No approved outcome is moving."}
       </h1>

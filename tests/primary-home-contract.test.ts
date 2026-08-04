@@ -23,6 +23,8 @@ describe("Primary Home product contract", () => {
     expect(query).toContain("getActiveGoalAuthorityRequestTimelines")
     expect(query).toContain("getRecentOutcomeCompletionTimeline")
     expect(query).toContain("getPersistedEvidenceTruth")
+    expect(query).toContain("getEvidenceForWorkOrder")
+    expect(query).toContain("decisionWorkOrderIds")
     expect(query).not.toContain("Promise.all")
   })
 
@@ -35,8 +37,19 @@ describe("Primary Home product contract", () => {
     expect(home).toContain("Nothing needs you")
     expect(home).toContain("Next without William")
     expect(technicalDetails).toContain("Technical details")
+    expect(technicalDetails).toContain("DialogContent")
+    expect(technicalDetails).toContain("DialogTrigger")
+    expect(technicalDetails).toContain("DialogClose")
     expect(home).not.toMatch(/TerraFusion|Property Workbench|TerraPilot|PACS/)
     expect(model).not.toMatch(/TerraFusion|Property Workbench|TerraPilot|PACS/)
+  })
+
+  it("does not present unavailable queue truth as healthy readiness", () => {
+    const home = source("components/primary-home/primary-home.tsx")
+
+    expect(home).toContain("No active outcome is proven")
+    expect(home).toContain("Ready to begin")
+    expect(home).not.toContain("WilliamOS is ready")
   })
 
   it("makes the active outcome the operating surface instead of a dashboard briefing", () => {

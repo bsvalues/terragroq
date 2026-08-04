@@ -47,7 +47,7 @@ export function AppShellFrame({
                   aria-label={item.label}
                   title={item.label}
                   className={cn(
-                    "flex h-12 w-14 flex-col items-center justify-center gap-1 border-l-2 border-transparent text-[#626c68] hover:text-[#edf1ed] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#59b8df]",
+                    "flex h-12 w-14 flex-col items-center justify-center gap-1 border-l-2 border-transparent text-[#8e9994] hover:text-[#edf1ed] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#59b8df]",
                     active && "border-l-[#54e0a3] text-[#54e0a3]",
                   )}
                 >
