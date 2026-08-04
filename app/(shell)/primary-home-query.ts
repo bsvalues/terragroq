@@ -1,6 +1,6 @@
 import { getActiveGoalAuthorityRequestTimelines } from "@/app/(shell)/goal-console/authority-request-timelines"
 import {
-  getEvidenceForWorkOrder,
+  getEvidenceForWorkOrders,
   getPersistedEvidenceTruth,
 } from "@/app/actions/evidence"
 import {
@@ -19,6 +19,9 @@ export type PrimaryHomeReadModel = Readonly<{
   decisionRequest: GoalTimelineDecisionRequest | null
 }>
 
+const TERMINAL_OUTCOME_STATES = new Set(["completed", "declined", "superseded"])
+const PERSISTED_EVIDENCE_RECORD_LIMIT = 100
+
 export async function getPrimaryHomeReadModel(): Promise<PrimaryHomeReadModel> {
   // Each read action resolves the authenticated Primary session. Keep these
   // reads ordered so Home does not create a burst of duplicate auth/database
@@ -28,21 +31,17 @@ export async function getPrimaryHomeReadModel(): Promise<PrimaryHomeReadModel> {
   const recentCompletions = await getRecentOutcomeCompletionTimeline()
   const currentRow = queue.activeItem
     ?? queue.nextEligibleItem
-    ?? queue.rows.find((row) => ![
-      "completed",
-      "declined",
-      "superseded",
-    ].includes(row.lifecycleState))
+    ?? queue.rows.find((row) => !TERMINAL_OUTCOME_STATES.has(row.lifecycleState))
     ?? null
   const currentGoalId = currentRow?.goalId
     ?? null
   const currentTimeline = currentGoalId === null
     ? null
     : await getGoalTimeline(currentGoalId)
-  const evidenceTruth = await getPersistedEvidenceTruth(100)
+  const evidenceTruth = await getPersistedEvidenceTruth(PERSISTED_EVIDENCE_RECORD_LIMIT)
   const relevantWorkOrderIds = new Set<number>()
   for (const row of queue.rows) {
-    if (!["completed", "declined", "superseded"].includes(row.lifecycleState)
+    if (!TERMINAL_OUTCOME_STATES.has(row.lifecycleState)
       && row.activeWorkOrderId !== null) {
       relevantWorkOrderIds.add(row.activeWorkOrderId)
     }
@@ -60,10 +59,7 @@ export async function getPrimaryHomeReadModel(): Promise<PrimaryHomeReadModel> {
       relevantWorkOrderIds.add(timeline.decisionRequest.workOrderId)
     }
   }
-  const exactEvidence: typeof evidenceTruth.records = []
-  for (const workOrderId of relevantWorkOrderIds) {
-    exactEvidence.push(...await getEvidenceForWorkOrder(workOrderId))
-  }
+  const exactEvidence = await getEvidenceForWorkOrders([...relevantWorkOrderIds])
   const evidenceRecords = [...new Map(
     [...evidenceTruth.records, ...exactEvidence].map((record) => [record.id, record]),
   ).values()]

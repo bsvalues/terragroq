@@ -5,6 +5,7 @@ import {
   projectPrimaryHomeModel,
   type PrimaryHomeModelInput,
 } from "@/components/primary-home/primary-home-model"
+import { formatPrimaryHomeTime } from "@/components/primary-home/primary-home-format"
 import type { RecentOutcomeCompletionTimeline } from "@/components/runtime/outcome-completion-timeline"
 import type { EvidenceRecord } from "@/lib/db/schema"
 import type { OutcomeQueueRecord } from "@/lib/outcome-queue/engine"
@@ -229,6 +230,20 @@ function evidence(overrides: Partial<EvidenceRecord> = {}): EvidenceRecord {
   }
 }
 
+function recommendationBinding(overrides: {
+  outcomeId?: number
+  workOrderId?: number
+  terminalEventId?: number
+  expectedNextState?: string
+} = {}) {
+  return JSON.stringify({
+    outcomeId: overrides.outcomeId ?? 1,
+    workOrderId: overrides.workOrderId ?? 101,
+    terminalEventId: overrides.terminalEventId ?? 901,
+    expectedNextState: overrides.expectedNextState ?? "EXECUTING",
+  })
+}
+
 const noCompletions: RecentOutcomeCompletionTimeline = { rows: [], truncated: false }
 
 function input(overrides: Partial<PrimaryHomeModelInput> = {}): PrimaryHomeModelInput {
@@ -306,6 +321,7 @@ describe("Primary Home read model", () => {
         workOrderId: 202,
         repo: "bsvalues/founder-os",
         nextValidMove: "APPROVE: release the reviewed preview",
+        notes: recommendationBinding({ outcomeId: 2, workOrderId: 202, terminalEventId: 902 }),
       }),
     ]
     const model = projectPrimaryHomeModel(input({
@@ -350,8 +366,8 @@ describe("Primary Home read model", () => {
       currentTimeline: current,
       actionableTimelines: [current],
       evidenceRecords: [
-        evidence({ id: 1, ref: "EV-1", nextValidMove: "APPROVE: release" }),
-        evidence({ id: 2, ref: "EV-2", nextValidMove: "DENY: keep private" }),
+        evidence({ id: 1, ref: "EV-1", nextValidMove: "APPROVE: release", notes: recommendationBinding() }),
+        evidence({ id: 2, ref: "EV-2", nextValidMove: "DENY: keep private", notes: recommendationBinding() }),
       ],
     }))
 
@@ -368,12 +384,14 @@ describe("Primary Home read model", () => {
           id: 9,
           ref: "EV-Z",
           nextValidMove: "APPROVE: use the older recommendation",
+          notes: recommendationBinding(),
           createdAt: new Date("2026-08-03T09:00:00.000Z"),
         }),
         evidence({
           id: 2,
           ref: "EV-A",
           nextValidMove: "APPROVE: use the current recommendation",
+          notes: recommendationBinding(),
           createdAt: new Date("2026-08-03T11:00:00.000Z"),
         }),
       ],
@@ -384,6 +402,67 @@ describe("Primary Home read model", () => {
       statement: "APPROVE: use the current recommendation",
       evidenceRefs: ["EV-A", "EV-Z"],
     })
+  })
+
+  it("fails recommendation closed when evidence belongs to an older authority request", () => {
+    const current = timeline({ actionable: true })
+    const model = projectPrimaryHomeModel(input({
+      currentTimeline: current,
+      actionableTimelines: [current],
+      evidenceRecords: [evidence({
+        nextValidMove: "APPROVE: follow stale evidence",
+        notes: recommendationBinding({ terminalEventId: 899 }),
+      })],
+    }))
+
+    expect(model.needsWilliam?.recommendation).toBeNull()
+  })
+
+  it("gives an actionable owner decision precedence over historical completion text", () => {
+    const current = timeline({
+      actionable: true,
+      phase: "COMPLETED",
+      workOrderStatus: "completed",
+      terminalState: "OWNER_DECISION_REQUIRED",
+    })
+    const model = projectPrimaryHomeModel(input({
+      currentTimeline: current,
+      actionableTimelines: [current],
+    }))
+
+    expect(model.founderBriefing.health.state).toBe("BLOCKED")
+  })
+
+  it("does not report an expired active lease as advancing or attribute its worker", () => {
+    const model = projectPrimaryHomeModel(input({
+      queue: queue([queueRecord({ leaseExpiresAt: "2026-08-03T11:00:00.000Z" })]),
+    }))
+
+    expect(model.nextWithoutWilliam.mode).toBe("RECOVER")
+    expect(model.founderBriefing.health.state).toBe("UNKNOWN")
+    expect(model.founderBriefing.actor).toBeNull()
+  })
+
+  it("does not infer review from an in-progress delivery reference alone", () => {
+    const model = projectPrimaryHomeModel(input({
+      currentTimeline: timeline({ delivery: "IN_PROGRESS", checkpointState: "EXECUTING" }),
+    }))
+
+    expect(model.founderBriefing.health.state).toBe("ADVANCING")
+  })
+
+  it("matches numeric fallback Goal outcome keys to current timeline truth", () => {
+    const model = projectPrimaryHomeModel(input({
+      queue: queue([queueRecord({ goalId: null, goalRef: null, outcomeKey: "goal:1" })]),
+    }))
+
+    expect(model.founderBriefing.health.state).toBe("ADVANCING")
+    expect(model.founderBriefing.actor).toBe("Codex")
+  })
+
+  it("guards invalid Home timestamps", () => {
+    expect(formatPrimaryHomeTime("not-a-date")).toBe("Time not recorded")
+    expect(formatPrimaryHomeTime(null)).toBe("Time not recorded")
   })
 
   it("uses the exact queue reason for an empty queue", () => {
@@ -433,7 +512,7 @@ describe("Primary Home read model", () => {
       ]),
       evidenceRecords: [
         evidence({ id: 1, repo: " bsvalues/founder-os/ ", workOrderId: 101 }),
-        evidence({ id: 2, repo: "BSVALUES/FOUNDER-OS", workOrderId: 301 }),
+        evidence({ id: 2, repo: "BSVALUES/FOUNDER-OS", workOrderId: 101 }),
         evidence({ id: 3, repo: "bsvalues/other-product", workOrderId: 302, result: "PARTIAL" }),
         evidence({ id: 4, repo: "   ", workOrderId: 303 }),
         evidence({ id: 5, repo: null, workOrderId: 304 }),
@@ -449,7 +528,10 @@ describe("Primary Home read model", () => {
     expect(model.projectHorizon[1]).toMatchObject({
       repo: "bsvalues/other-product",
       currentOutcome: "Prepare the second product",
-      health: { state: "BLOCKED", detail: "Dependency is not complete." },
+      health: {
+        state: "BLOCKED",
+        detail: "Lifecycle is not eligible. An active lease is still held",
+      },
       latestResult: { result: "PARTIAL" },
     })
   })

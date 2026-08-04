@@ -9,7 +9,13 @@ import { SidebarNav } from "./sidebar-nav"
 import { UserMenu } from "./user-menu"
 import { cn } from "@/lib/utils"
 
-const HOME_RAIL_DESTINATIONS = ["/", "/work-orders", "/projects", "/audit", "/runtime"] as const
+const HOME_RAIL_DESTINATIONS: ReadonlySet<string> = new Set([
+  "/",
+  "/work-orders",
+  "/projects",
+  "/audit",
+  "/runtime",
+])
 
 export function AppShellFrame({
   user,
@@ -26,9 +32,7 @@ export function AppShellFrame({
   const compactHome = pathname === "/"
 
   if (compactHome) {
-    const railItems = navItems.filter((item) => HOME_RAIL_DESTINATIONS.includes(
-      item.href as (typeof HOME_RAIL_DESTINATIONS)[number],
-    ))
+    const railItems = navItems.filter((item) => HOME_RAIL_DESTINATIONS.has(item.href))
 
     return (
       <div className="flex min-h-screen bg-[#0c0f10]">
@@ -38,7 +42,7 @@ export function AppShellFrame({
           </Link>
           <nav aria-label="Primary navigation" className="flex flex-1 flex-col items-center gap-2 py-5">
             {railItems.map((item) => {
-              const active = item.href === "/"
+              const active = item.href === pathname
               return (
                 <Link
                   key={item.href}

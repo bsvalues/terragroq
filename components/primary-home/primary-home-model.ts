@@ -163,6 +163,7 @@ function rowMatchesTimeline(
     || row.goalRef === timeline.goal.ref
     || row.outcomeKey === timeline.goal.ref
     || row.outcomeKey === `goal:${timeline.goal.ref}`
+    || row.outcomeKey === `goal:${timeline.goal.id}`
 }
 
 function containsState(value: string | null | undefined, pattern: RegExp): boolean {
@@ -214,15 +215,6 @@ function projectHealth(
     timeline.terminal.result,
   ].filter((value): value is string => Boolean(value)).join(" ")
 
-  if (timeline.terminal.state !== null
-    && containsState(stateText, /(COMPLETE|COMPLETED|VERIFIED|MERGED)/i)) {
-    return {
-      state: "COMPLETE",
-      label: "Complete",
-      detail: timeline.terminal.result ?? timeline.current.workOrder?.result ?? "Completion is recorded.",
-    }
-  }
-
   if (timeline.decisionRequest.status === "ACTIONABLE"
     || containsState(stateText, /(BLOCKED|FAILED|OWNER_DECISION_REQUIRED|QUARANTINED)/i)) {
     return {
@@ -235,8 +227,16 @@ function projectHealth(
     }
   }
 
-  if (containsState(stateText, /(REVIEW|VALIDATING|VALIDATION|PR_OPEN|MERGE_ELIGIBLE)/i)
-    || timeline.delivery.status === "IN_PROGRESS") {
+  if (timeline.terminal.state !== null
+    && containsState(stateText, /(COMPLETE|COMPLETED|VERIFIED|MERGED)/i)) {
+    return {
+      state: "COMPLETE",
+      label: "Complete",
+      detail: timeline.terminal.result ?? timeline.current.workOrder?.result ?? "Completion is recorded.",
+    }
+  }
+
+  if (containsState(stateText, /(REVIEW|VALIDATING|VALIDATION|PR_OPEN|MERGE_ELIGIBLE)/i)) {
     return {
       state: "AWAITING_REVIEW",
       label: "Awaiting review",
@@ -247,6 +247,8 @@ function projectHealth(
   }
 
   if (queue.activeItem
+    && queue.state === "ACTIVE"
+    && !queue.activeItem.staleLease
     && rowMatchesTimeline(queue.activeItem, timeline)
     && timeline.current.runtime.worker
     && timeline.current.runtime.recordedAt
@@ -348,10 +350,21 @@ function recommendationFor(
   evidenceRecords: readonly EvidenceRecord[],
 ): PrimaryHomeDecision["recommendation"] {
   const workOrderId = timeline.decisionRequest.workOrderId
-  if (workOrderId === null) return null
+  const terminalEventId = timeline.decisionRequest.terminalEventId
+  const expectedNextState = timeline.decisionRequest.expectedNextState
+  if (workOrderId === null || terminalEventId === null || expectedNextState === null) return null
 
   const recommendations = evidenceRecords
-    .filter((record) => record.workOrderId === workOrderId && record.result === "PASS")
+    .filter((record) => (
+      record.workOrderId === workOrderId
+      && record.result === "PASS"
+      && recommendationMatchesRequest(record, {
+        outcomeId: timeline.decisionRequest.outcomeId,
+        workOrderId,
+        terminalEventId,
+        expectedNextState,
+      })
+    ))
     .map((record) => {
       const statement = record.nextValidMove?.trim() ?? ""
       const match = /^(APPROVE|DENY)(?:\s*[:\-]\s*|\s+)/i.exec(statement)
@@ -378,6 +391,27 @@ function recommendationFor(
     choice: newest.choice,
     statement: newest.statement,
     evidenceRefs: [...new Set(recommendations.map((item) => item.evidenceRef))].sort(),
+  }
+}
+
+function recommendationMatchesRequest(
+  record: EvidenceRecord,
+  request: {
+    outcomeId: number
+    workOrderId: number
+    terminalEventId: number
+    expectedNextState: string
+  },
+): boolean {
+  if (record.notes === null) return false
+  try {
+    const parsed = JSON.parse(record.notes) as Record<string, unknown>
+    return parsed.outcomeId === request.outcomeId
+      && parsed.workOrderId === request.workOrderId
+      && parsed.terminalEventId === request.terminalEventId
+      && parsed.expectedNextState === request.expectedNextState
+  } catch {
+    return false
   }
 }
 
@@ -483,6 +517,7 @@ function projectHorizon(
 
   const currentWorkOrderId = input.currentTimeline?.current.workOrder?.id ?? null
   const decisionWorkOrderId = decisionTimeline?.decisionRequest.workOrderId ?? null
+  const currentProject = provenProject(input.currentTimeline, input.evidenceRecords)
   return [...groups.values()].map((group): PrimaryHomeProject => {
     const hasCurrent = currentWorkOrderId !== null
       && group.records.some((record) => record.workOrderId === currentWorkOrderId)
@@ -493,15 +528,16 @@ function projectHorizon(
       row.activeWorkOrderId !== null
       && group.records.some((record) => record.workOrderId === row.activeWorkOrderId)
     ))
-    const projectHealth = hasCurrent
+    const horizonHealth = hasCurrent
       ? health
       : queueRow?.lifecycleState === "blocked" || (queueRow?.blockerLabels.length ?? 0) > 0
         ? {
             state: "BLOCKED" as const,
             label: "Blocked",
-            detail: queueRow?.lifecycleReason
-              ?? queueRow?.blockerLabels.join(". ")
-              ?? "The project queue records a blocker.",
+            detail: (queueRow?.blockerLabels.length ?? 0) > 0
+              ? queueRow!.blockerLabels.join(". ")
+              : queueRow?.lifecycleReason
+                ?? "The project queue records a blocker.",
           }
         : UNKNOWN_HEALTH
     return {
@@ -511,7 +547,7 @@ function projectHorizon(
         : williamNeeded
           ? decisionTimeline?.goal.outcome ?? null
           : queueRow?.title ?? null,
-      health: projectHealth,
+      health: horizonHealth,
       williamNeeded,
       latestResult: latest ? {
         result: latest.result,
@@ -520,8 +556,8 @@ function projectHorizon(
       } : null,
     }
   }).sort((left, right) => (
-    Number(right.repo === provenProject(input.currentTimeline, input.evidenceRecords))
-      - Number(left.repo === provenProject(input.currentTimeline, input.evidenceRecords))
+    Number(right.repo === currentProject)
+      - Number(left.repo === currentProject)
     || Number(right.williamNeeded) - Number(left.williamNeeded)
     || left.repo.localeCompare(right.repo)
   ))
@@ -549,7 +585,9 @@ export function projectPrimaryHomeModel(input: PrimaryHomeModelInput): PrimaryHo
     ?? input.currentTimeline?.goal.outcome
     ?? null
   const actor = input.currentTimeline?.truth.state === "CURRENT"
+    && input.queue.state === "ACTIVE"
     && input.queue.activeItem !== null
+    && !input.queue.activeItem.staleLease
     && rowMatchesTimeline(input.queue.activeItem, input.currentTimeline)
     && input.currentTimeline.current.runtime.recordedAt !== null
     && input.currentTimeline.current.runtime.leaseStatus === "ACTIVE"

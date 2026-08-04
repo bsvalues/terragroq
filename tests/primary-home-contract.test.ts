@@ -23,10 +23,13 @@ describe("Primary Home product contract", () => {
     expect(query).toContain("getActiveGoalAuthorityRequestTimelines")
     expect(query).toContain("getRecentOutcomeCompletionTimeline")
     expect(query).toContain("getPersistedEvidenceTruth")
-    expect(query).toContain("getEvidenceForWorkOrder")
+    expect(query).toContain("getEvidenceForWorkOrders")
     expect(query).toContain("relevantWorkOrderIds")
     expect(query).toContain("row.activeWorkOrderId")
-    expect(query).not.toContain("Promise.all")
+    expect(query.indexOf("getOutcomeQueueSurface()"))
+      .toBeLessThan(query.indexOf("getActiveGoalAuthorityRequestTimelines()"))
+    expect(query.indexOf("getActiveGoalAuthorityRequestTimelines()"))
+      .toBeLessThan(query.indexOf("getRecentOutcomeCompletionTimeline()"))
   })
 
   it("keeps project identity live and project-neutral", () => {
@@ -61,6 +64,7 @@ describe("Primary Home product contract", () => {
     expect(home).toContain("Recent continuity")
     expect(home).toContain("Project horizon")
     expect(home).toContain("OutcomeFieldBackground")
+    expect(home).not.toContain('<main className="relative min-h')
     expect(home).not.toContain("Primary briefing")
     expect(home).not.toContain("Recently completed")
     expect(home).not.toContain("grid max-w-5xl gap-8 lg:grid-cols")

@@ -48,6 +48,8 @@ export function PrimaryHomeDecisionPanel({
           window.setTimeout(() => headingRef.current?.focus(), 0)
         } else {
           toast.error(result.message)
+          setSelected(null)
+          router.refresh()
         }
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Authority decision failed")

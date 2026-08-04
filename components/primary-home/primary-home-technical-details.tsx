@@ -4,6 +4,7 @@ import Link from "next/link"
 import { ArrowUpRight, ShieldCheck, X } from "lucide-react"
 
 import type { PrimaryHomeModel } from "@/components/primary-home/primary-home-model"
+import { formatPrimaryHomeTime } from "@/components/primary-home/primary-home-format"
 import {
   Dialog,
   DialogClose,
@@ -14,15 +15,6 @@ import {
 } from "@/components/ui/dialog"
 
 type TechnicalDetails = PrimaryHomeModel["technicalDetails"]
-
-function formatWhen(value: string) {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value))
-}
 
 export function PrimaryHomeTechnicalDetails({ details }: { details: TechnicalDetails }) {
   return (
@@ -65,7 +57,7 @@ export function PrimaryHomeTechnicalDetails({ details }: { details: TechnicalDet
           <TechnicalDetail label="Goal" value={details.currentGoalId?.toString() ?? "Not recorded"} />
           <TechnicalDetail label="Work Order" value={details.currentWorkOrderId?.toString() ?? "Not recorded"} />
           <TechnicalDetail label="Decision Goal" value={details.decisionGoalId?.toString() ?? "None"} />
-          <TechnicalDetail label="Generated" value={formatWhen(details.generatedAt)} />
+          <TechnicalDetail label="Generated" value={formatPrimaryHomeTime(details.generatedAt)} />
         </dl>
         <Link href="/runtime" className="mt-7 inline-flex items-center gap-2 text-xs font-medium text-[#59b8df]">
           Open full evidence <ArrowUpRight className="size-3.5" aria-hidden />

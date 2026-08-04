@@ -10,6 +10,7 @@ import {
 import type { GoalTimelineDecisionRequest } from "@/components/goal-console/goal-timeline-read-model"
 import { OutcomeFieldBackground } from "@/components/primary-home/outcome-field-background"
 import { PrimaryHomeDecisionPanel } from "@/components/primary-home/primary-home-decision"
+import { formatPrimaryHomeTime } from "@/components/primary-home/primary-home-format"
 import { PrimaryHomeTechnicalDetails } from "@/components/primary-home/primary-home-technical-details"
 import type {
   PrimaryHomeHealthState,
@@ -31,16 +32,6 @@ const HEALTH_TEXT: Record<PrimaryHomeHealthState, string> = {
   AWAITING_REVIEW: "text-[#59b8df]",
   COMPLETE: "text-[#d8dfd9]",
   UNKNOWN: "text-[#8e9994]",
-}
-
-function formatWhen(value: string | null) {
-  if (!value) return "Time not recorded"
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value))
 }
 
 function operationVerb(state: PrimaryHomeHealthState) {
@@ -76,7 +67,7 @@ export function PrimaryHome({
   const mode = fieldMode(model)
 
   return (
-    <main className="relative min-h-[calc(100vh-4rem)] min-w-0 overflow-hidden bg-[#0c0f10] text-[#edf1ed]">
+    <div className="relative min-h-[calc(100vh-4rem)] min-w-0 overflow-hidden bg-[#0c0f10] text-[#edf1ed]">
       <OutcomeFieldBackground
         health={briefing.health.state}
         active={mode === "ACTIVE"}
@@ -148,7 +139,7 @@ export function PrimaryHome({
                         <div className="min-w-0">
                           <p className="line-clamp-2 text-sm font-medium leading-5">{outcome.title}</p>
                           <p className="mt-1 text-xs leading-5 text-[#8e9994]">
-                            {outcome.result ?? "Completed"} · {formatWhen(outcome.completedAt)}
+                            {outcome.result ?? "Completed"} · {formatPrimaryHomeTime(outcome.completedAt)}
                           </p>
                           {outcome.evidenceState !== "RECORDED" && (
                             <Link
@@ -203,7 +194,7 @@ export function PrimaryHome({
                             {project.williamNeeded ? "Needs William" : "No owner action"}
                           </span>
                           {project.latestResult && (
-                            <span>Latest: {project.latestResult.result} · {formatWhen(project.latestResult.recordedAt)}</span>
+                            <span>Latest: {project.latestResult.result} · {formatPrimaryHomeTime(project.latestResult.recordedAt)}</span>
                           )}
                         </div>
                       </div>
@@ -215,7 +206,7 @@ export function PrimaryHome({
           </div>
         </section>
       </div>
-    </main>
+    </div>
   )
 }
 
