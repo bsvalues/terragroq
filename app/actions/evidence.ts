@@ -4,7 +4,7 @@ import { db } from "@/lib/db"
 import { evidenceRecord, workOrder, type EvidenceRecord } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { logEvent } from "@/lib/registers/events"
-import { and, desc, eq } from "drizzle-orm"
+import { and, desc, eq, inArray } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
 const MAX_PERSISTED_EVIDENCE_RECORDS = 100
@@ -38,6 +38,17 @@ export async function getEvidenceForWorkOrder(workOrderId: number): Promise<Evid
     .select()
     .from(evidenceRecord)
     .where(and(eq(evidenceRecord.userId, userId), eq(evidenceRecord.workOrderId, workOrderId)))
+    .orderBy(desc(evidenceRecord.createdAt))
+}
+
+export async function getEvidenceForWorkOrders(workOrderIds: readonly number[]): Promise<EvidenceRecord[]> {
+  const ids = [...new Set(workOrderIds.filter(Number.isSafeInteger))]
+  if (ids.length === 0) return []
+  const userId = await getUserId()
+  return db
+    .select()
+    .from(evidenceRecord)
+    .where(and(eq(evidenceRecord.userId, userId), inArray(evidenceRecord.workOrderId, ids)))
     .orderBy(desc(evidenceRecord.createdAt))
 }
 

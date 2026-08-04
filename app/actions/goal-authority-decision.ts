@@ -239,6 +239,7 @@ export async function recordGoalAuthorityDecision(
   }
 
   revalidatePath("/goal-console")
+  revalidatePath("/")
   return {
     status: "RECORDED",
     choice: input.choice,
