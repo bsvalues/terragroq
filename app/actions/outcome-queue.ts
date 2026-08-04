@@ -851,56 +851,16 @@ export async function recordV12CampaignOutcomeAuthority(input: {
     }
 
     if (timestampMode === "legacy_pacific") {
-      const repair = await transaction.execute(sql`
-        WITH repaired_goal AS (
-          UPDATE goal g
-          SET "createdAt" = q."suggestedAt" AT TIME ZONE 'UTC',
-              "updatedAt" = q."suggestedAt" AT TIME ZONE 'UTC'
-          FROM "outcome_queue_item" q
-          WHERE g.id = ${materializedGoal.id}
-            AND q.id = ${item.id}
-            AND g."createdAt" = q."suggestedAt" AT TIME ZONE 'America/Los_Angeles'
-            AND g."updatedAt" = q."suggestedAt" AT TIME ZONE 'America/Los_Angeles'
-          RETURNING 1
-        ), repaired_governance AS (
-          UPDATE governance_event ge
-          SET "createdAt" = q."suggestedAt" AT TIME ZONE 'UTC'
-          FROM "outcome_queue_item" q
-          WHERE ge.id = ${materializationEvents[0].id}
-            AND q.id = ${item.id}
-            AND ge."createdAt" = q."suggestedAt" AT TIME ZONE 'America/Los_Angeles'
-          RETURNING 1
-        ), repaired_audit AS (
-          UPDATE event_log el
-          SET "createdAt" = q."suggestedAt" AT TIME ZONE 'UTC'
-          FROM "outcome_queue_item" q
-          WHERE el.id = ${materializationAudits[0].id}
-            AND q.id = ${item.id}
-            AND el."createdAt" = q."suggestedAt" AT TIME ZONE 'America/Los_Angeles'
-          RETURNING 1
-        )
-        SELECT
-          (SELECT count(*) FROM repaired_goal) AS goals,
-          (SELECT count(*) FROM repaired_governance) AS governance,
-          (SELECT count(*) FROM repaired_audit) AS audits
-      `)
-      const repaired = repair.rows[0]
-      if (repair.rows.length !== 1
-        || Number(repaired?.goals) !== 1
-        || Number(repaired?.governance) !== 1
-        || Number(repaired?.audits) !== 1) {
-        throw new Error("V1_2_CAMPAIGN_TIMESTAMP_REPAIR_ATOMICITY_WALL")
-      }
       await transaction.insert(eventLog).values({
         userId,
-        type: "outcome.materialization_timestamp_repaired",
-        summary: `${item.goalRef}: normalized the exact legacy campaign materialization timestamps to UTC.`,
+        type: "outcome.materialization_timestamp_interpreted",
+        summary: `${item.goalRef}: recorded the exact legacy Pacific campaign timestamp interpretation without rewriting evidence.`,
         register: "outcome-queue",
         refId: item.goalId,
         metadata: {
           outcomeKey: item.outcomeKey,
           sourceTimezone: "America/Los_Angeles",
-          targetTimezone: "UTC",
+          canonicalInstant: item.suggestedAt.toISOString(),
           materializationEventId: materializationEvents[0].id,
           materializationAfterHash: materializationEvents[0].afterHash,
         },

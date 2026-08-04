@@ -643,6 +643,12 @@ describe("V1.2 continuous campaign materializer", () => {
     )).every((sql) => (
       sql.includes("::timestamptz AT TIME ZONE 'UTC'")
     ))).toBe(true)
+    const replay = database.statements.find((sql) => (
+      sql.includes('FROM "outcome_queue_item" q')
+    ))
+    expect(replay).toContain('g."createdAt" AT TIME ZONE \'UTC\'')
+    expect(replay).toContain('provenance."createdAt" AT TIME ZONE \'UTC\'')
+    expect(replay).toContain('provenance_log."createdAt" AT TIME ZONE \'UTC\'')
     expect(() => database.statements.forEach(assertV12CampaignSuggestionOnlySql))
       .not.toThrow()
   })

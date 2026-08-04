@@ -108,9 +108,6 @@ function transactionHarness(
     execute: vi.fn(async () => {
       executeCount += 1
       if (executeCount === 6) return { rows: [{ mode: timestampMode }] }
-      if (executeCount === 7) {
-        return { rows: [{ goals: 1, governance: 1, audits: 1 }] }
-      }
       return { rows: [] }
     }),
     select: vi.fn(() => fluentQuery(source.shift() ?? [])),
@@ -327,10 +324,11 @@ describe("V1.2 campaign server authority boundaries", () => {
     expect(harness.inserts).toContainEqual(expect.objectContaining({
       table: "event_log",
       values: expect.objectContaining({
-        type: "outcome.materialization_timestamp_repaired",
+        type: "outcome.materialization_timestamp_interpreted",
         refId: 21,
       }),
     }))
+    expect(harness.transaction.execute).toHaveBeenCalledTimes(6)
 
     const mismatchHarness = transactionHarness([
       [item],

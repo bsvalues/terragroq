@@ -338,8 +338,17 @@ SELECT
   g."recommendedMove" AS "goalRecommendedMove",
   g."requiresApproval" AS "goalRequiresApproval",
   g."linkedWorkOrderId" AS "goalLinkedWorkOrderId",
-  g.status AS "goalStatus", g."createdAt" AS "goalCreatedAt",
-  g."updatedAt" AS "goalUpdatedAt",
+  g.status AS "goalStatus",
+  CASE
+    WHEN g."createdAt" = q."suggestedAt" AT TIME ZONE 'America/Los_Angeles'
+      THEN q."suggestedAt"
+    ELSE g."createdAt" AT TIME ZONE 'UTC'
+  END AS "goalCreatedAt",
+  CASE
+    WHEN g."updatedAt" = q."suggestedAt" AT TIME ZONE 'America/Los_Angeles'
+      THEN q."suggestedAt"
+    ELSE g."updatedAt" AT TIME ZONE 'UTC'
+  END AS "goalUpdatedAt",
   provenance."eventCount" AS "provenanceEventCount",
   provenance.id AS "provenanceEventId",
   provenance."eventType" AS "provenanceEventType",
@@ -352,7 +361,11 @@ SELECT
   provenance."afterHash" AS "provenanceAfterHash",
   provenance."evidenceId" AS "provenanceEvidenceId",
   provenance.metadata AS "provenanceMetadata",
-  provenance."createdAt" AS "provenanceCreatedAt",
+  CASE
+    WHEN provenance."createdAt" = q."suggestedAt" AT TIME ZONE 'America/Los_Angeles'
+      THEN q."suggestedAt"
+    ELSE provenance."createdAt" AT TIME ZONE 'UTC'
+  END AS "provenanceCreatedAt",
   provenance_log."eventCount" AS "provenanceLogCount",
   provenance_log.id AS "provenanceLogId",
   provenance_log.type AS "provenanceLogType",
@@ -360,7 +373,11 @@ SELECT
   provenance_log.register AS "provenanceLogRegister",
   provenance_log."refId" AS "provenanceLogRefId",
   provenance_log.metadata AS "provenanceLogMetadata",
-  provenance_log."createdAt" AS "provenanceLogCreatedAt"
+  CASE
+    WHEN provenance_log."createdAt" = q."suggestedAt" AT TIME ZONE 'America/Los_Angeles'
+      THEN q."suggestedAt"
+    ELSE provenance_log."createdAt" AT TIME ZONE 'UTC'
+  END AS "provenanceLogCreatedAt"
 FROM "outcome_queue_item" q
 JOIN goal g ON g.id = q."goalId" AND g."userId" = q."userId"
 JOIN LATERAL (
