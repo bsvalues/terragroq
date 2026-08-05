@@ -863,10 +863,25 @@ export async function terminalizeOutcome({
       })
     }
   }
-  let runQuery = normalizeQuery(query)
+  let runQuery
   let pool
   let client
-  if (!runQuery) {
+  let releaseClient = false
+  let begun = false
+  if (query && typeof query === "object" && typeof query.connect === "function") {
+    client = await query.connect()
+    runQuery = client.query.bind(client)
+    releaseClient = true
+  } else if (query && typeof query === "object"
+    && typeof query.query === "function" && typeof query.release === "function") {
+    runQuery = query.query.bind(query)
+  } else if (typeof query === "function" && query.transactionBound === true) {
+    runQuery = query
+  } else if (query !== undefined && query !== null) {
+    throw Object.assign(new Error("terminalization requires a dedicated transaction client"), {
+      code: "OUTCOME_TERMINAL_TRANSACTION_CLIENT_REQUIRED",
+    })
+  } else {
     if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
@@ -877,13 +892,32 @@ export async function terminalizeOutcome({
     if (pool) {
       client = await pool.connect()
       runQuery = client.query.bind(client)
-      await runQuery("BEGIN")
+      releaseClient = true
     }
-    const updated = await runQuery(
-      `UPDATE goal SET status = 'dismissed', "updatedAt" = NOW()
-       WHERE id = $1 AND status = 'classified'
-       RETURNING id, "userId" AS "userId", ref`,
+    await runQuery("BEGIN")
+    begun = true
+    const identity = await runQuery(
+      `SELECT "userId" AS "userId" FROM goal WHERE id = $1`,
       [outcomeId],
+    )
+    const userId = identity?.rows?.[0]?.userId
+    if (typeof userId !== "string" || userId.length === 0) {
+      await runQuery("ROLLBACK")
+      begun = false
+      return false
+    }
+    await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [`${userId}:outcome-queue`])
+    const updated = await runQuery(
+      `UPDATE goal AS g SET status = 'dismissed', "updatedAt" = NOW()
+       WHERE g.id = $1 AND g."userId" = $2 AND g.status = 'classified'
+         AND NOT EXISTS (
+           SELECT 1 FROM "outcome_queue_item" AS q
+           WHERE q."userId" = g."userId"
+             AND q."goalId" = g.id
+             AND q."lifecycleState" = 'active'
+         )
+       RETURNING id, "userId" AS "userId", ref`,
+      [outcomeId, userId],
     )
     const row = updated?.rows?.[0]
     if (!row) {
@@ -891,8 +925,9 @@ export async function terminalizeOutcome({
         `SELECT EXISTS (
            SELECT 1
            FROM goal g
-           JOIN governance_event terminal
-             ON terminal."entityType" = 'goal' AND terminal."entityId"::text = g.id::text
+            JOIN governance_event terminal
+              ON terminal."entityType" = 'goal' AND terminal."entityId"::text = g.id::text
+               AND terminal."userId" = g."userId"
                AND terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
                AND terminal.metadata->>'result' = $2
                AND (terminal.metadata->>'nextState') IS NOT DISTINCT FROM $3
@@ -902,7 +937,8 @@ export async function terminalizeOutcome({
         [outcomeId, result, nextState ?? null, JSON.stringify(terminalMetadata)],
       )
       const alreadyTerminalized = prior?.rows?.[0]?.terminalized === true
-      if (client) await runQuery(alreadyTerminalized ? "COMMIT" : "ROLLBACK")
+      await runQuery(alreadyTerminalized ? "COMMIT" : "ROLLBACK")
+      begun = false
       return alreadyTerminalized
     }
     await runQuery(
@@ -910,15 +946,16 @@ export async function terminalizeOutcome({
        VALUES ($1, 'HERMES_OUTCOME_TERMINAL', 'goal', $2, 'hermes-codex-bridge', $3, $4::jsonb)`,
       [row.userId, String(row.id), `${result} for ${row.ref ?? `goal-${row.id}`}`, JSON.stringify(terminalMetadata)],
     )
-    if (client) await runQuery("COMMIT")
+    await runQuery("COMMIT")
+    begun = false
     return true
   } catch (error) {
-    if (client) {
+    if (begun) {
       try { await runQuery("ROLLBACK") } catch {}
     }
     throw error
   } finally {
-    client?.release()
+    if (releaseClient) client?.release()
     if (pool) await pool.end()
   }
 }

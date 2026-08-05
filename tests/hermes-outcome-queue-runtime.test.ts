@@ -1160,6 +1160,167 @@ describe("Hermes durable outcome queue runtime", () => {
     }))
   })
 
+  it("reactivates only the exact validation-blocked queue item under persisted recovery proof", async () => {
+    const resumeValidationRecoveryQueue = vi.fn(async () => ({
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }))
+    const bridge = runtime({ resumeValidationRecoveryQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).resolves.toMatchObject({
+      queueBinding: { expectedVersion: 6, fencingToken: 4 },
+    })
+    expect(resumeValidationRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
+      expectedVersion: 5,
+      fencingToken: 3,
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+      expectedLifecycleReason: "VALIDATION_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+    }))
+  })
+
+  it.each([
+    { proofDigest: "invalid", recoveryFencingToken: 57 },
+    { proofDigest: "d".repeat(64), recoveryFencingToken: 0 },
+  ])("rejects validation recovery without its exact proof and original fence", async (proof) => {
+    const resumeValidationRecoveryQueue = vi.fn()
+    const bridge = runtime({ resumeValidationRecoveryQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: proof.proofDigest,
+      recoveryFencingToken: proof.recoveryFencingToken,
+    })).rejects.toMatchObject({
+      code: "HERMES_OUTCOME_QUEUE_VALIDATION_RECOVERY_PROOF_WALL",
+    })
+    expect(resumeValidationRecoveryQueue).not.toHaveBeenCalled()
+  })
+
+  it("accepts an exact stale validation-recovery reclaim after a post-commit crash", async () => {
+    const resumeValidationRecoveryQueue = vi.fn(async () => ({
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      validationRecoveryStaleReclaimApplied: true,
+      validationRecoveryReclaimCount: 1,
+    }))
+    const bridge = runtime({ resumeValidationRecoveryQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).resolves.toMatchObject({
+      queueBinding: {
+        expectedVersion: 7,
+        fencingToken: 5,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED",
+      },
+    })
+  })
+
+  it("accepts a later proof-bound reclaim after another pre-persistence crash", async () => {
+    const resumeValidationRecoveryQueue = vi.fn(async () => ({
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 8,
+      fencingToken: 6,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      validationRecoveryStaleReclaimApplied: true,
+      validationRecoveryReclaimCount: 2,
+    }))
+    const bridge = runtime({ resumeValidationRecoveryQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).resolves.toMatchObject({
+      queueBinding: {
+        expectedVersion: 8,
+        fencingToken: 6,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED",
+      },
+    })
+  })
+
+  it("preserves repeated authority renewals across repeated recovery reclaims", async () => {
+    const resumeValidationRecoveryQueue = vi.fn(async () => ({
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 10,
+      fencingToken: 6,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      authorityRenewalApplied: true,
+      authorityRenewalCount: 2,
+      validationRecoveryStaleReclaimApplied: true,
+      validationRecoveryReclaimCount: 2,
+    }))
+    const bridge = runtime({ resumeValidationRecoveryQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).resolves.toMatchObject({
+      queueBinding: { expectedVersion: 10, fencingToken: 6 },
+    })
+  })
+
+  it("does not replay a validation-recovery transition already persisted in the queue binding", async () => {
+    const resumeValidationRecoveryQueue = vi.fn()
+    const bridge = runtime({ resumeValidationRecoveryQueue })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: 6,
+        version: 6,
+        fencingToken: 4,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).resolves.toBe(outcome)
+    expect(resumeValidationRecoveryQueue).not.toHaveBeenCalled()
+  })
+
   it("rejects an owner-decision resume proof without its authenticated next state", async () => {
     const resumeQueue = vi.fn()
     const bridge = runtime({ resumeQueue })

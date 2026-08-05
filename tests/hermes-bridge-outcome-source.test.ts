@@ -154,15 +154,21 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
   })
 
   it("removes terminal outcomes from selection while retaining a governance event", async () => {
-    const query = vi.fn()
-      .mockResolvedValueOnce({ rows: [{ id: 4, userId: "owner", ref: "GOAL-0004" }] })
-      .mockResolvedValueOnce({ rows: [] })
+    const query = vi.fn(async (sql: string) => {
+      if (sql.startsWith("SELECT \"userId\"")) return { rows: [{ userId: "owner" }] }
+      if (sql.includes("UPDATE goal AS g")) return { rows: [{ id: 4, userId: "owner", ref: "GOAL-0004" }] }
+      return { rows: [] }
+    })
+    Object.assign(query, { transactionBound: true })
     await expect(terminalizeOutcome({
       query, outcomeId: 4, result: "OWNER_DECISION_REQUIRED", nextState: "AUTHORITY_WALL",
       metadata: ownerDecisionPacket,
     })).resolves.toBe(true)
-    expect(query.mock.calls[0][0]).toMatch(/status = 'dismissed'/)
-    expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_TERMINAL/)
+    expect(query.mock.calls.some(([sql]) => /status = 'dismissed'/.test(sql))).toBe(true)
+    expect(query.mock.calls.some(([sql]) => /HERMES_OUTCOME_TERMINAL/.test(sql))).toBe(true)
+    expect(query.mock.calls.some(([sql, params]) =>
+      /pg_advisory_xact_lock/.test(sql) && params?.[0] === "owner:outcome-queue")).toBe(true)
+    expect(query.mock.calls.some(([sql]) => /NOT EXISTS[\s\S]+outcome_queue_item/.test(sql))).toBe(true)
   })
 
   it("records bounded provider exhaustion as a resumable classified deferral", async () => {
@@ -182,17 +188,59 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
   })
 
   it("treats an exactly recorded terminal outcome as idempotent success", async () => {
-    const query = vi.fn()
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ terminalized: true }] })
+    const query = vi.fn(async (sql: string) => {
+      if (sql.startsWith("SELECT \"userId\"")) return { rows: [{ userId: "owner" }] }
+      if (sql.includes("AS terminalized")) return { rows: [{ terminalized: true }] }
+      return { rows: [] }
+    })
+    Object.assign(query, { transactionBound: true })
     await expect(terminalizeOutcome({
       query, outcomeId: 4, result: "FAILED_TERMINAL", nextState: "POLICY_WALL",
     })).resolves.toBe(true)
-    expect(query.mock.calls[1][1]).toEqual([
+    const replayCall = query.mock.calls.find(([sql]) => sql.includes("AS terminalized"))
+    expect(replayCall?.[1]).toEqual([
       4, "FAILED_TERMINAL", "POLICY_WALL",
       JSON.stringify({ result: "FAILED_TERMINAL", nextState: "POLICY_WALL" }),
     ])
-    expect(query.mock.calls[1][0]).toMatch(/terminal\."entityId"::text = g\.id::text/)
+    expect(replayCall?.[0]).toMatch(/terminal\."entityId"::text = g\.id::text/)
+  })
+
+  it("rejects an injected pool query without a dedicated transaction client", async () => {
+    await expect(terminalizeOutcome({
+      query: vi.fn(),
+      outcomeId: 4,
+      result: "FAILED_TERMINAL",
+      nextState: "POLICY_WALL",
+    })).rejects.toMatchObject({
+      code: "OUTCOME_TERMINAL_TRANSACTION_CLIENT_REQUIRED",
+    })
+  })
+
+  it("checks out one dedicated pool client for the complete terminalization transaction", async () => {
+    const run = vi.fn(async (sql: string) => {
+      if (sql.startsWith("SELECT \"userId\"")) return { rows: [{ userId: "owner" }] }
+      if (sql.includes("UPDATE goal AS g")) return { rows: [{ id: 4, userId: "owner", ref: "GOAL-0004" }] }
+      return { rows: [] }
+    })
+    const release = vi.fn()
+    const pool = { connect: vi.fn(async () => ({ query: run, release })) }
+
+    await expect(terminalizeOutcome({
+      query: pool,
+      outcomeId: 4,
+      result: "FAILED_TERMINAL",
+      nextState: "POLICY_WALL",
+    })).resolves.toBe(true)
+    expect(pool.connect).toHaveBeenCalledTimes(1)
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      expect.stringMatching(/^SELECT "userId"/),
+      expect.stringMatching(/pg_advisory_xact_lock/),
+      expect.stringMatching(/UPDATE goal AS g/),
+      expect.stringMatching(/HERMES_OUTCOME_TERMINAL/),
+      "COMMIT",
+    ])
   })
 
   const ownerDecisionBinding = {
