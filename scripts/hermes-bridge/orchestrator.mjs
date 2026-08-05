@@ -32,6 +32,12 @@ const MAX_REMEDIATION_ROUNDS = 3
 const REVIEW_POLL_INTERVAL_MS = 15_000
 const REVIEW_POLL_ATTEMPTS = 80
 const SHA = /^[0-9a-f]{40}$/
+const PROJECTION_RETRY_DELAYS_MS = Object.freeze([1_000, 4_000])
+const RETRYABLE_PROJECTION_TRANSPORT_CODES = new Set([
+  "ENOTFOUND",
+  "ECONNRESET",
+  "ETIMEDOUT",
+])
 const OWNER_DECISION_RESUME_STATES = new Set([
   "OWNER_DECISION_ACCEPTED",
   "OWNER_DECISION_THREAD_RECOVERY_WALL",
@@ -42,6 +48,32 @@ const RECOVERABLE_DELIVERY_WALLS = new Set([
   "HERMES_REPOSITORY_RUNNER_WALL",
   "HERMES_REVIEW_CONTINUITY_WALL",
 ])
+
+export function isRetryableProjectionTransportError(error) {
+  if (!error || typeof error !== "object") return false
+  if (typeof error.code === "string") {
+    return RETRYABLE_PROJECTION_TRANSPORT_CODES.has(error.code)
+  }
+  if (Array.isArray(error.errors)) {
+    return error.errors.length > 0
+      && error.errors.every(isRetryableProjectionTransportError)
+  }
+  return error.cause ? isRetryableProjectionTransportError(error.cause) : false
+}
+
+export async function retryRuntimeProjection(operation, {
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  delays = PROJECTION_RETRY_DELAYS_MS,
+} = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error) {
+      if (attempt >= delays.length || !isRetryableProjectionTransportError(error)) throw error
+      await sleep(delays[attempt])
+    }
+  }
+}
 
 export const DEFAULT_VALIDATION_COMMANDS = Object.freeze([
   Object.freeze({ command: "npm", args: Object.freeze(["run", "lint"]), timeoutMs: 10 * 60 * 1000 }),
@@ -326,7 +358,7 @@ export function createHermesOrchestrator(options = {}) {
       })
     }
     try {
-      return await projectCheckpoint({
+      return await retryRuntimeProjection(() => projectCheckpoint({
         outcomeId: Number(outcomeId),
         attempt: execution.fencingToken,
         checkpoint: {
@@ -335,10 +367,11 @@ export function createHermesOrchestrator(options = {}) {
           detail: execution.checkpoint.detail,
           metadata: projectionMetadata(execution.metadata),
         },
-      })
-    } catch {
+      }), { sleep })
+    } catch (error) {
       throw Object.assign(new Error("Persisted runtime projection failed"), {
         code: "HERMES_RUNTIME_PROJECTION_WALL",
+        cause: error,
       })
     }
   }
@@ -355,7 +388,7 @@ export function createHermesOrchestrator(options = {}) {
         ? "ABANDONED"
         : execution.lease.status)
     try {
-      return await projectLease({
+      return await retryRuntimeProjection(() => projectLease({
         outcomeId: Number(outcomeId),
         attempt: execution.fencingToken,
         checkpointSequence: execution.checkpoint.sequence,
@@ -363,7 +396,7 @@ export function createHermesOrchestrator(options = {}) {
           status: projectedStatus,
           expiresAt: execution.lease.expiresAt,
         },
-      })
+      }), { sleep })
     } catch (error) {
       throw Object.assign(new Error("Persisted runtime lease projection failed"), {
         code: "HERMES_RUNTIME_PROJECTION_WALL",

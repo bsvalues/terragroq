@@ -1507,6 +1507,7 @@ export async function projectOutcomeRuntimeCheckpoint({
   let runQuery = normalizeQuery(query)
   let pool
   let client
+  let primaryError
   if (!runQuery) {
     if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
@@ -1701,13 +1702,18 @@ export async function projectOutcomeRuntimeCheckpoint({
       commitRef,
     }
   } catch (error) {
+    primaryError = error
     if (runQuery) {
       try { await runQuery("ROLLBACK") } catch {}
     }
     throw error
   } finally {
-    client?.release()
-    if (pool) await pool.end()
+    let cleanupError
+    try { client?.release() } catch (error) { cleanupError = error }
+    if (pool) {
+      try { await pool.end() } catch (error) { cleanupError ??= error }
+    }
+    if (!primaryError && cleanupError) throw cleanupError
   }
 }
 
@@ -1839,6 +1845,7 @@ export async function projectOutcomeRuntimeLease({
   let runQuery = normalizeQuery(query)
   let pool
   let client
+  let primaryError
   if (!runQuery) {
     if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
@@ -1915,13 +1922,18 @@ export async function projectOutcomeRuntimeLease({
       checkpointSequence,
     }
   } catch (error) {
+    primaryError = error
     if (runQuery) {
       try { await runQuery("ROLLBACK") } catch {}
     }
     throw error
   } finally {
-    client?.release()
-    if (pool) await pool.end()
+    let cleanupError
+    try { client?.release() } catch (error) { cleanupError = error }
+    if (pool) {
+      try { await pool.end() } catch (error) { cleanupError ??= error }
+    }
+    if (!primaryError && cleanupError) throw cleanupError
   }
 }
 

@@ -280,6 +280,27 @@ function normalizeValidation(command, index) {
   })
 }
 
+export function resolveWorktreeValidationInvocation(command, worktreePath, platform = process.platform) {
+  if (platform !== "win32") return command
+  const executable = path.basename(command.command).replace(/\.(?:cmd|exe)$/i, "")
+  const vitest = path.join(worktreePath, "node_modules", "vitest", "vitest.mjs")
+  const next = path.join(worktreePath, "node_modules", "next", "dist", "bin", "next")
+  if (executable === "npx" && command.args[0] === "vitest"
+    && fs.statSync(vitest, { throwIfNoEntry: false })?.isFile()) {
+    return { ...command, command: process.execPath, args: [vitest, ...command.args.slice(1)] }
+  }
+  if (executable !== "npm") return command
+  if (command.args[0] === "test" && command.args[1] === "--"
+    && fs.statSync(vitest, { throwIfNoEntry: false })?.isFile()) {
+    return { ...command, command: process.execPath, args: [vitest, "run", ...command.args.slice(2)] }
+  }
+  if (command.args[0] === "run" && ["lint", "build"].includes(command.args[1])
+    && fs.statSync(next, { throwIfNoEntry: false })?.isFile()) {
+    return { ...command, command: process.execPath, args: [next, command.args[1], ...command.args.slice(2)] }
+  }
+  return command
+}
+
 function statusPaths(output) {
   const fields = output.split("\0")
   const paths = []
@@ -693,7 +714,8 @@ export function createRepositoryLifecycle(options) {
         ...command.env,
         WILLIAMOS_HERMES_VALIDATION_ISOLATED: "1",
       }
-      const result = await run(command.command, command.args, {
+      const invocation = resolveWorktreeValidationInvocation(command, record.worktreePath)
+      const result = await run(invocation.command, invocation.args, {
         cwd: record.worktreePath, env: validationEnvironment,
         timeoutMs: command.timeoutMs, allowFailure: true,
         credentialAccess: false,
