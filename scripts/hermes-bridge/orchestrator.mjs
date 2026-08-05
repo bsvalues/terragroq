@@ -280,6 +280,28 @@ export function createHermesOrchestrator(options = {}) {
     })
   }
   const holderId = options.holderId ?? `${os.hostname()}:${process.pid}:${randomUUID()}`
+  async function abandonOwnedCycleLease() {
+    const owned = Object.values(state.read().executions).filter((execution) => (
+      execution?.lease?.status === "ACTIVE"
+      && !execution?.lease?.abandonedAt
+      && execution?.lease?.holderId === holderId
+    ))
+    if (owned.length > 1) {
+      throw Object.assign(new Error("Cycle holder owns multiple active leases"), {
+        code: "HERMES_EXECUTION_CONCURRENCY_WALL",
+      })
+    }
+    if (owned.length === 0) return { abandoned: false }
+    const execution = owned[0]
+    await abandonLease({
+      idempotencyKey: `${execution.outcomeId}:abandon:${execution.fencingToken}:cycle-exit:${execution.checkpoint.sequence}`,
+      outcomeId: execution.outcomeId,
+      holderId,
+      fencingToken: execution.fencingToken,
+      reason: "HERMES_CYCLE_PROCESS_EXIT",
+    })
+    return { abandoned: true, outcomeId: execution.outcomeId }
+  }
 
   function projectionMetadata(value = {}) {
     return Object.fromEntries([
@@ -1655,5 +1677,8 @@ export function createHermesOrchestrator(options = {}) {
     }
   }
 
-  return Object.freeze({ cycle, state, runtimeRoot, statePath, activationPath, notBeforePath })
+  return Object.freeze({
+    cycle, state, runtimeRoot, statePath, activationPath, notBeforePath,
+    abandonOwnedCycleLease,
+  })
 }
