@@ -11,6 +11,7 @@ import {
   readOutcomeQueue,
   renewOutcomeQueueLease,
   resumeOutcomeQueueAfterDecision,
+  resumeOutcomeQueueAfterValidationRecovery,
   transitionOutcomeQueueItem,
   verifyOutcomeQueueWorkOrderBinding,
 } from "./outcome-queue-source.mjs"
@@ -86,6 +87,11 @@ function queueBinding(outcome) {
     || typeof binding.leaseToken !== "string" || binding.leaseToken.trim() === ""
     || !Number.isSafeInteger(binding.fencingToken) || binding.fencingToken <= 0
     || typeof binding.acquisitionKey !== "string" || binding.acquisitionKey.trim() === ""
+    || (binding.validationRecoveryResumeState !== undefined
+      && ![
+        "VALIDATION_INFRASTRUCTURE_RECOVERED",
+        "VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED",
+      ].includes(binding.validationRecoveryResumeState))
     || (binding.activeWorkOrderId !== undefined
       && (!Number.isSafeInteger(binding.activeWorkOrderId) || binding.activeWorkOrderId <= 0))) {
     wall("Hermes outcome is missing its durable queue binding", "HERMES_OUTCOME_QUEUE_BINDING_WALL")
@@ -213,6 +219,12 @@ function requiredMergeSha(evidence) {
 
 function persistedBinding(item) {
   const activeWorkOrderId = Number(item.activeWorkOrderId)
+  const validationRecoveryResumeState = [
+    "VALIDATION_INFRASTRUCTURE_RECOVERED",
+    "VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED",
+  ].includes(item.lifecycleReason)
+    ? item.lifecycleReason
+    : null
   return {
     userId: item.userId,
     outcomeKey: item.outcomeKey,
@@ -221,6 +233,7 @@ function persistedBinding(item) {
     leaseToken: item.leaseToken,
     fencingToken: Number(item.fencingToken),
     acquisitionKey: item.acquisitionKey,
+    ...(validationRecoveryResumeState ? { validationRecoveryResumeState } : {}),
     ...(Number.isSafeInteger(activeWorkOrderId) && activeWorkOrderId > 0
       ? { activeWorkOrderId }
       : {}),
@@ -310,6 +323,30 @@ function isExactOwnerDecisionResume(item, binding, holderId, at) {
     && Date.parse(String(item.leaseExpiresAt)) > at.getTime()
 }
 
+function isExactValidationRecoveryResume(item, binding, holderId, at) {
+  const renewalCount = Number(item?.authorityRenewalCount
+    ?? (item?.authorityRenewalApplied === true ? 1 : 0))
+  const reclaimCount = Number(item?.validationRecoveryReclaimCount ?? 0)
+  if (!Number.isSafeInteger(renewalCount) || renewalCount < 0
+    || !Number.isSafeInteger(reclaimCount) || reclaimCount < 0) return false
+  return item?.userId === binding.userId
+    && item.outcomeKey === binding.outcomeKey
+    && item.lifecycleState === "active"
+    && item.lifecycleReason === (reclaimCount > 0
+      ? "VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED"
+      : "VALIDATION_INFRASTRUCTURE_RECOVERED")
+    && item.approvalState === "approved"
+    && item.authorityState === "matched"
+    && Number(item.version) === binding.expectedVersion + 2
+      + renewalCount + reclaimCount
+    && item.executionBinding === binding.executionBinding
+    && item.acquisitionKey === binding.acquisitionKey
+    && Number(item.fencingToken) === binding.fencingToken + 1 + reclaimCount
+    && item.leaseHolder === holderId
+    && item.leaseToken === binding.leaseToken
+    && Date.parse(String(item.leaseExpiresAt)) > at.getTime()
+}
+
 export function createHermesOutcomeQueueRuntime(options = {}) {
   const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL
   const database = createLazyPool(databaseUrl, options.createPool)
@@ -323,6 +360,8 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   const renewQueue = options.renewQueue ?? renewOutcomeQueueLease
   const deferQueue = options.deferQueue ?? deferOutcomeQueueLease
   const resumeQueue = options.resumeQueue ?? resumeOutcomeQueueAfterDecision
+  const resumeValidationRecoveryQueue = options.resumeValidationRecoveryQueue
+    ?? resumeOutcomeQueueAfterValidationRecovery
   const readQueue = options.readQueue ?? readOutcomeQueue
   const transitionQueue = options.transitionQueue ?? transitionOutcomeQueueItem
   const completeGoal = options.completeGoal ?? completeGoalOutcome
@@ -668,6 +707,46 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     return withPersistedBinding(outcome, resumed)
   }
 
+  async function resumeAfterValidationRecovery(outcome, proof) {
+    requireExecutionProofContext()
+    if (!outcome?.queueBinding) return outcome
+    const binding = queueBinding(outcome)
+    if (proof?.expectedNextState !== "VALIDATION_REMEDIATION_EXHAUSTED"
+      || typeof proof?.proofDigest !== "string" || !/^[0-9a-f]{64}$/.test(proof.proofDigest)
+      || !Number.isSafeInteger(proof?.recoveryFencingToken)
+      || proof.recoveryFencingToken <= 0) {
+      wall(
+        "Validation recovery proof did not preserve its exact boundary",
+        "HERMES_OUTCOME_QUEUE_VALIDATION_RECOVERY_PROOF_WALL",
+      )
+    }
+    if (binding.validationRecoveryResumeState) return outcome
+    const resumeAt = now()
+    const resumed = await resumeValidationRecoveryQueue({
+      databaseUrl,
+      userId: binding.userId,
+      outcomeKey: binding.outcomeKey,
+      expectedVersion: binding.expectedVersion + 1,
+      executionBinding: binding.executionBinding,
+      acquisitionKey: binding.acquisitionKey,
+      fencingToken: binding.fencingToken,
+      proofDigest: proof.proofDigest,
+      recoveryFencingToken: proof.recoveryFencingToken,
+      expectedLifecycleReason: proof.expectedNextState,
+      leaseHolder: holderId,
+      leaseToken: binding.leaseToken,
+      leaseDurationMs: QUEUE_LEASE_DURATION_MS,
+      now: resumeAt,
+    })
+    if (!isExactValidationRecoveryResume(resumed, binding, holderId, resumeAt)) {
+      wall(
+        "Validation recovery resume did not return its exact fresh queue fence",
+        "HERMES_OUTCOME_QUEUE_VALIDATION_RECOVERY_RESUME_WALL",
+      )
+    }
+    return withPersistedBinding(outcome, resumed)
+  }
+
   return {
     selectOutcome,
     completeOutcome,
@@ -677,6 +756,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     bindWorkOrder,
     refreshOutcome,
     resumeAfterOwnerDecision,
+    resumeAfterValidationRecovery,
     close: database.close,
   }
 }

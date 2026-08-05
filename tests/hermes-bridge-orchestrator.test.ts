@@ -188,7 +188,13 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
 
   it("reacquires a validation-infrastructure recovery without selecting a new outcome", async () => {
     const verifyValidationInfrastructureRecovery = vi.fn(async () => true)
-    const value = fixture(undefined, { verifyValidationInfrastructureRecovery })
+    const resumeQueueAfterValidationRecovery = vi.fn(async (outcome) => outcome)
+    const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
+    const value = fixture(undefined, {
+      verifyValidationInfrastructureRecovery,
+      resumeQueueAfterValidationRecovery,
+      refreshQueueOutcome,
+    })
     value.lifecycle.inspectWorkingTreePaths
       .mockResolvedValueOnce(["components/hermes/live-status.tsx", "tests/hermes-live-status.test.tsx"])
       .mockResolvedValue([])
@@ -286,6 +292,13 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       proofDigest: "d".repeat(64),
       expectedFencingToken: lease.fencingToken,
     })
+    expect(resumeQueueAfterValidationRecovery).toHaveBeenCalledWith(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: lease.fencingToken,
+    })
+    expect(resumeQueueAfterValidationRecovery.mock.invocationCallOrder[0])
+      .toBeLessThan(refreshQueueOutcome.mock.invocationCallOrder[0])
     expect(value.lifecycle.runValidationCommands).toHaveBeenCalled()
     expect(value.client.runTurn).not.toHaveBeenCalled()
     expect(value.projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({

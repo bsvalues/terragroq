@@ -259,6 +259,8 @@ export function createHermesOrchestrator(options = {}) {
   const bindQueueWorkOrder = options.bindQueueWorkOrder ?? (async () => null)
   const refreshQueueOutcome = options.refreshQueueOutcome ?? (async (outcome) => outcome)
   const resumeQueueAfterDecision = options.resumeQueueAfterDecision ?? (async (outcome) => outcome)
+  const resumeQueueAfterValidationRecovery = options.resumeQueueAfterValidationRecovery
+    ?? (async (outcome) => outcome)
   const readApprovedDecision = options.readApprovedOwnerDecision ?? readApprovedOwnerDecision
   const verifyValidationInfrastructureRecovery = options.verifyValidationInfrastructureRecovery
     ?? readValidationInfrastructureRecovery
@@ -647,6 +649,7 @@ export function createHermesOrchestrator(options = {}) {
       execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
       || execution?.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
     ))
+    const verifiedValidationRecoveries = new Map()
     for (const execution of validationRecoveries) {
       const legacyRecoveredCheckpoint = execution.checkpoint.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
       const pendingRecoveryPhase = execution.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
@@ -672,6 +675,12 @@ export function createHermesOrchestrator(options = {}) {
           code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL",
         })
       }
+      verifiedValidationRecoveries.set(String(execution.outcomeId), {
+        expectedNextState: VALIDATION_INFRASTRUCTURE_RETRY_STATE,
+        proofDigest: execution.metadata.validationRecoveryProofDigest,
+        recoveryFencingToken: execution.metadata.validationRecoveryFencingToken
+          ?? execution.fencingToken,
+      })
     }
     const recoveredCandidates = Object.values(initialized.executions).filter((execution) => (
       execution?.lease?.status === "ABANDONED"
@@ -802,6 +811,10 @@ export function createHermesOrchestrator(options = {}) {
         : current?.checkpoint?.state === "OWNER_DECISION_REQUIRED"
           ? { state: "OWNER_DECISION_REQUIRED", nextState: current.checkpoint.detail }
         : null
+    const validationRecoveryProof = verifiedValidationRecoveries.get(outcomeId)
+    if (validationRecoveryProof) {
+      outcome = await resumeQueueAfterValidationRecovery(outcome, validationRecoveryProof)
+    }
     outcome = terminalReplay
       ? await refreshQueueOutcome(outcome, terminalReplay)
       : await refreshQueueOutcome(outcome)

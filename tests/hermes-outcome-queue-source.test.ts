@@ -39,6 +39,7 @@ import {
   renewOutcomeLease as renewOutcomeLeaseCompatibility,
   renewOutcomeQueueLease,
   resumeOutcomeQueueAfterDecision,
+  resumeOutcomeQueueAfterValidationRecovery,
   transitionOutcome as transitionOutcomeCompatibility,
   transitionOutcomeQueueItem,
   verifyOutcomeQueueWorkOrderBinding,
@@ -2305,6 +2306,131 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.resumeAfterDecision,
       "COMMIT",
     ])
+  })
+
+  it("resumes a validation-blocked queue item only through exact persisted recovery proof", async () => {
+    const resumed = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    })
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.resumeAfterValidationRecovery ? [resumed] : [],
+    }))
+    const query = dedicatedQuery(run)
+
+    await expect(resumeOutcomeQueueAfterValidationRecovery({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 5,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+      expectedLifecycleReason: "VALIDATION_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).resolves.toEqual(resumed)
+    expect(run).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.resumeAfterValidationRecovery, [
+      userId,
+      "goal:GOAL-1000",
+      5,
+      "execution-a",
+      "acquire-a",
+      3,
+      "d".repeat(64),
+      57,
+      "resident-hermes",
+      "lease-a",
+      "2026-07-28T12:50:00.000Z",
+      now,
+      "VALIDATION_REMEDIATION_EXHAUSTED",
+    ])
+    expect(OUTCOME_QUEUE_SQL.resumeAfterValidationRecovery)
+      .toContain("HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED")
+    expect(OUTCOME_QUEUE_SQL.resumeAfterValidationRecovery)
+      .toContain("HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED")
+    expect(OUTCOME_QUEUE_SQL.resumeAfterValidationRecovery)
+      .toContain("proof.metadata->>'fencingToken' = $8::text")
+    expect(OUTCOME_QUEUE_SQL.resumeAfterValidationRecovery)
+      .toContain("recovered.id > proof.id")
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.resumeAfterValidationRecovery,
+      "COMMIT",
+    ])
+  })
+
+  it("reclaims an expired committed validation recovery before replaying local state", async () => {
+    const reclaimed = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      authorityRenewalApplied: false,
+      validationRecoveryStaleReclaimApplied: true,
+    })
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.reclaimExpiredValidationRecovery ? [reclaimed] : [],
+    }))
+    const query = dedicatedQuery(run)
+
+    await expect(resumeOutcomeQueueAfterValidationRecovery({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 5,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+      expectedLifecycleReason: "VALIDATION_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).resolves.toEqual(reclaimed)
+    expect(run).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.reclaimExpiredValidationRecovery,
+      expect.arrayContaining(["d".repeat(64), 57, "resident-hermes", "lease-a"]),
+    )
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredValidationRecovery)
+      .toContain(`q."leaseExpiresAt" <= $12::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredValidationRecovery)
+      .toContain("latest_terminal.metadata->>'result' = 'FAILED_TERMINAL'")
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredValidationRecovery)
+      .toContain("proof.id > latest_terminal.id")
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredValidationRecovery)
+      .toContain(`recovery_goal."userId" = q."userId"`)
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredValidationRecovery)
+      .toContain("recovery_goal.status = 'classified'")
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredValidationRecovery)
+      .toContain(`terminal."userId" = recovery_goal."userId"`)
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredValidationRecovery)
+      .toContain(`q."fencingToken" - $6::integer +`)
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredValidationRecovery)
+      .toContain(`'VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED'`)
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredValidationRecovery)
+      .toContain(`AS "validationRecoveryReclaimCount"`)
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredValidationRecovery)
+      .toContain(`AS "authorityRenewalCount"`)
+    expect(OUTCOME_QUEUE_SQL.replayResumeAfterValidationRecovery)
+      .toContain(`q."fencingToken" - $6::integer +`)
+    expect(OUTCOME_QUEUE_SQL.replayResumeAfterValidationRecovery)
+      .toContain(`AS "authorityRenewalCount"`)
   })
 
   it("verifies an existing canonical Work Order binding at the exact projected status", async () => {

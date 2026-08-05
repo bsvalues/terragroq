@@ -74,6 +74,7 @@ export function createResidentHermesOrchestrator(options = {}) {
     bindQueueWorkOrder: queueRuntime.bindWorkOrder,
     refreshQueueOutcome: queueRuntime.refreshOutcome,
     resumeQueueAfterDecision: queueRuntime.resumeAfterOwnerDecision,
+    resumeQueueAfterValidationRecovery: queueRuntime.resumeAfterValidationRecovery,
   })
   return Object.freeze({
     ...orchestrator,
