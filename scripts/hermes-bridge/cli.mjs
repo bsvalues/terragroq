@@ -183,6 +183,12 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex")
 }
 
+function isValidationInfrastructureFailure(value) {
+  const failure = String(value ?? "")
+  return /\bspawn EPERM\b/i.test(failure)
+    || /'(?:vitest|next)' is not recognized as an internal or external command/i.test(failure)
+}
+
 export async function recoverValidationInfrastructureWall(options = {}) {
   const orchestrator = options.orchestrator ?? createResidentHermesOrchestrator()
   const recordProof = options.recordProof ?? recordValidationInfrastructureRecoveryProof
@@ -196,7 +202,7 @@ export async function recoverValidationInfrastructureWall(options = {}) {
     (execution?.lease?.status === "RELEASED"
       && execution?.checkpoint?.state === "FAILED_TERMINAL"
       && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
-      && /\bspawn EPERM\b/i.test(String(execution?.metadata?.validationFailure ?? "")))
+      && isValidationInfrastructureFailure(execution?.metadata?.validationFailure))
     || (execution?.lease?.status === "ABANDONED"
       && execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
       && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
