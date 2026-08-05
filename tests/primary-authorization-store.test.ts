@@ -38,7 +38,7 @@ const AUTHORIZATION = {
   nonce: "abcdef01-2345-6789",
   issuedAt: ISSUED_AT,
   expiresAt: EXPIRES_AT,
-  scopes: SCOPES.map((outcomeKey, expectedVersion) => ({ outcomeKey, expectedVersion })),
+  scopes: SCOPES.map((outcomeKey) => ({ outcomeKey, expectedVersion: 0 })),
 }
 
 function canonical(value: unknown): unknown {
@@ -115,7 +115,7 @@ type ReceiptRow = {
 
 function queryHarness({
   receipts = [],
-  rows = SCOPES.map((scope, version) => candidate(scope, version)),
+  rows = SCOPES.map((scope) => candidate(scope, 0)),
   failAudit = false,
   missingReplayGrant = false,
 }: {
@@ -128,10 +128,10 @@ function queryHarness({
   const receiptInserts: unknown[][] = []
   const replayResults = receipts.map((entry) => entry.resultBinding)
   const replayQueueRows = replayResults.length === SCOPES.length
-    ? SCOPES.map((scope, expectedVersion) => {
+    ? SCOPES.map((scope) => {
       const result = replayResults.find((entry) => entry.outcomeKey === scope)!
       return {
-        ...candidate(scope, expectedVersion),
+        ...candidate(scope, 0),
         approvalState: "approved",
         approvedBy: USER_ID,
         approvedAt: ISSUED_AT,
@@ -272,7 +272,7 @@ describe("Primary Authorization Bridge atomic store", () => {
         {
           authorizationDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
           outcomeKey: SCOPES[1],
-          version: 2,
+          version: 1,
           decisionId: 72,
           decisionRef: "ADR-V12-CONTINUITY-STATUS",
           grantRef: "GRANT-V12-CONTINUITY-STATUS-20260804T200000000Z",
@@ -305,10 +305,10 @@ describe("Primary Authorization Bridge atomic store", () => {
       `primary-authorization:${AUTHORIZATION.nonce}:${SCOPES[1]}`,
     ])
     expect(harness.receiptInserts.map((params) => JSON.parse(params[4] as string))).toEqual(
-      result.outcomes.map((outcome, expectedVersion) => ({
+      result.outcomes.map((outcome) => ({
         authorizationDigest: result.authorizationDigest,
         outcomeKey: outcome.outcomeKey,
-        expectedVersion,
+        expectedVersion: 0,
       })),
     )
     expect(harness.client.release).toHaveBeenCalledOnce()
@@ -381,7 +381,7 @@ describe("Primary Authorization Bridge atomic store", () => {
   })
 
   it("rejects a stale candidate row before writing either scope", async () => {
-    const staleRows = SCOPES.map((scope, version) => candidate(scope, version))
+    const staleRows = SCOPES.map((scope) => candidate(scope, 0))
     staleRows[1].version = 99
     const harness = queryHarness({ rows: staleRows })
 
@@ -423,7 +423,7 @@ describe("Primary Authorization Bridge atomic store", () => {
       const binding = {
         authorizationDigest: result.authorizationDigest,
         outcomeKey: SCOPES[index],
-        expectedVersion: index,
+        expectedVersion: 0,
       }
       expect(params[3]).toBe(hash(binding))
       expect(JSON.parse(params[4] as string)).toEqual(binding)

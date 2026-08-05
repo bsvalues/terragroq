@@ -155,6 +155,9 @@ export class CodexAppServerClient {
     this.pending = new Map()
     this.completedIds = new Set()
     this.buffer = ""
+    this.bufferBytes = 0
+    this.frameTerminated = false
+    this.consumeData = (chunk) => this.#consume(chunk)
     this.process = null
     this.turnWaiter = null
     this.startingThreadId = null
@@ -174,7 +177,7 @@ export class CodexAppServerClient {
       windowsHide: true,
     })
     this.process.stdout.setEncoding?.("utf8")
-    this.process.stdout.on("data", (chunk) => this.#consume(chunk))
+    this.process.stdout.on("data", this.consumeData)
     this.process.stderr.resume?.()
     this.process.on("error", (error) => this.#fail(error))
     this.process.on("exit", (code, signal) => {
@@ -351,9 +354,12 @@ export class CodexAppServerClient {
 
   close() {
     if (!this.process) return
+    this.process.stdout.removeListener?.("data", this.consumeData)
     this.process.stdin.end?.()
     this.process.kill?.()
     this.process = null
+    this.buffer = ""
+    this.bufferBytes = 0
     this.#fail(new AppServerCancelledError())
   }
 
@@ -363,23 +369,39 @@ export class CodexAppServerClient {
   }
 
   #consume(chunk) {
-    this.buffer += String(chunk)
-    if (Buffer.byteLength(this.buffer, "utf8") > this.maxFrameBytes) {
-      this.buffer = ""
-      this.#fail(new AppServerFrameLimitError(this.maxFrameBytes))
-      return
-    }
+    if (this.frameTerminated || !this.process) return
+    let remaining = String(chunk)
     for (;;) {
-      const newline = this.buffer.indexOf("\n")
+      const newline = remaining.indexOf("\n")
+      const segment = newline < 0 ? remaining : remaining.slice(0, newline)
+      const segmentBytes = Buffer.byteLength(segment, "utf8")
+      if (this.bufferBytes + segmentBytes > this.maxFrameBytes) {
+        const error = new AppServerFrameLimitError(this.maxFrameBytes)
+        this.frameTerminated = true
+        this.wall = error
+        this.buffer = ""
+        this.bufferBytes = 0
+        this.#fail(error)
+        this.process.stdout.removeListener?.("data", this.consumeData)
+        this.process.stdin.end?.()
+        this.process.kill?.()
+        this.process = null
+        return
+      }
+      this.buffer += segment
+      this.bufferBytes += segmentBytes
       if (newline < 0) return
-      const line = this.buffer.slice(0, newline).trim()
-      this.buffer = this.buffer.slice(newline + 1)
+      const line = this.buffer.trim()
+      this.buffer = ""
+      this.bufferBytes = 0
+      remaining = remaining.slice(newline + 1)
       if (!line) continue
       try {
         this.#handle(JSON.parse(line))
       } catch (error) {
         this.#fail(error)
       }
+      if (remaining.length === 0) return
     }
   }
 

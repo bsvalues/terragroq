@@ -234,6 +234,26 @@ describe("CodexAppServerClient", () => {
       result: { thread: { id: "thread-owner", preview: "x".repeat(512) } },
     })
     await expect(pending).rejects.toMatchObject({ code: "APP_SERVER_FRAME_LIMIT" })
+    expect(process.killed).toBe(true)
+    expect(process.stdout.listenerCount("data")).toBe(0)
+    expect(() => client.request("thread/read", { threadId: "later" })).toThrow(
+      "Codex App Server is not connected",
+    )
+  })
+
+  it("enforces the frame limit per newline-delimited frame", async () => {
+    const { client, process } = setup({ maxFrameBytes: 128 })
+    await connect(client, process)
+    const first = client.request("one", {})
+    const second = client.request("two", {})
+    const [firstRequest, secondRequest] = process.messages().slice(-2)
+    process.stdout.write(
+      `${JSON.stringify({ id: firstRequest.id, result: { ok: "a".repeat(20) } })}\n`
+      + `${JSON.stringify({ id: secondRequest.id, result: { ok: "b".repeat(20) } })}\n`,
+    )
+    await expect(first).resolves.toEqual({ ok: "a".repeat(20) })
+    await expect(second).resolves.toEqual({ ok: "b".repeat(20) })
+    expect(process.killed).toBe(false)
   })
 
   it("starts a thread and captures only sanitized terminal turn data", async () => {

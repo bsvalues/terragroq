@@ -85,6 +85,7 @@ describe("primary authorization provenance", () => {
     ["subagent thread", { message: ownerMessage({ parentThreadId: "parent" }) }, "OWNER_MESSAGE_IDENTITY_WALL"],
     ["wrong thread", { message: ownerMessage({ threadId: "other" }) }, "OWNER_MESSAGE_IDENTITY_WALL"],
     ["wrong repository", { message: ownerMessage({ cwd: "C:/other" }) }, "REPOSITORY_CWD_MISMATCH"],
+    ["missing repository", { message: ownerMessage({ cwd: null }) }, "REPOSITORY_CWD_MISMATCH"],
     ["unrelated message", { message: ownerMessage({ textSha256: "0".repeat(64) }) }, "OWNER_REQUEST_HASH_MISMATCH"],
   ])("rejects %s", async (_name, mutation, code) => {
     boundary.account = {

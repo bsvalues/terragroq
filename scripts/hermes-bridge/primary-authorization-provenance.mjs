@@ -107,7 +107,10 @@ export async function verifyPrimaryAuthorizationProvenance({
     || message.parentThreadId !== null
     || message.agentRole !== null
     || message.turnStatus !== "completed") reject("OWNER_MESSAGE_IDENTITY_WALL")
-  if (normalizedPath(message.cwd ?? "") !== normalizedPath(canonicalRepository)) {
+  if (typeof message.cwd !== "string"
+    || message.cwd.length === 0
+    || !path.isAbsolute(message.cwd)
+    || normalizedPath(message.cwd) !== normalizedPath(canonicalRepository)) {
     reject("REPOSITORY_CWD_MISMATCH")
   }
   if (message.textSha256 !== PRIMARY_AUTHORIZATION_PIN.messageSha256) {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const boundaries = vi.hoisted(() => ({
   recordAuthorization: vi.fn(),
@@ -24,9 +24,12 @@ const AUTHORIZATION = Object.freeze({
 
 describe("Primary Authorization Bridge coordinator", () => {
   beforeEach(() => {
+    vi.stubEnv("DATABASE_URL", "postgresql://controlled-test-value")
     boundaries.recordAuthorization.mockReset().mockResolvedValue({ status: "RECORDED" })
     boundaries.verifyProvenance.mockReset().mockResolvedValue(AUTHORIZATION)
   })
+
+  afterEach(() => vi.unstubAllEnvs())
 
   it("passes only App Server-verified authorization to the atomic store", async () => {
     await expect(executePrimaryAuthorizationBridge({
@@ -39,7 +42,7 @@ describe("Primary Authorization Bridge coordinator", () => {
     })
     expect(boundaries.recordAuthorization).toHaveBeenCalledWith({
       query: QUERY,
-      databaseUrl: undefined,
+      databaseUrl: "postgresql://controlled-test-value",
       authorization: AUTHORIZATION,
     })
   })
