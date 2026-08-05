@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 
 import {
+  closeProjectionResources,
   completeOutcome,
   deferProviderOutcome,
   NATIVE_PROVIDER_RETRY_STATE,
@@ -90,6 +91,25 @@ function ownerDecisionReceipt(choice: "APPROVE" | "DENY", decisionId: number, ev
 }
 
 describe("Hermes bridge PostgreSQL outcome source", () => {
+  it("preserves primary projection errors while still attempting all cleanup", async () => {
+    const primary = new Error("primary")
+    const release = vi.fn(() => { throw new Error("release") })
+    const end = vi.fn(async () => { throw new Error("end") })
+    await expect(closeProjectionResources({
+      client: { release }, pool: { end }, primaryError: primary,
+    })).resolves.toBeUndefined()
+    expect(release).toHaveBeenCalledOnce()
+    expect(end).toHaveBeenCalledOnce()
+  })
+
+  it("reports the first cleanup error when no projection error exists", async () => {
+    const releaseError = new Error("release")
+    const release = vi.fn(() => { throw releaseError })
+    const end = vi.fn(async () => { throw new Error("end") })
+    await expect(closeProjectionResources({ client: { release }, pool: { end } }))
+      .rejects.toBe(releaseError)
+    expect(end).toHaveBeenCalledOnce()
+  })
   it("uses one deterministic parameterized row selection", async () => {
     const query = vi.fn(async () => ({ rows: [row] }))
     await expect(selectNextOutcome({ query })).resolves.toEqual(row)

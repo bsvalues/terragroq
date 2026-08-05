@@ -120,7 +120,7 @@ describe("Hermes repository lifecycle", () => {
       fs.writeFileSync(next, "")
 
       expect(resolveWorktreeValidationInvocation({
-        command: "npx", args: ["vitest", "run", "tests/focused.test.ts"], env: {}, timeoutMs: 1,
+        command: "NPX.EXE", args: ["vitest", "run", "tests/focused.test.ts"], env: {}, timeoutMs: 1,
       }, worktree, "win32")).toMatchObject({
         command: process.execPath,
         args: [vitest, "run", "tests/focused.test.ts"],
@@ -132,10 +132,10 @@ describe("Hermes repository lifecycle", () => {
         args: [vitest, "run", "--run"],
       })
       expect(resolveWorktreeValidationInvocation({
-        command: "npm", args: ["run", "build"], env: {}, timeoutMs: 1,
+        command: "NPM.CMD", args: ["run", "build", "--", "--profile"], env: {}, timeoutMs: 1,
       }, worktree, "win32")).toMatchObject({
         command: process.execPath,
-        args: [next, "build"],
+        args: [next, "build", "--profile"],
       })
     } finally {
       fs.rmSync(worktree, { recursive: true, force: true })

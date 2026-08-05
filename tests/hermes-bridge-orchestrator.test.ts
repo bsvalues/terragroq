@@ -175,6 +175,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
       integrity,
     ])
+    Object.assign(mixed, { code: "ETIMEDOUT" })
     expect(isRetryableProjectionTransportError(integrity)).toBe(false)
     expect(isRetryableProjectionTransportError(mixed)).toBe(false)
 
@@ -193,6 +194,12 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     await expect(retryRuntimeProjection(operation, { sleep })).rejects.toBe(transport)
     expect(operation).toHaveBeenCalledTimes(3)
     expect(sleep.mock.calls).toEqual([[1_000], [4_000]])
+  })
+
+  it("classifies temporary DNS lookup failures as retryable", () => {
+    expect(isRetryableProjectionTransportError(
+      Object.assign(new Error("temporary dns"), { code: "EAI_AGAIN" }),
+    )).toBe(true)
   })
 
   it("uses the bounded retry when projecting an orchestration checkpoint", async () => {

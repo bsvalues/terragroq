@@ -1451,6 +1451,15 @@ function runtimeEvidenceRef(outcomeId, attempt, checkpointSequence) {
   return `EV-HERMES-${outcomeId}-${attempt}-${checkpointSequence}`
 }
 
+export async function closeProjectionResources({ client, pool, primaryError } = {}) {
+  let cleanupError
+  try { client?.release() } catch (error) { cleanupError = error }
+  if (pool) {
+    try { await pool.end() } catch (error) { cleanupError ??= error }
+  }
+  if (!primaryError && cleanupError) throw cleanupError
+}
+
 function failureEvalForCheckpoint(checkpoint) {
   const state = checkpoint.state
   if (state === "FAILED_TERMINAL") {
@@ -1708,12 +1717,7 @@ export async function projectOutcomeRuntimeCheckpoint({
     }
     throw error
   } finally {
-    let cleanupError
-    try { client?.release() } catch (error) { cleanupError = error }
-    if (pool) {
-      try { await pool.end() } catch (error) { cleanupError ??= error }
-    }
-    if (!primaryError && cleanupError) throw cleanupError
+    await closeProjectionResources({ client, pool, primaryError })
   }
 }
 
@@ -1928,12 +1932,7 @@ export async function projectOutcomeRuntimeLease({
     }
     throw error
   } finally {
-    let cleanupError
-    try { client?.release() } catch (error) { cleanupError = error }
-    if (pool) {
-      try { await pool.end() } catch (error) { cleanupError ??= error }
-    }
-    if (!primaryError && cleanupError) throw cleanupError
+    await closeProjectionResources({ client, pool, primaryError })
   }
 }
 

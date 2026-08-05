@@ -282,7 +282,7 @@ function normalizeValidation(command, index) {
 
 export function resolveWorktreeValidationInvocation(command, worktreePath, platform = process.platform) {
   if (platform !== "win32") return command
-  const executable = path.basename(command.command).replace(/\.(?:cmd|exe)$/i, "")
+  const executable = path.basename(command.command).replace(/\.(?:cmd|exe)$/i, "").toLowerCase()
   const vitest = path.join(worktreePath, "node_modules", "vitest", "vitest.mjs")
   const next = path.join(worktreePath, "node_modules", "next", "dist", "bin", "next")
   if (executable === "npx" && command.args[0] === "vitest"
@@ -296,7 +296,12 @@ export function resolveWorktreeValidationInvocation(command, worktreePath, platf
   }
   if (command.args[0] === "run" && ["lint", "build"].includes(command.args[1])
     && fs.statSync(next, { throwIfNoEntry: false })?.isFile()) {
-    return { ...command, command: process.execPath, args: [next, command.args[1], ...command.args.slice(2)] }
+    const forwarded = command.args.slice(2)
+    return {
+      ...command,
+      command: process.execPath,
+      args: [next, command.args[1], ...(forwarded[0] === "--" ? forwarded.slice(1) : forwarded)],
+    }
   }
   return command
 }

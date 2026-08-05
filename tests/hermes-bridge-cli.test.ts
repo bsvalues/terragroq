@@ -392,7 +392,9 @@ describe("Hermes bridge CLI", () => {
       })),
       cleanupOwnedWorktree: vi.fn(async () => ({ cleaned: true })),
     }
-    const projectCheckpoint = vi.fn(async () => true)
+    const projectCheckpoint = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("temporary dns"), { code: "ENOTFOUND" }))
+      .mockResolvedValue(true)
     const recoverOutcome = vi.fn(async () => true)
     const read = vi.spyOn(fs, "existsSync").mockImplementation((target) =>
       target === candidate.metadata.worktreePath)
@@ -400,6 +402,7 @@ describe("Hermes bridge CLI", () => {
     try {
       await expect(recoverTerminalPostMergeCleanupWall({
         orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+        projectionSleep: async () => {},
       })).resolves.toMatchObject({
         result: "RECOVERED",
         outcomeId: "5",
@@ -430,6 +433,7 @@ describe("Hermes bridge CLI", () => {
           },
         },
       })
+      expect(projectCheckpoint).toHaveBeenCalledTimes(2)
       expect(recoverOutcome).toHaveBeenCalledWith({
         outcomeId: 5,
         prNumber: 440,

@@ -35,6 +35,7 @@ const SHA = /^[0-9a-f]{40}$/
 const PROJECTION_RETRY_DELAYS_MS = Object.freeze([1_000, 4_000])
 const RETRYABLE_PROJECTION_TRANSPORT_CODES = new Set([
   "ENOTFOUND",
+  "EAI_AGAIN",
   "ECONNRESET",
   "ETIMEDOUT",
 ])
@@ -51,12 +52,12 @@ const RECOVERABLE_DELIVERY_WALLS = new Set([
 
 export function isRetryableProjectionTransportError(error) {
   if (!error || typeof error !== "object") return false
-  if (typeof error.code === "string") {
-    return RETRYABLE_PROJECTION_TRANSPORT_CODES.has(error.code)
-  }
   if (Array.isArray(error.errors)) {
     return error.errors.length > 0
       && error.errors.every(isRetryableProjectionTransportError)
+  }
+  if (typeof error.code === "string") {
+    return RETRYABLE_PROJECTION_TRANSPORT_CODES.has(error.code)
   }
   return error.cause ? isRetryableProjectionTransportError(error.cause) : false
 }
