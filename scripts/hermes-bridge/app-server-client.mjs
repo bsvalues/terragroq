@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process"
+import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 
@@ -56,6 +57,15 @@ export class AppServerCancelledError extends Error {
     super("Codex App Server turn was cancelled")
     this.name = "AppServerCancelledError"
     this.code = "APP_SERVER_CANCELLED"
+  }
+}
+
+export class AppServerFrameLimitError extends Error {
+  constructor(limitBytes) {
+    super(`Codex App Server frame exceeded ${limitBytes} bytes`)
+    this.name = "AppServerFrameLimitError"
+    this.code = "APP_SERVER_FRAME_LIMIT"
+    this.limitBytes = limitBytes
   }
 }
 
@@ -125,6 +135,7 @@ export class CodexAppServerClient {
     clearTimer = clearTimeout,
     now = Date.now,
     onNotification = () => {},
+    maxFrameBytes = 512 * 1024 * 1024,
   } = {}) {
     this.spawn = spawn
     const launch = command ? { command, args: args ?? ["app-server", "--stdio"] } : defaultLaunch()
@@ -139,6 +150,7 @@ export class CodexAppServerClient {
     this.clearTimer = clearTimer
     this.now = now
     this.onNotification = onNotification
+    this.maxFrameBytes = maxFrameBytes
     this.nextId = 1
     this.pending = new Map()
     this.completedIds = new Set()
@@ -208,6 +220,49 @@ export class CodexAppServerClient {
   async resumeThread(threadId, params = {}) {
     const response = await this.request("thread/resume", { ...params, threadId })
     return response.thread.id
+  }
+
+  async readAccount() {
+    const response = await this.request("account/read", { refreshToken: false })
+    const account = response?.account ?? {}
+    return {
+      authType: typeof account.type === "string" ? account.type : null,
+      email: typeof account.email === "string" ? account.email : null,
+      requiresOpenaiAuth: response?.requiresOpenaiAuth === true,
+    }
+  }
+
+  async readThreadUserMessage({ threadId, turnId, messageId }) {
+    const response = await this.request("thread/read", { threadId, includeTurns: true })
+    const thread = response?.thread
+    if (!thread || thread.id !== threadId || !Array.isArray(thread.turns)) return null
+    const turns = thread.turns.filter((candidate) => candidate?.id === turnId)
+    if (turns.length !== 1) return null
+    const turn = turns[0]
+    const items = Array.isArray(turn.items)
+      ? turn.items.filter((candidate) => candidate?.id === messageId)
+      : []
+    if (items.length !== 1) return null
+    const item = items[0]
+    const content = Array.isArray(item.content) ? item.content : []
+    if (item.type !== "userMessage"
+      || content.length !== 1
+      || content[0]?.type !== "text"
+      || typeof content[0]?.text !== "string") return null
+    return Object.freeze({
+      threadId: thread.id,
+      threadSource: typeof thread.threadSource === "string" ? thread.threadSource : null,
+      source: typeof thread.source === "string" ? thread.source : null,
+      cwd: typeof thread.cwd === "string" ? thread.cwd : null,
+      parentThreadId: thread.parentThreadId ?? null,
+      agentRole: thread.agentRole ?? null,
+      turnId: turn.id,
+      turnStatus: typeof turn.status === "string" ? turn.status : null,
+      turnStartedAt: Number.isFinite(turn.startedAt) ? turn.startedAt : null,
+      turnCompletedAt: Number.isFinite(turn.completedAt) ? turn.completedAt : null,
+      messageId: item.id,
+      textSha256: createHash("sha256").update(content[0].text, "utf8").digest("hex"),
+    })
   }
 
   /** @param {any} options */
@@ -309,6 +364,10 @@ export class CodexAppServerClient {
 
   #consume(chunk) {
     this.buffer += String(chunk)
+    if (Buffer.byteLength(this.buffer, "utf8") > this.maxFrameBytes) {
+      this.#fail(new AppServerFrameLimitError(this.maxFrameBytes))
+      return
+    }
     for (;;) {
       const newline = this.buffer.indexOf("\n")
       if (newline < 0) return

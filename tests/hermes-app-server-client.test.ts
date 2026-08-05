@@ -120,6 +120,122 @@ describe("CodexAppServerClient", () => {
     await expect(second).resolves.toBe("thread-old")
   })
 
+  it("reads only non-credential account identity fields", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+
+    const pending = client.readAccount()
+    const request = process.messages().at(-1)
+    expect(request).toEqual({
+      id: expect.any(Number),
+      method: "account/read",
+      params: { refreshToken: false },
+    })
+    process.send({
+      id: request.id,
+      result: {
+        account: {
+          type: "chatgpt",
+          email: "owner@example.com",
+          accessToken: "must-not-escape",
+          credentials: { refreshToken: "must-not-escape-either" },
+        },
+        requiresOpenaiAuth: true,
+      },
+    })
+
+    const account = await pending
+    expect(account).toEqual({
+      authType: "chatgpt",
+      email: "owner@example.com",
+      requiresOpenaiAuth: true,
+    })
+    expect(JSON.stringify(account)).not.toContain("must-not-escape")
+  })
+
+  it("projects one exact direct-user message as a digest without returning its text", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+
+    const pending = client.readThreadUserMessage({
+      threadId: "thread-owner",
+      turnId: "turn-owner",
+      messageId: "item-owner",
+    })
+    const request = process.messages().at(-1)
+    expect(request).toMatchObject({
+      method: "thread/read",
+      params: { threadId: "thread-owner", includeTurns: true },
+    })
+    process.send({
+      id: request.id,
+      result: {
+        thread: {
+          id: "thread-owner",
+          threadSource: "user",
+          source: "vscode",
+          cwd: "C:/repo",
+          parentThreadId: null,
+          agentRole: null,
+          turns: [{
+            id: "turn-owner",
+            status: "completed",
+            startedAt: 100,
+            completedAt: 101,
+            items: [{
+              id: "item-owner",
+              type: "userMessage",
+              content: [{ type: "text", text: "exact owner consent", text_elements: [] }],
+            }],
+          }],
+        },
+      },
+    })
+
+    const result = await pending
+    expect(result).toMatchObject({
+      threadId: "thread-owner",
+      turnId: "turn-owner",
+      messageId: "item-owner",
+      textSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(JSON.stringify(result)).not.toContain("exact owner consent")
+  })
+
+  it("fails closed on duplicate or malformed thread items", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+    const pending = client.readThreadUserMessage({
+      threadId: "thread-owner", turnId: "turn-owner", messageId: "item-owner",
+    })
+    const request = process.messages().at(-1)
+    process.send({
+      id: request.id,
+      result: {
+        thread: {
+          id: "thread-owner",
+          turns: [{ id: "turn-owner", items: [
+            { id: "item-owner", type: "userMessage", content: [{ type: "text", text: "one" }] },
+            { id: "item-owner", type: "userMessage", content: [{ type: "text", text: "two" }] },
+          ] }],
+        },
+      },
+    })
+    await expect(pending).resolves.toBeNull()
+  })
+
+  it("fails closed when an App Server response exceeds the configured frame limit", async () => {
+    const { client, process } = setup({ maxFrameBytes: 256 })
+    await connect(client, process)
+    const pending = client.request("thread/read", { threadId: "thread-owner", includeTurns: true })
+    const request = process.messages().at(-1)
+    process.send({
+      id: request.id,
+      result: { thread: { id: "thread-owner", preview: "x".repeat(512) } },
+    })
+    await expect(pending).rejects.toMatchObject({ code: "APP_SERVER_FRAME_LIMIT" })
+  })
+
   it("starts a thread and captures only sanitized terminal turn data", async () => {
     const notifications: unknown[] = []
     const { client, process } = setup({ onNotification: (event: unknown) => notifications.push(event) })
