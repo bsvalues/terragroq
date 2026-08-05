@@ -403,6 +403,35 @@ describe("Hermes bridge durable state store", () => {
     })
   })
 
+  it("reopens an exact missing-executable validation infrastructure terminal", () => {
+    const { store } = fixture()
+    const validationFailure = "npx vitest run tests/focused.test.ts exited 1\n'vitest' is not recognized as an internal or external command"
+    const first = store.acquireLease({
+      outcomeId: "12", holderId: "one", leaseDurationMs: 1000,
+      metadata: { validationFailure, validationRemediationRound: 3 },
+      idempotencyKey: "missing-tool-acquire",
+    })
+    store.checkpoint({
+      outcomeId: "12", holderId: "one", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED", idempotencyKey: "missing-tool-failed",
+    })
+    store.releaseLease({
+      outcomeId: "12", holderId: "one", fencingToken: first.fencingToken,
+      idempotencyKey: "missing-tool-released",
+    })
+
+    expect(store.reopenValidationInfrastructureWall({
+      outcomeId: "12", expectedFencingToken: first.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "c".repeat(64), idempotencyKey: "missing-tool-recover",
+    })).toMatchObject({
+      leaseStatus: "ABANDONED",
+      state: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+    })
+  })
+
   it("refuses validation infrastructure recovery outside its exact boundary", () => {
     for (const invalid of ["detail", "failure", "owner-touch", "fence"] as const) {
       const { store } = fixture()

@@ -19,7 +19,7 @@ import {
 } from "./outcome-source.mjs"
 import { createHermesRepositoryLifecycle } from "./repository-lifecycle.mjs"
 import { produceRuntimeAgreement } from "./runtime-agreement.mjs"
-import { readHermesState } from "./state-store.mjs"
+import { isValidationInfrastructureFailure, readHermesState } from "./state-store.mjs"
 
 function print(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`)
@@ -181,12 +181,6 @@ async function recoverNativeProviderWall() {
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex")
-}
-
-function isValidationInfrastructureFailure(value) {
-  const failure = String(value ?? "")
-  return /\bspawn EPERM\b/i.test(failure)
-    || /'(?:vitest|next)' is not recognized as an internal or external command/i.test(failure)
 }
 
 export async function recoverValidationInfrastructureWall(options = {}) {
