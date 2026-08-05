@@ -123,7 +123,10 @@ JOIN authority_grant AS authority
   AND authority.ref = q."authorityGrantRef"
   AND authority.status = 'active'
   AND authority."revokedAt" IS NULL
-  AND (authority."expiresAt" IS NULL OR authority."expiresAt" > $2::timestamptz)
+  AND (
+    authority."expiresAt" IS NULL
+    OR authority."expiresAt" AT TIME ZONE 'UTC' > $2::timestamptz
+  )
   AND authority."authorityLevel" = q."authorityLevel"
   AND authority."grantedTo" = q."authoritySubject"
   AND authority.scope = q."outcomeKey"
@@ -239,7 +242,10 @@ SELECT
         AND authority.ref = q."authorityGrantRef"
         AND authority.status = 'active'
         AND authority."revokedAt" IS NULL
-        AND (authority."expiresAt" IS NULL OR authority."expiresAt" > $3::timestamptz)
+        AND (
+          authority."expiresAt" IS NULL
+          OR authority."expiresAt" AT TIME ZONE 'UTC' > $3::timestamptz
+        )
         AND authority."authorityLevel" = q."authorityLevel"
         AND authority."grantedTo" = q."authoritySubject"
         AND authority.scope = q."outcomeKey"

@@ -805,7 +805,10 @@ async function main() {
           AND live_grant.ref = q."authorityGrantRef"
           AND live_grant.status = 'active'
           AND live_grant."revokedAt" IS NULL
-          AND (live_grant."expiresAt" IS NULL OR live_grant."expiresAt" > NOW())
+          AND (
+            live_grant."expiresAt" IS NULL
+            OR live_grant."expiresAt" AT TIME ZONE 'UTC' > NOW()
+          )
           AND live_grant."authorityLevel" = q."authorityLevel"
           AND live_grant."grantedTo" = q."authoritySubject"
           AND live_grant.scope = q."outcomeKey"
@@ -891,7 +894,10 @@ async function main() {
             AND active_grant.ref = $4
             AND active_grant.status = 'active'
             AND active_grant."revokedAt" IS NULL
-            AND (active_grant."expiresAt" IS NULL OR active_grant."expiresAt" > NOW())
+            AND (
+              active_grant."expiresAt" IS NULL
+              OR active_grant."expiresAt" AT TIME ZONE 'UTC' > NOW()
+            )
             AND active_grant."authorityLevel" = q."authorityLevel"
             AND active_grant."grantedTo" = q."authoritySubject"
             AND active_grant.scope = q."outcomeKey"

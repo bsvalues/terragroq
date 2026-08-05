@@ -141,7 +141,10 @@ const LIVE_AUTHORITY_PREDICATE = `
       AND live_grant."ref" = q."authorityGrantRef"
       AND live_grant."status" = 'active'
       AND live_grant."revokedAt" IS NULL
-      AND (live_grant."expiresAt" IS NULL OR live_grant."expiresAt" > $1::timestamptz)
+      AND (
+        live_grant."expiresAt" IS NULL
+        OR live_grant."expiresAt" AT TIME ZONE 'UTC' > $1::timestamptz
+      )
       AND live_grant."authorityLevel" = q."authorityLevel"
       AND live_grant."grantedTo" = q."authoritySubject"
       AND live_grant."scope" = q."outcomeKey"
@@ -925,7 +928,10 @@ WHERE q."userId" = $1
   AND auth_grant."ref" = $5
   AND auth_grant."status" = 'active'
   AND auth_grant."revokedAt" IS NULL
-  AND (auth_grant."expiresAt" IS NULL OR auth_grant."expiresAt" > $6::timestamptz)
+  AND (
+    auth_grant."expiresAt" IS NULL
+    OR auth_grant."expiresAt" AT TIME ZONE 'UTC' > $6::timestamptz
+  )
   AND auth_grant."authorityLevel" = q."authorityLevel"
   AND auth_grant."grantedTo" = q."authoritySubject"
   AND auth_grant."scope" = q."outcomeKey"
@@ -1118,7 +1124,7 @@ WHERE q."userId" = $1
   AND q."authorityState" = 'matched'
   AND expired_grant."status" IN ('active', 'expired')
   AND expired_grant."revokedAt" IS NULL
-  AND expired_grant."expiresAt" <= $2::timestamptz
+  AND expired_grant."expiresAt" AT TIME ZONE 'UTC' <= $2::timestamptz
 ORDER BY ${ORDER_BY}
 FOR UPDATE OF q, expired_grant
 `,
@@ -1526,7 +1532,10 @@ WHERE q."userId" = $1
   AND auth_grant."ref" = $4
   AND auth_grant."status" = 'active'
   AND auth_grant."revokedAt" IS NULL
-  AND (auth_grant."expiresAt" IS NULL OR auth_grant."expiresAt" > $5::timestamptz)
+  AND (
+    auth_grant."expiresAt" IS NULL
+    OR auth_grant."expiresAt" AT TIME ZONE 'UTC' > $5::timestamptz
+  )
   AND auth_grant."authorityLevel" = q."authorityLevel"
   AND auth_grant."grantedTo" = q."authoritySubject"
   AND auth_grant."scope" = q."outcomeKey"
