@@ -7,6 +7,7 @@ import {
   OUTCOME_LIFECYCLE_STATES,
   TERMINAL_OUTCOME_STATES,
 } from "../../lib/outcome-queue/contract.mjs"
+import { isVerifiedPrimaryAuthorization } from "./primary-authorization-provenance.mjs"
 
 const QUEUE_STATES = new Set(OUTCOME_LIFECYCLE_STATES)
 const APPROVAL_STATES = new Set(["approved", "unapproved", "revoked"])
@@ -2306,29 +2307,116 @@ function v12CampaignGrantDraft(scope, userId, issuedAt) {
   return { ...draft, contentHash: requestHash(draft) }
 }
 
-function exactV12CampaignDecisionRecord(value, scope) {
+function v12CampaignDecisionDraft(scope) {
   const spec = V1_2_CAMPAIGN_SPECS[scope]
-  if (!spec || !value || typeof value !== "object") return false
-  return value.ref === `ADR-V12-${spec.suffix}`
-    && value.title === `Approve ${spec.title}`
-    && value.context
-      === "The Primary reviewed one fixed WilliamOS-native product proposal for the #471 continuous V1.2 campaign."
-    && value.decision === "APPROVE"
-    && value.rationale
-      === "This exact R1 UI/read-model outcome is useful product work inside #471 and requires explicit Primary approval before Hermes may acquire it."
-    && value.consequences
-      === "Hermes may execute only this exact queued outcome. The second outcome remains dependency-blocked until the first completes, and every #471 blocked boundary remains enforced."
-    && value.status === "accepted"
-    && value.authority === "binding"
-    && value.owner === "William"
-    && value.scope === scope
-    && sameOrderedStrings(value.evidence, [
+  if (!spec) fail("V1_2_CAMPAIGN_AUTHORITY_SCOPE_WALL")
+  return {
+    ref: `ADR-V12-${spec.suffix}`,
+    title: `Approve ${spec.title}`,
+    context:
+      "The Primary reviewed one fixed WilliamOS-native product proposal for the #471 continuous V1.2 campaign.",
+    decision: "APPROVE",
+    rationale:
+      "This exact R1 UI/read-model outcome is useful product work inside #471 and requires explicit Primary approval before Hermes may acquire it.",
+    consequences:
+      "Hermes may execute only this exact queued outcome. The second outcome remains dependency-blocked until the first completes, and every #471 blocked boundary remains enforced.",
+    status: "accepted",
+    authority: "binding",
+    owner: "William",
+    scope,
+    evidence: [
       "https://github.com/bsvalues/terragroq/issues/471",
       "issue-body-sha256:3771f688ee4c5d2f7e4ff22dbb09c45062a75d503fea5931912b98d1270db73a",
       "https://github.com/bsvalues/terragroq/issues/480",
-    ])
-    && sameOrderedStrings(value.tags, ["v1.2", "continuous-campaign", "primary-approved"])
-    && value.locked === true
+    ],
+    tags: ["v1.2", "continuous-campaign", "primary-approved"],
+    locked: true,
+  }
+}
+
+function exactV12CampaignDecisionRecord(value, scope) {
+  if (!V1_2_CAMPAIGN_SPECS[scope] || !value || typeof value !== "object") return false
+  const expected = v12CampaignDecisionDraft(scope)
+  return value.ref === expected.ref
+    && value.title === expected.title
+    && value.context === expected.context
+    && value.decision === expected.decision
+    && value.rationale === expected.rationale
+    && value.consequences === expected.consequences
+    && value.status === expected.status
+    && value.authority === expected.authority
+    && value.owner === expected.owner
+    && value.scope === expected.scope
+    && sameOrderedStrings(value.evidence, expected.evidence)
+    && sameOrderedStrings(value.tags, expected.tags)
+    && value.locked === expected.locked
+}
+
+function exactV12CampaignCandidateRow(row, userId, expectedVersion) {
+  const spec = V1_2_CAMPAIGN_SPECS[row?.outcomeKey]
+  return Boolean(spec)
+    && row.userId === userId
+    && Number.isSafeInteger(Number(row.goalId))
+    && Number(row.goalId) > 0
+    && typeof row.goalRef === "string"
+    && /^GOAL-\d{4,}$/.test(row.goalRef)
+    && row.title === spec.title
+    && row.objective === spec.objective
+    && sameOrderedStrings(row.dependencyKeys, spec.dependencyKeys)
+    && row.riskClass === "R1"
+    && row.approvalState === "unapproved"
+    && row.approvedBy == null
+    && row.approvedAt == null
+    && row.approvalDecisionId == null
+    && row.authorityState === "unverified"
+    && row.authorityLevel === "A2_WRITE_OWN"
+    && row.authorityGrantRef == null
+    && row.authoritySubject === "operator"
+    && row.authorityAction === "outcome:execute"
+    && row.lifecycleState === "suggested"
+    && row.lifecycleReason === "V1_2_CAMPAIGN_SUGGESTION_REQUIRES_OWNER_APPROVAL"
+    && row.activeWorkOrderId == null
+    && row.executionBinding == null
+    && row.leaseHolder == null
+    && row.leaseToken == null
+    && row.leaseExpiresAt == null
+    && Number(row.fencingToken) === 0
+    && Number(row.version) === expectedVersion
+    && row.acquisitionKey == null
+    && row.terminalResult == null
+    && row.terminalEvidenceId == null
+    && Array.isArray(row.terminalEvidenceRefs)
+    && row.terminalEvidenceRefs.length === 0
+    && row.terminalKey == null
+    && row.supersedesOutcomeKey == null
+    && row.supersededByOutcomeKey == null
+    && row.activatedAt == null
+    && row.terminalAt == null
+    && validTimestampValue(row.suggestedAt)
+    && timestamp(row.createdAt) === timestamp(row.suggestedAt)
+    && timestamp(row.updatedAt) === timestamp(row.suggestedAt)
+}
+
+function exactV12CampaignApprovedRow(row, userId, scope, result) {
+  const spec = V1_2_CAMPAIGN_SPECS[scope]
+  return Boolean(spec && row && result)
+    && row.userId === userId
+    && row.outcomeKey === scope
+    && row.title === spec.title
+    && row.objective === spec.objective
+    && sameOrderedStrings(row.dependencyKeys, spec.dependencyKeys)
+    && row.riskClass === "R1"
+    && row.approvalState === "approved"
+    && row.approvedBy === userId
+    && Number(row.approvalDecisionId) === Number(result.decisionId)
+    && row.authorityState === "matched"
+    && row.authorityLevel === "A2_WRITE_OWN"
+    && row.authorityGrantRef === result.grantRef
+    && row.authoritySubject === "operator"
+    && row.authorityAction === "outcome:execute"
+    && row.lifecycleState === "approved"
+    && row.lifecycleReason === "PRIMARY_CODEX_CONVERSATION_AUTHORIZATION"
+    && Number(row.version) === Number(result.version)
 }
 
 function exactExpiredV12CampaignGrantRecord(value, scope, userId, at) {
@@ -3600,6 +3688,415 @@ export async function resumeOutcomeQueueAfterDecision({
         await connection.query("ROLLBACK")
       } catch {
         // Preserve the primary resume error.
+      }
+    }
+    throw error
+  } finally {
+    await connection.close()
+  }
+}
+
+function primaryAuthorizationConsent(input, now) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("PRIMARY_AUTHORIZATION_CONSENT_INVALID")
+  }
+  const issuedAt = timestamp(input.issuedAt, "PRIMARY_AUTHORIZATION_TIME_INVALID")
+  const expiresAt = timestamp(input.expiresAt, "PRIMARY_AUTHORIZATION_TIME_INVALID")
+  const observedAt = timestamp(now, "PRIMARY_AUTHORIZATION_TIME_INVALID")
+  if (Date.parse(issuedAt) > Date.parse(observedAt)
+    || Date.parse(expiresAt) <= Date.parse(observedAt)
+    || Date.parse(expiresAt) - Date.parse(issuedAt) > 24 * 60 * 60 * 1000) {
+    fail("PRIMARY_AUTHORIZATION_EXPIRED")
+  }
+  const scopes = Array.isArray(input.scopes) ? input.scopes : []
+  if (input.version !== 1
+    || input.action !== "APPROVE"
+    || input.identityStatus !== "VERIFIED_PRIMARY_CODEX_APP_SERVER"
+    || input.accountEmail !== "bsvalues@gmail.com"
+    || input.threadSource !== "user"
+    || input.originator !== "Codex App Server"
+    || !/^[0-9a-f-]{36}$/.test(String(input.threadId ?? ""))
+    || !/^[0-9a-f-]{36}$/.test(String(input.turnId ?? ""))
+    || !/^item-[0-9a-z_-]+$/i.test(String(input.messageId ?? ""))
+    || !/^[a-f0-9]{64}$/.test(String(input.messageSha256 ?? ""))
+    || !/^[a-f0-9]{64}$/.test(String(input.sessionMetaSha256 ?? ""))
+    || !/^[a-f0-9-]{16,100}$/.test(String(input.nonce ?? ""))
+    || scopes.length !== V1_2_CAMPAIGN_OUTCOME_KEYS.size) {
+    fail("PRIMARY_AUTHORIZATION_CONSENT_INVALID")
+  }
+  const expectedKeys = [...V1_2_CAMPAIGN_OUTCOME_KEYS]
+  if (!scopes.every((entry, index) => (
+    entry && typeof entry === "object"
+    && entry.outcomeKey === expectedKeys[index]
+    && Number.isSafeInteger(entry.expectedVersion)
+    && entry.expectedVersion >= 0
+  ))) {
+    fail("PRIMARY_AUTHORIZATION_SCOPE_WALL")
+  }
+  const canonical = {
+    version: input.version,
+    action: input.action,
+    identityStatus: input.identityStatus,
+    accountEmail: input.accountEmail,
+    threadSource: input.threadSource,
+    originator: input.originator,
+    threadId: input.threadId,
+    turnId: input.turnId,
+    messageId: input.messageId,
+    messageSha256: input.messageSha256,
+    sessionMetaSha256: input.sessionMetaSha256,
+    nonce: input.nonce,
+    issuedAt,
+    expiresAt,
+    scopes: scopes.map((entry) => ({
+      outcomeKey: entry.outcomeKey,
+      expectedVersion: entry.expectedVersion,
+    })),
+  }
+  return { ...canonical, digest: requestHash(canonical) }
+}
+
+/**
+ * Persist one exact, locally-attested Primary decision. This is the governed
+ * mutation boundary used by the native authorization bridge; it never accepts
+ * raw conversation text or a caller-selected authority scope.
+ */
+export async function recordVerifiedPrimaryAuthorization({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  authorization,
+} = {}) {
+  if (!isVerifiedPrimaryAuthorization(authorization)) {
+    fail("PRIMARY_AUTHORIZATION_PROVENANCE_WALL")
+  }
+  const recordedAt = new Date()
+  authorization = primaryAuthorizationConsent(authorization, recordedAt)
+  const connection = await openQuery(query, databaseUrl, true)
+  let begun = false
+  try {
+    await connection.query("BEGIN")
+    begun = true
+    for (const lock of [
+      "primary-authorization-bridge",
+      "goal-outcome-intake",
+      "outcome-queue",
+      "authority-grant-allocation",
+    ]) {
+      await connection.query("SELECT pg_advisory_xact_lock(hashtext($1))", [lock])
+    }
+
+    const owners = await connection.query(
+      `SELECT "id", lower("email") AS "email"
+       FROM "user"
+       WHERE lower("email") = $1
+       ORDER BY "id"
+       FOR UPDATE`,
+      [authorization.accountEmail],
+    )
+    if (owners.rows.length !== 1) fail("PRIMARY_AUTHORIZATION_IDENTITY_WALL")
+    const userId = userScope(owners.rows[0].id)
+
+    const receiptKeys = authorization.scopes.map((scope) => (
+      `primary-authorization:${authorization.nonce}:${scope.outcomeKey}`
+    ))
+    const existingReceipts = await connection.query(
+      `SELECT * FROM "outcome_queue_mutation_receipt"
+       WHERE "userId" = $1 AND "idempotencyKey" = ANY($2::text[])
+       ORDER BY "idempotencyKey"`,
+      [userId, receiptKeys],
+    )
+    if (existingReceipts.rows.length > 0) {
+      if (existingReceipts.rows.length !== receiptKeys.length) {
+        fail("PRIMARY_AUTHORIZATION_REPLAY_WALL")
+      }
+      for (const receipt of existingReceipts.rows) {
+        const scope = authorization.scopes.find((entry) => entry.outcomeKey === receipt.outcomeKey)
+        const expectedBinding = {
+          authorizationDigest: authorization.digest,
+          outcomeKey: scope?.outcomeKey,
+          expectedVersion: scope?.expectedVersion,
+        }
+        const expectedDecision = scope ? v12CampaignDecisionDraft(scope.outcomeKey) : null
+        const expectedGrant = scope
+          ? v12CampaignGrantDraft(scope.outcomeKey, userId, authorization.issuedAt)
+          : null
+        const result = receipt.resultBinding
+        const exactResult = result && typeof result === "object"
+          && Number.isSafeInteger(Number(result.decisionId))
+          && Number(result.decisionId) > 0
+          && canonicalJson(result) === canonicalJson({
+            authorizationDigest: authorization.digest,
+            outcomeKey: scope?.outcomeKey,
+            version: Number(scope?.expectedVersion) + 1,
+            decisionId: Number(result.decisionId),
+            decisionRef: expectedDecision?.ref,
+            grantRef: expectedGrant?.ref,
+          })
+        if (!scope
+          || receipt.operation !== "primary_authorization.approve"
+          || receipt.requestHash !== requestHash(expectedBinding)
+          || canonicalJson(receipt.requestBinding) !== canonicalJson(expectedBinding)
+          || !exactResult) {
+          fail("PRIMARY_AUTHORIZATION_REPLAY_WALL")
+        }
+      }
+      const replayResults = existingReceipts.rows.map((row) => row.resultBinding)
+      const replayKeys = authorization.scopes.map((scope) => scope.outcomeKey)
+      const replayDecisionRefs = replayResults.map((result) => result.decisionRef)
+      const replayGrantRefs = replayResults.map((result) => result.grantRef)
+      const [replayQueue, replayDecisions, replayGrants] = await Promise.all([
+        connection.query(
+          `SELECT ${QUEUE_COLUMNS}
+           FROM "outcome_queue_item" AS q
+           WHERE q."userId" = $1 AND q."outcomeKey" = ANY($2::text[])
+           ORDER BY q."queueOrder", q."createdAt", q."outcomeKey"
+           FOR SHARE OF q`,
+          [userId, replayKeys],
+        ),
+        connection.query(
+          `SELECT * FROM "decision"
+           WHERE "userId" = $1 AND "ref" = ANY($2::text[])
+           ORDER BY "ref" FOR SHARE`,
+          [userId, replayDecisionRefs],
+        ),
+        connection.query(
+          `SELECT * FROM "authority_grant"
+           WHERE "userId" = $1 AND "ref" = ANY($2::text[])
+           ORDER BY "ref" FOR SHARE`,
+          [userId, replayGrantRefs],
+        ),
+      ])
+      if (replayQueue.rows.length !== authorization.scopes.length
+        || replayDecisions.rows.length !== authorization.scopes.length
+        || replayGrants.rows.length !== authorization.scopes.length) {
+        fail("PRIMARY_AUTHORIZATION_REPLAY_STATE_WALL")
+      }
+      const queueByKey = new Map(replayQueue.rows.map((row) => [row.outcomeKey, row]))
+      const decisionsByRef = new Map(replayDecisions.rows.map((row) => [row.ref, row]))
+      const grantsByRef = new Map(replayGrants.rows.map((row) => [row.ref, row]))
+      for (const scope of authorization.scopes) {
+        const result = replayResults.find((entry) => entry.outcomeKey === scope.outcomeKey)
+        const decision = decisionsByRef.get(result?.decisionRef)
+        const grant = grantsByRef.get(result?.grantRef)
+        const expectedGrant = v12CampaignGrantDraft(
+          scope.outcomeKey,
+          userId,
+          authorization.issuedAt,
+        )
+        if (!exactV12CampaignApprovedRow(queueByKey.get(scope.outcomeKey), userId, scope.outcomeKey, result)
+          || Number(decision?.id) !== Number(result?.decisionId)
+          || !exactV12CampaignDecisionRecord(decision, scope.outcomeKey)
+          || !exactNewV12CampaignGrantRecord(grant, expectedGrant)
+          || grant.status !== "active"
+          || Date.parse(timestamp(grant.expiresAt, "PRIMARY_AUTHORIZATION_REPLAY_STATE_WALL"))
+            <= recordedAt.getTime()) {
+          fail("PRIMARY_AUTHORIZATION_REPLAY_STATE_WALL")
+        }
+      }
+      await connection.query("COMMIT")
+      begun = false
+      return {
+        status: "REPLAYED",
+        userId,
+        authorizationDigest: authorization.digest,
+        outcomes: replayResults,
+      }
+    }
+
+    const keys = authorization.scopes.map((entry) => entry.outcomeKey)
+    const selected = await connection.query(
+      `SELECT ${QUEUE_COLUMNS}
+       FROM "outcome_queue_item" AS q
+       WHERE q."userId" = $1 AND q."outcomeKey" = ANY($2::text[])
+       ORDER BY q."queueOrder", q."createdAt", q."outcomeKey"
+       FOR UPDATE OF q`,
+      [userId, keys],
+    )
+    if (selected.rows.length !== keys.length) fail("PRIMARY_AUTHORIZATION_SCOPE_WALL")
+    const rowsByKey = new Map(selected.rows.map((row) => [row.outcomeKey, row]))
+    for (const scope of authorization.scopes) {
+      if (!exactV12CampaignCandidateRow(
+        rowsByKey.get(scope.outcomeKey),
+        userId,
+        scope.expectedVersion,
+      )) {
+        fail("PRIMARY_AUTHORIZATION_STALE_WALL")
+      }
+    }
+
+    const recorded = []
+    for (const scope of authorization.scopes) {
+      const row = rowsByKey.get(scope.outcomeKey)
+      const decisionDraft = v12CampaignDecisionDraft(scope.outcomeKey)
+      const grantDraft = v12CampaignGrantDraft(scope.outcomeKey, userId, authorization.issuedAt)
+      const collisions = await connection.query(
+        `SELECT
+           EXISTS(SELECT 1 FROM "decision" WHERE "userId" = $1 AND "ref" = $2) AS "decision",
+           EXISTS(SELECT 1 FROM "authority_grant" WHERE "userId" = $1 AND "ref" = $3) AS "grant"`,
+        [userId, decisionDraft.ref, grantDraft.ref],
+      )
+      if (collisions.rows[0]?.decision || collisions.rows[0]?.grant) {
+        fail("PRIMARY_AUTHORIZATION_REFERENCE_COLLISION_WALL")
+      }
+
+      const insertedDecision = await connection.query(
+        `INSERT INTO "decision" (
+           "userId", "ref", "title", "context", "decision", "rationale",
+           "consequences", "status", "authority", "owner", "scope",
+           "evidence", "tags", "locked", "decidedAt", "createdAt", "updatedAt"
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+           $12::text[], $13::text[], $14, $15::timestamptz,
+           $15::timestamptz, $15::timestamptz
+         ) RETURNING *`,
+        [
+          userId, decisionDraft.ref, decisionDraft.title, decisionDraft.context,
+          decisionDraft.decision, decisionDraft.rationale, decisionDraft.consequences,
+          decisionDraft.status, decisionDraft.authority, decisionDraft.owner,
+          decisionDraft.scope, decisionDraft.evidence, decisionDraft.tags,
+          decisionDraft.locked, authorization.issuedAt,
+        ],
+      )
+      const approval = insertedDecision.rows[0]
+      if (!exactV12CampaignDecisionRecord(approval, scope.outcomeKey)) {
+        fail("PRIMARY_AUTHORIZATION_DECISION_ATOMICITY_WALL")
+      }
+
+      const insertedGrant = await connection.query(
+        `INSERT INTO "authority_grant" (
+           "userId", "ref", "workOrderId", "grantedBy", "grantedTo",
+           "authorityLevel", "scope", "allowedActions", "blockedActions",
+           "reason", "status", "expiresAt", "revokedAt", "revokedBy",
+           "revokeReason", "contentHash", "createdAt"
+         ) VALUES (
+           $1, $2, NULL, $1, $3, $4, $5, $6::text[], $7::text[],
+           $8, $9, $10::timestamptz, NULL, NULL, NULL, $11,
+           $12::timestamptz
+         ) RETURNING *`,
+        [
+          userId, grantDraft.ref, grantDraft.grantedTo, grantDraft.authorityLevel,
+          grantDraft.scope, grantDraft.allowedActions, grantDraft.blockedActions,
+          grantDraft.reason, grantDraft.status, grantDraft.expiresAt,
+          grantDraft.contentHash, grantDraft.createdAt,
+        ],
+      )
+      const grant = insertedGrant.rows[0]
+      if (!exactNewV12CampaignGrantRecord(grant, grantDraft)) {
+        fail("PRIMARY_AUTHORIZATION_GRANT_ATOMICITY_WALL")
+      }
+
+      const approved = await connection.query(
+        `UPDATE "outcome_queue_item"
+         SET "approvalState" = 'approved',
+             "approvedBy" = $4,
+             "approvedAt" = $5::timestamptz,
+             "approvalDecisionId" = $6,
+             "authorityState" = 'matched',
+             "authorityGrantRef" = $7,
+             "lifecycleState" = 'approved',
+             "lifecycleReason" = 'PRIMARY_CODEX_CONVERSATION_AUTHORIZATION',
+             "version" = "version" + 1,
+             "updatedAt" = $5::timestamptz
+         WHERE "id" = $1 AND "userId" = $2 AND "outcomeKey" = $3
+           AND "version" = $8 AND "lifecycleState" = 'suggested'
+           AND "approvalState" = 'unapproved' AND "authorityState" = 'unverified'
+         RETURNING "outcomeKey", "version", "approvalDecisionId", "authorityGrantRef"`,
+        [
+          row.id, userId, scope.outcomeKey, userId, authorization.issuedAt,
+          approval.id, grant.ref, scope.expectedVersion,
+        ],
+      )
+      if (approved.rows.length !== 1) fail("PRIMARY_AUTHORIZATION_QUEUE_ATOMICITY_WALL")
+
+      const auditMetadata = {
+        authorizationDigest: authorization.digest,
+        source: "codex-desktop-direct-user",
+        accountEmailHash: requestHash(authorization.accountEmail),
+        threadId: authorization.threadId,
+        turnId: authorization.turnId,
+        messageId: authorization.messageId,
+        messageSha256: authorization.messageSha256,
+        sessionMetaSha256: authorization.sessionMetaSha256,
+        consentExpiresAt: authorization.expiresAt,
+        outcomeKey: scope.outcomeKey,
+        expectedVersion: scope.expectedVersion,
+        decisionRef: approval.ref,
+        grantRef: grant.ref,
+      }
+      await connection.query(
+        `INSERT INTO "governance_event" (
+           "userId", "eventType", "entityType", "entityId", "actor",
+           "reason", "afterHash", "metadata", "createdAt"
+         ) VALUES (
+           $1, 'PRIMARY_AUTHORIZATION_BRIDGE_RECORDED', 'authority_grant',
+           $2, 'primary', $3, $4, $5::jsonb, $6::timestamptz
+         )`,
+        [
+          userId, String(grant.id),
+          `Direct Codex Desktop owner consent authorizes only ${scope.outcomeKey}.`,
+          requestHash({ grant: grantDraft, authorizationDigest: authorization.digest }),
+          JSON.stringify({ ...auditMetadata, ownerConsentIssuedAt: authorization.issuedAt,
+            recordedAt: recordedAt.toISOString() }), recordedAt.toISOString(),
+        ],
+      )
+      await connection.query(
+        `INSERT INTO "event_log" (
+           "userId", "type", "summary", "register", "refId", "metadata", "createdAt"
+         ) VALUES (
+           $1, 'primary.authorization.recorded', $2, 'authority', $3,
+           $4::jsonb, $5::timestamptz
+         )`,
+        [
+          userId, `${approval.ref}: exact Codex Desktop consent recorded`, grant.id,
+          JSON.stringify({ ...auditMetadata, ownerConsentIssuedAt: authorization.issuedAt,
+            recordedAt: recordedAt.toISOString() }), recordedAt.toISOString(),
+        ],
+      )
+
+      const requestBinding = {
+        authorizationDigest: authorization.digest,
+        outcomeKey: scope.outcomeKey,
+        expectedVersion: scope.expectedVersion,
+      }
+      const resultBinding = {
+        authorizationDigest: authorization.digest,
+        outcomeKey: scope.outcomeKey,
+        version: approved.rows[0].version,
+        decisionId: approval.id,
+        decisionRef: approval.ref,
+        grantRef: grant.ref,
+      }
+      await connection.query(
+        `INSERT INTO "outcome_queue_mutation_receipt" (
+           "userId", "idempotencyKey", "operation", "outcomeKey",
+           "requestHash", "requestBinding", "resultBinding", "createdAt"
+         ) VALUES (
+           $1, $2, 'primary_authorization.approve', $3, $4,
+           $5::jsonb, $6::jsonb, $7::timestamptz
+         )`,
+        [
+          userId, `primary-authorization:${authorization.nonce}:${scope.outcomeKey}`,
+          scope.outcomeKey, requestHash(requestBinding), JSON.stringify(requestBinding),
+          JSON.stringify(resultBinding), recordedAt.toISOString(),
+        ],
+      )
+      recorded.push(resultBinding)
+    }
+
+    await connection.query("COMMIT")
+    begun = false
+    return {
+      status: "RECORDED",
+      userId,
+      authorizationDigest: authorization.digest,
+      outcomes: recorded,
+    }
+  } catch (error) {
+    if (begun) {
+      try {
+        await connection.query("ROLLBACK")
+      } catch {
+        // Preserve the authorization failure.
       }
     }
     throw error

@@ -120,6 +120,142 @@ describe("CodexAppServerClient", () => {
     await expect(second).resolves.toBe("thread-old")
   })
 
+  it("reads only non-credential account identity fields", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+
+    const pending = client.readAccount()
+    const request = process.messages().at(-1)
+    expect(request).toEqual({
+      id: expect.any(Number),
+      method: "account/read",
+      params: { refreshToken: false },
+    })
+    process.send({
+      id: request.id,
+      result: {
+        account: {
+          type: "chatgpt",
+          email: "owner@example.com",
+          accessToken: "must-not-escape",
+          credentials: { refreshToken: "must-not-escape-either" },
+        },
+        requiresOpenaiAuth: true,
+      },
+    })
+
+    const account = await pending
+    expect(account).toEqual({
+      authType: "chatgpt",
+      email: "owner@example.com",
+      requiresOpenaiAuth: true,
+    })
+    expect(JSON.stringify(account)).not.toContain("must-not-escape")
+  })
+
+  it("projects one exact direct-user message as a digest without returning its text", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+
+    const pending = client.readThreadUserMessage({
+      threadId: "thread-owner",
+      turnId: "turn-owner",
+      messageId: "item-owner",
+    })
+    const request = process.messages().at(-1)
+    expect(request).toMatchObject({
+      method: "thread/read",
+      params: { threadId: "thread-owner", includeTurns: true },
+    })
+    process.send({
+      id: request.id,
+      result: {
+        thread: {
+          id: "thread-owner",
+          threadSource: "user",
+          source: "vscode",
+          cwd: "C:/repo",
+          parentThreadId: null,
+          agentRole: null,
+          turns: [{
+            id: "turn-owner",
+            status: "completed",
+            startedAt: 100,
+            completedAt: 101,
+            items: [{
+              id: "item-owner",
+              type: "userMessage",
+              content: [{ type: "text", text: "exact owner consent", text_elements: [] }],
+            }],
+          }],
+        },
+      },
+    })
+
+    const result = await pending
+    expect(result).toMatchObject({
+      threadId: "thread-owner",
+      turnId: "turn-owner",
+      messageId: "item-owner",
+      textSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(JSON.stringify(result)).not.toContain("exact owner consent")
+  })
+
+  it("fails closed on duplicate or malformed thread items", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+    const pending = client.readThreadUserMessage({
+      threadId: "thread-owner", turnId: "turn-owner", messageId: "item-owner",
+    })
+    const request = process.messages().at(-1)
+    process.send({
+      id: request.id,
+      result: {
+        thread: {
+          id: "thread-owner",
+          turns: [{ id: "turn-owner", items: [
+            { id: "item-owner", type: "userMessage", content: [{ type: "text", text: "one" }] },
+            { id: "item-owner", type: "userMessage", content: [{ type: "text", text: "two" }] },
+          ] }],
+        },
+      },
+    })
+    await expect(pending).resolves.toBeNull()
+  })
+
+  it("fails closed when an App Server response exceeds the configured frame limit", async () => {
+    const { client, process } = setup({ maxFrameBytes: 256 })
+    await connect(client, process)
+    const pending = client.request("thread/read", { threadId: "thread-owner", includeTurns: true })
+    const request = process.messages().at(-1)
+    process.send({
+      id: request.id,
+      result: { thread: { id: "thread-owner", preview: "x".repeat(512) } },
+    })
+    await expect(pending).rejects.toMatchObject({ code: "APP_SERVER_FRAME_LIMIT" })
+    expect(process.killed).toBe(true)
+    expect(process.stdout.listenerCount("data")).toBe(0)
+    expect(() => client.request("thread/read", { threadId: "later" })).toThrow(
+      "Codex App Server is not connected",
+    )
+  })
+
+  it("enforces the frame limit per newline-delimited frame", async () => {
+    const { client, process } = setup({ maxFrameBytes: 128 })
+    await connect(client, process)
+    const first = client.request("one", {})
+    const second = client.request("two", {})
+    const [firstRequest, secondRequest] = process.messages().slice(-2)
+    process.stdout.write(
+      `${JSON.stringify({ id: firstRequest.id, result: { ok: "a".repeat(20) } })}\n`
+      + `${JSON.stringify({ id: secondRequest.id, result: { ok: "b".repeat(20) } })}\n`,
+    )
+    await expect(first).resolves.toEqual({ ok: "a".repeat(20) })
+    await expect(second).resolves.toEqual({ ok: "b".repeat(20) })
+    expect(process.killed).toBe(false)
+  })
+
   it("starts a thread and captures only sanitized terminal turn data", async () => {
     const notifications: unknown[] = []
     const { client, process } = setup({ onNotification: (event: unknown) => notifications.push(event) })

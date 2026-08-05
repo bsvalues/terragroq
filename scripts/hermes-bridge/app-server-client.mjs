@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process"
+import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 
@@ -56,6 +57,15 @@ export class AppServerCancelledError extends Error {
     super("Codex App Server turn was cancelled")
     this.name = "AppServerCancelledError"
     this.code = "APP_SERVER_CANCELLED"
+  }
+}
+
+export class AppServerFrameLimitError extends Error {
+  constructor(limitBytes) {
+    super(`Codex App Server frame exceeded ${limitBytes} bytes`)
+    this.name = "AppServerFrameLimitError"
+    this.code = "APP_SERVER_FRAME_LIMIT"
+    this.limitBytes = limitBytes
   }
 }
 
@@ -125,6 +135,7 @@ export class CodexAppServerClient {
     clearTimer = clearTimeout,
     now = Date.now,
     onNotification = () => {},
+    maxFrameBytes = 512 * 1024 * 1024,
   } = {}) {
     this.spawn = spawn
     const launch = command ? { command, args: args ?? ["app-server", "--stdio"] } : defaultLaunch()
@@ -139,10 +150,14 @@ export class CodexAppServerClient {
     this.clearTimer = clearTimer
     this.now = now
     this.onNotification = onNotification
+    this.maxFrameBytes = maxFrameBytes
     this.nextId = 1
     this.pending = new Map()
     this.completedIds = new Set()
     this.buffer = ""
+    this.bufferBytes = 0
+    this.frameTerminated = false
+    this.consumeData = (chunk) => this.#consume(chunk)
     this.process = null
     this.turnWaiter = null
     this.startingThreadId = null
@@ -162,7 +177,7 @@ export class CodexAppServerClient {
       windowsHide: true,
     })
     this.process.stdout.setEncoding?.("utf8")
-    this.process.stdout.on("data", (chunk) => this.#consume(chunk))
+    this.process.stdout.on("data", this.consumeData)
     this.process.stderr.resume?.()
     this.process.on("error", (error) => this.#fail(error))
     this.process.on("exit", (code, signal) => {
@@ -208,6 +223,49 @@ export class CodexAppServerClient {
   async resumeThread(threadId, params = {}) {
     const response = await this.request("thread/resume", { ...params, threadId })
     return response.thread.id
+  }
+
+  async readAccount() {
+    const response = await this.request("account/read", { refreshToken: false })
+    const account = response?.account ?? {}
+    return {
+      authType: typeof account.type === "string" ? account.type : null,
+      email: typeof account.email === "string" ? account.email : null,
+      requiresOpenaiAuth: response?.requiresOpenaiAuth === true,
+    }
+  }
+
+  async readThreadUserMessage({ threadId, turnId, messageId }) {
+    const response = await this.request("thread/read", { threadId, includeTurns: true })
+    const thread = response?.thread
+    if (!thread || thread.id !== threadId || !Array.isArray(thread.turns)) return null
+    const turns = thread.turns.filter((candidate) => candidate?.id === turnId)
+    if (turns.length !== 1) return null
+    const turn = turns[0]
+    const items = Array.isArray(turn.items)
+      ? turn.items.filter((candidate) => candidate?.id === messageId)
+      : []
+    if (items.length !== 1) return null
+    const item = items[0]
+    const content = Array.isArray(item.content) ? item.content : []
+    if (item.type !== "userMessage"
+      || content.length !== 1
+      || content[0]?.type !== "text"
+      || typeof content[0]?.text !== "string") return null
+    return Object.freeze({
+      threadId: thread.id,
+      threadSource: typeof thread.threadSource === "string" ? thread.threadSource : null,
+      source: typeof thread.source === "string" ? thread.source : null,
+      cwd: typeof thread.cwd === "string" ? thread.cwd : null,
+      parentThreadId: thread.parentThreadId ?? null,
+      agentRole: thread.agentRole ?? null,
+      turnId: turn.id,
+      turnStatus: typeof turn.status === "string" ? turn.status : null,
+      turnStartedAt: Number.isFinite(turn.startedAt) ? turn.startedAt : null,
+      turnCompletedAt: Number.isFinite(turn.completedAt) ? turn.completedAt : null,
+      messageId: item.id,
+      textSha256: createHash("sha256").update(content[0].text, "utf8").digest("hex"),
+    })
   }
 
   /** @param {any} options */
@@ -296,9 +354,12 @@ export class CodexAppServerClient {
 
   close() {
     if (!this.process) return
+    this.process.stdout.removeListener?.("data", this.consumeData)
     this.process.stdin.end?.()
     this.process.kill?.()
     this.process = null
+    this.buffer = ""
+    this.bufferBytes = 0
     this.#fail(new AppServerCancelledError())
   }
 
@@ -308,18 +369,39 @@ export class CodexAppServerClient {
   }
 
   #consume(chunk) {
-    this.buffer += String(chunk)
+    if (this.frameTerminated || !this.process) return
+    let remaining = String(chunk)
     for (;;) {
-      const newline = this.buffer.indexOf("\n")
+      const newline = remaining.indexOf("\n")
+      const segment = newline < 0 ? remaining : remaining.slice(0, newline)
+      const segmentBytes = Buffer.byteLength(segment, "utf8")
+      if (this.bufferBytes + segmentBytes > this.maxFrameBytes) {
+        const error = new AppServerFrameLimitError(this.maxFrameBytes)
+        this.frameTerminated = true
+        this.wall = error
+        this.buffer = ""
+        this.bufferBytes = 0
+        this.#fail(error)
+        this.process.stdout.removeListener?.("data", this.consumeData)
+        this.process.stdin.end?.()
+        this.process.kill?.()
+        this.process = null
+        return
+      }
+      this.buffer += segment
+      this.bufferBytes += segmentBytes
       if (newline < 0) return
-      const line = this.buffer.slice(0, newline).trim()
-      this.buffer = this.buffer.slice(newline + 1)
+      const line = this.buffer.trim()
+      this.buffer = ""
+      this.bufferBytes = 0
+      remaining = remaining.slice(newline + 1)
       if (!line) continue
       try {
         this.#handle(JSON.parse(line))
       } catch (error) {
         this.#fail(error)
       }
+      if (remaining.length === 0) return
     }
   }
 
