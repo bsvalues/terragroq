@@ -15,7 +15,11 @@ const SHA = /^[0-9a-f]{40}$/
 const SHA256 = /^[0-9a-f]{64}$/
 const SENSITIVE_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 const VALIDATION_INFRASTRUCTURE_DETAIL = "VALIDATION_REMEDIATION_EXHAUSTED"
-const VALIDATION_INFRASTRUCTURE_FAILURE = /\bspawn EPERM\b/i
+export function isValidationInfrastructureFailure(value) {
+  const failure = String(value ?? "")
+  return /\bspawn EPERM\b/i.test(failure)
+    || /'(?:vitest|next)' is not recognized as an internal or external command/i.test(failure)
+}
 const REVIEW_REMEDIATION_DETAIL = "REVIEW_REMEDIATION_EXHAUSTED"
 const TURN_RESULTS = new Set([
   "READY_FOR_VALIDATION",
@@ -762,7 +766,7 @@ export function reopenValidationInfrastructureWall(filePath, request, options = 
       || current.checkpoint.detail !== VALIDATION_INFRASTRUCTURE_DETAIL
       || request.expectedDetail !== VALIDATION_INFRASTRUCTURE_DETAIL
       || typeof current.metadata.validationFailure !== "string"
-      || !VALIDATION_INFRASTRUCTURE_FAILURE.test(current.metadata.validationFailure)
+      || !isValidationInfrastructureFailure(current.metadata.validationFailure)
       || textDigest(current.metadata.validationFailure) !== request.expectedValidationFailureDigest
       || typeof request.proofDigest !== "string"
       || !SHA256.test(request.proofDigest)

@@ -19,7 +19,7 @@ import {
 } from "./outcome-source.mjs"
 import { createHermesRepositoryLifecycle } from "./repository-lifecycle.mjs"
 import { produceRuntimeAgreement } from "./runtime-agreement.mjs"
-import { readHermesState } from "./state-store.mjs"
+import { isValidationInfrastructureFailure, readHermesState } from "./state-store.mjs"
 
 function print(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`)
@@ -196,7 +196,7 @@ export async function recoverValidationInfrastructureWall(options = {}) {
     (execution?.lease?.status === "RELEASED"
       && execution?.checkpoint?.state === "FAILED_TERMINAL"
       && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
-      && /\bspawn EPERM\b/i.test(String(execution?.metadata?.validationFailure ?? "")))
+      && isValidationInfrastructureFailure(execution?.metadata?.validationFailure))
     || (execution?.lease?.status === "ABANDONED"
       && execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
       && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE

@@ -220,6 +220,36 @@ describe("Hermes bridge CLI", () => {
     expect(recoverOutcome.mock.calls[0][0].proofDigest).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  it("classifies a missing isolated-worktree Vitest executable as recoverable infrastructure", async () => {
+    const validationFailure = "npx vitest run tests/focused.test.ts exited 1\n'vitest' is not recognized as an internal or external command"
+    const candidate = {
+      outcomeId: "12", fencingToken: 54,
+      lease: { status: "RELEASED" },
+      checkpoint: { sequence: 25, state: "FAILED_TERMINAL", detail: "VALIDATION_REMEDIATION_EXHAUSTED" },
+      metadata: { validationFailure },
+    }
+    const reopenValidationInfrastructureWall = vi.fn(() => ({ checkpointSequence: 26 }))
+    const orchestrator = {
+      state: {
+        read: () => ({
+          ownerTouchCounters: {
+            OWNER_OPERATION_TOUCH_COUNT: 0, OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+            OWNER_DIAGNOSTIC_TOUCH_COUNT: 0, OWNER_ROUTINE_DECISION_COUNT: 0,
+            OWNER_ROUTINE_CONTACT_COUNT: 0,
+          },
+          executions: { "12": candidate },
+        }),
+        reopenValidationInfrastructureWall,
+      },
+    }
+    const recordProof = vi.fn(async () => true)
+    const recoverOutcome = vi.fn(async () => true)
+
+    await expect(recoverValidationInfrastructureWall({ orchestrator, recordProof, recoverOutcome }))
+      .resolves.toMatchObject({ result: "RECOVERED", outcomeId: "12", proofRecorded: true })
+    expect(reopenValidationInfrastructureWall).toHaveBeenCalledOnce()
+  })
+
   it("recovers one contained external-tool wall through the supported CLI path", () => {
     const recover = vi.fn(() => ({ checkpointSequence: 8 }))
     const root = process.cwd()
