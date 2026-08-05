@@ -12,7 +12,39 @@ import {
   index,
   unique,
   uniqueIndex,
+  customType,
 } from "drizzle-orm/pg-core"
+
+const utcWallTimestamp = customType<{ data: Date; driverData: string | Date }>({
+  dataType() {
+    return "timestamp"
+  },
+  toDriver(value) {
+    if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+      throw new Error("AUTHORITY_TIMESTAMP_INVALID")
+    }
+    return value.toISOString().slice(0, -1).replace("T", " ")
+  },
+  fromDriver(value) {
+    if (value instanceof Date) {
+      return new Date(Date.UTC(
+        value.getFullYear(),
+        value.getMonth(),
+        value.getDate(),
+        value.getHours(),
+        value.getMinutes(),
+        value.getSeconds(),
+        value.getMilliseconds(),
+      ))
+    }
+    const normalized = value.trim().replace(" ", "T")
+    const instant = new Date(/[zZ]$|[+-]\d\d(?::?\d\d)?$/.test(normalized)
+      ? normalized
+      : `${normalized}Z`)
+    if (!Number.isFinite(instant.getTime())) throw new Error("AUTHORITY_TIMESTAMP_INVALID")
+    return instant
+  },
+})
 
 /* ------------------------------------------------------------------ */
 /* Better Auth tables (camelCase columns required by Better Auth)      */
@@ -639,12 +671,12 @@ export const authorityGrant = pgTable("authority_grant", {
   blockedActions: text("blockedActions").array().default([]).notNull(),
   reason: text("reason"),
   status: text("status").default("active").notNull(),
-  expiresAt: timestamp("expiresAt"),
-  revokedAt: timestamp("revokedAt"),
+  expiresAt: utcWallTimestamp("expiresAt"),
+  revokedAt: utcWallTimestamp("revokedAt"),
   revokedBy: text("revokedBy"),
   revokeReason: text("revokeReason"),
   contentHash: text("contentHash"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  createdAt: utcWallTimestamp("createdAt").default(sql`timezone('UTC', now())`).notNull(),
 })
 
 // Scoped human access grants. These are NOT authority grants: they may open one

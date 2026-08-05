@@ -9,7 +9,7 @@ import { requiresRecheck, computeFreshness } from "@/lib/governance/truth"
 import { classifyAgentClaim } from "@/lib/governance/agent-claims"
 import { validateRelease, isVagueRelease } from "@/lib/governance/locks"
 import { detectConflicts, isBlockingSeverity } from "@/lib/governance/conflicts"
-import type { WorkOrder, AuthorityGrant } from "@/lib/db/schema"
+import { authorityGrant, type WorkOrder, type AuthorityGrant } from "@/lib/db/schema"
 
 /* ------------------------------------------------------------------ */
 /* Fixtures                                                            */
@@ -158,6 +158,15 @@ describe("Execute loop is non-mutating and authority-gated", () => {
 })
 
 describe("Authority grants expire and revoke", () => {
+  it("maps legacy authority timestamps as UTC wall time in both directions", () => {
+    const databaseValue = new Date(2026, 7, 4, 12, 30, 15, 250)
+    expect(authorityGrant.expiresAt.mapFromDriverValue(databaseValue).toISOString())
+      .toBe("2026-08-04T12:30:15.250Z")
+    expect(authorityGrant.expiresAt.mapToDriverValue(
+      new Date("2026-08-04T12:30:15.250Z"),
+    )).toBe("2026-08-04 12:30:15.250")
+  })
+
   it("an expired grant is inactive", () => {
     const grant = makeGrant({ expiresAt: new Date(Date.now() - 1000) })
     expect(isGrantActive(grant).ok).toBe(false)

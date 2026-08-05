@@ -423,11 +423,13 @@ function acquisitionQuery({
           reason: values[5],
           status: "active",
           expiresAt: values[6],
+          expiresAtEpoch: Date.parse(String(values[6])) / 1000,
           revokedAt: null,
           revokedBy: null,
           revokeReason: null,
           contentHash: values[7],
           createdAt: values[8],
+          createdAtEpoch: Date.parse(String(values[8])) / 1000,
         }],
       }
     }
@@ -543,7 +545,14 @@ function mutationQuery({
     }
     if (sql === OUTCOME_QUEUE_SQL.readMutationItem) return { rows: [current] }
     if (sql === OUTCOME_QUEUE_SQL.readMutationAuthorityGrant) {
-      return { rows: boundGrant ? [boundGrant] : [] }
+      return {
+        rows: boundGrant ? [{
+          ...boundGrant,
+          expiresAtEpoch: boundGrant.expiresAt == null
+            ? null
+            : Date.parse(String(boundGrant.expiresAt)) / 1000,
+        }] : [],
+      }
     }
     if (sql === OUTCOME_QUEUE_SQL.readMutationSnapshot) return { rows: snapshot }
     if (sql === OUTCOME_QUEUE_SQL.readDependencyMutationSnapshot) {

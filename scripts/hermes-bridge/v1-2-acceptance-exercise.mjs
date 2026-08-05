@@ -1025,7 +1025,9 @@ async function main() {
         }
 
         const grants = await lockClient.query(
-          `SELECT ref, status, "revokedAt", "expiresAt", "authorityLevel",
+          `SELECT ref, status, "revokedAt",
+                  EXTRACT(EPOCH FROM ("expiresAt" AT TIME ZONE 'UTC')) AS "expiresAtEpoch",
+                  "authorityLevel",
                   "grantedTo", scope, "allowedActions", "blockedActions",
                   "workOrderId"
            FROM authority_grant
@@ -1060,15 +1062,15 @@ async function main() {
         if (!permits(dependencyGrant, ACCEPTANCE_OUTCOME_KEYS.dependencyBlocked)
           || dependencyGrant.status !== "active"
           || dependencyGrant.revokedAt !== null
-          || (dependencyGrant.expiresAt !== null
-            && Date.parse(dependencyGrant.expiresAt) <= Date.now())) {
+          || (dependencyGrant.expiresAtEpoch !== null
+            && Number(dependencyGrant.expiresAtEpoch) * 1000 <= Date.now())) {
           throw new Error("V1_2_DEPENDENCY_GRANT_FENCE_WALL")
         }
         if (!permits(authorityGrant, ACCEPTANCE_OUTCOME_KEYS.authorityBlocked)
           || authorityGrant.status !== "revoked"
           || authorityGrant.revokedAt === null
-          || (authorityGrant.expiresAt !== null
-            && Date.parse(authorityGrant.expiresAt) <= Date.now())) {
+          || (authorityGrant.expiresAtEpoch !== null
+            && Number(authorityGrant.expiresAtEpoch) * 1000 <= Date.now())) {
           throw new Error("V1_2_REVOKED_GRANT_FENCE_WALL")
         }
         if (!activeGrant

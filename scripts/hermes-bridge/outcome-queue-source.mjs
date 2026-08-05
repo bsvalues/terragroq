@@ -852,7 +852,8 @@ WHERE q."userId" = $1
 FOR UPDATE OF q
 `,
   readMutationAuthorityGrant: `
-SELECT "status", "expiresAt"
+SELECT "status",
+       EXTRACT(EPOCH FROM ("expiresAt" AT TIME ZONE 'UTC')) AS "expiresAtEpoch"
 FROM "authority_grant"
 WHERE "userId" = $1
   AND "ref" = $2
@@ -1144,10 +1145,12 @@ INSERT INTO "authority_grant" (
 ) VALUES (
   $1, $2, NULL, $1, 'operator',
   'A2_WRITE_OWN', $3, $4::text[], $5::text[], $6,
-  'active', $7::timestamptz, NULL, NULL, NULL,
-  $8, $9::timestamptz
+  'active', $7::timestamptz AT TIME ZONE 'UTC', NULL, NULL, NULL,
+  $8, $9::timestamptz AT TIME ZONE 'UTC'
 )
-RETURNING *
+RETURNING *,
+  EXTRACT(EPOCH FROM ("expiresAt" AT TIME ZONE 'UTC')) AS "expiresAtEpoch",
+  EXTRACT(EPOCH FROM ("createdAt" AT TIME ZONE 'UTC')) AS "createdAtEpoch"
 `,
   rebindRenewedV12CampaignGrant: `
 UPDATE "outcome_queue_item" AS q
@@ -4729,7 +4732,9 @@ export async function mutateOutcomeQueueItem({
         if (!["active", "revoked", "expired"].includes(grant.status)) {
           fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_INVALID")
         }
-        const expiresAt = grant.expiresAt == null ? null : Date.parse(grant.expiresAt)
+        const expiresAt = grant.expiresAtEpoch == null
+          ? null
+          : Number(grant.expiresAtEpoch) * 1000
         if (expiresAt !== null && !Number.isFinite(expiresAt)) {
           fail("OUTCOME_QUEUE_PROTECTED_DECLINE_AUTHORITY_INVALID")
         }
