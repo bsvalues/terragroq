@@ -365,6 +365,7 @@ export class CodexAppServerClient {
   #consume(chunk) {
     this.buffer += String(chunk)
     if (Buffer.byteLength(this.buffer, "utf8") > this.maxFrameBytes) {
+      this.buffer = ""
       this.#fail(new AppServerFrameLimitError(this.maxFrameBytes))
       return
     }
