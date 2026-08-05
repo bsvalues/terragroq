@@ -164,6 +164,44 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.selectOutcome).not.toHaveBeenCalled()
   })
 
+  it("abandons only the current cycle holder during orderly process exit", () => {
+    const value = fixture()
+    const outcome = {
+      id: 77, userId: "owner-id", command: "bounded work", lane: "ui", risk: "low",
+      authority: "A2_WRITE_OWN", verdict: "requires_approval", requiresApproval: true,
+    }
+    value.state.acquireLease({
+      idempotencyKey: "owned-exit-acquire",
+      outcomeId: "77",
+      holderId: "test-holder",
+      leaseDurationMs: 60_000,
+      metadata: { outcome },
+    })
+
+    expect(value.orchestrator.abandonOwnedCycleLease()).toEqual({ abandoned: true, outcomeId: "77" })
+    expect(value.state.read().executions["77"].lease).toMatchObject({
+      holderId: "test-holder",
+      abandonReason: "HERMES_CYCLE_PROCESS_EXIT",
+      abandonedAt: expect.any(String),
+    })
+    expect(value.orchestrator.abandonOwnedCycleLease()).toEqual({ abandoned: false })
+
+    const foreign = value.state.reclaimLease({
+      idempotencyKey: "foreign-exit-reclaim",
+      outcomeId: "77",
+      expectedFencingToken: value.state.read().executions["77"].fencingToken,
+      holderId: "foreign-holder",
+      leaseDurationMs: 60_000,
+    })
+    expect(value.orchestrator.abandonOwnedCycleLease()).toEqual({ abandoned: false })
+    const foreignExecution = value.state.read().executions["77"]
+    expect(foreignExecution).toMatchObject({
+      fencingToken: foreign.fencingToken,
+      lease: { holderId: "foreign-holder" },
+    })
+    expect(foreignExecution.lease.abandonedAt).toBeUndefined()
+  })
+
   it("targets an explicitly recovered outcome without selecting from the queue", async () => {
     const value = fixture()
     const recoveredOutcome = {

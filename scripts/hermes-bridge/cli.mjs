@@ -89,29 +89,33 @@ export async function runHermesQueueDrain({ orchestrator, maxOutcomes = 100 } = 
     })
   }
   const settled = []
-  for (let index = 0; index < maxOutcomes; index += 1) {
-    const result = await orchestrator.cycle()
-    if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {
-      if (settled.length === 0) return result
-      return {
-        result: "QUEUE_DRAINED",
-        settled,
-        stopReason: result.result,
-        ...(result.reasonCode ? { reasonCode: result.reasonCode } : {}),
+  try {
+    for (let index = 0; index < maxOutcomes; index += 1) {
+      const result = await orchestrator.cycle()
+      if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {
+        if (settled.length === 0) return result
+        return {
+          result: "QUEUE_DRAINED",
+          settled,
+          stopReason: result.result,
+          ...(result.reasonCode ? { reasonCode: result.reasonCode } : {}),
+        }
       }
+      settled.push({
+        result: result.result,
+        outcomeId: result.outcomeId,
+        ...(result.prNumber ? { prNumber: result.prNumber } : {}),
+        ...(result.mergeSha ? { mergeSha: result.mergeSha } : {}),
+        ...(result.nextState ? { nextState: result.nextState } : {}),
+      })
     }
-    settled.push({
-      result: result.result,
-      outcomeId: result.outcomeId,
-      ...(result.prNumber ? { prNumber: result.prNumber } : {}),
-      ...(result.mergeSha ? { mergeSha: result.mergeSha } : {}),
-      ...(result.nextState ? { nextState: result.nextState } : {}),
+    throw Object.assign(new Error("Hermes queue drain exceeded its bounded outcome budget"), {
+      code: "HERMES_QUEUE_DRAIN_BUDGET_WALL",
+      settled,
     })
+  } finally {
+    await orchestrator.abandonOwnedCycleLease?.()
   }
-  throw Object.assign(new Error("Hermes queue drain exceeded its bounded outcome budget"), {
-    code: "HERMES_QUEUE_DRAIN_BUDGET_WALL",
-    settled,
-  })
 }
 
 export async function captureRuntimeAgreement(options = {}) {
