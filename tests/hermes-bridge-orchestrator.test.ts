@@ -186,6 +186,167 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.selectOutcome).not.toHaveBeenCalled()
   })
 
+  it("reacquires a validation-infrastructure recovery without selecting a new outcome", async () => {
+    const verifyValidationInfrastructureRecovery = vi.fn(async () => true)
+    const value = fixture(undefined, { verifyValidationInfrastructureRecovery })
+    value.lifecycle.inspectWorkingTreePaths
+      .mockResolvedValueOnce(["components/hermes/live-status.tsx", "tests/hermes-live-status.test.tsx"])
+      .mockResolvedValue([])
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    const validationFailure = "npx vitest run tests/focused.test.ts exited 1\n'vitest' is not recognized as an internal or external command"
+    const lease = value.state.acquireLease({
+      idempotencyKey: "validation-infrastructure-acquire",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      leaseDurationMs: 1000,
+      metadata: {
+        outcome,
+        branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "goal-77"),
+        baseSha: "a".repeat(40),
+        validationFailure,
+        validationRemediationRound: 3,
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "validation-infrastructure-failed",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "validation-infrastructure-released",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: lease.fencingToken,
+    })
+    value.state.reopenValidationInfrastructureWall({
+      idempotencyKey: "validation-infrastructure-recovered",
+      outcomeId: "77",
+      expectedFencingToken: lease.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "d".repeat(64),
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+      prNumber: 500,
+    })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(verifyValidationInfrastructureRecovery).toHaveBeenCalledWith({
+      outcomeId: 77,
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      expectedFencingToken: lease.fencingToken,
+    })
+    expect(value.lifecycle.runValidationCommands).toHaveBeenCalled()
+    expect(value.client.runTurn).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "COMPLETE" },
+    })
+  })
+
+  it("refuses a locally reopened validation recovery without persisted proof", async () => {
+    const value = fixture(undefined, {
+      verifyValidationInfrastructureRecovery: vi.fn(async () => false),
+    })
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    const validationFailure = "npx vitest run tests/focused.test.ts exited 1\n'vitest' is not recognized as an internal or external command"
+    const lease = value.state.acquireLease({
+      idempotencyKey: "unconfirmed-validation-acquire",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome, validationFailure, validationRemediationRound: 3 },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "unconfirmed-validation-failed",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "unconfirmed-validation-released",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: lease.fencingToken,
+    })
+    value.state.reopenValidationInfrastructureWall({
+      idempotencyKey: "unconfirmed-validation-reopened",
+      outcomeId: "77",
+      expectedFencingToken: lease.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "e".repeat(64),
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL",
+    })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "ABANDONED" },
+      checkpoint: { state: "VALIDATION_INFRASTRUCTURE_RECOVERED" },
+    })
+  })
+
+  it.each([
+    ["checkpoint detail", (execution: any) => { execution.checkpoint.detail = "OTHER_STATE" }],
+    ["recovery reason", (execution: any) => { execution.lease.recoverReason = "OTHER_REASON" }],
+    ["proof digest", (execution: any) => { execution.metadata.validationRecoveryProofDigest = "invalid" }],
+  ])("fails closed for malformed validation recovery %s before queue selection", async (_label, corrupt) => {
+    const verifyValidationInfrastructureRecovery = vi.fn(async () => true)
+    const value = fixture(undefined, { verifyValidationInfrastructureRecovery })
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    const validationFailure = "npx vitest run tests/focused.test.ts exited 1\n'vitest' is not recognized as an internal or external command"
+    const lease = value.state.acquireLease({
+      idempotencyKey: `malformed-validation-acquire-${_label}`,
+      outcomeId: "77", holderId: "failed-holder", leaseDurationMs: 1000,
+      metadata: { outcome, validationFailure, validationRemediationRound: 3 },
+    })
+    value.state.checkpoint({
+      idempotencyKey: `malformed-validation-failed-${_label}`,
+      outcomeId: "77", holderId: "failed-holder", fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0, state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: `malformed-validation-released-${_label}`,
+      outcomeId: "77", holderId: "failed-holder", fencingToken: lease.fencingToken,
+    })
+    value.state.reopenValidationInfrastructureWall({
+      idempotencyKey: `malformed-validation-reopened-${_label}`,
+      outcomeId: "77", expectedFencingToken: lease.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "f".repeat(64),
+    })
+    const statePath = path.join(value.root, "state", "state.json")
+    const persisted = JSON.parse(fs.readFileSync(statePath, "utf8"))
+    corrupt(persisted.executions["77"])
+    fs.writeFileSync(statePath, `${JSON.stringify(persisted)}\n`)
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL",
+    })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(verifyValidationInfrastructureRecovery).not.toHaveBeenCalled()
+    expect(value.client.runTurn).not.toHaveBeenCalled()
+  })
+
   it("replays a durable validated Codex result after a crash without redispatch", async () => {
     const value = fixture()
     const outcome = await value.selectOutcome()

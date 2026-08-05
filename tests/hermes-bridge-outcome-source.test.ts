@@ -9,6 +9,7 @@ import {
   projectOutcomeRuntimeCheckpoint,
   projectOutcomeRuntimeLease,
   readApprovedOwnerDecision,
+  readValidationInfrastructureRecovery,
   recordOwnerAuthorityDecision,
   recordValidationInfrastructureRecoveryProof,
   recoverNativeProviderOutcome,
@@ -554,6 +555,24 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       query, outcomeId: 4, proofDigest: "b".repeat(64),
     })).resolves.toBe(true)
     expect(query.mock.calls[1][0]).toMatch(/HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED/)
+  })
+
+  it("verifies the exact persisted validation proof and recovered outcome before reacquisition", async () => {
+    const query = vi.fn().mockResolvedValueOnce({ rows: [{ recovered: true }] })
+    await expect(readValidationInfrastructureRecovery({
+      query, outcomeId: 4, proofDigest: "b".repeat(64), expectedFencingToken: 14,
+    })).resolves.toBe(true)
+    expect(query.mock.calls[0][0]).toMatch(/HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED/)
+    expect(query.mock.calls[0][0]).toMatch(/HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED/)
+    expect(query.mock.calls[0][0]).toMatch(/g\.status = 'classified'/)
+    expect(query.mock.calls[0][0]).toMatch(/fencingToken.*\$4::text/)
+    expect(query.mock.calls[0][1]).toEqual([4, "VALIDATION_REMEDIATION_EXHAUSTED", "b".repeat(64), 14])
+  })
+
+  it("requires an exact fencing token when verifying persisted validation recovery", async () => {
+    await expect(readValidationInfrastructureRecovery({
+      query: vi.fn(), outcomeId: 4, proofDigest: "b".repeat(64), expectedFencingToken: 0,
+    })).rejects.toMatchObject({ code: "VALIDATION_RECOVERY_PROOF_INVALID" })
   })
 
   it("persists exact infrastructure proof before outcome recovery", async () => {
