@@ -141,6 +141,10 @@ function expiredCampaignAuthorityRow(
     expiredGrant: {
       id: 202,
       ...grant,
+      createdAt: grant.createdAt.replace("T", " ").replace("Z", ""),
+      expiresAt: grant.expiresAt.replace("T", " ").replace("Z", ""),
+      createdAtEpoch: Date.parse(grant.createdAt) / 1000,
+      expiresAtEpoch: Date.parse(grant.expiresAt) / 1000,
     },
     ...overrides,
   })

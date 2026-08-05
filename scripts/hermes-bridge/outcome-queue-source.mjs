@@ -1107,7 +1107,10 @@ FOR UPDATE OF q
   readRenewableV12CampaignAuthorities: `
 SELECT ${QUEUE_COLUMNS},
        row_to_json(approval) AS "approval",
-       row_to_json(expired_grant) AS "expiredGrant"
+       to_jsonb(expired_grant) || jsonb_build_object(
+         'expiresAtEpoch', EXTRACT(EPOCH FROM (expired_grant."expiresAt" AT TIME ZONE 'UTC')),
+         'createdAtEpoch', EXTRACT(EPOCH FROM (expired_grant."createdAt" AT TIME ZONE 'UTC'))
+       ) AS "expiredGrant"
 FROM "outcome_queue_item" AS q
 JOIN "decision" AS approval
   ON approval."id" = q."approvalDecisionId"
@@ -2433,11 +2436,18 @@ function exactV12CampaignApprovedRow(row, userId, scope, result) {
 
 function exactExpiredV12CampaignGrantRecord(value, scope, userId, at) {
   if (!value || typeof value !== "object") return false
+  if (value.createdAtEpoch == null || value.expiresAtEpoch == null) return false
   let createdAt
   let expiresAt
   try {
-    createdAt = timestamp(value.createdAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL")
-    expiresAt = timestamp(value.expiresAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL")
+    createdAt = timestamp(
+      new Date(Number(value.createdAtEpoch) * 1000),
+      "V1_2_CAMPAIGN_GRANT_TIME_WALL",
+    )
+    expiresAt = timestamp(
+      new Date(Number(value.expiresAtEpoch) * 1000),
+      "V1_2_CAMPAIGN_GRANT_TIME_WALL",
+    )
   } catch {
     return false
   }
