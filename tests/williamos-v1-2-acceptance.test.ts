@@ -36,6 +36,15 @@ const campaignSource = fs.readFileSync(
   new URL("../scripts/hermes-bridge/v1-2-acceptance-campaign.mjs", import.meta.url),
   "utf8",
 )
+const authorityExpirySources = [
+  "outcome-queue-source.mjs",
+  "runtime-agreement.mjs",
+  "v1-2-acceptance-campaign.mjs",
+  "v1-2-acceptance-exercise.mjs",
+].map((file) => fs.readFileSync(
+  new URL(`../scripts/hermes-bridge/${file}`, import.meta.url),
+  "utf8",
+))
 
 function digest(value: unknown) {
   const canonical = (entry: unknown): unknown => {
@@ -787,6 +796,13 @@ afterEach(() => {
 })
 
 describe("WilliamOS V1.2 two-outcome acceptance", () => {
+  it("interprets legacy authority grant expiry timestamps as UTC in every live reader", () => {
+    for (const source of authorityExpirySources) {
+      expect(source).not.toMatch(/\."expiresAt"\s*>\s*(?:\$\d+::timestamptz|NOW\(\))/)
+      expect(source).not.toMatch(/\."expiresAt"\s*<=\s*\$\d+::timestamptz/)
+    }
+  })
+
   it("requires an explicit APPROVE decision in both live authority queries", () => {
     expect(
       campaignSource.match(/upper\(trim\(approval\.decision\)\) = 'APPROVE'/g),
@@ -882,7 +898,7 @@ describe("WilliamOS V1.2 two-outcome acceptance", () => {
       `authority.scope = q."outcomeKey"`,
     ))
     expect(authoritySql).toEqual(expect.stringContaining(
-      `authority."expiresAt" IS NULL OR authority."expiresAt" > $2::timestamptz`,
+      `authority."expiresAt" AT TIME ZONE 'UTC' > $2::timestamptz`,
     ))
     expect(authoritySql).toEqual(expect.stringContaining(
       `authority."authorityLevel" = q."authorityLevel"`,

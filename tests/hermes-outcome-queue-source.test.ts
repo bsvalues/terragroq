@@ -141,6 +141,10 @@ function expiredCampaignAuthorityRow(
     expiredGrant: {
       id: 202,
       ...grant,
+      createdAt: grant.createdAt.replace("T", " ").replace("Z", ""),
+      expiresAt: grant.expiresAt.replace("T", " ").replace("Z", ""),
+      createdAtEpoch: Date.parse(grant.createdAt) / 1000,
+      expiresAtEpoch: Date.parse(grant.expiresAt) / 1000,
     },
     ...overrides,
   })
@@ -423,11 +427,13 @@ function acquisitionQuery({
           reason: values[5],
           status: "active",
           expiresAt: values[6],
+          expiresAtEpoch: Date.parse(String(values[6])) / 1000,
           revokedAt: null,
           revokedBy: null,
           revokeReason: null,
           contentHash: values[7],
           createdAt: values[8],
+          createdAtEpoch: Date.parse(String(values[8])) / 1000,
         }],
       }
     }
@@ -543,7 +549,14 @@ function mutationQuery({
     }
     if (sql === OUTCOME_QUEUE_SQL.readMutationItem) return { rows: [current] }
     if (sql === OUTCOME_QUEUE_SQL.readMutationAuthorityGrant) {
-      return { rows: boundGrant ? [boundGrant] : [] }
+      return {
+        rows: boundGrant ? [{
+          ...boundGrant,
+          expiresAtEpoch: boundGrant.expiresAt == null
+            ? null
+            : Date.parse(String(boundGrant.expiresAt)) / 1000,
+        }] : [],
+      }
     }
     if (sql === OUTCOME_QUEUE_SQL.readMutationSnapshot) return { rows: snapshot }
     if (sql === OUTCOME_QUEUE_SQL.readDependencyMutationSnapshot) {
@@ -1167,7 +1180,7 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`live."leaseExpiresAt" > $1::timestamptz`)
     expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_grant."status" = 'active'`)
-    expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_grant."expiresAt" > $12::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_grant."expiresAt" AT TIME ZONE 'UTC' > $12::timestamptz`)
     expect(enqueueOutcome).toBe(persistOutcomeQueueItem)
     expect(listOutcomeQueue).toBe(readOutcomeQueue)
     expect(acquireOutcomeCompatibility).toBe(acquireNextEligibleOutcome)
@@ -1313,7 +1326,7 @@ describe("transactional durable outcome queue source", () => {
     ])
     expect(OUTCOME_QUEUE_SQL.matchAuthority).toContain(`grant."status" = 'active'`)
     expect(OUTCOME_QUEUE_SQL.matchAuthority).toContain(`grant."revokedAt" IS NULL`)
-    expect(OUTCOME_QUEUE_SQL.matchAuthority).toContain(`grant."expiresAt" > $5::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.matchAuthority).toContain(`grant."expiresAt" AT TIME ZONE 'UTC' > $5::timestamptz`)
     expect(OUTCOME_QUEUE_SQL.matchAuthority).toContain(
       `grant."authorityLevel" = q."authorityLevel"`,
     )
@@ -2138,7 +2151,7 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.renewLease).toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.renewLease).toContain(`live_grant."status" = 'active'`)
     expect(OUTCOME_QUEUE_SQL.renewLease)
-      .toContain(`live_grant."expiresAt" > $7::timestamptz`)
+      .toContain(`live_grant."expiresAt" AT TIME ZONE 'UTC' > $7::timestamptz`)
     expect(OUTCOME_QUEUE_SQL.renewLease).not.toContain("$1::timestamptz")
   })
 
@@ -2178,7 +2191,7 @@ describe("transactional durable outcome queue source", () => {
     ])
     expect(deferOutcomeLeaseCompatibility).toBe(deferOutcomeQueueLease)
     expect(OUTCOME_QUEUE_SQL.deferLease)
-      .toContain(`live_grant."expiresAt" > $9::timestamptz`)
+      .toContain(`live_grant."expiresAt" AT TIME ZONE 'UTC' > $9::timestamptz`)
     expect(OUTCOME_QUEUE_SQL.deferLease).not.toContain("$1::timestamptz")
   })
 
@@ -2211,7 +2224,7 @@ describe("transactional durable outcome queue source", () => {
       `$7 = live_grant."workOrderId"`,
     )
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
-      .toContain(`live_grant."expiresAt" > $8::timestamptz`)
+      .toContain(`live_grant."expiresAt" AT TIME ZONE 'UTC' > $8::timestamptz`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).not.toContain("$1::timestamptz")
   })
 
@@ -2278,7 +2291,7 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
       .toContain(`live_grant."status" = 'active'`)
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
-      .toContain(`live_grant."expiresAt" > $11::timestamptz`)
+      .toContain(`live_grant."expiresAt" AT TIME ZONE 'UTC' > $11::timestamptz`)
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)
       .toContain(`q."riskClass" IN ('R0', 'R1')`)
     expect(OUTCOME_QUEUE_SQL.resumeAfterDecision)

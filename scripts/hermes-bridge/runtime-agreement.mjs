@@ -45,7 +45,10 @@ WHERE q."userId" = $1
       AND live_grant."ref" = q."authorityGrantRef"
       AND live_grant."status" = 'active'
       AND live_grant."revokedAt" IS NULL
-      AND (live_grant."expiresAt" IS NULL OR live_grant."expiresAt" > $2::timestamptz)
+      AND (
+        live_grant."expiresAt" IS NULL
+        OR live_grant."expiresAt" AT TIME ZONE 'UTC' > $2::timestamptz
+      )
       AND live_grant."authorityLevel" = q."authorityLevel"
       AND live_grant."grantedTo" = q."authoritySubject"
       AND live_grant."scope" IN (q."outcomeKey", q."goalRef")
