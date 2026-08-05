@@ -118,11 +118,13 @@ function queryHarness({
   rows = SCOPES.map((scope) => candidate(scope, 0)),
   failAudit = false,
   missingReplayGrant = false,
+  timezoneProjection = false,
 }: {
   receipts?: ReceiptRow[]
   rows?: Array<Record<string, unknown>>
   failAudit?: boolean
   missingReplayGrant?: boolean
+  timezoneProjection?: boolean
 } = {}) {
   const commands: string[] = []
   const receiptInserts: unknown[][] = []
@@ -165,16 +167,25 @@ function queryHarness({
           })),
         }
       }
-      if (normalized.startsWith('SELECT * FROM "authority_grant"')) {
+      if (normalized.includes('FROM "authority_grant" AS g')) {
         return {
-          rows: replayResults.map((result, index) => ({
-            id: 81 + index,
-            ...v12CampaignGrant(
+          rows: replayResults.map((result, index) => {
+            const grant = v12CampaignGrant(
               result.outcomeKey as typeof SCOPES[number],
               USER_ID,
               new Date(ISSUED_AT),
-            ),
-          })).slice(0, missingReplayGrant ? 1 : undefined),
+            )
+            return {
+              id: 81 + index,
+              ...grant,
+              ...(timezoneProjection ? {
+                expiresAt: "2000-01-01T00:00:00",
+                createdAt: "2000-01-01T00:00:00",
+                expiresAtEpoch: Date.parse(String(grant.expiresAt)) / 1000,
+                createdAtEpoch: Date.parse(String(grant.createdAt)) / 1000,
+              } : {}),
+            }
+          }).slice(0, missingReplayGrant ? 1 : undefined),
         }
       }
       if (normalized.startsWith("SELECT EXISTS")) return { rows: [{ decision: false, grant: false }] }
@@ -379,6 +390,24 @@ describe("Primary Authorization Bridge atomic store", () => {
     })
     expect(harness.commands.at(-1)).toBe("ROLLBACK")
   })
+
+  it.each(["UTC", "America/Los_Angeles"])(
+    "replays from UTC epoch projections independently of host timezone: %s",
+    async (timezone) => {
+      vi.stubEnv("TZ", timezone)
+      const initial = queryHarness()
+      const recorded = await record(initial)
+      const replay = queryHarness({
+        receipts: replayRows(initial),
+        timezoneProjection: true,
+      })
+      await expect(record(replay)).resolves.toMatchObject({
+        status: "REPLAYED",
+        authorizationDigest: recorded.authorizationDigest,
+      })
+      vi.unstubAllEnvs()
+    },
+  )
 
   it("rejects a stale candidate row before writing either scope", async () => {
     const staleRows = SCOPES.map((scope) => candidate(scope, 0))

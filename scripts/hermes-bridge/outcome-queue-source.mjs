@@ -2451,9 +2451,9 @@ function exactExpiredV12CampaignGrantRecord(value, scope, userId, at) {
     && value.contentHash === expected.contentHash
 }
 
-function exactNewV12CampaignGrantRecord(value, draft) {
+function normalizedV12CampaignGrantRecord(value) {
   if (!value || typeof value !== "object") return false
-  const actual = {
+  return {
     userId: value.userId,
     ref: value.ref,
     workOrderId: value.workOrderId,
@@ -2465,14 +2465,30 @@ function exactNewV12CampaignGrantRecord(value, draft) {
     blockedActions: value.blockedActions,
     reason: value.reason,
     status: value.status,
-    expiresAt: timestamp(value.expiresAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL"),
-    createdAt: timestamp(value.createdAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL"),
+    expiresAt: value.expiresAtEpoch != null
+      ? timestamp(new Date(Number(value.expiresAtEpoch) * 1000), "V1_2_CAMPAIGN_GRANT_TIME_WALL")
+      : timestamp(value.expiresAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL"),
+    createdAt: value.createdAtEpoch != null
+      ? timestamp(new Date(Number(value.createdAtEpoch) * 1000), "V1_2_CAMPAIGN_GRANT_TIME_WALL")
+      : timestamp(value.createdAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL"),
     revokedAt: value.revokedAt,
     revokedBy: value.revokedBy,
     revokeReason: value.revokeReason,
     contentHash: value.contentHash,
   }
-  return canonicalJson(actual) === canonicalJson(draft)
+}
+
+function exactNewV12CampaignGrantRecord(value, draft) {
+  const actual = normalizedV12CampaignGrantRecord(value)
+  return actual !== false && canonicalJson(actual) === canonicalJson(draft)
+}
+
+function v12CampaignGrantMismatchFields(value, draft) {
+  const actual = normalizedV12CampaignGrantRecord(value)
+  if (actual === false) return ["record"]
+  return Object.keys(draft).filter((key) => (
+    canonicalJson(actual[key]) !== canonicalJson(draft[key])
+  ))
 }
 
 function v12CampaignRenewalLifecycle(row, expectedLifecycleReason) {
@@ -3860,9 +3876,12 @@ export async function recordVerifiedPrimaryAuthorization({
           [userId, replayDecisionRefs],
         ),
         connection.query(
-          `SELECT * FROM "authority_grant"
-           WHERE "userId" = $1 AND "ref" = ANY($2::text[])
-           ORDER BY "ref" FOR SHARE`,
+          `SELECT g.*,
+                  EXTRACT(EPOCH FROM (g."expiresAt" AT TIME ZONE 'UTC')) AS "expiresAtEpoch",
+                  EXTRACT(EPOCH FROM (g."createdAt" AT TIME ZONE 'UTC')) AS "createdAtEpoch"
+           FROM "authority_grant" AS g
+           WHERE g."userId" = $1 AND g."ref" = ANY($2::text[])
+           ORDER BY g."ref" FOR SHARE OF g`,
           [userId, replayGrantRefs],
         ),
       ])
@@ -3883,12 +3902,14 @@ export async function recordVerifiedPrimaryAuthorization({
           userId,
           authorization.issuedAt,
         )
+        const normalizedGrant = normalizedV12CampaignGrantRecord(grant)
         if (!exactV12CampaignApprovedRow(queueByKey.get(scope.outcomeKey), userId, scope.outcomeKey, result)
           || Number(decision?.id) !== Number(result?.decisionId)
           || !exactV12CampaignDecisionRecord(decision, scope.outcomeKey)
           || !exactNewV12CampaignGrantRecord(grant, expectedGrant)
           || grant.status !== "active"
-          || Date.parse(timestamp(grant.expiresAt, "PRIMARY_AUTHORIZATION_REPLAY_STATE_WALL"))
+          || normalizedGrant === false
+          || Date.parse(normalizedGrant.expiresAt)
             <= recordedAt.getTime()) {
           fail("PRIMARY_AUTHORIZATION_REPLAY_STATE_WALL")
         }
@@ -3970,9 +3991,11 @@ export async function recordVerifiedPrimaryAuthorization({
            "revokeReason", "contentHash", "createdAt"
          ) VALUES (
            $1, $2, NULL, $1, $3, $4, $5, $6::text[], $7::text[],
-           $8, $9, $10::timestamptz, NULL, NULL, NULL, $11,
-           $12::timestamptz
-         ) RETURNING *`,
+           $8, $9, $10::timestamptz AT TIME ZONE 'UTC', NULL, NULL, NULL, $11,
+           $12::timestamptz AT TIME ZONE 'UTC'
+         ) RETURNING *,
+             EXTRACT(EPOCH FROM ("expiresAt" AT TIME ZONE 'UTC')) AS "expiresAtEpoch",
+             EXTRACT(EPOCH FROM ("createdAt" AT TIME ZONE 'UTC')) AS "createdAtEpoch"`,
         [
           userId, grantDraft.ref, grantDraft.grantedTo, grantDraft.authorityLevel,
           grantDraft.scope, grantDraft.allowedActions, grantDraft.blockedActions,
@@ -3982,7 +4005,8 @@ export async function recordVerifiedPrimaryAuthorization({
       )
       const grant = insertedGrant.rows[0]
       if (!exactNewV12CampaignGrantRecord(grant, grantDraft)) {
-        fail("PRIMARY_AUTHORIZATION_GRANT_ATOMICITY_WALL")
+        const mismatches = v12CampaignGrantMismatchFields(grant, grantDraft)
+        fail(`PRIMARY_AUTHORIZATION_GRANT_ATOMICITY_WALL_${mismatches.join("_").toUpperCase()}`)
       }
 
       const approved = await connection.query(
