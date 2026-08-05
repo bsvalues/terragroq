@@ -620,7 +620,35 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[4][1][3]).toContain('"attempt":2')
     expect(query.mock.calls[4][1][3]).toContain('"checkpointSequence":7')
     expect(query.mock.calls[5][1]).toEqual([
-      42, "active", null, "a".repeat(40), ["pull-request:#448", `commit:${"a".repeat(40)}`], 2, 7,
+      42, "active", null, "a".repeat(40), ["pull-request:#448", `commit:${"a".repeat(40)}`], 2, 7, false,
+    ])
+  })
+
+  it("clears a stale projected commit reference for typed host-validation recovery", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 42, userId: "owner", ref: "WO-HERMES-OUTCOME-4" }] })
+      .mockResolvedValueOnce({ rows: [{ id: 91 }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpoint({
+      query,
+      outcomeId: 4,
+      attempt: 3,
+      checkpoint: {
+        sequence: 8,
+        state: "HOST_VALIDATION_STARTED",
+        metadata: { headRefOid: null },
+      },
+    })).resolves.toMatchObject({ commitRef: null })
+
+    expect(query.mock.calls[4][1][3]).toContain('"headRefOid":null')
+    expect(query.mock.calls[5][0]).toMatch(/CASE WHEN \$8::boolean THEN NULL/)
+    expect(query.mock.calls[5][1]).toEqual([
+      42, "active", null, null, [], 3, 8, true,
     ])
   })
 

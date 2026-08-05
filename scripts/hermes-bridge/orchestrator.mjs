@@ -286,7 +286,12 @@ export function createHermesOrchestrator(options = {}) {
       ["headRefOid", value.headRefOid],
       ["mergeSha", value.mergeSha],
       ["terminalCleanupRecoveryProofDigest", value.terminalCleanupRecoveryProofDigest],
-    ].filter(([, fieldValue]) => fieldValue !== null && fieldValue !== undefined))
+    ].filter(([field, fieldValue]) => (
+      field === "headRefOid"
+        ? fieldValue !== undefined && (fieldValue !== null
+          || value.validationRecoveryPhase === "PENDING_HOST_VALIDATION")
+        : fieldValue !== null && fieldValue !== undefined
+    )))
   }
 
   async function projectCurrentExecution(outcomeId) {
@@ -437,7 +442,11 @@ export function createHermesOrchestrator(options = {}) {
   }
 
   async function finalizeTerminal({ lease, sequence, outcome, nextState, metadata = {} }) {
-    const terminal = await checkpoint(lease, sequence, "FAILED_TERMINAL", nextState, metadata)
+    const terminal = await checkpoint(lease, sequence, "FAILED_TERMINAL", nextState, {
+      ...metadata,
+      validationRecoveryPhase: null,
+      validationRecoveryFencingToken: null,
+    })
     const outcomeTerminalized = await markTerminal({
       outcomeId: outcome.id, ...queueSettlementContext(outcome),
       result: "FAILED_TERMINAL", nextState,
@@ -634,15 +643,32 @@ export function createHermesOrchestrator(options = {}) {
     approvedReleasedExecutions.sort((left, right) =>
       Number(left.proof.decisionId) - Number(right.proof.decisionId)
         || String(left.execution.outcomeId).localeCompare(String(right.execution.outcomeId)))
-    const abandonedValidationRecoveries = Object.values(initialized.executions).filter((execution) => (
-      execution?.lease?.status === "ABANDONED"
-      && execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
+    const validationRecoveries = Object.values(initialized.executions).filter((execution) => (
+      execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
+      || execution?.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
     ))
-    for (const execution of abandonedValidationRecoveries) {
-      if (execution.checkpoint.detail !== VALIDATION_INFRASTRUCTURE_RETRY_STATE
-        || execution.lease.recoverReason !== "VALIDATION_INFRASTRUCTURE_REMEDIATED"
-        || !/^[0-9a-f]{64}$/.test(String(execution.metadata?.validationRecoveryProofDigest ?? ""))) {
+    for (const execution of validationRecoveries) {
+      const legacyRecoveredCheckpoint = execution.checkpoint.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
+      const pendingRecoveryPhase = execution.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+      if ((legacyRecoveredCheckpoint && execution.checkpoint.detail !== VALIDATION_INFRASTRUCTURE_RETRY_STATE)
+        || (legacyRecoveredCheckpoint
+          && execution.lease.recoverReason !== "VALIDATION_INFRASTRUCTURE_REMEDIATED")
+        || !/^[0-9a-f]{64}$/.test(String(execution.metadata?.validationRecoveryProofDigest ?? ""))
+        || (pendingRecoveryPhase
+          && (!Number.isSafeInteger(execution.metadata?.validationRecoveryFencingToken)
+            || execution.metadata.validationRecoveryFencingToken <= 0))) {
         throw Object.assign(new Error("Persisted validation recovery state is incomplete"), {
+          code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL",
+        })
+      }
+      const verified = await verifyValidationInfrastructureRecovery({
+        outcomeId: Number(execution.outcomeId),
+        expectedNextState: VALIDATION_INFRASTRUCTURE_RETRY_STATE,
+        proofDigest: execution.metadata.validationRecoveryProofDigest,
+        expectedFencingToken: execution.metadata.validationRecoveryFencingToken ?? execution.fencingToken,
+      })
+      if (!verified) {
+        throw Object.assign(new Error("Persisted validation recovery proof is incomplete"), {
           code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL",
         })
       }
@@ -659,26 +685,12 @@ export function createHermesOrchestrator(options = {}) {
         || (execution?.checkpoint?.state === "POST_MERGE_CLEANUP_RECOVERED"
           && /^PR #\d+$/.test(execution?.checkpoint?.detail ?? ""))
         || OWNER_DECISION_RESUME_STATES.has(execution?.checkpoint?.state)
+        || execution?.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
         || hasOwnerDecisionResume(execution?.metadata)
       )
     ))
     const recoveredExecutions = []
-    for (const execution of recoveredCandidates) {
-      if (execution.checkpoint.state === "VALIDATION_INFRASTRUCTURE_RECOVERED") {
-        const verified = await verifyValidationInfrastructureRecovery({
-          outcomeId: Number(execution.outcomeId),
-          expectedNextState: VALIDATION_INFRASTRUCTURE_RETRY_STATE,
-          proofDigest: execution.metadata.validationRecoveryProofDigest,
-          expectedFencingToken: execution.fencingToken,
-        })
-        if (!verified) {
-          throw Object.assign(new Error("Persisted validation recovery proof is incomplete"), {
-            code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL",
-          })
-        }
-      }
-      recoveredExecutions.push(execution)
-    }
+    for (const execution of recoveredCandidates) recoveredExecutions.push(execution)
     const deferredExecutions = Object.values(initialized.executions).filter((execution) => (
       execution?.lease?.status === "DEFERRED"
       && execution?.checkpoint?.state === "DEFERRED_PROVIDER_UNAVAILABLE"
@@ -1036,10 +1048,31 @@ export function createHermesOrchestrator(options = {}) {
       }
     }
     let durableHeadRefOid = lease.metadata?.headRefOid ?? null
-    if (!durableHeadRefOid && [
+    const validationRecoveryPending = lease.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+    if (validationRecoveryPending || [
       "HOST_VALIDATION_STARTED",
       "VALIDATION_INFRASTRUCTURE_RECOVERED",
     ].includes(recoveryCheckpointState)) {
+      durableHeadRefOid = null
+    }
+    if (!durableHeadRefOid && (validationRecoveryPending || [
+      "HOST_VALIDATION_STARTED",
+      "VALIDATION_INFRASTRUCTURE_RECOVERED",
+    ].includes(recoveryCheckpointState))) {
+      if (validationRecoveryPending) {
+        cp = await checkpoint(
+          lease,
+          sequence,
+          "HOST_VALIDATION_STARTED",
+          "Recovered validation infrastructure",
+          {
+            headRefOid: null,
+            validationEvidence: null,
+            validationRecoveryPhase: "PENDING_HOST_VALIDATION",
+          },
+        )
+        sequence = cp.checkpointSequence
+      }
       const workingPaths = await lifecycle.inspectWorkingTreePaths(record)
       if (workingPaths.length === 0) {
         throw Object.assign(new Error("Interrupted host validation has no owned file changes"), {
@@ -1053,6 +1086,8 @@ export function createHermesOrchestrator(options = {}) {
           validationEvidence: validation,
           validationFailure: "",
           validationRemediationRound: 0,
+          validationRecoveryPhase: null,
+          validationRecoveryFencingToken: null,
           headRefOid: null,
           ...consumedTurnResultMetadata(),
         })
@@ -1080,6 +1115,8 @@ export function createHermesOrchestrator(options = {}) {
         cp = await checkpoint(lease, sequence, "VALIDATION_REMEDIATION_REQUIRED", null, {
           validationFailure: detail,
           validationRemediationRound: initialRemediationRound + 1,
+          validationRecoveryPhase: null,
+          validationRecoveryFencingToken: null,
           validationEvidence: null,
           ...consumedTurnResultMetadata(),
         })
@@ -1394,6 +1431,7 @@ export function createHermesOrchestrator(options = {}) {
         assertChangedPathsAllowed(workingPaths, reservations)
         cp = await checkpoint(lease, sequence, "HOST_VALIDATION_STARTED", null, {
           validationEvidence: null,
+          headRefOid: null,
           ...consumedTurnResultMetadata(),
         })
         sequence = cp.checkpointSequence
@@ -1412,7 +1450,8 @@ export function createHermesOrchestrator(options = {}) {
             .slice(0, 4_000)
           cp = await checkpoint(lease, sequence, "VALIDATION_REMEDIATION_REQUIRED", null, {
             validationFailure: detail, validationRemediationRound: remediationRound + 1,
-            validationEvidence: null,
+            validationEvidence: null, validationRecoveryPhase: null,
+            validationRecoveryFencingToken: null,
           })
           sequence = cp.checkpointSequence
           pendingValidationFailure = detail
@@ -1424,7 +1463,8 @@ export function createHermesOrchestrator(options = {}) {
         }
         cp = await checkpoint(lease, sequence, "HOST_VALIDATION_PASSED", null, {
           validationEvidence: validation, validationFailure: "", validationRemediationRound: 0,
-          headRefOid: null,
+          headRefOid: null, validationRecoveryPhase: null,
+          validationRecoveryFencingToken: null,
         })
         sequence = cp.checkpointSequence
 
