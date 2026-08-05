@@ -2465,28 +2465,32 @@ function exactExpiredV12CampaignGrantRecord(value, scope, userId, at) {
 
 function normalizedV12CampaignGrantRecord(value) {
   if (!value || typeof value !== "object") return false
-  return {
-    userId: value.userId,
-    ref: value.ref,
-    workOrderId: value.workOrderId,
-    grantedBy: value.grantedBy,
-    grantedTo: value.grantedTo,
-    authorityLevel: value.authorityLevel,
-    scope: value.scope,
-    allowedActions: value.allowedActions,
-    blockedActions: value.blockedActions,
-    reason: value.reason,
-    status: value.status,
-    expiresAt: value.expiresAtEpoch != null
-      ? timestamp(new Date(Number(value.expiresAtEpoch) * 1000), "V1_2_CAMPAIGN_GRANT_TIME_WALL")
-      : timestamp(value.expiresAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL"),
-    createdAt: value.createdAtEpoch != null
-      ? timestamp(new Date(Number(value.createdAtEpoch) * 1000), "V1_2_CAMPAIGN_GRANT_TIME_WALL")
-      : timestamp(value.createdAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL"),
-    revokedAt: value.revokedAt,
-    revokedBy: value.revokedBy,
-    revokeReason: value.revokeReason,
-    contentHash: value.contentHash,
+  try {
+    return {
+      userId: value.userId,
+      ref: value.ref,
+      workOrderId: value.workOrderId,
+      grantedBy: value.grantedBy,
+      grantedTo: value.grantedTo,
+      authorityLevel: value.authorityLevel,
+      scope: value.scope,
+      allowedActions: value.allowedActions,
+      blockedActions: value.blockedActions,
+      reason: value.reason,
+      status: value.status,
+      expiresAt: value.expiresAtEpoch != null
+        ? timestamp(new Date(Number(value.expiresAtEpoch) * 1000), "V1_2_CAMPAIGN_GRANT_TIME_WALL")
+        : timestamp(value.expiresAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL"),
+      createdAt: value.createdAtEpoch != null
+        ? timestamp(new Date(Number(value.createdAtEpoch) * 1000), "V1_2_CAMPAIGN_GRANT_TIME_WALL")
+        : timestamp(value.createdAt, "V1_2_CAMPAIGN_GRANT_TIME_WALL"),
+      revokedAt: value.revokedAt,
+      revokedBy: value.revokedBy,
+      revokeReason: value.revokeReason,
+      contentHash: value.contentHash,
+    }
+  } catch {
+    return false
   }
 }
 

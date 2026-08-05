@@ -119,12 +119,14 @@ function queryHarness({
   failAudit = false,
   missingReplayGrant = false,
   timezoneProjection = false,
+  invalidGrantEpoch = false,
 }: {
   receipts?: ReceiptRow[]
   rows?: Array<Record<string, unknown>>
   failAudit?: boolean
   missingReplayGrant?: boolean
   timezoneProjection?: boolean
+  invalidGrantEpoch?: boolean
 } = {}) {
   const commands: string[] = []
   const receiptInserts: unknown[][] = []
@@ -186,7 +188,9 @@ function queryHarness({
               ...(timezoneProjection && projectsUtcEpochs ? {
                 expiresAt: "2000-01-01T00:00:00",
                 createdAt: "2000-01-01T00:00:00",
-                expiresAtEpoch: Date.parse(String(grant.expiresAt)) / 1000,
+                expiresAtEpoch: invalidGrantEpoch
+                  ? Number.NaN
+                  : Date.parse(String(grant.expiresAt)) / 1000,
                 createdAtEpoch: Date.parse(String(grant.createdAt)) / 1000,
               } : {}),
             }
@@ -213,7 +217,9 @@ function queryHarness({
             ...(timezoneProjection && projectsUtcEpochs ? {
               expiresAt: "2000-01-01T00:00:00",
               createdAt: "2000-01-01T00:00:00",
-              expiresAtEpoch: Date.parse(String(grant.expiresAt)) / 1000,
+              expiresAtEpoch: invalidGrantEpoch
+                ? Number.NaN
+                : Date.parse(String(grant.expiresAt)) / 1000,
               createdAtEpoch: Date.parse(String(grant.createdAt)) / 1000,
             } : {}),
           }],
@@ -412,35 +418,52 @@ describe("Primary Authorization Bridge atomic store", () => {
     "replays from UTC epoch projections independently of host timezone: %s",
     async (timezone) => {
       vi.stubEnv("TZ", timezone)
-      const initial = queryHarness({ timezoneProjection: true })
-      const recorded = await record(initial)
-      const insertGrantSql = initial.commands.find((sql) => sql.startsWith('INSERT INTO "authority_grant"'))
-      expect(insertGrantSql).toContain(`$10::timestamptz AT TIME ZONE 'UTC'`)
-      expect(insertGrantSql).toContain(`$12::timestamptz AT TIME ZONE 'UTC'`)
-      expect(insertGrantSql).toContain(
-        `EXTRACT(EPOCH FROM ("expiresAt" AT TIME ZONE 'UTC')) AS "expiresAtEpoch"`,
-      )
-      expect(insertGrantSql).toContain(
-        `EXTRACT(EPOCH FROM ("createdAt" AT TIME ZONE 'UTC')) AS "createdAtEpoch"`,
-      )
-      const replay = queryHarness({
-        receipts: replayRows(initial),
-        timezoneProjection: true,
-      })
-      await expect(record(replay)).resolves.toMatchObject({
-        status: "REPLAYED",
-        authorizationDigest: recorded.authorizationDigest,
-      })
-      const replayGrantSql = replay.commands.find((sql) => sql.includes('FROM "authority_grant" AS g'))
-      expect(replayGrantSql).toContain(
-        `EXTRACT(EPOCH FROM (g."expiresAt" AT TIME ZONE 'UTC')) AS "expiresAtEpoch"`,
-      )
-      expect(replayGrantSql).toContain(
-        `EXTRACT(EPOCH FROM (g."createdAt" AT TIME ZONE 'UTC')) AS "createdAtEpoch"`,
-      )
-      vi.unstubAllEnvs()
+      try {
+        const initial = queryHarness({ timezoneProjection: true })
+        const recorded = await record(initial)
+        const insertGrantSql = initial.commands.find((sql) => sql.startsWith('INSERT INTO "authority_grant"'))
+        expect(insertGrantSql).toContain(`$10::timestamptz AT TIME ZONE 'UTC'`)
+        expect(insertGrantSql).toContain(`$12::timestamptz AT TIME ZONE 'UTC'`)
+        expect(insertGrantSql).toContain(
+          `EXTRACT(EPOCH FROM ("expiresAt" AT TIME ZONE 'UTC')) AS "expiresAtEpoch"`,
+        )
+        expect(insertGrantSql).toContain(
+          `EXTRACT(EPOCH FROM ("createdAt" AT TIME ZONE 'UTC')) AS "createdAtEpoch"`,
+        )
+        const replay = queryHarness({
+          receipts: replayRows(initial),
+          timezoneProjection: true,
+        })
+        await expect(record(replay)).resolves.toMatchObject({
+          status: "REPLAYED",
+          authorizationDigest: recorded.authorizationDigest,
+        })
+        const replayGrantSql = replay.commands.find((sql) => sql.includes('FROM "authority_grant" AS g'))
+        expect(replayGrantSql).toContain(
+          `EXTRACT(EPOCH FROM (g."expiresAt" AT TIME ZONE 'UTC')) AS "expiresAtEpoch"`,
+        )
+        expect(replayGrantSql).toContain(
+          `EXTRACT(EPOCH FROM (g."createdAt" AT TIME ZONE 'UTC')) AS "createdAtEpoch"`,
+        )
+      } finally {
+        vi.unstubAllEnvs()
+      }
     },
   )
+
+  it("fails a replay with an invalid UTC epoch using the replay state wall", async () => {
+    const initial = queryHarness()
+    await record(initial)
+    const replay = queryHarness({
+      receipts: replayRows(initial),
+      timezoneProjection: true,
+      invalidGrantEpoch: true,
+    })
+    await expect(record(replay)).rejects.toMatchObject({
+      code: "PRIMARY_AUTHORIZATION_REPLAY_STATE_WALL",
+    })
+    expect(replay.commands.at(-1)).toBe("ROLLBACK")
+  })
 
   it("rejects a stale candidate row before writing either scope", async () => {
     const staleRows = SCOPES.map((scope) => candidate(scope, 0))
