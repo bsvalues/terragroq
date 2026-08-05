@@ -167,6 +167,21 @@ describe("Hermes bridge CLI", () => {
     expect(abandonOwnedCycleLease).toHaveBeenCalledOnce()
   })
 
+  it("preserves the primary cycle wall when exit cleanup also fails", async () => {
+    const cycleWall = Object.assign(new Error("projection unavailable"), {
+      code: "HERMES_RUNTIME_PROJECTION_WALL",
+    })
+    const cleanupWall = Object.assign(new Error("cleanup projection unavailable"), {
+      code: "HERMES_EXECUTION_CONCURRENCY_WALL",
+    })
+    const abandonOwnedCycleLease = vi.fn().mockRejectedValue(cleanupWall)
+    const cycle = vi.fn().mockRejectedValue(cycleWall)
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle, abandonOwnedCycleLease } }))
+      .rejects.toBe(cycleWall)
+    expect(abandonOwnedCycleLease).toHaveBeenCalledOnce()
+  })
+
   it("redacts credential-bearing database URLs from structured wall output", () => {
     expect(sanitizeBridgeMessage("connect failed for postgresql://owner:opaque-password@db.example.test/app"))
       .toBe("connect failed for postgresql://[REDACTED]@db.example.test/app")

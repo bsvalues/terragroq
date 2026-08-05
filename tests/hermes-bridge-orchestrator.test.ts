@@ -164,7 +164,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.selectOutcome).not.toHaveBeenCalled()
   })
 
-  it("abandons only the current cycle holder during orderly process exit", () => {
+  it("abandons and projects only the current cycle holder during orderly process exit", async () => {
     const value = fixture()
     const outcome = {
       id: 77, userId: "owner-id", command: "bounded work", lane: "ui", risk: "low",
@@ -178,13 +178,19 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       metadata: { outcome },
     })
 
-    expect(value.orchestrator.abandonOwnedCycleLease()).toEqual({ abandoned: true, outcomeId: "77" })
+    await expect(value.orchestrator.abandonOwnedCycleLease()).resolves.toEqual({
+      abandoned: true, outcomeId: "77",
+    })
     expect(value.state.read().executions["77"].lease).toMatchObject({
       holderId: "test-holder",
       abandonReason: "HERMES_CYCLE_PROCESS_EXIT",
       abandonedAt: expect.any(String),
     })
-    expect(value.orchestrator.abandonOwnedCycleLease()).toEqual({ abandoned: false })
+    expect(value.projectLease).toHaveBeenLastCalledWith(expect.objectContaining({
+      outcomeId: 77,
+      lease: expect.objectContaining({ status: "ABANDONED" }),
+    }))
+    await expect(value.orchestrator.abandonOwnedCycleLease()).resolves.toEqual({ abandoned: false })
 
     const foreign = value.state.reclaimLease({
       idempotencyKey: "foreign-exit-reclaim",
@@ -193,7 +199,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       holderId: "foreign-holder",
       leaseDurationMs: 60_000,
     })
-    expect(value.orchestrator.abandonOwnedCycleLease()).toEqual({ abandoned: false })
+    await expect(value.orchestrator.abandonOwnedCycleLease()).resolves.toEqual({ abandoned: false })
     const foreignExecution = value.state.read().executions["77"]
     expect(foreignExecution).toMatchObject({
       fencingToken: foreign.fencingToken,

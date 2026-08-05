@@ -114,7 +114,11 @@ export async function runHermesQueueDrain({ orchestrator, maxOutcomes = 100 } = 
       settled,
     })
   } finally {
-    await orchestrator.abandonOwnedCycleLease?.()
+    try {
+      await orchestrator.abandonOwnedCycleLease?.()
+    } catch {
+      // The local fence is already abandoned before projection; preserve the primary drain outcome.
+    }
   }
 }
 

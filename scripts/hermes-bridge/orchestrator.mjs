@@ -280,7 +280,7 @@ export function createHermesOrchestrator(options = {}) {
     })
   }
   const holderId = options.holderId ?? `${os.hostname()}:${process.pid}:${randomUUID()}`
-  function abandonOwnedCycleLease() {
+  async function abandonOwnedCycleLease() {
     const owned = Object.values(state.read().executions).filter((execution) => (
       execution?.lease?.status === "ACTIVE"
       && !execution?.lease?.abandonedAt
@@ -293,7 +293,7 @@ export function createHermesOrchestrator(options = {}) {
     }
     if (owned.length === 0) return { abandoned: false }
     const execution = owned[0]
-    state.abandonLease({
+    await abandonLease({
       idempotencyKey: `${execution.outcomeId}:abandon:${execution.fencingToken}:cycle-exit:${execution.checkpoint.sequence}`,
       outcomeId: execution.outcomeId,
       holderId,
