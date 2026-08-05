@@ -205,6 +205,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         branch: "codex/hermes-goal-77-77",
         worktreePath: path.join(value.root, "worktrees", "goal-77"),
         baseSha: "a".repeat(40),
+        headRefOid: "c".repeat(40),
         validationFailure,
         validationRemediationRound: 3,
       },
@@ -232,6 +233,46 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
       proofDigest: "d".repeat(64),
     })
+    const crashedRecovery = value.state.reclaimLease({
+      idempotencyKey: "validation-infrastructure-crash-reclaim",
+      outcomeId: "77",
+      expectedFencingToken: lease.fencingToken,
+      holderId: "crashed-recovery-holder",
+      leaseDurationMs: 1000,
+    })
+    const intent = value.state.checkpoint({
+      idempotencyKey: "validation-infrastructure-crash-intent",
+      outcomeId: "77",
+      holderId: "crashed-recovery-holder",
+      fencingToken: crashedRecovery.fencingToken,
+      expectedCheckpointSequence: crashedRecovery.checkpointSequence,
+      state: "WORKTREE_INTENT",
+      detail: null,
+    })
+    value.state.checkpoint({
+      idempotencyKey: "validation-infrastructure-crash-ready",
+      outcomeId: "77",
+      holderId: "crashed-recovery-holder",
+      fencingToken: crashedRecovery.fencingToken,
+      expectedCheckpointSequence: intent.checkpointSequence,
+      state: "WORKTREE_READY",
+      detail: null,
+    })
+    value.state.abandonLease({
+      idempotencyKey: "validation-infrastructure-crash-abandon",
+      outcomeId: "77",
+      holderId: "crashed-recovery-holder",
+      fencingToken: crashedRecovery.fencingToken,
+      reason: "PROCESS_CRASH",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      checkpoint: { state: "WORKTREE_READY" },
+      metadata: {
+        headRefOid: null,
+        validationRecoveryPhase: "PENDING_HOST_VALIDATION",
+        validationRecoveryFencingToken: lease.fencingToken,
+      },
+    })
 
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
       result: "COMPLETE",
@@ -247,6 +288,11 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(value.lifecycle.runValidationCommands).toHaveBeenCalled()
     expect(value.client.runTurn).not.toHaveBeenCalled()
+    expect(value.projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      checkpoint: expect.objectContaining({
+        metadata: expect.objectContaining({ headRefOid: null }),
+      }),
+    }))
     expect(value.state.read().executions["77"]).toMatchObject({
       lease: { status: "RELEASED" },
       checkpoint: { state: "COMPLETE" },
@@ -440,7 +486,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
   })
 
   it("terminalizes a failed recovered host validation at the final remediation round", async () => {
-    const value = fixture()
+    const verifyValidationInfrastructureRecovery = vi.fn(async () => true)
+    const value = fixture(undefined, { verifyValidationInfrastructureRecovery })
     const validationError = Object.assign(new Error("validation failed"), {
       code: "HERMES_VALIDATION_FAILED",
       validation: { command: "npm", args: ["test"], code: 1, output: "deterministic failure" },
@@ -458,6 +505,9 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         worktreePath: path.join(value.root, "worktrees", "goal-77"),
         baseSha: "a".repeat(40),
         validationRemediationRound: 3,
+        validationRecoveryProofDigest: "d".repeat(64),
+        validationRecoveryPhase: "PENDING_HOST_VALIDATION",
+        validationRecoveryFencingToken: 1,
       },
     })
     value.state.checkpoint({
@@ -493,6 +543,16 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         state: "FAILED_TERMINAL",
         detail: "VALIDATION_REMEDIATION_EXHAUSTED",
       },
+      metadata: {
+        validationRecoveryPhase: null,
+        validationRecoveryFencingToken: null,
+      },
+    })
+    expect(verifyValidationInfrastructureRecovery).toHaveBeenCalledWith({
+      outcomeId: 77,
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      expectedFencingToken: 1,
     })
     expect(value.client.runTurn).not.toHaveBeenCalled()
     expect(value.lifecycle.inspectPullRequest).not.toHaveBeenCalled()

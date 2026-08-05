@@ -1373,7 +1373,8 @@ function checkpointEvidence(metadata) {
   const hashes = {}
   for (const field of ["commit", "priorHeadRefOid", "headRefOid", "mergeSha"]) {
     const value = metadata?.[field]
-    if (value !== undefined && (typeof value !== "string" || !COMMIT_SHA.test(value))) {
+    const clearsHead = field === "headRefOid" && value === null
+    if (value !== undefined && !clearsHead && (typeof value !== "string" || !COMMIT_SHA.test(value))) {
       throw Object.assign(new Error(`checkpoint ${field} is invalid`), { code: "OUTCOME_PROJECTION_EVIDENCE_INVALID" })
     }
     if (value !== undefined) hashes[field] = value
@@ -1398,7 +1399,9 @@ function projectionEvidenceLabels(evidence) {
     ...(evidence.prNumber === undefined ? [] : [`pull-request:#${evidence.prNumber}`]),
     ...(evidence.commit === undefined ? [] : [`commit:${evidence.commit}`]),
     ...(evidence.priorHeadRefOid === undefined ? [] : [`prior-reviewed-head:${evidence.priorHeadRefOid}`]),
-    ...(evidence.headRefOid === undefined ? [] : [`reviewed-head:${evidence.headRefOid}`]),
+    ...(evidence.headRefOid === undefined || evidence.headRefOid === null
+      ? []
+      : [`reviewed-head:${evidence.headRefOid}`]),
     ...(evidence.mergeSha === undefined ? [] : [`merge:${evidence.mergeSha}`]),
   ]
 }
@@ -1460,6 +1463,9 @@ export async function projectOutcomeRuntimeCheckpoint({
   const evidence = checkpointEvidence(checkpoint.metadata)
   const projection = projectionForCheckpoint(checkpoint.state)
   const commitRef = evidence.mergeSha ?? evidence.commit ?? evidence.headRefOid ?? null
+  const clearCommitRef = evidence.headRefOid === null
+    && evidence.commit === undefined
+    && evidence.mergeSha === undefined
   const labels = projectionEvidenceLabels(evidence)
   let runQuery = normalizeQuery(query)
   let pool
@@ -1558,7 +1564,7 @@ export async function projectOutcomeRuntimeCheckpoint({
         `UPDATE work_order
          SET status = $2,
            result = $3,
-           "commitRef" = COALESCE($4, "commitRef"),
+           "commitRef" = CASE WHEN $8::boolean THEN NULL ELSE COALESCE($4, "commitRef") END,
            evidence = ARRAY(
              SELECT DISTINCT item
              FROM unnest(COALESCE(evidence, ARRAY[]::text[]) || $5::text[]) item
@@ -1581,7 +1587,8 @@ export async function projectOutcomeRuntimeCheckpoint({
                  )
                )
            )`,
-        [workOrder.id, projection.status, projection.result, commitRef, labels, attempt, checkpoint.sequence],
+        [workOrder.id, projection.status, projection.result, commitRef, labels, attempt, checkpoint.sequence,
+          clearCommitRef],
       )
       if (failureEval) {
         await runQuery(

@@ -368,6 +368,7 @@ describe("Hermes bridge durable state store", () => {
         validationFailure: "Error: spawn EPERM while starting an isolated host-only test",
         validationRemediationRound: 3,
         validationEvidence: [{ command: "npm", args: ["test", "--", "--run"], code: 1 }],
+        headRefOid: "a".repeat(40),
       },
       idempotencyKey: "validation-acquire",
     })
@@ -399,6 +400,9 @@ describe("Hermes bridge durable state store", () => {
       metadata: {
         validationFailure: null, validationEvidence: null, validationRemediationRound: 0,
         validationRecoveryProofDigest: proofDigest,
+        validationRecoveryPhase: "PENDING_HOST_VALIDATION",
+        validationRecoveryFencingToken: first.fencingToken,
+        headRefOid: null,
       },
     })
   })
@@ -430,6 +434,17 @@ describe("Hermes bridge durable state store", () => {
       leaseStatus: "ABANDONED",
       state: "VALIDATION_INFRASTRUCTURE_RECOVERED",
     })
+  })
+
+  it.each([
+    { validationRecoveryPhase: "PENDING_HOST_VALIDATION", validationRecoveryFencingToken: null },
+    { validationRecoveryPhase: null, validationRecoveryFencingToken: 14 },
+  ])("rejects an incomplete validation recovery metadata binding", (metadata) => {
+    const { store } = fixture()
+    expect(() => store.acquireLease({
+      outcomeId: "binding", holderId: "one", leaseDurationMs: 1000,
+      metadata, idempotencyKey: `binding-${metadata.validationRecoveryPhase ?? "token"}`,
+    })).toThrow(expect.objectContaining({ code: "INVALID_VALIDATION_RECOVERY_BINDING" }))
   })
 
   it("refuses validation infrastructure recovery outside its exact boundary", () => {

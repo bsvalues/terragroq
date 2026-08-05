@@ -357,6 +357,23 @@ function metadata(input = {}, current = {}) {
     && (typeof validationRecoveryProofDigest !== "string" || !SHA256.test(validationRecoveryProofDigest))) {
     fail("INVALID_VALIDATION_RECOVERY_PROOF_DIGEST")
   }
+  const validationRecoveryPhase = Object.hasOwn(input, "validationRecoveryPhase")
+    ? input.validationRecoveryPhase
+    : current.validationRecoveryPhase ?? null
+  if (validationRecoveryPhase !== null
+    && validationRecoveryPhase !== "PENDING_HOST_VALIDATION") {
+    fail("INVALID_VALIDATION_RECOVERY_PHASE")
+  }
+  const validationRecoveryFencingToken = Object.hasOwn(input, "validationRecoveryFencingToken")
+    ? input.validationRecoveryFencingToken
+    : current.validationRecoveryFencingToken ?? null
+  if (validationRecoveryFencingToken !== null
+    && (!Number.isSafeInteger(validationRecoveryFencingToken) || validationRecoveryFencingToken <= 0)) {
+    fail("INVALID_VALIDATION_RECOVERY_FENCING_TOKEN")
+  }
+  if ((validationRecoveryPhase === null) !== (validationRecoveryFencingToken === null)) {
+    fail("INVALID_VALIDATION_RECOVERY_BINDING")
+  }
   const reviewRecoveryProofDigest = Object.hasOwn(input, "reviewRecoveryProofDigest")
     ? input.reviewRecoveryProofDigest
     : current.reviewRecoveryProofDigest ?? null
@@ -509,6 +526,8 @@ function metadata(input = {}, current = {}) {
     validationFailure,
     validationRemediationRound,
     validationRecoveryProofDigest,
+    validationRecoveryPhase,
+    validationRecoveryFencingToken,
     reviewRecoveryProofDigest,
     terminalCleanupRecoveryProofDigest,
     reviewRecoveryPriorHeadRefOid,
@@ -793,6 +812,9 @@ export function reopenValidationInfrastructureWall(filePath, request, options = 
         validationEvidence: null,
         validationRemediationRound: 0,
         validationRecoveryProofDigest: request.proofDigest,
+        validationRecoveryPhase: "PENDING_HOST_VALIDATION",
+        validationRecoveryFencingToken: current.fencingToken,
+        headRefOid: null,
       }, current.metadata),
     }
     state.executions = { ...state.executions, [request.outcomeId]: reopened }
