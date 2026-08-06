@@ -381,7 +381,7 @@ function metadata(input = {}, current = {}) {
     ? input.validationRecoveryPhase
     : current.validationRecoveryPhase ?? null
   if (validationRecoveryPhase !== null
-    && validationRecoveryPhase !== "PENDING_HOST_VALIDATION") {
+    && !["PENDING_HOST_VALIDATION", "VALIDATION_REMEDIATION"].includes(validationRecoveryPhase)) {
     fail("INVALID_VALIDATION_RECOVERY_PHASE")
   }
   const validationRecoveryFencingToken = Object.hasOwn(input, "validationRecoveryFencingToken")

@@ -272,7 +272,31 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(foreignExecution.lease.abandonedAt).toBeUndefined()
   })
 
-  it("recovers only a dead local proof-bound validation holder while the supervisor is stopped", async () => {
+  it.each([
+    ["host validation", {
+      state: "HOST_VALIDATION_STARTED",
+      detail: "Recovered validation infrastructure",
+      metadata: (sourceFence: number, validationFailure: string) => ({
+        validationFailure,
+        validationRemediationRound: 0,
+        validationRecoveryPhase: "PENDING_HOST_VALIDATION",
+        validationRecoveryFencingToken: sourceFence,
+      }),
+    }],
+    ["validation remediation", {
+      state: "VALIDATION_REMEDIATION_REQUIRED",
+      detail: null,
+      metadata: (_sourceFence: number, validationFailure: string) => ({
+        validationFailure,
+        validationRemediationRound: 1,
+        validationRecoveryPhase: null,
+        validationRecoveryFencingToken: null,
+      }),
+    }],
+  ])("recovers only a dead local proof-bound %s holder while the supervisor is stopped", async (
+    label,
+    recoveryCheckpoint,
+  ) => {
     const orphanHolder = `${os.hostname()}:99999:11111111-1111-4111-8111-111111111111`
     const isProcessAlive = vi.fn(() => false)
     const value = fixture(undefined, { isProcessAlive })
@@ -301,7 +325,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       fencingToken: failed.fencingToken,
     })
     const reopened = value.state.reopenValidationInfrastructureWall({
-      idempotencyKey: "orphan-validation-reopen",
+      idempotencyKey: `77:recover-validation-infrastructure:${failed.fencingToken}`,
       outcomeId: "77",
       expectedFencingToken: failed.fencingToken,
       expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
@@ -314,6 +338,20 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       expectedFencingToken: reopened.fencingToken,
       holderId: orphanHolder,
       leaseDurationMs: 60_000,
+    })
+    value.state.checkpoint({
+      idempotencyKey: `orphan-validation-${label}`,
+      outcomeId: "77",
+      holderId: orphanHolder,
+      fencingToken: orphaned.fencingToken,
+      expectedCheckpointSequence: value.state.read().executions["77"].checkpoint.sequence,
+      state: recoveryCheckpoint.state,
+      detail: recoveryCheckpoint.detail,
+      metadata: recoveryCheckpoint.metadata(failed.fencingToken, validationFailure),
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      checkpoint: { state: recoveryCheckpoint.state, detail: recoveryCheckpoint.detail },
+      metadata: recoveryCheckpoint.metadata(failed.fencingToken, validationFailure),
     })
     fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
     const supervisorPath = path.join(value.root, "state", "supervisor.json")
@@ -410,6 +448,70 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       code: "HERMES_ORPHAN_RECOVERY_HOLDER_WALL",
     })
     expect(value.state.read().executions["77"].lease.abandonedAt).toBeUndefined()
+    expect(value.projectLease).not.toHaveBeenCalled()
+  })
+
+  it("refuses a later validation checkpoint without its exact recovery metadata", async () => {
+    const orphanHolder = `${os.hostname()}:99999:11111111-1111-4111-8111-111111111111`
+    const value = fixture(undefined, { isProcessAlive: vi.fn(() => false) })
+    const outcome = await value.selectOutcome()
+    const validationFailure = "Error: spawn EPERM while starting host validation"
+    const failed = value.state.acquireLease({
+      idempotencyKey: "malformed-later-validation-acquire",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome, validationFailure, validationRemediationRound: 3 },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "malformed-later-validation-terminal",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: failed.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "malformed-later-validation-release",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: failed.fencingToken,
+    })
+    const reopened = value.state.reopenValidationInfrastructureWall({
+      idempotencyKey: "malformed-later-validation-reopen",
+      outcomeId: "77",
+      expectedFencingToken: failed.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "d".repeat(64),
+    })
+    const orphaned = value.state.reclaimLease({
+      idempotencyKey: "malformed-later-validation-reclaim",
+      outcomeId: "77",
+      expectedFencingToken: reopened.fencingToken,
+      holderId: orphanHolder,
+      leaseDurationMs: 60_000,
+    })
+    value.state.checkpoint({
+      idempotencyKey: "malformed-later-validation-checkpoint",
+      outcomeId: "77",
+      holderId: orphanHolder,
+      fencingToken: orphaned.fencingToken,
+      expectedCheckpointSequence: value.state.read().executions["77"].checkpoint.sequence,
+      state: "VALIDATION_REMEDIATION_REQUIRED",
+      detail: null,
+      metadata: {
+        validationFailure: "",
+        validationRecoveryPhase: null,
+        validationRecoveryFencingToken: null,
+      },
+    })
+    fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
+
+    await expect(value.orchestrator.recoverOrphanedValidationCycleLease()).rejects.toMatchObject({
+      code: "HERMES_ORPHAN_RECOVERY_CANDIDATE_WALL",
+    })
     expect(value.projectLease).not.toHaveBeenCalled()
   })
 
@@ -561,11 +663,15 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
   })
 
-  it("reacquires a proof-bound validation recovery after a projection wall before its first checkpoint", async () => {
-    const verifyValidationInfrastructureRecovery = vi.fn(async () => true)
+  it("reacquires proof-bound validation remediation after an orphan recovery projection wall", async () => {
+    const resolveValidationInfrastructureRecovery = vi.fn(async () => ({
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 1,
+    }))
     const resumeQueueAfterValidationRecovery = vi.fn(async (outcome) => outcome)
     const value = fixture(undefined, {
-      verifyValidationInfrastructureRecovery,
+      resolveValidationInfrastructureRecovery,
       resumeQueueAfterValidationRecovery,
     })
     value.lifecycle.inspectWorkingTreePaths
@@ -618,6 +724,21 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       holderId: "projection-wall-holder",
       leaseDurationMs: 1000,
     })
+    value.state.checkpoint({
+      idempotencyKey: "validation-projection-wall-remediation-required",
+      outcomeId: "77",
+      holderId: "projection-wall-holder",
+      fencingToken: reclaimed.fencingToken,
+      expectedCheckpointSequence: value.state.read().executions["77"].checkpoint.sequence,
+      state: "VALIDATION_REMEDIATION_REQUIRED",
+      detail: null,
+      metadata: {
+        validationFailure,
+        validationRemediationRound: 1,
+        validationRecoveryPhase: null,
+        validationRecoveryFencingToken: null,
+      },
+    })
     value.state.abandonLease({
       idempotencyKey: "validation-projection-wall-abandon",
       outcomeId: "77",
@@ -627,10 +748,10 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(value.state.read().executions["77"]).toMatchObject({
       lease: { status: "ACTIVE", abandonReason: "HERMES_RUNTIME_PROJECTION_WALL" },
-      checkpoint: { state: "VALIDATION_INFRASTRUCTURE_RECOVERED" },
+      checkpoint: { state: "VALIDATION_REMEDIATION_REQUIRED" },
       metadata: {
-        validationRecoveryPhase: "PENDING_HOST_VALIDATION",
-        validationRecoveryFencingToken: lease.fencingToken,
+        validationRecoveryPhase: null,
+        validationRecoveryFencingToken: null,
       },
     })
 
@@ -639,15 +760,15 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       outcomeId: "77",
       prNumber: 500,
     })
-    expect(verifyValidationInfrastructureRecovery).toHaveBeenCalledWith({
+    expect(resolveValidationInfrastructureRecovery).toHaveBeenCalledWith({
       outcomeId: 77,
       expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
       proofDigest: "d".repeat(64),
-      expectedFencingToken: lease.fencingToken,
+      expectedFencingToken: null,
     })
     expect(resumeQueueAfterValidationRecovery).toHaveBeenCalledOnce()
     expect(value.lifecycle.runValidationCommands).toHaveBeenCalled()
-    expect(value.client.runTurn).not.toHaveBeenCalled()
+    expect(value.client.runTurn).toHaveBeenCalled()
   })
 
   it.each([
@@ -930,6 +1051,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       fencingToken: lease.fencingToken,
       expectedCheckpointSequence: 0,
       state: "HOST_VALIDATION_STARTED",
+      detail: "Recovered validation infrastructure",
     })
     value.state.abandonLease({
       idempotencyKey: "validation-final-round-crash",

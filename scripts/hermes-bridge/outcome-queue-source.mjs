@@ -8,6 +8,10 @@ import {
   TERMINAL_OUTCOME_STATES,
 } from "../../lib/outcome-queue/contract.mjs"
 import { isVerifiedPrimaryAuthorization } from "./primary-authorization-provenance.mjs"
+import {
+  createHermesDatabasePool,
+  HERMES_DATABASE_SCHEMA_TIMEOUT_MS,
+} from "./database-pool.mjs"
 
 const QUEUE_STATES = new Set(OUTCOME_LIFECYCLE_STATES)
 const APPROVAL_STATES = new Set(["approved", "unapproved", "revoked"])
@@ -1901,25 +1905,26 @@ export function digestOutcomeQueueCheckpointProof(input) {
 
 const poolByConnectionString = new Map()
 
-function poolFor(databaseUrl) {
-  let poolPromise = poolByConnectionString.get(databaseUrl)
+function poolFor(databaseUrl, queryTimeoutMs = undefined) {
+  const poolKey = `${queryTimeoutMs ?? "default"}:${databaseUrl}`
+  let poolPromise = poolByConnectionString.get(poolKey)
   if (!poolPromise) {
     poolPromise = import("pg")
       .then(({ Pool }) => {
-        const pool = new Pool({ connectionString: databaseUrl })
+        const pool = createHermesDatabasePool(Pool, databaseUrl, { queryTimeoutMs })
         pool.on("error", () => {
-          if (poolByConnectionString.get(databaseUrl) === poolPromise) {
-            poolByConnectionString.delete(databaseUrl)
+          if (poolByConnectionString.get(poolKey) === poolPromise) {
+            poolByConnectionString.delete(poolKey)
           }
           void pool.end().catch(() => {})
         })
         return pool
       })
       .catch((error) => {
-        poolByConnectionString.delete(databaseUrl)
+        poolByConnectionString.delete(poolKey)
         throw error
       })
-    poolByConnectionString.set(databaseUrl, poolPromise)
+    poolByConnectionString.set(poolKey, poolPromise)
   }
   return poolPromise
 }
@@ -1936,7 +1941,7 @@ function normalizeQuery(query) {
   return null
 }
 
-async function openQuery(query, databaseUrl, transactional = false) {
+async function openQuery(query, databaseUrl, transactional = false, queryTimeoutMs = undefined) {
   if (query && typeof query.connect === "function") {
     const client = await query.connect()
     return { query: client.query.bind(client), close: async () => client.release?.() }
@@ -1949,7 +1954,7 @@ async function openQuery(query, databaseUrl, transactional = false) {
   if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
     fail("DATABASE_URL_REQUIRED", "DATABASE_URL is required")
   }
-  const pool = await poolFor(databaseUrl)
+  const pool = await poolFor(databaseUrl, queryTimeoutMs)
   if (!transactional) return { query: pool.query.bind(pool), close: async () => {} }
   const client = await pool.connect()
   return {
@@ -2285,7 +2290,12 @@ export async function ensureOutcomeQueueHardeningSchema({
   query,
   databaseUrl = process.env.DATABASE_URL,
 } = {}) {
-  const connection = await openQuery(query, databaseUrl, true)
+  const connection = await openQuery(
+    query,
+    databaseUrl,
+    true,
+    HERMES_DATABASE_SCHEMA_TIMEOUT_MS,
+  )
   let begun = false
   let phase = "open"
   try {
