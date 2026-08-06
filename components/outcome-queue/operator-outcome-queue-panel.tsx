@@ -1,6 +1,7 @@
 "use client"
 
 import { useRef, useState, useTransition } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
   ArrowDown,
@@ -33,6 +34,7 @@ import {
 import type {
   OutcomeQueueOperatorRow,
 } from "@/lib/outcome-queue/operator-surface"
+import type { GoalTimelineProjection } from "@/components/goal-console/goal-timeline-read-model"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -46,6 +48,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { StatusBadge } from "@/components/status-badge"
 import { buildProtectedOutcomeReorderSnapshot } from "@/lib/outcome-queue/protected-reorder-snapshot"
+import { projectOutcomeQueueSupportingRecordLinks } from "@/components/outcome-queue/supporting-record-links"
 
 const REORDERABLE_STATES = new Set(["suggested", "approved", "blocked"])
 const TERMINAL_STATES = new Set(["completed", "declined", "superseded"])
@@ -106,9 +109,11 @@ function reorderInput(
 export function OperatorOutcomeQueuePanel({
   surface,
   compact = false,
+  timelines,
 }: {
   surface: OutcomeQueueActionSurface
   compact?: boolean
+  timelines?: readonly GoalTimelineProjection[]
 }) {
   const router = useRouter()
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(() => new Set())
@@ -387,6 +392,9 @@ export function OperatorOutcomeQueuePanel({
             const movable = !protectedAuthorityProposal
               && !row.isActive
               && movableIndex >= 0
+            const supportingRecordLinks = timelines
+              ? projectOutcomeQueueSupportingRecordLinks(row, timelines)
+              : []
             return (
               <li key={row.outcomeKey} className="grid gap-4 px-5 py-4 lg:grid-cols-[1fr_auto]">
                 <div className="min-w-0">
@@ -410,6 +418,49 @@ export function OperatorOutcomeQueuePanel({
                         <li key={blocker} className="text-xs text-warning">{blocker}</li>
                       ))}
                     </ul>
+                  ) : null}
+                  {supportingRecordLinks.length > 0 ? (
+                    <details className="mt-3 text-xs">
+                      <summary
+                        className="w-fit cursor-pointer font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground"
+                        aria-label={`Linked records for ${row.title}`}
+                      >
+                        Linked records ({supportingRecordLinks.reduce(
+                          (count, link) => count + link.records.length,
+                          0,
+                        )})
+                      </summary>
+                      <nav
+                        className="mt-3 grid gap-3 sm:grid-cols-2"
+                        aria-label={`Supporting records for ${row.title}`}
+                      >
+                        {supportingRecordLinks.map((link) => (
+                          <div key={link.kind} className="min-w-0 rounded-md border border-border bg-muted/20 p-3">
+                            <Link
+                              href={link.href}
+                              title={`Open the read-only ${link.kind.toLowerCase()} register`}
+                              className="font-medium text-primary underline-offset-4 hover:underline"
+                            >
+                              {link.label}
+                            </Link>
+                            <ul className="mt-2 space-y-2">
+                              {link.records.map((record) => (
+                                <li key={record.reference} className="min-w-0">
+                                  <span className="block break-all font-mono text-[10px] text-foreground">
+                                    {record.reference}
+                                  </span>
+                                  {record.detail ? (
+                                    <span className="mt-0.5 block break-words text-[11px] leading-relaxed text-muted-foreground">
+                                      {record.detail}
+                                    </span>
+                                  ) : null}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </nav>
+                    </details>
                   ) : null}
                 </div>
 

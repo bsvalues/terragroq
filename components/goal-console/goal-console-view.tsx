@@ -20,6 +20,7 @@ import { AGENTS } from "@/lib/goal/agent-matrix"
 import { lane as findLane, mode as findMode, authority as findAuthority } from "@/lib/goal/taxonomy"
 import { getGoalEmptyStatePrompts } from "@/components/goal-console/goal-empty-state"
 import { getGoalJourneyStep } from "@/components/goal-console/goal-journey"
+import { DURABLE_RECORD_ANCHORS } from "@/components/outcome-queue/supporting-record-links"
 import { OwnerOutcomeDeliveryPanel } from "@/components/goal-console/owner-outcome-delivery-panel"
 import { NeedsMyDecisionPanel } from "@/components/goal-console/needs-my-decision-panel"
 import { GoalTimelinePanel } from "@/components/goal-console/goal-timeline-panel"
@@ -135,16 +136,24 @@ export function GoalConsoleView({
   truth,
   timelines,
   initialAuthorityRequests,
+  initialGoalId = null,
 }: {
   initialGoals: Goal[]
   truth: CurrentTruth
   timelines: GoalTimelineProjection[]
   initialAuthorityRequests: GoalTimelineProjection[]
+  initialGoalId?: number | null
 }) {
   const router = useRouter()
   const [goals, setGoals] = useState<Goal[]>(initialGoals)
   const [command, setCommand] = useState("")
-  const [latest, setLatest] = useState<Goal | null>(initialGoals[0] ?? null)
+  const [latest, setLatest] = useState<Goal | null>(() => (
+    (initialGoalId === null
+      ? null
+      : initialGoals.find((goal) => goal.id === initialGoalId))
+    ?? initialGoals[0]
+    ?? null
+  ))
   const [loopReport, setLoopReport] = useState<LoopReport | null>(null)
   const [loopGoalId, setLoopGoalId] = useState<number | null>(null)
   const [goalTimelines, setGoalTimelines] = useState(
@@ -177,6 +186,15 @@ export function GoalConsoleView({
         state: "stale",
         lastSuccessfulObservation: null,
       }
+
+  useEffect(() => {
+    if (initialGoalId === null) return
+    const requestedGoal = initialGoals.find((goal) => goal.id === initialGoalId)
+    if (!requestedGoal) return
+    setLatest(requestedGoal)
+    setLoopReport(null)
+    setLoopGoalId(null)
+  }, [initialGoalId, initialGoals])
 
   useEffect(() => {
     const acceptedTimelines: GoalTimelineProjection[] = []
@@ -543,15 +561,17 @@ export function GoalConsoleView({
           {latest && <ClassificationCard goal={latest} />}
 
           {latest && (
-            <GoalTimelinePanel
-              timeline={selectedTimeline}
-              connection={selectedTimelineConnection}
-              decisionPending={decisionPending}
-              onRefresh={() => handleTimelineRefresh(latest.id)}
-              onAuthorityDecision={(choice) => {
-                if (selectedTimeline) handleAuthorityDecision(selectedTimeline, choice)
-              }}
-            />
+            <div id={DURABLE_RECORD_ANCHORS.goal} className="scroll-mt-6">
+              <GoalTimelinePanel
+                timeline={selectedTimeline}
+                connection={selectedTimelineConnection}
+                decisionPending={decisionPending}
+                onRefresh={() => handleTimelineRefresh(latest.id)}
+                onAuthorityDecision={(choice) => {
+                  if (selectedTimeline) handleAuthorityDecision(selectedTimeline, choice)
+                }}
+              />
+            </div>
           )}
 
           {/* Slice 2: Read-only loop verifier */}

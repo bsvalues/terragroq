@@ -51,6 +51,7 @@ import { StatusBadge } from "@/components/status-badge"
 import { getWorkOrderDraftChecklist } from "@/components/work-orders/work-order-draft-guidance"
 import { buildWorkOrderDraftPacket } from "@/components/work-orders/work-order-draft-packet"
 import { getWorkOrderEmptyStateSteps } from "@/components/work-orders/work-order-empty-state"
+import { DURABLE_RECORD_ANCHORS } from "@/components/outcome-queue/supporting-record-links"
 import {
   filterWorkOrders,
   getDistinctWorkOrderFilterValues,
@@ -605,9 +606,10 @@ export function WorkOrdersView({ initial }: { initial: WorkOrder[] }) {
                     {items.map((w) => (
                       <button
                         key={w.id}
+                        id={`${DURABLE_RECORD_ANCHORS.workOrder}-${w.id}`}
                         type="button"
                         onClick={() => setSelected(w)}
-                        className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 text-left transition-colors hover:border-primary/40"
+                        className="scroll-mt-6 flex flex-col gap-2 rounded-lg border border-border bg-card p-3 text-left transition-colors hover:border-primary/40 target:border-primary/60 target:ring-2 target:ring-primary/20"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-mono text-[10px] text-muted-foreground">

@@ -12,9 +12,10 @@ import {
   projectRuntimeEvidenceHistory,
   RUNTIME_EVIDENCE_HISTORY_LIMIT,
 } from "@/components/runtime/runtime-evidence"
-import { RuntimeExecutionPanel } from "@/components/runtime/runtime-execution-panel"
 import { Activity } from "lucide-react"
 import Link from "next/link"
+import { RuntimeExecutionPanel } from "@/components/runtime/runtime-execution-panel"
+import { DURABLE_RECORD_ANCHORS } from "@/components/outcome-queue/supporting-record-links"
 
 export default async function AuditPage() {
   const userId = await getUserId()
@@ -67,60 +68,77 @@ export default async function AuditPage() {
           </div>
           <EvidenceSpinePanel />
         </section>
-        {events.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border bg-card p-6">
-            <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 text-center">
-              <Activity className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm font-medium">No evidence events recorded yet</p>
-              <p className="text-sm leading-relaxed text-muted-foreground">
-                The record of reality fills only after operator actions, validation,
-                reviews, or production checks are captured. Start with a safe
-                governance surface; nothing runs automatically from these links.
-              </p>
-            </div>
-            <div className="mx-auto mt-6 grid max-w-3xl gap-3 md:grid-cols-3">
-              {getEventEmptyStateActions().map((action) => (
-                <Link
-                  key={action.href}
-                  href={action.href}
-                  className="rounded-md border border-border bg-background px-4 py-3 transition-colors hover:border-primary/40"
-                >
-                  <p className="text-sm font-medium">{action.title}</p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    {action.description}
-                  </p>
-                </Link>
-              ))}
-            </div>
+        <section
+          id={DURABLE_RECORD_ANCHORS.audit}
+          aria-labelledby="audit-event-register-title"
+          className="scroll-mt-6 space-y-3"
+        >
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Durable audit
+            </p>
+            <h2 id="audit-event-register-title" className="mt-1 text-base font-semibold">
+              Audit event register
+            </h2>
+            <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+              User-scoped recorded events linked from governed Goal and Work Order activity.
+            </p>
           </div>
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50">
-                <tr className="border-b border-border text-left font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                  <th className="px-4 py-2.5 font-medium">Timestamp</th>
-                  <th className="px-4 py-2.5 font-medium">Type</th>
-                  <th className="px-4 py-2.5 font-medium">Register</th>
-                  <th className="px-4 py-2.5 font-medium">Summary</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {events.map((e) => (
-                  <tr key={e.id} className="hover:bg-muted/30">
-                    <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                      {new Date(e.createdAt).toLocaleString()}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs">{e.type}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">
-                      {e.register ?? "—"}
-                    </td>
-                    <td className="px-4 py-2.5">{e.summary}</td>
-                  </tr>
+          {events.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border bg-card p-6">
+              <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 text-center">
+                <Activity className="h-8 w-8 text-muted-foreground" />
+                <p className="text-sm font-medium">No evidence events recorded yet</p>
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  The record of reality fills only after operator actions, validation,
+                  reviews, or production checks are captured. Start with a safe
+                  governance surface; nothing runs automatically from these links.
+                </p>
+              </div>
+              <div className="mx-auto mt-6 grid max-w-3xl gap-3 md:grid-cols-3">
+                {getEventEmptyStateActions().map((action) => (
+                  <Link
+                    key={action.href}
+                    href={action.href}
+                    className="rounded-md border border-border bg-background px-4 py-3 transition-colors hover:border-primary/40"
+                  >
+                    <p className="text-sm font-medium">{action.title}</p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {action.description}
+                    </p>
+                  </Link>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+              </div>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-lg border border-border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50">
+                  <tr className="border-b border-border text-left font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <th className="px-4 py-2.5 font-medium">Timestamp</th>
+                    <th className="px-4 py-2.5 font-medium">Type</th>
+                    <th className="px-4 py-2.5 font-medium">Register</th>
+                    <th className="px-4 py-2.5 font-medium">Summary</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {events.map((e) => (
+                    <tr key={e.id} className="hover:bg-muted/30">
+                      <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-muted-foreground">
+                        {new Date(e.createdAt).toLocaleString()}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs">{e.type}</td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">
+                        {e.register ?? "—"}
+                      </td>
+                      <td className="px-4 py-2.5">{e.summary}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       </div>
     </>
   )
