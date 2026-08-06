@@ -13,6 +13,8 @@ import {
   GOAL_TIMELINE_LOAD_LIMIT,
   loadGoalTimelineBatches,
   planMissingGoalTimelines,
+  prioritizeQueueGoalIds,
+  unavailableGoalTimelineIds,
 } from "@/components/outcome-queue/supporting-timeline-loader"
 
 const pageSource = readFileSync("app/(shell)/goal-console/page.tsx", "utf8")
@@ -142,7 +144,58 @@ describe("Goal Console outcome supporting-record drill-down", () => {
 
     expect(calls).toEqual(beyondTotalLimit.batches)
     expect(maximumConcurrentLoads).toBe(1)
-    expect(loaded).toHaveLength(50)
+    expect(loaded.records).toHaveLength(50)
+    expect(loaded.failedGoalIds).toEqual([])
+  })
+
+  it("prioritizes a live Goal after more than 50 terminal rows", () => {
+    const terminalRows = Array.from({ length: 51 }, (_, index) => ({
+      goalId: index + 1,
+      isActive: false,
+      isNextEligible: false,
+      lifecycleState: "completed",
+    }))
+    const liveGoalId = 900
+    const queueGoalIds = prioritizeQueueGoalIds([
+      ...terminalRows,
+      {
+        goalId: liveGoalId,
+        isActive: true,
+        isNextEligible: false,
+        lifecycleState: "active",
+      },
+    ])
+    const plan = planMissingGoalTimelines(queueGoalIds, [])
+
+    expect(queueGoalIds[0]).toBe(liveGoalId)
+    expect(plan.selectedGoalIds).toContain(liveGoalId)
+    expect(plan.selectedGoalIds).toEqual([
+      liveGoalId,
+      ...Array.from({ length: 49 }, (_, index) => index + 1),
+    ])
+    expect(plan.selectedGoalIds).not.toContain(50)
+    expect(plan.truncated).toBe(true)
+  })
+
+  it("preserves successful batches and marks every failed-batch Goal unavailable", async () => {
+    const firstBatch = Array.from({ length: 25 }, (_, index) => index + 1)
+    const secondBatch = Array.from({ length: 25 }, (_, index) => index + 26)
+    const loaded = await loadGoalTimelineBatches(
+      [firstBatch, secondBatch],
+      async (goalIds) => {
+        if (goalIds[0] === firstBatch[0]) throw new Error("batch unavailable")
+        return goalIds
+      },
+    )
+
+    expect(loaded.records).toEqual(secondBatch)
+    expect(loaded.failedGoalIds).toEqual(firstBatch)
+    expect(unavailableGoalTimelineIds(
+      [...firstBatch, ...secondBatch],
+      loaded.records,
+      loaded.failedGoalIds,
+    )).toEqual(firstBatch)
+    expect(pageSource).toContain("additionalTimelineLoad.failedGoalIds")
   })
 
   it("re-applies A after A to B to unavailable to A without refresh resets", () => {

@@ -15,6 +15,8 @@ import { requestedGoalId } from "@/components/goal-console/requested-goal-id"
 import {
   loadGoalTimelineBatches,
   planMissingGoalTimelines,
+  prioritizeQueueGoalIds,
+  unavailableGoalTimelineIds,
 } from "@/components/outcome-queue/supporting-timeline-loader"
 
 export default async function GoalConsolePage({
@@ -30,23 +32,24 @@ export default async function GoalConsolePage({
     getActiveGoalAuthorityRequestTimelines(),
     getOutcomeQueueSurface(),
   ])
-  const queueGoalIds = [...new Set(outcomeQueue.rows.flatMap((row) => (
-    row.goalId === null ? [] : [row.goalId]
-  )))]
+  const queueGoalIds = prioritizeQueueGoalIds(outcomeQueue.rows)
   const knownGoalIds = new Set(timelines.map((timeline) => timeline.goal.id))
   const missingTimelinePlan = planMissingGoalTimelines(queueGoalIds, knownGoalIds)
-  const additionalTimelines = await loadGoalTimelineBatches(
+  const additionalTimelineLoad = await loadGoalTimelineBatches(
     missingTimelinePlan.batches,
     getGoalTimelinesByIds,
   )
+  const additionalTimelines = additionalTimelineLoad.records
   const supportingTimelines = [...timelines, ...additionalTimelines]
   const returnedAdditionalGoalIds = new Set(
     additionalTimelines.map((timeline) => timeline.goal.id),
   )
   const supportingTimelineCoverage = {
     coveredGoalIds: [...knownGoalIds, ...missingTimelinePlan.selectedGoalIds],
-    unavailableGoalIds: missingTimelinePlan.selectedGoalIds.filter(
-      (goalId) => !returnedAdditionalGoalIds.has(goalId),
+    unavailableGoalIds: unavailableGoalTimelineIds(
+      missingTimelinePlan.selectedGoalIds,
+      returnedAdditionalGoalIds,
+      additionalTimelineLoad.failedGoalIds,
     ),
     truncated: missingTimelinePlan.truncated,
   }

@@ -32,7 +32,10 @@ record surfaces.
   correctly reapplies A instead of leaving the guard stuck, and a still-requested Goal can apply if
   it later becomes available.
 - Missing queue Goal timelines are capped at 50 per request and loaded sequentially in batches of
-  25, bounding both total enrichment work and concurrent database fan-out. Rows beyond that window
+  25, bounding both total enrichment work and concurrent database fan-out. Active and next-eligible
+  Goals are selected first, followed by other nonterminal Goals and then terminal history, with
+  queue order preserved within each group. A failed batch contributes no projections, does not stop
+  later batches, and marks every Goal in that batch unavailable. Rows beyond the selected window
   visibly report deferred supporting-record coverage and state that missing links are not evidence
   of no records; attempted Goal reads that return no exact projection report unavailable coverage.
 - Evidence deduplication uses the record-specific href as canonical identity. When one display ref
@@ -53,8 +56,10 @@ record surfaces.
   Evidence normalization, canonical-ID/display-alias collisions, multi-valued parser rejection,
   Goal-index duplicate retention, exact destinations, and unsupported Trace-event omission.
 - `tests/goal-console-outcome-record-drilldown.test.ts` exercises the timeline cap and sequential
-  loader with more than 25 and more than 50 Goal IDs, renders the row-51 coverage boundary, exercises
-  the deep-link request sequence and query parser, and records the exact-read and indexed-render
+  loader with more than 25 and more than 50 Goal IDs, proves a live Goal following 51 terminal rows
+  is still selected, and proves one failed batch does not discard a later successful batch while all
+  failed-batch IDs become unavailable. It also renders the row-51 coverage boundary, exercises the
+  deep-link request sequence and query parser, and records the exact-read and indexed-render
   contracts.
 
 ## Independent file review
@@ -63,7 +68,8 @@ The post-review remediation received a direct file-only consistency and safety r
 file-level defect was found in the reserved-path changes:
 
 - `app/(shell)/goal-console/page.tsx` fills at most 50 missing queue timelines in sequential batches
-  of at most 25 and passes the requested Goal ID into the Goal Console view.
+  of at most 25, prioritizes operationally live/nonterminal rows over retained terminal history,
+  isolates individual batch failures, and passes the requested Goal ID into the Goal Console view.
 - `components/outcome-queue/operator-outcome-queue-panel.tsx` renders the labelled record navigation
   only when at least one projected record exists, links each resolvable durable reference, and shows
   explicit deferred/unavailable coverage without implying that uncovered records do not exist.
@@ -100,6 +106,14 @@ The first focused native-host rerun passed all 17 supporting-record link tests b
 the rendered coverage fixture because Vite import analysis received preserved JSX from the directly
 imported TSX module. The coverage component now emits the same markup through `createElement`, keeping
 the behavioral rendered-boundary proof while removing preserved JSX from that focused import path.
+
+The latest exact-head review found that terminal history could consume all 50 enrichment slots and
+that one rejected timeline batch could fail the entire Goal Console request. The current handoff
+prioritizes active, next-eligible, and other nonterminal rows before terminal history; isolates each
+batch failure; preserves successful batches; and explicitly classifies every failed-batch Goal as
+unavailable. Behavioral coverage includes a live Goal after 51 terminal rows and a failed first batch
+followed by a successful second batch. These changes received direct file review; native validation
+was intentionally not run in this bounded lane.
 
 ## Safety and handoff
 
