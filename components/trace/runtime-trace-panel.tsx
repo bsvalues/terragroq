@@ -11,6 +11,7 @@ import {
   type RuntimeTraceProjection,
 } from "@/components/trace/runtime-trace-projection"
 import { Badge } from "@/components/ui/badge"
+import { DURABLE_RECORD_ANCHORS } from "@/components/outcome-queue/supporting-record-links"
 
 type RuntimeEventType = typeof RUNTIME_CHECKPOINT_EVENT | typeof RUNTIME_FAILURE_EVENT
 
@@ -24,7 +25,10 @@ export function RuntimeTracePanel({
   const failureEvals = records.filter((record) => record.eventType === RUNTIME_FAILURE_EVENT)
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border bg-card">
+    <section
+      id={DURABLE_RECORD_ANCHORS.trace}
+      className="scroll-mt-6 overflow-hidden rounded-lg border border-border bg-card"
+    >
       <div className="flex flex-col gap-3 border-b border-border bg-muted/30 px-4 py-3 md:flex-row md:items-start md:justify-between">
         <div>
           <div className="flex items-center gap-2">

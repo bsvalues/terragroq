@@ -33,7 +33,7 @@ describe("Goal Console persisted timeline surface", () => {
 
   it("consumes the persisted Goal timeline query", () => {
     expect(pageSource).toContain("getGoalTimelines")
-    expect(pageSource).toContain("timelines={timelines}")
+    expect(pageSource).toContain("timelines={supportingTimelines}")
     expect(panelSource).toContain("Persisted execution, validation, delivery, and evidence")
     expect(panelSource).toContain("WilliamOS is not inferring runtime progress")
     expect(panelSource).toContain("timeline.validationCheckpoints.at(-1)?.result")
