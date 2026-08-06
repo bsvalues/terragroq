@@ -1297,7 +1297,7 @@ export async function recoverValidationInfrastructureOutcome({
 }
 
 export async function recordValidationInfrastructureRecoveryProof({
-  query,
+  transactionClient,
   databaseUrl = process.env.DATABASE_URL,
   outcomeId,
   expectedNextState = VALIDATION_INFRASTRUCTURE_RETRY_STATE,
@@ -1312,17 +1312,31 @@ export async function recordValidationInfrastructureRecoveryProof({
     || !Number.isSafeInteger(fencingToken) || fencingToken <= 0) {
     throw Object.assign(new Error("validation recovery proof is invalid"), { code: "VALIDATION_RECOVERY_PROOF_INVALID" })
   }
-  let runQuery = normalizeQuery(query)
+  if (transactionClient !== undefined
+    && (typeof transactionClient?.query !== "function"
+      || typeof transactionClient?.release !== "function")) {
+    throw Object.assign(new Error("transactionClient must be a dedicated database client"), {
+      code: "VALIDATION_RECOVERY_TRANSACTION_CLIENT_INVALID",
+    })
+  }
+  let runQuery = transactionClient?.query?.bind(transactionClient)
   let pool
+  let client
   if (!runQuery) {
     if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
     pool = new Pool({ connectionString: databaseUrl })
-    runQuery = pool.query.bind(pool)
   }
   try {
+    if (pool) {
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+    }
+    const proofIdentity = `hermes-validation-recovery-proof:${outcomeId}:${expectedNextState}:${proofDigest}`
+    await runQuery("BEGIN")
+    await runQuery("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [proofIdentity])
     const recorded = await runQuery(
       `WITH latest_terminal AS (
          SELECT id, metadata
@@ -1347,13 +1361,17 @@ export async function recordValidationInfrastructureRecoveryProof({
          WHERE prior."entityType" = 'goal' AND prior."entityId"::text = candidate.id::text
            AND prior."eventType" = 'HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED'
            AND prior.metadata->>'proofDigest' = $4
+           AND prior.metadata->>'retryState' = $2
            AND prior.id > candidate."terminalId"
        )
        RETURNING id`,
       [outcomeId, expectedNextState,
         JSON.stringify({ retryState: expectedNextState, proofDigest, fencingToken }), proofDigest],
     )
-    if (recorded?.rows?.length > 0) return true
+    if (recorded?.rows?.length > 0) {
+      await runQuery("COMMIT")
+      return true
+    }
     const prior = await runQuery(
       `WITH latest_terminal AS (
          SELECT id FROM governance_event
@@ -1365,12 +1383,21 @@ export async function recordValidationInfrastructureRecoveryProof({
          SELECT 1 FROM governance_event proof, latest_terminal terminal
          WHERE proof."entityType" = 'goal' AND proof."entityId"::text = ($1::integer)::text
            AND proof."eventType" = 'HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED'
-           AND proof.metadata->>'proofDigest' = $2 AND proof.id > terminal.id
+           AND proof.metadata->>'proofDigest' = $2
+           AND proof.metadata->>'retryState' = $3
+           AND proof.metadata->>'fencingToken' = $4
+           AND proof.id > terminal.id
        ) AS recorded`,
-      [outcomeId, proofDigest],
+      [outcomeId, proofDigest, expectedNextState, String(fencingToken)],
     )
-    return prior?.rows?.[0]?.recorded === true
+    const alreadyRecorded = prior?.rows?.[0]?.recorded === true
+    await runQuery(alreadyRecorded ? "COMMIT" : "ROLLBACK")
+    return alreadyRecorded
+  } catch (error) {
+    try { await runQuery?.("ROLLBACK") } catch {}
+    throw error
   } finally {
+    client?.release()
     if (pool) await pool.end()
   }
 }

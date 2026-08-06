@@ -800,7 +800,12 @@ export function reopenValidationInfrastructureWall(filePath, request, options = 
     const ownerTouchesRemainZero = COUNTER_NAMES.every(
       (counter) => state.ownerTouchCounters[counter] === 0,
     )
-    if (current.lease.status !== "RELEASED"
+    const releasedOrExactlyAbandoned = current.lease.status === "RELEASED"
+      || (current.lease.status === "ACTIVE"
+        && typeof current.lease.abandonedAt === "string"
+        && current.lease.abandonedAt === current.lease.expiresAt
+        && current.lease.abandonReason === "HERMES_CYCLE_PROCESS_EXIT")
+    if (!releasedOrExactlyAbandoned
       || current.checkpoint.state !== "FAILED_TERMINAL"
       || current.checkpoint.detail !== VALIDATION_INFRASTRUCTURE_DETAIL
       || request.expectedDetail !== VALIDATION_INFRASTRUCTURE_DETAIL
@@ -812,8 +817,10 @@ export function reopenValidationInfrastructureWall(filePath, request, options = 
       || !ownerTouchesRemainZero) {
       fail("VALIDATION_INFRASTRUCTURE_RECOVERY_STATE_WALL")
     }
+    const recoveryFencingToken = state.nextFencingToken++
     const reopened = {
       ...current,
+      fencingToken: recoveryFencingToken,
       lease: {
         ...current.lease,
         status: "ABANDONED",

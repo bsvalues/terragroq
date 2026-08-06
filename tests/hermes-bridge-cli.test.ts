@@ -233,7 +233,7 @@ describe("Hermes bridge CLI", () => {
           },
           executions: { "5": candidate },
         }),
-        reopenValidationInfrastructureWall: vi.fn(() => { calls.push("state"); return {} }),
+        reopenValidationInfrastructureWall: vi.fn(() => { calls.push("state"); return { fencingToken: 15 } }),
       },
     }
     const recordProof = vi.fn(async () => { calls.push("proof"); return true })
@@ -241,9 +241,43 @@ describe("Hermes bridge CLI", () => {
 
     await expect(recoverValidationInfrastructureWall({ orchestrator, recordProof, recoverOutcome }))
       .resolves.toMatchObject({ result: "RECOVERED", outcomeId: "5", proofRecorded: true })
-    expect(calls).toEqual(["state", "proof", "database"])
+    expect(calls).toEqual(["proof", "state", "database"])
     expect(recordProof.mock.calls[0][0]).toMatchObject({ outcomeId: 5, fencingToken: 14 })
     expect(recoverOutcome.mock.calls[0][0].proofDigest).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it("leaves local validation state untouched when durable terminal proof is absent", async () => {
+    const reopenValidationInfrastructureWall = vi.fn()
+    const orchestrator = {
+      state: {
+        read: () => ({
+          ownerTouchCounters: {
+            OWNER_OPERATION_TOUCH_COUNT: 0, OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+            OWNER_DIAGNOSTIC_TOUCH_COUNT: 0, OWNER_ROUTINE_DECISION_COUNT: 0,
+            OWNER_ROUTINE_CONTACT_COUNT: 0,
+          },
+          executions: { "12": {
+            outcomeId: "12", fencingToken: 72,
+            lease: { status: "RELEASED" },
+            checkpoint: {
+              sequence: 86, state: "FAILED_TERMINAL",
+              detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+            },
+            metadata: { validationFailure: "Error: spawn EPERM" },
+          } },
+        }),
+        reopenValidationInfrastructureWall,
+      },
+    }
+    const recoverOutcome = vi.fn()
+
+    await expect(recoverValidationInfrastructureWall({
+      orchestrator,
+      recordProof: vi.fn(async () => false),
+      recoverOutcome,
+    })).rejects.toMatchObject({ code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL" })
+    expect(reopenValidationInfrastructureWall).not.toHaveBeenCalled()
+    expect(recoverOutcome).not.toHaveBeenCalled()
   })
 
   it("classifies a missing isolated-worktree Vitest executable as recoverable infrastructure", async () => {
@@ -254,7 +288,7 @@ describe("Hermes bridge CLI", () => {
       checkpoint: { sequence: 25, state: "FAILED_TERMINAL", detail: "VALIDATION_REMEDIATION_EXHAUSTED" },
       metadata: { validationFailure },
     }
-    const reopenValidationInfrastructureWall = vi.fn(() => ({ checkpointSequence: 26 }))
+    const reopenValidationInfrastructureWall = vi.fn(() => ({ checkpointSequence: 26, fencingToken: 55 }))
     const orchestrator = {
       state: {
         read: () => ({
@@ -274,6 +308,86 @@ describe("Hermes bridge CLI", () => {
     await expect(recoverValidationInfrastructureWall({ orchestrator, recordProof, recoverOutcome }))
       .resolves.toMatchObject({ result: "RECOVERED", outcomeId: "12", proofRecorded: true })
     expect(reopenValidationInfrastructureWall).toHaveBeenCalledOnce()
+  })
+
+  it("reopens validation infrastructure after an exact cycle-exit abandonment", async () => {
+    const validationFailure = "npm run lint exited 1\nFailed to load plugin 'react-hooks' declared in eslint-config-next: Cannot find module 'eslint-plugin-react-hooks'"
+    const abandonedAt = "2026-08-06T07:27:19.027Z"
+    const candidate = {
+      outcomeId: "12", fencingToken: 72,
+      lease: {
+        status: "ACTIVE", abandonedAt, expiresAt: abandonedAt,
+        abandonReason: "HERMES_CYCLE_PROCESS_EXIT",
+      },
+      checkpoint: {
+        sequence: 86, state: "FAILED_TERMINAL",
+        detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      },
+      metadata: { validationFailure },
+    }
+    const reopenValidationInfrastructureWall = vi.fn(() => ({ checkpointSequence: 87, fencingToken: 73 }))
+    const orchestrator = {
+      state: {
+        read: () => ({
+          ownerTouchCounters: {
+            OWNER_OPERATION_TOUCH_COUNT: 0, OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+            OWNER_DIAGNOSTIC_TOUCH_COUNT: 0, OWNER_ROUTINE_DECISION_COUNT: 0,
+            OWNER_ROUTINE_CONTACT_COUNT: 0,
+          },
+          executions: { "12": candidate },
+        }),
+        reopenValidationInfrastructureWall,
+      },
+    }
+
+    await expect(recoverValidationInfrastructureWall({
+      orchestrator,
+      recordProof: vi.fn(async ({ fencingToken }) => fencingToken === 72),
+      recoverOutcome: vi.fn(async () => true),
+    })).resolves.toMatchObject({ result: "RECOVERED", outcomeId: "12" })
+    expect(reopenValidationInfrastructureWall).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    [{ status: "ACTIVE", expiresAt: "2026-08-06T07:27:19.027Z" }, "missing abandonment"],
+    [{
+      status: "ACTIVE",
+      abandonedAt: "2026-08-06T07:27:18.000Z",
+      expiresAt: "2026-08-06T07:27:19.027Z",
+      abandonReason: "HERMES_CYCLE_PROCESS_EXIT",
+    }, "mismatched abandonment"],
+    [{
+      status: "ACTIVE",
+      abandonedAt: "2026-08-06T07:27:19.027Z",
+      expiresAt: "2026-08-06T07:27:19.027Z",
+      abandonReason: "MANUAL",
+    }, "non-cycle-exit abandonment"],
+  ])("rejects an ACTIVE validation terminal with %s", async (lease) => {
+    const validationFailure = "npm run lint exited 1\nFailed to load plugin 'react-hooks' declared in eslint-config-next: Cannot find module 'eslint-plugin-react-hooks'"
+    const orchestrator = {
+      state: {
+        read: () => ({
+          ownerTouchCounters: {
+            OWNER_OPERATION_TOUCH_COUNT: 0, OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+            OWNER_DIAGNOSTIC_TOUCH_COUNT: 0, OWNER_ROUTINE_DECISION_COUNT: 0,
+            OWNER_ROUTINE_CONTACT_COUNT: 0,
+          },
+          executions: { "12": {
+            outcomeId: "12", fencingToken: 72, lease,
+            checkpoint: {
+              sequence: 86, state: "FAILED_TERMINAL",
+              detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+            },
+            metadata: { validationFailure },
+          } },
+        }),
+        reopenValidationInfrastructureWall: vi.fn(),
+      },
+    }
+
+    await expect(recoverValidationInfrastructureWall({ orchestrator }))
+      .rejects.toMatchObject({ code: "HERMES_VALIDATION_RECOVERY_CANDIDATE_WALL" })
+    expect(orchestrator.state.reopenValidationInfrastructureWall).not.toHaveBeenCalled()
   })
 
   it("recovers one contained external-tool wall through the supported CLI path", () => {
