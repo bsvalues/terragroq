@@ -3,6 +3,7 @@ import process from "node:process"
 import { pathToFileURL } from "node:url"
 
 import { ensureOutcomeQueueHardeningSchema } from "./outcome-queue-source.mjs"
+import { createHermesDatabasePool } from "./database-pool.mjs"
 
 const REPOSITORY = "bsvalues/terragroq"
 const PRIMARY_EMAIL = "bsvalues@gmail.com"
@@ -473,7 +474,7 @@ export async function materializeV12ContinuousCampaign({
   let ownsPool = false
   if (!pool) {
     const { Pool } = createPool ? { Pool: createPool } : await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
     ownsPool = true
   }
   if (typeof pool?.connect !== "function") throw new Error("V1_2_CAMPAIGN_POOL_WALL")

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 
 import { evaluateOutcomePolicy } from "./policy.mjs"
+import { createHermesDatabasePool } from "./database-pool.mjs"
 
 export const OUTCOME_SELECTION_SQL = `
 SELECT
@@ -191,7 +192,7 @@ export async function recordOwnerAuthorityDecision({
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
   }
 
   try {
@@ -569,7 +570,7 @@ export async function readApprovedOwnerDecision({
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
     runQuery = pool.query.bind(pool)
   }
   try {
@@ -753,7 +754,7 @@ export async function selectNextOutcome({
       throw error
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
     runQuery = pool.query.bind(pool)
   }
 
@@ -784,7 +785,7 @@ export async function completeOutcome({ query, databaseUrl = process.env.DATABAS
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
   }
   try {
     if (pool) {
@@ -886,7 +887,7 @@ export async function terminalizeOutcome({
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
   }
   try {
     if (pool) {
@@ -981,7 +982,7 @@ export async function deferProviderOutcome({
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
   }
   try {
     if (pool) {
@@ -1055,7 +1056,7 @@ export async function readValidationInfrastructureRecovery({
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
     runQuery = pool.query.bind(pool)
   }
   try {
@@ -1113,7 +1114,7 @@ export async function recoverNativeProviderOutcome({
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
   }
   try {
     if (pool) {
@@ -1204,7 +1205,7 @@ export async function recoverValidationInfrastructureOutcome({
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
   }
   try {
     if (pool) {
@@ -1327,7 +1328,7 @@ export async function recordValidationInfrastructureRecoveryProof({
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
   }
   try {
     if (pool) {
@@ -1549,7 +1550,7 @@ export async function projectOutcomeRuntimeCheckpoint({
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
   }
 
   try {
@@ -1788,7 +1789,7 @@ export async function verifyReviewRecoveryProjectionCollision({
   if (!runQuery) {
     if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") return false
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
     runQuery = pool.query.bind(pool)
   }
   try {
@@ -1882,7 +1883,7 @@ export async function projectOutcomeRuntimeLease({
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
   }
 
   try {
@@ -1994,7 +1995,7 @@ export async function recoverReviewedOutcome({
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
   }
 
   try {
@@ -2108,7 +2109,7 @@ export async function recoverTerminalPostMergeCleanupOutcome({
       throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
     }
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = createHermesDatabasePool(Pool, databaseUrl)
   }
 
   try {

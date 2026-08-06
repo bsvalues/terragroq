@@ -8,6 +8,7 @@ import {
   TERMINAL_OUTCOME_STATES,
 } from "../../lib/outcome-queue/contract.mjs"
 import { isVerifiedPrimaryAuthorization } from "./primary-authorization-provenance.mjs"
+import { createHermesDatabasePool } from "./database-pool.mjs"
 
 const QUEUE_STATES = new Set(OUTCOME_LIFECYCLE_STATES)
 const APPROVAL_STATES = new Set(["approved", "unapproved", "revoked"])
@@ -1906,7 +1907,7 @@ function poolFor(databaseUrl) {
   if (!poolPromise) {
     poolPromise = import("pg")
       .then(({ Pool }) => {
-        const pool = new Pool({ connectionString: databaseUrl })
+        const pool = createHermesDatabasePool(Pool, databaseUrl)
         pool.on("error", () => {
           if (poolByConnectionString.get(databaseUrl) === poolPromise) {
             poolByConnectionString.delete(databaseUrl)

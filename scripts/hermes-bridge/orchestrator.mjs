@@ -367,14 +367,44 @@ export function createHermesOrchestrator(options = {}) {
     }
     const persisted = state.read()
     assertOwnerTouchCountersZero(persisted)
+    const recoverableValidationStates = new Set([
+      "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      "HOST_VALIDATION_STARTED",
+      "VALIDATION_REMEDIATION_REQUIRED",
+    ])
+    const hasRecoverySourceFence = (execution) => (
+      Number.isSafeInteger(execution?.metadata?.validationRecoveryFencingToken)
+      && execution.metadata.validationRecoveryFencingToken > 0
+    )
+    const matchesRecoverableValidationState = (execution) => {
+      if (execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED") {
+        return execution.checkpoint.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
+          && execution.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+          && hasRecoverySourceFence(execution)
+      }
+      if (execution?.checkpoint?.state === "HOST_VALIDATION_STARTED") {
+        return execution.checkpoint.detail === "Recovered validation infrastructure"
+          && execution.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+          && hasRecoverySourceFence(execution)
+      }
+      if (execution?.checkpoint?.state === "VALIDATION_REMEDIATION_REQUIRED") {
+        return execution.checkpoint.detail === null
+          && execution.metadata?.validationRecoveryPhase === null
+          && execution.metadata?.validationRecoveryFencingToken === null
+          && typeof execution.metadata?.validationFailure === "string"
+          && execution.metadata.validationFailure.length > 0
+          && Number.isSafeInteger(execution.metadata?.validationRemediationRound)
+          && execution.metadata.validationRemediationRound > 0
+      }
+      return false
+    }
     const candidates = Object.values(persisted.executions).filter((execution) => (
       execution?.lease?.status === "ACTIVE"
-      && execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
-      && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
-      && execution?.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+      && recoverableValidationStates.has(execution?.checkpoint?.state)
+      && matchesRecoverableValidationState(execution)
+      && execution?.metadata?.outcome
+      && String(execution.metadata.outcome.id) === String(execution.outcomeId)
       && /^[0-9a-f]{64}$/.test(String(execution?.metadata?.validationRecoveryProofDigest ?? ""))
-      && Number.isSafeInteger(execution?.metadata?.validationRecoveryFencingToken)
-      && execution.metadata.validationRecoveryFencingToken > 0
     ))
     if (candidates.length !== 1) {
       throw Object.assign(new Error("Exactly one orphaned validation recovery lease is required"), {
