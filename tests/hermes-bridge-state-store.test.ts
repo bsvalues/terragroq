@@ -386,15 +386,17 @@ describe("Hermes bridge durable state store", () => {
     const validationFailureDigest = createHash("sha256").update(validationFailure).digest("hex")
     const proofDigest = "b".repeat(64)
 
-    expect(store.reopenValidationInfrastructureWall({
+    const reopened = store.reopenValidationInfrastructureWall({
       outcomeId: "5", expectedFencingToken: first.fencingToken,
       expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED", validationFailure,
       expectedValidationFailureDigest: validationFailureDigest, proofDigest,
       idempotencyKey: "validation-recover",
-    })).toMatchObject({
+    })
+    expect(reopened).toMatchObject({
       leaseStatus: "ABANDONED", checkpointSequence: 2,
       state: "VALIDATION_INFRASTRUCTURE_RECOVERED",
     })
+    expect(reopened.fencingToken).toBeGreaterThan(first.fencingToken)
     expect(store.read().executions["5"]).toMatchObject({
       lease: { status: "ABANDONED", recoverReason: "VALIDATION_INFRASTRUCTURE_REMEDIATED" },
       checkpoint: { state: "VALIDATION_INFRASTRUCTURE_RECOVERED" },
@@ -406,6 +408,11 @@ describe("Hermes bridge durable state store", () => {
         headRefOid: null,
       },
     })
+    expect(() => store.reclaimLease({
+      outcomeId: "5", expectedFencingToken: first.fencingToken,
+      holderId: "stale-cycle", leaseDurationMs: 1000,
+      idempotencyKey: "stale-cycle-reclaim",
+    })).toThrowError(expect.objectContaining({ code: "FENCING_TOKEN_CONFLICT" }))
   })
 
   it("reopens an exact missing-executable validation infrastructure terminal", () => {
@@ -435,6 +442,117 @@ describe("Hermes bridge durable state store", () => {
       leaseStatus: "ABANDONED",
       state: "VALIDATION_INFRASTRUCTURE_RECOVERED",
     })
+  })
+
+  it("reopens an exact validation terminal abandoned during cycle exit", () => {
+    const { store } = fixture()
+    const validationFailure = "npm run lint exited 1\nFailed to load plugin 'react-hooks' declared in eslint-config-next: Cannot find module 'eslint-plugin-react-hooks'"
+    const first = store.acquireLease({
+      outcomeId: "12", holderId: "cycle-holder", leaseDurationMs: 1000,
+      metadata: { validationFailure, validationRemediationRound: 3 },
+      idempotencyKey: "cycle-abandon-acquire",
+    })
+    store.checkpoint({
+      outcomeId: "12", holderId: "cycle-holder", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED", idempotencyKey: "cycle-abandon-failed",
+    })
+    store.abandonLease({
+      outcomeId: "12", holderId: "cycle-holder", fencingToken: first.fencingToken,
+      reason: "HERMES_CYCLE_PROCESS_EXIT", idempotencyKey: "cycle-abandon",
+    })
+
+    expect(store.reopenValidationInfrastructureWall({
+      outcomeId: "12", expectedFencingToken: first.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "d".repeat(64), idempotencyKey: "cycle-abandon-recover",
+    })).toMatchObject({
+      leaseStatus: "ABANDONED",
+      state: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+    })
+  })
+
+  it("rejects a still-live validation terminal without abandonment evidence", () => {
+    const { store } = fixture()
+    const validationFailure = "npm run lint exited 1\nFailed to load plugin 'react-hooks' declared in eslint-config-next: Cannot find module 'eslint-plugin-react-hooks'"
+    const first = store.acquireLease({
+      outcomeId: "12", holderId: "live-holder", leaseDurationMs: 1000,
+      metadata: { validationFailure, validationRemediationRound: 3 },
+      idempotencyKey: "live-acquire",
+    })
+    store.checkpoint({
+      outcomeId: "12", holderId: "live-holder", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED", idempotencyKey: "live-failed",
+    })
+
+    expect(() => store.reopenValidationInfrastructureWall({
+      outcomeId: "12", expectedFencingToken: first.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "e".repeat(64), idempotencyKey: "live-recover",
+    })).toThrowError(expect.objectContaining({ code: "VALIDATION_INFRASTRUCTURE_RECOVERY_STATE_WALL" }))
+  })
+
+  it("rejects mismatched validation abandonment timestamps", () => {
+    const { dir, store } = fixture()
+    const validationFailure = "npm run lint exited 1\nFailed to load plugin 'react-hooks' declared in eslint-config-next: Cannot find module 'eslint-plugin-react-hooks'"
+    const first = store.acquireLease({
+      outcomeId: "12", holderId: "cycle-holder", leaseDurationMs: 1000,
+      metadata: { validationFailure, validationRemediationRound: 3 },
+      idempotencyKey: "mismatch-acquire",
+    })
+    store.checkpoint({
+      outcomeId: "12", holderId: "cycle-holder", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED", idempotencyKey: "mismatch-failed",
+    })
+    store.abandonLease({
+      outcomeId: "12", holderId: "cycle-holder", fencingToken: first.fencingToken,
+      reason: "HERMES_CYCLE_PROCESS_EXIT", idempotencyKey: "mismatch-abandon",
+    })
+    const statePath = join(dir, "state.json")
+    const persisted = JSON.parse(readFileSync(statePath, "utf8"))
+    persisted.executions["12"].lease.expiresAt = "2026-07-21T00:00:00.001Z"
+    writeFileSync(statePath, `${JSON.stringify(persisted, null, 2)}\n`)
+
+    expect(() => store.reopenValidationInfrastructureWall({
+      outcomeId: "12", expectedFencingToken: first.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "f".repeat(64), idempotencyKey: "mismatch-recover",
+    })).toThrowError(expect.objectContaining({ code: "VALIDATION_INFRASTRUCTURE_RECOVERY_STATE_WALL" }))
+  })
+
+  it("rejects equal abandonment timestamps from a non-cycle-exit reason", () => {
+    const { dir, store } = fixture()
+    const validationFailure = "npm run lint exited 1\nFailed to load plugin 'react-hooks' declared in eslint-config-next: Cannot find module 'eslint-plugin-react-hooks'"
+    const first = store.acquireLease({
+      outcomeId: "12", holderId: "manual-holder", leaseDurationMs: 1000,
+      metadata: { validationFailure, validationRemediationRound: 3 },
+      idempotencyKey: "reason-acquire",
+    })
+    store.checkpoint({
+      outcomeId: "12", holderId: "manual-holder", fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0, state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED", idempotencyKey: "reason-failed",
+    })
+    store.abandonLease({
+      outcomeId: "12", holderId: "manual-holder", fencingToken: first.fencingToken,
+      reason: "HERMES_CYCLE_PROCESS_EXIT", idempotencyKey: "reason-abandon",
+    })
+    const statePath = join(dir, "state.json")
+    const persisted = JSON.parse(readFileSync(statePath, "utf8"))
+    persisted.executions["12"].lease.abandonReason = "MANUAL"
+    writeFileSync(statePath, `${JSON.stringify(persisted, null, 2)}\n`)
+
+    expect(() => store.reopenValidationInfrastructureWall({
+      outcomeId: "12", expectedFencingToken: first.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "1".repeat(64), idempotencyKey: "reason-recover",
+    })).toThrowError(expect.objectContaining({ code: "VALIDATION_INFRASTRUCTURE_RECOVERY_STATE_WALL" }))
   })
 
   it("classifies only locked Next ESLint plugin resolution as validation infrastructure", () => {

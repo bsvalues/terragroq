@@ -202,7 +202,11 @@ export async function recoverValidationInfrastructureWall(options = {}) {
     throw Object.assign(new Error("Owner-touch counters must remain zero"), { code: "HERMES_VALIDATION_RECOVERY_OWNER_TOUCH_WALL" })
   }
   const candidates = Object.values(state.executions).filter((execution) => (
-    (execution?.lease?.status === "RELEASED"
+    ((execution?.lease?.status === "RELEASED"
+      || (execution?.lease?.status === "ACTIVE"
+        && typeof execution?.lease?.abandonedAt === "string"
+        && execution.lease.abandonedAt === execution?.lease?.expiresAt
+        && execution?.lease?.abandonReason === "HERMES_CYCLE_PROCESS_EXIT"))
       && execution?.checkpoint?.state === "FAILED_TERMINAL"
       && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
       && isValidationInfrastructureFailure(execution?.metadata?.validationFailure))
@@ -220,6 +224,9 @@ export async function recoverValidationInfrastructureWall(options = {}) {
     throw Object.assign(new Error("Validation infrastructure outcome id is invalid"), { code: "HERMES_VALIDATION_RECOVERY_OUTCOME_WALL" })
   }
   let proofDigest = candidate.metadata.validationRecoveryProofDigest
+  let proofFencingToken = candidate.metadata.validationRecoveryFencingToken
+    ?? candidate.fencingToken
+  let proofRecorded = false
   if (candidate.checkpoint.state === "FAILED_TERMINAL") {
     const validationFailureDigest = sha256(candidate.metadata.validationFailure)
     proofDigest = sha256(JSON.stringify({
@@ -229,6 +236,12 @@ export async function recoverValidationInfrastructureWall(options = {}) {
       checkpointDetail: candidate.checkpoint.detail,
       validationFailureDigest,
     }))
+    if (!await recordProof({ outcomeId, proofDigest, fencingToken: proofFencingToken })) {
+      throw Object.assign(new Error("Validation infrastructure proof was not persisted"), {
+        code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL",
+      })
+    }
+    proofRecorded = true
     orchestrator.state.reopenValidationInfrastructureWall({
       idempotencyKey: `${candidate.outcomeId}:recover-validation-infrastructure:${candidate.fencingToken}`,
       outcomeId: candidate.outcomeId,
@@ -238,7 +251,11 @@ export async function recoverValidationInfrastructureWall(options = {}) {
       proofDigest,
     })
   }
-  if (!await recordProof({ outcomeId, proofDigest, fencingToken: candidate.fencingToken })) {
+  if (!proofRecorded && !await recordProof({
+    outcomeId,
+    proofDigest,
+    fencingToken: proofFencingToken,
+  })) {
     throw Object.assign(new Error("Validation infrastructure proof was not persisted"), { code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL" })
   }
   if (!await recoverOutcome({ outcomeId, proofDigest })) {

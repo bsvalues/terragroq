@@ -644,12 +644,53 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
   })
 
   it("persists exact infrastructure proof before outcome recovery", async () => {
-    const query = vi.fn().mockResolvedValueOnce({ rows: [{ id: 99 }] })
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 99 }] })
+      .mockResolvedValueOnce({ rows: [] })
     await expect(recordValidationInfrastructureRecoveryProof({
-      query, outcomeId: 4, proofDigest: "b".repeat(64), fencingToken: 14,
+      transactionClient: { query, release: vi.fn() }, outcomeId: 4,
+      proofDigest: "b".repeat(64), fencingToken: 14,
     })).resolves.toBe(true)
-    expect(query.mock.calls[0][0]).toMatch(/HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED/)
-    expect(query.mock.calls[0][1][2]).toContain('"fencingToken":14')
+    expect(query.mock.calls[0][0]).toBe("BEGIN")
+    expect(query.mock.calls[1][0]).toMatch(/pg_advisory_xact_lock\(hashtextextended\(\$1, 0\)\)/)
+    expect(query.mock.calls[1][1][0]).toBe(
+      `hermes-validation-recovery-proof:4:VALIDATION_REMEDIATION_EXHAUSTED:${"b".repeat(64)}`,
+    )
+    expect(query.mock.calls[2][0]).toMatch(/HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED/)
+    expect(query.mock.calls[2][1][2]).toContain('"fencingToken":14')
+    expect(query.mock.calls[2][0]).toMatch(/metadata->>'retryState' = \$2/)
+    expect(query.mock.calls[2][0]).not.toMatch(/metadata->>'fencingToken'/)
+    expect(query.mock.calls[2][1]).toHaveLength(4)
+    expect(query.mock.calls[3][0]).toBe("COMMIT")
+  })
+
+  it("rejects an idempotent proof with the same digest but a different source fence", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ recorded: false }] })
+      .mockResolvedValueOnce({ rows: [] })
+    await expect(recordValidationInfrastructureRecoveryProof({
+      transactionClient: { query, release: vi.fn() }, outcomeId: 4,
+      proofDigest: "b".repeat(64), fencingToken: 14,
+    })).resolves.toBe(false)
+    expect(query.mock.calls[3][0]).toMatch(/metadata->>'retryState' = \$3/)
+    expect(query.mock.calls[3][0]).toMatch(/metadata->>'fencingToken' = \$4/)
+    expect(query.mock.calls[2][0]).not.toMatch(/metadata->>'fencingToken'/)
+    expect(query.mock.calls[3][1]).toEqual([
+      4, "b".repeat(64), "VALIDATION_REMEDIATION_EXHAUSTED", "14",
+    ])
+    expect(query.mock.calls[4][0]).toBe("ROLLBACK")
+  })
+
+  it("rejects a pool-like proof client that cannot guarantee session affinity", async () => {
+    await expect(recordValidationInfrastructureRecoveryProof({
+      transactionClient: { query: vi.fn(), connect: vi.fn() },
+      outcomeId: 4, proofDigest: "b".repeat(64), fencingToken: 14,
+    })).rejects.toMatchObject({ code: "VALIDATION_RECOVERY_TRANSACTION_CLIENT_INVALID" })
   })
 
   it("creates one deterministic Work Order and appends an idempotent runtime checkpoint", async () => {

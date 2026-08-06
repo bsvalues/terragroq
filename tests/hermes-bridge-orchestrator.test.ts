@@ -339,7 +339,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       holderId: "failed-holder",
       fencingToken: lease.fencingToken,
     })
-    value.state.reopenValidationInfrastructureWall({
+    const reopened = value.state.reopenValidationInfrastructureWall({
       idempotencyKey: "validation-infrastructure-recovered",
       outcomeId: "77",
       expectedFencingToken: lease.fencingToken,
@@ -350,7 +350,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     const crashedRecovery = value.state.reclaimLease({
       idempotencyKey: "validation-infrastructure-crash-reclaim",
       outcomeId: "77",
-      expectedFencingToken: lease.fencingToken,
+      expectedFencingToken: reopened.fencingToken,
       holderId: "crashed-recovery-holder",
       leaseDurationMs: 1000,
     })
@@ -2352,7 +2352,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       holderId: "historical-holder",
       fencingToken: first.fencingToken,
     })
-    value.state.reopenValidationInfrastructureWall({
+    const reopened = value.state.reopenValidationInfrastructureWall({
       idempotencyKey: "historical-terminal-recovery",
       outcomeId: "77",
       expectedFencingToken: first.fencingToken,
