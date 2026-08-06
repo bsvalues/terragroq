@@ -1754,6 +1754,11 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(createHermesStateStore(value.orchestrator.statePath).read().executions["77"].lease.status)
       .toBe("RELEASED")
+    const terminalExecution = createHermesStateStore(value.orchestrator.statePath).read().executions["77"]
+    expect(createHermesStateStore(value.orchestrator.statePath).read().idempotency)
+      .toHaveProperty(
+        `77:release:FAILED_TERMINAL:VALIDATION_REMEDIATION_EXHAUSTED:${terminalExecution.fencingToken}`,
+      )
   })
 
   it("requests exact-head review when the committed PR has no review evidence", async () => {
@@ -2304,6 +2309,78 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(value.client.runTurn).toHaveBeenCalledTimes(turnCount)
     expect(value.state.read().executions["77"].lease.status).toBe("RELEASED")
+  })
+
+  it("releases a recovered terminal under a new fence without colliding with its historical key", async () => {
+    const verifyValidationInfrastructureRecovery = vi.fn(async () => true)
+    const value = fixture(undefined, { verifyValidationInfrastructureRecovery })
+    const validationFailure = "npx vitest run tests/focused.test.ts exited 1\n'vitest' is not recognized as an internal or external command"
+    const validationError = Object.assign(new Error("validation failed"), {
+      code: "HERMES_VALIDATION_FAILED",
+      validation: { command: "npm", args: ["test"], code: 1, output: "deterministic failure" },
+    })
+    value.lifecycle.runValidationCommands.mockRejectedValue(validationError)
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    const first = value.state.acquireLease({
+      idempotencyKey: "historical-terminal-acquire",
+      outcomeId: "77",
+      holderId: "historical-holder",
+      leaseDurationMs: 1000,
+      metadata: {
+        outcome,
+        branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "goal-77"),
+        baseSha: "a".repeat(40),
+        validationFailure,
+        validationRemediationRound: 3,
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "historical-terminal-checkpoint",
+      outcomeId: "77",
+      holderId: "historical-holder",
+      fencingToken: first.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    const historicalReleaseKey = "77:release:FAILED_TERMINAL:VALIDATION_REMEDIATION_EXHAUSTED"
+    value.state.releaseLease({
+      idempotencyKey: historicalReleaseKey,
+      outcomeId: "77",
+      holderId: "historical-holder",
+      fencingToken: first.fencingToken,
+    })
+    value.state.reopenValidationInfrastructureWall({
+      idempotencyKey: "historical-terminal-recovery",
+      outcomeId: "77",
+      expectedFencingToken: first.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "d".repeat(64),
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "FAILED_TERMINAL",
+      outcomeId: "77",
+      nextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+
+    const state = value.state.read()
+    const recovered = state.executions["77"]
+    expect(recovered.fencingToken).toBeGreaterThan(first.fencingToken)
+    expect(recovered.lease.status).toBe("RELEASED")
+    expect(state.idempotency).toHaveProperty(historicalReleaseKey)
+    expect(state.idempotency).toHaveProperty(
+      `77:release:FAILED_TERMINAL:VALIDATION_REMEDIATION_EXHAUSTED:${recovered.fencingToken}`,
+    )
+    expect(verifyValidationInfrastructureRecovery).toHaveBeenCalledWith({
+      outcomeId: 77,
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      expectedFencingToken: first.fencingToken,
+    })
   })
 
   it("resumes merged-PR finalization from durable state without redispatching Codex", async () => {
