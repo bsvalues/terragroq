@@ -493,7 +493,7 @@ export function createHermesOrchestrator(options = {}) {
       throw Object.assign(new Error("Persisted outcome could not be closed after merge"), { code: "HERMES_OUTCOME_COMPLETION_WALL" })
     }
     await releaseLease({
-      idempotencyKey: `${lease.outcomeId}:release:complete`,
+      idempotencyKey: `${lease.outcomeId}:release:complete:${lease.fencingToken}`,
       outcomeId: lease.outcomeId, holderId, fencingToken: lease.fencingToken,
     })
     return { result: "COMPLETE", outcomeId: lease.outcomeId, prNumber, mergeSha, changedPaths }
@@ -515,7 +515,7 @@ export function createHermesOrchestrator(options = {}) {
       })
     }
     await releaseLease({
-      idempotencyKey: `${lease.outcomeId}:release:FAILED_TERMINAL:${nextState}`,
+      idempotencyKey: `${lease.outcomeId}:release:FAILED_TERMINAL:${nextState}:${lease.fencingToken}`,
       outcomeId: lease.outcomeId, holderId, fencingToken: lease.fencingToken,
     })
     return {
@@ -951,7 +951,7 @@ export function createHermesOrchestrator(options = {}) {
         })
       }
       await releaseLease({
-        idempotencyKey: `${outcomeId}:release:complete`,
+        idempotencyKey: `${outcomeId}:release:complete:${lease.fencingToken}`,
         outcomeId, holderId, fencingToken: lease.fencingToken,
       })
       return {
@@ -1002,7 +1002,7 @@ export function createHermesOrchestrator(options = {}) {
         })
       }
       await releaseLease({
-        idempotencyKey: `${outcomeId}:release:FAILED_TERMINAL:${nextState}`,
+        idempotencyKey: `${outcomeId}:release:FAILED_TERMINAL:${nextState}:${lease.fencingToken}`,
         outcomeId, holderId, fencingToken: lease.fencingToken,
       })
       return { result: "FAILED_TERMINAL", outcomeId, nextState }
@@ -1038,7 +1038,7 @@ export function createHermesOrchestrator(options = {}) {
         })
       }
       await releaseLease({
-        idempotencyKey: `${outcomeId}:release:OWNER_DECISION_REQUIRED`,
+        idempotencyKey: `${outcomeId}:release:OWNER_DECISION_REQUIRED:${lease.fencingToken}`,
         outcomeId, holderId, fencingToken: lease.fencingToken,
       })
       return { result: "OWNER_DECISION_REQUIRED", outcomeId, nextState }
@@ -1482,7 +1482,7 @@ export function createHermesOrchestrator(options = {}) {
             ...(decisionPacket ? { metadata: decisionPacket } : {}),
           })
           await releaseLease({
-            idempotencyKey: `${outcomeId}:release:${result.result}`,
+            idempotencyKey: `${outcomeId}:release:${result.result}:${lease.fencingToken}`,
             outcomeId, holderId, fencingToken: lease.fencingToken,
           })
           return { result: result.result, outcomeId, nextState: result.nextState ?? null }
