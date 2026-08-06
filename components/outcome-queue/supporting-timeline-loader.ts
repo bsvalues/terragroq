@@ -52,19 +52,22 @@ export function prioritizeQueueGoalIds(
 export function planMissingGoalTimelines(
   queueGoalIds: Iterable<number>,
   knownGoalIds: Iterable<number>,
+  reservedGoalIds: Iterable<number> = [],
 ): MissingGoalTimelinePlan {
   const seen = new Set(knownGoalIds)
   const selected: number[] = []
   let truncated = false
 
-  for (const goalId of queueGoalIds) {
-    if (!Number.isSafeInteger(goalId) || goalId <= 0 || seen.has(goalId)) continue
-    seen.add(goalId)
-    if (selected.length === GOAL_TIMELINE_LOAD_LIMIT) {
-      truncated = true
-      break
+  selection: for (const goalIds of [reservedGoalIds, queueGoalIds]) {
+    for (const goalId of goalIds) {
+      if (!Number.isSafeInteger(goalId) || goalId <= 0 || seen.has(goalId)) continue
+      seen.add(goalId)
+      if (selected.length === GOAL_TIMELINE_LOAD_LIMIT) {
+        truncated = true
+        break selection
+      }
+      selected.push(goalId)
     }
-    selected.push(goalId)
   }
 
   const batches: number[][] = []
