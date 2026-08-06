@@ -365,8 +365,10 @@ function receiptCatalogResult(sql: string) {
 function acquisitionQuery({
   receipt = [],
   receiptOutcome,
+  receiptOutcomeAfterRenewal,
   prior = [],
   replayEligibility = [{ approvalLive: true, authorityLive: true }],
+  replayEligibilityAfterRenewal,
   reclaimed = [],
   selected = [],
   selectedAfterRenewal,
@@ -378,8 +380,10 @@ function acquisitionQuery({
 }: {
   receipt?: unknown[]
   receiptOutcome?: unknown[]
+  receiptOutcomeAfterRenewal?: unknown[]
   prior?: unknown[]
   replayEligibility?: unknown[]
+  replayEligibilityAfterRenewal?: unknown[]
   reclaimed?: unknown[]
   selected?: unknown[]
   selectedAfterRenewal?: unknown[]
@@ -391,15 +395,27 @@ function acquisitionQuery({
 }) {
   let acquireCalls = 0
   let resumeCalls = 0
+  let receiptOutcomeReads = 0
+  let replayEligibilityReads = 0
   const run = vi.fn(async (sql: string, values: unknown[] = []) => {
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] }
     if (sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
     if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt) return { rows: receipt }
     if (sql === OUTCOME_QUEUE_SQL.readReceiptOutcome) {
-      return { rows: receiptOutcome ?? prior }
+      const rows = receiptOutcomeReads > 0 && receiptOutcomeAfterRenewal !== undefined
+        ? receiptOutcomeAfterRenewal
+        : (receiptOutcome ?? prior)
+      receiptOutcomeReads += 1
+      return { rows }
     }
     if (sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: prior }
-    if (sql === OUTCOME_QUEUE_SQL.revalidateAcquisition) return { rows: replayEligibility }
+    if (sql === OUTCOME_QUEUE_SQL.revalidateAcquisition) {
+      const rows = replayEligibilityReads > 0 && replayEligibilityAfterRenewal !== undefined
+        ? replayEligibilityAfterRenewal
+        : replayEligibility
+      replayEligibilityReads += 1
+      return { rows }
+    }
     if (sql === OUTCOME_QUEUE_SQL.reclaimAcquisition) return { rows: reclaimed }
     if (sql === OUTCOME_QUEUE_SQL.acquire) {
       const rows = acquireCalls > 0 && selectedAfterRenewal !== undefined
@@ -625,6 +641,22 @@ function mutationQuery({
 }
 
 describe("transactional durable outcome queue source", () => {
+  it("projects a unique durable V1.2 authority-renewal edge for restart recovery", () => {
+    expect(OUTCOME_QUEUE_SQL.read).toContain(`event."eventType" = 'AUTHORITY_RENEWED'`)
+    expect(OUTCOME_QUEUE_SQL.read).toContain(`event.metadata->>'grantRef' = q."authorityGrantRef"`)
+    expect(OUTCOME_QUEUE_SQL.read).toContain(`event.metadata->>'replacesGrantRef'`)
+    expect(OUTCOME_QUEUE_SQL.read).toContain(`count(*)::integer AS "authorityRenewalProofCount"`)
+    expect(OUTCOME_QUEUE_SQL.read).toContain(`CASE WHEN count(*) = 1`)
+    expect(OUTCOME_QUEUE_SQL.read).toContain(`renewed_grant."id"::text = event."entityId"`)
+    expect(OUTCOME_QUEUE_SQL.read).toContain(`renewed_grant."contentHash" = event."afterHash"`)
+    expect(OUTCOME_QUEUE_SQL.read).toContain(`renewed_grant."createdAt" = event."createdAt"`)
+    expect(OUTCOME_QUEUE_SQL.read).toContain(`campaign_approval.ref = event.metadata->>'decisionRef'`)
+    expect(OUTCOME_QUEUE_SQL.read).toContain(`event."actor" = 'hermes'`)
+    expect(OUTCOME_QUEUE_SQL.read).toContain(`event.metadata->>'parentIssue' = '471'`)
+    expect(OUTCOME_QUEUE_SQL.read)
+      .toContain(`event.metadata->>'replacesGrantRef' <> q."authorityGrantRef"`)
+  })
+
   it("bootstraps and verifies every additive queue invariant under one transaction lock", async () => {
     const constraintNames = [
       "outcome_queue_item_active_binding_check",
@@ -1873,6 +1905,128 @@ describe("transactional durable outcome queue source", () => {
     expect(query.mock.calls.at(-1)?.[0]).toBe("COMMIT")
   })
 
+  it("does not reclaim a stale same-key lease after approval is revoked", async () => {
+    const stale = queueRow({
+      leaseExpiresAt: "2026-07-28T11:59:59.000Z",
+      fencingToken: 3,
+      version: 8,
+    })
+    const query = acquisitionQuery({
+      receipt: [{ outcomeKey: stale.outcomeKey }],
+      receiptOutcome: [stale],
+      replayEligibility: [{ approvalLive: false, authorityLive: true }],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      replayed: false,
+      reclaimed: false,
+      reason: "AWAITING_APPROVAL",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.reclaimAcquisition,
+      expect.anything(),
+    )
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities,
+      expect.anything(),
+    )
+  })
+
+  it("does not reclaim a stale same-key lease when authority cannot be renewed", async () => {
+    const stale = queueRow({
+      leaseExpiresAt: "2026-07-28T11:59:59.000Z",
+      fencingToken: 3,
+      version: 8,
+    })
+    const query = acquisitionQuery({
+      receipt: [{ outcomeKey: stale.outcomeKey }],
+      receiptOutcome: [stale],
+      replayEligibility: [{ approvalLive: true, authorityLive: false }],
+      renewable: [],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      replayed: false,
+      reclaimed: false,
+      reason: "AUTHORITY_INELIGIBLE",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.reclaimAcquisition,
+      expect.anything(),
+    )
+  })
+
+  it("renews eligible V1.2 authority before replaying an existing acquisition receipt", async () => {
+    const expired = expiredCampaignAuthorityRow({
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      activeWorkOrderId: 472,
+      executionBinding: "execution-a",
+      leaseHolder: "supervisor-a",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:01:00.000Z",
+      fencingToken: 4,
+      version: 6,
+      acquisitionKey: "acquire-a",
+      activatedAt: "2026-07-27T12:00:00.000Z",
+    })
+    const renewedDraft = v12CampaignGrant(
+      expired.outcomeKey as "campaign:v1-2:queue-evidence-drilldown",
+      userId,
+      new Date(now),
+    )
+    const rebound = {
+      ...expired,
+      authorityGrantRef: renewedDraft.ref,
+      version: 7,
+    }
+    const query = acquisitionQuery({
+      receipt: [{ outcomeKey: expired.outcomeKey }],
+      receiptOutcome: [expired],
+      receiptOutcomeAfterRenewal: [rebound],
+      replayEligibility: [{ approvalLive: true, authorityLive: false }],
+      replayEligibilityAfterRenewal: [{ approvalLive: true, authorityLive: true }],
+      renewable: [expired],
+      rebound: [rebound],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: true,
+      replayed: true,
+      outcome: expect.objectContaining({
+        outcomeKey: expired.outcomeKey,
+        authorityGrantRef: renewedDraft.ref,
+        version: 7,
+      }),
+    })
+    expect(query).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.rebindRenewedV12CampaignGrant,
+      [
+        expired.id,
+        userId,
+        expired.outcomeKey,
+        6,
+        renewedDraft.ref,
+        now,
+        expired.authorityGrantRef,
+      ],
+    )
+    expect(query.mock.calls.filter(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.revalidateAcquisition,
+    )).toHaveLength(2)
+  })
+
   it("returns not-acquired for live same-key contention", async () => {
     const query = acquisitionQuery({
       receipt: [{ outcomeKey: "goal:GOAL-1000" }],
@@ -1889,6 +2043,44 @@ describe("transactional durable outcome queue source", () => {
       reason: "ACQUISITION_KEY_CONFLICT",
     })
     expect(query.mock.calls.at(-1)?.[0]).toBe("COMMIT")
+  })
+
+  it("does not renew authority for a live foreign-held acquisition", async () => {
+    const foreign = expiredCampaignAuthorityRow({
+      lifecycleState: "active",
+      activeWorkOrderId: 472,
+      acquisitionKey: "acquire-a",
+      executionBinding: "execution-other",
+      leaseHolder: "supervisor-other",
+      leaseToken: "lease-other",
+      leaseExpiresAt: "2026-07-28T12:01:00.000Z",
+      fencingToken: 4,
+      version: 6,
+    })
+    const query = acquisitionQuery({
+      receipt: [{ outcomeKey: foreign.outcomeKey }],
+      receiptOutcome: [foreign],
+      replayEligibility: [{ approvalLive: true, authorityLive: false }],
+      renewable: [foreign],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      replayed: false,
+      reclaimed: false,
+      reason: "ACQUISITION_KEY_CONFLICT",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.revalidateAcquisition,
+      expect.anything(),
+    )
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities,
+      expect.anything(),
+    )
   })
 
   it("replays a completed acquisition key without selecting another outcome", async () => {
@@ -1993,7 +2185,9 @@ describe("transactional durable outcome queue source", () => {
       reclaimed: true,
       reason: null,
     })
-    expect(query.mock.calls[4]).toEqual([
+    expect(query.mock.calls.find(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.reclaimAcquisition,
+    )).toEqual([
       OUTCOME_QUEUE_SQL.reclaimAcquisition,
       [
         now, userId, "goal:GOAL-1000", "execution-after-restart",
@@ -2019,6 +2213,72 @@ describe("transactional durable outcome queue source", () => {
     expect(reclaimProof?.[1]?.[2]).toBe("supervisor-nonce-2")
     expect(reclaimProof?.[1]?.[14]).toBe(4)
     expect(reclaimProof?.[1]?.[17]).toBe("RECLAIMED")
+  })
+
+  it("renews expired V1.2 authority before reclaiming an expired acquisition receipt", async () => {
+    const expired = expiredCampaignAuthorityRow({
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      activeWorkOrderId: 472,
+      executionBinding: "execution-old",
+      leaseHolder: "supervisor-old",
+      leaseToken: "lease-old",
+      leaseExpiresAt: "2026-07-28T11:59:00.000Z",
+      fencingToken: 4,
+      version: 6,
+      acquisitionKey: "acquire-a",
+      activatedAt: "2026-07-27T12:00:00.000Z",
+    })
+    const renewedDraft = v12CampaignGrant(
+      expired.outcomeKey as "campaign:v1-2:queue-evidence-drilldown",
+      userId,
+      new Date(now),
+    )
+    const rebound = {
+      ...expired,
+      authorityGrantRef: renewedDraft.ref,
+      version: 7,
+    }
+    const reclaimed = {
+      ...rebound,
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      executionBinding: "execution-a",
+      leaseHolder: "supervisor-a",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:01:00.000Z",
+      fencingToken: 5,
+      version: 8,
+    }
+    const query = acquisitionQuery({
+      receipt: [{ outcomeKey: expired.outcomeKey }],
+      receiptOutcome: [expired],
+      receiptOutcomeAfterRenewal: [rebound],
+      replayEligibility: [{ approvalLive: true, authorityLive: false }],
+      replayEligibilityAfterRenewal: [{ approvalLive: true, authorityLive: true }],
+      renewable: [expired],
+      rebound: [rebound],
+      reclaimed: [reclaimed],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: true,
+      reclaimed: true,
+      outcome: expect.objectContaining({
+        authorityGrantRef: renewedDraft.ref,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        version: 8,
+        fencingToken: 5,
+      }),
+    })
+    expect(query.mock.calls.find(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.rebindRenewedV12CampaignGrant,
+    )?.[1]?.[3]).toBe(6)
+    expect(query.mock.calls.find(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.reclaimAcquisition,
+    )?.[1]?.[8]).toBe(7)
   })
 
   it("guards transitions by user, version, and live fence", async () => {

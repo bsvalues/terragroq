@@ -42,6 +42,9 @@ function effectiveQueueCommand(item, goal) {
 function governedQueueOutcome(item, goal) {
   return {
     ...goal,
+    ...(typeof item?.authorityGrantRef === "string" && item.authorityGrantRef !== ""
+      ? { authorityGrantRef: item.authorityGrantRef }
+      : {}),
     ...(typeof item?.title === "string" && item.title.trim() !== ""
       ? { title: item.title.trim() }
       : {}),
@@ -87,6 +90,8 @@ function queueBinding(outcome) {
     || typeof binding.leaseToken !== "string" || binding.leaseToken.trim() === ""
     || !Number.isSafeInteger(binding.fencingToken) || binding.fencingToken <= 0
     || typeof binding.acquisitionKey !== "string" || binding.acquisitionKey.trim() === ""
+    || (binding.authorityGrantRef !== undefined
+      && (typeof binding.authorityGrantRef !== "string" || binding.authorityGrantRef.trim() === ""))
     || (binding.validationRecoveryResumeState !== undefined
       && ![
         "VALIDATION_INFRASTRUCTURE_RECOVERED",
@@ -233,6 +238,9 @@ function persistedBinding(item) {
     leaseToken: item.leaseToken,
     fencingToken: Number(item.fencingToken),
     acquisitionKey: item.acquisitionKey,
+    ...(typeof item.authorityGrantRef === "string" && item.authorityGrantRef !== ""
+      ? { authorityGrantRef: item.authorityGrantRef }
+      : {}),
     ...(validationRecoveryResumeState ? { validationRecoveryResumeState } : {}),
     ...(Number.isSafeInteger(activeWorkOrderId) && activeWorkOrderId > 0
       ? { activeWorkOrderId }
@@ -241,7 +249,12 @@ function persistedBinding(item) {
 }
 
 function withPersistedBinding(outcome, item) {
-  return { ...outcome, queueBinding: persistedBinding(item) }
+  const binding = persistedBinding(item)
+  const priorRecoveryState = outcome?.queueBinding?.validationRecoveryResumeState
+  if (priorRecoveryState && item.lifecycleReason === "STALE_LEASE_RECOVERED") {
+    binding.validationRecoveryResumeState = priorRecoveryState
+  }
+  return { ...outcome, queueBinding: binding }
 }
 
 function sameStrings(left, right) {
@@ -345,6 +358,40 @@ function isExactValidationRecoveryResume(item, binding, holderId, at) {
     && item.leaseHolder === holderId
     && item.leaseToken === binding.leaseToken
     && Date.parse(String(item.leaseExpiresAt)) > at.getTime()
+}
+
+function isExactPersistedValidationRecovery(item, binding, outcome) {
+  const versionDelta = Number(item?.version) - binding.expectedVersion
+  const fenceDelta = Number(item?.fencingToken) - binding.fencingToken
+  const provenPreviousAuthorityGrantRef = Number(item?.authorityRenewalProofCount) === 1
+    && typeof item?.previousAuthorityGrantRef === "string"
+    && item.previousAuthorityGrantRef !== ""
+    ? item.previousAuthorityGrantRef
+    : null
+  const priorAuthorityGrantRef = binding.authorityGrantRef
+    ?? outcome?.authorityGrantRef
+    ?? provenPreviousAuthorityGrantRef
+  const authorityRenewalDelta = typeof priorAuthorityGrantRef === "string"
+    && priorAuthorityGrantRef !== ""
+    && typeof item?.authorityGrantRef === "string"
+    && item.authorityGrantRef !== priorAuthorityGrantRef
+    ? 1
+    : 0
+  const exactRecovery = fenceDelta === 0
+    && versionDelta === authorityRenewalDelta
+    && item?.lifecycleReason === binding.validationRecoveryResumeState
+  const recoveredAcquisitionReclaim = Number.isSafeInteger(versionDelta)
+    && Number.isSafeInteger(fenceDelta)
+    && fenceDelta >= 0
+    && versionDelta === fenceDelta + authorityRenewalDelta
+    && item?.lifecycleReason === "STALE_LEASE_RECOVERED"
+  return (exactRecovery || recoveredAcquisitionReclaim)
+    && item?.userId === binding.userId
+    && item.outcomeKey === binding.outcomeKey
+    && item.lifecycleState === "active"
+    && item.executionBinding === binding.executionBinding
+    && item.acquisitionKey === binding.acquisitionKey
+    && item.leaseToken === binding.leaseToken
 }
 
 export function createHermesOutcomeQueueRuntime(options = {}) {
@@ -720,8 +767,16 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         "HERMES_OUTCOME_QUEUE_VALIDATION_RECOVERY_PROOF_WALL",
       )
     }
-    if (binding.validationRecoveryResumeState) return outcome
     const resumeAt = now()
+    if (binding.validationRecoveryResumeState) {
+      const current = (await readQueue({
+        databaseUrl,
+        userId: binding.userId,
+      })).find((item) => item.outcomeKey === binding.outcomeKey)
+      if (isExactPersistedValidationRecovery(current, binding, outcome)) {
+        return refreshOutcome(outcome)
+      }
+    }
     const resumed = await resumeValidationRecoveryQueue({
       databaseUrl,
       userId: binding.userId,

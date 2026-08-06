@@ -1301,7 +1301,20 @@ describe("Hermes durable outcome queue runtime", () => {
 
   it("does not replay a validation-recovery transition already persisted in the queue binding", async () => {
     const resumeValidationRecoveryQueue = vi.fn()
-    const bridge = runtime({ resumeValidationRecoveryQueue })
+    const recovered = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const readQueue = vi.fn(async () => [recovered])
+    const acquire = vi.fn(async () => ({ outcome: recovered, acquired: true, replayed: true }))
+    const bridge = runtime({ resumeValidationRecoveryQueue, readQueue, acquire })
     const outcome = {
       ...goal,
       queueBinding: {
@@ -1317,8 +1330,405 @@ describe("Hermes durable outcome queue runtime", () => {
       expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
       proofDigest: "d".repeat(64),
       recoveryFencingToken: 57,
-    })).resolves.toBe(outcome)
+    })).resolves.toMatchObject({
+      queueBinding: { expectedVersion: 6, fencingToken: 4 },
+    })
     expect(resumeValidationRecoveryQueue).not.toHaveBeenCalled()
+    expect(acquire).toHaveBeenCalledOnce()
+  })
+
+  it("reclaims an expired persisted validation-recovery lease through acquisition refresh", async () => {
+    const resumeValidationRecoveryQueue = vi.fn()
+    const recovered = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T11:50:00.000Z",
+    }
+    const reclaimed = {
+      ...recovered,
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      version: 7,
+      fencingToken: 5,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const readQueue = vi.fn(async () => [recovered])
+    const acquire = vi.fn(async () => ({ outcome: reclaimed, acquired: true, reclaimed: true }))
+    const bridge = runtime({ resumeValidationRecoveryQueue, readQueue, acquire })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: 6,
+        fencingToken: 4,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).resolves.toMatchObject({
+      queueBinding: {
+        expectedVersion: 7,
+        fencingToken: 5,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    })
+    expect(resumeValidationRecoveryQueue).not.toHaveBeenCalled()
+    expect(acquire).toHaveBeenCalledOnce()
+  })
+
+  it.each([0, 1, 2])(
+    "preserves recovery replay after %i crash-window stale acquisition reclaim(s)",
+    async (reclaimCount) => {
+    const resumeValidationRecoveryQueue = vi.fn()
+    const reclaimed = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 6 + reclaimCount,
+      fencingToken: 4 + reclaimCount,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const readQueue = vi.fn(async () => [reclaimed])
+    const acquire = vi.fn(async () => ({ outcome: reclaimed, acquired: true, replayed: true }))
+    const bridge = runtime({ resumeValidationRecoveryQueue, readQueue, acquire })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: 6,
+        fencingToken: 4,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).resolves.toMatchObject({
+      queueBinding: {
+        expectedVersion: 6 + reclaimCount,
+        fencingToken: 4 + reclaimCount,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    })
+    expect(resumeValidationRecoveryQueue).not.toHaveBeenCalled()
+    expect(acquire).toHaveBeenCalledOnce()
+    },
+  )
+
+  it("rejects persisted validation recovery when acquisition revalidation revokes authority", async () => {
+    const resumeValidationRecoveryQueue = vi.fn()
+    const recovered = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const readQueue = vi.fn(async () => [recovered])
+    const acquire = vi.fn(async () => ({
+      outcome: { ...recovered, authorityState: "revoked" },
+      acquired: false,
+      reason: "AUTHORITY_INELIGIBLE",
+    }))
+    const bridge = runtime({ resumeValidationRecoveryQueue, readQueue, acquire })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: 6,
+        fencingToken: 4,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REFRESH_WALL" })
+    expect(resumeValidationRecoveryQueue).not.toHaveBeenCalled()
+  })
+
+  it("delegates stale validation-recovery holder failover to acquisition refresh", async () => {
+    const resumeValidationRecoveryQueue = vi.fn()
+    const stale = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "prior-hermes-host",
+      leaseExpiresAt: "2026-07-28T11:50:00.000Z",
+    }
+    const reclaimed = {
+      ...stale,
+      version: 8,
+      fencingToken: 6,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const readQueue = vi.fn(async () => [stale])
+    const acquire = vi.fn(async () => ({ outcome: reclaimed, acquired: true, reclaimed: true }))
+    const bridge = runtime({ resumeValidationRecoveryQueue, readQueue, acquire })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: 6,
+        fencingToken: 4,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).resolves.toMatchObject({
+      queueBinding: { expectedVersion: 8, fencingToken: 6 },
+    })
+    expect(resumeValidationRecoveryQueue).not.toHaveBeenCalled()
+    expect(acquire).toHaveBeenCalledWith(expect.objectContaining({
+      leaseHolder: "resident-hermes",
+    }))
+  })
+
+  it("replays a persisted V1.2 authority renewal from the older recovery binding", async () => {
+    const resumeValidationRecoveryQueue = vi.fn()
+    const renewed = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      authorityGrantRef: "AUTH-GRANT-NEW",
+      version: 7,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const readQueue = vi.fn(async () => [renewed])
+    const acquire = vi.fn(async () => ({ outcome: renewed, acquired: true, replayed: true }))
+    const bridge = runtime({ resumeValidationRecoveryQueue, readQueue, acquire })
+    const outcome = {
+      ...goal,
+      authorityGrantRef: "AUTH-GRANT-OLD",
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: 6,
+        fencingToken: 4,
+        authorityGrantRef: "AUTH-GRANT-OLD",
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).resolves.toMatchObject({
+      queueBinding: {
+        expectedVersion: 7,
+        fencingToken: 4,
+        authorityGrantRef: "AUTH-GRANT-NEW",
+      },
+    })
+    expect(resumeValidationRecoveryQueue).not.toHaveBeenCalled()
+    expect(acquire).toHaveBeenCalledOnce()
+  })
+
+  it("replays a pre-upgrade recovery binding from exact durable authority-renewal proof", async () => {
+    const resumeValidationRecoveryQueue = vi.fn()
+    const renewed = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      authorityGrantRef: "AUTH-GRANT-NEW",
+      previousAuthorityGrantRef: "AUTH-GRANT-OLD",
+      authorityRenewalProofCount: 1,
+      version: 7,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const readQueue = vi.fn(async () => [renewed])
+    const acquire = vi.fn(async () => ({ outcome: renewed, acquired: true, replayed: true }))
+    const bridge = runtime({ resumeValidationRecoveryQueue, readQueue, acquire })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: 6,
+        fencingToken: 4,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).resolves.toMatchObject({
+      queueBinding: {
+        expectedVersion: 7,
+        fencingToken: 4,
+        authorityGrantRef: "AUTH-GRANT-NEW",
+      },
+    })
+    expect(resumeValidationRecoveryQueue).not.toHaveBeenCalled()
+  })
+
+  it("rejects ambiguous pre-upgrade authority-renewal proof", async () => {
+    const resumeValidationRecoveryQueue = vi.fn(async () => {
+      throw Object.assign(new Error("wall"), {
+        code: "OUTCOME_QUEUE_VALIDATION_RECOVERY_RESUME_WALL",
+      })
+    })
+    const ambiguous = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      authorityGrantRef: "AUTH-GRANT-NEW",
+      previousAuthorityGrantRef: null,
+      authorityRenewalProofCount: 2,
+      version: 7,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const bridge = runtime({
+      resumeValidationRecoveryQueue,
+      readQueue: vi.fn(async () => [ambiguous]),
+    })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: 6,
+        fencingToken: 4,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_VALIDATION_RECOVERY_RESUME_WALL" })
+    expect(resumeValidationRecoveryQueue).toHaveBeenCalledOnce()
+  })
+
+  it("rejects a version-only recovery mutation without an authority grant change", async () => {
+    const resumeValidationRecoveryQueue = vi.fn(async () => {
+      throw Object.assign(new Error("wall"), {
+        code: "OUTCOME_QUEUE_VALIDATION_RECOVERY_RESUME_WALL",
+      })
+    })
+    const mutated = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      authorityGrantRef: "AUTH-GRANT-OLD",
+      version: 7,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const bridge = runtime({
+      resumeValidationRecoveryQueue,
+      readQueue: vi.fn(async () => [mutated]),
+    })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: 6,
+        fencingToken: 4,
+        authorityGrantRef: "AUTH-GRANT-OLD",
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      recoveryFencingToken: 57,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_VALIDATION_RECOVERY_RESUME_WALL" })
+    expect(resumeValidationRecoveryQueue).toHaveBeenCalledOnce()
+  })
+
+  it("resumes a later validation recovery when the prior recovered binding is now blocked", async () => {
+    const resumeValidationRecoveryQueue = vi.fn(async () => ({
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 8,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }))
+    const readQueue = vi.fn(async () => [{
+      ...queueItem,
+      lifecycleState: "blocked",
+      lifecycleReason: "VALIDATION_REMEDIATION_EXHAUSTED",
+      version: 7,
+      fencingToken: 4,
+      leaseHolder: null,
+      leaseExpiresAt: null,
+    }])
+    const bridge = runtime({ resumeValidationRecoveryQueue, readQueue })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: 6,
+        version: 6,
+        fencingToken: 4,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    }
+
+    await expect(bridge.resumeAfterValidationRecovery(outcome, {
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "e".repeat(64),
+      recoveryFencingToken: 71,
+    })).resolves.toMatchObject({
+      queueBinding: {
+        expectedVersion: 8,
+        fencingToken: 5,
+        validationRecoveryResumeState: "VALIDATION_INFRASTRUCTURE_RECOVERED",
+      },
+    })
+    expect(resumeValidationRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
+      expectedVersion: 7,
+      fencingToken: 4,
+      proofDigest: "e".repeat(64),
+      recoveryFencingToken: 71,
+    }))
   })
 
   it("rejects an owner-decision resume proof without its authenticated next state", async () => {

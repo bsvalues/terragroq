@@ -1159,8 +1159,41 @@ WHERE "outcome_queue_item"."lifecycleState" = 'suggested'
 RETURNING *
 `,
   read: `
-SELECT ${QUEUE_COLUMNS}
+SELECT ${QUEUE_COLUMNS},
+       renewal."previousAuthorityGrantRef",
+       renewal."authorityRenewalProofCount"
 FROM "outcome_queue_item" AS q
+LEFT JOIN LATERAL (
+  SELECT
+    CASE WHEN count(*) = 1
+      THEN max(event.metadata->>'replacesGrantRef')
+      ELSE NULL
+    END AS "previousAuthorityGrantRef",
+    count(*)::integer AS "authorityRenewalProofCount"
+  FROM governance_event AS event
+  JOIN authority_grant AS renewed_grant
+    ON renewed_grant."userId" = q."userId"
+    AND renewed_grant."id"::text = event."entityId"
+    AND renewed_grant."ref" = q."authorityGrantRef"
+    AND renewed_grant."scope" = q."outcomeKey"
+    AND renewed_grant."contentHash" = event."afterHash"
+    AND renewed_grant."createdAt" = event."createdAt"
+  JOIN decision AS campaign_approval
+    ON campaign_approval.id = q."approvalDecisionId"
+    AND campaign_approval."userId" = q."userId"
+    AND campaign_approval.ref = event.metadata->>'decisionRef'
+  WHERE event."userId" = q."userId"
+    AND event."eventType" = 'AUTHORITY_RENEWED'
+    AND event."entityType" = 'authority_grant'
+    AND event."actor" = 'hermes'
+    AND event.metadata->>'outcomeKey' = q."outcomeKey"
+    AND event.metadata->>'grantRef' = q."authorityGrantRef"
+    AND event.metadata->>'automated' = 'true'
+    AND event.metadata->>'parentIssue' = '471'
+    AND event.metadata->>'unchangedAcceptedScope' = 'true'
+    AND event.metadata->>'replacesGrantRef' IS NOT NULL
+    AND event.metadata->>'replacesGrantRef' <> q."authorityGrantRef"
+) AS renewal ON TRUE
 WHERE q."userId" = $1
 ORDER BY ${ORDER_BY}
 `,
@@ -3401,7 +3434,7 @@ export async function acquireNextEligibleOutcome({
       fail("OUTCOME_QUEUE_ACQUISITION_RECEIPT_INVALID")
     }
     if (prior?.rows?.length === 1) {
-      const row = prior.rows[0]
+      let row = prior.rows[0]
       if (!receipt) {
         await ensureAcquisitionReceipt(connection, user, key, row, at)
         receiptEstablished = true
@@ -3426,19 +3459,46 @@ export async function acquireNextEligibleOutcome({
             : "OUTCOME_ALREADY_TERMINAL",
         }, "REPLAY_TERMINAL")
       }
-      const live = row.lifecycleState === "active"
+      let live = row.lifecycleState === "active"
         && Date.parse(String(row.leaseExpiresAt)) > Date.parse(at)
-      if (live) {
-        if (row.leaseHolder === holder
-          && row.leaseToken === token
-          && row.executionBinding === binding) {
-          const eligibility = await connection.query(
-            OUTCOME_QUEUE_SQL.revalidateAcquisition,
-            [at, user, row.outcomeKey],
+      const sameLiveIdentity = row.leaseHolder === holder
+        && row.leaseToken === token
+        && row.executionBinding === binding
+      if (row.lifecycleState === "active" && (!live || sameLiveIdentity)) {
+        let eligibility = await connection.query(
+          OUTCOME_QUEUE_SQL.revalidateAcquisition,
+          [at, user, row.outcomeKey],
+        )
+        let liveState = eligibility?.rows?.[0]
+        if (liveState?.approvalLive && !liveState?.authorityLive) {
+          const renewed = await renewExpiredV12CampaignAuthorities(
+            connection,
+            user,
+            at,
+            row.outcomeKey,
+            Number(row.version),
+            null,
           )
-          const liveState = eligibility?.rows?.[0]
-          if (!liveState?.approvalLive || !liveState?.authorityLive) {
-            return await finish({
+          if (renewed.has(row.outcomeKey)) {
+            const renewedOutcome = await connection.query(
+              OUTCOME_QUEUE_SQL.readReceiptOutcome,
+              [user, row.outcomeKey],
+            )
+            if ((renewedOutcome?.rows?.length ?? 0) !== 1) {
+              fail("OUTCOME_QUEUE_ACQUISITION_RECEIPT_INVALID")
+            }
+            row = renewedOutcome.rows[0]
+            live = Date.parse(String(row.leaseExpiresAt)) > Date.parse(at)
+            eligibility = await connection.query(
+              OUTCOME_QUEUE_SQL.revalidateAcquisition,
+              [at, user, row.outcomeKey],
+            )
+            liveState = eligibility?.rows?.[0]
+          }
+        }
+        if (!liveState?.approvalLive || !liveState?.authorityLive) {
+          return await finish(
+            {
               outcome: row,
               acquired: false,
               replayed: false,
@@ -3446,8 +3506,13 @@ export async function acquireNextEligibleOutcome({
               reason: !liveState?.approvalLive
                 ? "AWAITING_APPROVAL"
                 : "AUTHORITY_INELIGIBLE",
-            }, "REPLAY_INELIGIBLE")
-          }
+            },
+            "REPLAY_INELIGIBLE",
+          )
+        }
+      }
+      if (live) {
+        if (sameLiveIdentity) {
           return await finish(
             acquisitionResult(row, { replayed: true }),
             "REPLAY_WINNER",
