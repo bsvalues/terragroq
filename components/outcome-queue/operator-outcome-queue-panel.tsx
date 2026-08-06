@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useState, useTransition } from "react"
+import { useMemo, useRef, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
@@ -48,7 +48,15 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { StatusBadge } from "@/components/status-badge"
 import { buildProtectedOutcomeReorderSnapshot } from "@/lib/outcome-queue/protected-reorder-snapshot"
-import { projectOutcomeQueueSupportingRecordLinks } from "@/components/outcome-queue/supporting-record-links"
+import {
+  indexGoalTimelinesById,
+  projectOutcomeQueueSupportingRecordLinks,
+  type OutcomeQueueSupportingRecordKind,
+} from "@/components/outcome-queue/supporting-record-links"
+import {
+  SupportingRecordCoverageNotice,
+  type SupportingTimelineCoverage,
+} from "@/components/outcome-queue/supporting-record-coverage-notice"
 
 const REORDERABLE_STATES = new Set(["suggested", "approved", "blocked"])
 const TERMINAL_STATES = new Set(["completed", "declined", "superseded"])
@@ -68,6 +76,16 @@ const MANUAL_OUTCOME_PAUSE_REASONS = new Set([
   "OPERATOR_PAUSED",
   "Primary Operator paused this outcome.",
 ])
+const SUPPORTING_RECORD_KIND_LABELS: Record<
+  OutcomeQueueSupportingRecordKind,
+  string
+> = {
+  GOAL: "goal",
+  WORK_ORDER: "work order",
+  EVIDENCE: "evidence",
+  TRACE: "trace",
+  AUDIT: "audit",
+}
 
 function protectedV12AuthorityScope(outcomeKey: string): boolean {
   return PROTECTED_V1_2_AUTHORITY_SCOPES.has(outcomeKey)
@@ -110,10 +128,12 @@ export function OperatorOutcomeQueuePanel({
   surface,
   compact = false,
   timelines,
+  supportingTimelineCoverage,
 }: {
   surface: OutcomeQueueActionSurface
   compact?: boolean
   timelines?: readonly GoalTimelineProjection[]
+  supportingTimelineCoverage?: SupportingTimelineCoverage
 }) {
   const router = useRouter()
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(() => new Set())
@@ -124,6 +144,10 @@ export function OperatorOutcomeQueuePanel({
   const [replacementTitle, setReplacementTitle] = useState("")
   const [pending, startTransition] = useTransition()
   const attemptKeys = useRef(new Map<string, string>())
+  const timelinesByGoalId = useMemo(
+    () => indexGoalTimelinesById(timelines ?? []),
+    [timelines],
+  )
   const visibleRows = compact ? surface.rows.slice(0, 4) : surface.rows
   const movableRows = surface.rows.filter((item) => (
     REORDERABLE_STATES.has(item.lifecycleState)
@@ -392,8 +416,11 @@ export function OperatorOutcomeQueuePanel({
             const movable = !protectedAuthorityProposal
               && !row.isActive
               && movableIndex >= 0
+            const candidateTimelines = row.goalId === null
+              ? []
+              : timelinesByGoalId.get(row.goalId) ?? []
             const supportingRecordLinks = timelines
-              ? projectOutcomeQueueSupportingRecordLinks(row, timelines)
+              ? projectOutcomeQueueSupportingRecordLinks(row, candidateTimelines)
               : []
             return (
               <li key={row.outcomeKey} className="grid gap-4 px-5 py-4 lg:grid-cols-[1fr_auto]">
@@ -438,7 +465,7 @@ export function OperatorOutcomeQueuePanel({
                           <div key={link.kind} className="min-w-0 rounded-md border border-border bg-muted/20 p-3">
                             <Link
                               href={link.href}
-                              title={`Open the read-only ${link.kind.toLowerCase()} register`}
+                              title={`Open the read-only ${SUPPORTING_RECORD_KIND_LABELS[link.kind]} record surface`}
                               className="font-medium text-primary underline-offset-4 hover:underline"
                             >
                               {link.label}
@@ -446,9 +473,19 @@ export function OperatorOutcomeQueuePanel({
                             <ul className="mt-2 space-y-2">
                               {link.records.map((record) => (
                                 <li key={record.reference} className="min-w-0">
-                                  <span className="block break-all font-mono text-[10px] text-foreground">
-                                    {record.reference}
-                                  </span>
+                                  {record.href ? (
+                                    <Link
+                                      href={record.href}
+                                      className="block break-all font-mono text-[10px] text-primary underline-offset-4 hover:underline"
+                                      title={`Open exact ${SUPPORTING_RECORD_KIND_LABELS[link.kind]} record ${record.reference}`}
+                                    >
+                                      {record.reference}
+                                    </Link>
+                                  ) : (
+                                    <span className="block break-all font-mono text-[10px] text-foreground">
+                                      {record.reference}
+                                    </span>
+                                  )}
                                   {record.detail ? (
                                     <span className="mt-0.5 block break-words text-[11px] leading-relaxed text-muted-foreground">
                                       {record.detail}
@@ -462,6 +499,10 @@ export function OperatorOutcomeQueuePanel({
                       </nav>
                     </details>
                   ) : null}
+                  <SupportingRecordCoverageNotice
+                    goalId={row.goalId}
+                    coverage={supportingTimelineCoverage}
+                  />
                 </div>
 
                 {!terminal ? (

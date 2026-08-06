@@ -15,14 +15,37 @@ import {
 import { Activity } from "lucide-react"
 import Link from "next/link"
 import { RuntimeExecutionPanel } from "@/components/runtime/runtime-execution-panel"
-import { DURABLE_RECORD_ANCHORS } from "@/components/outcome-queue/supporting-record-links"
+import {
+  DURABLE_RECORD_ANCHORS,
+  normalizeDurableRecordReference,
+} from "@/components/outcome-queue/supporting-record-links"
+import {
+  DurableAuditRecordPanel,
+  DurableEvidenceRecordPanel,
+} from "@/components/evidence/durable-record-panels"
+import {
+  getDurableAuditRecord,
+  getDurableEvidenceRecord,
+} from "@/app/(shell)/audit/durable-record-query"
 
-export default async function AuditPage() {
+export default async function AuditPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    evidence?: string | string[]
+    audit?: string | string[]
+  }>
+}) {
+  const requested = await searchParams
+  const requestedEvidence = normalizeDurableRecordReference("evidence", requested.evidence)
+  const requestedAudit = normalizeDurableRecordReference("audit", requested.audit)
   const userId = await getUserId()
-  const [persistedEvidence, runtimeTruth, events] = await Promise.all([
+  const [persistedEvidence, runtimeTruth, events, durableEvidence, durableAudit] = await Promise.all([
     getPersistedEvidenceTruth(RUNTIME_EVIDENCE_HISTORY_LIMIT + 1),
     getRuntimeExecutionQuery(),
     getRecentEvents(userId, 200),
+    requestedEvidence ? getDurableEvidenceRecord(requestedEvidence) : Promise.resolve(null),
+    requestedAudit ? getDurableAuditRecord(requestedAudit) : Promise.resolve(null),
   ])
   const evidenceHistory = projectRuntimeEvidenceHistory(persistedEvidence.records)
 
@@ -33,6 +56,14 @@ export default async function AuditPage() {
         description="User-scoped persisted evidence and Hermes runtime execution truth, followed by retained historical/static Evidence Spine context. Read-only; evidence does not execute or authorize."
       />
       <div className="flex flex-col gap-6 p-6">
+        <DurableEvidenceRecordPanel
+          requestedReference={requestedEvidence}
+          record={durableEvidence}
+        />
+        <DurableAuditRecordPanel
+          requestedReference={requestedAudit}
+          record={durableAudit}
+        />
         <section aria-labelledby="persisted-evidence-truth-title" className="flex flex-col gap-4">
           <div>
             <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">

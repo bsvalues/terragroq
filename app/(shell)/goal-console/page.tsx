@@ -11,15 +11,11 @@ import { getGoalTimelines, getGoalTimelinesByIds } from "@/app/actions/goal-time
 import { getActiveGoalAuthorityRequestTimelines } from "@/app/(shell)/goal-console/authority-request-timelines"
 import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
 import { OperatorOutcomeQueuePanel } from "@/components/outcome-queue/operator-outcome-queue-panel"
-
-const GOAL_TIMELINE_BATCH_SIZE = 25
-
-function requestedGoalId(value: string | string[] | undefined): number | null {
-  const candidate = Array.isArray(value) ? value[0] : value
-  if (!candidate) return null
-  const parsed = Number(candidate)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
-}
+import { requestedGoalId } from "@/components/goal-console/requested-goal-id"
+import {
+  loadGoalTimelineBatches,
+  planMissingGoalTimelines,
+} from "@/components/outcome-queue/supporting-timeline-loader"
 
 export default async function GoalConsolePage({
   searchParams,
@@ -38,20 +34,22 @@ export default async function GoalConsolePage({
     row.goalId === null ? [] : [row.goalId]
   )))]
   const knownGoalIds = new Set(timelines.map((timeline) => timeline.goal.id))
-  const missingGoalIds = queueGoalIds.filter((goalId) => !knownGoalIds.has(goalId))
-  const missingTimelineBatches = Array.from(
-    { length: Math.ceil(missingGoalIds.length / GOAL_TIMELINE_BATCH_SIZE) },
-    (_, index) => missingGoalIds.slice(
-      index * GOAL_TIMELINE_BATCH_SIZE,
-      (index + 1) * GOAL_TIMELINE_BATCH_SIZE,
-    ),
+  const missingTimelinePlan = planMissingGoalTimelines(queueGoalIds, knownGoalIds)
+  const additionalTimelines = await loadGoalTimelineBatches(
+    missingTimelinePlan.batches,
+    getGoalTimelinesByIds,
   )
-  const supportingTimelines = [
-    ...timelines,
-    ...(await Promise.all(
-      missingTimelineBatches.map((goalIds) => getGoalTimelinesByIds(goalIds)),
-    )).flat(),
-  ]
+  const supportingTimelines = [...timelines, ...additionalTimelines]
+  const returnedAdditionalGoalIds = new Set(
+    additionalTimelines.map((timeline) => timeline.goal.id),
+  )
+  const supportingTimelineCoverage = {
+    coveredGoalIds: [...knownGoalIds, ...missingTimelinePlan.selectedGoalIds],
+    unavailableGoalIds: missingTimelinePlan.selectedGoalIds.filter(
+      (goalId) => !returnedAdditionalGoalIds.has(goalId),
+    ),
+    truncated: missingTimelinePlan.truncated,
+  }
 
   return (
     <>
@@ -60,7 +58,11 @@ export default async function GoalConsolePage({
         description="State the outcome once, then follow persisted Hermes and Codex delivery truth through completion or a genuine authority wall."
       />
       <div className="flex flex-col gap-4 px-6 pb-2">
-        <OperatorOutcomeQueuePanel surface={outcomeQueue} timelines={supportingTimelines} />
+        <OperatorOutcomeQueuePanel
+          surface={outcomeQueue}
+          timelines={supportingTimelines}
+          supportingTimelineCoverage={supportingTimelineCoverage}
+        />
         <PortfolioOperatorPanel outcomes={goals} />
         <CodexOperatorPanel />
         <ProductionOperatingModePanel />

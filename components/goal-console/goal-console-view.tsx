@@ -20,6 +20,7 @@ import { AGENTS } from "@/lib/goal/agent-matrix"
 import { lane as findLane, mode as findMode, authority as findAuthority } from "@/lib/goal/taxonomy"
 import { getGoalEmptyStatePrompts } from "@/components/goal-console/goal-empty-state"
 import { getGoalJourneyStep } from "@/components/goal-console/goal-journey"
+import { resolveInitialGoalRequest } from "@/components/goal-console/initial-goal-selection"
 import { DURABLE_RECORD_ANCHORS } from "@/components/outcome-queue/supporting-record-links"
 import { OwnerOutcomeDeliveryPanel } from "@/components/goal-console/owner-outcome-delivery-panel"
 import { NeedsMyDecisionPanel } from "@/components/goal-console/needs-my-decision-panel"
@@ -167,6 +168,7 @@ export function GoalConsoleView({
   )
   const goalTimelineRefreshSequences = useRef(new Map<number, number>())
   const authorityRequestRefreshSequence = useRef(0)
+  const lastRequestedInitialGoalId = useRef<number | null>(null)
   const pendingGoalSubmission = useRef<{ command: string; idempotencyKey: string } | null>(null)
   const goalTimelineLatestObservations = useRef(
     new Map(timelines.map((timeline) => [timeline.goal.id, observationTime(timeline)])),
@@ -188,9 +190,25 @@ export function GoalConsoleView({
       }
 
   useEffect(() => {
-    if (initialGoalId === null) return
-    const requestedGoal = initialGoals.find((goal) => goal.id === initialGoalId)
-    if (!requestedGoal) return
+    setGoals(initialGoals)
+    setLatest((current) => (
+      current
+        ? initialGoals.find((goal) => goal.id === current.id) ?? current
+        : initialGoals[0] ?? null
+    ))
+  }, [initialGoals])
+
+  useEffect(() => {
+    const requestedGoal = initialGoalId === null
+      ? null
+      : initialGoals.find((goal) => goal.id === initialGoalId) ?? null
+    const resolution = resolveInitialGoalRequest(
+      lastRequestedInitialGoalId.current,
+      initialGoalId,
+      requestedGoal !== null,
+    )
+    lastRequestedInitialGoalId.current = resolution.lastRequestedGoalId
+    if (resolution.goalIdToApply === null || !requestedGoal) return
     setLatest(requestedGoal)
     setLoopReport(null)
     setLoopGoalId(null)
