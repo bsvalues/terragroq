@@ -420,6 +420,157 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
   })
 
+  it("reacquires a proof-bound validation recovery after a projection wall before its first checkpoint", async () => {
+    const verifyValidationInfrastructureRecovery = vi.fn(async () => true)
+    const resumeQueueAfterValidationRecovery = vi.fn(async (outcome) => outcome)
+    const value = fixture(undefined, {
+      verifyValidationInfrastructureRecovery,
+      resumeQueueAfterValidationRecovery,
+    })
+    value.lifecycle.inspectWorkingTreePaths
+      .mockResolvedValueOnce(["components/hermes/live-status.tsx", "tests/hermes-live-status.test.tsx"])
+      .mockResolvedValue([])
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    const validationFailure = "npx vitest run tests/focused.test.ts exited 1\n'vitest' is not recognized as an internal or external command"
+    const lease = value.state.acquireLease({
+      idempotencyKey: "validation-projection-wall-acquire",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      leaseDurationMs: 1000,
+      metadata: {
+        outcome,
+        branch: "codex/hermes-goal-77-77",
+        worktreePath: path.join(value.root, "worktrees", "goal-77"),
+        baseSha: "a".repeat(40),
+        validationFailure,
+        validationRemediationRound: 3,
+      },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "validation-projection-wall-failed",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "validation-projection-wall-released",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: lease.fencingToken,
+    })
+    const reopened = value.state.reopenValidationInfrastructureWall({
+      idempotencyKey: "validation-projection-wall-recovered",
+      outcomeId: "77",
+      expectedFencingToken: lease.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "d".repeat(64),
+    })
+    const reclaimed = value.state.reclaimLease({
+      idempotencyKey: "validation-projection-wall-reclaim",
+      outcomeId: "77",
+      expectedFencingToken: reopened.fencingToken,
+      holderId: "projection-wall-holder",
+      leaseDurationMs: 1000,
+    })
+    value.state.abandonLease({
+      idempotencyKey: "validation-projection-wall-abandon",
+      outcomeId: "77",
+      holderId: "projection-wall-holder",
+      fencingToken: reclaimed.fencingToken,
+      reason: "HERMES_RUNTIME_PROJECTION_WALL",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "ACTIVE", abandonReason: "HERMES_RUNTIME_PROJECTION_WALL" },
+      checkpoint: { state: "VALIDATION_INFRASTRUCTURE_RECOVERED" },
+      metadata: {
+        validationRecoveryPhase: "PENDING_HOST_VALIDATION",
+        validationRecoveryFencingToken: lease.fencingToken,
+      },
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+      prNumber: 500,
+    })
+    expect(verifyValidationInfrastructureRecovery).toHaveBeenCalledWith({
+      outcomeId: 77,
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      expectedFencingToken: lease.fencingToken,
+    })
+    expect(resumeQueueAfterValidationRecovery).toHaveBeenCalledOnce()
+    expect(value.lifecycle.runValidationCommands).toHaveBeenCalled()
+    expect(value.client.runTurn).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["missing", null],
+    ["empty", ""],
+  ])("refuses a proof-bound active recovery with a %s abandonment marker", async (_label, abandonedAt) => {
+    const verifyValidationInfrastructureRecovery = vi.fn(async () => true)
+    const value = fixture(undefined, { verifyValidationInfrastructureRecovery })
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    const validationFailure = "npx vitest run tests/focused.test.ts exited 1\n'vitest' is not recognized as an internal or external command"
+    const lease = value.state.acquireLease({
+      idempotencyKey: "validation-unmarked-active-acquire",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome, validationFailure, validationRemediationRound: 3 },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "validation-unmarked-active-failed",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "validation-unmarked-active-released",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: lease.fencingToken,
+    })
+    const reopened = value.state.reopenValidationInfrastructureWall({
+      idempotencyKey: "validation-unmarked-active-recovered",
+      outcomeId: "77",
+      expectedFencingToken: lease.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "d".repeat(64),
+    })
+    value.state.reclaimLease({
+      idempotencyKey: "validation-unmarked-active-reclaim",
+      outcomeId: "77",
+      expectedFencingToken: reopened.fencingToken,
+      holderId: "live-holder",
+      leaseDurationMs: 1000,
+    })
+    if (abandonedAt !== null) {
+      const statePath = path.join(value.root, "state", "state.json")
+      const persisted = JSON.parse(fs.readFileSync(statePath, "utf8"))
+      persisted.executions["77"].lease.abandonedAt = abandonedAt
+      persisted.executions["77"].lease.expiresAt = abandonedAt
+      fs.writeFileSync(statePath, `${JSON.stringify(persisted)}\n`)
+    }
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL",
+    })
+    expect(verifyValidationInfrastructureRecovery).not.toHaveBeenCalled()
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(value.client.runTurn).not.toHaveBeenCalled()
+  })
+
   it("refuses a locally reopened validation recovery without persisted proof", async () => {
     const value = fixture(undefined, {
       verifyValidationInfrastructureRecovery: vi.fn(async () => false),

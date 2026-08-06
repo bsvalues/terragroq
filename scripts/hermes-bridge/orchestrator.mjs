@@ -709,9 +709,15 @@ export function createHermesOrchestrator(options = {}) {
     for (const execution of validationRecoveries) {
       const legacyRecoveredCheckpoint = execution.checkpoint.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
       const pendingRecoveryPhase = execution.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+      const originalRecoveryMarker = execution.lease.status === "ABANDONED"
+        && execution.lease.recoverReason === "VALIDATION_INFRASTRUCTURE_REMEDIATED"
+      const abandonedReacquiredRecovery = execution.lease.status === "ACTIVE"
+        && pendingRecoveryPhase
+        && typeof execution.lease.abandonedAt === "string"
+        && execution.lease.abandonedAt === execution.lease.expiresAt
+        && Number.isFinite(Date.parse(execution.lease.abandonedAt))
       if ((legacyRecoveredCheckpoint && execution.checkpoint.detail !== VALIDATION_INFRASTRUCTURE_RETRY_STATE)
-        || (legacyRecoveredCheckpoint
-          && execution.lease.recoverReason !== "VALIDATION_INFRASTRUCTURE_REMEDIATED")
+        || (legacyRecoveredCheckpoint && !originalRecoveryMarker && !abandonedReacquiredRecovery)
         || !/^[0-9a-f]{64}$/.test(String(execution.metadata?.validationRecoveryProofDigest ?? ""))
         || (pendingRecoveryPhase
           && (!Number.isSafeInteger(execution.metadata?.validationRecoveryFencingToken)
