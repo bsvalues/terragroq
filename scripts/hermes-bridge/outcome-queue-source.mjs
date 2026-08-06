@@ -1640,6 +1640,10 @@ WHERE q."userId" = $1
   AND q."executionBinding" = $4
   AND q."acquisitionKey" = $5
   AND q."fencingToken" > $6::integer
+  AND $9::text IS NOT NULL
+  AND $10::text IS NOT NULL
+  AND $11::timestamptz IS NOT NULL
+  AND $12::timestamptz IS NOT NULL
   AND (
     q."version" - $3::integer
       = q."fencingToken" - $6::integer + ${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL}
