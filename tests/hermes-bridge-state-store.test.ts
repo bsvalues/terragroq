@@ -7,6 +7,7 @@ import { createHash } from "node:crypto"
 import {
   createHermesStateStore,
   hermesTurnResultDigest,
+  isValidationInfrastructureFailure,
   normalizeHermesTurnResult,
 } from "@/scripts/hermes-bridge/state-store.mjs"
 
@@ -434,6 +435,43 @@ describe("Hermes bridge durable state store", () => {
       leaseStatus: "ABANDONED",
       state: "VALIDATION_INFRASTRUCTURE_RECOVERED",
     })
+  })
+
+  it("classifies only locked Next ESLint plugin resolution as validation infrastructure", () => {
+    expect(isValidationInfrastructureFailure(
+      "npm run lint exited 1\nFailed to load plugin 'react-hooks' declared in eslint-config-next: "
+      + "Cannot find module 'eslint-plugin-react-hooks'",
+    )).toBe(true)
+    expect(isValidationInfrastructureFailure(
+      "npm run lint exited 1\nFailed to load plugin '@next/next' declared in eslint-config-next: "
+      + "Cannot find module '@next/eslint-plugin-next'",
+    )).toBe(true)
+    expect(isValidationInfrastructureFailure(
+      "Type error: Cannot find module '@/components/missing-product-module'",
+    )).toBe(false)
+    expect(isValidationInfrastructureFailure(
+      "Failed to load plugin 'custom-plugin': Cannot find module 'custom-plugin'",
+    )).toBe(false)
+    expect(isValidationInfrastructureFailure(
+      "Failed to load plugin 'react-hooks' declared in '.eslintrc.cjs': "
+      + "Cannot find module 'eslint-plugin-react-hooks'",
+    )).toBe(false)
+    expect(isValidationInfrastructureFailure(
+      "npm run lint exited 1\nFailed to load plugin 'react-hooks' declared in eslint-config-next: "
+      + "Cannot find module 'eslint-plugin-import'",
+    )).toBe(false)
+    expect(isValidationInfrastructureFailure(
+      "npx vitest run tests/example.test.ts exited 1\nFailed to load plugin 'react-hooks' "
+      + "declared in eslint-config-next: Cannot find module 'eslint-plugin-react-hooks'",
+    )).toBe(false)
+    expect(isValidationInfrastructureFailure(
+      "npm run lint exited 1\nFailed to load plugin '@typescript-eslint' declared in eslint-config-next: "
+      + "Cannot find module '@typescript-eslint/eslint-plugin'",
+    )).toBe(true)
+    expect(isValidationInfrastructureFailure(
+      "npm run lint exited 1\nFailed to load parser '@typescript-eslint/parser' declared in eslint-config-next: "
+      + "Cannot find module '@typescript-eslint/parser'",
+    )).toBe(true)
   })
 
   it.each([

@@ -15,10 +15,30 @@ const SHA = /^[0-9a-f]{40}$/
 const SHA256 = /^[0-9a-f]{64}$/
 const SENSITIVE_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 const VALIDATION_INFRASTRUCTURE_DETAIL = "VALIDATION_REMEDIATION_EXHAUSTED"
+const NEXT_ESLINT_MISSING_TOOL_PAIRS = Object.freeze([
+  ["react-hooks", "eslint-plugin-react-hooks"],
+  ["react", "eslint-plugin-react"],
+  ["jsx-a11y", "eslint-plugin-jsx-a11y"],
+  ["import", "eslint-plugin-import"],
+  ["@next/next", "@next/eslint-plugin-next"],
+  ["@typescript-eslint", "@typescript-eslint/eslint-plugin"],
+  ["@typescript-eslint/parser", "@typescript-eslint/parser"],
+])
+
+function isLockedNextEslintInfrastructureFailure(failure) {
+  if (!/^npm run lint(?:\s.*?)? exited \d+\r?\n/i.test(failure)
+    || !/declared in [^\r\n]{0,1000}\beslint-config-next\b/i.test(failure)) return false
+  return NEXT_ESLINT_MISSING_TOOL_PAIRS.some(([loaded, missing]) => (
+    failure.includes(`Failed to load plugin '${loaded}'`)
+      || failure.includes(`Failed to load parser '${loaded}'`)
+  ) && failure.includes(`Cannot find module '${missing}'`))
+}
+
 export function isValidationInfrastructureFailure(value) {
   const failure = String(value ?? "")
   return /\bspawn EPERM\b/i.test(failure)
     || /'(?:vitest|next)' is not recognized as an internal or external command/i.test(failure)
+    || isLockedNextEslintInfrastructureFailure(failure)
 }
 const REVIEW_REMEDIATION_DETAIL = "REVIEW_REMEDIATION_EXHAUSTED"
 const TURN_RESULTS = new Set([
