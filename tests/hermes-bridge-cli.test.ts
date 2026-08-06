@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   captureRuntimeAgreement,
   recoverExternalToolWall,
+  recoverOrphanedValidationCycle,
   recoverPostMergeCleanupWall,
   recoverReviewedMerge,
   recoverTerminalPostMergeCleanupWall,
@@ -20,6 +21,17 @@ import {
 import { initializeHermesState } from "../scripts/hermes-bridge/state-store.mjs"
 
 describe("Hermes bridge CLI", () => {
+  it("delegates orphaned validation recovery to the guarded orchestrator operation", async () => {
+    const recoverOrphanedValidationCycleLease = vi.fn(async () => ({
+      result: "RECOVERED", outcomeId: "12", fencingToken: 78, replayed: false,
+    }))
+
+    await expect(recoverOrphanedValidationCycle({
+      orchestrator: { recoverOrphanedValidationCycleLease },
+    })).resolves.toEqual({ result: "RECOVERED", outcomeId: "12", fencingToken: 78, replayed: false })
+    expect(recoverOrphanedValidationCycleLease).toHaveBeenCalledOnce()
+  })
+
   it("runs the real read-only status command without supervisor proof context", () => {
     const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-cli-status-"))
     const statePath = path.join(runtimeRoot, "state", "state.json")

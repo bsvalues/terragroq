@@ -264,6 +264,11 @@ export async function recoverValidationInfrastructureWall(options = {}) {
   return { result: "RECOVERED", outcomeId: candidate.outcomeId, proofRecorded: true }
 }
 
+export async function recoverOrphanedValidationCycle(options = {}) {
+  const orchestrator = options.orchestrator ?? createResidentHermesOrchestrator()
+  return orchestrator.recoverOrphanedValidationCycleLease()
+}
+
 export function recoverExternalToolWall(options = {}) {
   const orchestrator = options.orchestrator ?? createResidentHermesOrchestrator()
   const activationPath = path.join(orchestrator.runtimeRoot, "control", "activation")
@@ -755,6 +760,7 @@ export async function runCli(command = process.argv[2]) {
     else if (command === "smoke") print(await smoke())
     else if (command === "recover-native-provider-wall") print(await recoverNativeProviderWall())
     else if (command === "recover-validation-infrastructure-wall") print(await recoverValidationInfrastructureWall())
+    else if (command === "recover-orphaned-validation-cycle") print(await recoverOrphanedValidationCycle())
     else if (command === "recover-external-tool-wall") print(recoverExternalToolWall())
     else if (command === "recover-post-merge-cleanup-wall") print(recoverPostMergeCleanupWall())
     else if (command === "recover-terminal-post-merge-cleanup-wall") print(await recoverTerminalPostMergeCleanupWall())
@@ -766,7 +772,7 @@ export async function runCli(command = process.argv[2]) {
         readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")),
       ))
     } else {
-      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|agreement|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-external-tool-wall|recover-post-merge-cleanup-wall|recover-terminal-post-merge-cleanup-wall|recover-reviewed-merge"), { code: "HERMES_CLI_USAGE" })
+      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|agreement|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-orphaned-validation-cycle|recover-external-tool-wall|recover-post-merge-cleanup-wall|recover-terminal-post-merge-cleanup-wall|recover-reviewed-merge"), { code: "HERMES_CLI_USAGE" })
     }
   } catch (error) {
     print({

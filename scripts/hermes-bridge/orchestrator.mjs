@@ -303,6 +303,14 @@ export function createHermesOrchestrator(options = {}) {
   const clientFactory = options.clientFactory ?? ((cwd) => new CodexAppServerClient({ cwd, timeoutMs: TURN_TIMEOUT_MS }))
   const now = options.now ?? (() => new Date())
   const sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)))
+  const isProcessAlive = options.isProcessAlive ?? ((processId) => {
+    try {
+      process.kill(processId, 0)
+      return true
+    } catch (error) {
+      return error?.code !== "ESRCH"
+    }
+  })
   const reviewPollIntervalMs = options.reviewPollIntervalMs ?? REVIEW_POLL_INTERVAL_MS
   const reviewPollAttempts = options.reviewPollAttempts ?? REVIEW_POLL_ATTEMPTS
   if (!Number.isFinite(reviewPollIntervalMs) || reviewPollIntervalMs <= 0
@@ -334,6 +342,109 @@ export function createHermesOrchestrator(options = {}) {
       reason: "HERMES_CYCLE_PROCESS_EXIT",
     })
     return { abandoned: true, outcomeId: execution.outcomeId }
+  }
+
+  async function recoverOrphanedValidationCycleLease() {
+    const supervisorPath = path.join(runtimeRoot, "state", "supervisor.json")
+    let supervisorAlive = false
+    if (fs.existsSync(supervisorPath)) {
+      try {
+        const supervisor = JSON.parse(fs.readFileSync(supervisorPath, "utf8"))
+        if (!Number.isSafeInteger(supervisor?.processId) || supervisor.processId <= 0) {
+          throw new Error("INVALID_SUPERVISOR_PID")
+        }
+        supervisorAlive = isProcessAlive(supervisor.processId)
+      } catch {
+        throw Object.assign(new Error("Supervisor evidence is malformed"), {
+          code: "HERMES_ORPHAN_RECOVERY_SUPERVISOR_WALL",
+        })
+      }
+    }
+    if (readControl(activationPath, "disabled") !== "disabled" || supervisorAlive) {
+      throw Object.assign(new Error("Supervisor must be stopped before orphan recovery"), {
+        code: "HERMES_ORPHAN_RECOVERY_SUPERVISOR_WALL",
+      })
+    }
+    const persisted = state.read()
+    assertOwnerTouchCountersZero(persisted)
+    const candidates = Object.values(persisted.executions).filter((execution) => (
+      execution?.lease?.status === "ACTIVE"
+      && execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
+      && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
+      && execution?.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+      && /^[0-9a-f]{64}$/.test(String(execution?.metadata?.validationRecoveryProofDigest ?? ""))
+      && Number.isSafeInteger(execution?.metadata?.validationRecoveryFencingToken)
+      && execution.metadata.validationRecoveryFencingToken > 0
+    ))
+    if (candidates.length !== 1) {
+      throw Object.assign(new Error("Exactly one orphaned validation recovery lease is required"), {
+        code: "HERMES_ORPHAN_RECOVERY_CANDIDATE_WALL",
+      })
+    }
+    const execution = candidates[0]
+    const projectAbandonedSnapshot = async (snapshot) => {
+      const assertExactFence = () => {
+        const current = state.read().executions[String(snapshot.outcomeId)]
+        if (current?.fencingToken !== snapshot.fencingToken
+          || current?.lease?.holderId !== snapshot.lease.holderId
+          || current?.lease?.abandonedAt !== snapshot.lease.abandonedAt
+          || current?.lease?.expiresAt !== snapshot.lease.expiresAt
+          || current?.lease?.abandonReason !== "HERMES_CYCLE_PROCESS_EXIT") {
+          throw Object.assign(new Error("Orphan recovery fence changed during projection"), {
+            code: "HERMES_ORPHAN_RECOVERY_FENCE_WALL",
+          })
+        }
+      }
+      assertExactFence()
+      const projected = await retryRuntimeProjection(() => projectLease({
+        outcomeId: Number(snapshot.outcomeId),
+        attempt: snapshot.fencingToken,
+        checkpointSequence: snapshot.checkpoint.sequence,
+        lease: { status: "ABANDONED", expiresAt: snapshot.lease.expiresAt },
+      }), { sleep })
+      assertExactFence()
+      return projected
+    }
+    const alreadyAbandoned = typeof execution.lease.abandonedAt === "string"
+      && execution.lease.abandonedAt === execution.lease.expiresAt
+      && Number.isFinite(Date.parse(execution.lease.abandonedAt))
+      && execution.lease.abandonReason === "HERMES_CYCLE_PROCESS_EXIT"
+    if (execution.lease.abandonedAt && !alreadyAbandoned) {
+      throw Object.assign(new Error("Recorded orphan recovery marker is malformed"), {
+        code: "HERMES_ORPHAN_RECOVERY_STATE_WALL",
+      })
+    }
+    if (alreadyAbandoned) {
+      await projectAbandonedSnapshot(execution)
+      return {
+        result: "RECOVERED", outcomeId: execution.outcomeId,
+        fencingToken: execution.fencingToken, replayed: true,
+      }
+    }
+    const holderMatch = /^([^:]+):(\d+):([0-9a-f-]{36})$/i.exec(String(execution.lease.holderId ?? ""))
+    const processId = Number(holderMatch?.[2])
+    if (!holderMatch
+      || holderMatch[1].toLowerCase() !== os.hostname().toLowerCase()
+      || !Number.isSafeInteger(processId)
+      || processId <= 0
+      || isProcessAlive(processId)) {
+      throw Object.assign(new Error("Recorded validation recovery holder is not a dead local process"), {
+        code: "HERMES_ORPHAN_RECOVERY_HOLDER_WALL",
+      })
+    }
+    state.abandonLease({
+      idempotencyKey: `${execution.outcomeId}:abandon:${execution.fencingToken}:orphan-recovery:${execution.checkpoint.sequence}`,
+      outcomeId: execution.outcomeId,
+      holderId: execution.lease.holderId,
+      fencingToken: execution.fencingToken,
+      reason: "HERMES_CYCLE_PROCESS_EXIT",
+    })
+    const abandoned = state.read().executions[String(execution.outcomeId)]
+    await projectAbandonedSnapshot(abandoned)
+    return {
+      result: "RECOVERED", outcomeId: execution.outcomeId,
+      fencingToken: execution.fencingToken, replayed: false,
+    }
   }
 
   function projectionMetadata(value = {}) {
@@ -1719,6 +1830,6 @@ export function createHermesOrchestrator(options = {}) {
 
   return Object.freeze({
     cycle, state, runtimeRoot, statePath, activationPath, notBeforePath,
-    abandonOwnedCycleLease,
+    abandonOwnedCycleLease, recoverOrphanedValidationCycleLease,
   })
 }
