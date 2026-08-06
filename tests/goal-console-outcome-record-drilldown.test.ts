@@ -177,6 +177,21 @@ describe("Goal Console outcome supporting-record drill-down", () => {
     expect(plan.truncated).toBe(true)
   })
 
+  it("reserves an existing requested Goal before the 50-Goal enrichment cap", () => {
+    const requestedId = 900
+    const queueGoalIds = Array.from({ length: 51 }, (_, index) => index + 1)
+    const plan = planMissingGoalTimelines(queueGoalIds, [], [requestedId])
+
+    expect(plan.selectedGoalIds).toEqual([
+      requestedId,
+      ...Array.from({ length: 49 }, (_, index) => index + 1),
+    ])
+    expect(plan.selectedGoalIds).not.toContain(50)
+    expect(plan.truncated).toBe(true)
+    expect(pageSource).toContain("goals.some((goal) => goal.id === initialGoalId)")
+    expect(pageSource).toContain("requestedGoalIds,")
+  })
+
   it("preserves successful batches and marks every failed-batch Goal unavailable", async () => {
     const firstBatch = Array.from({ length: 25 }, (_, index) => index + 1)
     const secondBatch = Array.from({ length: 25 }, (_, index) => index + 26)
@@ -224,6 +239,28 @@ describe("Goal Console outcome supporting-record drill-down", () => {
     expect(goalConsoleSource).toContain(
       "initialGoals.find((goal) => goal.id === current.id) ?? current",
     )
+  })
+
+  it("synchronizes manual selection so an unchanged deep link can select A again", () => {
+    let lastRequestedGoalId: number | null = null
+    const firstA = resolveInitialGoalRequest(lastRequestedGoalId, 8, true)
+    lastRequestedGoalId = firstA.lastRequestedGoalId
+
+    expect(firstA.goalIdToApply).toBe(8)
+
+    // Manual B selection clears the consumed A request before replacing the URL with B.
+    lastRequestedGoalId = null
+    const selectedB = resolveInitialGoalRequest(lastRequestedGoalId, 9, true)
+    lastRequestedGoalId = selectedB.lastRequestedGoalId
+    const linkedA = resolveInitialGoalRequest(lastRequestedGoalId, 8, true)
+
+    expect(selectedB.goalIdToApply).toBe(9)
+    expect(linkedA.goalIdToApply).toBe(8)
+    expect(goalConsoleSource).toContain("lastRequestedInitialGoalId.current = null")
+    expect(goalConsoleSource).toContain(
+      "router.replace(`/goal-console?goal=${goal.id}`, { scroll: false })",
+    )
+    expect(goalConsoleSource).toContain("onSelect={() => handleGoalSelection(g)}")
   })
 
   it("renders a labelled row-level record navigation only when links exist", () => {

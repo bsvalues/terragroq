@@ -34,7 +34,15 @@ export default async function GoalConsolePage({
   ])
   const queueGoalIds = prioritizeQueueGoalIds(outcomeQueue.rows)
   const knownGoalIds = new Set(timelines.map((timeline) => timeline.goal.id))
-  const missingTimelinePlan = planMissingGoalTimelines(queueGoalIds, knownGoalIds)
+  const requestedGoalIds = initialGoalId !== null
+    && goals.some((goal) => goal.id === initialGoalId)
+    ? [initialGoalId]
+    : []
+  const missingTimelinePlan = planMissingGoalTimelines(
+    queueGoalIds,
+    knownGoalIds,
+    requestedGoalIds,
+  )
   const additionalTimelineLoad = await loadGoalTimelineBatches(
     missingTimelinePlan.batches,
     getGoalTimelinesByIds,

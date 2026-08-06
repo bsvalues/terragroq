@@ -521,6 +521,15 @@ export function GoalConsoleView({
     })
   }
 
+  function handleGoalSelection(goal: Goal) {
+    lastRequestedInitialGoalId.current = null
+    setLatest(goal)
+    setLoopReport(null)
+    setLoopGoalId(null)
+    router.replace(`/goal-console?goal=${goal.id}`, { scroll: false })
+    handleTimelineRefresh(goal.id)
+  }
+
   return (
     <div className="flex flex-col gap-6 p-6">
       <OwnerOutcomeDeliveryPanel source={findApprovedOwnerOutcome(goals) ?? latest} />
@@ -660,12 +669,7 @@ export function GoalConsoleView({
                     goal={g}
                     active={latest?.id === g.id}
                     pending={pending}
-                    onSelect={() => {
-                      setLatest(g)
-                      setLoopReport(null)
-                      setLoopGoalId(null)
-                      handleTimelineRefresh(g.id)
-                    }}
+                    onSelect={() => handleGoalSelection(g)}
                     onConvert={() => handleConvert(g.id)}
                     onDismiss={() => handleDismiss(g.id)}
                   />
