@@ -11,6 +11,7 @@ import {
   projectOutcomeRuntimeCheckpoint,
   projectOutcomeRuntimeLease,
   readValidationInfrastructureRecovery,
+  resolveValidationInfrastructureRecovery,
   selectNextOutcome,
   terminalizeOutcome,
   VALIDATION_INFRASTRUCTURE_RETRY_STATE,
@@ -297,6 +298,16 @@ export function createHermesOrchestrator(options = {}) {
   const readApprovedDecision = options.readApprovedOwnerDecision ?? readApprovedOwnerDecision
   const verifyValidationInfrastructureRecovery = options.verifyValidationInfrastructureRecovery
     ?? readValidationInfrastructureRecovery
+  const resolveValidationRecovery = options.resolveValidationInfrastructureRecovery
+    ?? (options.verifyValidationInfrastructureRecovery
+      ? async (input) => (await verifyValidationInfrastructureRecovery(input)
+          ? {
+              expectedNextState: input.expectedNextState,
+              proofDigest: input.proofDigest,
+              recoveryFencingToken: input.expectedFencingToken,
+            }
+          : null)
+      : resolveValidationInfrastructureRecovery)
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const projectLease = options.projectLease ?? projectOutcomeRuntimeLease
   const leaseRenewalIntervalMs = options.leaseRenewalIntervalMs ?? 5 * 60 * 1000
@@ -321,6 +332,47 @@ export function createHermesOrchestrator(options = {}) {
     })
   }
   const holderId = options.holderId ?? `${os.hostname()}:${process.pid}:${randomUUID()}`
+  const recoverableValidationStates = new Set([
+    "VALIDATION_INFRASTRUCTURE_RECOVERED",
+    "HOST_VALIDATION_STARTED",
+    "VALIDATION_REMEDIATION_REQUIRED",
+  ])
+  const validationRecoverySourceFence = (execution, persisted) => {
+    if (Number.isSafeInteger(execution?.metadata?.validationRecoveryFencingToken)
+      && execution.metadata.validationRecoveryFencingToken > 0) {
+      return execution.metadata.validationRecoveryFencingToken
+    }
+    return null
+  }
+  const matchesRecoverableValidationState = (execution, persisted) => {
+    const sourceFence = validationRecoverySourceFence(execution, persisted)
+    if (execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED") {
+      return execution.checkpoint.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
+        && execution.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+        && (sourceFence !== null
+          || (execution.metadata?.validationRecoveryPhase === null
+            && execution.metadata?.validationRecoveryFencingToken === null))
+    }
+    if (execution?.checkpoint?.state === "HOST_VALIDATION_STARTED") {
+      return execution.checkpoint.detail === "Recovered validation infrastructure"
+        && execution.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+        && sourceFence !== null
+    }
+    if (execution?.checkpoint?.state === "VALIDATION_REMEDIATION_REQUIRED") {
+      return execution.checkpoint.detail === null
+        && [null, "VALIDATION_REMEDIATION"].includes(execution.metadata?.validationRecoveryPhase ?? null)
+        && typeof execution.metadata?.validationFailure === "string"
+        && execution.metadata.validationFailure.length > 0
+        && Number.isSafeInteger(execution.metadata?.validationRemediationRound)
+        && execution.metadata.validationRemediationRound > 0
+        && (sourceFence !== null
+          || (execution.metadata?.validationRecoveryPhase === null
+            && execution.metadata?.validationRecoveryFencingToken === null))
+    }
+    return !recoverableValidationStates.has(execution?.checkpoint?.state)
+      && execution?.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+      && sourceFence !== null
+  }
   async function abandonOwnedCycleLease() {
     const owned = Object.values(state.read().executions).filter((execution) => (
       execution?.lease?.status === "ACTIVE"
@@ -367,41 +419,10 @@ export function createHermesOrchestrator(options = {}) {
     }
     const persisted = state.read()
     assertOwnerTouchCountersZero(persisted)
-    const recoverableValidationStates = new Set([
-      "VALIDATION_INFRASTRUCTURE_RECOVERED",
-      "HOST_VALIDATION_STARTED",
-      "VALIDATION_REMEDIATION_REQUIRED",
-    ])
-    const hasRecoverySourceFence = (execution) => (
-      Number.isSafeInteger(execution?.metadata?.validationRecoveryFencingToken)
-      && execution.metadata.validationRecoveryFencingToken > 0
-    )
-    const matchesRecoverableValidationState = (execution) => {
-      if (execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED") {
-        return execution.checkpoint.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
-          && execution.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
-          && hasRecoverySourceFence(execution)
-      }
-      if (execution?.checkpoint?.state === "HOST_VALIDATION_STARTED") {
-        return execution.checkpoint.detail === "Recovered validation infrastructure"
-          && execution.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
-          && hasRecoverySourceFence(execution)
-      }
-      if (execution?.checkpoint?.state === "VALIDATION_REMEDIATION_REQUIRED") {
-        return execution.checkpoint.detail === null
-          && execution.metadata?.validationRecoveryPhase === null
-          && execution.metadata?.validationRecoveryFencingToken === null
-          && typeof execution.metadata?.validationFailure === "string"
-          && execution.metadata.validationFailure.length > 0
-          && Number.isSafeInteger(execution.metadata?.validationRemediationRound)
-          && execution.metadata.validationRemediationRound > 0
-      }
-      return false
-    }
     const candidates = Object.values(persisted.executions).filter((execution) => (
       execution?.lease?.status === "ACTIVE"
       && recoverableValidationStates.has(execution?.checkpoint?.state)
-      && matchesRecoverableValidationState(execution)
+      && matchesRecoverableValidationState(execution, persisted)
       && execution?.metadata?.outcome
       && String(execution.metadata.outcome.id) === String(execution.outcomeId)
       && /^[0-9a-f]{64}$/.test(String(execution?.metadata?.validationRecoveryProofDigest ?? ""))
@@ -842,10 +863,23 @@ export function createHermesOrchestrator(options = {}) {
     approvedReleasedExecutions.sort((left, right) =>
       Number(left.proof.decisionId) - Number(right.proof.decisionId)
         || String(left.execution.outcomeId).localeCompare(String(right.execution.outcomeId)))
-    const validationRecoveries = Object.values(initialized.executions).filter((execution) => (
-      execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
-      || execution?.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+    const validationRecoveryCandidates = Object.values(initialized.executions).filter((execution) => (
+      execution?.lease?.status !== "RELEASED"
+      && (recoverableValidationStates.has(execution?.checkpoint?.state)
+        || execution?.metadata?.validationRecoveryPhase !== null)
+      && (execution?.metadata?.validationRecoveryProofDigest !== null
+        || execution?.metadata?.validationRecoveryPhase !== null
+        || execution?.lease?.recoverReason === "VALIDATION_INFRASTRUCTURE_REMEDIATED")
     ))
+    for (const execution of validationRecoveryCandidates) {
+      if (!matchesRecoverableValidationState(execution, initialized)
+        || !/^[0-9a-f]{64}$/.test(String(execution?.metadata?.validationRecoveryProofDigest ?? ""))) {
+        throw Object.assign(new Error("Persisted validation recovery state is incomplete"), {
+          code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL",
+        })
+      }
+    }
+    const validationRecoveries = validationRecoveryCandidates
     const verifiedValidationRecoveries = new Map()
     for (const execution of validationRecoveries) {
       const legacyRecoveredCheckpoint = execution.checkpoint.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
@@ -859,21 +893,26 @@ export function createHermesOrchestrator(options = {}) {
         && Number.isFinite(Date.parse(execution.lease.abandonedAt))
       if ((legacyRecoveredCheckpoint && execution.checkpoint.detail !== VALIDATION_INFRASTRUCTURE_RETRY_STATE)
         || (legacyRecoveredCheckpoint && !originalRecoveryMarker && !abandonedReacquiredRecovery)
-        || !/^[0-9a-f]{64}$/.test(String(execution.metadata?.validationRecoveryProofDigest ?? ""))
-        || (pendingRecoveryPhase
-          && (!Number.isSafeInteger(execution.metadata?.validationRecoveryFencingToken)
-            || execution.metadata.validationRecoveryFencingToken <= 0))) {
+        || !matchesRecoverableValidationState(execution, initialized)
+        || !/^[0-9a-f]{64}$/.test(String(execution.metadata?.validationRecoveryProofDigest ?? ""))) {
         throw Object.assign(new Error("Persisted validation recovery state is incomplete"), {
           code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL",
         })
       }
-      const verified = await verifyValidationInfrastructureRecovery({
+      const resolvedProof = await resolveValidationRecovery({
         outcomeId: Number(execution.outcomeId),
         expectedNextState: VALIDATION_INFRASTRUCTURE_RETRY_STATE,
         proofDigest: execution.metadata.validationRecoveryProofDigest,
-        expectedFencingToken: execution.metadata.validationRecoveryFencingToken ?? execution.fencingToken,
+        expectedFencingToken: validationRecoverySourceFence(execution, initialized),
       })
-      if (!verified) {
+      const persistedRecoveryFencingToken = validationRecoverySourceFence(execution, initialized)
+      if (!resolvedProof
+        || resolvedProof.expectedNextState !== VALIDATION_INFRASTRUCTURE_RETRY_STATE
+        || resolvedProof.proofDigest !== execution.metadata.validationRecoveryProofDigest
+        || !Number.isSafeInteger(resolvedProof.recoveryFencingToken)
+        || resolvedProof.recoveryFencingToken <= 0
+        || (persistedRecoveryFencingToken !== null
+          && resolvedProof.recoveryFencingToken !== persistedRecoveryFencingToken)) {
         throw Object.assign(new Error("Persisted validation recovery proof is incomplete"), {
           code: "HERMES_VALIDATION_RECOVERY_PROOF_WALL",
         })
@@ -881,8 +920,7 @@ export function createHermesOrchestrator(options = {}) {
       verifiedValidationRecoveries.set(String(execution.outcomeId), {
         expectedNextState: VALIDATION_INFRASTRUCTURE_RETRY_STATE,
         proofDigest: execution.metadata.validationRecoveryProofDigest,
-        recoveryFencingToken: execution.metadata.validationRecoveryFencingToken
-          ?? execution.fencingToken,
+        recoveryFencingToken: resolvedProof.recoveryFencingToken,
       })
     }
     const recoveredCandidates = Object.values(initialized.executions).filter((execution) => (
@@ -897,7 +935,7 @@ export function createHermesOrchestrator(options = {}) {
         || (execution?.checkpoint?.state === "POST_MERGE_CLEANUP_RECOVERED"
           && /^PR #\d+$/.test(execution?.checkpoint?.detail ?? ""))
         || OWNER_DECISION_RESUME_STATES.has(execution?.checkpoint?.state)
-        || execution?.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+        || matchesRecoverableValidationState(execution, initialized)
         || hasOwnerDecisionResume(execution?.metadata)
       )
     ))
@@ -1265,6 +1303,7 @@ export function createHermesOrchestrator(options = {}) {
     }
     let durableHeadRefOid = lease.metadata?.headRefOid ?? null
     const validationRecoveryPending = lease.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
+    const durableValidationRecoveryFencingToken = validationRecoverySourceFence(lease, state.read())
     if (validationRecoveryPending || [
       "HOST_VALIDATION_STARTED",
       "VALIDATION_INFRASTRUCTURE_RECOVERED",
@@ -1331,8 +1370,10 @@ export function createHermesOrchestrator(options = {}) {
         cp = await checkpoint(lease, sequence, "VALIDATION_REMEDIATION_REQUIRED", null, {
           validationFailure: detail,
           validationRemediationRound: initialRemediationRound + 1,
-          validationRecoveryPhase: null,
-          validationRecoveryFencingToken: null,
+          validationRecoveryPhase: durableValidationRecoveryFencingToken === null
+            ? null
+            : "VALIDATION_REMEDIATION",
+          validationRecoveryFencingToken: durableValidationRecoveryFencingToken,
           validationEvidence: null,
           ...consumedTurnResultMetadata(),
         })
@@ -1666,8 +1707,11 @@ export function createHermesOrchestrator(options = {}) {
             .slice(0, 4_000)
           cp = await checkpoint(lease, sequence, "VALIDATION_REMEDIATION_REQUIRED", null, {
             validationFailure: detail, validationRemediationRound: remediationRound + 1,
-            validationEvidence: null, validationRecoveryPhase: null,
-            validationRecoveryFencingToken: null,
+            validationEvidence: null,
+            validationRecoveryPhase: durableValidationRecoveryFencingToken === null
+              ? null
+              : "VALIDATION_REMEDIATION",
+            validationRecoveryFencingToken: durableValidationRecoveryFencingToken,
           })
           sequence = cp.checkpointSequence
           pendingValidationFailure = detail

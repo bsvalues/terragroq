@@ -1098,6 +1098,77 @@ export async function readValidationInfrastructureRecovery({
   }
 }
 
+export async function resolveValidationInfrastructureRecovery({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  expectedNextState = VALIDATION_INFRASTRUCTURE_RETRY_STATE,
+  proofDigest,
+  expectedFencingToken = null,
+} = {}) {
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) {
+    throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
+  }
+  if (expectedNextState !== VALIDATION_INFRASTRUCTURE_RETRY_STATE
+    || typeof proofDigest !== "string" || !SHA256.test(proofDigest)
+    || (expectedFencingToken !== null
+      && (!Number.isSafeInteger(expectedFencingToken) || expectedFencingToken <= 0))) {
+    throw Object.assign(new Error("validation recovery proof is invalid"), {
+      code: "VALIDATION_RECOVERY_PROOF_INVALID",
+    })
+  }
+  let runQuery = normalizeQuery(query)
+  let pool
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = createHermesDatabasePool(Pool, databaseUrl)
+    runQuery = pool.query.bind(pool)
+  }
+  try {
+    const result = await runQuery(
+      `WITH latest_terminal AS (
+         SELECT id, metadata
+         FROM governance_event
+         WHERE "entityType" = 'goal' AND "entityId"::text = ($1::integer)::text
+           AND "eventType" = 'HERMES_OUTCOME_TERMINAL'
+         ORDER BY "createdAt" DESC, id DESC
+         LIMIT 1
+       )
+       SELECT proof.metadata->>'fencingToken' AS "recoveryFencingToken"
+       FROM goal g
+       JOIN latest_terminal terminal
+         ON terminal.metadata->>'result' = 'FAILED_TERMINAL'
+           AND terminal.metadata->>'nextState' = $2
+       JOIN governance_event proof
+         ON proof."entityType" = 'goal' AND proof."entityId"::text = g.id::text
+           AND proof."eventType" = 'HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED'
+           AND proof.metadata->>'retryState' = $2
+           AND proof.metadata->>'proofDigest' = $3
+           AND proof.id > terminal.id
+       JOIN governance_event recovered
+         ON recovered."entityType" = 'goal' AND recovered."entityId"::text = g.id::text
+           AND recovered."eventType" = 'HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED'
+           AND recovered.metadata->>'retryState' = $2
+           AND recovered.metadata->>'proofDigest' = $3
+           AND recovered.id > proof.id
+       WHERE g.id = $1::integer AND g.status = 'classified'
+       ORDER BY proof.id DESC
+       LIMIT 2`,
+      [outcomeId, expectedNextState, proofDigest],
+    )
+    if ((result?.rows?.length ?? 0) !== 1) return null
+    const recoveryFencingToken = Number(result.rows[0].recoveryFencingToken)
+    if (!Number.isSafeInteger(recoveryFencingToken) || recoveryFencingToken <= 0) return null
+    if (expectedFencingToken !== null && recoveryFencingToken !== expectedFencingToken) return null
+    return { expectedNextState, proofDigest, recoveryFencingToken }
+  } finally {
+    if (pool) await pool.end()
+  }
+}
+
 export async function recoverNativeProviderOutcome({
   query,
   databaseUrl = process.env.DATABASE_URL,

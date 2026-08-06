@@ -11,6 +11,7 @@ import {
   projectOutcomeRuntimeLease,
   readApprovedOwnerDecision,
   readValidationInfrastructureRecovery,
+  resolveValidationInfrastructureRecovery,
   recordOwnerAuthorityDecision,
   recordValidationInfrastructureRecoveryProof,
   recoverNativeProviderOutcome,
@@ -641,6 +642,43 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     await expect(readValidationInfrastructureRecovery({
       query: vi.fn(), outcomeId: 4, proofDigest: "b".repeat(64), expectedFencingToken: 0,
     })).rejects.toMatchObject({ code: "VALIDATION_RECOVERY_PROOF_INVALID" })
+  })
+
+  it("resolves the exact source fence from one canonical validation recovery chain", async () => {
+    const query = vi.fn().mockResolvedValueOnce({
+      rows: [{ recoveryFencingToken: "14" }],
+    })
+    await expect(resolveValidationInfrastructureRecovery({
+      query, outcomeId: 4, proofDigest: "b".repeat(64),
+    })).resolves.toEqual({
+      expectedNextState: "VALIDATION_REMEDIATION_EXHAUSTED",
+      proofDigest: "b".repeat(64),
+      recoveryFencingToken: 14,
+    })
+    expect(query.mock.calls[0][0]).toMatch(/ORDER BY proof\.id DESC/)
+    expect(query.mock.calls[0][0]).toMatch(/LIMIT 2/)
+    expect(query.mock.calls[0][1]).toEqual([
+      4, "VALIDATION_REMEDIATION_EXHAUSTED", "b".repeat(64),
+    ])
+  })
+
+  it("fails closed when validation recovery proof resolution is absent or ambiguous", async () => {
+    for (const rows of [[], [{ recoveryFencingToken: "14" }, { recoveryFencingToken: "13" }]]) {
+      await expect(resolveValidationInfrastructureRecovery({
+        query: vi.fn().mockResolvedValueOnce({ rows }),
+        outcomeId: 4,
+        proofDigest: "b".repeat(64),
+      })).resolves.toBeNull()
+    }
+  })
+
+  it("rejects a canonical recovery fence that disagrees with persisted local metadata", async () => {
+    await expect(resolveValidationInfrastructureRecovery({
+      query: vi.fn().mockResolvedValueOnce({ rows: [{ recoveryFencingToken: "14" }] }),
+      outcomeId: 4,
+      proofDigest: "b".repeat(64),
+      expectedFencingToken: 13,
+    })).resolves.toBeNull()
   })
 
   it("persists exact infrastructure proof before outcome recovery", async () => {

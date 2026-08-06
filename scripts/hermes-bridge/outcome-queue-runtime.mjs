@@ -16,6 +16,7 @@ import {
   verifyOutcomeQueueWorkOrderBinding,
 } from "./outcome-queue-source.mjs"
 import { readHermesState } from "./state-store.mjs"
+import { createHermesDatabasePool } from "./database-pool.mjs"
 import {
   completeOutcome as completeGoalOutcome,
   deferProviderOutcome as deferGoalOutcome,
@@ -119,8 +120,7 @@ function createLazyPool(databaseUrl, createPool) {
       const pending = Promise.resolve()
         .then(async () => createPool
           ? createPool(databaseUrl)
-          : new (await import("pg")).Pool({
-              connectionString: databaseUrl,
+          : createHermesDatabasePool((await import("pg")).Pool, databaseUrl, {
               allowExitOnIdle: true,
             }))
         .then((candidate) => {
