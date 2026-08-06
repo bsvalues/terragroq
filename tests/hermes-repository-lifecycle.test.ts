@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   createCommandEnvironment,
+  resolveWorktreeValidationEnvironment,
   resolveWorktreeValidationInvocation,
   createRepositoryLifecycle,
   HermesRepositoryLifecycleError,
@@ -107,6 +108,11 @@ describe("Hermes repository lifecycle", () => {
       APPDATA: path.resolve("C:/Temp/isolated-validation/AppData/Roaming"),
       LOCALAPPDATA: path.resolve("C:/Temp/isolated-validation/AppData/Local"),
     })
+    expect(createCommandEnvironment(source, {
+      NODE_PATH: "C:/workspace/node_modules/.pnpm/node_modules",
+    }, { credentialAccess: false, validationHome: "C:/Temp/isolated-validation" })).toMatchObject({
+      NODE_PATH: "C:/workspace/node_modules/.pnpm/node_modules",
+    })
   })
 
   it("resolves Windows junction-backed Vitest and Next validators to local Node entrypoints", () => {
@@ -139,6 +145,27 @@ describe("Hermes repository lifecycle", () => {
       })
     } finally {
       fs.rmSync(worktree, { recursive: true, force: true })
+    }
+  })
+
+  it("binds Windows validation to the owned pnpm virtual module directory", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-validation-environment-"))
+    const pnpmModules = path.join(workspace, "node_modules", ".pnpm", "node_modules")
+    try {
+      fs.mkdirSync(pnpmModules, { recursive: true })
+      expect(resolveWorktreeValidationEnvironment({
+        NEXT_TELEMETRY_DISABLED: "1",
+      }, workspace, "win32")).toEqual({
+        NEXT_TELEMETRY_DISABLED: "1",
+        NODE_PATH: pnpmModules,
+      })
+      expect(resolveWorktreeValidationEnvironment({
+        NEXT_TELEMETRY_DISABLED: "1",
+      }, workspace, "linux")).toEqual({
+        NEXT_TELEMETRY_DISABLED: "1",
+      })
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true })
     }
   })
 
@@ -244,6 +271,11 @@ describe("Hermes repository lifecycle", () => {
     expect(() => createRepositoryLifecycle({
       workspaceRoot: root, ownedWorktreeRoot: ownedRoot,
       validationCommands: [{ command: "npm", args: ["run", "build"], env: { DATABASE_URL: "forbidden" } }],
+      runner: async () => ({ code: 0 }),
+    })).toThrow(HermesRepositoryLifecycleError)
+    expect(() => createRepositoryLifecycle({
+      workspaceRoot: root, ownedWorktreeRoot: ownedRoot,
+      validationCommands: [{ command: "npm", args: ["run", "build"], env: { NODE_PATH: "caller-controlled" } }],
       runner: async () => ({ code: 0 }),
     })).toThrow(HermesRepositoryLifecycleError)
   })

@@ -15,6 +15,7 @@ const VALIDATION_EXECUTABLES = new Set(["node", "npm", "npx", "pnpm", "yarn", "b
 const VALIDATION_ENVIRONMENT = new Set([
   "NEXT_PRIVATE_BUILD_WORKER", "NEXT_TELEMETRY_DISABLED", "WILLIAMOS_HERMES_VALIDATION_ISOLATED",
 ])
+const INTERNAL_VALIDATION_ENVIRONMENT = new Set([...VALIDATION_ENVIRONMENT, "NODE_PATH"])
 const CHILD_ENVIRONMENT = new Set([
   "APPDATA", "COMSPEC", "HOME", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PATHEXT",
   "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP",
@@ -197,7 +198,7 @@ export function createCommandEnvironment(source = process.env, overrides = {}, {
     if (value !== undefined && allowed.has(key.toUpperCase())) result[key] = String(value)
   }
   for (const [key, value] of Object.entries(overrides)) {
-    if (value !== undefined && VALIDATION_ENVIRONMENT.has(key)) result[key] = String(value)
+    if (value !== undefined && INTERNAL_VALIDATION_ENVIRONMENT.has(key)) result[key] = String(value)
   }
   if (!credentialAccess) {
     const isolatedHome = path.resolve(validationHome ?? path.join(
@@ -304,6 +305,16 @@ export function resolveWorktreeValidationInvocation(command, worktreePath, platf
     }
   }
   return command
+}
+
+export function resolveWorktreeValidationEnvironment(environment, workspaceRoot, platform = process.platform) {
+  const resolved = { ...environment }
+  if (platform !== "win32") return resolved
+  const pnpmModules = path.join(workspaceRoot, "node_modules", ".pnpm", "node_modules")
+  if (fs.statSync(pnpmModules, { throwIfNoEntry: false })?.isDirectory()) {
+    resolved.NODE_PATH = pnpmModules
+  }
+  return resolved
 }
 
 function statusPaths(output) {
@@ -715,10 +726,10 @@ export function createRepositoryLifecycle(options) {
       if (executable === "npm" && command.args[0] === "run" && command.args[1] === "build") {
         removeGeneratedNextOutput(record)
       }
-      const validationEnvironment = {
+      const validationEnvironment = resolveWorktreeValidationEnvironment({
         ...command.env,
         WILLIAMOS_HERMES_VALIDATION_ISOLATED: "1",
-      }
+      }, workspaceRoot)
       const invocation = resolveWorktreeValidationInvocation(command, record.worktreePath)
       const result = await run(invocation.command, invocation.args, {
         cwd: record.worktreePath, env: validationEnvironment,
