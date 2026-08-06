@@ -272,6 +272,147 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(foreignExecution.lease.abandonedAt).toBeUndefined()
   })
 
+  it("recovers only a dead local proof-bound validation holder while the supervisor is stopped", async () => {
+    const orphanHolder = `${os.hostname()}:99999:11111111-1111-4111-8111-111111111111`
+    const isProcessAlive = vi.fn(() => false)
+    const value = fixture(undefined, { isProcessAlive })
+    const outcome = await value.selectOutcome()
+    const validationFailure = "Error: spawn EPERM while starting host validation"
+    const failed = value.state.acquireLease({
+      idempotencyKey: "orphan-validation-acquire",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome, validationFailure, validationRemediationRound: 3 },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "orphan-validation-terminal",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: failed.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "orphan-validation-release",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: failed.fencingToken,
+    })
+    const reopened = value.state.reopenValidationInfrastructureWall({
+      idempotencyKey: "orphan-validation-reopen",
+      outcomeId: "77",
+      expectedFencingToken: failed.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "d".repeat(64),
+    })
+    const orphaned = value.state.reclaimLease({
+      idempotencyKey: "orphan-validation-reclaim",
+      outcomeId: "77",
+      expectedFencingToken: reopened.fencingToken,
+      holderId: orphanHolder,
+      leaseDurationMs: 60_000,
+    })
+    fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
+    const supervisorPath = path.join(value.root, "state", "supervisor.json")
+    fs.writeFileSync(supervisorPath, "{}\n")
+    await expect(value.orchestrator.recoverOrphanedValidationCycleLease()).rejects.toMatchObject({
+      code: "HERMES_ORPHAN_RECOVERY_SUPERVISOR_WALL",
+    })
+    fs.unlinkSync(supervisorPath)
+
+    await expect(value.orchestrator.recoverOrphanedValidationCycleLease()).resolves.toEqual({
+      result: "RECOVERED",
+      outcomeId: "77",
+      fencingToken: orphaned.fencingToken,
+      replayed: false,
+    })
+    expect(isProcessAlive).toHaveBeenCalledWith(99999)
+    expect(value.state.read().executions["77"].lease).toMatchObject({
+      holderId: orphanHolder,
+      abandonReason: "HERMES_CYCLE_PROCESS_EXIT",
+      abandonedAt: expect.any(String),
+    })
+    expect(value.projectLease).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 77,
+      lease: expect.objectContaining({ status: "ABANDONED" }),
+    }))
+    await expect(value.orchestrator.recoverOrphanedValidationCycleLease()).resolves.toEqual({
+      result: "RECOVERED",
+      outcomeId: "77",
+      fencingToken: orphaned.fencingToken,
+      replayed: true,
+    })
+    expect(value.projectLease).toHaveBeenCalledTimes(2)
+    value.projectLease.mockImplementationOnce(async () => {
+      const current = value.state.read().executions["77"]
+      value.state.reclaimLease({
+        idempotencyKey: "orphan-validation-concurrent-reclaim",
+        outcomeId: "77",
+        expectedFencingToken: current.fencingToken,
+        holderId: `${os.hostname()}:99998:22222222-2222-4222-8222-222222222222`,
+        leaseDurationMs: 60_000,
+      })
+      return { workOrderId: 77 }
+    })
+    await expect(value.orchestrator.recoverOrphanedValidationCycleLease()).rejects.toMatchObject({
+      code: "HERMES_ORPHAN_RECOVERY_FENCE_WALL",
+    })
+  })
+
+  it("refuses orphan recovery while the recorded local holder is alive", async () => {
+    const orphanHolder = `${os.hostname()}:99999:11111111-1111-4111-8111-111111111111`
+    const value = fixture(undefined, { isProcessAlive: vi.fn(() => true) })
+    const outcome = await value.selectOutcome()
+    const validationFailure = "Error: spawn EPERM while starting host validation"
+    const failed = value.state.acquireLease({
+      idempotencyKey: "live-validation-acquire",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome, validationFailure, validationRemediationRound: 3 },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "live-validation-terminal",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: failed.fencingToken,
+      expectedCheckpointSequence: 0,
+      state: "FAILED_TERMINAL",
+      detail: "VALIDATION_REMEDIATION_EXHAUSTED",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "live-validation-release",
+      outcomeId: "77",
+      holderId: "failed-holder",
+      fencingToken: failed.fencingToken,
+    })
+    const reopened = value.state.reopenValidationInfrastructureWall({
+      idempotencyKey: "live-validation-reopen",
+      outcomeId: "77",
+      expectedFencingToken: failed.fencingToken,
+      expectedDetail: "VALIDATION_REMEDIATION_EXHAUSTED",
+      expectedValidationFailureDigest: createHash("sha256").update(validationFailure).digest("hex"),
+      proofDigest: "d".repeat(64),
+    })
+    value.state.reclaimLease({
+      idempotencyKey: "live-validation-reclaim",
+      outcomeId: "77",
+      expectedFencingToken: reopened.fencingToken,
+      holderId: orphanHolder,
+      leaseDurationMs: 60_000,
+    })
+    fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
+
+    await expect(value.orchestrator.recoverOrphanedValidationCycleLease()).rejects.toMatchObject({
+      code: "HERMES_ORPHAN_RECOVERY_HOLDER_WALL",
+    })
+    expect(value.state.read().executions["77"].lease.abandonedAt).toBeUndefined()
+    expect(value.projectLease).not.toHaveBeenCalled()
+  })
+
   it("targets an explicitly recovered outcome without selecting from the queue", async () => {
     const value = fixture()
     const recoveredOutcome = {
