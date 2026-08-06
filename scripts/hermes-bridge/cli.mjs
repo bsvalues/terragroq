@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { CodexAppServerClient, sanitizeAppServerText } from "./app-server-client.mjs"
-import { createHermesOrchestrator } from "./orchestrator.mjs"
+import { createHermesOrchestrator, retryRuntimeProjection } from "./orchestrator.mjs"
 import { createHermesOutcomeQueueRuntime } from "./outcome-queue-runtime.mjs"
 import {
   NATIVE_PROVIDER_RETRY_STATE,
@@ -437,7 +437,7 @@ export async function recoverTerminalPostMergeCleanupWall(options = {}) {
         mergeSha: candidate.metadata.mergeSha,
         proofDigest,
       })
-  await projectCheckpoint({
+  await retryRuntimeProjection(() => projectCheckpoint({
     outcomeId: Number(candidate.outcomeId),
     attempt: candidate.fencingToken,
     checkpoint: {
@@ -451,7 +451,7 @@ export async function recoverTerminalPostMergeCleanupWall(options = {}) {
         terminalCleanupRecoveryProofDigest: proofDigest,
       },
     },
-  })
+  }), { sleep: options.projectionSleep })
   if (!await recoverOutcome({
     outcomeId: Number(candidate.outcomeId),
     prNumber: candidate.metadata.prNumber,
@@ -632,7 +632,7 @@ export async function recoverReviewedMerge(options = {}) {
           mergeDetail: reviewedMergeDetail,
         })
   if (!alreadyReopened) {
-    await projectCheckpoint({
+    await retryRuntimeProjection(() => projectCheckpoint({
       outcomeId,
       attempt: candidate.fencingToken,
       checkpoint: {
@@ -646,7 +646,7 @@ export async function recoverReviewedMerge(options = {}) {
           remediationPullRequests: remediationProof.map((proof) => proof.prNumber),
         },
       },
-    })
+    }), { sleep: options.projectionSleep })
     if (!await recoverOutcome({
       outcomeId,
       prNumber: candidate.metadata.prNumber,
@@ -686,7 +686,9 @@ export async function recoverReviewedMerge(options = {}) {
     },
   }
   try {
-    await projectCheckpoint(recoveredProjection)
+    await retryRuntimeProjection(() => projectCheckpoint(recoveredProjection), {
+      sleep: options.projectionSleep,
+    })
   } catch (error) {
     if (!alreadyReopened || error?.code !== "OUTCOME_PROJECTION_IDEMPOTENCY_CONFLICT"
       || typeof orchestrator.state.reconcileReviewRemediationProjection !== "function"

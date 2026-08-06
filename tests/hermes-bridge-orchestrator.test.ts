@@ -4,7 +4,11 @@ import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { createHermesOrchestrator } from "../scripts/hermes-bridge/orchestrator.mjs"
+import {
+  createHermesOrchestrator,
+  isRetryableProjectionTransportError,
+  retryRuntimeProjection,
+} from "../scripts/hermes-bridge/orchestrator.mjs"
 import {
   createHermesStateStore,
   hermesTurnResultDigest,
@@ -150,6 +154,66 @@ afterEach(() => {
 })
 
 describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
+  it("retries only bounded transient projection transport failures", async () => {
+    const operation = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("dns"), { code: "ENOTFOUND" }))
+      .mockRejectedValueOnce(Object.assign(new Error("reset"), { code: "ECONNRESET" }))
+      .mockResolvedValue({ projected: true })
+    const sleep = vi.fn(async () => {})
+
+    await expect(retryRuntimeProjection(operation, { sleep })).resolves.toEqual({ projected: true })
+    expect(operation).toHaveBeenCalledTimes(3)
+    expect(sleep.mock.calls).toEqual([[1_000], [4_000]])
+  })
+
+  it("fails closed without retrying projection integrity or mixed aggregate errors", async () => {
+    const integrity = Object.assign(new Error("cardinality"), {
+      code: "OUTCOME_WORK_ORDER_CARDINALITY_WALL",
+      cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }),
+    })
+    const mixed = new AggregateError([
+      Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
+      integrity,
+    ])
+    Object.assign(mixed, { code: "ETIMEDOUT" })
+    expect(isRetryableProjectionTransportError(integrity)).toBe(false)
+    expect(isRetryableProjectionTransportError(mixed)).toBe(false)
+
+    const operation = vi.fn(async () => { throw integrity })
+    const sleep = vi.fn(async () => {})
+    await expect(retryRuntimeProjection(operation, { sleep })).rejects.toBe(integrity)
+    expect(operation).toHaveBeenCalledTimes(1)
+    expect(sleep).not.toHaveBeenCalled()
+  })
+
+  it("exhausts exactly three transient projection attempts without widening the retry budget", async () => {
+    const transport = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })
+    const operation = vi.fn(async () => { throw transport })
+    const sleep = vi.fn(async () => {})
+
+    await expect(retryRuntimeProjection(operation, { sleep })).rejects.toBe(transport)
+    expect(operation).toHaveBeenCalledTimes(3)
+    expect(sleep.mock.calls).toEqual([[1_000], [4_000]])
+  })
+
+  it("classifies temporary DNS lookup failures as retryable", () => {
+    expect(isRetryableProjectionTransportError(
+      Object.assign(new Error("temporary dns"), { code: "EAI_AGAIN" }),
+    )).toBe(true)
+  })
+
+  it("uses the bounded retry when projecting an orchestration checkpoint", async () => {
+    const projectCheckpoint = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("dns"), { code: "ENOTFOUND" }))
+      .mockRejectedValueOnce(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }))
+      .mockResolvedValue({ workOrderId: 77 })
+    const value = fixture(undefined, { projectCheckpoint })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    expect(projectCheckpoint.mock.calls.length).toBeGreaterThan(2)
+    expect(new Set(projectCheckpoint.mock.calls.slice(0, 3).map(([request]) => JSON.stringify(request))).size).toBe(1)
+  })
+
   it("rejects review polling budgets that can outlive the lease", () => {
     expect(() => createHermesOrchestrator({
       reviewPollIntervalMs: 10 * 60 * 1000,

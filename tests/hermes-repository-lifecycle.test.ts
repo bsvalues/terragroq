@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   createCommandEnvironment,
+  resolveWorktreeValidationInvocation,
   createRepositoryLifecycle,
   HermesRepositoryLifecycleError,
 } from "../scripts/hermes-bridge/repository-lifecycle.mjs"
@@ -106,6 +107,39 @@ describe("Hermes repository lifecycle", () => {
       APPDATA: path.resolve("C:/Temp/isolated-validation/AppData/Roaming"),
       LOCALAPPDATA: path.resolve("C:/Temp/isolated-validation/AppData/Local"),
     })
+  })
+
+  it("resolves Windows junction-backed Vitest and Next validators to local Node entrypoints", () => {
+    const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-validation-invocation-"))
+    try {
+      const vitest = path.join(worktree, "node_modules", "vitest", "vitest.mjs")
+      const next = path.join(worktree, "node_modules", "next", "dist", "bin", "next")
+      fs.mkdirSync(path.dirname(vitest), { recursive: true })
+      fs.mkdirSync(path.dirname(next), { recursive: true })
+      fs.writeFileSync(vitest, "")
+      fs.writeFileSync(next, "")
+
+      expect(resolveWorktreeValidationInvocation({
+        command: "NPX.EXE", args: ["vitest", "run", "tests/focused.test.ts"], env: {}, timeoutMs: 1,
+      }, worktree, "win32")).toMatchObject({
+        command: process.execPath,
+        args: [vitest, "run", "tests/focused.test.ts"],
+      })
+      expect(resolveWorktreeValidationInvocation({
+        command: "npm", args: ["test", "--", "--run"], env: {}, timeoutMs: 1,
+      }, worktree, "win32")).toMatchObject({
+        command: process.execPath,
+        args: [vitest, "run", "--run"],
+      })
+      expect(resolveWorktreeValidationInvocation({
+        command: "NPM.CMD", args: ["run", "build", "--", "--profile"], env: {}, timeoutMs: 1,
+      }, worktree, "win32")).toMatchObject({
+        command: process.execPath,
+        args: [next, "build", "--profile"],
+      })
+    } finally {
+      fs.rmSync(worktree, { recursive: true, force: true })
+    }
   })
 
   it("refreshes only the verified terragroq origin/main ref", async () => {
