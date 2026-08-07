@@ -142,6 +142,24 @@ describe("continuous campaign status panel contract", () => {
     )
   })
 
+  it("separates conflicting handoff evidence from pre-acquisition deferral", () => {
+    const panel = source(
+      "components/runtime/continuous-campaign-status-panel.tsx",
+    )
+    const conflictGate = panel.indexOf(
+      'status.handoff.acquisitionStatus === "CONFLICTING"',
+    )
+    const deferredAutomationCopy = panel.indexOf(
+      "automation proof is not evaluated yet.",
+    )
+
+    expect(conflictGate).toBeGreaterThan(-1)
+    expect(deferredAutomationCopy).toBeGreaterThan(conflictGate)
+    expect(panel.slice(conflictGate, deferredAutomationCopy)).toMatch(
+      /conflict[\s\S]*cannot[\s\S]*(?:trust|evaluat)/i,
+    )
+  })
+
   it("wires persisted queue truth through the Runtime page projection", () => {
     const page = source("app/(shell)/runtime/page.tsx")
 
@@ -150,14 +168,14 @@ describe("continuous campaign status panel contract", () => {
     expect(page).toContain("ContinuousCampaignStatusPanel")
   })
 
-  it("contains no campaign mutation or runtime-control affordance", () => {
+  it("declares no campaign mutation or runtime-control affordance in the panel or page module", () => {
     const page = source("app/(shell)/runtime/page.tsx")
     const panel = source(
       "components/runtime/continuous-campaign-status-panel.tsx",
     )
 
     expect(`${page}\n${panel}`).not.toMatch(
-      /<button|<form|<input|<select|<textarea|onClick=|startWorker|runCommand|cancelExecution/,
+      /<button|<Button|<form|<Form|<input|<Input|<select|<textarea|on(?:Click|Submit|Change)=|startWorker|runCommand|cancelExecution/,
     )
   })
 })

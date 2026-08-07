@@ -21,6 +21,7 @@ export type ContinuousCampaignQueueRow = Readonly<{
   activatedAt: string | null
   terminalAt: string | null
   terminalResult: string | null
+  terminalEvidenceId: number | null
   terminalEvidenceRefs: readonly string[]
 }>
 
@@ -83,6 +84,8 @@ const PHASE_LABELS: Readonly<Record<ContinuousCampaignStatus["phase"]["state"], 
   LIVE: "Live",
   SETTLED: "Settled",
 }
+
+const CROSS_SOURCE_TIMESTAMP_TOLERANCE_MS = 5_000
 
 function parsedTimestamp(value: string | null): number | null {
   if (value === null) return null
@@ -180,6 +183,10 @@ function settlementStep(
   const evidenceReferences = row === null
     ? []
     : normalizedEvidenceReferences(row.terminalEvidenceRefs)
+  const hasEvidenceId = row !== null
+    && row.terminalEvidenceId !== null
+    && Number.isSafeInteger(row.terminalEvidenceId)
+    && row.terminalEvidenceId > 0
 
   if (duplicate) {
     return {
@@ -203,10 +210,12 @@ function settlementStep(
       detail: "Settlement cannot be evaluated without the fixed campaign outcome.",
     }
   }
+  const terminalEvidenceCount = evidenceReferences.length
   if (row.lifecycleState !== "completed") {
     const hasTerminalState = row.terminalAt !== null
       || row.terminalResult !== null
-      || row.terminalEvidenceRefs.length > 0
+      || row.terminalEvidenceId !== null
+      || terminalEvidenceCount > 0
     return {
       id,
       label,
@@ -248,7 +257,7 @@ function settlementStep(
     terminalAt === null
     || row.terminalResult?.trim() === ""
     || row.terminalResult === null
-    || evidenceReferences.length === 0
+    || (!hasEvidenceId && evidenceReferences.length === 0)
   ) {
     return {
       id,
@@ -267,7 +276,7 @@ function settlementStep(
     title: row.title,
     status: "RECORDED",
     at: row.terminalAt,
-    detail: `${row.terminalResult} with ${evidenceReferences.length} evidence reference${evidenceReferences.length === 1 ? "" : "s"}.`,
+    detail: `${row.terminalResult} with ${evidenceReferences.length + (hasEvidenceId ? 1 : 0)} evidence reference${evidenceReferences.length + (hasEvidenceId ? 1 : 0) === 1 ? "" : "s"}.`,
   }
 }
 
@@ -346,7 +355,7 @@ function projectHandoff(
 
   const completionRow = matchingRows[0]
   if (!completionRow) {
-    const status = successorAcquisition.status === "RECORDED" ? "MISSING" : "PENDING"
+    const status = successorAcquisition.status === "PENDING" ? "PENDING" : "MISSING"
     return {
       acquisitionStatus: status,
       automationStatus: status,
@@ -371,7 +380,7 @@ function projectHandoff(
     }
   }
   if (evidence?.status !== "RECORDED") {
-    const status = successorAcquisition.status === "RECORDED" ? "MISSING" : "PENDING"
+    const status = successorAcquisition.status === "PENDING" ? "PENDING" : "MISSING"
     return {
       acquisitionStatus: status,
       automationStatus: status,
@@ -379,29 +388,38 @@ function projectHandoff(
       acquiredAt: successorAcquisition.at,
       fencingTokenRange: null,
       detail: status === "MISSING"
-        ? "Queue activation exists, but no qualifying acquisition receipt is recorded."
+        ? successorAcquisition.status === "RECORDED"
+          ? "Queue activation exists, but no qualifying acquisition receipt is recorded."
+          : "The successor outcome or its qualifying acquisition receipt is missing."
         : "No qualifying successor acquisition is recorded yet.",
     }
   }
 
   const receiptAcquiredAt = parsedTimestamp(evidence.acquiredAt)
+  const receiptId = evidence.receiptId?.trim() || null
+  const fencingTokenRange = evidence.fencingTokenRange
+  const validFencingTokenRange = fencingTokenRange !== null
+    && Number.isSafeInteger(fencingTokenRange.first)
+    && fencingTokenRange.first > 0
+    && Number.isSafeInteger(fencingTokenRange.latest)
+    && fencingTokenRange.latest >= fencingTokenRange.first
   const exactSuccessor = evidence.outcomeKey === successorKey
-    && evidence.receiptId !== null
-    && evidence.fencingTokenRange !== null
+    && receiptId !== null
+    && validFencingTokenRange
   const receiptOrdered = receiptAcquiredAt !== null
     && queueCompletedAt !== null
     && receiptAcquiredAt >= queueCompletedAt
   const observationsAgree = receiptAcquiredAt !== null
     && queueAcquiredAt !== null
-    && receiptAcquiredAt === queueAcquiredAt
+    && Math.abs(receiptAcquiredAt - queueAcquiredAt) <= CROSS_SOURCE_TIMESTAMP_TOLERANCE_MS
 
   if (!exactSuccessor) {
     return {
       acquisitionStatus: "CONFLICTING",
       automationStatus: "CONFLICTING",
-      receiptId: evidence.receiptId,
+      receiptId,
       acquiredAt: evidence.acquiredAt,
-      fencingTokenRange: evidence.fencingTokenRange,
+      fencingTokenRange,
       detail: "The completion timeline binds the predecessor to a conflicting successor receipt.",
     }
   }
@@ -420,9 +438,9 @@ function projectHandoff(
   return {
     acquisitionStatus: "RECORDED",
     automationStatus: "MISSING",
-    receiptId: evidence.receiptId,
+    receiptId,
     acquiredAt: evidence.acquiredAt,
-    fencingTokenRange: evidence.fencingTokenRange,
+    fencingTokenRange,
     detail: "Successor acquisition is recorded; automatic-trigger and zero-owner-contact proof are not exposed.",
   }
 }
@@ -498,19 +516,25 @@ export function projectContinuousCampaignStatus(
   const campaignRowsPresent = queueSurface.rows.some((row) => (
     row.outcomeKey === predecessorKey || row.outcomeKey === successorKey
   ))
+  const settlementsRecorded = firstSettlement.status === "RECORDED"
+    && successorSettlement.status === "RECORDED"
+  const campaignHasActivity = predecessorMatch.row?.activatedAt != null
+    || successorMatch.row?.activatedAt != null
+    || predecessorMatch.row?.lifecycleState === "active"
+    || successorMatch.row?.lifecycleState === "active"
+    || predecessorMatch.row?.lifecycleState === "completed"
+    || successorMatch.row?.lifecycleState === "completed"
   const phaseState: ContinuousCampaignStatus["phase"]["state"] = !campaignRowsPresent
     ? "NOT_RECORDED"
-    : predecessorMatch.row?.lifecycleState === "completed"
-      && successorMatch.row?.lifecycleState === "completed"
+    : settlementsRecorded
       ? "SETTLED"
-      : predecessorMatch.row?.activatedAt != null
-        || successorMatch.row?.activatedAt != null
-        || predecessorMatch.row?.lifecycleState === "active"
-        || successorMatch.row?.lifecycleState === "active"
+      : campaignHasActivity
         ? "LIVE"
         : "QUEUED"
 
   const gaps: ContinuousCampaignGap[] = []
+  // Campaign identity is not exposed by this read path, so at least one
+  // fail-closed evidence gap remains until that durable binding is available.
   if (campaignRowsPresent) {
     gaps.push({
       code: "CAMPAIGN_WINDOW_IDENTITY_MISSING",

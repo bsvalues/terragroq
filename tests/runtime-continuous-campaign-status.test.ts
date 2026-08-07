@@ -26,6 +26,7 @@ function liveQueueSurface() {
         activatedAt: FIRST_ACQUIRED_AT,
         terminalAt: FIRST_SETTLED_AT,
         terminalResult: "COMPLETE",
+        terminalEvidenceId: null,
         terminalEvidenceRefs: [
           "EV-HERMES-81-1-10",
           "pr:481",
@@ -42,6 +43,7 @@ function liveQueueSurface() {
         activatedAt: SUCCESSOR_ACQUIRED_AT,
         terminalAt: null,
         terminalResult: null,
+        terminalEvidenceId: null,
         terminalEvidenceRefs: [] as readonly string[],
       },
     ],
@@ -207,7 +209,7 @@ describe("projectContinuousCampaignStatus", () => {
         queueSurface.rows[0],
         {
           ...queueSurface.rows[1],
-          activatedAt: "2026-07-28T18:20:00.001Z",
+          activatedAt: "2026-07-28T18:20:05.001Z",
         },
       ],
     }, liveTimeline())
@@ -236,6 +238,57 @@ describe("projectContinuousCampaignStatus", () => {
       status: "MISSING",
     })
     expect(status.steps[1].detail).toMatch(/missing.*evidence reference/i)
+  })
+
+  it("accepts a valid terminal evidence id without evidence references", () => {
+    const queueSurface = liveQueueSurface()
+    const status = projectContinuousCampaignStatus({
+      ...queueSurface,
+      rows: [
+        {
+          ...queueSurface.rows[0],
+          terminalEvidenceId: 77,
+          terminalEvidenceRefs: [],
+        },
+        queueSurface.rows[1],
+      ],
+    }, liveTimeline())
+
+    expect(status.steps[1]).toMatchObject({
+      status: "RECORDED",
+    })
+  })
+
+  it("accepts bounded clock skew between queue activation and receipt insertion", () => {
+    const queueSurface = liveQueueSurface()
+    const status = projectContinuousCampaignStatus({
+      ...queueSurface,
+      rows: [
+        queueSurface.rows[0],
+        {
+          ...queueSurface.rows[1],
+          activatedAt: "2026-07-28T18:20:04.999Z",
+        },
+      ],
+    }, liveTimeline())
+
+    expect(status.handoff.acquisitionStatus).toBe("RECORDED")
+  })
+
+  it("reports a missing successor as missing when the completion row is absent", () => {
+    const queueSurface = liveQueueSurface()
+    const status = projectContinuousCampaignStatus({
+      ...queueSurface,
+      rows: [queueSurface.rows[0]],
+    }, {
+      truncated: false,
+      rows: [],
+    })
+
+    expect(status.handoff).toMatchObject({
+      acquisitionStatus: "MISSING",
+      automationStatus: "MISSING",
+    })
   })
 
   it("does not treat a truncated completion window as proof that no acquisition receipt exists", () => {
@@ -304,6 +357,86 @@ describe("projectContinuousCampaignStatus", () => {
     expect(pendingStatus.gaps.map((gap) => gap.code)).not.toContain(
       "AUTOMATIC_HANDOFF_PROOF_MISSING",
     )
+  })
+
+  it.each([
+    ["absent", [] as readonly string[]],
+    ["blank-only", ["", "   "] as readonly string[]],
+  ])("keeps the campaign live when successor terminal references are %s", (
+    _referenceState,
+    terminalEvidenceRefs,
+  ) => {
+    const queueSurface = liveQueueSurface()
+    const successorSettledAt = "2026-07-28T18:40:00.000Z"
+
+    const status = projectContinuousCampaignStatus(
+      {
+        ...queueSurface,
+        rows: [
+          queueSurface.rows[0],
+          {
+            ...queueSurface.rows[1],
+            lifecycleState: "completed",
+            lifecycleLabel: "Completed",
+            terminalAt: successorSettledAt,
+            terminalResult: "COMPLETE",
+            terminalEvidenceRefs,
+          },
+        ],
+      },
+      liveTimeline(),
+    )
+
+    expect(status.steps[3]).toMatchObject({
+      id: "successor-settlement",
+      status: "MISSING",
+      at: successorSettledAt,
+    })
+    expect(status.phase.state).toBe("LIVE")
+    expect(status.window.settledAt).toBeNull()
+    expect(status.gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "SUCCESSOR_SETTLEMENT_MISSING",
+        status: "MISSING",
+      }),
+    ]))
+  })
+
+  it.each([
+    ["a blank receipt id", { receiptId: "   " }],
+    ["a reversed fencing range", {
+      fencingTokenRange: { first: 3, latest: 2 },
+    }],
+    ["a non-integer fencing token", {
+      fencingTokenRange: { first: 1.5, latest: 2 },
+    }],
+    ["a non-safe fencing token", {
+      fencingTokenRange: { first: 2, latest: Number.MAX_SAFE_INTEGER + 1 },
+    }],
+  ])("rejects recorded successor evidence with %s", (
+    _invalidEvidence,
+    evidenceUpdate,
+  ) => {
+    const timeline = liveTimeline()
+    const status = projectContinuousCampaignStatus(
+      liveQueueSurface(),
+      {
+        ...timeline,
+        rows: [{
+          ...timeline.rows[0],
+          successorEvidence: {
+            ...timeline.rows[0].successorEvidence,
+            ...evidenceUpdate,
+          },
+        }],
+      },
+    )
+
+    expect(status.handoff.acquisitionStatus).toBe("CONFLICTING")
+    expect(status.handoff.automationStatus).toBe("CONFLICTING")
+    expect(status.handoff.acquisitionStatus).not.toBe("RECORDED")
+    expect(status.steps[2].status).toBe("CONFLICTING")
+    expect(status.evidenceStatus).toBe("CONFLICTING")
   })
 
   it("does not mutate persisted queue or completion evidence inputs", () => {

@@ -10,7 +10,7 @@ function formatTimestamp(value: string | null): string {
   if (value === null) return "not recorded"
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return "invalid timestamp"
-  return parsed.toISOString().replace("T", " ").replace(".000Z", " UTC")
+  return parsed.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC")
 }
 
 function EvidenceBadge({ status }: { status: ContinuousCampaignEvidenceStatus }) {
@@ -130,7 +130,7 @@ export function ContinuousCampaignStatusPanel({
             <div className="flex items-start justify-between gap-2">
               <div>
                 <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {step.label.includes("Acquisition") ? "Acquisition" : "Settlement"}
+                  {step.id.endsWith("acquisition") ? "Acquisition" : "Settlement"}
                 </p>
                 <p className="mt-1 text-xs font-medium">{step.title}</p>
               </div>
@@ -148,7 +148,7 @@ export function ContinuousCampaignStatusPanel({
       <div className="border-t border-border px-4 py-3">
         <div className="flex items-center gap-2">
           <TriangleAlert className="h-4 w-4 text-warning" aria-hidden />
-          <h3 className="text-xs font-medium">Evidence gaps</h3>
+          <h3 className="text-xs font-medium">Evidence gap detail</h3>
         </div>
         {status.handoff.acquisitionStatus === "RECORDED" &&
         status.handoff.automationStatus === "MISSING" ? (
@@ -158,6 +158,11 @@ export function ContinuousCampaignStatusPanel({
         ) : status.handoff.acquisitionStatus === "RECORDED" ? (
           <p className="mt-1 text-xs text-muted-foreground">
             Automation proof remains {status.handoff.automationStatus.toLowerCase()} at this campaign step.
+          </p>
+        ) : status.handoff.acquisitionStatus === "CONFLICTING" ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Successor handoff evidence conflicts at this campaign step; automation proof cannot be trusted or evaluated
+            from conflicting evidence.
           </p>
         ) : (
           <p className="mt-1 text-xs text-muted-foreground">
