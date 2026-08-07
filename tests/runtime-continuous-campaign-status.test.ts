@@ -359,84 +359,88 @@ describe("projectContinuousCampaignStatus", () => {
     )
   })
 
-  it.each([
-    ["absent", [] as readonly string[]],
-    ["blank-only", ["", "   "] as readonly string[]],
-  ])("keeps the campaign live when successor terminal references are %s", (
-    _referenceState,
-    terminalEvidenceRefs,
-  ) => {
+  it("keeps the campaign live when successor terminal references are absent or blank-only", () => {
     const queueSurface = liveQueueSurface()
     const successorSettledAt = "2026-07-28T18:40:00.000Z"
 
-    const status = projectContinuousCampaignStatus(
-      {
-        ...queueSurface,
-        rows: [
-          queueSurface.rows[0],
-          {
-            ...queueSurface.rows[1],
-            lifecycleState: "completed",
-            lifecycleLabel: "Completed",
-            terminalAt: successorSettledAt,
-            terminalResult: "COMPLETE",
-            terminalEvidenceRefs,
-          },
-        ],
-      },
-      liveTimeline(),
-    )
+    for (const terminalEvidenceRefs of [
+      [] as readonly string[],
+      ["", "   "] as readonly string[],
+    ]) {
+      const status = projectContinuousCampaignStatus(
+        {
+          ...queueSurface,
+          rows: [
+            queueSurface.rows[0],
+            {
+              ...queueSurface.rows[1],
+              lifecycleState: "completed",
+              lifecycleLabel: "Completed",
+              terminalAt: successorSettledAt,
+              terminalResult: "COMPLETE",
+              terminalEvidenceRefs,
+            },
+          ],
+        },
+        liveTimeline(),
+      )
 
-    expect(status.steps[3]).toMatchObject({
-      id: "successor-settlement",
-      status: "MISSING",
-      at: successorSettledAt,
-    })
-    expect(status.phase.state).toBe("LIVE")
-    expect(status.window.settledAt).toBeNull()
-    expect(status.gaps).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        code: "SUCCESSOR_SETTLEMENT_MISSING",
+      expect(status.steps[3]).toMatchObject({
+        id: "successor-settlement",
         status: "MISSING",
-      }),
-    ]))
+        at: successorSettledAt,
+      })
+      expect(status.phase.state).toBe("LIVE")
+      expect(status.window.settledAt).toBeNull()
+      expect(status.gaps).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: "SUCCESSOR_SETTLEMENT_MISSING",
+          status: "MISSING",
+        }),
+      ]))
+    }
   })
 
-  it.each([
-    ["a blank receipt id", { receiptId: "   " }],
-    ["a reversed fencing range", {
-      fencingTokenRange: { first: 3, latest: 2 },
-    }],
-    ["a non-integer fencing token", {
-      fencingTokenRange: { first: 1.5, latest: 2 },
-    }],
-    ["a non-safe fencing token", {
-      fencingTokenRange: { first: 2, latest: Number.MAX_SAFE_INTEGER + 1 },
-    }],
-  ])("rejects recorded successor evidence with %s", (
-    _invalidEvidence,
-    evidenceUpdate,
-  ) => {
+  it("rejects malformed recorded successor receipt evidence", () => {
     const timeline = liveTimeline()
-    const status = projectContinuousCampaignStatus(
-      liveQueueSurface(),
+    const validEvidence = timeline.rows[0].successorEvidence
+    const malformedEvidence = [
+      { ...validEvidence, receiptId: "   " },
       {
-        ...timeline,
-        rows: [{
-          ...timeline.rows[0],
-          successorEvidence: {
-            ...timeline.rows[0].successorEvidence,
-            ...evidenceUpdate,
-          },
-        }],
+        ...validEvidence,
+        fencingTokenRange: { first: 3, latest: 2 },
       },
-    )
+      {
+        ...validEvidence,
+        fencingTokenRange: { first: 1.5, latest: 2 },
+      },
+      {
+        ...validEvidence,
+        fencingTokenRange: {
+          first: 2,
+          latest: Number.MAX_SAFE_INTEGER + 1,
+        },
+      },
+    ]
 
-    expect(status.handoff.acquisitionStatus).toBe("CONFLICTING")
-    expect(status.handoff.automationStatus).toBe("CONFLICTING")
-    expect(status.handoff.acquisitionStatus).not.toBe("RECORDED")
-    expect(status.steps[2].status).toBe("CONFLICTING")
-    expect(status.evidenceStatus).toBe("CONFLICTING")
+    for (const successorEvidence of malformedEvidence) {
+      const status = projectContinuousCampaignStatus(
+        liveQueueSurface(),
+        {
+          ...timeline,
+          rows: [{
+            ...timeline.rows[0],
+            successorEvidence,
+          }],
+        },
+      )
+
+      expect(status.handoff.acquisitionStatus).toBe("CONFLICTING")
+      expect(status.handoff.automationStatus).toBe("CONFLICTING")
+      expect(status.handoff.acquisitionStatus).not.toBe("RECORDED")
+      expect(status.steps[2].status).toBe("CONFLICTING")
+      expect(status.evidenceStatus).toBe("CONFLICTING")
+    }
   })
 
   it("does not mutate persisted queue or completion evidence inputs", () => {
