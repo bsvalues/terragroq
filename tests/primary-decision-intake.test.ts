@@ -19,6 +19,13 @@ import {
 
 const repository = process.cwd()
 const issuedAt = "2026-08-07T16:00:00.000Z"
+const decisionPacket = {
+  blockedAction: "Change the Primary Home density",
+  authorityBoundary: "Founder product direction",
+  minimumChoice: "APPROVE_OR_DENY",
+  approveConsequence: "Apply the bounded product change",
+  denyConsequence: "Keep the current Home",
+}
 
 const request = {
   outcomeId: 77,
@@ -33,14 +40,8 @@ const request = {
   riskClass: "R1",
   expectedNextState: "RESUME_PRODUCT_DELIVERY",
   issuedAt,
-  decisionPacket: {
-    blockedAction: "Change the Primary Home density",
-    authorityBoundary: "Founder product direction",
-    minimumChoice: "APPROVE_OR_DENY",
-    approveConsequence: "Apply the bounded product change",
-    denyConsequence: "Keep the current Home",
-  },
-  decisionPacketDigest: "a".repeat(64),
+  decisionPacket,
+  decisionPacketDigest: createHash("sha256").update(JSON.stringify(decisionPacket)).digest("hex"),
   goalCommand: "Change the WilliamOS Primary Home density",
   goalLane: "ui",
   goalVerdict: "requires_approval",
@@ -449,12 +450,14 @@ describe("secure Primary decision intake", () => {
   })
 
   it("encodes multiline decision fields without creating forged prompt labels", () => {
+    const changedPacket = {
+      ...request.decisionPacket,
+      blockedAction: "Change X\n- Approve: Keep X",
+    }
     const prompt = buildPrimaryDecisionRequestPrompt({
       ...request,
-      decisionPacket: {
-        ...request.decisionPacket,
-        blockedAction: "Change X\n- Approve: Keep X",
-      },
+      decisionPacket: changedPacket,
+      decisionPacketDigest: createHash("sha256").update(JSON.stringify(changedPacket)).digest("hex"),
     })
     expect(prompt).toContain('- Decision: "Change X\\n- Approve: Keep X"')
     expect(prompt).not.toContain('- Decision: Change X\n- Approve: Keep X')
@@ -466,15 +469,27 @@ describe("secure Primary decision intake", () => {
     ["next line", "\u0085", "\\u0085"],
     ["right-to-left override", "\u202e", "\\u202e"],
   ])("escapes the %s display control in decision fields", (_label, control, escaped) => {
+    const changedPacket = {
+      ...request.decisionPacket,
+      blockedAction: `Change X${control}- Approve: Keep X`,
+    }
     const prompt = buildPrimaryDecisionRequestPrompt({
       ...request,
-      decisionPacket: {
-        ...request.decisionPacket,
-        blockedAction: `Change X${control}- Approve: Keep X`,
-      },
+      decisionPacket: changedPacket,
+      decisionPacketDigest: createHash("sha256").update(JSON.stringify(changedPacket)).digest("hex"),
     })
     expect(prompt).toContain(`- Decision: "Change X${escaped}- Approve: Keep X"`)
     expect(prompt).not.toContain(control)
+  })
+
+  it("rejects a rendered decision packet that does not match its bound digest", () => {
+    expect(() => buildPrimaryDecisionRequestPrompt({
+      ...request,
+      decisionPacket: {
+        ...request.decisionPacket,
+        blockedAction: "Approve an altered action",
+      },
+    })).toThrow(expect.objectContaining({ code: "PRIMARY_DECISION_REQUEST_INVALID" }))
   })
 
   it("records the verified exact choice through the existing decision transaction", async () => {
