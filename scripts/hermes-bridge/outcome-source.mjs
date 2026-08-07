@@ -296,6 +296,7 @@ function normalizedTimestamp(value) {
 function primaryDecisionPolicyProjection(row, decisionPacket) {
   return {
     command: [
+      row?.outcomeKey,
       row?.goalCommand,
       row?.queueTitle,
       row?.queueObjective,
