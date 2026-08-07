@@ -8,6 +8,8 @@ import {
   RUNTIME_EVIDENCE_HISTORY_LIMIT,
 } from "@/components/runtime/runtime-evidence"
 import { RuntimeExecutionPanel } from "@/components/runtime/runtime-execution-panel"
+import { ContinuousCampaignStatusPanel } from "@/components/runtime/continuous-campaign-status-panel"
+import { projectContinuousCampaignStatus } from "@/components/runtime/continuous-campaign-status"
 import { OutcomeCompletionTimelinePanel } from "@/components/runtime/outcome-completion-timeline-panel"
 import { RuntimeProbe } from "@/components/runtime/runtime-probe"
 import { ReadinessNativeAreaPanel } from "@/components/runtime/readiness-native-area-panel"
@@ -16,16 +18,27 @@ import { LocalOperatorPanel } from "@/components/local/local-operator-panel"
 import { LocalRuntimeLiveStatusPanel } from "@/components/local/local-runtime-live-status-panel"
 import { getRuntimeExecutions } from "@/app/actions/runtime-executions"
 import { getRecentOutcomeCompletionTimeline } from "@/app/actions/goal-timeline"
+import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
 
 export default async function RuntimePage() {
   const rt = buildRuntimeStatus()
-  const [evidenceRecords, executionTruth, outcomeCompletionTimeline] = await Promise.all([
+  const [
+    evidenceRecords,
+    executionTruth,
+    outcomeCompletionTimeline,
+    outcomeQueueSurface,
+  ] = await Promise.all([
     getRecentEvidence(RUNTIME_EVIDENCE_HISTORY_LIMIT + 1),
     getRuntimeExecutions(),
     getRecentOutcomeCompletionTimeline(),
+    getOutcomeQueueSurface(),
   ])
   const evidenceHistory = projectRuntimeEvidenceHistory(evidenceRecords)
+  const continuousCampaignStatus = projectContinuousCampaignStatus(
+    outcomeQueueSurface,
+    outcomeCompletionTimeline,
+  )
 
   const rows: { icon: typeof Cpu; label: string; value: string; mono?: boolean }[] = [
     { icon: Cpu, label: "Chat model", value: rt.chatModel, mono: true },
@@ -44,6 +57,7 @@ export default async function RuntimePage() {
       <div className="flex flex-col gap-6 p-6">
         <SystemsStatusPanel />
         <RuntimeExecutionPanel truth={executionTruth} />
+        <ContinuousCampaignStatusPanel status={continuousCampaignStatus} />
         <OutcomeCompletionTimelinePanel timeline={outcomeCompletionTimeline} />
         <LocalRuntimeLiveStatusPanel />
         <LocalOperatorPanel />
