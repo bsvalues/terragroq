@@ -210,6 +210,17 @@ function settlementStep(
       detail: "Settlement cannot be evaluated without the fixed campaign outcome.",
     }
   }
+  if (row.terminalEvidenceId !== null && !hasEvidenceId) {
+    return {
+      id,
+      label,
+      outcomeKey,
+      title: row.title,
+      status: "CONFLICTING",
+      at: row.terminalAt,
+      detail: "The recorded terminal evidence ID is invalid; expected a positive safe integer.",
+    }
+  }
   const terminalEvidenceCount = evidenceReferences.length
   if (row.lifecycleState !== "completed") {
     const hasTerminalState = row.terminalAt !== null
@@ -424,13 +435,33 @@ function projectHandoff(
     }
   }
 
-  if (!receiptOrdered || !observationsAgree) {
+  if (receiptAcquiredAt === null) {
+    return {
+      acquisitionStatus: "CONFLICTING",
+      automationStatus: "CONFLICTING",
+      receiptId,
+      acquiredAt: evidence.acquiredAt,
+      fencingTokenRange,
+      detail: "The recorded successor acquisition receipt timestamp is invalid.",
+    }
+  }
+  if (!receiptOrdered) {
+    return {
+      acquisitionStatus: "CONFLICTING",
+      automationStatus: "CONFLICTING",
+      receiptId,
+      acquiredAt: evidence.acquiredAt,
+      fencingTokenRange,
+      detail: "The successor acquisition receipt predates the predecessor settlement.",
+    }
+  }
+  if (!observationsAgree) {
     return {
       acquisitionStatus: "MISSING",
       automationStatus: "MISSING",
-      receiptId: evidence.receiptId,
+      receiptId,
       acquiredAt: evidence.acquiredAt,
-      fencingTokenRange: evidence.fencingTokenRange,
+      fencingTokenRange,
       detail: "Queue and completion observations are not snapshot-bound, so cross-source continuity is not yet proven.",
     }
   }

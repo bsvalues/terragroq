@@ -406,6 +406,8 @@ describe("projectContinuousCampaignStatus", () => {
     const validEvidence = timeline.rows[0].successorEvidence
     const malformedEvidence = [
       { ...validEvidence, receiptId: "   " },
+      { ...validEvidence, acquiredAt: null },
+      { ...validEvidence, acquiredAt: "not-a-timestamp" },
       {
         ...validEvidence,
         fencingTokenRange: { first: 3, latest: 2 },
