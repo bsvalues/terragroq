@@ -11,6 +11,7 @@ import {
   readOutcomeQueue,
   renewOutcomeQueueLease,
   resumeOutcomeQueueAfterDecision,
+  resumeOutcomeQueueAfterReviewRecovery,
   resumeOutcomeQueueAfterValidationRecovery,
   transitionOutcomeQueueItem,
   verifyOutcomeQueueWorkOrderBinding,
@@ -98,6 +99,11 @@ function queueBinding(outcome) {
         "VALIDATION_INFRASTRUCTURE_RECOVERED",
         "VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED",
       ].includes(binding.validationRecoveryResumeState))
+    || (binding.reviewRecoveryResumeState !== undefined
+      && ![
+        "REVIEW_REMEDIATION_RECOVERED",
+        "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      ].includes(binding.reviewRecoveryResumeState))
     || (binding.activeWorkOrderId !== undefined
       && (!Number.isSafeInteger(binding.activeWorkOrderId) || binding.activeWorkOrderId <= 0))) {
     wall("Hermes outcome is missing its durable queue binding", "HERMES_OUTCOME_QUEUE_BINDING_WALL")
@@ -230,6 +236,12 @@ function persistedBinding(item) {
   ].includes(item.lifecycleReason)
     ? item.lifecycleReason
     : null
+  const reviewRecoveryResumeState = [
+    "REVIEW_REMEDIATION_RECOVERED",
+    "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+  ].includes(item.lifecycleReason)
+    ? item.lifecycleReason
+    : null
   return {
     userId: item.userId,
     outcomeKey: item.outcomeKey,
@@ -242,6 +254,7 @@ function persistedBinding(item) {
       ? { authorityGrantRef: item.authorityGrantRef }
       : {}),
     ...(validationRecoveryResumeState ? { validationRecoveryResumeState } : {}),
+    ...(reviewRecoveryResumeState ? { reviewRecoveryResumeState } : {}),
     ...(Number.isSafeInteger(activeWorkOrderId) && activeWorkOrderId > 0
       ? { activeWorkOrderId }
       : {}),
@@ -253,6 +266,10 @@ function withPersistedBinding(outcome, item) {
   const priorRecoveryState = outcome?.queueBinding?.validationRecoveryResumeState
   if (priorRecoveryState && item.lifecycleReason === "STALE_LEASE_RECOVERED") {
     binding.validationRecoveryResumeState = priorRecoveryState
+  }
+  const priorReviewRecoveryState = outcome?.queueBinding?.reviewRecoveryResumeState
+  if (priorReviewRecoveryState && item.lifecycleReason === "STALE_LEASE_RECOVERED") {
+    binding.reviewRecoveryResumeState = priorReviewRecoveryState
   }
   return { ...outcome, queueBinding: binding }
 }
@@ -360,6 +377,56 @@ function isExactValidationRecoveryResume(item, binding, holderId, at) {
     && Date.parse(String(item.leaseExpiresAt)) > at.getTime()
 }
 
+function isExactReviewRecoveryResume(item, binding, holderId, at) {
+  const renewalCount = Number(item?.authorityRenewalCount
+    ?? (item?.authorityRenewalApplied === true ? 1 : 0))
+  const reclaimCount = Number(item?.reviewRecoveryReclaimCount ?? 0)
+  if (!Number.isSafeInteger(renewalCount) || renewalCount < 0
+    || !Number.isSafeInteger(reclaimCount) || reclaimCount < 0) return false
+  return item?.userId === binding.userId
+    && item.outcomeKey === binding.outcomeKey
+    && item.lifecycleState === "active"
+    && item.lifecycleReason === (reclaimCount > 0
+      ? "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+      : "REVIEW_REMEDIATION_RECOVERED")
+    && item.approvalState === "approved"
+    && item.authorityState === "matched"
+    && Number(item.version) === binding.expectedVersion + 2 + renewalCount + reclaimCount
+    && item.executionBinding === binding.executionBinding
+    && item.acquisitionKey === binding.acquisitionKey
+    && Number(item.fencingToken) === binding.fencingToken + 1 + reclaimCount
+    && item.leaseHolder === holderId
+    && item.leaseToken === binding.leaseToken
+    && Date.parse(String(item.leaseExpiresAt)) > at.getTime()
+}
+
+function isExactPersistedReviewRecovery(item, binding, outcome) {
+  const versionDelta = Number(item?.version) - binding.expectedVersion
+  const fenceDelta = Number(item?.fencingToken) - binding.fencingToken
+  const priorAuthorityGrantRef = binding.authorityGrantRef ?? outcome?.authorityGrantRef
+  const authorityRenewalDelta = typeof priorAuthorityGrantRef === "string"
+    && priorAuthorityGrantRef !== ""
+    && typeof item?.authorityGrantRef === "string"
+    && item.authorityGrantRef !== priorAuthorityGrantRef
+    ? 1
+    : 0
+  const exactRecovery = fenceDelta === 0
+    && versionDelta === authorityRenewalDelta
+    && item?.lifecycleReason === binding.reviewRecoveryResumeState
+  const recoveredAcquisitionReclaim = Number.isSafeInteger(versionDelta)
+    && Number.isSafeInteger(fenceDelta)
+    && fenceDelta >= 0
+    && versionDelta === fenceDelta + authorityRenewalDelta
+    && item?.lifecycleReason === "STALE_LEASE_RECOVERED"
+  return (exactRecovery || recoveredAcquisitionReclaim)
+    && item?.userId === binding.userId
+    && item.outcomeKey === binding.outcomeKey
+    && item.lifecycleState === "active"
+    && item.executionBinding === binding.executionBinding
+    && item.acquisitionKey === binding.acquisitionKey
+    && item.leaseToken === binding.leaseToken
+}
+
 function isExactPersistedValidationRecovery(item, binding, outcome) {
   const versionDelta = Number(item?.version) - binding.expectedVersion
   const fenceDelta = Number(item?.fencingToken) - binding.fencingToken
@@ -409,6 +476,8 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   const resumeQueue = options.resumeQueue ?? resumeOutcomeQueueAfterDecision
   const resumeValidationRecoveryQueue = options.resumeValidationRecoveryQueue
     ?? resumeOutcomeQueueAfterValidationRecovery
+  const resumeReviewRecoveryQueue = options.resumeReviewRecoveryQueue
+    ?? resumeOutcomeQueueAfterReviewRecovery
   const readQueue = options.readQueue ?? readOutcomeQueue
   const transitionQueue = options.transitionQueue ?? transitionOutcomeQueueItem
   const completeGoal = options.completeGoal ?? completeGoalOutcome
@@ -802,6 +871,57 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     return withPersistedBinding(outcome, resumed)
   }
 
+  async function resumeAfterReviewRecovery(outcome, proof) {
+    requireExecutionProofContext()
+    if (!outcome?.queueBinding) return outcome
+    const binding = queueBinding(outcome)
+    if (proof?.expectedNextState !== "REVIEW_REMEDIATION_EXHAUSTED"
+      || typeof proof?.proofDigest !== "string" || !/^[0-9a-f]{64}$/.test(proof.proofDigest)
+      || !Number.isSafeInteger(proof?.prNumber) || proof.prNumber <= 0
+      || typeof proof?.reviewedHeadSha !== "string" || !/^[0-9a-f]{40}$/.test(proof.reviewedHeadSha)
+      || typeof proof?.mergeSha !== "string" || !/^[0-9a-f]{40}$/.test(proof.mergeSha)) {
+      wall(
+        "Review recovery proof did not preserve its exact merged boundary",
+        "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL",
+      )
+    }
+    const resumeAt = now()
+    if (binding.reviewRecoveryResumeState) {
+      const current = (await readQueue({
+        databaseUrl,
+        userId: binding.userId,
+      })).find((item) => item.outcomeKey === binding.outcomeKey)
+      if (isExactPersistedReviewRecovery(current, binding, outcome)) {
+        return refreshOutcome(outcome)
+      }
+    }
+    const resumed = await resumeReviewRecoveryQueue({
+      databaseUrl,
+      userId: binding.userId,
+      outcomeKey: binding.outcomeKey,
+      expectedVersion: binding.expectedVersion + 1,
+      executionBinding: binding.executionBinding,
+      acquisitionKey: binding.acquisitionKey,
+      fencingToken: binding.fencingToken,
+      prNumber: proof.prNumber,
+      reviewedHeadSha: proof.reviewedHeadSha,
+      mergeSha: proof.mergeSha,
+      proofDigest: proof.proofDigest,
+      expectedLifecycleReason: proof.expectedNextState,
+      leaseHolder: holderId,
+      leaseToken: binding.leaseToken,
+      leaseDurationMs: QUEUE_LEASE_DURATION_MS,
+      now: resumeAt,
+    })
+    if (!isExactReviewRecoveryResume(resumed, binding, holderId, resumeAt)) {
+      wall(
+        "Review recovery resume did not return its exact fresh queue fence",
+        "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL",
+      )
+    }
+    return withPersistedBinding(outcome, resumed)
+  }
+
   return {
     selectOutcome,
     completeOutcome,
@@ -811,6 +931,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     bindWorkOrder,
     refreshOutcome,
     resumeAfterOwnerDecision,
+    resumeAfterReviewRecovery,
     resumeAfterValidationRecovery,
     close: database.close,
   }

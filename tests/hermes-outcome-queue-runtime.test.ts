@@ -166,6 +166,8 @@ describe("Hermes durable outcome queue runtime", () => {
       .rejects.toMatchObject({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" })
     await expect(bridge.resumeAfterOwnerDecision(outcome, {}))
       .rejects.toMatchObject({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" })
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {}))
+      .rejects.toMatchObject({ code: "HERMES_CAMPAIGN_WINDOW_REQUIRED" })
     expect(renewQueue).not.toHaveBeenCalled()
     expect(acquire).not.toHaveBeenCalled()
     expect(completeGoal).not.toHaveBeenCalled()
@@ -1191,6 +1193,156 @@ describe("Hermes durable outcome queue runtime", () => {
       leaseHolder: "resident-hermes",
       leaseToken: "lease-77",
     }))
+  })
+
+  it("reactivates only the exact review-blocked queue item under merged recovery proof", async () => {
+    const resumeReviewRecoveryQueue = vi.fn(async () => ({
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }))
+    const bridge = runtime({ resumeReviewRecoveryQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      prNumber: 523,
+      reviewedHeadSha: "a".repeat(40),
+      mergeSha: "b".repeat(40),
+    })).resolves.toMatchObject({
+      queueBinding: {
+        expectedVersion: 6,
+        fencingToken: 4,
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
+      },
+    })
+    expect(resumeReviewRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
+      expectedVersion: 5,
+      fencingToken: 3,
+      prNumber: 523,
+      reviewedHeadSha: "a".repeat(40),
+      mergeSha: "b".repeat(40),
+      proofDigest: "d".repeat(64),
+      expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+    }))
+  })
+
+  it("accepts an exact stale digest-bound review-recovery reclaim", async () => {
+    const resumeReviewRecoveryQueue = vi.fn(async () => ({
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoveryStaleReclaimApplied: true,
+      reviewRecoveryReclaimCount: 1,
+    }))
+    const bridge = runtime({ resumeReviewRecoveryQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64), prNumber: 523,
+      reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40),
+    })).resolves.toMatchObject({
+      queueBinding: {
+        expectedVersion: 7,
+        fencingToken: 5,
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      },
+    })
+  })
+
+  it.each([
+    { proofDigest: "invalid", prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40) },
+    { proofDigest: "d".repeat(64), prNumber: 0, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40) },
+    { proofDigest: "d".repeat(64), prNumber: 523, reviewedHeadSha: "short", mergeSha: "b".repeat(40) },
+    { proofDigest: "d".repeat(64), prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "short" },
+  ])("rejects review recovery with altered proof identity", async (proof) => {
+    const resumeReviewRecoveryQueue = vi.fn()
+    const bridge = runtime({ resumeReviewRecoveryQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
+      ...proof,
+    })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
+    expect(resumeReviewRecoveryQueue).not.toHaveBeenCalled()
+  })
+
+  it("refreshes an exact persisted review recovery after a post-commit crash", async () => {
+    const recovered = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const resumeReviewRecoveryQueue = vi.fn()
+    const readQueue = vi.fn(async () => [recovered])
+    const acquire = vi.fn(async () => ({ outcome: recovered, acquired: true, replayed: true }))
+    const bridge = runtime({ resumeReviewRecoveryQueue, readQueue, acquire })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: 6,
+        fencingToken: 4,
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
+      },
+    }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      prNumber: 523,
+      reviewedHeadSha: "a".repeat(40),
+      mergeSha: "b".repeat(40),
+    })).resolves.toMatchObject({ queueBinding: { expectedVersion: 6, fencingToken: 4 } })
+    expect(resumeReviewRecoveryQueue).not.toHaveBeenCalled()
+    expect(acquire).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    { lifecycleReason: "OTHER", version: 6, fencingToken: 4, outcomeKey: queueItem.outcomeKey },
+    { lifecycleReason: "REVIEW_REMEDIATION_RECOVERED", version: 7, fencingToken: 4, outcomeKey: queueItem.outcomeKey },
+    { lifecycleReason: "REVIEW_REMEDIATION_RECOVERED", version: 6, fencingToken: 5, outcomeKey: queueItem.outcomeKey },
+    { lifecycleReason: "REVIEW_REMEDIATION_RECOVERED", version: 6, fencingToken: 4, outcomeKey: "other" },
+  ])("rejects a review resume row with mismatched durable identity", async (mutation) => {
+    const resumeReviewRecoveryQueue = vi.fn(async () => ({
+      ...queueItem,
+      lifecycleState: "active",
+      approvalState: "approved",
+      authorityState: "matched",
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      ...mutation,
+    }))
+    const bridge = runtime({ resumeReviewRecoveryQueue })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64), prNumber: 523,
+      reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40),
+    })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL" })
   })
 
   it.each([

@@ -63,7 +63,8 @@ export function redactHermesStatus(value) {
 
 export function createResidentHermesOrchestrator(options = {}) {
   const queueRuntime = options.queueRuntime ?? createHermesOutcomeQueueRuntime()
-  const orchestrator = createHermesOrchestrator({
+  const createOrchestrator = options.createOrchestrator ?? createHermesOrchestrator
+  const orchestrator = createOrchestrator({
     workspace: options.workspace ?? process.cwd(),
     ...(options.orchestratorOptions ?? {}),
     selectOutcome: queueRuntime.selectOutcome,
@@ -74,6 +75,7 @@ export function createResidentHermesOrchestrator(options = {}) {
     bindQueueWorkOrder: queueRuntime.bindWorkOrder,
     refreshQueueOutcome: queueRuntime.refreshOutcome,
     resumeQueueAfterDecision: queueRuntime.resumeAfterOwnerDecision,
+    resumeQueueAfterReviewRecovery: queueRuntime.resumeAfterReviewRecovery,
     resumeQueueAfterValidationRecovery: queueRuntime.resumeAfterValidationRecovery,
   })
   return Object.freeze({
@@ -674,6 +676,7 @@ export async function recoverReviewedMerge(options = {}) {
       prNumber: candidate.metadata.prNumber,
       reviewedHeadSha,
       mergeSha,
+      proofDigest,
     })) {
       throw Object.assign(new Error("Persisted review outcome did not match recovery proof"), {
         code: "HERMES_REVIEW_RECOVERY_DATABASE_WALL",

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import {
   captureRuntimeAgreement,
+  createResidentHermesOrchestrator,
   recoverExternalToolWall,
   recoverOrphanedValidationCycle,
   recoverPostMergeCleanupWall,
@@ -21,6 +22,26 @@ import {
 import { initializeHermesState } from "../scripts/hermes-bridge/state-store.mjs"
 
 describe("Hermes bridge CLI", () => {
+  it("wires durable review recovery through the resident queue runtime", async () => {
+    const resumeAfterReviewRecovery = vi.fn()
+    const close = vi.fn(async () => {})
+    const queueRuntime = {
+      selectOutcome: vi.fn(), completeOutcome: vi.fn(), terminalizeOutcome: vi.fn(),
+      deferOutcome: vi.fn(), renewOutcomeLease: vi.fn(), bindWorkOrder: vi.fn(),
+      refreshOutcome: vi.fn(), resumeAfterOwnerDecision: vi.fn(),
+      resumeAfterValidationRecovery: vi.fn(), resumeAfterReviewRecovery, close,
+    }
+    const createOrchestrator = vi.fn(() => ({ cycle: vi.fn() }))
+
+    const resident = createResidentHermesOrchestrator({ queueRuntime, createOrchestrator })
+
+    expect(createOrchestrator).toHaveBeenCalledWith(expect.objectContaining({
+      resumeQueueAfterReviewRecovery: resumeAfterReviewRecovery,
+    }))
+    await resident.close()
+    expect(close).toHaveBeenCalledOnce()
+  })
+
   it("delegates orphaned validation recovery to the guarded orchestrator operation", async () => {
     const recoverOrphanedValidationCycleLease = vi.fn(async () => ({
       result: "RECOVERED", outcomeId: "12", fencingToken: 78, replayed: false,

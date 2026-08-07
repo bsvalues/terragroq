@@ -2046,18 +2046,21 @@ export async function recoverReviewedOutcome({
   prNumber,
   reviewedHeadSha,
   mergeSha,
+  proofDigest,
 } = {}) {
   if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) {
     throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
   }
   if (!Number.isSafeInteger(prNumber) || prNumber <= 0
     || typeof reviewedHeadSha !== "string" || !COMMIT_SHA.test(reviewedHeadSha)
-    || typeof mergeSha !== "string" || !COMMIT_SHA.test(mergeSha)) {
+    || typeof mergeSha !== "string" || !COMMIT_SHA.test(mergeSha)
+    || typeof proofDigest !== "string" || !/^[0-9a-f]{64}$/.test(proofDigest)) {
     throw Object.assign(new Error("review recovery evidence is invalid"), { code: "OUTCOME_REVIEW_RECOVERY_EVIDENCE_INVALID" })
   }
 
   const ref = outcomeWorkOrderRef(outcomeId)
   const idempotencyKey = `hermes-outcome:${outcomeId}:review-recovery:pr:${prNumber}:head:${reviewedHeadSha}:merge:${mergeSha}`
+  const confirmationKey = `${idempotencyKey}:queue-proof:${proofDigest}`
   let runQuery = normalizeQuery(query)
   let pool
   let client
@@ -2111,31 +2114,88 @@ export async function recoverReviewedOutcome({
        RETURNING g.id, exact."userId", exact."workOrderId", exact."mergeEventId"`,
       [outcomeId, ref, REVIEW_REMEDIATION_EXHAUSTED, prNumber, reviewedHeadSha, mergeSha],
     )
-    const row = recovered?.rows?.[0]
+    let row = recovered?.rows?.[0]
     if (!row) {
       const prior = await runQuery(
-        `SELECT EXISTS (
-           SELECT 1 FROM goal g
-           JOIN governance_event recovered
-             ON recovered."entityType" = 'goal' AND recovered."entityId"::text = g.id::text
-            AND recovered."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERED'
-            AND recovered.metadata->>'idempotencyKey' = $2
-           WHERE g.id = $1::integer AND g.status = 'classified'
-         ) AS recovered`,
-        [outcomeId, idempotencyKey],
+        `SELECT g."userId" AS "userId", wo.id AS "workOrderId",
+                recovered.id AS "recoveredEventId"
+         FROM goal g
+         JOIN work_order wo ON wo."userId" = g."userId" AND wo.ref = $2
+         JOIN governance_event recovered
+           ON recovered."userId" = g."userId"
+          AND recovered."entityType" = 'goal'
+          AND recovered."entityId"::text = g.id::text
+          AND recovered."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERED'
+          AND recovered.metadata->>'idempotencyKey' = $3
+          AND recovered.metadata->>'prNumber' = ($4::integer)::text
+          AND recovered.metadata->>'reviewedHeadSha' = $5
+          AND recovered.metadata->>'mergeSha' = $6
+         JOIN governance_event merged
+           ON merged."userId" = g."userId"
+          AND merged."entityType" = 'work_order'
+          AND merged."entityId"::text = wo.id::text
+          AND merged."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+          AND merged.metadata->>'checkpointState' = 'PR_MERGED'
+          AND merged.metadata->>'prNumber' = ($4::integer)::text
+          AND merged.metadata->>'headRefOid' = $5
+          AND merged.metadata->>'mergeSha' = $6
+          AND merged.id < recovered.id
+         WHERE g.id = $1::integer AND g.status = 'classified'`,
+        [outcomeId, ref, idempotencyKey, prNumber, reviewedHeadSha, mergeSha],
       )
-      const alreadyRecovered = prior?.rows?.[0]?.recovered === true
-      await runQuery(alreadyRecovered ? "COMMIT" : "ROLLBACK")
-      return alreadyRecovered
+      if (prior?.rows?.length !== 1) {
+        await runQuery("ROLLBACK")
+        return false
+      }
+      row = prior.rows[0]
+    } else {
+      await runQuery(
+        `INSERT INTO governance_event
+           ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+         VALUES ($1, 'HERMES_OUTCOME_REVIEW_RECOVERED', 'goal', $2,
+           'hermes-codex-bridge', $3, $4::jsonb)`,
+        [row.userId, String(outcomeId), `Released exact reviewed and merged PR #${prNumber} for normal finalization`,
+          JSON.stringify({ idempotencyKey, workOrderRef: ref, prNumber, reviewedHeadSha, mergeSha, proofDigest })],
+      )
     }
-    await runQuery(
-      `INSERT INTO governance_event
-         ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
-       VALUES ($1, 'HERMES_OUTCOME_REVIEW_RECOVERED', 'goal', $2,
-         'hermes-codex-bridge', $3, $4::jsonb)`,
-      [row.userId, String(outcomeId), `Released exact reviewed and merged PR #${prNumber} for normal finalization`,
-        JSON.stringify({ idempotencyKey, workOrderRef: ref, prNumber, reviewedHeadSha, mergeSha })],
+    const confirmations = await runQuery(
+      `SELECT metadata->>'proofDigest' AS "proofDigest"
+       FROM governance_event
+       WHERE "userId" = $1
+         AND "entityType" = 'goal'
+         AND "entityId"::text = $2
+         AND "eventType" = 'HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED'
+         AND metadata->>'prNumber' = ($3::integer)::text
+         AND metadata->>'reviewedHeadSha' = $4
+         AND metadata->>'mergeSha' = $5
+       FOR UPDATE`,
+      [row.userId, String(outcomeId), prNumber, reviewedHeadSha, mergeSha],
     )
+    if ((confirmations?.rows?.length ?? 0) > 1
+      || (confirmations?.rows?.length === 1
+        && confirmations.rows[0].proofDigest !== proofDigest)) {
+      throw Object.assign(new Error("review recovery digest conflicts with durable evidence"), {
+        code: "OUTCOME_REVIEW_RECOVERY_EVIDENCE_INVALID",
+      })
+    }
+    if ((confirmations?.rows?.length ?? 0) === 0) {
+      await runQuery(
+        `INSERT INTO governance_event
+           ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+         VALUES ($1, 'HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED', 'goal', $2,
+           'hermes-codex-bridge', $3, $4::jsonb)`,
+        [row.userId, String(outcomeId), `Bound reviewed PR #${prNumber} to its resident recovery proof`,
+          JSON.stringify({
+            idempotencyKey: confirmationKey,
+            recoveryIdempotencyKey: idempotencyKey,
+            workOrderRef: ref,
+            prNumber,
+            reviewedHeadSha,
+            mergeSha,
+            proofDigest,
+          })],
+      )
+    }
     await runQuery("COMMIT")
     return true
   } catch (error) {
