@@ -90,6 +90,10 @@ function parsedTimestamp(value: string | null): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function normalizedEvidenceReferences(references: readonly string[]): readonly string[] {
+  return references.map((reference) => reference.trim()).filter(Boolean)
+}
+
 function uniqueRow(
   rows: readonly ContinuousCampaignQueueRow[],
   outcomeKey: string,
@@ -173,6 +177,10 @@ function settlementStep(
   row: ContinuousCampaignQueueRow | null,
   duplicate: boolean,
 ): CampaignStep {
+  const evidenceReferences = row === null
+    ? []
+    : normalizedEvidenceReferences(row.terminalEvidenceRefs)
+
   if (duplicate) {
     return {
       id,
@@ -240,7 +248,7 @@ function settlementStep(
     terminalAt === null
     || row.terminalResult?.trim() === ""
     || row.terminalResult === null
-    || row.terminalEvidenceRefs.length === 0
+    || evidenceReferences.length === 0
   ) {
     return {
       id,
@@ -259,7 +267,7 @@ function settlementStep(
     title: row.title,
     status: "RECORDED",
     at: row.terminalAt,
-    detail: `${row.terminalResult} with ${row.terminalEvidenceRefs.length} evidence reference${row.terminalEvidenceRefs.length === 1 ? "" : "s"}.`,
+    detail: `${row.terminalResult} with ${evidenceReferences.length} evidence reference${evidenceReferences.length === 1 ? "" : "s"}.`,
   }
 }
 
@@ -303,6 +311,27 @@ function projectHandoff(
   }
 
   const [predecessorKey, successorKey] = CONTINUOUS_CAMPAIGN_OUTCOME_KEYS
+  const queueCompletedAt = parsedTimestamp(predecessor?.terminalAt ?? null)
+  const queueAcquiredAt = parsedTimestamp(successor?.activatedAt ?? null)
+  const dependencyStillDeclared = successor?.dependencyKeys.includes(predecessorKey) ?? false
+
+  if (
+    successorAcquisition.status === "RECORDED"
+    && (!dependencyStillDeclared
+      || queueCompletedAt === null
+      || queueAcquiredAt === null
+      || queueAcquiredAt < queueCompletedAt)
+  ) {
+    return {
+      acquisitionStatus: "CONFLICTING",
+      automationStatus: "CONFLICTING",
+      receiptId: null,
+      acquiredAt: successorAcquisition.at,
+      fencingTokenRange: null,
+      detail: "The persisted queue dependency or acquisition timing conflicts with predecessor settlement.",
+    }
+  }
+
   const matchingRows = timeline.rows.filter((row) => row.outcomeKey === predecessorKey)
   if (matchingRows.length > 1) {
     return {
@@ -355,26 +384,36 @@ function projectHandoff(
     }
   }
 
-  const acquiredAt = parsedTimestamp(evidence.acquiredAt)
-  const completedAt = parsedTimestamp(predecessor?.terminalAt ?? null)
-  const activatedAt = parsedTimestamp(successor?.activatedAt ?? null)
+  const receiptAcquiredAt = parsedTimestamp(evidence.acquiredAt)
   const exactSuccessor = evidence.outcomeKey === successorKey
     && evidence.receiptId !== null
     && evidence.fencingTokenRange !== null
-  const dependencyStillDeclared = successor?.dependencyKeys.includes(predecessorKey) ?? false
-  const ordered = acquiredAt !== null && completedAt !== null && acquiredAt >= completedAt
-  const activationAgrees = acquiredAt !== null
-    && activatedAt !== null
-    && acquiredAt === activatedAt
+  const receiptOrdered = receiptAcquiredAt !== null
+    && queueCompletedAt !== null
+    && receiptAcquiredAt >= queueCompletedAt
+  const observationsAgree = receiptAcquiredAt !== null
+    && queueAcquiredAt !== null
+    && receiptAcquiredAt === queueAcquiredAt
 
-  if (!exactSuccessor || !dependencyStillDeclared || !ordered || !activationAgrees) {
+  if (!exactSuccessor) {
     return {
       acquisitionStatus: "CONFLICTING",
       automationStatus: "CONFLICTING",
       receiptId: evidence.receiptId,
       acquiredAt: evidence.acquiredAt,
       fencingTokenRange: evidence.fencingTokenRange,
-      detail: "Successor dependency or timing conflicts with the predecessor settlement.",
+      detail: "The completion timeline binds the predecessor to a conflicting successor receipt.",
+    }
+  }
+
+  if (!receiptOrdered || !observationsAgree) {
+    return {
+      acquisitionStatus: "MISSING",
+      automationStatus: "MISSING",
+      receiptId: evidence.receiptId,
+      acquiredAt: evidence.acquiredAt,
+      fencingTokenRange: evidence.fencingTokenRange,
+      detail: "Queue and completion observations are not snapshot-bound, so cross-source continuity is not yet proven.",
     }
   }
 

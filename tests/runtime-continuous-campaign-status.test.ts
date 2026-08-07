@@ -176,6 +176,68 @@ describe("projectContinuousCampaignStatus", () => {
     )
   })
 
+  it("reports a queue-local timing conflict even when bounded timeline evidence is absent", () => {
+    const queueSurface = liveQueueSurface()
+    const status = projectContinuousCampaignStatus({
+      ...queueSurface,
+      rows: [
+        queueSurface.rows[0],
+        {
+          ...queueSurface.rows[1],
+          activatedAt: "2026-07-28T18:19:59.999Z",
+        },
+      ],
+    }, {
+      truncated: true,
+      rows: [],
+    })
+
+    expect(status.handoff).toMatchObject({
+      acquisitionStatus: "CONFLICTING",
+      automationStatus: "CONFLICTING",
+    })
+    expect(status.handoff.detail).toMatch(/persisted queue.*timing/i)
+  })
+
+  it("does not call mixed queue and timeline observations a durable conflict", () => {
+    const queueSurface = liveQueueSurface()
+    const status = projectContinuousCampaignStatus({
+      ...queueSurface,
+      rows: [
+        queueSurface.rows[0],
+        {
+          ...queueSurface.rows[1],
+          activatedAt: "2026-07-28T18:20:00.001Z",
+        },
+      ],
+    }, liveTimeline())
+
+    expect(status.handoff).toMatchObject({
+      acquisitionStatus: "MISSING",
+      automationStatus: "MISSING",
+    })
+    expect(status.handoff.detail).toMatch(/not snapshot-bound/i)
+  })
+
+  it("rejects blank terminal evidence references", () => {
+    const queueSurface = liveQueueSurface()
+    const status = projectContinuousCampaignStatus({
+      ...queueSurface,
+      rows: [
+        {
+          ...queueSurface.rows[0],
+          terminalEvidenceRefs: ["", "   "],
+        },
+        queueSurface.rows[1],
+      ],
+    }, liveTimeline())
+
+    expect(status.steps[1]).toMatchObject({
+      status: "MISSING",
+    })
+    expect(status.steps[1].detail).toMatch(/missing.*evidence reference/i)
+  })
+
   it("does not treat a truncated completion window as proof that no acquisition receipt exists", () => {
     const queueSurface = liveQueueSurface()
     const truncatedTimeline = {
