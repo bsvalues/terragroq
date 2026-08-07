@@ -413,12 +413,44 @@ export async function recordOwnerAuthorityDecision({
          ORDER BY id DESC
          LIMIT 1
        ), queue_item AS (
-         SELECT id, title, objective, "riskClass", "approvalState", "authorityState",
+         SELECT id, "outcomeKey", title, objective, "riskClass", "approvalState",
+           "approvalDecisionId", "authorityState", "authorityGrantRef",
            "authorityLevel", "authoritySubject", "authorityAction", "lifecycleState",
            "activeWorkOrderId"
          FROM outcome_queue_item
          WHERE "userId" = $4 AND "goalId" = $1::integer
          FOR UPDATE
+       ), live_approval AS (
+         SELECT approval.id
+         FROM decision approval
+         JOIN queue_item q ON approval.id = q."approvalDecisionId"
+         WHERE approval."userId" = $4 AND approval.status = 'accepted'
+           AND approval.authority = 'binding'
+           AND upper(trim(approval.decision)) = 'APPROVE'
+           AND approval.scope = q."outcomeKey"
+         FOR SHARE
+       ), live_grant AS (
+         SELECT grant_row.id
+         FROM authority_grant grant_row
+         JOIN queue_item q ON grant_row."ref" = q."authorityGrantRef"
+         WHERE grant_row."userId" = $4 AND grant_row.status = 'active'
+           AND grant_row."revokedAt" IS NULL
+           AND (grant_row."expiresAt" IS NULL
+             OR grant_row."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp())
+           AND grant_row."authorityLevel" = q."authorityLevel"
+           AND grant_row."grantedTo" = q."authoritySubject"
+           AND grant_row.scope = q."outcomeKey"
+           AND NOT EXISTS (
+             SELECT 1 FROM unnest(grant_row."blockedActions") blocked(action)
+             WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
+           )
+           AND (cardinality(grant_row."allowedActions") = 0 OR EXISTS (
+             SELECT 1 FROM unnest(grant_row."allowedActions") allowed(action)
+             WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
+           ))
+           AND (grant_row."workOrderId" IS NULL
+             OR grant_row."workOrderId" = q."activeWorkOrderId")
+         FOR SHARE
        ), prior_request AS (
          SELECT id AS "decisionId", ref AS "decisionRef", status, decision,
            authority, scope, evidence, "decidedAt"
@@ -439,7 +471,7 @@ export async function recordOwnerAuthorityDecision({
           FROM work_order_any wo
           JOIN decision d ON d.id = wo."linkedDecisionId"
         )
-       SELECT CURRENT_TIMESTAMP AS "transactionNow",
+       SELECT clock_timestamp() AS "transactionNow",
          goal_any.id AS "goalId", goal_any."goalUserId", goal_any.status AS "goalStatus",
          goal_any.ref AS "goalRef", goal_any.command AS "goalCommand",
          goal_any.lane AS "goalLane", goal_any.verdict AS "goalVerdict",
@@ -458,6 +490,7 @@ export async function recordOwnerAuthorityDecision({
          queue_item."approvalState", queue_item."authorityState", queue_item."authorityLevel",
          queue_item."authoritySubject", queue_item."authorityAction",
          queue_item."lifecycleState", queue_item."activeWorkOrderId",
+         live_approval.id AS "liveApprovalId", live_grant.id AS "liveGrantId",
          prior_request."decisionId", prior_request."decisionRef", prior_request.status AS "priorStatus",
          prior_request.decision AS "priorChoice", prior_request.authority AS "priorAuthority",
          prior_request.scope AS "priorScope", prior_request.evidence AS "priorEvidence",
@@ -473,6 +506,8 @@ export async function recordOwnerAuthorityDecision({
        LEFT JOIN requested_terminal ON TRUE
         LEFT JOIN latest_lease ON TRUE
         LEFT JOIN queue_item ON TRUE
+        LEFT JOIN live_approval ON TRUE
+        LEFT JOIN live_grant ON TRUE
         LEFT JOIN prior_request ON TRUE
         LEFT JOIN consumed_binding ON TRUE
         LEFT JOIN linked_work_order_decision ON TRUE`,
@@ -523,6 +558,8 @@ export async function recordOwnerAuthorityDecision({
       })
     }
     if (provenance && (row.queueItemId == null
+      || row.liveApprovalId == null
+      || row.liveGrantId == null
       || Number(row.activeWorkOrderId) !== workOrderId
       || row.lifecycleState !== "blocked"
       || row.approvalState !== "approved"
@@ -641,7 +678,7 @@ export async function recordOwnerAuthorityDecision({
     const recorded = await runQuery(
       `INSERT INTO decision
          ("userId", ref, title, context, decision, rationale, status, authority, owner, scope, evidence, tags, "decidedAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'binding', $1, $8, $9::text[], $10::text[], NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'binding', $1, $8, $9::text[], $10::text[], clock_timestamp())
        RETURNING id, ref, status, decision, "decidedAt"`,
       [
         ownerUserId,

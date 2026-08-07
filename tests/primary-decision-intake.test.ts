@@ -9,6 +9,7 @@ import {
   recordOwnerAuthorityDecision,
 } from "@/scripts/hermes-bridge/outcome-source.mjs"
 import {
+  buildPrimaryDecisionRequestPrompt,
   primaryDecisionRequestMarker,
   primaryDecisionRequestDigest,
   PRIMARY_DECISION_OWNER_EMAIL,
@@ -117,6 +118,8 @@ function decisionBinding(
     authorityAction: "outcome:execute",
     lifecycleState: "blocked",
     activeWorkOrderId: request.workOrderId,
+    liveApprovalId: 44,
+    liveGrantId: 55,
     ...overrides,
   }
 }
@@ -304,6 +307,35 @@ describe("secure Primary decision intake", () => {
     expect(query.mock.calls.some(([sql]) => /INSERT INTO decision/.test(sql))).toBe(false)
   })
 
+  it("rejects a revoked live grant even when the queue authority cache still matches", async () => {
+    const provenance = await verifyPrimaryDecisionResponse({
+      request,
+      repositoryPath: repository,
+      environment: { CODEX_THREAD_ID: "thread-owner" },
+      now: Date.parse(issuedAt) + 30_000,
+      createClient: () => fakeClient() as never,
+    })
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [decisionBinding(request.decisionPacket, {
+        liveGrantId: null,
+      })] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recordOwnerAuthorityDecision({
+      query,
+      outcomeId: request.outcomeId,
+      workOrderId: request.workOrderId,
+      terminalEventId: request.terminalEventId,
+      ownerUserId: request.ownerUserId,
+      choice: "APPROVE",
+      expectedNextState: request.expectedNextState,
+      primaryDecisionProvenance: provenance,
+    })).rejects.toMatchObject({ code: "PRIMARY_DECISION_AUTHORITY_STALE" })
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
   it("rejects a verified response that expires before the recording transaction", async () => {
     const provenance = await verifyPrimaryDecisionResponse({
       request,
@@ -478,6 +510,7 @@ it("projects exactly one allowed choice from the bounded response window", async
     presentedAfter: issuedAt,
     presentedBefore: "2026-08-07T17:00:00.000Z",
     requestMarker: primaryDecisionRequestMarker(request),
+    requestPrompt: buildPrimaryDecisionRequestPrompt(request),
   })
   const rpc = child.messages().at(-1)
   child.send({
@@ -485,7 +518,7 @@ it("projects exactly one allowed choice from the bounded response window", async
     result: {
       thread: {
         id: "thread-owner",
-        threadSource: "user",
+        threadSource: null,
         source: "vscode",
         cwd: repository,
         parentThreadId: null,
@@ -498,11 +531,11 @@ it("projects exactly one allowed choice from the bounded response window", async
           items: [{
             id: "request-message",
             type: "agentMessage",
-            text: `Decision needed\n${primaryDecisionRequestMarker(request)}`,
+            text: buildPrimaryDecisionRequestPrompt(request),
           }],
         }, {
           id: "turn-owner",
-          status: "inProgress",
+          status: "interrupted",
           startedAt: Date.parse(issuedAt) / 1000 + 10,
           items: [{
             id: "message-owner",
@@ -536,6 +569,7 @@ it("fails closed when two allowed decision responses exist in the same window", 
     presentedAfter: issuedAt,
     presentedBefore: "2026-08-07T17:00:00.000Z",
     requestMarker: primaryDecisionRequestMarker(request),
+    requestPrompt: buildPrimaryDecisionRequestPrompt(request),
   })
   const rpc = child.messages().at(-1)
   child.send({
@@ -548,7 +582,7 @@ it("fails closed when two allowed decision responses exist in the same window", 
           status: "completed",
           startedAt: Date.parse(issuedAt) / 1000 + 1,
           completedAt: Date.parse(issuedAt) / 1000 + 2,
-          items: [{ type: "agentMessage", text: primaryDecisionRequestMarker(request) }],
+          items: [{ type: "agentMessage", text: buildPrimaryDecisionRequestPrompt(request) }],
         }, {
           id: "turn-owner",
           status: "completed",

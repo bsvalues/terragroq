@@ -122,6 +122,7 @@ export async function verifyPrimaryDecisionResponse({
       presentedAfter,
       presentedBefore,
       requestMarker: primaryDecisionRequestMarker(request),
+      requestPrompt: buildPrimaryDecisionRequestPrompt(request),
     }), timeoutMs)
   } finally {
     client.close()
@@ -132,7 +133,7 @@ export async function verifyPrimaryDecisionResponse({
     || account.requiresOpenaiAuth !== true) wall("PRIMARY_DECISION_ACCOUNT_WALL")
   if (!response) wall("PRIMARY_DECISION_RESPONSE_NOT_FOUND")
   if (response.threadId !== threadId
-    || response.threadSource !== "user"
+    || !["user", null].includes(response.threadSource)
     || response.source !== "vscode"
     || response.parentThreadId !== null
     || response.agentRole !== null
