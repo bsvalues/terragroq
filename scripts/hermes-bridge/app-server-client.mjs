@@ -312,32 +312,39 @@ export class CodexAppServerClient {
         || requestPresentedAtMs < presentedAfterMs
         || requestPresentedAtMs > presentedBeforeMs
         || startedAtMs < requestPresentedAtMs) continue
-      for (const item of turn.items) {
-        const content = Array.isArray(item?.content) ? item.content : []
-        if (item?.type !== "userMessage" || content.length !== 1
-          || content[0]?.type !== "text" || typeof content[0]?.text !== "string") continue
-        const normalized = content[0].text.trim().toUpperCase()
-        const choice = normalized === "APPROVE" ? "APPROVE"
-          : ["DENY", "DECLINE"].includes(normalized) ? "DENY" : null
-        if (!choice) continue
-        candidates.push({
-          threadId: thread.id,
-          threadSource: typeof thread.threadSource === "string" ? thread.threadSource : null,
-          source: typeof thread.source === "string" ? thread.source : null,
-          cwd: typeof thread.cwd === "string" ? thread.cwd : null,
-          parentThreadId: thread.parentThreadId ?? null,
-          agentRole: thread.agentRole ?? null,
-          requestTurnId: priorTurn.id,
-          requestMessageId: requestMessage.id,
-          requestPresentedAt: Number(priorTurn.completedAt),
-          turnId: turn.id,
-          turnStartedAt: Number(turn.startedAt),
-          turnCompletedAt: Number(turn.completedAt),
-          messageId: item.id,
-          messageSha256: createHash("sha256").update(content[0].text, "utf8").digest("hex"),
-          choice,
-        })
-      }
+      const userItems = turn.items.filter((candidate) => candidate?.type === "userMessage")
+      const item = userItems.at(-1)
+      const content = Array.isArray(item?.content) ? item.content : []
+      if (!item || content.length !== 1
+        || content[0]?.type !== "text" || typeof content[0]?.text !== "string") continue
+      const priorChoiceExists = userItems.slice(0, -1).some((candidate) => {
+        const candidateContent = Array.isArray(candidate?.content) ? candidate.content : []
+        if (candidateContent.length !== 1 || candidateContent[0]?.type !== "text"
+          || typeof candidateContent[0]?.text !== "string") return false
+        return ["APPROVE", "DENY", "DECLINE"].includes(candidateContent[0].text.trim().toUpperCase())
+      })
+      if (priorChoiceExists) continue
+      const normalized = content[0].text.trim().toUpperCase()
+      const choice = normalized === "APPROVE" ? "APPROVE"
+        : ["DENY", "DECLINE"].includes(normalized) ? "DENY" : null
+      if (!choice) continue
+      candidates.push({
+        threadId: thread.id,
+        threadSource: typeof thread.threadSource === "string" ? thread.threadSource : null,
+        source: typeof thread.source === "string" ? thread.source : null,
+        cwd: typeof thread.cwd === "string" ? thread.cwd : null,
+        parentThreadId: thread.parentThreadId ?? null,
+        agentRole: thread.agentRole ?? null,
+        requestTurnId: priorTurn.id,
+        requestMessageId: requestMessage.id,
+        requestPresentedAt: Number(priorTurn.completedAt),
+        turnId: turn.id,
+        turnStartedAt: Number(turn.startedAt),
+        turnCompletedAt: Number(turn.completedAt),
+        messageId: item.id,
+        messageSha256: createHash("sha256").update(content[0].text, "utf8").digest("hex"),
+        choice,
+      })
     }
     return candidates.length === 1 ? Object.freeze(candidates[0]) : null
   }
