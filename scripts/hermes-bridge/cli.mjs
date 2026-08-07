@@ -97,7 +97,10 @@ export async function runHermesQueueDrain({
   }
   const settled = []
   try {
-    if (consumeDecision) await consumeDecision({ repositoryPath: process.cwd() })
+    if (consumeDecision) {
+      const decisionResult = await consumeDecision({ repositoryPath: process.cwd() })
+      if (decisionResult?.status === "PENDING_PRIMARY_DECISION") return decisionResult
+    }
     for (let index = 0; index < maxOutcomes; index += 1) {
       const result = await orchestrator.cycle()
       if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {

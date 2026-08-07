@@ -4,6 +4,8 @@ import { evaluateOutcomePolicy } from "./policy.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
 import {
   isVerifiedPrimaryDecisionResponse,
+  PRIMARY_DECISION_OWNER_EMAIL,
+  PRIMARY_DECISION_TTL_MS,
   primaryDecisionRequestDigest,
 } from "./primary-decision-provenance.mjs"
 
@@ -186,7 +188,7 @@ export async function readPendingPrimaryDecisionRequest({
          AND q."riskClass" IN ('R0', 'R1')
          AND q."lifecycleState" = 'blocked'
          AND q."approvalState" = 'approved'
-         AND q."authorityState" = 'verified'
+         AND q."authorityState" = 'matched'
          AND q."authoritySubject" = 'operator'
          AND q."authorityAction" = 'outcome:execute'
          AND COALESCE(latest_lease.metadata->>'leaseStatus', 'RELEASED') <> 'ACTIVE'
@@ -809,13 +811,13 @@ export async function readApprovedOwnerDecision({
     }) : null
     const validStoredProvenance = hasStoredProvenance
       && storedProvenance?.identityStatus === "VERIFIED_PRIMARY_CODEX_APP_SERVER"
-      && storedProvenance?.accountEmail === "bsvalues@gmail.com"
+      && storedProvenance?.accountEmail === PRIMARY_DECISION_OWNER_EMAIL
       && storedProvenance?.requestDigest === expectedRequestDigest
       && typeof storedProvenance?.responseDigest === "string"
       && /^[a-f0-9]{64}$/.test(storedProvenance.responseDigest)
       && normalizedTimestamp(storedProvenance.issuedAt) === normalizedTimestamp(row?.terminalIssuedAt)
       && Number.isFinite(Date.parse(storedProvenance.expiresAt))
-      && Date.parse(storedProvenance.expiresAt) - Date.parse(storedProvenance.issuedAt) === 60 * 60 * 1000
+      && Date.parse(storedProvenance.expiresAt) - Date.parse(storedProvenance.issuedAt) === PRIMARY_DECISION_TTL_MS
     const provenance = validStoredProvenance ? {
       identityStatus: storedProvenance.identityStatus,
       accountEmail: storedProvenance.accountEmail,

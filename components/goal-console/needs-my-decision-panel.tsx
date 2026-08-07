@@ -88,7 +88,8 @@ export function NeedsMyDecisionPanel({
 
               <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
                 You can answer <span className="font-medium text-foreground">Approve</span> or{" "}
-                <span className="font-medium text-foreground">Deny</span> in the authenticated
+                <span className="font-medium text-foreground">Deny</span> or{" "}
+                <span className="font-medium text-foreground">Decline</span> in the authenticated
                 Codex task that presented this exact request. Secure replies expire after one hour.
               </p>
 

@@ -6,6 +6,8 @@ import { CodexAppServerClient } from "@/scripts/hermes-bridge/app-server-client.
 import { consumePrimaryDecisionIntake } from "@/scripts/hermes-bridge/primary-decision-intake.mjs"
 import { readPendingPrimaryDecisionRequest } from "@/scripts/hermes-bridge/outcome-source.mjs"
 import {
+  primaryDecisionRequestMarker,
+  primaryDecisionRequestDigest,
   PRIMARY_DECISION_OWNER_EMAIL,
   verifyPrimaryDecisionResponse,
 } from "@/scripts/hermes-bridge/primary-decision-provenance.mjs"
@@ -81,6 +83,9 @@ describe("secure Primary decision intake", () => {
     })
     expect(JSON.stringify(response)).not.toContain("message-owner")
     expect(client.close).toHaveBeenCalled()
+    expect(client.readLatestDirectUserChoice).toHaveBeenCalledWith(expect.objectContaining({
+      requestMarker: primaryDecisionRequestMarker(request),
+    }))
   })
 
   it.each([
@@ -105,7 +110,31 @@ describe("secure Primary decision intake", () => {
       environment: {},
       readRequest: vi.fn(async () => request),
       recordDecision,
-    })).resolves.toEqual({ status: "PENDING_PRIMARY_DECISION", outcomeId: 77 })
+    })).resolves.toEqual({
+      status: "PENDING_PRIMARY_DECISION",
+      outcomeId: 77,
+      requestDigest: primaryDecisionRequestDigest(request),
+      prompt: expect.stringContaining(primaryDecisionRequestMarker(request)),
+    })
+    expect(recordDecision).not.toHaveBeenCalled()
+  })
+
+  it("presents the exact request when the authenticated task has not answered yet", async () => {
+    const recordDecision = vi.fn()
+    const wall = Object.assign(new Error("not answered"), {
+      code: "PRIMARY_DECISION_RESPONSE_NOT_FOUND",
+    })
+    await expect(consumePrimaryDecisionIntake({
+      environment: { CODEX_THREAD_ID: "thread-owner" },
+      readRequest: vi.fn(async () => request),
+      verifyResponse: vi.fn().mockRejectedValue(wall),
+      recordDecision,
+    })).resolves.toMatchObject({
+      status: "PENDING_PRIMARY_DECISION",
+      outcomeId: 77,
+      requestDigest: primaryDecisionRequestDigest(request),
+      prompt: expect.stringContaining("Reply only Approve or Deny"),
+    })
     expect(recordDecision).not.toHaveBeenCalled()
   })
 
@@ -179,7 +208,7 @@ describe("secure Primary decision intake", () => {
     expect(query.mock.calls[0][0]).toContain('q."authorityAction" = \'outcome:execute\'')
     expect(query.mock.calls[0][0]).toContain('q."lifecycleState" = \'blocked\'')
     expect(query.mock.calls[0][0]).toContain('q."approvalState" = \'approved\'')
-    expect(query.mock.calls[0][0]).toContain('q."authorityState" = \'verified\'')
+    expect(query.mock.calls[0][0]).toContain('q."authorityState" = \'matched\'')
     expect(query.mock.calls[0][1]).toEqual([PRIMARY_DECISION_OWNER_EMAIL])
   })
 })
@@ -213,6 +242,7 @@ it("projects exactly one allowed choice from the bounded response window", async
     threadId: "thread-owner",
     issuedAfter: issuedAt,
     expiresAt: "2026-08-07T17:00:00.000Z",
+    requestMarker: primaryDecisionRequestMarker(request),
   })
   const rpc = child.messages().at(-1)
   child.send({
@@ -226,10 +256,19 @@ it("projects exactly one allowed choice from the bounded response window", async
         parentThreadId: null,
         agentRole: null,
         turns: [{
-          id: "turn-owner",
+          id: "turn-request",
           status: "completed",
+          startedAt: Date.parse(issuedAt) / 1000 + 1,
+          completedAt: Date.parse(issuedAt) / 1000 + 2,
+          items: [{
+            id: "request-message",
+            type: "agentMessage",
+            text: `Decision needed\n${primaryDecisionRequestMarker(request)}`,
+          }],
+        }, {
+          id: "turn-owner",
+          status: "inProgress",
           startedAt: Date.parse(issuedAt) / 1000 + 10,
-          completedAt: Date.parse(issuedAt) / 1000 + 11,
           items: [{
             id: "message-owner",
             type: "userMessage",
@@ -260,6 +299,7 @@ it("fails closed when two allowed decision responses exist in the same window", 
     threadId: "thread-owner",
     issuedAfter: issuedAt,
     expiresAt: "2026-08-07T17:00:00.000Z",
+    requestMarker: primaryDecisionRequestMarker(request),
   })
   const rpc = child.messages().at(-1)
   child.send({
@@ -267,17 +307,23 @@ it("fails closed when two allowed decision responses exist in the same window", 
     result: {
       thread: {
         id: "thread-owner",
-        turns: ["APPROVE", "DENY"].map((text, index) => ({
-          id: `turn-${index}`,
+        turns: [{
+          id: "turn-request",
           status: "completed",
-          startedAt: Date.parse(issuedAt) / 1000 + 10 + index,
-          completedAt: Date.parse(issuedAt) / 1000 + 11 + index,
-          items: [{
+          startedAt: Date.parse(issuedAt) / 1000 + 1,
+          completedAt: Date.parse(issuedAt) / 1000 + 2,
+          items: [{ type: "agentMessage", text: primaryDecisionRequestMarker(request) }],
+        }, {
+          id: "turn-owner",
+          status: "completed",
+          startedAt: Date.parse(issuedAt) / 1000 + 10,
+          completedAt: Date.parse(issuedAt) / 1000 + 11,
+          items: ["APPROVE", "DENY"].map((text, index) => ({
             id: `message-${index}`,
             type: "userMessage",
             content: [{ type: "text", text }],
-          }],
-        })),
+          })),
+        }],
       },
     },
   })
