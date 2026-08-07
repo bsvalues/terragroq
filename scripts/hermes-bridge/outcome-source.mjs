@@ -439,7 +439,8 @@ export async function recordOwnerAuthorityDecision({
           FROM work_order_any wo
           JOIN decision d ON d.id = wo."linkedDecisionId"
         )
-       SELECT goal_any.id AS "goalId", goal_any."goalUserId", goal_any.status AS "goalStatus",
+       SELECT CURRENT_TIMESTAMP AS "transactionNow",
+         goal_any.id AS "goalId", goal_any."goalUserId", goal_any.status AS "goalStatus",
          goal_any.ref AS "goalRef", goal_any.command AS "goalCommand",
          goal_any.lane AS "goalLane", goal_any.verdict AS "goalVerdict",
          goal_any."requiresApproval" AS "goalRequiresApproval",
@@ -531,6 +532,13 @@ export async function recordOwnerAuthorityDecision({
       || !["R0", "R1"].includes(row.riskClass))) {
       throw Object.assign(new Error("Primary decision queue authority changed before recording"), {
         code: "PRIMARY_DECISION_AUTHORITY_STALE",
+      })
+    }
+    if (provenance && (!Number.isFinite(Date.parse(provenance.expiresAt))
+      || !Number.isFinite(Date.parse(row.transactionNow))
+      || Date.parse(row.transactionNow) > Date.parse(provenance.expiresAt))) {
+      throw Object.assign(new Error("Primary decision response expired before recording"), {
+        code: "PRIMARY_DECISION_EXPIRED",
       })
     }
     if (provenance) requirePrimaryDecisionPolicy(row, decisionPacket)
@@ -906,6 +914,7 @@ export async function readApprovedOwnerDecision({
       && Date.parse(storedProvenance.issuedAt) <= Date.parse(row?.decidedAt)
       && Number.isFinite(Date.parse(storedProvenance.expiresAt))
       && Date.parse(storedProvenance.expiresAt) - Date.parse(storedProvenance.issuedAt) === PRIMARY_DECISION_TTL_MS
+      && Date.parse(row?.decidedAt) <= Date.parse(storedProvenance.expiresAt)
     const provenance = validStoredProvenance ? {
       identityStatus: storedProvenance.identityStatus,
       accountEmail: storedProvenance.accountEmail,

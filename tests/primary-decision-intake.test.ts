@@ -105,6 +105,7 @@ function decisionBinding(
     },
     terminalUserId: request.ownerUserId,
     latestLeaseMetadata: { leaseStatus: "RELEASED" },
+    transactionNow: new Date(Date.parse(issuedAt) + 30_000).toISOString(),
     queueItemId: 33,
     queueTitle: request.queueTitle,
     queueObjective: request.queueObjective,
@@ -299,6 +300,36 @@ describe("secure Primary decision intake", () => {
       expectedNextState: request.expectedNextState,
       primaryDecisionProvenance: provenance,
     })).rejects.toMatchObject({ code: "PRIMARY_DECISION_AUTHORITY_STALE" })
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO decision/.test(sql))).toBe(false)
+  })
+
+  it("rejects a verified response that expires before the recording transaction", async () => {
+    const provenance = await verifyPrimaryDecisionResponse({
+      request,
+      repositoryPath: repository,
+      environment: { CODEX_THREAD_ID: "thread-owner" },
+      now: Date.parse(issuedAt) + 30_000,
+      createClient: () => fakeClient() as never,
+    })
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [decisionBinding(request.decisionPacket, {
+        transactionNow: new Date(Date.parse(provenance.expiresAt) + 1).toISOString(),
+      })] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recordOwnerAuthorityDecision({
+      query,
+      outcomeId: request.outcomeId,
+      workOrderId: request.workOrderId,
+      terminalEventId: request.terminalEventId,
+      ownerUserId: request.ownerUserId,
+      choice: "APPROVE",
+      expectedNextState: request.expectedNextState,
+      primaryDecisionProvenance: provenance,
+    })).rejects.toMatchObject({ code: "PRIMARY_DECISION_EXPIRED" })
     expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
     expect(query.mock.calls.some(([sql]) => /INSERT INTO decision/.test(sql))).toBe(false)
   })
