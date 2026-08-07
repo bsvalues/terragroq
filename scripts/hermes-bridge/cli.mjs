@@ -26,6 +26,12 @@ function print(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`)
 }
 
+export function printHermesCycleResult(value, write = process.stdout.write.bind(process.stdout)) {
+  write(value?.status === "PENDING_PRIMARY_DECISION"
+    ? `${value.prompt}\n`
+    : `${JSON.stringify(value)}\n`)
+}
+
 function flushStdout() {
   return new Promise((resolve, reject) => {
     process.stdout.write("", (error) => error ? reject(error) : resolve())
@@ -771,7 +777,9 @@ export async function runCli(command = process.argv[2]) {
   try {
     if (command === "cycle") {
       orchestrator = createResidentHermesOrchestrator()
-      print(await runHermesQueueDrain({ orchestrator, consumeDecision: consumePrimaryDecisionIntake }))
+      printHermesCycleResult(
+        await runHermesQueueDrain({ orchestrator, consumeDecision: consumePrimaryDecisionIntake }),
+      )
     }
     else if (command === "smoke") print(await smoke())
     else if (command === "recover-native-provider-wall") print(await recoverNativeProviderWall())

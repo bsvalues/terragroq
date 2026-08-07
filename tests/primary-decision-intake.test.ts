@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events"
 import { PassThrough, Writable } from "node:stream"
+import { createHash } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 
 import { CodexAppServerClient } from "@/scripts/hermes-bridge/app-server-client.mjs"
@@ -456,7 +457,51 @@ describe("secure Primary decision intake", () => {
     expect(query.mock.calls[0][0]).toContain('q."lifecycleState" = \'blocked\'')
     expect(query.mock.calls[0][0]).toContain('q."approvalState" = \'approved\'')
     expect(query.mock.calls[0][0]).toContain('q."authorityState" = \'matched\'')
+    expect(query.mock.calls[0][0]).toContain('JOIN decision approval')
+    expect(query.mock.calls[0][0]).toContain('JOIN authority_grant grant_row')
+    expect(query.mock.calls[0][0]).toContain('grant_row."revokedAt" IS NULL')
+    expect(query.mock.calls[0][0]).toContain('grant_row."expiresAt" AT TIME ZONE \'UTC\' > clock_timestamp()')
     expect(query.mock.calls[0][1]).toEqual([PRIMARY_DECISION_OWNER_EMAIL])
+  })
+
+  it("uses one database wall clock for the binding expiry fence and decidedAt", async () => {
+    const validRequest = {
+      ...request,
+      decisionPacketDigest: createHash("sha256")
+        .update(JSON.stringify(request.decisionPacket))
+        .digest("hex"),
+    }
+    const provenance = await verifyPrimaryDecisionResponse({
+      request: validRequest,
+      repositoryPath: repository,
+      environment: { CODEX_THREAD_ID: "thread-owner" },
+      now: Date.parse(issuedAt) + 30_000,
+      createClient: () => fakeClient() as never,
+    })
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [decisionBinding()] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recordOwnerAuthorityDecision({
+      query,
+      outcomeId: request.outcomeId,
+      workOrderId: request.workOrderId,
+      terminalEventId: request.terminalEventId,
+      ownerUserId: request.ownerUserId,
+      choice: "APPROVE",
+      expectedNextState: request.expectedNextState,
+      primaryDecisionProvenance: provenance,
+    })).rejects.toMatchObject({ code: "OWNER_DECISION_RECORD_WALL" })
+
+    const insertCall = query.mock.calls.find(([sql]) => /WITH write_clock AS/.test(sql))
+    expect(insertCall?.[0]).toContain('write_clock.recorded_at <= $11::timestamptz')
+    expect(insertCall?.[0]).toContain('grant_row."expiresAt" AT TIME ZONE \'UTC\' > write_clock.recorded_at')
+    expect(insertCall?.[0]).toContain('write_clock.recorded_at')
+    expect(insertCall?.[0]).toContain('"decidedAt" AT TIME ZONE \'UTC\' AS "decidedAt"')
+    expect(insertCall?.[1].at(-2)).toBe(provenance.expiresAt)
+    expect(insertCall?.[1].at(-1)).toBe(55)
   })
 
   it("rejects a terminal packet that crosses the canonical bridge policy", async () => {

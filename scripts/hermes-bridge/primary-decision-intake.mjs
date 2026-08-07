@@ -73,7 +73,9 @@ async function main(argv = process.argv.slice(2)) {
     code: "PRIMARY_DECISION_INTAKE_USAGE_WALL",
   })
   const result = await consumePrimaryDecisionIntake()
-  process.stdout.write(`${JSON.stringify(result)}\n`)
+  process.stdout.write(result.status === "PENDING_PRIMARY_DECISION"
+    ? `${result.prompt}\n`
+    : `${JSON.stringify(result)}\n`)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
