@@ -498,7 +498,7 @@ describe("secure Primary decision intake", () => {
     const insertCall = query.mock.calls.find(([sql]) => /WITH write_clock AS/.test(sql))
     expect(insertCall?.[0]).toContain('write_clock.recorded_at <= $11::timestamptz')
     expect(insertCall?.[0]).toContain('grant_row."expiresAt" AT TIME ZONE \'UTC\' > write_clock.recorded_at')
-    expect(insertCall?.[0]).toContain('write_clock.recorded_at')
+    expect(insertCall?.[0]).toContain("timezone('UTC', write_clock.recorded_at)")
     expect(insertCall?.[0]).toContain('"decidedAt" AT TIME ZONE \'UTC\' AS "decidedAt"')
     expect(insertCall?.[1].at(-2)).toBe(provenance.expiresAt)
     expect(insertCall?.[1].at(-1)).toBe(55)
