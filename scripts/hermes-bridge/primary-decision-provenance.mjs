@@ -6,11 +6,28 @@ import { CodexAppServerClient } from "./app-server-client.mjs"
 
 export const PRIMARY_DECISION_OWNER_EMAIL = "bsvalues@gmail.com"
 export const PRIMARY_DECISION_TTL_MS = 60 * 60 * 1000
+const PRIMARY_DECISION_APP_SERVER_TIMEOUT_MS = 30_000
 
 const VERIFIED = new WeakSet()
 
 function wall(code) {
   throw Object.assign(new Error(code), { code })
+}
+
+async function withDeadline(promise, timeoutMs) {
+  let timer
+  const deadline = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(Object.assign(
+      new Error("PRIMARY_DECISION_APP_SERVER_TIMEOUT"),
+      { code: "PRIMARY_DECISION_APP_SERVER_TIMEOUT" },
+    )), timeoutMs)
+    timer.unref?.()
+  })
+  try {
+    return await Promise.race([promise, deadline])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 function normalizedPath(value) {
@@ -72,7 +89,8 @@ export async function verifyPrimaryDecisionResponse({
   repositoryPath = process.cwd(),
   environment = process.env,
   now = Date.now(),
-  createClient = () => new CodexAppServerClient({ timeoutMs: 30_000 }),
+  timeoutMs = PRIMARY_DECISION_APP_SERVER_TIMEOUT_MS,
+  createClient = () => new CodexAppServerClient({ timeoutMs }),
 } = {}) {
   if (!request || typeof request !== "object") wall("PRIMARY_DECISION_REQUEST_INVALID")
   const threadId = environment.CODEX_THREAD_ID
@@ -96,14 +114,14 @@ export async function verifyPrimaryDecisionResponse({
   let account
   let response
   try {
-    await client.connect()
-    account = await client.readAccount()
-    response = await client.readLatestDirectUserChoice({
+    await withDeadline(client.connect(), timeoutMs)
+    account = await withDeadline(client.readAccount(), timeoutMs)
+    response = await withDeadline(client.readLatestDirectUserChoice({
       threadId,
       issuedAfter: request.issuedAt,
       expiresAt,
       requestMarker: primaryDecisionRequestMarker(request),
-    })
+    }), timeoutMs)
   } finally {
     client.close()
   }

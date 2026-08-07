@@ -290,9 +290,15 @@ export async function recordOwnerAuthorityDecision({
       code: "PRIMARY_DECISION_PROVENANCE_WALL",
     })
   }
+  if (primaryDecisionProvenance !== null && primaryDecisionProvenance.choice !== choice) {
+    throw Object.assign(new Error("primary decision provenance does not bind this choice"), {
+      code: "PRIMARY_DECISION_PROVENANCE_WALL",
+    })
+  }
   const provenance = primaryDecisionProvenance === null ? null : {
     identityStatus: primaryDecisionProvenance.identityStatus,
     accountEmail: primaryDecisionProvenance.accountEmail,
+    choice: primaryDecisionProvenance.choice,
     requestDigest: primaryDecisionProvenance.requestDigest,
     responseDigest: primaryDecisionProvenance.responseDigest,
     issuedAt: primaryDecisionProvenance.issuedAt,
@@ -461,6 +467,17 @@ export async function recordOwnerAuthorityDecision({
       })
     }
     const decisionPacketDigest = ownerDecisionPacketDigest(decisionPacket)
+    if (provenance && provenance.requestDigest !== primaryDecisionRequestDigest({
+      outcomeId,
+      workOrderId,
+      terminalEventId,
+      expectedNextState,
+      decisionPacketDigest,
+    })) {
+      throw Object.assign(new Error("primary decision provenance does not bind this request"), {
+        code: "PRIMARY_DECISION_PROVENANCE_WALL",
+      })
+    }
     const evidence = [...evidenceBase, `decision-packet:${decisionPacketDigest}`]
     const status = choice === "APPROVE" ? "accepted" : "rejected"
     if (row.decisionId != null) {
@@ -812,6 +829,7 @@ export async function readApprovedOwnerDecision({
     const validStoredProvenance = hasStoredProvenance
       && storedProvenance?.identityStatus === "VERIFIED_PRIMARY_CODEX_APP_SERVER"
       && storedProvenance?.accountEmail === PRIMARY_DECISION_OWNER_EMAIL
+      && storedProvenance?.choice === row.choice
       && storedProvenance?.requestDigest === expectedRequestDigest
       && typeof storedProvenance?.responseDigest === "string"
       && /^[a-f0-9]{64}$/.test(storedProvenance.responseDigest)

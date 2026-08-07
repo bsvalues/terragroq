@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from "vitest"
 
 import { CodexAppServerClient } from "@/scripts/hermes-bridge/app-server-client.mjs"
 import { consumePrimaryDecisionIntake } from "@/scripts/hermes-bridge/primary-decision-intake.mjs"
-import { readPendingPrimaryDecisionRequest } from "@/scripts/hermes-bridge/outcome-source.mjs"
+import {
+  readPendingPrimaryDecisionRequest,
+  recordOwnerAuthorityDecision,
+} from "@/scripts/hermes-bridge/outcome-source.mjs"
 import {
   primaryDecisionRequestMarker,
   primaryDecisionRequestDigest,
@@ -117,6 +120,109 @@ describe("secure Primary decision intake", () => {
       prompt: expect.stringContaining(primaryDecisionRequestMarker(request)),
     })
     expect(recordDecision).not.toHaveBeenCalled()
+  })
+
+  it("remains pending when an authenticated task has no response value", async () => {
+    const recordDecision = vi.fn()
+    await expect(consumePrimaryDecisionIntake({
+      environment: { CODEX_THREAD_ID: "thread-owner" },
+      readRequest: vi.fn(async () => request),
+      verifyResponse: vi.fn(async () => null),
+      recordDecision,
+    })).resolves.toMatchObject({
+      status: "PENDING_PRIMARY_DECISION",
+      outcomeId: 77,
+    })
+    expect(recordDecision).not.toHaveBeenCalled()
+  })
+
+  it("bounds App Server account reads and closes the client on timeout", async () => {
+    const client = fakeClient()
+    client.readAccount = vi.fn(() => new Promise(() => {}))
+    await expect(verifyPrimaryDecisionResponse({
+      request,
+      repositoryPath: repository,
+      environment: { CODEX_THREAD_ID: "thread-owner" },
+      now: Date.parse(issuedAt) + 30_000,
+      timeoutMs: 5,
+      createClient: () => client as never,
+    })).rejects.toMatchObject({ code: "PRIMARY_DECISION_APP_SERVER_TIMEOUT" })
+    expect(client.close).toHaveBeenCalledOnce()
+  })
+
+  it("rejects a verified denial provenance used for an approval", async () => {
+    const provenance = await verifyPrimaryDecisionResponse({
+      request,
+      repositoryPath: repository,
+      environment: { CODEX_THREAD_ID: "thread-owner" },
+      now: Date.parse(issuedAt) + 30_000,
+      createClient: () => fakeClient({ choice: "DENY" }) as never,
+    })
+    const query = vi.fn()
+    await expect(recordOwnerAuthorityDecision({
+      query,
+      outcomeId: request.outcomeId,
+      workOrderId: request.workOrderId,
+      terminalEventId: request.terminalEventId,
+      ownerUserId: request.ownerUserId,
+      choice: "APPROVE",
+      expectedNextState: request.expectedNextState,
+      primaryDecisionProvenance: provenance,
+    })).rejects.toMatchObject({ code: "PRIMARY_DECISION_PROVENANCE_WALL" })
+    expect(query).not.toHaveBeenCalled()
+  })
+
+  it("rejects verified provenance bound to a different persisted request", async () => {
+    const provenance = await verifyPrimaryDecisionResponse({
+      request,
+      repositoryPath: repository,
+      environment: { CODEX_THREAD_ID: "thread-owner" },
+      now: Date.parse(issuedAt) + 30_000,
+      createClient: () => fakeClient() as never,
+    })
+    const differentPacket = {
+      ...request.decisionPacket,
+      approveConsequence: "Apply a different bounded product change",
+    }
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        goalId: request.outcomeId,
+        goalUserId: request.ownerUserId,
+        goalStatus: "dismissed",
+        workOrderId: request.workOrderId,
+        workOrderUserId: request.ownerUserId,
+        latestTerminalId: request.terminalEventId,
+        latestTerminalMetadata: {
+          result: "OWNER_DECISION_REQUIRED",
+          nextState: request.expectedNextState,
+          ...differentPacket,
+        },
+        requestedTerminalId: request.terminalEventId,
+        requestedTerminalUserId: request.ownerUserId,
+        requestedTerminalMetadata: {
+          result: "OWNER_DECISION_REQUIRED",
+          nextState: request.expectedNextState,
+          ...differentPacket,
+        },
+        terminalUserId: request.ownerUserId,
+        latestLeaseMetadata: { leaseStatus: "RELEASED" },
+      }] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recordOwnerAuthorityDecision({
+      query,
+      outcomeId: request.outcomeId,
+      workOrderId: request.workOrderId,
+      terminalEventId: request.terminalEventId,
+      ownerUserId: request.ownerUserId,
+      choice: "APPROVE",
+      expectedNextState: request.expectedNextState,
+      primaryDecisionProvenance: provenance,
+    })).rejects.toMatchObject({ code: "PRIMARY_DECISION_PROVENANCE_WALL" })
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO decision/.test(sql))).toBe(false)
   })
 
   it("presents the exact request when the authenticated task has not answered yet", async () => {
