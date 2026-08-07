@@ -470,6 +470,9 @@ describe("secure Primary decision intake", () => {
     expect(query.mock.calls[0][0]).toContain('JOIN authority_grant grant_row')
     expect(query.mock.calls[0][0]).toContain('grant_row."revokedAt" IS NULL')
     expect(query.mock.calls[0][0]).toContain('grant_row."expiresAt" AT TIME ZONE \'UTC\' > clock_timestamp()')
+    expect(query.mock.calls[0][0]).toContain(
+      'terminal."createdAt" AT TIME ZONE current_setting(\'TimeZone\') AS "issuedAt"',
+    )
     expect(query.mock.calls[0][1]).toEqual([PRIMARY_DECISION_OWNER_EMAIL])
   })
 
@@ -589,6 +592,10 @@ it("projects exactly one allowed choice from the bounded response window", async
           startedAt: Date.parse(issuedAt) / 1000 + 1,
           completedAt: Date.parse(issuedAt) / 1000 + 2,
           items: [{
+            id: "request-progress",
+            type: "agentMessage",
+            text: "Preparing the exact request",
+          }, {
             id: "request-message",
             type: "agentMessage",
             text: buildPrimaryDecisionRequestPrompt(request),
@@ -610,6 +617,57 @@ it("projects exactly one allowed choice from the bounded response window", async
     choice: "APPROVE",
     messageSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
   })
+  client.close()
+})
+
+it("rejects a choice when the canonical request was not the final assistant message", async () => {
+  const child = new FakeProcess()
+  const client = new CodexAppServerClient({
+    spawn: vi.fn(() => child) as never,
+    command: "codex",
+    args: ["app-server", "--stdio"],
+  })
+  const connecting = client.connect()
+  child.send({ id: child.messages()[0].id, result: { userAgent: "fake" } })
+  await connecting
+  const pending = client.readLatestDirectUserChoice({
+    threadId: "thread-owner",
+    requestCreatedAt: issuedAt,
+    presentedAfter: issuedAt,
+    presentedBefore: "2026-08-07T17:00:00.000Z",
+    requestMarker: primaryDecisionRequestMarker(request),
+    requestPrompt: buildPrimaryDecisionRequestPrompt(request),
+  })
+  const rpc = child.messages().at(-1)
+  child.send({
+    id: rpc.id,
+    result: {
+      thread: {
+        id: "thread-owner",
+        turns: [{
+          id: "turn-request",
+          status: "completed",
+          startedAt: Date.parse(issuedAt) / 1000 + 1,
+          completedAt: Date.parse(issuedAt) / 1000 + 2,
+          items: [
+            { type: "agentMessage", text: buildPrimaryDecisionRequestPrompt(request) },
+            { type: "agentMessage", text: "Request withdrawn" },
+          ],
+        }, {
+          id: "turn-owner",
+          status: "completed",
+          startedAt: Date.parse(issuedAt) / 1000 + 10,
+          completedAt: Date.parse(issuedAt) / 1000 + 11,
+          items: [{
+            id: "message-owner",
+            type: "userMessage",
+            content: [{ type: "text", text: "APPROVE" }],
+          }],
+        }],
+      },
+    },
+  })
+  await expect(pending).resolves.toBeNull()
   client.close()
 })
 

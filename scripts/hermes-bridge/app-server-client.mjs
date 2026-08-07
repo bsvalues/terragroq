@@ -302,10 +302,11 @@ export class CodexAppServerClient {
       const priorTurn = thread.turns[turnIndex - 1]
       const priorItems = Array.isArray(priorTurn?.items) ? priorTurn.items : []
       const requestPresentedAtMs = Number(priorTurn?.completedAt) * 1_000
-      const requestMessage = priorTurn?.status === "completed"
-        ? priorItems.find((item) => item?.type === "agentMessage"
-          && typeof item.text === "string" && item.text === requestPrompt)
+      const finalAgentMessage = priorTurn?.status === "completed"
+        ? priorItems.filter((item) => item?.type === "agentMessage").at(-1)
         : null
+      const requestMessage = typeof finalAgentMessage?.text === "string"
+        && finalAgentMessage.text === requestPrompt ? finalAgentMessage : null
       if (!requestMessage || !Number.isFinite(requestPresentedAtMs)
         || requestPresentedAtMs < requestCreatedAtMs
         || requestPresentedAtMs < presentedAfterMs
