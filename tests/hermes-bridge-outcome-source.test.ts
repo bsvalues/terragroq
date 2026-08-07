@@ -573,7 +573,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       expiresAt: "2026-07-26T12:59:55.000Z",
     }
     const approvalReceipt = ownerDecisionReceipt("APPROVE", 19, 90, primaryDecisionProvenance)
-    const query = vi.fn(async () => ({ rows: [{
+    const persistedRow = {
       decisionId: 19,
       decisionRef: "OWNER-DECISION-4-88",
       status: "accepted",
@@ -598,7 +598,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       evidenceContentHash: approvalReceipt.contentHash,
       receiptMetadata: approvalReceipt.audit,
       auditMetadata: approvalReceipt.audit,
-    }] }))
+    }
+    const query = vi.fn(async () => ({ rows: [persistedRow] }))
 
     await expect(readApprovedOwnerDecision({
       query,
@@ -608,6 +609,19 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       ownerUserId: "owner",
       expectedNextState: "EXACT_NEXT_STATE",
     })).resolves.toMatchObject({ approved: true, decisionId: 19 })
+
+    const expiredQuery = vi.fn(async () => ({ rows: [{
+      ...persistedRow,
+      decidedAt: "2026-07-26T13:00:00.000Z",
+    }] }))
+    await expect(readApprovedOwnerDecision({
+      query: expiredQuery,
+      outcomeId: 4,
+      workOrderId: 42,
+      terminalEventId: 88,
+      ownerUserId: "owner",
+      expectedNextState: "EXACT_NEXT_STATE",
+    })).resolves.toBeNull()
   })
 
   it("rejects an approval without its complete evidence, trace, and audit receipt", async () => {

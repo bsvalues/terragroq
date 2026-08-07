@@ -42,9 +42,9 @@ continues to use the same database decision transaction.
 ## Validation
 
 - focused bridge, App Server, decision store, CLI, and Goal Console remediation
-  tests: 121 passed;
+  tests: 122 passed;
 - ESLint: passed with no warnings or errors;
-- full Vitest suite: 2,545 passed, 2 skipped;
+- full Vitest suite: 2,546 passed, 2 skipped;
 - Next.js production build with `NEXT_PRIVATE_BUILD_WORKER=0` and telemetry
   disabled: passed;
 - `git diff --check`: passed;
