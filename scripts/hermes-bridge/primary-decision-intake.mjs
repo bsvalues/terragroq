@@ -29,6 +29,7 @@ export async function consumePrimaryDecisionIntake({
   const pending = {
     status: "PENDING_PRIMARY_DECISION",
     outcomeId: request.outcomeId,
+    queueItemId: request.queueItemId,
     requestDigest: primaryDecisionRequestDigest(request),
     prompt: buildPrimaryDecisionRequestPrompt(request),
   }
@@ -52,6 +53,7 @@ export async function consumePrimaryDecisionIntake({
     query,
     databaseUrl,
     outcomeId: request.outcomeId,
+    queueItemId: request.queueItemId,
     workOrderId: request.workOrderId,
     terminalEventId: request.terminalEventId,
     ownerUserId: request.ownerUserId,
@@ -62,6 +64,7 @@ export async function consumePrimaryDecisionIntake({
   return {
     status: result.replayed ? "PRIMARY_DECISION_REPLAYED" : "PRIMARY_DECISION_RECORDED",
     outcomeId: request.outcomeId,
+    queueItemId: request.queueItemId,
     choice: response.choice,
     resumeReleased: result.resumeReleased,
     decisionRef: result.decisionRef,
@@ -74,7 +77,7 @@ async function main(argv = process.argv.slice(2)) {
   })
   const result = await consumePrimaryDecisionIntake()
   process.stdout.write(result.status === "PENDING_PRIMARY_DECISION"
-    ? `${result.prompt}\n`
+    ? result.prompt
     : `${JSON.stringify(result)}\n`)
 }
 

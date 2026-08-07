@@ -221,7 +221,7 @@ describe("Hermes bridge CLI", () => {
     }, (value) => writes.push(String(value)))
 
     expect(writes).toEqual([
-      "WILLIAMOS_PRIMARY_DECISION_REQUEST:exact\nReply only Approve or Deny\n",
+      "WILLIAMOS_PRIMARY_DECISION_REQUEST:exact\nReply only Approve or Deny",
     ])
     expect(agentEntrypoint).toContain(
       "emit that text byte-for-byte as the entire final assistant message",
