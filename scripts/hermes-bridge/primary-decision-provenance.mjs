@@ -14,7 +14,10 @@ function wall(code) {
 }
 
 function normalizedPath(value) {
-  return path.resolve(value).replaceAll("/", "\\").toLowerCase()
+  const resolved = path.resolve(value)
+  return process.platform === "win32"
+    ? resolved.replaceAll("/", "\\").toLowerCase()
+    : resolved
 }
 
 function gitCommonDirectory(repositoryPath) {
@@ -45,6 +48,23 @@ export function primaryDecisionRequestDigest(request) {
     expectedNextState: request.expectedNextState,
     decisionPacketDigest: request.decisionPacketDigest,
   })).digest("hex")
+}
+
+export function primaryDecisionRequestMarker(request) {
+  return `WILLIAMOS_PRIMARY_DECISION_REQUEST:${primaryDecisionRequestDigest(request)}`
+}
+
+export function buildPrimaryDecisionRequestPrompt(request) {
+  return `${primaryDecisionRequestMarker(request)}
+
+WilliamOS needs one Primary decision.
+
+- Decision: ${request.decisionPacket.blockedAction}
+- Why: ${request.decisionPacket.authorityBoundary}
+- Approve: ${request.decisionPacket.approveConsequence}
+- Deny: ${request.decisionPacket.denyConsequence}
+
+Reply only Approve or Deny. This request expires in one hour.`
 }
 
 export async function verifyPrimaryDecisionResponse({
@@ -82,12 +102,14 @@ export async function verifyPrimaryDecisionResponse({
       threadId,
       issuedAfter: request.issuedAt,
       expiresAt,
+      requestMarker: primaryDecisionRequestMarker(request),
     })
   } finally {
     client.close()
   }
   if (account?.authType !== "chatgpt"
-    || account.email?.trim().toLowerCase() !== PRIMARY_DECISION_OWNER_EMAIL
+    || typeof account?.email !== "string"
+    || account.email.trim().toLowerCase() !== PRIMARY_DECISION_OWNER_EMAIL
     || account.requiresOpenaiAuth !== true) wall("PRIMARY_DECISION_ACCOUNT_WALL")
   if (!response) wall("PRIMARY_DECISION_RESPONSE_NOT_FOUND")
   if (response.threadId !== threadId

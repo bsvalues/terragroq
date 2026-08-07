@@ -268,23 +268,33 @@ export class CodexAppServerClient {
     })
   }
 
-  async readLatestDirectUserChoice({ threadId, issuedAfter, expiresAt }) {
+  async readLatestDirectUserChoice({ threadId, issuedAfter, expiresAt, requestMarker }) {
     const response = await this.request("thread/read", { threadId, includeTurns: true })
     const thread = response?.thread
     if (!thread || thread.id !== threadId || !Array.isArray(thread.turns)) return null
     const issuedAfterMs = Date.parse(issuedAfter)
     const expiresAtMs = Date.parse(expiresAt)
     if (!Number.isFinite(issuedAfterMs) || !Number.isFinite(expiresAtMs)
+      || typeof requestMarker !== "string" || requestMarker.trim() === ""
       || expiresAtMs <= issuedAfterMs) return null
 
     const candidates = []
-    for (const turn of thread.turns) {
+    for (let turnIndex = 0; turnIndex < thread.turns.length; turnIndex += 1) {
+      const turn = thread.turns[turnIndex]
       const startedAtMs = Number(turn?.startedAt) * 1_000
       const completedAtMs = Number(turn?.completedAt) * 1_000
-      if (turn?.status !== "completed"
-        || !Number.isFinite(startedAtMs) || !Number.isFinite(completedAtMs)
-        || startedAtMs < issuedAfterMs || completedAtMs > expiresAtMs
+      const completed = turn?.status === "completed"
+      if (!completed && turn?.status !== "inProgress") continue
+      if (!Number.isFinite(startedAtMs) || startedAtMs < issuedAfterMs
+        || startedAtMs > expiresAtMs
+        || (completed && (!Number.isFinite(completedAtMs) || completedAtMs > expiresAtMs))
         || !Array.isArray(turn.items)) continue
+      const priorTurn = thread.turns[turnIndex - 1]
+      const priorItems = Array.isArray(priorTurn?.items) ? priorTurn.items : []
+      const requestPresented = priorTurn?.status === "completed"
+        && priorItems.some((item) => item?.type === "agentMessage"
+          && typeof item.text === "string" && item.text.includes(requestMarker))
+      if (!requestPresented) continue
       for (const item of turn.items) {
         const content = Array.isArray(item?.content) ? item.content : []
         if (item?.type !== "userMessage" || content.length !== 1

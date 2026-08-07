@@ -16,13 +16,16 @@ Codex App Server. Callers cannot provide those values.
 - protected or explicitly blocked outcome text is rejected;
 - the response must come from the declared Primary ChatGPT account in a root
   Codex task for the same Git repository;
+- the response turn must immediately follow the assistant turn that presented
+  the exact request-specific challenge marker;
 - only an exact `APPROVE`, `DENY`, or `DECLINE` response is recognized;
 - responses expire after one hour and duplicate candidates fail closed;
 - the existing transactional owner-decision contract provides stale-state,
   active-lease, replay, conflict, and exactly-once fencing;
 - non-secret request and response digests are persisted in the decision
   evidence and audit records;
-- a resident cycle without an authenticated Codex task remains inert.
+- a resident cycle without a bound response remains inert and returns the
+  exact expiring request instead of advancing the queue.
 
 No transcript text, credentials, cookies, tokens, session values, or secrets
 are returned or persisted by the bridge.
@@ -36,18 +39,19 @@ continues to use the same database decision transaction.
 
 ## Validation
 
-- focused bridge, App Server, decision store, CLI, and Goal Console tests:
-  131 passed;
+- focused bridge, App Server, decision store, CLI, and Goal Console remediation
+  tests: 112 passed;
 - ESLint: passed with no warnings or errors;
-- full Vitest suite: 2,532 passed, 2 skipped;
+- full Vitest suite: 2,536 passed, 2 skipped;
 - Next.js production build with `NEXT_PRIVATE_BUILD_WORKER=0` and telemetry
   disabled: passed;
 - `git diff --check`: passed;
 - changed-file secret-like-value scan: passed.
 
 The first build retry encountered a missing pnpm-linked Next worker file. The
-unchanged frozen lockfile was rematerialized in the isolated worktree and the
-build then passed. No dependency declaration changed.
+damaged generated package material was quarantined, the unchanged frozen
+lockfile was rematerialized in the isolated worktree, and the build then
+passed. No dependency declaration changed.
 
 ## Boundaries
 

@@ -6,10 +6,14 @@ import {
   recordOwnerAuthorityDecision,
 } from "./outcome-source.mjs"
 import {
+  buildPrimaryDecisionRequestPrompt,
   isVerifiedPrimaryDecisionResponse,
   PRIMARY_DECISION_OWNER_EMAIL,
+  primaryDecisionRequestDigest,
   verifyPrimaryDecisionResponse,
 } from "./primary-decision-provenance.mjs"
+
+export { buildPrimaryDecisionRequestPrompt }
 
 export async function consumePrimaryDecisionIntake({
   repositoryPath = process.cwd(),
@@ -22,10 +26,22 @@ export async function consumePrimaryDecisionIntake({
 } = {}) {
   const request = await readRequest({ query, databaseUrl, ownerEmail: PRIMARY_DECISION_OWNER_EMAIL })
   if (!request) return { status: "NO_PENDING_PRIMARY_DECISION" }
-  if (typeof environment.CODEX_THREAD_ID !== "string" || environment.CODEX_THREAD_ID.trim() === "") {
-    return { status: "PENDING_PRIMARY_DECISION", outcomeId: request.outcomeId }
+  const pending = {
+    status: "PENDING_PRIMARY_DECISION",
+    outcomeId: request.outcomeId,
+    requestDigest: primaryDecisionRequestDigest(request),
+    prompt: buildPrimaryDecisionRequestPrompt(request),
   }
-  const response = await verifyResponse({ request, repositoryPath, environment })
+  if (typeof environment.CODEX_THREAD_ID !== "string" || environment.CODEX_THREAD_ID.trim() === "") {
+    return pending
+  }
+  let response
+  try {
+    response = await verifyResponse({ request, repositoryPath, environment })
+  } catch (error) {
+    if (error?.code === "PRIMARY_DECISION_RESPONSE_NOT_FOUND") return pending
+    throw error
+  }
   if (!isVerifiedPrimaryDecisionResponse(response)) {
     throw Object.assign(new Error("Primary decision response was not verified"), {
       code: "PRIMARY_DECISION_PROVENANCE_WALL",
