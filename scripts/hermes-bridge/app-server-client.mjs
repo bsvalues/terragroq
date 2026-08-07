@@ -268,6 +268,50 @@ export class CodexAppServerClient {
     })
   }
 
+  async readLatestDirectUserChoice({ threadId, issuedAfter, expiresAt }) {
+    const response = await this.request("thread/read", { threadId, includeTurns: true })
+    const thread = response?.thread
+    if (!thread || thread.id !== threadId || !Array.isArray(thread.turns)) return null
+    const issuedAfterMs = Date.parse(issuedAfter)
+    const expiresAtMs = Date.parse(expiresAt)
+    if (!Number.isFinite(issuedAfterMs) || !Number.isFinite(expiresAtMs)
+      || expiresAtMs <= issuedAfterMs) return null
+
+    const candidates = []
+    for (const turn of thread.turns) {
+      const startedAtMs = Number(turn?.startedAt) * 1_000
+      const completedAtMs = Number(turn?.completedAt) * 1_000
+      if (turn?.status !== "completed"
+        || !Number.isFinite(startedAtMs) || !Number.isFinite(completedAtMs)
+        || startedAtMs < issuedAfterMs || completedAtMs > expiresAtMs
+        || !Array.isArray(turn.items)) continue
+      for (const item of turn.items) {
+        const content = Array.isArray(item?.content) ? item.content : []
+        if (item?.type !== "userMessage" || content.length !== 1
+          || content[0]?.type !== "text" || typeof content[0]?.text !== "string") continue
+        const normalized = content[0].text.trim().toUpperCase()
+        const choice = normalized === "APPROVE" ? "APPROVE"
+          : ["DENY", "DECLINE"].includes(normalized) ? "DENY" : null
+        if (!choice) continue
+        candidates.push({
+          threadId: thread.id,
+          threadSource: typeof thread.threadSource === "string" ? thread.threadSource : null,
+          source: typeof thread.source === "string" ? thread.source : null,
+          cwd: typeof thread.cwd === "string" ? thread.cwd : null,
+          parentThreadId: thread.parentThreadId ?? null,
+          agentRole: thread.agentRole ?? null,
+          turnId: turn.id,
+          turnStartedAt: Number(turn.startedAt),
+          turnCompletedAt: Number(turn.completedAt),
+          messageId: item.id,
+          messageSha256: createHash("sha256").update(content[0].text, "utf8").digest("hex"),
+          choice,
+        })
+      }
+    }
+    return candidates.length === 1 ? Object.freeze(candidates[0]) : null
+  }
+
   /** @param {any} options */
   async runTurn({ threadId, prompt, input, turn = {}, timeoutMs = this.timeoutMs, signal } = {}) {
     if (this.turnWaiter) throw new Error("Only one turn may run per App Server client")
