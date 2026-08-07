@@ -22,6 +22,7 @@ const issuedAt = "2026-08-07T16:00:00.000Z"
 
 const request = {
   outcomeId: 77,
+  queueItemId: 33,
   workOrderId: 91,
   terminalEventId: 120,
   ownerUserId: "owner-1",
@@ -190,6 +191,7 @@ describe("secure Primary decision intake", () => {
     })).resolves.toEqual({
       status: "PENDING_PRIMARY_DECISION",
       outcomeId: 77,
+      queueItemId: 33,
       requestDigest: primaryDecisionRequestDigest(request),
       prompt: expect.stringContaining(primaryDecisionRequestMarker(request)),
     })
@@ -236,6 +238,7 @@ describe("secure Primary decision intake", () => {
     await expect(recordOwnerAuthorityDecision({
       query,
       outcomeId: request.outcomeId,
+      queueItemId: request.queueItemId,
       workOrderId: request.workOrderId,
       terminalEventId: request.terminalEventId,
       ownerUserId: request.ownerUserId,
@@ -267,6 +270,7 @@ describe("secure Primary decision intake", () => {
     await expect(recordOwnerAuthorityDecision({
       query,
       outcomeId: request.outcomeId,
+      queueItemId: request.queueItemId,
       workOrderId: request.workOrderId,
       terminalEventId: request.terminalEventId,
       ownerUserId: request.ownerUserId,
@@ -297,6 +301,7 @@ describe("secure Primary decision intake", () => {
     await expect(recordOwnerAuthorityDecision({
       query,
       outcomeId: request.outcomeId,
+      queueItemId: request.queueItemId,
       workOrderId: request.workOrderId,
       terminalEventId: request.terminalEventId,
       ownerUserId: request.ownerUserId,
@@ -327,6 +332,7 @@ describe("secure Primary decision intake", () => {
     await expect(recordOwnerAuthorityDecision({
       query,
       outcomeId: request.outcomeId,
+      queueItemId: request.queueItemId,
       workOrderId: request.workOrderId,
       terminalEventId: request.terminalEventId,
       ownerUserId: request.ownerUserId,
@@ -356,6 +362,7 @@ describe("secure Primary decision intake", () => {
     await expect(recordOwnerAuthorityDecision({
       query,
       outcomeId: request.outcomeId,
+      queueItemId: request.queueItemId,
       workOrderId: request.workOrderId,
       terminalEventId: request.terminalEventId,
       ownerUserId: request.ownerUserId,
@@ -406,6 +413,7 @@ describe("secure Primary decision intake", () => {
 
     expect(recordDecision).toHaveBeenCalledWith(expect.objectContaining({
       outcomeId: 77,
+      queueItemId: 33,
       workOrderId: 91,
       terminalEventId: 120,
       ownerUserId: "owner-1",
@@ -419,6 +427,7 @@ describe("secure Primary decision intake", () => {
     expect(result).toEqual({
       status: "PRIMARY_DECISION_RECORDED",
       outcomeId: 77,
+      queueItemId: 33,
       choice: "APPROVE",
       resumeReleased: true,
       decisionRef: "OWNER-DECISION-77-120",
@@ -487,6 +496,7 @@ describe("secure Primary decision intake", () => {
     await expect(recordOwnerAuthorityDecision({
       query,
       outcomeId: request.outcomeId,
+      queueItemId: request.queueItemId,
       workOrderId: request.workOrderId,
       terminalEventId: request.terminalEventId,
       ownerUserId: request.ownerUserId,
@@ -496,6 +506,11 @@ describe("secure Primary decision intake", () => {
     })).rejects.toMatchObject({ code: "OWNER_DECISION_RECORD_WALL" })
 
     const insertCall = query.mock.calls.find(([sql]) => /WITH write_clock AS/.test(sql))
+    const bindingCall = query.mock.calls.find(([sql]) => /queue_item AS/.test(sql))
+    expect(bindingCall?.[0]).toContain('AND ($7::integer IS NULL OR id = $7::integer)')
+    expect(bindingCall?.[0]).toContain('AND "activeWorkOrderId" = $2::integer')
+    expect(bindingCall?.[0]).toContain('ORDER BY id DESC')
+    expect(bindingCall?.[1].at(-1)).toBe(request.queueItemId)
     expect(insertCall?.[0]).toContain('write_clock.recorded_at <= $11::timestamptz')
     expect(insertCall?.[0]).toContain('grant_row."expiresAt" AT TIME ZONE \'UTC\' > write_clock.recorded_at')
     expect(insertCall?.[0]).toContain("timezone('UTC', write_clock.recorded_at)")

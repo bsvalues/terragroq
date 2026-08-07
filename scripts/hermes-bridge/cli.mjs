@@ -28,7 +28,7 @@ function print(value) {
 
 export function printHermesCycleResult(value, write = process.stdout.write.bind(process.stdout)) {
   write(value?.status === "PENDING_PRIMARY_DECISION"
-    ? `${value.prompt}\n`
+    ? value.prompt
     : `${JSON.stringify(value)}\n`)
 }
 

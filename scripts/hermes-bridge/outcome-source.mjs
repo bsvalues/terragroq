@@ -161,7 +161,8 @@ export async function readPendingPrimaryDecisionRequest({
          wo.id AS "workOrderId", wo.ref AS "workOrderRef",
          terminal.id AS "terminalEventId",
          terminal."createdAt" AT TIME ZONE 'UTC' AS "issuedAt",
-         terminal.metadata AS "terminalMetadata", q."outcomeKey", q.title AS "queueTitle",
+         terminal.metadata AS "terminalMetadata", q.id AS "queueItemId",
+         q."outcomeKey", q.title AS "queueTitle",
          q.objective AS "queueObjective", q."riskClass", q."authorityLevel",
          q."authoritySubject", q."authorityAction"
        FROM goal g
@@ -236,7 +237,7 @@ export async function readPendingPrimaryDecisionRequest({
     const row = rows[0]
     const decisionPacket = persistedOwnerDecisionPacket(row.terminalMetadata)
     const expectedNextState = row.terminalMetadata?.nextState
-    const ids = [row.outcomeId, row.workOrderId, row.terminalEventId].map(Number)
+    const ids = [row.outcomeId, row.queueItemId, row.workOrderId, row.terminalEventId].map(Number)
     const issuedAt = normalizedTimestamp(row.issuedAt)
     if (!decisionPacket || ids.some((value) => !Number.isSafeInteger(value) || value <= 0)
       || typeof expectedNextState !== "string"
@@ -249,8 +250,9 @@ export async function readPendingPrimaryDecisionRequest({
     requirePrimaryDecisionPolicy(row, decisionPacket)
     return Object.freeze({
       outcomeId: ids[0],
-      workOrderId: ids[1],
-      terminalEventId: ids[2],
+      queueItemId: ids[1],
+      workOrderId: ids[2],
+      terminalEventId: ids[3],
       ownerUserId: row.ownerUserId,
       goalRef: row.goalRef,
       workOrderRef: row.workOrderRef,
@@ -338,6 +340,7 @@ export async function recordOwnerAuthorityDecision({
   query,
   databaseUrl = process.env.DATABASE_URL,
   outcomeId,
+  queueItemId = null,
   workOrderId,
   terminalEventId,
   ownerUserId,
@@ -354,6 +357,12 @@ export async function recordOwnerAuthorityDecision({
   }
   if (primaryDecisionProvenance !== null && primaryDecisionProvenance.choice !== choice) {
     throw Object.assign(new Error("primary decision provenance does not bind this choice"), {
+      code: "PRIMARY_DECISION_PROVENANCE_WALL",
+    })
+  }
+  if (primaryDecisionProvenance !== null
+    && (!Number.isSafeInteger(queueItemId) || queueItemId <= 0)) {
+    throw Object.assign(new Error("primary decision queue identity is invalid"), {
       code: "PRIMARY_DECISION_PROVENANCE_WALL",
     })
   }
@@ -443,6 +452,10 @@ export async function recordOwnerAuthorityDecision({
            "activeWorkOrderId"
          FROM outcome_queue_item
          WHERE "userId" = $4 AND "goalId" = $1::integer
+           AND ($7::integer IS NULL OR id = $7::integer)
+           AND "activeWorkOrderId" = $2::integer
+         ORDER BY id DESC
+         LIMIT 1
          FOR UPDATE
        ), live_approval AS (
          SELECT approval.id
@@ -535,7 +548,7 @@ export async function recordOwnerAuthorityDecision({
         LEFT JOIN prior_request ON TRUE
         LEFT JOIN consumed_binding ON TRUE
         LEFT JOIN linked_work_order_decision ON TRUE`,
-      [outcomeId, workOrderId, terminalEventId, ownerUserId, requestKey, terminalKey],
+      [outcomeId, workOrderId, terminalEventId, ownerUserId, requestKey, terminalKey, queueItemId],
     )
     const row = binding?.rows?.[0] ?? {}
     if (row.goalUserId != null && row.goalUserId !== ownerUserId
@@ -606,6 +619,7 @@ export async function recordOwnerAuthorityDecision({
     const decisionPacketDigest = ownerDecisionPacketDigest(decisionPacket)
     if (provenance && provenance.requestDigest !== primaryDecisionRequestDigest({
       outcomeId,
+      queueItemId,
       workOrderId,
       terminalEventId,
       expectedNextState,
@@ -633,6 +647,7 @@ export async function recordOwnerAuthorityDecision({
       const priorPayload = {
         outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState,
         decisionId: prior.decisionId, decisionRef, requestKey, decisionPacket, decisionPacketDigest,
+        ...(provenance ? { queueItemId } : {}),
         ...(provenance ? { primaryDecisionProvenance: provenance } : {}),
       }
       const priorNotes = canonicalJson(priorPayload)
@@ -726,6 +741,7 @@ export async function recordOwnerAuthorityDecision({
         `Owner authority decision for ${terminalKey}`,
         JSON.stringify({
           outcomeId, workOrderId, terminalEventId, expectedNextState, requestKey,
+          ...(provenance ? { queueItemId } : {}),
           decisionPacket, decisionPacketDigest,
         }),
         choice,
@@ -758,6 +774,7 @@ export async function recordOwnerAuthorityDecision({
     const evidencePayload = {
       outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState,
       decisionId: decisionRow.id, decisionRef, requestKey, decisionPacket, decisionPacketDigest,
+      ...(provenance ? { queueItemId } : {}),
       ...(provenance ? { primaryDecisionProvenance: provenance } : {}),
     }
     const evidenceInserted = await runQuery(
@@ -977,12 +994,15 @@ export async function readApprovedOwnerDecision({
       && Object.hasOwn(storedPayload, "primaryDecisionProvenance")
     const expectedRequestDigest = decisionPacketDigest ? primaryDecisionRequestDigest({
       outcomeId,
+      queueItemId: Number(storedPayload?.queueItemId),
       workOrderId: resolvedWorkOrderId,
       terminalEventId: resolvedTerminalEventId,
       expectedNextState,
       decisionPacketDigest,
     }) : null
     const validStoredProvenance = hasStoredProvenance
+      && Number.isSafeInteger(Number(storedPayload?.queueItemId))
+      && Number(storedPayload.queueItemId) > 0
       && storedProvenance?.identityStatus === "VERIFIED_PRIMARY_CODEX_APP_SERVER"
       && storedProvenance?.accountEmail === PRIMARY_DECISION_OWNER_EMAIL
       && storedProvenance?.choice === row.choice
@@ -1032,6 +1052,7 @@ export async function readApprovedOwnerDecision({
       requestKey,
       decisionPacket,
       decisionPacketDigest,
+      ...(provenance ? { queueItemId: Number(storedPayload.queueItemId) } : {}),
       ...(provenance ? { primaryDecisionProvenance: provenance } : {}),
     } : null
     const evidenceNotes = evidencePayload ? canonicalJson(evidencePayload) : null

@@ -60,6 +60,7 @@ export function isVerifiedPrimaryDecisionResponse(value) {
 export function primaryDecisionRequestDigest(request) {
   return createHash("sha256").update(JSON.stringify({
     outcomeId: request.outcomeId,
+    queueItemId: request.queueItemId,
     workOrderId: request.workOrderId,
     terminalEventId: request.terminalEventId,
     expectedNextState: request.expectedNextState,

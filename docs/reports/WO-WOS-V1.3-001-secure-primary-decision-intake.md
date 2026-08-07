@@ -45,7 +45,9 @@ when a decision is pending. The binding insert uses one database wall-clock
 instant to fence both consent and grant expiry and persists that instant as a
 UTC wall timestamp in `decidedAt`. The root Codex entrypoint requires the
 canonical stdout to become the complete assistant response before the owner
-reply is eligible.
+reply is eligible. The request digest and recording transaction are also bound
+to the exact queue row, preventing authority from a sibling history row from
+authorizing the request.
 
 ## Validation
 

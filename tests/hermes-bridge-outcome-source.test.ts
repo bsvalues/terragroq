@@ -77,6 +77,7 @@ function ownerDecisionReceipt(
   ]
   const payload = {
     outcomeId: 4,
+    ...(primaryDecisionProvenance ? { queueItemId: 33 } : {}),
     workOrderId: 42,
     terminalEventId: 88,
     ownerUserId: "owner",
@@ -563,6 +564,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       choice: "APPROVE",
       requestDigest: primaryDecisionRequestDigest({
         outcomeId: 4,
+        queueItemId: 33,
         workOrderId: 42,
         terminalEventId: 88,
         expectedNextState: "EXACT_NEXT_STATE",
