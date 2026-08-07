@@ -13,6 +13,9 @@ Codex App Server. Callers cannot provide those values.
 
 - exactly one current WilliamOS-native R0/R1 request must be actionable;
 - the queue item must remain blocked, approved, and authority-verified;
+- the presented request and its digest bind the exact outcome key, queue
+  version, terminal event, risk class, authority tuple, approval decision,
+  authority grant, allowed choices, and recommendation;
 - protected or explicitly blocked outcome text is rejected;
 - the response must come from the declared Primary ChatGPT account in a root
   Codex task for the same Git repository;
@@ -24,6 +27,8 @@ Codex App Server. Callers cannot provide those values.
   the underlying terminal wall is older, and duplicate candidates fail closed;
 - the existing transactional owner-decision contract provides stale-state,
   active-lease, replay, conflict, and exactly-once fencing;
+- the locked recording transaction rechecks that complete presented snapshot
+  and rejects any intervening queue, approval, or grant change before insert;
 - non-secret request and response digests are persisted in the decision
   evidence and audit records;
 - a resident cycle without a bound response remains inert and returns the
@@ -39,6 +44,12 @@ together and now states that the same exact request can be answered in the
 authenticated Codex task. The existing browser action remains available and
 continues to use the same database decision transaction.
 
+The canonical request shows the owner the outcome key, observed queue version,
+terminal event, exact authority scope, approval and grant references, allowed
+choices, system recommendation, and both consequences before consent.
+The recommendation is derived by an explicit default-deny policy with a visible
+rationale; WilliamOS does not bias the owner toward granting new authority.
+
 Pending intake now requires the same live approval and authority-grant state as
 queue acquisition, and the resident CLI emits only the canonical request text
 when a decision is pending. The binding insert uses one database wall-clock
@@ -52,9 +63,9 @@ authorizing the request.
 ## Validation
 
 - focused bridge, App Server, decision store, CLI, and Goal Console remediation
-  tests: 118 passed;
+  tests: 148 passed;
 - ESLint: passed with no warnings or errors;
-- full Vitest suite: 2,550 passed, 2 skipped (the final run used a 15-second
+- full Vitest suite: 2,552 passed, 2 skipped (the final run used a 15-second
   per-test timeout after unrelated process-concurrency tests exceeded their
   default timeout under host contention);
 - resident database request projection: passed with

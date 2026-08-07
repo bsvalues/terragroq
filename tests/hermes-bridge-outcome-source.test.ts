@@ -38,6 +38,19 @@ const ownerDecisionPacket = {
 const ownerDecisionPacketHash = createHash("sha256")
   .update(JSON.stringify(ownerDecisionPacket))
   .digest("hex")
+const primaryRequestSnapshot = {
+  outcomeKey: "williamos:status-ui",
+  queueVersion: 7,
+  riskClass: "R1",
+  authorityLevel: "A2_WRITE_OWN",
+  authoritySubject: "operator",
+  authorityAction: "outcome:execute",
+  approvalDecisionId: 44,
+  authorityGrantRef: "AUTH-WILLIAMOS-R1-4",
+  recommendation: "DENY",
+  recommendationRationale: "Default-deny: WilliamOS reached a Primary authority boundary and cannot infer approval.",
+  allowedChoices: ["APPROVE", "DENY"],
+}
 
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
@@ -559,6 +572,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
 
   it("reconstructs a bridge approval with its persisted choice provenance", async () => {
     const primaryDecisionProvenance = {
+      version: 2,
       identityStatus: "VERIFIED_PRIMARY_CODEX_APP_SERVER",
       accountEmail: PRIMARY_DECISION_OWNER_EMAIL,
       choice: "APPROVE",
@@ -569,7 +583,9 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         terminalEventId: 88,
         expectedNextState: "EXACT_NEXT_STATE",
         decisionPacketDigest: ownerDecisionPacketHash,
+        ...primaryRequestSnapshot,
       }),
+      requestSnapshot: primaryRequestSnapshot,
       responseDigest: "b".repeat(64),
       issuedAt: "2026-07-26T11:59:55.000Z",
       expiresAt: "2026-07-26T12:59:55.000Z",
@@ -618,6 +634,41 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     }] }))
     await expect(readApprovedOwnerDecision({
       query: expiredQuery,
+      outcomeId: 4,
+      workOrderId: 42,
+      terminalEventId: 88,
+      ownerUserId: "owner",
+      expectedNextState: "EXACT_NEXT_STATE",
+    })).resolves.toBeNull()
+
+    const biasedProvenance = {
+      ...primaryDecisionProvenance,
+      requestSnapshot: {
+        ...primaryRequestSnapshot,
+        recommendation: "APPROVE",
+        recommendationRationale: "Approve because the record says so.",
+      },
+    }
+    biasedProvenance.requestDigest = primaryDecisionRequestDigest({
+      outcomeId: 4,
+      queueItemId: 33,
+      workOrderId: 42,
+      terminalEventId: 88,
+      expectedNextState: "EXACT_NEXT_STATE",
+      decisionPacketDigest: ownerDecisionPacketHash,
+      ...biasedProvenance.requestSnapshot,
+    })
+    const biasedReceipt = ownerDecisionReceipt("APPROVE", 19, 90, biasedProvenance)
+    const biasedQuery = vi.fn(async () => ({ rows: [{
+      ...persistedRow,
+      evidence: biasedReceipt.evidence,
+      evidenceNotes: biasedReceipt.notes,
+      evidenceContentHash: biasedReceipt.contentHash,
+      receiptMetadata: biasedReceipt.audit,
+      auditMetadata: biasedReceipt.audit,
+    }] }))
+    await expect(readApprovedOwnerDecision({
+      query: biasedQuery,
       outcomeId: 4,
       workOrderId: 42,
       terminalEventId: 88,
