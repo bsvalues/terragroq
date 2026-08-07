@@ -1208,7 +1208,6 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       reviewedHeadSha: "b".repeat(40),
       mergeSha: "c".repeat(40),
       proofDigest: "d".repeat(64),
-      proofDigest: "d".repeat(64),
     })).resolves.toBe(false)
   })
 
