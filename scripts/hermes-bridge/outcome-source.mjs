@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { evaluateOutcomePolicy } from "./policy.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
 import {
+  derivePrimaryDecisionRecommendation,
   isVerifiedPrimaryDecisionResponse,
   PRIMARY_DECISION_OWNER_EMAIL,
   PRIMARY_DECISION_TTL_MS,
@@ -161,10 +162,11 @@ export async function readPendingPrimaryDecisionRequest({
          wo.id AS "workOrderId", wo.ref AS "workOrderRef",
          terminal.id AS "terminalEventId",
          terminal."createdAt" AT TIME ZONE current_setting('TimeZone') AS "issuedAt",
-         terminal.metadata AS "terminalMetadata", q.id AS "queueItemId",
-         q."outcomeKey", q.title AS "queueTitle",
-         q.objective AS "queueObjective", q."riskClass", q."authorityLevel",
-         q."authoritySubject", q."authorityAction"
+          terminal.metadata AS "terminalMetadata", q.id AS "queueItemId",
+          q."outcomeKey", q.version AS "queueVersion", q.title AS "queueTitle",
+          q.objective AS "queueObjective", q."riskClass", q."authorityLevel",
+          q."authoritySubject", q."authorityAction",
+          approval.id AS "approvalDecisionId", grant_row.ref AS "authorityGrantRef"
        FROM goal g
        JOIN "user" owner ON owner.id = g."userId" AND lower(owner.email) = lower($1)
        JOIN work_order wo ON wo."userId" = g."userId"
@@ -238,16 +240,25 @@ export async function readPendingPrimaryDecisionRequest({
     const decisionPacket = persistedOwnerDecisionPacket(row.terminalMetadata)
     const expectedNextState = row.terminalMetadata?.nextState
     const ids = [row.outcomeId, row.queueItemId, row.workOrderId, row.terminalEventId].map(Number)
+    const queueVersion = Number(row.queueVersion)
+    const approvalDecisionId = Number(row.approvalDecisionId)
     const issuedAt = normalizedTimestamp(row.issuedAt)
     if (!decisionPacket || ids.some((value) => !Number.isSafeInteger(value) || value <= 0)
       || typeof expectedNextState !== "string"
       || !/^[A-Z][A-Z0-9_]{1,79}$/.test(expectedNextState)
+      || !Number.isSafeInteger(queueVersion) || queueVersion < 0
+      || !Number.isSafeInteger(approvalDecisionId) || approvalDecisionId <= 0
+      || typeof row.authorityGrantRef !== "string" || row.authorityGrantRef.trim() === ""
       || !issuedAt) {
       throw Object.assign(new Error("Primary decision request is malformed"), {
         code: "PRIMARY_DECISION_REQUEST_INVALID",
       })
     }
     requirePrimaryDecisionPolicy(row, decisionPacket)
+    const recommendation = derivePrimaryDecisionRecommendation({
+      riskClass: row.riskClass,
+      decisionPacket,
+    })
     return Object.freeze({
       outcomeId: ids[0],
       queueItemId: ids[1],
@@ -257,7 +268,16 @@ export async function readPendingPrimaryDecisionRequest({
       goalRef: row.goalRef,
       workOrderRef: row.workOrderRef,
       outcomeKey: row.outcomeKey,
+      queueVersion,
       riskClass: row.riskClass,
+      authorityLevel: row.authorityLevel,
+      authoritySubject: row.authoritySubject,
+      authorityAction: row.authorityAction,
+      approvalDecisionId,
+      authorityGrantRef: row.authorityGrantRef,
+      recommendation: recommendation.choice,
+      recommendationRationale: recommendation.rationale,
+      allowedChoices: Object.freeze(["APPROVE", "DENY"]),
       expectedNextState,
       issuedAt,
       decisionPacket,
@@ -367,10 +387,12 @@ export async function recordOwnerAuthorityDecision({
     })
   }
   const provenance = primaryDecisionProvenance === null ? null : {
+    version: primaryDecisionProvenance.version,
     identityStatus: primaryDecisionProvenance.identityStatus,
     accountEmail: primaryDecisionProvenance.accountEmail,
     choice: primaryDecisionProvenance.choice,
     requestDigest: primaryDecisionProvenance.requestDigest,
+    requestSnapshot: primaryDecisionProvenance.requestSnapshot,
     responseDigest: primaryDecisionProvenance.responseDigest,
     issuedAt: primaryDecisionProvenance.issuedAt,
     expiresAt: primaryDecisionProvenance.expiresAt,
@@ -446,7 +468,7 @@ export async function recordOwnerAuthorityDecision({
          ORDER BY id DESC
          LIMIT 1
        ), queue_item AS (
-         SELECT id, "outcomeKey", title, objective, "riskClass", "approvalState",
+          SELECT id, "outcomeKey", version AS "queueVersion", title, objective, "riskClass", "approvalState",
            "approvalDecisionId", "authorityState", "authorityGrantRef",
            "authorityLevel", "authoritySubject", "authorityAction", "lifecycleState",
            "activeWorkOrderId"
@@ -467,7 +489,7 @@ export async function recordOwnerAuthorityDecision({
            AND approval.scope = q."outcomeKey"
          FOR SHARE
        ), live_grant AS (
-         SELECT grant_row.id
+          SELECT grant_row.id, grant_row.ref
          FROM authority_grant grant_row
          JOIN queue_item q ON grant_row."ref" = q."authorityGrantRef"
          WHERE grant_row."userId" = $4 AND grant_row.status = 'active'
@@ -522,12 +544,15 @@ export async function recordOwnerAuthorityDecision({
          requested_terminal.id AS "requestedTerminalId", requested_terminal."requestedTerminalUserId",
          requested_terminal.metadata AS "requestedTerminalMetadata",
          latest_lease.metadata AS "latestLeaseMetadata",
-         queue_item.id AS "queueItemId", queue_item.title AS "queueTitle",
-         queue_item.objective AS "queueObjective", queue_item."riskClass",
-         queue_item."approvalState", queue_item."authorityState", queue_item."authorityLevel",
-         queue_item."authoritySubject", queue_item."authorityAction",
-         queue_item."lifecycleState", queue_item."activeWorkOrderId",
-         live_approval.id AS "liveApprovalId", live_grant.id AS "liveGrantId",
+          queue_item.id AS "queueItemId", queue_item.title AS "queueTitle",
+          queue_item."outcomeKey", queue_item."queueVersion",
+          queue_item.objective AS "queueObjective", queue_item."riskClass",
+          queue_item."approvalState", queue_item."authorityState", queue_item."authorityLevel",
+          queue_item."authoritySubject", queue_item."authorityAction",
+          queue_item."approvalDecisionId", queue_item."authorityGrantRef",
+          queue_item."lifecycleState", queue_item."activeWorkOrderId",
+          live_approval.id AS "liveApprovalId", live_grant.id AS "liveGrantId",
+          live_grant.ref AS "liveGrantRef",
          prior_request."decisionId", prior_request."decisionRef", prior_request.status AS "priorStatus",
          prior_request.decision AS "priorChoice", prior_request.authority AS "priorAuthority",
          prior_request.scope AS "priorScope", prior_request.evidence AS "priorEvidence",
@@ -594,9 +619,28 @@ export async function recordOwnerAuthorityDecision({
         code: "OWNER_DECISION_STALE",
       })
     }
-    if (provenance && (row.queueItemId == null
+    const requestSnapshot = provenance?.requestSnapshot
+    const currentRecommendation = provenance ? derivePrimaryDecisionRecommendation({
+      riskClass: row.riskClass,
+      decisionPacket,
+    }) : null
+    if (provenance && (provenance.version !== 2 || !requestSnapshot
+      || row.queueItemId == null
       || row.liveApprovalId == null
       || row.liveGrantId == null
+      || row.outcomeKey !== requestSnapshot.outcomeKey
+      || Number(row.queueVersion) !== requestSnapshot.queueVersion
+      || row.riskClass !== requestSnapshot.riskClass
+      || row.authorityLevel !== requestSnapshot.authorityLevel
+      || row.authoritySubject !== requestSnapshot.authoritySubject
+      || row.authorityAction !== requestSnapshot.authorityAction
+      || Number(row.approvalDecisionId) !== requestSnapshot.approvalDecisionId
+      || Number(row.liveApprovalId) !== requestSnapshot.approvalDecisionId
+      || row.authorityGrantRef !== requestSnapshot.authorityGrantRef
+      || row.liveGrantRef !== requestSnapshot.authorityGrantRef
+      || requestSnapshot.recommendation !== currentRecommendation.choice
+      || requestSnapshot.recommendationRationale !== currentRecommendation.rationale
+      || JSON.stringify(requestSnapshot.allowedChoices) !== JSON.stringify(["APPROVE", "DENY"])
       || Number(row.activeWorkOrderId) !== workOrderId
       || row.lifecycleState !== "blocked"
       || row.approvalState !== "approved"
@@ -621,10 +665,11 @@ export async function recordOwnerAuthorityDecision({
       outcomeId,
       queueItemId,
       workOrderId,
-      terminalEventId,
-      expectedNextState,
-      decisionPacketDigest,
-    })) {
+       terminalEventId,
+       expectedNextState,
+       decisionPacketDigest,
+       ...requestSnapshot,
+     })) {
       throw Object.assign(new Error("primary decision provenance does not bind this request"), {
         code: "PRIMARY_DECISION_PROVENANCE_WALL",
       })
@@ -992,17 +1037,36 @@ export async function readApprovedOwnerDecision({
     const storedProvenance = storedPayload?.primaryDecisionProvenance
     const hasStoredProvenance = storedPayload !== null
       && Object.hasOwn(storedPayload, "primaryDecisionProvenance")
-    const expectedRequestDigest = decisionPacketDigest ? primaryDecisionRequestDigest({
-      outcomeId,
-      queueItemId: Number(storedPayload?.queueItemId),
-      workOrderId: resolvedWorkOrderId,
-      terminalEventId: resolvedTerminalEventId,
-      expectedNextState,
-      decisionPacketDigest,
-    }) : null
+    let storedRecommendation = null
+    if (hasStoredProvenance) {
+      try {
+        storedRecommendation = derivePrimaryDecisionRecommendation({
+          riskClass: storedProvenance?.requestSnapshot?.riskClass,
+          decisionPacket,
+        })
+      } catch {}
+    }
+    let expectedRequestDigest = null
+    if (decisionPacketDigest && hasStoredProvenance) {
+      try {
+        expectedRequestDigest = primaryDecisionRequestDigest({
+          outcomeId,
+          queueItemId: Number(storedPayload?.queueItemId),
+          workOrderId: resolvedWorkOrderId,
+          terminalEventId: resolvedTerminalEventId,
+          expectedNextState,
+          decisionPacketDigest,
+          ...storedProvenance?.requestSnapshot,
+        })
+      } catch {}
+    }
     const validStoredProvenance = hasStoredProvenance
       && Number.isSafeInteger(Number(storedPayload?.queueItemId))
       && Number(storedPayload.queueItemId) > 0
+      && storedProvenance?.version === 2
+      && storedRecommendation !== null
+      && storedProvenance?.requestSnapshot?.recommendation === storedRecommendation.choice
+      && storedProvenance?.requestSnapshot?.recommendationRationale === storedRecommendation.rationale
       && storedProvenance?.identityStatus === "VERIFIED_PRIMARY_CODEX_APP_SERVER"
       && storedProvenance?.accountEmail === PRIMARY_DECISION_OWNER_EMAIL
       && storedProvenance?.choice === row.choice
@@ -1016,10 +1080,12 @@ export async function readApprovedOwnerDecision({
       && Date.parse(storedProvenance.expiresAt) - Date.parse(storedProvenance.issuedAt) === PRIMARY_DECISION_TTL_MS
       && Date.parse(row?.decidedAt) <= Date.parse(storedProvenance.expiresAt)
     const provenance = validStoredProvenance ? {
+      version: storedProvenance.version,
       identityStatus: storedProvenance.identityStatus,
       accountEmail: storedProvenance.accountEmail,
       choice: storedProvenance.choice,
       requestDigest: storedProvenance.requestDigest,
+      requestSnapshot: storedProvenance.requestSnapshot,
       responseDigest: storedProvenance.responseDigest,
       issuedAt: storedProvenance.issuedAt,
       expiresAt: storedProvenance.expiresAt,

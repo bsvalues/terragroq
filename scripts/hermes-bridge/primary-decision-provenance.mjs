@@ -7,6 +7,7 @@ import { CodexAppServerClient } from "./app-server-client.mjs"
 export const PRIMARY_DECISION_OWNER_EMAIL = "bsvalues@gmail.com"
 export const PRIMARY_DECISION_TTL_MS = 60 * 60 * 1000
 const PRIMARY_DECISION_APP_SERVER_TIMEOUT_MS = 30_000
+const PRIMARY_DECISION_DEFAULT_DENY_RATIONALE = "Default-deny: WilliamOS reached a Primary authority boundary and cannot infer approval."
 
 const VERIFIED = new WeakSet()
 
@@ -57,6 +58,47 @@ export function isVerifiedPrimaryDecisionResponse(value) {
   return value !== null && typeof value === "object" && VERIFIED.has(value)
 }
 
+export function derivePrimaryDecisionRecommendation({ riskClass, decisionPacket } = {}) {
+  if (!["R0", "R1"].includes(riskClass)
+    || typeof decisionPacket?.authorityBoundary !== "string"
+    || decisionPacket.authorityBoundary.trim() === "") {
+    wall("PRIMARY_DECISION_REQUEST_INVALID")
+  }
+  return Object.freeze({
+    choice: "DENY",
+    rationale: PRIMARY_DECISION_DEFAULT_DENY_RATIONALE,
+  })
+}
+
+export function primaryDecisionRequestSnapshot(request) {
+  const snapshot = {
+    outcomeKey: request?.outcomeKey,
+    queueVersion: request?.queueVersion,
+    riskClass: request?.riskClass,
+    authorityLevel: request?.authorityLevel,
+    authoritySubject: request?.authoritySubject,
+    authorityAction: request?.authorityAction,
+    approvalDecisionId: request?.approvalDecisionId,
+    authorityGrantRef: request?.authorityGrantRef,
+    recommendation: request?.recommendation,
+    recommendationRationale: request?.recommendationRationale,
+    allowedChoices: Array.isArray(request?.allowedChoices) ? [...request.allowedChoices] : null,
+  }
+  if (typeof snapshot.outcomeKey !== "string" || snapshot.outcomeKey.trim() === ""
+    || !Number.isSafeInteger(snapshot.queueVersion) || snapshot.queueVersion < 0
+    || !["R0", "R1"].includes(snapshot.riskClass)
+    || [snapshot.authorityLevel, snapshot.authoritySubject, snapshot.authorityAction,
+      snapshot.authorityGrantRef].some((value) => typeof value !== "string" || value.trim() === "")
+    || !Number.isSafeInteger(snapshot.approvalDecisionId) || snapshot.approvalDecisionId <= 0
+    || !["APPROVE", "DENY"].includes(snapshot.recommendation)
+    || typeof snapshot.recommendationRationale !== "string"
+    || snapshot.recommendationRationale.trim() === ""
+    || JSON.stringify(snapshot.allowedChoices) !== JSON.stringify(["APPROVE", "DENY"])) {
+    wall("PRIMARY_DECISION_REQUEST_INVALID")
+  }
+  return Object.freeze({ ...snapshot, allowedChoices: Object.freeze(snapshot.allowedChoices) })
+}
+
 export function primaryDecisionRequestDigest(request) {
   return createHash("sha256").update(JSON.stringify({
     outcomeId: request.outcomeId,
@@ -65,6 +107,7 @@ export function primaryDecisionRequestDigest(request) {
     terminalEventId: request.terminalEventId,
     expectedNextState: request.expectedNextState,
     decisionPacketDigest: request.decisionPacketDigest,
+    ...primaryDecisionRequestSnapshot(request),
   })).digest("hex")
 }
 
@@ -77,6 +120,15 @@ export function buildPrimaryDecisionRequestPrompt(request) {
 
 WilliamOS needs one Primary decision.
 
+- Outcome: ${request.outcomeKey}
+- Observed queue version: ${request.queueVersion}
+- Observed terminal event: ${request.terminalEventId}
+- Authority: ${request.authorityLevel} / ${request.authoritySubject} / ${request.authorityAction}
+- Approval record: ${request.approvalDecisionId}
+- Authority grant: ${request.authorityGrantRef}
+- Allowed choices: Approve or Deny
+- Recommendation: ${request.recommendation === "APPROVE" ? "Approve" : "Deny"}
+- Recommendation reason: ${request.recommendationRationale}
 - Decision: ${request.decisionPacket.blockedAction}
 - Why: ${request.decisionPacket.authorityBoundary}
 - Approve: ${request.decisionPacket.approveConsequence}
@@ -163,11 +215,12 @@ export async function verifyPrimaryDecisionResponse({
   const expiresAt = new Date(requestPresentedAtMs + PRIMARY_DECISION_TTL_MS).toISOString()
 
   const verified = Object.freeze({
-    version: 1,
+    version: 2,
     choice: response.choice,
     accountEmail: PRIMARY_DECISION_OWNER_EMAIL,
     identityStatus: "VERIFIED_PRIMARY_CODEX_APP_SERVER",
     requestDigest: primaryDecisionRequestDigest(request),
+    requestSnapshot: primaryDecisionRequestSnapshot(request),
     responseDigest: createHash("sha256").update(JSON.stringify({
       threadId: response.threadId,
       requestTurnId: response.requestTurnId,

@@ -29,6 +29,7 @@ const request = {
   goalRef: "GOAL-0077",
   workOrderRef: "WO-HERMES-OUTCOME-77",
   outcomeKey: "williamos:primary-home-density",
+  queueVersion: 7,
   riskClass: "R1",
   expectedNextState: "RESUME_PRODUCT_DELIVERY",
   issuedAt,
@@ -47,6 +48,13 @@ const request = {
   queueTitle: "Primary Home density",
   queueObjective: "Apply the approved WilliamOS display density",
   authorityLevel: "A2_WRITE_OWN",
+  authoritySubject: "operator",
+  authorityAction: "outcome:execute",
+  approvalDecisionId: 44,
+  authorityGrantRef: "AUTH-WILLIAMOS-R1-77",
+  recommendation: "DENY",
+  recommendationRationale: "Default-deny: WilliamOS reached a Primary authority boundary and cannot infer approval.",
+  allowedChoices: ["APPROVE", "DENY"],
 }
 
 function fakeClient(responseOverrides: Record<string, unknown> = {}) {
@@ -110,18 +118,23 @@ function decisionBinding(
     latestLeaseMetadata: { leaseStatus: "RELEASED" },
     transactionNow: new Date(Date.parse(issuedAt) + 30_000).toISOString(),
     queueItemId: 33,
+    outcomeKey: request.outcomeKey,
+    queueVersion: request.queueVersion,
     queueTitle: request.queueTitle,
     queueObjective: request.queueObjective,
     riskClass: request.riskClass,
     approvalState: "approved",
     authorityState: "matched",
     authorityLevel: request.authorityLevel,
-    authoritySubject: "operator",
-    authorityAction: "outcome:execute",
+    authoritySubject: request.authoritySubject,
+    authorityAction: request.authorityAction,
+    approvalDecisionId: request.approvalDecisionId,
+    authorityGrantRef: request.authorityGrantRef,
     lifecycleState: "blocked",
     activeWorkOrderId: request.workOrderId,
     liveApprovalId: 44,
     liveGrantId: 55,
+    liveGrantRef: request.authorityGrantRef,
     ...overrides,
   }
 }
@@ -143,6 +156,15 @@ describe("secure Primary decision intake", () => {
       identityStatus: "VERIFIED_PRIMARY_CODEX_APP_SERVER",
       requestDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
       responseDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      requestSnapshot: expect.objectContaining({
+        outcomeKey: request.outcomeKey,
+        queueVersion: request.queueVersion,
+        approvalDecisionId: request.approvalDecisionId,
+        authorityGrantRef: request.authorityGrantRef,
+        recommendation: "DENY",
+        recommendationRationale: request.recommendationRationale,
+        allowedChoices: ["APPROVE", "DENY"],
+      }),
     })
     expect(JSON.stringify(response)).not.toContain("message-owner")
     expect(client.close).toHaveBeenCalled()
@@ -313,6 +335,37 @@ describe("secure Primary decision intake", () => {
     expect(query.mock.calls.some(([sql]) => /INSERT INTO decision/.test(sql))).toBe(false)
   })
 
+  it("rejects a queue version changed after the exact request was presented", async () => {
+    const provenance = await verifyPrimaryDecisionResponse({
+      request,
+      repositoryPath: repository,
+      environment: { CODEX_THREAD_ID: "thread-owner" },
+      now: Date.parse(issuedAt) + 30_000,
+      createClient: () => fakeClient() as never,
+    })
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [decisionBinding(request.decisionPacket, {
+        queueVersion: request.queueVersion + 1,
+      })] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recordOwnerAuthorityDecision({
+      query,
+      outcomeId: request.outcomeId,
+      queueItemId: request.queueItemId,
+      workOrderId: request.workOrderId,
+      terminalEventId: request.terminalEventId,
+      ownerUserId: request.ownerUserId,
+      choice: "APPROVE",
+      expectedNextState: request.expectedNextState,
+      primaryDecisionProvenance: provenance,
+    })).rejects.toMatchObject({ code: "PRIMARY_DECISION_AUTHORITY_STALE" })
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO decision/.test(sql))).toBe(false)
+  })
+
   it("rejects a revoked live grant even when the queue authority cache still matches", async () => {
     const provenance = await verifyPrimaryDecisionResponse({
       request,
@@ -388,7 +441,9 @@ describe("secure Primary decision intake", () => {
       status: "PENDING_PRIMARY_DECISION",
       outcomeId: 77,
       requestDigest: primaryDecisionRequestDigest(request),
-      prompt: expect.stringContaining("Reply only Approve or Deny"),
+      prompt: expect.stringMatching(
+        /Outcome: williamos:primary-home-density[\s\S]+Observed queue version: 7[\s\S]+Allowed choices: Approve or Deny[\s\S]+Recommendation: Deny[\s\S]+Recommendation reason: Default-deny[\s\S]+Reply only Approve or Deny/,
+      ),
     })
     expect(recordDecision).not.toHaveBeenCalled()
   })
