@@ -268,6 +268,95 @@ export class CodexAppServerClient {
     })
   }
 
+  async readLatestDirectUserChoice({
+    threadId,
+    requestCreatedAt,
+    presentedAfter,
+    presentedBefore,
+    requestMarker,
+    requestPrompt,
+  }) {
+    const response = await this.request("thread/read", { threadId, includeTurns: true })
+    const thread = response?.thread
+    if (!thread || thread.id !== threadId || !Array.isArray(thread.turns)) return null
+    const requestCreatedAtMs = Date.parse(requestCreatedAt)
+    const presentedAfterMs = Date.parse(presentedAfter)
+    const presentedBeforeMs = Date.parse(presentedBefore)
+    if (!Number.isFinite(requestCreatedAtMs) || !Number.isFinite(presentedAfterMs)
+      || !Number.isFinite(presentedBeforeMs)
+      || typeof requestMarker !== "string" || requestMarker.trim() === ""
+      || typeof requestPrompt !== "string" || !requestPrompt.includes(requestMarker)
+      || presentedBeforeMs <= presentedAfterMs) return null
+
+    const candidates = []
+    for (let turnIndex = 0; turnIndex < thread.turns.length; turnIndex += 1) {
+      const turn = thread.turns[turnIndex]
+      const startedAtMs = Number(turn?.startedAt) * 1_000
+      const completedAtMs = Number(turn?.completedAt) * 1_000
+      const completed = turn?.status === "completed"
+      const active = turn?.status === "inProgress" || turn?.status === "interrupted"
+      if (!completed && !active) continue
+      if (!Number.isFinite(startedAtMs) || startedAtMs > presentedBeforeMs
+        || (completed && (!Number.isFinite(completedAtMs) || completedAtMs > presentedBeforeMs))
+        || !Array.isArray(turn.items)) continue
+      const priorTurn = thread.turns[turnIndex - 1]
+      const priorItems = Array.isArray(priorTurn?.items) ? priorTurn.items : []
+      const requestPresentedAtMs = Number(priorTurn?.completedAt) * 1_000
+      const finalAgentMessage = priorTurn?.status === "completed"
+        ? priorItems.filter((item) => item?.type === "agentMessage").at(-1)
+        : null
+      const requestMessage = typeof finalAgentMessage?.text === "string"
+        && finalAgentMessage.text === requestPrompt ? finalAgentMessage : null
+      if (!requestMessage || !Number.isFinite(requestPresentedAtMs)
+        || requestPresentedAtMs < requestCreatedAtMs
+        || requestPresentedAtMs < presentedAfterMs
+        || requestPresentedAtMs > presentedBeforeMs
+        || startedAtMs < requestPresentedAtMs) continue
+      const laterUserMessageExists = thread.turns.slice(turnIndex + 1).some((laterTurn) => {
+        const laterStartedAtMs = Number(laterTurn?.startedAt) * 1_000
+        return Number.isFinite(laterStartedAtMs)
+          && laterStartedAtMs <= presentedBeforeMs
+          && Array.isArray(laterTurn.items)
+          && laterTurn.items.some((candidate) => candidate?.type === "userMessage")
+      })
+      if (laterUserMessageExists) continue
+      const userItems = turn.items.filter((candidate) => candidate?.type === "userMessage")
+      const item = userItems.at(-1)
+      const content = Array.isArray(item?.content) ? item.content : []
+      if (!item || content.length !== 1
+        || content[0]?.type !== "text" || typeof content[0]?.text !== "string") continue
+      const priorChoiceExists = userItems.slice(0, -1).some((candidate) => {
+        const candidateContent = Array.isArray(candidate?.content) ? candidate.content : []
+        if (candidateContent.length !== 1 || candidateContent[0]?.type !== "text"
+          || typeof candidateContent[0]?.text !== "string") return false
+        return ["APPROVE", "DENY", "DECLINE"].includes(candidateContent[0].text.trim().toUpperCase())
+      })
+      if (priorChoiceExists) continue
+      const normalized = content[0].text.trim().toUpperCase()
+      const choice = normalized === "APPROVE" ? "APPROVE"
+        : ["DENY", "DECLINE"].includes(normalized) ? "DENY" : null
+      if (!choice) continue
+      candidates.push({
+        threadId: thread.id,
+        threadSource: typeof thread.threadSource === "string" ? thread.threadSource : null,
+        source: typeof thread.source === "string" ? thread.source : null,
+        cwd: typeof thread.cwd === "string" ? thread.cwd : null,
+        parentThreadId: thread.parentThreadId ?? null,
+        agentRole: thread.agentRole ?? null,
+        requestTurnId: priorTurn.id,
+        requestMessageId: requestMessage.id,
+        requestPresentedAt: Number(priorTurn.completedAt),
+        turnId: turn.id,
+        turnStartedAt: Number(turn.startedAt),
+        turnCompletedAt: Number(turn.completedAt),
+        messageId: item.id,
+        messageSha256: createHash("sha256").update(content[0].text, "utf8").digest("hex"),
+        choice,
+      })
+    }
+    return candidates.length === 1 ? Object.freeze(candidates[0]) : null
+  }
+
   /** @param {any} options */
   async runTurn({ threadId, prompt, input, turn = {}, timeoutMs = this.timeoutMs, signal } = {}) {
     if (this.turnWaiter) throw new Error("Only one turn may run per App Server client")

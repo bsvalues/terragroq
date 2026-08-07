@@ -4,6 +4,22 @@ const ALLOWED_LANES = new Set(["docs", "ui", "read_model"])
 const ALLOWED_RISKS = new Set(["low", "R0", "R1"])
 const ALLOWED_AUTHORITIES = new Set(["A0_READ_ONLY", "A1_DRAFT", "A2_WRITE_OWN"])
 
+export const PROTECTED_SCOPE_LEXEMES = Object.freeze({
+  terrafusion: "terrafusion", terrapilot: "terrapilot", propertyworkbench: "property workbench",
+  county: "county", pacs: "pacs", parcel: "parcel", taxpayer: "taxpayer",
+  protecteddata: "protected data", production: "production", deploy: "deploy",
+  deployment: "deployment", release: "release", cutover: "cutover", mutate: "mutate",
+  mutation: "mutation", write: "write", change: "change", secret: "secret", password: "password",
+  credential: "credential", apikey: "api key", accesstoken: "access token", privatekey: "private key",
+  token: "token", cookie: "cookie", session: "session", paidoverage: "paid overage",
+  increase: "increase", spend: "spend", newspending: "new spending", purchase: "purchase",
+  billingupgrade: "billing upgrade", destructive: "destructive", delete: "delete", drop: "drop",
+  table: "table", database: "database", truncate: "truncate", forcepush: "force push",
+  resethard: "reset hard", wipe: "wipe", purge: "purge", create: "create", publish: "publish",
+  cut: "cut", push: "push", githubrelease: "github release", git: "git", tag: "tag",
+  issue357: "issue 357",
+})
+
 const BLOCKED_SCOPE = Object.freeze([
   ["EXTERNAL_PRODUCT_SCOPE", /\b(?:terrafusion|terrapilot|property\s+workbench)\b/i],
   ["COUNTY_PROTECTED_SCOPE", /\b(?:county|pacs|parcel|taxpayer|protected\s+data)\b/i],

@@ -18,11 +18,18 @@ import {
   recoverValidationInfrastructureOutcome,
 } from "./outcome-source.mjs"
 import { createHermesRepositoryLifecycle } from "./repository-lifecycle.mjs"
+import { consumePrimaryDecisionIntake } from "./primary-decision-intake.mjs"
 import { produceRuntimeAgreement } from "./runtime-agreement.mjs"
 import { isValidationInfrastructureFailure, readHermesState } from "./state-store.mjs"
 
 function print(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`)
+}
+
+export function printHermesCycleResult(value, write = process.stdout.write.bind(process.stdout)) {
+  write(value?.status === "PENDING_PRIMARY_DECISION"
+    ? value.prompt
+    : `${JSON.stringify(value)}\n`)
 }
 
 function flushStdout() {
@@ -84,22 +91,34 @@ export function createResidentHermesOrchestrator(options = {}) {
   })
 }
 
-export async function runHermesQueueDrain({ orchestrator, maxOutcomes = 100 } = {}) {
+export async function runHermesQueueDrain({
+  orchestrator,
+  maxOutcomes = 100,
+  consumeDecision = null,
+} = {}) {
   if (!orchestrator || !Number.isInteger(maxOutcomes) || maxOutcomes <= 0) {
     throw Object.assign(new Error("Hermes queue drain input is invalid"), {
       code: "HERMES_QUEUE_DRAIN_INPUT_WALL",
     })
   }
   const settled = []
+  let decision = null
   try {
+    if (consumeDecision) {
+      const decisionResult = await consumeDecision({ repositoryPath: process.cwd() })
+      if (decisionResult?.status === "PENDING_PRIMARY_DECISION") return decisionResult
+      if (["PRIMARY_DECISION_RECORDED", "PRIMARY_DECISION_REPLAYED"]
+        .includes(decisionResult?.status)) decision = decisionResult
+    }
     for (let index = 0; index < maxOutcomes; index += 1) {
       const result = await orchestrator.cycle()
       if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {
-        if (settled.length === 0) return result
+        if (settled.length === 0) return decision ? { ...result, decision } : result
         return {
           result: "QUEUE_DRAINED",
           settled,
           stopReason: result.result,
+          ...(decision ? { decision } : {}),
           ...(result.reasonCode ? { reasonCode: result.reasonCode } : {}),
         }
       }
@@ -758,7 +777,9 @@ export async function runCli(command = process.argv[2]) {
   try {
     if (command === "cycle") {
       orchestrator = createResidentHermesOrchestrator()
-      print(await runHermesQueueDrain({ orchestrator }))
+      printHermesCycleResult(
+        await runHermesQueueDrain({ orchestrator, consumeDecision: consumePrimaryDecisionIntake }),
+      )
     }
     else if (command === "smoke") print(await smoke())
     else if (command === "recover-native-provider-wall") print(await recoverNativeProviderWall())

@@ -15,11 +15,14 @@ import {
   recoverTerminalPostMergeCleanupWall,
   recoverValidationInfrastructureWall,
   redactHermesStatus,
+  printHermesCycleResult,
   runHermesQueueDrain,
   runCliEntrypoint,
   sanitizeBridgeMessage,
 } from "../scripts/hermes-bridge/cli.mjs"
 import { initializeHermesState } from "../scripts/hermes-bridge/state-store.mjs"
+
+const agentEntrypoint = fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8")
 
 describe("Hermes bridge CLI", () => {
   it("wires durable review recovery through the resident queue runtime", async () => {
@@ -172,6 +175,86 @@ describe("Hermes bridge CLI", () => {
         stopReason: "NO_ELIGIBLE_OUTCOME",
       })
     expect(cycle).toHaveBeenCalledTimes(3)
+  })
+
+  it("consumes a Primary decision exactly once before the first queue cycle", async () => {
+    const calls: string[] = []
+    const consumeDecision = vi.fn(async () => {
+      calls.push("decision")
+      return { status: "NO_PENDING_PRIMARY_DECISION" }
+    })
+    const cycle = vi.fn(async () => {
+      calls.push("cycle")
+      return { result: "NO_ELIGIBLE_OUTCOME" }
+    })
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, consumeDecision }))
+      .resolves.toEqual({ result: "NO_ELIGIBLE_OUTCOME" })
+    expect(consumeDecision).toHaveBeenCalledOnce()
+    expect(cycle).toHaveBeenCalledOnce()
+    expect(calls).toEqual(["decision", "cycle"])
+  })
+
+  it("returns an exact pending Primary request without starting a queue cycle", async () => {
+    const pending = {
+      status: "PENDING_PRIMARY_DECISION",
+      outcomeId: 77,
+      requestDigest: "a".repeat(64),
+      prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:exact",
+    }
+    const consumeDecision = vi.fn(async () => pending)
+    const cycle = vi.fn()
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, consumeDecision }))
+      .resolves.toEqual(pending)
+    expect(consumeDecision).toHaveBeenCalledOnce()
+    expect(cycle).not.toHaveBeenCalled()
+  })
+
+  it("prints only the canonical prompt for a pending Primary decision", () => {
+    const writes: string[] = []
+    printHermesCycleResult({
+      status: "PENDING_PRIMARY_DECISION",
+      outcomeId: 77,
+      requestDigest: "a".repeat(64),
+      prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:exact\nReply only Approve or Deny",
+    }, (value) => writes.push(String(value)))
+
+    expect(writes).toEqual([
+      "WILLIAMOS_PRIMARY_DECISION_REQUEST:exact\nReply only Approve or Deny",
+    ])
+    expect(agentEntrypoint).toContain(
+      "emit that text byte-for-byte as the entire final assistant message",
+    )
+    expect(agentEntrypoint).toContain("Stop all tool use")
+  })
+
+  it("surfaces a recorded Primary decision with the resulting queue state", async () => {
+    const decision = {
+      status: "PRIMARY_DECISION_RECORDED",
+      outcomeId: 77,
+      choice: "APPROVE",
+      resumeReleased: true,
+      decisionRef: "OWNER-DECISION-77-120",
+    }
+    const consumeDecision = vi.fn(async () => decision)
+    const cycle = vi.fn(async () => ({ result: "NO_ELIGIBLE_OUTCOME" }))
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, consumeDecision }))
+      .resolves.toEqual({ result: "NO_ELIGIBLE_OUTCOME", decision })
+  })
+
+  it("does not start a queue cycle when Primary decision intake fails", async () => {
+    const wall = Object.assign(new Error("decision provenance unavailable"), {
+      code: "PRIMARY_DECISION_PROVENANCE_WALL",
+    })
+    const consumeDecision = vi.fn().mockRejectedValue(wall)
+    const cycle = vi.fn()
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, consumeDecision }))
+      .rejects.toBe(wall)
+    expect(consumeDecision).toHaveBeenCalledOnce()
+    expect(cycle).not.toHaveBeenCalled()
   })
 
   it("preserves settled outcomes when the bounded drain budget is exhausted", async () => {
