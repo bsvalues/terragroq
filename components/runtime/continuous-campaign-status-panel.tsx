@@ -161,8 +161,7 @@ export function ContinuousCampaignStatusPanel({
           </p>
         ) : status.handoff.acquisitionStatus === "CONFLICTING" ? (
           <p className="mt-1 text-xs text-muted-foreground">
-            Successor handoff evidence conflicts at this campaign step; automation proof cannot be trusted or evaluated
-            from conflicting evidence.
+            Successor handoff evidence conflicts; automation proof cannot be trusted or evaluated from conflicting evidence.
           </p>
         ) : (
           <p className="mt-1 text-xs text-muted-foreground">

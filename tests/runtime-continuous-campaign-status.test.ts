@@ -201,24 +201,57 @@ describe("projectContinuousCampaignStatus", () => {
     expect(status.handoff.detail).toMatch(/persisted queue.*timing/i)
   })
 
-  it("does not call mixed queue and timeline observations a durable conflict", () => {
+  it("records handoff when valid queue and receipt times are within bounded clock tolerance", () => {
     const queueSurface = liveQueueSurface()
-    const status = projectContinuousCampaignStatus({
-      ...queueSurface,
-      rows: [
-        queueSurface.rows[0],
-        {
-          ...queueSurface.rows[1],
-          activatedAt: "2026-07-28T18:20:05.001Z",
-        },
-      ],
-    }, liveTimeline())
+    const timeline = liveTimeline()
+    const cases = [
+      {
+        activatedAt: SUCCESSOR_ACQUIRED_AT,
+        receiptId: "202",
+        expectedAcquisitionStatus: "RECORDED",
+      },
+      {
+        activatedAt: "2026-07-28T18:20:04.999Z",
+        receiptId: "202",
+        expectedAcquisitionStatus: "RECORDED",
+      },
+      {
+        activatedAt: "2026-07-28T18:20:05.001Z",
+        receiptId: "  202  ",
+        expectedAcquisitionStatus: "MISSING",
+      },
+    ] as const
 
-    expect(status.handoff).toMatchObject({
-      acquisitionStatus: "MISSING",
-      automationStatus: "MISSING",
-    })
-    expect(status.handoff.detail).toMatch(/not snapshot-bound/i)
+    for (const testCase of cases) {
+      const status = projectContinuousCampaignStatus({
+        ...queueSurface,
+        rows: [
+          queueSurface.rows[0],
+          {
+            ...queueSurface.rows[1],
+            activatedAt: testCase.activatedAt,
+          },
+        ],
+      }, {
+        ...timeline,
+        rows: [{
+          ...timeline.rows[0],
+          successorEvidence: {
+            ...timeline.rows[0].successorEvidence,
+            receiptId: testCase.receiptId,
+          },
+        }],
+      })
+
+      expect(status.handoff.acquisitionStatus).toBe(
+        testCase.expectedAcquisitionStatus,
+      )
+      expect(status.handoff.automationStatus).toBe("MISSING")
+      expect(status.handoff.receiptId).toBe("202")
+      if (testCase.expectedAcquisitionStatus === "MISSING") {
+        expect(status.handoff.detail).toMatch(/not snapshot-bound/i)
+      }
+    }
   })
 
   it("rejects blank terminal evidence references", () => {
@@ -259,20 +292,32 @@ describe("projectContinuousCampaignStatus", () => {
     })
   })
 
-  it("accepts bounded clock skew between queue activation and receipt insertion", () => {
+  it("rejects malformed terminal evidence ids even with a valid textual reference", () => {
     const queueSurface = liveQueueSurface()
-    const status = projectContinuousCampaignStatus({
-      ...queueSurface,
-      rows: [
-        queueSurface.rows[0],
-        {
-          ...queueSurface.rows[1],
-          activatedAt: "2026-07-28T18:20:04.999Z",
-        },
-      ],
-    }, liveTimeline())
 
-    expect(status.handoff.acquisitionStatus).toBe("RECORDED")
+    for (const terminalEvidenceId of [
+      0,
+      -1,
+      1.5,
+      Number.MAX_SAFE_INTEGER + 1,
+    ]) {
+      const status = projectContinuousCampaignStatus({
+        ...queueSurface,
+        rows: [
+          {
+            ...queueSurface.rows[0],
+            terminalEvidenceId,
+            terminalEvidenceRefs: ["EV-HERMES-81-1-10"],
+          },
+          queueSurface.rows[1],
+        ],
+      }, liveTimeline())
+
+      expect(status.steps[1]).toMatchObject({
+        id: "first-settlement",
+        status: "CONFLICTING",
+      })
+    }
   })
 
   it("reports a missing successor as missing when the completion row is absent", () => {
@@ -443,6 +488,31 @@ describe("projectContinuousCampaignStatus", () => {
       expect(status.steps[2].status).toBe("CONFLICTING")
       expect(status.evidenceStatus).toBe("CONFLICTING")
     }
+  })
+
+  it("reports an invalid receipt acquisition timestamp as conflicting", () => {
+    const timeline = liveTimeline()
+    const status = projectContinuousCampaignStatus(
+      liveQueueSurface(),
+      {
+        ...timeline,
+        rows: [{
+          ...timeline.rows[0],
+          successorEvidence: {
+            ...timeline.rows[0].successorEvidence,
+            acquiredAt: "not-a-timestamp",
+          },
+        }],
+      },
+    )
+
+    expect(status.handoff).toMatchObject({
+      acquisitionStatus: "CONFLICTING",
+      automationStatus: "CONFLICTING",
+    })
+    expect(status.handoff.detail).toMatch(
+      /invalid[^.]*timestamp|timestamp[^.]*invalid/i,
+    )
   })
 
   it("does not mutate persisted queue or completion evidence inputs", () => {

@@ -68,11 +68,11 @@ describe("continuous campaign status panel contract", () => {
       ],
       handoff: {
         acquisitionStatus: "CONFLICTING",
-        automationStatus: "MISSING",
+        automationStatus: "CONFLICTING",
         receiptId: null,
         acquiredAt: null,
         fencingTokenRange: null,
-        detail: "Cross-source proof is missing.",
+        detail: "Conflicting handoff evidence.",
       },
       evidenceStatus: "CONFLICTING",
       gaps: [{ code: "CROSS_SOURCE_CONFLICT", status: "CONFLICTING", detail: "Conflicting evidence." }],
@@ -86,6 +86,9 @@ describe("continuous campaign status panel contract", () => {
     }
     expect(markup).toContain("CROSS_SOURCE_CONFLICT")
     expect(markup).toContain("Conflicting evidence.")
+    expect(markup).toContain(
+      "Successor handoff evidence conflicts; automation proof cannot be trusted or evaluated from conflicting evidence.",
+    )
   })
 
   it("shows the campaign window, ordered lifecycle, handoff, and evidence gaps", () => {
