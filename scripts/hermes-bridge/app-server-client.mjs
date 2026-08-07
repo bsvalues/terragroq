@@ -274,6 +274,7 @@ export class CodexAppServerClient {
     presentedAfter,
     presentedBefore,
     requestMarker,
+    requestPrompt,
   }) {
     const response = await this.request("thread/read", { threadId, includeTurns: true })
     const thread = response?.thread
@@ -284,6 +285,7 @@ export class CodexAppServerClient {
     if (!Number.isFinite(requestCreatedAtMs) || !Number.isFinite(presentedAfterMs)
       || !Number.isFinite(presentedBeforeMs)
       || typeof requestMarker !== "string" || requestMarker.trim() === ""
+      || typeof requestPrompt !== "string" || !requestPrompt.includes(requestMarker)
       || presentedBeforeMs <= presentedAfterMs) return null
 
     const candidates = []
@@ -292,7 +294,8 @@ export class CodexAppServerClient {
       const startedAtMs = Number(turn?.startedAt) * 1_000
       const completedAtMs = Number(turn?.completedAt) * 1_000
       const completed = turn?.status === "completed"
-      if (!completed && turn?.status !== "inProgress") continue
+      const active = turn?.status === "inProgress" || turn?.status === "interrupted"
+      if (!completed && !active) continue
       if (!Number.isFinite(startedAtMs) || startedAtMs > presentedBeforeMs
         || (completed && (!Number.isFinite(completedAtMs) || completedAtMs > presentedBeforeMs))
         || !Array.isArray(turn.items)) continue
@@ -301,7 +304,7 @@ export class CodexAppServerClient {
       const requestPresentedAtMs = Number(priorTurn?.completedAt) * 1_000
       const requestMessage = priorTurn?.status === "completed"
         ? priorItems.find((item) => item?.type === "agentMessage"
-          && typeof item.text === "string" && item.text.includes(requestMarker))
+          && typeof item.text === "string" && item.text === requestPrompt)
         : null
       if (!requestMessage || !Number.isFinite(requestPresentedAtMs)
         || requestPresentedAtMs < requestCreatedAtMs
