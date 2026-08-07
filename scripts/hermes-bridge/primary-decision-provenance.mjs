@@ -106,9 +106,9 @@ export async function verifyPrimaryDecisionResponse({
     wall("REPOSITORY_PATH_INVALID")
   }
   const issuedAtMs = Date.parse(request.issuedAt)
-  const expiresAtMs = issuedAtMs + PRIMARY_DECISION_TTL_MS
-  if (!Number.isFinite(issuedAtMs) || now >= expiresAtMs) wall("PRIMARY_DECISION_EXPIRED")
-  const expiresAt = new Date(expiresAtMs).toISOString()
+  if (!Number.isFinite(issuedAtMs) || issuedAtMs > now) wall("PRIMARY_DECISION_REQUEST_INVALID")
+  const presentedAfter = new Date(Math.max(issuedAtMs, now - PRIMARY_DECISION_TTL_MS)).toISOString()
+  const presentedBefore = new Date(now).toISOString()
 
   const client = createClient()
   let account
@@ -118,8 +118,9 @@ export async function verifyPrimaryDecisionResponse({
     account = await withDeadline(client.readAccount(), timeoutMs)
     response = await withDeadline(client.readLatestDirectUserChoice({
       threadId,
-      issuedAfter: request.issuedAt,
-      expiresAt,
+      requestCreatedAt: request.issuedAt,
+      presentedAfter,
+      presentedBefore,
       requestMarker: primaryDecisionRequestMarker(request),
     }), timeoutMs)
   } finally {
@@ -134,7 +135,11 @@ export async function verifyPrimaryDecisionResponse({
     || response.threadSource !== "user"
     || response.source !== "vscode"
     || response.parentThreadId !== null
-    || response.agentRole !== null) wall("PRIMARY_DECISION_RESPONSE_IDENTITY_WALL")
+    || response.agentRole !== null
+    || ![response.requestTurnId, response.requestMessageId, response.turnId, response.messageId]
+      .every((value) => typeof value === "string" && value.trim() !== "")
+    || typeof response.messageSha256 !== "string"
+    || !/^[a-f0-9]{64}$/.test(response.messageSha256)) wall("PRIMARY_DECISION_RESPONSE_IDENTITY_WALL")
   let responseGitDirectory
   try {
     if (typeof response.cwd !== "string" || !path.isAbsolute(response.cwd)) throw new Error()
@@ -147,6 +152,14 @@ export async function verifyPrimaryDecisionResponse({
   }
   if (!["APPROVE", "DENY"].includes(response.choice)) wall("PRIMARY_DECISION_CHOICE_WALL")
 
+  const requestPresentedAtMs = Number(response.requestPresentedAt) * 1_000
+  if (!Number.isFinite(requestPresentedAtMs)
+    || requestPresentedAtMs < issuedAtMs
+    || requestPresentedAtMs < now - PRIMARY_DECISION_TTL_MS
+    || requestPresentedAtMs > now) wall("PRIMARY_DECISION_EXPIRED")
+  const provenanceIssuedAt = new Date(requestPresentedAtMs).toISOString()
+  const expiresAt = new Date(requestPresentedAtMs + PRIMARY_DECISION_TTL_MS).toISOString()
+
   const verified = Object.freeze({
     version: 1,
     choice: response.choice,
@@ -155,11 +168,13 @@ export async function verifyPrimaryDecisionResponse({
     requestDigest: primaryDecisionRequestDigest(request),
     responseDigest: createHash("sha256").update(JSON.stringify({
       threadId: response.threadId,
+      requestTurnId: response.requestTurnId,
+      requestMessageId: response.requestMessageId,
       turnId: response.turnId,
       messageId: response.messageId,
       messageSha256: response.messageSha256,
     })).digest("hex"),
-    issuedAt: request.issuedAt,
+    issuedAt: provenanceIssuedAt,
     expiresAt,
   })
   VERIFIED.add(verified)
