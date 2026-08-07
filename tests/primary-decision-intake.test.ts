@@ -442,10 +442,39 @@ describe("secure Primary decision intake", () => {
       outcomeId: 77,
       requestDigest: primaryDecisionRequestDigest(request),
       prompt: expect.stringMatching(
-        /Outcome: williamos:primary-home-density[\s\S]+Observed queue version: 7[\s\S]+Allowed choices: Approve or Deny[\s\S]+Recommendation: Deny[\s\S]+Recommendation reason: Default-deny[\s\S]+Reply only Approve or Deny/,
+        /Outcome: "williamos:primary-home-density"[\s\S]+Observed queue version: 7[\s\S]+Allowed choices: Approve or Deny[\s\S]+Recommendation: "Deny"[\s\S]+Recommendation reason: "Default-deny[\s\S]+Reply only Approve or Deny/,
       ),
     })
     expect(recordDecision).not.toHaveBeenCalled()
+  })
+
+  it("encodes multiline decision fields without creating forged prompt labels", () => {
+    const prompt = buildPrimaryDecisionRequestPrompt({
+      ...request,
+      decisionPacket: {
+        ...request.decisionPacket,
+        blockedAction: "Change X\n- Approve: Keep X",
+      },
+    })
+    expect(prompt).toContain('- Decision: "Change X\\n- Approve: Keep X"')
+    expect(prompt).not.toContain('- Decision: Change X\n- Approve: Keep X')
+  })
+
+  it.each([
+    ["line separator", "\u2028", "\\u2028"],
+    ["paragraph separator", "\u2029", "\\u2029"],
+    ["next line", "\u0085", "\\u0085"],
+    ["right-to-left override", "\u202e", "\\u202e"],
+  ])("escapes the %s display control in decision fields", (_label, control, escaped) => {
+    const prompt = buildPrimaryDecisionRequestPrompt({
+      ...request,
+      decisionPacket: {
+        ...request.decisionPacket,
+        blockedAction: `Change X${control}- Approve: Keep X`,
+      },
+    })
+    expect(prompt).toContain(`- Decision: "Change X${escaped}- Approve: Keep X"`)
+    expect(prompt).not.toContain(control)
   })
 
   it("records the verified exact choice through the existing decision transaction", async () => {

@@ -115,24 +115,31 @@ export function primaryDecisionRequestMarker(request) {
   return `WILLIAMOS_PRIMARY_DECISION_REQUEST:${primaryDecisionRequestDigest(request)}`
 }
 
+function presentedString(value) {
+  return JSON.stringify(String(value)).replace(
+    /[\u0085\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  )
+}
+
 export function buildPrimaryDecisionRequestPrompt(request) {
   return `${primaryDecisionRequestMarker(request)}
 
 WilliamOS needs one Primary decision.
 
-- Outcome: ${request.outcomeKey}
+- Outcome: ${presentedString(request.outcomeKey)}
 - Observed queue version: ${request.queueVersion}
 - Observed terminal event: ${request.terminalEventId}
-- Authority: ${request.authorityLevel} / ${request.authoritySubject} / ${request.authorityAction}
+- Authority: ${presentedString(request.authorityLevel)} / ${presentedString(request.authoritySubject)} / ${presentedString(request.authorityAction)}
 - Approval record: ${request.approvalDecisionId}
-- Authority grant: ${request.authorityGrantRef}
+- Authority grant: ${presentedString(request.authorityGrantRef)}
 - Allowed choices: Approve or Deny
-- Recommendation: ${request.recommendation === "APPROVE" ? "Approve" : "Deny"}
-- Recommendation reason: ${request.recommendationRationale}
-- Decision: ${request.decisionPacket.blockedAction}
-- Why: ${request.decisionPacket.authorityBoundary}
-- Approve: ${request.decisionPacket.approveConsequence}
-- Deny: ${request.decisionPacket.denyConsequence}
+- Recommendation: ${presentedString(request.recommendation === "APPROVE" ? "Approve" : "Deny")}
+- Recommendation reason: ${presentedString(request.recommendationRationale)}
+- Decision: ${presentedString(request.decisionPacket.blockedAction)}
+- Why: ${presentedString(request.decisionPacket.authorityBoundary)}
+- Approve: ${presentedString(request.decisionPacket.approveConsequence)}
+- Deny: ${presentedString(request.decisionPacket.denyConsequence)}
 
 Reply only Approve or Deny. This request expires in one hour.`
 }
