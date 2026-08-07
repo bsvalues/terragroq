@@ -347,6 +347,57 @@ const VALIDATION_RECOVERY_PROOF_PREDICATE = `
   )
 `
 
+const REVIEW_RECOVERY_PROOF_PREDICATE = `
+  EXISTS (
+    SELECT 1
+    FROM goal AS recovery_goal
+    JOIN LATERAL (
+      SELECT terminal.id, terminal.metadata
+      FROM governance_event AS terminal
+      WHERE terminal."entityType" = 'goal'
+        AND terminal."entityId"::text = recovery_goal.id::text
+        AND terminal."userId" = recovery_goal."userId"
+        AND terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
+      ORDER BY terminal."createdAt" DESC, terminal.id DESC
+      LIMIT 1
+    ) AS latest_terminal ON TRUE
+    JOIN governance_event AS merged
+      ON merged."userId" = recovery_goal."userId"
+     AND merged."entityType" = 'work_order'
+     AND merged."entityId"::text = q."activeWorkOrderId"::text
+     AND merged."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+     AND merged.metadata->>'checkpointState' = 'PR_MERGED'
+     AND merged.metadata->>'prNumber' = $7::text
+     AND merged.metadata->>'headRefOid' = $8
+     AND merged.metadata->>'mergeSha' = $9
+     AND merged.id > latest_terminal.id
+    JOIN governance_event AS recovered
+      ON recovered."userId" = recovery_goal."userId"
+     AND recovered."entityType" = 'goal'
+     AND recovered."entityId"::text = recovery_goal.id::text
+     AND recovered."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERED'
+     AND recovered.metadata->>'prNumber' = $7::text
+     AND recovered.metadata->>'reviewedHeadSha' = $8
+     AND recovered.metadata->>'mergeSha' = $9
+     AND recovered.id > merged.id
+    JOIN governance_event AS confirmed
+      ON confirmed."userId" = recovery_goal."userId"
+     AND confirmed."entityType" = 'goal'
+     AND confirmed."entityId"::text = recovery_goal.id::text
+     AND confirmed."eventType" = 'HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED'
+     AND confirmed.metadata->>'prNumber' = $7::text
+     AND confirmed.metadata->>'reviewedHeadSha' = $8
+     AND confirmed.metadata->>'mergeSha' = $9
+     AND confirmed.metadata->>'proofDigest' = $10
+     AND confirmed.id > recovered.id
+    WHERE recovery_goal.id = q."goalId"
+      AND recovery_goal."userId" = q."userId"
+      AND recovery_goal.status = 'classified'
+      AND latest_terminal.metadata->>'result' = 'FAILED_TERMINAL'
+      AND latest_terminal.metadata->>'nextState' = $15
+  )
+`
+
 const VALIDATION_RECOVERY_RENEWAL_COUNT_SQL = `(
   SELECT COUNT(*)::integer
   FROM governance_event AS recovery_renewal
@@ -1594,6 +1645,134 @@ WHERE q."userId" = $1
   )
 RETURNING ${QUEUE_COLUMNS}
 `,
+  resumeAfterReviewRecovery: `
+UPDATE "outcome_queue_item" AS q
+SET "lifecycleState" = 'active',
+    "lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERED',
+    "leaseHolder" = $11,
+    "leaseToken" = $12,
+    "leaseExpiresAt" = $13::timestamptz,
+    "fencingToken" = q."fencingToken" + 1,
+    "version" = q."version" + 1,
+    "updatedAt" = $14::timestamptz
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'blocked'
+  AND q."lifecycleReason" = $15
+  AND q."version" = $3
+  AND q."executionBinding" = $4
+  AND q."acquisitionKey" = $5
+  AND q."fencingToken" = $6
+  AND ${REVIEW_RECOVERY_PROOF_PREDICATE}
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$14::timestamptz")}
+  AND q."riskClass" IN ('R0', 'R1')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM unnest(q."dependencyKeys") AS dependency("outcomeKey")
+    LEFT JOIN "outcome_queue_item" AS completed_dependency
+      ON completed_dependency."userId" = q."userId"
+      AND completed_dependency."outcomeKey" = dependency."outcomeKey"
+    WHERE completed_dependency."lifecycleState" IS DISTINCT FROM 'completed'
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM "outcome_queue_item" AS live
+    WHERE live."userId" = q."userId"
+      AND live."id" <> q."id"
+      AND live."lifecycleState" = 'active'
+  )
+RETURNING ${QUEUE_COLUMNS}
+`,
+  reclaimExpiredReviewRecovery: `
+UPDATE "outcome_queue_item" AS q
+SET "lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED',
+    "leaseHolder" = $11,
+    "leaseToken" = $12,
+    "leaseExpiresAt" = $13::timestamptz,
+    "fencingToken" = q."fencingToken" + 1,
+    "version" = q."version" + 1,
+    "updatedAt" = $14::timestamptz
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."lifecycleReason" IN (
+    'REVIEW_REMEDIATION_RECOVERED',
+    'REVIEW_REMEDIATION_RECOVERY_RECLAIMED'
+  )
+  AND q."fencingToken" > $6::integer
+  AND q."version" - $3::integer
+    = q."fencingToken" - $6::integer + ${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL}
+  AND q."executionBinding" = $4
+  AND q."acquisitionKey" = $5
+  AND q."leaseExpiresAt" <= $14::timestamptz
+  AND ${REVIEW_RECOVERY_PROOF_PREDICATE}
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$14::timestamptz")}
+  AND q."riskClass" IN ('R0', 'R1')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM unnest(q."dependencyKeys") AS dependency("outcomeKey")
+    LEFT JOIN "outcome_queue_item" AS completed_dependency
+      ON completed_dependency."userId" = q."userId"
+      AND completed_dependency."outcomeKey" = dependency."outcomeKey"
+    WHERE completed_dependency."lifecycleState" IS DISTINCT FROM 'completed'
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM "outcome_queue_item" AS live
+    WHERE live."userId" = q."userId"
+      AND live."id" <> q."id"
+      AND live."lifecycleState" = 'active'
+  )
+RETURNING ${QUEUE_COLUMNS},
+  (${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL} > 0) AS "authorityRenewalApplied",
+  ${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL} AS "authorityRenewalCount",
+  (q."fencingToken" - $6::integer - 1) AS "reviewRecoveryReclaimCount",
+  TRUE AS "reviewRecoveryStaleReclaimApplied"
+`,
+  readReviewRecoveryCandidate: `
+SELECT ${QUEUE_COLUMNS}
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."lifecycleReason" IN (
+    'REVIEW_REMEDIATION_RECOVERED',
+    'REVIEW_REMEDIATION_RECOVERY_RECLAIMED'
+  )
+  AND q."executionBinding" = $4
+  AND q."acquisitionKey" = $5
+  AND q."fencingToken" > $6::integer
+  AND $11::text IS NOT NULL
+  AND $12::text IS NOT NULL
+  AND $13::timestamptz IS NOT NULL
+  AND $14::timestamptz IS NOT NULL
+  AND q."version" - $3::integer
+    = q."fencingToken" - $6::integer + ${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL}
+  AND ${REVIEW_RECOVERY_PROOF_PREDICATE}
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND q."riskClass" IN ('R0', 'R1')
+FOR UPDATE OF q
+`,
+  verifyPersistedReviewRecovery: `
+SELECT ${QUEUE_COLUMNS}
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."lifecycleReason" IN ($16, 'STALE_LEASE_RECOVERED')
+  AND q."version" = $3
+  AND q."executionBinding" = $4
+  AND q."acquisitionKey" = $5
+  AND q."fencingToken" = $6
+  AND q."leaseToken" = $12
+  AND ${REVIEW_RECOVERY_PROOF_PREDICATE}
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$14::timestamptz")}
+  AND q."riskClass" IN ('R0', 'R1')
+FOR UPDATE OF q
+`,
   reclaimExpiredValidationRecovery: `
 UPDATE "outcome_queue_item" AS q
 SET "lifecycleReason" = 'VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED',
@@ -1735,6 +1914,32 @@ WHERE q."userId" = $1
   AND ${VALIDATION_RECOVERY_PROOF_PREDICATE}
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$12::timestamptz")}
+`,
+  replayResumeAfterReviewRecovery: `
+SELECT ${QUEUE_COLUMNS},
+       (${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL} > 0) AS "authorityRenewalApplied",
+       ${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL} AS "authorityRenewalCount",
+       GREATEST(q."fencingToken" - $6::integer - 1, 0) AS "reviewRecoveryReclaimCount",
+       (q."fencingToken" - $6::integer > 1) AS "reviewRecoveryStaleReclaimApplied"
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."lifecycleReason" IN (
+    'REVIEW_REMEDIATION_RECOVERED',
+    'REVIEW_REMEDIATION_RECOVERY_RECLAIMED'
+  )
+  AND q."version" - $3::integer
+    = q."fencingToken" - $6::integer + ${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL}
+  AND q."executionBinding" = $4
+  AND q."acquisitionKey" = $5
+  AND q."fencingToken" > $6::integer
+  AND q."leaseHolder" = $11
+  AND q."leaseToken" = $12
+  AND q."leaseExpiresAt" > $14::timestamptz
+  AND ${REVIEW_RECOVERY_PROOF_PREDICATE}
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$14::timestamptz")}
 `,
   approve: `
 UPDATE "outcome_queue_item" AS q
@@ -4163,6 +4368,172 @@ export async function resumeOutcomeQueueAfterValidationRecovery({
         ? { validationRecoveryStaleReclaimApplied: true }
         : {}),
       validationRecoveryReclaimCount: reclaimCount,
+    }
+  } catch (error) {
+    if (begun) {
+      try { await connection.query("ROLLBACK") } catch {}
+    }
+    throw error
+  } finally {
+    await connection.close()
+  }
+}
+
+export async function resumeOutcomeQueueAfterReviewRecovery({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  userId,
+  outcomeKey,
+  expectedVersion,
+  executionBinding,
+  acquisitionKey,
+  fencingToken,
+  prNumber,
+  reviewedHeadSha,
+  mergeSha,
+  proofDigest,
+  expectedLifecycleReason,
+  leaseHolder,
+  leaseToken,
+  leaseDurationMs,
+  persistedLifecycleReason = null,
+  now = new Date(),
+} = {}) {
+  const user = userScope(userId)
+  const key = nonempty(outcomeKey, "OUTCOME_QUEUE_KEY_INVALID")
+  const version = integer(expectedVersion, "OUTCOME_QUEUE_VERSION_INVALID")
+  const binding = nonempty(executionBinding, "OUTCOME_QUEUE_EXECUTION_BINDING_INVALID")
+  const acquisition = nonempty(acquisitionKey, "OUTCOME_QUEUE_ACQUISITION_KEY_INVALID")
+  const fence = integer(fencingToken, "OUTCOME_QUEUE_FENCING_TOKEN_INVALID", { minimum: 1 })
+  const pr = integer(prNumber, "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_INVALID", { minimum: 1 })
+  const head = nonempty(reviewedHeadSha, "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_INVALID")
+  const merge = nonempty(mergeSha, "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_INVALID")
+  if (!/^[0-9a-f]{40}$/.test(head) || !/^[0-9a-f]{40}$/.test(merge)) {
+    fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_INVALID")
+  }
+  const digest = nonempty(proofDigest, "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_INVALID")
+  if (!/^[0-9a-f]{64}$/.test(digest)) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_INVALID")
+  const lifecycleReason = nonempty(
+    expectedLifecycleReason,
+    "OUTCOME_QUEUE_REVIEW_RECOVERY_STATE_WALL",
+  )
+  if (lifecycleReason !== "REVIEW_REMEDIATION_EXHAUSTED") {
+    fail("OUTCOME_QUEUE_REVIEW_RECOVERY_STATE_WALL")
+  }
+  if (persistedLifecycleReason !== null
+    && ![
+      "REVIEW_REMEDIATION_RECOVERED",
+      "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+    ].includes(persistedLifecycleReason)) {
+    fail("OUTCOME_QUEUE_REVIEW_RECOVERY_STATE_WALL")
+  }
+  const holder = nonempty(leaseHolder, "OUTCOME_QUEUE_LEASE_HOLDER_INVALID")
+  const token = nonempty(leaseToken, "OUTCOME_QUEUE_LEASE_TOKEN_INVALID")
+  integer(leaseDurationMs, "OUTCOME_QUEUE_LEASE_DURATION_INVALID", { minimum: 1 })
+  const at = timestamp(now)
+  const expiresAt = timestamp(new Date(Date.parse(at) + leaseDurationMs))
+  const values = [
+    user, key, version, binding, acquisition, fence, pr, head, merge, digest,
+    holder, token, expiresAt, at, lifecycleReason,
+  ]
+  const connection = await openQuery(query, databaseUrl, true)
+  let begun = false
+  try {
+    await connection.query("BEGIN")
+    begun = true
+    await connection.query(OUTCOME_QUEUE_SQL.acquireLock, [`${user}:outcome-queue`])
+    if (persistedLifecycleReason !== null) {
+      const verified = await connection.query(
+        OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
+        [...values, persistedLifecycleReason],
+      )
+      if (verified?.rows?.length !== 1) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+      await connection.query("COMMIT")
+      begun = false
+      return verified.rows[0]
+    }
+    let result = await connection.query(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery, values)
+    if (result?.rows?.length === 1) {
+      await connection.query("COMMIT")
+      begun = false
+      return result.rows[0]
+    }
+    const activeCandidate = await connection.query(
+      OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate,
+      values,
+    )
+    const renewed = new Map()
+    if ((result?.rows?.length ?? 0) === 0 && (activeCandidate?.rows?.length ?? 0) === 0) {
+      const renewal = await renewExpiredV12CampaignAuthorities(
+        connection,
+        user,
+        at,
+        key,
+        version,
+        lifecycleReason,
+      )
+      for (const entry of renewal) renewed.set(...entry)
+      if (renewed.has(key)) {
+        const renewedValues = [...values]
+        renewedValues[2] = renewed.get(key)
+        result = await connection.query(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery, renewedValues)
+      }
+    } else if ((activeCandidate?.rows?.length ?? 0) > 1) {
+      fail("OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL")
+    }
+    if (result?.rows?.length === 1) {
+      await connection.query("COMMIT")
+      begun = false
+      return { ...result.rows[0], authorityRenewalApplied: true, authorityRenewalCount: 1 }
+    }
+    let reclaimed = await connection.query(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery, values)
+    if ((reclaimed?.rows?.length ?? 0) === 0 && activeCandidate?.rows?.length === 1) {
+      const activeRenewal = await renewExpiredV12CampaignAuthorities(
+        connection,
+        user,
+        at,
+        key,
+        Number(activeCandidate.rows[0].version),
+        null,
+      )
+      for (const entry of activeRenewal) renewed.set(...entry)
+      if (activeRenewal.has(key)) {
+        reclaimed = await connection.query(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery, values)
+      }
+    }
+    if (reclaimed?.rows?.length === 1) {
+      await connection.query("COMMIT")
+      begun = false
+      return reclaimed.rows[0]
+    }
+    const replay = await connection.query(OUTCOME_QUEUE_SQL.replayResumeAfterReviewRecovery, values)
+    if (replay?.rows?.length !== 1) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL")
+    const {
+      authorityRenewalApplied: replayRenewalApplied,
+      authorityRenewalCount,
+      reviewRecoveryStaleReclaimApplied: staleReclaimApplied,
+      reviewRecoveryReclaimCount,
+      ...replayedOutcome
+    } = replay.rows[0]
+    const renewalCount = Number(authorityRenewalCount)
+    const reclaimCount = Number(reviewRecoveryReclaimCount)
+    if (!Number.isSafeInteger(renewalCount) || renewalCount < 0
+      || !Number.isSafeInteger(reclaimCount) || reclaimCount < 0
+      || replayRenewalApplied !== (renewalCount > 0)
+      || staleReclaimApplied !== (reclaimCount > 0)
+      || Number(replayedOutcome.version) !== version + 1 + renewalCount + reclaimCount) {
+      fail("OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL")
+    }
+    await connection.query("COMMIT")
+    begun = false
+    return {
+      ...replayedOutcome,
+      ...(renewed.has(key) || replayRenewalApplied === true
+        ? { authorityRenewalApplied: true }
+        : {}),
+      authorityRenewalCount: renewalCount,
+      ...(staleReclaimApplied === true ? { reviewRecoveryStaleReclaimApplied: true } : {}),
+      reviewRecoveryReclaimCount: reclaimCount,
     }
   } catch (error) {
     if (begun) {

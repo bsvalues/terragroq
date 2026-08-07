@@ -581,7 +581,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
   it("refuses recovery when persisted terminal evidence does not match", async () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ recovered: false }] })
+      .mockResolvedValueOnce({ rows: [] })
     await expect(recoverNativeProviderOutcome({ query, outcomeId: 4 })).resolves.toBe(false)
     expect(query).toHaveBeenCalledTimes(2)
   })
@@ -1090,9 +1090,11 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       .mockResolvedValueOnce({ rows: [] })
     const head = "b".repeat(40)
     const merge = "c".repeat(40)
+    const proof = "d".repeat(64)
 
     await expect(recoverReviewedOutcome({
       query, outcomeId: 4, prNumber: 448, reviewedHeadSha: head, mergeSha: merge,
+      proofDigest: proof,
     })).resolves.toBe(true)
     expect(query.mock.calls[2][0]).toMatch(/merged\.id > candidate\."terminalId"/)
     expect(query.mock.calls[2][1]).toEqual([
@@ -1100,6 +1102,32 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     ])
     expect(query.mock.calls[2][0]).toMatch(/status = 'classified'/)
     expect(query.mock.calls[3][0]).toMatch(/HERMES_OUTCOME_REVIEW_RECOVERED/)
+    expect(query.mock.calls[3][1][3]).toContain(`"proofDigest":"${proof}"`)
+    expect(query.mock.calls[4][0]).toMatch(/HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED/)
+    expect(query.mock.calls[5][0]).toMatch(/HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED/)
+  })
+
+  it("appends digest-bound queue evidence for a compatible pre-digest review recovery", async () => {
+    const head = "b".repeat(40)
+    const merge = "c".repeat(40)
+    const proof = "d".repeat(64)
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ userId: "owner", workOrderId: 42, recoveredEventId: 100 }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recoverReviewedOutcome({
+      query, outcomeId: 4, prNumber: 448, reviewedHeadSha: head, mergeSha: merge,
+      proofDigest: proof,
+    })).resolves.toBe(true)
+    expect(query.mock.calls[3][0]).toMatch(/merged\.id < recovered\.id/)
+    expect(query.mock.calls[4][0]).toMatch(/HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED/)
+    expect(query.mock.calls[5][1][3]).toContain(`"proofDigest":"${proof}"`)
+    expect(query.mock.calls.at(-1)?.[0]).toBe("COMMIT")
   })
 
   it("recovers cleanup exhaustion only from exact post-terminal cleanup evidence", async () => {
@@ -1179,6 +1207,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       prNumber: 448,
       reviewedHeadSha: "b".repeat(40),
       mergeSha: "c".repeat(40),
+      proofDigest: "d".repeat(64),
     })).resolves.toBe(false)
   })
 
@@ -1187,7 +1216,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ recovered: false }] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
     await expect(recoverReviewedOutcome({
       query,
@@ -1195,6 +1224,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       prNumber: 448,
       reviewedHeadSha: "b".repeat(40),
       mergeSha: "c".repeat(40),
+      proofDigest: "d".repeat(64),
     })).resolves.toBe(false)
     expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
   })

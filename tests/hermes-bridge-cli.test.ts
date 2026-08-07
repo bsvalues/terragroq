@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import {
   captureRuntimeAgreement,
+  createResidentHermesOrchestrator,
   recoverExternalToolWall,
   recoverOrphanedValidationCycle,
   recoverPostMergeCleanupWall,
@@ -21,6 +22,26 @@ import {
 import { initializeHermesState } from "../scripts/hermes-bridge/state-store.mjs"
 
 describe("Hermes bridge CLI", () => {
+  it("wires durable review recovery through the resident queue runtime", async () => {
+    const resumeAfterReviewRecovery = vi.fn()
+    const close = vi.fn(async () => {})
+    const queueRuntime = {
+      selectOutcome: vi.fn(), completeOutcome: vi.fn(), terminalizeOutcome: vi.fn(),
+      deferOutcome: vi.fn(), renewOutcomeLease: vi.fn(), bindWorkOrder: vi.fn(),
+      refreshOutcome: vi.fn(), resumeAfterOwnerDecision: vi.fn(),
+      resumeAfterValidationRecovery: vi.fn(), resumeAfterReviewRecovery, close,
+    }
+    const createOrchestrator = vi.fn(() => ({ cycle: vi.fn() }))
+
+    const resident = createResidentHermesOrchestrator({ queueRuntime, createOrchestrator })
+
+    expect(createOrchestrator).toHaveBeenCalledWith(expect.objectContaining({
+      resumeQueueAfterReviewRecovery: resumeAfterReviewRecovery,
+    }))
+    await resident.close()
+    expect(close).toHaveBeenCalledOnce()
+  })
+
   it("delegates orphaned validation recovery to the guarded orchestrator operation", async () => {
     const recoverOrphanedValidationCycleLease = vi.fn(async () => ({
       result: "RECOVERED", outcomeId: "12", fencingToken: 78, replayed: false,
@@ -768,7 +789,10 @@ describe("Hermes bridge CLI", () => {
     expect(reconcileRecoveryProjection).toHaveBeenCalledOnce()
     expect(cycle).toHaveBeenCalledTimes(4)
     expect(projectCheckpoint).toHaveBeenCalledTimes(8)
-    expect(recoverOutcome).toHaveBeenCalledOnce()
+    expect(recoverOutcome).toHaveBeenCalledTimes(5)
+    expect(recoverOutcome).toHaveBeenLastCalledWith(expect.objectContaining({
+      proofDigest: beginRecovery.mock.calls[0][0].proofDigest,
+    }))
   })
 
   it("accepts a bounded exact-head-reviewed remediation chain for a rate-limited original review", async () => {
@@ -915,7 +939,10 @@ describe("Hermes bridge CLI", () => {
       }),
     }))
     expect(cycle).toHaveBeenCalledTimes(2)
-    expect(recoverOutcome).toHaveBeenCalledOnce()
+    expect(recoverOutcome).toHaveBeenCalledTimes(2)
+    expect(recoverOutcome).toHaveBeenLastCalledWith(expect.objectContaining({
+      proofDigest: beginRecovery.mock.calls[0][0].proofDigest,
+    }))
     expect(lifecycle.verifyOriginMainContains).toHaveBeenCalledWith("c".repeat(40))
     expect(lifecycle.verifyOriginMainContains).toHaveBeenCalledWith(remediationMerge)
     expect(lifecycle.verifyCommitAncestor).toHaveBeenCalledWith("c".repeat(40), remediationMerge)

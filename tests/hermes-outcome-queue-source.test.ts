@@ -39,6 +39,7 @@ import {
   renewOutcomeLease as renewOutcomeLeaseCompatibility,
   renewOutcomeQueueLease,
   resumeOutcomeQueueAfterDecision,
+  resumeOutcomeQueueAfterReviewRecovery,
   resumeOutcomeQueueAfterValidationRecovery,
   transitionOutcome as transitionOutcomeCompatibility,
   transitionOutcomeQueueItem,
@@ -2628,6 +2629,221 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.resumeAfterValidationRecovery,
       "COMMIT",
     ])
+  })
+
+  it("resumes a review-blocked queue item only through the exact terminal, merge, and recovery chain", async () => {
+    const resumed = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    })
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery ? [resumed] : [],
+    }))
+
+    await expect(resumeOutcomeQueueAfterReviewRecovery({
+      query: dedicatedQuery(run),
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 5,
+      executionBinding: "execution-a",
+      acquisitionKey: "acquire-a",
+      fencingToken: 3,
+      prNumber: 523,
+      reviewedHeadSha: "a".repeat(40),
+      mergeSha: "b".repeat(40),
+      proofDigest: "d".repeat(64),
+      expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      now,
+    })).resolves.toEqual(resumed)
+    expect(run).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery, [
+      userId, "goal:GOAL-1000", 5, "execution-a", "acquire-a", 3, 523,
+      "a".repeat(40), "b".repeat(40), "d".repeat(64), "resident-hermes", "lease-a",
+      "2026-07-28T12:50:00.000Z", now, "REVIEW_REMEDIATION_EXHAUSTED",
+    ])
+    expect(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery).toContain("HERMES_OUTCOME_TERMINAL")
+    expect(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery).toContain("checkpointState' = 'PR_MERGED")
+    expect(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery).toContain("HERMES_OUTCOME_REVIEW_RECOVERED")
+    expect(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery).toContain("recovered.id > merged.id")
+    expect(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery).toContain(`live."id" <> q."id"`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery)
+      .not.toContain(`live."leaseExpiresAt"`)
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN", OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery, "COMMIT",
+    ])
+  })
+
+  it("replays an already committed exact review recovery without a second transition", async () => {
+    const replayed = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      authorityRenewalApplied: false,
+      authorityRenewalCount: 0,
+      reviewRecoveryStaleReclaimApplied: false,
+      reviewRecoveryReclaimCount: 0,
+    })
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.replayResumeAfterReviewRecovery ? [replayed] : [],
+    }))
+
+    await expect(resumeOutcomeQueueAfterReviewRecovery({
+      query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 5, executionBinding: "execution-a", acquisitionKey: "acquire-a",
+      fencingToken: 3, prNumber: 523, reviewedHeadSha: "a".repeat(40),
+      mergeSha: "b".repeat(40), proofDigest: "d".repeat(64),
+      expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes", leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000, now,
+    })).resolves.toMatchObject({ version: 6, fencingToken: 4 })
+    expect(run.mock.calls.filter(([sql]) => sql === OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery))
+      .toHaveLength(1)
+    expect(run).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.replayResumeAfterReviewRecovery, expect.any(Array))
+  })
+
+  it("reclaims an expired digest-bound review recovery with a fresh queue fence", async () => {
+    const reclaimed = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      authorityRenewalApplied: false,
+      authorityRenewalCount: 0,
+      reviewRecoveryStaleReclaimApplied: true,
+      reviewRecoveryReclaimCount: 1,
+    })
+    const active = { ...reclaimed, version: 6, fencingToken: 4 }
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate ? [active]
+        : sql === OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery ? [reclaimed]
+          : [],
+    }))
+
+    await expect(resumeOutcomeQueueAfterReviewRecovery({
+      query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 5, executionBinding: "execution-a", acquisitionKey: "acquire-a",
+      fencingToken: 3, prNumber: 523, reviewedHeadSha: "a".repeat(40),
+      mergeSha: "b".repeat(40), proofDigest: "d".repeat(64),
+      expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes", leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000, now,
+    })).resolves.toEqual(reclaimed)
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
+      .toContain(`q."leaseExpiresAt" <= $14::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
+      .toContain("confirmed.metadata->>'proofDigest' = $10")
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
+      .toContain(`q."riskClass" IN ('R0', 'R1')`)
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
+      .toContain(`completed_dependency."lifecycleState" IS DISTINCT FROM 'completed'`)
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
+      .toContain(`live."id" <> q."id"`)
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
+      .not.toContain(`live."leaseExpiresAt"`)
+    expect(run).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery, expect.any(Array))
+  })
+
+  it("revalidates an adopted review recovery against the exact durable proof identity", async () => {
+    const persisted = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:00:00.000Z",
+    })
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery ? [persisted] : [],
+    }))
+
+    await expect(resumeOutcomeQueueAfterReviewRecovery({
+      query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 6, executionBinding: "execution-a", acquisitionKey: "acquire-a",
+      fencingToken: 4, prNumber: 523, reviewedHeadSha: "a".repeat(40),
+      mergeSha: "b".repeat(40), proofDigest: "d".repeat(64),
+      expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes", leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      now,
+    })).resolves.toEqual(persisted)
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
+      "COMMIT",
+    ])
+    expect(OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery)
+      .toContain("confirmed.metadata->>'proofDigest' = $10")
+  })
+
+  it("revalidates an identity-preserving stale acquisition against the original review proof", async () => {
+    const persisted = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    })
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery ? [persisted] : [],
+    }))
+
+    await expect(resumeOutcomeQueueAfterReviewRecovery({
+      query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 7, executionBinding: "execution-a", acquisitionKey: "acquire-a",
+      fencingToken: 5, prNumber: 523, reviewedHeadSha: "a".repeat(40),
+      mergeSha: "b".repeat(40), proofDigest: "d".repeat(64),
+      expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes", leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      now,
+    })).resolves.toEqual(persisted)
+    expect(OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery)
+      .toContain(`q."lifecycleReason" IN ($16, 'STALE_LEASE_RECOVERED')`)
+    expect(run).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
+      expect.arrayContaining(["REVIEW_REMEDIATION_RECOVERED"]),
+    )
+  })
+
+  it.each([
+    { prNumber: 0, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), reason: "REVIEW_REMEDIATION_EXHAUSTED" },
+    { prNumber: 523, reviewedHeadSha: "short", mergeSha: "b".repeat(40), reason: "REVIEW_REMEDIATION_EXHAUSTED" },
+    { prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "short", reason: "REVIEW_REMEDIATION_EXHAUSTED" },
+    { prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), reason: "OTHER_TERMINAL" },
+  ])("rejects altered review recovery input before opening a transaction", async (proof) => {
+    const run = vi.fn()
+    await expect(resumeOutcomeQueueAfterReviewRecovery({
+      query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 5, executionBinding: "execution-a", acquisitionKey: "acquire-a",
+      fencingToken: 3, prNumber: proof.prNumber, reviewedHeadSha: proof.reviewedHeadSha,
+      mergeSha: proof.mergeSha, proofDigest: "d".repeat(64), expectedLifecycleReason: proof.reason,
+      leaseHolder: "resident-hermes", leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000, now,
+    })).rejects.toMatchObject({
+      code: expect.stringMatching(/^OUTCOME_QUEUE_REVIEW_RECOVERY_/),
+    })
+    expect(run).not.toHaveBeenCalled()
   })
 
   it("reclaims an expired committed validation recovery before replaying local state", async () => {

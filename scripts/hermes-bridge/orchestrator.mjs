@@ -295,6 +295,8 @@ export function createHermesOrchestrator(options = {}) {
   const resumeQueueAfterDecision = options.resumeQueueAfterDecision ?? (async (outcome) => outcome)
   const resumeQueueAfterValidationRecovery = options.resumeQueueAfterValidationRecovery
     ?? (async (outcome) => outcome)
+  const resumeQueueAfterReviewRecovery = options.resumeQueueAfterReviewRecovery
+    ?? (async (outcome) => outcome)
   const readApprovedDecision = options.readApprovedOwnerDecision ?? readApprovedOwnerDecision
   const verifyValidationInfrastructureRecovery = options.verifyValidationInfrastructureRecovery
     ?? readValidationInfrastructureRecovery
@@ -923,6 +925,31 @@ export function createHermesOrchestrator(options = {}) {
         recoveryFencingToken: resolvedProof.recoveryFencingToken,
       })
     }
+    const verifiedReviewRecoveries = new Map()
+    for (const execution of Object.values(initialized.executions)) {
+      if (execution?.lease?.status !== "ABANDONED"
+        || execution?.checkpoint?.state !== "REVIEW_REMEDIATION_RECOVERED"
+        || execution?.checkpoint?.detail !== "REVIEW_REMEDIATION_EXHAUSTED") continue
+      const prNumber = Number(execution?.metadata?.prNumber)
+      const reviewedHeadSha = execution?.metadata?.headRefOid
+      const mergeSha = execution?.metadata?.mergeSha
+      const proofDigest = execution?.metadata?.reviewRecoveryProofDigest
+      if (!Number.isSafeInteger(prNumber) || prNumber <= 0
+        || typeof reviewedHeadSha !== "string" || !/^[0-9a-f]{40}$/.test(reviewedHeadSha)
+        || typeof mergeSha !== "string" || !/^[0-9a-f]{40}$/.test(mergeSha)
+        || typeof proofDigest !== "string" || !/^[0-9a-f]{64}$/.test(proofDigest)) {
+        throw Object.assign(new Error("Persisted review recovery proof is incomplete"), {
+          code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+        })
+      }
+      verifiedReviewRecoveries.set(String(execution.outcomeId), {
+        expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
+        proofDigest,
+        prNumber,
+        reviewedHeadSha,
+        mergeSha,
+      })
+    }
     const recoveredCandidates = Object.values(initialized.executions).filter((execution) => (
       execution?.lease?.status === "ABANDONED"
       && (
@@ -1055,6 +1082,10 @@ export function createHermesOrchestrator(options = {}) {
     const validationRecoveryProof = verifiedValidationRecoveries.get(outcomeId)
     if (validationRecoveryProof) {
       outcome = await resumeQueueAfterValidationRecovery(outcome, validationRecoveryProof)
+    }
+    const reviewRecoveryProof = verifiedReviewRecoveries.get(outcomeId)
+    if (reviewRecoveryProof) {
+      outcome = await resumeQueueAfterReviewRecovery(outcome, reviewRecoveryProof)
     }
     outcome = terminalReplay
       ? await refreshQueueOutcome(outcome, terminalReplay)

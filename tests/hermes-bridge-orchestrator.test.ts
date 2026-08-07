@@ -1329,7 +1329,12 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
   })
 
   it("adopts a durable reviewed-merge recovery before queue selection after restart", async () => {
-    const value = fixture()
+    const resumeQueueAfterReviewRecovery = vi.fn(async (outcome) => outcome)
+    const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
+    const value = fixture(undefined, {
+      resumeQueueAfterReviewRecovery,
+      refreshQueueOutcome,
+    })
     const outcome = await value.selectOutcome()
     value.selectOutcome.mockClear()
     value.state.initialize()
@@ -1403,10 +1408,37 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       mergeCommit: { oid: "b".repeat(40) },
     })
 
+    resumeQueueAfterReviewRecovery.mockRejectedValueOnce(Object.assign(
+      new Error("durable queue resume failed"),
+      { code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL" },
+    ))
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "ABANDONED" },
+      checkpoint: {
+        state: "REVIEW_REMEDIATION_RECOVERED",
+        detail: "REVIEW_REMEDIATION_EXHAUSTED",
+      },
+    })
+    expect(value.lifecycle.runValidationCommands).not.toHaveBeenCalled()
+    expect(value.lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
+    expect(value.client.runTurn).not.toHaveBeenCalled()
+
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
       result: "COMPLETE", outcomeId: "77", prNumber: 500,
     })
     expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(resumeQueueAfterReviewRecovery).toHaveBeenCalledWith(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      prNumber: 500,
+      reviewedHeadSha: "c".repeat(40),
+      mergeSha: "b".repeat(40),
+    })
+    expect(resumeQueueAfterReviewRecovery.mock.invocationCallOrder[0])
+      .toBeLessThan(refreshQueueOutcome.mock.invocationCallOrder[0])
     expect(value.state.read().executions["77"]).toMatchObject({
       fencingToken: lease.fencingToken + 1,
       lease: { status: "RELEASED" },
