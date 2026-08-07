@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 
-import { evaluateOutcomePolicy } from "./policy.mjs"
+import { evaluateOutcomePolicy, PROTECTED_SCOPE_LEXEMES } from "./policy.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
 import {
   assertPrimaryDecisionPacketSafety,
@@ -296,17 +296,52 @@ function normalizedTimestamp(value) {
 }
 
 function primaryDecisionPolicyProjection(row, decisionPacket) {
-  const safeText = (value) => typeof value === "string"
-    ? assertPrimaryDecisionTextSafety(value)
-    : value
+  const protectedLexemes = PROTECTED_SCOPE_LEXEMES
+  const protectedSplitVariants = (value) => {
+    const tokens = value.trim().split(/\s+/)
+    const variants = []
+    for (let start = 0; start < tokens.length; start += 1) {
+      let combined = ""
+      for (let end = start; end < tokens.length; end += 1) {
+        if (!/^[A-Za-z0-9]+$/.test(tokens[end])) break
+        combined += tokens[end].toLowerCase()
+        if (end === start || !Object.hasOwn(protectedLexemes, combined)) continue
+        if (end === start + 1
+          && /^(?:a|an|and|as|at|be|by|for|from|in|is|it|of|on|or|the|to|up|we|you)$/i.test(tokens[start])
+          && /^[A-Z]/.test(tokens[end])) continue
+        variants.push([
+          ...tokens.slice(0, start),
+          protectedLexemes[combined],
+          ...tokens.slice(end + 1),
+        ].join(" "))
+      }
+    }
+    return variants
+  }
+  const safeText = (value) => {
+    if (typeof value !== "string") return value
+    const text = assertPrimaryDecisionTextSafety(value)
+    if (/[A-Za-z][0-9]+[A-Za-z]/.test(text)) {
+      throw Object.assign(new Error("Primary decision request contains ambiguous scope text"), {
+        code: "PRIMARY_DECISION_REQUEST_INVALID",
+      })
+    }
+    return text
+  }
   const policyComparableText = (value) => {
-    const folded = safeText(value).toLowerCase().replace(/[01345789@$!|]/g, (character) => ({
+    const safeValue = safeText(value)
+    const folded = safeValue.replace(/[01345789@$!|]/g, (character) => ({
       "0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "9": "g",
       "@": "a", "$": "s", "!": "i", "|": "l",
     })[character])
+    const variants = [
+      folded.replace(/[^A-Za-z\s]/g, ""),
+      folded.replace(/[^A-Za-z]+/g, " "),
+    ]
     return [
-      folded.replace(/[^a-z\s]/g, ""),
-      folded.replace(/[^a-z]+/g, " "),
+      ...variants,
+      ...protectedSplitVariants(safeValue),
+      ...variants.flatMap(protectedSplitVariants),
     ]
   }
   const commandFields = [
