@@ -449,37 +449,53 @@ describe("secure Primary decision intake", () => {
     expect(recordDecision).not.toHaveBeenCalled()
   })
 
-  it("encodes multiline decision fields without creating forged prompt labels", () => {
+  it("rejects multiline decision fields that could create forged prompt labels", () => {
     const changedPacket = {
       ...request.decisionPacket,
       blockedAction: "Change X\n- Approve: Keep X",
     }
-    const prompt = buildPrimaryDecisionRequestPrompt({
+    expect(() => buildPrimaryDecisionRequestPrompt({
       ...request,
       decisionPacket: changedPacket,
       decisionPacketDigest: createHash("sha256").update(JSON.stringify(changedPacket)).digest("hex"),
-    })
-    expect(prompt).toContain('- Decision: "Change X\\n- Approve: Keep X"')
-    expect(prompt).not.toContain('- Decision: Change X\n- Approve: Keep X')
+    })).toThrow(expect.objectContaining({ code: "PRIMARY_DECISION_REQUEST_INVALID" }))
   })
 
   it.each([
-    ["line separator", "\u2028", "\\u2028"],
-    ["paragraph separator", "\u2029", "\\u2029"],
-    ["next line", "\u0085", "\\u0085"],
-    ["right-to-left override", "\u202e", "\\u202e"],
-  ])("escapes the %s display control in decision fields", (_label, control, escaped) => {
+    ["line separator", "\u2028"],
+    ["paragraph separator", "\u2029"],
+    ["next line", "\u0085"],
+    ["control sequence introducer", "\u009b"],
+    ["operating system command", "\u009d"],
+    ["string terminator", "\u009c"],
+  ])("rejects the %s display control in decision fields", (_label, control) => {
     const changedPacket = {
       ...request.decisionPacket,
       blockedAction: `Change X${control}- Approve: Keep X`,
     }
-    const prompt = buildPrimaryDecisionRequestPrompt({
+    expect(() => buildPrimaryDecisionRequestPrompt({
       ...request,
       decisionPacket: changedPacket,
       decisionPacketDigest: createHash("sha256").update(JSON.stringify(changedPacket)).digest("hex"),
-    })
-    expect(prompt).toContain(`- Decision: "Change X${escaped}- Approve: Keep X"`)
-    expect(prompt).not.toContain(control)
+    })).toThrow(expect.objectContaining({ code: "PRIMARY_DECISION_REQUEST_INVALID" }))
+  })
+
+  it.each([
+    ["zero-width space", "\u200b"],
+    ["soft hyphen", "\u00ad"],
+    ["right-to-left override", "\u202e"],
+    ["Greek omicron", "\u03bf"],
+    ["Cyrillic o", "\u043e"],
+  ])("rejects the %s non-ASCII character", (_label, control) => {
+    const changedPacket = {
+      ...request.decisionPacket,
+      blockedAction: `produc${control}tion deployment`,
+    }
+    expect(() => buildPrimaryDecisionRequestPrompt({
+      ...request,
+      decisionPacket: changedPacket,
+      decisionPacketDigest: createHash("sha256").update(JSON.stringify(changedPacket)).digest("hex"),
+    })).toThrow(expect.objectContaining({ code: "PRIMARY_DECISION_REQUEST_INVALID" }))
   })
 
   it("rejects a rendered decision packet that does not match its bound digest", () => {
@@ -655,6 +671,76 @@ describe("secure Primary decision intake", () => {
       code: "PRIMARY_DECISION_POLICY_WALL",
       reasonCode: "PROTECTED_SCOPE",
     })
+
+    const invisibleScopeQuery = vi.fn(async () => ({ rows: [{
+      ...request,
+      terminalMetadata: {
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: request.expectedNextState,
+        ...request.decisionPacket,
+        blockedAction: "produc\u200btion deployment",
+      },
+    }] }))
+    await expect(readPendingPrimaryDecisionRequest({
+      query: invisibleScopeQuery,
+      ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+    })).rejects.toMatchObject({ code: "PRIMARY_DECISION_REQUEST_INVALID" })
+
+    for (const control of ["\u0085", "\u009b", "\u2028", "\u2029"]) {
+      const controlScopeQuery = vi.fn(async () => ({ rows: [{
+        ...request,
+        terminalMetadata: {
+          result: "OWNER_DECISION_REQUIRED",
+          nextState: request.expectedNextState,
+          ...request.decisionPacket,
+          blockedAction: `produc${control}tion deployment`,
+        },
+      }] }))
+      await expect(readPendingPrimaryDecisionRequest({
+        query: controlScopeQuery,
+        ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+      })).rejects.toMatchObject({ code: "PRIMARY_DECISION_REQUEST_INVALID" })
+    }
+
+    for (const confusable of ["\u03bf", "\u043e"]) {
+      const homoglyphScopeQuery = vi.fn(async () => ({ rows: [{
+        ...request,
+        terminalMetadata: {
+          result: "OWNER_DECISION_REQUIRED",
+          nextState: request.expectedNextState,
+          ...request.decisionPacket,
+          blockedAction: `pr${confusable}duction deployment`,
+        },
+      }] }))
+      await expect(readPendingPrimaryDecisionRequest({
+        query: homoglyphScopeQuery,
+        ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+      })).rejects.toMatchObject({ code: "PRIMARY_DECISION_REQUEST_INVALID" })
+    }
+
+    for (const obfuscatedScope of [
+      "pr0duction deployment",
+      "production dep1oyment",
+      "de1ete database",
+      "produc-tion deployment",
+      "property-workbench",
+      "produc+ion deployment",
+      "secre+ access",
+    ]) {
+      const asciiScopeQuery = vi.fn(async () => ({ rows: [{
+        ...request,
+        terminalMetadata: {
+          result: "OWNER_DECISION_REQUIRED",
+          nextState: request.expectedNextState,
+          ...request.decisionPacket,
+          blockedAction: obfuscatedScope,
+        },
+      }] }))
+      await expect(readPendingPrimaryDecisionRequest({
+        query: asciiScopeQuery,
+        ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+      })).rejects.toMatchObject({ code: "PRIMARY_DECISION_REQUEST_INVALID" })
+    }
   })
 })
 
