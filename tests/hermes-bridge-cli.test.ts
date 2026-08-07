@@ -22,6 +22,8 @@ import {
 } from "../scripts/hermes-bridge/cli.mjs"
 import { initializeHermesState } from "../scripts/hermes-bridge/state-store.mjs"
 
+const agentEntrypoint = fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8")
+
 describe("Hermes bridge CLI", () => {
   it("wires durable review recovery through the resident queue runtime", async () => {
     const resumeAfterReviewRecovery = vi.fn()
@@ -221,6 +223,10 @@ describe("Hermes bridge CLI", () => {
     expect(writes).toEqual([
       "WILLIAMOS_PRIMARY_DECISION_REQUEST:exact\nReply only Approve or Deny\n",
     ])
+    expect(agentEntrypoint).toContain(
+      "emit that text byte-for-byte as the entire final assistant message",
+    )
+    expect(agentEntrypoint).toContain("Stop all tool use")
   })
 
   it("surfaces a recorded Primary decision with the resulting queue state", async () => {

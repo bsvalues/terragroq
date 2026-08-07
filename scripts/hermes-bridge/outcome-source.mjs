@@ -706,7 +706,7 @@ export async function recordOwnerAuthorityDecision({
        INSERT INTO decision
          ("userId", ref, title, context, decision, rationale, status, authority, owner, scope, evidence, tags, "decidedAt")
        SELECT $1, $2, $3, $4, $5, $6, $7, 'binding', $1, $8, $9::text[], $10::text[],
-         write_clock.recorded_at
+         timezone('UTC', write_clock.recorded_at)
        FROM write_clock
        WHERE $11::timestamptz IS NULL OR (
          write_clock.recorded_at <= $11::timestamptz

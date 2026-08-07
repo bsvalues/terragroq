@@ -42,7 +42,10 @@ continues to use the same database decision transaction.
 Pending intake now requires the same live approval and authority-grant state as
 queue acquisition, and the resident CLI emits only the canonical request text
 when a decision is pending. The binding insert uses one database wall-clock
-instant to fence both consent and grant expiry and to persist `decidedAt`.
+instant to fence both consent and grant expiry and persists that instant as a
+UTC wall timestamp in `decidedAt`. The root Codex entrypoint requires the
+canonical stdout to become the complete assistant response before the owner
+reply is eligible.
 
 ## Validation
 

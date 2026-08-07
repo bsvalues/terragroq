@@ -21,6 +21,12 @@ Continue through routine problems and report a final verified outcome. Do not tu
 recoverable failures, agent coordination, or already-decided doctrine into back-and-forth with the
 owner.
 
+When the supported Hermes cycle returns stdout beginning with
+`WILLIAMOS_PRIMARY_DECISION_REQUEST:`, that stdout is the complete canonical Primary decision
+request. Stop all tool use and emit that text byte-for-byte as the entire final assistant message,
+with no Markdown fence, prefix, suffix, summary, or paraphrase. This exact assistant message is the
+authenticated presentation record; the next direct owner reply may then be verified and consumed.
+
 ## Multi-agent execution
 
 For substantial work, Codex must use bounded native subagent fan-out when independent lanes exist:
