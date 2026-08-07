@@ -99,6 +99,30 @@ export function primaryDecisionRequestSnapshot(request) {
   return Object.freeze({ ...snapshot, allowedChoices: Object.freeze(snapshot.allowedChoices) })
 }
 
+export function assertPrimaryDecisionTextSafety(value) {
+  const text = String(value)
+  if (!/^[\x20-\x7e]*$/.test(text)) {
+    wall("PRIMARY_DECISION_REQUEST_INVALID")
+  }
+  return text
+}
+
+export function assertPrimaryDecisionPacketSafety(packet) {
+  if (packet === null || typeof packet !== "object" || Array.isArray(packet)
+    || packet.minimumChoice !== "APPROVE_OR_DENY") {
+    wall("PRIMARY_DECISION_REQUEST_INVALID")
+  }
+  for (const field of ["blockedAction", "authorityBoundary", "approveConsequence", "denyConsequence"]) {
+    if (typeof packet[field] !== "string") wall("PRIMARY_DECISION_REQUEST_INVALID")
+    const text = assertPrimaryDecisionTextSafety(packet[field])
+    if (!/^[A-Za-z0-9 ]+[.!?]?$/.test(text)
+      || /[A-Za-z][0-9]|[0-9][A-Za-z]/.test(text)) {
+      wall("PRIMARY_DECISION_REQUEST_INVALID")
+    }
+  }
+  return packet
+}
+
 function assertDecisionPacketBinding(request) {
   if (request?.decisionPacket === undefined) return
   if (request.decisionPacket === null || typeof request.decisionPacket !== "object"
@@ -107,6 +131,7 @@ function assertDecisionPacketBinding(request) {
     || !/^[a-f0-9]{64}$/.test(request.decisionPacketDigest)) {
     wall("PRIMARY_DECISION_REQUEST_INVALID")
   }
+  assertPrimaryDecisionPacketSafety(request.decisionPacket)
   const digest = createHash("sha256")
     .update(JSON.stringify(request.decisionPacket))
     .digest("hex")
@@ -131,10 +156,7 @@ export function primaryDecisionRequestMarker(request) {
 }
 
 function presentedString(value) {
-  return JSON.stringify(String(value)).replace(
-    /[\u0085\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  )
+  return JSON.stringify(assertPrimaryDecisionTextSafety(value))
 }
 
 export function buildPrimaryDecisionRequestPrompt(request) {

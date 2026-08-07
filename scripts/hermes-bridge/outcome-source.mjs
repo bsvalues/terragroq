@@ -3,6 +3,8 @@ import { createHash } from "node:crypto"
 import { evaluateOutcomePolicy } from "./policy.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
 import {
+  assertPrimaryDecisionPacketSafety,
+  assertPrimaryDecisionTextSafety,
   derivePrimaryDecisionRecommendation,
   isVerifiedPrimaryDecisionResponse,
   PRIMARY_DECISION_OWNER_EMAIL,
@@ -98,7 +100,7 @@ function persistedOwnerDecisionPacket(value) {
   }
   if (Object.values(packet).some((entry) => typeof entry !== "string" || entry.trim() === "")
     || packet.minimumChoice !== "APPROVE_OR_DENY") return null
-  return packet
+  return assertPrimaryDecisionPacketSafety(packet)
 }
 
 function canonicalJson(value) {
@@ -294,20 +296,34 @@ function normalizedTimestamp(value) {
 }
 
 function primaryDecisionPolicyProjection(row, decisionPacket) {
+  const safeText = (value) => typeof value === "string"
+    ? assertPrimaryDecisionTextSafety(value)
+    : value
+  const policyComparableText = (value) => {
+    const folded = safeText(value).toLowerCase().replace(/[01345789@$!|]/g, (character) => ({
+      "0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "9": "g",
+      "@": "a", "$": "s", "!": "i", "|": "l",
+    })[character])
+    return [
+      folded.replace(/[^a-z\s]/g, ""),
+      folded.replace(/[^a-z]+/g, " "),
+    ]
+  }
+  const commandFields = [
+    row?.outcomeKey,
+    row?.goalCommand,
+    row?.queueTitle,
+    row?.queueObjective,
+    ...Object.values(decisionPacket ?? {}),
+  ].filter((value) => typeof value === "string").map(safeText)
   return {
-    command: [
-      row?.outcomeKey,
-      row?.goalCommand,
-      row?.queueTitle,
-      row?.queueObjective,
-      ...Object.values(decisionPacket ?? {}),
-    ].filter((value) => typeof value === "string").join("\n"),
-    title: row?.queueTitle,
-    description: row?.queueObjective,
-    lane: row?.goalLane,
+    command: [...commandFields, ...commandFields.flatMap(policyComparableText)].join("\n"),
+    title: safeText(row?.queueTitle),
+    description: safeText(row?.queueObjective),
+    lane: safeText(row?.goalLane),
     risk: row?.riskClass,
-    authority: row?.authorityLevel,
-    verdict: row?.goalVerdict,
+    authority: safeText(row?.authorityLevel),
+    verdict: safeText(row?.goalVerdict),
     requiresApproval: row?.goalRequiresApproval,
   }
 }
