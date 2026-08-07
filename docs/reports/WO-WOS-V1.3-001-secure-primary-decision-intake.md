@@ -18,7 +18,8 @@ Codex App Server. Callers cannot provide those values.
   Codex task for the same Git repository;
 - the response turn must immediately follow the assistant turn that presented
   the exact request-specific challenge marker;
-- only an exact `APPROVE`, `DENY`, or `DECLINE` response is recognized;
+- only an exact `APPROVE` or `DENY` response is recognized; `DECLINE` is
+  accepted as an alias for `DENY`;
 - responses expire after one hour and duplicate candidates fail closed;
 - the existing transactional owner-decision contract provides stale-state,
   active-lease, replay, conflict, and exactly-once fencing;
@@ -40,9 +41,9 @@ continues to use the same database decision transaction.
 ## Validation
 
 - focused bridge, App Server, decision store, CLI, and Goal Console remediation
-  tests: 112 passed;
+  tests: 116 passed;
 - ESLint: passed with no warnings or errors;
-- full Vitest suite: 2,536 passed, 2 skipped;
+- full Vitest suite: 2,540 passed, 2 skipped;
 - Next.js production build with `NEXT_PRIVATE_BUILD_WORKER=0` and telemetry
   disabled: passed;
 - `git diff --check`: passed;

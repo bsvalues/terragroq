@@ -42,6 +42,7 @@ export async function consumePrimaryDecisionIntake({
     if (error?.code === "PRIMARY_DECISION_RESPONSE_NOT_FOUND") return pending
     throw error
   }
+  if (response == null) return pending
   if (!isVerifiedPrimaryDecisionResponse(response)) {
     throw Object.assign(new Error("Primary decision response was not verified"), {
       code: "PRIMARY_DECISION_PROVENANCE_WALL",
