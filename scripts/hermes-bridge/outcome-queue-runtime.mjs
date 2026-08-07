@@ -887,13 +887,32 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     }
     const resumeAt = now()
     if (binding.reviewRecoveryResumeState) {
-      const current = (await readQueue({
+      const verified = await resumeReviewRecoveryQueue({
         databaseUrl,
         userId: binding.userId,
-      })).find((item) => item.outcomeKey === binding.outcomeKey)
-      if (isExactPersistedReviewRecovery(current, binding, outcome)) {
-        return refreshOutcome(outcome)
+        outcomeKey: binding.outcomeKey,
+        expectedVersion: binding.expectedVersion,
+        executionBinding: binding.executionBinding,
+        acquisitionKey: binding.acquisitionKey,
+        fencingToken: binding.fencingToken,
+        prNumber: proof.prNumber,
+        reviewedHeadSha: proof.reviewedHeadSha,
+        mergeSha: proof.mergeSha,
+        proofDigest: proof.proofDigest,
+        expectedLifecycleReason: proof.expectedNextState,
+        leaseHolder: holderId,
+        leaseToken: binding.leaseToken,
+        leaseDurationMs: QUEUE_LEASE_DURATION_MS,
+        persistedLifecycleReason: binding.reviewRecoveryResumeState,
+        now: resumeAt,
+      })
+      if (!isExactPersistedReviewRecovery(verified, binding, outcome)) {
+        wall(
+          "Persisted review recovery did not match its exact durable proof",
+          "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL",
+        )
       }
+      return refreshOutcome(outcome)
     }
     const resumed = await resumeReviewRecoveryQueue({
       databaseUrl,

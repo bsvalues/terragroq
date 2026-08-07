@@ -789,7 +789,10 @@ describe("Hermes bridge CLI", () => {
     expect(reconcileRecoveryProjection).toHaveBeenCalledOnce()
     expect(cycle).toHaveBeenCalledTimes(4)
     expect(projectCheckpoint).toHaveBeenCalledTimes(8)
-    expect(recoverOutcome).toHaveBeenCalledOnce()
+    expect(recoverOutcome).toHaveBeenCalledTimes(5)
+    expect(recoverOutcome).toHaveBeenLastCalledWith(expect.objectContaining({
+      proofDigest: beginRecovery.mock.calls[0][0].proofDigest,
+    }))
   })
 
   it("accepts a bounded exact-head-reviewed remediation chain for a rate-limited original review", async () => {
@@ -936,7 +939,10 @@ describe("Hermes bridge CLI", () => {
       }),
     }))
     expect(cycle).toHaveBeenCalledTimes(2)
-    expect(recoverOutcome).toHaveBeenCalledOnce()
+    expect(recoverOutcome).toHaveBeenCalledTimes(2)
+    expect(recoverOutcome).toHaveBeenLastCalledWith(expect.objectContaining({
+      proofDigest: beginRecovery.mock.calls[0][0].proofDigest,
+    }))
     expect(lifecycle.verifyOriginMainContains).toHaveBeenCalledWith("c".repeat(40))
     expect(lifecycle.verifyOriginMainContains).toHaveBeenCalledWith(remediationMerge)
     expect(lifecycle.verifyCommitAncestor).toHaveBeenCalledWith("c".repeat(40), remediationMerge)

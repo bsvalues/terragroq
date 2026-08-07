@@ -1681,7 +1681,6 @@ WHERE q."userId" = $1
     WHERE live."userId" = q."userId"
       AND live."id" <> q."id"
       AND live."lifecycleState" = 'active'
-      AND live."leaseExpiresAt" > $14::timestamptz
   )
 RETURNING ${QUEUE_COLUMNS}
 `,
@@ -1725,7 +1724,6 @@ WHERE q."userId" = $1
     WHERE live."userId" = q."userId"
       AND live."id" <> q."id"
       AND live."lifecycleState" = 'active'
-      AND live."leaseExpiresAt" > $14::timestamptz
   )
 RETURNING ${QUEUE_COLUMNS},
   (${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL} > 0) AS "authorityRenewalApplied",
@@ -1754,6 +1752,24 @@ WHERE q."userId" = $1
     = q."fencingToken" - $6::integer + ${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL}
   AND ${REVIEW_RECOVERY_PROOF_PREDICATE}
   AND ${LIVE_APPROVAL_PREDICATE}
+  AND q."riskClass" IN ('R0', 'R1')
+FOR UPDATE OF q
+`,
+  verifyPersistedReviewRecovery: `
+SELECT ${QUEUE_COLUMNS}
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."lifecycleReason" IN ($16, 'STALE_LEASE_RECOVERED')
+  AND q."version" = $3
+  AND q."executionBinding" = $4
+  AND q."acquisitionKey" = $5
+  AND q."fencingToken" = $6
+  AND q."leaseToken" = $12
+  AND ${REVIEW_RECOVERY_PROOF_PREDICATE}
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$14::timestamptz")}
   AND q."riskClass" IN ('R0', 'R1')
 FOR UPDATE OF q
 `,
@@ -4380,6 +4396,7 @@ export async function resumeOutcomeQueueAfterReviewRecovery({
   leaseHolder,
   leaseToken,
   leaseDurationMs,
+  persistedLifecycleReason = null,
   now = new Date(),
 } = {}) {
   const user = userScope(userId)
@@ -4403,6 +4420,13 @@ export async function resumeOutcomeQueueAfterReviewRecovery({
   if (lifecycleReason !== "REVIEW_REMEDIATION_EXHAUSTED") {
     fail("OUTCOME_QUEUE_REVIEW_RECOVERY_STATE_WALL")
   }
+  if (persistedLifecycleReason !== null
+    && ![
+      "REVIEW_REMEDIATION_RECOVERED",
+      "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+    ].includes(persistedLifecycleReason)) {
+    fail("OUTCOME_QUEUE_REVIEW_RECOVERY_STATE_WALL")
+  }
   const holder = nonempty(leaseHolder, "OUTCOME_QUEUE_LEASE_HOLDER_INVALID")
   const token = nonempty(leaseToken, "OUTCOME_QUEUE_LEASE_TOKEN_INVALID")
   integer(leaseDurationMs, "OUTCOME_QUEUE_LEASE_DURATION_INVALID", { minimum: 1 })
@@ -4418,6 +4442,16 @@ export async function resumeOutcomeQueueAfterReviewRecovery({
     await connection.query("BEGIN")
     begun = true
     await connection.query(OUTCOME_QUEUE_SQL.acquireLock, [`${user}:outcome-queue`])
+    if (persistedLifecycleReason !== null) {
+      const verified = await connection.query(
+        OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
+        [...values, persistedLifecycleReason],
+      )
+      if (verified?.rows?.length !== 1) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+      await connection.query("COMMIT")
+      begun = false
+      return verified.rows[0]
+    }
     let result = await connection.query(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery, values)
     if (result?.rows?.length === 1) {
       await connection.query("COMMIT")

@@ -671,17 +671,17 @@ export async function recoverReviewedMerge(options = {}) {
         },
       },
     }), { sleep: options.projectionSleep })
-    if (!await recoverOutcome({
-      outcomeId,
-      prNumber: candidate.metadata.prNumber,
-      reviewedHeadSha,
-      mergeSha,
-      proofDigest,
-    })) {
-      throw Object.assign(new Error("Persisted review outcome did not match recovery proof"), {
-        code: "HERMES_REVIEW_RECOVERY_DATABASE_WALL",
-      })
-    }
+  }
+  if (!await recoverOutcome({
+    outcomeId,
+    prNumber: candidate.metadata.prNumber,
+    reviewedHeadSha,
+    mergeSha,
+    proofDigest,
+  })) {
+    throw Object.assign(new Error("Persisted review outcome did not match recovery proof"), {
+      code: "HERMES_REVIEW_RECOVERY_DATABASE_WALL",
+    })
   }
   const reopened = alreadyReopened
     ? { checkpointSequence: candidate.checkpoint.sequence }

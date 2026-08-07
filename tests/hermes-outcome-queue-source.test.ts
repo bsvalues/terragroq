@@ -2673,6 +2673,8 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery).toContain("HERMES_OUTCOME_REVIEW_RECOVERED")
     expect(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery).toContain("recovered.id > merged.id")
     expect(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery).toContain(`live."id" <> q."id"`)
+    expect(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery)
+      .not.toContain(`live."leaseExpiresAt"`)
     expect(run.mock.calls.map(([sql]) => sql)).toEqual([
       "BEGIN", OUTCOME_QUEUE_SQL.acquireLock,
       OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery, "COMMIT",
@@ -2751,7 +2753,77 @@ describe("transactional durable outcome queue source", () => {
       .toContain(`completed_dependency."lifecycleState" IS DISTINCT FROM 'completed'`)
     expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
       .toContain(`live."id" <> q."id"`)
+    expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
+      .not.toContain(`live."leaseExpiresAt"`)
     expect(run).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery, expect.any(Array))
+  })
+
+  it("revalidates an adopted review recovery against the exact durable proof identity", async () => {
+    const persisted = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      version: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:00:00.000Z",
+    })
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery ? [persisted] : [],
+    }))
+
+    await expect(resumeOutcomeQueueAfterReviewRecovery({
+      query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 6, executionBinding: "execution-a", acquisitionKey: "acquire-a",
+      fencingToken: 4, prNumber: 523, reviewedHeadSha: "a".repeat(40),
+      mergeSha: "b".repeat(40), proofDigest: "d".repeat(64),
+      expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes", leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      now,
+    })).resolves.toEqual(persisted)
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
+      "COMMIT",
+    ])
+    expect(OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery)
+      .toContain("confirmed.metadata->>'proofDigest' = $10")
+  })
+
+  it("revalidates an identity-preserving stale acquisition against the original review proof", async () => {
+    const persisted = queueRow({
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    })
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery ? [persisted] : [],
+    }))
+
+    await expect(resumeOutcomeQueueAfterReviewRecovery({
+      query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 7, executionBinding: "execution-a", acquisitionKey: "acquire-a",
+      fencingToken: 5, prNumber: 523, reviewedHeadSha: "a".repeat(40),
+      mergeSha: "b".repeat(40), proofDigest: "d".repeat(64),
+      expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes", leaseToken: "lease-a",
+      leaseDurationMs: 50 * 60 * 1000,
+      persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      now,
+    })).resolves.toEqual(persisted)
+    expect(OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery)
+      .toContain(`q."lifecycleReason" IN ($16, 'STALE_LEASE_RECOVERED')`)
+    expect(run).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
+      expect.arrayContaining(["REVIEW_REMEDIATION_RECOVERED"]),
+    )
   })
 
   it.each([

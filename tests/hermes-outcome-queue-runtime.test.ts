@@ -1295,10 +1295,9 @@ describe("Hermes durable outcome queue runtime", () => {
       leaseHolder: "resident-hermes",
       leaseExpiresAt: "2026-07-28T12:50:00.000Z",
     }
-    const resumeReviewRecoveryQueue = vi.fn()
-    const readQueue = vi.fn(async () => [recovered])
+    const resumeReviewRecoveryQueue = vi.fn(async () => recovered)
     const acquire = vi.fn(async () => ({ outcome: recovered, acquired: true, replayed: true }))
-    const bridge = runtime({ resumeReviewRecoveryQueue, readQueue, acquire })
+    const bridge = runtime({ resumeReviewRecoveryQueue, acquire })
     const outcome = {
       ...goal,
       queueBinding: {
@@ -1316,7 +1315,52 @@ describe("Hermes durable outcome queue runtime", () => {
       reviewedHeadSha: "a".repeat(40),
       mergeSha: "b".repeat(40),
     })).resolves.toMatchObject({ queueBinding: { expectedVersion: 6, fencingToken: 4 } })
-    expect(resumeReviewRecoveryQueue).not.toHaveBeenCalled()
+    expect(resumeReviewRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
+      expectedVersion: 6,
+      fencingToken: 4,
+      proofDigest: "d".repeat(64),
+      persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+    }))
+    expect(acquire).toHaveBeenCalledOnce()
+  })
+
+  it("revalidates and refreshes a stale acquisition that preserves review recovery identity", async () => {
+    const recovered = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const resumeReviewRecoveryQueue = vi.fn(async () => recovered)
+    const acquire = vi.fn(async () => ({ outcome: recovered, acquired: true, replayed: true }))
+    const bridge = runtime({ resumeReviewRecoveryQueue, acquire })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        expectedVersion: 7,
+        fencingToken: 5,
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
+      },
+    }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
+      proofDigest: "d".repeat(64),
+      prNumber: 523,
+      reviewedHeadSha: "a".repeat(40),
+      mergeSha: "b".repeat(40),
+    })).resolves.toMatchObject({ queueBinding: { expectedVersion: 7, fencingToken: 5 } })
+    expect(resumeReviewRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
+      expectedVersion: 7,
+      fencingToken: 5,
+      persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+    }))
     expect(acquire).toHaveBeenCalledOnce()
   })
 
