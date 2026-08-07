@@ -52,9 +52,11 @@ authorizing the request.
 ## Validation
 
 - focused bridge, App Server, decision store, CLI, and Goal Console remediation
-  tests: 117 passed;
+  tests: 118 passed;
 - ESLint: passed with no warnings or errors;
-- full Vitest suite: 2,549 passed, 2 skipped;
+- full Vitest suite: 2,550 passed, 2 skipped (the final run used a 15-second
+  per-test timeout after unrelated process-concurrency tests exceeded their
+  default timeout under host contention);
 - resident database request projection: passed with
   `NO_PENDING_PRIMARY_DECISION` and no mutation;
 - Next.js production build with `NEXT_PRIVATE_BUILD_WORKER=0` and telemetry
