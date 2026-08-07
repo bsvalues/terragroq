@@ -99,7 +99,22 @@ export function primaryDecisionRequestSnapshot(request) {
   return Object.freeze({ ...snapshot, allowedChoices: Object.freeze(snapshot.allowedChoices) })
 }
 
+function assertDecisionPacketBinding(request) {
+  if (request?.decisionPacket === undefined) return
+  if (request.decisionPacket === null || typeof request.decisionPacket !== "object"
+    || Array.isArray(request.decisionPacket)
+    || typeof request.decisionPacketDigest !== "string"
+    || !/^[a-f0-9]{64}$/.test(request.decisionPacketDigest)) {
+    wall("PRIMARY_DECISION_REQUEST_INVALID")
+  }
+  const digest = createHash("sha256")
+    .update(JSON.stringify(request.decisionPacket))
+    .digest("hex")
+  if (digest !== request.decisionPacketDigest) wall("PRIMARY_DECISION_REQUEST_INVALID")
+}
+
 export function primaryDecisionRequestDigest(request) {
+  assertDecisionPacketBinding(request)
   return createHash("sha256").update(JSON.stringify({
     outcomeId: request.outcomeId,
     queueItemId: request.queueItemId,
@@ -123,6 +138,7 @@ function presentedString(value) {
 }
 
 export function buildPrimaryDecisionRequestPrompt(request) {
+  assertDecisionPacketBinding(request)
   return `${primaryDecisionRequestMarker(request)}
 
 WilliamOS needs one Primary decision.
