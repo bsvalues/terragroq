@@ -18,6 +18,7 @@ import {
   recoverValidationInfrastructureOutcome,
 } from "./outcome-source.mjs"
 import { createHermesRepositoryLifecycle } from "./repository-lifecycle.mjs"
+import { consumePrimaryDecisionIntake } from "./primary-decision-intake.mjs"
 import { produceRuntimeAgreement } from "./runtime-agreement.mjs"
 import { isValidationInfrastructureFailure, readHermesState } from "./state-store.mjs"
 
@@ -84,7 +85,11 @@ export function createResidentHermesOrchestrator(options = {}) {
   })
 }
 
-export async function runHermesQueueDrain({ orchestrator, maxOutcomes = 100 } = {}) {
+export async function runHermesQueueDrain({
+  orchestrator,
+  maxOutcomes = 100,
+  consumeDecision = null,
+} = {}) {
   if (!orchestrator || !Number.isInteger(maxOutcomes) || maxOutcomes <= 0) {
     throw Object.assign(new Error("Hermes queue drain input is invalid"), {
       code: "HERMES_QUEUE_DRAIN_INPUT_WALL",
@@ -92,6 +97,7 @@ export async function runHermesQueueDrain({ orchestrator, maxOutcomes = 100 } = 
   }
   const settled = []
   try {
+    if (consumeDecision) await consumeDecision({ repositoryPath: process.cwd() })
     for (let index = 0; index < maxOutcomes; index += 1) {
       const result = await orchestrator.cycle()
       if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {
@@ -758,7 +764,7 @@ export async function runCli(command = process.argv[2]) {
   try {
     if (command === "cycle") {
       orchestrator = createResidentHermesOrchestrator()
-      print(await runHermesQueueDrain({ orchestrator }))
+      print(await runHermesQueueDrain({ orchestrator, consumeDecision: consumePrimaryDecisionIntake }))
     }
     else if (command === "smoke") print(await smoke())
     else if (command === "recover-native-provider-wall") print(await recoverNativeProviderWall())

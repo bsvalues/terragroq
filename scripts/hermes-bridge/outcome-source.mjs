@@ -2,6 +2,10 @@ import { createHash } from "node:crypto"
 
 import { evaluateOutcomePolicy } from "./policy.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
+import {
+  isVerifiedPrimaryDecisionResponse,
+  primaryDecisionRequestDigest,
+} from "./primary-decision-provenance.mjs"
 
 export const OUTCOME_SELECTION_SQL = `
 SELECT
@@ -126,6 +130,112 @@ function ownerDecisionPacketDigest(packet) {
   return createHash("sha256").update(JSON.stringify(packet)).digest("hex")
 }
 
+export async function readPendingPrimaryDecisionRequest({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  ownerEmail,
+} = {}) {
+  if (typeof ownerEmail !== "string" || ownerEmail.trim() === "") {
+    throw Object.assign(new Error("Primary owner email is required"), {
+      code: "PRIMARY_DECISION_OWNER_INVALID",
+    })
+  }
+  let runQuery = normalizeQuery(query)
+  let pool
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = createHermesDatabasePool(Pool, databaseUrl)
+    runQuery = pool.query.bind(pool)
+  }
+  try {
+    const result = await runQuery(
+      `WITH candidates AS (
+       SELECT g.id AS "outcomeId", g.ref AS "goalRef", g."userId" AS "ownerUserId",
+         wo.id AS "workOrderId", wo.ref AS "workOrderRef",
+         terminal.id AS "terminalEventId", terminal."createdAt" AS "issuedAt",
+         terminal.metadata AS "terminalMetadata", q."outcomeKey", q."riskClass",
+         q."authoritySubject", q."authorityAction"
+       FROM goal g
+       JOIN "user" owner ON owner.id = g."userId" AND lower(owner.email) = lower($1)
+       JOIN work_order wo ON wo."userId" = g."userId"
+         AND wo.ref = 'WO-HERMES-OUTCOME-' || g.id::text
+         AND wo.result = 'OWNER_DECISION_REQUIRED'
+       JOIN "outcome_queue_item" q ON q."userId" = g."userId"
+         AND q."goalId" = g.id AND q."activeWorkOrderId" = wo.id
+       JOIN LATERAL (
+         SELECT event.id, event."createdAt", event.metadata
+         FROM governance_event event
+         WHERE event."userId" = g."userId" AND event."entityType" = 'goal'
+           AND event."entityId"::text = g.id::text
+           AND event."eventType" = 'HERMES_OUTCOME_TERMINAL'
+         ORDER BY event.id DESC LIMIT 1
+       ) terminal ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT lease.metadata
+         FROM governance_event lease
+         WHERE lease."userId" = g."userId" AND lease."entityType" = 'work_order'
+           AND lease."entityId"::text = wo.id::text
+           AND lease."eventType" = 'HERMES_RUNTIME_LEASE'
+         ORDER BY lease.id DESC LIMIT 1
+       ) latest_lease ON TRUE
+       WHERE g.status = 'dismissed' AND wo."linkedDecisionId" IS NULL
+         AND terminal.metadata->>'result' = 'OWNER_DECISION_REQUIRED'
+         AND q."riskClass" IN ('R0', 'R1')
+         AND q."lifecycleState" = 'blocked'
+         AND q."approvalState" = 'approved'
+         AND q."authorityState" = 'verified'
+         AND q."authoritySubject" = 'operator'
+         AND q."authorityAction" = 'outcome:execute'
+         AND COALESCE(latest_lease.metadata->>'leaseStatus', 'RELEASED') <> 'ACTIVE'
+         AND concat_ws(' ', q."outcomeKey", q.title, COALESCE(q.objective, '')) !~*
+           '\\m(terrafusion|terrapilot|property[[:space:]]+workbench|county|pacs|parcel|taxpayer|protected[[:space:]]+data|secret|password|credential|api[ -]?key|access[ -]?token|private[[:space:]]+key|paid[[:space:]]+overage|destructive|issue[[:space:]]*#?357)\\M|#357\\M'
+       ORDER BY terminal.id ASC
+       LIMIT 2
+      ) SELECT * FROM candidates`,
+      [ownerEmail.trim().toLowerCase()],
+    )
+    const rows = Array.isArray(result?.rows) ? result.rows : []
+    if (rows.length === 0) return null
+    if (rows.length !== 1) {
+      throw Object.assign(new Error("Primary decision request is ambiguous"), {
+        code: "PRIMARY_DECISION_AMBIGUOUS",
+      })
+    }
+    const row = rows[0]
+    const decisionPacket = persistedOwnerDecisionPacket(row.terminalMetadata)
+    const expectedNextState = row.terminalMetadata?.nextState
+    const ids = [row.outcomeId, row.workOrderId, row.terminalEventId].map(Number)
+    const issuedAt = normalizedTimestamp(row.issuedAt)
+    if (!decisionPacket || ids.some((value) => !Number.isSafeInteger(value) || value <= 0)
+      || typeof expectedNextState !== "string"
+      || !/^[A-Z][A-Z0-9_]{1,79}$/.test(expectedNextState)
+      || !issuedAt) {
+      throw Object.assign(new Error("Primary decision request is malformed"), {
+        code: "PRIMARY_DECISION_REQUEST_INVALID",
+      })
+    }
+    return Object.freeze({
+      outcomeId: ids[0],
+      workOrderId: ids[1],
+      terminalEventId: ids[2],
+      ownerUserId: row.ownerUserId,
+      goalRef: row.goalRef,
+      workOrderRef: row.workOrderRef,
+      outcomeKey: row.outcomeKey,
+      riskClass: row.riskClass,
+      expectedNextState,
+      issuedAt,
+      decisionPacket,
+      decisionPacketDigest: ownerDecisionPacketDigest(decisionPacket),
+    })
+  } finally {
+    if (pool) await pool.end()
+  }
+}
+
 function normalizedTimestamp(value) {
   const milliseconds = value instanceof Date ? value.getTime() : Date.parse(String(value ?? ""))
   return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : null
@@ -169,8 +279,23 @@ export async function recordOwnerAuthorityDecision({
   ownerUserId,
   choice,
   expectedNextState,
+  primaryDecisionProvenance = null,
 } = {}) {
   validateOwnerDecisionInput({ outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState })
+  if (primaryDecisionProvenance !== null
+    && !isVerifiedPrimaryDecisionResponse(primaryDecisionProvenance)) {
+    throw Object.assign(new Error("primary decision provenance is invalid"), {
+      code: "PRIMARY_DECISION_PROVENANCE_WALL",
+    })
+  }
+  const provenance = primaryDecisionProvenance === null ? null : {
+    identityStatus: primaryDecisionProvenance.identityStatus,
+    accountEmail: primaryDecisionProvenance.accountEmail,
+    requestDigest: primaryDecisionProvenance.requestDigest,
+    responseDigest: primaryDecisionProvenance.responseDigest,
+    issuedAt: primaryDecisionProvenance.issuedAt,
+    expiresAt: primaryDecisionProvenance.expiresAt,
+  }
   const requestKey = ownerDecisionRequestKey({ outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState })
   const terminalKey = ownerDecisionTerminalKey({ outcomeId, workOrderId, terminalEventId })
   const decisionRef = `OWNER-DECISION-${outcomeId}-${terminalEventId}`
@@ -183,6 +308,10 @@ export async function recordOwnerAuthorityDecision({
     `request:${requestKey}`,
     `terminal-binding:${terminalKey}`,
     `choice:${choice}`,
+    ...(provenance ? [
+      `primary-request:${provenance.requestDigest}`,
+      `primary-response:${provenance.responseDigest}`,
+    ] : []),
   ]
   let runQuery = normalizeQuery(query)
   let pool
@@ -348,6 +477,7 @@ export async function recordOwnerAuthorityDecision({
       const priorPayload = {
         outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState,
         decisionId: prior.decisionId, decisionRef, requestKey, decisionPacket, decisionPacketDigest,
+        ...(provenance ? { primaryDecisionProvenance: provenance } : {}),
       }
       const priorNotes = canonicalJson(priorPayload)
       const priorEvidenceHash = createHash("sha256").update(priorNotes).digest("hex")
@@ -454,6 +584,7 @@ export async function recordOwnerAuthorityDecision({
     const evidencePayload = {
       outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState,
       decisionId: decisionRow.id, decisionRef, requestKey, decisionPacket, decisionPacketDigest,
+      ...(provenance ? { primaryDecisionProvenance: provenance } : {}),
     }
     const evidenceInserted = await runQuery(
       `INSERT INTO evidence_record
@@ -576,7 +707,7 @@ export async function readApprovedOwnerDecision({
   try {
     const result = await runQuery(
       `WITH latest_terminal AS (
-       SELECT id, metadata
+       SELECT id, metadata, "createdAt"
          , "userId" AS "terminalUserId"
        FROM governance_event
          WHERE "entityType" = 'goal' AND "entityId"::text = $1::text
@@ -595,6 +726,7 @@ export async function readApprovedOwnerDecision({
          d.decision AS choice, d.authority, d.scope, d.evidence,
          d."decidedAt", g.id AS "outcomeId", wo.id AS "workOrderId",
          terminal.id AS "terminalEventId", terminal.metadata AS "terminalMetadata",
+         terminal."createdAt" AS "terminalIssuedAt",
          receipt.id AS "receiptEventId", ev.id AS "evidenceRecordId",
          ev.notes AS "evidenceNotes", ev."contentHash" AS "evidenceContentHash",
          receipt.metadata AS "receiptMetadata",
@@ -661,7 +793,38 @@ export async function readApprovedOwnerDecision({
       choice: "APPROVE",
       expectedNextState,
     }) : null
-    const expectedEvidence = decisionPacketDigest ? [
+    let storedPayload = null
+    try {
+      storedPayload = JSON.parse(row?.evidenceNotes ?? "null")
+    } catch {}
+    const storedProvenance = storedPayload?.primaryDecisionProvenance
+    const hasStoredProvenance = storedPayload !== null
+      && Object.hasOwn(storedPayload, "primaryDecisionProvenance")
+    const expectedRequestDigest = decisionPacketDigest ? primaryDecisionRequestDigest({
+      outcomeId,
+      workOrderId: resolvedWorkOrderId,
+      terminalEventId: resolvedTerminalEventId,
+      expectedNextState,
+      decisionPacketDigest,
+    }) : null
+    const validStoredProvenance = hasStoredProvenance
+      && storedProvenance?.identityStatus === "VERIFIED_PRIMARY_CODEX_APP_SERVER"
+      && storedProvenance?.accountEmail === "bsvalues@gmail.com"
+      && storedProvenance?.requestDigest === expectedRequestDigest
+      && typeof storedProvenance?.responseDigest === "string"
+      && /^[a-f0-9]{64}$/.test(storedProvenance.responseDigest)
+      && normalizedTimestamp(storedProvenance.issuedAt) === normalizedTimestamp(row?.terminalIssuedAt)
+      && Number.isFinite(Date.parse(storedProvenance.expiresAt))
+      && Date.parse(storedProvenance.expiresAt) - Date.parse(storedProvenance.issuedAt) === 60 * 60 * 1000
+    const provenance = validStoredProvenance ? {
+      identityStatus: storedProvenance.identityStatus,
+      accountEmail: storedProvenance.accountEmail,
+      requestDigest: storedProvenance.requestDigest,
+      responseDigest: storedProvenance.responseDigest,
+      issuedAt: storedProvenance.issuedAt,
+      expiresAt: storedProvenance.expiresAt,
+    } : null
+    const expectedEvidence = decisionPacketDigest && (!hasStoredProvenance || provenance) ? [
       `outcome:${outcomeId}`,
       `work-order:${resolvedWorkOrderId}`,
       `terminal-event:${resolvedTerminalEventId}`,
@@ -671,6 +834,10 @@ export async function readApprovedOwnerDecision({
         outcomeId, workOrderId: resolvedWorkOrderId, terminalEventId: resolvedTerminalEventId,
       })}`,
       "choice:APPROVE",
+      ...(provenance ? [
+        `primary-request:${provenance.requestDigest}`,
+        `primary-response:${provenance.responseDigest}`,
+      ] : []),
       `decision-packet:${decisionPacketDigest}`,
     ] : null
     const evidencePayload = decisionPacket ? {
@@ -685,6 +852,7 @@ export async function readApprovedOwnerDecision({
       requestKey,
       decisionPacket,
       decisionPacketDigest,
+      ...(provenance ? { primaryDecisionProvenance: provenance } : {}),
     } : null
     const evidenceNotes = evidencePayload ? canonicalJson(evidencePayload) : null
     const expectedAudit = evidencePayload ? {
