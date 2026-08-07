@@ -15,6 +15,7 @@ import {
   recoverTerminalPostMergeCleanupWall,
   recoverValidationInfrastructureWall,
   redactHermesStatus,
+  printHermesCycleResult,
   runHermesQueueDrain,
   runCliEntrypoint,
   sanitizeBridgeMessage,
@@ -206,6 +207,20 @@ describe("Hermes bridge CLI", () => {
       .resolves.toEqual(pending)
     expect(consumeDecision).toHaveBeenCalledOnce()
     expect(cycle).not.toHaveBeenCalled()
+  })
+
+  it("prints only the canonical prompt for a pending Primary decision", () => {
+    const writes: string[] = []
+    printHermesCycleResult({
+      status: "PENDING_PRIMARY_DECISION",
+      outcomeId: 77,
+      requestDigest: "a".repeat(64),
+      prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:exact\nReply only Approve or Deny",
+    }, (value) => writes.push(String(value)))
+
+    expect(writes).toEqual([
+      "WILLIAMOS_PRIMARY_DECISION_REQUEST:exact\nReply only Approve or Deny\n",
+    ])
   })
 
   it("surfaces a recorded Primary decision with the resulting queue state", async () => {

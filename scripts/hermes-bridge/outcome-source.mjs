@@ -159,7 +159,8 @@ export async function readPendingPrimaryDecisionRequest({
          g.command AS "goalCommand", g.lane AS "goalLane", g.verdict AS "goalVerdict",
          g."requiresApproval" AS "goalRequiresApproval",
          wo.id AS "workOrderId", wo.ref AS "workOrderRef",
-         terminal.id AS "terminalEventId", terminal."createdAt" AS "issuedAt",
+         terminal.id AS "terminalEventId",
+         terminal."createdAt" AT TIME ZONE 'UTC' AS "issuedAt",
          terminal.metadata AS "terminalMetadata", q."outcomeKey", q.title AS "queueTitle",
          q.objective AS "queueObjective", q."riskClass", q."authorityLevel",
          q."authoritySubject", q."authorityAction"
@@ -170,6 +171,29 @@ export async function readPendingPrimaryDecisionRequest({
          AND wo.result = 'OWNER_DECISION_REQUIRED'
        JOIN "outcome_queue_item" q ON q."userId" = g."userId"
          AND q."goalId" = g.id AND q."activeWorkOrderId" = wo.id
+       JOIN decision approval ON approval.id = q."approvalDecisionId"
+         AND approval."userId" = q."userId" AND approval.status = 'accepted'
+         AND approval.authority = 'binding'
+         AND upper(trim(approval.decision)) = 'APPROVE'
+         AND approval.scope = q."outcomeKey"
+       JOIN authority_grant grant_row ON grant_row."userId" = q."userId"
+         AND grant_row.ref = q."authorityGrantRef"
+         AND grant_row.status = 'active' AND grant_row."revokedAt" IS NULL
+         AND (grant_row."expiresAt" IS NULL
+           OR grant_row."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp())
+         AND grant_row."authorityLevel" = q."authorityLevel"
+         AND grant_row."grantedTo" = q."authoritySubject"
+         AND grant_row.scope = q."outcomeKey"
+         AND NOT EXISTS (
+           SELECT 1 FROM unnest(grant_row."blockedActions") blocked(action)
+           WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
+         )
+         AND (cardinality(grant_row."allowedActions") = 0 OR EXISTS (
+           SELECT 1 FROM unnest(grant_row."allowedActions") allowed(action)
+           WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
+         ))
+         AND (grant_row."workOrderId" IS NULL
+           OR grant_row."workOrderId" = q."activeWorkOrderId")
        JOIN LATERAL (
          SELECT event.id, event."createdAt", event.metadata
          FROM governance_event event
@@ -494,7 +518,7 @@ export async function recordOwnerAuthorityDecision({
          prior_request."decisionId", prior_request."decisionRef", prior_request.status AS "priorStatus",
          prior_request.decision AS "priorChoice", prior_request.authority AS "priorAuthority",
          prior_request.scope AS "priorScope", prior_request.evidence AS "priorEvidence",
-         prior_request."decidedAt" AS "priorDecidedAt",
+         prior_request."decidedAt" AT TIME ZONE 'UTC' AS "priorDecidedAt",
          consumed_binding."consumedDecisionId", consumed_binding."consumedDecisionRef",
           consumed_binding."consumedStatus", consumed_binding."consumedChoice",
           consumed_binding."consumedAuthority",
@@ -676,10 +700,26 @@ export async function recordOwnerAuthorityDecision({
     }
 
     const recorded = await runQuery(
-      `INSERT INTO decision
+      `WITH write_clock AS (
+         SELECT clock_timestamp() AS recorded_at
+       )
+       INSERT INTO decision
          ("userId", ref, title, context, decision, rationale, status, authority, owner, scope, evidence, tags, "decidedAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'binding', $1, $8, $9::text[], $10::text[], clock_timestamp())
-       RETURNING id, ref, status, decision, "decidedAt"`,
+       SELECT $1, $2, $3, $4, $5, $6, $7, 'binding', $1, $8, $9::text[], $10::text[],
+         write_clock.recorded_at
+       FROM write_clock
+       WHERE $11::timestamptz IS NULL OR (
+         write_clock.recorded_at <= $11::timestamptz
+         AND EXISTS (
+           SELECT 1 FROM authority_grant grant_row
+           WHERE grant_row.id = $12::integer
+             AND grant_row.status = 'active' AND grant_row."revokedAt" IS NULL
+             AND (grant_row."expiresAt" IS NULL
+               OR grant_row."expiresAt" AT TIME ZONE 'UTC' > write_clock.recorded_at)
+         )
+       )
+       RETURNING id, ref, status, decision,
+         "decidedAt" AT TIME ZONE 'UTC' AS "decidedAt"`,
       [
         ownerUserId,
         decisionRef,
@@ -694,6 +734,8 @@ export async function recordOwnerAuthorityDecision({
         scope,
         evidence,
         ["HERMES_OWNER_AUTHORITY_DECISION", choice],
+        provenance?.expiresAt ?? null,
+        provenance ? row.liveGrantId : null,
       ],
     )
     const decisionRow = recorded?.rows?.[0]
@@ -856,9 +898,10 @@ export async function readApprovedOwnerDecision({
        )
        SELECT d.id AS "decisionId", d.ref AS "decisionRef", d.status,
          d.decision AS choice, d.authority, d.scope, d.evidence,
-         d."decidedAt", g.id AS "outcomeId", wo.id AS "workOrderId",
+         d."decidedAt" AT TIME ZONE 'UTC' AS "decidedAt",
+         g.id AS "outcomeId", wo.id AS "workOrderId",
          terminal.id AS "terminalEventId", terminal.metadata AS "terminalMetadata",
-         terminal."createdAt" AS "terminalIssuedAt",
+         terminal."createdAt" AT TIME ZONE 'UTC' AS "terminalIssuedAt",
          receipt.id AS "receiptEventId", ev.id AS "evidenceRecordId",
          ev.notes AS "evidenceNotes", ev."contentHash" AS "evidenceContentHash",
          receipt.metadata AS "receiptMetadata",
