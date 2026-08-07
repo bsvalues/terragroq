@@ -208,6 +208,21 @@ describe("Hermes bridge CLI", () => {
     expect(cycle).not.toHaveBeenCalled()
   })
 
+  it("surfaces a recorded Primary decision with the resulting queue state", async () => {
+    const decision = {
+      status: "PRIMARY_DECISION_RECORDED",
+      outcomeId: 77,
+      choice: "APPROVE",
+      resumeReleased: true,
+      decisionRef: "OWNER-DECISION-77-120",
+    }
+    const consumeDecision = vi.fn(async () => decision)
+    const cycle = vi.fn(async () => ({ result: "NO_ELIGIBLE_OUTCOME" }))
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, consumeDecision }))
+      .resolves.toEqual({ result: "NO_ELIGIBLE_OUTCOME", decision })
+  })
+
   it("does not start a queue cycle when Primary decision intake fails", async () => {
     const wall = Object.assign(new Error("decision provenance unavailable"), {
       code: "PRIMARY_DECISION_PROVENANCE_WALL",

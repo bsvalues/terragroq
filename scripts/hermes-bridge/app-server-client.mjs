@@ -268,15 +268,23 @@ export class CodexAppServerClient {
     })
   }
 
-  async readLatestDirectUserChoice({ threadId, issuedAfter, expiresAt, requestMarker }) {
+  async readLatestDirectUserChoice({
+    threadId,
+    requestCreatedAt,
+    presentedAfter,
+    presentedBefore,
+    requestMarker,
+  }) {
     const response = await this.request("thread/read", { threadId, includeTurns: true })
     const thread = response?.thread
     if (!thread || thread.id !== threadId || !Array.isArray(thread.turns)) return null
-    const issuedAfterMs = Date.parse(issuedAfter)
-    const expiresAtMs = Date.parse(expiresAt)
-    if (!Number.isFinite(issuedAfterMs) || !Number.isFinite(expiresAtMs)
+    const requestCreatedAtMs = Date.parse(requestCreatedAt)
+    const presentedAfterMs = Date.parse(presentedAfter)
+    const presentedBeforeMs = Date.parse(presentedBefore)
+    if (!Number.isFinite(requestCreatedAtMs) || !Number.isFinite(presentedAfterMs)
+      || !Number.isFinite(presentedBeforeMs)
       || typeof requestMarker !== "string" || requestMarker.trim() === ""
-      || expiresAtMs <= issuedAfterMs) return null
+      || presentedBeforeMs <= presentedAfterMs) return null
 
     const candidates = []
     for (let turnIndex = 0; turnIndex < thread.turns.length; turnIndex += 1) {
@@ -285,16 +293,21 @@ export class CodexAppServerClient {
       const completedAtMs = Number(turn?.completedAt) * 1_000
       const completed = turn?.status === "completed"
       if (!completed && turn?.status !== "inProgress") continue
-      if (!Number.isFinite(startedAtMs) || startedAtMs < issuedAfterMs
-        || startedAtMs > expiresAtMs
-        || (completed && (!Number.isFinite(completedAtMs) || completedAtMs > expiresAtMs))
+      if (!Number.isFinite(startedAtMs) || startedAtMs > presentedBeforeMs
+        || (completed && (!Number.isFinite(completedAtMs) || completedAtMs > presentedBeforeMs))
         || !Array.isArray(turn.items)) continue
       const priorTurn = thread.turns[turnIndex - 1]
       const priorItems = Array.isArray(priorTurn?.items) ? priorTurn.items : []
-      const requestPresented = priorTurn?.status === "completed"
-        && priorItems.some((item) => item?.type === "agentMessage"
+      const requestPresentedAtMs = Number(priorTurn?.completedAt) * 1_000
+      const requestMessage = priorTurn?.status === "completed"
+        ? priorItems.find((item) => item?.type === "agentMessage"
           && typeof item.text === "string" && item.text.includes(requestMarker))
-      if (!requestPresented) continue
+        : null
+      if (!requestMessage || !Number.isFinite(requestPresentedAtMs)
+        || requestPresentedAtMs < requestCreatedAtMs
+        || requestPresentedAtMs < presentedAfterMs
+        || requestPresentedAtMs > presentedBeforeMs
+        || startedAtMs < requestPresentedAtMs) continue
       for (const item of turn.items) {
         const content = Array.isArray(item?.content) ? item.content : []
         if (item?.type !== "userMessage" || content.length !== 1
@@ -310,6 +323,9 @@ export class CodexAppServerClient {
           cwd: typeof thread.cwd === "string" ? thread.cwd : null,
           parentThreadId: thread.parentThreadId ?? null,
           agentRole: thread.agentRole ?? null,
+          requestTurnId: priorTurn.id,
+          requestMessageId: requestMessage.id,
+          requestPresentedAt: Number(priorTurn.completedAt),
           turnId: turn.id,
           turnStartedAt: Number(turn.startedAt),
           turnCompletedAt: Number(turn.completedAt),

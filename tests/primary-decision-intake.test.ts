@@ -55,6 +55,9 @@ function fakeClient(responseOverrides: Record<string, unknown> = {}) {
       cwd: repository,
       parentThreadId: null,
       agentRole: null,
+      requestTurnId: "turn-request",
+      requestMessageId: "request-message",
+      requestPresentedAt: Date.parse(issuedAt) / 1000 + 5,
       turnId: "turn-owner",
       turnStartedAt: Date.parse(issuedAt) / 1000 + 10,
       turnCompletedAt: Date.parse(issuedAt) / 1000 + 11,
@@ -92,19 +95,34 @@ describe("secure Primary decision intake", () => {
   })
 
   it.each([
-    ["expired request", { now: Date.parse(issuedAt) + 60 * 60 * 1000 }, "PRIMARY_DECISION_EXPIRED"],
+    ["future request", { request: { issuedAt: "2099-01-01T00:00:00.000Z" } }, "PRIMARY_DECISION_REQUEST_INVALID"],
     ["wrong task", { response: { threadId: "other" } }, "PRIMARY_DECISION_RESPONSE_IDENTITY_WALL"],
     ["subagent", { response: { parentThreadId: "parent" } }, "PRIMARY_DECISION_RESPONSE_IDENTITY_WALL"],
     ["wrong repository", { response: { cwd: "C:/other" } }, "PRIMARY_DECISION_REPOSITORY_WALL"],
   ])("rejects %s", async (_name, mutation, code) => {
     const response = (mutation as { response?: Record<string, unknown> }).response ?? {}
+    const requestMutation = (mutation as { request?: Record<string, unknown> }).request ?? {}
     await expect(verifyPrimaryDecisionResponse({
-      request,
+      request: { ...request, ...requestMutation },
       repositoryPath: repository,
       environment: { CODEX_THREAD_ID: "thread-owner" },
       now: (mutation as { now?: number }).now ?? Date.parse(issuedAt) + 30_000,
       createClient: () => fakeClient(response) as never,
     })).rejects.toMatchObject({ code })
+  })
+
+  it("starts the response TTL when an old terminal request is presented", async () => {
+    const now = Date.parse(issuedAt) + 2 * 60 * 60 * 1000
+    const response = await verifyPrimaryDecisionResponse({
+      request,
+      repositoryPath: repository,
+      environment: { CODEX_THREAD_ID: "thread-owner" },
+      now,
+      createClient: () => fakeClient({ requestPresentedAt: now / 1000 - 5 }) as never,
+    })
+
+    expect(response.issuedAt).toBe(new Date(now - 5_000).toISOString())
+    expect(response.expiresAt).toBe(new Date(now - 5_000 + 60 * 60 * 1000).toISOString())
   })
 
   it("remains inert for a resident cycle without an authenticated task", async () => {
@@ -346,8 +364,9 @@ it("projects exactly one allowed choice from the bounded response window", async
   await connecting
   const pending = client.readLatestDirectUserChoice({
     threadId: "thread-owner",
-    issuedAfter: issuedAt,
-    expiresAt: "2026-08-07T17:00:00.000Z",
+    requestCreatedAt: issuedAt,
+    presentedAfter: issuedAt,
+    presentedBefore: "2026-08-07T17:00:00.000Z",
     requestMarker: primaryDecisionRequestMarker(request),
   })
   const rpc = child.messages().at(-1)
@@ -403,8 +422,9 @@ it("fails closed when two allowed decision responses exist in the same window", 
   await connecting
   const pending = client.readLatestDirectUserChoice({
     threadId: "thread-owner",
-    issuedAfter: issuedAt,
-    expiresAt: "2026-08-07T17:00:00.000Z",
+    requestCreatedAt: issuedAt,
+    presentedAfter: issuedAt,
+    presentedBefore: "2026-08-07T17:00:00.000Z",
     requestMarker: primaryDecisionRequestMarker(request),
   })
   const rpc = child.messages().at(-1)

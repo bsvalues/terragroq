@@ -20,7 +20,8 @@ Codex App Server. Callers cannot provide those values.
   the exact request-specific challenge marker;
 - only an exact `APPROVE` or `DENY` response is recognized; `DECLINE` is
   accepted as an alias for `DENY`;
-- responses expire after one hour and duplicate candidates fail closed;
+- responses expire one hour after the exact challenge is presented, even when
+  the underlying terminal wall is older, and duplicate candidates fail closed;
 - the existing transactional owner-decision contract provides stale-state,
   active-lease, replay, conflict, and exactly-once fencing;
 - non-secret request and response digests are persisted in the decision
@@ -41,9 +42,9 @@ continues to use the same database decision transaction.
 ## Validation
 
 - focused bridge, App Server, decision store, CLI, and Goal Console remediation
-  tests: 116 passed;
+  tests: 118 passed;
 - ESLint: passed with no warnings or errors;
-- full Vitest suite: 2,540 passed, 2 skipped;
+- full Vitest suite: 2,542 passed, 2 skipped;
 - Next.js production build with `NEXT_PRIVATE_BUILD_WORKER=0` and telemetry
   disabled: passed;
 - `git diff --check`: passed;

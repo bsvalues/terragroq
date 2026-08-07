@@ -833,7 +833,9 @@ export async function readApprovedOwnerDecision({
       && storedProvenance?.requestDigest === expectedRequestDigest
       && typeof storedProvenance?.responseDigest === "string"
       && /^[a-f0-9]{64}$/.test(storedProvenance.responseDigest)
-      && normalizedTimestamp(storedProvenance.issuedAt) === normalizedTimestamp(row?.terminalIssuedAt)
+      && Number.isFinite(Date.parse(storedProvenance.issuedAt))
+      && Date.parse(storedProvenance.issuedAt) >= Date.parse(row?.terminalIssuedAt)
+      && Date.parse(storedProvenance.issuedAt) <= Date.parse(row?.decidedAt)
       && Number.isFinite(Date.parse(storedProvenance.expiresAt))
       && Date.parse(storedProvenance.expiresAt) - Date.parse(storedProvenance.issuedAt) === PRIMARY_DECISION_TTL_MS
     const provenance = validStoredProvenance ? {
