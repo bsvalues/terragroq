@@ -312,6 +312,14 @@ export class CodexAppServerClient {
         || requestPresentedAtMs < presentedAfterMs
         || requestPresentedAtMs > presentedBeforeMs
         || startedAtMs < requestPresentedAtMs) continue
+      const laterUserMessageExists = thread.turns.slice(turnIndex + 1).some((laterTurn) => {
+        const laterStartedAtMs = Number(laterTurn?.startedAt) * 1_000
+        return Number.isFinite(laterStartedAtMs)
+          && laterStartedAtMs <= presentedBeforeMs
+          && Array.isArray(laterTurn.items)
+          && laterTurn.items.some((candidate) => candidate?.type === "userMessage")
+      })
+      if (laterUserMessageExists) continue
       const userItems = turn.items.filter((candidate) => candidate?.type === "userMessage")
       const item = userItems.at(-1)
       const content = Array.isArray(item?.content) ? item.content : []

@@ -594,6 +594,23 @@ describe("secure Primary decision intake", () => {
       code: "PRIMARY_DECISION_POLICY_WALL",
       reasonCode: "PROTECTED_SCOPE",
     })
+
+    const protectedKeyQuery = vi.fn(async () => ({ rows: [{
+      ...request,
+      outcomeKey: "williamos:delete-database",
+      terminalMetadata: {
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: request.expectedNextState,
+        ...request.decisionPacket,
+      },
+    }] }))
+    await expect(readPendingPrimaryDecisionRequest({
+      query: protectedKeyQuery,
+      ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+    })).rejects.toMatchObject({
+      code: "PRIMARY_DECISION_POLICY_WALL",
+      reasonCode: "PROTECTED_SCOPE",
+    })
   })
 })
 
@@ -813,6 +830,63 @@ it("fails closed when the owner withdraws an earlier choice in the same turn", a
             type: "userMessage",
             content: [{ type: "text", text: "APPROVE" }],
           }, {
+            id: "message-withdraw",
+            type: "userMessage",
+            content: [{ type: "text", text: "actually wait" }],
+          }],
+        }],
+      },
+    },
+  })
+  await expect(pending).resolves.toBeNull()
+  client.close()
+})
+
+it("fails closed when a later owner turn withdraws an earlier choice", async () => {
+  const child = new FakeProcess()
+  const client = new CodexAppServerClient({
+    spawn: vi.fn(() => child) as never,
+    command: "codex",
+    args: ["app-server", "--stdio"],
+  })
+  const connecting = client.connect()
+  child.send({ id: child.messages()[0].id, result: { userAgent: "fake" } })
+  await connecting
+  const pending = client.readLatestDirectUserChoice({
+    threadId: "thread-owner",
+    requestCreatedAt: issuedAt,
+    presentedAfter: issuedAt,
+    presentedBefore: "2026-08-07T17:00:00.000Z",
+    requestMarker: primaryDecisionRequestMarker(request),
+    requestPrompt: buildPrimaryDecisionRequestPrompt(request),
+  })
+  const rpc = child.messages().at(-1)
+  child.send({
+    id: rpc.id,
+    result: {
+      thread: {
+        id: "thread-owner",
+        turns: [{
+          id: "turn-request",
+          status: "completed",
+          startedAt: Date.parse(issuedAt) / 1000 + 1,
+          completedAt: Date.parse(issuedAt) / 1000 + 2,
+          items: [{ type: "agentMessage", text: buildPrimaryDecisionRequestPrompt(request) }],
+        }, {
+          id: "turn-owner-approve",
+          status: "completed",
+          startedAt: Date.parse(issuedAt) / 1000 + 10,
+          completedAt: Date.parse(issuedAt) / 1000 + 11,
+          items: [{
+            id: "message-approve",
+            type: "userMessage",
+            content: [{ type: "text", text: "APPROVE" }],
+          }],
+        }, {
+          id: "turn-owner-withdraw",
+          status: "failed",
+          startedAt: Date.parse(issuedAt) / 1000 + 20,
+          items: [{
             id: "message-withdraw",
             type: "userMessage",
             content: [{ type: "text", text: "actually wait" }],

@@ -63,9 +63,9 @@ authorizing the request.
 ## Validation
 
 - focused bridge, App Server, decision store, CLI, and Goal Console remediation
-  tests: 148 passed;
+  tests: 149 passed;
 - ESLint: passed with no warnings or errors;
-- full Vitest suite: 2,552 passed, 2 skipped (the final run used a 15-second
+- full Vitest suite: 2,553 passed, 2 skipped (the final run used a 15-second
   per-test timeout after unrelated process-concurrency tests exceeded their
   default timeout under host contention);
 - resident database request projection: passed with
