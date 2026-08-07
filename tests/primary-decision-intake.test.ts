@@ -741,6 +741,127 @@ describe("secure Primary decision intake", () => {
         ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
       })).rejects.toMatchObject({ code: "PRIMARY_DECISION_REQUEST_INVALID" })
     }
+
+    for (const splitScope of [
+      "produc tion deployment",
+      "pro duc tion deployment",
+      "pro duc Tion deployment",
+      "p r o d u ction deployment",
+      "de lete database",
+      "de le te database",
+      "Change par cel records",
+      "Change pro perty work bench",
+      "Change pro tected da ta",
+      "in crease the spend",
+      "Use to ken value",
+    ]) {
+      const splitScopeQuery = vi.fn(async () => ({ rows: [{
+        ...request,
+        terminalMetadata: {
+          result: "OWNER_DECISION_REQUIRED",
+          nextState: request.expectedNextState,
+          ...request.decisionPacket,
+          blockedAction: splitScope,
+        },
+      }] }))
+      await expect(readPendingPrimaryDecisionRequest({
+        query: splitScopeQuery,
+        ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+      })).rejects.toMatchObject({
+        code: "PRIMARY_DECISION_POLICY_WALL",
+        reasonCode: "PROTECTED_SCOPE",
+      })
+    }
+
+    const benignAdjacentWordsQuery = vi.fn(async () => ({ rows: [{
+      ...request,
+      queueObjective: "Send update to Ken",
+      terminalMetadata: {
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: request.expectedNextState,
+        ...request.decisionPacket,
+      },
+    }] }))
+    await expect(readPendingPrimaryDecisionRequest({
+      query: benignAdjacentWordsQuery,
+      ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+    })).resolves.toMatchObject({ outcomeId: request.outcomeId })
+
+    const benignCapitalizedAdjacentWordsQuery = vi.fn(async () => ({ rows: [{
+      ...request,
+      queueObjective: "Send update To Ken",
+      terminalMetadata: {
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: request.expectedNextState,
+        ...request.decisionPacket,
+      },
+    }] }))
+    await expect(readPendingPrimaryDecisionRequest({
+      query: benignCapitalizedAdjacentWordsQuery,
+      ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+    })).resolves.toMatchObject({ outcomeId: request.outcomeId })
+
+    const benignSplitDatabaseQuery = vi.fn(async () => ({ rows: [{
+      ...request,
+      queueObjective: "Change the data base value",
+      terminalMetadata: {
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: request.expectedNextState,
+        ...request.decisionPacket,
+      },
+    }] }))
+    await expect(readPendingPrimaryDecisionRequest({
+      query: benignSplitDatabaseQuery,
+      ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+    })).resolves.toMatchObject({ outcomeId: request.outcomeId })
+
+    const mixedOutcomeKeyQuery = vi.fn(async () => ({ rows: [{
+      ...request,
+      outcomeKey: "williamos:product1on-deployment",
+      terminalMetadata: {
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: request.expectedNextState,
+        ...request.decisionPacket,
+      },
+    }] }))
+    await expect(readPendingPrimaryDecisionRequest({
+      query: mixedOutcomeKeyQuery,
+      ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+    })).rejects.toMatchObject({ code: "PRIMARY_DECISION_REQUEST_INVALID" })
+
+    const foldedSplitOutcomeKeyQuery = vi.fn(async () => ({ rows: [{
+      ...request,
+      outcomeKey: "williamos:pr0-duc-tion-deployment",
+      terminalMetadata: {
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: request.expectedNextState,
+        ...request.decisionPacket,
+      },
+    }] }))
+    await expect(readPendingPrimaryDecisionRequest({
+      query: foldedSplitOutcomeKeyQuery,
+      ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+    })).rejects.toMatchObject({
+      code: "PRIMARY_DECISION_POLICY_WALL",
+      reasonCode: "PROTECTED_SCOPE",
+    })
+
+    const mixedCaseFoldedOutcomeKeyQuery = vi.fn(async () => ({ rows: [{
+      ...request,
+      outcomeKey: "williamos:pr0-Duc-tion-deployment",
+      terminalMetadata: {
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: request.expectedNextState,
+        ...request.decisionPacket,
+      },
+    }] }))
+    await expect(readPendingPrimaryDecisionRequest({
+      query: mixedCaseFoldedOutcomeKeyQuery,
+      ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+    })).rejects.toMatchObject({
+      code: "PRIMARY_DECISION_POLICY_WALL",
+      reasonCode: "PROTECTED_SCOPE",
+    })
   })
 })
 
