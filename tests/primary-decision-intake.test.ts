@@ -37,6 +37,13 @@ const request = {
     denyConsequence: "Keep the current Home",
   },
   decisionPacketDigest: "a".repeat(64),
+  goalCommand: "Change the WilliamOS Primary Home density",
+  goalLane: "ui",
+  goalVerdict: "requires_approval",
+  goalRequiresApproval: true,
+  queueTitle: "Primary Home density",
+  queueObjective: "Apply the approved WilliamOS display density",
+  authorityLevel: "A2_WRITE_OWN",
 }
 
 function fakeClient(responseOverrides: Record<string, unknown> = {}) {
@@ -66,6 +73,50 @@ function fakeClient(responseOverrides: Record<string, unknown> = {}) {
       choice: "APPROVE",
       ...responseOverrides,
     })),
+  }
+}
+
+function decisionBinding(
+  decisionPacket = request.decisionPacket,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    goalId: request.outcomeId,
+    goalUserId: request.ownerUserId,
+    goalStatus: "dismissed",
+    goalCommand: request.goalCommand,
+    goalLane: request.goalLane,
+    goalVerdict: request.goalVerdict,
+    goalRequiresApproval: request.goalRequiresApproval,
+    workOrderId: request.workOrderId,
+    workOrderUserId: request.ownerUserId,
+    latestTerminalId: request.terminalEventId,
+    latestTerminalMetadata: {
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: request.expectedNextState,
+      ...decisionPacket,
+    },
+    requestedTerminalId: request.terminalEventId,
+    requestedTerminalUserId: request.ownerUserId,
+    requestedTerminalMetadata: {
+      result: "OWNER_DECISION_REQUIRED",
+      nextState: request.expectedNextState,
+      ...decisionPacket,
+    },
+    terminalUserId: request.ownerUserId,
+    latestLeaseMetadata: { leaseStatus: "RELEASED" },
+    queueItemId: 33,
+    queueTitle: request.queueTitle,
+    queueObjective: request.queueObjective,
+    riskClass: request.riskClass,
+    approvalState: "approved",
+    authorityState: "matched",
+    authorityLevel: request.authorityLevel,
+    authoritySubject: "operator",
+    authorityAction: "outcome:execute",
+    lifecycleState: "blocked",
+    activeWorkOrderId: request.workOrderId,
+    ...overrides,
   }
 }
 
@@ -205,28 +256,7 @@ describe("secure Primary decision intake", () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{
-        goalId: request.outcomeId,
-        goalUserId: request.ownerUserId,
-        goalStatus: "dismissed",
-        workOrderId: request.workOrderId,
-        workOrderUserId: request.ownerUserId,
-        latestTerminalId: request.terminalEventId,
-        latestTerminalMetadata: {
-          result: "OWNER_DECISION_REQUIRED",
-          nextState: request.expectedNextState,
-          ...differentPacket,
-        },
-        requestedTerminalId: request.terminalEventId,
-        requestedTerminalUserId: request.ownerUserId,
-        requestedTerminalMetadata: {
-          result: "OWNER_DECISION_REQUIRED",
-          nextState: request.expectedNextState,
-          ...differentPacket,
-        },
-        terminalUserId: request.ownerUserId,
-        latestLeaseMetadata: { leaseStatus: "RELEASED" },
-      }] })
+      .mockResolvedValueOnce({ rows: [decisionBinding(differentPacket)] })
       .mockResolvedValueOnce({ rows: [] })
 
     await expect(recordOwnerAuthorityDecision({
@@ -239,6 +269,36 @@ describe("secure Primary decision intake", () => {
       expectedNextState: request.expectedNextState,
       primaryDecisionProvenance: provenance,
     })).rejects.toMatchObject({ code: "PRIMARY_DECISION_PROVENANCE_WALL" })
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO decision/.test(sql))).toBe(false)
+  })
+
+  it("rejects authority revoked while the authenticated response is being verified", async () => {
+    const provenance = await verifyPrimaryDecisionResponse({
+      request,
+      repositoryPath: repository,
+      environment: { CODEX_THREAD_ID: "thread-owner" },
+      now: Date.parse(issuedAt) + 30_000,
+      createClient: () => fakeClient() as never,
+    })
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [decisionBinding(request.decisionPacket, {
+        authorityState: "revoked",
+      })] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(recordOwnerAuthorityDecision({
+      query,
+      outcomeId: request.outcomeId,
+      workOrderId: request.workOrderId,
+      terminalEventId: request.terminalEventId,
+      ownerUserId: request.ownerUserId,
+      choice: "APPROVE",
+      expectedNextState: request.expectedNextState,
+      primaryDecisionProvenance: provenance,
+    })).rejects.toMatchObject({ code: "PRIMARY_DECISION_AUTHORITY_STALE" })
     expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
     expect(query.mock.calls.some(([sql]) => /INSERT INTO decision/.test(sql))).toBe(false)
   })
@@ -334,6 +394,25 @@ describe("secure Primary decision intake", () => {
     expect(query.mock.calls[0][0]).toContain('q."approvalState" = \'approved\'')
     expect(query.mock.calls[0][0]).toContain('q."authorityState" = \'matched\'')
     expect(query.mock.calls[0][1]).toEqual([PRIMARY_DECISION_OWNER_EMAIL])
+  })
+
+  it("rejects a terminal packet that crosses the canonical bridge policy", async () => {
+    const query = vi.fn(async () => ({ rows: [{
+      ...request,
+      terminalMetadata: {
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: request.expectedNextState,
+        ...request.decisionPacket,
+        blockedAction: "Deploy this change to production",
+      },
+    }] }))
+    await expect(readPendingPrimaryDecisionRequest({
+      query,
+      ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+    })).rejects.toMatchObject({
+      code: "PRIMARY_DECISION_POLICY_WALL",
+      reasonCode: "PROTECTED_SCOPE",
+    })
   })
 })
 

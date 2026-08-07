@@ -156,9 +156,12 @@ export async function readPendingPrimaryDecisionRequest({
     const result = await runQuery(
       `WITH candidates AS (
        SELECT g.id AS "outcomeId", g.ref AS "goalRef", g."userId" AS "ownerUserId",
+         g.command AS "goalCommand", g.lane AS "goalLane", g.verdict AS "goalVerdict",
+         g."requiresApproval" AS "goalRequiresApproval",
          wo.id AS "workOrderId", wo.ref AS "workOrderRef",
          terminal.id AS "terminalEventId", terminal."createdAt" AS "issuedAt",
-         terminal.metadata AS "terminalMetadata", q."outcomeKey", q."riskClass",
+         terminal.metadata AS "terminalMetadata", q."outcomeKey", q.title AS "queueTitle",
+         q.objective AS "queueObjective", q."riskClass", q."authorityLevel",
          q."authoritySubject", q."authorityAction"
        FROM goal g
        JOIN "user" owner ON owner.id = g."userId" AND lower(owner.email) = lower($1)
@@ -219,6 +222,7 @@ export async function readPendingPrimaryDecisionRequest({
         code: "PRIMARY_DECISION_REQUEST_INVALID",
       })
     }
+    requirePrimaryDecisionPolicy(row, decisionPacket)
     return Object.freeze({
       outcomeId: ids[0],
       workOrderId: ids[1],
@@ -241,6 +245,40 @@ export async function readPendingPrimaryDecisionRequest({
 function normalizedTimestamp(value) {
   const milliseconds = value instanceof Date ? value.getTime() : Date.parse(String(value ?? ""))
   return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : null
+}
+
+function primaryDecisionPolicyProjection(row, decisionPacket) {
+  return {
+    command: [
+      row?.goalCommand,
+      row?.queueTitle,
+      row?.queueObjective,
+      ...Object.values(decisionPacket ?? {}),
+    ].filter((value) => typeof value === "string").join("\n"),
+    title: row?.queueTitle,
+    description: row?.queueObjective,
+    lane: row?.goalLane,
+    risk: row?.riskClass,
+    authority: row?.authorityLevel,
+    verdict: row?.goalVerdict,
+    requiresApproval: row?.goalRequiresApproval,
+  }
+}
+
+function requirePrimaryDecisionPolicy(row, decisionPacket) {
+  const decision = evaluateOutcomePolicy({
+    outcome: primaryDecisionPolicyProjection(row, decisionPacket),
+    actor: "bsvalues",
+    repository: "bsvalues/terragroq",
+    enabled: true,
+    standingAuthority: true,
+  })
+  if (!decision.allowed) {
+    throw Object.assign(new Error("Primary decision is outside the bounded bridge policy"), {
+      code: "PRIMARY_DECISION_POLICY_WALL",
+      reasonCode: decision.reasonCode,
+    })
+  }
 }
 
 function validateOwnerDecisionInput({ outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState }) {
@@ -341,7 +379,8 @@ export async function recordOwnerAuthorityDecision({
     await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [terminalKey])
     const binding = await runQuery(
        `WITH goal_any AS (
-         SELECT id, "userId" AS "goalUserId", status, ref
+         SELECT id, "userId" AS "goalUserId", status, ref, command,
+           lane, verdict, "requiresApproval"
          FROM goal WHERE id = $1::integer
          FOR UPDATE
        ), work_order_any AS (
@@ -373,6 +412,13 @@ export async function recordOwnerAuthorityDecision({
             AND "eventType" = 'HERMES_RUNTIME_LEASE'
          ORDER BY id DESC
          LIMIT 1
+       ), queue_item AS (
+         SELECT id, title, objective, "riskClass", "approvalState", "authorityState",
+           "authorityLevel", "authoritySubject", "authorityAction", "lifecycleState",
+           "activeWorkOrderId"
+         FROM outcome_queue_item
+         WHERE "userId" = $4 AND "goalId" = $1::integer
+         FOR UPDATE
        ), prior_request AS (
          SELECT id AS "decisionId", ref AS "decisionRef", status, decision,
            authority, scope, evidence, "decidedAt"
@@ -394,7 +440,10 @@ export async function recordOwnerAuthorityDecision({
           JOIN decision d ON d.id = wo."linkedDecisionId"
         )
        SELECT goal_any.id AS "goalId", goal_any."goalUserId", goal_any.status AS "goalStatus",
-         goal_any.ref AS "goalRef", work_order_any.id AS "workOrderId",
+         goal_any.ref AS "goalRef", goal_any.command AS "goalCommand",
+         goal_any.lane AS "goalLane", goal_any.verdict AS "goalVerdict",
+         goal_any."requiresApproval" AS "goalRequiresApproval",
+         work_order_any.id AS "workOrderId",
          work_order_any."workOrderUserId", work_order_any.ref AS "workOrderRef",
          work_order_any.status AS "workOrderStatus",
          work_order_any."linkedDecisionId" AS "workOrderLinkedDecisionId",
@@ -403,6 +452,11 @@ export async function recordOwnerAuthorityDecision({
          requested_terminal.id AS "requestedTerminalId", requested_terminal."requestedTerminalUserId",
          requested_terminal.metadata AS "requestedTerminalMetadata",
          latest_lease.metadata AS "latestLeaseMetadata",
+         queue_item.id AS "queueItemId", queue_item.title AS "queueTitle",
+         queue_item.objective AS "queueObjective", queue_item."riskClass",
+         queue_item."approvalState", queue_item."authorityState", queue_item."authorityLevel",
+         queue_item."authoritySubject", queue_item."authorityAction",
+         queue_item."lifecycleState", queue_item."activeWorkOrderId",
          prior_request."decisionId", prior_request."decisionRef", prior_request.status AS "priorStatus",
          prior_request.decision AS "priorChoice", prior_request.authority AS "priorAuthority",
          prior_request.scope AS "priorScope", prior_request.evidence AS "priorEvidence",
@@ -417,6 +471,7 @@ export async function recordOwnerAuthorityDecision({
        LEFT JOIN latest_terminal ON TRUE
        LEFT JOIN requested_terminal ON TRUE
         LEFT JOIN latest_lease ON TRUE
+        LEFT JOIN queue_item ON TRUE
         LEFT JOIN prior_request ON TRUE
         LEFT JOIN consumed_binding ON TRUE
         LEFT JOIN linked_work_order_decision ON TRUE`,
@@ -466,6 +521,19 @@ export async function recordOwnerAuthorityDecision({
         code: "OWNER_DECISION_STALE",
       })
     }
+    if (provenance && (row.queueItemId == null
+      || Number(row.activeWorkOrderId) !== workOrderId
+      || row.lifecycleState !== "blocked"
+      || row.approvalState !== "approved"
+      || row.authorityState !== "matched"
+      || row.authoritySubject !== "operator"
+      || row.authorityAction !== "outcome:execute"
+      || !["R0", "R1"].includes(row.riskClass))) {
+      throw Object.assign(new Error("Primary decision queue authority changed before recording"), {
+        code: "PRIMARY_DECISION_AUTHORITY_STALE",
+      })
+    }
+    if (provenance) requirePrimaryDecisionPolicy(row, decisionPacket)
     const decisionPacketDigest = ownerDecisionPacketDigest(decisionPacket)
     if (provenance && provenance.requestDigest !== primaryDecisionRequestDigest({
       outcomeId,
@@ -841,6 +909,7 @@ export async function readApprovedOwnerDecision({
     const provenance = validStoredProvenance ? {
       identityStatus: storedProvenance.identityStatus,
       accountEmail: storedProvenance.accountEmail,
+      choice: storedProvenance.choice,
       requestDigest: storedProvenance.requestDigest,
       responseDigest: storedProvenance.responseDigest,
       issuedAt: storedProvenance.issuedAt,

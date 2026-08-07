@@ -22,6 +22,10 @@ import {
   terminalizeOutcome,
   verifyReviewRecoveryProjectionCollision,
 } from "@/scripts/hermes-bridge/outcome-source.mjs"
+import {
+  PRIMARY_DECISION_OWNER_EMAIL,
+  primaryDecisionRequestDigest,
+} from "@/scripts/hermes-bridge/primary-decision-provenance.mjs"
 
 const row = { id: 4, ref: "GOAL-0004", command: "Build a WilliamOS status UI", lane: "ui", mode: "implement", risk: "low", authority: "A2_WRITE_OWN", verdict: "allow", requiresApproval: false, matchedRules: [], status: "classified" }
 const ownerDecisionPacket = {
@@ -49,7 +53,12 @@ function reorderedJson(value: string): string {
   return JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(value)).reverse()))
 }
 
-function ownerDecisionReceipt(choice: "APPROVE" | "DENY", decisionId: number, evidenceId: number) {
+function ownerDecisionReceipt(
+  choice: "APPROVE" | "DENY",
+  decisionId: number,
+  evidenceId: number,
+  primaryDecisionProvenance: Record<string, unknown> | null = null,
+) {
   const requestKey = `hermes-owner-decision:4:42:88:owner:${choice}:EXACT_NEXT_STATE`
   const decisionRef = "OWNER-DECISION-4-88"
   const evidence = [
@@ -60,6 +69,10 @@ function ownerDecisionReceipt(choice: "APPROVE" | "DENY", decisionId: number, ev
     `request:${requestKey}`,
     "terminal-binding:hermes-owner-decision-terminal:4:42:88",
     `choice:${choice}`,
+    ...(primaryDecisionProvenance ? [
+      `primary-request:${primaryDecisionProvenance.requestDigest}`,
+      `primary-response:${primaryDecisionProvenance.responseDigest}`,
+    ] : []),
     `decision-packet:${ownerDecisionPacketHash}`,
   ]
   const payload = {
@@ -74,6 +87,7 @@ function ownerDecisionReceipt(choice: "APPROVE" | "DENY", decisionId: number, ev
     requestKey,
     decisionPacket: ownerDecisionPacket,
     decisionPacketDigest: ownerDecisionPacketHash,
+    ...(primaryDecisionProvenance ? { primaryDecisionProvenance } : {}),
   }
   const notes = canonicalJson(payload)
   const audit = {
@@ -540,6 +554,60 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[0][0]).toMatch(
       /latest_terminal[\s\S]+AND "userId" = \$4[\s\S]+HERMES_OUTCOME_TERMINAL/,
     )
+  })
+
+  it("reconstructs a bridge approval with its persisted choice provenance", async () => {
+    const primaryDecisionProvenance = {
+      identityStatus: "VERIFIED_PRIMARY_CODEX_APP_SERVER",
+      accountEmail: PRIMARY_DECISION_OWNER_EMAIL,
+      choice: "APPROVE",
+      requestDigest: primaryDecisionRequestDigest({
+        outcomeId: 4,
+        workOrderId: 42,
+        terminalEventId: 88,
+        expectedNextState: "EXACT_NEXT_STATE",
+        decisionPacketDigest: ownerDecisionPacketHash,
+      }),
+      responseDigest: "b".repeat(64),
+      issuedAt: "2026-07-26T11:59:55.000Z",
+      expiresAt: "2026-07-26T12:59:55.000Z",
+    }
+    const approvalReceipt = ownerDecisionReceipt("APPROVE", 19, 90, primaryDecisionProvenance)
+    const query = vi.fn(async () => ({ rows: [{
+      decisionId: 19,
+      decisionRef: "OWNER-DECISION-4-88",
+      status: "accepted",
+      choice: "APPROVE",
+      authority: "binding",
+      outcomeId: 4,
+      workOrderId: 42,
+      terminalEventId: 88,
+      terminalUserId: "owner",
+      terminalIssuedAt: "2026-07-26T11:59:50.000Z",
+      decidedAt: "2026-07-26T12:00:00.000Z",
+      receiptEventId: 92,
+      evidenceRecordId: 90,
+      auditEventId: 93,
+      terminalMetadata: {
+        result: "OWNER_DECISION_REQUIRED",
+        nextState: "EXACT_NEXT_STATE",
+        ...ownerDecisionPacket,
+      },
+      evidence: approvalReceipt.evidence,
+      evidenceNotes: approvalReceipt.notes,
+      evidenceContentHash: approvalReceipt.contentHash,
+      receiptMetadata: approvalReceipt.audit,
+      auditMetadata: approvalReceipt.audit,
+    }] }))
+
+    await expect(readApprovedOwnerDecision({
+      query,
+      outcomeId: 4,
+      workOrderId: 42,
+      terminalEventId: 88,
+      ownerUserId: "owner",
+      expectedNextState: "EXACT_NEXT_STATE",
+    })).resolves.toMatchObject({ approved: true, decisionId: 19 })
   })
 
   it("rejects an approval without its complete evidence, trace, and audit receipt", async () => {
