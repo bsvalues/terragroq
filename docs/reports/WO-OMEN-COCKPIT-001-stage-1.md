@@ -1,9 +1,9 @@
 # WO-OMEN-COCKPIT-001 — OMEN cockpit Stage 1
 
 ```text
-OMEN_COCKPIT_STAGE_1: BLOCKED
-RESULT_STATE=BLOCKED_DEPENDENCY
-REASON_CODE=HERMES_TCP_SERVICES_UNREACHABLE_AFTER_SUCCESSFUL_PROOF
+OMEN_COCKPIT_STAGE_1: COMPLETE
+RESULT_STATE=COMPLETE
+REASON_CODE=NONE
 ```
 
 ## Work-order packet
@@ -74,23 +74,23 @@ ownerOperationsAllowed: false
 - Ethernet 2 IPv4 `192.168.1.157`.
 - PowerShell `7.6.4`, OpenSSH `9.5p2`, Git `2.55.0`, GitHub CLI `2.89.0`.
 - GitHub CLI authenticated as `bsvalues` with SSH Git protocol.
-- Stable VS Code `1.131.0` with official Remote SSH `0.124.0` and Remote Explorer installed and
+- Stable VS Code `1.132.0` with official Remote SSH `0.124.0` and Remote Explorer installed and
   configured for Windows OpenSSH. VS Code Insiders remains installed but is not the proven surface.
 - Existing SSH aliases target Hermes and Atlas and retain `StrictHostKeyChecking=ask`.
 
 ## Stage 1 status
 
-- SSH to Hermes: **PROVEN, THEN DEGRADED**. The repaired server accepted the intended fingerprint;
-  verbose proof records public-key authentication, hostname `Hermes`, and exit `0`. Later the same
-  run lost all tested Hermes TCP reachability while ICMP remained responsive; three bounded SSH
-  retries and a post-wait retry timed out before authentication.
+- SSH to Hermes: **PROVEN**. The repaired server accepts the intended fingerprint
+  `SHA256:yKY2L2DIR7KaYtgr4Vm5VXQrlzZmGk82GmU+2ARAWG8`; fresh verbose proof records public-key
+  authentication, hostname `Hermes`, and exit `0`. A temporary TCP outage observed after the first
+  proof recovered, and the final tunnel and VS Code proofs both established fresh SSH sessions.
 - SSH to Atlas: **PROVEN**. `ssh -o BatchMode=yes atlas hostname` returns `atlas` with exit `0`.
 - VS Code Remote SSH to Atlas: **PROVEN** using stable VS Code and the official extension. The resolver
   ran Windows OpenSSH, created the Atlas exec server, and started the user-scoped VS Code Server.
-- VS Code Remote SSH to Hermes: **PROVEN** before the later transport loss. Stable VS Code resolved
-  `ssh-remote+hermes`, created/cached the exec server, installed the user-scoped Windows VS Code
-  Server, and completed its install command. Subsequent new windows time out because Hermes TCP/22
-  is no longer reachable.
+- VS Code Remote SSH to Hermes: **PROVEN** after transport recovery. Stable VS Code `1.132.0` and
+  official Remote SSH `0.124.0` resolved the Windows x64 target, parsed the remote server listener,
+  resolved `ssh-remote+hermes` to its local forwarded port, and created/cached the exec server. The
+  proof window was closed without affecting other sessions.
 - Commands created: `lab-status`, `lab-hermes`, `lab-atlas`, `lab-containers`, `lab-backups`, shared
   module, safe installer, command shims, and a sanitized SSH config example.
 - Commands installed: managed files are at
@@ -110,9 +110,9 @@ ownerOperationsAllowed: false
   reachable and requires authentication; Mongo ping succeeds; `641G` free of `685G`; the latest
   observed backup archive candidates by mtime are the 2026-08-08 03:00 UTC TerraFusion volume files
   under `/home/bs/backups`. File presence does not prove archive integrity or set completeness.
-- RDP: `mstsc.exe` is present and Hermes TCP/3389 was open during initial discovery. It became
-  unreachable with the later Hermes TCP outage. Authentication/usefulness was not tested;
-  RDP is optional, not a normal-operations dependency.
+- RDP: `mstsc.exe` is present and Hermes TCP/3389 was open during initial discovery. A temporary
+  broader Hermes TCP outage was observed and subsequently recovered. RDP authentication/usefulness
+  was not tested; RDP is optional, not a normal-operations dependency.
 - Backup directory visibility: **PROVEN** at `/home/bs/backups`; the latest three archives pass
   `gzip -t`. Cross-node sync for this run is **VERIFIED_BOTH_DIRECTIONS** by exact file metadata and
   SHA-256 comparison, with the routine scheduled-task signal deliberately labeled unverified.
@@ -120,7 +120,9 @@ ownerOperationsAllowed: false
   Ollama `0.32.5` is at `11434`; all are wildcard-bound in Docker but direct OMEN LAN requests time
   out. A transient SSH tunnel proved Open WebUI at `http://127.0.0.1:13000/`, Portainer at
   `http://127.0.0.1:19000/`, and Ollama at `http://127.0.0.1:21434/`; the proof tunnel was stopped.
-  No firewall or binding change was attempted. No current lab monitoring surface was found; port
+  The final transient tunnel recheck returned HTTP `200` for all three endpoints, and the exact
+  tunnel process was then stopped. No firewall or binding change was attempted. No current lab
+  monitoring surface was found; port
   `8080` is a legacy EDB PEM landing page, not a verified operational radar.
 - Cross-node sync source: Hermes scheduled task `HermesCrossNodeBackupSync`, daily 04:00 PDT, last
   run `2026-08-08T04:00:00-07:00`, result `0`. Exact filename/size/SHA-256 comparison verifies the
@@ -144,7 +146,7 @@ HERMES
   Docker: 28.5.1
   Ollama: AVAILABLE 0.32.5
   GPU: NVIDIA GeForce RTX 3050
-  disk: 308 GB free of 465 GB
+  disk: 311 GB free of 465 GB
 ATLAS
   reachable: YES
   Docker: 29.7.2
@@ -159,24 +161,10 @@ LAB
 LAB_STATUS_EXIT=2
 ```
 
-Current installed-cockpit degradation proof after Hermes TCP loss:
-
-```text
-HERMES
-  reachable: NO (SSH_TIMEOUT)
-ATLAS
-  reachable: YES
-  Docker: 29.7.2
-  Postgres evidence: CONTAINER_PG_ISREADY_ACCEPTING
-  Redis evidence: CONTAINER_REDIS_AUTH_REQUIRED_REACHABLE
-  Mongo evidence: CONTAINER_MONGO_PING_OK
-  disk: 641G free of 685G
-LAB
-  latest backup: 2026-08-08T03:00:12+00:00|/home/bs/backups/terrafusion_final_build_20250615_051930_redis_data-20260808_030001.tar.gz
-  latest cross-node sync: UNKNOWN
-  operator blocker: one or more lab nodes are unreachable; inspect the typed SSH result above
-CURRENT_INSTALLED_LAB_STATUS_EXIT=2
-```
+The installed cockpit exits `2` deliberately because the scheduled task has no durable sync receipt;
+it does not infer a green continuity result from task exit `0`. Independent read-only file metadata
+and SHA-256 comparison verifies the current transfer in both directions, so this durable-evidence
+hardening gap does not prevent Stage 1 operator access or make the current backup/sync result unknown.
 
 The suite executes the real PowerShell entrypoints through a fake external SSH process. It verifies
 BatchMode/timeouts, authentication classification, incomplete-evidence nonzero status, UTF-16LE
@@ -222,18 +210,19 @@ Unresolved review findings: `0`.
 - `docs/reports/WO-OMEN-COCKPIT-001-stage-1.md`
 
 Initial implementation commit: `98eebedf9f335eec1afbc8e511f4cbcfbdb46e1c`.
-Continuation evidence/remediation commit: pending coordinator commit.
+Continuation evidence/remediation commits: `f91e47818e597dd582558b0e858720521e19f1f5`,
+`5820923d8bfd2f04594a157ae4ff12976be0adea`.
 Draft PR: `#529`.
 
 ## Exact remaining blocker
 
-Hermes trust, UI tunnels, and VS Code Remote SSH were all proven. The new blocker is current Hermes
-transport availability: ICMP responds, but TCP `22`, `3389`, `445`, `50080`, and `50443` all fail,
-and bounded SSH retries time out before authentication. Until TCP/22 is stably reachable again,
-OMEN cannot perform normal operator work or keep the proven UI tunnels open.
+None. Passwordless SSH, the installed cockpit, and VS Code Remote SSH are proven from OMEN to both
+required nodes; localhost-only admin-UI tunnel access is proven specifically to Hermes. The
+cross-node sync script should eventually emit a
+durable receipt/log so routine `lab-status` can verify continuity without a separate hash audit; that
+is a hardening follow-up outside Stage 1, not a current blocker.
 
-Owner action required: `false`. Recovery of Hermes TCP/network-service availability belongs to the
-already authorized Hermes operator lane; William must not act as diagnostic or command courier.
+Owner action required: `false`.
 
 ## Owner-touch counters
 
@@ -248,8 +237,8 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 ## Validation handoff
 
 ```text
-READY_FOR_VALIDATION
-commit=98eebedf9f335eec1afbc8e511f4cbcfbdb46e1c
+COMPLETE
+commit=pending-coordinator-completion-commit
 pr=529
 merge=null
 owner_operation_touch_count=0

@@ -16,7 +16,7 @@ connection attempt, and bounded server-alive settings.
 - LAN: Ethernet 2 IPv4 `192.168.1.157`.
 - PowerShell: `7.6.4`; OpenSSH: `9.5p2`; Git: `2.55.0`; GitHub CLI: `2.89.0`.
 - GitHub CLI is authenticated as `bsvalues` with Git operations configured for SSH.
-- Stable VS Code `1.131.0` is installed with official Remote SSH `0.124.0`, Remote SSH Editing
+- Stable VS Code `1.132.0` is installed with official Remote SSH `0.124.0`, Remote SSH Editing
   Configuration `0.87.0`, and Remote Explorer `0.5.0`. Its SSH path is explicitly set to Windows
   OpenSSH, with `hermes=windows` and `atlas=linux` platform mappings. VS Code Insiders remains
   installed, but its current product/extension combination is not the proven Remote SSH surface.
@@ -97,12 +97,10 @@ is not inferred from file presence. The cockpit reads cross-node status from sch
 `HermesCrossNodeBackupSync` and labels result `0` as unverified because its script emits no durable
 receipt/log. This run separately verified both directions by exact filename, size, and SHA-256.
 
-After those proofs, Hermes stopped accepting TCP connections while still responding to ICMP. Ports
-`22`, `3389`, `445`, `50080`, and `50443` were all unreachable, and bounded SSH retries timed out.
-That transport instability is the current Stage 1 blocker; no private key, password, firewall, or
-service setting was changed from OMEN.
-
-After Hermes TCP transport recovers, verify from a new OMEN terminal:
+Hermes temporarily stopped accepting TCP connections after the initial proof while still responding
+to ICMP. That condition recovered. Final passwordless SSH, tunnel, and VS Code Remote SSH proofs all
+established fresh connections without changing any private key, password, firewall, or service
+setting. Routine verification from a new OMEN terminal is:
 
 ```powershell
 ssh -o BatchMode=yes hermes hostname
@@ -115,11 +113,12 @@ Stable VS Code Remote SSH is proven end-to-end for Atlas and Hermes: the officia
 OpenSSH, connected to `atlas`, created its exec server, and installed/started the normal user-scoped
 VS Code Server under `/home/bs/.vscode-server`. For Hermes it resolved the Windows platform, created
 and cached the exec server, and installed the user-scoped server under `C:\Users\bs\.vscode-server`.
-New connections cannot be opened while the current Hermes TCP outage persists.
+A fresh post-recovery proof with stable VS Code `1.132.0` parsed the Windows x64 server listener,
+resolved `ssh-remote+hermes`, and created/cached its exec server.
 
 ## Browser and RDP truth
 
-Initially reachable OMEN web-management URLs (currently unavailable with the Hermes TCP outage):
+OMEN web-management URLs discovered during the initial LAN scan:
 
 - Hermes Windows Device Portal: `http://192.168.1.154:50080/`
 - Hermes Windows Device Portal TLS endpoint: `https://192.168.1.154:50443/`
@@ -138,6 +137,10 @@ HTTP 200 during the transient proof, then the exact tunnel process was stopped. 
 monitoring service was found. Port `8080` is legacy EDB PEM Apache, and ports `50080`/`50443` are
 Windows web management; neither is represented as the current operational radar.
 
-OMEN has `mstsc.exe`; Hermes TCP/3389 was reachable during initial discovery and later became
-unreachable with the broader TCP outage. RDP is potentially useful for exceptional Windows GUI
+The tunnel endpoints were revalidated after Hermes recovered: Open WebUI, Portainer, and Ollama each
+returned HTTP `200`; Ollama reported version `0.32.5`. The exact proof tunnel was then stopped and all
+three OMEN loopback ports were released.
+
+OMEN has `mstsc.exe`; Hermes TCP/3389 was reachable during initial discovery and temporarily became
+unreachable with the broader recovered TCP outage. RDP is potentially useful for exceptional Windows GUI
 administration, but login/usefulness was not tested and it is not required for normal lab operation.
