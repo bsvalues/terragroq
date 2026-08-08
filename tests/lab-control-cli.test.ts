@@ -21,14 +21,21 @@ type FixtureMode =
   | "receipt-missing"
   | "receipt-malformed"
   | "receipt-wrong-schema"
+  | "receipt-wrong-schema-case"
   | "receipt-future-completion"
   | "receipt-missing-direction"
   | "receipt-zero-file-count"
   | "receipt-invalid-manifest-hash"
-  | "receipt-mirror-hash-mismatch"
+  | "receipt-hash-mismatch"
+  | "receipt-run-id-mismatch"
+  | "receipt-direction-run-id-mismatch"
   | "receipt-task-start-mismatch"
   | "receipt-later-task"
   | "receipt-future-task"
+  | "receipt-only"
+  | "receipt-hermes-death"
+  | "receipt-task-state-incomplete"
+  | "receipt-task-evidence-out-of-order"
   | "receipt-invalid-base64"
   | "receipt-invalid-timestamp"
 
@@ -41,40 +48,61 @@ type Receipt = {
   result: string
   verification: string
   directions: Array<{
+    run_id: string
     direction: string
     source: string
     destination: string
     file_count: number
     manifest_sha256: string
+    verification: string
   }>
 }
 
+type TaskEvidence = {
+  schema_version: number
+  task_name: string
+  run_id: string
+  started_at: string
+  receipt_completed_at: string
+  completed_at: string
+  state: string
+  result: string
+  verification: string
+  atlas_receipt_sha256: string
+}
+
 function receiptFixture(mode: FixtureMode) {
+  const runId = "11111111-2222-3333-4444-555555555555"
   const receipt: Receipt = {
     schema_version: 1,
     task_name: "HermesCrossNodeBackupSync",
-    run_id: "20260808T110000Z-fixture",
+    run_id: runId,
     started_at: "2026-08-08T11:00:00.0000000Z",
     completed_at: "2026-08-08T11:00:25.0000000Z",
     result: "SUCCESS",
     verification: "SHA256_PASS",
     directions: [
       {
+        run_id: runId,
         direction: "ATLAS_TO_HERMES",
         source: "atlas",
         destination: "hermes",
         file_count: 3,
         manifest_sha256: "a".repeat(64),
+        verification: "SHA256_PASS",
       },
       {
+        run_id: runId,
         direction: "HERMES_TO_ATLAS",
         source: "hermes",
         destination: "atlas",
         file_count: 5,
         manifest_sha256: "b".repeat(64),
+        verification: "SHA256_PASS",
       },
     ],
   }
+  let taskState = "Ready"
   let taskResult = "0"
   let taskLastUtc = receipt.started_at
   let malformedBase64: string | undefined
@@ -90,19 +118,19 @@ function receiptFixture(mode: FixtureMode) {
       taskLastUtc = receipt.started_at
       break
     case "receipt-missing":
-      return {
-        receiptB64: "",
-        hermesReceiptHash: "",
-        atlasReceiptHash: "",
-        taskResult,
-        taskLastUtc,
-      }
+      break
     case "receipt-malformed":
       malformedJson = "{"
       break
     case "receipt-wrong-schema":
       receipt.schema_version = 2
       break
+    case "receipt-wrong-schema-case": {
+      const wrongCaseReceipt = { ...receipt, Schema_version: receipt.schema_version } as Record<string, unknown>
+      delete wrongCaseReceipt.schema_version
+      malformedJson = JSON.stringify(wrongCaseReceipt)
+      break
+    }
     case "receipt-future-completion":
       receipt.started_at = "2026-08-08T12:00:00.0000000Z"
       receipt.completed_at = "2026-08-08T12:05:01.0000000Z"
@@ -117,7 +145,8 @@ function receiptFixture(mode: FixtureMode) {
     case "receipt-invalid-manifest-hash":
       receipt.directions[0].manifest_sha256 = "NOT_A_SHA256"
       break
-    case "receipt-mirror-hash-mismatch":
+    case "receipt-direction-run-id-mismatch":
+      receipt.directions[1].run_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
       break
     case "receipt-task-start-mismatch":
       taskLastUtc = "2026-08-08T10:30:00.0000000Z"
@@ -127,6 +156,9 @@ function receiptFixture(mode: FixtureMode) {
       break
     case "receipt-future-task":
       taskLastUtc = "2026-08-08T11:04:00.0000000Z"
+      break
+    case "receipt-task-state-incomplete":
+      taskState = "Running"
       break
     case "receipt-invalid-base64":
       malformedBase64 = "%%%NOT_BASE64%%%"
@@ -139,9 +171,56 @@ function receiptFixture(mode: FixtureMode) {
   const compactJson = malformedJson ?? JSON.stringify(receipt)
   const bytes = Buffer.from(compactJson, "utf8")
   const receiptB64 = malformedBase64 ?? bytes.toString("base64")
-  const hermesReceiptHash = createHash("sha256").update(bytes).digest("hex")
-  const atlasReceiptHash = mode === "receipt-mirror-hash-mismatch" ? "c".repeat(64) : hermesReceiptHash
-  return { receiptB64, hermesReceiptHash, atlasReceiptHash, taskResult, taskLastUtc }
+  const atlasReceiptHash = createHash("sha256").update(bytes).digest("hex")
+  const evidenceCompletedAt = mode === "receipt-stale"
+    ? "2026-08-07T05:00:01.0000000Z"
+    : mode === "receipt-future-completion"
+      ? "2026-08-08T12:05:02.0000000Z"
+      : "2026-08-08T11:00:26.0000000Z"
+  const taskEvidence: TaskEvidence = {
+    schema_version: 1,
+    task_name: "HermesCrossNodeBackupSync",
+    run_id: runId,
+    started_at: receipt.started_at,
+    receipt_completed_at: receipt.completed_at,
+    completed_at: evidenceCompletedAt,
+    state: "COMPLETED",
+    result: "SUCCESS",
+    verification: "SHA256_PASS",
+    atlas_receipt_sha256: atlasReceiptHash,
+  }
+  if (mode === "receipt-run-id-mismatch") {
+    taskEvidence.run_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+  }
+  if (mode === "receipt-hash-mismatch") {
+    taskEvidence.atlas_receipt_sha256 = "c".repeat(64)
+  }
+  if (mode === "receipt-task-evidence-out-of-order") {
+    taskEvidence.completed_at = "2026-08-08T11:00:24.0000000Z"
+  }
+  const taskEvidenceBytes = Buffer.from(JSON.stringify(taskEvidence), "utf8")
+  let taskEvidenceB64 = taskEvidenceBytes.toString("base64")
+  let hermesTaskEvidenceHash = createHash("sha256").update(taskEvidenceBytes).digest("hex")
+  let atlasB64 = receiptB64
+  let atlasHash = atlasReceiptHash
+  if (mode === "receipt-missing") {
+    atlasB64 = ""
+    atlasHash = ""
+    taskEvidenceB64 = ""
+    hermesTaskEvidenceHash = ""
+  } else if (mode === "receipt-only" || mode === "receipt-hermes-death") {
+    taskEvidenceB64 = ""
+    hermesTaskEvidenceHash = ""
+  }
+  return {
+    receiptB64: atlasB64,
+    atlasReceiptHash: atlasHash,
+    taskEvidenceB64,
+    hermesTaskEvidenceHash,
+    taskState,
+    taskResult,
+    taskLastUtc,
+  }
 }
 
 function makeFakeSsh(mode: FixtureMode) {
@@ -176,6 +255,10 @@ if "%LAB_CONTROL_TEST_MODE%"=="incomplete" (
 )
 echo %*| %SystemRoot%\\System32\\findstr.exe /C:"hermes" >nul
 if not errorlevel 1 (
+  if "%LAB_CONTROL_TEST_MODE%"=="receipt-hermes-death" (
+    1>&2 echo Connection timed out.
+    exit /b 255
+  )
   echo hostname=HERMES
   echo os=Windows 10 Pro
   echo uptime=3 days
@@ -183,10 +266,11 @@ if not errorlevel 1 (
   echo ollama=AVAILABLE
   echo gpu=NVIDIA GeForce RTX 3050
   echo disk=321 GB free of 930 GB
+  echo cross_sync_task_state=%LAB_CONTROL_TEST_TASK_STATE%
   echo cross_sync_task_result=%LAB_CONTROL_TEST_TASK_RESULT%
   echo cross_sync_task_last_utc=%LAB_CONTROL_TEST_TASK_LAST_UTC%
-  echo cross_sync_receipt_b64=%LAB_CONTROL_TEST_RECEIPT_B64%
-  echo cross_sync_receipt_sha256=%LAB_CONTROL_TEST_HERMES_RECEIPT_SHA256%
+  echo cross_sync_task_evidence_b64=%LAB_CONTROL_TEST_TASK_EVIDENCE_B64%
+  echo cross_sync_task_evidence_sha256=%LAB_CONTROL_TEST_TASK_EVIDENCE_SHA256%
   exit /b 0
 )
 echo hostname=atlas
@@ -198,6 +282,7 @@ echo redis_evidence=REDIS_AUTH_REQUIRED_REACHABLE
 echo mongo_evidence=MONGO_PING_OK
 echo disk=744G free of 915G
 echo backup=2026-08-07T08:15:00-07:00 atlas-nightly
+echo cross_sync_receipt_b64=%LAB_CONTROL_TEST_RECEIPT_B64%
 echo cross_sync_receipt_sha256=%LAB_CONTROL_TEST_ATLAS_RECEIPT_SHA256%
 exit /b 0
 `,
@@ -220,11 +305,13 @@ function runCommand(command: string, mode: FixtureMode = "healthy") {
         LAB_CONTROL_TEST_LOG: fixture.log,
         LAB_CONTROL_TEST_MODE: mode,
         LAB_CONTROL_NOW_UTC: nowUtc,
+        LAB_CONTROL_TEST_TASK_STATE: fixture.receipt.taskState,
         LAB_CONTROL_TEST_TASK_RESULT: fixture.receipt.taskResult,
         LAB_CONTROL_TEST_TASK_LAST_UTC: fixture.receipt.taskLastUtc,
         LAB_CONTROL_TEST_RECEIPT_B64: fixture.receipt.receiptB64,
-        LAB_CONTROL_TEST_HERMES_RECEIPT_SHA256: fixture.receipt.hermesReceiptHash,
         LAB_CONTROL_TEST_ATLAS_RECEIPT_SHA256: fixture.receipt.atlasReceiptHash,
+        LAB_CONTROL_TEST_TASK_EVIDENCE_B64: fixture.receipt.taskEvidenceB64,
+        LAB_CONTROL_TEST_TASK_EVIDENCE_SHA256: fixture.receipt.hermesTaskEvidenceHash,
       },
       timeout: 15_000,
     },
@@ -276,7 +363,7 @@ describe("OMEN lab-control CLI", () => {
     expect(result.stdout).not.toContain("operator blocker: NONE")
   })
 
-  test("fresh mirrored task-bound receipt is the only green sync state", () => {
+  test("fresh Atlas receipt and matching completed Hermes task evidence are the only green sync state", () => {
     const result = runCommand("lab-status", "receipt-fresh")
 
     expect(result.status).toBe(0)
@@ -287,8 +374,13 @@ describe("OMEN lab-control CLI", () => {
   test.each([
     ["receipt-failed", "SYNC_FAILED"],
     ["receipt-stale", "SYNC_STALE"],
-    ["receipt-missing", "SYNC_NEVER_VERIFIED"],
+    ["receipt-missing", "SYNC_UNKNOWN"],
     ["receipt-malformed", "SYNC_FAILED"],
+    ["receipt-missing-direction", "SYNC_FAILED"],
+    ["receipt-hash-mismatch", "SYNC_FAILED"],
+    ["receipt-run-id-mismatch", "SYNC_FAILED"],
+    ["receipt-hermes-death", "SYNC_FAILED"],
+    ["receipt-only", "SYNC_FAILED"],
   ] as const)("%s remains non-green as %s", (mode, state) => {
     const result = runCommand("lab-status", mode)
 
@@ -296,16 +388,19 @@ describe("OMEN lab-control CLI", () => {
     expect(result.stdout).toContain(`latest cross-node sync: ${state}`)
     expect(result.stdout).toContain("operator blocker: REQUIRED_EVIDENCE_INCOMPLETE")
     expect(result.stdout).not.toContain("operator blocker: NONE")
+    expect(result.stdout).not.toContain("SYNC_NEVER_VERIFIED")
   })
 
   test.each([
     "receipt-wrong-schema",
+    "receipt-wrong-schema-case",
     "receipt-future-completion",
-    "receipt-missing-direction",
     "receipt-zero-file-count",
     "receipt-invalid-manifest-hash",
-    "receipt-mirror-hash-mismatch",
+    "receipt-direction-run-id-mismatch",
     "receipt-task-start-mismatch",
+    "receipt-task-state-incomplete",
+    "receipt-task-evidence-out-of-order",
     "receipt-invalid-base64",
     "receipt-invalid-timestamp",
   ] as const)("%s fails closed", (mode) => {
@@ -332,8 +427,9 @@ describe("OMEN lab-control CLI", () => {
     ["receipt-fresh", "SYNC_OK", 0],
     ["receipt-failed", "SYNC_FAILED", 2],
     ["receipt-stale", "SYNC_STALE", 2],
-    ["receipt-missing", "SYNC_NEVER_VERIFIED", 2],
+    ["receipt-missing", "SYNC_UNKNOWN", 2],
     ["receipt-malformed", "SYNC_FAILED", 2],
+    ["receipt-only", "SYNC_FAILED", 2],
   ] as const)("lab-backups shares %s classification as %s", (mode, state, status) => {
     const result = runCommand("lab-backups", mode)
 
@@ -352,7 +448,8 @@ describe("OMEN lab-control CLI", () => {
     expect(Buffer.from(hermesEncoded!, "base64").toString("utf16le")).toContain("http://127.0.0.1:11434/api/version")
     const hermesCommand = Buffer.from(hermesEncoded!, "base64").toString("utf16le")
     expect(hermesCommand).toContain("HermesCrossNodeBackupSync")
-    expect(hermesCommand).toContain("D:\\CrossNodeBackups\\crossnode-sync-receipt.json")
+    expect(hermesCommand).toContain("D:\\CrossNodeBackups\\crossnode-sync-task-evidence.json")
+    expect(hermesCommand).not.toContain("D:\\CrossNodeBackups\\crossnode-sync-receipt.json")
     expect(hermesCommand).toContain("65536")
     expect(hermesCommand).toContain("[System.IO.FileAccess]::Read")
     expect(atlasEncoded).toBeTruthy()
@@ -364,11 +461,14 @@ describe("OMEN lab-control CLI", () => {
     expect(atlasCommand).toContain('docker exec "$container" redis-cli')
     expect(atlasCommand).toContain('docker exec "$container" mongosh')
     expect(atlasCommand).toContain("/home/bs/from-hermes/crossnode-sync-receipt.json")
+    expect(atlasCommand).toContain("65536")
+    expect(atlasCommand).toContain("base64")
     expect(atlasCommand).toContain("stat -c %s")
+    expect(atlasCommand.match(/head -c 65536/g)).toHaveLength(2)
     expect(atlasCommand).toContain("sha256sum")
     for (const command of [hermesCommand, atlasCommand]) {
       expect(command).not.toMatch(/\b(?:Set-Content|Out-File|Move-Item|Remove-Item|mv|rm)\b/i)
-      expect(command).not.toMatch(/crossnode-sync-receipt\.json[^\r\n]*(?:>>?|\|\s*(?:Set-Content|Out-File))/i)
+      expect(command).not.toMatch(/crossnode-sync-(?:receipt|task-evidence)\.json[^\r\n]*(?:>>?|\|\s*(?:Set-Content|Out-File))/i)
     }
   })
 

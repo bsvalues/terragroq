@@ -134,6 +134,59 @@ function New-LabCrossSyncEvidence {
     }
 }
 
+function Test-LabExactJsonProperties {
+    param([object]$Object, [string[]]$Names)
+
+    if ($null -eq $Object -or $Object -is [array]) { return $false }
+    $actualNames = @($Object.PSObject.Properties | ForEach-Object { $_.Name })
+    if ($actualNames.Count -ne $Names.Count) { return $false }
+    foreach ($name in $Names) {
+        if ($name -cnotin $actualNames) { return $false }
+    }
+    $true
+}
+
+function ConvertFrom-LabJsonTransport {
+    param(
+        [Parameter(Mandatory)][string]$Base64,
+        [Parameter(Mandatory)][string]$ExpectedHash
+    )
+
+    if ($ExpectedHash -cnotmatch '^[0-9a-f]{64}$') {
+        return [pscustomobject]@{ Ok = $false; Detail = 'invalid_hash'; Document = $null }
+    }
+    try {
+        $bytes = [Convert]::FromBase64String($Base64)
+    } catch {
+        return [pscustomobject]@{ Ok = $false; Detail = 'invalid_base64'; Document = $null }
+    }
+    if ($bytes.Length -eq 0 -or $bytes.Length -gt 65536) {
+        return [pscustomobject]@{ Ok = $false; Detail = 'invalid_size'; Document = $null }
+    }
+
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $computedHash = [BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+    }
+    if ($computedHash -cne $ExpectedHash) {
+        return [pscustomobject]@{ Ok = $false; Detail = 'content_hash_mismatch'; Document = $null }
+    }
+
+    try {
+        $utf8 = New-Object Text.UTF8Encoding($false, $true)
+        $json = $utf8.GetString($bytes)
+        $document = ConvertFrom-Json -InputObject $json -DateKind String -ErrorAction Stop
+    } catch {
+        return [pscustomobject]@{ Ok = $false; Detail = 'invalid_json'; Document = $null }
+    }
+    if ($null -eq $document -or $document -is [array]) {
+        return [pscustomobject]@{ Ok = $false; Detail = 'invalid_schema'; Document = $null }
+    }
+    [pscustomobject]@{ Ok = $true; Detail = 'valid'; Document = $document }
+}
+
 function Get-LabCrossSyncEvidence {
     param(
         [Parameter(Mandatory)][System.Collections.IDictionary]$HermesValues,
@@ -142,10 +195,12 @@ function Get-LabCrossSyncEvidence {
     )
 
     $NowUtc = $NowUtc.ToUniversalTime()
+    $taskState = (Get-LabRawValue $HermesValues 'cross_sync_task_state').Trim()
     $taskResultText = (Get-LabRawValue $HermesValues 'cross_sync_task_result').Trim()
     $taskLastText = (Get-LabRawValue $HermesValues 'cross_sync_task_last_utc').Trim()
-    $receiptB64 = (Get-LabRawValue $HermesValues 'cross_sync_receipt_b64').Trim()
-    $hermesHash = (Get-LabRawValue $HermesValues 'cross_sync_receipt_sha256').Trim()
+    $taskEvidenceB64 = (Get-LabRawValue $HermesValues 'cross_sync_task_evidence_b64').Trim()
+    $taskEvidenceHash = (Get-LabRawValue $HermesValues 'cross_sync_task_evidence_sha256').Trim()
+    $receiptB64 = (Get-LabRawValue $AtlasValues 'cross_sync_receipt_b64').Trim()
     $atlasHash = (Get-LabRawValue $AtlasValues 'cross_sync_receipt_sha256').Trim()
 
     $taskResult = [long]0
@@ -158,106 +213,117 @@ function Get-LabCrossSyncEvidence {
         }
     }
 
-    if ([string]::IsNullOrWhiteSpace($receiptB64) -and
-        [string]::IsNullOrWhiteSpace($hermesHash) -and
-        [string]::IsNullOrWhiteSpace($atlasHash)) {
-        return New-LabCrossSyncEvidence -State 'SYNC_NEVER_VERIFIED' -Detail 'receipt=missing' -CompletedAtUtc $null
+    if ([string]::IsNullOrWhiteSpace($receiptB64) -and [string]::IsNullOrWhiteSpace($atlasHash)) {
+        return New-LabCrossSyncEvidence -State 'SYNC_UNKNOWN' -Detail 'receipt=missing' -CompletedAtUtc $null
     }
 
-    if ([string]::IsNullOrWhiteSpace($taskResultText) -or
+    if ([string]::IsNullOrWhiteSpace($taskState) -or
+        [string]::IsNullOrWhiteSpace($taskResultText) -or
         [string]::IsNullOrWhiteSpace($taskLastText) -or
+        [string]::IsNullOrWhiteSpace($taskEvidenceB64) -or
+        [string]::IsNullOrWhiteSpace($taskEvidenceHash) -or
         [string]::IsNullOrWhiteSpace($receiptB64) -or
-        [string]::IsNullOrWhiteSpace($hermesHash) -or
         [string]::IsNullOrWhiteSpace($atlasHash)) {
         return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=incomplete_transport' -CompletedAtUtc $null
     }
-
-    if ($hermesHash -notmatch '^[0-9a-f]{64}$' -or
-        $atlasHash -notmatch '^[0-9a-f]{64}$' -or
-        $hermesHash -cne $atlasHash) {
-        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=receipt_hash_mismatch' -CompletedAtUtc $null
+    if ($taskState -cne 'Ready') {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=task_not_ready' -CompletedAtUtc $null
     }
 
-    try {
-        $receiptBytes = [Convert]::FromBase64String($receiptB64)
-    } catch {
-        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_receipt_base64' -CompletedAtUtc $null
+    $receiptTransport = ConvertFrom-LabJsonTransport -Base64 $receiptB64 -ExpectedHash $atlasHash
+    if (-not $receiptTransport.Ok) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail "validation=receipt_$($receiptTransport.Detail)" -CompletedAtUtc $null
     }
-    if ($receiptBytes.Length -eq 0 -or $receiptBytes.Length -gt 65536) {
-        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_receipt_size' -CompletedAtUtc $null
+    $taskEvidenceTransport = ConvertFrom-LabJsonTransport -Base64 $taskEvidenceB64 -ExpectedHash $taskEvidenceHash
+    if (-not $taskEvidenceTransport.Ok) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail "validation=task_evidence_$($taskEvidenceTransport.Detail)" -CompletedAtUtc $null
     }
+    $receipt = $receiptTransport.Document
+    $taskEvidence = $taskEvidenceTransport.Document
 
-    $sha256 = [Security.Cryptography.SHA256]::Create()
-    try {
-        $computedHash = [BitConverter]::ToString($sha256.ComputeHash($receiptBytes)).Replace('-', '').ToLowerInvariant()
-    } finally {
-        $sha256.Dispose()
-    }
-    if ($computedHash -cne $hermesHash) {
-        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=receipt_content_hash_mismatch' -CompletedAtUtc $null
-    }
-
-    try {
-        $utf8 = New-Object Text.UTF8Encoding($false, $true)
-        $receiptJson = $utf8.GetString($receiptBytes)
-        $receipt = $receiptJson | ConvertFrom-Json -ErrorAction Stop
-    } catch {
-        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_receipt_json' -CompletedAtUtc $null
-    }
-    if ($null -eq $receipt -or $receipt -is [array]) {
-        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_receipt_schema' -CompletedAtUtc $null
+    $receiptProperties = @('schema_version', 'task_name', 'run_id', 'started_at', 'completed_at', 'result', 'verification', 'directions')
+    $taskEvidenceProperties = @('schema_version', 'task_name', 'run_id', 'started_at', 'receipt_completed_at', 'completed_at', 'state', 'result', 'verification', 'atlas_receipt_sha256')
+    if (-not (Test-LabExactJsonProperties $receipt $receiptProperties) -or
+        -not (Test-LabExactJsonProperties $taskEvidence $taskEvidenceProperties)) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_schema' -CompletedAtUtc $null
     }
 
     $schemaVersion = Get-LabJsonProperty $receipt 'schema_version'
     $taskName = Get-LabJsonProperty $receipt 'task_name'
-    $runId = Get-LabJsonProperty $receipt 'run_id'
+    $runId = [string](Get-LabJsonProperty $receipt 'run_id')
     $result = Get-LabJsonProperty $receipt 'result'
     $verification = Get-LabJsonProperty $receipt 'verification'
     if (($schemaVersion -isnot [int] -and $schemaVersion -isnot [long]) -or
         $schemaVersion -ne 1 -or
         $taskName -cne 'HermesCrossNodeBackupSync' -or
-        [string]::IsNullOrWhiteSpace([string]$runId) -or
-        ([string]$runId).Length -gt 128 -or
-        $runId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' -or
+        $runId -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
         $result -cne 'SUCCESS' -or
         $verification -cne 'SHA256_PASS') {
         return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_receipt_schema' -CompletedAtUtc $null
+    }
+
+    $evidenceSchemaVersion = Get-LabJsonProperty $taskEvidence 'schema_version'
+    $evidenceTaskName = Get-LabJsonProperty $taskEvidence 'task_name'
+    $evidenceRunId = [string](Get-LabJsonProperty $taskEvidence 'run_id')
+    if (($evidenceSchemaVersion -isnot [int] -and $evidenceSchemaVersion -isnot [long]) -or
+        $evidenceSchemaVersion -ne 1 -or
+        $evidenceTaskName -cne 'HermesCrossNodeBackupSync' -or
+        $evidenceRunId -cne $runId -or
+        (Get-LabJsonProperty $taskEvidence 'state') -cne 'COMPLETED' -or
+        (Get-LabJsonProperty $taskEvidence 'result') -cne 'SUCCESS' -or
+        (Get-LabJsonProperty $taskEvidence 'verification') -cne 'SHA256_PASS' -or
+        (Get-LabJsonProperty $taskEvidence 'atlas_receipt_sha256') -cne $atlasHash) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_task_evidence' -CompletedAtUtc $null
     }
 
     $directions = @(Get-LabJsonProperty $receipt 'directions')
     if ($directions.Count -ne 2) {
         return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_directions' -CompletedAtUtc $null
     }
-    $expectedDirections = @{
-        ATLAS_TO_HERMES = @{ Source = 'atlas'; Destination = 'hermes' }
-        HERMES_TO_ATLAS = @{ Source = 'hermes'; Destination = 'atlas' }
-    }
-    $observedDirections = @{}
-    foreach ($direction in $directions) {
+    $expectedDirections = @(
+        @{ Name = 'ATLAS_TO_HERMES'; Source = 'atlas'; Destination = 'hermes' },
+        @{ Name = 'HERMES_TO_ATLAS'; Source = 'hermes'; Destination = 'atlas' }
+    )
+    $directionProperties = @('run_id', 'direction', 'source', 'destination', 'file_count', 'manifest_sha256', 'verification')
+    for ($index = 0; $index -lt $directions.Count; $index++) {
+        $direction = $directions[$index]
+        $expectedDirection = $expectedDirections[$index]
+        if (-not (Test-LabExactJsonProperties $direction $directionProperties)) {
+            return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_directions' -CompletedAtUtc $null
+        }
         $name = Get-LabJsonProperty $direction 'direction'
         $source = Get-LabJsonProperty $direction 'source'
         $destination = Get-LabJsonProperty $direction 'destination'
         $fileCount = Get-LabJsonProperty $direction 'file_count'
         $manifestHash = Get-LabJsonProperty $direction 'manifest_sha256'
-        if (-not $expectedDirections.ContainsKey([string]$name) -or
-            $observedDirections.ContainsKey([string]$name) -or
-            $source -cne $expectedDirections[[string]$name].Source -or
-            $destination -cne $expectedDirections[[string]$name].Destination -or
+        if ((Get-LabJsonProperty $direction 'run_id') -cne $runId -or
+            $name -cne $expectedDirection.Name -or
+            $source -cne $expectedDirection.Source -or
+            $destination -cne $expectedDirection.Destination -or
             ($fileCount -isnot [int] -and $fileCount -isnot [long]) -or
             $fileCount -le 0 -or
-            $manifestHash -cnotmatch '^[0-9a-f]{64}$') {
+            $manifestHash -cnotmatch '^[0-9a-f]{64}$' -or
+            (Get-LabJsonProperty $direction 'verification') -cne 'SHA256_PASS') {
             return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_directions' -CompletedAtUtc $null
         }
-        $observedDirections[[string]$name] = $true
     }
 
     $taskLastUtc = ConvertFrom-LabUtcTimestamp $taskLastText
-    $startedUtc = ConvertFrom-LabUtcTimestamp (Get-LabJsonProperty $receipt 'started_at')
-    $completedUtc = ConvertFrom-LabUtcTimestamp (Get-LabJsonProperty $receipt 'completed_at')
-    if ($null -eq $taskLastUtc -or $null -eq $startedUtc -or $null -eq $completedUtc) {
+    $receiptStartedText = [string](Get-LabJsonProperty $receipt 'started_at')
+    $receiptCompletedText = [string](Get-LabJsonProperty $receipt 'completed_at')
+    $evidenceStartedText = [string](Get-LabJsonProperty $taskEvidence 'started_at')
+    $evidenceReceiptCompletedText = [string](Get-LabJsonProperty $taskEvidence 'receipt_completed_at')
+    $evidenceCompletedText = [string](Get-LabJsonProperty $taskEvidence 'completed_at')
+    if ($receiptStartedText -cne $evidenceStartedText -or $receiptCompletedText -cne $evidenceReceiptCompletedText) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=timestamp_binding_mismatch' -CompletedAtUtc $null
+    }
+    $startedUtc = ConvertFrom-LabUtcTimestamp $receiptStartedText
+    $receiptCompletedUtc = ConvertFrom-LabUtcTimestamp $receiptCompletedText
+    $evidenceCompletedUtc = ConvertFrom-LabUtcTimestamp $evidenceCompletedText
+    if ($null -eq $taskLastUtc -or $null -eq $startedUtc -or $null -eq $receiptCompletedUtc -or $null -eq $evidenceCompletedUtc) {
         return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=malformed_receipt_timestamp' -CompletedAtUtc $null
     }
-    if ($completedUtc -lt $startedUtc) {
+    if ($receiptCompletedUtc -lt $startedUtc -or $evidenceCompletedUtc -lt $receiptCompletedUtc) {
         return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=completion_before_start' -CompletedAtUtc $null
     }
     if ($taskLastUtc -gt $startedUtc) {
@@ -267,15 +333,18 @@ function Get-LabCrossSyncEvidence {
     if ($taskStartDelta -gt [TimeSpan]::FromMinutes(5)) {
         return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=task_start_mismatch' -CompletedAtUtc $null
     }
-    if ($completedUtc -gt $NowUtc.AddMinutes(5)) {
+    if ($taskLastUtc -gt $NowUtc.AddMinutes(5) -or
+        $startedUtc -gt $NowUtc.AddMinutes(5) -or
+        $receiptCompletedUtc -gt $NowUtc.AddMinutes(5) -or
+        $evidenceCompletedUtc -gt $NowUtc.AddMinutes(5)) {
         return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=future_completion' -CompletedAtUtc $null
     }
 
-    $detail = "completed=$($completedUtc.ToString('o'))"
-    if (($NowUtc - $completedUtc).TotalHours -gt 30) {
-        return New-LabCrossSyncEvidence -State 'SYNC_STALE' -Detail $detail -CompletedAtUtc $completedUtc
+    $detail = "completed=$($evidenceCompletedUtc.ToString('o'))"
+    if (($NowUtc - $evidenceCompletedUtc).TotalHours -gt 30) {
+        return New-LabCrossSyncEvidence -State 'SYNC_STALE' -Detail $detail -CompletedAtUtc $evidenceCompletedUtc
     }
-    New-LabCrossSyncEvidence -State 'SYNC_OK' -Detail $detail -CompletedAtUtc $completedUtc
+    New-LabCrossSyncEvidence -State 'SYNC_OK' -Detail $detail -CompletedAtUtc $evidenceCompletedUtc
 }
 
 function Get-LabNowUtc {
@@ -312,41 +381,44 @@ $gpu=if(Get-Command nvidia-smi -ErrorAction SilentlyContinue){nvidia-smi --query
 Out-Kv 'gpu' $gpu
 $d=Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
 if($d){Out-Kv 'disk' ('{0:N0} GB free of {1:N0} GB' -f ($d.FreeSpace/1GB),($d.Size/1GB))}else{Out-Kv 'disk' $null}
+$taskState=''
 $taskResult=''
 $taskLastUtc=''
 try {
+  $taskState=[string](Get-ScheduledTask -TaskName 'HermesCrossNodeBackupSync' -ErrorAction Stop).State
   $info=Get-ScheduledTaskInfo -TaskName 'HermesCrossNodeBackupSync' -ErrorAction Stop
   $taskResult=[string][long]$info.LastTaskResult
   $taskLastUtc=$info.LastRunTime.ToUniversalTime().ToString('o')
 } catch {}
-$receiptBytes=$null
-$receiptPath='D:\CrossNodeBackups\crossnode-sync-receipt.json'
+$eb=$null
+$ep='D:\CrossNodeBackups\crossnode-sync-task-evidence.json'
 try {
-  $stream=[System.IO.File]::Open($receiptPath,[System.IO.FileMode]::Open,[System.IO.FileAccess]::Read,([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+  $fs=[System.IO.File]::Open($ep,[System.IO.FileMode]::Open,[System.IO.FileAccess]::Read,([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
   try {
-    if($stream.Length -gt 0 -and $stream.Length -le 65536){
-      $buffer=New-Object byte[] ([int]$stream.Length)
-      $offset=0
-      while($offset -lt $buffer.Length){
-        $count=$stream.Read($buffer,$offset,$buffer.Length-$offset)
-        if($count -le 0){break}
-        $offset+=$count
+    if($fs.Length -gt 0 -and $fs.Length -le 65536){
+      $b=New-Object byte[] ([int]$fs.Length)
+      $o=0
+      while($o -lt $b.Length){
+        $n=$fs.Read($b,$o,$b.Length-$o)
+        if($n -le 0){break}
+        $o+=$n
       }
-      if($offset -eq $buffer.Length){$receiptBytes=$buffer}
+      if($o -eq $b.Length){$eb=$b}
     }
-  } finally {$stream.Dispose()}
+  } finally {$fs.Dispose()}
 } catch {}
-$receiptB64=''
-$receiptHash=''
-if($null -ne $receiptBytes){
-  $receiptB64=[Convert]::ToBase64String($receiptBytes)
-  $sha256=[Security.Cryptography.SHA256]::Create()
-  try {$receiptHash=[BitConverter]::ToString($sha256.ComputeHash($receiptBytes)).Replace('-','').ToLowerInvariant()} finally {$sha256.Dispose()}
+$e64=''
+$eh=''
+if($null -ne $eb){
+  $e64=[Convert]::ToBase64String($eb)
+  $sha=[Security.Cryptography.SHA256]::Create()
+  try {$eh=[BitConverter]::ToString($sha.ComputeHash($eb)).Replace('-','').ToLowerInvariant()} finally {$sha.Dispose()}
 }
+Out-RawKv 'cross_sync_task_state' $taskState
 Out-RawKv 'cross_sync_task_result' $taskResult
 Out-RawKv 'cross_sync_task_last_utc' $taskLastUtc
-Out-RawKv 'cross_sync_receipt_b64' $receiptB64
-Out-RawKv 'cross_sync_receipt_sha256' $receiptHash
+Out-RawKv 'cross_sync_task_evidence_b64' $e64
+Out-RawKv 'cross_sync_task_evidence_sha256' $eh
 '@
     $encoded = ConvertTo-LabEncodedPowerShellCommand -Command $probe
     "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded"
@@ -434,10 +506,15 @@ fi
 kv backup "$latest"
 receipt='/home/bs/from-hermes/crossnode-sync-receipt.json'
 receipt_size="$(stat -c %s "$receipt" 2>/dev/null)"
+receipt_b64=''
 receipt_hash=''
 if [ -n "$receipt_size" ] && [ "$receipt_size" -gt 0 ] && [ "$receipt_size" -le 65536 ]; then
-  receipt_hash="$(sha256sum "$receipt" 2>/dev/null | awk '{print $1}')"
+  receipt_b64="$(head -c 65536 -- "$receipt" 2>/dev/null | base64 -w 0)"
+  receipt_hash="$(head -c 65536 -- "$receipt" 2>/dev/null | sha256sum | awk '{print $1}')"
+  receipt_size_after="$(stat -c %s "$receipt" 2>/dev/null)"
+  if [ "$receipt_size_after" != "$receipt_size" ]; then receipt_b64=''; receipt_hash=''; fi
 fi
+kv_raw cross_sync_receipt_b64 "$receipt_b64"
 kv_raw cross_sync_receipt_sha256 "$receipt_hash"
 '@
     $encoded = ConvertTo-LabEncodedShellCommand -Command $probe
