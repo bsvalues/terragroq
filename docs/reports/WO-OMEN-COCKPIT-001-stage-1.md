@@ -3,7 +3,7 @@
 ```text
 OMEN_COCKPIT_STAGE_1: BLOCKED
 RESULT_STATE=BLOCKED_DEPENDENCY
-REASON_CODE=SSH_AUTHORIZATION_REQUIRED_ON_REMOTE_NODES
+REASON_CODE=HERMES_SSH_KEY_NOT_ACCEPTED
 ```
 
 ## Work-order packet
@@ -74,14 +74,18 @@ ownerOperationsAllowed: false
 - Ethernet 2 IPv4 `192.168.1.157`.
 - PowerShell `7.6.4`, OpenSSH `9.5p2`, Git `2.55.0`, GitHub CLI `2.89.0`.
 - GitHub CLI authenticated as `bsvalues` with SSH Git protocol.
-- VS Code Insiders `1.129.0` with official Remote SSH/Remote Explorer extensions installed.
+- Stable VS Code `1.131.0` with official Remote SSH `0.124.0` and Remote Explorer installed and
+  configured for Windows OpenSSH. VS Code Insiders remains installed but is not the proven surface.
 - Existing SSH aliases target Hermes and Atlas and retain `StrictHostKeyChecking=ask`.
 
 ## Stage 1 status
 
-- SSH to Hermes: **BLOCKED**. TCP/22 reachable; alias correct; BatchMode authentication rejected.
-- SSH to Atlas: **BLOCKED**. TCP/22 reachable; alias correct; BatchMode authentication rejected.
-- VS Code Remote SSH: client/extensions configured; connection proof blocked by the same SSH auth.
+- SSH to Hermes: **BLOCKED**. TCP/22 reachable; alias correct; OMEN offers the intended fingerprint,
+  but Hermes does not accept it and BatchMode exits `255`.
+- SSH to Atlas: **PROVEN**. `ssh -o BatchMode=yes atlas hostname` returns `atlas` with exit `0`.
+- VS Code Remote SSH to Atlas: **PROVEN** using stable VS Code and the official extension. The resolver
+  ran Windows OpenSSH, created the Atlas exec server, and started the user-scoped VS Code Server.
+- VS Code Remote SSH to Hermes: **BLOCKED** by the same plain-SSH key rejection.
 - Commands created: `lab-status`, `lab-hermes`, `lab-atlas`, `lab-containers`, `lab-backups`, shared
   module, safe installer, command shims, and a sanitized SSH config example.
 - Commands installed: managed files are at
@@ -97,12 +101,19 @@ ownerOperationsAllowed: false
   spaces in paths remain intact.
 - Installer safety: every managed-file conflict is preflighted before directory creation or copying,
   preventing a conflict from leaving a partial update.
+- Live Atlas status: Ubuntu 24.04.4 LTS; Docker `29.7.2`; Postgres accepts `pg_isready`; Redis is
+  reachable and requires authentication; Mongo ping succeeds; `641G` free of `685G`; the latest
+  observed backup archive candidates by mtime are the 2026-08-08 03:00 UTC TerraFusion volume files
+  under `/home/bs/backups`. File presence does not prove archive integrity or set completeness.
 - Browser URLs: Hermes Device Portal at `http://192.168.1.154:50080/` and
   `https://192.168.1.154:50443/`; usability not proven. Atlas `:9001` is a Portainer Agent, not UI.
   Portainer UI, Open WebUI, Ollama HTTP, and monitoring URLs remain unverified/not discovered.
 - RDP: `mstsc.exe` is present and Hermes TCP/3389 is open. Authentication/usefulness was not tested;
   RDP is optional, not a normal-operations dependency.
-- Backup directory visibility and cross-node sync status: **UNKNOWN** because Atlas SSH auth is blocked.
+- Backup directory visibility: **PROVEN** at `/home/bs/backups`. Cross-node sync status remains
+  **UNKNOWN** because no verified receipt/manifest/status marker was found.
+- Hermes Portainer/Open WebUI/Ollama binding and SSH-tunnel discovery: **BLOCKED** by Hermes SSH auth;
+  no binding, firewall, or exposure change was attempted.
 
 ## Validation evidence
 
@@ -118,9 +129,14 @@ Live, bounded read-only failure-path proof:
 HERMES
   reachable: NO (SSH_AUTH_BLOCKED)
 ATLAS
-  reachable: NO (SSH_AUTH_BLOCKED)
+  reachable: YES
+  Docker: 29.7.2
+  Postgres evidence: CONTAINER_PG_ISREADY_ACCEPTING
+  Redis evidence: CONTAINER_REDIS_AUTH_REQUIRED_REACHABLE
+  Mongo evidence: CONTAINER_MONGO_PING_OK
+  disk: 641G free of 685G
 LAB
-  latest backup: UNKNOWN
+  latest backup: 2026-08-08T03:00:12+00:00|/home/bs/backups/terrafusion_final_build_20250615_051930_redis_data-20260808_030001.tar.gz
   latest cross-node sync: UNKNOWN
   operator blocker: SSH authentication is not configured for one or more aliases
 LAB_STATUS_EXIT=2
@@ -168,14 +184,16 @@ Resolved review findings: `5`. Unresolved review findings: `0`.
 - `docs/runbooks/omen-lab-control.md`
 - `docs/reports/WO-OMEN-COCKPIT-001-stage-1.md`
 
-Commit hash: `null` (builder was instructed not to commit or push).
+Initial implementation commit: `98eebedf9f335eec1afbc8e511f4cbcfbdb46e1c`.
+Continuation evidence/remediation commit: pending coordinator commit.
+Draft PR: `#529`.
 
 ## Exact remaining blocker
 
-The public key already selected by OMEN must be authorized for user `bs` on both remote nodes. That
-remote-side change belongs to the separately authorized Hermes/Atlas lane, not this OMEN-only builder
-reservation. Until both BatchMode connections succeed, remote service state, backup visibility,
-browser application URLs, and VS Code Remote SSH cannot be fully proven.
+Atlas now accepts the intended OMEN key. Hermes still does not: the client offers fingerprint
+`SHA256:yKY2L2DIR7KaYtgr4Vm5VXQrlzZmGk82GmU+2ARAWG8`, the server never reports acceptance, and
+BatchMode exits `255`. Until Hermes accepts that key, Hermes facts, Portainer/Open WebUI binding and
+SSH-tunnel discovery, and Hermes VS Code Remote SSH cannot be proven.
 
 Owner action required: `false`. The coordinator should hand public-key authorization to the already
 authorized Hermes/Atlas operator lane; William must not act as credential or command courier.
@@ -194,8 +212,8 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 
 ```text
 READY_FOR_VALIDATION
-commit=null
-pr=null
+commit=98eebedf9f335eec1afbc8e511f4cbcfbdb46e1c
+pr=529
 merge=null
 owner_operation_touch_count=0
 owner_credential_touch_count=0

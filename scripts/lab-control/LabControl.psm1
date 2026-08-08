@@ -114,10 +114,18 @@ kv os "$(. /etc/os-release 2>/dev/null; printf '%s' "$PRETTY_NAME")"
 kv uptime "$(uptime -p 2>/dev/null)"
 kv docker "$(docker info --format '{{.ServerVersion}}' 2>/dev/null)"
 tcp_listener(){ ss -ltnH 2>/dev/null | awk -v p=":$1" '$4 ~ p"$" {found=1} END {exit !found}'; }
+container_for_port(){
+  docker ps --format '{{.Names}}|{{.Ports}}' 2>/dev/null |
+    awk -F'|' -v p=":$1->" 'index($2,p){print $1; exit}'
+}
 postgres_probe(){
   if command -v pg_isready >/dev/null 2>&1; then
     pg_isready -q -h 127.0.0.1 -p 5432 && { printf PG_ISREADY_ACCEPTING; return; }
     printf PG_ISREADY_REJECTING; return
+  fi
+  container="$(container_for_port 5432)"
+  if [ -n "$container" ]; then
+    docker exec "$container" pg_isready -q 2>/dev/null && { printf CONTAINER_PG_ISREADY_ACCEPTING; return; }
   fi
   tcp_listener 5432 && printf TCP_LISTENER_ONLY || printf NOT_OBSERVED
 }
@@ -128,6 +136,12 @@ redis_probe(){
     printf '%s' "$reply" | grep -Eiq 'NOAUTH|WRONGPASS|authentication required' && { printf REDIS_AUTH_REQUIRED_REACHABLE; return; }
     printf REDIS_CLI_NO_RESPONSE; return
   fi
+  container="$(container_for_port 6379)"
+  if [ -n "$container" ]; then
+    reply="$(docker exec "$container" redis-cli --no-auth-warning ping 2>&1)"
+    [ "$reply" = PONG ] && { printf CONTAINER_REDIS_PING_PONG; return; }
+    printf '%s' "$reply" | grep -Eiq 'NOAUTH|WRONGPASS|authentication required' && { printf CONTAINER_REDIS_AUTH_REQUIRED_REACHABLE; return; }
+  fi
   tcp_listener 6379 && printf TCP_LISTENER_ONLY || printf NOT_OBSERVED
 }
 mongo_probe(){
@@ -136,11 +150,16 @@ mongo_probe(){
     [ "$reply" = 1 ] && { printf MONGO_PING_OK; return; }
     printf MONGO_PING_FAILED; return
   fi
+  container="$(container_for_port 27017)"
+  if [ -n "$container" ]; then
+    reply="$(docker exec "$container" mongosh --quiet --eval 'db.adminCommand({ping:1}).ok' 2>/dev/null | tail -n 1)"
+    [ "$reply" = 1 ] && { printf CONTAINER_MONGO_PING_OK; return; }
+  fi
   tcp_listener 27017 && printf TCP_LISTENER_ONLY || printf NOT_OBSERVED
 }
 container_port_evidence(){
   port="$1"
-  row="$(docker ps --format '{{.Names}}|{{.Ports}}' 2>/dev/null | awk -F'|' -v p=":$port->" 'index($2,p){print $1; exit}')"
+  row="$(container_for_port "$port")"
   [ -n "$row" ] || { printf NO_EXPLICIT_DOCKER_PORT_MAPPING; return; }
   docker inspect --format 'name={{.Name}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' "$row" 2>/dev/null | sed 's#name=/#name=#'
 }
@@ -151,12 +170,20 @@ kv redis_container_evidence "$(container_port_evidence 6379)"
 kv mongo_evidence "$(mongo_probe)"
 kv mongo_container_evidence "$(container_port_evidence 27017)"
 kv disk "$(df -hP / 2>/dev/null | awk 'NR==2 {print $4 " free of " $2}')"
-latest="$({
-  for d in /srv/backups /var/backups /opt/backups /mnt/backups /backups; do
+latest_line="$({
+  for d in /home/bs/backups /srv/backups /opt/backups /mnt/backups /backups; do
     [ -d "$d" ] || continue
-    find "$d" -maxdepth 2 -type f -printf '%T@|%TY-%Tm-%TdT%TH:%TM:%TS%z|%p\n' 2>/dev/null
+    find "$d" -maxdepth 2 -type f -printf '%T@|%p\n' 2>/dev/null
   done
-} | sort -nr | head -n 1 | cut -d'|' -f2-)"
+} | sort -nr | head -n 1)"
+latest=''
+if [ -n "$latest_line" ]; then
+  latest_epoch="${latest_line%%|*}"
+  latest_path="${latest_line#*|}"
+  latest_time="$(date -d "@${latest_epoch%.*}" --iso-8601=seconds 2>/dev/null)"
+  [ -n "$latest_time" ] || latest_time="$latest_epoch"
+  latest="$latest_time|$latest_path"
+fi
 kv backup "$latest"
 kv cross_sync UNKNOWN
 '@
@@ -236,9 +263,9 @@ function Invoke-LabStatus {
             (Get-LabValue $atlas.Values 'cross_sync')
         )
         $genericIncomplete = @($requiredValues | Where-Object { $_ -match '^(?i:UNKNOWN|UNAVAILABLE|NOT_FOUND|NOT_INSTALLED|NOT_OBSERVED)' }).Count -gt 0
-        $postgresReady = (Get-LabValue $atlas.Values 'postgres_evidence') -eq 'PG_ISREADY_ACCEPTING'
-        $redisReady = (Get-LabValue $atlas.Values 'redis_evidence') -in @('REDIS_PING_PONG', 'REDIS_AUTH_REQUIRED_REACHABLE')
-        $mongoReady = (Get-LabValue $atlas.Values 'mongo_evidence') -eq 'MONGO_PING_OK'
+        $postgresReady = (Get-LabValue $atlas.Values 'postgres_evidence') -in @('PG_ISREADY_ACCEPTING', 'CONTAINER_PG_ISREADY_ACCEPTING')
+        $redisReady = (Get-LabValue $atlas.Values 'redis_evidence') -in @('REDIS_PING_PONG', 'REDIS_AUTH_REQUIRED_REACHABLE', 'CONTAINER_REDIS_PING_PONG', 'CONTAINER_REDIS_AUTH_REQUIRED_REACHABLE')
+        $mongoReady = (Get-LabValue $atlas.Values 'mongo_evidence') -in @('MONGO_PING_OK', 'CONTAINER_MONGO_PING_OK')
         if ($genericIncomplete -or -not $postgresReady -or -not $redisReady -or -not $mongoReady) {
             Write-Output '  operator blocker: REQUIRED_EVIDENCE_INCOMPLETE (inspect UNKNOWN/unavailable service or continuity fields above)'
             $global:LAB_CONTROL_EXIT_CODE = 2
@@ -297,11 +324,16 @@ function Invoke-LabBackups {
     $probe = @'
 printf 'ATLAS BACKUP CANDIDATES\n'
 found=0
-for d in /srv/backups /var/backups /opt/backups /mnt/backups /backups; do
+for d in /home/bs/backups /srv/backups /opt/backups /mnt/backups /backups; do
   [ -d "$d" ] || continue
   found=1
   printf '%s\n' "$d"
-  find "$d" -maxdepth 2 -type f -printf '%TY-%Tm-%TdT%TH:%TM:%TS%z %p\n' 2>/dev/null | sort -r | head -n 5
+  find "$d" -maxdepth 2 -type f -printf '%T@|%p\n' 2>/dev/null | sort -nr | head -n 5 |
+    while IFS='|' read -r epoch path; do
+      timestamp="$(date -d "@${epoch%.*}" --iso-8601=seconds 2>/dev/null)"
+      [ -n "$timestamp" ] || timestamp="$epoch"
+      printf '%s %s\n' "$timestamp" "$path"
+    done
 done
 [ "$found" -eq 1 ] || printf 'NO_KNOWN_BACKUP_DIRECTORY_VISIBLE\n'
 printf 'CROSS_NODE_SYNC\nUNKNOWN (no verified marker path configured)\n'

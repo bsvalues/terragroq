@@ -146,6 +146,9 @@ describe("OMEN lab-control CLI", () => {
     expect(atlasCommand).toContain("pg_isready")
     expect(atlasCommand).toContain("redis-cli")
     expect(atlasCommand).toContain("mongosh")
+    expect(atlasCommand).toContain('docker exec "$container" pg_isready')
+    expect(atlasCommand).toContain('docker exec "$container" redis-cli')
+    expect(atlasCommand).toContain('docker exec "$container" mongosh')
   })
 
   test("Atlas probe globally sorts backup candidates before choosing the newest path, including spaces", () => {
@@ -153,8 +156,10 @@ describe("OMEN lab-control CLI", () => {
     const encoded = result.sshArgs.match(/printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| sh/)?.[1]
     const atlasCommand = Buffer.from(encoded!, "base64").toString("utf8")
 
-    expect(atlasCommand).toContain("} | sort -nr | head -n 1 | cut -d'|' -f2-")
-    expect(atlasCommand).toContain("cut -d'|' -f2-")
+    expect(atlasCommand).toContain("/home/bs/backups")
+    expect(atlasCommand).not.toContain("/var/backups")
+    expect(atlasCommand).toContain("} | sort -nr | head -n 1)")
+    expect(atlasCommand).toContain("date -d \"@${latest_epoch%.*}\" --iso-8601=seconds")
     expect(atlasCommand).not.toMatch(/candidate=.*head -n 1[\s\S]*latest=\"\$candidate\"/)
   })
 
