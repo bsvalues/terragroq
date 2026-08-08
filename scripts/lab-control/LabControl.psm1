@@ -85,10 +85,212 @@ function ConvertFrom-LabKeyValueLines {
     $result
 }
 
+function Get-LabRawValue {
+    param([System.Collections.IDictionary]$Values, [string]$Key)
+
+    if ($null -ne $Values -and $Values.Contains($Key) -and $null -ne $Values[$Key]) {
+        return [string]$Values[$Key]
+    }
+    ''
+}
+
+function Get-LabJsonProperty {
+    param([object]$Object, [string]$Name)
+
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    $property.Value
+}
+
+function ConvertFrom-LabUtcTimestamp {
+    param([object]$Value)
+
+    if ($Value -is [datetime]) {
+        if ($Value.Kind -ne [DateTimeKind]::Utc) { return $null }
+        return $Value.ToUniversalTime()
+    }
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text) -or $text -notmatch 'Z$') { return $null }
+    $parsed = [datetime]::MinValue
+    $styles = [Globalization.DateTimeStyles]::RoundtripKind
+    if (-not [datetime]::TryParse($text, [Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$parsed)) {
+        return $null
+    }
+    $parsed.ToUniversalTime()
+}
+
+function New-LabCrossSyncEvidence {
+    param(
+        [Parameter(Mandatory)][string]$State,
+        [Parameter(Mandatory)][string]$Detail,
+        [AllowNull()][object]$CompletedAtUtc
+    )
+
+    [pscustomobject]@{
+        State = $State
+        Detail = $Detail
+        CompletedAtUtc = $CompletedAtUtc
+    }
+}
+
+function Get-LabCrossSyncEvidence {
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$HermesValues,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$AtlasValues,
+        [Parameter(Mandatory)][datetime]$NowUtc
+    )
+
+    $NowUtc = $NowUtc.ToUniversalTime()
+    $taskResultText = (Get-LabRawValue $HermesValues 'cross_sync_task_result').Trim()
+    $taskLastText = (Get-LabRawValue $HermesValues 'cross_sync_task_last_utc').Trim()
+    $receiptB64 = (Get-LabRawValue $HermesValues 'cross_sync_receipt_b64').Trim()
+    $hermesHash = (Get-LabRawValue $HermesValues 'cross_sync_receipt_sha256').Trim()
+    $atlasHash = (Get-LabRawValue $AtlasValues 'cross_sync_receipt_sha256').Trim()
+
+    $taskResult = [long]0
+    if (-not [string]::IsNullOrWhiteSpace($taskResultText)) {
+        if ($taskResultText -notmatch '^-?\d+$' -or -not [long]::TryParse($taskResultText, [ref]$taskResult)) {
+            return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_task_result' -CompletedAtUtc $null
+        }
+        if ($taskResult -ne 0) {
+            return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail "task_result=$taskResult" -CompletedAtUtc $null
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($receiptB64) -and
+        [string]::IsNullOrWhiteSpace($hermesHash) -and
+        [string]::IsNullOrWhiteSpace($atlasHash)) {
+        return New-LabCrossSyncEvidence -State 'SYNC_NEVER_VERIFIED' -Detail 'receipt=missing' -CompletedAtUtc $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($taskResultText) -or
+        [string]::IsNullOrWhiteSpace($taskLastText) -or
+        [string]::IsNullOrWhiteSpace($receiptB64) -or
+        [string]::IsNullOrWhiteSpace($hermesHash) -or
+        [string]::IsNullOrWhiteSpace($atlasHash)) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=incomplete_transport' -CompletedAtUtc $null
+    }
+
+    if ($hermesHash -notmatch '^[0-9a-f]{64}$' -or
+        $atlasHash -notmatch '^[0-9a-f]{64}$' -or
+        $hermesHash -cne $atlasHash) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=receipt_hash_mismatch' -CompletedAtUtc $null
+    }
+
+    try {
+        $receiptBytes = [Convert]::FromBase64String($receiptB64)
+    } catch {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_receipt_base64' -CompletedAtUtc $null
+    }
+    if ($receiptBytes.Length -eq 0 -or $receiptBytes.Length -gt 65536) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_receipt_size' -CompletedAtUtc $null
+    }
+
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $computedHash = [BitConverter]::ToString($sha256.ComputeHash($receiptBytes)).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+    }
+    if ($computedHash -cne $hermesHash) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=receipt_content_hash_mismatch' -CompletedAtUtc $null
+    }
+
+    try {
+        $utf8 = New-Object Text.UTF8Encoding($false, $true)
+        $receiptJson = $utf8.GetString($receiptBytes)
+        $receipt = $receiptJson | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_receipt_json' -CompletedAtUtc $null
+    }
+    if ($null -eq $receipt -or $receipt -is [array]) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_receipt_schema' -CompletedAtUtc $null
+    }
+
+    $schemaVersion = Get-LabJsonProperty $receipt 'schema_version'
+    $taskName = Get-LabJsonProperty $receipt 'task_name'
+    $runId = Get-LabJsonProperty $receipt 'run_id'
+    $result = Get-LabJsonProperty $receipt 'result'
+    $verification = Get-LabJsonProperty $receipt 'verification'
+    if (($schemaVersion -isnot [int] -and $schemaVersion -isnot [long]) -or
+        $schemaVersion -ne 1 -or
+        $taskName -cne 'HermesCrossNodeBackupSync' -or
+        [string]::IsNullOrWhiteSpace([string]$runId) -or
+        ([string]$runId).Length -gt 128 -or
+        $runId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' -or
+        $result -cne 'SUCCESS' -or
+        $verification -cne 'SHA256_PASS') {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_receipt_schema' -CompletedAtUtc $null
+    }
+
+    $directions = @(Get-LabJsonProperty $receipt 'directions')
+    if ($directions.Count -ne 2) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_directions' -CompletedAtUtc $null
+    }
+    $expectedDirections = @{
+        ATLAS_TO_HERMES = @{ Source = 'atlas'; Destination = 'hermes' }
+        HERMES_TO_ATLAS = @{ Source = 'hermes'; Destination = 'atlas' }
+    }
+    $observedDirections = @{}
+    foreach ($direction in $directions) {
+        $name = Get-LabJsonProperty $direction 'direction'
+        $source = Get-LabJsonProperty $direction 'source'
+        $destination = Get-LabJsonProperty $direction 'destination'
+        $fileCount = Get-LabJsonProperty $direction 'file_count'
+        $manifestHash = Get-LabJsonProperty $direction 'manifest_sha256'
+        if (-not $expectedDirections.ContainsKey([string]$name) -or
+            $observedDirections.ContainsKey([string]$name) -or
+            $source -cne $expectedDirections[[string]$name].Source -or
+            $destination -cne $expectedDirections[[string]$name].Destination -or
+            ($fileCount -isnot [int] -and $fileCount -isnot [long]) -or
+            $fileCount -le 0 -or
+            $manifestHash -cnotmatch '^[0-9a-f]{64}$') {
+            return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=invalid_directions' -CompletedAtUtc $null
+        }
+        $observedDirections[[string]$name] = $true
+    }
+
+    $taskLastUtc = ConvertFrom-LabUtcTimestamp $taskLastText
+    $startedUtc = ConvertFrom-LabUtcTimestamp (Get-LabJsonProperty $receipt 'started_at')
+    $completedUtc = ConvertFrom-LabUtcTimestamp (Get-LabJsonProperty $receipt 'completed_at')
+    if ($null -eq $taskLastUtc -or $null -eq $startedUtc -or $null -eq $completedUtc) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=malformed_receipt_timestamp' -CompletedAtUtc $null
+    }
+    $taskStartDelta = $startedUtc.Subtract($taskLastUtc).Duration()
+    if ($completedUtc -lt $startedUtc) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=completion_before_start' -CompletedAtUtc $null
+    }
+    if ($taskStartDelta -gt [TimeSpan]::FromMinutes(5)) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=task_start_mismatch' -CompletedAtUtc $null
+    }
+    if ($completedUtc -gt $NowUtc.AddMinutes(5)) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=future_completion' -CompletedAtUtc $null
+    }
+
+    $detail = "completed=$($completedUtc.ToString('o'))"
+    if (($NowUtc - $completedUtc).TotalHours -gt 30) {
+        return New-LabCrossSyncEvidence -State 'SYNC_STALE' -Detail $detail -CompletedAtUtc $completedUtc
+    }
+    New-LabCrossSyncEvidence -State 'SYNC_OK' -Detail $detail -CompletedAtUtc $completedUtc
+}
+
+function Get-LabNowUtc {
+    if ([string]::IsNullOrWhiteSpace($env:LAB_CONTROL_NOW_UTC)) {
+        return [datetime]::UtcNow
+    }
+    $override = ConvertFrom-LabUtcTimestamp $env:LAB_CONTROL_NOW_UTC
+    if ($null -eq $override) {
+        throw 'LAB_CONTROL_NOW_UTC must be an ISO-8601 UTC timestamp.'
+    }
+    $override
+}
+
 function Get-HermesProbeCommand {
     $probe = @'
 $ErrorActionPreference='SilentlyContinue'
 function Out-Kv($k,$v){ if([string]::IsNullOrWhiteSpace([string]$v)){$v='UNKNOWN'}; Write-Output ($k+'='+([string]$v).Trim()) }
+function Out-RawKv($k,$v){ Write-Output ($k+'='+[string]$v) }
 Out-Kv 'hostname' $env:COMPUTERNAME
 $os=Get-CimInstance Win32_OperatingSystem
 Out-Kv 'os' $os.Caption
@@ -107,12 +309,41 @@ $gpu=if(Get-Command nvidia-smi -ErrorAction SilentlyContinue){nvidia-smi --query
 Out-Kv 'gpu' $gpu
 $d=Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
 if($d){Out-Kv 'disk' ('{0:N0} GB free of {1:N0} GB' -f ($d.FreeSpace/1GB),($d.Size/1GB))}else{Out-Kv 'disk' $null}
-$sync=try {
+$taskResult=''
+$taskLastUtc=''
+try {
   $info=Get-ScheduledTaskInfo -TaskName 'HermesCrossNodeBackupSync' -ErrorAction Stop
-  $last=$info.LastRunTime.ToString('o')
-  if($info.LastTaskResult -eq 0){'UNVERIFIED_TASK_RESULT_0 last='+$last}else{'FAILED_TASK_RESULT_'+$info.LastTaskResult+' last='+$last}
-} catch {'NOT_OBSERVED'}
-Out-Kv 'cross_sync' $sync
+  $taskResult=[string][long]$info.LastTaskResult
+  $taskLastUtc=$info.LastRunTime.ToUniversalTime().ToString('o')
+} catch {}
+$receiptBytes=$null
+$receiptPath='D:\CrossNodeBackups\crossnode-sync-receipt.json'
+try {
+  $stream=[System.IO.File]::Open($receiptPath,[System.IO.FileMode]::Open,[System.IO.FileAccess]::Read,([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+  try {
+    if($stream.Length -gt 0 -and $stream.Length -le 65536){
+      $buffer=New-Object byte[] ([int]$stream.Length)
+      $offset=0
+      while($offset -lt $buffer.Length){
+        $count=$stream.Read($buffer,$offset,$buffer.Length-$offset)
+        if($count -le 0){break}
+        $offset+=$count
+      }
+      if($offset -eq $buffer.Length){$receiptBytes=$buffer}
+    }
+  } finally {$stream.Dispose()}
+} catch {}
+$receiptB64=''
+$receiptHash=''
+if($null -ne $receiptBytes){
+  $receiptB64=[Convert]::ToBase64String($receiptBytes)
+  $sha256=[Security.Cryptography.SHA256]::Create()
+  try {$receiptHash=[BitConverter]::ToString($sha256.ComputeHash($receiptBytes)).Replace('-','').ToLowerInvariant()} finally {$sha256.Dispose()}
+}
+Out-RawKv 'cross_sync_task_result' $taskResult
+Out-RawKv 'cross_sync_task_last_utc' $taskLastUtc
+Out-RawKv 'cross_sync_receipt_b64' $receiptB64
+Out-RawKv 'cross_sync_receipt_sha256' $receiptHash
 '@
     $encoded = ConvertTo-LabEncodedPowerShellCommand -Command $probe
     "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded"
@@ -121,6 +352,7 @@ Out-Kv 'cross_sync' $sync
 function Get-AtlasProbeCommand {
     $probe = @'
 kv(){ v="$2"; [ -n "$v" ] || v=UNKNOWN; printf '%s=%s\n' "$1" "$v"; }
+kv_raw(){ printf '%s=%s\n' "$1" "$2"; }
 kv hostname "$(hostname 2>/dev/null)"
 kv os "$(. /etc/os-release 2>/dev/null; printf '%s' "$PRETTY_NAME")"
 kv uptime "$(uptime -p 2>/dev/null)"
@@ -197,7 +429,13 @@ if [ -n "$latest_line" ]; then
   latest="$latest_time|$latest_path"
 fi
 kv backup "$latest"
-kv cross_sync UNKNOWN
+receipt='/home/bs/from-hermes/crossnode-sync-receipt.json'
+receipt_size="$(stat -c %s "$receipt" 2>/dev/null)"
+receipt_hash=''
+if [ -n "$receipt_size" ] && [ "$receipt_size" -gt 0 ] && [ "$receipt_size" -le 65536 ]; then
+  receipt_hash="$(sha256sum "$receipt" 2>/dev/null | awk '{print $1}')"
+fi
+kv_raw cross_sync_receipt_sha256 "$receipt_hash"
 '@
     $encoded = ConvertTo-LabEncodedShellCommand -Command $probe
     "printf %s $encoded | base64 -d | sh"
@@ -256,15 +494,14 @@ function Write-LabNodeSummary {
 function Invoke-LabStatus {
     $hermes = Get-LabNodeSnapshot -Target hermes
     $atlas = Get-LabNodeSnapshot -Target atlas
-    $crossSync = Get-LabValue $hermes.Values 'cross_sync'
-    if ($crossSync -eq 'UNKNOWN' -or $crossSync -eq 'NOT_OBSERVED') {
-        $crossSync = Get-LabValue $atlas.Values 'cross_sync'
-    }
+    $nowUtc = Get-LabNowUtc
+    $syncEvidence = Get-LabCrossSyncEvidence -HermesValues $hermes.Values -AtlasValues $atlas.Values -NowUtc $nowUtc
+    $syncReady = $syncEvidence.State -eq 'SYNC_OK'
     Write-LabNodeSummary $hermes
     Write-LabNodeSummary $atlas
     Write-Output 'LAB'
     Write-Output "  latest backup: $(Get-LabValue $atlas.Values 'backup')"
-    Write-Output "  latest cross-node sync: $crossSync"
+    Write-Output "  latest cross-node sync: $($syncEvidence.State) $($syncEvidence.Detail)"
 
     $failures = @($hermes, $atlas | Where-Object { -not $_.Reachable })
     if ($failures.Count -eq 0) {
@@ -275,14 +512,13 @@ function Invoke-LabStatus {
             (Get-LabValue $hermes.Values 'disk'),
             (Get-LabValue $atlas.Values 'docker'),
             (Get-LabValue $atlas.Values 'disk'),
-            (Get-LabValue $atlas.Values 'backup'),
-            $crossSync
+            (Get-LabValue $atlas.Values 'backup')
         )
         $genericIncomplete = @($requiredValues | Where-Object { $_ -match '^(?i:UNKNOWN|UNAVAILABLE|NOT_FOUND|NOT_INSTALLED|NOT_OBSERVED|UNVERIFIED|FAILED)' }).Count -gt 0
         $postgresReady = (Get-LabValue $atlas.Values 'postgres_evidence') -in @('PG_ISREADY_ACCEPTING', 'CONTAINER_PG_ISREADY_ACCEPTING')
         $redisReady = (Get-LabValue $atlas.Values 'redis_evidence') -in @('REDIS_PING_PONG', 'REDIS_AUTH_REQUIRED_REACHABLE', 'CONTAINER_REDIS_PING_PONG', 'CONTAINER_REDIS_AUTH_REQUIRED_REACHABLE')
         $mongoReady = (Get-LabValue $atlas.Values 'mongo_evidence') -in @('MONGO_PING_OK', 'CONTAINER_MONGO_PING_OK')
-        if ($genericIncomplete -or -not $postgresReady -or -not $redisReady -or -not $mongoReady) {
+        if ($genericIncomplete -or -not $postgresReady -or -not $redisReady -or -not $mongoReady -or -not $syncReady) {
             Write-Output '  operator blocker: REQUIRED_EVIDENCE_INCOMPLETE (inspect UNKNOWN/unavailable service or continuity fields above)'
             $global:LAB_CONTROL_EXIT_CODE = 2
         } else {
@@ -341,6 +577,9 @@ docker ps --format "table {{.Names}}`t{{.Image}}`t{{.Status}}`t{{.Ports}}"
 }
 
 function Invoke-LabBackups {
+    $hermes = Get-LabNodeSnapshot -Target hermes
+    $atlas = Get-LabNodeSnapshot -Target atlas
+    $syncEvidence = Get-LabCrossSyncEvidence -HermesValues $hermes.Values -AtlasValues $atlas.Values -NowUtc (Get-LabNowUtc)
     $probe = @'
 printf 'ATLAS BACKUP CANDIDATES\n'
 found=0
@@ -356,17 +595,17 @@ for d in /home/bs/backups /srv/backups /opt/backups /mnt/backups /backups; do
     done
 done
 [ "$found" -eq 1 ] || printf 'NO_KNOWN_BACKUP_DIRECTORY_VISIBLE\n'
-printf 'CROSS_NODE_SYNC\nUNKNOWN (no verified marker path configured)\n'
 '@
     $encoded = ConvertTo-LabEncodedShellCommand -Command $probe
     $result = Invoke-LabSsh -Target atlas -RemoteCommand "printf %s $encoded | base64 -d | sh"
     if ($result.Ok) {
         $result.Lines | Write-Output
-        $global:LAB_CONTROL_EXIT_CODE = 0
+        Write-Output "latest cross-node sync: $($syncEvidence.State) $($syncEvidence.Detail)"
+        $global:LAB_CONTROL_EXIT_CODE = if ($syncEvidence.State -eq 'SYNC_OK') { 0 } else { 2 }
     } else {
         Write-Output "ATLAS: UNREACHABLE ($($result.FailureKind))"
         $global:LAB_CONTROL_EXIT_CODE = 2
     }
 }
 
-Export-ModuleMember -Function Invoke-LabStatus, Invoke-LabHermes, Invoke-LabAtlas, Invoke-LabContainers, Invoke-LabBackups
+Export-ModuleMember -Function Get-LabCrossSyncEvidence, Invoke-LabStatus, Invoke-LabHermes, Invoke-LabAtlas, Invoke-LabContainers, Invoke-LabBackups
