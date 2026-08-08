@@ -146,6 +146,23 @@ function Test-LabExactJsonProperties {
     $true
 }
 
+function Test-LabJsonElementHasUniqueProperties {
+    param([Parameter(Mandatory)][System.Text.Json.JsonElement]$Element)
+
+    if ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::Object) {
+        $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($property in $Element.EnumerateObject()) {
+            if (-not $names.Add($property.Name)) { return $false }
+            if (-not (Test-LabJsonElementHasUniqueProperties -Element $property.Value)) { return $false }
+        }
+    } elseif ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
+        foreach ($item in $Element.EnumerateArray()) {
+            if (-not (Test-LabJsonElementHasUniqueProperties -Element $item)) { return $false }
+        }
+    }
+    $true
+}
+
 function ConvertFrom-LabJsonTransport {
     param(
         [Parameter(Mandatory)][string]$Base64,
@@ -177,6 +194,14 @@ function ConvertFrom-LabJsonTransport {
     try {
         $utf8 = New-Object Text.UTF8Encoding($false, $true)
         $json = $utf8.GetString($bytes)
+        $jsonDocument = [System.Text.Json.JsonDocument]::Parse($json)
+        try {
+            if (-not (Test-LabJsonElementHasUniqueProperties -Element $jsonDocument.RootElement)) {
+                return [pscustomobject]@{ Ok = $false; Detail = 'duplicate_property'; Document = $null }
+            }
+        } finally {
+            $jsonDocument.Dispose()
+        }
         $document = ConvertFrom-Json -InputObject $json -DateKind String -ErrorAction Stop
     } catch {
         return [pscustomobject]@{ Ok = $false; Detail = 'invalid_json'; Document = $null }

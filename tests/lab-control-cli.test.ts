@@ -29,6 +29,9 @@ type FixtureMode =
   | "receipt-hash-mismatch"
   | "receipt-run-id-mismatch"
   | "receipt-direction-run-id-mismatch"
+  | "receipt-duplicate-run-id"
+  | "receipt-direction-duplicate-run-id"
+  | "receipt-task-evidence-duplicate-run-id"
   | "receipt-task-start-mismatch"
   | "receipt-later-task"
   | "receipt-future-task"
@@ -168,7 +171,19 @@ function receiptFixture(mode: FixtureMode) {
       break
   }
 
-  const compactJson = malformedJson ?? JSON.stringify(receipt)
+  let compactJson = malformedJson ?? JSON.stringify(receipt)
+  if (mode === "receipt-duplicate-run-id") {
+    compactJson = compactJson.replace(
+      '"run_id":',
+      '"run_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","run_id":',
+    )
+  }
+  if (mode === "receipt-direction-duplicate-run-id") {
+    compactJson = compactJson.replace(
+      '"directions":[{"run_id":',
+      '"directions":[{"run_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","run_id":',
+    )
+  }
   const bytes = Buffer.from(compactJson, "utf8")
   const receiptB64 = malformedBase64 ?? bytes.toString("base64")
   const atlasReceiptHash = createHash("sha256").update(bytes).digest("hex")
@@ -198,7 +213,14 @@ function receiptFixture(mode: FixtureMode) {
   if (mode === "receipt-task-evidence-out-of-order") {
     taskEvidence.completed_at = "2026-08-08T11:00:24.0000000Z"
   }
-  const taskEvidenceBytes = Buffer.from(JSON.stringify(taskEvidence), "utf8")
+  let taskEvidenceJson = JSON.stringify(taskEvidence)
+  if (mode === "receipt-task-evidence-duplicate-run-id") {
+    taskEvidenceJson = taskEvidenceJson.replace(
+      '"run_id":',
+      '"run_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","run_id":',
+    )
+  }
+  const taskEvidenceBytes = Buffer.from(taskEvidenceJson, "utf8")
   let taskEvidenceB64 = taskEvidenceBytes.toString("base64")
   let hermesTaskEvidenceHash = createHash("sha256").update(taskEvidenceBytes).digest("hex")
   let atlasB64 = receiptB64
@@ -398,6 +420,9 @@ describe("OMEN lab-control CLI", () => {
     "receipt-zero-file-count",
     "receipt-invalid-manifest-hash",
     "receipt-direction-run-id-mismatch",
+    "receipt-duplicate-run-id",
+    "receipt-direction-duplicate-run-id",
+    "receipt-task-evidence-duplicate-run-id",
     "receipt-task-start-mismatch",
     "receipt-task-state-incomplete",
     "receipt-task-evidence-out-of-order",
