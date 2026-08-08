@@ -27,6 +27,8 @@ type FixtureMode =
   | "receipt-invalid-manifest-hash"
   | "receipt-mirror-hash-mismatch"
   | "receipt-task-start-mismatch"
+  | "receipt-later-task"
+  | "receipt-future-task"
   | "receipt-invalid-base64"
   | "receipt-invalid-timestamp"
 
@@ -119,6 +121,12 @@ function receiptFixture(mode: FixtureMode) {
       break
     case "receipt-task-start-mismatch":
       taskLastUtc = "2026-08-08T10:30:00.0000000Z"
+      break
+    case "receipt-later-task":
+      taskLastUtc = "2026-08-08T11:00:10.0000000Z"
+      break
+    case "receipt-future-task":
+      taskLastUtc = "2026-08-08T11:04:00.0000000Z"
       break
     case "receipt-invalid-base64":
       malformedBase64 = "%%%NOT_BASE64%%%"
@@ -307,6 +315,18 @@ describe("OMEN lab-control CLI", () => {
     expect(result.stdout).toContain("latest cross-node sync: SYNC_FAILED")
     expect(result.stdout).toContain("operator blocker: REQUIRED_EVIDENCE_INCOMPLETE")
   })
+
+  test.each(["receipt-later-task", "receipt-future-task"] as const)(
+    "%s cannot bind an earlier receipt to a later scheduled-task run",
+    (mode) => {
+      const result = runCommand("lab-status", mode)
+
+      expect(result.status).toBe(2)
+      expect(result.stdout).toContain("latest cross-node sync: SYNC_FAILED")
+      expect(result.stdout).toContain("operator blocker: REQUIRED_EVIDENCE_INCOMPLETE")
+      expect(result.stdout).not.toContain("operator blocker: NONE")
+    },
+  )
 
   test.each([
     ["receipt-fresh", "SYNC_OK", 0],

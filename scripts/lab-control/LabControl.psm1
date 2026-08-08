@@ -257,10 +257,13 @@ function Get-LabCrossSyncEvidence {
     if ($null -eq $taskLastUtc -or $null -eq $startedUtc -or $null -eq $completedUtc) {
         return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=malformed_receipt_timestamp' -CompletedAtUtc $null
     }
-    $taskStartDelta = $startedUtc.Subtract($taskLastUtc).Duration()
     if ($completedUtc -lt $startedUtc) {
         return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=completion_before_start' -CompletedAtUtc $null
     }
+    if ($taskLastUtc -gt $startedUtc) {
+        return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=task_start_mismatch' -CompletedAtUtc $null
+    }
+    $taskStartDelta = $startedUtc.Subtract($taskLastUtc)
     if ($taskStartDelta -gt [TimeSpan]::FromMinutes(5)) {
         return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=task_start_mismatch' -CompletedAtUtc $null
     }
