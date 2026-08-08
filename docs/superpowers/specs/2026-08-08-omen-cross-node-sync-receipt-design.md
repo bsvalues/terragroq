@@ -1,162 +1,183 @@
 # OMEN cross-node sync receipt design
 
-Status: approved for implementation on 2026-08-08
+Status: implemented and live-verified on 2026-08-08
 
 Work Order: `WO-OMEN-COCKPIT-SYNC-RECEIPT-001`
 
 ## Objective and boundary
 
-Stage 1 remains complete and frozen. This follow-up adds one observability contract: the existing
-Hermes scheduled cross-node backup sync will publish a durable success receipt only after both
-transfer directions pass post-transfer SHA-256 verification. OMEN will validate that receipt and
-report one of four stable states:
+Stage 1 remains complete and frozen. This bounded observability follow-up makes the existing Hermes
+scheduled cross-node backup sync machine-verifiable without changing its daily 04:00 schedule,
+source and destination roots, archive selection, 14-day retention policy, SSH identity, Docker
+topology, databases, backup creation, or storage architecture.
 
-- `SYNC_OK`
-- `SYNC_FAILED`
-- `SYNC_STALE`
-- `SYNC_NEVER_VERIFIED`
+The authority model is deliberately asymmetric:
 
-The daily 04:00 schedule, source and destination roots, archive selection, 14-day retention policy,
-SSH identity, Docker topology, databases, backup creation, and storage architecture do not change.
-Generated receipts remain outside Git. No credentials, command output, environment dump, or absolute
-private-key path may enter a receipt.
+- Hermes executes the two transfer directions, verifies the data, and records task evidence.
+- Atlas is the sole canonical durable receipt authority.
+- OMEN reads both evidence surfaces and classifies them locally without inferring success from file
+  existence or a scheduled-task result alone.
+
+The four public states are `SYNC_OK`, `SYNC_STALE`, `SYNC_FAILED`, and `SYNC_UNKNOWN`.
 
 ## Source-control and deployment boundary
 
-The authoritative producer is the tracked, clean script
-`C:\HermesLab\hermes\crossnode-sync.ps1` in the local `C:\HermesLab` Git repository. That repository
-has no remote, so the producer change receives a local commit and its hash is recorded as deployment
-evidence. Unrelated untracked Atlas inventory scripts remain untouched.
+The producer is tracked in the local `C:\HermesLab` Git repository. That repository has no remote,
+so the exact local commit is deployment evidence. Its reserved files are:
 
-The OMEN consumer, focused tests, runbook, and follow-up report remain on PR `#529` in
-`bsvalues/terragroq`. The generated receipts are written only to:
+- `hermes/crossnode-sync.ps1`
+- `hermes/crossnode-sync-lib.ps1`
+- `hermes/test-crossnode-sync-receipt.ps1`
 
-- Hermes: `D:\CrossNodeBackups\crossnode-sync-receipt.json`
-- Atlas: `/home/bs/from-hermes/crossnode-sync-receipt.json`
+The OMEN consumer, focused tests, runbook, and this follow-up report remain on PR `#529` in
+`bsvalues/terragroq`. Generated evidence stays outside Git at:
 
-## Receipt contract
+- Atlas canonical receipt: `/home/bs/from-hermes/crossnode-sync-receipt.json`
+- Hermes task evidence: `D:\CrossNodeBackups\crossnode-sync-task-evidence.json`
 
-The producer emits UTF-8 JSON with this schema:
+No Hermes receipt is canonical or required. There is no dual publication contract and no attempt to
+simulate a distributed transaction.
+
+## Immutable run binding
+
+Each complete sync attempt creates one UUID `run_id`. The same immutable value is required in:
+
+- the Atlas-to-Hermes direction record;
+- the Hermes-to-Atlas direction record;
+- the Atlas canonical receipt; and
+- the Hermes completed-task evidence.
+
+The receipt's `started_at` and `completed_at` must exactly match the corresponding
+`started_at` and `receipt_completed_at` fields in Hermes task evidence. The task evidence completion
+must follow receipt completion. Evidence from different runs is never combined.
+
+The Atlas receipt is strict UTF-8 JSON with exactly these top-level fields:
 
 ```json
 {
   "schema_version": 1,
   "task_name": "HermesCrossNodeBackupSync",
-  "run_id": "20260808T110000Z-<random-suffix>",
+  "run_id": "11111111-2222-3333-4444-555555555555",
   "started_at": "2026-08-08T11:00:00.0000000Z",
   "completed_at": "2026-08-08T11:00:25.0000000Z",
   "result": "SUCCESS",
   "verification": "SHA256_PASS",
   "directions": [
     {
+      "run_id": "11111111-2222-3333-4444-555555555555",
       "direction": "ATLAS_TO_HERMES",
       "source": "atlas",
       "destination": "hermes",
       "file_count": 3,
-      "manifest_sha256": "<sha256-of-canonical-verified-file-manifest>"
+      "manifest_sha256": "<64 lowercase hex characters>",
+      "verification": "SHA256_PASS"
     },
     {
+      "run_id": "11111111-2222-3333-4444-555555555555",
       "direction": "HERMES_TO_ATLAS",
       "source": "hermes",
       "destination": "atlas",
       "file_count": 5,
-      "manifest_sha256": "<sha256-of-canonical-verified-file-manifest>"
+      "manifest_sha256": "<64 lowercase hex characters>",
+      "verification": "SHA256_PASS"
     }
   ]
 }
 ```
 
-Each canonical manifest contains the expected source archive names, byte sizes, and SHA-256 values in
-ordinal path order. The destination manifest must contain every expected filename with the same size
-and SHA-256. Extra older destination archives do not invalidate the current transfer because the
-existing roots intentionally retain history. Empty source sets are failures; a run cannot publish a
-zero-file success receipt.
+Hermes task evidence contains exactly:
 
-Only the allowlisted host names, direction names, result, verification value, counts, timestamps, and
-manifest summaries are stored. Per-file absolute paths and raw stderr are excluded.
+```json
+{
+  "schema_version": 1,
+  "task_name": "HermesCrossNodeBackupSync",
+  "run_id": "11111111-2222-3333-4444-555555555555",
+  "started_at": "2026-08-08T11:00:00.0000000Z",
+  "receipt_completed_at": "2026-08-08T11:00:25.0000000Z",
+  "completed_at": "2026-08-08T11:00:26.0000000Z",
+  "state": "COMPLETED",
+  "result": "SUCCESS",
+  "verification": "SHA256_PASS",
+  "atlas_receipt_sha256": "<sha256 of the exact canonical Atlas receipt bytes>"
+}
+```
 
-## Producer flow and failure semantics
+Each canonical directional manifest consists of expected archive names, byte sizes, and SHA-256
+values in ordinal name order. The destination must contain every expected filename with the same size
+and hash. Extra retained destination archives do not invalidate the current transfer. Empty source
+sets, unsafe names, duplicate names, or nonpositive counts cannot produce success.
 
-The existing transfer directions remain in their current order. Every native `ssh` and `scp` call is
-wrapped so a nonzero exit is terminal and produces a sanitized error on the task stream. After both
-copies, the producer builds source and destination manifests and compares each expected file by name,
-size, and SHA-256.
+Only allowlisted hosts, direction names, result values, verification values, counts, timestamps, and
+manifest summaries are persisted. Per-file absolute paths, credentials, private-key paths, raw
+stderr, commands, and environment dumps are excluded.
 
-A success receipt is constructed only when:
+## Producer and publication semantics
 
-1. both transfer directions completed with exit `0`;
-2. both source sets contain at least one archive;
-3. every expected destination file exists;
-4. every expected byte size and SHA-256 matches; and
-5. both receipt copies can be persisted and verified.
+Every native `ssh` and `scp` call is checked; a nonzero exit is terminal. POSIX remote command
+payloads are base64-transported to avoid Windows OpenSSH command-line re-parsing. Native stderr is
+captured and sanitized without allowing PowerShell's native-error wrapping to terminate before the
+exit code can be classified.
 
-The producer writes same-directory temporary files and promotes them with atomic rename. It verifies
-the Atlas receipt copy hash before promoting the Hermes receipt. Any transfer, manifest, verification,
-receipt-copy, or atomic-promotion error exits nonzero and does not replace the prior valid success
-receipt. The scheduled task's `LastTaskResult` therefore records failure while the older success
-receipt remains available for diagnosis. The existing archive retention commands remain bounded to
-`*.tar.gz`; JSON receipts are never retention targets.
+Success requires both transfers to complete, positive source sets, destination existence, exact
+byte-size equality, and SHA-256 equality. Hermes then:
 
-There is no cross-node transaction. A failure between the two final renames can leave one new receipt
-copy and one old copy, but the nonzero scheduled-task result forces `SYNC_FAILED`; OMEN never treats
-either copy alone as success for that attempt.
+1. creates the Atlas receipt for that `run_id`;
+2. writes a same-directory temporary receipt on Atlas;
+3. closes and atomically renames it into the canonical Atlas path;
+4. reads and hashes the published Atlas bytes; and
+5. writes completed Hermes task evidence atomically only after the Atlas hash is confirmed.
+
+Any transfer, manifest, verification, receipt publication, or task-evidence failure exits nonzero.
+A failed or incomplete run never overwrites Hermes completed-task evidence with a success record.
+An older valid Atlas receipt can remain for diagnosis, but it cannot false-green a later failed task.
+If Hermes dies after Atlas publication but before completed task evidence, OMEN reports
+`SYNC_FAILED` because the canonical receipt alone is insufficient.
 
 ## OMEN consumer and state model
 
-The Hermes probe reads the fixed receipt path read-only with a strict size cap and transports it as a
-single base64 value alongside the scheduled task's last-run time and result. Atlas supplies its fixed
-receipt hash as corroboration when reachable. Generated JSON is never evaluated as code.
+The Hermes probe reads the scheduled task's state, result, and observed timestamp plus the fixed
+task-evidence file. The Atlas probe reads the fixed canonical receipt. Both JSON reads are capped at
+65,536 bytes, transported as base64, and accompanied by SHA-256. OMEN rejects malformed base64,
+oversized or changing files, hash mismatches, duplicate JSON property names, extra/missing fields,
+wrong case, and values outside exact allowlists. Generated JSON is never evaluated as code.
 
-The local PowerShell classifier validates schema, task binding, timestamps, result, verification,
-both required directions, positive file counts, SHA-256 formatting, and matching Hermes/Atlas receipt
-hashes. It uses an exact allowlist rather than accepting any nonempty string.
+Windows Task Scheduler's observed `LastRunTime` is not treated as the script's exact start time. Live
+proof showed `17:59:59Z` while the bound script interval was
+`17:59:22.0111389Z` through `17:59:35.1650529Z`. The truthful binding window therefore requires the
+scheduler observation to be:
 
-Precedence is fail closed:
+```text
+>= receipt.started_at - 5 minutes
+<= task_evidence.completed_at + 5 minutes
+```
 
-1. Current scheduled task result nonzero, malformed receipt, future timestamp, task/receipt binding
-   mismatch, missing direction, invalid count/hash, or receipt-copy hash mismatch: `SYNC_FAILED`.
-2. No valid success receipt has ever been observed: `SYNC_NEVER_VERIFIED`.
-3. Latest valid success receipt is more than 30 hours old: `SYNC_STALE`.
-4. Current task result is zero, the receipt is bound to that run, both copies match, and completion is
-   at most 30 hours old: `SYNC_OK`.
+The narrower receipt and task-evidence timestamps still require exact cross-document equality and
+strict monotonic ordering. All timestamps must also be no more than five minutes in the future.
 
-`SYNC_OK` is the only cross-node state accepted by `lab-status` for exit `0`. The other three states
-produce `REQUIRED_EVIDENCE_INCOMPLETE` and exit `2`. `lab-backups` uses the same classifier so its
-continuity result cannot disagree with `lab-status`.
+State precedence is fail closed:
 
-## Test-driven implementation
+1. `SYNC_FAILED`: explicit nonzero task result; task not `Ready`; incomplete evidence after a receipt
+   is present; invalid schema, encoding, hash, direction, count, timestamp, or `run_id`; mismatched
+   Atlas receipt hash; failed verification; or inconsistent task observation.
+2. `SYNC_UNKNOWN`: no trustworthy canonical receipt/evidence exists from which to determine state.
+3. `SYNC_STALE`: the evidence is otherwise a complete valid success, but Hermes completed-task
+   evidence is more than 30 hours old.
+4. `SYNC_OK`: Atlas receipt and Hermes completed-task evidence are valid, share the same `run_id`,
+   bind both verified directions and exact timestamps, task state is `Ready`, task result is `0`, the
+   scheduler observation is inside its bounded window, and evidence age is at most 30 hours.
 
-The OMEN focused suite first gains failing behavioral tests for:
+`SYNC_OK` is the only cross-node state accepted by `lab-status` for overall exit `0`. The other states
+produce `REQUIRED_EVIDENCE_INCOMPLETE` and exit `2`. `lab-backups` uses the same classifier.
 
-- fresh, valid, task-bound, mirrored receipt -> `SYNC_OK`, overall exit `0`;
-- nonzero latest task result despite an older valid receipt -> `SYNC_FAILED`, exit `2`;
-- valid receipt older than 30 hours -> `SYNC_STALE`, exit `2`;
-- no receipt -> `SYNC_NEVER_VERIFIED`, exit `2`;
-- malformed base64/JSON/schema/timestamp/direction/count/hash or mirror mismatch -> `SYNC_FAILED`;
-- future-dated or task-mismatched receipt -> `SYNC_FAILED`;
-- production-faithful Atlas fallback cannot false-green an arbitrary string;
-- Hermes remote receipt reads are bounded and contain no write command; and
-- `lab-status` and `lab-backups` share the same state classification.
+## Verification and delivery
 
-Producer tests use isolated temporary source/destination fixtures and fake checked native-call seams.
-They prove that matched two-direction manifests create the exact schema atomically, while simulated
-copy, SSH, missing-file, size, hash, empty-set, or receipt-mirror failures return nonzero and never
-replace the last success receipt. No production backup is used for unit tests.
+The producer suite proves matched manifests and safe atomic publication plus transfer, SSH, missing
+file, size, hash, empty-set, unsafe-name, duplicate-name, and persistence failures. The OMEN focused
+suite proves fresh, stale, explicit failure, missing evidence, one-direction-only, bad hashes,
+mismatched or duplicate `run_id`, out-of-order timestamps, scheduler-window boundaries, receipt-only,
+Hermes-death, and read-only bounded transport behavior.
 
-## Live verification and delivery
-
-After both repositories pass focused tests and direct review, deploy the committed producer script to
-its already-authoritative path and run the existing scheduled task once through Task Scheduler. The
-live proof must show:
-
-- task result `0`;
-- two matching receipt copies with the approved schema;
-- positive file counts for both directions;
-- `verification=SHA256_PASS` and `result=SUCCESS`;
-- independently recomputed source/destination manifest equality;
-- `lab-status` reports `SYNC_OK`, `operator blocker: NONE`, and exit `0`; and
-- a controlled fixture, not a production transfer, proves failed and stale receipts remain non-green.
-
-The final PR `#529` comment records the Hermes local producer commit, OMEN consumer commit, focused
-test output, live receipt hashes, task result, `lab-status` output, and zero owner-touch counters. PR
-`#529` remains draft until this evidence is attached; only then may it be marked ready for review.
+The live run proved task result `0`, one Atlas canonical receipt, matching completed Hermes task
+evidence, two positive verified direction counts, independent filename/size/SHA-256 equality, and
+installed `lab-status`/`lab-backups` success. PR `#529` remains draft until that evidence is attached;
+it may then be marked ready for review but must not be merged by this work order.

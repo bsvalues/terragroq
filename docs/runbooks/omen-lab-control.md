@@ -48,9 +48,8 @@ whole SSH config.
 
 On OMEN, the managed files are installed at
 `C:\Users\bsval\AppData\Local\WilliamOS\LabControl\bin`, and that directory is present in the user
-PATH. The installed `lab-status` entrypoint was resolved from that location and exercised successfully;
-its completion-candidate run exits `2` because the scheduled-task sync signal is explicitly
-unverified without the separate cross-host hash proof.
+PATH. The installed `lab-status` entrypoint was resolved from that location and exercised successfully.
+The current verified run reports `SYNC_OK`, operator blocker `NONE`, and exits `0`.
 
 ## Commands
 
@@ -58,7 +57,8 @@ unverified without the separate cross-host hash proof.
 - `lab-hermes`: detailed read-only Hermes snapshot.
 - `lab-atlas`: detailed read-only Atlas snapshot.
 - `lab-containers`: read-only `docker ps` output from both hosts.
-- `lab-backups`: bounded Atlas listing under common backup roots and explicit cross-node marker truth.
+- `lab-backups`: bounded Atlas listing under common backup roots and the same strict cross-node sync
+  receipt classifier used by `lab-status`.
 
 For `lab-status`, exit code `0` additionally requires all mandatory fields to carry usable evidence:
 Hermes Docker/Ollama/GPU/disk, Atlas Docker/disk, protocol-level Postgres/Redis/Mongo probes, latest
@@ -89,13 +89,50 @@ Both aliases resolve to the intended hosts, and both accepted passwordless SSH d
   `SHA256:yKY2L2DIR7KaYtgr4Vm5VXQrlzZmGk82GmU+2ARAWG8`; public-key authentication succeeds, hostname is
   `Hermes`, and the command exits `0`.
 
-The completion-candidate `lab-status` reports both nodes reachable. Hermes evidence includes Docker
-`28.5.1`, Ollama `0.32.5`, the RTX 3050, and disk status. Atlas evidence includes Docker `29.7.2`, successful
+The verified `lab-status` reports both nodes reachable. Hermes evidence includes Docker `28.5.1`,
+Ollama `0.32.5`, the RTX 3050, and disk status. Atlas evidence includes Docker `29.7.2`, successful
 read-only Postgres/Redis/Mongo protocol probes, `641G` free of `685G`, and the latest observed
 TerraFusion backup archive candidate by mtime under `/home/bs/backups`. Archive integrity/completeness
-is not inferred from file presence. The cockpit reads cross-node status from scheduled task
-`HermesCrossNodeBackupSync` and labels result `0` as unverified because its script emits no durable
-receipt/log. This run separately verified both directions by exact filename, size, and SHA-256.
+is not inferred from file presence. Cross-node status is now derived from the Atlas canonical
+receipt, bound Hermes completed-task evidence, and the Windows scheduled-task state/result rather
+than task result or receipt existence alone.
+
+## Cross-node sync receipt truth
+
+Atlas is the sole canonical durable receipt authority. Hermes executes and verifies both directions;
+OMEN consumes the resulting evidence read-only.
+
+- Atlas canonical receipt: `/home/bs/from-hermes/crossnode-sync-receipt.json`
+- Hermes completed-task evidence: `D:\CrossNodeBackups\crossnode-sync-task-evidence.json`
+- Scheduled task: `HermesCrossNodeBackupSync`
+- Freshness threshold: 30 hours
+
+One immutable UUID `run_id` must match in the Atlas receipt, both direction records, and Hermes task
+evidence. Both directions must report `SHA256_PASS` with positive file counts. Hermes evidence must
+contain the SHA-256 of the exact Atlas receipt bytes, and Task Scheduler must report state `Ready` and
+result `0`. A receipt file alone is never success.
+
+The public states are:
+
+- `SYNC_OK`: the canonical receipt, both direction records, Hermes completed-task evidence, task
+  result, hashes, `run_id`, and timestamps all validate, and the completion is no more than 30 hours
+  old.
+- `SYNC_STALE`: the evidence is otherwise a valid completed success but is older than 30 hours.
+- `SYNC_FAILED`: an explicit failure, nonzero task result, incomplete evidence after publication,
+  mismatch, malformed evidence, failed verification, or invalid ordering/binding exists.
+- `SYNC_UNKNOWN`: no trustworthy canonical evidence exists from which to determine the state.
+
+Windows Task Scheduler's observed `LastRunTime` is accepted only from five minutes before the bound
+receipt start through five minutes after Hermes task-evidence completion. This accounts for the live
+Windows observation being recorded after script completion while retaining a narrow fail-closed
+binding. Exact receipt/task-evidence timestamps still have to match and be internally ordered.
+
+Only `SYNC_OK` permits `lab-status` exit `0`. `SYNC_STALE`, `SYNC_FAILED`, and `SYNC_UNKNOWN` produce
+`REQUIRED_EVIDENCE_INCOMPLETE` and exit `2`. `lab-backups` applies the same state and exit rule.
+
+The live verified run used `run_id` `a14a4724-6fbe-4f5e-b91b-aef6dde55847`. It proved task result
+`0`, both directions `SHA256_PASS`, 6 of 6 Atlas-to-Hermes files and 15 of 15 Hermes-to-Atlas files
+matching by filename, size, and SHA-256, and installed `lab-status`/`lab-backups` exit `0`.
 
 Hermes temporarily stopped accepting TCP connections after the initial proof while still responding
 to ICMP. That condition recovered. Final passwordless SSH, tunnel, and VS Code Remote SSH proofs all
