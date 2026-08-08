@@ -3,7 +3,7 @@
 ```text
 OMEN_COCKPIT_STAGE_1: BLOCKED
 RESULT_STATE=BLOCKED_DEPENDENCY
-REASON_CODE=HERMES_SSH_KEY_NOT_ACCEPTED
+REASON_CODE=HERMES_TCP_SERVICES_UNREACHABLE_AFTER_SUCCESSFUL_PROOF
 ```
 
 ## Work-order packet
@@ -80,12 +80,17 @@ ownerOperationsAllowed: false
 
 ## Stage 1 status
 
-- SSH to Hermes: **BLOCKED**. TCP/22 reachable; alias correct; OMEN offers the intended fingerprint,
-  but Hermes does not accept it and BatchMode exits `255`.
+- SSH to Hermes: **PROVEN, THEN DEGRADED**. The repaired server accepted the intended fingerprint;
+  verbose proof records public-key authentication, hostname `Hermes`, and exit `0`. Later the same
+  run lost all tested Hermes TCP reachability while ICMP remained responsive; three bounded SSH
+  retries and a post-wait retry timed out before authentication.
 - SSH to Atlas: **PROVEN**. `ssh -o BatchMode=yes atlas hostname` returns `atlas` with exit `0`.
 - VS Code Remote SSH to Atlas: **PROVEN** using stable VS Code and the official extension. The resolver
   ran Windows OpenSSH, created the Atlas exec server, and started the user-scoped VS Code Server.
-- VS Code Remote SSH to Hermes: **BLOCKED** by the same plain-SSH key rejection.
+- VS Code Remote SSH to Hermes: **PROVEN** before the later transport loss. Stable VS Code resolved
+  `ssh-remote+hermes`, created/cached the exec server, installed the user-scoped Windows VS Code
+  Server, and completed its install command. Subsequent new windows time out because Hermes TCP/22
+  is no longer reachable.
 - Commands created: `lab-status`, `lab-hermes`, `lab-atlas`, `lab-containers`, `lab-backups`, shared
   module, safe installer, command shims, and a sanitized SSH config example.
 - Commands installed: managed files are at
@@ -105,29 +110,60 @@ ownerOperationsAllowed: false
   reachable and requires authentication; Mongo ping succeeds; `641G` free of `685G`; the latest
   observed backup archive candidates by mtime are the 2026-08-08 03:00 UTC TerraFusion volume files
   under `/home/bs/backups`. File presence does not prove archive integrity or set completeness.
-- Browser URLs: Hermes Device Portal at `http://192.168.1.154:50080/` and
-  `https://192.168.1.154:50443/`; usability not proven. Atlas `:9001` is a Portainer Agent, not UI.
-  Portainer UI, Open WebUI, Ollama HTTP, and monitoring URLs remain unverified/not discovered.
-- RDP: `mstsc.exe` is present and Hermes TCP/3389 is open. Authentication/usefulness was not tested;
+- RDP: `mstsc.exe` is present and Hermes TCP/3389 was open during initial discovery. It became
+  unreachable with the later Hermes TCP outage. Authentication/usefulness was not tested;
   RDP is optional, not a normal-operations dependency.
-- Backup directory visibility: **PROVEN** at `/home/bs/backups`. Cross-node sync status remains
-  **UNKNOWN** because no verified receipt/manifest/status marker was found.
-- Hermes Portainer/Open WebUI/Ollama binding and SSH-tunnel discovery: **BLOCKED** by Hermes SSH auth;
-  no binding, firewall, or exposure change was attempted.
+- Backup directory visibility: **PROVEN** at `/home/bs/backups`; the latest three archives pass
+  `gzip -t`. Cross-node sync for this run is **VERIFIED_BOTH_DIRECTIONS** by exact file metadata and
+  SHA-256 comparison, with the routine scheduled-task signal deliberately labeled unverified.
+- Hermes UI discovery: Open WebUI is healthy at container port `3000`, Portainer is up at `9000`, and
+  Ollama `0.32.5` is at `11434`; all are wildcard-bound in Docker but direct OMEN LAN requests time
+  out. A transient SSH tunnel proved Open WebUI at `http://127.0.0.1:13000/`, Portainer at
+  `http://127.0.0.1:19000/`, and Ollama at `http://127.0.0.1:21434/`; the proof tunnel was stopped.
+  No firewall or binding change was attempted. No current lab monitoring surface was found; port
+  `8080` is a legacy EDB PEM landing page, not a verified operational radar.
+- Cross-node sync source: Hermes scheduled task `HermesCrossNodeBackupSync`, daily 04:00 PDT, last
+  run `2026-08-08T04:00:00-07:00`, result `0`. Exact filename/size/SHA-256 comparison verifies the
+  current Atlas-to-Hermes three-file batch and Hermes-to-Atlas five-file batch in both directions.
+  The task script creates no receipt/log and suppresses transfer errors, so task result `0` alone is
+  labeled unverified by the routine cockpit.
 
 ## Validation evidence
 
 ```text
 pnpm exec vitest run tests/lab-control-cli.test.ts
 Test Files  1 passed (1)
-Tests       12 passed (12)
+Tests       13 passed (13)
 ```
 
 Live, bounded read-only failure-path proof:
 
 ```text
 HERMES
-  reachable: NO (SSH_AUTH_BLOCKED)
+  reachable: YES
+  Docker: 28.5.1
+  Ollama: AVAILABLE 0.32.5
+  GPU: NVIDIA GeForce RTX 3050
+  disk: 308 GB free of 465 GB
+ATLAS
+  reachable: YES
+  Docker: 29.7.2
+  Postgres evidence: CONTAINER_PG_ISREADY_ACCEPTING
+  Redis evidence: CONTAINER_REDIS_AUTH_REQUIRED_REACHABLE
+  Mongo evidence: CONTAINER_MONGO_PING_OK
+  disk: 641G free of 685G
+LAB
+  latest backup: 2026-08-08T03:00:12+00:00|/home/bs/backups/terrafusion_final_build_20250615_051930_redis_data-20260808_030001.tar.gz
+  latest cross-node sync: UNVERIFIED_TASK_RESULT_0 last=2026-08-08T04:00:00.0000000-07:00
+  operator blocker: REQUIRED_EVIDENCE_INCOMPLETE (inspect UNKNOWN/unavailable service or continuity fields above)
+LAB_STATUS_EXIT=2
+```
+
+Current installed-cockpit degradation proof after Hermes TCP loss:
+
+```text
+HERMES
+  reachable: NO (SSH_TIMEOUT)
 ATLAS
   reachable: YES
   Docker: 29.7.2
@@ -138,8 +174,8 @@ ATLAS
 LAB
   latest backup: 2026-08-08T03:00:12+00:00|/home/bs/backups/terrafusion_final_build_20250615_051930_redis_data-20260808_030001.tar.gz
   latest cross-node sync: UNKNOWN
-  operator blocker: SSH authentication is not configured for one or more aliases
-LAB_STATUS_EXIT=2
+  operator blocker: one or more lab nodes are unreachable; inspect the typed SSH result above
+CURRENT_INSTALLED_LAB_STATUS_EXIT=2
 ```
 
 The suite executes the real PowerShell entrypoints through a fake external SSH process. It verifies
@@ -147,7 +183,7 @@ BatchMode/timeouts, authentication classification, incomplete-evidence nonzero s
 Windows and UTF-8 POSIX payload decoding, invocation paths containing spaces, global backup ordering
 command shape, install paths containing spaces, and no-copy conflict preflight. Linux command
 availability is not claimed from OMEN; the remote POSIX payload is contract-tested at the SSH
-boundary and awaits Atlas execution after authentication.
+boundary and has also executed successfully against Atlas.
 
 OMEN installation proof:
 
@@ -168,7 +204,8 @@ Five findings were received and remediated in the builder reservation:
 4. insufficient command-shape/decode/quoting coverage;
 5. installer conflict detection after partial copying had begun.
 
-Resolved review findings: `5`. Unresolved review findings: `0`.
+Resolved review findings: `6` (including continuation wording that had overstated backup proof).
+Unresolved review findings: `0`.
 
 ## Files changed
 
@@ -190,13 +227,13 @@ Draft PR: `#529`.
 
 ## Exact remaining blocker
 
-Atlas now accepts the intended OMEN key. Hermes still does not: the client offers fingerprint
-`SHA256:yKY2L2DIR7KaYtgr4Vm5VXQrlzZmGk82GmU+2ARAWG8`, the server never reports acceptance, and
-BatchMode exits `255`. Until Hermes accepts that key, Hermes facts, Portainer/Open WebUI binding and
-SSH-tunnel discovery, and Hermes VS Code Remote SSH cannot be proven.
+Hermes trust, UI tunnels, and VS Code Remote SSH were all proven. The new blocker is current Hermes
+transport availability: ICMP responds, but TCP `22`, `3389`, `445`, `50080`, and `50443` all fail,
+and bounded SSH retries time out before authentication. Until TCP/22 is stably reachable again,
+OMEN cannot perform normal operator work or keep the proven UI tunnels open.
 
-Owner action required: `false`. The coordinator should hand public-key authorization to the already
-authorized Hermes/Atlas operator lane; William must not act as credential or command courier.
+Owner action required: `false`. Recovery of Hermes TCP/network-service availability belongs to the
+already authorized Hermes operator lane; William must not act as diagnostic or command courier.
 
 ## Owner-touch counters
 

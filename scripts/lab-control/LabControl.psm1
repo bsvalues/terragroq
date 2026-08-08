@@ -95,12 +95,24 @@ Out-Kv 'os' $os.Caption
 Out-Kv 'uptime' ((Get-Date)-$os.LastBootUpTime).ToString('d\d\ h\h\ m\m')
 $docker=if(Get-Command docker -ErrorAction SilentlyContinue){docker info --format '{{.ServerVersion}}' 2>$null}else{$null}
 Out-Kv 'docker' $docker
-$ollama=if(Get-Command ollama -ErrorAction SilentlyContinue){$o=ollama list 2>$null; if($LASTEXITCODE -eq 0){'AVAILABLE'}else{'UNAVAILABLE'}}else{'NOT_INSTALLED'}
+$ollama=try {
+  $response=Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/version' -TimeoutSec 3
+  if($response.version){'AVAILABLE '+$response.version}else{'AVAILABLE'}
+} catch {
+  $container=if(Get-Command docker -ErrorAction SilentlyContinue){docker ps --filter 'name=ollama' --format '{{.Names}}' 2>$null | Select-Object -First 1}else{$null}
+  if($container){'UNAVAILABLE_CONTAINER_RUNNING'}else{'NOT_OBSERVED'}
+}
 Out-Kv 'ollama' $ollama
 $gpu=if(Get-Command nvidia-smi -ErrorAction SilentlyContinue){nvidia-smi --query-gpu=name --format=csv,noheader 2>$null | Select-Object -First 1}else{$null}
 Out-Kv 'gpu' $gpu
 $d=Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
 if($d){Out-Kv 'disk' ('{0:N0} GB free of {1:N0} GB' -f ($d.FreeSpace/1GB),($d.Size/1GB))}else{Out-Kv 'disk' $null}
+$sync=try {
+  $info=Get-ScheduledTaskInfo -TaskName 'HermesCrossNodeBackupSync' -ErrorAction Stop
+  $last=$info.LastRunTime.ToString('o')
+  if($info.LastTaskResult -eq 0){'UNVERIFIED_TASK_RESULT_0 last='+$last}else{'FAILED_TASK_RESULT_'+$info.LastTaskResult+' last='+$last}
+} catch {'NOT_OBSERVED'}
+Out-Kv 'cross_sync' $sync
 '@
     $encoded = ConvertTo-LabEncodedPowerShellCommand -Command $probe
     "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded"
@@ -244,11 +256,15 @@ function Write-LabNodeSummary {
 function Invoke-LabStatus {
     $hermes = Get-LabNodeSnapshot -Target hermes
     $atlas = Get-LabNodeSnapshot -Target atlas
+    $crossSync = Get-LabValue $hermes.Values 'cross_sync'
+    if ($crossSync -eq 'UNKNOWN' -or $crossSync -eq 'NOT_OBSERVED') {
+        $crossSync = Get-LabValue $atlas.Values 'cross_sync'
+    }
     Write-LabNodeSummary $hermes
     Write-LabNodeSummary $atlas
     Write-Output 'LAB'
     Write-Output "  latest backup: $(Get-LabValue $atlas.Values 'backup')"
-    Write-Output "  latest cross-node sync: $(Get-LabValue $atlas.Values 'cross_sync')"
+    Write-Output "  latest cross-node sync: $crossSync"
 
     $failures = @($hermes, $atlas | Where-Object { -not $_.Reachable })
     if ($failures.Count -eq 0) {
@@ -260,9 +276,9 @@ function Invoke-LabStatus {
             (Get-LabValue $atlas.Values 'docker'),
             (Get-LabValue $atlas.Values 'disk'),
             (Get-LabValue $atlas.Values 'backup'),
-            (Get-LabValue $atlas.Values 'cross_sync')
+            $crossSync
         )
-        $genericIncomplete = @($requiredValues | Where-Object { $_ -match '^(?i:UNKNOWN|UNAVAILABLE|NOT_FOUND|NOT_INSTALLED|NOT_OBSERVED)' }).Count -gt 0
+        $genericIncomplete = @($requiredValues | Where-Object { $_ -match '^(?i:UNKNOWN|UNAVAILABLE|NOT_FOUND|NOT_INSTALLED|NOT_OBSERVED|UNVERIFIED|FAILED)' }).Count -gt 0
         $postgresReady = (Get-LabValue $atlas.Values 'postgres_evidence') -in @('PG_ISREADY_ACCEPTING', 'CONTAINER_PG_ISREADY_ACCEPTING')
         $redisReady = (Get-LabValue $atlas.Values 'redis_evidence') -in @('REDIS_PING_PONG', 'REDIS_AUTH_REQUIRED_REACHABLE', 'CONTAINER_REDIS_PING_PONG', 'CONTAINER_REDIS_AUTH_REQUIRED_REACHABLE')
         $mongoReady = (Get-LabValue $atlas.Values 'mongo_evidence') -in @('MONGO_PING_OK', 'CONTAINER_MONGO_PING_OK')
@@ -302,8 +318,12 @@ function Invoke-LabHermes { Write-LabDetailedSnapshot -Target hermes }
 function Invoke-LabAtlas { Write-LabDetailedSnapshot -Target atlas }
 
 function Invoke-LabContainers {
+    $hermesProbe = @'
+$ErrorActionPreference='SilentlyContinue'
+docker ps --format "table {{.Names}}`t{{.Image}}`t{{.Status}}`t{{.Ports}}"
+'@
     $commands = @{
-        hermes = "powershell.exe -NoLogo -NoProfile -NonInteractive -Command `$ErrorActionPreference='SilentlyContinue'; docker ps --format 'table {{.Names}}`t{{.Image}}`t{{.Status}}`t{{.Ports}}'"
+        hermes = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $(ConvertTo-LabEncodedPowerShellCommand -Command $hermesProbe)"
         atlas = "docker ps --format 'table {{.Names}}`t{{.Image}}`t{{.Status}}`t{{.Ports}}'"
     }
     $failed = $false

@@ -141,6 +141,8 @@ describe("OMEN lab-control CLI", () => {
     expect(result.status).toBe(0)
     expect(hermesEncoded).toBeTruthy()
     expect(Buffer.from(hermesEncoded!, "base64").toString("utf16le")).toContain("Get-CimInstance Win32_OperatingSystem")
+    expect(Buffer.from(hermesEncoded!, "base64").toString("utf16le")).toContain("http://127.0.0.1:11434/api/version")
+    expect(Buffer.from(hermesEncoded!, "base64").toString("utf16le")).toContain("HermesCrossNodeBackupSync")
     expect(atlasEncoded).toBeTruthy()
     const atlasCommand = Buffer.from(atlasEncoded!, "base64").toString("utf8")
     expect(atlasCommand).toContain("pg_isready")
@@ -174,6 +176,17 @@ describe("OMEN lab-control CLI", () => {
       expect(result.sshArgs).toContain("ConnectionAttempts=1")
     },
   )
+
+  test("lab-containers encodes the Hermes PowerShell probe without outer-shell variable expansion", () => {
+    const result = runCommand("lab-containers")
+    const hermesEncoded = result.sshArgs.match(/-EncodedCommand ([A-Za-z0-9+/=]+)/)?.[1]
+
+    expect(result.status).toBe(0)
+    expect(hermesEncoded).toBeTruthy()
+    const decoded = Buffer.from(hermesEncoded!, "base64").toString("utf16le")
+    expect(decoded).toContain("$ErrorActionPreference='SilentlyContinue'")
+    expect(decoded).toContain('docker ps --format "table {{.Names}}')
+  })
 
   test("installer creates persistent command shims in an isolated destination without changing PATH", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "lab-control-install-"))

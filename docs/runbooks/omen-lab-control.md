@@ -49,7 +49,8 @@ whole SSH config.
 On OMEN, the managed files are installed at
 `C:\Users\bsval\AppData\Local\WilliamOS\LabControl\bin`, and that directory is present in the user
 PATH. The installed `lab-status` entrypoint was resolved from that location and exercised successfully;
-it exits `2` while the current SSH authorization blocker remains.
+its completion-candidate run exits `2` because the scheduled-task sync signal is explicitly
+unverified without the separate cross-host hash proof.
 
 ## Commands
 
@@ -81,22 +82,27 @@ external SSH boundary.
 
 ## Current SSH state
 
-Both targets accept TCP/22, and both aliases resolve to the intended hosts.
+Both aliases resolve to the intended hosts, and both accepted passwordless SSH during proof.
 
 - Atlas: passwordless BatchMode SSH succeeds and returns hostname `atlas`.
-- Hermes: BatchMode SSH still returns `Permission denied (publickey,password,keyboard-interactive).`
-  Verbose client evidence shows OMEN offers fingerprint
-  `SHA256:yKY2L2DIR7KaYtgr4Vm5VXQrlzZmGk82GmU+2ARAWG8`, but Hermes never accepts it.
+- Hermes trust is proven: verbose client evidence shows the server accepts fingerprint
+  `SHA256:yKY2L2DIR7KaYtgr4Vm5VXQrlzZmGk82GmU+2ARAWG8`; public-key authentication succeeds, hostname is
+  `Hermes`, and the command exits `0`.
 
-The installed `lab-status` therefore reports Hermes as `SSH_AUTH_BLOCKED` and Atlas as reachable,
-emits a clear operator blocker, and exits `2`. Atlas evidence includes Docker `29.7.2`, successful
+The completion-candidate `lab-status` reports both nodes reachable. Hermes evidence includes Docker
+`28.5.1`, Ollama `0.32.5`, the RTX 3050, and disk status. Atlas evidence includes Docker `29.7.2`, successful
 read-only Postgres/Redis/Mongo protocol probes, `641G` free of `685G`, and the latest observed
 TerraFusion backup archive candidate by mtime under `/home/bs/backups`. Archive integrity/completeness
-is not inferred from file presence. Cross-node sync evidence remains `UNKNOWN`.
-Hermes server-side key acceptance belongs to the separately authorized Hermes lane. No private key,
-password, or secret belongs in this repository.
+is not inferred from file presence. The cockpit reads cross-node status from scheduled task
+`HermesCrossNodeBackupSync` and labels result `0` as unverified because its script emits no durable
+receipt/log. This run separately verified both directions by exact filename, size, and SHA-256.
 
-After that remote-side authorization, verify from a new OMEN terminal:
+After those proofs, Hermes stopped accepting TCP connections while still responding to ICMP. Ports
+`22`, `3389`, `445`, `50080`, and `50443` were all unreachable, and bounded SSH retries timed out.
+That transport instability is the current Stage 1 blocker; no private key, password, firewall, or
+service setting was changed from OMEN.
+
+After Hermes TCP transport recovers, verify from a new OMEN terminal:
 
 ```powershell
 ssh -o BatchMode=yes hermes hostname
@@ -105,24 +111,33 @@ lab-containers
 lab-backups
 ```
 
-Stable VS Code Remote SSH is proven end-to-end for Atlas: the official resolver launched Windows
+Stable VS Code Remote SSH is proven end-to-end for Atlas and Hermes: the official resolver launched Windows
 OpenSSH, connected to `atlas`, created its exec server, and installed/started the normal user-scoped
-VS Code Server under `/home/bs/.vscode-server`. Hermes resolution is configured but cannot complete
-until the same plain-SSH authorization blocker is cleared.
+VS Code Server under `/home/bs/.vscode-server`. For Hermes it resolved the Windows platform, created
+and cached the exec server, and installed the user-scoped server under `C:\Users\bs\.vscode-server`.
+New connections cannot be opened while the current Hermes TCP outage persists.
 
 ## Browser and RDP truth
 
-Verified reachable OMEN URLs:
+Initially reachable OMEN web-management URLs (currently unavailable with the Hermes TCP outage):
 
 - Hermes Windows Device Portal: `http://192.168.1.154:50080/`
 - Hermes Windows Device Portal TLS endpoint: `https://192.168.1.154:50443/`
 
-Certificate/authentication usability was not proven. Atlas port `9001` identifies Portainer Agent
-`2.39.5`, not a browser UI. No reachable Portainer UI, Open WebUI, Ollama HTTP endpoint, or common
-monitoring/status URL was discovered, so none is guessed here. Localhost-vs-LAN binding and safe SSH
-tunnel discovery on Hermes remain blocked by Hermes SSH authentication; no firewall or service
-exposure was changed.
+Atlas port `9001` identifies Portainer Agent `2.39.5`, not a browser UI. Hermes Docker publishes Open
+WebUI on `0.0.0.0:3000`, Portainer on `0.0.0.0:9000`, and Ollama on `0.0.0.0:11434`, but direct OMEN
+LAN requests time out. The safe proven access path is a local-only tunnel:
 
-OMEN has `mstsc.exe` and Hermes TCP/3389 is reachable. RDP is potentially useful for exceptional
-Windows GUI administration, but login/usefulness was not tested and it is not required for normal
-lab operation.
+```powershell
+ssh -N -L 127.0.0.1:13000:127.0.0.1:3000 -L 127.0.0.1:19000:127.0.0.1:9000 -L 127.0.0.1:21434:127.0.0.1:11434 hermes
+```
+
+While it runs, bookmark Open WebUI at `http://127.0.0.1:13000/`, Portainer at
+`http://127.0.0.1:19000/`, and the Ollama API at `http://127.0.0.1:21434/`. Each endpoint returned
+HTTP 200 during the transient proof, then the exact tunnel process was stopped. No current lab
+monitoring service was found. Port `8080` is legacy EDB PEM Apache, and ports `50080`/`50443` are
+Windows web management; neither is represented as the current operational radar.
+
+OMEN has `mstsc.exe`; Hermes TCP/3389 was reachable during initial discovery and later became
+unreachable with the broader TCP outage. RDP is potentially useful for exceptional Windows GUI
+administration, but login/usefulness was not tested and it is not required for normal lab operation.
