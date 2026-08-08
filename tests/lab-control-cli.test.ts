@@ -32,9 +32,9 @@ type FixtureMode =
   | "receipt-duplicate-run-id"
   | "receipt-direction-duplicate-run-id"
   | "receipt-task-evidence-duplicate-run-id"
-  | "receipt-task-start-mismatch"
-  | "receipt-later-task"
-  | "receipt-future-task"
+  | "receipt-task-before-window"
+  | "receipt-task-observed-after-completion"
+  | "receipt-task-after-window"
   | "receipt-only"
   | "receipt-hermes-death"
   | "receipt-task-state-incomplete"
@@ -151,14 +151,14 @@ function receiptFixture(mode: FixtureMode) {
     case "receipt-direction-run-id-mismatch":
       receipt.directions[1].run_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
       break
-    case "receipt-task-start-mismatch":
-      taskLastUtc = "2026-08-08T10:30:00.0000000Z"
+    case "receipt-task-before-window":
+      taskLastUtc = "2026-08-08T10:54:59.0000000Z"
       break
-    case "receipt-later-task":
-      taskLastUtc = "2026-08-08T11:00:10.0000000Z"
+    case "receipt-task-observed-after-completion":
+      taskLastUtc = "2026-08-08T11:00:59.0000000Z"
       break
-    case "receipt-future-task":
-      taskLastUtc = "2026-08-08T11:04:00.0000000Z"
+    case "receipt-task-after-window":
+      taskLastUtc = "2026-08-08T11:05:27.0000000Z"
       break
     case "receipt-task-state-incomplete":
       taskState = "Running"
@@ -393,6 +393,14 @@ describe("OMEN lab-control CLI", () => {
     expect(result.stdout).toContain("operator blocker: NONE")
   })
 
+  test("scheduled-task observation after evidence completion binds within the five-minute reporting grace", () => {
+    const result = runCommand("lab-status", "receipt-task-observed-after-completion")
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("latest cross-node sync: SYNC_OK")
+    expect(result.stdout).toContain("operator blocker: NONE")
+  })
+
   test.each([
     ["receipt-failed", "SYNC_FAILED"],
     ["receipt-stale", "SYNC_STALE"],
@@ -423,7 +431,8 @@ describe("OMEN lab-control CLI", () => {
     "receipt-duplicate-run-id",
     "receipt-direction-duplicate-run-id",
     "receipt-task-evidence-duplicate-run-id",
-    "receipt-task-start-mismatch",
+    "receipt-task-before-window",
+    "receipt-task-after-window",
     "receipt-task-state-incomplete",
     "receipt-task-evidence-out-of-order",
     "receipt-invalid-base64",
@@ -435,18 +444,6 @@ describe("OMEN lab-control CLI", () => {
     expect(result.stdout).toContain("latest cross-node sync: SYNC_FAILED")
     expect(result.stdout).toContain("operator blocker: REQUIRED_EVIDENCE_INCOMPLETE")
   })
-
-  test.each(["receipt-later-task", "receipt-future-task"] as const)(
-    "%s cannot bind an earlier receipt to a later scheduled-task run",
-    (mode) => {
-      const result = runCommand("lab-status", mode)
-
-      expect(result.status).toBe(2)
-      expect(result.stdout).toContain("latest cross-node sync: SYNC_FAILED")
-      expect(result.stdout).toContain("operator blocker: REQUIRED_EVIDENCE_INCOMPLETE")
-      expect(result.stdout).not.toContain("operator blocker: NONE")
-    },
-  )
 
   test.each([
     ["receipt-fresh", "SYNC_OK", 0],
