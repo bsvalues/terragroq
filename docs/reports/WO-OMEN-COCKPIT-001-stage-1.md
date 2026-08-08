@@ -238,7 +238,7 @@ OWNER_ROUTINE_CONTACT_COUNT=0
 
 ```text
 COMPLETE
-commit=pending-coordinator-completion-commit
+commit=20a1f452d22850374fabec3f8eedd2383baae1ad
 pr=529
 merge=null
 owner_operation_touch_count=0
