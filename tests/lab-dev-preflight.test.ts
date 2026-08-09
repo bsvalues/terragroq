@@ -20,6 +20,9 @@ type Mode =
   | "hermes-ollama-missing"
   | "atlas-unreachable"
   | "atlas-compose-mismatch"
+  | "atlas-compose-missing"
+  | "atlas-compose-extra"
+  | "atlas-compose-malformed"
   | "database-isolation-missing"
   | "database-isolation-incidental-neon"
   | "database-isolation-affirmative-instruction"
@@ -138,7 +141,10 @@ echo tf-redis^|redis:7^|running^|healthy^|6379
 echo tf-mongo^|mongo:7^|running^|healthy^|27017
 echo portainer_agent^|portainer/agent:latest^|running^|healthy^|9001
 if "%LAB_DEV_TEST_MODE%"=="atlas-compose-mismatch" echo COMPOSE_SERVICES=tf-postgres& exit /b 0
-echo COMPOSE_SERVICES=portainer_agent,tf-mongo,tf-postgres,tf-redis
+if "%LAB_DEV_TEST_MODE%"=="atlas-compose-missing" echo COMPOSE_SERVICES=mongo,postgres& exit /b 0
+if "%LAB_DEV_TEST_MODE%"=="atlas-compose-extra" echo COMPOSE_SERVICES=mongo,postgres,redis,unexpected& exit /b 0
+if "%LAB_DEV_TEST_MODE%"=="atlas-compose-malformed" echo COMPOSE_SERVICES=portainer_agent,tf-mongo,tf-postgres,tf-redis,& exit /b 0
+echo COMPOSE_SERVICES=mongo,postgres,redis
 exit /b 0
 `, "utf8")
   return { git, ssh, log, terrafusion, williamos }
@@ -183,6 +189,12 @@ afterEach(() => {
 })
 
 describe("OMEN Stage 5 development preflight", () => {
+  test("declares the independent Atlas Compose service contract", () => {
+    const topology = JSON.parse(readFileSync(path.join(repoRoot, "config", "lab-dev-topology.json"), "utf8"))
+
+    expect(topology.nodes["atlas-node"].composeServices).toEqual(["mongo", "postgres", "redis"])
+  })
+
   test("accepts only the fully evidenced disposable configuration flow", () => {
     const result = runPreflight("healthy")
 
@@ -210,6 +222,9 @@ describe("OMEN Stage 5 development preflight", () => {
     "hermes-ollama-missing",
     "atlas-unreachable",
     "atlas-compose-mismatch",
+    "atlas-compose-missing",
+    "atlas-compose-extra",
+    "atlas-compose-malformed",
     "database-isolation-missing",
     "database-isolation-incidental-neon",
     "database-isolation-affirmative-instruction",

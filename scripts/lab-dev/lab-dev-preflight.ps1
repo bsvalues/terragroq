@@ -75,11 +75,17 @@ function Test-ContainerTopology {
   return $true
 }
 
-function Get-ComposeServices {
-  param([string[]]$Output)
+function Test-ComposeServiceTopology {
+  param([string[]]$Output, $ExpectedServices)
+  $expected = @($ExpectedServices)
+  if ($expected.Count -eq 0 -or @($expected | Where-Object { $_ -isnot [string] -or $_ -notmatch '^[a-z0-9][a-z0-9._-]*$' }).Count -ne 0) { return $false }
+  if (@($expected | Sort-Object -Unique).Count -ne $expected.Count) { return $false }
   $line = @($Output | Where-Object { $_.StartsWith("COMPOSE_SERVICES=") })
-  if ($line.Count -ne 1) { return $null }
-  return @($line[0].Substring("COMPOSE_SERVICES=".Length).Split(",") | Where-Object { $_ })
+  if ($line.Count -ne 1) { return $false }
+  $actual = @($line[0].Substring("COMPOSE_SERVICES=".Length).Split(","))
+  if ($actual.Count -eq 0 -or @($actual | Where-Object { $_ -notmatch '^[a-z0-9][a-z0-9._-]*$' }).Count -ne 0) { return $false }
+  if (@($actual | Sort-Object -Unique).Count -ne $actual.Count) { return $false }
+  return -not (Compare-Object -ReferenceObject @($expected | Sort-Object) -DifferenceObject @($actual | Sort-Object))
 }
 
 function Test-DatabaseIsolation {
@@ -139,9 +145,7 @@ docker compose -f '__COMPOSE_FILE__' config --services | sort | paste -sd, - | s
   $atlasProbe = Get-RemoteRecords $sshExecutable $manifest.nodes.'atlas-node'.sshAlias "printf %s $atlasEncoded | base64 -d | sh"
   $atlasRecords = Get-ContainerRecords $atlasProbe.Output
   $atlasExpected = $manifest.nodes.'atlas-node'.advertisedContainers
-  $atlasNames = @($atlasExpected.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object)
-  $composeNames = Get-ComposeServices $atlasProbe.Output
-  $composeMatches = $composeNames -and -not (Compare-Object -ReferenceObject $atlasNames -DifferenceObject @($composeNames | Sort-Object))
+  $composeMatches = Test-ComposeServiceTopology $atlasProbe.Output $manifest.nodes.'atlas-node'.composeServices
   $results.ATLAS_STATE_ENDPOINTS = if ($atlasProbe.ExitCode -eq 0 -and $atlasRecords -and $composeMatches -and (Test-ContainerTopology $atlasRecords ([PSCustomObject]@{}) $atlasExpected)) { "ADVERTISED" } else { "ATLAS_METADATA_UNAVAILABLE" }
   $results.WILLIAMOS_DB_ISOLATION = Test-DatabaseIsolation $williamosPath
   $allGreen = $results.TERRAFUSION_SOURCE -eq "READY" -and $results.WILLIAMOS_SOURCE -eq "READY" -and $results.HERMES_COMPUTE -eq "AVAILABLE" -and $results.ATLAS_STATE_ENDPOINTS -eq "ADVERTISED" -and $results.WILLIAMOS_DB_ISOLATION -eq "PRESERVED"
