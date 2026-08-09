@@ -60,11 +60,11 @@ function Test-ContainerTopology {
   $expected = @{}
   foreach ($property in $RequiredContainers.PSObject.Properties) { $expected[$property.Name] = [int]$property.Value }
   foreach ($property in $AdvertisedContainers.PSObject.Properties) { $expected[$property.Name] = [int]$property.Value }
-  $actualNames = @($Records | ForEach-Object { $_.Name } | Sort-Object -Unique)
-  $expectedNames = @($expected.Keys | Sort-Object)
-  if (Compare-Object -ReferenceObject $expectedNames -DifferenceObject $actualNames) { return $false }
+  $actualNames = @($Records | ForEach-Object { $_.Name } | Sort-Object -CaseSensitive -Unique)
+  $expectedNames = @($expected.Keys | Sort-Object -CaseSensitive)
+  if (Compare-Object -CaseSensitive -ReferenceObject $expectedNames -DifferenceObject $actualNames) { return $false }
   foreach ($name in $expectedNames) {
-    $record = @($Records | Where-Object { $_.Name -eq $name })
+    $record = @($Records | Where-Object { $_.Name -ceq $name })
     if ($record.Count -ne 1 -or $record[0].Running -ne "running" -or $record[0].Health -notin @("healthy", "none")) { return $false }
     $ports = @($record[0].PublishedPorts.Split(","))
     if ($ports.Count -ne 1 -or $ports[0] -notmatch '^[1-9]\d*$') { return $false }
@@ -78,14 +78,14 @@ function Test-ContainerTopology {
 function Test-ComposeServiceTopology {
   param([string[]]$Output, $ExpectedServices)
   $expected = @($ExpectedServices)
-  if ($expected.Count -eq 0 -or @($expected | Where-Object { $_ -isnot [string] -or $_ -notmatch '^[a-z0-9][a-z0-9._-]*$' }).Count -ne 0) { return $false }
-  if (@($expected | Sort-Object -Unique).Count -ne $expected.Count) { return $false }
+  if ($expected.Count -eq 0 -or @($expected | Where-Object { $_ -isnot [string] -or $_ -cnotmatch '^[a-z0-9][a-z0-9._-]*$' }).Count -ne 0) { return $false }
+  if (@($expected | Sort-Object -CaseSensitive -Unique).Count -ne $expected.Count) { return $false }
   $line = @($Output | Where-Object { $_.StartsWith("COMPOSE_SERVICES=") })
   if ($line.Count -ne 1) { return $false }
   $actual = @($line[0].Substring("COMPOSE_SERVICES=".Length).Split(","))
-  if ($actual.Count -eq 0 -or @($actual | Where-Object { $_ -notmatch '^[a-z0-9][a-z0-9._-]*$' }).Count -ne 0) { return $false }
-  if (@($actual | Sort-Object -Unique).Count -ne $actual.Count) { return $false }
-  return -not (Compare-Object -ReferenceObject @($expected | Sort-Object) -DifferenceObject @($actual | Sort-Object))
+  if ($actual.Count -eq 0 -or @($actual | Where-Object { $_ -cnotmatch '^[a-z0-9][a-z0-9._-]*$' }).Count -ne 0) { return $false }
+  if (@($actual | Sort-Object -CaseSensitive -Unique).Count -ne $actual.Count) { return $false }
+  return -not (Compare-Object -CaseSensitive -ReferenceObject @($expected | Sort-Object -CaseSensitive) -DifferenceObject @($actual | Sort-Object -CaseSensitive))
 }
 
 function Test-DatabaseIsolation {
@@ -107,9 +107,12 @@ function Test-CanonicalIntegerMap {
   if ($Actual -isnot [PSCustomObject]) { return $false }
   $properties = @($Actual.PSObject.Properties)
   if ($properties.Count -ne $Expected.Count) { return $false }
+  $actualNames = @($properties | ForEach-Object { $_.Name } | Sort-Object -CaseSensitive)
+  $expectedNames = @($Expected.Keys | Sort-Object -CaseSensitive)
+  if (Compare-Object -CaseSensitive -ReferenceObject $expectedNames -DifferenceObject $actualNames) { return $false }
   foreach ($name in $Expected.Keys) {
-    $property = $Actual.PSObject.Properties[$name]
-    if ($null -eq $property -or $property.Value -isnot [Int64] -or $property.Value -ne $Expected[$name]) { return $false }
+    $property = @($properties | Where-Object { $_.Name -ceq $name })
+    if ($property.Count -ne 1 -or $property[0].Value -isnot [Int64] -or $property[0].Value -ne $Expected[$name]) { return $false }
   }
   return $true
 }

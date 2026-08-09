@@ -18,6 +18,7 @@ type Mode =
   | "stale-remote-source"
   | "hermes-unreachable"
   | "hermes-ollama-missing"
+  | "hermes-container-case"
   | "atlas-unreachable"
   | "atlas-compose-mismatch"
   | "atlas-compose-missing"
@@ -29,6 +30,8 @@ type Mode =
   | "atlas-extra-port"
   | "atlas-malformed-port"
   | "atlas-payload-extra-port"
+  | "atlas-container-case"
+  | "atlas-compose-case"
 
 function fixture(mode: Mode, atlasOutput = "") {
   const root = mkdtempSync(path.join(tmpdir(), "lab-dev-preflight-"))
@@ -129,6 +132,12 @@ if "%target%"=="hermes" goto hermes
 if "%target%"=="atlas" goto atlas
 exit /b 9
 :hermes
+if "%LAB_DEV_TEST_MODE%"=="hermes-container-case" (
+  echo OLLAMA^|ollama/ollama:latest^|running^|healthy^|11434
+  echo open-webui^|open-webui:latest^|running^|healthy^|3000
+  echo portainer^|portainer/portainer-ce:latest^|running^|healthy^|9000
+  exit /b 0
+)
 if "%LAB_DEV_TEST_MODE%"=="hermes-ollama-missing" (
   echo open-webui^|open-webui:latest^|running^|healthy^|3000
   echo portainer^|portainer/portainer-ce:latest^|running^|healthy^|9000
@@ -142,6 +151,7 @@ exit /b 0
 if "%LAB_DEV_TEST_MODE%"=="atlas-payload-extra-port" type "%LAB_DEV_TEST_ATLAS_OUTPUT%"& exit /b 0
 if "%LAB_DEV_TEST_MODE%"=="atlas-extra-port" echo tf-postgres^|postgres:16^|running^|healthy^|5432,unexpected& goto atlas_rest
 if "%LAB_DEV_TEST_MODE%"=="atlas-malformed-port" echo tf-postgres^|postgres:16^|running^|healthy^|5432,non-numeric& goto atlas_rest
+if "%LAB_DEV_TEST_MODE%"=="atlas-container-case" echo TF-POSTGRES^|postgres:16^|running^|healthy^|5432& goto atlas_rest
 echo tf-postgres^|postgres:16^|running^|healthy^|5432
 :atlas_rest
 echo tf-redis^|redis:7^|running^|healthy^|6379
@@ -151,6 +161,7 @@ if "%LAB_DEV_TEST_MODE%"=="atlas-compose-mismatch" echo COMPOSE_SERVICES=tf-post
 if "%LAB_DEV_TEST_MODE%"=="atlas-compose-missing" echo COMPOSE_SERVICES=mongo,postgres& exit /b 0
 if "%LAB_DEV_TEST_MODE%"=="atlas-compose-extra" echo COMPOSE_SERVICES=mongo,postgres,redis,unexpected& exit /b 0
 if "%LAB_DEV_TEST_MODE%"=="atlas-compose-malformed" echo COMPOSE_SERVICES=portainer_agent,tf-mongo,tf-postgres,tf-redis,& exit /b 0
+if "%LAB_DEV_TEST_MODE%"=="atlas-compose-case" echo COMPOSE_SERVICES=Mongo,postgres,redis& exit /b 0
 echo COMPOSE_SERVICES=mongo,postgres,redis
 exit /b 0
 `, "utf8")
@@ -265,6 +276,10 @@ describe("OMEN Stage 5 development preflight", () => {
     ["wrong WilliamOS branch", (manifest) => { manifest.sources.williamos.branch = "develop" }],
     ["wrong Hermes alias", (manifest) => { manifest.nodes.hermes.sshAlias = "other" }],
     ["wrong Hermes required map", (manifest) => { manifest.nodes.hermes.requiredContainers.ollama = 11435 }],
+    ["case-variant Hermes required map key", (manifest) => {
+      manifest.nodes.hermes.requiredContainers.OLLAMA = manifest.nodes.hermes.requiredContainers.ollama
+      delete manifest.nodes.hermes.requiredContainers.ollama
+    }],
     ["type-wrong Hermes advertised map", (manifest) => { manifest.nodes.hermes.advertisedContainers.portainer = "9000" }],
     ["wrong Atlas alias", (manifest) => { manifest.nodes["atlas-node"].sshAlias = "other" }],
     ["alternate Compose path", (manifest) => { manifest.nodes["atlas-node"].composeFile = "/tmp/terrafusion-data.yml" }],
@@ -343,6 +358,7 @@ describe("OMEN Stage 5 development preflight", () => {
     "stale-remote-source",
     "hermes-unreachable",
     "hermes-ollama-missing",
+    "hermes-container-case",
     "atlas-unreachable",
     "atlas-compose-mismatch",
     "atlas-compose-missing",
@@ -353,6 +369,8 @@ describe("OMEN Stage 5 development preflight", () => {
     "database-isolation-affirmative-instruction",
     "atlas-extra-port",
     "atlas-malformed-port",
+    "atlas-container-case",
+    "atlas-compose-case",
   ] as const)("fails closed for %s", (mode) => {
     expect(runPreflight(mode).status).toBe(2)
   })
