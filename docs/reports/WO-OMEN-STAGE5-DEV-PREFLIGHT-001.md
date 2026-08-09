@@ -15,7 +15,7 @@ OMEN proved current-source identity and bounded Hermes/Atlas capability metadata
 | Subject | Authority | Proof commit |
 | --- | --- | --- |
 | TerraFusion | `bsvalues/terrafusion_os_1.0` | `c7f2d78619a9eb19186c2c724876fb4d11c81b00` |
-| WilliamOS/control plane | `bsvalues/terragroq` | `8e60671b397fd67ad0ff8d64c2704d7c05b1ad55` |
+| WilliamOS/control plane | `bsvalues/terragroq` | `4f58224a48dc7c07803ffd3a2f5c186d44635299` |
 
 The live proof used clean linked worktrees containing each repository's live remote `main`. The TerraFusion worktree was not edited. `atlas-node` denotes the physical durable-state host; `atlas-suite` is a product/repository name and was not used as the host authority.
 
@@ -55,11 +55,11 @@ No application configuration, connection string, database schema, service bindin
 Task 1 validation at the live proof head:
 
 ```text
-FOCUSED_TESTS=20_PASSED
+FOCUSED_TESTS=32_PASSED
 FULL_SUITE_FILES=260_PASSED
-FULL_SUITE_TESTS=2589_PASSED
+FULL_SUITE_TESTS=2601_PASSED
 FULL_SUITE_TESTS_SKIPPED=2
-INDEPENDENT_TASK_1_REVIEW=CLEAN
+INDEPENDENT_TASK_1_REREVIEW=CLEAN
 ```
 
 The focused suite covered healthy output and fail-closed source, repository, worktree, endpoint, Compose-service, published-port, database-isolation, and prohibited-command cases. The production-faithful Atlas case separately validated Compose services from the independently advertised `portainer_agent` container.
