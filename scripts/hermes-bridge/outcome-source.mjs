@@ -1,7 +1,16 @@
 import { createHash } from "node:crypto"
 
-import { evaluateOutcomePolicy } from "./policy.mjs"
+import { evaluateOutcomePolicy, PROTECTED_SCOPE_LEXEMES } from "./policy.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
+import {
+  assertPrimaryDecisionPacketSafety,
+  assertPrimaryDecisionTextSafety,
+  derivePrimaryDecisionRecommendation,
+  isVerifiedPrimaryDecisionResponse,
+  PRIMARY_DECISION_OWNER_EMAIL,
+  PRIMARY_DECISION_TTL_MS,
+  primaryDecisionRequestDigest,
+} from "./primary-decision-provenance.mjs"
 
 export const OUTCOME_SELECTION_SQL = `
 SELECT
@@ -91,7 +100,7 @@ function persistedOwnerDecisionPacket(value) {
   }
   if (Object.values(packet).some((entry) => typeof entry !== "string" || entry.trim() === "")
     || packet.minimumChoice !== "APPROVE_OR_DENY") return null
-  return packet
+  return assertPrimaryDecisionPacketSafety(packet)
 }
 
 function canonicalJson(value) {
@@ -126,9 +135,280 @@ function ownerDecisionPacketDigest(packet) {
   return createHash("sha256").update(JSON.stringify(packet)).digest("hex")
 }
 
+export async function readPendingPrimaryDecisionRequest({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  ownerEmail,
+} = {}) {
+  if (typeof ownerEmail !== "string" || ownerEmail.trim() === "") {
+    throw Object.assign(new Error("Primary owner email is required"), {
+      code: "PRIMARY_DECISION_OWNER_INVALID",
+    })
+  }
+  let runQuery = normalizeQuery(query)
+  let pool
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = createHermesDatabasePool(Pool, databaseUrl)
+    runQuery = pool.query.bind(pool)
+  }
+  try {
+    const result = await runQuery(
+      `WITH candidates AS (
+       SELECT g.id AS "outcomeId", g.ref AS "goalRef", g."userId" AS "ownerUserId",
+         g.command AS "goalCommand", g.lane AS "goalLane", g.verdict AS "goalVerdict",
+         g."requiresApproval" AS "goalRequiresApproval",
+         wo.id AS "workOrderId", wo.ref AS "workOrderRef",
+         terminal.id AS "terminalEventId",
+         terminal."createdAt" AT TIME ZONE current_setting('TimeZone') AS "issuedAt",
+          terminal.metadata AS "terminalMetadata", q.id AS "queueItemId",
+          q."outcomeKey", q.version AS "queueVersion", q.title AS "queueTitle",
+          q.objective AS "queueObjective", q."riskClass", q."authorityLevel",
+          q."authoritySubject", q."authorityAction",
+          approval.id AS "approvalDecisionId", grant_row.ref AS "authorityGrantRef"
+       FROM goal g
+       JOIN "user" owner ON owner.id = g."userId" AND lower(owner.email) = lower($1)
+       JOIN work_order wo ON wo."userId" = g."userId"
+         AND wo.ref = 'WO-HERMES-OUTCOME-' || g.id::text
+         AND wo.result = 'OWNER_DECISION_REQUIRED'
+       JOIN "outcome_queue_item" q ON q."userId" = g."userId"
+         AND q."goalId" = g.id AND q."activeWorkOrderId" = wo.id
+       JOIN decision approval ON approval.id = q."approvalDecisionId"
+         AND approval."userId" = q."userId" AND approval.status = 'accepted'
+         AND approval.authority = 'binding'
+         AND upper(trim(approval.decision)) = 'APPROVE'
+         AND approval.scope = q."outcomeKey"
+       JOIN authority_grant grant_row ON grant_row."userId" = q."userId"
+         AND grant_row.ref = q."authorityGrantRef"
+         AND grant_row.status = 'active' AND grant_row."revokedAt" IS NULL
+         AND (grant_row."expiresAt" IS NULL
+           OR grant_row."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp())
+         AND grant_row."authorityLevel" = q."authorityLevel"
+         AND grant_row."grantedTo" = q."authoritySubject"
+         AND grant_row.scope = q."outcomeKey"
+         AND NOT EXISTS (
+           SELECT 1 FROM unnest(grant_row."blockedActions") blocked(action)
+           WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
+         )
+         AND (cardinality(grant_row."allowedActions") = 0 OR EXISTS (
+           SELECT 1 FROM unnest(grant_row."allowedActions") allowed(action)
+           WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
+         ))
+         AND (grant_row."workOrderId" IS NULL
+           OR grant_row."workOrderId" = q."activeWorkOrderId")
+       JOIN LATERAL (
+         SELECT event.id, event."createdAt", event.metadata
+         FROM governance_event event
+         WHERE event."userId" = g."userId" AND event."entityType" = 'goal'
+           AND event."entityId"::text = g.id::text
+           AND event."eventType" = 'HERMES_OUTCOME_TERMINAL'
+         ORDER BY event.id DESC LIMIT 1
+       ) terminal ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT lease.metadata
+         FROM governance_event lease
+         WHERE lease."userId" = g."userId" AND lease."entityType" = 'work_order'
+           AND lease."entityId"::text = wo.id::text
+           AND lease."eventType" = 'HERMES_RUNTIME_LEASE'
+         ORDER BY lease.id DESC LIMIT 1
+       ) latest_lease ON TRUE
+       WHERE g.status = 'dismissed' AND wo."linkedDecisionId" IS NULL
+         AND terminal.metadata->>'result' = 'OWNER_DECISION_REQUIRED'
+         AND q."riskClass" IN ('R0', 'R1')
+         AND q."lifecycleState" = 'blocked'
+         AND q."approvalState" = 'approved'
+         AND q."authorityState" = 'matched'
+         AND q."authoritySubject" = 'operator'
+         AND q."authorityAction" = 'outcome:execute'
+         AND COALESCE(latest_lease.metadata->>'leaseStatus', 'RELEASED') <> 'ACTIVE'
+         AND concat_ws(' ', q."outcomeKey", q.title, COALESCE(q.objective, '')) !~*
+           '\\m(terrafusion|terrapilot|property[[:space:]]+workbench|county|pacs|parcel|taxpayer|protected[[:space:]]+data|secret|password|credential|api[ -]?key|access[ -]?token|private[[:space:]]+key|paid[[:space:]]+overage|destructive|issue[[:space:]]*#?357)\\M|#357\\M'
+       ORDER BY terminal.id ASC
+       LIMIT 2
+      ) SELECT * FROM candidates`,
+      [ownerEmail.trim().toLowerCase()],
+    )
+    const rows = Array.isArray(result?.rows) ? result.rows : []
+    if (rows.length === 0) return null
+    if (rows.length !== 1) {
+      throw Object.assign(new Error("Primary decision request is ambiguous"), {
+        code: "PRIMARY_DECISION_AMBIGUOUS",
+      })
+    }
+    const row = rows[0]
+    const decisionPacket = persistedOwnerDecisionPacket(row.terminalMetadata)
+    const expectedNextState = row.terminalMetadata?.nextState
+    const ids = [row.outcomeId, row.queueItemId, row.workOrderId, row.terminalEventId].map(Number)
+    const queueVersion = Number(row.queueVersion)
+    const approvalDecisionId = Number(row.approvalDecisionId)
+    const issuedAt = normalizedTimestamp(row.issuedAt)
+    if (!decisionPacket || ids.some((value) => !Number.isSafeInteger(value) || value <= 0)
+      || typeof expectedNextState !== "string"
+      || !/^[A-Z][A-Z0-9_]{1,79}$/.test(expectedNextState)
+      || !Number.isSafeInteger(queueVersion) || queueVersion < 0
+      || !Number.isSafeInteger(approvalDecisionId) || approvalDecisionId <= 0
+      || typeof row.authorityGrantRef !== "string" || row.authorityGrantRef.trim() === ""
+      || !issuedAt) {
+      throw Object.assign(new Error("Primary decision request is malformed"), {
+        code: "PRIMARY_DECISION_REQUEST_INVALID",
+      })
+    }
+    requirePrimaryDecisionPolicy(row, decisionPacket)
+    const recommendation = derivePrimaryDecisionRecommendation({
+      riskClass: row.riskClass,
+      decisionPacket,
+    })
+    return Object.freeze({
+      outcomeId: ids[0],
+      queueItemId: ids[1],
+      workOrderId: ids[2],
+      terminalEventId: ids[3],
+      ownerUserId: row.ownerUserId,
+      goalRef: row.goalRef,
+      workOrderRef: row.workOrderRef,
+      outcomeKey: row.outcomeKey,
+      queueVersion,
+      riskClass: row.riskClass,
+      authorityLevel: row.authorityLevel,
+      authoritySubject: row.authoritySubject,
+      authorityAction: row.authorityAction,
+      approvalDecisionId,
+      authorityGrantRef: row.authorityGrantRef,
+      recommendation: recommendation.choice,
+      recommendationRationale: recommendation.rationale,
+      allowedChoices: Object.freeze(["APPROVE", "DENY"]),
+      expectedNextState,
+      issuedAt,
+      decisionPacket,
+      decisionPacketDigest: ownerDecisionPacketDigest(decisionPacket),
+    })
+  } finally {
+    if (pool) await pool.end()
+  }
+}
+
 function normalizedTimestamp(value) {
   const milliseconds = value instanceof Date ? value.getTime() : Date.parse(String(value ?? ""))
   return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : null
+}
+
+function primaryDecisionPolicyProjection(row, decisionPacket) {
+  const protectedLexemes = PROTECTED_SCOPE_LEXEMES
+  const protectedSplitVariants = (value) => {
+    const tokens = value.trim().split(/\s+/)
+    const reconstructed = []
+    let changed = false
+    for (let start = 0; start < tokens.length;) {
+      let combined = ""
+      let match = null
+      for (let end = start; end < tokens.length; end += 1) {
+        if (!/^[A-Za-z0-9]+$/.test(tokens[end])) break
+        combined += tokens[end].toLowerCase()
+        const protectedMatch = Object.keys(protectedLexemes).find((lexeme) => (
+          lexeme.length === combined.length
+          && [...lexeme].every((character, index) => (
+            character === combined[index]
+            || (/[il]/.test(character) && /[il]/.test(combined[index]))
+          ))
+        ))
+        if (end === start || !protectedMatch) continue
+        if (protectedMatch === "token" && /^to$/i.test(tokens[start]) && tokens[end] === "Ken") continue
+        match = { end, value: protectedLexemes[protectedMatch] }
+      }
+      if (match) {
+        reconstructed.push(match.value)
+        start = match.end + 1
+        changed = true
+      } else {
+        reconstructed.push(tokens[start])
+        start += 1
+      }
+    }
+    return changed ? [reconstructed.join(" ")] : []
+  }
+  const safeText = (value) => {
+    if (typeof value !== "string") return value
+    const text = assertPrimaryDecisionTextSafety(value)
+    return text
+  }
+  const policyComparableText = (value) => {
+    const safeValue = safeText(value)
+    const canonicalizeAsciiConfusables = (candidate) => candidate.replace(/[A-Za-z]+/g, (word) => {
+      const lower = word.toLowerCase()
+      const match = Object.keys(protectedLexemes).find((lexeme) => (
+        lexeme.length === lower.length
+        && [...lexeme].every((character, index) => (
+          character === lower[index]
+          || (/[il]/.test(character) && /[il]/.test(lower[index]))
+        ))
+      ))
+      return match ? protectedLexemes[match] : word
+    })
+    const fold = (candidate, one) => candidate.replace(/[01345789@$!|]/g, (character) => ({
+      "0": "o", "1": one, "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "9": "g",
+      "@": "a", "$": "s", "!": "i", "|": "l",
+    })[character])
+    const variants = new Set([safeValue])
+    const pending = [safeValue]
+    while (pending.length > 0) {
+      const candidate = pending.shift()
+      const transformed = [
+        canonicalizeAsciiConfusables(candidate),
+        fold(candidate, "l"),
+        fold(candidate, "i"),
+        candidate.replace(/[^A-Za-z\s]/g, ""),
+        candidate.replace(/[^A-Za-z]+/g, " "),
+        ...protectedSplitVariants(candidate),
+      ]
+      for (const variant of transformed) {
+        if (variants.has(variant)) continue
+        variants.add(variant)
+        pending.push(variant)
+        if (variants.size > 128) {
+          throw Object.assign(new Error("Primary decision policy normalization exceeded safe bounds"), {
+            code: "PRIMARY_DECISION_REQUEST_INVALID",
+          })
+        }
+      }
+    }
+    return [...variants]
+  }
+  const commandFields = [
+    row?.outcomeKey,
+    row?.goalCommand,
+    row?.queueTitle,
+    row?.queueObjective,
+    ...Object.values(decisionPacket ?? {}),
+  ].filter((value) => typeof value === "string").map(safeText)
+  return {
+    command: [...commandFields, ...commandFields.flatMap(policyComparableText)].join("\n"),
+    title: safeText(row?.queueTitle),
+    description: safeText(row?.queueObjective),
+    lane: safeText(row?.goalLane),
+    risk: row?.riskClass,
+    authority: safeText(row?.authorityLevel),
+    verdict: safeText(row?.goalVerdict),
+    requiresApproval: row?.goalRequiresApproval,
+  }
+}
+
+function requirePrimaryDecisionPolicy(row, decisionPacket) {
+  const decision = evaluateOutcomePolicy({
+    outcome: primaryDecisionPolicyProjection(row, decisionPacket),
+    actor: "bsvalues",
+    repository: "bsvalues/terragroq",
+    enabled: true,
+    standingAuthority: true,
+  })
+  if (!decision.allowed) {
+    throw Object.assign(new Error("Primary decision is outside the bounded bridge policy"), {
+      code: "PRIMARY_DECISION_POLICY_WALL",
+      reasonCode: decision.reasonCode,
+    })
+  }
 }
 
 function validateOwnerDecisionInput({ outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState }) {
@@ -164,13 +444,43 @@ export async function recordOwnerAuthorityDecision({
   query,
   databaseUrl = process.env.DATABASE_URL,
   outcomeId,
+  queueItemId = null,
   workOrderId,
   terminalEventId,
   ownerUserId,
   choice,
   expectedNextState,
+  primaryDecisionProvenance = null,
 } = {}) {
   validateOwnerDecisionInput({ outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState })
+  if (primaryDecisionProvenance !== null
+    && !isVerifiedPrimaryDecisionResponse(primaryDecisionProvenance)) {
+    throw Object.assign(new Error("primary decision provenance is invalid"), {
+      code: "PRIMARY_DECISION_PROVENANCE_WALL",
+    })
+  }
+  if (primaryDecisionProvenance !== null && primaryDecisionProvenance.choice !== choice) {
+    throw Object.assign(new Error("primary decision provenance does not bind this choice"), {
+      code: "PRIMARY_DECISION_PROVENANCE_WALL",
+    })
+  }
+  if (primaryDecisionProvenance !== null
+    && (!Number.isSafeInteger(queueItemId) || queueItemId <= 0)) {
+    throw Object.assign(new Error("primary decision queue identity is invalid"), {
+      code: "PRIMARY_DECISION_PROVENANCE_WALL",
+    })
+  }
+  const provenance = primaryDecisionProvenance === null ? null : {
+    version: primaryDecisionProvenance.version,
+    identityStatus: primaryDecisionProvenance.identityStatus,
+    accountEmail: primaryDecisionProvenance.accountEmail,
+    choice: primaryDecisionProvenance.choice,
+    requestDigest: primaryDecisionProvenance.requestDigest,
+    requestSnapshot: primaryDecisionProvenance.requestSnapshot,
+    responseDigest: primaryDecisionProvenance.responseDigest,
+    issuedAt: primaryDecisionProvenance.issuedAt,
+    expiresAt: primaryDecisionProvenance.expiresAt,
+  }
   const requestKey = ownerDecisionRequestKey({ outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState })
   const terminalKey = ownerDecisionTerminalKey({ outcomeId, workOrderId, terminalEventId })
   const decisionRef = `OWNER-DECISION-${outcomeId}-${terminalEventId}`
@@ -183,6 +493,10 @@ export async function recordOwnerAuthorityDecision({
     `request:${requestKey}`,
     `terminal-binding:${terminalKey}`,
     `choice:${choice}`,
+    ...(provenance ? [
+      `primary-request:${provenance.requestDigest}`,
+      `primary-response:${provenance.responseDigest}`,
+    ] : []),
   ]
   let runQuery = normalizeQuery(query)
   let pool
@@ -204,7 +518,8 @@ export async function recordOwnerAuthorityDecision({
     await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [terminalKey])
     const binding = await runQuery(
        `WITH goal_any AS (
-         SELECT id, "userId" AS "goalUserId", status, ref
+         SELECT id, "userId" AS "goalUserId", status, ref, command,
+           lane, verdict, "requiresApproval"
          FROM goal WHERE id = $1::integer
          FOR UPDATE
        ), work_order_any AS (
@@ -236,6 +551,49 @@ export async function recordOwnerAuthorityDecision({
             AND "eventType" = 'HERMES_RUNTIME_LEASE'
          ORDER BY id DESC
          LIMIT 1
+       ), queue_item AS (
+          SELECT id, "outcomeKey", version AS "queueVersion", title, objective, "riskClass", "approvalState",
+           "approvalDecisionId", "authorityState", "authorityGrantRef",
+           "authorityLevel", "authoritySubject", "authorityAction", "lifecycleState",
+           "activeWorkOrderId"
+         FROM outcome_queue_item
+         WHERE "userId" = $4 AND "goalId" = $1::integer
+           AND ($7::integer IS NULL OR id = $7::integer)
+           AND "activeWorkOrderId" = $2::integer
+         ORDER BY id DESC
+         LIMIT 1
+         FOR UPDATE
+       ), live_approval AS (
+         SELECT approval.id
+         FROM decision approval
+         JOIN queue_item q ON approval.id = q."approvalDecisionId"
+         WHERE approval."userId" = $4 AND approval.status = 'accepted'
+           AND approval.authority = 'binding'
+           AND upper(trim(approval.decision)) = 'APPROVE'
+           AND approval.scope = q."outcomeKey"
+         FOR SHARE
+       ), live_grant AS (
+          SELECT grant_row.id, grant_row.ref
+         FROM authority_grant grant_row
+         JOIN queue_item q ON grant_row."ref" = q."authorityGrantRef"
+         WHERE grant_row."userId" = $4 AND grant_row.status = 'active'
+           AND grant_row."revokedAt" IS NULL
+           AND (grant_row."expiresAt" IS NULL
+             OR grant_row."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp())
+           AND grant_row."authorityLevel" = q."authorityLevel"
+           AND grant_row."grantedTo" = q."authoritySubject"
+           AND grant_row.scope = q."outcomeKey"
+           AND NOT EXISTS (
+             SELECT 1 FROM unnest(grant_row."blockedActions") blocked(action)
+             WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
+           )
+           AND (cardinality(grant_row."allowedActions") = 0 OR EXISTS (
+             SELECT 1 FROM unnest(grant_row."allowedActions") allowed(action)
+             WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
+           ))
+           AND (grant_row."workOrderId" IS NULL
+             OR grant_row."workOrderId" = q."activeWorkOrderId")
+         FOR SHARE
        ), prior_request AS (
          SELECT id AS "decisionId", ref AS "decisionRef", status, decision,
            authority, scope, evidence, "decidedAt"
@@ -256,8 +614,12 @@ export async function recordOwnerAuthorityDecision({
           FROM work_order_any wo
           JOIN decision d ON d.id = wo."linkedDecisionId"
         )
-       SELECT goal_any.id AS "goalId", goal_any."goalUserId", goal_any.status AS "goalStatus",
-         goal_any.ref AS "goalRef", work_order_any.id AS "workOrderId",
+       SELECT clock_timestamp() AS "transactionNow",
+         goal_any.id AS "goalId", goal_any."goalUserId", goal_any.status AS "goalStatus",
+         goal_any.ref AS "goalRef", goal_any.command AS "goalCommand",
+         goal_any.lane AS "goalLane", goal_any.verdict AS "goalVerdict",
+         goal_any."requiresApproval" AS "goalRequiresApproval",
+         work_order_any.id AS "workOrderId",
          work_order_any."workOrderUserId", work_order_any.ref AS "workOrderRef",
          work_order_any.status AS "workOrderStatus",
          work_order_any."linkedDecisionId" AS "workOrderLinkedDecisionId",
@@ -266,10 +628,19 @@ export async function recordOwnerAuthorityDecision({
          requested_terminal.id AS "requestedTerminalId", requested_terminal."requestedTerminalUserId",
          requested_terminal.metadata AS "requestedTerminalMetadata",
          latest_lease.metadata AS "latestLeaseMetadata",
+          queue_item.id AS "queueItemId", queue_item.title AS "queueTitle",
+          queue_item."outcomeKey", queue_item."queueVersion",
+          queue_item.objective AS "queueObjective", queue_item."riskClass",
+          queue_item."approvalState", queue_item."authorityState", queue_item."authorityLevel",
+          queue_item."authoritySubject", queue_item."authorityAction",
+          queue_item."approvalDecisionId", queue_item."authorityGrantRef",
+          queue_item."lifecycleState", queue_item."activeWorkOrderId",
+          live_approval.id AS "liveApprovalId", live_grant.id AS "liveGrantId",
+          live_grant.ref AS "liveGrantRef",
          prior_request."decisionId", prior_request."decisionRef", prior_request.status AS "priorStatus",
          prior_request.decision AS "priorChoice", prior_request.authority AS "priorAuthority",
          prior_request.scope AS "priorScope", prior_request.evidence AS "priorEvidence",
-         prior_request."decidedAt" AS "priorDecidedAt",
+         prior_request."decidedAt" AT TIME ZONE 'UTC' AS "priorDecidedAt",
          consumed_binding."consumedDecisionId", consumed_binding."consumedDecisionRef",
           consumed_binding."consumedStatus", consumed_binding."consumedChoice",
           consumed_binding."consumedAuthority",
@@ -280,10 +651,13 @@ export async function recordOwnerAuthorityDecision({
        LEFT JOIN latest_terminal ON TRUE
        LEFT JOIN requested_terminal ON TRUE
         LEFT JOIN latest_lease ON TRUE
+        LEFT JOIN queue_item ON TRUE
+        LEFT JOIN live_approval ON TRUE
+        LEFT JOIN live_grant ON TRUE
         LEFT JOIN prior_request ON TRUE
         LEFT JOIN consumed_binding ON TRUE
         LEFT JOIN linked_work_order_decision ON TRUE`,
-      [outcomeId, workOrderId, terminalEventId, ownerUserId, requestKey, terminalKey],
+      [outcomeId, workOrderId, terminalEventId, ownerUserId, requestKey, terminalKey, queueItemId],
     )
     const row = binding?.rows?.[0] ?? {}
     if (row.goalUserId != null && row.goalUserId !== ownerUserId
@@ -329,7 +703,61 @@ export async function recordOwnerAuthorityDecision({
         code: "OWNER_DECISION_STALE",
       })
     }
+    const requestSnapshot = provenance?.requestSnapshot
+    const currentRecommendation = provenance ? derivePrimaryDecisionRecommendation({
+      riskClass: row.riskClass,
+      decisionPacket,
+    }) : null
+    if (provenance && (provenance.version !== 2 || !requestSnapshot
+      || row.queueItemId == null
+      || row.liveApprovalId == null
+      || row.liveGrantId == null
+      || row.outcomeKey !== requestSnapshot.outcomeKey
+      || Number(row.queueVersion) !== requestSnapshot.queueVersion
+      || row.riskClass !== requestSnapshot.riskClass
+      || row.authorityLevel !== requestSnapshot.authorityLevel
+      || row.authoritySubject !== requestSnapshot.authoritySubject
+      || row.authorityAction !== requestSnapshot.authorityAction
+      || Number(row.approvalDecisionId) !== requestSnapshot.approvalDecisionId
+      || Number(row.liveApprovalId) !== requestSnapshot.approvalDecisionId
+      || row.authorityGrantRef !== requestSnapshot.authorityGrantRef
+      || row.liveGrantRef !== requestSnapshot.authorityGrantRef
+      || requestSnapshot.recommendation !== currentRecommendation.choice
+      || requestSnapshot.recommendationRationale !== currentRecommendation.rationale
+      || JSON.stringify(requestSnapshot.allowedChoices) !== JSON.stringify(["APPROVE", "DENY"])
+      || Number(row.activeWorkOrderId) !== workOrderId
+      || row.lifecycleState !== "blocked"
+      || row.approvalState !== "approved"
+      || row.authorityState !== "matched"
+      || row.authoritySubject !== "operator"
+      || row.authorityAction !== "outcome:execute"
+      || !["R0", "R1"].includes(row.riskClass))) {
+      throw Object.assign(new Error("Primary decision queue authority changed before recording"), {
+        code: "PRIMARY_DECISION_AUTHORITY_STALE",
+      })
+    }
+    if (provenance && (!Number.isFinite(Date.parse(provenance.expiresAt))
+      || !Number.isFinite(Date.parse(row.transactionNow))
+      || Date.parse(row.transactionNow) > Date.parse(provenance.expiresAt))) {
+      throw Object.assign(new Error("Primary decision response expired before recording"), {
+        code: "PRIMARY_DECISION_EXPIRED",
+      })
+    }
+    if (provenance) requirePrimaryDecisionPolicy(row, decisionPacket)
     const decisionPacketDigest = ownerDecisionPacketDigest(decisionPacket)
+    if (provenance && provenance.requestDigest !== primaryDecisionRequestDigest({
+      outcomeId,
+      queueItemId,
+      workOrderId,
+       terminalEventId,
+       expectedNextState,
+       decisionPacketDigest,
+       ...requestSnapshot,
+     })) {
+      throw Object.assign(new Error("primary decision provenance does not bind this request"), {
+        code: "PRIMARY_DECISION_PROVENANCE_WALL",
+      })
+    }
     const evidence = [...evidenceBase, `decision-packet:${decisionPacketDigest}`]
     const status = choice === "APPROVE" ? "accepted" : "rejected"
     if (row.decisionId != null) {
@@ -348,6 +776,8 @@ export async function recordOwnerAuthorityDecision({
       const priorPayload = {
         outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState,
         decisionId: prior.decisionId, decisionRef, requestKey, decisionPacket, decisionPacketDigest,
+        ...(provenance ? { queueItemId } : {}),
+        ...(provenance ? { primaryDecisionProvenance: provenance } : {}),
       }
       const priorNotes = canonicalJson(priorPayload)
       const priorEvidenceHash = createHash("sha256").update(priorNotes).digest("hex")
@@ -414,16 +844,33 @@ export async function recordOwnerAuthorityDecision({
     }
 
     const recorded = await runQuery(
-      `INSERT INTO decision
+      `WITH write_clock AS (
+         SELECT clock_timestamp() AS recorded_at
+       )
+       INSERT INTO decision
          ("userId", ref, title, context, decision, rationale, status, authority, owner, scope, evidence, tags, "decidedAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'binding', $1, $8, $9::text[], $10::text[], NOW())
-       RETURNING id, ref, status, decision, "decidedAt"`,
+       SELECT $1, $2, $3, $4, $5, $6, $7, 'binding', $1, $8, $9::text[], $10::text[],
+         timezone('UTC', write_clock.recorded_at)
+       FROM write_clock
+       WHERE $11::timestamptz IS NULL OR (
+         write_clock.recorded_at <= $11::timestamptz
+         AND EXISTS (
+           SELECT 1 FROM authority_grant grant_row
+           WHERE grant_row.id = $12::integer
+             AND grant_row.status = 'active' AND grant_row."revokedAt" IS NULL
+             AND (grant_row."expiresAt" IS NULL
+               OR grant_row."expiresAt" AT TIME ZONE 'UTC' > write_clock.recorded_at)
+         )
+       )
+       RETURNING id, ref, status, decision,
+         "decidedAt" AT TIME ZONE 'UTC' AS "decidedAt"`,
       [
         ownerUserId,
         decisionRef,
         `Owner authority decision for ${terminalKey}`,
         JSON.stringify({
           outcomeId, workOrderId, terminalEventId, expectedNextState, requestKey,
+          ...(provenance ? { queueItemId } : {}),
           decisionPacket, decisionPacketDigest,
         }),
         choice,
@@ -432,6 +879,8 @@ export async function recordOwnerAuthorityDecision({
         scope,
         evidence,
         ["HERMES_OWNER_AUTHORITY_DECISION", choice],
+        provenance?.expiresAt ?? null,
+        provenance ? row.liveGrantId : null,
       ],
     )
     const decisionRow = recorded?.rows?.[0]
@@ -454,6 +903,8 @@ export async function recordOwnerAuthorityDecision({
     const evidencePayload = {
       outcomeId, workOrderId, terminalEventId, ownerUserId, choice, expectedNextState,
       decisionId: decisionRow.id, decisionRef, requestKey, decisionPacket, decisionPacketDigest,
+      ...(provenance ? { queueItemId } : {}),
+      ...(provenance ? { primaryDecisionProvenance: provenance } : {}),
     }
     const evidenceInserted = await runQuery(
       `INSERT INTO evidence_record
@@ -576,7 +1027,7 @@ export async function readApprovedOwnerDecision({
   try {
     const result = await runQuery(
       `WITH latest_terminal AS (
-       SELECT id, metadata
+       SELECT id, metadata, "createdAt"
          , "userId" AS "terminalUserId"
        FROM governance_event
          WHERE "entityType" = 'goal' AND "entityId"::text = $1::text
@@ -593,8 +1044,10 @@ export async function readApprovedOwnerDecision({
        )
        SELECT d.id AS "decisionId", d.ref AS "decisionRef", d.status,
          d.decision AS choice, d.authority, d.scope, d.evidence,
-         d."decidedAt", g.id AS "outcomeId", wo.id AS "workOrderId",
+         d."decidedAt" AT TIME ZONE 'UTC' AS "decidedAt",
+         g.id AS "outcomeId", wo.id AS "workOrderId",
          terminal.id AS "terminalEventId", terminal.metadata AS "terminalMetadata",
+         terminal."createdAt" AT TIME ZONE current_setting('TimeZone') AS "terminalIssuedAt",
          receipt.id AS "receiptEventId", ev.id AS "evidenceRecordId",
          ev.notes AS "evidenceNotes", ev."contentHash" AS "evidenceContentHash",
          receipt.metadata AS "receiptMetadata",
@@ -661,7 +1114,67 @@ export async function readApprovedOwnerDecision({
       choice: "APPROVE",
       expectedNextState,
     }) : null
-    const expectedEvidence = decisionPacketDigest ? [
+    let storedPayload = null
+    try {
+      storedPayload = JSON.parse(row?.evidenceNotes ?? "null")
+    } catch {}
+    const storedProvenance = storedPayload?.primaryDecisionProvenance
+    const hasStoredProvenance = storedPayload !== null
+      && Object.hasOwn(storedPayload, "primaryDecisionProvenance")
+    let storedRecommendation = null
+    if (hasStoredProvenance) {
+      try {
+        storedRecommendation = derivePrimaryDecisionRecommendation({
+          riskClass: storedProvenance?.requestSnapshot?.riskClass,
+          decisionPacket,
+        })
+      } catch {}
+    }
+    let expectedRequestDigest = null
+    if (decisionPacketDigest && hasStoredProvenance) {
+      try {
+        expectedRequestDigest = primaryDecisionRequestDigest({
+          outcomeId,
+          queueItemId: Number(storedPayload?.queueItemId),
+          workOrderId: resolvedWorkOrderId,
+          terminalEventId: resolvedTerminalEventId,
+          expectedNextState,
+          decisionPacketDigest,
+          ...storedProvenance?.requestSnapshot,
+        })
+      } catch {}
+    }
+    const validStoredProvenance = hasStoredProvenance
+      && Number.isSafeInteger(Number(storedPayload?.queueItemId))
+      && Number(storedPayload.queueItemId) > 0
+      && storedProvenance?.version === 2
+      && storedRecommendation !== null
+      && storedProvenance?.requestSnapshot?.recommendation === storedRecommendation.choice
+      && storedProvenance?.requestSnapshot?.recommendationRationale === storedRecommendation.rationale
+      && storedProvenance?.identityStatus === "VERIFIED_PRIMARY_CODEX_APP_SERVER"
+      && storedProvenance?.accountEmail === PRIMARY_DECISION_OWNER_EMAIL
+      && storedProvenance?.choice === row.choice
+      && storedProvenance?.requestDigest === expectedRequestDigest
+      && typeof storedProvenance?.responseDigest === "string"
+      && /^[a-f0-9]{64}$/.test(storedProvenance.responseDigest)
+      && Number.isFinite(Date.parse(storedProvenance.issuedAt))
+      && Date.parse(storedProvenance.issuedAt) >= Date.parse(row?.terminalIssuedAt)
+      && Date.parse(storedProvenance.issuedAt) <= Date.parse(row?.decidedAt)
+      && Number.isFinite(Date.parse(storedProvenance.expiresAt))
+      && Date.parse(storedProvenance.expiresAt) - Date.parse(storedProvenance.issuedAt) === PRIMARY_DECISION_TTL_MS
+      && Date.parse(row?.decidedAt) <= Date.parse(storedProvenance.expiresAt)
+    const provenance = validStoredProvenance ? {
+      version: storedProvenance.version,
+      identityStatus: storedProvenance.identityStatus,
+      accountEmail: storedProvenance.accountEmail,
+      choice: storedProvenance.choice,
+      requestDigest: storedProvenance.requestDigest,
+      requestSnapshot: storedProvenance.requestSnapshot,
+      responseDigest: storedProvenance.responseDigest,
+      issuedAt: storedProvenance.issuedAt,
+      expiresAt: storedProvenance.expiresAt,
+    } : null
+    const expectedEvidence = decisionPacketDigest && (!hasStoredProvenance || provenance) ? [
       `outcome:${outcomeId}`,
       `work-order:${resolvedWorkOrderId}`,
       `terminal-event:${resolvedTerminalEventId}`,
@@ -671,6 +1184,10 @@ export async function readApprovedOwnerDecision({
         outcomeId, workOrderId: resolvedWorkOrderId, terminalEventId: resolvedTerminalEventId,
       })}`,
       "choice:APPROVE",
+      ...(provenance ? [
+        `primary-request:${provenance.requestDigest}`,
+        `primary-response:${provenance.responseDigest}`,
+      ] : []),
       `decision-packet:${decisionPacketDigest}`,
     ] : null
     const evidencePayload = decisionPacket ? {
@@ -685,6 +1202,8 @@ export async function readApprovedOwnerDecision({
       requestKey,
       decisionPacket,
       decisionPacketDigest,
+      ...(provenance ? { queueItemId: Number(storedPayload.queueItemId) } : {}),
+      ...(provenance ? { primaryDecisionProvenance: provenance } : {}),
     } : null
     const evidenceNotes = evidencePayload ? canonicalJson(evidencePayload) : null
     const expectedAudit = evidencePayload ? {

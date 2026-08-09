@@ -86,6 +86,13 @@ export function NeedsMyDecisionPanel({
                 <DecisionDetail label="Blocked action" value={item.blockedAction} />
               </dl>
 
+              <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                You can answer <span className="font-medium text-foreground">Approve</span> or{" "}
+                <span className="font-medium text-foreground">Deny</span> or{" "}
+                <span className="font-medium text-foreground">Decline</span> in the authenticated
+                Codex task that presented this exact request. Secure replies expire after one hour.
+              </p>
+
               <div className="mt-4">
                 <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
                   Available choices
