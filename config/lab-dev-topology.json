@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "workOrderId": "WO-OMEN-STAGE5-DEV-PREFLIGHT-001",
+  "sources": {
+    "terrafusion": { "repository": "bsvalues/terrafusion_os_1.0", "branch": "main", "canonicalMarker": "PATH_CANON_REGISTER.md" },
+    "williamos": { "repository": "bsvalues/terragroq", "branch": "main", "databaseAuthority": "NEON_SEPARATE" }
+  },
+  "nodes": {
+    "hermes": { "sshAlias": "hermes", "requiredContainers": { "ollama": 11434 }, "advertisedContainers": { "open-webui": 3000, "portainer": 9000 } },
+    "atlas-node": { "sshAlias": "atlas", "composeFile": "/home/bs/terrafusion/terrafusion-data.yml", "advertisedContainers": { "tf-postgres": 5432, "tf-redis": 6379, "tf-mongo": 27017, "portainer_agent": 9001 } }
+  },
+  "policies": { "williamosUsesAtlasDatabase": false, "databaseQueriesAllowed": false, "forgeInspectionAllowed": false }
+}
