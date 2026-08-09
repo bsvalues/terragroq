@@ -8,6 +8,90 @@ STATUS=READY_FOR_DISPOSABLE_CONFIGURATION_PROOF
 OWNER_ACTION_REQUIRED=false
 ```
 
+## Work-order packet
+
+```yaml
+schemaVersion: 2
+workOrderId: WO-OMEN-STAGE5-DEV-PREFLIGHT-001
+programId: PROGRAM-OMEN-STAGE5-DEV-FLOW-001
+goalId: GOAL-OMEN-STAGE5-DEV-FLOW-001
+loopId: LOOP-OMEN-STAGE5-PREFLIGHT
+objective: Prove current-source identity and bounded Hermes/Atlas advertised capabilities before disposable configuration.
+riskClass: R1
+repositories: [bsvalues/terragroq]
+baseRefs: [e146e2ba7759019b41a474ece7d7b3dc63c13b9c]
+dependencies: [WO-OMEN-COCKPIT-001]
+fanInGate: ALL
+laneId: omen-stage5-dev-preflight
+teamRoles:
+  coordinator: codex-root
+  builder: [codex-stage5-preflight-builder, codex-stage5-evidence-builder]
+  reviewer: independent-assurance
+providerRequirements: [supported-hosted-codex]
+preferredProviders: [codex]
+fallbackProviders: []
+reservations:
+  paths:
+    - config/lab-dev-topology.json
+    - scripts/lab-dev/lab-dev-preflight.ps1
+    - scripts/lab-dev/README.md
+    - tests/lab-dev-preflight.test.ts
+    - docs/runbooks/omen-stage5-dev-flow.md
+    - docs/reports/WO-OMEN-STAGE5-DEV-PREFLIGHT-001.md
+    - docs/superpowers/plans/2026-08-08-omen-stage5-dev-preflight.md
+  contracts: [lab-dev-preflight, lab-dev-topology]
+  environments: [OMEN-control-plane]
+allowedActions:
+  - edit and test isolated OMEN repository worktrees
+  - read bounded Git remote refs
+  - read bounded SSH Docker and Compose metadata
+  - execute the normal branch, PR, review, and eligible-merge lifecycle
+forbiddenActions:
+  - query database or service payloads
+  - inspect container environments or execute commands inside containers
+  - write remote state or change services, firewalls, mounts, or Forge
+  - expose or inspect secrets
+  - mutate product source
+  - change frozen Stage 1 scope or files
+authorityGrantRefs:
+  - owner-correction-omen-not-idle-2026-08-08
+  - owner-execution-mode-subagent-driven-2026-08-08
+programActivationGrantRef: owner-correction-omen-not-idle-2026-08-08
+grantStatusEventRefs: []
+requiredOutputs:
+  - topology manifest
+  - preflight CLI and tests
+  - operator runbook
+  - live evidence report
+requiredValidation:
+  - focused preflight contract suite
+  - full Vitest suite
+  - live bounded preflight
+  - independent reviews
+  - current-head checks
+reviewRequirements:
+  - independent task review
+  - independent whole-branch review
+  - review-thread closure
+mergeMode: normal-branch-pr-review-eligible-merge
+retryBudget: 2
+remediationBudget: 5
+reroutePolicy: Return actionable findings to the reserved original builder.
+stopConditions:
+  - protected or destructive action required
+  - secret exposure
+  - scope expansion
+  - remediation budget exhausted
+evidenceTargets:
+  - docs/reports/WO-OMEN-STAGE5-DEV-PREFLIGHT-001.md
+  - PR-530
+ownerDecisionConditions:
+  - new protected, production, destructive, credential, or scope-expanding action
+ownerOperationsAllowed: false
+```
+
+`WO-OMEN-COCKPIT-001` is complete. This packet records the already-active owner authority before PR merge eligibility; it does not manufacture authority or retroactively claim authority for work outside the recorded decisions.
+
 OMEN proved current-source identity and bounded Hermes/Atlas capability metadata. This is a preflight result: TerraFusion and WilliamOS are **not** represented as already configured against Hermes or Atlas.
 
 ## Proof subjects
