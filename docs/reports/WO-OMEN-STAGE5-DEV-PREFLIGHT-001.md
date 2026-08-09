@@ -15,13 +15,23 @@ OMEN proved current-source identity and bounded Hermes/Atlas capability metadata
 | Subject | Authority | Proof commit |
 | --- | --- | --- |
 | TerraFusion | `bsvalues/terrafusion_os_1.0` | `c7f2d78619a9eb19186c2c724876fb4d11c81b00` |
-| WilliamOS/control plane | `bsvalues/terragroq` | `4f58224a48dc7c07803ffd3a2f5c186d44635299` |
+| WilliamOS/control plane | `bsvalues/terragroq` | `6e6b5dc91bbf704626ac24674f488429b19f682d` |
 
 The live proof used clean linked worktrees containing each repository's live remote `main`. The TerraFusion worktree was not edited. `atlas-node` denotes the physical durable-state host; `atlas-suite` is a product/repository name and was not used as the host authority.
 
 ## Live result
 
-The OMEN preflight completed with exit code `0` and emitted these exact stable states:
+The live proof is bound to this exact completed run and preflight contract:
+
+```text
+PROOF_STARTED_UTC=2026-08-09T03:56:03.3327927Z
+PROOF_COMPLETED_UTC=2026-08-09T03:56:11.9543482Z
+PREFLIGHT_REVISION=6e6b5dc91bbf704626ac24674f488429b19f682d
+TOPOLOGY_MANIFEST_SHA256=6A7E7A748E5C7BFD346B191AFA8F6FC1CE4D90CF3D41493A976E907123C5A25F
+PREFLIGHT_EXIT_CODE=0
+```
+
+That OMEN preflight emitted these exact stable states:
 
 ```text
 TERRAFUSION_SOURCE=READY
@@ -55,9 +65,9 @@ No application configuration, connection string, database schema, service bindin
 Task 1 validation at the live proof head:
 
 ```text
-FOCUSED_TESTS=32_PASSED
+FOCUSED_TESTS=48_PASSED
 FULL_SUITE_FILES=260_PASSED
-FULL_SUITE_TESTS=2601_PASSED
+FULL_SUITE_TESTS=2617_PASSED
 FULL_SUITE_TESTS_SKIPPED=2
 INDEPENDENT_TASK_1_REREVIEW=CLEAN
 ```
@@ -66,7 +76,7 @@ The focused suite covered healthy output and fail-closed source, repository, wor
 
 ## Evidence and safety boundary
 
-The proof collected only local Git identity/worktree metadata and allowlisted remote Docker/Compose metadata. It did not query or inspect:
+The proof collected only local Git identity/worktree metadata, remote Git reference metadata read via `git ls-remote` for `refs/heads/main`, and allowlisted remote Docker/Compose metadata. It did not query or inspect:
 
 - Postgres, Redis, or Mongo data or readiness endpoints;
 - Ollama, Open WebUI, Portainer, or other HTTP/service payloads;

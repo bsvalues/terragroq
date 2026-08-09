@@ -97,7 +97,7 @@ Create schema version `1` with these exact authorities:
   },
   "nodes": {
     "hermes": { "sshAlias": "hermes", "requiredContainers": { "ollama": 11434 }, "advertisedContainers": { "open-webui": 3000, "portainer": 9000 } },
-    "atlas-node": { "sshAlias": "atlas", "composeFile": "/home/bs/terrafusion/terrafusion-data.yml", "advertisedContainers": { "tf-postgres": 5432, "tf-redis": 6379, "tf-mongo": 27017, "portainer_agent": 9001 } }
+    "atlas-node": { "sshAlias": "atlas", "composeFile": "/home/bs/terrafusion/terrafusion-data.yml", "composeServices": ["mongo", "postgres", "redis"], "advertisedContainers": { "tf-postgres": 5432, "tf-redis": 6379, "tf-mongo": 27017, "portainer_agent": 9001 } }
   },
   "policies": { "williamosUsesAtlasDatabase": false, "databaseQueriesAllowed": false, "forgeInspectionAllowed": false }
 }
