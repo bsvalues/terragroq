@@ -779,6 +779,8 @@ describe("secure Primary decision intake", () => {
       "in crease the sp end",
       "In Crease the spend",
       "a PiKey access",
+      "productlon deployment",
+      "credentiaI access",
     ]) {
       const splitScopeQuery = vi.fn(async () => ({ rows: [{
         ...request,
@@ -883,6 +885,7 @@ describe("secure Primary decision intake", () => {
       "Phase 1 rollout",
       "Item 4 evidence",
       "Stage 2 review",
+      "Build the public interface",
     ]) {
       const ordinaryNumberedQuery = vi.fn(async () => ({ rows: [{
         ...request,

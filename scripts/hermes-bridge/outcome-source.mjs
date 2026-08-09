@@ -329,11 +329,26 @@ function primaryDecisionPolicyProjection(row, decisionPacket) {
   }
   const policyComparableText = (value) => {
     const safeValue = safeText(value)
-    const fold = (one) => safeValue.replace(/[01345789@$!|]/g, (character) => ({
+    const canonicalizeAsciiConfusables = (candidate) => candidate.replace(/[A-Za-z]+/g, (word) => {
+      const lower = word.toLowerCase()
+      const match = Object.keys(protectedLexemes).find((lexeme) => (
+        lexeme.length === lower.length
+        && [...lexeme].every((character, index) => (
+          character === lower[index]
+          || (/[il]/.test(character) && /[il]/.test(lower[index]))
+        ))
+      ))
+      return match ? protectedLexemes[match] : word
+    })
+    const asciiVariants = [
+      safeValue,
+      canonicalizeAsciiConfusables(safeValue),
+    ]
+    const fold = (candidate, one) => candidate.replace(/[01345789@$!|]/g, (character) => ({
       "0": "o", "1": one, "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "9": "g",
       "@": "a", "$": "s", "!": "i", "|": "l",
     })[character])
-    const folded = [fold("l"), fold("i")]
+    const folded = asciiVariants.flatMap((candidate) => [fold(candidate, "l"), fold(candidate, "i")])
     const variants = folded.flatMap((candidate) => [
       candidate.replace(/[^A-Za-z\s]/g, ""),
       candidate.replace(/[^A-Za-z]+/g, " "),
