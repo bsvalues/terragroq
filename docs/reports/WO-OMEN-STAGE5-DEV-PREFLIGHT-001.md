@@ -15,7 +15,7 @@ OMEN proved current-source identity and bounded Hermes/Atlas capability metadata
 | Subject | Authority | Proof commit |
 | --- | --- | --- |
 | TerraFusion | `bsvalues/terrafusion_os_1.0` | `c7f2d78619a9eb19186c2c724876fb4d11c81b00` |
-| WilliamOS/control plane | `bsvalues/terragroq` | `6e6b5dc91bbf704626ac24674f488429b19f682d` |
+| WilliamOS/control plane | `bsvalues/terragroq` | `ca2068628d1afe9c4f43db6f9e0118783a5adec8` |
 
 The live proof used clean linked worktrees containing each repository's live remote `main`. The TerraFusion worktree was not edited. `atlas-node` denotes the physical durable-state host; `atlas-suite` is a product/repository name and was not used as the host authority.
 
@@ -24,9 +24,9 @@ The live proof used clean linked worktrees containing each repository's live rem
 The live proof is bound to this exact completed run and preflight contract:
 
 ```text
-PROOF_STARTED_UTC=2026-08-09T03:56:03.3327927Z
-PROOF_COMPLETED_UTC=2026-08-09T03:56:11.9543482Z
-PREFLIGHT_REVISION=6e6b5dc91bbf704626ac24674f488429b19f682d
+PROOF_STARTED_UTC=2026-08-09T04:15:08.8317963Z
+PROOF_COMPLETED_UTC=2026-08-09T04:15:18.7927078Z
+PREFLIGHT_REVISION=ca2068628d1afe9c4f43db6f9e0118783a5adec8
 TOPOLOGY_MANIFEST_SHA256=6A7E7A748E5C7BFD346B191AFA8F6FC1CE4D90CF3D41493A976E907123C5A25F
 PREFLIGHT_EXIT_CODE=0
 ```
@@ -65,11 +65,11 @@ No application configuration, connection string, database schema, service bindin
 Task 1 validation at the live proof head:
 
 ```text
-FOCUSED_TESTS=48_PASSED
+FOCUSED_TESTS=52_PASSED
 FULL_SUITE_FILES=260_PASSED
-FULL_SUITE_TESTS=2617_PASSED
+FULL_SUITE_TESTS=2621_PASSED
 FULL_SUITE_TESTS_SKIPPED=2
-INDEPENDENT_TASK_1_REREVIEW=CLEAN
+INDEPENDENT_TASK_1_ROUND_5_REREVIEW=CLEAN
 ```
 
 The focused suite covered healthy output and fail-closed source, repository, worktree, endpoint, Compose-service, published-port, database-isolation, and prohibited-command cases. The production-faithful Atlas case separately validated Compose services from the independently advertised `portainer_agent` container.
