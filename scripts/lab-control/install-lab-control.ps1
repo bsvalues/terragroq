@@ -25,17 +25,19 @@ if (-not $Force) {
     }
 }
 
-if ($PSCmdlet.ShouldProcess($InstallRoot, 'Install OMEN lab-control command files')) {
-    New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
-    foreach ($name in $sourceFiles) {
-        $source = Join-Path $PSScriptRoot $name
-        $destination = Join-Path $InstallRoot $name
-        if (Test-Path -LiteralPath $destination) {
-            $same = (Get-FileHash -LiteralPath $source).Hash -eq (Get-FileHash -LiteralPath $destination).Hash
-            if ($same) { continue }
-        }
-        Copy-Item -LiteralPath $source -Destination $destination -Force:$Force
+if (-not $PSCmdlet.ShouldProcess($InstallRoot, 'Install OMEN lab-control command files')) {
+    return
+}
+
+New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
+foreach ($name in $sourceFiles) {
+    $source = Join-Path $PSScriptRoot $name
+    $destination = Join-Path $InstallRoot $name
+    if (Test-Path -LiteralPath $destination) {
+        $same = (Get-FileHash -LiteralPath $source).Hash -eq (Get-FileHash -LiteralPath $destination).Hash
+        if ($same) { continue }
     }
+    Copy-Item -LiteralPath $source -Destination $destination -Force:$Force
 }
 
 if ($SkipUserPath) {

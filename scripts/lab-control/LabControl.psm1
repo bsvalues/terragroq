@@ -348,7 +348,7 @@ function Get-LabCrossSyncEvidence {
     if ($null -eq $taskLastUtc -or $null -eq $startedUtc -or $null -eq $receiptCompletedUtc -or $null -eq $evidenceCompletedUtc) {
         return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=malformed_receipt_timestamp' -CompletedAtUtc $null
     }
-    if ($receiptCompletedUtc -lt $startedUtc -or $evidenceCompletedUtc -lt $receiptCompletedUtc) {
+    if ($receiptCompletedUtc -le $startedUtc -or $evidenceCompletedUtc -le $receiptCompletedUtc) {
         return New-LabCrossSyncEvidence -State 'SYNC_FAILED' -Detail 'validation=completion_before_start' -CompletedAtUtc $null
     }
     $taskObservationGrace = [TimeSpan]::FromMinutes(5)
@@ -606,7 +606,7 @@ function Invoke-LabStatus {
     Write-Output "  latest backup: $(Get-LabValue $atlas.Values 'backup')"
     Write-Output "  latest cross-node sync: $($syncEvidence.State) $($syncEvidence.Detail)"
 
-    $failures = @($hermes, $atlas | Where-Object { -not $_.Reachable })
+    $failures = @((@($hermes, $atlas) | Where-Object { -not $_.Reachable }))
     if ($failures.Count -eq 0) {
         $requiredValues = @(
             (Get-LabValue $hermes.Values 'docker'),

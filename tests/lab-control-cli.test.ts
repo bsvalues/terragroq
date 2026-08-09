@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
@@ -38,6 +38,8 @@ type FixtureMode =
   | "receipt-only"
   | "receipt-hermes-death"
   | "receipt-task-state-incomplete"
+  | "receipt-completed-at-start"
+  | "receipt-task-evidence-completed-at-receipt"
   | "receipt-task-evidence-out-of-order"
   | "receipt-invalid-base64"
   | "receipt-invalid-timestamp"
@@ -163,6 +165,9 @@ function receiptFixture(mode: FixtureMode) {
     case "receipt-task-state-incomplete":
       taskState = "Running"
       break
+    case "receipt-completed-at-start":
+      receipt.completed_at = receipt.started_at
+      break
     case "receipt-invalid-base64":
       malformedBase64 = "%%%NOT_BASE64%%%"
       break
@@ -213,6 +218,9 @@ function receiptFixture(mode: FixtureMode) {
   if (mode === "receipt-task-evidence-out-of-order") {
     taskEvidence.completed_at = "2026-08-08T11:00:24.0000000Z"
   }
+  if (mode === "receipt-task-evidence-completed-at-receipt") {
+    taskEvidence.completed_at = receipt.completed_at
+  }
   let taskEvidenceJson = JSON.stringify(taskEvidence)
   if (mode === "receipt-task-evidence-duplicate-run-id") {
     taskEvidenceJson = taskEvidenceJson.replace(
@@ -251,12 +259,24 @@ function makeFakeSsh(mode: FixtureMode) {
   tempRoots.push(root)
   const bin = path.join(root, "fake ssh bin")
   mkdirSync(bin)
-  const fakeSsh = path.join(bin, "fake-ssh.cmd")
+  const fakeSsh = path.join(bin, process.platform === "win32" ? "fake-ssh.cmd" : "fake-ssh")
   const log = path.join(root, "ssh-args.log")
-  writeFileSync(
-    fakeSsh,
-    `@echo off
+  const windowsFixture = `@echo off
 echo %*>>"%LAB_CONTROL_TEST_LOG%"
+set "LAB_CONTROL_TEST_TARGET="
+:find_target
+if "%~1"=="" goto target_ready
+if /I "%~1"=="hermes" (
+  set "LAB_CONTROL_TEST_TARGET=hermes"
+  goto target_ready
+)
+if /I "%~1"=="atlas" (
+  set "LAB_CONTROL_TEST_TARGET=atlas"
+  goto target_ready
+)
+shift
+goto find_target
+:target_ready
 if "%LAB_CONTROL_TEST_MODE%"=="auth-blocked" (
   1>&2 echo Permission denied ^(publickey,password,keyboard-interactive^).
   exit /b 255
@@ -275,26 +295,27 @@ if "%LAB_CONTROL_TEST_MODE%"=="incomplete" (
   echo backup=UNKNOWN
   exit /b 0
 )
-echo %*| %SystemRoot%\\System32\\findstr.exe /C:"hermes" >nul
-if not errorlevel 1 (
-  if "%LAB_CONTROL_TEST_MODE%"=="receipt-hermes-death" (
-    1>&2 echo Connection timed out.
-    exit /b 255
-  )
-  echo hostname=HERMES
-  echo os=Windows 10 Pro
-  echo uptime=3 days
-  echo docker=27.5.1
-  echo ollama=AVAILABLE
-  echo gpu=NVIDIA GeForce RTX 3050
-  echo disk=321 GB free of 930 GB
-  echo cross_sync_task_state=%LAB_CONTROL_TEST_TASK_STATE%
-  echo cross_sync_task_result=%LAB_CONTROL_TEST_TASK_RESULT%
-  echo cross_sync_task_last_utc=%LAB_CONTROL_TEST_TASK_LAST_UTC%
-  echo cross_sync_task_evidence_b64=%LAB_CONTROL_TEST_TASK_EVIDENCE_B64%
-  echo cross_sync_task_evidence_sha256=%LAB_CONTROL_TEST_TASK_EVIDENCE_SHA256%
-  exit /b 0
-)
+if /I "%LAB_CONTROL_TEST_TARGET%"=="hermes" if "%LAB_CONTROL_TEST_MODE%"=="receipt-hermes-death" goto hermes_death
+if /I "%LAB_CONTROL_TEST_TARGET%"=="hermes" goto hermes_ok
+goto atlas_ok
+:hermes_death
+1>&2 echo Connection timed out.
+exit /b 255
+:hermes_ok
+echo hostname=HERMES
+echo os=Windows 10 Pro
+echo uptime=3 days
+echo docker=27.5.1
+echo ollama=AVAILABLE
+echo gpu=NVIDIA GeForce RTX 3050
+echo disk=321 GB free of 930 GB
+echo cross_sync_task_state=%LAB_CONTROL_TEST_TASK_STATE%
+echo cross_sync_task_result=%LAB_CONTROL_TEST_TASK_RESULT%
+echo cross_sync_task_last_utc=%LAB_CONTROL_TEST_TASK_LAST_UTC%
+echo cross_sync_task_evidence_b64=%LAB_CONTROL_TEST_TASK_EVIDENCE_B64%
+echo cross_sync_task_evidence_sha256=%LAB_CONTROL_TEST_TASK_EVIDENCE_SHA256%
+exit /b 0
+:atlas_ok
 echo hostname=atlas
 echo os=Ubuntu 24.04.3 LTS
 echo uptime=up 8 days
@@ -307,9 +328,72 @@ echo backup=2026-08-07T08:15:00-07:00 atlas-nightly
 echo cross_sync_receipt_b64=%LAB_CONTROL_TEST_RECEIPT_B64%
 echo cross_sync_receipt_sha256=%LAB_CONTROL_TEST_ATLAS_RECEIPT_SHA256%
 exit /b 0
-`,
-    "utf8",
-  )
+`
+  const posixFixture = `#!/bin/sh
+printf '%s\\n' "$*" >> "$LAB_CONTROL_TEST_LOG"
+target=''
+for arg in "$@"; do
+  case "$arg" in
+    hermes|atlas) target="$arg"; break ;;
+  esac
+done
+if [ "\${LAB_CONTROL_TEST_MODE-}" = 'auth-blocked' ]; then
+  printf '%s\\n' 'Permission denied (publickey,password,keyboard-interactive).' >&2
+  exit 255
+fi
+if [ "\${LAB_CONTROL_TEST_MODE-}" = 'incomplete' ]; then
+  printf '%s\\n' \
+    'hostname=reachable-host' \
+    'os=known' \
+    'uptime=known' \
+    'docker=UNKNOWN' \
+    'ollama=UNAVAILABLE' \
+    'gpu=NOT_FOUND' \
+    'disk=10 GB free of 100 GB' \
+    'postgres_evidence=TCP_LISTENER_ONLY' \
+    'redis_evidence=UNKNOWN' \
+    'mongo_evidence=NOT_OBSERVED' \
+    'backup=UNKNOWN'
+  exit 0
+fi
+if [ "$target" = 'hermes' ]; then
+  if [ "\${LAB_CONTROL_TEST_MODE-}" = 'receipt-hermes-death' ]; then
+    printf '%s\\n' 'Connection timed out.' >&2
+    exit 255
+  fi
+  printf '%s\\n' \
+    'hostname=HERMES' \
+    'os=Windows 10 Pro' \
+    'uptime=3 days' \
+    'docker=27.5.1' \
+    'ollama=AVAILABLE' \
+    'gpu=NVIDIA GeForce RTX 3050' \
+    'disk=321 GB free of 930 GB'
+  printf 'cross_sync_task_state=%s\\n' "\${LAB_CONTROL_TEST_TASK_STATE-}"
+  printf 'cross_sync_task_result=%s\\n' "\${LAB_CONTROL_TEST_TASK_RESULT-}"
+  printf 'cross_sync_task_last_utc=%s\\n' "\${LAB_CONTROL_TEST_TASK_LAST_UTC-}"
+  printf 'cross_sync_task_evidence_b64=%s\\n' "\${LAB_CONTROL_TEST_TASK_EVIDENCE_B64-}"
+  printf 'cross_sync_task_evidence_sha256=%s\\n' "\${LAB_CONTROL_TEST_TASK_EVIDENCE_SHA256-}"
+  exit 0
+fi
+printf '%s\\n' \
+  'hostname=atlas' \
+  'os=Ubuntu 24.04.3 LTS' \
+  'uptime=up 8 days' \
+  'docker=27.5.1' \
+  'postgres_evidence=PG_ISREADY_ACCEPTING' \
+  'redis_evidence=REDIS_AUTH_REQUIRED_REACHABLE' \
+  'mongo_evidence=MONGO_PING_OK' \
+  'disk=744G free of 915G' \
+  'backup=2026-08-07T08:15:00-07:00 atlas-nightly'
+printf 'cross_sync_receipt_b64=%s\\n' "\${LAB_CONTROL_TEST_RECEIPT_B64-}"
+printf 'cross_sync_receipt_sha256=%s\\n' "\${LAB_CONTROL_TEST_ATLAS_RECEIPT_SHA256-}"
+exit 0
+`
+  writeFileSync(fakeSsh, process.platform === "win32" ? windowsFixture : posixFixture, "utf8")
+  if (process.platform !== "win32") {
+    chmodSync(fakeSsh, 0o755)
+  }
   return { fakeSsh, log, root, receipt }
 }
 
@@ -409,7 +493,6 @@ describe("OMEN lab-control CLI", () => {
     ["receipt-missing-direction", "SYNC_FAILED"],
     ["receipt-hash-mismatch", "SYNC_FAILED"],
     ["receipt-run-id-mismatch", "SYNC_FAILED"],
-    ["receipt-hermes-death", "SYNC_FAILED"],
     ["receipt-only", "SYNC_FAILED"],
   ] as const)("%s remains non-green as %s", (mode, state) => {
     const result = runCommand("lab-status", mode)
@@ -419,6 +502,29 @@ describe("OMEN lab-control CLI", () => {
     expect(result.stdout).toContain("operator blocker: REQUIRED_EVIDENCE_INCOMPLETE")
     expect(result.stdout).not.toContain("operator blocker: NONE")
     expect(result.stdout).not.toContain("SYNC_NEVER_VERIFIED")
+  })
+
+  test("a receipt cannot hide Hermes becoming unreachable after Atlas publication", () => {
+    const result = runCommand("lab-status", "receipt-hermes-death")
+
+    expect(result.status).toBe(2)
+    expect(result.stdout).toContain("HERMES")
+    expect(result.stdout).toContain("reachable: NO (SSH_TIMEOUT)")
+    expect(result.stdout).toContain("latest cross-node sync: SYNC_FAILED")
+    expect(result.stdout).toContain("operator blocker: one or more lab nodes are unreachable")
+    expect(result.stdout).not.toContain("operator blocker: REQUIRED_EVIDENCE_INCOMPLETE")
+    expect(result.stdout).not.toContain("operator blocker: NONE")
+  })
+
+  test.each([
+    "receipt-completed-at-start",
+    "receipt-task-evidence-completed-at-receipt",
+  ] as const)("%s rejects a zero-duration completion boundary", (mode) => {
+    const result = runCommand("lab-status", mode)
+
+    expect(result.status).toBe(2)
+    expect(result.stdout).toContain("latest cross-node sync: SYNC_FAILED validation=completion_before_start")
+    expect(result.stdout).toContain("operator blocker: REQUIRED_EVIDENCE_INCOMPLETE")
   })
 
   test.each([
@@ -582,5 +688,33 @@ describe("OMEN lab-control CLI", () => {
     expect(result.stderr).toContain("Refusing to overwrite modified managed file")
     expect(existsSync(path.join(root, "LabControl.psm1"))).toBe(false)
     expect(readFileSync(path.join(root, "lab-status.ps1"), "utf8")).toBe("user-modified")
+  })
+
+  test("installer WhatIf stops before reporting SkipUserPath installation success", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "lab-control-whatif-"))
+    tempRoots.push(parent)
+    const root = path.join(parent, "Lab Control Bin")
+
+    const result = spawnSync(
+      pwsh,
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        path.join(scriptRoot, "install-lab-control.ps1"),
+        "-InstallRoot",
+        root,
+        "-SkipUserPath",
+        "-WhatIf",
+      ],
+      { cwd: repoRoot, encoding: "utf8", timeout: 15_000 },
+    )
+
+    expect(result.status).toBe(0)
+    expect(existsSync(root)).toBe(false)
+    expect(result.stdout).toContain("What if:")
+    expect(result.stdout).not.toContain("Installed lab-control commands")
+    expect(result.stdout).not.toContain("User PATH unchanged")
   })
 })
