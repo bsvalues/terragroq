@@ -18,7 +18,8 @@ function Test-SourceContract {
   param($Source, [string]$RepositoryPath, [string]$GitExecutable, [string]$Marker)
   try {
     $remote = Invoke-CheckedCommand $GitExecutable @("-C", $RepositoryPath, "config", "--get", "remote.origin.url")
-    if ($remote.ExitCode -ne 0 -or $remote.Output.Count -ne 1 -or (ConvertTo-RepositoryIdentity $remote.Output[0]) -cne $Source.repository) { return "SOURCE_REMOTE_IDENTITY_MISMATCH" }
+    $remoteIdentity = if ($remote.Output.Count -eq 1) { ConvertTo-RepositoryIdentity $remote.Output[0] } else { $null }
+    if ($remote.ExitCode -ne 0 -or $null -eq $remoteIdentity -or -not $remoteIdentity.Equals([string]$Source.repository, [StringComparison]::OrdinalIgnoreCase)) { return "SOURCE_REMOTE_IDENTITY_MISMATCH" }
     $gitDir = Invoke-CheckedCommand $GitExecutable @("-C", $RepositoryPath, "rev-parse", "--git-dir")
     $commonDir = Invoke-CheckedCommand $GitExecutable @("-C", $RepositoryPath, "rev-parse", "--git-common-dir")
     if ($gitDir.ExitCode -ne 0 -or $commonDir.ExitCode -ne 0 -or $gitDir.Output.Count -ne 1 -or $commonDir.Output.Count -ne 1) { return "SOURCE_GIT_FAILURE" }
@@ -166,7 +167,7 @@ try {
   $hermesPayload = @'
 docker ps --format '{{.Names}}|{{.Image}}|{{.State}}|{{.Status}}|{{.Ports}}' | ForEach-Object {
   $fields = $_.Split('|', 5)
-  $health = if ($fields[3] -match '\((healthy|unhealthy)\)') { $Matches[1] } else { 'none' }
+  $health = if ($fields[3] -match '\((?:health:\s*)?(healthy|unhealthy|starting)\)') { $Matches[1].ToLowerInvariant() } else { 'none' }
   $ports = @([regex]::Matches($fields[4], ':(\d+)->') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique) -join ','
   "$($fields[0])|$($fields[1])|$($fields[2])|$health|$ports"
 }
@@ -180,8 +181,9 @@ docker ps --format '{{.Names}}|{{.Image}}|{{.State}}|{{.Status}}|{{.Ports}}' | F
 set -eu
 docker ps --format '{{.Names}}|{{.Image}}|{{.State}}|{{.Status}}|{{.Ports}}' | awk -F'|' '{
   health = "none"
-  if ($4 ~ /\(healthy\)/) health = "healthy"
-  if ($4 ~ /\(unhealthy\)/) health = "unhealthy"
+  if ($4 ~ /\(healthy\)/ || $4 ~ /\(health: healthy\)/) health = "healthy"
+  if ($4 ~ /\(unhealthy\)/ || $4 ~ /\(health: unhealthy\)/) health = "unhealthy"
+  if ($4 ~ /\(health: starting\)/) health = "starting"
   portCount = 0
   mappingCount = split($5, mappings, ",")
   for (mappingIndex = 1; mappingIndex <= mappingCount; mappingIndex++) {
