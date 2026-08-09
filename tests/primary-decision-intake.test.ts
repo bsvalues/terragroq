@@ -82,6 +82,7 @@ function fakeClient(responseOverrides: Record<string, unknown> = {}) {
       turnCompletedAt: Date.parse(issuedAt) / 1000 + 11,
       messageId: "message-owner",
       messageSha256: "b".repeat(64),
+      threadSnapshotSha256: "c".repeat(64),
       choice: "APPROVE",
       ...responseOverrides,
     })),
@@ -203,6 +204,27 @@ describe("secure Primary decision intake", () => {
 
     expect(response.issuedAt).toBe(new Date(now - 5_000).toISOString())
     expect(response.expiresAt).toBe(new Date(now - 5_000 + 60 * 60 * 1000).toISOString())
+  })
+
+  it("fails closed when the authenticated thread changes between verification snapshots", async () => {
+    const firstClient = fakeClient()
+    const firstResponse = await firstClient.readLatestDirectUserChoice()
+    const client = fakeClient()
+    client.readLatestDirectUserChoice
+      .mockResolvedValueOnce(firstResponse)
+      .mockResolvedValueOnce({
+        ...firstResponse,
+        threadSnapshotSha256: "d".repeat(64),
+      })
+
+    await expect(verifyPrimaryDecisionResponse({
+      request,
+      repositoryPath: repository,
+      environment: { CODEX_THREAD_ID: "thread-owner" },
+      now: Date.parse(issuedAt) + 30_000,
+      createClient: () => client as never,
+    })).rejects.toMatchObject({ code: "PRIMARY_DECISION_RESPONSE_NOT_FOUND" })
+    expect(client.readLatestDirectUserChoice).toHaveBeenCalledTimes(2)
   })
 
   it("remains inert for a resident cycle without an authenticated task", async () => {
@@ -830,7 +852,10 @@ describe("secure Primary decision intake", () => {
     await expect(readPendingPrimaryDecisionRequest({
       query: mixedOutcomeKeyQuery,
       ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
-    })).rejects.toMatchObject({ code: "PRIMARY_DECISION_REQUEST_INVALID" })
+    })).rejects.toMatchObject({
+      code: "PRIMARY_DECISION_POLICY_WALL",
+      reasonCode: "PROTECTED_SCOPE",
+    })
 
     for (const separatedDigitScope of [
       { outcomeKey: "williamos:product-1-on-deployment" },
@@ -848,7 +873,30 @@ describe("secure Primary decision intake", () => {
       await expect(readPendingPrimaryDecisionRequest({
         query: separatedDigitQuery,
         ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
-      })).rejects.toMatchObject({ code: "PRIMARY_DECISION_REQUEST_INVALID" })
+      })).rejects.toMatchObject({
+        code: "PRIMARY_DECISION_POLICY_WALL",
+        reasonCode: "PROTECTED_SCOPE",
+      })
+    }
+
+    for (const ordinaryNumberedScope of [
+      "Phase 1 rollout",
+      "Item 4 evidence",
+      "Stage 2 review",
+    ]) {
+      const ordinaryNumberedQuery = vi.fn(async () => ({ rows: [{
+        ...request,
+        queueObjective: ordinaryNumberedScope,
+        terminalMetadata: {
+          result: "OWNER_DECISION_REQUIRED",
+          nextState: request.expectedNextState,
+          ...request.decisionPacket,
+        },
+      }] }))
+      await expect(readPendingPrimaryDecisionRequest({
+        query: ordinaryNumberedQuery,
+        ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+      })).resolves.toMatchObject({ outcomeId: request.outcomeId })
     }
 
     const foldedSplitOutcomeKeyQuery = vi.fn(async () => ({ rows: [{

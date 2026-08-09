@@ -214,14 +214,19 @@ export async function verifyPrimaryDecisionResponse({
   try {
     await withDeadline(client.connect(), timeoutMs)
     account = await withDeadline(client.readAccount(), timeoutMs)
-    response = await withDeadline(client.readLatestDirectUserChoice({
+    const responseInput = {
       threadId,
       requestCreatedAt: request.issuedAt,
       presentedAfter,
       presentedBefore,
       requestMarker: primaryDecisionRequestMarker(request),
       requestPrompt: buildPrimaryDecisionRequestPrompt(request),
-    }), timeoutMs)
+    }
+    const firstResponse = await withDeadline(client.readLatestDirectUserChoice(responseInput), timeoutMs)
+    response = await withDeadline(client.readLatestDirectUserChoice(responseInput), timeoutMs)
+    if (!firstResponse || !response || JSON.stringify(firstResponse) !== JSON.stringify(response)) {
+      response = null
+    }
   } finally {
     client.close()
   }
@@ -238,7 +243,11 @@ export async function verifyPrimaryDecisionResponse({
     || ![response.requestTurnId, response.requestMessageId, response.turnId, response.messageId]
       .every((value) => typeof value === "string" && value.trim() !== "")
     || typeof response.messageSha256 !== "string"
-    || !/^[a-f0-9]{64}$/.test(response.messageSha256)) wall("PRIMARY_DECISION_RESPONSE_IDENTITY_WALL")
+    || !/^[a-f0-9]{64}$/.test(response.messageSha256)
+    || typeof response.threadSnapshotSha256 !== "string"
+    || !/^[a-f0-9]{64}$/.test(response.threadSnapshotSha256)) {
+    wall("PRIMARY_DECISION_RESPONSE_IDENTITY_WALL")
+  }
   let responseGitDirectory
   try {
     if (typeof response.cwd !== "string" || !path.isAbsolute(response.cwd)) throw new Error()
@@ -273,6 +282,7 @@ export async function verifyPrimaryDecisionResponse({
       turnId: response.turnId,
       messageId: response.messageId,
       messageSha256: response.messageSha256,
+      threadSnapshotSha256: response.threadSnapshotSha256,
     })).digest("hex"),
     issuedAt: provenanceIssuedAt,
     expiresAt,

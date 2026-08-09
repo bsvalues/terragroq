@@ -280,6 +280,9 @@ export class CodexAppServerClient {
     const observedBeforeMs = this.now()
     const thread = response?.thread
     if (!thread || thread.id !== threadId || !Array.isArray(thread.turns)) return null
+    const threadSnapshotSha256 = createHash("sha256")
+      .update(JSON.stringify(thread.turns), "utf8")
+      .digest("hex")
     const requestCreatedAtMs = Date.parse(requestCreatedAt)
     const presentedAfterMs = Date.parse(presentedAfter)
     const verificationStartedAtMs = Date.parse(presentedBefore)
@@ -353,6 +356,7 @@ export class CodexAppServerClient {
         turnCompletedAt: Number(turn.completedAt),
         messageId: item.id,
         messageSha256: createHash("sha256").update(content[0].text, "utf8").digest("hex"),
+        threadSnapshotSha256,
         choice,
       })
     }

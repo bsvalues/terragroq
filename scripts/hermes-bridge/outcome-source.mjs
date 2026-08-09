@@ -325,24 +325,19 @@ function primaryDecisionPolicyProjection(row, decisionPacket) {
   const safeText = (value) => {
     if (typeof value !== "string") return value
     const text = assertPrimaryDecisionTextSafety(value)
-    if (/[A-Za-z][0-9]+[A-Za-z]/.test(text)
-      || /[A-Za-z][\s:_-]+[0-9][\s:_-]+[A-Za-z]/.test(text)) {
-      throw Object.assign(new Error("Primary decision request contains ambiguous scope text"), {
-        code: "PRIMARY_DECISION_REQUEST_INVALID",
-      })
-    }
     return text
   }
   const policyComparableText = (value) => {
     const safeValue = safeText(value)
-    const folded = safeValue.replace(/[01345789@$!|]/g, (character) => ({
-      "0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "9": "g",
+    const fold = (one) => safeValue.replace(/[01345789@$!|]/g, (character) => ({
+      "0": "o", "1": one, "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "9": "g",
       "@": "a", "$": "s", "!": "i", "|": "l",
     })[character])
-    const variants = [
-      folded.replace(/[^A-Za-z\s]/g, ""),
-      folded.replace(/[^A-Za-z]+/g, " "),
-    ]
+    const folded = [fold("l"), fold("i")]
+    const variants = folded.flatMap((candidate) => [
+      candidate.replace(/[^A-Za-z\s]/g, ""),
+      candidate.replace(/[^A-Za-z]+/g, " "),
+    ])
     return [
       ...variants,
       ...protectedSplitVariants(safeValue),
