@@ -352,7 +352,7 @@ function primaryDecisionPolicyProjection(row, decisionPacket) {
     const variants = folded.flatMap((candidate) => [
       candidate.replace(/[^A-Za-z\s]/g, ""),
       candidate.replace(/[^A-Za-z]+/g, " "),
-    ])
+    ]).flatMap((candidate) => [candidate, canonicalizeAsciiConfusables(candidate)])
     return [
       ...variants,
       ...protectedSplitVariants(safeValue),

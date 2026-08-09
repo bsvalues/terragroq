@@ -794,7 +794,29 @@ describe("secure Primary decision intake", () => {
       await expect(readPendingPrimaryDecisionRequest({
         query: splitScopeQuery,
         ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
-      })).rejects.toMatchObject({
+      }), `protected split scope: ${splitScope}`).rejects.toMatchObject({
+        code: "PRIMARY_DECISION_POLICY_WALL",
+        reasonCode: "PROTECTED_SCOPE",
+      })
+    }
+
+    for (const combinedScope of [
+      "product-lon deployment",
+      "credentia-I access",
+    ]) {
+      const combinedScopeQuery = vi.fn(async () => ({ rows: [{
+        ...request,
+        queueObjective: combinedScope,
+        terminalMetadata: {
+          result: "OWNER_DECISION_REQUIRED",
+          nextState: request.expectedNextState,
+          ...request.decisionPacket,
+        },
+      }] }))
+      await expect(readPendingPrimaryDecisionRequest({
+        query: combinedScopeQuery,
+        ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+      }), `combined protected scope: ${combinedScope}`).rejects.toMatchObject({
         code: "PRIMARY_DECISION_POLICY_WALL",
         reasonCode: "PROTECTED_SCOPE",
       })
