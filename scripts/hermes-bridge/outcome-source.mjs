@@ -299,29 +299,34 @@ function primaryDecisionPolicyProjection(row, decisionPacket) {
   const protectedLexemes = PROTECTED_SCOPE_LEXEMES
   const protectedSplitVariants = (value) => {
     const tokens = value.trim().split(/\s+/)
-    const variants = []
-    for (let start = 0; start < tokens.length; start += 1) {
+    const reconstructed = []
+    let changed = false
+    for (let start = 0; start < tokens.length;) {
       let combined = ""
+      let match = null
       for (let end = start; end < tokens.length; end += 1) {
         if (!/^[A-Za-z0-9]+$/.test(tokens[end])) break
         combined += tokens[end].toLowerCase()
         if (end === start || !Object.hasOwn(protectedLexemes, combined)) continue
-        if (end === start + 1
-          && /^(?:a|an|and|as|at|be|by|for|from|in|is|it|of|on|or|the|to|up|we|you)$/i.test(tokens[start])
-          && /^[A-Z]/.test(tokens[end])) continue
-        variants.push([
-          ...tokens.slice(0, start),
-          protectedLexemes[combined],
-          ...tokens.slice(end + 1),
-        ].join(" "))
+        if (combined === "token" && /^to$/i.test(tokens[start]) && tokens[end] === "Ken") continue
+        match = { end, value: protectedLexemes[combined] }
+      }
+      if (match) {
+        reconstructed.push(match.value)
+        start = match.end + 1
+        changed = true
+      } else {
+        reconstructed.push(tokens[start])
+        start += 1
       }
     }
-    return variants
+    return changed ? [reconstructed.join(" ")] : []
   }
   const safeText = (value) => {
     if (typeof value !== "string") return value
     const text = assertPrimaryDecisionTextSafety(value)
-    if (/[A-Za-z][0-9]+[A-Za-z]/.test(text)) {
+    if (/[A-Za-z][0-9]+[A-Za-z]/.test(text)
+      || /[A-Za-z][\s:_-]+[0-9][\s:_-]+[A-Za-z]/.test(text)) {
       throw Object.assign(new Error("Primary decision request contains ambiguous scope text"), {
         code: "PRIMARY_DECISION_REQUEST_INVALID",
       })

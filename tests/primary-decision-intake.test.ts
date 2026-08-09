@@ -754,6 +754,9 @@ describe("secure Primary decision intake", () => {
       "Change pro tected da ta",
       "in crease the spend",
       "Use to ken value",
+      "in crease the sp end",
+      "In Crease the spend",
+      "a PiKey access",
     ]) {
       const splitScopeQuery = vi.fn(async () => ({ rows: [{
         ...request,
@@ -828,6 +831,25 @@ describe("secure Primary decision intake", () => {
       query: mixedOutcomeKeyQuery,
       ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
     })).rejects.toMatchObject({ code: "PRIMARY_DECISION_REQUEST_INVALID" })
+
+    for (const separatedDigitScope of [
+      { outcomeKey: "williamos:product-1-on-deployment" },
+      { queueObjective: "Product 1 on deployment" },
+    ]) {
+      const separatedDigitQuery = vi.fn(async () => ({ rows: [{
+        ...request,
+        ...separatedDigitScope,
+        terminalMetadata: {
+          result: "OWNER_DECISION_REQUIRED",
+          nextState: request.expectedNextState,
+          ...request.decisionPacket,
+        },
+      }] }))
+      await expect(readPendingPrimaryDecisionRequest({
+        query: separatedDigitQuery,
+        ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+      })).rejects.toMatchObject({ code: "PRIMARY_DECISION_REQUEST_INVALID" })
+    }
 
     const foldedSplitOutcomeKeyQuery = vi.fn(async () => ({ rows: [{
       ...request,
@@ -1139,6 +1161,65 @@ it("fails closed when a later owner turn withdraws an earlier choice", async () 
           startedAt: Date.parse(issuedAt) / 1000 + 20,
           items: [{
             id: "message-withdraw",
+            type: "userMessage",
+            content: [{ type: "text", text: "actually wait" }],
+          }],
+        }],
+      },
+    },
+  })
+  await expect(pending).resolves.toBeNull()
+  client.close()
+})
+
+it("fails closed when a withdrawal arrives while the response snapshot is being read", async () => {
+  const child = new FakeProcess()
+  const verificationStartedAt = "2026-08-07T17:00:00.000Z"
+  const client = new CodexAppServerClient({
+    spawn: vi.fn(() => child) as never,
+    command: "codex",
+    args: ["app-server", "--stdio"],
+    now: () => Date.parse("2026-08-07T17:00:01.000Z"),
+  })
+  const connecting = client.connect()
+  child.send({ id: child.messages()[0].id, result: { userAgent: "fake" } })
+  await connecting
+  const pending = client.readLatestDirectUserChoice({
+    threadId: "thread-owner",
+    requestCreatedAt: issuedAt,
+    presentedAfter: issuedAt,
+    presentedBefore: verificationStartedAt,
+    requestMarker: primaryDecisionRequestMarker(request),
+    requestPrompt: buildPrimaryDecisionRequestPrompt(request),
+  })
+  const rpc = child.messages().at(-1)
+  child.send({
+    id: rpc.id,
+    result: {
+      thread: {
+        id: "thread-owner",
+        turns: [{
+          id: "turn-request",
+          status: "completed",
+          startedAt: Date.parse(issuedAt) / 1000 + 1,
+          completedAt: Date.parse(issuedAt) / 1000 + 2,
+          items: [{ type: "agentMessage", text: buildPrimaryDecisionRequestPrompt(request) }],
+        }, {
+          id: "turn-owner-approve",
+          status: "completed",
+          startedAt: Date.parse(issuedAt) / 1000 + 10,
+          completedAt: Date.parse(issuedAt) / 1000 + 11,
+          items: [{
+            id: "message-approve",
+            type: "userMessage",
+            content: [{ type: "text", text: "APPROVE" }],
+          }],
+        }, {
+          id: "turn-owner-withdraw-during-read",
+          status: "inProgress",
+          startedAt: Date.parse(verificationStartedAt) / 1000 + 0.5,
+          items: [{
+            id: "message-withdraw-during-read",
             type: "userMessage",
             content: [{ type: "text", text: "actually wait" }],
           }],

@@ -277,16 +277,18 @@ export class CodexAppServerClient {
     requestPrompt,
   }) {
     const response = await this.request("thread/read", { threadId, includeTurns: true })
+    const observedBeforeMs = this.now()
     const thread = response?.thread
     if (!thread || thread.id !== threadId || !Array.isArray(thread.turns)) return null
     const requestCreatedAtMs = Date.parse(requestCreatedAt)
     const presentedAfterMs = Date.parse(presentedAfter)
-    const presentedBeforeMs = Date.parse(presentedBefore)
+    const verificationStartedAtMs = Date.parse(presentedBefore)
     if (!Number.isFinite(requestCreatedAtMs) || !Number.isFinite(presentedAfterMs)
-      || !Number.isFinite(presentedBeforeMs)
+      || !Number.isFinite(verificationStartedAtMs) || !Number.isFinite(observedBeforeMs)
       || typeof requestMarker !== "string" || requestMarker.trim() === ""
       || typeof requestPrompt !== "string" || !requestPrompt.includes(requestMarker)
-      || presentedBeforeMs <= presentedAfterMs) return null
+      || verificationStartedAtMs <= presentedAfterMs
+      || observedBeforeMs < verificationStartedAtMs) return null
 
     const candidates = []
     for (let turnIndex = 0; turnIndex < thread.turns.length; turnIndex += 1) {
@@ -296,8 +298,8 @@ export class CodexAppServerClient {
       const completed = turn?.status === "completed"
       const active = turn?.status === "inProgress" || turn?.status === "interrupted"
       if (!completed && !active) continue
-      if (!Number.isFinite(startedAtMs) || startedAtMs > presentedBeforeMs
-        || (completed && (!Number.isFinite(completedAtMs) || completedAtMs > presentedBeforeMs))
+      if (!Number.isFinite(startedAtMs) || startedAtMs > observedBeforeMs
+        || (completed && (!Number.isFinite(completedAtMs) || completedAtMs > observedBeforeMs))
         || !Array.isArray(turn.items)) continue
       const priorTurn = thread.turns[turnIndex - 1]
       const priorItems = Array.isArray(priorTurn?.items) ? priorTurn.items : []
@@ -310,12 +312,12 @@ export class CodexAppServerClient {
       if (!requestMessage || !Number.isFinite(requestPresentedAtMs)
         || requestPresentedAtMs < requestCreatedAtMs
         || requestPresentedAtMs < presentedAfterMs
-        || requestPresentedAtMs > presentedBeforeMs
+        || requestPresentedAtMs > observedBeforeMs
         || startedAtMs < requestPresentedAtMs) continue
       const laterUserMessageExists = thread.turns.slice(turnIndex + 1).some((laterTurn) => {
         const laterStartedAtMs = Number(laterTurn?.startedAt) * 1_000
         return Number.isFinite(laterStartedAtMs)
-          && laterStartedAtMs <= presentedBeforeMs
+          && laterStartedAtMs <= observedBeforeMs
           && Array.isArray(laterTurn.items)
           && laterTurn.items.some((candidate) => candidate?.type === "userMessage")
       })
