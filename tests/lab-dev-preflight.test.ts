@@ -37,9 +37,11 @@ function fixture(mode: Mode, atlasOutput = "") {
   const terrafusion = path.join(root, "terrafusion")
   const williamos = path.join(root, "williamos")
   const log = path.join(root, "ssh-args.log")
+  const gitLog = path.join(root, "git-args.log")
   const atlasOutputPath = path.join(root, "atlas-output.txt")
   mkdirSync(bin)
   writeFileSync(log, "")
+  writeFileSync(gitLog, "")
   writeFileSync(atlasOutputPath, atlasOutput)
   mkdirSync(terrafusion)
   mkdirSync(williamos)
@@ -66,6 +68,7 @@ function fixture(mode: Mode, atlasOutput = "") {
   const git = path.join(bin, "fake-git.cmd")
   const ssh = path.join(bin, "fake-ssh.cmd")
   writeFileSync(git, `@echo off
+echo %*>>"%LAB_DEV_TEST_GIT_LOG%"
 set "all=%*"
 set "repo=williamos"
 echo %all% | findstr /I /C:"terrafusion" >nul && set "repo=terrafusion"
@@ -151,28 +154,37 @@ if "%LAB_DEV_TEST_MODE%"=="atlas-compose-malformed" echo COMPOSE_SERVICES=portai
 echo COMPOSE_SERVICES=mongo,postgres,redis
 exit /b 0
 `, "utf8")
-  return { git, ssh, log, root, atlasOutputPath, terrafusion, williamos }
+  return { git, ssh, gitLog, log, root, atlasOutputPath, terrafusion, williamos }
 }
 
-function invokePreflight(mode: Mode, testFixture: ReturnType<typeof fixture>, selectedScript = scriptPath) {
+function invokePreflight(
+  mode: Mode,
+  testFixture: ReturnType<typeof fixture>,
+  selectedScript = scriptPath,
+  options: { terrafusionPath?: string | null } = {},
+) {
+  const invocationEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    LAB_DEV_GIT_EXECUTABLE: testFixture.git,
+    LAB_DEV_SSH_EXECUTABLE: testFixture.ssh,
+    LAB_DEV_NOW_UTC: "2026-08-08T12:00:00Z",
+    LAB_DEV_TEST_MODE: mode,
+    LAB_DEV_TEST_ATLAS_OUTPUT: testFixture.atlasOutputPath,
+    LAB_DEV_TEST_GIT_LOG: testFixture.gitLog,
+    LAB_DEV_TEST_SSH_LOG: testFixture.log,
+    TERRAFUSION_REPO_PATH: options.terrafusionPath ?? testFixture.terrafusion,
+    WILLIAMOS_REPO_PATH: testFixture.williamos,
+  }
+  if (options.terrafusionPath === null) delete invocationEnv.TERRAFUSION_REPO_PATH
   const result = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", selectedScript], {
     cwd: repoRoot,
     encoding: "utf8",
     timeout: 15_000,
-    env: {
-      ...process.env,
-      LAB_DEV_GIT_EXECUTABLE: testFixture.git,
-      LAB_DEV_SSH_EXECUTABLE: testFixture.ssh,
-      LAB_DEV_NOW_UTC: "2026-08-08T12:00:00Z",
-      LAB_DEV_TEST_MODE: mode,
-      LAB_DEV_TEST_ATLAS_OUTPUT: testFixture.atlasOutputPath,
-      LAB_DEV_TEST_SSH_LOG: testFixture.log,
-      TERRAFUSION_REPO_PATH: testFixture.terrafusion,
-      WILLIAMOS_REPO_PATH: testFixture.williamos,
-    },
+    env: invocationEnv,
   })
   return {
     ...result,
+    gitArgs: readFileSync(testFixture.gitLog, "utf8"),
     sshArgs: readFileSync(testFixture.log, "utf8"),
   }
 }
@@ -244,9 +256,22 @@ afterEach(() => {
 
 describe("OMEN Stage 5 development preflight", () => {
   const invalidManifestCases: Array<[string, (manifest: any) => void]> = [
+    ["type-wrong schema version", (manifest) => { manifest.schemaVersion = "1" }],
+    ["wrong work order", (manifest) => { manifest.workOrderId = "WO-OTHER" }],
+    ["wrong TerraFusion repository", (manifest) => { manifest.sources.terrafusion.repository = "bsvalues/other" }],
+    ["wrong TerraFusion branch", (manifest) => { manifest.sources.terrafusion.branch = "develop" }],
+    ["wrong TerraFusion marker", (manifest) => { manifest.sources.terrafusion.canonicalMarker = "OTHER.md" }],
+    ["wrong WilliamOS repository", (manifest) => { manifest.sources.williamos.repository = "bsvalues/other" }],
+    ["wrong WilliamOS branch", (manifest) => { manifest.sources.williamos.branch = "develop" }],
+    ["wrong Hermes alias", (manifest) => { manifest.nodes.hermes.sshAlias = "other" }],
+    ["wrong Hermes required map", (manifest) => { manifest.nodes.hermes.requiredContainers.ollama = 11435 }],
+    ["type-wrong Hermes advertised map", (manifest) => { manifest.nodes.hermes.advertisedContainers.portainer = "9000" }],
+    ["wrong Atlas alias", (manifest) => { manifest.nodes["atlas-node"].sshAlias = "other" }],
     ["alternate Compose path", (manifest) => { manifest.nodes["atlas-node"].composeFile = "/tmp/terrafusion-data.yml" }],
     ["Compose path shell syntax", (manifest) => { manifest.nodes["atlas-node"].composeFile = "/home/bs/terrafusion/terrafusion-data.yml'; uname -a; '" }],
     ["Compose path control character", (manifest) => { manifest.nodes["atlas-node"].composeFile = "/home/bs/terrafusion/terrafusion-data.yml\nuname -a" }],
+    ["extra Compose service", (manifest) => { manifest.nodes["atlas-node"].composeServices.push("other") }],
+    ["wrong Atlas advertised map", (manifest) => { delete manifest.nodes["atlas-node"].advertisedContainers.portainer_agent }],
     ["missing database authority", (manifest) => { delete manifest.sources.williamos.databaseAuthority }],
     ["type-wrong database authority", (manifest) => { manifest.sources.williamos.databaseAuthority = false }],
     ["opposite database authority", (manifest) => { manifest.sources.williamos.databaseAuthority = "ATLAS_SHARED" }],
@@ -262,8 +287,30 @@ describe("OMEN Stage 5 development preflight", () => {
 
     expect(result.status).toBe(2)
     expect(result.stdout).toContain("BLOCKER=PRECHECK_CONFIGURATION_INVALID")
+    expect(result.gitArgs).toBe("")
     expect(result.sshArgs).toBe("")
   }, 20_000)
+
+  test.each([
+    ["missing", null],
+    ["blank", "   "],
+  ] as const)("rejects %s TERRAFUSION_REPO_PATH before Git or SSH", (_name, terrafusionPath) => {
+    const testFixture = fixture("healthy")
+    const result = invokePreflight("healthy", testFixture, scriptPath, { terrafusionPath })
+
+    expect(result.status).toBe(2)
+    expect(result.stdout).toContain("BLOCKER=PRECHECK_CONFIGURATION_INVALID")
+    expect(result.stdout).not.toMatch(/[A-Z]:\\Users\\/i)
+    expect(result.gitArgs).toBe("")
+    expect(result.sshArgs).toBe("")
+  })
+
+  test("documents TerraFusion path selection without a machine-specific default", () => {
+    const readme = readFileSync(path.join(repoRoot, "scripts", "lab-dev", "README.md"), "utf8")
+
+    expect(readme).toContain("TERRAFUSION_REPO_PATH")
+    expect(readme).not.toMatch(/[A-Z]:\\Users\\/i)
+  })
 
   test("declares the independent Atlas Compose service contract", () => {
     const topology = JSON.parse(readFileSync(path.join(repoRoot, "config", "lab-dev-topology.json"), "utf8"))

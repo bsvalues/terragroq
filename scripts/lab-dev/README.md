@@ -6,4 +6,4 @@ Run it from the WilliamOS repository with `pwsh -NoProfile -File scripts/lab-dev
 
 The remote commands use noninteractive SSH with a five-second connection timeout and collect only Docker/Compose metadata: container name, image, running state, health state, published ports, and Atlas Compose service names. They do not query databases, inspect Forge, inspect container environment variables, execute inside containers, write remote state, or make changes to either node.
 
-The default TerraFusion checkout is `C:\Users\bsval\terrafusion_os_1.0`; the default WilliamOS checkout is this repository. Local checkout paths and raw remote URLs are never printed.
+Set `TERRAFUSION_REPO_PATH` to the local TerraFusion checkout before running the preflight; a missing or blank value fails during precheck. `WILLIAMOS_REPO_PATH` remains optional and defaults to this repository. Local checkout paths and raw remote URLs are never printed.

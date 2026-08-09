@@ -102,19 +102,58 @@ function Test-DatabaseIsolation {
   } catch { return "DATABASE_ISOLATION_EVIDENCE_MISSING" }
 }
 
+function Test-CanonicalIntegerMap {
+  param($Actual, [hashtable]$Expected)
+  if ($Actual -isnot [PSCustomObject]) { return $false }
+  $properties = @($Actual.PSObject.Properties)
+  if ($properties.Count -ne $Expected.Count) { return $false }
+  foreach ($name in $Expected.Keys) {
+    $property = $Actual.PSObject.Properties[$name]
+    if ($null -eq $property -or $property.Value -isnot [Int64] -or $property.Value -ne $Expected[$name]) { return $false }
+  }
+  return $true
+}
+
+function Test-CanonicalStringSet {
+  param($Actual, [string[]]$Expected)
+  $values = @($Actual)
+  if ($values.Count -ne $Expected.Count -or @($values | Where-Object { $_ -isnot [string] }).Count -ne 0) { return $false }
+  if (@($values | Sort-Object -Unique).Count -ne $values.Count) { return $false }
+  return -not (Compare-Object -CaseSensitive -ReferenceObject @($Expected | Sort-Object) -DifferenceObject @($values | Sort-Object))
+}
+
+function Test-CanonicalManifest {
+  param($Manifest)
+  if ($Manifest.schemaVersion -isnot [Int64] -or $Manifest.schemaVersion -ne 1) { return $false }
+  if ($Manifest.workOrderId -isnot [string] -or $Manifest.workOrderId -cne "WO-OMEN-STAGE5-DEV-PREFLIGHT-001") { return $false }
+  if ($Manifest.sources.terrafusion.repository -isnot [string] -or $Manifest.sources.terrafusion.repository -cne "bsvalues/terrafusion_os_1.0") { return $false }
+  if ($Manifest.sources.terrafusion.branch -isnot [string] -or $Manifest.sources.terrafusion.branch -cne "main") { return $false }
+  if ($Manifest.sources.terrafusion.canonicalMarker -isnot [string] -or $Manifest.sources.terrafusion.canonicalMarker -cne "PATH_CANON_REGISTER.md") { return $false }
+  if ($Manifest.sources.williamos.repository -isnot [string] -or $Manifest.sources.williamos.repository -cne "bsvalues/terragroq") { return $false }
+  if ($Manifest.sources.williamos.branch -isnot [string] -or $Manifest.sources.williamos.branch -cne "main") { return $false }
+  if ($Manifest.sources.williamos.databaseAuthority -isnot [string] -or $Manifest.sources.williamos.databaseAuthority -cne "NEON_SEPARATE") { return $false }
+  if ($Manifest.nodes.hermes.sshAlias -isnot [string] -or $Manifest.nodes.hermes.sshAlias -cne "hermes") { return $false }
+  if (-not (Test-CanonicalIntegerMap $Manifest.nodes.hermes.requiredContainers @{ ollama = 11434 })) { return $false }
+  if (-not (Test-CanonicalIntegerMap $Manifest.nodes.hermes.advertisedContainers @{ "open-webui" = 3000; portainer = 9000 })) { return $false }
+  if ($Manifest.nodes.'atlas-node'.sshAlias -isnot [string] -or $Manifest.nodes.'atlas-node'.sshAlias -cne "atlas") { return $false }
+  if ($Manifest.nodes.'atlas-node'.composeFile -isnot [string] -or $Manifest.nodes.'atlas-node'.composeFile -cne "/home/bs/terrafusion/terrafusion-data.yml") { return $false }
+  if (-not (Test-CanonicalStringSet $Manifest.nodes.'atlas-node'.composeServices @("mongo", "postgres", "redis"))) { return $false }
+  if (-not (Test-CanonicalIntegerMap $Manifest.nodes.'atlas-node'.advertisedContainers @{ "tf-postgres" = 5432; "tf-redis" = 6379; "tf-mongo" = 27017; portainer_agent = 9001 })) { return $false }
+  if ($Manifest.policies.williamosUsesAtlasDatabase -isnot [bool] -or $Manifest.policies.williamosUsesAtlasDatabase -ne $false) { return $false }
+  if ($Manifest.policies.databaseQueriesAllowed -isnot [bool] -or $Manifest.policies.databaseQueriesAllowed -ne $false) { return $false }
+  if ($Manifest.policies.forgeInspectionAllowed -isnot [bool] -or $Manifest.policies.forgeInspectionAllowed -ne $false) { return $false }
+  return $true
+}
+
 try {
   $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
   $manifest = Get-Content -LiteralPath (Join-Path $repoRoot "config/lab-dev-topology.json") -Raw | ConvertFrom-Json
-  if ($manifest.schemaVersion -ne 1 -or $manifest.workOrderId -ne "WO-OMEN-STAGE5-DEV-PREFLIGHT-001") { throw "Invalid topology manifest" }
-  if ($manifest.nodes.'atlas-node'.composeFile -isnot [string] -or $manifest.nodes.'atlas-node'.composeFile -cne "/home/bs/terrafusion/terrafusion-data.yml") { throw "Invalid topology manifest" }
-  if ($manifest.sources.williamos.databaseAuthority -isnot [string] -or $manifest.sources.williamos.databaseAuthority -cne "NEON_SEPARATE") { throw "Invalid topology manifest" }
-  if ($manifest.policies.williamosUsesAtlasDatabase -isnot [bool] -or $manifest.policies.williamosUsesAtlasDatabase -ne $false) { throw "Invalid topology manifest" }
-  if ($manifest.policies.databaseQueriesAllowed -isnot [bool] -or $manifest.policies.databaseQueriesAllowed -ne $false) { throw "Invalid topology manifest" }
-  if ($manifest.policies.forgeInspectionAllowed -isnot [bool] -or $manifest.policies.forgeInspectionAllowed -ne $false) { throw "Invalid topology manifest" }
+  if (-not (Test-CanonicalManifest $manifest)) { throw "Invalid topology manifest" }
   if ($env:LAB_DEV_NOW_UTC) { [DateTime]::Parse($env:LAB_DEV_NOW_UTC).ToUniversalTime() | Out-Null }
+  if ([string]::IsNullOrWhiteSpace($env:TERRAFUSION_REPO_PATH)) { throw "TerraFusion repository path is required" }
   $gitExecutable = if ($env:LAB_DEV_GIT_EXECUTABLE) { $env:LAB_DEV_GIT_EXECUTABLE } else { "git" }
   $sshExecutable = if ($env:LAB_DEV_SSH_EXECUTABLE) { $env:LAB_DEV_SSH_EXECUTABLE } else { "ssh" }
-  $terrafusionPath = if ($env:TERRAFUSION_REPO_PATH) { $env:TERRAFUSION_REPO_PATH } else { "C:\Users\bsval\terrafusion_os_1.0" }
+  $terrafusionPath = $env:TERRAFUSION_REPO_PATH
   $williamosPath = if ($env:WILLIAMOS_REPO_PATH) { $env:WILLIAMOS_REPO_PATH } else { $repoRoot }
 
   $results = [ordered]@{}
