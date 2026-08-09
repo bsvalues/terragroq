@@ -307,9 +307,16 @@ function primaryDecisionPolicyProjection(row, decisionPacket) {
       for (let end = start; end < tokens.length; end += 1) {
         if (!/^[A-Za-z0-9]+$/.test(tokens[end])) break
         combined += tokens[end].toLowerCase()
-        if (end === start || !Object.hasOwn(protectedLexemes, combined)) continue
-        if (combined === "token" && /^to$/i.test(tokens[start]) && tokens[end] === "Ken") continue
-        match = { end, value: protectedLexemes[combined] }
+        const protectedMatch = Object.keys(protectedLexemes).find((lexeme) => (
+          lexeme.length === combined.length
+          && [...lexeme].every((character, index) => (
+            character === combined[index]
+            || (/[il]/.test(character) && /[il]/.test(combined[index]))
+          ))
+        ))
+        if (end === start || !protectedMatch) continue
+        if (protectedMatch === "token" && /^to$/i.test(tokens[start]) && tokens[end] === "Ken") continue
+        match = { end, value: protectedLexemes[protectedMatch] }
       }
       if (match) {
         reconstructed.push(match.value)
@@ -340,24 +347,34 @@ function primaryDecisionPolicyProjection(row, decisionPacket) {
       ))
       return match ? protectedLexemes[match] : word
     })
-    const asciiVariants = [
-      safeValue,
-      canonicalizeAsciiConfusables(safeValue),
-    ]
     const fold = (candidate, one) => candidate.replace(/[01345789@$!|]/g, (character) => ({
       "0": "o", "1": one, "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "9": "g",
       "@": "a", "$": "s", "!": "i", "|": "l",
     })[character])
-    const folded = asciiVariants.flatMap((candidate) => [fold(candidate, "l"), fold(candidate, "i")])
-    const variants = folded.flatMap((candidate) => [
-      candidate.replace(/[^A-Za-z\s]/g, ""),
-      candidate.replace(/[^A-Za-z]+/g, " "),
-    ]).flatMap((candidate) => [candidate, canonicalizeAsciiConfusables(candidate)])
-    return [
-      ...variants,
-      ...protectedSplitVariants(safeValue),
-      ...variants.flatMap(protectedSplitVariants),
-    ]
+    const variants = new Set([safeValue])
+    const pending = [safeValue]
+    while (pending.length > 0) {
+      const candidate = pending.shift()
+      const transformed = [
+        canonicalizeAsciiConfusables(candidate),
+        fold(candidate, "l"),
+        fold(candidate, "i"),
+        candidate.replace(/[^A-Za-z\s]/g, ""),
+        candidate.replace(/[^A-Za-z]+/g, " "),
+        ...protectedSplitVariants(candidate),
+      ]
+      for (const variant of transformed) {
+        if (variants.has(variant)) continue
+        variants.add(variant)
+        pending.push(variant)
+        if (variants.size > 128) {
+          throw Object.assign(new Error("Primary decision policy normalization exceeded safe bounds"), {
+            code: "PRIMARY_DECISION_REQUEST_INVALID",
+          })
+        }
+      }
+    }
+    return [...variants]
   }
   const commandFields = [
     row?.outcomeKey,

@@ -803,6 +803,8 @@ describe("secure Primary decision intake", () => {
     for (const combinedScope of [
       "product-lon deployment",
       "credentia-I access",
+      "product lon deployment",
+      "credentia I access",
     ]) {
       const combinedScopeQuery = vi.fn(async () => ({ rows: [{
         ...request,
