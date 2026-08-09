@@ -1,0 +1,102 @@
+{
+  "schema_version": "0.1",
+  "generated_at": "2026-08-09T21:57:00Z",
+  "nodes": [
+    {
+      "id": "omen",
+      "hostname": "OMEN",
+      "role": "operator-cockpit-development-burst-compute",
+      "availability_class": "interactive",
+      "os": {"family": "windows", "version": "11"},
+      "authority": {
+        "allow": ["interactive-development", "operator-control", "read-only-lab-inspection", "transient-ssh-tunnel", "burst-compute"],
+        "deny": ["authoritative-durable-state", "county-production-write", "pacs-production-write", "unattended-critical-state"]
+      },
+      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed; live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "Static role only; hardware must be refreshed by probe-windows.ps1"},
+      "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "AMD", "model": "Ryzen 9 8940HX", "cores": 16, "threads": 32, "max_mhz": null, "numa_node": null}],
+      "dimms": [],
+      "gpus": [{"id": "gpu0", "vendor": "NVIDIA", "model": "GeForce RTX 5060 Laptop GPU", "pci_bus_id": null, "uuid": null, "vram_bytes": 8589934592, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}],
+      "disks": [],
+      "network": [],
+      "runtimes": [{"id": "wsl2", "kind": "wsl", "version": null, "state": "running", "endpoint": null, "details": {}}, {"id": "docker-desktop", "kind": "docker", "version": null, "state": "running", "endpoint": null, "details": {}}],
+      "capabilities": ["interactive-development", "operator-control", "transient-ssh-tunnel", "burst-compute", "cuda"],
+      "constraints": ["not-always-on", "no-authoritative-state"],
+      "warnings": ["DIMM, disk, NIC, driver, runtime versions, and dynamic health require live probe"]
+    },
+    {
+      "id": "hermes-node",
+      "hostname": "HERMES",
+      "role": "local-ai-gpu-execution-worker",
+      "availability_class": "resident",
+      "os": {"family": "windows", "version": "10"},
+      "authority": {
+        "allow": ["local-llm-inference", "gpu-batch", "agent-runtime", "bounded-execution", "ssh-control"],
+        "deny": ["authoritative-durable-state", "county-production-write", "pacs-production-write", "direct-ollama-lan-exposure"]
+      },
+      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed; live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "Hermes software subsystem is distinct from this physical node"},
+      "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "Intel", "model": "Core i7-5960X", "cores": 8, "threads": 16, "max_mhz": null, "numa_node": null}],
+      "dimms": [],
+      "gpus": [{"id": "gpu0", "vendor": "NVIDIA", "model": "GeForce RTX 3050", "pci_bus_id": null, "uuid": null, "vram_bytes": 6442450944, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}, {"id": "gpu1", "vendor": "NVIDIA", "model": "Quadro K2200", "pci_bus_id": null, "uuid": null, "vram_bytes": 4294967296, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}],
+      "disks": [],
+      "network": [{"id": "lan0", "name": "primary-lan", "mac": null, "state": "unknown", "speed_mbps": null, "duplex": null, "addresses": ["192.168.1.154"], "default_route": null}],
+      "runtimes": [{"id": "ollama", "kind": "ollama", "version": null, "state": "healthy", "endpoint": "http://127.0.0.1:11434", "details": {"exposure": "loopback-only"}}, {"id": "docker", "kind": "docker", "version": "28.5.1", "state": "running", "endpoint": null, "details": {}}, {"id": "ssh", "kind": "ssh", "version": null, "state": "running", "endpoint": null, "details": {}}],
+      "capabilities": ["local-llm-inference", "gpu-batch", "agent-runtime", "cuda", "ssh-control"],
+      "constraints": ["no-authoritative-state", "ollama-loopback-only"],
+      "warnings": ["DIMM, disk, NIC, GPU PCI identity, driver, and dynamic health require live probe"]
+    },
+    {
+      "id": "atlas",
+      "hostname": "atlas",
+      "role": "durable-state-forge-retrieval",
+      "availability_class": "stateful",
+      "os": {"family": "linux", "version": "Ubuntu 24.04"},
+      "authority": {
+        "allow": ["authoritative-durable-state", "database-state", "forge-storage", "retrieval-index", "backup-source", "protected-data-read-when-authorized"],
+        "deny": ["noisy-unbounded-batch-by-default", "county-production-write", "pacs-production-write"]
+      },
+      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed; live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "All populated DIMMs and disks must be enumerated live"},
+      "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "Intel", "model": "Xeon E5-2690 v4", "cores": 14, "threads": 28, "max_mhz": null, "numa_node": null}],
+      "dimms": [],
+      "gpus": [],
+      "disks": [],
+      "network": [{"id": "lan0", "name": "enp0s25", "mac": null, "state": "unknown", "speed_mbps": null, "duplex": null, "addresses": ["192.168.1.156"], "default_route": null}],
+      "runtimes": [{"id": "docker", "kind": "docker", "version": null, "state": "running", "endpoint": null, "details": {}}, {"id": "postgres", "kind": "database", "version": null, "state": "healthy", "endpoint": null, "details": {}}, {"id": "redis", "kind": "database", "version": null, "state": "running", "endpoint": null, "details": {"authentication": "required"}}, {"id": "mongo", "kind": "database", "version": null, "state": "healthy", "endpoint": null, "details": {}}, {"id": "forge", "kind": "storage", "version": null, "state": "healthy", "endpoint": "/forge", "details": {"filesystem": "ext4", "mount_by_uuid": true}}],
+      "capabilities": ["database-state", "forge-storage", "retrieval-index", "backup-archive", "protected-data-read"],
+      "constraints": ["protect-state-latency", "avoid-noisy-batch-by-default"],
+      "warnings": ["DIMM-level inventory, all disks including Forge serial/health, NIC counters, and runtime versions require live probe"]
+    },
+    {
+      "id": "t5810-2",
+      "hostname": null,
+      "role": "secondary-cpu-batch-nas-backup-candidate",
+      "availability_class": "secondary",
+      "os": null,
+      "authority": {
+        "allow": ["cpu-batch-candidate", "ci-build-test-candidate", "hash-verify-candidate", "backup-archive-candidate", "nas-candidate"],
+        "deny": ["authoritative-durable-state-until-approved", "county-production-write", "pacs-production-write"]
+      },
+      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed; live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "Machine recently revived; exact RAM/GPU/disk/network/runtime inventory must be discovered before capability promotion"},
+      "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "Intel", "model": "Xeon E5-2690 v4", "cores": 14, "threads": 28, "max_mhz": null, "numa_node": null}],
+      "dimms": [],
+      "gpus": [],
+      "disks": [],
+      "network": [],
+      "runtimes": [],
+      "capabilities": ["cpu-batch-candidate", "ci-build-test-candidate", "backup-archive-candidate", "nas-candidate"],
+      "constraints": ["inventory-unproven", "not-schedulable-yet"],
+      "warnings": ["No live capability should be scheduled until probe evidence exists"]
+    },
+    {
+      "id": "azure",
+      "hostname": null,
+      "role": "approved-production-external-capability-envelope",
+      "availability_class": "external",
+      "os": null,
+      "authority": {"allow": [], "deny": ["implicit-use", "implicit-cost", "implicit-protected-data-egress"]},
+      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-policy-envelope", "probe_version": null, "confidence": "declared", "ttl_seconds": null, "notes": "Capabilities are empty until separately authorized and discovered"},
+      "cpus": [], "dimms": [], "gpus": [], "disks": [], "network": [], "runtimes": [], "capabilities": [],
+      "constraints": ["explicit-authority-required", "cost-boundary", "data-classification-boundary"],
+      "warnings": []
+    }
+  ]
+}
