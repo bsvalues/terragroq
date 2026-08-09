@@ -80,6 +80,12 @@ ownerOperationsAllowed: false
 
 ## Stage 1 status
 
+> **Supersession note (2026-08-08):** The pre-follow-up `lab-status` exit `2` and missing-receipt
+> evidence retained below is historical. Current operational sync truth is documented in
+> [`WO-OMEN-COCKPIT-SYNC-RECEIPT-001.md`](WO-OMEN-COCKPIT-SYNC-RECEIPT-001.md), where the Atlas
+> canonical receipt and bound Hermes task evidence produce `SYNC_OK`, `lab-status` exit `0`, and
+> 45 passing focused tests. Stage 1 remains operationally complete and frozen.
+
 - SSH to Hermes: **PROVEN**. The repaired server accepts the intended fingerprint
   `SHA256:yKY2L2DIR7KaYtgr4Vm5VXQrlzZmGk82GmU+2ARAWG8`; fresh verbose proof records public-key
   authentication, hostname `Hermes`, and exit `0`. A temporary TCP outage observed after the first
