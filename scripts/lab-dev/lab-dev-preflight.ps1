@@ -106,6 +106,11 @@ try {
   $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
   $manifest = Get-Content -LiteralPath (Join-Path $repoRoot "config/lab-dev-topology.json") -Raw | ConvertFrom-Json
   if ($manifest.schemaVersion -ne 1 -or $manifest.workOrderId -ne "WO-OMEN-STAGE5-DEV-PREFLIGHT-001") { throw "Invalid topology manifest" }
+  if ($manifest.nodes.'atlas-node'.composeFile -isnot [string] -or $manifest.nodes.'atlas-node'.composeFile -cne "/home/bs/terrafusion/terrafusion-data.yml") { throw "Invalid topology manifest" }
+  if ($manifest.sources.williamos.databaseAuthority -isnot [string] -or $manifest.sources.williamos.databaseAuthority -cne "NEON_SEPARATE") { throw "Invalid topology manifest" }
+  if ($manifest.policies.williamosUsesAtlasDatabase -isnot [bool] -or $manifest.policies.williamosUsesAtlasDatabase -ne $false) { throw "Invalid topology manifest" }
+  if ($manifest.policies.databaseQueriesAllowed -isnot [bool] -or $manifest.policies.databaseQueriesAllowed -ne $false) { throw "Invalid topology manifest" }
+  if ($manifest.policies.forgeInspectionAllowed -isnot [bool] -or $manifest.policies.forgeInspectionAllowed -ne $false) { throw "Invalid topology manifest" }
   if ($env:LAB_DEV_NOW_UTC) { [DateTime]::Parse($env:LAB_DEV_NOW_UTC).ToUniversalTime() | Out-Null }
   $gitExecutable = if ($env:LAB_DEV_GIT_EXECUTABLE) { $env:LAB_DEV_GIT_EXECUTABLE } else { "git" }
   $sshExecutable = if ($env:LAB_DEV_SSH_EXECUTABLE) { $env:LAB_DEV_SSH_EXECUTABLE } else { "ssh" }
@@ -135,8 +140,33 @@ docker ps --format '{{.Names}}|{{.Image}}|{{.State}}|{{.Status}}|{{.Ports}}' | a
   health = "none"
   if ($4 ~ /\(healthy\)/) health = "healthy"
   if ($4 ~ /\(unhealthy\)/) health = "unhealthy"
+  portCount = 0
+  mappingCount = split($5, mappings, ",")
+  for (mappingIndex = 1; mappingIndex <= mappingCount; mappingIndex++) {
+    if (match(mappings[mappingIndex], /:[0-9][0-9]*->/)) {
+      hostPort = substr(mappings[mappingIndex], RSTART + 1, RLENGTH - 3)
+      duplicate = 0
+      for (existingIndex = 1; existingIndex <= portCount; existingIndex++) {
+        if (portValues[existingIndex] == hostPort) duplicate = 1
+      }
+      if (!duplicate) {
+        portValues[++portCount] = hostPort
+      }
+    }
+  }
+  for (left = 1; left <= portCount; left++) {
+    for (right = left + 1; right <= portCount; right++) {
+      if ((portValues[right] + 0) < (portValues[left] + 0)) {
+        swap = portValues[left]
+        portValues[left] = portValues[right]
+        portValues[right] = swap
+      }
+    }
+  }
   ports = ""
-  if (match($5, /:[0-9][0-9]*->/)) ports = substr($5, RSTART + 1, RLENGTH - 3)
+  for (portIndex = 1; portIndex <= portCount; portIndex++) {
+    ports = ports (portIndex == 1 ? "" : ",") portValues[portIndex]
+  }
   print $1 "|" $2 "|" $3 "|" health "|" ports
 }'
 docker compose -f '__COMPOSE_FILE__' config --services | sort | paste -sd, - | sed 's/^/COMPOSE_SERVICES=/'

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
@@ -28,16 +28,19 @@ type Mode =
   | "database-isolation-affirmative-instruction"
   | "atlas-extra-port"
   | "atlas-malformed-port"
+  | "atlas-payload-extra-port"
 
-function fixture(mode: Mode) {
+function fixture(mode: Mode, atlasOutput = "") {
   const root = mkdtempSync(path.join(tmpdir(), "lab-dev-preflight-"))
   roots.push(root)
   const bin = path.join(root, "fake-bin")
   const terrafusion = path.join(root, "terrafusion")
   const williamos = path.join(root, "williamos")
   const log = path.join(root, "ssh-args.log")
+  const atlasOutputPath = path.join(root, "atlas-output.txt")
   mkdirSync(bin)
   writeFileSync(log, "")
+  writeFileSync(atlasOutputPath, atlasOutput)
   mkdirSync(terrafusion)
   mkdirSync(williamos)
   writeFileSync(path.join(terrafusion, "PATH_CANON_REGISTER.md"), "canonical marker\n")
@@ -133,6 +136,7 @@ echo open-webui^|open-webui:latest^|running^|healthy^|3000
 echo portainer^|portainer/portainer-ce:latest^|running^|healthy^|9000
 exit /b 0
 :atlas
+if "%LAB_DEV_TEST_MODE%"=="atlas-payload-extra-port" type "%LAB_DEV_TEST_ATLAS_OUTPUT%"& exit /b 0
 if "%LAB_DEV_TEST_MODE%"=="atlas-extra-port" echo tf-postgres^|postgres:16^|running^|healthy^|5432,unexpected& goto atlas_rest
 if "%LAB_DEV_TEST_MODE%"=="atlas-malformed-port" echo tf-postgres^|postgres:16^|running^|healthy^|5432,non-numeric& goto atlas_rest
 echo tf-postgres^|postgres:16^|running^|healthy^|5432
@@ -147,12 +151,11 @@ if "%LAB_DEV_TEST_MODE%"=="atlas-compose-malformed" echo COMPOSE_SERVICES=portai
 echo COMPOSE_SERVICES=mongo,postgres,redis
 exit /b 0
 `, "utf8")
-  return { git, ssh, log, terrafusion, williamos }
+  return { git, ssh, log, root, atlasOutputPath, terrafusion, williamos }
 }
 
-function runPreflight(mode: Mode) {
-  const testFixture = fixture(mode)
-  const result = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", scriptPath], {
+function invokePreflight(mode: Mode, testFixture: ReturnType<typeof fixture>, selectedScript = scriptPath) {
+  const result = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", selectedScript], {
     cwd: repoRoot,
     encoding: "utf8",
     timeout: 15_000,
@@ -162,6 +165,7 @@ function runPreflight(mode: Mode) {
       LAB_DEV_SSH_EXECUTABLE: testFixture.ssh,
       LAB_DEV_NOW_UTC: "2026-08-08T12:00:00Z",
       LAB_DEV_TEST_MODE: mode,
+      LAB_DEV_TEST_ATLAS_OUTPUT: testFixture.atlasOutputPath,
       LAB_DEV_TEST_SSH_LOG: testFixture.log,
       TERRAFUSION_REPO_PATH: testFixture.terrafusion,
       WILLIAMOS_REPO_PATH: testFixture.williamos,
@@ -171,6 +175,23 @@ function runPreflight(mode: Mode) {
     ...result,
     sshArgs: readFileSync(testFixture.log, "utf8"),
   }
+}
+
+function runPreflight(mode: Mode, atlasOutput = "") {
+  return invokePreflight(mode, fixture(mode, atlasOutput))
+}
+
+function runPreflightWithManifest(mutate: (manifest: any) => void) {
+  const testFixture = fixture("healthy")
+  const isolatedRoot = path.join(testFixture.root, "isolated-repo")
+  const isolatedScript = path.join(isolatedRoot, "scripts", "lab-dev", "lab-dev-preflight.ps1")
+  const manifest = JSON.parse(readFileSync(path.join(repoRoot, "config", "lab-dev-topology.json"), "utf8"))
+  mutate(manifest)
+  mkdirSync(path.dirname(isolatedScript), { recursive: true })
+  mkdirSync(path.join(isolatedRoot, "config"), { recursive: true })
+  writeFileSync(isolatedScript, readFileSync(scriptPath, "utf8"))
+  writeFileSync(path.join(isolatedRoot, "config", "lab-dev-topology.json"), JSON.stringify(manifest))
+  return invokePreflight("healthy", testFixture, isolatedScript)
 }
 
 function decodedPayloads(sshArgs: string) {
@@ -184,11 +205,66 @@ function decodedPayloads(sshArgs: string) {
   }
 }
 
+function executeAtlasPayload(payload: string, dockerPsOutput: string) {
+  const root = mkdtempSync(path.join(tmpdir(), "lab-dev-atlas-payload-"))
+  roots.push(root)
+  const docker = path.join(root, "docker")
+  writeFileSync(docker, `#!/bin/sh
+if [ "$1" = "ps" ]; then
+  printf '%s\\n' "$LAB_DEV_DOCKER_PS_OUTPUT"
+  exit 0
+fi
+if [ "$1" = "compose" ]; then
+  printf '%s\\n' mongo postgres redis
+  exit 0
+fi
+exit 9
+`)
+  chmodSync(docker, 0o755)
+
+  if (process.platform === "win32") {
+    const wslRoot = root.replace(/^([A-Za-z]):\\/, (_, drive: string) => `/mnt/${drive.toLowerCase()}/`).replaceAll("\\", "/")
+    return spawnSync(
+      "wsl.exe",
+      ["-e", "env", "-i", `PATH=${wslRoot}:/usr/bin:/bin`, `LAB_DEV_DOCKER_PS_OUTPUT=${dockerPsOutput}`, "sh", "-s"],
+      { encoding: "utf8", input: payload, timeout: 15_000 },
+    )
+  }
+  return spawnSync("sh", ["-s"], {
+    encoding: "utf8",
+    input: payload,
+    timeout: 15_000,
+    env: { PATH: `${root}:/usr/bin:/bin`, LAB_DEV_DOCKER_PS_OUTPUT: dockerPsOutput },
+  })
+}
+
 afterEach(() => {
   while (roots.length > 0) rmSync(roots.pop()!, { recursive: true, force: true })
 })
 
 describe("OMEN Stage 5 development preflight", () => {
+  const invalidManifestCases: Array<[string, (manifest: any) => void]> = [
+    ["alternate Compose path", (manifest) => { manifest.nodes["atlas-node"].composeFile = "/tmp/terrafusion-data.yml" }],
+    ["Compose path shell syntax", (manifest) => { manifest.nodes["atlas-node"].composeFile = "/home/bs/terrafusion/terrafusion-data.yml'; uname -a; '" }],
+    ["Compose path control character", (manifest) => { manifest.nodes["atlas-node"].composeFile = "/home/bs/terrafusion/terrafusion-data.yml\nuname -a" }],
+    ["missing database authority", (manifest) => { delete manifest.sources.williamos.databaseAuthority }],
+    ["type-wrong database authority", (manifest) => { manifest.sources.williamos.databaseAuthority = false }],
+    ["opposite database authority", (manifest) => { manifest.sources.williamos.databaseAuthority = "ATLAS_SHARED" }],
+    ["missing policy", (manifest) => { delete manifest.policies.databaseQueriesAllowed }],
+    ["type-wrong policy", (manifest) => { manifest.policies.forgeInspectionAllowed = "false" }],
+    ["Atlas database policy enabled", (manifest) => { manifest.policies.williamosUsesAtlasDatabase = true }],
+    ["database queries enabled", (manifest) => { manifest.policies.databaseQueriesAllowed = true }],
+    ["Forge inspection enabled", (manifest) => { manifest.policies.forgeInspectionAllowed = true }],
+  ]
+
+  test.each(invalidManifestCases)("rejects %s before SSH", (_name, mutate) => {
+    const result = runPreflightWithManifest(mutate)
+
+    expect(result.status).toBe(2)
+    expect(result.stdout).toContain("BLOCKER=PRECHECK_CONFIGURATION_INVALID")
+    expect(result.sshArgs).toBe("")
+  }, 20_000)
+
   test("declares the independent Atlas Compose service contract", () => {
     const topology = JSON.parse(readFileSync(path.join(repoRoot, "config", "lab-dev-topology.json"), "utf8"))
 
@@ -244,4 +320,19 @@ describe("OMEN Stage 5 development preflight", () => {
     }
     expect(payloads.atlas).toContain("compose")
   })
+
+  test("the exact Atlas payload preserves every published host port and fails closed on extras", () => {
+    const payload = decodedPayloads(runPreflight("healthy").sshArgs).atlas
+    const dockerPsOutput = [
+      "tf-postgres|postgres:16|running|Up 1 hour (healthy)|0.0.0.0:5432->5432/tcp, 0.0.0.0:15432->5432/tcp",
+      "tf-redis|redis:7|running|Up 1 hour (healthy)|0.0.0.0:6379->6379/tcp",
+      "tf-mongo|mongo:7|running|Up 1 hour (healthy)|0.0.0.0:27017->27017/tcp",
+      "portainer_agent|portainer/agent:latest|running|Up 1 hour (healthy)|0.0.0.0:9001->9001/tcp",
+    ].join("\n")
+    const transformed = executeAtlasPayload(payload, dockerPsOutput)
+
+    expect(transformed.status).toBe(0)
+    expect(transformed.stdout).toContain("tf-postgres|postgres:16|running|healthy|5432,15432")
+    expect(runPreflight("atlas-payload-extra-port", transformed.stdout).status).toBe(2)
+  }, 30_000)
 })
