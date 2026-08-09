@@ -155,9 +155,16 @@ FULL_SUITE_FILES=260_PASSED
 FULL_SUITE_TESTS=2628_PASSED
 FULL_SUITE_TESTS_SKIPPED=2
 INDEPENDENT_TASK_1_REVIEW=CLEAN
+INDEPENDENT_GOVERNANCE_PACKET_REVIEW=CLEAN
+INDEPENDENT_WHOLE_BRANCH_REVIEW=CLEAN
+MERGE_READINESS=READY
+OWNER_ACTION_REQUIRED=false
+REVIEW_THREAD_CLOSURE=PENDING_CURRENT_HEAD_GITHUB_RECHECK
 ```
 
 The focused suite covered healthy output and fail-closed source, repository, worktree, endpoint, Compose-service, published-port, database-isolation, and prohibited-command cases. The production-faithful Atlas case separately validated Compose services from the independently advertised `portainer_agent` container.
+
+`MERGE_READINESS=READY` records the completed local validation and independent-review gates. Review-thread closure remains an external PR gate: after this exact remediation is pushed, the current-head GitHub recheck must report `ZERO_UNRESOLVED` before merge. This commit does not claim that self-referential closure is already complete.
 
 ## Evidence and safety boundary
 
