@@ -28,9 +28,11 @@ function Test-SourceContract {
     if (($status.Output -join "").Trim().Length -ne 0) { return "SOURCE_DIRTY" }
     $branch = Invoke-CheckedCommand $GitExecutable @("-C", $RepositoryPath, "branch", "--show-current")
     if ($branch.ExitCode -ne 0 -or $branch.Output.Count -ne 1 -or [string]::IsNullOrWhiteSpace($branch.Output[0])) { return "SOURCE_BRANCH_UNNAMED" }
-    $mainRef = Invoke-CheckedCommand $GitExecutable @("-C", $RepositoryPath, "rev-parse", "refs/heads/$($Source.branch)")
-    $ancestor = Invoke-CheckedCommand $GitExecutable @("-C", $RepositoryPath, "merge-base", "--is-ancestor", "refs/heads/$($Source.branch)", "HEAD")
-    if ($mainRef.ExitCode -ne 0 -or $ancestor.ExitCode -ne 0) { return "SOURCE_MAIN_NOT_ANCESTOR" }
+    $liveMain = Invoke-CheckedCommand $GitExecutable @("-C", $RepositoryPath, "ls-remote", $remote.Output[0].Trim(), "refs/heads/$($Source.branch)")
+    $liveMainPattern = "^(?<sha>[0-9a-fA-F]{40})\s+refs/heads/$([regex]::Escape([string]$Source.branch))$"
+    if ($liveMain.ExitCode -ne 0 -or $liveMain.Output.Count -ne 1 -or $liveMain.Output[0] -notmatch $liveMainPattern) { return "SOURCE_LIVE_MAIN_INVALID" }
+    $ancestor = Invoke-CheckedCommand $GitExecutable @("-C", $RepositoryPath, "merge-base", "--is-ancestor", $Matches.sha, "HEAD")
+    if ($ancestor.ExitCode -ne 0) { return "SOURCE_LIVE_MAIN_NOT_ANCESTOR" }
     if ($Marker -and -not (Test-Path -LiteralPath (Join-Path $RepositoryPath $Marker) -PathType Leaf)) { return "SOURCE_MARKER_MISSING" }
     return "READY"
   } catch { return "SOURCE_GIT_FAILURE" }
@@ -64,7 +66,11 @@ function Test-ContainerTopology {
   foreach ($name in $expectedNames) {
     $record = @($Records | Where-Object { $_.Name -eq $name })
     if ($record.Count -ne 1 -or $record[0].Running -ne "running" -or $record[0].Health -notin @("healthy", "none")) { return $false }
-    if ($record[0].PublishedPorts -notmatch "(^|,)$($expected[$name])(,|$)") { return $false }
+    $ports = @($record[0].PublishedPorts.Split(","))
+    if ($ports.Count -ne 1 -or $ports[0] -notmatch '^[1-9]\d*$') { return $false }
+    try {
+      if ([Int64]$ports[0] -ne [Int64]$expected[$name] -or [Int64]$ports[0] -gt 65535) { return $false }
+    } catch { return $false }
   }
   return $true
 }
@@ -81,8 +87,11 @@ function Test-DatabaseIsolation {
   try {
     $readme = Get-Content -LiteralPath (Join-Path $WilliamOsPath "README.md") -Raw
     $runbook = Get-Content -LiteralPath (Join-Path $WilliamOsPath "docs/runbooks/local-williamos-operator-runbook.md") -Raw
-    if ($readme -notmatch '(?i)\bNeon\b') { return "NEON_CONTRACT_MISSING" }
-    if ($runbook -notmatch '(?i)point\s+WilliamOS\s+`DATABASE_URL`\s+at\s+TerraFusion\s+PostgreSQL') { return "TERRAFUSION_DATABASE_PROHIBITION_MISSING" }
+    if ($readme -notmatch '(?im)^\s*\|\s*Database\s*\|\s*Neon\s+Postgres(?:\s|\|)') { return "NEON_CONTRACT_MISSING" }
+    $databaseTarget = 'WilliamOS\s+`DATABASE_URL`\s+at\s+TerraFusion\s+Postgres(?:QL)?'
+    $directProhibition = "(?im)^\s*(?:[-*]\s*)?Do\s+not\s+point\s+$databaseTarget\s*\.?\s*$"
+    $listedProhibition = "(?ims)\bDo\s+not\s*:\s*(?:[-*][^\r\n]*\r?\n\s*)*?[-*]\s*point\s+$databaseTarget\s*\.?\s*$"
+    if ($runbook -notmatch $directProhibition -and $runbook -notmatch $listedProhibition) { return "TERRAFUSION_DATABASE_PROHIBITION_MISSING" }
     return "PRESERVED"
   } catch { return "DATABASE_ISOLATION_EVIDENCE_MISSING" }
 }

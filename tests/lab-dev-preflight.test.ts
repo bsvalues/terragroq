@@ -15,11 +15,16 @@ type Mode =
   | "shared-checkout"
   | "dirty-source"
   | "stale-source"
+  | "stale-remote-source"
   | "hermes-unreachable"
   | "hermes-ollama-missing"
   | "atlas-unreachable"
   | "atlas-compose-mismatch"
   | "database-isolation-missing"
+  | "database-isolation-incidental-neon"
+  | "database-isolation-affirmative-instruction"
+  | "atlas-extra-port"
+  | "atlas-malformed-port"
 
 function fixture(mode: Mode) {
   const root = mkdtempSync(path.join(tmpdir(), "lab-dev-preflight-"))
@@ -33,14 +38,23 @@ function fixture(mode: Mode) {
   mkdirSync(terrafusion)
   mkdirSync(williamos)
   writeFileSync(path.join(terrafusion, "PATH_CANON_REGISTER.md"), "canonical marker\n")
-  writeFileSync(path.join(williamos, "README.md"), mode === "database-isolation-missing" ? "Database pending\n" : "Neon Postgres\n")
+  writeFileSync(
+    path.join(williamos, "README.md"),
+    mode === "database-isolation-missing"
+      ? "Database pending\n"
+      : mode === "database-isolation-incidental-neon"
+        ? "Neon Postgres is mentioned incidentally.\n"
+        : "| Database | Neon Postgres via Drizzle ORM |\n",
+  )
   const runbooks = path.join(williamos, "docs", "runbooks")
   mkdirSync(runbooks, { recursive: true })
   writeFileSync(
     path.join(runbooks, "local-williamos-operator-runbook.md"),
     mode === "database-isolation-missing"
       ? "Database policy pending\n"
-      : "Do not point WilliamOS `DATABASE_URL` at TerraFusion PostgreSQL.\n",
+      : mode === "database-isolation-affirmative-instruction"
+        ? "Point WilliamOS `DATABASE_URL` at TerraFusion PostgreSQL.\n"
+        : "Do not:\n\n- point WilliamOS `DATABASE_URL` at TerraFusion PostgreSQL\n",
   )
 
   const git = path.join(bin, "fake-git.cmd")
@@ -58,7 +72,9 @@ if /I "%all%"=="-C %WILLIAMOS_REPO_PATH% rev-parse --git-common-dir" goto common
 echo %all% | findstr /C:"status --porcelain" >nul && goto status
 echo %all% | findstr /C:"branch --show-current" >nul && goto branch
 echo %all% | findstr /C:"rev-parse refs/heads/main" >nul && goto mainref
+echo %all% | findstr /C:"ls-remote" >nul && goto remote_main
 echo %all% | findstr /C:"merge-base --is-ancestor refs/heads/main HEAD" >nul && goto ancestor
+echo %all% | findstr /C:"merge-base --is-ancestor" >nul && goto live_ancestor
 exit /b 9
 :remote
 if "%LAB_DEV_TEST_MODE%"=="wrong-repository" if "%repo%"=="terrafusion" echo https://github.com/bsvalues/not-terrafusion.git& exit /b 0
@@ -79,10 +95,18 @@ exit /b 0
 echo main
 exit /b 0
 :mainref
-echo deadbeef
+echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+exit /b 0
+:remote_main
+if "%LAB_DEV_TEST_MODE%"=="stale-remote-source" echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/main& exit /b 0
+echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main
 exit /b 0
 :ancestor
 if "%LAB_DEV_TEST_MODE%"=="stale-source" exit /b 1
+exit /b 0
+:live_ancestor
+if "%LAB_DEV_TEST_MODE%"=="stale-source" exit /b 1
+if "%LAB_DEV_TEST_MODE%"=="stale-remote-source" exit /b 1
 exit /b 0
 `, "utf8")
   writeFileSync(ssh, `@echo off
@@ -106,7 +130,10 @@ echo open-webui^|open-webui:latest^|running^|healthy^|3000
 echo portainer^|portainer/portainer-ce:latest^|running^|healthy^|9000
 exit /b 0
 :atlas
+if "%LAB_DEV_TEST_MODE%"=="atlas-extra-port" echo tf-postgres^|postgres:16^|running^|healthy^|5432,unexpected& goto atlas_rest
+if "%LAB_DEV_TEST_MODE%"=="atlas-malformed-port" echo tf-postgres^|postgres:16^|running^|healthy^|5432,non-numeric& goto atlas_rest
 echo tf-postgres^|postgres:16^|running^|healthy^|5432
+:atlas_rest
 echo tf-redis^|redis:7^|running^|healthy^|6379
 echo tf-mongo^|mongo:7^|running^|healthy^|27017
 echo portainer_agent^|portainer/agent:latest^|running^|healthy^|9001
@@ -178,11 +205,16 @@ describe("OMEN Stage 5 development preflight", () => {
     "shared-checkout",
     "dirty-source",
     "stale-source",
+    "stale-remote-source",
     "hermes-unreachable",
     "hermes-ollama-missing",
     "atlas-unreachable",
     "atlas-compose-mismatch",
     "database-isolation-missing",
+    "database-isolation-incidental-neon",
+    "database-isolation-affirmative-instruction",
+    "atlas-extra-port",
+    "atlas-malformed-port",
   ] as const)("fails closed for %s", (mode) => {
     expect(runPreflight(mode).status).toBe(2)
   })
