@@ -18,8 +18,10 @@ goalId: GOAL-OMEN-STAGE5-DEV-FLOW-001
 loopId: LOOP-OMEN-STAGE5-PREFLIGHT
 objective: Prove current-source identity and bounded Hermes/Atlas advertised capabilities before disposable configuration.
 riskClass: R1
-repositories: [bsvalues/terragroq]
-baseRefs: [e146e2ba7759019b41a474ece7d7b3dc63c13b9c]
+repositories: [bsvalues/terragroq, bsvalues/terrafusion_os_1.0]
+baseRefs:
+  bsvalues/terragroq: e146e2ba7759019b41a474ece7d7b3dc63c13b9c
+  bsvalues/terrafusion_os_1.0: c7f2d78619a9eb19186c2c724876fb4d11c81b00
 dependencies: [WO-OMEN-COCKPIT-001]
 fanInGate: ALL
 laneId: omen-stage5-dev-preflight
@@ -55,7 +57,6 @@ forbiddenActions:
   - change frozen Stage 1 scope or files
 authorityGrantRefs:
   - owner-correction-omen-not-idle-2026-08-08
-  - owner-execution-mode-subagent-driven-2026-08-08
 programActivationGrantRef: owner-correction-omen-not-idle-2026-08-08
 grantStatusEventRefs: []
 requiredOutputs:
@@ -90,7 +91,7 @@ ownerDecisionConditions:
 ownerOperationsAllowed: false
 ```
 
-`WO-OMEN-COCKPIT-001` is complete. This packet records the already-active owner authority before PR merge eligibility; it does not manufacture authority or retroactively claim authority for work outside the recorded decisions.
+`WO-OMEN-COCKPIT-001` is complete. This packet records the already-active owner authority before PR merge eligibility; it does not manufacture authority or retroactively claim authority for work outside the recorded decisions. The TerraFusion repository is a read-only proof subject, not an edit or mutation reservation. The repository playbook requires hosted-agent/subagent execution as a governance mechanism; that requirement is not an owner authority grant.
 
 OMEN proved current-source identity and bounded Hermes/Atlas capability metadata. This is a preflight result: TerraFusion and WilliamOS are **not** represented as already configured against Hermes or Atlas.
 
