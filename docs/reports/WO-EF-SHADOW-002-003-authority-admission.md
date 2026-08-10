@@ -5,8 +5,10 @@ Issue: `#538`
 Status: `CONTAINED_NOT_AUTHORIZED`
 
 PR `#549` merged authority-registry entries for these Work Orders before the authority packet and
-scope contract had been independently reviewed. No workload was executed. This record removes both
-entries from the executable registry and preserves the fail-closed boundary.
+scope contract had been independently reviewed. A bounded local inference for WO-EF-SHADOW-002 was
+then performed before this containment merged. That execution is quarantined and is not admissible
+shadow evidence. WO-EF-SHADOW-003 did not execute. This record removes both entries from the
+executable registry and preserves the fail-closed boundary.
 
 ## WO-EF-SHADOW-002
 
@@ -26,6 +28,21 @@ entries from the executable registry and preserves the fail-closed boundary.
 The prompt may contain no protected, county, PACS, production, credential, or repository-secret data.
 The task may not change model inventory, runtime configuration, host configuration, or network
 exposure.
+
+### Quarantined execution
+
+- Receipt SHA-256: `91e8ba65d178becc0109abb1574eff0c123626a423f8e358768eff2272875c50`
+- Outcome SHA-256: `a52489e6da85ce520dd86b26427b092cf591ed7fb9e504bf7a8d72f06bd66556`
+- Execution window: `2026-08-10T14:58:35.068Z` through `2026-08-10T14:59:00.817Z`
+- Actual activity: one fixed benign prompt to the existing HERMES loopback Ollama service
+- Runtime result: `COMPLETED / SUCCEEDED`
+- Admission status: `QUARANTINED_NOT_ADMISSIBLE`
+- Evidence delivery: PR `#552`, closed without merge
+
+The execution used no scheduler, placement-engine launch, autonomous dispatch, external provider,
+protected data, or remote mutation. Those safety facts do not cure the authority-sequencing defect,
+so the receipt and outcome must not be added to the production trust registries or counted toward
+the Phase 2 representative set.
 
 ## WO-EF-SHADOW-003
 
@@ -55,7 +72,7 @@ credentials, access county or PACS data, write state, mutate a database, or chan
 - AEGIS storage, NAS, or backup authority granted: `false`
 - Remote infrastructure mutation authority: `false`
 
-Execution performed for WO-EF-SHADOW-002: `false`
+Execution performed for WO-EF-SHADOW-002: `true, quarantined and not admissible`
 
 Execution performed for WO-EF-SHADOW-003: `false`
 
