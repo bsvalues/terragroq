@@ -209,3 +209,39 @@ node scripts/execution-fabric/recommend-pinned-placement.mjs `
 
 This command performs no dispatch, lease acquisition, reservation, remote mutation, authority
 change, or scheduler activation.
+
+## Shadow placement observation (Phase 2)
+
+`evaluate-shadow-placement.mjs` compares one immutable Phase 1 placement receipt with one recorded
+observation of where real work ran. It is an offline comparison surface for issue #538. It never
+launches work, selects a replacement target, calibrates policy, activates a scheduler, or grants
+execution authority.
+
+The receipt is the JSON result produced by `recommend-pinned-placement.mjs`. The observation binds
+the exact receipt bytes through `placement_receipt_sha256` and declares either a recorded target or
+that the workload was not run. A different target must carry an explicit divergence reason and
+explanation; mismatches never become silent fallback.
+
+```powershell
+node scripts/execution-fabric/evaluate-shadow-placement.mjs `
+  --receipt .artifacts/execution-fabric/phase1-receipt.json `
+  --observation .artifacts/execution-fabric/shadow-observation.json `
+  --snapshot-root .artifacts/execution-fabric/snapshots `
+  --verifier scripts/execution-fabric/verify_snapshot.py `
+  --python py `
+  --registry config/execution-fabric/registry.seed.json `
+  --schema config/execution-fabric/registry.schema.json `
+  --policy config/execution-fabric/pinned-evidence-policy.json `
+  --workloads config/execution-fabric/placement-workloads.json
+```
+
+The evaluator runs the trusted Phase 1 recommendation function again from the pinned snapshot set,
+frozen verifier, registry, schema, policy, and workload catalog. The supplied receipt must match that
+replayed output exactly. The only subprocess permitted by this comparison is the contract-pinned
+canonical snapshot verifier; no workload process is launched. A recorded target is rejected when
+the observation time reaches or exceeds that target's evidence expiry.
+
+Results are `SHADOW_MATCH`, `SHADOW_DIVERGENCE`, `SHADOW_NOT_RUN`, or `INPUT_REJECTED`. Every result
+remains `shadow_only=true`, `dispatch_allowed=false`, `execution_authorized=false`, and
+`remote_systems_modified=false`. Phase 2 observations are evidence for later review; they are not a
+claim that placement policy is calibrated or safe to dispatch.

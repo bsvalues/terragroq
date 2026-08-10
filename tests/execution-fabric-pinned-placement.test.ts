@@ -125,6 +125,20 @@ describe("Execution Fabric pinned placement recommendations", () => {
       { node: "hermes-node", snapshot_sha256: value.refs["hermes-node"] },
     ])
     expect(first.decision_input_sha256).toMatch(/^[a-f0-9]{64}$/)
+    expect(first.eligible_nodes.find((node: JsonObject) => node.node_id === "aegis")?.evidence_used).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "nodes.aegis.capability_health.compute",
+          value: expect.objectContaining({
+            state: "READY",
+            observed_at: feeds().aegis.observed_at,
+            expires_at: "2026-08-10T07:04:09.000Z",
+            snapshot_sha256: value.refs.aegis,
+            evidence_ref: `snapshots/aegis/${value.refs.aegis}.json`,
+          }),
+        }),
+      ]),
+    )
 
     const common = args(value)
     const start = common.indexOf("--evidence")
@@ -258,6 +272,9 @@ describe("Execution Fabric pinned placement recommendations", () => {
     expect(result.recommendation.node_id).toBe("hermes-node")
     expect(aegis.reasons).toContainEqual(expect.objectContaining({
       code: "CPU_THREADS_UNKNOWN", observed: null,
+    }))
+    expect(aegis.reasons).toContainEqual(expect.objectContaining({
+      code: "CAPABILITY_NOT_READY", detail: "compute", observed: "FAIL_CLOSED",
     }))
   })
 

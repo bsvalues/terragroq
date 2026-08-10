@@ -362,10 +362,33 @@ function runtime(node, id) {
   return node.runtimes.find((candidate) => candidate.id === id)
 }
 
-function adaptHermes(node, snapshot) {
+function pinnedCapabilityAxis(item, state, reason) {
+  const observedAt = item.snapshot.observed_at
+  const observedMs = Date.parse(observedAt)
+  const expiresAt = new Date(observedMs + item.ttl_seconds * 1000).toISOString()
+  return {
+    state,
+    reason,
+    observed_at: observedAt,
+    expires_at: expiresAt,
+    snapshot_sha256: item.reference.snapshot_sha256,
+    evidence_ref: `snapshots/${item.reference.node}/${item.reference.snapshot_sha256}.json`,
+  }
+}
+
+function capabilityReason(name, state) {
+  return state === "READY" ? `${name}_CAPABILITY_READY` : `${name}_CAPABILITY_${state}`
+}
+
+function adaptHermes(node, snapshot, item) {
   retainCapabilities(node, snapshot.compute_capability_health, ["agent-runtime"])
   retainCapabilities(node, snapshot.gpu_inference_capability_health, ["gpu-batch", "cuda"])
   retainCapabilities(node, snapshot.local_llm_capability_health, ["local-llm-inference"])
+  node.capability_health.compute = pinnedCapabilityAxis(
+    item,
+    snapshot.compute_capability_health,
+    capabilityReason("COMPUTE", snapshot.compute_capability_health),
+  )
   if (snapshot.compute_capability_health === "READY" && node.cpus[0]) node.cpus[0].threads = snapshot.resources.cpu_threads
   else node.cpus = []
   node.gpus = snapshot.resources.gpus.map((gpu, index) => ({
@@ -398,8 +421,23 @@ function adaptAtlas(node, snapshot) {
   if (forge) forge.state = snapshot.resources?.forge === "mounted" && snapshot.storage_capability_health === "READY" ? "running" : "degraded"
 }
 
-function adaptAegis(node, snapshot) {
+function adaptAegis(node, snapshot, item) {
   retainCapabilities(node, snapshot.compute_capability_health, [...capabilitySet(node)])
+  node.capability_health.compute = pinnedCapabilityAxis(
+    item,
+    snapshot.compute_capability_health,
+    capabilityReason("COMPUTE", snapshot.compute_capability_health),
+  )
+  node.capability_health.backup_target = pinnedCapabilityAxis(
+    item,
+    snapshot.backup_capability_health,
+    snapshot.backup_reason,
+  )
+  node.capability_health.archive_storage = pinnedCapabilityAxis(
+    item,
+    snapshot.archive_capability_health,
+    snapshot.backup_reason,
+  )
   if (snapshot.compute_capability_health === "READY" && node.cpus[0]) node.cpus[0].threads = snapshot.cores
   else node.cpus = []
 }
@@ -419,7 +457,7 @@ export function applyPinnedEvidence(registryInput, loaded) {
     if (!node) fail(`snapshot node is absent from registry: ${item.reference.node}`)
     const adapter = ADAPTERS[item.snapshot.schema]
     if (!adapter) fail(`unsupported snapshot schema: ${item.snapshot.schema}`)
-    adapter(node, item.snapshot)
+    adapter(node, item.snapshot, item)
     node.evidence = {
       confidence: "observed",
       observed_at: item.snapshot.observed_at,
