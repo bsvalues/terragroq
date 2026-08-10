@@ -21,7 +21,7 @@ The matrix separates declared role, retained live probe evidence, and authority.
 - Scheduler state is explicitly `disabled`; scheduler authority is `not-granted`.
 - ATLAS alone retains authoritative durable-state authority.
 - OMEN, HERMES-NODE, and AEGIS cannot gain durable-state authority through probe overlay.
-- AEGIS's intended compute role is declared, but compute placement and storage capability remain blocked until trusted proof is admitted.
+- AEGIS's intended compute role and trusted evidence are recorded, but compute placement remains blocked because compute authority is not granted. Storage/NAS/backup remain blocked pending separate storage proof and authority.
 - County/PACS writes, protected-data expansion, destructive disk operations, implicit cloud use, and paid execution remain blocked.
 - The failing AEGIS 4 TB disk is evidence only. No wipe or destructive action is authorized.
 
@@ -53,6 +53,19 @@ The first AEGIS capture correctly failed closed because the corrupted disk repor
 - Ignored generated local probe artifacts so raw transient inventory cannot be committed accidentally.
 - Retained non-positive physical-disk capacity as explicit unknown evidence and fenced the node from storage placement instead of dropping the device or inventing capacity.
 - Pinned the trusted hashed machine identities for HERMES-NODE, ATLAS, and AEGIS from the retained, hostname-bound live probes.
+
+## Validation evidence
+
+Validation was run after the live-probe mismatch remediation and before publishing the reviewed head:
+
+- `node_modules/vitest/vitest.mjs run tests/execution-fabric-registry.test.ts`: `47 passed`.
+- Broader suite excluding the separately host-dependent TerraFusion lab preflight: `261 files passed`, `2663 tests passed`, `2 skipped`.
+- `next lint`: PASS with no warnings or errors.
+- Clean `NEXT_PRIVATE_BUILD_WORKER=0 NEXT_TELEMETRY_DISABLED=1 next build`: PASS.
+- Seed and generated snapshot validation against `registry.schema.json`: PASS.
+- JavaScript syntax, PowerShell parse, Bash syntax, `git diff --check`, and changed-file secret-pattern scan: PASS.
+
+The generated probes and snapshot are ignored artifacts. Their hashes in this report are the durable binding between the exact reviewed source and the retained local evidence.
 
 ## Remaining gate
 
