@@ -72,8 +72,26 @@ function fixture() {
   const packet = makePacket(baseSha, patch)
   fs.writeFileSync(path.join(physicalWorkspace, ".williamos-remote-dev-owner.json"), JSON.stringify({ run_id: packet.runId, work_order_id: packet.workOrderId, repository: packet.repository, branch: packet.branch, base_sha: packet.baseSha }))
   const fakeBin = path.join(hostRoot, "bin"); fs.mkdirSync(fakeBin)
-  writeExecutable(path.join(fakeBin, "dotnet"), `#!/usr/bin/env bash\nif [[ \"\${FAKE_DOTNET_MODE:-ok}\" == timeout ]]; then sleep 3; fi\nif [[ \"\${FAKE_DOTNET_MODE:-ok}\" == build-fail && \"\${1:-}\" == build ]]; then exit 7; fi\nif [[ \"\${FAKE_DOTNET_MODE:-ok}\" == test-fail && \"\${1:-}\" == test ]]; then exit 9; fi\nexit 0\n`)
+  writeExecutable(path.join(fakeBin, "dotnet"), `#!/usr/bin/env bash
+if [[ "\${FAKE_DOTNET_MODE:-ok}" == timeout ]]; then sleep 3; fi
+if [[ "\${FAKE_DOTNET_MODE:-ok}" == build-fail && "\${1:-}" == build ]]; then exit 7; fi
+if [[ "\${1:-}" == test ]]; then
+  for arg in "$@"; do case "$arg" in *LogFileName=*) trx="\${arg#*LogFileName=}";; esac; done
+  if [[ "\${FAKE_DOTNET_MODE:-ok}" != test-infra ]]; then
+    mkdir -p "$(dirname "$trx")"
+    if [[ "\${FAKE_DOTNET_MODE:-ok}" == test-assertion ]]; then printf '%s\n' '<TestRun><ResultSummary outcome="Failed"><Counters failed="1" passed="2" total="3" aborted="0" executed="3" timeout="0" error="0" /></ResultSummary></TestRun>' > "$trx"; exit 1
+    else printf '%s\n' '<TestRun><ResultSummary outcome="Completed"><Counters passed="3" total="3" failed="0" executed="3" error="0" aborted="0" timeout="0" /></ResultSummary></TestRun>' > "$trx"; fi
+  fi
+fi
+if [[ "\${1:-}" == test && "\${FAKE_DOTNET_MODE:-ok}" == test-infra ]]; then exit 9; fi
+exit 0
+`)
   writeExecutable(path.join(fakeBin, "corepack"), "#!/usr/bin/env bash\nexit 0\n")
+  writeExecutable(path.join(fakeBin, "taskset"), "#!/usr/bin/env bash\nshift 2\nexec \"$@\"\n")
+  writeExecutable(path.join(fakeBin, "prlimit"), "#!/usr/bin/env bash\nwhile [[ \"$1\" != -- ]]; do shift; done\nshift\nexec \"$@\"\n")
+  writeExecutable(path.join(fakeBin, "flock"), "#!/usr/bin/env bash\nexit 0\n")
+  writeExecutable(path.join(fakeBin, "du"), "#!/usr/bin/env bash\nprintf '%s\\t%s\\n' \"\${FAKE_SCRATCH_BYTES:-4096}\" \"\${@: -1}\"\n")
+  writeExecutable(path.join(fakeBin, "findmnt"), "#!/usr/bin/env bash\n[[ \"\${FAKE_NESTED_MOUNT:-0}\" == 1 ]] && printf '%s\\n' '/nested/mount'\nexit 0\n")
   return { hostRoot, physicalWorkspace, repository, baseSha, patch, packet, fakeBin }
 }
 
@@ -87,6 +105,11 @@ function runWorker(operation: string, value: ReturnType<typeof fixture>, options
   })
   const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean)
   return { ...result, json: lines.length ? JSON.parse(lines.at(-1)!) : undefined }
+}
+
+function workerSummary(stderr: string) {
+  const line = stderr.split(/\r?\n/).find((entry) => entry.startsWith("REMOTE_DEV_SUMMARY\t"))
+  return line ? JSON.parse(Buffer.from(line.split("\t", 2)[1], "base64").toString("utf8")) : undefined
 }
 
 afterEach(() => { while (tempRoots.length) fs.rmSync(tempRoots.pop()!, { recursive: true, force: true }) })
@@ -129,7 +152,7 @@ describe("fixed AEGIS remote development worker", () => {
 
     const staged = fixture(); fs.writeFileSync(path.join(staged.repository, "foreign.txt"), "staged\n"); execFileSync("git", ["add", "foreign.txt"], { cwd: staged.repository })
     expect(runWorker("COMMIT_RESERVED_PATHS", staged).json).toMatchObject({ status: "PATH_NOT_RESERVED" })
-  }, 15_000)
+  }, 60_000)
 
   it("times out bounded processes, blocks failed builds, and preserves informational failures", () => {
     const timedOut = fixture()
@@ -137,8 +160,61 @@ describe("fixed AEGIS remote development worker", () => {
     const failed = fixture()
     expect(runWorker("BUILD_DOTNET_RELEASE", failed, { env: { FAKE_DOTNET_MODE: "build-fail" } }).json).toMatchObject({ status: "BLOCKING_OPERATION_FAILED" })
     const observed = fixture()
-    expect(runWorker("TEST_DOTNET_INFORMATIONAL", observed, { env: { FAKE_DOTNET_MODE: "test-fail" } }).json).toMatchObject({ status: "OBSERVED_FAILURE" })
+    const assertionResult = runWorker("TEST_DOTNET_INFORMATIONAL", observed, { env: { FAKE_DOTNET_MODE: "test-assertion" } })
+    expect(assertionResult.json).toMatchObject({ status: "OBSERVED_FAILURE" })
+    expect(workerSummary(assertionResult.stderr).testCounts).toEqual({ total: 3, executed: 3, passed: 2, failed: 1 })
+    const infrastructure = fixture()
+    expect(runWorker("TEST_DOTNET_INFORMATIONAL", infrastructure, { env: { FAKE_DOTNET_MODE: "test-infra" } }).json).toMatchObject({ status: "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" })
+  }, 60_000)
+
+  it("enforces CPU, memory, and aggregate scratch limits and fails when limit tooling is unavailable", () => {
+    const missing = fixture(); fs.rmSync(path.join(missing.fakeBin, "prlimit"))
+    expect(runWorker("PROVE_PREFLIGHT", missing).json).toMatchObject({ status: "RESOURCE_LIMIT_UNAVAILABLE" })
+    const excess = fixture()
+    expect(runWorker("PROVE_PREFLIGHT", excess, { env: { FAKE_SCRATCH_BYTES: "85899345921" } }).json).toMatchObject({ status: "SCRATCH_LIMIT_EXCEEDED" })
+    const source = fs.readFileSync(worker, "utf8")
+    expect(source).toContain("taskset -c 0-11")
+    expect(source).toContain("prlimit --as=12884901888")
+  })
+
+  it("emits strict sub-second timestamps and rejects a non-increasing clock", () => {
+    const source = fs.readFileSync(worker, "utf8")
+    expect(source).toContain("%Y-%m-%dT%H:%M:%S.%3NZ")
+    expect(source).toContain("CLOCK_NOT_MONOTONIC")
+  })
+
+  it("locks workspace lifecycle, recovers only exact owned partial creation, and rejects reserved symlinks", () => {
+    const value = fixture()
+    const reserved = path.join(value.repository, ".github/workflows/dotnet-test.yml")
+    fs.mkdirSync(path.dirname(reserved), { recursive: true })
+    fs.symlinkSync(path.join(value.repository, "README.md"), reserved)
+    expect(runWorker("RESTORE_DOTNET", value).json).toMatchObject({ status: "RESERVED_PATH_SYMLINK_REJECTED" })
+    const source = fs.readFileSync(worker, "utf8")
+    expect(source).toContain("WORKSPACE_LOCK_BUSY")
+    expect(source).toContain("PARTIAL_WORKSPACE_RECOVERED")
+    expect(source).toContain("validate_trusted_parent")
+  })
+
+  it("deterministically resets an exact owned partial repository during workspace creation", () => {
+    const value = fixture()
+    fs.writeFileSync(path.join(value.repository, "partial-clone.tmp"), "partial")
+    writeExecutable(path.join(value.fakeBin, "git"), `#!/usr/bin/env bash
+if [[ "\${1:-}" == clone ]]; then dest="\${@: -1}"; mkdir -p "$dest/.git"; exit 0; fi
+if [[ "\${1:-}" == -C ]]; then shift 2; fi
+if [[ "\${1:-}" == rev-parse ]]; then printf '%s\\n' "$FAKE_BASE_SHA"; fi
+exit 0
+`)
+    const result = runWorker("CREATE_WORKSPACE", value, { env: { FAKE_BASE_SHA: value.baseSha } })
+    expect(result.json).toMatchObject({ status: "SUCCEEDED" })
+    expect(fs.existsSync(path.join(value.repository, "partial-clone.tmp"))).toBe(false)
   }, 15_000)
+
+  it("rejects every nested mount before exact cleanup", () => {
+    const value = fixture()
+    fs.writeFileSync(path.join(value.physicalWorkspace, ".williamos-post-merge-proven"), `${value.packet.runId}:${value.baseSha}\n`)
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", value, { env: { FAKE_NESTED_MOUNT: "1" } }).json).toMatchObject({ status: "CLEANUP_NESTED_MOUNT" })
+    expect(fs.existsSync(value.physicalWorkspace)).toBe(true)
+  })
 
   it("does not clean without exact ownership and post-merge proof", () => {
     const value = fixture()

@@ -2,7 +2,8 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { execFileSync, spawnSync } from "node:child_process"
+import zlib from "node:zlib"
+import { execFileSync, spawn, spawnSync } from "node:child_process"
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
@@ -20,6 +21,8 @@ const fakeLog = path.join(testRoot, "ssh.log")
 const evidenceRoots: string[] = []
 const reservedPaths = [".github/workflows/dotnet-test.yml", ".github/workflows/terrafusion-ci.yml", "tests/ci-terrafusion-unit-informational.test.ts", "docs/brain/evidence/WO-TF-REMOTE-DEV-OFFLOAD-001-proof.md"]
 const operations = ["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "APPLY_RESERVED_PATCH", "RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE", "COMMIT_RESERVED_PATHS", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE", "CLEAN_EXACT_WORKSPACE"]
+const approvedAegisKey = "AAAAC3NzaC1lZDI1NTE5AAAAIGZ/ADhMtzZwM46u+K2IK8hiThC/Jk1FD4//ly+ouxZE"
+const approvedAegisFingerprint = "SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo"
 
 function envelope(baseSha: string) {
   return { schemaVersion: 2, programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001", goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001", loopId: "LOOP-WOS-MULTI-AGENT-OPERATOR-001", workOrderId: "WO-TF-REMOTE-DEV-OFFLOAD-001", objective: "Deliver the bounded TerraFusion informational CI proof.", riskClass: "R1", repositories: ["bsvalues/terrafusion_os_1.0"], baseRefs: [{ repository: "bsvalues/terrafusion_os_1.0", ref: "refs/heads/main", commitSha: baseSha }], dependencies: [], fanInGate: "ALL", laneId: "LANE-TF-REMOTE-DEV-OFFLOAD", teamRoles: { coordinator: "omen-controller", builder: "aegis-worker", reviewer: "independent-assurance" }, providerRequirements: ["hermes-relay"], preferredProviders: ["hermes-relay"], fallbackProviders: [], reservations: { paths: reservedPaths.map((entry) => ({ repository: "bsvalues/terrafusion_os_1.0", path: entry })), contracts: ["remote-dev-offload-v1"], environments: ["aegis-proof-workspace"] }, allowedActions: ["READ_REPOSITORY", "WRITE_RESERVED_PATHS", "RUN_VALIDATION", "COMMIT_OWN_CHANGES", "PUSH_OWN_BRANCH", "OPEN_DRAFT_PR", "READ_CI_AND_REVIEW", "MERGE_ELIGIBLE_PR", "VERIFY_POST_MERGE"], forbiddenActions: ["OWNER_CONTACT", "CREDENTIAL_ACCESS", "RUNTIME_ACTIVATION", "PRODUCTION_WRITE", "BRANCH_PROTECTION_BYPASS", "DESTRUCTIVE_GIT"], authorityGrantRefs: ["grant-remote-dev-offload-v1"], programActivationGrantRef: "grant-remote-dev-offload-v1", grantStatusEventRefs: ["grant-status-remote-dev-offload-v1"], requiredOutputs: ["policy-bound-packet", "hash-chained-evidence"], requiredValidation: ["focused-vitest"], reviewRequirements: { independentReviewer: true, minimumApprovals: 1, maximumUnresolvedThreads: 0 }, mergeMode: "ASSURANCE_GATED", retryBudget: { maxAttempts: 3, backoffSeconds: 10 }, remediationBudget: { maxCycles: 2 }, reroutePolicy: "NONE", stopConditions: ["authority-wall", "resource-limit"], evidenceTargets: ["branch", "commit", "merge", "cleanup"], ownerDecisionConditions: [], ownerOperationsAllowed: false }
@@ -37,12 +40,10 @@ function fixture() {
   const patchPath = path.join(directory, "patch.bin"); fs.writeFileSync(patchPath, patch)
   const envelopePath = path.join(directory, "envelope.json"); fs.writeFileSync(envelopePath, JSON.stringify(dispatch))
   const evidenceRoot = path.join(root, ".artifacts/execution-fabric/remote-dev-offload-v1"); evidenceRoots.push(path.join(evidenceRoot, packet.runId))
-  const keyBytes = Buffer.from("synthetic-aegis-host-key")
-  const knownHostLine = `aegis ssh-ed25519 ${keyBytes.toString("base64")}`
-  const fingerprint = `SHA256:${crypto.createHash("sha256").update(keyBytes).digest("base64").replace(/=+$/, "")}`
+  const knownHostLine = `aegis ssh-ed25519 ${approvedAegisKey}`
   const startedAt = new Date(now - 120_000).toISOString(); const completedAt = new Date(now - 60_000).toISOString()
   const evidence = { schemaVersion: 1, runId: packet.runId, operation: "PROVE_PREFLIGHT", attempt: 1, startedAt, completedAt, status: "SUCCEEDED", exitCode: 0, nodeId: "aegis", workspace: packet.workspace, branch: packet.branch, baseSha, headSha: baseSha, outputSha256: "d".repeat(64), policySha256: packet.bindings.policySha256, packetSha256: packet.bindings.packetSha256, patchSha256: packet.patch.sha256, patchGeneration: 1, previousEvidenceSha256: null }
-  const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", controller, "-PolicyPath", policyPath, "-PacketPath", packetPath, "-DispatchEnvelopePath", envelopePath, "-PatchPath", patchPath, "-EvidenceRoot", evidenceRoot, "-Operation", "PROVE_PREFLIGHT", "-Attempt", "1", "-PreviousEvidenceSha256", "null", "-AegisKnownHostLine", knownHostLine, "-AegisHostKeyFingerprint", fingerprint, "-SshTimeoutSeconds", "3"]
+  const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", controller, "-PolicyPath", policyPath, "-PacketPath", packetPath, "-DispatchEnvelopePath", envelopePath, "-PatchPath", patchPath, "-EvidenceRoot", evidenceRoot, "-Operation", "PROVE_PREFLIGHT", "-Attempt", "1", "-PreviousEvidenceSha256", "null", "-AegisKnownHostLine", knownHostLine, "-SshTimeoutSeconds", "10"]
   return { directory, args, evidence, evidenceRoot }
 }
 
@@ -62,11 +63,42 @@ function run(args: string[], env: Record<string, string> = {}) {
   return spawnSync(pwsh, args, { encoding: "utf8", timeout: 15_000, env: { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: fakeLog, ...env } })
 }
 
+function decodedRelay(encodedBootstrap: string) {
+  const bootstrap = Buffer.from(encodedBootstrap, "base64").toString("utf16le")
+  const compressed = bootstrap.match(/FromBase64String\('([^']+)'\)/)?.[1]
+  if (!compressed) throw new Error("relay payload is absent")
+  return zlib.gunzipSync(Buffer.from(compressed, "base64")).toString("utf8")
+}
+
+function encodedRelay(relay: string) {
+  const bytes = Buffer.from(relay)
+  const compressed = zlib.gzipSync(bytes).toString("base64")
+  const digest = crypto.createHash("sha256").update(bytes).digest("hex")
+  const bootstrap = `$raw=[Convert]::FromBase64String('${compressed}');$s=[IO.MemoryStream]::new([byte[]]$raw);$g=[IO.Compression.GZipStream]::new($s,[IO.Compression.CompressionMode]::Decompress);$t=[IO.MemoryStream]::new();$g.CopyTo($t);$g.Dispose();$s.Dispose();$b=$t.ToArray();$t.Dispose();$h=[Security.Cryptography.SHA256]::Create();$a=([BitConverter]::ToString($h.ComputeHash($b))).Replace('-','').ToLowerInvariant();$h.Dispose();if($a-ne'${digest}'){exit 64};$p=Join-Path ([IO.Path]::GetTempPath()) ('relay-'+[Guid]::NewGuid().ToString('N')+'.ps1');try{[IO.File]::WriteAllBytes($p,$b);& $p;exit $LASTEXITCODE}finally{Remove-Item $p -Force -ErrorAction SilentlyContinue}`
+  return Buffer.from(bootstrap, "utf16le").toString("base64")
+}
+
+function summaryFor(evidence: any) {
+  const value = { schemaVersion: 1, operation: evidence.operation, startedAt: evidence.startedAt, completedAt: evidence.completedAt, status: evidence.status, exitCode: evidence.exitCode, resourceObservations: { cpuThreads: 12, memoryBytes: 12884901888, scratchBeforeBytes: 1, scratchAfterBytes: 1 }, testCounts: null }
+  return `REMOTE_DEV_SUMMARY\t${Buffer.from(JSON.stringify(value)).toString("base64")}`
+}
+
+function runRelay(encoded: string, input: string, env: NodeJS.ProcessEnv) {
+  return new Promise<{ status: number | null, stdout: string, stderr: string }>((resolve) => {
+    const child = spawn(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { env })
+    let stdout = ""; let stderr = ""
+    child.stdout.setEncoding("utf8").on("data", (value) => { stdout += value })
+    child.stderr.setEncoding("utf8").on("data", (value) => { stderr += value })
+    child.on("close", (status) => resolve({ status, stdout, stderr }))
+    child.stdin.end(input)
+  })
+}
+
 describe("Hermes-mediated remote development controller", () => {
   it("contacts only Hermes with BatchMode, a finite timeout, and an encoded independently validating relay", () => {
     const value = fixture()
     const result = run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2)
     const log = fs.readFileSync(fakeLog, "utf8").trim().split("\t")
     expect(log).toContain("BatchMode=yes")
     expect(log).toContain("ConnectTimeout=10")
@@ -74,15 +106,20 @@ describe("Hermes-mediated remote development controller", () => {
     expect(log).not.toContain("aegis")
     expect(log).toContain("-EncodedCommand")
     const encoded = log.at(-1)!
-    const relay = Buffer.from(encoded, "base64").toString("utf16le")
+    const relay = decodedRelay(encoded)
     expect(relay).toContain("StrictHostKeyChecking=yes")
     expect(relay).toContain("UserKnownHostsFile=")
-    expect(relay).toContain("FileMode]::CreateNew")
+    expect(relay).toContain("FileMode]::OpenOrCreate")
     expect(relay).toContain("packetSha256")
     expect(relay).toContain("policySha256")
+    expect(relay).toContain(approvedAegisFingerprint)
+    expect(relay).toContain("WORKER_DIGEST_MISMATCH")
     expect(relay).not.toContain("StrictHostKeyChecking=no")
     expect(relay).not.toMatch(/PasswordAuthentication=yes|Invoke-Expression/)
-    expect(fs.readdirSync(path.join(value.evidenceRoot, value.evidence.runId))).toHaveLength(1)
+    expect(fs.readdirSync(path.join(value.evidenceRoot, value.evidence.runId)).sort()).toEqual([
+      "00-prove_preflight-1-operation-summary.json",
+      "00-prove_preflight-1.json",
+    ])
   })
 
   it("rejects invalid input before SSH with exit 64", () => {
@@ -118,9 +155,9 @@ describe("Hermes-mediated remote development controller", () => {
   it("Hermes independently rejects a self-consistent reserved-path drift before contacting AEGIS", () => {
     const value = fixture()
     const prepared = run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
-    expect(prepared.status).toBe(0)
+    expect(prepared.status).toBe(2)
     const invocation = fs.readFileSync(fakeLog, "utf8").trim().split("\t")
-    const relay = Buffer.from(invocation.at(-1)!, "base64").toString("utf16le")
+    const relay = decodedRelay(invocation.at(-1)!)
     const relayInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8"))
     const packet = JSON.parse(Buffer.from(relayInput.packet, "base64").toString("utf8"))
     packet.patch.changedPaths[0] = "README.md"
@@ -129,7 +166,7 @@ describe("Hermes-mediated remote development controller", () => {
     relayInput.packet = Buffer.from(JSON.stringify(packet)).toString("base64")
     const programData = path.join(value.directory, "program-data"); fs.mkdirSync(programData)
     const innerLog = path.join(value.directory, "inner-ssh.log")
-    const result = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(relay, "utf16le").toString("base64")], {
+    const result = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedRelay(relay)], {
       encoding: "utf8", input: JSON.stringify(relayInput), env: { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) },
     })
     expect(result.status).toBe(64)
@@ -140,13 +177,13 @@ describe("Hermes-mediated remote development controller", () => {
   it("Hermes accepts the exact bound packet once and rejects a replay before a second AEGIS call", () => {
     const value = fixture()
     const prepared = run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
-    expect(prepared.status).toBe(0)
+    expect(prepared.status).toBe(2)
     const invocation = fs.readFileSync(fakeLog, "utf8").trim().split("\t")
     const encodedRelay = invocation.at(-1)!
     const relayInput = fs.readFileSync(`${fakeLog}.stdin`, "utf8")
     const programData = path.join(value.directory, "program-data"); fs.mkdirSync(programData)
     const innerLog = path.join(value.directory, "inner-ssh.log")
-    const env = { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) }
+    const env = { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(value.evidence) }
     const first = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedRelay], { encoding: "utf8", input: relayInput, env })
     expect(first.status, `${first.stdout}\n${first.stderr}`).toBe(0)
     const second = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedRelay], { encoding: "utf8", input: relayInput, env })
@@ -165,9 +202,116 @@ describe("Hermes-mediated remote development controller", () => {
 
   it("does not expose credentials or allow password and direct-AEGIS options", () => {
     const value = fixture(); const result = run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence), GH_TOKEN: "ghp_abcdefghijklmnopqrstuvwxyz123456" })
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2)
     const log = fs.readFileSync(fakeLog, "utf8")
     expect(log).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz123456")
     expect(log).not.toMatch(/PasswordAuthentication=yes|StrictHostKeyChecking=no|\baegis\b/)
+  })
+
+  it("binds the approved AEGIS identity and rejects a caller-selected host key", () => {
+    const value = fixture()
+    const args = [...value.args]
+    args[args.indexOf("-AegisKnownHostLine") + 1] = `aegis ssh-ed25519 ${Buffer.from("attacker-key").toString("base64")}`
+    const result = run(args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
+    expect(result.status).toBe(64)
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "INVALID_INPUT", reasonCode: "HOST_KEY_PIN_MISMATCH" })
+    expect(fs.existsSync(fakeLog)).toBe(false)
+  })
+
+  it("makes a failed blocking operation terminal and never advances to commit or push", () => {
+    const source = fs.readFileSync(controller, "utf8")
+    expect(source).toContain("terminalStatus='BLOCKED'")
+    expect(source).toContain("if($state.terminalStatus-ne'ACTIVE')")
+    expect(source.indexOf("WORKER_EVIDENCE_MISMATCH")).toBeLessThan(source.indexOf("lastOperationIndex=$index"))
+  })
+
+  it("serializes replay validation and preserves terminal tombstones", () => {
+    const source = fs.readFileSync(controller, "utf8")
+    expect(source).toContain("[IO.FileShare]::None")
+    expect(source).toContain("RUN_LOCK_BUSY")
+    expect(source).not.toContain("Remove-Item -LiteralPath $statePath")
+  })
+
+  it("admits exactly one concurrent dispatch for a single-use run", async () => {
+    const value = fixture()
+    run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
+    const invocation = fs.readFileSync(fakeLog, "utf8").trim().split("\t")
+    const encoded = invocation.at(-1)!
+    const relayInput = fs.readFileSync(`${fakeLog}.stdin`, "utf8")
+    const programData = path.join(value.directory, "concurrent-program-data"); fs.mkdirSync(programData)
+    const innerLog = path.join(value.directory, "concurrent-inner.log")
+    const env = { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_DELAY_MS: "2500", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(value.evidence) }
+    const first = runRelay(encoded, relayInput, env)
+    const second = runRelay(encoded, relayInput, env)
+    const results = await Promise.all([first, second])
+    expect(results.map((entry) => entry.status).sort()).toEqual([0, 2])
+    expect(results.some((entry) => entry.stdout.includes("RUN_LOCK_BUSY"))).toBe(true)
+    expect(fs.readFileSync(innerLog, "utf8").trim().split(/\r?\n/)).toHaveLength(1)
+  }, 20_000)
+
+  it("makes a nonzero worker result terminal before commit or push can dispatch", () => {
+    const value = fixture()
+    run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
+    const invocation = fs.readFileSync(fakeLog, "utf8").trim().split("\t")
+    const encoded = invocation.at(-1)!
+    const initialInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8"))
+    const programData = path.join(value.directory, "terminal-program-data"); fs.mkdirSync(programData)
+    const innerLog = path.join(value.directory, "terminal-inner.log")
+    const blockedEnv = { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_EXIT: "2", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify({ status: "BLOCKED", reasonCode: "BLOCKING_OPERATION_FAILED" }) }
+    const first = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(initialInput), env: blockedEnv })
+    expect(first.status).toBe(2)
+    initialInput.operation = "COMMIT_RESERVED_PATHS"
+    const second = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(initialInput), env: blockedEnv })
+    expect(second.status).toBe(64)
+    expect(second.stdout).toContain("RUN_REPLAY_OR_ORDER_INVALID")
+    expect(fs.readFileSync(innerLog, "utf8").trim().split(/\r?\n/)).toHaveLength(1)
+  }, 15_000)
+
+  it("pins the reviewed worker digest and independently verifies it on Hermes", () => {
+    const source = fs.readFileSync(controller, "utf8")
+    const match = source.match(/trustedWorkerSha256\s*=\s*'([a-f0-9]{64})'/i)
+    expect(match?.[1]).toBeTruthy()
+    const workerDigest = crypto.createHash("sha256").update(fs.readFileSync(path.join(root, "scripts/execution-fabric/live/aegis-remote-dev-worker.sh"))).digest("hex")
+    expect(match?.[1]).toBe(workerDigest)
+    expect(source.match(/WORKER_DIGEST_MISMATCH/g)?.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it("Hermes rejects altered worker bytes before an AEGIS process starts", () => {
+    const value = fixture()
+    run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
+    const invocation = fs.readFileSync(fakeLog, "utf8").trim().split("\t")
+    const relayInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8")); relayInput.worker = Buffer.from("unreviewed worker").toString("base64")
+    const programData = path.join(value.directory, "digest-program-data"); fs.mkdirSync(programData)
+    const innerLog = path.join(value.directory, "digest-inner.log")
+    const result = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", invocation.at(-1)!], { encoding: "utf8", input: JSON.stringify(relayInput), env: { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog } })
+    expect(result.status).toBe(64)
+    expect(result.stdout).toContain("WORKER_DIGEST_MISMATCH")
+    expect(fs.existsSync(innerLog)).toBe(false)
+  })
+
+  it("checks every evidence ancestor and retains only bounded sanitized summaries", () => {
+    const source = fs.readFileSync(controller, "utf8")
+    expect(source).toContain("EVIDENCE_ANCESTOR_REPARSE_POINT")
+    expect(source).toContain("operation-summary.json")
+    expect(source).toContain("resourceLimits")
+    expect(source).not.toMatch(/Stdout\s*=.*WriteAllText|Stderr\s*=.*WriteAllText/)
+  })
+
+  it("rejects a reparse-point run directory before SSH or evidence publication", () => {
+    const value = fixture()
+    const runDirectory = path.join(value.evidenceRoot, value.evidence.runId)
+    const outside = path.join(value.directory, "outside-evidence"); fs.mkdirSync(outside, { recursive: true })
+    fs.mkdirSync(value.evidenceRoot, { recursive: true }); fs.symlinkSync(outside, runDirectory, "junction")
+    const result = run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
+    expect(result.status).toBe(64)
+    expect(JSON.parse(result.stdout)).toMatchObject({ reasonCode: "EVIDENCE_ANCESTOR_REPARSE_POINT" })
+    expect(fs.existsSync(fakeLog)).toBe(false)
+  })
+
+  it("uses exit 0 only for COMPLETE and maps process or evidence-write failures to operational exit 2", () => {
+    const source = fs.readFileSync(controller, "utf8")
+    expect(source).toContain("$transitionResult.status -eq 'COMPLETE'")
+    expect(source).toContain("EVIDENCE_WRITE_FAILED")
+    expect(source).toContain("SSH_UNAVAILABLE")
   })
 })

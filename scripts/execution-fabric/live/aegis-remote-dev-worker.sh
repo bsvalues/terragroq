@@ -103,8 +103,12 @@ if [[ -n "$WORKER_ROOT" ]]; then
   [[ ! -L "$WORKER_ROOT" ]] || die_input "SYMLINK_REJECTED" "worker root is a symlink"
   WORKER_ROOT="$(timeout 5 realpath -- "$WORKER_ROOT")" || die_input "PATH_CONFINEMENT_FAILED" "worker root is unavailable"
 fi
+if [[ -n "$WORKER_ROOT" && -d "$WORKER_ROOT/bin" ]]; then
+  export PATH="$WORKER_ROOT/bin:$PATH"
+fi
 PHYSICAL_WORKSPACE="${WORKER_ROOT}${LOGICAL_WORKSPACE}"
 PHYSICAL_PARENT="${WORKER_ROOT}/srv/william/workspaces"
+TRUSTED_PARENT="${WORKER_ROOT}/srv/william"
 REPO_DIR="$PHYSICAL_WORKSPACE/repository"
 MARKER_PATH="$PHYSICAL_WORKSPACE/$OWNER_MARKER"
 PROOF_PATH="$PHYSICAL_WORKSPACE/$MERGE_MARKER"
@@ -115,24 +119,71 @@ if [[ -L "$PHYSICAL_WORKSPACE" || -L "$PHYSICAL_PARENT" ]]; then die_input "SYML
 PROCESS_TIMEOUT_SECONDS="${REMOTE_DEV_PROCESS_TIMEOUT_SECONDS:-$PACKET_TIMEOUT}"
 if [[ ! "$PROCESS_TIMEOUT_SECONDS" =~ ^[0-9]+$ || "$PROCESS_TIMEOUT_SECONDS" -lt 1 || "$PROCESS_TIMEOUT_SECONDS" -gt "$PACKET_TIMEOUT" ]]; then die_input "RESOURCE_LIMIT_EXCEEDED" "process timeout exceeds packet ceiling"; fi
 export DOTNET_PROCESSOR_COUNT=12 MSBUILDNODECOUNT=12
-ulimit -n 256 2>/dev/null || true
-ulimit -u 64 2>/dev/null || true
-ulimit -v 12582912 2>/dev/null || true
+readonly SCRATCH_LIMIT_BYTES=85899345920
+
+for required_tool in timeout node realpath sha256sum taskset prlimit flock du findmnt; do
+  command -v "$required_tool" >/dev/null 2>&1 || die_block "RESOURCE_LIMIT_UNAVAILABLE" "$required_tool is required for the enforced envelope"
+done
+
+validate_trusted_parent() {
+  [[ -d "$TRUSTED_PARENT" && ! -L "$TRUSTED_PARENT" ]] || die_input "PATH_CONFINEMENT_FAILED" "trusted parent is unavailable"
+  local canonical owner current
+  canonical="$(timeout 5 realpath -- "$TRUSTED_PARENT")" || die_input "PATH_CONFINEMENT_FAILED" "trusted parent cannot be resolved"
+  [[ "$canonical" == "$TRUSTED_PARENT" ]] || die_input "PATH_CONFINEMENT_FAILED" "trusted parent identity differs"
+  owner="$(timeout 5 stat -c %u -- "$TRUSTED_PARENT")" || die_input "PATH_CONFINEMENT_FAILED" "trusted parent ownership is unavailable"
+  current="$(timeout 5 id -u)" || die_input "PATH_CONFINEMENT_FAILED" "worker identity is unavailable"
+  [[ "$owner" == "$current" ]] || die_input "PATH_CONFINEMENT_FAILED" "trusted parent is not worker-owned"
+}
+
+validate_trusted_parent
+if [[ ! -e "$PHYSICAL_PARENT" ]]; then
+  timeout 15 mkdir -- "$PHYSICAL_PARENT" || die_block "WORKSPACE_CREATE_FAILED" "cannot create workspace parent"
+  timeout 5 chmod 0700 -- "$PHYSICAL_PARENT" || die_block "WORKSPACE_CREATE_FAILED" "cannot protect workspace parent"
+fi
+[[ -d "$PHYSICAL_PARENT" && ! -L "$PHYSICAL_PARENT" ]] || die_input "PATH_CONFINEMENT_FAILED" "workspace parent is not an exact directory"
+exec 9>"$PHYSICAL_PARENT/.remote-dev-offload.lock" || die_block "WORKSPACE_LOCK_FAILED" "cannot open lifecycle lock"
+flock -n 9 || die_block "WORKSPACE_LOCK_BUSY" "another exact-workspace operation is active"
+
+scratch_bytes() {
+  if [[ ! -e "$PHYSICAL_WORKSPACE" ]]; then printf '0'; return; fi
+  local measured
+  measured="$(timeout 10 du -sb -- "$PHYSICAL_WORKSPACE" | { read -r bytes _rest; printf '%s' "$bytes"; })" || die_block "SCRATCH_MEASUREMENT_FAILED" "cannot measure workspace scratch"
+  [[ "$measured" =~ ^[0-9]+$ ]] || die_block "SCRATCH_MEASUREMENT_FAILED" "scratch measurement is malformed"
+  printf '%s' "$measured"
+}
+
+SCRATCH_BEFORE="$(scratch_bytes)"
+(( SCRATCH_BEFORE <= SCRATCH_LIMIT_BYTES )) || die_block "SCRATCH_LIMIT_EXCEEDED" "workspace exceeds the 80 GiB scratch ceiling"
 
 run_capture() {
   : > "$OUTPUT_FILE"
   set +e
-  timeout --signal=TERM --kill-after=5 "$PROCESS_TIMEOUT_SECONDS" "$@" >"$OUTPUT_FILE" 2>&1
+  timeout --signal=TERM --kill-after=5 "$PROCESS_TIMEOUT_SECONDS" taskset -c 0-11 prlimit --as=12884901888 --nproc=64 --nofile=256:256 -- "$@" >"$OUTPUT_FILE" 2>&1
   RUN_EXIT=$?
   set -e
+  SCRATCH_AFTER="$(scratch_bytes)"
+  if (( SCRATCH_AFTER > SCRATCH_LIMIT_BYTES )); then die_block "SCRATCH_LIMIT_EXCEEDED" "operation exceeded the 80 GiB scratch ceiling"; fi
 }
 
 run_quiet() {
   set +e
-  timeout --signal=TERM --kill-after=5 "$PROCESS_TIMEOUT_SECONDS" "$@" >/dev/null 2>&1
+  timeout --signal=TERM --kill-after=5 "$PROCESS_TIMEOUT_SECONDS" taskset -c 0-11 prlimit --as=12884901888 --nproc=64 --nofile=256:256 -- "$@" >/dev/null 2>&1
   local code=$?
   set -e
   return "$code"
+}
+
+validate_reserved_paths() {
+  local relative current component
+  [[ -d "$REPO_DIR" && ! -L "$REPO_DIR" ]] || return 0
+  for relative in "${RESERVED_PATHS[@]}"; do
+    current="$REPO_DIR"
+    IFS='/' read -r -a components <<< "$relative"
+    for component in "${components[@]}"; do
+      current="$current/$component"
+      [[ ! -L "$current" ]] || die_input "RESERVED_PATH_SYMLINK_REJECTED" "reserved path contains a symlink"
+    done
+  done
 }
 
 is_reserved() {
@@ -161,6 +212,7 @@ repo_value() {
 }
 
 validate_repo() {
+  validate_reserved_paths
   [[ -d "$REPO_DIR/.git" && ! -L "$REPO_DIR" ]] || die_block "GIT_REPOSITORY_MISSING" "repository is unavailable"
   local remote branch head
   remote="$(repo_value remote get-url origin)" || die_block "GIT_REMOTE_MISMATCH" "origin is unavailable"
@@ -181,7 +233,7 @@ validate_repo() {
   fi
 }
 
-STARTED_AT="$(timeout 5 date -u +%Y-%m-%dT%H:%M:%S.000Z)" || die_block "CLOCK_FAILED" "cannot read clock"
+STARTED_AT="$(timeout 5 date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" || die_block "CLOCK_FAILED" "cannot read clock"
 RUN_EXIT=0
 RESULT_STATUS="SUCCEEDED"
 HEAD_SHA="$BASE_SHA"
@@ -196,11 +248,23 @@ case "$OPERATION" in
     run_capture node --version
     ;;
   CREATE_WORKSPACE)
-    [[ ! -e "$PHYSICAL_WORKSPACE" ]] || die_block "WORKSPACE_ALREADY_EXISTS" "exact workspace already exists"
-    [[ -d "${WORKER_ROOT}/srv/william" && ! -L "${WORKER_ROOT}/srv/william" ]] || die_input "PATH_CONFINEMENT_FAILED" "trusted parent is unavailable"
-    timeout 15 install -d -m 0700 -- "$PHYSICAL_PARENT" || die_block "WORKSPACE_CREATE_FAILED" "cannot create workspace parent"
-    timeout 15 mkdir -- "$PHYSICAL_WORKSPACE" || die_block "WORKSPACE_CREATE_FAILED" "cannot create exact workspace"
-    timeout 10 node -e 'const fs=require("node:fs"),p=require("node:path"),[file,run,wo,repo,branch,base]=process.argv.slice(1);const tmp=`${file}.${process.pid}.tmp`;fs.writeFileSync(tmp,JSON.stringify({run_id:run,work_order_id:wo,repository:repo,branch,base_sha:base}),{mode:0o600,flag:"wx"});fs.renameSync(tmp,file)' "$MARKER_PATH" "$RUN_ID" "$PACKET_WORK_ORDER" "$PACKET_REPOSITORY" "$BRANCH" "$BASE_SHA" || die_block "WORKSPACE_CREATE_FAILED" "cannot publish ownership marker"
+    if [[ -e "$PHYSICAL_WORKSPACE" ]]; then
+      [[ -d "$PHYSICAL_WORKSPACE" && ! -L "$PHYSICAL_WORKSPACE" ]] || die_input "PATH_CONFINEMENT_FAILED" "partial workspace is not an exact directory"
+      validate_owner_marker
+      PARTIAL_WORKSPACE_RECOVERED=true
+      if [[ -e "$REPO_DIR" ]]; then
+        [[ -d "$REPO_DIR" && ! -L "$REPO_DIR" ]] || die_block "PARTIAL_WORKSPACE_UNSAFE" "partial repository is not an exact directory"
+        repo_canonical="$(timeout 5 realpath -- "$REPO_DIR")" || die_block "PARTIAL_WORKSPACE_UNSAFE" "partial repository cannot be resolved"
+        [[ "$repo_canonical" == "$REPO_DIR" ]] || die_block "PARTIAL_WORKSPACE_UNSAFE" "partial repository identity differs"
+        partial_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$REPO_DIR" 2>/dev/null || true)"
+        [[ -z "$partial_mounts" ]] || die_block "PARTIAL_WORKSPACE_UNSAFE" "partial repository contains a mount boundary"
+        run_capture rm -rf -- "$REPO_DIR"
+        [[ $RUN_EXIT -eq 0 && ! -e "$REPO_DIR" ]] || die_block "PARTIAL_WORKSPACE_UNSAFE" "partial repository could not be reset"
+      fi
+    else
+      timeout 15 mkdir -- "$PHYSICAL_WORKSPACE" || die_block "WORKSPACE_CREATE_FAILED" "cannot create exact workspace"
+      timeout 10 node -e 'const fs=require("node:fs"),[file,run,wo,repo,branch,base]=process.argv.slice(1);const tmp=`${file}.${process.pid}.tmp`;fs.writeFileSync(tmp,JSON.stringify({run_id:run,work_order_id:wo,repository:repo,branch,base_sha:base}),{mode:0o600,flag:"wx"});fs.renameSync(tmp,file)' "$MARKER_PATH" "$RUN_ID" "$PACKET_WORK_ORDER" "$PACKET_REPOSITORY" "$BRANCH" "$BASE_SHA" || die_block "WORKSPACE_CREATE_FAILED" "cannot publish ownership marker"
+    fi
     run_capture git clone --no-checkout --origin origin "$REMOTE_URL" "$REPO_DIR"
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "Git clone failed"
     run_capture git -C "$REPO_DIR" fetch --no-tags origin main
@@ -236,8 +300,29 @@ case "$OPERATION" in
     ;;
   TEST_DOTNET_INFORMATIONAL)
     validate_owner_marker; validate_repo
-    run_capture dotnet test backend/tests/TerraFusion.Unit.Tests/TerraFusion.Unit.Tests.csproj -c Release --no-build -v:minimal /nologo
-    if [[ $RUN_EXIT -ne 0 ]]; then RESULT_STATUS="OBSERVED_FAILURE"; fi
+    run_capture dotnet build backend/tests/TerraFusion.Unit.Tests/TerraFusion.Unit.Tests.csproj -c Release --no-restore -v:minimal /nologo
+    [[ $RUN_EXIT -eq 0 ]] || die_block "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" "focused test project did not build"
+    TRX_FILE="$TMP_ROOT/informational.trx"
+    run_capture dotnet test backend/tests/TerraFusion.Unit.Tests/TerraFusion.Unit.Tests.csproj -c Release --no-build -v:minimal /nologo --logger "trx;LogFileName=$TRX_FILE"
+    [[ -f "$TRX_FILE" && ! -L "$TRX_FILE" ]] || die_block "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" "test runner did not publish a trustworthy result file"
+    set +e
+    TEST_COUNTS="$(timeout 10 node -e '
+      const fs=require("node:fs"),s=fs.readFileSync(process.argv[1],"utf8"),tag=s.match(/<Counters\b([^>]*)\/?\s*>/i);if(!tag)process.exit(1);
+      const attrs=Object.fromEntries([...tag[1].matchAll(/([A-Za-z]+)="(\d+)"/g)].map(m=>[m[1].toLowerCase(),Number(m[2])]));
+      for(const key of ["total","executed","passed","failed","error","timeout","aborted"])if(!Number.isSafeInteger(attrs[key])||attrs[key]<0)process.exit(1);
+      if(attrs.error!==0||attrs.timeout!==0||attrs.aborted!==0)process.exit(1);
+      process.stdout.write(JSON.stringify({total:attrs.total,executed:attrs.executed,passed:attrs.passed,failed:attrs.failed}));
+    ' "$TRX_FILE")"
+    trx_exit=$?
+    set -e
+    [[ $trx_exit -eq 0 ]] || die_block "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" "test results show runner or infrastructure failure"
+    failed_count="$(printf '%s' "$TEST_COUNTS" | timeout 5 node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).failed)))')"
+    if [[ $RUN_EXIT -ne 0 ]]; then
+      (( failed_count > 0 )) || die_block "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" "nonzero test result is not an assertion-only failure"
+      RESULT_STATUS="OBSERVED_FAILURE"
+    else
+      (( failed_count == 0 )) || die_block "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" "runner exit disagrees with failed assertions"
+    fi
     ;;
   BUILD_DOTNET_RELEASE)
     validate_owner_marker; validate_repo
@@ -278,7 +363,8 @@ case "$OPERATION" in
     [[ "$proof" == "$RUN_ID:$HEAD_SHA" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "post-merge proof differs"
     canonical="$(timeout 5 realpath -- "$PHYSICAL_WORKSPACE")" || die_block "CLEANUP_NOT_AUTHORIZED" "workspace cannot be resolved"
     [[ "$canonical" == "$PHYSICAL_WORKSPACE" && "$canonical" != "$PHYSICAL_PARENT" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "workspace does not resolve exactly"
-    if timeout 5 mountpoint -q -- "$PHYSICAL_WORKSPACE"; then die_block "CLEANUP_NOT_AUTHORIZED" "workspace is a mount point"; fi
+    nested_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$PHYSICAL_WORKSPACE" 2>/dev/null || true)"
+    [[ -z "$nested_mounts" ]] || die_block "CLEANUP_NESTED_MOUNT" "workspace contains a mount boundary"
     run_capture rm -rf -- "$PHYSICAL_WORKSPACE"
     [[ $RUN_EXIT -eq 0 && ! -e "$PHYSICAL_WORKSPACE" ]] || die_block "BLOCKING_OPERATION_FAILED" "exact cleanup failed"
     RESULT_STATUS="CLEANUP_ABSENCE_PROVEN"
@@ -289,7 +375,18 @@ if [[ $RUN_EXIT -eq 124 || $RUN_EXIT -eq 137 ]]; then die_block "PROCESS_TIMEOUT
 if [[ $RUN_EXIT -ne 0 && "$RESULT_STATUS" != "OBSERVED_FAILURE" ]]; then die_block "BLOCKING_OPERATION_FAILED" "fixed blocking operation failed with exit $RUN_EXIT"; fi
 if [[ -d "$REPO_DIR/.git" ]]; then HEAD_SHA="$(repo_value rev-parse HEAD 2>/dev/null || printf '%s' "$BASE_SHA")"; fi
 OUTPUT_SHA="$(timeout 10 sha256sum "$OUTPUT_FILE" | { read -r digest _rest; printf '%s' "$digest"; })" || die_block "EVIDENCE_FAILED" "output digest failed"
-COMPLETED_AT="$(timeout 5 date -u +%Y-%m-%dT%H:%M:%S.000Z)" || die_block "CLOCK_FAILED" "cannot read clock"
+COMPLETED_AT="$(timeout 5 date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" || die_block "CLOCK_FAILED" "cannot read clock"
+set +e
+timeout 5 node -e 'const a=Date.parse(process.argv[1]),b=Date.parse(process.argv[2]);if(!Number.isFinite(a)||!Number.isFinite(b)||b<=a)process.exit(1)' "$STARTED_AT" "$COMPLETED_AT"
+clock_exit=$?
+set -e
+[[ $clock_exit -eq 0 ]] || die_block "CLOCK_NOT_MONOTONIC" "operation timestamps are not strictly increasing"
+
+SUMMARY_JSON="$(timeout 10 node -e '
+  const [operation,startedAt,completedAt,status,exitCode,before,after,counts]=process.argv.slice(1);let testCounts=null;try{testCounts=JSON.parse(counts)}catch{}
+  process.stdout.write(JSON.stringify({schemaVersion:1,operation,startedAt,completedAt,status,exitCode:Number(exitCode),resourceObservations:{cpuThreads:12,memoryBytes:12884901888,scratchBeforeBytes:Number(before),scratchAfterBytes:Number(after)},testCounts}))
+' "$OPERATION" "$STARTED_AT" "$COMPLETED_AT" "$RESULT_STATUS" "$RUN_EXIT" "$SCRATCH_BEFORE" "${SCRATCH_AFTER:-$SCRATCH_BEFORE}" "${TEST_COUNTS:-null}")" || die_block "EVIDENCE_FAILED" "cannot create sanitized operation summary"
+printf 'REMOTE_DEV_SUMMARY\t%s\n' "$(printf '%s' "$SUMMARY_JSON" | timeout 5 base64 | tr -d '\r\n')" >&2
 
 timeout 10 node -e '
   const a=process.argv.slice(1);const previous=a[16]==="null"?null:a[16]

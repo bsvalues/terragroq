@@ -9,12 +9,13 @@ param(
     [Parameter(Mandatory = $true)][int]$Attempt,
     [Parameter(Mandatory = $true)][string]$PreviousEvidenceSha256,
     [Parameter(Mandatory = $true)][string]$AegisKnownHostLine,
-    [Parameter(Mandatory = $true)][string]$AegisHostKeyFingerprint,
     [int]$SshTimeoutSeconds = 5400
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$trustedAegisFingerprint = 'SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo'
+$trustedWorkerSha256 = 'ce5b4d5f14ce1f8424730b0ee51e975f07b50b6542d82271cbabc7a880b72b05'
 
 function Write-ResultAndExit {
     param([string]$Status, [string]$ReasonCode, [string]$Detail, [int]$ExitCode)
@@ -37,6 +38,25 @@ function Get-Sha256Hex {
     $algorithm = [Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($algorithm.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant() }
     finally { $algorithm.Dispose() }
+}
+
+function Assert-NoReparseAncestor {
+    param([string]$Root, [string]$Target)
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $targetFull = [IO.Path]::GetFullPath($Target).TrimEnd('\')
+    if ($targetFull -ne $rootFull -and -not $targetFull.StartsWith($rootFull + '\', [StringComparison]::OrdinalIgnoreCase)) { Write-ResultAndExit 'INVALID_INPUT' 'EVIDENCE_ROOT_INVALID' 'evidence path escapes its ignored root' 64 }
+    $current = $rootFull
+    foreach ($segment in $targetFull.Substring($rootFull.Length).TrimStart('\').Split('\', [StringSplitOptions]::RemoveEmptyEntries)) {
+        if (Test-Path -LiteralPath $current) {
+            $item = Get-Item -LiteralPath $current -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { Write-ResultAndExit 'INVALID_INPUT' 'EVIDENCE_ANCESTOR_REPARSE_POINT' 'evidence ancestor is a reparse point' 64 }
+        }
+        $current = Join-Path $current $segment
+    }
+    if (Test-Path -LiteralPath $current) {
+        $item = Get-Item -LiteralPath $current -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { Write-ResultAndExit 'INVALID_INPUT' 'EVIDENCE_ANCESTOR_REPARSE_POINT' 'evidence run directory is a reparse point' 64 }
+    }
 }
 
 function Invoke-BoundedProcess {
@@ -79,8 +99,11 @@ try {
     $contractPath = Join-Path $scriptRoot 'remote-dev-offload-contract.mjs'
     $workerPath = Join-Path $scriptRoot 'aegis-remote-dev-worker.sh'
     if (-not (Test-Path -LiteralPath $contractPath -PathType Leaf) -or -not (Test-Path -LiteralPath $workerPath -PathType Leaf)) { Write-ResultAndExit 'INVALID_INPUT' 'IMPLEMENTATION_MISSING' 'contract or fixed worker is unavailable' 64 }
+    $workerBytes = [IO.File]::ReadAllBytes($workerPath)
+    if ((Get-Sha256Hex $workerBytes) -ne $trustedWorkerSha256) { Write-ResultAndExit 'INVALID_INPUT' 'WORKER_DIGEST_MISMATCH' 'local fixed worker differs from the reviewed digest' 64 }
 
-    $node = (Get-Command node -CommandType Application -ErrorAction Stop).Source
+    try { $node = (Get-Command node -CommandType Application -ErrorAction Stop).Source }
+    catch { Write-ResultAndExit 'BLOCKED' 'NODE_UNAVAILABLE' 'local packet validator is unavailable' 2 }
     $validateScript = @'
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -105,23 +128,26 @@ process.stdout.write(JSON.stringify({status:"READY",packet:result.packet,policyS
     if ((Get-Sha256Hex $patchBytes) -ne $packet.patch.sha256) { Write-ResultAndExit 'INVALID_INPUT' 'PATCH_BINDING_MISMATCH' 'patch digest differs from packet' 64 }
 
     $knownHostMatch = [regex]::Match($AegisKnownHostLine, '^aegis\s+(ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521))\s+([A-Za-z0-9+/]+={0,2})$')
-    if (-not $knownHostMatch.Success -or $AegisHostKeyFingerprint -notmatch '^SHA256:[A-Za-z0-9+/]{20,}={0,2}$') { Write-ResultAndExit 'INVALID_INPUT' 'HOST_KEY_PIN_INVALID' 'AEGIS known-host binding is malformed' 64 }
+    if (-not $knownHostMatch.Success) { Write-ResultAndExit 'INVALID_INPUT' 'HOST_KEY_PIN_INVALID' 'AEGIS known-host binding is malformed' 64 }
     try { $keyBytes = [Convert]::FromBase64String($knownHostMatch.Groups[2].Value) }
     catch { Write-ResultAndExit 'INVALID_INPUT' 'HOST_KEY_PIN_INVALID' 'AEGIS key bytes are malformed' 64 }
     $fingerprint = 'SHA256:' + [Convert]::ToBase64String(([Security.Cryptography.SHA256]::Create()).ComputeHash($keyBytes)).TrimEnd('=')
-    if ($fingerprint -ne $AegisHostKeyFingerprint.TrimEnd('=')) { Write-ResultAndExit 'INVALID_INPUT' 'HOST_KEY_PIN_MISMATCH' 'AEGIS host-key fingerprint differs' 64 }
+    if ($fingerprint -ne $trustedAegisFingerprint) { Write-ResultAndExit 'INVALID_INPUT' 'HOST_KEY_PIN_MISMATCH' 'AEGIS host-key fingerprint differs from immutable approval' 64 }
 
     $runDirectory = Join-Path ([IO.Path]::GetFullPath($EvidenceRoot)) $packet.runId
-    [IO.Directory]::CreateDirectory($runDirectory) | Out-Null
+    Assert-NoReparseAncestor $repositoryRoot $requestedEvidenceRoot
+    Assert-NoReparseAncestor $repositoryRoot $runDirectory
+    try { [IO.Directory]::CreateDirectory($runDirectory) | Out-Null }
+    catch { Write-ResultAndExit 'BLOCKED' 'EVIDENCE_WRITE_FAILED' 'evidence run directory could not be created' 2 }
     $runItem = Get-Item -LiteralPath $runDirectory -Force
     if (($runItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { Write-ResultAndExit 'INVALID_INPUT' 'EVIDENCE_PATH_REPARSE_POINT' 'evidence directory must not be a reparse point' 64 }
 
     $policyB64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($policyFull))
     $packetB64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($packetFull))
     $patchB64 = [Convert]::ToBase64String($patchBytes)
-    $workerB64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($workerPath))
+    $workerB64 = [Convert]::ToBase64String($workerBytes)
     $knownHostB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($AegisKnownHostLine))
-    $relayValues = @{ policy = $policyB64; packet = $packetB64; patch = $patchB64; worker = $workerB64; knownHost = $knownHostB64; fingerprint = $AegisHostKeyFingerprint; operation = $Operation; attempt = $Attempt; previous = $PreviousEvidenceSha256 }
+    $relayValues = @{ policy = $policyB64; packet = $packetB64; patch = $patchB64; worker = $workerB64; knownHost = $knownHostB64; operation = $Operation; attempt = $Attempt; previous = $PreviousEvidenceSha256 }
     $relayInput = $relayValues | ConvertTo-Json -Compress
 
     $relayValidator = @'
@@ -159,42 +185,67 @@ function Fail([string]$code,[string]$detail,[int]$exitCode=2){[Console]::Out.Wri
 function Hash([byte[]]$bytes){$h=[Security.Cryptography.SHA256]::Create();try{return ([BitConverter]::ToString($h.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()}finally{$h.Dispose()}}
 $relayRaw=[Console]::In.ReadToEnd();$relay=$relayRaw|ConvertFrom-Json -Depth 100
 $policyBytes=[Convert]::FromBase64String($relay.policy);$packetBytes=[Convert]::FromBase64String($relay.packet);$patchBytes=[Convert]::FromBase64String($relay.patch);$workerBytes=[Convert]::FromBase64String($relay.worker)
-$policy=[Text.Encoding]::UTF8.GetString($policyBytes)|ConvertFrom-Json -Depth 100;$packet=[Text.Encoding]::UTF8.GetString($packetBytes)|ConvertFrom-Json -Depth 100
+$policy=[Text.Encoding]::UTF8.GetString($policyBytes)|ConvertFrom-Json -Depth 100;$packetText=[Text.Encoding]::UTF8.GetString($packetBytes);$packet=$packetText|ConvertFrom-Json -Depth 100
 $validatorCompressed=[Convert]::FromBase64String('__VALIDATOR_GZIP__');$sourceStream=[IO.MemoryStream]::new([byte[]]$validatorCompressed);$validatorGzip=[IO.Compression.GZipStream]::new($sourceStream,[IO.Compression.CompressionMode]::Decompress);$targetStream=[IO.MemoryStream]::new();try{$validatorGzip.CopyTo($targetStream)}finally{$validatorGzip.Dispose();$sourceStream.Dispose()};$validatorBytes=$targetStream.ToArray();$targetStream.Dispose();if((Hash $validatorBytes)-ne'__VALIDATOR_SHA__'){Fail 'RELAY_VALIDATOR_MISMATCH' 'validator digest differs' 64}
 $validatorPath=Join-Path ([IO.Path]::GetTempPath()) ('remote-dev-relay-'+[Guid]::NewGuid().ToString('N')+'.cjs');[IO.File]::WriteAllBytes($validatorPath,$validatorBytes)
 try{$node=@(Get-Command node.exe,node -CommandType Application -ErrorAction SilentlyContinue)[0].Source;if(-not$node){Fail 'RELAY_VALIDATOR_UNAVAILABLE' 'Node is unavailable' 2};$vpsi=[Diagnostics.ProcessStartInfo]::new();$vpsi.FileName=$node;$vpsi.Arguments='"'+$validatorPath+'"';$vpsi.UseShellExecute=$false;$vpsi.CreateNoWindow=$true;$vpsi.RedirectStandardInput=$true;$vpsi.RedirectStandardOutput=$true;$vpsi.RedirectStandardError=$true;$vp=[Diagnostics.Process]::new();$vp.StartInfo=$vpsi;if(-not$vp.Start()){Fail 'RELAY_VALIDATOR_UNAVAILABLE' 'validator did not start' 2};$vp.StandardInput.Write($relayRaw);$vp.StandardInput.Close();$vo=$vp.StandardOutput.ReadToEndAsync();$ve=$vp.StandardError.ReadToEndAsync();if(-not$vp.WaitForExit(30000)){try{$vp.Kill()}catch{};Fail 'RELAY_VALIDATOR_TIMEOUT' 'validator timed out' 2};$validatorOutput=$vo.GetAwaiter().GetResult();if($vp.ExitCode-ne0){[Console]::Out.WriteLine($validatorOutput.Trim());exit $vp.ExitCode};$validated=$validatorOutput|ConvertFrom-Json -Depth 20}finally{Remove-Item -LiteralPath $validatorPath -Force -ErrorAction SilentlyContinue}
 $policyDigest=$validated.policySha256;$packetDigest=$validated.packetSha256;$index=[int]$validated.operationIndex;$ops=@('PROVE_PREFLIGHT','CREATE_WORKSPACE','APPLY_RESERVED_PATCH','RESTORE_DOTNET','TEST_WORKFLOW_CONTRACT','TEST_DOTNET_INFORMATIONAL','BUILD_DOTNET_RELEASE','COMMIT_RESERVED_PATHS','PUSH_AUTHORIZED_BRANCH','PROVE_POST_MERGE','CLEAN_EXACT_WORKSPACE')
-$knownHost=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($relay.knownHost));$parts=$knownHost-split'\s+';if($parts.Count-ne3-or$parts[0]-ne'aegis'){Fail 'HOST_KEY_PIN_INVALID' 'known host is malformed' 64};$actualFingerprint='SHA256:'+([Convert]::ToBase64String(([Security.Cryptography.SHA256]::Create()).ComputeHash([Convert]::FromBase64String($parts[2]))).TrimEnd('='));if($actualFingerprint-ne([string]$relay.fingerprint).TrimEnd('=')){Fail 'HOST_KEY_PIN_MISMATCH' 'known host fingerprint differs' 64}
-$markerRoot=Join-Path $env:ProgramData 'WilliamOS\remote-dev-offload-v1';[IO.Directory]::CreateDirectory($markerRoot)|Out-Null;$statePath=Join-Path $markerRoot ($packet.runId+'.json')
-$state=[ordered]@{runId=$packet.runId;policySha256=$policyDigest;packetSha256=$packetDigest;lastOperationIndex=-1;lastAttempt=0}
-try{$stream=[IO.File]::Open($statePath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);try{$bytes=[Text.Encoding]::UTF8.GetBytes(($state|ConvertTo-Json -Compress));$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}}catch [IO.IOException]{$existing=Get-Content -LiteralPath $statePath -Raw|ConvertFrom-Json;if($existing.runId-ne$packet.runId-or$existing.policySha256-ne$policyDigest-or$existing.packetSha256-ne$packetDigest){Fail 'RUN_BINDING_MISMATCH' 'run marker differs' 64};$state=[ordered]@{runId=$existing.runId;policySha256=$existing.policySha256;packetSha256=$existing.packetSha256;lastOperationIndex=[int]$existing.lastOperationIndex;lastAttempt=[int]$existing.lastAttempt}}
-$attempt=[int]$relay.attempt;if(($index-eq$state.lastOperationIndex-and$attempt-ne($state.lastAttempt+1))-or($index-eq($state.lastOperationIndex+1)-and$attempt-ne1)-or($index-lt$state.lastOperationIndex)-or($index-gt($state.lastOperationIndex+1))){Fail 'RUN_REPLAY_OR_ORDER_INVALID' 'operation replay or order is invalid' 64}
-$state.lastOperationIndex=$index;$state.lastAttempt=$attempt;$stateTmp=$statePath+'.'+[Guid]::NewGuid().ToString('N')+'.tmp';[IO.File]::WriteAllText($stateTmp,($state|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false));Move-Item -LiteralPath $stateTmp -Destination $statePath -Force
+$knownHost=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($relay.knownHost));$parts=$knownHost-split'\s+';if($parts.Count-ne3-or$parts[0]-ne'aegis'){Fail 'HOST_KEY_PIN_INVALID' 'known host is malformed' 64};$actualFingerprint='SHA256:'+([Convert]::ToBase64String(([Security.Cryptography.SHA256]::Create()).ComputeHash([Convert]::FromBase64String($parts[2]))).TrimEnd('='));if($actualFingerprint-ne'__AEGIS_FINGERPRINT__'){Fail 'HOST_KEY_PIN_MISMATCH' 'known host fingerprint differs from immutable approval' 64}
+if((Hash $workerBytes)-ne'__WORKER_SHA__'){Fail 'WORKER_DIGEST_MISMATCH' 'worker bytes differ from immutable review' 64}
+$markerRoot=Join-Path $env:ProgramData 'WilliamOS\remote-dev-offload-v1';[IO.Directory]::CreateDirectory($markerRoot)|Out-Null;$statePath=Join-Path $markerRoot ($packet.runId+'.json');$lockPath=Join-Path $markerRoot ($packet.runId+'.lock')
+try{$runLock=[IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}catch [IO.IOException]{Fail 'RUN_LOCK_BUSY' 'another dispatch for this run is active' 2}
+function SaveState {$tmp=$statePath+'.'+[Guid]::NewGuid().ToString('N')+'.tmp';[IO.File]::WriteAllText($tmp,($state|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false));Move-Item -LiteralPath $tmp -Destination $statePath -Force}
+$state=[ordered]@{runId=$packet.runId;policySha256=$policyDigest;packetSha256=$packetDigest;lastOperationIndex=-1;lastAttempt=0;lastEvidenceSha256=$null;lastCompletedAt=$null;inFlightOperation=$null;terminalStatus='ACTIVE'}
+if(Test-Path -LiteralPath $statePath){try{$existing=Get-Content -LiteralPath $statePath -Raw|ConvertFrom-Json -Depth 20}catch{Fail 'RUN_STATE_INVALID' 'run marker is malformed' 64};if($existing.runId-ne$packet.runId-or$existing.policySha256-ne$policyDigest-or$existing.packetSha256-ne$packetDigest){Fail 'RUN_BINDING_MISMATCH' 'run marker differs' 64};$state=[ordered]@{runId=$existing.runId;policySha256=$existing.policySha256;packetSha256=$existing.packetSha256;lastOperationIndex=[int]$existing.lastOperationIndex;lastAttempt=[int]$existing.lastAttempt;lastEvidenceSha256=$existing.lastEvidenceSha256;lastCompletedAt=$existing.lastCompletedAt;inFlightOperation=$existing.inFlightOperation;terminalStatus=$existing.terminalStatus}}
+if($state.terminalStatus-ne'ACTIVE'){Fail 'RUN_REPLAY_OR_ORDER_INVALID' 'terminal run tombstone forbids reuse' 64}
+$attempt=[int]$relay.attempt;if($state.inFlightOperation){$state.terminalStatus='BLOCKED';SaveState;Fail 'RUN_INCOMPLETE_PREVIOUS_DISPATCH' 'a previous dispatch did not settle cleanly' 2};if($index-ne($state.lastOperationIndex+1)-or$attempt-ne1){Fail 'RUN_REPLAY_OR_ORDER_INVALID' 'operation replay or order is invalid' 64}
 $knownHosts=Join-Path $markerRoot ($packet.runId+'.known_hosts');[IO.File]::WriteAllText($knownHosts,$knownHost+[Environment]::NewLine,[Text.UTF8Encoding]::new($false))
-$ssh=@(Get-Command ssh.exe -CommandType Application -ErrorAction Stop)[0].Source;$psi=[Diagnostics.ProcessStartInfo]::new();$psi.FileName=$ssh;$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardInput=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
+$state.inFlightOperation=$relay.operation;SaveState
+try{$ssh=@(Get-Command ssh.exe -CommandType Application -ErrorAction Stop)[0].Source}catch{Fail 'AEGIS_SSH_UNAVAILABLE' 'SSH is unavailable' 2};$psi=[Diagnostics.ProcessStartInfo]::new();$psi.FileName=$ssh;$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardInput=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
 $psi.Arguments='-o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="'+$knownHosts+'" aegis bash -s -- '+$relay.operation+' '+$relay.packet+' '+$relay.patch+' '+$attempt+' '+$relay.previous
-$process=[Diagnostics.Process]::new();$process.StartInfo=$psi;if(-not$process.Start()){Fail 'AEGIS_START_FAILED' 'AEGIS process did not start'};$process.StandardInput.BaseStream.Write($workerBytes,0,$workerBytes.Length);$process.StandardInput.Close();$outTask=$process.StandardOutput.ReadToEndAsync();$errTask=$process.StandardError.ReadToEndAsync();if(-not$process.WaitForExit(([int]$packet.resourceLimits.timeoutSeconds)*1000)){try{$process.Kill()}catch{};Fail 'AEGIS_TIMEOUT' 'AEGIS worker timed out'};$stdout=$outTask.GetAwaiter().GetResult();$stderr=$errTask.GetAwaiter().GetResult()
-if($process.ExitCode-ne0){if($stdout.Trim()){[Console]::Out.WriteLine($stdout.Trim())}else{Fail 'AEGIS_WORKER_FAILED' ('AEGIS worker exit '+$process.ExitCode)}}
-$lines=@($stdout-split"`r?`n"|Where-Object{$_.Trim()});if($lines.Count-ne1){Fail 'MALFORMED_WORKER_OUTPUT' 'worker must emit one JSON line'};try{$evidence=$lines[0]|ConvertFrom-Json -Depth 100}catch{Fail 'MALFORMED_WORKER_OUTPUT' 'worker JSON is malformed'}
-if($evidence.runId-ne$packet.runId-or$evidence.operation-ne$relay.operation-or$evidence.attempt-ne$attempt-or$evidence.policySha256-ne$policyDigest-or$evidence.packetSha256-ne$packetDigest){Fail 'WORKER_EVIDENCE_MISMATCH' 'worker evidence binding differs'}
-if($evidence.status-eq'CLEANUP_ABSENCE_PROVEN'){Remove-Item -LiteralPath $statePath -Force};[Console]::Out.WriteLine($lines[0]);exit 0
+$process=[Diagnostics.Process]::new();$process.StartInfo=$psi;if(-not$process.Start()){Fail 'AEGIS_START_FAILED' 'AEGIS process did not start'};$process.StandardInput.BaseStream.Write($workerBytes,0,$workerBytes.Length);$process.StandardInput.Close();$outTask=$process.StandardOutput.ReadToEndAsync();$errTask=$process.StandardError.ReadToEndAsync();if(-not$process.WaitForExit(([int]$packet.resourceLimits.timeoutSeconds)*1000)){try{$process.Kill()}catch{};$state.terminalStatus='BLOCKED';SaveState;Fail 'AEGIS_TIMEOUT' 'AEGIS worker timed out'};$stdout=$outTask.GetAwaiter().GetResult();$stderr=$errTask.GetAwaiter().GetResult()
+if($process.ExitCode-ne0){$state.terminalStatus='BLOCKED';SaveState;if($stdout.Trim()){[Console]::Out.WriteLine($stdout.Trim());exit 2}else{Fail 'AEGIS_WORKER_FAILED' ('AEGIS worker exit '+$process.ExitCode)}}
+$lines=@($stdout-split"`r?`n"|Where-Object{$_.Trim()});if($lines.Count-ne1){$state.terminalStatus='BLOCKED';SaveState;Fail 'MALFORMED_WORKER_OUTPUT' 'worker must emit one JSON line'};try{$evidence=$lines[0]|ConvertFrom-Json -Depth 100}catch{$state.terminalStatus='BLOCKED';SaveState;Fail 'MALFORMED_WORKER_OUTPUT' 'worker JSON is malformed'}
+$requiredEvidence=@('attempt','baseSha','branch','completedAt','exitCode','headSha','nodeId','operation','outputSha256','packetSha256','patchGeneration','patchSha256','policySha256','previousEvidenceSha256','runId','schemaVersion','startedAt','status','workspace');if((@($evidence.PSObject.Properties.Name|Sort-Object)-join',')-ne($requiredEvidence-join',')){$state.terminalStatus='BLOCKED';SaveState;Fail 'WORKER_EVIDENCE_MISMATCH' 'worker evidence fields differ'}
+$expectedPrevious=if($relay.previous-eq'null'){$null}else{$relay.previous};if($expectedPrevious-ne$state.lastEvidenceSha256-or$evidence.runId-ne$packet.runId-or$evidence.operation-ne$relay.operation-or$evidence.attempt-ne$attempt-or$evidence.policySha256-ne$policyDigest-or$evidence.packetSha256-ne$packetDigest-or$evidence.nodeId-ne'aegis'-or$evidence.workspace-ne$packet.workspace-or$evidence.branch-ne$packet.branch-or$evidence.baseSha-ne$packet.baseSha-or$evidence.patchSha256-ne$packet.patch.sha256-or$evidence.patchGeneration-ne1-or$evidence.previousEvidenceSha256-ne$expectedPrevious-or$evidence.headSha-notmatch'^[a-f0-9]{40}$'-or$evidence.outputSha256-notmatch'^[a-f0-9]{64}$'){$state.terminalStatus='BLOCKED';SaveState;Fail 'WORKER_EVIDENCE_MISMATCH' 'worker evidence binding differs'}
+$startedText=[regex]::Match($lines[0],'"startedAt":"([^"]+)"').Groups[1].Value;$completedText=[regex]::Match($lines[0],'"completedAt":"([^"]+)"').Groups[1].Value;$issuedText=[regex]::Match($packetText,'"issuedAt":"([^"]+)"').Groups[1].Value;$expiresText=[regex]::Match($packetText,'"expiresAt":"([^"]+)"').Groups[1].Value;if($startedText -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$' -or $completedText -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$'){$state.terminalStatus='BLOCKED';SaveState;Fail 'WORKER_EVIDENCE_TIME_INVALID' 'worker timestamps are malformed'};try{$started=[DateTimeOffset]::Parse($startedText);$completed=[DateTimeOffset]::Parse($completedText);$issued=[DateTimeOffset]::Parse($issuedText);$expires=[DateTimeOffset]::Parse($expiresText)}catch{$state.terminalStatus='BLOCKED';SaveState;Fail 'WORKER_EVIDENCE_TIME_INVALID' 'worker timestamps are malformed'};if($completed -le $started -or $started -lt $issued -or $completed -gt $expires -or ($completed-$started).TotalSeconds -gt [double]$packet.resourceLimits.timeoutSeconds -or ($state.lastCompletedAt -and $started -le [DateTimeOffset]::Parse([string]$state.lastCompletedAt))){$state.terminalStatus='BLOCKED';SaveState;Fail 'WORKER_EVIDENCE_TIME_INVALID' 'worker timestamps are not strictly ordered'}
+$validStatus=($evidence.status-eq'SUCCEEDED'-and$evidence.exitCode-eq0)-or($relay.operation-eq'TEST_DOTNET_INFORMATIONAL'-and$evidence.status-eq'OBSERVED_FAILURE'-and$evidence.exitCode-ne0)-or($relay.operation-eq'PROVE_POST_MERGE'-and$evidence.status-eq'MERGE_ANCESTRY_PROVEN'-and$evidence.exitCode-eq0)-or($relay.operation-eq'CLEAN_EXACT_WORKSPACE'-and$evidence.status-eq'CLEANUP_ABSENCE_PROVEN'-and$evidence.exitCode-eq0);if(-not$validStatus){$state.terminalStatus='BLOCKED';SaveState;Fail 'WORKER_EVIDENCE_STATUS_INVALID' 'worker status or exit truth differs'}
+$summaryLine=@($stderr-split"`r?`n"|Where-Object{$_.StartsWith("REMOTE_DEV_SUMMARY`t")});if($summaryLine.Count-ne1){$state.terminalStatus='BLOCKED';SaveState;Fail 'WORKER_SUMMARY_INVALID' 'sanitized worker summary is missing'};try{$summary=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($summaryLine[0]-split"`t",2)[1]))|ConvertFrom-Json -Depth 20}catch{$state.terminalStatus='BLOCKED';SaveState;Fail 'WORKER_SUMMARY_INVALID' 'sanitized worker summary is malformed'}
+$state.lastOperationIndex=$index;$state.lastAttempt=$attempt;$state.lastEvidenceSha256=Hash([Text.Encoding]::UTF8.GetBytes($lines[0]));$state.lastCompletedAt=$completedText;$state.inFlightOperation=$null;if($evidence.status-eq'CLEANUP_ABSENCE_PROVEN'){$state.terminalStatus='COMPLETE'};SaveState
+$runLock.Dispose();[Console]::Out.WriteLine((@{evidence=$evidence;summary=$summary}|ConvertTo-Json -Compress -Depth 30));exit 0
 '@
-    $relayScript = $relayScript.Replace('__VALIDATOR_GZIP__', $validatorGzipB64).Replace('__VALIDATOR_SHA__', $validatorSha256)
-    $encodedRelay = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($relayScript))
+    $relayScript = $relayScript.Replace('__VALIDATOR_GZIP__', $validatorGzipB64).Replace('__VALIDATOR_SHA__', $validatorSha256).Replace('__AEGIS_FINGERPRINT__', $trustedAegisFingerprint).Replace('__WORKER_SHA__', $trustedWorkerSha256)
+    $relayBytes = [Text.Encoding]::UTF8.GetBytes($relayScript)
+    $relaySha256 = Get-Sha256Hex $relayBytes
+    $relayStream = [IO.MemoryStream]::new()
+    $relayGzip = [IO.Compression.GZipStream]::new($relayStream, [IO.Compression.CompressionMode]::Compress, $true)
+    try { $relayGzip.Write($relayBytes, 0, $relayBytes.Length) } finally { $relayGzip.Dispose() }
+    $relayGzipB64 = [Convert]::ToBase64String($relayStream.ToArray()); $relayStream.Dispose()
+    $relayBootstrap = @'
+$ErrorActionPreference='Stop';$raw=[Convert]::FromBase64String('__RELAY_GZIP__');$source=[IO.MemoryStream]::new([byte[]]$raw);$gzip=[IO.Compression.GZipStream]::new($source,[IO.Compression.CompressionMode]::Decompress);$target=[IO.MemoryStream]::new();try{$gzip.CopyTo($target)}finally{$gzip.Dispose();$source.Dispose()};$bytes=$target.ToArray();$target.Dispose();$hash=[Security.Cryptography.SHA256]::Create();try{$actual=([BitConverter]::ToString($hash.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()}finally{$hash.Dispose()};if($actual-ne'__RELAY_SHA__'){exit 64};$path=Join-Path ([IO.Path]::GetTempPath()) ('remote-dev-fixed-relay-'+[Guid]::NewGuid().ToString('N')+'.ps1');try{[IO.File]::WriteAllBytes($path,$bytes);& $path;exit $LASTEXITCODE}finally{Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue}
+'@
+    $relayBootstrap = $relayBootstrap.Replace('__RELAY_GZIP__', $relayGzipB64).Replace('__RELAY_SHA__', $relaySha256)
+    $encodedRelay = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($relayBootstrap))
 
-    $sshCommand = @(Get-Command ssh.exe -CommandType Application -ErrorAction Stop)[0].Source
-    $remote = Invoke-BoundedProcess $sshCommand @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ConnectionAttempts=1', 'hermes', 'powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedRelay) $SshTimeoutSeconds $relayInput
+    try { $sshCommand = @(Get-Command ssh.exe -CommandType Application -ErrorAction Stop)[0].Source }
+    catch { Write-ResultAndExit 'BLOCKED' 'SSH_UNAVAILABLE' 'Windows OpenSSH client is unavailable' 2 }
+    try { $remote = Invoke-BoundedProcess $sshCommand @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ConnectionAttempts=1', 'hermes', 'powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedRelay) $SshTimeoutSeconds $relayInput }
+    catch { Write-ResultAndExit 'BLOCKED' 'HERMES_START_FAILED' 'Hermes SSH process could not start' 2 }
     if ($remote.TimedOut) { Write-ResultAndExit 'BLOCKED' 'HERMES_TIMEOUT' 'Hermes relay timed out' 2 }
     if ($remote.ExitCode -ne 0) { Write-ResultAndExit 'BLOCKED' 'HERMES_OR_AEGIS_FAILED' ($remote.Stdout + $remote.Stderr) 2 }
     $lines = @($remote.Stdout -split "`r?`n" | Where-Object { $_.Trim().Length -gt 0 })
     if ($lines.Count -ne 1) { Write-ResultAndExit 'BLOCKED' 'MALFORMED_WORKER_OUTPUT' 'relay must return exactly one JSON line' 2 }
-    try { $evidence = $lines[0] | ConvertFrom-Json -Depth 100 }
+    try { $relayResult = $lines[0] | ConvertFrom-Json -Depth 100 }
     catch { Write-ResultAndExit 'BLOCKED' 'MALFORMED_WORKER_OUTPUT' 'relay output is not JSON' 2 }
-    if ($evidence.status -eq 'BLOCKED' -or $null -eq $evidence.schemaVersion) { Write-ResultAndExit 'BLOCKED' ([string]$evidence.reasonCode) ([string]$evidence.detail) 2 }
+    if ($relayResult.status -eq 'BLOCKED') { Write-ResultAndExit 'BLOCKED' ([string]$relayResult.reasonCode) ([string]$relayResult.detail) 2 }
+    if ($relayResult.PSObject.Properties.Name -contains 'evidence') { $evidence = $relayResult.evidence; $operationSummary = $relayResult.summary }
+    else { $evidence = $relayResult; $operationSummary = @{ schemaVersion = 1; operation = $Operation; startedAt = $evidence.startedAt; completedAt = $evidence.completedAt; status = $evidence.status; exitCode = $evidence.exitCode; resourceObservations = @{ cpuThreads = $packet.resourceLimits.cpuThreads; memoryBytes = $packet.resourceLimits.memoryBytes; scratchBeforeBytes = $null; scratchAfterBytes = $null }; testCounts = $null } }
+    if ($null -eq $evidence.schemaVersion) { Write-ResultAndExit 'BLOCKED' 'MALFORMED_WORKER_OUTPUT' 'relay evidence is absent' 2 }
+    $evidenceJson = $evidence | ConvertTo-Json -Compress -Depth 100
 
-    $historyFiles = @(Get-ChildItem -LiteralPath $runDirectory -File -Filter '*.json' | Sort-Object Name)
+    $historyFiles = @(Get-ChildItem -LiteralPath $runDirectory -File -Filter '*.json' | Where-Object { $_.Name -match '^\d{2}-[a-z0-9-]+-\d+\.json$' } | Sort-Object Name)
     $history = @($historyFiles | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json -Depth 100 })
-    $evidenceB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($lines[0]))
+    $evidenceB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($evidenceJson))
     $historyJson = if ($history.Count -eq 0) { '[]' } else { $history | ConvertTo-Json -Compress -Depth 100 }
     $historyB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($historyJson))
     $transitionScript = @'
@@ -210,10 +261,17 @@ const [contractPath,packetPath,envelopePath,evidenceB64,historyB64]=process.argv
     $index = [Array]::IndexOf([object[]]$packet.operations, $Operation)
     $evidenceFile = Join-Path $runDirectory ('{0:D2}-{1}-{2}.json' -f $index, $Operation.ToLowerInvariant(), $Attempt)
     $temporaryEvidence = $evidenceFile + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
-    [IO.File]::WriteAllText($temporaryEvidence, $lines[0] + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temporaryEvidence -Destination $evidenceFile
-    [Console]::Out.WriteLine($lines[0])
-    exit 0
+    $summaryFile = Join-Path $runDirectory ('{0:D2}-{1}-{2}-operation-summary.json' -f $index, $Operation.ToLowerInvariant(), $Attempt)
+    try {
+        [IO.File]::WriteAllText($temporaryEvidence, $evidenceJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporaryEvidence -Destination $evidenceFile
+        $summaryJson = $operationSummary | Select-Object schemaVersion, operation, startedAt, completedAt, status, exitCode, resourceObservations, testCounts | ConvertTo-Json -Compress -Depth 20
+        [IO.File]::WriteAllText($summaryFile, $summaryJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    }
+    catch { Write-ResultAndExit 'BLOCKED' 'EVIDENCE_WRITE_FAILED' 'sanitized evidence could not be published' 2 }
+    [Console]::Out.WriteLine($evidenceJson)
+    if ($transitionResult.status -eq 'COMPLETE') { exit 0 }
+    exit 2
 }
 catch {
     Write-ResultAndExit 'INVALID_INPUT' 'CONTROLLER_INPUT_INVALID' $_.Exception.Message 64
