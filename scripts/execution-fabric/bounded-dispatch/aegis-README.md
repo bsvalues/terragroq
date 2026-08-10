@@ -20,9 +20,17 @@ GitHub, subprocess, arbitrary-shell, scheduler, registry-write, authority-write,
 fallback, or output-storage surface.
 
 Activation additionally requires injected atomic one-use claim and exclusive resident-AEGIS lease
-providers. Those providers govern runtime-control state outside this read-only workload adapter; the
-adapter itself performs no claim/lease filesystem writes. Identity and all trust inputs are rechecked
-after the claim and before the file descriptor is opened.
+providers. `run-resident-aegis-hash-verify.mjs` is the Linux-only resident wrapper for those host
+dependencies. It accepts only repository-confined request and receipt paths, derives identity from
+the local hostname and `/etc/machine-id`, replays placement from the fixed user-local snapshot root,
+and proves Forge and authority artifacts from a clean executable checkout exactly at local trusted
+`main`. It runs only as the dedicated non-root `williamos-fabric` account. Its private, node-scoped
+claim/lease ledger must be pre-provisioned at `/var/lib/williamos/fabric/ledger`; stale leases are
+reconciled only after durable release evidence or proof that the exact process holder is dead. It has no
+SSH, network, GitHub, external-provider, scheduler, fallback, or arbitrary-workload command surface.
+Those providers govern runtime-control state outside this read-only workload adapter; the adapter
+itself performs no claim/lease filesystem writes. Identity and all trust inputs are rechecked after
+the claim and before the file descriptor is opened.
 The request is snapshotted before claim acquisition and checked again immediately before opening the
 input. The staging-root real path and directory identity are revalidated after file-descriptor
 acquisition and before any workload bytes are read.
@@ -30,13 +38,13 @@ acquisition and before any workload bytes are read.
 Future authority must retain a separately reviewed scope artifact under
 `config/execution-fabric/aegis-bounded-dispatch-authority-scopes/`. The registry entry and trusted-main
 proof bind its exact bytes, request scope, staging-root ID, expected digest and length, byte/timeout
-ceilings, Forge registries, reviewed identity, one-attempt limit, and prohibited actions.
+ceilings, Forge registries, reviewed identity, one-attempt limit, and prohibited actions. Commit
+identity is not embedded in the scope itself: the later registry entry names distinct execution and
+review commits, and the resident proof requires the scope bytes to be exact and unchanged at both.
 
-There is intentionally no resident CLI wrapper yet. A safe wrapper still needs supported host
-implementations for trusted pinned-placement replay, trusted-main Forge/authority proof, atomic
-single-use claim, and exclusive local lease. The packet does not replace those trust providers with
-self-attestation, Git, network access, or owner-carried evidence. Until that integration exists and a
-future authority entry is separately reviewed, the exact terminal production state is
+The packet and wrapper do not replace their trust providers with self-attestation, network access,
+or owner-carried evidence. Until fresh local snapshots and a future authority entry are separately
+reviewed and retained on trusted main, the exact terminal production state is
 `BLOCKED_AUTHORITY / AUTHORITY_NOT_ADMITTED` at the Work Order and when this adapter evaluates the
 empty registry. Resident-provider availability is a separate prerequisite and cannot substitute for
 authority.

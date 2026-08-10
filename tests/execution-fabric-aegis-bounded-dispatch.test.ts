@@ -185,8 +185,6 @@ function fixture({ authority = true, grant = true, input = Buffer.from("AEGIS ex
     machine_id_sha256: identity().machine_id_sha256,
     producer_identity: "resident-aegis",
     reviewer_identity: "independent-assurance",
-    execution_commit: "a".repeat(40),
-    review_commit: "b".repeat(40),
     maximum_attempts: 1,
     risk_class: "R1",
     authority_status: "GRANTED",
@@ -326,6 +324,20 @@ describe("AEGIS bounded HASH_VERIFY adapter", () => {
     })
   })
 
+  it("keeps commit ancestry in the authority proof instead of self-referencing the scope commits", () => {
+    const value = fixture()
+    const files = authorityFiles(value)
+    expect(files.scope).not.toHaveProperty("execution_commit")
+    expect(files.scope).not.toHaveProperty("review_commit")
+    const proof = vi.fn(authorityProof)
+    expect(prepareAegisHashVerify({ ...value, proveTrustedAuthority: proof })).toMatchObject({
+      status: "READY_FOR_SINGLE_USE_LOCAL_HASH",
+    })
+    expect(proof).toHaveBeenCalledWith(expect.objectContaining({
+      scopeArtifactSha256: files.registry.entries[0].scope_artifact_sha256,
+    }))
+  })
+
   it("rejects wrong host and machine identity before authority use", () => {
     for (const changed of [identity({ hostname: "not-aegis" }), identity({ machine_id_sha256: "f".repeat(64) })]) {
       const value = fixture()
@@ -386,6 +398,12 @@ describe("AEGIS bounded HASH_VERIFY adapter", () => {
       }
       expect(prepareAegisHashVerify(value)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "PATH_ESCAPE" }] })
     }
+    const hardLinked = fixture()
+    const outside = path.join(os.tmpdir(), `aegis-hard-link-${crypto.randomUUID()}.bin`)
+    fs.writeFileSync(outside, hardLinked.originalInput)
+    fs.rmSync(hardLinked.inputPath)
+    fs.linkSync(outside, hardLinked.inputPath)
+    expect(prepareAegisHashVerify(hardLinked)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "INPUT_INVALID" }] })
   })
 
   it("rejects oversized and non-regular inputs before consuming a claim", async () => {
