@@ -135,15 +135,28 @@ function validateTemplateRegistry(value) {
 
 function validateAuthorityRegistry(value) {
   exactKeys(value, ["schema_version", "registry_id", "entries"], "authority registry")
-  if (value.schema_version !== "0.1-bounded-dispatch-authority-registry"
+  if (value.schema_version !== "0.2-bounded-dispatch-authority-registry"
     || value.registry_id !== "execution-fabric-bounded-dispatch-authorities"
     || !Array.isArray(value.entries)) fail("TRUST_ROOT_INVALID", "authority registry contract is invalid")
   const references = new Set()
   for (const [index, entry] of value.entries.entries()) {
-    exactKeys(entry, [
+    const commonKeys = [
       "reference", "work_order_id", "template_id", "selected_node_id", "scope_sha256", "valid_from",
       "expires_at", "maximum_attempts", "scope_path", "scope_artifact_sha256", "reviewed_commit", "status",
-    ], `authority ${index}`)
+    ]
+    if (entry?.status === "ACTIVE") {
+      exactKeys(entry, [...commonKeys, "ledger_genesis_sha256"], `authority ${index}`)
+      digest(entry.ledger_genesis_sha256, `authority ${index}.ledger_genesis_sha256`)
+    } else if (entry?.status === "CONSUMED_REJECTED") {
+      exactKeys(entry, [...commonKeys, "terminal_evidence_path", "terminal_evidence_sha256"], `authority ${index}`)
+      if (typeof entry.terminal_evidence_path !== "string"
+        || !/^docs\/reports\/bounded-dispatch\/[A-Za-z0-9][A-Za-z0-9._-]{2,200}\.json$/.test(entry.terminal_evidence_path)) {
+        fail("TRUST_ROOT_INVALID", `authority ${index}.terminal_evidence_path is invalid`)
+      }
+      digest(entry.terminal_evidence_sha256, `authority ${index}.terminal_evidence_sha256`)
+    } else {
+      fail("TRUST_ROOT_INVALID", `authority ${index}.status is invalid`)
+    }
     identifier(entry.reference, `authority ${index}.reference`)
     identifier(entry.work_order_id, `authority ${index}.work_order_id`)
     identifier(entry.template_id, `authority ${index}.template_id`)
@@ -157,7 +170,7 @@ function validateAuthorityRegistry(value) {
     timestamp(entry.valid_from, `authority ${index}.valid_from`)
     timestamp(entry.expires_at, `authority ${index}.expires_at`)
     integer(entry.maximum_attempts, `authority ${index}.maximum_attempts`, 1, 1)
-    if (!GIT_SHA40.test(entry.reviewed_commit) || entry.status !== "ACTIVE") {
+    if (!GIT_SHA40.test(entry.reviewed_commit)) {
       fail("TRUST_ROOT_INVALID", `authority ${index} review binding is invalid`)
     }
     if (Date.parse(entry.valid_from) >= Date.parse(entry.expires_at)) fail("TRUST_ROOT_INVALID", `authority ${index} window is invalid`)
@@ -223,6 +236,15 @@ function scopeBinding(request, selectedNodeId) {
     limits: request.limits,
     forge: request.forge,
   }
+}
+
+export function buildResidentHermesRequestBody(request) {
+  return JSON.stringify({
+    model: request.input.model,
+    prompt: request.input.prompt,
+    stream: false,
+    options: { temperature: 0, num_predict: 64 },
+  })
 }
 
 function rejected(error) {
@@ -324,6 +346,41 @@ function prepareOrThrow({ repositoryRoot, receiptBytes, request, evaluatedAt, pr
   validateAuthorityRegistry(authorityArtifact.value)
   const authority = authorityArtifact.value.entries.find((entry) => entry.reference === request.authority_reference)
   if (!authority) fail("AUTHORITY_NOT_ADMITTED", "requested authority reference is absent")
+  if (authority.status !== "ACTIVE") {
+    const terminalEvidence = readRepositoryArtifact(repositoryRoot, authority.terminal_evidence_path, "terminal authority evidence")
+    if (terminalEvidence.sha256 !== authority.terminal_evidence_sha256
+      || terminalEvidence.value?.status !== "CONSUMED_REJECTED"
+      || terminalEvidence.value?.authority_reference !== authority.reference
+      || terminalEvidence.value?.retry_allowed !== false) {
+      fail("TRUST_ROOT_INVALID", "terminal authority evidence is invalid")
+    }
+    fail("AUTHORITY_CONSUMED", "requested authority is terminal and cannot be replayed")
+  }
+  const runtimePolicyArtifact = readRepositoryArtifact(
+    repositoryRoot,
+    "config/execution-fabric/bounded-dispatch-runtime-policy.json",
+    "bounded dispatch runtime policy",
+  )
+  exactKeys(runtimePolicyArtifact.value, [
+    "schema_version", "policy_id", "execution_enabled", "active_authority_references",
+    "scheduler_state", "scheduler_authority", "autonomous_dispatch", "alternate_node_allowed",
+    "aegis_compute_authority", "aegis_storage_nas_backup_authority",
+  ], "bounded dispatch runtime policy")
+  const runtimePolicy = runtimePolicyArtifact.value
+  if (runtimePolicy.schema_version !== "0.1-bounded-dispatch-runtime-policy"
+    || runtimePolicy.policy_id !== "execution-fabric-bounded-dispatch-runtime"
+    || runtimePolicy.scheduler_state !== "disabled" || runtimePolicy.scheduler_authority !== "not-granted"
+    || runtimePolicy.autonomous_dispatch !== false || runtimePolicy.alternate_node_allowed !== false
+    || runtimePolicy.aegis_compute_authority !== false
+    || runtimePolicy.aegis_storage_nas_backup_authority !== false
+    || !Array.isArray(runtimePolicy.active_authority_references)
+    || runtimePolicy.active_authority_references.some((entry) => typeof entry !== "string" || !SAFE_ID.test(entry))) {
+    fail("TRUST_ROOT_INVALID", "bounded dispatch runtime policy is invalid")
+  }
+  if (runtimePolicy.execution_enabled !== true
+    || !runtimePolicy.active_authority_references.includes(authority.reference)) {
+    fail("RUNTIME_DISABLED", "bounded dispatch execution is not enabled for this authority")
+  }
   if (authority.work_order_id !== request.work_order_id || authority.template_id !== request.template_id
     || authority.selected_node_id !== receiptView.selected_node_id || authority.scope_sha256 !== scopeSha256) {
     fail("AUTHORITY_SCOPE_MISMATCH", "authority does not bind the exact request scope")
@@ -334,14 +391,19 @@ function prepareOrThrow({ repositoryRoot, receiptBytes, request, evaluatedAt, pr
   }
   exactKeys(scopeArtifact.value, [
     "schema_version", "reference", "work_order_id", "template_id", "selected_node_id", "scope_sha256",
-    "maximum_attempts", "risk_class", "forge_permission_set_sha256", "prohibited_actions", "status",
+    "maximum_attempts", "risk_class", "forge_permission_set_sha256", "prohibited_actions", "request_binding",
+    "http_body_sha256", "ledger_genesis_sha256", "runtime_policy_id", "status",
   ], "bounded dispatch authority scope")
   const scopeContract = scopeArtifact.value
-  if (scopeContract.schema_version !== "0.1-bounded-dispatch-authority-scope"
+  if (scopeContract.schema_version !== "0.2-bounded-dispatch-authority-scope"
     || scopeContract.reference !== authority.reference || scopeContract.work_order_id !== authority.work_order_id
     || scopeContract.template_id !== authority.template_id || scopeContract.selected_node_id !== authority.selected_node_id
     || scopeContract.scope_sha256 !== authority.scope_sha256 || scopeContract.maximum_attempts !== 1
     || scopeContract.risk_class !== "R1" || scopeContract.forge_permission_set_sha256 !== permissionArtifact.sha256
+    || scopeContract.ledger_genesis_sha256 !== authority.ledger_genesis_sha256
+    || scopeContract.runtime_policy_id !== runtimePolicy.policy_id
+    || scopeContract.http_body_sha256 !== sha256(Buffer.from(buildResidentHermesRequestBody(request), "utf8"))
+    || canonicalizeJcs(scopeContract.request_binding) !== canonicalizeJcs(scope)
     || scopeContract.status !== "REVIEWED_NON_ACTIVE_SCOPE"
     || JSON.stringify(scopeContract.prohibited_actions) !== JSON.stringify(permissionArtifact.value.prohibited_actions)) {
     fail("AUTHORITY_SCOPE_MISMATCH", "reviewed authority scope contract is invalid")
@@ -358,12 +420,14 @@ function prepareOrThrow({ repositoryRoot, receiptBytes, request, evaluatedAt, pr
   })
   exactKeys(proof, [
     "schema_version", "trusted_ref", "registry_sha256", "authority_reference", "authority_reviewed_commit",
-    "scope_artifact_sha256", "exact_entry_count",
+    "scope_artifact_sha256", "activation_commit", "activated_at", "trusted_head", "exact_entry_count",
   ], "trusted authority proof")
   if (proof.schema_version !== "0.1-trusted-bounded-dispatch-authority-proof"
-    || proof.trusted_ref !== "refs/heads/main" || proof.registry_sha256 !== authorityArtifact.sha256
+    || proof.trusted_ref !== "refs/remotes/origin/main" || proof.registry_sha256 !== authorityArtifact.sha256
     || proof.authority_reference !== authority.reference || proof.authority_reviewed_commit !== authority.reviewed_commit
-    || proof.scope_artifact_sha256 !== scopeArtifact.sha256
+    || proof.scope_artifact_sha256 !== scopeArtifact.sha256 || !GIT_SHA40.test(proof.activation_commit)
+    || !GIT_SHA40.test(proof.trusted_head) || timestamp(proof.activated_at, "trusted authority proof.activated_at") !== proof.activated_at
+    || Date.parse(proof.activated_at) >= Date.parse(authority.valid_from)
     || proof.exact_entry_count !== 1) fail("AUTHORITY_UNPROVEN", "trusted-main authority proof is invalid")
 
   const validUntil = new Date(Math.min(
@@ -380,11 +444,17 @@ function prepareOrThrow({ repositoryRoot, receiptBytes, request, evaluatedAt, pr
     selected_node_id: receiptView.selected_node_id,
     request_sha256: sha256(canonicalizeJcs(request)),
     scope_sha256: scopeSha256,
+    http_body_sha256: scopeContract.http_body_sha256,
     placement_receipt_sha256: receiptSha256,
     placement_replay_sha256: placementProof.semantic_replay_sha256,
     template_registry_sha256: templateArtifact.sha256,
     authority_registry_sha256: authorityArtifact.sha256,
+    runtime_policy_sha256: runtimePolicyArtifact.sha256,
     authority_scope_sha256: scopeArtifact.sha256,
+    ledger_genesis_sha256: authority.ledger_genesis_sha256,
+    authority_activation_commit: proof.activation_commit,
+    authority_activated_at: proof.activated_at,
+    trusted_main_head: proof.trusted_head,
     forge_permission_set_sha256: permissionArtifact.sha256,
     authority_reference: authority.reference,
     authority_reviewed_commit: authority.reviewed_commit,
@@ -440,12 +510,14 @@ export async function executeResidentHermesBoundedDispatch({
   proveTrustedPlacement,
   claimSingleUse,
   acquireExclusiveRuntimeLease,
-  releaseExclusiveRuntimeLease,
+  settleSuccessfulDispatch,
+  settleFailedDispatch,
   invokeLoopbackModel,
   captureResourceObservations,
 }) {
   if (typeof clock !== "function" || typeof claimSingleUse !== "function"
-    || typeof acquireExclusiveRuntimeLease !== "function" || typeof releaseExclusiveRuntimeLease !== "function"
+    || typeof acquireExclusiveRuntimeLease !== "function" || typeof settleSuccessfulDispatch !== "function"
+    || typeof settleFailedDispatch !== "function"
     || typeof invokeLoopbackModel !== "function" || typeof captureResourceObservations !== "function") {
     fail("RUNTIME_DEPENDENCY_MISSING", "trusted runtime dependencies are required")
   }
@@ -474,10 +546,7 @@ export async function executeResidentHermesBoundedDispatch({
   identifier(lease.lease_id, "exclusive runtime lease.lease_id")
   timestamp(lease.acquired_at, "exclusive runtime lease.acquired_at")
   let result
-  let releaseError = null
-  let executionError = null
   let dispatchAttempted = false
-  let runtimeLeaseReleased = false
   try {
     const startedAt = timestamp(clock(), "trusted start clock")
     if (Date.parse(claim.claimed_at) < Date.parse(firstAt)
@@ -493,7 +562,9 @@ export async function executeResidentHermesBoundedDispatch({
       || rechecked.preparation.scope_sha256 !== prepared.preparation.scope_sha256
       || rechecked.preparation.placement_receipt_sha256 !== prepared.preparation.placement_receipt_sha256
       || rechecked.preparation.template_registry_sha256 !== prepared.preparation.template_registry_sha256
-      || rechecked.preparation.authority_registry_sha256 !== prepared.preparation.authority_registry_sha256) {
+      || rechecked.preparation.authority_registry_sha256 !== prepared.preparation.authority_registry_sha256
+      || rechecked.preparation.runtime_policy_sha256 !== prepared.preparation.runtime_policy_sha256
+      || rechecked.preparation.trusted_main_head !== prepared.preparation.trusted_main_head) {
       fail("PREPARATION_RECHECK_INVALID", "trusted preparation bindings changed before invocation")
     }
     if (Date.parse(startedAt) >= Date.parse(rechecked.preparation.valid_until)) {
@@ -532,6 +603,7 @@ export async function executeResidentHermesBoundedDispatch({
     adapter_id: rechecked.preparation.adapter_id,
     actual_target_node: "hermes-node",
     request_sha256: rechecked.preparation.request_sha256,
+    http_body_sha256: rechecked.preparation.http_body_sha256,
     scope_sha256: rechecked.preparation.scope_sha256,
     placement_receipt_sha256: rechecked.preparation.placement_receipt_sha256,
     preparation_sha256: rechecked.preparation.preparation_sha256,
@@ -559,38 +631,34 @@ export async function executeResidentHermesBoundedDispatch({
     external_provider_accessed: false,
     remote_systems_modified: false,
     shell_executed: false,
-    runtime_lease_released: false,
+    runtime_lease_released: true,
   }
+    result.result_sha256 = sha256(canonicalizeJcs(result))
+    const settled = await settleSuccessfulDispatch({
+      claim_id: claim.claim_id,
+      lease_id: lease.lease_id,
+      request_sha256: rechecked.preparation.request_sha256,
+      result: structuredClone(result),
+    })
+    if (settled !== true) fail("COMPLETION_PERSISTENCE_FAILED", "durable completion settlement was not confirmed")
   } catch (error) {
-    executionError = annotateRuntimeError(error, {
-      dispatchAttempted,
-      claimId: claim.claim_id,
-      runtimeLeaseId: lease.lease_id,
-      runtimeLeaseReleased: false,
-    })
-    throw executionError
-  } finally {
+    let runtimeLeaseReleased = false
     try {
-      const released = await releaseExclusiveRuntimeLease({
-        lease_id: lease.lease_id,
+      runtimeLeaseReleased = await settleFailedDispatch({
         claim_id: claim.claim_id,
-      })
-      runtimeLeaseReleased = released === true
-      if (!runtimeLeaseReleased) releaseError = new BoundedDispatchError("LEASE_RELEASE_FAILED", "runtime lease release was not confirmed")
-    } catch (error) {
-      releaseError = error
+        lease_id: lease.lease_id,
+        dispatch_attempted: dispatchAttempted,
+        reason: error instanceof BoundedDispatchError ? error.code : "RUNTIME_FAILURE",
+      }) === true
+    } catch {
+      runtimeLeaseReleased = false
     }
-    if (executionError) executionError.runtimeLeaseReleased = runtimeLeaseReleased
-  }
-  if (releaseError) {
-    throw annotateRuntimeError(releaseError, {
+    throw annotateRuntimeError(error, {
       dispatchAttempted,
       claimId: claim.claim_id,
       runtimeLeaseId: lease.lease_id,
-      runtimeLeaseReleased: false,
+      runtimeLeaseReleased,
     })
   }
-  result.runtime_lease_released = true
-  result.result_sha256 = sha256(canonicalizeJcs(result))
   return result
 }

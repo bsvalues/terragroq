@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.1-bounded-dispatch-authority-registry",
+  "schema_version": "0.2-bounded-dispatch-authority-registry",
   "registry_id": "execution-fabric-bounded-dispatch-authorities",
   "entries": [
     {
@@ -14,7 +14,9 @@
       "scope_path": "config/execution-fabric/bounded-dispatch-authority-scopes/WO-EF-DISPATCH-001.json",
       "scope_artifact_sha256": "7fa416dec91745a990ace5d76a783df3d0e7e72e1c54b6136f9c3835be8c8c65",
       "reviewed_commit": "020fc6906ce3f5ad158ad2afb930ab02dc90e674",
-      "status": "ACTIVE"
+      "status": "CONSUMED_REJECTED",
+      "terminal_evidence_path": "docs/reports/bounded-dispatch/WO-EF-DISPATCH-001-terminal-evidence.json",
+      "terminal_evidence_sha256": "e0c1adb53f904e015051e0141cbd66406fc1061ac08b9c043bcdd7b9e5623fd0"
     }
   ]
 }

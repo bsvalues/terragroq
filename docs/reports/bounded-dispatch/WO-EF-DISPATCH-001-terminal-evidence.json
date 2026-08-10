@@ -1,0 +1,46 @@
+{
+  "schema_version": "0.1-bounded-dispatch-terminal-evidence",
+  "work_order_id": "WO-EF-DISPATCH-001",
+  "authority_reference": "issue-538-phase3-bounded-dispatch-001",
+  "status": "CONSUMED_REJECTED",
+  "claim": {
+    "request_id": "phase3-hermes-inference-001",
+    "request_sha256": "823100db6fb1b570fec02f6c4ecc1c2acbe8f7502f2929c17f5fc7df1a890a79",
+    "scope_sha256": "14a943bff96d32a891d17997ade343f3294abc14343ddf52b1ed99db78fb1fa1",
+    "claim_sha256": "829e0f41479c26770b1b1de24ef4706df58392bbc3ee2fb5b0bf388a5512a82a",
+    "retained_source_path": "C:\\HermesLab\\bounded-dispatch-ledger\\b8297795fefeb5f9925d34fe86ebb1eafae6adddbfc93384470731407ea8cae1.json",
+    "retained_artifact_path": "docs/reports/bounded-dispatch/WO-EF-DISPATCH-001-resident-claim.json",
+    "retained_artifact_sha256": "b7fdd2b9ad5a1f2ea46ddeaf5c44714143d7078c338ced0af5ac5f5b01fec784",
+    "claimed_at": "2026-08-10T16:21:02.842Z",
+    "maximum_attempts": 1
+  },
+  "transport_observation": {
+    "node": "hermes-node",
+    "service": "loopback-ollama",
+    "method": "POST",
+    "path": "/api/generate",
+    "http_status": 200,
+    "completed_at": "2026-08-10T16:21:26.702Z"
+  },
+  "certification": {
+    "completion_receipt_retained": false,
+    "expected_marker_proven": false,
+    "exact_response_digest_proven": false,
+    "execution_occurred": true,
+    "result": "UNCERTIFIABLE_DO_NOT_REPLAY"
+  },
+  "assurance_findings": [
+    "exact-request-preimage-not-retained-in-reviewed-scope",
+    "trusted-authority-ref-not-origin-main-bound",
+    "loopback-fetch-redirect-not-rejected",
+    "claim-and-result-not-crash-durable",
+    "lease-not-fenced-or-recoverable"
+  ],
+  "retry_allowed": false,
+  "scheduler_activated": false,
+  "autonomous_dispatch": false,
+  "aegis_authority_granted": false,
+  "storage_nas_backup_authority_granted": false,
+  "remote_systems_modified": false,
+  "owner_action_required": false
+}

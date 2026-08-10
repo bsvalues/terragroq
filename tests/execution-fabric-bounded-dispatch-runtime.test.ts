@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest"
 
 import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
 import {
+  buildResidentHermesRequestBody,
   executeResidentHermesBoundedDispatch,
   prepareResidentHermesBoundedDispatch,
 } from "../scripts/execution-fabric/bounded-dispatch/resident-hermes-bounded-dispatch.mjs"
@@ -13,8 +14,10 @@ import {
 const receiptPath = "docs/reports/shadow-admission/WO-EF-SHADOW-004-resident-8e063f9de03e0471-receipt.json"
 const permissionPath = "config/execution-fabric/agent-forge-bounded-dispatch-permission.json"
 const templatePath = "config/execution-fabric/bounded-dispatch-templates.json"
+const runtimePolicyPath = "config/execution-fabric/bounded-dispatch-runtime-policy.json"
 const permissionSha256 = "a2e2938b58440d5d46ad92d08da43f79e714f34140bed375abc897ac8bb64760"
 const authorityReference = "issue-538-phase3-bounded-dispatch-test"
+const ledgerGenesisSha256 = "b".repeat(64)
 
 function sha256(value: Buffer | string) {
   return crypto.createHash("sha256").update(value).digest("hex")
@@ -60,7 +63,7 @@ function fixture({ admitAuthority = true } = {}) {
   const value = request(receiptBytes)
   const scopePath = "config/execution-fabric/bounded-dispatch-authority-scopes/WO-EF-DISPATCH-001.json"
   const scope = `${JSON.stringify({
-    schema_version: "0.1-bounded-dispatch-authority-scope",
+    schema_version: "0.2-bounded-dispatch-authority-scope",
     reference: authorityReference,
     work_order_id: value.work_order_id,
     template_id: value.template_id,
@@ -69,6 +72,17 @@ function fixture({ admitAuthority = true } = {}) {
     maximum_attempts: 1,
     risk_class: "R1",
     forge_permission_set_sha256: permissionSha256,
+    request_binding: {
+      work_order_id: value.work_order_id,
+      template_id: value.template_id,
+      selected_node_id: "hermes-node",
+      input: value.input,
+      limits: value.limits,
+      forge: value.forge,
+    },
+    http_body_sha256: sha256(buildResidentHermesRequestBody(value)),
+    ledger_genesis_sha256: ledgerGenesisSha256,
+    runtime_policy_id: "execution-fabric-bounded-dispatch-runtime",
     prohibited_actions: [
       "arbitrary-shell", "autonomous-scheduling", "authority-mutation", "external-provider-access",
       "remote-node-access", "silent-replacement", "stateful-storage-write",
@@ -90,23 +104,40 @@ function fixture({ admitAuthority = true } = {}) {
     scope_path: scopePath,
     scope_artifact_sha256: sha256(scope),
     reviewed_commit: "a".repeat(40),
+    ledger_genesis_sha256: ledgerGenesisSha256,
     status: "ACTIVE",
   }] : []
   const registry = `${JSON.stringify({
-    schema_version: "0.1-bounded-dispatch-authority-registry",
+    schema_version: "0.2-bounded-dispatch-authority-registry",
     registry_id: "execution-fabric-bounded-dispatch-authorities",
     entries,
   }, null, 2)}\n`
   const registryPath = path.join(repositoryRoot, "config/execution-fabric/bounded-dispatch-authority-registry.json")
   fs.mkdirSync(path.dirname(registryPath), { recursive: true })
   fs.writeFileSync(registryPath, registry)
+  const runtimePolicyDestination = path.join(repositoryRoot, runtimePolicyPath)
+  fs.writeFileSync(runtimePolicyDestination, `${JSON.stringify({
+    schema_version: "0.1-bounded-dispatch-runtime-policy",
+    policy_id: "execution-fabric-bounded-dispatch-runtime",
+    execution_enabled: true,
+    active_authority_references: [authorityReference],
+    scheduler_state: "disabled",
+    scheduler_authority: "not-granted",
+    autonomous_dispatch: false,
+    alternate_node_allowed: false,
+    aegis_compute_authority: false,
+    aegis_storage_nas_backup_authority: false,
+  }, null, 2)}\n`)
   const proveTrustedAuthority = ({ registrySha256, authority, scope: scopeBinding }: any) => ({
     schema_version: "0.1-trusted-bounded-dispatch-authority-proof",
-    trusted_ref: "refs/heads/main",
+    trusted_ref: "refs/remotes/origin/main",
     registry_sha256: registrySha256,
     authority_reference: authority.reference,
     authority_reviewed_commit: authority.reviewed_commit,
     scope_artifact_sha256: scopeBinding.sha256,
+    activation_commit: "b".repeat(40),
+    activated_at: "2026-08-10T15:20:00.000Z",
+    trusted_head: "c".repeat(40),
     exact_entry_count: 1,
   })
   const proveTrustedPlacement = ({ receiptSha256, receipt }: any) => ({
@@ -126,7 +157,8 @@ function runtimeLease() {
       lease_id: "lease-phase3-hermes-001",
       acquired_at: "2026-08-10T15:21:00.150Z",
     }),
-    releaseExclusiveRuntimeLease: async () => true,
+    settleSuccessfulDispatch: async () => true,
+    settleFailedDispatch: async () => true,
   }
 }
 
@@ -140,6 +172,7 @@ describe("Execution Fabric Phase 3 resident HERMES bounded dispatch", () => {
       process.cwd(),
       "config/execution-fabric/bounded-dispatch-authority-registry.json",
     ), "utf8"))
+    const runtimePolicy = JSON.parse(fs.readFileSync(path.join(process.cwd(), runtimePolicyPath), "utf8"))
     expect(scope).toMatchObject({
       reference: "issue-538-phase3-bounded-dispatch-001",
       scope_sha256: "14a943bff96d32a891d17997ade343f3294abc14343ddf52b1ed99db78fb1fa1",
@@ -152,9 +185,22 @@ describe("Execution Fabric Phase 3 resident HERMES bounded dispatch", () => {
         scope_sha256: "14a943bff96d32a891d17997ade343f3294abc14343ddf52b1ed99db78fb1fa1",
         valid_from: "2026-08-10T16:20:00.000Z",
         maximum_attempts: 1,
-        status: "ACTIVE",
+        status: "CONSUMED_REJECTED",
+        terminal_evidence_sha256: sha256(fs.readFileSync(path.join(
+          process.cwd(),
+          "docs/reports/bounded-dispatch/WO-EF-DISPATCH-001-terminal-evidence.json",
+        ))),
       }),
     ])
+    expect(runtimePolicy).toMatchObject({
+      execution_enabled: false,
+      active_authority_references: [],
+      scheduler_state: "disabled",
+      scheduler_authority: "not-granted",
+      autonomous_dispatch: false,
+      aegis_compute_authority: false,
+      aegis_storage_nas_backup_authority: false,
+    })
     const receiptBytes = fs.readFileSync(path.join(process.cwd(), receiptPath))
     expect(prepareResidentHermesBoundedDispatch({
       repositoryRoot: process.cwd(),
@@ -239,7 +285,13 @@ describe("Execution Fabric Phase 3 resident HERMES bounded dispatch", () => {
       }),
     ])
     expect(runtimeSource).toContain('fetch("http://127.0.0.1:11434/api/generate"')
+    expect(runtimeSource).toContain('redirect: "error"')
+    expect(runtimeSource).toContain('const trustedRef = "refs/remotes/origin/main"')
+    expect(runtimeSource).toContain("store.markRequestStarted")
+    expect(runtimeSource).toContain("store.complete")
+    expect(runtimeSource).toContain('requireExisting: true')
     expect(runtimeSource).not.toMatch(/fetch\(["']https?:\/\/(?!127\.0\.0\.1:11434)/)
+    expect(runtimeSource).not.toContain('const trustedRef = "refs/heads/main"')
   })
 
   it("executes one claimed loopback template and emits bounded evidence", async () => {
@@ -328,7 +380,6 @@ describe("Execution Fabric Phase 3 resident HERMES bounded dispatch", () => {
   it("consumes the request but does not invoke when resident concurrency is occupied", async () => {
     const value = fixture()
     let invoked = false
-    let released = false
     await expect(executeResidentHermesBoundedDispatch({
       ...value,
       clock: () => "2026-08-10T15:21:00.000Z",
@@ -342,12 +393,12 @@ describe("Execution Fabric Phase 3 resident HERMES bounded dispatch", () => {
         lease_id: "lease-phase3-hermes-occupied",
         acquired_at: "2026-08-10T15:21:00.000Z",
       }),
-      releaseExclusiveRuntimeLease: async () => { released = true; return true },
+      settleSuccessfulDispatch: async () => true,
+      settleFailedDispatch: async () => true,
       invokeLoopbackModel: async () => { invoked = true; return "HERMES_PHASE3_OK" },
       captureResourceObservations: async () => [],
     })).rejects.toThrow("CONCURRENCY_LIMIT_REACHED")
     expect(invoked).toBe(false)
-    expect(released).toBe(false)
   })
 
   it("rejects unknown executable fields and missing result markers", async () => {

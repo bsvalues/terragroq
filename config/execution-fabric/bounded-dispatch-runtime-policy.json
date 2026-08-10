@@ -1,0 +1,12 @@
+{
+  "schema_version": "0.1-bounded-dispatch-runtime-policy",
+  "policy_id": "execution-fabric-bounded-dispatch-runtime",
+  "execution_enabled": false,
+  "active_authority_references": [],
+  "scheduler_state": "disabled",
+  "scheduler_authority": "not-granted",
+  "autonomous_dispatch": false,
+  "alternate_node_allowed": false,
+  "aegis_compute_authority": false,
+  "aegis_storage_nas_backup_authority": false
+}

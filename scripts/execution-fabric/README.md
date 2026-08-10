@@ -175,11 +175,11 @@ Preparation independently requires:
 - a later active authority-registry entry whose complete bytes are on trusted `main`;
 - exact Work Order, template, HERMES node, input, limits, risk, and one-attempt bindings.
 
-The checked-in authority registry starts empty, so the production runtime fails closed. An admitted
-scope does not activate authority. A separate future-dated activation must merge before its
-effective time. After preparation, the resident wrapper atomically claims the request digest in the
-HERMES ledger, rechecks freshness and authority, then invokes the exact template once. A failed or
-interrupted claim is consumed rather than retried silently.
+The first authority is retained as `CONSUMED_REJECTED`, and the runtime policy is disabled. An
+admitted scope does not activate authority. A separate future-dated activation must merge before its
+effective time and explicitly enable only that authority reference. The hardened wrapper requires a
+pre-provisioned, scope-bound durable ledger, origin/main provenance, monotonic fencing, a persisted
+request-intent transition, redirect rejection, and durable completion settlement before stdout.
 
 ```powershell
 npm run fabric:bounded-dispatch -- `
