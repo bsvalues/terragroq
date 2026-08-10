@@ -190,6 +190,20 @@ describe("Execution Fabric Phase 3 resident HERMES bounded dispatch", () => {
         maximum_attempts: 1,
         status: "ACTIVE",
       }),
+      expect.objectContaining({
+        reference: "issue-538-phase3-bounded-dispatch-002",
+        work_order_id: "WO-EF-DISPATCH-002",
+        template_id: "hermes.local-llm-inference.v1",
+        selected_node_id: "hermes-node",
+        scope_sha256: "4344ffc727cab579289868664f6ba36bacaa7dadd719986833d562e5340c5330",
+        valid_from: "2026-08-10T16:40:00.000Z",
+        expires_at: "2026-08-10T20:40:00.000Z",
+        maximum_attempts: 1,
+        scope_path: "config/execution-fabric/bounded-dispatch-authority-scopes/WO-EF-DISPATCH-002.json",
+        scope_artifact_sha256: "cb856d4916bcf84aa87ea0a6dac21b8a4e0a97e0b0632c4cca3651a14686edd0",
+        reviewed_commit: "59035427737b6fc71e1d1a09a57311ca331e9d54",
+        status: "ACTIVE",
+      }),
     ])
     const receiptBytes = fs.readFileSync(path.join(process.cwd(), receiptPath))
     expect(prepareResidentHermesBoundedDispatch({
