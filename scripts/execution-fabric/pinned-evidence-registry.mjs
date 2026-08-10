@@ -274,7 +274,9 @@ function parseVerifiedSnapshot(bytes, reference, policy) {
     fail(`${reference.node} observed_at must be UTC RFC 3339`)
   }
   if (snapshot.scheduler !== "OFF") fail(`${reference.node} snapshot does not preserve scheduler OFF`)
-  VALIDATORS[snapshot.schema](snapshot)
+  const validator = VALIDATORS[snapshot.schema]
+  if (!validator) fail(`unsupported snapshot schema: ${snapshot.schema}`)
+  validator(snapshot)
   return { reference, snapshot, ttl_seconds: rule.ttl_seconds }
 }
 
@@ -364,13 +366,21 @@ function adaptHermes(node, snapshot) {
   retainCapabilities(node, snapshot.compute_capability_health, ["agent-runtime"])
   retainCapabilities(node, snapshot.gpu_inference_capability_health, ["gpu-batch", "cuda"])
   retainCapabilities(node, snapshot.local_llm_capability_health, ["local-llm-inference"])
-  if (node.cpus[0] && Number.isInteger(snapshot.resources?.cpu_threads)) node.cpus[0].threads = snapshot.resources.cpu_threads
-  const observedGpu = snapshot.resources?.gpus?.[0]
-  if (node.gpus[0] && Number.isInteger(observedGpu?.vram_total_mb)) {
-    node.gpus[0].vram_bytes = observedGpu.vram_total_mb * 1024 * 1024
-    node.gpus[0].temperature_c = Number.isFinite(observedGpu.temp_c) ? observedGpu.temp_c : null
-    node.gpus[0].utilization_percent = Number.isFinite(observedGpu.util_pct) ? observedGpu.util_pct : null
-  }
+  if (snapshot.compute_capability_health === "READY" && node.cpus[0]) node.cpus[0].threads = snapshot.resources.cpu_threads
+  else node.cpus = []
+  node.gpus = snapshot.resources.gpus.map((gpu, index) => ({
+    id: `gpu${index}`,
+    vendor: gpu.name.toLowerCase().includes("nvidia") ? "NVIDIA" : null,
+    model: gpu.name,
+    pci_bus_id: null,
+    uuid: null,
+    vram_bytes: gpu.vram_total_mb * 1024 * 1024,
+    driver_version: null,
+    cuda_version: null,
+    compute_capability: null,
+    temperature_c: gpu.temp_c,
+    utilization_percent: gpu.util_pct,
+  }))
   const ollama = runtime(node, "ollama")
   if (ollama) ollama.state = snapshot.resources?.ollama === "running" && snapshot.local_llm_capability_health === "READY" ? "running" : "degraded"
 }
@@ -390,7 +400,8 @@ function adaptAtlas(node, snapshot) {
 
 function adaptAegis(node, snapshot) {
   retainCapabilities(node, snapshot.compute_capability_health, [...capabilitySet(node)])
-  if (node.cpus[0]) node.cpus[0].threads = snapshot.cores
+  if (snapshot.compute_capability_health === "READY" && node.cpus[0]) node.cpus[0].threads = snapshot.cores
+  else node.cpus = []
 }
 
 const ADAPTERS = {

@@ -26,19 +26,15 @@ function rejected(error) {
   }
 }
 
-function readJson(filePath, label) {
+function readJsonArtifact(filePath, label) {
   try {
-    return JSON.parse(fs.readFileSync(path.resolve(filePath), "utf8"))
+    const bytes = fs.readFileSync(path.resolve(filePath))
+    return {
+      value: JSON.parse(bytes.toString("utf8").replace(/^\uFEFF/, "")),
+      sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+    }
   } catch (error) {
     fail(`unable to read ${label}: ${error.message}`)
-  }
-}
-
-function fileSha256(filePath, label) {
-  try {
-    return crypto.createHash("sha256").update(fs.readFileSync(path.resolve(filePath))).digest("hex")
-  } catch (error) {
-    fail(`unable to hash ${label}: ${error.message}`)
   }
 }
 
@@ -87,10 +83,14 @@ function parseArguments(argv) {
 
 function runOrThrow(argv) {
   const args = parseArguments(argv)
-  const registryBase = readJson(args.registry, "registry base")
-  const schema = readJson(args.schema, "registry schema")
-  const policy = readJson(args.policy, "pinned evidence policy")
-  const catalog = readJson(args.workloads, "workload catalog")
+  const registryArtifact = readJsonArtifact(args.registry, "registry base")
+  const schemaArtifact = readJsonArtifact(args.schema, "registry schema")
+  const policyArtifact = readJsonArtifact(args.policy, "pinned evidence policy")
+  const catalogArtifact = readJsonArtifact(args.workloads, "workload catalog")
+  const registryBase = registryArtifact.value
+  const schema = schemaArtifact.value
+  const policy = policyArtifact.value
+  const catalog = catalogArtifact.value
   validatePinnedCatalog(catalog)
   const workload = catalog.workloads.find((candidate) => candidate.id === args.workload)
   if (!workload) fail(`workload not found: ${args.workload}`)
@@ -105,10 +105,10 @@ function runOrThrow(argv) {
   const placement = evaluatePlacement(registry, workload, { evaluatedAt: args.at, schema })
   if (placement.status === "INPUT_REJECTED") fail(placement.error.detail)
   const inputArtifacts = {
-    registry_base_sha256: fileSha256(args.registry, "registry base"),
-    registry_schema_sha256: fileSha256(args.schema, "registry schema"),
-    pinned_evidence_policy_sha256: fileSha256(args.policy, "pinned evidence policy"),
-    workload_catalog_sha256: fileSha256(args.workloads, "workload catalog"),
+    registry_base_sha256: registryArtifact.sha256,
+    registry_schema_sha256: schemaArtifact.sha256,
+    pinned_evidence_policy_sha256: policyArtifact.sha256,
+    workload_catalog_sha256: catalogArtifact.sha256,
   }
   const receipt = {
     ...placement,

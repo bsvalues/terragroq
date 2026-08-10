@@ -176,6 +176,17 @@ describe("Execution Fabric pinned placement recommendations", () => {
     expectRejected(run(value), "atlas.resources must contain exactly")
   })
 
+  it("rejects a policy-bound schema without a supported validator", () => {
+    const value = fixture((items) => { items["hermes-node"].schema = "future-placement-readiness/1" })
+    const policyPath = path.join(value.root, "policy.json")
+    const policy = JSON.parse(fs.readFileSync(path.join(repositoryRoot, "config/execution-fabric/pinned-evidence-policy.json"), "utf8"))
+    policy.required_evidence["hermes-node"].schema = "future-placement-readiness/1"
+    fs.writeFileSync(policyPath, `${JSON.stringify(policy, null, 2)}\n`)
+    const selectedArgs = args(value)
+    selectedArgs[selectedArgs.indexOf(path.join(repositoryRoot, "config/execution-fabric/pinned-evidence-policy.json"))] = policyPath
+    expectRejected(runPinnedPlacementCli(selectedArgs), "unsupported snapshot schema")
+  })
+
   it("rejects scheduler drift and capability-specific inference failure without changing authority", () => {
     const schedulerOn = fixture((items) => { items.aegis.scheduler = "ON" })
     expectRejected(run(schedulerOn), "scheduler OFF")
@@ -210,6 +221,24 @@ describe("Execution Fabric pinned placement recommendations", () => {
     expect(result.ineligible_nodes.find((node: JsonObject) => node.node_id === "hermes-node")).toBeUndefined()
   })
 
+  it("replaces the complete seeded Hermes GPU inventory with observed GPUs", () => {
+    const observedSingleGpu = fixture((items) => {
+      items["hermes-node"].resources.gpus = [{
+        name: "NVIDIA Test GPU", vram_total_mb: 2048, vram_free_mb: 1536,
+        vram_used_mb: 512, util_pct: 5, temp_c: 30,
+      }]
+    })
+    const selectedArgs = args(observedSingleGpu)
+    selectedArgs[selectedArgs.indexOf("cpu-heavy-build")] = "gpu-local-inference"
+    const result = runPinnedPlacementCli(selectedArgs) as JsonObject
+    const hermes = result.ineligible_nodes.find((node: JsonObject) => node.node_id === "hermes-node")
+
+    expect(result.status).toBe("NO_ELIGIBLE_NODE")
+    expect(hermes.reasons).toContainEqual(expect.objectContaining({
+      code: "GPU_VRAM_INSUFFICIENT", observed: 2147483648,
+    }))
+  })
+
   it("uses observed AEGIS logical CPU capacity instead of freshening seed capacity", () => {
     const lowCapacity = fixture((items) => { items.aegis.cores = 1 })
     const result = run(lowCapacity)
@@ -219,6 +248,31 @@ describe("Execution Fabric pinned placement recommendations", () => {
     expect(aegis.reasons).toContainEqual(expect.objectContaining({
       code: "CPU_THREADS_INSUFFICIENT", required: 8, observed: 1,
     }))
+  })
+
+  it("makes failed AEGIS compute health a hard CPU eligibility failure", () => {
+    const failedCompute = fixture((items) => { items.aegis.compute_capability_health = "FAIL_CLOSED" })
+    const result = run(failedCompute)
+    const aegis = result.ineligible_nodes.find((node: JsonObject) => node.node_id === "aegis")
+
+    expect(result.recommendation.node_id).toBe("hermes-node")
+    expect(aegis.reasons).toContainEqual(expect.objectContaining({
+      code: "CPU_THREADS_UNKNOWN", observed: null,
+    }))
+  })
+
+  it("rejects path traversal and missing arguments in the snapshot pinning helper", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "fabric-pin-helper-"))
+    const feedPath = path.join(root, "feed.json")
+    fs.writeFileSync(feedPath, `${JSON.stringify({ node: "../escape" })}\n`)
+    const traversal = spawnSync(testPython, [pinHelper, feedPath, path.join(root, "snapshots")], { encoding: "utf8", windowsHide: true })
+    const missingArgs = spawnSync(testPython, [pinHelper], { encoding: "utf8", windowsHide: true })
+
+    expect(traversal.status).not.toBe(0)
+    expect(traversal.stderr).toContain("feed node must match")
+    expect(fs.existsSync(path.join(root, "escape"))).toBe(false)
+    expect(missingArgs.status).not.toBe(0)
+    expect(missingArgs.stderr).toContain("usage: pin_test_snapshot.py")
   })
 
   it("rejects an unconstrained interpreter command", () => {
