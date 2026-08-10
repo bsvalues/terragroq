@@ -1,5 +1,20 @@
 {
   "schema_version": "0.1-bounded-dispatch-authority-registry",
   "registry_id": "execution-fabric-bounded-dispatch-authorities",
-  "entries": []
+  "entries": [
+    {
+      "reference": "issue-538-phase3-bounded-dispatch-001",
+      "work_order_id": "WO-EF-DISPATCH-001",
+      "template_id": "hermes.local-llm-inference.v1",
+      "selected_node_id": "hermes-node",
+      "scope_sha256": "14a943bff96d32a891d17997ade343f3294abc14343ddf52b1ed99db78fb1fa1",
+      "valid_from": "2026-08-10T16:20:00.000Z",
+      "expires_at": "2026-08-10T20:20:00.000Z",
+      "maximum_attempts": 1,
+      "scope_path": "config/execution-fabric/bounded-dispatch-authority-scopes/WO-EF-DISPATCH-001.json",
+      "scope_artifact_sha256": "7fa416dec91745a990ace5d76a783df3d0e7e72e1c54b6136f9c3835be8c8c65",
+      "reviewed_commit": "020fc6906ce3f5ad158ad2afb930ab02dc90e674",
+      "status": "ACTIVE"
+    }
+  ]
 }
