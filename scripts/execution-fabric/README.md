@@ -139,3 +139,47 @@ retained manifest; packet input cannot supply or override that resolver.
 
 CLI exit status is fail-closed: `0` means `CONTRACT_READY`, `1` means `CONTRACT_BLOCKED`, and `2`
 means `INPUT_REJECTED`.
+
+## Pinned-evidence placement recommendation (v0.2)
+
+`recommend-pinned-placement.mjs` is the Phase 1 bridge from immutable capability feeds to the
+recommendation-only evaluator. It requires the exact Hermes, Atlas, and AEGIS snapshot references,
+executes the producer-owned `verify_snapshot.py` reference verifier, overlays only observed
+capability health and resource facts onto the committed registry, and preserves the registry's
+authority lists byte-for-byte.
+
+The policy pins the SHA-256 of that exact reference-verifier implementation. Supplying a different
+script that merely exits successfully is rejected before snapshot content is used.
+It also binds each required node to one exact feed schema and freshness TTL. Referenced bytes are
+copied into a private temporary verification set, verified there, checked for byte stability, and
+then parsed from those same staged bytes. Canonical integrity therefore cannot be confused with
+schema validity or separated from the bytes used by the decision.
+The already-hashed verifier bytes are staged alongside the evidence and that staged copy is the one
+executed. The interpreter name is constrained to Python, and successful output must enumerate the
+exact expected node/hash prefixes and snapshot count.
+
+The receipt records sorted `evidence_snapshot[]` references, the placement-policy version, hashes of
+the registry/schema/policy/catalog inputs, and `decision_input_sha256`. Identical workload, explicit
+evaluation time, policy artifacts, and verified snapshot set therefore produce the same decision.
+Missing, renamed, cross-schema, structurally malformed, future-dated, stale, unverifiable, or
+scheduler-enabled evidence fails
+closed. Staleness makes nodes ineligible; verifier or contract failure rejects the input entirely.
+
+```powershell
+node scripts/execution-fabric/recommend-pinned-placement.mjs `
+  --snapshot-root C:\HermesLab\snapshots `
+  --verifier C:\HermesLab\tools\verify_snapshot.py `
+  --python py `
+  --registry config/execution-fabric/registry.seed.json `
+  --schema config/execution-fabric/registry.schema.json `
+  --policy config/execution-fabric/pinned-evidence-policy.json `
+  --workloads config/execution-fabric/placement-workloads.json `
+  --workload cpu-heavy-build `
+  --at 2026-08-10T07:00:00.000Z `
+  --evidence hermes-node=<sha256> `
+  --evidence atlas=<sha256> `
+  --evidence aegis=<sha256>
+```
+
+This command performs no dispatch, lease acquisition, reservation, remote mutation, authority
+change, or scheduler activation.
