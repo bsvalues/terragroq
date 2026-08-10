@@ -132,6 +132,21 @@ function runtimeLease() {
 
 describe("Execution Fabric Phase 3 resident HERMES bounded dispatch", () => {
   it("fails closed while the production authority registry is empty", () => {
+    const scope = JSON.parse(fs.readFileSync(path.join(
+      process.cwd(),
+      "config/execution-fabric/bounded-dispatch-authority-scopes/WO-EF-DISPATCH-001.json",
+    ), "utf8"))
+    const productionAuthority = JSON.parse(fs.readFileSync(path.join(
+      process.cwd(),
+      "config/execution-fabric/bounded-dispatch-authority-registry.json",
+    ), "utf8"))
+    expect(scope).toMatchObject({
+      reference: "issue-538-phase3-bounded-dispatch-001",
+      scope_sha256: "14a943bff96d32a891d17997ade343f3294abc14343ddf52b1ed99db78fb1fa1",
+      maximum_attempts: 1,
+      status: "REVIEWED_NON_ACTIVE_SCOPE",
+    })
+    expect(productionAuthority.entries).toEqual([])
     const receiptBytes = fs.readFileSync(path.join(process.cwd(), receiptPath))
     expect(prepareResidentHermesBoundedDispatch({
       repositoryRoot: process.cwd(),
