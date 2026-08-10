@@ -1,0 +1,11 @@
+{
+  "schema_version": "0.2-pinned-evidence-policy",
+  "recommendation_only": true,
+  "canonicalization_contract": "jcs-rfc8785/1",
+  "reference_verifier_sha256": "c8f488953cf91e7ea8badd59e718185171096783b58a4d75b4ba4a77581297b6",
+  "required_evidence": {
+    "hermes-node": { "schema": "hermes-placement-readiness/1", "ttl_seconds": 300 },
+    "atlas": { "schema": "atlas-placement-readiness/1", "ttl_seconds": 300 },
+    "aegis": { "schema": "aegis-capability/1", "ttl_seconds": 300 }
+  }
+}
