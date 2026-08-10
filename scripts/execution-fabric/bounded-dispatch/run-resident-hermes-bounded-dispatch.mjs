@@ -258,6 +258,7 @@ main().catch((error) => {
     runtime_lease_id: error?.runtimeLeaseId ?? null,
     dispatch_attempted: error?.dispatchAttempted === true,
     runtime_lease_released: error?.runtimeLeaseReleased === true,
+    output: error?.outputEvidence ?? null,
     dispatch_allowed: false,
     scheduler_activated: false,
     autonomous_dispatch: false,

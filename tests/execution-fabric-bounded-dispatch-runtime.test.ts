@@ -379,6 +379,46 @@ describe("Execution Fabric Phase 3 resident HERMES bounded dispatch", () => {
       message: expect.stringContaining("EXPECTED_MARKER_MISSING"),
       dispatchAttempted: true,
       runtimeLeaseReleased: true,
+      outputEvidence: {
+        sha256: sha256(Buffer.from("wrong result", "utf8")),
+        byte_length: 12,
+        expected_marker: "HERMES_PHASE3_OK",
+        expected_marker_observed: false,
+      },
+    })
+  })
+
+  it("retains the genuine first production attempt as consumed fail-closed evidence", () => {
+    const retainedRoot = path.join(process.cwd(), "docs/reports/bounded-dispatch")
+    const receiptBytes = fs.readFileSync(path.join(retainedRoot, "WO-EF-DISPATCH-001-receipt.json"))
+    const retainedRequest = JSON.parse(fs.readFileSync(
+      path.join(retainedRoot, "WO-EF-DISPATCH-001-request.json"), "utf8",
+    ))
+    const retainedClaim = JSON.parse(fs.readFileSync(
+      path.join(retainedRoot, "WO-EF-DISPATCH-001-claim.json"), "utf8",
+    ))
+    const retainedResult = JSON.parse(fs.readFileSync(
+      path.join(retainedRoot, "WO-EF-DISPATCH-001-result.json"), "utf8",
+    ))
+    expect(sha256(receiptBytes)).toBe("3b8d11da2c42289381aa7fd8793fad239f10dd48564af43fdb97099ac3987375")
+    expect(retainedRequest.placement_receipt_sha256).toBe(sha256(receiptBytes))
+    expect(retainedClaim).toMatchObject({
+      request_sha256: sha256(canonicalizeJcs(retainedRequest)),
+      authority_reference: retainedRequest.authority_reference,
+      maximum_attempts: 1,
+    })
+    const claimWithoutDigest = structuredClone(retainedClaim)
+    delete claimWithoutDigest.claim_sha256
+    expect(retainedClaim.claim_sha256).toBe(sha256(canonicalizeJcs(claimWithoutDigest)))
+    expect(retainedResult).toMatchObject({
+      status: "FAILED_CLOSED",
+      claim_id: `claim-${retainedClaim.claim_sha256.slice(0, 24)}`,
+      dispatch_attempted: true,
+      runtime_lease_released: true,
+      dispatch_allowed: false,
+      scheduler_activated: false,
+      autonomous_dispatch: false,
+      silent_replacement: false,
     })
   })
 })
