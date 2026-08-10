@@ -8,6 +8,7 @@
       "description": "A bounded build or test workload that uses disposable scratch storage and benefits from CPU capacity.",
       "requirements": {
         "capabilities_all": [],
+        "health_axes_all": ["compute"],
         "authority_all": [],
         "runtimes_all": [],
         "minimum_cpu_threads": 8,
@@ -30,6 +31,7 @@
       "description": "Local language-model inference requiring an authorized, healthy Ollama runtime and a GPU with at least 4 GiB of VRAM.",
       "requirements": {
         "capabilities_all": ["local-llm-inference"],
+        "health_axes_all": [],
         "authority_all": ["local-llm-inference"],
         "runtimes_all": [
           {
@@ -57,6 +59,7 @@
       "description": "A state-bearing database operation that may run only where durable-state authority and database capability are both present.",
       "requirements": {
         "capabilities_all": ["database-state"],
+        "health_axes_all": [],
         "authority_all": ["database-state"],
         "runtimes_all": [],
         "minimum_cpu_threads": null,
@@ -79,6 +82,7 @@
       "description": "An operator-attended development workload requiring explicit interactive-development capability and authority.",
       "requirements": {
         "capabilities_all": ["interactive-development"],
+        "health_axes_all": [],
         "authority_all": ["interactive-development"],
         "runtimes_all": [],
         "minimum_cpu_threads": null,

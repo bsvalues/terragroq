@@ -329,6 +329,14 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
         ...node.evidence, confidence: "observed", observed_at: observedTimes[node.id],
         ttl_seconds: 300, probe_version: "0.1-node-probe",
       }
+      if (observedTimes[node.id]) node.capability_health.compute = {
+        state: "READY",
+        reason: "COMPUTE_CAPABILITY_READY",
+        observed_at: observedTimes[node.id],
+        expires_at: "2026-08-10T03:42:00.000Z",
+        snapshot_sha256: null,
+        evidence_ref: `${node.id}.json`,
+      }
     }
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "fabric-dispatch-placement-"))
     let artifact: any

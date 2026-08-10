@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://william-os.local/schemas/execution-fabric-registry-v0.1.json",
+  "$id": "https://william-os.local/schemas/execution-fabric-registry-v0.2.json",
   "title": "WilliamOS Execution Fabric Registry",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "generated_at", "scheduler", "nodes"],
   "properties": {
-    "schema_version": {"const": "0.1"},
+    "schema_version": {"const": "0.2"},
     "generated_at": {"type": "string", "format": "date-time"},
     "scheduler": {
       "type": "object",
@@ -201,10 +201,64 @@
         "source": {"type": ["string", "null"], "minLength": 1}
       }
     },
+    "capability_health_axis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason", "observed_at", "expires_at", "snapshot_sha256", "evidence_ref"],
+      "properties": {
+        "state": {"enum": ["READY", "DEGRADED", "FAIL_CLOSED", "PENDING", "UNKNOWN"]},
+        "reason": {"type": "string", "minLength": 1},
+        "observed_at": {"type": ["string", "null"], "format": "date-time"},
+        "expires_at": {"type": ["string", "null"], "format": "date-time"},
+        "snapshot_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+        "evidence_ref": {"type": ["string", "null"], "minLength": 1}
+      }
+    },
+    "capability_health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compute", "backup_target", "archive_storage", "nas"],
+      "properties": {
+        "compute": {"$ref": "#/$defs/capability_health_axis"},
+        "backup_target": {"$ref": "#/$defs/capability_health_axis"},
+        "archive_storage": {"$ref": "#/$defs/capability_health_axis"},
+        "nas": {"$ref": "#/$defs/capability_health_axis"}
+      }
+    },
+    "required_mount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "serial", "label", "uuid", "mountpoint"],
+      "properties": {
+        "role": {"enum": ["primary", "secondary"]},
+        "serial": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "uuid": {"type": "string", "minLength": 1},
+        "mountpoint": {"type": "string", "pattern": "^/backup-(primary|secondary)$"}
+      }
+    },
+    "capability_evidence_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "max_ttl_hours", "accepted_raw_probe_sha256", "accepted_capability_file_sha256", "accepted_backup_receipt_sha256", "required_mounts"],
+      "properties": {
+        "schema": {"const": "aegis-capability-evidence-policy/1"},
+        "max_ttl_hours": {"type": "number", "exclusiveMinimum": 0, "maximum": 48},
+        "accepted_raw_probe_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "accepted_capability_file_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "accepted_backup_receipt_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "required_mounts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/required_mount"}
+        }
+      }
+    },
     "node": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "identity", "role", "availability_class", "authority", "evidence", "cpus", "dimms", "gpus", "disks", "network", "runtimes", "capabilities"],
+      "required": ["id", "identity", "role", "availability_class", "authority", "evidence", "capability_health", "cpus", "dimms", "gpus", "disks", "network", "runtimes", "capabilities"],
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
         "hostname": {"type": ["string", "null"]},
@@ -219,6 +273,8 @@
         },
         "authority": {"$ref": "#/$defs/authority"},
         "evidence": {"$ref": "#/$defs/evidence"},
+        "capability_evidence_policy": {"$ref": "#/$defs/capability_evidence_policy"},
+        "capability_health": {"$ref": "#/$defs/capability_health"},
         "cpus": {"type": "array", "items": {"$ref": "#/$defs/cpu"}},
         "dimms": {"type": "array", "items": {"$ref": "#/$defs/dimm"}},
         "gpus": {"type": "array", "items": {"$ref": "#/$defs/gpu"}},

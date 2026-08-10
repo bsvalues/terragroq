@@ -156,12 +156,12 @@ function validateWorkload(workload) {
   if (typeof workload.title !== "string" || workload.title.trim() === "") fail(`${workload.id}.title must be a non-empty string`)
   if (typeof workload.description !== "string" || workload.description.trim() === "") fail(`${workload.id}.description must be a non-empty string`)
   exactKeys(requirements, [
-    "capabilities_all", "authority_all", "runtimes_all", "minimum_cpu_threads",
+    "capabilities_all", "health_axes_all", "authority_all", "runtimes_all", "minimum_cpu_threads",
     "minimum_gpu_vram_bytes", "excluded_authority", "observed_evidence_required", "fresh_evidence_required",
   ], `${workload.id}.requirements`)
   exactKeys(preferences, ["capabilities", "availability_order", "higher_cpu_threads", "higher_gpu_vram"], `${workload.id}.preferences`)
 
-  for (const field of ["capabilities_all", "authority_all", "excluded_authority"]) {
+  for (const field of ["capabilities_all", "health_axes_all", "authority_all", "excluded_authority"]) {
     stringArray(requirements[field], `${workload.id}.requirements.${field}`)
   }
   const excludedAuthority = new Set(requirements.excluded_authority)
@@ -295,6 +295,29 @@ function compareText(left, right) {
   return left < right ? -1 : 1
 }
 
+const CAPABILITY_HEALTH_AXES = new Map([
+  ["backup-target", "backup_target"],
+  ["archive-storage", "archive_storage"],
+])
+
+function capabilityHealthReason(node, capability, evaluatedAt) {
+  const axisName = CAPABILITY_HEALTH_AXES.get(capability)
+  if (!axisName) return null
+  const axis = node.capability_health?.[axisName]
+  const evidencePath = `nodes.${node.id}.capability_health.${axisName}`
+  if (!isObject(axis)) {
+    return reason("CAPABILITY_HEALTH_REQUIRED", capability, "READY", null, [evidencePath])
+  }
+  if (axis.state !== "READY") {
+    return reason("CAPABILITY_NOT_READY", capability, "READY", axis.state, [`${evidencePath}.state`, `${evidencePath}.reason`])
+  }
+  const expiresAt = Date.parse(axis.expires_at)
+  if (!Number.isFinite(expiresAt) || expiresAt <= evaluatedAt.getTime()) {
+    return reason("CAPABILITY_EVIDENCE_STALE", capability, "unexpired", axis.expires_at, [`${evidencePath}.expires_at`])
+  }
+  return null
+}
+
 function evaluateNode(node, workload, evaluatedAt) {
   const requirements = workload.requirements
   const preferences = workload.preferences
@@ -338,6 +361,28 @@ function evaluateNode(node, workload, evaluatedAt) {
       "CAPABILITY_REQUIRED", capability, true, false, [`nodes.${node.id}.capabilities.${capability}`],
     ))
     evidenceUsed.push(evidenceRef(`nodes.${node.id}.capabilities.${capability}`, capabilities.has(capability)))
+    const healthReason = capabilityHealthReason(node, capability, evaluatedAt)
+    if (capabilities.has(capability) && healthReason) reasons.push(healthReason)
+    const axisName = CAPABILITY_HEALTH_AXES.get(capability)
+    if (axisName) evidenceUsed.push(evidenceRef(
+      `nodes.${node.id}.capability_health.${axisName}`,
+      node.capability_health?.[axisName] ?? null,
+    ))
+  }
+  for (const axisName of requirements.health_axes_all) {
+    const axis = node.capability_health?.[axisName]
+    const evidencePath = `nodes.${node.id}.capability_health.${axisName}`
+    if (!isObject(axis)) reasons.push(reason("CAPABILITY_HEALTH_REQUIRED", axisName, "READY", null, [evidencePath]))
+    else if (axis.state !== "READY") reasons.push(reason(
+      "CAPABILITY_NOT_READY", axisName, "READY", axis.state, [`${evidencePath}.state`, `${evidencePath}.reason`],
+    ))
+    else {
+      const expiresAt = Date.parse(axis.expires_at)
+      if (!Number.isFinite(expiresAt) || expiresAt <= evaluatedAt.getTime()) reasons.push(reason(
+        "CAPABILITY_EVIDENCE_STALE", axisName, "unexpired", axis.expires_at, [`${evidencePath}.expires_at`],
+      ))
+    }
+    evidenceUsed.push(evidenceRef(evidencePath, axis ?? null))
   }
   for (const authority of requirements.authority_all) {
     if (!allow.has(authority)) reasons.push(reason(

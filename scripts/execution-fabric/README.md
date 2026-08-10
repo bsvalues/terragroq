@@ -2,7 +2,7 @@
 
 Issue: #531
 
-These scripts build an evidence-backed resource registry. They are read-only by design. V0.1 does not schedule or mutate infrastructure.
+These scripts build an evidence-backed resource registry. They are read-only by design. V0.2 does not schedule or mutate infrastructure.
 
 Generated `.artifacts/execution-fabric/` probe files are host-local and ignored by Git. Durable conclusions belong in reviewed reports such as `docs/reports/WILLIAMOS-EXECUTION-FABRIC-V0.1-LIVE-MATRIX.md`.
 
@@ -17,7 +17,22 @@ Each node emits a local probe file:
 .artifacts/execution-fabric/aegis.json
 ```
 
-`assemble-registry.mjs` overlays live discovered hardware/runtime facts onto the declared role/authority seed and emits:
+Capability producers may additionally emit a separately digest-bound capability snapshot. The first
+accepted producer contract is:
+
+```text
+.artifacts/execution-fabric/aegis-capability.json
+schema: aegis-capability/1
+canonicalization: jcs-rfc8785/1
+```
+
+Node probes describe machine identity and inventory. Capability snapshots describe independent
+service readiness. Neither source grants execution authority.
+
+`assemble-registry.mjs` is the only operational entrypoint. It pins the reviewed canonical v0.2
+seed and schema digests, always uses the real system clock, and overlays live discovered
+hardware/runtime facts onto the declared role/authority seed. `assemble-registry-core.mjs` exists
+only for isolated fixture testing and is not an operator surface. The entrypoint emits:
 
 ```text
 .artifacts/execution-fabric/registry.snapshot.json
@@ -27,6 +42,14 @@ Missing or stale probes add fail-closed scheduling constraints; they never silen
 Observed promotion also requires a canonical host-derived node ID and an exact match to the
 trusted hashed machine-identity pin in the seed. A node with no pin remains declared and
 unschedulable until onboarding records that pin through a reviewed evidence change.
+
+AEGIS backup/archive promotion additionally requires exact capability and receipt byte hashes pinned
+by reviewed policy, a valid self-digest, exact producer schemas, the exact trusted machine identity
+and backup mounts, freshness inside the policy maximum, `scheduler=OFF`, and restore-verified source
+and manifest evidence. Missing, malformed, stale, future, hash-mismatched, mount-mismatched, or
+scheduler-enabled evidence fails those storage capabilities closed without changing overall node
+health. Compute is classified independently from the fresh raw probe and running Docker runtime.
+NAS remains pending until a separate file-share service and authority are proven.
 
 ## Windows
 
@@ -59,7 +82,6 @@ From the repository root:
 
 ```bash
 node scripts/execution-fabric/assemble-registry.mjs \
-  --seed config/execution-fabric/registry.seed.json \
   --evidence-dir .artifacts/execution-fabric \
   --out .artifacts/execution-fabric/registry.snapshot.json
 ```
@@ -68,7 +90,7 @@ The assembler preserves declared authority/role constraints while replacing hard
 It validates complete nested resource data before promotion or publication and rejects probes
 from unapproved probe implementations.
 
-## Required live proof for v0.1
+## Required live proof for v0.2
 
 1. OMEN probe.
 2. HERMES-NODE probe.
@@ -81,9 +103,13 @@ from unapproved probe implementations.
 
 ## Scheduler boundary
 
-The registry is scheduler-ready, but scheduling remains disabled in v0.1. A later bounded Hermes work order may consume this registry to match workload requirements against healthy, fresh, authorized capabilities.
+The registry is scheduler-ready, but scheduling remains disabled in v0.2. A later bounded Hermes work order may consume this registry to match workload requirements against healthy, fresh, authorized capabilities.
 
 William must not be asked to choose a node for normal work placement.
+
+Capability health is not execution authority. A `READY` AEGIS backup or archive axis does not grant
+Hermes permission to dispatch, does not create a worker identity, and does not weaken the disabled
+scheduler boundary.
 
 ## Recommendation-only placement proof
 
