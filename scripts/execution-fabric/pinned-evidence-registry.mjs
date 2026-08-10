@@ -4,6 +4,8 @@ import { spawnSync } from "node:child_process"
 import crypto from "node:crypto"
 import os from "node:os"
 
+import { canonicalizeJcs } from "./canonical-json.mjs"
+
 const SHA256 = /^[a-f0-9]{64}$/
 const OBSERVED_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/
 
@@ -339,6 +341,64 @@ export function loadPinnedEvidence({ snapshotRoot, references, policy, verifier,
     }
     const loaded = staged.items.map((item) => parseVerifiedSnapshot(item.bytes, item.reference, policy))
     return { loaded, verification, verifier_sha256: verifierIdentity.sha256 }
+  } finally {
+    for (const item of staged.items) {
+      try { fs.chmodSync(item.stagedPath, 0o644) } catch {}
+    }
+    try { fs.chmodSync(path.join(staged.stagedRoot, "verify_snapshot.py"), 0o644) } catch {}
+    fs.rmSync(staged.stagedRoot, { recursive: true, force: true })
+  }
+}
+
+export function loadPinnedEvidenceInProcess({ snapshotRoot, references, policy, verifier }) {
+  validatePolicy(policy)
+  if (!Array.isArray(references)) fail("evidence references must be an array")
+  const normalized = references.map((reference) => {
+    if (!object(reference) || Object.keys(reference).sort().join(",") !== "node,snapshot_sha256") {
+      fail("each evidence reference must contain exactly node and snapshot_sha256")
+    }
+    return { node: reference.node, snapshot_sha256: reference.snapshot_sha256 }
+  }).sort((left, right) => left.node < right.node ? -1 : left.node > right.node ? 1 : 0)
+  const identities = normalized.map((entry) => entry.node)
+  if (new Set(identities).size !== identities.length) fail("duplicate evidence node reference")
+  const expected = Object.keys(policy.required_evidence).sort()
+  if (JSON.stringify([...identities].sort()) !== JSON.stringify(expected)) {
+    fail(`evidence node set must be exactly: ${expected.join(", ")}`)
+  }
+  const verifierIdentity = verifyReferenceIdentity(verifier, policy.reference_verifier_sha256)
+  const staged = stageReferencedBytes(snapshotRoot, normalized)
+  try {
+    const stagedVerifier = path.join(staged.stagedRoot, "verify_snapshot.py")
+    fs.writeFileSync(stagedVerifier, verifierIdentity.bytes, { flag: "wx" })
+    fs.chmodSync(stagedVerifier, 0o444)
+    const output = []
+    for (const item of staged.items) {
+      let snapshot
+      try {
+        snapshot = JSON.parse(item.bytes.toString("utf8").replace(/^\uFEFF/, ""))
+      } catch (error) {
+        fail(`unable to parse ${item.reference.node} snapshot during in-process verification: ${error.message}`)
+      }
+      const embedded = snapshot?.snapshot_sha256
+      const canonicalValue = structuredClone(snapshot)
+      if (object(canonicalValue)) delete canonicalValue.snapshot_sha256
+      const recomputed = crypto.createHash("sha256").update(canonicalizeJcs(canonicalValue)).digest("hex")
+      if (recomputed !== item.reference.snapshot_sha256 || embedded !== item.reference.snapshot_sha256) {
+        fail(`${item.reference.node} in-process canonical snapshot verification failed`)
+      }
+      output.push(`OK   ${item.reference.node} recomputed=${recomputed.slice(0, 12)}.. filename=${recomputed.slice(0, 12)}.. embedded=${recomputed.slice(0, 12)}..`)
+    }
+    output.push(`VERIFY snapshots=${normalized.length} fails=0`)
+    for (const item of staged.items) {
+      const afterVerification = fs.readFileSync(item.stagedPath)
+      if (!afterVerification.equals(item.bytes)) fail(`${item.reference.node} staged snapshot bytes changed during verification`)
+    }
+    const loaded = staged.items.map((item) => parseVerifiedSnapshot(item.bytes, item.reference, policy))
+    return {
+      loaded,
+      verification: { verifier_stdout: output.join("\n"), verifier_stderr: "" },
+      verifier_sha256: verifierIdentity.sha256,
+    }
   } finally {
     for (const item of staged.items) {
       try { fs.chmodSync(item.stagedPath, 0o644) } catch {}

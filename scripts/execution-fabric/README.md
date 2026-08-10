@@ -168,7 +168,8 @@ executable, remote address, storage path, or replacement node.
 
 Preparation independently requires:
 
-- a fresh Phase 1 receipt reproduced by the pinned-evidence placement verifier;
+- a fresh Phase 1 receipt reproduced in-process from the exact RFC 8785 snapshot bytes while still
+  binding the reviewed reference-verifier digest;
 - an exact Agent Forge permission-set digest;
 - an exact reviewed non-active authority-scope artifact;
 - a later active authority-registry entry whose complete bytes are on trusted `main`;
