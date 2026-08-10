@@ -92,12 +92,20 @@ function expectRejected(action: () => unknown, detail: RegExp) {
 }
 
 describe("Execution Fabric shadow evidence trust registries", () => {
-  it("keeps settlement fail closed when authority is pre-admitted but no outcome exists", () => {
+  it("loads the reviewed production admission and rejects an unrelated fixture outcome", () => {
     expect(DEFAULT_SHADOW_OUTCOME_REGISTRY).toMatch(/shadow-outcome-registry\.json$/)
     expect(DEFAULT_SHADOW_AUTHORITY_REGISTRY).toMatch(/shadow-authority-registry\.json$/)
     const loaded = loadShadowEvidenceTrustRegistries()
 
-    expect(loaded.outcome_registry).toMatchObject({ status: "EMPTY_FAIL_CLOSED", entries: [] })
+    expect(loaded.outcome_registry).toMatchObject({
+      status: "VALID",
+      entries: [{
+        artifact_sha256: "9bd0b44bc7f4dc77fd2f24e590a048c7b964884da76d37d917d145799caea285",
+        work_order_id: "WO-EF-SHADOW-001",
+        actual_target_node: "hermes-node",
+        status: "ACTIVE",
+      }],
+    })
     expect(loaded.authority_registry).toMatchObject({
       status: "VALID",
       entries: [{
@@ -110,7 +118,7 @@ describe("Execution Fabric shadow evidence trust registries", () => {
     expectRejected(() => trust({
       outcomeRegistry: loaded.outcome_registry,
       authorityRegistry: loaded.authority_registry,
-    }), /empty or invalid trust registries/)
+    }), /outcome artifact is not present in the reviewed outcome registry/)
   })
 
   it("settles exact artifact, source, Work Order, node, authority, review, and time bindings", () => {

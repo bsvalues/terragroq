@@ -213,6 +213,46 @@ function mutateRepositoryJson(repositoryRoot: string, relativePath: string, muta
 }
 
 describe("Execution Fabric Phase 2 shadow placement", () => {
+  it("replays the reviewed WO-EF-SHADOW-001 production observation exactly", () => {
+    const receiptBytes = fs.readFileSync(path.join(
+      process.cwd(),
+      "docs/reports/execution-fabric-shadow-receipts/WO-EF-SHADOW-001.json",
+    ))
+    const observationBytes = fs.readFileSync(path.join(
+      process.cwd(),
+      "docs/reports/execution-fabric-shadow-observations/WO-EF-SHADOW-001.json",
+    ))
+
+    const first = evaluateShadowPlacement({ receiptBytes, observationBytes }) as JsonObject
+    const replay = evaluateShadowPlacement({ receiptBytes, observationBytes }) as JsonObject
+
+    expect(first).toEqual(replay)
+    expect(first).toMatchObject({
+      status: "OBSERVED",
+      trust_scope: "production",
+      observation_only: true,
+      work_order_id: "WO-EF-SHADOW-001",
+      policy_receipt: { selected_node_id: "aegis" },
+      recorded_observation: {
+        manual_target: "hermes-node",
+        outcome_trust: { status: "TRUSTED" },
+      },
+      comparison: {
+        diverged: true,
+        divergence_reasons: [
+          "MANUAL_TARGET_DIFFERS_FROM_RECOMMENDATION",
+          "RECORDED_AUTHORITY_CONSTRAINT",
+        ],
+        silent_fallback: false,
+      },
+      safety: {
+        authority_violations: 0,
+        stale_evidence_placements: 0,
+        silent_fallbacks: 0,
+      },
+    })
+  })
+
   it("replays an exact recorded historical observation deterministically without execution", () => {
     const first = evaluate()
     const second = evaluate()
