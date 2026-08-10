@@ -5,16 +5,17 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { canonicalizeJcs } from "./canonical-json.mjs"
+import {
+  loadShadowEvidenceTrustRegistries,
+  validateShadowEvidenceTrust,
+} from "./shadow-evidence-trust.mjs"
 import { validateShadowOutcomeEvidence } from "./shadow-outcome-evidence.mjs"
 
 const EXIT_INVALID = 2
 const SHA256 = /^[a-f0-9]{64}$/
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{1,255}$/
 const ALLOWED_DIVERGENCE_REASONS = new Set([
-  "ACTUAL_TARGET_NOT_RECORDED",
   "MANUAL_TARGET_DIFFERS_FROM_RECOMMENDATION",
-  "NO_POLICY_RECOMMENDATION",
-  "OPERATOR_PLACEMENT_PRECEDED_POLICY_RECEIPT",
   "RECORDED_AUTHORITY_CONSTRAINT",
   "RECORDED_CAPABILITY_CONSTRAINT",
   "RECORDED_RESOURCE_CONSTRAINT",
@@ -71,9 +72,19 @@ function digest(value, label) {
 }
 
 function timestamp(value, label) {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value)
-    || !Number.isFinite(Date.parse(value))) fail(`${label} must be an explicit UTC timestamp`)
-  return Date.parse(value)
+  const match = typeof value === "string"
+    ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/.exec(value)
+    : null
+  if (!match) fail(`${label} must be an explicit UTC timestamp`)
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction = ""] = match
+  const [year, month, day, hour, minute, second] = [yearText, monthText, dayText, hourText, minuteText, secondText].map(Number)
+  const milliseconds = Number(fraction.padEnd(3, "0"))
+  const instant = Date.UTC(year, month - 1, day, hour, minute, second, milliseconds)
+  const date = new Date(instant)
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day
+    || date.getUTCHours() !== hour || date.getUTCMinutes() !== minute || date.getUTCSeconds() !== second
+    || date.getUTCMilliseconds() !== milliseconds) fail(`${label} is not a valid UTC calendar timestamp`)
+  return instant
 }
 
 function readArtifact(filePath, label) {
@@ -117,7 +128,7 @@ function rejectExecutableInput(value, pathName = "input") {
   }
   if (!value || typeof value !== "object") return
   for (const [key, child] of Object.entries(value)) {
-    const normalized = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase()
+    const normalized = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replaceAll("-", "_").toLowerCase()
     if (PROHIBITED_FIELD.test(normalized)) fail(`${pathName}.${key} is not permitted in observation-only input`)
     rejectExecutableInput(child, `${pathName}.${key}`)
   }
@@ -184,10 +195,37 @@ function loadOutcomeEvidence(repositoryRoot, binding) {
   const artifactPath = resolveRetainedSource(repositoryRoot, binding.path)
   const artifactBytes = fs.readFileSync(artifactPath)
   try {
-    return validateShadowOutcomeEvidence({ artifactBytes, expectedSha256: binding.sha256 })
+    return {
+      artifactBytes,
+      evidence: validateShadowOutcomeEvidence({ artifactBytes, expectedSha256: binding.sha256 }),
+    }
   } catch (error) {
     const detail = String(error?.message ?? error).replace(/^FABRIC_SHADOW_OUTCOME_EVIDENCE_INVALID:\s*/, "")
     fail(`outcome evidence rejected: ${detail}`)
+  }
+}
+
+function settleOutcomeEvidenceTrust(repositoryRoot, artifactBytes, expectedArtifactSha256, retainedSourceSha256) {
+  const registryDirectory = path.join(
+    fs.realpathSync(path.resolve(repositoryRoot)),
+    "config",
+    "execution-fabric",
+  )
+  try {
+    const registries = loadShadowEvidenceTrustRegistries({
+      outcomeRegistryPath: path.join(registryDirectory, "shadow-outcome-registry.json"),
+      authorityRegistryPath: path.join(registryDirectory, "shadow-authority-registry.json"),
+    })
+    return validateShadowEvidenceTrust({
+      artifactBytes,
+      expectedArtifactSha256,
+      retainedSourceSha256,
+      outcomeRegistry: registries.outcome_registry,
+      authorityRegistry: registries.authority_registry,
+    })
+  } catch (error) {
+    const detail = String(error?.message ?? error).replace(/^FABRIC_SHADOW_EVIDENCE_TRUST_INVALID:\s*/, "")
+    fail(`outcome trust settlement rejected: ${detail}`)
   }
 }
 
@@ -201,11 +239,12 @@ function loadTrustedReceiptRegistry(repositoryRoot) {
   const seen = new Set()
   for (const [index, entry] of artifact.value.trusted_receipts.entries()) {
     exactKeys(entry, [
-      "receipt_sha256", "workload_id", "decision_input_sha256", "evidence_snapshot",
+      "receipt_sha256", "work_order_id", "workload_id", "decision_input_sha256", "evidence_snapshot",
       "reviewed_commit", "status",
     ], `trusted receipt registry entry ${index}`)
     digest(entry.receipt_sha256, `trusted receipt registry entry ${index}.receipt_sha256`)
     digest(entry.decision_input_sha256, `trusted receipt registry entry ${index}.decision_input_sha256`)
+    identifier(entry.work_order_id, `trusted receipt registry entry ${index}.work_order_id`)
     identifier(entry.workload_id, `trusted receipt registry entry ${index}.workload_id`)
     if (!/^[a-f0-9]{40}$/.test(entry.reviewed_commit) || entry.status !== "TRUSTED") {
       fail(`trusted receipt registry entry ${index} review binding is invalid`)
@@ -224,10 +263,11 @@ function loadTrustedReceiptRegistry(repositoryRoot) {
   return artifact
 }
 
-function verifyTrustedReceipt(registryArtifact, receipt, receiptSha256) {
+function verifyTrustedReceipt(registryArtifact, receipt, receiptSha256, workOrderId) {
   const trusted = registryArtifact.value.trusted_receipts.find((entry) => entry.receipt_sha256 === receiptSha256)
   if (!trusted) fail("receipt digest is absent from the reviewed trust registry")
-  if (trusted.workload_id !== receipt.workload.id
+  if (trusted.work_order_id !== workOrderId
+    || trusted.workload_id !== receipt.workload.id
     || trusted.decision_input_sha256 !== receipt.decision_input_sha256
     || canonicalizeJcs(trusted.evidence_snapshot) !== canonicalizeJcs(receipt.evidence_snapshot)) {
     fail("receipt does not match its reviewed trust-registry binding")
@@ -276,6 +316,19 @@ function validateReceipt(receipt, receiptSha256) {
     if (candidate.execution_authorized !== false || candidate.dispatch_allowed !== false) {
       fail(`${candidate.node_id}: receipt candidate is authority-bearing`)
     }
+  }
+  const receiptTime = timestamp(receipt.evaluated_at, "receipt.evaluated_at")
+  for (const candidate of eligible) {
+    if (candidate.eligible !== true || !Number.isInteger(candidate.rank) || candidate.rank < 1
+      || candidate.freshness?.state !== "fresh"
+      || !["observed", "proven"].includes(candidate.confidence)) {
+      fail(`${candidate.node_id}: eligible candidate semantics are contradictory or untrusted`)
+    }
+    const expiresAt = timestamp(candidate.freshness.expires_at, `${candidate.node_id}: eligible evidence expiry`)
+    if (expiresAt <= receiptTime) fail(`${candidate.node_id}: eligible evidence is already expired`)
+  }
+  for (const candidate of ineligible) {
+    if (candidate.eligible !== false) fail(`${candidate.node_id}: ineligible candidate semantics are contradictory`)
   }
 
   if (receipt.status === "RECOMMENDED") {
@@ -327,7 +380,8 @@ function validateObservation(observation, repositoryRoot, receipt, receiptSha256
     fail("observation source hash does not match exact retained record bytes")
   }
 
-  const outcomeEvidence = loadOutcomeEvidence(repositoryRoot, observation.outcome_evidence)
+  const loadedOutcome = loadOutcomeEvidence(repositoryRoot, observation.outcome_evidence)
+  const outcomeEvidence = loadedOutcome.evidence
   if (outcomeEvidence.work_order_id !== observation.work_order_id) fail("outcome evidence Work Order does not match observation")
   if (outcomeEvidence.actual_target_node !== observation.manual_target) fail("outcome evidence target does not match observation")
   const receiptTime = timestamp(receipt.evaluated_at, "receipt.evaluated_at")
@@ -337,11 +391,20 @@ function validateObservation(observation, repositoryRoot, receipt, receiptSha256
   if (observationTime < receiptTime) fail("shadow observation predates the placement recommendation")
   if (outcomeStart < receiptTime) fail("outcome execution predates the placement recommendation")
   const selectedCandidate = receipt.eligible_nodes.find((candidate) => candidate.node_id === observation.manual_target)
-  if (selectedCandidate && outcomeStart >= timestamp(selectedCandidate.freshness.expires_at, "selected evidence expiry")) {
+  if (!selectedCandidate || selectedCandidate.eligible !== true) {
+    fail("actual target is not eligible in the trusted placement receipt")
+  }
+  if (outcomeStart >= timestamp(selectedCandidate.freshness.expires_at, "selected evidence expiry")) {
     fail("outcome execution began at or after selected evidence expiry")
   }
   if (observationTime < outcomeComplete) fail("shadow observation predates outcome completion")
   validateSourceClaims(sourceBytes, observation, outcomeEvidence)
+  const outcomeTrust = settleOutcomeEvidenceTrust(
+    repositoryRoot,
+    loadedOutcome.artifactBytes,
+    observation.outcome_evidence.sha256,
+    sourceSha256,
+  )
 
   if (!Array.isArray(observation.divergence_reasons)
     || new Set(observation.divergence_reasons).size !== observation.divergence_reasons.length
@@ -350,24 +413,13 @@ function validateObservation(observation, repositoryRoot, receipt, receiptSha256
   }
   const selected = receipt.recommendation?.node_id ?? null
   const diverged = observation.manual_target !== selected
-  if (observation.divergence_reasons.includes("OPERATOR_PLACEMENT_PRECEDED_POLICY_RECEIPT")) {
-    fail("post-recommendation observations cannot claim operator-preceded chronology")
-  }
-  if (selected === null && observation.manual_target !== null
-    && !observation.divergence_reasons.includes("NO_POLICY_RECOMMENDATION")) {
-    fail("manual target without a policy recommendation requires NO_POLICY_RECOMMENDATION")
-  }
   if (selected !== null && observation.manual_target !== null && selected !== observation.manual_target
     && !observation.divergence_reasons.includes("MANUAL_TARGET_DIFFERS_FROM_RECOMMENDATION")) {
     fail("target mismatch requires MANUAL_TARGET_DIFFERS_FROM_RECOMMENDATION")
   }
-  if (selected !== null && observation.manual_target === null
-    && !observation.divergence_reasons.includes("ACTUAL_TARGET_NOT_RECORDED")) {
-    fail("missing actual target requires ACTUAL_TARGET_NOT_RECORDED")
-  }
   if (diverged && observation.divergence_reasons.length === 0) fail("divergence requires at least one explicit reason")
   if (!diverged && observation.divergence_reasons.length !== 0) fail("matching targets must not claim divergence")
-  return { source_sha256: sourceSha256, outcome_evidence: outcomeEvidence, diverged }
+  return { source_sha256: sourceSha256, outcome_evidence: outcomeEvidence, outcome_trust: outcomeTrust, diverged }
 }
 
 function evaluateShadowPlacementAtRoot({ receiptBytes, observationBytes, repositoryRoot, trustScope }) {
@@ -377,7 +429,12 @@ function evaluateShadowPlacementAtRoot({ receiptBytes, observationBytes, reposit
   const observation = observationArtifact.value
   const receiptView = validateReceipt(structuredClone(receipt), receiptArtifact.sha256)
   const trustRegistry = loadTrustedReceiptRegistry(repositoryRoot)
-  const trustRegistrySha256 = verifyTrustedReceipt(trustRegistry, receipt, receiptArtifact.sha256)
+  const trustRegistrySha256 = verifyTrustedReceipt(
+    trustRegistry,
+    receipt,
+    receiptArtifact.sha256,
+    observation.work_order_id,
+  )
   const observationView = validateObservation(structuredClone(observation), repositoryRoot, receipt, receiptArtifact.sha256)
   const result = {
     schema_version: "0.1-shadow-placement-result",
@@ -399,6 +456,7 @@ function evaluateShadowPlacementAtRoot({ receiptBytes, observationBytes, reposit
       recorded_at: observation.recorded_at,
       manual_target: observation.manual_target,
       outcome_evidence: observationView.outcome_evidence,
+      outcome_trust: observationView.outcome_trust,
       source_path: observation.source.path,
       source_sha256: observationView.source_sha256,
     },
@@ -453,13 +511,19 @@ function evaluateShadowPlacementBatchWith(entries, evaluator, trustScope) {
     .sort((left, right) => left.observation_id < right.observation_id ? -1 : left.observation_id > right.observation_id ? 1 : 0)
   const ids = observations.map((entry) => entry.observation_id)
   if (new Set(ids).size !== ids.length) fail("shadow batch contains duplicate observation IDs")
-  const bindings = observations.map((entry) => [
+  const sourceBindings = observations.map((entry) => [
     entry.policy_receipt.sha256,
     entry.work_order_id,
     entry.workload_id,
-    entry.recorded_observation.outcome_evidence.artifact_sha256,
+    entry.recorded_observation.source_sha256,
   ].join(":"))
-  if (new Set(bindings).size !== bindings.length) fail("shadow batch contains duplicate receipt-to-observation bindings")
+  if (new Set(sourceBindings).size !== sourceBindings.length) {
+    fail("shadow batch contains duplicate receipt-to-source bindings")
+  }
+  const outcomeBindings = observations.map((entry) => entry.recorded_observation.outcome_evidence.artifact_sha256)
+  if (new Set(outcomeBindings).size !== outcomeBindings.length) {
+    fail("shadow batch contains duplicate immutable outcomes")
+  }
   const result = {
     schema_version: "0.1-shadow-placement-proof",
     gate: trustScope === "production" ? "HERMES_PLACEMENT_SHADOW_PROOF" : "HERMES_PLACEMENT_SHADOW_TEST_FIXTURE",
