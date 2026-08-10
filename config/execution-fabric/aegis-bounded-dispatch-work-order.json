@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 2,
+  "workOrderId": "WO-EF-DISPATCH-AEGIS-ADAPTER-001",
+  "programId": "WO-EF-PLACEMENT-001",
+  "goalId": "HERMES_BOUNDED_DISPATCH_V0_2",
+  "loopId": "WO-EF-PLACEMENT-001-PHASE3",
+  "objective": "Prove one exact read-only SHA-256 verification on canonical AEGIS through a bounded resident adapter.",
+  "riskClass": "R1",
+  "repositories": [
+    "bsvalues/terragroq"
+  ],
+  "baseRefs": [
+    "refs/heads/main"
+  ],
+  "dependencies": [
+    "HERMES_BOUNDED_DISPATCH_LANE:PASS"
+  ],
+  "fanInGate": "ALL",
+  "laneId": "resident-aegis",
+  "teamRoles": {
+    "coordinator": "codex-root",
+    "builder": "resident-aegis",
+    "reviewer": "independent-assurance"
+  },
+  "providerRequirements": [
+    "resident-aegis",
+    "canonical-aegis-identity",
+    "fresh-aegis-capability-evidence",
+    "nodejs"
+  ],
+  "preferredProviders": [
+    "resident-aegis"
+  ],
+  "fallbackProviders": [],
+  "reservations": {
+    "paths": [
+      "config/execution-fabric/aegis-bounded-dispatch-*",
+      "config/execution-fabric/agent-forge-aegis-bounded-hash-verify-permission.json",
+      "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-*",
+      "docs/reports/bounded-dispatch/aegis-inputs/*",
+      "scripts/execution-fabric/bounded-dispatch/aegis-*"
+    ],
+    "contracts": [
+      "aegis.hash-verify.v1",
+      "resident-aegis-hash-verify-v1"
+    ],
+    "environments": [
+      "aegis"
+    ]
+  },
+  "allowedActions": [
+    "acquire-fixed-local-runtime-claim-lease",
+    "read-exact-bounded-input",
+    "compute-sha256",
+    "emit-bounded-result-evidence"
+  ],
+  "forbiddenActions": [
+    "arbitrary-shell",
+    "autonomous-scheduling",
+    "authority-mutation",
+    "external-provider-access",
+    "network-access",
+    "remote-node-access",
+    "silent-replacement",
+    "workload-storage-write"
+  ],
+  "authorityGrantRefs": [],
+  "programActivationGrantRef": "github-issue-538",
+  "grantStatusEventRefs": [],
+  "requiredOutputs": [
+    "pinned-placement-receipt",
+    "single-use-claim",
+    "bounded-hash-result",
+    "resource-observation",
+    "reviewed-github-evidence"
+  ],
+  "requiredValidation": [
+    "exact-aegis-identity",
+    "fresh-replayed-placement",
+    "exact-forge-permission-digest",
+    "exact-authority-scope",
+    "input-byte-ceiling",
+    "realpath-and-symlink-confinement",
+    "single-use-claim",
+    "exclusive-concurrency-lease",
+    "zero-forbidden-side-effects"
+  ],
+  "reviewRequirements": [
+    "independent-scope-review",
+    "separate-future-dated-activation",
+    "zero-unresolved-security-or-authority-findings"
+  ],
+  "mergeMode": "squash",
+  "retryBudget": 0,
+  "remediationBudget": 3,
+  "reroutePolicy": "NO_FALLBACK_NEW_RECEIPT_AND_AUTHORITY_REQUIRED",
+  "stopConditions": [
+    "PROVIDER_UNAVAILABLE",
+    "AUTHORITY_INACTIVE",
+    "EVIDENCE_STALE",
+    "IDENTITY_MISMATCH",
+    "SCOPE_MISMATCH",
+    "RESERVATION_COLLISION"
+  ],
+  "evidenceTargets": [
+    "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-receipt.json",
+    "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-claim.json",
+    "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-result.json"
+  ],
+  "ownerDecisionConditions": [
+    "destructive-operation",
+    "protected-production-data",
+    "new-credentials-or-provider",
+    "cloud-spend",
+    "material-product-scope-change"
+  ],
+  "ownerOperationsAllowed": false,
+  "operationalState": "BLOCKED_NO_ELIGIBLE_PROVIDER",
+  "reasonCode": "PROVIDER_UNAVAILABLE",
+  "authorityStatus": "NOT_GRANTED",
+  "schedulerActivated": false,
+  "autonomousDispatch": false
+}

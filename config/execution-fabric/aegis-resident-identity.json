@@ -1,0 +1,9 @@
+{
+  "schema_version": "0.1-aegis-resident-identity",
+  "node_id": "aegis",
+  "hostname": "aegis",
+  "machine_id_sha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b",
+  "machine_id_source": "/etc/machine-id",
+  "network_address_is_identity": false,
+  "status": "REVIEWED_IDENTITY_NOT_AUTHORITY"
+}
