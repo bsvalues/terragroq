@@ -97,7 +97,7 @@
         "id": {"type": "string"},
         "model": {"type": "string"},
         "serial": {"type": ["string", "null"]},
-        "capacity_bytes": {"type": "integer", "minimum": 1},
+        "capacity_bytes": {"type": ["integer", "null"], "minimum": 1},
         "transport": {"type": ["string", "null"]},
         "rotational": {"type": ["boolean", "null"]},
         "smart_overall": {"type": ["string", "null"]},

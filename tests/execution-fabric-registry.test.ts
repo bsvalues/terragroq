@@ -522,6 +522,36 @@ describe("Execution Fabric semantic invariants", () => {
     })
   })
 
+  it("retains an unknown-capacity physical disk while fencing storage placement", () => {
+    const seed = clone(canonicalSeed)
+    const aegis = nodeById(seed, "aegis")
+    pinMachineIdentity(aegis)
+    const aegisProbe = probeFor(aegis)
+    ;(aegisProbe.node as JsonObject).disks = [{
+      ...disk("disk-failed", "CORRUPTED-IDENTITY"),
+      capacity_bytes: null,
+    }]
+    ;(aegisProbe.node as JsonObject).warnings = [
+      "disk failed: reported non-positive capacity; retained as unknown and unschedulable",
+    ]
+
+    const result = assemble(seed, { aegis: aegisProbe })
+    const assembledAegis = nodeById(result.registry!, "aegis")
+
+    expect(result.status, result.stderr).toBe(0)
+    expect((assembledAegis.evidence as JsonObject).confidence).toBe("observed")
+    expect((assembledAegis.disks as JsonObject[])[0]).toMatchObject({
+      id: "disk-failed",
+      capacity_bytes: null,
+    })
+    expect(assembledAegis.constraints).toEqual(expect.arrayContaining([
+      "not-schedulable-unknown-disk-capacity",
+    ]))
+    expect(assembledAegis.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/non-positive capacity/),
+    ]))
+  })
+
   it("rejects authority entries that conflict between allow and deny", () => {
     const seed = clone(canonicalSeed)
     const aegis = nodeById(seed, "aegis")

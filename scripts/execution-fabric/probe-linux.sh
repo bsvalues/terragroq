@@ -152,6 +152,12 @@ if lsblk:
         data = json.loads(lsblk)
         for d in data.get('blockdevices',[]):
             if d.get('type') != 'disk': continue
+            raw_capacity = int(d.get('size') or 0)
+            capacity = raw_capacity if raw_capacity > 0 else None
+            if capacity is None:
+                warnings.append(
+                    f"disk {d.get('name')}: reported non-positive capacity; retained as unknown and unschedulable"
+                )
             fs = []
             for c in d.get('children') or []:
                 fs.append({
@@ -173,7 +179,7 @@ if lsblk:
                     except Exception as e: warnings.append(f"smart parse {d.get('name')}: {e}")
             disks.append({
                 'id': f"disk-{d.get('name')}", 'model': d.get('model') or d.get('name'), 'serial': d.get('serial'),
-                'capacity_bytes': int(d.get('size') or 0), 'transport': d.get('tran'),
+                'capacity_bytes': capacity, 'transport': d.get('tran'),
                 'rotational': bool(d.get('rota')) if d.get('rota') is not None else None,
                 'smart_overall': smart_overall, 'power_on_hours': poh,
                 'reallocated': realloc, 'pending': pending, 'uncorrectable': unc, 'filesystems': fs

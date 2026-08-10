@@ -38,7 +38,7 @@
       "hostname": "HERMES",
       "identity": {
         "hostname": "HERMES",
-        "machine_id_sha256": null,
+        "machine_id_sha256": "7d1d7ef856531c57a6b7118781e1e76f44fa7655b1da25eb2bbf2433e0ca84b1",
         "source": "windows-cim-system-uuid-sha256"
       },
       "role": "local-ai-gpu-execution-worker",
@@ -64,7 +64,7 @@
       "hostname": "atlas",
       "identity": {
         "hostname": "atlas",
-        "machine_id_sha256": null,
+        "machine_id_sha256": "1406acb70a4fa29a84cacdf9bedef398af99ec6b8d85079632d6f822ddaa0ba1",
         "source": "linux-machine-id-sha256"
       },
       "role": "durable-state-forge-retrieval",
@@ -90,7 +90,7 @@
       "hostname": "aegis",
       "identity": {
         "hostname": "aegis",
-        "machine_id_sha256": null,
+        "machine_id_sha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b",
         "source": "linux-machine-id-sha256"
       },
       "role": "secondary-cpu-batch-ci-worker-storage-pending",

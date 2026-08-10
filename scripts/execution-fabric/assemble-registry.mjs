@@ -244,7 +244,8 @@ const nodes = seed.nodes.map((declared) => {
       ...new Set([
         ...(declared.constraints || []),
         ...(stale ? ['not-schedulable-stale-evidence'] : []),
-        ...(probe.node.disks.some(disk => disk.serial == null) ? ['not-schedulable-ambiguous-disk-identity'] : [])
+        ...(probe.node.disks.some(disk => disk.serial == null) ? ['not-schedulable-ambiguous-disk-identity'] : []),
+        ...(probe.node.disks.some(disk => disk.capacity_bytes == null) ? ['not-schedulable-unknown-disk-capacity'] : [])
       ])
     ],
     warnings: [...new Set([...(declared.warnings || []).filter(x => !x.includes('require live probe')), ...mergedWarnings])]
