@@ -105,9 +105,10 @@ REPO_DIR="$PHYSICAL_WORKSPACE/repository"
 MARKER_PATH="$PHYSICAL_WORKSPACE/$OWNER_MARKER"
 PROOF_PATH="$PHYSICAL_WORKSPACE/$MERGE_MARKER"
 SCRATCH_DIR="$PHYSICAL_WORKSPACE/.williamos-scratch"
+QUARANTINE_PATH="$PHYSICAL_PARENT/.williamos-quarantine-$WORK_ORDER_ID-$RUN_ID"
 
 [[ "$PACKET_WORKSPACE" == "$LOGICAL_WORKSPACE" ]] || die_input "WORKSPACE_MISMATCH" "packet workspace differs"
-if [[ -L "$PHYSICAL_WORKSPACE" || -L "$PHYSICAL_PARENT" ]]; then die_input "SYMLINK_REJECTED" "workspace path is a symlink"; fi
+if [[ -L "$PHYSICAL_WORKSPACE" || -L "$PHYSICAL_PARENT" || -L "$QUARANTINE_PATH" ]]; then die_input "SYMLINK_REJECTED" "workspace lifecycle path is a symlink"; fi
 
 PROCESS_TIMEOUT_SECONDS="${REMOTE_DEV_PROCESS_TIMEOUT_SECONDS:-$PACKET_TIMEOUT}"
 if [[ ! "$PROCESS_TIMEOUT_SECONDS" =~ ^[0-9]+$ || "$PROCESS_TIMEOUT_SECONDS" -lt 1 || "$PROCESS_TIMEOUT_SECONDS" -gt "$PACKET_TIMEOUT" ]]; then die_input "RESOURCE_LIMIT_EXCEEDED" "process timeout exceeds packet ceiling"; fi
@@ -132,7 +133,7 @@ validate_trusted_parent() {
 
 require_containment_tools() {
   local required_tool
-  for required_tool in timeout node realpath sha256sum flock findmnt systemd-run hostname id git dotnet corepack nproc df awk stat find readlink sync head tail tr grep du base64 bash mktemp rm xfs_io xfs_quota; do
+  for required_tool in timeout node realpath sha256sum flock findmnt systemd-run hostname id git dotnet corepack nproc df awk stat find readlink sync head tail tr grep du base64 bash mktemp mv rm xfs_io xfs_quota; do
     command -v "$required_tool" >/dev/null 2>&1 || die_block "CONTAINMENT_UNAVAILABLE" "$required_tool is required for bounded execution"
   done
 }
@@ -283,13 +284,13 @@ run_capture() {
   run_capture_at "$REPO_DIR" "$@"
 }
 
-workspace_target_matches() {
-  local target="${1% (deleted)}"
-  [[ "$target" == "$PHYSICAL_WORKSPACE" || "$target" == "$PHYSICAL_WORKSPACE/"* ]]
+protected_target_matches() {
+  local target="${1% (deleted)}" protected_path="$2"
+  [[ "$target" == "$protected_path" || "$target" == "$protected_path/"* ]]
 }
 
-assert_workspace_not_in_use() {
-  local current_uid proc_dirs scan_exit proc_dir proc_uid same_identity link target link_exit state fd_paths fd_exit fd_path deadline process_count=0 fd_count
+assert_path_not_in_use() {
+  local protected_path="$1" current_uid proc_dirs scan_exit proc_dir proc_uid same_identity link target link_exit state fd_paths fd_exit fd_path deadline process_count=0 fd_count
   deadline=$((SECONDS + 15))
   current_uid="$(timeout 5 id -u)" || die_block "CLEANUP_PROCESS_SCAN_FAILED" "worker identity is unavailable for process scan"
   set +e
@@ -323,7 +324,7 @@ assert_workspace_not_in_use() {
         [[ "$state" == "Z" ]] && continue 2
         die_block "CLEANUP_PROCESS_SCAN_FAILED" "same-user process root or cwd is inaccessible"
       fi
-      workspace_target_matches "$target" && die_block "CLEANUP_WORKSPACE_IN_USE" "a process references the exact workspace"
+      protected_target_matches "$target" "$protected_path" && die_block "CLEANUP_WORKSPACE_IN_USE" "a process references the quarantined workspace"
     done
     set +e
     fd_paths="$(timeout 5 find "$proc_dir/fd" -mindepth 1 -maxdepth 1 -type l -print 2>/dev/null | head -n 65537)"
@@ -348,21 +349,46 @@ assert_workspace_not_in_use() {
         [[ "$same_identity" != true ]] && continue
         die_block "CLEANUP_PROCESS_SCAN_FAILED" "same-user process descriptor is ambiguous"
       fi
-      workspace_target_matches "$target" && die_block "CLEANUP_WORKSPACE_IN_USE" "a process has an open workspace descriptor"
+      protected_target_matches "$target" "$protected_path" && die_block "CLEANUP_WORKSPACE_IN_USE" "a process has an open quarantined-workspace descriptor"
     done <<< "$fd_paths"
   done <<< "$proc_dirs"
 }
 
 run_exact_cleanup() {
+  local workspace_identity quarantine_identity quarantine_canonical quarantine_mounts quarantine_proof
   measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"
   OUTPUT_SHA="$(timeout 10 sha256sum "$OUTPUT_FILE" | { read -r digest _rest; printf '%s' "$digest"; })" || die_block "EVIDENCE_FAILED" "cleanup output digest failed"
+  [[ ! -e "$QUARANTINE_PATH" && ! -L "$QUARANTINE_PATH" ]] || die_block "CLEANUP_QUARANTINE_EXISTS" "deterministic quarantine already exists and requires recovery"
+  workspace_identity="$(timeout 5 stat -c '%d:%i' -- "$PHYSICAL_WORKSPACE")" || die_block "CLEANUP_QUARANTINE_FAILED" "workspace inode identity is unavailable"
   set +e
-  run_cleanup_profile "$PROCESS_TIMEOUT_SECONDS" rm -rf -- "$PHYSICAL_WORKSPACE" >/dev/null 2>&1
+  run_cleanup_profile "$PROCESS_TIMEOUT_SECONDS" mv -T -- "$PHYSICAL_WORKSPACE" "$QUARANTINE_PATH" >/dev/null 2>&1
   RUN_EXIT=$?
   set -e
-  if [[ $RUN_EXIT -eq 0 && ! -e "$PHYSICAL_WORKSPACE" ]]; then
-    timeout 10 sync -- "$PHYSICAL_PARENT" || die_block "CLEANUP_DURABILITY_FAILED" "canonical parent directory fsync failed"
-  fi
+  [[ $RUN_EXIT -eq 0 ]] || die_block "CLEANUP_QUARANTINE_FAILED" "atomic workspace quarantine failed"
+  [[ ! -e "$PHYSICAL_WORKSPACE" && ! -L "$PHYSICAL_WORKSPACE" ]] || die_block "CLEANUP_ORIGINAL_RECREATED" "original workspace path was recreated during quarantine"
+  [[ -d "$QUARANTINE_PATH" && ! -L "$QUARANTINE_PATH" ]] || die_block "CLEANUP_QUARANTINE_FAILED" "quarantined workspace is unavailable"
+  quarantine_canonical="$(timeout 5 realpath -- "$QUARANTINE_PATH")" || die_block "CLEANUP_QUARANTINE_FAILED" "quarantine identity cannot be resolved"
+  [[ "$quarantine_canonical" == "$QUARANTINE_PATH" ]] || die_block "CLEANUP_QUARANTINE_FAILED" "quarantine path identity differs"
+  quarantine_identity="$(timeout 5 stat -c '%d:%i' -- "$QUARANTINE_PATH")" || die_block "CLEANUP_QUARANTINE_FAILED" "quarantine inode identity is unavailable"
+  [[ "$quarantine_identity" == "$workspace_identity" ]] || die_block "CLEANUP_QUARANTINE_FAILED" "quarantine inode differs from the verified workspace"
+  validate_owner_marker_at "$QUARANTINE_PATH"
+  [[ -f "$QUARANTINE_PATH/$MERGE_MARKER" && ! -L "$QUARANTINE_PATH/$MERGE_MARKER" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "quarantined post-merge proof is absent"
+  quarantine_proof="$(timeout 5 tr -d '\r\n' < "$QUARANTINE_PATH/$MERGE_MARKER")"
+  [[ "$quarantine_proof" == "$RUN_ID:$HEAD_SHA" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "quarantined post-merge proof differs"
+  timeout 10 sync -- "$PHYSICAL_PARENT" || die_block "CLEANUP_DURABILITY_FAILED" "canonical parent directory quarantine fsync failed"
+  quarantine_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$QUARANTINE_PATH" 2>/dev/null || true)"
+  [[ -z "$quarantine_mounts" ]] || die_block "CLEANUP_NESTED_MOUNT" "quarantined workspace contains a mount boundary"
+  assert_path_not_in_use "$QUARANTINE_PATH"
+  [[ ! -e "$PHYSICAL_WORKSPACE" && ! -L "$PHYSICAL_WORKSPACE" ]] || die_block "CLEANUP_ORIGINAL_RECREATED" "original workspace path was recreated after quarantine"
+  quarantine_identity="$(timeout 5 stat -c '%d:%i' -- "$QUARANTINE_PATH")" || die_block "CLEANUP_QUARANTINE_FAILED" "quarantine inode disappeared before deletion"
+  [[ "$quarantine_identity" == "$workspace_identity" ]] || die_block "CLEANUP_QUARANTINE_FAILED" "quarantine inode changed before deletion"
+  set +e
+  run_cleanup_profile "$PROCESS_TIMEOUT_SECONDS" rm -rf -- "$QUARANTINE_PATH" >/dev/null 2>&1
+  RUN_EXIT=$?
+  set -e
+  [[ $RUN_EXIT -eq 0 && ! -e "$QUARANTINE_PATH" && ! -L "$QUARANTINE_PATH" ]] || die_block "BLOCKING_OPERATION_FAILED" "exact quarantine deletion failed"
+  [[ ! -e "$PHYSICAL_WORKSPACE" && ! -L "$PHYSICAL_WORKSPACE" ]] || die_block "CLEANUP_ORIGINAL_RECREATED" "original workspace path was recreated during deletion"
+  timeout 10 sync -- "$PHYSICAL_PARENT" || die_block "CLEANUP_DURABILITY_FAILED" "canonical parent directory deletion fsync failed"
   SCRATCH_AFTER=0
 }
 
@@ -386,19 +412,22 @@ is_reserved() {
   return 1
 }
 
-validate_owner_marker() {
-  [[ -f "$MARKER_PATH" && ! -L "$MARKER_PATH" ]] || die_block "OWNERSHIP_MARKER_MISMATCH" "ownership marker is missing"
+validate_owner_marker_at() {
+  local workspace_root="$1" marker_path="$1/$OWNER_MARKER"
+  [[ -f "$marker_path" && ! -L "$marker_path" ]] || die_block "OWNERSHIP_MARKER_MISMATCH" "ownership marker is missing"
   set +e
   timeout 10 node -e '
     const fs=require("node:fs");const [file,run,wo,repo,branch,base]=process.argv.slice(1);let v
     try{v=JSON.parse(fs.readFileSync(file,"utf8"))}catch{process.exit(1)}
     const expected={run_id:run,work_order_id:wo,repository:repo,branch,base_sha:base}
     if(JSON.stringify(v)!==JSON.stringify(expected))process.exit(1)
-  ' "$MARKER_PATH" "$RUN_ID" "$PACKET_WORK_ORDER" "$PACKET_REPOSITORY" "$BRANCH" "$BASE_SHA"
+  ' "$marker_path" "$RUN_ID" "$PACKET_WORK_ORDER" "$PACKET_REPOSITORY" "$BRANCH" "$BASE_SHA"
   marker_exit=$?
   set -e
   [[ $marker_exit -eq 0 ]] || die_block "OWNERSHIP_MARKER_MISMATCH" "ownership marker differs"
 }
+
+validate_owner_marker() { validate_owner_marker_at "$PHYSICAL_WORKSPACE"; }
 
 repo_value() {
   timeout 15 git -C "$REPO_DIR" "$@" 2>/dev/null
@@ -431,6 +460,10 @@ RUN_EXIT=0
 RESULT_STATUS="SUCCEEDED"
 HEAD_SHA="$BASE_SHA"
 OPERATION_SCRATCH_PREPARED=false
+
+if [[ "$OPERATION" != "CLEAN_EXACT_WORKSPACE" && ( -e "$QUARANTINE_PATH" || -L "$QUARANTINE_PATH" ) ]]; then
+  die_block "QUARANTINE_RECOVERY_REQUIRED" "an owned cleanup quarantine must be recovered before further lifecycle work"
+fi
 
 if [[ "$OPERATION" != "PROVE_PREFLIGHT" ]]; then
   require_containment_tools
@@ -600,7 +633,6 @@ case "$OPERATION" in
     [[ "$canonical" == "$PHYSICAL_WORKSPACE" && "$canonical" != "$PHYSICAL_PARENT" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "workspace does not resolve exactly"
     nested_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$PHYSICAL_WORKSPACE" 2>/dev/null || true)"
     [[ -z "$nested_mounts" ]] || die_block "CLEANUP_NESTED_MOUNT" "workspace contains a mount boundary"
-    assert_workspace_not_in_use
     validate_scratch_dir
     prepare_operation_scratch
     run_exact_cleanup

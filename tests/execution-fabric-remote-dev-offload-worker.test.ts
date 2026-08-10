@@ -121,20 +121,24 @@ fi
 printf '%s\n' '734 0 0 83886080'
 `)
   writeExecutable(path.join(fakeBin, "find"), `#!/usr/bin/env bash
-if [[ "\${1:-}" == /proc ]]; then [[ -n "\${FAKE_PROC_IN_USE:-}" ]] && printf '%s\n' /proc/4242; exit 0; fi
-if [[ -n "\${FAKE_PROC_IN_USE:-}" && "\${1:-}" == /proc/4242/fd ]]; then [[ "$FAKE_PROC_IN_USE" == *fd ]] && printf '%s\n' /proc/4242/fd/3; exit 0; fi
+entered="$REMOTE_DEV_WORKER_ROOT/quarantine-entered"
+if [[ "\${1:-}" == /proc ]]; then [[ -n "\${FAKE_PROC_IN_USE:-}" || -f "$entered" ]] && printf '%s\n' /proc/4242; exit 0; fi
+if [[ "\${1:-}" == /proc/4242/fd ]]; then [[ "\${FAKE_PROC_IN_USE:-}" == *fd ]] && printf '%s\n' /proc/4242/fd/3; exit 0; fi
 exec /usr/bin/find "$@"
 `)
   writeExecutable(path.join(fakeBin, "stat"), `#!/usr/bin/env bash
-if [[ -n "\${FAKE_PROC_IN_USE:-}" && "\${@: -1}" == /proc/4242 ]]; then [[ "$FAKE_PROC_IN_USE" == other-* ]] && printf '%s\n' '${Number(bashUid) + 1}' || printf '%s\n' '${bashUid}'; exit 0; fi
+if [[ ( -n "\${FAKE_PROC_IN_USE:-}" || -f "$REMOTE_DEV_WORKER_ROOT/quarantine-entered" ) && "\${@: -1}" == /proc/4242 ]]; then [[ "\${FAKE_PROC_IN_USE:-}" == other-* ]] && printf '%s\n' '${Number(bashUid) + 1}' || printf '%s\n' '${bashUid}'; exit 0; fi
 exec /usr/bin/stat "$@"
 `)
   writeExecutable(path.join(fakeBin, "readlink"), `#!/usr/bin/env bash
-if [[ -n "\${FAKE_PROC_IN_USE:-}" ]]; then
+if [[ -n "\${FAKE_PROC_IN_USE:-}" || -f "$REMOTE_DEV_WORKER_ROOT/quarantine-entered" ]]; then
+  entered_target=''
+  [[ -f "$REMOTE_DEV_WORKER_ROOT/quarantine-entered" ]] && entered_target="$(<"$REMOTE_DEV_WORKER_ROOT/quarantine-entered")"
+  quarantine_target="$(/usr/bin/find "$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces" -mindepth 1 -maxdepth 1 -type d -name '.williamos-quarantine-*' -print -quit 2>/dev/null)"
   case "\${@: -1}" in
-    /proc/4242/cwd) [[ "$FAKE_PROC_IN_USE" == cwd ]] && printf '%s\n' "$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001" || printf '%s\n' /unrelated;;
+    /proc/4242/cwd) if [[ -n "$entered_target" ]]; then printf '%s\n' "$entered_target"; elif [[ "$FAKE_PROC_IN_USE" == cwd ]]; then printf '%s\n' "\${quarantine_target:-$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001}"; else printf '%s\n' /unrelated; fi;;
     /proc/4242/root) printf '%s\n' /;;
-    /proc/4242/fd/3) printf '%s\n' "$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001/repository/README.md";;
+    /proc/4242/fd/3) printf '%s\n' "\${quarantine_target:-$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001}/repository/README.md";;
     *) exec /usr/bin/readlink "$@";;
   esac
   exit 0
@@ -168,6 +172,8 @@ fi
 if [[ -n "$working_directory" ]]; then cd "$working_directory" || exit 80
 elif [[ "\${FAKE_SERVICE_DEFAULT_CWD:-0}" == 1 ]]; then cd "$REMOTE_DEV_WORKER_ROOT" || exit 81
 fi
+if [[ "\${1:-}" == mv && "\${FAKE_ENTER_BEFORE_QUARANTINE:-0}" == 1 ]]; then printf '%s\n' "\${@: -1}" > "$REMOTE_DEV_WORKER_ROOT/quarantine-entered"; fi
+if [[ "\${1:-}" == mv && "\${FAKE_RECREATE_ORIGINAL:-0}" == 1 ]]; then source_path="\${@: -2:1}"; "$@" || exit $?; mkdir -- "$source_path"; exit 0; fi
 if [[ "\${1:-}" == test && ( " $* " == *" ! -w /tmp "* || " $* " == *" -w "* ) ]]; then
   [[ "$props" == *"ReadWritePaths="* && "$props" == *"ReadOnlyPaths=/tmp /var/tmp"* ]] || exit 71
   exit 0
@@ -176,7 +182,7 @@ if [[ "\${1:-}" == findmnt ]]; then printf '%s\n' tmpfs; exit 0; fi
 if [[ "\${FAKE_NAMESPACE_STRICT:-0}" == 1 ]]; then
   workspace="\${REMOTE_DEV_WORKER_ROOT}/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001"
   parent="\${REMOTE_DEV_WORKER_ROOT}/srv/william/workspaces"
-  if [[ "\${1:-}" == rm ]]; then
+  if [[ "\${1:-}" == rm || "\${1:-}" == mv ]]; then
     [[ "$props" == *"ReadWritePaths=$parent"* && "$props" != *"ReadWritePaths=$workspace"* ]] || exit 73
   else
     [[ "$props" == *"ReadWritePaths=$workspace"* && "$props" == *"ReadOnlyPaths=/tmp /var/tmp"* ]] || exit 74
@@ -381,8 +387,10 @@ exit 0
     for (const mode of ["cwd", "fd", "other-fd"]) {
       const value = fixture()
       fs.writeFileSync(path.join(value.physicalWorkspace, ".williamos-post-merge-proven"), `${value.packet.runId}:${value.baseSha}\n`)
+      const quarantine = path.join(path.dirname(value.physicalWorkspace), `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${value.packet.runId}`)
       expect(runWorker("CLEAN_EXACT_WORKSPACE", value, { env: { FAKE_PROC_IN_USE: mode } }).json).toMatchObject({ status: "CLEANUP_WORKSPACE_IN_USE" })
-      expect(fs.existsSync(value.physicalWorkspace)).toBe(true)
+      expect(fs.existsSync(value.physicalWorkspace)).toBe(false)
+      expect(fs.existsSync(path.join(quarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
     }
   }, 30_000)
 
@@ -395,9 +403,39 @@ exit 0
 
     const failed = fixture()
     fs.writeFileSync(path.join(failed.physicalWorkspace, ".williamos-post-merge-proven"), `${failed.packet.runId}:${failed.baseSha}\n`)
+    const failedQuarantine = path.join(path.dirname(failed.physicalWorkspace), `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${failed.packet.runId}`)
     expect(runWorker("CLEAN_EXACT_WORKSPACE", failed, { env: { FAKE_SYNC_FAIL: "1" } }).json).toMatchObject({ status: "CLEANUP_DURABILITY_FAILED" })
     expect(fs.existsSync(failed.physicalWorkspace)).toBe(false)
+    expect(fs.existsSync(path.join(failedQuarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
   }, 30_000)
+
+  it("atomically quarantines before scanning and rejects both a pre-rename entrant and original-path recreation", () => {
+    const entrant = fixture()
+    fs.writeFileSync(path.join(entrant.physicalWorkspace, ".williamos-post-merge-proven"), `${entrant.packet.runId}:${entrant.baseSha}\n`)
+    const entrantQuarantine = path.join(path.dirname(entrant.physicalWorkspace), `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${entrant.packet.runId}`)
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", entrant, { env: { FAKE_ENTER_BEFORE_QUARANTINE: "1" } }).json).toMatchObject({ status: "CLEANUP_WORKSPACE_IN_USE" })
+    expect(fs.existsSync(entrant.physicalWorkspace)).toBe(false)
+    expect(fs.existsSync(path.join(entrantQuarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
+
+    const recreated = fixture()
+    fs.writeFileSync(path.join(recreated.physicalWorkspace, ".williamos-post-merge-proven"), `${recreated.packet.runId}:${recreated.baseSha}\n`)
+    const recreatedQuarantine = path.join(path.dirname(recreated.physicalWorkspace), `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${recreated.packet.runId}`)
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", recreated, { env: { FAKE_RECREATE_ORIGINAL: "1" } }).json).toMatchObject({ status: "CLEANUP_ORIGINAL_RECREATED" })
+    expect(fs.existsSync(recreated.physicalWorkspace)).toBe(true)
+    expect(fs.existsSync(path.join(recreatedQuarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
+  }, 30_000)
+
+  it("rejects an owned quarantine before any other lifecycle operation mutates the parent", () => {
+    const value = fixture()
+    const parent = path.dirname(value.physicalWorkspace)
+    const quarantine = path.join(parent, `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${value.packet.runId}`)
+    fs.renameSync(value.physicalWorkspace, quarantine)
+    const lock = path.join(parent, ".remote-dev-offload.lock")
+    expect(fs.existsSync(lock)).toBe(false)
+    expect(runWorker("CREATE_WORKSPACE", value).json).toMatchObject({ status: "QUARANTINE_RECOVERY_REQUIRED" })
+    expect(fs.existsSync(lock)).toBe(false)
+    expect(fs.existsSync(path.join(quarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
+  })
 
   it("emits strict sub-second timestamps and rejects a non-increasing clock", () => {
     const source = fs.readFileSync(worker, "utf8")
