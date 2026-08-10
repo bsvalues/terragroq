@@ -29,7 +29,10 @@ canonicalization: jcs-rfc8785/1
 Node probes describe machine identity and inventory. Capability snapshots describe independent
 service readiness. Neither source grants execution authority.
 
-`assemble-registry.mjs` overlays live discovered hardware/runtime facts onto the declared role/authority seed and emits:
+`assemble-registry.mjs` is the only operational entrypoint. It pins the reviewed canonical v0.2
+seed and schema digests, always uses the real system clock, and overlays live discovered
+hardware/runtime facts onto the declared role/authority seed. `assemble-registry-core.mjs` exists
+only for isolated fixture testing and is not an operator surface. The entrypoint emits:
 
 ```text
 .artifacts/execution-fabric/registry.snapshot.json
@@ -40,11 +43,12 @@ Observed promotion also requires a canonical host-derived node ID and an exact m
 trusted hashed machine-identity pin in the seed. A node with no pin remains declared and
 unschedulable until onboarding records that pin through a reviewed evidence change.
 
-AEGIS backup/archive promotion additionally requires a valid self-digest, exact producer schema,
-fresh evidence inside the producer's declared threshold, `scheduler=OFF`, and READY backup/archive
-axes. Missing, malformed, stale, future, hash-mismatched, or scheduler-enabled evidence fails those
-capabilities closed without falsely changing node or compute health. NAS remains pending until a
-separate file-share service and authority are proven.
+AEGIS backup/archive promotion additionally requires exact capability and receipt byte hashes pinned
+by reviewed policy, a valid self-digest, exact producer schemas, the exact trusted machine identity
+and backup mounts, freshness inside the policy maximum, `scheduler=OFF`, and restore-verified source
+and manifest evidence. Missing, malformed, stale, future, hash-mismatched, mount-mismatched, or
+scheduler-enabled evidence fails those capabilities closed without falsely changing node or compute
+health. NAS remains pending until a separate file-share service and authority are proven.
 
 ## Windows
 

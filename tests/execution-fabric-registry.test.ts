@@ -11,7 +11,8 @@ type JsonObject = Record<string, unknown>
 const repositoryRoot = process.cwd()
 const schemaPath = path.join(repositoryRoot, "config/execution-fabric/registry.schema.json")
 const seedPath = path.join(repositoryRoot, "config/execution-fabric/registry.seed.json")
-const assemblerPath = path.join(repositoryRoot, "scripts/execution-fabric/assemble-registry.mjs")
+const entrypointPath = path.join(repositoryRoot, "scripts/execution-fabric/assemble-registry.mjs")
+const assemblerPath = path.join(repositoryRoot, "scripts/execution-fabric/assemble-registry-core.mjs")
 const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8")) as JsonObject
 const canonicalSeed = JSON.parse(fs.readFileSync(seedPath, "utf8")) as JsonObject
 const temporaryDirectories: string[] = []
@@ -31,6 +32,11 @@ describe("RFC 8785 canonical JSON", () => {
 
   it("rejects non-JSON numeric values", () => {
     expect(() => canonicalizeJcs({ value: Number.POSITIVE_INFINITY })).toThrow("JCS numbers must be finite")
+  })
+
+  it.each(["\ud800", "\udead"])("rejects malformed Unicode %j", (value) => {
+    expect(() => canonicalizeJcs({ value })).toThrow("JCS strings must not contain lone surrogates")
+    expect(() => canonicalizeJcs({ [value]: true })).toThrow("JCS strings must not contain lone surrogates")
   })
 })
 
@@ -876,27 +882,40 @@ describe("Execution Fabric AEGIS capability evidence", () => {
     expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "CAPABILITY_TTL_EXCEEDS_POLICY" })
   })
 
-  it("rejects the deterministic clock outside explicit test execution", () => {
+  it("rejects every clock override at the production entrypoint", () => {
     const root = temporaryDirectory()
     const outputPath = path.join(root, "snapshot.json")
     const result = spawnSync(
       process.execPath,
-      [assemblerPath, "--seed", seedPath, "--out", outputPath],
+      [entrypointPath, "--out", outputPath],
       {
         cwd: repositoryRoot,
         encoding: "utf8",
         env: {
           ...process.env,
-          NODE_ENV: "production",
-          FABRIC_ALLOW_TEST_CLOCK: "0",
+          NODE_ENV: "test",
+          FABRIC_ALLOW_TEST_CLOCK: "1",
           FABRIC_NOW_UTC: nowUtc,
         },
       },
     )
 
     expect(result.status).toBe(2)
-    expect(result.stderr).toContain("FABRIC_NOW_UTC is restricted to explicit test execution")
+    expect(result.stderr).toContain("clock overrides are not accepted by the production entrypoint")
     expect(fs.existsSync(outputPath)).toBe(false)
+  })
+
+  it("rejects caller-selected seed and schema paths at the production entrypoint", () => {
+    for (const argument of ["--seed", "--schema"]) {
+      const result = spawnSync(
+        process.execPath,
+        [entrypointPath, argument, seedPath],
+        { cwd: repositoryRoot, encoding: "utf8" },
+      )
+
+      expect(result.status).toBe(2)
+      expect(result.stderr).toContain(`unsupported argument ${argument}`)
+    }
   })
 
   it("rejects altered capability bytes against the trusted pin before parsing", () => {

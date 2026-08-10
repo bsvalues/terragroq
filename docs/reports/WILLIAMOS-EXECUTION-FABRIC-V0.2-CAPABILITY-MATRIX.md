@@ -47,11 +47,13 @@ node or compute capability fail.
 - backup/archive expiry: `2026-08-12T06:15:01Z`
 - compute projection: `READY`
 
-Raw evidence remains host-local and ignored. These digests bind the reviewed repository conclusion
-to the retained producer artifacts without publishing machine inventory or credentials.
+Raw evidence remains host-local and ignored. The reviewed policy publishes only the non-secret disk
+identifiers needed to bind the two backup mounts; it does not commit the full machine inventory or
+any credentials.
 
-The assembled snapshot is a retained capability-promotion proof, not a current placement input. Its
-older raw machine probes are intentionally stale and therefore cannot authorize or support dispatch.
+The assembled snapshot was fresh at its recorded assembly time. It is a retained
+capability-promotion proof, not an evergreen placement input; its five-minute compute evidence and
+48-hour backup/archive evidence fail closed after their recorded expiries.
 
 ## Authority boundary
 
