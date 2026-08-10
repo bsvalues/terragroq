@@ -217,31 +217,27 @@ observation of where real work ran. It is an offline comparison surface for issu
 launches work, selects a replacement target, calibrates policy, activates a scheduler, or grants
 execution authority.
 
-The receipt is the JSON result produced by `recommend-pinned-placement.mjs`. The observation binds
-the exact receipt bytes through `placement_receipt_sha256` and declares either a recorded target or
-that the workload was not run. A different target must carry an explicit divergence reason and
-explanation; mismatches never become silent fallback.
+The receipt is the JSON result produced by `recommend-pinned-placement.mjs`. Production evaluation
+accepts it only when its exact byte digest is admitted by the repository-owned reviewed registry at
+`config/execution-fabric/shadow-receipt-registry.json`. The production CLI does not accept caller
+paths for registries, policies, schemas, workload catalogs, verifiers, interpreters, or trust roots.
+
+The observation binds the exact receipt bytes, a retained delivery record, and a canonical immutable
+outcome-evidence JSON artifact. That artifact binds the Work Order, actual node, terminal result,
+authority outcome, chronology, and resource observations; latency is derived from timestamps rather
+than declared by the caller. A different target requires an explicit classified divergence reason.
 
 ```powershell
 node scripts/execution-fabric/evaluate-shadow-placement.mjs `
   --receipt .artifacts/execution-fabric/phase1-receipt.json `
-  --observation .artifacts/execution-fabric/shadow-observation.json `
-  --snapshot-root .artifacts/execution-fabric/snapshots `
-  --verifier scripts/execution-fabric/verify_snapshot.py `
-  --python py `
-  --registry config/execution-fabric/registry.seed.json `
-  --schema config/execution-fabric/registry.schema.json `
-  --policy config/execution-fabric/pinned-evidence-policy.json `
-  --workloads config/execution-fabric/placement-workloads.json
+  --observation .artifacts/execution-fabric/shadow-observation.json
 ```
 
-The evaluator runs the trusted Phase 1 recommendation function again from the pinned snapshot set,
-frozen verifier, registry, schema, policy, and workload catalog. The supplied receipt must match that
-replayed output exactly. The only subprocess permitted by this comparison is the contract-pinned
-canonical snapshot verifier; no workload process is launched. A recorded target is rejected when
-the observation time reaches or exceeds that target's evidence expiry.
+The evaluator executes no subprocess. It rejects unadmitted receipts, changed source or outcome
+bytes, pre-recommendation execution/observation chronology, authority violations, malformed resource
+facts, secrets, executable fields, duplicate bindings, and unexplained target divergence.
 
-Results are `SHADOW_MATCH`, `SHADOW_DIVERGENCE`, `SHADOW_NOT_RUN`, or `INPUT_REJECTED`. Every result
-remains `shadow_only=true`, `dispatch_allowed=false`, `execution_authorized=false`, and
-`remote_systems_modified=false`. Phase 2 observations are evidence for later review; they are not a
-claim that placement policy is calibrated or safe to dispatch.
+Results are `OBSERVED` or `INPUT_REJECTED`; test-fixture APIs emit only `TEST_OBSERVED` / `TEST_PASS`.
+Every result remains observation-only with job launch, scheduler activation, authority mutation,
+remote access, and shell execution false. Phase 2 observations are evidence for later review; they
+are not a claim that placement policy is calibrated or safe to dispatch.
