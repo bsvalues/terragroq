@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://william-os.local/schemas/execution-fabric-registry-v0.1.json",
+  "$id": "https://william-os.local/schemas/execution-fabric-registry-v0.2.json",
   "title": "WilliamOS Execution Fabric Registry",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "generated_at", "scheduler", "nodes"],
   "properties": {
-    "schema_version": {"const": "0.1"},
+    "schema_version": {"const": "0.2"},
     "generated_at": {"type": "string", "format": "date-time"},
     "scheduler": {
       "type": "object",
@@ -225,6 +225,35 @@
         "nas": {"$ref": "#/$defs/capability_health_axis"}
       }
     },
+    "required_mount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "serial", "label", "uuid", "mountpoint"],
+      "properties": {
+        "role": {"enum": ["primary", "secondary"]},
+        "serial": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "uuid": {"type": "string", "minLength": 1},
+        "mountpoint": {"type": "string", "pattern": "^/backup-(primary|secondary)$"}
+      }
+    },
+    "capability_evidence_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "max_ttl_hours", "accepted_capability_file_sha256", "accepted_backup_receipt_sha256", "required_mounts"],
+      "properties": {
+        "schema": {"const": "aegis-capability-evidence-policy/1"},
+        "max_ttl_hours": {"type": "number", "exclusiveMinimum": 0, "maximum": 48},
+        "accepted_capability_file_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "accepted_backup_receipt_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "required_mounts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/required_mount"}
+        }
+      }
+    },
     "node": {
       "type": "object",
       "additionalProperties": false,
@@ -243,6 +272,7 @@
         },
         "authority": {"$ref": "#/$defs/authority"},
         "evidence": {"$ref": "#/$defs/evidence"},
+        "capability_evidence_policy": {"$ref": "#/$defs/capability_evidence_policy"},
         "capability_health": {"$ref": "#/$defs/capability_health"},
         "cpus": {"type": "array", "items": {"$ref": "#/$defs/cpu"}},
         "dimms": {"type": "array", "items": {"$ref": "#/$defs/dimm"}},

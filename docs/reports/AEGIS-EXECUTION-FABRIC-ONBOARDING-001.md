@@ -145,6 +145,7 @@ compute, NAS, privileged, or autonomous execution authority.
 - capability observed at: `2026-08-10T06:59:09Z`
 - capability self-digest: `77fc4cbc56702ea60a56c361e974e19f617d1845d03bbfb9c3bbb4c453fadfdd`
 - retained capability file SHA-256: `7F08C56825F786A9905F35630A387007A5868328E2FF07E024674C7D0C31FC8F`
+- canonical backup receipt SHA-256: `FB766CA0F3428F20CCDC980CA0CA140062DCD5DBCE112AD25AC14B6286A5D5B9`
 - retained evidence-contract SHA-256: `966F28C401461E28867375D07CB3BFA434F39A76202BFED77B1F906823263F55`
 - scheduler field: `OFF`
 - current trust caveat: the proven backup trust paths still land as broad `bs`; this is not accepted

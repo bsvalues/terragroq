@@ -7,22 +7,26 @@ Status: `CAPABILITY_EVIDENCE_READY / SCHEDULER_OFF / EXECUTION_AUTHORITY_NOT_GRA
 ## Result
 
 Execution Fabric capability health is now distinct from node health and from execution authority.
-The AEGIS producer emits one self-digest-bound `aegis-capability/1` snapshot. Registry assembly may
-promote `backup-target` and `archive-storage` only when that exact snapshot is well formed, current,
-reports `RESTORE_VERIFIED` evidence through its producer contract, and retains `scheduler=OFF`.
+The AEGIS producer emits one self-digest-bound `aegis-capability/1` snapshot and one canonical
+`aegis-backup-state/1` receipt. Registry assembly may promote `backup-target` and
+`archive-storage` only when the trusted v0.2 policy pins both exact files, the fresh machine probe
+matches AEGIS and both required mounts, the receipt proves independent restore-verified copies, and
+the producer retains `scheduler=OFF`.
 
 ## AEGIS capability truth
 
 | Axis | State | Evidence |
 | --- | --- | --- |
 | node | `WARN` | Phantom zero-byte bay; no capacity claim |
-| compute | `DEGRADED / LIVE_PROBE_STALE` | Producer reports READY, but the independent raw node probe is outside the five-minute compute window |
+| compute | `READY` in the reviewed capture | Fresh independently captured AEGIS machine probe and active Docker runtime |
 | backup-target | `READY` while fresh | Restore-verified generation `20260810T061501Z`, 48-hour threshold |
 | archive-storage | `READY` while fresh | Same restore-verified evidence contract as backup v1 |
 | NAS | `PENDING` | No file-share service or NAS authority |
 
-Missing, malformed, hash-mismatched, future-dated, stale, or scheduler-enabled capability evidence
-fails backup and archive closed. Backup failure does not make the node or compute capability fail.
+Missing, malformed, hash-mismatched, future-dated, stale, scheduler-enabled, self-extended,
+machine-identity-mismatched, or mount-incomplete evidence fails backup and archive closed. Receipt
+hash/restore chronology/source-leg/manifest failures do the same. Backup failure does not make the
+node or compute capability fail.
 
 ## Evidence binding
 
@@ -32,11 +36,16 @@ fails backup and archive closed. Backup failure does not make the node or comput
 - observed at: `2026-08-10T06:59:09Z`
 - self-digest: `77fc4cbc56702ea60a56c361e974e19f617d1845d03bbfb9c3bbb4c453fadfdd`
 - retained capability file SHA-256: `7F08C56825F786A9905F35630A387007A5868328E2FF07E024674C7D0C31FC8F`
+- canonical backup receipt SHA-256: `FB766CA0F3428F20CCDC980CA0CA140062DCD5DBCE112AD25AC14B6286A5D5B9`
 - retained evidence-contract SHA-256: `966F28C401461E28867375D07CB3BFA434F39A76202BFED77B1F906823263F55`
-- reviewed assembly time: `2026-08-10T06:59:09Z`
-- reviewed assembled snapshot SHA-256: `1ED2A12B5A407C13248F66F514469E3F4B06DD0C8DE77C22A22C90AD646AF660`
+- trusted policy maximum TTL: `48 hours`
+- required primary mount: `W4Y0C392 / BACKUP_PRIMARY / 0564b327-74f7-4048-9ec1-8738d09dca79 / /backup-primary`
+- required secondary mount: `6VPAE286 / BACKUP_SECONDARY / ab119332-259b-4714-a274-8add6dbb9351 / /backup-secondary`
+- fresh raw node probe observed at: `2026-08-10T11:04:02.971944Z`
+- reviewed assembly time: `2026-08-10T11:04:02.971Z`
+- reviewed assembled snapshot SHA-256: `F2872FE894B66942A48D91C230F1CF4D5A3EA9884FEB0E1E0137652024F35D4B`
 - backup/archive expiry: `2026-08-12T06:15:01Z`
-- compute projection: `DEGRADED / LIVE_PROBE_STALE`
+- compute projection: `READY`
 
 Raw evidence remains host-local and ignored. These digests bind the reviewed repository conclusion
 to the retained producer artifacts without publishing machine inventory or credentials.

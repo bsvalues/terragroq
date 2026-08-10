@@ -191,15 +191,96 @@ function percentage(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
 }
 
+function sha256(bytes) {
+  return crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+function readPinnedBytes(filePath, expectedSha256, missingReason, mismatchReason) {
+  if (!fs.existsSync(filePath)) invalidCapability(missingReason, `${path.basename(filePath)} is missing`);
+  const bytes = fs.readFileSync(filePath);
+  if (sha256(bytes) !== expectedSha256) {
+    invalidCapability(mismatchReason, `${path.basename(filePath)} exact-byte SHA-256 does not match trusted policy`);
+  }
+  return bytes;
+}
+
+function validateCapabilityPolicy(policy) {
+  const shapeErrors = [
+    ...exactKeys(policy, ['schema', 'max_ttl_hours', 'accepted_capability_file_sha256', 'accepted_backup_receipt_sha256', 'required_mounts'], '$.capability_evidence_policy')
+  ];
+  if (shapeErrors.length) invalidCapability('CAPABILITY_POLICY_INVALID', shapeErrors.join('; '));
+  if (policy.schema !== 'aegis-capability-evidence-policy/1') invalidCapability('CAPABILITY_POLICY_INVALID', 'capability policy schema mismatch');
+  if (!positiveNumber(policy.max_ttl_hours) || policy.max_ttl_hours > 48) invalidCapability('CAPABILITY_POLICY_INVALID', 'max_ttl_hours must be in (0,48]');
+  for (const field of ['accepted_capability_file_sha256', 'accepted_backup_receipt_sha256']) {
+    if (!/^[a-f0-9]{64}$/.test(policy[field])) invalidCapability('CAPABILITY_POLICY_INVALID', `${field} must be lowercase SHA-256`);
+  }
+  if (!Array.isArray(policy.required_mounts) || policy.required_mounts.length !== 2) invalidCapability('CAPABILITY_POLICY_INVALID', 'exactly two required mounts are required');
+  const roles = new Set();
+  for (const mount of policy.required_mounts) {
+    const errors = exactKeys(mount, ['role', 'serial', 'label', 'uuid', 'mountpoint'], '$.capability_evidence_policy.required_mounts[]');
+    if (errors.length || !['primary', 'secondary'].includes(mount?.role) || roles.has(mount.role)) invalidCapability('CAPABILITY_POLICY_INVALID', errors.join('; ') || 'required mount roles must be unique primary and secondary');
+    roles.add(mount.role);
+    for (const field of ['serial', 'label', 'uuid', 'mountpoint']) {
+      if (typeof mount[field] !== 'string' || !mount[field].trim()) invalidCapability('CAPABILITY_POLICY_INVALID', `required mount ${field} must be nonempty`);
+    }
+  }
+  return policy;
+}
+
+function readBackupReceipt(policy) {
+  const receiptPath = path.join(evidenceDir, 'aegis-backup-state.json');
+  const bytes = readPinnedBytes(receiptPath, policy.accepted_backup_receipt_sha256, 'BACKUP_RECEIPT_MISSING', 'BACKUP_RECEIPT_HASH_MISMATCH');
+  let receipt;
+  try {
+    receipt = JSON.parse(bytes.toString('utf8'));
+  } catch (error) {
+    invalidCapability('BACKUP_RECEIPT_MALFORMED', error.message);
+  }
+  const shapeErrors = [
+    ...exactKeys(receipt, ['schema', 'observed_at', 'backup_generation', 'last_backup', 'last_hash_verify', 'last_restore_verify', 'primary_result', 'secondary_result', 'protected_sources', 'primary_crown_jewel_manifest_sha256', 'secondary_crown_jewel_manifest_sha256', 'primary_free', 'secondary_free', 'receipt'], '$.receipt'),
+    ...(Array.isArray(receipt?.protected_sources) ? receipt.protected_sources.flatMap((source, index) => exactKeys(source, ['source', 'status'], `$.receipt.protected_sources[${index}]`)) : ['$.receipt.protected_sources: expected array'])
+  ];
+  if (shapeErrors.length) invalidCapability('BACKUP_RECEIPT_INVALID', shapeErrors.join('; '));
+  if (receipt.schema !== 'aegis-backup-state/1') invalidCapability('BACKUP_RECEIPT_INVALID', 'receipt schema mismatch');
+  const observedMs = rfc3339Ms(receipt.observed_at);
+  const backupMs = compactUtcMs(receipt.last_backup);
+  const hashMs = compactUtcMs(receipt.last_hash_verify);
+  const restoreMs = compactUtcMs(receipt.last_restore_verify);
+  if ([observedMs, backupMs, hashMs, restoreMs].some(value => value == null) || backupMs > hashMs || hashMs > restoreMs || restoreMs > observedMs) {
+    invalidCapability('BACKUP_RECEIPT_INVALID', 'receipt backup/hash/restore chronology is invalid');
+  }
+  if (receipt.backup_generation !== receipt.last_backup || receipt.receipt !== `/backup-primary/receipts/${receipt.backup_generation}.json`) invalidCapability('BACKUP_RECEIPT_INVALID', 'receipt generation fields disagree');
+  if (!receipt.protected_sources.length || receipt.protected_sources.some(source => typeof source.source !== 'string' || !source.source.trim() || !['RESTORE_VERIFIED', 'SKIPPED'].includes(source.status)) || !receipt.protected_sources.some(source => source.status === 'RESTORE_VERIFIED')) {
+    invalidCapability('BACKUP_RECEIPT_INVALID', 'protected sources must be named and every non-SKIPPED source must be RESTORE_VERIFIED');
+  }
+  const restoredCount = receipt.protected_sources.filter(source => source.status === 'RESTORE_VERIFIED').length;
+  if (receipt.primary_result !== Array(restoredCount).fill('RESTORE_VERIFIED').join('/') || receipt.secondary_result !== 'OK') invalidCapability('BACKUP_RECEIPT_INVALID', 'receipt results do not match restored sources');
+  if (!/^[a-f0-9]{64}$/.test(receipt.primary_crown_jewel_manifest_sha256) || receipt.primary_crown_jewel_manifest_sha256 !== receipt.secondary_crown_jewel_manifest_sha256) invalidCapability('BACKUP_RECEIPT_INVALID', 'primary and secondary manifests must be equal lowercase SHA-256 values');
+  for (const field of ['primary_free', 'secondary_free']) {
+    if (typeof receipt[field] !== 'string' || !receipt[field].trim()) invalidCapability('BACKUP_RECEIPT_INVALID', `${field} must be nonempty`);
+  }
+  return { receipt, backupMs, restoreMs };
+}
+
+const aegisDeclared = seed.nodes?.find(node => node.id === 'aegis');
+let aegisPolicy;
+try {
+  aegisPolicy = validateCapabilityPolicy(aegisDeclared?.capability_evidence_policy);
+} catch (error) {
+  aegisPolicy = { invalid: true, reason: error.reason || 'CAPABILITY_POLICY_INVALID', detail: error.message };
+}
+
 function readCapabilitySnapshot(nodeId, nowMs) {
   const capabilityPath = path.join(evidenceDir, `${nodeId}-capability.json`);
   if (!fs.existsSync(capabilityPath)) {
     return { kind: 'missing', reason: 'CAPABILITY_EVIDENCE_MISSING', warning: 'CAPABILITY_EVIDENCE_MISSING' };
   }
   try {
+    if (aegisPolicy.invalid) invalidCapability(aegisPolicy.reason, aegisPolicy.detail);
     let snapshot;
+    const bytes = readPinnedBytes(capabilityPath, aegisPolicy.accepted_capability_file_sha256, 'CAPABILITY_EVIDENCE_MISSING', 'CAPABILITY_FILE_HASH_MISMATCH');
     try {
-      snapshot = JSON.parse(fs.readFileSync(capabilityPath, 'utf8'));
+      snapshot = JSON.parse(bytes.toString('utf8'));
     } catch (error) {
       invalidCapability('CAPABILITY_EVIDENCE_MALFORMED', error.message);
     }
@@ -241,6 +322,7 @@ function readCapabilitySnapshot(nodeId, nowMs) {
     if (typeof snapshot.backup.threshold_hours !== 'number' || !Number.isFinite(snapshot.backup.threshold_hours) || snapshot.backup.threshold_hours <= 0) {
       invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'backup.threshold_hours must be positive');
     }
+    if (snapshot.backup.threshold_hours > aegisPolicy.max_ttl_hours) invalidCapability('CAPABILITY_TTL_EXCEEDS_POLICY', 'backup.threshold_hours exceeds trusted max_ttl_hours');
     if (snapshot.scheduler !== 'OFF') invalidCapability('CAPABILITY_SCHEDULER_NOT_OFF', 'scheduler must be OFF');
     const observedMs = rfc3339Ms(snapshot.observed_at);
     if (observedMs == null) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'observed_at must be RFC3339');
@@ -267,6 +349,16 @@ function readCapabilitySnapshot(nodeId, nowMs) {
     delete hashInput.snapshot_sha256;
     const calculatedHash = crypto.createHash('sha256').update(canonicalJson(hashInput), 'utf8').digest('hex');
     if (calculatedHash !== snapshot.snapshot_sha256) invalidCapability('CAPABILITY_HASH_MISMATCH', 'snapshot_sha256 does not match canonical content');
+    let storageProof;
+    try {
+      const receipt = readBackupReceipt(aegisPolicy);
+      if (snapshot.backup.last_backup !== receipt.receipt.last_backup || snapshot.backup.last_restore_verify !== receipt.receipt.last_restore_verify || observedMs < rfc3339Ms(receipt.receipt.observed_at)) {
+        invalidCapability('BACKUP_RECEIPT_MISMATCH', 'capability snapshot and backup receipt fields disagree');
+      }
+      storageProof = { kind: 'valid', ...receipt };
+    } catch (error) {
+      storageProof = { kind: 'invalid', reason: error.reason || 'BACKUP_RECEIPT_INVALID', detail: error.message };
+    }
     return {
       kind: 'valid',
       snapshot,
@@ -274,6 +366,7 @@ function readCapabilitySnapshot(nodeId, nowMs) {
       backupMs,
       restoreMs,
       thresholdMs,
+      storageProof,
       evidenceRef: path.basename(capabilityPath)
     };
   } catch (error) {
@@ -453,8 +546,15 @@ function projectAegisCapabilityHealth(node) {
       warnings: [...new Set([...(node.warnings || []), aegisCapability.warning])]
     };
   }
-  const { snapshot, observedMs, backupMs, restoreMs, thresholdMs, evidenceRef } = aegisCapability;
+  const { snapshot, observedMs, backupMs, restoreMs, thresholdMs, storageProof, evidenceRef } = aegisCapability;
   const metadata = [snapshot.observed_at, snapshot.snapshot_sha256, evidenceRef];
+  const probeReason = nodeProbeGateReason(node);
+  const requiredMountsPresent = !probeReason && aegisPolicy.required_mounts.every(required =>
+    (node.disks || []).some(disk => disk.serial === required.serial && (disk.filesystems || []).some(filesystem =>
+      filesystem.label === required.label && filesystem.uuid === required.uuid && filesystem.mountpoint === required.mountpoint
+    ))
+  );
+  const storageGateReason = probeReason || (!requiredMountsPresent ? 'AEGIS_REQUIRED_MOUNTS_MISMATCH' : null) || (storageProof.kind !== 'valid' ? storageProof.reason : null);
   const projectStorageAxis = (state) => {
     const observedExpiresMs = observedMs + thresholdMs;
     const expiryCandidates = [observedExpiresMs];
@@ -463,11 +563,11 @@ function projectAegisCapabilityHealth(node) {
     const expiresMs = Math.min(...expiryCandidates);
     const expiresAt = new Date(expiresMs).toISOString();
     if (state === 'FAIL_CLOSED') return capabilityAxis(state, snapshot.backup.reason, metadata[0], expiresAt, metadata[1], metadata[2]);
+    if (storageGateReason) return capabilityAxis('FAIL_CLOSED', storageGateReason, metadata[0], expiresAt, metadata[1], metadata[2]);
     const stale = now >= observedExpiresMs || now - backupMs > thresholdMs || now - restoreMs > thresholdMs;
     if (stale) return capabilityAxis('FAIL_CLOSED', 'BACKUP_STALE', metadata[0], expiresAt, metadata[1], metadata[2]);
     return capabilityAxis(state, snapshot.backup.reason, metadata[0], expiresAt, metadata[1], metadata[2]);
   };
-  const probeReason = nodeProbeGateReason(node);
   const computeState = probeReason ? 'DEGRADED' : snapshot.compute_capability_health;
   const computeReason = probeReason || (computeState === 'READY' ? 'COMPUTE_CAPABILITY_READY' : 'COMPUTE_CAPABILITY_DEGRADED');
   return {
@@ -490,7 +590,7 @@ const globalDiskSerials = new Map();
 const seedSchemaErrors = validateSchema(seed, schema);
 if (seedSchemaErrors.length) errors.push(...seedSchemaErrors.map(error => `seed schema: ${error}`));
 if (seed.scheduler?.state !== 'disabled' || seed.scheduler?.authority !== 'not-granted') {
-  errors.push('scheduler must remain disabled and unauthorized in v0.1');
+  errors.push('scheduler must remain disabled and unauthorized in v0.2');
 }
 const seedNodeIds = seed.nodes.map(node => node.id);
 if (
@@ -536,8 +636,8 @@ for (const n of nodes) {
     const expectedDeny = [...expectedAuthority.deny].sort();
     if (actualAllow.length !== rawAllow.length) errors.push(`${n.id}: duplicate authority allow entry`);
     if (actualDeny.length !== rawDeny.length) errors.push(`${n.id}: duplicate authority deny entry`);
-    if (JSON.stringify(actualAllow) !== JSON.stringify(expectedAllow)) errors.push(`${n.id}: authority allow set differs from canonical v0.1 policy`);
-    if (JSON.stringify(actualDeny) !== JSON.stringify(expectedDeny)) errors.push(`${n.id}: authority deny set differs from canonical v0.1 policy`);
+    if (JSON.stringify(actualAllow) !== JSON.stringify(expectedAllow)) errors.push(`${n.id}: authority allow set differs from canonical v0.2 policy`);
+    if (JSON.stringify(actualDeny) !== JSON.stringify(expectedDeny)) errors.push(`${n.id}: authority deny set differs from canonical v0.2 policy`);
     const conflicts = actualAllow.filter(value => actualDeny.includes(value));
     if (conflicts.length) errors.push(`${n.id}: authority allow/deny conflict ${conflicts.join(',')}`);
   }
@@ -552,7 +652,7 @@ for (const id of ['omen','hermes-node','aegis']) {
 }
 
 const registry = {
-  schema_version: '0.1',
+  schema_version: '0.2',
   generated_at: new Date(now).toISOString(),
   scheduler: seed.scheduler,
   nodes

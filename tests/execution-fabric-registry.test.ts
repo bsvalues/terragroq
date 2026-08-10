@@ -228,7 +228,16 @@ function capabilitySnapshot(overrides: JsonObject = {}): JsonObject {
 
 function healthyAegisProbe(seed: JsonObject, observedAt = "2026-08-10T12:00:00Z"): JsonObject {
   const probe = probeFor(nodeById(seed, "aegis"), observedAt)
-  ;(probe.node as JsonObject).disks = [disk("backup-primary", "W4Y0C392")]
+  ;(probe.node as JsonObject).disks = [
+    {
+      ...disk("backup-primary", "W4Y0C392"),
+      filesystems: [{ name: "sdc1", fstype: "ext4", label: "BACKUP_PRIMARY", uuid: "0564b327-74f7-4048-9ec1-8738d09dca79", mountpoint: "/backup-primary", size_bytes: 1000 }],
+    },
+    {
+      ...disk("backup-secondary", "6VPAE286"),
+      filesystems: [{ name: "sda1", fstype: "ext4", label: "BACKUP_SECONDARY", uuid: "ab119332-259b-4714-a274-8add6dbb9351", mountpoint: "/backup-secondary", size_bytes: 1000 }],
+    },
+  ]
   ;(probe.node as JsonObject).runtimes = [{
     id: "backup-health",
     kind: "backup",
@@ -240,26 +249,57 @@ function healthyAegisProbe(seed: JsonObject, observedAt = "2026-08-10T12:00:00Z"
   return probe
 }
 
+function backupReceipt(overrides: JsonObject = {}): JsonObject {
+  return {
+    schema: "aegis-backup-state/1",
+    observed_at: "2026-08-10T12:00:00Z",
+    backup_generation: "20260810T120000Z",
+    last_backup: "20260810T120000Z",
+    last_hash_verify: "20260810T120000Z",
+    last_restore_verify: "20260810T120000Z",
+    primary_result: "RESTORE_VERIFIED/RESTORE_VERIFIED/RESTORE_VERIFIED",
+    secondary_result: "OK",
+    protected_sources: [
+      { source: "atlas:tf-postgres", status: "RESTORE_VERIFIED" },
+      { source: "atlas:/forge/terrafusion", status: "RESTORE_VERIFIED" },
+      { source: "hermes:HermesLab+ollama-meta", status: "RESTORE_VERIFIED" },
+      { source: "atlas:tf-mongo", status: "SKIPPED" },
+    ],
+    primary_crown_jewel_manifest_sha256: "a".repeat(64),
+    secondary_crown_jewel_manifest_sha256: "a".repeat(64),
+    primary_free: "867G",
+    secondary_free: "870G",
+    receipt: "/backup-primary/receipts/20260810T120000Z.json",
+    ...overrides,
+  }
+}
+
 function assemble(
   seed: JsonObject,
   probes: Record<string, JsonObject> = {},
-  options: { capabilityEvidence?: JsonObject | string, nowUtc?: string } = {},
+  options: { capabilityEvidence?: JsonObject | string, backupReceipt?: JsonObject | string | null, nowUtc?: string, pinEvidence?: boolean } = {},
 ) {
   const root = temporaryDirectory()
   const evidenceDirectory = path.join(root, "evidence")
   const testSeedPath = path.join(root, "seed.json")
   const outputPath = path.join(root, "snapshot.json")
   fs.mkdirSync(evidenceDirectory, { recursive: true })
+  const capabilityContent = options.capabilityEvidence === undefined
+    ? undefined
+    : typeof options.capabilityEvidence === "string" ? options.capabilityEvidence : `${JSON.stringify(options.capabilityEvidence, null, 2)}\n`
+  const receiptEvidence = options.backupReceipt === undefined ? backupReceipt() : options.backupReceipt
+  const receiptContent = receiptEvidence === null ? null : typeof receiptEvidence === "string" ? receiptEvidence : `${JSON.stringify(receiptEvidence, null, 2)}\n`
+  if (options.pinEvidence !== false) {
+    const policy = nodeById(seed, "aegis").capability_evidence_policy as JsonObject
+    if (capabilityContent !== undefined) policy.accepted_capability_file_sha256 = crypto.createHash("sha256").update(capabilityContent).digest("hex")
+    if (receiptContent !== null) policy.accepted_backup_receipt_sha256 = crypto.createHash("sha256").update(receiptContent).digest("hex")
+  }
   fs.writeFileSync(testSeedPath, `${JSON.stringify(seed, null, 2)}\n`)
   for (const [nodeId, probe] of Object.entries(probes)) {
     fs.writeFileSync(path.join(evidenceDirectory, `${nodeId}.json`), `${JSON.stringify(probe, null, 2)}\n`)
   }
-  if (options.capabilityEvidence !== undefined) {
-    const content = typeof options.capabilityEvidence === "string"
-      ? options.capabilityEvidence
-      : `${JSON.stringify(options.capabilityEvidence, null, 2)}\n`
-    fs.writeFileSync(path.join(evidenceDirectory, "aegis-capability.json"), content)
-  }
+  if (capabilityContent !== undefined) fs.writeFileSync(path.join(evidenceDirectory, "aegis-capability.json"), capabilityContent)
+  if (receiptContent !== null) fs.writeFileSync(path.join(evidenceDirectory, "aegis-backup-state.json"), receiptContent)
 
   const result = spawnSync(
     process.execPath,
@@ -534,12 +574,12 @@ describe("Execution Fabric fail-closed assembly", () => {
 describe("Execution Fabric AEGIS capability evidence", () => {
   const nowUtc = "2026-08-10T12:00:00Z"
 
-  function assembleAegis(capabilityEvidence?: JsonObject | string, probeObservedAt = nowUtc) {
+  function assembleAegis(capabilityEvidence?: JsonObject | string, probeObservedAt = nowUtc, receipt: JsonObject | string = backupReceipt()) {
     const seed = clone(canonicalSeed)
     return assemble(
       seed,
       { aegis: healthyAegisProbe(seed, probeObservedAt) },
-      { capabilityEvidence, nowUtc },
+      { capabilityEvidence, backupReceipt: receipt, nowUtc },
     )
   }
 
@@ -604,9 +644,10 @@ describe("Execution Fabric AEGIS capability evidence", () => {
   })
 
   it("fails backup and archive closed at the freshness threshold", () => {
+    const seed = clone(canonicalSeed)
     const result = assemble(
-      clone(canonicalSeed),
-      {},
+      seed,
+      { aegis: healthyAegisProbe(seed, "2026-08-11T12:00:00Z") },
       { capabilityEvidence: capabilitySnapshot(), nowUtc: "2026-08-11T12:00:00Z" },
     )
     const health = aegisHealth(result)
@@ -706,7 +747,20 @@ describe("Execution Fabric AEGIS capability evidence", () => {
         threshold_hours: 1,
       },
     })
-    const health = aegisHealth(assembleAegis(snapshot))
+    const seed = clone(canonicalSeed)
+    const result = assemble(seed, { aegis: healthyAegisProbe(seed) }, {
+      capabilityEvidence: snapshot,
+      backupReceipt: backupReceipt({
+        observed_at: "2026-08-10T11:00:00Z",
+        backup_generation: "20260810T105900Z",
+        last_backup: "20260810T105900Z",
+        last_hash_verify: "20260810T110000Z",
+        last_restore_verify: "20260810T110000Z",
+        receipt: "/backup-primary/receipts/20260810T105900Z.json",
+      }),
+      nowUtc,
+    })
+    const health = aegisHealth(result)
 
     expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "BACKUP_STALE" })
     expect(health.archive_storage).toMatchObject({ state: "FAIL_CLOSED", reason: "BACKUP_STALE" })
@@ -761,12 +815,12 @@ describe("Execution Fabric AEGIS capability evidence", () => {
     expect(health.archive_storage).toMatchObject({ state: "FAIL_CLOSED", reason: "RESTORE_VERIFICATION_FAILED" })
   })
 
-  it("degrades compute for a stale node probe without degrading fresh backup evidence", () => {
+  it("degrades compute and independently fails storage closed for a stale node probe", () => {
     const health = aegisHealth(assembleAegis(capabilitySnapshot(), "2026-08-10T11:50:00Z"))
 
     expect(health.compute).toMatchObject({ state: "DEGRADED", reason: "LIVE_PROBE_STALE" })
-    expect(health.backup_target).toMatchObject({ state: "READY" })
-    expect(health.archive_storage).toMatchObject({ state: "READY" })
+    expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "LIVE_PROBE_STALE" })
+    expect(health.archive_storage).toMatchObject({ state: "FAIL_CLOSED", reason: "LIVE_PROBE_STALE" })
   })
 
   it("does not mutate scheduler or authority while projecting capability health", () => {
@@ -792,6 +846,123 @@ describe("Execution Fabric AEGIS capability evidence", () => {
 
     expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "CAPABILITY_EVIDENCE_INVALID" })
     expect(health.nas).toMatchObject({ state: "PENDING", reason: "NAS_SERVICE_UNPROVEN" })
+  })
+
+  it("bounds producer TTL by the trusted policy maximum", () => {
+    const seed = clone(canonicalSeed)
+    ;(nodeById(seed, "aegis").capability_evidence_policy as JsonObject).max_ttl_hours = 12
+    const health = aegisHealth(assemble(seed, { aegis: healthyAegisProbe(seed) }, {
+      capabilityEvidence: capabilitySnapshot(),
+      nowUtc,
+    }))
+
+    expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "CAPABILITY_TTL_EXCEEDS_POLICY" })
+  })
+
+  it("rejects altered capability bytes against the trusted pin before parsing", () => {
+    const seed = clone(canonicalSeed)
+    const capabilityContent = `${JSON.stringify(capabilitySnapshot(), null, 2)}\n`
+    const receiptContent = `${JSON.stringify(backupReceipt(), null, 2)}\n`
+    const policy = nodeById(seed, "aegis").capability_evidence_policy as JsonObject
+    policy.accepted_capability_file_sha256 = crypto.createHash("sha256").update(capabilityContent).digest("hex")
+    policy.accepted_backup_receipt_sha256 = crypto.createHash("sha256").update(receiptContent).digest("hex")
+    const result = assemble(seed, { aegis: healthyAegisProbe(seed) }, {
+      capabilityEvidence: `${capabilityContent} `,
+      backupReceipt: receiptContent,
+      nowUtc,
+      pinEvidence: false,
+    })
+
+    expect(aegisHealth(result).backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "CAPABILITY_FILE_HASH_MISMATCH" })
+  })
+
+  it("rejects duplicate receipt JSON against the trusted exact-byte pin before parsing", () => {
+    const seed = clone(canonicalSeed)
+    const capabilityContent = `${JSON.stringify(capabilitySnapshot(), null, 2)}\n`
+    const receiptContent = `${JSON.stringify(backupReceipt(), null, 2)}\n`
+    const duplicateJson = receiptContent.replace('"schema": "aegis-backup-state/1",', '"schema": "aegis-backup-state/1",\n  "schema": "aegis-backup-state/1",')
+    const policy = nodeById(seed, "aegis").capability_evidence_policy as JsonObject
+    policy.accepted_capability_file_sha256 = crypto.createHash("sha256").update(capabilityContent).digest("hex")
+    policy.accepted_backup_receipt_sha256 = crypto.createHash("sha256").update(receiptContent).digest("hex")
+    const result = assemble(seed, { aegis: healthyAegisProbe(seed) }, {
+      capabilityEvidence: capabilityContent,
+      backupReceipt: duplicateJson,
+      nowUtc,
+      pinEvidence: false,
+    })
+    const health = aegisHealth(result)
+
+    expect(health.compute).toMatchObject({ state: "READY" })
+    expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "BACKUP_RECEIPT_HASH_MISMATCH" })
+  })
+
+  it("fails storage closed when the pinned backup receipt is missing", () => {
+    const seed = clone(canonicalSeed)
+    const health = aegisHealth(assemble(seed, { aegis: healthyAegisProbe(seed) }, {
+      capabilityEvidence: capabilitySnapshot(),
+      backupReceipt: null,
+      nowUtc,
+    }))
+
+    expect(health.compute).toMatchObject({ state: "READY" })
+    expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "BACKUP_RECEIPT_MISSING" })
+  })
+
+  it.each([
+    ["additional receipt key", { untrusted: true }],
+    ["hash before backup", { last_hash_verify: "20260810T115959Z" }],
+    ["unverified source", { protected_sources: [{ source: "atlas:tf-postgres", status: "OK" }] }],
+    ["manifest disagreement", { secondary_crown_jewel_manifest_sha256: "b".repeat(64) }],
+    ["incorrect primary result", { primary_result: "OK" }],
+    ["incorrect secondary result", { secondary_result: "RESTORE_VERIFIED" }],
+  ])("fails storage closed for %s", (_case, overrides) => {
+    const health = aegisHealth(assembleAegis(capabilitySnapshot(), nowUtc, backupReceipt(overrides)))
+
+    expect(health.compute).toMatchObject({ state: "READY" })
+    expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "BACKUP_RECEIPT_INVALID" })
+    expect(health.archive_storage).toMatchObject({ state: "FAIL_CLOSED", reason: "BACKUP_RECEIPT_INVALID" })
+  })
+
+  it("requires exact capability and receipt cross-field agreement", () => {
+    const health = aegisHealth(assembleAegis(capabilitySnapshot(), nowUtc, backupReceipt({
+      backup_generation: "20260810T115900Z",
+      last_backup: "20260810T115900Z",
+      last_hash_verify: "20260810T115900Z",
+      last_restore_verify: "20260810T115900Z",
+      receipt: "/backup-primary/receipts/20260810T115900Z.json",
+    })))
+
+    expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "BACKUP_RECEIPT_MISMATCH" })
+  })
+
+  it("requires the raw probe to bind the exact trusted machine identity", () => {
+    const seed = clone(canonicalSeed)
+    const probe = healthyAegisProbe(seed)
+    ;((probe.node as JsonObject).identity as JsonObject).machine_id_sha256 = "f".repeat(64)
+    const health = aegisHealth(assemble(seed, { aegis: probe }, { capabilityEvidence: capabilitySnapshot(), nowUtc }))
+
+    expect(health.compute).toMatchObject({ state: "DEGRADED", reason: "LIVE_PROBE_INVALID" })
+    expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "LIVE_PROBE_INVALID" })
+  })
+
+  it("requires exact primary and secondary serial, label, UUID, and mountpoint", () => {
+    const seed = clone(canonicalSeed)
+    const probe = healthyAegisProbe(seed)
+    ;((((probe.node as JsonObject).disks as JsonObject[])[1].filesystems as JsonObject[])[0]).uuid = "wrong-uuid"
+    const health = aegisHealth(assemble(seed, { aegis: probe }, { capabilityEvidence: capabilitySnapshot(), nowUtc }))
+
+    expect(health.compute).toMatchObject({ state: "READY" })
+    expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "AEGIS_REQUIRED_MOUNTS_MISMATCH" })
+  })
+
+  it("fails storage closed for an incomplete raw probe while preserving compute classification", () => {
+    const seed = clone(canonicalSeed)
+    const probe = healthyAegisProbe(seed)
+    ;(probe.node as JsonObject).disks = []
+    const health = aegisHealth(assemble(seed, { aegis: probe }, { capabilityEvidence: capabilitySnapshot(), nowUtc }))
+
+    expect(health.compute).toMatchObject({ state: "DEGRADED", reason: "LIVE_PROBE_INCOMPLETE" })
+    expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "LIVE_PROBE_INCOMPLETE" })
   })
 })
 
@@ -1002,7 +1173,7 @@ describe("Execution Fabric semantic invariants", () => {
     const result = assemble(seed)
 
     expect(result.status).toBe(2)
-    expect(result.stderr).toContain(`${nodeId}: authority ${list} set differs from canonical v0.1 policy`)
+    expect(result.stderr).toContain(`${nodeId}: authority ${list} set differs from canonical v0.2 policy`)
     expect(result.registry).toBeNull()
   })
 
@@ -1076,13 +1247,13 @@ describe("Execution Fabric probe and scheduler boundaries", () => {
     expect(linux).toContain("'hostname':canonical_hostname")
   })
 
-  it("keeps scheduler activation absent in v0.1", () => {
+  it("keeps scheduler activation absent in v0.2", () => {
     const readme = fs.readFileSync(path.join(repositoryRoot, "scripts/execution-fabric/README.md"), "utf8")
     const assembler = fs.readFileSync(assemblerPath, "utf8")
     const schemaProperties = schema.properties as JsonObject
     const schedulerRule = schemaProperties.scheduler as JsonObject
 
-    expect(readme).toContain("scheduling remains disabled in v0.1")
+    expect(readme).toContain("scheduling remains disabled in v0.2")
     expect((schema.required as string[])).toContain("scheduler")
     expect(schedulerRule).toBeDefined()
     expect(JSON.stringify(schedulerRule)).toContain('"disabled"')

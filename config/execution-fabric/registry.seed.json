@@ -1,10 +1,10 @@
 {
-  "schema_version": "0.1",
+  "schema_version": "0.2",
   "generated_at": "2026-08-09T21:57:00Z",
   "scheduler": {
     "state": "disabled",
     "authority": "not-granted",
-    "notes": "V0.1 is evidence and placement-readiness only; no autonomous scheduling authority exists"
+    "notes": "V0.2 is evidence and placement-readiness only; no autonomous scheduling authority exists"
   },
   "nodes": [
     {
@@ -119,6 +119,16 @@
         "deny": ["authoritative-durable-state", "backup-archive-execution-authority-not-granted", "nas-until-service-and-authority-proven", "county-production-write", "pacs-production-write", "destructive-disk-action"]
       },
       "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed plus AEGIS onboarding evidence; trusted live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "AEGIS is the owner-approved canonical label; machine evidence and capability evidence remain independently freshness-gated"},
+      "capability_evidence_policy": {
+        "schema": "aegis-capability-evidence-policy/1",
+        "max_ttl_hours": 48,
+        "accepted_capability_file_sha256": "7f08c56825f786a9905f35630a387007a5868328e2ff07e024674c7d0c31fc8f",
+        "accepted_backup_receipt_sha256": "fb766ca0f3428f20ccdc980ca0ca140062dcd5dbce112ad25ac14b6286a5d5b9",
+        "required_mounts": [
+          {"role": "primary", "serial": "W4Y0C392", "label": "BACKUP_PRIMARY", "uuid": "0564b327-74f7-4048-9ec1-8738d09dca79", "mountpoint": "/backup-primary"},
+          {"role": "secondary", "serial": "6VPAE286", "label": "BACKUP_SECONDARY", "uuid": "ab119332-259b-4714-a274-8add6dbb9351", "mountpoint": "/backup-secondary"}
+        ]
+      },
       "capability_health": {
         "compute": {"state": "UNKNOWN", "reason": "LIVE_CAPABILITY_EVIDENCE_REQUIRED", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
         "backup_target": {"state": "PENDING", "reason": "LIVE_CAPABILITY_EVIDENCE_REQUIRED", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},

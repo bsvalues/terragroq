@@ -2,7 +2,7 @@
 
 Issue: #531
 
-These scripts build an evidence-backed resource registry. They are read-only by design. V0.1 does not schedule or mutate infrastructure.
+These scripts build an evidence-backed resource registry. They are read-only by design. V0.2 does not schedule or mutate infrastructure.
 
 Generated `.artifacts/execution-fabric/` probe files are host-local and ignored by Git. Durable conclusions belong in reviewed reports such as `docs/reports/WILLIAMOS-EXECUTION-FABRIC-V0.1-LIVE-MATRIX.md`.
 
@@ -86,7 +86,7 @@ The assembler preserves declared authority/role constraints while replacing hard
 It validates complete nested resource data before promotion or publication and rejects probes
 from unapproved probe implementations.
 
-## Required live proof for v0.1
+## Required live proof for v0.2
 
 1. OMEN probe.
 2. HERMES-NODE probe.
@@ -99,7 +99,7 @@ from unapproved probe implementations.
 
 ## Scheduler boundary
 
-The registry is scheduler-ready, but scheduling remains disabled in v0.1. A later bounded Hermes work order may consume this registry to match workload requirements against healthy, fresh, authorized capabilities.
+The registry is scheduler-ready, but scheduling remains disabled in v0.2. A later bounded Hermes work order may consume this registry to match workload requirements against healthy, fresh, authorized capabilities.
 
 William must not be asked to choose a node for normal work placement.
 
