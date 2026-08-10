@@ -25,6 +25,17 @@ const PLACEMENT_FILES = [
   "config/execution-fabric/pinned-evidence-policy.json",
   "config/execution-fabric/placement-workloads.json",
 ]
+const EXECUTABLE_FILES = [
+  "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs",
+  "scripts/execution-fabric/bounded-dispatch/aegis-hash-verify.mjs",
+  "scripts/execution-fabric/canonical-json.mjs",
+  "scripts/execution-fabric/recommend-pinned-placement.mjs",
+  "scripts/execution-fabric/recommend-placement.mjs",
+  "scripts/execution-fabric/pinned-evidence-registry.mjs",
+  "scripts/execution-fabric/evaluate-shadow-placement.mjs",
+  "scripts/execution-fabric/shadow-evidence-trust.mjs",
+  "scripts/execution-fabric/shadow-outcome-evidence.mjs",
+]
 const FORGE_FILES = {
   permission: "config/execution-fabric/agent-forge-aegis-bounded-hash-verify-permission.json",
   templates: "config/execution-fabric/aegis-bounded-dispatch-templates.json",
@@ -107,7 +118,8 @@ export function readConfinedReport(relativePath, repositoryRoot = REPOSITORY_ROO
   }
   const real = fs.realpathSync(lexical)
   assertContained(reportsRoot, real, "artifact")
-  if (!fs.statSync(real).isFile()) fail("PATH_INVALID", "artifact must be a regular file")
+  const stats = fs.statSync(real)
+  if (!stats.isFile() || stats.nlink !== 1) fail("PATH_INVALID", "artifact must be a single-link regular file")
   return fs.readFileSync(real)
 }
 
@@ -176,7 +188,10 @@ function assertTrustedWorkingFile(runGit, repositoryRoot, relativePath) {
   }
   const real = fs.realpathSync(lexical)
   assertContained(root, real, "trusted working file")
-  if (!fs.statSync(real).isFile()) fail("TRUSTED_MAIN_MISMATCH", `${relativePath} is not a regular file`)
+  const stats = fs.statSync(real)
+  if (!stats.isFile() || stats.nlink !== 1) {
+    fail("TRUSTED_MAIN_MISMATCH", `${relativePath} is not a single-link regular file`)
+  }
   const local = fs.readFileSync(real)
   if (!trusted.equals(local)) fail("TRUSTED_MAIN_MISMATCH", `${relativePath} differs from trusted main`)
   return trusted
@@ -196,6 +211,7 @@ export function createTrustedProofProviders({
     if (!COMMIT.test(head) || head !== main || !COMMIT.test(tree) || status.length !== 0) {
       fail("TRUSTED_MAIN_MISMATCH", "resident executable checkout must be clean and exactly trusted main")
     }
+    for (const relativePath of EXECUTABLE_FILES) assertTrustedWorkingFile(runGit, repositoryRoot, relativePath)
     return {
       schema_version: "0.1-trusted-aegis-executable-checkout",
       trusted_ref: TRUSTED_REF,
@@ -371,7 +387,7 @@ export function createLedgerProviders({
   validateDirectory = (stats, uid) => stats.isDirectory() && !stats.isSymbolicLink()
     && stats.uid === uid && (stats.mode & 0o077) === 0,
   validateLedgerFile = (stats, uid) => stats.isFile() && !stats.isSymbolicLink()
-    && stats.uid === uid && (stats.mode & 0o077) === 0,
+    && stats.nlink === 1 && stats.uid === uid && (stats.mode & 0o077) === 0,
   syncDirectory = syncDirectoryDurably,
 } = {}) {
   const uid = assertLinuxNonRoot({ platform, getuid, username })

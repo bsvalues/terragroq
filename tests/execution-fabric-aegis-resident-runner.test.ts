@@ -41,8 +41,10 @@ describe("resident AEGIS HASH_VERIFY runner", () => {
     expect(() => readConfinedReport("package.json", root)).toThrow("PATH_ESCAPE")
     expect(() => readConfinedReport("docs/reports/../secret.json", root)).toThrow("PATH_ESCAPE")
     expect(() => readConfinedReport(path.join(root, "docs/reports/request.json"), root)).toThrow("PATH_ESCAPE")
+    fs.writeFileSync(path.join(root, "outside.json"), "{}")
+    fs.linkSync(path.join(root, "outside.json"), path.join(reports, "hard-linked.json"))
+    expect(() => readConfinedReport("docs/reports/hard-linked.json", root)).toThrow("PATH_INVALID")
     if (process.platform !== "win32") {
-      fs.writeFileSync(path.join(root, "outside.json"), "{}")
       fs.symlinkSync(path.join(root, "outside.json"), path.join(reports, "linked.json"))
       expect(() => readConfinedReport("docs/reports/linked.json", root)).toThrow("PATH_ESCAPE")
     }
@@ -155,6 +157,17 @@ describe("resident AEGIS HASH_VERIFY runner", () => {
       "config/execution-fabric/aegis-bounded-dispatch-authority-registry.json": Buffer.from(JSON.stringify({ entries: [{ reference: "authority-001" }] })),
       "config/execution-fabric/aegis-bounded-dispatch-authority-scopes/scope.json": Buffer.from("scope"),
     }
+    for (const executable of [
+      "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs",
+      "scripts/execution-fabric/bounded-dispatch/aegis-hash-verify.mjs",
+      "scripts/execution-fabric/canonical-json.mjs",
+      "scripts/execution-fabric/recommend-pinned-placement.mjs",
+      "scripts/execution-fabric/recommend-placement.mjs",
+      "scripts/execution-fabric/pinned-evidence-registry.mjs",
+      "scripts/execution-fabric/evaluate-shadow-placement.mjs",
+      "scripts/execution-fabric/shadow-evidence-trust.mjs",
+      "scripts/execution-fabric/shadow-outcome-evidence.mjs",
+    ]) files[executable] = Buffer.from(`trusted:${executable}`)
     for (const [relative, bytes] of Object.entries(files)) {
       const destination = path.join(root, ...relative.split("/"))
       fs.mkdirSync(path.dirname(destination), { recursive: true })

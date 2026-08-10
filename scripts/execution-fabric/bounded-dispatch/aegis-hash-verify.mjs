@@ -106,7 +106,10 @@ function readRepositoryJson(repositoryRoot, relativePath, label) {
   contained(root, lexical, label)
   let real
   try {
-    if (fs.lstatSync(lexical).isSymbolicLink()) fail("PATH_ESCAPE", `${label} must not be a symbolic link`)
+    const lexicalStats = fs.lstatSync(lexical)
+    if (lexicalStats.isSymbolicLink() || !lexicalStats.isFile() || lexicalStats.nlink !== 1) {
+      fail("PATH_ESCAPE", `${label} must be a single-link regular file`)
+    }
     real = fs.realpathSync(lexical)
   } catch (error) {
     if (error instanceof AegisHashVerifyError) throw error
@@ -430,7 +433,7 @@ function resolveStagedFile(binding, relativePath) {
   const real = fs.realpathSync(lexical)
   contained(root, real, "staged input")
   const stats = fs.lstatSync(lexical)
-  if (!stats.isFile()) fail("INPUT_INVALID", "staged input must be a regular file")
+  if (!stats.isFile() || stats.nlink !== 1) fail("INPUT_INVALID", "staged input must be a single-link regular file")
   return {
     root, lexical, real, size: stats.size,
     identity: { dev: stats.dev, ino: stats.ino, size: stats.size, mtimeMs: stats.mtimeMs, ctimeMs: stats.ctimeMs },
@@ -563,7 +566,7 @@ function readExactStagedBytes(repositoryRoot, stagingRootId, request) {
     descriptor = fs.openSync(staged.lexical, fs.constants.O_RDONLY | noFollow)
     const before = fs.fstatSync(descriptor)
     verifyStagingRoot(stagingRoot)
-    if (!before.isFile() || before.size !== request.input.expected_byte_length
+    if (!before.isFile() || before.nlink !== 1 || before.size !== request.input.expected_byte_length
       || before.size > request.limits.max_input_bytes || before.size > MAX_BYTES) {
       fail("BYTE_CEILING_EXCEEDED", "open staged input violates exact byte ceiling")
     }

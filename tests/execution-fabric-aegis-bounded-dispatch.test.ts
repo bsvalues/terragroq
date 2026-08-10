@@ -398,6 +398,12 @@ describe("AEGIS bounded HASH_VERIFY adapter", () => {
       }
       expect(prepareAegisHashVerify(value)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "PATH_ESCAPE" }] })
     }
+    const hardLinked = fixture()
+    const outside = path.join(os.tmpdir(), `aegis-hard-link-${crypto.randomUUID()}.bin`)
+    fs.writeFileSync(outside, hardLinked.originalInput)
+    fs.rmSync(hardLinked.inputPath)
+    fs.linkSync(outside, hardLinked.inputPath)
+    expect(prepareAegisHashVerify(hardLinked)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "INPUT_INVALID" }] })
   })
 
   it("rejects oversized and non-regular inputs before consuming a claim", async () => {
