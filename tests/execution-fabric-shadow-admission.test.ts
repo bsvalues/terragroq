@@ -130,6 +130,34 @@ describe("Execution Fabric genuine shadow outcome admission", () => {
     }))).toThrow("review proof did not bind the exact review record")
   })
 
+  it("rejects cross-artifact target, recommendation chronology, and freshness mismatches", () => {
+    let selected = fixture()
+    let receiptPath = path.join(selected.root, selected.candidate.receipt.path)
+    let receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"))
+    receipt.eligible_nodes = []
+    receipt.status = "NO_ELIGIBLE_NODE"
+    receipt.recommendation = null
+    fs.writeFileSync(receiptPath, `${JSON.stringify(receipt)}\n`)
+    selected.candidate.receipt.sha256 = sha(fs.readFileSync(receiptPath))
+    expect(() => compile(selected)).toThrow("actual target is not eligible")
+
+    selected = fixture()
+    receiptPath = path.join(selected.root, selected.candidate.receipt.path)
+    receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"))
+    receipt.evaluated_at = "2026-08-10T08:00:01.000Z"
+    fs.writeFileSync(receiptPath, `${JSON.stringify(receipt)}\n`)
+    selected.candidate.receipt.sha256 = sha(fs.readFileSync(receiptPath))
+    expect(() => compile(selected)).toThrow("outcome execution predates")
+
+    selected = fixture()
+    receiptPath = path.join(selected.root, selected.candidate.receipt.path)
+    receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"))
+    receipt.eligible_nodes[0].freshness.expires_at = "2026-08-10T08:00:00.000Z"
+    fs.writeFileSync(receiptPath, `${JSON.stringify(receipt)}\n`)
+    selected.candidate.receipt.sha256 = sha(fs.readFileSync(receiptPath))
+    expect(() => compile(selected)).toThrow("at or after actual target evidence expiry")
+  })
+
   it("rejects impossible calendar instants and symlinked retained evidence", () => {
     const impossible = fixture({ recorded_at: "2026-02-30T08:01:01.000Z" })
     expect(() => compile(impossible)).toThrow("must name a real UTC calendar instant")

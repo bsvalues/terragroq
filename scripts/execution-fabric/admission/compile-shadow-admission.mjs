@@ -125,6 +125,14 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   if (outcomeValidation.work_order_id !== workOrder) fail("outcome Work Order does not match candidate")
   const actualNode = outcomeValidation.actual_target_node
   if (!NODES.has(actualNode)) fail("outcome target is not a canonical Fabric node")
+  const receiptTime = timestamp(receipt.evaluated_at, "receipt.evaluated_at")
+  const outcomeStart = timestamp(outcomeValidation.chronology.started_at, "outcome started_at")
+  const eligibleActual = receipt.eligible_nodes.find((entry) => entry.node_id === actualNode && entry.eligible === true)
+  if (!eligibleActual) fail("actual target is not eligible in the trusted placement receipt")
+  if (outcomeStart < receiptTime) fail("outcome execution predates the placement recommendation")
+  if (outcomeStart >= timestamp(eligibleActual.freshness.expires_at, "actual target evidence expiry")) {
+    fail("outcome execution began at or after actual target evidence expiry")
+  }
   exact(candidate.authority, ["reference", "allowed_canonical_nodes", "valid_from", "expires_at", "reviewed_commit"], "candidate.authority")
   id(candidate.authority.reference, "candidate.authority.reference")
   if (!Array.isArray(candidate.authority.allowed_canonical_nodes) || !candidate.authority.allowed_canonical_nodes.includes(actualNode)) fail("reviewed authority does not include actual target")
@@ -132,6 +140,7 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   const validFrom = timestamp(candidate.authority.valid_from, "candidate.authority.valid_from")
   const expiresAt = timestamp(candidate.authority.expires_at, "candidate.authority.expires_at")
   const recordedAt = timestamp(candidate.recorded_at, "candidate.recorded_at")
+  if (recordedAt < receiptTime) fail("admission predates the placement recommendation")
   if (validFrom > Date.parse(outcomeValidation.chronology.started_at) || expiresAt < Date.parse(outcomeValidation.chronology.completed_at)) fail("reviewed authority does not cover outcome chronology")
   if (recordedAt < Date.parse(outcomeValidation.chronology.completed_at)) fail("admission predates outcome completion")
   if (!COMMIT.test(candidate.authority.reviewed_commit)) fail("reviewed_commit must be a full lowercase Git commit")
