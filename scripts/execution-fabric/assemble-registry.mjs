@@ -14,8 +14,16 @@ const evidenceDir = arg('--evidence-dir', '.artifacts/execution-fabric');
 const outPath = arg('--out', '.artifacts/execution-fabric/registry.snapshot.json');
 
 if (fs.existsSync(outPath)) fs.rmSync(outPath);
-const seed = JSON.parse(fs.readFileSync(seedPath, 'utf8'));
-const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+function readJson(filePath, label) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    console.error(`FABRIC_REGISTRY_INVALID: unable to read ${label} at ${filePath}: ${error.message}`);
+    process.exit(2);
+  }
+}
+const seed = readJson(seedPath, 'seed');
+const schema = readJson(schemaPath, 'schema');
 const warnings = [];
 const probeWarnings = new Map();
 
@@ -164,6 +172,22 @@ function readProbe(declared) {
     for (const field of ['cpus', 'dimms', 'gpus', 'disks', 'network', 'runtimes', 'warnings']) {
       if (!Array.isArray(x.node[field])) throw new Error(`${field} must be an array`);
     }
+    const nestedRules = {
+      cpus: schema.$defs.cpu,
+      dimms: schema.$defs.dimm,
+      gpus: schema.$defs.gpu,
+      disks: schema.$defs.disk,
+      network: schema.$defs.network,
+      runtimes: schema.$defs.runtime
+    };
+    const nestedErrors = [];
+    for (const [field, rule] of Object.entries(nestedRules)) {
+      x.node[field].forEach((item, index) => {
+        nestedErrors.push(...validateSchema(item, rule, `$.node.${field}[${index}]`));
+      });
+    }
+    nestedErrors.push(...validateSchema(x.node.os, schema.$defs.os, '$.node.os'));
+    if (nestedErrors.length) throw new Error(nestedErrors.join('; '));
     const expectedProbe = declared.os?.family === 'windows'
       ? 'scripts/execution-fabric/probe-windows.ps1'
       : declared.os?.family === 'linux'
@@ -222,6 +246,14 @@ const nodes = seed.nodes.map((declared) => {
   if (future) mergedWarnings.push(`LIVE_PROBE_FUTURE observed_at=${probe.evidence.observed_at}`);
   else if (stale) mergedWarnings.push(`LIVE_PROBE_STALE age_seconds=${ageSeconds ?? 'unknown'}`);
 
+  const capabilityList = declared.capabilities || [];
+  const incompleteInventory =
+    probe.node.cpus.length === 0 ||
+    probe.node.disks.length === 0 ||
+    (capabilityList.length > 0 && probe.node.runtimes.length === 0) ||
+    (capabilityList.some(capability => /gpu|cuda/.test(capability)) && probe.node.gpus.length === 0);
+  if (incompleteInventory) mergedWarnings.push('LIVE_PROBE_INCOMPLETE required capability inventory is absent');
+
   const candidate = {
     ...declared,
     hostname: probe.node.hostname ?? declared.hostname,
@@ -244,6 +276,7 @@ const nodes = seed.nodes.map((declared) => {
       ...new Set([
         ...(declared.constraints || []),
         ...(stale ? ['not-schedulable-stale-evidence'] : []),
+        ...(incompleteInventory ? ['not-schedulable-incomplete-inventory'] : []),
         ...(probe.node.disks.some(disk => disk.serial == null) ? ['not-schedulable-ambiguous-disk-identity'] : []),
         ...(probe.node.disks.some(disk => disk.capacity_bytes == null) ? ['not-schedulable-unknown-disk-capacity'] : [])
       ])

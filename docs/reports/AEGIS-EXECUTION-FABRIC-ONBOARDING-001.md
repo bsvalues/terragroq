@@ -4,12 +4,12 @@ Status: `AEGIS_EXECUTION_FABRIC_ONBOARDING: COMPLETE` (scheduler remains OFF)
 
 ## Canonical role
 
-AEGIS is the secondary CPU-batch / CI-build-test / backup-archive-NAS candidate node beneath Hermes.
+AEGIS is the secondary CPU-batch / CI-build-test candidate node beneath Hermes. Backup-archive and NAS roles remain denied until storage is proven.
 
 - OMEN = cockpit / interactive development
 - HERMES-NODE = AI/GPU execution
 - ATLAS = authoritative durable state + Forge
-- AEGIS = secondary compute + protection/storage
+- AEGIS = secondary compute; storage authority pending
 - Azure = separately authorized production/external capability
 
 ## Live inventory
@@ -19,8 +19,8 @@ AEGIS is the secondary CPU-batch / CI-build-test / backup-archive-NAS candidate 
 - CPU: Intel Xeon E5-2690 v4, 1 socket, 14 cores / 28 threads, 1.2–3.5 GHz
 - RAM: 16 GB ECC DDR4, 4×4 GB @ 2133 MT/s across DIMM1–DIMM4 / four channels; Micron 9ASF51272PZ family
 - OS: Ubuntu 24.04.4 LTS, kernel 6.8.0-137
-- NVMe: WD_BLACK SN850X 2 TB, serial `26020C801969`, OS/workspace, root ext4 ~1.8 TB, SMART PASSED
-- NIC: Intel I217-LM, MAC `18:66:DA:13:4F:C9`, 1000 Mb/s full duplex
+- NVMe: WD_BLACK SN850X 2 TB, serial retained host-locally, OS/workspace, root ext4 ~1.8 TB, SMART PASSED
+- NIC: Intel I217-LM, MAC retained host-locally, 1000 Mb/s full duplex
 - Docker: Engine 29.7.2, overlayfs, enabled at boot
 - SSH: active
 - Portainer agent: `:9001`
@@ -28,7 +28,7 @@ AEGIS is the secondary CPU-batch / CI-build-test / backup-archive-NAS candidate 
 
 ## SATA disk findings
 
-### ST4000DX000, serial Z1Z0398N
+### Failed 4 TB-class SATA device
 
 Disposition: `RETIRE` / not schedulable storage.
 
@@ -40,7 +40,7 @@ Observed inconsistent capacity reports:
 
 This resolves the earlier ~3.9 GB anomaly. Treat as failing / firmware-translator capacity corruption. No storage authority is granted.
 
-### ST1000DM003, serial W4Y0C392
+### ST1000DM003 1 TB SATA device
 
 Disposition: healthy but occupied; storage role pending classification.
 
@@ -52,9 +52,18 @@ Disposition: healthy but occupied; storage role pending classification.
 - uncorrectables: 0
 - existing NTFS partitions (~917 GB + ~13.7 GB), old Windows content unclassified
 
+### ST31000528AS 1 TB SATA device
+
+Disposition: present but storage role remains unproven.
+
+- existing NTFS volume labelled `Expansion Drive`
+- serial retained host-locally
+- no retained SMART proof in the four-node capture
+- contents and uniqueness remain unclassified
+
 ### Storage conclusion
 
-AEGIS currently has no proven spare bulk storage. `backup-target`, `archive-storage`, and `nas` remain PENDING and unschedulable until storage is explicitly proven and authorized.
+AEGIS currently has no proven spare bulk storage across the three observed SATA devices. `backup-target`, `archive-storage`, and `nas` remain PENDING and unschedulable until storage is explicitly proven and authorized.
 
 ## Capability policy
 
@@ -97,7 +106,7 @@ AEGIS health evidence reports:
 - NIC/link
 - disk SMART state
 
-Current AEGIS health is WARN solely because the failing ST4000DX000 is still attached; compute/runtime state is healthy.
+Current AEGIS storage health is WARN because the failed device remains attached and the third SATA device lacks retained SMART proof; compute/runtime state is healthy.
 
 ## Privilege boundary
 

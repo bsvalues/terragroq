@@ -28,7 +28,7 @@
       "gpus": [{"id": "gpu0", "vendor": "NVIDIA", "model": "GeForce RTX 5060 Laptop GPU", "pci_bus_id": null, "uuid": null, "vram_bytes": 8589934592, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}],
       "disks": [],
       "network": [],
-      "runtimes": [{"id": "wsl2", "kind": "wsl", "version": null, "state": "running", "endpoint": null, "details": {}}, {"id": "docker-desktop", "kind": "docker", "version": null, "state": "running", "endpoint": null, "details": {}}],
+      "runtimes": [{"id": "wsl2", "kind": "wsl", "version": null, "state": "unknown", "endpoint": null, "details": {}}, {"id": "docker-desktop", "kind": "docker", "version": null, "state": "unknown", "endpoint": null, "details": {}}],
       "capabilities": ["interactive-development", "operator-control", "transient-ssh-tunnel", "burst-compute", "cuda"],
       "constraints": ["not-always-on", "no-authoritative-state"],
       "warnings": ["DIMM, disk, NIC, driver, runtime versions, and dynamic health require live probe"]
@@ -53,7 +53,7 @@
       "dimms": [],
       "gpus": [{"id": "gpu0", "vendor": "NVIDIA", "model": "GeForce RTX 3050", "pci_bus_id": null, "uuid": null, "vram_bytes": 6442450944, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}, {"id": "gpu1", "vendor": "NVIDIA", "model": "Quadro K2200", "pci_bus_id": null, "uuid": null, "vram_bytes": 4294967296, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}],
       "disks": [],
-      "network": [{"id": "lan0", "name": "primary-lan", "mac": null, "state": "unknown", "speed_mbps": null, "duplex": null, "addresses": ["192.168.1.154"], "default_route": null}],
+      "network": [],
       "runtimes": [{"id": "ollama", "kind": "ollama", "version": null, "state": "healthy", "endpoint": "http://127.0.0.1:11434", "details": {"exposure": "loopback-only"}}, {"id": "docker", "kind": "docker", "version": "28.5.1", "state": "running", "endpoint": null, "details": {}}, {"id": "ssh", "kind": "ssh", "version": null, "state": "running", "endpoint": null, "details": {}}],
       "capabilities": ["local-llm-inference", "gpu-batch", "agent-runtime", "cuda", "ssh-control"],
       "constraints": ["no-authoritative-state", "ollama-loopback-only"],
@@ -79,8 +79,8 @@
       "dimms": [],
       "gpus": [],
       "disks": [],
-      "network": [{"id": "lan0", "name": "enp0s25", "mac": null, "state": "unknown", "speed_mbps": null, "duplex": null, "addresses": ["192.168.1.156"], "default_route": null}],
-      "runtimes": [{"id": "docker", "kind": "docker", "version": null, "state": "running", "endpoint": null, "details": {}}, {"id": "postgres", "kind": "database", "version": null, "state": "healthy", "endpoint": null, "details": {}}, {"id": "redis", "kind": "database", "version": null, "state": "running", "endpoint": null, "details": {"authentication": "required"}}, {"id": "mongo", "kind": "database", "version": null, "state": "healthy", "endpoint": null, "details": {}}, {"id": "forge", "kind": "storage", "version": null, "state": "healthy", "endpoint": "/forge", "details": {"filesystem": "ext4", "mount_by_uuid": true}}],
+      "network": [],
+      "runtimes": [{"id": "docker", "kind": "docker", "version": null, "state": "unknown", "endpoint": null, "details": {}}, {"id": "postgres", "kind": "database", "version": null, "state": "unknown", "endpoint": null, "details": {}}, {"id": "redis", "kind": "database", "version": null, "state": "unknown", "endpoint": null, "details": {"authentication": "required"}}, {"id": "mongo", "kind": "database", "version": null, "state": "unknown", "endpoint": null, "details": {}}, {"id": "forge", "kind": "storage", "version": null, "state": "unknown", "endpoint": "/forge", "details": {"filesystem": "ext4", "mount_by_uuid": true}}],
       "capabilities": ["database-state", "forge-storage", "retrieval-index", "backup-archive", "protected-data-read"],
       "constraints": ["protect-state-latency", "avoid-noisy-batch-by-default"],
       "warnings": ["DIMM-level inventory, all disks including Forge serial/health, NIC counters, and runtime versions require live probe"]
@@ -109,7 +109,7 @@
       "runtimes": [],
       "capabilities": ["cpu-batch-candidate", "ci-build-test-candidate", "hash-verify-candidate", "compression-candidate", "etl-transform-candidate", "docker-worker-candidate"],
       "constraints": ["scheduler-disabled", "memory-16gb", "nvme-free-space-reserve-required", "storage-capability-pending"],
-      "warnings": ["ST4000DX000 is RETIRE and unschedulable", "ST1000DM003 is healthy but occupied and unclassified", "NAS and backup authority remain pending storage proof"]
+      "warnings": ["Failed SATA device is RETIRE and unschedulable", "ST1000DM003 is healthy but occupied and unclassified", "ST31000528AS is present without retained SMART proof", "NAS and backup authority remain pending storage proof"]
     },
     {
       "id": "azure",

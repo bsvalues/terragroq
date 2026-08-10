@@ -17,7 +17,7 @@ if (-not $canonicalNodeId -or $NodeId -ne $canonicalNodeId) {
   throw "PROBE_NODE_IDENTITY_WALL hostname=$hostname requested=$NodeId canonical=$canonicalNodeId"
 }
 
-function Try-Run([scriptblock]$Block, $Fallback = $null, [string]$Warning = '') {
+function Invoke-Safely([scriptblock]$Block, $Fallback = $null, [string]$Warning = '') {
   try { & $Block } catch { if ($Warning) { $warnings.Add("$Warning`: $($_.Exception.Message)") }; $Fallback }
 }
 
@@ -27,7 +27,6 @@ function Convert-MemoryType($code) {
   return $null
 }
 
-$cs = Get-CimInstance Win32_ComputerSystem
 $systemProduct = Get-CimInstance Win32_ComputerSystemProduct
 $machineId = ([string]$systemProduct.UUID).Trim().ToLowerInvariant()
 if (-not $machineId) { throw 'PROBE_MACHINE_ID_UNAVAILABLE' }
@@ -87,7 +86,7 @@ $dimms = @(Get-CimInstance Win32_PhysicalMemory | Where-Object { $_.Capacity -gt
 $gpuRows = @()
 $nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($nvidia) {
-  $gpuRows = Try-Run {
+  $gpuRows = Invoke-Safely {
     @(& nvidia-smi --query-gpu=uuid,name,pci.bus_id,memory.total,driver_version,temperature.gpu,utilization.gpu --format=csv,noheader,nounits | ForEach-Object {
       $p = $_ -split ',\s*'
       [ordered]@{
@@ -122,9 +121,12 @@ if (-not $gpuRows -or $gpuRows.Count -eq 0) {
       utilization_percent = $null
     }
   })
+  if ($gpuRows.Count -gt 0) {
+    $warnings.Add('GPU inventory used Win32_VideoController fallback; AdapterRAM may understate VRAM above 4 GiB')
+  }
 }
 
-$diskRows = Try-Run { @(Get-Disk -ErrorAction Stop | ForEach-Object {
+$diskRows = Invoke-Safely { @(Get-Disk -ErrorAction Stop | ForEach-Object {
   $disk = $_
   $capacity = Convert-PositiveInt64 $disk.Size
   if ($null -eq $capacity) { $warnings.Add("disk $($disk.Number) reported non-positive capacity; retained as unknown and unschedulable") }
@@ -133,12 +135,17 @@ $diskRows = Try-Run { @(Get-Disk -ErrorAction Stop | ForEach-Object {
     $fs = @(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop | ForEach-Object {
       $part = $_
       $vol = $part | Get-Volume -ErrorAction SilentlyContinue
-      [ordered]@{
-        partition = [string]$part.PartitionNumber
-        drive_letter = if ($part.DriveLetter) { [string]$part.DriveLetter } else { $null }
-        filesystem = if ($vol) { [string]$vol.FileSystem } else { $null }
-        label = if ($vol) { [string]$vol.FileSystemLabel } else { $null }
-        size_bytes = [int64]$part.Size
+      $partitionSize = Convert-PositiveInt64 $part.Size
+      if ($null -eq $partitionSize) {
+        $warnings.Add("disk $($disk.Number) partition $($part.PartitionNumber) reported non-positive size; relationship omitted")
+      } else {
+        [ordered]@{
+          partition = [string]$part.PartitionNumber
+          drive_letter = if ($part.DriveLetter) { [string]$part.DriveLetter } else { $null }
+          filesystem = if ($vol) { [string]$vol.FileSystem } else { $null }
+          label = if ($vol) { [string]$vol.FileSystemLabel } else { $null }
+          size_bytes = $partitionSize
+        }
       }
     })
   } catch { $warnings.Add("disk $($disk.Number) filesystem enumeration failed: $($_.Exception.Message)") }
@@ -181,8 +188,8 @@ if (-not $diskRows -or $diskRows.Count -eq 0) {
   }
 }
 
-$ipConfigs = Try-Run { @(Get-NetIPConfiguration -ErrorAction Stop) } @() 'NetTCPIP configuration unavailable'
-$netRows = Try-Run { @(Get-NetAdapter -ErrorAction Stop | ForEach-Object {
+$ipConfigs = Invoke-Safely { @(Get-NetIPConfiguration -ErrorAction Stop) } @() 'NetTCPIP configuration unavailable'
+$netRows = Invoke-Safely { @(Get-NetAdapter -ErrorAction Stop | ForEach-Object {
   $a = $_
   $cfg = $ipConfigs | Where-Object InterfaceIndex -eq $a.ifIndex | Select-Object -First 1
   $addresses = @()
@@ -224,7 +231,7 @@ if (-not $netRows -or $netRows.Count -eq 0) {
 $runtimes = [System.Collections.Generic.List[object]]::new()
 $docker = Get-Command docker -ErrorAction SilentlyContinue
 if ($docker) {
-  $dv = Try-Run { (& docker version --format '{{.Server.Version}}' 2>$null).Trim() } $null 'docker version failed'
+  $dv = Invoke-Safely { (& docker version --format '{{.Server.Version}}' 2>$null).Trim() } $null 'docker version failed'
   $runtimes.Add([ordered]@{id='docker';kind='docker';version=$dv;state=if($dv){'running'}else{'unavailable'};endpoint=$null;details=@{}})
 }
 $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
@@ -241,7 +248,7 @@ if ($wsl) {
 }
 $ssh = Get-Service sshd -ErrorAction SilentlyContinue
 if ($ssh) { $runtimes.Add([ordered]@{id='ssh';kind='ssh';version=$null;state=if($ssh.Status -eq 'Running'){'running'}else{'stopped'};endpoint=$null;details=@{start_type=[string]$ssh.StartType}}) }
-$ollama = Try-Run { Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 } $null
+$ollama = Invoke-Safely { Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 } $null
 if ($ollama) { $runtimes.Add([ordered]@{id='ollama';kind='ollama';version=$null;state='healthy';endpoint='http://127.0.0.1:11434';details=@{models=@($ollama.models | ForEach-Object name)}}) }
 
 $result = [ordered]@{
@@ -272,10 +279,11 @@ $result = [ordered]@{
   }
 }
 
-$json = $result | ConvertTo-Json -Depth 12
+$json = ConvertTo-Json -InputObject $result -Depth 12
 if ($OutputPath) {
-  $parent = Split-Path -Parent $OutputPath
+  $resolvedOutputPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath $OutputPath))
+  $parent = Split-Path -Parent $resolvedOutputPath
   if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
-  [System.IO.File]::WriteAllText($OutputPath, $json, [System.Text.UTF8Encoding]::new($false))
+  [System.IO.File]::WriteAllText($resolvedOutputPath, $json, [System.Text.UTF8Encoding]::new($false))
 }
 $json

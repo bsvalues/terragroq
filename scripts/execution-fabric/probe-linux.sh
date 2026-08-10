@@ -29,6 +29,23 @@ def run(cmd, timeout=20, sudo=False):
     except Exception as e:
         return None, str(e)
 
+def systemctl_state(unit):
+    try:
+        loaded = subprocess.run(
+            ['systemctl', 'show', '--property=LoadState', '--value', unit],
+            text=True, capture_output=True, timeout=20
+        )
+        if loaded.returncode != 0 or (loaded.stdout or '').strip() != 'loaded':
+            return None
+        p = subprocess.run(
+            ['systemctl', 'is-active', unit], text=True, capture_output=True, timeout=20
+        )
+        state = (p.stdout or '').strip()
+        return state or None
+    except Exception as e:
+        warnings.append(f'systemctl {unit}: {e}')
+        return None
+
 hostname, _ = run(['hostname'])
 canonical_hostname = (hostname or '').strip().lower().split('.')[0]
 canonical_node_ids = {'atlas': 'atlas', 'aegis': 'aegis'}
@@ -228,11 +245,14 @@ if shutil.which('docker'):
     dv, _ = run(['docker','version','--format','{{.Server.Version}}'])
     add_runtime('docker','docker','running' if dv else 'unavailable',dv)
 for svc,kind in [('ssh','ssh'),('sshd','ssh')]:
-    st,_=run(['systemctl','is-active',svc])
-    if st: add_runtime('ssh',kind,'running' if st=='active' else 'stopped'); break
+    st = systemctl_state(svc)
+    if st and st != 'unknown':
+        add_runtime('ssh',kind,'running' if st=='active' else 'stopped')
+        break
 for svc in ['postgresql','redis-server','redis','mongod','mongodb']:
-    st,_=run(['systemctl','is-active',svc])
-    if st: add_runtime(svc,'database','running' if st=='active' else 'stopped')
+    st = systemctl_state(svc)
+    if st and st != 'unknown':
+        add_runtime(svc,'database','running' if st=='active' else 'stopped')
 fm,_ = run(['findmnt','-J','/forge'])
 if fm:
     try:
@@ -243,9 +263,9 @@ if fm:
 result = {
   'schema_version':'0.1-node-probe',
   'node':{
-    'id':canonical_node_id,'hostname':hostname,'observed_at':observed,
+    'id':canonical_node_id,'hostname':canonical_hostname,'observed_at':observed,
     'identity':{
-      'hostname':hostname,
+      'hostname':canonical_hostname,
       'machine_id_sha256':machine_id_sha256,
       'source':identity_source,
     },

@@ -33,6 +33,27 @@ function typeMatches(value: unknown, expected: string): boolean {
   return typeof value === expected
 }
 
+function isRfc3339DateTime(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/.exec(value)
+  if (!match) return false
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, , offsetHourText, offsetMinuteText] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+  const second = Number(secondText)
+  const offsetHour = offsetHourText == null ? 0 : Number(offsetHourText)
+  const offsetMinute = offsetMinuteText == null ? 0 : Number(offsetMinuteText)
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 60 || offsetHour > 23 || offsetMinute > 59) return false
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+  const parseableValue = second === 60
+    ? value.replace(/:(?:60)(?=(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$)/, ":59")
+    : value
+  return day >= 1 && day <= daysInMonth && Number.isFinite(Date.parse(parseableValue))
+}
+
 function assertSchemaConformance(value: unknown, rawRule: unknown, location = "$"): void {
   const rule = rawRule as JsonObject
   if (Array.isArray(rule.oneOf)) {
@@ -56,7 +77,7 @@ function assertSchemaConformance(value: unknown, rawRule: unknown, location = "$
     return
   }
 
-  if (Object.prototype.hasOwnProperty.call(rule, "const")) {
+  if (Object.hasOwn(rule, "const")) {
     expect(value, `${location}: const`).toEqual(rule.const)
   }
   if (Array.isArray(rule.enum)) {
@@ -74,7 +95,7 @@ function assertSchemaConformance(value: unknown, rawRule: unknown, location = "$
   if (typeof value === "string") {
     if (typeof rule.minLength === "number") expect(value.length, `${location}: minLength`).toBeGreaterThanOrEqual(rule.minLength)
     if (typeof rule.pattern === "string") expect(value, `${location}: pattern`).toMatch(new RegExp(rule.pattern))
-    if (rule.format === "date-time") expect(Number.isFinite(Date.parse(value)), `${location}: date-time`).toBe(true)
+    if (rule.format === "date-time") expect(isRfc3339DateTime(value), `${location}: date-time`).toBe(true)
   }
   if (typeof value === "number") {
     if (typeof rule.minimum === "number") expect(value, `${location}: minimum`).toBeGreaterThanOrEqual(rule.minimum)
@@ -87,13 +108,13 @@ function assertSchemaConformance(value: unknown, rawRule: unknown, location = "$
     const object = value as JsonObject
     const properties = (rule.properties ?? {}) as JsonObject
     for (const required of (rule.required ?? []) as string[]) {
-      expect(Object.prototype.hasOwnProperty.call(object, required), `${location}: required ${required}`).toBe(true)
+      expect(Object.hasOwn(object, required), `${location}: required ${required}`).toBe(true)
     }
     if (rule.additionalProperties === false) {
-      expect(Object.keys(object).filter((key) => !(key in properties)), `${location}: additional properties`).toEqual([])
+      expect(Object.keys(object).filter((key) => !Object.hasOwn(properties, key)), `${location}: additional properties`).toEqual([])
     }
     for (const [key, child] of Object.entries(object)) {
-      if (properties[key]) assertSchemaConformance(child, properties[key], `${location}.${key}`)
+      if (Object.hasOwn(properties, key)) assertSchemaConformance(child, properties[key], `${location}.${key}`)
     }
   }
 }
@@ -231,6 +252,20 @@ describe("Execution Fabric fail-closed assembly", () => {
     expect((assembledOmen.evidence as JsonObject).ttl_seconds).toBe(300)
   })
 
+  it("fences fresh evidence when capability inventory is incomplete", () => {
+    const seed = clone(canonicalSeed)
+    const aegis = nodeById(seed, "aegis")
+    const incompleteProbe = probeFor(aegis)
+    ;(incompleteProbe.node as JsonObject).runtimes = []
+    const result = assemble(seed, { aegis: incompleteProbe })
+    const assembledAegis = nodeById(result.registry!, "aegis")
+
+    expect(result.status, result.stderr).toBe(0)
+    expect((assembledAegis.evidence as JsonObject).confidence).toBe("observed")
+    expect(assembledAegis.constraints).toEqual(expect.arrayContaining(["not-schedulable-incomplete-inventory"]))
+    expect(assembledAegis.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/^LIVE_PROBE_INCOMPLETE /)]))
+  })
+
   it("fails closed on a future-dated probe", () => {
     const seed = clone(canonicalSeed)
     const omen = nodeById(seed, "omen")
@@ -280,6 +315,18 @@ describe("Execution Fabric fail-closed assembly", () => {
     expect((assembledAegis.evidence as JsonObject).confidence).toBe("declared")
     expect(assembledAegis.constraints).toEqual(expect.arrayContaining(["not-schedulable-without-live-probe"]))
     expect(assembledAegis.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/^LIVE_PROBE_INVALID /)]))
+  })
+
+  it("degrades a probe with a malformed nested disk instead of aborting assembly", () => {
+    const seed = clone(canonicalSeed)
+    const aegis = nodeById(seed, "aegis")
+    const malformedProbe = probeFor(aegis)
+    ;(malformedProbe.node as JsonObject).disks = [null]
+    const result = assemble(seed, { aegis: malformedProbe })
+
+    expect(result.status, result.stderr).toBe(0)
+    expectProbeDegraded(result, "aegis")
+    expect(result.stderr).not.toContain("TypeError")
   })
 
   it("rejects invalid nested probe data before publishing any observed inventory", () => {
@@ -391,10 +438,26 @@ describe("Execution Fabric fail-closed assembly", () => {
 
     expect(result.status, result.stderr).toBe(0)
     assertSchemaConformance(result.registry, schema)
+    expect((nodeById(result.registry!, "azure").evidence as JsonObject).confidence).toBe("declared")
+    for (const nodeId of ["omen", "hermes-node", "atlas", "aegis"]) {
+      expect((nodeById(result.registry!, nodeId).evidence as JsonObject).confidence).toBe("observed")
+    }
   })
 })
 
 describe("Execution Fabric semantic invariants", () => {
+  it("returns the fail-closed exit contract for an unreadable seed", () => {
+    const root = temporaryDirectory()
+    const result = spawnSync(
+      process.execPath,
+      [assemblerPath, "--seed", path.join(root, "missing.json"), "--out", path.join(root, "snapshot.json")],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    )
+
+    expect(result.status).toBe(2)
+    expect(result.stderr).toContain("FABRIC_REGISTRY_INVALID: unable to read seed")
+  })
+
   it.each([
     ["missing", (seed: JsonObject) => {
       seed.nodes = (seed.nodes as JsonObject[]).filter((node) => node.id !== "azure")
@@ -655,6 +718,11 @@ describe("Execution Fabric probe and scheduler boundaries", () => {
     expect(windows).toContain("function Convert-NonBlankString")
     expect(windows).toContain("capacity_bytes = $capacity")
     expect(windows).toContain("serial = Convert-NonBlankString")
+    expect(windows).toContain("ConvertTo-Json -InputObject $result")
+    expect(windows).toContain("GetFullPath")
+    expect(linux).toContain("def systemctl_state(unit)")
+    expect(linux).toContain("'--property=LoadState'")
+    expect(linux).toContain("'hostname':canonical_hostname")
   })
 
   it("keeps scheduler activation absent in v0.1", () => {
