@@ -222,11 +222,16 @@ describe("Execution Fabric Phase 2 shadow placement", () => {
       process.cwd(),
       "docs/reports/execution-fabric-shadow-observations/WO-EF-SHADOW-001.json",
     ))
+    const retainedEvaluation = JSON.parse(fs.readFileSync(path.join(
+      process.cwd(),
+      "docs/reports/execution-fabric-shadow-evaluations/WO-EF-SHADOW-001.json",
+    ), "utf8"))
 
     const first = evaluateShadowPlacement({ receiptBytes, observationBytes }) as JsonObject
     const replay = evaluateShadowPlacement({ receiptBytes, observationBytes }) as JsonObject
 
     expect(first).toEqual(replay)
+    expect(first).toEqual(retainedEvaluation)
     expect(first).toMatchObject({
       status: "OBSERVED",
       trust_scope: "production",
@@ -249,6 +254,7 @@ describe("Execution Fabric Phase 2 shadow placement", () => {
         authority_violations: 0,
         stale_evidence_placements: 0,
         silent_fallbacks: 0,
+        scheduler_state: "disabled",
       },
     })
   })

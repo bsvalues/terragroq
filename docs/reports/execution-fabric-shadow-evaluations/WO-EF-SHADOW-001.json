@@ -8,7 +8,7 @@
   "workload_id": "cpu-heavy-build",
   "policy_receipt": {
     "sha256": "222a72ccbc1cb21acb180af42e3db2b589ad88575ccbaa88323758c39bf8def7",
-    "trust_registry_sha256": "eb2492cae1a542b6ab41f2966b6c312313d922a1d399a5159b527e7697a87319",
+    "trust_registry_sha256": "043d907942a44148926ef22117ef6c39f38324d090dd9b09a66e896afd00be85",
     "status": "RECOMMENDED",
     "selected_node_id": "aegis",
     "evaluated_at": "2026-08-10T14:07:37.340Z"
@@ -94,5 +94,5 @@
   "authority_mutated": false,
   "remote_accessed": false,
   "shell_executed": false,
-  "replay_sha256": "98eab43c75f8da0c20a16cbf69223314502e3360bb4fe2cb94ae234854be2b04"
+  "replay_sha256": "e6d711d8b8fdf66c8eff9fd39be0dd3c778f0cb1528a58d482a1c62a70fd5529"
 }
