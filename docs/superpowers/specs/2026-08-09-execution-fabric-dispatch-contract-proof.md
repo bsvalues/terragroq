@@ -53,7 +53,10 @@ without creating or mutating their records.
 - `bindings`: canonical SHA-256 digests over every constituent section.
 
 Executable command/shell/endpoint fields and secret-like material are rejected before readiness is
-projected. Git commits use their canonical 40-character SHA; evidence and content bindings use
+projected. Field-name checks normalize snake_case and camelCase before applying that wall. Canonical
+placement node collections require exact nested fields, unique membership, consecutive eligible ranks,
+fresh observed/proven evidence, complete rank basis, and non-authorizing flags. Git commits use their
+canonical 40-character SHA; evidence and content bindings use
 SHA-256.
 
 ## Decisions
