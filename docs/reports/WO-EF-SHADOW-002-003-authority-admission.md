@@ -27,9 +27,9 @@ exposure.
 - Expires at: `2026-08-11T02:42:00.000Z`
 - Authority source commit: `ace709f88752d1e270c3d369b14259c9872e89e7`
 
-The task may inspect bounded filesystem metadata only. It may not read protected file contents,
-inspect credentials, access county or PACS data, write state, mutate a database, or change ATLAS
-configuration.
+The task may query only bounded, read-only Forge metadata exposed by the approved Forge root; it is
+not authority for arbitrary filesystem inspection. It may not read protected file contents, inspect
+credentials, access county or PACS data, write state, mutate a database, or change ATLAS configuration.
 
 ## Preserved boundary
 
