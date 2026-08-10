@@ -92,13 +92,21 @@ function expectRejected(action: () => unknown, detail: RegExp) {
 }
 
 describe("Execution Fabric shadow evidence trust registries", () => {
-  it("loads the repository-owned empty registries in a fail-closed state", () => {
+  it("keeps settlement fail closed when authority is pre-admitted but no outcome exists", () => {
     expect(DEFAULT_SHADOW_OUTCOME_REGISTRY).toMatch(/shadow-outcome-registry\.json$/)
     expect(DEFAULT_SHADOW_AUTHORITY_REGISTRY).toMatch(/shadow-authority-registry\.json$/)
     const loaded = loadShadowEvidenceTrustRegistries()
 
     expect(loaded.outcome_registry).toMatchObject({ status: "EMPTY_FAIL_CLOSED", entries: [] })
-    expect(loaded.authority_registry).toMatchObject({ status: "EMPTY_FAIL_CLOSED", entries: [] })
+    expect(loaded.authority_registry).toMatchObject({
+      status: "VALID",
+      entries: [{
+        reference: "issue-538-phase2-shadow-001",
+        work_order_id: "WO-EF-SHADOW-001",
+        allowed_canonical_nodes: ["hermes-node"],
+        status: "ACTIVE",
+      }],
+    })
     expectRejected(() => trust({
       outcomeRegistry: loaded.outcome_registry,
       authorityRegistry: loaded.authority_registry,
