@@ -84,7 +84,7 @@ export function parseArguments(argv) {
 function assertContained(root, candidate, label) {
   const relative = path.relative(root, candidate)
   if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    fail("PATH_ESCAPE", `${label} must be a file beneath ${REPORTS_ROOT}`)
+    fail("PATH_ESCAPE", `${label} must remain beneath its trust root`)
   }
 }
 
@@ -164,7 +164,20 @@ function requireGitSuccess(runGit, args, detail) {
 
 function assertTrustedWorkingFile(runGit, repositoryRoot, relativePath) {
   const trusted = gitShow(runGit, TRUSTED_REF, relativePath)
-  const local = fs.readFileSync(path.join(repositoryRoot, ...relativePath.split("/")))
+  const root = fs.realpathSync(repositoryRoot)
+  const lexical = path.join(root, ...relativePath.split("/"))
+  assertContained(root, lexical, "trusted working file")
+  let cursor = root
+  for (const segment of relativePath.split("/")) {
+    cursor = path.join(cursor, segment)
+    if (fs.lstatSync(cursor).isSymbolicLink()) {
+      fail("TRUSTED_MAIN_MISMATCH", `${relativePath} must not contain symbolic links`)
+    }
+  }
+  const real = fs.realpathSync(lexical)
+  assertContained(root, real, "trusted working file")
+  if (!fs.statSync(real).isFile()) fail("TRUSTED_MAIN_MISMATCH", `${relativePath} is not a regular file`)
+  const local = fs.readFileSync(real)
   if (!trusted.equals(local)) fail("TRUSTED_MAIN_MISMATCH", `${relativePath} differs from trusted main`)
   return trusted
 }
@@ -228,7 +241,11 @@ export function createTrustedProofProviders({
       || sha256(identity) !== identityRegistrySha256 || sha256(workOrder) !== workOrderSha256) {
       fail("FORGE_UNPROVEN", "trusted main does not retain the exact Forge packet")
     }
-    const registry = JSON.parse(templates.toString("utf8"))
+    let registry
+    try { registry = JSON.parse(templates.toString("utf8")) } catch {
+      fail("FORGE_UNPROVEN", "trusted template registry is not valid JSON")
+    }
+    if (!Array.isArray(registry?.templates)) fail("FORGE_UNPROVEN", "trusted template registry has no template list")
     const exactTemplateCount = registry.templates.filter((entry) => entry?.template_id === "aegis.hash-verify.v1").length
     return {
       schema_version: "0.1-trusted-aegis-forge-proof",

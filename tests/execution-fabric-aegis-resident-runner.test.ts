@@ -209,6 +209,15 @@ describe("resident AEGIS HASH_VERIFY runner", () => {
       work_order_sha256: sha(files["config/execution-fabric/aegis-bounded-dispatch-work-order.json"]),
       exact_template_count: 1, verified: true,
     })
+    const retainedTemplates = files["config/execution-fabric/aegis-bounded-dispatch-templates.json"]
+    files["config/execution-fabric/aegis-bounded-dispatch-templates.json"] = Buffer.from("{")
+    expect(() => providers.proveTrustedForge({
+      permissionSha256: sha(files["config/execution-fabric/agent-forge-aegis-bounded-hash-verify-permission.json"]),
+      templateRegistrySha256: sha(files["config/execution-fabric/aegis-bounded-dispatch-templates.json"]),
+      identityRegistrySha256: sha(files["config/execution-fabric/aegis-resident-identity.json"]),
+      workOrderSha256: sha(files["config/execution-fabric/aegis-bounded-dispatch-work-order.json"]),
+    })).toThrow("FORGE_UNPROVEN")
+    files["config/execution-fabric/aegis-bounded-dispatch-templates.json"] = retainedTemplates
     const executionCommit = "a".repeat(40)
     const reviewedCommit = "b".repeat(40)
     expect(providers.proveTrustedAuthority({
