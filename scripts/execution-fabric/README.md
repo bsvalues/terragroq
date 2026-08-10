@@ -110,3 +110,32 @@ The command rejects a changed snapshot digest, malformed workload, and any regis
 is not exactly `disabled / not-granted`. It marks stale or non-observed nodes ineligible while fresh,
 independent candidates remain evaluable. It performs no dispatch,
 lease, reservation, remote connection, authority update, or scheduler mutation.
+
+## Bounded dispatch-contract proof
+
+`evaluate-dispatch-contract.mjs` evaluates a fully bound, static proof packet describing what would
+have to be true before one placement recommendation could become one authorized job. It binds the
+canonical output of `recommend-placement.mjs` and its snapshot/workload digests to an R1 workload
+envelope, authority tuple, path reservation,
+single-writer lease/fencing token, checkpoint, bounded recovery policy, and completion evidence.
+
+The evaluator returns `CONTRACT_READY`, `CONTRACT_BLOCKED`, or `INPUT_REJECTED`. `CONTRACT_READY`
+means only that the static packet satisfies the contract. Every result keeps
+`execution_authorized=false` and `dispatch_allowed=false`; the script has no queue, worker, remote
+connection, command-execution, live lease, authority-write, or scheduler-activation adapter.
+Placement readiness additionally requires a host-injected verifier for the exact placement artifact,
+snapshot digest, and workload digest. Packet fields and CLI arguments cannot manufacture that trust.
+
+```powershell
+node scripts/execution-fabric/evaluate-dispatch-contract.mjs `
+  --contract <local-proof-packet.json> `
+  --at <evaluation-time-utc>
+```
+
+Proof fixtures must identify themselves as `proof-fixture` authority evidence. They are not grants
+and cannot be consumed by Hermes or any node runtime. CLI evaluation cannot self-attest a completion
+claim. A host integration must inject a verified evidence resolver backed by an independently trusted,
+retained manifest; packet input cannot supply or override that resolver.
+
+CLI exit status is fail-closed: `0` means `CONTRACT_READY`, `1` means `CONTRACT_BLOCKED`, and `2`
+means `INPUT_REJECTED`.
