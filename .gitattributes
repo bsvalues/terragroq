@@ -6,3 +6,4 @@ docs/reports/execution-fabric-shadow-observations/*.json text eol=lf
 docs/reports/execution-fabric-shadow-outcomes/*.json text eol=lf
 docs/reports/execution-fabric-shadow-receipts/*.json text eol=lf
 docs/reports/shadow-admission/*.json text eol=lf
+docs/reports/shadow-admission/*.md text eol=lf
