@@ -3,7 +3,7 @@
   "status": "RECOMMENDED",
   "recommendation_only": true,
   "eligibility_scope": "recommendation-only",
-  "evaluated_at": "2026-08-10T20:39:34.613Z",
+  "evaluated_at": "2026-08-10T20:47:29.929Z",
   "workload": {
     "id": "cpu-heavy-build",
     "title": "CPU-heavy build",
@@ -48,7 +48,7 @@
         },
         {
           "path": "nodes.aegis.evidence.observed_at",
-          "value": "2026-08-10T20:36:39Z"
+          "value": "2026-08-10T20:46:18Z"
         },
         {
           "path": "nodes.aegis.evidence.ttl_seconds",
@@ -56,7 +56,7 @@
         },
         {
           "path": "nodes.aegis.evidence.probe",
-          "value": "pinned snapshot 95014397aa31c503161447ad5d2d86b99ea789d69a9aeeb03033db39f11e9f02"
+          "value": "pinned snapshot ccf13d6e02781c8eb90f58a56c4e753b63a31a6ab983b7f8fc8e328dabbc4b56"
         },
         {
           "path": "nodes.aegis.evidence.probe_version",
@@ -85,10 +85,10 @@
           "value": {
             "state": "READY",
             "reason": "COMPUTE_CAPABILITY_READY",
-            "observed_at": "2026-08-10T20:36:39Z",
-            "expires_at": "2026-08-10T20:41:39.000Z",
-            "snapshot_sha256": "95014397aa31c503161447ad5d2d86b99ea789d69a9aeeb03033db39f11e9f02",
-            "evidence_ref": "snapshots/aegis/95014397aa31c503161447ad5d2d86b99ea789d69a9aeeb03033db39f11e9f02.json"
+            "observed_at": "2026-08-10T20:46:18Z",
+            "expires_at": "2026-08-10T20:51:18.000Z",
+            "snapshot_sha256": "ccf13d6e02781c8eb90f58a56c4e753b63a31a6ab983b7f8fc8e328dabbc4b56",
+            "evidence_ref": "snapshots/aegis/ccf13d6e02781c8eb90f58a56c4e753b63a31a6ab983b7f8fc8e328dabbc4b56.json"
           }
         },
         {
@@ -127,9 +127,9 @@
       "confidence": "observed",
       "freshness": {
         "state": "fresh",
-        "age_seconds": 175.613,
+        "age_seconds": 71.929,
         "ttl_seconds": 300,
-        "expires_at": "2026-08-10T20:41:39.000Z"
+        "expires_at": "2026-08-10T20:51:18.000Z"
       },
       "execution_authorized": false,
       "dispatch_allowed": false,
@@ -154,7 +154,7 @@
         },
         {
           "path": "nodes.hermes-node.evidence.observed_at",
-          "value": "2026-08-10T20:36:31Z"
+          "value": "2026-08-10T20:46:16Z"
         },
         {
           "path": "nodes.hermes-node.evidence.ttl_seconds",
@@ -162,7 +162,7 @@
         },
         {
           "path": "nodes.hermes-node.evidence.probe",
-          "value": "pinned snapshot d3a79ff9d4f65497770255fe1f59cb2da9813c20873bd6dd57028b37ada2df7b"
+          "value": "pinned snapshot c5a1f5153a125ae3bd7ca482ebe9773442194e8f05ec21947b8db3cba8c610d2"
         },
         {
           "path": "nodes.hermes-node.evidence.probe_version",
@@ -188,10 +188,10 @@
           "value": {
             "state": "READY",
             "reason": "COMPUTE_CAPABILITY_READY",
-            "observed_at": "2026-08-10T20:36:31Z",
-            "expires_at": "2026-08-10T20:41:31.000Z",
-            "snapshot_sha256": "d3a79ff9d4f65497770255fe1f59cb2da9813c20873bd6dd57028b37ada2df7b",
-            "evidence_ref": "snapshots/hermes-node/d3a79ff9d4f65497770255fe1f59cb2da9813c20873bd6dd57028b37ada2df7b.json"
+            "observed_at": "2026-08-10T20:46:16Z",
+            "expires_at": "2026-08-10T20:51:16.000Z",
+            "snapshot_sha256": "c5a1f5153a125ae3bd7ca482ebe9773442194e8f05ec21947b8db3cba8c610d2",
+            "evidence_ref": "snapshots/hermes-node/c5a1f5153a125ae3bd7ca482ebe9773442194e8f05ec21947b8db3cba8c610d2.json"
           }
         },
         {
@@ -230,9 +230,9 @@
       "confidence": "observed",
       "freshness": {
         "state": "fresh",
-        "age_seconds": 183.613,
+        "age_seconds": 73.929,
         "ttl_seconds": 300,
-        "expires_at": "2026-08-10T20:41:31.000Z"
+        "expires_at": "2026-08-10T20:51:16.000Z"
       },
       "execution_authorized": false,
       "dispatch_allowed": false,
@@ -283,7 +283,7 @@
         },
         {
           "path": "nodes.atlas.evidence.observed_at",
-          "value": "2026-08-10T20:36:35Z"
+          "value": "2026-08-10T20:46:46Z"
         },
         {
           "path": "nodes.atlas.evidence.ttl_seconds",
@@ -291,7 +291,7 @@
         },
         {
           "path": "nodes.atlas.evidence.probe",
-          "value": "pinned snapshot 3d969ea9bb778c0fd180316441540bf3bd2d938c6c92acb5df13bd259c7308d6"
+          "value": "pinned snapshot 32879530a35081f6f3feb1eb8fee074368a70032123dd4b66b67be406f06984f"
         },
         {
           "path": "nodes.atlas.evidence.probe_version",
@@ -339,9 +339,9 @@
       "confidence": "observed",
       "freshness": {
         "state": "fresh",
-        "age_seconds": 179.613,
+        "age_seconds": 43.929,
         "ttl_seconds": 300,
-        "expires_at": "2026-08-10T20:41:35.000Z"
+        "expires_at": "2026-08-10T20:51:46.000Z"
       },
       "execution_authorized": false,
       "dispatch_allowed": false,
@@ -589,15 +589,15 @@
   "evidence_snapshot": [
     {
       "node": "aegis",
-      "snapshot_sha256": "95014397aa31c503161447ad5d2d86b99ea789d69a9aeeb03033db39f11e9f02"
+      "snapshot_sha256": "ccf13d6e02781c8eb90f58a56c4e753b63a31a6ab983b7f8fc8e328dabbc4b56"
     },
     {
       "node": "atlas",
-      "snapshot_sha256": "3d969ea9bb778c0fd180316441540bf3bd2d938c6c92acb5df13bd259c7308d6"
+      "snapshot_sha256": "32879530a35081f6f3feb1eb8fee074368a70032123dd4b66b67be406f06984f"
     },
     {
       "node": "hermes-node",
-      "snapshot_sha256": "d3a79ff9d4f65497770255fe1f59cb2da9813c20873bd6dd57028b37ada2df7b"
+      "snapshot_sha256": "c5a1f5153a125ae3bd7ca482ebe9773442194e8f05ec21947b8db3cba8c610d2"
     }
   ],
   "evidence_verifier": {
@@ -613,5 +613,5 @@
     "workload_catalog_sha256": "793c56c24df803b8492c967c9e6d5f9f5563af7bddc5aec6526da56f32a1c14f"
   },
   "catalog_schema_version": "0.1-placement-workloads",
-  "decision_input_sha256": "f844044f091fb6e6d927d3d00d09f42d67cf0e7616da630ae85597480d2d1392"
+  "decision_input_sha256": "993a58975a14b47cdfdc3441e97e9e555bdd2476696dfd2ed6da5da19393a4fe"
 }
