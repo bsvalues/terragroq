@@ -84,3 +84,29 @@ from unapproved probe implementations.
 The registry is scheduler-ready, but scheduling remains disabled in v0.1. A later bounded Hermes work order may consume this registry to match workload requirements against healthy, fresh, authorized capabilities.
 
 William must not be asked to choose a node for normal work placement.
+
+## Recommendation-only placement proof
+
+`recommend-placement.mjs` consumes an exact, digest-bound registry snapshot and one bounded workload
+from `config/execution-fabric/placement-workloads.json`. It reports recommendation eligibility,
+ineligibility reasons, deterministic ranking evidence, confidence, and freshness. Recommendation
+eligibility is analytical only: it does not mean the scheduler or a node has execution authority.
+
+The proof must be evaluated inside the retained snapshot's evidence window. Supplying a later
+timestamp correctly makes expired evidence ineligible instead of silently treating historical facts
+as current.
+
+```powershell
+node scripts/execution-fabric/recommend-placement.mjs `
+  --snapshot .artifacts/execution-fabric/registry.snapshot.json `
+  --schema config/execution-fabric/registry.schema.json `
+  --expected-snapshot-sha256 20B218E8F7AC6E78027FE31B2725FF14DD11339D818636F1FC44313C828FC9F9 `
+  --workloads config/execution-fabric/placement-workloads.json `
+  --workload cpu-heavy-build `
+  --at 2026-08-10T03:38:05.166Z
+```
+
+The command rejects a changed snapshot digest, malformed workload, and any registry whose scheduler
+is not exactly `disabled / not-granted`. It marks stale or non-observed nodes ineligible while fresh,
+independent candidates remain evaluable. It performs no dispatch,
+lease, reservation, remote connection, authority update, or scheduler mutation.

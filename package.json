@@ -12,7 +12,8 @@
     "hermes:smoke": "node scripts/hermes-bridge/cli.mjs smoke",
     "hermes:status": "node scripts/hermes-bridge/cli.mjs status",
     "hermes:cycle": "node --env-file=.env.local scripts/hermes-bridge/cli.mjs cycle",
-    "hermes:authorize": "node --env-file=.env.local scripts/hermes-bridge/primary-authorization-bridge.mjs"
+    "hermes:authorize": "node --env-file=.env.local scripts/hermes-bridge/primary-authorization-bridge.mjs",
+    "fabric:recommend": "node scripts/execution-fabric/recommend-placement.mjs"
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.214",

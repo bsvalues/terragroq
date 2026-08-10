@@ -1,0 +1,99 @@
+{
+  "schema_version": "0.1-placement-workloads",
+  "recommendation_only": true,
+  "workloads": [
+    {
+      "id": "cpu-heavy-build",
+      "title": "CPU-heavy build",
+      "description": "A bounded build or test workload that uses disposable scratch storage and benefits from CPU capacity.",
+      "requirements": {
+        "capabilities_all": [],
+        "authority_all": [],
+        "runtimes_all": [],
+        "minimum_cpu_threads": 8,
+        "minimum_gpu_vram_bytes": null,
+        "excluded_authority": ["authoritative-durable-state"],
+        "observed_evidence_required": true,
+        "fresh_evidence_required": true
+      },
+      "preferences": {
+        "capabilities": ["ci-build-test-candidate", "cpu-batch-candidate", "docker-worker-candidate", "agent-runtime", "burst-compute"],
+        "availability_order": ["secondary", "resident", "interactive"],
+        "higher_cpu_threads": true,
+        "higher_gpu_vram": false
+      },
+      "storage_semantics": "scratch-only"
+    },
+    {
+      "id": "gpu-local-inference",
+      "title": "GPU local inference",
+      "description": "Local language-model inference requiring an authorized, healthy Ollama runtime and a GPU with at least 4 GiB of VRAM.",
+      "requirements": {
+        "capabilities_all": ["local-llm-inference"],
+        "authority_all": ["local-llm-inference"],
+        "runtimes_all": [
+          {
+            "kind": "ollama",
+            "states": ["healthy", "running"]
+          }
+        ],
+        "minimum_cpu_threads": null,
+        "minimum_gpu_vram_bytes": 4294967296,
+        "excluded_authority": [],
+        "observed_evidence_required": true,
+        "fresh_evidence_required": true
+      },
+      "preferences": {
+        "capabilities": [],
+        "availability_order": ["resident"],
+        "higher_cpu_threads": false,
+        "higher_gpu_vram": true
+      },
+      "storage_semantics": "none"
+    },
+    {
+      "id": "authoritative-state-operation",
+      "title": "Authoritative state operation",
+      "description": "A state-bearing database operation that may run only where durable-state authority and database capability are both present.",
+      "requirements": {
+        "capabilities_all": ["database-state"],
+        "authority_all": ["database-state"],
+        "runtimes_all": [],
+        "minimum_cpu_threads": null,
+        "minimum_gpu_vram_bytes": null,
+        "excluded_authority": [],
+        "observed_evidence_required": true,
+        "fresh_evidence_required": true
+      },
+      "preferences": {
+        "capabilities": [],
+        "availability_order": ["stateful"],
+        "higher_cpu_threads": false,
+        "higher_gpu_vram": false
+      },
+      "storage_semantics": "authoritative-state"
+    },
+    {
+      "id": "interactive-development",
+      "title": "Interactive development",
+      "description": "An operator-attended development workload requiring explicit interactive-development capability and authority.",
+      "requirements": {
+        "capabilities_all": ["interactive-development"],
+        "authority_all": ["interactive-development"],
+        "runtimes_all": [],
+        "minimum_cpu_threads": null,
+        "minimum_gpu_vram_bytes": null,
+        "excluded_authority": [],
+        "observed_evidence_required": true,
+        "fresh_evidence_required": true
+      },
+      "preferences": {
+        "capabilities": [],
+        "availability_order": ["interactive"],
+        "higher_cpu_threads": false,
+        "higher_gpu_vram": false
+      },
+      "storage_semantics": "none"
+    }
+  ]
+}
