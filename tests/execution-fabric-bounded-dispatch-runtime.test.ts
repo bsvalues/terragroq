@@ -136,6 +136,10 @@ describe("Execution Fabric Phase 3 resident HERMES bounded dispatch", () => {
       process.cwd(),
       "config/execution-fabric/bounded-dispatch-authority-scopes/WO-EF-DISPATCH-001.json",
     ), "utf8"))
+    const successorScope = JSON.parse(fs.readFileSync(path.join(
+      process.cwd(),
+      "config/execution-fabric/bounded-dispatch-authority-scopes/WO-EF-DISPATCH-002.json",
+    ), "utf8"))
     const productionAuthority = JSON.parse(fs.readFileSync(path.join(
       process.cwd(),
       "config/execution-fabric/bounded-dispatch-authority-registry.json",
@@ -146,6 +150,38 @@ describe("Execution Fabric Phase 3 resident HERMES bounded dispatch", () => {
       maximum_attempts: 1,
       status: "REVIEWED_NON_ACTIVE_SCOPE",
     })
+    expect(successorScope).toMatchObject({
+      reference: "issue-538-phase3-bounded-dispatch-002",
+      work_order_id: "WO-EF-DISPATCH-002",
+      template_id: "hermes.local-llm-inference.v1",
+      selected_node_id: "hermes-node",
+      scope_sha256: "4344ffc727cab579289868664f6ba36bacaa7dadd719986833d562e5340c5330",
+      maximum_attempts: 1,
+      risk_class: "R1",
+      forge_permission_set_sha256: permissionSha256,
+      prohibited_actions: [
+        "arbitrary-shell",
+        "autonomous-scheduling",
+        "authority-mutation",
+        "external-provider-access",
+        "remote-node-access",
+        "silent-replacement",
+        "stateful-storage-write",
+      ],
+      status: "REVIEWED_NON_ACTIVE_SCOPE",
+    })
+    expect(successorScope.scope_sha256).toBe(sha256(canonicalizeJcs({
+      work_order_id: "WO-EF-DISPATCH-002",
+      template_id: "hermes.local-llm-inference.v1",
+      selected_node_id: "hermes-node",
+      input: {
+        model: "llama3.2:3b",
+        prompt: "Repeat this word: HERMESOK002",
+        expected_marker: "HERMESOK002",
+      },
+      limits: { timeout_ms: 30000, max_response_bytes: 1024 },
+      forge: { producer_identity: "resident-hermes", permission_set_sha256: permissionSha256 },
+    })))
     expect(productionAuthority.entries).toEqual([
       expect.objectContaining({
         reference: "issue-538-phase3-bounded-dispatch-001",

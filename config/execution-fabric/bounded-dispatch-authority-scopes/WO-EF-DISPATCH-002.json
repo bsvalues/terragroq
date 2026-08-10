@@ -1,0 +1,21 @@
+{
+  "schema_version": "0.1-bounded-dispatch-authority-scope",
+  "reference": "issue-538-phase3-bounded-dispatch-002",
+  "work_order_id": "WO-EF-DISPATCH-002",
+  "template_id": "hermes.local-llm-inference.v1",
+  "selected_node_id": "hermes-node",
+  "scope_sha256": "4344ffc727cab579289868664f6ba36bacaa7dadd719986833d562e5340c5330",
+  "maximum_attempts": 1,
+  "risk_class": "R1",
+  "forge_permission_set_sha256": "a2e2938b58440d5d46ad92d08da43f79e714f34140bed375abc897ac8bb64760",
+  "prohibited_actions": [
+    "arbitrary-shell",
+    "autonomous-scheduling",
+    "authority-mutation",
+    "external-provider-access",
+    "remote-node-access",
+    "silent-replacement",
+    "stateful-storage-write"
+  ],
+  "status": "REVIEWED_NON_ACTIVE_SCOPE"
+}
