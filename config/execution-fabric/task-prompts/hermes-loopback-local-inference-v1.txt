@@ -1,0 +1,1 @@
+Reply with exactly HERMES_DISPATCH_001_OK and nothing else.

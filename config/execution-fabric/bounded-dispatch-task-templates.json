@@ -1,0 +1,32 @@
+{
+  "schema_version": "0.1-bounded-dispatch-task-template-catalog",
+  "catalog_id": "execution-fabric-bounded-dispatch-task-templates",
+  "scheduler_state": "OFF",
+  "templates": [
+    {
+      "id": "hermes-loopback-local-inference-v1",
+      "version": "1.0.0",
+      "canonical_node": "hermes-node",
+      "workload_id": "local-llm-inference",
+      "model": "llama3.2:3b",
+      "prompt_sha256": "ab5bcd896d9617473a3cb8c84c04e2a247f68fb36a257717856acbae4e88a692",
+      "expected_marker": "HERMES_DISPATCH_001_OK",
+      "endpoint": "http://127.0.0.1:11434/api/generate",
+      "endpoint_scope": "loopback-only",
+      "maximum_calls": 1,
+      "timeout_seconds": 60,
+      "redirect_policy": "error",
+      "stream": false,
+      "resource_ceilings": {
+        "maximum_gpu_vram_bytes": 6442450944,
+        "prompt_limit_bytes": 1024,
+        "response_limit_bytes": 65536
+      },
+      "data_classification": "non-sensitive-only",
+      "protected_data_allowed": false,
+      "execution_mode": "FIXED_TEMPLATE_ONLY",
+      "scheduler_state": "OFF",
+      "autonomous_dispatch": false
+    }
+  ]
+}

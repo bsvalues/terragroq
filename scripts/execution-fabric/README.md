@@ -65,6 +65,27 @@ For HERMES-NODE use `-NodeId hermes-node`.
 
 The probe inventories CPU, every populated DIMM exposed by SMBIOS, NVIDIA GPUs, physical disks/partitions, NICs/IPs, and read-only runtime health for Docker/WSL/SSH/Ollama when present.
 
+## Phase 3 single-shot dispatch
+
+`fabric:dispatch:single` is an explicit, non-scheduling runner for one reviewed HERMES loopback
+inference template. It is fail-closed while
+`config/execution-fabric/bounded-dispatch-authority-registry.json` is empty.
+
+The runner accepts only a reviewed admission artifact already present as exact bytes on
+`origin/main` and a local durable state path. It independently revalidates the active single-use
+authority, exact task template, reviewed scope bytes, separate activation evidence, trusted-main
+chronology, admission digest, validity windows, lease, and fencing token. The HERMES adapter constructs
+the loopback URL, model, prompt, timeout, response limit, and request body internally. No caller may
+supply a command, URL, model, prompt, fallback node, retry, or scheduler setting.
+
+The durable store records request initiation before the HTTP call. A crash after initiation becomes
+`OUTCOME_UNKNOWN_DO_NOT_REPLAY`; it never silently sends a second model request. A stale holder is
+fenced, and a different node requires a new placement receipt and separate authority.
+
+This implementation alone grants no authority and performs no execution. A later sequence must
+separately review the exact scope, activation evidence, registry admission, and live placement before
+one bounded proof can run.
+
 Do not elevate merely for convenience. If Windows hides a field without elevation, emit unknown/warning rather than weakening security.
 
 ## Linux
