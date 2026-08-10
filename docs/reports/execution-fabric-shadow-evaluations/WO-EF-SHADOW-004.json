@@ -1,0 +1,101 @@
+{
+  "schema_version": "0.1-shadow-placement-result",
+  "status": "OBSERVED",
+  "trust_scope": "production",
+  "observation_only": true,
+  "observation_id": "shadow-WO-EF-SHADOW-004-resident-8e063f9de03e0471",
+  "work_order_id": "WO-EF-SHADOW-004",
+  "workload_id": "gpu-local-inference",
+  "policy_receipt": {
+    "sha256": "5dc81506c61698cc9369c2ff0dad9b8af8cf5b78a831f785871b0ad1b8ef1197",
+    "trust_registry_sha256": "7e4bb9f8b142be9ca9013fcfbb21954814d84eeb6115b4f87386d67c23117e72",
+    "status": "RECOMMENDED",
+    "selected_node_id": "hermes-node",
+    "evaluated_at": "2026-08-10T15:20:52.014Z"
+  },
+  "recorded_observation": {
+    "sha256": "b438312ca7d505824394bc29aa291984835ef5b4c63dcdbf0142081f1d6e36b4",
+    "recorded_at": "2026-08-10T15:31:16.308Z",
+    "manual_target": "hermes-node",
+    "outcome_evidence": {
+      "schema_version": "0.1-shadow-outcome-evidence-validation",
+      "status": "VALID",
+      "observation_only": true,
+      "artifact_sha256": "fd7e4ee6aacbbdb6feb198b6a07b030c1b075b44dff1ab2b1b52f794f3dd3ec8",
+      "work_order_id": "WO-EF-SHADOW-004",
+      "actual_target_node": "hermes-node",
+      "outcome": {
+        "status": "COMPLETED",
+        "result": "SUCCEEDED"
+      },
+      "chronology": {
+        "started_at": "2026-08-10T15:21:12.016Z",
+        "completed_at": "2026-08-10T15:21:36.537Z",
+        "latency_ms": 24521
+      },
+      "authority_outcome": {
+        "status": "COMPLIANT",
+        "reference": "issue-538-phase2-shadow-004",
+        "checked_at": "2026-08-10T15:21:12.016Z"
+      },
+      "resource_observations": [
+        {
+          "metric": "cpu_load_pct",
+          "observed_at": "2026-08-10T15:21:36.537Z",
+          "unit": "percent",
+          "value": 40
+        },
+        {
+          "metric": "gpu_vram_used_bytes",
+          "observed_at": "2026-08-10T15:21:36.537Z",
+          "unit": "bytes",
+          "value": 3473932288
+        },
+        {
+          "metric": "ram_used_bytes",
+          "observed_at": "2026-08-10T15:21:36.537Z",
+          "unit": "bytes",
+          "value": 19363663872
+        }
+      ],
+      "dispatch_allowed": false,
+      "execution_authorized": false,
+      "remote_systems_modified": false,
+      "shell_executed": false
+    },
+    "outcome_trust": {
+      "schema_version": "0.1-shadow-evidence-trust-validation",
+      "status": "TRUSTED",
+      "observation_only": true,
+      "artifact_sha256": "fd7e4ee6aacbbdb6feb198b6a07b030c1b075b44dff1ab2b1b52f794f3dd3ec8",
+      "retained_source_sha256": "fa3c2e18623e083f804d2fd37082632406ddc6f50c24c7e5976cf5fd6ecf2319",
+      "work_order_id": "WO-EF-SHADOW-004",
+      "actual_target_node": "hermes-node",
+      "authority_reference": "issue-538-phase2-shadow-004",
+      "outcome_reviewed_commit": "61a10b37ca0e5fb3d0cd43588db691cc8d0ed7b6",
+      "authority_reviewed_commit": "b1a275e62349d02d00557fbb853f53ae38fe497a",
+      "dispatch_allowed": false,
+      "execution_authorized": false,
+      "remote_systems_modified": false
+    },
+    "source_path": "docs/reports/WO-EF-SHADOW-004-resident-8e063f9de03e0471-delivery.md",
+    "source_sha256": "fa3c2e18623e083f804d2fd37082632406ddc6f50c24c7e5976cf5fd6ecf2319"
+  },
+  "comparison": {
+    "diverged": false,
+    "divergence_reasons": [],
+    "silent_fallback": false
+  },
+  "safety": {
+    "authority_violations": 0,
+    "stale_evidence_placements": 0,
+    "silent_fallbacks": 0,
+    "scheduler_state": "disabled"
+  },
+  "job_launched": false,
+  "scheduler_activated": false,
+  "authority_mutated": false,
+  "remote_accessed": false,
+  "shell_executed": false,
+  "replay_sha256": "c7265b15d5d4e2f7d099bf3787fb9d49d47627365bc044cca53a1d9276096fcb"
+}

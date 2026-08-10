@@ -241,6 +241,9 @@ accepts it only when its exact byte digest is admitted by the repository-owned r
 paths for registries, policies, schemas, workload catalogs, verifiers, interpreters, or trust roots.
 Each receipt admission also binds the exact Work Order; a reviewed recommendation cannot be reused
 as evidence for a different Work Order.
+The reported trust-registry digest is derived from the selected reviewed receipt binding plus the
+registry and policy schema versions, so later append-only admissions do not rewrite historical
+replay identity.
 
 Outcome settlement is independently pinned by the repository-owned reviewed registries at
 `config/execution-fabric/shadow-outcome-registry.json` and

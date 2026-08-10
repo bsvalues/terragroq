@@ -272,7 +272,11 @@ function verifyTrustedReceipt(registryArtifact, receipt, receiptSha256, workOrde
     || canonicalizeJcs(trusted.evidence_snapshot) !== canonicalizeJcs(receipt.evidence_snapshot)) {
     fail("receipt does not match its reviewed trust-registry binding")
   }
-  return registryArtifact.sha256
+  return crypto.createHash("sha256").update(canonicalizeJcs({
+    registry_schema_version: registryArtifact.value.schema_version,
+    placement_policy_version: registryArtifact.value.placement_policy_version,
+    trusted_receipt: trusted,
+  })).digest("hex")
 }
 
 export function validateShadowPlacementReceipt(receipt, receiptSha256) {

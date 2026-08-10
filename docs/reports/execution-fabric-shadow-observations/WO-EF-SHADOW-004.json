@@ -1,0 +1,21 @@
+{
+  "schema_version": "0.1-shadow-placement-observation",
+  "classification": "recorded-historical-observation",
+  "observation_id": "shadow-WO-EF-SHADOW-004-resident-8e063f9de03e0471",
+  "work_order_id": "WO-EF-SHADOW-004",
+  "workload_id": "gpu-local-inference",
+  "receipt_sha256": "5dc81506c61698cc9369c2ff0dad9b8af8cf5b78a831f785871b0ad1b8ef1197",
+  "recorded_at": "2026-08-10T15:31:16.308Z",
+  "manual_target": "hermes-node",
+  "source": {
+    "kind": "retained-repository-delivery-record",
+    "path": "docs/reports/WO-EF-SHADOW-004-resident-8e063f9de03e0471-delivery.md",
+    "sha256": "fa3c2e18623e083f804d2fd37082632406ddc6f50c24c7e5976cf5fd6ecf2319"
+  },
+  "outcome_evidence": {
+    "kind": "retained-canonical-outcome-evidence",
+    "path": "docs/reports/execution-fabric-shadow-outcomes/WO-EF-SHADOW-004-resident-8e063f9de03e0471-outcome.json",
+    "sha256": "fd7e4ee6aacbbdb6feb198b6a07b030c1b075b44dff1ab2b1b52f794f3dd3ec8"
+  },
+  "divergence_reasons": []
+}
