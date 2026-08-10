@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url"
 import { execFileSync } from "node:child_process"
 
 import { canonicalizeJcs } from "../canonical-json.mjs"
+import { validateShadowPlacementReceipt } from "../evaluate-shadow-placement.mjs"
 import { validateShadowOutcomeEvidence } from "../shadow-outcome-evidence.mjs"
 
 const SHA256 = /^[a-f0-9]{64}$/
@@ -103,7 +104,7 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   exact(candidate, [
     "schema_version", "candidate_id", "work_order_id", "workload_id", "producer_lane",
     "outcome_kind", "receipt", "delivery_record", "outcome_evidence", "review_evidence",
-    "authority", "recorded_at", "divergence_reasons",
+    "authority", "review_commit", "recorded_at", "divergence_reasons",
   ], "candidate")
   if (candidate.schema_version !== "0.1-shadow-admission-candidate") fail("candidate schema_version is unsupported")
   if (!new Set(["MANUAL_KNOWN_SAFE", "RESIDENT_HERMES_REVIEWED"]).has(candidate.outcome_kind)) fail("outcome_kind is not eligible for genuine admission")
@@ -118,8 +119,8 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   const review = retained(root, candidate.review_evidence, "candidate.review_evidence", [".json", ".md"])
   let receipt
   try { receipt = JSON.parse(receiptArtifact.bytes.toString("utf8")) } catch { fail("receipt is not JSON") }
+  validateShadowPlacementReceipt(receipt, receiptArtifact.sha256)
   if (receipt.work_order_id !== workOrder || receipt?.workload?.id !== workload) fail("receipt identity does not match candidate")
-  if (receipt?.recommendation?.execution_authorized !== false || receipt?.recommendation?.dispatch_allowed !== false) fail("receipt is authority-bearing")
   const outcomeValidation = validateShadowOutcomeEvidence({ artifactBytes: outcome.bytes, expectedSha256: candidate.outcome_evidence.sha256 })
   if (outcomeValidation.work_order_id !== workOrder) fail("outcome Work Order does not match candidate")
   const actualNode = outcomeValidation.actual_target_node
@@ -134,7 +135,11 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   if (validFrom > Date.parse(outcomeValidation.chronology.started_at) || expiresAt < Date.parse(outcomeValidation.chronology.completed_at)) fail("reviewed authority does not cover outcome chronology")
   if (recordedAt < Date.parse(outcomeValidation.chronology.completed_at)) fail("admission predates outcome completion")
   if (!COMMIT.test(candidate.authority.reviewed_commit)) fail("reviewed_commit must be a full lowercase Git commit")
+  if (!COMMIT.test(candidate.review_commit)) fail("review_commit must be a full lowercase Git commit")
   if (outcomeValidation.authority_outcome.reference !== candidate.authority.reference) fail("outcome authority reference does not match reviewed authority")
+  const checkedAt = timestamp(outcomeValidation.authority_outcome.checked_at, "outcome authority checked_at")
+  if (checkedAt < validFrom || checkedAt >= expiresAt) fail("outcome authority check is outside the reviewed authority window")
+  if (Date.parse(outcomeValidation.chronology.completed_at) >= expiresAt) fail("reviewed authority expires at or before outcome completion")
   if (!Array.isArray(candidate.divergence_reasons) || new Set(candidate.divergence_reasons).size !== candidate.divergence_reasons.length || candidate.divergence_reasons.some((reason) => !DIVERGENCE.has(reason))) fail("divergence_reasons are invalid or duplicated")
   const selectedNode = receipt?.recommendation?.node_id ?? null
   const diverged = selectedNode !== actualNode
@@ -143,13 +148,21 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   const commitProof = reviewProof({
     repositoryRoot: root,
     reviewedCommit: candidate.authority.reviewed_commit,
-    // The review record names the commit, so requiring that record inside the same commit
-    // would create an impossible self-referential Git hash. The reviewed commit must contain
-    // the three execution facts; the retained review record independently binds that commit.
+    // The execution commit contains the three execution facts. A separate later review commit
+    // contains the retained review record that names and reviews this execution commit.
     artifacts: [receiptArtifact, delivery, outcome],
   })
   if (!commitProof || commitProof.reviewed_commit !== candidate.authority.reviewed_commit || commitProof.trusted_ref !== "refs/heads/main" || commitProof.exact_artifact_count !== 3) {
     fail("review proof did not bind trusted main, reviewed commit, and all exact artifacts")
+  }
+  const reviewCommitProof = reviewProof({
+    repositoryRoot: root,
+    reviewedCommit: candidate.review_commit,
+    artifacts: [review],
+  })
+  if (!reviewCommitProof || reviewCommitProof.reviewed_commit !== candidate.review_commit
+    || reviewCommitProof.trusted_ref !== "refs/heads/main" || reviewCommitProof.exact_artifact_count !== 1) {
+    fail("review proof did not bind the exact review record to trusted main")
   }
 
   const receiptSha256 = hash(receiptArtifact.bytes)
@@ -169,7 +182,7 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
       outcome: { artifact_sha256: candidate.outcome_evidence.sha256, work_order_id: workOrder, actual_target_node: actualNode, retained_source_sha256: candidate.delivery_record.sha256, authority_reference: candidate.authority.reference, reviewed_commit: candidate.authority.reviewed_commit, status: "ACTIVE" },
       authority: { reference: candidate.authority.reference, work_order_id: workOrder, allowed_canonical_nodes: [...candidate.authority.allowed_canonical_nodes].sort(), valid_from: candidate.authority.valid_from, expires_at: candidate.authority.expires_at, reviewed_commit: candidate.authority.reviewed_commit, status: "ACTIVE" },
     },
-    evidence: { review_path: review.normalized, review_sha256: candidate.review_evidence.sha256, producer_lane: candidate.producer_lane, outcome_kind: candidate.outcome_kind, commit_proof: commitProof },
+    evidence: { review_path: review.normalized, review_sha256: candidate.review_evidence.sha256, producer_lane: candidate.producer_lane, outcome_kind: candidate.outcome_kind, commit_proof: commitProof, review_commit_proof: reviewCommitProof },
     safety: { observation_only: true, job_launched: false, scheduler_activated: false, dispatch_authority_granted: false, authority_mutated: false, remote_accessed: false, shell_executed: false },
   }
   return { ...result, bundle_sha256: hash(canonicalBytes(result)) }
@@ -182,6 +195,9 @@ export function runShadowAdmissionCli(argv) {
     const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
     const relative = path.relative(repositoryRoot, candidatePath).replaceAll("\\", "/")
     if (!relative.startsWith("docs/reports/") || relative.startsWith("../")) fail("candidate must be retained under docs/reports")
+    if (fs.lstatSync(candidatePath).isSymbolicLink()) fail("candidate path must not be a symbolic link")
+    const realRelative = path.relative(repositoryRoot, fs.realpathSync(candidatePath)).replaceAll("\\", "/")
+    if (!realRelative.startsWith("docs/reports/") || realRelative.startsWith("../")) fail("candidate resolves outside docs/reports")
     return compileShadowAdmission({ candidate: JSON.parse(fs.readFileSync(candidatePath, "utf8")), repositoryRoot })
   } catch (error) {
     if (!(error instanceof AdmissionError)) throw error

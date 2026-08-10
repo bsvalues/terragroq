@@ -275,7 +275,7 @@ function verifyTrustedReceipt(registryArtifact, receipt, receiptSha256, workOrde
   return registryArtifact.sha256
 }
 
-function validateReceipt(receipt, receiptSha256) {
+export function validateShadowPlacementReceipt(receipt, receiptSha256) {
   object(receipt, "receipt")
   rejectExecutableInput(receipt, "receipt")
   if (receipt.schema_version !== "0.2-pinned-placement-recommendation") fail("receipt schema_version is unsupported")
@@ -427,7 +427,7 @@ function evaluateShadowPlacementAtRoot({ receiptBytes, observationBytes, reposit
   const observationArtifact = parseArtifactBytes(observationBytes, "historical observation bytes")
   const receipt = receiptArtifact.value
   const observation = observationArtifact.value
-  const receiptView = validateReceipt(structuredClone(receipt), receiptArtifact.sha256)
+  const receiptView = validateShadowPlacementReceipt(structuredClone(receipt), receiptArtifact.sha256)
   const trustRegistry = loadTrustedReceiptRegistry(repositoryRoot)
   const trustRegistrySha256 = verifyTrustedReceipt(
     trustRegistry,

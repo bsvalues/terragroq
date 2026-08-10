@@ -22,10 +22,19 @@ function fixture(overrides: Json = {}) {
     return { path: relative, sha256: sha(bytes) }
   }
   const receipt = {
-    schema_version: "0.2-placement-receipt", work_order_id: "WO-LIVE-001",
-    workload: { id: "reviewed-maintenance" }, decision_input_sha256: "1".repeat(64),
-    evidence_snapshot: [{ node: "omen", snapshot_sha256: "2".repeat(64) }],
-    recommendation: { node_id: "omen", execution_authorized: false, dispatch_allowed: false },
+    schema_version: "0.2-pinned-placement-recommendation", status: "RECOMMENDED",
+    recommendation_only: true, eligibility_scope: "recommendation-only", work_order_id: "WO-LIVE-001",
+    evaluated_at: "2026-08-10T07:59:30.000Z",
+    workload: { id: "reviewed-maintenance", title: "Reviewed maintenance", storage_semantics: "none" },
+    scheduler: { state: "disabled", authority: "not-granted", autonomous_dispatch: "forbidden" },
+    recommendation: { node_id: "omen", rank: 1, rank_basis: { stable_node_id: "omen" }, execution_authorized: false, dispatch_allowed: false },
+    eligible_nodes: [{ node_id: "omen", eligible: true, rank: 1, rank_basis: { stable_node_id: "omen" }, reasons: [], evidence_used: [], confidence: "observed", freshness: { state: "fresh", expires_at: "2026-08-10T08:00:30.000Z" }, execution_authorized: false, dispatch_allowed: false }],
+    ineligible_nodes: [], confidence: { state: "observed", freshness: "fresh", registry_freshness: "fresh" },
+    placement_policy_version: "execution-fabric-placement/0.2",
+    evidence_snapshot: [{ node: "aegis", snapshot_sha256: "2".repeat(64) }, { node: "atlas", snapshot_sha256: "3".repeat(64) }, { node: "hermes-node", snapshot_sha256: "4".repeat(64) }],
+    evidence_verifier: { contract: "jcs-rfc8785/1", sha256: "5".repeat(64), result: "PASS" },
+    input_artifacts: { registry_base_sha256: "6".repeat(64) }, decision_input_sha256: "1".repeat(64),
+    authority_mutated: false, remote_systems_modified: false,
   }
   const outcome = {
     actual_target_node: "omen",
@@ -45,6 +54,7 @@ function fixture(overrides: Json = {}) {
     outcome_evidence: write("docs/reports/execution-fabric-shadow-outcomes/WO-LIVE-001.json", outcomeBytes),
     review_evidence: write("docs/reports/shadow-admission/WO-LIVE-001-review.md", `# WO-LIVE-001 review\n\nReviewed commit: ${commit}\n`),
     authority: { reference: "authority-WO-LIVE-001", allowed_canonical_nodes: ["omen"], valid_from: "2026-08-10T07:59:00.000Z", expires_at: "2026-08-10T08:01:00.000Z", reviewed_commit: commit },
+    review_commit: "b".repeat(40),
     recorded_at: "2026-08-10T08:01:01.000Z", divergence_reasons: [],
     ...overrides,
   }
@@ -101,6 +111,23 @@ describe("Execution Fabric genuine shadow outcome admission", () => {
     const selected = fixture()
     expect(() => compile(selected, ({ reviewedCommit }: Json) => ({ trusted_ref: "refs/heads/main", reviewed_commit: reviewedCommit, exact_artifact_count: 2 })))
       .toThrow("review proof did not bind trusted main")
+  })
+
+  it("rejects receipts outside the canonical Phase 2 contract and unmerged review records", () => {
+    const invalidReceipt = fixture()
+    const receiptPath = path.join(invalidReceipt.root, invalidReceipt.candidate.receipt.path)
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"))
+    receipt.scheduler.state = "enabled"
+    fs.writeFileSync(receiptPath, `${JSON.stringify(receipt)}\n`)
+    invalidReceipt.candidate.receipt.sha256 = sha(fs.readFileSync(receiptPath))
+    expect(() => compile(invalidReceipt)).toThrow("receipt scheduler boundary is invalid")
+
+    const missingReview = fixture()
+    expect(() => compile(missingReview, ({ reviewedCommit, artifacts }: Json) => ({
+      trusted_ref: "refs/heads/main",
+      reviewed_commit: reviewedCommit,
+      exact_artifact_count: reviewedCommit === missingReview.candidate.review_commit ? 0 : artifacts.length,
+    }))).toThrow("review proof did not bind the exact review record")
   })
 
   it("rejects impossible calendar instants and symlinked retained evidence", () => {
