@@ -1,0 +1,12 @@
+{
+  "schema_version": "0.1-resident-aegis-runtime-lease",
+  "lease_id": "lease-0a542442964a45d907079864",
+  "claim_id": "claim-dce2320e5b737d481de2bc69",
+  "acquired_at": "2026-08-10T20:51:15.117Z",
+  "holder": {
+    "pid": 33863,
+    "boot_id": "d4ab2256-576c-451c-a57b-e55dd741a180",
+    "process_start_ticks": "6810988"
+  },
+  "lease_sha256": "0950c3602d54701760adcefb7b268cb172aa586586ee85c1f4c8792a71de49cc"
+}

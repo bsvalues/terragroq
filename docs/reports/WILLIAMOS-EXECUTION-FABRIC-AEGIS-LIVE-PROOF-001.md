@@ -33,6 +33,8 @@ An immediate replay of the identical request failed closed with
 - Expected and observed input SHA-256: `8142d6c2154446cabc944c77dfe99c1e2c986985a03d33f4f841395de3747e14`
 - Claim ID: `claim-dce2320e5b737d481de2bc69`
 - Lease ID: `lease-0a542442964a45d907079864`
+- Lease SHA-256: `0950c3602d54701760adcefb7b268cb172aa586586ee85c1f4c8792a71de49cc`
+- Lease reconstruction evidence SHA-256: `02a67bf7a6c187381de67ac47d4a92b41b3f195fa1b1c3c384b4f6c4d0313692`
 - Runner evidence SHA-256: `5ae228e950792cfe9926c2615b83f25a6fa47d45317ac7a3855d3ef1feef57ad`
 - Replay artifact SHA-256: `a45fcbd83da0c2a52315748f60ffb90ae197c8c299c2b11bdb57b3aad00a66bc`
 - Replay evidence SHA-256: `5b3bc381ba7e541a0709b44f32c4f552aa196f32750513dad805094ac6be6a93`
@@ -42,10 +44,16 @@ Retained artifacts:
 - `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-request.json`
 - `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-receipt.json`
 - `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-claim.json`
+- `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-lease.json`
+- `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-lease-reconstruction.json`
 - `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-result.json`
 - `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-release.json`
 - `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-replay.json`
 - `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-replay-evidence.json`
+
+The runner removed its active lease file after durable release. The exact lease body was recovered
+from its retained SHA-256 using the bounded AEGIS journal PID and monotonic-start window. The
+search produced exactly one candidate; its full digest matches the result and release records.
 
 ## Failed-Closed Precursor Evidence
 
