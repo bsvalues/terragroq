@@ -12,28 +12,6 @@
       "expires_at": "2026-08-10T20:01:38.777Z",
       "reviewed_commit": "83b9d699e90dfb2296f8cb3b9ae775661c6a941f",
       "status": "ACTIVE"
-    },
-    {
-      "reference": "issue-538-phase2-shadow-002",
-      "work_order_id": "WO-EF-SHADOW-002",
-      "allowed_canonical_nodes": [
-        "hermes-node"
-      ],
-      "valid_from": "2026-08-10T14:42:00.000Z",
-      "expires_at": "2026-08-11T02:42:00.000Z",
-      "reviewed_commit": "ace709f88752d1e270c3d369b14259c9872e89e7",
-      "status": "ACTIVE"
-    },
-    {
-      "reference": "issue-538-phase2-shadow-003",
-      "work_order_id": "WO-EF-SHADOW-003",
-      "allowed_canonical_nodes": [
-        "atlas"
-      ],
-      "valid_from": "2026-08-10T14:42:00.000Z",
-      "expires_at": "2026-08-11T02:42:00.000Z",
-      "reviewed_commit": "ace709f88752d1e270c3d369b14259c9872e89e7",
-      "status": "ACTIVE"
     }
   ]
 }

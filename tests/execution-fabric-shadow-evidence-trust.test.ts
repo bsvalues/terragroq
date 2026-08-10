@@ -107,25 +107,17 @@ describe("Execution Fabric shadow evidence trust registries", () => {
       }),
     ]))
     expect(loaded.authority_registry.status).toBe("VALID")
-    expect(loaded.authority_registry.entries).toEqual(expect.arrayContaining([
+    expect(loaded.authority_registry.entries).toEqual([
       expect.objectContaining({
         reference: "issue-538-phase2-shadow-001",
         work_order_id: "WO-EF-SHADOW-001",
         allowed_canonical_nodes: ["hermes-node"],
         status: "ACTIVE",
       }),
-      expect.objectContaining({
-        reference: "issue-538-phase2-shadow-002",
-        work_order_id: "WO-EF-SHADOW-002",
-        allowed_canonical_nodes: ["hermes-node"],
-        status: "ACTIVE",
-      }),
-      expect.objectContaining({
-        reference: "issue-538-phase2-shadow-003",
-        work_order_id: "WO-EF-SHADOW-003",
-        allowed_canonical_nodes: ["atlas"],
-        status: "ACTIVE",
-      }),
+    ])
+    expect(loaded.authority_registry.entries).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ reference: "issue-538-phase2-shadow-002" }),
+      expect.objectContaining({ reference: "issue-538-phase2-shadow-003" }),
     ]))
     expectRejected(() => trust({
       outcomeRegistry: loaded.outcome_registry,

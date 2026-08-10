@@ -1,18 +1,27 @@
-# WO-EF-SHADOW-002 and WO-EF-SHADOW-003 authority admission
+# WO-EF-SHADOW-002 and WO-EF-SHADOW-003 containment record
 
 Issue: `#538`
 
-Purpose: admit two bounded, operator-selected executions needed to form a representative Phase 2
-shadow-placement set after a fresh recommendation exists for each Work Order.
+Status: `CONTAINED_NOT_AUTHORIZED`
+
+PR `#549` merged authority-registry entries for these Work Orders before the authority packet and
+scope contract had been independently reviewed. No workload was executed. This record removes both
+entries from the executable registry and preserves the fail-closed boundary.
 
 ## WO-EF-SHADOW-002
 
 - Authority reference: `issue-538-phase2-shadow-002`
 - Allowed node: `hermes-node`
 - Workload: one fixed, benign local-LLM inference through the existing HERMES loopback service
-- Valid from: `2026-08-10T14:42:00.000Z`
-- Expires at: `2026-08-11T02:42:00.000Z`
-- Authority source commit: `ace709f88752d1e270c3d369b14259c9872e89e7`
+- Authority state: `NOT_AUTHORIZED`
+- Risk: `R0`
+- Task template: `existing-loopback-llm-inference-v1`
+- Repository scope: `bsvalues/terragroq`
+- Environment scope: `hermes-loopback-ollama`
+- Allowed actions: invoke the existing loopback LLM; read one bounded response
+- Forbidden actions: protected-data access, secret inspection, model-inventory change, runtime mutation
+- Data class: non-sensitive only
+- Owner decision condition: a new authority boundary only
 
 The prompt may contain no protected, county, PACS, production, credential, or repository-secret data.
 The task may not change model inventory, runtime configuration, host configuration, or network
@@ -23,9 +32,15 @@ exposure.
 - Authority reference: `issue-538-phase2-shadow-003`
 - Allowed node: `atlas`
 - Workload: one read-only authoritative-state metadata query against the approved Forge root
-- Valid from: `2026-08-10T14:42:00.000Z`
-- Expires at: `2026-08-11T02:42:00.000Z`
-- Authority source commit: `ace709f88752d1e270c3d369b14259c9872e89e7`
+- Authority state: `NOT_AUTHORIZED`
+- Risk: `R0`
+- Task template: `forge-root-metadata-query-v1`
+- Repository scope: `bsvalues/terragroq`
+- Environment scope: `atlas-forge-root-read-only`
+- Allowed actions: read Forge-root metadata; report aggregate metadata
+- Forbidden actions: protected-content access, secret inspection, database mutation, filesystem mutation
+- Data class: non-sensitive metadata only
+- Owner decision condition: a new authority boundary only
 
 The task may query only bounded, read-only Forge metadata exposed by the approved Forge root; it is
 not authority for arbitrary filesystem inspection. It may not read protected file contents, inspect
@@ -40,6 +55,10 @@ credentials, access county or PACS data, write state, mutate a database, or chan
 - AEGIS storage, NAS, or backup authority granted: `false`
 - Remote infrastructure mutation authority: `false`
 
-These admissions are prerequisites for genuine observations, not execution receipts or Phase 2 pass
-claims. Each execution may begin only after its own fresh Phase 1 recommendation is retained. Receipt
-and outcome settlement remain fail closed until separately retained, reviewed, and admitted.
+Execution performed for WO-EF-SHADOW-002: `false`
+
+Execution performed for WO-EF-SHADOW-003: `false`
+
+Any future admission requires a separate reviewed contract that binds the exact authority scope,
+followed by a separate future-dated activation merged before its effective time. Neither Work Order
+may execute from PR `#549` or from this containment record.
