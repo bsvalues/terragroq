@@ -281,7 +281,11 @@ $result = [ordered]@{
 
 $json = ConvertTo-Json -InputObject $result -Depth 12
 if ($OutputPath) {
-  $resolvedOutputPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath $OutputPath))
+  $resolvedOutputPath = if ([System.IO.Path]::IsPathRooted($OutputPath)) {
+    [System.IO.Path]::GetFullPath($OutputPath)
+  } else {
+    [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath $OutputPath))
+  }
   $parent = Split-Path -Parent $resolvedOutputPath
   if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
   [System.IO.File]::WriteAllText($resolvedOutputPath, $json, [System.Text.UTF8Encoding]::new($false))

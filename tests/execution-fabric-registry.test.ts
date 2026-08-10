@@ -719,6 +719,7 @@ describe("Execution Fabric probe and scheduler boundaries", () => {
     expect(windows).toContain("capacity_bytes = $capacity")
     expect(windows).toContain("serial = Convert-NonBlankString")
     expect(windows).toContain("ConvertTo-Json -InputObject $result")
+    expect(windows).toContain("[System.IO.Path]::IsPathRooted($OutputPath)")
     expect(windows).toContain("GetFullPath")
     expect(linux).toContain("def systemctl_state(unit)")
     expect(linux).toContain("'--property=LoadState'")
