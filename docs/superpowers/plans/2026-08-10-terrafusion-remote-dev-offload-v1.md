@@ -192,7 +192,7 @@ Use `set -euo pipefail`, `umask 077`, a fixed operation `case`, `realpath` confi
 Hardcode operation-to-command mappings. Representative mappings:
 
 ```bash
-RESTORE_DOTNET) dotnet restore backend/TerraFusion.sln ;;
+RESTORE_DOTNET) dotnet restore backend/tests/TerraFusion.Unit.Tests/TerraFusion.Unit.Tests.csproj ;;
 TEST_WORKFLOW_CONTRACT) corepack pnpm exec vitest run tests/ci-terrafusion-unit-informational.test.ts ;;
 TEST_DOTNET_INFORMATIONAL) dotnet test backend/tests/TerraFusion.Unit.Tests/TerraFusion.Unit.Tests.csproj -c Release --no-build -v:minimal /nologo ;;
 BUILD_DOTNET_RELEASE) dotnet build backend/TerraFusion.sln -c Release --no-restore -v:minimal /nologo ;;
@@ -208,7 +208,13 @@ Validate packet locally, create one sanitized evidence directory, and invoke onl
 ssh.exe -o BatchMode=yes -o ConnectTimeout=10 hermes powershell.exe -NoProfile -EncodedCommand <validated-relay-script>
 ```
 
-The relay script must pin the known AEGIS fingerprint, call AEGIS with BatchMode and a finite timeout, and pass base64 JSON/patch bytes to the fixed worker without interpolation. It may not write a persistent Hermes file or modify Hermes configuration.
+The relay script must pin the known AEGIS fingerprint and independently validate the policy digest,
+packet digest, immutable `runId`, exact Work Order/repository/node/workspace/transport, operation
+allowlist, resource ceilings, expiry, and single-use run binding before any AEGIS call. It then calls
+AEGIS with BatchMode and a finite timeout and passes base64 JSON/patch bytes to the fixed worker
+without interpolation. Hermes rejects replay through an atomic proof-scoped run marker outside the
+TerraFusion repository; that marker expires with the grant and is removed only after terminal
+evidence. The relay may not create a persistent service or modify Hermes configuration.
 
 - [ ] **Step 6: Run focused GREEN and safety scans**
 
@@ -244,7 +250,7 @@ Fetch both remotes, capture the TerraFusion `origin/main` SHA, generate a random
 
 Through `ssh hermes`, verify the effective AEGIS host/user/key, known-host fingerprint, TCP/22, BatchMode authentication, hostname, OS, CPU, memory, disk free, process list for the exact workspace, Git, .NET 8, Node, Corepack/pnpm, and GitHub repository read/push capability. Do not alter SSH configuration, install packages, or write the workspace.
 
-Expected: exact AEGIS identity, at least 12 logical CPUs, at least 12 GiB usable memory or a policy-lowered concurrency that remains within the 12-thread/12-GiB ceiling, at least 80 GiB free scratch, and authenticated Git push capability.
+Expected: exact AEGIS identity, at least 12 logical CPUs, at least 12 GiB usable memory or a policy-lowered concurrency that remains within the 12-thread/12-GiB ceiling, at least 80 GiB free scratch, and authenticated Git push capability. The preflight also verifies Hermes independently rejects a digest mismatch, expired packet, widened resource limit, unknown operation, and replayed `runId` before contacting AEGIS.
 
 - [ ] **Step 3: Acquire exactly one workspace**
 
@@ -276,6 +282,7 @@ The focused test must parse the workflow text and assert:
 expect(dotnetWorkflow).toContain("informational:")
 expect(dotnetWorkflow).toContain("default: false")
 expect(dotnetWorkflow).toContain("continue-on-error: ${{ inputs.informational }}")
+expect(dotnetWorkflow).toContain('RESTORE_TARGET="${{ inputs.test_project || inputs.solution }}"')
 expect(ciWorkflow).toContain("backend-doctrine-informational:")
 expect(ciWorkflow).toContain("test_project: backend/tests/TerraFusion.Unit.Tests/TerraFusion.Unit.Tests.csproj")
 expect(ciWorkflow).toContain("informational: true")
@@ -297,6 +304,18 @@ informational:
 ```
 
 Add `continue-on-error: ${{ inputs.informational }}` only to `Canonical tests (Release)` and `Tests with coverage (Release)`. Do not add it to checkout, setup, cache, restore, build, or coverage-output verification.
+
+Change `Restore dependencies` to resolve the same target-selection rule used by the build and test
+steps:
+
+```bash
+RESTORE_TARGET="${{ inputs.test_project || inputs.solution }}"
+dotnet restore "$RESTORE_TARGET"
+```
+
+This is required because `TerraFusion.Unit.Tests` is intentionally absent from
+`backend/TerraFusion.sln`; a solution-only restore cannot support a subsequent `--no-restore` build
+of that project. The default path remains the solution when `test_project` is empty.
 
 - [ ] **Step 3: Add the project-wide informational job**
 
@@ -335,7 +354,10 @@ Defer commit until Task 5 completes so the proof document contains exact AEGIS e
 
 - [ ] **Step 1: Restore dependencies on AEGIS**
 
-Invoke `RESTORE_DOTNET`. Expected: `dotnet restore backend/TerraFusion.sln` exits 0 within 90 minutes. Record output digest, duration, and AEGIS identity; do not commit package caches.
+Invoke `RESTORE_DOTNET`. Expected:
+`dotnet restore backend/tests/TerraFusion.Unit.Tests/TerraFusion.Unit.Tests.csproj` exits 0 within 90
+minutes, matching the reusable workflow's `test_project` target selection. Record output digest,
+duration, and AEGIS identity; do not commit package caches.
 
 - [ ] **Step 2: Build the focused test project on AEGIS**
 
