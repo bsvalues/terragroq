@@ -40,8 +40,8 @@ function fixture() {
 function request(templateId = "aegis.ci-build-test.v1") {
   const inputs: Record<string, object> = {
     "aegis.ci-build-test.v1": { profile_id: "williamos.standard-validation.v1" },
-    "aegis.hash-verify.v1": {
-      profile_id: "sha256.verify.v1",
+    "aegis.hash-manifest-verify.future.v1": {
+      profile_id: "sha256.manifest-verify.future.v1",
       expected_aggregate_sha256: digest("aggregate"),
     },
     "aegis.compression.v1": {
@@ -95,7 +95,7 @@ function rewrite(root: string, relativePath: string, mutate: (value: any) => voi
 describe("Execution Fabric non-active AEGIS bounded adapter contract", () => {
   it.each([
     ["aegis.ci-build-test.v1", "CI_BUILD_TEST"],
-    ["aegis.hash-verify.v1", "HASH_VERIFY"],
+    ["aegis.hash-manifest-verify.future.v1", "HASH_VERIFY"],
     ["aegis.compression.v1", "COMPRESSION"],
   ])("accepts the reviewed %s request only as a non-active contract", (templateId, workloadClass) => {
     const result = evaluateResidentAegisContract({ repositoryRoot: fixture(), request: request(templateId) })
@@ -200,7 +200,7 @@ describe("Execution Fabric non-active AEGIS bounded adapter contract", () => {
   })
 
   it("rejects changed hash and compression semantics", () => {
-    const hash = request("aegis.hash-verify.v1")
+    const hash = request("aegis.hash-manifest-verify.future.v1")
     hash.input.profile_id = "md5.verify.v1"
     const compression = request("aegis.compression.v1")
     compression.input.profile_id = "tar-zstd.nondeterministic.v1"

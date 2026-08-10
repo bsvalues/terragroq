@@ -12,6 +12,7 @@ import {
 
 type Json = Record<string, any>
 const sha = (bytes: Buffer | string) => crypto.createHash("sha256").update(bytes).digest("hex")
+const repositoryBytes = (file: string) => Buffer.from(fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n"), "utf8")
 const configPaths = [
   "config/execution-fabric/aegis-bounded-dispatch-templates.json",
   "config/execution-fabric/agent-forge-aegis-bounded-hash-verify-permission.json",
@@ -107,7 +108,7 @@ function authorityProof({ registrySha256, authority, scopeSha256, scopeArtifactS
   }
 }
 
-function fixture({ authority = true, input = Buffer.from("AEGIS exact hash bytes\n") } = {}) {
+function fixture({ authority = true, grant = true, input = Buffer.from("AEGIS exact hash bytes\n") } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-bounded-dispatch-"))
   const repositoryRoot = path.join(root, "repo")
   const stagingRoot = path.join(repositoryRoot, "docs", "reports", "bounded-dispatch", "aegis-inputs")
@@ -121,9 +122,9 @@ function fixture({ authority = true, input = Buffer.from("AEGIS exact hash bytes
   const inputPath = path.join(stagingRoot, "approved", "input.bin")
   fs.mkdirSync(path.dirname(inputPath), { recursive: true })
   fs.writeFileSync(inputPath, input)
-  const permissionBytes = fs.readFileSync(path.join(repositoryRoot, configPaths[1]))
-  const templateBytes = fs.readFileSync(path.join(repositoryRoot, configPaths[0]))
-  const identityBytes = fs.readFileSync(path.join(repositoryRoot, configPaths[2]))
+  const permissionBytes = repositoryBytes(path.join(repositoryRoot, configPaths[1]))
+  const templateBytes = repositoryBytes(path.join(repositoryRoot, configPaths[0]))
+  const identityBytes = repositoryBytes(path.join(repositoryRoot, configPaths[2]))
   const receiptBytes = Buffer.from(`${JSON.stringify(receipt())}\n`)
   const request = {
     schema_version: "0.1-aegis-hash-verify-request",
@@ -139,6 +140,15 @@ function fixture({ authority = true, input = Buffer.from("AEGIS exact hash bytes
     limits: { max_input_bytes: 1048576, timeout_ms: 30000 },
     forge: { permission_set_sha256: sha(permissionBytes), template_registry_sha256: sha(templateBytes) },
     authority_reference: "issue-538-aegis-hash-test-001",
+  }
+  if (grant) {
+    const workOrderPath = path.join(repositoryRoot, configPaths[3])
+    const workOrder = JSON.parse(fs.readFileSync(workOrderPath, "utf8"))
+    workOrder.authorityGrantRefs = [request.authority_reference]
+    workOrder.operationalState = "AUTHORITY_MATCHED"
+    workOrder.reasonCode = null
+    workOrder.authorityStatus = "GRANTED"
+    fs.writeFileSync(workOrderPath, JSON.stringify(workOrder))
   }
   const scope = {
     work_order_id: request.work_order_id,
@@ -179,11 +189,12 @@ function fixture({ authority = true, input = Buffer.from("AEGIS exact hash bytes
     review_commit: "b".repeat(40),
     maximum_attempts: 1,
     risk_class: "R1",
+    authority_status: "GRANTED",
     prohibited_actions: [
       "arbitrary-shell", "autonomous-scheduling", "authority-mutation", "external-provider-access",
       "network-access", "remote-node-access", "silent-replacement", "workload-storage-write",
     ],
-    status: "REVIEWED_NON_ACTIVE_SCOPE",
+    status: "REVIEWED_ACTIVE_SINGLE_USE_SCOPE",
   }
   const scopeBytes = Buffer.from(JSON.stringify(scopeArtifact))
   const scopeDestination = path.join(repositoryRoot, scopePath)
@@ -258,8 +269,8 @@ function authorityFiles(value: Json) {
 }
 
 describe("AEGIS bounded HASH_VERIFY adapter", () => {
-  it("keeps production non-active while the separate authority registry is empty", () => {
-    const value = fixture()
+  it("keeps production non-active while the checked-in Work Order is not granted", () => {
+    const value = fixture({ grant: false })
     fs.copyFileSync(
       path.join(process.cwd(), "config/execution-fabric/aegis-bounded-dispatch-authority-registry.json"),
       path.join(value.repositoryRoot, "config/execution-fabric/aegis-bounded-dispatch-authority-registry.json"),
@@ -268,7 +279,7 @@ describe("AEGIS bounded HASH_VERIFY adapter", () => {
     expect(result).toMatchObject({
       status: "BLOCKED",
       operational_state: "BLOCKED_AUTHORITY",
-      reasons: [{ code: "AUTHORITY_NOT_ADMITTED" }],
+      reasons: [{ code: "WORK_ORDER_AUTHORITY_INACTIVE" }],
       execution_authorized: false,
       operation_allowed: false,
       safety: { scheduler_activated: false, remote_accessed: false, output_storage_modified: false },
@@ -284,6 +295,34 @@ describe("AEGIS bounded HASH_VERIFY adapter", () => {
       maximum_attempts: 1,
       operation_allowed: true,
       safety: { dispatch_performed: false, network_accessed: false, workload_storage_modified: false },
+    })
+  })
+
+  it("rejects a granted Work Order when its exact authority entry is absent", () => {
+    expect(prepareAegisHashVerify(fixture({ authority: false }))).toMatchObject({
+      status: "BLOCKED", operational_state: "BLOCKED_AUTHORITY",
+      reasons: [{ code: "AUTHORITY_NOT_ADMITTED" }],
+    })
+  })
+
+  it("binds the authenticated execution Work Order to the exact request", () => {
+    const value = fixture()
+    value.request.work_order_id = "WO-EF-DISPATCH-AEGIS-OTHER"
+    expect(prepareAegisHashVerify(value)).toMatchObject({
+      status: "BLOCKED", reasons: [{ code: "WORK_ORDER_AUTHORITY_INACTIVE" }],
+    })
+  })
+
+  it("requires the retained execution scope to carry granted single-use authority", () => {
+    const value = fixture()
+    const files = authorityFiles(value)
+    files.scope.authority_status = "NOT_GRANTED"
+    const changedScopeBytes = Buffer.from(JSON.stringify(files.scope))
+    fs.writeFileSync(files.scopePath, changedScopeBytes)
+    files.registry.entries[0].scope_artifact_sha256 = sha(changedScopeBytes)
+    fs.writeFileSync(files.registryPath, JSON.stringify(files.registry))
+    expect(prepareAegisHashVerify(value)).toMatchObject({
+      status: "BLOCKED", reasons: [{ code: "AUTHORITY_SCOPE_MISMATCH" }],
     })
   })
 
@@ -459,7 +498,7 @@ describe("AEGIS bounded HASH_VERIFY adapter", () => {
   it("emits bounded mismatch evidence for a wrong expected digest", async () => {
     const value = fixture()
     value.request.input.expected_sha256 = "f".repeat(64)
-    const identityBytes = fs.readFileSync(path.join(value.repositoryRoot, configPaths[2]))
+    const identityBytes = repositoryBytes(path.join(value.repositoryRoot, configPaths[2]))
     const scope = {
       work_order_id: value.request.work_order_id, template_id: value.request.template_id, selected_node_id: "aegis",
       input: { ...value.request.input }, limits: { ...value.request.limits }, forge: { ...value.request.forge },
@@ -531,6 +570,54 @@ describe("AEGIS bounded HASH_VERIFY adapter", () => {
       releaseAttempted: true, runtimeLeaseReleased: true,
     })
     expect(operation.releaseExclusiveLease).toHaveBeenCalledTimes(1)
+  })
+
+  it("rejects request mutation after preflight and uses only the immutable snapshot", async () => {
+    const value = fixture()
+    const operation = runtime(value, {
+      acquireExclusiveLease: vi.fn(async () => {
+        value.request.input.relative_path = "approved/replacement.bin"
+        return { acquired: true, lease_id: "lease-aegis-mutated-request", acquired_at: "2026-08-10T08:01:00.200Z" }
+      }),
+    })
+    const error = await executeAegisHashVerify(operation).catch((caught) => caught)
+    expect(error).toMatchObject({
+      message: expect.stringContaining("REQUEST_CHANGED"), claimConsumed: true,
+      leaseAcquired: true, operationAttempted: false, runtimeLeaseReleased: true,
+    })
+    expect(operation.releaseExclusiveLease).toHaveBeenCalledTimes(1)
+  })
+
+  it("releases an acquired lease even when its response is malformed", async () => {
+    const value = fixture()
+    const operation = runtime(value, {
+      acquireExclusiveLease: vi.fn(async () => ({
+        acquired: true, lease_id: "lease-aegis-malformed-response",
+        acquired_at: "2026-08-10T08:01:00.200Z", unexpected: true,
+      })),
+    })
+    const error = await executeAegisHashVerify(operation).catch((caught) => caught)
+    expect(error).toMatchObject({
+      message: expect.stringContaining("fields do not match"), claimConsumed: true,
+      leaseAcquired: true, operationAttempted: false, releaseAttempted: true,
+      runtimeLeaseReleased: true,
+    })
+    expect(operation.releaseExclusiveLease).toHaveBeenCalledWith({
+      lease_id: "lease-aegis-malformed-response", claim_id: "claim-aegis-hash-001",
+    })
+
+    const invalidTimestamp = fixture()
+    const invalidOperation = runtime(invalidTimestamp, {
+      acquireExclusiveLease: vi.fn(async () => ({
+        acquired: true, lease_id: "lease-aegis-invalid-time", acquired_at: "not-a-timestamp",
+      })),
+    })
+    const timestampError = await executeAegisHashVerify(invalidOperation).catch((caught) => caught)
+    expect(timestampError).toMatchObject({
+      message: expect.stringContaining("canonical UTC timestamp"), leaseAcquired: true,
+      releaseAttempted: true, runtimeLeaseReleased: true, operationAttempted: false,
+    })
+    expect(invalidOperation.releaseExclusiveLease).toHaveBeenCalledTimes(1)
   })
 
   it("rechecks receipt freshness and authority bytes after the claim", async () => {
@@ -617,6 +704,40 @@ describe("AEGIS bounded HASH_VERIFY adapter", () => {
     }
   })
 
+  it("rejects a staging-root replacement before reading any bytes", async () => {
+    const value = fixture()
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-root-swap-outside-"))
+    const outsideInput = path.join(outside, "approved", "input.bin")
+    fs.mkdirSync(path.dirname(outsideInput), { recursive: true })
+    fs.writeFileSync(outsideInput, value.originalInput)
+    const savedRoot = `${value.stagingRoot}-saved`
+    const originalOpen = fs.openSync.bind(fs)
+    let swapped = false
+    const readSpy = vi.spyOn(fs, "readSync")
+    let readsAtSwap = 0
+    const openSpy = vi.spyOn(fs, "openSync").mockImplementation(((target: fs.PathLike, flags: any, mode?: any) => {
+      if (!swapped && path.resolve(String(target)) === path.resolve(value.inputPath)) {
+        swapped = true
+        readsAtSwap = readSpy.mock.calls.length
+        fs.renameSync(value.stagingRoot, savedRoot)
+        fs.symlinkSync(outside, value.stagingRoot, process.platform === "win32" ? "junction" : "dir")
+      }
+      return originalOpen(target, flags, mode)
+    }) as typeof fs.openSync)
+    try {
+      const operation = runtime(value)
+      const error = await executeAegisHashVerify(operation).catch((caught) => caught)
+      expect(error).toMatchObject({
+        message: expect.stringMatching(/PATH_ESCAPE|INPUT_CHANGED/), claimConsumed: true,
+        leaseAcquired: true, operationAttempted: true, runtimeLeaseReleased: true,
+      })
+      expect(readSpy.mock.calls.length).toBe(readsAtSwap)
+    } finally {
+      openSpy.mockRestore()
+      readSpy.mockRestore()
+    }
+  })
+
   it("attempts lease release only once when release fails", async () => {
     const value = fixture()
     const releaseExclusiveLease = vi.fn(async () => false)
@@ -671,5 +792,10 @@ describe("AEGIS bounded HASH_VERIFY adapter", () => {
     expect(source).not.toContain("scheduler_activated: true")
     expect(source).not.toContain("fallback_used: true")
     expect(source).toContain("fs.constants.O_NOFOLLOW")
+    const broaderContract = JSON.parse(fs.readFileSync(path.join(
+      process.cwd(), "config/execution-fabric/aegis-bounded-dispatch-contract.json",
+    ), "utf8"))
+    expect(broaderContract.templates.map((template: Json) => template.template_id))
+      .not.toContain("aegis.hash-verify.v1")
   })
 })

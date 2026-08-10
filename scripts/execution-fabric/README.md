@@ -196,7 +196,9 @@ authority are available.
 ## Non-active AEGIS bounded compute contract
 
 `bounded-dispatch/resident-aegis-contract.mjs` validates the reviewed contract boundary for three
-future AEGIS workload classes: `CI_BUILD_TEST`, `HASH_VERIFY`, and `COMPRESSION`. It is deliberately
+future AEGIS workload classes: `CI_BUILD_TEST`, manifest `HASH_VERIFY`, and `COMPRESSION`. The
+manifest profile is `aegis.hash-manifest-verify.future.v1`; it does not redefine the separately
+reviewed one-file `aegis.hash-verify.v1` adapter. The evaluator is deliberately
 not an execution adapter. A successful evaluation returns `NON_ACTIVE_REQUEST_SHAPE_VALID` with
 source and placement explicitly unproven, `execution_authorized=false`, and
 `dispatch_allowed=false`.

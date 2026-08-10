@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "workOrderId": "WO-EF-DISPATCH-AEGIS-ADAPTER-001",
+  "workOrderId": "WO-EF-DISPATCH-AEGIS-001",
   "programId": "WO-EF-PLACEMENT-001",
   "goalId": "HERMES_BOUNDED_DISPATCH_V0_2",
   "loopId": "WO-EF-PLACEMENT-001-PHASE3",
@@ -115,8 +115,8 @@
     "material-product-scope-change"
   ],
   "ownerOperationsAllowed": false,
-  "operationalState": "BLOCKED_NO_ELIGIBLE_PROVIDER",
-  "reasonCode": "PROVIDER_UNAVAILABLE",
+  "operationalState": "BLOCKED_AUTHORITY",
+  "reasonCode": "AUTHORITY_NOT_ADMITTED",
   "authorityStatus": "NOT_GRANTED",
   "schedulerActivated": false,
   "autonomousDispatch": false
