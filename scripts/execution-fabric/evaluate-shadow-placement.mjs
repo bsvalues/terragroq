@@ -205,7 +205,7 @@ function loadOutcomeEvidence(repositoryRoot, binding) {
   }
 }
 
-function settleOutcomeEvidenceTrust(repositoryRoot, artifactBytes, expectedArtifactSha256, retainedSourceSha256, workloadId) {
+function settleOutcomeEvidenceTrust(repositoryRoot, artifactBytes, expectedArtifactSha256, retainedSourceSha256) {
   const registryDirectory = path.join(
     fs.realpathSync(path.resolve(repositoryRoot)),
     "config",
@@ -220,7 +220,6 @@ function settleOutcomeEvidenceTrust(repositoryRoot, artifactBytes, expectedArtif
       artifactBytes,
       expectedArtifactSha256,
       retainedSourceSha256,
-      workloadId,
       outcomeRegistry: registries.outcome_registry,
       authorityRegistry: registries.authority_registry,
     })
@@ -405,7 +404,6 @@ function validateObservation(observation, repositoryRoot, receipt, receiptSha256
     loadedOutcome.artifactBytes,
     observation.outcome_evidence.sha256,
     sourceSha256,
-    receipt.workload.id,
   )
 
   if (!Array.isArray(observation.divergence_reasons)

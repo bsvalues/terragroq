@@ -1,21 +1,19 @@
-# WO-EF-SHADOW-002 and WO-EF-SHADOW-003 proposed authority packet
+# WO-EF-SHADOW-002 and WO-EF-SHADOW-003 containment record
 
 Issue: `#538`
 
-Status: `PENDING_REVIEWED_FUTURE_DATED_ACTIVATION`
+Status: `CONTAINED_NOT_AUTHORIZED`
 
-Purpose: define two bounded, operator-selected executions needed to form a representative Phase 2
-shadow-placement set. This packet is not active authority. A separate activation must be reviewed,
-merged, and effective before either Work Order can begin.
+PR `#549` merged authority-registry entries for these Work Orders before the authority packet and
+scope contract had been independently reviewed. No workload was executed. This record removes both
+entries from the executable registry and preserves the fail-closed boundary.
 
 ## WO-EF-SHADOW-002
 
 - Authority reference: `issue-538-phase2-shadow-002`
 - Allowed node: `hermes-node`
 - Workload: one fixed, benign local-LLM inference through the existing HERMES loopback service
-- Valid from: `2026-08-10T14:42:00.000Z`
-- Expires at: `2026-08-11T02:42:00.000Z`
-- Authority source commit: `2c76da3aad0db472d261c2e0f4e0fac3bc9c3069`
+- Authority state: `NOT_AUTHORIZED`
 - Risk: `R0`
 - Task template: `existing-loopback-llm-inference-v1`
 - Repository scope: `bsvalues/terragroq`
@@ -34,9 +32,7 @@ exposure.
 - Authority reference: `issue-538-phase2-shadow-003`
 - Allowed node: `atlas`
 - Workload: one read-only authoritative-state metadata query against the approved Forge root
-- Valid from: `2026-08-10T14:42:00.000Z`
-- Expires at: `2026-08-11T02:42:00.000Z`
-- Authority source commit: `2c76da3aad0db472d261c2e0f4e0fac3bc9c3069`
+- Authority state: `NOT_AUTHORIZED`
 - Risk: `R0`
 - Task template: `forge-root-metadata-query-v1`
 - Repository scope: `bsvalues/terragroq`
@@ -59,10 +55,10 @@ credentials, access county or PACS data, write state, mutate a database, or chan
 - AEGIS storage, NAS, or backup authority granted: `false`
 - Remote infrastructure mutation authority: `false`
 
-The executable authority registry binds these exact scopes and rejects workload mismatch, missing or
-extra scope fields, malformed scope values, duplicate scope values, and unsorted action/scope sets.
+Execution performed for WO-EF-SHADOW-002: `false`
 
-These proposed admissions are not execution receipts or Phase 2 pass claims. Each execution may
-begin only after a future-dated activation is merged and its own fresh Phase 1 recommendation is
-retained. Receipt and outcome settlement remain fail closed until separately retained, reviewed, and
-admitted.
+Execution performed for WO-EF-SHADOW-003: `false`
+
+Any future admission requires a separate reviewed contract that binds the exact authority scope,
+followed by a separate future-dated activation merged before its effective time. Neither Work Order
+may execute from PR `#549` or from this containment record.
