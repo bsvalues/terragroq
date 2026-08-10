@@ -1,0 +1,22 @@
+{
+  "schema_version": "0.1-shadow-placement-proof",
+  "gate": "HERMES_PLACEMENT_SHADOW_PROOF",
+  "status": "PASS",
+  "trust_scope": "production",
+  "observation_only": true,
+  "bounded_observation_count": 2,
+  "divergence_count": 1,
+  "authority_violations": 0,
+  "stale_evidence_placements": 0,
+  "silent_fallbacks": 0,
+  "observation_replay_sha256": [
+    "3998c68c49d57dd24ba8fd3863c5644c8be05ddefeb15ceaec90a99b576bf6ff",
+    "c7265b15d5d4e2f7d099bf3787fb9d49d47627365bc044cca53a1d9276096fcb"
+  ],
+  "job_launched": false,
+  "scheduler_activated": false,
+  "authority_mutated": false,
+  "remote_accessed": false,
+  "shell_executed": false,
+  "replay_sha256": "3671d53a94102129fa9434718d610bdb3641cf5cd2f11755e5904b077fcc25f3"
+}
