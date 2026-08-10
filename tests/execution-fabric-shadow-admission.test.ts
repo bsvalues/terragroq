@@ -9,7 +9,7 @@ import { compileShadowAdmission } from "../scripts/execution-fabric/admission/co
 
 type Json = Record<string, any>
 const sha = (bytes: Buffer | string) => crypto.createHash("sha256").update(bytes).digest("hex")
-const reviewed = ({ reviewedCommit, artifacts }: Json) => ({ trusted_ref: "refs/heads/main", reviewed_commit: reviewedCommit, exact_artifact_count: artifacts.length })
+const reviewed = ({ reviewedCommit, artifacts, predecessorCommit = null }: Json) => ({ trusted_ref: "refs/heads/main", reviewed_commit: reviewedCommit, exact_artifact_count: artifacts.length, strict_after_commit: predecessorCommit })
 const compile = (selected: Json, proof: any = reviewed) => compileShadowAdmission({ candidate: selected.candidate, repositoryRoot: selected.root, reviewProof: proof })
 
 function fixture(overrides: Json = {}) {
@@ -63,9 +63,11 @@ function fixture(overrides: Json = {}) {
     receipt: write("docs/reports/shadow-admission/WO-LIVE-001-receipt.json", `${JSON.stringify(receipt)}\n`),
     delivery_record: write("docs/reports/WO-LIVE-001-delivery.md", "# WO-LIVE-001\n\nTARGET: omen\n\n## Result\nPASS\n\nLATENCY_MS: 3000\n"),
     outcome_evidence: write("docs/reports/execution-fabric-shadow-outcomes/WO-LIVE-001.json", outcomeBytes),
-    review_evidence: write("docs/reports/shadow-admission/WO-LIVE-001-review.md", `# WO-LIVE-001 review\n\nReviewed commit: ${commit}\n`),
+    review_evidence: write("docs/reports/shadow-admission/WO-LIVE-001-review.md", `# WO-LIVE-001 review\n\nExecution commit: ${"c".repeat(40)}\n\nREVIEWER: assurance-agent\nVERDICT: PASS\n`),
     authority: { reference: "authority-WO-LIVE-001", allowed_canonical_nodes: ["omen"], authority_scope: authorityScope, valid_from: "2026-08-10T07:59:00.000Z", expires_at: "2026-08-10T08:01:00.000Z", reviewed_commit: commit },
+    execution_commit: "c".repeat(40),
     review_commit: "b".repeat(40),
+    reviewer_identity: "assurance-agent",
     recorded_at: "2026-08-10T08:01:01.000Z", divergence_reasons: [],
     ...overrides,
   }
@@ -97,7 +99,7 @@ describe("Execution Fabric genuine shadow outcome admission", () => {
     fs.writeFileSync(reviewPath, "# unrelated review\n")
     selected.candidate.review_evidence.sha256 = sha(fs.readFileSync(reviewPath))
     expect(() => compile(selected))
-      .toThrow("review evidence does not bind Work Order and reviewed commit")
+      .toThrow("review evidence does not bind Work Order, execution commit, reviewer, and PASS verdict")
   })
 
   it("rejects authority gaps, premature admission, and fabricated target divergence", () => {
@@ -142,13 +144,13 @@ describe("Execution Fabric genuine shadow outcome admission", () => {
   })
 
   it("rejects malformed, unsorted, and duplicate authority scope arrays", () => {
-    const cases: Array<[string, (scope: Json) => void, string]> = [
-      ["empty", (scope) => { scope.repository_scope = [] }, "must be a non-empty array"],
-      ["malformed", (scope) => { scope.environment_scope = ["unsafe scope"] }, "must contain only safe scope values"],
-      ["unsorted", (scope) => { scope.allowed_actions = ["write-report", "read-metadata"] }, "must be sorted"],
-      ["duplicate", (scope) => { scope.forbidden_actions = ["inspect-secrets", "inspect-secrets"] }, "contains duplicates"],
+    const cases: Array<[(scope: Json) => void, string]> = [
+      [(scope) => { scope.repository_scope = [] }, "must be a non-empty array"],
+      [(scope) => { scope.environment_scope = ["unsafe scope"] }, "must contain only safe scope values"],
+      [(scope) => { scope.allowed_actions = ["write-report", "read-metadata"] }, "must be sorted"],
+      [(scope) => { scope.forbidden_actions = ["inspect-secrets", "inspect-secrets"] }, "contains duplicates"],
     ]
-    for (const [, mutate, message] of cases) {
+    for (const [mutate, message] of cases) {
       const selected = fixture()
       mutate(selected.candidate.authority.authority_scope)
       expect(() => compile(selected)).toThrow(message)
@@ -164,7 +166,7 @@ describe("Execution Fabric genuine shadow outcome admission", () => {
 
   it("fails closed when trusted-main proof does not bind all exact artifacts", () => {
     const selected = fixture()
-    expect(() => compile(selected, ({ reviewedCommit }: Json) => ({ trusted_ref: "refs/heads/main", reviewed_commit: reviewedCommit, exact_artifact_count: 2 })))
+    expect(() => compile(selected, ({ reviewedCommit, predecessorCommit = null }: Json) => ({ trusted_ref: "refs/heads/main", reviewed_commit: reviewedCommit, exact_artifact_count: 2, strict_after_commit: predecessorCommit })))
       .toThrow("review proof did not bind trusted main")
   })
 
@@ -178,10 +180,11 @@ describe("Execution Fabric genuine shadow outcome admission", () => {
     expect(() => compile(invalidReceipt)).toThrow("receipt scheduler boundary is invalid")
 
     const missingReview = fixture()
-    expect(() => compile(missingReview, ({ reviewedCommit, artifacts }: Json) => ({
+    expect(() => compile(missingReview, ({ reviewedCommit, artifacts, predecessorCommit = null }: Json) => ({
       trusted_ref: "refs/heads/main",
       reviewed_commit: reviewedCommit,
       exact_artifact_count: reviewedCommit === missingReview.candidate.review_commit ? 0 : artifacts.length,
+      strict_after_commit: predecessorCommit,
     }))).toThrow("review proof did not bind the exact review record")
   })
 

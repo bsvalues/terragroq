@@ -1,9 +1,12 @@
-# WO-EF-SHADOW-002 and WO-EF-SHADOW-003 authority admission
+# WO-EF-SHADOW-002 and WO-EF-SHADOW-003 proposed authority packet
 
 Issue: `#538`
 
-Purpose: admit two bounded, operator-selected executions needed to form a representative Phase 2
-shadow-placement set after a fresh recommendation exists for each Work Order.
+Status: `PENDING_REVIEWED_FUTURE_DATED_ACTIVATION`
+
+Purpose: define two bounded, operator-selected executions needed to form a representative Phase 2
+shadow-placement set. This packet is not active authority. A separate activation must be reviewed,
+merged, and effective before either Work Order can begin.
 
 ## WO-EF-SHADOW-002
 
@@ -59,6 +62,7 @@ credentials, access county or PACS data, write state, mutate a database, or chan
 The executable authority registry binds these exact scopes and rejects workload mismatch, missing or
 extra scope fields, malformed scope values, duplicate scope values, and unsorted action/scope sets.
 
-These admissions are prerequisites for genuine observations, not execution receipts or Phase 2 pass
-claims. Each execution may begin only after its own fresh Phase 1 recommendation is retained. Receipt
-and outcome settlement remain fail closed until separately retained, reviewed, and admitted.
+These proposed admissions are not execution receipts or Phase 2 pass claims. Each execution may
+begin only after a future-dated activation is merged and its own fresh Phase 1 recommendation is
+retained. Receipt and outcome settlement remain fail closed until separately retained, reviewed, and
+admitted.

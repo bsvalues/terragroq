@@ -120,14 +120,18 @@ function retained(root, binding, label, extensions) {
   return { bytes, normalized, sha256: binding.sha256 }
 }
 
-function proveReviewedCommit({ repositoryRoot, reviewedCommit, artifacts }) {
+function proveReviewedCommit({ repositoryRoot, reviewedCommit, artifacts, predecessorCommit = null }) {
   try {
     execFileSync("git", ["merge-base", "--is-ancestor", reviewedCommit, "refs/heads/main"], { cwd: repositoryRoot, stdio: "ignore" })
+    if (predecessorCommit !== null) {
+      if (predecessorCommit === reviewedCommit) fail("review commit must be distinct from the execution commit")
+      execFileSync("git", ["merge-base", "--is-ancestor", predecessorCommit, reviewedCommit], { cwd: repositoryRoot, stdio: "ignore" })
+    }
     for (const artifact of artifacts) {
       const committed = execFileSync("git", ["show", `${reviewedCommit}:${artifact.normalized}`], { cwd: repositoryRoot, maxBuffer: 8 * 1024 * 1024 })
       if (hash(committed) !== artifact.sha256) fail(`${artifact.normalized} exact bytes are absent from reviewed_commit`)
     }
-    return { trusted_ref: "refs/heads/main", reviewed_commit: reviewedCommit, exact_artifact_count: artifacts.length }
+    return { trusted_ref: "refs/heads/main", reviewed_commit: reviewedCommit, exact_artifact_count: artifacts.length, strict_after_commit: predecessorCommit }
   } catch (error) {
     if (error instanceof AdmissionError) throw error
     fail("reviewed_commit is not an ancestor of trusted main or cannot prove exact retained bytes")
@@ -139,7 +143,7 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   exact(candidate, [
     "schema_version", "candidate_id", "work_order_id", "workload_id", "producer_lane",
     "outcome_kind", "receipt", "delivery_record", "outcome_evidence", "review_evidence",
-    "authority", "review_commit", "recorded_at", "divergence_reasons",
+    "authority", "execution_commit", "review_commit", "reviewer_identity", "recorded_at", "divergence_reasons",
   ], "candidate")
   if (candidate.schema_version !== "0.1-shadow-admission-candidate") fail("candidate schema_version is unsupported")
   if (!new Set(["MANUAL_KNOWN_SAFE", "RESIDENT_HERMES_REVIEWED"]).has(candidate.outcome_kind)) fail("outcome_kind is not eligible for genuine admission")
@@ -147,6 +151,8 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   const workOrder = id(candidate.work_order_id, "candidate.work_order_id")
   const workload = id(candidate.workload_id, "candidate.workload_id")
   id(candidate.producer_lane, "candidate.producer_lane")
+  id(candidate.reviewer_identity, "candidate.reviewer_identity")
+  if (candidate.reviewer_identity === candidate.producer_lane) fail("reviewer identity must be independent from the producer lane")
   const root = fs.realpathSync(path.resolve(repositoryRoot))
   const receiptArtifact = retained(root, candidate.receipt, "candidate.receipt", [".json"])
   const delivery = retained(root, candidate.delivery_record, "candidate.delivery_record", [".md"])
@@ -183,7 +189,9 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   if (validFrom > Date.parse(outcomeValidation.chronology.started_at) || expiresAt < Date.parse(outcomeValidation.chronology.completed_at)) fail("reviewed authority does not cover outcome chronology")
   if (recordedAt < Date.parse(outcomeValidation.chronology.completed_at)) fail("admission predates outcome completion")
   if (!COMMIT.test(candidate.authority.reviewed_commit)) fail("reviewed_commit must be a full lowercase Git commit")
+  if (!COMMIT.test(candidate.execution_commit)) fail("execution_commit must be a full lowercase Git commit")
   if (!COMMIT.test(candidate.review_commit)) fail("review_commit must be a full lowercase Git commit")
+  if (candidate.execution_commit === candidate.review_commit) fail("review commit must be distinct from the execution commit")
   if (outcomeValidation.authority_outcome.reference !== candidate.authority.reference) fail("outcome authority reference does not match reviewed authority")
   const checkedAt = timestamp(outcomeValidation.authority_outcome.checked_at, "outcome authority checked_at")
   if (checkedAt < validFrom || checkedAt >= expiresAt) fail("outcome authority check is outside the reviewed authority window")
@@ -192,24 +200,31 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   const selectedNode = receipt?.recommendation?.node_id ?? null
   const diverged = selectedNode !== actualNode
   if (diverged !== candidate.divergence_reasons.includes("MANUAL_TARGET_DIFFERS_FROM_RECOMMENDATION")) fail("target divergence classification does not match receipt and outcome")
-  if (!review.bytes.toString("utf8").includes(workOrder) || !review.bytes.toString("utf8").includes(candidate.authority.reviewed_commit)) fail("review evidence does not bind Work Order and reviewed commit")
+  const reviewText = review.bytes.toString("utf8")
+  if (!reviewText.includes(workOrder) || !reviewText.includes(candidate.execution_commit)
+    || !new RegExp(`^REVIEWER\\s*:\\s*${candidate.reviewer_identity.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "im").test(reviewText)
+    || !/^VERDICT\s*:\s*PASS\s*$/im.test(reviewText)) {
+    fail("review evidence does not bind Work Order, execution commit, reviewer, and PASS verdict")
+  }
   const commitProof = reviewProof({
     repositoryRoot: root,
-    reviewedCommit: candidate.authority.reviewed_commit,
+    reviewedCommit: candidate.execution_commit,
     // The execution commit contains the three execution facts. A separate later review commit
     // contains the retained review record that names and reviews this execution commit.
     artifacts: [receiptArtifact, delivery, outcome],
   })
-  if (!commitProof || commitProof.reviewed_commit !== candidate.authority.reviewed_commit || commitProof.trusted_ref !== "refs/heads/main" || commitProof.exact_artifact_count !== 3) {
+  if (!commitProof || commitProof.reviewed_commit !== candidate.execution_commit || commitProof.trusted_ref !== "refs/heads/main" || commitProof.exact_artifact_count !== 3) {
     fail("review proof did not bind trusted main, reviewed commit, and all exact artifacts")
   }
   const reviewCommitProof = reviewProof({
     repositoryRoot: root,
     reviewedCommit: candidate.review_commit,
     artifacts: [review],
+    predecessorCommit: candidate.execution_commit,
   })
   if (!reviewCommitProof || reviewCommitProof.reviewed_commit !== candidate.review_commit
-    || reviewCommitProof.trusted_ref !== "refs/heads/main" || reviewCommitProof.exact_artifact_count !== 1) {
+    || reviewCommitProof.trusted_ref !== "refs/heads/main" || reviewCommitProof.exact_artifact_count !== 1
+    || reviewCommitProof.strict_after_commit !== candidate.execution_commit) {
     fail("review proof did not bind the exact review record to trusted main")
   }
 
@@ -227,8 +242,8 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
     schema_version: "0.1-shadow-admission-bundle", status: "READY_FOR_REVIEWED_REGISTRY_ADMISSION",
     candidate_id: candidate.candidate_id, observation,
     registry_entries: {
-      receipt: { receipt_sha256: receiptSha256, work_order_id: workOrder, workload_id: workload, decision_input_sha256: receipt.decision_input_sha256, evidence_snapshot: receipt.evidence_snapshot, reviewed_commit: candidate.authority.reviewed_commit, status: "TRUSTED" },
-      outcome: { artifact_sha256: candidate.outcome_evidence.sha256, work_order_id: workOrder, actual_target_node: actualNode, retained_source_sha256: candidate.delivery_record.sha256, authority_reference: candidate.authority.reference, reviewed_commit: candidate.authority.reviewed_commit, status: "ACTIVE" },
+      receipt: { receipt_sha256: receiptSha256, work_order_id: workOrder, workload_id: workload, decision_input_sha256: receipt.decision_input_sha256, evidence_snapshot: receipt.evidence_snapshot, reviewed_commit: candidate.execution_commit, status: "TRUSTED" },
+      outcome: { artifact_sha256: candidate.outcome_evidence.sha256, work_order_id: workOrder, actual_target_node: actualNode, retained_source_sha256: candidate.delivery_record.sha256, authority_reference: candidate.authority.reference, reviewed_commit: candidate.execution_commit, status: "ACTIVE" },
       authority: { reference: candidate.authority.reference, work_order_id: workOrder, allowed_canonical_nodes: [...candidate.authority.allowed_canonical_nodes].sort(), authority_scope: validatedAuthorityScope, valid_from: candidate.authority.valid_from, expires_at: candidate.authority.expires_at, reviewed_commit: candidate.authority.reviewed_commit, status: "ACTIVE" },
     },
     evidence: { review_path: review.normalized, review_sha256: candidate.review_evidence.sha256, producer_lane: candidate.producer_lane, outcome_kind: candidate.outcome_kind, commit_proof: commitProof, review_commit_proof: reviewCommitProof },
