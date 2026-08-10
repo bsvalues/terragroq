@@ -1,0 +1,132 @@
+{
+  "schema_version": "0.1",
+  "generated_at": "2026-08-09T21:57:00Z",
+  "scheduler": {
+    "state": "disabled",
+    "authority": "not-granted",
+    "notes": "V0.1 is evidence and placement-readiness only; no autonomous scheduling authority exists"
+  },
+  "nodes": [
+    {
+      "id": "omen",
+      "hostname": "OMEN",
+      "identity": {
+        "hostname": "OMEN",
+        "machine_id_sha256": "81c6fef6da6187fc4ab6b8acd18c3704b3223fef93bbcec2a0bcaf5bc98fa727",
+        "source": "windows-cim-system-uuid-sha256"
+      },
+      "role": "operator-cockpit-development-burst-compute",
+      "availability_class": "interactive",
+      "os": {"family": "windows", "version": "11"},
+      "authority": {
+        "allow": ["interactive-development", "operator-control", "read-only-lab-inspection", "transient-ssh-tunnel", "burst-compute"],
+        "deny": ["authoritative-durable-state", "county-production-write", "pacs-production-write", "unattended-critical-state"]
+      },
+      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed; live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "Static role only; hardware must be refreshed by probe-windows.ps1"},
+      "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "AMD", "model": "Ryzen 9 8940HX", "cores": 16, "threads": 32, "max_mhz": null, "numa_node": null}],
+      "dimms": [],
+      "gpus": [{"id": "gpu0", "vendor": "NVIDIA", "model": "GeForce RTX 5060 Laptop GPU", "pci_bus_id": null, "uuid": null, "vram_bytes": 8589934592, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}],
+      "disks": [],
+      "network": [],
+      "runtimes": [{"id": "wsl2", "kind": "wsl", "version": null, "state": "unknown", "endpoint": null, "details": {}}, {"id": "docker-desktop", "kind": "docker", "version": null, "state": "unknown", "endpoint": null, "details": {}}],
+      "capabilities": ["interactive-development", "operator-control", "transient-ssh-tunnel", "burst-compute", "cuda"],
+      "constraints": ["not-always-on", "no-authoritative-state"],
+      "warnings": ["DIMM, disk, NIC, driver, runtime versions, and dynamic health require live probe"]
+    },
+    {
+      "id": "hermes-node",
+      "hostname": "HERMES",
+      "identity": {
+        "hostname": "HERMES",
+        "machine_id_sha256": "7d1d7ef856531c57a6b7118781e1e76f44fa7655b1da25eb2bbf2433e0ca84b1",
+        "source": "windows-cim-system-uuid-sha256"
+      },
+      "role": "local-ai-gpu-execution-worker",
+      "availability_class": "resident",
+      "os": {"family": "windows", "version": "10"},
+      "authority": {
+        "allow": ["local-llm-inference", "gpu-batch", "agent-runtime", "bounded-execution", "ssh-control"],
+        "deny": ["authoritative-durable-state", "county-production-write", "pacs-production-write", "direct-ollama-lan-exposure"]
+      },
+      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed; live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "Hermes software subsystem is distinct from this physical node"},
+      "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "Intel", "model": "Core i7-5960X", "cores": 8, "threads": 16, "max_mhz": null, "numa_node": null}],
+      "dimms": [],
+      "gpus": [{"id": "gpu0", "vendor": "NVIDIA", "model": "GeForce RTX 3050", "pci_bus_id": null, "uuid": null, "vram_bytes": 6442450944, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}, {"id": "gpu1", "vendor": "NVIDIA", "model": "Quadro K2200", "pci_bus_id": null, "uuid": null, "vram_bytes": 4294967296, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}],
+      "disks": [],
+      "network": [],
+      "runtimes": [{"id": "ollama", "kind": "ollama", "version": null, "state": "healthy", "endpoint": "http://127.0.0.1:11434", "details": {"exposure": "loopback-only"}}, {"id": "docker", "kind": "docker", "version": "28.5.1", "state": "running", "endpoint": null, "details": {}}, {"id": "ssh", "kind": "ssh", "version": null, "state": "running", "endpoint": null, "details": {}}],
+      "capabilities": ["local-llm-inference", "gpu-batch", "agent-runtime", "cuda", "ssh-control"],
+      "constraints": ["no-authoritative-state", "ollama-loopback-only"],
+      "warnings": ["DIMM, disk, NIC, GPU PCI identity, driver, and dynamic health require live probe"]
+    },
+    {
+      "id": "atlas",
+      "hostname": "atlas",
+      "identity": {
+        "hostname": "atlas",
+        "machine_id_sha256": "1406acb70a4fa29a84cacdf9bedef398af99ec6b8d85079632d6f822ddaa0ba1",
+        "source": "linux-machine-id-sha256"
+      },
+      "role": "durable-state-forge-retrieval",
+      "availability_class": "stateful",
+      "os": {"family": "linux", "version": "Ubuntu 24.04"},
+      "authority": {
+        "allow": ["authoritative-durable-state", "database-state", "forge-storage", "retrieval-index", "backup-source", "protected-data-read-when-authorized"],
+        "deny": ["noisy-unbounded-batch-by-default", "county-production-write", "pacs-production-write"]
+      },
+      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed; live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "All populated DIMMs and disks must be enumerated live"},
+      "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "Intel", "model": "Xeon E5-2690 v4", "cores": 14, "threads": 28, "max_mhz": null, "numa_node": null}],
+      "dimms": [],
+      "gpus": [],
+      "disks": [],
+      "network": [],
+      "runtimes": [{"id": "docker", "kind": "docker", "version": null, "state": "unknown", "endpoint": null, "details": {}}, {"id": "postgres", "kind": "database", "version": null, "state": "unknown", "endpoint": null, "details": {}}, {"id": "redis", "kind": "database", "version": null, "state": "unknown", "endpoint": null, "details": {"authentication": "required"}}, {"id": "mongo", "kind": "database", "version": null, "state": "unknown", "endpoint": null, "details": {}}, {"id": "forge", "kind": "storage", "version": null, "state": "unknown", "endpoint": "/forge", "details": {"filesystem": "ext4", "mount_by_uuid": true}}],
+      "capabilities": ["database-state", "forge-storage", "retrieval-index", "backup-archive", "protected-data-read"],
+      "constraints": ["protect-state-latency", "avoid-noisy-batch-by-default"],
+      "warnings": ["DIMM-level inventory, all disks including Forge serial/health, NIC counters, and runtime versions require live probe"]
+    },
+    {
+      "id": "aegis",
+      "hostname": "aegis",
+      "identity": {
+        "hostname": "aegis",
+        "machine_id_sha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b",
+        "source": "linux-machine-id-sha256"
+      },
+      "role": "secondary-cpu-batch-ci-worker-storage-pending",
+      "availability_class": "secondary",
+      "os": {"family": "linux", "version": "Ubuntu 24.04"},
+      "authority": {
+        "allow": ["cpu-batch-candidate", "ci-build-test-candidate", "hash-verify-candidate", "compression-candidate", "etl-transform-candidate", "docker-worker-candidate"],
+        "deny": ["authoritative-durable-state", "backup-archive-until-storage-proven", "nas-until-storage-proven", "county-production-write", "pacs-production-write", "destructive-disk-action"]
+      },
+      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed plus AEGIS onboarding evidence; trusted live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "AEGIS is the owner-approved canonical label; its trusted machine identity pin, raw compute proof, and all storage authority remain pending"},
+      "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "Intel", "model": "Xeon E5-2690 v4", "cores": 14, "threads": 28, "max_mhz": null, "numa_node": null}],
+      "dimms": [],
+      "gpus": [],
+      "disks": [],
+      "network": [],
+      "runtimes": [],
+      "capabilities": ["cpu-batch-candidate", "ci-build-test-candidate", "hash-verify-candidate", "compression-candidate", "etl-transform-candidate", "docker-worker-candidate"],
+      "constraints": ["scheduler-disabled", "memory-16gb", "nvme-free-space-reserve-required", "storage-capability-pending"],
+      "warnings": ["Failed SATA device is RETIRE and unschedulable", "ST1000DM003 is healthy but occupied and unclassified", "ST31000528AS is present without retained SMART proof", "NAS and backup authority remain pending storage proof"]
+    },
+    {
+      "id": "azure",
+      "hostname": null,
+      "identity": {
+        "hostname": null,
+        "machine_id_sha256": null,
+        "source": null
+      },
+      "role": "approved-production-external-capability-envelope",
+      "availability_class": "external",
+      "os": null,
+      "authority": {"allow": [], "deny": ["implicit-use", "implicit-cost", "implicit-protected-data-egress"]},
+      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-policy-envelope", "probe_version": null, "confidence": "declared", "ttl_seconds": null, "notes": "Capabilities are empty until separately authorized and discovered"},
+      "cpus": [], "dimms": [], "gpus": [], "disks": [], "network": [], "runtimes": [], "capabilities": [],
+      "constraints": ["explicit-authority-required", "cost-boundary", "data-classification-boundary"],
+      "warnings": []
+    }
+  ]
+}

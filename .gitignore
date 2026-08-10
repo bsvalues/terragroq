@@ -49,6 +49,7 @@ id_rsa
 id_ed25519
 
 # Generated / cache (rebuild on demand)
+.artifacts/execution-fabric/
 WilliamOS/20_Graphify/generated/
 WilliamOS/40_Search/generated/
 WilliamOS/60_Synthesis/generated/cache/
