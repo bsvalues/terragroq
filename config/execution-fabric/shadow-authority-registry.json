@@ -12,6 +12,17 @@
       "expires_at": "2026-08-10T20:01:38.777Z",
       "reviewed_commit": "83b9d699e90dfb2296f8cb3b9ae775661c6a941f",
       "status": "ACTIVE"
+    },
+    {
+      "reference": "issue-538-phase2-shadow-002",
+      "work_order_id": "WO-EF-SHADOW-002",
+      "allowed_canonical_nodes": [
+        "hermes-node"
+      ],
+      "valid_from": "2026-08-10T14:43:03.850Z",
+      "expires_at": "2026-08-10T20:01:38.777Z",
+      "reviewed_commit": "380f9606527a9f3c698dbffe262102bda1db8e68",
+      "status": "ACTIVE"
     }
   ]
 }
