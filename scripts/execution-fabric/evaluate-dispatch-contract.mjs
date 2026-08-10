@@ -122,7 +122,8 @@ function rejectExecutableOrSecretInput(value, pathName = "input") {
   }
   if (!value || typeof value !== "object") return
   for (const [key, child] of Object.entries(value)) {
-    if (EXECUTABLE_FIELD.test(key)) fail(`${pathName}.${key} is not permitted in a static proof packet`)
+    const normalizedKey = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase()
+    if (EXECUTABLE_FIELD.test(normalizedKey)) fail(`${pathName}.${key} is not permitted in a static proof packet`)
     rejectExecutableOrSecretInput(child, `${pathName}.${key}`)
   }
 }
@@ -170,8 +171,24 @@ function placementView(artifact) {
   if (!node) fail("recommendation selected node must exist in eligible_nodes")
   const freshness = object(node.freshness, "recommendation selected-node freshness")
   if (node.eligible !== true || node.rank !== selected.rank || node.execution_authorized !== false
-    || node.dispatch_allowed !== false) {
+    || node.dispatch_allowed !== false || freshness.state !== "fresh"
+    || !["observed", "proven"].includes(node.confidence)
+    || node.rank_basis === null || node.evidence_used.length === 0
+    || canonicalJson(node.rank_basis) !== canonicalJson(selected.rank_basis)) {
     fail("recommendation selected node must be eligible, rank-consistent, and non-authorizing")
+  }
+  for (const [index, candidate] of eligibleNodes.entries()) {
+    if (candidate.eligible !== true || candidate.rank !== index + 1 || candidate.rank_basis === null
+      || candidate.execution_authorized !== false || candidate.dispatch_allowed !== false
+      || candidate.freshness.state !== "fresh" || !["observed", "proven"].includes(candidate.confidence)) {
+      fail("recommendation eligible nodes must be fresh, observed, non-authorizing, and consecutively ranked")
+    }
+  }
+  for (const candidate of artifact.ineligible_nodes) {
+    if (candidate.eligible !== false || candidate.rank !== null || candidate.rank_basis !== null
+      || candidate.execution_authorized !== false || candidate.dispatch_allowed !== false) {
+      fail("recommendation ineligible nodes must remain unranked and non-authorizing")
+    }
   }
   return {
     snapshot_sha256: artifact.snapshot.sha256,
@@ -184,6 +201,32 @@ function placementView(artifact) {
     execution_authorized: selected.execution_authorized,
     dispatch_allowed: selected.dispatch_allowed,
   }
+}
+
+function validatePlacementArtifactShape(artifact) {
+  if (!Array.isArray(artifact.eligible_nodes) || artifact.eligible_nodes.length === 0
+    || !Array.isArray(artifact.ineligible_nodes)) fail("recommendation node collections are invalid")
+  const nodes = [...artifact.eligible_nodes, ...artifact.ineligible_nodes]
+  const nodeIds = []
+  for (const [index, node] of nodes.entries()) {
+    const label = `recommendation node ${index}`
+    exactKeys(node, [
+      "node_id", "eligible", "rank", "rank_basis", "reasons", "evidence_used", "confidence",
+      "freshness", "execution_authorized", "dispatch_allowed", "authority_note",
+    ], label)
+    exactKeys(node.freshness, ["state", "age_seconds", "ttl_seconds", "expires_at"], `${label}.freshness`)
+    if (!Array.isArray(node.reasons) || !Array.isArray(node.evidence_used)) fail(`${label} evidence collections are invalid`)
+    for (const [reasonIndex, entry] of node.reasons.entries()) exactKeys(entry,
+      ["code", "detail", "required", "observed", "evidence_ref"], `${label}.reasons[${reasonIndex}]`)
+    for (const [evidenceIndex, entry] of node.evidence_used.entries()) exactKeys(entry,
+      ["path", "value"], `${label}.evidence_used[${evidenceIndex}]`)
+    if (node.rank_basis !== null) exactKeys(node.rank_basis, [
+      "preferred_capability_count", "availability_index", "cpu_threads", "maximum_gpu_vram_bytes", "stable_node_id",
+    ], `${label}.rank_basis`)
+    identifier(node.node_id, `${label}.node_id`)
+    nodeIds.push(node.node_id)
+  }
+  if (new Set(nodeIds).size !== nodeIds.length) fail("recommendation nodes must be unique across eligibility collections")
 }
 
 export function bindDispatchContract(input) {
@@ -224,6 +267,7 @@ function validateShape(packet) {
     "node_id", "rank", "rank_basis", "execution_authorized", "dispatch_allowed",
   ], "recommendation.recommendation")
   exactKeys(packet.recommendation.snapshot, ["path", "sha256"], "recommendation.snapshot")
+  validatePlacementArtifactShape(packet.recommendation)
   exactKeys(packet.workload_envelope, [
     "job_id", "work_order_id", "placement_workload_id", "placement_workload_sha256", "placement_snapshot_sha256",
     "repository", "base_ref", "base_sha", "risk_class", "selected_node_id",
