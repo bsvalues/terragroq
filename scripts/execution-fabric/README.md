@@ -82,7 +82,6 @@ From the repository root:
 
 ```bash
 node scripts/execution-fabric/assemble-registry.mjs \
-  --seed config/execution-fabric/registry.seed.json \
   --evidence-dir .artifacts/execution-fabric \
   --out .artifacts/execution-fabric/registry.snapshot.json
 ```

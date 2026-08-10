@@ -37,6 +37,14 @@ function observedRegistry(): JsonObject {
       ttl_seconds: 300,
       probe_version: "0.1-node-probe",
     }
+    node.capability_health.compute = {
+      state: "READY",
+      reason: "COMPUTE_CAPABILITY_READY",
+      observed_at: observedTimes[node.id],
+      expires_at: "2026-08-10T03:42:00.000Z",
+      snapshot_sha256: null,
+      evidence_ref: `${node.id}.json`,
+    }
   }
   return registry
 }
@@ -114,6 +122,23 @@ describe("Execution Fabric recommendation-only placement", () => {
         expect(entry).toHaveProperty("observed")
       }
     }
+  })
+
+  it("rejects CPU placement when the compute health axis is degraded or expired", () => {
+    const degradedRegistry = observedRegistry()
+    const aegis = degradedRegistry.nodes.find((node: JsonObject) => node.id === "aegis")
+    aegis.capability_health.compute.state = "DEGRADED"
+    aegis.capability_health.compute.reason = "RUNTIME_UNAVAILABLE"
+    let result = recommendation("cpu-heavy-build", degradedRegistry)
+
+    expect(result.ineligible_nodes.find((node: JsonObject) => node.node_id === "aegis").reasons)
+      .toContainEqual(expect.objectContaining({ code: "CAPABILITY_NOT_READY", detail: "compute" }))
+
+    const expiredRegistry = observedRegistry()
+    expiredRegistry.nodes.find((node: JsonObject) => node.id === "aegis").capability_health.compute.expires_at = evaluatedAt
+    result = recommendation("cpu-heavy-build", expiredRegistry)
+    expect(result.ineligible_nodes.find((node: JsonObject) => node.node_id === "aegis").reasons)
+      .toContainEqual(expect.objectContaining({ code: "CAPABILITY_EVIDENCE_STALE", detail: "compute" }))
   })
 
   it.each([

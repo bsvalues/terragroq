@@ -199,12 +199,12 @@ function readPinnedBytes(filePath, expectedSha256, missingReason, mismatchReason
 
 function validateCapabilityPolicy(policy) {
   const shapeErrors = [
-    ...exactKeys(policy, ['schema', 'max_ttl_hours', 'accepted_capability_file_sha256', 'accepted_backup_receipt_sha256', 'required_mounts'], '$.capability_evidence_policy')
+    ...exactKeys(policy, ['schema', 'max_ttl_hours', 'accepted_raw_probe_sha256', 'accepted_capability_file_sha256', 'accepted_backup_receipt_sha256', 'required_mounts'], '$.capability_evidence_policy')
   ];
   if (shapeErrors.length) invalidCapability('CAPABILITY_POLICY_INVALID', shapeErrors.join('; '));
   if (policy.schema !== 'aegis-capability-evidence-policy/1') invalidCapability('CAPABILITY_POLICY_INVALID', 'capability policy schema mismatch');
   if (!positiveNumber(policy.max_ttl_hours) || policy.max_ttl_hours > 48) invalidCapability('CAPABILITY_POLICY_INVALID', 'max_ttl_hours must be in (0,48]');
-  for (const field of ['accepted_capability_file_sha256', 'accepted_backup_receipt_sha256']) {
+  for (const field of ['accepted_raw_probe_sha256', 'accepted_capability_file_sha256', 'accepted_backup_receipt_sha256']) {
     if (!/^[a-f0-9]{64}$/.test(policy[field])) invalidCapability('CAPABILITY_POLICY_INVALID', `${field} must be lowercase SHA-256`);
   }
   if (!Array.isArray(policy.required_mounts) || policy.required_mounts.length !== 2) invalidCapability('CAPABILITY_POLICY_INVALID', 'exactly two required mounts are required');
@@ -379,7 +379,13 @@ function readProbe(declared) {
   const p = path.join(evidenceDir, `${nodeId}.json`);
   if (!fs.existsSync(p)) return null;
   try {
-    const x = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const rawProbe = fs.readFileSync(p);
+    if (declared.id === 'aegis') {
+      const acceptedDigest = declared.capability_evidence_policy?.accepted_raw_probe_sha256;
+      const observedDigest = crypto.createHash('sha256').update(rawProbe).digest('hex');
+      if (!acceptedDigest || observedDigest !== acceptedDigest) throw new Error('raw probe digest does not match reviewed policy');
+    }
+    const x = JSON.parse(rawProbe.toString('utf8'));
     const shapeErrors = [
       ...exactKeys(x, ['schema_version', 'node', 'evidence'], '$'),
       ...exactKeys(x?.node, ['id', 'hostname', 'identity', 'observed_at', 'os', 'cpus', 'dimms', 'gpus', 'disks', 'network', 'runtimes', 'warnings'], '$.node'),
@@ -537,16 +543,32 @@ function nodeProbeGateReason(node) {
 }
 
 function projectAegisCapabilityHealth(node) {
+  const probeReason = nodeProbeGateReason(node);
+  const dockerReady = (node.runtimes || []).some(runtime => runtime.kind === 'docker' && runtime.state === 'running');
+  const computeGateReason = probeReason || (!dockerReady ? 'RUNTIME_UNAVAILABLE' : null);
+  const computeObservedMs = rfc3339Ms(node.evidence?.observed_at);
+  const computeTtlSeconds = node.evidence?.ttl_seconds;
+  const computeExpiresAt = computeObservedMs != null && Number.isFinite(computeTtlSeconds)
+    ? new Date(computeObservedMs + computeTtlSeconds * 1000).toISOString()
+    : null;
+  const compute = capabilityAxis(
+    computeGateReason ? 'DEGRADED' : 'READY',
+    computeGateReason || 'COMPUTE_CAPABILITY_READY',
+    node.evidence?.observed_at ?? null,
+    computeExpiresAt,
+    null,
+    'aegis.json'
+  );
   if (aegisCapability.kind !== 'valid') {
+    const fallback = capabilityFallback(aegisCapability.kind, aegisCapability.reason);
     return {
       ...node,
-      capability_health: capabilityFallback(aegisCapability.kind, aegisCapability.reason),
+      capability_health: { ...fallback, compute },
       warnings: [...new Set([...(node.warnings || []), aegisCapability.warning])]
     };
   }
   const { snapshot, observedMs, backupMs, restoreMs, thresholdMs, storageProof, evidenceRef } = aegisCapability;
   const metadata = [snapshot.observed_at, snapshot.snapshot_sha256, evidenceRef];
-  const probeReason = nodeProbeGateReason(node);
   const requiredMountsPresent = !probeReason && aegisPolicy.required_mounts.every(required =>
     (node.disks || []).some(disk => disk.serial === required.serial && (disk.filesystems || []).some(filesystem =>
       filesystem.label === required.label && filesystem.uuid === required.uuid && filesystem.mountpoint === required.mountpoint
@@ -566,19 +588,10 @@ function projectAegisCapabilityHealth(node) {
     if (stale) return capabilityAxis('FAIL_CLOSED', 'BACKUP_STALE', metadata[0], expiresAt, metadata[1], metadata[2]);
     return capabilityAxis(state, snapshot.backup.reason, metadata[0], expiresAt, metadata[1], metadata[2]);
   };
-  const dockerReady = (node.runtimes || []).some(runtime => runtime.kind === 'docker' && runtime.state === 'running');
-  const computeGateReason = probeReason || (!dockerReady ? 'RUNTIME_UNAVAILABLE' : null);
-  const computeState = computeGateReason ? 'DEGRADED' : 'READY';
-  const computeReason = computeGateReason || 'COMPUTE_CAPABILITY_READY';
-  const computeObservedMs = rfc3339Ms(node.evidence?.observed_at);
-  const computeTtlSeconds = node.evidence?.ttl_seconds;
-  const computeExpiresAt = computeObservedMs != null && Number.isFinite(computeTtlSeconds)
-    ? new Date(computeObservedMs + computeTtlSeconds * 1000).toISOString()
-    : null;
   return {
     ...node,
     capability_health: {
-      compute: capabilityAxis(computeState, computeReason, node.evidence?.observed_at ?? metadata[0], computeExpiresAt, metadata[1], metadata[2]),
+      compute,
       backup_target: projectStorageAxis(snapshot.backup_capability_health),
       archive_storage: projectStorageAxis(snapshot.archive_capability_health),
       nas: capabilityAxis('PENDING', 'NAS_SERVICE_UNPROVEN')

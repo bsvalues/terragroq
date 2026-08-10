@@ -122,6 +122,7 @@
       "capability_evidence_policy": {
         "schema": "aegis-capability-evidence-policy/1",
         "max_ttl_hours": 48,
+        "accepted_raw_probe_sha256": "05f109f5fd36a9cf01877f590da1d96bca44eda85b3ef7c76daed104b5dc4009",
         "accepted_capability_file_sha256": "7f08c56825f786a9905f35630a387007a5868328e2ff07e024674c7d0c31fc8f",
         "accepted_backup_receipt_sha256": "fb766ca0f3428f20ccdc980ca0ca140062dcd5dbce112ad25ac14b6286a5d5b9",
         "required_mounts": [

@@ -315,6 +315,11 @@ function assemble(
     const policy = nodeById(seed, "aegis").capability_evidence_policy as JsonObject
     if (capabilityContent !== undefined) policy.accepted_capability_file_sha256 = crypto.createHash("sha256").update(capabilityContent).digest("hex")
     if (receiptContent !== null) policy.accepted_backup_receipt_sha256 = crypto.createHash("sha256").update(receiptContent).digest("hex")
+    const aegisProbe = probes.aegis
+    if (aegisProbe) {
+      const probeContent = `${JSON.stringify(aegisProbe, null, 2)}\n`
+      policy.accepted_raw_probe_sha256 = crypto.createHash("sha256").update(probeContent).digest("hex")
+    }
   }
   fs.writeFileSync(testSeedPath, `${JSON.stringify(seed, null, 2)}\n`)
   for (const [nodeId, probe] of Object.entries(probes)) {
@@ -648,12 +653,26 @@ describe("Execution Fabric AEGIS capability evidence", () => {
     assertSchemaConformance(result.registry, schema)
   })
 
+  it("rejects an AEGIS raw probe whose exact file digest is not pinned by reviewed policy", () => {
+    const seed = clone(canonicalSeed)
+    const probe = healthyAegisProbe(seed)
+    const result = assemble(seed, { aegis: probe }, {
+      capabilityEvidence: capabilitySnapshot(),
+      pinEvidence: false,
+      nowUtc,
+    })
+    const health = aegisHealth(result)
+
+    expect(health.compute).toMatchObject({ state: "DEGRADED", reason: "LIVE_PROBE_INVALID" })
+    expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED" })
+  })
+
   it("retains pending backup and archive axes when capability evidence is missing", () => {
     const result = assembleAegis()
     const aegis = nodeById(result.registry!, "aegis")
     const health = aegisHealth(result)
 
-    expect(health.compute).toMatchObject({ state: "UNKNOWN", reason: "CAPABILITY_EVIDENCE_MISSING" })
+    expect(health.compute).toMatchObject({ state: "READY", reason: "COMPUTE_CAPABILITY_READY" })
     expect(health.backup_target).toMatchObject({ state: "PENDING", reason: "CAPABILITY_EVIDENCE_MISSING" })
     expect(health.archive_storage).toMatchObject({ state: "PENDING", reason: "CAPABILITY_EVIDENCE_MISSING" })
     expect(aegis.warnings).toEqual(expect.arrayContaining(["CAPABILITY_EVIDENCE_MISSING"]))
@@ -663,7 +682,7 @@ describe("Execution Fabric AEGIS capability evidence", () => {
     const result = assembleAegis("{not-json")
     const health = aegisHealth(result)
 
-    expect(health.compute).toMatchObject({ state: "DEGRADED", reason: "CAPABILITY_EVIDENCE_MALFORMED" })
+    expect(health.compute).toMatchObject({ state: "READY", reason: "COMPUTE_CAPABILITY_READY" })
     expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "CAPABILITY_EVIDENCE_MALFORMED" })
     expect((nodeById(result.registry!, "aegis").warnings as string[]).join(" ")).toContain("CAPABILITY_EVIDENCE_MALFORMED")
   })
@@ -948,10 +967,13 @@ describe("Execution Fabric AEGIS capability evidence", () => {
     const seed = clone(canonicalSeed)
     const capabilityContent = `${JSON.stringify(capabilitySnapshot(), null, 2)}\n`
     const receiptContent = `${JSON.stringify(backupReceipt(), null, 2)}\n`
+    const probe = healthyAegisProbe(seed)
+    const probeContent = `${JSON.stringify(probe, null, 2)}\n`
     const policy = nodeById(seed, "aegis").capability_evidence_policy as JsonObject
+    policy.accepted_raw_probe_sha256 = crypto.createHash("sha256").update(probeContent).digest("hex")
     policy.accepted_capability_file_sha256 = crypto.createHash("sha256").update(capabilityContent).digest("hex")
     policy.accepted_backup_receipt_sha256 = crypto.createHash("sha256").update(receiptContent).digest("hex")
-    const result = assemble(seed, { aegis: healthyAegisProbe(seed) }, {
+    const result = assemble(seed, { aegis: probe }, {
       capabilityEvidence: `${capabilityContent} `,
       backupReceipt: receiptContent,
       nowUtc,
@@ -966,10 +988,13 @@ describe("Execution Fabric AEGIS capability evidence", () => {
     const capabilityContent = `${JSON.stringify(capabilitySnapshot(), null, 2)}\n`
     const receiptContent = `${JSON.stringify(backupReceipt(), null, 2)}\n`
     const duplicateJson = receiptContent.replace('"schema": "aegis-backup-state/1",', '"schema": "aegis-backup-state/1",\n  "schema": "aegis-backup-state/1",')
+    const probe = healthyAegisProbe(seed)
+    const probeContent = `${JSON.stringify(probe, null, 2)}\n`
     const policy = nodeById(seed, "aegis").capability_evidence_policy as JsonObject
+    policy.accepted_raw_probe_sha256 = crypto.createHash("sha256").update(probeContent).digest("hex")
     policy.accepted_capability_file_sha256 = crypto.createHash("sha256").update(capabilityContent).digest("hex")
     policy.accepted_backup_receipt_sha256 = crypto.createHash("sha256").update(receiptContent).digest("hex")
-    const result = assemble(seed, { aegis: healthyAegisProbe(seed) }, {
+    const result = assemble(seed, { aegis: probe }, {
       capabilityEvidence: capabilityContent,
       backupReceipt: duplicateJson,
       nowUtc,

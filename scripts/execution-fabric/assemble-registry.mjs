@@ -12,8 +12,8 @@ const repositoryRoot = path.resolve(scriptDirectory, '..', '..');
 const canonicalSeedPath = path.join(repositoryRoot, 'config', 'execution-fabric', 'registry.seed.json');
 const canonicalSchemaPath = path.join(repositoryRoot, 'config', 'execution-fabric', 'registry.schema.json');
 const corePath = path.join(scriptDirectory, 'assemble-registry-core.mjs');
-const expectedSeedSha256 = 'a3406b2eaa9596866e3211e6f1256f37a395c0e7c3186a56217a3c8458c8b7b5';
-const expectedSchemaSha256 = 'af36ba5e30431f819cedab2f48d5e883ca667a75690fcb7514f31c2441aae18f';
+const expectedSeedSha256 = 'ca99a560c60bbb833faaa57a4fb5a6f2151cba77afb4ed491d8cd60ca20ebaec';
+const expectedSchemaSha256 = 'eafef11faab3a10adb46cc3b23f9b274c6f3d1642be2c95f3d7f0f8bbf9c5776';
 
 function digest(filePath) {
   const value = JSON.parse(fs.readFileSync(filePath, 'utf8'));

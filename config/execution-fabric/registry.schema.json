@@ -240,10 +240,11 @@
     "capability_evidence_policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema", "max_ttl_hours", "accepted_capability_file_sha256", "accepted_backup_receipt_sha256", "required_mounts"],
+      "required": ["schema", "max_ttl_hours", "accepted_raw_probe_sha256", "accepted_capability_file_sha256", "accepted_backup_receipt_sha256", "required_mounts"],
       "properties": {
         "schema": {"const": "aegis-capability-evidence-policy/1"},
         "max_ttl_hours": {"type": "number", "exclusiveMinimum": 0, "maximum": 48},
+        "accepted_raw_probe_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "accepted_capability_file_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "accepted_backup_receipt_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "required_mounts": {
