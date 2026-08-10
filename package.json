@@ -16,7 +16,8 @@
     "fabric:recommend": "node scripts/execution-fabric/recommend-placement.mjs",
     "fabric:dispatch-contract": "node scripts/execution-fabric/evaluate-dispatch-contract.mjs",
     "fabric:recommend:pinned": "node scripts/execution-fabric/recommend-pinned-placement.mjs",
-    "fabric:shadow": "node scripts/execution-fabric/evaluate-shadow-placement.mjs"
+    "fabric:shadow": "node scripts/execution-fabric/evaluate-shadow-placement.mjs",
+    "fabric:shadow-outcome": "node scripts/execution-fabric/shadow-outcome-evidence.mjs"
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.214",

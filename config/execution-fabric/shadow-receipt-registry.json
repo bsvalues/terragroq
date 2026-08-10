@@ -1,0 +1,6 @@
+
+{
+  "schema_version": "0.1-shadow-receipt-registry",
+  "placement_policy_version": "execution-fabric-placement/0.2",
+  "trusted_receipts": []
+}
