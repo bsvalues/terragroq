@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest"
 import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
 import {
   evaluateShadowPlacement,
+  evaluateShadowPlacementBatch,
   evaluateShadowPlacementTestFixture,
   evaluateShadowPlacementTestFixtureBatch,
   runShadowPlacementCli,
@@ -342,6 +343,28 @@ describe("Execution Fabric Phase 2 shadow placement", () => {
         scheduler_state: "disabled",
       },
     })
+  })
+
+  it("replays the bounded genuine production proof exactly", () => {
+    const entries = [
+      {
+        receipt: "docs/reports/execution-fabric-shadow-receipts/WO-EF-SHADOW-001.json",
+        observation: "docs/reports/execution-fabric-shadow-observations/WO-EF-SHADOW-001.json",
+      },
+      {
+        receipt: "docs/reports/shadow-admission/WO-EF-SHADOW-004-resident-8e063f9de03e0471-receipt.json",
+        observation: "docs/reports/execution-fabric-shadow-observations/WO-EF-SHADOW-004.json",
+      },
+    ].map((artifact) => ({
+      receiptBytes: fs.readFileSync(path.join(process.cwd(), artifact.receipt)),
+      observationBytes: fs.readFileSync(path.join(process.cwd(), artifact.observation)),
+    }))
+    const retainedProof = JSON.parse(fs.readFileSync(path.join(
+      process.cwd(),
+      "docs/reports/execution-fabric-shadow-evaluations/WO-EF-PLACEMENT-001-phase2-proof.json",
+    ), "utf8"))
+
+    expect(evaluateShadowPlacementBatch(entries)).toEqual(retainedProof)
   })
 
   it("keeps an admitted observation replay-stable when a later receipt is appended", () => {

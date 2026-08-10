@@ -113,27 +113,55 @@ the divergence, the two bounded recoverable shell-handling failures, strict Git 
 the exact reviewed main commit, and owned-workspace cleanup. The placement engine did not launch
 the work.
 
-This one observation proves the hardened admission and replay path with genuine evidence. It does
-not satisfy Issue #538's requirement for a bounded representative set of genuine Work Orders or
-support policy calibration. Therefore:
+That first observation proved the hardened admission and replay path with genuine evidence, but did
+not alone satisfy Issue #538's bounded representative-set requirement. A second separately scoped,
+activated, executed, independently reviewed, and admitted genuine observation now covers local GPU
+inference on HERMES-NODE:
+
+```text
+WORK_ORDER: WO-EF-SHADOW-004
+WORKLOAD: gpu-local-inference
+RECOMMENDED_NODE: hermes-node
+ACTUAL_NODE: hermes-node
+DIVERGENCE: none
+RECEIPT_SHA256: 5dc81506c61698cc9369c2ff0dad9b8af8cf5b78a831f785871b0ad1b8ef1197
+OUTCOME_SHA256: fd7e4ee6aacbbdb6feb198b6a07b030c1b075b44dff1ab2b1b52f794f3dd3ec8
+EVALUATION: OBSERVED
+```
+
+The bounded set now exercises two distinct genuine workload classes and both major comparison
+paths: an authority-constrained, explained CPU-work divergence and a matching GPU-local-inference
+placement. Deterministic production batch replay records:
+
+```text
+BOUNDED_OBSERVATION_COUNT: 2
+DIVERGENCE_COUNT: 1
+AUTHORITY_VIOLATIONS: 0
+STALE_EVIDENCE_PLACEMENTS: 0
+SILENT_FALLBACKS: 0
+REPLAY_SHA256: 3671d53a94102129fa9434718d610bdb3641cf5cd2f11755e5904b077fcc25f3
+```
+
+Therefore:
 
 ```text
 PHASE_2_SHADOW_HARNESS: HARDENED
-FIRST_OBSERVATION_COMPLETE: TRUE
-HERMES_PLACEMENT_SHADOW_PROOF: PENDING_ADDITIONAL_REPRESENTATIVE_OBSERVATIONS
+GENUINE_BOUNDED_OBSERVATION_SET: COMPLETE
+HERMES_PLACEMENT_SHADOW_PROOF: PASS
 SCHEDULER: OFF
 DISPATCH_AUTHORITY: NOT_GRANTED
 ```
 
-No policy-calibration or bounded-dispatch claim follows from this implementation alone.
+This gate makes Phase 3 contract implementation eligible. It does not itself activate a scheduler,
+grant dispatch authority, or claim any bounded dispatch has occurred.
 
 ## Validation
 
-- Phase 2 focused suites: 43/43 passed.
+- Current focused producer/admission/placement/outcome/trust suites: 61/61 passed.
 - Complete Execution Fabric family: 264/264 passed.
 - Full repository suite: 2,935 passed, 2 skipped; four pre-existing
   `lab-dev-preflight` environment/child-process failures remain outside this Fabric change.
 - Lint: passed with no warnings or errors.
 - Production build: passed.
-- Independent exact-head assurance: first observation evidence PASS; Phase 2 remains open pending
-  additional representative genuine observations.
+- Deterministic bounded production replay: `HERMES_PLACEMENT_SHADOW_PROOF: PASS` with two genuine
+  observations and zero acceptance violations.
