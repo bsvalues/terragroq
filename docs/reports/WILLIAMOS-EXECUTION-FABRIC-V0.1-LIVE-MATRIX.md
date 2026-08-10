@@ -1,6 +1,6 @@
 # WilliamOS Execution Fabric v0.1 live matrix
 
-Status: `FOUR_NODE_LIVE_PROOF_ASSEMBLED / INDEPENDENT_REVIEW_PENDING / SCHEDULER_OFF`
+Status: `FOUR_NODE_LIVE_PROOF_COMPLETE / MERGED / SCHEDULER_OFF`
 
 PR: `#532`
 
@@ -69,8 +69,9 @@ Validation was run after the live-probe mismatch remediation and before publishi
 
 The generated probes and snapshot are ignored artifacts. Their hashes in this report are the durable binding between the exact reviewed source and the retained local evidence.
 
-## Remaining gate
+## Gate completion
 
-1. Independently review the exact implementation head and the hash-bound four-node snapshot.
-
-Until that review passes, PR #532 remains draft and no placement or scheduling capability is activated. Review completion may make the registry evidence merge-ready; it does not grant AEGIS compute authority, AEGIS storage authority, or scheduler authority.
+PR #532 passed independent review with zero unresolved threads and merged to `origin/main` at
+`47be461a2f09b83b8d9bc5d5559a1138f54ba539`. Review completion made the registry evidence available
+for bounded reasoning; it did not grant AEGIS compute authority, AEGIS storage authority, or
+scheduler authority.
