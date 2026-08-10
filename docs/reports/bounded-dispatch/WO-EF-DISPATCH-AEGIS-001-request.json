@@ -1,0 +1,21 @@
+{
+  "schema_version": "0.1-aegis-hash-verify-request",
+  "request_id": "aegis-single-use-hash-001",
+  "work_order_id": "WO-EF-DISPATCH-AEGIS-001",
+  "template_id": "aegis.hash-verify.v1",
+  "placement_receipt_sha256": "389c03cc669f303578eb41a785f42b0532b6e3eb9e54e10c68013e7d60677c30",
+  "input": {
+    "relative_path": "WO-EF-DISPATCH-AEGIS-001.json",
+    "expected_sha256": "8142d6c2154446cabc944c77dfe99c1e2c986985a03d33f4f841395de3747e14",
+    "expected_byte_length": 137
+  },
+  "limits": {
+    "max_input_bytes": 1048576,
+    "timeout_ms": 30000
+  },
+  "forge": {
+    "permission_set_sha256": "ff8587a3e05eeb0aa7abaa80ed882b0f43010ad2fd119e71f0b58e353dfd2989",
+    "template_registry_sha256": "7217d0486fb67e17d27b7854bb8f44d0ba7d063bddde7d45282c091306d8d58b"
+  },
+  "authority_reference": "issue-538-aegis-single-use-hash-001"
+}
