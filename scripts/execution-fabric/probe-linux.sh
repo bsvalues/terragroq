@@ -158,11 +158,16 @@ if lsblk:
                 warnings.append(
                     f"disk {d.get('name')}: reported non-positive capacity; retained as unknown and unschedulable"
                 )
+            serial = (str(d.get('serial')).strip() if d.get('serial') is not None else '') or None
             fs = []
             for c in d.get('children') or []:
+                child_size = int(c.get('size') or 0)
+                if child_size <= 0:
+                    warnings.append(f"filesystem {c.get('name')}: reported non-positive size; relationship omitted")
+                    continue
                 fs.append({
                     'name': c.get('name'),'fstype':c.get('fstype'),'label':c.get('label'),'uuid':c.get('uuid'),
-                    'mountpoint':c.get('mountpoint'),'size_bytes':c.get('size')
+                    'mountpoint':c.get('mountpoint'),'size_bytes':child_size
                 })
             smart_overall = poh = realloc = pending = unc = None
             if shutil.which('smartctl'):
@@ -178,7 +183,7 @@ if lsblk:
                         unc = attrs.get('Offline_Uncorrectable')
                     except Exception as e: warnings.append(f"smart parse {d.get('name')}: {e}")
             disks.append({
-                'id': f"disk-{d.get('name')}", 'model': d.get('model') or d.get('name'), 'serial': d.get('serial'),
+                'id': f"disk-{d.get('name')}", 'model': d.get('model') or d.get('name'), 'serial': serial,
                 'capacity_bytes': capacity, 'transport': d.get('tran'),
                 'rotational': bool(d.get('rota')) if d.get('rota') is not None else None,
                 'smart_overall': smart_overall, 'power_on_hours': poh,

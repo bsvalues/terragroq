@@ -643,6 +643,20 @@ describe("Execution Fabric probe and scheduler boundaries", () => {
     expect(source).not.toMatch(/\b(mkfs|wipefs|parted|fdisk|systemctl\s+(?:start|stop|restart|enable|disable)|docker\s+(?:run|start|stop|rm))\b/i)
   })
 
+  it("normalizes probe disk identity and capacity without inventing storage facts", () => {
+    const linux = fs.readFileSync(path.join(repositoryRoot, "scripts/execution-fabric/probe-linux.sh"), "utf8")
+    const windows = fs.readFileSync(path.join(repositoryRoot, "scripts/execution-fabric/probe-windows.ps1"), "utf8")
+
+    expect(linux).toContain("child_size = int(c.get('size') or 0)")
+    expect(linux).toContain("if child_size <= 0")
+    expect(linux).toContain("'size_bytes':child_size")
+    expect(linux).toContain("'serial': serial")
+    expect(windows).toContain("function Convert-PositiveInt64")
+    expect(windows).toContain("function Convert-NonBlankString")
+    expect(windows).toContain("capacity_bytes = $capacity")
+    expect(windows).toContain("serial = Convert-NonBlankString")
+  })
+
   it("keeps scheduler activation absent in v0.1", () => {
     const readme = fs.readFileSync(path.join(repositoryRoot, "scripts/execution-fabric/README.md"), "utf8")
     const assembler = fs.readFileSync(assemblerPath, "utf8")

@@ -37,6 +37,22 @@ try {
 } finally {
   $sha256.Dispose()
 }
+
+function Convert-PositiveInt64($Value) {
+  if ($null -eq $Value) { return $null }
+  try {
+    $converted = [int64]$Value
+    if ($converted -gt 0) { return $converted }
+  } catch {}
+  return $null
+}
+
+function Convert-NonBlankString($Value) {
+  if ($null -eq $Value) { return $null }
+  $converted = ([string]$Value).Trim()
+  if ($converted) { return $converted }
+  return $null
+}
 $os = Get-CimInstance Win32_OperatingSystem
 $cpus = @(Get-CimInstance Win32_Processor | ForEach-Object {
   [ordered]@{
@@ -110,6 +126,8 @@ if (-not $gpuRows -or $gpuRows.Count -eq 0) {
 
 $diskRows = Try-Run { @(Get-Disk -ErrorAction Stop | ForEach-Object {
   $disk = $_
+  $capacity = Convert-PositiveInt64 $disk.Size
+  if ($null -eq $capacity) { $warnings.Add("disk $($disk.Number) reported non-positive capacity; retained as unknown and unschedulable") }
   $fs = @()
   try {
     $fs = @(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop | ForEach-Object {
@@ -127,8 +145,8 @@ $diskRows = Try-Run { @(Get-Disk -ErrorAction Stop | ForEach-Object {
   [ordered]@{
     id = "disk-$($disk.Number)"
     model = [string]$disk.FriendlyName
-    serial = if ($disk.SerialNumber) { $disk.SerialNumber.Trim() } else { $null }
-    capacity_bytes = [int64]$disk.Size
+    serial = Convert-NonBlankString $disk.SerialNumber
+    capacity_bytes = $capacity
     transport = [string]$disk.BusType
     rotational = $null
     smart_overall = [string]$disk.HealthStatus
@@ -141,11 +159,13 @@ $diskRows = Try-Run { @(Get-Disk -ErrorAction Stop | ForEach-Object {
 }) } @() 'Storage module disk enumeration unavailable'
 if (-not $diskRows -or $diskRows.Count -eq 0) {
   $diskRows = @(Get-CimInstance Win32_DiskDrive | ForEach-Object {
+    $capacity = Convert-PositiveInt64 $_.Size
+    if ($null -eq $capacity) { $warnings.Add("disk $($_.Index) reported non-positive capacity; retained as unknown and unschedulable") }
     [ordered]@{
       id = "disk-$($_.Index)"
       model = if ($_.Model) { [string]$_.Model } else { [string]$_.Caption }
-      serial = if ($_.SerialNumber) { $_.SerialNumber.Trim() } else { $null }
-      capacity_bytes = [int64]$_.Size
+      serial = Convert-NonBlankString $_.SerialNumber
+      capacity_bytes = $capacity
       transport = if ($_.InterfaceType) { [string]$_.InterfaceType } else { $null }
       rotational = $null
       smart_overall = if ($_.Status) { [string]$_.Status } else { $null }
