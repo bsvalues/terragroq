@@ -47,8 +47,9 @@ AEGIS backup/archive promotion additionally requires exact capability and receip
 by reviewed policy, a valid self-digest, exact producer schemas, the exact trusted machine identity
 and backup mounts, freshness inside the policy maximum, `scheduler=OFF`, and restore-verified source
 and manifest evidence. Missing, malformed, stale, future, hash-mismatched, mount-mismatched, or
-scheduler-enabled evidence fails those capabilities closed without falsely changing node or compute
-health. NAS remains pending until a separate file-share service and authority are proven.
+scheduler-enabled evidence fails those storage capabilities closed without changing overall node
+health. Compute is classified independently from the fresh raw probe and running Docker runtime.
+NAS remains pending until a separate file-share service and authority are proven.
 
 ## Windows
 

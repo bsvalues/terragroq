@@ -566,8 +566,10 @@ function projectAegisCapabilityHealth(node) {
     if (stale) return capabilityAxis('FAIL_CLOSED', 'BACKUP_STALE', metadata[0], expiresAt, metadata[1], metadata[2]);
     return capabilityAxis(state, snapshot.backup.reason, metadata[0], expiresAt, metadata[1], metadata[2]);
   };
-  const computeState = probeReason ? 'DEGRADED' : snapshot.compute_capability_health;
-  const computeReason = probeReason || (computeState === 'READY' ? 'COMPUTE_CAPABILITY_READY' : 'COMPUTE_CAPABILITY_DEGRADED');
+  const dockerReady = (node.runtimes || []).some(runtime => runtime.kind === 'docker' && runtime.state === 'running');
+  const computeGateReason = probeReason || (!dockerReady ? 'RUNTIME_UNAVAILABLE' : null);
+  const computeState = computeGateReason ? 'DEGRADED' : 'READY';
+  const computeReason = computeGateReason || 'COMPUTE_CAPABILITY_READY';
   const computeObservedMs = rfc3339Ms(node.evidence?.observed_at);
   const computeTtlSeconds = node.evidence?.ttl_seconds;
   const computeExpiresAt = computeObservedMs != null && Number.isFinite(computeTtlSeconds)

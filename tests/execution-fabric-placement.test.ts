@@ -117,6 +117,48 @@ describe("Execution Fabric recommendation-only placement", () => {
   })
 
   it.each([
+    ["backup-target", "backup_target"],
+    ["archive-storage", "archive_storage"],
+  ])("requires current READY health for declared %s capability", (capability, axisName) => {
+    const selectedWorkload = clone(workload("cpu-heavy-build"))
+    selectedWorkload.requirements.capabilities_all = [capability]
+    selectedWorkload.requirements.minimum_cpu_threads = 0
+    selectedWorkload.preferences = {
+      capabilities: [],
+      availability_order: [],
+      higher_cpu_threads: false,
+      higher_gpu_vram: false,
+    }
+    const pendingRegistry = observedRegistry()
+    const pending = evaluatePlacement(pendingRegistry, selectedWorkload, { evaluatedAt, schema: registrySchema })
+    const pendingAegis = pending.ineligible_nodes.find((node: JsonObject) => node.node_id === "aegis")
+
+    expect(pendingAegis.reasons).toContainEqual(expect.objectContaining({
+      code: "CAPABILITY_NOT_READY",
+      detail: capability,
+      observed: "PENDING",
+    }))
+
+    const expiredRegistry = observedRegistry()
+    const aegis = expiredRegistry.nodes.find((node: JsonObject) => node.id === "aegis")
+    aegis.capability_health[axisName] = {
+      state: "READY",
+      reason: "RESTORE_VERIFIED",
+      observed_at: "2026-08-10T03:30:00.000Z",
+      expires_at: evaluatedAt,
+      snapshot_sha256: "a".repeat(64),
+      evidence_ref: "fixture",
+    }
+    const expired = evaluatePlacement(expiredRegistry, selectedWorkload, { evaluatedAt, schema: registrySchema })
+    const expiredAegis = expired.ineligible_nodes.find((node: JsonObject) => node.node_id === "aegis")
+
+    expect(expiredAegis.reasons).toContainEqual(expect.objectContaining({
+      code: "CAPABILITY_EVIDENCE_STALE",
+      detail: capability,
+    }))
+  })
+
+  it.each([
     ["gpu-local-inference", "hermes-node"],
     ["authoritative-state-operation", "atlas"],
     ["interactive-development", "omen"],

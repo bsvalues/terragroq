@@ -250,14 +250,24 @@ function healthyAegisProbe(seed: JsonObject, observedAt = "2026-08-10T12:00:00Z"
       filesystems: [{ name: "sda1", fstype: "ext4", label: "BACKUP_SECONDARY", uuid: "ab119332-259b-4714-a274-8add6dbb9351", mountpoint: "/backup-secondary", size_bytes: 1000 }],
     },
   ]
-  ;(probe.node as JsonObject).runtimes = [{
-    id: "backup-health",
-    kind: "backup",
-    version: "1",
-    state: "healthy",
-    endpoint: null,
-    details: {},
-  }]
+  ;(probe.node as JsonObject).runtimes = [
+    {
+      id: "docker",
+      kind: "docker",
+      version: "test",
+      state: "running",
+      endpoint: null,
+      details: {},
+    },
+    {
+      id: "backup-health",
+      kind: "backup",
+      version: "1",
+      state: "healthy",
+      endpoint: null,
+      details: {},
+    },
+  ]
   return probe
 }
 
@@ -313,20 +323,21 @@ function assemble(
   if (capabilityContent !== undefined) fs.writeFileSync(path.join(evidenceDirectory, "aegis-capability.json"), capabilityContent)
   if (receiptContent !== null) fs.writeFileSync(path.join(evidenceDirectory, "aegis-backup-state.json"), receiptContent)
 
+  const childEnv = { ...process.env }
+  delete childEnv.FABRIC_NOW_UTC
+  delete childEnv.FABRIC_ALLOW_TEST_CLOCK
+  if (options.nowUtc) {
+    childEnv.NODE_ENV = "test"
+    childEnv.FABRIC_ALLOW_TEST_CLOCK = "1"
+    childEnv.FABRIC_NOW_UTC = options.nowUtc
+  }
   const result = spawnSync(
     process.execPath,
     [assemblerPath, "--seed", testSeedPath, "--evidence-dir", evidenceDirectory, "--out", outputPath],
     {
       cwd: repositoryRoot,
       encoding: "utf8",
-      env: {
-        ...process.env,
-        ...(options.nowUtc ? {
-          NODE_ENV: "test",
-          FABRIC_ALLOW_TEST_CLOCK: "1",
-          FABRIC_NOW_UTC: options.nowUtc,
-        } : {}),
-      },
+      env: childEnv,
     },
   )
   const registry = fs.existsSync(outputPath) ? JSON.parse(fs.readFileSync(outputPath, "utf8")) as JsonObject : null
@@ -844,6 +855,21 @@ describe("Execution Fabric AEGIS capability evidence", () => {
     expect(health.compute).toMatchObject({ state: "DEGRADED", reason: "LIVE_PROBE_STALE" })
     expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "LIVE_PROBE_STALE" })
     expect(health.archive_storage).toMatchObject({ state: "FAIL_CLOSED", reason: "LIVE_PROBE_STALE" })
+  })
+
+  it("degrades compute when the fresh raw probe does not report a running Docker runtime", () => {
+    const seed = clone(canonicalSeed)
+    const probe = healthyAegisProbe(seed)
+    const docker = ((probe.node as JsonObject).runtimes as JsonObject[]).find(runtime => runtime.kind === "docker")!
+    docker.state = "stopped"
+
+    const health = aegisHealth(assemble(seed, { aegis: probe }, {
+      capabilityEvidence: capabilitySnapshot(),
+      nowUtc,
+    }))
+
+    expect(health.compute).toMatchObject({ state: "DEGRADED", reason: "RUNTIME_UNAVAILABLE" })
+    expect(health.compute.expires_at).toBe("2026-08-10T12:05:00.000Z")
   })
 
   it("does not mutate scheduler or authority while projecting capability health", () => {

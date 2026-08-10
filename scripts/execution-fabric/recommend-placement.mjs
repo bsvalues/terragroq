@@ -297,6 +297,29 @@ function compareText(left, right) {
   return left < right ? -1 : 1
 }
 
+const CAPABILITY_HEALTH_AXES = new Map([
+  ["backup-target", "backup_target"],
+  ["archive-storage", "archive_storage"],
+])
+
+function capabilityHealthReason(node, capability, evaluatedAt) {
+  const axisName = CAPABILITY_HEALTH_AXES.get(capability)
+  if (!axisName) return null
+  const axis = node.capability_health?.[axisName]
+  const evidencePath = `nodes.${node.id}.capability_health.${axisName}`
+  if (!isObject(axis)) {
+    return reason("CAPABILITY_HEALTH_REQUIRED", capability, "READY", null, [evidencePath])
+  }
+  if (axis.state !== "READY") {
+    return reason("CAPABILITY_NOT_READY", capability, "READY", axis.state, [`${evidencePath}.state`, `${evidencePath}.reason`])
+  }
+  const expiresAt = Date.parse(axis.expires_at)
+  if (!Number.isFinite(expiresAt) || expiresAt <= evaluatedAt.getTime()) {
+    return reason("CAPABILITY_EVIDENCE_STALE", capability, "unexpired", axis.expires_at, [`${evidencePath}.expires_at`])
+  }
+  return null
+}
+
 function evaluateNode(node, workload, evaluatedAt) {
   const requirements = workload.requirements
   const preferences = workload.preferences
@@ -340,6 +363,13 @@ function evaluateNode(node, workload, evaluatedAt) {
       "CAPABILITY_REQUIRED", capability, true, false, [`nodes.${node.id}.capabilities.${capability}`],
     ))
     evidenceUsed.push(evidenceRef(`nodes.${node.id}.capabilities.${capability}`, capabilities.has(capability)))
+    const healthReason = capabilityHealthReason(node, capability, evaluatedAt)
+    if (capabilities.has(capability) && healthReason) reasons.push(healthReason)
+    const axisName = CAPABILITY_HEALTH_AXES.get(capability)
+    if (axisName) evidenceUsed.push(evidenceRef(
+      `nodes.${node.id}.capability_health.${axisName}`,
+      node.capability_health?.[axisName] ?? null,
+    ))
   }
   for (const authority of requirements.authority_all) {
     if (!allow.has(authority)) reasons.push(reason(
