@@ -64,7 +64,9 @@
     "silent-replacement",
     "workload-storage-write"
   ],
-  "authorityGrantRefs": [],
+  "authorityGrantRefs": [
+    "issue-538-aegis-single-use-hash-001"
+  ],
   "programActivationGrantRef": "github-issue-538",
   "grantStatusEventRefs": [],
   "requiredOutputs": [
@@ -90,7 +92,7 @@
     "separate-future-dated-activation",
     "zero-unresolved-security-or-authority-findings"
   ],
-  "mergeMode": "squash",
+  "mergeMode": "merge",
   "retryBudget": 0,
   "remediationBudget": 3,
   "reroutePolicy": "NO_FALLBACK_NEW_RECEIPT_AND_AUTHORITY_REQUIRED",
@@ -115,9 +117,9 @@
     "material-product-scope-change"
   ],
   "ownerOperationsAllowed": false,
-  "operationalState": "BLOCKED_AUTHORITY",
-  "reasonCode": "AUTHORITY_NOT_ADMITTED",
-  "authorityStatus": "NOT_GRANTED",
+  "operationalState": "AUTHORITY_MATCHED",
+  "reasonCode": null,
+  "authorityStatus": "GRANTED",
   "schedulerActivated": false,
   "autonomousDispatch": false
 }
