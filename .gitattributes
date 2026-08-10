@@ -1,5 +1,8 @@
 scripts/execution-fabric/verify_snapshot.py text eol=lf
 config/execution-fabric/shadow-*.json text eol=lf
+config/execution-fabric/bounded-dispatch-*.json text eol=lf
+config/execution-fabric/agent-forge-bounded-dispatch-permission.json text eol=lf
+config/execution-fabric/bounded-dispatch-authority-scopes/*.json text eol=lf
 docs/reports/WO-EF-SHADOW-*.md text eol=lf
 docs/reports/execution-fabric-shadow-evaluations/*.json text eol=lf
 docs/reports/execution-fabric-shadow-observations/*.json text eol=lf
@@ -7,3 +10,4 @@ docs/reports/execution-fabric-shadow-outcomes/*.json text eol=lf
 docs/reports/execution-fabric-shadow-receipts/*.json text eol=lf
 docs/reports/shadow-admission/*.json text eol=lf
 docs/reports/shadow-admission/*.md text eol=lf
+docs/reports/bounded-dispatch/*.json text eol=lf

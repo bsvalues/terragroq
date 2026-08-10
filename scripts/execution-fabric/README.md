@@ -158,6 +158,42 @@ node scripts/execution-fabric/evaluate-dispatch-contract.mjs `
   --at <evaluation-time-utc>
 ```
 
+## Phase 3 resident HERMES bounded dispatch
+
+`bounded-dispatch/resident-hermes-bounded-dispatch.mjs` is the single-shot runtime boundary for the
+first Phase 3 class: `LOCAL_LLM_INFERENCE` on HERMES-NODE. It consumes only the exact
+`hermes.local-llm-inference.v1` template. The adapter is selected by code, calls only the fixed
+loopback Ollama surface, permits only the reviewed model allowlist, and has no caller-provided
+executable, remote address, storage path, or replacement node.
+
+Preparation independently requires:
+
+- a fresh Phase 1 receipt reproduced by the pinned-evidence placement verifier;
+- an exact Agent Forge permission-set digest;
+- an exact reviewed non-active authority-scope artifact;
+- a later active authority-registry entry whose complete bytes are on trusted `main`;
+- exact Work Order, template, HERMES node, input, limits, risk, and one-attempt bindings.
+
+The checked-in authority registry starts empty, so the production runtime fails closed. An admitted
+scope does not activate authority. A separate future-dated activation must merge before its
+effective time. After preparation, the resident wrapper atomically claims the request digest in the
+HERMES ledger, rechecks freshness and authority, then invokes the exact template once. A failed or
+interrupted claim is consumed rather than retried silently.
+
+```powershell
+npm run fabric:bounded-dispatch -- `
+  --request docs/reports/bounded-dispatch/<request>.json `
+  --receipt docs/reports/bounded-dispatch/<receipt>.json
+```
+
+The production wrapper does not accept a caller clock, ledger location, interpreter, model service
+address, authority registry, template registry, or alternate node. The scheduler remains off;
+`dispatch_performed=true` can be emitted only for the one exact claimed invocation. AEGIS templates
+remain absent and fail closed until a resident AEGIS adapter and separately reviewed authority are
+available.
+
+### Static proof boundary (continued)
+
 Proof fixtures must identify themselves as `proof-fixture` authority evidence. They are not grants
 and cannot be consumed by Hermes or any node runtime. CLI evaluation cannot self-attest a completion
 claim. A host integration must inject a verified evidence resolver backed by an independently trusted,

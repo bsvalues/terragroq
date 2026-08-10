@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.1-bounded-dispatch-template-registry",
+  "registry_id": "execution-fabric-bounded-dispatch-templates",
+  "templates": [
+    {
+      "template_id": "hermes.local-llm-inference.v1",
+      "workload_id": "gpu-local-inference",
+      "workload_class": "LOCAL_LLM_INFERENCE",
+      "selected_node_id": "hermes-node",
+      "adapter_id": "resident-hermes-loopback-ollama-v1",
+      "allowed_models": [
+        "llama3.2:3b"
+      ],
+      "max_prompt_bytes": 512,
+      "max_response_bytes": 4096,
+      "max_timeout_ms": 60000,
+      "network_scope": "loopback-only",
+      "storage_semantics": "none",
+      "risk_class": "R1",
+      "forge_permission_set_sha256": "a2e2938b58440d5d46ad92d08da43f79e714f34140bed375abc897ac8bb64760",
+      "status": "IMPLEMENTED_NOT_AUTHORIZED"
+    }
+  ]
+}
