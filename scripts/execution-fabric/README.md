@@ -212,6 +212,24 @@ change, or scheduler activation.
 
 ## Shadow placement observation (Phase 2)
 
+### Genuine-outcome admission
+
+`admission/compile-shadow-admission.mjs` is the fail-closed bridge between a completed,
+known-safe producer outcome and the reviewed shadow registries. The resident producer must first
+retain a Phase 1 receipt before execution, then retain canonical outcome, delivery, and independent
+review evidence. The compiler verifies exact bytes, chronology, authority coverage, canonical node
+identity, and that the reviewed commit is on trusted `main` and contains the exact receipt, delivery,
+and outcome artifacts.
+
+```powershell
+npm run fabric:shadow-admit -- --candidate docs/reports/shadow-admission/<candidate>.json
+```
+
+Its output is a review-ready observation and registry-entry proposal. It never edits a registry,
+launches work, schedules, dispatches, grants authority, or accesses a remote system. A separate
+reviewed repository change must admit the proposal. Missing pre-execution receipt or producer facts
+remain pending; completed work is never retrofitted or fabricated.
+
 `evaluate-shadow-placement.mjs` compares one immutable Phase 1 placement receipt with one recorded
 observation of where real work ran. It is an offline comparison surface for issue #538. It never
 launches work, selects a replacement target, calibrates policy, activates a scheduler, or grants

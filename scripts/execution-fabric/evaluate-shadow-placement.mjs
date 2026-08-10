@@ -161,7 +161,7 @@ function resolveRetainedSource(repositoryRoot, relativePath) {
   return realSource
 }
 
-function validateSourceClaims(sourceBytes, observation, outcomeEvidence) {
+export function validateShadowSourceClaims(sourceBytes, observation, outcomeEvidence) {
   const sourceText = sourceBytes.toString("utf8")
   const escapedWorkOrder = observation.work_order_id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
   if (!new RegExp(`^#\\s+.*\\b${escapedWorkOrder}\\b`, "im").test(sourceText)) {
@@ -275,7 +275,7 @@ function verifyTrustedReceipt(registryArtifact, receipt, receiptSha256, workOrde
   return registryArtifact.sha256
 }
 
-function validateReceipt(receipt, receiptSha256) {
+export function validateShadowPlacementReceipt(receipt, receiptSha256) {
   object(receipt, "receipt")
   rejectExecutableInput(receipt, "receipt")
   if (receipt.schema_version !== "0.2-pinned-placement-recommendation") fail("receipt schema_version is unsupported")
@@ -398,7 +398,7 @@ function validateObservation(observation, repositoryRoot, receipt, receiptSha256
     fail("outcome execution began at or after selected evidence expiry")
   }
   if (observationTime < outcomeComplete) fail("shadow observation predates outcome completion")
-  validateSourceClaims(sourceBytes, observation, outcomeEvidence)
+  validateShadowSourceClaims(sourceBytes, observation, outcomeEvidence)
   const outcomeTrust = settleOutcomeEvidenceTrust(
     repositoryRoot,
     loadedOutcome.artifactBytes,
@@ -427,7 +427,7 @@ function evaluateShadowPlacementAtRoot({ receiptBytes, observationBytes, reposit
   const observationArtifact = parseArtifactBytes(observationBytes, "historical observation bytes")
   const receipt = receiptArtifact.value
   const observation = observationArtifact.value
-  const receiptView = validateReceipt(structuredClone(receipt), receiptArtifact.sha256)
+  const receiptView = validateShadowPlacementReceipt(structuredClone(receipt), receiptArtifact.sha256)
   const trustRegistry = loadTrustedReceiptRegistry(repositoryRoot)
   const trustRegistrySha256 = verifyTrustedReceipt(
     trustRegistry,
