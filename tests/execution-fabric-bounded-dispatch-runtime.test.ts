@@ -20,6 +20,16 @@ function sha256(value: Buffer | string) {
   return crypto.createHash("sha256").update(value).digest("hex")
 }
 
+function loadRetainedDispatchEvidence(workOrderId: string) {
+  const retainedRoot = path.join(process.cwd(), "docs/reports/bounded-dispatch")
+  return {
+    receiptBytes: fs.readFileSync(path.join(retainedRoot, `${workOrderId}-receipt.json`)),
+    retainedRequest: JSON.parse(fs.readFileSync(path.join(retainedRoot, `${workOrderId}-request.json`), "utf8")),
+    retainedClaim: JSON.parse(fs.readFileSync(path.join(retainedRoot, `${workOrderId}-claim.json`), "utf8")),
+    retainedResult: JSON.parse(fs.readFileSync(path.join(retainedRoot, `${workOrderId}-result.json`), "utf8")),
+  }
+}
+
 function request(receiptBytes: Buffer) {
   return {
     schema_version: "0.1-bounded-dispatch-request",
@@ -439,17 +449,9 @@ describe("Execution Fabric Phase 3 resident HERMES bounded dispatch", () => {
   })
 
   it("retains the genuine first production attempt as consumed fail-closed evidence", () => {
-    const retainedRoot = path.join(process.cwd(), "docs/reports/bounded-dispatch")
-    const receiptBytes = fs.readFileSync(path.join(retainedRoot, "WO-EF-DISPATCH-001-receipt.json"))
-    const retainedRequest = JSON.parse(fs.readFileSync(
-      path.join(retainedRoot, "WO-EF-DISPATCH-001-request.json"), "utf8",
-    ))
-    const retainedClaim = JSON.parse(fs.readFileSync(
-      path.join(retainedRoot, "WO-EF-DISPATCH-001-claim.json"), "utf8",
-    ))
-    const retainedResult = JSON.parse(fs.readFileSync(
-      path.join(retainedRoot, "WO-EF-DISPATCH-001-result.json"), "utf8",
-    ))
+    const { receiptBytes, retainedRequest, retainedClaim, retainedResult } = loadRetainedDispatchEvidence(
+      "WO-EF-DISPATCH-001",
+    )
     expect(sha256(receiptBytes)).toBe("3b8d11da2c42289381aa7fd8793fad239f10dd48564af43fdb97099ac3987375")
     expect(retainedRequest.placement_receipt_sha256).toBe(sha256(receiptBytes))
     expect(retainedClaim).toMatchObject({
@@ -470,5 +472,57 @@ describe("Execution Fabric Phase 3 resident HERMES bounded dispatch", () => {
       autonomous_dispatch: false,
       silent_replacement: false,
     })
+  })
+
+  it("retains the genuine second production attempt as bounded success evidence", () => {
+    const { receiptBytes, retainedRequest, retainedClaim, retainedResult } = loadRetainedDispatchEvidence(
+      "WO-EF-DISPATCH-002",
+    )
+    const reviewedScope = JSON.parse(fs.readFileSync(path.join(
+      process.cwd(),
+      "config/execution-fabric/bounded-dispatch-authority-scopes/WO-EF-DISPATCH-002.json",
+    ), "utf8"))
+    expect(sha256(receiptBytes)).toBe("4d8ca045ba06347c14e01d6e7d5b253b55bd363d25360c2a7a6fbeaeef603d8a")
+    expect(retainedRequest.placement_receipt_sha256).toBe(sha256(receiptBytes))
+    expect(sha256(canonicalizeJcs(retainedRequest))).toBe(
+      "5f4011c9efda808f5c11db4609e44efea18eba8caab1e475d682aa39d1eeeacd",
+    )
+    expect(retainedClaim).toMatchObject({
+      request_sha256: sha256(canonicalizeJcs(retainedRequest)),
+      authority_reference: retainedRequest.authority_reference,
+      scope_sha256: reviewedScope.scope_sha256,
+      maximum_attempts: 1,
+    })
+    const claimWithoutDigest = structuredClone(retainedClaim)
+    delete claimWithoutDigest.claim_sha256
+    expect(retainedClaim.claim_sha256).toBe(sha256(canonicalizeJcs(claimWithoutDigest)))
+    expect(retainedClaim.claim_sha256).toBe(
+      "88ebe21ece91afab0b40528954dc5d5df693a7f92f5b6e4c536c6dc1a9d81015",
+    )
+    expect(retainedResult).toMatchObject({
+      status: "COMPLETED",
+      result: "SUCCEEDED",
+      request_sha256: retainedClaim.request_sha256,
+      scope_sha256: retainedClaim.scope_sha256,
+      authority_reference: retainedClaim.authority_reference,
+      placement_receipt_sha256: retainedRequest.placement_receipt_sha256,
+      claim_id: `claim-${retainedClaim.claim_sha256.slice(0, 24)}`,
+      output: { expected_marker: "HERMESOK002", expected_marker_observed: true },
+      execution_authorized: true,
+      dispatch_performed: true,
+      scheduler_activated: false,
+      autonomous_dispatch: false,
+      silent_replacement: false,
+      external_provider_accessed: false,
+      remote_systems_modified: false,
+      shell_executed: false,
+      runtime_lease_released: true,
+    })
+    const resultWithoutDigest = structuredClone(retainedResult)
+    delete resultWithoutDigest.result_sha256
+    expect(retainedResult.result_sha256).toBe(sha256(canonicalizeJcs(resultWithoutDigest)))
+    expect(retainedResult.result_sha256).toBe(
+      "e8ef25cd4ad277ab04bfb2a5f9af3a685fe7f93f76edb920b353d75222d43447",
+    )
   })
 })

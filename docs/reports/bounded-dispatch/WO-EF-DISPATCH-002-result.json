@@ -1,0 +1,47 @@
+{
+  "schema_version": "0.1-bounded-dispatch-result",
+  "status": "COMPLETED",
+  "result": "SUCCEEDED",
+  "request_id": "phase3-hermes-inference-002",
+  "work_order_id": "WO-EF-DISPATCH-002",
+  "template_id": "hermes.local-llm-inference.v1",
+  "adapter_id": "resident-hermes-loopback-ollama-v1",
+  "actual_target_node": "hermes-node",
+  "request_sha256": "5f4011c9efda808f5c11db4609e44efea18eba8caab1e475d682aa39d1eeeacd",
+  "scope_sha256": "4344ffc727cab579289868664f6ba36bacaa7dadd719986833d562e5340c5330",
+  "placement_receipt_sha256": "4d8ca045ba06347c14e01d6e7d5b253b55bd363d25360c2a7a6fbeaeef603d8a",
+  "preparation_sha256": "1b9dff9f8891a5eddc15a7d51b8093de219bc6aa883105f88ce60daaf7003728",
+  "authority_reference": "issue-538-phase3-bounded-dispatch-002",
+  "claim_id": "claim-88ebe21ece91afab0b405289",
+  "runtime_lease_id": "lease-ceaf14f63fbe6ed0894f7785",
+  "chronology": {
+    "claimed_at": "2026-08-10T16:40:48.461Z",
+    "lease_acquired_at": "2026-08-10T16:40:48.462Z",
+    "started_at": "2026-08-10T16:40:48.463Z",
+    "completed_at": "2026-08-10T16:41:12.559Z"
+  },
+  "output": {
+    "sha256": "9b47d2b55db9bff9dd41c0cf273e098d29c7bf15e44ec5695b925be5c38ed966",
+    "byte_length": 11,
+    "expected_marker": "HERMESOK002",
+    "expected_marker_observed": true
+  },
+  "resource_observations": [
+    {
+      "metric": "ram_used_bytes",
+      "unit": "bytes",
+      "value": 18453356544,
+      "observed_at": "2026-08-10T16:41:12.559Z"
+    }
+  ],
+  "execution_authorized": true,
+  "dispatch_performed": true,
+  "scheduler_activated": false,
+  "autonomous_dispatch": false,
+  "silent_replacement": false,
+  "external_provider_accessed": false,
+  "remote_systems_modified": false,
+  "shell_executed": false,
+  "runtime_lease_released": true,
+  "result_sha256": "e8ef25cd4ad277ab04bfb2a5f9af3a685fe7f93f76edb920b353d75222d43447"
+}
