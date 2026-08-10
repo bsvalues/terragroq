@@ -50,7 +50,7 @@ function fixture(overrides: Json = {}) {
     work_order_id: "WO-LIVE-001", workload_id: "reviewed-maintenance", producer_lane: "resident-hermes",
     outcome_kind: "RESIDENT_HERMES_REVIEWED",
     receipt: write("docs/reports/shadow-admission/WO-LIVE-001-receipt.json", `${JSON.stringify(receipt)}\n`),
-    delivery_record: write("docs/reports/WO-LIVE-001-delivery.md", "# WO-LIVE-001\n\n## Result\nPASS\n"),
+    delivery_record: write("docs/reports/WO-LIVE-001-delivery.md", "# WO-LIVE-001\n\nTARGET: omen\n\n## Result\nPASS\n\nLATENCY_MS: 3000\n"),
     outcome_evidence: write("docs/reports/execution-fabric-shadow-outcomes/WO-LIVE-001.json", outcomeBytes),
     review_evidence: write("docs/reports/shadow-admission/WO-LIVE-001-review.md", `# WO-LIVE-001 review\n\nReviewed commit: ${commit}\n`),
     authority: { reference: "authority-WO-LIVE-001", allowed_canonical_nodes: ["omen"], valid_from: "2026-08-10T07:59:00.000Z", expires_at: "2026-08-10T08:01:00.000Z", reviewed_commit: commit },
@@ -156,6 +156,20 @@ describe("Execution Fabric genuine shadow outcome admission", () => {
     fs.writeFileSync(receiptPath, `${JSON.stringify(receipt)}\n`)
     selected.candidate.receipt.sha256 = sha(fs.readFileSync(receiptPath))
     expect(() => compile(selected)).toThrow("at or after actual target evidence expiry")
+  })
+
+  it("rejects delivery records that do not prove the actual target and latency", () => {
+    let selected = fixture()
+    let deliveryPath = path.join(selected.root, selected.candidate.delivery_record.path)
+    fs.writeFileSync(deliveryPath, "# WO-LIVE-001\n\n## Result\nPASS\n\nLATENCY_MS: 3000\n")
+    selected.candidate.delivery_record.sha256 = sha(fs.readFileSync(deliveryPath))
+    expect(() => compile(selected)).toThrow("does not identify the recorded manual target")
+
+    selected = fixture()
+    deliveryPath = path.join(selected.root, selected.candidate.delivery_record.path)
+    fs.writeFileSync(deliveryPath, "# WO-LIVE-001\n\nTARGET: omen\n\n## Result\nPASS\n\nLATENCY_MS: 2999\n")
+    selected.candidate.delivery_record.sha256 = sha(fs.readFileSync(deliveryPath))
+    expect(() => compile(selected)).toThrow("does not support the recorded latency")
   })
 
   it("rejects impossible calendar instants and symlinked retained evidence", () => {

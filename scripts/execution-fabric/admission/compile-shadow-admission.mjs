@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url"
 import { execFileSync } from "node:child_process"
 
 import { canonicalizeJcs } from "../canonical-json.mjs"
-import { validateShadowPlacementReceipt } from "../evaluate-shadow-placement.mjs"
+import { validateShadowPlacementReceipt, validateShadowSourceClaims } from "../evaluate-shadow-placement.mjs"
 import { validateShadowOutcomeEvidence } from "../shadow-outcome-evidence.mjs"
 
 const SHA256 = /^[a-f0-9]{64}$/
@@ -183,6 +183,7 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
     outcome_evidence: { kind: "retained-canonical-outcome-evidence", path: outcome.normalized, sha256: candidate.outcome_evidence.sha256 },
     divergence_reasons: [...candidate.divergence_reasons].sort(),
   }
+  validateShadowSourceClaims(delivery.bytes, observation, outcomeValidation)
   const result = {
     schema_version: "0.1-shadow-admission-bundle", status: "READY_FOR_REVIEWED_REGISTRY_ADMISSION",
     candidate_id: candidate.candidate_id, observation,

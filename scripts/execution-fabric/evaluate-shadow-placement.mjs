@@ -161,7 +161,7 @@ function resolveRetainedSource(repositoryRoot, relativePath) {
   return realSource
 }
 
-function validateSourceClaims(sourceBytes, observation, outcomeEvidence) {
+export function validateShadowSourceClaims(sourceBytes, observation, outcomeEvidence) {
   const sourceText = sourceBytes.toString("utf8")
   const escapedWorkOrder = observation.work_order_id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
   if (!new RegExp(`^#\\s+.*\\b${escapedWorkOrder}\\b`, "im").test(sourceText)) {
@@ -398,7 +398,7 @@ function validateObservation(observation, repositoryRoot, receipt, receiptSha256
     fail("outcome execution began at or after selected evidence expiry")
   }
   if (observationTime < outcomeComplete) fail("shadow observation predates outcome completion")
-  validateSourceClaims(sourceBytes, observation, outcomeEvidence)
+  validateShadowSourceClaims(sourceBytes, observation, outcomeEvidence)
   const outcomeTrust = settleOutcomeEvidenceTrust(
     repositoryRoot,
     loadedOutcome.artifactBytes,
