@@ -23,7 +23,7 @@ function fixture(overrides: Json = {}) {
   }
   const receipt = {
     schema_version: "0.2-pinned-placement-recommendation", status: "RECOMMENDED",
-    recommendation_only: true, eligibility_scope: "recommendation-only", work_order_id: "WO-LIVE-001",
+    recommendation_only: true, eligibility_scope: "recommendation-only",
     evaluated_at: "2026-08-10T07:59:30.000Z",
     workload: { id: "reviewed-maintenance", title: "Reviewed maintenance", storage_semantics: "none" },
     scheduler: { state: "disabled", authority: "not-granted", autonomous_dispatch: "forbidden" },
@@ -175,6 +175,13 @@ describe("Execution Fabric genuine shadow outcome admission", () => {
   it("rejects impossible calendar instants and symlinked retained evidence", () => {
     const impossible = fixture({ recorded_at: "2026-02-30T08:01:01.000Z" })
     expect(() => compile(impossible)).toThrow("must name a real UTC calendar instant")
+
+    const traversal = fixture()
+    const outside = path.join(traversal.root, "config", "receipt.json")
+    fs.mkdirSync(path.dirname(outside), { recursive: true })
+    fs.copyFileSync(path.join(traversal.root, traversal.candidate.receipt.path), outside)
+    traversal.candidate.receipt = { path: "docs/reports/../../config/receipt.json", sha256: sha(fs.readFileSync(outside)) }
+    expect(() => compile(traversal)).toThrow("resolves outside its retained report boundary")
 
     if (process.platform !== "win32") {
       const linked = fixture()

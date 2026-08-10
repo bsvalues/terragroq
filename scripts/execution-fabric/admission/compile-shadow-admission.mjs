@@ -69,6 +69,10 @@ function retained(root, binding, label, extensions) {
   const resolved = path.resolve(root, binding.path)
   const relative = path.relative(root, resolved)
   if (relative.startsWith("..") || path.isAbsolute(relative)) fail(`${label}.path escapes repository root`)
+  const normalizedRelative = relative.replaceAll("\\", "/")
+  if (!normalizedRelative.startsWith("docs/reports/") || !extensions.some((extension) => normalizedRelative.endsWith(extension))) {
+    fail(`${label}.path resolves outside its retained report boundary`)
+  }
   let real
   try {
     if (fs.lstatSync(resolved).isSymbolicLink()) fail(`${label}.path must not be a symbolic link`)
@@ -120,7 +124,7 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   let receipt
   try { receipt = JSON.parse(receiptArtifact.bytes.toString("utf8")) } catch { fail("receipt is not JSON") }
   validateShadowPlacementReceipt(receipt, receiptArtifact.sha256)
-  if (receipt.work_order_id !== workOrder || receipt?.workload?.id !== workload) fail("receipt identity does not match candidate")
+  if (receipt?.workload?.id !== workload) fail("receipt workload does not match candidate")
   const outcomeValidation = validateShadowOutcomeEvidence({ artifactBytes: outcome.bytes, expectedSha256: candidate.outcome_evidence.sha256 })
   if (outcomeValidation.work_order_id !== workOrder) fail("outcome Work Order does not match candidate")
   const actualNode = outcomeValidation.actual_target_node
