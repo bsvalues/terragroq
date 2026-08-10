@@ -1,5 +1,17 @@
 {
   "schema_version": "0.1-shadow-authority-registry",
   "registry_id": "execution-fabric-shadow-authorities",
-  "entries": []
+  "entries": [
+    {
+      "reference": "issue-538-phase2-shadow-001",
+      "work_order_id": "WO-EF-SHADOW-001",
+      "allowed_canonical_nodes": [
+        "hermes-node"
+      ],
+      "valid_from": "2026-08-10T14:01:38.777Z",
+      "expires_at": "2026-08-10T20:01:38.777Z",
+      "reviewed_commit": "83b9d699e90dfb2296f8cb3b9ae775661c6a941f",
+      "status": "ACTIVE"
+    }
+  ]
 }
