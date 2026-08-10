@@ -1,0 +1,617 @@
+{
+  "schema_version": "0.2-pinned-placement-recommendation",
+  "status": "RECOMMENDED",
+  "recommendation_only": true,
+  "eligibility_scope": "recommendation-only",
+  "evaluated_at": "2026-08-10T19:55:00.000Z",
+  "workload": {
+    "id": "cpu-heavy-build",
+    "title": "CPU-heavy build",
+    "storage_semantics": "scratch-only"
+  },
+  "scheduler": {
+    "state": "disabled",
+    "authority": "not-granted",
+    "autonomous_dispatch": "forbidden"
+  },
+  "workload_digest_sha256": "581937CB3EC06715AB1261C7E56C5A4045B7550A2F3258779707C3F441221A04",
+  "recommendation": {
+    "node_id": "aegis",
+    "rank": 1,
+    "rank_basis": {
+      "preferred_capability_count": 3,
+      "availability_index": 0,
+      "cpu_threads": 28,
+      "maximum_gpu_vram_bytes": null,
+      "stable_node_id": "aegis"
+    },
+    "execution_authorized": false,
+    "dispatch_allowed": false
+  },
+  "eligible_nodes": [
+    {
+      "node_id": "aegis",
+      "eligible": true,
+      "rank": 1,
+      "rank_basis": {
+        "preferred_capability_count": 3,
+        "availability_index": 0,
+        "cpu_threads": 28,
+        "maximum_gpu_vram_bytes": null,
+        "stable_node_id": "aegis"
+      },
+      "reasons": [],
+      "evidence_used": [
+        {
+          "path": "nodes.aegis.evidence.confidence",
+          "value": "observed"
+        },
+        {
+          "path": "nodes.aegis.evidence.observed_at",
+          "value": "2026-08-10T19:54:08Z"
+        },
+        {
+          "path": "nodes.aegis.evidence.ttl_seconds",
+          "value": 300
+        },
+        {
+          "path": "nodes.aegis.evidence.probe",
+          "value": "pinned snapshot e78982d05a44b2f48fbd7688c49af5ec2692f7b5d61685252f9c97458152aaea"
+        },
+        {
+          "path": "nodes.aegis.evidence.probe_version",
+          "value": "aegis-capability/1"
+        },
+        {
+          "path": "nodes.aegis.availability_class",
+          "value": "secondary"
+        },
+        {
+          "path": "nodes.aegis.constraints",
+          "value": [
+            "scheduler-disabled",
+            "memory-16gb",
+            "nvme-free-space-reserve-required",
+            "backup-archive-execution-authority-not-granted",
+            "nas-service-and-authority-pending"
+          ]
+        },
+        {
+          "path": "workload.storage_semantics",
+          "value": "scratch-only"
+        },
+        {
+          "path": "nodes.aegis.capability_health.compute",
+          "value": {
+            "state": "READY",
+            "reason": "COMPUTE_CAPABILITY_READY",
+            "observed_at": "2026-08-10T19:54:08Z",
+            "expires_at": "2026-08-10T19:59:08.000Z",
+            "snapshot_sha256": "e78982d05a44b2f48fbd7688c49af5ec2692f7b5d61685252f9c97458152aaea",
+            "evidence_ref": "snapshots/aegis/e78982d05a44b2f48fbd7688c49af5ec2692f7b5d61685252f9c97458152aaea.json"
+          }
+        },
+        {
+          "path": "nodes.aegis.authority.allow.authoritative-durable-state",
+          "value": false
+        },
+        {
+          "path": "nodes.aegis.resources.cpu_threads",
+          "value": 28
+        },
+        {
+          "path": "nodes.aegis.resources.maximum_gpu_vram_bytes",
+          "value": null
+        },
+        {
+          "path": "nodes.aegis.capabilities.ci-build-test-candidate",
+          "value": true
+        },
+        {
+          "path": "nodes.aegis.capabilities.cpu-batch-candidate",
+          "value": true
+        },
+        {
+          "path": "nodes.aegis.capabilities.docker-worker-candidate",
+          "value": true
+        },
+        {
+          "path": "nodes.aegis.capabilities.agent-runtime",
+          "value": false
+        },
+        {
+          "path": "nodes.aegis.capabilities.burst-compute",
+          "value": false
+        }
+      ],
+      "confidence": "observed",
+      "freshness": {
+        "state": "fresh",
+        "age_seconds": 52,
+        "ttl_seconds": 300,
+        "expires_at": "2026-08-10T19:59:08.000Z"
+      },
+      "execution_authorized": false,
+      "dispatch_allowed": false,
+      "authority_note": "Recommendation eligibility does not grant node or scheduler authority."
+    },
+    {
+      "node_id": "hermes-node",
+      "eligible": true,
+      "rank": 2,
+      "rank_basis": {
+        "preferred_capability_count": 1,
+        "availability_index": 1,
+        "cpu_threads": 16,
+        "maximum_gpu_vram_bytes": null,
+        "stable_node_id": "hermes-node"
+      },
+      "reasons": [],
+      "evidence_used": [
+        {
+          "path": "nodes.hermes-node.evidence.confidence",
+          "value": "observed"
+        },
+        {
+          "path": "nodes.hermes-node.evidence.observed_at",
+          "value": "2026-08-10T19:54:01Z"
+        },
+        {
+          "path": "nodes.hermes-node.evidence.ttl_seconds",
+          "value": 300
+        },
+        {
+          "path": "nodes.hermes-node.evidence.probe",
+          "value": "pinned snapshot 949eec7f6c566701fa5a55e24b62524c64ac2969ae1123f35cf41ab92966945d"
+        },
+        {
+          "path": "nodes.hermes-node.evidence.probe_version",
+          "value": "hermes-placement-readiness/1"
+        },
+        {
+          "path": "nodes.hermes-node.availability_class",
+          "value": "resident"
+        },
+        {
+          "path": "nodes.hermes-node.constraints",
+          "value": [
+            "no-authoritative-state",
+            "ollama-loopback-only"
+          ]
+        },
+        {
+          "path": "workload.storage_semantics",
+          "value": "scratch-only"
+        },
+        {
+          "path": "nodes.hermes-node.capability_health.compute",
+          "value": {
+            "state": "READY",
+            "reason": "COMPUTE_CAPABILITY_READY",
+            "observed_at": "2026-08-10T19:54:01Z",
+            "expires_at": "2026-08-10T19:59:01.000Z",
+            "snapshot_sha256": "949eec7f6c566701fa5a55e24b62524c64ac2969ae1123f35cf41ab92966945d",
+            "evidence_ref": "snapshots/hermes-node/949eec7f6c566701fa5a55e24b62524c64ac2969ae1123f35cf41ab92966945d.json"
+          }
+        },
+        {
+          "path": "nodes.hermes-node.authority.allow.authoritative-durable-state",
+          "value": false
+        },
+        {
+          "path": "nodes.hermes-node.resources.cpu_threads",
+          "value": 16
+        },
+        {
+          "path": "nodes.hermes-node.resources.maximum_gpu_vram_bytes",
+          "value": 6442450944
+        },
+        {
+          "path": "nodes.hermes-node.capabilities.ci-build-test-candidate",
+          "value": false
+        },
+        {
+          "path": "nodes.hermes-node.capabilities.cpu-batch-candidate",
+          "value": false
+        },
+        {
+          "path": "nodes.hermes-node.capabilities.docker-worker-candidate",
+          "value": false
+        },
+        {
+          "path": "nodes.hermes-node.capabilities.agent-runtime",
+          "value": true
+        },
+        {
+          "path": "nodes.hermes-node.capabilities.burst-compute",
+          "value": false
+        }
+      ],
+      "confidence": "observed",
+      "freshness": {
+        "state": "fresh",
+        "age_seconds": 59,
+        "ttl_seconds": 300,
+        "expires_at": "2026-08-10T19:59:01.000Z"
+      },
+      "execution_authorized": false,
+      "dispatch_allowed": false,
+      "authority_note": "Recommendation eligibility does not grant node or scheduler authority."
+    }
+  ],
+  "ineligible_nodes": [
+    {
+      "node_id": "atlas",
+      "eligible": false,
+      "rank": null,
+      "rank_basis": null,
+      "reasons": [
+        {
+          "code": "AUTHORITY_EXCLUDED",
+          "detail": "authoritative-durable-state",
+          "required": false,
+          "observed": true,
+          "evidence_ref": [
+            "nodes.atlas.authority.allow.authoritative-durable-state"
+          ]
+        },
+        {
+          "code": "CAPABILITY_NOT_READY",
+          "detail": "compute",
+          "required": "READY",
+          "observed": "UNKNOWN",
+          "evidence_ref": [
+            "nodes.atlas.capability_health.compute.state",
+            "nodes.atlas.capability_health.compute.reason"
+          ]
+        },
+        {
+          "code": "STORAGE_SEMANTICS_INELIGIBLE",
+          "detail": "scratch-only excludes authoritative durable-state nodes",
+          "required": false,
+          "observed": true,
+          "evidence_ref": [
+            "nodes.atlas.authority.allow.authoritative-durable-state",
+            "workload.storage_semantics"
+          ]
+        }
+      ],
+      "evidence_used": [
+        {
+          "path": "nodes.atlas.evidence.confidence",
+          "value": "observed"
+        },
+        {
+          "path": "nodes.atlas.evidence.observed_at",
+          "value": "2026-08-10T19:54:04Z"
+        },
+        {
+          "path": "nodes.atlas.evidence.ttl_seconds",
+          "value": 300
+        },
+        {
+          "path": "nodes.atlas.evidence.probe",
+          "value": "pinned snapshot 6a9b2afeb4f3c537b9a272fd2e6ce2841b8fb9fde782f07a746078cb32dd3a1f"
+        },
+        {
+          "path": "nodes.atlas.evidence.probe_version",
+          "value": "atlas-placement-readiness/1"
+        },
+        {
+          "path": "nodes.atlas.availability_class",
+          "value": "stateful"
+        },
+        {
+          "path": "nodes.atlas.constraints",
+          "value": [
+            "protect-state-latency",
+            "avoid-noisy-batch-by-default"
+          ]
+        },
+        {
+          "path": "workload.storage_semantics",
+          "value": "scratch-only"
+        },
+        {
+          "path": "nodes.atlas.capability_health.compute",
+          "value": {
+            "state": "UNKNOWN",
+            "reason": "LIVE_CAPABILITY_EVIDENCE_REQUIRED",
+            "observed_at": null,
+            "expires_at": null,
+            "snapshot_sha256": null,
+            "evidence_ref": null
+          }
+        },
+        {
+          "path": "nodes.atlas.authority.allow.authoritative-durable-state",
+          "value": true
+        },
+        {
+          "path": "nodes.atlas.resources.cpu_threads",
+          "value": 28
+        },
+        {
+          "path": "nodes.atlas.resources.maximum_gpu_vram_bytes",
+          "value": null
+        }
+      ],
+      "confidence": "observed",
+      "freshness": {
+        "state": "fresh",
+        "age_seconds": 56,
+        "ttl_seconds": 300,
+        "expires_at": "2026-08-10T19:59:04.000Z"
+      },
+      "execution_authorized": false,
+      "dispatch_allowed": false,
+      "authority_note": "Recommendation eligibility does not grant node or scheduler authority."
+    },
+    {
+      "node_id": "azure",
+      "eligible": false,
+      "rank": null,
+      "rank_basis": null,
+      "reasons": [
+        {
+          "code": "CAPABILITY_NOT_READY",
+          "detail": "compute",
+          "required": "READY",
+          "observed": "UNKNOWN",
+          "evidence_ref": [
+            "nodes.azure.capability_health.compute.state",
+            "nodes.azure.capability_health.compute.reason"
+          ]
+        },
+        {
+          "code": "CPU_THREADS_UNKNOWN",
+          "detail": "CPU thread inventory is unavailable",
+          "required": 8,
+          "observed": null,
+          "evidence_ref": [
+            "nodes.azure.resources.cpu_threads"
+          ]
+        },
+        {
+          "code": "EVIDENCE_TTL_REQUIRED",
+          "detail": "freshness is insufficient",
+          "required": "fresh",
+          "observed": "insufficient",
+          "evidence_ref": [
+            "nodes.azure.evidence.observed_at",
+            "nodes.azure.evidence.ttl_seconds"
+          ]
+        },
+        {
+          "code": "OBSERVED_EVIDENCE_REQUIRED",
+          "detail": "confidence is declared",
+          "required": [
+            "observed",
+            "proven"
+          ],
+          "observed": "declared",
+          "evidence_ref": [
+            "nodes.azure.evidence.confidence"
+          ]
+        }
+      ],
+      "evidence_used": [
+        {
+          "path": "nodes.azure.evidence.confidence",
+          "value": "declared"
+        },
+        {
+          "path": "nodes.azure.evidence.observed_at",
+          "value": "2026-08-09T21:57:00Z"
+        },
+        {
+          "path": "nodes.azure.evidence.ttl_seconds",
+          "value": null
+        },
+        {
+          "path": "nodes.azure.evidence.probe",
+          "value": "declared-policy-envelope"
+        },
+        {
+          "path": "nodes.azure.evidence.probe_version",
+          "value": null
+        },
+        {
+          "path": "nodes.azure.availability_class",
+          "value": "external"
+        },
+        {
+          "path": "nodes.azure.constraints",
+          "value": [
+            "explicit-authority-required",
+            "cost-boundary",
+            "data-classification-boundary"
+          ]
+        },
+        {
+          "path": "workload.storage_semantics",
+          "value": "scratch-only"
+        },
+        {
+          "path": "nodes.azure.capability_health.compute",
+          "value": {
+            "state": "UNKNOWN",
+            "reason": "EXTERNAL_CAPABILITY_NOT_AUTHORIZED",
+            "observed_at": null,
+            "expires_at": null,
+            "snapshot_sha256": null,
+            "evidence_ref": null
+          }
+        },
+        {
+          "path": "nodes.azure.authority.allow.authoritative-durable-state",
+          "value": false
+        },
+        {
+          "path": "nodes.azure.resources.cpu_threads",
+          "value": null
+        },
+        {
+          "path": "nodes.azure.resources.maximum_gpu_vram_bytes",
+          "value": null
+        }
+      ],
+      "confidence": "declared",
+      "freshness": {
+        "state": "insufficient",
+        "age_seconds": null,
+        "ttl_seconds": null,
+        "expires_at": null
+      },
+      "execution_authorized": false,
+      "dispatch_allowed": false,
+      "authority_note": "Recommendation eligibility does not grant node or scheduler authority."
+    },
+    {
+      "node_id": "omen",
+      "eligible": false,
+      "rank": null,
+      "rank_basis": null,
+      "reasons": [
+        {
+          "code": "CAPABILITY_NOT_READY",
+          "detail": "compute",
+          "required": "READY",
+          "observed": "UNKNOWN",
+          "evidence_ref": [
+            "nodes.omen.capability_health.compute.state",
+            "nodes.omen.capability_health.compute.reason"
+          ]
+        },
+        {
+          "code": "EVIDENCE_TTL_REQUIRED",
+          "detail": "freshness is insufficient",
+          "required": "fresh",
+          "observed": "insufficient",
+          "evidence_ref": [
+            "nodes.omen.evidence.observed_at",
+            "nodes.omen.evidence.ttl_seconds"
+          ]
+        },
+        {
+          "code": "OBSERVED_EVIDENCE_REQUIRED",
+          "detail": "confidence is declared",
+          "required": [
+            "observed",
+            "proven"
+          ],
+          "observed": "declared",
+          "evidence_ref": [
+            "nodes.omen.evidence.confidence"
+          ]
+        }
+      ],
+      "evidence_used": [
+        {
+          "path": "nodes.omen.evidence.confidence",
+          "value": "declared"
+        },
+        {
+          "path": "nodes.omen.evidence.observed_at",
+          "value": "2026-08-09T21:57:00Z"
+        },
+        {
+          "path": "nodes.omen.evidence.ttl_seconds",
+          "value": 0
+        },
+        {
+          "path": "nodes.omen.evidence.probe",
+          "value": "declared-seed; live probe required"
+        },
+        {
+          "path": "nodes.omen.evidence.probe_version",
+          "value": null
+        },
+        {
+          "path": "nodes.omen.availability_class",
+          "value": "interactive"
+        },
+        {
+          "path": "nodes.omen.constraints",
+          "value": [
+            "not-always-on",
+            "no-authoritative-state"
+          ]
+        },
+        {
+          "path": "workload.storage_semantics",
+          "value": "scratch-only"
+        },
+        {
+          "path": "nodes.omen.capability_health.compute",
+          "value": {
+            "state": "UNKNOWN",
+            "reason": "LIVE_CAPABILITY_EVIDENCE_REQUIRED",
+            "observed_at": null,
+            "expires_at": null,
+            "snapshot_sha256": null,
+            "evidence_ref": null
+          }
+        },
+        {
+          "path": "nodes.omen.authority.allow.authoritative-durable-state",
+          "value": false
+        },
+        {
+          "path": "nodes.omen.resources.cpu_threads",
+          "value": 32
+        },
+        {
+          "path": "nodes.omen.resources.maximum_gpu_vram_bytes",
+          "value": 8589934592
+        }
+      ],
+      "confidence": "declared",
+      "freshness": {
+        "state": "insufficient",
+        "age_seconds": null,
+        "ttl_seconds": 0,
+        "expires_at": null
+      },
+      "execution_authorized": false,
+      "dispatch_allowed": false,
+      "authority_note": "Recommendation eligibility does not grant node or scheduler authority."
+    }
+  ],
+  "confidence": {
+    "state": "observed",
+    "freshness": "fresh",
+    "registry_freshness": "mixed"
+  },
+  "authority_mutated": false,
+  "remote_systems_modified": false,
+  "placement_policy_version": "execution-fabric-placement/0.2",
+  "evidence_snapshot": [
+    {
+      "node": "aegis",
+      "snapshot_sha256": "e78982d05a44b2f48fbd7688c49af5ec2692f7b5d61685252f9c97458152aaea"
+    },
+    {
+      "node": "atlas",
+      "snapshot_sha256": "6a9b2afeb4f3c537b9a272fd2e6ce2841b8fb9fde782f07a746078cb32dd3a1f"
+    },
+    {
+      "node": "hermes-node",
+      "snapshot_sha256": "949eec7f6c566701fa5a55e24b62524c64ac2969ae1123f35cf41ab92966945d"
+    }
+  ],
+  "evidence_verifier": {
+    "contract": "jcs-rfc8785/1",
+    "reference_implementation": "verify_snapshot.py",
+    "sha256": "c8f488953cf91e7ea8badd59e718185171096783b58a4d75b4ba4a77581297b6",
+    "result": "PASS"
+  },
+  "input_artifacts": {
+    "registry_base_sha256": "3bf87569b1865d2b2b2e331f45c4a577b00c58d9819d3d8a200288cbea6bbba2",
+    "registry_schema_sha256": "a834885e14f3e017dc7c12f9a9c15dd37620d78723c41da952551c6080410d2c",
+    "pinned_evidence_policy_sha256": "129e10d7f317d52ac91791806d62914e220f6730323e25089528b9e6fde0f2ab",
+    "workload_catalog_sha256": "09df974622f99439c25f35d7ebfb17047543584badd5fe3c9f7e615dead51926"
+  },
+  "catalog_schema_version": "0.1-placement-workloads",
+  "decision_input_sha256": "a32a069e4474bac2c7173a8e1eb533dfa0ae1c0d38f4d8513ddf6d5c5a4c4cec"
+}
