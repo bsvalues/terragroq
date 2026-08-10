@@ -1,1 +1,7 @@
 scripts/execution-fabric/verify_snapshot.py text eol=lf
+config/execution-fabric/shadow-*.json text eol=lf
+docs/reports/WO-EF-SHADOW-*.md text eol=lf
+docs/reports/execution-fabric-shadow-evaluations/*.json text eol=lf
+docs/reports/execution-fabric-shadow-observations/*.json text eol=lf
+docs/reports/execution-fabric-shadow-outcomes/*.json text eol=lf
+docs/reports/execution-fabric-shadow-receipts/*.json text eol=lf

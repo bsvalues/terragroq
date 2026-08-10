@@ -1,5 +1,15 @@
 {
   "schema_version": "0.1-shadow-outcome-registry",
   "registry_id": "execution-fabric-shadow-outcomes",
-  "entries": []
+  "entries": [
+    {
+      "artifact_sha256": "9bd0b44bc7f4dc77fd2f24e590a048c7b964884da76d37d917d145799caea285",
+      "work_order_id": "WO-EF-SHADOW-001",
+      "actual_target_node": "hermes-node",
+      "retained_source_sha256": "3cfcbb0c3d6be2eadea532359450feedc82166d87c98211b36442540c1c99706",
+      "authority_reference": "issue-538-phase2-shadow-001",
+      "reviewed_commit": "455e55f17959eb005d4d50bb31ad7a18645565da",
+      "status": "ACTIVE"
+    }
+  ]
 }

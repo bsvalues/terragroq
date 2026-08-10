@@ -1,0 +1,98 @@
+{
+  "schema_version": "0.1-shadow-placement-result",
+  "status": "OBSERVED",
+  "trust_scope": "production",
+  "observation_only": true,
+  "observation_id": "shadow-WO-EF-SHADOW-001",
+  "work_order_id": "WO-EF-SHADOW-001",
+  "workload_id": "cpu-heavy-build",
+  "policy_receipt": {
+    "sha256": "222a72ccbc1cb21acb180af42e3db2b589ad88575ccbaa88323758c39bf8def7",
+    "trust_registry_sha256": "043d907942a44148926ef22117ef6c39f38324d090dd9b09a66e896afd00be85",
+    "status": "RECOMMENDED",
+    "selected_node_id": "aegis",
+    "evaluated_at": "2026-08-10T14:07:37.340Z"
+  },
+  "recorded_observation": {
+    "sha256": "656cbc75151e462e7635298819f26ca8a942b3f414f9ca97c4a47d23eaf7b7e9",
+    "recorded_at": "2026-08-10T14:10:44.102Z",
+    "manual_target": "hermes-node",
+    "outcome_evidence": {
+      "schema_version": "0.1-shadow-outcome-evidence-validation",
+      "status": "VALID",
+      "observation_only": true,
+      "artifact_sha256": "9bd0b44bc7f4dc77fd2f24e590a048c7b964884da76d37d917d145799caea285",
+      "work_order_id": "WO-EF-SHADOW-001",
+      "actual_target_node": "hermes-node",
+      "outcome": {
+        "status": "COMPLETED",
+        "result": "SUCCEEDED"
+      },
+      "chronology": {
+        "started_at": "2026-08-10T14:08:02.476Z",
+        "completed_at": "2026-08-10T14:09:03.309Z",
+        "latency_ms": 60833
+      },
+      "authority_outcome": {
+        "status": "COMPLIANT",
+        "reference": "issue-538-phase2-shadow-001",
+        "checked_at": "2026-08-10T14:08:02.476Z"
+      },
+      "resource_observations": [
+        {
+          "metric": "cpu_load_pct",
+          "observed_at": "2026-08-10T14:09:03.309Z",
+          "unit": "percent",
+          "value": 52
+        },
+        {
+          "metric": "ram_used_bytes",
+          "observed_at": "2026-08-10T14:09:03.309Z",
+          "unit": "bytes",
+          "value": 16366403584
+        }
+      ],
+      "dispatch_allowed": false,
+      "execution_authorized": false,
+      "remote_systems_modified": false,
+      "shell_executed": false
+    },
+    "outcome_trust": {
+      "schema_version": "0.1-shadow-evidence-trust-validation",
+      "status": "TRUSTED",
+      "observation_only": true,
+      "artifact_sha256": "9bd0b44bc7f4dc77fd2f24e590a048c7b964884da76d37d917d145799caea285",
+      "retained_source_sha256": "3cfcbb0c3d6be2eadea532359450feedc82166d87c98211b36442540c1c99706",
+      "work_order_id": "WO-EF-SHADOW-001",
+      "actual_target_node": "hermes-node",
+      "authority_reference": "issue-538-phase2-shadow-001",
+      "outcome_reviewed_commit": "455e55f17959eb005d4d50bb31ad7a18645565da",
+      "authority_reviewed_commit": "83b9d699e90dfb2296f8cb3b9ae775661c6a941f",
+      "dispatch_allowed": false,
+      "execution_authorized": false,
+      "remote_systems_modified": false
+    },
+    "source_path": "docs/reports/WO-EF-SHADOW-001-live-observation.md",
+    "source_sha256": "3cfcbb0c3d6be2eadea532359450feedc82166d87c98211b36442540c1c99706"
+  },
+  "comparison": {
+    "diverged": true,
+    "divergence_reasons": [
+      "MANUAL_TARGET_DIFFERS_FROM_RECOMMENDATION",
+      "RECORDED_AUTHORITY_CONSTRAINT"
+    ],
+    "silent_fallback": false
+  },
+  "safety": {
+    "authority_violations": 0,
+    "stale_evidence_placements": 0,
+    "silent_fallbacks": 0,
+    "scheduler_state": "disabled"
+  },
+  "job_launched": false,
+  "scheduler_activated": false,
+  "authority_mutated": false,
+  "remote_accessed": false,
+  "shell_executed": false,
+  "replay_sha256": "e6d711d8b8fdf66c8eff9fd39be0dd3c778f0cb1528a58d482a1c62a70fd5529"
+}

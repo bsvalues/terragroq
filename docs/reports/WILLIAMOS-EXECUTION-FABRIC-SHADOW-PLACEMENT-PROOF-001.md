@@ -5,6 +5,7 @@ Phase: 2 - shadow placement observation
 Phase 1 baseline: merge `794a665`
 Initial harness merge: `ec002f515`
 First hardening merge: `64e93ef740`
+Post-merge hardening: `83b9d699e9`
 
 ## Corrected result boundary
 
@@ -94,12 +95,32 @@ remote_accessed: false
 shell_executed: false
 ```
 
-The production trust registry intentionally contains no receipt until a genuine reviewed Phase 1
-receipt and its outcome evidence are admitted. Therefore:
+The production trust registries now contain the first genuine reviewed observation:
+
+```text
+WORK_ORDER: WO-EF-SHADOW-001
+RECOMMENDED_NODE: aegis
+ACTUAL_NODE: hermes-node
+DIVERGENCE: authority-constrained manual target
+RECEIPT_SHA256: 222a72ccbc1cb21acb180af42e3db2b589ad88575ccbaa88323758c39bf8def7
+OUTCOME_SHA256: 9bd0b44bc7f4dc77fd2f24e590a048c7b964884da76d37d917d145799caea285
+EVALUATION: OBSERVED
+```
+
+The recommendation selected AEGIS, but AEGIS execution authority remained ungranted. HERMES was
+eligible and separately authorized for the complete execution window. The retained evidence records
+the divergence, the two bounded recoverable shell-handling failures, strict Git object verification,
+the exact reviewed main commit, and owned-workspace cleanup. The placement engine did not launch
+the work.
+
+This one observation proves the hardened admission and replay path with genuine evidence. It does
+not satisfy Issue #538's requirement for a bounded representative set of genuine Work Orders or
+support policy calibration. Therefore:
 
 ```text
 PHASE_2_SHADOW_HARNESS: HARDENED
-HERMES_PLACEMENT_SHADOW_PROOF: PENDING_GENUINE_OBSERVATIONS
+FIRST_OBSERVATION_COMPLETE: TRUE
+HERMES_PLACEMENT_SHADOW_PROOF: PENDING_ADDITIONAL_REPRESENTATIVE_OBSERVATIONS
 SCHEDULER: OFF
 DISPATCH_AUTHORITY: NOT_GRANTED
 ```
@@ -108,10 +129,11 @@ No policy-calibration or bounded-dispatch claim follows from this implementation
 
 ## Validation
 
-- Phase 2 focused suites: 31/31 passed.
-- Complete Execution Fabric family: 263/263 passed.
-- Full repository suite: 2,934 passed, 2 skipped; four pre-existing
+- Phase 2 focused suites: 43/43 passed.
+- Complete Execution Fabric family: 264/264 passed.
+- Full repository suite: 2,935 passed, 2 skipped; four pre-existing
   `lab-dev-preflight` environment/child-process failures remain outside this Fabric change.
 - Lint: passed with no warnings or errors.
 - Production build: passed.
-- Independent post-merge hardening assurance: pending exact-head review.
+- Independent exact-head assurance: first observation evidence PASS; Phase 2 remains open pending
+  additional representative genuine observations.

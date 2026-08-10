@@ -2,5 +2,28 @@
 {
   "schema_version": "0.1-shadow-receipt-registry",
   "placement_policy_version": "execution-fabric-placement/0.2",
-  "trusted_receipts": []
+  "trusted_receipts": [
+    {
+      "receipt_sha256": "222a72ccbc1cb21acb180af42e3db2b589ad88575ccbaa88323758c39bf8def7",
+      "work_order_id": "WO-EF-SHADOW-001",
+      "workload_id": "cpu-heavy-build",
+      "decision_input_sha256": "ab1b512af42ccbdad5b4ffc80812b4a307a6f9ac87cce0f5a74e981132a81ea9",
+      "evidence_snapshot": [
+        {
+          "node": "aegis",
+          "snapshot_sha256": "667a7d7180598993dd8e205376f9cfb9679e57a52fafd60a8050cd6b1536443c"
+        },
+        {
+          "node": "atlas",
+          "snapshot_sha256": "c759679c1b7a7c666784ed2fec934796a532b708d3cd150dcbc27366edb04121"
+        },
+        {
+          "node": "hermes-node",
+          "snapshot_sha256": "c329c3c16fd16dbddd71c26ff0d67a15c55e86d7d7a8210836f15a711785d299"
+        }
+      ],
+      "reviewed_commit": "455e55f17959eb005d4d50bb31ad7a18645565da",
+      "status": "TRUSTED"
+    }
+  ]
 }
