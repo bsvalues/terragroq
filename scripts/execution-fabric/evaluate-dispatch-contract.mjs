@@ -142,6 +142,7 @@ function authorityTuple(packet) {
     risk_ceiling: packet.authority.risk_ceiling,
     allowed_actions: packet.authority.allowed_actions,
     path_scope: packet.authority.path_scope,
+    resource_ceiling: packet.authority.resource_ceiling,
     version: packet.authority.version,
     nonce: packet.authority.nonce,
   }
@@ -239,7 +240,12 @@ function validateShape(packet) {
     "authority_tuple_sha256", "status_event_head_sha256", "current_status_event_head_sha256",
     "revocation_head_sha256", "current_revocation_head_sha256", "trusted_owner_bundle_sha256",
     "status_event_ref", "revocation_event_ref",
+    "resource_ceiling",
   ], "authority")
+  exactKeys(packet.authority.resource_ceiling, [
+    "max_cpu_threads", "max_memory_bytes", "max_scratch_bytes", "minimum_free_scratch_bytes",
+    "max_attempts", "max_timeout_seconds",
+  ], "authority.resource_ceiling")
   exactKeys(packet.reservation, [
     "reservation_id", "status", "holder_id", "selected_node_id", "repository", "path_scope", "version",
     "holder_token_digest", "acquisition_count", "conflict_count", "issued_at", "expires_at",
@@ -367,6 +373,7 @@ function validateValues(packet) {
     fail("completion.required_evidence must contain the exact canonical evidence set")
   }
   for (const [key, value] of Object.entries(packet.workload_envelope.resource_limits)) integer(value, `resource_limits.${key}`, 1)
+  for (const [key, value] of Object.entries(packet.authority.resource_ceiling)) integer(value, `authority.resource_ceiling.${key}`, 1)
   if (packet.authority.revoked_at !== null) timestamp(packet.authority.revoked_at, "authority.revoked_at")
   if (packet.authority.consumed_at !== null) timestamp(packet.authority.consumed_at, "authority.consumed_at")
   if (packet.lease.lost_at !== null) timestamp(packet.lease.lost_at, "lease.lost_at")
@@ -385,6 +392,24 @@ function evaluateOrThrow(input, options = {}) {
   const placement = placementView(packet.recommendation)
   const reasons = []
   const add = (code, detail, required, observed, refs) => reasons.push(reason(code, detail, required, observed, refs))
+
+  let trustedPlacement = null
+  if (typeof options.resolveTrustedPlacementArtifact === "function") {
+    try {
+      trustedPlacement = options.resolveTrustedPlacementArtifact(structuredClone(packet.recommendation))
+    } catch {
+      trustedPlacement = null
+    }
+  }
+  const placementArtifactSha256 = sha256(packet.recommendation)
+  if (!trustedPlacement || trustedPlacement.verified !== true
+    || trustedPlacement.artifact_sha256 !== placementArtifactSha256
+    || trustedPlacement.snapshot_sha256 !== placement.snapshot_sha256
+    || trustedPlacement.workload_sha256 !== placement.workload_sha256) {
+    add("PLACEMENT_EVIDENCE_UNATTESTED", "packet-local placement evidence cannot attest itself",
+      "host-injected verified placement resolver bound to artifact, snapshot, and workload digests",
+      trustedPlacement, ["recommendation"])
+  }
 
   let dispatchEnvelope
   try {
@@ -474,7 +499,9 @@ function evaluateOrThrow(input, options = {}) {
     || canonicalJson(normalizedReservation.reservations.environments) !== canonicalJson(canonicalEnvelope.reservations.environments)
     || canonicalJson(normalizedReservation.reservations.paths.map((entry) => entry.path)) !== canonicalJson(envelope.path_scope)
     || canonicalJson(normalizedReservation.reservations.contracts) !== canonicalJson(envelope.contract_scope)
-    || canonicalJson(normalizedReservation.reservations.environments) !== canonicalJson(envelope.environment_scope)) {
+    || canonicalJson(normalizedReservation.reservations.environments) !== canonicalJson(envelope.environment_scope)
+    || normalizedReservation.reservations.repositories.length !== 0
+    || normalizedReservation.reservations.protectedResources.length !== 0) {
     add("RESERVATION_CONTRACT_MISMATCH", "canonical reservation set and dispatch envelope must match",
       canonicalEnvelope.reservations, normalizedReservation, ["dispatch_envelope.reservations", "reservation_set"])
   }
@@ -503,6 +530,20 @@ function evaluateOrThrow(input, options = {}) {
     add("RISK_AUTHORITY_MISMATCH", "bounded proof is R1 only", "R1",
       { workload: envelope.risk_class, authority: authority.risk_ceiling },
       ["workload_envelope.risk_class", "authority.risk_ceiling"])
+  }
+  const ceiling = authority.resource_ceiling
+  const limits = envelope.resource_limits
+  const selectedNode = packet.recommendation.eligible_nodes.find((entry) => entry.node_id === placement.selected_node_id)
+  const availableCpuThreads = selectedNode?.rank_basis?.cpu_threads
+  if (limits.max_cpu_threads > ceiling.max_cpu_threads || limits.max_memory_bytes > ceiling.max_memory_bytes
+    || limits.max_scratch_bytes > ceiling.max_scratch_bytes
+    || limits.minimum_free_scratch_bytes < ceiling.minimum_free_scratch_bytes
+    || envelope.max_attempts > ceiling.max_attempts || envelope.timeout_seconds > ceiling.max_timeout_seconds
+    || !Number.isSafeInteger(availableCpuThreads) || limits.max_cpu_threads > availableCpuThreads) {
+    add("RESOURCE_AUTHORITY_CEILING_EXCEEDED", "workload resources must fit authority ceilings and selected-node evidence",
+      { ...ceiling, selected_node_cpu_threads: availableCpuThreads },
+      { ...limits, max_attempts: envelope.max_attempts, timeout_seconds: envelope.timeout_seconds },
+      ["authority.resource_ceiling", "workload_envelope.resource_limits", "recommendation.eligible_nodes.rank_basis.cpu_threads"])
   }
   if (envelope.data_classification !== "repository-source" || envelope.storage_semantics !== "scratch-only"
     || envelope.network_scope !== "repository-and-ci-only") {
@@ -554,6 +595,15 @@ function evaluateOrThrow(input, options = {}) {
   if (at >= Date.parse(authority.expires_at) || at < Date.parse(authority.issued_at)) {
     add("AUTHORITY_EXPIRED", "evaluation is outside authority validity", authority.expires_at,
       options.evaluatedAt, ["authority.issued_at", "authority.expires_at"])
+  }
+  if (Date.parse(reservation.issued_at) < Date.parse(authority.issued_at)
+    || Date.parse(lease.issued_at) < Date.parse(reservation.issued_at)
+    || Date.parse(packet.checkpoint.recorded_at) < Date.parse(lease.issued_at)) {
+    add("ISSUANCE_CHRONOLOGY_INVALID", "authority, reservation, lease, and checkpoint must be issued in dependency order",
+      "authority.issued_at <= reservation.issued_at <= lease.issued_at <= checkpoint.recorded_at",
+      { authority: authority.issued_at, reservation: reservation.issued_at, lease: lease.issued_at,
+        checkpoint: packet.checkpoint.recorded_at },
+      ["authority.issued_at", "reservation.issued_at", "lease.issued_at", "checkpoint.recorded_at"])
   }
 
   if (reservation.status !== "SIMULATED_HELD" || reservation.conflict_count !== 0
@@ -774,9 +824,13 @@ export function evaluateDispatchContract(input, options = {}) {
 
 export function runCli(argv) {
   const args = {}
+  const allowed = new Set(["contract", "at"])
   for (let index = 0; index < argv.length; index += 2) {
     if (!argv[index]?.startsWith("--") || argv[index + 1] === undefined) return inputRejected(new DispatchContractError("arguments must use --name value pairs"))
-    args[argv[index].slice(2)] = argv[index + 1]
+    const key = argv[index].slice(2)
+    if (!allowed.has(key)) return inputRejected(new DispatchContractError(`unknown option --${key}`))
+    if (Object.hasOwn(args, key)) return inputRejected(new DispatchContractError(`duplicate option --${key}`))
+    args[key] = argv[index + 1]
   }
   if (!args.contract || !args.at) return inputRejected(new DispatchContractError("--contract and --at are required"))
   try {

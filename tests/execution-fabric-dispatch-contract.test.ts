@@ -16,6 +16,18 @@ import {
 const at = "2026-08-10T03:40:00.000Z"
 const completionAt = "2026-08-10T03:42:00.000Z"
 const sha = (character: string) => character.repeat(64)
+const canonicalJson = (value: any): string => Array.isArray(value)
+  ? `[${value.map(canonicalJson).join(",")}]`
+  : value && typeof value === "object"
+    ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
+    : JSON.stringify(value)
+const artifactSha = (value: any) => crypto.createHash("sha256").update(canonicalJson(value)).digest("hex").toUpperCase()
+const placementTrust = (artifact: any) => ({
+  verified: true,
+  artifact_sha256: artifactSha(artifact),
+  snapshot_sha256: artifact.snapshot.sha256,
+  workload_sha256: artifact.workload_digest_sha256,
+})
 
 function packet(phase: "PRE_DISPATCH" | "COMPLETION_CLAIM" = "PRE_DISPATCH") {
   const complete = phase === "COMPLETION_CLAIM"
@@ -48,9 +60,9 @@ function packet(phase: "PRE_DISPATCH" | "COMPLETION_CLAIM" = "PRE_DISPATCH") {
       workload: { id: "cpu-heavy-build", title: "CPU-heavy scratch build", storage_semantics: "scratch-only" },
       scheduler: { state: "disabled", authority: "not-granted", autonomous_dispatch: "forbidden" },
       workload_digest_sha256: sha("F"),
-      recommendation: { node_id: "aegis", rank: 1, rank_basis: {}, execution_authorized: false, dispatch_allowed: false },
+      recommendation: { node_id: "aegis", rank: 1, rank_basis: { cpu_threads: 28 }, execution_authorized: false, dispatch_allowed: false },
       eligible_nodes: [{
-        node_id: "aegis", eligible: true, rank: 1, rank_basis: {}, reasons: [], evidence_used: [],
+        node_id: "aegis", eligible: true, rank: 1, rank_basis: { cpu_threads: 28 }, reasons: [], evidence_used: [],
         confidence: "observed",
         freshness: { state: "fresh", age_seconds: 55, ttl_seconds: 300, expires_at: "2026-08-10T03:43:05.166Z" },
         execution_authorized: false, dispatch_allowed: false,
@@ -188,6 +200,14 @@ function packet(phase: "PRE_DISPATCH" | "COMPLETION_CLAIM" = "PRE_DISPATCH") {
       trusted_owner_bundle_sha256: sha("4"),
       status_event_ref: "EVENT-FABRIC-PROOF-ACTIVE-001",
       revocation_event_ref: "EVENT-FABRIC-PROOF-REVOCATION-HEAD-001",
+      resource_ceiling: {
+        max_cpu_threads: 24,
+        max_memory_bytes: 34359738368,
+        max_scratch_bytes: 107374182400,
+        minimum_free_scratch_bytes: 107374182400,
+        max_attempts: 2,
+        max_timeout_seconds: 1800,
+      },
     },
     reservation: {
       reservation_id: "RES-FABRIC-PROOF-001",
@@ -270,8 +290,10 @@ function packet(phase: "PRE_DISPATCH" | "COMPLETION_CLAIM" = "PRE_DISPATCH") {
 }
 
 function evaluate(value = packet()) {
+  const trustedPlacement = packet().recommendation
   return evaluateDispatchContract(value, {
     evaluatedAt: value.phase === "COMPLETION_CLAIM" ? completionAt : at,
+    resolveTrustedPlacementArtifact: () => placementTrust(trustedPlacement),
     resolveTrustedEvidenceManifest: value.phase === "COMPLETION_CLAIM"
       ? () => ({ verified: true, manifest_sha256: sha("9") })
       : undefined,
@@ -326,7 +348,10 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
     value.recommendation = artifact
     value.workload_envelope.placement_workload_sha256 = artifact.workload_digest_sha256
     value.workload_envelope.placement_snapshot_sha256 = artifact.snapshot.sha256
-    expect(evaluate(bindDispatchContract(value))).toMatchObject({ status: "CONTRACT_READY", dispatch_allowed: false })
+    expect(evaluateDispatchContract(bindDispatchContract(value), {
+      evaluatedAt: at,
+      resolveTrustedPlacementArtifact: () => placementTrust(artifact),
+    })).toMatchObject({ status: "CONTRACT_READY", dispatch_allowed: false })
   })
 
   it("makes one CPU build contract-ready without authorizing execution", () => {
@@ -378,6 +403,9 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
     ["protected data semantics", (value: any) => { value.workload_envelope.data_classification = "protected" }, "WORKLOAD_SEMANTICS_OUT_OF_SCOPE"],
     ["authoritative storage semantics", (value: any) => { value.workload_envelope.storage_semantics = "authoritative-state" }, "WORKLOAD_SEMANTICS_OUT_OF_SCOPE"],
     ["unrestricted network semantics", (value: any) => { value.workload_envelope.network_scope = "unrestricted" }, "WORKLOAD_SEMANTICS_OUT_OF_SCOPE"],
+    ["resource ceiling", (value: any) => { value.workload_envelope.resource_limits.max_memory_bytes = Number.MAX_SAFE_INTEGER }, "RESOURCE_AUTHORITY_CEILING_EXCEEDED"],
+    ["selected-node CPU capacity", (value: any) => { value.workload_envelope.resource_limits.max_cpu_threads = 29 }, "RESOURCE_AUTHORITY_CEILING_EXCEEDED"],
+    ["issuance order", (value: any) => { value.authority.issued_at = "2026-08-10T03:39:45.000Z" }, "ISSUANCE_CHRONOLOGY_INVALID"],
   ])("blocks %s", (_name, mutate, code) => {
     expect(rebound(mutate).reasons.map((entry: any) => entry.code)).toContain(code)
   })
@@ -386,6 +414,14 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
     const value = packet()
     value.workload_envelope.timeout_seconds = 999
     expect(evaluate(value).reasons.map((entry: any) => entry.code)).toContain("BINDING_MISMATCH")
+  })
+
+  it("rejects a locally reconstructed placement artifact without independent trust", () => {
+    const value = packet()
+    value.recommendation.workload.title = "Fabricated but internally consistent"
+    const result = evaluate(bindDispatchContract(value))
+    expect(result.status).toBe("CONTRACT_BLOCKED")
+    expect(result.reasons.map((entry: any) => entry.code)).toContain("PLACEMENT_EVIDENCE_UNATTESTED")
   })
 
   it("binds the final checkpoint against packet-local tampering", () => {
@@ -442,6 +478,11 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
     }, "COMPLETION_CLAIM")
     expect(result.status).toBe("CONTRACT_BLOCKED")
     expect(result.reasons.map((entry: any) => entry.code)).toContain("COMPLETION_EVIDENCE_MISSING")
+  })
+
+  it.each(["repositories", "protectedResources"])("blocks escaped canonical %s reservations", (field) => {
+    const result = rebound((value) => { value.reservation_set.reservations[field] = ["foreign-scope"] })
+    expect(result.reasons.map((entry: any) => entry.code)).toContain("RESERVATION_CONTRACT_MISMATCH")
   })
 
   it.each([
@@ -541,5 +582,7 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
     expect(exitCodeForStatus("CONTRACT_READY")).toBe(0)
     expect(exitCodeForStatus("CONTRACT_BLOCKED")).toBe(1)
     expect(exitCodeForStatus("INPUT_REJECTED")).toBe(2)
+    expect(runCli(["--contract", "a", "--at", at, "--extra", "x"]).status).toBe("INPUT_REJECTED")
+    expect(runCli(["--contract", "a", "--contract", "b", "--at", at]).status).toBe("INPUT_REJECTED")
   })
 })
