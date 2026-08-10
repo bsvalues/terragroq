@@ -132,7 +132,7 @@ validate_trusted_parent() {
 
 require_containment_tools() {
   local required_tool
-  for required_tool in timeout node realpath sha256sum flock findmnt systemd-run hostname id git dotnet corepack nproc df awk stat find tail tr grep du base64 bash mktemp rm xfs_io xfs_quota; do
+  for required_tool in timeout node realpath sha256sum flock findmnt systemd-run hostname id git dotnet corepack nproc df awk stat find readlink sync head tail tr grep du base64 bash mktemp rm xfs_io xfs_quota; do
     command -v "$required_tool" >/dev/null 2>&1 || die_block "CONTAINMENT_UNAVAILABLE" "$required_tool is required for bounded execution"
   done
 }
@@ -169,12 +169,13 @@ validate_workspace_project() {
 }
 
 run_ordinary_profile() {
-  local writable_root="$1" scratch_root="$2" runtime_seconds="$3"
-  shift 3
+  local writable_root="$1" scratch_root="$2" working_directory="$3" runtime_seconds="$4"
+  shift 4
   timeout --signal=TERM --kill-after=5 "$runtime_seconds" systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
+    --expand-environment=no \
     -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
     -p "RuntimeMaxSec=$runtime_seconds" -p ProtectSystem=strict -p ProtectHome=read-only \
-    -p "ReadWritePaths=$writable_root" -p "ReadOnlyPaths=/tmp /var/tmp" \
+    -p "ReadWritePaths=$writable_root" -p "ReadOnlyPaths=/tmp /var/tmp" -p "WorkingDirectory=$working_directory" \
     --setenv=TMPDIR="$scratch_root/tmp" --setenv=TMP="$scratch_root/tmp" --setenv=TEMP="$scratch_root/tmp" \
     --setenv=XDG_CACHE_HOME="$scratch_root/xdg-cache" --setenv=NUGET_PACKAGES="$scratch_root/nuget" \
     --setenv=DOTNET_CLI_HOME="$scratch_root/dotnet-home" --setenv=COREPACK_HOME="$scratch_root/corepack" \
@@ -185,16 +186,18 @@ run_cleanup_profile() {
   local runtime_seconds="$1"
   shift
   timeout --signal=TERM --kill-after=5 "$runtime_seconds" systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
+    --expand-environment=no \
     -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
     -p "RuntimeMaxSec=$runtime_seconds" -p ProtectSystem=strict -p ProtectHome=read-only \
-    -p "ReadWritePaths=$PHYSICAL_PARENT" -p "ReadOnlyPaths=/tmp /var/tmp" -- "$@"
+    -p "ReadWritePaths=$PHYSICAL_PARENT" -p "ReadOnlyPaths=/tmp /var/tmp" -p "WorkingDirectory=$PHYSICAL_PARENT" -- "$@"
 }
 
 run_preflight_repository_profile() {
   timeout --signal=TERM --kill-after=5 120 systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
+    --expand-environment=no \
     -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
     -p RuntimeMaxSec=120 -p ProtectSystem=strict -p ProtectHome=read-only \
-    -p "TemporaryFileSystem=/tmp:size=4294967296,mode=0700" -p "ReadOnlyPaths=/var/tmp" \
+    -p "TemporaryFileSystem=/tmp:size=4294967296,mode=0700" -p "ReadOnlyPaths=/var/tmp" -p WorkingDirectory=/tmp \
     --setenv=REMOTE_URL="$REMOTE_URL" --setenv=BASE_SHA="$BASE_SHA" --setenv=RUN_ID="$RUN_ID" -- \
     bash -c 'set -euo pipefail; proof=$(mktemp -d); trap '\''rm -rf -- "$proof"'\'' EXIT; git ls-remote --exit-code "$REMOTE_URL" refs/heads/main >/dev/null; git init --bare "$proof/repository.git" >/dev/null; git -C "$proof/repository.git" fetch --depth=1 "$REMOTE_URL" "$BASE_SHA" >/dev/null; git -C "$proof/repository.git" push --dry-run "$REMOTE_URL" "$BASE_SHA:refs/heads/williamos-preflight-$RUN_ID" >/dev/null'
 }
@@ -202,7 +205,7 @@ run_preflight_repository_profile() {
 probe_containment() {
   local code
   set +e
-  run_ordinary_profile "$PHYSICAL_PARENT" "$PHYSICAL_PARENT" 30 test ! -w /tmp >/dev/null 2>&1
+  run_ordinary_profile "$PHYSICAL_PARENT" "$PHYSICAL_PARENT" "$PHYSICAL_PARENT" 30 test ! -w /tmp >/dev/null 2>&1
   code=$?
   set -e
   [[ $code -eq 0 ]] || die_block "CONTAINMENT_UNAVAILABLE" "ordinary systemd containment profile could not be proven"
@@ -258,16 +261,96 @@ measure_scratch() {
   SCRATCH_MEASURED_BYTES="$bytes"
 }
 
-run_capture() {
+run_capture_at() {
+  local working_directory="$1"
+  shift
+  local canonical_working_directory
+  canonical_working_directory="$(timeout 5 realpath -- "$working_directory")" || die_block "PATH_CONFINEMENT_FAILED" "operation working directory cannot be resolved"
+  [[ "$canonical_working_directory" == "$working_directory" ]] || die_block "PATH_CONFINEMENT_FAILED" "operation working directory identity differs"
   : > "$OUTPUT_FILE"
   validate_scratch_dir
   measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"
   set +e
-  run_ordinary_profile "$PHYSICAL_WORKSPACE" "$SCRATCH_DIR" "$PROCESS_TIMEOUT_SECONDS" "$@" >"$OUTPUT_FILE" 2>&1
+  run_ordinary_profile "$PHYSICAL_WORKSPACE" "$SCRATCH_DIR" "$canonical_working_directory" "$PROCESS_TIMEOUT_SECONDS" "$@" >"$OUTPUT_FILE" 2>&1
   RUN_EXIT=$?
   set -e
   validate_scratch_dir
   measure_scratch; SCRATCH_AFTER="$SCRATCH_MEASURED_BYTES"
+}
+
+run_capture() {
+  [[ -d "$REPO_DIR" && ! -L "$REPO_DIR" ]] || die_block "GIT_REPOSITORY_MISSING" "repository working directory is unavailable"
+  run_capture_at "$REPO_DIR" "$@"
+}
+
+workspace_target_matches() {
+  local target="${1% (deleted)}"
+  [[ "$target" == "$PHYSICAL_WORKSPACE" || "$target" == "$PHYSICAL_WORKSPACE/"* ]]
+}
+
+assert_workspace_not_in_use() {
+  local current_uid proc_dirs scan_exit proc_dir proc_uid same_identity link target link_exit state fd_paths fd_exit fd_path deadline process_count=0 fd_count
+  deadline=$((SECONDS + 15))
+  current_uid="$(timeout 5 id -u)" || die_block "CLEANUP_PROCESS_SCAN_FAILED" "worker identity is unavailable for process scan"
+  set +e
+  proc_dirs="$(timeout 10 find /proc -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' -print 2>/dev/null | head -n 4097)"
+  scan_exit=$?
+  set -e
+  [[ $scan_exit -eq 0 ]] || die_block "CLEANUP_PROCESS_SCAN_FAILED" "process namespace cannot be enumerated"
+  while IFS= read -r proc_dir; do
+    [[ -n "$proc_dir" && "$proc_dir" =~ ^/proc/[0-9]+$ ]] || continue
+    (( ++process_count <= 4096 )) || die_block "CLEANUP_PROCESS_SCAN_FAILED" "process namespace exceeds the bounded scan"
+    (( SECONDS <= deadline )) || die_block "CLEANUP_PROCESS_SCAN_FAILED" "process namespace scan exceeded its deadline"
+    set +e
+    proc_uid="$(timeout 2 stat -c %u -- "$proc_dir" 2>/dev/null)"
+    scan_exit=$?
+    set -e
+    if [[ $scan_exit -ne 0 ]]; then
+      [[ ! -e "$proc_dir" ]] && continue
+      die_block "CLEANUP_PROCESS_SCAN_FAILED" "an extant process identity is inaccessible"
+    fi
+    same_identity=false
+    [[ "$proc_uid" == "$current_uid" ]] && same_identity=true
+    for link in cwd root; do
+      set +e
+      target="$(timeout 2 readlink -- "$proc_dir/$link" 2>/dev/null)"
+      link_exit=$?
+      set -e
+      if [[ $link_exit -ne 0 ]]; then
+        [[ ! -e "$proc_dir" ]] && continue 2
+        [[ "$same_identity" != true ]] && continue
+        state="$(timeout 2 awk '/^State:/{print $2;exit}' "$proc_dir/status" 2>/dev/null)" || die_block "CLEANUP_PROCESS_SCAN_FAILED" "same-user process state is inaccessible"
+        [[ "$state" == "Z" ]] && continue 2
+        die_block "CLEANUP_PROCESS_SCAN_FAILED" "same-user process root or cwd is inaccessible"
+      fi
+      workspace_target_matches "$target" && die_block "CLEANUP_WORKSPACE_IN_USE" "a process references the exact workspace"
+    done
+    set +e
+    fd_paths="$(timeout 5 find "$proc_dir/fd" -mindepth 1 -maxdepth 1 -type l -print 2>/dev/null | head -n 65537)"
+    fd_exit=$?
+    set -e
+    if [[ $fd_exit -ne 0 ]]; then
+      [[ ! -e "$proc_dir" ]] && continue
+      [[ "$same_identity" != true ]] && continue
+      die_block "CLEANUP_PROCESS_SCAN_FAILED" "same-user process descriptors are inaccessible"
+    fi
+    fd_count=0
+    while IFS= read -r fd_path; do
+      [[ -n "$fd_path" ]] || continue
+      (( ++fd_count <= 65536 )) || die_block "CLEANUP_PROCESS_SCAN_FAILED" "same-user process descriptor set exceeds the bounded scan"
+      (( SECONDS <= deadline )) || die_block "CLEANUP_PROCESS_SCAN_FAILED" "process descriptor scan exceeded its deadline"
+      set +e
+      target="$(timeout 2 readlink -- "$fd_path" 2>/dev/null)"
+      link_exit=$?
+      set -e
+      if [[ $link_exit -ne 0 ]]; then
+        [[ ! -e "$proc_dir" ]] && break
+        [[ "$same_identity" != true ]] && continue
+        die_block "CLEANUP_PROCESS_SCAN_FAILED" "same-user process descriptor is ambiguous"
+      fi
+      workspace_target_matches "$target" && die_block "CLEANUP_WORKSPACE_IN_USE" "a process has an open workspace descriptor"
+    done <<< "$fd_paths"
+  done <<< "$proc_dirs"
 }
 
 run_exact_cleanup() {
@@ -277,6 +360,9 @@ run_exact_cleanup() {
   run_cleanup_profile "$PROCESS_TIMEOUT_SECONDS" rm -rf -- "$PHYSICAL_WORKSPACE" >/dev/null 2>&1
   RUN_EXIT=$?
   set -e
+  if [[ $RUN_EXIT -eq 0 && ! -e "$PHYSICAL_WORKSPACE" ]]; then
+    timeout 10 sync -- "$PHYSICAL_PARENT" || die_block "CLEANUP_DURABILITY_FAILED" "canonical parent directory fsync failed"
+  fi
   SCRATCH_AFTER=0
 }
 
@@ -402,7 +488,7 @@ case "$OPERATION" in
         [[ -d "$SCRATCH_DIR" ]] || timeout 10 mkdir -m 0700 -- "$SCRATCH_DIR" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create exact scratch directory"
         prepare_operation_scratch
         OPERATION_SCRATCH_PREPARED=true
-        run_capture rm -rf -- "$REPO_DIR"
+        run_capture_at "$PHYSICAL_WORKSPACE" rm -rf -- "$REPO_DIR"
         [[ $RUN_EXIT -eq 0 && ! -e "$REPO_DIR" ]] || die_block "PARTIAL_WORKSPACE_UNSAFE" "partial repository could not be reset"
       fi
     else
@@ -413,7 +499,7 @@ case "$OPERATION" in
     timeout 10 mkdir -p -m 0700 -- "$SCRATCH_DIR/tmp" "$SCRATCH_DIR/xdg-cache" "$SCRATCH_DIR/nuget" "$SCRATCH_DIR/dotnet-home" "$SCRATCH_DIR/corepack" "$SCRATCH_DIR/npm-cache" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create bounded cache directories"
     validate_workspace_project
     if [[ "$OPERATION_SCRATCH_PREPARED" != true ]]; then prepare_operation_scratch; OPERATION_SCRATCH_PREPARED=true; fi
-    run_capture git clone --no-checkout --origin origin "$REMOTE_URL" "$REPO_DIR"
+    run_capture_at "$PHYSICAL_WORKSPACE" git clone --no-checkout --origin origin "$REMOTE_URL" "$REPO_DIR"
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "Git clone failed"
     run_capture git -C "$REPO_DIR" fetch --no-tags origin main
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "Git fetch failed"
@@ -514,6 +600,7 @@ case "$OPERATION" in
     [[ "$canonical" == "$PHYSICAL_WORKSPACE" && "$canonical" != "$PHYSICAL_PARENT" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "workspace does not resolve exactly"
     nested_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$PHYSICAL_WORKSPACE" 2>/dev/null || true)"
     [[ -z "$nested_mounts" ]] || die_block "CLEANUP_NESTED_MOUNT" "workspace contains a mount boundary"
+    assert_workspace_not_in_use
     validate_scratch_dir
     prepare_operation_scratch
     run_exact_cleanup

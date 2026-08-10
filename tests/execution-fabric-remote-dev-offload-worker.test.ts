@@ -12,6 +12,7 @@ const root = process.cwd()
 const worker = path.join(root, "scripts/execution-fabric/live/aegis-remote-dev-worker.sh")
 const policy = JSON.parse(fs.readFileSync(path.join(root, "config/execution-fabric/remote-dev-offload-v1.policy.json"), "utf8"))
 const bash = "C:\\Program Files\\Git\\bin\\bash.exe"
+const bashUid = execFileSync(bash, ["-lc", "id -u"], { encoding: "utf8" }).trim()
 const tempRoots: string[] = []
 const reservedPaths = [
   ".github/workflows/dotnet-test.yml",
@@ -74,6 +75,8 @@ function fixture() {
   fs.mkdirSync(path.join(physicalWorkspace, ".williamos-scratch"), { mode: 0o700 })
   const fakeBin = path.join(hostRoot, "bin"); fs.mkdirSync(fakeBin)
   writeExecutable(path.join(fakeBin, "dotnet"), `#!/usr/bin/env bash
+if [[ "\${1:-}" == --version ]]; then printf '%s\n' '8.0.100'; exit 0; fi
+if [[ "\${FAKE_REQUIRE_REPO_CWD:-0}" == 1 ]]; then [[ "$PWD" == "$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001/repository" ]] || exit 66; fi
 if [[ "\${FAKE_DOTNET_MODE:-ok}" == timeout ]]; then sleep 3; fi
 if [[ "\${FAKE_DOTNET_MODE:-ok}" == build-fail && "\${1:-}" == build ]]; then exit 7; fi
 if [[ "\${1:-}" == test ]]; then
@@ -93,7 +96,11 @@ fi
 if [[ "\${1:-}" == test && "\${FAKE_DOTNET_MODE:-ok}" == test-infra ]]; then exit 9; fi
 exit 0
 `)
-  writeExecutable(path.join(fakeBin, "corepack"), "#!/usr/bin/env bash\nexit 0\n")
+  writeExecutable(path.join(fakeBin, "corepack"), `#!/usr/bin/env bash
+if [[ "\${FAKE_REQUIRE_REPO_CWD:-0}" == 1 ]]; then [[ "$PWD" == "$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001/repository" ]] || exit 67; fi
+if [[ " $* " == *" pnpm --version "* ]]; then printf '%s\n' '9.15.0'; fi
+exit 0
+`)
   writeExecutable(path.join(fakeBin, "taskset"), "#!/usr/bin/env bash\nshift 2\nexec \"$@\"\n")
   writeExecutable(path.join(fakeBin, "prlimit"), "#!/usr/bin/env bash\nwhile [[ \"$1\" != -- ]]; do shift; done\nshift\nexec \"$@\"\n")
   writeExecutable(path.join(fakeBin, "flock"), "#!/usr/bin/env bash\nexit 0\n")
@@ -113,16 +120,54 @@ if [[ "$*" == *"state -p"* ]]; then
 fi
 printf '%s\n' '734 0 0 83886080'
 `)
+  writeExecutable(path.join(fakeBin, "find"), `#!/usr/bin/env bash
+if [[ "\${1:-}" == /proc ]]; then [[ -n "\${FAKE_PROC_IN_USE:-}" ]] && printf '%s\n' /proc/4242; exit 0; fi
+if [[ -n "\${FAKE_PROC_IN_USE:-}" && "\${1:-}" == /proc/4242/fd ]]; then [[ "$FAKE_PROC_IN_USE" == *fd ]] && printf '%s\n' /proc/4242/fd/3; exit 0; fi
+exec /usr/bin/find "$@"
+`)
+  writeExecutable(path.join(fakeBin, "stat"), `#!/usr/bin/env bash
+if [[ -n "\${FAKE_PROC_IN_USE:-}" && "\${@: -1}" == /proc/4242 ]]; then [[ "$FAKE_PROC_IN_USE" == other-* ]] && printf '%s\n' '${Number(bashUid) + 1}' || printf '%s\n' '${bashUid}'; exit 0; fi
+exec /usr/bin/stat "$@"
+`)
+  writeExecutable(path.join(fakeBin, "readlink"), `#!/usr/bin/env bash
+if [[ -n "\${FAKE_PROC_IN_USE:-}" ]]; then
+  case "\${@: -1}" in
+    /proc/4242/cwd) [[ "$FAKE_PROC_IN_USE" == cwd ]] && printf '%s\n' "$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001" || printf '%s\n' /unrelated;;
+    /proc/4242/root) printf '%s\n' /;;
+    /proc/4242/fd/3) printf '%s\n' "$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001/repository/README.md";;
+    *) exec /usr/bin/readlink "$@";;
+  esac
+  exit 0
+fi
+exec /usr/bin/readlink "$@"
+`)
+  writeExecutable(path.join(fakeBin, "sync"), `#!/usr/bin/env bash
+[[ "\${FAKE_SYNC_FAIL:-0}" == 1 ]] && exit 9
+[[ -n "\${FAKE_SYNC_LOG:-}" ]] && printf '%s\n' "\${@: -1}" > "$FAKE_SYNC_LOG"
+exit 0
+`)
   writeExecutable(path.join(fakeBin, "systemd-run"), `#!/usr/bin/env bash
 props=''
+working_directory=''
+expand_disabled=0
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == -- ]]; then shift; break; fi
   case "$1" in
-    -p) shift; props="$props|\${1:-}";;
+    -p) shift; props="$props|\${1:-}"; case "\${1:-}" in WorkingDirectory=*) working_directory="\${1#WorkingDirectory=}";; esac;;
+    --expand-environment=no) expand_disabled=1;;
     --setenv=*) value="\${1#--setenv=}"; export "\${value?}";;
   esac
   shift
 done
+if [[ "\${FAKE_REQUIRE_NO_EXPAND:-0}" == 1 ]]; then
+  [[ "$expand_disabled" == 1 ]] || exit 78
+  if [[ "\${1:-}" == bash && "\${2:-}" == -c ]]; then
+    [[ "\${3:-}" == *'$proof'* && "\${3:-}" == *'$REMOTE_URL'* && "\${3:-}" == *'$BASE_SHA'* && "\${3:-}" == *'$RUN_ID'* ]] || exit 79
+  fi
+fi
+if [[ -n "$working_directory" ]]; then cd "$working_directory" || exit 80
+elif [[ "\${FAKE_SERVICE_DEFAULT_CWD:-0}" == 1 ]]; then cd "$REMOTE_DEV_WORKER_ROOT" || exit 81
+fi
 if [[ "\${1:-}" == test && ( " $* " == *" ! -w /tmp "* || " $* " == *" -w "* ) ]]; then
   [[ "$props" == *"ReadWritePaths="* && "$props" == *"ReadOnlyPaths=/tmp /var/tmp"* ]] || exit 71
   exit 0
@@ -304,6 +349,54 @@ describe("fixed AEGIS remote development worker", () => {
     const source = fs.readFileSync(worker, "utf8")
     expect(source).toContain('-p "ReadWritePaths=$PHYSICAL_PARENT"')
     expect(source).not.toContain('run_cleanup_capture rm -rf -- "$PHYSICAL_WORKSPACE"')
+  }, 30_000)
+
+  it("binds ordinary services to the exact repository instead of inheriting the manager working directory", () => {
+    const value = fixture()
+    const env = { FAKE_SERVICE_DEFAULT_CWD: "1", FAKE_REQUIRE_REPO_CWD: "1" }
+    for (const operation of ["RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE"]) {
+      expect(runWorker(operation, value, { env }).json).toMatchObject({ status: "SUCCEEDED" })
+    }
+    expect(fs.readFileSync(worker, "utf8")).toContain('-p "WorkingDirectory=$working_directory"')
+  }, 45_000)
+
+  it("disables systemd manager expansion and preserves fixed preflight Bash variables", () => {
+    const value = fixture(); fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
+    writeExecutable(path.join(value.fakeBin, "hostname"), "#!/usr/bin/env bash\nprintf '%s\\n' aegis\n")
+    writeExecutable(path.join(value.fakeBin, "id"), `#!/usr/bin/env bash
+if [[ "\${1:-}" == -un ]]; then printf '%s\n' bs; else printf '%s\n' '${bashUid}'; fi
+`)
+    writeExecutable(path.join(value.fakeBin, "nproc"), "#!/usr/bin/env bash\nprintf '%s\\n' 12\n")
+    writeExecutable(path.join(value.fakeBin, "df"), "#!/usr/bin/env bash\nprintf '%s\\n' Available 100000000000\n")
+    writeExecutable(path.join(value.fakeBin, "git"), `#!/usr/bin/env bash
+if [[ "\${1:-}" == --version ]]; then printf '%s\n' 'git version 2.50.0'; fi
+exit 0
+`)
+    const result = runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_REQUIRE_NO_EXPAND: "1" } })
+    expect(result.json).toMatchObject({ status: "SUCCEEDED" })
+    expect((fs.readFileSync(worker, "utf8").match(/--expand-environment=no/g) ?? []).length).toBeGreaterThanOrEqual(3)
+  }, 20_000)
+
+  it("blocks exact cleanup while an unrelated same-user process has a workspace cwd or open fd", () => {
+    for (const mode of ["cwd", "fd", "other-fd"]) {
+      const value = fixture()
+      fs.writeFileSync(path.join(value.physicalWorkspace, ".williamos-post-merge-proven"), `${value.packet.runId}:${value.baseSha}\n`)
+      expect(runWorker("CLEAN_EXACT_WORKSPACE", value, { env: { FAKE_PROC_IN_USE: mode } }).json).toMatchObject({ status: "CLEANUP_WORKSPACE_IN_USE" })
+      expect(fs.existsSync(value.physicalWorkspace)).toBe(true)
+    }
+  }, 30_000)
+
+  it("fsyncs the exact canonical parent after removal and fails closed on durability errors", () => {
+    const durable = fixture()
+    fs.writeFileSync(path.join(durable.physicalWorkspace, ".williamos-post-merge-proven"), `${durable.packet.runId}:${durable.baseSha}\n`)
+    const syncLog = path.join(durable.hostRoot, "sync.log")
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", durable, { env: { FAKE_SYNC_LOG: toPosix(syncLog) } }).json).toMatchObject({ status: "CLEANUP_ABSENCE_PROVEN" })
+    expect(fs.readFileSync(syncLog, "utf8").trim()).toBe(toPosix(path.dirname(durable.physicalWorkspace)))
+
+    const failed = fixture()
+    fs.writeFileSync(path.join(failed.physicalWorkspace, ".williamos-post-merge-proven"), `${failed.packet.runId}:${failed.baseSha}\n`)
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", failed, { env: { FAKE_SYNC_FAIL: "1" } }).json).toMatchObject({ status: "CLEANUP_DURABILITY_FAILED" })
+    expect(fs.existsSync(failed.physicalWorkspace)).toBe(false)
   }, 30_000)
 
   it("emits strict sub-second timestamps and rejects a non-increasing clock", () => {
