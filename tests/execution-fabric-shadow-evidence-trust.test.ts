@@ -114,6 +114,13 @@ describe("Execution Fabric shadow evidence trust registries", () => {
         allowed_canonical_nodes: ["hermes-node"],
         status: "ACTIVE",
       }),
+      expect.objectContaining({
+        reference: "issue-538-phase2-shadow-004",
+        work_order_id: "WO-EF-SHADOW-004",
+        allowed_canonical_nodes: ["hermes-node"],
+        reviewed_commit: "b1a275e62349d02d00557fbb853f53ae38fe497a",
+        status: "ACTIVE",
+      }),
     ])
     expect(loaded.authority_registry.entries).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ reference: "issue-538-phase2-shadow-002" }),
