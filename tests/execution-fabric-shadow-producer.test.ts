@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest"
 
 import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
 import { evaluateShadowPlacementTestFixture } from "../scripts/execution-fabric/evaluate-shadow-placement.mjs"
+import { digestShadowAuthorityScope } from "../scripts/execution-fabric/shadow-authority-scope.mjs"
+import { digestScopedAuthorityActivationEntry } from "../scripts/execution-fabric/shadow-scoped-authority.mjs"
 import {
   captureResidentShadowOutcome,
   compileReviewedResidentShadowCandidate,
@@ -133,6 +135,134 @@ function preflight(selected: Json, events: string[] = []) {
 }
 
 describe("resident Hermes shadow producer", () => {
+  it("preflights and captures 0.2 facts against one immutable scoped authority", () => {
+    const selected = fixture({}, { workload: { id: "local-llm-inference", title: "Bounded inference", storage_semantics: "none" } })
+    const workload = JSON.parse(selected.receiptBytes.toString()).workload
+    const scope = {
+      schema_version: "0.2-shadow-authority-scope",
+      authority_reference: "issue-538-phase2-shadow-002",
+      work_order_id: "WO-EF-SHADOW-002",
+      workload: { id: workload.id, contract_sha256: digest(Buffer.from(`${canonicalizeJcs(workload)}\n`)) },
+      risk_class: "R0",
+      task_template: { id: "loopback-inference-v1", contract_sha256: "2".repeat(64) },
+      repository_scope: ["bsvalues/terragroq"],
+      environment_scope: ["hermes-loopback-ollama"],
+      allowed_actions: ["invoke bounded inference"],
+      forbidden_actions: ["inspect secrets", "mutate runtime"],
+      data_classification: "non-sensitive",
+      owner_decision_conditions: ["new authority boundary"],
+      allowed_canonical_nodes: ["hermes-node"],
+    }
+    const scopeBytes = Buffer.from(`${canonicalizeJcs(scope)}\n`)
+    const artifactRelative = "docs/reports/execution-fabric-shadow-authorities/issue-538-phase2-shadow-002.json"
+    const artifactPath = path.join(selected.root, artifactRelative)
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true })
+    fs.writeFileSync(artifactPath, scopeBytes)
+    const entry = {
+      reference: scope.authority_reference,
+      work_order_id: scope.work_order_id,
+      authority_artifact_path: artifactRelative,
+      authority_artifact_sha256: digest(scopeBytes),
+      authority_scope_sha256: digestShadowAuthorityScope(scope),
+      scope_review_commit: "a".repeat(40),
+      valid_from: "2026-08-10T08:00:30.000Z",
+      expires_at: "2026-08-10T08:20:00.000Z",
+      status: "ACTIVE",
+    }
+    fs.writeFileSync(path.join(selected.root, "config", "execution-fabric", "shadow-authority-registry-v0.2.json"), JSON.stringify({
+      schema_version: "0.2-shadow-authority-registry",
+      registry_id: "execution-fabric-scoped-shadow-authorities",
+      entries: [entry],
+    }))
+    const scopedProof = () => ({
+      scope_proof: { trusted_ref: "refs/heads/main", artifact_sha256: entry.authority_artifact_sha256, reviewed_commit: entry.scope_review_commit },
+      activation_proof: { trusted_ref: "refs/heads/main", activation_commit: "b".repeat(40), entry_sha256: digestScopedAuthorityActivationEntry(entry) },
+    })
+    const checked = preflightResidentShadowProducer({
+      repositoryRoot: selected.root,
+      receiptBytes: selected.receiptBytes,
+      receiptSha256: selected.receiptSha256,
+      workOrderId: scope.work_order_id,
+      trustedClock: () => "2026-08-10T08:01:00.000Z",
+      trustedResidentIdentity: () => ({ node_id: "hermes-node", producer_lane: "resident-hermes" }),
+      trustedAuthorityProof: authorityProof,
+      trustedScopedAuthorityProof: scopedProof,
+    })
+    expect(checked.authority).toMatchObject({
+      schema_version: "0.2-shadow-scoped-authority-settlement",
+      authority_scope_sha256: entry.authority_scope_sha256,
+      authority_activation_commit: "b".repeat(40),
+    })
+    const capture = captureResidentShadowOutcome({
+      repositoryRoot: selected.root,
+      receiptBytes: selected.receiptBytes,
+      preflight: checked,
+      trustedAuthorityProof: authorityProof,
+      trustedScopedAuthorityProof: scopedProof,
+      readTrustedProducerFacts: () => factsFor(checked, {
+        schema_version: "0.2-resident-shadow-producer-facts",
+        work_order_id: scope.work_order_id,
+        authority_reference: scope.authority_reference,
+        authority_scope_sha256: entry.authority_scope_sha256,
+        authority_activation_commit: "b".repeat(40),
+      }),
+    })
+    expect(capture.outcome).toMatchObject({
+      schema_version: "0.2-shadow-outcome-evidence",
+      authority_outcome: {
+        scope_sha256: entry.authority_scope_sha256,
+        activation_commit: "b".repeat(40),
+      },
+    })
+    const retained = materializeResidentShadowEvidence({
+      repositoryRoot: selected.root,
+      receiptBytes: selected.receiptBytes,
+      capture,
+    })
+    const executionCommit = "c".repeat(40)
+    const reviewCommit = "d".repeat(40)
+    const reviewBytes = Buffer.from(`# ${scope.work_order_id} scoped review\n\nExecution commit: ${executionCommit}\nAuthority scope: ${entry.authority_scope_sha256}\n\nREVIEWER: assurance-agent\nVERDICT: PASS\n`)
+    const reviewPath = `docs/reports/shadow-admission/${scope.work_order_id}-scoped-review.md`
+    fs.writeFileSync(path.join(selected.root, reviewPath), reviewBytes)
+    const materialized = materializeResidentShadowCandidate({
+      repositoryRoot: selected.root,
+      capture,
+      retainedEvidence: retained,
+      reviewEvidence: { path: reviewPath, sha256: digest(reviewBytes) },
+      executionCommit,
+      reviewCommit,
+      reviewerIdentity: "assurance-agent",
+      trustedClock: () => "2026-08-10T08:04:00.000Z",
+      trustedAuthorityProof: authorityProof,
+      trustedScopedAuthorityProof: scopedProof,
+      proveReviewCommitOrder: () => ({
+        trusted_ref: "refs/heads/main",
+        execution_commit: executionCommit,
+        review_commit: reviewCommit,
+        execution_is_strict_ancestor: true,
+      }),
+    })
+    expect(materialized.candidate).toMatchObject({
+      schema_version: "0.2-shadow-admission-candidate",
+      authority: { authority_scope_sha256: entry.authority_scope_sha256 },
+    })
+    const bundle = compileReviewedResidentShadowCandidate({
+      candidate: materialized.candidate,
+      repositoryRoot: selected.root,
+      reviewProof: ({ reviewedCommit, artifacts, predecessorCommit = null }: Json) => ({
+        trusted_ref: "refs/heads/main",
+        reviewed_commit: reviewedCommit,
+        exact_artifact_count: artifacts.length,
+        strict_after_commit: predecessorCommit,
+      }),
+      scopedAuthorityProof: () => structuredClone(checked.authority),
+    })
+    expect(bundle.registry_entries.authority).toMatchObject({
+      authority_scope_sha256: entry.authority_scope_sha256,
+      status: "TRUSTED_EXISTING_ACTIVATION",
+    })
+  })
+
   it("preflights the exact receipt before identity/facts and materializes compiler-shaped evidence", () => {
     const selected = fixture()
     const events: string[] = []

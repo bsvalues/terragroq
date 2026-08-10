@@ -7,6 +7,7 @@ import { canonicalizeJcs } from "./canonical-json.mjs"
 
 const EXIT_INVALID = 2
 const SHA256 = /^[a-f0-9]{64}$/
+const GIT_SHA = /^[a-f0-9]{40}$/
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const OUTCOME_PAIRS = new Map([
   ["COMPLETED", "SUCCEEDED"],
@@ -183,7 +184,10 @@ export function validateShadowOutcomeEvidence({ artifactBytes, expectedSha256 })
     "actual_target_node", "authority_outcome", "completed_at", "resource_observations",
     "result", "schema_version", "started_at", "status", "work_order_id",
   ], "artifact")
-  if (artifact.schema_version !== "0.1-shadow-outcome-evidence") fail("artifact schema_version is unsupported")
+  if (!new Set(["0.1-shadow-outcome-evidence", "0.2-shadow-outcome-evidence"]).has(artifact.schema_version)) {
+    fail("artifact schema_version is unsupported")
+  }
+  const scoped = artifact.schema_version === "0.2-shadow-outcome-evidence"
   const workOrderId = identifier(artifact.work_order_id, "artifact.work_order_id")
   const actualTargetNode = identifier(artifact.actual_target_node, "artifact.actual_target_node")
   if (!OUTCOME_PAIRS.has(artifact.status)) fail("artifact.status is unsupported")
@@ -195,9 +199,19 @@ export function validateShadowOutcomeEvidence({ artifactBytes, expectedSha256 })
   const latencyMs = completedAt - startedAt
   if (!Number.isSafeInteger(latencyMs)) fail("derived latency is outside the safe integer range")
 
-  exactKeys(artifact.authority_outcome, ["checked_at", "reference", "status"], "artifact.authority_outcome")
+  exactKeys(artifact.authority_outcome, scoped
+    ? ["activation_commit", "checked_at", "reference", "scope_sha256", "status"]
+    : ["checked_at", "reference", "status"], "artifact.authority_outcome")
   if (artifact.authority_outcome.status !== "COMPLIANT") fail("authority outcome is not COMPLIANT")
   const authorityReference = identifier(artifact.authority_outcome.reference, "artifact.authority_outcome.reference")
+  const authorityScopeSha256 = scoped ? artifact.authority_outcome.scope_sha256 : null
+  if (scoped && (typeof authorityScopeSha256 !== "string" || !SHA256.test(authorityScopeSha256))) {
+    fail("artifact.authority_outcome.scope_sha256 must be lowercase SHA-256 hex")
+  }
+  const authorityActivationCommit = scoped ? artifact.authority_outcome.activation_commit : null
+  if (scoped && (typeof authorityActivationCommit !== "string" || !GIT_SHA.test(authorityActivationCommit))) {
+    fail("artifact.authority_outcome.activation_commit must be a lowercase Git commit")
+  }
   const authorityCheckedAt = timestamp(artifact.authority_outcome.checked_at, "artifact.authority_outcome.checked_at")
   if (authorityCheckedAt < startedAt || authorityCheckedAt > completedAt) {
     fail("authority outcome timestamp is outside outcome chronology")
@@ -209,7 +223,7 @@ export function validateShadowOutcomeEvidence({ artifactBytes, expectedSha256 })
     completedAt,
   )
   return {
-    schema_version: "0.1-shadow-outcome-evidence-validation",
+    schema_version: scoped ? "0.2-shadow-outcome-evidence-validation" : "0.1-shadow-outcome-evidence-validation",
     status: "VALID",
     observation_only: true,
     artifact_sha256: actualSha256,
@@ -225,6 +239,10 @@ export function validateShadowOutcomeEvidence({ artifactBytes, expectedSha256 })
       status: "COMPLIANT",
       reference: authorityReference,
       checked_at: normalizeTimestamp(artifact.authority_outcome.checked_at),
+      ...(scoped ? {
+        scope_sha256: authorityScopeSha256,
+        activation_commit: authorityActivationCommit,
+      } : {}),
     },
     resource_observations: resourceObservations,
     dispatch_allowed: false,

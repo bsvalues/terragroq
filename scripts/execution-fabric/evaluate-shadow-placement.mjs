@@ -2,6 +2,7 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 import { canonicalizeJcs } from "./canonical-json.mjs"
@@ -10,6 +11,11 @@ import {
   validateShadowEvidenceTrust,
 } from "./shadow-evidence-trust.mjs"
 import { validateShadowOutcomeEvidence } from "./shadow-outcome-evidence.mjs"
+import {
+  digestScopedAuthorityActivationEntry,
+  settleScopedShadowAuthority,
+  validateScopedShadowAuthorityRegistry,
+} from "./shadow-scoped-authority.mjs"
 
 const EXIT_INVALID = 2
 const SHA256 = /^[a-f0-9]{64}$/
@@ -205,7 +211,71 @@ function loadOutcomeEvidence(repositoryRoot, binding) {
   }
 }
 
-function settleOutcomeEvidenceTrust(repositoryRoot, artifactBytes, expectedArtifactSha256, retainedSourceSha256) {
+function proveScopedAuthority(repositoryRoot, registryPath, entry) {
+  const artifactPath = path.resolve(repositoryRoot, entry.authority_artifact_path)
+  const relativeArtifact = path.relative(repositoryRoot, artifactPath).replaceAll("\\", "/")
+  if (!relativeArtifact.startsWith("docs/reports/execution-fabric-shadow-authorities/")
+    || path.isAbsolute(relativeArtifact) || relativeArtifact.startsWith("../")) {
+    fail("scoped authority artifact escapes its retained boundary")
+  }
+  if (fs.lstatSync(artifactPath).isSymbolicLink()) fail("scoped authority artifact must not be a symbolic link")
+  const realArtifact = fs.realpathSync(artifactPath)
+  if (path.relative(repositoryRoot, realArtifact).startsWith("..")) fail("scoped authority artifact resolves outside repository")
+  const artifactBytes = fs.readFileSync(artifactPath)
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", entry.scope_review_commit, "refs/heads/main"], { cwd: repositoryRoot, stdio: "ignore" })
+    const reviewedBytes = execFileSync("git", ["show", `${entry.scope_review_commit}:${relativeArtifact}`], { cwd: repositoryRoot })
+    if (!reviewedBytes.equals(artifactBytes)) fail("scope review commit does not contain the exact authority artifact")
+  } catch (error) {
+    if (error instanceof ShadowPlacementError) throw error
+    fail("scope review commit is not trusted main ancestry or lacks the exact authority artifact")
+  }
+
+  const registryRelative = path.relative(repositoryRoot, registryPath).replaceAll("\\", "/")
+  let activationCommit = null
+  try {
+    const commits = execFileSync("git", ["log", "--reverse", "--format=%H", "refs/heads/main", "--", registryRelative], { cwd: repositoryRoot, encoding: "utf8" })
+      .split(/\r?\n/).filter(Boolean)
+    for (const candidate of commits) {
+      let candidateRegistry
+      try {
+        candidateRegistry = JSON.parse(execFileSync("git", ["show", `${candidate}:${registryRelative}`], { cwd: repositoryRoot, encoding: "utf8" }))
+      } catch { continue }
+      const match = candidateRegistry?.entries?.find((item) => item?.reference === entry.reference)
+      if (match && digestScopedAuthorityActivationEntry(match) === digestScopedAuthorityActivationEntry(entry)) {
+        activationCommit = candidate
+        break
+      }
+    }
+  } catch { fail("unable to prove scoped authority activation from trusted main") }
+  if (!activationCommit) fail("no trusted-main commit contains the exact scoped authority activation entry")
+  try {
+    if (activationCommit === entry.scope_review_commit) fail("activation commit must be strictly after scope review")
+    execFileSync("git", ["merge-base", "--is-ancestor", entry.scope_review_commit, activationCommit], { cwd: repositoryRoot, stdio: "ignore" })
+    const committedAt = execFileSync("git", ["show", "-s", "--format=%cI", activationCommit], { cwd: repositoryRoot, encoding: "utf8" }).trim()
+    if (!Number.isFinite(Date.parse(committedAt)) || Date.parse(committedAt) >= Date.parse(entry.valid_from)) {
+      fail("scoped authority activation was not merged before valid_from")
+    }
+  } catch (error) {
+    if (error instanceof ShadowPlacementError) throw error
+    fail("scope review is not strict trusted ancestry of activation")
+  }
+  return {
+    artifactBytes,
+    scopeProof: {
+      trusted_ref: "refs/heads/main",
+      artifact_sha256: entry.authority_artifact_sha256,
+      reviewed_commit: entry.scope_review_commit,
+    },
+    activationProof: {
+      trusted_ref: "refs/heads/main",
+      activation_commit: activationCommit,
+      entry_sha256: digestScopedAuthorityActivationEntry(entry),
+    },
+  }
+}
+
+function settleOutcomeEvidenceTrust(repositoryRoot, artifactBytes, expectedArtifactSha256, retainedSourceSha256, workload) {
   const registryDirectory = path.join(
     fs.realpathSync(path.resolve(repositoryRoot)),
     "config",
@@ -216,12 +286,34 @@ function settleOutcomeEvidenceTrust(repositoryRoot, artifactBytes, expectedArtif
       outcomeRegistryPath: path.join(registryDirectory, "shadow-outcome-registry.json"),
       authorityRegistryPath: path.join(registryDirectory, "shadow-authority-registry.json"),
     })
+    const outcome = validateShadowOutcomeEvidence({ artifactBytes, expectedSha256: expectedArtifactSha256 })
+    let scopedAuthoritySettlement = null
+    if (outcome.schema_version === "0.2-shadow-outcome-evidence-validation") {
+      const scopedRegistryPath = path.join(registryDirectory, "shadow-authority-registry-v0.2.json")
+      const scopedRegistry = validateScopedShadowAuthorityRegistry(JSON.parse(fs.readFileSync(scopedRegistryPath, "utf8")))
+      const matches = scopedRegistry.entries.filter((entry) => entry.reference === outcome.authority_outcome.reference)
+      if (matches.length !== 1) fail("exactly one scoped authority activation must match the outcome")
+      const entry = matches[0]
+      const proof = proveScopedAuthority(repositoryRoot, scopedRegistryPath, entry)
+      scopedAuthoritySettlement = settleScopedShadowAuthority({
+        entry,
+        artifactBytes: proof.artifactBytes,
+        checkedAt: outcome.authority_outcome.checked_at,
+        workOrderId: outcome.work_order_id,
+        workloadId: workload.id,
+        workloadContractSha256: crypto.createHash("sha256").update(`${canonicalizeJcs(workload)}\n`, "utf8").digest("hex"),
+        nodeId: outcome.actual_target_node,
+        scopeProof: proof.scopeProof,
+        activationProof: proof.activationProof,
+      })
+    }
     return validateShadowEvidenceTrust({
       artifactBytes,
       expectedArtifactSha256,
       retainedSourceSha256,
       outcomeRegistry: registries.outcome_registry,
       authorityRegistry: registries.authority_registry,
+      scopedAuthoritySettlement,
     })
   } catch (error) {
     const detail = String(error?.message ?? error).replace(/^FABRIC_SHADOW_EVIDENCE_TRUST_INVALID:\s*/, "")
@@ -404,6 +496,7 @@ function validateObservation(observation, repositoryRoot, receipt, receiptSha256
     loadedOutcome.artifactBytes,
     observation.outcome_evidence.sha256,
     sourceSha256,
+    receipt.workload,
   )
 
   if (!Array.isArray(observation.divergence_reasons)
@@ -436,8 +529,9 @@ function evaluateShadowPlacementAtRoot({ receiptBytes, observationBytes, reposit
     observation.work_order_id,
   )
   const observationView = validateObservation(structuredClone(observation), repositoryRoot, receipt, receiptArtifact.sha256)
+  const scoped = observationView.outcome_evidence.schema_version === "0.2-shadow-outcome-evidence-validation"
   const result = {
-    schema_version: "0.1-shadow-placement-result",
+    schema_version: scoped ? "0.2-shadow-placement-result" : "0.1-shadow-placement-result",
     status: trustScope === "production" ? "OBSERVED" : "TEST_OBSERVED",
     trust_scope: trustScope,
     observation_only: true,

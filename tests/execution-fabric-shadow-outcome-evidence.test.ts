@@ -59,6 +59,30 @@ function expectSafety(value: JsonObject) {
 }
 
 describe("Execution Fabric shadow outcome evidence", () => {
+  it("binds scoped 0.2 outcomes to the exact authority scope and activation commit", () => {
+    const selected = artifact({
+      schema_version: "0.2-shadow-outcome-evidence",
+      authority_outcome: {
+        status: "COMPLIANT",
+        reference: "authority-local-omen-manual-v1",
+        checked_at: "2026-07-04T14:40:56.000Z",
+        scope_sha256: "a".repeat(64),
+        activation_commit: "b".repeat(40),
+      },
+    })
+    expect(validate(selected)).toMatchObject({
+      schema_version: "0.2-shadow-outcome-evidence-validation",
+      authority_outcome: {
+        scope_sha256: "a".repeat(64),
+        activation_commit: "b".repeat(40),
+      },
+    })
+    const missing = structuredClone(selected)
+    delete missing.authority_outcome.scope_sha256
+    expectRejected(() => validate(missing), /must contain exactly/)
+    expectRejected(() => validate({ ...selected, authority_outcome: { ...selected.authority_outcome, activation_commit: "B".repeat(40) } }), /lowercase Git commit/)
+  })
+
   it("validates exact immutable bytes and derives latency from chronology", () => {
     const first = validate()
     const second = validate()

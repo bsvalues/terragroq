@@ -8,6 +8,11 @@ import { validateShadowPlacementReceipt, validateShadowSourceClaims } from "../e
 import { runPinnedPlacementCli } from "../recommend-pinned-placement.mjs"
 import { validateShadowAuthorityRegistry } from "../shadow-evidence-trust.mjs"
 import { validateShadowOutcomeEvidence } from "../shadow-outcome-evidence.mjs"
+import {
+  settleScopedShadowAuthority,
+  validateScopedShadowAuthorityRegistry,
+  validateShadowAuthorityArtifact,
+} from "../shadow-scoped-authority.mjs"
 
 const SHA256 = /^[a-f0-9]{64}$/
 const COMMIT = /^[a-f0-9]{40}$/
@@ -103,7 +108,55 @@ function readJsonNoSymlink(filePath, label) {
   }
 }
 
-function loadActiveAuthority(repositoryRoot, workOrderId, nodeId, at, trustedAuthorityProof) {
+function loadActiveAuthority(repositoryRoot, workOrderId, workload, nodeId, at, trustedAuthorityProof, trustedScopedAuthorityProof) {
+  const scopedRegistryPath = path.join(repositoryRoot, "config", "execution-fabric", "shadow-authority-registry-v0.2.json")
+  if (fs.existsSync(scopedRegistryPath)) {
+    const loadedScoped = readJsonNoSymlink(scopedRegistryPath, "reviewed scoped shadow authority registry")
+    let scopedRegistry
+    try { scopedRegistry = validateScopedShadowAuthorityRegistry(loadedScoped.value) } catch (error) {
+      fail(String(error?.message ?? error).replace(/^FABRIC_SHADOW_SCOPED_AUTHORITY_INVALID:\s*/, ""))
+    }
+    const candidates = []
+    for (const entry of scopedRegistry.entries.filter((item) => item.work_order_id === workOrderId)) {
+      const artifactPath = path.resolve(repositoryRoot, entry.authority_artifact_path)
+      const relative = path.relative(repositoryRoot, artifactPath)
+      if (relative.startsWith("..") || path.isAbsolute(relative)) fail("scoped authority artifact resolves outside repository")
+      const artifact = readJsonNoSymlink(artifactPath, "scoped authority artifact")
+      const validation = validateShadowAuthorityArtifact({ artifactBytes: artifact.bytes, expectedSha256: entry.authority_artifact_sha256 })
+      if (validation.scope.allowed_canonical_nodes.includes(nodeId)) candidates.push({ entry, artifact })
+    }
+    if (candidates.length > 1) fail("multiple scoped authorities bind the Work Order and resident node")
+    if (candidates.length === 1) {
+      if (typeof trustedScopedAuthorityProof !== "function") fail("an injected scoped authority proof is required")
+      const selected = candidates[0]
+      const proof = trustedScopedAuthorityProof({
+        repositoryRoot,
+        registryPath: scopedRegistryPath,
+        registryBytes: Buffer.from(loadedScoped.bytes),
+        entry: structuredClone(selected.entry),
+        artifactPath: path.resolve(repositoryRoot, selected.entry.authority_artifact_path),
+        artifactBytes: Buffer.from(selected.artifact.bytes),
+      })
+      exact(proof, ["activation_proof", "scope_proof"], "trusted scoped authority proof")
+      const settlement = settleScopedShadowAuthority({
+        entry: selected.entry,
+        artifactBytes: selected.artifact.bytes,
+        checkedAt: at,
+        workOrderId,
+        workloadId: workload.id,
+        workloadContractSha256: sha256(canonicalBytes(workload)),
+        nodeId,
+        scopeProof: proof.scope_proof,
+        activationProof: proof.activation_proof,
+      })
+      return {
+        authority: settlement,
+        authority_registry_sha256: sha256(loadedScoped.bytes),
+        authority_proof: structuredClone(proof),
+      }
+    }
+  }
+
   const registryPath = path.join(repositoryRoot, "config", "execution-fabric", "shadow-authority-registry.json")
   let realRegistry
   try { realRegistry = fs.realpathSync(registryPath) } catch (error) { fail(`unable to resolve authority registry: ${error.message}`) }
@@ -186,6 +239,7 @@ export function preflightResidentShadowProducer({
   trustedClock,
   trustedResidentIdentity,
   trustedAuthorityProof,
+  trustedScopedAuthorityProof,
 }) {
   const root = realRepositoryRoot(repositoryRoot)
   const receipt = parseReceipt(receiptBytes, receiptSha256)
@@ -208,7 +262,9 @@ export function preflightResidentShadowProducer({
   if (!eligible) fail("resident Hermes is not eligible in the exact placement receipt")
   const freshUntil = new Date(timestamp(eligible.freshness?.expires_at, "resident evidence expiry")).toISOString()
   if (checkedAtMs >= Date.parse(freshUntil)) fail("resident placement evidence is not fresh at preflight")
-  const authoritySettlement = loadActiveAuthority(root, workOrderId, nodeId, checkedAt, trustedAuthorityProof)
+  const authoritySettlement = loadActiveAuthority(
+    root, workOrderId, receipt.workload, nodeId, checkedAt, trustedAuthorityProof, trustedScopedAuthorityProof,
+  )
 
   const result = {
     schema_version: "0.1-resident-shadow-producer-preflight",
@@ -245,18 +301,24 @@ export function recommendAndPreflightResidentShadowProducer({ pinnedPlacementArg
 }
 
 function validateFacts(facts) {
+  const scoped = facts?.schema_version === "0.2-resident-shadow-producer-facts"
   exact(facts, [
     "schema_version", "preflight_sha256", "receipt_sha256", "work_order_id", "resident_node_id",
     "producer_lane", "started_at", "completed_at", "authority_checked_at", "authority_reference",
     "authority_status", "status", "result", "resource_observations",
+    ...(scoped ? ["authority_activation_commit", "authority_scope_sha256"] : []),
   ], "trusted producer facts")
-  if (facts.schema_version !== "0.1-resident-shadow-producer-facts") fail("trusted producer facts schema is unsupported")
+  if (!scoped && facts.schema_version !== "0.1-resident-shadow-producer-facts") fail("trusted producer facts schema is unsupported")
   identifier(facts.work_order_id, "facts work_order_id")
   identifier(facts.resident_node_id, "facts resident_node_id")
   identifier(facts.producer_lane, "facts producer_lane")
   digest(facts.preflight_sha256, "facts preflight_sha256")
   digest(facts.receipt_sha256, "facts receipt_sha256")
   identifier(facts.authority_reference, "facts authority_reference")
+  if (scoped) {
+    digest(facts.authority_scope_sha256, "facts authority_scope_sha256")
+    if (!COMMIT.test(facts.authority_activation_commit)) fail("facts authority_activation_commit must be a full lowercase Git commit")
+  }
   if (facts.authority_status !== "COMPLIANT") fail("facts authority_status must be COMPLIANT")
   timestamp(facts.started_at, "facts started_at")
   timestamp(facts.completed_at, "facts completed_at")
@@ -275,6 +337,7 @@ export function captureResidentShadowOutcome({
   preflight,
   readTrustedProducerFacts,
   trustedAuthorityProof,
+  trustedScopedAuthorityProof,
 }) {
   validatePreflight(preflight)
   const root = realRepositoryRoot(repositoryRoot)
@@ -282,8 +345,8 @@ export function captureResidentShadowOutcome({
   const eligible = receipt.eligible_nodes.find((entry) => entry.node_id === preflight.resident_node_id && entry.eligible === true)
   if (!eligible || eligible.freshness.expires_at !== preflight.fresh_until) fail("preflight no longer binds the exact eligible receipt entry")
   const currentAuthority = loadActiveAuthority(
-    root, preflight.work_order_id, preflight.resident_node_id,
-    preflight.preflight_checked_at, trustedAuthorityProof,
+    root, preflight.work_order_id, receipt.workload, preflight.resident_node_id,
+    preflight.preflight_checked_at, trustedAuthorityProof, trustedScopedAuthorityProof,
   )
   if (canonicalizeJcs(currentAuthority.authority) !== canonicalizeJcs(preflight.authority)
     || currentAuthority.authority_registry_sha256 !== preflight.authority_registry_sha256
@@ -308,6 +371,15 @@ export function captureResidentShadowOutcome({
   if (facts.authority_reference !== preflight.authority.reference || facts.authority_status !== "COMPLIANT") {
     fail("trusted producer facts do not bind a compliant reviewed authority outcome")
   }
+  const scoped = preflight.authority.schema_version === "0.2-shadow-scoped-authority-settlement"
+  if (scoped && (facts.schema_version !== "0.2-resident-shadow-producer-facts"
+    || facts.authority_scope_sha256 !== preflight.authority.authority_scope_sha256
+    || facts.authority_activation_commit !== preflight.authority.authority_activation_commit)) {
+    fail("trusted producer facts do not bind the exact scoped authority")
+  }
+  if (!scoped && facts.schema_version !== "0.1-resident-shadow-producer-facts") {
+    fail("legacy producer facts cannot claim scoped authority")
+  }
   const startedAt = timestamp(facts.started_at, "facts started_at")
   const completedAt = timestamp(facts.completed_at, "facts completed_at")
   const authorityCheckedAt = timestamp(facts.authority_checked_at, "facts authority_checked_at")
@@ -326,11 +398,15 @@ export function captureResidentShadowOutcome({
       checked_at: facts.authority_checked_at,
       reference: facts.authority_reference,
       status: facts.authority_status,
+      ...(scoped ? {
+        scope_sha256: facts.authority_scope_sha256,
+        activation_commit: facts.authority_activation_commit,
+      } : {}),
     },
     completed_at: facts.completed_at,
     resource_observations: facts.resource_observations.map((entry) => ({ ...entry })),
     result: facts.result,
-    schema_version: "0.1-shadow-outcome-evidence",
+    schema_version: scoped ? "0.2-shadow-outcome-evidence" : "0.1-shadow-outcome-evidence",
     started_at: facts.started_at,
     status: facts.status,
     work_order_id: facts.work_order_id,
@@ -501,6 +577,7 @@ export function materializeResidentShadowCandidate({
   reviewerIdentity,
   trustedClock,
   trustedAuthorityProof,
+  trustedScopedAuthorityProof,
   proveReviewCommitOrder,
 }) {
   const root = realRepositoryRoot(repositoryRoot)
@@ -510,9 +587,11 @@ export function materializeResidentShadowCandidate({
   }
   identifier(reviewerIdentity, "reviewer_identity")
   if (reviewerIdentity === capture.preflight.producer_lane) fail("reviewer identity must be independent from the producer lane")
+  const receipt = readRetainedBinding(root, retainedEvidence.receipt, "retained receipt")
+  const receiptValue = parseReceipt(receipt.bytes, receipt.sha256)
   const currentAuthority = loadActiveAuthority(
-    root, capture.preflight.work_order_id, capture.preflight.resident_node_id,
-    capture.preflight.preflight_checked_at, trustedAuthorityProof,
+    root, capture.preflight.work_order_id, receiptValue.workload, capture.preflight.resident_node_id,
+    capture.preflight.preflight_checked_at, trustedAuthorityProof, trustedScopedAuthorityProof,
   )
   if (canonicalizeJcs(currentAuthority.authority) !== canonicalizeJcs(capture.preflight.authority)
     || currentAuthority.authority_registry_sha256 !== capture.preflight.authority_registry_sha256) {
@@ -525,12 +604,13 @@ export function materializeResidentShadowCandidate({
     || commitOrder.review_commit !== reviewCommit || commitOrder.execution_is_strict_ancestor !== true) {
     fail("trusted-main proof does not establish strict execution-before-review commit order")
   }
-  const receipt = readRetainedBinding(root, retainedEvidence.receipt, "retained receipt")
   const delivery = readRetainedBinding(root, retainedEvidence.delivery_record, "retained delivery")
   const outcome = readRetainedBinding(root, retainedEvidence.outcome_evidence, "retained outcome")
   const review = readRetainedBinding(root, reviewEvidence, "independent review evidence")
+  const scoped = capture.preflight.authority.schema_version === "0.2-shadow-scoped-authority-settlement"
   if (!review.bytes.toString("utf8").includes(capture.preflight.work_order_id)
     || !review.bytes.toString("utf8").includes(executionCommit)
+    || (scoped && !review.bytes.toString("utf8").includes(capture.preflight.authority.authority_scope_sha256))
     || !new RegExp(`^REVIEWER\\s*:\\s*${reviewerIdentity.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "im").test(review.bytes.toString("utf8"))
     || !/^VERDICT\s*:\s*PASS\s*$/im.test(review.bytes.toString("utf8"))) {
     fail("independent review does not bind the Work Order, execution commit, reviewer, and PASS verdict")
@@ -543,7 +623,7 @@ export function materializeResidentShadowCandidate({
   }
   const diverged = capture.preflight.recommendation_node_id !== capture.preflight.resident_node_id
   const candidate = {
-    schema_version: "0.1-shadow-admission-candidate",
+    schema_version: scoped ? "0.2-shadow-admission-candidate" : "0.1-shadow-admission-candidate",
     candidate_id: retainedEvidence.candidate_id,
     work_order_id: capture.preflight.work_order_id,
     workload_id: capture.preflight.workload_id,
@@ -553,7 +633,7 @@ export function materializeResidentShadowCandidate({
     delivery_record: { path: delivery.path, sha256: delivery.sha256 },
     outcome_evidence: { path: outcome.path, sha256: outcome.sha256 },
     review_evidence: { path: review.path, sha256: review.sha256 },
-    authority: {
+    authority: scoped ? structuredClone(capture.preflight.authority) : {
       reference: capture.preflight.authority.reference,
       allowed_canonical_nodes: [...capture.preflight.authority.allowed_canonical_nodes].sort(),
       valid_from: capture.preflight.authority.valid_from,
@@ -578,7 +658,7 @@ export function materializeResidentShadowCandidate({
   }
 }
 
-export function compileReviewedResidentShadowCandidate({ candidate, repositoryRoot, reviewProof }) {
+export function compileReviewedResidentShadowCandidate({ candidate, repositoryRoot, reviewProof, scopedAuthorityProof }) {
   if (typeof reviewProof !== "function") fail("an injected trusted-main admission proof is required")
-  return compileShadowAdmission({ candidate, repositoryRoot, reviewProof })
+  return compileShadowAdmission({ candidate, repositoryRoot, reviewProof, scopedAuthorityProof })
 }

@@ -92,6 +92,57 @@ function expectRejected(action: () => unknown, detail: RegExp) {
 }
 
 describe("Execution Fabric shadow evidence trust registries", () => {
+  it("settles scoped 0.2 outcome evidence only against the exact trusted authority settlement", () => {
+    const scopedValue = {
+      ...artifactValue,
+      schema_version: "0.2-shadow-outcome-evidence",
+      authority_outcome: {
+        ...artifactValue.authority_outcome,
+        scope_sha256: "d".repeat(64),
+        activation_commit: "e".repeat(40),
+      },
+    }
+    const scopedBytes = Buffer.from(`${canonicalizeJcs(scopedValue)}\n`)
+    const scopedSha = crypto.createHash("sha256").update(scopedBytes).digest("hex")
+    const outcomes = outcomeRegistry()
+    outcomes.entries[0].artifact_sha256 = scopedSha
+    const settlement = {
+      schema_version: "0.2-shadow-scoped-authority-settlement",
+      status: "AUTHORIZED",
+      reference: artifactValue.authority_outcome.reference,
+      work_order_id: artifactValue.work_order_id,
+      workload_id: "interactive-development",
+      node_id: artifactValue.actual_target_node,
+      checked_at: artifactValue.authority_outcome.checked_at,
+      authority_artifact_sha256: "f".repeat(64),
+      authority_scope_sha256: "d".repeat(64),
+      scope_review_commit: "a".repeat(40),
+      authority_activation_commit: "e".repeat(40),
+      activation_entry_sha256: "1".repeat(64),
+      valid_from: "2026-07-04T14:00:00.000Z",
+      expires_at: "2026-07-04T15:00:00.000Z",
+    }
+    const input = {
+      artifactBytes: scopedBytes,
+      expectedArtifactSha256: scopedSha,
+      retainedSourceSha256,
+      outcomeRegistry: outcomes,
+      authorityRegistry: null,
+      scopedAuthoritySettlement: settlement,
+    }
+    expect(validateShadowEvidenceTrust(input)).toMatchObject({
+      schema_version: "0.2-shadow-evidence-trust-validation",
+      authority_scope_sha256: "d".repeat(64),
+      authority_activation_commit: "e".repeat(40),
+    })
+    expect(() => validateShadowEvidenceTrust({
+      ...input,
+      scopedAuthoritySettlement: { ...settlement, authority_scope_sha256: "2".repeat(64) },
+    })).toThrow(/does not bind the exact outcome authority/)
+    expect(() => validateShadowEvidenceTrust({ ...input, scopedAuthoritySettlement: null }))
+      .toThrow(/scoped_authority_settlement must be an object/)
+  })
+
   it("loads the reviewed production admission and rejects an unrelated fixture outcome", () => {
     expect(DEFAULT_SHADOW_OUTCOME_REGISTRY).toMatch(/shadow-outcome-registry\.json$/)
     expect(DEFAULT_SHADOW_AUTHORITY_REGISTRY).toMatch(/shadow-authority-registry\.json$/)

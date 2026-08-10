@@ -107,14 +107,17 @@ function proveReviewedCommit({ repositoryRoot, reviewedCommit, artifacts, predec
   }
 }
 
-export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof = proveReviewedCommit }) {
+export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof = proveReviewedCommit, scopedAuthorityProof = null }) {
   safe(candidate)
   exact(candidate, [
     "schema_version", "candidate_id", "work_order_id", "workload_id", "producer_lane",
     "outcome_kind", "receipt", "delivery_record", "outcome_evidence", "review_evidence",
     "authority", "execution_commit", "review_commit", "reviewer_identity", "recorded_at", "divergence_reasons",
   ], "candidate")
-  if (candidate.schema_version !== "0.1-shadow-admission-candidate") fail("candidate schema_version is unsupported")
+  if (!new Set(["0.1-shadow-admission-candidate", "0.2-shadow-admission-candidate"]).has(candidate.schema_version)) {
+    fail("candidate schema_version is unsupported")
+  }
+  const scoped = candidate.schema_version === "0.2-shadow-admission-candidate"
   if (!new Set(["MANUAL_KNOWN_SAFE", "RESIDENT_HERMES_REVIEWED"]).has(candidate.outcome_kind)) fail("outcome_kind is not eligible for genuine admission")
   id(candidate.candidate_id, "candidate.candidate_id")
   const workOrder = id(candidate.work_order_id, "candidate.work_order_id")
@@ -143,17 +146,38 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   if (outcomeStart >= timestamp(eligibleActual.freshness.expires_at, "actual target evidence expiry")) {
     fail("outcome execution began at or after actual target evidence expiry")
   }
-  exact(candidate.authority, ["reference", "allowed_canonical_nodes", "valid_from", "expires_at", "reviewed_commit"], "candidate.authority")
+  if (scoped) {
+    exact(candidate.authority, [
+      "activation_entry_sha256", "authority_activation_commit", "authority_artifact_sha256",
+      "authority_scope_sha256", "checked_at", "expires_at", "node_id", "reference",
+      "schema_version", "scope_review_commit", "status", "valid_from", "work_order_id", "workload_id",
+    ], "candidate.authority")
+    if (candidate.authority.schema_version !== "0.2-shadow-scoped-authority-settlement"
+      || candidate.authority.status !== "AUTHORIZED") fail("candidate scoped authority is not AUTHORIZED")
+    if (typeof scopedAuthorityProof !== "function") fail("an independent scoped authority proof is required")
+    const proven = scopedAuthorityProof(structuredClone(candidate.authority))
+    if (canonicalizeJcs(proven) !== canonicalizeJcs(candidate.authority)) fail("independent scoped authority proof does not match candidate")
+    if (candidate.authority.work_order_id !== workOrder || candidate.authority.workload_id !== workload
+      || candidate.authority.node_id !== actualNode) fail("scoped authority does not bind candidate Work Order, workload, and node")
+    if (outcomeValidation.schema_version !== "0.2-shadow-outcome-evidence-validation"
+      || outcomeValidation.authority_outcome.scope_sha256 !== candidate.authority.authority_scope_sha256
+      || outcomeValidation.authority_outcome.activation_commit !== candidate.authority.authority_activation_commit) {
+      fail("scoped outcome does not bind the candidate authority")
+    }
+  } else {
+    exact(candidate.authority, ["reference", "allowed_canonical_nodes", "valid_from", "expires_at", "reviewed_commit"], "candidate.authority")
+    if (outcomeValidation.schema_version !== "0.1-shadow-outcome-evidence-validation") fail("legacy admission cannot accept scoped outcome evidence")
+    if (!Array.isArray(candidate.authority.allowed_canonical_nodes) || !candidate.authority.allowed_canonical_nodes.includes(actualNode)) fail("reviewed authority does not include actual target")
+    if (candidate.authority.allowed_canonical_nodes.some((node) => !NODES.has(node))) fail("reviewed authority contains a noncanonical node")
+  }
   id(candidate.authority.reference, "candidate.authority.reference")
-  if (!Array.isArray(candidate.authority.allowed_canonical_nodes) || !candidate.authority.allowed_canonical_nodes.includes(actualNode)) fail("reviewed authority does not include actual target")
-  if (candidate.authority.allowed_canonical_nodes.some((node) => !NODES.has(node))) fail("reviewed authority contains a noncanonical node")
   const validFrom = timestamp(candidate.authority.valid_from, "candidate.authority.valid_from")
   const expiresAt = timestamp(candidate.authority.expires_at, "candidate.authority.expires_at")
   const recordedAt = timestamp(candidate.recorded_at, "candidate.recorded_at")
   if (recordedAt < receiptTime) fail("admission predates the placement recommendation")
   if (validFrom > Date.parse(outcomeValidation.chronology.started_at) || expiresAt < Date.parse(outcomeValidation.chronology.completed_at)) fail("reviewed authority does not cover outcome chronology")
   if (recordedAt < Date.parse(outcomeValidation.chronology.completed_at)) fail("admission predates outcome completion")
-  if (!COMMIT.test(candidate.authority.reviewed_commit)) fail("reviewed_commit must be a full lowercase Git commit")
+  if (!scoped && !COMMIT.test(candidate.authority.reviewed_commit)) fail("reviewed_commit must be a full lowercase Git commit")
   if (!COMMIT.test(candidate.execution_commit)) fail("execution_commit must be a full lowercase Git commit")
   if (!COMMIT.test(candidate.review_commit)) fail("review_commit must be a full lowercase Git commit")
   if (candidate.execution_commit === candidate.review_commit) fail("review commit must be distinct from the execution commit")
@@ -167,6 +191,7 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   if (diverged !== candidate.divergence_reasons.includes("MANUAL_TARGET_DIFFERS_FROM_RECOMMENDATION")) fail("target divergence classification does not match receipt and outcome")
   const reviewText = review.bytes.toString("utf8")
   if (!reviewText.includes(workOrder) || !reviewText.includes(candidate.execution_commit)
+    || (scoped && !reviewText.includes(candidate.authority.authority_scope_sha256))
     || !new RegExp(`^REVIEWER\\s*:\\s*${candidate.reviewer_identity.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "im").test(reviewText)
     || !/^VERDICT\s*:\s*PASS\s*$/im.test(reviewText)) {
     fail("review evidence does not bind Work Order, execution commit, reviewer, and PASS verdict")
@@ -209,7 +234,9 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
     registry_entries: {
       receipt: { receipt_sha256: receiptSha256, work_order_id: workOrder, workload_id: workload, decision_input_sha256: receipt.decision_input_sha256, evidence_snapshot: receipt.evidence_snapshot, reviewed_commit: candidate.execution_commit, status: "TRUSTED" },
       outcome: { artifact_sha256: candidate.outcome_evidence.sha256, work_order_id: workOrder, actual_target_node: actualNode, retained_source_sha256: candidate.delivery_record.sha256, authority_reference: candidate.authority.reference, reviewed_commit: candidate.execution_commit, status: "ACTIVE" },
-      authority: { reference: candidate.authority.reference, work_order_id: workOrder, allowed_canonical_nodes: [...candidate.authority.allowed_canonical_nodes].sort(), valid_from: candidate.authority.valid_from, expires_at: candidate.authority.expires_at, reviewed_commit: candidate.authority.reviewed_commit, status: "ACTIVE" },
+      authority: scoped
+        ? { reference: candidate.authority.reference, work_order_id: workOrder, authority_scope_sha256: candidate.authority.authority_scope_sha256, authority_artifact_sha256: candidate.authority.authority_artifact_sha256, scope_review_commit: candidate.authority.scope_review_commit, authority_activation_commit: candidate.authority.authority_activation_commit, activation_entry_sha256: candidate.authority.activation_entry_sha256, status: "TRUSTED_EXISTING_ACTIVATION" }
+        : { reference: candidate.authority.reference, work_order_id: workOrder, allowed_canonical_nodes: [...candidate.authority.allowed_canonical_nodes].sort(), valid_from: candidate.authority.valid_from, expires_at: candidate.authority.expires_at, reviewed_commit: candidate.authority.reviewed_commit, status: "ACTIVE" },
     },
     evidence: { review_path: review.normalized, review_sha256: candidate.review_evidence.sha256, producer_lane: candidate.producer_lane, outcome_kind: candidate.outcome_kind, commit_proof: commitProof, review_commit_proof: reviewCommitProof },
     safety: { observation_only: true, job_launched: false, scheduler_activated: false, dispatch_authority_granted: false, authority_mutated: false, remote_accessed: false, shell_executed: false },

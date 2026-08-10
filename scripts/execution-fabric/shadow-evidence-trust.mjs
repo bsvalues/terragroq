@@ -228,6 +228,7 @@ export function validateShadowEvidenceTrust({
   retainedSourceSha256,
   outcomeRegistry,
   authorityRegistry,
+  scopedAuthoritySettlement = null,
 }) {
   let outcomeEvidence
   try {
@@ -240,8 +241,9 @@ export function validateShadowEvidenceTrust({
   }
   digest(retainedSourceSha256, "retained_source_sha256")
   const outcomes = normalizeOutcomeRegistry(outcomeRegistry)
-  const authorities = normalizeAuthorityRegistry(authorityRegistry)
-  if (outcomes.status !== "VALID" || authorities.status !== "VALID") {
+  const scoped = outcomeEvidence.schema_version === "0.2-shadow-outcome-evidence-validation"
+  const authorities = scoped ? null : normalizeAuthorityRegistry(authorityRegistry)
+  if (outcomes.status !== "VALID" || (!scoped && authorities.status !== "VALID")) {
     fail("empty or invalid trust registries cannot settle outcome evidence")
   }
 
@@ -252,6 +254,43 @@ export function validateShadowEvidenceTrust({
   if (outcomeEntry.retained_source_sha256 !== retainedSourceSha256) fail("outcome retained-source binding mismatch")
   if (outcomeEntry.authority_reference !== outcomeEvidence.authority_outcome.reference) {
     fail("outcome authority-reference binding mismatch")
+  }
+
+  if (scoped) {
+    exactKeys(scopedAuthoritySettlement, [
+      "activation_entry_sha256", "authority_activation_commit", "authority_artifact_sha256",
+      "authority_scope_sha256", "checked_at", "expires_at", "node_id", "reference",
+      "schema_version", "scope_review_commit", "status", "valid_from", "work_order_id", "workload_id",
+    ], "scoped_authority_settlement")
+    if (scopedAuthoritySettlement.schema_version !== "0.2-shadow-scoped-authority-settlement"
+      || scopedAuthoritySettlement.status !== "AUTHORIZED") fail("scoped authority settlement is not AUTHORIZED")
+    if (scopedAuthoritySettlement.reference !== outcomeEvidence.authority_outcome.reference
+      || scopedAuthoritySettlement.work_order_id !== outcomeEvidence.work_order_id
+      || scopedAuthoritySettlement.node_id !== outcomeEvidence.actual_target_node
+      || scopedAuthoritySettlement.authority_scope_sha256 !== outcomeEvidence.authority_outcome.scope_sha256
+      || scopedAuthoritySettlement.authority_activation_commit !== outcomeEvidence.authority_outcome.activation_commit
+      || scopedAuthoritySettlement.checked_at !== outcomeEvidence.authority_outcome.checked_at) {
+      fail("scoped authority settlement does not bind the exact outcome authority")
+    }
+    return {
+      schema_version: "0.2-shadow-evidence-trust-validation",
+      status: "TRUSTED",
+      observation_only: true,
+      artifact_sha256: outcomeEvidence.artifact_sha256,
+      retained_source_sha256: retainedSourceSha256,
+      work_order_id: outcomeEvidence.work_order_id,
+      actual_target_node: outcomeEvidence.actual_target_node,
+      authority_reference: scopedAuthoritySettlement.reference,
+      authority_scope_sha256: scopedAuthoritySettlement.authority_scope_sha256,
+      authority_artifact_sha256: scopedAuthoritySettlement.authority_artifact_sha256,
+      scope_review_commit: scopedAuthoritySettlement.scope_review_commit,
+      authority_activation_commit: scopedAuthoritySettlement.authority_activation_commit,
+      activation_entry_sha256: scopedAuthoritySettlement.activation_entry_sha256,
+      outcome_reviewed_commit: outcomeEntry.reviewed_commit,
+      dispatch_allowed: false,
+      execution_authorized: false,
+      remote_systems_modified: false,
+    }
   }
 
   const authorityEntry = authorities.entries.find((entry) => entry.reference === outcomeEntry.authority_reference)
