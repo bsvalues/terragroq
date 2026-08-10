@@ -1,0 +1,13 @@
+{
+  "schema_version": "0.1-bounded-dispatch-runtime-error",
+  "status": "FAILED_CLOSED",
+  "detail": "FABRIC_BOUNDED_DISPATCH_INVALID: EXPECTED_MARKER_MISSING: result does not contain the exact expected marker",
+  "claim_id": "claim-829e0f41479c26770b1b1de2",
+  "runtime_lease_id": "lease-e749e489e80e7270c1c1f472",
+  "dispatch_attempted": true,
+  "runtime_lease_released": true,
+  "dispatch_allowed": false,
+  "scheduler_activated": false,
+  "autonomous_dispatch": false,
+  "silent_replacement": false
+}

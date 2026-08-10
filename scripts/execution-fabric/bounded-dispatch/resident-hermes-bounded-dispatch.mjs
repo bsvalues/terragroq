@@ -511,7 +511,16 @@ export async function executeResidentHermesBoundedDispatch({
     if (typeof response !== "string" || Buffer.byteLength(response, "utf8") > request.limits.max_response_bytes) {
       fail("RESULT_INVALID", "loopback model result is missing or exceeds the response ceiling")
     }
-    if (!response.includes(request.input.expected_marker)) fail("EXPECTED_MARKER_MISSING", "result does not contain the exact expected marker")
+    if (!response.includes(request.input.expected_marker)) {
+      const markerError = new BoundedDispatchError("EXPECTED_MARKER_MISSING", "result does not contain the exact expected marker")
+      markerError.outputEvidence = {
+        sha256: sha256(Buffer.from(response, "utf8")),
+        byte_length: Buffer.byteLength(response, "utf8"),
+        expected_marker: request.input.expected_marker,
+        expected_marker_observed: false,
+      }
+      throw markerError
+    }
     const completedAt = timestamp(clock(), "trusted completion clock")
     if (Date.parse(completedAt) < Date.parse(startedAt)
       || Date.parse(completedAt) >= Date.parse(rechecked.preparation.valid_until)) {
