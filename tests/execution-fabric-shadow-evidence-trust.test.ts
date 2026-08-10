@@ -37,6 +37,17 @@ const artifactBytes = Buffer.from(`${canonicalizeJcs(artifactValue)}\n`)
 const artifactSha256 = crypto.createHash("sha256").update(artifactBytes).digest("hex")
 const retainedSourceSha256 = "b".repeat(64)
 const reviewedCommit = "c".repeat(40)
+const authorityScope = {
+  workload_id: "fixture-workload",
+  risk_class: "R0",
+  task_template_id: "fixture-read-only-v1",
+  repository_scope: ["bsvalues/terragroq"],
+  environment_scope: ["fixture-owned-workspace"],
+  allowed_actions: ["read-metadata"],
+  forbidden_actions: ["inspect-secrets", "mutate-state"],
+  data_classification: "non-sensitive-only",
+  owner_decision_condition: "new-authority-boundary-only",
+}
 
 function outcomeRegistry(overrides: JsonObject = {}): JsonObject {
   return {
@@ -63,6 +74,7 @@ function authorityRegistry(overrides: JsonObject = {}): JsonObject {
       reference: "authority-local-omen-manual-v1",
       work_order_id: "WO-LOCAL-107",
       allowed_canonical_nodes: ["omen"],
+      authority_scope: structuredClone(authorityScope),
       valid_from: "2026-07-04T14:00:00.000Z",
       expires_at: "2026-07-04T15:00:00.000Z",
       reviewed_commit: reviewedCommit,
@@ -77,6 +89,7 @@ function trust(overrides: JsonObject = {}) {
     artifactBytes,
     expectedArtifactSha256: artifactSha256,
     retainedSourceSha256,
+    workloadId: authorityScope.workload_id,
     outcomeRegistry: outcomeRegistry(),
     authorityRegistry: authorityRegistry(),
     ...overrides,
@@ -217,6 +230,7 @@ describe("Execution Fabric shadow evidence trust registries", () => {
       artifactBytes: azureBytes,
       expectedArtifactSha256: azureSha256,
       retainedSourceSha256,
+      workloadId: authorityScope.workload_id,
       outcomeRegistry: outcome,
       authorityRegistry: authority,
     }).actual_target_node).toBe("azure")
@@ -234,6 +248,26 @@ describe("Execution Fabric shadow evidence trust registries", () => {
     const expired = authorityRegistry()
     expired.entries[0].expires_at = artifactValue.authority_outcome.checked_at
     expectRejected(() => trust({ authorityRegistry: expired }), /outside the reviewed validity window/)
+  })
+
+  it("binds authority to the exact workload and executable scope", () => {
+    expectRejected(() => trust({ workloadId: "different-workload" }), /authority workload binding mismatch/)
+
+    const missingScope = authorityRegistry()
+    delete missingScope.entries[0].authority_scope
+    expectRejected(() => validateShadowAuthorityRegistry(missingScope), /must contain exactly/)
+
+    const extraScope = authorityRegistry()
+    extraScope.entries[0].authority_scope.unreviewed = "value"
+    expectRejected(() => validateShadowAuthorityRegistry(extraScope), /must contain exactly/)
+
+    const duplicateActions = authorityRegistry()
+    duplicateActions.entries[0].authority_scope.allowed_actions = ["read-metadata", "read-metadata"]
+    expectRejected(() => validateShadowAuthorityRegistry(duplicateActions), /contains duplicates/)
+
+    const unsortedActions = authorityRegistry()
+    unsortedActions.entries[0].authority_scope.allowed_actions = ["read-metadata", "inspect-metadata"]
+    expectRejected(() => validateShadowAuthorityRegistry(unsortedActions), /must be sorted/)
   })
 
   it("rejects every outcome registry semantic binding mismatch", () => {

@@ -12,7 +12,15 @@ shadow-placement set after a fresh recommendation exists for each Work Order.
 - Workload: one fixed, benign local-LLM inference through the existing HERMES loopback service
 - Valid from: `2026-08-10T14:42:00.000Z`
 - Expires at: `2026-08-11T02:42:00.000Z`
-- Authority source commit: `ace709f88752d1e270c3d369b14259c9872e89e7`
+- Authority source commit: `b70d1182e315064c9e0154c2c2862b155117947e`
+- Risk: `R0`
+- Task template: `existing-loopback-llm-inference-v1`
+- Repository scope: `bsvalues/terragroq`
+- Environment scope: `hermes-loopback-ollama`
+- Allowed actions: invoke the existing loopback LLM; read one bounded response
+- Forbidden actions: protected-data access, secret inspection, model-inventory change, runtime mutation
+- Data class: non-sensitive only
+- Owner decision condition: a new authority boundary only
 
 The prompt may contain no protected, county, PACS, production, credential, or repository-secret data.
 The task may not change model inventory, runtime configuration, host configuration, or network
@@ -25,7 +33,15 @@ exposure.
 - Workload: one read-only authoritative-state metadata query against the approved Forge root
 - Valid from: `2026-08-10T14:42:00.000Z`
 - Expires at: `2026-08-11T02:42:00.000Z`
-- Authority source commit: `ace709f88752d1e270c3d369b14259c9872e89e7`
+- Authority source commit: `b70d1182e315064c9e0154c2c2862b155117947e`
+- Risk: `R0`
+- Task template: `forge-root-metadata-query-v1`
+- Repository scope: `bsvalues/terragroq`
+- Environment scope: `atlas-forge-root-read-only`
+- Allowed actions: read Forge-root metadata; report aggregate metadata
+- Forbidden actions: protected-content access, secret inspection, database mutation, filesystem mutation
+- Data class: non-sensitive metadata only
+- Owner decision condition: a new authority boundary only
 
 The task may query only bounded, read-only Forge metadata exposed by the approved Forge root; it is
 not authority for arbitrary filesystem inspection. It may not read protected file contents, inspect
@@ -39,6 +55,9 @@ credentials, access county or PACS data, write state, mutate a database, or chan
 - AEGIS compute authority granted: `false`
 - AEGIS storage, NAS, or backup authority granted: `false`
 - Remote infrastructure mutation authority: `false`
+
+The executable authority registry binds these exact scopes and rejects workload mismatch, missing or
+extra scope fields, malformed scope values, duplicate scope values, and unsorted action/scope sets.
 
 These admissions are prerequisites for genuine observations, not execution receipts or Phase 2 pass
 claims. Each execution may begin only after its own fresh Phase 1 recommendation is retained. Receipt

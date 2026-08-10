@@ -11,6 +11,8 @@ import { validateShadowOutcomeEvidence } from "../shadow-outcome-evidence.mjs"
 const SHA256 = /^[a-f0-9]{64}$/
 const COMMIT = /^[a-f0-9]{40}$/
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{1,255}$/
+const SAFE_AUTHORITY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const SAFE_SCOPE_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/
 const NODES = new Set(["omen", "hermes-node", "atlas", "aegis", "azure"])
 const DIVERGENCE = new Set([
   "MANUAL_TARGET_DIFFERS_FROM_RECOMMENDATION",
@@ -39,6 +41,34 @@ function id(value, label) {
   if (typeof value !== "string" || !SAFE_ID.test(value)) fail(`${label} must be a safe identifier`)
   return value
 }
+function sortedScopeValues(value, label) {
+  if (!Array.isArray(value) || value.length === 0) fail(`${label} must be a non-empty array`)
+  if (value.some((entry) => typeof entry !== "string" || !SAFE_SCOPE_VALUE.test(entry))) fail(`${label} must contain only safe scope values`)
+  if (new Set(value).size !== value.length) fail(`${label} contains duplicates`)
+  if (JSON.stringify(value) !== JSON.stringify([...value].sort())) fail(`${label} must be sorted`)
+  return [...value]
+}
+function authorityId(value, label) {
+  if (typeof value !== "string" || !SAFE_AUTHORITY_ID.test(value)) fail(`${label} must be a safe identifier`)
+  return value
+}
+function authorityScope(value, label) {
+  exact(value, [
+    "workload_id", "risk_class", "task_template_id", "repository_scope", "environment_scope",
+    "allowed_actions", "forbidden_actions", "data_classification", "owner_decision_condition",
+  ], label)
+  return {
+    workload_id: authorityId(value.workload_id, `${label}.workload_id`),
+    risk_class: authorityId(value.risk_class, `${label}.risk_class`),
+    task_template_id: authorityId(value.task_template_id, `${label}.task_template_id`),
+    repository_scope: sortedScopeValues(value.repository_scope, `${label}.repository_scope`),
+    environment_scope: sortedScopeValues(value.environment_scope, `${label}.environment_scope`),
+    allowed_actions: sortedScopeValues(value.allowed_actions, `${label}.allowed_actions`),
+    forbidden_actions: sortedScopeValues(value.forbidden_actions, `${label}.forbidden_actions`),
+    data_classification: authorityId(value.data_classification, `${label}.data_classification`),
+    owner_decision_condition: authorityId(value.owner_decision_condition, `${label}.owner_decision_condition`),
+  }
+}
 function digest(value, label) {
   if (typeof value !== "string" || !SHA256.test(value)) fail(`${label} must be lowercase SHA-256 hex`)
   return value
@@ -57,7 +87,8 @@ function safe(value, label = "candidate") {
   if (typeof value === "string" && SECRET.test(value)) fail(`${label} contains secret-like material`)
   if (!value || typeof value !== "object") return
   for (const [key, child] of Object.entries(value)) {
-    if (UNSAFE_KEY.test(key)) fail(`${label}.${key} is not permitted in observation-only admission`)
+    const isAuthorityEnvironmentScope = label === "candidate.authority.authority_scope" && key === "environment_scope"
+    if (UNSAFE_KEY.test(key) && !isAuthorityEnvironmentScope) fail(`${label}.${key} is not permitted in observation-only admission`)
     safe(child, `${label}.${key}`)
   }
 }
@@ -137,8 +168,12 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
   if (outcomeStart >= timestamp(eligibleActual.freshness.expires_at, "actual target evidence expiry")) {
     fail("outcome execution began at or after actual target evidence expiry")
   }
-  exact(candidate.authority, ["reference", "allowed_canonical_nodes", "valid_from", "expires_at", "reviewed_commit"], "candidate.authority")
+  exact(candidate.authority, ["reference", "allowed_canonical_nodes", "authority_scope", "valid_from", "expires_at", "reviewed_commit"], "candidate.authority")
   id(candidate.authority.reference, "candidate.authority.reference")
+  const validatedAuthorityScope = authorityScope(candidate.authority.authority_scope, "candidate.authority.authority_scope")
+  if (validatedAuthorityScope.workload_id !== workload || validatedAuthorityScope.workload_id !== receipt.workload.id) {
+    fail("authority_scope workload_id must match candidate workload_id and receipt workload.id")
+  }
   if (!Array.isArray(candidate.authority.allowed_canonical_nodes) || !candidate.authority.allowed_canonical_nodes.includes(actualNode)) fail("reviewed authority does not include actual target")
   if (candidate.authority.allowed_canonical_nodes.some((node) => !NODES.has(node))) fail("reviewed authority contains a noncanonical node")
   const validFrom = timestamp(candidate.authority.valid_from, "candidate.authority.valid_from")
@@ -194,7 +229,7 @@ export function compileShadowAdmission({ candidate, repositoryRoot, reviewProof 
     registry_entries: {
       receipt: { receipt_sha256: receiptSha256, work_order_id: workOrder, workload_id: workload, decision_input_sha256: receipt.decision_input_sha256, evidence_snapshot: receipt.evidence_snapshot, reviewed_commit: candidate.authority.reviewed_commit, status: "TRUSTED" },
       outcome: { artifact_sha256: candidate.outcome_evidence.sha256, work_order_id: workOrder, actual_target_node: actualNode, retained_source_sha256: candidate.delivery_record.sha256, authority_reference: candidate.authority.reference, reviewed_commit: candidate.authority.reviewed_commit, status: "ACTIVE" },
-      authority: { reference: candidate.authority.reference, work_order_id: workOrder, allowed_canonical_nodes: [...candidate.authority.allowed_canonical_nodes].sort(), valid_from: candidate.authority.valid_from, expires_at: candidate.authority.expires_at, reviewed_commit: candidate.authority.reviewed_commit, status: "ACTIVE" },
+      authority: { reference: candidate.authority.reference, work_order_id: workOrder, allowed_canonical_nodes: [...candidate.authority.allowed_canonical_nodes].sort(), authority_scope: validatedAuthorityScope, valid_from: candidate.authority.valid_from, expires_at: candidate.authority.expires_at, reviewed_commit: candidate.authority.reviewed_commit, status: "ACTIVE" },
     },
     evidence: { review_path: review.normalized, review_sha256: candidate.review_evidence.sha256, producer_lane: candidate.producer_lane, outcome_kind: candidate.outcome_kind, commit_proof: commitProof, review_commit_proof: reviewCommitProof },
     safety: { observation_only: true, job_launched: false, scheduler_activated: false, dispatch_authority_granted: false, authority_mutated: false, remote_accessed: false, shell_executed: false },

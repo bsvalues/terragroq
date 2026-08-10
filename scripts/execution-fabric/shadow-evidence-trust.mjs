@@ -7,6 +7,7 @@ import { validateShadowOutcomeEvidence } from "./shadow-outcome-evidence.mjs"
 const SHA256 = /^[a-f0-9]{64}$/
 const GIT_SHA = /^[a-f0-9]{40}$/
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const SAFE_SCOPE_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/
 const CANONICAL_NODES = new Set(["aegis", "atlas", "azure", "hermes-node", "omen"])
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url))
@@ -92,6 +93,37 @@ function canonicalNode(value, label) {
   return value
 }
 
+function scopeValue(value, label) {
+  if (typeof value !== "string" || !SAFE_SCOPE_VALUE.test(value)) fail(`${label} must be a safe scope value`)
+  return value
+}
+
+function sortedScopeValues(value, label) {
+  if (!Array.isArray(value) || value.length === 0) fail(`${label} must be a non-empty array`)
+  const normalized = value.map((entry, index) => scopeValue(entry, `${label}[${index}]`))
+  if (new Set(normalized).size !== normalized.length) fail(`${label} contains duplicates`)
+  if (JSON.stringify(normalized) !== JSON.stringify([...normalized].sort())) fail(`${label} must be sorted`)
+  return normalized
+}
+
+function validateAuthorityScope(scope, label) {
+  exactKeys(scope, [
+    "allowed_actions", "data_classification", "environment_scope", "forbidden_actions",
+    "owner_decision_condition", "repository_scope", "risk_class", "task_template_id", "workload_id",
+  ], label)
+  return {
+    workload_id: identifier(scope.workload_id, `${label}.workload_id`),
+    risk_class: identifier(scope.risk_class, `${label}.risk_class`),
+    task_template_id: identifier(scope.task_template_id, `${label}.task_template_id`),
+    repository_scope: sortedScopeValues(scope.repository_scope, `${label}.repository_scope`),
+    environment_scope: sortedScopeValues(scope.environment_scope, `${label}.environment_scope`),
+    allowed_actions: sortedScopeValues(scope.allowed_actions, `${label}.allowed_actions`),
+    forbidden_actions: sortedScopeValues(scope.forbidden_actions, `${label}.forbidden_actions`),
+    data_classification: identifier(scope.data_classification, `${label}.data_classification`),
+    owner_decision_condition: identifier(scope.owner_decision_condition, `${label}.owner_decision_condition`),
+  }
+}
+
 export function validateShadowOutcomeRegistry(registryInput) {
   const registry = structuredClone(registryInput)
   validateRegistryEnvelope(registry, "0.1-shadow-outcome-registry", "outcome_registry")
@@ -131,7 +163,7 @@ export function validateShadowAuthorityRegistry(registryInput) {
   const entries = registry.entries.map((entry, index) => {
     const label = `authority_registry.entries[${index}]`
     exactKeys(entry, [
-      "allowed_canonical_nodes", "expires_at", "reference", "reviewed_commit", "status",
+      "allowed_canonical_nodes", "authority_scope", "expires_at", "reference", "reviewed_commit", "status",
       "valid_from", "work_order_id",
     ], label)
     const reference = identifier(entry.reference, `${label}.reference`)
@@ -157,6 +189,7 @@ export function validateShadowAuthorityRegistry(registryInput) {
     return {
       reference,
       work_order_id: identifier(entry.work_order_id, `${label}.work_order_id`),
+      authority_scope: validateAuthorityScope(entry.authority_scope, `${label}.authority_scope`),
       allowed_canonical_nodes: allowedCanonicalNodes,
       valid_from: new Date(validFrom).toISOString(),
       expires_at: new Date(expiresAt).toISOString(),
@@ -226,6 +259,7 @@ export function validateShadowEvidenceTrust({
   artifactBytes,
   expectedArtifactSha256,
   retainedSourceSha256,
+  workloadId,
   outcomeRegistry,
   authorityRegistry,
 }) {
@@ -239,6 +273,7 @@ export function validateShadowEvidenceTrust({
     fail(`outcome artifact validation failed: ${error.message}`)
   }
   digest(retainedSourceSha256, "retained_source_sha256")
+  identifier(workloadId, "workload_id")
   const outcomes = normalizeOutcomeRegistry(outcomeRegistry)
   const authorities = normalizeAuthorityRegistry(authorityRegistry)
   if (outcomes.status !== "VALID" || authorities.status !== "VALID") {
@@ -257,6 +292,7 @@ export function validateShadowEvidenceTrust({
   const authorityEntry = authorities.entries.find((entry) => entry.reference === outcomeEntry.authority_reference)
   if (!authorityEntry) fail("authority reference is not present in the reviewed authority registry")
   if (authorityEntry.work_order_id !== outcomeEvidence.work_order_id) fail("authority Work Order binding mismatch")
+  if (authorityEntry.authority_scope.workload_id !== workloadId) fail("authority workload binding mismatch")
   if (!authorityEntry.allowed_canonical_nodes.includes(outcomeEvidence.actual_target_node)) {
     fail("actual target is not allowed by the reviewed authority entry")
   }
