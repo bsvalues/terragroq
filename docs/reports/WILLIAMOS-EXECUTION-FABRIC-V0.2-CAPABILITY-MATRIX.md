@@ -41,9 +41,9 @@ node or compute capability fail.
 - trusted policy maximum TTL: `48 hours`
 - required primary mount: `W4Y0C392 / BACKUP_PRIMARY / 0564b327-74f7-4048-9ec1-8738d09dca79 / /backup-primary`
 - required secondary mount: `6VPAE286 / BACKUP_SECONDARY / ab119332-259b-4714-a274-8add6dbb9351 / /backup-secondary`
-- fresh raw node probe observed at: `2026-08-10T11:04:02.971944Z`
-- reviewed assembly time: `2026-08-10T11:04:02.971Z`
-- reviewed assembled snapshot SHA-256: `F2872FE894B66942A48D91C230F1CF4D5A3EA9884FEB0E1E0137652024F35D4B`
+- fresh raw node probe observed at: `2026-08-10T11:22:22.198642Z`
+- reviewed assembly time: `2026-08-10T11:22:33.724Z`
+- reviewed assembled snapshot SHA-256: `0890E7E36900B420A78BBEB4DDB06A9725AE780414D515922F16C7BD47FDB857`
 - backup/archive expiry: `2026-08-12T06:15:01Z`
 - compute projection: `READY`
 

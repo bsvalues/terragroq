@@ -4,6 +4,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
+import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
 
 type JsonObject = Record<string, unknown>
 
@@ -19,14 +20,19 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
-  if (value !== null && typeof value === "object") {
-    const object = value as JsonObject
-    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`
-  }
-  return JSON.stringify(value)
-}
+describe("RFC 8785 canonical JSON", () => {
+  it("matches fixed ordering, escaping, and ECMAScript number vectors", () => {
+    expect(canonicalizeJcs({
+      z: true,
+      a: "line\n€",
+      n: [333333333.33333329, 1E30, 4.50, 2e-3, 1e-27],
+    })).toBe('{"a":"line\\n€","n":[333333333.3333333,1e+30,4.5,0.002,1e-27],"z":true}')
+  })
+
+  it("rejects non-JSON numeric values", () => {
+    expect(() => canonicalizeJcs({ value: Number.POSITIVE_INFINITY })).toThrow("JCS numbers must be finite")
+  })
+})
 
 function temporaryDirectory(): string {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "execution-fabric-registry-"))
@@ -222,7 +228,7 @@ function capabilitySnapshot(overrides: JsonObject = {}): JsonObject {
     ...overrides,
   }
   const hashInput = clone(snapshot)
-  snapshot.snapshot_sha256 = crypto.createHash("sha256").update(canonicalJson(hashInput)).digest("hex")
+  snapshot.snapshot_sha256 = crypto.createHash("sha256").update(canonicalizeJcs(hashInput)).digest("hex")
   return snapshot
 }
 
@@ -307,7 +313,14 @@ function assemble(
     {
       cwd: repositoryRoot,
       encoding: "utf8",
-      env: { ...process.env, ...(options.nowUtc ? { FABRIC_NOW_UTC: options.nowUtc } : {}) },
+      env: {
+        ...process.env,
+        ...(options.nowUtc ? {
+          NODE_ENV: "test",
+          FABRIC_ALLOW_TEST_CLOCK: "1",
+          FABRIC_NOW_UTC: options.nowUtc,
+        } : {}),
+      },
     },
   )
   const registry = fs.existsSync(outputPath) ? JSON.parse(fs.readFileSync(outputPath, "utf8")) as JsonObject : null
@@ -594,6 +607,10 @@ describe("Execution Fabric AEGIS capability evidence", () => {
     const health = aegisHealth(result)
 
     expect(health.compute).toMatchObject({ state: "READY", reason: "COMPUTE_CAPABILITY_READY" })
+    expect(health.compute).toMatchObject({
+      observed_at: nowUtc,
+      expires_at: "2026-08-10T12:05:00.000Z",
+    })
     expect(health.backup_target).toMatchObject({
       state: "READY",
       reason: "RESTORE_VERIFIED",
@@ -857,6 +874,29 @@ describe("Execution Fabric AEGIS capability evidence", () => {
     }))
 
     expect(health.backup_target).toMatchObject({ state: "FAIL_CLOSED", reason: "CAPABILITY_TTL_EXCEEDS_POLICY" })
+  })
+
+  it("rejects the deterministic clock outside explicit test execution", () => {
+    const root = temporaryDirectory()
+    const outputPath = path.join(root, "snapshot.json")
+    const result = spawnSync(
+      process.execPath,
+      [assemblerPath, "--seed", seedPath, "--out", outputPath],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_ENV: "production",
+          FABRIC_ALLOW_TEST_CLOCK: "0",
+          FABRIC_NOW_UTC: nowUtc,
+        },
+      },
+    )
+
+    expect(result.status).toBe(2)
+    expect(result.stderr).toContain("FABRIC_NOW_UTC is restricted to explicit test execution")
+    expect(fs.existsSync(outputPath)).toBe(false)
   })
 
   it("rejects altered capability bytes against the trusted pin before parsing", () => {

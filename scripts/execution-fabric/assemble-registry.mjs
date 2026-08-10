@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { canonicalizeJcs } from './canonical-json.mjs';
 
 const args = process.argv.slice(2);
 function arg(name, fallback = null) {
@@ -144,14 +145,6 @@ function exactKeys(value, expected, location) {
   const actual = Object.keys(value).sort();
   const wanted = [...expected].sort();
   return JSON.stringify(actual) === JSON.stringify(wanted) ? [] : [`${location}: expected exact keys ${wanted.join(',')}`];
-}
-
-function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value !== null && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function capabilityAxis(state, reason, observedAt = null, expiresAt = null, snapshotSha256 = null, evidenceRef = null) {
@@ -347,7 +340,7 @@ function readCapabilitySnapshot(nodeId, nowMs) {
     if (!/^[a-f0-9]{64}$/.test(snapshot.snapshot_sha256)) invalidCapability('CAPABILITY_HASH_MISMATCH', 'snapshot_sha256 must be lowercase SHA-256');
     const hashInput = { ...snapshot };
     delete hashInput.snapshot_sha256;
-    const calculatedHash = crypto.createHash('sha256').update(canonicalJson(hashInput), 'utf8').digest('hex');
+    const calculatedHash = crypto.createHash('sha256').update(canonicalizeJcs(hashInput), 'utf8').digest('hex');
     if (calculatedHash !== snapshot.snapshot_sha256) invalidCapability('CAPABILITY_HASH_MISMATCH', 'snapshot_sha256 does not match canonical content');
     let storageProof;
     try {
@@ -452,6 +445,11 @@ function isoMs(value) {
 }
 
 const configuredNow = process.env.FABRIC_NOW_UTC;
+const testClockAllowed = process.env.NODE_ENV === 'test' && process.env.FABRIC_ALLOW_TEST_CLOCK === '1';
+if (configuredNow != null && !testClockAllowed) {
+  console.error('FABRIC_REGISTRY_INVALID: FABRIC_NOW_UTC is restricted to explicit test execution');
+  process.exit(2);
+}
 const configuredNowMs = configuredNow == null ? null : rfc3339Ms(configuredNow);
 if (configuredNow != null && configuredNowMs == null) {
   console.error('FABRIC_REGISTRY_INVALID: FABRIC_NOW_UTC must be an RFC3339 date-time');
@@ -570,10 +568,15 @@ function projectAegisCapabilityHealth(node) {
   };
   const computeState = probeReason ? 'DEGRADED' : snapshot.compute_capability_health;
   const computeReason = probeReason || (computeState === 'READY' ? 'COMPUTE_CAPABILITY_READY' : 'COMPUTE_CAPABILITY_DEGRADED');
+  const computeObservedMs = rfc3339Ms(node.evidence?.observed_at);
+  const computeTtlSeconds = node.evidence?.ttl_seconds;
+  const computeExpiresAt = computeObservedMs != null && Number.isFinite(computeTtlSeconds)
+    ? new Date(computeObservedMs + computeTtlSeconds * 1000).toISOString()
+    : null;
   return {
     ...node,
     capability_health: {
-      compute: capabilityAxis(computeState, computeReason, metadata[0], null, metadata[1], metadata[2]),
+      compute: capabilityAxis(computeState, computeReason, node.evidence?.observed_at ?? metadata[0], computeExpiresAt, metadata[1], metadata[2]),
       backup_target: projectStorageAxis(snapshot.backup_capability_health),
       archive_storage: projectStorageAxis(snapshot.archive_capability_health),
       nas: capabilityAxis('PENDING', 'NAS_SERVICE_UNPROVEN')
