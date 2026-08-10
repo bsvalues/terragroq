@@ -5,7 +5,7 @@
 `READY`
 
 The independent assurance lane reviewed execution commit
-`a1be45615ffb35a0fa15570759ebb2dcfd242aac` and found no P1 or P2 issue.
+`a1be45615ffb35a0fa15570759ebb2dcfd242aac` and found no P1 or P2 issues.
 
 ## Exact binding
 
@@ -18,10 +18,11 @@ The independent assurance lane reviewed execution commit
 ## Authority boundary
 
 - Scheduler activation and autonomous dispatch remain false.
-- Arbitrary shell, network access, remote-node access, authority mutation, fallback, and workload-storage writes remain prohibited.
+- Arbitrary shell, network access, remote-node access, authority mutation, silent replacement, and workload-storage writes remain prohibited.
 - Storage, NAS, backup, and authoritative-state authority are not granted.
 - Replacing only the short-lived placement receipt and its request digest cannot expand the stable scope. Any change to the input, limits, Forge packet, identity, node, or template changes or fails the scope binding.
-- Execution remains fail-closed until a separate descendant commit records one time-bounded authority entry on trusted `main`.
+- The activation lane records one time-bounded authority entry and must preserve the reviewed commit ancestry with a merge commit. Execution stays fail-closed outside that window and permits only one attempt.
+- The short-lived placement receipt is published separately after activation so placement freshness and authority validity overlap at execution time.
 
 ## Validation
 

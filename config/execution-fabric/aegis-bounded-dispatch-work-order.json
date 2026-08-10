@@ -92,7 +92,7 @@
     "separate-future-dated-activation",
     "zero-unresolved-security-or-authority-findings"
   ],
-  "mergeMode": "squash",
+  "mergeMode": "merge",
   "retryBudget": 0,
   "remediationBudget": 3,
   "reroutePolicy": "NO_FALLBACK_NEW_RECEIPT_AND_AUTHORITY_REQUIRED",
