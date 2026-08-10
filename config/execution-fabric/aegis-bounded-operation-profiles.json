@@ -16,8 +16,8 @@
       ]
     },
     {
-      "profile_id": "sha256.verify.v1",
-      "template_id": "aegis.hash-verify.v1",
+      "profile_id": "sha256.manifest-verify.future.v1",
+      "template_id": "aegis.hash-manifest-verify.future.v1",
       "runner_kind": "in-process-digest-pinned-module",
       "network_scope": "none",
       "algorithm": "sha256",

@@ -8,7 +8,7 @@ const SHA256 = /^[a-f0-9]{64}$/
 const GIT_SHA40 = /^[a-f0-9]{40}$/
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const AEGIS_PERMISSION_SHA256 = "9a9cb0584b23a11d00064f70e1ca8d8f126b00d5bae607396d68b925741a49c1"
-const AEGIS_PROFILES_SHA256 = "83a96697443f316d236250e988be7d3a84b74146cd84894d7a0906033c509568"
+const AEGIS_PROFILES_SHA256 = "93f15931d3e2b7b6130610f465432971c93c5aae969b71c6fc131603a23d5fe0"
 const PROHIBITED_FIELD = /(?:^|_)(?:command|commands|cmd|shell|script|argv|args|executable|exec|spawn|cwd|stdin|environment|env|endpoint|credential|credentials|password|private_key|secret|token|api_key|connection_string|authorization)(?:$|_)/i
 const SECRET_VALUE = /(?:-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|\bgh[pousr]_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk-(?:proj-)?[A-Za-z0-9_-]{12,}\b|\bBearer\s+[A-Za-z0-9._~+/=-]{8,}\b|\bAKIA[A-Z0-9]{16}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}\b|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^/\s:@]+:[^@\s/]+@)/i
 
@@ -85,7 +85,9 @@ function readArtifact(repositoryRoot, relativePath, label) {
   const real = fs.realpathSync(lexical)
   const realRelative = path.relative(root, real)
   if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) fail("PATH_ESCAPE", `${label} resolves outside the repository`)
-  const bytes = fs.readFileSync(real)
+  const text = fs.readFileSync(real, "utf8")
+  if (text.replace(/\r\n/g, "").includes("\r")) fail("TRUST_ROOT_INVALID", `${label} contains a non-canonical carriage return`)
+  const bytes = Buffer.from(text.replace(/\r\n/g, "\n"), "utf8")
   try {
     return { bytes, sha256: sha256(bytes), value: JSON.parse(bytes.toString("utf8").replace(/^\uFEFF/, "")) }
   } catch {
@@ -176,7 +178,7 @@ function validateContract(value) {
   integer(value.resource_ceilings.maximum_stderr_bytes, "maximum_stderr_bytes", 1, 16777216)
   const expectedTemplates = [
     ["aegis.ci-build-test.v1", "CI_BUILD_TEST", "reviewed-repository-validation-plan", "validation-summary-and-artifact-manifest", "fixed-digest-pinned-container-profile", "job-scoped-nvme-scratch-only"],
-    ["aegis.hash-verify.v1", "HASH_VERIFY", "sha256-file-manifest", "sha256-verification-receipt", "in-process-digest-pinned-module", "read-input-write-job-receipt"],
+    ["aegis.hash-manifest-verify.future.v1", "HASH_VERIFY", "sha256-file-manifest", "sha256-verification-receipt", "future-in-process-digest-pinned-module", "read-input-write-job-receipt"],
     ["aegis.compression.v1", "COMPRESSION", "reviewed-file-manifest", "tar-zstd-artifact-and-manifest", "in-process-digest-pinned-module", "job-scoped-nvme-scratch-only"],
   ]
   if (!Array.isArray(value.templates) || value.templates.length !== expectedTemplates.length) fail("TRUST_ROOT_INVALID", "template set changed")
@@ -229,8 +231,8 @@ function validateOperationProfiles(value) {
       stages: ["lockfile-integrity", "focused-tests", "full-suite", "production-build"],
     },
     {
-      profile_id: "sha256.verify.v1",
-      template_id: "aegis.hash-verify.v1",
+      profile_id: "sha256.manifest-verify.future.v1",
+      template_id: "aegis.hash-manifest-verify.future.v1",
       runner_kind: "in-process-digest-pinned-module",
       network_scope: "none",
       algorithm: "sha256",
@@ -316,7 +318,7 @@ function validateRequest(request, contract) {
   } else if (template.workload_class === "HASH_VERIFY") {
     exactKeys(request.input, ["profile_id", "expected_aggregate_sha256"], "request.input")
     digest(request.input.expected_aggregate_sha256, "expected_aggregate_sha256")
-    if (request.input.profile_id !== "sha256.verify.v1") fail("INPUT_INVALID", "hash profile is not reviewed")
+    if (request.input.profile_id !== "sha256.manifest-verify.future.v1") fail("INPUT_INVALID", "hash profile is not reviewed")
   } else {
     exactKeys(request.input, ["profile_id"], "request.input")
     if (request.input.profile_id !== "tar-zstd.deterministic.v1") fail("INPUT_INVALID", "compression profile is not reviewed")

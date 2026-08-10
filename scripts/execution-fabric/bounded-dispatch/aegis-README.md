@@ -6,6 +6,12 @@ while `aegis-bounded-dispatch-authority-registry.json` has no exact active entry
 the exact reviewed template, Agent Forge permission, AEGIS identity, Work Order, fresh pinned receipt,
 trusted-main Forge proof, canonical resident identity, and trusted-main authority proof.
 
+The repository packet is the exact execution Work Order `WO-EF-DISPATCH-AEGIS-001`. The checked-in
+packet remains `NOT_GRANTED`. A future single-use attempt must update that authenticated packet to
+`GRANTED`, bind its sole `authorityGrantRefs` entry to the exact request, and retain a separately
+reviewed scope with `authority_status=GRANTED` and `REVIEWED_ACTIVE_SINGLE_USE_SCOPE` for the same
+Work Order. An active registry entry cannot override a denied or differently bound Work Order.
+
 The only workload operation is a descriptor-bounded SHA-256 read of one exact regular file beneath
 the template-owned repository root `docs/reports/bounded-dispatch/aegis-inputs`. Callers cannot
 replace that root. Absolute paths, traversal, links/junctions, changed files, and inputs
@@ -17,6 +23,9 @@ Activation additionally requires injected atomic one-use claim and exclusive res
 providers. Those providers govern runtime-control state outside this read-only workload adapter; the
 adapter itself performs no claim/lease filesystem writes. Identity and all trust inputs are rechecked
 after the claim and before the file descriptor is opened.
+The request is snapshotted before claim acquisition and checked again immediately before opening the
+input. The staging-root real path and directory identity are revalidated after file-descriptor
+acquisition and before any workload bytes are read.
 
 Future authority must retain a separately reviewed scope artifact under
 `config/execution-fabric/aegis-bounded-dispatch-authority-scopes/`. The registry entry and trusted-main
@@ -28,5 +37,6 @@ implementations for trusted pinned-placement replay, trusted-main Forge/authorit
 single-use claim, and exclusive local lease. The packet does not replace those trust providers with
 self-attestation, Git, network access, or owner-carried evidence. Until that integration exists and a
 future authority entry is separately reviewed, the exact terminal production state is
-`BLOCKED_NO_ELIGIBLE_PROVIDER / PROVIDER_UNAVAILABLE` at the Work Order and
-`BLOCKED_AUTHORITY / AUTHORITY_NOT_ADMITTED` when this adapter evaluates the empty registry.
+`BLOCKED_AUTHORITY / AUTHORITY_NOT_ADMITTED` at the Work Order and when this adapter evaluates the
+empty registry. Resident-provider availability is a separate prerequisite and cannot substitute for
+authority.

@@ -15,6 +15,10 @@ HASH_VERIFY
 COMPRESSION
 ```
 
+The non-active manifest profile uses `aegis.hash-manifest-verify.future.v1`. The separately reviewed
+one-file, 1 MiB adapter retains the canonical `aegis.hash-verify.v1` identifier; the two contracts do
+not share a template ID.
+
 ## Boundaries
 
 ```text

@@ -74,7 +74,7 @@ function rejected(error) {
   const code = error instanceof AegisHashVerifyError ? error.code : "INTERNAL_ERROR"
   const state = code === "PROVIDER_UNAVAILABLE" ? "BLOCKED_NO_ELIGIBLE_PROVIDER"
     : code === "EVIDENCE_STALE" ? "BLOCKED_EVIDENCE_STALE"
-      : code.startsWith("AUTHORITY_") ? "BLOCKED_AUTHORITY"
+      : code.startsWith("AUTHORITY_") || code.startsWith("WORK_ORDER_AUTHORITY_") ? "BLOCKED_AUTHORITY"
         : code.includes("PATH") || code.includes("INPUT") || code.includes("BYTE") ? "FAILED_INPUT_VALIDATION"
           : "BLOCKED_POLICY"
   return {
@@ -113,7 +113,12 @@ function readRepositoryJson(repositoryRoot, relativePath, label) {
     fail("TRUST_ROOT_MISSING", `${label} is unavailable`)
   }
   contained(root, real, label)
-  const bytes = fs.readFileSync(real)
+  const diskBytes = fs.readFileSync(real)
+  const text = diskBytes.toString("utf8")
+  if (text.replace(/\r\n/g, "").includes("\r")) {
+    fail("TRUST_ROOT_INVALID", `${label} contains a non-canonical carriage return`)
+  }
+  const bytes = Buffer.from(text.replace(/\r\n/g, "\n"), "utf8")
   let value
   try { value = JSON.parse(bytes.toString("utf8")) } catch { fail("TRUST_ROOT_INVALID", `${label} must contain JSON`) }
   return { bytes, sha256: sha256(bytes), value }
@@ -206,12 +211,16 @@ function validateIdentity(identity) {
   digest(identity.machine_id_sha256, "identity machine_id_sha256")
 }
 
-function validateWorkOrder(packet) {
-  if (packet?.schemaVersion !== 2 || packet?.workOrderId !== "WO-EF-DISPATCH-AEGIS-ADAPTER-001"
+function validateWorkOrder(packet, request) {
+  if (packet?.schemaVersion !== 2 || packet?.workOrderId !== "WO-EF-DISPATCH-AEGIS-001"
+    || packet?.workOrderId !== request.work_order_id
     || packet?.laneId !== "resident-aegis" || packet?.riskClass !== "R1"
-    || packet?.authorityStatus !== "NOT_GRANTED" || packet?.schedulerActivated !== false
+    || packet?.authorityStatus !== "GRANTED" || packet?.operationalState !== "AUTHORITY_MATCHED"
+    || packet?.reasonCode !== null
+    || JSON.stringify(packet?.authorityGrantRefs) !== JSON.stringify([request.authority_reference])
+    || packet?.schedulerActivated !== false
     || packet?.autonomousDispatch !== false || packet?.ownerOperationsAllowed !== false) {
-    fail("WORK_ORDER_INVALID", "AEGIS work-order packet is not fail-closed")
+    fail("WORK_ORDER_AUTHORITY_INACTIVE", "AEGIS execution Work Order is not bound to the exact granted authority")
   }
   exact(packet.teamRoles, ["coordinator", "builder", "reviewer"], "work-order teamRoles")
   if (packet.teamRoles.builder !== "resident-aegis" || packet.teamRoles.reviewer !== "independent-assurance") {
@@ -334,7 +343,7 @@ function validateAuthority(repositoryRoot, request, expectedScope, scopeSha256, 
     "staging_root_id", "relative_path", "expected_sha256", "expected_byte_length", "max_input_bytes", "timeout_ms",
     "permission_set_sha256", "template_registry_sha256", "identity_registry_sha256", "machine_id_sha256",
     "producer_identity", "reviewer_identity", "execution_commit", "review_commit",
-    "maximum_attempts", "risk_class", "prohibited_actions", "status",
+    "maximum_attempts", "risk_class", "authority_status", "prohibited_actions", "status",
   ], "reviewed authority scope")
   const expectedProhibited = [
     "arbitrary-shell", "autonomous-scheduling", "authority-mutation", "external-provider-access",
@@ -355,9 +364,9 @@ function validateAuthority(repositoryRoot, request, expectedScope, scopeSha256, 
     || scope.machine_id_sha256 !== expectedScope.machine_id_sha256
     || scope.producer_identity !== authority.producer_identity || scope.reviewer_identity !== authority.reviewer_identity
     || scope.execution_commit !== authority.execution_commit || scope.review_commit !== authority.reviewed_commit
-    || scope.maximum_attempts !== 1 || scope.risk_class !== "R1"
+    || scope.maximum_attempts !== 1 || scope.risk_class !== "R1" || scope.authority_status !== "GRANTED"
     || JSON.stringify(scope.prohibited_actions) !== JSON.stringify(expectedProhibited)
-    || scope.status !== "REVIEWED_NON_ACTIVE_SCOPE") {
+    || scope.status !== "REVIEWED_ACTIVE_SINGLE_USE_SCOPE") {
     fail("AUTHORITY_SCOPE_MISMATCH", "reviewed scope does not bind the exact request")
   }
   const at = timestamp(evaluatedAt, "authority evaluatedAt")
@@ -388,8 +397,27 @@ function validateAuthority(repositoryRoot, request, expectedScope, scopeSha256, 
   return { authority, authorityRegistrySha256: registry.sha256, scopeArtifactSha256: retainedScope.sha256, proof }
 }
 
-function resolveStagedFile(stagingRoot, relativePath) {
-  const root = realRoot(stagingRoot, "Forge staging root")
+function verifyStagingRoot(binding) {
+  let currentReal
+  let stats
+  try {
+    if (fs.lstatSync(binding.lexical).isSymbolicLink()) fail("PATH_ESCAPE", "fixed Forge staging root must not become a symbolic link")
+    currentReal = fs.realpathSync(binding.lexical)
+    stats = fs.statSync(currentReal)
+  } catch (error) {
+    if (error instanceof AegisHashVerifyError) throw error
+    fail("INPUT_CHANGED", "fixed Forge staging root changed or became unavailable")
+  }
+  contained(binding.repository, currentReal, "fixed Forge staging root")
+  if (currentReal !== binding.real || !stats.isDirectory()
+    || stats.dev !== binding.identity.dev || stats.ino !== binding.identity.ino) {
+    fail("INPUT_CHANGED", "fixed Forge staging root identity changed")
+  }
+  return currentReal
+}
+
+function resolveStagedFile(binding, relativePath) {
+  const root = verifyStagingRoot(binding)
   const lexical = path.resolve(root, relativePath)
   contained(root, lexical, "staged input")
   const relative = path.relative(root, lexical)
@@ -423,7 +451,14 @@ function fixedStagingRoot(repositoryRoot, inputRoot) {
     fail("INPUT_UNAVAILABLE", "fixed Forge staging root is unavailable")
   }
   contained(repository, real, "fixed Forge staging root")
-  return real
+  const stats = fs.statSync(real)
+  if (!stats.isDirectory()) fail("INPUT_INVALID", "fixed Forge staging root must be a directory")
+  return {
+    repository,
+    lexical,
+    real,
+    identity: { dev: stats.dev, ino: stats.ino },
+  }
 }
 
 function prepareOrThrow(input) {
@@ -440,7 +475,7 @@ function prepareOrThrow(input) {
   validateForgePermission(artifacts.permission.value)
   const template = validateTemplateRegistry(artifacts.templates.value, artifacts.permission.sha256)
   validateIdentity(artifacts.identity.value)
-  validateWorkOrder(artifacts.workOrder.value)
+  validateWorkOrder(artifacts.workOrder.value, input.request)
   const forgeProof = validateForgeProof(input.proveTrustedForge, artifacts)
   const identity = validateResidentIdentity(artifacts.identity.value, input.trustedResidentIdentity)
   if (input.request.template_id !== template.template_id || placement.receipt.workload.id !== template.workload_id
@@ -528,6 +563,7 @@ function readExactStagedBytes(repositoryRoot, stagingRootId, request) {
     const noFollow = fs.constants.O_NOFOLLOW ?? 0
     descriptor = fs.openSync(staged.lexical, fs.constants.O_RDONLY | noFollow)
     const before = fs.fstatSync(descriptor)
+    verifyStagingRoot(stagingRoot)
     if (!before.isFile() || before.size !== request.input.expected_byte_length
       || before.size > request.limits.max_input_bytes || before.size > MAX_BYTES) {
       fail("BYTE_CEILING_EXCEEDED", "open staged input violates exact byte ceiling")
@@ -555,14 +591,18 @@ export async function executeAegisHashVerify(input) {
   let prepared = null
   let claim = null
   let lease = null
+  let rawLease = null
   let operationAttempted = false
   let releaseAttempted = false
   let released = false
   try {
     if (typeof input.clock !== "function") fail("CLOCK_UNAVAILABLE", "trusted resident clock is required")
+    const requestSha256 = sha256(Buffer.from(canonicalizeJcs(input.request)))
+    const request = structuredClone(input.request)
+    const receiptBytes = Buffer.from(input.receiptBytes)
     const preparedAt = input.clock()
     timestamp(preparedAt, "prepared_at")
-    prepared = prepareOrThrow({ ...input, evaluatedAt: preparedAt })
+    prepared = prepareOrThrow({ ...input, request, receiptBytes, evaluatedAt: preparedAt })
     if (typeof input.claimSingleUse !== "function") fail("CLAIM_UNAVAILABLE", "single-use claim provider is required")
     claim = requireSuccessfulCallback(await input.claimSingleUse({
       request_sha256: prepared.request_sha256,
@@ -581,8 +621,8 @@ export async function executeAegisHashVerify(input) {
     if (typeof input.acquireExclusiveLease !== "function" || typeof input.releaseExclusiveLease !== "function") {
       fail("LEASE_UNAVAILABLE", "exclusive resident AEGIS lease providers are required")
     }
-    lease = requireSuccessfulCallback(await input.acquireExclusiveLease({ claim_id: claim.claim_id }),
-      ["acquired", "lease_id", "acquired_at"], "exclusive lease")
+    rawLease = await input.acquireExclusiveLease({ claim_id: claim.claim_id })
+    lease = requireSuccessfulCallback(rawLease, ["acquired", "lease_id", "acquired_at"], "exclusive lease")
     if (lease.acquired !== true) fail("CONCURRENCY_LIMIT_REACHED", "resident AEGIS concurrency is occupied")
     id(lease.lease_id, "lease_id")
     const leaseAt = timestamp(lease.acquired_at, "lease acquired_at")
@@ -591,7 +631,7 @@ export async function executeAegisHashVerify(input) {
     const recheckedAt = input.clock()
     const recheckedAtMs = timestamp(recheckedAt, "rechecked_at")
     if (recheckedAtMs < leaseAt) fail("PREFLIGHT_CHRONOLOGY_INVALID", "post-claim preflight predates lease")
-    const rechecked = prepareOrThrow({ ...input, evaluatedAt: recheckedAt })
+    const rechecked = prepareOrThrow({ ...input, request, receiptBytes, evaluatedAt: recheckedAt })
     if (rechecked.trust_binding_sha256 !== prepared.trust_binding_sha256
       || rechecked.scope_sha256 !== prepared.scope_sha256 || rechecked.receipt_sha256 !== prepared.receipt_sha256) {
       fail("PREFLIGHT_CHANGED", "trust inputs changed after claim")
@@ -599,8 +639,11 @@ export async function executeAegisHashVerify(input) {
     const startedAt = input.clock()
     const startedAtMs = timestamp(startedAt, "started_at")
     if (startedAtMs < recheckedAtMs) fail("OPERATION_CHRONOLOGY_INVALID", "operation start predates post-claim preflight")
+    if (requestSha256 !== sha256(Buffer.from(canonicalizeJcs(input.request)))) {
+      fail("REQUEST_CHANGED", "request changed after the post-claim preflight")
+    }
     operationAttempted = true
-    const bytes = readExactStagedBytes(input.repositoryRoot, prepared.input.staging_root_id, input.request)
+    const bytes = readExactStagedBytes(input.repositoryRoot, prepared.input.staging_root_id, request)
     const observedSha256 = sha256(bytes)
     const completedAt = input.clock()
     const completedAtMs = timestamp(completedAt, "completed_at")
@@ -609,7 +652,7 @@ export async function executeAegisHashVerify(input) {
       || completedAtMs >= timestamp(prepared.authority_expires_at, "authority_expires_at")) {
       fail("OPERATION_CHRONOLOGY_INVALID", "completion exceeds chronology, freshness, authority, or timeout")
     }
-    const matched = observedSha256 === input.request.input.expected_sha256
+    const matched = observedSha256 === request.input.expected_sha256
     const result = {
       schema_version: "0.1-aegis-hash-verify-evidence",
       status: matched ? "COMPLETED" : "FAILED_CLOSED",
@@ -625,10 +668,10 @@ export async function executeAegisHashVerify(input) {
       adapter_id: "resident-aegis-hash-verify-v1",
       operation: {
         kind: "HASH_VERIFY",
-        relative_path: input.request.input.relative_path,
+        relative_path: request.input.relative_path,
         byte_length: bytes.length,
         digest_algorithm: "sha256",
-        expected_sha256: input.request.input.expected_sha256,
+        expected_sha256: request.input.expected_sha256,
         observed_sha256: observedSha256,
         matched,
       },
@@ -647,16 +690,17 @@ export async function executeAegisHashVerify(input) {
     result.runtime_lease_released = true
     return { ...result, evidence_sha256: sha256(canonicalBytes(result)) }
   } catch (error) {
-    if (lease?.acquired === true && !releaseAttempted && typeof input.releaseExclusiveLease === "function") {
+    const acquiredLease = lease?.acquired === true ? lease : rawLease?.acquired === true ? rawLease : null
+    if (acquiredLease && !releaseAttempted && typeof input.releaseExclusiveLease === "function") {
       releaseAttempted = true
-      try { released = await input.releaseExclusiveLease({ lease_id: lease.lease_id, claim_id: claim?.claim_id ?? null }) === true } catch { released = false }
+      try { released = await input.releaseExclusiveLease({ lease_id: acquiredLease.lease_id ?? null, claim_id: claim?.claim_id ?? null }) === true } catch { released = false }
     }
     const normalized = error instanceof Error ? error : new Error(String(error))
     normalized.claimConsumed = claim?.claimed === true
     normalized.claimId = claim?.claim_id ?? null
     normalized.claimedAt = claim?.claimed_at ?? null
-    normalized.leaseId = lease?.lease_id ?? null
-    normalized.leaseAcquired = lease?.acquired === true
+    normalized.leaseId = lease?.lease_id ?? rawLease?.lease_id ?? null
+    normalized.leaseAcquired = lease?.acquired === true || rawLease?.acquired === true
     normalized.operationAttempted = operationAttempted
     normalized.releaseAttempted = releaseAttempted
     normalized.runtimeLeaseReleased = released
