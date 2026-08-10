@@ -12,7 +12,7 @@ William -> WilliamOS -> Hermes -> Codex/agents -> GitHub delivery
                          v
                   Execution Fabric
              OMEN / HERMES-NODE / ATLAS
-                  T5810-2 / Azure
+                    AEGIS / Azure
 ```
 
 Hermes the software subsystem is distinct from HERMES-NODE, the current X99 execution host.
@@ -28,7 +28,7 @@ The registry must fail closed when evidence is stale, conflicting, incomplete, o
 - `omen`: operator cockpit, interactive development, optional burst compute; not authoritative state and not assumed always-on.
 - `hermes-node`: local AI/GPU execution worker; current Ollama/agent compute; not durable-state authority.
 - `atlas`: durable state, databases, Forge, retrieval, protected-data services; noisy batch work is disfavored.
-- `t5810-2`: secondary CPU/batch/NAS/backup worker candidate; exact inventory is discovered, never assumed.
+- `aegis`: secondary CPU/batch/CI worker; storage remains unavailable until separately proven.
 - `azure`: future approved production/external capability envelope; no implicit authority.
 - frontier providers are represented only when explicitly approved, with cost/data/authority constraints.
 
@@ -75,7 +75,7 @@ Hard constraints outrank performance:
 - Atlas is authoritative for durable state; compute workers must not silently become state authority.
 - HERMES-NODE may run local AI/agents but does not receive durable-state authority by convenience.
 - OMEN is interactive/burst and may disappear; critical always-on state cannot depend on it.
-- T5810-2 may absorb CPU-heavy/batch/backup work once discovered and approved.
+- AEGIS may absorb bounded CPU-heavy/build/test work once evidence is fresh; backup/NAS work remains blocked pending storage proof.
 - Protected county/PACS systems remain non-selectable without explicit authority.
 - Frontier/cloud execution requires explicit provider, cost, data-classification, and authority permission.
 
@@ -120,7 +120,7 @@ A generated snapshot can truthfully answer:
 - which claims are proven vs unknown;
 - what evidence backs each claim.
 
-V0.1 is complete only after live probes run on OMEN, HERMES-NODE, ATLAS, and T5810-2 (when online), their outputs validate against the schema, and an independently reviewed merged registry snapshot is produced.
+V0.1 is complete only after live probes run on OMEN, HERMES-NODE, ATLAS, and AEGIS, their outputs validate against the schema, and an independently reviewed merged registry snapshot is produced.
 
 ## Explicit non-goals
 

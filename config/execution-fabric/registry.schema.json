@@ -4,10 +4,20 @@
   "title": "WilliamOS Execution Fabric Registry",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "generated_at", "nodes"],
+  "required": ["schema_version", "generated_at", "scheduler", "nodes"],
   "properties": {
     "schema_version": {"const": "0.1"},
     "generated_at": {"type": "string", "format": "date-time"},
+    "scheduler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "authority"],
+      "properties": {
+        "state": {"const": "disabled"},
+        "authority": {"const": "not-granted"},
+        "notes": {"type": ["string", "null"]}
+      }
+    },
     "nodes": {
       "type": "array",
       "items": {"$ref": "#/$defs/node"}
@@ -95,7 +105,23 @@
         "reallocated": {"type": ["integer", "null"], "minimum": 0},
         "pending": {"type": ["integer", "null"], "minimum": 0},
         "uncorrectable": {"type": ["integer", "null"], "minimum": 0},
-        "filesystems": {"type": "array", "items": {"type": "object"}}
+        "filesystems": {"type": "array", "items": {"$ref": "#/$defs/filesystem"}}
+      }
+    },
+    "filesystem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["size_bytes"],
+      "properties": {
+        "partition": {"type": ["string", "null"]},
+        "drive_letter": {"type": ["string", "null"]},
+        "filesystem": {"type": ["string", "null"]},
+        "name": {"type": ["string", "null"]},
+        "fstype": {"type": ["string", "null"]},
+        "label": {"type": ["string", "null"]},
+        "uuid": {"type": ["string", "null"]},
+        "mountpoint": {"type": ["string", "null"]},
+        "size_bytes": {"type": "integer", "minimum": 1}
       }
     },
     "network": {
@@ -123,7 +149,34 @@
         "version": {"type": ["string", "null"]},
         "state": {"enum": ["healthy", "running", "stopped", "degraded", "unavailable", "unknown"]},
         "endpoint": {"type": ["string", "null"]},
-        "details": {"type": "object"}
+        "details": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "exposure": {"type": "string"},
+            "authentication": {"type": "string"},
+            "filesystem": {"type": "string"},
+            "mount_by_uuid": {"type": "boolean"},
+            "source": {"type": ["string", "null"]},
+            "fstype": {"type": ["string", "null"]},
+            "options": {"type": ["string", "null"]},
+            "observation": {"type": "string"},
+            "start_type": {"type": "string"},
+            "models": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "os": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["family"],
+      "properties": {
+        "family": {"enum": ["windows", "linux"]},
+        "name": {"type": ["string", "null"]},
+        "caption": {"type": ["string", "null"]},
+        "version": {"type": ["string", "null"]},
+        "build": {"type": ["string", "null"]}
       }
     },
     "authority": {
@@ -135,16 +188,35 @@
         "deny": {"type": "array", "items": {"type": "string"}}
       }
     },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostname", "machine_id_sha256", "source"],
+      "properties": {
+        "hostname": {"type": ["string", "null"], "minLength": 1},
+        "machine_id_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "source": {"type": ["string", "null"], "minLength": 1}
+      }
+    },
     "node": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "role", "availability_class", "authority", "evidence", "cpus", "dimms", "gpus", "disks", "network", "runtimes", "capabilities"],
+      "required": ["id", "identity", "role", "availability_class", "authority", "evidence", "cpus", "dimms", "gpus", "disks", "network", "runtimes", "capabilities"],
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
         "hostname": {"type": ["string", "null"]},
+        "identity": {"$ref": "#/$defs/identity"},
         "role": {"type": "string"},
         "availability_class": {"enum": ["interactive", "resident", "stateful", "secondary", "external", "unknown"]},
-        "os": {"type": ["object", "null"]},
+        "os": {
+          "oneOf": [
+            {"$ref": "#/$defs/os"},
+            {"type": "null"}
+          ]
+        },
         "authority": {"$ref": "#/$defs/authority"},
         "evidence": {"$ref": "#/$defs/evidence"},
         "cpus": {"type": "array", "items": {"$ref": "#/$defs/cpu"}},

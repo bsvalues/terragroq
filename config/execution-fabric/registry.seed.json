@@ -1,10 +1,20 @@
 {
   "schema_version": "0.1",
   "generated_at": "2026-08-09T21:57:00Z",
+  "scheduler": {
+    "state": "disabled",
+    "authority": "not-granted",
+    "notes": "V0.1 is evidence and placement-readiness only; no autonomous scheduling authority exists"
+  },
   "nodes": [
     {
       "id": "omen",
       "hostname": "OMEN",
+      "identity": {
+        "hostname": "OMEN",
+        "machine_id_sha256": "81c6fef6da6187fc4ab6b8acd18c3704b3223fef93bbcec2a0bcaf5bc98fa727",
+        "source": "windows-cim-system-uuid-sha256"
+      },
       "role": "operator-cockpit-development-burst-compute",
       "availability_class": "interactive",
       "os": {"family": "windows", "version": "11"},
@@ -26,6 +36,11 @@
     {
       "id": "hermes-node",
       "hostname": "HERMES",
+      "identity": {
+        "hostname": "HERMES",
+        "machine_id_sha256": null,
+        "source": "windows-cim-system-uuid-sha256"
+      },
       "role": "local-ai-gpu-execution-worker",
       "availability_class": "resident",
       "os": {"family": "windows", "version": "10"},
@@ -47,6 +62,11 @@
     {
       "id": "atlas",
       "hostname": "atlas",
+      "identity": {
+        "hostname": "atlas",
+        "machine_id_sha256": null,
+        "source": "linux-machine-id-sha256"
+      },
       "role": "durable-state-forge-retrieval",
       "availability_class": "stateful",
       "os": {"family": "linux", "version": "Ubuntu 24.04"},
@@ -66,29 +86,39 @@
       "warnings": ["DIMM-level inventory, all disks including Forge serial/health, NIC counters, and runtime versions require live probe"]
     },
     {
-      "id": "t5810-2",
-      "hostname": null,
-      "role": "secondary-cpu-batch-nas-backup-candidate",
-      "availability_class": "secondary",
-      "os": null,
-      "authority": {
-        "allow": ["cpu-batch-candidate", "ci-build-test-candidate", "hash-verify-candidate", "backup-archive-candidate", "nas-candidate"],
-        "deny": ["authoritative-durable-state-until-approved", "county-production-write", "pacs-production-write"]
+      "id": "aegis",
+      "hostname": "aegis",
+      "identity": {
+        "hostname": "aegis",
+        "machine_id_sha256": null,
+        "source": "linux-machine-id-sha256"
       },
-      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed; live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "Machine recently revived; exact RAM/GPU/disk/network/runtime inventory must be discovered before capability promotion"},
+      "role": "secondary-cpu-batch-ci-worker-storage-pending",
+      "availability_class": "secondary",
+      "os": {"family": "linux", "version": "Ubuntu 24.04"},
+      "authority": {
+        "allow": ["cpu-batch-candidate", "ci-build-test-candidate", "hash-verify-candidate", "compression-candidate", "etl-transform-candidate", "docker-worker-candidate"],
+        "deny": ["authoritative-durable-state", "backup-archive-until-storage-proven", "nas-until-storage-proven", "county-production-write", "pacs-production-write", "destructive-disk-action"]
+      },
+      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed plus AEGIS onboarding evidence; trusted live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "AEGIS is the owner-approved canonical label; its trusted machine identity pin, raw compute proof, and all storage authority remain pending"},
       "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "Intel", "model": "Xeon E5-2690 v4", "cores": 14, "threads": 28, "max_mhz": null, "numa_node": null}],
       "dimms": [],
       "gpus": [],
       "disks": [],
       "network": [],
       "runtimes": [],
-      "capabilities": ["cpu-batch-candidate", "ci-build-test-candidate", "backup-archive-candidate", "nas-candidate"],
-      "constraints": ["inventory-unproven", "not-schedulable-yet"],
-      "warnings": ["No live capability should be scheduled until probe evidence exists"]
+      "capabilities": ["cpu-batch-candidate", "ci-build-test-candidate", "hash-verify-candidate", "compression-candidate", "etl-transform-candidate", "docker-worker-candidate"],
+      "constraints": ["scheduler-disabled", "memory-16gb", "nvme-free-space-reserve-required", "storage-capability-pending"],
+      "warnings": ["ST4000DX000 is RETIRE and unschedulable", "ST1000DM003 is healthy but occupied and unclassified", "NAS and backup authority remain pending storage proof"]
     },
     {
       "id": "azure",
       "hostname": null,
+      "identity": {
+        "hostname": null,
+        "machine_id_sha256": null,
+        "source": null
+      },
       "role": "approved-production-external-capability-envelope",
       "availability_class": "external",
       "os": null,

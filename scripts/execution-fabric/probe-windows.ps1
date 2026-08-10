@@ -6,6 +6,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $observed = (Get-Date).ToUniversalTime().ToString('o')
 $warnings = [System.Collections.Generic.List[string]]::new()
+$hostname = [Environment]::MachineName
+$canonicalNodeIds = @{
+  'OMEN' = 'omen'
+  'HERMES' = 'hermes-node'
+  'HERMES-NODE' = 'hermes-node'
+}
+$canonicalNodeId = $canonicalNodeIds[$hostname.ToUpperInvariant()]
+if (-not $canonicalNodeId -or $NodeId -ne $canonicalNodeId) {
+  throw "PROBE_NODE_IDENTITY_WALL hostname=$hostname requested=$NodeId canonical=$canonicalNodeId"
+}
 
 function Try-Run([scriptblock]$Block, $Fallback = $null, [string]$Warning = '') {
   try { & $Block } catch { if ($Warning) { $warnings.Add("$Warning`: $($_.Exception.Message)") }; $Fallback }
@@ -18,6 +28,15 @@ function Convert-MemoryType($code) {
 }
 
 $cs = Get-CimInstance Win32_ComputerSystem
+$systemProduct = Get-CimInstance Win32_ComputerSystemProduct
+$machineId = ([string]$systemProduct.UUID).Trim().ToLowerInvariant()
+if (-not $machineId) { throw 'PROBE_MACHINE_ID_UNAVAILABLE' }
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try {
+  $machineIdHash = -join ($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($machineId)) | ForEach-Object { $_.ToString('x2') })
+} finally {
+  $sha256.Dispose()
+}
 $os = Get-CimInstance Win32_OperatingSystem
 $cpus = @(Get-CimInstance Win32_Processor | ForEach-Object {
   [ordered]@{
@@ -89,7 +108,7 @@ if (-not $gpuRows -or $gpuRows.Count -eq 0) {
   })
 }
 
-$diskRows = @(Get-Disk | ForEach-Object {
+$diskRows = Try-Run { @(Get-Disk -ErrorAction Stop | ForEach-Object {
   $disk = $_
   $fs = @()
   try {
@@ -119,10 +138,31 @@ $diskRows = @(Get-Disk | ForEach-Object {
     uncorrectable = $null
     filesystems = $fs
   }
-})
+}) } @() 'Storage module disk enumeration unavailable'
+if (-not $diskRows -or $diskRows.Count -eq 0) {
+  $diskRows = @(Get-CimInstance Win32_DiskDrive | ForEach-Object {
+    [ordered]@{
+      id = "disk-$($_.Index)"
+      model = if ($_.Model) { [string]$_.Model } else { [string]$_.Caption }
+      serial = if ($_.SerialNumber) { $_.SerialNumber.Trim() } else { $null }
+      capacity_bytes = [int64]$_.Size
+      transport = if ($_.InterfaceType) { [string]$_.InterfaceType } else { $null }
+      rotational = $null
+      smart_overall = if ($_.Status) { [string]$_.Status } else { $null }
+      power_on_hours = $null
+      reallocated = $null
+      pending = $null
+      uncorrectable = $null
+      filesystems = @()
+    }
+  })
+  if ($diskRows.Count -gt 0) {
+    $warnings.Add('Disk inventory used Win32_DiskDrive fallback; partition/filesystem relationships are unavailable')
+  }
+}
 
-$ipConfigs = Get-NetIPConfiguration
-$netRows = @(Get-NetAdapter | ForEach-Object {
+$ipConfigs = Try-Run { @(Get-NetIPConfiguration -ErrorAction Stop) } @() 'NetTCPIP configuration unavailable'
+$netRows = Try-Run { @(Get-NetAdapter -ErrorAction Stop | ForEach-Object {
   $a = $_
   $cfg = $ipConfigs | Where-Object InterfaceIndex -eq $a.ifIndex | Select-Object -First 1
   $addresses = @()
@@ -140,7 +180,26 @@ $netRows = @(Get-NetAdapter | ForEach-Object {
     addresses = $addresses
     default_route = if ($cfg -and $cfg.IPv4DefaultGateway) { $true } else { $false }
   }
-})
+}) } @() 'NetAdapter enumeration unavailable'
+if (-not $netRows -or $netRows.Count -eq 0) {
+  $defaultRoutes = @(Get-CimInstance Win32_IP4RouteTable -ErrorAction SilentlyContinue | Where-Object Destination -eq '0.0.0.0')
+  $netRows = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled = TRUE' | ForEach-Object {
+    $adapter = Get-CimInstance Win32_NetworkAdapter -Filter "Index = $($_.Index)" -ErrorAction SilentlyContinue
+    [ordered]@{
+      id = "nic-$($_.Index)"
+      name = if ($adapter.NetConnectionID) { [string]$adapter.NetConnectionID } else { [string]$_.Description }
+      mac = if ($_.MACAddress) { [string]$_.MACAddress } else { $null }
+      state = if ($adapter.NetEnabled) { 'up' } else { 'unknown' }
+      speed_mbps = if ($adapter.Speed) { [double]$adapter.Speed / 1000000 } else { $null }
+      duplex = $null
+      addresses = @($_.IPAddress)
+      default_route = [bool]($defaultRoutes | Where-Object InterfaceIndex -eq $_.InterfaceIndex)
+    }
+  })
+  if ($netRows.Count -gt 0) {
+    $warnings.Add('Network inventory used CIM fallback; duplex and some route/link details may be unavailable')
+  }
+}
 
 $runtimes = [System.Collections.Generic.List[object]]::new()
 $docker = Get-Command docker -ErrorAction SilentlyContinue
@@ -150,8 +209,15 @@ if ($docker) {
 }
 $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
 if ($wsl) {
-  $ws = Try-Run { (& wsl.exe --status 2>$null | Out-String).Trim() } '' 'wsl status failed'
-  $runtimes.Add([ordered]@{id='wsl';kind='wsl';version=$null;state=if($ws){'running'}else{'unknown'};endpoint=$null;details=@{status=$ws}})
+  $wslProcesses = @(Get-Process -Name wsl,wslhost,wslservice -ErrorAction SilentlyContinue)
+  $runtimes.Add([ordered]@{
+    id = 'wsl'
+    kind = 'wsl'
+    version = $null
+    state = if ($wslProcesses.Count -gt 0) { 'running' } else { 'unknown' }
+    endpoint = $null
+    details = @{observation='process-state only; wsl.exe status is not invoked because it can block'}
+  })
 }
 $ssh = Get-Service sshd -ErrorAction SilentlyContinue
 if ($ssh) { $runtimes.Add([ordered]@{id='ssh';kind='ssh';version=$null;state=if($ssh.Status -eq 'Running'){'running'}else{'stopped'};endpoint=$null;details=@{start_type=[string]$ssh.StartType}}) }
@@ -161,15 +227,20 @@ if ($ollama) { $runtimes.Add([ordered]@{id='ollama';kind='ollama';version=$null;
 $result = [ordered]@{
   schema_version = '0.1-node-probe'
   node = [ordered]@{
-    id = $NodeId
-    hostname = $env:COMPUTERNAME
+    id = $canonicalNodeId
+    hostname = $hostname
+    identity = [ordered]@{
+      hostname = $hostname
+      machine_id_sha256 = $machineIdHash
+      source = 'windows-cim-system-uuid-sha256'
+    }
     observed_at = $observed
     os = [ordered]@{family='windows';caption=$os.Caption;version=$os.Version;build=$os.BuildNumber}
-    cpus = $cpus
-    dimms = $dimms
-    gpus = $gpuRows
-    disks = $diskRows
-    network = $netRows
+    cpus = @($cpus)
+    dimms = @($dimms)
+    gpus = @($gpuRows)
+    disks = @($diskRows)
+    network = @($netRows)
     runtimes = @($runtimes)
     warnings = @($warnings)
   }

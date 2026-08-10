@@ -4,6 +4,8 @@ Issue: #531
 
 These scripts build an evidence-backed resource registry. They are read-only by design. V0.1 does not schedule or mutate infrastructure.
 
+Generated `.artifacts/execution-fabric/` probe files are host-local and ignored by Git. Durable conclusions belong in reviewed reports such as `docs/reports/WILLIAMOS-EXECUTION-FABRIC-V0.1-LIVE-MATRIX.md`.
+
 ## Output model
 
 Each node emits a local probe file:
@@ -12,7 +14,7 @@ Each node emits a local probe file:
 .artifacts/execution-fabric/omen.json
 .artifacts/execution-fabric/hermes-node.json
 .artifacts/execution-fabric/atlas.json
-.artifacts/execution-fabric/t5810-2.json
+.artifacts/execution-fabric/aegis.json
 ```
 
 `assemble-registry.mjs` overlays live discovered hardware/runtime facts onto the declared role/authority seed and emits:
@@ -22,6 +24,9 @@ Each node emits a local probe file:
 ```
 
 Missing or stale probes add fail-closed scheduling constraints; they never silently promote capability.
+Observed promotion also requires a canonical host-derived node ID and an exact match to the
+trusted hashed machine-identity pin in the seed. A node with no pin remains declared and
+unschedulable until onboarding records that pin through a reviewed evidence change.
 
 ## Windows
 
@@ -43,7 +48,7 @@ Do not elevate merely for convenience. If Windows hides a field without elevatio
 
 ```bash
 bash scripts/execution-fabric/probe-linux.sh atlas .artifacts/execution-fabric/atlas.json
-bash scripts/execution-fabric/probe-linux.sh t5810-2 .artifacts/execution-fabric/t5810-2.json
+bash scripts/execution-fabric/probe-linux.sh aegis .artifacts/execution-fabric/aegis.json
 ```
 
 The Linux probe uses `sudo -n` only for read-only SMBIOS/SMART evidence. If passwordless sudo is unavailable, those fields remain unknown and the warning is preserved.
@@ -60,13 +65,15 @@ node scripts/execution-fabric/assemble-registry.mjs \
 ```
 
 The assembler preserves declared authority/role constraints while replacing hardware/runtime observations with live evidence. It fails closed on duplicate identities and architectural authority violations.
+It validates complete nested resource data before promotion or publication and rejects probes
+from unapproved probe implementations.
 
 ## Required live proof for v0.1
 
 1. OMEN probe.
 2. HERMES-NODE probe.
 3. ATLAS probe.
-4. T5810-2 probe once the revived machine is online.
+4. AEGIS probe.
 5. Assemble one registry snapshot.
 6. Validate schema and semantic invariants.
 7. Independently review the exact snapshot and scripts.

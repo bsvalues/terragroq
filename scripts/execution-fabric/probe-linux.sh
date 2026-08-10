@@ -9,7 +9,7 @@ if [[ -z "$NODE_ID" ]]; then
 fi
 
 python3 - "$NODE_ID" "$OUTPUT_PATH" <<'PY'
-import json, os, re, shutil, subprocess, sys
+import hashlib, json, os, re, shutil, subprocess, sys
 from datetime import datetime, timezone
 
 node_id = sys.argv[1]
@@ -30,6 +30,33 @@ def run(cmd, timeout=20, sudo=False):
         return None, str(e)
 
 hostname, _ = run(['hostname'])
+canonical_hostname = (hostname or '').strip().lower().split('.')[0]
+canonical_node_ids = {'atlas': 'atlas', 'aegis': 'aegis'}
+canonical_node_id = canonical_node_ids.get(canonical_hostname)
+if not canonical_node_id or node_id != canonical_node_id:
+    raise SystemExit(
+        f'PROBE_NODE_IDENTITY_WALL hostname={hostname} requested={node_id} canonical={canonical_node_id}'
+    )
+
+machine_id = None
+identity_source = None
+for identity_path, source in [
+    ('/etc/machine-id', 'linux-machine-id-sha256'),
+    ('/sys/class/dmi/id/product_uuid', 'linux-dmi-product-uuid-sha256'),
+]:
+    try:
+        with open(identity_path, encoding='utf-8') as f:
+            candidate = f.read().strip().lower()
+        if candidate:
+            machine_id = candidate
+            identity_source = source
+            break
+    except OSError:
+        pass
+if not machine_id:
+    raise SystemExit('PROBE_MACHINE_ID_UNAVAILABLE')
+machine_id_sha256 = hashlib.sha256(machine_id.encode('utf-8')).hexdigest()
+
 os_release = {}
 try:
     with open('/etc/os-release', encoding='utf-8') as f:
@@ -205,7 +232,12 @@ if fm:
 result = {
   'schema_version':'0.1-node-probe',
   'node':{
-    'id':node_id,'hostname':hostname,'observed_at':observed,
+    'id':canonical_node_id,'hostname':hostname,'observed_at':observed,
+    'identity':{
+      'hostname':hostname,
+      'machine_id_sha256':machine_id_sha256,
+      'source':identity_source,
+    },
     'os':{'family':'linux','name':os_release.get('PRETTY_NAME'),'version':os_release.get('VERSION_ID')},
     'cpus':cpus,'dimms':dimms,'gpus':gpus,'disks':disks,'network':network,'runtimes':runtimes,'warnings':warnings
   },
