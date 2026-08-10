@@ -12,7 +12,7 @@ shadow-placement set after a fresh recommendation exists for each Work Order.
 - Workload: one fixed, benign local-LLM inference through the existing HERMES loopback service
 - Valid from: `2026-08-10T14:42:00.000Z`
 - Expires at: `2026-08-11T02:42:00.000Z`
-- Authority source commit: `b70d1182e315064c9e0154c2c2862b155117947e`
+- Authority source commit: `2c76da3aad0db472d261c2e0f4e0fac3bc9c3069`
 - Risk: `R0`
 - Task template: `existing-loopback-llm-inference-v1`
 - Repository scope: `bsvalues/terragroq`
@@ -33,7 +33,7 @@ exposure.
 - Workload: one read-only authoritative-state metadata query against the approved Forge root
 - Valid from: `2026-08-10T14:42:00.000Z`
 - Expires at: `2026-08-11T02:42:00.000Z`
-- Authority source commit: `b70d1182e315064c9e0154c2c2862b155117947e`
+- Authority source commit: `2c76da3aad0db472d261c2e0f4e0fac3bc9c3069`
 - Risk: `R0`
 - Task template: `forge-root-metadata-query-v1`
 - Repository scope: `bsvalues/terragroq`
