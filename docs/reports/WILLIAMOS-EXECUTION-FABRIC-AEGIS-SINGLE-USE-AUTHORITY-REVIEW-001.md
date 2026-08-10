@@ -29,3 +29,12 @@ The independent assurance lane reviewed execution commit
 - Focused AEGIS bounded-dispatch and resident-runner tests: 37 passed.
 - Scope, input, receipt, Forge, and identity digests: PASS.
 - Worktree mutation by assurance lane: none.
+
+## Exact-head remediation review
+
+Independent assurance reviewed commit
+`512f7c92f12d6cb34883b6da89d1afab5655a7a4` after GitHub review remediation and returned
+`READY` with no P1 or P2 findings. It verified that merge ancestry is preserved, the stale
+request and receipt are absent from the activation head, the authority window is bounded,
+the input is LF-pinned, stable scope digests still match, and no scheduler, storage, remote,
+or autonomous-dispatch authority was introduced.
