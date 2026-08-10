@@ -3,7 +3,11 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { evaluatePlacement } from "./recommend-placement.mjs"
-import { applyPinnedEvidence, loadPinnedEvidence } from "./pinned-evidence-registry.mjs"
+import {
+  applyPinnedEvidence,
+  loadPinnedEvidence,
+  loadPinnedEvidenceInProcess,
+} from "./pinned-evidence-registry.mjs"
 
 const EXIT_INVALID = 2
 
@@ -81,7 +85,7 @@ function parseArguments(argv) {
   return parsed
 }
 
-function runOrThrow(argv) {
+function runOrThrow(argv, evidenceLoader = loadPinnedEvidence) {
   const args = parseArguments(argv)
   const registryArtifact = readJsonArtifact(args.registry, "registry base")
   const schemaArtifact = readJsonArtifact(args.schema, "registry schema")
@@ -94,7 +98,7 @@ function runOrThrow(argv) {
   validatePinnedCatalog(catalog)
   const workload = catalog.workloads.find((candidate) => candidate.id === args.workload)
   if (!workload) fail(`workload not found: ${args.workload}`)
-  const evidence = loadPinnedEvidence({
+  const evidence = evidenceLoader({
     snapshotRoot: args["snapshot-root"],
     references: args.evidence,
     policy,
@@ -138,6 +142,17 @@ function runOrThrow(argv) {
 export function runPinnedPlacementCli(argv) {
   try {
     return runOrThrow(argv)
+  } catch (error) {
+    if (/^(FABRIC_PINNED_(?:PLACEMENT|EVIDENCE)_INVALID|FABRIC_PLACEMENT_INVALID):/.test(String(error?.message ?? error))) {
+      return rejected(error)
+    }
+    throw error
+  }
+}
+
+export function runPinnedPlacementInProcessCli(argv) {
+  try {
+    return runOrThrow(argv, loadPinnedEvidenceInProcess)
   } catch (error) {
     if (/^(FABRIC_PINNED_(?:PLACEMENT|EVIDENCE)_INVALID|FABRIC_PLACEMENT_INVALID):/.test(String(error?.message ?? error))) {
       return rejected(error)

@@ -28,7 +28,8 @@ claim or invoke work.
 
 Before one invocation, the runtime requires all of the following:
 
-1. exact pinned-evidence replay of a still-fresh Phase 1 placement receipt;
+1. exact in-process RFC 8785 pinned-evidence replay of a still-fresh Phase 1 placement receipt,
+   bound to the reviewed reference-verifier digest without relying on a host Python launcher;
 2. exact Agent Forge permission bytes for resident HERMES;
 3. an exact reviewed, non-active authority-scope artifact retained in its reviewed commit;
 4. a separate later active authority-registry entry whose complete bytes are on trusted `main`;
@@ -61,8 +62,9 @@ scope, activation, and result evidence; it does not schedule or select work.
 
 - bounded runtime, static dispatch-contract, and Phase 2 placement suites: `104/104 PASS`;
 - Execution Fabric family excluding the host-blocked pinned-Python suite: `283/283 PASS`;
-- pinned-Python suite: `15` tests blocked before test logic by sandbox denial of the WindowsApps
-  Python interpreter; this is the existing host condition and not a product failure;
+- legacy external-Python verifier suite: `15` tests blocked before test logic by the host's broken
+  Python launcher; the bounded runtime no longer consumes that launcher;
+- in-process pinned-verifier replay and tamper rejection: `PASS`;
 - Node syntax checks: `PASS`;
 - production build: `PASS` (existing Better Auth environment warnings only);
 - `git diff --check`: `PASS`.

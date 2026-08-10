@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 import { canonicalizeJcs } from "../canonical-json.mjs"
-import { runPinnedPlacementCli } from "../recommend-pinned-placement.mjs"
+import { runPinnedPlacementInProcessCli } from "../recommend-pinned-placement.mjs"
 import { executeResidentHermesBoundedDispatch } from "./resident-hermes-bounded-dispatch.mjs"
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
@@ -88,7 +88,6 @@ function proveTrustedPlacement({ receiptSha256, receipt }) {
   const args = [
     "--snapshot-root", "C:\\HermesLab\\snapshots",
     "--verifier", "C:\\HermesLab\\tools\\verify_snapshot.py",
-    "--python", "py",
     "--registry", path.join(REPOSITORY_ROOT, "config/execution-fabric/registry.seed.json"),
     "--schema", path.join(REPOSITORY_ROOT, "config/execution-fabric/registry.schema.json"),
     "--policy", path.join(REPOSITORY_ROOT, "config/execution-fabric/pinned-evidence-policy.json"),
@@ -97,7 +96,7 @@ function proveTrustedPlacement({ receiptSha256, receipt }) {
     "--at", receipt.evaluated_at,
   ]
   for (const evidence of receipt.evidence_snapshot) args.push("--evidence", `${evidence.node}=${evidence.snapshot_sha256}`)
-  const replay = runPinnedPlacementCli(args)
+  const replay = runPinnedPlacementInProcessCli(args)
   if (replay.status === "INPUT_REJECTED" || canonicalizeJcs(replay) !== canonicalizeJcs(receipt)) {
     throw new Error("pinned placement replay does not reproduce the exact receipt semantics")
   }

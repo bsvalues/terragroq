@@ -1,10 +1,15 @@
+import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { describe, expect, it } from "vitest"
 
-import { runPinnedPlacementCli } from "../scripts/execution-fabric/recommend-pinned-placement.mjs"
+import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
+import {
+  runPinnedPlacementCli,
+  runPinnedPlacementInProcessCli,
+} from "../scripts/execution-fabric/recommend-pinned-placement.mjs"
 
 type JsonObject = Record<string, any>
 type Fixture = { root: string; snapshotRoot: string; refs: Record<string, string> }
@@ -81,6 +86,25 @@ function fixture(mutate?: (values: Record<string, JsonObject>) => void): Fixture
   return { root, snapshotRoot, refs }
 }
 
+function inProcessFixture(mutate?: (values: Record<string, JsonObject>) => void): Fixture {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "fabric-pinned-placement-in-process-"))
+  const snapshotRoot = path.join(root, "snapshots")
+  const values = feeds()
+  mutate?.(values)
+  const refs: Record<string, string> = {}
+  for (const [node, feed] of Object.entries(values)) {
+    const snapshotSha256 = crypto.createHash("sha256").update(canonicalizeJcs(feed)).digest("hex")
+    const directory = path.join(snapshotRoot, node)
+    fs.mkdirSync(directory, { recursive: true })
+    fs.writeFileSync(path.join(directory, `${snapshotSha256}.json`), `${JSON.stringify({
+      ...feed,
+      snapshot_sha256: snapshotSha256,
+    }, null, 2)}\n`)
+    refs[node] = snapshotSha256
+  }
+  return { root, snapshotRoot, refs }
+}
+
 function args(value: Fixture, at = "2026-08-10T07:00:00.000Z") {
   return [
     "--snapshot-root", value.snapshotRoot, "--verifier", verifier, "--python", testPython,
@@ -108,6 +132,28 @@ function expectRejected(result: JsonObject, detail: string) {
 }
 
 describe("Execution Fabric pinned placement recommendations", () => {
+  it("replays the pinned verifier contract in-process without an interpreter dependency", () => {
+    const value = inProcessFixture()
+    const first = runPinnedPlacementInProcessCli(args(value)) as JsonObject
+    const replay = runPinnedPlacementInProcessCli(args(value)) as JsonObject
+    expect(first).toEqual(replay)
+    expect(first).toMatchObject({
+      status: "RECOMMENDED",
+      recommendation: { node_id: "aegis", execution_authorized: false, dispatch_allowed: false },
+      scheduler: { state: "disabled", authority: "not-granted", autonomous_dispatch: "forbidden" },
+      evidence_verifier: {
+        contract: "jcs-rfc8785/1",
+        reference_implementation: "verify_snapshot.py",
+        result: "PASS",
+      },
+    })
+
+    const hermesPath = path.join(value.snapshotRoot, "hermes-node", `${value.refs["hermes-node"]}.json`)
+    const changed = JSON.parse(fs.readFileSync(hermesPath, "utf8"))
+    changed.resources.cpu_load_pct += 1
+    fs.writeFileSync(hermesPath, `${JSON.stringify(changed, null, 2)}\n`)
+    expect(runPinnedPlacementInProcessCli(args(value))).toMatchObject({ status: "INPUT_REJECTED" })
+  })
   it("runs the real pinned verifier and is invariant to reference order", () => {
     const value = fixture()
     const first = run(value)
