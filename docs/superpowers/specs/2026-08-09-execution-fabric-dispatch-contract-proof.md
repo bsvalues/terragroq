@@ -28,8 +28,9 @@ without creating or mutating their records.
 `schema_version` is `0.1-dispatch-contract-proof`; `proof_mode` is
 `STATIC_NON_CONSUMABLE`. Unknown fields fail closed. The exact sections are:
 
-- `recommendation`: recommendation schema/status, exact snapshot and workload digests, selected node,
-  evaluation/expiry, and the existing `execution_authorized=false` and `dispatch_allowed=false` walls.
+- `recommendation`: the canonical artifact emitted by `recommend-placement.mjs`, including exact
+  snapshot/workload digests, ranked selected node, evidence freshness, scheduler walls, and the
+  existing `execution_authorized=false` and `dispatch_allowed=false` walls.
 - `dispatch_envelope`: canonical v2 program/goal/loop/Work Order, repository/base, roles, reservations,
   actions, bounded retries, review, evidence, and owner-operation contract.
 - `reservation_set`: canonical v1 normalized path/contract/environment reservation set.
