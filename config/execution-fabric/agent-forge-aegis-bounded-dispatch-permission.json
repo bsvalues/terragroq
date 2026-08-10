@@ -1,0 +1,29 @@
+{
+  "schema_version": "0.1-agent-forge-aegis-bounded-dispatch-permission",
+  "permission_set_id": "resident-aegis-bounded-compute-v1",
+  "agent_identity": "resident-aegis",
+  "provider_identity": "resident-aegis",
+  "allowed_actions": [
+    "prepare-exact-reviewed-compute-template",
+    "write-job-scoped-scratch",
+    "emit-bounded-result-evidence",
+    "remove-owned-job-scratch"
+  ],
+  "prohibited_actions": [
+    "arbitrary-shell",
+    "autonomous-scheduling",
+    "authority-mutation",
+    "external-network-access",
+    "remote-node-access",
+    "silent-replacement",
+    "authoritative-state-write",
+    "backup-nas-archive-access",
+    "destructive-disk-action",
+    "privilege-escalation"
+  ],
+  "maximum_concurrency": 1,
+  "scheduler_activation_allowed": false,
+  "autonomous_dispatch_allowed": false,
+  "storage_authority_allowed": false,
+  "status": "SCOPE_ONLY_NOT_AUTHORITY"
+}

@@ -1,0 +1,44 @@
+{
+  "schema_version": "0.1-aegis-bounded-operation-profiles",
+  "registry_id": "resident-aegis-bounded-operation-profiles",
+  "profiles": [
+    {
+      "profile_id": "williamos.standard-validation.v1",
+      "template_id": "aegis.ci-build-test.v1",
+      "runner_kind": "digest-pinned-rootless-container",
+      "network_scope": "none",
+      "dependency_policy": "preprovisioned-lockfile-only",
+      "stages": [
+        "lockfile-integrity",
+        "focused-tests",
+        "full-suite",
+        "production-build"
+      ]
+    },
+    {
+      "profile_id": "sha256.verify.v1",
+      "template_id": "aegis.hash-verify.v1",
+      "runner_kind": "in-process-digest-pinned-module",
+      "network_scope": "none",
+      "algorithm": "sha256",
+      "stages": [
+        "manifest-verify",
+        "aggregate-verify"
+      ]
+    },
+    {
+      "profile_id": "tar-zstd.deterministic.v1",
+      "template_id": "aegis.compression.v1",
+      "runner_kind": "in-process-digest-pinned-module",
+      "network_scope": "none",
+      "format": "tar.zst",
+      "deterministic": true,
+      "stages": [
+        "manifest-verify",
+        "archive-create",
+        "archive-manifest"
+      ]
+    }
+  ],
+  "status": "NON_ACTIVE_PROFILES"
+}
