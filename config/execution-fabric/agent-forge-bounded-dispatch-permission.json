@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.1-agent-forge-bounded-dispatch-permission",
+  "permission_set_id": "resident-hermes-bounded-local-inference-v1",
+  "agent_identity": "resident-hermes",
+  "provider_identity": "resident-hermes",
+  "allowed_actions": [
+    "invoke-exact-loopback-model-template",
+    "emit-bounded-result-evidence"
+  ],
+  "prohibited_actions": [
+    "arbitrary-shell",
+    "autonomous-scheduling",
+    "authority-mutation",
+    "external-provider-access",
+    "remote-node-access",
+    "silent-replacement",
+    "stateful-storage-write"
+  ],
+  "maximum_concurrency": 1,
+  "scheduler_activation_allowed": false,
+  "autonomous_dispatch_allowed": false,
+  "status": "SCOPE_ONLY_NOT_AUTHORITY"
+}
