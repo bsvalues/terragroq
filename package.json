@@ -17,6 +17,7 @@
     "fabric:dispatch-contract": "node scripts/execution-fabric/evaluate-dispatch-contract.mjs",
     "fabric:recommend:pinned": "node scripts/execution-fabric/recommend-pinned-placement.mjs",
     "fabric:shadow": "node scripts/execution-fabric/evaluate-shadow-placement.mjs",
+    "fabric:shadow-admit": "node scripts/execution-fabric/admission/compile-shadow-admission.mjs",
     "fabric:shadow-outcome": "node scripts/execution-fabric/shadow-outcome-evidence.mjs"
   },
   "dependencies": {
