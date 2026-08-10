@@ -1,0 +1,16 @@
+{
+  "schema_version": "0.1-aegis-resident-runner-error",
+  "status": "FAILED_CLOSED",
+  "code": "REQUEST_ALREADY_CONSUMED",
+  "detail": "FABRIC_AEGIS_HASH_VERIFY_INVALID: REQUEST_ALREADY_CONSUMED: single-use request is already consumed",
+  "claim_consumed": false,
+  "claim_id": "claim-dce2320e5b737d481de2bc69",
+  "runtime_lease_id": null,
+  "operation_attempted": false,
+  "runtime_lease_released": false,
+  "execution_authorized": false,
+  "network_accessed": false,
+  "remote_systems_modified": false,
+  "scheduler_activated": false,
+  "fallback_used": false
+}
