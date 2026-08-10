@@ -3,7 +3,7 @@
   "request_id": "aegis-single-use-hash-001",
   "work_order_id": "WO-EF-DISPATCH-AEGIS-001",
   "template_id": "aegis.hash-verify.v1",
-  "placement_receipt_sha256": "389c03cc669f303578eb41a785f42b0532b6e3eb9e54e10c68013e7d60677c30",
+  "placement_receipt_sha256": "671022632e9468629be5d0cd86e5f50dea81cffd6aec4e46ecfe4f1486b0f415",
   "input": {
     "relative_path": "WO-EF-DISPATCH-AEGIS-001.json",
     "expected_sha256": "8142d6c2154446cabc944c77dfe99c1e2c986985a03d33f4f841395de3747e14",

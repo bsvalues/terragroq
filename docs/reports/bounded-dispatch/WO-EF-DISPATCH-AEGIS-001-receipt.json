@@ -3,7 +3,7 @@
   "status": "RECOMMENDED",
   "recommendation_only": true,
   "eligibility_scope": "recommendation-only",
-  "evaluated_at": "2026-08-10T20:30:39.790Z",
+  "evaluated_at": "2026-08-10T20:39:34.613Z",
   "workload": {
     "id": "cpu-heavy-build",
     "title": "CPU-heavy build",
@@ -48,7 +48,7 @@
         },
         {
           "path": "nodes.aegis.evidence.observed_at",
-          "value": "2026-08-10T20:30:37Z"
+          "value": "2026-08-10T20:36:39Z"
         },
         {
           "path": "nodes.aegis.evidence.ttl_seconds",
@@ -56,7 +56,7 @@
         },
         {
           "path": "nodes.aegis.evidence.probe",
-          "value": "pinned snapshot 1466c41fda22d65278ec2514e3bea22d70fb455bf6dd390ed56adba82f127504"
+          "value": "pinned snapshot 95014397aa31c503161447ad5d2d86b99ea789d69a9aeeb03033db39f11e9f02"
         },
         {
           "path": "nodes.aegis.evidence.probe_version",
@@ -85,10 +85,10 @@
           "value": {
             "state": "READY",
             "reason": "COMPUTE_CAPABILITY_READY",
-            "observed_at": "2026-08-10T20:30:37Z",
-            "expires_at": "2026-08-10T20:35:37.000Z",
-            "snapshot_sha256": "1466c41fda22d65278ec2514e3bea22d70fb455bf6dd390ed56adba82f127504",
-            "evidence_ref": "snapshots/aegis/1466c41fda22d65278ec2514e3bea22d70fb455bf6dd390ed56adba82f127504.json"
+            "observed_at": "2026-08-10T20:36:39Z",
+            "expires_at": "2026-08-10T20:41:39.000Z",
+            "snapshot_sha256": "95014397aa31c503161447ad5d2d86b99ea789d69a9aeeb03033db39f11e9f02",
+            "evidence_ref": "snapshots/aegis/95014397aa31c503161447ad5d2d86b99ea789d69a9aeeb03033db39f11e9f02.json"
           }
         },
         {
@@ -127,9 +127,9 @@
       "confidence": "observed",
       "freshness": {
         "state": "fresh",
-        "age_seconds": 2.79,
+        "age_seconds": 175.613,
         "ttl_seconds": 300,
-        "expires_at": "2026-08-10T20:35:37.000Z"
+        "expires_at": "2026-08-10T20:41:39.000Z"
       },
       "execution_authorized": false,
       "dispatch_allowed": false,
@@ -154,7 +154,7 @@
         },
         {
           "path": "nodes.hermes-node.evidence.observed_at",
-          "value": "2026-08-10T20:30:33Z"
+          "value": "2026-08-10T20:36:31Z"
         },
         {
           "path": "nodes.hermes-node.evidence.ttl_seconds",
@@ -162,7 +162,7 @@
         },
         {
           "path": "nodes.hermes-node.evidence.probe",
-          "value": "pinned snapshot 348f146cb6953a4bcd8282167ebbb16cbbd46db8cc8e32bbc35873f4138cce3d"
+          "value": "pinned snapshot d3a79ff9d4f65497770255fe1f59cb2da9813c20873bd6dd57028b37ada2df7b"
         },
         {
           "path": "nodes.hermes-node.evidence.probe_version",
@@ -188,10 +188,10 @@
           "value": {
             "state": "READY",
             "reason": "COMPUTE_CAPABILITY_READY",
-            "observed_at": "2026-08-10T20:30:33Z",
-            "expires_at": "2026-08-10T20:35:33.000Z",
-            "snapshot_sha256": "348f146cb6953a4bcd8282167ebbb16cbbd46db8cc8e32bbc35873f4138cce3d",
-            "evidence_ref": "snapshots/hermes-node/348f146cb6953a4bcd8282167ebbb16cbbd46db8cc8e32bbc35873f4138cce3d.json"
+            "observed_at": "2026-08-10T20:36:31Z",
+            "expires_at": "2026-08-10T20:41:31.000Z",
+            "snapshot_sha256": "d3a79ff9d4f65497770255fe1f59cb2da9813c20873bd6dd57028b37ada2df7b",
+            "evidence_ref": "snapshots/hermes-node/d3a79ff9d4f65497770255fe1f59cb2da9813c20873bd6dd57028b37ada2df7b.json"
           }
         },
         {
@@ -230,9 +230,9 @@
       "confidence": "observed",
       "freshness": {
         "state": "fresh",
-        "age_seconds": 6.79,
+        "age_seconds": 183.613,
         "ttl_seconds": 300,
-        "expires_at": "2026-08-10T20:35:33.000Z"
+        "expires_at": "2026-08-10T20:41:31.000Z"
       },
       "execution_authorized": false,
       "dispatch_allowed": false,
@@ -283,7 +283,7 @@
         },
         {
           "path": "nodes.atlas.evidence.observed_at",
-          "value": "2026-08-10T20:30:34Z"
+          "value": "2026-08-10T20:36:35Z"
         },
         {
           "path": "nodes.atlas.evidence.ttl_seconds",
@@ -291,7 +291,7 @@
         },
         {
           "path": "nodes.atlas.evidence.probe",
-          "value": "pinned snapshot c31fd02340bf5d7a61648b28c09e310fe16002ee23bcc214ae2409364e125077"
+          "value": "pinned snapshot 3d969ea9bb778c0fd180316441540bf3bd2d938c6c92acb5df13bd259c7308d6"
         },
         {
           "path": "nodes.atlas.evidence.probe_version",
@@ -339,9 +339,9 @@
       "confidence": "observed",
       "freshness": {
         "state": "fresh",
-        "age_seconds": 5.79,
+        "age_seconds": 179.613,
         "ttl_seconds": 300,
-        "expires_at": "2026-08-10T20:35:34.000Z"
+        "expires_at": "2026-08-10T20:41:35.000Z"
       },
       "execution_authorized": false,
       "dispatch_allowed": false,
@@ -589,15 +589,15 @@
   "evidence_snapshot": [
     {
       "node": "aegis",
-      "snapshot_sha256": "1466c41fda22d65278ec2514e3bea22d70fb455bf6dd390ed56adba82f127504"
+      "snapshot_sha256": "95014397aa31c503161447ad5d2d86b99ea789d69a9aeeb03033db39f11e9f02"
     },
     {
       "node": "atlas",
-      "snapshot_sha256": "c31fd02340bf5d7a61648b28c09e310fe16002ee23bcc214ae2409364e125077"
+      "snapshot_sha256": "3d969ea9bb778c0fd180316441540bf3bd2d938c6c92acb5df13bd259c7308d6"
     },
     {
       "node": "hermes-node",
-      "snapshot_sha256": "348f146cb6953a4bcd8282167ebbb16cbbd46db8cc8e32bbc35873f4138cce3d"
+      "snapshot_sha256": "d3a79ff9d4f65497770255fe1f59cb2da9813c20873bd6dd57028b37ada2df7b"
     }
   ],
   "evidence_verifier": {
@@ -607,11 +607,11 @@
     "result": "PASS"
   },
   "input_artifacts": {
-    "registry_base_sha256": "3bf87569b1865d2b2b2e331f45c4a577b00c58d9819d3d8a200288cbea6bbba2",
-    "registry_schema_sha256": "a834885e14f3e017dc7c12f9a9c15dd37620d78723c41da952551c6080410d2c",
-    "pinned_evidence_policy_sha256": "129e10d7f317d52ac91791806d62914e220f6730323e25089528b9e6fde0f2ab",
-    "workload_catalog_sha256": "09df974622f99439c25f35d7ebfb17047543584badd5fe3c9f7e615dead51926"
+    "registry_base_sha256": "80ad159f4845645ace22f60f6d6d89e481258243f06a79bcb06d408a40dd6af6",
+    "registry_schema_sha256": "67ca8e4bc15edf665bb83ff59e94f16947552e1d9a87860deca5895b9e67e376",
+    "pinned_evidence_policy_sha256": "3592f2af72068e12b040b81cf803df72a51003b16926701f93818fa8416cc71a",
+    "workload_catalog_sha256": "793c56c24df803b8492c967c9e6d5f9f5563af7bddc5aec6526da56f32a1c14f"
   },
   "catalog_schema_version": "0.1-placement-workloads",
-  "decision_input_sha256": "29df13d1ecf27d92f4a2f6590268688ee526b10cb8515b40f979b2491a4c469f"
+  "decision_input_sha256": "f844044f091fb6e6d927d3d00d09f42d67cf0e7616da630ae85597480d2d1392"
 }
