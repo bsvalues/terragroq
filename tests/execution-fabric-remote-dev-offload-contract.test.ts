@@ -60,14 +60,14 @@ function packet() {
     transport: { controller: "omen", relay: "hermes", worker: "aegis" },
     resourceLimits: { cpuThreads: 12, memoryBytes: 12884901888, scratchBytes: 85899345920, timeoutSeconds: 5400, maxAttempts: 3 },
     operations: ["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "APPLY_RESERVED_PATCH", "RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE", "COMMIT_RESERVED_PATHS", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE", "CLEAN_EXACT_WORKSPACE"],
-    patch: { sha256: "b".repeat(64), changedPaths: [".github/workflows/dotnet-test.yml", ".github/workflows/terrafusion-ci.yml", "tests/ci-terrafusion-unit-informational.test.ts", "docs/brain/evidence/WO-TF-REMOTE-DEV-OFFLOAD-001-proof.md"] },
+    patch: { sha256: "b".repeat(64), generation: 1, changedPaths: [".github/workflows/dotnet-test.yml", ".github/workflows/terrafusion-ci.yml", "tests/ci-terrafusion-unit-informational.test.ts", "docs/brain/evidence/WO-TF-REMOTE-DEV-OFFLOAD-001-proof.md"] },
     authority: { grantId: "grant-remote-dev-offload-v1", issuedAt: "2026-08-10T18:00:00.000Z", expiresAt: "2026-08-10T22:00:00.000Z", singleUse: true },
     bindings: { policySha256: "", packetSha256: "" },
   }
 }
 
 function context(overrides: Record<string, unknown> = {}) {
-  return { now: "2026-08-10T19:00:00.000Z", seenRunIds: [], branch: "codex/wo-tf-remote-dev-offload-001-734", dispatchEnvelope: envelope(), ...overrides }
+  return { now: "2026-08-10T21:00:00.000Z", seenRunIds: [], branch: "codex/wo-tf-remote-dev-offload-001-734", dispatchEnvelope: envelope(), ...overrides }
 }
 
 function bound() {
@@ -76,12 +76,12 @@ function bound() {
   return result.packet
 }
 
-function evidence(operation: string, attempt: number, previousEvidenceSha256: string | null, overrides: Record<string, unknown> = {}) {
+function evidence(operation: string, attempt: number, previousEvidenceSha256: string | null, overrides: Record<string, unknown> = {}, boundPacket = bound()) {
   const sequence = packet().operations.indexOf(operation) + 1
   return {
     schemaVersion: 1, runId: packet().runId, operation, attempt,
     startedAt: `2026-08-10T19:${String(sequence).padStart(2, "0")}:00.000Z`, completedAt: `2026-08-10T19:${String(sequence).padStart(2, "0")}:30.000Z`,
-    status: "SUCCEEDED", exitCode: 0, nodeId: "aegis", workspace: "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001", baseSha: "a".repeat(40), headSha: "c".repeat(40), outputSha256: "d".repeat(64), previousEvidenceSha256,
+    status: "SUCCEEDED", exitCode: 0, nodeId: "aegis", workspace: "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001", branch: boundPacket.branch, baseSha: "a".repeat(40), headSha: "c".repeat(40), outputSha256: "d".repeat(64), policySha256: boundPacket.bindings.policySha256, packetSha256: boundPacket.bindings.packetSha256, patchSha256: boundPacket.patch.sha256, patchGeneration: boundPacket.patch.generation, previousEvidenceSha256,
     ...overrides,
   }
 }
@@ -95,12 +95,38 @@ describe("remote development offload proof contract", () => {
     expect(value.resourceLimits).toEqual({ cpuThreads: 12, memoryBytes: 12884901888, scratchBytes: 85899345920, timeoutSeconds: 5400, maxAttempts: 3 })
     expect(value.scheduler).toEqual({ state: "disabled", standingAegisAuthority: false })
     expect(value.operations).toEqual(packet().operations)
+    expect(value.reservedPaths).toEqual(packet().patch.changedPaths)
+    expect(value.deniedActions).toEqual(["ARBITRARY_SHELL", "ATLAS_ACCESS", "CREDENTIAL_ACCESS", "OWNER_CONTACT", "PERSISTENT_SERVICE", "RUNTIME_ACTIVATION"])
+    expect(value.deniedTargets).toEqual(["atlas", "omen-workspace", "hermes-workspace", "production", "protected-data"])
+  })
+
+  it.each([
+    ["substituted reserved path", (value: any) => { value.reservedPaths[0] = "README.md" }],
+    ["removed denied action", (value: any) => { value.deniedActions.pop() }],
+    ["removed denied target", (value: any) => { value.deniedTargets.pop() }],
+  ])("blocks weakened policy %s", (_name, mutate) => {
+    const value = policy(); mutate(value)
+    expect(bindRemoteDevPacket(packet(), value, context())).toMatchObject({ status: "BLOCKED" })
   })
 
   it("binds one exact Hermes-mediated packet to canonical dispatch and JCS SHA-256 values", () => {
     const result = bindRemoteDevPacket(packet(), policy(), context())
     expect(result).toMatchObject({ status: "READY", packet: { bindings: { policySha256: sha(policy()), packetSha256: expect.stringMatching(/^[a-f0-9]{64}$/) } } })
     expect(exitCodeForRemoteDevStatus(result.status)).toBe(0)
+  })
+
+  it.each([
+    ["reservation path", (value: any) => { value.reservations.paths[0].path = "README.md" }],
+    ["authority grant reference", (value: any) => { value.authorityGrantRefs = ["another-grant"] }],
+    ["Hermes role", (value: any) => { value.teamRoles.coordinator = "other-controller" }],
+    ["allowed action", (value: any) => { value.allowedActions = value.allowedActions.filter((action: string) => action !== "VERIFY_POST_MERGE") }],
+    ["forbidden action", (value: any) => { value.forbiddenActions = ["CREDENTIAL_ACCESS"] }],
+    ["risk class", (value: any) => { value.riskClass = "R0" }],
+    ["retry limit", (value: any) => { value.retryBudget.maxAttempts = 2 }],
+    ["review requirement", (value: any) => { value.reviewRequirements.minimumApprovals = 2 }],
+  ])("blocks canonical dispatch envelope drift in %s", (_name, mutate) => {
+    const changed = envelope(); mutate(changed)
+    expect(bindRemoteDevPacket(packet(), policy(), context({ dispatchEnvelope: changed }))).toMatchObject({ status: "BLOCKED", reasons: [{ code: "DISPATCH_ENVELOPE_MISMATCH" }] })
   })
 
   it.each([
@@ -125,14 +151,27 @@ describe("remote development offload proof contract", () => {
 
   it("requires ordered hash-chained evidence and merge ancestry before guarded cleanup completes", () => {
     const value = bound()
-    const first = evidence("PROVE_PREFLIGHT", 1, null)
+    const first = evidence("PROVE_PREFLIGHT", 1, null, {}, value)
     expect(evaluateRemoteDevTransition(value, first, context())).toMatchObject({ status: "RUNNING" })
     const chain = [first]
     for (const [index, operation] of packet().operations.slice(1).entries()) {
       const previous = chain.at(-1)!
-      chain.push(evidence(operation, 1, sha(previous), operation === "PROVE_POST_MERGE" ? { status: "MERGE_ANCESTRY_PROVEN" } : operation === "CLEAN_EXACT_WORKSPACE" ? { status: "CLEANUP_ABSENCE_PROVEN" } : {}))
+      chain.push(evidence(operation, 1, sha(previous), operation === "PROVE_POST_MERGE" ? { status: "MERGE_ANCESTRY_PROVEN" } : operation === "CLEAN_EXACT_WORKSPACE" ? { status: "CLEANUP_ABSENCE_PROVEN" } : {}, value))
     }
     expect(evaluateRemoteDevTransition(value, chain.at(-1)!, context({ evidenceHistory: chain.slice(0, -1) }))).toMatchObject({ status: "COMPLETE" })
+  })
+
+  it.each([
+    ["policy binding", (value: any) => { value.policySha256 = "e".repeat(64) }],
+    ["packet binding", (value: any) => { value.packetSha256 = "e".repeat(64) }],
+    ["branch", (value: any) => { value.branch = "codex/wo-tf-remote-dev-offload-001-other" }],
+    ["patch digest", (value: any) => { value.patchSha256 = "e".repeat(64) }],
+    ["patch generation", (value: any) => { value.patchGeneration = 2 }],
+    ["future transition timestamp", (value: any) => { value.completedAt = "2026-08-10T21:00:00.001Z" }],
+    ["pre-grant transition timestamp", (value: any) => { value.startedAt = "2026-08-10T17:59:00.000Z" }],
+  ])("blocks evidence that drifts %s or violates grant chronology", (_name, mutate) => {
+    const value = bound(); const first = evidence("PROVE_PREFLIGHT", 1, null, {}, value); mutate(first)
+    expect(evaluateRemoteDevTransition(value, first, context())).toMatchObject({ status: "BLOCKED" })
   })
 
   it("blocks ambiguous cleanup, out-of-order operations, and malformed CLI input", () => {

@@ -39,8 +39,8 @@ function rejectUnsafe(value, label = "input") {
 }
 
 function validatePolicy(policy) {
-  exactKeys(policy, ["schemaVersion", "workOrderId", "repository", "baseRef", "nodeId", "workspace", "branchPrefix", "reservedPaths", "resourceLimits", "operations", "transport", "canonicalAegisContract", "scheduler", "deniedActions", "deniedTargets"], "policy")
-  if (policy.schemaVersion !== 1 || policy.workOrderId !== "WO-TF-REMOTE-DEV-OFFLOAD-001" || policy.repository !== "bsvalues/terrafusion_os_1.0" || policy.baseRef !== "refs/heads/main" || policy.nodeId !== "aegis" || policy.workspace !== "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001" || policy.branchPrefix !== "codex/wo-tf-remote-dev-offload-001-") block("POLICY_INVALID", "immutable identity changed")
+  exactKeys(policy, ["schemaVersion", "workOrderId", "repository", "baseRef", "nodeId", "workspace", "branchPrefix", "patchGeneration", "reservedPaths", "resourceLimits", "operations", "transport", "canonicalAegisContract", "scheduler", "deniedActions", "deniedTargets"], "policy")
+  if (policy.schemaVersion !== 1 || policy.workOrderId !== "WO-TF-REMOTE-DEV-OFFLOAD-001" || policy.repository !== "bsvalues/terrafusion_os_1.0" || policy.baseRef !== "refs/heads/main" || policy.nodeId !== "aegis" || policy.workspace !== "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001" || policy.branchPrefix !== "codex/wo-tf-remote-dev-offload-001-" || policy.patchGeneration !== 1) block("POLICY_INVALID", "immutable identity changed")
   exactValue(policy.resourceLimits, { cpuThreads: 12, memoryBytes: 12884901888, scratchBytes: 85899345920, timeoutSeconds: 5400, maxAttempts: 3 }, "resourceLimits")
   exactValue(policy.operations, ["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "APPLY_RESERVED_PATCH", "RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE", "COMMIT_RESERVED_PATHS", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE", "CLEAN_EXACT_WORKSPACE"], "operations")
   exactValue(policy.transport, { controller: "omen", relay: "hermes", worker: "aegis", hermesOnly: true }, "transport")
@@ -50,8 +50,9 @@ function validatePolicy(policy) {
   const canonicalAegis = JSON.parse(canonicalBytes.toString("utf8"))
   if (canonicalAegis.contract_id !== policy.canonicalAegisContract.contractId || canonicalAegis.status !== policy.canonicalAegisContract.status || canonicalAegis.execution_authorized !== false || canonicalAegis.scheduler_activation_allowed !== false || !canonicalAegis.templates?.some((template) => template.template_id === policy.canonicalAegisContract.ciBuildTemplateId)) block("CANONICAL_AEGIS_CONTRACT_MISMATCH", "non-active CI_BUILD_TEST contract")
   exactValue(policy.scheduler, { state: "disabled", standingAegisAuthority: false }, "scheduler")
-  if (!Array.isArray(policy.reservedPaths) || policy.reservedPaths.length !== 4 || !policy.reservedPaths.every((item) => typeof item === "string" && !item.startsWith("/") && !item.includes("..") && !item.includes("\\"))) block("POLICY_INVALID", "reservedPaths")
-  if (!Array.isArray(policy.deniedActions) || !Array.isArray(policy.deniedTargets) || !policy.deniedTargets.includes("atlas")) block("POLICY_INVALID", "denial policy")
+  exactValue(policy.reservedPaths, [".github/workflows/dotnet-test.yml", ".github/workflows/terrafusion-ci.yml", "tests/ci-terrafusion-unit-informational.test.ts", "docs/brain/evidence/WO-TF-REMOTE-DEV-OFFLOAD-001-proof.md"], "reservedPaths")
+  exactValue(policy.deniedActions, ["ARBITRARY_SHELL", "ATLAS_ACCESS", "CREDENTIAL_ACCESS", "OWNER_CONTACT", "PERSISTENT_SERVICE", "RUNTIME_ACTIVATION"], "deniedActions")
+  exactValue(policy.deniedTargets, ["atlas", "omen-workspace", "hermes-workspace", "production", "protected-data"], "deniedTargets")
   return policy
 }
 
@@ -81,8 +82,9 @@ function validatePacket(input, policy, trustedContext, { requireBindings = false
   exactValue(packet.transport, { controller: "omen", relay: "hermes", worker: "aegis" }, "transport")
   exactValue(packet.resourceLimits, policy.resourceLimits, "resourceLimits")
   exactValue(packet.operations, policy.operations, "operations")
-  exactKeys(packet.patch, ["sha256", "changedPaths"], "packet.patch")
+  exactKeys(packet.patch, ["sha256", "generation", "changedPaths"], "packet.patch")
   digest(packet.patch.sha256, "patch.sha256")
+  if (!Number.isSafeInteger(packet.patch.generation) || packet.patch.generation !== policy.patchGeneration) block("PATCH_INVALID", "generation")
   if (!Array.isArray(packet.patch.changedPaths) || packet.patch.changedPaths.some((item) => typeof item !== "string") || new Set(packet.patch.changedPaths).size !== packet.patch.changedPaths.length) block("PATCH_INVALID", "changedPaths")
   exactValue([...packet.patch.changedPaths].sort(), [...policy.reservedPaths].sort(), "patch.changedPaths")
   exactKeys(packet.authority, ["grantId", "issuedAt", "expiresAt", "singleUse"], "packet.authority")
@@ -94,7 +96,16 @@ function validatePacket(input, policy, trustedContext, { requireBindings = false
     if (packet.bindings.policySha256 !== hash(policy) || packet.bindings.packetSha256 !== hash(unsigned)) block("BINDING_MISMATCH", "bindings")
   }
   const { envelope } = trustedContext
-  if (envelope.workOrderId !== packet.workOrderId || envelope.repositories.length !== 1 || envelope.repositories[0] !== packet.repository || envelope.baseRefs[0].ref !== packet.baseRef || envelope.baseRefs[0].commitSha !== packet.baseSha || envelope.ownerOperationsAllowed !== false) block("DISPATCH_ENVELOPE_MISMATCH", "canonical envelope")
+  const approvedEnvelope = {
+    schemaVersion: 2, programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001", goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001", loopId: "LOOP-WOS-MULTI-AGENT-OPERATOR-001", workOrderId: packet.workOrderId,
+    objective: "Deliver the bounded TerraFusion informational CI proof.", riskClass: "R1", repositories: [packet.repository], baseRefs: [{ repository: packet.repository, ref: packet.baseRef, commitSha: packet.baseSha }], dependencies: [], fanInGate: "ALL", laneId: "LANE-TF-REMOTE-DEV-OFFLOAD",
+    teamRoles: { coordinator: "omen-controller", builder: "aegis-worker", reviewer: "independent-assurance" }, providerRequirements: ["hermes-relay"], preferredProviders: ["hermes-relay"], fallbackProviders: [],
+    reservations: { paths: policy.reservedPaths.map((path) => ({ repository: packet.repository, path })), contracts: ["remote-dev-offload-v1"], environments: ["aegis-proof-workspace"] },
+    allowedActions: ["READ_REPOSITORY", "WRITE_RESERVED_PATHS", "RUN_VALIDATION", "COMMIT_OWN_CHANGES", "PUSH_OWN_BRANCH", "OPEN_DRAFT_PR", "READ_CI_AND_REVIEW", "MERGE_ELIGIBLE_PR", "VERIFY_POST_MERGE"],
+    forbiddenActions: ["OWNER_CONTACT", "CREDENTIAL_ACCESS", "RUNTIME_ACTIVATION", "PRODUCTION_WRITE", "BRANCH_PROTECTION_BYPASS", "DESTRUCTIVE_GIT"], authorityGrantRefs: ["grant-remote-dev-offload-v1"], programActivationGrantRef: "grant-remote-dev-offload-v1", grantStatusEventRefs: ["grant-status-remote-dev-offload-v1"],
+    requiredOutputs: ["policy-bound-packet", "hash-chained-evidence"], requiredValidation: ["focused-vitest"], reviewRequirements: { independentReviewer: true, minimumApprovals: 1, maximumUnresolvedThreads: 0 }, mergeMode: "ASSURANCE_GATED", retryBudget: { maxAttempts: 3, backoffSeconds: 10 }, remediationBudget: { maxCycles: 2 }, reroutePolicy: "NONE", stopConditions: ["authority-wall", "resource-limit"], evidenceTargets: ["branch", "commit", "merge", "cleanup"], ownerDecisionConditions: [], ownerOperationsAllowed: false,
+  }
+  if (canonicalizeJcs(envelope) !== canonicalizeJcs(validateDispatchEnvelope(approvedEnvelope).envelope)) block("DISPATCH_ENVELOPE_MISMATCH", "canonical envelope")
   return packet
 }
 
@@ -109,12 +120,13 @@ export function bindRemoteDevPacket(packet, policy, trustedContext) {
   } catch (error) { return blocked(error) }
 }
 
-function validateEvidence(evidence, packet, previous, expectedIndex) {
+function validateEvidence(evidence, packet, previous, expectedIndex, trustedNow) {
   rejectUnsafe(evidence, "evidence")
-  exactKeys(evidence, ["schemaVersion", "runId", "operation", "attempt", "startedAt", "completedAt", "status", "exitCode", "nodeId", "workspace", "baseSha", "headSha", "outputSha256", "previousEvidenceSha256"], "evidence")
-  if (evidence.schemaVersion !== 1 || evidence.runId !== packet.runId || evidence.operation !== packet.operations[expectedIndex] || !Number.isSafeInteger(evidence.attempt) || evidence.attempt < 1 || evidence.attempt > packet.resourceLimits.maxAttempts || !Number.isSafeInteger(evidence.exitCode) || evidence.nodeId !== packet.nodeId || evidence.workspace !== packet.workspace || evidence.baseSha !== packet.baseSha || !SHA40.test(evidence.headSha)) block("EVIDENCE_IDENTITY_MISMATCH", "evidence")
+  exactKeys(evidence, ["schemaVersion", "runId", "operation", "attempt", "startedAt", "completedAt", "status", "exitCode", "nodeId", "workspace", "branch", "baseSha", "headSha", "outputSha256", "policySha256", "packetSha256", "patchSha256", "patchGeneration", "previousEvidenceSha256"], "evidence")
+  if (evidence.schemaVersion !== 1 || evidence.runId !== packet.runId || evidence.operation !== packet.operations[expectedIndex] || !Number.isSafeInteger(evidence.attempt) || evidence.attempt < 1 || evidence.attempt > packet.resourceLimits.maxAttempts || !Number.isSafeInteger(evidence.exitCode) || evidence.nodeId !== packet.nodeId || evidence.workspace !== packet.workspace || evidence.branch !== packet.branch || evidence.baseSha !== packet.baseSha || evidence.policySha256 !== packet.bindings.policySha256 || evidence.packetSha256 !== packet.bindings.packetSha256 || evidence.patchSha256 !== packet.patch.sha256 || evidence.patchGeneration !== packet.patch.generation || !SHA40.test(evidence.headSha)) block("EVIDENCE_IDENTITY_MISMATCH", "evidence")
   const started = utcMs(evidence.startedAt, "evidence.startedAt"); const completed = utcMs(evidence.completedAt, "evidence.completedAt")
-  if (completed <= started || completed - started > packet.resourceLimits.timeoutSeconds * 1000) block("EVIDENCE_TIME_INVALID", "evidence duration")
+  const issued = utcMs(packet.authority.issuedAt, "authority.issuedAt"); const expires = utcMs(packet.authority.expiresAt, "authority.expiresAt")
+  if (started < issued || completed <= started || completed > Math.min(trustedNow, expires) || completed - started > packet.resourceLimits.timeoutSeconds * 1000) block("EVIDENCE_TIME_INVALID", "evidence duration")
   digest(evidence.outputSha256, "evidence.outputSha256")
   if (previous === undefined) { if (evidence.previousEvidenceSha256 !== null) block("EVIDENCE_CHAIN_INVALID", "first evidence") } else if (evidence.previousEvidenceSha256 !== hash(previous) || started <= utcMs(previous.completedAt, "previous.completedAt")) block("EVIDENCE_CHAIN_INVALID", "previous evidence")
   if (evidence.status !== "SUCCEEDED" && !(evidence.operation === "TEST_DOTNET_INFORMATIONAL" && evidence.status === "OBSERVED_FAILURE") && !(evidence.operation === "PROVE_POST_MERGE" && evidence.status === "MERGE_ANCESTRY_PROVEN") && !(evidence.operation === "CLEAN_EXACT_WORKSPACE" && evidence.status === "CLEANUP_ABSENCE_PROVEN")) block("EVIDENCE_STATUS_INVALID", "status")
@@ -127,8 +139,8 @@ export function evaluateRemoteDevTransition(packet, evidence, trustedContext) {
     const trusted = validateTrustedContext(trustedContext, { history: true }); const valid = validatePacket(packet, policy, trusted, { requireBindings: true })
     const history = trusted.history
     if (history.length >= valid.operations.length) block("EVIDENCE_CHAIN_INVALID", "history is complete")
-    history.forEach((entry, index) => validateEvidence(entry, valid, index === 0 ? undefined : history[index - 1], index))
-    validateEvidence(evidence, valid, history.length === 0 ? undefined : history.at(-1), history.length)
+    history.forEach((entry, index) => validateEvidence(entry, valid, index === 0 ? undefined : history[index - 1], index, trusted.now))
+    validateEvidence(evidence, valid, history.length === 0 ? undefined : history.at(-1), history.length, trusted.now)
     const all = [...history, evidence]
     if (all.length !== valid.operations.length) return { status: "RUNNING", evidenceSha256: hash(evidence) }
     if (all.at(-2).operation !== "PROVE_POST_MERGE" || all.at(-2).status !== "MERGE_ANCESTRY_PROVEN" || all.at(-1).operation !== "CLEAN_EXACT_WORKSPACE" || all.at(-1).status !== "CLEANUP_ABSENCE_PROVEN") block("CLEANUP_NOT_AUTHORIZED", "merge ancestry and exact cleanup evidence required")

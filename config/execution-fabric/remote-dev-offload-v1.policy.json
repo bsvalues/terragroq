@@ -6,6 +6,7 @@
   "nodeId": "aegis",
   "workspace": "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001",
   "branchPrefix": "codex/wo-tf-remote-dev-offload-001-",
+  "patchGeneration": 1,
   "reservedPaths": [
     ".github/workflows/dotnet-test.yml",
     ".github/workflows/terrafusion-ci.yml",
