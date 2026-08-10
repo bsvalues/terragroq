@@ -1,0 +1,30 @@
+# AEGIS Single-Use Authority Review
+
+## Disposition
+
+`READY`
+
+The independent assurance lane reviewed execution commit
+`a1be45615ffb35a0fa15570759ebb2dcfd242aac` and found no P1 or P2 issue.
+
+## Exact binding
+
+- Input SHA-256 and the exact 137-byte length match the reviewed request and scope.
+- The canonical scope digest is `02ff047e9e0979527a43c64305256d75cf5897912e4b5581073006a1f9d1e8fb`.
+- Forge permission, template registry, AEGIS identity, and machine identity digests match.
+- The Work Order, request, input, node, template, authority reference, and R1 limits are consistent.
+- Maximum attempts and concurrency are both one; the Work Order retry budget is zero.
+
+## Authority boundary
+
+- Scheduler activation and autonomous dispatch remain false.
+- Arbitrary shell, network access, remote-node access, authority mutation, fallback, and workload-storage writes remain prohibited.
+- Storage, NAS, backup, and authoritative-state authority are not granted.
+- Replacing only the short-lived placement receipt and its request digest cannot expand the stable scope. Any change to the input, limits, Forge packet, identity, node, or template changes or fails the scope binding.
+- Execution remains fail-closed until a separate descendant commit records one time-bounded authority entry on trusted `main`.
+
+## Validation
+
+- Focused AEGIS bounded-dispatch and resident-runner tests: 37 passed.
+- Scope, input, receipt, Forge, and identity digests: PASS.
+- Worktree mutation by assurance lane: none.
