@@ -77,7 +77,13 @@ function fixture() {
 if [[ "\${FAKE_DOTNET_MODE:-ok}" == timeout ]]; then sleep 3; fi
 if [[ "\${FAKE_DOTNET_MODE:-ok}" == build-fail && "\${1:-}" == build ]]; then exit 7; fi
 if [[ "\${1:-}" == test ]]; then
-  for arg in "$@"; do case "$arg" in *LogFileName=*) trx="\${arg#*LogFileName=}";; esac; done
+  previous=''
+  for arg in "$@"; do
+    [[ "$previous" == --results-directory ]] && results="$arg"
+    case "$arg" in *LogFileName=*) trx="\${arg#*LogFileName=}";; esac
+    previous="$arg"
+  done
+  [[ "\${trx:-}" == /* ]] || trx="\${results:?}/\${trx:?}"
   if [[ "\${FAKE_DOTNET_MODE:-ok}" != test-infra ]]; then
     mkdir -p "$(dirname "$trx")"
     if [[ "\${FAKE_DOTNET_MODE:-ok}" == test-assertion ]]; then printf '%s\n' '<TestRun><ResultSummary outcome="Failed"><Counters failed="1" passed="2" total="3" aborted="0" executed="3" timeout="0" error="0" /></ResultSummary></TestRun>' > "$trx"; exit 1
@@ -99,14 +105,45 @@ if [[ "$*" == *"--target /tmp"* ]]; then printf '%s\n' tmpfs; exit 0; fi
 exit 0
 `)
   writeExecutable(path.join(fakeBin, "xfs_io"), "#!/usr/bin/env bash\nprintf '%s\\n' 'fsxattr.xflags = 0x00000800 [proj-inherit]' 'fsxattr.projid = 734'\n")
-  writeExecutable(path.join(fakeBin, "xfs_quota"), "#!/usr/bin/env bash\nprintf '%s\\n' '734 0 0 83886080'\n")
+  writeExecutable(path.join(fakeBin, "xfs_quota"), `#!/usr/bin/env bash
+if [[ "$*" == *"state -p"* ]]; then
+  if [[ "\${FAKE_QUOTA_STATE:-on}" == off ]]; then printf '%s\n' 'Project quota state' '  Accounting: OFF' '  Enforcement: OFF'
+  else printf '%s\n' 'Project quota state' '  Accounting: ON' '  Enforcement: ON'; fi
+  exit 0
+fi
+printf '%s\n' '734 0 0 83886080'
+`)
   writeExecutable(path.join(fakeBin, "systemd-run"), `#!/usr/bin/env bash
+props=''
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == -- ]]; then shift; break; fi
-  case "$1" in --setenv=*) value="\${1#--setenv=}"; export "\${value?}";; esac
+  case "$1" in
+    -p) shift; props="$props|\${1:-}";;
+    --setenv=*) value="\${1#--setenv=}"; export "\${value?}";;
+  esac
   shift
 done
+if [[ "\${1:-}" == test && ( " $* " == *" ! -w /tmp "* || " $* " == *" -w "* ) ]]; then
+  [[ "$props" == *"ReadWritePaths="* && "$props" == *"ReadOnlyPaths=/tmp /var/tmp"* ]] || exit 71
+  exit 0
+fi
 if [[ "\${1:-}" == findmnt ]]; then printf '%s\n' tmpfs; exit 0; fi
+if [[ "\${FAKE_NAMESPACE_STRICT:-0}" == 1 ]]; then
+  workspace="\${REMOTE_DEV_WORKER_ROOT}/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001"
+  parent="\${REMOTE_DEV_WORKER_ROOT}/srv/william/workspaces"
+  if [[ "\${1:-}" == rm ]]; then
+    [[ "$props" == *"ReadWritePaths=$parent"* && "$props" != *"ReadWritePaths=$workspace"* ]] || exit 73
+  else
+    [[ "$props" == *"ReadWritePaths=$workspace"* && "$props" == *"ReadOnlyPaths=/tmp /var/tmp"* ]] || exit 74
+    for value in "\${TMPDIR:-}" "\${TMP:-}" "\${TEMP:-}" "\${XDG_CACHE_HOME:-}" "\${NUGET_PACKAGES:-}" "\${DOTNET_CLI_HOME:-}" "\${COREPACK_HOME:-}" "\${npm_config_cache:-}"; do
+      [[ "$value" == "$workspace/.williamos-scratch"/* ]] || exit 75
+    done
+    if [[ "\${1:-}" == dotnet && " $* " == *" test "* ]]; then
+      [[ " $* " == *" --results-directory $workspace/.williamos-scratch/"* ]] || exit 76
+      [[ " $* " != *"/tmp/"* ]] || exit 77
+    fi
+  fi
+fi
 exec "$@"
 `)
   return { hostRoot, physicalWorkspace, repository, baseSha, patch, packet, fakeBin }
@@ -214,7 +251,9 @@ describe("fixed AEGIS remote development worker", () => {
     expect(fs.readdirSync(parent).sort()).toEqual(before)
     const source = fs.readFileSync(worker, "utf8")
     const preflight = source.slice(source.indexOf("PROVE_PREFLIGHT)"), source.indexOf("CREATE_WORKSPACE)"))
-    for (const required of ["hostname", "id -un", "git --version", "dotnet --version", "node --version", "corepack pnpm --version", "nproc", "MemTotal", "df -PB1", "git ls-remote", "push --dry-run", "probe_containment", "prove_project_quota"]) expect(preflight).toContain(required)
+    for (const required of ["hostname", "id -un", "git --version", "dotnet --version", "node --version", "corepack pnpm --version", "nproc", "MemTotal", "df -PB1", "run_preflight_repository_profile", "probe_containment", "prove_project_quota"]) expect(preflight).toContain(required)
+    for (const required of ["git ls-remote", "push --dry-run", "TemporaryFileSystem=/tmp:size=4294967296"]) expect(source).toContain(required)
+    expect(source).not.toContain("PREFLIGHT_TMP_ROOT")
     expect(preflight).not.toContain('exec 9>')
     expect(preflight).not.toContain('flock -n')
     expect(source).toContain('if [[ "$OPERATION" != "PROVE_PREFLIGHT" ]]')
@@ -230,11 +269,42 @@ describe("fixed AEGIS remote development worker", () => {
     expect(source).toContain("CONTAINMENT_UNAVAILABLE")
     expect(source).toContain("SCRATCH_CONFINEMENT_FAILED")
     for (const variable of ["TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME", "NUGET_PACKAGES", "DOTNET_CLI_HOME", "COREPACK_HOME", "npm_config_cache"]) expect(source).toContain(`--setenv=${variable}=`)
-    expect(source).toContain('ReadWritePaths=$PHYSICAL_WORKSPACE')
+    expect(source).toContain('run_ordinary_profile "$PHYSICAL_WORKSPACE" "$SCRATCH_DIR"')
     expect(source).toContain('ReadOnlyPaths=/tmp /var/tmp')
     expect(source).toContain('measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"')
     expect(source).toContain('measure_scratch; SCRATCH_AFTER="$SCRATCH_MEASURED_BYTES"')
   }, 15_000)
+
+  it("requires project quota accounting and enforcement to be active", () => {
+    const value = fixture(); fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
+    expect(runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_QUOTA_STATE: "off" } }).json).toMatchObject({ status: "SCRATCH_CONFINEMENT_FAILED" })
+    expect(fs.readFileSync(worker, "utf8")).toContain('state -p')
+  })
+
+  it("keeps informational TRX and every operational capture inside quota-bound scratch under the real namespace profile", () => {
+    const value = fixture()
+    const result = runWorker("TEST_DOTNET_INFORMATIONAL", value, { env: { FAKE_NAMESPACE_STRICT: "1", FAKE_DOTNET_MODE: "test-assertion" } })
+    expect(result.json).toMatchObject({ status: "OBSERVED_FAILURE" })
+    expect(workerSummary(result.stderr).testCounts).toEqual({ total: 3, executed: 3, passed: 2, failed: 1 })
+    const source = fs.readFileSync(worker, "utf8")
+    expect(source).not.toContain('OUTPUT_FILE="$TMP_ROOT/output.log"')
+    expect(source).toContain('--results-directory "$RESULTS_DIR"')
+    expect(source).toContain('TRX_FILE="$RESULTS_DIR/informational.trx"')
+  }, 20_000)
+
+  it("probes both namespace profiles before acquisition and removes the exact workspace through the parent cleanup profile", () => {
+    const preflight = fixture(); fs.rmSync(preflight.physicalWorkspace, { recursive: true, force: true })
+    expect(runWorker("PROVE_PREFLIGHT", preflight, { env: { FAKE_REQUIRE_PROFILE_PROBES: "1" } }).json).not.toMatchObject({ status: "CONTAINMENT_UNAVAILABLE" })
+
+    const cleanup = fixture()
+    fs.writeFileSync(path.join(cleanup.physicalWorkspace, ".williamos-post-merge-proven"), `${cleanup.packet.runId}:${cleanup.baseSha}\n`)
+    const result = runWorker("CLEAN_EXACT_WORKSPACE", cleanup, { env: { FAKE_NAMESPACE_STRICT: "1" } })
+    expect(result.json).toMatchObject({ status: "CLEANUP_ABSENCE_PROVEN" })
+    expect(fs.existsSync(cleanup.physicalWorkspace)).toBe(false)
+    const source = fs.readFileSync(worker, "utf8")
+    expect(source).toContain('-p "ReadWritePaths=$PHYSICAL_PARENT"')
+    expect(source).not.toContain('run_cleanup_capture rm -rf -- "$PHYSICAL_WORKSPACE"')
+  }, 30_000)
 
   it("emits strict sub-second timestamps and rejects a non-increasing clock", () => {
     const source = fs.readFileSync(worker, "utf8")

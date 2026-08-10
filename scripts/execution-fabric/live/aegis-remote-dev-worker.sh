@@ -44,18 +44,10 @@ if [[ ! "$ATTEMPT" =~ ^[1-3]$ ]]; then die_input "ATTEMPT_INVALID" "attempt must
 if [[ "$PREVIOUS_EVIDENCE" != "null" && ! "$PREVIOUS_EVIDENCE" =~ ^[a-f0-9]{64}$ ]]; then die_input "EVIDENCE_CHAIN_INVALID" "previous evidence digest is invalid"; fi
 if [[ ! "$PACKET_B64" =~ ^[A-Za-z0-9+/]+={0,2}$ || ! "$PATCH_B64" =~ ^[A-Za-z0-9+/]*={0,2}$ ]]; then die_input "INVALID_INPUT" "payloads must be base64"; fi
 
-TMP_ROOT="$(timeout 5 mktemp -d)" || die_block "WORKER_IO_FAILED" "cannot create private temporary directory"
-cleanup_temp() { timeout 5 rm -rf -- "$TMP_ROOT" >/dev/null 2>&1 || true; }
-trap cleanup_temp EXIT
-PACKET_FILE="$TMP_ROOT/packet.json"
-PATCH_FILE="$TMP_ROOT/change.patch"
-META_FILE="$TMP_ROOT/meta.bin"
-OUTPUT_FILE="$TMP_ROOT/output.log"
-
 set +e
-timeout 15 node -e '
-  const crypto=require("node:crypto"),fs=require("node:fs")
-  const [packetB64,patchB64,operation,attempt,packetFile,patchFile,metaFile]=process.argv.slice(1)
+validation="$(timeout 15 node -e '
+  const crypto=require("node:crypto")
+  const [packetB64,patchB64,operation]=process.argv.slice(1)
   const fail=(code,detail)=>{process.stderr.write(`${code}\t${detail}\n`);process.exit(65)}
   let bytes,patch,p
   try { bytes=Buffer.from(packetB64,"base64"); patch=Buffer.from(patchB64,"base64"); p=JSON.parse(bytes.toString("utf8")) } catch { fail("INVALID_INPUT","packet JSON is malformed") }
@@ -82,20 +74,20 @@ timeout 15 node -e '
   if(p.bindings.policySha256!=="8e4d17071567ed1f43c01a02251a689d1879cfadcf90af92260267ebd668fd2c")fail("POLICY_DIGEST_MISMATCH","policy digest differs")
   const unsigned=structuredClone(p);delete unsigned.bindings
   if(p.bindings.packetSha256!==digest(Buffer.from(canonical(unsigned),"utf8")))fail("PACKET_DIGEST_MISMATCH","packet digest differs")
-  fs.writeFileSync(packetFile,bytes,{mode:0o600});fs.writeFileSync(patchFile,patch,{mode:0o600})
   const fields=[p.runId,p.workOrderId,p.repository,p.baseSha,p.branch,p.workspace,p.patch.sha256,p.bindings.policySha256,p.bindings.packetSha256,String(p.patch.generation),String(p.resourceLimits.timeoutSeconds)]
-  fs.writeFileSync(metaFile,Buffer.from(fields.join("\0")+"\0"),{mode:0o600})
-' "$PACKET_B64" "$PATCH_B64" "$OPERATION" "$ATTEMPT" "$PACKET_FILE" "$PATCH_FILE" "$META_FILE" 2>"$TMP_ROOT/validation.err"
+  process.stdout.write(fields.join("\n"))
+' "$PACKET_B64" "$PATCH_B64" "$OPERATION" 2>&1)"
 validation_exit=$?
 set -e
 if [[ $validation_exit -ne 0 ]]; then
-  validation="$(timeout 5 head -n 1 "$TMP_ROOT/validation.err" 2>/dev/null || true)"
+  validation="${validation%%$'\n'*}"
   code="${validation%%$'\t'*}"; detail="${validation#*$'\t'}"
   [[ -n "$code" ]] || code="INVALID_INPUT"
   die_input "$code" "$detail"
 fi
 
-mapfile -d '' -t meta < "$META_FILE"
+mapfile -t meta <<< "$validation"
+[[ ${#meta[@]} -eq 11 ]] || die_input "INVALID_INPUT" "validated packet metadata differs"
 RUN_ID="${meta[0]}"; PACKET_WORK_ORDER="${meta[1]}"; PACKET_REPOSITORY="${meta[2]}"; BASE_SHA="${meta[3]}"; BRANCH="${meta[4]}"; PACKET_WORKSPACE="${meta[5]}"; PATCH_SHA="${meta[6]}"; PACKET_POLICY_SHA="${meta[7]}"; PACKET_SHA="${meta[8]}"; PATCH_GENERATION="${meta[9]}"; PACKET_TIMEOUT="${meta[10]}"
 
 WORKER_ROOT="${REMOTE_DEV_WORKER_ROOT:-}"
@@ -140,19 +132,22 @@ validate_trusted_parent() {
 
 require_containment_tools() {
   local required_tool
-  for required_tool in timeout node realpath sha256sum flock findmnt systemd-run hostname id git dotnet corepack nproc df awk stat find tail tr grep du xfs_io xfs_quota; do
+  for required_tool in timeout node realpath sha256sum flock findmnt systemd-run hostname id git dotnet corepack nproc df awk stat find tail tr grep du base64 bash mktemp rm xfs_io xfs_quota; do
     command -v "$required_tool" >/dev/null 2>&1 || die_block "CONTAINMENT_UNAVAILABLE" "$required_tool is required for bounded execution"
   done
 }
 
 prove_project_quota() {
-  local mount_info filesystem options mount_target quota_stat project_id quota_line quota_id hard_kib
+  local mount_info filesystem options mount_target quota_state quota_stat project_id quota_line quota_id hard_kib
   mount_info="$(timeout 10 findmnt -n -o FSTYPE,OPTIONS,TARGET --target "$PHYSICAL_PARENT")" || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace filesystem identity is unavailable"
   read -r filesystem options mount_target <<< "$mount_info"
   [[ "$filesystem" == "xfs" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace parent is not on XFS"
   if [[ ",$options," != *,prjquota,* && ",$options," != *,pquota,* ]]; then
     die_block "SCRATCH_CONFINEMENT_FAILED" "XFS project quota is not active for the workspace parent"
   fi
+  quota_state="$(timeout 10 xfs_quota -x -c "state -p" "$mount_target")" || die_block "SCRATCH_CONFINEMENT_FAILED" "project quota state is unavailable"
+  printf '%s\n' "$quota_state" | grep -Eqi 'Accounting:[[:space:]]+ON' || die_block "SCRATCH_CONFINEMENT_FAILED" "project quota accounting is not active"
+  printf '%s\n' "$quota_state" | grep -Eqi 'Enforcement:[[:space:]]+ON' || die_block "SCRATCH_CONFINEMENT_FAILED" "project quota enforcement is not active"
   quota_stat="$(timeout 10 xfs_io -c stat "$PHYSICAL_PARENT")" || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace project identity is unavailable"
   printf '%s\n' "$quota_stat" | grep -qi 'proj-inherit' || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace parent does not enforce project inheritance"
   project_id="$(printf '%s\n' "$quota_stat" | awk '/projid =/{print $3;exit}')"
@@ -173,17 +168,50 @@ validate_workspace_project() {
   [[ "$workspace_project_id" == "$QUOTA_PROJECT_ID" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace did not inherit the bounded project quota"
 }
 
-probe_containment() {
-  : > "$OUTPUT_FILE"
-  set +e
-  timeout 30 systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
+run_ordinary_profile() {
+  local writable_root="$1" scratch_root="$2" runtime_seconds="$3"
+  shift 3
+  timeout --signal=TERM --kill-after=5 "$runtime_seconds" systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
     -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
-    -p RuntimeMaxSec=30 -p ProtectSystem=strict -p ProtectHome=read-only \
-    -p "TemporaryFileSystem=/tmp:size=1048576,mode=0700" -- \
-    findmnt -n -o FSTYPE --target /tmp >"$OUTPUT_FILE" 2>&1
-  local code=$?
+    -p "RuntimeMaxSec=$runtime_seconds" -p ProtectSystem=strict -p ProtectHome=read-only \
+    -p "ReadWritePaths=$writable_root" -p "ReadOnlyPaths=/tmp /var/tmp" \
+    --setenv=TMPDIR="$scratch_root/tmp" --setenv=TMP="$scratch_root/tmp" --setenv=TEMP="$scratch_root/tmp" \
+    --setenv=XDG_CACHE_HOME="$scratch_root/xdg-cache" --setenv=NUGET_PACKAGES="$scratch_root/nuget" \
+    --setenv=DOTNET_CLI_HOME="$scratch_root/dotnet-home" --setenv=COREPACK_HOME="$scratch_root/corepack" \
+    --setenv=npm_config_cache="$scratch_root/npm-cache" -- "$@"
+}
+
+run_cleanup_profile() {
+  local runtime_seconds="$1"
+  shift
+  timeout --signal=TERM --kill-after=5 "$runtime_seconds" systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
+    -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
+    -p "RuntimeMaxSec=$runtime_seconds" -p ProtectSystem=strict -p ProtectHome=read-only \
+    -p "ReadWritePaths=$PHYSICAL_PARENT" -p "ReadOnlyPaths=/tmp /var/tmp" -- "$@"
+}
+
+run_preflight_repository_profile() {
+  timeout --signal=TERM --kill-after=5 120 systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
+    -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
+    -p RuntimeMaxSec=120 -p ProtectSystem=strict -p ProtectHome=read-only \
+    -p "TemporaryFileSystem=/tmp:size=4294967296,mode=0700" -p "ReadOnlyPaths=/var/tmp" \
+    --setenv=REMOTE_URL="$REMOTE_URL" --setenv=BASE_SHA="$BASE_SHA" --setenv=RUN_ID="$RUN_ID" -- \
+    bash -c 'set -euo pipefail; proof=$(mktemp -d); trap '\''rm -rf -- "$proof"'\'' EXIT; git ls-remote --exit-code "$REMOTE_URL" refs/heads/main >/dev/null; git init --bare "$proof/repository.git" >/dev/null; git -C "$proof/repository.git" fetch --depth=1 "$REMOTE_URL" "$BASE_SHA" >/dev/null; git -C "$proof/repository.git" push --dry-run "$REMOTE_URL" "$BASE_SHA:refs/heads/williamos-preflight-$RUN_ID" >/dev/null'
+}
+
+probe_containment() {
+  local code
+  set +e
+  run_ordinary_profile "$PHYSICAL_PARENT" "$PHYSICAL_PARENT" 30 test ! -w /tmp >/dev/null 2>&1
+  code=$?
   set -e
-  [[ $code -eq 0 && "$(tr -d '\r\n' < "$OUTPUT_FILE")" == "tmpfs" ]] || die_block "CONTAINMENT_UNAVAILABLE" "systemd cgroup and bounded temporary filesystem could not be proven"
+  [[ $code -eq 0 ]] || die_block "CONTAINMENT_UNAVAILABLE" "ordinary systemd containment profile could not be proven"
+
+  set +e
+  run_cleanup_profile 30 test -w "$PHYSICAL_PARENT" >/dev/null 2>&1
+  code=$?
+  set -e
+  [[ $code -eq 0 ]] || die_block "CONTAINMENT_UNAVAILABLE" "cleanup systemd containment profile could not be proven"
 }
 
 acquire_workspace_lock() {
@@ -202,6 +230,27 @@ validate_scratch_dir() {
   [[ "$owner" == "$current" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "scratch is not worker-owned"
 }
 
+prepare_operation_scratch() {
+  validate_scratch_dir
+  RESULTS_ROOT="$SCRATCH_DIR/results"
+  if [[ -e "$RESULTS_ROOT" || -L "$RESULTS_ROOT" ]]; then
+    [[ -d "$RESULTS_ROOT" && ! -L "$RESULTS_ROOT" && "$(timeout 5 realpath -- "$RESULTS_ROOT")" == "$RESULTS_ROOT" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "operation results root is unsafe"
+    [[ "$(timeout 5 stat -c %u -- "$RESULTS_ROOT")" == "$(timeout 5 id -u)" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "operation results root is not worker-owned"
+  else
+    timeout 10 mkdir -m 0700 -- "$RESULTS_ROOT" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create bounded operation results root"
+  fi
+  RESULTS_DIR="$RESULTS_ROOT/${OPERATION,,}-$ATTEMPT"
+  [[ ! -e "$RESULTS_DIR" && ! -L "$RESULTS_DIR" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "operation results directory already exists"
+  timeout 10 mkdir -m 0700 -- "$RESULTS_DIR" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create bounded operation results directory"
+  OUTPUT_FILE="$RESULTS_DIR/output.log"
+  PATCH_FILE="$RESULTS_DIR/change.patch"
+  TRX_FILE="$RESULTS_DIR/informational.trx"
+  : > "$OUTPUT_FILE"
+  if [[ "$OPERATION" == "APPLY_RESERVED_PATCH" ]]; then
+    printf '%s' "$PATCH_B64" | timeout 10 base64 -d > "$PATCH_FILE" || die_block "PATCH_BINDING_MISMATCH" "cannot materialize the bounded patch"
+  fi
+}
+
 measure_scratch() {
   local bytes
   bytes="$(timeout 10 du -s -B1 -- "$SCRATCH_DIR" | awk '{print $1;exit}')" || die_block "SCRATCH_CONFINEMENT_FAILED" "scratch usage cannot be measured"
@@ -214,28 +263,18 @@ run_capture() {
   validate_scratch_dir
   measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"
   set +e
-  timeout --signal=TERM --kill-after=5 "$PROCESS_TIMEOUT_SECONDS" systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
-    -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
-    -p "RuntimeMaxSec=$PROCESS_TIMEOUT_SECONDS" -p ProtectSystem=strict -p ProtectHome=read-only \
-    -p "ReadWritePaths=$PHYSICAL_WORKSPACE" -p "ReadOnlyPaths=/tmp /var/tmp" \
-    --setenv=TMPDIR="$SCRATCH_DIR/tmp" --setenv=TMP="$SCRATCH_DIR/tmp" --setenv=TEMP="$SCRATCH_DIR/tmp" \
-    --setenv=XDG_CACHE_HOME="$SCRATCH_DIR/xdg-cache" --setenv=NUGET_PACKAGES="$SCRATCH_DIR/nuget" \
-    --setenv=DOTNET_CLI_HOME="$SCRATCH_DIR/dotnet-home" --setenv=COREPACK_HOME="$SCRATCH_DIR/corepack" \
-    --setenv=npm_config_cache="$SCRATCH_DIR/npm-cache" -- "$@" >"$OUTPUT_FILE" 2>&1
+  run_ordinary_profile "$PHYSICAL_WORKSPACE" "$SCRATCH_DIR" "$PROCESS_TIMEOUT_SECONDS" "$@" >"$OUTPUT_FILE" 2>&1
   RUN_EXIT=$?
   set -e
   validate_scratch_dir
   measure_scratch; SCRATCH_AFTER="$SCRATCH_MEASURED_BYTES"
 }
 
-run_cleanup_capture() {
-  : > "$OUTPUT_FILE"
+run_exact_cleanup() {
   measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"
+  OUTPUT_SHA="$(timeout 10 sha256sum "$OUTPUT_FILE" | { read -r digest _rest; printf '%s' "$digest"; })" || die_block "EVIDENCE_FAILED" "cleanup output digest failed"
   set +e
-  timeout --signal=TERM --kill-after=5 "$PROCESS_TIMEOUT_SECONDS" systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
-    -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
-    -p "RuntimeMaxSec=$PROCESS_TIMEOUT_SECONDS" -p ProtectSystem=strict -p ProtectHome=read-only \
-    -p "ReadWritePaths=$PHYSICAL_WORKSPACE" -p "ReadOnlyPaths=/tmp /var/tmp" -- "$@" >"$OUTPUT_FILE" 2>&1
+  run_cleanup_profile "$PROCESS_TIMEOUT_SECONDS" rm -rf -- "$PHYSICAL_WORKSPACE" >/dev/null 2>&1
   RUN_EXIT=$?
   set -e
   SCRATCH_AFTER=0
@@ -305,11 +344,16 @@ STARTED_AT="$(timeout 5 date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" || die_block "CLOCK_FA
 RUN_EXIT=0
 RESULT_STATUS="SUCCEEDED"
 HEAD_SHA="$BASE_SHA"
+OPERATION_SCRATCH_PREPARED=false
 
 if [[ "$OPERATION" != "PROVE_PREFLIGHT" ]]; then
   require_containment_tools
   prove_project_quota
   acquire_workspace_lock
+  if [[ "$OPERATION" != "CREATE_WORKSPACE" && "$OPERATION" != "CLEAN_EXACT_WORKSPACE" ]]; then
+    prepare_operation_scratch
+    OPERATION_SCRATCH_PREPARED=true
+  fi
 fi
 
 case "$OPERATION" in
@@ -327,7 +371,7 @@ case "$OPERATION" in
     [[ "$host_name" == "aegis" ]] || die_block "PREFLIGHT_IDENTITY_FAILED" "worker hostname is not aegis"
     user_name="$(timeout 5 id -un)" || die_block "PREFLIGHT_IDENTITY_FAILED" "worker user is unavailable"
     [[ "$user_name" == "bs" ]] || die_block "PREFLIGHT_IDENTITY_FAILED" "worker user is not bs"
-    timeout 10 git --version >>"$OUTPUT_FILE" 2>&1 || die_block "PREFLIGHT_TOOLCHAIN_FAILED" "Git is unavailable"
+    timeout 10 git --version >/dev/null 2>&1 || die_block "PREFLIGHT_TOOLCHAIN_FAILED" "Git is unavailable"
     dotnet_version="$(timeout 10 dotnet --version)" || die_block "PREFLIGHT_TOOLCHAIN_FAILED" ".NET is unavailable"
     [[ "$dotnet_version" == 8.* ]] || die_block "PREFLIGHT_TOOLCHAIN_FAILED" ".NET 8 is required"
     node_version="$(timeout 10 node --version)" || die_block "PREFLIGHT_TOOLCHAIN_FAILED" "Node is unavailable"
@@ -340,11 +384,8 @@ case "$OPERATION" in
     awk -v bytes="$memory_bytes" 'BEGIN{exit !(bytes>=12884901888)}' || die_block "PREFLIGHT_CAPACITY_FAILED" "less than 12 GiB memory is available"
     disk_bytes="$(timeout 5 df -PB1 --output=avail "$PHYSICAL_PARENT" | tail -n 1 | tr -d ' ')" || die_block "PREFLIGHT_CAPACITY_FAILED" "disk capacity is unavailable"
     [[ "$disk_bytes" =~ ^[0-9]+$ ]] && (( disk_bytes >= SCRATCH_LIMIT_BYTES )) || die_block "PREFLIGHT_CAPACITY_FAILED" "less than 80 GiB disk is available"
-    timeout 30 git ls-remote --exit-code "$REMOTE_URL" refs/heads/main >>"$OUTPUT_FILE" 2>&1 || die_block "PREFLIGHT_REPOSITORY_AUTH_FAILED" "authenticated repository read failed"
-    PREFLIGHT_REPO="$TMP_ROOT/preflight.git"
-    timeout 15 git init --bare "$PREFLIGHT_REPO" >>"$OUTPUT_FILE" 2>&1 || die_block "PREFLIGHT_REPOSITORY_AUTH_FAILED" "temporary repository proof setup failed"
-    timeout 30 git -C "$PREFLIGHT_REPO" fetch --depth=1 "$REMOTE_URL" "$BASE_SHA" >>"$OUTPUT_FILE" 2>&1 || die_block "PREFLIGHT_REPOSITORY_AUTH_FAILED" "authenticated pinned revision read failed"
-    timeout 30 git -C "$PREFLIGHT_REPO" push --dry-run "$REMOTE_URL" "$BASE_SHA:refs/heads/williamos-preflight-$RUN_ID" >>"$OUTPUT_FILE" 2>&1 || die_block "PREFLIGHT_REPOSITORY_AUTH_FAILED" "authenticated repository push capability failed"
+    run_preflight_repository_profile >/dev/null 2>&1 || die_block "PREFLIGHT_REPOSITORY_AUTH_FAILED" "bounded authenticated repository read and push proof failed"
+    OUTPUT_SHA="$(printf '' | sha256sum | { read -r digest _rest; printf '%s' "$digest"; })"
     RUN_EXIT=0; SCRATCH_BEFORE=0; SCRATCH_AFTER=0
     ;;
   CREATE_WORKSPACE)
@@ -359,8 +400,9 @@ case "$OPERATION" in
         partial_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$REPO_DIR" 2>/dev/null || true)"
         [[ -z "$partial_mounts" ]] || die_block "PARTIAL_WORKSPACE_UNSAFE" "partial repository contains a mount boundary"
         [[ -d "$SCRATCH_DIR" ]] || timeout 10 mkdir -m 0700 -- "$SCRATCH_DIR" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create exact scratch directory"
-        validate_scratch_dir
-        run_cleanup_capture rm -rf -- "$REPO_DIR"
+        prepare_operation_scratch
+        OPERATION_SCRATCH_PREPARED=true
+        run_capture rm -rf -- "$REPO_DIR"
         [[ $RUN_EXIT -eq 0 && ! -e "$REPO_DIR" ]] || die_block "PARTIAL_WORKSPACE_UNSAFE" "partial repository could not be reset"
       fi
     else
@@ -370,7 +412,7 @@ case "$OPERATION" in
     [[ -d "$SCRATCH_DIR" ]] || timeout 10 mkdir -m 0700 -- "$SCRATCH_DIR" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create exact scratch directory"
     timeout 10 mkdir -p -m 0700 -- "$SCRATCH_DIR/tmp" "$SCRATCH_DIR/xdg-cache" "$SCRATCH_DIR/nuget" "$SCRATCH_DIR/dotnet-home" "$SCRATCH_DIR/corepack" "$SCRATCH_DIR/npm-cache" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create bounded cache directories"
     validate_workspace_project
-    validate_scratch_dir
+    if [[ "$OPERATION_SCRATCH_PREPARED" != true ]]; then prepare_operation_scratch; OPERATION_SCRATCH_PREPARED=true; fi
     run_capture git clone --no-checkout --origin origin "$REMOTE_URL" "$REPO_DIR"
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "Git clone failed"
     run_capture git -C "$REPO_DIR" fetch --no-tags origin main
@@ -408,9 +450,10 @@ case "$OPERATION" in
     validate_owner_marker; validate_repo
     run_capture dotnet build backend/tests/TerraFusion.Unit.Tests/TerraFusion.Unit.Tests.csproj -c Release --no-restore -v:minimal /nologo
     [[ $RUN_EXIT -eq 0 ]] || die_block "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" "focused test project did not build"
-    TRX_FILE="$TMP_ROOT/informational.trx"
-    run_capture dotnet test backend/tests/TerraFusion.Unit.Tests/TerraFusion.Unit.Tests.csproj -c Release --no-build -v:minimal /nologo --logger "trx;LogFileName=$TRX_FILE"
+    run_capture dotnet test backend/tests/TerraFusion.Unit.Tests/TerraFusion.Unit.Tests.csproj -c Release --no-build -v:minimal /nologo --results-directory "$RESULTS_DIR" --logger "trx;LogFileName=informational.trx"
     [[ -f "$TRX_FILE" && ! -L "$TRX_FILE" ]] || die_block "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" "test runner did not publish a trustworthy result file"
+    trx_bytes="$(timeout 5 stat -c %s -- "$TRX_FILE")" || die_block "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" "test result size is unavailable"
+    [[ "$trx_bytes" =~ ^[0-9]+$ && "$trx_bytes" -le 16777216 ]] || die_block "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" "test result exceeds the bounded parser limit"
     set +e
     TEST_COUNTS="$(timeout 10 node -e '
       const fs=require("node:fs"),s=fs.readFileSync(process.argv[1],"utf8"),tag=s.match(/<Counters\b([^>]*)\/?\s*>/i);if(!tag)process.exit(1);
@@ -472,7 +515,8 @@ case "$OPERATION" in
     nested_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$PHYSICAL_WORKSPACE" 2>/dev/null || true)"
     [[ -z "$nested_mounts" ]] || die_block "CLEANUP_NESTED_MOUNT" "workspace contains a mount boundary"
     validate_scratch_dir
-    run_cleanup_capture rm -rf -- "$PHYSICAL_WORKSPACE"
+    prepare_operation_scratch
+    run_exact_cleanup
     [[ $RUN_EXIT -eq 0 && ! -e "$PHYSICAL_WORKSPACE" ]] || die_block "BLOCKING_OPERATION_FAILED" "exact cleanup failed"
     RESULT_STATUS="CLEANUP_ABSENCE_PROVEN"
     ;;
@@ -481,7 +525,10 @@ esac
 if [[ $RUN_EXIT -eq 124 || $RUN_EXIT -eq 137 ]]; then die_block "PROCESS_TIMEOUT" "fixed operation exceeded its timeout"; fi
 if [[ $RUN_EXIT -ne 0 && "$RESULT_STATUS" != "OBSERVED_FAILURE" ]]; then die_block "BLOCKING_OPERATION_FAILED" "fixed blocking operation failed with exit $RUN_EXIT"; fi
 if [[ -d "$REPO_DIR/.git" ]]; then HEAD_SHA="$(repo_value rev-parse HEAD 2>/dev/null || printf '%s' "$BASE_SHA")"; fi
-OUTPUT_SHA="$(timeout 10 sha256sum "$OUTPUT_FILE" | { read -r digest _rest; printf '%s' "$digest"; })" || die_block "EVIDENCE_FAILED" "output digest failed"
+if [[ -z "${OUTPUT_SHA:-}" ]]; then
+  [[ -f "${OUTPUT_FILE:-}" && ! -L "$OUTPUT_FILE" ]] || die_block "EVIDENCE_FAILED" "bounded output capture is unavailable"
+  OUTPUT_SHA="$(timeout 10 sha256sum "$OUTPUT_FILE" | { read -r digest _rest; printf '%s' "$digest"; })" || die_block "EVIDENCE_FAILED" "output digest failed"
+fi
 COMPLETED_AT="$(timeout 5 date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" || die_block "CLOCK_FAILED" "cannot read clock"
 set +e
 timeout 5 node -e 'const a=Date.parse(process.argv[1]),b=Date.parse(process.argv[2]);if(!Number.isFinite(a)||!Number.isFinite(b)||b<=a)process.exit(1)' "$STARTED_AT" "$COMPLETED_AT"
