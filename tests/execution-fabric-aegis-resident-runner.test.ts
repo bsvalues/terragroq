@@ -51,7 +51,7 @@ describe("resident AEGIS HASH_VERIFY runner", () => {
   it("requires Linux, a non-root user, hostname aegis, and the hashed machine id", () => {
     const expected = sha("0123456789abcdef0123456789abcdef")
     expect(trustedResidentIdentity({
-      platform: "linux", getuid: () => 1000, hostname: () => "aegis",
+      platform: "linux", getuid: () => 1000, username: () => "williamos-fabric", hostname: () => "aegis",
       readMachineId: () => Buffer.from("0123456789abcdef0123456789abcdef\n"),
     })).toEqual({
       node_id: "aegis", hostname: "aegis", machine_id_sha256: expected,
@@ -60,14 +60,21 @@ describe("resident AEGIS HASH_VERIFY runner", () => {
     expect(() => trustedResidentIdentity({ platform: "win32", getuid: () => 1000 })).toThrow("PLATFORM_MISMATCH")
     expect(() => trustedResidentIdentity({ platform: "linux", getuid: () => 0 })).toThrow("ROOT_FORBIDDEN")
     expect(() => trustedResidentIdentity({
-      platform: "linux", getuid: () => 1000, hostname: () => "other", readMachineId: () => Buffer.from("0".repeat(32)),
+      platform: "linux", getuid: () => 1000, username: () => "williamos-fabric",
+      hostname: () => "other", readMachineId: () => Buffer.from("0".repeat(32)),
     })).toThrow("IDENTITY_MISMATCH")
+    expect(() => trustedResidentIdentity({
+      platform: "linux", getuid: () => 1000, username: () => "other",
+    })).toThrow("EXECUTION_IDENTITY_MISMATCH")
   })
 
   it("atomically consumes one claim and keeps duplicate attempts consumed", async () => {
     const providers = createLedgerProviders({
-      homeDirectory: privateHome(), platform: "linux", getuid: () => process.getuid?.() ?? 1000,
+      ledgerRoot: privateHome(), platform: "linux", getuid: () => process.getuid?.() ?? 1000,
+      username: () => "williamos-fabric",
       clock: () => "2026-08-10T08:01:00.000Z",
+      holderIdentity: () => ({ pid: 100, boot_id: "boot", process_start_ticks: "10" }),
+      holderIsAlive: () => true,
       validateDirectory: (stats: fs.Stats) => stats.isDirectory() && !stats.isSymbolicLink(),
       validateLedgerFile: (stats: fs.Stats) => stats.isFile() && !stats.isSymbolicLink(),
       syncDirectory: () => undefined,
@@ -78,13 +85,17 @@ describe("resident AEGIS HASH_VERIFY runner", () => {
     expect(results.filter((entry) => !entry.claimed)).toHaveLength(1)
     expect(fs.readdirSync(providers.ledgerRoot).filter((name) => name.startsWith("claim-"))).toHaveLength(1)
     expect(providers.runtimeEvidence().claim_sha256).toMatch(/^[a-f0-9]{64}$/)
+    expect(results[0].claim_id).toBe(results[1].claim_id)
   })
 
   it("rejects an occupied lease and releases only the matching lease", async () => {
     let tick = 0
     const providers = createLedgerProviders({
-      homeDirectory: privateHome(), platform: "linux", getuid: () => process.getuid?.() ?? 1000,
+      ledgerRoot: privateHome(), platform: "linux", getuid: () => process.getuid?.() ?? 1000,
+      username: () => "williamos-fabric",
       clock: () => `2026-08-10T08:01:0${tick++}.000Z`,
+      holderIdentity: () => ({ pid: 100, boot_id: "boot", process_start_ticks: "10" }),
+      holderIsAlive: () => true,
       validateDirectory: (stats: fs.Stats) => stats.isDirectory() && !stats.isSymbolicLink(),
       validateLedgerFile: (stats: fs.Stats) => stats.isFile() && !stats.isSymbolicLink(),
       syncDirectory: () => undefined,
@@ -101,6 +112,32 @@ describe("resident AEGIS HASH_VERIFY runner", () => {
     })
     expect(fs.readdirSync(providers.ledgerRoot).filter((name) => name.startsWith("release-"))).toHaveLength(1)
     expect((await providers.acquireExclusiveLease({ claim_id: "claim-two" })).acquired).toBe(true)
+  })
+
+  it("recovers a lease only after the exact process holder is proven dead", async () => {
+    const ledgerRoot = privateHome()
+    const common = {
+      ledgerRoot, platform: "linux", getuid: () => process.getuid?.() ?? 1000,
+      username: () => "williamos-fabric",
+      validateDirectory: (stats: fs.Stats) => stats.isDirectory() && !stats.isSymbolicLink(),
+      validateLedgerFile: (stats: fs.Stats) => stats.isFile() && !stats.isSymbolicLink(),
+      syncDirectory: () => undefined,
+    }
+    const first = createLedgerProviders({
+      ...common, clock: () => "2026-08-10T08:01:00.000Z",
+      holderIdentity: () => ({ pid: 100, boot_id: "boot-one", process_start_ticks: "10" }),
+      holderIsAlive: () => true,
+    })
+    expect((await first.acquireExclusiveLease({ claim_id: "claim-one" })).acquired).toBe(true)
+
+    const second = createLedgerProviders({
+      ...common, clock: () => "2026-08-10T08:02:00.000Z",
+      holderIdentity: () => ({ pid: 200, boot_id: "boot-one", process_start_ticks: "20" }),
+      holderIsAlive: () => false,
+    })
+    expect((await second.acquireExclusiveLease({ claim_id: "claim-two" })).acquired).toBe(true)
+    expect(second.runtimeEvidence().recovery_sha256).toMatch(/^[a-f0-9]{64}$/)
+    expect(fs.readdirSync(ledgerRoot).filter((name) => name.startsWith("recovery-"))).toHaveLength(1)
   })
 
   it("uses exact trusted-main Git command arrays and emits exact proof shapes", () => {
@@ -124,9 +161,13 @@ describe("resident AEGIS HASH_VERIFY runner", () => {
       fs.writeFileSync(destination, bytes)
     }
     const calls: string[][] = []
+    const headCommit = "c".repeat(40)
+    const treeCommit = "d".repeat(40)
     const runGit = (args: string[]) => {
       calls.push(args)
       if (args[0] === "merge-base") return Buffer.alloc(0)
+      if (args[0] === "status") return Buffer.alloc(0)
+      if (args[0] === "rev-parse") return Buffer.from(`${args[1] === "HEAD^{tree}" ? treeCommit : headCommit}\n`)
       const spec = args[1]
       const separator = spec.indexOf(":")
       return files[spec.slice(separator + 1)]
@@ -136,9 +177,18 @@ describe("resident AEGIS HASH_VERIFY runner", () => {
       evidence_snapshot: [{ node: "aegis", snapshot_sha256: "1".repeat(64) }],
     }
     const providers = createTrustedProofProviders({
-      repositoryRoot: root, homeDirectory: "/home/tester", runGit,
+      repositoryRoot: root, snapshotRoot: "/var/lib/williamos/fabric/snapshots", runGit,
       runPlacementReplay: () => receipt,
     })
+    expect(providers.proveTrustedCheckout()).toEqual({
+      schema_version: "0.1-trusted-aegis-executable-checkout", trusted_ref: "refs/heads/main",
+      head_commit: headCommit, tree_sha1: treeCommit, clean: true, verified: true,
+    })
+    const dirty = createTrustedProofProviders({
+      repositoryRoot: root,
+      runGit: (args: string[]) => args[0] === "status" ? Buffer.from(" M changed.mjs\n") : runGit(args),
+    })
+    expect(() => dirty.proveTrustedCheckout()).toThrow("TRUSTED_MAIN_MISMATCH")
     expect(providers.proveTrustedPlacement({ receiptSha256: "2".repeat(64), receipt })).toEqual({
       schema_version: "0.1-trusted-pinned-placement-proof",
       receipt_sha256: "2".repeat(64),
@@ -183,7 +233,8 @@ describe("resident AEGIS HASH_VERIFY runner", () => {
     expect(calls).toContainEqual(["merge-base", "--is-ancestor", reviewedCommit, "refs/heads/main"])
     expect(calls).toContainEqual(["show", `${executionCommit}:config/execution-fabric/aegis-bounded-dispatch-authority-scopes/scope.json`])
     expect(calls).toContainEqual(["show", `${reviewedCommit}:config/execution-fabric/aegis-bounded-dispatch-authority-scopes/scope.json`])
-    expect(calls.every((args) => args[0] === "show" || JSON.stringify(args) === JSON.stringify(["merge-base", "--is-ancestor", executionCommit, reviewedCommit])
+    expect(calls.every((args) => args[0] === "show" || args[0] === "rev-parse" || args[0] === "status"
+      || JSON.stringify(args) === JSON.stringify(["merge-base", "--is-ancestor", executionCommit, reviewedCommit])
       || JSON.stringify(args) === JSON.stringify(["merge-base", "--is-ancestor", reviewedCommit, "refs/heads/main"]))).toBe(true)
   })
 

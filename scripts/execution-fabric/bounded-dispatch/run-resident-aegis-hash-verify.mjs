@@ -14,9 +14,10 @@ export const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.me
 const TRUSTED_REF = "refs/heads/main"
 const GIT_BINARY = "/usr/bin/git"
 const MACHINE_ID_PATH = "/etc/machine-id"
+const EXECUTION_ACCOUNT = "williamos-fabric"
+const LEDGER_ROOT = "/var/lib/williamos/fabric/ledger"
+const SNAPSHOT_ROOT = "/var/lib/williamos/fabric/snapshots"
 const REPORTS_ROOT = "docs/reports"
-const LEDGER_PARTS = [".williamos", "execution-fabric", "aegis-ledger"]
-const SNAPSHOT_PARTS = [".williamos", "execution-fabric", "aegis-snapshots"]
 const PLACEMENT_FILES = [
   "scripts/execution-fabric/verify_snapshot.py",
   "config/execution-fabric/registry.seed.json",
@@ -48,11 +49,18 @@ function fail(code, detail) {
   throw error
 }
 
-function assertLinuxNonRoot({ platform = process.platform, getuid = process.getuid } = {}) {
+function assertLinuxNonRoot({
+  platform = process.platform,
+  getuid = process.getuid,
+  username = () => os.userInfo().username,
+} = {}) {
   if (platform !== "linux") fail("PLATFORM_MISMATCH", "resident AEGIS requires Linux")
   if (typeof getuid !== "function") fail("IDENTITY_UNAVAILABLE", "numeric current-user identity is unavailable")
   const uid = getuid()
   if (!Number.isSafeInteger(uid) || uid <= 0) fail("ROOT_FORBIDDEN", "resident AEGIS must run as a non-root user")
+  if (username() !== EXECUTION_ACCOUNT) {
+    fail("EXECUTION_IDENTITY_MISMATCH", `resident AEGIS must run as ${EXECUTION_ACCOUNT}`)
+  }
   return uid
 }
 
@@ -106,10 +114,11 @@ export function readConfinedReport(relativePath, repositoryRoot = REPOSITORY_ROO
 export function trustedResidentIdentity({
   platform = process.platform,
   getuid = process.getuid,
+  username = () => os.userInfo().username,
   hostname = os.hostname,
   readMachineId = () => fs.readFileSync(MACHINE_ID_PATH),
 } = {}) {
-  assertLinuxNonRoot({ platform, getuid })
+  assertLinuxNonRoot({ platform, getuid, username })
   const actualHostname = hostname()
   if (actualHostname !== "aegis") fail("IDENTITY_MISMATCH", "resident hostname must be exactly aegis")
   const machineId = Buffer.from(readMachineId()).toString("utf8").trim()
@@ -162,14 +171,32 @@ function assertTrustedWorkingFile(runGit, repositoryRoot, relativePath) {
 
 export function createTrustedProofProviders({
   repositoryRoot = REPOSITORY_ROOT,
-  homeDirectory = os.homedir(),
+  snapshotRoot = SNAPSHOT_ROOT,
   runGit = defaultRunGit,
   runPlacementReplay = runPinnedPlacementInProcessCli,
 } = {}) {
+  function proveTrustedCheckout() {
+    const head = runGit(["rev-parse", "HEAD"]).toString("utf8").trim()
+    const main = runGit(["rev-parse", TRUSTED_REF]).toString("utf8").trim()
+    const tree = runGit(["rev-parse", "HEAD^{tree}"]).toString("utf8").trim()
+    const status = runGit(["status", "--porcelain=v1", "--untracked-files=all"])
+    if (!COMMIT.test(head) || head !== main || !COMMIT.test(tree) || status.length !== 0) {
+      fail("TRUSTED_MAIN_MISMATCH", "resident executable checkout must be clean and exactly trusted main")
+    }
+    return {
+      schema_version: "0.1-trusted-aegis-executable-checkout",
+      trusted_ref: TRUSTED_REF,
+      head_commit: head,
+      tree_sha1: tree,
+      clean: true,
+      verified: true,
+    }
+  }
+
   function proveTrustedPlacement({ receiptSha256, receipt }) {
     for (const relativePath of PLACEMENT_FILES) assertTrustedWorkingFile(runGit, repositoryRoot, relativePath)
     const args = [
-      "--snapshot-root", path.join(homeDirectory, ...SNAPSHOT_PARTS),
+      "--snapshot-root", snapshotRoot,
       "--verifier", path.join(repositoryRoot, "scripts/execution-fabric/verify_snapshot.py"),
       "--registry", path.join(repositoryRoot, "config/execution-fabric/registry.seed.json"),
       "--schema", path.join(repositoryRoot, "config/execution-fabric/registry.schema.json"),
@@ -247,27 +274,39 @@ export function createTrustedProofProviders({
     }
   }
 
-  return { proveTrustedPlacement, proveTrustedForge, proveTrustedAuthority }
+  return { proveTrustedCheckout, proveTrustedPlacement, proveTrustedForge, proveTrustedAuthority }
 }
 
-function ensurePrivateDirectory(homeDirectory, uid, validateDirectory) {
-  const home = fs.realpathSync(homeDirectory)
-  let cursor = home
-  for (const part of LEDGER_PARTS) {
-    cursor = path.join(cursor, part)
-    try { fs.mkdirSync(cursor, { mode: 0o700 }) } catch (error) {
-      if (error?.code !== "EEXIST") throw error
-    }
-    const stats = fs.lstatSync(cursor)
-    if (!validateDirectory(stats, uid)) {
-      fail("LEDGER_UNTRUSTED", "AEGIS ledger path must be a current-user-owned real directory")
-    }
-    const real = fs.realpathSync(cursor)
-    if (path.relative(home, real).startsWith("..") || path.isAbsolute(path.relative(home, real))) {
-      fail("LEDGER_UNTRUSTED", "AEGIS ledger escapes the current user home")
-    }
+function requirePrivateLedgerRoot(ledgerRoot, uid, validateDirectory) {
+  const lexical = path.resolve(ledgerRoot)
+  const stats = fs.lstatSync(lexical)
+  const real = fs.realpathSync(lexical)
+  if (real !== lexical || !validateDirectory(stats, uid)) {
+    fail("LEDGER_UNTRUSTED", "AEGIS ledger must be the provisioned private node-scoped directory")
   }
-  return cursor
+  return real
+}
+
+function processStartTicks(pid) {
+  const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8")
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/)
+  if (!/^\d+$/.test(fields[19] ?? "")) fail("HOLDER_IDENTITY_INVALID", "process start ticks are unavailable")
+  return fields[19]
+}
+
+function residentHolderIdentity() {
+  const bootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()
+  if (!/^[a-f0-9-]{36}$/.test(bootId)) fail("HOLDER_IDENTITY_INVALID", "kernel boot identity is unavailable")
+  return { pid: process.pid, boot_id: bootId, process_start_ticks: processStartTicks(process.pid) }
+}
+
+function residentHolderIsAlive(holder) {
+  try {
+    const bootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()
+    return bootId === holder.boot_id && processStartTicks(holder.pid) === holder.process_start_ticks
+  } catch {
+    return false
+  }
 }
 
 function syncDirectoryDurably(directoryPath) {
@@ -305,26 +344,32 @@ function readPrivateLedgerJson(filePath, uid, validateLedgerFile) {
 }
 
 export function createLedgerProviders({
-  homeDirectory = os.homedir(),
+  ledgerRoot: requestedLedgerRoot = LEDGER_ROOT,
   platform = process.platform,
   getuid = process.getuid,
+  username = () => os.userInfo().username,
   clock = () => new Date().toISOString(),
+  holderIdentity = residentHolderIdentity,
+  holderIsAlive = residentHolderIsAlive,
   validateDirectory = (stats, uid) => stats.isDirectory() && !stats.isSymbolicLink()
     && stats.uid === uid && (stats.mode & 0o077) === 0,
   validateLedgerFile = (stats, uid) => stats.isFile() && !stats.isSymbolicLink()
     && stats.uid === uid && (stats.mode & 0o077) === 0,
   syncDirectory = syncDirectoryDurably,
 } = {}) {
-  const uid = assertLinuxNonRoot({ platform, getuid })
-  const ledgerRoot = ensurePrivateDirectory(homeDirectory, uid, validateDirectory)
+  const uid = assertLinuxNonRoot({ platform, getuid, username })
+  const ledgerRoot = requirePrivateLedgerRoot(requestedLedgerRoot, uid, validateDirectory)
   let retainedClaim = null
   let retainedLease = null
   let retainedRelease = null
+  let retainedRecovery = null
   const claimSingleUse = async ({ request_sha256, scope_sha256, authority_reference, maximum_attempts }) => {
     const claimKeySha256 = sha256(canonicalBytes({ authority_reference, scope_sha256 }))
     const claimedAt = clock()
+    const claimId = `claim-${claimKeySha256.slice(0, 24)}`
     const claim = {
       schema_version: "0.1-aegis-single-use-claim",
+      claim_id: claimId,
       request_sha256,
       scope_sha256,
       authority_reference,
@@ -344,23 +389,81 @@ export function createLedgerProviders({
           || retainedClaimSha256 !== sha256(canonicalBytes(claimBody))) {
           fail("LEDGER_UNTRUSTED", "retained AEGIS claim does not match its single-use key")
         }
-        return { claimed: false, claim_id: `claim-${claimKeySha256.slice(0, 24)}`, claimed_at: retainedClaim.claimed_at }
+        return { claimed: false, claim_id: retainedClaim.claim_id, claimed_at: retainedClaim.claimed_at }
       }
       throw error
     }
     retainedClaim = claim
-    return { claimed: true, claim_id: `claim-${claim.claim_sha256.slice(0, 24)}`, claimed_at: claimedAt }
+    return { claimed: true, claim_id: claimId, claimed_at: claimedAt }
   }
+
+  const validateLease = (lease) => {
+    const { lease_sha256: retainedLeaseSha256, ...leaseBody } = lease ?? {}
+    return lease && lease.schema_version === "0.1-resident-aegis-runtime-lease"
+      && typeof lease.holder === "object" && Number.isSafeInteger(lease.holder.pid) && lease.holder.pid > 0
+      && typeof lease.holder.boot_id === "string" && typeof lease.holder.process_start_ticks === "string"
+      && retainedLeaseSha256 === sha256(canonicalBytes(leaseBody))
+  }
+
+  const reconcileDeadLease = () => {
+    const leasePath = path.join(ledgerRoot, "resident-aegis-active.json")
+    const active = readPrivateLedgerJson(leasePath, uid, validateLedgerFile)
+    if (!active) return true
+    if (!validateLease(active)) fail("LEDGER_UNTRUSTED", "active AEGIS lease is invalid")
+    const releasePath = path.join(ledgerRoot, `release-${active.lease_id}.json`)
+    const release = readPrivateLedgerJson(releasePath, uid, validateLedgerFile)
+    if (release) {
+      const { release_sha256: releaseSha256, ...releaseBody } = release
+      if (release.lease_id !== active.lease_id || release.claim_id !== active.claim_id
+        || release.lease_sha256 !== active.lease_sha256
+        || releaseSha256 !== sha256(canonicalBytes(releaseBody))) {
+        fail("LEDGER_UNTRUSTED", "retained AEGIS release record is invalid")
+      }
+      retainedRelease = release
+    } else {
+      if (holderIsAlive(active.holder)) return false
+      const recovery = {
+        schema_version: "0.1-resident-aegis-runtime-lease-recovery",
+        lease_id: active.lease_id,
+        claim_id: active.claim_id,
+        lease_sha256: active.lease_sha256,
+        reason: "PROVEN_DEAD_PROCESS_HOLDER",
+        recovered_at: clock(),
+      }
+      recovery.recovery_sha256 = sha256(canonicalBytes(recovery))
+      const recoveryPath = path.join(ledgerRoot, `recovery-${active.lease_id}.json`)
+      try { writeExclusiveDurable(recoveryPath, recovery, syncDirectory) } catch (error) {
+        if (error?.code !== "EEXIST") throw error
+        const existing = readPrivateLedgerJson(recoveryPath, uid, validateLedgerFile)
+        const { recovery_sha256: recoverySha256, ...recoveryBody } = existing ?? {}
+        if (!existing || existing.lease_id !== active.lease_id || existing.claim_id !== active.claim_id
+          || existing.lease_sha256 !== active.lease_sha256
+          || recoverySha256 !== sha256(canonicalBytes(recoveryBody))) {
+          fail("LEDGER_UNTRUSTED", "retained AEGIS recovery record is invalid")
+        }
+        retainedRecovery = existing
+      }
+      retainedRecovery ??= recovery
+    }
+    try { fs.unlinkSync(leasePath) } catch (error) {
+      if (error?.code !== "ENOENT") throw error
+    }
+    syncDirectory(ledgerRoot)
+    return true
+  }
+
   const acquireExclusiveLease = async ({ claim_id }) => {
     const acquiredAt = clock()
     const leaseId = `lease-${sha256(canonicalBytes({ claim_id, acquired_at: acquiredAt })).slice(0, 24)}`
     const lease = {
-        schema_version: "0.1-resident-aegis-runtime-lease",
-        lease_id: leaseId,
-        claim_id,
-        acquired_at: acquiredAt,
+      schema_version: "0.1-resident-aegis-runtime-lease",
+      lease_id: leaseId,
+      claim_id,
+      acquired_at: acquiredAt,
+      holder: holderIdentity(),
     }
     lease.lease_sha256 = sha256(canonicalBytes(lease))
+    if (!reconcileDeadLease()) return { acquired: false, lease_id: leaseId, acquired_at: acquiredAt }
     try {
       writeExclusiveDurable(path.join(ledgerRoot, "resident-aegis-active.json"), lease, syncDirectory)
     } catch (error) {
@@ -374,9 +477,7 @@ export function createLedgerProviders({
     const leasePath = path.join(ledgerRoot, "resident-aegis-active.json")
     const retained = readPrivateLedgerJson(leasePath, uid, validateLedgerFile)
     if (!retained) return false
-    const { lease_sha256: retainedLeaseSha256, ...leaseBody } = retained
-    if (retained.lease_id !== lease_id || retained.claim_id !== claim_id
-      || retainedLeaseSha256 !== sha256(canonicalBytes(leaseBody))) return false
+    if (!validateLease(retained) || retained.lease_id !== lease_id || retained.claim_id !== claim_id) return false
     const release = {
       schema_version: "0.1-resident-aegis-runtime-lease-release",
       lease_id,
@@ -409,6 +510,7 @@ export function createLedgerProviders({
     claim_sha256: retainedClaim?.claim_sha256 ?? null,
     lease_sha256: retainedLease?.lease_sha256 ?? null,
     release_sha256: retainedRelease?.release_sha256 ?? null,
+    recovery_sha256: retainedRecovery?.recovery_sha256 ?? null,
   })
   return { ledgerRoot, claimSingleUse, acquireExclusiveLease, releaseExclusiveLease, runtimeEvidence }
 }
@@ -416,10 +518,11 @@ export function createLedgerProviders({
 export async function runResidentAegis(argv = process.argv.slice(2)) {
   const args = parseArguments(argv)
   assertLinuxNonRoot()
+  const proof = createTrustedProofProviders()
+  const executableProof = proof.proveTrustedCheckout()
   const requestBytes = readConfinedReport(args.request)
   const receiptBytes = readConfinedReport(args.receipt)
   const request = JSON.parse(requestBytes.toString("utf8").replace(/^\uFEFF/, ""))
-  const proof = createTrustedProofProviders()
   const ledger = createLedgerProviders()
   const adapterResult = await executeAegisHashVerify({
     repositoryRoot: REPOSITORY_ROOT,
@@ -436,6 +539,7 @@ export async function runResidentAegis(argv = process.argv.slice(2)) {
   })
   const evidence = {
     schema_version: "0.1-aegis-resident-runner-evidence",
+    executable_proof: executableProof,
     adapter_result: adapterResult,
     runtime_evidence: ledger.runtimeEvidence(),
   }

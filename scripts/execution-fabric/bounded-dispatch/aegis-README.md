@@ -23,8 +23,10 @@ Activation additionally requires injected atomic one-use claim and exclusive res
 providers. `run-resident-aegis-hash-verify.mjs` is the Linux-only resident wrapper for those host
 dependencies. It accepts only repository-confined request and receipt paths, derives identity from
 the local hostname and `/etc/machine-id`, replays placement from the fixed user-local snapshot root,
-and proves Forge and authority artifacts from local trusted `main`. Its private claim/lease ledger is
-owned by the current non-root account beneath `~/.williamos/execution-fabric/aegis-ledger`. It has no
+and proves Forge and authority artifacts from a clean executable checkout exactly at local trusted
+`main`. It runs only as the dedicated non-root `williamos-fabric` account. Its private, node-scoped
+claim/lease ledger must be pre-provisioned at `/var/lib/williamos/fabric/ledger`; stale leases are
+reconciled only after durable release evidence or proof that the exact process holder is dead. It has no
 SSH, network, GitHub, external-provider, scheduler, fallback, or arbitrary-workload command surface.
 Those providers govern runtime-control state outside this read-only workload adapter; the adapter
 itself performs no claim/lease filesystem writes. Identity and all trust inputs are rechecked after
