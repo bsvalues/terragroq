@@ -119,7 +119,11 @@ function observation(receiptSha256: string, overrides: JsonObject = {}): JsonObj
   }
 }
 
-function trustedRepository(receiptValue: JsonObject, receiptSha256: string) {
+function trustedRepository(
+  receiptValue: JsonObject,
+  receiptSha256: string,
+  observationValue: JsonObject = observation(receiptSha256),
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fabric-shadow-trust-"))
   for (const [relativePath, workOrderId] of [
     [retainedRecord, "WO-LOCAL-107"],
@@ -141,11 +145,40 @@ function trustedRepository(receiptValue: JsonObject, receiptSha256: string) {
     placement_policy_version: "execution-fabric-placement/0.2",
     trusted_receipts: [{
       receipt_sha256: receiptSha256,
+      work_order_id: observationValue.work_order_id,
       workload_id: receiptValue.workload.id,
       decision_input_sha256: receiptValue.decision_input_sha256,
       evidence_snapshot: receiptValue.evidence_snapshot,
       reviewed_commit: "a".repeat(40),
       status: "TRUSTED",
+    }],
+  }, null, 2)}\n`)
+  const selectedOutcome = outcomeEvidence(observationValue.work_order_id, observationValue.manual_target)
+  const selectedSourceSha256 = observationValue.source.sha256
+  fs.writeFileSync(path.join(root, "config/execution-fabric/shadow-outcome-registry.json"), `${JSON.stringify({
+    schema_version: "0.1-shadow-outcome-registry",
+    registry_id: "shadow-outcomes-test-v1",
+    entries: [{
+      artifact_sha256: selectedOutcome.sha256,
+      work_order_id: observationValue.work_order_id,
+      actual_target_node: observationValue.manual_target,
+      retained_source_sha256: selectedSourceSha256,
+      authority_reference: "authority-shadow-observation-v1",
+      reviewed_commit: "b".repeat(40),
+      status: "ACTIVE",
+    }],
+  }, null, 2)}\n`)
+  fs.writeFileSync(path.join(root, "config/execution-fabric/shadow-authority-registry.json"), `${JSON.stringify({
+    schema_version: "0.1-shadow-authority-registry",
+    registry_id: "shadow-authorities-test-v1",
+    entries: [{
+      reference: "authority-shadow-observation-v1",
+      work_order_id: observationValue.work_order_id,
+      allowed_canonical_nodes: [observationValue.manual_target],
+      valid_from: "2026-08-10T07:00:30.000Z",
+      expires_at: "2026-08-10T07:02:00.000Z",
+      reviewed_commit: "c".repeat(40),
+      status: "ACTIVE",
     }],
   }, null, 2)}\n`)
   return root
@@ -158,7 +191,7 @@ function entry(receiptValue = receipt(), observationOverrides: JsonObject = {}) 
   return {
     receiptBytes: Buffer.from(bytes),
     observationBytes: Buffer.from(`${JSON.stringify(observationValue, null, 2)}\n`),
-    repositoryRoot: trustedRepository(receiptValue, receiptSha256),
+    repositoryRoot: trustedRepository(receiptValue, receiptSha256, observationValue),
   }
 }
 
@@ -170,6 +203,13 @@ function evaluate(receiptValue = receipt(), observationOverrides: JsonObject = {
 
 function expectRejected(action: () => unknown, detail: string) {
   expect(action).toThrowError(`FABRIC_SHADOW_PLACEMENT_INVALID: ${detail}`)
+}
+
+function mutateRepositoryJson(repositoryRoot: string, relativePath: string, mutate: (value: JsonObject) => void) {
+  const artifactPath = path.join(repositoryRoot, relativePath)
+  const value = JSON.parse(fs.readFileSync(artifactPath, "utf8"))
+  mutate(value)
+  fs.writeFileSync(artifactPath, `${JSON.stringify(value, null, 2)}\n`)
 }
 
 describe("Execution Fabric Phase 2 shadow placement", () => {
@@ -198,7 +238,7 @@ describe("Execution Fabric Phase 2 shadow placement", () => {
   it("rolls up a bounded observation set deterministically and rejects duplicate records", () => {
     const receiptValue = receipt()
     const first = entry(receiptValue)
-    const second = entry(receiptValue, {
+    const second = entry(receipt({ decision_input_sha256: "1".repeat(64) }), {
       sourcePath: secondRetainedRecord,
       observation_id: "shadow-WO-LOCAL-053",
       work_order_id: "WO-LOCAL-053",
@@ -218,13 +258,13 @@ describe("Execution Fabric Phase 2 shadow placement", () => {
       "shadow batch contains duplicate observation IDs")
     const relabeled = entry(receiptValue, { observation_id: "shadow-WO-LOCAL-107-relabeled" })
     expectRejected(() => evaluateShadowPlacementTestFixtureBatch([first, relabeled]),
-      "shadow batch contains duplicate receipt-to-observation bindings")
+      "shadow batch contains duplicate receipt-to-source bindings")
     const alternateReport = entry(receiptValue, {
       sourcePath: alternateRetainedRecord,
       observation_id: "shadow-WO-LOCAL-107-alternate-report",
     })
     expectRejected(() => evaluateShadowPlacementTestFixtureBatch([first, alternateReport]),
-      "shadow batch contains duplicate receipt-to-observation bindings")
+      "shadow batch contains duplicate immutable outcomes")
   })
 
   it("requires an explicit classified reason for every target mismatch", () => {
@@ -236,6 +276,8 @@ describe("Execution Fabric Phase 2 shadow placement", () => {
       eligible_nodes: [{
         ...receipt().eligible_nodes[0], node_id: "hermes-node",
         rank_basis: { stable_node_id: "hermes-node" },
+      }, {
+        ...receipt().eligible_nodes[0], rank: 2,
       }],
     })
     expectRejected(
@@ -253,26 +295,51 @@ describe("Execution Fabric Phase 2 shadow placement", () => {
     })
   })
 
-  it("records a manual target beside a no-eligible-node receipt only as an explained divergence", () => {
+  it("requires trustworthy semantics for every eligible target", () => {
+    for (const candidateOverride of [
+      { eligible: false },
+      { freshness: { state: "stale", expires_at: "2026-08-10T07:05:00.000Z" } },
+      { confidence: "declared" },
+      { freshness: { state: "fresh", expires_at: "2026-08-10T06:59:59.000Z" } },
+    ]) {
+      const contradictory = receipt({
+        eligible_nodes: [{ ...receipt().eligible_nodes[0], ...candidateOverride }],
+      })
+      expect(() => evaluate(contradictory)).toThrowError(/eligible candidate|eligible evidence is already expired/)
+    }
+
+    const contradictoryAlternate = receipt({
+      recommendation: {
+        node_id: "hermes-node", rank: 1, rank_basis: { stable_node_id: "hermes-node" },
+        execution_authorized: false, dispatch_allowed: false,
+      },
+      eligible_nodes: [{
+        ...receipt().eligible_nodes[0], node_id: "hermes-node",
+        rank_basis: { stable_node_id: "hermes-node" },
+      }, {
+        ...receipt().eligible_nodes[0], eligible: false, rank: 2,
+      }],
+    })
+    expectRejected(() => evaluate(contradictoryAlternate, {
+      divergence_reasons: ["MANUAL_TARGET_DIFFERS_FROM_RECOMMENDATION"],
+    }), "omen: eligible candidate semantics are contradictory or untrusted")
+  })
+
+  it("rejects every actual target when the trusted receipt has no eligible node", () => {
     const blockedReceipt = receipt({
       status: "NO_ELIGIBLE_NODE",
       recommendation: null,
       eligible_nodes: [],
       confidence: { state: "insufficient", freshness: "insufficient", registry_freshness: "stale" },
     })
-    expectRejected(() => evaluate(blockedReceipt), "manual target without a policy recommendation requires NO_POLICY_RECOMMENDATION")
-
-    const result = evaluate(blockedReceipt, {
-      divergence_reasons: ["NO_POLICY_RECOMMENDATION"],
-    })
-    expect(result.policy_receipt.selected_node_id).toBeNull()
-    expect(result.comparison).toMatchObject({ diverged: true, silent_fallback: false })
+    expectRejected(() => evaluate(blockedReceipt),
+      "actual target is not eligible in the trusted placement receipt")
   })
 
   it("rejects stale or untrusted recommendation evidence", () => {
     const stale = receipt()
     stale.eligible_nodes[0].freshness.state = "stale"
-    expectRejected(() => evaluate(stale), "receipt recommendation uses stale or untrusted evidence")
+    expectRejected(() => evaluate(stale), "omen: eligible candidate semantics are contradictory or untrusted")
 
     const unverified = receipt()
     unverified.evidence_verifier.result = "FAIL"
@@ -285,7 +352,9 @@ describe("Execution Fabric Phase 2 shadow placement", () => {
   })
 
   it("rejects receipt secret or executable aliases recursively", () => {
-    for (const field of ["cmd", "exec", "spawn", "env", "environment", "token", "api_key", "authorization"]) {
+    for (const field of [
+      "cmd", "exec", "spawn", "env", "environment", "token", "api_key", "api-key", "private-key", "authorization",
+    ]) {
       const unsafe = receipt()
       unsafe.workload[field] = "not-permitted"
       expectRejected(() => evaluate(unsafe), `receipt.workload.${field} is not permitted in observation-only input`)
@@ -329,6 +398,56 @@ describe("Execution Fabric Phase 2 shadow placement", () => {
       recorded_at: "2026-08-10T06:59:59.000Z",
       divergence_reasons: ["OPERATOR_PLACEMENT_PRECEDED_POLICY_RECEIPT"],
     }), "shadow observation predates the placement recommendation")
+  })
+
+  it("rejects divergence reasons that cannot occur in the accepted chronology", () => {
+    expectRejected(() => evaluate(receipt(), {
+      divergence_reasons: ["OPERATOR_PLACEMENT_PRECEDED_POLICY_RECEIPT"],
+    }), "observation divergence_reasons are invalid or duplicated")
+  })
+
+  it("requires independently reviewed outcome and authority settlement", () => {
+    const wrongWorkOrder = entry()
+    mutateRepositoryJson(wrongWorkOrder.repositoryRoot,
+      "config/execution-fabric/shadow-receipt-registry.json",
+      (registry) => { registry.trusted_receipts[0].work_order_id = "WO-OTHER" })
+    expectRejected(() => evaluateShadowPlacementTestFixture(wrongWorkOrder),
+      "receipt does not match its reviewed trust-registry binding")
+
+    const unregistered = entry()
+    mutateRepositoryJson(unregistered.repositoryRoot,
+      "config/execution-fabric/shadow-outcome-registry.json",
+      (registry) => { registry.entries = [] })
+    expectRejected(() => evaluateShadowPlacementTestFixture(unregistered),
+      "outcome trust settlement rejected: empty or invalid trust registries cannot settle outcome evidence")
+
+    const forgedSource = entry()
+    mutateRepositoryJson(forgedSource.repositoryRoot,
+      "config/execution-fabric/shadow-outcome-registry.json",
+      (registry) => { registry.entries[0].retained_source_sha256 = "0".repeat(64) })
+    expectRejected(() => evaluateShadowPlacementTestFixture(forgedSource),
+      "outcome trust settlement rejected: outcome retained-source binding mismatch")
+
+    const unauthorizedNode = entry()
+    mutateRepositoryJson(unauthorizedNode.repositoryRoot,
+      "config/execution-fabric/shadow-authority-registry.json",
+      (registry) => { registry.entries[0].allowed_canonical_nodes = ["atlas"] })
+    expectRejected(() => evaluateShadowPlacementTestFixture(unauthorizedNode),
+      "outcome trust settlement rejected: actual target is not allowed by the reviewed authority entry")
+
+    const expiredExecution = entry()
+    mutateRepositoryJson(expiredExecution.repositoryRoot,
+      "config/execution-fabric/shadow-authority-registry.json",
+      (registry) => { registry.entries[0].expires_at = "2026-08-10T07:01:10.000Z" })
+    expectRejected(() => evaluateShadowPlacementTestFixture(expiredExecution),
+      "outcome trust settlement rejected: authority check or execution chronology is outside the reviewed validity window")
+  })
+
+  it("rejects normalized impossible calendar timestamps", () => {
+    expectRejected(() => evaluate(receipt({ evaluated_at: "2026-02-30T07:00:00.000Z" })),
+      "receipt.evaluated_at is not a valid UTC calendar timestamp")
+    expectRejected(() => evaluate(receipt(), { recorded_at: "2026-02-30T07:05:00.000Z" }),
+      "observation.recorded_at is not a valid UTC calendar timestamp")
   })
 
   it("rejects unclassified fixtures, path escape, and records outside the retained report boundary", () => {
