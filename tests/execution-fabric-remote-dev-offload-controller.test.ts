@@ -7,7 +7,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process"
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
-import { bindRemoteDevPacket } from "../scripts/execution-fabric/live/remote-dev-offload-contract.mjs"
+import { bindRemoteDevPacket, evaluateRemoteDevTransition } from "../scripts/execution-fabric/live/remote-dev-offload-contract.mjs"
 import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
 
 const root = process.cwd()
@@ -23,6 +23,7 @@ const reservedPaths = [".github/workflows/dotnet-test.yml", ".github/workflows/t
 const operations = ["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "APPLY_RESERVED_PATCH", "RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE", "COMMIT_RESERVED_PATHS", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE", "CLEAN_EXACT_WORKSPACE"]
 const approvedAegisKey = "AAAAC3NzaC1lZDI1NTE5AAAAIGZ/ADhMtzZwM46u+K2IK8hiThC/Jk1FD4//ly+ouxZE"
 const approvedAegisFingerprint = "SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo"
+const jcsDigest = (value: unknown) => crypto.createHash("sha256").update(canonicalizeJcs(value)).digest("hex")
 
 function envelope(baseSha: string) {
   return { schemaVersion: 2, programId: "PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001", goalId: "GOAL-WOS-MULTI-AGENT-OPERATOR-001", loopId: "LOOP-WOS-MULTI-AGENT-OPERATOR-001", workOrderId: "WO-TF-REMOTE-DEV-OFFLOAD-001", objective: "Deliver the bounded TerraFusion informational CI proof.", riskClass: "R1", repositories: ["bsvalues/terrafusion_os_1.0"], baseRefs: [{ repository: "bsvalues/terrafusion_os_1.0", ref: "refs/heads/main", commitSha: baseSha }], dependencies: [], fanInGate: "ALL", laneId: "LANE-TF-REMOTE-DEV-OFFLOAD", teamRoles: { coordinator: "omen-controller", builder: "aegis-worker", reviewer: "independent-assurance" }, providerRequirements: ["hermes-relay"], preferredProviders: ["hermes-relay"], fallbackProviders: [], reservations: { paths: reservedPaths.map((entry) => ({ repository: "bsvalues/terrafusion_os_1.0", path: entry })), contracts: ["remote-dev-offload-v1"], environments: ["aegis-proof-workspace"] }, allowedActions: ["READ_REPOSITORY", "WRITE_RESERVED_PATHS", "RUN_VALIDATION", "COMMIT_OWN_CHANGES", "PUSH_OWN_BRANCH", "OPEN_DRAFT_PR", "READ_CI_AND_REVIEW", "MERGE_ELIGIBLE_PR", "VERIFY_POST_MERGE"], forbiddenActions: ["OWNER_CONTACT", "CREDENTIAL_ACCESS", "RUNTIME_ACTIVATION", "PRODUCTION_WRITE", "BRANCH_PROTECTION_BYPASS", "DESTRUCTIVE_GIT"], authorityGrantRefs: ["grant-remote-dev-offload-v1"], programActivationGrantRef: "grant-remote-dev-offload-v1", grantStatusEventRefs: ["grant-status-remote-dev-offload-v1"], requiredOutputs: ["policy-bound-packet", "hash-chained-evidence"], requiredValidation: ["focused-vitest"], reviewRequirements: { independentReviewer: true, minimumApprovals: 1, maximumUnresolvedThreads: 0 }, mergeMode: "ASSURANCE_GATED", retryBudget: { maxAttempts: 3, backoffSeconds: 10 }, remediationBudget: { maxCycles: 2 }, reroutePolicy: "NONE", stopConditions: ["authority-wall", "resource-limit"], evidenceTargets: ["branch", "commit", "merge", "cleanup"], ownerDecisionConditions: [], ownerOperationsAllowed: false }
@@ -44,7 +45,7 @@ function fixture() {
   const startedAt = new Date(now - 120_000).toISOString(); const completedAt = new Date(now - 60_000).toISOString()
   const evidence = { schemaVersion: 1, runId: packet.runId, operation: "PROVE_PREFLIGHT", attempt: 1, startedAt, completedAt, status: "SUCCEEDED", exitCode: 0, nodeId: "aegis", workspace: packet.workspace, branch: packet.branch, baseSha, headSha: baseSha, outputSha256: "d".repeat(64), policySha256: packet.bindings.policySha256, packetSha256: packet.bindings.packetSha256, patchSha256: packet.patch.sha256, patchGeneration: 1, previousEvidenceSha256: null }
   const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", controller, "-PolicyPath", policyPath, "-PacketPath", packetPath, "-DispatchEnvelopePath", envelopePath, "-PatchPath", patchPath, "-EvidenceRoot", evidenceRoot, "-Operation", "PROVE_PREFLIGHT", "-Attempt", "1", "-PreviousEvidenceSha256", "null", "-AegisKnownHostLine", knownHostLine, "-SshTimeoutSeconds", "10"]
-  return { directory, args, evidence, evidenceRoot }
+  return { directory, args, evidence, evidenceRoot, packet }
 }
 
 beforeAll(() => {
@@ -190,7 +191,65 @@ describe("Hermes-mediated remote development controller", () => {
     expect(second.status).toBe(64)
     expect(JSON.parse(second.stdout)).toMatchObject({ status: "BLOCKED", reasonCode: "RUN_REPLAY_OR_ORDER_INVALID" })
     expect(fs.readFileSync(innerLog, "utf8").trim().split(/\r?\n/)).toHaveLength(1)
-  })
+  }, 15_000)
+
+  it("uses the exact Task 1 canonical JCS digest across consecutive Hermes operations", () => {
+    const value = fixture()
+    run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
+    const invocation = fs.readFileSync(fakeLog, "utf8").trim().split("\t")
+    const encoded = invocation.at(-1)!
+    const firstInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8"))
+    const programData = path.join(value.directory, "canonical-chain-program-data"); fs.mkdirSync(programData)
+    const innerLog = path.join(value.directory, "canonical-chain-inner.log")
+    const baseEnv = { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog }
+    const first = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(firstInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(value.evidence) } })
+    expect(first.status, `${first.stdout}\n${first.stderr}`).toBe(0)
+    const canonicalPrevious = jcsDigest(value.evidence)
+    const secondEvidence = { ...value.evidence, operation: "CREATE_WORKSPACE", startedAt: new Date(Date.parse(value.evidence.completedAt) + 1_000).toISOString(), completedAt: new Date(Date.parse(value.evidence.completedAt) + 2_000).toISOString(), previousEvidenceSha256: canonicalPrevious }
+    const secondInput = { ...firstInput, operation: "CREATE_WORKSPACE", previous: canonicalPrevious }
+    const second = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(secondInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(secondEvidence), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(secondEvidence) } })
+    expect(second.status, `${second.stdout}\n${second.stderr}`).toBe(0)
+    expect(evaluateRemoteDevTransition(value.packet, value.evidence, { now: new Date().toISOString(), seenRunIds: [], branch: value.packet.branch, dispatchEnvelope: envelope(value.evidence.baseSha), evidenceHistory: [] })).toMatchObject({ status: "RUNNING", evidenceSha256: canonicalPrevious })
+    expect(evaluateRemoteDevTransition(value.packet, secondEvidence, { now: new Date().toISOString(), seenRunIds: [], branch: value.packet.branch, dispatchEnvelope: envelope(value.evidence.baseSha), evidenceHistory: [value.evidence] })).toMatchObject({ status: "RUNNING", evidenceSha256: jcsDigest(secondEvidence) })
+  }, 15_000)
+
+  it("rejects a raw-JSON previous digest when Task 1 canonical JCS differs", () => {
+    const value = fixture()
+    run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
+    const invocation = fs.readFileSync(fakeLog, "utf8").trim().split("\t")
+    const encoded = invocation.at(-1)!; const firstInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8"))
+    const programData = path.join(value.directory, "raw-chain-program-data"); fs.mkdirSync(programData)
+    const innerLog = path.join(value.directory, "raw-chain-inner.log")
+    const baseEnv = { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog }
+    expect(spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(firstInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(value.evidence) } }).status).toBe(0)
+    const rawPrevious = crypto.createHash("sha256").update(JSON.stringify(value.evidence)).digest("hex")
+    expect(rawPrevious).not.toBe(jcsDigest(value.evidence))
+    const secondInput = { ...firstInput, operation: "CREATE_WORKSPACE", previous: rawPrevious }
+    const blocked = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(secondInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(value.evidence) } })
+    expect(blocked.status).toBe(64)
+    expect(blocked.stdout).toContain("EVIDENCE_CHAIN_INVALID")
+    expect(fs.readFileSync(innerLog, "utf8").trim().split(/\r?\n/)).toHaveLength(1)
+  }, 15_000)
+
+  it("enumerates underscore-bearing evidence filenames through the complete lifecycle", () => {
+    const value = fixture(); const args = [...value.args]
+    let previous: string | null = null; const history: any[] = []
+    for (let index = 0; index < operations.length; index += 1) {
+      const startedAt = new Date(Date.parse(value.evidence.startedAt) + index * 2_000).toISOString()
+      const completedAt = new Date(Date.parse(startedAt) + 1_000).toISOString()
+      const status = index === operations.length - 2 ? "MERGE_ANCESTRY_PROVEN" : index === operations.length - 1 ? "CLEANUP_ABSENCE_PROVEN" : "SUCCEEDED"
+      const evidence = { ...value.evidence, operation: operations[index], startedAt, completedAt, status, previousEvidenceSha256: previous }
+      args[args.indexOf("-Operation") + 1] = operations[index]
+      args[args.indexOf("-PreviousEvidenceSha256") + 1] = previous ?? "null"
+      const result = run(args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(evidence) })
+      expect(result.status, `${operations[index]}\n${result.stdout}\n${result.stderr}`).toBe(index === operations.length - 1 ? 0 : 2)
+      history.push(evidence); previous = jcsDigest(evidence)
+    }
+    const files = fs.readdirSync(path.join(value.evidenceRoot, value.evidence.runId)).filter((name) => !name.includes("operation-summary"))
+    expect(files).toHaveLength(operations.length)
+    expect(files).toContain("00-prove_preflight-1.json")
+    expect(files).toContain("10-clean_exact_workspace-1.json")
+  }, 60_000)
 
   it("fails closed for timeout, Hermes authentication failure, downstream failure, and malformed worker output", () => {
     const timed = fixture(); const timedArgs = [...timed.args]; timedArgs[timedArgs.indexOf("-SshTimeoutSeconds") + 1] = "1"

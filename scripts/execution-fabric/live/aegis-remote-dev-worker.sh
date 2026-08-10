@@ -112,6 +112,7 @@ TRUSTED_PARENT="${WORKER_ROOT}/srv/william"
 REPO_DIR="$PHYSICAL_WORKSPACE/repository"
 MARKER_PATH="$PHYSICAL_WORKSPACE/$OWNER_MARKER"
 PROOF_PATH="$PHYSICAL_WORKSPACE/$MERGE_MARKER"
+SCRATCH_DIR="$PHYSICAL_WORKSPACE/.williamos-scratch"
 
 [[ "$PACKET_WORKSPACE" == "$LOGICAL_WORKSPACE" ]] || die_input "WORKSPACE_MISMATCH" "packet workspace differs"
 if [[ -L "$PHYSICAL_WORKSPACE" || -L "$PHYSICAL_PARENT" ]]; then die_input "SYMLINK_REJECTED" "workspace path is a symlink"; fi
@@ -120,10 +121,7 @@ PROCESS_TIMEOUT_SECONDS="${REMOTE_DEV_PROCESS_TIMEOUT_SECONDS:-$PACKET_TIMEOUT}"
 if [[ ! "$PROCESS_TIMEOUT_SECONDS" =~ ^[0-9]+$ || "$PROCESS_TIMEOUT_SECONDS" -lt 1 || "$PROCESS_TIMEOUT_SECONDS" -gt "$PACKET_TIMEOUT" ]]; then die_input "RESOURCE_LIMIT_EXCEEDED" "process timeout exceeds packet ceiling"; fi
 export DOTNET_PROCESSOR_COUNT=12 MSBUILDNODECOUNT=12
 readonly SCRATCH_LIMIT_BYTES=85899345920
-
-for required_tool in timeout node realpath sha256sum taskset prlimit flock du findmnt; do
-  command -v "$required_tool" >/dev/null 2>&1 || die_block "RESOURCE_LIMIT_UNAVAILABLE" "$required_tool is required for the enforced envelope"
-done
+readonly SCRATCH_LIMIT_KIB=83886080
 
 validate_trusted_parent() {
   [[ -d "$TRUSTED_PARENT" && ! -L "$TRUSTED_PARENT" ]] || die_input "PATH_CONFINEMENT_FAILED" "trusted parent is unavailable"
@@ -133,44 +131,114 @@ validate_trusted_parent() {
   owner="$(timeout 5 stat -c %u -- "$TRUSTED_PARENT")" || die_input "PATH_CONFINEMENT_FAILED" "trusted parent ownership is unavailable"
   current="$(timeout 5 id -u)" || die_input "PATH_CONFINEMENT_FAILED" "worker identity is unavailable"
   [[ "$owner" == "$current" ]] || die_input "PATH_CONFINEMENT_FAILED" "trusted parent is not worker-owned"
+  [[ -d "$PHYSICAL_PARENT" && ! -L "$PHYSICAL_PARENT" ]] || die_input "PATH_CONFINEMENT_FAILED" "workspace parent is unavailable"
+  canonical="$(timeout 5 realpath -- "$PHYSICAL_PARENT")" || die_input "PATH_CONFINEMENT_FAILED" "workspace parent cannot be resolved"
+  [[ "$canonical" == "$PHYSICAL_PARENT" ]] || die_input "PATH_CONFINEMENT_FAILED" "workspace parent identity differs"
+  owner="$(timeout 5 stat -c %u -- "$PHYSICAL_PARENT")" || die_input "PATH_CONFINEMENT_FAILED" "workspace parent ownership is unavailable"
+  [[ "$owner" == "$current" ]] || die_input "PATH_CONFINEMENT_FAILED" "workspace parent is not worker-owned"
 }
 
-validate_trusted_parent
-if [[ ! -e "$PHYSICAL_PARENT" ]]; then
-  timeout 15 mkdir -- "$PHYSICAL_PARENT" || die_block "WORKSPACE_CREATE_FAILED" "cannot create workspace parent"
-  timeout 5 chmod 0700 -- "$PHYSICAL_PARENT" || die_block "WORKSPACE_CREATE_FAILED" "cannot protect workspace parent"
-fi
-[[ -d "$PHYSICAL_PARENT" && ! -L "$PHYSICAL_PARENT" ]] || die_input "PATH_CONFINEMENT_FAILED" "workspace parent is not an exact directory"
-exec 9>"$PHYSICAL_PARENT/.remote-dev-offload.lock" || die_block "WORKSPACE_LOCK_FAILED" "cannot open lifecycle lock"
-flock -n 9 || die_block "WORKSPACE_LOCK_BUSY" "another exact-workspace operation is active"
-
-scratch_bytes() {
-  if [[ ! -e "$PHYSICAL_WORKSPACE" ]]; then printf '0'; return; fi
-  local measured
-  measured="$(timeout 10 du -sb -- "$PHYSICAL_WORKSPACE" | { read -r bytes _rest; printf '%s' "$bytes"; })" || die_block "SCRATCH_MEASUREMENT_FAILED" "cannot measure workspace scratch"
-  [[ "$measured" =~ ^[0-9]+$ ]] || die_block "SCRATCH_MEASUREMENT_FAILED" "scratch measurement is malformed"
-  printf '%s' "$measured"
+require_containment_tools() {
+  local required_tool
+  for required_tool in timeout node realpath sha256sum flock findmnt systemd-run hostname id git dotnet corepack nproc df awk stat find tail tr grep du xfs_io xfs_quota; do
+    command -v "$required_tool" >/dev/null 2>&1 || die_block "CONTAINMENT_UNAVAILABLE" "$required_tool is required for bounded execution"
+  done
 }
 
-SCRATCH_BEFORE="$(scratch_bytes)"
-(( SCRATCH_BEFORE <= SCRATCH_LIMIT_BYTES )) || die_block "SCRATCH_LIMIT_EXCEEDED" "workspace exceeds the 80 GiB scratch ceiling"
+prove_project_quota() {
+  local mount_info filesystem options mount_target quota_stat project_id quota_line quota_id hard_kib
+  mount_info="$(timeout 10 findmnt -n -o FSTYPE,OPTIONS,TARGET --target "$PHYSICAL_PARENT")" || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace filesystem identity is unavailable"
+  read -r filesystem options mount_target <<< "$mount_info"
+  [[ "$filesystem" == "xfs" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace parent is not on XFS"
+  if [[ ",$options," != *,prjquota,* && ",$options," != *,pquota,* ]]; then
+    die_block "SCRATCH_CONFINEMENT_FAILED" "XFS project quota is not active for the workspace parent"
+  fi
+  quota_stat="$(timeout 10 xfs_io -c stat "$PHYSICAL_PARENT")" || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace project identity is unavailable"
+  printf '%s\n' "$quota_stat" | grep -qi 'proj-inherit' || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace parent does not enforce project inheritance"
+  project_id="$(printf '%s\n' "$quota_stat" | awk '/projid =/{print $3;exit}')"
+  [[ "$project_id" =~ ^[1-9][0-9]*$ ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace project ID is invalid"
+  quota_line="$(timeout 10 xfs_quota -x -c "quota -p -b -N $project_id" "$mount_target" | awk 'NF>=4 && $1 ~ /^#?[0-9]+$/ {print $1, $4;exit}')" || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace quota report is unavailable"
+  read -r quota_id hard_kib <<< "$quota_line"
+  quota_id="${quota_id#\#}"
+  [[ "$quota_id" == "$project_id" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace quota report does not match the inherited project"
+  [[ "$hard_kib" == "$SCRATCH_LIMIT_KIB" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace project hard limit is not exactly 80 GiB"
+  QUOTA_PROJECT_ID="$project_id"
+}
+
+validate_workspace_project() {
+  [[ -n "${QUOTA_PROJECT_ID:-}" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "trusted quota project ID is unavailable"
+  local workspace_stat workspace_project_id
+  workspace_stat="$(timeout 10 xfs_io -c stat "$PHYSICAL_WORKSPACE")" || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace project identity is unavailable"
+  workspace_project_id="$(printf '%s\n' "$workspace_stat" | awk '/projid =/{print $3;exit}')"
+  [[ "$workspace_project_id" == "$QUOTA_PROJECT_ID" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace did not inherit the bounded project quota"
+}
+
+probe_containment() {
+  : > "$OUTPUT_FILE"
+  set +e
+  timeout 30 systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
+    -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
+    -p RuntimeMaxSec=30 -p ProtectSystem=strict -p ProtectHome=read-only \
+    -p "TemporaryFileSystem=/tmp:size=1048576,mode=0700" -- \
+    findmnt -n -o FSTYPE --target /tmp >"$OUTPUT_FILE" 2>&1
+  local code=$?
+  set -e
+  [[ $code -eq 0 && "$(tr -d '\r\n' < "$OUTPUT_FILE")" == "tmpfs" ]] || die_block "CONTAINMENT_UNAVAILABLE" "systemd cgroup and bounded temporary filesystem could not be proven"
+}
+
+acquire_workspace_lock() {
+  validate_trusted_parent
+  exec 9>"$PHYSICAL_PARENT/.remote-dev-offload.lock" || die_block "WORKSPACE_LOCK_FAILED" "cannot open lifecycle lock"
+  flock -n 9 || die_block "WORKSPACE_LOCK_BUSY" "another exact-workspace operation is active"
+}
+
+validate_scratch_dir() {
+  [[ -d "$SCRATCH_DIR" && ! -L "$SCRATCH_DIR" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "exact workspace scratch directory is unavailable"
+  local canonical owner current
+  canonical="$(timeout 5 realpath -- "$SCRATCH_DIR")" || die_block "SCRATCH_CONFINEMENT_FAILED" "scratch cannot be resolved"
+  [[ "$canonical" == "$SCRATCH_DIR" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "scratch identity differs"
+  owner="$(timeout 5 stat -c %u -- "$SCRATCH_DIR")" || die_block "SCRATCH_CONFINEMENT_FAILED" "scratch ownership is unavailable"
+  current="$(timeout 5 id -u)" || die_block "SCRATCH_CONFINEMENT_FAILED" "worker identity is unavailable"
+  [[ "$owner" == "$current" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "scratch is not worker-owned"
+}
+
+measure_scratch() {
+  local bytes
+  bytes="$(timeout 10 du -s -B1 -- "$SCRATCH_DIR" | awk '{print $1;exit}')" || die_block "SCRATCH_CONFINEMENT_FAILED" "scratch usage cannot be measured"
+  [[ "$bytes" =~ ^[0-9]+$ && "$bytes" -le "$SCRATCH_LIMIT_BYTES" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "scratch usage exceeds the approved limit"
+  SCRATCH_MEASURED_BYTES="$bytes"
+}
 
 run_capture() {
   : > "$OUTPUT_FILE"
+  validate_scratch_dir
+  measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"
   set +e
-  timeout --signal=TERM --kill-after=5 "$PROCESS_TIMEOUT_SECONDS" taskset -c 0-11 prlimit --as=12884901888 --nproc=64 --nofile=256:256 -- "$@" >"$OUTPUT_FILE" 2>&1
+  timeout --signal=TERM --kill-after=5 "$PROCESS_TIMEOUT_SECONDS" systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
+    -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
+    -p "RuntimeMaxSec=$PROCESS_TIMEOUT_SECONDS" -p ProtectSystem=strict -p ProtectHome=read-only \
+    -p "ReadWritePaths=$PHYSICAL_WORKSPACE" -p "ReadOnlyPaths=/tmp /var/tmp" \
+    --setenv=TMPDIR="$SCRATCH_DIR/tmp" --setenv=TMP="$SCRATCH_DIR/tmp" --setenv=TEMP="$SCRATCH_DIR/tmp" \
+    --setenv=XDG_CACHE_HOME="$SCRATCH_DIR/xdg-cache" --setenv=NUGET_PACKAGES="$SCRATCH_DIR/nuget" \
+    --setenv=DOTNET_CLI_HOME="$SCRATCH_DIR/dotnet-home" --setenv=COREPACK_HOME="$SCRATCH_DIR/corepack" \
+    --setenv=npm_config_cache="$SCRATCH_DIR/npm-cache" -- "$@" >"$OUTPUT_FILE" 2>&1
   RUN_EXIT=$?
   set -e
-  SCRATCH_AFTER="$(scratch_bytes)"
-  if (( SCRATCH_AFTER > SCRATCH_LIMIT_BYTES )); then die_block "SCRATCH_LIMIT_EXCEEDED" "operation exceeded the 80 GiB scratch ceiling"; fi
+  validate_scratch_dir
+  measure_scratch; SCRATCH_AFTER="$SCRATCH_MEASURED_BYTES"
 }
 
-run_quiet() {
+run_cleanup_capture() {
+  : > "$OUTPUT_FILE"
+  measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"
   set +e
-  timeout --signal=TERM --kill-after=5 "$PROCESS_TIMEOUT_SECONDS" taskset -c 0-11 prlimit --as=12884901888 --nproc=64 --nofile=256:256 -- "$@" >/dev/null 2>&1
-  local code=$?
+  timeout --signal=TERM --kill-after=5 "$PROCESS_TIMEOUT_SECONDS" systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
+    -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
+    -p "RuntimeMaxSec=$PROCESS_TIMEOUT_SECONDS" -p ProtectSystem=strict -p ProtectHome=read-only \
+    -p "ReadWritePaths=$PHYSICAL_WORKSPACE" -p "ReadOnlyPaths=/tmp /var/tmp" -- "$@" >"$OUTPUT_FILE" 2>&1
+  RUN_EXIT=$?
   set -e
-  return "$code"
+  SCRATCH_AFTER=0
 }
 
 validate_reserved_paths() {
@@ -238,14 +306,46 @@ RUN_EXIT=0
 RESULT_STATUS="SUCCEEDED"
 HEAD_SHA="$BASE_SHA"
 
+if [[ "$OPERATION" != "PROVE_PREFLIGHT" ]]; then
+  require_containment_tools
+  prove_project_quota
+  acquire_workspace_lock
+fi
+
 case "$OPERATION" in
   PROVE_PREFLIGHT)
-    if [[ -e "$PHYSICAL_WORKSPACE" ]]; then
-      [[ -d "$PHYSICAL_WORKSPACE" ]] || die_input "PATH_CONFINEMENT_FAILED" "workspace is not a directory"
-      canonical="$(timeout 5 realpath -- "$PHYSICAL_WORKSPACE")" || die_input "PATH_CONFINEMENT_FAILED" "workspace cannot be resolved"
-      [[ "$canonical" == "$PHYSICAL_WORKSPACE" ]] || die_input "SYMLINK_REJECTED" "workspace does not resolve exactly"
+    require_containment_tools
+    validate_trusted_parent
+    [[ ! -e "$PHYSICAL_WORKSPACE" && ! -L "$PHYSICAL_WORKSPACE" ]] || die_block "WORKSPACE_NOT_ABSENT" "exact proof workspace must be absent before acquisition"
+    if [[ -e "$PHYSICAL_PARENT/.remote-dev-offload.lock" || -L "$PHYSICAL_PARENT/.remote-dev-offload.lock" ]]; then
+      [[ -f "$PHYSICAL_PARENT/.remote-dev-offload.lock" && ! -L "$PHYSICAL_PARENT/.remote-dev-offload.lock" ]] || die_block "PATH_CONFINEMENT_FAILED" "lifecycle lock path is unsafe"
+      [[ "$(timeout 5 stat -c %u -- "$PHYSICAL_PARENT/.remote-dev-offload.lock")" == "$(timeout 5 id -u)" ]] || die_block "PATH_CONFINEMENT_FAILED" "lifecycle lock is not worker-owned"
     fi
-    run_capture node --version
+    probe_containment
+    prove_project_quota
+    host_name="$(timeout 5 hostname | tr '[:upper:]' '[:lower:]')" || die_block "PREFLIGHT_IDENTITY_FAILED" "hostname is unavailable"
+    [[ "$host_name" == "aegis" ]] || die_block "PREFLIGHT_IDENTITY_FAILED" "worker hostname is not aegis"
+    user_name="$(timeout 5 id -un)" || die_block "PREFLIGHT_IDENTITY_FAILED" "worker user is unavailable"
+    [[ "$user_name" == "bs" ]] || die_block "PREFLIGHT_IDENTITY_FAILED" "worker user is not bs"
+    timeout 10 git --version >>"$OUTPUT_FILE" 2>&1 || die_block "PREFLIGHT_TOOLCHAIN_FAILED" "Git is unavailable"
+    dotnet_version="$(timeout 10 dotnet --version)" || die_block "PREFLIGHT_TOOLCHAIN_FAILED" ".NET is unavailable"
+    [[ "$dotnet_version" == 8.* ]] || die_block "PREFLIGHT_TOOLCHAIN_FAILED" ".NET 8 is required"
+    node_version="$(timeout 10 node --version)" || die_block "PREFLIGHT_TOOLCHAIN_FAILED" "Node is unavailable"
+    [[ "$node_version" =~ ^v[0-9]+\. ]] || die_block "PREFLIGHT_TOOLCHAIN_FAILED" "Node version is malformed"
+    pnpm_version="$(timeout 15 corepack pnpm --version)" || die_block "PREFLIGHT_TOOLCHAIN_FAILED" "Corepack/pnpm is unavailable"
+    [[ -n "$pnpm_version" ]] || die_block "PREFLIGHT_TOOLCHAIN_FAILED" "Corepack/pnpm version is empty"
+    cpu_count="$(timeout 5 nproc)" || die_block "PREFLIGHT_CAPACITY_FAILED" "CPU capacity is unavailable"
+    [[ "$cpu_count" =~ ^[0-9]+$ ]] && (( cpu_count >= 12 )) || die_block "PREFLIGHT_CAPACITY_FAILED" "fewer than 12 CPUs are available"
+    memory_bytes="$(timeout 5 awk '/^MemTotal:/{print $2*1024}' /proc/meminfo)" || die_block "PREFLIGHT_CAPACITY_FAILED" "memory capacity is unavailable"
+    awk -v bytes="$memory_bytes" 'BEGIN{exit !(bytes>=12884901888)}' || die_block "PREFLIGHT_CAPACITY_FAILED" "less than 12 GiB memory is available"
+    disk_bytes="$(timeout 5 df -PB1 --output=avail "$PHYSICAL_PARENT" | tail -n 1 | tr -d ' ')" || die_block "PREFLIGHT_CAPACITY_FAILED" "disk capacity is unavailable"
+    [[ "$disk_bytes" =~ ^[0-9]+$ ]] && (( disk_bytes >= SCRATCH_LIMIT_BYTES )) || die_block "PREFLIGHT_CAPACITY_FAILED" "less than 80 GiB disk is available"
+    timeout 30 git ls-remote --exit-code "$REMOTE_URL" refs/heads/main >>"$OUTPUT_FILE" 2>&1 || die_block "PREFLIGHT_REPOSITORY_AUTH_FAILED" "authenticated repository read failed"
+    PREFLIGHT_REPO="$TMP_ROOT/preflight.git"
+    timeout 15 git init --bare "$PREFLIGHT_REPO" >>"$OUTPUT_FILE" 2>&1 || die_block "PREFLIGHT_REPOSITORY_AUTH_FAILED" "temporary repository proof setup failed"
+    timeout 30 git -C "$PREFLIGHT_REPO" fetch --depth=1 "$REMOTE_URL" "$BASE_SHA" >>"$OUTPUT_FILE" 2>&1 || die_block "PREFLIGHT_REPOSITORY_AUTH_FAILED" "authenticated pinned revision read failed"
+    timeout 30 git -C "$PREFLIGHT_REPO" push --dry-run "$REMOTE_URL" "$BASE_SHA:refs/heads/williamos-preflight-$RUN_ID" >>"$OUTPUT_FILE" 2>&1 || die_block "PREFLIGHT_REPOSITORY_AUTH_FAILED" "authenticated repository push capability failed"
+    RUN_EXIT=0; SCRATCH_BEFORE=0; SCRATCH_AFTER=0
     ;;
   CREATE_WORKSPACE)
     if [[ -e "$PHYSICAL_WORKSPACE" ]]; then
@@ -258,13 +358,19 @@ case "$OPERATION" in
         [[ "$repo_canonical" == "$REPO_DIR" ]] || die_block "PARTIAL_WORKSPACE_UNSAFE" "partial repository identity differs"
         partial_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$REPO_DIR" 2>/dev/null || true)"
         [[ -z "$partial_mounts" ]] || die_block "PARTIAL_WORKSPACE_UNSAFE" "partial repository contains a mount boundary"
-        run_capture rm -rf -- "$REPO_DIR"
+        [[ -d "$SCRATCH_DIR" ]] || timeout 10 mkdir -m 0700 -- "$SCRATCH_DIR" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create exact scratch directory"
+        validate_scratch_dir
+        run_cleanup_capture rm -rf -- "$REPO_DIR"
         [[ $RUN_EXIT -eq 0 && ! -e "$REPO_DIR" ]] || die_block "PARTIAL_WORKSPACE_UNSAFE" "partial repository could not be reset"
       fi
     else
       timeout 15 mkdir -- "$PHYSICAL_WORKSPACE" || die_block "WORKSPACE_CREATE_FAILED" "cannot create exact workspace"
       timeout 10 node -e 'const fs=require("node:fs"),[file,run,wo,repo,branch,base]=process.argv.slice(1);const tmp=`${file}.${process.pid}.tmp`;fs.writeFileSync(tmp,JSON.stringify({run_id:run,work_order_id:wo,repository:repo,branch,base_sha:base}),{mode:0o600,flag:"wx"});fs.renameSync(tmp,file)' "$MARKER_PATH" "$RUN_ID" "$PACKET_WORK_ORDER" "$PACKET_REPOSITORY" "$BRANCH" "$BASE_SHA" || die_block "WORKSPACE_CREATE_FAILED" "cannot publish ownership marker"
     fi
+    [[ -d "$SCRATCH_DIR" ]] || timeout 10 mkdir -m 0700 -- "$SCRATCH_DIR" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create exact scratch directory"
+    timeout 10 mkdir -p -m 0700 -- "$SCRATCH_DIR/tmp" "$SCRATCH_DIR/xdg-cache" "$SCRATCH_DIR/nuget" "$SCRATCH_DIR/dotnet-home" "$SCRATCH_DIR/corepack" "$SCRATCH_DIR/npm-cache" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create bounded cache directories"
+    validate_workspace_project
+    validate_scratch_dir
     run_capture git clone --no-checkout --origin origin "$REMOTE_URL" "$REPO_DIR"
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "Git clone failed"
     run_capture git -C "$REPO_DIR" fetch --no-tags origin main
@@ -365,7 +471,8 @@ case "$OPERATION" in
     [[ "$canonical" == "$PHYSICAL_WORKSPACE" && "$canonical" != "$PHYSICAL_PARENT" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "workspace does not resolve exactly"
     nested_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$PHYSICAL_WORKSPACE" 2>/dev/null || true)"
     [[ -z "$nested_mounts" ]] || die_block "CLEANUP_NESTED_MOUNT" "workspace contains a mount boundary"
-    run_capture rm -rf -- "$PHYSICAL_WORKSPACE"
+    validate_scratch_dir
+    run_cleanup_capture rm -rf -- "$PHYSICAL_WORKSPACE"
     [[ $RUN_EXIT -eq 0 && ! -e "$PHYSICAL_WORKSPACE" ]] || die_block "BLOCKING_OPERATION_FAILED" "exact cleanup failed"
     RESULT_STATUS="CLEANUP_ABSENCE_PROVEN"
     ;;

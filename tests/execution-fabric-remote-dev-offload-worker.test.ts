@@ -71,6 +71,7 @@ function fixture() {
   const patch = Buffer.from("", "utf8")
   const packet = makePacket(baseSha, patch)
   fs.writeFileSync(path.join(physicalWorkspace, ".williamos-remote-dev-owner.json"), JSON.stringify({ run_id: packet.runId, work_order_id: packet.workOrderId, repository: packet.repository, branch: packet.branch, base_sha: packet.baseSha }))
+  fs.mkdirSync(path.join(physicalWorkspace, ".williamos-scratch"), { mode: 0o700 })
   const fakeBin = path.join(hostRoot, "bin"); fs.mkdirSync(fakeBin)
   writeExecutable(path.join(fakeBin, "dotnet"), `#!/usr/bin/env bash
 if [[ "\${FAKE_DOTNET_MODE:-ok}" == timeout ]]; then sleep 3; fi
@@ -91,7 +92,23 @@ exit 0
   writeExecutable(path.join(fakeBin, "prlimit"), "#!/usr/bin/env bash\nwhile [[ \"$1\" != -- ]]; do shift; done\nshift\nexec \"$@\"\n")
   writeExecutable(path.join(fakeBin, "flock"), "#!/usr/bin/env bash\nexit 0\n")
   writeExecutable(path.join(fakeBin, "du"), "#!/usr/bin/env bash\nprintf '%s\\t%s\\n' \"\${FAKE_SCRATCH_BYTES:-4096}\" \"\${@: -1}\"\n")
-  writeExecutable(path.join(fakeBin, "findmnt"), "#!/usr/bin/env bash\n[[ \"\${FAKE_NESTED_MOUNT:-0}\" == 1 ]] && printf '%s\\n' '/nested/mount'\nexit 0\n")
+  writeExecutable(path.join(fakeBin, "findmnt"), `#!/usr/bin/env bash
+if [[ "$*" == *"FSTYPE,OPTIONS,TARGET"* ]]; then printf '%s\n' "xfs rw,relatime,prjquota \${FAKE_MOUNT_TARGET:-/srv/william}"; exit 0; fi
+if [[ "$*" == *"--target /tmp"* ]]; then printf '%s\n' tmpfs; exit 0; fi
+[[ "\${FAKE_NESTED_MOUNT:-0}" == 1 ]] && printf '%s\n' '/nested/mount'
+exit 0
+`)
+  writeExecutable(path.join(fakeBin, "xfs_io"), "#!/usr/bin/env bash\nprintf '%s\\n' 'fsxattr.xflags = 0x00000800 [proj-inherit]' 'fsxattr.projid = 734'\n")
+  writeExecutable(path.join(fakeBin, "xfs_quota"), "#!/usr/bin/env bash\nprintf '%s\\n' '734 0 0 83886080'\n")
+  writeExecutable(path.join(fakeBin, "systemd-run"), `#!/usr/bin/env bash
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == -- ]]; then shift; break; fi
+  case "$1" in --setenv=*) value="\${1#--setenv=}"; export "\${value?}";; esac
+  shift
+done
+if [[ "\${1:-}" == findmnt ]]; then printf '%s\n' tmpfs; exit 0; fi
+exec "$@"
+`)
   return { hostRoot, physicalWorkspace, repository, baseSha, patch, packet, fakeBin }
 }
 
@@ -100,8 +117,8 @@ function runWorker(operation: string, value: ReturnType<typeof fixture>, options
   const patch = options.patch ?? value.patch
   const result = spawnSync(bash, [worker, operation, encode(JSON.stringify(packet)), encode(patch), "1", "null"], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${toPosix(value.fakeBin)}:${process.env.PATH}`, REMOTE_DEV_WORKER_ROOT: toPosix(value.hostRoot), REMOTE_DEV_PROCESS_TIMEOUT_SECONDS: "2", ...options.env },
-    timeout: 10_000,
+    env: { ...process.env, PATH: `${toPosix(value.fakeBin)}:${toPosix("C:\\Program Files\\nodejs")}:${process.env.PATH}`, REMOTE_DEV_WORKER_ROOT: toPosix(value.hostRoot), REMOTE_DEV_PROCESS_TIMEOUT_SECONDS: "2", ...options.env },
+    timeout: 20_000,
   })
   const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean)
   return { ...result, json: lines.length ? JSON.parse(lines.at(-1)!) : undefined }
@@ -132,7 +149,7 @@ describe("fixed AEGIS remote development worker", () => {
     fs.rmSync(path.join(value.repository, "backend/src/Program.cs"))
     const packet = makePacket(value.baseSha, patch)
     expect(runWorker("APPLY_RESERVED_PATCH", value, { packet, patch }).json).toMatchObject({ status: "PATH_NOT_RESERVED" })
-  })
+  }, 15_000)
 
   it("rejects symlinked roots, traversal, wrong Git identity, dirty state, and extra staged paths", () => {
     const symlinked = fixture()
@@ -167,15 +184,57 @@ describe("fixed AEGIS remote development worker", () => {
     expect(runWorker("TEST_DOTNET_INFORMATIONAL", infrastructure, { env: { FAKE_DOTNET_MODE: "test-infra" } }).json).toMatchObject({ status: "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" })
   }, 60_000)
 
-  it("enforces CPU, memory, and aggregate scratch limits and fails when limit tooling is unavailable", () => {
-    const missing = fixture(); fs.rmSync(path.join(missing.fakeBin, "prlimit"))
-    expect(runWorker("PROVE_PREFLIGHT", missing).json).toMatchObject({ status: "RESOURCE_LIMIT_UNAVAILABLE" })
-    const excess = fixture()
-    expect(runWorker("PROVE_PREFLIGHT", excess, { env: { FAKE_SCRATCH_BYTES: "85899345921" } }).json).toMatchObject({ status: "SCRATCH_LIMIT_EXCEEDED" })
-    const source = fs.readFileSync(worker, "utf8")
-    expect(source).toContain("taskset -c 0-11")
-    expect(source).toContain("prlimit --as=12884901888")
+  it("fails preflight when aggregate containment is unavailable", () => {
+    const missing = fixture(); fs.rmSync(missing.physicalWorkspace, { recursive: true, force: true }); fs.rmSync(path.join(missing.fakeBin, "systemd-run"))
+    expect(runWorker("PROVE_PREFLIGHT", missing).json).toMatchObject({ status: "CONTAINMENT_UNAVAILABLE" })
   })
+
+  it("requires one aggregate systemd cgroup and an inherited 80 GiB XFS project quota rather than per-process hints", () => {
+    const source = fs.readFileSync(worker, "utf8")
+    expect(source).toContain("systemd-run --user")
+    expect(source).toContain("AllowedCPUs=0-11")
+    expect(source).toContain("CPUQuota=1200%")
+    expect(source).toContain("MemoryMax=12884901888")
+    expect(source).toContain("xfs_io")
+    expect(source).toContain("xfs_quota")
+    expect(source).toContain("proj-inherit")
+    expect(source).toContain("SCRATCH_LIMIT_KIB=83886080")
+    expect(source).not.toContain("taskset -c 0-11")
+    expect(source).not.toContain("prlimit --as=12884901888")
+  })
+
+  it("keeps preflight read-only and checks exact identity, toolchain, capacity, containment, and repository auth", () => {
+    const value = fixture()
+    fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
+    fs.rmSync(path.join(value.fakeBin, "systemd-run"))
+    const parent = path.dirname(value.physicalWorkspace)
+    const before = fs.readdirSync(parent).sort()
+    const result = runWorker("PROVE_PREFLIGHT", value)
+    expect(result.json).toMatchObject({ status: "CONTAINMENT_UNAVAILABLE" })
+    expect(fs.readdirSync(parent).sort()).toEqual(before)
+    const source = fs.readFileSync(worker, "utf8")
+    const preflight = source.slice(source.indexOf("PROVE_PREFLIGHT)"), source.indexOf("CREATE_WORKSPACE)"))
+    for (const required of ["hostname", "id -un", "git --version", "dotnet --version", "node --version", "corepack pnpm --version", "nproc", "MemTotal", "df -PB1", "git ls-remote", "push --dry-run", "probe_containment", "prove_project_quota"]) expect(preflight).toContain(required)
+    expect(preflight).not.toContain('exec 9>')
+    expect(preflight).not.toContain('flock -n')
+    expect(source).toContain('if [[ "$OPERATION" != "PROVE_PREFLIGHT" ]]')
+  })
+
+  it("fails closed when the bounded project quota cannot be proven and confines cache/temp paths", () => {
+    const badQuota = fixture(); fs.rmSync(badQuota.physicalWorkspace, { recursive: true, force: true })
+    writeExecutable(path.join(badQuota.fakeBin, "xfs_quota"), "#!/usr/bin/env bash\nprintf '%s\\n' '734 0 0 1024'\n")
+    expect(runWorker("PROVE_PREFLIGHT", badQuota).json).toMatchObject({ status: "SCRATCH_CONFINEMENT_FAILED" })
+    const oversized = fixture()
+    expect(runWorker("RESTORE_DOTNET", oversized, { env: { FAKE_SCRATCH_BYTES: "85899345921" } }).json).toMatchObject({ status: "SCRATCH_CONFINEMENT_FAILED" })
+    const source = fs.readFileSync(worker, "utf8")
+    expect(source).toContain("CONTAINMENT_UNAVAILABLE")
+    expect(source).toContain("SCRATCH_CONFINEMENT_FAILED")
+    for (const variable of ["TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME", "NUGET_PACKAGES", "DOTNET_CLI_HOME", "COREPACK_HOME", "npm_config_cache"]) expect(source).toContain(`--setenv=${variable}=`)
+    expect(source).toContain('ReadWritePaths=$PHYSICAL_WORKSPACE')
+    expect(source).toContain('ReadOnlyPaths=/tmp /var/tmp')
+    expect(source).toContain('measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"')
+    expect(source).toContain('measure_scratch; SCRATCH_AFTER="$SCRATCH_MEASURED_BYTES"')
+  }, 15_000)
 
   it("emits strict sub-second timestamps and rejects a non-increasing clock", () => {
     const source = fs.readFileSync(worker, "utf8")
@@ -222,6 +281,6 @@ exit 0
     fs.writeFileSync(path.join(value.physicalWorkspace, ".williamos-post-merge-proven"), "wrong\n")
     expect(runWorker("CLEAN_EXACT_WORKSPACE", value).json).toMatchObject({ status: "CLEANUP_NOT_AUTHORIZED" })
     expect(fs.existsSync(value.physicalWorkspace)).toBe(true)
-  })
+  }, 15_000)
 
 })
