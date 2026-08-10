@@ -201,10 +201,34 @@
         "source": {"type": ["string", "null"], "minLength": 1}
       }
     },
+    "capability_health_axis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason", "observed_at", "expires_at", "snapshot_sha256", "evidence_ref"],
+      "properties": {
+        "state": {"enum": ["READY", "DEGRADED", "FAIL_CLOSED", "PENDING", "UNKNOWN"]},
+        "reason": {"type": "string", "minLength": 1},
+        "observed_at": {"type": ["string", "null"], "format": "date-time"},
+        "expires_at": {"type": ["string", "null"], "format": "date-time"},
+        "snapshot_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+        "evidence_ref": {"type": ["string", "null"], "minLength": 1}
+      }
+    },
+    "capability_health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compute", "backup_target", "archive_storage", "nas"],
+      "properties": {
+        "compute": {"$ref": "#/$defs/capability_health_axis"},
+        "backup_target": {"$ref": "#/$defs/capability_health_axis"},
+        "archive_storage": {"$ref": "#/$defs/capability_health_axis"},
+        "nas": {"$ref": "#/$defs/capability_health_axis"}
+      }
+    },
     "node": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "identity", "role", "availability_class", "authority", "evidence", "cpus", "dimms", "gpus", "disks", "network", "runtimes", "capabilities"],
+      "required": ["id", "identity", "role", "availability_class", "authority", "evidence", "capability_health", "cpus", "dimms", "gpus", "disks", "network", "runtimes", "capabilities"],
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
         "hostname": {"type": ["string", "null"]},
@@ -219,6 +243,7 @@
         },
         "authority": {"$ref": "#/$defs/authority"},
         "evidence": {"$ref": "#/$defs/evidence"},
+        "capability_health": {"$ref": "#/$defs/capability_health"},
         "cpus": {"type": "array", "items": {"$ref": "#/$defs/cpu"}},
         "dimms": {"type": "array", "items": {"$ref": "#/$defs/dimm"}},
         "gpus": {"type": "array", "items": {"$ref": "#/$defs/gpu"}},

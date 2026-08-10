@@ -4,7 +4,9 @@ Status: `AEGIS_EXECUTION_FABRIC_ONBOARDING: COMPLETE` (scheduler remains OFF)
 
 ## Canonical role
 
-AEGIS is the secondary CPU-batch / CI-build-test candidate node beneath Hermes. Backup-archive and NAS roles remain denied until storage is proven.
+AEGIS is the secondary CPU-batch / CI-build-test candidate node beneath Hermes. Backup-target and
+archive-storage capability are now restore-verified and independently freshness-gated. NAS remains
+pending because no file-share service or NAS authority has been delivered.
 
 - OMEN = cockpit / interactive development
 - HERMES-NODE = AI/GPU execution
@@ -42,28 +44,31 @@ This resolves the earlier ~3.9 GB anomaly. Treat as failing / firmware-translato
 
 ### ST1000DM003 1 TB SATA device
 
-Disposition: healthy but occupied; storage role pending classification.
+Disposition: `BACKUP_PRIMARY` / restore-verified.
 
 - nominal capacity: 1 TB
 - SMART: PASSED
-- power-on hours: 817
+- power-on hours: 820 in the retained v0.2 evidence
 - reallocations: 0
 - pending sectors: 0
 - uncorrectables: 0
-- existing NTFS partitions (~917 GB + ~13.7 GB), old Windows content unclassified
+- ext4 label `BACKUP_PRIMARY`; UUID `0564b327-74f7-4048-9ec1-8738d09dca79`
+- mounted at `/backup-primary`; approximately 867 GiB free in the retained capability snapshot
 
 ### ST31000528AS 1 TB SATA device
 
-Disposition: present but storage role remains unproven.
+Disposition: `BACKUP_SECONDARY` / restore-verified second copy for crown-jewel state.
 
-- existing NTFS volume labelled `Expansion Drive`
-- serial retained host-locally
-- no retained SMART proof in the four-node capture
-- contents and uniqueness remain unclassified
+- ext4 label `BACKUP_SECONDARY`; UUID `ab119332-259b-4714-a274-8add6dbb9351`
+- mounted at `/backup-secondary`; approximately 870 GiB free in the retained capability snapshot
+- SMART PASSED; retained power-on hours `10474`
 
 ### Storage conclusion
 
-AEGIS currently has no proven spare bulk storage across the three observed SATA devices. `backup-target`, `archive-storage`, and `nas` remain PENDING and unschedulable until storage is explicitly proven and authorized.
+AEGIS has two independently mounted 1 TB backup disks. The retained generation
+`20260810T061501Z` records all protected source legs as `RESTORE_VERIFIED`, and the primary and
+secondary crown-jewel manifest sets match. `backup-target` and `archive-storage` are READY only while
+that evidence remains within its declared 48-hour freshness threshold. NAS remains PENDING.
 
 ## Capability policy
 
@@ -75,9 +80,11 @@ READY candidates:
 - `etl`
 - `docker-worker`
 
-PENDING:
+READY while fresh restore evidence remains valid:
 - `backup-target`
 - `archive-storage`
+
+PENDING:
 - `nas`
 
 DENY:
@@ -92,7 +99,8 @@ DENY:
 Constraints:
 - 16 GB RAM; reject memory-heavy jobs without sufficient headroom
 - protect NVMe OS/workspace capacity
-- storage capabilities remain unschedulable until proven
+- backup/archive execution authority remains ungranted even while capability health is READY
+- NAS remains unschedulable until both its service and authority are separately proven
 
 ## Health integration
 
@@ -106,14 +114,38 @@ AEGIS health evidence reports:
 - NIC/link
 - disk SMART state
 
-Current AEGIS storage health is WARN because the failed device remains attached and the third SATA device lacks retained SMART proof; compute/runtime state is healthy.
+The retained producer snapshot separates node and capability health. The reviewed registry assembly
+then applies its own raw-node freshness gate:
+
+- node health: `WARN` only because Linux reports an absent/phantom zero-byte bay;
+- producer compute capability: `READY`;
+- registry compute projection: `DEGRADED / LIVE_PROBE_STALE` because the independently retained raw
+  node probe predates the capability snapshot by more than the five-minute compute window;
+- backup capability: `READY`;
+- archive capability: `READY`;
+- NAS capability: `PENDING`.
+
+A backup evidence failure does not erase compute readiness. Missing, malformed, stale, mismatched,
+or incomplete restore evidence fails only backup/archive capability closed.
 
 ## Privilege boundary
 
 Passwordless `sudo` currently exists for bootstrap/operation. It is explicitly NOT a scheduler capability or authority grant.
 
-Before autonomous privileged dispatch, replace unrestricted NOPASSWD operation with a bounded execution account and scoped sudo/service policy.
+Before autonomous privileged dispatch, replace unrestricted NOPASSWD operation with a bounded execution account and scoped sudo/service policy. Capability readiness is not that authority grant.
 
 ## Scheduler state
 
-Scheduler activation remains OFF. This report provides live evidence for PR #532 and replaces the provisional `t5810-2` concept with canonical node identity `aegis` / hostname `aegis`.
+Scheduler activation remains OFF. The v0.2 capability refresh does not grant backup, archive,
+compute, NAS, privileged, or autonomous execution authority.
+
+## Retained v0.2 evidence
+
+- capability schema: `aegis-capability/1`
+- capability observed at: `2026-08-10T06:59:09Z`
+- capability self-digest: `77fc4cbc56702ea60a56c361e974e19f617d1845d03bbfb9c3bbb4c453fadfdd`
+- retained capability file SHA-256: `7F08C56825F786A9905F35630A387007A5868328E2FF07E024674C7D0C31FC8F`
+- retained evidence-contract SHA-256: `966F28C401461E28867375D07CB3BFA434F39A76202BFED77B1F906823263F55`
+- scheduler field: `OFF`
+- current trust caveat: the proven backup trust paths still land as broad `bs`; this is not accepted
+  as a privileged scheduling identity.

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 const args = process.argv.slice(2);
 function arg(name, fallback = null) {
@@ -42,7 +43,7 @@ const canonicalAuthority = {
   },
   aegis: {
     allow: ['cpu-batch-candidate', 'ci-build-test-candidate', 'hash-verify-candidate', 'compression-candidate', 'etl-transform-candidate', 'docker-worker-candidate'],
-    deny: ['authoritative-durable-state', 'backup-archive-until-storage-proven', 'nas-until-storage-proven', 'county-production-write', 'pacs-production-write', 'destructive-disk-action']
+    deny: ['authoritative-durable-state', 'backup-archive-execution-authority-not-granted', 'nas-until-service-and-authority-proven', 'county-production-write', 'pacs-production-write', 'destructive-disk-action']
   },
   azure: {
     allow: [],
@@ -145,6 +146,142 @@ function exactKeys(value, expected, location) {
   return JSON.stringify(actual) === JSON.stringify(wanted) ? [] : [`${location}: expected exact keys ${wanted.join(',')}`];
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function capabilityAxis(state, reason, observedAt = null, expiresAt = null, snapshotSha256 = null, evidenceRef = null) {
+  return { state, reason, observed_at: observedAt, expires_at: expiresAt, snapshot_sha256: snapshotSha256, evidence_ref: evidenceRef };
+}
+
+function capabilityFallback(kind, reason) {
+  const state = kind === 'missing' ? 'PENDING' : 'FAIL_CLOSED';
+  return {
+    compute: capabilityAxis(kind === 'missing' ? 'UNKNOWN' : 'DEGRADED', reason),
+    backup_target: capabilityAxis(state, reason),
+    archive_storage: capabilityAxis(state, reason),
+    nas: capabilityAxis('PENDING', 'NAS_SERVICE_UNPROVEN')
+  };
+}
+
+function invalidCapability(reason, detail) {
+  const error = new Error(detail);
+  error.reason = reason;
+  throw error;
+}
+
+function compactUtcMs(value) {
+  const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(value);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second] = match;
+  const iso = `${year}-${month}-${day}T${hour}:${minute}:${second}.000Z`;
+  const parsed = Date.parse(iso);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === iso ? parsed : null;
+}
+
+function positiveNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function percentage(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
+}
+
+function readCapabilitySnapshot(nodeId, nowMs) {
+  const capabilityPath = path.join(evidenceDir, `${nodeId}-capability.json`);
+  if (!fs.existsSync(capabilityPath)) {
+    return { kind: 'missing', reason: 'CAPABILITY_EVIDENCE_MISSING', warning: 'CAPABILITY_EVIDENCE_MISSING' };
+  }
+  try {
+    let snapshot;
+    try {
+      snapshot = JSON.parse(fs.readFileSync(capabilityPath, 'utf8'));
+    } catch (error) {
+      invalidCapability('CAPABILITY_EVIDENCE_MALFORMED', error.message);
+    }
+    const shapeErrors = [
+      ...exactKeys(snapshot, [
+        'schema', 'canonicalization', 'node', 'observed_at', 'timestamp', 'status',
+        'root_avail_gb', 'root_use_pct', 'docker_active', 'docker_disk', 'portainer_agent',
+        'load1', 'cores', 'cpu_temp_c', 'ram_total_mb', 'ram_avail_pct', 'smart', 'nic',
+        'storage_role', 'node_health', 'compute_capability_health', 'backup_capability_health',
+        'archive_capability_health', 'backup_reason', 'scheduler', 'backup', 'issues', 'snapshot_sha256'
+      ], '$'),
+      ...exactKeys(snapshot?.backup, ['last_backup', 'last_restore_verify', 'age_hours', 'capability', 'reason', 'threshold_hours'], '$.backup')
+    ];
+    if (shapeErrors.length) invalidCapability('CAPABILITY_EVIDENCE_INVALID', shapeErrors.join('; '));
+    if (snapshot.schema !== 'aegis-capability/1') invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'schema must be aegis-capability/1');
+    if (snapshot.node !== 'aegis' || nodeId !== 'aegis') invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'node must be aegis');
+    if (snapshot.canonicalization !== 'jcs-rfc8785/1') invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'canonicalization must be jcs-rfc8785/1');
+    if (!['ok', 'warn', 'fail'].includes(snapshot.status)) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'status must be ok, warn, or fail');
+    if (!['OK', 'WARN', 'FAIL'].includes(snapshot.node_health)) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'node_health must be OK, WARN, or FAIL');
+    if (!positiveNumber(snapshot.root_avail_gb)) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'root_avail_gb must be positive');
+    if (!percentage(snapshot.root_use_pct)) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'root_use_pct must be between 0 and 100');
+    if (!positiveNumber(snapshot.cores)) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'cores must be positive');
+    if (!positiveNumber(snapshot.ram_total_mb)) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'ram_total_mb must be positive');
+    if (!percentage(snapshot.ram_avail_pct)) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'ram_avail_pct must be between 0 and 100');
+    if (!['READY', 'DEGRADED'].includes(snapshot.compute_capability_health)) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'compute_capability_health must be READY or DEGRADED');
+    if (snapshot.compute_capability_health === 'READY' && snapshot.docker_active !== 'active') {
+      invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'READY compute requires docker_active=active');
+    }
+    if (!['READY', 'FAIL_CLOSED'].includes(snapshot.backup_capability_health)) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'backup_capability_health must be READY or FAIL_CLOSED');
+    if (!['READY', 'FAIL_CLOSED'].includes(snapshot.archive_capability_health)) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'archive_capability_health must be READY or FAIL_CLOSED');
+    if (snapshot.backup_capability_health !== snapshot.archive_capability_health) {
+      invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'backup and archive capability health must match in v1');
+    }
+    if (!['READY', 'FAIL_CLOSED'].includes(snapshot.backup.capability) || snapshot.backup.capability !== snapshot.backup_capability_health) {
+      invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'backup.capability must match backup and archive capability health');
+    }
+    if (typeof snapshot.backup.reason !== 'string' || !snapshot.backup.reason.trim()) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'backup.reason must be nonempty');
+    if (snapshot.backup_reason !== snapshot.backup.reason) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'backup_reason must match backup.reason');
+    if (typeof snapshot.backup.threshold_hours !== 'number' || !Number.isFinite(snapshot.backup.threshold_hours) || snapshot.backup.threshold_hours <= 0) {
+      invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'backup.threshold_hours must be positive');
+    }
+    if (snapshot.scheduler !== 'OFF') invalidCapability('CAPABILITY_SCHEDULER_NOT_OFF', 'scheduler must be OFF');
+    const observedMs = rfc3339Ms(snapshot.observed_at);
+    if (observedMs == null) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'observed_at must be RFC3339');
+    if (observedMs > nowMs) invalidCapability('CAPABILITY_EVIDENCE_FUTURE', 'observed_at must not be in the future');
+    const timestampMs = rfc3339Ms(snapshot.timestamp);
+    if (timestampMs == null || timestampMs !== observedMs) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'timestamp must be RFC3339 and match observed_at');
+    let backupMs = null;
+    let restoreMs = null;
+    if (snapshot.backup_capability_health === 'READY') {
+      if (!['OK', 'RESTORE_VERIFIED'].includes(snapshot.backup.reason)) {
+        invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'READY reason must be OK or RESTORE_VERIFIED');
+      }
+      backupMs = compactUtcMs(snapshot.backup.last_backup);
+      restoreMs = compactUtcMs(snapshot.backup.last_restore_verify);
+      if (backupMs == null || restoreMs == null) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'READY backup timestamps must use YYYYMMDDTHHMMSSZ');
+      if (backupMs > observedMs || restoreMs > observedMs) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'READY backup timestamps must not be future relative to observed_at');
+      if (restoreMs < backupMs) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'restore verification must not precede backup');
+    }
+    const thresholdMs = snapshot.backup.threshold_hours * 60 * 60 * 1000;
+    const expiresMs = observedMs + thresholdMs;
+    if (!Number.isFinite(expiresMs) || Math.abs(expiresMs) > 8.64e15) invalidCapability('CAPABILITY_EVIDENCE_INVALID', 'backup.threshold_hours produces an invalid expiry');
+    if (!/^[a-f0-9]{64}$/.test(snapshot.snapshot_sha256)) invalidCapability('CAPABILITY_HASH_MISMATCH', 'snapshot_sha256 must be lowercase SHA-256');
+    const hashInput = { ...snapshot };
+    delete hashInput.snapshot_sha256;
+    const calculatedHash = crypto.createHash('sha256').update(canonicalJson(hashInput), 'utf8').digest('hex');
+    if (calculatedHash !== snapshot.snapshot_sha256) invalidCapability('CAPABILITY_HASH_MISMATCH', 'snapshot_sha256 does not match canonical content');
+    return {
+      kind: 'valid',
+      snapshot,
+      observedMs,
+      backupMs,
+      restoreMs,
+      thresholdMs,
+      evidenceRef: path.basename(capabilityPath)
+    };
+  } catch (error) {
+    const reason = error.reason || 'CAPABILITY_EVIDENCE_INVALID';
+    return { kind: 'invalid', reason, warning: `CAPABILITY_EVIDENCE_INVALID reason=${reason} detail=${error.message}` };
+  }
+}
+
 function recordInvalidProbe(nodeId, message) {
   const warning = `${nodeId}: invalid probe: ${message}`;
   warnings.push(warning);
@@ -221,8 +358,15 @@ function isoMs(value) {
   return rfc3339Ms(value);
 }
 
-const now = Date.now();
+const configuredNow = process.env.FABRIC_NOW_UTC;
+const configuredNowMs = configuredNow == null ? null : rfc3339Ms(configuredNow);
+if (configuredNow != null && configuredNowMs == null) {
+  console.error('FABRIC_REGISTRY_INVALID: FABRIC_NOW_UTC must be an RFC3339 date-time');
+  process.exit(2);
+}
+const now = configuredNowMs ?? Date.now();
 const dynamicTtl = 300;
+const aegisCapability = readCapabilitySnapshot('aegis', now);
 function declaredFallback(declared) {
   const evidenceWarning = probeWarnings.has(declared.id)
     ? `LIVE_PROBE_INVALID ${probeWarnings.get(declared.id)}`
@@ -234,7 +378,7 @@ function declaredFallback(declared) {
   };
 }
 
-const nodes = seed.nodes.map((declared) => {
+const probedNodes = seed.nodes.map((declared) => {
   const probe = readProbe(declared);
   if (!probe) return declaredFallback(declared);
 
@@ -290,6 +434,54 @@ const nodes = seed.nodes.map((declared) => {
   }
   return candidate;
 });
+
+function nodeProbeGateReason(node) {
+  const nodeWarnings = node.warnings || [];
+  if (nodeWarnings.some(warning => warning.startsWith('LIVE_PROBE_INVALID'))) return 'LIVE_PROBE_INVALID';
+  if (nodeWarnings.some(warning => warning.startsWith('LIVE_PROBE_MISSING'))) return 'LIVE_PROBE_MISSING';
+  if (nodeWarnings.some(warning => warning.startsWith('LIVE_PROBE_FUTURE'))) return 'LIVE_PROBE_FUTURE';
+  if (nodeWarnings.some(warning => warning.startsWith('LIVE_PROBE_STALE'))) return 'LIVE_PROBE_STALE';
+  if (nodeWarnings.some(warning => warning.startsWith('LIVE_PROBE_INCOMPLETE'))) return 'LIVE_PROBE_INCOMPLETE';
+  return null;
+}
+
+function projectAegisCapabilityHealth(node) {
+  if (aegisCapability.kind !== 'valid') {
+    return {
+      ...node,
+      capability_health: capabilityFallback(aegisCapability.kind, aegisCapability.reason),
+      warnings: [...new Set([...(node.warnings || []), aegisCapability.warning])]
+    };
+  }
+  const { snapshot, observedMs, backupMs, restoreMs, thresholdMs, evidenceRef } = aegisCapability;
+  const metadata = [snapshot.observed_at, snapshot.snapshot_sha256, evidenceRef];
+  const projectStorageAxis = (state) => {
+    const observedExpiresMs = observedMs + thresholdMs;
+    const expiryCandidates = [observedExpiresMs];
+    if (backupMs != null) expiryCandidates.push(backupMs + thresholdMs);
+    if (restoreMs != null) expiryCandidates.push(restoreMs + thresholdMs);
+    const expiresMs = Math.min(...expiryCandidates);
+    const expiresAt = new Date(expiresMs).toISOString();
+    if (state === 'FAIL_CLOSED') return capabilityAxis(state, snapshot.backup.reason, metadata[0], expiresAt, metadata[1], metadata[2]);
+    const stale = now >= observedExpiresMs || now - backupMs > thresholdMs || now - restoreMs > thresholdMs;
+    if (stale) return capabilityAxis('FAIL_CLOSED', 'BACKUP_STALE', metadata[0], expiresAt, metadata[1], metadata[2]);
+    return capabilityAxis(state, snapshot.backup.reason, metadata[0], expiresAt, metadata[1], metadata[2]);
+  };
+  const probeReason = nodeProbeGateReason(node);
+  const computeState = probeReason ? 'DEGRADED' : snapshot.compute_capability_health;
+  const computeReason = probeReason || (computeState === 'READY' ? 'COMPUTE_CAPABILITY_READY' : 'COMPUTE_CAPABILITY_DEGRADED');
+  return {
+    ...node,
+    capability_health: {
+      compute: capabilityAxis(computeState, computeReason, metadata[0], null, metadata[1], metadata[2]),
+      backup_target: projectStorageAxis(snapshot.backup_capability_health),
+      archive_storage: projectStorageAxis(snapshot.archive_capability_health),
+      nas: capabilityAxis('PENDING', 'NAS_SERVICE_UNPROVEN')
+    }
+  };
+}
+
+const nodes = probedNodes.map(node => node.id === 'aegis' ? projectAegisCapabilityHealth(node) : node);
 
 // Fail-closed semantic invariants.
 const errors = [];
@@ -361,7 +553,7 @@ for (const id of ['omen','hermes-node','aegis']) {
 
 const registry = {
   schema_version: '0.1',
-  generated_at: new Date().toISOString(),
+  generated_at: new Date(now).toISOString(),
   scheduler: seed.scheduler,
   nodes
 };

@@ -23,6 +23,12 @@
         "deny": ["authoritative-durable-state", "county-production-write", "pacs-production-write", "unattended-critical-state"]
       },
       "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed; live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "Static role only; hardware must be refreshed by probe-windows.ps1"},
+      "capability_health": {
+        "compute": {"state": "UNKNOWN", "reason": "LIVE_CAPABILITY_EVIDENCE_REQUIRED", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "backup_target": {"state": "PENDING", "reason": "CAPABILITY_NOT_DECLARED_FOR_NODE", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "archive_storage": {"state": "PENDING", "reason": "CAPABILITY_NOT_DECLARED_FOR_NODE", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "nas": {"state": "PENDING", "reason": "CAPABILITY_NOT_DECLARED_FOR_NODE", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null}
+      },
       "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "AMD", "model": "Ryzen 9 8940HX", "cores": 16, "threads": 32, "max_mhz": null, "numa_node": null}],
       "dimms": [],
       "gpus": [{"id": "gpu0", "vendor": "NVIDIA", "model": "GeForce RTX 5060 Laptop GPU", "pci_bus_id": null, "uuid": null, "vram_bytes": 8589934592, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}],
@@ -49,6 +55,12 @@
         "deny": ["authoritative-durable-state", "county-production-write", "pacs-production-write", "direct-ollama-lan-exposure"]
       },
       "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed; live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "Hermes software subsystem is distinct from this physical node"},
+      "capability_health": {
+        "compute": {"state": "UNKNOWN", "reason": "LIVE_CAPABILITY_EVIDENCE_REQUIRED", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "backup_target": {"state": "PENDING", "reason": "CAPABILITY_NOT_DECLARED_FOR_NODE", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "archive_storage": {"state": "PENDING", "reason": "CAPABILITY_NOT_DECLARED_FOR_NODE", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "nas": {"state": "PENDING", "reason": "CAPABILITY_NOT_DECLARED_FOR_NODE", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null}
+      },
       "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "Intel", "model": "Core i7-5960X", "cores": 8, "threads": 16, "max_mhz": null, "numa_node": null}],
       "dimms": [],
       "gpus": [{"id": "gpu0", "vendor": "NVIDIA", "model": "GeForce RTX 3050", "pci_bus_id": null, "uuid": null, "vram_bytes": 6442450944, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}, {"id": "gpu1", "vendor": "NVIDIA", "model": "Quadro K2200", "pci_bus_id": null, "uuid": null, "vram_bytes": 4294967296, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}],
@@ -75,6 +87,12 @@
         "deny": ["noisy-unbounded-batch-by-default", "county-production-write", "pacs-production-write"]
       },
       "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed; live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "All populated DIMMs and disks must be enumerated live"},
+      "capability_health": {
+        "compute": {"state": "UNKNOWN", "reason": "LIVE_CAPABILITY_EVIDENCE_REQUIRED", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "backup_target": {"state": "PENDING", "reason": "CAPABILITY_NOT_DECLARED_FOR_NODE", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "archive_storage": {"state": "PENDING", "reason": "CAPABILITY_NOT_DECLARED_FOR_NODE", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "nas": {"state": "PENDING", "reason": "CAPABILITY_NOT_DECLARED_FOR_NODE", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null}
+      },
       "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "Intel", "model": "Xeon E5-2690 v4", "cores": 14, "threads": 28, "max_mhz": null, "numa_node": null}],
       "dimms": [],
       "gpus": [],
@@ -98,18 +116,24 @@
       "os": {"family": "linux", "version": "Ubuntu 24.04"},
       "authority": {
         "allow": ["cpu-batch-candidate", "ci-build-test-candidate", "hash-verify-candidate", "compression-candidate", "etl-transform-candidate", "docker-worker-candidate"],
-        "deny": ["authoritative-durable-state", "backup-archive-until-storage-proven", "nas-until-storage-proven", "county-production-write", "pacs-production-write", "destructive-disk-action"]
+        "deny": ["authoritative-durable-state", "backup-archive-execution-authority-not-granted", "nas-until-service-and-authority-proven", "county-production-write", "pacs-production-write", "destructive-disk-action"]
       },
-      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed plus AEGIS onboarding evidence; trusted live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "AEGIS is the owner-approved canonical label; its trusted machine identity pin, raw compute proof, and all storage authority remain pending"},
+      "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-seed plus AEGIS onboarding evidence; trusted live probe required", "probe_version": null, "confidence": "declared", "ttl_seconds": 0, "notes": "AEGIS is the owner-approved canonical label; machine evidence and capability evidence remain independently freshness-gated"},
+      "capability_health": {
+        "compute": {"state": "UNKNOWN", "reason": "LIVE_CAPABILITY_EVIDENCE_REQUIRED", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "backup_target": {"state": "PENDING", "reason": "LIVE_CAPABILITY_EVIDENCE_REQUIRED", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "archive_storage": {"state": "PENDING", "reason": "LIVE_CAPABILITY_EVIDENCE_REQUIRED", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "nas": {"state": "PENDING", "reason": "NAS_SERVICE_UNPROVEN", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null}
+      },
       "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "Intel", "model": "Xeon E5-2690 v4", "cores": 14, "threads": 28, "max_mhz": null, "numa_node": null}],
       "dimms": [],
       "gpus": [],
       "disks": [],
       "network": [],
       "runtimes": [],
-      "capabilities": ["cpu-batch-candidate", "ci-build-test-candidate", "hash-verify-candidate", "compression-candidate", "etl-transform-candidate", "docker-worker-candidate"],
-      "constraints": ["scheduler-disabled", "memory-16gb", "nvme-free-space-reserve-required", "storage-capability-pending"],
-      "warnings": ["Failed SATA device is RETIRE and unschedulable", "ST1000DM003 is healthy but occupied and unclassified", "ST31000528AS is present without retained SMART proof", "NAS and backup authority remain pending storage proof"]
+      "capabilities": ["cpu-batch-candidate", "ci-build-test-candidate", "hash-verify-candidate", "compression-candidate", "etl-transform-candidate", "docker-worker-candidate", "backup-target", "archive-storage"],
+      "constraints": ["scheduler-disabled", "memory-16gb", "nvme-free-space-reserve-required", "backup-archive-execution-authority-not-granted", "nas-service-and-authority-pending"],
+      "warnings": ["Phantom zero-byte SATA bay is non-capacity and unschedulable", "Backup and archive readiness require fresh capability evidence", "NAS service and authority remain unproven", "Autonomous or privileged dispatch remains unauthorized"]
     },
     {
       "id": "azure",
@@ -124,6 +148,12 @@
       "os": null,
       "authority": {"allow": [], "deny": ["implicit-use", "implicit-cost", "implicit-protected-data-egress"]},
       "evidence": {"observed_at": "2026-08-09T21:57:00Z", "probe": "declared-policy-envelope", "probe_version": null, "confidence": "declared", "ttl_seconds": null, "notes": "Capabilities are empty until separately authorized and discovered"},
+      "capability_health": {
+        "compute": {"state": "UNKNOWN", "reason": "EXTERNAL_CAPABILITY_NOT_AUTHORIZED", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "backup_target": {"state": "PENDING", "reason": "EXTERNAL_CAPABILITY_NOT_AUTHORIZED", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "archive_storage": {"state": "PENDING", "reason": "EXTERNAL_CAPABILITY_NOT_AUTHORIZED", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null},
+        "nas": {"state": "PENDING", "reason": "EXTERNAL_CAPABILITY_NOT_AUTHORIZED", "observed_at": null, "expires_at": null, "snapshot_sha256": null, "evidence_ref": null}
+      },
       "cpus": [], "dimms": [], "gpus": [], "disks": [], "network": [], "runtimes": [], "capabilities": [],
       "constraints": ["explicit-authority-required", "cost-boundary", "data-classification-boundary"],
       "warnings": []

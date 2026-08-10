@@ -17,6 +17,18 @@ Each node emits a local probe file:
 .artifacts/execution-fabric/aegis.json
 ```
 
+Capability producers may additionally emit a separately digest-bound capability snapshot. The first
+accepted producer contract is:
+
+```text
+.artifacts/execution-fabric/aegis-capability.json
+schema: aegis-capability/1
+canonicalization: jcs-rfc8785/1
+```
+
+Node probes describe machine identity and inventory. Capability snapshots describe independent
+service readiness. Neither source grants execution authority.
+
 `assemble-registry.mjs` overlays live discovered hardware/runtime facts onto the declared role/authority seed and emits:
 
 ```text
@@ -27,6 +39,12 @@ Missing or stale probes add fail-closed scheduling constraints; they never silen
 Observed promotion also requires a canonical host-derived node ID and an exact match to the
 trusted hashed machine-identity pin in the seed. A node with no pin remains declared and
 unschedulable until onboarding records that pin through a reviewed evidence change.
+
+AEGIS backup/archive promotion additionally requires a valid self-digest, exact producer schema,
+fresh evidence inside the producer's declared threshold, `scheduler=OFF`, and READY backup/archive
+axes. Missing, malformed, stale, future, hash-mismatched, or scheduler-enabled evidence fails those
+capabilities closed without falsely changing node or compute health. NAS remains pending until a
+separate file-share service and authority are proven.
 
 ## Windows
 
@@ -84,6 +102,10 @@ from unapproved probe implementations.
 The registry is scheduler-ready, but scheduling remains disabled in v0.1. A later bounded Hermes work order may consume this registry to match workload requirements against healthy, fresh, authorized capabilities.
 
 William must not be asked to choose a node for normal work placement.
+
+Capability health is not execution authority. A `READY` AEGIS backup or archive axis does not grant
+Hermes permission to dispatch, does not create a worker identity, and does not weaken the disabled
+scheduler boundary.
 
 ## Recommendation-only placement proof
 
