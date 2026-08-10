@@ -60,9 +60,17 @@ function packet(phase: "PRE_DISPATCH" | "COMPLETION_CLAIM" = "PRE_DISPATCH") {
       workload: { id: "cpu-heavy-build", title: "CPU-heavy scratch build", storage_semantics: "scratch-only" },
       scheduler: { state: "disabled", authority: "not-granted", autonomous_dispatch: "forbidden" },
       workload_digest_sha256: sha("F"),
-      recommendation: { node_id: "aegis", rank: 1, rank_basis: { cpu_threads: 28 }, execution_authorized: false, dispatch_allowed: false },
+      recommendation: {
+        node_id: "aegis", rank: 1,
+        rank_basis: { preferred_capability_count: 1, availability_index: 0, cpu_threads: 28,
+          maximum_gpu_vram_bytes: null, stable_node_id: "aegis" },
+        execution_authorized: false, dispatch_allowed: false,
+      },
       eligible_nodes: [{
-        node_id: "aegis", eligible: true, rank: 1, rank_basis: { cpu_threads: 28 }, reasons: [], evidence_used: [],
+        node_id: "aegis", eligible: true, rank: 1,
+        rank_basis: { preferred_capability_count: 1, availability_index: 0, cpu_threads: 28,
+          maximum_gpu_vram_bytes: null, stable_node_id: "aegis" },
+        reasons: [], evidence_used: [{ path: "nodes.aegis.resources.cpu_threads", value: 28 }],
         confidence: "observed",
         freshness: { state: "fresh", age_seconds: 55, ttl_seconds: 300, expires_at: "2026-08-10T03:43:05.166Z" },
         execution_authorized: false, dispatch_allowed: false,
@@ -396,7 +404,7 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
     ["fencing mismatch", (value: any) => { value.checkpoint.fencing_token = 40 }, "FENCING_TOKEN_CONFLICT"],
     ["holder digest mismatch", (value: any) => { value.checkpoint.holder_token_digest = sha("8") }, "HOLDER_TOKEN_DIGEST_MISMATCH"],
     ["authority replay", (value: any) => { value.authority.consumption_count = 1; value.authority.consumed_at = "2026-08-10T03:39:59.000Z" }, "AUTHORITY_REPLAY"],
-    ["non-rank-one placement", (value: any) => { value.recommendation.recommendation.rank = 2; value.recommendation.eligible_nodes[0].rank = 2 }, "PLACEMENT_RECOMMENDATION_INVALID"],
+    ["non-rank-one placement", (value: any) => { value.recommendation.recommendation.rank = 2; value.recommendation.eligible_nodes[0].rank = 2 }, "INPUT_REJECTED"],
     ["scheduler activation", (value: any) => { value.safety.scheduler_state = "enabled" }, "SCHEDULER_AUTHORITY_WALL"],
     ["remote dispatch", (value: any) => { value.safety.autonomous_dispatch = true }, "PROOF_MODE_VIOLATION"],
     ["unfenced prohibited action", (value: any) => { value.workload_envelope.denied_actions = value.workload_envelope.denied_actions.filter((entry: string) => entry !== "production-mutation") }, "PROHIBITED_ACTION_NOT_FENCED"],
@@ -422,6 +430,23 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
     const result = evaluate(bindDispatchContract(value))
     expect(result.status).toBe("CONTRACT_BLOCKED")
     expect(result.reasons.map((entry: any) => entry.code)).toContain("PLACEMENT_EVIDENCE_UNATTESTED")
+  })
+
+  it.each([
+    ["stale selected node", (value: any) => { value.recommendation.eligible_nodes[0].freshness.state = "stale" }],
+    ["declared selected node", (value: any) => { value.recommendation.eligible_nodes[0].confidence = "declared" }],
+    ["empty rank basis", (value: any) => {
+      value.recommendation.recommendation.rank_basis = {}
+      value.recommendation.eligible_nodes[0].rank_basis = {}
+    }],
+    ["duplicate ineligible membership", (value: any) => {
+      value.recommendation.ineligible_nodes.push({ ...structuredClone(value.recommendation.eligible_nodes[0]), eligible: false,
+        rank: null, rank_basis: null })
+    }],
+  ])("rejects malformed canonical placement internals: %s", (_name, mutate) => {
+    const value = packet()
+    mutate(value)
+    expect(evaluate(bindDispatchContract(value)).status).toBe("INPUT_REJECTED")
   })
 
   it("binds the final checkpoint against packet-local tampering", () => {
@@ -547,6 +572,10 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
     const commandIdentifier = packet()
     commandIdentifier.authority.nonce = "npm test && curl example.invalid"
     expect(evaluate(commandIdentifier).status).toBe("INPUT_REJECTED")
+
+    const camelCase = packet()
+    camelCase.recommendation.eligible_nodes[0].shellCommand = "node unsafe.mjs"
+    expect(evaluate(bindDispatchContract(camelCase)).status).toBe("INPUT_REJECTED")
   })
 
   it("normalizes action vocabularies before applying protected-action fences", () => {
