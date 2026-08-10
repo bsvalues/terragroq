@@ -1,0 +1,27 @@
+{
+  "schema_version": "0.1-agent-forge-aegis-bounded-dispatch-permission",
+  "permission_set_id": "resident-aegis-bounded-hash-verify-v1",
+  "agent_identity": "resident-aegis",
+  "provider_identity": "resident-aegis",
+  "allowed_actions": [
+    "acquire-fixed-local-runtime-claim-lease",
+    "read-exact-bounded-input",
+    "compute-sha256",
+    "emit-bounded-result-evidence"
+  ],
+  "prohibited_actions": [
+    "arbitrary-shell",
+    "autonomous-scheduling",
+    "authority-mutation",
+    "external-provider-access",
+    "network-access",
+    "remote-node-access",
+    "silent-replacement",
+    "workload-storage-write"
+  ],
+  "maximum_concurrency": 1,
+  "maximum_input_bytes": 1048576,
+  "scheduler_activation_allowed": false,
+  "autonomous_dispatch_allowed": false,
+  "status": "SCOPE_ONLY_NOT_AUTHORITY"
+}

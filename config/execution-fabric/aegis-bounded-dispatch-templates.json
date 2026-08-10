@@ -1,0 +1,22 @@
+{
+  "schema_version": "0.1-aegis-bounded-dispatch-template-registry",
+  "registry_id": "execution-fabric-aegis-bounded-dispatch-templates",
+  "templates": [
+    {
+      "template_id": "aegis.hash-verify.v1",
+      "workload_id": "cpu-heavy-build",
+      "workload_class": "HASH_VERIFY",
+      "selected_node_id": "aegis",
+      "adapter_id": "resident-aegis-hash-verify-v1",
+      "input_root": "docs/reports/bounded-dispatch/aegis-inputs",
+      "digest_algorithm": "sha256",
+      "max_input_bytes": 1048576,
+      "max_timeout_ms": 30000,
+      "network_scope": "none",
+      "storage_semantics": "read-only-input",
+      "risk_class": "R1",
+      "forge_permission_set_sha256": "ff8587a3e05eeb0aa7abaa80ed882b0f43010ad2fd119e71f0b58e353dfd2989",
+      "status": "ADAPTER_PACKET_NOT_ACTIVE"
+    }
+  ]
+}
