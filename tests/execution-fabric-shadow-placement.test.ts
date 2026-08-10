@@ -313,6 +313,55 @@ describe("Execution Fabric Phase 2 shadow placement", () => {
       "shadow batch contains duplicate immutable outcomes")
   })
 
+  it("replays the reviewed WO-EF-SHADOW-004 production observation exactly", () => {
+    const receiptBytes = fs.readFileSync(path.join(
+      process.cwd(),
+      "docs/reports/shadow-admission/WO-EF-SHADOW-004-resident-8e063f9de03e0471-receipt.json",
+    ))
+    const observationBytes = fs.readFileSync(path.join(
+      process.cwd(),
+      "docs/reports/execution-fabric-shadow-observations/WO-EF-SHADOW-004.json",
+    ))
+    const retainedEvaluation = JSON.parse(fs.readFileSync(path.join(
+      process.cwd(),
+      "docs/reports/execution-fabric-shadow-evaluations/WO-EF-SHADOW-004.json",
+    ), "utf8"))
+
+    const replay = evaluateShadowPlacement({ receiptBytes, observationBytes }) as JsonObject
+    expect(replay).toEqual(retainedEvaluation)
+    expect(replay).toMatchObject({
+      status: "OBSERVED",
+      work_order_id: "WO-EF-SHADOW-004",
+      policy_receipt: { selected_node_id: "hermes-node" },
+      recorded_observation: { manual_target: "hermes-node" },
+      comparison: { diverged: false, silent_fallback: false },
+      safety: {
+        authority_violations: 0,
+        stale_evidence_placements: 0,
+        silent_fallbacks: 0,
+        scheduler_state: "disabled",
+      },
+    })
+  })
+
+  it("keeps an admitted observation replay-stable when a later receipt is appended", () => {
+    const replayEntry = entry()
+    const first = evaluateShadowPlacementTestFixture(replayEntry)
+
+    mutateRepositoryJson(
+      replayEntry.repositoryRoot,
+      "config/execution-fabric/shadow-receipt-registry.json",
+      (registry) => {
+        const later = structuredClone(registry.trusted_receipts[0])
+        later.receipt_sha256 = "f".repeat(64)
+        later.work_order_id = "WO-LATER-001"
+        registry.trusted_receipts.push(later)
+      },
+    )
+
+    expect(evaluateShadowPlacementTestFixture(replayEntry)).toEqual(first)
+  })
+
   it("requires an explicit classified reason for every target mismatch", () => {
     const hermesReceipt = receipt({
       recommendation: {

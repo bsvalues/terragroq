@@ -10,6 +10,15 @@
       "authority_reference": "issue-538-phase2-shadow-001",
       "reviewed_commit": "455e55f17959eb005d4d50bb31ad7a18645565da",
       "status": "ACTIVE"
+    },
+    {
+      "artifact_sha256": "fd7e4ee6aacbbdb6feb198b6a07b030c1b075b44dff1ab2b1b52f794f3dd3ec8",
+      "work_order_id": "WO-EF-SHADOW-004",
+      "actual_target_node": "hermes-node",
+      "retained_source_sha256": "fa3c2e18623e083f804d2fd37082632406ddc6f50c24c7e5976cf5fd6ecf2319",
+      "authority_reference": "issue-538-phase2-shadow-004",
+      "reviewed_commit": "61a10b37ca0e5fb3d0cd43588db691cc8d0ed7b6",
+      "status": "ACTIVE"
     }
   ]
 }

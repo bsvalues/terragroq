@@ -24,6 +24,28 @@
       ],
       "reviewed_commit": "455e55f17959eb005d4d50bb31ad7a18645565da",
       "status": "TRUSTED"
+    },
+    {
+      "receipt_sha256": "5dc81506c61698cc9369c2ff0dad9b8af8cf5b78a831f785871b0ad1b8ef1197",
+      "work_order_id": "WO-EF-SHADOW-004",
+      "workload_id": "gpu-local-inference",
+      "decision_input_sha256": "6919cd5292f442a534937349ebfe07411146e9fc8ecdca4d68ef0fd0935a29b2",
+      "evidence_snapshot": [
+        {
+          "node": "aegis",
+          "snapshot_sha256": "85c14c687b936aafed60b6bb1f9a1513f1c2bf3e0f4cdaceb2a22c11e27c695e"
+        },
+        {
+          "node": "atlas",
+          "snapshot_sha256": "c759679c1b7a7c666784ed2fec934796a532b708d3cd150dcbc27366edb04121"
+        },
+        {
+          "node": "hermes-node",
+          "snapshot_sha256": "28c38ea34a722884a9f97a2310d758548b6bbae79acc98e4c1d98fb424e1fa74"
+        }
+      ],
+      "reviewed_commit": "61a10b37ca0e5fb3d0cd43588db691cc8d0ed7b6",
+      "status": "TRUSTED"
     }
   ]
 }
