@@ -1,0 +1,22 @@
+{
+  "schema_version": "0.1-aegis-replay-evidence",
+  "status": "REPLAY_REJECTED",
+  "rejection_code": "REQUEST_ALREADY_CONSUMED",
+  "attempted_at": "2026-08-10T20:51:15.361Z",
+  "captured_at": "2026-08-10T21:01:16.344Z",
+  "trusted_main_commit": "20ac37a9787856744f077fcb3252808a3697bd53",
+  "claim_id": "claim-dce2320e5b737d481de2bc69",
+  "request_sha256": "f336d53449797d917a299f3ddc65936b38c5f946250b5f989fb0f21ff4406ef4",
+  "receipt_sha256": "25fcc3218f777a51f8856a45eb94f3a25f7b2e7f3b844eab829d80565e4aede8",
+  "stable_scope_sha256": "02ff047e9e0979527a43c64305256d75cf5897912e4b5581073006a1f9d1e8fb",
+  "scope_artifact_sha256": "90f089b0d64989edafcc96e847e77993a0c352d99a2716bbfb72bd3fbc27cfc7",
+  "replay_artifact_sha256": "a45fcbd83da0c2a52315748f60ffb90ae197c8c299c2b11bdb57b3aad00a66bc",
+  "runtime_lease_id": null,
+  "operation_attempted": false,
+  "execution_authorized": false,
+  "network_accessed": false,
+  "remote_systems_modified": false,
+  "scheduler_activated": false,
+  "fallback_used": false,
+  "replay_evidence_sha256": "5b3bc381ba7e541a0709b44f32c4f552aa196f32750513dad805094ac6be6a93"
+}

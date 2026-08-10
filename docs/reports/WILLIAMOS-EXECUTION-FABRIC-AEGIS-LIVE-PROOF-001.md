@@ -23,6 +23,7 @@ An immediate replay of the identical request failed closed with
 - Operation started: `2026-08-10T20:51:15.174Z`
 - Operation completed: `2026-08-10T20:51:15.175Z`
 - Lease released: `2026-08-10T20:51:15.176Z`
+- Replay rejected: `2026-08-10T20:51:15.361Z`
 
 ## Evidence
 
@@ -33,6 +34,8 @@ An immediate replay of the identical request failed closed with
 - Claim ID: `claim-dce2320e5b737d481de2bc69`
 - Lease ID: `lease-0a542442964a45d907079864`
 - Runner evidence SHA-256: `5ae228e950792cfe9926c2615b83f25a6fa47d45317ac7a3855d3ef1feef57ad`
+- Replay artifact SHA-256: `a45fcbd83da0c2a52315748f60ffb90ae197c8c299c2b11bdb57b3aad00a66bc`
+- Replay evidence SHA-256: `5b3bc381ba7e541a0709b44f32c4f552aa196f32750513dad805094ac6be6a93`
 
 Retained artifacts:
 
@@ -42,6 +45,7 @@ Retained artifacts:
 - `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-result.json`
 - `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-release.json`
 - `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-replay.json`
+- `docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-replay-evidence.json`
 
 ## Failed-Closed Precursor Evidence
 
