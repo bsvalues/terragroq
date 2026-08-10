@@ -19,6 +19,11 @@ const PROHIBITED_ACTIONS = [
   "remote-dispatch",
   "secret-inspection",
 ]
+const PROHIBITED_ACTION_KEYS = new Set([
+  ...PROHIBITED_ACTIONS,
+  "branch-protection-bypass", "credential-access", "destructive-git", "owner-contact",
+  "production-write", "runtime-activation",
+])
 const REQUIRED_COMPLETION_EVIDENCE = [
   "commit_sha",
   "merge_sha",
@@ -153,6 +158,30 @@ function bindingValues(packet) {
     lease_sha256: sha256(packet.lease),
     recovery_sha256: sha256(packet.recovery),
     completion_sha256: sha256(packet.completion),
+    checkpoint_sha256: sha256(packet.checkpoint),
+  }
+}
+
+function placementView(artifact) {
+  const selected = object(artifact.recommendation, "recommendation.recommendation")
+  const eligibleNodes = Array.isArray(artifact.eligible_nodes) ? artifact.eligible_nodes : []
+  const node = eligibleNodes.find((entry) => entry?.node_id === selected.node_id)
+  if (!node) fail("recommendation selected node must exist in eligible_nodes")
+  const freshness = object(node.freshness, "recommendation selected-node freshness")
+  if (node.eligible !== true || node.rank !== selected.rank || node.execution_authorized !== false
+    || node.dispatch_allowed !== false) {
+    fail("recommendation selected node must be eligible, rank-consistent, and non-authorizing")
+  }
+  return {
+    snapshot_sha256: artifact.snapshot.sha256,
+    workload_id: artifact.workload.id,
+    workload_sha256: artifact.workload_digest_sha256,
+    selected_node_id: selected.node_id,
+    rank: selected.rank,
+    evaluated_at: artifact.evaluated_at,
+    expires_at: freshness.expires_at,
+    execution_authorized: selected.execution_authorized,
+    dispatch_allowed: selected.dispatch_allowed,
   }
 }
 
@@ -184,12 +213,19 @@ function validateShape(packet) {
   if (!['PRE_DISPATCH', 'COMPLETION_CLAIM'].includes(packet.phase)) fail("unsupported phase")
 
   exactKeys(packet.recommendation, [
-    "schema_version", "status", "recommendation_only", "snapshot_sha256", "workload_id",
-    "workload_sha256", "selected_node_id", "rank", "evaluated_at", "expires_at", "execution_authorized",
-    "dispatch_allowed",
+    "schema_version", "status", "recommendation_only", "eligibility_scope", "evaluated_at", "workload",
+    "scheduler", "workload_digest_sha256", "recommendation", "eligible_nodes", "ineligible_nodes",
+    "confidence", "authority_mutated", "remote_systems_modified", "snapshot", "catalog_schema_version",
   ], "recommendation")
+  exactKeys(packet.recommendation.workload, ["id", "title", "storage_semantics"], "recommendation.workload")
+  exactKeys(packet.recommendation.scheduler, ["state", "authority", "autonomous_dispatch"], "recommendation.scheduler")
+  exactKeys(packet.recommendation.recommendation, [
+    "node_id", "rank", "rank_basis", "execution_authorized", "dispatch_allowed",
+  ], "recommendation.recommendation")
+  exactKeys(packet.recommendation.snapshot, ["path", "sha256"], "recommendation.snapshot")
   exactKeys(packet.workload_envelope, [
-    "job_id", "work_order_id", "repository", "base_ref", "base_sha", "risk_class", "selected_node_id",
+    "job_id", "work_order_id", "placement_workload_id", "placement_workload_sha256", "placement_snapshot_sha256",
+    "repository", "base_ref", "base_sha", "risk_class", "selected_node_id",
     "path_scope", "contract_scope", "environment_scope", "allowed_actions", "denied_actions", "resource_limits", "data_classification",
     "storage_semantics", "network_scope", "max_attempts", "timeout_seconds",
   ], "workload_envelope")
@@ -235,9 +271,12 @@ function validateShape(packet) {
 }
 
 function validateValues(packet) {
+  const placement = placementView(packet.recommendation)
   for (const [label, value] of [
-    ["recommendation.snapshot_sha256", packet.recommendation.snapshot_sha256],
-    ["recommendation.workload_sha256", packet.recommendation.workload_sha256],
+    ["recommendation.snapshot.sha256", placement.snapshot_sha256],
+    ["recommendation.workload_digest_sha256", placement.workload_sha256],
+    ["workload_envelope.placement_snapshot_sha256", packet.workload_envelope.placement_snapshot_sha256],
+    ["workload_envelope.placement_workload_sha256", packet.workload_envelope.placement_workload_sha256],
     ["authority.authority_tuple_sha256", packet.authority.authority_tuple_sha256],
     ["authority.status_event_head_sha256", packet.authority.status_event_head_sha256],
     ["authority.current_status_event_head_sha256", packet.authority.current_status_event_head_sha256],
@@ -255,6 +294,11 @@ function validateValues(packet) {
   for (const [label, value] of [
     ["workload_envelope.job_id", packet.workload_envelope.job_id],
     ["workload_envelope.work_order_id", packet.workload_envelope.work_order_id],
+    ["workload_envelope.placement_workload_id", packet.workload_envelope.placement_workload_id],
+    ["recommendation.recommendation.node_id", placement.selected_node_id],
+    ["workload_envelope.selected_node_id", packet.workload_envelope.selected_node_id],
+    ["authority.selected_node_id", packet.authority.selected_node_id],
+    ["reservation.selected_node_id", packet.reservation.selected_node_id],
     ["authority.grant_id", packet.authority.grant_id],
     ["authority.status_event_ref", packet.authority.status_event_ref],
     ["authority.revocation_event_ref", packet.authority.revocation_event_ref],
@@ -265,10 +309,10 @@ function validateValues(packet) {
     ["completion.evidence_anchor.ledger_id", packet.completion.evidence_anchor.ledger_id],
   ]) identifier(value, label)
   gitSha(packet.workload_envelope.base_sha, "workload_envelope.base_sha")
-  integer(packet.recommendation.rank, "recommendation.rank", 1)
+  integer(placement.rank, "recommendation.recommendation.rank", 1)
   for (const [label, value] of [
-    ["recommendation.evaluated_at", packet.recommendation.evaluated_at],
-    ["recommendation.expires_at", packet.recommendation.expires_at],
+    ["recommendation.evaluated_at", placement.evaluated_at],
+    ["recommendation selected-node freshness.expires_at", placement.expires_at],
     ["authority.issued_at", packet.authority.issued_at],
     ["authority.expires_at", packet.authority.expires_at],
     ["reservation.issued_at", packet.reservation.issued_at],
@@ -279,8 +323,8 @@ function validateValues(packet) {
   ]) timestamp(value, label)
   for (const [label, value] of [
     ["recommendation.recommendation_only", packet.recommendation.recommendation_only],
-    ["recommendation.execution_authorized", packet.recommendation.execution_authorized],
-    ["recommendation.dispatch_allowed", packet.recommendation.dispatch_allowed],
+    ["recommendation.recommendation.execution_authorized", placement.execution_authorized],
+    ["recommendation.recommendation.dispatch_allowed", placement.dispatch_allowed],
     ["authority.single_use", packet.authority.single_use],
     ["recovery.reclaim_requires_expired_lease", packet.recovery.reclaim_requires_expired_lease],
     ["safety.autonomous_dispatch", packet.safety.autonomous_dispatch],
@@ -338,6 +382,7 @@ function evaluateOrThrow(input, options = {}) {
   validateShape(packet)
   validateValues(packet)
   const at = timestamp(options.evaluatedAt, "evaluated_at")
+  const placement = placementView(packet.recommendation)
   const reasons = []
   const add = (code, detail, required, observed, refs) => reasons.push(reason(code, detail, required, observed, refs))
 
@@ -372,14 +417,18 @@ function evaluateOrThrow(input, options = {}) {
   }
   if (packet.recommendation.schema_version !== "0.1-placement-recommendation"
     || packet.recommendation.status !== "RECOMMENDED" || !packet.recommendation.recommendation_only
-    || packet.recommendation.rank !== 1
-    || packet.recommendation.execution_authorized || packet.recommendation.dispatch_allowed) {
+    || packet.recommendation.eligibility_scope !== "recommendation-only"
+    || placement.rank !== 1 || placement.execution_authorized || placement.dispatch_allowed
+    || packet.recommendation.scheduler.state !== "disabled"
+    || packet.recommendation.scheduler.authority !== "not-granted"
+    || packet.recommendation.scheduler.autonomous_dispatch !== "forbidden"
+    || packet.recommendation.authority_mutated || packet.recommendation.remote_systems_modified) {
     add("PLACEMENT_RECOMMENDATION_INVALID", "placement must remain recommendation-only", true,
       packet.recommendation, ["recommendation"])
   }
-  if (at > Date.parse(packet.recommendation.expires_at) || at < Date.parse(packet.recommendation.evaluated_at)) {
-    add("PLACEMENT_EVIDENCE_STALE", "evaluation is outside recommendation validity", packet.recommendation.expires_at,
-      options.evaluatedAt, ["recommendation.evaluated_at", "recommendation.expires_at"])
+  if (at >= Date.parse(placement.expires_at) || at < Date.parse(placement.evaluated_at)) {
+    add("PLACEMENT_EVIDENCE_STALE", "evaluation is outside recommendation validity", placement.expires_at,
+      options.evaluatedAt, ["recommendation.evaluated_at", "recommendation.eligible_nodes.freshness.expires_at"])
   }
 
   const envelope = packet.workload_envelope
@@ -387,6 +436,13 @@ function evaluateOrThrow(input, options = {}) {
   const reservation = packet.reservation
   const lease = packet.lease
   const canonicalEnvelope = dispatchEnvelope.envelope
+  if (envelope.placement_workload_id !== placement.workload_id
+    || envelope.placement_workload_sha256 !== placement.workload_sha256
+    || envelope.placement_snapshot_sha256 !== placement.snapshot_sha256
+    || envelope.storage_semantics !== packet.recommendation.workload.storage_semantics) {
+    add("PLACEMENT_ARTIFACT_BINDING_MISMATCH", "workload envelope must bind the canonical placement artifact",
+      placement, envelope, ["recommendation", "workload_envelope"])
+  }
   if (dispatchEnvelope.validationOnly !== true || dispatchEnvelope.authorityGranted !== false
     || canonicalEnvelope.ownerOperationsAllowed !== false) {
     add("DISPATCH_ENVELOPE_AUTHORITY_WALL", "canonical envelope must remain validation-only",
@@ -425,7 +481,7 @@ function evaluateOrThrow(input, options = {}) {
   for (const [field, values] of [
     ["work_order_id", [envelope.work_order_id, authority.work_order_id]],
     ["repository", [envelope.repository, authority.repository, reservation.repository]],
-    ["selected_node_id", [packet.recommendation.selected_node_id, envelope.selected_node_id,
+    ["selected_node_id", [placement.selected_node_id, envelope.selected_node_id,
       authority.selected_node_id, reservation.selected_node_id]],
   ]) {
     if (new Set(values).size !== 1) add("SCOPE_BINDING_MISMATCH", field, values[0], values, [field])
@@ -448,14 +504,28 @@ function evaluateOrThrow(input, options = {}) {
       { workload: envelope.risk_class, authority: authority.risk_ceiling },
       ["workload_envelope.risk_class", "authority.risk_ceiling"])
   }
-  const denied = new Set(envelope.denied_actions)
-  const allowed = new Set(envelope.allowed_actions)
-  const authorityAllowed = new Set(authority.allowed_actions)
+  if (envelope.data_classification !== "repository-source" || envelope.storage_semantics !== "scratch-only"
+    || envelope.network_scope !== "repository-and-ci-only") {
+    add("WORKLOAD_SEMANTICS_OUT_OF_SCOPE", "bounded proof permits repository source, scratch-only storage, and repository/CI network only",
+      { data_classification: "repository-source", storage_semantics: "scratch-only", network_scope: "repository-and-ci-only" },
+      { data_classification: envelope.data_classification, storage_semantics: envelope.storage_semantics,
+        network_scope: envelope.network_scope },
+      ["workload_envelope.data_classification", "workload_envelope.storage_semantics", "workload_envelope.network_scope"])
+  }
+  const actionKey = (value) => value.trim().toLowerCase().replaceAll("_", "-")
+  const denied = new Set(envelope.denied_actions.map(actionKey))
+  const allowed = new Set(envelope.allowed_actions.map(actionKey))
+  const authorityAllowed = new Set(authority.allowed_actions.map(actionKey))
   for (const action of envelope.allowed_actions) {
-    if (denied.has(action)) add("ACTION_CONFLICT", action, "not both allowed and denied", action,
+    if (denied.has(actionKey(action))) add("ACTION_CONFLICT", action, "not both allowed and denied", action,
       ["workload_envelope.allowed_actions", "workload_envelope.denied_actions"])
-    if (!authorityAllowed.has(action)) add("ACTION_NOT_AUTHORIZED", action, true, false,
+    if (!authorityAllowed.has(actionKey(action))) add("ACTION_NOT_AUTHORIZED", action, true, false,
       ["authority.allowed_actions", "workload_envelope.allowed_actions"])
+  }
+  for (const action of [...allowed, ...authorityAllowed]) {
+    if (PROHIBITED_ACTION_KEYS.has(action)) add("PROHIBITED_ACTION_NOT_FENCED", action,
+      "prohibited action absent from allow sets", true,
+      ["workload_envelope.allowed_actions", "authority.allowed_actions"])
   }
   for (const action of PROHIBITED_ACTIONS) {
     if (allowed.has(action) || authorityAllowed.has(action) || !denied.has(action)) {
@@ -580,10 +650,11 @@ function evaluateOrThrow(input, options = {}) {
       || consumedAt >= Date.parse(authority.expires_at)
       || consumedAt >= Date.parse(reservation.expires_at)
       || consumedAt >= Date.parse(lease.expires_at)
-      || checkpointAt <= consumedAt || releasedAt <= checkpointAt || claimedAt <= releasedAt || at < claimedAt) {
+      || checkpointAt <= consumedAt || releasedAt <= checkpointAt || claimedAt <= releasedAt || at < claimedAt
+      || checkpointAt >= Date.parse(lease.expires_at) || releasedAt >= Date.parse(lease.expires_at)) {
       add("COMPLETION_CHRONOLOGY_INVALID",
         "completion events must be ordered, in-force, and already observed at evaluation time",
-        "issued <= consumed < checkpoint <= released <= claimed <= evaluated, all before expiry",
+        "issued <= consumed < checkpoint < released < claimed <= evaluated, all before expiry",
         { consumed_at: authority.consumed_at, checkpoint_at: packet.checkpoint.recorded_at,
           released_at: lease.released_at, claimed_at: packet.completion.claimed_at, evaluated_at: options.evaluatedAt },
         ["authority.consumed_at", "checkpoint.recorded_at", "lease.released_at", "completion.claimed_at"])
@@ -598,6 +669,20 @@ function evaluateOrThrow(input, options = {}) {
         add("COMPLETION_EVIDENCE_MISSING", field, "non-empty evidence", actualEvidence[field] ?? null,
           [`completion.evidence.${field}`])
       }
+    }
+    if (!GIT_SHA40.test(actualEvidence.commit_sha ?? "") || !GIT_SHA40.test(actualEvidence.merge_sha ?? "")) {
+      add("COMPLETION_GIT_REFERENCE_INVALID", "commit and merge references must be canonical Git SHAs",
+        "lowercase 40-character Git SHA", { commit_sha: actualEvidence.commit_sha, merge_sha: actualEvidence.merge_sha },
+        ["completion.evidence.commit_sha", "completion.evidence.merge_sha"])
+    }
+    for (const field of ["test_result_sha256", "review_result_sha256", "verification_sha256"]) {
+      if (!SHA256.test(actualEvidence[field] ?? "")) add("COMPLETION_DIGEST_INVALID", field,
+        "uppercase SHA-256 hex", actualEvidence[field], [`completion.evidence.${field}`])
+    }
+    if (!/^https:\/\/github\.com\/bsvalues\/terragroq\/pull\/[1-9][0-9]*$/.test(actualEvidence.pr_url ?? "")) {
+      add("COMPLETION_PR_REFERENCE_INVALID", "PR evidence must identify this repository",
+        "https://github.com/bsvalues/terragroq/pull/<number>", actualEvidence.pr_url,
+        ["completion.evidence.pr_url"])
     }
     const expectedEvidenceDigest = sha256(actualEvidence)
     if (packet.completion.evidence_sha256 !== expectedEvidenceDigest
@@ -635,7 +720,7 @@ function evaluateOrThrow(input, options = {}) {
     status: reasons.length === 0 ? "CONTRACT_READY" : "CONTRACT_BLOCKED",
     phase: packet.phase,
     contract_id: packet.contract_id,
-    selected_node_id: packet.recommendation.selected_node_id,
+    selected_node_id: placement.selected_node_id,
     reasons,
     evidence_used: [
       "recommendation", "workload_envelope", "authority", "reservation", "lease", "checkpoint",
@@ -698,8 +783,14 @@ export function runCli(argv) {
     const packet = JSON.parse(fs.readFileSync(path.resolve(args.contract), "utf8"))
     return evaluateDispatchContract(packet, { evaluatedAt: args.at })
   } catch (error) {
-    return inputRejected(new DispatchContractError(`unable to read contract: ${error.message}`))
+    return inputRejected(new DispatchContractError(`unable to read contract: ${error.code ?? error.name ?? "READ_FAILED"}`))
   }
+}
+
+export function exitCodeForStatus(status) {
+  if (status === "CONTRACT_READY") return 0
+  if (status === "CONTRACT_BLOCKED") return 1
+  return 2
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
@@ -707,5 +798,5 @@ if (isMain) {
   const result = runCli(process.argv.slice(2))
   const stream = result.status === "INPUT_REJECTED" ? process.stderr : process.stdout
   stream.write(`${JSON.stringify(result, null, 2)}\n`)
-  if (result.status === "INPUT_REJECTED") process.exitCode = 2
+  process.exitCode = exitCodeForStatus(result.status)
 }

@@ -1,9 +1,15 @@
+import { spawnSync } from "node:child_process"
+import crypto from "node:crypto"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { describe, expect, it } from "vitest"
 
 // @ts-expect-error JavaScript module has no declaration file.
 import {
   bindDispatchContract,
   evaluateDispatchContract,
+  exitCodeForStatus,
   runCli,
 } from "../scripts/execution-fabric/evaluate-dispatch-contract.mjs"
 
@@ -14,11 +20,11 @@ const sha = (character: string) => character.repeat(64)
 function packet(phase: "PRE_DISPATCH" | "COMPLETION_CLAIM" = "PRE_DISPATCH") {
   const complete = phase === "COMPLETION_CLAIM"
   const evidence = complete ? {
-    commit_sha: sha("A"),
+    commit_sha: "a".repeat(40),
     test_result_sha256: sha("B"),
     review_result_sha256: sha("C"),
     pr_url: "https://github.com/bsvalues/terragroq/pull/999",
-    merge_sha: sha("D"),
+    merge_sha: "d".repeat(40),
     verification_sha256: sha("E"),
   } : {
     commit_sha: null,
@@ -37,19 +43,35 @@ function packet(phase: "PRE_DISPATCH" | "COMPLETION_CLAIM" = "PRE_DISPATCH") {
       schema_version: "0.1-placement-recommendation",
       status: "RECOMMENDED",
       recommendation_only: true,
-      snapshot_sha256: "20B218E8F7AC6E78027FE31B2725FF14DD11339D818636F1FC44313C828FC9F9",
-      workload_id: "cpu-heavy-build",
-      workload_sha256: sha("F"),
-      selected_node_id: "aegis",
-      rank: 1,
+      eligibility_scope: "recommendation-only",
       evaluated_at: "2026-08-10T03:38:05.166Z",
-      expires_at: "2026-08-10T03:43:05.166Z",
-      execution_authorized: false,
-      dispatch_allowed: false,
+      workload: { id: "cpu-heavy-build", title: "CPU-heavy scratch build", storage_semantics: "scratch-only" },
+      scheduler: { state: "disabled", authority: "not-granted", autonomous_dispatch: "forbidden" },
+      workload_digest_sha256: sha("F"),
+      recommendation: { node_id: "aegis", rank: 1, rank_basis: {}, execution_authorized: false, dispatch_allowed: false },
+      eligible_nodes: [{
+        node_id: "aegis", eligible: true, rank: 1, rank_basis: {}, reasons: [], evidence_used: [],
+        confidence: "observed",
+        freshness: { state: "fresh", age_seconds: 55, ttl_seconds: 300, expires_at: "2026-08-10T03:43:05.166Z" },
+        execution_authorized: false, dispatch_allowed: false,
+        authority_note: "Recommendation eligibility does not grant node or scheduler authority.",
+      }],
+      ineligible_nodes: [],
+      confidence: { state: "observed", freshness: "fresh", registry_freshness: "fresh" },
+      authority_mutated: false,
+      remote_systems_modified: false,
+      snapshot: {
+        path: ".artifacts/execution-fabric/registry.snapshot.json",
+        sha256: "20B218E8F7AC6E78027FE31B2725FF14DD11339D818636F1FC44313C828FC9F9",
+      },
+      catalog_schema_version: "0.1-placement-workloads",
     },
     workload_envelope: {
       job_id: "JOB-FABRIC-CPU-BUILD-001",
       work_order_id: "WO-FABRIC-DISPATCH-CONTRACT-001",
+      placement_workload_id: "cpu-heavy-build",
+      placement_workload_sha256: sha("F"),
+      placement_snapshot_sha256: "20B218E8F7AC6E78027FE31B2725FF14DD11339D818636F1FC44313C828FC9F9",
       repository: "bsvalues/terragroq",
       base_ref: "refs/heads/main",
       base_sha: "1".repeat(40),
@@ -263,6 +285,50 @@ function rebound(mutator: (value: any) => void, phase: "PRE_DISPATCH" | "COMPLET
 }
 
 describe("Execution Fabric bounded dispatch-contract proof", () => {
+  it("consumes the canonical placement evaluator artifact without a hand-shaped adapter", () => {
+    const root = process.cwd()
+    const registry = JSON.parse(fs.readFileSync(path.join(root, "config/execution-fabric/registry.seed.json"), "utf8"))
+    const schema = JSON.parse(fs.readFileSync(path.join(root, "config/execution-fabric/registry.schema.json"), "utf8"))
+    const catalog = JSON.parse(fs.readFileSync(path.join(root, "config/execution-fabric/placement-workloads.json"), "utf8"))
+    const observedTimes: Record<string, string> = {
+      omen: "2026-08-10T03:37:39.527Z", "hermes-node": "2026-08-10T03:37:41.325Z",
+      atlas: "2026-08-10T03:37:02.109Z", aegis: "2026-08-10T03:37:09.776Z",
+    }
+    for (const node of registry.nodes) {
+      if (observedTimes[node.id]) node.evidence = {
+        ...node.evidence, confidence: "observed", observed_at: observedTimes[node.id],
+        ttl_seconds: 300, probe_version: "0.1-node-probe",
+      }
+    }
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "fabric-dispatch-placement-"))
+    let artifact: any
+    try {
+      const snapshotPath = path.join(temporary, "snapshot.json")
+      const schemaPath = path.join(temporary, "schema.json")
+      const catalogPath = path.join(temporary, "workloads.json")
+      const snapshotBytes = Buffer.from(JSON.stringify(registry))
+      fs.writeFileSync(snapshotPath, snapshotBytes)
+      fs.writeFileSync(schemaPath, JSON.stringify(schema))
+      fs.writeFileSync(catalogPath, JSON.stringify(catalog))
+      const snapshotSha = crypto.createHash("sha256").update(snapshotBytes).digest("hex").toUpperCase()
+      const child = spawnSync(process.execPath, [
+        path.join(root, "scripts/execution-fabric/recommend-placement.mjs"),
+        "--snapshot", snapshotPath, "--schema", schemaPath, "--workloads", catalogPath,
+        "--workload", "cpu-heavy-build", "--expected-snapshot-sha256", snapshotSha,
+        "--at", "2026-08-10T03:38:05.166Z",
+      ], { encoding: "utf8" })
+      expect(child.status, child.stderr).toBe(0)
+      artifact = JSON.parse(child.stdout)
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true })
+    }
+    const value = packet()
+    value.recommendation = artifact
+    value.workload_envelope.placement_workload_sha256 = artifact.workload_digest_sha256
+    value.workload_envelope.placement_snapshot_sha256 = artifact.snapshot.sha256
+    expect(evaluate(bindDispatchContract(value))).toMatchObject({ status: "CONTRACT_READY", dispatch_allowed: false })
+  })
+
   it("makes one CPU build contract-ready without authorizing execution", () => {
     const result = evaluate()
     expect(result).toMatchObject({
@@ -290,7 +356,8 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
   })
 
   it.each([
-    ["stale placement", (value: any) => { value.recommendation.expires_at = "2026-08-10T03:39:59.000Z" }, "PLACEMENT_EVIDENCE_STALE"],
+    ["stale placement", (value: any) => { value.recommendation.eligible_nodes[0].freshness.expires_at = "2026-08-10T03:39:59.000Z" }, "PLACEMENT_EVIDENCE_STALE"],
+    ["placement expiry instant", (value: any) => { value.recommendation.eligible_nodes[0].freshness.expires_at = at }, "PLACEMENT_EVIDENCE_STALE"],
     ["changed authority scope", (value: any) => { value.authority.path_scope = ["**"] }, "PATH_SCOPE_MISMATCH"],
     ["duplicate acquisition", (value: any) => { value.reservation.acquisition_count = 2 }, "RESERVATION_NOT_EXCLUSIVE"],
     ["conflicting reservation", (value: any) => { value.reservation.conflict_count = 1 }, "RESERVATION_NOT_EXCLUSIVE"],
@@ -304,10 +371,13 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
     ["fencing mismatch", (value: any) => { value.checkpoint.fencing_token = 40 }, "FENCING_TOKEN_CONFLICT"],
     ["holder digest mismatch", (value: any) => { value.checkpoint.holder_token_digest = sha("8") }, "HOLDER_TOKEN_DIGEST_MISMATCH"],
     ["authority replay", (value: any) => { value.authority.consumption_count = 1; value.authority.consumed_at = "2026-08-10T03:39:59.000Z" }, "AUTHORITY_REPLAY"],
-    ["non-rank-one placement", (value: any) => { value.recommendation.rank = 2 }, "PLACEMENT_RECOMMENDATION_INVALID"],
+    ["non-rank-one placement", (value: any) => { value.recommendation.recommendation.rank = 2; value.recommendation.eligible_nodes[0].rank = 2 }, "PLACEMENT_RECOMMENDATION_INVALID"],
     ["scheduler activation", (value: any) => { value.safety.scheduler_state = "enabled" }, "SCHEDULER_AUTHORITY_WALL"],
     ["remote dispatch", (value: any) => { value.safety.autonomous_dispatch = true }, "PROOF_MODE_VIOLATION"],
     ["unfenced prohibited action", (value: any) => { value.workload_envelope.denied_actions = value.workload_envelope.denied_actions.filter((entry: string) => entry !== "production-mutation") }, "PROHIBITED_ACTION_NOT_FENCED"],
+    ["protected data semantics", (value: any) => { value.workload_envelope.data_classification = "protected" }, "WORKLOAD_SEMANTICS_OUT_OF_SCOPE"],
+    ["authoritative storage semantics", (value: any) => { value.workload_envelope.storage_semantics = "authoritative-state" }, "WORKLOAD_SEMANTICS_OUT_OF_SCOPE"],
+    ["unrestricted network semantics", (value: any) => { value.workload_envelope.network_scope = "unrestricted" }, "WORKLOAD_SEMANTICS_OUT_OF_SCOPE"],
   ])("blocks %s", (_name, mutate, code) => {
     expect(rebound(mutate).reasons.map((entry: any) => entry.code)).toContain(code)
   })
@@ -315,6 +385,12 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
   it("detects packet tampering without recomputed bindings", () => {
     const value = packet()
     value.workload_envelope.timeout_seconds = 999
+    expect(evaluate(value).reasons.map((entry: any) => entry.code)).toContain("BINDING_MISMATCH")
+  })
+
+  it("binds the final checkpoint against packet-local tampering", () => {
+    const value = packet("COMPLETION_CLAIM")
+    value.checkpoint.sequence += 1
     expect(evaluate(value).reasons.map((entry: any) => entry.code)).toContain("BINDING_MISMATCH")
   })
 
@@ -368,6 +444,16 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
     expect(result.reasons.map((entry: any) => entry.code)).toContain("COMPLETION_EVIDENCE_MISSING")
   })
 
+  it.each([
+    ["commit SHA", (value: any) => { value.completion.evidence.commit_sha = "x" }, "COMPLETION_GIT_REFERENCE_INVALID"],
+    ["merge SHA", (value: any) => { value.completion.evidence.merge_sha = "x" }, "COMPLETION_GIT_REFERENCE_INVALID"],
+    ["result digest", (value: any) => { value.completion.evidence.test_result_sha256 = "x" }, "COMPLETION_DIGEST_INVALID"],
+    ["PR URL", (value: any) => { value.completion.evidence.pr_url = "not-a-pr" }, "COMPLETION_PR_REFERENCE_INVALID"],
+  ])("rejects malformed completion %s", (_name, mutate, code) => {
+    const result = rebound(mutate, "COMPLETION_CLAIM")
+    expect(result.reasons.map((entry: any) => entry.code)).toContain(code)
+  })
+
   it("rejects a second completion consumption as replay", () => {
     const result = rebound((value) => { value.authority.consumption_count = 2 }, "COMPLETION_CLAIM")
     expect(result.reasons.map((entry: any) => entry.code)).toContain("AUTHORITY_CONSUMPTION_INVALID")
@@ -382,6 +468,13 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
       value.checkpoint.recorded_at = value.authority.consumed_at
       value.lease.released_at = value.authority.consumed_at
       value.completion.claimed_at = value.authority.consumed_at
+    }],
+    ["checkpoint after lease expiry", (value: any) => {
+      value.checkpoint.recorded_at = "2026-08-10T03:42:31.000Z"
+      value.lease.released_at = "2026-08-10T03:42:32.000Z"
+      value.completion.claimed_at = "2026-08-10T03:42:33.000Z"
+      value.authority.expires_at = "2026-08-10T03:44:00.000Z"
+      value.reservation.expires_at = "2026-08-10T03:44:00.000Z"
     }],
   ])("rejects invalid completion chronology: %s", (_name, mutate) => {
     const result = rebound(mutate, "COMPLETION_CLAIM")
@@ -415,6 +508,24 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
     expect(evaluate(commandIdentifier).status).toBe("INPUT_REJECTED")
   })
 
+  it("normalizes action vocabularies before applying protected-action fences", () => {
+    const result = rebound((value) => {
+      value.workload_envelope.allowed_actions.push("PRODUCTION_WRITE")
+      value.authority.allowed_actions.push("PRODUCTION_WRITE")
+    })
+    expect(result.reasons.map((entry: any) => entry.code)).toContain("PROHIBITED_ACTION_NOT_FENCED")
+  })
+
+  it("rejects unsafe selected-node identities", () => {
+    const value = packet()
+    value.recommendation.recommendation.node_id = "aegis && run"
+    value.recommendation.eligible_nodes[0].node_id = "aegis && run"
+    value.workload_envelope.selected_node_id = "aegis && run"
+    value.authority.selected_node_id = "aegis && run"
+    value.reservation.selected_node_id = "aegis && run"
+    expect(evaluate(bindDispatchContract(value)).status).toBe("INPUT_REJECTED")
+  })
+
   it("keeps retry and terminal classifications disjoint", () => {
     const result = rebound((value) => { value.recovery.terminal_codes.push("WORKER_LOST") })
     expect(result.reasons.map((entry: any) => entry.code)).toContain("RECOVERY_CLASS_CONFLICT")
@@ -422,5 +533,13 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
 
   it("returns structured INPUT_REJECTED from the CLI boundary", () => {
     expect(runCli([])).toMatchObject({ status: "INPUT_REJECTED", execution_authorized: false })
+  })
+
+  it("keeps CLI failures path-independent and blocked decisions non-zero", () => {
+    const result = runCli(["--contract", path.join("C:", "private", "missing-contract.json"), "--at", at])
+    expect(JSON.stringify(result)).not.toContain("private")
+    expect(exitCodeForStatus("CONTRACT_READY")).toBe(0)
+    expect(exitCodeForStatus("CONTRACT_BLOCKED")).toBe(1)
+    expect(exitCodeForStatus("INPUT_REJECTED")).toBe(2)
   })
 })
