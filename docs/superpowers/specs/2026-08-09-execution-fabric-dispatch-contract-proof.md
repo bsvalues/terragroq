@@ -37,7 +37,8 @@ without creating or mutating their records.
 - `workload_envelope`: exact job/Work Order/repository/base/node/path/contract/environment/action scope, R1 ceiling, finite
   CPU/RAM/scratch/time/attempt limits, data/storage/network classifications, and prohibited actions.
 - `authority`: versioned, expiring, revocable, single-use `proof-fixture` bound to the exact authority
-  tuple. It is evidence for contract evaluation and is not a live grant.
+  tuple and finite resource/attempt/time ceilings. It is evidence for contract evaluation and is not
+  a live grant.
 - `reservation`: one simulated acquisition with zero conflicts, exact holder/node/repository/paths,
   version, and validity window.
 - `lease` and `checkpoint`: one simulated holder, reservation, lease ID, generation, monotonic fencing
@@ -80,9 +81,13 @@ remote_systems_modified=false
 
 The selected node, Work Order, repository, base ref and commit, program/goal/loop authority tuple,
 grant/status-event references, actions, and path/contract/environment reservations must agree across
-all records. Prohibited actions must be explicitly
+all records. Repository and protected-resource reservation collections must remain empty. Placement
+readiness requires a host-injected verifier bound to the exact artifact, snapshot, and workload
+digests; packet input and the CLI cannot create that trust. Resource requirements must remain under
+the authority ceiling and selected-node CPU evidence. Prohibited actions must be explicitly
 denied and absent from both workload and authority allow sets. Authority must be unexpired,
-non-revoked, single-use, and unused at pre-dispatch. Reservation acquisition must be exactly once and
+non-revoked, single-use, and unused at pre-dispatch. Authority issuance, reservation acquisition,
+lease issuance, and checkpoint recording must occur in dependency order. Reservation acquisition must be exactly once and
 collision-free. Lease, reservation, checkpoint, and recovery must share the same holder and current
 fence. Recovery can advance only to a greater fence within the finite attempt budget.
 

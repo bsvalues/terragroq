@@ -123,6 +123,8 @@ The evaluator returns `CONTRACT_READY`, `CONTRACT_BLOCKED`, or `INPUT_REJECTED`.
 means only that the static packet satisfies the contract. Every result keeps
 `execution_authorized=false` and `dispatch_allowed=false`; the script has no queue, worker, remote
 connection, command-execution, live lease, authority-write, or scheduler-activation adapter.
+Placement readiness additionally requires a host-injected verifier for the exact placement artifact,
+snapshot digest, and workload digest. Packet fields and CLI arguments cannot manufacture that trust.
 
 ```powershell
 node scripts/execution-fabric/evaluate-dispatch-contract.mjs `

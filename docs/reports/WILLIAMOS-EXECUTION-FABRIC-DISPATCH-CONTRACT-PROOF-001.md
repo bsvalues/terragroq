@@ -78,9 +78,9 @@ OWNER_ACTION_REQUIRED=false
 ## Validation
 
 ```text
-focused dispatch-contract tests: 58 passed
-canonical contract tests: 236 passed
-exact-head full suite: 2,754 passed / 2 skipped
+focused dispatch-contract tests: 64 passed
+canonical contract tests: 242 passed
+exact-head full suite: 2,760 passed / 2 skipped
 lint: PASS / no warnings or errors
 production build: PASS
 git diff --check: PASS
