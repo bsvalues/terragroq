@@ -1,0 +1,74 @@
+{
+  "schema_version": "0.1-aegis-resident-runner-evidence",
+  "executable_proof": {
+    "schema_version": "0.1-trusted-aegis-executable-checkout",
+    "trusted_ref": "refs/heads/main",
+    "head_commit": "20ac37a9787856744f077fcb3252808a3697bd53",
+    "tree_sha1": "7c73d5c6b347879cf11fd3e4a33f422d6eff63d9",
+    "clean": true,
+    "verified": true
+  },
+  "adapter_result": {
+    "schema_version": "0.1-aegis-hash-verify-evidence",
+    "status": "COMPLETED",
+    "result": "VERIFIED",
+    "request_sha256": "f336d53449797d917a299f3ddc65936b38c5f946250b5f989fb0f21ff4406ef4",
+    "receipt_sha256": "25fcc3218f777a51f8856a45eb94f3a25f7b2e7f3b844eab829d80565e4aede8",
+    "preparation_sha256": "e90bd342cf3ce21b0afe89b0af2371ab5a7637d5ce2944d710267ec8a4eb7f5c",
+    "scope_sha256": "02ff047e9e0979527a43c64305256d75cf5897912e4b5581073006a1f9d1e8fb",
+    "authority_reference": "issue-538-aegis-single-use-hash-001",
+    "claim": {
+      "claim_id": "claim-dce2320e5b737d481de2bc69",
+      "claimed_at": "2026-08-10T20:51:15.115Z"
+    },
+    "lease": {
+      "lease_id": "lease-0a542442964a45d907079864",
+      "acquired_at": "2026-08-10T20:51:15.117Z"
+    },
+    "actual_target_node": "aegis",
+    "adapter_id": "resident-aegis-hash-verify-v1",
+    "operation": {
+      "kind": "HASH_VERIFY",
+      "relative_path": "WO-EF-DISPATCH-AEGIS-001.json",
+      "byte_length": 137,
+      "digest_algorithm": "sha256",
+      "expected_sha256": "8142d6c2154446cabc944c77dfe99c1e2c986985a03d33f4f841395de3747e14",
+      "observed_sha256": "8142d6c2154446cabc944c77dfe99c1e2c986985a03d33f4f841395de3747e14",
+      "matched": true
+    },
+    "chronology": {
+      "started_at": "2026-08-10T20:51:15.174Z",
+      "completed_at": "2026-08-10T20:51:15.175Z"
+    },
+    "resource_observation": {
+      "metric": "input_bytes_hashed",
+      "unit": "bytes",
+      "value": 137,
+      "observed_at": "2026-08-10T20:51:15.175Z"
+    },
+    "operation_performed": true,
+    "execution_authorized": true,
+    "runtime_lease_released": true,
+    "safety": {
+      "scheduler_activated": false,
+      "autonomous_dispatch": false,
+      "dispatch_performed": true,
+      "remote_accessed": false,
+      "network_accessed": false,
+      "shell_executed": false,
+      "authority_mutated": false,
+      "registry_modified": false,
+      "workload_storage_modified": false,
+      "output_storage_modified": false,
+      "fallback_used": false
+    },
+    "evidence_sha256": "9e4ee2032c123d967ab68ef504df21dea4c279c7a9568296e9f718ae81e887ff"
+  },
+  "runtime_evidence": {
+    "claim_sha256": "31078a6819013b3518cff51869cb884db2214eb6a1d7a43832f03dfac05eb0d4",
+    "lease_sha256": "0950c3602d54701760adcefb7b268cb172aa586586ee85c1f4c8792a71de49cc",
+    "release_sha256": "5523a60f6f7e71b5b25c8ab7e44f7d9f86f7148ade83e619f66fdbbda89c7610",
+    "recovery_sha256": null
+  },
+  "runner_evidence_sha256": "5ae228e950792cfe9926c2615b83f25a6fa47d45317ac7a3855d3ef1feef57ad"
+}
