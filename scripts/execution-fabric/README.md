@@ -189,9 +189,32 @@ npm run fabric:bounded-dispatch -- `
 
 The production wrapper does not accept a caller clock, ledger location, interpreter, model service
 address, authority registry, template registry, or alternate node. The scheduler remains off;
-`dispatch_performed=true` can be emitted only for the one exact claimed invocation. AEGIS templates
-remain absent and fail closed until a resident AEGIS adapter and separately reviewed authority are
-available.
+`dispatch_performed=true` can be emitted only for the one exact claimed invocation. Executable AEGIS
+templates remain absent and fail closed until a resident AEGIS adapter and separately reviewed
+authority are available.
+
+## Non-active AEGIS bounded compute contract
+
+`bounded-dispatch/resident-aegis-contract.mjs` validates the reviewed contract boundary for three
+future AEGIS workload classes: `CI_BUILD_TEST`, `HASH_VERIFY`, and `COMPRESSION`. It is deliberately
+not an execution adapter. A successful evaluation returns `NON_ACTIVE_REQUEST_SHAPE_VALID` with
+source and placement explicitly unproven, `execution_authorized=false`, and
+`dispatch_allowed=false`.
+
+The contract pins the canonical AEGIS machine identity, exact Agent Forge permission bytes,
+scratch-only NVMe workspace, one-job concurrency, CPU/memory/runtime/output ceilings, no network,
+and the evidence required from any future lease and completion. Backup, NAS, archive, authoritative
+state, privilege escalation, arbitrary shell, alternate nodes, and remote access remain prohibited.
+Future requests must also reference exact repository-retained input-manifest bytes and one exact
+operation profile from the digest-pinned non-active profile registry. Opaque plan digests are not
+accepted as proof of safe work.
+No AEGIS entry exists in the authority registry. A later resident implementation, separately
+reviewed scope, and future activation would each require their own evidence and review before one
+real job could run.
+
+The process-free evaluator validates a declared repository commit and tree digest but does not claim
+to prove Git ancestry or tree identity. A trusted `origin/main` source proof is an explicit future
+activation prerequisite.
 
 ### Static proof boundary (continued)
 

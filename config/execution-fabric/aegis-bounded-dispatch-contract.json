@@ -1,0 +1,99 @@
+{
+  "schema_version": "0.1-aegis-bounded-dispatch-contract",
+  "contract_id": "resident-aegis-bounded-compute-v1",
+  "selected_node_id": "aegis",
+  "machine_identity_sha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b",
+  "forge_permission_path": "config/execution-fabric/agent-forge-aegis-bounded-dispatch-permission.json",
+  "forge_permission_sha256": "9a9cb0584b23a11d00064f70e1ca8d8f126b00d5bae607396d68b925741a49c1",
+  "operation_profiles_path": "config/execution-fabric/aegis-bounded-operation-profiles.json",
+  "operation_profiles_sha256": "83a96697443f316d236250e988be7d3a84b74146cd84894d7a0906033c509568",
+  "required_execution_identity": {
+    "account": "williamos-fabric",
+    "privilege": "non-root-no-sudo",
+    "status": "REQUIRED_NOT_PROVISIONED"
+  },
+  "workspace": {
+    "root": "/var/lib/williamos/fabric/workspaces",
+    "storage_semantics": "job-scoped-nvme-scratch-only",
+    "source_mode": "detached-reviewed-commit",
+    "symlink_policy": "reject",
+    "hardlink_policy": "reject",
+    "cross_device_policy": "reject",
+    "minimum_free_bytes": 107374182400,
+    "maximum_written_bytes": 5368709120
+  },
+  "resource_ceilings": {
+    "maximum_concurrency": 1,
+    "maximum_cpu_threads": 12,
+    "maximum_memory_bytes": 8589934592,
+    "maximum_runtime_ms": 1800000,
+    "maximum_output_bytes": 536870912,
+    "maximum_processes": 64,
+    "maximum_file_descriptors": 256,
+    "maximum_stdout_bytes": 16777216,
+    "maximum_stderr_bytes": 16777216
+  },
+  "templates": [
+    {
+      "template_id": "aegis.ci-build-test.v1",
+      "workload_class": "CI_BUILD_TEST",
+      "input_contract": "reviewed-repository-validation-plan",
+      "output_contract": "validation-summary-and-artifact-manifest",
+      "implementation_contract": "fixed-digest-pinned-container-profile",
+      "network_scope": "none",
+      "storage_semantics": "job-scoped-nvme-scratch-only"
+    },
+    {
+      "template_id": "aegis.hash-verify.v1",
+      "workload_class": "HASH_VERIFY",
+      "input_contract": "sha256-file-manifest",
+      "output_contract": "sha256-verification-receipt",
+      "implementation_contract": "in-process-digest-pinned-module",
+      "network_scope": "none",
+      "storage_semantics": "read-input-write-job-receipt"
+    },
+    {
+      "template_id": "aegis.compression.v1",
+      "workload_class": "COMPRESSION",
+      "input_contract": "reviewed-file-manifest",
+      "output_contract": "tar-zstd-artifact-and-manifest",
+      "implementation_contract": "in-process-digest-pinned-module",
+      "network_scope": "none",
+      "storage_semantics": "job-scoped-nvme-scratch-only"
+    }
+  ],
+  "required_evidence": [
+    "exact-request-bytes",
+    "exact-operation-profile-bytes",
+    "exact-input-manifest-bytes",
+    "trusted-origin-main-source-proof",
+    "reviewed-scope-bytes",
+    "fresh-placement-receipt",
+    "aegis-machine-identity-proof",
+    "workspace-preflight",
+    "lease-and-fencing-history",
+    "resource-observations",
+    "result-and-output-digests",
+    "owned-scratch-cleanup-receipt"
+  ],
+  "prohibited_paths": [
+    "/backup-primary",
+    "/backup-secondary",
+    "/mnt",
+    "/media"
+  ],
+  "future_activation_prerequisites": [
+    "dedicated-non-root-no-sudo-identity-proven",
+    "fresh-aegis-compute-capability-proven",
+    "trusted-origin-main-source-proof",
+    "exact-adapter-and-operation-profile-digests-reviewed",
+    "durable-single-shot-ledger-proven",
+    "separate-non-active-scope-reviewed",
+    "future-dated-single-use-activation-reviewed"
+  ],
+  "execution_authorized": false,
+  "scheduler_activation_allowed": false,
+  "autonomous_dispatch_allowed": false,
+  "storage_nas_backup_authority_allowed": false,
+  "status": "NON_ACTIVE_CONTRACT"
+}
