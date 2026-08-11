@@ -30,7 +30,14 @@ json_status() {
 }
 
 die_input() { json_status "$1" 64 "$2"; exit 64; }
-die_block() { json_status "$1" 2 "$2"; exit 2; }
+die_block() {
+  case "$1" in
+    CLEANUP_DURABILITY_FAILED|CLEANUP_NESTED_MOUNT|CLEANUP_PROCESS_SCAN_FAILED|CLEANUP_WORKSPACE_IN_USE)
+      if [[ "${RECOVERABLE_CLEANUP_ARMED:-false}" == true ]] && emit_recoverable_cleanup "$1"; then exit 2; fi
+      ;;
+  esac
+  json_status "$1" 2 "$2"; exit 2
+}
 
 if [[ $# -ne 5 ]]; then die_input "INVALID_INPUT" "expected operation, packet, patch, attempt, and previous evidence digest"; fi
 OPERATION="$1"; PACKET_B64="$2"; PATCH_B64="$3"; ATTEMPT="$4"; PREVIOUS_EVIDENCE="$5"
@@ -107,6 +114,8 @@ PROOF_PATH="$PHYSICAL_WORKSPACE/$MERGE_MARKER"
 SCRATCH_DIR="$PHYSICAL_WORKSPACE/.williamos-scratch"
 QUARANTINE_PATH="$PHYSICAL_PARENT/.williamos-quarantine-$WORK_ORDER_ID-$RUN_ID"
 QUARANTINE_PREFIX=".williamos-quarantine-$WORK_ORDER_ID-"
+RECOVERABLE_CLEANUP_ARMED=false
+RECOVERY_QUARANTINE_IDENTITY=""
 
 [[ "$PACKET_WORKSPACE" == "$LOGICAL_WORKSPACE" ]] || die_input "WORKSPACE_MISMATCH" "packet workspace differs"
 if [[ -L "$PHYSICAL_WORKSPACE" || -L "$PHYSICAL_PARENT" || -L "$QUARANTINE_PATH" ]]; then die_input "SYMLINK_REJECTED" "workspace lifecycle path is a symlink"; fi
@@ -166,6 +175,19 @@ bind_quarantine_authority() {
   elif [[ "$OPERATION" == "CLEAN_EXACT_WORKSPACE" && "$QUARANTINE_COUNT" -ne 0 ]]; then
     die_block "QUARANTINE_NAMESPACE_AMBIGUOUS" "cleanup cannot combine an original workspace with a quarantine"
   fi
+}
+
+emit_recoverable_cleanup() {
+  local cause_code="$1" canonical identity
+  [[ "$OPERATION" == "CLEAN_EXACT_WORKSPACE" && -d "$QUARANTINE_PATH" && ! -L "$QUARANTINE_PATH" && ! -e "$PHYSICAL_WORKSPACE" && ! -L "$PHYSICAL_WORKSPACE" ]] || return 1
+  canonical="$(timeout 5 realpath -- "$QUARANTINE_PATH")" || return 1
+  [[ "$canonical" == "$QUARANTINE_PATH" ]] || return 1
+  identity="$(timeout 5 stat -c '%d:%i' -- "$QUARANTINE_PATH")" || return 1
+  [[ -n "$RECOVERY_QUARANTINE_IDENTITY" && "$identity" == "$RECOVERY_QUARANTINE_IDENTITY" ]] || return 1
+  timeout 10 node -e '
+    const a=process.argv.slice(1),previous=a[12]==="null"?null:a[12]
+    process.stdout.write(JSON.stringify({schemaVersion:1,status:"BLOCKED",reasonCode:"CLEANUP_QUARANTINED_RECOVERABLE",detail:"quarantined cleanup requires same-run retry",runId:a[0],operation:"CLEAN_EXACT_WORKSPACE",attempt:Number(a[1]),nodeId:"aegis",workspace:a[2],quarantinePath:a[3],originalAbsent:true,branch:a[4],baseSha:a[5],headSha:a[6],policySha256:a[7],packetSha256:a[8],patchSha256:a[9],patchGeneration:Number(a[10]),previousEvidenceSha256:previous,causeCode:a[11]})+"\n")
+  ' "$RUN_ID" "$ATTEMPT" "$PACKET_WORKSPACE" "${LOGICAL_WORKSPACE%/*}/.williamos-quarantine-$WORK_ORDER_ID-$RUN_ID" "$BRANCH" "$BASE_SHA" "$HEAD_SHA" "$PACKET_POLICY_SHA" "$PACKET_SHA" "$PATCH_SHA" "$PATCH_GENERATION" "$cause_code" "$PREVIOUS_EVIDENCE" || return 1
 }
 
 require_containment_tools() {
@@ -412,6 +434,8 @@ run_exact_cleanup() {
   [[ -f "$QUARANTINE_PATH/$MERGE_MARKER" && ! -L "$QUARANTINE_PATH/$MERGE_MARKER" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "quarantined post-merge proof is absent"
   quarantine_proof="$(timeout 5 tr -d '\r\n' < "$QUARANTINE_PATH/$MERGE_MARKER")"
   [[ "$quarantine_proof" == "$RUN_ID:$HEAD_SHA" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "quarantined post-merge proof differs"
+  RECOVERY_QUARANTINE_IDENTITY="$quarantine_identity"
+  RECOVERABLE_CLEANUP_ARMED=true
   timeout 10 sync -- "$PHYSICAL_PARENT" || die_block "CLEANUP_DURABILITY_FAILED" "canonical parent directory quarantine fsync failed"
   quarantine_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$QUARANTINE_PATH" 2>/dev/null || true)"
   [[ -z "$quarantine_mounts" ]] || die_block "CLEANUP_NESTED_MOUNT" "quarantined workspace contains a mount boundary"
@@ -455,6 +479,7 @@ run_recovery_cleanup() {
   local quarantine_identity quarantine_mounts
   validate_recovery_quarantine
   quarantine_identity="$(timeout 5 stat -c '%d:%i' -- "$QUARANTINE_PATH")" || die_block "CLEANUP_RECOVERY_INVALID" "quarantine inode identity is unavailable"
+  RECOVERY_QUARANTINE_IDENTITY="$quarantine_identity"
   SCRATCH_DIR="$QUARANTINE_PATH/.williamos-scratch"
   REPO_DIR="$QUARANTINE_PATH/repository"
   MARKER_PATH="$QUARANTINE_PATH/$OWNER_MARKER"
@@ -463,6 +488,7 @@ run_recovery_cleanup() {
   prepare_operation_scratch
   measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"
   OUTPUT_SHA="$(timeout 10 sha256sum "$OUTPUT_FILE" | { read -r digest _rest; printf '%s' "$digest"; })" || die_block "EVIDENCE_FAILED" "recovery output digest failed"
+  RECOVERABLE_CLEANUP_ARMED=true
   quarantine_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$QUARANTINE_PATH" 2>/dev/null || true)"
   [[ -z "$quarantine_mounts" ]] || die_block "CLEANUP_NESTED_MOUNT" "recovery quarantine contains a mount boundary"
   assert_path_not_in_use "$QUARANTINE_PATH"

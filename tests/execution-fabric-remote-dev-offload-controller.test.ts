@@ -84,6 +84,28 @@ function summaryFor(evidence: any) {
   return `REMOTE_DEV_SUMMARY\t${Buffer.from(JSON.stringify(value)).toString("base64")}`
 }
 
+function recoverableCleanupFailure(value: ReturnType<typeof fixture>, previous: string, overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 1, status: "BLOCKED", reasonCode: "CLEANUP_QUARANTINED_RECOVERABLE", detail: "quarantined cleanup requires same-run retry",
+    runId: value.packet.runId, operation: "CLEAN_EXACT_WORKSPACE", attempt: 1, nodeId: "aegis", workspace: value.packet.workspace,
+    quarantinePath: `${path.posix.dirname(value.packet.workspace)}/.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${value.packet.runId}`,
+    originalAbsent: true, branch: value.packet.branch, baseSha: value.packet.baseSha, headSha: value.packet.baseSha,
+    policySha256: value.packet.bindings.policySha256, packetSha256: value.packet.bindings.packetSha256,
+    patchSha256: value.packet.patch.sha256, patchGeneration: 1, previousEvidenceSha256: previous,
+    causeCode: "CLEANUP_WORKSPACE_IN_USE", ...overrides,
+  }
+}
+
+function seedPostMergeState(programData: string, value: ReturnType<typeof fixture>, previous: string) {
+  const markerRoot = path.join(programData, "WilliamOS", "remote-dev-offload-v1"); fs.mkdirSync(markerRoot, { recursive: true })
+  fs.writeFileSync(path.join(markerRoot, `${value.packet.runId}.json`), JSON.stringify({
+    runId: value.packet.runId, policySha256: value.packet.bindings.policySha256, packetSha256: value.packet.bindings.packetSha256,
+    lastOperationIndex: 9, lastAttempt: 1, lastEvidenceSha256: previous, lastCompletedAt: value.evidence.completedAt,
+    inFlightOperation: null, terminalStatus: "ACTIVE", terminalReason: null, recoverableHeadSha: null, cleanupFailures: [],
+  }))
+  return path.join(markerRoot, `${value.packet.runId}.json`)
+}
+
 function runRelay(encoded: string, input: string, env: NodeJS.ProcessEnv) {
   return new Promise<{ status: number | null, stdout: string, stderr: string }>((resolve) => {
     const child = spawn(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { env })
@@ -93,6 +115,13 @@ function runRelay(encoded: string, input: string, env: NodeJS.ProcessEnv) {
     child.on("close", (status) => resolve({ status, stdout, stderr }))
     child.stdin.end(input)
   })
+}
+
+function isolatedProgramDataEnv(programData: string, extra: NodeJS.ProcessEnv = {}) {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
+  for (const key of Object.keys(env)) if (key.toLowerCase() === "programdata") delete env[key]
+  env.ProgramData = programData
+  return env
 }
 
 describe("Hermes-mediated remote development controller", () => {
@@ -168,7 +197,7 @@ describe("Hermes-mediated remote development controller", () => {
     const programData = path.join(value.directory, "program-data"); fs.mkdirSync(programData)
     const innerLog = path.join(value.directory, "inner-ssh.log")
     const result = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedRelay(relay)], {
-      encoding: "utf8", input: JSON.stringify(relayInput), env: { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) },
+      encoding: "utf8", input: JSON.stringify(relayInput), env: isolatedProgramDataEnv(programData, { PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) }),
     })
     expect(result.status).toBe(64)
     expect(JSON.parse(result.stdout)).toMatchObject({ status: "BLOCKED", reasonCode: "PATCH_PATHS_MISMATCH" })
@@ -184,7 +213,7 @@ describe("Hermes-mediated remote development controller", () => {
     const relayInput = fs.readFileSync(`${fakeLog}.stdin`, "utf8")
     const programData = path.join(value.directory, "program-data"); fs.mkdirSync(programData)
     const innerLog = path.join(value.directory, "inner-ssh.log")
-    const env = { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(value.evidence) }
+    const env = isolatedProgramDataEnv(programData, { PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(value.evidence) })
     const first = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedRelay], { encoding: "utf8", input: relayInput, env })
     expect(first.status, `${first.stdout}\n${first.stderr}`).toBe(0)
     const second = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedRelay], { encoding: "utf8", input: relayInput, env })
@@ -201,7 +230,7 @@ describe("Hermes-mediated remote development controller", () => {
     const firstInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8"))
     const programData = path.join(value.directory, "canonical-chain-program-data"); fs.mkdirSync(programData)
     const innerLog = path.join(value.directory, "canonical-chain-inner.log")
-    const baseEnv = { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog }
+    const baseEnv = isolatedProgramDataEnv(programData, { PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: innerLog })
     const first = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(firstInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(value.evidence) } })
     expect(first.status, `${first.stdout}\n${first.stderr}`).toBe(0)
     const canonicalPrevious = jcsDigest(value.evidence)
@@ -220,7 +249,7 @@ describe("Hermes-mediated remote development controller", () => {
     const encoded = invocation.at(-1)!; const firstInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8"))
     const programData = path.join(value.directory, "raw-chain-program-data"); fs.mkdirSync(programData)
     const innerLog = path.join(value.directory, "raw-chain-inner.log")
-    const baseEnv = { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog }
+    const baseEnv = isolatedProgramDataEnv(programData, { PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: innerLog })
     expect(spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(firstInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(value.evidence) } }).status).toBe(0)
     const rawPrevious = crypto.createHash("sha256").update(JSON.stringify(value.evidence)).digest("hex")
     expect(rawPrevious).not.toBe(jcsDigest(value.evidence))
@@ -299,7 +328,7 @@ describe("Hermes-mediated remote development controller", () => {
     const relayInput = fs.readFileSync(`${fakeLog}.stdin`, "utf8")
     const programData = path.join(value.directory, "concurrent-program-data"); fs.mkdirSync(programData)
     const innerLog = path.join(value.directory, "concurrent-inner.log")
-    const env = { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_DELAY_MS: "2500", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(value.evidence) }
+    const env = isolatedProgramDataEnv(programData, { PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_DELAY_MS: "2500", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(value.evidence) })
     const first = runRelay(encoded, relayInput, env)
     const second = runRelay(encoded, relayInput, env)
     const results = await Promise.all([first, second])
@@ -316,7 +345,7 @@ describe("Hermes-mediated remote development controller", () => {
     const initialInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8"))
     const programData = path.join(value.directory, "terminal-program-data"); fs.mkdirSync(programData)
     const innerLog = path.join(value.directory, "terminal-inner.log")
-    const blockedEnv = { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_EXIT: "2", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify({ status: "BLOCKED", reasonCode: "BLOCKING_OPERATION_FAILED" }) }
+    const blockedEnv = isolatedProgramDataEnv(programData, { PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: innerLog, REMOTE_DEV_FAKE_SSH_EXIT: "2", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify({ status: "BLOCKED", reasonCode: "BLOCKING_OPERATION_FAILED" }) })
     const first = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(initialInput), env: blockedEnv })
     expect(first.status).toBe(2)
     initialInput.operation = "COMMIT_RESERVED_PATHS"
@@ -325,6 +354,72 @@ describe("Hermes-mediated remote development controller", () => {
     expect(second.stdout).toContain("RUN_REPLAY_OR_ORDER_INVALID")
     expect(fs.readFileSync(innerLog, "utf8").trim().split(/\r?\n/)).toHaveLength(1)
   }, 15_000)
+
+  it("allows exactly one bound same-run cleanup retry and retains the failed-attempt tombstone", () => {
+    const value = fixture(); run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
+    const invocation = fs.readFileSync(fakeLog, "utf8").trim().split("\t"); const encoded = invocation.at(-1)!
+    const relayInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8")); const previous = "e".repeat(64)
+    relayInput.operation = "CLEAN_EXACT_WORKSPACE"; relayInput.attempt = 1; relayInput.previous = previous
+    const programData = path.join(value.directory, "cleanup-retry-program-data"); const statePath = seedPostMergeState(programData, value, previous)
+    const innerLog = path.join(value.directory, "cleanup-retry-inner.log")
+    const baseEnv = isolatedProgramDataEnv(programData, { PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: innerLog })
+    const failure = recoverableCleanupFailure(value, previous)
+    const first = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(relayInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_EXIT: "2", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(failure) } })
+    expect(first.status, `${first.stdout}\n${first.stderr}`).toBe(2)
+    expect(JSON.parse(first.stdout)).toMatchObject({ reasonCode: "CLEANUP_QUARANTINED_RECOVERABLE", attempt: 1 })
+    expect(JSON.parse(fs.readFileSync(statePath, "utf8"))).toMatchObject({ terminalStatus: "RECOVERABLE_CLEAN_BLOCKED", terminalReason: "CLEANUP_QUARANTINED_RECOVERABLE", lastAttempt: 1, cleanupFailures: [{ attempt: 1, reasonCode: "CLEANUP_QUARANTINED_RECOVERABLE" }] })
+
+    relayInput.attempt = 2
+    const startedAt = new Date(Date.parse(value.evidence.completedAt) + 1_000).toISOString(); const completedAt = new Date(Date.parse(startedAt) + 1_000).toISOString()
+    const recovered = { ...value.evidence, operation: "CLEAN_EXACT_WORKSPACE", attempt: 2, startedAt, completedAt, status: "CLEANUP_ABSENCE_PROVEN", previousEvidenceSha256: previous }
+    const second = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(relayInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(recovered), REMOTE_DEV_FAKE_SSH_ERROR: summaryFor(recovered) } })
+    expect(second.status, `${second.stdout}\n${second.stderr}`).toBe(0)
+    expect(JSON.parse(second.stdout).evidence).toMatchObject({ status: "CLEANUP_ABSENCE_PROVEN", attempt: 2 })
+    expect(JSON.parse(fs.readFileSync(statePath, "utf8"))).toMatchObject({ terminalStatus: "COMPLETE", lastAttempt: 2, cleanupFailures: [{ attempt: 1 }] })
+    expect(fs.readFileSync(innerLog, "utf8").trim().split(/\r?\n/)).toHaveLength(2)
+  }, 20_000)
+
+  it("publishes a bounded recoverable-cleanup receipt without adding it to Task 1 evidence history", () => {
+    const value = fixture(); const args = [...value.args]; const previous = "e".repeat(64)
+    args[args.indexOf("-Operation") + 1] = "CLEAN_EXACT_WORKSPACE"; args[args.indexOf("-PreviousEvidenceSha256") + 1] = previous
+    const relayFailure = {
+      status: "BLOCKED", reasonCode: "CLEANUP_QUARANTINED_RECOVERABLE", detail: "quarantined cleanup requires same-run retry",
+      runId: value.packet.runId, operation: "CLEAN_EXACT_WORKSPACE", attempt: 1, previousEvidenceSha256: previous,
+      headSha: value.packet.baseSha, failureResultSha256: "f".repeat(64), causeCode: "CLEANUP_WORKSPACE_IN_USE",
+    }
+    const result = run(args, { REMOTE_DEV_FAKE_SSH_EXIT: "2", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(relayFailure) })
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2)
+    const runDirectory = path.join(value.evidenceRoot, value.packet.runId)
+    expect(JSON.parse(fs.readFileSync(path.join(runDirectory, "10-clean_exact_workspace-1-recoverable-failure.json"), "utf8"))).toMatchObject(relayFailure)
+    expect(fs.readdirSync(runDirectory).filter((name) => /^\d{2}-[a-z0-9_-]+-\d+\.json$/.test(name))).toHaveLength(0)
+  })
+
+  it("rejects a different run, wrong attempt, wrong terminal reason, or non-clean recovery before AEGIS dispatch", () => {
+    const cases = ["different-run", "wrong-attempt", "wrong-reason", "non-clean"] as const
+    for (const scenario of cases) {
+      const value = fixture(); run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
+      const invocation = fs.readFileSync(fakeLog, "utf8").trim().split("\t"); const encoded = invocation.at(-1)!
+      const relayInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8")); const previous = "e".repeat(64)
+      relayInput.operation = "CLEAN_EXACT_WORKSPACE"; relayInput.attempt = 1; relayInput.previous = previous
+      const programData = path.join(value.directory, `${scenario}-program-data`); const statePath = seedPostMergeState(programData, value, previous)
+      const innerLog = path.join(value.directory, `${scenario}-inner.log`); const baseEnv = isolatedProgramDataEnv(programData, { PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: innerLog })
+      const failure = recoverableCleanupFailure(value, previous)
+      const first = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(relayInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_EXIT: "2", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(failure) } })
+      expect(first.status).toBe(2)
+      if (scenario === "different-run") {
+        const other = fixture(); const otherPacketPath = other.args[other.args.indexOf("-PacketPath") + 1]
+        relayInput.packet = fs.readFileSync(otherPacketPath).toString("base64")
+      }
+      if (scenario === "wrong-attempt") relayInput.attempt = 3
+      else relayInput.attempt = 2
+      if (scenario === "wrong-reason") { const state = JSON.parse(fs.readFileSync(statePath, "utf8")); state.terminalReason = "BLOCKING_OPERATION_FAILED"; fs.writeFileSync(statePath, JSON.stringify(state)) }
+      if (scenario === "non-clean") relayInput.operation = "COMMIT_RESERVED_PATHS"
+      const before = fs.readFileSync(innerLog, "utf8").trim().split(/\r?\n/).length
+      const blocked = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(relayInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) } })
+      expect(blocked.status).not.toBe(0)
+      expect(fs.readFileSync(innerLog, "utf8").trim().split(/\r?\n/)).toHaveLength(before)
+    }
+  }, 45_000)
 
   it("pins the reviewed worker digest and independently verifies it on Hermes", () => {
     const source = fs.readFileSync(controller, "utf8")
@@ -342,7 +437,7 @@ describe("Hermes-mediated remote development controller", () => {
     const relayInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8")); relayInput.worker = Buffer.from("unreviewed worker").toString("base64")
     const programData = path.join(value.directory, "digest-program-data"); fs.mkdirSync(programData)
     const innerLog = path.join(value.directory, "digest-inner.log")
-    const result = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", invocation.at(-1)!], { encoding: "utf8", input: JSON.stringify(relayInput), env: { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, ProgramData: programData, REMOTE_DEV_FAKE_SSH_LOG: innerLog } })
+    const result = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", invocation.at(-1)!], { encoding: "utf8", input: JSON.stringify(relayInput), env: isolatedProgramDataEnv(programData, { PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: innerLog }) })
     expect(result.status).toBe(64)
     expect(result.stdout).toContain("WORKER_DIGEST_MISMATCH")
     expect(fs.existsSync(innerLog)).toBe(false)

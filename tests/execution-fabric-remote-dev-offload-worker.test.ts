@@ -203,10 +203,10 @@ exec "$@"
   return { hostRoot, physicalWorkspace, repository, baseSha, patch, packet, fakeBin }
 }
 
-function runWorker(operation: string, value: ReturnType<typeof fixture>, options: { packet?: any, patch?: Buffer, env?: Record<string, string> } = {}) {
+function runWorker(operation: string, value: ReturnType<typeof fixture>, options: { packet?: any, patch?: Buffer, env?: Record<string, string>, attempt?: number, previous?: string } = {}) {
   const packet = options.packet ?? value.packet
   const patch = options.patch ?? value.patch
-  const result = spawnSync(bash, [worker, operation, encode(JSON.stringify(packet)), encode(patch), "1", "null"], {
+  const result = spawnSync(bash, [worker, operation, encode(JSON.stringify(packet)), encode(patch), String(options.attempt ?? 1), options.previous ?? "null"], {
     encoding: "utf8",
     env: { ...process.env, PATH: `${toPosix(value.fakeBin)}:${toPosix("C:\\Program Files\\nodejs")}:${process.env.PATH}`, REMOTE_DEV_WORKER_ROOT: toPosix(value.hostRoot), REMOTE_DEV_PROCESS_TIMEOUT_SECONDS: "2", ...options.env },
     timeout: 20_000,
@@ -391,7 +391,7 @@ exit 0
       const value = fixture()
       fs.writeFileSync(path.join(value.physicalWorkspace, ".williamos-post-merge-proven"), `${value.packet.runId}:${value.baseSha}\n`)
       const quarantine = path.join(path.dirname(value.physicalWorkspace), `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${value.packet.runId}`)
-      expect(runWorker("CLEAN_EXACT_WORKSPACE", value, { env: { FAKE_PROC_IN_USE: mode } }).json).toMatchObject({ status: "CLEANUP_WORKSPACE_IN_USE" })
+      expect(runWorker("CLEAN_EXACT_WORKSPACE", value, { env: { FAKE_PROC_IN_USE: mode } }).json).toMatchObject({ status: "BLOCKED", reasonCode: "CLEANUP_QUARANTINED_RECOVERABLE", causeCode: "CLEANUP_WORKSPACE_IN_USE" })
       expect(fs.existsSync(value.physicalWorkspace)).toBe(false)
       expect(fs.existsSync(path.join(quarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
     }
@@ -407,7 +407,7 @@ exit 0
     const failed = fixture()
     fs.writeFileSync(path.join(failed.physicalWorkspace, ".williamos-post-merge-proven"), `${failed.packet.runId}:${failed.baseSha}\n`)
     const failedQuarantine = path.join(path.dirname(failed.physicalWorkspace), `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${failed.packet.runId}`)
-    expect(runWorker("CLEAN_EXACT_WORKSPACE", failed, { env: { FAKE_SYNC_FAIL: "1" } }).json).toMatchObject({ status: "CLEANUP_DURABILITY_FAILED" })
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", failed, { env: { FAKE_SYNC_FAIL: "1" } }).json).toMatchObject({ status: "BLOCKED", reasonCode: "CLEANUP_QUARANTINED_RECOVERABLE", causeCode: "CLEANUP_DURABILITY_FAILED" })
     expect(fs.existsSync(failed.physicalWorkspace)).toBe(false)
     expect(fs.existsSync(path.join(failedQuarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
   }, 30_000)
@@ -416,7 +416,7 @@ exit 0
     const entrant = fixture()
     fs.writeFileSync(path.join(entrant.physicalWorkspace, ".williamos-post-merge-proven"), `${entrant.packet.runId}:${entrant.baseSha}\n`)
     const entrantQuarantine = path.join(path.dirname(entrant.physicalWorkspace), `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${entrant.packet.runId}`)
-    expect(runWorker("CLEAN_EXACT_WORKSPACE", entrant, { env: { FAKE_ENTER_BEFORE_QUARANTINE: "1" } }).json).toMatchObject({ status: "CLEANUP_WORKSPACE_IN_USE" })
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", entrant, { env: { FAKE_ENTER_BEFORE_QUARANTINE: "1" } }).json).toMatchObject({ status: "BLOCKED", reasonCode: "CLEANUP_QUARANTINED_RECOVERABLE", causeCode: "CLEANUP_WORKSPACE_IN_USE" })
     expect(fs.existsSync(entrant.physicalWorkspace)).toBe(false)
     expect(fs.existsSync(path.join(entrantQuarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
 
@@ -485,6 +485,42 @@ exit 0
     expect(runWorker("CLEAN_EXACT_WORKSPACE", denied, { packet: differentRunPacket }).json).toMatchObject({ status: "CLEANUP_RECOVERY_AUTHORITY_MISMATCH" })
     expect(fs.existsSync(path.join(deniedQuarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
   }, 30_000)
+
+  it("retains attempt-specific cleanup evidence and permits only a fully bound same-run retry", () => {
+    const value = fixture()
+    fs.writeFileSync(path.join(value.physicalWorkspace, ".williamos-post-merge-proven"), `${value.packet.runId}:${value.baseSha}\n`)
+    const previous = "e".repeat(64)
+    const first = runWorker("CLEAN_EXACT_WORKSPACE", value, { previous, env: { FAKE_PROC_IN_USE: "cwd" } })
+    expect(first.json).toMatchObject({
+      status: "BLOCKED", reasonCode: "CLEANUP_QUARANTINED_RECOVERABLE", runId: value.packet.runId,
+      operation: "CLEAN_EXACT_WORKSPACE", attempt: 1, previousEvidenceSha256: previous,
+      originalAbsent: true, causeCode: "CLEANUP_WORKSPACE_IN_USE",
+    })
+    const quarantine = path.join(path.dirname(value.physicalWorkspace), `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${value.packet.runId}`)
+    expect(fs.readFileSync(path.join(quarantine, ".williamos-scratch/results/clean_exact_workspace-1/output.log"), "utf8")).toBe("")
+
+    const second = runWorker("CLEAN_EXACT_WORKSPACE", value, { attempt: 2, previous })
+    expect(second.json).toMatchObject({ status: "CLEANUP_ABSENCE_PROVEN", attempt: 2, previousEvidenceSha256: previous })
+    expect(fs.existsSync(quarantine)).toBe(false)
+    expect(fs.existsSync(value.physicalWorkspace)).toBe(false)
+  }, 30_000)
+
+  it("blocks same-run recovery when marker, proof, or repository HEAD no longer matches", () => {
+    const marker = fixture(); const markerQuarantine = path.join(path.dirname(marker.physicalWorkspace), `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${marker.packet.runId}`)
+    fs.writeFileSync(path.join(marker.physicalWorkspace, ".williamos-post-merge-proven"), `${marker.packet.runId}:${marker.baseSha}\n`); fs.renameSync(marker.physicalWorkspace, markerQuarantine)
+    fs.writeFileSync(path.join(markerQuarantine, ".williamos-remote-dev-owner.json"), JSON.stringify({ run_id: marker.packet.runId }))
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", marker, { attempt: 2, previous: "e".repeat(64) }).json).toMatchObject({ status: "OWNERSHIP_MARKER_MISMATCH" })
+
+    const proof = fixture(); const proofQuarantine = path.join(path.dirname(proof.physicalWorkspace), `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${proof.packet.runId}`)
+    fs.writeFileSync(path.join(proof.physicalWorkspace, ".williamos-post-merge-proven"), `${proof.packet.runId}:${proof.baseSha}\n`); fs.renameSync(proof.physicalWorkspace, proofQuarantine)
+    fs.writeFileSync(path.join(proofQuarantine, ".williamos-post-merge-proven"), `${proof.packet.runId}:${"f".repeat(40)}\n`)
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", proof, { attempt: 2, previous: "e".repeat(64) }).json).toMatchObject({ status: "CLEANUP_NOT_AUTHORIZED" })
+
+    const head = fixture(); const headQuarantine = path.join(path.dirname(head.physicalWorkspace), `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${head.packet.runId}`)
+    fs.writeFileSync(path.join(head.physicalWorkspace, ".williamos-post-merge-proven"), `${head.packet.runId}:${head.baseSha}\n`); fs.renameSync(head.physicalWorkspace, headQuarantine)
+    execFileSync("git", ["commit", "--allow-empty", "-m", "synthetic head drift"], { cwd: path.join(headQuarantine, "repository"), stdio: "ignore" })
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", head, { attempt: 2, previous: "e".repeat(64) }).json).toMatchObject({ status: "CLEANUP_NOT_AUTHORIZED" })
+  }, 45_000)
 
   it("emits strict sub-second timestamps and rejects a non-increasing clock", () => {
     const source = fs.readFileSync(worker, "utf8")
