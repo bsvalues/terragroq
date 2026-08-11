@@ -183,6 +183,37 @@ describe("Hermes interactive-user supervisor", () => {
   })
 
   it.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1")(
+    "fails with the typed executable wall when Node is absent",
+    () => {
+      const { root, script } = isolatedSupervisor()
+      const emptyPath = path.join(root, "empty-path")
+      fs.mkdirSync(emptyPath)
+      const pwshProbe = spawnSync(
+        "pwsh",
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Environment]::ProcessPath"],
+        { encoding: "utf8" },
+      )
+      expect(pwshProbe.status, pwshProbe.stderr).toBe(0)
+      const pwshPath = pwshProbe.stdout.trim()
+      const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
+      const result = spawnSync(
+        pwshPath,
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+          `& ${quote(script)} -Workspace ${quote(root)} -RuntimeRoot ${quote(root)} -RunOnce`],
+        {
+          encoding: "utf8",
+          env: { ...process.env, PATH: emptyPath },
+          timeout: 15_000,
+        },
+      )
+
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain("HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL")
+      expect(result.stderr).not.toContain("CommandNotFoundException")
+    },
+  )
+
+  it.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1")(
     "fails closed on a malformed persisted campaign window",
     () => {
       const { root, script } = isolatedSupervisor()
