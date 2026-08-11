@@ -247,17 +247,15 @@ export async function executeAegisStandingHash(options) {
     admission_issued_at: candidateAdmission.issued_at,
     admission_expires_at: candidateAdmission.expires_at,
   }
-  const claim = object(await options.claimAdmission(claimBinding), "claim result")
-  if (claim.claimed !== true) fail("ADMISSION_REPLAY", "exact admission and request binding was already claimed")
-  sameBinding(claim, claimBinding, Object.keys(claimBinding), "CLAIM_BINDING_MISMATCH", "claim")
-  timestamp(claim.claimed_at, "claim.claimed_at")
-
   const requestedLease = {
     ...claimBinding,
     lease_id: request.lease.lease_id,
     fencing_token: request.lease.fencing_token,
   }
   let acquiredLease = null
+  let claim = null
+  let claimAcquired = false
+  let claimedAt = null
   let failure = null
   let completion = null
   let terminalPersisted = false
@@ -265,6 +263,12 @@ export async function executeAegisStandingHash(options) {
   let verification = null
 
   try {
+    claim = object(await options.claimAdmission(claimBinding), "claim result")
+    if (claim.claimed !== true) fail("ADMISSION_REPLAY", "exact admission and request binding was already claimed")
+    claimAcquired = true
+    sameBinding(claim, claimBinding, Object.keys(claimBinding), "CLAIM_BINDING_MISMATCH", "claim")
+    claimedAt = timestamp(claim.claimed_at, "claim.claimed_at")
+
     const lease = object(await options.acquireLease(requestedLease), "lease result")
     if (lease.acquired !== true) fail("CONCURRENCY_LIMIT_REACHED", "the single standing execution lease is occupied")
     acquiredLease = {
@@ -372,7 +376,18 @@ export async function executeAegisStandingHash(options) {
     terminalPersisted = true
   } catch (error) {
     failure = error
-    const failureBody = {
+    if (claimAcquired) try {
+      const failedAt = finiteClock(options.now)
+      const chronologyFloor = Math.max(
+        admittedAt,
+        claimedAt === null ? admittedAt : Date.parse(claimedAt),
+        acquiredLease ? Date.parse(acquiredLease.acquired_at) : admittedAt,
+        startedAt === null ? admittedAt : startedAt,
+      )
+      if (!Number.isFinite(chronologyFloor) || failedAt < chronologyFloor) {
+        fail("FAILURE_CHRONOLOGY_INVALID", "failure evidence chronology is not monotonic")
+      }
+      const failureBody = {
       schema_version: "1.0-aegis-standing-hash-completion",
       status: "FAILED_CLOSED",
       result: typeof error?.code === "string" ? error.code : "HASH_EXECUTION_FAILED",
@@ -384,7 +399,7 @@ export async function executeAegisStandingHash(options) {
       source: structuredClone(request.source),
       workload: structuredClone(request.workload),
       admission: { admission_id: candidateAdmission.admission_id, admission_sha256: admissionSha256 },
-      claim: { claim_id: request.claim.claim_id, claimed_at: claim.claimed_at },
+      claim: { claim_id: request.claim.claim_id, claimed_at: claimedAt },
       lease: acquiredLease ? {
         lease_id: acquiredLease.lease_id,
         fencing_token: acquiredLease.fencing_token,
@@ -401,7 +416,7 @@ export async function executeAegisStandingHash(options) {
       } : null,
       chronology: {
         started_at: startedAt === null ? null : new Date(startedAt).toISOString(),
-        failed_at: acquiredLease?.acquired_at ?? claim.claimed_at,
+        failed_at: new Date(failedAt).toISOString(),
       },
       safety: {
         shell_executed: false,
@@ -413,11 +428,10 @@ export async function executeAegisStandingHash(options) {
       },
       immutable: true,
     }
-    const failureEvidence = deepFreeze({
-      ...failureBody,
-      evidence_sha256: sha256Object(failureBody),
-    })
-    try {
+      const failureEvidence = deepFreeze({
+        ...failureBody,
+        evidence_sha256: sha256Object(failureBody),
+      })
       const persisted = object(await (acquiredLease
         ? options.persistResult(failureEvidence)
         : options.persistClaimFailure(failureEvidence)), "failure persistence result")

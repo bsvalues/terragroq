@@ -285,6 +285,27 @@ describe("AEGIS standing HASH_VERIFY runtime", () => {
     expect(runtime.claimAdmission).not.toHaveBeenCalled()
   })
 
+  it("terminalizes every newly durable claim even when callback metadata is malformed", async () => {
+    const value = request()
+    const runtime = harness({
+      claimAdmission: vi.fn(async (binding: Json) => ({
+        claimed: true,
+        ...binding,
+        job_id: "wrong-job",
+        claimed_at: "2026-08-10T22:00:00.010Z",
+      })),
+    })
+
+    await expect(execute(value, admission(value), runtime)).rejects.toMatchObject({ code: "CLAIM_BINDING_MISMATCH" })
+    expect(runtime.persistClaimFailure).toHaveBeenCalledWith(expect.objectContaining({
+      status: "FAILED_CLOSED",
+      result: "CLAIM_BINDING_MISMATCH",
+      lease: null,
+      chronology: expect.objectContaining({ failed_at: "2026-08-10T22:00:00.020Z" }),
+    }))
+    expect(runtime.acquireLease).not.toHaveBeenCalled()
+  })
+
   it("rejects occupied concurrency and releases a valid but mismatched fence", async () => {
     const occupied = harness({
       acquireLease: vi.fn(async (binding: Json) => ({ acquired: false, ...binding, acquired_at: "2026-08-10T22:00:00.020Z" })),
@@ -374,6 +395,10 @@ describe("AEGIS standing HASH_VERIFY runtime", () => {
     expect(timedOutRuntime.persistResult).toHaveBeenCalledWith(expect.objectContaining({
       status: "FAILED_CLOSED",
       result: "RUNTIME_TIMEOUT",
+      chronology: expect.objectContaining({
+        started_at: new Date(baseTime + 20).toISOString(),
+        failed_at: new Date(baseTime + timedOut.limits.runtime_ms + 21).toISOString(),
+      }),
     }))
     expect(timedOutRuntime.releaseLease).toHaveBeenCalledTimes(1)
   })

@@ -269,11 +269,20 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
       .toBe("export const trusted = true\n")
     expect(descriptorReads.some((candidate) => typeof candidate === "number")).toBe(true)
 
-    const driftedFs = Object.create(fs) as typeof fs
-    driftedFs.lstatSync = ((candidate: fs.PathLike) => {
-      const stats = fs.lstatSync(candidate)
-      return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, { ino: stats.ino + 1 })
-    }) as typeof fs.lstatSync
+    const driftedFs = new Proxy(fs, {
+      get(target, property, receiver) {
+        if (property === "lstatSync") return (candidate: fs.PathLike) => {
+          const stats = fs.lstatSync(candidate)
+          return new Proxy(stats, {
+            get(statsTarget, statsProperty, statsReceiver) {
+              if (statsProperty === "ino") return statsTarget.ino + 1
+              return Reflect.get(statsTarget, statsProperty, statsReceiver)
+            },
+          })
+        }
+        return Reflect.get(target, property, receiver)
+      },
+    }) as typeof fs
     expect(() => readTrustedClosureFile(driftedFs, root, relative)).toThrow("TRUSTED_MAIN_MISMATCH")
   })
 

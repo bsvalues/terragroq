@@ -57,7 +57,7 @@
   "standing_integration": {
     "integration_id": "aegis-hash-verify-standing-integration-v1",
     "operation_core_sha256": "c5965a206b5f26c0db21176a609775d1ca176409b644bbc241fde74565bd8d8f",
-    "runtime_sha256": "77266f3cf7302b7c7d3acf9ebb2b28df0c7f84ef69edaa0070172a7c18547e45",
+    "runtime_sha256": "eabe70c00d98229efe020e209a3233033bb8cb4a303b83d79c1d8aab4af63b03",
     "resident_runner_sha256": "f749041dd36a38d295d82c952c68039b1b6ac0aea2b2f1dd6e9ba7a5c58001c2",
     "standing_contract_sha256": "0ad6aa6ef3a5e10a19de1417bf82edcf9a7f4b9c12e3c736fa6150b99d4e7163",
     "trusted_release_manifest_required": true,
