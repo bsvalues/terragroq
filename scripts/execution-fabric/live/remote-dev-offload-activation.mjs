@@ -277,8 +277,40 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
     const lease = await ledger.acquireExclusiveLease({ claim_id: claim.claim_id })
     if (lease.acquired !== true) fail("NODE_EXCLUSIVE_LEASE_UNPROVEN", "node-exclusive AEGIS lease was not acquired")
     const session = Object.freeze({ runId: authority.run.runId })
-    LIVE_SESSIONS.set(session, { authority, candidate, ledger, claimId: claim.claim_id, leaseId: lease.lease_id, settling: false })
+    LIVE_SESSIONS.set(session, {
+      ledger,
+      runId: authority.run.runId,
+      authorityReference: authority.authorityReference,
+      maximumAttempts: authority.resources.maxAttempts,
+      requestSha256: jcsDigest(candidate),
+      scopeSha256,
+      claimId: claim.claim_id,
+      leaseId: lease.lease_id,
+      leaseReleased: false,
+      settling: false,
+    })
     return { status: "AUTHORIZED_SINGLE_USE", executionAuthorized: true, runId: authority.run.runId, claimId: claim.claim_id, leaseId: lease.lease_id, session, schedulerActivated: false, standingAegisAuthority: false, atlasAllowed: false }
+  } catch (error) { return blocked(error) }
+}
+
+export async function settleRemoteDevActivationState(state) {
+  try {
+    if (!state || typeof state !== "object" || state.settling === true) fail("ACTIVATION_SESSION_INVALID", "activation session is already settling or invalid")
+    state.settling = true
+    try {
+      if (state.leaseReleased !== true) {
+        const released = await state.ledger.releaseExclusiveLease({ lease_id: state.leaseId, claim_id: state.claimId })
+        if (released !== true) fail("ACTIVATION_EVIDENCE_MISMATCH", "canonical lease release failed")
+        state.leaseReleased = true
+      }
+      const replay = await state.ledger.claimSingleUse({ request_sha256: state.requestSha256, scope_sha256: state.scopeSha256, authority_reference: state.authorityReference, maximum_attempts: state.maximumAttempts })
+      if (replay.claimed !== false || replay.claim_id !== state.claimId) fail("ACTIVATION_EVIDENCE_MISMATCH", "canonical replay rejection failed")
+      const evidence = state.ledger.runtimeEvidence()
+      if (!SHA256.test(evidence.release_sha256 ?? "")) fail("ACTIVATION_EVIDENCE_MISMATCH", "canonical durable release evidence is unavailable")
+      return { status: "SETTLEMENT_EVIDENCE_VERIFIED", executionAuthorized: false, releaseSha256: evidence.release_sha256 }
+    } finally {
+      state.settling = false
+    }
   } catch (error) { return blocked(error) }
 }
 
@@ -286,15 +318,9 @@ export async function settleRemoteDevActivation(session) {
   try {
     if (!session || typeof session !== "object" || !LIVE_SESSIONS.has(session)) fail("ACTIVATION_SESSION_INVALID", "settlement requires the opaque session returned by the fixed live gate")
     const state = LIVE_SESSIONS.get(session)
-    if (state.settling) fail("ACTIVATION_SESSION_INVALID", "activation session is already settling")
-    state.settling = true
-    const released = await state.ledger.releaseExclusiveLease({ lease_id: state.leaseId, claim_id: state.claimId })
-    if (released !== true) fail("ACTIVATION_EVIDENCE_MISMATCH", "canonical lease release failed")
-    const replay = await state.ledger.claimSingleUse({ request_sha256: jcsDigest(state.candidate), scope_sha256: normalizedDigest(read(ACTIVATION_PATH)), authority_reference: state.authority.authorityReference, maximum_attempts: state.authority.resources.maxAttempts })
-    if (replay.claimed !== false || replay.claim_id !== state.claimId) fail("ACTIVATION_EVIDENCE_MISMATCH", "canonical replay rejection failed")
-    const evidence = state.ledger.runtimeEvidence()
-    if (!SHA256.test(evidence.release_sha256 ?? "")) fail("ACTIVATION_EVIDENCE_MISMATCH", "canonical durable release evidence is unavailable")
+    const settled = await settleRemoteDevActivationState(state)
+    if (settled.status !== "SETTLEMENT_EVIDENCE_VERIFIED") fail(settled.reasons?.[0]?.code ?? "ACTIVATION_EVIDENCE_MISMATCH", settled.reasons?.[0]?.detail ?? "settlement evidence is unavailable")
     LIVE_SESSIONS.delete(session)
-    return { status: "CONSUMED_SINGLE_USE", executionAuthorized: false, runId: state.authority.run.runId, claimId: state.claimId, leaseReleased: true, replayRejected: true, releaseSha256: evidence.release_sha256, schedulerActivated: false, standingAegisAuthority: false }
+    return { status: "CONSUMED_SINGLE_USE", executionAuthorized: false, runId: state.runId, claimId: state.claimId, leaseReleased: true, replayRejected: true, releaseSha256: settled.releaseSha256, schedulerActivated: false, standingAegisAuthority: false }
   } catch (error) { return blocked(error) }
 }

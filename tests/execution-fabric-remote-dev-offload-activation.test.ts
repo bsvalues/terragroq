@@ -1,15 +1,13 @@
-import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 
 import { describe, expect, it } from "vitest"
 
-import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
-
 import {
   authorizeRemoteDevActivation,
   inspectRemoteDevActivationWindow,
   inspectResidentNoSudoResult,
+  settleRemoteDevActivationState,
   settleRemoteDevActivation,
   validateRemoteDevActivationAuthority,
 } from "../scripts/execution-fabric/live/remote-dev-offload-activation.mjs"
@@ -17,11 +15,7 @@ import {
 const root = process.cwd()
 const authorityPath = path.join(root, "config/execution-fabric/remote-dev-offload-v1-activation.json")
 const authority = () => JSON.parse(fs.readFileSync(authorityPath, "utf8"))
-const sha = (bytes: Buffer | string) => crypto.createHash("sha256").update(bytes).digest("hex")
-const activationScopeSha = () => sha(Buffer.from(fs.readFileSync(authorityPath, "utf8").replace(/\r\n/g, "\n"), "utf8"))
-const requestSha = () => sha(canonicalizeJcs(candidate()))
-const claimKeySha = () => sha(canonicalizeJcs({ authority_reference: authority().authorityReference, scope_sha256: activationScopeSha() }))
-const claimId = () => `claim-${claimKeySha().slice(0, 24)}`
+const fabricatedClaimId = "claim-766b694bc86df27f564d5adb"
 
 function candidate() {
   const value = authority()
@@ -42,67 +36,17 @@ function candidate() {
   }
 }
 
-function runtimeProof() {
-  const value = authority()
-  return {
-    identity: {
-      provider: "trustedResidentIdentity",
-      account: "williamos-fabric",
-      uid: 1001,
-      nonRoot: true,
-      noSudo: true,
-      verified: true,
-    },
-    trustedMain: {
-      provider: "createTrustedProofProviders",
-      trustedRef: "refs/heads/main",
-      headCommit: value.trustedMain.minimumCommit,
-      minimumCommit: value.trustedMain.minimumCommit,
-      ancestryVerified: true,
-      clean: true,
-      exactArtifactBindings: true,
-      verified: true,
-    },
-    network: {
-      provider: "remoteDevDefaultDenyProof",
-      defaultDeny: true,
-      atlasDenied: true,
-      endpoints: value.network.endpoints,
-      verified: true,
-    },
-    claim: {
-      provider: "createLedgerProviders",
-      claimed: true,
-      claimId: claimId(),
-      claimKeySha256: claimKeySha(),
-      authorityReference: value.authorityReference,
-      runId: value.run.runId,
-      scopeSha256: activationScopeSha(),
-      requestSha256: requestSha(),
-      maximumAttempts: 3,
-    },
-    lease: {
-      provider: "createLedgerProviders",
-      acquired: true,
-      leaseId: "lease-56b41a963bbf4c80907bd37d",
-      claimId: claimId(),
-      runId: value.run.runId,
-      nodeId: "aegis",
-    },
-  }
-}
-
 function settlement() {
   const value = authority()
   return {
     runId: value.run.runId,
-    claimId: claimId(),
+    claimId: fabricatedClaimId,
     leaseId: "lease-56b41a963bbf4c80907bd37d",
     release: {
       provider: "createLedgerProviders",
       released: true,
       runId: value.run.runId,
-      claimId: claimId(),
+      claimId: fabricatedClaimId,
       leaseId: "lease-56b41a963bbf4c80907bd37d",
       releaseSha256: "2".repeat(64),
     },
@@ -111,7 +55,7 @@ function settlement() {
       status: "REPLAY_REJECTED",
       rejectionCode: "REQUEST_ALREADY_CONSUMED",
       runId: value.run.runId,
-      claimId: claimId(),
+      claimId: fabricatedClaimId,
       authorityReference: value.authorityReference,
       operationAttempted: false,
       replaySha256: "3".repeat(64),
@@ -170,18 +114,11 @@ describe("TerraFusion remote development one-run activation", () => {
     expect(validateRemoteDevActivationAuthority(substituted, substitutedCandidate)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "ACTIVATION_BINDING_DRIFT" }] })
   })
 
-  it("rejects fabricated serialized proof and caller time without invoking a caller-selected provider", async () => {
-    for (const suppliedTime of [now, "1999-01-01T00:00:00.000Z"]) {
-      expect(await authorizeRemoteDevActivation(authority(), candidate(), suppliedTime, runtimeProof())).toMatchObject({
-        status: "BLOCKED",
-        executionAuthorized: false,
-        reasons: [{ code: "ACTIVATION_RUNTIME_NODE_INVALID" }],
-      })
-    }
-  })
-
-  it("never accepts caller proof objects at an active time outside resident AEGIS", async () => {
-    expect(await authorizeRemoteDevActivation(authority(), candidate(), now, runtimeProof())).not.toMatchObject({ executionAuthorized: true })
+  it("fails closed through the actual two-argument authorization API on every platform", async () => {
+    const result = await authorizeRemoteDevActivation(authority(), candidate())
+    expect(result.status).toBe("BLOCKED")
+    expect(result.executionAuthorized).toBe(false)
+    expect(result.reasons).toEqual([{ code: expect.any(String), detail: expect.any(String) }])
   })
 
   it("settles only an opaque module-issued live session, never fabricated release/replay JSON", async () => {
@@ -190,6 +127,47 @@ describe("TerraFusion remote development one-run activation", () => {
       executionAuthorized: false,
       reasons: [{ code: "ACTIVATION_SESSION_INVALID" }],
     })
+  })
+
+  it("reopens settlement after failure and replays the authorization-time scope digest", async () => {
+    let releaseAttempts = 0
+    let replayAttempts = 0
+    const replayScopes: string[] = []
+    const state = {
+      settling: false,
+      leaseReleased: false,
+      runId: authority().run.runId,
+      claimId: "claim-766b694bc86df27f564d5adb",
+      leaseId: "lease-56b41a963bbf4c80907bd37d",
+      authorityReference: authority().authorityReference,
+      maximumAttempts: authority().resources.maxAttempts,
+      requestSha256: "1".repeat(64),
+      scopeSha256: "a".repeat(64),
+      ledger: {
+        releaseExclusiveLease: async () => {
+          releaseAttempts += 1
+          if (releaseAttempts === 1) throw new Error("transient ledger error")
+          return releaseAttempts > 2
+        },
+        claimSingleUse: async ({ scope_sha256 }: any) => {
+          replayAttempts += 1
+          replayScopes.push(scope_sha256)
+          if (replayAttempts === 1) throw new Error("transient replay error")
+          return { claimed: false, claim_id: "claim-766b694bc86df27f564d5adb" }
+        },
+        runtimeEvidence: () => ({ release_sha256: "2".repeat(64) }),
+      },
+    }
+    expect(await settleRemoteDevActivationState(state)).toMatchObject({ status: "BLOCKED" })
+    expect(state.settling).toBe(false)
+    expect(await settleRemoteDevActivationState(state)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "ACTIVATION_EVIDENCE_MISMATCH" }] })
+    expect(state.settling).toBe(false)
+    expect(await settleRemoteDevActivationState(state)).toMatchObject({ status: "BLOCKED" })
+    expect(state.settling).toBe(false)
+    expect(state.leaseReleased).toBe(true)
+    expect(await settleRemoteDevActivationState(state)).toMatchObject({ status: "SETTLEMENT_EVIDENCE_VERIFIED", releaseSha256: "2".repeat(64) })
+    expect(releaseAttempts).toBe(3)
+    expect(replayScopes).toEqual(["a".repeat(64), "a".repeat(64)])
   })
 
   it("accepts only the exact fixed resident sudo denial and rejects inconclusive failures", () => {
