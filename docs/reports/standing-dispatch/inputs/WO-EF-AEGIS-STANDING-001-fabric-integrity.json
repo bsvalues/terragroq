@@ -21,11 +21,17 @@
     }
   ],
   "execution_boundary": {
-    "workload_class": "HASH_VERIFY",
-    "node_id": "aegis",
     "network_scope": "none",
+    "durable_storage_allowed": false,
+    "control_evidence_storage_required": true,
+    "nas_allowed": false,
+    "backup_allowed": false,
+    "archive_authority_allowed": false,
+    "destructive_disk_allowed": false,
+    "sudo_allowed": false,
+    "privilege_escalation_allowed": false,
     "scheduler_state": "disabled",
-    "autonomous_selection": false,
-    "storage_nas_backup_authority": false
+    "scheduler_authority": "not-granted",
+    "autonomous_selection": false
   }
 }
