@@ -26,11 +26,13 @@ The package manifest JCS SHA-256 is
 `abee19f7d7016e6ac628b281ae15d292fe2681219ab68dd96f83077a5231af4e`.
 The trusted planner pins that complete manifest digest. The manifest binds the
 activation, worker, network provider, network launcher, network policy,
-installer gate, and forced-command entrypoint. Trusted-main status additionally
-requires the planner, manifest, and all seven bound artifacts to match direct
-`refs/heads/main:path` bytes with Git replacement objects disabled. Before
-merge the truthful state is `PACKAGE_AWAITING_TRUSTED_MAIN`; any byte drift
-after merge blocks the package.
+installer gate, and forced-command entrypoint. This is internal consistency,
+not a trust root: the currently executing planner cannot authenticate itself.
+The truthful state is always `PACKAGE_INTERNAL_CONSISTENCY_ONLY` with
+`EXTERNAL_TRUST_ROOT_REQUIRED`. A future root-owned handoff must independently
+pin the exact reviewed planner, manifest, and seven artifact bytes before any
+live preflight or apply. This package itself can never return an authoritative
+trusted-main or apply success state.
 
 ## Reserved paths
 
@@ -174,10 +176,11 @@ administrator posture.
 - GREEN 2: even an exact proposed authority now returns
   `LIVE_APPLY_OWNER_HANDOFF_REQUIRED`, `applyAuthorized: false`, and
   `executionAuthorized: false`.
-- package inspection: seven internal artifact digests exact, manifest digest
-  exact, and `PACKAGE_AWAITING_TRUSTED_MAIN` until this reviewed generation is
-  merged. Only an exact clean trusted-main checkout can return
-  `PACKAGE_TRUSTED_MAIN_VERIFIED`.
+- package inspection: seven internal artifact digests exact and manifest digest
+  exact, but status remains `PACKAGE_INTERNAL_CONSISTENCY_ONLY` /
+  `EXTERNAL_TRUST_ROOT_REQUIRED` with exit 2. A separate previously trusted,
+  root-owned verifier must pin this exact generation; the package never
+  self-promotes to trusted or applicable.
 
 No live preflight was claimed. The accepted audit says the current node is not
 ready; this package truthfully describes the mutations needed for a later

@@ -270,11 +270,11 @@ describe("AEGIS remote-dev prerequisite package", () => {
     })
   })
 
-  it("verifies every package artifact against its reviewed digest", () => {
+  it("checks internal artifact digests without claiming an external trust root", () => {
     const inspection = inspectProvisioningPackage(repoRoot)
 
-    expect(inspection.status).toBe("PACKAGE_AWAITING_TRUSTED_MAIN")
-    expect(inspection.reasonCode).toBe("PACKAGE_NOT_MERGED_TO_TRUSTED_MAIN")
+    expect(inspection.status).toBe("PACKAGE_INTERNAL_CONSISTENCY_ONLY")
+    expect(inspection.reasonCode).toBe("EXTERNAL_TRUST_ROOT_REQUIRED")
     expect(inspection.executionAuthorized).toBe(false)
     expect(inspection.drift).toEqual([])
     expect(inspection.verifiedPaths).toEqual([

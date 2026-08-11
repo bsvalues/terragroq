@@ -2,7 +2,6 @@
 import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
-import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 import { canonicalizeJcs } from "../canonical-json.mjs"
@@ -79,32 +78,6 @@ export function validateProvisioningManifest(manifest) {
   return validateManifest(structuredClone(manifest))
 }
 
-function git(repoRoot, args) {
-  const executable = process.platform === "win32" ? "git.exe" : "/usr/bin/git"
-  const result = spawnSync(executable, ["-C", repoRoot, "--no-replace-objects", ...args], {
-    encoding: args[0] === "show" ? undefined : "utf8",
-    env: { GIT_CONFIG_NOSYSTEM: "1", GIT_NO_REPLACE_OBJECTS: "1", HOME: process.platform === "win32" ? (process.env.USERPROFILE ?? "C:\\") : "/nonexistent", PATH: process.platform === "win32" ? (process.env.PATH ?? "") : "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
-    timeout: 10_000,
-    maxBuffer: 2_097_152,
-  })
-  if (result.error || result.status !== 0) throw new Error(`trusted-main git ${args[0]} failed`)
-  return result.stdout
-}
-
-function inspectTrustedMainBytes(repoRoot, manifest) {
-  const head = String(git(repoRoot, ["rev-parse", "HEAD"])).trim()
-  const main = String(git(repoRoot, ["rev-parse", "refs/heads/main"])).trim()
-  if (head !== main) return { status: "PACKAGE_AWAITING_TRUSTED_MAIN", reasonCode: "PACKAGE_NOT_MERGED_TO_TRUSTED_MAIN" }
-  git(repoRoot, ["merge-base", "--is-ancestor", manifest.trustedMain.commit, head])
-  const criticalPaths = [MANIFEST_PATH, "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs", ...manifest.bindings.map((entry) => entry.path)]
-  for (const relativePath of criticalPaths) {
-    const reviewed = git(repoRoot, ["show", `refs/heads/main:${relativePath}`])
-    const current = fs.readFileSync(path.resolve(repoRoot, relativePath))
-    if (!Buffer.isBuffer(reviewed) || !reviewed.equals(current)) return { status: "BLOCKED", reasonCode: "TRUSTED_MAIN_WORKING_BYTES_DRIFT", path: relativePath }
-  }
-  return { status: "PACKAGE_TRUSTED_MAIN_VERIFIED", reasonCode: null, trustedMainCommit: head }
-}
-
 export function inspectProvisioningPackage(repoRoot) {
   try {
     const manifestBytes = fs.readFileSync(path.join(repoRoot, MANIFEST_PATH))
@@ -125,8 +98,7 @@ export function inspectProvisioningPackage(repoRoot) {
       if (actual !== binding.sha256) drift.push(binding.path)
     }
     if (drift.length) return { status: "BLOCKED", reasonCode: "PACKAGE_BINDING_DRIFT", executionAuthorized: false, manifestSha256: canonicalDigest(manifest), verifiedPaths: [], drift }
-    const trustedMain = inspectTrustedMainBytes(repoRoot, manifest)
-    return { ...trustedMain, executionAuthorized: false, applyAuthorized: false, manifestSha256: canonicalDigest(manifest), verifiedPaths: [...EXPECTED_BINDINGS], drift: [] }
+    return { status: "PACKAGE_INTERNAL_CONSISTENCY_ONLY", reasonCode: "EXTERNAL_TRUST_ROOT_REQUIRED", executionAuthorized: false, applyAuthorized: false, manifestSha256: canonicalDigest(manifest), verifiedPaths: [...EXPECTED_BINDINGS], drift: [] }
   } catch (error) {
     return { status: "BLOCKED", reasonCode: "PACKAGE_INVALID", executionAuthorized: false, manifestSha256: null, verifiedPaths: [], drift: [], detail: String(error?.message ?? error) }
   }
@@ -279,7 +251,7 @@ function cli() {
   if (command === "inspect") {
     const result = inspectProvisioningPackage(repoRoot)
     process.stdout.write(`${JSON.stringify(result)}\n`)
-    process.exitCode = result.status === "PACKAGE_TRUSTED_MAIN_VERIFIED" ? 0 : 2
+    process.exitCode = 2
     return
   }
   if (command === "dry-run" && argument) {
