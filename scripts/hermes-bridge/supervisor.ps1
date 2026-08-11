@@ -21,7 +21,11 @@ $logDir = Join-Path $runtimeRootPath "logs"
 $supervisorLogPath = Join-Path $logDir ("supervisor-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 $cliPath = Join-Path $workspacePath "scripts\hermes-bridge\cli.mjs"
 $envPath = Join-Path $workspacePath ".env.local"
-$nodeCommand = Get-Command node -CommandType Application -ErrorAction Stop
+$nodeCommand = Get-Command node -CommandType Application -All -ErrorAction Stop |
+    Select-Object -First 1
+if ($null -eq $nodeCommand) {
+    throw "HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL"
+}
 $nodePath = [IO.Path]::GetFullPath($nodeCommand.Source)
 if (-not (Test-Path -LiteralPath $nodePath -PathType Leaf)) {
     throw "HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL"
