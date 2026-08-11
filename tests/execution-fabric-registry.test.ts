@@ -123,8 +123,18 @@ function assertSchemaConformance(value: unknown, rawRule: unknown, location = "$
     if (typeof rule.minimum === "number") expect(value, `${location}: minimum`).toBeGreaterThanOrEqual(rule.minimum)
     if (typeof rule.maximum === "number") expect(value, `${location}: maximum`).toBeLessThanOrEqual(rule.maximum)
   }
-  if (Array.isArray(value) && rule.items) {
-    value.forEach((item, index) => assertSchemaConformance(item, rule.items, `${location}[${index}]`))
+  if (Array.isArray(value)) {
+    if (typeof rule.minItems === "number") expect(value.length, `${location}: minItems`).toBeGreaterThanOrEqual(rule.minItems)
+    if (typeof rule.maxItems === "number") expect(value.length, `${location}: maxItems`).toBeLessThanOrEqual(rule.maxItems)
+    if (Array.isArray(rule.prefixItems)) {
+      ;(rule.prefixItems as unknown[]).forEach((itemRule, index) => {
+        if (index < value.length) assertSchemaConformance(value[index], itemRule, `${location}[${index}]`)
+      })
+      if (rule.items === false) expect(value.length, `${location}: prefixItems length`).toBeLessThanOrEqual(rule.prefixItems.length)
+      else if (rule.items) value.slice(rule.prefixItems.length).forEach((item, offset) => assertSchemaConformance(item, rule.items, `${location}[${rule.prefixItems.length + offset}]`))
+    } else if (rule.items) {
+      value.forEach((item, index) => assertSchemaConformance(item, rule.items, `${location}[${index}]`))
+    }
   }
   if (typeMatches(value, "object")) {
     const object = value as JsonObject
@@ -360,6 +370,22 @@ describe("Execution Fabric registry schema and identity", () => {
     assertSchemaConformance(canonicalSeed, schema)
   })
 
+  it.each([
+    ["duplicate risk classes", (bounded: JsonObject) => { bounded.risk_classes = ["R0", "R0"] }],
+    ["reordered risk classes", (bounded: JsonObject) => { bounded.risk_classes = ["R1", "R0"] }],
+    ["truncated risk classes", (bounded: JsonObject) => { bounded.risk_classes = ["R0"] }],
+    ["duplicate workload classes", (bounded: JsonObject) => { bounded.workload_classes = ["CI_BUILD_TEST", "HASH_VERIFY", "HASH_VERIFY"] }],
+    ["reordered workload classes", (bounded: JsonObject) => { bounded.workload_classes = ["HASH_VERIFY", "CI_BUILD_TEST", "COMPRESSION"] }],
+    ["truncated workload classes", (bounded: JsonObject) => { bounded.workload_classes = ["CI_BUILD_TEST", "HASH_VERIFY"] }],
+  ])("rejects %s in the exact bounded-compute tuple", (_case, mutate) => {
+    const invalidSeed = clone(canonicalSeed)
+    const bounded = (nodeById(invalidSeed, "aegis").authority as JsonObject).bounded_compute as JsonObject
+    mutate(bounded)
+
+    expect(() => assertSchemaConformance(invalidSeed, schema)).toThrow()
+    expect(assemble(invalidSeed).status).toBe(2)
+  })
+
   it("uses AEGIS as the canonical secondary node identity", () => {
     const ids = (canonicalSeed.nodes as JsonObject[]).map((node) => node.id)
     const aegis = nodeById(canonicalSeed, "aegis")
@@ -375,11 +401,37 @@ describe("Execution Fabric registry schema and identity", () => {
         "nas-service-and-authority-pending",
       ]),
     })
-    expect((aegis.authority as JsonObject).allow).toEqual(expect.arrayContaining(["cpu-batch-candidate", "docker-worker-candidate"]))
+    expect((aegis.authority as JsonObject).allow).toEqual([
+      "limited-standing-compute-authority",
+      "ci-build-test-when-adapter-active",
+      "hash-verify-when-standing-integration-active",
+      "compression-when-adapter-active",
+    ])
+    expect((aegis.authority as JsonObject).bounded_compute).toEqual(expect.objectContaining({
+      schema: "aegis-standing-compute-authority/1",
+      authority_ref: "github-issue-586",
+      state: "granted",
+      repository: "bsvalues/terragroq",
+      risk_classes: ["R0", "R1"],
+      workload_classes: ["CI_BUILD_TEST", "HASH_VERIFY", "COMPRESSION"],
+      maximum_concurrency: 1,
+      maximum_cpu_threads: 12,
+      maximum_memory_bytes: 8589934592,
+      maximum_runtime_ms: 1800000,
+      maximum_output_bytes: 536870912,
+      maximum_scratch_write_bytes: 5368709120,
+      minimum_free_bytes_after_job: 107374182400,
+      network_scope: "none",
+      privilege: "non-root-no-sudo",
+      scheduler_state: "disabled",
+      scheduler_authority: "not-granted",
+      autonomous_work_selection: false,
+      durable_storage_authority: false,
+    }))
     expect((aegis.authority as JsonObject).deny).toEqual(expect.arrayContaining([
       "authoritative-durable-state",
-      "backup-archive-execution-authority-not-granted",
-      "nas-until-service-and-authority-proven",
+      "backup-archive",
+      "nas",
       "destructive-disk-action",
     ]))
     expect(aegis.capabilities).toEqual(expect.arrayContaining(["backup-target", "archive-storage"]))
@@ -1267,6 +1319,17 @@ describe("Execution Fabric semantic invariants", () => {
     expect(result.status).toBe(2)
     expect(result.stderr).toContain(`omen: duplicate authority ${list} entry`)
     expect(result.registry).toBeNull()
+  })
+
+  it("rejects drift in the AEGIS bounded compute authority envelope", () => {
+    const invalidSeed = clone(canonicalSeed)
+    const aegis = nodeById(invalidSeed, "aegis")
+    ;((aegis.authority as JsonObject).bounded_compute as JsonObject).maximum_cpu_threads = 13
+
+    const result = assemble(invalidSeed)
+
+    expect(result.status).toBe(2)
+    expect(result.stderr).toContain("aegis: bounded compute authority differs from canonical v0.2 policy")
   })
 
   it.each([

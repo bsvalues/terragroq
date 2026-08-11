@@ -43,8 +43,34 @@ const canonicalAuthority = {
     deny: ['noisy-unbounded-batch-by-default', 'county-production-write', 'pacs-production-write']
   },
   aegis: {
-    allow: ['cpu-batch-candidate', 'ci-build-test-candidate', 'hash-verify-candidate', 'compression-candidate', 'etl-transform-candidate', 'docker-worker-candidate'],
-    deny: ['authoritative-durable-state', 'backup-archive-execution-authority-not-granted', 'nas-until-service-and-authority-proven', 'county-production-write', 'pacs-production-write', 'destructive-disk-action']
+    allow: ['limited-standing-compute-authority', 'ci-build-test-when-adapter-active', 'hash-verify-when-standing-integration-active', 'compression-when-adapter-active'],
+    deny: ['authoritative-durable-state', 'backup-archive', 'nas', 'county-production-write', 'pacs-production-write', 'destructive-disk-action'],
+    bounded_compute: {
+      schema: 'aegis-standing-compute-authority/1',
+      authority_ref: 'github-issue-586',
+      state: 'granted',
+      repository: 'bsvalues/terragroq',
+      risk_classes: ['R0', 'R1'],
+      workload_classes: ['CI_BUILD_TEST', 'HASH_VERIFY', 'COMPRESSION'],
+      node_id: 'aegis',
+      machine_identity_sha256: '1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b',
+      maximum_concurrency: 1,
+      maximum_cpu_threads: 12,
+      maximum_memory_bytes: 8589934592,
+      maximum_runtime_ms: 1800000,
+      maximum_output_bytes: 536870912,
+      maximum_scratch_write_bytes: 5368709120,
+      minimum_free_bytes_after_job: 107374182400,
+      network_scope: 'none',
+      execution_identity: 'williamos-fabric',
+      privilege: 'non-root-no-sudo',
+      storage_scope: 'job-scoped-nvme-scratch-only',
+      adapter_policy: 'separately-reviewed-active-adapter-required',
+      scheduler_state: 'disabled',
+      scheduler_authority: 'not-granted',
+      autonomous_work_selection: false,
+      durable_storage_authority: false
+    }
   },
   azure: {
     allow: [],
@@ -120,8 +146,24 @@ function validateSchema(value, rawRule, location = '$') {
     if (typeof rule.minimum === 'number' && value < rule.minimum) errors.push(`${location}: below minimum`);
     if (typeof rule.maximum === 'number' && value > rule.maximum) errors.push(`${location}: above maximum`);
   }
-  if (Array.isArray(value) && rule.items) {
-    value.forEach((item, index) => errors.push(...validateSchema(item, rule.items, `${location}[${index}]`)));
+  if (Array.isArray(value)) {
+    if (Number.isInteger(rule.minItems) && value.length < rule.minItems) errors.push(`${location}: shorter than minItems`);
+    if (Number.isInteger(rule.maxItems) && value.length > rule.maxItems) errors.push(`${location}: longer than maxItems`);
+    if (Array.isArray(rule.prefixItems)) {
+      rule.prefixItems.forEach((itemRule, index) => {
+        if (index < value.length) errors.push(...validateSchema(value[index], itemRule, `${location}[${index}]`));
+      });
+      if (rule.items === false && value.length > rule.prefixItems.length) {
+        errors.push(`${location}: contains items beyond prefixItems`);
+      } else if (rule.items && rule.items !== false) {
+        value.slice(rule.prefixItems.length).forEach((item, offset) => {
+          const index = rule.prefixItems.length + offset;
+          errors.push(...validateSchema(item, rule.items, `${location}[${index}]`));
+        });
+      }
+    } else if (rule.items && rule.items !== false) {
+      value.forEach((item, index) => errors.push(...validateSchema(item, rule.items, `${location}[${index}]`)));
+    }
   }
   if (typeMatches(value, 'object')) {
     const properties = rule.properties ?? {};
@@ -656,6 +698,11 @@ for (const n of nodes) {
     if (actualDeny.length !== rawDeny.length) errors.push(`${n.id}: duplicate authority deny entry`);
     if (JSON.stringify(actualAllow) !== JSON.stringify(expectedAllow)) errors.push(`${n.id}: authority allow set differs from canonical v0.2 policy`);
     if (JSON.stringify(actualDeny) !== JSON.stringify(expectedDeny)) errors.push(`${n.id}: authority deny set differs from canonical v0.2 policy`);
+    const actualBoundedCompute = n.authority?.bounded_compute;
+    const expectedBoundedCompute = expectedAuthority.bounded_compute;
+    if (canonicalizeJcs(actualBoundedCompute ?? null) !== canonicalizeJcs(expectedBoundedCompute ?? null)) {
+      errors.push(`${n.id}: bounded compute authority differs from canonical v0.2 policy`);
+    }
     const conflicts = actualAllow.filter(value => actualDeny.includes(value));
     if (conflicts.length) errors.push(`${n.id}: authority allow/deny conflict ${conflicts.join(',')}`);
   }

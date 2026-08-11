@@ -1,0 +1,86 @@
+{
+  "$schema": "./aegis-standing-compute-authority.schema.v1.json",
+  "schema_version": "1.0",
+  "authority_id": "aegis-standing-compute-authority-v1",
+  "authority_reference": "github-issue-586",
+  "authority_status": "ACTIVE",
+  "repository": "bsvalues/terragroq",
+  "allowed_risk_classes": [
+    "R0",
+    "R1"
+  ],
+  "outcome_eligibility": {
+    "origin": "WILLIAMOS_NATIVE",
+    "approval_status": "ALREADY_APPROVED"
+  },
+  "node_identity": {
+    "node_id": "aegis",
+    "hostname": "aegis",
+    "machine_id_sha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b",
+    "execution_account": "williamos-fabric",
+    "privilege": "non-root-no-sudo"
+  },
+  "resource_limits": {
+    "maximum_concurrency": 1,
+    "maximum_cpu_threads": 12,
+    "maximum_memory_bytes": 8589934592,
+    "maximum_runtime_ms": 1800000,
+    "maximum_output_bytes": 536870912,
+    "maximum_scratch_write_bytes": 5368709120,
+    "minimum_free_bytes_after_requested_writes": 107374182400
+  },
+  "execution_boundary": {
+    "network_scope": "none",
+    "durable_storage_allowed": false,
+    "nas_allowed": false,
+    "backup_allowed": false,
+    "archive_authority_allowed": false,
+    "destructive_disk_allowed": false,
+    "sudo_allowed": false,
+    "privilege_escalation_allowed": false,
+    "scheduler_state": "disabled",
+    "scheduler_authority": "not-granted",
+    "autonomous_selection": false
+  },
+  "evidence_policy": {
+    "maximum_age_ms": 300000,
+    "placement_required": true,
+    "capability_required": true,
+    "exact_source_commit_required": true,
+    "reviewed_adapter_template_profile_digests_required": true,
+    "one_time_job_claim_required": true,
+    "lease_and_fencing_required": true
+  },
+  "workload_adapters": [
+    {
+      "workload_class": "CI_BUILD_TEST",
+      "template_id": "aegis.ci-build-test.v1",
+      "adapter_id": null,
+      "profile_id": "williamos.standard-validation.v1",
+      "adapter_sha256": null,
+      "template_sha256": null,
+      "profile_sha256": null,
+      "status": "ADAPTER_BLOCKED"
+    },
+    {
+      "workload_class": "HASH_VERIFY",
+      "template_id": "aegis.hash-verify.v1",
+      "adapter_id": "resident-aegis-hash-verify-v1",
+      "profile_id": "resident-aegis-bounded-hash-verify-v1",
+      "adapter_sha256": "2fe20b5efb3944d001e86ba2da33578d327ee37fafd8b88397ca2d5cc1eb1c84",
+      "template_sha256": "7217d0486fb67e17d27b7854bb8f44d0ba7d063bddde7d45282c091306d8d58b",
+      "profile_sha256": "ff8587a3e05eeb0aa7abaa80ed882b0f43010ad2fd119e71f0b58e353dfd2989",
+      "status": "REVIEWED_NOT_STANDING_INTEGRATED"
+    },
+    {
+      "workload_class": "COMPRESSION",
+      "template_id": "aegis.compression.v1",
+      "adapter_id": null,
+      "profile_id": "tar-zstd.deterministic.v1",
+      "adapter_sha256": null,
+      "template_sha256": null,
+      "profile_sha256": null,
+      "status": "ADAPTER_BLOCKED"
+    }
+  ]
+}

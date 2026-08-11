@@ -24,6 +24,39 @@ The authorization does not make a persisted goal self-executing, expand a Work
 Order, waive dependency or reservation gates, or grant protected, production,
 financial, credential, runtime, or external-system authority.
 
+### Limited AEGIS standing compute grant
+
+The owner additionally authorizes WilliamOS-native R0/R1 outcomes to use bounded
+AEGIS compute for exactly these workload classes:
+
+- `CI_BUILD_TEST`;
+- `HASH_VERIFY`;
+- `COMPRESSION`.
+
+This is a compute grant, not generic `AUTONOMY`, `WORKER_ACTIVATION_GATE`,
+`COMMAND_RUNNER_GATE`, scheduler, runtime, storage, network, or remote-system
+authority. The global scheduler remains off. Only a separately reviewed active
+adapter for the exact workload class may execute; `CI_BUILD_TEST` and
+`COMPRESSION` are currently adapter-blocked. The reviewed `HASH_VERIFY` adapter
+is not yet integrated with this standing authority, so it also remains blocked.
+The grant records authority but does not itself create an executable path.
+
+Every job must bind the exact approved owner outcome, approved Work Order,
+reviewed source, approved template, approved operation profile, separately
+reviewed active adapter, complete evidence chain, exclusive lease, current
+fence, and single-use claim. Missing, stale, conflicting, or expanded bindings
+fail closed.
+
+A job request cannot self-assert approval. A separate short-lived binding from
+the trusted WilliamOS authority control plane must name the exact job, outcome,
+risk, Work Order, source commit, and workload adapter tuple. The job claim must
+bind the canonical digest of that admission, and each admission is single-use.
+
+The standing ceilings are one concurrent job, at most 12 CPU threads, 8 GiB
+memory, 30 minutes runtime, 512 MiB output, and 5 GiB job-scoped scratch writes
+while preserving at least 100 GiB free scratch capacity. Network access is
+prohibited and execution must use a non-root identity without sudo.
+
 ## Mission
 
 Turn approved owner outcomes into completed WilliamOS-native results without
@@ -117,6 +150,9 @@ Blocked:
 - database, schema, runtime, command runner, scheduler, or background-worker
   creation or activation;
 - local WilliamOS runtime or supervisor activation;
+- AEGIS global scheduler activation, generic worker activation, arbitrary
+  command execution, persistent workload storage, NAS/backup authority,
+  network access, root/sudo execution, or remote-system access or mutation;
 - issue #357 retry, reactivation, wrapping, renaming, or reuse.
 
 ## Continuation
@@ -130,3 +166,6 @@ review remediation, or status relay.
 
 Canonical evidence:
 `docs/reports/WO-OWNER-OUTCOME-008-owner-outcome-delivery-rollup.md`
+
+AEGIS standing compute authority evidence:
+`docs/reports/WILLIAMOS-EXECUTION-FABRIC-AEGIS-STANDING-COMPUTE-AUTHORITY-001.md`

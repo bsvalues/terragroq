@@ -58,6 +58,7 @@ describe("Authority Registry", () => {
       "PRODUCTION_DEPLOY",
       "CLOUD_CONFIG",
       "GITHUB_WRITE",
+      "AEGIS_BOUNDED_COMPUTE",
       "AUTONOMY",
       "LAN_EXPOSURE",
       "SECRET_HANDLING",
@@ -73,6 +74,7 @@ describe("Authority Registry", () => {
     const gateIds = AUTHORITY_GATES.map((gate) => gate.gateId)
 
     expect(gateIds).toEqual([
+      "AEGIS_BOUNDED_COMPUTE_GATE",
       "LOCAL_RUNTIME_METADATA_GATE",
       "LOCAL_RUNTIME_CONTROL_GATE",
       "MEMORY_WRITE_GATE",
@@ -112,6 +114,7 @@ describe("Authority Registry", () => {
 
     expect(ids).toEqual([
       "authority-read-only-registry",
+      "authority-aegis-bounded-compute-standing",
       "authority-local-runtime-mutation",
       "authority-metadata-expansion",
       "authority-memory-governance",
@@ -132,6 +135,95 @@ describe("Authority Registry", () => {
       category: "COUNCIL_ADVISORY",
       level: "owner-decision-required",
       riskLevel: "critical",
+    })
+  })
+
+  it("records the narrow owner-approved AEGIS standing compute grant", () => {
+    const registry = getAuthorityRegistrySurface()
+    const record = registry.records.find((entry) => entry.authorityId === "authority-aegis-bounded-compute-standing")
+    const gate = registry.gates.find((entry) => entry.gateId === "AEGIS_BOUNDED_COMPUTE_GATE")
+
+    expect(record).toMatchObject({
+      category: "AEGIS_BOUNDED_COMPUTE",
+      level: "allowed-by-current-lane",
+      ownerDecisionRequired: false,
+      status: "active",
+      boundedComputeGrant: {
+        node: "aegis",
+        riskClasses: ["R0", "R1"],
+        workloadClasses: ["CI_BUILD_TEST", "HASH_VERIFY", "COMPRESSION"],
+        ceilings: {
+          maximumConcurrency: 1,
+          maximumCpuThreads: 12,
+          maximumMemoryBytes: 8 * 1024 ** 3,
+          maximumRuntimeMs: 30 * 60 * 1000,
+          maximumOutputBytes: 512 * 1024 ** 2,
+          maximumScratchWriteBytes: 5 * 1024 ** 3,
+          minimumScratchReserveBytes: 100 * 1024 ** 3,
+          network: "none",
+          executionIdentity: "non-root-no-sudo",
+        },
+        adapterAvailability: {
+          CI_BUILD_TEST: "BLOCKED_NO_SEPARATELY_REVIEWED_ACTIVE_ADAPTER",
+          HASH_VERIFY: "BLOCKED_STANDING_INTEGRATION_NOT_ACTIVE",
+          COMPRESSION: "BLOCKED_NO_SEPARATELY_REVIEWED_ACTIVE_ADAPTER",
+        },
+        globalSchedulerEnabled: false,
+      },
+    })
+    expect(record?.boundedComputeGrant?.requiredJobBindings).toEqual([
+      "exact-approved-owner-outcome",
+      "exact-approved-work-order",
+      "exact-reviewed-source",
+      "exact-approved-template",
+      "exact-approved-operation-profile",
+      "exact-separately-reviewed-active-adapter",
+      "complete-evidence-chain",
+      "exclusive-lease",
+      "current-fence",
+      "single-use-claim",
+    ])
+    expect(record?.blockedActions).toEqual(expect.arrayContaining([
+      "Generic worker activation",
+      "Arbitrary command execution",
+      "Global scheduler activation",
+      "Network access",
+      "Storage, NAS, or backup authority",
+      "Remote-system access or mutation",
+    ]))
+    expect(gate).toMatchObject({
+      category: "AEGIS_BOUNDED_COMPUTE",
+      level: "allowed-by-current-lane",
+      status: "open-for-bounded-jobs",
+    })
+    expect(registry.aegisBoundedComputeGates).toEqual([gate])
+  })
+
+  it("keeps broad execution gates blocked despite the bounded AEGIS grant", () => {
+    const gates = new Map(AUTHORITY_GATES.map((gate) => [gate.gateId, gate]))
+
+    for (const gateId of [
+      "WORKER_ACTIVATION_GATE",
+      "COMMAND_RUNNER_GATE",
+      "SCHEDULER_GATE",
+      "LOCAL_RUNTIME_CONTROL_GATE",
+      "SERVICE_REGISTRATION_GATE",
+      "TOOL_CALL_GATE",
+      "AUTONOMOUS_LOOP_GATE",
+      "OPERATOR_HOST_GATE",
+    ] as const) {
+      expect(gates.get(gateId)?.status).toBe("blocked")
+    }
+    expect(gates.get("WORKER_ACTIVATION_GATE")?.summary).toContain("No worker")
+    expect(gates.get("COMMAND_RUNNER_GATE")?.summary).toContain("blocked")
+    expect(gates.get("SCHEDULER_GATE")?.safeNextAction).toBe("No schedule is created.")
+    expect(getAuthorityRegistrySurface().safety).toMatchObject({
+      commandRunnerAdded: false,
+      workerActivationAdded: false,
+      runtimeControlAdded: false,
+      persistenceImplemented: false,
+      scheduleCreated: false,
+      autonomyAdded: false,
     })
   })
 

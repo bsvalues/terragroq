@@ -185,7 +185,39 @@
       "required": ["allow", "deny"],
       "properties": {
         "allow": {"type": "array", "items": {"type": "string"}},
-        "deny": {"type": "array", "items": {"type": "string"}}
+        "deny": {"type": "array", "items": {"type": "string"}},
+        "bounded_compute": {"$ref": "#/$defs/bounded_compute_authority"}
+      }
+    },
+    "bounded_compute_authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "authority_ref", "state", "repository", "risk_classes", "workload_classes", "node_id", "machine_identity_sha256", "maximum_concurrency", "maximum_cpu_threads", "maximum_memory_bytes", "maximum_runtime_ms", "maximum_output_bytes", "maximum_scratch_write_bytes", "minimum_free_bytes_after_job", "network_scope", "execution_identity", "privilege", "storage_scope", "adapter_policy", "scheduler_state", "scheduler_authority", "autonomous_work_selection", "durable_storage_authority"],
+      "properties": {
+        "schema": {"const": "aegis-standing-compute-authority/1"},
+        "authority_ref": {"const": "github-issue-586"},
+        "state": {"const": "granted"},
+        "repository": {"const": "bsvalues/terragroq"},
+        "risk_classes": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"const": "R0"}, {"const": "R1"}], "items": false},
+        "workload_classes": {"type": "array", "minItems": 3, "maxItems": 3, "prefixItems": [{"const": "CI_BUILD_TEST"}, {"const": "HASH_VERIFY"}, {"const": "COMPRESSION"}], "items": false},
+        "node_id": {"const": "aegis"},
+        "machine_identity_sha256": {"const": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b"},
+        "maximum_concurrency": {"const": 1},
+        "maximum_cpu_threads": {"const": 12},
+        "maximum_memory_bytes": {"const": 8589934592},
+        "maximum_runtime_ms": {"const": 1800000},
+        "maximum_output_bytes": {"const": 536870912},
+        "maximum_scratch_write_bytes": {"const": 5368709120},
+        "minimum_free_bytes_after_job": {"const": 107374182400},
+        "network_scope": {"const": "none"},
+        "execution_identity": {"const": "williamos-fabric"},
+        "privilege": {"const": "non-root-no-sudo"},
+        "storage_scope": {"const": "job-scoped-nvme-scratch-only"},
+        "adapter_policy": {"const": "separately-reviewed-active-adapter-required"},
+        "scheduler_state": {"const": "disabled"},
+        "scheduler_authority": {"const": "not-granted"},
+        "autonomous_work_selection": {"const": false},
+        "durable_storage_authority": {"const": false}
       }
     },
     "identity": {
