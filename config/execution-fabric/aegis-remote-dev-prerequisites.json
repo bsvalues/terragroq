@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 1,
+  "packageId": "aegis-remote-dev-prerequisites-issue-734-v1",
+  "status": "PACKAGE_ONLY_NOT_APPLIED",
+  "executionAuthorized": false,
+  "ownerAuthorityRequired": true,
+  "trustedMain": {
+    "repository": "bsvalues/terragroq",
+    "ref": "refs/heads/main",
+    "commit": "d5e725e47dc32f8ea113d0a0168e956bac84659e"
+  },
+  "proof": {
+    "workOrderId": "WO-TF-REMOTE-DEV-OFFLOAD-001",
+    "issue": {
+      "repository": "bsvalues/terrafusion_os_1.0",
+      "number": 734
+    },
+    "activationId": "remote-dev-offload-v1-issue-734-single-use-001",
+    "activationStatus": "INACTIVE_PENDING_PREREQUISITES",
+    "generalSchedulerEnabled": false,
+    "standingAegisAuthorityEnabled": false
+  },
+  "identity": {
+    "account": "williamos-fabric",
+    "privilege": "non-root-no-sudo",
+    "passwordLocked": true,
+    "shell": "/bin/bash",
+    "machineIdSha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b",
+    "lingeringUserManagerRequired": true
+  },
+  "transport": {
+    "sourceHost": "hermes",
+    "sourceAddress": "192.168.1.154",
+    "account": "williamos-fabric",
+    "authorizedKeysPath": "/home/williamos-fabric/.ssh/authorized_keys",
+    "forcedCommandPath": "/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs",
+    "passwordAuthenticationAllowed": false,
+    "ptyAllowed": false,
+    "forwardingAllowed": false,
+    "unrestrictedShellAllowed": false,
+    "unrestrictedBsWorkerPathAllowed": false,
+    "ownerKeyFingerprint": "SHA256:owner-approved-hermes-transport-key"
+  },
+  "repositories": {
+    "controlPlane": {
+      "repository": "bsvalues/terragroq",
+      "remote": "https://github.com/bsvalues/terragroq.git",
+      "path": "/var/lib/williamos/fabric/workspaces/terragroq",
+      "ref": "refs/heads/main",
+      "commit": "d5e725e47dc32f8ea113d0a0168e956bac84659e",
+      "cleanRequired": true,
+      "remoteEqualityRequired": true
+    },
+    "targetMirror": {
+      "repository": "bsvalues/terrafusion_os_1.0",
+      "remote": "https://github.com/bsvalues/terrafusion_os_1.0.git",
+      "path": "/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git",
+      "baseRef": "refs/heads/main",
+      "proofBaseCommit": "ffd2fa35f5152de2b95e7f63b220050d18193d7a",
+      "bareRequired": true
+    }
+  },
+  "toolchain": {
+    "git": { "version": "2.43.0", "path": "/usr/bin/git" },
+    "node": { "version": "22.18.0", "path": "/usr/bin/node" },
+    "dotnetSdk": { "version": "8.0.423", "path": "/usr/bin/dotnet" },
+    "corepack": { "version": "0.34.0", "path": "/usr/bin/corepack" },
+    "pnpm": { "version": "9.0.0", "path": "/usr/bin/pnpm" }
+  },
+  "storage": {
+    "mountPath": "/srv/william",
+    "filesystem": "xfs",
+    "mountByUuidRequired": true,
+    "ownerSuppliedFilesystemUuidRequired": true,
+    "requiredMountOptions": ["nodev", "nosuid", "prjquota"],
+    "workspacePath": "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001",
+    "projectId": 734,
+    "hardLimitBytes": 85899345920,
+    "formatAuthorized": false,
+    "mountMutationAuthorized": false
+  },
+  "network": {
+    "mechanism": "ROOT_ATTESTED_CGROUP_EGRESS_V1",
+    "dualStackDefaultDeny": true,
+    "directNetworkAllowed": false,
+    "brokerRequired": true,
+    "atlas": {
+      "allowed": false,
+      "addresses": ["192.168.1.156/32", "::ffff:192.168.1.156/128"],
+      "ports": "ALL"
+    },
+    "endpoints": [
+      { "host": "ssh.github.com", "port": 443, "operations": ["git-fetch", "git-push"] },
+      { "host": "api.github.com", "port": 443, "operations": ["github-pr"] },
+      { "host": "api.nuget.org", "port": 443, "operations": ["dotnet-restore"] },
+      { "host": "globalcdn.nuget.org", "port": 443, "operations": ["dotnet-restore"] }
+    ],
+    "allOtherIpv4Denied": true,
+    "allOtherIpv6Denied": true
+  },
+  "github": {
+    "sshHost": "ssh.github.com",
+    "sshPort": 443,
+    "batchMode": true,
+    "strictHostKeyChecking": true,
+    "knownHostAlgorithm": "ssh-ed25519",
+    "knownHostFingerprint": "SHA256:github-published-ed25519-host-key",
+    "accountKeyFingerprint": "SHA256:owner-approved-github-key",
+    "repositoryAllowlist": ["bsvalues/terragroq", "bsvalues/terrafusion_os_1.0"]
+  },
+  "rootAssets": {
+    "signingPrivateKeyPath": "/etc/williamos-fabric/aegis-remote-dev-launch-authority.key",
+    "signingPublicKeyPath": "/etc/williamos-fabric/aegis-remote-dev-launch-authority.pem",
+    "signingPrivateKeyMode": "0600",
+    "signingPublicKeyMode": "0644",
+    "networkSlice": "williamos-aegis-remote-dev.slice",
+    "networkReceiptPath": "/run/williamos-fabric/aegis-remote-dev-network-proof.json",
+    "networkReceiptMode": "0444",
+    "launcherPath": "/usr/local/libexec/williamos-aegis-remote-dev-network-launcher.mjs",
+    "launcherMode": "0555",
+    "ticketDirectory": "/var/lib/williamos-fabric/remote-dev-launch-tickets",
+    "ticketDirectoryMode": "3770",
+    "ticketDirectoryAppendOnly": true
+  },
+  "ledger": {
+    "path": "/var/lib/williamos-fabric/remote-dev-ledger",
+    "owner": "root",
+    "group": "williamos-fabric",
+    "mode": "2750",
+    "durableFilesystemRequired": true,
+    "atomicPublishRequired": true,
+    "appendOnlyEvidenceRequired": true
+  },
+  "apply": {
+    "defaultMode": "DRY_RUN",
+    "liveApplyAuthorized": false,
+    "authorityMaximumAgeSeconds": 900,
+    "rootRequired": true,
+    "linuxRequired": true,
+    "refuseDrift": true,
+    "consumeAuthorityBeforeFirstMutation": true,
+    "mutationJournalRequired": true
+  },
+  "rollback": {
+    "automatic": false,
+    "ownerAuthorityRequired": true,
+    "preserveWorkspaceData": true,
+    "preserveSigningKey": true,
+    "preserveTicketTombstones": true,
+    "preserveLedgerEvidence": true,
+    "neverFormatOrUnmountStorage": true,
+    "steps": [
+      "disable-new-dispatch",
+      "stop-proof-specific-units",
+      "remove-proof-specific-egress-rules",
+      "disable-forced-command-key",
+      "restore-package-managed-files-from-journal",
+      "verify-no-proof-processes",
+      "retain-durable-evidence-for-owner-review"
+    ]
+  },
+  "bindings": [
+    { "path": "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs", "sha256": "5c6ac555fd66a18a87141eb9b80af203e4b1e61cec8a2dabb4b5e5b2f05d8f06" },
+    { "path": "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh", "sha256": "4359cfc2cd00165c6cf9aa34e044fe485cca5e4e72c3be428c86bccf04e42c3e" },
+    { "path": "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs", "sha256": "931f43de365ac7ea0120d0e9df98c562389f5397e5427ea50c1be2926109c344" },
+    { "path": "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs", "sha256": "11afe07d2a717e66e7c8e42585d586181e53ceb793bbb7cbe9cff90d91da8b2a" },
+    { "path": "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs", "sha256": "daa8f7fdd9d4ddbf38b75545729de9142891795b89e73299f7bb1536931cf1de" },
+    { "path": "scripts/execution-fabric/live/aegis-remote-dev-worker.sh", "sha256": "28e0c79bc19875a7ed7fb963c840aa3d4dad4b9a5cd107bfdea94ca98039b424" },
+    { "path": "config/execution-fabric/aegis-resident-network-boundary.json", "sha256": "1e0cceaabd091e14adf2224d7823243f42b91de67069a2bbf47d23de7692e0c2" },
+    { "path": "config/execution-fabric/remote-dev-offload-v1-activation.json", "sha256": "b4142eac0e961f5581f6471e8f6497b6ada9785dcdcdce00632c1166cabb8e13" }
+  ]
+}
