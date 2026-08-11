@@ -123,8 +123,16 @@ function assertSchemaConformance(value: unknown, rawRule: unknown, location = "$
     if (typeof rule.minimum === "number") expect(value, `${location}: minimum`).toBeGreaterThanOrEqual(rule.minimum)
     if (typeof rule.maximum === "number") expect(value, `${location}: maximum`).toBeLessThanOrEqual(rule.maximum)
   }
-  if (Array.isArray(value) && rule.items) {
-    value.forEach((item, index) => assertSchemaConformance(item, rule.items, `${location}[${index}]`))
+  if (Array.isArray(value)) {
+    if (Array.isArray(rule.prefixItems)) {
+      ;(rule.prefixItems as unknown[]).forEach((itemRule, index) => {
+        if (index < value.length) assertSchemaConformance(value[index], itemRule, `${location}[${index}]`)
+      })
+      if (rule.items === false) expect(value.length, `${location}: prefixItems length`).toBeLessThanOrEqual(rule.prefixItems.length)
+      else if (rule.items) value.slice(rule.prefixItems.length).forEach((item, offset) => assertSchemaConformance(item, rule.items, `${location}[${rule.prefixItems.length + offset}]`))
+    } else if (rule.items) {
+      value.forEach((item, index) => assertSchemaConformance(item, rule.items, `${location}[${index}]`))
+    }
   }
   if (typeMatches(value, "object")) {
     const object = value as JsonObject
@@ -360,6 +368,20 @@ describe("Execution Fabric registry schema and identity", () => {
     assertSchemaConformance(canonicalSeed, schema)
   })
 
+  it.each([
+    ["duplicate risk classes", (bounded: JsonObject) => { bounded.risk_classes = ["R0", "R0"] }],
+    ["reordered risk classes", (bounded: JsonObject) => { bounded.risk_classes = ["R1", "R0"] }],
+    ["duplicate workload classes", (bounded: JsonObject) => { bounded.workload_classes = ["CI_BUILD_TEST", "HASH_VERIFY", "HASH_VERIFY"] }],
+    ["reordered workload classes", (bounded: JsonObject) => { bounded.workload_classes = ["HASH_VERIFY", "CI_BUILD_TEST", "COMPRESSION"] }],
+  ])("rejects %s in the exact bounded-compute tuple", (_case, mutate) => {
+    const invalidSeed = clone(canonicalSeed)
+    const bounded = (nodeById(invalidSeed, "aegis").authority as JsonObject).bounded_compute as JsonObject
+    mutate(bounded)
+
+    expect(() => assertSchemaConformance(invalidSeed, schema)).toThrow()
+    expect(assemble(invalidSeed).status).toBe(2)
+  })
+
   it("uses AEGIS as the canonical secondary node identity", () => {
     const ids = (canonicalSeed.nodes as JsonObject[]).map((node) => node.id)
     const aegis = nodeById(canonicalSeed, "aegis")
@@ -404,8 +426,8 @@ describe("Execution Fabric registry schema and identity", () => {
     }))
     expect((aegis.authority as JsonObject).deny).toEqual(expect.arrayContaining([
       "authoritative-durable-state",
-      "backup-archive-execution-authority-not-granted",
-      "nas-until-service-and-authority-proven",
+      "backup-archive",
+      "nas",
       "destructive-disk-action",
     ]))
     expect(aegis.capabilities).toEqual(expect.arrayContaining(["backup-target", "archive-storage"]))

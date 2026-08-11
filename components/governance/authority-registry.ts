@@ -82,6 +82,10 @@ export type AuthorityRecord = {
 
 export type AegisWorkloadClass = "CI_BUILD_TEST" | "HASH_VERIFY" | "COMPRESSION"
 
+export type AegisAdapterAvailability =
+  | "BLOCKED_NO_SEPARATELY_REVIEWED_ACTIVE_ADAPTER"
+  | "BLOCKED_STANDING_INTEGRATION_NOT_ACTIVE"
+
 export type AegisBoundedComputeGrant = {
   node: "aegis"
   riskClasses: ["R0", "R1"]
@@ -98,7 +102,7 @@ export type AegisBoundedComputeGrant = {
     executionIdentity: "non-root-no-sudo"
   }
   requiredJobBindings: string[]
-  adapterAvailability: Record<AegisWorkloadClass, string>
+  adapterAvailability: Record<AegisWorkloadClass, AegisAdapterAvailability>
   globalSchedulerEnabled: false
 }
 
@@ -313,6 +317,7 @@ export const AUTHORITY_RECORDS: AuthorityRecord[] = [
       "Generic worker activation",
       "Arbitrary command execution",
       "Global scheduler activation",
+      "HASH_VERIFY until exact standing-authority integration is active",
       "Network access",
       "Root or sudo execution",
       "Storage, NAS, or backup authority",
@@ -983,7 +988,7 @@ export const EVIDENCE_AUTHORITY_LINKS: AuthorityLinkRecord[] = [
     gateId: "AEGIS_BOUNDED_COMPUTE_GATE",
     relatedItem: "docs/reports/WILLIAMOS-EXECUTION-FABRIC-AEGIS-STANDING-COMPUTE-AUTHORITY-001.md",
     description: "Records the owner's narrow standing compute grant, exact ceilings, per-job admission bindings, and unchanged broad blocks.",
-    safeNextAction: "Use only for an exact eligible job with an active reviewed adapter.",
+    safeNextAction: "Keep CI_BUILD_TEST and COMPRESSION blocked until reviewed adapters exist, and HASH_VERIFY blocked until exact standing-authority integration is active.",
     prohibitedAction: "Infer generic execution, scheduler, storage, network, or remote-system authority.",
   },
   {

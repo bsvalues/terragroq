@@ -86,6 +86,17 @@ old one-use authority cannot be repurposed. No adapter currently consumes this
 standing grant, so this change authorizes the bounded class without falsely
 claiming an executable standing path.
 
+## Vocabulary mapping
+
+The dedicated authority artifact names the post-write reserve as
+`minimum_free_bytes_after_requested_writes`; the Fabric registry projects the
+same value as `minimum_free_bytes_after_job`, and the read model exposes it as
+`minimumScratchReserveBytes`. All three are fixed at 100 GiB.
+
+The authority artifact records the historical HASH adapter as
+`REVIEWED_NOT_STANDING_INTEGRATED`; the read model presents the same condition
+as `BLOCKED_STANDING_INTEGRATION_NOT_ACTIVE`. Neither value activates execution.
+
 ## Unchanged broad blocks
 
 ```text
@@ -121,7 +132,7 @@ runtime, storage, or remote-system gates.
 
 - Focused Authority Registry suite: `16/16 PASS`.
 - Standing authority eligibility suite: `4/4 PASS`.
-- Canonical Fabric registry suite: `107/107 PASS`.
+- Canonical Fabric registry suite: `111/111 PASS`.
 - Eligibility evaluation remains non-authorizing: `execution_authorized=false`
   and `dispatch_allowed=false` until durable trusted-main integration exists.
 - Broad worker, command-runner, scheduler, runtime, persistence, tool-call,

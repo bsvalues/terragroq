@@ -144,6 +144,17 @@ describe("AEGIS v1 limited standing compute authority", () => {
     const changed = structuredClone(authority)
     changed.resource_limits.maximum_concurrency = 2
     expect(() => validateAegisStandingAuthority(changed)).toThrow("does not match the reviewed v1 contract")
+    expect(evaluateAegisStandingEligibility({
+      authority: changed,
+      request: request(),
+      candidateAdmission: null,
+      now: () => now,
+    })).toMatchObject({
+      status: "REJECTED",
+      code: "AUTHORITY_INVALID",
+      execution_authorized: false,
+      dispatch_allowed: false,
+    })
 
     const source = fs.readFileSync(evaluatorPath, "utf8")
     expect(source).not.toMatch(/node:(?:child_process|fs|net|http|https)/)

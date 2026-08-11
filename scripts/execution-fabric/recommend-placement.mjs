@@ -111,8 +111,22 @@ function validateSchema(value, rawRule, schema, location = "$") {
     if (typeof rule.minimum === "number" && value < rule.minimum) errors.push(`${location}: below minimum`)
     if (typeof rule.maximum === "number" && value > rule.maximum) errors.push(`${location}: above maximum`)
   }
-  if (Array.isArray(value) && rule.items) {
-    value.forEach((item, index) => errors.push(...validateSchema(item, rule.items, schema, `${location}[${index}]`)))
+  if (Array.isArray(value)) {
+    if (Array.isArray(rule.prefixItems)) {
+      rule.prefixItems.forEach((itemRule, index) => {
+        if (index < value.length) errors.push(...validateSchema(value[index], itemRule, schema, `${location}[${index}]`))
+      })
+      if (rule.items === false && value.length > rule.prefixItems.length) {
+        errors.push(`${location}: contains items beyond prefixItems`)
+      } else if (rule.items && rule.items !== false) {
+        value.slice(rule.prefixItems.length).forEach((item, offset) => {
+          const index = rule.prefixItems.length + offset
+          errors.push(...validateSchema(item, rule.items, schema, `${location}[${index}]`))
+        })
+      }
+    } else if (rule.items && rule.items !== false) {
+      value.forEach((item, index) => errors.push(...validateSchema(item, rule.items, schema, `${location}[${index}]`)))
+    }
   }
   if (isObject(value)) {
     const properties = rule.properties ?? {}

@@ -116,7 +116,7 @@
       "os": {"family": "linux", "version": "Ubuntu 24.04"},
       "authority": {
         "allow": ["limited-standing-compute-authority", "ci-build-test-when-adapter-active", "hash-verify-when-standing-integration-active", "compression-when-adapter-active"],
-        "deny": ["authoritative-durable-state", "backup-archive-execution-authority-not-granted", "nas-until-service-and-authority-proven", "county-production-write", "pacs-production-write", "destructive-disk-action"],
+        "deny": ["authoritative-durable-state", "backup-archive", "nas", "county-production-write", "pacs-production-write", "destructive-disk-action"],
         "bounded_compute": {
           "schema": "aegis-standing-compute-authority/1",
           "authority_ref": "github-issue-586",

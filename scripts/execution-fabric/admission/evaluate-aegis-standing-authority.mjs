@@ -246,9 +246,9 @@ function validateCandidateAdmission(admission, request, authority, nowMs) {
 }
 
 export function evaluateAegisStandingEligibility({ authority, request, candidateAdmission, now = () => Date.now() }) {
-  validateAegisStandingAuthority(authority)
-  if (typeof now !== "function") fail("CLOCK_INVALID", "now must be a function")
   try {
+    validateAegisStandingAuthority(authority)
+    if (typeof now !== "function") fail("CLOCK_INVALID", "now must be a function")
     const nowMs = now()
     if (!Number.isFinite(nowMs)) fail("CLOCK_INVALID", "clock returned a non-finite value")
     validateRequest(request, authority, nowMs)

@@ -44,7 +44,7 @@ const canonicalAuthority = {
   },
   aegis: {
     allow: ['limited-standing-compute-authority', 'ci-build-test-when-adapter-active', 'hash-verify-when-standing-integration-active', 'compression-when-adapter-active'],
-    deny: ['authoritative-durable-state', 'backup-archive-execution-authority-not-granted', 'nas-until-service-and-authority-proven', 'county-production-write', 'pacs-production-write', 'destructive-disk-action'],
+    deny: ['authoritative-durable-state', 'backup-archive', 'nas', 'county-production-write', 'pacs-production-write', 'destructive-disk-action'],
     bounded_compute: {
       schema: 'aegis-standing-compute-authority/1',
       authority_ref: 'github-issue-586',
@@ -146,8 +146,22 @@ function validateSchema(value, rawRule, location = '$') {
     if (typeof rule.minimum === 'number' && value < rule.minimum) errors.push(`${location}: below minimum`);
     if (typeof rule.maximum === 'number' && value > rule.maximum) errors.push(`${location}: above maximum`);
   }
-  if (Array.isArray(value) && rule.items) {
-    value.forEach((item, index) => errors.push(...validateSchema(item, rule.items, `${location}[${index}]`)));
+  if (Array.isArray(value)) {
+    if (Array.isArray(rule.prefixItems)) {
+      rule.prefixItems.forEach((itemRule, index) => {
+        if (index < value.length) errors.push(...validateSchema(value[index], itemRule, `${location}[${index}]`));
+      });
+      if (rule.items === false && value.length > rule.prefixItems.length) {
+        errors.push(`${location}: contains items beyond prefixItems`);
+      } else if (rule.items && rule.items !== false) {
+        value.slice(rule.prefixItems.length).forEach((item, offset) => {
+          const index = rule.prefixItems.length + offset;
+          errors.push(...validateSchema(item, rule.items, `${location}[${index}]`));
+        });
+      }
+    } else if (rule.items && rule.items !== false) {
+      value.forEach((item, index) => errors.push(...validateSchema(item, rule.items, `${location}[${index}]`)));
+    }
   }
   if (typeMatches(value, 'object')) {
     const properties = rule.properties ?? {};

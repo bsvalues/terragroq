@@ -59,7 +59,6 @@
     }
   },
   "$defs": {
-    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "node_identity": {
       "type": "object",
       "additionalProperties": false,
