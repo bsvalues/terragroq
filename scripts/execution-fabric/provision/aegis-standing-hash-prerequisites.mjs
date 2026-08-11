@@ -201,7 +201,7 @@ export function buildStandingProvisioningPlan(rawManifest, observed) {
       drift.push(`existingRuntimeRoots.${root.path}`)
       continue
     }
-    existing(check, observation, {
+    const present = existing(check, observation, {
       path: root.path,
       owner: root.owner,
       group: root.group,
@@ -209,6 +209,7 @@ export function buildStandingProvisioningPlan(rawManifest, observed) {
       preserveExisting: true,
       mutationAllowed: false,
     }, `existingRuntimeRoots.${root.path}`, drift)
+    if (!present) drift.push(`existingRuntimeRoots.${root.path}.exists`)
   }
 
   const releaseExists = existing(check, observed.reviewedRelease, {

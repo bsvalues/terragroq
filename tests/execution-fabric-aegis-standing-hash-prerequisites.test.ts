@@ -331,6 +331,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
     })
 
     for (const [path, field, value] of [
+      ["/var/lib/williamos", "exists", false],
       ["/var/lib/williamos", "owner", "root"],
       ["/var/lib/williamos", "mode", "0755"],
       ["/var/lib/williamos/fabric", "group", "root"],
