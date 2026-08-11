@@ -372,7 +372,7 @@
     },
     {
       "path": "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs",
-      "sha256": "7700f0660f16e1d6adefc8c2e96bf3c5a43d724c5a6b76c97a5d24b0c101e6a0",
+      "sha256": "0e42a595006108260d0b62c8cd509114b17d04af4a7218480391ca526974b981",
       "textNormalization": "LF"
     }
   ]
