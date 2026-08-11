@@ -39,12 +39,13 @@ function fixture() {
   const packet = bound.packet
   const packetPath = path.join(directory, "packet.json"); fs.writeFileSync(packetPath, JSON.stringify(packet))
   const patchPath = path.join(directory, "patch.bin"); fs.writeFileSync(patchPath, patch)
+  const ticketPath = path.join(directory, "launch-ticket.json"); fs.writeFileSync(ticketPath, "{}\n")
   const envelopePath = path.join(directory, "envelope.json"); fs.writeFileSync(envelopePath, JSON.stringify(dispatch))
   const evidenceRoot = path.join(root, ".artifacts/execution-fabric/remote-dev-offload-v1"); evidenceRoots.push(path.join(evidenceRoot, packet.runId))
   const knownHostLine = `aegis ssh-ed25519 ${approvedAegisKey}`
   const startedAt = new Date(now - 120_000).toISOString(); const completedAt = new Date(now - 60_000).toISOString()
   const evidence = { schemaVersion: 1, runId: packet.runId, operation: "PROVE_PREFLIGHT", attempt: 1, startedAt, completedAt, status: "SUCCEEDED", exitCode: 0, nodeId: "aegis", workspace: packet.workspace, branch: packet.branch, baseSha, headSha: baseSha, outputSha256: "d".repeat(64), policySha256: packet.bindings.policySha256, packetSha256: packet.bindings.packetSha256, patchSha256: packet.patch.sha256, patchGeneration: 1, previousEvidenceSha256: null }
-  const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", controller, "-PolicyPath", policyPath, "-PacketPath", packetPath, "-DispatchEnvelopePath", envelopePath, "-PatchPath", patchPath, "-EvidenceRoot", evidenceRoot, "-Operation", "PROVE_PREFLIGHT", "-Attempt", "1", "-PreviousEvidenceSha256", "null", "-AegisKnownHostLine", knownHostLine, "-SshTimeoutSeconds", "10"]
+  const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", controller, "-PolicyPath", policyPath, "-PacketPath", packetPath, "-DispatchEnvelopePath", envelopePath, "-PatchPath", patchPath, "-EvidenceRoot", evidenceRoot, "-Operation", "PROVE_PREFLIGHT", "-Attempt", "1", "-PreviousEvidenceSha256", "null", "-LaunchTicketPath", ticketPath, "-AegisKnownHostLine", knownHostLine, "-SshTimeoutSeconds", "10"]
   return { directory, args, evidence, evidenceRoot, packet }
 }
 
@@ -131,6 +132,14 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(result.status).toBe(2)
     expect(JSON.parse(result.stdout)).toMatchObject({ status: "BLOCKED", reasonCode: "REMOTE_DEV_SCOPE_INACTIVE" })
     expect(fs.existsSync(fakeLog)).toBe(false)
+  })
+
+  it("routes the streamed worker only through the fixed root-installed enforced-slice launcher", () => {
+    const source = fs.readFileSync(controller, "utf8")
+    expect(source).toContain("/usr/local/libexec/williamos-aegis-remote-dev-network-launcher.mjs")
+    expect(source).not.toContain("aegis bash -s --")
+    expect(source).toContain("$remotePatchArgument=\"'\"+$relay.patch+\"'\"")
+    expect(source).toContain("+$remotePatchArgument+")
   })
 })
 
@@ -486,6 +495,9 @@ describe.skip("future-activation Hermes-mediated remote development controller",
     const workerDigest = crypto.createHash("sha256").update(fs.readFileSync(path.join(root, "scripts/execution-fabric/live/aegis-remote-dev-worker.sh"))).digest("hex")
     expect(match?.[1]).toBe(workerDigest)
     expect(source.match(/WORKER_DIGEST_MISMATCH/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(source).toContain("LaunchTicketPath")
+    expect(source).toContain("SIGNED_LAUNCH_TICKET_INVALID")
+    expect(source).not.toContain("NetworkProofId")
   })
 
   it("Hermes rejects altered worker bytes before an AEGIS process starts", () => {

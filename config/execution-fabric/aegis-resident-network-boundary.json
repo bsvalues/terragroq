@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "policyId": "aegis-remote-dev-root-attested-egress-v1",
+  "provider": "proveResidentAegisNetworkBoundary",
+  "nodeId": "aegis",
+  "executionIdentity": {
+    "account": "williamos-fabric",
+    "machineIdSha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b"
+  },
+  "trustedMain": {
+    "repository": "bsvalues/terragroq",
+    "ref": "refs/heads/main",
+    "minimumCommit": "f04c816dbcba96990f7754b4767ff16ae7b9b5c9"
+  },
+  "receipt": {
+    "path": "/run/williamos-fabric/aegis-remote-dev-network-proof.json",
+    "ownerUid": 0,
+    "mode": "0444",
+    "maximumAgeSeconds": 30,
+    "bootIdPath": "/proc/sys/kernel/random/boot_id",
+    "controlGroupRootPath": "/sys/fs/cgroup",
+    "enforcedSliceUnit": "williamos-aegis-remote-dev.slice"
+  },
+  "workerLaunch": {
+    "launcherPath": "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs",
+    "installedPath": "/usr/local/libexec/williamos-aegis-remote-dev-network-launcher.mjs",
+    "nodePath": "/usr/bin/node",
+    "systemdRunPath": "/usr/bin/systemd-run",
+    "sliceUnit": "williamos-aegis-remote-dev.slice",
+    "workerMustBeExactRunScopeDescendant": true,
+    "receiptLauncherDigestRequired": true,
+    "launchAuthorityPublicKeyPath": "/etc/williamos-fabric/aegis-remote-dev-launch-authority.pem",
+    "signedSingleOperationTicketRequired": true,
+    "canonicalWorkerDigestRequired": true,
+    "ticketConsumptionDirectory": "/var/lib/williamos-fabric/remote-dev-launch-tickets",
+    "atomicTicketTombstoneRequired": true,
+    "appendOnlyDirectoryRequired": true
+  },
+  "enforcement": {
+    "mechanism": "ROOT_ATTESTED_CGROUP_EGRESS_V1",
+    "defaultDeny": true,
+    "directNetworkAllowed": false,
+    "brokerRequired": true,
+    "atlas": {
+      "allowed": false,
+      "addresses": [
+        "192.168.1.156/32"
+      ],
+      "ports": "ALL"
+    },
+    "endpoints": [
+      {
+        "host": "ssh.github.com",
+        "port": 443,
+        "operations": [
+          "git-fetch",
+          "git-push"
+        ]
+      },
+      {
+        "host": "api.github.com",
+        "port": 443,
+        "operations": [
+          "github-pr"
+        ]
+      },
+      {
+        "host": "api.nuget.org",
+        "port": 443,
+        "operations": [
+          "dotnet-restore"
+        ]
+      },
+      {
+        "host": "globalcdn.nuget.org",
+        "port": 443,
+        "operations": [
+          "dotnet-restore"
+        ]
+      }
+    ]
+  },
+  "bindings": {
+    "activationPath": "config/execution-fabric/remote-dev-offload-v1-activation.json",
+    "providerPath": "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs",
+    "launcherPath": "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs",
+    "identityPath": "config/execution-fabric/aegis-resident-identity.json"
+  }
+}

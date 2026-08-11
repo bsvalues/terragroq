@@ -42,6 +42,9 @@
         "scripts/execution-fabric/live/remote-dev-offload-contract.mjs",
         "config/execution-fabric/remote-dev-offload-v1.policy.json",
         "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json",
+        "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs",
+        "config/execution-fabric/aegis-resident-network-boundary.json",
+        "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs",
         "scripts/execution-fabric/canonical-json.mjs",
         "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs",
         "config/execution-fabric/aegis-resident-identity.json"
@@ -58,11 +61,11 @@
   "bindings": {
     "worker": {
       "path": "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
-      "sha256": "0804de94642f936e3db4972f7c4fe6839446ecf21c196d282dffd82fae48c6cb"
+      "sha256": "a721abdda3f7feb2833a47c2021d846962b44f0fc48a16a1a9dbe024774a71d1"
     },
     "controller": {
       "path": "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1",
-      "sha256": "4b65be81943399844e3273b4b2993d2ee61f7ddd7de0b3d2647c35d7fa012b0a"
+      "sha256": "5504fa9bdfafe3a0cde9a7cee0886233580de52831ba8bf9958366834709f3ec"
     },
     "contract": {
       "path": "scripts/execution-fabric/live/remote-dev-offload-contract.mjs",
@@ -70,11 +73,23 @@
     },
     "policy": {
       "path": "config/execution-fabric/remote-dev-offload-v1.policy.json",
-      "sha256": "57302d39033a78d65f4c398ca2ae78ae3821f6909a76856309e77eb209e23030"
+      "sha256": "b5e0d20825f3b4136565c6593988f89240579e5b3072bd20e0bc1ed4c4cb3c75"
     },
     "inactiveScope": {
       "path": "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json",
-      "sha256": "e96aea481c840971cf4de0dbc88e644bc050ea14f6ddd12eaea0c7cf5f7f3a8f"
+      "sha256": "9e66f77e1060d5cf47da6d264ad493049bdaebc9cf8518dea5fea9795594d772"
+    },
+    "networkProvider": {
+      "path": "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs",
+      "sha256": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507"
+    },
+    "networkPolicy": {
+      "path": "config/execution-fabric/aegis-resident-network-boundary.json",
+      "sha256": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6"
+    },
+    "networkLauncher": {
+      "path": "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs",
+      "sha256": "d382962531bd80269c1b75297dab331682364262810bdde4b4a61a7fe4b4b69a"
     }
   },
   "executionIdentity": {

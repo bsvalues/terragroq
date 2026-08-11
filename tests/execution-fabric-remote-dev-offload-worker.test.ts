@@ -21,6 +21,7 @@ const reservedPaths = [
   "docs/brain/evidence/WO-TF-REMOTE-DEV-OFFLOAD-001-proof.md",
 ]
 const operations = ["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "APPLY_RESERVED_PATCH", "RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE", "COMMIT_RESERVED_PATHS", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE", "CLEAN_EXACT_WORKSPACE"]
+const launchTicketId = "34d1f58a-5c15-4e62-845f-f54f73829e2f"
 const toPosix = (value: string) => `/${value[0].toLowerCase()}${value.slice(2).replaceAll("\\", "/")}`
 const sha256 = (value: Buffer | string) => crypto.createHash("sha256").update(value).digest("hex")
 const encode = (value: Buffer | string) => Buffer.from(value).toString("base64")
@@ -53,6 +54,20 @@ function makePacket(baseSha: string, patch: Buffer, overrides: Record<string, un
 function writeExecutable(file: string, body: string) {
   fs.writeFileSync(file, body.replaceAll("\r\n", "\n"))
   fs.chmodSync(file, 0o755)
+}
+
+function installPreflightFakes(value: ReturnType<typeof fixture>) {
+  writeExecutable(path.join(value.fakeBin, "hostname"), "#!/usr/bin/env bash\nprintf '%s\\n' aegis\n")
+  writeExecutable(path.join(value.fakeBin, "nproc"), "#!/usr/bin/env bash\nprintf '%s\\n' 12\n")
+  writeExecutable(path.join(value.fakeBin, "df"), "#!/usr/bin/env bash\nprintf '%s\\n' Available 100000000000\n")
+  writeExecutable(path.join(value.fakeBin, "awk"), `#!/usr/bin/env bash
+if [[ "\${@: -1}" == /proc/meminfo ]]; then printf '%s\n' 12884901888; exit 0; fi
+exec /usr/bin/awk "$@"
+`)
+  writeExecutable(path.join(value.fakeBin, "git"), `#!/usr/bin/env bash
+if [[ "\${1:-}" == --version ]]; then printf '%s\n' 'git version 2.50.0'; fi
+exit 0
+`)
 }
 
 function fixture() {
@@ -158,6 +173,12 @@ exec /usr/bin/readlink "$@"
 [[ -n "\${FAKE_SYNC_LOG:-}" ]] && printf '%s\n' "\${@: -1}" > "$FAKE_SYNC_LOG"
 exit 0
 `)
+  writeExecutable(path.join(fakeBin, "mv"), `#!/usr/bin/env bash
+source_path="\${@: -2:1}"; destination="\${@: -1}"
+if [[ "\${FAKE_ENTER_BEFORE_QUARANTINE:-0}" == 1 ]]; then printf '%s\n' "$destination" > "$REMOTE_DEV_WORKER_ROOT/quarantine-entered"; fi
+if [[ "\${FAKE_RECREATE_ORIGINAL:-0}" == 1 ]]; then /usr/bin/mv "$@" || exit $?; mkdir -- "$source_path"; exit 0; fi
+exec /usr/bin/mv "$@"
+`)
   writeExecutable(path.join(fakeBin, "systemd-run"), `#!/usr/bin/env bash
 props=''
 working_directory=''
@@ -211,10 +232,10 @@ exec "$@"
 function runWorker(operation: string, value: ReturnType<typeof fixture>, options: { packet?: any, patch?: Buffer, env?: Record<string, string>, attempt?: number, previous?: string } = {}) {
   const packet = options.packet ?? value.packet
   const patch = options.patch ?? value.patch
-  const result = spawnSync(bash, [worker, operation, encode(JSON.stringify(packet)), encode(patch), String(options.attempt ?? 1), options.previous ?? "null"], {
+  const result = spawnSync(bash, [worker, operation, encode(JSON.stringify(packet)), encode(patch), String(options.attempt ?? 1), options.previous ?? "null", launchTicketId], {
     encoding: "utf8",
     env: { ...process.env, PATH: `${toPosix(value.fakeBin)}:${toPosix("C:\\Program Files\\nodejs")}:${process.env.PATH}`, REMOTE_DEV_WORKER_ROOT: toPosix(value.hostRoot), REMOTE_DEV_PROCESS_TIMEOUT_SECONDS: "2", ...options.env },
-    timeout: 20_000,
+    timeout: 40_000,
   })
   const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean)
   return { ...result, json: lines.length ? JSON.parse(lines.at(-1)!) : undefined }
@@ -228,6 +249,14 @@ function workerSummary(stderr: string) {
 afterEach(() => { while (tempRoots.length) fs.rmSync(tempRoots.pop()!, { recursive: true, force: true }) })
 
 describe("fixed AEGIS remote development worker", () => {
+  it("cannot reach the user service manager or create nested systemd units", () => {
+    const source = fs.readFileSync(worker, "utf8")
+    expect(source).not.toContain("systemd-run")
+    expect(source).toContain("worker can reach the user service manager")
+    expect(source).toContain("worker is outside the exact fixed launcher service")
+    expect(source).toContain('williamos-aegis-remote-dev-$LAUNCH_TICKET_ID.service')
+  })
+
   it("rejects any execution identity other than williamos-fabric", () => {
     const value = fixture()
     expect(runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_EXECUTION_ACCOUNT: "bs" } }).json).toMatchObject({ status: "EXECUTION_IDENTITY_MISMATCH" })
@@ -298,16 +327,16 @@ describe("fixed AEGIS remote development worker", () => {
   }, 60_000)
 
   it("fails preflight when aggregate containment is unavailable", () => {
-    const missing = fixture(); fs.rmSync(missing.physicalWorkspace, { recursive: true, force: true }); fs.rmSync(path.join(missing.fakeBin, "systemd-run"))
-    expect(runWorker("PROVE_PREFLIGHT", missing).json).toMatchObject({ status: "CONTAINMENT_UNAVAILABLE" })
+    const missing = fixture(); fs.rmSync(missing.physicalWorkspace, { recursive: true, force: true })
+    expect(runWorker("PROVE_PREFLIGHT", missing, { env: { REMOTE_DEV_TEST_CGROUP: "/user.slice/other.service" } }).json).toMatchObject({ status: "CONTAINMENT_UNAVAILABLE" })
   })
 
   it("requires one aggregate systemd cgroup and an inherited 80 GiB XFS project quota rather than per-process hints", () => {
     const source = fs.readFileSync(worker, "utf8")
-    expect(source).toContain("systemd-run --user")
-    expect(source).toContain("AllowedCPUs=0-11")
-    expect(source).toContain("CPUQuota=1200%")
-    expect(source).toContain("MemoryMax=12884901888")
+    const launcher = fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")
+    expect(launcher).toContain("AllowedCPUs=0-11")
+    expect(launcher).toContain("CPUQuota=1200%")
+    expect(launcher).toContain("MemoryMax=12884901888")
     expect(source).toContain("xfs_io")
     expect(source).toContain("xfs_quota")
     expect(source).toContain("proj-inherit")
@@ -319,16 +348,16 @@ describe("fixed AEGIS remote development worker", () => {
   it("keeps preflight read-only and checks exact identity, toolchain, capacity, containment, and repository auth", () => {
     const value = fixture()
     fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
-    fs.rmSync(path.join(value.fakeBin, "systemd-run"))
     const parent = path.dirname(value.physicalWorkspace)
     const before = fs.readdirSync(parent).sort()
-    const result = runWorker("PROVE_PREFLIGHT", value)
+    const result = runWorker("PROVE_PREFLIGHT", value, { env: { REMOTE_DEV_TEST_CGROUP: "/user.slice/other.service" } })
     expect(result.json).toMatchObject({ status: "CONTAINMENT_UNAVAILABLE" })
     expect(fs.readdirSync(parent).sort()).toEqual(before)
     const source = fs.readFileSync(worker, "utf8")
     const preflight = source.slice(source.indexOf("PROVE_PREFLIGHT)"), source.indexOf("CREATE_WORKSPACE)"))
     for (const required of ["hostname", '"$IDENTITY_BINARY" -un', "git --version", "dotnet --version", "node --version", "corepack pnpm --version", "nproc", "MemTotal", "df -PB1", "run_preflight_repository_profile", "probe_containment", "prove_project_quota"]) expect(preflight).toContain(required)
-    for (const required of ["git ls-remote", "push --dry-run", "TemporaryFileSystem=/tmp:size=4294967296"]) expect(source).toContain(required)
+    for (const required of ["git ls-remote", "push --dry-run"]) expect(source).toContain(required)
+    expect(fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")).toContain("TemporaryFileSystem=/tmp:size=4294967296")
     expect(source).not.toContain("PREFLIGHT_TMP_ROOT")
     expect(preflight).not.toContain('exec 9>')
     expect(preflight).not.toContain('flock -n')
@@ -344,9 +373,14 @@ describe("fixed AEGIS remote development worker", () => {
     const source = fs.readFileSync(worker, "utf8")
     expect(source).toContain("CONTAINMENT_UNAVAILABLE")
     expect(source).toContain("SCRATCH_CONFINEMENT_FAILED")
-    for (const variable of ["TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME", "NUGET_PACKAGES", "DOTNET_CLI_HOME", "COREPACK_HOME", "npm_config_cache"]) expect(source).toContain(`--setenv=${variable}=`)
+    for (const [variable, suffix] of [
+      ["TMPDIR", "tmp"], ["TMP", "tmp"], ["TEMP", "tmp"],
+      ["XDG_CACHE_HOME", "xdg-cache"], ["NUGET_PACKAGES", "nuget"],
+      ["DOTNET_CLI_HOME", "dotnet-home"], ["COREPACK_HOME", "corepack"],
+      ["npm_config_cache", "npm-cache"],
+    ]) expect(source).toContain(`${variable}="$scratch_root/${suffix}"`)
     expect(source).toContain('run_ordinary_profile "$PHYSICAL_WORKSPACE" "$SCRATCH_DIR"')
-    expect(source).toContain('ReadOnlyPaths=/tmp /var/tmp')
+    expect(fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")).toContain('ReadOnlyPaths=/tmp /var/tmp /run/user/${uid}')
     expect(source).toContain('measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"')
     expect(source).toContain('measure_scratch; SCRATCH_AFTER="$SCRATCH_MEASURED_BYTES"')
   }, 15_000)
@@ -370,7 +404,8 @@ describe("fixed AEGIS remote development worker", () => {
 
   it("probes both namespace profiles before acquisition and removes the exact workspace through the parent cleanup profile", () => {
     const preflight = fixture(); fs.rmSync(preflight.physicalWorkspace, { recursive: true, force: true })
-    expect(runWorker("PROVE_PREFLIGHT", preflight, { env: { FAKE_REQUIRE_PROFILE_PROBES: "1" } }).json).not.toMatchObject({ status: "CONTAINMENT_UNAVAILABLE" })
+    installPreflightFakes(preflight)
+    expect(runWorker("PROVE_PREFLIGHT", preflight).json).toMatchObject({ status: "SUCCEEDED" })
 
     const cleanup = fixture()
     fs.writeFileSync(path.join(cleanup.physicalWorkspace, ".williamos-post-merge-proven"), `${cleanup.packet.runId}:${cleanup.baseSha}\n`)
@@ -378,7 +413,7 @@ describe("fixed AEGIS remote development worker", () => {
     expect(result.json).toMatchObject({ status: "CLEANUP_ABSENCE_PROVEN" })
     expect(fs.existsSync(cleanup.physicalWorkspace)).toBe(false)
     const source = fs.readFileSync(worker, "utf8")
-    expect(source).toContain('-p "ReadWritePaths=$PHYSICAL_PARENT"')
+    expect(fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")).toContain("ReadWritePaths=${WORKSPACE_PARENT}")
     expect(source).not.toContain('run_cleanup_capture rm -rf -- "$PHYSICAL_WORKSPACE"')
   }, 30_000)
 
@@ -388,24 +423,18 @@ describe("fixed AEGIS remote development worker", () => {
     for (const operation of ["RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE"]) {
       expect(runWorker(operation, value, { env }).json).toMatchObject({ status: "SUCCEEDED" })
     }
-    expect(fs.readFileSync(worker, "utf8")).toContain('-p "WorkingDirectory=$working_directory"')
+    expect(fs.readFileSync(worker, "utf8")).toContain('cd -- "$working_directory" || exit 125')
   }, 45_000)
 
   it("disables systemd manager expansion and preserves fixed preflight Bash variables", () => {
     const value = fixture(); fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
-    writeExecutable(path.join(value.fakeBin, "hostname"), "#!/usr/bin/env bash\nprintf '%s\\n' aegis\n")
+    installPreflightFakes(value)
     writeExecutable(path.join(value.fakeBin, "id"), `#!/usr/bin/env bash
 if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\n' '${bashUid}'; fi
 `)
-    writeExecutable(path.join(value.fakeBin, "nproc"), "#!/usr/bin/env bash\nprintf '%s\\n' 12\n")
-    writeExecutable(path.join(value.fakeBin, "df"), "#!/usr/bin/env bash\nprintf '%s\\n' Available 100000000000\n")
-    writeExecutable(path.join(value.fakeBin, "git"), `#!/usr/bin/env bash
-if [[ "\${1:-}" == --version ]]; then printf '%s\n' 'git version 2.50.0'; fi
-exit 0
-`)
     const result = runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_REQUIRE_NO_EXPAND: "1" } })
     expect(result.json).toMatchObject({ status: "SUCCEEDED" })
-    expect((fs.readFileSync(worker, "utf8").match(/--expand-environment=no/g) ?? []).length).toBeGreaterThanOrEqual(3)
+    expect(fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")).toContain('"--expand-environment=no"')
   }, 20_000)
 
   it("blocks exact cleanup while an unrelated same-user process has a workspace cwd or open fd", () => {
