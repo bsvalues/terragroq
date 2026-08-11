@@ -77,7 +77,8 @@ function verifiedManifest() {
   verifyRootOwnedDirectoryChain(path.dirname(RELEASE_MANIFEST_PATH))
   readRootOwnedFile(BOOTSTRAP_PATH, 65536)
   let manifest
-  try { manifest = JSON.parse(readRootOwnedFile(RELEASE_MANIFEST_PATH, 65536).toString("utf8")) } catch { fail("RELEASE_MANIFEST_UNTRUSTED", "release manifest is not valid JSON") }
+  const manifestBytes = readRootOwnedFile(RELEASE_MANIFEST_PATH, 65536)
+  try { manifest = JSON.parse(manifestBytes.toString("utf8")) } catch { fail("RELEASE_MANIFEST_UNTRUSTED", "release manifest is not valid JSON") }
   const body = { ...manifest }
   delete body.release_manifest_sha256
   if (manifest.schema_version !== "1.0-williamos-trusted-main-release"

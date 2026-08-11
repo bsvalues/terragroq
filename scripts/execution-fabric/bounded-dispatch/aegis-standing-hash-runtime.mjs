@@ -199,12 +199,13 @@ export async function executeAegisStandingHash(options) {
     "candidateAdmission",
     "now",
     "claimAdmission",
+    "persistClaimFailure",
     "acquireLease",
     "releaseLease",
     "readInput",
     "persistResult",
   ], "runtime options")
-  for (const callback of ["now", "claimAdmission", "acquireLease", "releaseLease", "readInput", "persistResult"]) {
+  for (const callback of ["now", "claimAdmission", "persistClaimFailure", "acquireLease", "releaseLease", "readInput", "persistResult"]) {
     if (typeof options[callback] !== "function") fail("INVALID_RUNTIME_CONTRACT", `${callback} must be a function`)
   }
 
@@ -259,6 +260,9 @@ export async function executeAegisStandingHash(options) {
   let acquiredLease = null
   let failure = null
   let completion = null
+  let terminalPersisted = false
+  let startedAt = null
+  let verification = null
 
   try {
     const lease = object(await options.acquireLease(requestedLease), "lease result")
@@ -267,6 +271,7 @@ export async function executeAegisStandingHash(options) {
       ...claimBinding,
       lease_id: lease.lease_id,
       fencing_token: lease.fencing_token,
+      acquired_at: lease.acquired_at,
     }
     timestamp(lease.acquired_at, "lease.acquired_at")
     if (lease.lease_id !== requestedLease.lease_id || lease.fencing_token !== requestedLease.fencing_token) {
@@ -283,7 +288,7 @@ export async function executeAegisStandingHash(options) {
       now: () => recheckedAt,
     }), expectedEligibility)
 
-    const startedAt = finiteClock(options.now)
+    startedAt = finiteClock(options.now)
     requireFresh(request, candidateAdmission, authority, startedAt)
     const bytes = await options.readInput({
       ...claimBinding,
@@ -293,7 +298,6 @@ export async function executeAegisStandingHash(options) {
     })
     if (!(bytes instanceof Uint8Array)) fail("INPUT_TYPE_INVALID", "input reader must return exact bytes")
     const exactBytes = Buffer.from(bytes)
-    let verification
     try {
       verification = verifyAegisHashBytes(exactBytes, request.input.expected_sha256, request.input.expected_byte_length)
     } catch (error) {
@@ -365,10 +369,67 @@ export async function executeAegisStandingHash(options) {
       evidence,
       lease_released: false,
     }
+    terminalPersisted = true
   } catch (error) {
     failure = error
+    const failureBody = {
+      schema_version: "1.0-aegis-standing-hash-completion",
+      status: "FAILED_CLOSED",
+      result: typeof error?.code === "string" ? error.code : "HASH_EXECUTION_FAILED",
+      authority_id: authority.authority_id,
+      authority_sha256: candidateAdmission.authority_sha256,
+      job_id: request.job_id,
+      outcome_id: request.outcome.outcome_id,
+      work_order_id: request.work_order_id,
+      source: structuredClone(request.source),
+      workload: structuredClone(request.workload),
+      admission: { admission_id: candidateAdmission.admission_id, admission_sha256: admissionSha256 },
+      claim: { claim_id: request.claim.claim_id, claimed_at: claim.claimed_at },
+      lease: acquiredLease ? {
+        lease_id: acquiredLease.lease_id,
+        fencing_token: acquiredLease.fencing_token,
+      } : null,
+      request_binding_sha256: requestBindingSha256,
+      operation: verification ? {
+        kind: "HASH_VERIFY",
+        relative_path: request.input.relative_path,
+        byte_length: verification.byte_length,
+        digest_algorithm: "sha256",
+        expected_sha256: request.input.expected_sha256,
+        observed_sha256: verification.observed_sha256,
+        matched: verification.matched,
+      } : null,
+      chronology: {
+        started_at: startedAt === null ? null : new Date(startedAt).toISOString(),
+        failed_at: acquiredLease?.acquired_at ?? claim.claimed_at,
+      },
+      safety: {
+        shell_executed: false,
+        network_accessed: false,
+        workload_storage_written: false,
+        control_evidence_storage_written: true,
+        authority_escalated: false,
+        autonomous_dispatch: false,
+      },
+      immutable: true,
+    }
+    const failureEvidence = deepFreeze({
+      ...failureBody,
+      evidence_sha256: sha256Object(failureBody),
+    })
+    try {
+      const persisted = object(await (acquiredLease
+        ? options.persistResult(failureEvidence)
+        : options.persistClaimFailure(failureEvidence)), "failure persistence result")
+      if (persisted.persisted !== true || persisted.evidence_sha256 !== failureEvidence.evidence_sha256) {
+        fail("EVIDENCE_PERSISTENCE_FAILED", "immutable failure evidence was not durably acknowledged")
+      }
+      terminalPersisted = true
+    } catch (persistenceError) {
+      failure.persistence_error = persistenceError
+    }
   } finally {
-    if (acquiredLease) {
+    if (acquiredLease && terminalPersisted) {
       try {
         await releaseAcquiredLease(options.releaseLease, acquiredLease, failure)
         if (completion) completion.lease_released = true

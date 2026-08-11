@@ -480,6 +480,7 @@ export function createStandingLedgerProviders({
   const root = fsApi.realpathSync(lexicalRoot)
   if (root !== lexicalRoot || !validateDirectory(rootStats, uid)) fail("LEDGER_UNTRUSTED", "standing ledger root is not private")
   let lastClaim = null
+  let lastClaimFailure = null
   let lastLease = null
   let lastResult = null
   let lastRelease = null
@@ -708,6 +709,36 @@ export function createStandingLedgerProviders({
     return { acquired: true, ...binding, acquired_at: acquiredAt }
   })
 
+  const persistClaimFailure = async (evidence) => withMutationLock(async () => {
+    if (!DIGEST.test(evidence?.evidence_sha256 ?? "") || evidence?.status !== "FAILED_CLOSED" || evidence?.lease !== null) {
+      fail("EVIDENCE_INVALID", "claim-only failure evidence is invalid")
+    }
+    const key = sha256(canonicalBytes({
+      authority_id: evidence.authority_id,
+      admission_id: evidence.admission?.admission_id,
+      admission_sha256: evidence.admission?.admission_sha256,
+    }))
+    const claimPath = path.join(root, `claim-${key}.json`)
+    const retainedClaim = readLedgerWith(fsApi, claimPath, uid, validateFile)
+    if (!recordDigestValid(retainedClaim, "claim_record_sha256")
+      || retainedClaim.claim_id !== evidence.claim?.claim_id
+      || retainedClaim.request_binding_sha256 !== evidence.request_binding_sha256) {
+      fail("LEDGER_UNTRUSTED", "claim-only failure does not bind a durable admission claim")
+    }
+    const filePath = ledgerRecordPath(root, "result", evidence.admission.admission_id, "admission_id")
+    try { writeExclusiveWith(fsApi, filePath, evidence, sync) } catch (error) {
+      if (error?.code !== "EEXIST") throw error
+      const retained = readLedgerWith(fsApi, filePath, uid, validateFile)
+      if (retained?.evidence_sha256 !== evidence.evidence_sha256 || canonical(retained) !== canonical(evidence)) {
+        fail("LEDGER_UNTRUSTED", "retained claim-only failure evidence differs")
+      }
+      lastClaimFailure = retained
+      return { persisted: true, evidence_sha256: retained.evidence_sha256 }
+    }
+    lastClaimFailure = evidence
+    return { persisted: true, evidence_sha256: evidence.evidence_sha256 }
+  })
+
   const persistResult = async (evidence) => withMutationLock(async () => {
     if (!DIGEST.test(evidence?.evidence_sha256 ?? "")) fail("EVIDENCE_INVALID", "completion evidence digest is invalid")
     const active = readLedgerWith(fsApi, activePath, uid, validateFile)
@@ -772,10 +803,11 @@ export function createStandingLedgerProviders({
   return {
     ledgerRoot: root,
     claimAdmission,
+    persistClaimFailure,
     acquireLease,
     persistResult,
     releaseLease,
-    runtimeEvidence: () => ({ claim_sha256: lastClaim?.claim_record_sha256 ?? null, lease_sha256: lastLease?.lease_record_sha256 ?? null, result_sha256: lastResult?.evidence_sha256 ?? null, release_sha256: lastRelease?.release_sha256 ?? null }),
+    runtimeEvidence: () => ({ claim_sha256: lastClaim?.claim_record_sha256 ?? null, lease_sha256: lastLease?.lease_record_sha256 ?? null, result_sha256: lastResult?.evidence_sha256 ?? lastClaimFailure?.evidence_sha256 ?? null, release_sha256: lastRelease?.release_sha256 ?? null }),
   }
 }
 
@@ -808,6 +840,7 @@ export async function runResidentAegisStandingHash(argv = process.argv.slice(2))
     candidateAdmission,
     now: () => Date.now(),
     claimAdmission: ledger.claimAdmission,
+    persistClaimFailure: ledger.persistClaimFailure,
     acquireLease: ledger.acquireLease,
     releaseLease: ledger.releaseLease,
     persistResult: ledger.persistResult,

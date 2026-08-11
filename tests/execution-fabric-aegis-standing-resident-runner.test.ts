@@ -96,6 +96,24 @@ function completion(binding = leaseBinding()): Json {
   return { ...body, evidence_sha256: sha256Object(body) }
 }
 
+function claimFailure(binding = claimBinding()): Json {
+  const body = {
+    schema_version: "1.0-aegis-standing-hash-completion",
+    status: "FAILED_CLOSED",
+    result: "CONCURRENCY_LIMIT_REACHED",
+    authority_id: binding.authority_id,
+    admission: {
+      admission_id: binding.admission_id,
+      admission_sha256: binding.admission_sha256,
+    },
+    claim: { claim_id: binding.claim_id },
+    lease: null,
+    request_binding_sha256: binding.request_binding_sha256,
+    immutable: true,
+  }
+  return { ...body, evidence_sha256: sha256Object(body) }
+}
+
 function ledger(root = tempRoot("aegis-standing-ledger-"), overrides: Json = {}) {
   fs.chmodSync(root, 0o700)
   const journal = journalByRoot.get(root) ?? [{
@@ -252,10 +270,10 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     expect(descriptorReads.some((candidate) => typeof candidate === "number")).toBe(true)
 
     const driftedFs = Object.create(fs) as typeof fs
-    driftedFs.fstatSync = ((descriptor: number) => {
-      const stats = fs.fstatSync(descriptor)
+    driftedFs.lstatSync = ((candidate: fs.PathLike) => {
+      const stats = fs.lstatSync(candidate)
       return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, { ino: stats.ino + 1 })
-    }) as typeof fs.fstatSync
+    }) as typeof fs.lstatSync
     expect(() => readTrustedClosureFile(driftedFs, root, relative)).toThrow("TRUSTED_MAIN_MISMATCH")
   })
 
@@ -308,6 +326,21 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
 
     await expect(providers.claimAdmission(binding)).resolves.toMatchObject({ claimed: false })
     expect(fs.readdirSync(root).filter((name) => name.startsWith("claim-"))).toHaveLength(0)
+  })
+
+  it("persists immutable claim-only failure evidence when no lease is acquired", async () => {
+    const root = tempRoot("aegis-standing-claim-failure-")
+    const providers = ledger(root)
+    const binding = claimBinding()
+    const evidence = claimFailure(binding)
+    await providers.claimAdmission(binding)
+
+    await expect(providers.persistClaimFailure(evidence)).resolves.toEqual({
+      persisted: true,
+      evidence_sha256: evidence.evidence_sha256,
+    })
+    expect(providers.runtimeEvidence().result_sha256).toBe(evidence.evidence_sha256)
+    await expect(providers.persistClaimFailure({ ...evidence, result: "CHANGED" })).rejects.toThrow("LEDGER_UNTRUSTED")
   })
 
   it("fails closed on a malformed retained journal claim", async () => {
@@ -603,7 +636,9 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     expect(source).toContain("manifest.release_root !== releaseRoot")
     expect(source).toContain("before.uid !== 0")
     expect(source).toContain("sha256(readRootOwnedFile(candidate, 1024 * 1024)) !== expected")
-    expect(source.indexOf("verifiedManifest()")).toBeLessThan(source.indexOf("await import("))
+    expect(source).toMatch(/const \{ manifest, releaseRoot \} = verifiedManifest\(\)/)
+    expect(source.indexOf("= verifiedManifest()")).toBeGreaterThan(-1)
+    expect(source.indexOf("= verifiedManifest()")).toBeLessThan(source.indexOf("await import("))
     expect(source).not.toMatch(/node:child_process|\b(?:exec|execFile|spawn|fork)Sync?\s*\(|shell:\s*true/)
     expect(source).not.toMatch(/node:(?:http|https|net|tls|dns)|\bssh\b|api\.github\.com|\bgh\b/)
   })

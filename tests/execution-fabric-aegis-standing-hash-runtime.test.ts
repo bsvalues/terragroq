@@ -171,6 +171,10 @@ function harness(overrides: Json = {}) {
     return { released, lease_id: binding.lease_id, fencing_token: binding.fencing_token }
   })
   const readInput = vi.fn(async () => Buffer.from(inputBytes))
+  const persistClaimFailure = vi.fn(async (evidence: Json) => {
+    events.push("persist-claim-failure")
+    return { persisted: true, evidence_sha256: evidence.evidence_sha256 }
+  })
   const persistResult = vi.fn(async (evidence: Json) => {
     events.push("persist")
     return { persisted: true, evidence_sha256: evidence.evidence_sha256 }
@@ -182,6 +186,7 @@ function harness(overrides: Json = {}) {
     acquireLease,
     releaseLease,
     readInput,
+    persistClaimFailure,
     persistResult,
     ...overrides,
   }
@@ -220,6 +225,7 @@ async function execute(value: Json, candidate: Json, runtime = harness(), now = 
     candidateAdmission: candidate,
     now,
     claimAdmission: runtime.claimAdmission,
+    persistClaimFailure: runtime.persistClaimFailure,
     acquireLease: runtime.acquireLease,
     releaseLease: runtime.releaseLease,
     readInput: runtime.readInput,
@@ -272,7 +278,8 @@ describe("AEGIS standing HASH_VERIFY runtime", () => {
 
     await expect(executeAegisStandingHash({
       authority: authority(), request: value, candidateAdmission: candidate, now: () => baseTime,
-      claimAdmission: runtime.claimAdmission, acquireLease: runtime.acquireLease,
+      claimAdmission: runtime.claimAdmission, persistClaimFailure: runtime.persistClaimFailure,
+      acquireLease: runtime.acquireLease,
       releaseLease: runtime.releaseLease, readInput: runtime.readInput, persistResult: runtime.persistResult,
     })).rejects.toMatchObject({ code: "ELIGIBILITY_NOT_AUTHORIZED" })
     expect(runtime.claimAdmission).not.toHaveBeenCalled()
@@ -284,6 +291,11 @@ describe("AEGIS standing HASH_VERIFY runtime", () => {
     })
     const value = request()
     await expect(execute(value, admission(value), occupied)).rejects.toMatchObject({ code: "CONCURRENCY_LIMIT_REACHED" })
+    expect(occupied.persistClaimFailure).toHaveBeenCalledWith(expect.objectContaining({
+      status: "FAILED_CLOSED",
+      result: "CONCURRENCY_LIMIT_REACHED",
+      lease: null,
+    }))
     expect(occupied.readInput).not.toHaveBeenCalled()
     expect(occupied.releaseLease).not.toHaveBeenCalled()
 
@@ -322,6 +334,7 @@ describe("AEGIS standing HASH_VERIFY runtime", () => {
     await expect(executeAegisStandingHash({
       authority: authority(), request: value, candidateAdmission: candidate,
       now: clocks(baseTime, baseTime + 1000), claimAdmission: runtime.claimAdmission,
+      persistClaimFailure: runtime.persistClaimFailure,
       acquireLease: runtime.acquireLease, releaseLease: runtime.releaseLease,
       readInput: runtime.readInput, persistResult: runtime.persistResult,
     })).rejects.toMatchObject({ code: "EVIDENCE_STALE" })
@@ -334,20 +347,35 @@ describe("AEGIS standing HASH_VERIFY runtime", () => {
     const short = request()
     const shortRuntime = harness({ readInput: vi.fn(async () => inputBytes.subarray(1)) })
     await expect(execute(short, admission(short), shortRuntime)).rejects.toMatchObject({ code: "INPUT_LENGTH_MISMATCH" })
+    expect(shortRuntime.persistResult).toHaveBeenCalledWith(expect.objectContaining({
+      status: "FAILED_CLOSED",
+      result: "INPUT_LENGTH_MISMATCH",
+    }))
     expect(shortRuntime.releaseLease).toHaveBeenCalledTimes(1)
 
     const changed = request("002")
     const changedRuntime = harness({ readInput: vi.fn(async () => Buffer.alloc(inputBytes.length, 1)) })
     await expect(execute(changed, admission(changed), changedRuntime)).rejects.toMatchObject({ code: "HASH_MISMATCH" })
+    expect(changedRuntime.persistResult).toHaveBeenCalledWith(expect.objectContaining({
+      status: "FAILED_CLOSED",
+      result: "HASH_MISMATCH",
+      operation: expect.objectContaining({ matched: false }),
+    }))
     expect(changedRuntime.releaseLease).toHaveBeenCalledTimes(1)
 
     const timedOut = request("003")
+    const timedOutRuntime = harness()
     await expect(execute(
       timedOut,
       admission(timedOut),
-      harness(),
+      timedOutRuntime,
       clocks(baseTime, baseTime + 10, baseTime + 20, baseTime + timedOut.limits.runtime_ms + 21),
     )).rejects.toMatchObject({ code: "RUNTIME_TIMEOUT" })
+    expect(timedOutRuntime.persistResult).toHaveBeenCalledWith(expect.objectContaining({
+      status: "FAILED_CLOSED",
+      result: "RUNTIME_TIMEOUT",
+    }))
+    expect(timedOutRuntime.releaseLease).toHaveBeenCalledTimes(1)
   })
 
   it("accounts for the hash operation before measuring completion time", () => {
@@ -358,7 +386,7 @@ describe("AEGIS standing HASH_VERIFY runtime", () => {
       .toBeLessThan(source.indexOf("const completedAt = finiteClock(options.now)"))
   })
 
-  it("persists immutable completion evidence before releasing and releases on persistence failure", async () => {
+  it("persists immutable completion evidence before releasing and retains the lease on persistence failure", async () => {
     const value = request()
     const runtime = harness()
     const result = await execute(value, admission(value), runtime)
@@ -375,7 +403,7 @@ describe("AEGIS standing HASH_VERIFY runtime", () => {
     })
     const second = request("002")
     await expect(execute(second, admission(second), failing)).rejects.toThrow("durable store unavailable")
-    expect(failing.releaseLease).toHaveBeenCalledTimes(1)
+    expect(failing.releaseLease).not.toHaveBeenCalled()
   })
 
   it("rejects command, shell, env, and network fields and contains no runtime primitives", async () => {

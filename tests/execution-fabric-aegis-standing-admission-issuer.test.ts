@@ -167,6 +167,7 @@ describe("AEGIS standing HASH_VERIFY admission issuer", () => {
         consumed.add(key)
         return { claimed: true, ...binding, claimed_at: "2026-08-10T21:59:31.001Z" }
       },
+      persistClaimFailure: async (evidence: Json) => ({ persisted: true, evidence_sha256: evidence.evidence_sha256 }),
       acquireLease: async (binding: Json) => {
         if (activeLease) return { acquired: false, ...binding, acquired_at: "2026-08-10T21:59:31.005Z" }
         activeLease = true
