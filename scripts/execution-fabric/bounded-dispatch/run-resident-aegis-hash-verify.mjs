@@ -409,6 +409,7 @@ export function createLedgerProviders({
       try {
         fs.mkdirSync(candidatePath, { mode: 0o700 })
         writeExclusiveDurable(candidateHolderPath, holderIdentity(), syncDirectory)
+        syncDirectory(candidatePath)
         fs.renameSync(candidatePath, nodeMutationLockPath)
         syncDirectory(ledgerRoot)
         acquired = true
@@ -511,7 +512,7 @@ export function createLedgerProviders({
   const validateStandingLease = (lease) => {
     const { lease_record_sha256: retainedLeaseSha256, ...leaseBody } = lease ?? {}
     return lease?.schema_version === "1.0-aegis-standing-lease"
-      && exactKeys(lease, ["schema_version", "authority_id", "authority_sha256", "job_id", "admission_id", "admission_sha256", "request_sha256", "request_binding_sha256", "claim_id", "admission_issued_at", "admission_expires_at", "lease_id", "fencing_token", "acquired_at", "holder", "lease_record_sha256"])
+      && exactKeys(lease, ["schema_version", "authority_id", "authority_sha256", "job_id", "admission_id", "admission_sha256", "request_binding_sha256", "job_scope_sha256", "claim_id", "admission_issued_at", "admission_expires_at", "lease_id", "fencing_token", "acquired_at", "holder", "lease_record_sha256"])
       && SAFE_RUNTIME_ID.test(lease.lease_id ?? "") && SAFE_RUNTIME_ID.test(lease.claim_id ?? "")
       && exactKeys(lease.holder, ["pid", "boot_id", "process_start_ticks"])
       && typeof lease.holder === "object" && Number.isSafeInteger(lease.holder.pid) && lease.holder.pid > 0

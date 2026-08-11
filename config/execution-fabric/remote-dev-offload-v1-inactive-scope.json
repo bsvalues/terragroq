@@ -42,7 +42,7 @@
       },
       "trustedRunner": {
         "path": "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs",
-        "sha256": "c75164af95281b69cdc407f0dade896f87d53d39c68eed167dc39b2a4b9a6f7b"
+        "sha256": "423c345e0fa17ff37ff55d5b9b84a8d65cd530ab329a127136152cc2a46070f3"
       },
       "proofWorker": {
         "path": "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",

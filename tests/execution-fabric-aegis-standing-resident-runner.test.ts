@@ -61,8 +61,8 @@ function claimBinding(id = "001"): Json {
     job_id: `job-standing-${id}`,
     admission_id: `admission-standing-${id}`,
     admission_sha256: id === "001" ? "2".repeat(64) : "3".repeat(64),
-    request_sha256: id === "001" ? "4".repeat(64) : "5".repeat(64),
     request_binding_sha256: id === "001" ? "6".repeat(64) : "7".repeat(64),
+    job_scope_sha256: id === "001" ? "4".repeat(64) : "5".repeat(64),
     claim_id: `claim-standing-${id}`,
     admission_issued_at: "2026-08-10T21:59:00.000Z",
     admission_expires_at: "2026-08-11T21:59:00.000Z",
@@ -251,7 +251,7 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
 
     const claimPath = path.join(root, fs.readdirSync(root).find((name) => name.startsWith("claim-"))!)
     const retained = JSON.parse(fs.readFileSync(claimPath, "utf8"))
-    retained.request_sha256 = "f".repeat(64)
+    retained.job_scope_sha256 = "f".repeat(64)
     fs.writeFileSync(claimPath, `${JSON.stringify(retained)}\n`)
     await expect(providers.claimAdmission(binding)).rejects.toThrow("LEDGER_UNTRUSTED")
   })

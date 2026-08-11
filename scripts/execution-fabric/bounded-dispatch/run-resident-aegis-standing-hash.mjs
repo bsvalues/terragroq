@@ -720,7 +720,7 @@ export function createStandingLedgerProviders({
     const { lease_record_sha256: retainedLeaseSha256, ...leaseBody } = lease ?? {}
     const acquiredAtMs = Date.parse(lease?.acquired_at)
     return lease?.schema_version === "1.0-aegis-standing-lease"
-      && exactRecordKeys(lease, ["schema_version", "authority_id", "authority_sha256", "job_id", "admission_id", "admission_sha256", "request_sha256", "request_binding_sha256", "claim_id", "admission_issued_at", "admission_expires_at", "lease_id", "fencing_token", "acquired_at", "holder", "lease_record_sha256"])
+      && exactRecordKeys(lease, ["schema_version", "authority_id", "authority_sha256", "job_id", "admission_id", "admission_sha256", "request_binding_sha256", "job_scope_sha256", "claim_id", "admission_issued_at", "admission_expires_at", "lease_id", "fencing_token", "acquired_at", "holder", "lease_record_sha256"])
       && /^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/.test(lease.lease_id ?? "")
       && /^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/.test(lease.claim_id ?? "")
       && Number.isSafeInteger(lease.fencing_token) && lease.fencing_token > 0
