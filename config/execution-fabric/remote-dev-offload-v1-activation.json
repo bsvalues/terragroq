@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 1,
+  "activationId": "remote-dev-offload-v1-issue-734-single-use-001",
+  "authorityReference": "issue-734-terrafusion-remote-dev-single-use-001",
+  "workOrderId": "WO-TF-REMOTE-DEV-OFFLOAD-001",
+  "status": "FUTURE_DATED_SINGLE_USE_AUTHORITY",
+  "executionAuthorizedByFileAlone": false,
+  "issue": {
+    "repository": "bsvalues/terrafusion_os_1.0",
+    "number": 734,
+    "outcome": "MAKE_OMITTED_DOTNET_DOCTRINE_TEST_VISIBLE_AS_INFORMATIONAL"
+  },
+  "run": {
+    "runId": "56b41a96-3bbf-4c80-907b-d37db1437e9d",
+    "issuedAt": "2026-08-11T02:50:00.000Z",
+    "validFrom": "2026-08-11T04:00:00.000Z",
+    "expiresAt": "2026-08-11T08:00:00.000Z",
+    "singleUse": true,
+    "maximumConsumptionCount": 1
+  },
+  "target": {
+    "repository": "bsvalues/terrafusion_os_1.0",
+    "baseRef": "refs/heads/main",
+    "nodeId": "aegis",
+    "workspace": "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001",
+    "branch": "codex/wo-tf-remote-dev-offload-001-734"
+  },
+  "trustedMain": {
+    "controlPlane": {
+      "repository": "bsvalues/terragroq",
+      "ref": "refs/heads/main",
+      "minimumCommit": "1611f23061398de6159c97ce1f78c9c79f8dd31d",
+      "ancestryRequired": true,
+      "cleanExactHeadRequired": true,
+      "proofProvider": "createTrustedProofProviders",
+      "workingFilesProof": "inspectActivationCriticalWorkingFiles",
+      "criticalPaths": [
+        "config/execution-fabric/remote-dev-offload-v1-activation.json",
+        "scripts/execution-fabric/live/remote-dev-offload-activation.mjs",
+        "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
+        "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1",
+        "scripts/execution-fabric/live/remote-dev-offload-contract.mjs",
+        "config/execution-fabric/remote-dev-offload-v1.policy.json",
+        "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json",
+        "scripts/execution-fabric/canonical-json.mjs",
+        "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs",
+        "config/execution-fabric/aegis-resident-identity.json"
+      ]
+    },
+    "target": {
+      "repository": "bsvalues/terrafusion_os_1.0",
+      "ref": "refs/heads/main",
+      "pinnedCommit": "ffd2fa35f5152de2b95e7f63b220050d18193d7a",
+      "freshRemoteEqualityRequired": true,
+      "freshRemoteEqualityOperation": "CREATE_WORKSPACE"
+    }
+  },
+  "bindings": {
+    "worker": {
+      "path": "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
+      "sha256": "0804de94642f936e3db4972f7c4fe6839446ecf21c196d282dffd82fae48c6cb"
+    },
+    "controller": {
+      "path": "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1",
+      "sha256": "4b65be81943399844e3273b4b2993d2ee61f7ddd7de0b3d2647c35d7fa012b0a"
+    },
+    "contract": {
+      "path": "scripts/execution-fabric/live/remote-dev-offload-contract.mjs",
+      "sha256": "ef194526032d9cc22391bdd3bc306046698d0d00159f073acd1ceb067dd24962"
+    },
+    "policy": {
+      "path": "config/execution-fabric/remote-dev-offload-v1.policy.json",
+      "sha256": "57302d39033a78d65f4c398ca2ae78ae3821f6909a76856309e77eb209e23030"
+    },
+    "inactiveScope": {
+      "path": "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json",
+      "sha256": "e96aea481c840971cf4de0dbc88e644bc050ea14f6ddd12eaea0c7cf5f7f3a8f"
+    }
+  },
+  "executionIdentity": {
+    "account": "williamos-fabric",
+    "privilege": "non-root-no-sudo",
+    "identityProvider": "trustedResidentIdentity",
+    "reviewedIdentityPath": "config/execution-fabric/aegis-resident-identity.json",
+    "machineIdSha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b",
+    "noSudoProofRequired": true
+  },
+  "operations": [
+    "PROVE_PREFLIGHT",
+    "CREATE_WORKSPACE",
+    "APPLY_RESERVED_PATCH",
+    "RESTORE_DOTNET",
+    "TEST_WORKFLOW_CONTRACT",
+    "TEST_DOTNET_INFORMATIONAL",
+    "BUILD_DOTNET_RELEASE",
+    "COMMIT_RESERVED_PATHS",
+    "PUSH_AUTHORIZED_BRANCH",
+    "PROVE_POST_MERGE",
+    "CLEAN_EXACT_WORKSPACE"
+  ],
+  "resources": {
+    "canonicalProfileEquivalent": false,
+    "cpuThreads": 12,
+    "memoryBytes": 12884901888,
+    "scratchBytes": 85899345920,
+    "timeoutSeconds": 5400,
+    "maxAttempts": 3
+  },
+  "network": {
+    "defaultDeny": true,
+    "atlasAllowed": false,
+    "enforcementProofRequired": true,
+    "endpoints": [
+      {
+        "host": "ssh.github.com",
+        "port": 443,
+        "operations": [
+          "git-fetch",
+          "git-push"
+        ]
+      },
+      {
+        "host": "api.github.com",
+        "port": 443,
+        "operations": [
+          "github-pr"
+        ]
+      },
+      {
+        "host": "api.nuget.org",
+        "port": 443,
+        "operations": [
+          "dotnet-restore"
+        ]
+      },
+      {
+        "host": "globalcdn.nuget.org",
+        "port": 443,
+        "operations": [
+          "dotnet-restore"
+        ]
+      }
+    ]
+  },
+  "lifecycle": {
+    "ledgerProvider": "createLedgerProviders",
+    "durableSingleUseClaimRequired": true,
+    "nodeExclusiveLeaseRequired": true,
+    "durableReleaseRequired": true,
+    "replayRejectionRequired": true,
+    "sameRunScopeClaimLeaseRequired": true
+  },
+  "authoritySeparation": {
+    "inactiveBaselineRemainsInactive": true,
+    "closedCanonicalCiTemplateActivated": false,
+    "consumedHashScope": "WO-EF-DISPATCH-AEGIS-001",
+    "consumedHashAuthorityReference": "issue-538-aegis-single-use-hash-001",
+    "hashScopeReuseAllowed": false,
+    "hashEvidenceMutationAllowed": false
+  },
+  "scheduler": {
+    "state": "disabled",
+    "standingAegisAuthority": false,
+    "autonomousDispatch": false
+  }
+}
