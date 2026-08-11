@@ -76,4 +76,23 @@ describe("Hermes database pool", () => {
       },
     })
   })
+
+  it.each([
+    ["zero", 0],
+    ["negative", -1],
+    ["not a number", Number.NaN],
+    ["infinite", Number.POSITIVE_INFINITY],
+    ["fractional", 1.5],
+    ["string", "5000"],
+    ["above the approved schema ceiling", HERMES_DATABASE_SCHEMA_TIMEOUT_MS + 1],
+  ])("fails closed for a %s query budget", (_label, queryTimeoutMs) => {
+    const Pool = vi.fn()
+
+    expect(() =>
+      createHermesDatabasePool(Pool, "postgresql://example.invalid/williamos", {
+        queryTimeoutMs,
+      }),
+    ).toThrow("HERMES_DATABASE_QUERY_TIMEOUT_CONFIGURATION_WALL")
+    expect(Pool).not.toHaveBeenCalled()
+  })
 })
