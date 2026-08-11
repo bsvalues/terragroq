@@ -868,7 +868,7 @@ function runAsAccount(processApi, account, action) {
     transitionEstablished = true
     return action()
   } catch (error) {
-    if (!transitionEstablished && !error?.code) {
+    if (!transitionEstablished && !String(error?.code ?? "").startsWith("AEGIS_PROVISION_")) {
       fail("AEGIS_PROVISION_PRIVILEGE_DROP_FAILED", "effective service identity transition failed")
     }
     throw error

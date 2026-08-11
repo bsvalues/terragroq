@@ -289,7 +289,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/canonical-json.mjs", sha256: "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs", sha256: "c18ecec38a5086788d7f4532b471efc6548cd293c27f3983a92934464015fb16", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "0d370baa055411a8e482791a0b99f5b289894ff5511de1ebaf0f89339a176007", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "c90de483e1e9e8c7199cfda273fe1b470276f66acca4af2627aed263a098aed8", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "7700f0660f16e1d6adefc8c2e96bf3c5a43d724c5a6b76c97a5d24b0c101e6a0", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
@@ -799,7 +799,9 @@ function injectedRootProcess(failOperation?: string) {
   let groups = [0]
   const events: Json[] = []
   const reject = (operation: string) => {
-    if (failOperation === operation) throw new Error(`INJECTED_${operation.toUpperCase()}_FAILURE`)
+    if (failOperation === operation) {
+      throw Object.assign(new Error(`INJECTED_${operation.toUpperCase()}_FAILURE`), { code: "EPERM" })
+    }
   }
   return {
     events,
