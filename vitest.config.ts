@@ -1,10 +1,19 @@
 import { defineConfig } from "vitest/config"
 import tsconfigPaths from "vite-tsconfig-paths"
 
+const executableModuleTestCompatibility = {
+  name: "executable-module-test-compatibility",
+  enforce: "pre" as const,
+  transform(source: string, id: string) {
+    if (!id.endsWith(".mjs") || !source.startsWith("#!")) return null
+    return source.replace(/^#![^\r\n]*(?:\r?\n|$)/, "")
+  },
+}
+
 // Governance test harness (WO-013). Tests target the PURE governance modules so
 // they run without a database or network — fully deterministic and reproducible.
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  plugins: [executableModuleTestCompatibility, tsconfigPaths()],
   test: {
     include: ["tests/**/*.test.ts"],
     environment: "node",

@@ -229,6 +229,24 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
         rootExecutionAllowed: false,
         sudoAllowed: false,
       },
+      existingRuntimeRoots: [
+        {
+          path: "/var/lib/williamos",
+          owner: "williamos-fabric",
+          group: "williamos-fabric",
+          mode: "0750",
+          preserveExisting: true,
+          mutationAllowed: false,
+        },
+        {
+          path: "/var/lib/williamos/fabric",
+          owner: "williamos-fabric",
+          group: "williamos-fabric",
+          mode: "0700",
+          preserveExisting: true,
+          mutationAllowed: false,
+        },
+      ],
       standingExecutionBoundary: {
         workloadClass: "HASH_VERIFY",
         networkScope: "none",
@@ -267,7 +285,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/canonical-json.mjs", sha256: "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs", sha256: "c18ecec38a5086788d7f4532b471efc6548cd293c27f3983a92934464015fb16", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "0662102ff973fbb745afda40ad8ca6746bc740bbd292df4d4563852d411aefe7", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "d5cb8f348ea827b61626e8f1c31f563284f8649fdf986cc174d5e9fb1e2230f9", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "7700f0660f16e1d6adefc8c2e96bf3c5a43d724c5a6b76c97a5d24b0c101e6a0", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
@@ -504,7 +522,13 @@ type VirtualNode = {
 }
 
 function injectedLinuxFs(options: {
-  existing?: Array<{ path: string, kind?: VirtualNode["kind"] }>
+  existing?: Array<{
+    path: string
+    kind?: VirtualNode["kind"]
+    mode?: number
+    uid?: number
+    gid?: number
+  }>
   failPath?: string
   failJournalRecordType?: string
 } = {}) {
@@ -537,11 +561,20 @@ function injectedLinuxFs(options: {
     putDirectory(directory)
   }
   putDirectory("/home/williamos-fabric", 0o755, 734, 734)
+  putDirectory("/var/lib/williamos", 0o750, 734, 734)
+  putDirectory("/var/lib/williamos/fabric", 0o700, 734, 734)
   nodes.set(normalize("/etc/machine-id"), node("file", 0o444, Buffer.from("00000000000000000000000000000000\n")))
   nodes.set(normalize("/etc/passwd"), node("file", 0o444, Buffer.from("williamos-fabric:x:734:734::/home/williamos-fabric:/bin/bash\n")))
   nodes.set(normalize("/etc/group"), node("file", 0o444, Buffer.from("williamos-fabric:x:734:\n")))
   for (const entry of options.existing ?? []) {
-    nodes.set(normalize(entry.path), node(entry.kind ?? "file", entry.kind === "directory" ? 0o755 : 0o644))
+    const kind = entry.kind ?? "file"
+    nodes.set(normalize(entry.path), node(
+      kind,
+      entry.mode ?? (kind === "directory" ? 0o755 : 0o644),
+      Buffer.alloc(0),
+      entry.uid ?? 0,
+      entry.gid ?? 0,
+    ))
   }
   const failPath = options.failPath ? normalize(options.failPath) : null
   const missing = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" })
@@ -842,6 +875,8 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
     const cases = [
       ["/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs", "symlink", "AEGIS_PROVISION_SYMLINK_REJECTED"],
       ["/etc/williamos/fabric/trusted-main-release.json", "file", "AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS"],
+      ["/var/lib/williamos/fabric/standing-hash-requests", "directory", "AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS"],
+      ["/var/lib/williamos/fabric/standing-hash-ledger", "directory", "AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS"],
       ["/var/lib/williamos-aegis-standing-hash-" + authority.authorityId + ".mutation-journal.jsonl", "file", "AEGIS_PROVISION_AUTHORITY_REPLAY"],
     ] as const
     for (const [target, kind, code] of cases) {
@@ -930,6 +965,56 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
       expect(value, target).toBeDefined()
       expect({ uid: value!.uid, gid: value!.gid, mode: value!.mode & 0o777 }).toEqual({ uid, gid, mode })
     }
+  })
+
+  it("preserves the exact existing service-owned runtime roots without mutating them", () => {
+    const { virtual, options } = implementationInput({ mode: "apply" })
+    const result = applyAegisStandingHashPrerequisites(options)
+
+    expect(result.preserved_runtime_roots).toEqual([
+      {
+        path: "/var/lib/williamos",
+        owner: "williamos-fabric",
+        group: "williamos-fabric",
+        mode: "0750",
+        preserved: true,
+        mutated: false,
+      },
+      {
+        path: "/var/lib/williamos/fabric",
+        owner: "williamos-fabric",
+        group: "williamos-fabric",
+        mode: "0700",
+        preserved: true,
+        mutated: false,
+      },
+    ])
+    expect(virtual.statAt("/var/lib/williamos")).toMatchObject({ uid: 734, gid: 734, mode: 0o040750 })
+    expect(virtual.statAt("/var/lib/williamos/fabric")).toMatchObject({ uid: 734, gid: 734, mode: 0o040700 })
+    const mutations = virtual.events.filter(({ kind }) => ["mkdir", "chown", "chmod", "open-create", "write"].includes(kind))
+    expect(mutations).not.toContainEqual(expect.objectContaining({ path: virtual.pathOf("/var/lib/williamos") }))
+    expect(mutations).not.toContainEqual(expect.objectContaining({ path: virtual.pathOf("/var/lib/williamos/fabric") }))
+  })
+
+  it.each([
+    ["runtime owner", { path: "/var/lib/williamos", kind: "directory", mode: 0o750, uid: 0, gid: 0 }],
+    ["runtime group", { path: "/var/lib/williamos", kind: "directory", mode: 0o750, uid: 734, gid: 0 }],
+    ["runtime mode", { path: "/var/lib/williamos", kind: "directory", mode: 0o755, uid: 734, gid: 734 }],
+    ["runtime type", { path: "/var/lib/williamos", kind: "file", mode: 0o750, uid: 734, gid: 734 }],
+    ["fabric owner", { path: "/var/lib/williamos/fabric", kind: "directory", mode: 0o700, uid: 0, gid: 734 }],
+    ["fabric group", { path: "/var/lib/williamos/fabric", kind: "directory", mode: 0o700, uid: 734, gid: 0 }],
+    ["fabric mode", { path: "/var/lib/williamos/fabric", kind: "directory", mode: 0o750, uid: 734, gid: 734 }],
+    ["fabric symlink", { path: "/var/lib/williamos/fabric", kind: "symlink", mode: 0o700, uid: 734, gid: 734 }],
+  ])("rejects preserved %s drift before consuming authority", (_label, existing) => {
+    const { virtual, options } = implementationInput({
+      mode: "apply",
+      virtualOptions: { existing: [existing] },
+    })
+
+    expect(() => applyAegisStandingHashPrerequisites(options)).toThrow(expect.objectContaining({
+      code: "AEGIS_PROVISION_DIRECTORY_DRIFT",
+    }))
+    expect(journalRecords(virtual, options.authority.authorityId)).toEqual([])
   })
 
   it("writes exactly one restricted authorized_keys record bound to the public key", () => {

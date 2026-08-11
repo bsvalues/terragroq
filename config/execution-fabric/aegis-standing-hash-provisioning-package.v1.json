@@ -98,6 +98,24 @@
       "singleLink": false
     }
   ],
+  "existingRuntimeRoots": [
+    {
+      "path": "/var/lib/williamos",
+      "owner": "williamos-fabric",
+      "group": "williamos-fabric",
+      "mode": "0750",
+      "preserveExisting": true,
+      "mutationAllowed": false
+    },
+    {
+      "path": "/var/lib/williamos/fabric",
+      "owner": "williamos-fabric",
+      "group": "williamos-fabric",
+      "mode": "0700",
+      "preserveExisting": true,
+      "mutationAllowed": false
+    }
+  ],
   "privateRoots": {
     "request": {
       "path": "/var/lib/williamos/fabric/standing-hash-requests",
@@ -349,7 +367,7 @@
     },
     {
       "path": "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs",
-      "sha256": "0662102ff973fbb745afda40ad8ca6746bc740bbd292df4d4563852d411aefe7",
+      "sha256": "d5cb8f348ea827b61626e8f1c31f563284f8649fdf986cc174d5e9fb1e2230f9",
       "textNormalization": "LF"
     },
     {

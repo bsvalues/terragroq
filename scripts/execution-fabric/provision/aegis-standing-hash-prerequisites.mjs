@@ -5,7 +5,7 @@ import path from "node:path"
 import { canonicalizeJcs } from "../canonical-json.mjs"
 
 const MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-provisioning-package.v1.json"
-const EXPECTED_MANIFEST_SHA256 = "c8c776b833d73eafb4a746b497164f515697483084439776c309ffd1d4b626bb"
+const EXPECTED_MANIFEST_SHA256 = "4a255a3aead96a15d40e4318956ec19e4357bd80746e94b6a0bc1fd35d32be65"
 const SHA256 = /^[a-f0-9]{64}$/
 const COMMIT = /^[a-f0-9]{40}$/
 const SSH_SHA256_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}$/

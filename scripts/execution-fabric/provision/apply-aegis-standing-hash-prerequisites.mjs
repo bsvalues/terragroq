@@ -86,6 +86,24 @@ const EXPECTED_ROOT_ASSETS = Object.freeze({
   "replay-epoch-initializer": "/usr/local/libexec/williamos/aegis-standing-hash-replay-epoch.mjs",
   "release-manifest": "/etc/williamos/fabric/trusted-main-release.json",
 })
+const EXPECTED_EXISTING_RUNTIME_ROOTS = Object.freeze([
+  Object.freeze({
+    path: "/var/lib/williamos",
+    owner: "williamos-fabric",
+    group: "williamos-fabric",
+    mode: "0750",
+    preserveExisting: true,
+    mutationAllowed: false,
+  }),
+  Object.freeze({
+    path: "/var/lib/williamos/fabric",
+    owner: "williamos-fabric",
+    group: "williamos-fabric",
+    mode: "0700",
+    preserveExisting: true,
+    mutationAllowed: false,
+  }),
+])
 const SSH_ENTRYPOINT_SOURCE = "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs"
 const REPLAY_INITIALIZER_SOURCE = "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs"
 const APPLY_SOURCE = "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs"
@@ -208,6 +226,9 @@ function validateManifest(manifest) {
     request: "/var/lib/williamos/fabric/standing-hash-requests",
     ledger: "/var/lib/williamos/fabric/standing-hash-ledger",
     nodeLease: "/var/lib/williamos/fabric/ledger",
+  }
+  if (!same(manifest.existingRuntimeRoots, EXPECTED_EXISTING_RUNTIME_ROOTS)) {
+    fail("AEGIS_PROVISION_PACKAGE_INVALID", "preserved existing runtime roots differ")
   }
   for (const [name, expectedPath] of Object.entries(privateExpected)) {
     const root = manifest.privateRoots?.[name]
@@ -668,14 +689,17 @@ function validateCheckoutInspection(candidate, sourcePath, expected) {
 
 function buildLayout(manifest, closure, publicKey, account) {
   const releaseRoot = manifest.reviewedRelease.releaseRoot
+  const preservedDirectories = manifest.existingRuntimeRoots.map(({ path: target, mode }) => ({
+    path: target,
+    ...account,
+    mode: Number.parseInt(mode, 8),
+  }))
   const directories = new Map([
     ["/opt/williamos", { uid: 0, gid: 0, mode: 0o755 }],
     ["/opt/williamos/releases", { uid: 0, gid: 0, mode: 0o755 }],
     ["/usr/local/libexec/williamos", { uid: 0, gid: 0, mode: 0o755 }],
     ["/etc/williamos", { uid: 0, gid: 0, mode: 0o755 }],
     ["/etc/williamos/fabric", { uid: 0, gid: 0, mode: 0o755 }],
-    ["/var/lib/williamos", { uid: 0, gid: 0, mode: 0o755 }],
-    ["/var/lib/williamos/fabric", { uid: 0, gid: 0, mode: 0o755 }],
     [manifest.privateRoots.request.path, { ...account, mode: 0o700 }],
     [manifest.privateRoots.ledger.path, { ...account, mode: 0o700 }],
     [manifest.privateRoots.nodeLease.path, { ...account, mode: 0o700 }],
@@ -688,13 +712,21 @@ function buildLayout(manifest, closure, publicKey, account) {
     { id: "replay-epoch-initializer", path: EXPECTED_ROOT_ASSETS["replay-epoch-initializer"], bytes: closure.get(REPLAY_INITIALIZER_SOURCE), uid: 0, gid: 0, mode: 0o555 },
     { id: "authorized-keys", path: manifest.invocationBoundary.authorizedKeysPath, bytes: Buffer.from(publicKey.authorizedRecord, "utf8"), ...account, mode: 0o600 },
   )
-  return { releaseRoot, directories: [...directories.entries()].map(([directoryPath, metadata]) => ({ path: directoryPath, ...metadata })), files }
+  return {
+    releaseRoot,
+    preservedDirectories,
+    directories: [...directories.entries()].map(([directoryPath, metadata]) => ({ path: directoryPath, ...metadata })),
+    files,
+  }
 }
 
 function preflightLayout(fsApi, layout, journalPath, account) {
   const immutableBases = ["/", "/opt", "/usr", "/usr/local", "/usr/local/libexec", "/etc", "/var", "/var/lib", "/home"]
   for (const base of immutableBases) assertExistingDirectory(fsApi, base, { uid: 0, immutableRoot: true })
   assertExistingDirectory(fsApi, "/home/williamos-fabric", { uid: account.uid, gid: account.gid, immutableRoot: true })
+  for (const item of layout.preservedDirectories) {
+    assertExistingDirectory(fsApi, item.path, { uid: item.uid, gid: item.gid, mode: item.mode })
+  }
   if (existsNoFollow(fsApi, journalPath).exists) fail("AEGIS_PROVISION_AUTHORITY_REPLAY", "authority mutation journal already exists")
   const release = existsNoFollow(fsApi, layout.releaseRoot)
   if (release.exists) {
@@ -877,6 +909,14 @@ function evidenceBase(manifest, authority, publicKey, mode, journalPath, planned
     mutation_journal: mode === "apply" ? journalPath : null,
     dedicated_transport_key_fingerprint: publicKey.fingerprint,
     dedicated_transport_public_key_sha256: publicKey.fileSha256,
+    preserved_runtime_roots: manifest.existingRuntimeRoots.map(({ path: target, owner, group, mode }) => ({
+      path: target,
+      owner,
+      group,
+      mode,
+      preserved: true,
+      mutated: false,
+    })),
     planned_mutations: planned,
     completed_mutations: [],
     deferred_mutations: [
