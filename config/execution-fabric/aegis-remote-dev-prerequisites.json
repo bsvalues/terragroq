@@ -45,7 +45,7 @@
     "controlPlane": {
       "repository": "bsvalues/terragroq",
       "remote": "https://github.com/bsvalues/terragroq.git",
-      "path": "/var/lib/williamos/fabric/workspaces/terragroq",
+      "path": "/var/lib/williamos-remote-dev/control/terragroq",
       "ref": "refs/heads/main",
       "commit": "fea7785fd480d3b5f107c286cc8eb1bac6d04793",
       "cleanRequired": true,
@@ -54,7 +54,7 @@
     "targetMirror": {
       "repository": "bsvalues/terrafusion_os_1.0",
       "remote": "https://github.com/bsvalues/terrafusion_os_1.0.git",
-      "path": "/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git",
+      "path": "/var/lib/williamos-remote-dev/repositories/terrafusion_os_1.0.git",
       "baseRef": "refs/heads/main",
       "proofBaseCommit": "ffd2fa35f5152de2b95e7f63b220050d18193d7a",
       "bareRequired": true

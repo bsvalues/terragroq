@@ -10,6 +10,8 @@ const CLAIM_ROOT = `${EVIDENCE_ROOT}/claims`
 const JOURNAL_ROOT = `${EVIDENCE_ROOT}/journal`
 const LAUNCH_PRIVATE_KEY = "/etc/williamos-fabric/aegis-remote-dev-launch-authority.key"
 const LAUNCH_PUBLIC_KEY = "/etc/williamos-fabric/aegis-remote-dev-launch-authority.pem"
+const CONTROL_REPOSITORY = "/var/lib/williamos-remote-dev/control/terragroq"
+const TARGET_MIRROR = "/var/lib/williamos-remote-dev/repositories/terrafusion_os_1.0.git"
 const FIXED_ENV = Object.freeze({ HOME: "/nonexistent", PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1" })
 const STEPS = Object.freeze([
   "RECONCILE_BOUNDED_IDENTITY", "INSTALL_ROOT_LAUNCH_ASSETS", "INSTALL_DUAL_STACK_BROKER_BOUNDARY",
@@ -206,10 +208,32 @@ function rootOwnedRepositoryTree(directory) {
   } catch { return false }
 }
 
+function trustedRepositoryParents() {
+  for (const directory of [path.dirname(CONTROL_REPOSITORY), path.dirname(TARGET_MIRROR)]) {
+    let cursor = "/"
+    for (const segment of directory.slice(1).split("/").filter(Boolean)) {
+      cursor = path.join(cursor, segment)
+      if (!lexists(cursor)) continue
+      try {
+        const stat = fs.lstatSync(cursor)
+        if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) return false
+      } catch { return false }
+    }
+  }
+  return true
+}
+
+export function inspectTrustedRepositoryReconciliation({ parentsExact, controlExists, controlExact, mirrorExists, mirrorExact }) {
+  if (![parentsExact, controlExists, controlExact, mirrorExists, mirrorExact].every((value) => typeof value === "boolean")) return "DRIFT"
+  if (!parentsExact) return "DRIFT"
+  if (!controlExists && !mirrorExists) return "ABSENT"
+  return controlExists && controlExact && mirrorExists && mirrorExact ? "MATCH" : "DRIFT"
+}
+
 function repositoryState(manifest, authority) {
-  const control = "/var/lib/williamos/fabric/workspaces/terragroq"
-  const mirror = "/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git"
-  const controlExists = fs.existsSync(control); const mirrorExists = fs.existsSync(mirror)
+  const control = CONTROL_REPOSITORY
+  const mirror = TARGET_MIRROR
+  const controlExists = lexists(control); const mirrorExists = lexists(mirror)
   try {
     let controlMatch = false; let mirrorMatch = false
     if (controlExists) {
@@ -224,8 +248,14 @@ function repositoryState(manifest, authority) {
         || run("/usr/bin/git", [`--git-dir=${mirror}`, "remote", "get-url", "origin"]) !== "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git") return "DRIFT"
       mirrorMatch = spawnSync("/usr/bin/git", [`--git-dir=${mirror}`, "cat-file", "-e", "ffd2fa35f5152de2b95e7f63b220050d18193d7a^{commit}"], { shell: false, timeout: 5000, env: FIXED_ENV }).status === 0
     }
-    return controlMatch && mirrorMatch ? "MATCH" : "ABSENT"
-  } catch { return controlExists || mirrorExists ? "DRIFT" : "ABSENT" }
+    return inspectTrustedRepositoryReconciliation({
+      parentsExact: trustedRepositoryParents(),
+      controlExists,
+      controlExact: controlMatch,
+      mirrorExists,
+      mirrorExact: mirrorMatch,
+    })
+  } catch { return "DRIFT" }
 }
 function rootAssetsState(manifest, authority) {
   const ids = accountIds("williamos-fabric"); let missing = false
@@ -473,12 +503,12 @@ function applyTransport(authority) {
   run("/usr/bin/loginctl", ["enable-linger", "williamos-fabric"])
 }
 function applyRepositories(manifest, authority) {
-  const control = "/var/lib/williamos/fabric/workspaces/terragroq"; const mirror = "/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git"
+  const control = CONTROL_REPOSITORY; const mirror = TARGET_MIRROR
   const rootSsh = "/usr/bin/ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/etc/williamos-fabric/github_known_hosts -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -o IdentityFile=/etc/williamos-fabric/github-account.key -o ProxyCommand=none"
   const gitOptions = { timeout: 300_000, env: { GIT_SSH_COMMAND: rootSsh } }
-  ensureRootDirectory("/var/lib/williamos/fabric/workspaces")
-  ensureRootDirectory("/var/lib/williamos/fabric/repositories")
-  if ((fs.existsSync(control) || fs.existsSync(mirror)) && repositoryState(manifest, authority) === "DRIFT") fail("REPOSITORY_DRIFT", "existing control checkout or target mirror is not root-controlled and clean")
+  ensureRootDirectory("/var/lib/williamos-remote-dev/control")
+  ensureRootDirectory("/var/lib/williamos-remote-dev/repositories")
+  if (repositoryState(manifest, authority) === "DRIFT") fail("REPOSITORY_DRIFT", "existing control checkout, target mirror, or prospective namespace parent is not exact")
   if (!fs.existsSync(control)) run("/usr/bin/git", ["clone", "--no-checkout", "ssh://git@ssh.github.com:443/bsvalues/terragroq.git", control], gitOptions)
   run("/usr/bin/git", ["fetch", "--force", "origin", `+refs/heads/main:refs/remotes/origin/main`], { ...gitOptions, cwd: control })
   if (run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control }) !== authority.trustedMainCommit) fail("REPOSITORY_DRIFT", "fresh control-plane main differs from signed authority")

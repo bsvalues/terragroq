@@ -9,7 +9,7 @@ import { canonicalizeJcs } from "../canonical-json.mjs"
 const MANIFEST_PATH = "config/execution-fabric/aegis-remote-dev-prerequisites.json"
 const SHA256 = /^[a-f0-9]{64}$/
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const EXPECTED_MANIFEST_SHA256 = "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a"
+const EXPECTED_MANIFEST_SHA256 = "1fb6fde76456483a34166b67b6b4413d05c9d69261223f2315d2718de64c359c"
 const EXPECTED_BINDINGS = Object.freeze([
   "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh",
   "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs",

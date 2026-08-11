@@ -10,7 +10,7 @@ const SHA40 = /^[a-f0-9]{40}$/
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const PLACEHOLDER = /owner-approved|published|placeholder|example|todo/i
 const EXPECTED_COMMIT = "bcca6069a917d706314f7c8cb7b3cd40cdd910da"
-const EXPECTED_PACKAGE_JCS = "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a"
+const EXPECTED_PACKAGE_JCS = "1fb6fde76456483a34166b67b6b4413d05c9d69261223f2315d2718de64c359c"
 const EXPECTED_MACHINE = "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b"
 const EXPECTED_STORAGE_UUID = "5744648d-9289-4d4e-ac6a-707e8405a5d6"
 const EXPECTED_TRUSTED_EVIDENCE = Object.freeze({
@@ -37,15 +37,15 @@ const AUTHORITY_ROOT = "/var/lib/williamos-fabric/remote-dev-prerequisite-handof
 const BUNDLE_ROOT = "/usr/local/share/williamos/aegis-root-handoff-bundle"
 const STAGED_ROOT = "/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/staged"
 const EXPECTED_ASSET_DIGESTS = Object.freeze({
-  "config/execution-fabric/aegis-remote-dev-prerequisites.json": "3f4124737a4339e34534c15201db08e1bd271b59483a459ab76ea5ff284dc582",
-  "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs": "843727481311ee5303a14fd67dcd05334e6e75cfd242bf54d13e35f8ae688d46",
+  "config/execution-fabric/aegis-remote-dev-prerequisites.json": "6dceb72cc61185700b20b89c54b2936b2338451f67ca738ce05eafd2f358876d",
+  "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs": "f4c2d081674809c2ebc3525acdc80dcbaf8ecf284bfa20017c430fa3ce6ae691",
   "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh": "7e92a1b3acf541f978f086ee1cec8191cc2b9732bc7f83380e4ecb13fec8d9d4",
   "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs": "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7",
   "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs": "02de9ec83f7dbc3e8a9858438ca4afe87af7ca123e6be79f90a579dc7bf78633",
   "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507",
   "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "7e9286b38d76e88eef13aa37628e69151aca2527b6bdfd50d9b835de0a5cb022",
   "config/execution-fabric/aegis-resident-network-boundary.json": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6",
-  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "313d26bb6524b6c0fb6cac47ceaeca59636721a8c9ca99a297423551e585bbe7",
+  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "6fc94d705e90cda3d8eaaf75964f3baae246d3f2294966a731e422fe0d8ee396",
   "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh": "4f76725ae7188ae676b5afde4d1622a8c6cdaea0b1bc8d1288dab04700b17ccd",
   "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf": "bb6967f25ae614d152c2bbaf4073eae4575f98819f9b4a855b5de20a60e4e789",
   "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf": "a6e83ce0c8b2d2c8127a268c5bd48f27ff3199894f0179afc412a5b01f7fe9c6",

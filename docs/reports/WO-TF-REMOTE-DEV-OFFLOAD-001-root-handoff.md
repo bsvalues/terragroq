@@ -69,8 +69,12 @@ The signed owner authority may perform only these ordered operations:
    reconciliation, plus a fixed systemd socket broker that receives the key as
    a service credential only for signed preflight/clone/fetch/push operations;
    worker and build processes cannot read the private key;
-6. reconcile root-owned, clean, remote-equal control checkout and TerraFusion
-   mirror without resetting dirty or worker-writable state;
+6. reconcile the root-owned, clean, remote-equal control checkout at
+   `/var/lib/williamos-remote-dev/control/terragroq` and TerraFusion mirror at
+   `/var/lib/williamos-remote-dev/repositories/terrafusion_os_1.0.git` without
+   resetting dirty or worker-writable state; the separate preserved standing
+   runtime checkout beneath `/var/lib/williamos/fabric` is never adopted,
+   moved, chowned, or modified;
 7. prove exact signed Git/Node/Corepack/pnpm binaries and install only the exact
    staged .NET SDK 8.0.423 archive when absent;
 8. create the separate durable worker ledger and root-owned append-only launch
