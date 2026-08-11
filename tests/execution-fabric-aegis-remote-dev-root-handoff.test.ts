@@ -12,7 +12,7 @@ import {
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
-import { inspectNoSudoCapabilityEvidence, inspectRootAdapterContract } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -261,6 +261,25 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:20:00.000Z", adapter)).toMatchObject({ status: "BLOCKED", reasonCode: "OWNER_AUTHORITY_EXPIRED" })
     expect(state.claimCalls).toEqual([false])
     expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:45:00.000Z", adapter)).toMatchObject({ status: "BLOCKED", reasonCode: "OWNER_AUTHORITY_EXPIRED" })
+  })
+
+  it("re-samples trusted time at the durable claim boundary and rejects delayed create or resume", async () => {
+    const manifest = loadManifest(); const signed = signedAuthority(manifest); const observed = completeObservation(manifest)
+    expect(inspectRootClaimWindow(signed.envelope.payload, "2026-08-11T20:14:59.999Z")).toEqual({ createAllowed: true, resumeAllowed: true })
+    expect(inspectRootClaimWindow(signed.envelope.payload, "2026-08-11T20:15:00.000Z")).toEqual({ createAllowed: false, resumeAllowed: true })
+    expect(inspectRootClaimWindow(signed.envelope.payload, "2026-08-11T20:45:00.000Z")).toEqual({ createAllowed: false, resumeAllowed: false })
+    const delayedAdapter = (boundaryNow: string, claimed: boolean) => ({
+      acquireLease: async () => true, releaseLease: async () => undefined, reprove: async () => observed,
+      claim: async () => {
+        const window = inspectRootClaimWindow(signed.envelope.payload, boundaryNow)
+        if (!window.resumeAllowed || (!claimed && !window.createAllowed)) return { expired: true }
+        return claimed ? { resume: true } : true
+      },
+      recover: async () => ({ records: [], committed: false }), append: async () => undefined,
+      effectApplied: async () => true, apply: async () => undefined, verify: async () => observed, publishSuccess: async () => undefined,
+    })
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:14:59.000Z", delayedAdapter("2026-08-11T20:15:00.000Z", false))).toMatchObject({ status: "BLOCKED", reasonCode: "OWNER_AUTHORITY_EXPIRED" })
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:20:00.000Z", delayedAdapter("2026-08-11T20:45:00.000Z", true))).toMatchObject({ status: "BLOCKED", reasonCode: "OWNER_AUTHORITY_EXPIRED" })
   })
 
   it("resumes from durable post-apply verification by committing without duplicating the verification record", async () => {

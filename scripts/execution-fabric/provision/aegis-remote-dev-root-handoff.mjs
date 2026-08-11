@@ -45,7 +45,7 @@ const EXPECTED_ASSET_DIGESTS = Object.freeze({
   "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507",
   "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "ce1e33480f4d6262fcf682eb849008a82d4bc147413c145f537225e2fb394fa1",
   "config/execution-fabric/aegis-resident-network-boundary.json": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6",
-  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "46b357e65e0e9282955f2e88632a7d2fcca5c5fde75fab95461c0adf8f477b9c",
+  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "e55563027f212d043bd5834eb8d242d233e3607cc7d9f00d154b9cb1c701ef2f",
   "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh": "4f76725ae7188ae676b5afde4d1622a8c6cdaea0b1bc8d1288dab04700b17ccd",
   "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf": "bb6967f25ae614d152c2bbaf4073eae4575f98819f9b4a855b5de20a60e4e789",
   "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf": "a6e83ce0c8b2d2c8127a268c5bd48f27ff3199894f0179afc412a5b01f7fe9c6",
@@ -239,6 +239,7 @@ export async function executeRootHandoffTransaction(manifest, envelope, publicKe
     if (plan.status !== "READY_FOR_SIGNED_AUTHORITY" && plan.status !== "ALREADY_VERIFIED") return plan
     const claim = await adapter.claim(envelope.payload.authorityId, envelope.payload.transactionId, initialWindow)
     const resume = typeof claim === "object" && claim?.resume === true
+    if (typeof claim === "object" && claim?.expired === true) return blocked("OWNER_AUTHORITY_EXPIRED", "trusted claim-boundary time is outside the signed create or resume window")
     if (!initialWindow && !resume) return blocked("OWNER_AUTHORITY_EXPIRED", "initial authority window elapsed and no exact durable claim exists")
     if (claim !== true && !resume) return blocked("OWNER_AUTHORITY_CONSUMED", "owner authority already has a durable claim")
     if (resume) {

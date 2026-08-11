@@ -514,6 +514,12 @@ function proveRootServiceFence() {
 }
 
 function exactRootDirectory(directory, mode, append = false) { try { const s = fs.lstatSync(directory); return trustedParents(directory) && s.isDirectory() && !s.isSymbolicLink() && s.uid === 0 && s.gid === 0 && (s.mode & 0o7777) === mode && (!append || appendOnly(directory)) } catch { return false } }
+export function inspectRootClaimWindow(authority, now) {
+  const issued = Date.parse(authority?.issuedAt); const expires = Date.parse(authority?.expiresAt)
+  const resumeExpires = Date.parse(authority?.resumeExpiresAt); const current = Date.parse(now)
+  if (![issued, expires, resumeExpires, current].every(Number.isFinite) || expires - issued !== 900_000 || resumeExpires - expires !== 1_800_000 || current < issued) return { createAllowed: false, resumeAllowed: false }
+  return { createAllowed: current < expires, resumeAllowed: current < resumeExpires }
+}
 export function createRootProductionAdapter(manifest, authority, trust) {
   if (process.platform !== "linux" || process.getuid?.() !== 0) fail("ROOT_LINUX_REQUIRED", "fixed adapter runs only as root on Linux")
   if (!exactRootDirectory(EVIDENCE_ROOT, 0o700, true) || !exactRootDirectory(CLAIM_ROOT, 0o700, true) || !exactRootDirectory(JOURNAL_ROOT, 0o700, true) || !exactRootDirectory(STAGED_ROOT, 0o700)) fail("EXTERNAL_BOOTSTRAP_INCOMPLETE", "root evidence, claim, journal, or staged directory trust differs")
@@ -524,11 +530,14 @@ export function createRootProductionAdapter(manifest, authority, trust) {
     reprove: async () => observe(manifest, authority, trust),
     claim: async (authorityId, transactionId, allowCreate) => {
       const destination = `${CLAIM_ROOT}/${authorityId}.claimed`; let handle
+      const claimWindow = inspectRootClaimWindow(authority, run("/usr/bin/date", ["-u", "+%Y-%m-%dT%H:%M:%S.%3NZ"]))
+      if (!claimWindow.resumeAllowed) return { expired: true }
       const existingClaim = () => {
         const existing = readCanonicalRootJson(destination)
         return existing.authorityId === authorityId && existing.transactionId === transactionId && existing.authoritySha256 === sha(Buffer.from(canonical(authority), "utf8")) ? { resume: true } : false
       }
       try { return existingClaim() } catch (error) { if (error?.code !== "ENOENT") throw error }
+      if (!claimWindow.createAllowed) return { expired: true }
       if (allowCreate !== true) return false
       try { handle = fs.openSync(destination, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o400) } catch (error) {
         if (error?.code !== "EEXIST") throw error
