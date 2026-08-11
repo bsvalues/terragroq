@@ -14,6 +14,7 @@ import {
   readTrustedClosureFile,
   STANDING_TRUSTED_FILES,
 } from "../scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs"
+import { createLedgerProviders } from "../scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs"
 
 type Json = Record<string, any>
 
@@ -129,6 +130,7 @@ function ledger(root = tempRoot("aegis-standing-ledger-"), overrides: Json = {})
   journalByRoot.set(root, journal)
   return createStandingLedgerProviders({
     ledgerRoot: root,
+    nodeLeasePath: path.join(root, "resident-aegis-active.json"),
     fsApi: fs,
     platform: "linux",
     getuid: () => process.getuid?.() ?? 1000,
@@ -449,6 +451,49 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     await expect(providers.acquireLease(secondLease)).resolves.toMatchObject({ acquired: true, ...secondLease })
   })
 
+  it("shares one node-exclusive lease with the remote-development runtime in both acquisition orders", async () => {
+    const fabricRoot = tempRoot("aegis-shared-node-lease-")
+    const remoteRoot = path.join(fabricRoot, "ledger")
+    const standingRoot = path.join(fabricRoot, "standing-hash-ledger")
+    fs.mkdirSync(remoteRoot, { mode: 0o700 })
+    fs.mkdirSync(standingRoot, { mode: 0o700 })
+    const common = {
+      platform: "linux",
+      getuid: () => process.getuid?.() ?? 1000,
+      username: () => "williamos-fabric",
+      validateDirectory: (stats: fs.Stats) => stats.isDirectory() && !stats.isSymbolicLink(),
+      validateLedgerFile: (stats: fs.Stats) => stats.isFile() && !stats.isSymbolicLink(),
+      syncDirectory: () => undefined,
+      holderIdentity: () => ({ pid: 100, boot_id: "boot-shared", process_start_ticks: "10" }),
+      holderIsAlive: () => true,
+    }
+    const remote = createLedgerProviders({
+      ...common,
+      ledgerRoot: remoteRoot,
+      clock: () => "2026-08-10T22:00:00.000Z",
+    })
+    const standing = ledger(standingRoot, {
+      nodeLeasePath: path.join(remoteRoot, "resident-aegis-active.json"),
+    })
+    const remoteLease = await remote.acquireExclusiveLease({ claim_id: "claim-remote" })
+    expect(remoteLease.acquired).toBe(true)
+    await standing.claimAdmission(claimBinding())
+    await expect(standing.acquireLease(leaseBinding())).resolves.toMatchObject({ acquired: false })
+    await expect(remote.releaseExclusiveLease({
+      lease_id: remoteLease.lease_id,
+      claim_id: "claim-remote",
+    })).resolves.toBe(true)
+
+    await expect(standing.acquireLease(leaseBinding())).resolves.toMatchObject({ acquired: true })
+    const remoteAfterStanding = createLedgerProviders({
+      ...common,
+      ledgerRoot: remoteRoot,
+      clock: () => "2026-08-10T22:00:05.000Z",
+    })
+    await expect(remoteAfterStanding.acquireExclusiveLease({ claim_id: "claim-remote-two" }))
+      .resolves.toMatchObject({ acquired: false })
+  })
+
   it("rejects path-like lease identifiers before creating an active lease", async () => {
     const root = tempRoot("aegis-standing-lease-path-")
     const providers = ledger(root)
@@ -456,7 +501,7 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
       ...leaseBinding(),
       lease_id: "../../outside",
     })).rejects.toThrow("IDENTIFIER_INVALID")
-    expect(fs.existsSync(path.join(root, "standing-hash-active.json"))).toBe(false)
+    expect(fs.existsSync(path.join(root, "resident-aegis-active.json"))).toBe(false)
   })
 
   it("recovers only an exact holder proven dead", async () => {
@@ -489,7 +534,7 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     const binding = leaseBinding()
     await first.claimAdmission(claimBinding())
     await first.acquireLease(binding)
-    const activePath = path.join(root, "standing-hash-active.json")
+    const activePath = path.join(root, "resident-aegis-active.json")
     const active = JSON.parse(fs.readFileSync(activePath, "utf8"))
     const recovery = {
       schema_version: "1.0-aegis-standing-lease-recovery",
@@ -571,7 +616,7 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     fs.writeFileSync(releasePath, `${JSON.stringify(release)}\n`)
 
     await expect(providers.releaseLease(binding)).rejects.toThrow("LEDGER_UNTRUSTED")
-    expect(fs.existsSync(path.join(root, "standing-hash-active.json"))).toBe(true)
+    expect(fs.existsSync(path.join(root, "resident-aegis-active.json"))).toBe(true)
   })
 
   it("proves a clean reviewed detached release checkout and exact tracked closure bytes", () => {

@@ -16,6 +16,7 @@ const TRUSTED_REF = "refs/heads/main"
 const REPORT_ROOT = "docs/reports/standing-dispatch"
 const INPUT_ROOT = `${REPORT_ROOT}/inputs`
 const LEDGER_ROOT = "/var/lib/williamos/fabric/standing-hash-ledger"
+const NODE_LEASE_PATH = "/var/lib/williamos/fabric/ledger/resident-aegis-active.json"
 const REQUEST_ROOT = "/var/lib/williamos/fabric/standing-hash-requests"
 const RELEASE_MANIFEST_PATH = "/etc/williamos/fabric/trusted-main-release.json"
 const MACHINE_ID_PATH = "/etc/machine-id"
@@ -459,6 +460,7 @@ function defaultHolderIsAlive(holder) {
 
 export function createStandingLedgerProviders({
   ledgerRoot: requestedRoot = LEDGER_ROOT,
+  nodeLeasePath: requestedNodeLeasePath = NODE_LEASE_PATH,
   fsApi = fs,
   platform = process.platform,
   getuid = process.getuid,
@@ -479,6 +481,14 @@ export function createStandingLedgerProviders({
   const rootStats = fsApi.lstatSync(lexicalRoot)
   const root = fsApi.realpathSync(lexicalRoot)
   if (root !== lexicalRoot || !validateDirectory(rootStats, uid)) fail("LEDGER_UNTRUSTED", "standing ledger root is not private")
+  const nodeLeasePath = path.resolve(requestedNodeLeasePath)
+  const nodeLeaseRoot = path.dirname(nodeLeasePath)
+  const nodeLeaseRootStats = fsApi.lstatSync(nodeLeaseRoot)
+  if (path.basename(nodeLeasePath) !== "resident-aegis-active.json"
+    || fsApi.realpathSync(nodeLeaseRoot) !== nodeLeaseRoot
+    || !validateDirectory(nodeLeaseRootStats, uid)) {
+    fail("LEDGER_UNTRUSTED", "shared AEGIS node lease root is not private")
+  }
   let lastClaim = null
   let lastClaimFailure = null
   let lastLease = null
@@ -631,10 +641,21 @@ export function createStandingLedgerProviders({
     return { claimed: true, ...binding, claimed_at: body.claimed_at }
   })
 
-  const activePath = path.join(root, "standing-hash-active.json")
+  const activePath = nodeLeasePath
+  const remoteLeaseValid = (lease) => {
+    const { lease_sha256: retainedLeaseSha256, ...leaseBody } = lease ?? {}
+    return lease?.schema_version === "0.1-resident-aegis-runtime-lease"
+      && typeof lease.holder === "object" && Number.isSafeInteger(lease.holder.pid) && lease.holder.pid > 0
+      && typeof lease.holder.boot_id === "string" && typeof lease.holder.process_start_ticks === "string"
+      && retainedLeaseSha256 === sha256(canonicalBytes(leaseBody))
+  }
   const reconcile = () => {
     const active = readLedgerWith(fsApi, activePath, uid, validateFile)
     if (!active) return true
+    if (active.schema_version === "0.1-resident-aegis-runtime-lease") {
+      if (!remoteLeaseValid(active)) fail("LEDGER_UNTRUSTED", "active remote-development lease is invalid")
+      return false
+    }
     if (!recordDigestValid(active, "lease_record_sha256")) fail("LEDGER_UNTRUSTED", "active standing lease is invalid")
     if (holderIsAlive(active.holder)) return false
     const acquiredAt = Date.parse(active.acquired_at)
@@ -667,7 +688,7 @@ export function createStandingLedgerProviders({
       }
     }
     fsApi.unlinkSync(activePath)
-    sync(root)
+    sync(nodeLeaseRoot)
     return true
   }
 
@@ -689,7 +710,7 @@ export function createStandingLedgerProviders({
     const highestFence = usedFences.length ? Math.max(...usedFences) : 0
     if (!Number.isSafeInteger(binding.fencing_token) || binding.fencing_token <= highestFence) {
       fsApi.unlinkSync(activePath)
-      sync(root)
+      sync(nodeLeaseRoot)
       fail("FENCING_REPLAY", "standing lease fencing token is not strictly increasing")
     }
     const fence = {
@@ -704,7 +725,7 @@ export function createStandingLedgerProviders({
       writeExclusiveWith(fsApi, path.join(root, `fence-${binding.fencing_token}.json`), fence, sync)
     } catch (error) {
       fsApi.unlinkSync(activePath)
-      sync(root)
+      sync(nodeLeaseRoot)
       if (error?.code === "EEXIST") fail("FENCING_REPLAY", "standing lease fencing token was already used")
       throw error
     }
@@ -804,7 +825,7 @@ export function createStandingLedgerProviders({
       }
     }
     fsApi.unlinkSync(activePath)
-    sync(root)
+    sync(nodeLeaseRoot)
     lastRelease = body
     return { released: true, ...binding }
   })

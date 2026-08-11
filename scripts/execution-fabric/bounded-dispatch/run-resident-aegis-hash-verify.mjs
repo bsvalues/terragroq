@@ -438,10 +438,22 @@ export function createLedgerProviders({
       && retainedLeaseSha256 === sha256(canonicalBytes(leaseBody))
   }
 
+  const validateStandingLease = (lease) => {
+    const { lease_record_sha256: retainedLeaseSha256, ...leaseBody } = lease ?? {}
+    return lease?.schema_version === "1.0-aegis-standing-lease"
+      && typeof lease.holder === "object" && Number.isSafeInteger(lease.holder.pid) && lease.holder.pid > 0
+      && typeof lease.holder.boot_id === "string" && typeof lease.holder.process_start_ticks === "string"
+      && retainedLeaseSha256 === sha256(canonicalBytes(leaseBody))
+  }
+
   const reconcileDeadLease = () => {
     const leasePath = path.join(ledgerRoot, "resident-aegis-active.json")
     const active = readPrivateLedgerJson(leasePath, uid, validateLedgerFile)
     if (!active) return true
+    if (active.schema_version === "1.0-aegis-standing-lease") {
+      if (!validateStandingLease(active)) fail("LEDGER_UNTRUSTED", "active standing AEGIS lease is invalid")
+      return false
+    }
     if (!validateLease(active)) fail("LEDGER_UNTRUSTED", "active AEGIS lease is invalid")
     const releasePath = path.join(ledgerRoot, `release-${active.lease_id}.json`)
     const release = readPrivateLedgerJson(releasePath, uid, validateLedgerFile)

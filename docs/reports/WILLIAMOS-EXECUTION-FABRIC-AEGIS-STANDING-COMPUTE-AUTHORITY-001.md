@@ -149,8 +149,14 @@ runtime, storage, or remote-system gates.
 
 ## Validation
 
-- Focused Authority Registry, standing authority, admission issuer, historical
-  adapter, standing HASH runtime, and resident runner suites: `113/113 PASS`.
+- Integrated Authority Registry, standing authority, admission issuer,
+  historical adapter, standing HASH runtime, resident runner, remote-development
+  trust, and network-boundary suites: `320 PASS / 27 deliberate skips`.
+- Standing HASH_VERIFY and remote-development execution share one atomically
+  created node-exclusive AEGIS lease. Each runtime treats the other's valid
+  lease as occupied and cannot recover or overwrite it.
+- Claim-only and completion evidence digests are verified before first write;
+  mutation-lock release is atomic and cannot remove a replacement lock.
 - Eligibility remains non-authorizing without an exact unexpired reviewed-main
   per-job admission and matching durable claim, lease/fence, and receipt chain.
 - Broad worker, command-runner, scheduler, runtime, persistence, tool-call,
