@@ -15,7 +15,7 @@ evidence was changed while producing this package.
 ## Trusted baseline
 
 - control plane: `bsvalues/terragroq` `refs/heads/main`
-- trusted merge: `d5e725e47dc32f8ea113d0a0168e956bac84659e`
+- trusted package base: `fea7785fd480d3b5f107c286cc8eb1bac6d04793`
 - proof: `WO-TF-REMOTE-DEV-OFFLOAD-001`, TerraFusion issue `#734`
 - TerraFusion proof base: `ffd2fa35f5152de2b95e7f63b220050d18193d7a`
 - activation posture: `INACTIVE_PENDING_PREREQUISITES`
@@ -23,7 +23,9 @@ evidence was changed while producing this package.
 - standing AEGIS authority: disabled
 
 The package manifest JCS SHA-256 is
-`abee19f7d7016e6ac628b281ae15d292fe2681219ab68dd96f83077a5231af4e`.
+`cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a`.
+It is recorded by the trusted planner constant and recomputed in the test
+evidence for this correction.
 The trusted planner pins that complete manifest digest. The manifest binds the
 activation, worker, network provider, network launcher, network policy,
 installer gate, and forced-command entrypoint. This is internal consistency,
@@ -44,6 +46,12 @@ These paths were declared before editing:
 - `scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs`
 - `tests/execution-fabric-aegis-remote-dev-prerequisites.test.ts`
 - `docs/reports/WO-TF-REMOTE-DEV-OFFLOAD-001-prerequisite-provisioning.md`
+- `scripts/execution-fabric/live/aegis-remote-dev-worker.sh`
+- `tests/execution-fabric-remote-dev-offload-worker.test.ts`
+- `config/execution-fabric/remote-dev-offload-v1-inactive-scope.json`
+- `config/execution-fabric/remote-dev-offload-v1.policy.json`
+- `scripts/execution-fabric/live/invoke-remote-dev-offload.ps1`
+- `config/execution-fabric/remote-dev-offload-v1-activation.json`
 
 ## Accepted read-only audit gaps
 
@@ -55,8 +63,9 @@ facts:
 2. the resident `terragroq` checkout is stale and a trusted TerraFusion mirror
    is absent.
 3. the exact Node, .NET SDK, Corepack, and pnpm toolchain is incomplete.
-4. `/srv/william` is not an XFS project-quota mount compatible with the worker's
-   exact 80 GiB ceiling.
+4. workspace storage was the existing ext4 root filesystem and required a
+   bounded mechanism compatible with the worker's exact 80 GiB ceiling. This
+   gap is now closed by the verified loopback-XFS evidence below.
 5. dual-stack default-deny egress, broker enforcement, and Atlas denial are not
    proven.
 6. `ssh.github.com:443` host trust and the dedicated account authentication
@@ -102,7 +111,7 @@ the first mutation.
    forced command. The exact key fingerprint is an owner input.
 3. **Trusted repositories**: reconcile
    `/var/lib/williamos/fabric/workspaces/terragroq` to clean remote-equal commit
-   `d5e725e47dc32f8ea113d0a0168e956bac84659e`; create root-reviewed bare mirror
+   `fea7785fd480d3b5f107c286cc8eb1bac6d04793`; create root-reviewed bare mirror
    `/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git` and prove
    commit `ffd2fa35f5152de2b95e7f63b220050d18193d7a` exists. Drift or local work
    blocks; it is never reset away.
@@ -110,11 +119,20 @@ the first mutation.
    `22.18.0`, .NET SDK `8.0.423`, Corepack `0.34.0`, and pnpm `9.0.0`.
    Package/archive hashes and provenance must be attached to the live authority
    before installation.
-5. **Workspace storage**: owner supplies the exact filesystem UUID for an
-   already prepared XFS filesystem mounted at `/srv/william` with `nodev`,
-   `nosuid`, and `prjquota`; assign project ID `734` and enforce hard limit
-   `85899345920` bytes for the exact proof workspace. This package never formats,
-   remounts, unmounts, or selects a disk.
+5. **Workspace storage — already completed and not an apply mutation**: the
+   bounded mechanism is `LOOPBACK_XFS_PROJECT_QUOTA_V1`, backed by the existing
+   AEGIS ext4 root at
+   `/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs`. The image is
+   exactly `107374182400` bytes, `root:root`, mode `0600`; it is attached as
+   observed `/dev/loop0` (`7:0`), and `/srv/william` independently reports
+   that same device and major/minor identity as its source, with XFS UUID
+   `5744648d-9289-4d4e-ac6a-707e8405a5d6`, label `AEGIS_RDEV`, with
+   `rw,nosuid,nodev,prjquota,exec`. `/srv/william/workspaces` is
+   `williamos-fabric`, mode `0700`. Project `734` has inherit flag `P`, quota
+   accounting/enforcement are ON, and the numeric project report proves hard
+   limit `83886080` KiB (`85899345920` bytes). Observed workspace free space was
+   `85899345920` bytes. No external disk or backup storage is used. No further
+   format, mount, remount, or workspace creation is authorized by this correction.
 6. **Network**: install a root-owned broker/enforcement generation for the exact
    worker cgroup; default-deny IPv4 and IPv6; deny Atlas
    `192.168.1.156/32` and its IPv4-mapped IPv6 address on all ports; permit only
@@ -140,7 +158,7 @@ the first mutation.
 
 ## Owner inputs required for a future live handoff
 
-- exact existing XFS filesystem UUID for `/srv/william`
+- storage owner input: closed by the exact loopback-XFS evidence above
 - exact Hermes bounded-transport public-key fingerprint
 - exact GitHub account public-key fingerprint and repository permissions
 - exact package/archive hashes and source for the pinned toolchain
@@ -163,7 +181,7 @@ journal from the live apply.
 7. retain the signing key, ticket tombstones, workspace data, and durable ledger
    for owner review.
 
-Rollback never formats, unmounts, deletes workspaces, removes evidence, reopens
+Rollback never deletes or reformats the loopback image, unmounts storage, deletes workspaces, removes evidence, reopens
 direct egress, restores `bs` as a worker transport, or changes AEGIS's general
 administrator posture.
 
@@ -183,6 +201,7 @@ administrator posture.
   self-promotes to trusted or applicable.
 
 No live preflight was claimed. The accepted audit says the current node is not
-ready; this package truthfully describes the mutations needed for a later
-owner-authorized apply and keeps activation inactive until those mutations and
-their root-owned evidence are independently reviewed.
+ready for dispatch because non-storage prerequisites remain. Storage itself was
+independently completed and is represented here as verified existing state, not
+as a proposed external disk or another mutation. Activation stays inactive until
+the remaining prerequisites and their root-owned evidence are independently reviewed.
