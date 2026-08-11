@@ -86,6 +86,24 @@ const EXPECTED_ROOT_ASSETS = Object.freeze({
   "replay-epoch-initializer": "/usr/local/libexec/williamos/aegis-standing-hash-replay-epoch.mjs",
   "release-manifest": "/etc/williamos/fabric/trusted-main-release.json",
 })
+const EXPECTED_EXISTING_RUNTIME_ROOTS = Object.freeze([
+  Object.freeze({
+    path: "/var/lib/williamos",
+    owner: "williamos-fabric",
+    group: "williamos-fabric",
+    mode: "0750",
+    preserveExisting: true,
+    mutationAllowed: false,
+  }),
+  Object.freeze({
+    path: "/var/lib/williamos/fabric",
+    owner: "williamos-fabric",
+    group: "williamos-fabric",
+    mode: "0700",
+    preserveExisting: true,
+    mutationAllowed: false,
+  }),
+])
 const SSH_ENTRYPOINT_SOURCE = "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs"
 const REPLAY_INITIALIZER_SOURCE = "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs"
 const APPLY_SOURCE = "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs"
@@ -208,6 +226,9 @@ function validateManifest(manifest) {
     request: "/var/lib/williamos/fabric/standing-hash-requests",
     ledger: "/var/lib/williamos/fabric/standing-hash-ledger",
     nodeLease: "/var/lib/williamos/fabric/ledger",
+  }
+  if (!same(manifest.existingRuntimeRoots, EXPECTED_EXISTING_RUNTIME_ROOTS)) {
+    fail("AEGIS_PROVISION_PACKAGE_INVALID", "preserved existing runtime roots differ")
   }
   for (const [name, expectedPath] of Object.entries(privateExpected)) {
     const root = manifest.privateRoots?.[name]
@@ -668,14 +689,17 @@ function validateCheckoutInspection(candidate, sourcePath, expected) {
 
 function buildLayout(manifest, closure, publicKey, account) {
   const releaseRoot = manifest.reviewedRelease.releaseRoot
+  const preservedDirectories = manifest.existingRuntimeRoots.map(({ path: target, mode }) => ({
+    path: target,
+    ...account,
+    mode: Number.parseInt(mode, 8),
+  }))
   const directories = new Map([
     ["/opt/williamos", { uid: 0, gid: 0, mode: 0o755 }],
     ["/opt/williamos/releases", { uid: 0, gid: 0, mode: 0o755 }],
     ["/usr/local/libexec/williamos", { uid: 0, gid: 0, mode: 0o755 }],
     ["/etc/williamos", { uid: 0, gid: 0, mode: 0o755 }],
     ["/etc/williamos/fabric", { uid: 0, gid: 0, mode: 0o755 }],
-    ["/var/lib/williamos", { uid: 0, gid: 0, mode: 0o755 }],
-    ["/var/lib/williamos/fabric", { uid: 0, gid: 0, mode: 0o755 }],
     [manifest.privateRoots.request.path, { ...account, mode: 0o700 }],
     [manifest.privateRoots.ledger.path, { ...account, mode: 0o700 }],
     [manifest.privateRoots.nodeLease.path, { ...account, mode: 0o700 }],
@@ -688,13 +712,21 @@ function buildLayout(manifest, closure, publicKey, account) {
     { id: "replay-epoch-initializer", path: EXPECTED_ROOT_ASSETS["replay-epoch-initializer"], bytes: closure.get(REPLAY_INITIALIZER_SOURCE), uid: 0, gid: 0, mode: 0o555 },
     { id: "authorized-keys", path: manifest.invocationBoundary.authorizedKeysPath, bytes: Buffer.from(publicKey.authorizedRecord, "utf8"), ...account, mode: 0o600 },
   )
-  return { releaseRoot, directories: [...directories.entries()].map(([directoryPath, metadata]) => ({ path: directoryPath, ...metadata })), files }
+  return {
+    releaseRoot,
+    preservedDirectories,
+    directories: [...directories.entries()].map(([directoryPath, metadata]) => ({ path: directoryPath, ...metadata })),
+    files,
+  }
 }
 
 function preflightLayout(fsApi, layout, journalPath, account) {
   const immutableBases = ["/", "/opt", "/usr", "/usr/local", "/usr/local/libexec", "/etc", "/var", "/var/lib", "/home"]
   for (const base of immutableBases) assertExistingDirectory(fsApi, base, { uid: 0, immutableRoot: true })
   assertExistingDirectory(fsApi, "/home/williamos-fabric", { uid: account.uid, gid: account.gid, immutableRoot: true })
+  for (const item of layout.preservedDirectories) {
+    assertExistingDirectory(fsApi, item.path, { uid: item.uid, gid: item.gid, mode: item.mode })
+  }
   if (existsNoFollow(fsApi, journalPath).exists) fail("AEGIS_PROVISION_AUTHORITY_REPLAY", "authority mutation journal already exists")
   const release = existsNoFollow(fsApi, layout.releaseRoot)
   if (release.exists) {
@@ -769,7 +801,7 @@ function fsyncParent(fsApi, targetPath) {
   try { fsApi.fsyncSync(descriptor) } finally { fsApi.closeSync(descriptor) }
 }
 
-function createExclusiveFile(fsApi, item) {
+function createExclusiveFile(fsApi, item, { ownershipAlreadySet = false } = {}) {
   const temporaryPath = `${item.path}.provisioning-${crypto.randomUUID()}.tmp`
   let descriptor
   let temporaryCreated = false
@@ -780,7 +812,7 @@ function createExclusiveFile(fsApi, item) {
       flags(fsApi).O_WRONLY | flags(fsApi).O_CREAT | flags(fsApi).O_EXCL | (flags(fsApi).O_NOFOLLOW ?? 0), item.mode)
     temporaryCreated = true
     fsApi.fchmodSync(descriptor, item.mode)
-    fsApi.fchownSync(descriptor, item.uid, item.gid)
+    if (!ownershipAlreadySet) fsApi.fchownSync(descriptor, item.uid, item.gid)
     writeAll(fsApi, descriptor, item.bytes)
     fsApi.fsyncSync(descriptor)
   } finally {
@@ -799,12 +831,84 @@ function createExclusiveFile(fsApi, item) {
   }
 }
 
-function createExclusiveDirectory(fsApi, item) {
+function createExclusiveDirectory(fsApi, item, { ownershipAlreadySet = false } = {}) {
   assertSafeParentChain(fsApi, item.path, item.uid)
   fsApi.mkdirSync(item.path, { recursive: false, mode: item.mode })
-  fsApi.chownSync(item.path, item.uid, item.gid)
+  if (!ownershipAlreadySet) fsApi.chownSync(item.path, item.uid, item.gid)
   fsApi.chmodSync(item.path, item.mode)
   fsyncParent(fsApi, item.path)
+}
+
+function assertPrivilegeTransitionAvailable(processApi) {
+  const methods = ["geteuid", "getegid", "seteuid", "setegid", "getgroups", "setgroups"]
+  if (methods.some((name) => typeof processApi[name] !== "function")
+    || processApi.geteuid() !== 0 || processApi.getegid() !== 0) {
+    fail("AEGIS_PROVISION_PRIVILEGE_DROP_UNAVAILABLE", "root applier cannot establish the bounded service identity")
+  }
+}
+
+function runAsAccount(processApi, account, action) {
+  assertPrivilegeTransitionAvailable(processApi)
+  const originalGroups = processApi.getgroups()
+  if (!Array.isArray(originalGroups) || originalGroups.some((group) => !Number.isSafeInteger(group) || group < 0)) {
+    fail("AEGIS_PROVISION_PRIVILEGE_DROP_UNAVAILABLE", "root supplementary groups cannot be retained safely")
+  }
+  let groupChanged = false
+  let transitionEstablished = false
+  let pendingError
+  try {
+    processApi.setgroups([account.gid])
+    processApi.setegid(account.gid)
+    groupChanged = true
+    processApi.seteuid(account.uid)
+    const boundedGroups = [...processApi.getgroups()].sort((left, right) => left - right)
+    if (processApi.geteuid() !== account.uid || processApi.getegid() !== account.gid
+      || !same(boundedGroups, [account.gid])) {
+      fail("AEGIS_PROVISION_PRIVILEGE_DROP_FAILED", "effective service identity differs")
+    }
+    transitionEstablished = true
+    return action()
+  } catch (error) {
+    let outgoing = error
+    if (!transitionEstablished && !String(error?.code ?? "").startsWith("AEGIS_PROVISION_")) {
+      outgoing = new Error(
+        "AEGIS_PROVISION_PRIVILEGE_DROP_FAILED: effective service identity transition failed",
+        { cause: error },
+      )
+      outgoing.code = "AEGIS_PROVISION_PRIVILEGE_DROP_FAILED"
+      outgoing.causeCode = error?.code ?? null
+    }
+    pendingError = outgoing
+    throw outgoing
+  } finally {
+    let restoreFailure = null
+    let restoreCause = null
+    try {
+      if (processApi.geteuid() !== 0) processApi.seteuid(0)
+      if (groupChanged || processApi.getegid() !== 0) processApi.setegid(0)
+      processApi.setgroups(originalGroups)
+      const restoredGroups = [...processApi.getgroups()].sort((left, right) => left - right)
+      const expectedGroups = [...originalGroups].sort((left, right) => left - right)
+      if (processApi.geteuid() !== 0 || processApi.getegid() !== 0 || !same(restoredGroups, expectedGroups)) {
+        restoreFailure = "root applier identity was not restored"
+      }
+    } catch (error) {
+      restoreFailure = "root applier identity restoration failed"
+      restoreCause = error
+    }
+    if (restoreFailure !== null) {
+      if (pendingError) {
+        pendingError.restoreFailureCode = "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED"
+        pendingError.restoreFailureReason = restoreFailure
+        pendingError.restoreFailureCauseCode = restoreCause?.code ?? null
+      } else {
+        const error = new Error(`AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED: ${restoreFailure}`, { cause: restoreCause })
+        error.code = "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED"
+        error.causeCode = restoreCause?.code ?? null
+        throw error
+      }
+    }
+  }
 }
 
 function createJournal(fsApi, journalPath, record) {
@@ -877,6 +981,14 @@ function evidenceBase(manifest, authority, publicKey, mode, journalPath, planned
     mutation_journal: mode === "apply" ? journalPath : null,
     dedicated_transport_key_fingerprint: publicKey.fingerprint,
     dedicated_transport_public_key_sha256: publicKey.fileSha256,
+    preserved_runtime_roots: manifest.existingRuntimeRoots.map(({ path: target, owner, group, mode }) => ({
+      path: target,
+      owner,
+      group,
+      mode,
+      preserved: true,
+      mutated: false,
+    })),
     planned_mutations: planned,
     completed_mutations: [],
     deferred_mutations: [
@@ -965,6 +1077,8 @@ export function provisionAegisStandingHashPrerequisites({
   ]
   const evidence = evidenceBase(manifest, authority, publicKey, mode, journalPath, planned)
   if (mode === "dry-run") return evidence
+  assertPrivilegeTransitionAvailable(processApi)
+  runAsAccount(processApi, account, () => undefined)
 
   const consumed = {
     schema_version: "1.0-aegis-standing-hash-mutation-journal",
@@ -988,15 +1102,27 @@ export function provisionAegisStandingHashPrerequisites({
     completed.push(description)
     appendJournal(fsApi, journalPath, { record_type: "MUTATION_COMPLETED", sequence: sequence++, ...description })
   }
+  const mutateOwned = (item, action) => {
+    const accountOwned = item.uid === account.uid && item.gid === account.gid
+    return accountOwned
+      ? runAsAccount(processApi, account, () => action({ ownershipAlreadySet: true }))
+      : action({ ownershipAlreadySet: false })
+  }
   try {
     for (const directory of layout.directories) {
-      mutate({ type: "CREATE_DIRECTORY", path: directory.path }, () => createExclusiveDirectory(fsApi, directory))
+      mutate({ type: "CREATE_DIRECTORY", path: directory.path }, () => mutateOwned(
+        directory,
+        (options) => createExclusiveDirectory(fsApi, directory, options),
+      ))
     }
     mutate({ type: "INSTALL_REVIEWED_CHECKOUT", path: layout.releaseRoot, source_path: checkout.sourcePath, commit: checkout.headCommit }, () => {
       checkoutApi.publish({ sourcePath: checkout.sourcePath, destination: layout.releaseRoot, expected: checkoutExpected, fsApi })
     })
     for (const file of layout.files) {
-      mutate({ type: "INSTALL_FILE", id: file.id, path: file.path, sha256: sha256(file.bytes) }, () => createExclusiveFile(fsApi, file))
+      mutate({ type: "INSTALL_FILE", id: file.id, path: file.path, sha256: sha256(file.bytes) }, () => mutateOwned(
+        file,
+        (options) => createExclusiveFile(fsApi, file, options),
+      ))
     }
     appendJournal(fsApi, journalPath, {
       record_type: "APPLY_COMPLETE",
@@ -1008,6 +1134,11 @@ export function provisionAegisStandingHashPrerequisites({
       scheduler_activated: false,
     })
   } catch (error) {
+    const restorationEvidence = error?.restoreFailureCode ? {
+      restore_failure_code: error.restoreFailureCode,
+      restore_failure_reason: error.restoreFailureReason ?? null,
+      restore_failure_cause_code: error.restoreFailureCauseCode ?? null,
+    } : {}
     try {
       appendJournal(fsApi, journalPath, {
         record_type: "APPLY_FAILED_PARTIAL_STATE",
@@ -1015,6 +1146,7 @@ export function provisionAegisStandingHashPrerequisites({
         failed_at: clock(),
         completed_mutation_count: completed.length,
         failure_code: error?.code ?? "AEGIS_PROVISION_MUTATION_FAILED",
+        ...restorationEvidence,
       })
     } catch (journalError) {
       const evidenceFailure = new Error(
@@ -1023,12 +1155,19 @@ export function provisionAegisStandingHashPrerequisites({
       evidenceFailure.code = "AEGIS_PROVISION_EVIDENCE_WRITE_FAILED"
       evidenceFailure.causeCode = journalError?.code ?? "AEGIS_PROVISION_JOURNAL_WRITE_FAILED"
       evidenceFailure.originalFailureCode = error?.code ?? "AEGIS_PROVISION_MUTATION_FAILED"
+      evidenceFailure.restoreFailureCode = error?.restoreFailureCode ?? null
+      evidenceFailure.restoreFailureReason = error?.restoreFailureReason ?? null
+      evidenceFailure.restoreFailureCauseCode = error?.restoreFailureCauseCode ?? null
       evidenceFailure.authorityConsumed = true
       evidenceFailure.journalPath = journalPath
       throw evidenceFailure
     }
     const partial = new Error(`AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS: authority consumed; mutation stopped after ${completed.length} completed operations`)
     partial.code = "AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS"
+    partial.originalFailureCode = error?.code ?? "AEGIS_PROVISION_MUTATION_FAILED"
+    partial.restoreFailureCode = error?.restoreFailureCode ?? null
+    partial.restoreFailureReason = error?.restoreFailureReason ?? null
+    partial.restoreFailureCauseCode = error?.restoreFailureCauseCode ?? null
     partial.authorityConsumed = true
     partial.journalPath = journalPath
     throw partial
@@ -1038,6 +1177,27 @@ export function provisionAegisStandingHashPrerequisites({
 
 export const applyAegisStandingHashPrerequisites = provisionAegisStandingHashPrerequisites
 export const executeAegisStandingHashProvisioning = provisionAegisStandingHashPrerequisites
+
+export function standingProvisioningErrorEvidence(error) {
+  return {
+    schema_version: "1.0-aegis-standing-hash-root-provisioning-error",
+    status: "FAILED_CLOSED",
+    code: error?.code ?? "AEGIS_PROVISION_REJECTED",
+    detail: String(error?.message ?? error).slice(0, 512),
+    authority_consumed: error?.authorityConsumed === true,
+    mutation_journal: error?.journalPath ?? null,
+    original_failure_code: error?.originalFailureCode ?? null,
+    restore_failure_code: error?.restoreFailureCode ?? null,
+    restore_failure_reason: error?.restoreFailureReason ?? null,
+    restore_failure_cause_code: error?.restoreFailureCauseCode ?? null,
+    private_key_generated: false,
+    private_key_inspected: false,
+    replay_epoch_initialized: false,
+    workload_executed: false,
+    scheduler_activated: false,
+    network_accessed: false,
+  }
+}
 
 function parseCli(argv) {
   const result = { mode: null, authorityPath: null, publicKeyPath: null, keyEvidencePath: null, reviewedCheckoutSourcePath: null }
@@ -1095,20 +1255,7 @@ export function main(argv = process.argv.slice(2), dependencies = {}) {
     ;(dependencies.stdout ?? process.stdout).write(`${canonicalize(evidence)}\n`)
     return 0
   } catch (error) {
-    ;(dependencies.stderr ?? process.stderr).write(`${canonicalize({
-      schema_version: "1.0-aegis-standing-hash-root-provisioning-error",
-      status: "FAILED_CLOSED",
-      code: error?.code ?? "AEGIS_PROVISION_REJECTED",
-      detail: String(error?.message ?? error).slice(0, 512),
-      authority_consumed: error?.authorityConsumed === true,
-      mutation_journal: error?.journalPath ?? null,
-      private_key_generated: false,
-      private_key_inspected: false,
-      replay_epoch_initialized: false,
-      workload_executed: false,
-      scheduler_activated: false,
-      network_accessed: false,
-    })}\n`)
+    ;(dependencies.stderr ?? process.stderr).write(`${canonicalize(standingProvisioningErrorEvidence(error))}\n`)
     return error?.code === "AEGIS_PROVISION_USAGE_INVALID" ? 64 : 2
   }
 }

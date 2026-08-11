@@ -15,6 +15,7 @@ import {
 import {
   applyAegisStandingHashPrerequisites,
   assertNoGitAlternates,
+  standingProvisioningErrorEvidence,
 } from "../scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs"
 import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
 
@@ -90,6 +91,10 @@ function readyObservation(value = manifest()): Json {
       rootExecutionAllowed: false,
       sudoAllowed: false,
     },
+    existingRuntimeRoots: Object.fromEntries(value.existingRuntimeRoots.map((root: Json) => [
+      root.path,
+      { exists: true, ...root },
+    ])),
     reviewedRelease: {
       exists: true,
       gitCheckoutRequired: true,
@@ -229,6 +234,24 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
         rootExecutionAllowed: false,
         sudoAllowed: false,
       },
+      existingRuntimeRoots: [
+        {
+          path: "/var/lib/williamos",
+          owner: "williamos-fabric",
+          group: "williamos-fabric",
+          mode: "0750",
+          preserveExisting: true,
+          mutationAllowed: false,
+        },
+        {
+          path: "/var/lib/williamos/fabric",
+          owner: "williamos-fabric",
+          group: "williamos-fabric",
+          mode: "0700",
+          preserveExisting: true,
+          mutationAllowed: false,
+        },
+      ],
       standingExecutionBoundary: {
         workloadClass: "HASH_VERIFY",
         networkScope: "none",
@@ -267,7 +290,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/canonical-json.mjs", sha256: "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs", sha256: "c18ecec38a5086788d7f4532b471efc6548cd293c27f3983a92934464015fb16", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "0662102ff973fbb745afda40ad8ca6746bc740bbd292df4d4563852d411aefe7", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "2c69221e56659d3f358c8a81236e59dc61e8994bae7a98b558c6648fee5021d6", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "7700f0660f16e1d6adefc8c2e96bf3c5a43d724c5a6b76c97a5d24b0c101e6a0", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
@@ -298,6 +321,29 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       ownerAuthorityRequired: true,
       mutations: [],
     })
+  })
+
+  it("cannot report READY without exact preserved runtime-root observations", () => {
+    const missing = readyObservation()
+    delete missing.existingRuntimeRoots
+    expect(buildStandingProvisioningPlan(manifest(), missing)).toMatchObject({
+      status: "BLOCKED",
+      reasonCode: "PREFLIGHT_EVIDENCE_INCOMPLETE",
+    })
+
+    for (const [path, field, value] of [
+      ["/var/lib/williamos", "exists", false],
+      ["/var/lib/williamos", "owner", "root"],
+      ["/var/lib/williamos", "mode", "0755"],
+      ["/var/lib/williamos/fabric", "group", "root"],
+      ["/var/lib/williamos/fabric", "mutationAllowed", true],
+    ] as const) {
+      const observed = readyObservation()
+      observed.existingRuntimeRoots[path][field] = value
+      const result = buildStandingProvisioningPlan(manifest(), observed)
+      expect(result).toMatchObject({ status: "BLOCKED", reasonCode: "PROVISIONING_DRIFT" })
+      expect(result.drift).toContain(`existingRuntimeRoots.${path}.${field}`)
+    }
   })
 
   it("blocks existing drift without proposing or performing mutations", () => {
@@ -504,7 +550,13 @@ type VirtualNode = {
 }
 
 function injectedLinuxFs(options: {
-  existing?: Array<{ path: string, kind?: VirtualNode["kind"] }>
+  existing?: Array<{
+    path: string
+    kind?: VirtualNode["kind"]
+    mode?: number
+    uid?: number
+    gid?: number
+  }>
   failPath?: string
   failJournalRecordType?: string
 } = {}) {
@@ -513,6 +565,7 @@ function injectedLinuxFs(options: {
   const virtualOpenFlags = new Map<number, number>()
   const virtualWriteOffsets = new Map<number, number>()
   const events: Json[] = []
+  let identityProvider = () => ({ uid: 0, gid: 0 })
   let nextDescriptor = 10_000
   let nextInode = 100
   const normalize = (candidate: fs.PathLike) => String(candidate).startsWith("/")
@@ -537,11 +590,20 @@ function injectedLinuxFs(options: {
     putDirectory(directory)
   }
   putDirectory("/home/williamos-fabric", 0o755, 734, 734)
+  putDirectory("/var/lib/williamos", 0o750, 734, 734)
+  putDirectory("/var/lib/williamos/fabric", 0o700, 734, 734)
   nodes.set(normalize("/etc/machine-id"), node("file", 0o444, Buffer.from("00000000000000000000000000000000\n")))
   nodes.set(normalize("/etc/passwd"), node("file", 0o444, Buffer.from("williamos-fabric:x:734:734::/home/williamos-fabric:/bin/bash\n")))
   nodes.set(normalize("/etc/group"), node("file", 0o444, Buffer.from("williamos-fabric:x:734:\n")))
   for (const entry of options.existing ?? []) {
-    nodes.set(normalize(entry.path), node(entry.kind ?? "file", entry.kind === "directory" ? 0o755 : 0o644))
+    const kind = entry.kind ?? "file"
+    nodes.set(normalize(entry.path), node(
+      kind,
+      entry.mode ?? (kind === "directory" ? 0o755 : 0o644),
+      Buffer.alloc(0),
+      entry.uid ?? 0,
+      entry.gid ?? 0,
+    ))
   }
   const failPath = options.failPath ? normalize(options.failPath) : null
   const missing = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" })
@@ -586,7 +648,8 @@ function injectedLinuxFs(options: {
         if (nodes.has(target) && (flags & fs.constants.O_EXCL) !== 0) {
           throw Object.assign(new Error("EEXIST"), { code: "EEXIST" })
         }
-        nodes.set(target, node("file", mode ?? 0o666))
+        const identity = identityProvider()
+        nodes.set(target, node("file", mode ?? 0o666, Buffer.alloc(0), identity.uid, identity.gid))
         events.push({ kind: "open-create", path: target, flags, mode })
       } else if (!nodes.has(target)) {
         throw missing()
@@ -622,8 +685,10 @@ function injectedLinuxFs(options: {
     },
     mkdirSync(candidate: fs.PathLike, config: Json) {
       const target = normalize(candidate)
+      if (target === failPath) throw Object.assign(new Error("INJECTED_WRITE_FAILURE"), { code: "EIO" })
       if (nodes.has(target)) throw Object.assign(new Error("EEXIST"), { code: "EEXIST" })
-      nodes.set(target, node("directory", config.mode))
+      const identity = identityProvider()
+      nodes.set(target, node("directory", config.mode, Buffer.alloc(0), identity.uid, identity.gid))
       events.push({ kind: "mkdir", path: target, mode: config.mode })
     },
     chownSync(candidate: fs.PathLike, uid: number, gid: number) {
@@ -700,6 +765,9 @@ function injectedLinuxFs(options: {
     pathOf: normalize,
     bytesAt: (candidate: string) => nodes.get(normalize(candidate))?.bytes,
     statAt: (candidate: string) => nodes.get(normalize(candidate)),
+    setIdentityProvider(provider: () => { uid: number, gid: number }) {
+      identityProvider = provider
+    },
     installCheckout(candidate: string) {
       const checkoutRoot = normalize(candidate)
       const directories = [
@@ -727,8 +795,53 @@ function injectedLinuxFs(options: {
   }
 }
 
+function injectedRootProcess(failOperation?: string | string[] | { operation: string, occurrence: number }) {
+  let uid = 0
+  let gid = 0
+  let groups = [0]
+  const events: Json[] = []
+  const failureSpecs = (Array.isArray(failOperation) ? failOperation : failOperation ? [failOperation] : [])
+    .map((entry) => typeof entry === "string" ? { operation: entry, occurrence: 1 } : entry)
+  const operationCounts = new Map<string, number>()
+  const reject = (operation: string) => {
+    const occurrence = (operationCounts.get(operation) ?? 0) + 1
+    operationCounts.set(operation, occurrence)
+    if (failureSpecs.some((entry) => entry.operation === operation && entry.occurrence === occurrence)) {
+      throw Object.assign(new Error(`INJECTED_${operation.toUpperCase()}_FAILURE`), { code: "EPERM" })
+    }
+  }
+  return {
+    events,
+    identity: () => ({ uid, gid }),
+    api: {
+      platform: "linux",
+      getuid: () => uid,
+      geteuid: () => uid,
+      getegid: () => gid,
+      getgroups: () => [...groups],
+      seteuid(next: number) {
+        reject(next === 0 ? "restore-euid" : "drop-euid")
+        events.push({ kind: "seteuid", from: uid, to: next })
+        uid = next
+      },
+      setegid(next: number) {
+        reject(next === 0 ? "restore-egid" : "drop-egid")
+        events.push({ kind: "setegid", from: gid, to: next })
+        gid = next
+      },
+      setgroups(next: number[]) {
+        reject(next.length === 1 && next[0] === 734 ? "drop-groups" : "restore-groups")
+        events.push({ kind: "setgroups", from: [...groups], to: [...next] })
+        groups = [...next]
+      },
+    },
+  }
+}
+
 function implementationInput(overrides: Json = {}) {
   const virtual = injectedLinuxFs(overrides.virtualOptions)
+  const rootProcess = injectedRootProcess(overrides.processFailure)
+  virtual.setIdentityProvider(rootProcess.identity)
   const publicKey = overrides.publicKey ?? TRANSPORT_PUBLIC_KEY + "\n"
   const normalizedPublicKey = publicKey.trim()
   const keyEvidence = overrides.keyGenerationEvidence ?? keyGenerationEvidence(manifest(), normalizedPublicKey)
@@ -762,7 +875,7 @@ function implementationInput(overrides: Json = {}) {
       keyGenerationEvidence: keyEvidence,
       mode: overrides.mode,
       fsApi: virtual.fsApi,
-      processApi: overrides.processApi ?? { platform: "linux", getuid: () => 0 },
+      processApi: overrides.processApi ?? rootProcess.api,
       hostname: overrides.hostnameApi ?? (() => "aegis"),
       clock: overrides.clock ?? (() => NOW),
       machineIdentitySha256: manifest().identity.machineIdSha256,
@@ -771,6 +884,7 @@ function implementationInput(overrides: Json = {}) {
       checkoutApi,
       packageClosure,
     },
+    processEvents: rootProcess.events,
   }
 }
 
@@ -842,6 +956,8 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
     const cases = [
       ["/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs", "symlink", "AEGIS_PROVISION_SYMLINK_REJECTED"],
       ["/etc/williamos/fabric/trusted-main-release.json", "file", "AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS"],
+      ["/var/lib/williamos/fabric/standing-hash-requests", "directory", "AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS"],
+      ["/var/lib/williamos/fabric/standing-hash-ledger", "directory", "AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS"],
       ["/var/lib/williamos-aegis-standing-hash-" + authority.authorityId + ".mutation-journal.jsonl", "file", "AEGIS_PROVISION_AUTHORITY_REPLAY"],
     ] as const
     for (const [target, kind, code] of cases) {
@@ -884,7 +1000,7 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
 
   it("installs the exact ordered assets with exact modes and owners", () => {
     const authority = applyAuthority()
-    const { virtual, options } = implementationInput({ authority, mode: "apply" })
+    const { virtual, options, processEvents } = implementationInput({ authority, mode: "apply" })
     const result = applyAegisStandingHashPrerequisites(options)
     const records = journalRecords(virtual, authority.authorityId)
     const completed = records
@@ -930,6 +1046,112 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
       expect(value, target).toBeDefined()
       expect({ uid: value!.uid, gid: value!.gid, mode: value!.mode & 0o777 }).toEqual({ uid, gid, mode })
     }
+    expect(processEvents).toContainEqual({ kind: "setegid", from: 0, to: 734 })
+    expect(processEvents).toContainEqual({ kind: "seteuid", from: 0, to: 734 })
+    expect(processEvents).toContainEqual({ kind: "setgroups", from: [0], to: [734] })
+    expect(processEvents).toContainEqual({ kind: "seteuid", from: 734, to: 0 })
+    expect(processEvents).toContainEqual({ kind: "setegid", from: 734, to: 0 })
+    expect(processEvents).toContainEqual({ kind: "setgroups", from: [734], to: [0] })
+    expect(virtual.events).not.toContainEqual(expect.objectContaining({ kind: "chown", uid: 734 }))
+    expect(virtual.events).not.toContainEqual(expect.objectContaining({ kind: "fchown", uid: 734 }))
+  })
+
+  it("rejects an unavailable privilege transition before consuming authority", () => {
+    const authority = applyAuthority()
+    const { virtual, options } = implementationInput({
+      authority,
+      mode: "apply",
+      processApi: { platform: "linux", getuid: () => 0 },
+    })
+    expect(() => applyAegisStandingHashPrerequisites(options)).toThrow(expect.objectContaining({
+      code: "AEGIS_PROVISION_PRIVILEGE_DROP_UNAVAILABLE",
+    }))
+    expect(journalRecords(virtual, authority.authorityId)).toEqual([])
+  })
+
+  it.each([
+    "drop-groups",
+    "drop-egid",
+    "drop-euid",
+    "restore-euid",
+    "restore-egid",
+    "restore-groups",
+  ])("exercises and restores the %s transition before consuming authority", (processFailure) => {
+    const authority = applyAuthority()
+    const { virtual, options } = implementationInput({ authority, mode: "apply", processFailure })
+    expect(() => applyAegisStandingHashPrerequisites(options)).toThrow(/AEGIS_PROVISION_PRIVILEGE_(DROP|RESTORE)_FAILED/)
+    expect(journalRecords(virtual, authority.authorityId)).toEqual([])
+  })
+
+  it("retains the original drop failure when restoration also fails", () => {
+    const authority = applyAuthority()
+    const { virtual, options } = implementationInput({
+      authority,
+      mode: "apply",
+      processFailure: ["drop-euid", "restore-egid"],
+    })
+    try {
+      applyAegisStandingHashPrerequisites(options)
+      throw new Error("EXPECTED_REJECTION")
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: "AEGIS_PROVISION_PRIVILEGE_DROP_FAILED",
+        causeCode: "EPERM",
+        restoreFailureCode: "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED",
+        restoreFailureCauseCode: "EPERM",
+      })
+    }
+    expect(journalRecords(virtual, authority.authorityId)).toEqual([])
+  })
+
+  it("preserves the exact existing service-owned runtime roots without mutating them", () => {
+    const { virtual, options } = implementationInput({ mode: "apply" })
+    const result = applyAegisStandingHashPrerequisites(options)
+
+    expect(result.preserved_runtime_roots).toEqual([
+      {
+        path: "/var/lib/williamos",
+        owner: "williamos-fabric",
+        group: "williamos-fabric",
+        mode: "0750",
+        preserved: true,
+        mutated: false,
+      },
+      {
+        path: "/var/lib/williamos/fabric",
+        owner: "williamos-fabric",
+        group: "williamos-fabric",
+        mode: "0700",
+        preserved: true,
+        mutated: false,
+      },
+    ])
+    expect(virtual.statAt("/var/lib/williamos")).toMatchObject({ uid: 734, gid: 734, mode: 0o040750 })
+    expect(virtual.statAt("/var/lib/williamos/fabric")).toMatchObject({ uid: 734, gid: 734, mode: 0o040700 })
+    const mutations = virtual.events.filter(({ kind }) => ["mkdir", "chown", "chmod", "open-create", "write"].includes(kind))
+    expect(mutations).not.toContainEqual(expect.objectContaining({ path: virtual.pathOf("/var/lib/williamos") }))
+    expect(mutations).not.toContainEqual(expect.objectContaining({ path: virtual.pathOf("/var/lib/williamos/fabric") }))
+  })
+
+  it.each([
+    ["runtime owner", { path: "/var/lib/williamos", kind: "directory", mode: 0o750, uid: 0, gid: 0 }],
+    ["runtime group", { path: "/var/lib/williamos", kind: "directory", mode: 0o750, uid: 734, gid: 0 }],
+    ["runtime mode", { path: "/var/lib/williamos", kind: "directory", mode: 0o755, uid: 734, gid: 734 }],
+    ["runtime type", { path: "/var/lib/williamos", kind: "file", mode: 0o750, uid: 734, gid: 734 }],
+    ["fabric owner", { path: "/var/lib/williamos/fabric", kind: "directory", mode: 0o700, uid: 0, gid: 734 }],
+    ["fabric group", { path: "/var/lib/williamos/fabric", kind: "directory", mode: 0o700, uid: 734, gid: 0 }],
+    ["fabric mode", { path: "/var/lib/williamos/fabric", kind: "directory", mode: 0o750, uid: 734, gid: 734 }],
+    ["fabric symlink", { path: "/var/lib/williamos/fabric", kind: "symlink", mode: 0o700, uid: 734, gid: 734 }],
+  ])("rejects preserved %s drift before consuming authority", (_label, existing) => {
+    const { virtual, options } = implementationInput({
+      mode: "apply",
+      virtualOptions: { existing: [existing] },
+    })
+
+    expect(() => applyAegisStandingHashPrerequisites(options)).toThrow(expect.objectContaining({
+      code: "AEGIS_PROVISION_DIRECTORY_DRIFT",
+    }))
+    expect(journalRecords(virtual, options.authority.authorityId)).toEqual([])
   })
 
   it("writes exactly one restricted authorized_keys record bound to the public key", () => {
@@ -1025,6 +1247,45 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
     expect(journalFsyncs).toHaveLength(journalWrites.length)
   })
 
+  it("retains combined mutation and identity-restoration failure evidence in the journal and CLI shape", () => {
+    const authority = applyAuthority()
+    const { virtual, options } = implementationInput({
+      authority,
+      mode: "apply",
+      virtualOptions: { failPath: "/var/lib/williamos/fabric/standing-hash-requests" },
+      processFailure: { operation: "restore-egid", occurrence: 2 },
+    })
+    let caught: any
+    try {
+      applyAegisStandingHashPrerequisites(options)
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toMatchObject({
+      code: "AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS",
+      originalFailureCode: "EIO",
+      restoreFailureCode: "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED",
+      restoreFailureReason: "root applier identity restoration failed",
+      restoreFailureCauseCode: "EPERM",
+      authorityConsumed: true,
+    })
+    expect(journalRecords(virtual, authority.authorityId).at(-1)).toMatchObject({
+      record_type: "APPLY_FAILED_PARTIAL_STATE",
+      failure_code: "EIO",
+      restore_failure_code: "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED",
+      restore_failure_reason: "root applier identity restoration failed",
+      restore_failure_cause_code: "EPERM",
+    })
+    expect(standingProvisioningErrorEvidence(caught)).toMatchObject({
+      code: "AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS",
+      original_failure_code: "EIO",
+      restore_failure_code: "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED",
+      restore_failure_reason: "root applier identity restoration failed",
+      restore_failure_cause_code: "EPERM",
+      authority_consumed: true,
+    })
+  })
+
   it("returns a typed evidence failure when partial-state journaling cannot be retained", () => {
     const authority = applyAuthority()
     const failedPath = "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs"
@@ -1041,6 +1302,27 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
       code: "AEGIS_PROVISION_EVIDENCE_WRITE_FAILED",
       causeCode: "EIO",
       originalFailureCode: "EIO",
+      authorityConsumed: true,
+    }))
+  })
+
+  it("retains restoration evidence when partial-state journaling also fails", () => {
+    const authority = applyAuthority()
+    const { options } = implementationInput({
+      authority,
+      mode: "apply",
+      virtualOptions: {
+        failPath: "/var/lib/williamos/fabric/standing-hash-requests",
+        failJournalRecordType: "APPLY_FAILED_PARTIAL_STATE",
+      },
+      processFailure: { operation: "restore-egid", occurrence: 2 },
+    })
+    expect(() => applyAegisStandingHashPrerequisites(options)).toThrow(expect.objectContaining({
+      code: "AEGIS_PROVISION_EVIDENCE_WRITE_FAILED",
+      originalFailureCode: "EIO",
+      restoreFailureCode: "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED",
+      restoreFailureReason: "root applier identity restoration failed",
+      restoreFailureCauseCode: "EPERM",
       authorityConsumed: true,
     }))
   })

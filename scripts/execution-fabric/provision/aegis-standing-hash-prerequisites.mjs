@@ -5,7 +5,7 @@ import path from "node:path"
 import { canonicalizeJcs } from "../canonical-json.mjs"
 
 const MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-provisioning-package.v1.json"
-const EXPECTED_MANIFEST_SHA256 = "c8c776b833d73eafb4a746b497164f515697483084439776c309ffd1d4b626bb"
+const EXPECTED_MANIFEST_SHA256 = "be964c429f57b7a5e34a5fe815d688f65aa10038330fec6147d7d545e0825507"
 const SHA256 = /^[a-f0-9]{64}$/
 const COMMIT = /^[a-f0-9]{40}$/
 const SSH_SHA256_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}$/
@@ -30,6 +30,7 @@ const AUTHORITY_KEYS = Object.freeze([
 const OBSERVATION_SECTIONS = Object.freeze([
   "platform",
   "identity",
+  "existingRuntimeRoots",
   "reviewedRelease",
   "rootOwnedAssets",
   "privateRoots",
@@ -193,6 +194,23 @@ export function buildStandingProvisioningPlan(rawManifest, observed) {
     sudoAllowed: false,
   }
   for (const [key, value] of Object.entries(expectedIdentity)) check(`identity.${key}`, observed.identity[key], value)
+
+  for (const root of manifest.existingRuntimeRoots) {
+    const observation = observed.existingRuntimeRoots[root.path]
+    if (!observation || typeof observation !== "object" || Array.isArray(observation)) {
+      drift.push(`existingRuntimeRoots.${root.path}`)
+      continue
+    }
+    const present = existing(check, observation, {
+      path: root.path,
+      owner: root.owner,
+      group: root.group,
+      mode: root.mode,
+      preserveExisting: true,
+      mutationAllowed: false,
+    }, `existingRuntimeRoots.${root.path}`, drift)
+    if (!present && observation.exists === false) drift.push(`existingRuntimeRoots.${root.path}.exists`)
+  }
 
   const releaseExists = existing(check, observed.reviewedRelease, {
     gitCheckoutRequired: true,
