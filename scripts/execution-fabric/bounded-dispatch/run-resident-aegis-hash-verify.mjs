@@ -544,21 +544,36 @@ export function createLedgerProviders({
     const release = readPrivateLedgerJson(releasePath, uid, validateLedgerFile)
     if (release) {
       const { release_sha256: releaseSha256, ...releaseBody } = release
-      if (release.lease_id !== active.lease_id || release.claim_id !== active.claim_id
+      const acquiredAtMs = Date.parse(active.acquired_at)
+      const releasedAtMs = Date.parse(release.released_at)
+      if (!exactKeys(release, ["schema_version", "lease_id", "claim_id", "lease_sha256", "released_at", "release_sha256"])
+        || release.schema_version !== "0.1-resident-aegis-runtime-lease-release"
+        || release.lease_id !== active.lease_id || release.claim_id !== active.claim_id
         || release.lease_sha256 !== active.lease_sha256
+        || !Number.isFinite(acquiredAtMs) || new Date(acquiredAtMs).toISOString() !== active.acquired_at
+        || !Number.isFinite(releasedAtMs) || new Date(releasedAtMs).toISOString() !== release.released_at
+        || releasedAtMs < acquiredAtMs
         || releaseSha256 !== sha256(canonicalBytes(releaseBody))) {
         fail("LEDGER_UNTRUSTED", "retained AEGIS release record is invalid")
       }
       retainedRelease = release
     } else {
       if (holderIsAlive(active.holder)) return false
+      const recoveredAt = clock()
+      const acquiredAtMs = Date.parse(active.acquired_at)
+      const recoveredAtMs = Date.parse(recoveredAt)
+      if (!Number.isFinite(acquiredAtMs) || new Date(acquiredAtMs).toISOString() !== active.acquired_at
+        || !Number.isFinite(recoveredAtMs) || new Date(recoveredAtMs).toISOString() !== recoveredAt
+        || recoveredAtMs < acquiredAtMs) {
+        fail("LEDGER_UNTRUSTED", "dead AEGIS lease chronology is invalid")
+      }
       const recovery = {
         schema_version: "0.1-resident-aegis-runtime-lease-recovery",
         lease_id: active.lease_id,
         claim_id: active.claim_id,
         lease_sha256: active.lease_sha256,
         reason: "PROVEN_DEAD_PROCESS_HOLDER",
-        recovered_at: clock(),
+        recovered_at: recoveredAt,
       }
       recovery.recovery_sha256 = sha256(canonicalBytes(recovery))
       const recoveryPath = path.join(ledgerRoot, `recovery-${active.lease_id}.json`)
@@ -566,8 +581,14 @@ export function createLedgerProviders({
         if (error?.code !== "EEXIST") throw error
         const existing = readPrivateLedgerJson(recoveryPath, uid, validateLedgerFile)
         const { recovery_sha256: recoverySha256, ...recoveryBody } = existing ?? {}
-        if (!existing || existing.lease_id !== active.lease_id || existing.claim_id !== active.claim_id
+        const retainedRecoveredAtMs = Date.parse(existing?.recovered_at)
+        if (!exactKeys(existing, ["schema_version", "lease_id", "claim_id", "lease_sha256", "reason", "recovered_at", "recovery_sha256"])
+          || existing.schema_version !== "0.1-resident-aegis-runtime-lease-recovery"
+          || existing.lease_id !== active.lease_id || existing.claim_id !== active.claim_id
           || existing.lease_sha256 !== active.lease_sha256
+          || existing.reason !== "PROVEN_DEAD_PROCESS_HOLDER"
+          || !Number.isFinite(retainedRecoveredAtMs) || new Date(retainedRecoveredAtMs).toISOString() !== existing.recovered_at
+          || retainedRecoveredAtMs < acquiredAtMs || retainedRecoveredAtMs > recoveredAtMs
           || recoverySha256 !== sha256(canonicalBytes(recoveryBody))) {
           fail("LEDGER_UNTRUSTED", "retained AEGIS recovery record is invalid")
         }

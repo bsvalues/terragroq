@@ -585,6 +585,68 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     expect(fs.readdirSync(root).filter((name) => name.startsWith("remote-recovery-"))).toHaveLength(0)
   })
 
+  it("rejects malformed retained remote release and recovery evidence before retirement", async () => {
+    for (const retainedKind of ["release", "recovery"] as const) {
+      const root = tempRoot(`aegis-malformed-remote-${retainedKind}-`)
+      fs.chmodSync(root, 0o700)
+      const common = {
+        ledgerRoot: root, platform: "linux", getuid: () => process.getuid?.() ?? 1000,
+        username: () => "williamos-fabric",
+        validateDirectory: (stats: fs.Stats) => stats.isDirectory() && !stats.isSymbolicLink(),
+        validateLedgerFile: (stats: fs.Stats) => stats.isFile() && !stats.isSymbolicLink(),
+        syncDirectory: () => undefined,
+        holderIdentity: () => ({ pid: 100, boot_id: "boot-a", process_start_ticks: "10" }),
+      }
+      const first = createLedgerProviders({ ...common, holderIsAlive: () => true, clock: () => "2026-08-10T22:00:00.000Z" })
+      const lease = await first.acquireExclusiveLease({ claim_id: "claim-remote" })
+      const activePath = path.join(root, "resident-aegis-active.json")
+      const active = JSON.parse(fs.readFileSync(activePath, "utf8"))
+      const body = retainedKind === "release" ? {
+        schema_version: "not-a-release", lease_id: lease.lease_id, claim_id: "claim-remote",
+        lease_sha256: active.lease_sha256, released_at: "not-a-time", unexpected: true,
+      } : {
+        schema_version: "not-a-recovery", lease_id: lease.lease_id, claim_id: "claim-remote",
+        lease_sha256: active.lease_sha256, reason: "WRONG", recovered_at: "not-a-time", unexpected: true,
+      }
+      const digestKey = retainedKind === "release" ? "release_sha256" : "recovery_sha256"
+      const retained = { ...body, [digestKey]: sha256Object(body) }
+      fs.writeFileSync(path.join(root, `${retainedKind}-${lease.lease_id}.json`), `${JSON.stringify(retained)}\n`)
+      const second = createLedgerProviders({
+        ...common, holderIsAlive: () => retainedKind === "release", clock: () => "2026-08-10T22:00:01.000Z",
+      })
+
+      await expect(second.acquireExclusiveLease({ claim_id: "claim-next" })).rejects.toThrow("LEDGER_UNTRUSTED")
+      expect(JSON.parse(fs.readFileSync(activePath, "utf8"))).toEqual(active)
+    }
+  })
+
+  it("rejects an unknown digest-valid active lease schema before liveness or recovery", async () => {
+    const root = tempRoot("aegis-unknown-standing-schema-")
+    const first = ledger(root)
+    await first.claimAdmission(claimBinding())
+    await first.acquireLease(leaseBinding())
+    const activePath = path.join(root, "resident-aegis-active.json")
+    const active = JSON.parse(fs.readFileSync(activePath, "utf8"))
+    const { lease_record_sha256: _oldDigest, ...changedBody } = { ...active, schema_version: "1.0-unknown-aegis-lease" }
+    const changed = { ...changedBody, lease_record_sha256: sha256Object(changedBody) }
+    fs.writeFileSync(activePath, `${JSON.stringify(changed)}\n`)
+    const second = ledger(root, { holderIsAlive: vi.fn(() => false) })
+
+    await expect(second.reconcileNodeLease()).rejects.toThrow("LEDGER_UNTRUSTED")
+    expect(JSON.parse(fs.readFileSync(activePath, "utf8"))).toEqual(changed)
+    expect(fs.readdirSync(root).filter((name) => name.startsWith("recovery-"))).toHaveLength(0)
+  })
+
+  it("runs recovery-only node reconciliation before the production execution claim", () => {
+    const source = fs.readFileSync(path.join(
+      process.cwd(), "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs",
+    ), "utf8")
+    const reconcileIndex = source.indexOf("await ledger.reconcileNodeLease()")
+    const executeIndex = source.indexOf("await executeAegisStandingHash({")
+    expect(reconcileIndex).toBeGreaterThanOrEqual(0)
+    expect(executeIndex).toBeGreaterThan(reconcileIndex)
+  })
+
   it("never deletes a replacement lease created after atomic retirement", async () => {
     const root = tempRoot("aegis-remote-release-replacement-")
     fs.chmodSync(root, 0o700)

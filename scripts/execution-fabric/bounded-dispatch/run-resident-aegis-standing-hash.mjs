@@ -716,6 +716,20 @@ export function createStandingLedgerProviders({
       && typeof lease.holder.boot_id === "string" && typeof lease.holder.process_start_ticks === "string"
       && retainedLeaseSha256 === sha256(canonicalBytes(leaseBody))
   }
+  const standingLeaseValid = (lease) => {
+    const { lease_record_sha256: retainedLeaseSha256, ...leaseBody } = lease ?? {}
+    const acquiredAtMs = Date.parse(lease?.acquired_at)
+    return lease?.schema_version === "1.0-aegis-standing-lease"
+      && exactRecordKeys(lease, ["schema_version", "authority_id", "authority_sha256", "job_id", "admission_id", "admission_sha256", "request_sha256", "request_binding_sha256", "claim_id", "admission_issued_at", "admission_expires_at", "lease_id", "fencing_token", "acquired_at", "holder", "lease_record_sha256"])
+      && /^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/.test(lease.lease_id ?? "")
+      && /^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/.test(lease.claim_id ?? "")
+      && Number.isSafeInteger(lease.fencing_token) && lease.fencing_token > 0
+      && exactRecordKeys(lease.holder, ["pid", "boot_id", "process_start_ticks"])
+      && Number.isSafeInteger(lease.holder.pid) && lease.holder.pid > 0
+      && typeof lease.holder.boot_id === "string" && typeof lease.holder.process_start_ticks === "string"
+      && Number.isFinite(acquiredAtMs) && new Date(acquiredAtMs).toISOString() === lease.acquired_at
+      && retainedLeaseSha256 === sha256(canonicalBytes(leaseBody))
+  }
   const retireActiveLease = (active, label) => {
     safeId(active.lease_id, "lease_id")
     const retiredPath = path.join(nodeLeaseRoot, `retired-${active.lease_id}-${crypto.randomUUID()}.json`)
@@ -770,7 +784,9 @@ export function createStandingLedgerProviders({
       if (!remoteLeaseValid(active)) fail("LEDGER_UNTRUSTED", "active remote-development lease is invalid")
       return recoverRemoteLease(active)
     }
-    if (!recordDigestValid(active, "lease_record_sha256")) fail("LEDGER_UNTRUSTED", "active standing lease is invalid")
+    if (active.schema_version !== "1.0-aegis-standing-lease" || !standingLeaseValid(active)) {
+      fail("LEDGER_UNTRUSTED", "active standing lease is invalid")
+    }
     if (holderIsAlive(active.holder)) return false
     const acquiredAt = Date.parse(active.acquired_at)
     const recoveredAt = clock()
@@ -983,6 +999,8 @@ export async function runResidentAegisStandingHash(argv = process.argv.slice(2))
   if (!inputPath.startsWith(`${INPUT_ROOT}/`)) fail("PATH_ESCAPE", "request input is outside the fixed standing input root")
   const trusted = createStandingTrustedProof({ admissionPath: args.admission, inputPath, sourceCommit: request.source?.commit_sha, authority })
   const ledger = createStandingLedgerProviders()
+  const nodeLeaseState = await ledger.reconcileNodeLease()
+  if (nodeLeaseState.available !== true) fail("NODE_LEASE_OCCUPIED", "the shared AEGIS node lease is occupied")
   const completion = await executeAegisStandingHash({
     authority,
     request,
