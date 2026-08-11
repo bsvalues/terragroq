@@ -1,7 +1,7 @@
 import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { spawnSync } from "node:child_process"
 
 const MANIFEST_PATH = "config/execution-fabric/aegis-remote-dev-root-handoff.json"
@@ -14,7 +14,7 @@ const EXPECTED_PACKAGE_JCS = "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0e
 const EXPECTED_MACHINE = "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b"
 const EXPECTED_STORAGE_UUID = "5744648d-9289-4d4e-ac6a-707e8405a5d6"
 const EXPECTED_TRUSTED_EVIDENCE = Object.freeze({
-  "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json": "df58b16da25a8a39668f04ddc6af79842ede3376695446f6fecfdf4cde2fe18a",
+  "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json": "13f1a05f76b6ffb8bf4d2d556720d3553c084174da42c36ef812d64b336e216e",
   "config/execution-fabric/aegis-resident-identity.json": "69a9008e680ef236367c8b4b3ebf85b9d96dbc9cf3545b97c2275761b327643d",
   "config/execution-fabric/aegis-bounded-dispatch-authority-scopes/WO-EF-DISPATCH-AEGIS-001.json": "90f089b0d64989edafcc96e847e77993a0c352d99a2716bbfb72bd3fbc27cfc7",
   "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-claim.json": "40385c3163908c30d4eb559cded69ac2d05ae46c31a029dbbdc94d821139f845",
@@ -41,17 +41,17 @@ const EXPECTED_ASSET_DIGESTS = Object.freeze({
   "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs": "843727481311ee5303a14fd67dcd05334e6e75cfd242bf54d13e35f8ae688d46",
   "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh": "7e92a1b3acf541f978f086ee1cec8191cc2b9732bc7f83380e4ecb13fec8d9d4",
   "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs": "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7",
-  "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs": "1543dcda442bbbd06996f536a11652f21ea7bf9ba8fd6927ac710a21930c1d90",
+  "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs": "02de9ec83f7dbc3e8a9858438ca4afe87af7ca123e6be79f90a579dc7bf78633",
   "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507",
   "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "ce1e33480f4d6262fcf682eb849008a82d4bc147413c145f537225e2fb394fa1",
   "config/execution-fabric/aegis-resident-network-boundary.json": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6",
-  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "e55563027f212d043bd5834eb8d242d233e3607cc7d9f00d154b9cb1c701ef2f",
+  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "5b25f10bcd367982505ef301db5a9332a3c4057017057aa8c9dbd18cec9bac75",
   "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh": "4f76725ae7188ae676b5afde4d1622a8c6cdaea0b1bc8d1288dab04700b17ccd",
   "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf": "bb6967f25ae614d152c2bbaf4073eae4575f98819f9b4a855b5de20a60e4e789",
   "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf": "a6e83ce0c8b2d2c8127a268c5bd48f27ff3199894f0179afc412a5b01f7fe9c6",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-enforcer.mjs": "931b0a9b0e98f4e6f3cc023e83e07914eafea53ae1844858e89f68e86247b1d5",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs": "8c2b7f13fde3971f8ea633f7aaf2afda36b319439a04dac86d1164270f978c4a",
-  "scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs": "9f1aa89954ecc3f8ff85d58b65dc18892f4d5ab31e79ab48e3aeac2f544c0ebf",
+  "scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs": "17ecde60f3fbe70b754f57b2c4bfc72d1250be11cfd60e00b961e4e9c8390e5f",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-proxy-connect.mjs": "45a29680a83ff59fb925f998faf819915ec45ee22237f1b3a2679b6f496a8346",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-client.mjs": "27ddbbbb3bcfc1278f1b3e043ba5d30e5627b6071f633ce699c1ab7bd1e55e49",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-broker.mjs": "3730a0e98af480a796ffa7cdd0ae61faef0490cbd891212e6e926c258021c112",
@@ -366,7 +366,7 @@ async function productionMain() {
     productionInputs(envelope.payload)
     const adapterAsset = manifest.appliedAssets.find((asset) => asset.destination === INSTALLED_ADAPTER_PATH)
     if (!adapterAsset || sha256(rootFile(INSTALLED_ADAPTER_PATH, 0o555)) !== adapterAsset.sha256) throw new Error("installed root adapter differs")
-    const { createRootProductionAdapter } = await import(`file://${INSTALLED_ADAPTER_PATH}`)
+    const { createRootProductionAdapter } = await import(/* @vite-ignore */ pathToFileURL(INSTALLED_ADAPTER_PATH).href)
     const underlying = createRootProductionAdapter(manifest, envelope.payload, trust)
     const adapter = Object.freeze({ ...underlying, reprove: async () => ({ ...await underlying.reprove(), ...trust }), verify: async () => ({ ...await underlying.verify(), ...trust }) })
     const result = await executeRootHandoffTransaction(manifest, envelope, publicKey, now, adapter)

@@ -397,7 +397,7 @@ function applyNetwork(authority) {
   run("/usr/bin/systemd-analyze", ["verify", "/etc/systemd/system/williamos-aegis-remote-dev-egress.service", "/etc/systemd/system/williamos-aegis-remote-dev-broker.service", "/etc/systemd/system/williamos-aegis-remote-dev-git-broker.socket", "/etc/systemd/system/williamos-aegis-remote-dev-git-broker.service"])
   run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-egress-enforcer.mjs"])
   run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-egress-broker.mjs"])
-  run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-runtime-authority.mjs"])
+  run("/usr/bin/node", ["--check", "/usr/local/libexec/aegis-remote-dev-runtime-authority.mjs"])
   run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-git-broker.mjs"])
   run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-git-client.mjs"])
   const worker = accountIds("williamos-fabric"); const gitBroker = accountIds("williamos-git-broker")

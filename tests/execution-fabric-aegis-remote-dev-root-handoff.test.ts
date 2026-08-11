@@ -23,7 +23,7 @@ const rawSha = (file: string) => {
   const trusted = spawnSync("git", ["show", `HEAD:${file}`], { cwd: root, encoding: null, shell: false })
   return sha(trusted.status === 0 ? trusted.stdout : fs.readFileSync(path.join(root, file)))
 }
-const currentRawSha = (file: string) => sha(Buffer.from(fs.readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n")))
+const currentRawSha = (file: string) => sha(fs.readFileSync(path.join(root, file)))
 
 function completeObservation(manifest = loadManifest()) {
   return {
@@ -391,7 +391,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(broker).toContain("authorizeBrokerConnect(authorization.ticket, authorization.operation")
     expect(broker).toContain("407 Proxy Authentication Required")
     expect(broker).toContain('request.headers["proxy-authorization"] === undefined ? 407 : 403')
-    const gitBroker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-broker.mjs"), "utf8")
+    const gitBroker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-broker.mjs"), "utf8").replace(/\r\n/g, "\n")
     const gitService = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-git-broker.service"), "utf8")
     expect(gitBroker).toContain('bound.runId !== authorization.payload.runId')
     expect(gitBroker).toContain("fs.constants.O_EXCL")
@@ -443,6 +443,8 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     const cli = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh"), "utf8")
     expect(adapter).toContain('const EVIDENCE_ROOT = "/var/lib/williamos-fabric/remote-dev-prerequisite-handoff"')
     expect(adapter).toContain('const BUNDLE_ROOT = "/usr/local/share/williamos/aegis-root-handoff-bundle"')
+    expect(adapter).toContain('["--check", "/usr/local/libexec/aegis-remote-dev-runtime-authority.mjs"]')
+    expect(adapter).not.toContain('["--check", "/usr/local/libexec/williamos-aegis-remote-dev-runtime-authority.mjs"]')
     expect(adapter).not.toContain("process.env.HOME")
     expect(adapter).not.toContain("shell: true")
     expect(adapter).toContain("fs.constants.O_EXCL")
