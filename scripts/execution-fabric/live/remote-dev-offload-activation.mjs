@@ -10,6 +10,7 @@ import {
   createTrustedProofProviders,
   trustedResidentIdentity,
 } from "../bounded-dispatch/run-resident-aegis-hash-verify.mjs"
+import { proveResidentAegisNetworkBoundary } from "./aegis-resident-network-boundary.mjs"
 import { validateRemoteDevTrustBaseline } from "./remote-dev-offload-contract.mjs"
 
 const SHA256 = /^[a-f0-9]{64}$/
@@ -55,6 +56,9 @@ const ARTIFACT_PATHS = {
   contract: "scripts/execution-fabric/live/remote-dev-offload-contract.mjs",
   policy: "config/execution-fabric/remote-dev-offload-v1.policy.json",
   inactiveScope: "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json",
+  networkProvider: "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs",
+  networkPolicy: "config/execution-fabric/aegis-resident-network-boundary.json",
+  networkLauncher: "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs",
 }
 const BASELINE_ARTIFACT_PATHS = {
   contract: "config/execution-fabric/aegis-bounded-dispatch-contract.json",
@@ -98,6 +102,9 @@ const ACTIVATION_CRITICAL_PATHS = [
   ARTIFACT_PATHS.contract,
   ARTIFACT_PATHS.policy,
   ARTIFACT_PATHS.inactiveScope,
+  ARTIFACT_PATHS.networkProvider,
+  ARTIFACT_PATHS.networkPolicy,
+  ARTIFACT_PATHS.networkLauncher,
   "scripts/execution-fabric/canonical-json.mjs",
   "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs",
   IDENTITY_PATH,
@@ -330,12 +337,6 @@ export function inspectActivationCriticalWorkingFiles(authority, { repositoryRoo
   } catch (error) { return blocked(error) }
 }
 
-function proveFixedNetworkBoundary() {
-  // Static authority is not network enforcement. A later reviewed resident provider must
-  // replace this fail-closed boundary with fixed local evidence before claim or lease creation.
-  fail("NETWORK_BOUNDARY_UNPROVEN", "no fixed resident default-deny and Atlas-denial provider is provisioned")
-}
-
 function trustedRuntimeNow() {
   const result = spawnSync("/usr/bin/date", ["-u", "+%Y-%m-%dT%H:%M:%S.%3NZ"], {
     encoding: "utf8",
@@ -369,9 +370,12 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
     if (controlPlane.status !== "CONTROL_PLANE_TRUSTED_MAIN_VERIFIED") fail(controlPlane.reasons?.[0]?.code ?? "TRUSTED_MAIN_UNPROVEN", controlPlane.reasons?.[0]?.detail ?? "control-plane trusted main is unproven")
     const criticalFiles = inspectActivationCriticalWorkingFiles(authority)
     if (criticalFiles.status !== "ACTIVATION_CRITICAL_FILES_VERIFIED") fail("TRUSTED_MAIN_UNPROVEN", criticalFiles.reasons?.[0]?.detail ?? "activation-critical working files are unproven")
-    proveFixedNetworkBoundary()
+    const networkBoundary = await proveResidentAegisNetworkBoundary()
+    if (networkBoundary.status !== "RESIDENT_NETWORK_BOUNDARY_VERIFIED") {
+      fail("NETWORK_BOUNDARY_UNPROVEN", networkBoundary.reasons?.[0]?.detail ?? "fixed resident network boundary is unproven")
+    }
 
-    // This code is unreachable until the explicit fixed network provider above is reviewed.
+    // Claims and leases are reachable only after the fixed resident network proof succeeds.
     const ledger = createLedgerProviders()
     const scopeSha256 = normalizedDigest(read(ACTIVATION_PATH))
     const claim = await ledger.claimSingleUse({ request_sha256: jcsDigest(candidate), scope_sha256: scopeSha256, authority_reference: authority.authorityReference, maximum_attempts: authority.resources.maxAttempts })
@@ -386,12 +390,34 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
       maximumAttempts: authority.resources.maxAttempts,
       requestSha256: jcsDigest(candidate),
       scopeSha256,
+      networkProofId: networkBoundary.proofId,
+      networkEnforcementGenerationId: networkBoundary.enforcementGenerationId,
+      networkControlGroupIdentity: networkBoundary.controlGroupIdentity,
+      networkLauncherSha256: networkBoundary.launcherSha256,
+      networkWorkerSha256: networkBoundary.workerSha256,
+      networkLaunchAuthorityPublicKeySha256: networkBoundary.launchAuthorityPublicKeySha256,
       claimId: claim.claim_id,
       leaseId: lease.lease_id,
       leaseReleased: false,
       settling: false,
     })
-    return { status: "AUTHORIZED_SINGLE_USE", executionAuthorized: true, runId: authority.run.runId, claimId: claim.claim_id, leaseId: lease.lease_id, session, schedulerActivated: false, standingAegisAuthority: false, atlasAllowed: false }
+    return {
+      status: "AUTHORIZED_SINGLE_USE",
+      executionAuthorized: true,
+      runId: authority.run.runId,
+      claimId: claim.claim_id,
+      leaseId: lease.lease_id,
+      networkProofId: networkBoundary.proofId,
+      networkEnforcementGenerationId: networkBoundary.enforcementGenerationId,
+      networkControlGroupIdentity: networkBoundary.controlGroupIdentity,
+      networkLauncherSha256: networkBoundary.launcherSha256,
+      networkWorkerSha256: networkBoundary.workerSha256,
+      networkLaunchAuthorityPublicKeySha256: networkBoundary.launchAuthorityPublicKeySha256,
+      session,
+      schedulerActivated: false,
+      standingAegisAuthority: false,
+      atlasAllowed: false,
+    }
   } catch (error) { return blocked(error) }
 }
 
