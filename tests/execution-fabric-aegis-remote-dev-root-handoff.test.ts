@@ -291,6 +291,17 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(worker).toContain("williamos-aegis-remote-dev-git-client.mjs")
     expect(launcher).toContain("WILLIAMOS_NETWORK_TICKET_B64")
     expect(launcher).toContain("WILLIAMOS_NETWORK_PACKET_B64")
+    expect(launcher).toContain('bound.operation === "RESTORE_DOTNET"')
+    expect(launcher).toContain("HTTPS_PROXY: proxy")
+    const broker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs"), "utf8")
+    expect(broker).toContain('decoded.subarray(0, separator).toString("ascii") !== "WilliamOS"')
+    expect(broker).toContain("authorizeConnect(authorization.ticket, authorization.operation")
+    expect(broker).toContain("407 Proxy Authentication Required")
+    expect(broker).toContain('request.headers["proxy-authorization"] === undefined ? 407 : 403')
+    const gitBroker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-broker.mjs"), "utf8")
+    expect(gitBroker).toContain('bound.runId !== authorization.payload.runId')
+    expect(gitBroker).toContain("server.maxConnections = 1")
+    expect(gitBroker).toMatch(/createServer\(\(socket\) => \{\s+server\.close\(\)/)
   })
 
   it("ships one fixed production OS adapter and CLI with no caller provider, clock, path, or command injection", () => {

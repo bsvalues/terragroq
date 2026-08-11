@@ -38,6 +38,7 @@ function execute(request) {
   const operation = decodedTicket?.payload?.operation
   const authorization = authorizeGitOperation(request.ticketB64, request.packetB64, operation)
   const bound = packet(request.packetB64, authorization.payload.packetSha256)
+  if (bound.runId !== authorization.payload.runId) throw new Error("run binding differs")
   exactCredential()
   const proxy = "/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-proxy-connect.mjs %h %p"
   const ssh = `/usr/bin/ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/etc/williamos-fabric/github_known_hosts -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -o IdentityFile=${KEY} -o ProxyCommand=${JSON.stringify(proxy)}`
@@ -75,6 +76,7 @@ function execute(request) {
 }
 
 const server = net.createServer((socket) => {
+  server.close()
   let bytes = Buffer.alloc(0)
   socket.setTimeout(30_000)
   socket.on("data", (chunk) => { bytes = Buffer.concat([bytes, chunk]); if (bytes.length > 1_600_000) socket.destroy() })
@@ -86,5 +88,6 @@ const server = net.createServer((socket) => {
     } catch { socket.end(`${canonical({ head: null, reasonCode: "GIT_BROKER_REJECTED", status: "BLOCKED" })}\n`) }
   })
 })
+server.maxConnections = 1
 server.on("error", () => { process.exitCode = 2 })
 server.listen({ fd: 3 })

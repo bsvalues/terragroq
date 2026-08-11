@@ -379,12 +379,17 @@ function managerEnvironment(uid) {
   })
 }
 function workerEnvironment(bound) {
-  return Object.freeze({
+  const environment = {
     HOME: "/nonexistent", PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C",
     WILLIAMOS_NETWORK_TICKET_B64: bound.ticketB64,
     WILLIAMOS_NETWORK_PACKET_B64: bound.packetB64,
     WILLIAMOS_NETWORK_OPERATION: bound.operation,
-  })
+  }
+  if (bound.operation === "RESTORE_DOTNET") {
+    const proxy = `http://WilliamOS:${encodeURIComponent(bound.ticketB64)}@127.0.0.1:17734`
+    Object.assign(environment, { HTTPS_PROXY: proxy, https_proxy: proxy, NO_PROXY: "", no_proxy: "" })
+  }
+  return Object.freeze(environment)
 }
 function fixedServiceProperties(operation, uid) {
   const properties = [
