@@ -1,0 +1,7 @@
+[Unit]
+Description=WilliamOS AEGIS single-proof worker slice
+
+[Slice]
+CPUQuota=1200%
+MemoryMax=12884901888
+TasksMax=64

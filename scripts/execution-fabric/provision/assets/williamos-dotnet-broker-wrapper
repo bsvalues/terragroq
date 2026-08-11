@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export HTTPS_PROXY=http://127.0.0.1:17734
+export NO_PROXY=
+exec /usr/share/dotnet/dotnet "$@"

@@ -1,0 +1,428 @@
+import crypto from "node:crypto"
+import fs from "node:fs"
+import path from "node:path"
+import { spawnSync } from "node:child_process"
+
+const EVIDENCE_ROOT = "/var/lib/williamos-fabric/remote-dev-prerequisite-handoff"
+const BUNDLE_ROOT = "/usr/local/share/williamos/aegis-root-handoff-bundle"
+const STAGED_ROOT = `${EVIDENCE_ROOT}/staged`
+const CLAIM_ROOT = `${EVIDENCE_ROOT}/claims`
+const JOURNAL_ROOT = `${EVIDENCE_ROOT}/journal`
+const LAUNCH_PRIVATE_KEY = "/etc/williamos-fabric/aegis-remote-dev-launch-authority.key"
+const LAUNCH_PUBLIC_KEY = "/etc/williamos-fabric/aegis-remote-dev-launch-authority.pem"
+const FIXED_ENV = Object.freeze({ HOME: "/nonexistent", PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1" })
+const STEPS = Object.freeze([
+  "RECONCILE_BOUNDED_IDENTITY", "INSTALL_ROOT_LAUNCH_ASSETS", "INSTALL_DUAL_STACK_BROKER_BOUNDARY",
+  "INSTALL_GITHUB_HOST_AUTH_BOUNDARY", "RECONCILE_TRUSTED_REPOSITORIES", "INSTALL_PINNED_TOOLCHAIN",
+  "CREATE_DURABLE_LEDGER", "INSTALL_FORCED_COMMAND_TRANSPORT",
+])
+const sha = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex")
+const canonical = (value) => value === null ? "null" : typeof value === "string" ? JSON.stringify(value) : typeof value === "number" ? JSON.stringify(value) : typeof value === "boolean" ? String(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
+
+function fail(code, detail) { const error = new Error(detail); error.code = code; throw error }
+function run(executable, args, options = {}) {
+  const result = spawnSync(executable, args, { encoding: "utf8", shell: false, windowsHide: true, timeout: options.timeout ?? 30_000, maxBuffer: 4 * 1024 * 1024, env: FIXED_ENV, cwd: options.cwd, input: options.input })
+  if (result.error || !(options.statuses ?? [0]).includes(result.status)) fail(options.code ?? "ROOT_COMMAND_FAILED", `${path.basename(executable)} ${args[0] ?? ""} failed`)
+  return String(result.stdout ?? "").trim()
+}
+function trustedParents(file) {
+  let cursor = "/"
+  for (const segment of path.dirname(file).slice(1).split("/").filter(Boolean)) {
+    cursor = path.join(cursor, segment); const stat = fs.lstatSync(cursor)
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) return false
+  }
+  return true
+}
+function exactFile(file, expectedSha, owner = 0, group = 0, mode) {
+  try {
+    const stat = fs.lstatSync(file)
+    return trustedParents(file) && stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.uid === owner && stat.gid === group && (mode === undefined || (stat.mode & 0o7777) === mode) && sha(fs.readFileSync(file)) === expectedSha
+  } catch { return false }
+}
+function readCanonicalRootJson(file, mode = 0o400) {
+  const stat = fs.lstatSync(file)
+  if (!trustedParents(file) || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== 0 || stat.gid !== 0 || (stat.mode & 0o7777) !== mode || stat.size < 3 || stat.size > 1_048_576) fail("EVIDENCE_FILE_UNTRUSTED", `${file} trust differs`)
+  const bytes = fs.readFileSync(file); let value
+  try { value = JSON.parse(bytes.toString("utf8")) } catch { fail("EVIDENCE_FILE_INVALID", `${file} is not JSON`) }
+  if (!bytes.equals(Buffer.from(`${canonical(value)}\n`, "utf8"))) fail("EVIDENCE_FILE_INVALID", `${file} is not canonical JSON`)
+  return value
+}
+function ensureRootDirectory(directory, mode = 0o755) {
+  let cursor = "/"
+  for (const segment of directory.slice(1).split("/").filter(Boolean)) {
+    cursor = path.join(cursor, segment)
+    if (!fs.existsSync(cursor)) fs.mkdirSync(cursor, { mode })
+    const stat = fs.lstatSync(cursor)
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) fail("DESTINATION_PARENT_UNTRUSTED", `${cursor} is not root-controlled`)
+  }
+}
+function atomicInstall(source, destination, expectedSha, mode, uid = 0, gid = 0) {
+  const parent = path.dirname(destination); ensureRootDirectory(parent)
+  if (!exactFile(source, expectedSha, 0, 0, 0o444) && !exactFile(source, expectedSha, 0, 0, 0o555)) fail("BUNDLE_ASSET_UNTRUSTED", `${source} differs from signed bytes`)
+  if (fs.existsSync(destination)) {
+    if (!exactFile(destination, expectedSha, uid, gid, mode)) fail("EXISTING_STATE_DRIFT", `${destination} differs; overwrite refused`)
+    return
+  }
+  const temporary = `${destination}.${process.pid}.tmp`
+  const bytes = fs.readFileSync(source); const handle = fs.openSync(temporary, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, mode)
+  fs.writeFileSync(handle, bytes); fs.fsyncSync(handle); fs.fchownSync(handle, uid, gid); fs.fchmodSync(handle, mode); fs.closeSync(handle); fs.renameSync(temporary, destination)
+  const directory = fs.openSync(parent, fs.constants.O_RDONLY); fs.fsyncSync(directory); fs.closeSync(directory)
+}
+function staged(name, expectedSha, mode) {
+  const file = path.join(STAGED_ROOT, name)
+  if (!exactFile(file, expectedSha, 0, 0, mode)) fail("SIGNED_INPUT_UNAVAILABLE", `${name} does not match signed authority`)
+  return file
+}
+function accountIds(name) {
+  const line = run("/usr/bin/getent", ["passwd", name], { statuses: [0, 2], code: "IDENTITY_QUERY_FAILED" })
+  if (!line) return null
+  const fields = line.split(":"); const uid = Number(fields[2]); const gid = Number(fields[3])
+  if (!Number.isSafeInteger(uid) || uid <= 0 || !Number.isSafeInteger(gid) || gid <= 0) fail("IDENTITY_DRIFT", "bounded account identifiers differ")
+  return { uid, gid, home: fields[5], shell: fields[6] }
+}
+function version(executable, args, pattern) {
+  try { return pattern.exec(run(executable, args, { timeout: 10_000 }))?.[1] ?? null } catch { return null }
+}
+function toolchainState(authority) {
+  const exact = [["git", "/usr/bin/git", ["--version"], /git version (\S+)/], ["node", "/usr/bin/node", ["--version"], /v(\S+)/], ["dotnetSdk", "/usr/bin/dotnet", ["--version"], /(\S+)/], ["corepack", "/usr/bin/corepack", ["--version"], /(\S+)/], ["pnpm", "/usr/bin/pnpm", ["--version"], /(\S+)/]]
+  let missing = false
+  for (const [name, executable, args, pattern] of exact) {
+    const observed = version(executable, args, pattern)
+    if (observed === authority.inputs.toolchain[name].version) {
+      if (name !== "dotnetSdk" && !exactFile(executable, authority.inputs.toolchain[name].sha256, 0, 0, 0o755)) return "DRIFT"
+      continue
+    }
+    if (name === "dotnetSdk" && !fs.existsSync("/usr/share/dotnet")) { missing = true; continue }
+    if (!fs.existsSync(executable)) { missing = true; continue }
+    return "DRIFT"
+  }
+  return missing ? "ABSENT" : "MATCH"
+}
+
+function rootOwnedRepositoryTree(directory) {
+  try {
+    const stat = fs.lstatSync(directory)
+    if (!trustedParents(directory) || !stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== 0 || stat.gid !== 0 || (stat.mode & 0o022) !== 0) return false
+    return run("/usr/bin/find", [directory, "-xdev", "(", "!", "-user", "root", "-o", "-perm", "/022", ")", "-print", "-quit"]) === ""
+  } catch { return false }
+}
+
+function repositoryState(manifest) {
+  const control = "/var/lib/williamos/fabric/workspaces/terragroq"
+  const mirror = "/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git"
+  const controlExists = fs.existsSync(control); const mirrorExists = fs.existsSync(mirror)
+  try {
+    let controlMatch = false; let mirrorMatch = false
+    if (controlExists) {
+      if (!rootOwnedRepositoryTree(control)
+        || run("/usr/bin/git", ["remote", "get-url", "origin"], { cwd: control }) !== "ssh://git@ssh.github.com:443/bsvalues/terragroq.git"
+        || run("/usr/bin/git", ["status", "--porcelain"], { cwd: control }) !== "") return "DRIFT"
+      controlMatch = run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "HEAD"], { cwd: control }) === manifest.trustedMain.commit
+        && run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control }) === manifest.trustedMain.commit
+    }
+    if (mirrorExists) {
+      if (!rootOwnedRepositoryTree(mirror)
+        || run("/usr/bin/git", [`--git-dir=${mirror}`, "remote", "get-url", "origin"]) !== "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git") return "DRIFT"
+      mirrorMatch = spawnSync("/usr/bin/git", [`--git-dir=${mirror}`, "cat-file", "-e", "ffd2fa35f5152de2b95e7f63b220050d18193d7a^{commit}"], { shell: false, timeout: 5000, env: FIXED_ENV }).status === 0
+    }
+    return controlMatch && mirrorMatch ? "MATCH" : "ABSENT"
+  } catch { return controlExists || mirrorExists ? "DRIFT" : "ABSENT" }
+}
+function rootAssetsState(manifest, authority) {
+  const ids = accountIds("williamos-fabric"); let missing = false
+  for (const asset of manifest.appliedAssets) {
+    if (!fs.existsSync(asset.destination)) { missing = true; continue }
+    if (!exactFile(asset.destination, asset.sha256, 0, asset.group === "williamos-fabric" ? ids?.gid : 0, Number.parseInt(asset.mode, 8))) return "DRIFT"
+  }
+  const privateExists = fs.existsSync(LAUNCH_PRIVATE_KEY); const publicExists = fs.existsSync(LAUNCH_PUBLIC_KEY)
+  if (privateExists !== publicExists || ((privateExists || publicExists) && !launchKeyEvidence(authority).match)) return "DRIFT"
+  if (!privateExists) missing = true
+  return missing ? "ABSENT" : "MATCH"
+}
+function launchKeyEvidence(authority) {
+  try {
+    const privateStat = fs.lstatSync(LAUNCH_PRIVATE_KEY); const publicStat = fs.lstatSync(LAUNCH_PUBLIC_KEY)
+    if (!trustedParents(LAUNCH_PRIVATE_KEY) || !trustedParents(LAUNCH_PUBLIC_KEY) || !privateStat.isFile() || !publicStat.isFile() || privateStat.isSymbolicLink() || publicStat.isSymbolicLink()
+      || privateStat.nlink !== 1 || publicStat.nlink !== 1 || privateStat.uid !== 0 || privateStat.gid !== 0 || publicStat.uid !== 0 || publicStat.gid !== 0
+      || (privateStat.mode & 0o7777) !== 0o400 || (publicStat.mode & 0o7777) !== 0o444) return { match: false }
+    const privateBytes = fs.readFileSync(LAUNCH_PRIVATE_KEY); const publicBytes = fs.readFileSync(LAUNCH_PUBLIC_KEY)
+    const privateKey = crypto.createPrivateKey(privateBytes); const publicKey = crypto.createPublicKey(publicBytes)
+    const derived = crypto.createPublicKey(privateKey).export({ type: "spki", format: "der" }); const observed = publicKey.export({ type: "spki", format: "der" })
+    if (!Buffer.from(derived).equals(Buffer.from(observed))) return { match: false }
+    const publicSha256 = sha(publicBytes); const privateSha256 = sha(privateBytes); const fingerprint = `SHA256:${crypto.createHash("sha256").update(observed).digest("base64").replace(/=+$/, "")}`
+    if (authority.inputs.launchSigningKeyAction === "ADOPT_EXACT_EXISTING" && (authority.inputs.launchSigningPrivateKeySha256 !== privateSha256 || authority.inputs.launchSigningPublicKeySha256 !== publicSha256 || authority.inputs.launchSigningKeyFingerprint !== fingerprint)) return { match: false }
+    return { match: true, privateSha256, publicSha256, fingerprint }
+  } catch { return { match: false } }
+}
+
+function applyLaunchKey(authority) {
+  const existingPrivate = fs.existsSync(LAUNCH_PRIVATE_KEY); const existingPublic = fs.existsSync(LAUNCH_PUBLIC_KEY)
+  if (existingPrivate || existingPublic) {
+    if (!existingPrivate || !existingPublic || !launchKeyEvidence(authority).match) fail("LAUNCH_KEY_DRIFT", "existing root launch keypair differs; overwrite refused")
+    return
+  }
+  if (authority.inputs.launchSigningKeyAction !== "GENERATE_ON_AEGIS") fail("LAUNCH_KEY_ABSENT", "exact adopted launch key is absent")
+  ensureRootDirectory("/etc/williamos-fabric", 0o755)
+  const privateTemp = `${LAUNCH_PRIVATE_KEY}.${authority.transactionId}.tmp`; const publicTemp = `${LAUNCH_PUBLIC_KEY}.${authority.transactionId}.tmp`
+  run("/usr/bin/openssl", ["genpkey", "-algorithm", "ED25519", "-out", privateTemp])
+  run("/usr/bin/openssl", ["pkey", "-in", privateTemp, "-pubout", "-out", publicTemp])
+  for (const [file, mode] of [[privateTemp, 0o400], [publicTemp, 0o444]]) { fs.chownSync(file, 0, 0); fs.chmodSync(file, mode); const handle = fs.openSync(file, fs.constants.O_RDONLY); fs.fsyncSync(handle); fs.closeSync(handle) }
+  fs.renameSync(privateTemp, LAUNCH_PRIVATE_KEY); fs.renameSync(publicTemp, LAUNCH_PUBLIC_KEY); const parent = fs.openSync("/etc/williamos-fabric", fs.constants.O_RDONLY); fs.fsyncSync(parent); fs.closeSync(parent)
+  if (!launchKeyEvidence(authority).match) fail("LAUNCH_KEY_DRIFT", "generated root launch keypair verification failed")
+}
+function storageObservation() {
+  const image = "/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs"
+  try {
+    const stat = fs.lstatSync(image); const real = fs.realpathSync(image)
+    const loopLine = run("/usr/sbin/losetup", ["-j", image, "--noheadings", "--output", "NAME,BACK-FILE"]).split(/\r?\n/).filter(Boolean)
+    if (loopLine.length !== 1) throw new Error("loop ambiguity")
+    const loopDevice = loopLine[0].trim().split(/\s+/)[0]
+    const loopBacking = run("/usr/sbin/losetup", ["--noheadings", "--output", "BACK-FILE", loopDevice])
+    const majorMinor = run("/usr/bin/lsblk", ["-dn", "-o", "MAJ:MIN", loopDevice])
+    const backingMount = run("/usr/bin/findmnt", ["-n", "-o", "FSTYPE", "--target", image])
+    const mount = run("/usr/bin/findmnt", ["-n", "-o", "SOURCE,MAJ:MIN,FSTYPE,OPTIONS", "--target", "/srv/william"]).split(/\s+/, 4)
+    const uuid = run("/usr/sbin/blkid", ["-s", "UUID", "-o", "value", loopDevice]); const label = run("/usr/sbin/blkid", ["-s", "LABEL", "-o", "value", loopDevice])
+    const xfs = run("/usr/sbin/xfs_io", ["-c", "stat", "/srv/william/workspaces"]); const projectId = Number(/projid = (\d+)/.exec(xfs)?.[1])
+    const quotaState = run("/usr/sbin/xfs_quota", ["-x", "-c", "state -p", "/srv/william"])
+    const report = run("/usr/sbin/xfs_quota", ["-x", "-c", "report -p -b -n -N", "/srv/william"])
+    const row = report.split(/\r?\n/).map((line) => line.trim().split(/\s+/)).find((fields) => fields[0] === "#734" || fields[0] === "734")
+    const hardKiB = Number(row?.[3])
+    return { verified: true, mutationRequested: false, backingHostFilesystem: backingMount, backingImageRealPath: real, backingImageBytes: stat.size, backingImageOwner: stat.uid === 0 ? "root" : String(stat.uid), backingImageGroup: stat.gid === 0 ? "root" : String(stat.gid), backingImageMode: (stat.mode & 0o777).toString(8).padStart(4, "0"), backingImageNlink: stat.nlink, backingDevice: String(stat.dev), backingInode: String(stat.ino), backingCtimeNs: stat.ctimeNs?.toString() ?? String(Math.trunc(stat.ctimeMs * 1e6)), loopDevice, loopBackingImageRealPath: fs.realpathSync(loopBacking), loopMajorMinor: majorMinor, mountSource: mount[0], mountSourceMajorMinor: mount[1], filesystemType: mount[2], filesystemUuid: uuid, filesystemLabel: label, mountPath: "/srv/william", mountOptions: mount[3].split(","), projectId, projectInherit: /proj-inherit|\[[^\]]*P[^\]]*\]/.test(xfs), quotaAccounting: /Accounting:\s+ON/i.test(quotaState), quotaEnforcement: /Enforcement:\s+ON/i.test(quotaState), hardLimitBytes: hardKiB * 1024 }
+  } catch { return { verified: false, mutationRequested: false } }
+}
+
+export function inspectRootAdapterContract() {
+  return { status: "ROOT_OS_ADAPTER_CONTRACT_VERIFIED", executionAuthorized: false, applyAuthorized: false, storageMode: "VERIFY_ONLY", schedulerEnabled: false, standingAuthority: false, steps: [...STEPS] }
+}
+
+function appendOnly(directory) {
+  try { return /^[A-Za-z-]*a[A-Za-z-]*\s+/.test(run("/usr/bin/lsattr", ["-d", "--", directory])) } catch { return false }
+}
+function networkBoundaryMatches() {
+  try {
+    const rules = run("/usr/sbin/nft", ["list", "chain", "inet", "williamos_aegis_remote_dev", "output"])
+    const required = [
+      'meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject',
+      'meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject',
+      'meta skuid "williamos-fabric" ip daddr 127.0.0.1 tcp dport 17734 accept',
+      'meta skuid "williamos-fabric" reject',
+    ]
+    if (!rules.includes("type filter hook output priority filter; policy accept;") || required.some((entry) => rules.split(entry).length !== 2)
+      || (rules.match(/meta skuid/g) ?? []).length !== required.length) return false
+    for (const unit of ["williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service"]) {
+      if (run("/usr/bin/systemctl", ["is-active", unit]) !== "active" || run("/usr/bin/systemctl", ["is-enabled", unit]) !== "enabled") return false
+    }
+    const listener = run("/usr/bin/ss", ["-H", "-ltn", "sport = :17734"])
+    return listener.split(/\r?\n/).filter(Boolean).length === 1 && listener.includes("127.0.0.1:17734")
+  } catch { return false }
+}
+function activeProofWorkerExists() {
+  try {
+    const active = run("/usr/bin/systemctl", ["list-units", "--all", "--plain", "--no-legend", "williamos-aegis-remote-dev-*.service"], { statuses: [0, 1] })
+    if (active.split(/\r?\n/).some((line) => /\b(?:activating|active|deactivating)\b/.test(line))) return true
+    const root = "/sys/fs/cgroup"
+    return fs.readdirSync(root, { recursive: true }).some((entry) => /williamos-aegis-remote-dev-[0-9a-f-]{36}\.service$/.test(String(entry)))
+  } catch { return true }
+}
+
+function recoverJournal(authority) {
+  if (activeProofWorkerExists()) fail("RECOVERY_WORKER_ACTIVE", "proof worker or transient unit remains active")
+  const prefix = `${authority.transactionId}.`; const files = fs.readdirSync(JOURNAL_ROOT).filter((name) => name.startsWith(prefix))
+  const records = []; let previous = "0".repeat(64); let sequence = 0; let pending = null; let lastStep = -1; let postVerified = false; let terminal = false
+  for (const name of files.sort()) {
+    if (!new RegExp(`^${authority.transactionId.replaceAll("-", "\\-")}\\.[0-9]{6}\\.[a-f0-9]{64}\\.json$`).test(name)) fail("JOURNAL_CHAIN_INVALID", "journal filename differs")
+    const record = readCanonicalRootJson(path.join(JOURNAL_ROOT, name))
+    const unsigned = { schemaVersion: record.schemaVersion, sequence: record.sequence, previousSha256: record.previousSha256, phase: record.phase, detail: record.detail }
+    const digest = sha(Buffer.from(canonical(unsigned), "utf8"))
+    if (record.schemaVersion !== 1 || record.sequence !== sequence + 1 || record.previousSha256 !== previous || record.recordSha256 !== digest || !name.includes(`.${String(record.sequence).padStart(6, "0")}.${digest}.`)) fail("JOURNAL_CHAIN_INVALID", "journal sequence or digest differs")
+    if (!["AUTHORITY_CONSUMED", "STEP_INTENT", "STEP_APPLIED", "POST_APPLY_VERIFIED", "COMMITTED", "FAILED_PARTIAL"].includes(record.phase)) fail("JOURNAL_CHAIN_INVALID", "journal phase differs")
+    if (terminal || (record.sequence === 1 && record.phase !== "AUTHORITY_CONSUMED") || (record.phase === "AUTHORITY_CONSUMED" && (record.sequence !== 1 || record.detail?.authorityId !== authority.authorityId || record.detail?.transactionId !== authority.transactionId))) fail("JOURNAL_CHAIN_INVALID", "journal authority or terminal order differs")
+    if (record.phase === "STEP_INTENT") {
+      const index = STEPS.indexOf(record.detail?.stepId)
+      if (pending !== null || postVerified || index <= lastStep) fail("JOURNAL_CHAIN_INVALID", "step intent order differs")
+      pending = record.detail.stepId
+    } else if (record.phase === "STEP_APPLIED") {
+      if (pending === null || record.detail?.stepId !== pending) fail("JOURNAL_CHAIN_INVALID", "step apply is not bound to its intent")
+      lastStep = STEPS.indexOf(pending); pending = null
+    } else if (record.phase === "POST_APPLY_VERIFIED") {
+      if (pending !== null || postVerified) fail("JOURNAL_CHAIN_INVALID", "post-apply verification order differs")
+      postVerified = true
+    } else if (record.phase === "COMMITTED") {
+      if (!postVerified || pending !== null || record.detail?.transactionId !== authority.transactionId) fail("JOURNAL_CHAIN_INVALID", "commit order differs")
+      terminal = true
+    } else if (record.phase === "FAILED_PARTIAL") terminal = true
+    sequence = record.sequence; previous = digest; records.push(record)
+  }
+  if (records.some((record) => record.phase === "FAILED_PARTIAL")) fail("AUTHORITY_FAILED_CONSUMED", "failed authority can never be resumed")
+  const committed = records.at(-1)?.phase === "COMMITTED"
+  return { records, committed }
+}
+function observe(manifest, authority, trust) {
+  const ids = accountIds("williamos-fabric")
+  const transportPath = "/etc/ssh/authorized_keys/williamos-fabric"
+  const transport = fs.existsSync(transportPath) ? fs.readFileSync(transportPath, "utf8") : ""
+  const rootAssets = rootAssetsState(manifest, authority)
+  const nft = networkBoundaryMatches()
+  const repositories = repositoryState(manifest)
+  const toolchain = toolchainState(authority)
+  const ledger = (() => { try { const s = fs.lstatSync("/var/lib/williamos/fabric/ledger"); return trustedParents("/var/lib/williamos/fabric/ledger") && s.isDirectory() && !s.isSymbolicLink() && s.uid === ids?.uid && s.gid === ids?.gid && (s.mode & 0o7777) === 0o700 && run("/usr/bin/findmnt", ["-n", "-o", "FSTYPE", "--target", "/var/lib/williamos/fabric/ledger"]) === "ext4" } catch { return false } })()
+  const identityMatch = (() => { try { const shadow = run("/usr/bin/getent", ["shadow", "williamos-fabric"]).split(":")[1]; const linger = fs.existsSync(`/var/lib/systemd/linger/williamos-fabric`); const sudo = spawnSync("/usr/bin/sudo", ["-n", "-l", "-U", "williamos-fabric"], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV }); return ids?.shell === "/bin/bash" && /^!/.test(shadow) && linger && sudo.status !== 0 && /may not run sudo/i.test(`${sudo.stdout}${sudo.stderr}`) } catch { return false } })()
+  const expectedTransport = (() => { try { const key = fs.readFileSync(path.join(STAGED_ROOT, "hermes-transport.pub"), "utf8").trim(); return `from="192.168.1.154",restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" ${key}\n` } catch { return null } })()
+  const githubMatch = exactFile("/etc/williamos-fabric/github_known_hosts", authority.inputs.githubHostKnownHostsSha256, 0, 0, 0o444) && exactFile("/etc/williamos-fabric/github-account.key", authority.inputs.githubAccountPrivateKeySha256, 0, 0, 0o400)
+  const states = {
+    RECONCILE_BOUNDED_IDENTITY: identityMatch ? "MATCH" : ids ? "DRIFT" : "ABSENT",
+    INSTALL_ROOT_LAUNCH_ASSETS: rootAssets,
+    INSTALL_DUAL_STACK_BROKER_BOUNDARY: nft ? "MATCH" : (() => { try { const table = spawnSync("/usr/sbin/nft", ["list", "table", "inet", "williamos_aegis_remote_dev"], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV }); const active = ["williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service"].some((unit) => spawnSync("/usr/bin/systemctl", ["is-active", "--quiet", unit], { shell: false, timeout: 5000, env: FIXED_ENV }).status === 0); return table.status === 0 || active ? "DRIFT" : "ABSENT" } catch { return "DRIFT" } })(),
+    INSTALL_GITHUB_HOST_AUTH_BOUNDARY: githubMatch ? "MATCH" : fs.existsSync("/etc/williamos-fabric/github_known_hosts") || fs.existsSync("/etc/williamos-fabric/github-account.key") ? "DRIFT" : "ABSENT",
+    RECONCILE_TRUSTED_REPOSITORIES: repositories,
+    INSTALL_PINNED_TOOLCHAIN: toolchain,
+    CREATE_DURABLE_LEDGER: ledger && appendOnly("/var/lib/williamos-fabric/remote-dev-launch-tickets") ? "MATCH" : fs.existsSync("/var/lib/williamos/fabric/ledger") || fs.existsSync("/var/lib/williamos-fabric/remote-dev-launch-tickets") ? "DRIFT" : "ABSENT",
+    INSTALL_FORCED_COMMAND_TRANSPORT: transport === expectedTransport && exactFile(transportPath, sha(Buffer.from(expectedTransport)), 0, 0, 0o444) ? "MATCH" : transport ? "DRIFT" : "ABSENT",
+  }
+  return { platform: { os: process.platform, effectiveUid: process.getuid?.(), hostname: run("/usr/bin/hostname", ["-s"]), machineIdSha256: sha(Buffer.from(fs.readFileSync("/etc/machine-id", "utf8").trim(), "utf8")) }, ...trust, trustedMain: { ...trust.trustedMain, exactCleanHead: repositories === "MATCH", criticalBytesMatch: rootAssets }, storage: storageObservation(), prerequisites: states }
+}
+
+function applyIdentity() {
+  let ids = accountIds("williamos-fabric")
+  if (!ids) { run("/usr/sbin/useradd", ["--create-home", "--shell", "/bin/bash", "williamos-fabric"]); ids = accountIds("williamos-fabric") }
+  if (ids.home !== "/home/williamos-fabric" || ids.shell !== "/bin/bash") fail("IDENTITY_DRIFT", "existing bounded account home or shell differs")
+  run("/usr/sbin/usermod", ["--lock", "williamos-fabric"])
+  const sudo = spawnSync("/usr/bin/sudo", ["-n", "-l", "-U", "williamos-fabric"], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV })
+  if (sudo.status === 0 || !/may not run sudo/i.test(`${sudo.stdout}${sudo.stderr}`)) fail("IDENTITY_DRIFT", "no-sudo capability is unproven")
+  run("/usr/bin/loginctl", ["enable-linger", "williamos-fabric"])
+  if (!accountIds("williamos-egress-broker")) run("/usr/sbin/useradd", ["--system", "--shell", "/usr/sbin/nologin", "--no-create-home", "williamos-egress-broker"])
+}
+function applyAssets(manifest, authority) {
+  for (const asset of manifest.appliedAssets) {
+    const source = path.join(BUNDLE_ROOT, ...asset.source.split("/")); const ids = asset.group === "williamos-fabric" ? accountIds("williamos-fabric") : null
+    atomicInstall(source, asset.destination, asset.sha256, Number.parseInt(asset.mode, 8), 0, ids?.gid ?? 0)
+  }
+  applyLaunchKey(authority)
+  run("/usr/bin/systemctl", ["daemon-reload"])
+}
+function applyNetwork(authority) {
+  if (!fs.existsSync("/etc/williamos-fabric/williamos-aegis-remote-dev-egress.nft")) fail("ROOT_ASSET_MISSING", "default-deny asset is missing")
+  run("/usr/bin/systemd-analyze", ["verify", "/etc/systemd/system/williamos-aegis-remote-dev-egress.service", "/etc/systemd/system/williamos-aegis-remote-dev-broker.service"])
+  run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-egress-enforcer.mjs"])
+  run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-egress-broker.mjs"])
+  run("/usr/bin/systemctl", ["enable", "--now", "williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service"])
+  if (!networkBoundaryMatches()) fail("NETWORK_BOUNDARY_UNPROVEN", "exact broker/default-deny/Atlas boundary differs after apply")
+}
+function applyGithub(authority) {
+  const known = staged("github_known_hosts", authority.inputs.githubHostKnownHostsSha256, 0o400)
+  const key = staged("github-account.key", authority.inputs.githubAccountPrivateKeySha256, 0o400)
+  atomicInstall(known, "/etc/williamos-fabric/github_known_hosts", authority.inputs.githubHostKnownHostsSha256, 0o444)
+  atomicInstall(key, "/etc/williamos-fabric/github-account.key", authority.inputs.githubAccountPrivateKeySha256, 0o400)
+  const fingerprint = run("/usr/bin/ssh-keygen", ["-lf", "/etc/williamos-fabric/github-account.key", "-E", "sha256"])
+  if (!fingerprint.includes(authority.inputs.githubAccountKeyFingerprint)) fail("GITHUB_KEY_DRIFT", "GitHub account key fingerprint differs")
+}
+function applyTransport(authority) {
+  const source = staged("hermes-transport.pub", authority.inputs.hermesTransportPublicKeySha256, 0o400)
+  const fingerprint = run("/usr/bin/ssh-keygen", ["-lf", source, "-E", "sha256"])
+  if (!fingerprint.includes(authority.inputs.hermesTransportKeyFingerprint)) fail("TRANSPORT_KEY_DRIFT", "Hermes transport key fingerprint differs")
+  const directory = "/etc/ssh/authorized_keys"; ensureRootDirectory(directory, 0o755)
+  const key = fs.readFileSync(source, "utf8").trim(); const line = `from="192.168.1.154",restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" ${key}\n`
+  const destination = `${directory}/williamos-fabric`; if (fs.existsSync(destination)) { if (!exactFile(destination, sha(Buffer.from(line)), 0, 0, 0o444)) fail("TRANSPORT_DRIFT", "existing forced-command transport differs") }
+  else { const handle = fs.openSync(destination, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o444); fs.writeFileSync(handle, line); fs.fsyncSync(handle); fs.closeSync(handle); const parent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(parent); fs.closeSync(parent) }
+  run("/usr/sbin/sshd", ["-t"])
+  for (const address of ["192.168.1.154", "192.168.1.155"]) {
+    const effective = run("/usr/sbin/sshd", ["-T", "-C", `user=williamos-fabric,host=aegis,addr=${address}`])
+    for (const required of ["passwordauthentication no", "kbdinteractiveauthentication no", "allowtcpforwarding no", "permittty no", "authorizedkeysfile /etc/ssh/authorized_keys/williamos-fabric"]) if (!effective.includes(required)) fail("TRANSPORT_DRIFT", "effective SSH restriction differs")
+  }
+}
+function applyRepositories(manifest) {
+  const control = "/var/lib/williamos/fabric/workspaces/terragroq"; const mirror = "/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git"
+  ensureRootDirectory("/var/lib/williamos/fabric/workspaces")
+  ensureRootDirectory("/var/lib/williamos/fabric/repositories")
+  if ((fs.existsSync(control) || fs.existsSync(mirror)) && repositoryState(manifest) === "DRIFT") fail("REPOSITORY_DRIFT", "existing control checkout or target mirror is not root-controlled and clean")
+  if (!fs.existsSync(control)) run("/usr/bin/git", ["clone", "--no-checkout", "ssh://git@ssh.github.com:443/bsvalues/terragroq.git", control], { timeout: 300_000 })
+  run("/usr/bin/git", ["fetch", "--force", "origin", `+refs/heads/main:refs/remotes/origin/main`], { cwd: control, timeout: 300_000 })
+  if (run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control }) !== manifest.trustedMain.commit) fail("REPOSITORY_DRIFT", "fresh control-plane main differs")
+  if (run("/usr/bin/git", ["status", "--porcelain"], { cwd: control }) !== "") fail("REPOSITORY_DRIFT", "control checkout is dirty")
+  run("/usr/bin/git", ["checkout", "-B", "main", manifest.trustedMain.commit], { cwd: control })
+  if (!fs.existsSync(mirror)) run("/usr/bin/git", ["clone", "--mirror", "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git", mirror], { timeout: 300_000 })
+  run("/usr/bin/git", [`--git-dir=${mirror}`, "fetch", "--force", "origin", "+refs/heads/main:refs/heads/main"], { timeout: 300_000 })
+  run("/usr/bin/git", [`--git-dir=${mirror}`, "cat-file", "-e", "ffd2fa35f5152de2b95e7f63b220050d18193d7a^{commit}"])
+  if (repositoryState(manifest) !== "MATCH") fail("REPOSITORY_DRIFT", "trusted repositories differ after reconciliation")
+}
+function applyToolchain(authority) {
+  const dotnet = authority.inputs.toolchain.dotnetSdk
+  if (version("/usr/bin/dotnet", ["--version"], /(\S+)/) !== dotnet.version) {
+    if (fs.existsSync("/usr/share/dotnet")) fail("PINNED_TOOLCHAIN_DRIFT", "existing .NET installation differs; overwrite refused")
+    const archive = staged("dotnet-sdk-8.0.423-linux-x64.tar.gz", dotnet.sha256, 0o400)
+    const entries = run("/usr/bin/tar", ["-tzf", archive], { timeout: 30_000 }).split(/\r?\n/).filter(Boolean)
+    if (!entries.length || entries.some((entry) => entry.startsWith("/") || entry.split("/").includes(".."))) fail("PINNED_TOOLCHAIN_ARCHIVE_INVALID", ".NET archive contains an unsafe path")
+    ensureRootDirectory("/usr/share")
+    const temporary = `/usr/share/dotnet.${authority.transactionId}.tmp`
+    if (fs.existsSync(temporary)) fail("PINNED_TOOLCHAIN_PARTIAL", "transaction .NET staging directory already exists")
+    fs.mkdirSync(temporary, { mode: 0o755 })
+    run("/usr/bin/tar", ["-xzf", archive, "--no-same-owner", "--no-same-permissions", "-C", temporary], { timeout: 300_000 })
+    fs.chmodSync(temporary, 0o755)
+    if (version(`${temporary}/dotnet`, ["--version"], /(\S+)/) !== dotnet.version) fail("PINNED_TOOLCHAIN_ARCHIVE_INVALID", "staged .NET SDK version differs")
+    fs.renameSync(temporary, "/usr/share/dotnet"); const parent = fs.openSync("/usr/share", fs.constants.O_RDONLY); fs.fsyncSync(parent); fs.closeSync(parent)
+  }
+  const exact = [["git", "/usr/bin/git", ["--version"], /git version (\S+)/], ["node", "/usr/bin/node", ["--version"], /v(\S+)/], ["dotnetSdk", "/usr/bin/dotnet", ["--version"], /(\S+)/], ["corepack", "/usr/bin/corepack", ["--version"], /(\S+)/], ["pnpm", "/usr/bin/pnpm", ["--version"], /(\S+)/]]
+  for (const [name, executable, args, pattern] of exact) if (version(executable, args, pattern) !== authority.inputs.toolchain[name].version) fail("PINNED_TOOLCHAIN_UNAVAILABLE", `${name} must be pre-staged and installed by the signed package provenance before this transaction`)
+}
+function applyLedger() {
+  run("/usr/bin/systemd-tmpfiles", ["--create", "/etc/tmpfiles.d/williamos-aegis-remote-dev.conf"])
+  run("/usr/bin/chattr", ["+a", "/var/lib/williamos-fabric/remote-dev-launch-tickets"])
+}
+function publishReceipt(manifest, authority, journalHeadSha256) {
+  const launchKey = launchKeyEvidence(authority); if (!launchKey.match) fail("LAUNCH_KEY_DRIFT", "root launch key evidence differs at publication")
+  const receipt = { schemaVersion: 1, status: "PREREQUISITES_VERIFIED", workOrderId: "WO-TF-REMOTE-DEV-OFFLOAD-001", transactionId: authority.transactionId, authorityId: authority.authorityId, completedAt: run("/usr/bin/date", ["-u", "+%Y-%m-%dT%H:%M:%S.%3NZ"]), machineIdSha256: manifest.target.machineIdSha256, trustedMainCommit: manifest.trustedMain.commit, rootHandoffManifestSha256: authority.rootHandoffManifestSha256, prerequisiteManifestJcsSha256: manifest.prerequisitePackage.manifestJcsSha256, appliedAssets: manifest.appliedAssets, authoritySha256: sha(Buffer.from(canonical(authority), "utf8")), inputsSha256: sha(Buffer.from(canonical(authority.inputs), "utf8")), launchAuthorityPublicKeySha256: launchKey.publicSha256, storage: authority.storage, journalHeadSha256, schedulerEnabled: false, standingAuthority: false, dispatchOccurred: false, closedHashMutation: false, executionAuthorized: false, activationAuthorized: false }
+  const bytes = Buffer.from(`${canonical(receipt)}\n`, "utf8"); const destination = "/var/lib/williamos-fabric/remote-dev-prerequisite-verified.json"
+  if (fs.existsSync(destination)) {
+    const current = readCanonicalRootJson(destination, 0o444)
+    if (!Buffer.from(`${canonical(current)}\n`, "utf8").equals(bytes)) fail("SUCCESS_RECEIPT_CONFLICT", "canonical success receipt belongs to another transaction or journal head")
+    return sha(bytes)
+  }
+  let handle
+  try { handle = fs.openSync(destination, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o444) } catch (error) { fail("SUCCESS_RECEIPT_CONFLICT", `canonical success receipt publication failed: ${error?.code ?? "unknown"}`) }
+  fs.writeFileSync(handle, bytes); fs.fsyncSync(handle); fs.closeSync(handle); const directory = fs.openSync("/var/lib/williamos-fabric", fs.constants.O_RDONLY); fs.fsyncSync(directory); fs.closeSync(directory)
+  return sha(bytes)
+}
+
+function exactRootDirectory(directory, mode, append = false) { try { const s = fs.lstatSync(directory); return trustedParents(directory) && s.isDirectory() && !s.isSymbolicLink() && s.uid === 0 && s.gid === 0 && (s.mode & 0o7777) === mode && (!append || appendOnly(directory)) } catch { return false } }
+export function createRootProductionAdapter(manifest, authority, trust) {
+  if (process.platform !== "linux" || process.getuid?.() !== 0) fail("ROOT_LINUX_REQUIRED", "fixed adapter runs only as root on Linux")
+  if (!exactRootDirectory(EVIDENCE_ROOT, 0o700, true) || !exactRootDirectory(CLAIM_ROOT, 0o700, true) || !exactRootDirectory(JOURNAL_ROOT, 0o700, true) || !exactRootDirectory(STAGED_ROOT, 0o700)) fail("EXTERNAL_BOOTSTRAP_INCOMPLETE", "root evidence, claim, journal, or staged directory trust differs")
+  let head = "0".repeat(64); let sequence = 0
+  return Object.freeze({
+    acquireLease: async () => true,
+    releaseLease: async () => undefined,
+    reprove: async () => observe(manifest, authority, trust),
+    claim: async (authorityId, transactionId) => {
+      const destination = `${CLAIM_ROOT}/${authorityId}.claimed`; let handle
+      try { handle = fs.openSync(destination, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o400) } catch (error) {
+        if (error?.code !== "EEXIST") throw error
+        const existing = readCanonicalRootJson(destination)
+        return existing.authorityId === authorityId && existing.transactionId === transactionId && existing.authoritySha256 === sha(Buffer.from(canonical(authority), "utf8")) ? { resume: true } : false
+      }
+      fs.writeFileSync(handle, `${canonical({ authorityId, transactionId, authoritySha256: sha(Buffer.from(canonical(authority), "utf8")) })}\n`); fs.fsyncSync(handle); fs.closeSync(handle); const directory = fs.openSync(CLAIM_ROOT, fs.constants.O_RDONLY); fs.fsyncSync(directory); fs.closeSync(directory); return true
+    },
+    recover: async () => {
+      const recovered = recoverJournal(authority)
+      sequence = recovered.records.at(-1)?.sequence ?? 0; head = recovered.records.at(-1)?.recordSha256 ?? "0".repeat(64)
+      return recovered
+    },
+    append: async (record) => {
+      if (record.sequence !== sequence + 1 || record.previousSha256 !== head) fail("JOURNAL_CHAIN_INVALID", "journal record sequence differs")
+      const file = `${JOURNAL_ROOT}/${authority.transactionId}.${String(record.sequence).padStart(6, "0")}.${record.recordSha256}.json`; const handle = fs.openSync(file, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o400); fs.writeFileSync(handle, `${canonical(record)}\n`); fs.fsyncSync(handle); fs.closeSync(handle); const directory = fs.openSync(JOURNAL_ROOT, fs.constants.O_RDONLY); fs.fsyncSync(directory); fs.closeSync(directory); sequence = record.sequence; head = record.recordSha256
+    },
+    effectApplied: async (id) => observe(manifest, authority, trust).prerequisites[id] === "MATCH",
+    apply: async (id) => {
+      if (id === "RECONCILE_BOUNDED_IDENTITY") applyIdentity()
+      else if (id === "INSTALL_ROOT_LAUNCH_ASSETS") applyAssets(manifest, authority)
+      else if (id === "INSTALL_DUAL_STACK_BROKER_BOUNDARY") applyNetwork(authority)
+      else if (id === "INSTALL_GITHUB_HOST_AUTH_BOUNDARY") applyGithub(authority)
+      else if (id === "RECONCILE_TRUSTED_REPOSITORIES") applyRepositories(manifest)
+      else if (id === "INSTALL_PINNED_TOOLCHAIN") applyToolchain(authority)
+      else if (id === "CREATE_DURABLE_LEDGER") applyLedger()
+      else if (id === "INSTALL_FORCED_COMMAND_TRANSPORT") applyTransport(authority)
+      else fail("STEP_NOT_ALLOWLISTED", "root handoff step differs")
+    },
+    verify: async () => observe(manifest, authority, trust),
+    publishSuccess: async (_payload, journalHeadSha256) => { publishReceipt(manifest, authority, journalHeadSha256) },
+  })
+}

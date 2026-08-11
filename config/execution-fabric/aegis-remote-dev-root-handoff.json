@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "handoffId": "aegis-remote-dev-root-handoff-issue-734-v1",
+  "status": "UNTRUSTED_UNTIL_ROOT_BOOTSTRAP",
+  "trustedMain": {
+    "repository": "bsvalues/terragroq",
+    "remote": "https://github.com/bsvalues/terragroq.git",
+    "ref": "refs/heads/main",
+    "commit": "bcca6069a917d706314f7c8cb7b3cd40cdd910da",
+    "freshRemoteEqualityRequired": true,
+    "replaceObjectsDisabled": true,
+    "configIsolationRequired": true
+  },
+  "prerequisitePackage": {
+    "packageId": "aegis-remote-dev-prerequisites-issue-734-v1",
+    "generationCommit": "bcca6069a917d706314f7c8cb7b3cd40cdd910da",
+    "manifestPath": "config/execution-fabric/aegis-remote-dev-prerequisites.json",
+    "manifestJcsSha256": "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a",
+    "plannerPath": "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs",
+    "installerPath": "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh"
+  },
+  "target": {
+    "nodeId": "aegis",
+    "hostname": "aegis",
+    "machineIdSha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b",
+    "os": "linux",
+    "effectiveUid": 0
+  },
+  "bootstrap": {
+    "verifierPath": "/usr/local/libexec/williamos-aegis-root-handoff.mjs",
+    "verifierMode": "0555",
+    "adapterPath": "/usr/local/libexec/williamos-aegis-root-os-adapter.mjs",
+    "adapterMode": "0555",
+    "cliPath": "/usr/local/sbin/williamos-aegis-root-handoff",
+    "cliMode": "0555",
+    "manifestPath": "/usr/local/share/williamos/aegis-root-handoff-bundle/config/execution-fabric/aegis-remote-dev-root-handoff.json",
+    "manifestMode": "0444",
+    "bundleRoot": "/usr/local/share/williamos/aegis-root-handoff-bundle",
+    "evidenceDirectoriesPrecreated": true,
+    "ownerPublicKeyPath": "/etc/williamos-fabric/owner-prerequisite-authority.pem",
+    "ownerPublicKeyMode": "0444",
+    "outOfBandRootInstallRequired": true
+  },
+  "storage": {
+    "mode": "VERIFY_ONLY",
+    "mechanism": "LOOPBACK_XFS_PROJECT_QUOTA_V1",
+    "backingImageRealPath": "/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs",
+    "backingImageBytes": 107374182400,
+    "filesystemUuid": "5744648d-9289-4d4e-ac6a-707e8405a5d6",
+    "mountPath": "/srv/william",
+    "projectId": 734,
+    "hardLimitBytes": 85899345920,
+    "formatAllowed": false,
+    "mountAllowed": false,
+    "remountAllowed": false,
+    "quotaMutationAllowed": false,
+    "workspaceCreationAllowed": false
+  },
+  "posture": {
+    "proofActivation": "INACTIVE_PENDING_PREREQUISITES",
+    "generalSchedulerEnabled": false,
+    "standingAegisAuthorityEnabled": false,
+    "dispatchAuthorized": false,
+    "closedHashWorkOrder": "WO-EF-DISPATCH-AEGIS-001",
+    "closedHashMutationAllowed": false,
+    "atlasAllowed": false,
+    "hermesConfigurationMutationAllowed": false
+  },
+  "authority": {
+    "algorithm": "Ed25519",
+    "maximumAgeSeconds": 900,
+    "singleUse": true,
+    "consumeBeforeMutation": true,
+    "claimDirectory": "/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/claims",
+    "leasePath": "/run/lock/williamos-aegis-prerequisite-handoff.lock",
+    "requiredConcreteInputs": [
+      "hermes-transport-public-key",
+      "github-account-public-key",
+      "github-host-key-fingerprint",
+      "toolchain-package-provenance",
+      "launch-signing-key-action"
+    ]
+  },
+  "evidence": {
+    "namespace": "WO-TF-REMOTE-DEV-OFFLOAD-001/prerequisite-handoff",
+    "path": "/var/lib/williamos-fabric/remote-dev-prerequisite-handoff",
+    "owner": "root",
+    "mode": "0700",
+    "hashChained": true,
+    "appendOnly": true,
+    "fsyncRequired": true,
+    "successReceipt": "/var/lib/williamos-fabric/remote-dev-prerequisite-verified.json"
+  },
+  "trustedEvidence": [
+    { "path": "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json", "sha256": "8e3106945d69d2b770012ea99a15952d8c19eba70319ec6f811b2e13d91e9507", "purpose": "inactive proof scope" },
+    { "path": "config/execution-fabric/aegis-resident-identity.json", "sha256": "69a9008e680ef236367c8b4b3ebf85b9d96dbc9cf3545b97c2275761b327643d", "purpose": "canonical AEGIS identity" },
+    { "path": "config/execution-fabric/aegis-bounded-dispatch-authority-scopes/WO-EF-DISPATCH-AEGIS-001.json", "sha256": "90f089b0d64989edafcc96e847e77993a0c352d99a2716bbfb72bd3fbc27cfc7", "purpose": "closed HASH scope" },
+    { "path": "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-claim.json", "sha256": "40385c3163908c30d4eb559cded69ac2d05ae46c31a029dbbdc94d821139f845", "purpose": "closed HASH claim" },
+    { "path": "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-lease.json", "sha256": "c868754130d3c64b0ae2a8c5095d05a0ff978bf5ff0ff11eb76657422d7bef8d", "purpose": "closed HASH lease" },
+    { "path": "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-release.json", "sha256": "941173d93f64b806918d007552a7417cef122363442c8110d78c615ea1f039b2", "purpose": "closed HASH release" },
+    { "path": "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-replay-evidence.json", "sha256": "302bbf305171000f3dacb4af33fa62ce89011e5ddcb3641d729fbc2f4eae5e90", "purpose": "closed HASH replay evidence" }
+  ],
+  "steps": [
+    { "id": "RECONCILE_BOUNDED_IDENTITY", "idempotencyPredicate": "locked non-root williamos-fabric has no sudo capability", "rollbackClass": "RESTORE_IF_UNCHANGED" },
+    { "id": "INSTALL_ROOT_LAUNCH_ASSETS", "idempotencyPredicate": "all signed root launch assets match destination bytes owner group and mode", "rollbackClass": "RESTORE_IF_UNCHANGED" },
+    { "id": "INSTALL_DUAL_STACK_BROKER_BOUNDARY", "idempotencyPredicate": "worker direct IPv4 and IPv6 egress is denied and exact broker allowlist with Atlas denial is attested", "rollbackClass": "DISABLE_ONLY" },
+    { "id": "INSTALL_GITHUB_HOST_AUTH_BOUNDARY", "idempotencyPredicate": "strict ssh.github.com port 443 host and account trust is exact", "rollbackClass": "RESTORE_IF_UNCHANGED" },
+    { "id": "RECONCILE_TRUSTED_REPOSITORIES", "idempotencyPredicate": "control checkout and target mirror equal signed commits without local drift", "rollbackClass": "RESTORE_IF_UNCHANGED" },
+    { "id": "INSTALL_PINNED_TOOLCHAIN", "idempotencyPredicate": "fixed paths report exact signed versions and package hashes", "rollbackClass": "RESTORE_IF_UNCHANGED" },
+    { "id": "CREATE_DURABLE_LEDGER", "idempotencyPredicate": "separate root-owned durable atomic append-only evidence namespace is exact", "rollbackClass": "PRESERVE_EVIDENCE" },
+    { "id": "INSTALL_FORCED_COMMAND_TRANSPORT", "idempotencyPredicate": "exact restrict forced-command key is present and no unrestricted worker key exists", "rollbackClass": "DISABLE_ONLY" }
+  ],
+  "appliedAssets": [
+    { "source": "config/execution-fabric/aegis-remote-dev-prerequisites.json", "destination": "/usr/local/share/williamos/aegis-root-handoff-bundle/config/execution-fabric/aegis-remote-dev-prerequisites.json", "sha256": "3f4124737a4339e34534c15201db08e1bd271b59483a459ab76ea5ff284dc582", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs", "destination": "/usr/local/share/williamos/aegis-root-handoff-bundle/scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs", "sha256": "843727481311ee5303a14fd67dcd05334e6e75cfd242bf54d13e35f8ae688d46", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh", "destination": "/usr/local/share/williamos/aegis-root-handoff-bundle/scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh", "sha256": "7e92a1b3acf541f978f086ee1cec8191cc2b9732bc7f83380e4ecb13fec8d9d4", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs", "destination": "/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs", "sha256": "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7", "owner": "root", "group": "root", "mode": "0555" },
+    { "source": "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs", "destination": "/usr/local/libexec/williamos-aegis-remote-dev-network-launcher.mjs", "sha256": "d382962531bd80269c1b75297dab331682364262810bdde4b4a61a7fe4b4b69a", "owner": "root", "group": "root", "mode": "0555" },
+    { "source": "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs", "destination": "/usr/local/share/williamos/aegis-root-handoff-bundle/scripts/execution-fabric/live/aegis-resident-network-boundary.mjs", "sha256": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "scripts/execution-fabric/live/aegis-remote-dev-worker.sh", "destination": "/usr/local/share/williamos/aegis-root-handoff-bundle/scripts/execution-fabric/live/aegis-remote-dev-worker.sh", "sha256": "55054941b6366a4a3f480f6c01ac4fc50465d4bfa743f672ce7d6539e51b360b", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "config/execution-fabric/aegis-resident-network-boundary.json", "destination": "/usr/local/share/williamos/aegis-root-handoff-bundle/config/execution-fabric/aegis-resident-network-boundary.json", "sha256": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs", "destination": "/usr/local/libexec/williamos-aegis-root-os-adapter.mjs", "sha256": "d238b51a6d9ed72de659bb13ab7be42292defb15f9d74d67367daa38a19952f5", "owner": "root", "group": "root", "mode": "0555" },
+    { "source": "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh", "destination": "/usr/local/sbin/williamos-aegis-root-handoff", "sha256": "56630f270af148f1b02c94abfe33bac3512804eafe3ccd0a99de76564d4bc6da", "owner": "root", "group": "root", "mode": "0555" },
+    { "source": "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf", "destination": "/etc/ssh/ssh_config.d/90-williamos-aegis-github.conf", "sha256": "932376eafc9f7830e7e57cf2da71c54b888f4487b27588df499dd9edf67588e8", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf", "destination": "/etc/ssh/sshd_config.d/90-williamos-fabric-remote-dev.conf", "sha256": "9335fb18d81108ec1d8ec5db88f5b36108770f98235cc7e982fb9c02fc990f9e", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-enforcer.mjs", "destination": "/usr/local/libexec/williamos-aegis-remote-dev-egress-enforcer.mjs", "sha256": "931b0a9b0e98f4e6f3cc023e83e07914eafea53ae1844858e89f68e86247b1d5", "owner": "root", "group": "root", "mode": "0555" },
+    { "source": "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs", "destination": "/usr/local/libexec/williamos-aegis-remote-dev-egress-broker.mjs", "sha256": "2e80abc4c14a7a0b21144c0824ee2394cd752e9b02f77634a38181e3038c08fd", "owner": "root", "group": "root", "mode": "0555" },
+    { "source": "scripts/execution-fabric/provision/assets/aegis-remote-dev-proxy-connect.mjs", "destination": "/usr/local/libexec/williamos-aegis-remote-dev-proxy-connect.mjs", "sha256": "64c8dc17088f4a4ca37872feb0997d4265dc5108cc10b1b0e5e62fd76317b522", "owner": "root", "group": "root", "mode": "0555" },
+    { "source": "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-broker.service", "destination": "/etc/systemd/system/williamos-aegis-remote-dev-broker.service", "sha256": "540a3137c055896f1ad223d64c7a0af94eb01a7fb89fefc81f045b8e6ca6d3e7", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.nft", "destination": "/etc/williamos-fabric/williamos-aegis-remote-dev-egress.nft", "sha256": "7ae54384fa8eea7ad5c35bbeff4ae00bfb8b0f9f83fdfcd4bfeeb6622d59e867", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.service", "destination": "/etc/systemd/system/williamos-aegis-remote-dev-egress.service", "sha256": "36e5b23c6e0937a5ee76ef5d7249e4ff13babfb0664f84a91626f5e20193a83a", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev.slice", "destination": "/etc/systemd/user/williamos-aegis-remote-dev.slice", "sha256": "fc588c814d41b0f5be77ac7436d02f95644aa03b373912f70da6c41a61baff7c", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev.tmpfiles", "destination": "/etc/tmpfiles.d/williamos-aegis-remote-dev.conf", "sha256": "108fa6b6d3e9140868cf50c900c36e96fcd58dcfddb01ce631a57a27c389f96f", "owner": "root", "group": "root", "mode": "0444" },
+    { "source": "scripts/execution-fabric/provision/assets/williamos-dotnet-broker-wrapper", "destination": "/usr/bin/dotnet", "sha256": "f09d0fc345c40a15366939e2d2cf6dd7b67f39aa59dc929f39246d2f3d362891", "owner": "root", "group": "root", "mode": "0555" }
+  ],
+  "rollback": {
+    "automatic": false,
+    "separateSignedAuthorityRequired": true,
+    "preserveStorage": true,
+    "preserveSigningKey": true,
+    "preserveTickets": true,
+    "preserveLedger": true,
+    "restoreOnlyIfInstalledDigestMatches": true
+  }
+}

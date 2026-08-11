@@ -1,0 +1,9 @@
+table inet williamos_aegis_remote_dev {
+  chain output {
+    type filter hook output priority filter; policy accept;
+    meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject
+    meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject
+    meta skuid "williamos-fabric" ip daddr 127.0.0.1 tcp dport 17734 accept
+    meta skuid "williamos-fabric" reject
+  }
+}

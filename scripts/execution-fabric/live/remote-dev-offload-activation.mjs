@@ -49,6 +49,7 @@ const ROOT = new URL("../../../", import.meta.url)
 const REPOSITORY_ROOT = fileURLToPath(ROOT)
 const ACTIVATION_PATH = "config/execution-fabric/remote-dev-offload-v1-activation.json"
 const IDENTITY_PATH = "config/execution-fabric/aegis-resident-identity.json"
+const PREREQUISITE_RECEIPT_PATH = "/var/lib/williamos-fabric/remote-dev-prerequisite-verified.json"
 const LIVE_SESSIONS = new WeakMap()
 const ARTIFACT_PATHS = {
   worker: "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
@@ -59,6 +60,9 @@ const ARTIFACT_PATHS = {
   networkProvider: "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs",
   networkPolicy: "config/execution-fabric/aegis-resident-network-boundary.json",
   networkLauncher: "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs",
+  rootPrerequisiteManifest: "config/execution-fabric/aegis-remote-dev-root-handoff.json",
+  rootPrerequisiteVerifier: "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs",
+  rootPrerequisiteAdapter: "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs",
 }
 const BASELINE_ARTIFACT_PATHS = {
   contract: "config/execution-fabric/aegis-bounded-dispatch-contract.json",
@@ -105,6 +109,9 @@ const ACTIVATION_CRITICAL_PATHS = [
   ARTIFACT_PATHS.networkProvider,
   ARTIFACT_PATHS.networkPolicy,
   ARTIFACT_PATHS.networkLauncher,
+  ARTIFACT_PATHS.rootPrerequisiteManifest,
+  ARTIFACT_PATHS.rootPrerequisiteVerifier,
+  ARTIFACT_PATHS.rootPrerequisiteAdapter,
   "scripts/execution-fabric/canonical-json.mjs",
   "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs",
   IDENTITY_PATH,
@@ -350,6 +357,47 @@ function trustedRuntimeNow() {
   return value
 }
 
+function readRootPrerequisiteReceipt() {
+  let cursor = path.parse(PREREQUISITE_RECEIPT_PATH).root
+  for (const segment of PREREQUISITE_RECEIPT_PATH.slice(cursor.length).split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, segment); const stat = fs.lstatSync(cursor)
+    if (stat.isSymbolicLink()) fail("ROOT_PREREQUISITES_UNPROVEN", "prerequisite receipt path contains a symlink")
+    if (cursor !== PREREQUISITE_RECEIPT_PATH && (!stat.isDirectory() || stat.uid !== 0 || (stat.mode & 0o022) !== 0)) fail("ROOT_PREREQUISITES_UNPROVEN", "prerequisite receipt parent is not root-controlled")
+  }
+  const stat = fs.lstatSync(PREREQUISITE_RECEIPT_PATH)
+  if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== 0 || stat.gid !== 0 || (stat.mode & 0o7777) !== 0o444 || stat.size < 3 || stat.size > 1_048_576) fail("ROOT_PREREQUISITES_UNPROVEN", "prerequisite receipt file trust differs")
+  const bytes = fs.readFileSync(PREREQUISITE_RECEIPT_PATH); let receipt
+  try { receipt = JSON.parse(bytes.toString("utf8")) } catch { fail("ROOT_PREREQUISITES_UNPROVEN", "prerequisite receipt is not JSON") }
+  if (!bytes.equals(Buffer.from(`${canonicalizeJcs(receipt)}\n`, "utf8"))) fail("ROOT_PREREQUISITES_UNPROVEN", "prerequisite receipt is not canonical JSON")
+  return { bytes, receipt }
+}
+
+export function inspectRootPrerequisiteReceiptEvidence(bytes, manifest, currentMachine) {
+  try {
+    const receipt = JSON.parse(Buffer.from(bytes).toString("utf8"))
+    if (!Buffer.from(bytes).equals(Buffer.from(`${canonicalizeJcs(receipt)}\n`, "utf8"))) fail("ROOT_PREREQUISITES_UNPROVEN", "prerequisite receipt is not canonical JSON")
+    exactKeys(receipt, ["schemaVersion", "status", "workOrderId", "transactionId", "authorityId", "completedAt", "machineIdSha256", "trustedMainCommit", "rootHandoffManifestSha256", "prerequisiteManifestJcsSha256", "appliedAssets", "authoritySha256", "inputsSha256", "launchAuthorityPublicKeySha256", "storage", "journalHeadSha256", "schedulerEnabled", "standingAuthority", "dispatchOccurred", "closedHashMutation", "executionAuthorized", "activationAuthorized"], "prerequisite receipt")
+    if (receipt.schemaVersion !== 1 || receipt.status !== "PREREQUISITES_VERIFIED" || receipt.workOrderId !== "WO-TF-REMOTE-DEV-OFFLOAD-001"
+      || !GUID.test(receipt.transactionId) || !GUID.test(receipt.authorityId) || !UTC.test(receipt.completedAt) || !Number.isFinite(Date.parse(receipt.completedAt))
+      || receipt.machineIdSha256 !== currentMachine || receipt.machineIdSha256 !== manifest.target?.machineIdSha256
+      || receipt.trustedMainCommit !== manifest.trustedMain?.commit || receipt.rootHandoffManifestSha256 !== jcsDigest(manifest)
+      || receipt.prerequisiteManifestJcsSha256 !== manifest.prerequisitePackage?.manifestJcsSha256 || !same(receipt.appliedAssets, manifest.appliedAssets)
+      || !SHA256.test(receipt.authoritySha256) || !SHA256.test(receipt.inputsSha256) || !SHA256.test(receipt.launchAuthorityPublicKeySha256)
+      || !same(receipt.storage, { mode: "VERIFY_ONLY", filesystemUuid: manifest.storage?.filesystemUuid, projectId: 734, hardLimitBytes: 85899345920 })
+      || !SHA256.test(receipt.journalHeadSha256) || receipt.schedulerEnabled !== false || receipt.standingAuthority !== false || receipt.dispatchOccurred !== false
+      || receipt.closedHashMutation !== false || receipt.executionAuthorized !== false || receipt.activationAuthorized !== false) fail("ROOT_PREREQUISITES_UNPROVEN", "canonical prerequisite receipt binding differs")
+    return { status: "ROOT_PREREQUISITES_VERIFIED", executionAuthorized: false, receiptSha256: crypto.createHash("sha256").update(bytes).digest("hex"), transactionId: receipt.transactionId, launchAuthorityPublicKeySha256: receipt.launchAuthorityPublicKeySha256 }
+  } catch (error) { return blocked(error) }
+}
+
+function proveRootPrerequisites() {
+  const manifest = JSON.parse(read(ARTIFACT_PATHS.rootPrerequisiteManifest)); const { bytes } = readRootPrerequisiteReceipt()
+  const currentMachine = crypto.createHash("sha256").update(fs.readFileSync("/etc/machine-id", "utf8").trim()).digest("hex")
+  const result = inspectRootPrerequisiteReceiptEvidence(bytes, manifest, currentMachine)
+  if (result.status !== "ROOT_PREREQUISITES_VERIFIED") fail("ROOT_PREREQUISITES_UNPROVEN", result.reasons?.[0]?.detail ?? "canonical prerequisite receipt differs")
+  return result
+}
+
 export async function authorizeRemoteDevActivation(authority, candidate) {
   try {
     const matched = validateRemoteDevActivationAuthority(authority, candidate)
@@ -370,10 +418,13 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
     if (controlPlane.status !== "CONTROL_PLANE_TRUSTED_MAIN_VERIFIED") fail(controlPlane.reasons?.[0]?.code ?? "TRUSTED_MAIN_UNPROVEN", controlPlane.reasons?.[0]?.detail ?? "control-plane trusted main is unproven")
     const criticalFiles = inspectActivationCriticalWorkingFiles(authority)
     if (criticalFiles.status !== "ACTIVATION_CRITICAL_FILES_VERIFIED") fail("TRUSTED_MAIN_UNPROVEN", criticalFiles.reasons?.[0]?.detail ?? "activation-critical working files are unproven")
+    const prerequisites = proveRootPrerequisites()
+    if (prerequisites.status !== "ROOT_PREREQUISITES_VERIFIED") fail("ROOT_PREREQUISITES_UNPROVEN", "root prerequisite receipt differs")
     const networkBoundary = await proveResidentAegisNetworkBoundary()
     if (networkBoundary.status !== "RESIDENT_NETWORK_BOUNDARY_VERIFIED") {
       fail("NETWORK_BOUNDARY_UNPROVEN", networkBoundary.reasons?.[0]?.detail ?? "fixed resident network boundary is unproven")
     }
+    if (networkBoundary.launchAuthorityPublicKeySha256 !== prerequisites.launchAuthorityPublicKeySha256) fail("ROOT_PREREQUISITES_UNPROVEN", "network launch authority differs from the durable prerequisite receipt")
 
     // Claims and leases are reachable only after the fixed resident network proof succeeds.
     const ledger = createLedgerProviders()
@@ -396,6 +447,8 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
       networkLauncherSha256: networkBoundary.launcherSha256,
       networkWorkerSha256: networkBoundary.workerSha256,
       networkLaunchAuthorityPublicKeySha256: networkBoundary.launchAuthorityPublicKeySha256,
+      rootPrerequisiteReceiptSha256: prerequisites.receiptSha256,
+      rootPrerequisiteTransactionId: prerequisites.transactionId,
       claimId: claim.claim_id,
       leaseId: lease.lease_id,
       leaseReleased: false,
@@ -413,6 +466,8 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
       networkLauncherSha256: networkBoundary.launcherSha256,
       networkWorkerSha256: networkBoundary.workerSha256,
       networkLaunchAuthorityPublicKeySha256: networkBoundary.launchAuthorityPublicKeySha256,
+      rootPrerequisiteReceiptSha256: prerequisites.receiptSha256,
+      rootPrerequisiteTransactionId: prerequisites.transactionId,
       session,
       schedulerActivated: false,
       standingAegisAuthority: false,

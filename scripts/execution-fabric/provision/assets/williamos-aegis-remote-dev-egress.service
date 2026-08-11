@@ -1,0 +1,18 @@
+[Unit]
+Description=WilliamOS AEGIS proof-specific direct-egress denial
+Before=williamos-aegis-remote-dev-broker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ExecStart=/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-egress-enforcer.mjs --enforce
+ExecStop=/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-egress-enforcer.mjs --enforce
+
+[Install]
+WantedBy=multi-user.target
