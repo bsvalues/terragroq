@@ -540,8 +540,11 @@ export function createStandingLedgerProviders({
     try {
       return await action()
     } finally {
-      fsApi.unlinkSync(mutationHolderPath)
-      fsApi.rmdirSync(mutationLockPath)
+      const releasePath = path.join(root, `mutation-release-${crypto.randomUUID()}`)
+      fsApi.renameSync(mutationLockPath, releasePath)
+      sync(root)
+      fsApi.unlinkSync(path.join(releasePath, "holder.json"))
+      fsApi.rmdirSync(releasePath)
       sync(root)
     }
   }
@@ -713,6 +716,9 @@ export function createStandingLedgerProviders({
     if (!DIGEST.test(evidence?.evidence_sha256 ?? "") || evidence?.status !== "FAILED_CLOSED" || evidence?.lease !== null) {
       fail("EVIDENCE_INVALID", "claim-only failure evidence is invalid")
     }
+    if (!recordDigestValid(evidence, "evidence_sha256")) {
+      fail("EVIDENCE_INVALID", "claim-only failure evidence digest does not match its payload")
+    }
     const key = sha256(canonicalBytes({
       authority_id: evidence.authority_id,
       admission_id: evidence.admission?.admission_id,
@@ -741,7 +747,9 @@ export function createStandingLedgerProviders({
   })
 
   const persistResult = async (evidence) => withMutationLock(async () => {
-    if (!DIGEST.test(evidence?.evidence_sha256 ?? "")) fail("EVIDENCE_INVALID", "completion evidence digest is invalid")
+    if (!DIGEST.test(evidence?.evidence_sha256 ?? "") || !recordDigestValid(evidence, "evidence_sha256")) {
+      fail("EVIDENCE_INVALID", "completion evidence digest is invalid")
+    }
     const active = readLedgerWith(fsApi, activePath, uid, validateFile)
     if (!recordDigestValid(active, "lease_record_sha256")) fail("LEDGER_UNTRUSTED", "completion has no valid active lease")
     if (evidence.authority_sha256 !== active.authority_sha256

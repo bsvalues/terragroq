@@ -271,8 +271,8 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
 
     const driftedFs = new Proxy(fs, {
       get(target, property, receiver) {
-        if (property === "lstatSync") return (candidate: fs.PathLike) => {
-          const stats = fs.lstatSync(candidate)
+        if (property === "fstatSync") return (descriptor: number) => {
+          const stats = fs.fstatSync(descriptor)
           return new Proxy(stats, {
             get(statsTarget, statsProperty, statsReceiver) {
               if (statsProperty === "ino") return statsTarget.ino + 1
@@ -349,7 +349,14 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
       evidence_sha256: evidence.evidence_sha256,
     })
     expect(providers.runtimeEvidence().result_sha256).toBe(evidence.evidence_sha256)
-    await expect(providers.persistClaimFailure({ ...evidence, result: "CHANGED" })).rejects.toThrow("LEDGER_UNTRUSTED")
+    await expect(providers.persistClaimFailure({ ...evidence, result: "CHANGED" })).rejects.toThrow("EVIDENCE_INVALID")
+
+    const freshProviders = ledger(tempRoot("aegis-standing-claim-failure-tamper-"))
+    await freshProviders.claimAdmission(binding)
+    await expect(freshProviders.persistClaimFailure({
+      ...evidence,
+      result: "CHANGED",
+    })).rejects.toThrow("EVIDENCE_INVALID")
   })
 
   it("fails closed on a malformed retained journal claim", async () => {
@@ -387,6 +394,37 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     expect(fs.existsSync(lockRoot)).toBe(false)
     expect(fs.readdirSync(root).some((name) => name.startsWith("mutation-lock-candidate-"))).toBe(false)
     expect(fs.readdirSync(root).some((name) => name.startsWith("mutation-recovery-"))).toBe(false)
+  })
+
+  it("atomically releases only the acquired mutation lock", async () => {
+    const root = tempRoot("aegis-standing-mutation-release-")
+    const lockRoot = path.join(root, "standing-hash-mutation.lock")
+    const renameSync = fs.renameSync.bind(fs)
+    let replacementCreated = false
+    const injectedFs = new Proxy(fs, {
+      get(target, property, receiver) {
+        if (property === "renameSync") return (source: fs.PathLike, destination: fs.PathLike) => {
+          renameSync(source, destination)
+          if (path.resolve(String(source)) === path.resolve(lockRoot)
+            && path.basename(String(destination)).startsWith("mutation-release-")) {
+            fs.mkdirSync(lockRoot, { mode: 0o700 })
+            fs.writeFileSync(path.join(lockRoot, "holder.json"), `${JSON.stringify({
+              pid: 42,
+              boot_id: "replacement-boot",
+              process_start_ticks: "42",
+            })}\n`)
+            replacementCreated = true
+          }
+        }
+        return Reflect.get(target, property, receiver)
+      },
+    }) as typeof fs
+    const providers = ledger(root, { fsApi: injectedFs })
+
+    await expect(providers.claimAdmission(claimBinding())).resolves.toMatchObject({ claimed: true })
+    expect(replacementCreated).toBe(true)
+    expect(fs.existsSync(path.join(lockRoot, "holder.json"))).toBe(true)
+    expect(fs.readdirSync(root).some((name) => name.startsWith("mutation-release-"))).toBe(false)
   })
 
   it("enforces one exact lease and strictly increasing fencing", async () => {
@@ -504,6 +542,13 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     fs.writeFileSync(resultPath, `${JSON.stringify(retained)}\n`)
     await expect(providers.persistResult(evidence)).rejects.toThrow("LEDGER_UNTRUSTED")
     await expect(providers.releaseLease(binding)).rejects.toThrow("LEDGER_UNTRUSTED")
+
+    const freshRoot = tempRoot("aegis-standing-result-digest-tamper-")
+    const freshProviders = ledger(freshRoot)
+    await freshProviders.claimAdmission(claimBinding())
+    await freshProviders.acquireLease(binding)
+    await expect(freshProviders.persistResult({ ...evidence, result: "CHANGED" })).rejects.toThrow("EVIDENCE_INVALID")
+    expect(fs.readdirSync(freshRoot).filter((name) => name.startsWith("result-"))).toHaveLength(0)
   })
 
   it("rejects a conflicting retained release without removing the active lease", async () => {

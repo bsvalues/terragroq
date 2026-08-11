@@ -408,8 +408,11 @@ describe("AEGIS standing HASH_VERIFY runtime", () => {
     const source = fs.readFileSync(path.join(
       process.cwd(), "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs",
     ), "utf8")
-    expect(source.indexOf("verification = verifyAegisHashBytes"))
-      .toBeLessThan(source.indexOf("const completedAt = finiteClock(options.now)"))
+    const hashIndex = source.indexOf("verification = verifyAegisHashBytes")
+    const completedIndex = source.indexOf("const completedAt = finiteClock(options.now)")
+    expect(hashIndex).toBeGreaterThanOrEqual(0)
+    expect(completedIndex).toBeGreaterThanOrEqual(0)
+    expect(hashIndex).toBeLessThan(completedIndex)
   })
 
   it("persists immutable completion evidence before releasing and retains the lease on persistence failure", async () => {
