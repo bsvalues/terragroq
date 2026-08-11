@@ -85,7 +85,7 @@ type NodeValue = {
 }
 
 function injectedWindowsFs(
-  existing: Array<{ target: string, kind?: NodeValue["kind"], bytes?: string }> = [],
+  existing: Array<{ target: string, kind?: NodeValue["kind"], bytes?: string, nlink?: number }> = [],
   temporaryUnlinkFailures = 0,
 ) {
   const normalize = (candidate: fs.PathLike) => path.win32.normalize(String(candidate)).toLowerCase()
@@ -111,7 +111,10 @@ function injectedWindowsFs(
   add(SSH_KEYGEN_PATH, "file")
   add(ICACLS_PATH, "file")
   add(WHOAMI_PATH, "file")
-  for (const item of existing) add(item.target, item.kind ?? "file", item.bytes ?? "existing")
+  for (const item of existing) {
+    add(item.target, item.kind ?? "file", item.bytes ?? "existing")
+    if (item.nlink !== undefined) nodes.get(normalize(item.target))!.nlink = item.nlink
+  }
 
   const missing = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" })
   const stats = (value: NodeValue) => ({
@@ -300,6 +303,33 @@ describe("injected Hermes AEGIS standing HASH dedicated-key generation", () => {
     })
     expect(value.spawnSyncApi).not.toHaveBeenCalled()
     expect(value.virtual.events.filter(({ kind }) => ["create", "write", "link", "unlink", "spawn"].includes(kind))).toEqual([])
+  })
+
+  it("accepts Windows component-store hard links for the fixed system executables", () => {
+    const value = harness({
+      existing: [
+        { target: WHOAMI_PATH, nlink: 2 },
+        { target: SSH_KEYGEN_PATH, nlink: 2 },
+        { target: ICACLS_PATH, nlink: 2 },
+      ],
+    })
+
+    expect(createHermesAegisStandingHashKey(value.options)).toMatchObject({ status: "DRY_RUN" })
+    expect(value.spawnSyncApi).not.toHaveBeenCalled()
+  })
+
+  it("still rejects an indirect fixed system executable", () => {
+    const value = harness({ existing: [{ target: WHOAMI_PATH, kind: "symlink" }] })
+
+    expect(errorCode(() => createHermesAegisStandingHashKey(value.options))).toBe("HERMES_KEY_EXECUTABLE_UNTRUSTED")
+    expect(value.spawnSyncApi).not.toHaveBeenCalled()
+  })
+
+  it.each([0, Number.NaN])("rejects malformed fixed-executable link count %s", (nlink) => {
+    const value = harness({ existing: [{ target: WHOAMI_PATH, nlink }] })
+
+    expect(errorCode(() => createHermesAegisStandingHashKey(value.options))).toBe("HERMES_KEY_EXECUTABLE_UNTRUSTED")
+    expect(value.spawnSyncApi).not.toHaveBeenCalled()
   })
 
   it.each([
