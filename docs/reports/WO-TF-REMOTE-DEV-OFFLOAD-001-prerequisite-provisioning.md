@@ -111,7 +111,7 @@ the first mutation.
    forced command. The exact key fingerprint is an owner input.
 3. **Trusted repositories**: reconcile
    `/var/lib/williamos/fabric/workspaces/terragroq` to clean remote-equal commit
-   `d5e725e47dc32f8ea113d0a0168e956bac84659e`; create root-reviewed bare mirror
+   `fea7785fd480d3b5f107c286cc8eb1bac6d04793`; create root-reviewed bare mirror
    `/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git` and prove
    commit `ffd2fa35f5152de2b95e7f63b220050d18193d7a` exists. Drift or local work
    blocks; it is never reset away.
