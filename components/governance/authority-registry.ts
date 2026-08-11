@@ -18,6 +18,7 @@ export type AuthorityCategory =
   | "PRODUCTION_DEPLOY"
   | "CLOUD_CONFIG"
   | "GITHUB_WRITE"
+  | "AEGIS_BOUNDED_COMPUTE"
   | "AUTONOMY"
   | "LAN_EXPOSURE"
   | "SECRET_HANDLING"
@@ -50,6 +51,7 @@ export type AuthorityGateId =
   | "PORT_STATUS_GATE"
   | "FILESYSTEM_METADATA_GATE"
   | "GITHUB_METADATA_GATE"
+  | "AEGIS_BOUNDED_COMPUTE_GATE"
   | "START_STOP_GATE"
   | "SERVICE_REGISTRATION_GATE"
   | "SCHEDULER_GATE"
@@ -75,6 +77,29 @@ export type AuthorityRecord = {
   relatedEvidence: string[]
   status: "active" | "blocked" | "prepared" | "future-gate"
   riskLevel: RiskLevel
+  boundedComputeGrant?: AegisBoundedComputeGrant
+}
+
+export type AegisWorkloadClass = "CI_BUILD_TEST" | "HASH_VERIFY" | "COMPRESSION"
+
+export type AegisBoundedComputeGrant = {
+  node: "aegis"
+  riskClasses: ["R0", "R1"]
+  workloadClasses: AegisWorkloadClass[]
+  ceilings: {
+    maximumConcurrency: 1
+    maximumCpuThreads: 12
+    maximumMemoryBytes: 8589934592
+    maximumRuntimeMs: 1800000
+    maximumOutputBytes: 536870912
+    maximumScratchWriteBytes: 5368709120
+    minimumScratchReserveBytes: 107374182400
+    network: "none"
+    executionIdentity: "non-root-no-sudo"
+  }
+  requiredJobBindings: string[]
+  adapterAvailability: Record<AegisWorkloadClass, string>
+  globalSchedulerEnabled: false
 }
 
 export type AuthorityGateRecord = {
@@ -82,7 +107,7 @@ export type AuthorityGateRecord = {
   title: string
   category: AuthorityCategory
   level: AuthorityLevel
-  status: "open-for-display" | "blocked" | "future-gate"
+  status: "open-for-display" | "open-for-bounded-jobs" | "blocked" | "future-gate"
   summary: string
   requiredOwnerDecision: string
   requiredEvidence: string[]
@@ -148,6 +173,7 @@ export type AuthorityRegistrySurface = {
   productionDeployGates: AuthorityGateRecord[]
   dbSchemaGates: AuthorityGateRecord[]
   autonomyWorkerGates: AuthorityGateRecord[]
+  aegisBoundedComputeGates: AuthorityGateRecord[]
   safetyProofCards: AuthoritySafetyProofCard[]
   ownerOperationEvidence: OwnerOperationEvidenceModel
   navigation: {
@@ -220,6 +246,7 @@ export const AUTHORITY_DOCTRINE = {
     "Brain Council recommends but does not authorize execution.",
     "Local OMEN remains read-only, manual-only, and localhost-only.",
     "Hermes, MCP, workers, and autonomy remain blocked until separate activation gates.",
+    "Approved WilliamOS-native R0/R1 AEGIS bounded compute is a narrow exception and does not open generic worker, command-runner, scheduler, runtime, storage, network, or remote-system authority.",
     "WilliamOS may display authority state.",
     "WilliamOS must not grant itself authority.",
     "Codex does not self-authorize.",
@@ -244,6 +271,7 @@ export const AUTHORITY_CATEGORIES = [
   ["PRODUCTION_DEPLOY", "owner-decision-required", "Production deploy, cutover, or release remains blocked."],
   ["CLOUD_CONFIG", "owner-decision-required", "Azure, Vercel, DNS, and cloud settings changes remain blocked."],
   ["GITHUB_WRITE", "owner-decision-required", "GitHub write actions from the UI or runtime remain blocked."],
+  ["AEGIS_BOUNDED_COMPUTE", "allowed-by-current-lane", "Exact WilliamOS-native R0/R1 AEGIS jobs may use the standing bounded-compute grant only through separately reviewed active adapters and complete per-job bindings."],
   ["AUTONOMY", "owner-decision-required", "Hermes, MCP, workers, schedulers, and autonomous loops remain blocked."],
   ["LAN_EXPOSURE", "owner-decision-required", "LAN or public exposure requires a separate safety gate."],
   ["SECRET_HANDLING", "owner-decision-required", "Secret creation, inspection, printing, storage, or transfer requires authority."],
@@ -269,6 +297,73 @@ export const AUTHORITY_RECORDS: AuthorityRecord[] = [
     relatedEvidence: ["docs/reports/WO-AUTHORITY-016-authority-registry-rollup.md"],
     status: "active",
     riskLevel: "low",
+  },
+  {
+    authorityId: "authority-aegis-bounded-compute-standing",
+    title: "AEGIS Standing Bounded Compute Authority",
+    category: "AEGIS_BOUNDED_COMPUTE",
+    level: "allowed-by-current-lane",
+    scope: "WilliamOS-native R0/R1 compute on AEGIS for CI_BUILD_TEST, HASH_VERIFY, or COMPRESSION under exact per-job bindings and fixed resource ceilings.",
+    allowedActions: [
+      "Run one exact approved CI_BUILD_TEST, HASH_VERIFY, or COMPRESSION job through a separately reviewed active adapter",
+      "Use job-scoped NVMe scratch within the fixed write and reserve ceilings",
+      "Capture bounded result and cleanup evidence",
+    ],
+    blockedActions: [
+      "Generic worker activation",
+      "Arbitrary command execution",
+      "Global scheduler activation",
+      "Network access",
+      "Root or sudo execution",
+      "Storage, NAS, or backup authority",
+      "Remote-system access or mutation",
+      "CI_BUILD_TEST or COMPRESSION without a separately reviewed active adapter",
+    ],
+    requiredEvidence: [
+      "Exact approved owner outcome and Work Order",
+      "Exact reviewed source, template, operation profile, and adapter",
+      "Complete evidence chain",
+      "Exclusive lease, current fence, and single-use claim",
+    ],
+    ownerDecisionRequired: false,
+    relatedWorkOrders: ["PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001", "Issue #586"],
+    relatedEvidence: ["docs/reports/WILLIAMOS-EXECUTION-FABRIC-AEGIS-STANDING-COMPUTE-AUTHORITY-001.md"],
+    status: "active",
+    riskLevel: "medium",
+    boundedComputeGrant: {
+      node: "aegis",
+      riskClasses: ["R0", "R1"],
+      workloadClasses: ["CI_BUILD_TEST", "HASH_VERIFY", "COMPRESSION"],
+      ceilings: {
+        maximumConcurrency: 1,
+        maximumCpuThreads: 12,
+        maximumMemoryBytes: 8589934592,
+        maximumRuntimeMs: 1800000,
+        maximumOutputBytes: 536870912,
+        maximumScratchWriteBytes: 5368709120,
+        minimumScratchReserveBytes: 107374182400,
+        network: "none",
+        executionIdentity: "non-root-no-sudo",
+      },
+      requiredJobBindings: [
+        "exact-approved-owner-outcome",
+        "exact-approved-work-order",
+        "exact-reviewed-source",
+        "exact-approved-template",
+        "exact-approved-operation-profile",
+        "exact-separately-reviewed-active-adapter",
+        "complete-evidence-chain",
+        "exclusive-lease",
+        "current-fence",
+        "single-use-claim",
+      ],
+      adapterAvailability: {
+        CI_BUILD_TEST: "BLOCKED_NO_SEPARATELY_REVIEWED_ACTIVE_ADAPTER",
+        HASH_VERIFY: "BLOCKED_STANDING_INTEGRATION_NOT_ACTIVE",
+        COMPRESSION: "BLOCKED_NO_SEPARATELY_REVIEWED_ACTIVE_ADAPTER",
+      },
+      globalSchedulerEnabled: false,
+    },
   },
   {
     authorityId: "authority-local-runtime-mutation",
@@ -412,6 +507,33 @@ function gate(input: AuthorityGateRecord): AuthorityGateRecord {
 }
 
 export const AUTHORITY_GATES: AuthorityGateRecord[] = [
+  gate({
+    gateId: "AEGIS_BOUNDED_COMPUTE_GATE",
+    title: "AEGIS standing bounded compute gate",
+    category: "AEGIS_BOUNDED_COMPUTE",
+    level: "allowed-by-current-lane",
+    status: "open-for-bounded-jobs",
+    summary: "The owner grants WilliamOS-native R0/R1 AEGIS compute only for exact CI_BUILD_TEST, HASH_VERIFY, and COMPRESSION jobs that satisfy every binding and ceiling; this is not generic execution authority.",
+    requiredOwnerDecision: "No additional owner decision is required for an exact job inside this grant; any expansion requires a new explicit owner decision.",
+    requiredEvidence: [
+      "Exact approved outcome and Work Order",
+      "Exact reviewed source, template, profile, and separately reviewed active adapter",
+      "Complete evidence chain",
+      "Exclusive lease, current fence, and single-use claim",
+    ],
+    prohibitedActions: [
+      "unapproved workload class",
+      "generic worker activation",
+      "arbitrary command execution",
+      "global scheduler activation",
+      "network access",
+      "root or sudo execution",
+      "storage/NAS/backup authority",
+      "remote-system access or mutation",
+    ],
+    safeNextAction: "Admit only an exact bound job through a separately reviewed active adapter; keep CI_BUILD_TEST and COMPRESSION blocked until such adapters exist.",
+    riskLevel: "medium",
+  }),
   gate({
     gateId: "LOCAL_RUNTIME_METADATA_GATE",
     title: "Local runtime metadata gate",
@@ -832,6 +954,13 @@ export const OWNER_DECISIONS: OwnerDecisionRecord[] = [
 
 export const WORK_ORDER_AUTHORITY_LINKS: AuthorityLinkRecord[] = [
   {
+    label: "AEGIS standing bounded compute",
+    authorityId: "authority-aegis-bounded-compute-standing",
+    gateId: "AEGIS_BOUNDED_COMPUTE_GATE",
+    relatedItem: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 / Issue #586",
+    description: "The standing grant covers only exact WilliamOS-native R0/R1 bounded-compute jobs with complete bindings; it does not activate a scheduler or generic worker.",
+  },
+  {
     label: "WOE detail surfaces",
     authorityId: "authority-read-only-registry",
     gateId: "LOCAL_RUNTIME_METADATA_GATE",
@@ -848,6 +977,15 @@ export const WORK_ORDER_AUTHORITY_LINKS: AuthorityLinkRecord[] = [
 ]
 
 export const EVIDENCE_AUTHORITY_LINKS: AuthorityLinkRecord[] = [
+  {
+    label: "AEGIS standing compute authority record",
+    authorityId: "authority-aegis-bounded-compute-standing",
+    gateId: "AEGIS_BOUNDED_COMPUTE_GATE",
+    relatedItem: "docs/reports/WILLIAMOS-EXECUTION-FABRIC-AEGIS-STANDING-COMPUTE-AUTHORITY-001.md",
+    description: "Records the owner's narrow standing compute grant, exact ceilings, per-job admission bindings, and unchanged broad blocks.",
+    safeNextAction: "Use only for an exact eligible job with an active reviewed adapter.",
+    prohibitedAction: "Infer generic execution, scheduler, storage, network, or remote-system authority.",
+  },
   {
     label: "Authority registry proof",
     authorityId: "authority-read-only-registry",
@@ -1038,6 +1176,7 @@ export function getAuthorityRegistrySurface(): AuthorityRegistrySurface {
       "AUTONOMOUS_LOOP_GATE",
       "OPERATOR_HOST_GATE",
     ]),
+    aegisBoundedComputeGates: gates(["AEGIS_BOUNDED_COMPUTE_GATE"]),
     safetyProofCards: AUTHORITY_SAFETY_PROOF_CARDS,
     ownerOperationEvidence: createOwnerOperationEvidencePlaceholder({
       surface: "authority",

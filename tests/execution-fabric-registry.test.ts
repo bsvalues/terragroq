@@ -375,7 +375,33 @@ describe("Execution Fabric registry schema and identity", () => {
         "nas-service-and-authority-pending",
       ]),
     })
-    expect((aegis.authority as JsonObject).allow).toEqual(expect.arrayContaining(["cpu-batch-candidate", "docker-worker-candidate"]))
+    expect((aegis.authority as JsonObject).allow).toEqual([
+      "limited-standing-compute-authority",
+      "ci-build-test-when-adapter-active",
+      "hash-verify-when-standing-integration-active",
+      "compression-when-adapter-active",
+    ])
+    expect((aegis.authority as JsonObject).bounded_compute).toEqual(expect.objectContaining({
+      schema: "aegis-standing-compute-authority/1",
+      authority_ref: "github-issue-586",
+      state: "granted",
+      repository: "bsvalues/terragroq",
+      risk_classes: ["R0", "R1"],
+      workload_classes: ["CI_BUILD_TEST", "HASH_VERIFY", "COMPRESSION"],
+      maximum_concurrency: 1,
+      maximum_cpu_threads: 12,
+      maximum_memory_bytes: 8589934592,
+      maximum_runtime_ms: 1800000,
+      maximum_output_bytes: 536870912,
+      maximum_scratch_write_bytes: 5368709120,
+      minimum_free_bytes_after_job: 107374182400,
+      network_scope: "none",
+      privilege: "non-root-no-sudo",
+      scheduler_state: "disabled",
+      scheduler_authority: "not-granted",
+      autonomous_work_selection: false,
+      durable_storage_authority: false,
+    }))
     expect((aegis.authority as JsonObject).deny).toEqual(expect.arrayContaining([
       "authoritative-durable-state",
       "backup-archive-execution-authority-not-granted",
@@ -1267,6 +1293,17 @@ describe("Execution Fabric semantic invariants", () => {
     expect(result.status).toBe(2)
     expect(result.stderr).toContain(`omen: duplicate authority ${list} entry`)
     expect(result.registry).toBeNull()
+  })
+
+  it("rejects drift in the AEGIS bounded compute authority envelope", () => {
+    const invalidSeed = clone(canonicalSeed)
+    const aegis = nodeById(invalidSeed, "aegis")
+    ;((aegis.authority as JsonObject).bounded_compute as JsonObject).maximum_cpu_threads = 13
+
+    const result = assemble(invalidSeed)
+
+    expect(result.status).toBe(2)
+    expect(result.stderr).toContain("aegis: bounded compute authority differs from canonical v0.2 policy")
   })
 
   it.each([
