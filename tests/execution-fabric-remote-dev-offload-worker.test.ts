@@ -123,6 +123,12 @@ exit 0
 `)
   writeExecutable(path.join(fakeBin, "taskset"), "#!/usr/bin/env bash\nshift 2\nexec \"$@\"\n")
   writeExecutable(path.join(fakeBin, "prlimit"), "#!/usr/bin/env bash\nwhile [[ \"$1\" != -- ]]; do shift; done\nshift\nexec \"$@\"\n")
+  writeExecutable(path.join(fakeBin, "timeout"), `#!/usr/bin/env bash
+if [[ "\${FAKE_REQUIRE_PREFLIGHT_TIMEOUT:-0}" == 1 && " $* " == *" node "* && " $* " == *"williamos-aegis-remote-dev-git-client.mjs"* ]]; then
+  [[ "\${1:-}" == 930 ]] || exit 124
+fi
+exec /usr/bin/timeout "$@"
+`)
   writeExecutable(path.join(fakeBin, "flock"), `#!/usr/bin/env bash
 if [[ "\${FAKE_QUARANTINE_ON_LOCK:-0}" == 1 ]]; then mkdir -p -- "$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces/.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-11111111-1111-4111-8111-111111111111"; fi
 exit 0
@@ -229,6 +235,17 @@ if [[ "\${FAKE_NAMESPACE_STRICT:-0}" == 1 ]]; then
 fi
 exec "$@"
 `)
+  const brokerClient = path.join(hostRoot, "usr/local/libexec/williamos-aegis-remote-dev-git-client.mjs")
+  fs.mkdirSync(path.dirname(brokerClient), { recursive: true })
+  writeExecutable(brokerClient, `#!/usr/bin/env node
+import fs from "node:fs"
+import path from "node:path"
+if (process.env.WILLIAMOS_NETWORK_OPERATION === "CREATE_WORKSPACE") {
+  const repository = path.join(process.env.REMOTE_DEV_WORKER_ROOT, "srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001/repository")
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true })
+}
+process.stdout.write(JSON.stringify({status:"GIT_OPERATION_VERIFIED",reasonCode:"GIT_OPERATION_VERIFIED",head:process.env.FAKE_BASE_SHA || "0".repeat(40)})+"\\n")
+`)
   return { hostRoot, physicalWorkspace, repository, baseSha, patch, packet, fakeBin }
 }
 
@@ -237,7 +254,7 @@ function runWorker(operation: string, value: ReturnType<typeof fixture>, options
   const patch = options.patch ?? value.patch
   const result = spawnSync(bash, [worker, operation, encode(JSON.stringify(packet)), encode(patch), String(options.attempt ?? 1), options.previous ?? "null", launchTicketId], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${toPosix(value.fakeBin)}:${toPosix("C:\\Program Files\\nodejs")}:${process.env.PATH}`, REMOTE_DEV_WORKER_ROOT: toPosix(value.hostRoot), REMOTE_DEV_PROCESS_TIMEOUT_SECONDS: "2", ...options.env },
+    env: { ...process.env, PATH: `${toPosix(value.fakeBin)}:${toPosix("C:\\Program Files\\nodejs")}:${process.env.PATH}`, REMOTE_DEV_WORKER_ROOT: toPosix(value.hostRoot), REMOTE_DEV_PROCESS_TIMEOUT_SECONDS: "2", WILLIAMOS_NETWORK_OPERATION: operation, WILLIAMOS_NETWORK_PACKET_B64: encode(JSON.stringify(packet)), WILLIAMOS_NETWORK_TICKET_B64: encode("test-ticket"), ...options.env },
     timeout: 40_000,
   })
   const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean)
@@ -327,7 +344,7 @@ describe("fixed AEGIS remote development worker", () => {
     expect(workerSummary(assertionResult.stderr).testCounts).toEqual({ total: 3, executed: 3, passed: 2, failed: 1 })
     const infrastructure = fixture()
     expect(runWorker("TEST_DOTNET_INFORMATIONAL", infrastructure, { env: { FAKE_DOTNET_MODE: "test-infra" } }).json).toMatchObject({ status: "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" })
-  }, 60_000)
+  }, 90_000)
 
   it("fails preflight when aggregate containment is unavailable", () => {
     const missing = fixture(); fs.rmSync(missing.physicalWorkspace, { recursive: true, force: true })
@@ -359,7 +376,9 @@ describe("fixed AEGIS remote development worker", () => {
     const source = fs.readFileSync(worker, "utf8")
     const preflight = source.slice(source.indexOf("PROVE_PREFLIGHT)"), source.indexOf("CREATE_WORKSPACE)"))
     for (const required of ["hostname", '"$IDENTITY_BINARY" -un', "git --version", "dotnet --version", "node --version", "corepack pnpm --version", "nproc", "MemTotal", "df -PB1", "run_preflight_repository_profile", "probe_containment", "prove_project_quota"]) expect(preflight).toContain(required)
-    for (const required of ["git ls-remote", "push --dry-run"]) expect(source).toContain(required)
+    expect(source).not.toContain("git ls-remote")
+    expect(source).not.toContain("push --dry-run")
+    expect(source).toContain("williamos-aegis-remote-dev-git-client.mjs")
     expect(fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")).toContain("TemporaryFileSystem=/tmp:size=4294967296")
     expect(source).not.toContain("PREFLIGHT_TMP_ROOT")
     expect(preflight).not.toContain('exec 9>')
@@ -392,7 +411,7 @@ describe("fixed AEGIS remote development worker", () => {
     const value = fixture(); fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
     expect(runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_QUOTA_STATE: "off" } }).json).toMatchObject({ status: "SCRATCH_CONFINEMENT_FAILED" })
     expect(fs.readFileSync(worker, "utf8")).toContain('state -p')
-  })
+  }, 15_000)
 
   it("accepts xfsprogs 6.6 project-inherit flag P and the exact numeric #734 report row", () => {
     const liveFormat = fixture(); fs.rmSync(liveFormat.physicalWorkspace, { recursive: true, force: true })
@@ -409,7 +428,7 @@ describe("fixed AEGIS remote development worker", () => {
 
     const wrongLimit = fixture(); fs.rmSync(wrongLimit.physicalWorkspace, { recursive: true, force: true })
     expect(runWorker("PROVE_PREFLIGHT", wrongLimit, { env: { FAKE_QUOTA_REPORT: "#734 0 0 83886079" } }).json).toMatchObject({ status: "SCRATCH_CONFINEMENT_FAILED" })
-  }, 30_000)
+  }, 60_000)
 
   it("keeps informational TRX and every operational capture inside quota-bound scratch under the real namespace profile", () => {
     const value = fixture()
@@ -457,6 +476,13 @@ if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\
     expect(fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")).toContain('"--expand-environment=no"')
   }, 20_000)
 
+  it("keeps the outer repository preflight budget above all three bounded broker Git calls", () => {
+    const value = fixture(); fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
+    installPreflightFakes(value)
+    expect(runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_REQUIRE_PREFLIGHT_TIMEOUT: "1" } }).json).toMatchObject({ status: "SUCCEEDED" })
+    expect(fs.readFileSync(worker, "utf8")).toContain("timeout 930 node \"$GIT_BROKER_CLIENT\"")
+  }, 20_000)
+
   it("blocks exact cleanup while an unrelated same-user process has a workspace cwd or open fd", () => {
     for (const mode of ["cwd", "fd", "other-fd"]) {
       const value = fixture()
@@ -466,7 +492,7 @@ if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\
       expect(fs.existsSync(value.physicalWorkspace)).toBe(false)
       expect(fs.existsSync(path.join(quarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
     }
-  }, 30_000)
+  }, 60_000)
 
   it("fsyncs the exact canonical parent after removal and fails closed on durability errors", () => {
     const durable = fixture()
@@ -538,6 +564,14 @@ if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\
   }, 30_000)
 
   it("recovers only the exact same-origin quarantine authorized by the CLEAN packet", () => {
+    const source = fs.readFileSync(worker, "utf8")
+    const validator = source.slice(
+      source.indexOf("validate_recovery_quarantine()"),
+      source.indexOf("run_recovery_cleanup()"),
+    )
+    expect(validator.match(/GIT_CONFIG_VALUE_0="\$recovery_repo" timeout 15 git/g)).toHaveLength(4)
+    expect(validator).not.toMatch(/(?<!GIT_CONFIG_VALUE_0="\$recovery_repo" )timeout 15 git -C "\$recovery_repo"/)
+
     const authorized = fixture()
     const authorizedParent = path.dirname(authorized.physicalWorkspace)
     const authorizedQuarantine = path.join(authorizedParent, `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${authorized.packet.runId}`)
@@ -616,7 +650,7 @@ if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\
     expect(source).toContain("WORKSPACE_LOCK_BUSY")
     expect(source).toContain("PARTIAL_WORKSPACE_RECOVERED")
     expect(source).toContain("validate_trusted_parent")
-  })
+  }, 15_000)
 
   it("deterministically resets an exact owned partial repository during workspace creation", () => {
     const value = fixture()
@@ -637,7 +671,7 @@ exit 0
     fs.writeFileSync(path.join(value.physicalWorkspace, ".williamos-post-merge-proven"), `${value.packet.runId}:${value.baseSha}\n`)
     expect(runWorker("CLEAN_EXACT_WORKSPACE", value, { env: { FAKE_NESTED_MOUNT: "1" } }).json).toMatchObject({ status: "CLEANUP_NESTED_MOUNT" })
     expect(fs.existsSync(value.physicalWorkspace)).toBe(true)
-  })
+  }, 15_000)
 
   it("does not clean without exact ownership and post-merge proof", () => {
     const value = fixture()

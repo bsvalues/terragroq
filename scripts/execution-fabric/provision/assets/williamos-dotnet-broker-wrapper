@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ticket="${WILLIAMOS_NETWORK_TICKET_B64:-}"
+operation="${WILLIAMOS_NETWORK_OPERATION:-}"
+case "$operation" in
+  RESTORE_DOTNET)
+    [[ -n "$ticket" && "$ticket" =~ ^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$ ]] || exit 64
+    expected="$(/usr/bin/node -e 'process.stdout.write(`http://WilliamOS:${encodeURIComponent(process.argv[1])}@127.0.0.1:17734`)' "$ticket")"
+    [[ "${HTTPS_PROXY:-}" == "$expected" && "${https_proxy:-}" == "$expected" && -z "${NO_PROXY:-}" && -z "${no_proxy:-}" ]] || exit 64
+    ;;
+  PROVE_PREFLIGHT)
+    [[ $# == 1 && "$1" == "--version" && -z "${HTTPS_PROXY:-}${https_proxy:-}${NO_PROXY:-}${no_proxy:-}" ]] || exit 64
+    ;;
+  TEST_DOTNET_INFORMATIONAL|BUILD_DOTNET_RELEASE)
+    [[ -z "$ticket" && -z "${HTTPS_PROXY:-}${https_proxy:-}${NO_PROXY:-}${no_proxy:-}" ]] || exit 64
+    ;;
+  *) exit 64 ;;
+esac
+exec /usr/share/dotnet/dotnet "$@"

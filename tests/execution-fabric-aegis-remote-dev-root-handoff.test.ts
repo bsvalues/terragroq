@@ -1,0 +1,510 @@
+import crypto from "node:crypto"
+import fs from "node:fs"
+import path from "node:path"
+import { spawnSync } from "node:child_process"
+import { describe, expect, it } from "vitest"
+
+import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
+import {
+  buildRootHandoffPlan,
+  executeRootHandoffTransaction,
+  hasExactStorageMountSemantics,
+  inspectRootHandoffBundle,
+  isProofWorkerUnitName as isVerifierProofWorkerUnitName,
+  validateOwnerAuthority,
+  validateRootHandoffManifest,
+} from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
+import { exactNftBoundaryLines, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
+
+const root = path.resolve(import.meta.dirname, "..")
+const manifestPath = path.join(root, "config/execution-fabric/aegis-remote-dev-root-handoff.json")
+const loadManifest = () => JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+const sha = (bytes: crypto.BinaryLike) => crypto.createHash("sha256").update(bytes).digest("hex")
+const rawSha = (file: string) => {
+  const trusted = spawnSync("git", ["--no-replace-objects", "show", `HEAD:${file}`], { cwd: root, encoding: null, shell: false, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" } })
+  return sha(trusted.status === 0 ? trusted.stdout : fs.readFileSync(path.join(root, file)))
+}
+const currentRawSha = (file: string) => sha(fs.readFileSync(path.join(root, file)))
+
+function completeObservation(manifest = loadManifest()) {
+  return {
+    platform: { os: "linux", effectiveUid: 0, hostname: "aegis", machineIdSha256: manifest.target.machineIdSha256 },
+    bootstrap: { verifierRootOwned: true, verifierMode: "0555", ownerPublicKeyRootOwned: true, ownerPublicKeyMode: "0444" },
+    trustedMain: { remote: "https://github.com/bsvalues/terragroq.git", ref: "refs/heads/main", minimumCommit: manifest.trustedMain.minimumCommit, authorityCommit: "d".repeat(40), freshRemoteAuthorityEquality: true, exactCleanHead: true, replaceObjectsDisabled: true, configIsolation: true, criticalBytesMatch: true },
+    storage: {
+      verified: true, mutationRequested: false, backingImageRealPath: manifest.storage.backingImageRealPath,
+      backingImageBytes: manifest.storage.backingImageBytes, backingImageOwner: "root", backingImageGroup: "root", backingImageMode: "0600", backingImageNlink: 1,
+      backingHostFilesystem: "ext4", backingDevice: "2049", backingInode: "734", backingCtimeNs: "1786497600000000000",
+      loopDevice: "/dev/loop7", loopBackingImageRealPath: manifest.storage.backingImageRealPath, mountSource: "/dev/loop7", mountSourceMajorMinor: "7:7",
+      loopMajorMinor: "7:7", filesystemType: "xfs", filesystemUuid: manifest.storage.filesystemUuid, filesystemLabel: "AEGIS_RDEV",
+      mountPath: "/srv/william", mountOptions: ["rw", "nosuid", "nodev", "relatime", "attr2", "inode64", "prjquota"], projectId: 734,
+      projectInherit: true, quotaAccounting: true, quotaEnforcement: true, hardLimitBytes: 85899345920,
+    },
+    prerequisites: Object.fromEntries(manifest.steps.map((step: { id: string }) => [step.id, "ABSENT"])),
+    scheduler: { enabled: false, standingAuthority: false, dispatchOccurred: false },
+    closedHash: { changed: false },
+  }
+}
+
+function signedAuthority(manifest = loadManifest(), overrides: Record<string, unknown> = {}) {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519")
+  const payload = {
+    schemaVersion: 1,
+    authorityId: "b6726cab-1f13-47da-9d25-1a199bb52c0f",
+    transactionId: "2ac672df-eb80-48df-a887-e2bc26bf401b",
+    operation: "APPLY_PREREQUISITES",
+    workOrderId: "WO-TF-REMOTE-DEV-OFFLOAD-001",
+    issue: { repository: "bsvalues/terrafusion_os_1.0", number: 734 },
+    machineIdSha256: manifest.target.machineIdSha256,
+    bootId: "8f8c3601-3767-4d13-9cc6-b3a911a5fba9",
+      trustedMainCommit: "d".repeat(40),
+    rootHandoffManifestSha256: sha(Buffer.from(canonicalizeJcs(manifest), "utf8")),
+    verifierSha256: currentRawSha("scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"),
+    historicalPreflightManifestJcsSha256: manifest.prerequisitePackage.supersededPreflight.manifestJcsSha256,
+    appliedAssets: manifest.appliedAssets,
+    inputs: {
+      hermesTransportPublicKeySha256: "1".repeat(64), hermesTransportKeyFingerprint: "SHA256:real-hermes-key",
+      githubAccountPublicKeySha256: "2".repeat(64), githubAccountKeyFingerprint: "SHA256:real-github-key",
+      githubAccountPrivateKeySha256: "8".repeat(64), githubHostKnownHostsSha256: "9".repeat(64),
+      githubHostKeyFingerprint: "SHA256:real-github-host-key",
+      toolchain: {
+        git: { version: "2.43.0", source: "PREINSTALLED:/usr/bin/git", sha256: "3".repeat(64) },
+        node: { version: "22.18.0", source: "PREINSTALLED:/usr/bin/node", sha256: "4".repeat(64) },
+        dotnetSdk: { version: "8.0.423", source: "STAGED:dotnet-sdk-8.0.423-linux-x64.tar.gz", sha256: "5".repeat(64) },
+        corepack: { version: "0.34.0", source: "PREINSTALLED:/usr/bin/corepack", sha256: "6".repeat(64) },
+        pnpm: { version: "9.0.0", source: "PREINSTALLED:/usr/bin/pnpm", sha256: "7".repeat(64) },
+      },
+      launchSigningKeyAction: "GENERATE_ON_AEGIS",
+      launchSigningPrivateKeySha256: null, launchSigningPublicKeySha256: null, launchSigningKeyFingerprint: null,
+    },
+    storage: { mode: "VERIFY_ONLY", filesystemUuid: manifest.storage.filesystemUuid, projectId: 734, hardLimitBytes: 85899345920 },
+    allowedSteps: manifest.steps.map((step: { id: string }) => step.id),
+    rollback: { automatic: false, separateSignedAuthorityRequired: true, preserveEvidence: true, preserveStorage: true },
+    issuedAt: "2026-08-11T20:00:00.000Z", expiresAt: "2026-08-11T20:15:00.000Z",
+    resumeExpiresAt: "2026-08-11T20:45:00.000Z", singleUse: true,
+    ...overrides,
+  }
+  const bytes = Buffer.from(canonicalizeJcs(payload), "utf8")
+  return { envelope: { payload, signature: crypto.sign(null, bytes, privateKey).toString("base64") }, publicKey }
+}
+
+describe("AEGIS root-owned prerequisite handoff", () => {
+  it("pins the merged prerequisite generation and every applied asset exactly", () => {
+    const manifest = validateRootHandoffManifest(loadManifest())
+    expect(manifest.trustedMain.minimumCommit).toBe("bcca6069a917d706314f7c8cb7b3cd40cdd910da")
+    expect(manifest.prerequisitePackage).toMatchObject({ packageId: "aegis-remote-dev-root-prerequisites-issue-734-v2", semanticSupersession: true, historicalSuccessClaimed: false, supersededPreflight: { manifestJcsSha256: "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a" } })
+    expect(manifest.appliedAssets.length).toBeGreaterThanOrEqual(7)
+    for (const asset of manifest.appliedAssets) expect(rawSha(asset.source)).toBe(asset.sha256)
+    expect(inspectRootHandoffBundle(root)).toMatchObject({ status: "BUNDLE_INTERNAL_CONSISTENCY_ONLY", externalTrustRootRequired: true, applyAuthorized: false, drift: [] })
+  }, 15_000)
+
+  it("rejects manifest, asset, scheduler, standing-authority, and closed-HASH drift", () => {
+    for (const mutate of [
+      (v: any) => { v.trustedMain.minimumCommit = "0".repeat(40) },
+      (v: any) => { v.prerequisitePackage.supersededPreflight.manifestJcsSha256 = "0".repeat(64) },
+      (v: any) => { v.appliedAssets[0].sha256 = "0".repeat(64) },
+      (v: any) => { v.posture.generalSchedulerEnabled = true },
+      (v: any) => { v.posture.standingAegisAuthorityEnabled = true },
+      (v: any) => { v.posture.closedHashMutationAllowed = true },
+    ]) {
+      const value = loadManifest(); mutate(value)
+      expect(() => validateRootHandoffManifest(value)).toThrow()
+    }
+  })
+
+  it("requires signed exact single-use owner authority and rejects placeholders, drift, expiry, and reuse", () => {
+    const manifest = loadManifest(); const good = signedAuthority(manifest)
+    expect(validateOwnerAuthority(manifest, good.envelope, good.publicKey, "2026-08-11T20:05:00.000Z", false)).toMatchObject({ status: "OWNER_AUTHORITY_VERIFIED", applyAuthorized: false })
+    const cases = [
+      { inputs: { ...good.envelope.payload.inputs, hermesTransportKeyFingerprint: "SHA256:owner-approved-hermes-transport-key" } },
+      { machineIdSha256: "0".repeat(64) },
+      { verifierSha256: "0".repeat(64) },
+      { allowedSteps: good.envelope.payload.allowedSteps.slice(1) },
+      { storage: { ...good.envelope.payload.storage, mode: "MUTATE" } },
+    ]
+    for (const changed of cases) {
+      const candidate = signedAuthority(manifest, changed)
+      expect(validateOwnerAuthority(manifest, candidate.envelope, candidate.publicKey, "2026-08-11T20:05:00.000Z", false).status).toBe("BLOCKED")
+    }
+    expect(validateOwnerAuthority(manifest, good.envelope, good.publicKey, "2026-08-11T20:16:00.000Z", false).status).toBe("OWNER_AUTHORITY_RESUME_ONLY_VERIFIED")
+    expect(validateOwnerAuthority(manifest, good.envelope, good.publicKey, "2026-08-11T20:05:00.000Z", true).reasonCode).toBe("OWNER_AUTHORITY_CONSUMED")
+  })
+
+  it("blocks any storage absence or drift and never plans format, mount, remount, quota, or workspace creation", () => {
+    const manifest = loadManifest()
+    for (const mutate of [
+      (o: any) => { o.storage.verified = false },
+      (o: any) => { o.storage.mutationRequested = true },
+      (o: any) => { o.storage.loopBackingImageRealPath = "/other" },
+      (o: any) => { o.storage.mountSourceMajorMinor = "7:8" },
+      (o: any) => { o.storage.mountOptions.push("noexec") },
+      (o: any) => { o.storage.quotaEnforcement = false },
+      (o: any) => { o.storage.hardLimitBytes = 1 },
+    ]) {
+      const observed = completeObservation(manifest); mutate(observed)
+      expect(buildRootHandoffPlan(manifest, observed)).toMatchObject({ status: "BLOCKED", reasonCode: "STORAGE_VERIFY_ONLY_DRIFT", mutations: [] })
+    }
+    const plan = buildRootHandoffPlan(manifest, completeObservation(manifest))
+    expect(plan.status).toBe("READY_FOR_SIGNED_AUTHORITY")
+    expect(plan.mutations.map((entry: any) => entry.id)).not.toEqual(expect.arrayContaining(["FORMAT_STORAGE", "MOUNT_STORAGE", "REMOUNT_STORAGE", "CREATE_WORKSPACE", "SET_QUOTA"]))
+    expect(hasExactStorageMountSemantics(["rw", "nosuid", "nodev", "relatime", "attr2", "inode64", "prjquota"])).toBe(true)
+    expect(hasExactStorageMountSemantics(["rw", "nosuid", "nodev", "prjquota", "noexec"])).toBe(false)
+  })
+
+  it("classifies only UUID-named transient proof workers as recovery blockers", () => {
+    const transient = "williamos-aegis-remote-dev-7bc3ef49-0812-4dc8-a679-ff359887ca1d.service"
+    for (const classifier of [isVerifierProofWorkerUnitName, isAdapterProofWorkerUnitName]) {
+      expect(classifier(transient)).toBe(true)
+      expect(classifier("williamos-aegis-remote-dev-broker.service")).toBe(false)
+      expect(classifier("williamos-aegis-remote-dev-egress.service")).toBe(false)
+      expect(classifier("williamos-aegis-remote-dev-git-broker.service")).toBe(false)
+    }
+  })
+
+  it("fails closed on root, Linux, machine, trusted-main, key, toolchain, and prerequisite drift", () => {
+    const manifest = loadManifest()
+    const mutations = [
+      (o: any) => { o.platform.effectiveUid = 1000 },
+      (o: any) => { o.platform.os = "windows" },
+      (o: any) => { o.platform.machineIdSha256 = "0".repeat(64) },
+      (o: any) => { o.trustedMain.authorityCommit = "0" },
+      (o: any) => { o.trustedMain.replaceObjectsDisabled = false },
+      (o: any) => { o.bootstrap.verifierRootOwned = false },
+      (o: any) => { o.scheduler.enabled = true },
+      (o: any) => { o.closedHash.changed = true },
+      (o: any) => { o.prerequisites.INSTALL_PINNED_TOOLCHAIN = "DRIFT" },
+    ]
+    for (const mutate of mutations) {
+      const observed = completeObservation(manifest); mutate(observed)
+      expect(buildRootHandoffPlan(manifest, observed).status).toBe("BLOCKED")
+    }
+  })
+
+  it("consumes once before mutation, journals intent/applied records, and resumes only the same transaction", async () => {
+    const manifest = loadManifest(); const observed = completeObservation(manifest); const signed = signedAuthority(manifest)
+    const state = { claimed: false, records: [] as any[], effects: new Set<string>(), lease: false, receiptHead: null as string | null }
+    const adapter = {
+      acquireLease: async () => { if (state.lease) return false; state.lease = true; return true },
+      releaseLease: async () => { state.lease = false },
+      reprove: async () => observed,
+      claim: async () => { if (state.claimed) return false; state.claimed = true; return true },
+      append: async (record: any) => { state.records.push(record) },
+      effectApplied: async (id: string) => state.effects.has(id),
+      apply: async (id: string) => { state.effects.add(id) },
+      verify: async () => {
+        const verified = completeObservation(manifest)
+        verified.prerequisites = Object.fromEntries(manifest.steps.map((step: { id: string }) => [step.id, "MATCH"]))
+        return verified
+      },
+      publishSuccess: async (_payload: any, head: string) => { state.receiptHead = head },
+    }
+    const first = await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:05:00.000Z", adapter)
+    expect(first).toMatchObject({ status: "PREREQUISITES_APPLIED_VERIFIED", executionAuthorized: false })
+    expect(state.records[0].phase).toBe("AUTHORITY_CONSUMED")
+    expect(state.records.some((record) => record.phase === "STEP_INTENT")).toBe(true)
+    expect(state.records.at(-1).phase).toBe("COMMITTED")
+    expect(state.receiptHead).toBe(state.records.at(-1).recordSha256)
+    const again = await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:06:00.000Z", adapter)
+    expect(again.reasonCode).toBe("OWNER_AUTHORITY_CONSUMED")
+  })
+
+  it("keeps failure partial and inert and requires separate signed rollback authority", async () => {
+    const manifest = loadManifest(); const signed = signedAuthority(manifest); let claimed = false
+    const adapter = {
+      acquireLease: async () => true, releaseLease: async () => undefined, reprove: async () => completeObservation(manifest),
+      claim: async () => { claimed = true; return true }, append: async () => undefined, effectApplied: async () => false,
+      apply: async () => { throw new Error("synthetic failure") }, verify: async () => completeObservation(manifest),
+      publishSuccess: async () => { throw new Error("must not publish") },
+    }
+    const result = await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:05:00.000Z", adapter)
+    expect(claimed).toBe(true)
+    expect(result).toMatchObject({ status: "BLOCKED", reasonCode: "PARTIAL_APPLY_INERT", executionAuthorized: false, rollbackAuthorized: false })
+  })
+
+  it("resumes the same consumed transaction after an effect-before-applied crash without reapplying the effect", async () => {
+    const manifest = loadManifest(); const signed = signedAuthority(manifest); const observed = completeObservation(manifest)
+    const state = { claimed: false, records: [] as any[], effects: new Set<string>(), crash: true, applyCalls: 0 }
+    const adapter = {
+      acquireLease: async () => true, releaseLease: async () => undefined,
+      reprove: async () => {
+        const value = structuredClone(observed)
+        for (const id of state.effects) value.prerequisites[id] = "MATCH"
+        return value
+      },
+      claim: async () => state.claimed ? { resume: true } : (state.claimed = true),
+      recover: async () => ({ records: state.records, committed: false }),
+      append: async (record: any) => {
+        if (state.crash && record.phase === "STEP_APPLIED") throw new Error("synthetic process loss")
+        if (state.crash && record.phase === "FAILED_PARTIAL") throw new Error("process is gone")
+        state.records.push(record)
+      },
+      effectApplied: async (id: string) => state.effects.has(id),
+      apply: async (id: string) => { state.applyCalls += 1; state.effects.add(id) },
+      verify: async () => { const value = completeObservation(manifest); value.prerequisites = Object.fromEntries(manifest.steps.map((step: { id: string }) => [step.id, "MATCH"])); return value },
+      publishSuccess: async () => undefined,
+    }
+    const firstResult = await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:05:00.000Z", adapter)
+    expect(firstResult).toMatchObject({ status: "BLOCKED", reasonCode: "PARTIAL_APPLY_INERT" })
+    expect(state.applyCalls).toBe(1)
+    state.crash = false
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:06:00.000Z", adapter)).toMatchObject({ status: "PREREQUISITES_APPLIED_VERIFIED" })
+    expect(state.applyCalls).toBe(manifest.steps.length)
+    const firstIntent = state.records.findIndex((record) => record.phase === "STEP_INTENT")
+    expect(state.records[firstIntent + 1]).toMatchObject({ phase: "STEP_APPLIED", detail: { stepId: manifest.steps[0].id } })
+  })
+
+  it("allows only the exact consumed transaction to resume after the initial authority window", async () => {
+    const manifest = loadManifest(); const signed = signedAuthority(manifest); const observed = completeObservation(manifest)
+    const state = { claimed: true, claimCalls: [] as boolean[], records: [] as any[] }
+    const verified = completeObservation(manifest)
+    verified.prerequisites = Object.fromEntries(manifest.steps.map((step: { id: string }) => [step.id, "MATCH"]))
+    const adapter = {
+      acquireLease: async () => true, releaseLease: async () => undefined, reprove: async () => observed,
+      claim: async (_authorityId: string, _transactionId: string, allowCreate: boolean) => {
+        state.claimCalls.push(allowCreate)
+        return state.claimed ? { resume: true } : (allowCreate ? (state.claimed = true) : false)
+      },
+      recover: async () => ({ records: state.records, committed: false }),
+      append: async (record: any) => { state.records.push(record) }, effectApplied: async () => true,
+      apply: async () => { throw new Error("must not apply") }, verify: async () => verified, publishSuccess: async () => undefined,
+    }
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:20:00.000Z", adapter)).toMatchObject({ status: "PREREQUISITES_APPLIED_VERIFIED" })
+    expect(state.claimCalls).toEqual([false])
+
+    state.claimed = false; state.records = []; state.claimCalls = []
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:20:00.000Z", adapter)).toMatchObject({ status: "BLOCKED", reasonCode: "OWNER_AUTHORITY_EXPIRED" })
+    expect(state.claimCalls).toEqual([false])
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:45:00.000Z", adapter)).toMatchObject({ status: "BLOCKED", reasonCode: "OWNER_AUTHORITY_EXPIRED" })
+  })
+
+  it("re-samples trusted time at the durable claim boundary and rejects delayed create or resume", async () => {
+    const manifest = loadManifest(); const signed = signedAuthority(manifest); const observed = completeObservation(manifest)
+    expect(inspectRootClaimWindow(signed.envelope.payload, "2026-08-11T20:14:59.999Z")).toEqual({ createAllowed: true, resumeAllowed: true })
+    expect(inspectRootClaimWindow(signed.envelope.payload, "2026-08-11T20:15:00.000Z")).toEqual({ createAllowed: false, resumeAllowed: true })
+    expect(inspectRootClaimWindow(signed.envelope.payload, "2026-08-11T20:45:00.000Z")).toEqual({ createAllowed: false, resumeAllowed: false })
+    const delayedAdapter = (boundaryNow: string, claimed: boolean) => ({
+      acquireLease: async () => true, releaseLease: async () => undefined, reprove: async () => observed,
+      claim: async () => {
+        const window = inspectRootClaimWindow(signed.envelope.payload, boundaryNow)
+        if (!window.resumeAllowed || (!claimed && !window.createAllowed)) return { expired: true }
+        return claimed ? { resume: true } : true
+      },
+      recover: async () => ({ records: [], committed: false }), append: async () => undefined,
+      effectApplied: async () => true, apply: async () => undefined, verify: async () => observed, publishSuccess: async () => undefined,
+    })
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:14:59.000Z", delayedAdapter("2026-08-11T20:15:00.000Z", false))).toMatchObject({ status: "BLOCKED", reasonCode: "OWNER_AUTHORITY_EXPIRED" })
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:20:00.000Z", delayedAdapter("2026-08-11T20:45:00.000Z", true))).toMatchObject({ status: "BLOCKED", reasonCode: "OWNER_AUTHORITY_EXPIRED" })
+  })
+
+  it("resumes from durable post-apply verification by committing without duplicating the verification record", async () => {
+    const manifest = loadManifest(); const signed = signedAuthority(manifest); let claimed = false; let crash = true
+    const records: any[] = []
+    const verified = completeObservation(manifest)
+    verified.prerequisites = Object.fromEntries(manifest.steps.map((step: { id: string }) => [step.id, "MATCH"]))
+    const adapter = {
+      acquireLease: async () => true, releaseLease: async () => undefined, reprove: async () => verified,
+      claim: async () => claimed ? { resume: true } : (claimed = true),
+      recover: async () => ({ records, committed: false }),
+      append: async (record: any) => {
+        if (crash && (record.phase === "COMMITTED" || record.phase === "FAILED_PARTIAL")) throw new Error("synthetic process loss")
+        records.push(record)
+      },
+      effectApplied: async () => true, apply: async () => { throw new Error("must not apply") }, verify: async () => verified,
+      publishSuccess: async () => undefined,
+    }
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:05:00.000Z", adapter)).toMatchObject({ status: "BLOCKED", reasonCode: "PARTIAL_APPLY_INERT" })
+    expect(records.filter((record) => record.phase === "POST_APPLY_VERIFIED")).toHaveLength(1)
+    crash = false
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:06:00.000Z", adapter)).toMatchObject({ status: "PREREQUISITES_APPLIED_VERIFIED" })
+    expect(records.filter((record) => record.phase === "POST_APPLY_VERIFIED")).toHaveLength(1)
+    expect(records.at(-1).phase).toBe("COMMITTED")
+  })
+
+  it("refuses commit when current prerequisite state disappears after durable post-apply verification", async () => {
+    const manifest = loadManifest(); const signed = signedAuthority(manifest); let claimed = false; let crash = true; let drift = false
+    const records: any[] = []
+    const observation = () => { const value = completeObservation(manifest); value.prerequisites = Object.fromEntries(manifest.steps.map((step: { id: string }) => [step.id, "MATCH"])); if (drift) value.prerequisites[manifest.steps[0].id] = "ABSENT"; return value }
+    const adapter = {
+      acquireLease: async () => true, releaseLease: async () => undefined, reprove: async () => observation(),
+      claim: async () => claimed ? { resume: true } : (claimed = true), recover: async () => ({ records, committed: false }),
+      append: async (record: any) => { if (crash && (record.phase === "COMMITTED" || record.phase === "FAILED_PARTIAL")) throw new Error("synthetic process loss"); records.push(record) },
+      effectApplied: async () => true, apply: async () => { throw new Error("must not apply") }, verify: async () => observation(), publishSuccess: async () => { throw new Error("must not publish") },
+    }
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:05:00.000Z", adapter)).toMatchObject({ status: "BLOCKED", reasonCode: "PARTIAL_APPLY_INERT" })
+    drift = true; crash = false
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:06:00.000Z", adapter)).toMatchObject({ status: "BLOCKED", reasonCode: "PARTIAL_APPLY_INERT" })
+    expect(records.some((record) => record.phase === "COMMITTED")).toBe(false)
+  })
+
+  it("accepts only an exact conclusive sudo denial and rejects password, signal, or ambiguous errors", () => {
+    expect(inspectNoSudoCapabilityEvidence({ status: 1, signal: null, error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" })).toBe(true)
+    expect(inspectNoSudoCapabilityEvidence({ status: 1, signal: null, error: null, stdout: "", stderr: "Sorry, user williamos-fabric may not run sudo on aegis.\n" })).toBe(true)
+    for (const value of [
+      { status: 0, signal: null, error: null, stdout: "allowed", stderr: "" },
+      { status: 1, signal: null, error: null, stdout: "", stderr: "a password is required\n" },
+      { status: 1, signal: "SIGTERM", error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" },
+      { status: 1, signal: null, error: new Error("spawn failed"), stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" },
+      { status: 2, signal: null, error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" },
+    ]) expect(inspectNoSudoCapabilityEvidence(value)).toBe(false)
+  })
+
+  it("ships an exact dual-stack default-deny policy broker with Atlas denied and no fail-open delete/apply gap", () => {
+    const broker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs"), "utf8")
+    const runtimeAuthority = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"), "utf8")
+    const enforcer = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-enforcer.mjs"), "utf8")
+    const service = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.service"), "utf8")
+    const nft = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.nft"), "utf8")
+    for (const endpoint of ["ssh.github.com", "api.github.com", "api.nuget.org", "globalcdn.nuget.org"]) expect(broker).toContain(endpoint)
+    expect(runtimeAuthority).toContain('normalized === "192.168.1.156"')
+    expect(runtimeAuthority).toContain("mappedIpv4")
+    expect(broker).not.toContain('delete table')
+    expect(enforcer).toContain("flush chain inet")
+    expect(enforcer).not.toContain("delete table")
+    expect(service).toContain("ExecStop=/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-egress-enforcer.mjs --enforce")
+    expect(nft).toContain('meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject')
+    expect(nft).toContain('meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject')
+    const fabricProxy = 'meta skuid "williamos-fabric" ip daddr 127.0.0.1 tcp dport 17734 accept'
+    const gitBrokerProxy = 'meta skuid "williamos-git-broker" ip daddr 127.0.0.1 tcp dport 17734 accept'
+    const allOtherUsersDenied = 'ip daddr 127.0.0.1 tcp dport 17734 reject'
+    expect(nft).toContain(fabricProxy)
+    expect(nft).toContain(gitBrokerProxy)
+    expect(nft.indexOf(fabricProxy)).toBeLessThan(nft.indexOf(allOtherUsersDenied))
+    expect(nft.indexOf(gitBrokerProxy)).toBeLessThan(nft.indexOf(allOtherUsersDenied))
+    expect(nft.match(/meta skuid "williamos-fabric" reject/g)).toHaveLength(1)
+    expect(enforcer).toContain('meta skuid "williamos-git-broker" ip daddr 127.0.0.1 tcp dport 17734 accept')
+    const exactLiveLines = nft.split(/\r?\n/).map((line) => line.trim().replace(/\s+/g, " ")).filter(Boolean)
+    expect(exactNftBoundaryLines(exactLiveLines)).toBe(true)
+    for (const drift of [
+      exactLiveLines.filter((line) => !line.includes('skuid "williamos-git-broker"')),
+      exactLiveLines.filter((line) => !line.includes('skuid "williamos-fabric" ip daddr 127.0.0.1')),
+      [...exactLiveLines.slice(0, 6), exactLiveLines[7], exactLiveLines[6], ...exactLiveLines.slice(8)],
+      [...exactLiveLines.slice(0, -2), 'meta skuid "other" accept', ...exactLiveLines.slice(-2)],
+    ]) expect(exactNftBoundaryLines(drift)).toBe(false)
+  })
+
+  it("scopes every CONNECT destination to the signed operation and rejects private or mapped-private destinations", () => {
+    expect(allowedHostForOperation("CREATE_WORKSPACE", "ssh.github.com")).toBe(true)
+    expect(allowedHostForOperation("RESTORE_DOTNET", "api.nuget.org")).toBe(true)
+    expect(allowedHostForOperation("RESTORE_DOTNET", "globalcdn.nuget.org")).toBe(true)
+    expect(allowedHostForOperation("PUSH_AUTHORIZED_BRANCH", "ssh.github.com")).toBe(true)
+    expect(allowedHostForOperation("BUILD_DOTNET_RELEASE", "ssh.github.com")).toBe(false)
+    expect(allowedHostForOperation("RESTORE_DOTNET", "ssh.github.com")).toBe(false)
+    for (const address of ["192.168.1.156", "::ffff:192.168.1.156", "::ffff:c0a8:019c", "10.0.0.1", "100.64.0.1", "127.0.0.1", "172.16.0.1", "169.254.1.1", "192.0.2.1", "198.18.0.1", "198.51.100.1", "203.0.113.1", "fc00::1", "fd00::1", "fe80::1", "::1"]) {
+      expect(isDeniedDestination(address)).toBe(true)
+    }
+    const authority = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"), "utf8")
+    expect(authority).toContain("const current = Date.now()")
+    expect(authority).toContain("current >= expires")
+    expect(authority).toContain("continueConnectAuthorization")
+    expect(authority).toContain("issued + 5_400_000")
+    expect(isDeniedDestination("140.82.112.36")).toBe(false)
+    expect(isDeniedDestination("2606:50c0:8000::154")).toBe(false)
+  })
+
+  it("keeps GitHub private credentials outside worker-readable configuration and uses a signed PUSH broker", () => {
+    const ssh = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf"), "utf8")
+    const worker = fs.readFileSync(path.join(root, "scripts/execution-fabric/live/aegis-remote-dev-worker.sh"), "utf8")
+    const launcher = fs.readFileSync(path.join(root, "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")
+    expect(ssh).not.toContain("github-account.key")
+    expect(worker).not.toContain('push origin "HEAD:refs/heads/$BRANCH"')
+    expect(worker).toContain("williamos-aegis-remote-dev-git-client.mjs")
+    expect(launcher).toContain("WILLIAMOS_NETWORK_TICKET_B64")
+    expect(launcher).toContain("WILLIAMOS_NETWORK_PACKET_B64")
+    expect(launcher).toContain('bound.operation === "RESTORE_DOTNET"')
+    expect(launcher).toContain("HTTPS_PROXY: proxy")
+    const dotnet = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/williamos-dotnet-broker-wrapper"), "utf8")
+    expect(dotnet).toContain('"${HTTPS_PROXY:-}" == "$expected"')
+    expect(dotnet).toContain('"${https_proxy:-}" == "$expected"')
+    expect(dotnet).not.toContain("export HTTPS_PROXY=http://127.0.0.1:17734")
+    const broker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs"), "utf8")
+    expect(broker).toContain('decoded.subarray(0, separator).toString("ascii") !== "WilliamOS"')
+    expect(broker).toContain("separator !== 9")
+    expect(broker).toContain("authorizeBrokerConnect(authorization.ticket, authorization.operation")
+    expect(broker).toContain("407 Proxy Authentication Required")
+    expect(broker).toContain('request.headers["proxy-authorization"] === undefined ? 407 : 403')
+    const gitBroker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-broker.mjs"), "utf8").replace(/\r\n/g, "\n")
+    const gitClient = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-client.mjs"), "utf8")
+    const gitService = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-git-broker.service"), "utf8")
+    expect(gitBroker).toContain('bound.runId !== authorization.payload.runId')
+    expect(gitBroker).toContain("fs.constants.O_EXCL")
+    expect(gitBroker).toContain(".git-consumed")
+    expect(gitBroker).toContain("consumeGitTicket(authorization.payload)\n  exactCredential()")
+    expect(gitService).toContain("User=williamos-git-broker")
+    expect(gitService).toContain("Group=williamos-fabric")
+    expect(gitService).toContain("IPAddressDeny=any")
+    expect(gitService).toContain("IPAddressAllow=localhost")
+    expect(gitService).toContain("/var/lib/williamos-fabric/remote-dev-launch-tickets")
+    expect(gitService).not.toContain("User=williamos-fabric")
+    expect(gitBroker).toContain('name.startsWith("url.")')
+    expect(gitBroker).toContain('"remote", "get-url", "--push", "--all", "origin"')
+    expect(gitBroker).toContain('"push", REMOTE')
+    expect(gitClient).toContain("PROVE_PREFLIGHT: 920_000")
+    expect(gitClient).toContain("socket.setTimeout(OPERATION_TIMEOUT_MS[operation])")
+    expect(gitClient).not.toContain("socket.setTimeout(30_000)")
+    expect(worker).toContain('chmod 2770 -- "$PHYSICAL_WORKSPACE"')
+    expect(worker).toContain("umask 077")
+    expect(worker).toContain("run_shared_git_capture()")
+    expect(worker).toContain("GIT_CONFIG_KEY_0=safe.directory")
+    expect(worker).toContain('GIT_CONFIG_VALUE_0="$REPO_DIR"')
+    expect(worker).toContain("umask 007")
+    expect(worker).toContain("umask \"$previous_umask\"")
+    expect(worker).toContain('chmod 0640 -- "$marker_tmp"')
+    expect(dotnet).toContain("TEST_DOTNET_INFORMATIONAL|BUILD_DOTNET_RELEASE")
+  })
+
+  it("accepts only the exact authenticated restore proxy and explicit non-network dotnet modes", () => {
+    const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "/usr/bin/bash"
+    const wrapper = path.join(root, "scripts/execution-fabric/provision/assets/williamos-dotnet-broker-wrapper")
+    const base = { ...process.env, HTTPS_PROXY: "", https_proxy: "", NO_PROXY: "", no_proxy: "" }
+    const preflight = spawnSync(bash, [wrapper, "--version"], { env: { ...base, WILLIAMOS_NETWORK_OPERATION: "PROVE_PREFLIGHT", WILLIAMOS_NETWORK_TICKET_B64: "e30=" }, shell: false })
+    expect(preflight.status).not.toBe(64)
+    const ticket = "e30="; const proxy = `http://WilliamOS:${encodeURIComponent(ticket)}@127.0.0.1:17734`
+    const restore = spawnSync(bash, [wrapper, "restore"], { env: { ...base, WILLIAMOS_NETWORK_OPERATION: "RESTORE_DOTNET", WILLIAMOS_NETWORK_TICKET_B64: ticket, HTTPS_PROXY: proxy, https_proxy: proxy }, shell: false })
+    expect(restore.status).not.toBe(64)
+    const unauthenticated = spawnSync(bash, [wrapper, "restore"], { env: { ...base, WILLIAMOS_NETWORK_OPERATION: "RESTORE_DOTNET" }, shell: false })
+    expect(unauthenticated.status).toBe(64)
+    const networkedBuild = spawnSync(bash, [wrapper, "build", "--no-restore"], { env: { ...base, WILLIAMOS_NETWORK_OPERATION: "BUILD_DOTNET_RELEASE", HTTPS_PROXY: "http://127.0.0.1:17734" }, shell: false })
+    expect(networkedBuild.status).toBe(64)
+  })
+
+  it("ships one fixed production OS adapter and CLI with no caller provider, clock, path, or command injection", () => {
+    expect(inspectRootAdapterContract()).toMatchObject({
+      status: "ROOT_OS_ADAPTER_CONTRACT_VERIFIED",
+      executionAuthorized: false,
+      storageMode: "VERIFY_ONLY",
+      schedulerEnabled: false,
+      standingAuthority: false,
+    })
+    const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
+    const verifier = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"), "utf8")
+    const cli = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh"), "utf8")
+    expect(adapter).toContain('const EVIDENCE_ROOT = "/var/lib/williamos-fabric/remote-dev-prerequisite-handoff"')
+    expect(adapter).toContain('const BUNDLE_ROOT = "/usr/local/share/williamos/aegis-root-handoff-bundle"')
+    expect(adapter).toContain('["--check", "/usr/local/libexec/aegis-remote-dev-runtime-authority.mjs"]')
+    expect(adapter).not.toContain('["--check", "/usr/local/libexec/williamos-aegis-remote-dev-runtime-authority.mjs"]')
+    expect(adapter).not.toContain("process.env.HOME")
+    expect(adapter).not.toContain("shell: true")
+    expect(adapter).toContain("fs.constants.O_EXCL")
+    expect(adapter).toContain("recoverJournal(authority)")
+    expect(adapter).toContain('run("/usr/sbin/usermod", ["-G", "", "--home", "/var/empty/williamos-fabric"')
+    expect(adapter).toContain('"williamos-git-broker"')
+    expect(adapter).toContain('"merge-base", "--is-ancestor", manifest.trustedMain.minimumCommit, authority.trustedMainCommit')
+    expect(adapter).toContain("existingReceiptMatches")
+    expect(adapter).toContain("proveRootServiceFence")
+    expect(adapter).toContain("sharedGroupProcessesExact")
+    expect(adapter).toContain("isProofWorkerUnitName(path.basename(String(entry)))")
+    expect(adapter).toContain('version("/usr/share/dotnet/dotnet"')
+    expect(adapter).toContain('fs.readlinkSync("/usr/bin/dotnet") !== "/usr/share/dotnet/dotnet"')
+    expect(cli).toContain("KillMode=control-group")
+    expect(cli).toContain("--wait --pipe --collect")
+    expect(cli).toContain("williamos-aegis-root-handoff.service")
+    expect(adapter.indexOf('run("/usr/bin/loginctl", ["terminate-user", "williamos-fabric"]')).toBeLessThan(adapter.indexOf("applyAssets(manifest, authority)"))
+    expect(adapter).toContain("exactNftBoundaryLines(lines)")
+    expect(verifier).toContain('const OWNER_PUBLIC_KEY_PATH = "/etc/williamos-fabric/owner-prerequisite-authority.pem"')
+    expect(verifier).toContain('const INSTALLED_VERIFIER_PATH = "/usr/local/libexec/williamos-aegis-root-handoff.mjs"')
+    expect(cli).toContain("/usr/bin/flock")
+    expect(cli).toContain("/usr/local/libexec/williamos-aegis-root-handoff.mjs")
+    expect(cli).not.toContain("eval ")
+  })
+})

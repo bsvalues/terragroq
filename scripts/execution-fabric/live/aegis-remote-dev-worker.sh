@@ -102,6 +102,9 @@ if [[ -n "$WORKER_ROOT" ]]; then
   [[ ! -L "$WORKER_ROOT" ]] || die_input "SYMLINK_REJECTED" "worker root is a symlink"
   WORKER_ROOT="$(timeout 5 realpath -- "$WORKER_ROOT")" || die_input "PATH_CONFINEMENT_FAILED" "worker root is unavailable"
 fi
+GIT_BROKER_CLIENT="${WORKER_ROOT}/usr/local/libexec/williamos-aegis-remote-dev-git-client.mjs"
+[[ -f "$GIT_BROKER_CLIENT" && ! -L "$GIT_BROKER_CLIENT" ]] || die_input "GIT_BROKER_UNAVAILABLE" "fixed credential-isolated Git client is unavailable"
+readonly GIT_BROKER_CLIENT
 if [[ -n "$WORKER_ROOT" && -d "$WORKER_ROOT/bin" ]]; then
   export PATH="$WORKER_ROOT/bin:$PATH"
 fi
@@ -117,6 +120,7 @@ PHYSICAL_WORKSPACE="${WORKER_ROOT}${LOGICAL_WORKSPACE}"
 PHYSICAL_PARENT="${WORKER_ROOT}/srv/william/workspaces"
 TRUSTED_PARENT="${WORKER_ROOT}/srv/william"
 REPO_DIR="$PHYSICAL_WORKSPACE/repository"
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$REPO_DIR"
 MARKER_PATH="$PHYSICAL_WORKSPACE/$OWNER_MARKER"
 PROOF_PATH="$PHYSICAL_WORKSPACE/$MERGE_MARKER"
 SCRATCH_DIR="$PHYSICAL_WORKSPACE/.williamos-scratch"
@@ -262,16 +266,7 @@ run_cleanup_profile() {
 }
 
 run_preflight_repository_profile() {
-  (
-    set -euo pipefail
-    cd -- /tmp
-    proof="$(mktemp -d)"
-    trap 'rm -rf -- "$proof"' EXIT
-    timeout 120 git ls-remote --exit-code "$REMOTE_URL" refs/heads/main >/dev/null
-    git init --bare "$proof/repository.git" >/dev/null
-    timeout 120 git -C "$proof/repository.git" fetch --depth=1 "$REMOTE_URL" "$BASE_SHA" >/dev/null
-    timeout 120 git -C "$proof/repository.git" push --dry-run "$REMOTE_URL" "$BASE_SHA:refs/heads/williamos-preflight-$RUN_ID" >/dev/null
-  )
+  timeout 930 node "$GIT_BROKER_CLIENT"
 }
 
 probe_containment() {
@@ -354,6 +349,16 @@ run_capture_at() {
 run_capture() {
   [[ -d "$REPO_DIR" && ! -L "$REPO_DIR" ]] || die_block "GIT_REPOSITORY_MISSING" "repository working directory is unavailable"
   run_capture_at "$REPO_DIR" "$@"
+}
+
+run_shared_git_capture() {
+  local previous_umask run_exit
+  previous_umask="$(umask)"
+  umask 007
+  run_capture "$@"
+  run_exit=$RUN_EXIT
+  umask "$previous_umask"
+  RUN_EXIT=$run_exit
 }
 
 protected_target_matches() {
@@ -472,13 +477,13 @@ validate_recovery_quarantine() {
   validate_owner_marker_at "$QUARANTINE_PATH"
   [[ -d "$recovery_repo/.git" && ! -L "$recovery_repo" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined repository is unavailable"
   [[ "$(timeout 5 realpath -- "$recovery_repo")" == "$recovery_repo" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined repository identity differs"
-  remote="$(timeout 15 git -C "$recovery_repo" remote get-url origin)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined origin is unavailable"
+  remote="$(GIT_CONFIG_VALUE_0="$recovery_repo" timeout 15 git -C "$recovery_repo" remote get-url origin)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined origin is unavailable"
   [[ "$remote" == "$REMOTE_URL" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined origin differs"
-  branch="$(timeout 15 git -C "$recovery_repo" branch --show-current)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined branch is unavailable"
+  branch="$(GIT_CONFIG_VALUE_0="$recovery_repo" timeout 15 git -C "$recovery_repo" branch --show-current)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined branch is unavailable"
   [[ "$branch" == "$BRANCH" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined branch differs"
-  HEAD_SHA="$(timeout 15 git -C "$recovery_repo" rev-parse HEAD)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined HEAD is unavailable"
+  HEAD_SHA="$(GIT_CONFIG_VALUE_0="$recovery_repo" timeout 15 git -C "$recovery_repo" rev-parse HEAD)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined HEAD is unavailable"
   [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined HEAD is malformed"
-  changed="$(timeout 15 git -C "$recovery_repo" status --porcelain --untracked-files=all)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined worktree status is unavailable"
+  changed="$(GIT_CONFIG_VALUE_0="$recovery_repo" timeout 15 git -C "$recovery_repo" status --porcelain --untracked-files=all)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined worktree status is unavailable"
   [[ -z "$changed" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined worktree contains unverified changes"
   [[ -f "$QUARANTINE_PATH/$MERGE_MARKER" && ! -L "$QUARANTINE_PATH/$MERGE_MARKER" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "quarantined post-merge proof is absent"
   quarantine_proof="$(timeout 5 tr -d '\r\n' < "$QUARANTINE_PATH/$MERGE_MARKER")"
@@ -495,6 +500,7 @@ run_recovery_cleanup() {
   RECOVERY_QUARANTINE_IDENTITY="$quarantine_identity"
   SCRATCH_DIR="$QUARANTINE_PATH/.williamos-scratch"
   REPO_DIR="$QUARANTINE_PATH/repository"
+  export GIT_CONFIG_VALUE_0="$REPO_DIR"
   MARKER_PATH="$QUARANTINE_PATH/$OWNER_MARKER"
   PROOF_PATH="$QUARANTINE_PATH/$MERGE_MARKER"
   validate_scratch_dir
@@ -656,19 +662,18 @@ case "$OPERATION" in
       timeout 15 mkdir -- "$PHYSICAL_WORKSPACE" || die_block "WORKSPACE_CREATE_FAILED" "cannot create exact workspace"
       timeout 10 node -e 'const fs=require("node:fs"),[file,run,wo,repo,branch,base]=process.argv.slice(1);const tmp=`${file}.${process.pid}.tmp`;fs.writeFileSync(tmp,JSON.stringify({run_id:run,work_order_id:wo,repository:repo,branch,base_sha:base}),{mode:0o600,flag:"wx"});fs.renameSync(tmp,file)' "$MARKER_PATH" "$RUN_ID" "$PACKET_WORK_ORDER" "$PACKET_REPOSITORY" "$BRANCH" "$BASE_SHA" || die_block "WORKSPACE_CREATE_FAILED" "cannot publish ownership marker"
     fi
+    timeout 10 chmod 2770 -- "$PHYSICAL_WORKSPACE" || die_block "WORKSPACE_CREATE_FAILED" "cannot bind exact Git broker group access"
     [[ -d "$SCRATCH_DIR" ]] || timeout 10 mkdir -m 0700 -- "$SCRATCH_DIR" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create exact scratch directory"
     timeout 10 mkdir -p -m 0700 -- "$SCRATCH_DIR/tmp" "$SCRATCH_DIR/xdg-cache" "$SCRATCH_DIR/nuget" "$SCRATCH_DIR/dotnet-home" "$SCRATCH_DIR/corepack" "$SCRATCH_DIR/npm-cache" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create bounded cache directories"
     validate_workspace_project
     if [[ "$OPERATION_SCRATCH_PREPARED" != true ]]; then prepare_operation_scratch; OPERATION_SCRATCH_PREPARED=true; fi
-    run_capture_at "$PHYSICAL_WORKSPACE" git clone --no-checkout --origin origin "$REMOTE_URL" "$REPO_DIR"
-    [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "Git clone failed"
-    run_capture git -C "$REPO_DIR" fetch --no-tags origin main
-    [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "Git fetch failed"
+    run_capture_at "$PHYSICAL_WORKSPACE" node "$GIT_BROKER_CLIENT"
+    [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "credential-isolated Git clone/fetch failed"
     fetched="$(repo_value rev-parse origin/main)" || die_block "GIT_BASE_MISMATCH" "origin/main is unavailable"
     [[ "$fetched" == "$BASE_SHA" ]] || die_block "GIT_BASE_MISMATCH" "fresh origin/main differs from pinned base"
-    run_capture git -C "$REPO_DIR" switch --create "$BRANCH" --detach "$BASE_SHA"
+    run_shared_git_capture git -C "$REPO_DIR" switch --create "$BRANCH" --detach "$BASE_SHA"
     if [[ $RUN_EXIT -ne 0 ]]; then
-      run_capture git -C "$REPO_DIR" checkout -b "$BRANCH" "$BASE_SHA"
+      run_shared_git_capture git -C "$REPO_DIR" checkout -b "$BRANCH" "$BASE_SHA"
     fi
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "branch creation failed"
     ;;
@@ -682,7 +687,7 @@ case "$OPERATION" in
     done < "$OUTPUT_FILE"
     run_capture git -C "$REPO_DIR" apply --check -- "$PATCH_FILE"
     [[ $RUN_EXIT -eq 0 ]] || die_block "PATCH_INVALID" "patch does not apply cleanly"
-    run_capture git -C "$REPO_DIR" apply -- "$PATCH_FILE"
+    run_shared_git_capture git -C "$REPO_DIR" apply -- "$PATCH_FILE"
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "patch application failed"
     ;;
   RESTORE_DOTNET)
@@ -728,24 +733,28 @@ case "$OPERATION" in
     validate_owner_marker
     while IFS= read -r file; do [[ -z "$file" ]] || is_reserved "$file" || die_input "PATH_NOT_RESERVED" "staged path is not reserved"; done < <(timeout 15 git -C "$REPO_DIR" diff --cached --name-only)
     validate_repo
-    run_capture git -C "$REPO_DIR" add -- "${RESERVED_PATHS[@]}"
+    run_shared_git_capture git -C "$REPO_DIR" add -- "${RESERVED_PATHS[@]}"
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "reserved staging failed"
     while IFS= read -r file; do [[ -z "$file" ]] || is_reserved "$file" || die_input "PATH_NOT_RESERVED" "staged path is not reserved"; done < <(timeout 15 git -C "$REPO_DIR" diff --cached --name-only)
-    run_capture git -C "$REPO_DIR" commit -m "ci(backend): expose doctrine tests as informational"
+    run_shared_git_capture git -C "$REPO_DIR" commit -m "ci(backend): expose doctrine tests as informational"
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "commit failed"
     HEAD_SHA="$(repo_value rev-parse HEAD)"
-    printf '%s\n' "$HEAD_SHA" > "$PHYSICAL_WORKSPACE/.williamos-commit-created"
+    marker_tmp="$PHYSICAL_WORKSPACE/.williamos-commit-created.${RUN_ID}.tmp"
+    printf '%s\n' "$HEAD_SHA" > "$marker_tmp"
+    chmod 0640 -- "$marker_tmp"
+    mv -- "$marker_tmp" "$PHYSICAL_WORKSPACE/.williamos-commit-created"
     ;;
   PUSH_AUTHORIZED_BRANCH)
     validate_owner_marker; validate_repo
     HEAD_SHA="$(repo_value rev-parse HEAD)"
-    run_capture git -C "$REPO_DIR" push origin "HEAD:refs/heads/$BRANCH"
+    run_capture node "$GIT_BROKER_CLIENT"
+    [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "credential-isolated Git push failed"
     ;;
   PROVE_POST_MERGE)
     validate_owner_marker; validate_repo
     HEAD_SHA="$(repo_value rev-parse HEAD)"
-    run_capture git -C "$REPO_DIR" fetch --no-tags origin main
-    [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "post-merge fetch failed"
+    run_capture node "$GIT_BROKER_CLIENT"
+    [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "credential-isolated post-merge fetch failed"
     run_capture git -C "$REPO_DIR" merge-base --is-ancestor "$HEAD_SHA" origin/main
     [[ $RUN_EXIT -eq 0 ]] || die_block "MERGE_ANCESTRY_NOT_PROVEN" "head is not on origin/main"
     printf '%s:%s\n' "$RUN_ID" "$HEAD_SHA" > "$PROOF_PATH"

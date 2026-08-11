@@ -378,8 +378,16 @@ function managerEnvironment(uid) {
     DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${uid}/bus`,
   })
 }
-function workerEnvironment() {
-  return Object.freeze({ HOME: "/nonexistent", PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" })
+function workerEnvironment(bound) {
+  const environment = { HOME: "/nonexistent", PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C", WILLIAMOS_NETWORK_OPERATION: bound.operation }
+  if (["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "RESTORE_DOTNET", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE"].includes(bound.operation)) {
+    Object.assign(environment, { WILLIAMOS_NETWORK_TICKET_B64: bound.ticketB64, WILLIAMOS_NETWORK_PACKET_B64: bound.packetB64 })
+  }
+  if (bound.operation === "RESTORE_DOTNET") {
+    const proxy = `http://WilliamOS:${encodeURIComponent(bound.ticketB64)}@127.0.0.1:17734`
+    Object.assign(environment, { HTTPS_PROXY: proxy, https_proxy: proxy, NO_PROXY: "", no_proxy: "" })
+  }
+  return Object.freeze(environment)
 }
 function fixedServiceProperties(operation, uid) {
   const properties = [
@@ -421,7 +429,7 @@ function child(args) {
     if (result.status !== "WORKER_NETWORK_BOUNDARY_VERIFIED") fail(result.reasons?.[0]?.detail ?? "worker network boundary differs")
     executionUid()
     const worker = spawnSync("/usr/bin/bash", ["-s", "--", bound.operation, bound.packetB64, bound.patchB64, bound.attempt, bound.previous, authorization.ticketId], {
-      input: workerBytes, stdio: ["pipe", "pipe", "pipe"], env: workerEnvironment(), maxBuffer: WORKER_STREAM_MAX_BYTES + 1,
+      input: workerBytes, stdio: ["pipe", "pipe", "pipe"], env: workerEnvironment(bound), maxBuffer: WORKER_STREAM_MAX_BYTES + 1,
     })
     if (worker.error?.code === "ENOBUFS") {
       return createWorkerOverflowEnvelope(authorization.ticketId, worker.status, worker.stdout ?? Buffer.alloc(0), worker.stderr ?? Buffer.alloc(0))
@@ -449,6 +457,7 @@ function parent(args) {
     ...service.properties.flatMap((property) => ["-p", property]),
     ...fixedServiceProperties(bound.operation, uid),
     "/usr/bin/env", "-i", "HOME=/nonexistent", "PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C",
+    `WILLIAMOS_NETWORK_TICKET_B64=${bound.ticketB64}`, `WILLIAMOS_NETWORK_PACKET_B64=${bound.packetB64}`, `WILLIAMOS_NETWORK_OPERATION=${bound.operation}`,
     "/usr/bin/node", INSTALL_PATH, "--child", ...args,
   ], { input: workerBytes, stdio: ["pipe", "pipe", "pipe"], env, maxBuffer: ENVELOPE_MAX_BYTES })
   if (launched.error || launched.status !== 0) fail("fixed enforced-slice launch failed")

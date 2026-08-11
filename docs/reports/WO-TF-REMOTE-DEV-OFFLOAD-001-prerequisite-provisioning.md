@@ -1,5 +1,10 @@
 # WO-TF-REMOTE-DEV-OFFLOAD-001 AEGIS prerequisite provisioning package
 
+> Historical package checkpoint. The exact current external bootstrap,
+> transaction, destination, and remaining-input contract is
+> `WO-TF-REMOTE-DEV-OFFLOAD-001-root-handoff.md`; where the two differ, the
+> reviewed root-handoff generation is authoritative.
+
 ## Result
 
 `AEGIS_REMOTE_DEV_PREREQUISITE_PACKAGE: READY_FOR_REVIEW`
