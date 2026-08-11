@@ -494,6 +494,132 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
       .resolves.toMatchObject({ acquired: false })
   })
 
+  it("serializes both runtimes through the same live node mutation lock", async () => {
+    const fabricRoot = tempRoot("aegis-shared-node-lock-")
+    const remoteRoot = path.join(fabricRoot, "ledger")
+    const standingRoot = path.join(fabricRoot, "standing-hash-ledger")
+    fs.mkdirSync(remoteRoot, { mode: 0o700 })
+    fs.mkdirSync(standingRoot, { mode: 0o700 })
+    const lockRoot = path.join(remoteRoot, "resident-aegis-mutation.lock")
+    fs.mkdirSync(lockRoot, { mode: 0o700 })
+    fs.writeFileSync(path.join(lockRoot, "holder.json"), `${JSON.stringify({ pid: 77, boot_id: "boot-live", process_start_ticks: "77" })}\n`)
+    const common = {
+      platform: "linux", getuid: () => process.getuid?.() ?? 1000, username: () => "williamos-fabric",
+      validateDirectory: (stats: fs.Stats) => stats.isDirectory() && !stats.isSymbolicLink(),
+      validateLedgerFile: (stats: fs.Stats) => stats.isFile() && !stats.isSymbolicLink(),
+      syncDirectory: () => undefined,
+      holderIdentity: () => ({ pid: 100, boot_id: "boot-shared", process_start_ticks: "10" }),
+      holderIsAlive: () => true,
+    }
+    const remote = createLedgerProviders({ ...common, ledgerRoot: remoteRoot, clock: () => "2026-08-10T22:00:00.000Z" })
+    const standing = ledger(standingRoot, {
+      nodeLeasePath: path.join(remoteRoot, "resident-aegis-active.json"),
+      holderIsAlive: () => true,
+    })
+    await standing.claimAdmission(claimBinding())
+
+    await expect(remote.acquireExclusiveLease({ claim_id: "claim-remote" })).resolves.toMatchObject({ acquired: false })
+    await expect(standing.acquireLease(leaseBinding())).resolves.toMatchObject({ acquired: false })
+    expect(fs.existsSync(path.join(remoteRoot, "resident-aegis-active.json"))).toBe(false)
+  })
+
+  it("recovers a proven-dead remote lease without minting remote execution authority", async () => {
+    const fabricRoot = tempRoot("aegis-remote-recovery-")
+    const remoteRoot = path.join(fabricRoot, "ledger")
+    const standingRoot = path.join(fabricRoot, "standing-hash-ledger")
+    fs.mkdirSync(remoteRoot, { mode: 0o700 })
+    fs.mkdirSync(standingRoot, { mode: 0o700 })
+    const common = {
+      platform: "linux", getuid: () => process.getuid?.() ?? 1000, username: () => "williamos-fabric",
+      validateDirectory: (stats: fs.Stats) => stats.isDirectory() && !stats.isSymbolicLink(),
+      validateLedgerFile: (stats: fs.Stats) => stats.isFile() && !stats.isSymbolicLink(),
+      syncDirectory: () => undefined,
+      holderIdentity: () => ({ pid: 100, boot_id: "boot-dead", process_start_ticks: "10" }),
+      holderIsAlive: () => true,
+    }
+    const remote = createLedgerProviders({ ...common, ledgerRoot: remoteRoot, clock: () => "2026-08-10T22:00:00.000Z" })
+    const remoteLease = await remote.acquireExclusiveLease({ claim_id: "claim-remote-dead" })
+    expect(remoteLease.acquired).toBe(true)
+    const standing = ledger(standingRoot, {
+      nodeLeasePath: path.join(remoteRoot, "resident-aegis-active.json"),
+      holderIdentity: () => ({ pid: 200, boot_id: "boot-new", process_start_ticks: "20" }),
+      holderIsAlive: vi.fn(() => false),
+    })
+    await expect(standing.reconcileNodeLease()).resolves.toEqual({ available: true })
+    const recoveryNames = fs.readdirSync(remoteRoot).filter((name) => name.startsWith("remote-recovery-"))
+    expect(recoveryNames).toEqual([`remote-recovery-${remoteLease.lease_id}.json`])
+    const recovery = JSON.parse(fs.readFileSync(path.join(remoteRoot, recoveryNames[0]), "utf8"))
+    expect(recovery).toMatchObject({
+      schema_version: "1.0-aegis-shared-remote-lease-recovery",
+      lease_id: remoteLease.lease_id,
+      claim_id: "claim-remote-dead",
+      reason: "PROVEN_DEAD_REMOTE_HOLDER",
+      execution_authority_created: false,
+    })
+    expect(fs.readdirSync(remoteRoot).filter((name) => name.startsWith("claim-"))).toHaveLength(0)
+    expect(fs.readdirSync(standingRoot).filter((name) => /^(?:claim|fence|result|release)-/.test(name))).toHaveLength(0)
+    expect(fs.existsSync(path.join(remoteRoot, "resident-aegis-active.json"))).toBe(false)
+  })
+
+  it("fails closed on a malformed remote lease without removing it", async () => {
+    const root = tempRoot("aegis-malformed-remote-lease-")
+    const standingRoot = path.join(root, "standing")
+    fs.mkdirSync(standingRoot, { mode: 0o700 })
+    const activePath = path.join(root, "resident-aegis-active.json")
+    const body = {
+      schema_version: "0.1-resident-aegis-runtime-lease",
+      lease_id: "../../outside",
+      claim_id: "claim-remote",
+      acquired_at: "2026-08-10T22:00:00.000Z",
+      holder: { pid: 100, boot_id: "boot-dead", process_start_ticks: "10" },
+    } as Json
+    fs.writeFileSync(activePath, `${JSON.stringify({ ...body, lease_sha256: sha256Object(body) })}\n`)
+    const standing = ledger(standingRoot, {
+      nodeLeasePath: activePath,
+      holderIsAlive: vi.fn(() => false),
+    })
+    await standing.claimAdmission(claimBinding())
+
+    await expect(standing.acquireLease(leaseBinding())).rejects.toThrow("LEDGER_UNTRUSTED")
+    expect(fs.existsSync(activePath)).toBe(true)
+    expect(fs.readdirSync(root).filter((name) => name.startsWith("remote-recovery-"))).toHaveLength(0)
+  })
+
+  it("never deletes a replacement lease created after atomic retirement", async () => {
+    const root = tempRoot("aegis-remote-release-replacement-")
+    fs.chmodSync(root, 0o700)
+    const activePath = path.join(root, "resident-aegis-active.json")
+    const renameSync = fs.renameSync.bind(fs)
+    const replacement = { schema_version: "replacement-test-lease", lease_id: "lease-replacement" }
+    let injectReplacement = false
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+      renameSync(source, destination)
+      if (injectReplacement && path.resolve(String(source)) === path.resolve(activePath)
+        && path.basename(String(destination)).startsWith("retired-")) {
+        fs.writeFileSync(activePath, `${JSON.stringify(replacement)}\n`)
+      }
+    })
+    const remote = createLedgerProviders({
+      ledgerRoot: root, platform: "linux", getuid: () => process.getuid?.() ?? 1000,
+      username: () => "williamos-fabric",
+      validateDirectory: (stats: fs.Stats) => stats.isDirectory() && !stats.isSymbolicLink(),
+      validateLedgerFile: (stats: fs.Stats) => stats.isFile() && !stats.isSymbolicLink(),
+      syncDirectory: () => undefined,
+      holderIdentity: () => ({ pid: 100, boot_id: "boot-a", process_start_ticks: "10" }),
+      holderIsAlive: () => true,
+      clock: () => "2026-08-10T22:00:00.000Z",
+    })
+    const lease = await remote.acquireExclusiveLease({ claim_id: "claim-remote" })
+    injectReplacement = true
+
+    try {
+      await expect(remote.releaseExclusiveLease({ lease_id: lease.lease_id, claim_id: "claim-remote" })).resolves.toBe(true)
+      expect(JSON.parse(fs.readFileSync(activePath, "utf8"))).toEqual(replacement)
+    } finally {
+      renameSpy.mockRestore()
+    }
+  })
+
   it("rejects path-like lease identifiers before creating an active lease", async () => {
     const root = tempRoot("aegis-standing-lease-path-")
     const providers = ledger(root)

@@ -559,6 +559,69 @@ export function createStandingLedgerProviders({
     }
   }
 
+  const nodeMutationLockPath = path.join(nodeLeaseRoot, "resident-aegis-mutation.lock")
+  const nodeMutationHolderPath = path.join(nodeMutationLockPath, "holder.json")
+  const withNodeMutationLock = async (action, occupiedValue) => {
+    let acquired = false
+    for (let attempt = 0; attempt < 2 && !acquired; attempt += 1) {
+      const candidatePath = path.join(nodeLeaseRoot, `node-mutation-candidate-${crypto.randomUUID()}`)
+      const candidateHolderPath = path.join(candidatePath, "holder.json")
+      try {
+        fsApi.mkdirSync(candidatePath, { mode: 0o700 })
+        writeExclusiveWith(fsApi, candidateHolderPath, holderIdentity(), sync)
+        sync(candidatePath)
+        fsApi.renameSync(candidatePath, nodeMutationLockPath)
+        sync(nodeLeaseRoot)
+        acquired = true
+      } catch (error) {
+        if (fsApi.existsSync(candidateHolderPath)) fsApi.unlinkSync(candidateHolderPath)
+        if (fsApi.existsSync(candidatePath)) fsApi.rmdirSync(candidatePath)
+        if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes(error?.code)) throw error
+        if (!fsApi.existsSync(nodeMutationLockPath)) continue
+        const lockStats = fsApi.lstatSync(nodeMutationLockPath)
+        if (!validateDirectory(lockStats, uid)) fail("LEDGER_UNTRUSTED", "shared AEGIS mutation lock is not private")
+        const retainedHolder = readLedgerWith(fsApi, nodeMutationHolderPath, uid, validateFile)
+        const entries = fsApi.readdirSync(nodeMutationLockPath)
+        if (!retainedHolder && entries.length === 0) {
+          const emptyRecoveryPath = path.join(nodeLeaseRoot, `node-mutation-recovery-${crypto.randomUUID()}`)
+          try { fsApi.renameSync(nodeMutationLockPath, emptyRecoveryPath) } catch (renameError) {
+            if (renameError?.code === "ENOENT") continue
+            throw renameError
+          }
+          if (fsApi.readdirSync(emptyRecoveryPath).length !== 0) fail("LEDGER_UNTRUSTED", "empty shared mutation lock changed during recovery")
+          fsApi.rmdirSync(emptyRecoveryPath)
+          sync(nodeLeaseRoot)
+          continue
+        }
+        if (!retainedHolder || entries.length !== 1 || entries[0] !== "holder.json") {
+          fail("LEDGER_UNTRUSTED", "shared AEGIS mutation lock is invalid")
+        }
+        if (holderIsAlive(retainedHolder)) return occupiedValue
+        const recoveryPath = path.join(nodeLeaseRoot, `node-mutation-recovery-${crypto.randomUUID()}`)
+        try { fsApi.renameSync(nodeMutationLockPath, recoveryPath) } catch (renameError) {
+          if (renameError?.code === "ENOENT") continue
+          throw renameError
+        }
+        const movedHolder = readLedgerWith(fsApi, path.join(recoveryPath, "holder.json"), uid, validateFile)
+        if (canonical(movedHolder) !== canonical(retainedHolder)) fail("LEDGER_UNTRUSTED", "shared AEGIS mutation holder changed during recovery")
+        fsApi.unlinkSync(path.join(recoveryPath, "holder.json"))
+        fsApi.rmdirSync(recoveryPath)
+        sync(nodeLeaseRoot)
+      }
+    }
+    if (!acquired) return occupiedValue
+    try {
+      return await action()
+    } finally {
+      const releasePath = path.join(nodeLeaseRoot, `node-mutation-release-${crypto.randomUUID()}`)
+      fsApi.renameSync(nodeMutationLockPath, releasePath)
+      sync(nodeLeaseRoot)
+      fsApi.unlinkSync(path.join(releasePath, "holder.json"))
+      fsApi.rmdirSync(releasePath)
+      sync(nodeLeaseRoot)
+    }
+  }
+
   const journalEntries = () => {
     const entries = readJournal()
     if (!Array.isArray(entries)) fail("JOURNAL_UNTRUSTED", "standing journal response is invalid")
@@ -645,16 +708,67 @@ export function createStandingLedgerProviders({
   const remoteLeaseValid = (lease) => {
     const { lease_sha256: retainedLeaseSha256, ...leaseBody } = lease ?? {}
     return lease?.schema_version === "0.1-resident-aegis-runtime-lease"
+      && exactRecordKeys(lease, ["schema_version", "lease_id", "claim_id", "acquired_at", "holder", "lease_sha256"])
+      && /^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/.test(lease.lease_id ?? "")
+      && /^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/.test(lease.claim_id ?? "")
+      && exactRecordKeys(lease.holder, ["pid", "boot_id", "process_start_ticks"])
       && typeof lease.holder === "object" && Number.isSafeInteger(lease.holder.pid) && lease.holder.pid > 0
       && typeof lease.holder.boot_id === "string" && typeof lease.holder.process_start_ticks === "string"
       && retainedLeaseSha256 === sha256(canonicalBytes(leaseBody))
+  }
+  const retireActiveLease = (active, label) => {
+    safeId(active.lease_id, "lease_id")
+    const retiredPath = path.join(nodeLeaseRoot, `retired-${active.lease_id}-${crypto.randomUUID()}.json`)
+    fsApi.renameSync(activePath, retiredPath)
+    const retired = readLedgerWith(fsApi, retiredPath, uid, validateFile)
+    if (canonical(retired) !== canonical(active)) fail("LEDGER_UNTRUSTED", `active AEGIS lease changed before ${label}`)
+    fsApi.unlinkSync(retiredPath)
+    sync(nodeLeaseRoot)
+  }
+  const recoverRemoteLease = (active) => {
+    if (holderIsAlive(active.holder)) return false
+    const acquiredAtMs = Date.parse(active.acquired_at)
+    const recoveredAt = clock()
+    const recoveredAtMs = Date.parse(recoveredAt)
+    if (!Number.isFinite(acquiredAtMs) || new Date(acquiredAtMs).toISOString() !== active.acquired_at
+      || !Number.isFinite(recoveredAtMs) || new Date(recoveredAtMs).toISOString() !== recoveredAt
+      || recoveredAtMs < acquiredAtMs) {
+      fail("LEDGER_UNTRUSTED", "dead remote lease chronology is invalid")
+    }
+    const body = {
+      schema_version: "1.0-aegis-shared-remote-lease-recovery",
+      lease_id: active.lease_id,
+      claim_id: active.claim_id,
+      lease_sha256: active.lease_sha256,
+      recovered_at: recoveredAt,
+      reason: "PROVEN_DEAD_REMOTE_HOLDER",
+      execution_authority_created: false,
+    }
+    body.recovery_sha256 = sha256(canonicalBytes(body))
+    const recoveryPath = path.join(nodeLeaseRoot, `remote-recovery-${active.lease_id}.json`)
+    try { writeExclusiveWith(fsApi, recoveryPath, body, sync) } catch (error) {
+      if (error?.code !== "EEXIST") throw error
+      const retained = readLedgerWith(fsApi, recoveryPath, uid, validateFile)
+      const retainedAtMs = Date.parse(retained?.recovered_at)
+      if (!exactRecordKeys(retained, ["schema_version", "lease_id", "claim_id", "lease_sha256", "recovered_at", "reason", "execution_authority_created", "recovery_sha256"])
+        || retained.schema_version !== body.schema_version || !recordDigestValid(retained, "recovery_sha256")
+        || retained.lease_id !== body.lease_id || retained.claim_id !== body.claim_id
+        || retained.lease_sha256 !== body.lease_sha256 || retained.reason !== body.reason
+        || retained.execution_authority_created !== false || !Number.isFinite(retainedAtMs)
+        || new Date(retainedAtMs).toISOString() !== retained.recovered_at
+        || retainedAtMs < acquiredAtMs || retainedAtMs > recoveredAtMs) {
+        fail("LEDGER_UNTRUSTED", "retained remote recovery does not bind the exact dead lease")
+      }
+    }
+    retireActiveLease(active, "remote recovery")
+    return true
   }
   const reconcile = () => {
     const active = readLedgerWith(fsApi, activePath, uid, validateFile)
     if (!active) return true
     if (active.schema_version === "0.1-resident-aegis-runtime-lease") {
       if (!remoteLeaseValid(active)) fail("LEDGER_UNTRUSTED", "active remote-development lease is invalid")
-      return false
+      return recoverRemoteLease(active)
     }
     if (!recordDigestValid(active, "lease_record_sha256")) fail("LEDGER_UNTRUSTED", "active standing lease is invalid")
     if (holderIsAlive(active.holder)) return false
@@ -687,10 +801,13 @@ export function createStandingLedgerProviders({
         fail("LEDGER_UNTRUSTED", "retained recovery does not bind the exact dead lease")
       }
     }
-    fsApi.unlinkSync(activePath)
-    sync(nodeLeaseRoot)
+    retireActiveLease(active, "standing recovery")
     return true
   }
+
+  const reconcileNodeLease = async () => withMutationLock(async () => withNodeMutationLock(async () => ({
+    available: reconcile(),
+  }), { available: false }))
 
   const acquireLease = async (binding) => withMutationLock(async () => {
     safeId(binding.lease_id, "lease_id")
@@ -698,37 +815,39 @@ export function createStandingLedgerProviders({
     const acquiredAt = clock()
     const body = { schema_version: "1.0-aegis-standing-lease", ...binding, acquired_at: acquiredAt, holder: holderIdentity() }
     body.lease_record_sha256 = sha256(canonicalBytes(body))
-    if (!reconcile()) return { acquired: false, ...binding, acquired_at: acquiredAt }
-    try { writeExclusiveWith(fsApi, activePath, body, sync) } catch (error) {
-      if (error?.code === "EEXIST") return { acquired: false, ...binding, acquired_at: acquiredAt }
-      throw error
-    }
-    const usedFences = fsApi.readdirSync(root)
-      .map((name) => /^fence-(\d+)\.json$/.exec(name))
-      .filter(Boolean)
-      .map((match) => Number(match[1]))
-    const highestFence = usedFences.length ? Math.max(...usedFences) : 0
-    if (!Number.isSafeInteger(binding.fencing_token) || binding.fencing_token <= highestFence) {
-      fsApi.unlinkSync(activePath)
-      sync(nodeLeaseRoot)
-      fail("FENCING_REPLAY", "standing lease fencing token is not strictly increasing")
-    }
-    const fence = {
-      schema_version: "1.0-aegis-standing-fence",
-      fencing_token: binding.fencing_token,
-      lease_id: binding.lease_id,
-      admission_id: binding.admission_id,
-      recorded_at: acquiredAt,
-    }
-    fence.fence_sha256 = sha256(canonicalBytes(fence))
-    try {
-      writeExclusiveWith(fsApi, path.join(root, `fence-${binding.fencing_token}.json`), fence, sync)
-    } catch (error) {
-      fsApi.unlinkSync(activePath)
-      sync(nodeLeaseRoot)
-      if (error?.code === "EEXIST") fail("FENCING_REPLAY", "standing lease fencing token was already used")
-      throw error
-    }
+    const acquired = await withNodeMutationLock(async () => {
+      if (!reconcile()) return false
+      try { writeExclusiveWith(fsApi, activePath, body, sync) } catch (error) {
+        if (error?.code === "EEXIST") return false
+        throw error
+      }
+      const usedFences = fsApi.readdirSync(root)
+        .map((name) => /^fence-(\d+)\.json$/.exec(name))
+        .filter(Boolean)
+        .map((match) => Number(match[1]))
+      const highestFence = usedFences.length ? Math.max(...usedFences) : 0
+      if (!Number.isSafeInteger(binding.fencing_token) || binding.fencing_token <= highestFence) {
+        retireActiveLease(body, "fencing rejection")
+        fail("FENCING_REPLAY", "standing lease fencing token is not strictly increasing")
+      }
+      const fence = {
+        schema_version: "1.0-aegis-standing-fence",
+        fencing_token: binding.fencing_token,
+        lease_id: binding.lease_id,
+        admission_id: binding.admission_id,
+        recorded_at: acquiredAt,
+      }
+      fence.fence_sha256 = sha256(canonicalBytes(fence))
+      try {
+        writeExclusiveWith(fsApi, path.join(root, `fence-${binding.fencing_token}.json`), fence, sync)
+      } catch (error) {
+        retireActiveLease(body, "fencing failure")
+        if (error?.code === "EEXIST") fail("FENCING_REPLAY", "standing lease fencing token was already used")
+        throw error
+      }
+      return true
+    }, false)
+    if (!acquired) return { acquired: false, ...binding, acquired_at: acquiredAt }
     lastLease = body
     return { acquired: true, ...binding, acquired_at: acquiredAt }
   })
@@ -794,7 +913,7 @@ export function createStandingLedgerProviders({
     return { persisted: true, evidence_sha256: evidence.evidence_sha256 }
   })
 
-  const releaseLease = async (binding) => withMutationLock(async () => {
+  const releaseLease = async (binding) => withMutationLock(async () => withNodeMutationLock(async () => {
     const active = readLedgerWith(fsApi, activePath, uid, validateFile)
     if (!recordDigestValid(active, "lease_record_sha256")) fail("LEDGER_UNTRUSTED", "active standing lease is invalid")
     if (active.lease_id !== binding.lease_id || active.claim_id !== binding.claim_id) fail("LEASE_BINDING_MISMATCH", "release does not match the active lease")
@@ -824,16 +943,16 @@ export function createStandingLedgerProviders({
         fail("LEDGER_UNTRUSTED", "retained release does not bind the exact lease")
       }
     }
-    fsApi.unlinkSync(activePath)
-    sync(nodeLeaseRoot)
+    retireActiveLease(active, "standing release")
     lastRelease = body
     return { released: true, ...binding }
-  })
+  }, { released: false, ...binding }))
 
   return {
     ledgerRoot: root,
     claimAdmission,
     persistClaimFailure,
+    reconcileNodeLease,
     acquireLease,
     persistResult,
     releaseLease,

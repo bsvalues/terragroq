@@ -44,7 +44,10 @@ const FORGE_FILES = {
 }
 const AUTHORITY_REGISTRY = "config/execution-fabric/aegis-bounded-dispatch-authority-registry.json"
 const SAFE_SCOPE_PATH = /^config\/execution-fabric\/aegis-bounded-dispatch-authority-scopes\/[A-Za-z0-9][A-Za-z0-9._-]{2,200}\.json$/
+const SAFE_RUNTIME_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/
 const COMMIT = /^[a-f0-9]{40}$/
+const exactKeys = (value, keys) => value && typeof value === "object"
+  && Object.keys(value).sort().join("\u0000") === [...keys].sort().join("\u0000")
 
 function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex")
@@ -396,6 +399,70 @@ export function createLedgerProviders({
   let retainedLease = null
   let retainedRelease = null
   let retainedRecovery = null
+  const nodeMutationLockPath = path.join(ledgerRoot, "resident-aegis-mutation.lock")
+  const nodeMutationHolderPath = path.join(nodeMutationLockPath, "holder.json")
+  const withNodeMutationLock = async (action, occupiedValue) => {
+    let acquired = false
+    for (let attempt = 0; attempt < 2 && !acquired; attempt += 1) {
+      const candidatePath = path.join(ledgerRoot, `node-mutation-candidate-${crypto.randomUUID()}`)
+      const candidateHolderPath = path.join(candidatePath, "holder.json")
+      try {
+        fs.mkdirSync(candidatePath, { mode: 0o700 })
+        writeExclusiveDurable(candidateHolderPath, holderIdentity(), syncDirectory)
+        fs.renameSync(candidatePath, nodeMutationLockPath)
+        syncDirectory(ledgerRoot)
+        acquired = true
+      } catch (error) {
+        if (fs.existsSync(candidateHolderPath)) fs.unlinkSync(candidateHolderPath)
+        if (fs.existsSync(candidatePath)) fs.rmdirSync(candidatePath)
+        if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes(error?.code)) throw error
+        if (!fs.existsSync(nodeMutationLockPath)) continue
+        if (!validateDirectory(fs.lstatSync(nodeMutationLockPath), uid)) {
+          fail("LEDGER_UNTRUSTED", "shared AEGIS mutation lock is not private")
+        }
+        const retainedHolder = readPrivateLedgerJson(nodeMutationHolderPath, uid, validateLedgerFile)
+        const entries = fs.readdirSync(nodeMutationLockPath)
+        if (!retainedHolder && entries.length === 0) {
+          const emptyRecoveryPath = path.join(ledgerRoot, `node-mutation-recovery-${crypto.randomUUID()}`)
+          try { fs.renameSync(nodeMutationLockPath, emptyRecoveryPath) } catch (renameError) {
+            if (renameError?.code === "ENOENT") continue
+            throw renameError
+          }
+          if (fs.readdirSync(emptyRecoveryPath).length !== 0) fail("LEDGER_UNTRUSTED", "empty shared mutation lock changed during recovery")
+          fs.rmdirSync(emptyRecoveryPath)
+          syncDirectory(ledgerRoot)
+          continue
+        }
+        if (!retainedHolder || entries.length !== 1 || entries[0] !== "holder.json") {
+          fail("LEDGER_UNTRUSTED", "shared AEGIS mutation lock is invalid")
+        }
+        if (holderIsAlive(retainedHolder)) return occupiedValue
+        const recoveryPath = path.join(ledgerRoot, `node-mutation-recovery-${crypto.randomUUID()}`)
+        try { fs.renameSync(nodeMutationLockPath, recoveryPath) } catch (renameError) {
+          if (renameError?.code === "ENOENT") continue
+          throw renameError
+        }
+        const movedHolder = readPrivateLedgerJson(path.join(recoveryPath, "holder.json"), uid, validateLedgerFile)
+        if (canonicalBytes(movedHolder).compare(canonicalBytes(retainedHolder)) !== 0) {
+          fail("LEDGER_UNTRUSTED", "shared AEGIS mutation holder changed during recovery")
+        }
+        fs.unlinkSync(path.join(recoveryPath, "holder.json"))
+        fs.rmdirSync(recoveryPath)
+        syncDirectory(ledgerRoot)
+      }
+    }
+    if (!acquired) return occupiedValue
+    try {
+      return await action()
+    } finally {
+      const releasePath = path.join(ledgerRoot, `node-mutation-release-${crypto.randomUUID()}`)
+      fs.renameSync(nodeMutationLockPath, releasePath)
+      syncDirectory(ledgerRoot)
+      fs.unlinkSync(path.join(releasePath, "holder.json"))
+      fs.rmdirSync(releasePath)
+      syncDirectory(ledgerRoot)
+    }
+  }
   const claimSingleUse = async ({ request_sha256, scope_sha256, authority_reference, maximum_attempts }) => {
     const claimKeySha256 = sha256(canonicalBytes({ authority_reference, scope_sha256 }))
     const claimedAt = clock()
@@ -433,6 +500,9 @@ export function createLedgerProviders({
   const validateLease = (lease) => {
     const { lease_sha256: retainedLeaseSha256, ...leaseBody } = lease ?? {}
     return lease && lease.schema_version === "0.1-resident-aegis-runtime-lease"
+      && exactKeys(lease, ["schema_version", "lease_id", "claim_id", "acquired_at", "holder", "lease_sha256"])
+      && SAFE_RUNTIME_ID.test(lease.lease_id ?? "") && SAFE_RUNTIME_ID.test(lease.claim_id ?? "")
+      && exactKeys(lease.holder, ["pid", "boot_id", "process_start_ticks"])
       && typeof lease.holder === "object" && Number.isSafeInteger(lease.holder.pid) && lease.holder.pid > 0
       && typeof lease.holder.boot_id === "string" && typeof lease.holder.process_start_ticks === "string"
       && retainedLeaseSha256 === sha256(canonicalBytes(leaseBody))
@@ -441,9 +511,24 @@ export function createLedgerProviders({
   const validateStandingLease = (lease) => {
     const { lease_record_sha256: retainedLeaseSha256, ...leaseBody } = lease ?? {}
     return lease?.schema_version === "1.0-aegis-standing-lease"
+      && exactKeys(lease, ["schema_version", "authority_id", "authority_sha256", "job_id", "admission_id", "admission_sha256", "request_sha256", "request_binding_sha256", "claim_id", "admission_issued_at", "admission_expires_at", "lease_id", "fencing_token", "acquired_at", "holder", "lease_record_sha256"])
+      && SAFE_RUNTIME_ID.test(lease.lease_id ?? "") && SAFE_RUNTIME_ID.test(lease.claim_id ?? "")
+      && exactKeys(lease.holder, ["pid", "boot_id", "process_start_ticks"])
       && typeof lease.holder === "object" && Number.isSafeInteger(lease.holder.pid) && lease.holder.pid > 0
       && typeof lease.holder.boot_id === "string" && typeof lease.holder.process_start_ticks === "string"
       && retainedLeaseSha256 === sha256(canonicalBytes(leaseBody))
+  }
+
+  const retireActiveLease = (lease, label) => {
+    const leasePath = path.join(ledgerRoot, "resident-aegis-active.json")
+    const retiredPath = path.join(ledgerRoot, `retired-${lease.lease_id}-${crypto.randomUUID()}.json`)
+    fs.renameSync(leasePath, retiredPath)
+    const retired = readPrivateLedgerJson(retiredPath, uid, validateLedgerFile)
+    if (canonicalBytes(retired).compare(canonicalBytes(lease)) !== 0) {
+      fail("LEDGER_UNTRUSTED", `active AEGIS lease changed before ${label}`)
+    }
+    fs.unlinkSync(retiredPath)
+    syncDirectory(ledgerRoot)
   }
 
   const reconcileDeadLease = () => {
@@ -490,14 +575,11 @@ export function createLedgerProviders({
       }
       retainedRecovery ??= recovery
     }
-    try { fs.unlinkSync(leasePath) } catch (error) {
-      if (error?.code !== "ENOENT") throw error
-    }
-    syncDirectory(ledgerRoot)
+    retireActiveLease(active, "recovery")
     return true
   }
 
-  const acquireExclusiveLease = async ({ claim_id }) => {
+  const acquireExclusiveLease = async ({ claim_id }) => withNodeMutationLock(async () => {
     const acquiredAt = clock()
     const leaseId = `lease-${sha256(canonicalBytes({ claim_id, acquired_at: acquiredAt })).slice(0, 24)}`
     const lease = {
@@ -517,8 +599,8 @@ export function createLedgerProviders({
     }
     retainedLease = lease
     return { acquired: true, lease_id: leaseId, acquired_at: acquiredAt }
-  }
-  const releaseExclusiveLease = async ({ lease_id, claim_id }) => {
+  }, { acquired: false, lease_id: null, acquired_at: null })
+  const releaseExclusiveLease = async ({ lease_id, claim_id }) => withNodeMutationLock(async () => {
     const leasePath = path.join(ledgerRoot, "resident-aegis-active.json")
     const retained = readPrivateLedgerJson(leasePath, uid, validateLedgerFile)
     if (!retained) return false
@@ -545,12 +627,11 @@ export function createLedgerProviders({
       }
       retainedRelease = existing
     }
-    fs.unlinkSync(leasePath)
-    syncDirectory(ledgerRoot)
+    retireActiveLease(retained, "release")
     retainedLease = retained
     retainedRelease ??= release
     return true
-  }
+  }, false)
   const runtimeEvidence = () => ({
     claim_sha256: retainedClaim?.claim_sha256 ?? null,
     lease_sha256: retainedLease?.lease_sha256 ?? null,
