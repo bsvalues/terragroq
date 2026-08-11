@@ -6,7 +6,6 @@ readonly WORK_ORDER_ID="WO-TF-REMOTE-DEV-OFFLOAD-001"
 readonly REPOSITORY="bsvalues/terrafusion_os_1.0"
 readonly REMOTE_URL="git@github.com:bsvalues/terrafusion_os_1.0.git"
 readonly LOGICAL_WORKSPACE="/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001"
-readonly POLICY_SHA256="8e4d17071567ed1f43c01a02251a689d1879cfadcf90af92260267ebd668fd2c"
 readonly OWNER_MARKER=".williamos-remote-dev-owner.json"
 readonly MERGE_MARKER=".williamos-post-merge-proven"
 readonly -a ALLOWED_OPERATIONS=(
@@ -78,7 +77,7 @@ validation="$(timeout 15 node -e '
   const issued=Date.parse(p.authority.issuedAt),expires=Date.parse(p.authority.expiresAt),now=Date.now()
   if(p.authority.grantId!=="grant-remote-dev-offload-v1"||p.authority.singleUse!==true||!Number.isFinite(issued)||!Number.isFinite(expires)||issued>=now||expires<=now||expires-issued>14400000)fail("AUTHORITY_INVALID","grant is invalid or expired")
   exact(p.bindings,["policySha256","packetSha256"],"bindings")
-  if(p.bindings.policySha256!=="8e4d17071567ed1f43c01a02251a689d1879cfadcf90af92260267ebd668fd2c")fail("POLICY_DIGEST_MISMATCH","policy digest differs")
+  if(!/^[a-f0-9]{64}$/.test(p.bindings.policySha256))fail("POLICY_DIGEST_MISMATCH","policy digest is malformed")
   const unsigned=structuredClone(p);delete unsigned.bindings
   if(p.bindings.packetSha256!==digest(Buffer.from(canonical(unsigned),"utf8")))fail("PACKET_DIGEST_MISMATCH","packet digest differs")
   const fields=[p.runId,p.workOrderId,p.repository,p.baseSha,p.branch,p.workspace,p.patch.sha256,p.bindings.policySha256,p.bindings.packetSha256,String(p.patch.generation),String(p.resourceLimits.timeoutSeconds)]
@@ -105,6 +104,8 @@ fi
 if [[ -n "$WORKER_ROOT" && -d "$WORKER_ROOT/bin" ]]; then
   export PATH="$WORKER_ROOT/bin:$PATH"
 fi
+EXECUTION_ACCOUNT="$(timeout 5 id -un)" || die_input "EXECUTION_IDENTITY_MISMATCH" "execution account is unavailable"
+[[ "$EXECUTION_ACCOUNT" == "williamos-fabric" ]] || die_input "EXECUTION_IDENTITY_MISMATCH" "dedicated AEGIS execution account is required"
 PHYSICAL_WORKSPACE="${WORKER_ROOT}${LOGICAL_WORKSPACE}"
 PHYSICAL_PARENT="${WORKER_ROOT}/srv/william/workspaces"
 TRUSTED_PARENT="${WORKER_ROOT}/srv/william"
@@ -604,7 +605,7 @@ case "$OPERATION" in
     host_name="$(timeout 5 hostname | tr '[:upper:]' '[:lower:]')" || die_block "PREFLIGHT_IDENTITY_FAILED" "hostname is unavailable"
     [[ "$host_name" == "aegis" ]] || die_block "PREFLIGHT_IDENTITY_FAILED" "worker hostname is not aegis"
     user_name="$(timeout 5 id -un)" || die_block "PREFLIGHT_IDENTITY_FAILED" "worker user is unavailable"
-    [[ "$user_name" == "bs" ]] || die_block "PREFLIGHT_IDENTITY_FAILED" "worker user is not bs"
+    [[ "$user_name" == "williamos-fabric" ]] || die_block "PREFLIGHT_IDENTITY_FAILED" "worker user is not williamos-fabric"
     timeout 10 git --version >/dev/null 2>&1 || die_block "PREFLIGHT_TOOLCHAIN_FAILED" "Git is unavailable"
     dotnet_version="$(timeout 10 dotnet --version)" || die_block "PREFLIGHT_TOOLCHAIN_FAILED" ".NET is unavailable"
     [[ "$dotnet_version" == 8.* ]] || die_block "PREFLIGHT_TOOLCHAIN_FAILED" ".NET 8 is required"

@@ -41,10 +41,14 @@
   },
   "canonicalAegisContract": {
     "path": "config/execution-fabric/aegis-bounded-dispatch-contract.json",
-    "sha256": "bc9bc0d795462f930bb495e665c05efdd44d5c1809a63326ba81522cda8883d7",
+    "sha256": "18299f57bb86e9cd4902a98b93f56c702aa51b44e5d9e085dddac247f24b8d22",
     "contractId": "resident-aegis-bounded-compute-v1",
     "status": "NON_ACTIVE_CONTRACT",
     "ciBuildTemplateId": "aegis.ci-build-test.v1"
+  },
+  "trustBaseline": {
+    "scopePath": "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json",
+    "scopeSha256": "8368d9fde4a2e79786000fa58f7a1182abf08134f4deda07d3ce63ebc1478317"
   },
   "scheduler": {
     "state": "disabled",

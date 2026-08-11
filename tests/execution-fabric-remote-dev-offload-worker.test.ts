@@ -46,7 +46,7 @@ function makePacket(baseSha: string, patch: Buffer, overrides: Record<string, un
     authority: { grantId: "grant-remote-dev-offload-v1", issuedAt: new Date(now - 60_000).toISOString(), expiresAt: new Date(now + 3_600_000).toISOString(), singleUse: true }, bindings: { policySha256: "", packetSha256: "" }, ...overrides,
   }
   const result = bindRemoteDevPacket(packet, policy, { now: new Date(now).toISOString(), seenRunIds: [], branch: packet.branch, dispatchEnvelope: envelope(baseSha) })
-  if (result.status !== "READY") throw new Error(JSON.stringify(result))
+  if (result.status !== "INACTIVE_TRUSTED_MAIN_READY") throw new Error(JSON.stringify(result))
   return result.packet
 }
 
@@ -74,6 +74,11 @@ function fixture() {
   fs.writeFileSync(path.join(physicalWorkspace, ".williamos-remote-dev-owner.json"), JSON.stringify({ run_id: packet.runId, work_order_id: packet.workOrderId, repository: packet.repository, branch: packet.branch, base_sha: packet.baseSha }))
   fs.mkdirSync(path.join(physicalWorkspace, ".williamos-scratch"), { mode: 0o700 })
   const fakeBin = path.join(hostRoot, "bin"); fs.mkdirSync(fakeBin)
+  writeExecutable(path.join(fakeBin, "id"), `#!/usr/bin/env bash
+if [[ "\${1:-}" == -un ]]; then printf '%s\n' "\${FAKE_EXECUTION_ACCOUNT:-williamos-fabric}"; exit 0; fi
+if [[ "\${1:-}" == -u ]]; then printf '%s\n' '${bashUid}'; exit 0; fi
+exec /usr/bin/id "$@"
+`)
   writeExecutable(path.join(fakeBin, "dotnet"), `#!/usr/bin/env bash
 if [[ "\${1:-}" == --version ]]; then printf '%s\n' '8.0.100'; exit 0; fi
 if [[ "\${FAKE_REQUIRE_REPO_CWD:-0}" == 1 ]]; then [[ "$PWD" == "$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001/repository" ]] || exit 66; fi
@@ -223,6 +228,11 @@ function workerSummary(stderr: string) {
 afterEach(() => { while (tempRoots.length) fs.rmSync(tempRoots.pop()!, { recursive: true, force: true }) })
 
 describe("fixed AEGIS remote development worker", () => {
+  it("rejects any execution identity other than williamos-fabric", () => {
+    const value = fixture()
+    expect(runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_EXECUTION_ACCOUNT: "bs" } }).json).toMatchObject({ status: "EXECUTION_IDENTITY_MISMATCH" })
+  })
+
   it("rejects arbitrary operations, wrong workspaces, and widened resources as invalid input", () => {
     const value = fixture()
     expect(runWorker("ARBITRARY_SHELL", value).json).toMatchObject({ status: "OPERATION_NOT_ALLOWED" })
@@ -373,7 +383,7 @@ describe("fixed AEGIS remote development worker", () => {
     const value = fixture(); fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
     writeExecutable(path.join(value.fakeBin, "hostname"), "#!/usr/bin/env bash\nprintf '%s\\n' aegis\n")
     writeExecutable(path.join(value.fakeBin, "id"), `#!/usr/bin/env bash
-if [[ "\${1:-}" == -un ]]; then printf '%s\n' bs; else printf '%s\n' '${bashUid}'; fi
+if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\n' '${bashUid}'; fi
 `)
     writeExecutable(path.join(value.fakeBin, "nproc"), "#!/usr/bin/env bash\nprintf '%s\\n' 12\n")
     writeExecutable(path.join(value.fakeBin, "df"), "#!/usr/bin/env bash\nprintf '%s\\n' Available 100000000000\n")

@@ -72,7 +72,7 @@ function context(overrides: Record<string, unknown> = {}) {
 
 function bound() {
   const result = bindRemoteDevPacket(packet(), policy(), context())
-  expect(result.status).toBe("READY")
+  expect(result.status).toBe("INACTIVE_TRUSTED_MAIN_READY")
   return result.packet
 }
 
@@ -109,10 +109,10 @@ describe("remote development offload proof contract", () => {
     expect(bindRemoteDevPacket(packet(), value, context())).toMatchObject({ status: "BLOCKED" })
   })
 
-  it("binds one exact Hermes-mediated packet to canonical dispatch and JCS SHA-256 values", () => {
+  it("compiles one exact Hermes-mediated packet but keeps dispatch inactive", () => {
     const result = bindRemoteDevPacket(packet(), policy(), context())
-    expect(result).toMatchObject({ status: "READY", packet: { bindings: { policySha256: sha(policy()), packetSha256: expect.stringMatching(/^[a-f0-9]{64}$/) } } })
-    expect(exitCodeForRemoteDevStatus(result.status)).toBe(0)
+    expect(result).toMatchObject({ status: "INACTIVE_TRUSTED_MAIN_READY", executionAuthorized: false, packet: { bindings: { policySha256: sha(policy()), packetSha256: expect.stringMatching(/^[a-f0-9]{64}$/) } } })
+    expect(exitCodeForRemoteDevStatus(result.status)).not.toBe(0)
   })
 
   it.each([

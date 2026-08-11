@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url"
 
 import { canonicalizeJcs } from "../canonical-json.mjs"
 import { validateDispatchEnvelope } from "../../multi-agent-operator/dispatch-envelope.mjs"
+import {
+  createLedgerProviders,
+  createTrustedProofProviders,
+  trustedResidentIdentity,
+} from "../bounded-dispatch/run-resident-aegis-hash-verify.mjs"
 
 const SHA256 = /^[a-f0-9]{64}$/
 const SHA40 = /^[a-f0-9]{40}$/
@@ -27,6 +32,8 @@ function hash(value) { return crypto.createHash("sha256").update(canonicalizeJcs
 function utcMs(value, label) { if (typeof value !== "string" || !UTC.test(value) || !Number.isFinite(Date.parse(value))) block("TIMESTAMP_INVALID", label); return Date.parse(value) }
 function digest(value, label) { if (typeof value !== "string" || !SHA256.test(value)) block("HASH_INVALID", label); return value }
 function exactValue(left, right, label) { if (canonicalizeJcs(left) !== canonicalizeJcs(right)) block("POLICY_MISMATCH", label) }
+function byteDigest(bytes) { return crypto.createHash("sha256").update(bytes).digest("hex") }
+function trustedTextBytes(bytes) { return Buffer.from(Buffer.from(bytes).toString("utf8").replace(/\r\n/g, "\n"), "utf8") }
 
 function rejectUnsafe(value, label = "input") {
   if (typeof value === "string") { if (SECRET_LIKE.test(value)) block("SECRET_LIKE_VALUE", label); return }
@@ -38,17 +45,172 @@ function rejectUnsafe(value, label = "input") {
   }
 }
 
+const TRUST_ARTIFACT_PATHS = {
+  contract: "config/execution-fabric/aegis-bounded-dispatch-contract.json",
+  profiles: "config/execution-fabric/aegis-bounded-operation-profiles.json",
+  authorityRegistry: "config/execution-fabric/aegis-bounded-dispatch-authority-registry.json",
+  identity: "config/execution-fabric/aegis-resident-identity.json",
+  forgePermission: "config/execution-fabric/agent-forge-aegis-bounded-dispatch-permission.json",
+  trustedRunner: "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs",
+  proofWorker: "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
+}
+const HASH_EVIDENCE_PATHS = {
+  scope: "config/execution-fabric/aegis-bounded-dispatch-authority-scopes/WO-EF-DISPATCH-AEGIS-001.json",
+  claim: "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-claim.json",
+  lease: "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-lease.json",
+  release: "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-release.json",
+  replay: "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-replay-evidence.json",
+}
+
+function parseArtifact(artifacts, name) {
+  const bytes = artifacts?.[name]
+  if (!Buffer.isBuffer(bytes) && !(bytes instanceof Uint8Array)) block("TRUST_BASELINE_DRIFT", `${name} bytes are unavailable`)
+  try { return JSON.parse(Buffer.from(bytes).toString("utf8").replace(/^\uFEFF/, "")) } catch { block("TRUST_BASELINE_DRIFT", `${name} is not JSON`) }
+}
+
+function exactTrustKeys(value, keys, label) {
+  const actual = Object.keys(object(value, label)).sort()
+  if (JSON.stringify(actual) !== JSON.stringify([...keys].sort())) block("TRUST_BASELINE_DRIFT", `${label} fields differ`)
+}
+
+export function validateRemoteDevTrustBaseline(policy, scope, artifacts) {
+  try {
+    object(policy, "policy"); object(scope, "trust scope")
+    exactTrustKeys(scope, ["schemaVersion", "scopeId", "workOrderId", "templateId", "selectedNodeId", "status", "executionAuthorized", "activationAllowed", "executionIdentity", "trustedMain", "authoritySeparation", "ownerAuthorizedException", "futureActivationRequirements", "scheduler"], "trust scope")
+    exactTrustKeys(scope.executionIdentity, ["account", "privilege", "required", "provider"], "executionIdentity")
+    exactTrustKeys(scope.trustedMain, ["ref", "checkoutState", "ancestryRequired", "proofProvider", "bindings"], "trustedMain")
+    exactTrustKeys(scope.authoritySeparation, ["closedCiTemplate", "consumedHashProof"], "authoritySeparation")
+    exactTrustKeys(scope.authoritySeparation.closedCiTemplate, ["contractId", "templateId", "profileId", "contractStatus", "profileStatus"], "closedCiTemplate")
+    exactTrustKeys(scope.authoritySeparation.consumedHashProof, ["workOrderId", "authorityReference", "templateId", "claimId", "reuseAllowed", "mutationAllowed", "artifacts"], "consumedHashProof")
+    exactTrustKeys(scope.ownerAuthorizedException, ["canonicalProfileEquivalent", "reason", "resources", "network"], "ownerAuthorizedException")
+    exactTrustKeys(scope.ownerAuthorizedException.resources, ["cpuThreads", "memoryBytes", "scratchBytes", "timeoutSeconds", "maxAttempts"], "ownerAuthorizedException.resources")
+    exactTrustKeys(scope.ownerAuthorizedException.network, ["defaultDeny", "atlasAllowed", "endpoints"], "ownerAuthorizedException.network")
+    exactTrustKeys(scope.futureActivationRequirements, ["dedicatedExecutionIdentity", "trustedMainAncestry", "durableSingleUseClaim", "nodeExclusiveLease", "durableLeaseRelease", "replayRejectionEvidence", "ledgerProvider", "sameRunAndScopeBinding"], "futureActivationRequirements")
+    exactTrustKeys(scope.scheduler, ["state", "standingAegisAuthority", "autonomousDispatch"], "scheduler")
+    exactKeys(policy.trustBaseline, ["scopePath", "scopeSha256"], "policy.trustBaseline")
+    if (policy.trustBaseline.scopePath !== "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json") block("TRUST_SCOPE_DIGEST_MISMATCH", "scope path differs")
+    const scopeBytes = artifacts?.trustScope
+    if (!Buffer.isBuffer(scopeBytes) && !(scopeBytes instanceof Uint8Array)) block("TRUST_SCOPE_DIGEST_MISMATCH", "scope bytes are unavailable")
+    if (policy.trustBaseline.scopeSha256 !== byteDigest(trustedTextBytes(scopeBytes))) block("TRUST_SCOPE_DIGEST_MISMATCH", "scope bytes differ")
+
+    if (scope.workOrderId === "WO-EF-DISPATCH-AEGIS-001" || scope.authoritySeparation?.consumedHashProof?.reuseAllowed !== false || scope.authoritySeparation?.consumedHashProof?.mutationAllowed !== false) {
+      block("HASH_SCOPE_REUSE_REJECTED", "the consumed HASH_VERIFY scope is immutable and unavailable")
+    }
+    if (scope.executionIdentity?.account !== "williamos-fabric" || scope.executionIdentity?.privilege !== "non-root-no-sudo"
+      || scope.executionIdentity?.required !== true || scope.executionIdentity?.provider !== trustedResidentIdentity.name) block("EXECUTION_IDENTITY_MISMATCH", "dedicated AEGIS identity differs")
+
+    const requirements = scope.futureActivationRequirements
+    const requiredFuture = ["dedicatedExecutionIdentity", "trustedMainAncestry", "durableSingleUseClaim", "nodeExclusiveLease", "durableLeaseRelease", "replayRejectionEvidence", "sameRunAndScopeBinding"]
+    if (!requirements || requiredFuture.some((field) => requirements[field] !== true) || requirements.ledgerProvider !== createLedgerProviders.name) block("FUTURE_ACTIVATION_EVIDENCE_INCOMPLETE", "claim, lease, release, replay, identity, and ancestry are mandatory")
+
+    const expectedResources = { cpuThreads: 12, memoryBytes: 12884901888, scratchBytes: 85899345920, timeoutSeconds: 5400, maxAttempts: 3 }
+    const expectedNetwork = {
+      defaultDeny: true,
+      atlasAllowed: false,
+      endpoints: [
+        { host: "github.com", port: 443, operations: ["git-fetch", "git-push"] },
+        { host: "api.github.com", port: 443, operations: ["github-pr"] },
+        { host: "api.nuget.org", port: 443, operations: ["dotnet-restore"] },
+        { host: "globalcdn.nuget.org", port: 443, operations: ["dotnet-restore"] },
+      ],
+    }
+    if (scope.ownerAuthorizedException?.canonicalProfileEquivalent !== false
+      || scope.ownerAuthorizedException?.reason !== "ISSUE_734_DOTNET_RESTORE_TEST_BUILD_PROOF"
+      || canonicalizeJcs(scope.ownerAuthorizedException?.resources) !== canonicalizeJcs(expectedResources)
+      || canonicalizeJcs(scope.ownerAuthorizedException?.network) !== canonicalizeJcs(expectedNetwork)) {
+      block("OWNER_EXCEPTION_INVALID", "the non-equivalent resource/network exception is ambiguous or widened")
+    }
+
+    if (scope.schemaVersion !== 1 || scope.scopeId !== "remote-dev-offload-v1-ci-build-inactive"
+      || scope.workOrderId !== "WO-TF-REMOTE-DEV-OFFLOAD-001" || scope.templateId !== "aegis.ci-build-test.v1"
+      || scope.selectedNodeId !== "aegis" || scope.status !== "OWNER_AUTHORIZED_EXCEPTION_INACTIVE"
+      || scope.executionAuthorized !== false || scope.activationAllowed !== false
+      || canonicalizeJcs(scope.scheduler) !== canonicalizeJcs({ state: "disabled", standingAegisAuthority: false, autonomousDispatch: false })) {
+      block("TRUST_BASELINE_DRIFT", "inactive proof identity or posture differs")
+    }
+    if (scope.trustedMain?.ref !== "refs/heads/main" || scope.trustedMain?.checkoutState !== "EXACT_CLEAN_HEAD"
+      || scope.trustedMain?.ancestryRequired !== true || scope.trustedMain?.proofProvider !== createTrustedProofProviders.name) {
+      block("FUTURE_ACTIVATION_EVIDENCE_INCOMPLETE", "trusted-main ancestry proof is not mandatory")
+    }
+
+    const bindings = scope.trustedMain.bindings
+    if (JSON.stringify(Object.keys(bindings ?? {}).sort()) !== JSON.stringify(Object.keys(TRUST_ARTIFACT_PATHS).sort())) block("TRUST_BASELINE_DRIFT", "trusted-main artifact set differs")
+    for (const [name, artifactPath] of Object.entries(TRUST_ARTIFACT_PATHS)) {
+      exactTrustKeys(bindings[name], ["path", "sha256"], `trustedMain.bindings.${name}`)
+      if (bindings[name]?.path !== artifactPath || bindings[name]?.sha256 !== byteDigest(trustedTextBytes(artifacts?.[name] ?? Buffer.alloc(0)))) block("TRUST_BASELINE_DRIFT", `${name} digest differs`)
+    }
+    if (policy.canonicalAegisContract?.path !== TRUST_ARTIFACT_PATHS.contract || policy.canonicalAegisContract?.sha256 !== bindings.contract.sha256) block("TRUST_BASELINE_DRIFT", "policy contract binding differs")
+
+    const canonicalContract = parseArtifact(artifacts, "contract")
+    const profiles = parseArtifact(artifacts, "profiles")
+    const authorityRegistry = parseArtifact(artifacts, "authorityRegistry")
+    const identity = parseArtifact(artifacts, "identity")
+    const forgePermission = parseArtifact(artifacts, "forgePermission")
+    const ciProfile = profiles.profiles?.find((entry) => entry.profile_id === "williamos.standard-validation.v1")
+    if (canonicalContract.contract_id !== "resident-aegis-bounded-compute-v1" || canonicalContract.status !== "NON_ACTIVE_CONTRACT"
+      || canonicalContract.execution_authorized !== false || canonicalContract.required_execution_identity?.account !== "williamos-fabric"
+      || !canonicalContract.templates?.some((entry) => entry.template_id === "aegis.ci-build-test.v1" && entry.network_scope === "none")
+      || profiles.status !== "NON_ACTIVE_PROFILES" || ciProfile?.template_id !== "aegis.ci-build-test.v1" || ciProfile?.network_scope !== "none"
+      || identity.node_id !== "aegis" || forgePermission.scheduler_activation_allowed !== false || forgePermission.autonomous_dispatch_allowed !== false) {
+      block("TRUST_BASELINE_DRIFT", "canonical non-active CI contract semantics differ")
+    }
+    if (canonicalContract.resource_ceilings?.maximum_memory_bytes === expectedResources.memoryBytes
+      || canonicalContract.workspace?.maximum_written_bytes === expectedResources.scratchBytes
+      || canonicalContract.resource_ceilings?.maximum_runtime_ms === expectedResources.timeoutSeconds * 1000) {
+      block("OWNER_EXCEPTION_INVALID", "proof exception is incorrectly represented as canonical profile equivalence")
+    }
+
+    const separation = scope.authoritySeparation
+    if (canonicalizeJcs(separation.closedCiTemplate) !== canonicalizeJcs({ contractId: "resident-aegis-bounded-compute-v1", templateId: "aegis.ci-build-test.v1", profileId: "williamos.standard-validation.v1", contractStatus: "NON_ACTIVE_CONTRACT", profileStatus: "NON_ACTIVE_PROFILES" })) block("TRUST_BASELINE_DRIFT", "closed CI template binding differs")
+    const consumed = separation.consumedHashProof
+    if (consumed.workOrderId !== "WO-EF-DISPATCH-AEGIS-001" || consumed.authorityReference !== "issue-538-aegis-single-use-hash-001"
+      || consumed.templateId !== "aegis.hash-verify.v1" || consumed.claimId !== "claim-dce2320e5b737d481de2bc69") block("HASH_SCOPE_REUSE_REJECTED", "consumed HASH_VERIFY identity differs")
+    if (JSON.stringify(Object.keys(consumed.artifacts ?? {}).sort()) !== JSON.stringify(Object.keys(HASH_EVIDENCE_PATHS).sort())) block("HASH_SCOPE_REUSE_REJECTED", "consumed HASH_VERIFY artifact set differs")
+    for (const [name, artifactPath] of Object.entries(HASH_EVIDENCE_PATHS)) {
+      const artifactName = `hash${name[0].toUpperCase()}${name.slice(1)}`
+      exactTrustKeys(consumed.artifacts[name], ["path", "sha256"], `consumedHashProof.artifacts.${name}`)
+      if (consumed.artifacts[name]?.path !== artifactPath || consumed.artifacts[name]?.sha256 !== byteDigest(trustedTextBytes(artifacts?.[artifactName] ?? Buffer.alloc(0)))) block("HASH_SCOPE_REUSE_REJECTED", `consumed ${name} bytes differ`)
+    }
+    const hashScope = parseArtifact(artifacts, "hashScope")
+    const hashClaim = parseArtifact(artifacts, "hashClaim")
+    const hashLease = parseArtifact(artifacts, "hashLease")
+    const hashRelease = parseArtifact(artifacts, "hashRelease")
+    const hashReplay = parseArtifact(artifacts, "hashReplay")
+    const authorityEntry = authorityRegistry.entries?.find((entry) => entry.reference === consumed.authorityReference)
+    if (hashScope.work_order_id !== consumed.workOrderId || hashScope.reference !== consumed.authorityReference
+      || hashClaim.claim_id !== consumed.claimId || hashClaim.authority_reference !== consumed.authorityReference
+      || hashLease.claim_id !== consumed.claimId || hashRelease.claim_id !== consumed.claimId || hashRelease.lease_id !== hashLease.lease_id
+      || hashReplay.claim_id !== consumed.claimId || hashReplay.rejection_code !== "REQUEST_ALREADY_CONSUMED"
+      || authorityEntry?.work_order_id !== consumed.workOrderId || authorityEntry?.scope_path !== HASH_EVIDENCE_PATHS.scope) {
+      block("HASH_SCOPE_REUSE_REJECTED", "consumed HASH_VERIFY evidence chain differs")
+    }
+
+    return { status: "INACTIVE_TRUSTED_MAIN_READY", executionAuthorized: false, workOrderId: scope.workOrderId, executionIdentity: scope.executionIdentity.account }
+  } catch (error) { return blocked(error) }
+}
+
+function readTrustBaseline(policy) {
+  const scopeBytes = fs.readFileSync(new URL(`../../../${policy.trustBaseline.scopePath}`, import.meta.url))
+  const scope = JSON.parse(scopeBytes.toString("utf8"))
+  const artifacts = { trustScope: scopeBytes }
+  for (const [name, artifactPath] of Object.entries(TRUST_ARTIFACT_PATHS)) artifacts[name] = fs.readFileSync(new URL(`../../../${artifactPath}`, import.meta.url))
+  for (const [name, artifactPath] of Object.entries(HASH_EVIDENCE_PATHS)) artifacts[`hash${name[0].toUpperCase()}${name.slice(1)}`] = fs.readFileSync(new URL(`../../../${artifactPath}`, import.meta.url))
+  return validateRemoteDevTrustBaseline(policy, scope, artifacts)
+}
+
 function validatePolicy(policy) {
-  exactKeys(policy, ["schemaVersion", "workOrderId", "repository", "baseRef", "nodeId", "workspace", "branchPrefix", "patchGeneration", "reservedPaths", "resourceLimits", "operations", "transport", "canonicalAegisContract", "scheduler", "deniedActions", "deniedTargets"], "policy")
+  exactKeys(policy, ["schemaVersion", "workOrderId", "repository", "baseRef", "nodeId", "workspace", "branchPrefix", "patchGeneration", "reservedPaths", "resourceLimits", "operations", "transport", "canonicalAegisContract", "trustBaseline", "scheduler", "deniedActions", "deniedTargets"], "policy")
   if (policy.schemaVersion !== 1 || policy.workOrderId !== "WO-TF-REMOTE-DEV-OFFLOAD-001" || policy.repository !== "bsvalues/terrafusion_os_1.0" || policy.baseRef !== "refs/heads/main" || policy.nodeId !== "aegis" || policy.workspace !== "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001" || policy.branchPrefix !== "codex/wo-tf-remote-dev-offload-001-" || policy.patchGeneration !== 1) block("POLICY_INVALID", "immutable identity changed")
   exactValue(policy.resourceLimits, { cpuThreads: 12, memoryBytes: 12884901888, scratchBytes: 85899345920, timeoutSeconds: 5400, maxAttempts: 3 }, "resourceLimits")
   exactValue(policy.operations, ["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "APPLY_RESERVED_PATCH", "RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE", "COMMIT_RESERVED_PATHS", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE", "CLEAN_EXACT_WORKSPACE"], "operations")
   exactValue(policy.transport, { controller: "omen", relay: "hermes", worker: "aegis", hermesOnly: true }, "transport")
-  exactValue(policy.canonicalAegisContract, { path: "config/execution-fabric/aegis-bounded-dispatch-contract.json", sha256: "bc9bc0d795462f930bb495e665c05efdd44d5c1809a63326ba81522cda8883d7", contractId: "resident-aegis-bounded-compute-v1", status: "NON_ACTIVE_CONTRACT", ciBuildTemplateId: "aegis.ci-build-test.v1" }, "canonicalAegisContract")
+  exactValue(policy.canonicalAegisContract, { path: "config/execution-fabric/aegis-bounded-dispatch-contract.json", sha256: "18299f57bb86e9cd4902a98b93f56c702aa51b44e5d9e085dddac247f24b8d22", contractId: "resident-aegis-bounded-compute-v1", status: "NON_ACTIVE_CONTRACT", ciBuildTemplateId: "aegis.ci-build-test.v1" }, "canonicalAegisContract")
   const canonicalBytes = fs.readFileSync(new URL("../../../config/execution-fabric/aegis-bounded-dispatch-contract.json", import.meta.url))
   if (crypto.createHash("sha256").update(canonicalBytes).digest("hex") !== policy.canonicalAegisContract.sha256) block("CANONICAL_AEGIS_CONTRACT_MISMATCH", "contract bytes")
   const canonicalAegis = JSON.parse(canonicalBytes.toString("utf8"))
   if (canonicalAegis.contract_id !== policy.canonicalAegisContract.contractId || canonicalAegis.status !== policy.canonicalAegisContract.status || canonicalAegis.execution_authorized !== false || canonicalAegis.scheduler_activation_allowed !== false || !canonicalAegis.templates?.some((template) => template.template_id === policy.canonicalAegisContract.ciBuildTemplateId)) block("CANONICAL_AEGIS_CONTRACT_MISMATCH", "non-active CI_BUILD_TEST contract")
+  const trust = readTrustBaseline(policy)
+  if (trust.status !== "INACTIVE_TRUSTED_MAIN_READY") block(trust.reasons?.[0]?.code ?? "TRUST_BASELINE_DRIFT", trust.reasons?.[0]?.detail ?? "trust baseline failed")
   exactValue(policy.scheduler, { state: "disabled", standingAegisAuthority: false }, "scheduler")
   exactValue(policy.reservedPaths, [".github/workflows/dotnet-test.yml", ".github/workflows/terrafusion-ci.yml", "tests/ci-terrafusion-unit-informational.test.ts", "docs/brain/evidence/WO-TF-REMOTE-DEV-OFFLOAD-001-proof.md"], "reservedPaths")
   exactValue(policy.deniedActions, ["ARBITRARY_SHELL", "ATLAS_ACCESS", "CREDENTIAL_ACCESS", "OWNER_CONTACT", "PERSISTENT_SERVICE", "RUNTIME_ACTIVATION"], "deniedActions")
@@ -116,7 +278,7 @@ export function bindRemoteDevPacket(packet, policy, trustedContext) {
     const validPolicy = validatePolicy(policy); const trusted = validateTrustedContext(trustedContext); const value = validatePacket(packet, validPolicy, trusted)
     const bound = structuredClone(value); const unsigned = structuredClone(bound); delete unsigned.bindings
     bound.bindings = { policySha256: hash(validPolicy), packetSha256: hash(unsigned) }
-    return { status: "READY", packet: bound, policySha256: bound.bindings.policySha256 }
+    return { status: "INACTIVE_TRUSTED_MAIN_READY", executionAuthorized: false, packet: bound, policySha256: bound.bindings.policySha256 }
   } catch (error) { return blocked(error) }
 }
 

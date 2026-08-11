@@ -35,7 +35,7 @@ function fixture() {
   const raw: any = { schemaVersion: 1, runId: crypto.randomUUID(), workOrderId: "WO-TF-REMOTE-DEV-OFFLOAD-001", repository: "bsvalues/terrafusion_os_1.0", baseRef: "refs/heads/main", baseSha, branch: `codex/wo-tf-remote-dev-offload-001-${crypto.randomUUID().slice(0, 8)}`, nodeId: "aegis", workspace: "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001", transport: { controller: "omen", relay: "hermes", worker: "aegis" }, resourceLimits: { cpuThreads: 12, memoryBytes: 12884901888, scratchBytes: 85899345920, timeoutSeconds: 5400, maxAttempts: 3 }, operations, patch: { sha256: crypto.createHash("sha256").update(patch).digest("hex"), generation: 1, changedPaths: reservedPaths }, authority: { grantId: "grant-remote-dev-offload-v1", issuedAt: new Date(now - 300_000).toISOString(), expiresAt: new Date(now + 3_600_000).toISOString(), singleUse: true }, bindings: { policySha256: "", packetSha256: "" } }
   const dispatch = envelope(baseSha)
   const bound = bindRemoteDevPacket(raw, policy, { now: new Date(now).toISOString(), seenRunIds: [], branch: raw.branch, dispatchEnvelope: dispatch })
-  if (bound.status !== "READY") throw new Error(JSON.stringify(bound))
+  if (bound.status !== "INACTIVE_TRUSTED_MAIN_READY") throw new Error(JSON.stringify(bound))
   const packet = bound.packet
   const packetPath = path.join(directory, "packet.json"); fs.writeFileSync(packetPath, JSON.stringify(packet))
   const patchPath = path.join(directory, "patch.bin"); fs.writeFileSync(patchPath, patch)
@@ -124,7 +124,17 @@ function isolatedProgramDataEnv(programData: string, extra: NodeJS.ProcessEnv = 
   return env
 }
 
-describe("Hermes-mediated remote development controller", () => {
+describe("inactive Hermes-mediated remote development controller", () => {
+  it("blocks before SSH while the trusted-main proof scope is inactive", () => {
+    const value = fixture()
+    const result = run(value.args)
+    expect(result.status).toBe(2)
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "BLOCKED", reasonCode: "REMOTE_DEV_SCOPE_INACTIVE" })
+    expect(fs.existsSync(fakeLog)).toBe(false)
+  })
+})
+
+describe.skip("future-activation Hermes-mediated remote development controller", () => {
   it("contacts only Hermes with BatchMode, a finite timeout, and an encoded independently validating relay", () => {
     const value = fixture()
     const result = run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })

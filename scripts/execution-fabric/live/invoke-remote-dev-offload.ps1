@@ -15,7 +15,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $trustedAegisFingerprint = 'SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo'
-$trustedWorkerSha256 = '1f2d7af4421ac55229b46bc2fec65c126ee7f54fc1d672f82b2cfd8441a4e284'
+$trustedWorkerSha256 = '46d5273aec026c86c9afc7ec1773ad4347e4e375bc4146cefb9dfb287cc72814'
 
 function Write-ResultAndExit {
     param([string]$Status, [string]$ReasonCode, [string]$Detail, [int]$ExitCode)
@@ -99,7 +99,8 @@ try {
     $contractPath = Join-Path $scriptRoot 'remote-dev-offload-contract.mjs'
     $workerPath = Join-Path $scriptRoot 'aegis-remote-dev-worker.sh'
     if (-not (Test-Path -LiteralPath $contractPath -PathType Leaf) -or -not (Test-Path -LiteralPath $workerPath -PathType Leaf)) { Write-ResultAndExit 'INVALID_INPUT' 'IMPLEMENTATION_MISSING' 'contract or fixed worker is unavailable' 64 }
-    $workerBytes = [IO.File]::ReadAllBytes($workerPath)
+    $workerText = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($workerPath)).Replace("`r`n", "`n")
+    $workerBytes = [Text.UTF8Encoding]::new($false).GetBytes($workerText)
     if ((Get-Sha256Hex $workerBytes) -ne $trustedWorkerSha256) { Write-ResultAndExit 'INVALID_INPUT' 'WORKER_DIGEST_MISMATCH' 'local fixed worker differs from the reviewed digest' 64 }
 
     try {
@@ -118,10 +119,15 @@ const policy=JSON.parse(fs.readFileSync(policyPath,"utf8"));
 const packet=JSON.parse(fs.readFileSync(packetPath,"utf8"));
 const dispatchEnvelope=JSON.parse(fs.readFileSync(envelopePath,"utf8"));
 const result=contract.bindRemoteDevPacket(packet,policy,{now:new Date().toISOString(),seenRunIds:[],branch:packet.branch,dispatchEnvelope});
+if(result.status==="INACTIVE_TRUSTED_MAIN_READY"&&result.executionAuthorized===false&&JSON.stringify(result.packet)===JSON.stringify(packet)){process.stdout.write(JSON.stringify({status:"BLOCKED",reasonCode:"REMOTE_DEV_SCOPE_INACTIVE",detail:"trusted-main proof scope is reviewed but inactive"}));process.exit(2)}
 if(result.status!=="READY"||JSON.stringify(result.packet)!==JSON.stringify(packet)){process.stdout.write(JSON.stringify({status:"BLOCKED",reasonCode:"PACKET_NOT_PREBOUND",detail:JSON.stringify(result.reasons||[])}));process.exit(64)}
 process.stdout.write(JSON.stringify({status:"READY",packet:result.packet,policySha256:result.policySha256}));
 '@
     $validation = Invoke-BoundedProcess $node @('--input-type=module', '-e', $validateScript, $policyFull, $contractPath, $policyFull, $packetFull, $envelopeFull) 30
+    if ($validation.ExitCode -eq 2) {
+        try { $inactive = $validation.Stdout | ConvertFrom-Json -Depth 20 } catch { $inactive = $null }
+        if ($inactive.reasonCode -eq 'REMOTE_DEV_SCOPE_INACTIVE') { Write-ResultAndExit 'BLOCKED' 'REMOTE_DEV_SCOPE_INACTIVE' 'trusted-main proof scope is reviewed but inactive' 2 }
+    }
     if ($validation.TimedOut -or $validation.ExitCode -ne 0) { Write-ResultAndExit 'INVALID_INPUT' 'PACKET_VALIDATION_FAILED' ($validation.Stdout + $validation.Stderr) 64 }
     try { $validated = $validation.Stdout | ConvertFrom-Json -Depth 100 }
     catch { Write-ResultAndExit 'INVALID_INPUT' 'PACKET_VALIDATION_MALFORMED' 'local contract validation did not return JSON' 64 }
@@ -165,7 +171,7 @@ try{relay=JSON.parse(fs.readFileSync(0,"utf8"));policy=JSON.parse(Buffer.from(re
 const operations=["PROVE_PREFLIGHT","CREATE_WORKSPACE","APPLY_RESERVED_PATCH","RESTORE_DOTNET","TEST_WORKFLOW_CONTRACT","TEST_DOTNET_INFORMATIONAL","BUILD_DOTNET_RELEASE","COMMIT_RESERVED_PATHS","PUSH_AUTHORIZED_BRANCH","PROVE_POST_MERGE","CLEAN_EXACT_WORKSPACE"];
 const paths=[".github/workflows/dotnet-test.yml",".github/workflows/terrafusion-ci.yml","tests/ci-terrafusion-unit-informational.test.ts","docs/brain/evidence/WO-TF-REMOTE-DEV-OFFLOAD-001-proof.md"];
 const limits={cpuThreads:12,memoryBytes:12884901888,scratchBytes:85899345920,timeoutSeconds:5400,maxAttempts:3};
-const policyDigest=hash(Buffer.from(jcs(policy),"utf8"));if(policyDigest!=="8e4d17071567ed1f43c01a02251a689d1879cfadcf90af92260267ebd668fd2c")fail("POLICY_DIGEST_MISMATCH","canonical policy differs");
+const policyDigest=hash(Buffer.from(jcs(policy),"utf8"));if(policyDigest!=="853419c1a0013b24ee51dd3c5c5647860a88b0949079419afb1b94884d8d60d8")fail("POLICY_DIGEST_MISMATCH","canonical policy differs");
 exact(packet,["schemaVersion","runId","workOrderId","repository","baseRef","baseSha","branch","nodeId","workspace","transport","resourceLimits","operations","patch","authority","bindings"],"PACKET_FIELDS_INVALID");
 if(packet.schemaVersion!==1||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(packet.runId)||packet.workOrderId!=="WO-TF-REMOTE-DEV-OFFLOAD-001"||packet.repository!=="bsvalues/terrafusion_os_1.0"||packet.baseRef!=="refs/heads/main"||!/^[a-f0-9]{40}$/.test(packet.baseSha)||!/^codex\/wo-tf-remote-dev-offload-001-[a-z0-9-]+$/.test(packet.branch)||packet.nodeId!=="aegis"||packet.workspace!=="/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001")fail("IDENTITY_MISMATCH","immutable packet identity differs");
 exact(packet.transport,["controller","relay","worker"],"TRANSPORT_FIELDS_INVALID");if(jcs(packet.transport)!==jcs({controller:"omen",relay:"hermes",worker:"aegis"}))fail("TRANSPORT_MISMATCH","Hermes mediation is mandatory");
