@@ -28,7 +28,7 @@ evidence was changed while producing this package.
 - standing AEGIS authority: disabled
 
 The package manifest JCS SHA-256 is
-`cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a`.
+`1fb6fde76456483a34166b67b6b4413d05c9d69261223f2315d2718de64c359c`.
 It is recorded by the trusted planner constant and recomputed in the test
 evidence for this correction.
 The trusted planner pins that complete manifest digest. The manifest binds the

@@ -45,7 +45,7 @@ const EXPECTED_ASSET_DIGESTS = Object.freeze({
   "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507",
   "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "7e9286b38d76e88eef13aa37628e69151aca2527b6bdfd50d9b835de0a5cb022",
   "config/execution-fabric/aegis-resident-network-boundary.json": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6",
-  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "6fc94d705e90cda3d8eaaf75964f3baae246d3f2294966a731e422fe0d8ee396",
+  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "5fba15230a425f607c4b9fb52509c21a90230c83802d606922762612c78ee505",
   "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh": "4f76725ae7188ae676b5afde4d1622a8c6cdaea0b1bc8d1288dab04700b17ccd",
   "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf": "bb6967f25ae614d152c2bbaf4073eae4575f98819f9b4a855b5de20a60e4e789",
   "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf": "a6e83ce0c8b2d2c8127a268c5bd48f27ff3199894f0179afc412a5b01f7fe9c6",

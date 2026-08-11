@@ -354,6 +354,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
   it("isolates trusted remote-development repositories from the preserved standing runtime root", () => {
     const prerequisite = JSON.parse(fs.readFileSync(path.join(root, "config/execution-fabric/aegis-remote-dev-prerequisites.json"), "utf8"))
     const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
+    const report = fs.readFileSync(path.join(root, "docs/reports/WO-TF-REMOTE-DEV-OFFLOAD-001-prerequisite-provisioning.md"), "utf8")
     expect(prerequisite.repositories.controlPlane.path).toBe("/var/lib/williamos-remote-dev/control/terragroq")
     expect(prerequisite.repositories.targetMirror.path).toBe("/var/lib/williamos-remote-dev/repositories/terrafusion_os_1.0.git")
     expect(adapter).toContain('const CONTROL_REPOSITORY = "/var/lib/williamos-remote-dev/control/terragroq"')
@@ -363,6 +364,10 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(adapter).not.toContain("const controlExists = fs.existsSync(control)")
     expect(adapter).not.toContain('/var/lib/williamos/fabric/workspaces/terragroq')
     expect(adapter).not.toContain('/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git')
+    const repositoryFunction = adapter.slice(adapter.indexOf("function repositoryState"), adapter.indexOf("function rootAssetsState"))
+    expect(repositoryFunction.indexOf("try {")).toBeLessThan(repositoryFunction.indexOf("const controlExists = lexists(control)"))
+    expect(report).toContain("`1fb6fde76456483a34166b67b6b4413d05c9d69261223f2315d2718de64c359c`")
+    expect(report).not.toContain("`cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a`")
   })
 
   it("treats only two truly absent repositories under safe parents as reconcilable", () => {

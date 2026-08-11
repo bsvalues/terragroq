@@ -233,8 +233,8 @@ export function inspectTrustedRepositoryReconciliation({ parentsExact, controlEx
 function repositoryState(manifest, authority) {
   const control = CONTROL_REPOSITORY
   const mirror = TARGET_MIRROR
-  const controlExists = lexists(control); const mirrorExists = lexists(mirror)
   try {
+    const controlExists = lexists(control); const mirrorExists = lexists(mirror)
     let controlMatch = false; let mirrorMatch = false
     if (controlExists) {
       if (!rootOwnedRepositoryTree(control)
