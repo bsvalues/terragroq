@@ -18,6 +18,7 @@ const INPUT_ROOT = `${REPORT_ROOT}/inputs`
 const LEDGER_ROOT = "/var/lib/williamos/fabric/standing-hash-ledger"
 const REQUEST_ROOT = "/var/lib/williamos/fabric/standing-hash-requests"
 const RELEASE_MANIFEST_PATH = "/etc/williamos/fabric/trusted-main-release.json"
+const MACHINE_ID_PATH = "/etc/machine-id"
 const JOURNAL_IDENTIFIER = "williamos-aegis-standing-hash"
 const JOURNAL_EPOCH_ID = "aegis-standing-hash-replay-epoch-v1"
 const MAX_ARTIFACT_BYTES = 1024 * 1024
@@ -269,11 +270,33 @@ export function readTrustedClosureFile(fsApi, repositoryRoot, relativePath) {
   }
 }
 
+export function readResidentMachineIdentity({ fsApi = fs, machineIdPath = MACHINE_ID_PATH } = {}) {
+  const lexical = path.resolve(machineIdPath)
+  let descriptor
+  try {
+    const stats = fsApi.lstatSync(lexical)
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1 || stats.uid !== 0
+      || (stats.mode & 0o022) !== 0 || stats.size > 256 || fsApi.realpathSync(lexical) !== lexical) {
+      fail("MACHINE_ID_UNTRUSTED", "AEGIS machine identity file is not immutable and root-owned")
+    }
+    descriptor = fsApi.openSync(lexical, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+    const opened = fsApi.fstatSync(descriptor)
+    if (!opened.isFile() || opened.nlink !== 1 || opened.uid !== 0 || (opened.mode & 0o022) !== 0
+      || opened.dev !== stats.dev || opened.ino !== stats.ino || opened.size !== stats.size
+      || opened.mtimeMs !== stats.mtimeMs || opened.ctimeMs !== stats.ctimeMs) {
+      fail("MACHINE_ID_UNTRUSTED", "AEGIS machine identity changed during acquisition")
+    }
+    const machineId = fsApi.readFileSync(descriptor).toString("utf8").trim()
+    if (!/^[a-fA-F0-9]{32}$/.test(machineId)) fail("MACHINE_ID_UNTRUSTED", "AEGIS machine identity is invalid")
+    return { node_id: "aegis", machine_id_sha256: sha256(Buffer.from(machineId, "utf8")) }
+  } finally {
+    if (descriptor !== undefined) fsApi.closeSync(descriptor)
+  }
+}
+
 export function createStandingTrustedProof({ repositoryRoot = REPOSITORY_ROOT, admissionPath, inputPath, sourceCommit, authority = null, fsApi = fs, runGit = (args) => defaultRunGit(args, repositoryRoot), readReleaseManifest = () => readStandingReleaseManifest() } = {}) {
-    const branchResult = runGit(["symbolic-ref", "--quiet", "HEAD"]).toString("utf8").trim()
-    if (branchResult && branchResult !== TRUSTED_REF) fail("TRUSTED_MAIN_MISMATCH", "resident checkout is not the canonical main branch")
     if (runGit(["status", "--porcelain=v1", "--untracked-files=no"]).length !== 0) fail("TRUSTED_MAIN_MISMATCH", "resident checkout is dirty")
-    const head = runGit(["rev-parse", "HEAD"]).toString("utf8").trim()
+    const head = runGit(["rev-parse", "--verify", "HEAD"]).toString("utf8").trim()
     if (!COMMIT.test(head)) fail("TRUSTED_MAIN_MISMATCH", "resident main commit is invalid")
     const releaseManifest = validateReleaseManifest(readReleaseManifest(), head)
     if (!COMMIT.test(sourceCommit ?? "")) fail("SOURCE_COMMIT_MISMATCH", "request source commit is invalid")
@@ -466,17 +489,38 @@ export function createStandingLedgerProviders({
   const withMutationLock = async (action) => {
     let acquired = false
     for (let attempt = 0; attempt < 2 && !acquired; attempt += 1) {
+      const candidateLockPath = path.join(root, `mutation-lock-candidate-${crypto.randomUUID()}`)
+      const candidateHolderPath = path.join(candidateLockPath, "holder.json")
       try {
-        fsApi.mkdirSync(mutationLockPath, { mode: 0o700 })
-        writeExclusiveWith(fsApi, mutationHolderPath, holderIdentity(), sync)
+        fsApi.mkdirSync(candidateLockPath, { mode: 0o700 })
+        writeExclusiveWith(fsApi, candidateHolderPath, holderIdentity(), sync)
+        sync(candidateLockPath)
+        fsApi.renameSync(candidateLockPath, mutationLockPath)
         sync(root)
         acquired = true
       } catch (error) {
-        if (error?.code !== "EEXIST") throw error
+        if (fsApi.existsSync(candidateHolderPath)) fsApi.unlinkSync(candidateHolderPath)
+        if (fsApi.existsSync(candidateLockPath)) fsApi.rmdirSync(candidateLockPath)
+        if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes(error?.code)) throw error
+        if (!fsApi.existsSync(mutationLockPath)) throw error
         const lockStats = fsApi.lstatSync(mutationLockPath)
         if (!validateDirectory(lockStats, uid)) fail("LEDGER_UNTRUSTED", "standing mutation lock is not private")
         const retainedHolder = readLedgerWith(fsApi, mutationHolderPath, uid, validateFile)
-        if (!retainedHolder || holderIsAlive(retainedHolder)) {
+        const retainedEntries = fsApi.readdirSync(mutationLockPath)
+        if (!retainedHolder && retainedEntries.length === 0) {
+          const emptyRecoveryPath = path.join(root, `mutation-recovery-${crypto.randomUUID()}`)
+          try {
+            fsApi.renameSync(mutationLockPath, emptyRecoveryPath)
+          } catch (renameError) {
+            if (renameError?.code === "ENOENT") continue
+            throw renameError
+          }
+          if (fsApi.readdirSync(emptyRecoveryPath).length !== 0) fail("LEDGER_UNTRUSTED", "empty mutation lock changed during recovery")
+          fsApi.rmdirSync(emptyRecoveryPath)
+          sync(root)
+          continue
+        }
+        if (!retainedHolder || retainedEntries.length !== 1 || retainedEntries[0] !== "holder.json" || holderIsAlive(retainedHolder)) {
           fail("LEDGER_MUTATION_LOCKED", "standing ledger mutation is already in progress")
         }
         const recoveryPath = path.join(root, `mutation-recovery-${crypto.randomUUID()}`)
@@ -749,7 +793,11 @@ export async function runResidentAegisStandingHash(argv = process.argv.slice(2))
   const admissionBytes = readStandingArtifact(args.admission)
   const request = parseJson(requestBytes, "request")
   const candidateAdmission = parseJson(admissionBytes, "admission")
-  const authority = parseJson(fs.readFileSync(path.join(REPOSITORY_ROOT, "config/execution-fabric/aegis-standing-compute-authority.v1.json")), "authority")
+  const authority = parseJson(readTrustedClosureFile(fs, REPOSITORY_ROOT, "config/execution-fabric/aegis-standing-compute-authority.v1.json"), "authority")
+  const residentIdentity = readResidentMachineIdentity()
+  if (residentIdentity.machine_id_sha256 !== authority.node_identity?.machine_id_sha256) {
+    fail("EXECUTION_IDENTITY_MISMATCH", "resident machine identity does not match the standing AEGIS authority")
+  }
   const inputPath = `${REPORT_ROOT}/${request.input?.relative_path ?? ""}`
   if (!inputPath.startsWith(`${INPUT_ROOT}/`)) fail("PATH_ESCAPE", "request input is outside the fixed standing input root")
   const trusted = createStandingTrustedProof({ admissionPath: args.admission, inputPath, sourceCommit: request.source?.commit_sha, authority })
@@ -765,7 +813,7 @@ export async function runResidentAegisStandingHash(argv = process.argv.slice(2))
     persistResult: ledger.persistResult,
     readInput: async () => readStandingArtifact(inputPath, { repositoryRoot: REPOSITORY_ROOT, requiredRoot: INPUT_ROOT }),
   })
-  const evidence = { schema_version: "1.0-aegis-standing-resident-evidence", trusted_main: trusted, completion, runtime_evidence: ledger.runtimeEvidence(), scheduler_activated: false, autonomous_selection: false }
+  const evidence = { schema_version: "1.0-aegis-standing-resident-evidence", resident_identity: residentIdentity, trusted_main: trusted, completion, runtime_evidence: ledger.runtimeEvidence(), scheduler_activated: false, autonomous_selection: false }
   return { ...evidence, runner_evidence_sha256: sha256(canonicalBytes(evidence)) }
 }
 

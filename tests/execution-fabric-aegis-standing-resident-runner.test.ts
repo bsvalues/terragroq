@@ -9,6 +9,7 @@ import {
   createStandingTrustedProof,
   parseStandingArguments,
   readPrivateStandingRequest,
+  readResidentMachineIdentity,
   readStandingArtifact,
   readTrustedClosureFile,
   STANDING_TRUSTED_FILES,
@@ -258,6 +259,32 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     expect(() => readTrustedClosureFile(driftedFs, root, relative)).toThrow("TRUSTED_MAIN_MISMATCH")
   })
 
+  it("binds execution to an immutable root-owned resident machine identity", () => {
+    const root = tempRoot("aegis-standing-machine-id-")
+    const machineIdPath = write(root, "machine-id", "0123456789abcdef0123456789abcdef\n")
+    const descriptorReads: Array<number | fs.PathLike> = []
+    const injectedFs = Object.create(fs) as typeof fs
+    const decorate = (stats: fs.Stats) => Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, {
+      uid: 0,
+      mode: 0o100444,
+    })
+    injectedFs.lstatSync = ((candidate: fs.PathLike) => decorate(fs.lstatSync(candidate))) as typeof fs.lstatSync
+    injectedFs.fstatSync = ((descriptor: number) => decorate(fs.fstatSync(descriptor))) as typeof fs.fstatSync
+    injectedFs.readFileSync = ((candidate: number | fs.PathLike, ...args: any[]) => {
+      descriptorReads.push(candidate)
+      return (fs.readFileSync as any)(candidate, ...args)
+    }) as typeof fs.readFileSync
+
+    expect(readResidentMachineIdentity({ fsApi: injectedFs, machineIdPath })).toEqual({
+      node_id: "aegis",
+      machine_id_sha256: sha256("0123456789abcdef0123456789abcdef"),
+    })
+    expect(descriptorReads.some((candidate) => typeof candidate === "number")).toBe(true)
+
+    fs.writeFileSync(machineIdPath, "not-a-machine-id\n")
+    expect(() => readResidentMachineIdentity({ fsApi: injectedFs, machineIdPath })).toThrow("MACHINE_ID_UNTRUSTED")
+  })
+
   it("fails closed until a retained privileged journal epoch predates admission", async () => {
     const root = tempRoot("aegis-standing-epoch-")
     journalByRoot.set(root, [])
@@ -305,6 +332,18 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     await expect(providers.claimAdmission(claimBinding())).resolves.toMatchObject({ claimed: true })
     expect(holderIsAlive).toHaveBeenCalledWith({ pid: 99, boot_id: "boot-old", process_start_ticks: "9" })
     expect(fs.existsSync(lockRoot)).toBe(false)
+    expect(fs.readdirSync(root).some((name) => name.startsWith("mutation-recovery-"))).toBe(false)
+  })
+
+  it("recovers an exact empty lock left before holder publication", async () => {
+    const root = tempRoot("aegis-standing-empty-mutation-lock-")
+    const lockRoot = path.join(root, "standing-hash-mutation.lock")
+    fs.mkdirSync(lockRoot, { mode: 0o700 })
+    const providers = ledger(root)
+
+    await expect(providers.claimAdmission(claimBinding())).resolves.toMatchObject({ claimed: true })
+    expect(fs.existsSync(lockRoot)).toBe(false)
+    expect(fs.readdirSync(root).some((name) => name.startsWith("mutation-lock-candidate-"))).toBe(false)
     expect(fs.readdirSync(root).some((name) => name.startsWith("mutation-recovery-"))).toBe(false)
   })
 
@@ -448,7 +487,7 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     expect(fs.existsSync(path.join(root, "standing-hash-active.json"))).toBe(true)
   })
 
-  it("proves a clean refs/heads/main checkout and exact tracked closure bytes", () => {
+  it("proves a clean reviewed detached release checkout and exact tracked closure bytes", () => {
     const root = tempRoot("aegis-standing-proof-")
     const admissionPath = "docs/reports/standing-dispatch/admission.json"
     const inputPath = "docs/reports/standing-dispatch/inputs/input.bin"
@@ -480,7 +519,6 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     const calls: string[][] = []
     const runGit = vi.fn((args: string[]) => {
       calls.push(args)
-      if (args[0] === "symbolic-ref") return Buffer.from("refs/heads/main\n")
       if (args[0] === "rev-parse") return Buffer.from(`${commit}\n`)
       if (args[0] === "status") return Buffer.alloc(0)
       if (args[0] === "merge-base") return Buffer.alloc(0)
@@ -511,6 +549,8 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
       exact_file_count: Object.keys(closure).length,
       verified: true,
     })
+    expect(calls).toContainEqual(["rev-parse", "--verify", "HEAD"])
+    expect(calls.some((args) => args[0] === "symbolic-ref")).toBe(false)
     for (const relative of Object.keys(closure)) {
       expect(calls).toContainEqual(["ls-files", "--error-unmatch", "--", relative])
       expect(calls).toContainEqual(["show", `${commit}:${relative}`])

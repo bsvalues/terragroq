@@ -350,6 +350,14 @@ describe("AEGIS standing HASH_VERIFY runtime", () => {
     )).rejects.toMatchObject({ code: "RUNTIME_TIMEOUT" })
   })
 
+  it("accounts for the hash operation before measuring completion time", () => {
+    const source = fs.readFileSync(path.join(
+      process.cwd(), "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs",
+    ), "utf8")
+    expect(source.indexOf("verification = verifyAegisHashBytes"))
+      .toBeLessThan(source.indexOf("const completedAt = finiteClock(options.now)"))
+  })
+
   it("persists immutable completion evidence before releasing and releases on persistence failure", async () => {
     const value = request()
     const runtime = harness()

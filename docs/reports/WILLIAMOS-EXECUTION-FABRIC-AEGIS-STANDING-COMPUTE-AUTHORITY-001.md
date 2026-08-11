@@ -150,7 +150,7 @@ runtime, storage, or remote-system gates.
 ## Validation
 
 - Focused Authority Registry, standing authority, admission issuer, historical
-  adapter, standing HASH runtime, and resident runner suites: `108/108 PASS`.
+  adapter, standing HASH runtime, and resident runner suites: `111/111 PASS`.
 - Eligibility remains non-authorizing without an exact unexpired reviewed-main
   per-job admission and matching durable claim, lease/fence, and receipt chain.
 - Broad worker, command-runner, scheduler, runtime, persistence, tool-call,

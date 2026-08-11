@@ -293,17 +293,17 @@ export async function executeAegisStandingHash(options) {
     })
     if (!(bytes instanceof Uint8Array)) fail("INPUT_TYPE_INVALID", "input reader must return exact bytes")
     const exactBytes = Buffer.from(bytes)
-    const completedAt = finiteClock(options.now)
-    if (completedAt < startedAt || completedAt - startedAt > request.limits.runtime_ms) {
-      fail("RUNTIME_TIMEOUT", "HASH_VERIFY exceeded its exact runtime limit")
-    }
-    requireFresh(request, candidateAdmission, authority, completedAt)
     let verification
     try {
       verification = verifyAegisHashBytes(exactBytes, request.input.expected_sha256, request.input.expected_byte_length)
     } catch (error) {
       fail(error?.code === "INPUT_CHANGED" ? "INPUT_LENGTH_MISMATCH" : "HASH_OPERATION_REJECTED", String(error?.message ?? error))
     }
+    const completedAt = finiteClock(options.now)
+    if (completedAt < startedAt || completedAt - startedAt > request.limits.runtime_ms) {
+      fail("RUNTIME_TIMEOUT", "HASH_VERIFY exceeded its exact runtime limit")
+    }
+    requireFresh(request, candidateAdmission, authority, completedAt)
     const observedSha256 = verification.observed_sha256
     if (!verification.matched) {
       fail("HASH_MISMATCH", "input SHA-256 does not match the approved request")
