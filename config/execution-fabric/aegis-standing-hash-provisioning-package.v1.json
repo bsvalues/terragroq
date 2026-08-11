@@ -1,0 +1,361 @@
+{
+  "schemaVersion": 1,
+  "packageId": "aegis-standing-hash-provisioning-issue-595-v1",
+  "status": "PACKAGE_ONLY_NOT_APPLIED",
+  "applyAuthorized": false,
+  "executionAuthorized": false,
+  "ownerAuthorityRequired": true,
+  "issue": {
+    "repository": "bsvalues/terragroq",
+    "number": 595,
+    "workOrderId": "WO-EF-AEGIS-STANDING-001"
+  },
+  "trustedMain": {
+    "repository": "bsvalues/terragroq",
+    "ref": "refs/heads/main",
+    "commit": "13709f5789c25dea408283730a6bd35e8fd894ab",
+    "reviewed": true
+  },
+  "identity": {
+    "nodeId": "aegis",
+    "hostname": "aegis",
+    "machineIdSha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b",
+    "account": "williamos-fabric",
+    "privilege": "non-root-no-sudo",
+    "rootExecutionAllowed": false,
+    "sudoAllowed": false
+  },
+  "reviewedRelease": {
+    "repository": "bsvalues/terragroq",
+    "ref": "refs/heads/main",
+    "commit": "13709f5789c25dea408283730a6bd35e8fd894ab",
+    "gitCheckoutRequired": true,
+    "cleanCheckoutRequired": true,
+    "bootstrapSourcePath": "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs",
+    "bootstrapInstallPath": "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs",
+    "releaseManifestPath": "/etc/williamos/fabric/trusted-main-release.json",
+    "releaseRoot": "/opt/williamos/releases/13709f5789c25dea408283730a6bd35e8fd894ab",
+    "entrypointPath": "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs",
+    "manifestSchemaVersion": "1.0-williamos-trusted-main-release",
+    "runtimeClosurePaths": [
+      "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs",
+      "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs",
+      "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs",
+      "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs",
+      "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs"
+    ],
+    "exactClosureRequired": true
+  },
+  "rootOwnedAssets": [
+    {
+      "id": "bootstrap",
+      "path": "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs",
+      "type": "file",
+      "owner": "root",
+      "group": "root",
+      "mode": "0555",
+      "direct": true,
+      "singleLink": true
+    },
+    {
+      "id": "ssh-entrypoint",
+      "path": "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs",
+      "type": "file",
+      "owner": "root",
+      "group": "root",
+      "mode": "0555",
+      "direct": true,
+      "singleLink": true
+    },
+    {
+      "id": "replay-epoch-initializer",
+      "path": "/usr/local/libexec/williamos/aegis-standing-hash-replay-epoch.mjs",
+      "type": "file",
+      "owner": "root",
+      "group": "root",
+      "mode": "0555",
+      "direct": true,
+      "singleLink": true
+    },
+    {
+      "id": "release-manifest",
+      "path": "/etc/williamos/fabric/trusted-main-release.json",
+      "type": "file",
+      "owner": "root",
+      "group": "root",
+      "mode": "0444",
+      "direct": true,
+      "singleLink": true
+    },
+    {
+      "id": "release-root",
+      "path": "/opt/williamos/releases/13709f5789c25dea408283730a6bd35e8fd894ab",
+      "type": "directory",
+      "owner": "root",
+      "group": "root",
+      "mode": "0755",
+      "direct": true,
+      "singleLink": false
+    }
+  ],
+  "privateRoots": {
+    "request": {
+      "path": "/var/lib/williamos/fabric/standing-hash-requests",
+      "owner": "williamos-fabric",
+      "group": "williamos-fabric",
+      "mode": "0700",
+      "purpose": "ephemeral-private-request"
+    },
+    "ledger": {
+      "path": "/var/lib/williamos/fabric/standing-hash-ledger",
+      "owner": "williamos-fabric",
+      "group": "williamos-fabric",
+      "mode": "0700",
+      "purpose": "durable-control-evidence",
+      "atomicPublishRequired": true,
+      "immutableCompletionRequired": true
+    },
+    "nodeLease": {
+      "path": "/var/lib/williamos/fabric/ledger",
+      "owner": "williamos-fabric",
+      "group": "williamos-fabric",
+      "mode": "0700",
+      "purpose": "shared-node-lease",
+      "atomicPublishRequired": true,
+      "durable": true
+    }
+  },
+  "replayJournal": {
+    "provider": "systemd-journal",
+    "identifier": "williamos-aegis-standing-hash",
+    "epochId": "aegis-standing-hash-replay-epoch-v1",
+    "epochMustPredateAdmission": true,
+    "retainedRequired": true,
+    "reconstructionAllowed": false
+  },
+  "invocationBoundary": {
+    "sourceHost": "hermes",
+    "sourceAddress": "192.168.1.154",
+    "targetHost": "aegis",
+    "targetHostEd25519Fingerprint": "SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo",
+    "account": "williamos-fabric",
+    "authorizedKeysPath": "/home/williamos-fabric/.ssh/authorized_keys",
+    "forcedCommandPath": "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs",
+    "dedicatedTransportKeyRequired": true,
+    "dedicatedTransportKeyAlgorithm": "ssh-ed25519",
+    "dedicatedTransportKeyGenerationHost": "hermes",
+    "dedicatedTransportPrivateKeyPath": "C:\\Users\\bs\\.ssh\\id_ed25519_williamos_aegis_standing_hash",
+    "dedicatedTransportPublicKeyPath": "C:\\Users\\bs\\.ssh\\id_ed25519_williamos_aegis_standing_hash.pub",
+    "dedicatedTransportPrivateKeyLocalOnly": true,
+    "dedicatedTransportPrivateKeyInspectionAllowed": false,
+    "dedicatedTransportKeyFingerprintBinding": "BOUND_BY_HERMES_GENERATION_EVIDENCE",
+    "dedicatedTransportKeyFingerprintEvidenceRequired": true,
+    "dedicatedTransportKeyGenerationEvidencePath": "C:\\Users\\bs\\.ssh\\id_ed25519_williamos_aegis_standing_hash.generation-evidence.json",
+    "dedicatedTransportKeyGenerationAuthorityRequired": true,
+    "existingKeyReuseAllowed": false,
+    "authorizedKeyOptions": [
+      "restrict",
+      "from=\"192.168.1.154\"",
+      "command=\"/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs\"",
+      "no-agent-forwarding",
+      "no-port-forwarding",
+      "no-X11-forwarding",
+      "no-pty",
+      "no-user-rc"
+    ],
+    "authorizedKeyRecordExactRequired": true,
+    "passwordAuthenticationAllowed": false,
+    "unrestrictedShellAllowed": false,
+    "executable": "/usr/bin/node",
+    "bootstrapPath": "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs",
+    "argumentOrder": [
+      "--request",
+      "<private-request-id>",
+      "--admission",
+      "docs/reports/standing-dispatch/<admission>.json"
+    ],
+    "workloadClass": "HASH_VERIFY",
+    "arbitraryArgumentsAllowed": false,
+    "arbitraryCommandAllowed": false,
+    "shellAllowed": false,
+    "ptyAllowed": false,
+    "forwardingAllowed": false,
+    "sudoAllowed": false
+  },
+  "standingExecutionBoundary": {
+    "authorityId": "aegis-standing-compute-authority-v1",
+    "authorityReference": "github-issue-586",
+    "integrationId": "aegis-hash-verify-standing-integration-v1",
+    "templateId": "aegis.hash-verify.v1",
+    "adapterId": "resident-aegis-hash-verify-v1",
+    "profileId": "resident-aegis-bounded-hash-verify-v1",
+    "workloadClass": "HASH_VERIFY",
+    "riskClasses": [
+      "R0",
+      "R1"
+    ],
+    "networkScope": "none",
+    "durableWorkloadStorageAllowed": false,
+    "controlEvidenceStorageRequired": true,
+    "maximumConcurrency": 1,
+    "maximumInputBytes": 1048576,
+    "maximumRuntimeMs": 30000,
+    "schedulerState": "disabled",
+    "schedulerAuthority": "not-granted",
+    "autonomousSelection": false,
+    "singleAdmissionRequired": true,
+    "singleUseClaimRequired": true,
+    "exclusiveLeaseAndFenceRequired": true
+  },
+  "rootMutations": [
+    {
+      "id": "INSTALL_REVIEWED_RELEASE_CLOSURE",
+      "asset": "reviewedRelease"
+    },
+    {
+      "id": "INSTALL_ROOT_OWNED_BOOTSTRAP",
+      "asset": "rootOwnedAssets.bootstrap"
+    },
+    {
+      "id": "INSTALL_ROOT_OWNED_RELEASE_MANIFEST",
+      "asset": "rootOwnedAssets.release-manifest"
+    },
+    {
+      "id": "INSTALL_ROOT_OWNED_SSH_ENTRYPOINT",
+      "asset": "rootOwnedAssets.ssh-entrypoint"
+    },
+    {
+      "id": "INSTALL_ROOT_OWNED_REPLAY_EPOCH_INITIALIZER",
+      "asset": "rootOwnedAssets.replay-epoch-initializer"
+    },
+    {
+      "id": "CREATE_PRIVATE_REQUEST_ROOT",
+      "asset": "privateRoots.request"
+    },
+    {
+      "id": "CREATE_PRIVATE_LEDGER_ROOT",
+      "asset": "privateRoots.ledger"
+    },
+    {
+      "id": "CREATE_PRIVATE_NODE_LEASE_ROOT",
+      "asset": "privateRoots.nodeLease"
+    },
+    {
+      "id": "ESTABLISH_REPLAY_JOURNAL_EPOCH",
+      "asset": "replayJournal"
+    },
+    {
+      "id": "INSTALL_FORCED_COMMAND_AUTHORIZED_KEY",
+      "asset": "invocationBoundary"
+    }
+  ],
+  "hermesPrerequisiteMutations": [
+    {
+      "id": "CREATE_DEDICATED_HERMES_TRANSPORT_KEY",
+      "asset": "invocationBoundary",
+      "separateSingleUseAuthorityRequired": true,
+      "mustPrecedeRootApply": true
+    }
+  ],
+  "apply": {
+    "defaultMode": "DRY_RUN",
+    "liveRootApplyAuthorized": false,
+    "authorityMaximumAgeSeconds": 900,
+    "singleUseAuthorityRequired": true,
+    "consumeBeforeFirstMutationRequired": true,
+    "refuseExistingDrift": true,
+    "mutationJournalRequired": true
+  },
+  "rollback": {
+    "automatic": false,
+    "ownerAuthorityRequired": true,
+    "preserveReviewedRelease": true,
+    "preserveBootstrap": true,
+    "preserveRequestEvidence": true,
+    "preserveLedgerEvidence": true,
+    "preserveReplayJournal": true,
+    "destructiveCleanupAllowed": false,
+    "steps": [
+      "disable-standing-invocation",
+      "preserve-private-request-and-ledger-evidence",
+      "preserve-replay-journal",
+      "restore-only-package-managed-root-assets-from-mutation-journal",
+      "retain-reviewed-release-for-owner-review"
+    ]
+  },
+  "blockedScope": [
+    "scheduler-activation",
+    "autonomous-selection",
+    "generic-runner",
+    "ci-build-test",
+    "compression",
+    "network-access",
+    "persistent-workload-storage",
+    "nas",
+    "backup",
+    "archive",
+    "root-workload",
+    "sudo",
+    "terrafusion",
+    "property-workbench",
+    "terrapilot",
+    "county-pacs",
+    "production-mutation",
+    "protected-data",
+    "paid-overage",
+    "destructive-operation",
+    "issue-357-reuse"
+  ],
+  "bindings": [
+    {
+      "path": "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs",
+      "sha256": "7d4b713c00f73726ce39f20856c53a69865968d98d2daf08e2ce038c612ce14b",
+      "textNormalization": "LF"
+    },
+    {
+      "path": "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs",
+      "sha256": "1e817dc0c87803a93d503d29183b6af66bd776173812d0270985b5e261db54a1",
+      "textNormalization": "LF"
+    },
+    {
+      "path": "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs",
+      "sha256": "eb1cf0517caf3a4c4a1935ed8bea73c53fed64cc1ad3effa3963e6e237c22be2",
+      "textNormalization": "LF"
+    },
+    {
+      "path": "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs",
+      "sha256": "c5965a206b5f26c0db21176a609775d1ca176409b644bbc241fde74565bd8d8f",
+      "textNormalization": "LF"
+    },
+    {
+      "path": "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs",
+      "sha256": "0775904a9ceb7fae71e1ce9100f5017c5f05885c1a16e380f52971a4ac4665f8",
+      "textNormalization": "LF"
+    },
+    {
+      "path": "scripts/execution-fabric/canonical-json.mjs",
+      "sha256": "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21",
+      "textNormalization": "LF"
+    },
+    {
+      "path": "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs",
+      "sha256": "c18ecec38a5086788d7f4532b471efc6548cd293c27f3983a92934464015fb16",
+      "textNormalization": "LF"
+    },
+    {
+      "path": "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs",
+      "sha256": "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802",
+      "textNormalization": "LF"
+    },
+    {
+      "path": "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs",
+      "sha256": "0662102ff973fbb745afda40ad8ca6746bc740bbd292df4d4563852d411aefe7",
+      "textNormalization": "LF"
+    },
+    {
+      "path": "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs",
+      "sha256": "7700f0660f16e1d6adefc8c2e96bf3c5a43d724c5a6b76c97a5d24b0c101e6a0",
+      "textNormalization": "LF"
+    }
+  ]
+}
