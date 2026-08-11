@@ -7,7 +7,7 @@
   "trustedMain": {
     "repository": "bsvalues/terragroq",
     "ref": "refs/heads/main",
-    "commit": "d5e725e47dc32f8ea113d0a0168e956bac84659e"
+    "commit": "fea7785fd480d3b5f107c286cc8eb1bac6d04793"
   },
   "proof": {
     "workOrderId": "WO-TF-REMOTE-DEV-OFFLOAD-001",
@@ -47,7 +47,7 @@
       "remote": "https://github.com/bsvalues/terragroq.git",
       "path": "/var/lib/williamos/fabric/workspaces/terragroq",
       "ref": "refs/heads/main",
-      "commit": "d5e725e47dc32f8ea113d0a0168e956bac84659e",
+      "commit": "fea7785fd480d3b5f107c286cc8eb1bac6d04793",
       "cleanRequired": true,
       "remoteEqualityRequired": true
     },
@@ -68,16 +68,50 @@
     "pnpm": { "version": "9.0.0", "path": "/usr/bin/pnpm" }
   },
   "storage": {
-    "mountPath": "/srv/william",
-    "filesystem": "xfs",
-    "mountByUuidRequired": true,
-    "ownerSuppliedFilesystemUuidRequired": true,
-    "requiredMountOptions": ["nodev", "nosuid", "prjquota"],
+    "mechanism": "LOOPBACK_XFS_PROJECT_QUOTA_V1",
+    "backing": {
+      "hostFilesystem": "ext4",
+      "imagePath": "/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs",
+      "imageBytes": 107374182400,
+      "owner": "root",
+      "group": "root",
+      "mode": "0600",
+      "nlink": 1,
+      "externalDiskUsed": false,
+      "backupStorageUsed": false
+    },
+    "loop": {
+      "dynamicDeviceRequired": true,
+      "observedDevice": "/dev/loop0",
+      "backingImagePath": "/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs"
+    },
+    "filesystem": {
+      "type": "xfs",
+      "uuid": "5744648d-9289-4d4e-ac6a-707e8405a5d6",
+      "label": "AEGIS_RDEV"
+    },
+    "mount": {
+      "path": "/srv/william",
+      "requiredOptions": ["rw", "nosuid", "nodev", "prjquota", "exec"]
+    },
+    "workspaceParent": {
+      "path": "/srv/william/workspaces",
+      "owner": "williamos-fabric",
+      "mode": "0700"
+    },
     "workspacePath": "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001",
-    "projectId": 734,
-    "hardLimitBytes": 85899345920,
-    "formatAuthorized": false,
-    "mountMutationAuthorized": false
+    "projectQuota": {
+      "projectId": 734,
+      "inheritFlag": "P",
+      "accounting": true,
+      "enforcement": true,
+      "hardLimitBytes": 85899345920,
+      "hardLimitKiB": 83886080
+    },
+    "formatExistingBlockDeviceAuthorized": false,
+    "newExternalDiskAuthorized": false,
+    "backupStorageUseAuthorized": false,
+    "furtherLiveMutationAuthorized": false
   },
   "network": {
     "mechanism": "ROOT_ATTESTED_CGROUP_EGRESS_V1",
@@ -162,10 +196,10 @@
   "bindings": [
     { "path": "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh", "sha256": "7e92a1b3acf541f978f086ee1cec8191cc2b9732bc7f83380e4ecb13fec8d9d4" },
     { "path": "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs", "sha256": "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7" },
-    { "path": "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs", "sha256": "11afe07d2a717e66e7c8e42585d586181e53ceb793bbb7cbe9cff90d91da8b2a" },
-    { "path": "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs", "sha256": "daa8f7fdd9d4ddbf38b75545729de9142891795b89e73299f7bb1536931cf1de" },
-    { "path": "scripts/execution-fabric/live/aegis-remote-dev-worker.sh", "sha256": "28e0c79bc19875a7ed7fb963c840aa3d4dad4b9a5cd107bfdea94ca98039b424" },
-    { "path": "config/execution-fabric/aegis-resident-network-boundary.json", "sha256": "1e0cceaabd091e14adf2224d7823243f42b91de67069a2bbf47d23de7692e0c2" },
-    { "path": "config/execution-fabric/remote-dev-offload-v1-activation.json", "sha256": "b4142eac0e961f5581f6471e8f6497b6ada9785dcdcdce00632c1166cabb8e13" }
+    { "path": "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs", "sha256": "d382962531bd80269c1b75297dab331682364262810bdde4b4a61a7fe4b4b69a" },
+    { "path": "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs", "sha256": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507" },
+    { "path": "scripts/execution-fabric/live/aegis-remote-dev-worker.sh", "sha256": "55054941b6366a4a3f480f6c01ac4fc50465d4bfa743f672ce7d6539e51b360b" },
+    { "path": "config/execution-fabric/aegis-resident-network-boundary.json", "sha256": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6" },
+    { "path": "config/execution-fabric/remote-dev-offload-v1-activation.json", "sha256": "13dc1b0b205bf5f5c45b7400e7406413e59fb4b703d3e4e55d6d6718db0a84a5" }
   ]
 }

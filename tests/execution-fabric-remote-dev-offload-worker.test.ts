@@ -134,14 +134,17 @@ if [[ "$*" == *"--target /tmp"* ]]; then printf '%s\n' tmpfs; exit 0; fi
 [[ "\${FAKE_NESTED_MOUNT:-0}" == 1 ]] && printf '%s\n' '/nested/mount'
 exit 0
 `)
-  writeExecutable(path.join(fakeBin, "xfs_io"), "#!/usr/bin/env bash\nprintf '%s\\n' 'fsxattr.xflags = 0x00000800 [proj-inherit]' 'fsxattr.projid = 734'\n")
+  writeExecutable(path.join(fakeBin, "xfs_io"), `#!/usr/bin/env bash
+printf '%s\n' "fsxattr.xflags = 0x00000800 \${FAKE_XFS_FLAGS:-[--------P-------]}" 'fsxattr.projid = 734'
+`)
   writeExecutable(path.join(fakeBin, "xfs_quota"), `#!/usr/bin/env bash
 if [[ "$*" == *"state -p"* ]]; then
   if [[ "\${FAKE_QUOTA_STATE:-on}" == off ]]; then printf '%s\n' 'Project quota state' '  Accounting: OFF' '  Enforcement: OFF'
   else printf '%s\n' 'Project quota state' '  Accounting: ON' '  Enforcement: ON'; fi
   exit 0
 fi
-printf '%s\n' '734 0 0 83886080'
+[[ "$*" == *"report -p -b -n -N"* ]] || exit 64
+printf '%s\n' "\${FAKE_QUOTA_REPORT:-#734 0 0 83886080}"
 `)
   writeExecutable(path.join(fakeBin, "find"), `#!/usr/bin/env bash
 entered="$REMOTE_DEV_WORKER_ROOT/quarantine-entered"
@@ -390,6 +393,23 @@ describe("fixed AEGIS remote development worker", () => {
     expect(runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_QUOTA_STATE: "off" } }).json).toMatchObject({ status: "SCRATCH_CONFINEMENT_FAILED" })
     expect(fs.readFileSync(worker, "utf8")).toContain('state -p')
   })
+
+  it("accepts xfsprogs 6.6 project-inherit flag P and the exact numeric #734 report row", () => {
+    const liveFormat = fixture(); fs.rmSync(liveFormat.physicalWorkspace, { recursive: true, force: true })
+    installPreflightFakes(liveFormat)
+    expect(runWorker("PROVE_PREFLIGHT", liveFormat).json).toMatchObject({ status: "SUCCEEDED" })
+
+    const legacy = fixture(); fs.rmSync(legacy.physicalWorkspace, { recursive: true, force: true })
+    installPreflightFakes(legacy)
+    expect(runWorker("PROVE_PREFLIGHT", legacy, { env: { FAKE_XFS_FLAGS: "[proj-inherit]", FAKE_QUOTA_REPORT: "734 0 0 83886080" } }).json).toMatchObject({ status: "SUCCEEDED" })
+
+    const wrongProject = fixture(); fs.rmSync(wrongProject.physicalWorkspace, { recursive: true, force: true })
+    writeExecutable(path.join(wrongProject.fakeBin, "xfs_io"), "#!/usr/bin/env bash\nprintf '%s\\n' 'fsxattr.xflags = 0x00000800 [--------P-------]' 'fsxattr.projid = 735'\n")
+    expect(runWorker("PROVE_PREFLIGHT", wrongProject).json).toMatchObject({ status: "SCRATCH_CONFINEMENT_FAILED" })
+
+    const wrongLimit = fixture(); fs.rmSync(wrongLimit.physicalWorkspace, { recursive: true, force: true })
+    expect(runWorker("PROVE_PREFLIGHT", wrongLimit, { env: { FAKE_QUOTA_REPORT: "#734 0 0 83886079" } }).json).toMatchObject({ status: "SCRATCH_CONFINEMENT_FAILED" })
+  }, 30_000)
 
   it("keeps informational TRX and every operational capture inside quota-bound scratch under the real namespace profile", () => {
     const value = fixture()
