@@ -9,7 +9,7 @@ import { canonicalizeJcs } from "../canonical-json.mjs"
 const MANIFEST_PATH = "config/execution-fabric/aegis-remote-dev-prerequisites.json"
 const SHA256 = /^[a-f0-9]{64}$/
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const EXPECTED_MANIFEST_SHA256 = "abee19f7d7016e6ac628b281ae15d292fe2681219ab68dd96f83077a5231af4e"
+const EXPECTED_MANIFEST_SHA256 = "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a"
 const EXPECTED_BINDINGS = Object.freeze([
   "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh",
   "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs",
@@ -26,6 +26,10 @@ function sha256(value) {
 
 function canonicalDigest(value) {
   return sha256(Buffer.from(canonicalizeJcs(value), "utf8"))
+}
+
+function trustedTextDigest(bytes) {
+  return sha256(Buffer.from(Buffer.from(bytes).toString("utf8").replace(/\r\n/g, "\n"), "utf8"))
 }
 
 function equal(left, right) {
@@ -50,15 +54,43 @@ function validateManifest(manifest) {
   if (canonicalDigest(manifest) !== EXPECTED_MANIFEST_SHA256) throw new Error("manifest bytes differ from the reviewed package generation")
   if (manifest.schemaVersion !== 1 || manifest.packageId !== "aegis-remote-dev-prerequisites-issue-734-v1") throw new Error("manifest identity differs")
   if (manifest.status !== "PACKAGE_ONLY_NOT_APPLIED" || manifest.executionAuthorized !== false || manifest.ownerAuthorityRequired !== true) throw new Error("manifest posture differs")
-  if (!equal(manifest.trustedMain, { repository: "bsvalues/terragroq", ref: "refs/heads/main", commit: "d5e725e47dc32f8ea113d0a0168e956bac84659e" })) throw new Error("trusted main differs")
+  if (!equal(manifest.trustedMain, { repository: "bsvalues/terragroq", ref: "refs/heads/main", commit: "fea7785fd480d3b5f107c286cc8eb1bac6d04793" })) throw new Error("trusted main differs")
   if (manifest.proof?.workOrderId !== "WO-TF-REMOTE-DEV-OFFLOAD-001" || manifest.proof?.issue?.repository !== "bsvalues/terrafusion_os_1.0" || manifest.proof?.issue?.number !== 734
     || manifest.proof?.activationStatus !== "INACTIVE_PENDING_PREREQUISITES" || manifest.proof?.generalSchedulerEnabled !== false || manifest.proof?.standingAegisAuthorityEnabled !== false) throw new Error("proof scope differs")
   if (manifest.identity?.account !== "williamos-fabric" || manifest.identity?.privilege !== "non-root-no-sudo" || manifest.identity?.machineIdSha256 !== "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b") throw new Error("identity scope differs")
   if (manifest.transport?.account !== "williamos-fabric" || manifest.transport?.sourceHost !== "hermes" || manifest.transport?.sourceAddress !== "192.168.1.154"
     || manifest.transport?.unrestrictedBsWorkerPathAllowed !== false || manifest.transport?.unrestrictedShellAllowed !== false || manifest.transport?.passwordAuthenticationAllowed !== false
     || manifest.transport?.ptyAllowed !== false || manifest.transport?.forwardingAllowed !== false) throw new Error("transport boundary differs")
-  if (manifest.storage?.filesystem !== "xfs" || manifest.storage?.mountPath !== "/srv/william" || manifest.storage?.projectId !== 734
-    || manifest.storage?.hardLimitBytes !== 85_899_345_920 || manifest.storage?.formatAuthorized !== false || manifest.storage?.mountMutationAuthorized !== false) throw new Error("storage boundary differs")
+  const storage = {
+    mechanism: "LOOPBACK_XFS_PROJECT_QUOTA_V1",
+    backing: {
+      hostFilesystem: "ext4",
+      imagePath: "/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs",
+      imageBytes: 107_374_182_400,
+      owner: "root",
+      group: "root",
+      mode: "0600",
+      nlink: 1,
+      externalDiskUsed: false,
+      backupStorageUsed: false,
+    },
+    loop: {
+      dynamicDeviceRequired: true,
+      observedDevice: "/dev/loop0",
+      observedMajorMinor: "7:0",
+      backingImagePath: "/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs",
+    },
+    filesystem: { type: "xfs", uuid: "5744648d-9289-4d4e-ac6a-707e8405a5d6", label: "AEGIS_RDEV" },
+    mount: { path: "/srv/william", observedSource: "/dev/loop0", observedSourceMajorMinor: "7:0", requiredOptions: ["rw", "nosuid", "nodev", "prjquota", "exec"] },
+    workspaceParent: { path: "/srv/william/workspaces", owner: "williamos-fabric", mode: "0700" },
+    workspacePath: "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001",
+    projectQuota: { projectId: 734, inheritFlag: "P", accounting: true, enforcement: true, hardLimitBytes: 85_899_345_920, hardLimitKiB: 83_886_080 },
+    formatExistingBlockDeviceAuthorized: false,
+    newExternalDiskAuthorized: false,
+    backupStorageUseAuthorized: false,
+    furtherLiveMutationAuthorized: false,
+  }
+  if (!equal(manifest.storage, storage)) throw new Error("storage boundary differs")
   const endpoints = [
     { host: "ssh.github.com", port: 443, operations: ["git-fetch", "git-push"] },
     { host: "api.github.com", port: 443, operations: ["github-pr"] },
@@ -94,7 +126,7 @@ export function inspectProvisioningPackage(repoRoot) {
         continue
       }
       let actual
-      try { actual = sha256(fs.readFileSync(fullPath)) } catch { actual = null }
+      try { actual = trustedTextDigest(fs.readFileSync(fullPath)) } catch { actual = null }
       if (actual !== binding.sha256) drift.push(binding.path)
     }
     if (drift.length) return { status: "BLOCKED", reasonCode: "PACKAGE_BINDING_DRIFT", executionAuthorized: false, manifestSha256: canonicalDigest(manifest), verifiedPaths: [], drift }
@@ -164,15 +196,39 @@ export function buildProvisioningPlan(rawManifest, observed) {
   planIf(!observed.toolchain.dotnetSdk, "INSTALL_PINNED_TOOLCHAIN", "install the exact reviewed Node/.NET/Corepack/pnpm toolchain")
   if (observed.toolchain.dotnetSdk && observed.toolchain.dotnetSdk !== manifest.toolchain.dotnetSdk.version) drift.push("toolchain.dotnetSdk")
 
-  check("storage.mountPath", observed.storage.mountPath, manifest.storage.mountPath)
-  check("storage.filesystem", observed.storage.filesystem, "xfs")
-  check("storage.mountedByUuid", observed.storage.mountedByUuid, true)
-  if (typeof observed.storage.filesystemUuid !== "string" || observed.storage.filesystemUuid.length < 8) drift.push("storage.filesystemUuid")
-  check("storage.mountOptions", [...(observed.storage.mountOptions ?? [])].sort(), [...manifest.storage.requiredMountOptions].sort())
+  check("storage.mechanism", observed.storage.mechanism, manifest.storage.mechanism)
+  check("storage.backingFilesystem", observed.storage.backingFilesystem, manifest.storage.backing.hostFilesystem)
+  check("storage.backingImagePath", observed.storage.backingImagePath, manifest.storage.backing.imagePath)
+  check("storage.backingImageBytes", observed.storage.backingImageBytes, manifest.storage.backing.imageBytes)
+  check("storage.backingImageOwner", observed.storage.backingImageOwner, manifest.storage.backing.owner)
+  check("storage.backingImageGroup", observed.storage.backingImageGroup, manifest.storage.backing.group)
+  check("storage.backingImageMode", observed.storage.backingImageMode, manifest.storage.backing.mode)
+  check("storage.backingImageNlink", observed.storage.backingImageNlink, manifest.storage.backing.nlink)
+  if (!/^\/dev\/loop[0-9]+$/.test(observed.storage.loopDevice ?? "")) drift.push("storage.loopDevice")
+  if (!/^[0-9]+:[0-9]+$/.test(observed.storage.loopDeviceMajorMinor ?? "")) drift.push("storage.loopDeviceMajorMinor")
+  check("storage.loopBackingImagePath", observed.storage.loopBackingImagePath, manifest.storage.loop.backingImagePath)
+  check("storage.mountSource", observed.storage.mountSource, observed.storage.loopDevice)
+  check("storage.mountSourceMajorMinor", observed.storage.mountSourceMajorMinor, observed.storage.loopDeviceMajorMinor)
+  check("storage.mountPath", observed.storage.mountPath, manifest.storage.mount.path)
+  check("storage.filesystem", observed.storage.filesystem, manifest.storage.filesystem.type)
+  check("storage.filesystemUuid", observed.storage.filesystemUuid, manifest.storage.filesystem.uuid)
+  check("storage.filesystemLabel", observed.storage.filesystemLabel, manifest.storage.filesystem.label)
+  check("storage.mountOptions", [...(observed.storage.mountOptions ?? [])].sort(), [...manifest.storage.mount.requiredOptions].sort())
+  check("storage.workspaceParent", observed.storage.workspaceParent, manifest.storage.workspaceParent.path)
+  check("storage.workspaceOwner", observed.storage.workspaceOwner, manifest.storage.workspaceParent.owner)
+  check("storage.workspaceMode", observed.storage.workspaceMode, manifest.storage.workspaceParent.mode)
   check("storage.workspacePath", observed.storage.workspacePath, manifest.storage.workspacePath)
-  check("storage.projectId", observed.storage.projectId, manifest.storage.projectId)
-  check("storage.hardLimitBytes", observed.storage.hardLimitBytes, manifest.storage.hardLimitBytes)
-  planIf(observed.storage.hardLimitEnforced === false, "ENFORCE_XFS_PROJECT_QUOTA", "assign project 734 and its exact 80 GiB hard limit without formatting or remounting")
+  check("storage.projectId", observed.storage.projectId, manifest.storage.projectQuota.projectId)
+  check("storage.hardLimitBytes", observed.storage.hardLimitBytes, manifest.storage.projectQuota.hardLimitBytes)
+  check("storage.quotaAccounting", observed.storage.quotaAccounting, manifest.storage.projectQuota.accounting)
+  check("storage.quotaEnforcement", observed.storage.quotaEnforcement, manifest.storage.projectQuota.enforcement)
+  check("storage.projectInherit", observed.storage.projectInherit, true)
+  check("storage.externalDiskUsed", observed.storage.externalDiskUsed, false)
+  check("storage.backupStorageUsed", observed.storage.backupStorageUsed, false)
+  if (typeof observed.storage.loopbackVerified !== "boolean") drift.push("storage.loopbackVerified")
+  if (typeof observed.storage.hardLimitEnforced !== "boolean") drift.push("storage.hardLimitEnforced")
+  planIf(observed.storage.loopbackVerified === false || observed.storage.hardLimitEnforced === false,
+    "VERIFY_LOOPBACK_XFS_PROJECT_QUOTA", "verify the existing 100 GiB loopback XFS and exact project 734 80 GiB hard limit; do not format, remount, or allocate storage")
 
   check("network.mechanism", observed.network.mechanism, manifest.network.mechanism)
   check("network.dualStackDefaultDeny", observed.network.dualStackDefaultDeny, true)
@@ -237,7 +293,7 @@ export function validateApplyAuthority(rawManifest, authority, now) {
     githubAccountKeyFingerprint: manifest.github.accountKeyFingerprint,
   }
   for (const [key, value] of Object.entries(expected)) if (authority[key] !== value) return blocked("OWNER_AUTHORITY_SCOPE_MISMATCH", `owner authority ${key} differs`)
-  if (typeof authority.xfsFilesystemUuid !== "string" || authority.xfsFilesystemUuid.length < 8) return blocked("OWNER_AUTHORITY_SCOPE_MISMATCH", "owner authority XFS UUID is absent")
+  if (authority.xfsFilesystemUuid !== manifest.storage.filesystem.uuid) return blocked("OWNER_AUTHORITY_SCOPE_MISMATCH", "owner authority XFS UUID differs")
   const issued = Date.parse(authority.issuedAt)
   const expires = Date.parse(authority.expiresAt)
   const current = Date.parse(now)

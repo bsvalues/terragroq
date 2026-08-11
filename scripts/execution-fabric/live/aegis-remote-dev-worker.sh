@@ -217,10 +217,14 @@ prove_project_quota() {
   printf '%s\n' "$quota_state" | grep -Eqi 'Accounting:[[:space:]]+ON' || die_block "SCRATCH_CONFINEMENT_FAILED" "project quota accounting is not active"
   printf '%s\n' "$quota_state" | grep -Eqi 'Enforcement:[[:space:]]+ON' || die_block "SCRATCH_CONFINEMENT_FAILED" "project quota enforcement is not active"
   quota_stat="$(timeout 10 xfs_io -c stat "$PHYSICAL_PARENT")" || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace project identity is unavailable"
-  printf '%s\n' "$quota_stat" | grep -qi 'proj-inherit' || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace parent does not enforce project inheritance"
+  if ! printf '%s\n' "$quota_stat" | grep -qi 'proj-inherit' \
+    && ! printf '%s\n' "$quota_stat" | grep -Eq 'fsxattr\.xflags[[:space:]]*=.*\[[^]]*P[^]]*\]'; then
+    die_block "SCRATCH_CONFINEMENT_FAILED" "workspace parent does not enforce project inheritance"
+  fi
   project_id="$(printf '%s\n' "$quota_stat" | awk '/projid =/{print $3;exit}')"
-  [[ "$project_id" =~ ^[1-9][0-9]*$ ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace project ID is invalid"
-  quota_line="$(timeout 10 xfs_quota -x -c "quota -p -b -N $project_id" "$mount_target" | awk 'NF>=4 && $1 ~ /^#?[0-9]+$/ {print $1, $4;exit}')" || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace quota report is unavailable"
+  [[ "$project_id" == "734" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace project ID is not exactly 734"
+  quota_line="$(timeout 10 xfs_quota -x -c "report -p -b -n -N" "$mount_target" | awk '$1 == "#734" || $1 == "734" {if (NF < 4) exit 2; print $1, $4; found=1; exit} END {if (!found) exit 1}')" \
+    || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace quota report is unavailable"
   read -r quota_id hard_kib <<< "$quota_line"
   quota_id="${quota_id#\#}"
   [[ "$quota_id" == "$project_id" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "workspace quota report does not match the inherited project"
