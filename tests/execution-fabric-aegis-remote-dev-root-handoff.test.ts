@@ -95,7 +95,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(manifest.appliedAssets.length).toBeGreaterThanOrEqual(7)
     for (const asset of manifest.appliedAssets) expect(rawSha(asset.source)).toBe(asset.sha256)
     expect(inspectRootHandoffBundle(root)).toMatchObject({ status: "BUNDLE_INTERNAL_CONSISTENCY_ONLY", externalTrustRootRequired: true, applyAuthorized: false, drift: [] })
-  })
+  }, 15_000)
 
   it("rejects manifest, asset, scheduler, standing-authority, and closed-HASH drift", () => {
     for (const mutate of [

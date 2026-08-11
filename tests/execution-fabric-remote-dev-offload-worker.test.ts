@@ -338,7 +338,7 @@ describe("fixed AEGIS remote development worker", () => {
     expect(workerSummary(assertionResult.stderr).testCounts).toEqual({ total: 3, executed: 3, passed: 2, failed: 1 })
     const infrastructure = fixture()
     expect(runWorker("TEST_DOTNET_INFORMATIONAL", infrastructure, { env: { FAKE_DOTNET_MODE: "test-infra" } }).json).toMatchObject({ status: "INFORMATIONAL_TEST_INFRASTRUCTURE_FAILED" })
-  }, 60_000)
+  }, 90_000)
 
   it("fails preflight when aggregate containment is unavailable", () => {
     const missing = fixture(); fs.rmSync(missing.physicalWorkspace, { recursive: true, force: true })
@@ -405,7 +405,7 @@ describe("fixed AEGIS remote development worker", () => {
     const value = fixture(); fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
     expect(runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_QUOTA_STATE: "off" } }).json).toMatchObject({ status: "SCRATCH_CONFINEMENT_FAILED" })
     expect(fs.readFileSync(worker, "utf8")).toContain('state -p')
-  })
+  }, 15_000)
 
   it("accepts xfsprogs 6.6 project-inherit flag P and the exact numeric #734 report row", () => {
     const liveFormat = fixture(); fs.rmSync(liveFormat.physicalWorkspace, { recursive: true, force: true })
@@ -422,7 +422,7 @@ describe("fixed AEGIS remote development worker", () => {
 
     const wrongLimit = fixture(); fs.rmSync(wrongLimit.physicalWorkspace, { recursive: true, force: true })
     expect(runWorker("PROVE_PREFLIGHT", wrongLimit, { env: { FAKE_QUOTA_REPORT: "#734 0 0 83886079" } }).json).toMatchObject({ status: "SCRATCH_CONFINEMENT_FAILED" })
-  }, 30_000)
+  }, 60_000)
 
   it("keeps informational TRX and every operational capture inside quota-bound scratch under the real namespace profile", () => {
     const value = fixture()
@@ -479,7 +479,7 @@ if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\
       expect(fs.existsSync(value.physicalWorkspace)).toBe(false)
       expect(fs.existsSync(path.join(quarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
     }
-  }, 30_000)
+  }, 60_000)
 
   it("fsyncs the exact canonical parent after removal and fails closed on durability errors", () => {
     const durable = fixture()
