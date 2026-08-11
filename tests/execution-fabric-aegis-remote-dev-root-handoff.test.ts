@@ -344,7 +344,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(dotnet).not.toContain("export HTTPS_PROXY=http://127.0.0.1:17734")
     const broker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs"), "utf8")
     expect(broker).toContain('decoded.subarray(0, separator).toString("ascii") !== "WilliamOS"')
-    expect(broker).toContain("authorizeConnect(authorization.ticket, authorization.operation")
+    expect(broker).toContain("authorizeBrokerConnect(authorization.ticket, authorization.operation")
     expect(broker).toContain("407 Proxy Authentication Required")
     expect(broker).toContain('request.headers["proxy-authorization"] === undefined ? 407 : 403')
     const gitBroker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-broker.mjs"), "utf8")
