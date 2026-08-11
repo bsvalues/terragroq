@@ -83,7 +83,10 @@ function readyObservation() {
       backingImageMode: "0600",
       backingImageNlink: 1,
       loopDevice: "/dev/loop0",
+      loopDeviceMajorMinor: "7:0",
       loopBackingImagePath: "/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs",
+      mountSource: "/dev/loop0",
+      mountSourceMajorMinor: "7:0",
       mountPath: "/srv/william",
       filesystem: "xfs",
       filesystemUuid: "5744648d-9289-4d4e-ac6a-707e8405a5d6",
@@ -228,6 +231,24 @@ describe("AEGIS remote-dev prerequisite package", () => {
     })
     expect(result.mutations).toEqual([])
     expect(result.ownerAuthorityRequired).toBe(true)
+  })
+
+  it("requires explicit loopback/quota verification and binds the mount to the same loop object", () => {
+    for (const mutate of [
+      (value: any) => { delete value.storage.loopbackVerified },
+      (value: any) => { delete value.storage.hardLimitEnforced },
+      (value: any) => { value.storage.mountSource = "/dev/loop1" },
+      (value: any) => { value.storage.mountSourceMajorMinor = "7:1" },
+    ]) {
+      const observed = readyObservation()
+      mutate(observed)
+      expect(buildProvisioningPlan(manifest(), observed)).toMatchObject({
+        status: "BLOCKED",
+        reasonCode: "PREREQUISITE_DRIFT",
+        executionAuthorized: false,
+        applyAuthorized: false,
+      })
+    }
   })
 
   it("returns an exact dry-run mutation plan for absent state without applying it", () => {

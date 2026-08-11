@@ -23,7 +23,7 @@ evidence was changed while producing this package.
 - standing AEGIS authority: disabled
 
 The package manifest JCS SHA-256 is
-`51410d9fe7781ccd3e707fa60a2f985cc7abfad7782d1cfa710a5be3a3031034`.
+`cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a`.
 It is recorded by the trusted planner constant and recomputed in the test
 evidence for this correction.
 The trusted planner pins that complete manifest digest. The manifest binds the
@@ -124,7 +124,8 @@ the first mutation.
    AEGIS ext4 root at
    `/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs`. The image is
    exactly `107374182400` bytes, `root:root`, mode `0600`; it is attached as
-   observed `/dev/loop0` and mounted at `/srv/william` as XFS UUID
+   observed `/dev/loop0` (`7:0`), and `/srv/william` independently reports
+   that same device and major/minor identity as its source, with XFS UUID
    `5744648d-9289-4d4e-ac6a-707e8405a5d6`, label `AEGIS_RDEV`, with
    `rw,nosuid,nodev,prjquota,exec`. `/srv/william/workspaces` is
    `williamos-fabric`, mode `0700`. Project `734` has inherit flag `P`, quota

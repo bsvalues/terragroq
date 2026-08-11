@@ -9,7 +9,7 @@ import { canonicalizeJcs } from "../canonical-json.mjs"
 const MANIFEST_PATH = "config/execution-fabric/aegis-remote-dev-prerequisites.json"
 const SHA256 = /^[a-f0-9]{64}$/
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const EXPECTED_MANIFEST_SHA256 = "51410d9fe7781ccd3e707fa60a2f985cc7abfad7782d1cfa710a5be3a3031034"
+const EXPECTED_MANIFEST_SHA256 = "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a"
 const EXPECTED_BINDINGS = Object.freeze([
   "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh",
   "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs",
@@ -77,10 +77,11 @@ function validateManifest(manifest) {
     loop: {
       dynamicDeviceRequired: true,
       observedDevice: "/dev/loop0",
+      observedMajorMinor: "7:0",
       backingImagePath: "/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs",
     },
     filesystem: { type: "xfs", uuid: "5744648d-9289-4d4e-ac6a-707e8405a5d6", label: "AEGIS_RDEV" },
-    mount: { path: "/srv/william", requiredOptions: ["rw", "nosuid", "nodev", "prjquota", "exec"] },
+    mount: { path: "/srv/william", observedSource: "/dev/loop0", observedSourceMajorMinor: "7:0", requiredOptions: ["rw", "nosuid", "nodev", "prjquota", "exec"] },
     workspaceParent: { path: "/srv/william/workspaces", owner: "williamos-fabric", mode: "0700" },
     workspacePath: "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001",
     projectQuota: { projectId: 734, inheritFlag: "P", accounting: true, enforcement: true, hardLimitBytes: 85_899_345_920, hardLimitKiB: 83_886_080 },
@@ -204,7 +205,10 @@ export function buildProvisioningPlan(rawManifest, observed) {
   check("storage.backingImageMode", observed.storage.backingImageMode, manifest.storage.backing.mode)
   check("storage.backingImageNlink", observed.storage.backingImageNlink, manifest.storage.backing.nlink)
   if (!/^\/dev\/loop[0-9]+$/.test(observed.storage.loopDevice ?? "")) drift.push("storage.loopDevice")
+  if (!/^[0-9]+:[0-9]+$/.test(observed.storage.loopDeviceMajorMinor ?? "")) drift.push("storage.loopDeviceMajorMinor")
   check("storage.loopBackingImagePath", observed.storage.loopBackingImagePath, manifest.storage.loop.backingImagePath)
+  check("storage.mountSource", observed.storage.mountSource, observed.storage.loopDevice)
+  check("storage.mountSourceMajorMinor", observed.storage.mountSourceMajorMinor, observed.storage.loopDeviceMajorMinor)
   check("storage.mountPath", observed.storage.mountPath, manifest.storage.mount.path)
   check("storage.filesystem", observed.storage.filesystem, manifest.storage.filesystem.type)
   check("storage.filesystemUuid", observed.storage.filesystemUuid, manifest.storage.filesystem.uuid)
@@ -221,6 +225,8 @@ export function buildProvisioningPlan(rawManifest, observed) {
   check("storage.projectInherit", observed.storage.projectInherit, true)
   check("storage.externalDiskUsed", observed.storage.externalDiskUsed, false)
   check("storage.backupStorageUsed", observed.storage.backupStorageUsed, false)
+  if (typeof observed.storage.loopbackVerified !== "boolean") drift.push("storage.loopbackVerified")
+  if (typeof observed.storage.hardLimitEnforced !== "boolean") drift.push("storage.hardLimitEnforced")
   planIf(observed.storage.loopbackVerified === false || observed.storage.hardLimitEnforced === false,
     "VERIFY_LOOPBACK_XFS_PROJECT_QUOTA", "verify the existing 100 GiB loopback XFS and exact project 734 80 GiB hard limit; do not format, remount, or allocate storage")
 

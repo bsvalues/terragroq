@@ -83,6 +83,7 @@
     "loop": {
       "dynamicDeviceRequired": true,
       "observedDevice": "/dev/loop0",
+      "observedMajorMinor": "7:0",
       "backingImagePath": "/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs"
     },
     "filesystem": {
@@ -92,6 +93,8 @@
     },
     "mount": {
       "path": "/srv/william",
+      "observedSource": "/dev/loop0",
+      "observedSourceMajorMinor": "7:0",
       "requiredOptions": ["rw", "nosuid", "nodev", "prjquota", "exec"]
     },
     "workspaceParent": {
