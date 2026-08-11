@@ -801,7 +801,7 @@ function fsyncParent(fsApi, targetPath) {
   try { fsApi.fsyncSync(descriptor) } finally { fsApi.closeSync(descriptor) }
 }
 
-function createExclusiveFile(fsApi, item) {
+function createExclusiveFile(fsApi, item, { ownershipAlreadySet = false } = {}) {
   const temporaryPath = `${item.path}.provisioning-${crypto.randomUUID()}.tmp`
   let descriptor
   let temporaryCreated = false
@@ -812,7 +812,7 @@ function createExclusiveFile(fsApi, item) {
       flags(fsApi).O_WRONLY | flags(fsApi).O_CREAT | flags(fsApi).O_EXCL | (flags(fsApi).O_NOFOLLOW ?? 0), item.mode)
     temporaryCreated = true
     fsApi.fchmodSync(descriptor, item.mode)
-    fsApi.fchownSync(descriptor, item.uid, item.gid)
+    if (!ownershipAlreadySet) fsApi.fchownSync(descriptor, item.uid, item.gid)
     writeAll(fsApi, descriptor, item.bytes)
     fsApi.fsyncSync(descriptor)
   } finally {
@@ -831,12 +831,40 @@ function createExclusiveFile(fsApi, item) {
   }
 }
 
-function createExclusiveDirectory(fsApi, item) {
+function createExclusiveDirectory(fsApi, item, { ownershipAlreadySet = false } = {}) {
   assertSafeParentChain(fsApi, item.path, item.uid)
   fsApi.mkdirSync(item.path, { recursive: false, mode: item.mode })
-  fsApi.chownSync(item.path, item.uid, item.gid)
+  if (!ownershipAlreadySet) fsApi.chownSync(item.path, item.uid, item.gid)
   fsApi.chmodSync(item.path, item.mode)
   fsyncParent(fsApi, item.path)
+}
+
+function assertPrivilegeTransitionAvailable(processApi) {
+  const methods = ["geteuid", "getegid", "seteuid", "setegid"]
+  if (methods.some((name) => typeof processApi[name] !== "function")
+    || processApi.geteuid() !== 0 || processApi.getegid() !== 0) {
+    fail("AEGIS_PROVISION_PRIVILEGE_DROP_UNAVAILABLE", "root applier cannot establish the bounded service identity")
+  }
+}
+
+function runAsAccount(processApi, account, action) {
+  assertPrivilegeTransitionAvailable(processApi)
+  let groupChanged = false
+  try {
+    processApi.setegid(account.gid)
+    groupChanged = true
+    processApi.seteuid(account.uid)
+    if (processApi.geteuid() !== account.uid || processApi.getegid() !== account.gid) {
+      fail("AEGIS_PROVISION_PRIVILEGE_DROP_FAILED", "effective service identity differs")
+    }
+    return action()
+  } finally {
+    if (processApi.geteuid() !== 0) processApi.seteuid(0)
+    if (groupChanged || processApi.getegid() !== 0) processApi.setegid(0)
+    if (processApi.geteuid() !== 0 || processApi.getegid() !== 0) {
+      fail("AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED", "root applier identity was not restored")
+    }
+  }
 }
 
 function createJournal(fsApi, journalPath, record) {
@@ -1005,6 +1033,7 @@ export function provisionAegisStandingHashPrerequisites({
   ]
   const evidence = evidenceBase(manifest, authority, publicKey, mode, journalPath, planned)
   if (mode === "dry-run") return evidence
+  assertPrivilegeTransitionAvailable(processApi)
 
   const consumed = {
     schema_version: "1.0-aegis-standing-hash-mutation-journal",
@@ -1028,15 +1057,27 @@ export function provisionAegisStandingHashPrerequisites({
     completed.push(description)
     appendJournal(fsApi, journalPath, { record_type: "MUTATION_COMPLETED", sequence: sequence++, ...description })
   }
+  const mutateOwned = (item, action) => {
+    const accountOwned = item.uid === account.uid && item.gid === account.gid
+    return accountOwned
+      ? runAsAccount(processApi, account, () => action({ ownershipAlreadySet: true }))
+      : action({ ownershipAlreadySet: false })
+  }
   try {
     for (const directory of layout.directories) {
-      mutate({ type: "CREATE_DIRECTORY", path: directory.path }, () => createExclusiveDirectory(fsApi, directory))
+      mutate({ type: "CREATE_DIRECTORY", path: directory.path }, () => mutateOwned(
+        directory,
+        (options) => createExclusiveDirectory(fsApi, directory, options),
+      ))
     }
     mutate({ type: "INSTALL_REVIEWED_CHECKOUT", path: layout.releaseRoot, source_path: checkout.sourcePath, commit: checkout.headCommit }, () => {
       checkoutApi.publish({ sourcePath: checkout.sourcePath, destination: layout.releaseRoot, expected: checkoutExpected, fsApi })
     })
     for (const file of layout.files) {
-      mutate({ type: "INSTALL_FILE", id: file.id, path: file.path, sha256: sha256(file.bytes) }, () => createExclusiveFile(fsApi, file))
+      mutate({ type: "INSTALL_FILE", id: file.id, path: file.path, sha256: sha256(file.bytes) }, () => mutateOwned(
+        file,
+        (options) => createExclusiveFile(fsApi, file, options),
+      ))
     }
     appendJournal(fsApi, journalPath, {
       record_type: "APPLY_COMPLETE",

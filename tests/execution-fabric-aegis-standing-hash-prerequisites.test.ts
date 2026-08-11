@@ -90,6 +90,10 @@ function readyObservation(value = manifest()): Json {
       rootExecutionAllowed: false,
       sudoAllowed: false,
     },
+    existingRuntimeRoots: Object.fromEntries(value.existingRuntimeRoots.map((root: Json) => [
+      root.path,
+      { exists: true, ...root },
+    ])),
     reviewedRelease: {
       exists: true,
       gitCheckoutRequired: true,
@@ -285,7 +289,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/canonical-json.mjs", sha256: "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs", sha256: "c18ecec38a5086788d7f4532b471efc6548cd293c27f3983a92934464015fb16", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "d5cb8f348ea827b61626e8f1c31f563284f8649fdf986cc174d5e9fb1e2230f9", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "319acc6055138b428b656b524220c38a0c6cbd52f18aad3f3186746f0d216332", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "7700f0660f16e1d6adefc8c2e96bf3c5a43d724c5a6b76c97a5d24b0c101e6a0", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
@@ -316,6 +320,28 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       ownerAuthorityRequired: true,
       mutations: [],
     })
+  })
+
+  it("cannot report READY without exact preserved runtime-root observations", () => {
+    const missing = readyObservation()
+    delete missing.existingRuntimeRoots
+    expect(buildStandingProvisioningPlan(manifest(), missing)).toMatchObject({
+      status: "BLOCKED",
+      reasonCode: "PREFLIGHT_EVIDENCE_INCOMPLETE",
+    })
+
+    for (const [path, field, value] of [
+      ["/var/lib/williamos", "owner", "root"],
+      ["/var/lib/williamos", "mode", "0755"],
+      ["/var/lib/williamos/fabric", "group", "root"],
+      ["/var/lib/williamos/fabric", "mutationAllowed", true],
+    ] as const) {
+      const observed = readyObservation()
+      observed.existingRuntimeRoots[path][field] = value
+      const result = buildStandingProvisioningPlan(manifest(), observed)
+      expect(result).toMatchObject({ status: "BLOCKED", reasonCode: "PROVISIONING_DRIFT" })
+      expect(result.drift).toContain(`existingRuntimeRoots.${path}.${field}`)
+    }
   })
 
   it("blocks existing drift without proposing or performing mutations", () => {
@@ -537,6 +563,7 @@ function injectedLinuxFs(options: {
   const virtualOpenFlags = new Map<number, number>()
   const virtualWriteOffsets = new Map<number, number>()
   const events: Json[] = []
+  let identityProvider = () => ({ uid: 0, gid: 0 })
   let nextDescriptor = 10_000
   let nextInode = 100
   const normalize = (candidate: fs.PathLike) => String(candidate).startsWith("/")
@@ -619,7 +646,8 @@ function injectedLinuxFs(options: {
         if (nodes.has(target) && (flags & fs.constants.O_EXCL) !== 0) {
           throw Object.assign(new Error("EEXIST"), { code: "EEXIST" })
         }
-        nodes.set(target, node("file", mode ?? 0o666))
+        const identity = identityProvider()
+        nodes.set(target, node("file", mode ?? 0o666, Buffer.alloc(0), identity.uid, identity.gid))
         events.push({ kind: "open-create", path: target, flags, mode })
       } else if (!nodes.has(target)) {
         throw missing()
@@ -656,7 +684,8 @@ function injectedLinuxFs(options: {
     mkdirSync(candidate: fs.PathLike, config: Json) {
       const target = normalize(candidate)
       if (nodes.has(target)) throw Object.assign(new Error("EEXIST"), { code: "EEXIST" })
-      nodes.set(target, node("directory", config.mode))
+      const identity = identityProvider()
+      nodes.set(target, node("directory", config.mode, Buffer.alloc(0), identity.uid, identity.gid))
       events.push({ kind: "mkdir", path: target, mode: config.mode })
     },
     chownSync(candidate: fs.PathLike, uid: number, gid: number) {
@@ -733,6 +762,9 @@ function injectedLinuxFs(options: {
     pathOf: normalize,
     bytesAt: (candidate: string) => nodes.get(normalize(candidate))?.bytes,
     statAt: (candidate: string) => nodes.get(normalize(candidate)),
+    setIdentityProvider(provider: () => { uid: number, gid: number }) {
+      identityProvider = provider
+    },
     installCheckout(candidate: string) {
       const checkoutRoot = normalize(candidate)
       const directories = [
@@ -760,8 +792,34 @@ function injectedLinuxFs(options: {
   }
 }
 
+function injectedRootProcess() {
+  let uid = 0
+  let gid = 0
+  const events: Json[] = []
+  return {
+    events,
+    identity: () => ({ uid, gid }),
+    api: {
+      platform: "linux",
+      getuid: () => uid,
+      geteuid: () => uid,
+      getegid: () => gid,
+      seteuid(next: number) {
+        events.push({ kind: "seteuid", from: uid, to: next })
+        uid = next
+      },
+      setegid(next: number) {
+        events.push({ kind: "setegid", from: gid, to: next })
+        gid = next
+      },
+    },
+  }
+}
+
 function implementationInput(overrides: Json = {}) {
   const virtual = injectedLinuxFs(overrides.virtualOptions)
+  const rootProcess = injectedRootProcess()
+  virtual.setIdentityProvider(rootProcess.identity)
   const publicKey = overrides.publicKey ?? TRANSPORT_PUBLIC_KEY + "\n"
   const normalizedPublicKey = publicKey.trim()
   const keyEvidence = overrides.keyGenerationEvidence ?? keyGenerationEvidence(manifest(), normalizedPublicKey)
@@ -795,7 +853,7 @@ function implementationInput(overrides: Json = {}) {
       keyGenerationEvidence: keyEvidence,
       mode: overrides.mode,
       fsApi: virtual.fsApi,
-      processApi: overrides.processApi ?? { platform: "linux", getuid: () => 0 },
+      processApi: overrides.processApi ?? rootProcess.api,
       hostname: overrides.hostnameApi ?? (() => "aegis"),
       clock: overrides.clock ?? (() => NOW),
       machineIdentitySha256: manifest().identity.machineIdSha256,
@@ -804,6 +862,7 @@ function implementationInput(overrides: Json = {}) {
       checkoutApi,
       packageClosure,
     },
+    processEvents: rootProcess.events,
   }
 }
 
@@ -919,7 +978,7 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
 
   it("installs the exact ordered assets with exact modes and owners", () => {
     const authority = applyAuthority()
-    const { virtual, options } = implementationInput({ authority, mode: "apply" })
+    const { virtual, options, processEvents } = implementationInput({ authority, mode: "apply" })
     const result = applyAegisStandingHashPrerequisites(options)
     const records = journalRecords(virtual, authority.authorityId)
     const completed = records
@@ -965,6 +1024,25 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
       expect(value, target).toBeDefined()
       expect({ uid: value!.uid, gid: value!.gid, mode: value!.mode & 0o777 }).toEqual({ uid, gid, mode })
     }
+    expect(processEvents).toContainEqual({ kind: "setegid", from: 0, to: 734 })
+    expect(processEvents).toContainEqual({ kind: "seteuid", from: 0, to: 734 })
+    expect(processEvents.at(-2)).toEqual({ kind: "seteuid", from: 734, to: 0 })
+    expect(processEvents.at(-1)).toEqual({ kind: "setegid", from: 734, to: 0 })
+    expect(virtual.events).not.toContainEqual(expect.objectContaining({ kind: "chown", uid: 734 }))
+    expect(virtual.events).not.toContainEqual(expect.objectContaining({ kind: "fchown", uid: 734 }))
+  })
+
+  it("rejects an unavailable privilege transition before consuming authority", () => {
+    const authority = applyAuthority()
+    const { virtual, options } = implementationInput({
+      authority,
+      mode: "apply",
+      processApi: { platform: "linux", getuid: () => 0 },
+    })
+    expect(() => applyAegisStandingHashPrerequisites(options)).toThrow(expect.objectContaining({
+      code: "AEGIS_PROVISION_PRIVILEGE_DROP_UNAVAILABLE",
+    }))
+    expect(journalRecords(virtual, authority.authorityId)).toEqual([])
   })
 
   it("preserves the exact existing service-owned runtime roots without mutating them", () => {
