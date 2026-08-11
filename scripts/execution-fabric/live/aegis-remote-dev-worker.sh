@@ -106,6 +106,7 @@ MARKER_PATH="$PHYSICAL_WORKSPACE/$OWNER_MARKER"
 PROOF_PATH="$PHYSICAL_WORKSPACE/$MERGE_MARKER"
 SCRATCH_DIR="$PHYSICAL_WORKSPACE/.williamos-scratch"
 QUARANTINE_PATH="$PHYSICAL_PARENT/.williamos-quarantine-$WORK_ORDER_ID-$RUN_ID"
+QUARANTINE_PREFIX=".williamos-quarantine-$WORK_ORDER_ID-"
 
 [[ "$PACKET_WORKSPACE" == "$LOGICAL_WORKSPACE" ]] || die_input "WORKSPACE_MISMATCH" "packet workspace differs"
 if [[ -L "$PHYSICAL_WORKSPACE" || -L "$PHYSICAL_PARENT" || -L "$QUARANTINE_PATH" ]]; then die_input "SYMLINK_REJECTED" "workspace lifecycle path is a symlink"; fi
@@ -129,6 +130,42 @@ validate_trusted_parent() {
   [[ "$canonical" == "$PHYSICAL_PARENT" ]] || die_input "PATH_CONFINEMENT_FAILED" "workspace parent identity differs"
   owner="$(timeout 5 stat -c %u -- "$PHYSICAL_PARENT")" || die_input "PATH_CONFINEMENT_FAILED" "workspace parent ownership is unavailable"
   [[ "$owner" == "$current" ]] || die_input "PATH_CONFINEMENT_FAILED" "workspace parent is not worker-owned"
+}
+
+enumerate_quarantine_namespace() {
+  local current owner canonical kind entry name suffix
+  local -a entries=()
+  [[ -r "$PHYSICAL_PARENT" && -x "$PHYSICAL_PARENT" ]] || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine namespace metadata is inaccessible"
+  shopt -s nullglob
+  entries=("$PHYSICAL_PARENT"/"$QUARANTINE_PREFIX"*)
+  shopt -u nullglob
+  (( ${#entries[@]} <= 1 )) || die_block "QUARANTINE_NAMESPACE_AMBIGUOUS" "multiple Work Order quarantines require explicit recovery"
+  QUARANTINE_COUNT=${#entries[@]}
+  QUARANTINE_FOUND=""
+  (( QUARANTINE_COUNT == 0 )) && return 0
+  entry="${entries[0]}"; name="${entry##*/}"; suffix="${name#"$QUARANTINE_PREFIX"}"
+  [[ "$name" == "$QUARANTINE_PREFIX"* && "$suffix" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine name does not contain one structurally valid originating run"
+  [[ ! -L "$entry" ]] || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine namespace contains a symlink"
+  kind="$(timeout 5 stat -c %F -- "$entry")" || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine type is inaccessible"
+  [[ "$kind" == "directory" ]] || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine namespace contains an unexpected type"
+  canonical="$(timeout 5 realpath -- "$entry")" || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine path is inaccessible"
+  [[ "$canonical" == "$entry" ]] || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine canonical identity differs"
+  owner="$(timeout 5 stat -c %u -- "$entry")" || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine owner is inaccessible"
+  current="$(timeout 5 id -u)" || die_block "QUARANTINE_NAMESPACE_INVALID" "worker identity is unavailable"
+  [[ "$owner" == "$current" ]] || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine is not worker-owned"
+  QUARANTINE_FOUND="$entry"
+}
+
+bind_quarantine_authority() {
+  RECOVERY_MODE=false
+  if [[ "$OPERATION" == "CLEAN_EXACT_WORKSPACE" && ! -e "$PHYSICAL_WORKSPACE" && ! -L "$PHYSICAL_WORKSPACE" && "$QUARANTINE_COUNT" -eq 1 ]]; then
+    [[ "$QUARANTINE_FOUND" == "$QUARANTINE_PATH" ]] || die_block "CLEANUP_RECOVERY_AUTHORITY_MISMATCH" "current CLEAN authority does not bind the originating quarantine run"
+    RECOVERY_MODE=true
+  elif [[ "$OPERATION" != "CLEAN_EXACT_WORKSPACE" && "$QUARANTINE_COUNT" -ne 0 ]]; then
+    die_block "QUARANTINE_RECOVERY_REQUIRED" "a Work Order cleanup quarantine must be recovered before further lifecycle work"
+  elif [[ "$OPERATION" == "CLEAN_EXACT_WORKSPACE" && "$QUARANTINE_COUNT" -ne 0 ]]; then
+    die_block "QUARANTINE_NAMESPACE_AMBIGUOUS" "cleanup cannot combine an original workspace with a quarantine"
+  fi
 }
 
 require_containment_tools() {
@@ -392,6 +429,55 @@ run_exact_cleanup() {
   SCRATCH_AFTER=0
 }
 
+validate_recovery_quarantine() {
+  local recovery_repo="$QUARANTINE_PATH/repository" remote branch changed recovery_stat recovery_project quarantine_proof
+  [[ "$QUARANTINE_FOUND" == "$QUARANTINE_PATH" && -d "$QUARANTINE_PATH" && ! -L "$QUARANTINE_PATH" ]] || die_block "CLEANUP_RECOVERY_AUTHORITY_MISMATCH" "current authority does not bind the discovered quarantine"
+  validate_owner_marker_at "$QUARANTINE_PATH"
+  [[ -d "$recovery_repo/.git" && ! -L "$recovery_repo" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined repository is unavailable"
+  [[ "$(timeout 5 realpath -- "$recovery_repo")" == "$recovery_repo" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined repository identity differs"
+  remote="$(timeout 15 git -C "$recovery_repo" remote get-url origin)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined origin is unavailable"
+  [[ "$remote" == "$REMOTE_URL" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined origin differs"
+  branch="$(timeout 15 git -C "$recovery_repo" branch --show-current)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined branch is unavailable"
+  [[ "$branch" == "$BRANCH" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined branch differs"
+  HEAD_SHA="$(timeout 15 git -C "$recovery_repo" rev-parse HEAD)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined HEAD is unavailable"
+  [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined HEAD is malformed"
+  changed="$(timeout 15 git -C "$recovery_repo" status --porcelain --untracked-files=all)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined worktree status is unavailable"
+  [[ -z "$changed" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined worktree contains unverified changes"
+  [[ -f "$QUARANTINE_PATH/$MERGE_MARKER" && ! -L "$QUARANTINE_PATH/$MERGE_MARKER" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "quarantined post-merge proof is absent"
+  quarantine_proof="$(timeout 5 tr -d '\r\n' < "$QUARANTINE_PATH/$MERGE_MARKER")"
+  [[ "$quarantine_proof" == "$RUN_ID:$HEAD_SHA" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "quarantined post-merge proof differs"
+  recovery_stat="$(timeout 10 xfs_io -c stat "$QUARANTINE_PATH")" || die_block "SCRATCH_CONFINEMENT_FAILED" "quarantine project identity is unavailable"
+  recovery_project="$(printf '%s\n' "$recovery_stat" | awk '/projid =/{print $3;exit}')"
+  [[ "$recovery_project" == "$QUOTA_PROJECT_ID" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "quarantine project identity differs"
+}
+
+run_recovery_cleanup() {
+  local quarantine_identity quarantine_mounts
+  validate_recovery_quarantine
+  quarantine_identity="$(timeout 5 stat -c '%d:%i' -- "$QUARANTINE_PATH")" || die_block "CLEANUP_RECOVERY_INVALID" "quarantine inode identity is unavailable"
+  SCRATCH_DIR="$QUARANTINE_PATH/.williamos-scratch"
+  REPO_DIR="$QUARANTINE_PATH/repository"
+  MARKER_PATH="$QUARANTINE_PATH/$OWNER_MARKER"
+  PROOF_PATH="$QUARANTINE_PATH/$MERGE_MARKER"
+  validate_scratch_dir
+  prepare_operation_scratch
+  measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"
+  OUTPUT_SHA="$(timeout 10 sha256sum "$OUTPUT_FILE" | { read -r digest _rest; printf '%s' "$digest"; })" || die_block "EVIDENCE_FAILED" "recovery output digest failed"
+  quarantine_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$QUARANTINE_PATH" 2>/dev/null || true)"
+  [[ -z "$quarantine_mounts" ]] || die_block "CLEANUP_NESTED_MOUNT" "recovery quarantine contains a mount boundary"
+  assert_path_not_in_use "$QUARANTINE_PATH"
+  [[ ! -e "$PHYSICAL_WORKSPACE" && ! -L "$PHYSICAL_WORKSPACE" ]] || die_block "CLEANUP_ORIGINAL_RECREATED" "original workspace exists during recovery"
+  [[ "$(timeout 5 stat -c '%d:%i' -- "$QUARANTINE_PATH")" == "$quarantine_identity" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantine inode changed before recovery deletion"
+  set +e
+  run_cleanup_profile "$PROCESS_TIMEOUT_SECONDS" rm -rf -- "$QUARANTINE_PATH" >/dev/null 2>&1
+  RUN_EXIT=$?
+  set -e
+  [[ $RUN_EXIT -eq 0 && ! -e "$QUARANTINE_PATH" && ! -L "$QUARANTINE_PATH" ]] || die_block "BLOCKING_OPERATION_FAILED" "exact recovery quarantine deletion failed"
+  [[ ! -e "$PHYSICAL_WORKSPACE" && ! -L "$PHYSICAL_WORKSPACE" ]] || die_block "CLEANUP_ORIGINAL_RECREATED" "original workspace was recreated during recovery"
+  timeout 10 sync -- "$PHYSICAL_PARENT" || die_block "CLEANUP_DURABILITY_FAILED" "canonical parent recovery fsync failed"
+  SCRATCH_AFTER=0
+}
+
 validate_reserved_paths() {
   local relative current component
   [[ -d "$REPO_DIR" && ! -L "$REPO_DIR" ]] || return 0
@@ -460,15 +546,18 @@ RUN_EXIT=0
 RESULT_STATUS="SUCCEEDED"
 HEAD_SHA="$BASE_SHA"
 OPERATION_SCRATCH_PREPARED=false
+RECOVERY_MODE=false
 
-if [[ "$OPERATION" != "CLEAN_EXACT_WORKSPACE" && ( -e "$QUARANTINE_PATH" || -L "$QUARANTINE_PATH" ) ]]; then
-  die_block "QUARANTINE_RECOVERY_REQUIRED" "an owned cleanup quarantine must be recovered before further lifecycle work"
-fi
+validate_trusted_parent
+enumerate_quarantine_namespace
+bind_quarantine_authority
 
 if [[ "$OPERATION" != "PROVE_PREFLIGHT" ]]; then
   require_containment_tools
   prove_project_quota
   acquire_workspace_lock
+  enumerate_quarantine_namespace
+  bind_quarantine_authority
   if [[ "$OPERATION" != "CREATE_WORKSPACE" && "$OPERATION" != "CLEAN_EXACT_WORKSPACE" ]]; then
     prepare_operation_scratch
     OPERATION_SCRATCH_PREPARED=true
@@ -624,18 +713,22 @@ case "$OPERATION" in
     RESULT_STATUS="MERGE_ANCESTRY_PROVEN"
     ;;
   CLEAN_EXACT_WORKSPACE)
-    validate_owner_marker; validate_repo
-    HEAD_SHA="$(repo_value rev-parse HEAD)"
-    [[ -f "$PROOF_PATH" && ! -L "$PROOF_PATH" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "post-merge proof is absent"
-    proof="$(timeout 5 tr -d '\r\n' < "$PROOF_PATH")"
-    [[ "$proof" == "$RUN_ID:$HEAD_SHA" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "post-merge proof differs"
-    canonical="$(timeout 5 realpath -- "$PHYSICAL_WORKSPACE")" || die_block "CLEANUP_NOT_AUTHORIZED" "workspace cannot be resolved"
-    [[ "$canonical" == "$PHYSICAL_WORKSPACE" && "$canonical" != "$PHYSICAL_PARENT" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "workspace does not resolve exactly"
-    nested_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$PHYSICAL_WORKSPACE" 2>/dev/null || true)"
-    [[ -z "$nested_mounts" ]] || die_block "CLEANUP_NESTED_MOUNT" "workspace contains a mount boundary"
-    validate_scratch_dir
-    prepare_operation_scratch
-    run_exact_cleanup
+    if [[ "$RECOVERY_MODE" == true ]]; then
+      run_recovery_cleanup
+    else
+      validate_owner_marker; validate_repo
+      HEAD_SHA="$(repo_value rev-parse HEAD)"
+      [[ -f "$PROOF_PATH" && ! -L "$PROOF_PATH" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "post-merge proof is absent"
+      proof="$(timeout 5 tr -d '\r\n' < "$PROOF_PATH")"
+      [[ "$proof" == "$RUN_ID:$HEAD_SHA" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "post-merge proof differs"
+      canonical="$(timeout 5 realpath -- "$PHYSICAL_WORKSPACE")" || die_block "CLEANUP_NOT_AUTHORIZED" "workspace cannot be resolved"
+      [[ "$canonical" == "$PHYSICAL_WORKSPACE" && "$canonical" != "$PHYSICAL_PARENT" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "workspace does not resolve exactly"
+      nested_mounts="$(timeout 10 findmnt -R -n -o TARGET -- "$PHYSICAL_WORKSPACE" 2>/dev/null || true)"
+      [[ -z "$nested_mounts" ]] || die_block "CLEANUP_NESTED_MOUNT" "workspace contains a mount boundary"
+      validate_scratch_dir
+      prepare_operation_scratch
+      run_exact_cleanup
+    fi
     [[ $RUN_EXIT -eq 0 && ! -e "$PHYSICAL_WORKSPACE" ]] || die_block "BLOCKING_OPERATION_FAILED" "exact cleanup failed"
     RESULT_STATUS="CLEANUP_ABSENCE_PROVEN"
     ;;

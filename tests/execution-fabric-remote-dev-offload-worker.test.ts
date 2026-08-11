@@ -103,7 +103,10 @@ exit 0
 `)
   writeExecutable(path.join(fakeBin, "taskset"), "#!/usr/bin/env bash\nshift 2\nexec \"$@\"\n")
   writeExecutable(path.join(fakeBin, "prlimit"), "#!/usr/bin/env bash\nwhile [[ \"$1\" != -- ]]; do shift; done\nshift\nexec \"$@\"\n")
-  writeExecutable(path.join(fakeBin, "flock"), "#!/usr/bin/env bash\nexit 0\n")
+  writeExecutable(path.join(fakeBin, "flock"), `#!/usr/bin/env bash
+if [[ "\${FAKE_QUARANTINE_ON_LOCK:-0}" == 1 ]]; then mkdir -p -- "$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces/.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-11111111-1111-4111-8111-111111111111"; fi
+exit 0
+`)
   writeExecutable(path.join(fakeBin, "du"), "#!/usr/bin/env bash\nprintf '%s\\t%s\\n' \"\${FAKE_SCRATCH_BYTES:-4096}\" \"\${@: -1}\"\n")
   writeExecutable(path.join(fakeBin, "findmnt"), `#!/usr/bin/env bash
 if [[ "$*" == *"FSTYPE,OPTIONS,TARGET"* ]]; then printf '%s\n' "xfs rw,relatime,prjquota \${FAKE_MOUNT_TARGET:-/srv/william}"; exit 0; fi
@@ -425,17 +428,63 @@ exit 0
     expect(fs.existsSync(path.join(recreatedQuarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
   }, 30_000)
 
-  it("rejects an owned quarantine before any other lifecycle operation mutates the parent", () => {
+  it("blocks a later run on a prior quarantine before lock or duplicate workspace mutation", () => {
     const value = fixture()
     const parent = path.dirname(value.physicalWorkspace)
     const quarantine = path.join(parent, `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${value.packet.runId}`)
     fs.renameSync(value.physicalWorkspace, quarantine)
     const lock = path.join(parent, ".remote-dev-offload.lock")
+    const packet = makePacket(value.baseSha, value.patch, { runId: crypto.randomUUID() })
     expect(fs.existsSync(lock)).toBe(false)
-    expect(runWorker("CREATE_WORKSPACE", value).json).toMatchObject({ status: "QUARANTINE_RECOVERY_REQUIRED" })
+    expect(runWorker("CREATE_WORKSPACE", value, { packet }).json).toMatchObject({ status: "QUARANTINE_RECOVERY_REQUIRED" })
     expect(fs.existsSync(lock)).toBe(false)
+    expect(fs.existsSync(value.physicalWorkspace)).toBe(false)
     expect(fs.existsSync(path.join(quarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
-  })
+  }, 15_000)
+
+  it("rechecks the quarantine namespace under the lifecycle lock before workspace creation", () => {
+    const value = fixture(); fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
+    expect(runWorker("CREATE_WORKSPACE", value, { env: { FAKE_QUARANTINE_ON_LOCK: "1" } }).json).toMatchObject({ status: "QUARANTINE_RECOVERY_REQUIRED" })
+    expect(fs.existsSync(value.physicalWorkspace)).toBe(false)
+  }, 15_000)
+
+  it("fails closed on malformed, symlinked, or multiple Work Order quarantines", () => {
+    const malformed = fixture()
+    fs.mkdirSync(path.join(path.dirname(malformed.physicalWorkspace), ".williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-not-a-run"))
+    expect(runWorker("PROVE_PREFLIGHT", malformed).json).toMatchObject({ status: "QUARANTINE_NAMESPACE_INVALID" })
+
+    const symlinked = fixture()
+    const symlinkParent = path.dirname(symlinked.physicalWorkspace)
+    const outside = path.join(symlinked.hostRoot, "outside-quarantine"); fs.mkdirSync(outside)
+    fs.symlinkSync(outside, path.join(symlinkParent, `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${crypto.randomUUID()}`), "junction")
+    expect(runWorker("PROVE_PREFLIGHT", symlinked).json).toMatchObject({ status: "QUARANTINE_NAMESPACE_INVALID" })
+
+    const multiple = fixture()
+    const multipleParent = path.dirname(multiple.physicalWorkspace)
+    fs.mkdirSync(path.join(multipleParent, `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${crypto.randomUUID()}`))
+    fs.mkdirSync(path.join(multipleParent, `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${crypto.randomUUID()}`))
+    expect(runWorker("PROVE_PREFLIGHT", multiple).json).toMatchObject({ status: "QUARANTINE_NAMESPACE_AMBIGUOUS" })
+  }, 30_000)
+
+  it("recovers only the exact same-origin quarantine authorized by the CLEAN packet", () => {
+    const authorized = fixture()
+    const authorizedParent = path.dirname(authorized.physicalWorkspace)
+    const authorizedQuarantine = path.join(authorizedParent, `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${authorized.packet.runId}`)
+    fs.writeFileSync(path.join(authorized.physicalWorkspace, ".williamos-post-merge-proven"), `${authorized.packet.runId}:${authorized.baseSha}\n`)
+    fs.renameSync(authorized.physicalWorkspace, authorizedQuarantine)
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", authorized).json).toMatchObject({ status: "CLEANUP_ABSENCE_PROVEN" })
+    expect(fs.existsSync(authorizedQuarantine)).toBe(false)
+    expect(fs.existsSync(authorized.physicalWorkspace)).toBe(false)
+
+    const denied = fixture()
+    const deniedParent = path.dirname(denied.physicalWorkspace)
+    const deniedQuarantine = path.join(deniedParent, `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${denied.packet.runId}`)
+    fs.writeFileSync(path.join(denied.physicalWorkspace, ".williamos-post-merge-proven"), `${denied.packet.runId}:${denied.baseSha}\n`)
+    fs.renameSync(denied.physicalWorkspace, deniedQuarantine)
+    const differentRunPacket = makePacket(denied.baseSha, denied.patch, { runId: crypto.randomUUID() })
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", denied, { packet: differentRunPacket }).json).toMatchObject({ status: "CLEANUP_RECOVERY_AUTHORITY_MISMATCH" })
+    expect(fs.existsSync(path.join(deniedQuarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
+  }, 30_000)
 
   it("emits strict sub-second timestamps and rejects a non-increasing clock", () => {
     const source = fs.readFileSync(worker, "utf8")
