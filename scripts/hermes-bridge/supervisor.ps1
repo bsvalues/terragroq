@@ -26,25 +26,27 @@ $createdNew = $false
 $mutex = [Threading.Mutex]::new($true, $mutexName, [ref]$createdNew)
 
 function Resolve-OwnedNodePath {
-    $nodePath = try {
-        foreach ($nodeCommand in @(Get-Command node -CommandType Application -All -ErrorAction Stop)) {
+    $nodeCommands = try {
+        @(Get-Command node -CommandType Application -All -ErrorAction Stop)
+    }
+    catch {
+        @()
+    }
+    foreach ($nodeCommand in $nodeCommands) {
+        try {
             $candidatePath = [IO.Path]::GetFullPath($nodeCommand.Source)
             if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) { continue }
             $versionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($candidatePath)
             if ($versionInfo.ProductName -ceq "Node.js" -and
                 $versionInfo.OriginalFilename -ceq "node.exe") {
-                $candidatePath
-                break
+                return $candidatePath
             }
         }
+        catch {
+            continue
+        }
     }
-    catch {
-        $null
-    }
-    if ([string]::IsNullOrWhiteSpace($nodePath)) {
-        throw "HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL"
-    }
-    return $nodePath
+    throw "HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL"
 }
 
 function ConvertTo-SupervisorToken {

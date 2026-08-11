@@ -127,12 +127,17 @@ describe("Hermes interactive-user supervisor", () => {
       `-RuntimeRoot ${quote("runtime")}`,
       "-RunOnce",
     ].join(" ")
+    const inheritedPath = process.env.PATH ?? process.env.Path ?? ""
+    const nodeSearchPath = [firstNodeRoot, secondNodeRoot, inheritedPath]
+      .filter(Boolean)
+      .join(path.delimiter)
     const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
       cwd: launchRoot,
       encoding: "utf8",
       env: {
         ...process.env,
-        PATH: [firstNodeRoot, secondNodeRoot, process.env.PATH].filter(Boolean).join(path.delimiter),
+        PATH: nodeSearchPath,
+        Path: nodeSearchPath,
       },
       timeout: 15_000,
     })
@@ -166,7 +171,8 @@ describe("Hermes interactive-user supervisor", () => {
         encoding: "utf8",
         env: {
           ...process.env,
-          PATH: [firstNodeRoot, secondNodeRoot, process.env.PATH].filter(Boolean).join(path.delimiter),
+          PATH: nodeSearchPath,
+          Path: nodeSearchPath,
         },
         timeout: 15_000,
       },
@@ -205,7 +211,7 @@ describe("Hermes interactive-user supervisor", () => {
           `& ${quote(script)} -Workspace ${quote(root)} -RuntimeRoot ${quote(runtimeRoot)} -RunOnce -CycleAction { [PSCustomObject]@{ ExitCode = 0; Result = 'QUEUE_DRAINED'; StopReason = 'NO_OUTCOME' } }`],
         {
           encoding: "utf8",
-          env: { ...process.env, PATH: emptyPath },
+          env: { ...process.env, PATH: emptyPath, Path: emptyPath },
           timeout: 15_000,
         },
       )
@@ -239,7 +245,7 @@ describe("Hermes interactive-user supervisor", () => {
           `& ${quote(script)} -Workspace ${quote(root)} -RuntimeRoot ${quote(root)} -RunOnce`],
         {
           encoding: "utf8",
-          env: { ...process.env, PATH: emptyPath },
+          env: { ...process.env, PATH: emptyPath, Path: emptyPath },
           timeout: 15_000,
         },
       )
