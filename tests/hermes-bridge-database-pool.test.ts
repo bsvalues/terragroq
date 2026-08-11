@@ -57,4 +57,23 @@ describe("Hermes database pool", () => {
       },
     })
   })
+
+  it("does not let a connection wait outlive an explicitly narrower query budget", () => {
+    const Pool = vi.fn(function Pool(this: { options: unknown }, options: unknown) {
+      this.options = options
+    })
+
+    const pool = createHermesDatabasePool(Pool, "postgresql://example.invalid/williamos", {
+      queryTimeoutMs: 5_000,
+    })
+
+    expect(pool).toMatchObject({
+      options: {
+        connectionTimeoutMillis: 5_000,
+        query_timeout: 5_000,
+        statement_timeout: 5_000,
+        idleTimeoutMillis: HERMES_DATABASE_IDLE_TIMEOUT_MS,
+      },
+    })
+  })
 })
