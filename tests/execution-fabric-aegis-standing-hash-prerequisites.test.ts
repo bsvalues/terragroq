@@ -15,6 +15,7 @@ import {
 import {
   applyAegisStandingHashPrerequisites,
   assertNoGitAlternates,
+  standingProvisioningErrorEvidence,
 } from "../scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs"
 import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
 
@@ -289,7 +290,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/canonical-json.mjs", sha256: "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs", sha256: "c18ecec38a5086788d7f4532b471efc6548cd293c27f3983a92934464015fb16", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "ba207282273e5edd20fe64f2f49c270389c6dbe10cfe46e49d031b7c4ac025c9", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "2c69221e56659d3f358c8a81236e59dc61e8994bae7a98b558c6648fee5021d6", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "7700f0660f16e1d6adefc8c2e96bf3c5a43d724c5a6b76c97a5d24b0c101e6a0", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
@@ -684,6 +685,7 @@ function injectedLinuxFs(options: {
     },
     mkdirSync(candidate: fs.PathLike, config: Json) {
       const target = normalize(candidate)
+      if (target === failPath) throw Object.assign(new Error("INJECTED_WRITE_FAILURE"), { code: "EIO" })
       if (nodes.has(target)) throw Object.assign(new Error("EEXIST"), { code: "EEXIST" })
       const identity = identityProvider()
       nodes.set(target, node("directory", config.mode, Buffer.alloc(0), identity.uid, identity.gid))
@@ -793,14 +795,18 @@ function injectedLinuxFs(options: {
   }
 }
 
-function injectedRootProcess(failOperation?: string | string[]) {
+function injectedRootProcess(failOperation?: string | string[] | { operation: string, occurrence: number }) {
   let uid = 0
   let gid = 0
   let groups = [0]
   const events: Json[] = []
-  const failures = new Set(Array.isArray(failOperation) ? failOperation : failOperation ? [failOperation] : [])
+  const failureSpecs = (Array.isArray(failOperation) ? failOperation : failOperation ? [failOperation] : [])
+    .map((entry) => typeof entry === "string" ? { operation: entry, occurrence: 1 } : entry)
+  const operationCounts = new Map<string, number>()
   const reject = (operation: string) => {
-    if (failures.has(operation)) {
+    const occurrence = (operationCounts.get(operation) ?? 0) + 1
+    operationCounts.set(operation, occurrence)
+    if (failureSpecs.some((entry) => entry.operation === operation && entry.occurrence === occurrence)) {
       throw Object.assign(new Error(`INJECTED_${operation.toUpperCase()}_FAILURE`), { code: "EPERM" })
     }
   }
@@ -1241,6 +1247,45 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
     expect(journalFsyncs).toHaveLength(journalWrites.length)
   })
 
+  it("retains combined mutation and identity-restoration failure evidence in the journal and CLI shape", () => {
+    const authority = applyAuthority()
+    const { virtual, options } = implementationInput({
+      authority,
+      mode: "apply",
+      virtualOptions: { failPath: "/var/lib/williamos/fabric/standing-hash-requests" },
+      processFailure: { operation: "restore-egid", occurrence: 2 },
+    })
+    let caught: any
+    try {
+      applyAegisStandingHashPrerequisites(options)
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toMatchObject({
+      code: "AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS",
+      originalFailureCode: "EIO",
+      restoreFailureCode: "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED",
+      restoreFailureReason: "root applier identity restoration failed",
+      restoreFailureCauseCode: "EPERM",
+      authorityConsumed: true,
+    })
+    expect(journalRecords(virtual, authority.authorityId).at(-1)).toMatchObject({
+      record_type: "APPLY_FAILED_PARTIAL_STATE",
+      failure_code: "EIO",
+      restore_failure_code: "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED",
+      restore_failure_reason: "root applier identity restoration failed",
+      restore_failure_cause_code: "EPERM",
+    })
+    expect(standingProvisioningErrorEvidence(caught)).toMatchObject({
+      code: "AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS",
+      original_failure_code: "EIO",
+      restore_failure_code: "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED",
+      restore_failure_reason: "root applier identity restoration failed",
+      restore_failure_cause_code: "EPERM",
+      authority_consumed: true,
+    })
+  })
+
   it("returns a typed evidence failure when partial-state journaling cannot be retained", () => {
     const authority = applyAuthority()
     const failedPath = "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs"
@@ -1257,6 +1302,27 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
       code: "AEGIS_PROVISION_EVIDENCE_WRITE_FAILED",
       causeCode: "EIO",
       originalFailureCode: "EIO",
+      authorityConsumed: true,
+    }))
+  })
+
+  it("retains restoration evidence when partial-state journaling also fails", () => {
+    const authority = applyAuthority()
+    const { options } = implementationInput({
+      authority,
+      mode: "apply",
+      virtualOptions: {
+        failPath: "/var/lib/williamos/fabric/standing-hash-requests",
+        failJournalRecordType: "APPLY_FAILED_PARTIAL_STATE",
+      },
+      processFailure: { operation: "restore-egid", occurrence: 2 },
+    })
+    expect(() => applyAegisStandingHashPrerequisites(options)).toThrow(expect.objectContaining({
+      code: "AEGIS_PROVISION_EVIDENCE_WRITE_FAILED",
+      originalFailureCode: "EIO",
+      restoreFailureCode: "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED",
+      restoreFailureReason: "root applier identity restoration failed",
+      restoreFailureCauseCode: "EPERM",
       authorityConsumed: true,
     }))
   })

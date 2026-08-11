@@ -367,7 +367,7 @@
     },
     {
       "path": "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs",
-      "sha256": "ba207282273e5edd20fe64f2f49c270389c6dbe10cfe46e49d031b7c4ac025c9",
+      "sha256": "2c69221e56659d3f358c8a81236e59dc61e8994bae7a98b558c6648fee5021d6",
       "textNormalization": "LF"
     },
     {

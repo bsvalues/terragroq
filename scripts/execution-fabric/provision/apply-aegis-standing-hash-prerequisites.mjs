@@ -1134,6 +1134,11 @@ export function provisionAegisStandingHashPrerequisites({
       scheduler_activated: false,
     })
   } catch (error) {
+    const restorationEvidence = error?.restoreFailureCode ? {
+      restore_failure_code: error.restoreFailureCode,
+      restore_failure_reason: error.restoreFailureReason ?? null,
+      restore_failure_cause_code: error.restoreFailureCauseCode ?? null,
+    } : {}
     try {
       appendJournal(fsApi, journalPath, {
         record_type: "APPLY_FAILED_PARTIAL_STATE",
@@ -1141,6 +1146,7 @@ export function provisionAegisStandingHashPrerequisites({
         failed_at: clock(),
         completed_mutation_count: completed.length,
         failure_code: error?.code ?? "AEGIS_PROVISION_MUTATION_FAILED",
+        ...restorationEvidence,
       })
     } catch (journalError) {
       const evidenceFailure = new Error(
@@ -1149,12 +1155,19 @@ export function provisionAegisStandingHashPrerequisites({
       evidenceFailure.code = "AEGIS_PROVISION_EVIDENCE_WRITE_FAILED"
       evidenceFailure.causeCode = journalError?.code ?? "AEGIS_PROVISION_JOURNAL_WRITE_FAILED"
       evidenceFailure.originalFailureCode = error?.code ?? "AEGIS_PROVISION_MUTATION_FAILED"
+      evidenceFailure.restoreFailureCode = error?.restoreFailureCode ?? null
+      evidenceFailure.restoreFailureReason = error?.restoreFailureReason ?? null
+      evidenceFailure.restoreFailureCauseCode = error?.restoreFailureCauseCode ?? null
       evidenceFailure.authorityConsumed = true
       evidenceFailure.journalPath = journalPath
       throw evidenceFailure
     }
     const partial = new Error(`AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS: authority consumed; mutation stopped after ${completed.length} completed operations`)
     partial.code = "AEGIS_PROVISION_PARTIAL_STATE_AMBIGUOUS"
+    partial.originalFailureCode = error?.code ?? "AEGIS_PROVISION_MUTATION_FAILED"
+    partial.restoreFailureCode = error?.restoreFailureCode ?? null
+    partial.restoreFailureReason = error?.restoreFailureReason ?? null
+    partial.restoreFailureCauseCode = error?.restoreFailureCauseCode ?? null
     partial.authorityConsumed = true
     partial.journalPath = journalPath
     throw partial
@@ -1164,6 +1177,27 @@ export function provisionAegisStandingHashPrerequisites({
 
 export const applyAegisStandingHashPrerequisites = provisionAegisStandingHashPrerequisites
 export const executeAegisStandingHashProvisioning = provisionAegisStandingHashPrerequisites
+
+export function standingProvisioningErrorEvidence(error) {
+  return {
+    schema_version: "1.0-aegis-standing-hash-root-provisioning-error",
+    status: "FAILED_CLOSED",
+    code: error?.code ?? "AEGIS_PROVISION_REJECTED",
+    detail: String(error?.message ?? error).slice(0, 512),
+    authority_consumed: error?.authorityConsumed === true,
+    mutation_journal: error?.journalPath ?? null,
+    original_failure_code: error?.originalFailureCode ?? null,
+    restore_failure_code: error?.restoreFailureCode ?? null,
+    restore_failure_reason: error?.restoreFailureReason ?? null,
+    restore_failure_cause_code: error?.restoreFailureCauseCode ?? null,
+    private_key_generated: false,
+    private_key_inspected: false,
+    replay_epoch_initialized: false,
+    workload_executed: false,
+    scheduler_activated: false,
+    network_accessed: false,
+  }
+}
 
 function parseCli(argv) {
   const result = { mode: null, authorityPath: null, publicKeyPath: null, keyEvidencePath: null, reviewedCheckoutSourcePath: null }
@@ -1221,20 +1255,7 @@ export function main(argv = process.argv.slice(2), dependencies = {}) {
     ;(dependencies.stdout ?? process.stdout).write(`${canonicalize(evidence)}\n`)
     return 0
   } catch (error) {
-    ;(dependencies.stderr ?? process.stderr).write(`${canonicalize({
-      schema_version: "1.0-aegis-standing-hash-root-provisioning-error",
-      status: "FAILED_CLOSED",
-      code: error?.code ?? "AEGIS_PROVISION_REJECTED",
-      detail: String(error?.message ?? error).slice(0, 512),
-      authority_consumed: error?.authorityConsumed === true,
-      mutation_journal: error?.journalPath ?? null,
-      private_key_generated: false,
-      private_key_inspected: false,
-      replay_epoch_initialized: false,
-      workload_executed: false,
-      scheduler_activated: false,
-      network_accessed: false,
-    })}\n`)
+    ;(dependencies.stderr ?? process.stderr).write(`${canonicalize(standingProvisioningErrorEvidence(error))}\n`)
     return error?.code === "AEGIS_PROVISION_USAGE_INVALID" ? 64 : 2
   }
 }
