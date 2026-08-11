@@ -544,16 +544,19 @@ export function createLedgerProviders({
     const releasePath = path.join(ledgerRoot, `release-${active.lease_id}.json`)
     const release = readPrivateLedgerJson(releasePath, uid, validateLedgerFile)
     if (release) {
+      const observedAt = clock()
       const { release_sha256: releaseSha256, ...releaseBody } = release
       const acquiredAtMs = Date.parse(active.acquired_at)
       const releasedAtMs = Date.parse(release.released_at)
+      const observedAtMs = Date.parse(observedAt)
       if (!exactKeys(release, ["schema_version", "lease_id", "claim_id", "lease_sha256", "released_at", "release_sha256"])
         || release.schema_version !== "0.1-resident-aegis-runtime-lease-release"
         || release.lease_id !== active.lease_id || release.claim_id !== active.claim_id
         || release.lease_sha256 !== active.lease_sha256
         || !Number.isFinite(acquiredAtMs) || new Date(acquiredAtMs).toISOString() !== active.acquired_at
         || !Number.isFinite(releasedAtMs) || new Date(releasedAtMs).toISOString() !== release.released_at
-        || releasedAtMs < acquiredAtMs
+        || !Number.isFinite(observedAtMs) || new Date(observedAtMs).toISOString() !== observedAt
+        || releasedAtMs < acquiredAtMs || releasedAtMs > observedAtMs
         || releaseSha256 !== sha256(canonicalBytes(releaseBody))) {
         fail("LEDGER_UNTRUSTED", "retained AEGIS release record is invalid")
       }

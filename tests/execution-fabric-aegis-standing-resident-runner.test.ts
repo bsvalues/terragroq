@@ -620,6 +620,37 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     }
   })
 
+  it("rejects a future-dated retained remote release without retiring a live lease", async () => {
+    const root = tempRoot("aegis-future-remote-release-")
+    fs.chmodSync(root, 0o700)
+    const common = {
+      ledgerRoot: root, platform: "linux", getuid: () => process.getuid?.() ?? 1000,
+      username: () => "williamos-fabric",
+      validateDirectory: (stats: fs.Stats) => stats.isDirectory() && !stats.isSymbolicLink(),
+      validateLedgerFile: (stats: fs.Stats) => stats.isFile() && !stats.isSymbolicLink(),
+      syncDirectory: () => undefined,
+      holderIdentity: () => ({ pid: 100, boot_id: "boot-a", process_start_ticks: "10" }),
+      holderIsAlive: () => true,
+    }
+    const first = createLedgerProviders({ ...common, clock: () => "2026-08-10T22:00:00.000Z" })
+    const lease = await first.acquireExclusiveLease({ claim_id: "claim-remote" })
+    const activePath = path.join(root, "resident-aegis-active.json")
+    const active = JSON.parse(fs.readFileSync(activePath, "utf8"))
+    const releaseBody = {
+      schema_version: "0.1-resident-aegis-runtime-lease-release",
+      lease_id: lease.lease_id,
+      claim_id: "claim-remote",
+      lease_sha256: active.lease_sha256,
+      released_at: "2026-08-10T22:00:02.000Z",
+    }
+    const release = { ...releaseBody, release_sha256: sha256Object(releaseBody) }
+    fs.writeFileSync(path.join(root, `release-${lease.lease_id}.json`), `${JSON.stringify(release)}\n`)
+    const second = createLedgerProviders({ ...common, clock: () => "2026-08-10T22:00:01.000Z" })
+
+    await expect(second.acquireExclusiveLease({ claim_id: "claim-next" })).rejects.toThrow("LEDGER_UNTRUSTED")
+    expect(JSON.parse(fs.readFileSync(activePath, "utf8"))).toEqual(active)
+  })
+
   it("rejects an unknown digest-valid active lease schema before liveness or recovery", async () => {
     const root = tempRoot("aegis-unknown-standing-schema-")
     const first = ledger(root)

@@ -151,7 +151,7 @@ runtime, storage, or remote-system gates.
 
 - Integrated Authority Registry, standing authority, admission issuer,
   historical adapter, standing HASH runtime, resident runner, remote-development
-  trust, and network-boundary suites: `327 PASS / 27 deliberate skips`.
+  trust, and network-boundary suites: `328 PASS / 27 deliberate skips`.
 - Standing HASH_VERIFY and remote-development execution share one atomically
   created node-exclusive AEGIS lease and one node-wide mutation lock. Each
   runtime treats the other's live valid lease as occupied and cannot overwrite
