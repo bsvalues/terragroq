@@ -23,10 +23,14 @@ evidence was changed while producing this package.
 - standing AEGIS authority: disabled
 
 The package manifest JCS SHA-256 is
-`7b8beefc24439b9f9f4c656774d3086e727dffe2e68f9075bc6c3aa2753e44ee`.
-It binds the exact trusted-main bytes of the activation, worker, network
-provider, network launcher, network policy, planner, installer gate, and forced
-command entrypoint. Any byte drift blocks the package.
+`abee19f7d7016e6ac628b281ae15d292fe2681219ab68dd96f83077a5231af4e`.
+The trusted planner pins that complete manifest digest. The manifest binds the
+activation, worker, network provider, network launcher, network policy,
+installer gate, and forced-command entrypoint. Trusted-main status additionally
+requires the planner, manifest, and all seven bound artifacts to match direct
+`refs/heads/main:path` bytes with Git replacement objects disabled. Before
+merge the truthful state is `PACKAGE_AWAITING_TRUSTED_MAIN`; any byte drift
+after merge blocks the package.
 
 ## Reserved paths
 
@@ -73,8 +77,9 @@ these states:
 - `BLOCKED / PACKAGE_BINDING_DRIFT`: a reviewed package/runtime byte differs.
 
 The bounded SSH entrypoint accepts only the existing fixed launcher path, the
-eleven reviewed operation names, bounded base64url arguments, attempts 1-16,
-and `GENESIS` or an exact SHA-256 predecessor. It never evaluates a command
+eleven reviewed operation names, canonical standard-base64 arguments, the
+controller's exact single-quoted patch argument, attempts 1-3, and `null` or an
+exact SHA-256 predecessor. It never evaluates a command
 string and rejects a shell, metacharacter suffix, newline, unknown operation,
 or malformed replay binding.
 
@@ -163,13 +168,16 @@ administrator posture.
 ## Test evidence
 
 - RED 1: missing provisioning module prevented the new suite from loading.
-- GREEN 1: 9 focused prerequisite tests passed.
+- GREEN 1: 10 focused prerequisite tests passed.
 - RED 2: an internally consistent caller-supplied authority incorrectly
   returned `applyAuthorized: true`.
 - GREEN 2: even an exact proposed authority now returns
   `LIVE_APPLY_OWNER_HANDOFF_REQUIRED`, `applyAuthorized: false`, and
   `executionAuthorized: false`.
-- package inspection: `PACKAGE_BINDINGS_VERIFIED`, eight exact paths, no drift.
+- package inspection: seven internal artifact digests exact, manifest digest
+  exact, and `PACKAGE_AWAITING_TRUSTED_MAIN` until this reviewed generation is
+  merged. Only an exact clean trusted-main checkout can return
+  `PACKAGE_TRUSTED_MAIN_VERIFIED`.
 
 No live preflight was claimed. The accepted audit says the current node is not
 ready; this package truthfully describes the mutations needed for a later

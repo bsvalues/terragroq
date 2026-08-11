@@ -160,9 +160,8 @@
     ]
   },
   "bindings": [
-    { "path": "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs", "sha256": "5c6ac555fd66a18a87141eb9b80af203e4b1e61cec8a2dabb4b5e5b2f05d8f06" },
-    { "path": "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh", "sha256": "4359cfc2cd00165c6cf9aa34e044fe485cca5e4e72c3be428c86bccf04e42c3e" },
-    { "path": "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs", "sha256": "931f43de365ac7ea0120d0e9df98c562389f5397e5427ea50c1be2926109c344" },
+    { "path": "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh", "sha256": "7e92a1b3acf541f978f086ee1cec8191cc2b9732bc7f83380e4ecb13fec8d9d4" },
+    { "path": "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs", "sha256": "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7" },
     { "path": "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs", "sha256": "11afe07d2a717e66e7c8e42585d586181e53ceb793bbb7cbe9cff90d91da8b2a" },
     { "path": "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs", "sha256": "daa8f7fdd9d4ddbf38b75545729de9142891795b89e73299f7bb1536931cf1de" },
     { "path": "scripts/execution-fabric/live/aegis-remote-dev-worker.sh", "sha256": "28e0c79bc19875a7ed7fb963c840aa3d4dad4b9a5cd107bfdea94ca98039b424" },

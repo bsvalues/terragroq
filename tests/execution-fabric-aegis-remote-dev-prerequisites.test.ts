@@ -7,6 +7,7 @@ import {
   buildProvisioningPlan,
   inspectProvisioningPackage,
   validateApplyAuthority,
+  validateProvisioningManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs"
 import { parseBoundedSshCommand } from "../scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs"
 
@@ -152,6 +153,7 @@ describe("AEGIS remote-dev prerequisite package", () => {
     expect(value.toolchain.pnpm.version).toBe("9.0.0")
     expect(value.network.atlas.allowed).toBe(false)
     expect(value.network.endpoints).toEqual(readyObservation().network.endpoints)
+    expect(value.bindings.some((entry: { path: string }) => entry.path.endsWith("aegis-remote-dev-prerequisites.mjs"))).toBe(false)
   })
 
   it("fails closed without a complete observation and never authorizes execution", () => {
@@ -271,11 +273,11 @@ describe("AEGIS remote-dev prerequisite package", () => {
   it("verifies every package artifact against its reviewed digest", () => {
     const inspection = inspectProvisioningPackage(repoRoot)
 
-    expect(inspection.status).toBe("PACKAGE_BINDINGS_VERIFIED")
+    expect(inspection.status).toBe("PACKAGE_AWAITING_TRUSTED_MAIN")
+    expect(inspection.reasonCode).toBe("PACKAGE_NOT_MERGED_TO_TRUSTED_MAIN")
     expect(inspection.executionAuthorized).toBe(false)
     expect(inspection.drift).toEqual([])
     expect(inspection.verifiedPaths).toEqual([
-      "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs",
       "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh",
       "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs",
       "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs",
@@ -284,6 +286,32 @@ describe("AEGIS remote-dev prerequisite package", () => {
       "config/execution-fabric/aegis-resident-network-boundary.json",
       "config/execution-fabric/remote-dev-offload-v1-activation.json",
     ])
+  })
+
+  it("rejects unknown fields and every activation-critical manifest drift instead of self-attesting it", () => {
+    expect(() => validateProvisioningManifest(manifest())).not.toThrow()
+    const cases: Array<(value: any) => void> = [
+      (value) => { value.unknown = true },
+      (value) => { value.toolchain.node.version = "latest" },
+      (value) => { value.storage.mountByUuidRequired = false },
+      (value) => { value.storage.requiredMountOptions = ["prjquota"] },
+      (value) => { value.network.mechanism = "DIRECT_EGRESS" },
+      (value) => { value.network.allOtherIpv6Denied = false },
+      (value) => { value.network.atlas.ports = "443" },
+      (value) => { value.github.strictHostKeyChecking = false },
+      (value) => { value.github.repositoryAllowlist.push("attacker/repository") },
+      (value) => { value.rootAssets.ticketDirectoryAppendOnly = false },
+      (value) => { value.ledger.appendOnlyEvidenceRequired = false },
+      (value) => { value.rollback.preserveLedgerEvidence = false },
+      (value) => { value.rollback.steps = [] },
+      (value) => { value.apply.mutationJournalRequired = false },
+    ]
+
+    for (const mutate of cases) {
+      const value = manifest()
+      mutate(value)
+      expect(() => validateProvisioningManifest(value)).toThrow()
+    }
   })
 
   it("keeps rollback bounded to package-managed configuration and preserves durable evidence and data", () => {
@@ -310,13 +338,14 @@ describe("AEGIS remote-dev prerequisite package", () => {
   })
 
   it("accepts only the exact forced-command launcher grammar and never a general shell", () => {
-    const accepted = "/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-network-launcher.mjs ticket_1 PROVE_PREFLIGHT packet_1 - 1 GENESIS"
+    const packet = "eyJydW5JZCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSJ9"
+    const accepted = `/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-network-launcher.mjs e30= PROVE_PREFLIGHT ${packet} '' 1 null`
 
     expect(parseBoundedSshCommand(accepted)).toEqual({
       executable: "/usr/bin/node",
       args: [
         "/usr/local/libexec/williamos-aegis-remote-dev-network-launcher.mjs",
-        "ticket_1", "PROVE_PREFLIGHT", "packet_1", "-", "1", "GENESIS",
+        "e30=", "PROVE_PREFLIGHT", packet, "", "1", "null",
       ],
     })
     for (const rejected of [
@@ -324,8 +353,9 @@ describe("AEGIS remote-dev prerequisite package", () => {
       `${accepted}; id`,
       `${accepted}\n/usr/bin/id`,
       accepted.replace("PROVE_PREFLIGHT", "ARBITRARY_COMMAND"),
-      accepted.replace(" 1 GENESIS", " 17 GENESIS"),
-      accepted.replace(" GENESIS", " deadbeef"),
+      accepted.replace(" 1 null", " 4 null"),
+      accepted.replace(" null", " deadbeef"),
+      accepted.replace(" '' 1 null", " 'cGF0Y2gK';id 1 null"),
     ]) expect(() => parseBoundedSshCommand(rejected)).toThrow()
   })
 })

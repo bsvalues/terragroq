@@ -2,6 +2,7 @@
 import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
+import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 import { canonicalizeJcs } from "../canonical-json.mjs"
@@ -9,8 +10,8 @@ import { canonicalizeJcs } from "../canonical-json.mjs"
 const MANIFEST_PATH = "config/execution-fabric/aegis-remote-dev-prerequisites.json"
 const SHA256 = /^[a-f0-9]{64}$/
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const EXPECTED_MANIFEST_SHA256 = "abee19f7d7016e6ac628b281ae15d292fe2681219ab68dd96f83077a5231af4e"
 const EXPECTED_BINDINGS = Object.freeze([
-  "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs",
   "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh",
   "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs",
   "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs",
@@ -47,6 +48,7 @@ function blocked(reasonCode, detail, drift = []) {
 
 function validateManifest(manifest) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("manifest is not an object")
+  if (canonicalDigest(manifest) !== EXPECTED_MANIFEST_SHA256) throw new Error("manifest bytes differ from the reviewed package generation")
   if (manifest.schemaVersion !== 1 || manifest.packageId !== "aegis-remote-dev-prerequisites-issue-734-v1") throw new Error("manifest identity differs")
   if (manifest.status !== "PACKAGE_ONLY_NOT_APPLIED" || manifest.executionAuthorized !== false || manifest.ownerAuthorityRequired !== true) throw new Error("manifest posture differs")
   if (!equal(manifest.trustedMain, { repository: "bsvalues/terragroq", ref: "refs/heads/main", commit: "d5e725e47dc32f8ea113d0a0168e956bac84659e" })) throw new Error("trusted main differs")
@@ -73,6 +75,36 @@ function validateManifest(manifest) {
   return manifest
 }
 
+export function validateProvisioningManifest(manifest) {
+  return validateManifest(structuredClone(manifest))
+}
+
+function git(repoRoot, args) {
+  const executable = process.platform === "win32" ? "git.exe" : "/usr/bin/git"
+  const result = spawnSync(executable, ["-C", repoRoot, "--no-replace-objects", ...args], {
+    encoding: args[0] === "show" ? undefined : "utf8",
+    env: { GIT_CONFIG_NOSYSTEM: "1", GIT_NO_REPLACE_OBJECTS: "1", HOME: process.platform === "win32" ? (process.env.USERPROFILE ?? "C:\\") : "/nonexistent", PATH: process.platform === "win32" ? (process.env.PATH ?? "") : "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
+    timeout: 10_000,
+    maxBuffer: 2_097_152,
+  })
+  if (result.error || result.status !== 0) throw new Error(`trusted-main git ${args[0]} failed`)
+  return result.stdout
+}
+
+function inspectTrustedMainBytes(repoRoot, manifest) {
+  const head = String(git(repoRoot, ["rev-parse", "HEAD"])).trim()
+  const main = String(git(repoRoot, ["rev-parse", "refs/heads/main"])).trim()
+  if (head !== main) return { status: "PACKAGE_AWAITING_TRUSTED_MAIN", reasonCode: "PACKAGE_NOT_MERGED_TO_TRUSTED_MAIN" }
+  git(repoRoot, ["merge-base", "--is-ancestor", manifest.trustedMain.commit, head])
+  const criticalPaths = [MANIFEST_PATH, "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs", ...manifest.bindings.map((entry) => entry.path)]
+  for (const relativePath of criticalPaths) {
+    const reviewed = git(repoRoot, ["show", `refs/heads/main:${relativePath}`])
+    const current = fs.readFileSync(path.resolve(repoRoot, relativePath))
+    if (!Buffer.isBuffer(reviewed) || !reviewed.equals(current)) return { status: "BLOCKED", reasonCode: "TRUSTED_MAIN_WORKING_BYTES_DRIFT", path: relativePath }
+  }
+  return { status: "PACKAGE_TRUSTED_MAIN_VERIFIED", reasonCode: null, trustedMainCommit: head }
+}
+
 export function inspectProvisioningPackage(repoRoot) {
   try {
     const manifestBytes = fs.readFileSync(path.join(repoRoot, MANIFEST_PATH))
@@ -93,7 +125,8 @@ export function inspectProvisioningPackage(repoRoot) {
       if (actual !== binding.sha256) drift.push(binding.path)
     }
     if (drift.length) return { status: "BLOCKED", reasonCode: "PACKAGE_BINDING_DRIFT", executionAuthorized: false, manifestSha256: canonicalDigest(manifest), verifiedPaths: [], drift }
-    return { status: "PACKAGE_BINDINGS_VERIFIED", executionAuthorized: false, manifestSha256: canonicalDigest(manifest), verifiedPaths: [...EXPECTED_BINDINGS], drift: [] }
+    const trustedMain = inspectTrustedMainBytes(repoRoot, manifest)
+    return { ...trustedMain, executionAuthorized: false, applyAuthorized: false, manifestSha256: canonicalDigest(manifest), verifiedPaths: [...EXPECTED_BINDINGS], drift: [] }
   } catch (error) {
     return { status: "BLOCKED", reasonCode: "PACKAGE_INVALID", executionAuthorized: false, manifestSha256: null, verifiedPaths: [], drift: [], detail: String(error?.message ?? error) }
   }
@@ -246,7 +279,7 @@ function cli() {
   if (command === "inspect") {
     const result = inspectProvisioningPackage(repoRoot)
     process.stdout.write(`${JSON.stringify(result)}\n`)
-    process.exitCode = result.status === "PACKAGE_BINDINGS_VERIFIED" ? 0 : 2
+    process.exitCode = result.status === "PACKAGE_TRUSTED_MAIN_VERIFIED" ? 0 : 2
     return
   }
   if (command === "dry-run" && argument) {

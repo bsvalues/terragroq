@@ -17,6 +17,10 @@ if [[ "$(/usr/bin/uname -s)" != "Linux" ]]; then
   blocked "LINUX_PREFLIGHT_REQUIRED" "the package is AEGIS Linux-only"
   exit $?
 fi
+if [[ ! -x /usr/bin/node ]]; then
+  blocked "PINNED_NODE_MISSING" "the read-only package planner requires the reviewed /usr/bin/node toolchain prerequisite"
+  exit $?
+fi
 
 case "${1:---preflight}" in
   --preflight)
