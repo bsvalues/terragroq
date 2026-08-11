@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0-aegis-standing-hash-input",
+  "work_order_id": "WO-EF-AEGIS-STANDING-001",
+  "issue": "https://github.com/bsvalues/terragroq/issues/595",
+  "purpose": "Verify the retained integrity manifest for the reviewed AEGIS standing compute boundary.",
+  "artifacts": [
+    {
+      "path": "config/execution-fabric/aegis-standing-compute-authority.v1.json",
+      "byte_length": 3538,
+      "sha256": "41cc5a3c837f055d5e65dab0924aaa9e04e422b8637f6420e8b0e93a5165712e"
+    },
+    {
+      "path": "config/execution-fabric/aegis-standing-hash-template.v1.json",
+      "byte_length": 680,
+      "sha256": "0ad6aa6ef3a5e10a19de1417bf82edcf9a7f4b9c12e3c736fa6150b99d4e7163"
+    },
+    {
+      "path": "config/execution-fabric/aegis-resident-identity.json",
+      "byte_length": 319,
+      "sha256": "69a9008e680ef236367c8b4b3ebf85b9d96dbc9cf3545b97c2275761b327643d"
+    }
+  ],
+  "execution_boundary": {
+    "workload_class": "HASH_VERIFY",
+    "node_id": "aegis",
+    "network_scope": "none",
+    "scheduler_state": "disabled",
+    "autonomous_selection": false,
+    "storage_nas_backup_authority": false
+  }
+}
