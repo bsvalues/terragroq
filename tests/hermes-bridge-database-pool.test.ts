@@ -25,10 +25,10 @@ describe("Hermes database pool", () => {
     })
     expect(pool).toMatchObject({
       options: {
-        connectionTimeoutMillis: 30_000,
-        query_timeout: 30_000,
-        statement_timeout: 30_000,
-        idleTimeoutMillis: 10_000,
+        connectionTimeoutMillis: HERMES_DATABASE_CONNECTION_TIMEOUT_MS,
+        query_timeout: HERMES_DATABASE_QUERY_TIMEOUT_MS,
+        statement_timeout: HERMES_DATABASE_QUERY_TIMEOUT_MS,
+        idleTimeoutMillis: HERMES_DATABASE_IDLE_TIMEOUT_MS,
       },
     })
     expect(HERMES_DATABASE_CONNECTION_TIMEOUT_MS).toBeGreaterThan(10_000)
@@ -49,10 +49,10 @@ describe("Hermes database pool", () => {
 
     expect(pool).toMatchObject({
       options: {
-        connectionTimeoutMillis: 30_000,
-        query_timeout: 120_000,
-        statement_timeout: 120_000,
-        idleTimeoutMillis: 10_000,
+        connectionTimeoutMillis: HERMES_DATABASE_CONNECTION_TIMEOUT_MS,
+        query_timeout: HERMES_DATABASE_SCHEMA_TIMEOUT_MS,
+        statement_timeout: HERMES_DATABASE_SCHEMA_TIMEOUT_MS,
+        idleTimeoutMillis: HERMES_DATABASE_IDLE_TIMEOUT_MS,
         allowExitOnIdle: true,
       },
     })
