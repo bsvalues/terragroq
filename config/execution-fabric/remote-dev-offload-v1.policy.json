@@ -48,7 +48,7 @@
   },
   "trustBaseline": {
     "scopePath": "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json",
-    "scopeSha256": "13f1a05f76b6ffb8bf4d2d556720d3553c084174da42c36ef812d64b336e216e"
+    "scopeSha256": "51f0c8b6717f6f058cb444ab60cd7e60a6a1b91c485a62a72dca81e0547a33cb"
   },
   "scheduler": {
     "state": "disabled",

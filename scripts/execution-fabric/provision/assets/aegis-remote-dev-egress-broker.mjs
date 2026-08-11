@@ -16,7 +16,7 @@ function ticketAuthority(request) {
   const decoded = Buffer.from(basic[1], "base64")
   if (decoded.toString("base64") !== basic[1]) throw new Error("proxy authority encoding differs")
   const separator = decoded.indexOf(58)
-  if (separator !== 10 || decoded.subarray(0, separator).toString("ascii") !== "WilliamOS") throw new Error("proxy authority identity differs")
+  if (separator !== 9 || decoded.subarray(0, separator).toString("ascii") !== "WilliamOS") throw new Error("proxy authority identity differs")
   const ticket = decoded.subarray(separator + 1).toString("ascii")
   const operation = JSON.parse(Buffer.from(ticket, "base64").toString("utf8"))?.payload?.operation
   return { operation, ticket }

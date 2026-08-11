@@ -8,11 +8,13 @@ import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
 import {
   buildRootHandoffPlan,
   executeRootHandoffTransaction,
+  hasExactStorageMountSemantics,
   inspectRootHandoffBundle,
+  isProofWorkerUnitName as isVerifierProofWorkerUnitName,
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
-import { inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -20,7 +22,7 @@ const manifestPath = path.join(root, "config/execution-fabric/aegis-remote-dev-r
 const loadManifest = () => JSON.parse(fs.readFileSync(manifestPath, "utf8"))
 const sha = (bytes: crypto.BinaryLike) => crypto.createHash("sha256").update(bytes).digest("hex")
 const rawSha = (file: string) => {
-  const trusted = spawnSync("git", ["show", `HEAD:${file}`], { cwd: root, encoding: null, shell: false })
+  const trusted = spawnSync("git", ["--no-replace-objects", "show", `HEAD:${file}`], { cwd: root, encoding: null, shell: false, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" } })
   return sha(trusted.status === 0 ? trusted.stdout : fs.readFileSync(path.join(root, file)))
 }
 const currentRawSha = (file: string) => sha(fs.readFileSync(path.join(root, file)))
@@ -36,7 +38,7 @@ function completeObservation(manifest = loadManifest()) {
       backingHostFilesystem: "ext4", backingDevice: "2049", backingInode: "734", backingCtimeNs: "1786497600000000000",
       loopDevice: "/dev/loop7", loopBackingImageRealPath: manifest.storage.backingImageRealPath, mountSource: "/dev/loop7", mountSourceMajorMinor: "7:7",
       loopMajorMinor: "7:7", filesystemType: "xfs", filesystemUuid: manifest.storage.filesystemUuid, filesystemLabel: "AEGIS_RDEV",
-      mountPath: "/srv/william", mountOptions: ["rw", "nosuid", "nodev", "prjquota", "exec"], projectId: 734,
+      mountPath: "/srv/william", mountOptions: ["rw", "nosuid", "nodev", "relatime", "attr2", "inode64", "prjquota"], projectId: 734,
       projectInherit: true, quotaAccounting: true, quotaEnforcement: true, hardLimitBytes: 85899345920,
     },
     prerequisites: Object.fromEntries(manifest.steps.map((step: { id: string }) => [step.id, "ABSENT"])),
@@ -136,6 +138,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
       (o: any) => { o.storage.mutationRequested = true },
       (o: any) => { o.storage.loopBackingImageRealPath = "/other" },
       (o: any) => { o.storage.mountSourceMajorMinor = "7:8" },
+      (o: any) => { o.storage.mountOptions.push("noexec") },
       (o: any) => { o.storage.quotaEnforcement = false },
       (o: any) => { o.storage.hardLimitBytes = 1 },
     ]) {
@@ -145,6 +148,18 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     const plan = buildRootHandoffPlan(manifest, completeObservation(manifest))
     expect(plan.status).toBe("READY_FOR_SIGNED_AUTHORITY")
     expect(plan.mutations.map((entry: any) => entry.id)).not.toEqual(expect.arrayContaining(["FORMAT_STORAGE", "MOUNT_STORAGE", "REMOUNT_STORAGE", "CREATE_WORKSPACE", "SET_QUOTA"]))
+    expect(hasExactStorageMountSemantics(["rw", "nosuid", "nodev", "relatime", "attr2", "inode64", "prjquota"])).toBe(true)
+    expect(hasExactStorageMountSemantics(["rw", "nosuid", "nodev", "prjquota", "noexec"])).toBe(false)
+  })
+
+  it("classifies only UUID-named transient proof workers as recovery blockers", () => {
+    const transient = "williamos-aegis-remote-dev-7bc3ef49-0812-4dc8-a679-ff359887ca1d.service"
+    for (const classifier of [isVerifierProofWorkerUnitName, isAdapterProofWorkerUnitName]) {
+      expect(classifier(transient)).toBe(true)
+      expect(classifier("williamos-aegis-remote-dev-broker.service")).toBe(false)
+      expect(classifier("williamos-aegis-remote-dev-egress.service")).toBe(false)
+      expect(classifier("williamos-aegis-remote-dev-git-broker.service")).toBe(false)
+    }
   })
 
   it("fails closed on root, Linux, machine, trusted-main, key, toolchain, and prerequisite drift", () => {
@@ -349,6 +364,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(service).toContain("ExecStop=/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-egress-enforcer.mjs --enforce")
     expect(nft).toContain('meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject')
     expect(nft).toContain('meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject')
+    expect(nft).toContain('ip daddr 127.0.0.1 tcp dport 17734 reject')
     expect(nft.match(/meta skuid "williamos-fabric" reject/g)).toHaveLength(1)
   })
 
@@ -388,10 +404,12 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(dotnet).not.toContain("export HTTPS_PROXY=http://127.0.0.1:17734")
     const broker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs"), "utf8")
     expect(broker).toContain('decoded.subarray(0, separator).toString("ascii") !== "WilliamOS"')
+    expect(broker).toContain("separator !== 9")
     expect(broker).toContain("authorizeBrokerConnect(authorization.ticket, authorization.operation")
     expect(broker).toContain("407 Proxy Authentication Required")
     expect(broker).toContain('request.headers["proxy-authorization"] === undefined ? 407 : 403')
     const gitBroker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-broker.mjs"), "utf8").replace(/\r\n/g, "\n")
+    const gitClient = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-client.mjs"), "utf8")
     const gitService = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-git-broker.service"), "utf8")
     expect(gitBroker).toContain('bound.runId !== authorization.payload.runId')
     expect(gitBroker).toContain("fs.constants.O_EXCL")
@@ -406,9 +424,14 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(gitBroker).toContain('name.startsWith("url.")')
     expect(gitBroker).toContain('"remote", "get-url", "--push", "--all", "origin"')
     expect(gitBroker).toContain('"push", REMOTE')
+    expect(gitClient).toContain("PROVE_PREFLIGHT: 920_000")
+    expect(gitClient).toContain("socket.setTimeout(OPERATION_TIMEOUT_MS[operation])")
+    expect(gitClient).not.toContain("socket.setTimeout(30_000)")
     expect(worker).toContain('chmod 2770 -- "$PHYSICAL_WORKSPACE"')
     expect(worker).toContain("umask 077")
     expect(worker).toContain("run_shared_git_capture()")
+    expect(worker).toContain("GIT_CONFIG_KEY_0=safe.directory")
+    expect(worker).toContain('GIT_CONFIG_VALUE_0="$REPO_DIR"')
     expect(worker).toContain("umask 007")
     expect(worker).toContain("umask \"$previous_umask\"")
     expect(worker).toContain('chmod 0640 -- "$marker_tmp"')
@@ -455,6 +478,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(adapter).toContain("existingReceiptMatches")
     expect(adapter).toContain("proveRootServiceFence")
     expect(adapter).toContain("sharedGroupProcessesExact")
+    expect(adapter).toContain("isProofWorkerUnitName(path.basename(String(entry)))")
     expect(adapter).toContain('version("/usr/share/dotnet/dotnet"')
     expect(adapter).toContain('fs.readlinkSync("/usr/bin/dotnet") !== "/usr/share/dotnet/dotnet"')
     expect(cli).toContain("KillMode=control-group")

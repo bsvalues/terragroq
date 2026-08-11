@@ -6,6 +6,7 @@ const ticketB64 = process.env.WILLIAMOS_NETWORK_TICKET_B64 ?? ""
 const packetB64 = process.env.WILLIAMOS_NETWORK_PACKET_B64 ?? ""
 const operation = process.env.WILLIAMOS_NETWORK_OPERATION ?? ""
 const base64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+const OPERATION_TIMEOUT_MS = Object.freeze({ PROVE_PREFLIGHT: 920_000, CREATE_WORKSPACE: 620_000, PUSH_AUTHORIZED_BRANCH: 320_000, PROVE_POST_MERGE: 320_000 })
 
 function finish(status, reasonCode) {
   process.stdout.write(`${JSON.stringify({ status, reasonCode })}\n`)
@@ -18,7 +19,7 @@ if (process.argv.length !== 2 || !["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "PUSH_
   const request = `${JSON.stringify({ packetB64, ticketB64 })}\n`
   const socket = net.createConnection({ path: SOCKET_PATH }); let response = Buffer.alloc(0); let settled = false
   const fail = () => { if (!settled) { settled = true; socket.destroy(); finish("BLOCKED", "GIT_BROKER_UNAVAILABLE") } }
-  socket.setTimeout(30_000)
+  socket.setTimeout(OPERATION_TIMEOUT_MS[operation])
   socket.once("connect", () => socket.end(request))
   socket.on("data", (chunk) => { response = Buffer.concat([response, chunk]); if (response.length > 65_536) fail() })
   socket.once("timeout", fail); socket.once("error", fail)

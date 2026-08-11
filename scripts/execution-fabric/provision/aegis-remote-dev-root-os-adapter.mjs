@@ -274,6 +274,7 @@ function networkBoundaryMatches() {
       'meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject',
       'meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject',
       'meta skuid "williamos-fabric" ip daddr 127.0.0.1 tcp dport 17734 accept',
+      'ip daddr 127.0.0.1 tcp dport 17734 reject',
       'meta skuid "williamos-fabric" reject',
       "}",
       "}",
@@ -290,10 +291,14 @@ function networkBoundaryMatches() {
 function activeProofWorkerExists() {
   try {
     const active = run("/usr/bin/systemctl", ["list-units", "--all", "--plain", "--no-legend", "williamos-aegis-remote-dev-*.service"], { statuses: [0, 1] })
-    if (active.split(/\r?\n/).some((line) => /\b(?:activating|active|deactivating)\b/.test(line))) return true
+    if (active.split(/\r?\n/).some((line) => isProofWorkerUnitName(line.trim().split(/\s+/, 1)[0] ?? "") && /\b(?:activating|active|deactivating)\b/.test(line))) return true
     const root = "/sys/fs/cgroup"
-    return fs.readdirSync(root, { recursive: true }).some((entry) => /williamos-aegis-remote-dev-[0-9a-f-]{36}\.service$/.test(String(entry)))
+    return fs.readdirSync(root, { recursive: true }).some((entry) => isProofWorkerUnitName(path.basename(String(entry))))
   } catch { return true }
+}
+
+export function isProofWorkerUnitName(value) {
+  return /^williamos-aegis-remote-dev-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.service$/i.test(String(value))
 }
 
 function recoverJournal(authority) {

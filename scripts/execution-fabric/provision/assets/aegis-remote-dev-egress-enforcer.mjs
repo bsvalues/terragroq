@@ -4,10 +4,11 @@ import { spawnSync } from "node:child_process"
 const ENV = Object.freeze({ HOME: "/nonexistent", PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C", LC_ALL: "C" })
 const TABLE = "williamos_aegis_remote_dev"
 const RULES = [
-  'add rule inet williamos_aegis_remote_dev output meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject',
-  'add rule inet williamos_aegis_remote_dev output meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject',
-  'add rule inet williamos_aegis_remote_dev output meta skuid "williamos-fabric" ip daddr 127.0.0.1 tcp dport 17734 accept',
-  'add rule inet williamos_aegis_remote_dev output meta skuid "williamos-fabric" reject',
+  `add rule inet ${TABLE} output meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject`,
+  `add rule inet ${TABLE} output meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject`,
+  `add rule inet ${TABLE} output meta skuid "williamos-fabric" ip daddr 127.0.0.1 tcp dport 17734 accept`,
+  `add rule inet ${TABLE} output ip daddr 127.0.0.1 tcp dport 17734 reject`,
+  `add rule inet ${TABLE} output meta skuid "williamos-fabric" reject`,
 ]
 
 function run(args, input) {
