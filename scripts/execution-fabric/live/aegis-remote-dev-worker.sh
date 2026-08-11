@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-umask 007
+umask 077
 
 readonly WORK_ORDER_ID="WO-TF-REMOTE-DEV-OFFLOAD-001"
 readonly REPOSITORY="bsvalues/terrafusion_os_1.0"
@@ -350,6 +350,16 @@ run_capture() {
   run_capture_at "$REPO_DIR" "$@"
 }
 
+run_shared_git_capture() {
+  local previous_umask run_exit
+  previous_umask="$(umask)"
+  umask 007
+  run_capture "$@"
+  run_exit=$RUN_EXIT
+  umask "$previous_umask"
+  RUN_EXIT=$run_exit
+}
+
 protected_target_matches() {
   local target="${1% (deleted)}" protected_path="$2"
   [[ "$target" == "$protected_path" || "$target" == "$protected_path/"* ]]
@@ -659,9 +669,9 @@ case "$OPERATION" in
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "credential-isolated Git clone/fetch failed"
     fetched="$(repo_value rev-parse origin/main)" || die_block "GIT_BASE_MISMATCH" "origin/main is unavailable"
     [[ "$fetched" == "$BASE_SHA" ]] || die_block "GIT_BASE_MISMATCH" "fresh origin/main differs from pinned base"
-    run_capture git -C "$REPO_DIR" switch --create "$BRANCH" --detach "$BASE_SHA"
+    run_shared_git_capture git -C "$REPO_DIR" switch --create "$BRANCH" --detach "$BASE_SHA"
     if [[ $RUN_EXIT -ne 0 ]]; then
-      run_capture git -C "$REPO_DIR" checkout -b "$BRANCH" "$BASE_SHA"
+      run_shared_git_capture git -C "$REPO_DIR" checkout -b "$BRANCH" "$BASE_SHA"
     fi
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "branch creation failed"
     ;;
@@ -675,7 +685,7 @@ case "$OPERATION" in
     done < "$OUTPUT_FILE"
     run_capture git -C "$REPO_DIR" apply --check -- "$PATCH_FILE"
     [[ $RUN_EXIT -eq 0 ]] || die_block "PATCH_INVALID" "patch does not apply cleanly"
-    run_capture git -C "$REPO_DIR" apply -- "$PATCH_FILE"
+    run_shared_git_capture git -C "$REPO_DIR" apply -- "$PATCH_FILE"
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "patch application failed"
     ;;
   RESTORE_DOTNET)
@@ -721,10 +731,10 @@ case "$OPERATION" in
     validate_owner_marker
     while IFS= read -r file; do [[ -z "$file" ]] || is_reserved "$file" || die_input "PATH_NOT_RESERVED" "staged path is not reserved"; done < <(timeout 15 git -C "$REPO_DIR" diff --cached --name-only)
     validate_repo
-    run_capture git -C "$REPO_DIR" add -- "${RESERVED_PATHS[@]}"
+    run_shared_git_capture git -C "$REPO_DIR" add -- "${RESERVED_PATHS[@]}"
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "reserved staging failed"
     while IFS= read -r file; do [[ -z "$file" ]] || is_reserved "$file" || die_input "PATH_NOT_RESERVED" "staged path is not reserved"; done < <(timeout 15 git -C "$REPO_DIR" diff --cached --name-only)
-    run_capture git -C "$REPO_DIR" commit -m "ci(backend): expose doctrine tests as informational"
+    run_shared_git_capture git -C "$REPO_DIR" commit -m "ci(backend): expose doctrine tests as informational"
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "commit failed"
     HEAD_SHA="$(repo_value rev-parse HEAD)"
     marker_tmp="$PHYSICAL_WORKSPACE/.williamos-commit-created.${RUN_ID}.tmp"

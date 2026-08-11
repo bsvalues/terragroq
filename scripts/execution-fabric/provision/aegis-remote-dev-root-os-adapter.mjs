@@ -522,12 +522,17 @@ export function createRootProductionAdapter(manifest, authority, trust) {
     acquireLease: async () => { proveRootServiceFence(); return true },
     releaseLease: async () => undefined,
     reprove: async () => observe(manifest, authority, trust),
-    claim: async (authorityId, transactionId) => {
+    claim: async (authorityId, transactionId, allowCreate) => {
       const destination = `${CLAIM_ROOT}/${authorityId}.claimed`; let handle
-      try { handle = fs.openSync(destination, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o400) } catch (error) {
-        if (error?.code !== "EEXIST") throw error
+      const existingClaim = () => {
         const existing = readCanonicalRootJson(destination)
         return existing.authorityId === authorityId && existing.transactionId === transactionId && existing.authoritySha256 === sha(Buffer.from(canonical(authority), "utf8")) ? { resume: true } : false
+      }
+      try { return existingClaim() } catch (error) { if (error?.code !== "ENOENT") throw error }
+      if (allowCreate !== true) return false
+      try { handle = fs.openSync(destination, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o400) } catch (error) {
+        if (error?.code !== "EEXIST") throw error
+        return existingClaim()
       }
       fs.writeFileSync(handle, `${canonical({ authorityId, transactionId, authoritySha256: sha(Buffer.from(canonical(authority), "utf8")) })}\n`); fs.fsyncSync(handle); fs.closeSync(handle); const directory = fs.openSync(CLAIM_ROOT, fs.constants.O_RDONLY); fs.fsyncSync(directory); fs.closeSync(directory); return true
     },

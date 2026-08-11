@@ -16,7 +16,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $trustedAegisFingerprint = 'SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo'
-$trustedWorkerSha256 = '155f32a21f0be1ffa15c31e763f20d7c656e7e1027c3e0eeec6cc626f190ad04'
+$trustedWorkerSha256 = 'ce1e33480f4d6262fcf682eb849008a82d4bc147413c145f537225e2fb394fa1'
 
 function Write-ResultAndExit {
     param([string]$Status, [string]$ReasonCode, [string]$Detail, [int]$ExitCode)

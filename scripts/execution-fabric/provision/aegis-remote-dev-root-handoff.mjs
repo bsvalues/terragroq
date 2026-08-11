@@ -14,7 +14,7 @@ const EXPECTED_PACKAGE_JCS = "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0e
 const EXPECTED_MACHINE = "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b"
 const EXPECTED_STORAGE_UUID = "5744648d-9289-4d4e-ac6a-707e8405a5d6"
 const EXPECTED_TRUSTED_EVIDENCE = Object.freeze({
-  "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json": "9d04692787b328cec63963ca625a08d8e4706e29872b8fb448d797268e50e5d5",
+  "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json": "df58b16da25a8a39668f04ddc6af79842ede3376695446f6fecfdf4cde2fe18a",
   "config/execution-fabric/aegis-resident-identity.json": "69a9008e680ef236367c8b4b3ebf85b9d96dbc9cf3545b97c2275761b327643d",
   "config/execution-fabric/aegis-bounded-dispatch-authority-scopes/WO-EF-DISPATCH-AEGIS-001.json": "90f089b0d64989edafcc96e847e77993a0c352d99a2716bbfb72bd3fbc27cfc7",
   "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-claim.json": "40385c3163908c30d4eb559cded69ac2d05ae46c31a029dbbdc94d821139f845",
@@ -43,9 +43,9 @@ const EXPECTED_ASSET_DIGESTS = Object.freeze({
   "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs": "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7",
   "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs": "1543dcda442bbbd06996f536a11652f21ea7bf9ba8fd6927ac710a21930c1d90",
   "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507",
-  "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "155f32a21f0be1ffa15c31e763f20d7c656e7e1027c3e0eeec6cc626f190ad04",
+  "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "ce1e33480f4d6262fcf682eb849008a82d4bc147413c145f537225e2fb394fa1",
   "config/execution-fabric/aegis-resident-network-boundary.json": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6",
-  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "40a5724e4d84bee9d74dd762543e99533b0d4ff43e11e80ffe9a313a8971fe6a",
+  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "46b357e65e0e9282955f2e88632a7d2fcca5c5fde75fab95461c0adf8f477b9c",
   "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh": "4f76725ae7188ae676b5afde4d1622a8c6cdaea0b1bc8d1288dab04700b17ccd",
   "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf": "bb6967f25ae614d152c2bbaf4073eae4575f98819f9b4a855b5de20a60e4e789",
   "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf": "a6e83ce0c8b2d2c8127a268c5bd48f27ff3199894f0179afc412a5b01f7fe9c6",
@@ -123,8 +123,8 @@ export function validateRootHandoffManifest(raw) {
     if (!path.posix.isAbsolute(asset.destination) || asset.sha256 !== EXPECTED_ASSET_DIGESTS[asset.source] || asset.owner !== "root" || !/^0[0-7]{3}$/.test(asset.mode) || sources.has(asset.source) || destinations.has(asset.destination)) throw new Error("applied asset binding differs")
     sources.add(asset.source); destinations.add(asset.destination)
   }
-  exact(value.authority, ["algorithm", "maximumAgeSeconds", "singleUse", "consumeBeforeMutation", "claimDirectory", "leasePath", "requiredConcreteInputs"], "authority")
-  if (value.authority.algorithm !== "Ed25519" || value.authority.maximumAgeSeconds !== 900 || value.authority.singleUse !== true || value.authority.consumeBeforeMutation !== true) throw new Error("authority posture differs")
+  exact(value.authority, ["algorithm", "maximumAgeSeconds", "resumeWindowSeconds", "singleUse", "consumeBeforeMutation", "claimDirectory", "leasePath", "requiredConcreteInputs"], "authority")
+  if (value.authority.algorithm !== "Ed25519" || value.authority.maximumAgeSeconds !== 900 || value.authority.resumeWindowSeconds !== 1800 || value.authority.singleUse !== true || value.authority.consumeBeforeMutation !== true) throw new Error("authority posture differs")
   if (!same(value.evidence, { namespace: "WO-TF-REMOTE-DEV-OFFLOAD-001/prerequisite-handoff", path: "/var/lib/williamos-fabric/remote-dev-prerequisite-handoff", owner: "root", mode: "0700", hashChained: true, appendOnly: true, fsyncRequired: true, successReceipt: "/var/lib/williamos-fabric/remote-dev-prerequisite-verified.json" })) throw new Error("evidence boundary differs")
   if (!Array.isArray(value.trustedEvidence) || !same(value.trustedEvidence.map((entry) => entry.path), Object.keys(EXPECTED_TRUSTED_EVIDENCE))) throw new Error("trusted evidence set differs")
   for (const entry of value.trustedEvidence) {
@@ -188,7 +188,7 @@ export function validateOwnerAuthority(rawManifest, envelope, publicKey, now, co
   try {
     exact(envelope, ["payload", "signature"], "authority envelope")
     const p = envelope.payload
-    exact(p, ["schemaVersion", "authorityId", "transactionId", "operation", "workOrderId", "issue", "machineIdSha256", "bootId", "trustedMainCommit", "rootHandoffManifestSha256", "verifierSha256", "historicalPreflightManifestJcsSha256", "appliedAssets", "inputs", "storage", "allowedSteps", "rollback", "issuedAt", "expiresAt", "singleUse"], "authority payload")
+    exact(p, ["schemaVersion", "authorityId", "transactionId", "operation", "workOrderId", "issue", "machineIdSha256", "bootId", "trustedMainCommit", "rootHandoffManifestSha256", "verifierSha256", "historicalPreflightManifestJcsSha256", "appliedAssets", "inputs", "storage", "allowedSteps", "rollback", "issuedAt", "expiresAt", "resumeExpiresAt", "singleUse"], "authority payload")
     if (consumed) return blocked("OWNER_AUTHORITY_CONSUMED", "owner authority already has a durable claim")
     if (p.schemaVersion !== 1 || !GUID.test(p.authorityId) || !GUID.test(p.transactionId) || !GUID.test(p.bootId) || p.operation !== "APPLY_PREREQUISITES" || p.workOrderId !== "WO-TF-REMOTE-DEV-OFFLOAD-001" || p.issue?.repository !== "bsvalues/terrafusion_os_1.0" || p.issue?.number !== 734 || p.singleUse !== true) throw new Error("owner authority identity differs")
     if (p.machineIdSha256 !== manifest.target.machineIdSha256 || !SHA40.test(p.trustedMainCommit) || p.rootHandoffManifestSha256 !== canonicalSha(manifest) || p.verifierSha256 !== rawSha(fs.readFileSync(VERIFIER_PATH)) || p.historicalPreflightManifestJcsSha256 !== manifest.prerequisitePackage.supersededPreflight.manifestJcsSha256 || !same(p.appliedAssets, manifest.appliedAssets) || !same(p.allowedSteps, EXPECTED_STEPS)) throw new Error("owner authority binding differs")
@@ -209,10 +209,11 @@ export function validateOwnerAuthority(rawManifest, envelope, publicKey, now, co
       const item = p.inputs.toolchain[name]; exact(item, ["version", "source", "sha256"], `toolchain ${name}`)
       if (item.version !== version || item.source !== sources[name] || PLACEHOLDER.test(item.source) || !SHA256.test(item.sha256)) throw new Error(`toolchain ${name} provenance differs`)
     }
-    const issued = Date.parse(p.issuedAt); const expires = Date.parse(p.expiresAt); const current = Date.parse(now)
-    if (![issued, expires, current].every(Number.isFinite) || expires - issued !== 900_000 || current < issued || current >= expires) return blocked("OWNER_AUTHORITY_EXPIRED", "owner authority is outside its exact 15-minute window")
+    const issued = Date.parse(p.issuedAt); const expires = Date.parse(p.expiresAt); const resumeExpires = Date.parse(p.resumeExpiresAt); const current = Date.parse(now)
+    if (![issued, expires, resumeExpires, current].every(Number.isFinite) || expires - issued !== 900_000 || resumeExpires - expires !== 1_800_000 || current < issued || current >= resumeExpires) return blocked("OWNER_AUTHORITY_EXPIRED", "owner authority is outside its exact initial or bounded resume window")
     const signature = Buffer.from(envelope.signature, "base64")
     if (signature.toString("base64") !== envelope.signature || !crypto.verify(null, Buffer.from(canonicalizeJcs(p), "utf8"), publicKey, signature)) throw new Error("owner authority signature differs")
+    if (current >= expires) return { status: "OWNER_AUTHORITY_RESUME_ONLY_VERIFIED", reasonCode: "EXACT_CONSUMED_TRANSACTION_REQUIRED", authorityId: p.authorityId, transactionId: p.transactionId, executionAuthorized: false, applyAuthorized: false }
     return { status: "OWNER_AUTHORITY_VERIFIED", reasonCode: "EXTERNAL_SIGNATURE_VERIFIED", authorityId: p.authorityId, transactionId: p.transactionId, executionAuthorized: false, applyAuthorized: false }
   } catch (error) { return blocked("OWNER_AUTHORITY_INVALID", String(error?.message ?? error)) }
 }
@@ -226,7 +227,8 @@ function journalRecord(previous, sequence, phase, detail) {
 // callers must never treat this returned object as an activation or dispatch receipt.
 export async function executeRootHandoffTransaction(manifest, envelope, publicKey, now, adapter) {
   const authority = validateOwnerAuthority(manifest, envelope, publicKey, now, false)
-  if (authority.status !== "OWNER_AUTHORITY_VERIFIED") return authority
+  if (authority.status !== "OWNER_AUTHORITY_VERIFIED" && authority.status !== "OWNER_AUTHORITY_RESUME_ONLY_VERIFIED") return authority
+  const initialWindow = authority.status === "OWNER_AUTHORITY_VERIFIED"
   let lease = false; let previous = "0".repeat(64); let sequence = 0; let recovery = { records: [], committed: false }; let committed = false
   const append = async (phase, detail) => { const record = journalRecord(previous, ++sequence, phase, detail); await adapter.append(record); previous = record.recordSha256 }
   try {
@@ -235,8 +237,9 @@ export async function executeRootHandoffTransaction(manifest, envelope, publicKe
     const observed = await adapter.reprove()
     const plan = buildRootHandoffPlan(manifest, observed)
     if (plan.status !== "READY_FOR_SIGNED_AUTHORITY" && plan.status !== "ALREADY_VERIFIED") return plan
-    const claim = await adapter.claim(envelope.payload.authorityId, envelope.payload.transactionId)
+    const claim = await adapter.claim(envelope.payload.authorityId, envelope.payload.transactionId, initialWindow)
     const resume = typeof claim === "object" && claim?.resume === true
+    if (!initialWindow && !resume) return blocked("OWNER_AUTHORITY_EXPIRED", "initial authority window elapsed and no exact durable claim exists")
     if (claim !== true && !resume) return blocked("OWNER_AUTHORITY_CONSUMED", "owner authority already has a durable claim")
     if (resume) {
       recovery = await adapter.recover(envelope.payload.authorityId, envelope.payload.transactionId)
@@ -357,7 +360,7 @@ async function productionMain() {
     const now = fixedRun("/usr/bin/date", ["-u", "+%Y-%m-%dT%H:%M:%S.%3NZ"])
     const publicKey = crypto.createPublicKey(rootFile(OWNER_PUBLIC_KEY_PATH, 0o444))
     const authority = validateOwnerAuthority(manifest, envelope, publicKey, now, false)
-    if (authority.status !== "OWNER_AUTHORITY_VERIFIED") throw new Error(authority.reasonCode)
+    if (authority.status !== "OWNER_AUTHORITY_VERIFIED" && authority.status !== "OWNER_AUTHORITY_RESUME_ONLY_VERIFIED") throw new Error(authority.reasonCode)
     const trust = productionTrust(manifest, envelope.payload)
     productionInputs(envelope.payload)
     const adapterAsset = manifest.appliedAssets.find((asset) => asset.destination === INSTALLED_ADAPTER_PATH)

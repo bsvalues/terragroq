@@ -79,7 +79,8 @@ function signedAuthority(manifest = loadManifest(), overrides: Record<string, un
     storage: { mode: "VERIFY_ONLY", filesystemUuid: manifest.storage.filesystemUuid, projectId: 734, hardLimitBytes: 85899345920 },
     allowedSteps: manifest.steps.map((step: { id: string }) => step.id),
     rollback: { automatic: false, separateSignedAuthorityRequired: true, preserveEvidence: true, preserveStorage: true },
-    issuedAt: "2026-08-11T20:00:00.000Z", expiresAt: "2026-08-11T20:15:00.000Z", singleUse: true,
+    issuedAt: "2026-08-11T20:00:00.000Z", expiresAt: "2026-08-11T20:15:00.000Z",
+    resumeExpiresAt: "2026-08-11T20:45:00.000Z", singleUse: true,
     ...overrides,
   }
   const bytes = Buffer.from(canonicalizeJcs(payload), "utf8")
@@ -124,7 +125,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
       const candidate = signedAuthority(manifest, changed)
       expect(validateOwnerAuthority(manifest, candidate.envelope, candidate.publicKey, "2026-08-11T20:05:00.000Z", false).status).toBe("BLOCKED")
     }
-    expect(validateOwnerAuthority(manifest, good.envelope, good.publicKey, "2026-08-11T20:16:00.000Z", false).reasonCode).toBe("OWNER_AUTHORITY_EXPIRED")
+    expect(validateOwnerAuthority(manifest, good.envelope, good.publicKey, "2026-08-11T20:16:00.000Z", false).status).toBe("OWNER_AUTHORITY_RESUME_ONLY_VERIFIED")
     expect(validateOwnerAuthority(manifest, good.envelope, good.publicKey, "2026-08-11T20:05:00.000Z", true).reasonCode).toBe("OWNER_AUTHORITY_CONSUMED")
   })
 
@@ -236,6 +237,30 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(state.applyCalls).toBe(manifest.steps.length)
     const firstIntent = state.records.findIndex((record) => record.phase === "STEP_INTENT")
     expect(state.records[firstIntent + 1]).toMatchObject({ phase: "STEP_APPLIED", detail: { stepId: manifest.steps[0].id } })
+  })
+
+  it("allows only the exact consumed transaction to resume after the initial authority window", async () => {
+    const manifest = loadManifest(); const signed = signedAuthority(manifest); const observed = completeObservation(manifest)
+    const state = { claimed: true, claimCalls: [] as boolean[], records: [] as any[] }
+    const verified = completeObservation(manifest)
+    verified.prerequisites = Object.fromEntries(manifest.steps.map((step: { id: string }) => [step.id, "MATCH"]))
+    const adapter = {
+      acquireLease: async () => true, releaseLease: async () => undefined, reprove: async () => observed,
+      claim: async (_authorityId: string, _transactionId: string, allowCreate: boolean) => {
+        state.claimCalls.push(allowCreate)
+        return state.claimed ? { resume: true } : (allowCreate ? (state.claimed = true) : false)
+      },
+      recover: async () => ({ records: state.records, committed: false }),
+      append: async (record: any) => { state.records.push(record) }, effectApplied: async () => true,
+      apply: async () => { throw new Error("must not apply") }, verify: async () => verified, publishSuccess: async () => undefined,
+    }
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:20:00.000Z", adapter)).toMatchObject({ status: "PREREQUISITES_APPLIED_VERIFIED" })
+    expect(state.claimCalls).toEqual([false])
+
+    state.claimed = false; state.records = []; state.claimCalls = []
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:20:00.000Z", adapter)).toMatchObject({ status: "BLOCKED", reasonCode: "OWNER_AUTHORITY_EXPIRED" })
+    expect(state.claimCalls).toEqual([false])
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:45:00.000Z", adapter)).toMatchObject({ status: "BLOCKED", reasonCode: "OWNER_AUTHORITY_EXPIRED" })
   })
 
   it("resumes from durable post-apply verification by committing without duplicating the verification record", async () => {
@@ -363,7 +388,10 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(gitBroker).toContain('"remote", "get-url", "--push", "--all", "origin"')
     expect(gitBroker).toContain('"push", REMOTE')
     expect(worker).toContain('chmod 2770 -- "$PHYSICAL_WORKSPACE"')
+    expect(worker).toContain("umask 077")
+    expect(worker).toContain("run_shared_git_capture()")
     expect(worker).toContain("umask 007")
+    expect(worker).toContain("umask \"$previous_umask\"")
     expect(worker).toContain('chmod 0640 -- "$marker_tmp"')
     expect(dotnet).toContain("TEST_DOTNET_INFORMATIONAL|BUILD_DOTNET_RELEASE")
   })
