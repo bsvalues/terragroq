@@ -247,7 +247,7 @@ function defaultRunGit(args, repositoryRoot = REPOSITORY_ROOT) {
   return Buffer.from(result.stdout ?? [])
 }
 
-function readTrustedClosureFile(fsApi, repositoryRoot, relativePath) {
+export function readTrustedClosureFile(fsApi, repositoryRoot, relativePath) {
   const lexical = path.join(repositoryRoot, ...relativePath.split("/"))
   const repositoryReal = fsApi.realpathSync(repositoryRoot)
   const stats = fsApi.lstatSync(lexical)
@@ -255,7 +255,18 @@ function readTrustedClosureFile(fsApi, repositoryRoot, relativePath) {
   if (!stats.isFile() || stats.nlink !== 1 || stats.size > MAX_ARTIFACT_BYTES) fail("TRUSTED_MAIN_MISMATCH", `${relativePath} is not a bounded single-link file`)
   const real = fsApi.realpathSync(lexical)
   contained(repositoryReal, real, relativePath)
-  return fsApi.readFileSync(lexical)
+  let descriptor
+  try {
+    descriptor = fsApi.openSync(lexical, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+    const opened = fsApi.fstatSync(descriptor)
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== stats.dev || opened.ino !== stats.ino
+      || opened.size !== stats.size || opened.mtimeMs !== stats.mtimeMs || opened.ctimeMs !== stats.ctimeMs) {
+      fail("TRUSTED_MAIN_MISMATCH", `${relativePath} changed during trusted closure acquisition`)
+    }
+    return fsApi.readFileSync(descriptor)
+  } finally {
+    if (descriptor !== undefined) fsApi.closeSync(descriptor)
+  }
 }
 
 export function createStandingTrustedProof({ repositoryRoot = REPOSITORY_ROOT, admissionPath, inputPath, sourceCommit, authority = null, fsApi = fs, runGit = (args) => defaultRunGit(args, repositoryRoot), readReleaseManifest = () => readStandingReleaseManifest() } = {}) {

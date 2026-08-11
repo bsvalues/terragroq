@@ -10,6 +10,7 @@ import {
   parseStandingArguments,
   readPrivateStandingRequest,
   readStandingArtifact,
+  readTrustedClosureFile,
   STANDING_TRUSTED_FILES,
 } from "../scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs"
 
@@ -232,6 +233,29 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     retained.request_sha256 = "f".repeat(64)
     fs.writeFileSync(claimPath, `${JSON.stringify(retained)}\n`)
     await expect(providers.claimAdmission(binding)).rejects.toThrow("LEDGER_UNTRUSTED")
+  })
+
+  it("reads trusted closure bytes through a no-follow descriptor and rejects inode drift", () => {
+    const root = tempRoot("aegis-standing-closure-descriptor-")
+    const relative = "scripts/execution-fabric/closure.mjs"
+    write(root, relative, "export const trusted = true\n")
+    const descriptorReads: Array<number | fs.PathLike> = []
+    const injectedFs = Object.create(fs) as typeof fs
+    injectedFs.readFileSync = ((candidate: number | fs.PathLike, ...args: any[]) => {
+      descriptorReads.push(candidate)
+      return (fs.readFileSync as any)(candidate, ...args)
+    }) as typeof fs.readFileSync
+
+    expect(readTrustedClosureFile(injectedFs, root, relative).toString("utf8"))
+      .toBe("export const trusted = true\n")
+    expect(descriptorReads.some((candidate) => typeof candidate === "number")).toBe(true)
+
+    const driftedFs = Object.create(fs) as typeof fs
+    driftedFs.fstatSync = ((descriptor: number) => {
+      const stats = fs.fstatSync(descriptor)
+      return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, { ino: stats.ino + 1 })
+    }) as typeof fs.fstatSync
+    expect(() => readTrustedClosureFile(driftedFs, root, relative)).toThrow("TRUSTED_MAIN_MISMATCH")
   })
 
   it("fails closed until a retained privileged journal epoch predates admission", async () => {
