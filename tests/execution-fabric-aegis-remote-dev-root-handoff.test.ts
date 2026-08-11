@@ -334,7 +334,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(gitBroker).toContain('bound.runId !== authorization.payload.runId')
     expect(gitBroker).toContain("fs.constants.O_EXCL")
     expect(gitBroker).toContain(".git-consumed")
-    expect(gitBroker.indexOf("consumeGitTicket(authorization.payload)")).toBeLessThan(gitBroker.indexOf("exactCredential()"))
+    expect(gitBroker).toContain("consumeGitTicket(authorization.payload)\n  exactCredential()")
     expect(gitService).toContain("User=williamos-git-broker")
     expect(gitService).toContain("Group=williamos-fabric")
     expect(gitService).toContain("IPAddressDeny=any")
