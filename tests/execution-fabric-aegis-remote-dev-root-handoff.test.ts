@@ -14,7 +14,7 @@ import {
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
-import { exactNftBoundaryLines, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { exactNftBoundaryLines, inspectDurableLedgerReconciliation, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -340,13 +340,34 @@ describe("AEGIS root-owned prerequisite handoff", () => {
   it("accepts only an exact conclusive sudo denial and rejects password, signal, or ambiguous errors", () => {
     expect(inspectNoSudoCapabilityEvidence({ status: 1, signal: null, error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" })).toBe(true)
     expect(inspectNoSudoCapabilityEvidence({ status: 1, signal: null, error: null, stdout: "", stderr: "Sorry, user williamos-fabric may not run sudo on aegis.\n" })).toBe(true)
+    expect(inspectNoSudoCapabilityEvidence({ status: 0, signal: null, error: null, stdout: "User williamos-fabric is not allowed to run sudo on aegis.\n", stderr: "" })).toBe(true)
     for (const value of [
       { status: 0, signal: null, error: null, stdout: "allowed", stderr: "" },
+      { status: 0, signal: null, error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" },
       { status: 1, signal: null, error: null, stdout: "", stderr: "a password is required\n" },
       { status: 1, signal: "SIGTERM", error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" },
       { status: 1, signal: null, error: new Error("spawn failed"), stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" },
       { status: 2, signal: null, error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" },
     ]) expect(inspectNoSudoCapabilityEvidence(value)).toBe(false)
+  })
+
+  it("reconciles only an exact preserved closed HASH ledger when the new ticket directory alone is absent", () => {
+    const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
+    expect(adapter).toContain('ticketExists: lexists("/var/lib/williamos-fabric/remote-dev-launch-tickets")')
+    expect(adapter).not.toContain('ticketExists: fs.existsSync("/var/lib/williamos-fabric/remote-dev-launch-tickets")')
+    expect(inspectDurableLedgerReconciliation({ ledgerExact: true, ledgerExists: true, ledgerRecordsExact: true, ticketExact: false, ticketExists: false })).toBe("ABSENT")
+    expect(inspectDurableLedgerReconciliation({ ledgerExact: true, ledgerExists: true, ledgerRecordsExact: true, ticketExact: true, ticketExists: true })).toBe("MATCH")
+    for (const state of [
+      { ledgerExact: false, ledgerExists: false, ledgerRecordsExact: false, ticketExact: false, ticketExists: false },
+      { ledgerExact: false, ledgerExists: true, ledgerRecordsExact: false, ticketExact: false, ticketExists: false },
+      { ledgerExact: true, ledgerExists: true, ledgerRecordsExact: false, ticketExact: false, ticketExists: false },
+      { ledgerExact: true, ledgerExists: true, ledgerRecordsExact: true, ticketExact: false, ticketExists: true },
+      { ledgerExact: false, ledgerExists: false, ledgerRecordsExact: false, ticketExact: true, ticketExists: true },
+      { ledgerExact: false, ledgerExists: true, ledgerRecordsExact: false, ticketExact: true, ticketExists: true },
+      { ledgerExact: true, ledgerExists: false, ledgerRecordsExact: true, ticketExact: true, ticketExists: true },
+      { ledgerExact: true, ledgerExists: true, ledgerRecordsExact: true, ticketExact: true, ticketExists: false },
+      { ledgerExact: true, ledgerExists: true, ledgerRecordsExact: true, ticketExact: false, ticketExists: undefined },
+    ]) expect(inspectDurableLedgerReconciliation(state)).toBe("DRIFT")
   })
 
   it("ships an exact dual-stack default-deny policy broker with Atlas denied and no fail-open delete/apply gap", () => {

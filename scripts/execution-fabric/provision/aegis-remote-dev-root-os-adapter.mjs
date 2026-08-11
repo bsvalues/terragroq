@@ -123,11 +123,45 @@ function sharedGroupProcessesExact(gid, allowedUids) {
 }
 
 export function inspectNoSudoCapabilityEvidence(result) {
-  if (!result || result.error != null || result.signal !== null || result.status !== 1) return false
+  if (!result || result.error != null || result.signal !== null || ![0, 1].includes(result.status)) return false
   const stdout = String(result.stdout ?? ""); const stderr = String(result.stderr ?? "")
   if ((stdout.length > 0) === (stderr.length > 0)) return false
   const output = stdout || stderr
-  return /^(?:User williamos-fabric is not allowed to run sudo on|Sorry, user williamos-fabric may not run sudo on) [A-Za-z0-9._-]+\.\r?\n?$/.test(output)
+  const exactDenial = /^(?:User williamos-fabric is not allowed to run sudo on|Sorry, user williamos-fabric may not run sudo on) [A-Za-z0-9._-]+\.\r?\n?$/.test(output)
+  if (!exactDenial) return false
+  return result.status === 1 || (result.status === 0 && stdout.length > 0 && /^User williamos-fabric is not allowed to run sudo on /.test(stdout))
+}
+
+export function inspectDurableLedgerReconciliation({ ledgerExact, ledgerExists, ledgerRecordsExact, ticketExact, ticketExists }) {
+  if (![ledgerExact, ledgerExists, ledgerRecordsExact, ticketExact, ticketExists].every((value) => typeof value === "boolean")) return "DRIFT"
+  if ((ledgerExact && !ledgerExists) || (ticketExact && !ticketExists)) return "DRIFT"
+  if (ledgerExact && ledgerExists && ledgerRecordsExact && ticketExact && ticketExists) return "MATCH"
+  if (ledgerExact && ledgerExists && ledgerRecordsExact && !ticketExact && !ticketExists) return "ABSENT"
+  return "DRIFT"
+}
+
+function closedHashLedgerRecordsExact(manifest, ids) {
+  try {
+    if (!ids) return false
+    const claimBinding = manifest.trustedEvidence.find((entry) => entry.path === "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-claim.json")
+    const releaseBinding = manifest.trustedEvidence.find((entry) => entry.path === "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-release.json")
+    if (!claimBinding || !releaseBinding) return false
+    const claimSource = path.join(BUNDLE_ROOT, ...claimBinding.path.split("/")); const releaseSource = path.join(BUNDLE_ROOT, ...releaseBinding.path.split("/"))
+    if (!exactFile(claimSource, claimBinding.sha256, 0, 0, 0o444) || !exactFile(releaseSource, releaseBinding.sha256, 0, 0, 0o444)) return false
+    const claim = JSON.parse(fs.readFileSync(claimSource, "utf8")); const release = JSON.parse(fs.readFileSync(releaseSource, "utf8"))
+    if (!/^[0-9a-f]{64}$/.test(claim.claim_key_sha256 ?? "") || !/^lease-[0-9a-f]{24}$/.test(release.lease_id ?? "") || release.claim_id !== claim.claim_id) return false
+    const expected = new Map([
+      [`claim-${claim.claim_key_sha256}.json`, claimBinding.sha256],
+      [`release-${release.lease_id}.json`, releaseBinding.sha256],
+    ])
+    const ledgerRoot = "/var/lib/williamos/fabric/ledger"; const entries = fs.readdirSync(ledgerRoot)
+    if (!same([...entries].sort(), [...expected.keys()].sort())) return false
+    for (const [name, expectedSha] of expected) {
+      const entry = path.join(ledgerRoot, name); const stat = fs.lstatSync(entry)
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== ids.uid || stat.gid !== ids.gid || (stat.mode & 0o7777) !== 0o600 || sha(fs.readFileSync(entry)) !== expectedSha) return false
+    }
+    return true
+  } catch { return false }
 }
 function noSudoCapability() {
   return inspectNoSudoCapabilityEvidence(spawnSync("/usr/bin/sudo", ["-n", "-l", "-U", "williamos-fabric"], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV }))
@@ -348,6 +382,7 @@ function observe(manifest, authority, trust) {
   const repositories = repositoryState(manifest, authority)
   const toolchain = toolchainState(manifest, authority)
   const ledger = (() => { try { const s = fs.lstatSync("/var/lib/williamos/fabric/ledger"); return trustedParents("/var/lib/williamos/fabric/ledger") && s.isDirectory() && !s.isSymbolicLink() && s.uid === ids?.uid && s.gid === ids?.gid && (s.mode & 0o7777) === 0o700 && run("/usr/bin/findmnt", ["-n", "-o", "FSTYPE", "--target", "/var/lib/williamos/fabric/ledger"]) === "ext4" } catch { return false } })()
+  const ledgerRecordsExact = closedHashLedgerRecordsExact(manifest, ids)
   const processState = ids ? userProcesses(ids.uid) : { proven: true, pids: [], onlyManager: true }
   const brokerProcessState = brokerIds ? userProcesses(brokerIds.uid) : { proven: true, pids: [], onlyManager: true }
   const gitBrokerProcessState = gitBrokerIds ? userProcesses(gitBrokerIds.uid) : { proven: true, pids: [], onlyManager: true }
@@ -361,7 +396,7 @@ function observe(manifest, authority, trust) {
     INSTALL_GITHUB_HOST_AUTH_BOUNDARY: githubMatch ? "MATCH" : fs.existsSync("/etc/williamos-fabric/github_known_hosts") || fs.existsSync("/etc/williamos-fabric/github-account.key") ? "DRIFT" : "ABSENT",
     RECONCILE_TRUSTED_REPOSITORIES: repositories,
     INSTALL_PINNED_TOOLCHAIN: toolchain,
-    CREATE_DURABLE_LEDGER: ledger && appendOnly("/var/lib/williamos-fabric/remote-dev-launch-tickets") ? "MATCH" : fs.existsSync("/var/lib/williamos/fabric/ledger") || fs.existsSync("/var/lib/williamos-fabric/remote-dev-launch-tickets") ? "DRIFT" : "ABSENT",
+    CREATE_DURABLE_LEDGER: inspectDurableLedgerReconciliation({ ledgerExact: ledger, ledgerExists: fs.existsSync("/var/lib/williamos/fabric/ledger"), ledgerRecordsExact, ticketExact: appendOnly("/var/lib/williamos-fabric/remote-dev-launch-tickets"), ticketExists: lexists("/var/lib/williamos-fabric/remote-dev-launch-tickets") }),
     INSTALL_FORCED_COMMAND_TRANSPORT: transport === expectedTransport && exactFile(transportPath, sha(Buffer.from(expectedTransport)), 0, 0, 0o444) ? "MATCH" : transport ? "DRIFT" : "ABSENT",
   }
   return { platform: { os: process.platform, effectiveUid: process.getuid?.(), hostname: run("/usr/bin/hostname", ["-s"]), machineIdSha256: sha(Buffer.from(fs.readFileSync("/etc/machine-id", "utf8").trim(), "utf8")) }, ...trust, trustedMain: { ...trust.trustedMain, exactCleanHead: repositories === "MATCH", criticalBytesMatch: rootAssets }, storage: storageObservation(), prerequisites: states }
