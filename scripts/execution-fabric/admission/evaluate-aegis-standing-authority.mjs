@@ -1,9 +1,13 @@
+import crypto from "node:crypto"
+
 const SHA256 = /^[a-f0-9]{64}$/
 const COMMIT = /^[a-f0-9]{40}$/
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{1,255}$/
+const SAFE_RELATIVE_PATH = /^(?:[A-Za-z0-9][A-Za-z0-9._-]*)(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/
 const WORK_ORDER = /^WO-[A-Z0-9][A-Z0-9-]{2,127}$/
 const UNSAFE_KEY = /(?:^|[_-])(?:command|commands|cmd|shell|script|argv|args|executable|exec|spawn|cwd|stdin|environment|env|endpoint|credential|credentials|password|passwd|private[_-]?key|secret|secrets|token|tokens|api[_-]?key|connection[_-]?string|authorization)(?:$|[_-])/i
 const SECRET_LIKE = /(?:-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|\bAKIA[A-Z0-9]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}\b|\bsk-(?:proj-)?[A-Za-z0-9_-]{12,}\b|\bBearer\s+[A-Za-z0-9._~+/=-]{8,})/i
+const HASH_MAX_INPUT_BYTES = 1048576
 
 const EXPECTED_AUTHORITY = {
   $schema: "./aegis-standing-compute-authority.schema.v1.json",
@@ -13,7 +17,7 @@ const EXPECTED_AUTHORITY = {
   authority_status: "ACTIVE",
   repository: "bsvalues/terragroq",
   allowed_risk_classes: ["R0", "R1"],
-  outcome_eligibility: { origin: "WILLIAMOS_NATIVE", approval_status: "ALREADY_APPROVED" },
+  outcome_eligibility: { origin: "WILLIAMOS_NATIVE", approval_status: "ALREADY_APPROVED", dependency_status: "CLEARED" },
   node_identity: {
     node_id: "aegis",
     hostname: "aegis",
@@ -33,6 +37,7 @@ const EXPECTED_AUTHORITY = {
   execution_boundary: {
     network_scope: "none",
     durable_storage_allowed: false,
+    control_evidence_storage_required: true,
     nas_allowed: false,
     backup_allowed: false,
     archive_authority_allowed: false,
@@ -45,6 +50,7 @@ const EXPECTED_AUTHORITY = {
   },
   evidence_policy: {
     maximum_age_ms: 300000,
+    maximum_admission_age_ms: 86400000,
     placement_required: true,
     capability_required: true,
     exact_source_commit_required: true,
@@ -52,9 +58,18 @@ const EXPECTED_AUTHORITY = {
     one_time_job_claim_required: true,
     lease_and_fencing_required: true,
   },
+  standing_integration: {
+    integration_id: "aegis-hash-verify-standing-integration-v1",
+    operation_core_sha256: "c5965a206b5f26c0db21176a609775d1ca176409b644bbc241fde74565bd8d8f",
+    runtime_sha256: "eb1cf0517caf3a4c4a1935ed8bea73c53fed64cc1ad3effa3963e6e237c22be2",
+    resident_runner_sha256: "1e817dc0c87803a93d503d29183b6af66bd776173812d0270985b5e261db54a1",
+    standing_contract_sha256: "0ad6aa6ef3a5e10a19de1417bf82edcf9a7f4b9c12e3c736fa6150b99d4e7163",
+    trusted_release_manifest_required: true,
+    status: "ACTIVE",
+  },
   workload_adapters: [
     { workload_class: "CI_BUILD_TEST", template_id: "aegis.ci-build-test.v1", adapter_id: null, profile_id: "williamos.standard-validation.v1", adapter_sha256: null, template_sha256: null, profile_sha256: null, status: "ADAPTER_BLOCKED" },
-    { workload_class: "HASH_VERIFY", template_id: "aegis.hash-verify.v1", adapter_id: "resident-aegis-hash-verify-v1", profile_id: "resident-aegis-bounded-hash-verify-v1", adapter_sha256: "2fe20b5efb3944d001e86ba2da33578d327ee37fafd8b88397ca2d5cc1eb1c84", template_sha256: "7217d0486fb67e17d27b7854bb8f44d0ba7d063bddde7d45282c091306d8d58b", profile_sha256: "ff8587a3e05eeb0aa7abaa80ed882b0f43010ad2fd119e71f0b58e353dfd2989", status: "REVIEWED_NOT_STANDING_INTEGRATED" },
+    { workload_class: "HASH_VERIFY", template_id: "aegis.hash-verify.v1", adapter_id: "resident-aegis-hash-verify-v1", profile_id: "resident-aegis-bounded-hash-verify-v1", adapter_sha256: "b0c625b92414bbab62fb3d7356b2e04a179377d8076590fe1c521335eb2a30c9", template_sha256: "7217d0486fb67e17d27b7854bb8f44d0ba7d063bddde7d45282c091306d8d58b", profile_sha256: "ff8587a3e05eeb0aa7abaa80ed882b0f43010ad2fd119e71f0b58e353dfd2989", status: "ACTIVE" },
     { workload_class: "COMPRESSION", template_id: "aegis.compression.v1", adapter_id: null, profile_id: "tar-zstd.deterministic.v1", adapter_sha256: null, template_sha256: null, profile_sha256: null, status: "ADAPTER_BLOCKED" },
   ],
 }
@@ -76,6 +91,58 @@ function canonical(value) {
 }
 
 const sha256 = (value) => crypto.createHash("sha256").update(canonical(value), "utf8").digest("hex")
+
+function requestBinding(request) {
+  return {
+    schema_version: request.schema_version,
+    job_id: request.job_id,
+    outcome: request.outcome,
+    work_order_id: request.work_order_id,
+    source: request.source,
+    workload: request.workload,
+    execution_identity: request.execution_identity,
+    reviewed_binding: request.reviewed_binding,
+    input: request.input,
+    placement_evidence: request.placement_evidence,
+    capability_evidence: request.capability_evidence,
+    limits: request.limits,
+    boundary: request.boundary,
+    lease: request.lease,
+    claim: { claim_id: request.claim?.claim_id },
+  }
+}
+
+function jobScope(request) {
+  return {
+    schema_version: request.schema_version,
+    job_id: request.job_id,
+    outcome: request.outcome,
+    work_order_id: request.work_order_id,
+    source: request.source,
+    workload: request.workload,
+    execution_identity: request.execution_identity,
+    reviewed_binding: request.reviewed_binding,
+    input: request.input,
+    limits: request.limits,
+    boundary: request.boundary,
+  }
+}
+
+export function aegisStandingJobScope(request) {
+  return structuredClone(jobScope(request))
+}
+
+export function aegisStandingRequestBindingSha256(request) {
+  return sha256(requestBinding(request))
+}
+
+export function aegisStandingJobScopeSha256(request) {
+  return sha256(jobScope(request))
+}
+
+export function aegisStandingAuthoritySha256(authority) {
+  return sha256(authority)
+}
 
 function exact(value, keys, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("INVALID_SHAPE", `${label} must be an object`)
@@ -123,6 +190,8 @@ function validateEvidence(evidence, label, request, authority, nowMs, capability
   exact(evidence, keys, label)
   identifier(evidence.evidence_id, `${label}.evidence_id`)
   digest(evidence.evidence_sha256, `${label}.evidence_sha256`)
+  const { evidence_sha256: retainedDigest, ...evidenceBody } = evidence
+  same(retainedDigest, sha256(evidenceBody), "EVIDENCE_DIGEST_MISMATCH", `${label} digest does not bind its exact claims`)
   same(evidence.node_id, authority.node_identity.node_id, "NODE_MISMATCH", `${label} names the wrong node`)
   same(evidence.machine_id_sha256, authority.node_identity.machine_id_sha256, "IDENTITY_MISMATCH", `${label} names the wrong machine identity`)
   const observedAt = timestamp(evidence.observed_at, `${label}.observed_at`)
@@ -154,14 +223,15 @@ export function validateAegisStandingAuthority(authority) {
 
 function validateRequest(request, authority, nowMs) {
   scanSafety(request)
-  exact(request, ["schema_version", "job_id", "outcome", "work_order_id", "source", "workload", "execution_identity", "reviewed_binding", "placement_evidence", "capability_evidence", "limits", "boundary", "lease", "claim"], "request")
+  exact(request, ["schema_version", "job_id", "outcome", "work_order_id", "source", "workload", "execution_identity", "reviewed_binding", "input", "placement_evidence", "capability_evidence", "limits", "boundary", "lease", "claim"], "request")
   same(request.schema_version, "1.0-aegis-standing-admission-request", "INVALID_VERSION", "request schema_version is unsupported")
   identifier(request.job_id, "request.job_id")
 
-  exact(request.outcome, ["outcome_id", "origin", "risk_class", "approval_status"], "request.outcome")
+  exact(request.outcome, ["outcome_id", "origin", "risk_class", "approval_status", "dependency_status"], "request.outcome")
   identifier(request.outcome.outcome_id, "request.outcome.outcome_id")
   same(request.outcome.origin, authority.outcome_eligibility.origin, "OUTCOME_NOT_NATIVE", "outcome must be WilliamOS-native")
   same(request.outcome.approval_status, authority.outcome_eligibility.approval_status, "OUTCOME_NOT_APPROVED", "outcome must already be approved")
+  same(request.outcome.dependency_status, authority.outcome_eligibility.dependency_status, "DEPENDENCIES_NOT_CLEARED", "outcome dependencies must already be cleared")
   if (!authority.allowed_risk_classes.includes(request.outcome.risk_class)) fail("RISK_NOT_AUTHORIZED", "only R0 and R1 outcomes are authorized")
   if (typeof request.work_order_id !== "string" || !WORK_ORDER.test(request.work_order_id)) fail("WORK_ORDER_INVALID", "an exact Work Order ID is required")
 
@@ -178,10 +248,23 @@ function validateRequest(request, authority, nowMs) {
   exact(request.execution_identity, ["node_id", "machine_id_sha256", "execution_account", "privilege"], "request.execution_identity")
   for (const field of ["node_id", "machine_id_sha256", "execution_account", "privilege"]) same(request.execution_identity[field], authority.node_identity[field], "IDENTITY_MISMATCH", `execution identity ${field} does not match`)
 
-  exact(request.reviewed_binding, ["adapter_sha256", "template_sha256", "profile_sha256"], "request.reviewed_binding")
+  exact(request.reviewed_binding, ["adapter_sha256", "template_sha256", "profile_sha256", "operation_core_sha256", "runtime_sha256", "resident_runner_sha256", "standing_contract_sha256"], "request.reviewed_binding")
   for (const field of ["adapter_sha256", "template_sha256", "profile_sha256"]) {
     digest(request.reviewed_binding[field], `request.reviewed_binding.${field}`)
     same(request.reviewed_binding[field], adapter[field], "REVIEWED_DIGEST_MISMATCH", `${field} does not match the active reviewed binding`)
+  }
+  for (const field of ["operation_core_sha256", "runtime_sha256", "resident_runner_sha256", "standing_contract_sha256"]) {
+    digest(request.reviewed_binding[field], `request.reviewed_binding.${field}`)
+    same(request.reviewed_binding[field], authority.standing_integration[field], "REVIEWED_DIGEST_MISMATCH", `${field} does not match the active standing integration`)
+  }
+
+  exact(request.input, ["relative_path", "expected_sha256", "expected_byte_length"], "request.input")
+  if (typeof request.input.relative_path !== "string" || request.input.relative_path.length > 240 || !SAFE_RELATIVE_PATH.test(request.input.relative_path) || request.input.relative_path.split("/").some((part) => part === "." || part === "..")) {
+    fail("INPUT_PATH_INVALID", "input path must be a canonical relative path")
+  }
+  digest(request.input.expected_sha256, "request.input.expected_sha256")
+  if (!Number.isSafeInteger(request.input.expected_byte_length) || request.input.expected_byte_length < 0 || request.input.expected_byte_length > HASH_MAX_INPUT_BYTES) {
+    fail("INPUT_LENGTH_INVALID", "input byte length is invalid or exceeds the reviewed hash adapter limit")
   }
 
   exact(request.limits, ["cpu_threads", "memory_bytes", "runtime_ms", "output_bytes", "scratch_write_bytes"], "request.limits")
@@ -213,36 +296,38 @@ function validateRequest(request, authority, nowMs) {
 function validateCandidateAdmission(admission, request, authority, nowMs) {
   scanSafety(admission, "candidate admission")
   exact(admission, [
-    "schema_version", "admission_id", "issuer", "authority_id", "job_id", "outcome_id",
-    "approval_status", "risk_class", "work_order_id", "source", "workload", "issued_at", "expires_at",
+    "schema_version", "admission_id", "issuer", "authority_id", "authority_sha256", "status", "single_use",
+    "consumption_count", "consumed_at", "revoked_at", "job_scope", "job_scope_sha256", "approval_provenance", "issued_at", "expires_at",
   ], "candidate admission")
   same(admission.schema_version, "1.0-aegis-standing-job-admission", "ADMISSION_INVALID", "candidate admission version is unsupported")
   identifier(admission.admission_id, "candidate admission.admission_id")
   same(admission.issuer, "williamos-authority-control-plane", "ADMISSION_UNTRUSTED", "candidate admission issuer is not the expected WilliamOS authority control plane")
   same(admission.authority_id, authority.authority_id, "ADMISSION_AUTHORITY_MISMATCH", "admission does not bind the active standing authority")
-  same(admission.approval_status, "ALREADY_APPROVED", "OUTCOME_NOT_APPROVED", "trusted admission does not record approval")
-  if (!authority.allowed_risk_classes.includes(admission.risk_class)) fail("RISK_NOT_AUTHORIZED", "trusted admission risk is outside R0/R1")
+  digest(admission.authority_sha256, "candidate admission.authority_sha256")
+  same(admission.authority_sha256, aegisStandingAuthoritySha256(authority), "ADMISSION_AUTHORITY_MISMATCH", "admission does not bind the exact active standing authority")
+  if (admission.status === "REVOKED" || admission.revoked_at !== null) fail("ADMISSION_REVOKED", "candidate admission has been revoked")
+  same(admission.status, "ACTIVE", "ADMISSION_INACTIVE", "candidate admission is not active")
+  same(admission.single_use, true, "ADMISSION_NOT_SINGLE_USE", "candidate admission must be single use")
+  if (admission.consumption_count !== 0 || admission.consumed_at !== null) fail("ADMISSION_REPLAYED", "candidate admission has already been consumed")
+  digest(admission.job_scope_sha256, "candidate admission.job_scope_sha256")
+  exact(admission.approval_provenance, ["mode", "authority_reference", "outcome_id", "work_order_id", "dependency_status"], "candidate admission.approval_provenance")
+  same(admission.approval_provenance.mode, "REVIEWED_MAIN", "ADMISSION_UNTRUSTED", "admission must be retained on reviewed main")
+  same(admission.approval_provenance.authority_reference, authority.authority_reference, "ADMISSION_AUTHORITY_MISMATCH", "admission approval reference does not match standing authority")
+  same(admission.approval_provenance.outcome_id, request.outcome.outcome_id, "OUTCOME_BINDING_MISMATCH", "admission does not bind the approved outcome")
+  same(admission.approval_provenance.work_order_id, request.work_order_id, "WORK_ORDER_BINDING_MISMATCH", "admission does not bind the approved Work Order")
+  same(admission.approval_provenance.dependency_status, authority.outcome_eligibility.dependency_status, "DEPENDENCIES_NOT_CLEARED", "admission does not attest cleared dependencies")
   const issuedAt = timestamp(admission.issued_at, "candidate admission.issued_at")
   const expiresAt = timestamp(admission.expires_at, "candidate admission.expires_at")
-  if (issuedAt > nowMs || expiresAt <= nowMs || expiresAt - issuedAt > authority.evidence_policy.maximum_age_ms) {
+  if (issuedAt > nowMs || expiresAt <= nowMs || expiresAt - issuedAt > authority.evidence_policy.maximum_admission_age_ms) {
     fail("ADMISSION_EXPIRED", "trusted admission is future-dated, expired, or exceeds the bounded lifetime")
   }
-  exact(admission.source, ["repository", "commit_sha"], "candidate admission.source")
-  exact(admission.workload, ["workload_class", "template_id", "adapter_id", "profile_id"], "candidate admission.workload")
-  for (const [actual, expected, label] of [
-    [admission.job_id, request.job_id, "job"],
-    [admission.outcome_id, request.outcome.outcome_id, "outcome"],
-    [admission.risk_class, request.outcome.risk_class, "risk"],
-    [admission.work_order_id, request.work_order_id, "Work Order"],
-    [admission.source.repository, request.source.repository, "repository"],
-    [admission.source.commit_sha, request.source.commit_sha, "source commit"],
-  ]) same(actual, expected, "ADMISSION_BINDING_MISMATCH", `trusted admission ${label} binding does not match the request`)
-  for (const field of ["workload_class", "template_id", "adapter_id", "profile_id"]) {
-    same(admission.workload[field], request.workload[field], "ADMISSION_BINDING_MISMATCH", `trusted admission workload ${field} does not match the request`)
-  }
+  const jobScopeSha256 = aegisStandingJobScopeSha256(request)
+  same(canonical(admission.job_scope), canonical(jobScope(request)), "JOB_SCOPE_BINDING_MISMATCH", "candidate admission does not retain the complete immutable job scope")
+  same(admission.job_scope_sha256, jobScopeSha256, "JOB_SCOPE_BINDING_MISMATCH", "candidate admission does not bind the immutable job scope")
+  const requestBindingSha256 = aegisStandingRequestBindingSha256(request)
   const admissionSha256 = sha256(admission)
   same(request.claim.admission_sha256, admissionSha256, "ADMISSION_DIGEST_MISMATCH", "claim does not bind the exact trusted admission")
-  return admissionSha256
+  return { admissionSha256, requestBindingSha256, jobScopeSha256 }
 }
 
 export function evaluateAegisStandingEligibility({ authority, request, candidateAdmission, now = () => Date.now() }) {
@@ -253,18 +338,20 @@ export function evaluateAegisStandingEligibility({ authority, request, candidate
     if (!Number.isFinite(nowMs)) fail("CLOCK_INVALID", "clock returned a non-finite value")
     validateRequest(request, authority, nowMs)
     if (!candidateAdmission) fail("ADMISSION_REQUIRED", "a separately verified control-plane admission is required")
-    const admissionSha256 = validateCandidateAdmission(candidateAdmission, request, authority, nowMs)
+    const { admissionSha256, requestBindingSha256, jobScopeSha256 } = validateCandidateAdmission(candidateAdmission, request, authority, nowMs)
     return {
-      status: "ELIGIBILITY_SHAPE_VALID",
+      status: "ADMITTED",
       authority_id: authority.authority_id,
+      authority_sha256: candidateAdmission.authority_sha256,
       job_id: request.job_id,
       admission_id: candidateAdmission.admission_id,
       admission_sha256: admissionSha256,
-      execution_authorized: false,
-      dispatch_allowed: false,
+      request_binding_sha256: requestBindingSha256,
+      job_scope_sha256: jobScopeSha256,
+      execution_authorized: true,
+      dispatch_allowed: true,
       scheduler_activated: false,
       autonomous_selection: false,
-      reason_code: "DURABLE_TRUSTED_MAIN_ADMISSION_NOT_INTEGRATED",
     }
   } catch (error) {
     if (!(error instanceof AdmissionFailure)) throw error
@@ -279,4 +366,3 @@ export function evaluateAegisStandingEligibility({ authority, request, candidate
     }
   }
 }
-import crypto from "node:crypto"

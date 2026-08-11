@@ -165,8 +165,13 @@ describe("Authority Registry", () => {
         },
         adapterAvailability: {
           CI_BUILD_TEST: "BLOCKED_NO_SEPARATELY_REVIEWED_ACTIVE_ADAPTER",
-          HASH_VERIFY: "BLOCKED_STANDING_INTEGRATION_NOT_ACTIVE",
+          HASH_VERIFY: "ACTIVE_REVIEWED_STANDING_ADAPTER",
           COMPRESSION: "BLOCKED_NO_SEPARATELY_REVIEWED_ACTIVE_ADAPTER",
+        },
+        adapterIds: {
+          CI_BUILD_TEST: null,
+          HASH_VERIFY: "resident-aegis-hash-verify-v1",
+          COMPRESSION: null,
         },
         globalSchedulerEnabled: false,
       },
@@ -178,10 +183,12 @@ describe("Authority Registry", () => {
       "exact-approved-template",
       "exact-approved-operation-profile",
       "exact-separately-reviewed-active-adapter",
+      "expiring-reviewed-main-per-job-admission",
       "complete-evidence-chain",
+      "immutable-completion-receipt",
       "exclusive-lease",
       "current-fence",
-      "single-use-claim",
+      "durable-single-use-claim",
     ])
     expect(record?.blockedActions).toEqual(expect.arrayContaining([
       "Generic worker activation",
@@ -196,6 +203,11 @@ describe("Authority Registry", () => {
       level: "allowed-by-current-lane",
       status: "open-for-bounded-jobs",
     })
+    expect(gate?.requiredEvidence).toEqual(expect.arrayContaining([
+      "Exact expiring reviewed-main per-job admission",
+      "Complete evidence chain and immutable completion receipt",
+      "Durable single-use claim, exclusive lease, and current fence",
+    ]))
     expect(registry.aegisBoundedComputeGates).toEqual([gate])
   })
 

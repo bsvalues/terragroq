@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0-aegis-standing-hash-template",
+  "template_id": "aegis.hash-verify.v1",
+  "workload_class": "HASH_VERIFY",
+  "selected_node_id": "aegis",
+  "adapter_id": "resident-aegis-hash-verify-v1",
+  "profile_id": "resident-aegis-bounded-hash-verify-v1",
+  "input_root": "docs/reports/standing-dispatch/inputs",
+  "digest_algorithm": "sha256",
+  "maximum_input_bytes": 1048576,
+  "maximum_runtime_ms": 30000,
+  "network_scope": "none",
+  "storage_semantics": "read-only-reviewed-input",
+  "risk_classes": [
+    "R0",
+    "R1"
+  ],
+  "maximum_concurrency": 1,
+  "scheduler_activation_allowed": false,
+  "autonomous_selection_allowed": false,
+  "status": "ACTIVE"
+}

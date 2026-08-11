@@ -190,13 +190,13 @@ npm run fabric:bounded-dispatch -- `
 The production wrapper does not accept a caller clock, ledger location, interpreter, model service
 address, authority registry, template registry, or alternate node. The scheduler remains off;
 `dispatch_performed=true` can be emitted only for the one exact claimed invocation. Executable AEGIS
-templates remain absent and fail closed until a resident AEGIS adapter and separately reviewed
-authority are available.
+work is not available through this HERMES wrapper; the separately reviewed standing AEGIS
+`HASH_VERIFY` adapter is documented below.
 
 ## Non-active AEGIS bounded compute contract
 
 `bounded-dispatch/resident-aegis-contract.mjs` validates the reviewed contract boundary for three
-future AEGIS workload classes: `CI_BUILD_TEST`, manifest `HASH_VERIFY`, and `COMPRESSION`. The
+AEGIS workload classes: `CI_BUILD_TEST`, manifest `HASH_VERIFY`, and `COMPRESSION`. The
 manifest profile is `aegis.hash-manifest-verify.future.v1`; it does not redefine the separately
 reviewed one-file `aegis.hash-verify.v1` adapter. The evaluator is deliberately
 not an execution adapter. A successful evaluation returns `NON_ACTIVE_REQUEST_SHAPE_VALID` with
@@ -210,13 +210,55 @@ state, privilege escalation, arbitrary shell, alternate nodes, and remote access
 Future requests must also reference exact repository-retained input-manifest bytes and one exact
 operation profile from the digest-pinned non-active profile registry. Opaque plan digests are not
 accepted as proof of safe work.
-No AEGIS entry exists in the authority registry. A later resident implementation, separately
-reviewed scope, and future activation would each require their own evidence and review before one
-real job could run.
+The standing authority registry now binds the separately reviewed active `HASH_VERIFY` adapter.
+This non-active contract evaluator still cannot authorize or execute a job. `CI_BUILD_TEST` and
+`COMPRESSION` remain adapter-blocked, and every standing `HASH_VERIFY` invocation requires its own
+expiring reviewed-main admission and durable execution evidence described below.
 
-The process-free evaluator validates a declared repository commit and tree digest but does not claim
-to prove Git ancestry or tree identity. A trusted `origin/main` source proof is an explicit future
-activation prerequisite.
+## Standing AEGIS HASH_VERIFY runner
+
+Issue #590 adds the reviewed standing `HASH_VERIFY` adapter
+`resident-aegis-hash-verify-v1` through a standing admission wrapper. It accepts exactly one request ID and one admission path:
+
+```bash
+/usr/bin/node /usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs \
+  --request <private-request-id> \
+  --admission docs/reports/standing-dispatch/<admission>.json
+```
+
+The ephemeral request is an owner-only file selected by safe ID below
+`/var/lib/williamos/fabric/standing-hash-requests`. The admission is tracked below
+`docs/reports/standing-dispatch` and retains the complete canonical job scope for review. Its input
+must be tracked below `docs/reports/standing-dispatch/inputs`. Durable claim, lease, fence, result,
+and release records use `/var/lib/williamos/fabric/standing-hash-ledger`; claim replay is additionally
+anchored in the privileged system journal behind a retained epoch.
+
+The root-owned bootstrap verifies its own reviewed digest and the complete executable closure from
+the root-owned release manifest before importing the resident runner. The manifest selects only the
+content-addressed `/opt/williamos/releases/<reviewed-main-sha>` directory; every ancestor and closure
+file must be root-owned, non-writable by the execution account, direct, and single-linked. The runner
+accepts no command, executable, shell, environment, network target, alternate
+report/input/ledger root, scheduler, or autonomous-selection input. It requires clean
+`refs/heads/main` pinned to the exact reviewed head by the root-owned
+`/etc/williamos/fabric/trusted-main-release.json`, an exact unexpired reviewed-main admission, the
+active adapter and standing-wrapper digests, a durable single-use claim, the exclusive lease/current
+fence, and an immutable completion receipt. `CI_BUILD_TEST` and `COMPRESSION` remain adapter-blocked,
+the global scheduler remains disabled, and the Issue #538 one-shot proof remains immutable.
+
+The process-free evaluator remains non-executing. The resident wrapper is the only standing
+integration boundary, validates source ancestry and exact tracked bytes with sanitized Git, and
+fails closed when the independently provisioned release manifest or replay epoch is absent.
+
+The AEGIS release process installs the reviewed bootstrap at
+`/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs` as a root-owned, non-writable file
+and atomically provisions `/etc/williamos/fabric/trusted-main-release.json`. That manifest binds the
+exact reviewed `main` commit and SHA-256 of the bootstrap, resident runner, standing runtime, hash
+core, and evaluator. The execution account may read but cannot update the manifest, bootstrap, or
+content-addressed release. Workload/NAS/archive writes remain forbidden; the claim, lease, result,
+release, and privileged replay records are required control-plane audit evidence rather than workload
+storage authority.
+If the privileged replay epoch is first initialized after an admission was issued, that admission
+fails closed and a later reviewed admission is required; history is never inferred or reconstructed.
 
 ### Static proof boundary (continued)
 
