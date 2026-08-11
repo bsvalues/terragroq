@@ -38,8 +38,8 @@ die_block() {
   json_status "$1" 2 "$2"; exit 2
 }
 
-if [[ $# -ne 5 ]]; then die_input "INVALID_INPUT" "expected operation, packet, patch, attempt, and previous evidence digest"; fi
-OPERATION="$1"; PACKET_B64="$2"; PATCH_B64="$3"; ATTEMPT="$4"; PREVIOUS_EVIDENCE="$5"
+if [[ $# -ne 6 ]]; then die_input "INVALID_INPUT" "expected operation, packet, patch, attempt, previous evidence digest, and signed launch ticket id"; fi
+OPERATION="$1"; PACKET_B64="$2"; PATCH_B64="$3"; ATTEMPT="$4"; PREVIOUS_EVIDENCE="$5"; LAUNCH_TICKET_ID="$6"
 
 operation_allowed=false
 for candidate in "${ALLOWED_OPERATIONS[@]}"; do
@@ -48,6 +48,7 @@ done
 if [[ "$operation_allowed" != true ]]; then die_input "OPERATION_NOT_ALLOWED" "operation is outside the fixed allowlist"; fi
 if [[ ! "$ATTEMPT" =~ ^[1-3]$ ]]; then die_input "ATTEMPT_INVALID" "attempt must be 1, 2, or 3"; fi
 if [[ "$PREVIOUS_EVIDENCE" != "null" && ! "$PREVIOUS_EVIDENCE" =~ ^[a-f0-9]{64}$ ]]; then die_input "EVIDENCE_CHAIN_INVALID" "previous evidence digest is invalid"; fi
+if [[ ! "$LAUNCH_TICKET_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]; then die_input "SIGNED_LAUNCH_TICKET_INVALID" "signed launch ticket id is invalid"; fi
 if [[ ! "$PACKET_B64" =~ ^[A-Za-z0-9+/]+={0,2}$ || ! "$PATCH_B64" =~ ^[A-Za-z0-9+/]*={0,2}$ ]]; then die_input "INVALID_INPUT" "payloads must be base64"; fi
 
 set +e
@@ -199,7 +200,7 @@ emit_recoverable_cleanup() {
 
 require_containment_tools() {
   local required_tool
-  for required_tool in timeout node realpath sha256sum flock findmnt systemd-run hostname id git dotnet corepack nproc df awk stat find readlink sync head tail tr grep du base64 bash mktemp mv rm xfs_io xfs_quota; do
+  for required_tool in timeout node realpath sha256sum flock findmnt hostname id git dotnet corepack nproc df awk stat find readlink sync head tail tr grep du base64 bash mktemp mv rm xfs_io xfs_quota; do
     command -v "$required_tool" >/dev/null 2>&1 || die_block "CONTAINMENT_UNAVAILABLE" "$required_tool is required for bounded execution"
   done
 }
@@ -238,50 +239,51 @@ validate_workspace_project() {
 run_ordinary_profile() {
   local writable_root="$1" scratch_root="$2" working_directory="$3" runtime_seconds="$4"
   shift 4
-  timeout --signal=TERM --kill-after=5 "$runtime_seconds" systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
-    --expand-environment=no \
-    -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
-    -p "RuntimeMaxSec=$runtime_seconds" -p ProtectSystem=strict -p ProtectHome=read-only \
-    -p "ReadWritePaths=$writable_root" -p "ReadOnlyPaths=/tmp /var/tmp" -p "WorkingDirectory=$working_directory" \
-    --setenv=TMPDIR="$scratch_root/tmp" --setenv=TMP="$scratch_root/tmp" --setenv=TEMP="$scratch_root/tmp" \
-    --setenv=XDG_CACHE_HOME="$scratch_root/xdg-cache" --setenv=NUGET_PACKAGES="$scratch_root/nuget" \
-    --setenv=DOTNET_CLI_HOME="$scratch_root/dotnet-home" --setenv=COREPACK_HOME="$scratch_root/corepack" \
-    --setenv=npm_config_cache="$scratch_root/npm-cache" -- "$@"
+  [[ "$writable_root" == "$PHYSICAL_WORKSPACE" || "$writable_root" == "$PHYSICAL_PARENT" ]] || return 125
+  [[ "$scratch_root" == "$SCRATCH_DIR" || "$scratch_root" == "$PHYSICAL_PARENT" ]] || return 125
+  (
+    cd -- "$working_directory"
+    TMPDIR="$scratch_root/tmp" TMP="$scratch_root/tmp" TEMP="$scratch_root/tmp" \
+      XDG_CACHE_HOME="$scratch_root/xdg-cache" NUGET_PACKAGES="$scratch_root/nuget" \
+      DOTNET_CLI_HOME="$scratch_root/dotnet-home" COREPACK_HOME="$scratch_root/corepack" \
+      npm_config_cache="$scratch_root/npm-cache" \
+      timeout --signal=TERM --kill-after=5 "$runtime_seconds" "$@"
+  )
 }
 
 run_cleanup_profile() {
   local runtime_seconds="$1"
   shift
-  timeout --signal=TERM --kill-after=5 "$runtime_seconds" systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
-    --expand-environment=no \
-    -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
-    -p "RuntimeMaxSec=$runtime_seconds" -p ProtectSystem=strict -p ProtectHome=read-only \
-    -p "ReadWritePaths=$PHYSICAL_PARENT" -p "ReadOnlyPaths=/tmp /var/tmp" -p "WorkingDirectory=$PHYSICAL_PARENT" -- "$@"
+  (cd -- "$PHYSICAL_PARENT" && timeout --signal=TERM --kill-after=5 "$runtime_seconds" "$@")
 }
 
 run_preflight_repository_profile() {
-  timeout --signal=TERM --kill-after=5 120 systemd-run --user --quiet --wait --pipe --collect --service-type=exec \
-    --expand-environment=no \
-    -p AllowedCPUs=0-11 -p CPUQuota=1200% -p MemoryMax=12884901888 -p TasksMax=64 \
-    -p RuntimeMaxSec=120 -p ProtectSystem=strict -p ProtectHome=read-only \
-    -p "TemporaryFileSystem=/tmp:size=4294967296,mode=0700" -p "ReadOnlyPaths=/var/tmp" -p WorkingDirectory=/tmp \
-    --setenv=REMOTE_URL="$REMOTE_URL" --setenv=BASE_SHA="$BASE_SHA" --setenv=RUN_ID="$RUN_ID" -- \
-    bash -c 'set -euo pipefail; proof=$(mktemp -d); trap '\''rm -rf -- "$proof"'\'' EXIT; git ls-remote --exit-code "$REMOTE_URL" refs/heads/main >/dev/null; git init --bare "$proof/repository.git" >/dev/null; git -C "$proof/repository.git" fetch --depth=1 "$REMOTE_URL" "$BASE_SHA" >/dev/null; git -C "$proof/repository.git" push --dry-run "$REMOTE_URL" "$BASE_SHA:refs/heads/williamos-preflight-$RUN_ID" >/dev/null'
+  (
+    set -euo pipefail
+    cd -- /tmp
+    proof="$(mktemp -d)"
+    trap 'rm -rf -- "$proof"' EXIT
+    timeout 120 git ls-remote --exit-code "$REMOTE_URL" refs/heads/main >/dev/null
+    git init --bare "$proof/repository.git" >/dev/null
+    timeout 120 git -C "$proof/repository.git" fetch --depth=1 "$REMOTE_URL" "$BASE_SHA" >/dev/null
+    timeout 120 git -C "$proof/repository.git" push --dry-run "$REMOTE_URL" "$BASE_SHA:refs/heads/williamos-preflight-$RUN_ID" >/dev/null
+  )
 }
 
 probe_containment() {
-  local code
-  set +e
-  run_ordinary_profile "$PHYSICAL_PARENT" "$PHYSICAL_PARENT" "$PHYSICAL_PARENT" 30 test ! -w /tmp >/dev/null 2>&1
-  code=$?
-  set -e
-  [[ $code -eq 0 ]] || die_block "CONTAINMENT_UNAVAILABLE" "ordinary systemd containment profile could not be proven"
-
-  set +e
-  run_cleanup_profile 30 test -w "$PHYSICAL_PARENT" >/dev/null 2>&1
-  code=$?
-  set -e
-  [[ $code -eq 0 ]] || die_block "CONTAINMENT_UNAVAILABLE" "cleanup systemd containment profile could not be proven"
+  local cgroup expected_cgroup
+  expected_cgroup="/user.slice/user-$EXECUTION_UID.slice/user@$EXECUTION_UID.service/app.slice/williamos-aegis-remote-dev.slice/williamos-aegis-remote-dev-$LAUNCH_TICKET_ID.service"
+  if [[ -n "$WORKER_ROOT" ]]; then
+    cgroup="${REMOTE_DEV_TEST_CGROUP:-$expected_cgroup}"
+  else
+    cgroup="$(timeout 5 awk -F: 'BEGIN{count=0} $1=="0" && $2=="" {count++; value=$3} END{if(count!=1)exit 1; print value}' /proc/self/cgroup)" \
+      || die_block "CONTAINMENT_UNAVAILABLE" "unified worker cgroup is unavailable"
+  fi
+  [[ "$cgroup" == "$expected_cgroup" ]] \
+    || die_block "CONTAINMENT_UNAVAILABLE" "worker is outside the exact fixed launcher service"
+  [[ -n "$WORKER_ROOT" || ( ! -S "/run/user/$EXECUTION_UID/bus" && ! -S "/run/user/$EXECUTION_UID/systemd/private" ) ]] \
+    || die_block "CONTAINMENT_UNAVAILABLE" "worker can reach the user service manager"
+  [[ -n "$WORKER_ROOT" || ( -w /tmp && ! -w /var/tmp ) ]] || die_block "CONTAINMENT_UNAVAILABLE" "preflight filesystem containment differs"
 }
 
 acquire_workspace_lock() {

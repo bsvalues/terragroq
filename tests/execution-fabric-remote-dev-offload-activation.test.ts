@@ -118,6 +118,56 @@ describe("TerraFusion remote development one-run activation", () => {
     expect(validateRemoteDevActivationAuthority(substituted, substitutedCandidate)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "ACTIVATION_BINDING_DRIFT" }] })
   })
 
+  it("binds activation to the fixed resident network provider and reviewed policy bytes", () => {
+    const value = authority()
+    expect(value.bindings.networkProvider).toMatchObject({
+      path: "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs",
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(value.bindings.networkPolicy).toMatchObject({
+      path: "config/execution-fabric/aegis-resident-network-boundary.json",
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(value.bindings.networkLauncher).toMatchObject({
+      path: "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs",
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(value.trustedMain.controlPlane.criticalPaths).toEqual(expect.arrayContaining([
+      value.bindings.networkProvider.path,
+      value.bindings.networkPolicy.path,
+      value.bindings.networkLauncher.path,
+    ]))
+
+    for (const binding of ["networkProvider", "networkPolicy", "networkLauncher"] as const) {
+      const drifted = authority()
+      drifted.bindings[binding].sha256 = "0".repeat(64)
+      expect(validateRemoteDevActivationAuthority(drifted, candidate())).toMatchObject({
+        status: "BLOCKED",
+        reasons: [{ code: "ACTIVATION_BINDING_DRIFT" }],
+      })
+    }
+  })
+
+  it("retains the exact network proof generation in the opaque authorization session", () => {
+    const source = fs.readFileSync(path.join(root, "scripts/execution-fabric/live/remote-dev-offload-activation.mjs"), "utf8")
+    expect(source).toContain("networkProofId: networkBoundary.proofId")
+    expect(source).toContain("networkEnforcementGenerationId: networkBoundary.enforcementGenerationId")
+    expect(source).toContain("networkControlGroupIdentity: networkBoundary.controlGroupIdentity")
+    expect(source).toContain("networkLauncherSha256: networkBoundary.launcherSha256")
+    expect(source).toContain("networkWorkerSha256: networkBoundary.workerSha256")
+    expect(source).toContain("networkLaunchAuthorityPublicKeySha256: networkBoundary.launchAuthorityPublicKeySha256")
+  })
+
+  it("evaluates the fixed network proof before creating any claim or lease provider", () => {
+    const source = fs.readFileSync(path.join(root, "scripts/execution-fabric/live/remote-dev-offload-activation.mjs"), "utf8")
+    const authorizeStart = source.indexOf("export async function authorizeRemoteDevActivation")
+    const networkGate = source.indexOf("await proveResidentAegisNetworkBoundary()", authorizeStart)
+    const ledgerGate = source.indexOf("createLedgerProviders()", authorizeStart)
+    expect(authorizeStart).toBeGreaterThanOrEqual(0)
+    expect(networkGate).toBeGreaterThan(authorizeStart)
+    expect(ledgerGate).toBeGreaterThan(networkGate)
+  })
+
   it("separates the trusted control-plane checkout from the pinned TerraFusion target base", () => {
     const value = authority()
     expect(value.trustedMain.controlPlane.repository).toBe("bsvalues/terragroq")

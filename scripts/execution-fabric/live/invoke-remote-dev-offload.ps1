@@ -8,6 +8,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Operation,
     [Parameter(Mandatory = $true)][int]$Attempt,
     [Parameter(Mandatory = $true)][string]$PreviousEvidenceSha256,
+    [Parameter(Mandatory = $true)][string]$LaunchTicketPath,
     [Parameter(Mandatory = $true)][string]$AegisKnownHostLine,
     [int]$SshTimeoutSeconds = 5400
 )
@@ -15,7 +16,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $trustedAegisFingerprint = 'SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo'
-$trustedWorkerSha256 = '0804de94642f936e3db4972f7c4fe6839446ecf21c196d282dffd82fae48c6cb'
+$trustedWorkerSha256 = '1eef474ddcd557267f9bcbe7e835774d419048ee12dec4b6a2a2f9111407011b'
 
 function Write-ResultAndExit {
     param([string]$Status, [string]$ReasonCode, [string]$Detail, [int]$ExitCode)
@@ -135,6 +136,9 @@ process.stdout.write(JSON.stringify({status:"READY",packet:result.packet,policyS
     $packet = $validated.packet
     if ($packet.operations -notcontains $Operation) { Write-ResultAndExit 'INVALID_INPUT' 'OPERATION_NOT_ALLOWED' 'operation is outside packet allowlist' 64 }
     if ($PreviousEvidenceSha256 -ne 'null' -and $PreviousEvidenceSha256 -notmatch '^[a-f0-9]{64}$') { Write-ResultAndExit 'INVALID_INPUT' 'EVIDENCE_CHAIN_INVALID' 'previous evidence digest is invalid' 64 }
+    $ticketFull = Resolve-InputFile $LaunchTicketPath 'signed launch ticket'
+    $ticketBytes = [IO.File]::ReadAllBytes($ticketFull)
+    if ($ticketBytes.Length -lt 2 -or $ticketBytes.Length -gt 65536) { Write-ResultAndExit 'INVALID_INPUT' 'SIGNED_LAUNCH_TICKET_INVALID' 'signed launch ticket size differs' 64 }
     $patchBytes = [IO.File]::ReadAllBytes($patchFull)
     if ((Get-Sha256Hex $patchBytes) -ne $packet.patch.sha256) { Write-ResultAndExit 'INVALID_INPUT' 'PATCH_BINDING_MISMATCH' 'patch digest differs from packet' 64 }
 
@@ -158,7 +162,8 @@ process.stdout.write(JSON.stringify({status:"READY",packet:result.packet,policyS
     $patchB64 = [Convert]::ToBase64String($patchBytes)
     $workerB64 = [Convert]::ToBase64String($workerBytes)
     $knownHostB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($AegisKnownHostLine))
-    $relayValues = @{ policy = $policyB64; packet = $packetB64; patch = $patchB64; worker = $workerB64; knownHost = $knownHostB64; operation = $Operation; attempt = $Attempt; previous = $PreviousEvidenceSha256 }
+    $ticketB64 = [Convert]::ToBase64String($ticketBytes)
+    $relayValues = @{ policy = $policyB64; packet = $packetB64; patch = $patchB64; worker = $workerB64; knownHost = $knownHostB64; ticket = $ticketB64; operation = $Operation; attempt = $Attempt; previous = $PreviousEvidenceSha256 }
     $relayInput = $relayValues | ConvertTo-Json -Compress
 
     $relayValidator = @'
@@ -171,7 +176,7 @@ try{relay=JSON.parse(fs.readFileSync(0,"utf8"));policy=JSON.parse(Buffer.from(re
 const operations=["PROVE_PREFLIGHT","CREATE_WORKSPACE","APPLY_RESERVED_PATCH","RESTORE_DOTNET","TEST_WORKFLOW_CONTRACT","TEST_DOTNET_INFORMATIONAL","BUILD_DOTNET_RELEASE","COMMIT_RESERVED_PATHS","PUSH_AUTHORIZED_BRANCH","PROVE_POST_MERGE","CLEAN_EXACT_WORKSPACE"];
 const paths=[".github/workflows/dotnet-test.yml",".github/workflows/terrafusion-ci.yml","tests/ci-terrafusion-unit-informational.test.ts","docs/brain/evidence/WO-TF-REMOTE-DEV-OFFLOAD-001-proof.md"];
 const limits={cpuThreads:12,memoryBytes:12884901888,scratchBytes:85899345920,timeoutSeconds:5400,maxAttempts:3};
-const policyDigest=hash(Buffer.from(jcs(policy),"utf8"));if(policyDigest!=="e4360705cee54327d2ca2aa003502d71c811f5a737cb853c3ccea32405518fd1")fail("POLICY_DIGEST_MISMATCH","canonical policy differs");
+const policyDigest=hash(Buffer.from(jcs(policy),"utf8"));if(policyDigest!=="1cb71dfb0774a93605387a1c224fb2a66ad7dfda023d546b6cab39447c3a1661")fail("POLICY_DIGEST_MISMATCH","canonical policy differs");
 exact(packet,["schemaVersion","runId","workOrderId","repository","baseRef","baseSha","branch","nodeId","workspace","transport","resourceLimits","operations","patch","authority","bindings"],"PACKET_FIELDS_INVALID");
 if(packet.schemaVersion!==1||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(packet.runId)||packet.workOrderId!=="WO-TF-REMOTE-DEV-OFFLOAD-001"||packet.repository!=="bsvalues/terrafusion_os_1.0"||packet.baseRef!=="refs/heads/main"||!/^[a-f0-9]{40}$/.test(packet.baseSha)||!/^codex\/wo-tf-remote-dev-offload-001-[a-z0-9-]+$/.test(packet.branch)||packet.nodeId!=="aegis"||packet.workspace!=="/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001")fail("IDENTITY_MISMATCH","immutable packet identity differs");
 exact(packet.transport,["controller","relay","worker"],"TRANSPORT_FIELDS_INVALID");if(jcs(packet.transport)!==jcs({controller:"omen",relay:"hermes",worker:"aegis"}))fail("TRANSPORT_MISMATCH","Hermes mediation is mandatory");
@@ -180,7 +185,7 @@ if(jcs(packet.operations)!==jcs(operations)||!operations.includes(relay.operatio
 exact(packet.patch,["sha256","generation","changedPaths"],"PATCH_FIELDS_INVALID");if(packet.patch.generation!==1||jcs(packet.patch.changedPaths)!==jcs(paths))fail("PATCH_PATHS_MISMATCH","reserved patch paths differ");if(hash(patch)!==packet.patch.sha256)fail("PATCH_DIGEST_MISMATCH","patch bytes differ");
 exact(packet.authority,["grantId","issuedAt","expiresAt","singleUse"],"AUTHORITY_FIELDS_INVALID");const issued=Date.parse(packet.authority.issuedAt),expires=Date.parse(packet.authority.expiresAt),now=Date.now();if(packet.authority.grantId!=="grant-remote-dev-offload-v1"||packet.authority.singleUse!==true||!Number.isFinite(issued)||!Number.isFinite(expires)||issued>=now||expires<=now||expires-issued>14400000)fail("AUTHORITY_INVALID","grant is invalid or expired");
 exact(packet.bindings,["policySha256","packetSha256"],"BINDING_FIELDS_INVALID");if(packet.bindings.policySha256!==policyDigest)fail("POLICY_DIGEST_MISMATCH","packet policy binding differs");const unsigned=structuredClone(packet);delete unsigned.bindings;const packetDigest=hash(Buffer.from(jcs(unsigned),"utf8"));if(packet.bindings.packetSha256!==packetDigest)fail("PACKET_DIGEST_MISMATCH","packet digest differs");
-if(!Number.isSafeInteger(relay.attempt)||relay.attempt<1||relay.attempt>3)fail("ATTEMPT_INVALID","attempt differs");if(relay.previous!=="null"&&!/^[a-f0-9]{64}$/.test(relay.previous))fail("EVIDENCE_CHAIN_INVALID","previous evidence digest differs");
+if(!Number.isSafeInteger(relay.attempt)||relay.attempt<1||relay.attempt>3)fail("ATTEMPT_INVALID","attempt differs");if(relay.previous!=="null"&&!/^[a-f0-9]{64}$/.test(relay.previous))fail("EVIDENCE_CHAIN_INVALID","previous evidence digest differs");if(typeof relay.ticket!=="string"||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(relay.ticket)||Buffer.from(relay.ticket,"base64").length>65536)fail("SIGNED_LAUNCH_TICKET_INVALID","signed launch ticket encoding differs");
 process.stdout.write(JSON.stringify({status:"READY",runId:packet.runId,policySha256:policyDigest,packetSha256:packetDigest,operationIndex:operations.indexOf(relay.operation)}));
 '@
     $validatorBytes = [Text.Encoding]::UTF8.GetBytes($relayValidator)
@@ -222,7 +227,7 @@ if($state.inFlightOperation){$state.terminalStatus='BLOCKED';$state.terminalReas
 $knownHosts=Join-Path $markerRoot ($packet.runId+'.known_hosts');[IO.File]::WriteAllText($knownHosts,$knownHost+[Environment]::NewLine,[Text.UTF8Encoding]::new($false))
 $state.inFlightOperation=$relay.operation;SaveState
 try{$ssh=@(Get-Command ssh.exe -CommandType Application -ErrorAction Stop)[0].Source}catch{Fail 'AEGIS_SSH_UNAVAILABLE' 'SSH is unavailable' 2};$psi=[Diagnostics.ProcessStartInfo]::new();$psi.FileName=$ssh;$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardInput=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
-$psi.Arguments='-o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="'+$knownHosts+'" aegis bash -s -- '+$relay.operation+' '+$relay.packet+' '+$relay.patch+' '+$attempt+' '+$relay.previous
+$psi.Arguments='-o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="'+$knownHosts+'" aegis /usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-network-launcher.mjs '+$relay.ticket+' '+$relay.operation+' '+$relay.packet+' '+$relay.patch+' '+$attempt+' '+$relay.previous
 $process=[Diagnostics.Process]::new();$process.StartInfo=$psi;if(-not$process.Start()){Fail 'AEGIS_START_FAILED' 'AEGIS process did not start'};$process.StandardInput.BaseStream.Write($workerBytes,0,$workerBytes.Length);$process.StandardInput.Close();$outTask=$process.StandardOutput.ReadToEndAsync();$errTask=$process.StandardError.ReadToEndAsync();if(-not$process.WaitForExit(([int]$packet.resourceLimits.timeoutSeconds)*1000)){try{$process.Kill()}catch{};$state.terminalStatus='BLOCKED';$state.terminalReason='AEGIS_TIMEOUT';SaveState;Fail 'AEGIS_TIMEOUT' 'AEGIS worker timed out'};$stdout=$outTask.GetAwaiter().GetResult();$stderr=$errTask.GetAwaiter().GetResult()
 if($process.ExitCode-ne0){
   $recoverable=$null;$workerLines=@($stdout-split"`r?`n"|Where-Object{$_.Trim()});if($process.ExitCode-eq2-and$workerLines.Count-eq1){try{$recoverable=$workerLines[0]|ConvertFrom-Json -Depth 40}catch{$recoverable=$null}}
