@@ -283,7 +283,7 @@ describe("Hermes-mediated remote development controller", () => {
   it("fails closed for timeout, Hermes authentication failure, downstream failure, and malformed worker output", () => {
     const timed = fixture(); const timedArgs = [...timed.args]; timedArgs[timedArgs.indexOf("-SshTimeoutSeconds") + 1] = "1"
     expect(run(timedArgs, { REMOTE_DEV_FAKE_SSH_DELAY_MS: "2500", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(timed.evidence) }).status).toBe(2)
-    const auth = fixture(); expect(run(auth.args, { REMOTE_DEV_FAKE_SSH_EXIT: "255", REMOTE_DEV_FAKE_SSH_ERROR: "Permission denied (publickey)." }).status).toBe(2)
+    const auth = fixture(); const authResult = run(auth.args, { REMOTE_DEV_FAKE_SSH_EXIT: "255", REMOTE_DEV_FAKE_SSH_ERROR: "Permission denied (publickey)." }); expect(authResult.status, `${authResult.stdout}\n${authResult.stderr}`).toBe(2)
     const downstream = fixture(); expect(run(downstream.args, { REMOTE_DEV_FAKE_SSH_EXIT: "2", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify({ status: "BLOCKED", reasonCode: "AEGIS_TIMEOUT" }) }).status).toBe(2)
     const malformed = fixture(); expect(run(malformed.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: "not-json" }).status).toBe(2)
   }, 15_000)
@@ -392,6 +392,54 @@ describe("Hermes-mediated remote development controller", () => {
     const runDirectory = path.join(value.evidenceRoot, value.packet.runId)
     expect(JSON.parse(fs.readFileSync(path.join(runDirectory, "10-clean_exact_workspace-1-recoverable-failure.json"), "utf8"))).toMatchObject(relayFailure)
     expect(fs.readdirSync(runDirectory).filter((name) => /^\d{2}-[a-z0-9_-]+-\d+\.json$/.test(name))).toHaveLength(0)
+  })
+
+  it("never ratchets the trusted cleanup HEAD across recoverable attempts", () => {
+    const value = fixture(); run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
+    const invocation = fs.readFileSync(fakeLog, "utf8").trim().split("\t"); const encoded = invocation.at(-1)!
+    const relayInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8")); const previous = "e".repeat(64)
+    relayInput.operation = "CLEAN_EXACT_WORKSPACE"; relayInput.attempt = 1; relayInput.previous = previous
+    const programData = path.join(value.directory, "cleanup-head-program-data"); const statePath = seedPostMergeState(programData, value, previous)
+    const innerLog = path.join(value.directory, "cleanup-head-inner.log"); const baseEnv = isolatedProgramDataEnv(programData, { PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: innerLog })
+    const firstFailure = recoverableCleanupFailure(value, previous)
+    expect(spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(relayInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_EXIT: "2", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(firstFailure) } }).status).toBe(2)
+    relayInput.attempt = 2
+    const changedHead = "f".repeat(40); const changed = recoverableCleanupFailure(value, previous, { attempt: 2, headSha: changedHead })
+    const second = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(relayInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_EXIT: "2", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(changed) } })
+    expect(second.status).toBe(2)
+    expect(JSON.parse(second.stdout)).toMatchObject({ reasonCode: "CLEANUP_RECOVERY_BINDING_MISMATCH" })
+    expect(JSON.parse(fs.readFileSync(statePath, "utf8"))).toMatchObject({ terminalStatus: "BLOCKED", terminalReason: "CLEANUP_RECOVERY_BINDING_MISMATCH", recoverableHeadSha: value.packet.baseSha, cleanupFailures: [{ headSha: value.packet.baseSha }] })
+  }, 20_000)
+
+  it("turns attempt three into cleanup recovery exhaustion and never dispatches attempt four", () => {
+    const value = fixture(); run(value.args, { REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) })
+    const invocation = fs.readFileSync(fakeLog, "utf8").trim().split("\t"); const encoded = invocation.at(-1)!
+    const relayInput = JSON.parse(fs.readFileSync(`${fakeLog}.stdin`, "utf8")); const previous = "e".repeat(64)
+    relayInput.operation = "CLEAN_EXACT_WORKSPACE"; relayInput.previous = previous
+    const programData = path.join(value.directory, "cleanup-exhausted-program-data"); const statePath = seedPostMergeState(programData, value, previous)
+    const innerLog = path.join(value.directory, "cleanup-exhausted-inner.log"); const baseEnv = isolatedProgramDataEnv(programData, { PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: innerLog })
+    for (const attempt of [1, 2, 3]) {
+      relayInput.attempt = attempt; const failure = recoverableCleanupFailure(value, previous, { attempt })
+      const result = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(relayInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_EXIT: "2", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(failure) } })
+      expect(result.status).toBe(2)
+      expect(JSON.parse(result.stdout)).toMatchObject({ reasonCode: attempt < 3 ? "CLEANUP_QUARANTINED_RECOVERABLE" : "CLEANUP_RECOVERY_EXHAUSTED", attempt })
+    }
+    expect(JSON.parse(fs.readFileSync(statePath, "utf8"))).toMatchObject({ terminalStatus: "BLOCKED", terminalReason: "CLEANUP_RECOVERY_EXHAUSTED", lastAttempt: 3, cleanupFailures: [{ attempt: 1 }, { attempt: 2 }, { attempt: 3 }] })
+    relayInput.attempt = 4
+    const fourth = spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", input: JSON.stringify(relayInput), env: { ...baseEnv, REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(value.evidence) } })
+    expect(fourth.status).not.toBe(0)
+    expect(fs.readFileSync(innerLog, "utf8").trim().split(/\r?\n/)).toHaveLength(3)
+  }, 30_000)
+
+  it("publishes exhaustion evidence without promising a fourth recoverable attempt", () => {
+    const value = fixture(); const args = [...value.args]; const previous = "e".repeat(64)
+    args[args.indexOf("-Operation") + 1] = "CLEAN_EXACT_WORKSPACE"; args[args.indexOf("-Attempt") + 1] = "3"; args[args.indexOf("-PreviousEvidenceSha256") + 1] = previous
+    const exhausted = { status: "BLOCKED", reasonCode: "CLEANUP_RECOVERY_EXHAUSTED", detail: "cleanup recovery attempt budget exhausted", runId: value.packet.runId, operation: "CLEAN_EXACT_WORKSPACE", attempt: 3, previousEvidenceSha256: previous, headSha: value.packet.baseSha, failureResultSha256: "f".repeat(64), causeCode: "CLEANUP_WORKSPACE_IN_USE" }
+    const result = run(args, { REMOTE_DEV_FAKE_SSH_EXIT: "2", REMOTE_DEV_FAKE_SSH_OUTPUT: JSON.stringify(exhausted) })
+    expect(result.status).toBe(2)
+    const runDirectory = path.join(value.evidenceRoot, value.packet.runId)
+    expect(fs.existsSync(path.join(runDirectory, "10-clean_exact_workspace-3-exhausted.json"))).toBe(true)
+    expect(fs.existsSync(path.join(runDirectory, "10-clean_exact_workspace-3-recoverable-failure.json"))).toBe(false)
   })
 
   it("rejects a different run, wrong attempt, wrong terminal reason, or non-clean recovery before AEGIS dispatch", () => {

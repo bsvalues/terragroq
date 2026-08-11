@@ -520,6 +520,13 @@ exit 0
     fs.writeFileSync(path.join(head.physicalWorkspace, ".williamos-post-merge-proven"), `${head.packet.runId}:${head.baseSha}\n`); fs.renameSync(head.physicalWorkspace, headQuarantine)
     execFileSync("git", ["commit", "--allow-empty", "-m", "synthetic head drift"], { cwd: path.join(headQuarantine, "repository"), stdio: "ignore" })
     expect(runWorker("CLEAN_EXACT_WORKSPACE", head, { attempt: 2, previous: "e".repeat(64) }).json).toMatchObject({ status: "CLEANUP_NOT_AUTHORIZED" })
+    expect(fs.existsSync(path.join(headQuarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
+
+    const headThird = fixture(); const headThirdQuarantine = path.join(path.dirname(headThird.physicalWorkspace), `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${headThird.packet.runId}`)
+    fs.writeFileSync(path.join(headThird.physicalWorkspace, ".williamos-post-merge-proven"), `${headThird.packet.runId}:${headThird.baseSha}\n`); fs.renameSync(headThird.physicalWorkspace, headThirdQuarantine)
+    execFileSync("git", ["commit", "--allow-empty", "-m", "synthetic third-attempt head drift"], { cwd: path.join(headThirdQuarantine, "repository"), stdio: "ignore" })
+    expect(runWorker("CLEAN_EXACT_WORKSPACE", headThird, { attempt: 3, previous: "e".repeat(64) }).json).toMatchObject({ status: "CLEANUP_NOT_AUTHORIZED" })
+    expect(fs.existsSync(path.join(headThirdQuarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
   }, 45_000)
 
   it("emits strict sub-second timestamps and rejects a non-increasing clock", () => {
