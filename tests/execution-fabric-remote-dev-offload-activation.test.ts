@@ -1,11 +1,15 @@
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 import { describe, expect, it } from "vitest"
 
 import {
   authorizeRemoteDevActivation,
+  inspectActivationCriticalWorkingFiles,
+  inspectControlPlaneTrustedCheckout,
   inspectRemoteDevActivationWindow,
+  inspectResidentIdentityBinding,
   inspectResidentNoSudoResult,
   settleRemoteDevActivationState,
   settleRemoteDevActivation,
@@ -25,7 +29,7 @@ function candidate() {
     issue: value.issue,
     repository: value.target.repository,
     baseRef: value.target.baseRef,
-    baseSha: value.trustedMain.minimumCommit,
+    baseSha: value.trustedMain.target.pinnedCommit,
     nodeId: value.target.nodeId,
     workspace: value.target.workspace,
     branch: value.target.branch,
@@ -112,6 +116,61 @@ describe("TerraFusion remote development one-run activation", () => {
     const substituted = authority(); substituted.run.runId = "0f8fad5b-d9cb-469f-a165-70867728950e"
     const substitutedCandidate = candidate(); substitutedCandidate.runId = substituted.run.runId
     expect(validateRemoteDevActivationAuthority(substituted, substitutedCandidate)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "ACTIVATION_BINDING_DRIFT" }] })
+  })
+
+  it("separates the trusted control-plane checkout from the pinned TerraFusion target base", () => {
+    const value = authority()
+    expect(value.trustedMain.controlPlane.repository).toBe("bsvalues/terragroq")
+    expect(value.trustedMain.target).toMatchObject({
+      repository: "bsvalues/terrafusion_os_1.0",
+      ref: "refs/heads/main",
+      pinnedCommit: candidate().baseSha,
+      freshRemoteEqualityOperation: "CREATE_WORKSPACE",
+    })
+    expect(inspectControlPlaneTrustedCheckout(value, candidate(), {
+      verified: true,
+      clean: true,
+      trusted_ref: "refs/heads/main",
+      head_commit: "b".repeat(40),
+    }, () => ({ status: 0 }))).toMatchObject({ status: "CONTROL_PLANE_TRUSTED_MAIN_VERIFIED", executionAuthorized: false })
+    const targetDrift = candidate(); targetDrift.baseSha = "c".repeat(40)
+    expect(validateRemoteDevActivationAuthority(value, targetDrift)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "TARGET_TRUSTED_MAIN_UNPROVEN" }] })
+  })
+
+  it("binds the live resident identity to the reviewed AEGIS machine id", () => {
+    const value = authority()
+    const reviewed = JSON.parse(fs.readFileSync(path.join(root, value.executionIdentity.reviewedIdentityPath), "utf8"))
+    const actual = { node_id: "aegis", hostname: "aegis", machine_id_sha256: reviewed.machine_id_sha256, agent_identity: "resident-aegis", provider_identity: "resident-aegis" }
+    expect(inspectResidentIdentityBinding(value, actual, reviewed)).toMatchObject({ status: "RESIDENT_IDENTITY_VERIFIED", executionAuthorized: false })
+    expect(inspectResidentIdentityBinding(value, { ...actual, machine_id_sha256: "0".repeat(64) }, reviewed)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "EXECUTION_IDENTITY_UNPROVEN" }] })
+  })
+
+  it("compares every activation-critical working file directly with trusted main bytes", () => {
+    const value = authority()
+    expect(value.trustedMain.controlPlane.criticalPaths).toEqual(expect.arrayContaining([
+      "config/execution-fabric/remote-dev-offload-v1-activation.json",
+      "scripts/execution-fabric/live/remote-dev-offload-activation.mjs",
+      "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
+      "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1",
+      "config/execution-fabric/aegis-resident-identity.json",
+    ]))
+    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "activation-trust-"))
+    try {
+      const trusted = new Map<string, Buffer>()
+      for (const relativePath of value.trustedMain.controlPlane.criticalPaths) {
+        const bytes = Buffer.from(`trusted:${relativePath}\n`)
+        trusted.set(relativePath, bytes)
+        const localPath = path.join(fixture, ...relativePath.split("/"))
+        fs.mkdirSync(path.dirname(localPath), { recursive: true })
+        fs.writeFileSync(localPath, bytes)
+      }
+      const runGit = (args: string[]) => trusted.get(String(args[1]).replace(/^refs\/heads\/main:/, ""))!
+      expect(inspectActivationCriticalWorkingFiles(value, { repositoryRoot: fixture, runGit })).toMatchObject({ status: "ACTIVATION_CRITICAL_FILES_VERIFIED", executionAuthorized: false })
+      fs.writeFileSync(path.join(fixture, ...value.trustedMain.controlPlane.criticalPaths[0].split("/")), "substituted\n")
+      expect(inspectActivationCriticalWorkingFiles(value, { repositoryRoot: fixture, runGit })).toMatchObject({ status: "BLOCKED", reasons: [{ code: "TRUSTED_MAIN_UNPROVEN" }] })
+    } finally {
+      fs.rmSync(fixture, { recursive: true, force: true })
+    }
   })
 
   it("fails closed through the actual two-argument authorization API on every platform", async () => {

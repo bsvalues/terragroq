@@ -1,5 +1,6 @@
 import crypto from "node:crypto"
 import fs from "node:fs"
+import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
@@ -46,6 +47,7 @@ function blocked(error) {
 const ROOT = new URL("../../../", import.meta.url)
 const REPOSITORY_ROOT = fileURLToPath(ROOT)
 const ACTIVATION_PATH = "config/execution-fabric/remote-dev-offload-v1-activation.json"
+const IDENTITY_PATH = "config/execution-fabric/aegis-resident-identity.json"
 const LIVE_SESSIONS = new WeakMap()
 const ARTIFACT_PATHS = {
   worker: "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
@@ -88,6 +90,18 @@ const EXPECTED_ENDPOINTS = [
   { host: "api.nuget.org", port: 443, operations: ["dotnet-restore"] },
   { host: "globalcdn.nuget.org", port: 443, operations: ["dotnet-restore"] },
 ]
+const ACTIVATION_CRITICAL_PATHS = [
+  ACTIVATION_PATH,
+  "scripts/execution-fabric/live/remote-dev-offload-activation.mjs",
+  ARTIFACT_PATHS.worker,
+  ARTIFACT_PATHS.controller,
+  ARTIFACT_PATHS.contract,
+  ARTIFACT_PATHS.policy,
+  ARTIFACT_PATHS.inactiveScope,
+  "scripts/execution-fabric/canonical-json.mjs",
+  "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs",
+  IDENTITY_PATH,
+]
 
 function read(relativePath) { return fs.readFileSync(new URL(relativePath, ROOT)) }
 function jcsDigest(value) { return crypto.createHash("sha256").update(canonicalizeJcs(value)).digest("hex") }
@@ -126,10 +140,15 @@ function validateAuthority(authority) {
   exactKeys(authority.target, ["repository", "baseRef", "nodeId", "workspace", "branch"], "target")
   const target = { repository: "bsvalues/terrafusion_os_1.0", baseRef: "refs/heads/main", nodeId: "aegis", workspace: "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001", branch: "codex/wo-tf-remote-dev-offload-001-734" }
   if (!same(authority.target, target)) fail("ACTIVATION_SCOPE_MISMATCH", "target differs")
-  exactKeys(authority.trustedMain, ["ref", "minimumCommit", "ancestryRequired", "cleanExactHeadRequired", "proofProvider"], "trustedMain")
-  if (authority.trustedMain.ref !== "refs/heads/main" || !SHA40.test(authority.trustedMain.minimumCommit)
-    || authority.trustedMain.ancestryRequired !== true || authority.trustedMain.cleanExactHeadRequired !== true
-    || authority.trustedMain.proofProvider !== createTrustedProofProviders.name) fail("TRUSTED_MAIN_UNPROVEN", "trusted-main requirements differ")
+  exactKeys(authority.trustedMain, ["controlPlane", "target"], "trustedMain")
+  exactKeys(authority.trustedMain.controlPlane, ["repository", "ref", "minimumCommit", "ancestryRequired", "cleanExactHeadRequired", "proofProvider", "workingFilesProof", "criticalPaths"], "trustedMain.controlPlane")
+  if (authority.trustedMain.controlPlane.repository !== "bsvalues/terragroq" || authority.trustedMain.controlPlane.ref !== "refs/heads/main"
+    || !SHA40.test(authority.trustedMain.controlPlane.minimumCommit) || authority.trustedMain.controlPlane.ancestryRequired !== true
+    || authority.trustedMain.controlPlane.cleanExactHeadRequired !== true || authority.trustedMain.controlPlane.proofProvider !== createTrustedProofProviders.name
+    || authority.trustedMain.controlPlane.workingFilesProof !== inspectActivationCriticalWorkingFiles.name
+    || !same(authority.trustedMain.controlPlane.criticalPaths, ACTIVATION_CRITICAL_PATHS)) fail("TRUSTED_MAIN_UNPROVEN", "control-plane trusted-main requirements differ")
+  exactKeys(authority.trustedMain.target, ["repository", "ref", "pinnedCommit", "freshRemoteEqualityRequired", "freshRemoteEqualityOperation"], "trustedMain.target")
+  if (!same(authority.trustedMain.target, { repository: authority.target.repository, ref: authority.target.baseRef, pinnedCommit: "ffd2fa35f5152de2b95e7f63b220050d18193d7a", freshRemoteEqualityRequired: true, freshRemoteEqualityOperation: "CREATE_WORKSPACE" })) fail("TARGET_TRUSTED_MAIN_UNPROVEN", "TerraFusion target trusted-main requirements differ")
 
   exactKeys(authority.bindings, Object.keys(ARTIFACT_PATHS), "bindings")
   for (const [name, relativePath] of Object.entries(ARTIFACT_PATHS)) {
@@ -138,8 +157,8 @@ function validateAuthority(authority) {
       || authority.bindings[name].sha256 !== normalizedDigest(read(relativePath))) fail("ACTIVATION_BINDING_DRIFT", `${name} bytes differ from authority`)
   }
 
-  exactKeys(authority.executionIdentity, ["account", "privilege", "identityProvider", "noSudoProofRequired"], "executionIdentity")
-  if (!same(authority.executionIdentity, { account: "williamos-fabric", privilege: "non-root-no-sudo", identityProvider: trustedResidentIdentity.name, noSudoProofRequired: true })) fail("ACTIVATION_SCOPE_MISMATCH", "execution identity differs")
+  exactKeys(authority.executionIdentity, ["account", "privilege", "identityProvider", "reviewedIdentityPath", "machineIdSha256", "noSudoProofRequired"], "executionIdentity")
+  if (!same(authority.executionIdentity, { account: "williamos-fabric", privilege: "non-root-no-sudo", identityProvider: trustedResidentIdentity.name, reviewedIdentityPath: IDENTITY_PATH, machineIdSha256: "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b", noSudoProofRequired: true })) fail("ACTIVATION_SCOPE_MISMATCH", "execution identity differs")
   if (!same(authority.operations, EXPECTED_OPERATIONS) || !same(authority.resources, EXPECTED_RESOURCES)) fail("ACTIVATION_SCOPE_MISMATCH", "operations or resources differ")
   exactKeys(authority.network, ["defaultDeny", "atlasAllowed", "enforcementProofRequired", "endpoints"], "network")
   if (!same(authority.network, { defaultDeny: true, atlasAllowed: false, enforcementProofRequired: true, endpoints: EXPECTED_ENDPOINTS })) fail("ACTIVATION_SCOPE_MISMATCH", "network exception differs")
@@ -151,7 +170,7 @@ function validateAuthority(authority) {
 function validateCandidate(authority, candidate) {
   exactKeys(candidate, ["runId", "workOrderId", "issue", "repository", "baseRef", "baseSha", "nodeId", "workspace", "branch", "operations", "resources", "network", "executionIdentity"], "candidate")
   if (candidate.runId !== authority.run.runId) fail("ACTIVATION_RUN_MISMATCH", "candidate run differs")
-  if (!SHA40.test(candidate.baseSha)) fail("TRUSTED_MAIN_UNPROVEN", "candidate base is not a commit")
+  if (!SHA40.test(candidate.baseSha) || candidate.baseSha !== authority.trustedMain.target.pinnedCommit) fail("TARGET_TRUSTED_MAIN_UNPROVEN", "candidate TerraFusion base is not the reviewed target commit")
   const expected = {
     runId: authority.run.runId,
     workOrderId: authority.workOrderId,
@@ -220,10 +239,8 @@ function proveNoSudoCapability() {
   if (inspected.status !== "NO_SUDO_VERIFIED") fail("EXECUTION_IDENTITY_UNPROVEN", inspected.reasons?.[0]?.detail ?? "no-sudo capability could not be proven")
 }
 
-function proveMinimumTrustedMain(authority, candidate, checkout) {
-  if (checkout?.verified !== true || checkout?.clean !== true || checkout?.trusted_ref !== authority.trustedMain.ref
-    || checkout?.head_commit !== candidate.baseSha) fail("TRUSTED_MAIN_UNPROVEN", "canonical checkout proof differs")
-  const ancestry = spawnSync("/usr/bin/git", ["merge-base", "--is-ancestor", authority.trustedMain.minimumCommit, candidate.baseSha], {
+function runControlPlaneAncestry(minimumCommit, headCommit) {
+  return spawnSync("/usr/bin/git", ["merge-base", "--is-ancestor", minimumCommit, headCommit], {
     cwd: REPOSITORY_ROOT,
     encoding: "utf8",
     shell: false,
@@ -231,7 +248,75 @@ function proveMinimumTrustedMain(authority, candidate, checkout) {
     timeout: 5000,
     env: { HOME: "/nonexistent", PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
   })
-  if (ancestry.status !== 0) fail("TRUSTED_MAIN_UNPROVEN", "minimum trusted-main ancestry is unproven")
+}
+
+export function inspectControlPlaneTrustedCheckout(authority, candidate, checkout, runAncestry = runControlPlaneAncestry) {
+  try {
+    const controlPlane = authority?.trustedMain?.controlPlane
+    const target = authority?.trustedMain?.target
+    if (!controlPlane || !target || candidate?.baseSha !== target.pinnedCommit) fail("TARGET_TRUSTED_MAIN_UNPROVEN", "TerraFusion target base differs from the reviewed target commit")
+    if (checkout?.verified !== true || checkout?.clean !== true || checkout?.trusted_ref !== controlPlane.ref
+      || !SHA40.test(checkout?.head_commit ?? "")) fail("TRUSTED_MAIN_UNPROVEN", "canonical control-plane checkout proof differs")
+    const ancestry = runAncestry(controlPlane.minimumCommit, checkout.head_commit)
+    if (ancestry?.status !== 0) fail("TRUSTED_MAIN_UNPROVEN", "minimum control-plane trusted-main ancestry is unproven")
+    return { status: "CONTROL_PLANE_TRUSTED_MAIN_VERIFIED", executionAuthorized: false, headCommit: checkout.head_commit, targetCommit: target.pinnedCommit }
+  } catch (error) { return blocked(error) }
+}
+
+export function inspectResidentIdentityBinding(authority, actual, reviewed) {
+  try {
+    exactKeys(reviewed, ["schema_version", "node_id", "hostname", "machine_id_sha256", "machine_id_source", "network_address_is_identity", "status"], "reviewed identity")
+    exactKeys(actual, ["node_id", "hostname", "machine_id_sha256", "agent_identity", "provider_identity"], "resident identity")
+    if (reviewed.schema_version !== "0.1-aegis-resident-identity" || reviewed.node_id !== "aegis" || reviewed.hostname !== "aegis"
+      || reviewed.machine_id_source !== "/etc/machine-id" || reviewed.network_address_is_identity !== false
+      || reviewed.status !== "REVIEWED_IDENTITY_NOT_AUTHORITY" || !SHA256.test(reviewed.machine_id_sha256)
+      || authority?.executionIdentity?.reviewedIdentityPath !== IDENTITY_PATH
+      || authority?.executionIdentity?.machineIdSha256 !== reviewed.machine_id_sha256
+      || actual.node_id !== reviewed.node_id || actual.hostname !== reviewed.hostname
+      || actual.machine_id_sha256 !== reviewed.machine_id_sha256
+      || actual.agent_identity !== "resident-aegis" || actual.provider_identity !== "resident-aegis") {
+      fail("EXECUTION_IDENTITY_UNPROVEN", "resident AEGIS identity differs from the reviewed machine binding")
+    }
+    return { status: "RESIDENT_IDENTITY_VERIFIED", executionAuthorized: false, nodeId: actual.node_id, machineIdSha256: actual.machine_id_sha256 }
+  } catch (error) { return blocked(error) }
+}
+
+function defaultReadTrustedMainFile(args) {
+  const result = spawnSync("/usr/bin/git", args, {
+    cwd: REPOSITORY_ROOT,
+    encoding: null,
+    shell: false,
+    windowsHide: true,
+    timeout: 5000,
+    maxBuffer: 4 * 1024 * 1024,
+    env: { HOME: "/nonexistent", PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+  })
+  if (result.status !== 0) fail("TRUSTED_MAIN_UNPROVEN", "trusted control-plane file is unavailable from main")
+  return Buffer.from(result.stdout ?? [])
+}
+
+export function inspectActivationCriticalWorkingFiles(authority, { repositoryRoot = REPOSITORY_ROOT, runGit = defaultReadTrustedMainFile } = {}) {
+  try {
+    const controlPlane = authority?.trustedMain?.controlPlane
+    if (!controlPlane || controlPlane.ref !== "refs/heads/main" || !same(controlPlane.criticalPaths, ACTIVATION_CRITICAL_PATHS)) fail("TRUSTED_MAIN_UNPROVEN", "activation-critical path set differs")
+    const root = fs.realpathSync(repositoryRoot)
+    for (const relativePath of ACTIVATION_CRITICAL_PATHS) {
+      const lexical = path.join(root, ...relativePath.split("/"))
+      const relative = path.relative(root, lexical)
+      if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) fail("TRUSTED_MAIN_UNPROVEN", "activation-critical path escapes the repository")
+      let cursor = root
+      for (const segment of relativePath.split("/")) {
+        cursor = path.join(cursor, segment)
+        if (fs.lstatSync(cursor).isSymbolicLink()) fail("TRUSTED_MAIN_UNPROVEN", `${relativePath} must not contain symbolic links`)
+      }
+      const real = fs.realpathSync(lexical)
+      const stats = fs.statSync(real)
+      if (!stats.isFile() || stats.nlink !== 1) fail("TRUSTED_MAIN_UNPROVEN", `${relativePath} is not a single-link regular file`)
+      const trusted = Buffer.from(runGit(["show", `${controlPlane.ref}:${relativePath}`]))
+      if (!trusted.equals(fs.readFileSync(real))) fail("TRUSTED_MAIN_UNPROVEN", `${relativePath} differs from trusted main`)
+    }
+    return { status: "ACTIVATION_CRITICAL_FILES_VERIFIED", executionAuthorized: false, pathCount: ACTIVATION_CRITICAL_PATHS.length }
+  } catch (error) { return blocked(error) }
 }
 
 function proveFixedNetworkBoundary() {
@@ -262,11 +347,17 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
     if (window.status !== "WINDOW_ACTIVE") fail(window.reasons?.[0]?.code ?? "ACTIVATION_TIME_INVALID", window.reasons?.[0]?.detail ?? "activation window is unavailable")
     let identity
     try { identity = trustedResidentIdentity() } catch { fail("EXECUTION_IDENTITY_UNPROVEN", "fixed resident identity proof failed") }
-    if (identity?.node_id !== "aegis" || identity?.hostname !== "aegis") fail("EXECUTION_IDENTITY_UNPROVEN", "fixed resident identity differs")
+    let reviewedIdentity
+    try { reviewedIdentity = JSON.parse(read(IDENTITY_PATH)) } catch { fail("EXECUTION_IDENTITY_UNPROVEN", "reviewed resident identity is unavailable") }
+    const identityBinding = inspectResidentIdentityBinding(authority, identity, reviewedIdentity)
+    if (identityBinding.status !== "RESIDENT_IDENTITY_VERIFIED") fail("EXECUTION_IDENTITY_UNPROVEN", identityBinding.reasons?.[0]?.detail ?? "fixed resident identity differs")
     proveNoSudoCapability()
     let checkout
     try { checkout = createTrustedProofProviders().proveTrustedCheckout() } catch { fail("TRUSTED_MAIN_UNPROVEN", "fixed trusted-main provider failed") }
-    proveMinimumTrustedMain(authority, candidate, checkout)
+    const controlPlane = inspectControlPlaneTrustedCheckout(authority, candidate, checkout)
+    if (controlPlane.status !== "CONTROL_PLANE_TRUSTED_MAIN_VERIFIED") fail(controlPlane.reasons?.[0]?.code ?? "TRUSTED_MAIN_UNPROVEN", controlPlane.reasons?.[0]?.detail ?? "control-plane trusted main is unproven")
+    const criticalFiles = inspectActivationCriticalWorkingFiles(authority)
+    if (criticalFiles.status !== "ACTIVATION_CRITICAL_FILES_VERIFIED") fail("TRUSTED_MAIN_UNPROVEN", criticalFiles.reasons?.[0]?.detail ?? "activation-critical working files are unproven")
     proveFixedNetworkBoundary()
 
     // This code is unreachable until the explicit fixed network provider above is reviewed.

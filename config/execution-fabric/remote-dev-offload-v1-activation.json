@@ -26,11 +26,34 @@
     "branch": "codex/wo-tf-remote-dev-offload-001-734"
   },
   "trustedMain": {
-    "ref": "refs/heads/main",
-    "minimumCommit": "1611f23061398de6159c97ce1f78c9c79f8dd31d",
-    "ancestryRequired": true,
-    "cleanExactHeadRequired": true,
-    "proofProvider": "createTrustedProofProviders"
+    "controlPlane": {
+      "repository": "bsvalues/terragroq",
+      "ref": "refs/heads/main",
+      "minimumCommit": "1611f23061398de6159c97ce1f78c9c79f8dd31d",
+      "ancestryRequired": true,
+      "cleanExactHeadRequired": true,
+      "proofProvider": "createTrustedProofProviders",
+      "workingFilesProof": "inspectActivationCriticalWorkingFiles",
+      "criticalPaths": [
+        "config/execution-fabric/remote-dev-offload-v1-activation.json",
+        "scripts/execution-fabric/live/remote-dev-offload-activation.mjs",
+        "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
+        "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1",
+        "scripts/execution-fabric/live/remote-dev-offload-contract.mjs",
+        "config/execution-fabric/remote-dev-offload-v1.policy.json",
+        "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json",
+        "scripts/execution-fabric/canonical-json.mjs",
+        "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs",
+        "config/execution-fabric/aegis-resident-identity.json"
+      ]
+    },
+    "target": {
+      "repository": "bsvalues/terrafusion_os_1.0",
+      "ref": "refs/heads/main",
+      "pinnedCommit": "ffd2fa35f5152de2b95e7f63b220050d18193d7a",
+      "freshRemoteEqualityRequired": true,
+      "freshRemoteEqualityOperation": "CREATE_WORKSPACE"
+    }
   },
   "bindings": {
     "worker": {
@@ -58,6 +81,8 @@
     "account": "williamos-fabric",
     "privilege": "non-root-no-sudo",
     "identityProvider": "trustedResidentIdentity",
+    "reviewedIdentityPath": "config/execution-fabric/aegis-resident-identity.json",
+    "machineIdSha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b",
     "noSudoProofRequired": true
   },
   "operations": [
