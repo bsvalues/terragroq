@@ -4,7 +4,7 @@ umask 077
 
 readonly WORK_ORDER_ID="WO-TF-REMOTE-DEV-OFFLOAD-001"
 readonly REPOSITORY="bsvalues/terrafusion_os_1.0"
-readonly REMOTE_URL="git@github.com:bsvalues/terrafusion_os_1.0.git"
+readonly REMOTE_URL="ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git"
 readonly LOGICAL_WORKSPACE="/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001"
 readonly OWNER_MARKER=".williamos-remote-dev-owner.json"
 readonly MERGE_MARKER=".williamos-post-merge-proven"
@@ -104,8 +104,14 @@ fi
 if [[ -n "$WORKER_ROOT" && -d "$WORKER_ROOT/bin" ]]; then
   export PATH="$WORKER_ROOT/bin:$PATH"
 fi
-EXECUTION_ACCOUNT="$(timeout 5 id -un)" || die_input "EXECUTION_IDENTITY_MISMATCH" "execution account is unavailable"
+IDENTITY_BINARY="/usr/bin/id"
+if [[ -n "$WORKER_ROOT" ]]; then IDENTITY_BINARY="$WORKER_ROOT/bin/id"; fi
+[[ -f "$IDENTITY_BINARY" && ! -L "$IDENTITY_BINARY" && -x "$IDENTITY_BINARY" ]] || die_input "EXECUTION_IDENTITY_MISMATCH" "trusted identity binary is unavailable"
+readonly IDENTITY_BINARY
+EXECUTION_ACCOUNT="$(timeout 5 "$IDENTITY_BINARY" -un)" || die_input "EXECUTION_IDENTITY_MISMATCH" "execution account is unavailable"
+EXECUTION_UID="$(timeout 5 "$IDENTITY_BINARY" -u)" || die_input "EXECUTION_IDENTITY_MISMATCH" "numeric execution identity is unavailable"
 [[ "$EXECUTION_ACCOUNT" == "williamos-fabric" ]] || die_input "EXECUTION_IDENTITY_MISMATCH" "dedicated AEGIS execution account is required"
+[[ "$EXECUTION_UID" =~ ^[0-9]+$ ]] && (( EXECUTION_UID > 0 )) || die_input "EXECUTION_IDENTITY_MISMATCH" "dedicated AEGIS execution account must be non-root"
 PHYSICAL_WORKSPACE="${WORKER_ROOT}${LOGICAL_WORKSPACE}"
 PHYSICAL_PARENT="${WORKER_ROOT}/srv/william/workspaces"
 TRUSTED_PARENT="${WORKER_ROOT}/srv/william"
@@ -133,7 +139,7 @@ validate_trusted_parent() {
   canonical="$(timeout 5 realpath -- "$TRUSTED_PARENT")" || die_input "PATH_CONFINEMENT_FAILED" "trusted parent cannot be resolved"
   [[ "$canonical" == "$TRUSTED_PARENT" ]] || die_input "PATH_CONFINEMENT_FAILED" "trusted parent identity differs"
   owner="$(timeout 5 stat -c %u -- "$TRUSTED_PARENT")" || die_input "PATH_CONFINEMENT_FAILED" "trusted parent ownership is unavailable"
-  current="$(timeout 5 id -u)" || die_input "PATH_CONFINEMENT_FAILED" "worker identity is unavailable"
+  current="$(timeout 5 "$IDENTITY_BINARY" -u)" || die_input "PATH_CONFINEMENT_FAILED" "worker identity is unavailable"
   [[ "$owner" == "$current" ]] || die_input "PATH_CONFINEMENT_FAILED" "trusted parent is not worker-owned"
   [[ -d "$PHYSICAL_PARENT" && ! -L "$PHYSICAL_PARENT" ]] || die_input "PATH_CONFINEMENT_FAILED" "workspace parent is unavailable"
   canonical="$(timeout 5 realpath -- "$PHYSICAL_PARENT")" || die_input "PATH_CONFINEMENT_FAILED" "workspace parent cannot be resolved"
@@ -161,7 +167,7 @@ enumerate_quarantine_namespace() {
   canonical="$(timeout 5 realpath -- "$entry")" || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine path is inaccessible"
   [[ "$canonical" == "$entry" ]] || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine canonical identity differs"
   owner="$(timeout 5 stat -c %u -- "$entry")" || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine owner is inaccessible"
-  current="$(timeout 5 id -u)" || die_block "QUARANTINE_NAMESPACE_INVALID" "worker identity is unavailable"
+  current="$(timeout 5 "$IDENTITY_BINARY" -u)" || die_block "QUARANTINE_NAMESPACE_INVALID" "worker identity is unavailable"
   [[ "$owner" == "$current" ]] || die_block "QUARANTINE_NAMESPACE_INVALID" "quarantine is not worker-owned"
   QUARANTINE_FOUND="$entry"
 }
@@ -290,7 +296,7 @@ validate_scratch_dir() {
   canonical="$(timeout 5 realpath -- "$SCRATCH_DIR")" || die_block "SCRATCH_CONFINEMENT_FAILED" "scratch cannot be resolved"
   [[ "$canonical" == "$SCRATCH_DIR" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "scratch identity differs"
   owner="$(timeout 5 stat -c %u -- "$SCRATCH_DIR")" || die_block "SCRATCH_CONFINEMENT_FAILED" "scratch ownership is unavailable"
-  current="$(timeout 5 id -u)" || die_block "SCRATCH_CONFINEMENT_FAILED" "worker identity is unavailable"
+  current="$(timeout 5 "$IDENTITY_BINARY" -u)" || die_block "SCRATCH_CONFINEMENT_FAILED" "worker identity is unavailable"
   [[ "$owner" == "$current" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "scratch is not worker-owned"
 }
 
@@ -299,7 +305,7 @@ prepare_operation_scratch() {
   RESULTS_ROOT="$SCRATCH_DIR/results"
   if [[ -e "$RESULTS_ROOT" || -L "$RESULTS_ROOT" ]]; then
     [[ -d "$RESULTS_ROOT" && ! -L "$RESULTS_ROOT" && "$(timeout 5 realpath -- "$RESULTS_ROOT")" == "$RESULTS_ROOT" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "operation results root is unsafe"
-    [[ "$(timeout 5 stat -c %u -- "$RESULTS_ROOT")" == "$(timeout 5 id -u)" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "operation results root is not worker-owned"
+    [[ "$(timeout 5 stat -c %u -- "$RESULTS_ROOT")" == "$(timeout 5 "$IDENTITY_BINARY" -u)" ]] || die_block "SCRATCH_CONFINEMENT_FAILED" "operation results root is not worker-owned"
   else
     timeout 10 mkdir -m 0700 -- "$RESULTS_ROOT" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create bounded operation results root"
   fi
@@ -352,7 +358,7 @@ protected_target_matches() {
 assert_path_not_in_use() {
   local protected_path="$1" current_uid proc_dirs scan_exit proc_dir proc_uid same_identity link target link_exit state fd_paths fd_exit fd_path deadline process_count=0 fd_count
   deadline=$((SECONDS + 15))
-  current_uid="$(timeout 5 id -u)" || die_block "CLEANUP_PROCESS_SCAN_FAILED" "worker identity is unavailable for process scan"
+  current_uid="$(timeout 5 "$IDENTITY_BINARY" -u)" || die_block "CLEANUP_PROCESS_SCAN_FAILED" "worker identity is unavailable for process scan"
   set +e
   proc_dirs="$(timeout 10 find /proc -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' -print 2>/dev/null | head -n 4097)"
   scan_exit=$?
@@ -598,13 +604,13 @@ case "$OPERATION" in
     [[ ! -e "$PHYSICAL_WORKSPACE" && ! -L "$PHYSICAL_WORKSPACE" ]] || die_block "WORKSPACE_NOT_ABSENT" "exact proof workspace must be absent before acquisition"
     if [[ -e "$PHYSICAL_PARENT/.remote-dev-offload.lock" || -L "$PHYSICAL_PARENT/.remote-dev-offload.lock" ]]; then
       [[ -f "$PHYSICAL_PARENT/.remote-dev-offload.lock" && ! -L "$PHYSICAL_PARENT/.remote-dev-offload.lock" ]] || die_block "PATH_CONFINEMENT_FAILED" "lifecycle lock path is unsafe"
-      [[ "$(timeout 5 stat -c %u -- "$PHYSICAL_PARENT/.remote-dev-offload.lock")" == "$(timeout 5 id -u)" ]] || die_block "PATH_CONFINEMENT_FAILED" "lifecycle lock is not worker-owned"
+      [[ "$(timeout 5 stat -c %u -- "$PHYSICAL_PARENT/.remote-dev-offload.lock")" == "$(timeout 5 "$IDENTITY_BINARY" -u)" ]] || die_block "PATH_CONFINEMENT_FAILED" "lifecycle lock is not worker-owned"
     fi
     probe_containment
     prove_project_quota
     host_name="$(timeout 5 hostname | tr '[:upper:]' '[:lower:]')" || die_block "PREFLIGHT_IDENTITY_FAILED" "hostname is unavailable"
     [[ "$host_name" == "aegis" ]] || die_block "PREFLIGHT_IDENTITY_FAILED" "worker hostname is not aegis"
-    user_name="$(timeout 5 id -un)" || die_block "PREFLIGHT_IDENTITY_FAILED" "worker user is unavailable"
+    user_name="$(timeout 5 "$IDENTITY_BINARY" -un)" || die_block "PREFLIGHT_IDENTITY_FAILED" "worker user is unavailable"
     [[ "$user_name" == "williamos-fabric" ]] || die_block "PREFLIGHT_IDENTITY_FAILED" "worker user is not williamos-fabric"
     timeout 10 git --version >/dev/null 2>&1 || die_block "PREFLIGHT_TOOLCHAIN_FAILED" "Git is unavailable"
     dotnet_version="$(timeout 10 dotnet --version)" || die_block "PREFLIGHT_TOOLCHAIN_FAILED" ".NET is unavailable"

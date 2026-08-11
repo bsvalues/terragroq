@@ -43,6 +43,7 @@ function scope() {
       account: "williamos-fabric",
       privilege: "non-root-no-sudo",
       required: true,
+      verified: false,
       provider: "trustedResidentIdentity",
     },
     trustedMain: {
@@ -89,7 +90,7 @@ function scope() {
         defaultDeny: true,
         atlasAllowed: false,
         endpoints: [
-          { host: "github.com", port: 443, operations: ["git-fetch", "git-push"] },
+          { host: "ssh.github.com", port: 443, operations: ["git-fetch", "git-push"] },
           { host: "api.github.com", port: 443, operations: ["github-pr"] },
           { host: "api.nuget.org", port: 443, operations: ["dotnet-restore"] },
           { host: "globalcdn.nuget.org", port: 443, operations: ["dotnet-restore"] },
@@ -98,6 +99,8 @@ function scope() {
     },
     futureActivationRequirements: {
       dedicatedExecutionIdentity: true,
+      canonicalIdentityProviderEvidence: true,
+      noSudoCapabilityEvidence: true,
       trustedMainAncestry: true,
       durableSingleUseClaim: true,
       nodeExclusiveLease: true,
@@ -105,6 +108,7 @@ function scope() {
       replayRejectionEvidence: true,
       ledgerProvider: "createLedgerProviders",
       sameRunAndScopeBinding: true,
+      networkDefaultDenyEvidence: true,
     },
     scheduler: { state: "disabled", standingAegisAuthority: false, autonomousDispatch: false },
   }
@@ -164,12 +168,20 @@ describe("remote development trusted-main reconciliation", () => {
     expect(reconcile(policy(), value)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "EXECUTION_IDENTITY_MISMATCH" }] })
   })
 
+  it("keeps identity proof explicitly unverified until the future activation gate", () => {
+    const value = scope(); value.executionIdentity.verified = true
+    expect(reconcile(policy(), value)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "EXECUTION_IDENTITY_MISMATCH" }] })
+  })
+
   it.each([
     ["trusted-main ancestry", "trustedMainAncestry"],
+    ["canonical identity provider evidence", "canonicalIdentityProviderEvidence"],
+    ["no-sudo capability evidence", "noSudoCapabilityEvidence"],
     ["durable claim", "durableSingleUseClaim"],
     ["exclusive lease", "nodeExclusiveLease"],
     ["durable release", "durableLeaseRelease"],
     ["replay evidence", "replayRejectionEvidence"],
+    ["network default-deny evidence", "networkDefaultDenyEvidence"],
   ])("rejects missing %s activation evidence", (_label, field) => {
     const value = scope(); (value.futureActivationRequirements as any)[field] = false
     expect(reconcile(policy(), value)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "FUTURE_ACTIVATION_EVIDENCE_INCOMPLETE" }] })

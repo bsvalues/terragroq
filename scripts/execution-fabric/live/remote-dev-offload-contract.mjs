@@ -77,7 +77,7 @@ export function validateRemoteDevTrustBaseline(policy, scope, artifacts) {
   try {
     object(policy, "policy"); object(scope, "trust scope")
     exactTrustKeys(scope, ["schemaVersion", "scopeId", "workOrderId", "templateId", "selectedNodeId", "status", "executionAuthorized", "activationAllowed", "executionIdentity", "trustedMain", "authoritySeparation", "ownerAuthorizedException", "futureActivationRequirements", "scheduler"], "trust scope")
-    exactTrustKeys(scope.executionIdentity, ["account", "privilege", "required", "provider"], "executionIdentity")
+    exactTrustKeys(scope.executionIdentity, ["account", "privilege", "required", "verified", "provider"], "executionIdentity")
     exactTrustKeys(scope.trustedMain, ["ref", "checkoutState", "ancestryRequired", "proofProvider", "bindings"], "trustedMain")
     exactTrustKeys(scope.authoritySeparation, ["closedCiTemplate", "consumedHashProof"], "authoritySeparation")
     exactTrustKeys(scope.authoritySeparation.closedCiTemplate, ["contractId", "templateId", "profileId", "contractStatus", "profileStatus"], "closedCiTemplate")
@@ -85,7 +85,7 @@ export function validateRemoteDevTrustBaseline(policy, scope, artifacts) {
     exactTrustKeys(scope.ownerAuthorizedException, ["canonicalProfileEquivalent", "reason", "resources", "network"], "ownerAuthorizedException")
     exactTrustKeys(scope.ownerAuthorizedException.resources, ["cpuThreads", "memoryBytes", "scratchBytes", "timeoutSeconds", "maxAttempts"], "ownerAuthorizedException.resources")
     exactTrustKeys(scope.ownerAuthorizedException.network, ["defaultDeny", "atlasAllowed", "endpoints"], "ownerAuthorizedException.network")
-    exactTrustKeys(scope.futureActivationRequirements, ["dedicatedExecutionIdentity", "trustedMainAncestry", "durableSingleUseClaim", "nodeExclusiveLease", "durableLeaseRelease", "replayRejectionEvidence", "ledgerProvider", "sameRunAndScopeBinding"], "futureActivationRequirements")
+    exactTrustKeys(scope.futureActivationRequirements, ["dedicatedExecutionIdentity", "canonicalIdentityProviderEvidence", "noSudoCapabilityEvidence", "trustedMainAncestry", "durableSingleUseClaim", "nodeExclusiveLease", "durableLeaseRelease", "replayRejectionEvidence", "networkDefaultDenyEvidence", "ledgerProvider", "sameRunAndScopeBinding"], "futureActivationRequirements")
     exactTrustKeys(scope.scheduler, ["state", "standingAegisAuthority", "autonomousDispatch"], "scheduler")
     exactKeys(policy.trustBaseline, ["scopePath", "scopeSha256"], "policy.trustBaseline")
     if (policy.trustBaseline.scopePath !== "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json") block("TRUST_SCOPE_DIGEST_MISMATCH", "scope path differs")
@@ -97,10 +97,11 @@ export function validateRemoteDevTrustBaseline(policy, scope, artifacts) {
       block("HASH_SCOPE_REUSE_REJECTED", "the consumed HASH_VERIFY scope is immutable and unavailable")
     }
     if (scope.executionIdentity?.account !== "williamos-fabric" || scope.executionIdentity?.privilege !== "non-root-no-sudo"
-      || scope.executionIdentity?.required !== true || scope.executionIdentity?.provider !== trustedResidentIdentity.name) block("EXECUTION_IDENTITY_MISMATCH", "dedicated AEGIS identity differs")
+      || scope.executionIdentity?.required !== true || scope.executionIdentity?.verified !== false
+      || scope.executionIdentity?.provider !== trustedResidentIdentity.name) block("EXECUTION_IDENTITY_MISMATCH", "dedicated AEGIS identity differs or is falsely represented as already verified")
 
     const requirements = scope.futureActivationRequirements
-    const requiredFuture = ["dedicatedExecutionIdentity", "trustedMainAncestry", "durableSingleUseClaim", "nodeExclusiveLease", "durableLeaseRelease", "replayRejectionEvidence", "sameRunAndScopeBinding"]
+    const requiredFuture = ["dedicatedExecutionIdentity", "canonicalIdentityProviderEvidence", "noSudoCapabilityEvidence", "trustedMainAncestry", "durableSingleUseClaim", "nodeExclusiveLease", "durableLeaseRelease", "replayRejectionEvidence", "networkDefaultDenyEvidence", "sameRunAndScopeBinding"]
     if (!requirements || requiredFuture.some((field) => requirements[field] !== true) || requirements.ledgerProvider !== createLedgerProviders.name) block("FUTURE_ACTIVATION_EVIDENCE_INCOMPLETE", "claim, lease, release, replay, identity, and ancestry are mandatory")
 
     const expectedResources = { cpuThreads: 12, memoryBytes: 12884901888, scratchBytes: 85899345920, timeoutSeconds: 5400, maxAttempts: 3 }
@@ -108,7 +109,7 @@ export function validateRemoteDevTrustBaseline(policy, scope, artifacts) {
       defaultDeny: true,
       atlasAllowed: false,
       endpoints: [
-        { host: "github.com", port: 443, operations: ["git-fetch", "git-push"] },
+        { host: "ssh.github.com", port: 443, operations: ["git-fetch", "git-push"] },
         { host: "api.github.com", port: 443, operations: ["github-pr"] },
         { host: "api.nuget.org", port: 443, operations: ["dotnet-restore"] },
         { host: "globalcdn.nuget.org", port: 443, operations: ["dotnet-restore"] },
@@ -298,7 +299,11 @@ function validateEvidence(evidence, packet, previous, expectedIndex, trustedNow)
 export function evaluateRemoteDevTransition(packet, evidence, trustedContext) {
   try {
     const policy = JSON.parse(fs.readFileSync(new URL("../../../config/execution-fabric/remote-dev-offload-v1.policy.json", import.meta.url), "utf8"))
-    const trusted = validateTrustedContext(trustedContext, { history: true }); const valid = validatePacket(packet, policy, trusted, { requireBindings: true })
+    const validPolicy = validatePolicy(policy)
+    if (validPolicy.scheduler.state === "disabled" || validPolicy.scheduler.standingAegisAuthority !== true) {
+      block("REMOTE_DEV_SCOPE_INACTIVE", "evidence transitions are unavailable until a separately reviewed activation scope is valid")
+    }
+    const trusted = validateTrustedContext(trustedContext, { history: true }); const valid = validatePacket(packet, validPolicy, trusted, { requireBindings: true })
     const history = trusted.history
     if (history.length >= valid.operations.length) block("EVIDENCE_CHAIN_INVALID", "history is complete")
     history.forEach((entry, index) => validateEvidence(entry, valid, index === 0 ? undefined : history[index - 1], index, trusted.now))

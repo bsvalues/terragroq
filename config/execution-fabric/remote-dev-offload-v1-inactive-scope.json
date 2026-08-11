@@ -11,6 +11,7 @@
     "account": "williamos-fabric",
     "privilege": "non-root-no-sudo",
     "required": true,
+    "verified": false,
     "provider": "trustedResidentIdentity"
   },
   "trustedMain": {
@@ -45,7 +46,7 @@
       },
       "proofWorker": {
         "path": "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
-        "sha256": "46d5273aec026c86c9afc7ec1773ad4347e4e375bc4146cefb9dfb287cc72814"
+        "sha256": "0804de94642f936e3db4972f7c4fe6839446ecf21c196d282dffd82fae48c6cb"
       }
     }
   },
@@ -103,7 +104,7 @@
       "atlasAllowed": false,
       "endpoints": [
         {
-          "host": "github.com",
+          "host": "ssh.github.com",
           "port": 443,
           "operations": [
             "git-fetch",
@@ -136,11 +137,14 @@
   },
   "futureActivationRequirements": {
     "dedicatedExecutionIdentity": true,
+    "canonicalIdentityProviderEvidence": true,
+    "noSudoCapabilityEvidence": true,
     "trustedMainAncestry": true,
     "durableSingleUseClaim": true,
     "nodeExclusiveLease": true,
     "durableLeaseRelease": true,
     "replayRejectionEvidence": true,
+    "networkDefaultDenyEvidence": true,
     "ledgerProvider": "createLedgerProviders",
     "sameRunAndScopeBinding": true
   },

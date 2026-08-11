@@ -68,7 +68,7 @@ function fixture() {
   execFileSync("git", ["commit", "-qm", "base"], { cwd: repository })
   const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim()
   execFileSync("git", ["branch", "-M", "codex/wo-tf-remote-dev-offload-001-734"], { cwd: repository })
-  execFileSync("git", ["remote", "add", "origin", "git@github.com:bsvalues/terrafusion_os_1.0.git"], { cwd: repository })
+  execFileSync("git", ["remote", "add", "origin", "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git"], { cwd: repository })
   const patch = Buffer.from("", "utf8")
   const packet = makePacket(baseSha, patch)
   fs.writeFileSync(path.join(physicalWorkspace, ".williamos-remote-dev-owner.json"), JSON.stringify({ run_id: packet.runId, work_order_id: packet.workOrderId, repository: packet.repository, branch: packet.branch, base_sha: packet.baseSha }))
@@ -76,7 +76,7 @@ function fixture() {
   const fakeBin = path.join(hostRoot, "bin"); fs.mkdirSync(fakeBin)
   writeExecutable(path.join(fakeBin, "id"), `#!/usr/bin/env bash
 if [[ "\${1:-}" == -un ]]; then printf '%s\n' "\${FAKE_EXECUTION_ACCOUNT:-williamos-fabric}"; exit 0; fi
-if [[ "\${1:-}" == -u ]]; then printf '%s\n' '${bashUid}'; exit 0; fi
+if [[ "\${1:-}" == -u ]]; then printf '%s\n' "\${FAKE_EXECUTION_UID:-${bashUid}}"; exit 0; fi
 exec /usr/bin/id "$@"
 `)
   writeExecutable(path.join(fakeBin, "dotnet"), `#!/usr/bin/env bash
@@ -233,6 +233,18 @@ describe("fixed AEGIS remote development worker", () => {
     expect(runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_EXECUTION_ACCOUNT: "bs" } }).json).toMatchObject({ status: "EXECUTION_IDENTITY_MISMATCH" })
   })
 
+  it("rejects uid zero and does not trust a PATH-resolved identity binary", () => {
+    const value = fixture()
+    expect(runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_EXECUTION_UID: "0" } }).json).toMatchObject({ status: "EXECUTION_IDENTITY_MISMATCH" })
+    const source = fs.readFileSync(worker, "utf8")
+    expect(source).toContain('IDENTITY_BINARY="/usr/bin/id"')
+    expect(source).not.toMatch(/timeout 5 id -u[n]?/)
+  })
+
+  it("uses the fixed SSH-over-443 GitHub endpoint declared by the proof network exception", () => {
+    expect(fs.readFileSync(worker, "utf8")).toContain('REMOTE_URL="ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git"')
+  })
+
   it("rejects arbitrary operations, wrong workspaces, and widened resources as invalid input", () => {
     const value = fixture()
     expect(runWorker("ARBITRARY_SHELL", value).json).toMatchObject({ status: "OPERATION_NOT_ALLOWED" })
@@ -259,7 +271,7 @@ describe("fixed AEGIS remote development worker", () => {
     fs.symlinkSync(outside, symlinked.physicalWorkspace, "junction")
     expect(runWorker("PROVE_PREFLIGHT", symlinked).json).toMatchObject({ status: "SYMLINK_REJECTED" })
 
-    const wrongRemote = fixture(); execFileSync("git", ["remote", "set-url", "origin", "git@github.com:bsvalues/other.git"], { cwd: wrongRemote.repository })
+    const wrongRemote = fixture(); execFileSync("git", ["remote", "set-url", "origin", "ssh://git@ssh.github.com:443/bsvalues/other.git"], { cwd: wrongRemote.repository })
     expect(runWorker("RESTORE_DOTNET", wrongRemote).json).toMatchObject({ status: "GIT_REMOTE_MISMATCH" })
 
     const wrongBase = fixture(); fs.writeFileSync(path.join(wrongBase.repository, "README.md"), "next\n"); execFileSync("git", ["commit", "-qam", "next"], { cwd: wrongBase.repository })
@@ -315,7 +327,7 @@ describe("fixed AEGIS remote development worker", () => {
     expect(fs.readdirSync(parent).sort()).toEqual(before)
     const source = fs.readFileSync(worker, "utf8")
     const preflight = source.slice(source.indexOf("PROVE_PREFLIGHT)"), source.indexOf("CREATE_WORKSPACE)"))
-    for (const required of ["hostname", "id -un", "git --version", "dotnet --version", "node --version", "corepack pnpm --version", "nproc", "MemTotal", "df -PB1", "run_preflight_repository_profile", "probe_containment", "prove_project_quota"]) expect(preflight).toContain(required)
+    for (const required of ["hostname", '"$IDENTITY_BINARY" -un', "git --version", "dotnet --version", "node --version", "corepack pnpm --version", "nproc", "MemTotal", "df -PB1", "run_preflight_repository_profile", "probe_containment", "prove_project_quota"]) expect(preflight).toContain(required)
     for (const required of ["git ls-remote", "push --dry-run", "TemporaryFileSystem=/tmp:size=4294967296"]) expect(source).toContain(required)
     expect(source).not.toContain("PREFLIGHT_TMP_ROOT")
     expect(preflight).not.toContain('exec 9>')

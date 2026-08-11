@@ -149,16 +149,16 @@ describe("remote development offload proof contract", () => {
     expect(result).toMatchObject({ status: "BLOCKED", reasons: [{ code: "RUN_ID_REUSED" }] })
   })
 
-  it("requires ordered hash-chained evidence and merge ancestry before guarded cleanup completes", () => {
+  it("rejects every evidence transition while the reconciled proof scope is inactive", () => {
     const value = bound()
     const first = evidence("PROVE_PREFLIGHT", 1, null, {}, value)
-    expect(evaluateRemoteDevTransition(value, first, context())).toMatchObject({ status: "RUNNING" })
+    expect(evaluateRemoteDevTransition(value, first, context())).toMatchObject({ status: "BLOCKED", reasons: [{ code: "REMOTE_DEV_SCOPE_INACTIVE" }] })
     const chain = [first]
     for (const [index, operation] of packet().operations.slice(1).entries()) {
       const previous = chain.at(-1)!
       chain.push(evidence(operation, 1, sha(previous), operation === "PROVE_POST_MERGE" ? { status: "MERGE_ANCESTRY_PROVEN" } : operation === "CLEAN_EXACT_WORKSPACE" ? { status: "CLEANUP_ABSENCE_PROVEN" } : {}, value))
     }
-    expect(evaluateRemoteDevTransition(value, chain.at(-1)!, context({ evidenceHistory: chain.slice(0, -1) }))).toMatchObject({ status: "COMPLETE" })
+    expect(evaluateRemoteDevTransition(value, chain.at(-1)!, context({ evidenceHistory: chain.slice(0, -1) }))).toMatchObject({ status: "BLOCKED", reasons: [{ code: "REMOTE_DEV_SCOPE_INACTIVE" }] })
   })
 
   it.each([
