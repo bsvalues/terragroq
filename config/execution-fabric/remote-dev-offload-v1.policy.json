@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "workOrderId": "WO-TF-REMOTE-DEV-OFFLOAD-001",
+  "repository": "bsvalues/terrafusion_os_1.0",
+  "baseRef": "refs/heads/main",
+  "nodeId": "aegis",
+  "workspace": "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001",
+  "branchPrefix": "codex/wo-tf-remote-dev-offload-001-",
+  "patchGeneration": 1,
+  "reservedPaths": [
+    ".github/workflows/dotnet-test.yml",
+    ".github/workflows/terrafusion-ci.yml",
+    "tests/ci-terrafusion-unit-informational.test.ts",
+    "docs/brain/evidence/WO-TF-REMOTE-DEV-OFFLOAD-001-proof.md"
+  ],
+  "resourceLimits": {
+    "cpuThreads": 12,
+    "memoryBytes": 12884901888,
+    "scratchBytes": 85899345920,
+    "timeoutSeconds": 5400,
+    "maxAttempts": 3
+  },
+  "operations": [
+    "PROVE_PREFLIGHT",
+    "CREATE_WORKSPACE",
+    "APPLY_RESERVED_PATCH",
+    "RESTORE_DOTNET",
+    "TEST_WORKFLOW_CONTRACT",
+    "TEST_DOTNET_INFORMATIONAL",
+    "BUILD_DOTNET_RELEASE",
+    "COMMIT_RESERVED_PATHS",
+    "PUSH_AUTHORIZED_BRANCH",
+    "PROVE_POST_MERGE",
+    "CLEAN_EXACT_WORKSPACE"
+  ],
+  "transport": {
+    "controller": "omen",
+    "relay": "hermes",
+    "worker": "aegis",
+    "hermesOnly": true
+  },
+  "canonicalAegisContract": {
+    "path": "config/execution-fabric/aegis-bounded-dispatch-contract.json",
+    "sha256": "18299f57bb86e9cd4902a98b93f56c702aa51b44e5d9e085dddac247f24b8d22",
+    "contractId": "resident-aegis-bounded-compute-v1",
+    "status": "NON_ACTIVE_CONTRACT",
+    "ciBuildTemplateId": "aegis.ci-build-test.v1"
+  },
+  "trustBaseline": {
+    "scopePath": "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json",
+    "scopeSha256": "e96aea481c840971cf4de0dbc88e644bc050ea14f6ddd12eaea0c7cf5f7f3a8f"
+  },
+  "scheduler": {
+    "state": "disabled",
+    "standingAegisAuthority": false
+  },
+  "deniedActions": [
+    "ARBITRARY_SHELL",
+    "ATLAS_ACCESS",
+    "CREDENTIAL_ACCESS",
+    "OWNER_CONTACT",
+    "PERSISTENT_SERVICE",
+    "RUNTIME_ACTIVATION"
+  ],
+  "deniedTargets": [
+    "atlas",
+    "omen-workspace",
+    "hermes-workspace",
+    "production",
+    "protected-data"
+  ]
+}
