@@ -17,6 +17,7 @@
     "resource_limits",
     "execution_boundary",
     "evidence_policy",
+    "standing_integration",
     "workload_adapters"
   ],
   "properties": {
@@ -36,16 +37,18 @@
     "outcome_eligibility": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["origin", "approval_status"],
+      "required": ["origin", "approval_status", "dependency_status"],
       "properties": {
         "origin": { "const": "WILLIAMOS_NATIVE" },
-        "approval_status": { "const": "ALREADY_APPROVED" }
+        "approval_status": { "const": "ALREADY_APPROVED" },
+        "dependency_status": { "const": "CLEARED" }
       }
     },
     "node_identity": { "$ref": "#/$defs/node_identity" },
     "resource_limits": { "$ref": "#/$defs/resource_limits" },
     "execution_boundary": { "$ref": "#/$defs/execution_boundary" },
     "evidence_policy": { "$ref": "#/$defs/evidence_policy" },
+    "standing_integration": { "$ref": "#/$defs/standing_integration" },
     "workload_adapters": {
       "type": "array",
       "prefixItems": [
@@ -88,10 +91,11 @@
     "execution_boundary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["network_scope", "durable_storage_allowed", "nas_allowed", "backup_allowed", "archive_authority_allowed", "destructive_disk_allowed", "sudo_allowed", "privilege_escalation_allowed", "scheduler_state", "scheduler_authority", "autonomous_selection"],
+      "required": ["network_scope", "durable_storage_allowed", "control_evidence_storage_required", "nas_allowed", "backup_allowed", "archive_authority_allowed", "destructive_disk_allowed", "sudo_allowed", "privilege_escalation_allowed", "scheduler_state", "scheduler_authority", "autonomous_selection"],
       "properties": {
         "network_scope": { "const": "none" },
         "durable_storage_allowed": { "const": false },
+        "control_evidence_storage_required": { "const": true },
         "nas_allowed": { "const": false },
         "backup_allowed": { "const": false },
         "archive_authority_allowed": { "const": false },
@@ -106,15 +110,30 @@
     "evidence_policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["maximum_age_ms", "placement_required", "capability_required", "exact_source_commit_required", "reviewed_adapter_template_profile_digests_required", "one_time_job_claim_required", "lease_and_fencing_required"],
+      "required": ["maximum_age_ms", "maximum_admission_age_ms", "placement_required", "capability_required", "exact_source_commit_required", "reviewed_adapter_template_profile_digests_required", "one_time_job_claim_required", "lease_and_fencing_required"],
       "properties": {
         "maximum_age_ms": { "const": 300000 },
+        "maximum_admission_age_ms": { "const": 86400000 },
         "placement_required": { "const": true },
         "capability_required": { "const": true },
         "exact_source_commit_required": { "const": true },
         "reviewed_adapter_template_profile_digests_required": { "const": true },
         "one_time_job_claim_required": { "const": true },
         "lease_and_fencing_required": { "const": true }
+      }
+    },
+    "standing_integration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["integration_id", "operation_core_sha256", "runtime_sha256", "resident_runner_sha256", "standing_contract_sha256", "trusted_release_manifest_required", "status"],
+      "properties": {
+        "integration_id": { "const": "aegis-hash-verify-standing-integration-v1" },
+        "operation_core_sha256": { "const": "c5965a206b5f26c0db21176a609775d1ca176409b644bbc241fde74565bd8d8f" },
+        "runtime_sha256": { "const": "f85928c9e3d110e7ddae564095e01dd50840c9a585d82e248a4c16f55fb62b3c" },
+        "resident_runner_sha256": { "const": "6338401ee14fd3573702a56b6ccb6308412e8255e5b070cf98089c366258d6a0" },
+        "standing_contract_sha256": { "const": "0ad6aa6ef3a5e10a19de1417bf82edcf9a7f4b9c12e3c736fa6150b99d4e7163" },
+        "trusted_release_manifest_required": { "const": true },
+        "status": { "const": "ACTIVE" }
       }
     },
     "blocked_adapter_base": {
@@ -147,10 +166,10 @@
         "template_id": { "const": "aegis.hash-verify.v1" },
         "adapter_id": { "const": "resident-aegis-hash-verify-v1" },
         "profile_id": { "const": "resident-aegis-bounded-hash-verify-v1" },
-        "adapter_sha256": { "const": "2fe20b5efb3944d001e86ba2da33578d327ee37fafd8b88397ca2d5cc1eb1c84" },
+        "adapter_sha256": { "const": "b0c625b92414bbab62fb3d7356b2e04a179377d8076590fe1c521335eb2a30c9" },
         "template_sha256": { "const": "7217d0486fb67e17d27b7854bb8f44d0ba7d063bddde7d45282c091306d8d58b" },
         "profile_sha256": { "const": "ff8587a3e05eeb0aa7abaa80ed882b0f43010ad2fd119e71f0b58e353dfd2989" },
-        "status": { "const": "REVIEWED_NOT_STANDING_INTEGRATED" }
+        "status": { "const": "ACTIVE" }
       }
     },
     "compression_adapter": {

@@ -4,6 +4,7 @@ import path from "node:path"
 
 import { canonicalizeJcs } from "../canonical-json.mjs"
 import { validateShadowPlacementReceipt } from "../evaluate-shadow-placement.mjs"
+import { verifyAegisHashBytes } from "./aegis-hash-core.mjs"
 
 const SHA256 = /^[a-f0-9]{64}$/
 const COMMIT = /^[a-f0-9]{40}$/
@@ -646,7 +647,8 @@ export async function executeAegisHashVerify(input) {
     }
     operationAttempted = true
     const bytes = readExactStagedBytes(input.repositoryRoot, prepared.input.staging_root_id, request)
-    const observedSha256 = sha256(bytes)
+    const verification = verifyAegisHashBytes(bytes, request.input.expected_sha256, request.input.expected_byte_length)
+    const observedSha256 = verification.observed_sha256
     const completedAt = input.clock()
     const completedAtMs = timestamp(completedAt, "completed_at")
     if (completedAtMs < startedAtMs || completedAtMs - startedAtMs > prepared.timeout_ms
@@ -654,7 +656,7 @@ export async function executeAegisHashVerify(input) {
       || completedAtMs >= timestamp(prepared.authority_expires_at, "authority_expires_at")) {
       fail("OPERATION_CHRONOLOGY_INVALID", "completion exceeds chronology, freshness, authority, or timeout")
     }
-    const matched = observedSha256 === request.input.expected_sha256
+    const matched = verification.matched
     const result = {
       schema_version: "0.1-aegis-hash-verify-evidence",
       status: matched ? "COMPLETED" : "FAILED_CLOSED",

@@ -11,7 +11,8 @@
   ],
   "outcome_eligibility": {
     "origin": "WILLIAMOS_NATIVE",
-    "approval_status": "ALREADY_APPROVED"
+    "approval_status": "ALREADY_APPROVED",
+    "dependency_status": "CLEARED"
   },
   "node_identity": {
     "node_id": "aegis",
@@ -32,6 +33,7 @@
   "execution_boundary": {
     "network_scope": "none",
     "durable_storage_allowed": false,
+    "control_evidence_storage_required": true,
     "nas_allowed": false,
     "backup_allowed": false,
     "archive_authority_allowed": false,
@@ -44,12 +46,22 @@
   },
   "evidence_policy": {
     "maximum_age_ms": 300000,
+    "maximum_admission_age_ms": 86400000,
     "placement_required": true,
     "capability_required": true,
     "exact_source_commit_required": true,
     "reviewed_adapter_template_profile_digests_required": true,
     "one_time_job_claim_required": true,
     "lease_and_fencing_required": true
+  },
+  "standing_integration": {
+    "integration_id": "aegis-hash-verify-standing-integration-v1",
+    "operation_core_sha256": "c5965a206b5f26c0db21176a609775d1ca176409b644bbc241fde74565bd8d8f",
+    "runtime_sha256": "f85928c9e3d110e7ddae564095e01dd50840c9a585d82e248a4c16f55fb62b3c",
+    "resident_runner_sha256": "6338401ee14fd3573702a56b6ccb6308412e8255e5b070cf98089c366258d6a0",
+    "standing_contract_sha256": "0ad6aa6ef3a5e10a19de1417bf82edcf9a7f4b9c12e3c736fa6150b99d4e7163",
+    "trusted_release_manifest_required": true,
+    "status": "ACTIVE"
   },
   "workload_adapters": [
     {
@@ -67,10 +79,10 @@
       "template_id": "aegis.hash-verify.v1",
       "adapter_id": "resident-aegis-hash-verify-v1",
       "profile_id": "resident-aegis-bounded-hash-verify-v1",
-      "adapter_sha256": "2fe20b5efb3944d001e86ba2da33578d327ee37fafd8b88397ca2d5cc1eb1c84",
+      "adapter_sha256": "b0c625b92414bbab62fb3d7356b2e04a179377d8076590fe1c521335eb2a30c9",
       "template_sha256": "7217d0486fb67e17d27b7854bb8f44d0ba7d063bddde7d45282c091306d8d58b",
       "profile_sha256": "ff8587a3e05eeb0aa7abaa80ed882b0f43010ad2fd119e71f0b58e353dfd2989",
-      "status": "REVIEWED_NOT_STANDING_INTEGRATED"
+      "status": "ACTIVE"
     },
     {
       "workload_class": "COMPRESSION",

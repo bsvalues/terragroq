@@ -1,8 +1,10 @@
 # WilliamOS Execution Fabric AEGIS Standing Compute Authority 001
 
-Issue: `#586`
+Authority issue: `#586`
 
-Status: `AUTHORITY_GRANTED / EXECUTION_INTEGRATION_PENDING / FAIL_CLOSED`
+Standing HASH_VERIFY integration: `#590`
+
+Status: `AUTHORITY_GRANTED / HASH_VERIFY_STANDING_ADAPTER_ACTIVE / FAIL_CLOSED`
 
 Program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
 
@@ -54,17 +56,23 @@ Each job must bind all of the following exact records:
 4. approved template;
 5. approved operation profile;
 6. separately reviewed active adapter for the workload class;
-7. complete evidence chain;
-8. exclusive lease;
-9. current fence; and
-10. single-use claim.
+7. exact expiring reviewed-main per-job admission;
+8. complete evidence chain;
+9. durable single-use claim;
+10. exclusive lease;
+11. current fence; and
+12. immutable completion receipt.
 
-The request cannot assert its own approval. Admission requires a separate,
-short-lived control-plane binding from the trusted WilliamOS authority source.
-That binding names the exact job, outcome, risk, Work Order, source commit, and
-workload adapter tuple. The single-use claim carries the canonical digest of
-that binding. Missing bindings, caller-only approval claims, digest drift, and
-reused admission identifiers reject before execution.
+The private request cannot assert its own approval. Admission requires a
+separate, expiring control-plane artifact retained on reviewed `main`. That
+artifact contains the complete canonical job scope and approval provenance,
+including the exact outcome, cleared dependency state, risk, Work Order, source
+commit, and adapter/integration digest tuple. The resident checkout must also
+match a root-owned reviewed-release manifest. A root-owned bootstrap verifies a
+content-addressed, root-owned, non-writable release directory and hashes the
+complete executable module closure through no-follow descriptors before importing it. The single-use claim carries the
+canonical digest of that binding. Missing bindings, caller-only approval claims,
+digest drift, and reused admission identifiers reject before execution.
 
 Admission fails closed when any binding is absent, stale, expired, consumed,
 conflicting, digest-mismatched, broader than the approved outcome or Work Order,
@@ -75,16 +83,26 @@ single-use job claim or lease/fence controls.
 
 ```text
 CI_BUILD_TEST: BLOCKED_NO_SEPARATELY_REVIEWED_ACTIVE_ADAPTER
-HASH_VERIFY: BLOCKED_STANDING_INTEGRATION_NOT_ACTIVE
+HASH_VERIFY: ACTIVE_REVIEWED_STANDING_ADAPTER
+HASH_VERIFY ADAPTER: resident-aegis-hash-verify-v1
 COMPRESSION: BLOCKED_NO_SEPARATELY_REVIEWED_ACTIVE_ADAPTER
 ```
 
-Only a separately reviewed adapter integrated with a durable standing-admission
-path may execute. Contract or profile presence is not adapter activation. The
-completed bounded `HASH_VERIFY` proof remains immutable historical evidence; its
-old one-use authority cannot be repurposed. No adapter currently consumes this
-standing grant, so this change authorizes the bounded class without falsely
-claiming an executable standing path.
+Only a separately reviewed active adapter may execute. Issue #590 supplies that
+path for `HASH_VERIFY` only. Each invocation still requires an exact, expiring
+admission retained on reviewed `main`, a durable single-use claim, an exclusive
+lease with a current fence, and an immutable completion receipt. Contract,
+template, profile, or standing-authority presence alone does not authorize a
+job. A retained privileged journal epoch and claim prevent local claim deletion
+from reopening an admission; missing journal history fails closed.
+
+The boundary distinguishes prohibited workload/NAS/archive storage from required
+control-plane evidence. Claim, lease, fence, recovery, result, release, and replay
+records are durable audit evidence; they do not grant workload storage authority.
+
+The Issue #538 one-shot proof and its consumed authority remain immutable
+historical evidence. They are not standing admission, cannot be renewed or
+repurposed, and are not modified by Issue #590.
 
 ## Vocabulary mapping
 
@@ -93,9 +111,10 @@ The dedicated authority artifact names the post-write reserve as
 same value as `minimum_free_bytes_after_job`, and the read model exposes it as
 `minimumScratchReserveBytes`. All three are fixed at 100 GiB.
 
-The authority artifact records the historical HASH adapter as
-`REVIEWED_NOT_STANDING_INTEGRATED`; the read model presents the same condition
-as `BLOCKED_STANDING_INTEGRATION_NOT_ACTIVE`. Neither value activates execution.
+The authority artifact and read model identify
+`resident-aegis-hash-verify-v1` as the active reviewed standing
+`HASH_VERIFY` adapter. That adapter identity does not weaken any per-job gate or
+activate `CI_BUILD_TEST` or `COMPRESSION`.
 
 ## Unchanged broad blocks
 
@@ -130,11 +149,10 @@ runtime, storage, or remote-system gates.
 
 ## Validation
 
-- Focused Authority Registry suite: `16/16 PASS`.
-- Standing authority eligibility suite: `4/4 PASS`.
-- Canonical Fabric registry suite: `113/113 PASS`.
-- Eligibility evaluation remains non-authorizing: `execution_authorized=false`
-  and `dispatch_allowed=false` until durable trusted-main integration exists.
+- Focused Authority Registry, standing authority, admission issuer, historical
+  adapter, standing HASH runtime, and resident runner suites: `107/107 PASS`.
+- Eligibility remains non-authorizing without an exact unexpired reviewed-main
+  per-job admission and matching durable claim, lease/fence, and receipt chain.
 - Broad worker, command-runner, scheduler, runtime, persistence, tool-call,
   autonomous-loop, and operator-host blocks: `UNCHANGED / BLOCKED`.
 - Completed Issue #538 single-use proof artifacts changed: `0`.

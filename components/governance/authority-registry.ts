@@ -84,7 +84,7 @@ export type AegisWorkloadClass = "CI_BUILD_TEST" | "HASH_VERIFY" | "COMPRESSION"
 
 export type AegisAdapterAvailability =
   | "BLOCKED_NO_SEPARATELY_REVIEWED_ACTIVE_ADAPTER"
-  | "BLOCKED_STANDING_INTEGRATION_NOT_ACTIVE"
+  | "ACTIVE_REVIEWED_STANDING_ADAPTER"
 
 export type AegisBoundedComputeGrant = {
   node: "aegis"
@@ -103,6 +103,7 @@ export type AegisBoundedComputeGrant = {
   }
   requiredJobBindings: string[]
   adapterAvailability: Record<AegisWorkloadClass, AegisAdapterAvailability>
+  adapterIds: Record<AegisWorkloadClass, string | null>
   globalSchedulerEnabled: false
 }
 
@@ -317,7 +318,6 @@ export const AUTHORITY_RECORDS: AuthorityRecord[] = [
       "Generic worker activation",
       "Arbitrary command execution",
       "Global scheduler activation",
-      "HASH_VERIFY until exact standing-authority integration is active",
       "Network access",
       "Root or sudo execution",
       "Storage, NAS, or backup authority",
@@ -327,11 +327,12 @@ export const AUTHORITY_RECORDS: AuthorityRecord[] = [
     requiredEvidence: [
       "Exact approved owner outcome and Work Order",
       "Exact reviewed source, template, operation profile, and adapter",
-      "Complete evidence chain",
-      "Exclusive lease, current fence, and single-use claim",
+      "Exact expiring reviewed-main per-job admission",
+      "Complete evidence chain and immutable completion receipt",
+      "Durable single-use claim, exclusive lease, and current fence",
     ],
     ownerDecisionRequired: false,
-    relatedWorkOrders: ["PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001", "Issue #586"],
+    relatedWorkOrders: ["PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001", "Issue #586", "Issue #590"],
     relatedEvidence: ["docs/reports/WILLIAMOS-EXECUTION-FABRIC-AEGIS-STANDING-COMPUTE-AUTHORITY-001.md"],
     status: "active",
     riskLevel: "medium",
@@ -357,15 +358,22 @@ export const AUTHORITY_RECORDS: AuthorityRecord[] = [
         "exact-approved-template",
         "exact-approved-operation-profile",
         "exact-separately-reviewed-active-adapter",
+        "expiring-reviewed-main-per-job-admission",
         "complete-evidence-chain",
+        "immutable-completion-receipt",
         "exclusive-lease",
         "current-fence",
-        "single-use-claim",
+        "durable-single-use-claim",
       ],
       adapterAvailability: {
         CI_BUILD_TEST: "BLOCKED_NO_SEPARATELY_REVIEWED_ACTIVE_ADAPTER",
-        HASH_VERIFY: "BLOCKED_STANDING_INTEGRATION_NOT_ACTIVE",
+        HASH_VERIFY: "ACTIVE_REVIEWED_STANDING_ADAPTER",
         COMPRESSION: "BLOCKED_NO_SEPARATELY_REVIEWED_ACTIVE_ADAPTER",
+      },
+      adapterIds: {
+        CI_BUILD_TEST: null,
+        HASH_VERIFY: "resident-aegis-hash-verify-v1",
+        COMPRESSION: null,
       },
       globalSchedulerEnabled: false,
     },
@@ -523,8 +531,9 @@ export const AUTHORITY_GATES: AuthorityGateRecord[] = [
     requiredEvidence: [
       "Exact approved outcome and Work Order",
       "Exact reviewed source, template, profile, and separately reviewed active adapter",
-      "Complete evidence chain",
-      "Exclusive lease, current fence, and single-use claim",
+      "Exact expiring reviewed-main per-job admission",
+      "Complete evidence chain and immutable completion receipt",
+      "Durable single-use claim, exclusive lease, and current fence",
     ],
     prohibitedActions: [
       "unapproved workload class",
@@ -536,7 +545,7 @@ export const AUTHORITY_GATES: AuthorityGateRecord[] = [
       "storage/NAS/backup authority",
       "remote-system access or mutation",
     ],
-    safeNextAction: "Admit only an exact bound job through a separately reviewed active adapter; keep CI_BUILD_TEST and COMPRESSION blocked until such adapters exist.",
+    safeNextAction: "Admit HASH_VERIFY only through resident-aegis-hash-verify-v1 with an exact expiring reviewed-main admission, durable claim, lease/fence, and receipt; keep CI_BUILD_TEST and COMPRESSION blocked.",
     riskLevel: "medium",
   }),
   gate({
@@ -962,8 +971,8 @@ export const WORK_ORDER_AUTHORITY_LINKS: AuthorityLinkRecord[] = [
     label: "AEGIS standing bounded compute",
     authorityId: "authority-aegis-bounded-compute-standing",
     gateId: "AEGIS_BOUNDED_COMPUTE_GATE",
-    relatedItem: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 / Issue #586",
-    description: "The standing grant covers only exact WilliamOS-native R0/R1 bounded-compute jobs with complete bindings; it does not activate a scheduler or generic worker.",
+    relatedItem: "PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001 / Issues #586 and #590",
+    description: "The standing grant covers only exact WilliamOS-native R0/R1 bounded-compute jobs; Issue #590 activates the reviewed HASH_VERIFY adapter without activating a scheduler or generic worker.",
   },
   {
     label: "WOE detail surfaces",
@@ -988,7 +997,7 @@ export const EVIDENCE_AUTHORITY_LINKS: AuthorityLinkRecord[] = [
     gateId: "AEGIS_BOUNDED_COMPUTE_GATE",
     relatedItem: "docs/reports/WILLIAMOS-EXECUTION-FABRIC-AEGIS-STANDING-COMPUTE-AUTHORITY-001.md",
     description: "Records the owner's narrow standing compute grant, exact ceilings, per-job admission bindings, and unchanged broad blocks.",
-    safeNextAction: "Keep CI_BUILD_TEST and COMPRESSION blocked until reviewed adapters exist, and HASH_VERIFY blocked until exact standing-authority integration is active.",
+    safeNextAction: "Use resident-aegis-hash-verify-v1 only with exact expiring per-job admission and durable claim, lease/fence, and receipt; keep CI_BUILD_TEST and COMPRESSION blocked.",
     prohibitedAction: "Infer generic execution, scheduler, storage, network, or remote-system authority.",
   },
   {

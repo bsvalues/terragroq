@@ -37,15 +37,16 @@ This is a compute grant, not generic `AUTONOMY`, `WORKER_ACTIVATION_GATE`,
 `COMMAND_RUNNER_GATE`, scheduler, runtime, storage, network, or remote-system
 authority. The global scheduler remains off. Only a separately reviewed active
 adapter for the exact workload class may execute; `CI_BUILD_TEST` and
-`COMPRESSION` are currently adapter-blocked. The reviewed `HASH_VERIFY` adapter
-is not yet integrated with this standing authority, so it also remains blocked.
-The grant records authority but does not itself create an executable path.
+`COMPRESSION` remain adapter-blocked. Issue #590 activates the reviewed standing
+`HASH_VERIFY` adapter `resident-aegis-hash-verify-v1`; it does not
+activate another workload class, a scheduler, or autonomous job selection.
 
 Every job must bind the exact approved owner outcome, approved Work Order,
 reviewed source, approved template, approved operation profile, separately
-reviewed active adapter, complete evidence chain, exclusive lease, current
-fence, and single-use claim. Missing, stale, conflicting, or expanded bindings
-fail closed.
+reviewed active adapter, exact expiring reviewed-main per-job admission,
+complete evidence chain, durable single-use claim, exclusive lease, current
+fence, and immutable completion receipt. Missing, stale, conflicting, consumed,
+or expanded bindings fail closed.
 
 A job request cannot self-assert approval. A separate short-lived binding from
 the trusted WilliamOS authority control plane must name the exact job, outcome,
