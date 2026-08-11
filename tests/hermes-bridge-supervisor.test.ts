@@ -182,12 +182,49 @@ describe("Hermes interactive-user supervisor", () => {
     expect(fs.existsSync(path.join(runtimeRoot, "state", "supervisor.json"))).toBe(false)
   })
 
-  it.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1")(
+  it.skipIf(hostOnly)(
+    "does not require Node for a custom resident cycle",
+    () => {
+      const { root, script } = isolatedSupervisor()
+      const runtimeRoot = path.join(root, "runtime")
+      const activationPath = path.join(runtimeRoot, "control", "activation")
+      const emptyPath = path.join(root, "empty-path")
+      fs.mkdirSync(path.dirname(activationPath), { recursive: true })
+      fs.mkdirSync(emptyPath)
+      fs.writeFileSync(activationPath, "enabled\n")
+      const pwshProbe = spawnSync(
+        "pwsh",
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Environment]::ProcessPath"],
+        { encoding: "utf8" },
+      )
+      expect(pwshProbe.status, pwshProbe.stderr).toBe(0)
+      const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
+      const result = spawnSync(
+        pwshProbe.stdout.trim(),
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+          `& ${quote(script)} -Workspace ${quote(root)} -RuntimeRoot ${quote(runtimeRoot)} -RunOnce -CycleAction { [PSCustomObject]@{ ExitCode = 0; Result = 'QUEUE_DRAINED'; StopReason = 'NO_OUTCOME' } }`],
+        {
+          encoding: "utf8",
+          env: { ...process.env, PATH: emptyPath },
+          timeout: 15_000,
+        },
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout).toContain("INTERACTIVE_USER_RESIDENT")
+      expect(result.stderr).not.toContain("HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL")
+    },
+  )
+
+  it.skipIf(hostOnly)(
     "fails with the typed executable wall when Node is absent",
     () => {
       const { root, script } = isolatedSupervisor()
       const emptyPath = path.join(root, "empty-path")
+      const activationPath = path.join(root, "control", "activation")
       fs.mkdirSync(emptyPath)
+      fs.mkdirSync(path.dirname(activationPath), { recursive: true })
+      fs.writeFileSync(activationPath, "enabled\n")
       const pwshProbe = spawnSync(
         "pwsh",
         ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Environment]::ProcessPath"],
@@ -207,8 +244,12 @@ describe("Hermes interactive-user supervisor", () => {
         },
       )
 
-      expect(result.status).not.toBe(0)
-      expect(result.stderr).toContain("HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL")
+      expect(result.status, result.stderr).toBe(0)
+      const supervisorLog = fs.readdirSync(path.join(root, "logs"))
+        .find((name) => /^supervisor-\d{8}\.log$/.test(name))
+      expect(supervisorLog).toBeDefined()
+      expect(fs.readFileSync(path.join(root, "logs", supervisorLog!), "utf8"))
+        .toContain("stopReason=HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL")
       expect(result.stderr).not.toContain("CommandNotFoundException")
     },
   )
@@ -369,6 +410,9 @@ describe("Hermes interactive-user supervisor", () => {
     expect(supervisor).toContain("[Diagnostics.FileVersionInfo]::GetVersionInfo($candidatePath)")
     expect(supervisor).toContain('$versionInfo.ProductName -ceq "Node.js"')
     expect(supervisor).toContain('$versionInfo.OriginalFilename -ceq "node.exe"')
+    expect(supervisor.indexOf("$nodePath = Resolve-OwnedNodePath")).toBeGreaterThan(
+      supervisor.indexOf('if ($null -ne $customCycleAction)'),
+    )
     expect(supervisor).toContain("HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL")
     expect(supervisor).toContain("$startInfo.FileName = $OwnedNodePath")
     expect(supervisor).not.toContain('$startInfo.FileName = "node"')

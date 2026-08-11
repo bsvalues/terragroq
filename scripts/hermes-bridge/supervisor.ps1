@@ -21,27 +21,31 @@ $logDir = Join-Path $runtimeRootPath "logs"
 $supervisorLogPath = Join-Path $logDir ("supervisor-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 $cliPath = Join-Path $workspacePath "scripts\hermes-bridge\cli.mjs"
 $envPath = Join-Path $workspacePath ".env.local"
-$nodePath = try {
-    foreach ($nodeCommand in @(Get-Command node -CommandType Application -All -ErrorAction Stop)) {
-        $candidatePath = [IO.Path]::GetFullPath($nodeCommand.Source)
-        if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) { continue }
-        $versionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($candidatePath)
-        if ($versionInfo.ProductName -ceq "Node.js" -and
-            $versionInfo.OriginalFilename -ceq "node.exe") {
-            $candidatePath
-            break
-        }
-    }
-}
-catch {
-    $null
-}
-if ([string]::IsNullOrWhiteSpace($nodePath)) {
-    throw "HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL"
-}
 $mutexName = "Global\WilliamOSHermesCodexBridgeSupervisor"
 $createdNew = $false
 $mutex = [Threading.Mutex]::new($true, $mutexName, [ref]$createdNew)
+
+function Resolve-OwnedNodePath {
+    $nodePath = try {
+        foreach ($nodeCommand in @(Get-Command node -CommandType Application -All -ErrorAction Stop)) {
+            $candidatePath = [IO.Path]::GetFullPath($nodeCommand.Source)
+            if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) { continue }
+            $versionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($candidatePath)
+            if ($versionInfo.ProductName -ceq "Node.js" -and
+                $versionInfo.OriginalFilename -ceq "node.exe") {
+                $candidatePath
+                break
+            }
+        }
+    }
+    catch {
+        $null
+    }
+    if ([string]::IsNullOrWhiteSpace($nodePath)) {
+        throw "HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL"
+    }
+    return $nodePath
+}
 
 function ConvertTo-SupervisorToken {
     param(
@@ -370,6 +374,7 @@ try {
                     -Pulse $pulseAction
             }
             else {
+                $nodePath = Resolve-OwnedNodePath
                 $cycleEnvelope = Invoke-OwnedNodeCycle `
                     -OwnedWorkspace $workspacePath `
                     -OwnedNodePath $nodePath `
@@ -390,10 +395,12 @@ try {
         catch {
             $cycleExitCode = 1
             $cycleResult = "WALL"
-            $cycleStopReason = "CYCLE_EXCEPTION"
+            $cycleStopReason = ConvertTo-SupervisorToken `
+                -Value $_.Exception.Message `
+                -Fallback "CYCLE_EXCEPTION"
             [IO.File]::AppendAllText(
                 $supervisorLogPath,
-                "$( [DateTimeOffset]::UtcNow.ToString('o') ) HERMES_SUPERVISOR_CYCLE_EXCEPTION type=$($_.Exception.GetType().Name)`n",
+                "$( [DateTimeOffset]::UtcNow.ToString('o') ) HERMES_SUPERVISOR_CYCLE_EXCEPTION type=$($_.Exception.GetType().Name) stopReason=$cycleStopReason`n",
                 [Text.UTF8Encoding]::new($false)
             )
         }
