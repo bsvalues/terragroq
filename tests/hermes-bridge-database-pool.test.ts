@@ -25,12 +25,16 @@ describe("Hermes database pool", () => {
     })
     expect(pool).toMatchObject({
       options: {
-        connectionTimeoutMillis: 10_000,
+        connectionTimeoutMillis: 30_000,
         query_timeout: 30_000,
         statement_timeout: 30_000,
         idleTimeoutMillis: 10_000,
       },
     })
+    expect(HERMES_DATABASE_CONNECTION_TIMEOUT_MS).toBeGreaterThan(10_000)
+    expect(HERMES_DATABASE_CONNECTION_TIMEOUT_MS).toBeLessThanOrEqual(
+      HERMES_DATABASE_QUERY_TIMEOUT_MS,
+    )
   })
 
   it("supports a separate bounded schema budget and resident idle exit", () => {
@@ -45,7 +49,7 @@ describe("Hermes database pool", () => {
 
     expect(pool).toMatchObject({
       options: {
-        connectionTimeoutMillis: 10_000,
+        connectionTimeoutMillis: 30_000,
         query_timeout: 120_000,
         statement_timeout: 120_000,
         idleTimeoutMillis: 10_000,

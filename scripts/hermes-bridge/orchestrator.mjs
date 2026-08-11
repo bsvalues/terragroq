@@ -40,6 +40,9 @@ const RETRYABLE_PROJECTION_TRANSPORT_CODES = new Set([
   "ECONNRESET",
   "ETIMEDOUT",
 ])
+const RETRYABLE_PROJECTION_TRANSPORT_MESSAGES = new Set([
+  "Connection terminated due to connection timeout",
+])
 const OWNER_DECISION_RESUME_STATES = new Set([
   "OWNER_DECISION_ACCEPTED",
   "OWNER_DECISION_THREAD_RECOVERY_WALL",
@@ -60,6 +63,8 @@ export function isRetryableProjectionTransportError(error) {
   if (typeof error.code === "string") {
     return RETRYABLE_PROJECTION_TRANSPORT_CODES.has(error.code)
   }
+  if (typeof error.message === "string"
+    && RETRYABLE_PROJECTION_TRANSPORT_MESSAGES.has(error.message)) return true
   return error.cause ? isRetryableProjectionTransportError(error.cause) : false
 }
 

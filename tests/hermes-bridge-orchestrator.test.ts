@@ -202,6 +202,21 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     )).toBe(true)
   })
 
+  it("retries only the exact message-only PostgreSQL connection timeout", async () => {
+    const timeout = new Error("Connection terminated due to connection timeout")
+    const unrelated = new Error("Connection terminated unexpectedly")
+    expect(isRetryableProjectionTransportError(timeout)).toBe(true)
+    expect(isRetryableProjectionTransportError(unrelated)).toBe(false)
+
+    const operation = vi.fn()
+      .mockRejectedValueOnce(timeout)
+      .mockResolvedValue({ projected: true })
+    const sleep = vi.fn(async () => {})
+    await expect(retryRuntimeProjection(operation, { sleep })).resolves.toEqual({ projected: true })
+    expect(operation).toHaveBeenCalledTimes(2)
+    expect(sleep.mock.calls).toEqual([[1_000]])
+  })
+
   it("uses the bounded retry when projecting an orchestration checkpoint", async () => {
     const projectCheckpoint = vi.fn()
       .mockRejectedValueOnce(Object.assign(new Error("dns"), { code: "ENOTFOUND" }))
