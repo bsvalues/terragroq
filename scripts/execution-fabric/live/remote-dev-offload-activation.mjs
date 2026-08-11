@@ -102,6 +102,17 @@ const ACTIVATION_CRITICAL_PATHS = [
   "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs",
   IDENTITY_PATH,
 ]
+const TRUSTED_GIT_ENV = Object.freeze({
+  HOME: "/nonexistent",
+  PATH: "/usr/bin:/bin",
+  LANG: "C",
+  LC_ALL: "C",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_OPTIONAL_LOCKS: "0",
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_NO_REPLACE_OBJECTS: "1",
+})
 
 function read(relativePath) { return fs.readFileSync(new URL(relativePath, ROOT)) }
 function jcsDigest(value) { return crypto.createHash("sha256").update(canonicalizeJcs(value)).digest("hex") }
@@ -239,14 +250,14 @@ function proveNoSudoCapability() {
   if (inspected.status !== "NO_SUDO_VERIFIED") fail("EXECUTION_IDENTITY_UNPROVEN", inspected.reasons?.[0]?.detail ?? "no-sudo capability could not be proven")
 }
 
-function runControlPlaneAncestry(minimumCommit, headCommit) {
-  return spawnSync("/usr/bin/git", ["merge-base", "--is-ancestor", minimumCommit, headCommit], {
+function runControlPlaneAncestry(args) {
+  return spawnSync("/usr/bin/git", args, {
     cwd: REPOSITORY_ROOT,
     encoding: "utf8",
     shell: false,
     windowsHide: true,
     timeout: 5000,
-    env: { HOME: "/nonexistent", PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+    env: TRUSTED_GIT_ENV,
   })
 }
 
@@ -257,7 +268,7 @@ export function inspectControlPlaneTrustedCheckout(authority, candidate, checkou
     if (!controlPlane || !target || candidate?.baseSha !== target.pinnedCommit) fail("TARGET_TRUSTED_MAIN_UNPROVEN", "TerraFusion target base differs from the reviewed target commit")
     if (checkout?.verified !== true || checkout?.clean !== true || checkout?.trusted_ref !== controlPlane.ref
       || !SHA40.test(checkout?.head_commit ?? "")) fail("TRUSTED_MAIN_UNPROVEN", "canonical control-plane checkout proof differs")
-    const ancestry = runAncestry(controlPlane.minimumCommit, checkout.head_commit)
+    const ancestry = runAncestry(["--no-replace-objects", "merge-base", "--is-ancestor", controlPlane.minimumCommit, checkout.head_commit])
     if (ancestry?.status !== 0) fail("TRUSTED_MAIN_UNPROVEN", "minimum control-plane trusted-main ancestry is unproven")
     return { status: "CONTROL_PLANE_TRUSTED_MAIN_VERIFIED", executionAuthorized: false, headCommit: checkout.head_commit, targetCommit: target.pinnedCommit }
   } catch (error) { return blocked(error) }
@@ -289,7 +300,7 @@ function defaultReadTrustedMainFile(args) {
     windowsHide: true,
     timeout: 5000,
     maxBuffer: 4 * 1024 * 1024,
-    env: { HOME: "/nonexistent", PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+    env: TRUSTED_GIT_ENV,
   })
   if (result.status !== 0) fail("TRUSTED_MAIN_UNPROVEN", "trusted control-plane file is unavailable from main")
   return Buffer.from(result.stdout ?? [])
@@ -312,7 +323,7 @@ export function inspectActivationCriticalWorkingFiles(authority, { repositoryRoo
       const real = fs.realpathSync(lexical)
       const stats = fs.statSync(real)
       if (!stats.isFile() || stats.nlink !== 1) fail("TRUSTED_MAIN_UNPROVEN", `${relativePath} is not a single-link regular file`)
-      const trusted = Buffer.from(runGit(["show", `${controlPlane.ref}:${relativePath}`]))
+      const trusted = Buffer.from(runGit(["--no-replace-objects", "show", `${controlPlane.ref}:${relativePath}`]))
       if (!trusted.equals(fs.readFileSync(real))) fail("TRUSTED_MAIN_UNPROVEN", `${relativePath} differs from trusted main`)
     }
     return { status: "ACTIVATION_CRITICAL_FILES_VERIFIED", executionAuthorized: false, pathCount: ACTIVATION_CRITICAL_PATHS.length }

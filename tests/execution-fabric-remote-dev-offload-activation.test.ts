@@ -132,7 +132,10 @@ describe("TerraFusion remote development one-run activation", () => {
       clean: true,
       trusted_ref: "refs/heads/main",
       head_commit: "b".repeat(40),
-    }, () => ({ status: 0 }))).toMatchObject({ status: "CONTROL_PLANE_TRUSTED_MAIN_VERIFIED", executionAuthorized: false })
+    }, (args: string[]) => {
+      expect(args).toEqual(["--no-replace-objects", "merge-base", "--is-ancestor", value.trustedMain.controlPlane.minimumCommit, "b".repeat(40)])
+      return { status: 0 }
+    })).toMatchObject({ status: "CONTROL_PLANE_TRUSTED_MAIN_VERIFIED", executionAuthorized: false })
     const targetDrift = candidate(); targetDrift.baseSha = "c".repeat(40)
     expect(validateRemoteDevActivationAuthority(value, targetDrift)).toMatchObject({ status: "BLOCKED", reasons: [{ code: "TARGET_TRUSTED_MAIN_UNPROVEN" }] })
   })
@@ -164,7 +167,10 @@ describe("TerraFusion remote development one-run activation", () => {
         fs.mkdirSync(path.dirname(localPath), { recursive: true })
         fs.writeFileSync(localPath, bytes)
       }
-      const runGit = (args: string[]) => trusted.get(String(args[1]).replace(/^refs\/heads\/main:/, ""))!
+      const runGit = (args: string[]) => {
+        expect(args[0]).toBe("--no-replace-objects")
+        return trusted.get(String(args[2]).replace(/^refs\/heads\/main:/, ""))!
+      }
       expect(inspectActivationCriticalWorkingFiles(value, { repositoryRoot: fixture, runGit })).toMatchObject({ status: "ACTIVATION_CRITICAL_FILES_VERIFIED", executionAuthorized: false })
       fs.writeFileSync(path.join(fixture, ...value.trustedMain.controlPlane.criticalPaths[0].split("/")), "substituted\n")
       expect(inspectActivationCriticalWorkingFiles(value, { repositoryRoot: fixture, runGit })).toMatchObject({ status: "BLOCKED", reasons: [{ code: "TRUSTED_MAIN_UNPROVEN" }] })
