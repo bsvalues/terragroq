@@ -21,18 +21,22 @@ $logDir = Join-Path $runtimeRootPath "logs"
 $supervisorLogPath = Join-Path $logDir ("supervisor-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 $cliPath = Join-Path $workspacePath "scripts\hermes-bridge\cli.mjs"
 $envPath = Join-Path $workspacePath ".env.local"
-$nodeCommand = try {
-    Get-Command node -CommandType Application -All -ErrorAction Stop |
-        Select-Object -First 1
+$nodePath = try {
+    foreach ($nodeCommand in @(Get-Command node -CommandType Application -All -ErrorAction Stop)) {
+        $candidatePath = [IO.Path]::GetFullPath($nodeCommand.Source)
+        if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) { continue }
+        $versionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($candidatePath)
+        if ($versionInfo.ProductName -ceq "Node.js" -and
+            $versionInfo.OriginalFilename -ceq "node.exe") {
+            $candidatePath
+            break
+        }
+    }
 }
 catch {
     $null
 }
-if ($null -eq $nodeCommand) {
-    throw "HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL"
-}
-$nodePath = [IO.Path]::GetFullPath($nodeCommand.Source)
-if (-not (Test-Path -LiteralPath $nodePath -PathType Leaf)) {
+if ([string]::IsNullOrWhiteSpace($nodePath)) {
     throw "HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL"
 }
 $mutexName = "Global\WilliamOSHermesCodexBridgeSupervisor"
