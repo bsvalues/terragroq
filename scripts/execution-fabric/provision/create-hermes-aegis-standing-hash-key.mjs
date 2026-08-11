@@ -129,7 +129,7 @@ function assertAbsentTargets(fsApi) {
 
 function assertFixedExecutable(fsApi, target) {
   const stats = fsApi.lstatSync(target)
-  if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink < 1
+  if (!stats.isFile() || stats.isSymbolicLink() || !Number.isSafeInteger(stats.nlink) || stats.nlink < 1
     || path.win32.normalize(fsApi.realpathSync(target)).toLowerCase() !== path.win32.normalize(target).toLowerCase()) {
     fail("HERMES_KEY_EXECUTABLE_UNTRUSTED", `${target} must be the fixed direct system executable`)
   }

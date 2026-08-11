@@ -305,7 +305,7 @@ describe("injected Hermes AEGIS standing HASH dedicated-key generation", () => {
     expect(value.virtual.events.filter(({ kind }) => ["create", "write", "link", "unlink", "spawn"].includes(kind))).toEqual([])
   })
 
-  it("accepts Windows component-store hard links only for the fixed system executables", () => {
+  it("accepts Windows component-store hard links for the fixed system executables", () => {
     const value = harness({
       existing: [
         { target: WHOAMI_PATH, nlink: 2 },
@@ -320,6 +320,13 @@ describe("injected Hermes AEGIS standing HASH dedicated-key generation", () => {
 
   it("still rejects an indirect fixed system executable", () => {
     const value = harness({ existing: [{ target: WHOAMI_PATH, kind: "symlink" }] })
+
+    expect(errorCode(() => createHermesAegisStandingHashKey(value.options))).toBe("HERMES_KEY_EXECUTABLE_UNTRUSTED")
+    expect(value.spawnSyncApi).not.toHaveBeenCalled()
+  })
+
+  it.each([0, Number.NaN])("rejects malformed fixed-executable link count %s", (nlink) => {
+    const value = harness({ existing: [{ target: WHOAMI_PATH, nlink }] })
 
     expect(errorCode(() => createHermesAegisStandingHashKey(value.options))).toBe("HERMES_KEY_EXECUTABLE_UNTRUSTED")
     expect(value.spawnSyncApi).not.toHaveBeenCalled()
