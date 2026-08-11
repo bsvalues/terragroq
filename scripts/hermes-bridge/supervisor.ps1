@@ -21,6 +21,20 @@ $logDir = Join-Path $runtimeRootPath "logs"
 $supervisorLogPath = Join-Path $logDir ("supervisor-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 $cliPath = Join-Path $workspacePath "scripts\hermes-bridge\cli.mjs"
 $envPath = Join-Path $workspacePath ".env.local"
+$nodeCommand = try {
+    Get-Command node -CommandType Application -All -ErrorAction Stop |
+        Select-Object -First 1
+}
+catch {
+    $null
+}
+if ($null -eq $nodeCommand) {
+    throw "HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL"
+}
+$nodePath = [IO.Path]::GetFullPath($nodeCommand.Source)
+if (-not (Test-Path -LiteralPath $nodePath -PathType Leaf)) {
+    throw "HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL"
+}
 $mutexName = "Global\WilliamOSHermesCodexBridgeSupervisor"
 $createdNew = $false
 $mutex = [Threading.Mutex]::new($true, $mutexName, [ref]$createdNew)
@@ -153,6 +167,7 @@ function Get-CycleEnvelope {
 function Invoke-OwnedNodeCycle {
     param(
         [Parameter(Mandatory)][string]$OwnedWorkspace,
+        [Parameter(Mandatory)][string]$OwnedNodePath,
         [Parameter(Mandatory)][string]$OwnedCliPath,
         [Parameter(Mandatory)][string]$OwnedRuntimeRoot,
         [Parameter(Mandatory)][string]$OwnedEnvPath,
@@ -168,7 +183,7 @@ function Invoke-OwnedNodeCycle {
     $processStarted = $false
     try {
         $startInfo = [Diagnostics.ProcessStartInfo]::new()
-        $startInfo.FileName = "node"
+        $startInfo.FileName = $OwnedNodePath
         $startInfo.WorkingDirectory = $OwnedWorkspace
         $startInfo.UseShellExecute = $false
         $startInfo.CreateNoWindow = $true
@@ -353,6 +368,7 @@ try {
             else {
                 $cycleEnvelope = Invoke-OwnedNodeCycle `
                     -OwnedWorkspace $workspacePath `
+                    -OwnedNodePath $nodePath `
                     -OwnedCliPath $cliPath `
                     -OwnedRuntimeRoot $runtimeRootPath `
                     -OwnedEnvPath $envPath `

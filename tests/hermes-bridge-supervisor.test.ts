@@ -102,11 +102,17 @@ describe("Hermes interactive-user supervisor", () => {
   it.skipIf(hostOnly)("returns from a direct one-shot Node cycle without a nested shell", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-direct-cycle-"))
     const launchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-direct-launch-"))
+    const firstNodeRoot = path.join(launchRoot, "node-first")
+    const secondNodeRoot = path.join(launchRoot, "node-second")
     const runtimeRoot = path.join(launchRoot, "runtime")
     const activationPath = path.join(runtimeRoot, "control", "activation")
     const cliDirectory = path.join(workspace, "scripts", "hermes-bridge")
     fs.mkdirSync(path.dirname(activationPath), { recursive: true })
     fs.mkdirSync(cliDirectory, { recursive: true })
+    fs.mkdirSync(firstNodeRoot)
+    fs.mkdirSync(secondNodeRoot)
+    fs.copyFileSync(process.execPath, path.join(firstNodeRoot, "node.exe"))
+    fs.copyFileSync(process.execPath, path.join(secondNodeRoot, "node.exe"))
     fs.writeFileSync(activationPath, "enabled\n")
     fs.writeFileSync(path.join(workspace, ".env.local"), "")
     fs.writeFileSync(
@@ -124,6 +130,10 @@ describe("Hermes interactive-user supervisor", () => {
     const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
       cwd: launchRoot,
       encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: [firstNodeRoot, secondNodeRoot, process.env.PATH].filter(Boolean).join(path.delimiter),
+      },
       timeout: 15_000,
     })
 
@@ -151,7 +161,15 @@ describe("Hermes interactive-user supervisor", () => {
     const second = spawnSync(
       "pwsh",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
-      { cwd: launchRoot, encoding: "utf8", timeout: 15_000 },
+      {
+        cwd: launchRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: [firstNodeRoot, secondNodeRoot, process.env.PATH].filter(Boolean).join(path.delimiter),
+        },
+        timeout: 15_000,
+      },
     )
     expect(second.status, second.stderr).toBe(0)
     const cycles = fs.readFileSync(
@@ -163,6 +181,37 @@ describe("Hermes interactive-user supervisor", () => {
     expect(cycles[1].processIdentity).not.toBe(cycles[0].processIdentity)
     expect(fs.existsSync(path.join(runtimeRoot, "state", "supervisor.json"))).toBe(false)
   })
+
+  it.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1")(
+    "fails with the typed executable wall when Node is absent",
+    () => {
+      const { root, script } = isolatedSupervisor()
+      const emptyPath = path.join(root, "empty-path")
+      fs.mkdirSync(emptyPath)
+      const pwshProbe = spawnSync(
+        "pwsh",
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Environment]::ProcessPath"],
+        { encoding: "utf8" },
+      )
+      expect(pwshProbe.status, pwshProbe.stderr).toBe(0)
+      const pwshPath = pwshProbe.stdout.trim()
+      const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
+      const result = spawnSync(
+        pwshPath,
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+          `& ${quote(script)} -Workspace ${quote(root)} -RuntimeRoot ${quote(root)} -RunOnce`],
+        {
+          encoding: "utf8",
+          env: { ...process.env, PATH: emptyPath },
+          timeout: 15_000,
+        },
+      )
+
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain("HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL")
+      expect(result.stderr).not.toContain("CommandNotFoundException")
+    },
+  )
 
   it.skipIf(process.platform !== "win32" || process.env.WILLIAMOS_HERMES_VALIDATION_ISOLATED === "1")(
     "fails closed on a malformed persisted campaign window",
@@ -316,6 +365,12 @@ describe("Hermes interactive-user supervisor", () => {
     expect(supervisor).toContain("[IO.File]::Move($temporary, $Path)")
     expect(supervisor).toContain("HERMES_CAMPAIGN_WINDOW_INVALID")
     expect(supervisor).toContain("$runtimeRootPath = [IO.Path]::GetFullPath($RuntimeRoot)")
+    expect(supervisor).toContain("Get-Command node -CommandType Application -All -ErrorAction Stop")
+    expect(supervisor).toContain("Select-Object -First 1")
+    expect(supervisor).toContain("$nodePath = [IO.Path]::GetFullPath($nodeCommand.Source)")
+    expect(supervisor).toContain("HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL")
+    expect(supervisor).toContain("$startInfo.FileName = $OwnedNodePath")
+    expect(supervisor).not.toContain('$startInfo.FileName = "node"')
     expect(supervisor).toContain('$startInfo.ArgumentList.Add($OwnedCliPath)')
     expect(supervisor).toContain('$startInfo.ArgumentList.Add("cycle")')
     expect(supervisor).not.toContain("& pwsh.exe")
