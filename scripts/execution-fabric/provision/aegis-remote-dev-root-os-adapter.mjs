@@ -40,6 +40,7 @@ function exactFile(file, expectedSha, owner = 0, group = 0, mode) {
     return trustedParents(file) && stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.uid === owner && stat.gid === group && (mode === undefined || (stat.mode & 0o7777) === mode) && sha(fs.readFileSync(file)) === expectedSha
   } catch { return false }
 }
+function lexists(file) { try { fs.lstatSync(file); return true } catch (error) { if (error?.code === "ENOENT") return false; throw error } }
 function readCanonicalRootJson(file, mode = 0o400) {
   const stat = fs.lstatSync(file)
   if (!trustedParents(file) || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== 0 || stat.gid !== 0 || (stat.mode & 0o7777) !== mode || stat.size < 3 || stat.size > 1_048_576) fail("EVIDENCE_FILE_UNTRUSTED", `${file} trust differs`)
@@ -105,6 +106,21 @@ function userProcesses(uid) {
   }
   return { proven: true, pids, onlyManager }
 }
+function sharedGroupProcessesExact(gid, allowedUids) {
+  try {
+    const allowed = new Set(allowedUids.map(String))
+    for (const entry of fs.readdirSync("/proc")) {
+      if (!/^[1-9][0-9]*$/.test(entry)) continue
+      let status
+      try { status = fs.readFileSync(`/proc/${entry}/status`, "utf8") } catch (error) { if (error?.code === "ENOENT") continue; return false }
+      const gids = [...(/^[G]id:\s+(.+)$/m.exec(status)?.[1] ?? "").trim().split(/\s+/), ...(/^[G]roups:\s*(.*)$/m.exec(status)?.[1] ?? "").trim().split(/\s+/)].filter(Boolean)
+      if (!gids.includes(String(gid))) continue
+      const uids = (/^[U]id:\s+(.+)$/m.exec(status)?.[1] ?? "").trim().split(/\s+/).filter(Boolean)
+      if (!uids.length || uids.some((uid) => !allowed.has(uid))) return false
+    }
+    return true
+  } catch { return false }
+}
 
 export function inspectNoSudoCapabilityEvidence(result) {
   if (!result || result.error != null || result.signal !== null || result.status !== 1) return false
@@ -119,13 +135,26 @@ function noSudoCapability() {
 function version(executable, args, pattern) {
   try { return pattern.exec(run(executable, args, { timeout: 10_000 }))?.[1] ?? null } catch { return null }
 }
-function toolchainState(authority) {
-  const exact = [["git", "/usr/bin/git", ["--version"], /git version (\S+)/], ["node", "/usr/bin/node", ["--version"], /v(\S+)/], ["dotnetSdk", "/usr/bin/dotnet", ["--version"], /(\S+)/], ["corepack", "/usr/bin/corepack", ["--version"], /(\S+)/], ["pnpm", "/usr/bin/pnpm", ["--version"], /(\S+)/]]
+function toolchainState(manifest, authority) {
+  const wrapper = manifest.appliedAssets.find((asset) => asset.destination === "/usr/bin/dotnet")
+  if (!wrapper) return "DRIFT"
+  if (lexists("/usr/bin/dotnet") && !exactFile("/usr/bin/dotnet", wrapper.sha256, 0, 0, 0o555)) {
+    const command = fs.lstatSync("/usr/bin/dotnet")
+    if (!command.isSymbolicLink() || fs.readlinkSync("/usr/bin/dotnet") !== "/usr/share/dotnet/dotnet") return "DRIFT"
+  }
+  const exact = [["git", "/usr/bin/git", ["--version"], /git version (\S+)/], ["node", "/usr/bin/node", ["--version"], /v(\S+)/], ["dotnetSdk", "/usr/share/dotnet/dotnet", ["--version"], /(\S+)/], ["corepack", "/usr/bin/corepack", ["--version"], /(\S+)/], ["pnpm", "/usr/bin/pnpm", ["--version"], /(\S+)/]]
   let missing = false
   for (const [name, executable, args, pattern] of exact) {
     const observed = version(executable, args, pattern)
     if (observed === authority.inputs.toolchain[name].version) {
       if (name !== "dotnetSdk" && !exactFile(executable, authority.inputs.toolchain[name].sha256, 0, 0, 0o755)) return "DRIFT"
+      if (name === "dotnetSdk" && !exactFile("/usr/bin/dotnet", wrapper.sha256, 0, 0, 0o555)) {
+        if (lexists("/usr/bin/dotnet")) {
+          const command = fs.lstatSync("/usr/bin/dotnet")
+          if (!command.isSymbolicLink() || fs.readlinkSync("/usr/bin/dotnet") !== "/usr/share/dotnet/dotnet") return "DRIFT"
+        }
+        missing = true
+      }
       continue
     }
     if (name === "dotnetSdk" && !fs.existsSync("/usr/share/dotnet")) { missing = true; continue }
@@ -167,6 +196,7 @@ function repositoryState(manifest, authority) {
 function rootAssetsState(manifest, authority) {
   const ids = accountIds("williamos-fabric"); let missing = false
   for (const asset of manifest.appliedAssets) {
+    if (asset.destination === "/usr/bin/dotnet") continue
     if (!fs.existsSync(asset.destination)) { missing = true; continue }
     if (!exactFile(asset.destination, asset.sha256, 0, asset.group === "williamos-fabric" ? ids?.gid : 0, Number.parseInt(asset.mode, 8))) return "DRIFT"
   }
@@ -307,12 +337,12 @@ function observe(manifest, authority, trust) {
   const rootAssets = rootAssetsState(manifest, authority)
   const nft = networkBoundaryMatches()
   const repositories = repositoryState(manifest, authority)
-  const toolchain = toolchainState(authority)
+  const toolchain = toolchainState(manifest, authority)
   const ledger = (() => { try { const s = fs.lstatSync("/var/lib/williamos/fabric/ledger"); return trustedParents("/var/lib/williamos/fabric/ledger") && s.isDirectory() && !s.isSymbolicLink() && s.uid === ids?.uid && s.gid === ids?.gid && (s.mode & 0o7777) === 0o700 && run("/usr/bin/findmnt", ["-n", "-o", "FSTYPE", "--target", "/var/lib/williamos/fabric/ledger"]) === "ext4" } catch { return false } })()
   const processState = ids ? userProcesses(ids.uid) : { proven: true, pids: [], onlyManager: true }
   const brokerProcessState = brokerIds ? userProcesses(brokerIds.uid) : { proven: true, pids: [], onlyManager: true }
   const gitBrokerProcessState = gitBrokerIds ? userProcesses(gitBrokerIds.uid) : { proven: true, pids: [], onlyManager: true }
-  const identityMatch = (() => { try { const shadow = run("/usr/bin/getent", ["shadow", "williamos-fabric"]).split(":")[1]; const linger = fs.existsSync(`/var/lib/systemd/linger/williamos-fabric`); return ids?.home === "/var/empty/williamos-fabric" && ids?.shell === "/bin/bash" && /^!/.test(shadow) && linger && noSudoCapability() && same(supplementaryGroups("williamos-fabric"), [ids.gid]) && processState.proven && processState.onlyManager && brokerIds?.home === "/var/empty/williamos-egress-broker" && brokerIds?.shell === "/usr/sbin/nologin" && brokerProcessState.proven && same(supplementaryGroups("williamos-egress-broker"), [brokerIds.gid]) && gitBrokerIds?.home === "/var/empty/williamos-git-broker" && gitBrokerIds?.shell === "/usr/sbin/nologin" && gitBrokerIds.gid === ids.gid && gitBrokerProcessState.proven && gitBrokerProcessState.pids.length === 0 && same(supplementaryGroups("williamos-git-broker"), [ids.gid]) && exactSharedGitGroup(ids.gid) } catch { return false } })()
+  const identityMatch = (() => { try { const shadow = run("/usr/bin/getent", ["shadow", "williamos-fabric"]).split(":")[1]; const linger = fs.existsSync(`/var/lib/systemd/linger/williamos-fabric`); return ids?.home === "/var/empty/williamos-fabric" && ids?.shell === "/bin/bash" && /^!/.test(shadow) && linger && noSudoCapability() && same(supplementaryGroups("williamos-fabric"), [ids.gid]) && processState.proven && processState.onlyManager && brokerIds?.home === "/var/empty/williamos-egress-broker" && brokerIds?.shell === "/usr/sbin/nologin" && brokerProcessState.proven && same(supplementaryGroups("williamos-egress-broker"), [brokerIds.gid]) && gitBrokerIds?.home === "/var/empty/williamos-git-broker" && gitBrokerIds?.shell === "/usr/sbin/nologin" && gitBrokerIds.gid === ids.gid && gitBrokerProcessState.proven && gitBrokerProcessState.pids.length === 0 && same(supplementaryGroups("williamos-git-broker"), [ids.gid]) && exactSharedGitGroup(ids.gid) && sharedGroupProcessesExact(ids.gid, [ids.uid, gitBrokerIds.uid]) } catch { return false } })()
   const expectedTransport = (() => { try { const key = fs.readFileSync(path.join(STAGED_ROOT, "hermes-transport.pub"), "utf8").trim(); return `from="192.168.1.154",restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" ${key}\n` } catch { return null } })()
   const githubMatch = exactFile("/etc/williamos-fabric/github_known_hosts", authority.inputs.githubHostKnownHostsSha256, 0, 0, 0o444) && exactFile("/etc/williamos-fabric/github-account.key", authority.inputs.githubAccountPrivateKeySha256, 0, 0, 0o400)
   const states = {
@@ -351,10 +381,11 @@ function applyIdentity() {
   ensureRootDirectory("/var/empty/williamos-git-broker", 0o755)
   run("/usr/sbin/usermod", ["-G", "", "--gid", "williamos-fabric", "--home", "/var/empty/williamos-git-broker", "--shell", "/usr/sbin/nologin", "--lock", "williamos-git-broker"])
   gitBroker = accountIds("williamos-git-broker")
-  if (!gitBroker || gitBroker.gid !== ids.gid || !same(supplementaryGroups("williamos-git-broker"), [ids.gid]) || !exactSharedGitGroup(ids.gid)) fail("IDENTITY_DRIFT", "Git broker identity or exact shared primary group differs")
+  if (!gitBroker || gitBroker.gid !== ids.gid || !same(supplementaryGroups("williamos-git-broker"), [ids.gid]) || !exactSharedGitGroup(ids.gid) || !sharedGroupProcessesExact(ids.gid, [ids.uid, gitBroker.uid])) fail("IDENTITY_DRIFT", "Git broker identity, live retained group holders, or exact shared primary group differs")
 }
 function applyAssets(manifest, authority) {
   for (const asset of manifest.appliedAssets) {
+    if (asset.destination === "/usr/bin/dotnet") continue
     const source = path.join(BUNDLE_ROOT, ...asset.source.split("/")); const ids = asset.group === "williamos-fabric" ? accountIds("williamos-fabric") : null
     atomicInstall(source, asset.destination, asset.sha256, Number.parseInt(asset.mode, 8), 0, ids?.gid ?? 0)
   }
@@ -369,6 +400,8 @@ function applyNetwork(authority) {
   run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-runtime-authority.mjs"])
   run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-git-broker.mjs"])
   run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-git-client.mjs"])
+  const worker = accountIds("williamos-fabric"); const gitBroker = accountIds("williamos-git-broker")
+  if (!worker || !gitBroker || !sharedGroupProcessesExact(worker.gid, [worker.uid, gitBroker.uid])) fail("IDENTITY_DRIFT", "retained shared-group process exists before broker socket enable")
   run("/usr/bin/systemctl", ["enable", "--now", "williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service", "williamos-aegis-remote-dev-git-broker.socket"])
   if (!networkBoundaryMatches()) fail("NETWORK_BOUNDARY_UNPROVEN", "exact broker/default-deny/Atlas boundary differs after apply")
 }
@@ -413,9 +446,9 @@ function applyRepositories(manifest, authority) {
   run("/usr/bin/git", [`--git-dir=${mirror}`, "cat-file", "-e", "ffd2fa35f5152de2b95e7f63b220050d18193d7a^{commit}"])
   if (repositoryState(manifest, authority) !== "MATCH") fail("REPOSITORY_DRIFT", "trusted repositories differ after reconciliation")
 }
-function applyToolchain(authority) {
+function applyToolchain(manifest, authority) {
   const dotnet = authority.inputs.toolchain.dotnetSdk
-  if (version("/usr/bin/dotnet", ["--version"], /(\S+)/) !== dotnet.version) {
+  if (version("/usr/share/dotnet/dotnet", ["--version"], /(\S+)/) !== dotnet.version) {
     if (fs.existsSync("/usr/share/dotnet")) fail("PINNED_TOOLCHAIN_DRIFT", "existing .NET installation differs; overwrite refused")
     const archive = staged("dotnet-sdk-8.0.423-linux-x64.tar.gz", dotnet.sha256, 0o400)
     const entries = run("/usr/bin/tar", ["-tzf", archive], { timeout: 30_000 }).split(/\r?\n/).filter(Boolean)
@@ -437,7 +470,16 @@ function applyToolchain(authority) {
     run("/usr/bin/sync", ["-f", temporary])
     fs.renameSync(temporary, "/usr/share/dotnet"); const parent = fs.openSync("/usr/share", fs.constants.O_RDONLY); fs.fsyncSync(parent); fs.closeSync(parent)
   }
-  const exact = [["git", "/usr/bin/git", ["--version"], /git version (\S+)/], ["node", "/usr/bin/node", ["--version"], /v(\S+)/], ["dotnetSdk", "/usr/bin/dotnet", ["--version"], /(\S+)/], ["corepack", "/usr/bin/corepack", ["--version"], /(\S+)/], ["pnpm", "/usr/bin/pnpm", ["--version"], /(\S+)/]]
+  const wrapper = manifest.appliedAssets.find((asset) => asset.destination === "/usr/bin/dotnet")
+  if (!wrapper) fail("PINNED_TOOLCHAIN_DRIFT", "reviewed dotnet wrapper asset is absent")
+  const source = path.join(BUNDLE_ROOT, ...wrapper.source.split("/"))
+  if (lexists("/usr/bin/dotnet") && !exactFile("/usr/bin/dotnet", wrapper.sha256, 0, 0, 0o555)) {
+    const stat = fs.lstatSync("/usr/bin/dotnet")
+    if (!stat.isSymbolicLink() || fs.readlinkSync("/usr/bin/dotnet") !== "/usr/share/dotnet/dotnet") fail("PINNED_TOOLCHAIN_DRIFT", "existing dotnet command is neither reviewed wrapper nor canonical SDK symlink")
+    fs.unlinkSync("/usr/bin/dotnet")
+  }
+  atomicInstall(source, "/usr/bin/dotnet", wrapper.sha256, 0o555)
+  const exact = [["git", "/usr/bin/git", ["--version"], /git version (\S+)/], ["node", "/usr/bin/node", ["--version"], /v(\S+)/], ["dotnetSdk", "/usr/share/dotnet/dotnet", ["--version"], /(\S+)/], ["corepack", "/usr/bin/corepack", ["--version"], /(\S+)/], ["pnpm", "/usr/bin/pnpm", ["--version"], /(\S+)/]]
   for (const [name, executable, args, pattern] of exact) if (version(executable, args, pattern) !== authority.inputs.toolchain[name].version) fail("PINNED_TOOLCHAIN_UNAVAILABLE", `${name} must be pre-staged and installed by the signed package provenance before this transaction`)
 }
 function applyLedger() {
@@ -505,7 +547,7 @@ export function createRootProductionAdapter(manifest, authority, trust) {
       else if (id === "INSTALL_DUAL_STACK_BROKER_BOUNDARY") applyNetwork(authority)
       else if (id === "INSTALL_GITHUB_HOST_AUTH_BOUNDARY") applyGithub(authority)
       else if (id === "RECONCILE_TRUSTED_REPOSITORIES") applyRepositories(manifest, authority)
-      else if (id === "INSTALL_PINNED_TOOLCHAIN") applyToolchain(authority)
+      else if (id === "INSTALL_PINNED_TOOLCHAIN") applyToolchain(manifest, authority)
       else if (id === "CREATE_DURABLE_LEDGER") applyLedger()
       else if (id === "INSTALL_FORCED_COMMAND_TRANSPORT") applyTransport(authority)
       else fail("STEP_NOT_ALLOWLISTED", "root handoff step differs")

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-umask 077
+umask 007
 
 readonly WORK_ORDER_ID="WO-TF-REMOTE-DEV-OFFLOAD-001"
 readonly REPOSITORY="bsvalues/terrafusion_os_1.0"
@@ -727,7 +727,10 @@ case "$OPERATION" in
     run_capture git -C "$REPO_DIR" commit -m "ci(backend): expose doctrine tests as informational"
     [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "commit failed"
     HEAD_SHA="$(repo_value rev-parse HEAD)"
-    printf '%s\n' "$HEAD_SHA" > "$PHYSICAL_WORKSPACE/.williamos-commit-created"
+    marker_tmp="$PHYSICAL_WORKSPACE/.williamos-commit-created.${RUN_ID}.tmp"
+    printf '%s\n' "$HEAD_SHA" > "$marker_tmp"
+    chmod 0640 -- "$marker_tmp"
+    mv -- "$marker_tmp" "$PHYSICAL_WORKSPACE/.williamos-commit-created"
     ;;
   PUSH_AUTHORIZED_BRANCH)
     validate_owner_marker; validate_repo

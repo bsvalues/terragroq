@@ -91,8 +91,9 @@ function execute(request) {
     if (!/^[a-f0-9]{40}$/.test(head)) throw new Error("repository head differs")
     if (operation === "PUSH_AUTHORIZED_BRANCH") {
       const marker = "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001/.williamos-commit-created"
-      const markerStat = fs.lstatSync(marker); const markerValue = fs.readFileSync(marker, "utf8")
-      if (!markerStat.isFile() || markerStat.isSymbolicLink() || markerStat.nlink !== 1 || markerValue !== `${head}\n`) throw new Error("committed-head marker differs")
+      const markerStat = fs.lstatSync(marker); const workspaceStat = fs.lstatSync("/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001"); const markerValue = fs.readFileSync(marker, "utf8")
+      if (!markerStat.isFile() || markerStat.isSymbolicLink() || markerStat.nlink !== 1 || markerStat.uid !== workspaceStat.uid || markerStat.gid !== process.getgid()
+        || (markerStat.mode & 0o7777) !== 0o640 || markerValue !== `${head}\n`) throw new Error("committed-head marker differs")
       run(["-c", "core.hooksPath=/dev/null", "-c", "credential.helper=", "-C", REPOSITORY, "push", REMOTE, `HEAD:refs/heads/${bound.branch}`], gitEnv)
     }
     else run(["-C", REPOSITORY, "fetch", "--no-tags", REMOTE, "main:refs/remotes/origin/main"], gitEnv)

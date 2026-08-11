@@ -379,11 +379,9 @@ function managerEnvironment(uid) {
   })
 }
 function workerEnvironment(bound) {
-  const environment = {
-    HOME: "/nonexistent", PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C",
-    WILLIAMOS_NETWORK_TICKET_B64: bound.ticketB64,
-    WILLIAMOS_NETWORK_PACKET_B64: bound.packetB64,
-    WILLIAMOS_NETWORK_OPERATION: bound.operation,
+  const environment = { HOME: "/nonexistent", PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C", WILLIAMOS_NETWORK_OPERATION: bound.operation }
+  if (["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "RESTORE_DOTNET", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE"].includes(bound.operation)) {
+    Object.assign(environment, { WILLIAMOS_NETWORK_TICKET_B64: bound.ticketB64, WILLIAMOS_NETWORK_PACKET_B64: bound.packetB64 })
   }
   if (bound.operation === "RESTORE_DOTNET") {
     const proxy = `http://WilliamOS:${encodeURIComponent(bound.ticketB64)}@127.0.0.1:17734`

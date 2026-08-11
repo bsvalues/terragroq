@@ -262,6 +262,22 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(records.at(-1).phase).toBe("COMMITTED")
   })
 
+  it("refuses commit when current prerequisite state disappears after durable post-apply verification", async () => {
+    const manifest = loadManifest(); const signed = signedAuthority(manifest); let claimed = false; let crash = true; let drift = false
+    const records: any[] = []
+    const observation = () => { const value = completeObservation(manifest); value.prerequisites = Object.fromEntries(manifest.steps.map((step: { id: string }) => [step.id, "MATCH"])); if (drift) value.prerequisites[manifest.steps[0].id] = "ABSENT"; return value }
+    const adapter = {
+      acquireLease: async () => true, releaseLease: async () => undefined, reprove: async () => observation(),
+      claim: async () => claimed ? { resume: true } : (claimed = true), recover: async () => ({ records, committed: false }),
+      append: async (record: any) => { if (crash && (record.phase === "COMMITTED" || record.phase === "FAILED_PARTIAL")) throw new Error("synthetic process loss"); records.push(record) },
+      effectApplied: async () => true, apply: async () => { throw new Error("must not apply") }, verify: async () => observation(), publishSuccess: async () => { throw new Error("must not publish") },
+    }
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:05:00.000Z", adapter)).toMatchObject({ status: "BLOCKED", reasonCode: "PARTIAL_APPLY_INERT" })
+    drift = true; crash = false
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:06:00.000Z", adapter)).toMatchObject({ status: "BLOCKED", reasonCode: "PARTIAL_APPLY_INERT" })
+    expect(records.some((record) => record.phase === "COMMITTED")).toBe(false)
+  })
+
   it("accepts only an exact conclusive sudo denial and rejects password, signal, or ambiguous errors", () => {
     expect(inspectNoSudoCapabilityEvidence({ status: 1, signal: null, error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" })).toBe(true)
     expect(inspectNoSudoCapabilityEvidence({ status: 1, signal: null, error: null, stdout: "", stderr: "Sorry, user williamos-fabric may not run sudo on aegis.\n" })).toBe(true)
@@ -305,6 +321,8 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     const authority = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"), "utf8")
     expect(authority).toContain("const current = Date.now()")
     expect(authority).toContain("current >= expires")
+    expect(authority).toContain("continueConnectAuthorization")
+    expect(authority).toContain("issued + 5_400_000")
     expect(isDeniedDestination("140.82.112.36")).toBe(false)
     expect(isDeniedDestination("2606:50c0:8000::154")).toBe(false)
   })
@@ -339,11 +357,30 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(gitService).toContain("Group=williamos-fabric")
     expect(gitService).toContain("IPAddressDeny=any")
     expect(gitService).toContain("IPAddressAllow=localhost")
+    expect(gitService).toContain("/var/lib/williamos-fabric/remote-dev-launch-tickets")
     expect(gitService).not.toContain("User=williamos-fabric")
     expect(gitBroker).toContain('name.startsWith("url.")')
     expect(gitBroker).toContain('"remote", "get-url", "--push", "--all", "origin"')
     expect(gitBroker).toContain('"push", REMOTE')
     expect(worker).toContain('chmod 2770 -- "$PHYSICAL_WORKSPACE"')
+    expect(worker).toContain("umask 007")
+    expect(worker).toContain('chmod 0640 -- "$marker_tmp"')
+    expect(dotnet).toContain("TEST_DOTNET_INFORMATIONAL|BUILD_DOTNET_RELEASE")
+  })
+
+  it("accepts only the exact authenticated restore proxy and explicit non-network dotnet modes", () => {
+    const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "/usr/bin/bash"
+    const wrapper = path.join(root, "scripts/execution-fabric/provision/assets/williamos-dotnet-broker-wrapper")
+    const base = { ...process.env, HTTPS_PROXY: "", https_proxy: "", NO_PROXY: "", no_proxy: "" }
+    const preflight = spawnSync(bash, [wrapper, "--version"], { env: { ...base, WILLIAMOS_NETWORK_OPERATION: "PROVE_PREFLIGHT", WILLIAMOS_NETWORK_TICKET_B64: "e30=" }, shell: false })
+    expect(preflight.status).not.toBe(64)
+    const ticket = "e30="; const proxy = `http://WilliamOS:${encodeURIComponent(ticket)}@127.0.0.1:17734`
+    const restore = spawnSync(bash, [wrapper, "restore"], { env: { ...base, WILLIAMOS_NETWORK_OPERATION: "RESTORE_DOTNET", WILLIAMOS_NETWORK_TICKET_B64: ticket, HTTPS_PROXY: proxy, https_proxy: proxy }, shell: false })
+    expect(restore.status).not.toBe(64)
+    const unauthenticated = spawnSync(bash, [wrapper, "restore"], { env: { ...base, WILLIAMOS_NETWORK_OPERATION: "RESTORE_DOTNET" }, shell: false })
+    expect(unauthenticated.status).toBe(64)
+    const networkedBuild = spawnSync(bash, [wrapper, "build", "--no-restore"], { env: { ...base, WILLIAMOS_NETWORK_OPERATION: "BUILD_DOTNET_RELEASE", HTTPS_PROXY: "http://127.0.0.1:17734" }, shell: false })
+    expect(networkedBuild.status).toBe(64)
   })
 
   it("ships one fixed production OS adapter and CLI with no caller provider, clock, path, or command injection", () => {
@@ -368,7 +405,11 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(adapter).toContain('"merge-base", "--is-ancestor", manifest.trustedMain.minimumCommit, authority.trustedMainCommit')
     expect(adapter).toContain("existingReceiptMatches")
     expect(adapter).toContain("proveRootServiceFence")
+    expect(adapter).toContain("sharedGroupProcessesExact")
+    expect(adapter).toContain('version("/usr/share/dotnet/dotnet"')
+    expect(adapter).toContain('fs.readlinkSync("/usr/bin/dotnet") !== "/usr/share/dotnet/dotnet"')
     expect(cli).toContain("KillMode=control-group")
+    expect(cli).toContain("--wait --pipe --collect")
     expect(cli).toContain("williamos-aegis-root-handoff.service")
     expect(adapter.indexOf('run("/usr/bin/loginctl", ["terminate-user", "williamos-fabric"]')).toBeLessThan(adapter.indexOf("applyAssets(manifest, authority)"))
     expect(adapter).toContain("same(lines, expected)")

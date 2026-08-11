@@ -46,7 +46,7 @@
       },
       "proofWorker": {
         "path": "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
-        "sha256": "1a256ad534219152713bdc2b46353f56d011eb8ce5bae62f11f5857e96fdb9e8"
+        "sha256": "155f32a21f0be1ffa15c31e763f20d7c656e7e1027c3e0eeec6cc626f190ad04"
       }
     }
   },

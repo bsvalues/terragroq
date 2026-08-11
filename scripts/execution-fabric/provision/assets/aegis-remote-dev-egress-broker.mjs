@@ -1,10 +1,12 @@
 #!/usr/bin/node
 import dns from "node:dns/promises"
+import crypto from "node:crypto"
 import http from "node:http"
 import net from "node:net"
-import { allowedHostForOperation, authorizeConnect, isDeniedDestination } from "./aegis-remote-dev-runtime-authority.mjs"
+import { allowedHostForOperation, authorizeConnect, continueConnectAuthorization, isDeniedDestination } from "./aegis-remote-dev-runtime-authority.mjs"
 
 const HOSTS = new Set(["ssh.github.com", "api.github.com", "api.nuget.org", "globalcdn.nuget.org"])
+const sessions = new Map()
 function ticketAuthority(request) {
   const header = String(request.headers["proxy-authorization"] ?? "")
   const direct = /^WilliamOS ([A-Za-z0-9+/]+={0,2})$/.exec(header)
@@ -31,6 +33,14 @@ async function resolveExact(host) {
   if (!values.length || values.some(isDeniedDestination)) throw new Error("destination denied")
   return values[0]
 }
+function authorizeBrokerConnect(ticket, operation, host) {
+  const key = crypto.createHash("sha256").update(ticket, "ascii").digest("hex")
+  const existing = sessions.get(key)
+  if (existing) return continueConnectAuthorization(existing, operation, host)
+  const authorization = authorizeConnect(ticket, operation, host)
+  sessions.set(key, authorization)
+  return authorization
+}
 const server = http.createServer((_request, response) => { response.writeHead(405, { Connection: "close" }); response.end() })
 server.on("connect", async (request, client, head) => {
   try {
@@ -38,7 +48,7 @@ server.on("connect", async (request, client, head) => {
     if (!match || !HOSTS.has(match[1])) throw new Error("endpoint denied")
     const authorization = ticketAuthority(request)
     if (!allowedHostForOperation(authorization.operation, match[1])) throw new Error("operation authority denied")
-    authorizeConnect(authorization.ticket, authorization.operation, match[1])
+    authorizeBrokerConnect(authorization.ticket, authorization.operation, match[1])
     const upstream = net.createConnection({ host: await resolveExact(match[1]), port: 443 })
     upstream.setTimeout(30_000)
     upstream.once("connect", () => { client.write("HTTP/1.1 200 Connection Established\r\n\r\n"); if (head.length) upstream.write(head); upstream.pipe(client); client.pipe(upstream) })

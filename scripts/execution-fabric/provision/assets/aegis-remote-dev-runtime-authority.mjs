@@ -130,6 +130,14 @@ export function authorizeConnect(ticketB64, operation, host) {
   return fixedRuntimeAuthorization(ticketB64, operation)
 }
 
+export function continueConnectAuthorization(authorization, operation, host) {
+  if (!authorization || authorization.payload?.operation !== operation || !allowedHostForOperation(operation, host)) fail("continued operation endpoint denied")
+  const issued = Date.parse(authorization.payload.issuedAt); const current = Date.now()
+  if (![issued, current].every(Number.isFinite) || current < issued || current >= issued + 5_400_000) fail("continued operation capability expired")
+  verifyCgroup(authorization.receipt, authorization.payload.ticketId)
+  return authorization
+}
+
 export function authorizeGitOperation(ticketB64, packetB64, operation) {
   if (!["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE"].includes(operation)) fail("Git operation denied")
   return fixedRuntimeAuthorization(ticketB64, operation, packetB64)
