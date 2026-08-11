@@ -364,8 +364,15 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(service).toContain("ExecStop=/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-egress-enforcer.mjs --enforce")
     expect(nft).toContain('meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject')
     expect(nft).toContain('meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject')
-    expect(nft).toContain('ip daddr 127.0.0.1 tcp dport 17734 reject')
+    const fabricProxy = 'meta skuid "williamos-fabric" ip daddr 127.0.0.1 tcp dport 17734 accept'
+    const gitBrokerProxy = 'meta skuid "williamos-git-broker" ip daddr 127.0.0.1 tcp dport 17734 accept'
+    const allOtherUsersDenied = 'ip daddr 127.0.0.1 tcp dport 17734 reject'
+    expect(nft).toContain(fabricProxy)
+    expect(nft).toContain(gitBrokerProxy)
+    expect(nft.indexOf(fabricProxy)).toBeLessThan(nft.indexOf(allOtherUsersDenied))
+    expect(nft.indexOf(gitBrokerProxy)).toBeLessThan(nft.indexOf(allOtherUsersDenied))
     expect(nft.match(/meta skuid "williamos-fabric" reject/g)).toHaveLength(1)
+    expect(enforcer).toContain('meta skuid "williamos-git-broker" ip daddr 127.0.0.1 tcp dport 17734 accept')
   })
 
   it("scopes every CONNECT destination to the signed operation and rejects private or mapped-private destinations", () => {

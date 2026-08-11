@@ -14,7 +14,7 @@ const EXPECTED_PACKAGE_JCS = "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0e
 const EXPECTED_MACHINE = "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b"
 const EXPECTED_STORAGE_UUID = "5744648d-9289-4d4e-ac6a-707e8405a5d6"
 const EXPECTED_TRUSTED_EVIDENCE = Object.freeze({
-  "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json": "51f0c8b6717f6f058cb444ab60cd7e60a6a1b91c485a62a72dca81e0547a33cb",
+  "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json": "d16d6d842d66d78c1f4cb2b99e93617ab6d2e7721c87e872c90c02d6599cbea9",
   "config/execution-fabric/aegis-resident-identity.json": "69a9008e680ef236367c8b4b3ebf85b9d96dbc9cf3545b97c2275761b327643d",
   "config/execution-fabric/aegis-bounded-dispatch-authority-scopes/WO-EF-DISPATCH-AEGIS-001.json": "90f089b0d64989edafcc96e847e77993a0c352d99a2716bbfb72bd3fbc27cfc7",
   "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-claim.json": "40385c3163908c30d4eb559cded69ac2d05ae46c31a029dbbdc94d821139f845",
@@ -43,13 +43,13 @@ const EXPECTED_ASSET_DIGESTS = Object.freeze({
   "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs": "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7",
   "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs": "02de9ec83f7dbc3e8a9858438ca4afe87af7ca123e6be79f90a579dc7bf78633",
   "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507",
-  "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "5b8f428608c4a0180f752a8951e71040089f384538a60ed51075c7453a83e5e8",
+  "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "7e9286b38d76e88eef13aa37628e69151aca2527b6bdfd50d9b835de0a5cb022",
   "config/execution-fabric/aegis-resident-network-boundary.json": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6",
   "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "4b94a2c336ce1e0644264c0497a7798a98a23f366fb963289d87205023f39f08",
   "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh": "4f76725ae7188ae676b5afde4d1622a8c6cdaea0b1bc8d1288dab04700b17ccd",
   "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf": "bb6967f25ae614d152c2bbaf4073eae4575f98819f9b4a855b5de20a60e4e789",
   "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf": "a6e83ce0c8b2d2c8127a268c5bd48f27ff3199894f0179afc412a5b01f7fe9c6",
-  "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-enforcer.mjs": "22ef27e6a0bd232adbf97fbba725e62ccbd20489b84f46936c10e5d0fbe8c7eb",
+  "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-enforcer.mjs": "ab6620219fd506be40b2f80bb983e4a592a1600e7254e40993bde4534d3d0ba3",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs": "060d4208dca9f4a75ae401abbe95b5ba5d07d39c2f1ab92ebb725db7dcbfc735",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs": "17ecde60f3fbe70b754f57b2c4bfc72d1250be11cfd60e00b961e4e9c8390e5f",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-proxy-connect.mjs": "45a29680a83ff59fb925f998faf819915ec45ee22237f1b3a2679b6f496a8346",
@@ -58,7 +58,7 @@ const EXPECTED_ASSET_DIGESTS = Object.freeze({
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-broker.service": "540a3137c055896f1ad223d64c7a0af94eb01a7fb89fefc81f045b8e6ca6d3e7",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-git-broker.socket": "116392f032d35c89f473522a1420f46715cbd4e2ae5c2853bc6adf8bb6e4ad15",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-git-broker.service": "04b97efce77ccf7792f3eb91f47018b549a18a49e2040c9c3a369823e068ab2e",
-  "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.nft": "2570dbbca84b83b2995bb6a96ec192d9a28381bc0e4397e17c139ec764184d00",
+  "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.nft": "a817c556a16157fb47176d313d93016ca0dd55ee0bfbdb0c816b00180c0db1eb",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.service": "36e5b23c6e0937a5ee76ef5d7249e4ff13babfb0664f84a91626f5e20193a83a",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev.slice": "fc588c814d41b0f5be77ac7436d02f95644aa03b373912f70da6c41a61baff7c",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev.tmpfiles": "108fa6b6d3e9140868cf50c900c36e96fcd58dcfddb01ce631a57a27c389f96f",

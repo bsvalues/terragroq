@@ -7,6 +7,7 @@ const RULES = [
   `add rule inet ${TABLE} output meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject`,
   `add rule inet ${TABLE} output meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject`,
   `add rule inet ${TABLE} output meta skuid "williamos-fabric" ip daddr 127.0.0.1 tcp dport 17734 accept`,
+  `add rule inet ${TABLE} output meta skuid "williamos-git-broker" ip daddr 127.0.0.1 tcp dport 17734 accept`,
   `add rule inet ${TABLE} output ip daddr 127.0.0.1 tcp dport 17734 reject`,
   `add rule inet ${TABLE} output meta skuid "williamos-fabric" reject`,
 ]

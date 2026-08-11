@@ -266,7 +266,7 @@ run_cleanup_profile() {
 }
 
 run_preflight_repository_profile() {
-  timeout 300 node "$GIT_BROKER_CLIENT"
+  timeout 930 node "$GIT_BROKER_CLIENT"
 }
 
 probe_containment() {
@@ -477,13 +477,13 @@ validate_recovery_quarantine() {
   validate_owner_marker_at "$QUARANTINE_PATH"
   [[ -d "$recovery_repo/.git" && ! -L "$recovery_repo" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined repository is unavailable"
   [[ "$(timeout 5 realpath -- "$recovery_repo")" == "$recovery_repo" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined repository identity differs"
-  remote="$(timeout 15 git -C "$recovery_repo" remote get-url origin)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined origin is unavailable"
+  remote="$(GIT_CONFIG_VALUE_0="$recovery_repo" timeout 15 git -C "$recovery_repo" remote get-url origin)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined origin is unavailable"
   [[ "$remote" == "$REMOTE_URL" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined origin differs"
-  branch="$(timeout 15 git -C "$recovery_repo" branch --show-current)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined branch is unavailable"
+  branch="$(GIT_CONFIG_VALUE_0="$recovery_repo" timeout 15 git -C "$recovery_repo" branch --show-current)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined branch is unavailable"
   [[ "$branch" == "$BRANCH" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined branch differs"
-  HEAD_SHA="$(timeout 15 git -C "$recovery_repo" rev-parse HEAD)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined HEAD is unavailable"
+  HEAD_SHA="$(GIT_CONFIG_VALUE_0="$recovery_repo" timeout 15 git -C "$recovery_repo" rev-parse HEAD)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined HEAD is unavailable"
   [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined HEAD is malformed"
-  changed="$(timeout 15 git -C "$recovery_repo" status --porcelain --untracked-files=all)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined worktree status is unavailable"
+  changed="$(GIT_CONFIG_VALUE_0="$recovery_repo" timeout 15 git -C "$recovery_repo" status --porcelain --untracked-files=all)" || die_block "CLEANUP_RECOVERY_INVALID" "quarantined worktree status is unavailable"
   [[ -z "$changed" ]] || die_block "CLEANUP_RECOVERY_INVALID" "quarantined worktree contains unverified changes"
   [[ -f "$QUARANTINE_PATH/$MERGE_MARKER" && ! -L "$QUARANTINE_PATH/$MERGE_MARKER" ]] || die_block "CLEANUP_NOT_AUTHORIZED" "quarantined post-merge proof is absent"
   quarantine_proof="$(timeout 5 tr -d '\r\n' < "$QUARANTINE_PATH/$MERGE_MARKER")"

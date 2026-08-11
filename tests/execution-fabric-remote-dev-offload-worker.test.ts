@@ -123,6 +123,12 @@ exit 0
 `)
   writeExecutable(path.join(fakeBin, "taskset"), "#!/usr/bin/env bash\nshift 2\nexec \"$@\"\n")
   writeExecutable(path.join(fakeBin, "prlimit"), "#!/usr/bin/env bash\nwhile [[ \"$1\" != -- ]]; do shift; done\nshift\nexec \"$@\"\n")
+  writeExecutable(path.join(fakeBin, "timeout"), `#!/usr/bin/env bash
+if [[ "\${FAKE_REQUIRE_PREFLIGHT_TIMEOUT:-0}" == 1 && " $* " == *" node "* && " $* " == *"williamos-aegis-remote-dev-git-client.mjs"* ]]; then
+  [[ "\${1:-}" == 930 ]] || exit 124
+fi
+exec /usr/bin/timeout "$@"
+`)
   writeExecutable(path.join(fakeBin, "flock"), `#!/usr/bin/env bash
 if [[ "\${FAKE_QUARANTINE_ON_LOCK:-0}" == 1 ]]; then mkdir -p -- "$REMOTE_DEV_WORKER_ROOT/srv/william/workspaces/.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-11111111-1111-4111-8111-111111111111"; fi
 exit 0
@@ -470,6 +476,13 @@ if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\
     expect(fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")).toContain('"--expand-environment=no"')
   }, 20_000)
 
+  it("keeps the outer repository preflight budget above all three bounded broker Git calls", () => {
+    const value = fixture(); fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
+    installPreflightFakes(value)
+    expect(runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_REQUIRE_PREFLIGHT_TIMEOUT: "1" } }).json).toMatchObject({ status: "SUCCEEDED" })
+    expect(fs.readFileSync(worker, "utf8")).toContain("timeout 930 node \"$GIT_BROKER_CLIENT\"")
+  }, 20_000)
+
   it("blocks exact cleanup while an unrelated same-user process has a workspace cwd or open fd", () => {
     for (const mode of ["cwd", "fd", "other-fd"]) {
       const value = fixture()
@@ -551,6 +564,14 @@ if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\
   }, 30_000)
 
   it("recovers only the exact same-origin quarantine authorized by the CLEAN packet", () => {
+    const source = fs.readFileSync(worker, "utf8")
+    const validator = source.slice(
+      source.indexOf("validate_recovery_quarantine()"),
+      source.indexOf("run_recovery_cleanup()"),
+    )
+    expect(validator.match(/GIT_CONFIG_VALUE_0="\$recovery_repo" timeout 15 git/g)).toHaveLength(4)
+    expect(validator).not.toMatch(/(?<!GIT_CONFIG_VALUE_0="\$recovery_repo" )timeout 15 git -C "\$recovery_repo"/)
+
     const authorized = fixture()
     const authorizedParent = path.dirname(authorized.physicalWorkspace)
     const authorizedQuarantine = path.join(authorizedParent, `.williamos-quarantine-WO-TF-REMOTE-DEV-OFFLOAD-001-${authorized.packet.runId}`)
