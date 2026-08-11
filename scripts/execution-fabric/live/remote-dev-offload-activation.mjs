@@ -372,16 +372,16 @@ function readRootPrerequisiteReceipt() {
   return { bytes, receipt }
 }
 
-export function inspectRootPrerequisiteReceiptEvidence(bytes, manifest, currentMachine) {
+export function inspectRootPrerequisiteReceiptEvidence(bytes, manifest, currentMachine, currentControlCommit) {
   try {
     const receipt = JSON.parse(Buffer.from(bytes).toString("utf8"))
     if (!Buffer.from(bytes).equals(Buffer.from(`${canonicalizeJcs(receipt)}\n`, "utf8"))) fail("ROOT_PREREQUISITES_UNPROVEN", "prerequisite receipt is not canonical JSON")
-    exactKeys(receipt, ["schemaVersion", "status", "workOrderId", "transactionId", "authorityId", "completedAt", "machineIdSha256", "trustedMainCommit", "rootHandoffManifestSha256", "prerequisiteManifestJcsSha256", "appliedAssets", "authoritySha256", "inputsSha256", "launchAuthorityPublicKeySha256", "storage", "journalHeadSha256", "schedulerEnabled", "standingAuthority", "dispatchOccurred", "closedHashMutation", "executionAuthorized", "activationAuthorized"], "prerequisite receipt")
+    exactKeys(receipt, ["schemaVersion", "status", "workOrderId", "transactionId", "authorityId", "completedAt", "machineIdSha256", "trustedMainCommit", "rootHandoffManifestSha256", "historicalPreflightManifestJcsSha256", "appliedAssets", "authoritySha256", "inputsSha256", "launchAuthorityPublicKeySha256", "storage", "journalHeadSha256", "schedulerEnabled", "standingAuthority", "dispatchOccurred", "closedHashMutation", "executionAuthorized", "activationAuthorized"], "prerequisite receipt")
     if (receipt.schemaVersion !== 1 || receipt.status !== "PREREQUISITES_VERIFIED" || receipt.workOrderId !== "WO-TF-REMOTE-DEV-OFFLOAD-001"
       || !GUID.test(receipt.transactionId) || !GUID.test(receipt.authorityId) || !UTC.test(receipt.completedAt) || !Number.isFinite(Date.parse(receipt.completedAt))
       || receipt.machineIdSha256 !== currentMachine || receipt.machineIdSha256 !== manifest.target?.machineIdSha256
-      || receipt.trustedMainCommit !== manifest.trustedMain?.commit || receipt.rootHandoffManifestSha256 !== jcsDigest(manifest)
-      || receipt.prerequisiteManifestJcsSha256 !== manifest.prerequisitePackage?.manifestJcsSha256 || !same(receipt.appliedAssets, manifest.appliedAssets)
+      || !SHA40.test(currentControlCommit ?? "") || receipt.trustedMainCommit !== currentControlCommit || receipt.rootHandoffManifestSha256 !== jcsDigest(manifest)
+      || receipt.historicalPreflightManifestJcsSha256 !== manifest.prerequisitePackage?.supersededPreflight?.manifestJcsSha256 || !same(receipt.appliedAssets, manifest.appliedAssets)
       || !SHA256.test(receipt.authoritySha256) || !SHA256.test(receipt.inputsSha256) || !SHA256.test(receipt.launchAuthorityPublicKeySha256)
       || !same(receipt.storage, { mode: "VERIFY_ONLY", filesystemUuid: manifest.storage?.filesystemUuid, projectId: 734, hardLimitBytes: 85899345920 })
       || !SHA256.test(receipt.journalHeadSha256) || receipt.schedulerEnabled !== false || receipt.standingAuthority !== false || receipt.dispatchOccurred !== false
@@ -390,11 +390,22 @@ export function inspectRootPrerequisiteReceiptEvidence(bytes, manifest, currentM
   } catch (error) { return blocked(error) }
 }
 
-function proveRootPrerequisites() {
+function proveRootPrerequisites(currentControlCommit) {
   const manifest = JSON.parse(read(ARTIFACT_PATHS.rootPrerequisiteManifest)); const { bytes } = readRootPrerequisiteReceipt()
   const currentMachine = crypto.createHash("sha256").update(fs.readFileSync("/etc/machine-id", "utf8").trim()).digest("hex")
-  const result = inspectRootPrerequisiteReceiptEvidence(bytes, manifest, currentMachine)
+  const result = inspectRootPrerequisiteReceiptEvidence(bytes, manifest, currentMachine, currentControlCommit)
   if (result.status !== "ROOT_PREREQUISITES_VERIFIED") fail("ROOT_PREREQUISITES_UNPROVEN", result.reasons?.[0]?.detail ?? "canonical prerequisite receipt differs")
+  for (const asset of manifest.appliedAssets ?? []) {
+    let cursor = path.parse(asset.destination).root
+    for (const segment of path.dirname(asset.destination).slice(cursor.length).split(path.sep).filter(Boolean)) {
+      cursor = path.join(cursor, segment); const parent = fs.lstatSync(cursor)
+      if (!parent.isDirectory() || parent.isSymbolicLink() || parent.uid !== 0 || (parent.mode & 0o022) !== 0) fail("ROOT_PREREQUISITES_UNPROVEN", "installed prerequisite parent trust differs")
+    }
+    const stat = fs.lstatSync(asset.destination)
+    const installedSha256 = crypto.createHash("sha256").update(fs.readFileSync(asset.destination)).digest("hex")
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== 0 || stat.gid !== 0
+      || (stat.mode & 0o7777) !== Number.parseInt(asset.mode, 8) || installedSha256 !== asset.sha256) fail("ROOT_PREREQUISITES_UNPROVEN", "installed prerequisite bytes or metadata differ")
+  }
   return result
 }
 
@@ -418,7 +429,7 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
     if (controlPlane.status !== "CONTROL_PLANE_TRUSTED_MAIN_VERIFIED") fail(controlPlane.reasons?.[0]?.code ?? "TRUSTED_MAIN_UNPROVEN", controlPlane.reasons?.[0]?.detail ?? "control-plane trusted main is unproven")
     const criticalFiles = inspectActivationCriticalWorkingFiles(authority)
     if (criticalFiles.status !== "ACTIVATION_CRITICAL_FILES_VERIFIED") fail("TRUSTED_MAIN_UNPROVEN", criticalFiles.reasons?.[0]?.detail ?? "activation-critical working files are unproven")
-    const prerequisites = proveRootPrerequisites()
+    const prerequisites = proveRootPrerequisites(checkout.head_commit)
     if (prerequisites.status !== "ROOT_PREREQUISITES_VERIFIED") fail("ROOT_PREREQUISITES_UNPROVEN", "root prerequisite receipt differs")
     const networkBoundary = await proveResidentAegisNetworkBoundary()
     if (networkBoundary.status !== "RESIDENT_NETWORK_BOUNDARY_VERIFIED") {

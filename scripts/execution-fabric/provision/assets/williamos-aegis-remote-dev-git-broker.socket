@@ -1,0 +1,14 @@
+[Unit]
+Description=WilliamOS AEGIS proof-specific Git submit broker socket
+After=williamos-aegis-remote-dev-egress.service
+Requires=williamos-aegis-remote-dev-egress.service
+
+[Socket]
+ListenStream=/run/williamos-fabric/aegis-remote-dev-git-broker.sock
+SocketUser=root
+SocketGroup=williamos-fabric
+SocketMode=0660
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

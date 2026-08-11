@@ -64,11 +64,11 @@
   "bindings": {
     "worker": {
       "path": "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
-      "sha256": "55054941b6366a4a3f480f6c01ac4fc50465d4bfa743f672ce7d6539e51b360b"
+      "sha256": "70396303a910c0ecd83e938dd562e32e50cfde8e9c3abe3873e5b2857c45f6f3"
     },
     "controller": {
       "path": "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1",
-      "sha256": "32fef2f3e6beadc802fcd74638224638a08b69ef596a589d53dbb3c565c1cac7"
+      "sha256": "2428b08735af38bf1471042d009b9be9719c54b31ab8132b9d80714aa3a2ca1c"
     },
     "contract": {
       "path": "scripts/execution-fabric/live/remote-dev-offload-contract.mjs",
@@ -76,11 +76,11 @@
     },
     "policy": {
       "path": "config/execution-fabric/remote-dev-offload-v1.policy.json",
-      "sha256": "6007eaf066eee868dd52ffbfe577a5d32b5e5ea74d10ebd8f1d212d5d9fbaa41"
+      "sha256": "57b6efaafad160fcf0936479fb35302bf226ce2c23369e28b7f2c2f0c4da1b4e"
     },
     "inactiveScope": {
       "path": "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json",
-      "sha256": "366ba739346d9c1cd28cb36b57a77a36e2ed28d0902f1e9fa0797a0010b607df"
+      "sha256": "a548213bdd76b9d49ff295674fa166c7dfa3e968dd5a07344b4cd8cb880a8fa7"
     },
     "networkProvider": {
       "path": "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs",
@@ -92,19 +92,19 @@
     },
     "networkLauncher": {
       "path": "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs",
-      "sha256": "ab9c427357b50de023964a63bb2cf94d8bd87b2647fce040522a7ff0e4849cd5"
+      "sha256": "6094ad5208c56d1bb63d30eebd8a88edb2ecd4d7d5f89aad74078b6bf28ef6fe"
     },
     "rootPrerequisiteManifest": {
       "path": "config/execution-fabric/aegis-remote-dev-root-handoff.json",
-      "sha256": "bbde0642b1cc19031b4b150ed73619bd41ffc9f5dddc12f663e2b74dd2a7d0e9"
+      "sha256": "7f162c8d24d96a2e45db97f15762ef1e9e38632c5a2b3d7b833d51e1436a934a"
     },
     "rootPrerequisiteVerifier": {
       "path": "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs",
-      "sha256": "98c2f830b1e7e733b2d95ab26bd088487f22312d96d08055fe09e822eafd1282"
+      "sha256": "0d97f7e7ed0d472111343c4205e4ba26cd05dd53cf47642ce738cf8e29f7b730"
     },
     "rootPrerequisiteAdapter": {
       "path": "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs",
-      "sha256": "d238b51a6d9ed72de659bb13ab7be42292defb15f9d74d67367daa38a19952f5"
+      "sha256": "21bbdfb46a7b75fc627922f342d2d10bf93633acd1f46b401db638538fd94c58"
     }
   },
   "executionIdentity": {

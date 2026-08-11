@@ -229,6 +229,17 @@ if [[ "\${FAKE_NAMESPACE_STRICT:-0}" == 1 ]]; then
 fi
 exec "$@"
 `)
+  const brokerClient = path.join(hostRoot, "usr/local/libexec/williamos-aegis-remote-dev-git-client.mjs")
+  fs.mkdirSync(path.dirname(brokerClient), { recursive: true })
+  writeExecutable(brokerClient, `#!/usr/bin/env node
+import fs from "node:fs"
+import path from "node:path"
+if (process.env.WILLIAMOS_NETWORK_OPERATION === "CREATE_WORKSPACE") {
+  const repository = path.join(process.env.REMOTE_DEV_WORKER_ROOT, "srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001/repository")
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true })
+}
+process.stdout.write(JSON.stringify({status:"GIT_OPERATION_VERIFIED",reasonCode:"GIT_OPERATION_VERIFIED",head:process.env.FAKE_BASE_SHA || "0".repeat(40)})+"\\n")
+`)
   return { hostRoot, physicalWorkspace, repository, baseSha, patch, packet, fakeBin }
 }
 
@@ -237,7 +248,7 @@ function runWorker(operation: string, value: ReturnType<typeof fixture>, options
   const patch = options.patch ?? value.patch
   const result = spawnSync(bash, [worker, operation, encode(JSON.stringify(packet)), encode(patch), String(options.attempt ?? 1), options.previous ?? "null", launchTicketId], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${toPosix(value.fakeBin)}:${toPosix("C:\\Program Files\\nodejs")}:${process.env.PATH}`, REMOTE_DEV_WORKER_ROOT: toPosix(value.hostRoot), REMOTE_DEV_PROCESS_TIMEOUT_SECONDS: "2", ...options.env },
+    env: { ...process.env, PATH: `${toPosix(value.fakeBin)}:${toPosix("C:\\Program Files\\nodejs")}:${process.env.PATH}`, REMOTE_DEV_WORKER_ROOT: toPosix(value.hostRoot), REMOTE_DEV_PROCESS_TIMEOUT_SECONDS: "2", WILLIAMOS_NETWORK_OPERATION: operation, WILLIAMOS_NETWORK_PACKET_B64: encode(JSON.stringify(packet)), WILLIAMOS_NETWORK_TICKET_B64: encode("test-ticket"), ...options.env },
     timeout: 40_000,
   })
   const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean)
@@ -359,7 +370,9 @@ describe("fixed AEGIS remote development worker", () => {
     const source = fs.readFileSync(worker, "utf8")
     const preflight = source.slice(source.indexOf("PROVE_PREFLIGHT)"), source.indexOf("CREATE_WORKSPACE)"))
     for (const required of ["hostname", '"$IDENTITY_BINARY" -un', "git --version", "dotnet --version", "node --version", "corepack pnpm --version", "nproc", "MemTotal", "df -PB1", "run_preflight_repository_profile", "probe_containment", "prove_project_quota"]) expect(preflight).toContain(required)
-    for (const required of ["git ls-remote", "push --dry-run"]) expect(source).toContain(required)
+    expect(source).not.toContain("git ls-remote")
+    expect(source).not.toContain("push --dry-run")
+    expect(source).toContain("williamos-aegis-remote-dev-git-client.mjs")
     expect(fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")).toContain("TemporaryFileSystem=/tmp:size=4294967296")
     expect(source).not.toContain("PREFLIGHT_TMP_ROOT")
     expect(preflight).not.toContain('exec 9>')
@@ -637,7 +650,7 @@ exit 0
     fs.writeFileSync(path.join(value.physicalWorkspace, ".williamos-post-merge-proven"), `${value.packet.runId}:${value.baseSha}\n`)
     expect(runWorker("CLEAN_EXACT_WORKSPACE", value, { env: { FAKE_NESTED_MOUNT: "1" } }).json).toMatchObject({ status: "CLEANUP_NESTED_MOUNT" })
     expect(fs.existsSync(value.physicalWorkspace)).toBe(true)
-  })
+  }, 15_000)
 
   it("does not clean without exact ownership and post-merge proof", () => {
     const value = fixture()

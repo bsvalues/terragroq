@@ -29,7 +29,8 @@ initial trust root and never reports that it did.
 - closed `WO-EF-DISPATCH-AEGIS-001` HASH authority/evidence: immutable and
   never reused
 
-The root manifest binds every installed asset by raw SHA-256, destination,
+The root manifest is the canonical v2 semantic supersession of the earlier
+non-applying preflight manifest. It binds every installed asset by raw SHA-256, destination,
 owner, group, and mode. The verifier separately pins the prerequisite manifest,
 closed HASH evidence, inactive scope, canonical AEGIS identity, and fresh
 `origin/main` equality with Git replace objects/configuration disabled.
@@ -59,12 +60,15 @@ The signed owner authority may perform only these ordered operations:
 2. install the exact root-owned launcher, provider, worker, broker, nftables,
    systemd, SSH, tmpfiles, and .NET wrapper assets;
 3. generate or adopt the exact root-owned Ed25519 launch key;
-4. establish worker direct-egress denial with a loopback HTTP CONNECT broker
-   restricted to `ssh.github.com:443`, `api.github.com:443`,
-   `api.nuget.org:443`, and `globalcdn.nuget.org:443`, with Atlas and all other
-   IPv4/IPv6 egress denied;
+4. establish worker direct-egress denial with a loopback HTTP CONNECT broker;
+   every CONNECT must carry the signed launch ticket and exact operation, and
+   the operation-to-host map permits only its reviewed Git or NuGet endpoint;
+   Atlas, mapped-private IPv6, private/link-local destinations, and all other
+   IPv4/IPv6 egress are denied;
 5. install exact root-only GitHub host/account trust used for root repository
-   reconciliation; the worker cannot read the private key;
+   reconciliation, plus a fixed systemd socket broker that receives the key as
+   a service credential only for signed preflight/clone/fetch/push operations;
+   worker and build processes cannot read the private key;
 6. reconcile root-owned, clean, remote-equal control checkout and TerraFusion
    mirror without resetting dirty or worker-writable state;
 7. prove exact signed Git/Node/Corepack/pnpm binaries and install only the exact
@@ -74,7 +78,7 @@ The signed owner authority may perform only these ordered operations:
 9. install the source-restricted forced-command transport last.
 
 Storage creation, formatting, mounting, remounting, quota mutation, workspace
-creation, dispatch, Git push, PR creation, Atlas access, Hermes changes, Forge,
+creation, dispatch, live Git push, PR creation, Atlas access, Hermes changes, Forge,
 backup disks, and closed HASH evidence are not root-handoff mutations.
 
 ## Inputs still required before live apply

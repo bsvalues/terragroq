@@ -166,7 +166,7 @@ describe("TerraFusion remote development one-run activation", () => {
   it("evaluates the fixed network proof before creating any claim or lease provider", () => {
     const source = fs.readFileSync(path.join(root, "scripts/execution-fabric/live/remote-dev-offload-activation.mjs"), "utf8")
     const authorizeStart = source.indexOf("export async function authorizeRemoteDevActivation")
-    const prerequisiteGate = source.indexOf("proveRootPrerequisites()", authorizeStart)
+    const prerequisiteGate = source.indexOf("proveRootPrerequisites(checkout.head_commit)", authorizeStart)
     const networkGate = source.indexOf("await proveResidentAegisNetworkBoundary()", authorizeStart)
     const ledgerGate = source.indexOf("createLedgerProviders()", authorizeStart)
     expect(authorizeStart).toBeGreaterThanOrEqual(0)
@@ -181,22 +181,22 @@ describe("TerraFusion remote development one-run activation", () => {
     const receipt = {
       schemaVersion: 1, status: "PREREQUISITES_VERIFIED", workOrderId: "WO-TF-REMOTE-DEV-OFFLOAD-001",
       transactionId: "2ac672df-eb80-48df-a887-e2bc26bf401b", authorityId: "b6726cab-1f13-47da-9d25-1a199bb52c0f",
-      completedAt: "2026-08-11T20:10:00.000Z", machineIdSha256: machine, trustedMainCommit: manifest.trustedMain.commit,
+      completedAt: "2026-08-11T20:10:00.000Z", machineIdSha256: machine, trustedMainCommit: "b".repeat(40),
       rootHandoffManifestSha256: crypto.createHash("sha256").update(canonicalizeJcs(manifest)).digest("hex"),
-      prerequisiteManifestJcsSha256: manifest.prerequisitePackage.manifestJcsSha256, appliedAssets: manifest.appliedAssets,
+      historicalPreflightManifestJcsSha256: manifest.prerequisitePackage.supersededPreflight.manifestJcsSha256, appliedAssets: manifest.appliedAssets,
       authoritySha256: "b".repeat(64), inputsSha256: "c".repeat(64), launchAuthorityPublicKeySha256: "d".repeat(64),
       storage: { mode: "VERIFY_ONLY", filesystemUuid: manifest.storage.filesystemUuid, projectId: 734, hardLimitBytes: 85899345920 },
       journalHeadSha256: "a".repeat(64), schedulerEnabled: false, standingAuthority: false, dispatchOccurred: false,
       closedHashMutation: false, executionAuthorized: false, activationAuthorized: false,
     }
     const bytes = Buffer.from(`${canonicalizeJcs(receipt)}\n`)
-    expect(inspectRootPrerequisiteReceiptEvidence(bytes, manifest, machine)).toMatchObject({ status: "ROOT_PREREQUISITES_VERIFIED", executionAuthorized: false })
+    expect(inspectRootPrerequisiteReceiptEvidence(bytes, manifest, machine, "b".repeat(40))).toMatchObject({ status: "ROOT_PREREQUISITES_VERIFIED", executionAuthorized: false })
     for (const changed of [
       { ...receipt, machineIdSha256: "0".repeat(64) },
       { ...receipt, journalHeadSha256: "0" },
       { ...receipt, activationAuthorized: true },
       { ...receipt, appliedAssets: receipt.appliedAssets.slice(1) },
-    ]) expect(inspectRootPrerequisiteReceiptEvidence(Buffer.from(`${canonicalizeJcs(changed)}\n`), manifest, machine)).toMatchObject({ status: "BLOCKED", executionAuthorized: false, reasons: [{ code: "ROOT_PREREQUISITES_UNPROVEN" }] })
+    ]) expect(inspectRootPrerequisiteReceiptEvidence(Buffer.from(`${canonicalizeJcs(changed)}\n`), manifest, machine, "b".repeat(40))).toMatchObject({ status: "BLOCKED", executionAuthorized: false, reasons: [{ code: "ROOT_PREREQUISITES_UNPROVEN" }] })
   })
 
   it("separates the trusted control-plane checkout from the pinned TerraFusion target base", () => {

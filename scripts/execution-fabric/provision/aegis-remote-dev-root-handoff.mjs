@@ -14,7 +14,7 @@ const EXPECTED_PACKAGE_JCS = "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0e
 const EXPECTED_MACHINE = "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b"
 const EXPECTED_STORAGE_UUID = "5744648d-9289-4d4e-ac6a-707e8405a5d6"
 const EXPECTED_TRUSTED_EVIDENCE = Object.freeze({
-  "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json": "8e3106945d69d2b770012ea99a15952d8c19eba70319ec6f811b2e13d91e9507",
+  "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json": "e5a122722e5cc6a3af0b3ce7c3699c0b0ab463818a055ee0098bff558c380f87",
   "config/execution-fabric/aegis-resident-identity.json": "69a9008e680ef236367c8b4b3ebf85b9d96dbc9cf3545b97c2275761b327643d",
   "config/execution-fabric/aegis-bounded-dispatch-authority-scopes/WO-EF-DISPATCH-AEGIS-001.json": "90f089b0d64989edafcc96e847e77993a0c352d99a2716bbfb72bd3fbc27cfc7",
   "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-claim.json": "40385c3163908c30d4eb559cded69ac2d05ae46c31a029dbbdc94d821139f845",
@@ -41,18 +41,23 @@ const EXPECTED_ASSET_DIGESTS = Object.freeze({
   "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs": "843727481311ee5303a14fd67dcd05334e6e75cfd242bf54d13e35f8ae688d46",
   "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh": "7e92a1b3acf541f978f086ee1cec8191cc2b9732bc7f83380e4ecb13fec8d9d4",
   "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs": "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7",
-  "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs": "d382962531bd80269c1b75297dab331682364262810bdde4b4a61a7fe4b4b69a",
+  "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs": "9374ff438c66d43c8d2c0b5b1074f45355a74563124ebcd42447a7db1b365a71",
   "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507",
-  "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "55054941b6366a4a3f480f6c01ac4fc50465d4bfa743f672ce7d6539e51b360b",
+  "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "70396303a910c0ecd83e938dd562e32e50cfde8e9c3abe3873e5b2857c45f6f3",
   "config/execution-fabric/aegis-resident-network-boundary.json": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6",
-  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "d238b51a6d9ed72de659bb13ab7be42292defb15f9d74d67367daa38a19952f5",
+  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "21bbdfb46a7b75fc627922f342d2d10bf93633acd1f46b401db638538fd94c58",
   "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh": "56630f270af148f1b02c94abfe33bac3512804eafe3ccd0a99de76564d4bc6da",
-  "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf": "932376eafc9f7830e7e57cf2da71c54b888f4487b27588df499dd9edf67588e8",
-  "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf": "9335fb18d81108ec1d8ec5db88f5b36108770f98235cc7e982fb9c02fc990f9e",
+  "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf": "bb6967f25ae614d152c2bbaf4073eae4575f98819f9b4a855b5de20a60e4e789",
+  "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf": "a6e83ce0c8b2d2c8127a268c5bd48f27ff3199894f0179afc412a5b01f7fe9c6",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-enforcer.mjs": "931b0a9b0e98f4e6f3cc023e83e07914eafea53ae1844858e89f68e86247b1d5",
-  "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs": "2e80abc4c14a7a0b21144c0824ee2394cd752e9b02f77634a38181e3038c08fd",
-  "scripts/execution-fabric/provision/assets/aegis-remote-dev-proxy-connect.mjs": "64c8dc17088f4a4ca37872feb0997d4265dc5108cc10b1b0e5e62fd76317b522",
+  "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs": "7ceda52d2cf6270a331e692562b591fe23b5466ac2f1e914e4fdf2ff311996aa",
+  "scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs": "e51a5c2b90d7e8c0a7fe8786c605d8c4cbec485b3a9db06b952931c93a7cd765",
+  "scripts/execution-fabric/provision/assets/aegis-remote-dev-proxy-connect.mjs": "45a29680a83ff59fb925f998faf819915ec45ee22237f1b3a2679b6f496a8346",
+  "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-client.mjs": "27ddbbbb3bcfc1278f1b3e043ba5d30e5627b6071f633ce699c1ab7bd1e55e49",
+  "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-broker.mjs": "36f46c6283acd7623e56ca9a3ff66516507ae2bbdb360411baa573437e27e30e",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-broker.service": "540a3137c055896f1ad223d64c7a0af94eb01a7fb89fefc81f045b8e6ca6d3e7",
+  "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-git-broker.socket": "116392f032d35c89f473522a1420f46715cbd4e2ae5c2853bc6adf8bb6e4ad15",
+  "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-git-broker.service": "75deee46e82534aa6955361248ebf4c103c3a822049cd257f419f04621713437",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.nft": "7ae54384fa8eea7ad5c35bbeff4ae00bfb8b0f9f83fdfcd4bfeeb6622d59e867",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.service": "36e5b23c6e0937a5ee76ef5d7249e4ff13babfb0664f84a91626f5e20193a83a",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev.slice": "fc588c814d41b0f5be77ac7436d02f95644aa03b373912f70da6c41a61baff7c",
@@ -95,9 +100,11 @@ export function validateRootHandoffManifest(raw) {
   const value = structuredClone(raw)
   exact(value, ["schemaVersion", "handoffId", "status", "trustedMain", "prerequisitePackage", "target", "bootstrap", "storage", "posture", "authority", "evidence", "trustedEvidence", "steps", "appliedAssets", "rollback"], "manifest")
   if (value.schemaVersion !== 1 || value.handoffId !== "aegis-remote-dev-root-handoff-issue-734-v1" || value.status !== "UNTRUSTED_UNTIL_ROOT_BOOTSTRAP") throw new Error("handoff identity differs")
-  if (!same(value.trustedMain, { repository: "bsvalues/terragroq", remote: "https://github.com/bsvalues/terragroq.git", ref: "refs/heads/main", commit: EXPECTED_COMMIT, freshRemoteEqualityRequired: true, replaceObjectsDisabled: true, configIsolationRequired: true })) throw new Error("trusted-main boundary differs")
-  exact(value.prerequisitePackage, ["packageId", "generationCommit", "manifestPath", "manifestJcsSha256", "plannerPath", "installerPath"], "prerequisitePackage")
-  if (value.prerequisitePackage.packageId !== "aegis-remote-dev-prerequisites-issue-734-v1" || value.prerequisitePackage.generationCommit !== EXPECTED_COMMIT || value.prerequisitePackage.manifestJcsSha256 !== EXPECTED_PACKAGE_JCS) throw new Error("prerequisite package differs")
+  if (!same(value.trustedMain, { repository: "bsvalues/terragroq", remote: "https://github.com/bsvalues/terragroq.git", ref: "refs/heads/main", minimumCommit: EXPECTED_COMMIT, freshRemoteAuthorityEqualityRequired: true, replaceObjectsDisabled: true, configIsolationRequired: true })) throw new Error("trusted-main boundary differs")
+  exact(value.prerequisitePackage, ["packageId", "generationBaseCommit", "canonicalManifestPath", "semanticSupersession", "historicalSuccessClaimed", "supersededPreflight"], "prerequisitePackage")
+  if (value.prerequisitePackage.packageId !== "aegis-remote-dev-root-prerequisites-issue-734-v2" || value.prerequisitePackage.generationBaseCommit !== EXPECTED_COMMIT
+    || value.prerequisitePackage.canonicalManifestPath !== MANIFEST_PATH || value.prerequisitePackage.semanticSupersession !== true || value.prerequisitePackage.historicalSuccessClaimed !== false) throw new Error("canonical prerequisite package differs")
+  if (!same(value.prerequisitePackage.supersededPreflight, { packageId: "aegis-remote-dev-prerequisites-issue-734-v1", manifestPath: "config/execution-fabric/aegis-remote-dev-prerequisites.json", manifestJcsSha256: EXPECTED_PACKAGE_JCS, plannerPath: "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs", installerPath: "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh" })) throw new Error("superseded preflight provenance differs")
   if (!same(value.target, { nodeId: "aegis", hostname: "aegis", machineIdSha256: EXPECTED_MACHINE, os: "linux", effectiveUid: 0 })) throw new Error("root target differs")
   if (!same(value.bootstrap, { verifierPath: "/usr/local/libexec/williamos-aegis-root-handoff.mjs", verifierMode: "0555", adapterPath: "/usr/local/libexec/williamos-aegis-root-os-adapter.mjs", adapterMode: "0555", cliPath: "/usr/local/sbin/williamos-aegis-root-handoff", cliMode: "0555", manifestPath: INSTALLED_MANIFEST_PATH, manifestMode: "0444", bundleRoot: BUNDLE_ROOT, evidenceDirectoriesPrecreated: true, ownerPublicKeyPath: "/etc/williamos-fabric/owner-prerequisite-authority.pem", ownerPublicKeyMode: "0444", outOfBandRootInstallRequired: true })) throw new Error("external bootstrap differs")
   if (!same(value.storage, { mode: "VERIFY_ONLY", mechanism: "LOOPBACK_XFS_PROJECT_QUOTA_V1", backingImageRealPath: "/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs", backingImageBytes: 107374182400, filesystemUuid: EXPECTED_STORAGE_UUID, mountPath: "/srv/william", projectId: 734, hardLimitBytes: 85899345920, formatAllowed: false, mountAllowed: false, remountAllowed: false, quotaMutationAllowed: false, workspaceCreationAllowed: false })) throw new Error("storage posture differs")
@@ -161,7 +168,9 @@ export function buildRootHandoffPlan(rawManifest, observed) {
   const platform = observed?.platform; const trusted = observed?.trustedMain; const bootstrap = observed?.bootstrap
   if (platform?.os !== "linux" || platform?.effectiveUid !== 0 || platform?.hostname !== "aegis" || platform?.machineIdSha256 !== manifest.target.machineIdSha256) return blocked("ROOT_MACHINE_IDENTITY_UNPROVEN", "root/Linux/canonical AEGIS identity differs")
   if (bootstrap?.verifierRootOwned !== true || bootstrap?.verifierMode !== "0555" || bootstrap?.ownerPublicKeyRootOwned !== true || bootstrap?.ownerPublicKeyMode !== "0444") return blocked("EXTERNAL_ROOT_BOOTSTRAP_UNPROVEN", "root verifier or owner public key trust differs")
-  if (trusted?.remote !== manifest.trustedMain.remote || trusted?.ref !== manifest.trustedMain.ref || trusted?.commit !== manifest.trustedMain.commit || trusted?.exactCleanHead !== true || trusted?.replaceObjectsDisabled !== true || trusted?.configIsolation !== true || trusted?.criticalBytesMatch !== true) return blocked("TRUSTED_MAIN_UNPROVEN", "fresh remote equality or critical working bytes differ")
+  if (trusted?.remote !== manifest.trustedMain.remote || trusted?.ref !== manifest.trustedMain.ref || trusted?.minimumCommit !== manifest.trustedMain.minimumCommit
+    || !SHA40.test(trusted?.authorityCommit ?? "") || trusted?.freshRemoteAuthorityEquality !== true || trusted?.exactCleanHead !== true
+    || trusted?.replaceObjectsDisabled !== true || trusted?.configIsolation !== true || trusted?.criticalBytesMatch !== true) return blocked("TRUSTED_MAIN_UNPROVEN", "fresh authority-bound remote equality or critical working bytes differ")
   if (observed?.scheduler?.enabled !== false || observed.scheduler.standingAuthority !== false || observed.scheduler.dispatchOccurred !== false) return blocked("INACTIVE_POSTURE_DRIFT", "scheduler, standing authority, or dispatch posture differs")
   if (observed?.closedHash?.changed !== false) return blocked("CLOSED_HASH_SCOPE_DRIFT", "closed HASH authority or evidence differs")
   const mutations = []
@@ -179,10 +188,10 @@ export function validateOwnerAuthority(rawManifest, envelope, publicKey, now, co
   try {
     exact(envelope, ["payload", "signature"], "authority envelope")
     const p = envelope.payload
-    exact(p, ["schemaVersion", "authorityId", "transactionId", "operation", "workOrderId", "issue", "machineIdSha256", "bootId", "trustedMainCommit", "rootHandoffManifestSha256", "verifierSha256", "prerequisiteManifestJcsSha256", "appliedAssets", "inputs", "storage", "allowedSteps", "rollback", "issuedAt", "expiresAt", "singleUse"], "authority payload")
+    exact(p, ["schemaVersion", "authorityId", "transactionId", "operation", "workOrderId", "issue", "machineIdSha256", "bootId", "trustedMainCommit", "rootHandoffManifestSha256", "verifierSha256", "historicalPreflightManifestJcsSha256", "appliedAssets", "inputs", "storage", "allowedSteps", "rollback", "issuedAt", "expiresAt", "singleUse"], "authority payload")
     if (consumed) return blocked("OWNER_AUTHORITY_CONSUMED", "owner authority already has a durable claim")
     if (p.schemaVersion !== 1 || !GUID.test(p.authorityId) || !GUID.test(p.transactionId) || !GUID.test(p.bootId) || p.operation !== "APPLY_PREREQUISITES" || p.workOrderId !== "WO-TF-REMOTE-DEV-OFFLOAD-001" || p.issue?.repository !== "bsvalues/terrafusion_os_1.0" || p.issue?.number !== 734 || p.singleUse !== true) throw new Error("owner authority identity differs")
-    if (p.machineIdSha256 !== manifest.target.machineIdSha256 || p.trustedMainCommit !== manifest.trustedMain.commit || p.rootHandoffManifestSha256 !== canonicalSha(manifest) || p.verifierSha256 !== rawSha(fs.readFileSync(VERIFIER_PATH)) || p.prerequisiteManifestJcsSha256 !== manifest.prerequisitePackage.manifestJcsSha256 || !same(p.appliedAssets, manifest.appliedAssets) || !same(p.allowedSteps, EXPECTED_STEPS)) throw new Error("owner authority binding differs")
+    if (p.machineIdSha256 !== manifest.target.machineIdSha256 || !SHA40.test(p.trustedMainCommit) || p.rootHandoffManifestSha256 !== canonicalSha(manifest) || p.verifierSha256 !== rawSha(fs.readFileSync(VERIFIER_PATH)) || p.historicalPreflightManifestJcsSha256 !== manifest.prerequisitePackage.supersededPreflight.manifestJcsSha256 || !same(p.appliedAssets, manifest.appliedAssets) || !same(p.allowedSteps, EXPECTED_STEPS)) throw new Error("owner authority binding differs")
     if (!same(p.storage, { mode: "VERIFY_ONLY", filesystemUuid: EXPECTED_STORAGE_UUID, projectId: 734, hardLimitBytes: 85899345920 })) throw new Error("owner authority storage differs")
     if (!same(p.rollback, { automatic: false, separateSignedAuthorityRequired: true, preserveEvidence: true, preserveStorage: true })) throw new Error("owner authority rollback differs")
     exact(p.inputs, ["hermesTransportPublicKeySha256", "hermesTransportKeyFingerprint", "githubAccountPublicKeySha256", "githubAccountPrivateKeySha256", "githubAccountKeyFingerprint", "githubHostKnownHostsSha256", "githubHostKeyFingerprint", "toolchain", "launchSigningKeyAction", "launchSigningPrivateKeySha256", "launchSigningPublicKeySha256", "launchSigningKeyFingerprint"], "authority inputs")
@@ -240,8 +249,13 @@ export async function executeRootHandoffTransaction(manifest, envelope, publicKe
       }
       if (recovery.records.length === 0) await append("AUTHORITY_CONSUMED", { authorityId: envelope.payload.authorityId, transactionId: envelope.payload.transactionId })
     } else await append("AUTHORITY_CONSUMED", { authorityId: envelope.payload.authorityId, transactionId: envelope.payload.transactionId })
-    const applied = new Set(recovery.records.filter((record) => record.phase === "STEP_APPLIED").map((record) => record.detail?.stepId))
+    let applied = new Set(recovery.records.filter((record) => record.phase === "STEP_APPLIED").map((record) => record.detail?.stepId))
     const intended = new Set(recovery.records.filter((record) => record.phase === "STEP_INTENT").map((record) => record.detail?.stepId))
+    const pendingIntent = [...recovery.records].reverse().find((record) => record.phase === "STEP_INTENT" && !applied.has(record.detail?.stepId))?.detail?.stepId
+    if (pendingIntent && await adapter.effectApplied(pendingIntent)) {
+      await append("STEP_APPLIED", { stepId: pendingIntent })
+      applied = new Set([...applied, pendingIntent])
+    }
     for (const step of plan.mutations) {
       if (applied.has(step.id)) continue
       if (!intended.has(step.id)) await append("STEP_INTENT", { stepId: step.id })
@@ -278,7 +292,7 @@ function productionTrust(manifest, authority) {
   const cliAsset = manifest.appliedAssets.find((asset) => asset.destination === INSTALLED_CLI_PATH)
   if (!cliAsset || sha256(rootFile(INSTALLED_CLI_PATH, 0o555)) !== cliAsset.sha256) throw new Error("installed root CLI differs")
   const remote = fixedRun("/usr/bin/git", ["-c", "protocol.file.allow=never", "ls-remote", "--exit-code", manifest.trustedMain.remote, manifest.trustedMain.ref]).split(/\s+/)[0]
-  if (remote !== manifest.trustedMain.commit) throw new Error("fresh origin/main equality differs")
+  if (remote !== authority.trustedMainCommit) throw new Error("fresh origin/main authority equality differs")
   for (const asset of manifest.appliedAssets) {
     const source = path.join(BUNDLE_ROOT, ...asset.source.split("/")); const bytes = rootFile(source, asset.mode === "0555" ? 0o555 : 0o444)
     if (sha256(bytes) !== asset.sha256) throw new Error(`${asset.source} exact bundle bytes differ`)
@@ -295,7 +309,7 @@ function productionTrust(manifest, authority) {
   if (active) throw new Error("proof worker is already active")
   const bootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()
   if (bootId !== authority.bootId || !GUID.test(bootId)) throw new Error("signed boot generation differs")
-  return { bootstrap: { verifierRootOwned: true, verifierMode: "0555", ownerPublicKeyRootOwned: true, ownerPublicKeyMode: "0444" }, trustedMain: { remote: manifest.trustedMain.remote, ref: manifest.trustedMain.ref, commit: remote, exactCleanHead: true, replaceObjectsDisabled: true, configIsolation: true, criticalBytesMatch: true }, scheduler: { enabled: inactive.scheduler.state !== "disabled", standingAuthority: inactive.scheduler.standingAegisAuthority, dispatchOccurred: active }, closedHash: { changed: false }, bootId, authorityId: authority.authorityId }
+  return { bootstrap: { verifierRootOwned: true, verifierMode: "0555", ownerPublicKeyRootOwned: true, ownerPublicKeyMode: "0444" }, trustedMain: { remote: manifest.trustedMain.remote, ref: manifest.trustedMain.ref, minimumCommit: manifest.trustedMain.minimumCommit, authorityCommit: remote, freshRemoteAuthorityEquality: true, exactCleanHead: true, replaceObjectsDisabled: true, configIsolation: true, criticalBytesMatch: true }, scheduler: { enabled: inactive.scheduler.state !== "disabled", standingAuthority: inactive.scheduler.standingAegisAuthority, dispatchOccurred: active }, closedHash: { changed: false }, bootId, authorityId: authority.authorityId }
 }
 function productionInputs(authority) {
   const fixed = [

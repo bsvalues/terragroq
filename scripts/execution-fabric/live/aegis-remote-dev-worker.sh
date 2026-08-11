@@ -102,6 +102,9 @@ if [[ -n "$WORKER_ROOT" ]]; then
   [[ ! -L "$WORKER_ROOT" ]] || die_input "SYMLINK_REJECTED" "worker root is a symlink"
   WORKER_ROOT="$(timeout 5 realpath -- "$WORKER_ROOT")" || die_input "PATH_CONFINEMENT_FAILED" "worker root is unavailable"
 fi
+GIT_BROKER_CLIENT="${WORKER_ROOT}/usr/local/libexec/williamos-aegis-remote-dev-git-client.mjs"
+[[ -f "$GIT_BROKER_CLIENT" && ! -L "$GIT_BROKER_CLIENT" ]] || die_input "GIT_BROKER_UNAVAILABLE" "fixed credential-isolated Git client is unavailable"
+readonly GIT_BROKER_CLIENT
 if [[ -n "$WORKER_ROOT" && -d "$WORKER_ROOT/bin" ]]; then
   export PATH="$WORKER_ROOT/bin:$PATH"
 fi
@@ -262,16 +265,7 @@ run_cleanup_profile() {
 }
 
 run_preflight_repository_profile() {
-  (
-    set -euo pipefail
-    cd -- /tmp
-    proof="$(mktemp -d)"
-    trap 'rm -rf -- "$proof"' EXIT
-    timeout 120 git ls-remote --exit-code "$REMOTE_URL" refs/heads/main >/dev/null
-    git init --bare "$proof/repository.git" >/dev/null
-    timeout 120 git -C "$proof/repository.git" fetch --depth=1 "$REMOTE_URL" "$BASE_SHA" >/dev/null
-    timeout 120 git -C "$proof/repository.git" push --dry-run "$REMOTE_URL" "$BASE_SHA:refs/heads/williamos-preflight-$RUN_ID" >/dev/null
-  )
+  timeout 300 node "$GIT_BROKER_CLIENT"
 }
 
 probe_containment() {
@@ -660,10 +654,8 @@ case "$OPERATION" in
     timeout 10 mkdir -p -m 0700 -- "$SCRATCH_DIR/tmp" "$SCRATCH_DIR/xdg-cache" "$SCRATCH_DIR/nuget" "$SCRATCH_DIR/dotnet-home" "$SCRATCH_DIR/corepack" "$SCRATCH_DIR/npm-cache" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create bounded cache directories"
     validate_workspace_project
     if [[ "$OPERATION_SCRATCH_PREPARED" != true ]]; then prepare_operation_scratch; OPERATION_SCRATCH_PREPARED=true; fi
-    run_capture_at "$PHYSICAL_WORKSPACE" git clone --no-checkout --origin origin "$REMOTE_URL" "$REPO_DIR"
-    [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "Git clone failed"
-    run_capture git -C "$REPO_DIR" fetch --no-tags origin main
-    [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "Git fetch failed"
+    run_capture_at "$PHYSICAL_WORKSPACE" node "$GIT_BROKER_CLIENT"
+    [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "credential-isolated Git clone/fetch failed"
     fetched="$(repo_value rev-parse origin/main)" || die_block "GIT_BASE_MISMATCH" "origin/main is unavailable"
     [[ "$fetched" == "$BASE_SHA" ]] || die_block "GIT_BASE_MISMATCH" "fresh origin/main differs from pinned base"
     run_capture git -C "$REPO_DIR" switch --create "$BRANCH" --detach "$BASE_SHA"
@@ -739,13 +731,14 @@ case "$OPERATION" in
   PUSH_AUTHORIZED_BRANCH)
     validate_owner_marker; validate_repo
     HEAD_SHA="$(repo_value rev-parse HEAD)"
-    run_capture git -C "$REPO_DIR" push origin "HEAD:refs/heads/$BRANCH"
+    run_capture node "$GIT_BROKER_CLIENT"
+    [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "credential-isolated Git push failed"
     ;;
   PROVE_POST_MERGE)
     validate_owner_marker; validate_repo
     HEAD_SHA="$(repo_value rev-parse HEAD)"
-    run_capture git -C "$REPO_DIR" fetch --no-tags origin main
-    [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "post-merge fetch failed"
+    run_capture node "$GIT_BROKER_CLIENT"
+    [[ $RUN_EXIT -eq 0 ]] || die_block "BLOCKING_OPERATION_FAILED" "credential-isolated post-merge fetch failed"
     run_capture git -C "$REPO_DIR" merge-base --is-ancestor "$HEAD_SHA" origin/main
     [[ $RUN_EXIT -eq 0 ]] || die_block "MERGE_ANCESTRY_NOT_PROVEN" "head is not on origin/main"
     printf '%s:%s\n' "$RUN_ID" "$HEAD_SHA" > "$PROOF_PATH"

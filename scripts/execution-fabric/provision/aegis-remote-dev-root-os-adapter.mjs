@@ -21,7 +21,7 @@ const canonical = (value) => value === null ? "null" : typeof value === "string"
 
 function fail(code, detail) { const error = new Error(detail); error.code = code; throw error }
 function run(executable, args, options = {}) {
-  const result = spawnSync(executable, args, { encoding: "utf8", shell: false, windowsHide: true, timeout: options.timeout ?? 30_000, maxBuffer: 4 * 1024 * 1024, env: FIXED_ENV, cwd: options.cwd, input: options.input })
+  const result = spawnSync(executable, args, { encoding: "utf8", shell: false, windowsHide: true, timeout: options.timeout ?? 30_000, maxBuffer: 4 * 1024 * 1024, env: { ...FIXED_ENV, ...(options.env ?? {}) }, cwd: options.cwd, input: options.input })
   if (result.error || !(options.statuses ?? [0]).includes(result.status)) fail(options.code ?? "ROOT_COMMAND_FAILED", `${path.basename(executable)} ${args[0] ?? ""} failed`)
   return String(result.stdout ?? "").trim()
 }
@@ -80,6 +80,33 @@ function accountIds(name) {
   if (!Number.isSafeInteger(uid) || uid <= 0 || !Number.isSafeInteger(gid) || gid <= 0) fail("IDENTITY_DRIFT", "bounded account identifiers differ")
   return { uid, gid, home: fields[5], shell: fields[6] }
 }
+function supplementaryGroups(name) {
+  try { return run("/usr/bin/id", ["-G", name]).split(/\s+/).filter(Boolean).map(Number) } catch { return [] }
+}
+function userProcesses(uid) {
+  const result = spawnSync("/usr/bin/pgrep", ["-u", String(uid)], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV })
+  if (result.error || ![0, 1].includes(result.status)) return { proven: false, pids: [], onlyManager: false }
+  const pids = result.status === 1 ? [] : String(result.stdout ?? "").trim().split(/\s+/).filter(Boolean)
+  let onlyManager = true
+  for (const pid of pids) {
+    try {
+      const argv = fs.readFileSync(`/proc/${pid}/cmdline`).toString("utf8").split("\0").filter(Boolean)
+      if (![/^\/usr\/lib\/systemd\/systemd$/, /^\/lib\/systemd\/systemd$/].some((pattern) => pattern.test(argv[0] ?? "")) || !argv.includes("--user")) onlyManager = false
+    } catch { onlyManager = false }
+  }
+  return { proven: true, pids, onlyManager }
+}
+
+export function inspectNoSudoCapabilityEvidence(result) {
+  if (!result || result.error != null || result.signal !== null || result.status !== 1) return false
+  const stdout = String(result.stdout ?? ""); const stderr = String(result.stderr ?? "")
+  if ((stdout.length > 0) === (stderr.length > 0)) return false
+  const output = stdout || stderr
+  return /^(?:User williamos-fabric is not allowed to run sudo on|Sorry, user williamos-fabric may not run sudo on) [A-Za-z0-9._-]+\.\r?\n?$/.test(output)
+}
+function noSudoCapability() {
+  return inspectNoSudoCapabilityEvidence(spawnSync("/usr/bin/sudo", ["-n", "-l", "-U", "williamos-fabric"], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV }))
+}
 function version(executable, args, pattern) {
   try { return pattern.exec(run(executable, args, { timeout: 10_000 }))?.[1] ?? null } catch { return null }
 }
@@ -107,7 +134,7 @@ function rootOwnedRepositoryTree(directory) {
   } catch { return false }
 }
 
-function repositoryState(manifest) {
+function repositoryState(manifest, authority) {
   const control = "/var/lib/williamos/fabric/workspaces/terragroq"
   const mirror = "/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git"
   const controlExists = fs.existsSync(control); const mirrorExists = fs.existsSync(mirror)
@@ -117,8 +144,8 @@ function repositoryState(manifest) {
       if (!rootOwnedRepositoryTree(control)
         || run("/usr/bin/git", ["remote", "get-url", "origin"], { cwd: control }) !== "ssh://git@ssh.github.com:443/bsvalues/terragroq.git"
         || run("/usr/bin/git", ["status", "--porcelain"], { cwd: control }) !== "") return "DRIFT"
-      controlMatch = run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "HEAD"], { cwd: control }) === manifest.trustedMain.commit
-        && run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control }) === manifest.trustedMain.commit
+      controlMatch = run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "HEAD"], { cwd: control }) === authority.trustedMainCommit
+        && run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control }) === authority.trustedMainCommit
     }
     if (mirrorExists) {
       if (!rootOwnedRepositoryTree(mirror)
@@ -201,15 +228,20 @@ function appendOnly(directory) {
 function networkBoundaryMatches() {
   try {
     const rules = run("/usr/sbin/nft", ["list", "chain", "inet", "williamos_aegis_remote_dev", "output"])
-    const required = [
+    const expected = [
+      "table inet williamos_aegis_remote_dev {",
+      "chain output {",
+      "type filter hook output priority filter; policy accept;",
       'meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject',
       'meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject',
       'meta skuid "williamos-fabric" ip daddr 127.0.0.1 tcp dport 17734 accept',
       'meta skuid "williamos-fabric" reject',
+      "}",
+      "}",
     ]
-    if (!rules.includes("type filter hook output priority filter; policy accept;") || required.some((entry) => rules.split(entry).length !== 2)
-      || (rules.match(/meta skuid/g) ?? []).length !== required.length) return false
-    for (const unit of ["williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service"]) {
+    const lines = rules.split(/\r?\n/).map((line) => line.trim().replace(/\s+/g, " ")).filter(Boolean)
+    if (!same(lines, expected)) return false
+    for (const unit of ["williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service", "williamos-aegis-remote-dev-git-broker.socket"]) {
       if (run("/usr/bin/systemctl", ["is-active", unit]) !== "active" || run("/usr/bin/systemctl", ["is-enabled", unit]) !== "enabled") return false
     }
     const listener = run("/usr/bin/ss", ["-H", "-ltn", "sport = :17734"])
@@ -259,18 +291,21 @@ function recoverJournal(authority) {
 }
 function observe(manifest, authority, trust) {
   const ids = accountIds("williamos-fabric")
+  const brokerIds = accountIds("williamos-egress-broker")
   const transportPath = "/etc/ssh/authorized_keys/williamos-fabric"
   const transport = fs.existsSync(transportPath) ? fs.readFileSync(transportPath, "utf8") : ""
   const rootAssets = rootAssetsState(manifest, authority)
   const nft = networkBoundaryMatches()
-  const repositories = repositoryState(manifest)
+  const repositories = repositoryState(manifest, authority)
   const toolchain = toolchainState(authority)
   const ledger = (() => { try { const s = fs.lstatSync("/var/lib/williamos/fabric/ledger"); return trustedParents("/var/lib/williamos/fabric/ledger") && s.isDirectory() && !s.isSymbolicLink() && s.uid === ids?.uid && s.gid === ids?.gid && (s.mode & 0o7777) === 0o700 && run("/usr/bin/findmnt", ["-n", "-o", "FSTYPE", "--target", "/var/lib/williamos/fabric/ledger"]) === "ext4" } catch { return false } })()
-  const identityMatch = (() => { try { const shadow = run("/usr/bin/getent", ["shadow", "williamos-fabric"]).split(":")[1]; const linger = fs.existsSync(`/var/lib/systemd/linger/williamos-fabric`); const sudo = spawnSync("/usr/bin/sudo", ["-n", "-l", "-U", "williamos-fabric"], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV }); return ids?.shell === "/bin/bash" && /^!/.test(shadow) && linger && sudo.status !== 0 && /may not run sudo/i.test(`${sudo.stdout}${sudo.stderr}`) } catch { return false } })()
+  const processState = ids ? userProcesses(ids.uid) : { proven: true, pids: [], onlyManager: true }
+  const brokerProcessState = brokerIds ? userProcesses(brokerIds.uid) : { proven: true, pids: [], onlyManager: true }
+  const identityMatch = (() => { try { const shadow = run("/usr/bin/getent", ["shadow", "williamos-fabric"]).split(":")[1]; const linger = fs.existsSync(`/var/lib/systemd/linger/williamos-fabric`); return ids?.home === "/var/empty/williamos-fabric" && ids?.shell === "/bin/bash" && /^!/.test(shadow) && linger && noSudoCapability() && same(supplementaryGroups("williamos-fabric"), [ids.gid]) && processState.proven && processState.onlyManager && brokerIds?.home === "/var/empty/williamos-egress-broker" && brokerIds?.shell === "/usr/sbin/nologin" && same(supplementaryGroups("williamos-egress-broker"), [brokerIds.gid]) } catch { return false } })()
   const expectedTransport = (() => { try { const key = fs.readFileSync(path.join(STAGED_ROOT, "hermes-transport.pub"), "utf8").trim(); return `from="192.168.1.154",restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" ${key}\n` } catch { return null } })()
   const githubMatch = exactFile("/etc/williamos-fabric/github_known_hosts", authority.inputs.githubHostKnownHostsSha256, 0, 0, 0o444) && exactFile("/etc/williamos-fabric/github-account.key", authority.inputs.githubAccountPrivateKeySha256, 0, 0, 0o400)
   const states = {
-    RECONCILE_BOUNDED_IDENTITY: identityMatch ? "MATCH" : ids ? "DRIFT" : "ABSENT",
+    RECONCILE_BOUNDED_IDENTITY: identityMatch ? "MATCH" : ids && (!processState.proven || (processState.pids.length > 0 && !processState.onlyManager) || !brokerProcessState.proven || brokerProcessState.pids.length > 0 || !noSudoCapability()) ? "DRIFT" : "ABSENT",
     INSTALL_ROOT_LAUNCH_ASSETS: rootAssets,
     INSTALL_DUAL_STACK_BROKER_BOUNDARY: nft ? "MATCH" : (() => { try { const table = spawnSync("/usr/sbin/nft", ["list", "table", "inet", "williamos_aegis_remote_dev"], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV }); const active = ["williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service"].some((unit) => spawnSync("/usr/bin/systemctl", ["is-active", "--quiet", unit], { shell: false, timeout: 5000, env: FIXED_ENV }).status === 0); return table.status === 0 || active ? "DRIFT" : "ABSENT" } catch { return "DRIFT" } })(),
     INSTALL_GITHUB_HOST_AUTH_BOUNDARY: githubMatch ? "MATCH" : fs.existsSync("/etc/williamos-fabric/github_known_hosts") || fs.existsSync("/etc/williamos-fabric/github-account.key") ? "DRIFT" : "ABSENT",
@@ -284,13 +319,21 @@ function observe(manifest, authority, trust) {
 
 function applyIdentity() {
   let ids = accountIds("williamos-fabric")
-  if (!ids) { run("/usr/sbin/useradd", ["--create-home", "--shell", "/bin/bash", "williamos-fabric"]); ids = accountIds("williamos-fabric") }
-  if (ids.home !== "/home/williamos-fabric" || ids.shell !== "/bin/bash") fail("IDENTITY_DRIFT", "existing bounded account home or shell differs")
-  run("/usr/sbin/usermod", ["--lock", "williamos-fabric"])
-  const sudo = spawnSync("/usr/bin/sudo", ["-n", "-l", "-U", "williamos-fabric"], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV })
-  if (sudo.status === 0 || !/may not run sudo/i.test(`${sudo.stdout}${sudo.stderr}`)) fail("IDENTITY_DRIFT", "no-sudo capability is unproven")
-  run("/usr/bin/loginctl", ["enable-linger", "williamos-fabric"])
-  if (!accountIds("williamos-egress-broker")) run("/usr/sbin/useradd", ["--system", "--shell", "/usr/sbin/nologin", "--no-create-home", "williamos-egress-broker"])
+  if (!ids) { run("/usr/sbin/useradd", ["--no-create-home", "--home-dir", "/var/empty/williamos-fabric", "--shell", "/bin/bash", "williamos-fabric"]); ids = accountIds("williamos-fabric") }
+  run("/usr/bin/loginctl", ["disable-linger", "williamos-fabric"], { statuses: [0, 1] })
+  run("/usr/bin/loginctl", ["terminate-user", "williamos-fabric"], { statuses: [0, 1] })
+  const stopped = userProcesses(ids.uid); if (!stopped.proven || stopped.pids.length) fail("IDENTITY_ACTIVE", "bounded identity still owns a process after termination")
+  ensureRootDirectory("/var/empty/williamos-fabric", 0o755)
+  run("/usr/sbin/usermod", ["-G", "", "--home", "/var/empty/williamos-fabric", "--shell", "/bin/bash", "--lock", "williamos-fabric"])
+  ids = accountIds("williamos-fabric")
+  if (!ids || !same(supplementaryGroups("williamos-fabric"), [ids.gid]) || !noSudoCapability()) fail("IDENTITY_DRIFT", "exact primary-only no-sudo identity is unproven")
+  let broker = accountIds("williamos-egress-broker")
+  if (!broker) { run("/usr/sbin/useradd", ["--system", "--home-dir", "/var/empty/williamos-egress-broker", "--shell", "/usr/sbin/nologin", "--no-create-home", "williamos-egress-broker"]); broker = accountIds("williamos-egress-broker") }
+  const brokerProcesses = userProcesses(broker.uid); if (!brokerProcesses.proven || brokerProcesses.pids.length) fail("IDENTITY_ACTIVE", "egress broker identity unexpectedly owns a process before network apply")
+  ensureRootDirectory("/var/empty/williamos-egress-broker", 0o755)
+  run("/usr/sbin/usermod", ["-G", "", "--home", "/var/empty/williamos-egress-broker", "--shell", "/usr/sbin/nologin", "--lock", "williamos-egress-broker"])
+  broker = accountIds("williamos-egress-broker")
+  if (!broker || !same(supplementaryGroups("williamos-egress-broker"), [broker.gid])) fail("IDENTITY_DRIFT", "egress broker identity retains supplementary groups")
 }
 function applyAssets(manifest, authority) {
   for (const asset of manifest.appliedAssets) {
@@ -302,10 +345,13 @@ function applyAssets(manifest, authority) {
 }
 function applyNetwork(authority) {
   if (!fs.existsSync("/etc/williamos-fabric/williamos-aegis-remote-dev-egress.nft")) fail("ROOT_ASSET_MISSING", "default-deny asset is missing")
-  run("/usr/bin/systemd-analyze", ["verify", "/etc/systemd/system/williamos-aegis-remote-dev-egress.service", "/etc/systemd/system/williamos-aegis-remote-dev-broker.service"])
+  run("/usr/bin/systemd-analyze", ["verify", "/etc/systemd/system/williamos-aegis-remote-dev-egress.service", "/etc/systemd/system/williamos-aegis-remote-dev-broker.service", "/etc/systemd/system/williamos-aegis-remote-dev-git-broker.socket", "/etc/systemd/system/williamos-aegis-remote-dev-git-broker.service"])
   run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-egress-enforcer.mjs"])
   run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-egress-broker.mjs"])
-  run("/usr/bin/systemctl", ["enable", "--now", "williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service"])
+  run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-runtime-authority.mjs"])
+  run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-git-broker.mjs"])
+  run("/usr/bin/node", ["--check", "/usr/local/libexec/williamos-aegis-remote-dev-git-client.mjs"])
+  run("/usr/bin/systemctl", ["enable", "--now", "williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service", "williamos-aegis-remote-dev-git-broker.socket"])
   if (!networkBoundaryMatches()) fail("NETWORK_BOUNDARY_UNPROVEN", "exact broker/default-deny/Atlas boundary differs after apply")
 }
 function applyGithub(authority) {
@@ -327,23 +373,26 @@ function applyTransport(authority) {
   run("/usr/sbin/sshd", ["-t"])
   for (const address of ["192.168.1.154", "192.168.1.155"]) {
     const effective = run("/usr/sbin/sshd", ["-T", "-C", `user=williamos-fabric,host=aegis,addr=${address}`])
-    for (const required of ["passwordauthentication no", "kbdinteractiveauthentication no", "allowtcpforwarding no", "permittty no", "authorizedkeysfile /etc/ssh/authorized_keys/williamos-fabric"]) if (!effective.includes(required)) fail("TRANSPORT_DRIFT", "effective SSH restriction differs")
+    for (const required of ["passwordauthentication no", "kbdinteractiveauthentication no", "hostbasedauthentication no", "pubkeyauthentication yes", "authenticationmethods publickey", "forcecommand /usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs", "allowtcpforwarding no", "permittty no", "permituserenvironment no", "permituserrc no", "authorizedkeysfile /etc/ssh/authorized_keys/williamos-fabric", "authorizedkeyscommand none", "authorizedprincipalscommand none", "trustedusercakeys none"]) if (!effective.includes(required)) fail("TRANSPORT_DRIFT", "effective SSH restriction differs")
   }
+  run("/usr/bin/loginctl", ["enable-linger", "williamos-fabric"])
 }
-function applyRepositories(manifest) {
+function applyRepositories(manifest, authority) {
   const control = "/var/lib/williamos/fabric/workspaces/terragroq"; const mirror = "/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git"
+  const rootSsh = "/usr/bin/ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/etc/williamos-fabric/github_known_hosts -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -o IdentityFile=/etc/williamos-fabric/github-account.key -o ProxyCommand=none"
+  const gitOptions = { timeout: 300_000, env: { GIT_SSH_COMMAND: rootSsh } }
   ensureRootDirectory("/var/lib/williamos/fabric/workspaces")
   ensureRootDirectory("/var/lib/williamos/fabric/repositories")
-  if ((fs.existsSync(control) || fs.existsSync(mirror)) && repositoryState(manifest) === "DRIFT") fail("REPOSITORY_DRIFT", "existing control checkout or target mirror is not root-controlled and clean")
-  if (!fs.existsSync(control)) run("/usr/bin/git", ["clone", "--no-checkout", "ssh://git@ssh.github.com:443/bsvalues/terragroq.git", control], { timeout: 300_000 })
-  run("/usr/bin/git", ["fetch", "--force", "origin", `+refs/heads/main:refs/remotes/origin/main`], { cwd: control, timeout: 300_000 })
-  if (run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control }) !== manifest.trustedMain.commit) fail("REPOSITORY_DRIFT", "fresh control-plane main differs")
+  if ((fs.existsSync(control) || fs.existsSync(mirror)) && repositoryState(manifest, authority) === "DRIFT") fail("REPOSITORY_DRIFT", "existing control checkout or target mirror is not root-controlled and clean")
+  if (!fs.existsSync(control)) run("/usr/bin/git", ["clone", "--no-checkout", "ssh://git@ssh.github.com:443/bsvalues/terragroq.git", control], gitOptions)
+  run("/usr/bin/git", ["fetch", "--force", "origin", `+refs/heads/main:refs/remotes/origin/main`], { ...gitOptions, cwd: control })
+  if (run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control }) !== authority.trustedMainCommit) fail("REPOSITORY_DRIFT", "fresh control-plane main differs from signed authority")
   if (run("/usr/bin/git", ["status", "--porcelain"], { cwd: control }) !== "") fail("REPOSITORY_DRIFT", "control checkout is dirty")
-  run("/usr/bin/git", ["checkout", "-B", "main", manifest.trustedMain.commit], { cwd: control })
-  if (!fs.existsSync(mirror)) run("/usr/bin/git", ["clone", "--mirror", "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git", mirror], { timeout: 300_000 })
-  run("/usr/bin/git", [`--git-dir=${mirror}`, "fetch", "--force", "origin", "+refs/heads/main:refs/heads/main"], { timeout: 300_000 })
+  run("/usr/bin/git", ["checkout", "-B", "main", authority.trustedMainCommit], { cwd: control })
+  if (!fs.existsSync(mirror)) run("/usr/bin/git", ["clone", "--mirror", "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git", mirror], gitOptions)
+  run("/usr/bin/git", [`--git-dir=${mirror}`, "fetch", "--force", "origin", "+refs/heads/main:refs/heads/main"], gitOptions)
   run("/usr/bin/git", [`--git-dir=${mirror}`, "cat-file", "-e", "ffd2fa35f5152de2b95e7f63b220050d18193d7a^{commit}"])
-  if (repositoryState(manifest) !== "MATCH") fail("REPOSITORY_DRIFT", "trusted repositories differ after reconciliation")
+  if (repositoryState(manifest, authority) !== "MATCH") fail("REPOSITORY_DRIFT", "trusted repositories differ after reconciliation")
 }
 function applyToolchain(authority) {
   const dotnet = authority.inputs.toolchain.dotnetSdk
@@ -354,11 +403,19 @@ function applyToolchain(authority) {
     if (!entries.length || entries.some((entry) => entry.startsWith("/") || entry.split("/").includes(".."))) fail("PINNED_TOOLCHAIN_ARCHIVE_INVALID", ".NET archive contains an unsafe path")
     ensureRootDirectory("/usr/share")
     const temporary = `/usr/share/dotnet.${authority.transactionId}.tmp`
-    if (fs.existsSync(temporary)) fail("PINNED_TOOLCHAIN_PARTIAL", "transaction .NET staging directory already exists")
+    if (fs.existsSync(temporary)) {
+      const partial = fs.lstatSync(temporary)
+      if (!trustedParents(temporary) || !partial.isDirectory() || partial.isSymbolicLink() || partial.uid !== 0 || partial.gid !== 0 || !temporary.startsWith("/usr/share/dotnet.") || !temporary.endsWith(".tmp")) fail("PINNED_TOOLCHAIN_PARTIAL", "transaction .NET staging path is unsafe")
+      fs.rmSync(temporary, { recursive: true, force: false })
+    }
     fs.mkdirSync(temporary, { mode: 0o755 })
-    run("/usr/bin/tar", ["-xzf", archive, "--no-same-owner", "--no-same-permissions", "-C", temporary], { timeout: 300_000 })
+    run("/usr/bin/tar", ["-xzf", archive, "--no-same-owner", "-C", temporary], { timeout: 300_000 })
     fs.chmodSync(temporary, 0o755)
+    const unsafeType = run("/usr/bin/find", [temporary, "-xdev", "(", "-type", "l", "-o", "-type", "s", "-o", "-type", "p", "-o", "-type", "b", "-o", "-type", "c", "-o", "-type", "f", "-links", "+1", ")", "-print", "-quit"])
+    const unsafeMode = run("/usr/bin/find", [temporary, "-xdev", "(", "!", "-user", "root", "-o", "-perm", "/022", "-o", "-type", "d", "!", "-perm", "-0555", "-o", "-type", "f", "!", "-perm", "-0444", ")", "-print", "-quit"])
+    if (unsafeType || unsafeMode) fail("PINNED_TOOLCHAIN_ARCHIVE_INVALID", ".NET SDK tree type, ownership, or worker-readable mode differs")
     if (version(`${temporary}/dotnet`, ["--version"], /(\S+)/) !== dotnet.version) fail("PINNED_TOOLCHAIN_ARCHIVE_INVALID", "staged .NET SDK version differs")
+    run("/usr/bin/sync", ["-f", temporary])
     fs.renameSync(temporary, "/usr/share/dotnet"); const parent = fs.openSync("/usr/share", fs.constants.O_RDONLY); fs.fsyncSync(parent); fs.closeSync(parent)
   }
   const exact = [["git", "/usr/bin/git", ["--version"], /git version (\S+)/], ["node", "/usr/bin/node", ["--version"], /v(\S+)/], ["dotnetSdk", "/usr/bin/dotnet", ["--version"], /(\S+)/], ["corepack", "/usr/bin/corepack", ["--version"], /(\S+)/], ["pnpm", "/usr/bin/pnpm", ["--version"], /(\S+)/]]
@@ -370,7 +427,7 @@ function applyLedger() {
 }
 function publishReceipt(manifest, authority, journalHeadSha256) {
   const launchKey = launchKeyEvidence(authority); if (!launchKey.match) fail("LAUNCH_KEY_DRIFT", "root launch key evidence differs at publication")
-  const receipt = { schemaVersion: 1, status: "PREREQUISITES_VERIFIED", workOrderId: "WO-TF-REMOTE-DEV-OFFLOAD-001", transactionId: authority.transactionId, authorityId: authority.authorityId, completedAt: run("/usr/bin/date", ["-u", "+%Y-%m-%dT%H:%M:%S.%3NZ"]), machineIdSha256: manifest.target.machineIdSha256, trustedMainCommit: manifest.trustedMain.commit, rootHandoffManifestSha256: authority.rootHandoffManifestSha256, prerequisiteManifestJcsSha256: manifest.prerequisitePackage.manifestJcsSha256, appliedAssets: manifest.appliedAssets, authoritySha256: sha(Buffer.from(canonical(authority), "utf8")), inputsSha256: sha(Buffer.from(canonical(authority.inputs), "utf8")), launchAuthorityPublicKeySha256: launchKey.publicSha256, storage: authority.storage, journalHeadSha256, schedulerEnabled: false, standingAuthority: false, dispatchOccurred: false, closedHashMutation: false, executionAuthorized: false, activationAuthorized: false }
+  const receipt = { schemaVersion: 1, status: "PREREQUISITES_VERIFIED", workOrderId: "WO-TF-REMOTE-DEV-OFFLOAD-001", transactionId: authority.transactionId, authorityId: authority.authorityId, completedAt: run("/usr/bin/date", ["-u", "+%Y-%m-%dT%H:%M:%S.%3NZ"]), machineIdSha256: manifest.target.machineIdSha256, trustedMainCommit: authority.trustedMainCommit, rootHandoffManifestSha256: authority.rootHandoffManifestSha256, historicalPreflightManifestJcsSha256: manifest.prerequisitePackage.supersededPreflight.manifestJcsSha256, appliedAssets: manifest.appliedAssets, authoritySha256: sha(Buffer.from(canonical(authority), "utf8")), inputsSha256: sha(Buffer.from(canonical(authority.inputs), "utf8")), launchAuthorityPublicKeySha256: launchKey.publicSha256, storage: authority.storage, journalHeadSha256, schedulerEnabled: false, standingAuthority: false, dispatchOccurred: false, closedHashMutation: false, executionAuthorized: false, activationAuthorized: false }
   const bytes = Buffer.from(`${canonical(receipt)}\n`, "utf8"); const destination = "/var/lib/williamos-fabric/remote-dev-prerequisite-verified.json"
   if (fs.existsSync(destination)) {
     const current = readCanonicalRootJson(destination, 0o444)
@@ -416,7 +473,7 @@ export function createRootProductionAdapter(manifest, authority, trust) {
       else if (id === "INSTALL_ROOT_LAUNCH_ASSETS") applyAssets(manifest, authority)
       else if (id === "INSTALL_DUAL_STACK_BROKER_BOUNDARY") applyNetwork(authority)
       else if (id === "INSTALL_GITHUB_HOST_AUTH_BOUNDARY") applyGithub(authority)
-      else if (id === "RECONCILE_TRUSTED_REPOSITORIES") applyRepositories(manifest)
+      else if (id === "RECONCILE_TRUSTED_REPOSITORIES") applyRepositories(manifest, authority)
       else if (id === "INSTALL_PINNED_TOOLCHAIN") applyToolchain(authority)
       else if (id === "CREATE_DURABLE_LEDGER") applyLedger()
       else if (id === "INSTALL_FORCED_COMMAND_TRANSPORT") applyTransport(authority)

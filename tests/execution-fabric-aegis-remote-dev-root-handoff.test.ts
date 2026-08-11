@@ -12,7 +12,8 @@ import {
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
-import { inspectRootAdapterContract } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { inspectNoSudoCapabilityEvidence, inspectRootAdapterContract } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
 const manifestPath = path.join(root, "config/execution-fabric/aegis-remote-dev-root-handoff.json")
@@ -22,12 +23,13 @@ const rawSha = (file: string) => {
   const trusted = spawnSync("git", ["show", `HEAD:${file}`], { cwd: root, encoding: null, shell: false })
   return sha(trusted.status === 0 ? trusted.stdout : fs.readFileSync(path.join(root, file)))
 }
+const currentRawSha = (file: string) => sha(Buffer.from(fs.readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n")))
 
 function completeObservation(manifest = loadManifest()) {
   return {
     platform: { os: "linux", effectiveUid: 0, hostname: "aegis", machineIdSha256: manifest.target.machineIdSha256 },
     bootstrap: { verifierRootOwned: true, verifierMode: "0555", ownerPublicKeyRootOwned: true, ownerPublicKeyMode: "0444" },
-    trustedMain: { remote: "https://github.com/bsvalues/terragroq.git", ref: "refs/heads/main", commit: manifest.trustedMain.commit, exactCleanHead: true, replaceObjectsDisabled: true, configIsolation: true, criticalBytesMatch: true },
+    trustedMain: { remote: "https://github.com/bsvalues/terragroq.git", ref: "refs/heads/main", minimumCommit: manifest.trustedMain.minimumCommit, authorityCommit: "d".repeat(40), freshRemoteAuthorityEquality: true, exactCleanHead: true, replaceObjectsDisabled: true, configIsolation: true, criticalBytesMatch: true },
     storage: {
       verified: true, mutationRequested: false, backingImageRealPath: manifest.storage.backingImageRealPath,
       backingImageBytes: manifest.storage.backingImageBytes, backingImageOwner: "root", backingImageGroup: "root", backingImageMode: "0600", backingImageNlink: 1,
@@ -54,10 +56,10 @@ function signedAuthority(manifest = loadManifest(), overrides: Record<string, un
     issue: { repository: "bsvalues/terrafusion_os_1.0", number: 734 },
     machineIdSha256: manifest.target.machineIdSha256,
     bootId: "8f8c3601-3767-4d13-9cc6-b3a911a5fba9",
-    trustedMainCommit: manifest.trustedMain.commit,
+      trustedMainCommit: "d".repeat(40),
     rootHandoffManifestSha256: sha(Buffer.from(canonicalizeJcs(manifest), "utf8")),
-    verifierSha256: rawSha("scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"),
-    prerequisiteManifestJcsSha256: manifest.prerequisitePackage.manifestJcsSha256,
+    verifierSha256: currentRawSha("scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"),
+    historicalPreflightManifestJcsSha256: manifest.prerequisitePackage.supersededPreflight.manifestJcsSha256,
     appliedAssets: manifest.appliedAssets,
     inputs: {
       hermesTransportPublicKeySha256: "1".repeat(64), hermesTransportKeyFingerprint: "SHA256:real-hermes-key",
@@ -87,8 +89,8 @@ function signedAuthority(manifest = loadManifest(), overrides: Record<string, un
 describe("AEGIS root-owned prerequisite handoff", () => {
   it("pins the merged prerequisite generation and every applied asset exactly", () => {
     const manifest = validateRootHandoffManifest(loadManifest())
-    expect(manifest.trustedMain.commit).toBe("bcca6069a917d706314f7c8cb7b3cd40cdd910da")
-    expect(manifest.prerequisitePackage).toMatchObject({ packageId: "aegis-remote-dev-prerequisites-issue-734-v1", manifestJcsSha256: "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a" })
+    expect(manifest.trustedMain.minimumCommit).toBe("bcca6069a917d706314f7c8cb7b3cd40cdd910da")
+    expect(manifest.prerequisitePackage).toMatchObject({ packageId: "aegis-remote-dev-root-prerequisites-issue-734-v2", semanticSupersession: true, historicalSuccessClaimed: false, supersededPreflight: { manifestJcsSha256: "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a" } })
     expect(manifest.appliedAssets.length).toBeGreaterThanOrEqual(7)
     for (const asset of manifest.appliedAssets) expect(rawSha(asset.source)).toBe(asset.sha256)
     expect(inspectRootHandoffBundle(root)).toMatchObject({ status: "BUNDLE_INTERNAL_CONSISTENCY_ONLY", externalTrustRootRequired: true, applyAuthorized: false, drift: [] })
@@ -96,8 +98,8 @@ describe("AEGIS root-owned prerequisite handoff", () => {
 
   it("rejects manifest, asset, scheduler, standing-authority, and closed-HASH drift", () => {
     for (const mutate of [
-      (v: any) => { v.trustedMain.commit = "0".repeat(40) },
-      (v: any) => { v.prerequisitePackage.manifestJcsSha256 = "0".repeat(64) },
+      (v: any) => { v.trustedMain.minimumCommit = "0".repeat(40) },
+      (v: any) => { v.prerequisitePackage.supersededPreflight.manifestJcsSha256 = "0".repeat(64) },
       (v: any) => { v.appliedAssets[0].sha256 = "0".repeat(64) },
       (v: any) => { v.posture.generalSchedulerEnabled = true },
       (v: any) => { v.posture.standingAegisAuthorityEnabled = true },
@@ -114,7 +116,6 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     const cases = [
       { inputs: { ...good.envelope.payload.inputs, hermesTransportKeyFingerprint: "SHA256:owner-approved-hermes-transport-key" } },
       { machineIdSha256: "0".repeat(64) },
-      { trustedMainCommit: "0".repeat(40) },
       { verifierSha256: "0".repeat(64) },
       { allowedSteps: good.envelope.payload.allowedSteps.slice(1) },
       { storage: { ...good.envelope.payload.storage, mode: "MUTATE" } },
@@ -151,7 +152,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
       (o: any) => { o.platform.effectiveUid = 1000 },
       (o: any) => { o.platform.os = "windows" },
       (o: any) => { o.platform.machineIdSha256 = "0".repeat(64) },
-      (o: any) => { o.trustedMain.commit = "0".repeat(40) },
+      (o: any) => { o.trustedMain.authorityCommit = "0" },
       (o: any) => { o.trustedMain.replaceObjectsDisabled = false },
       (o: any) => { o.bootstrap.verifierRootOwned = false },
       (o: any) => { o.scheduler.enabled = true },
@@ -209,7 +210,12 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     const manifest = loadManifest(); const signed = signedAuthority(manifest); const observed = completeObservation(manifest)
     const state = { claimed: false, records: [] as any[], effects: new Set<string>(), crash: true, applyCalls: 0 }
     const adapter = {
-      acquireLease: async () => true, releaseLease: async () => undefined, reprove: async () => observed,
+      acquireLease: async () => true, releaseLease: async () => undefined,
+      reprove: async () => {
+        const value = structuredClone(observed)
+        for (const id of state.effects) value.prerequisites[id] = "MATCH"
+        return value
+      },
       claim: async () => state.claimed ? { resume: true } : (state.claimed = true),
       recover: async () => ({ records: state.records, committed: false }),
       append: async (record: any) => {
@@ -222,21 +228,37 @@ describe("AEGIS root-owned prerequisite handoff", () => {
       verify: async () => { const value = completeObservation(manifest); value.prerequisites = Object.fromEntries(manifest.steps.map((step: { id: string }) => [step.id, "MATCH"])); return value },
       publishSuccess: async () => undefined,
     }
-    expect((await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:05:00.000Z", adapter)).status).toBe("BLOCKED")
+    const firstResult = await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:05:00.000Z", adapter)
+    expect(firstResult).toMatchObject({ status: "BLOCKED", reasonCode: "PARTIAL_APPLY_INERT" })
     expect(state.applyCalls).toBe(1)
     state.crash = false
     expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:06:00.000Z", adapter)).toMatchObject({ status: "PREREQUISITES_APPLIED_VERIFIED" })
     expect(state.applyCalls).toBe(manifest.steps.length)
+    const firstIntent = state.records.findIndex((record) => record.phase === "STEP_INTENT")
+    expect(state.records[firstIntent + 1]).toMatchObject({ phase: "STEP_APPLIED", detail: { stepId: manifest.steps[0].id } })
+  })
+
+  it("accepts only an exact conclusive sudo denial and rejects password, signal, or ambiguous errors", () => {
+    expect(inspectNoSudoCapabilityEvidence({ status: 1, signal: null, error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" })).toBe(true)
+    expect(inspectNoSudoCapabilityEvidence({ status: 1, signal: null, error: null, stdout: "", stderr: "Sorry, user williamos-fabric may not run sudo on aegis.\n" })).toBe(true)
+    for (const value of [
+      { status: 0, signal: null, error: null, stdout: "allowed", stderr: "" },
+      { status: 1, signal: null, error: null, stdout: "", stderr: "a password is required\n" },
+      { status: 1, signal: "SIGTERM", error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" },
+      { status: 1, signal: null, error: new Error("spawn failed"), stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" },
+      { status: 2, signal: null, error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" },
+    ]) expect(inspectNoSudoCapabilityEvidence(value)).toBe(false)
   })
 
   it("ships an exact dual-stack default-deny policy broker with Atlas denied and no fail-open delete/apply gap", () => {
     const broker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs"), "utf8")
+    const runtimeAuthority = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"), "utf8")
     const enforcer = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-enforcer.mjs"), "utf8")
     const service = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.service"), "utf8")
     const nft = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.nft"), "utf8")
     for (const endpoint of ["ssh.github.com", "api.github.com", "api.nuget.org", "globalcdn.nuget.org"]) expect(broker).toContain(endpoint)
-    expect(broker).toContain('address === "192.168.1.156"')
-    expect(broker).toContain('lower === "::ffff:192.168.1.156"')
+    expect(runtimeAuthority).toContain('normalized === "192.168.1.156"')
+    expect(runtimeAuthority).toContain("mappedIpv4")
     expect(broker).not.toContain('delete table')
     expect(enforcer).toContain("flush chain inet")
     expect(enforcer).not.toContain("delete table")
@@ -244,6 +266,31 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(nft).toContain('meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject')
     expect(nft).toContain('meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject')
     expect(nft.match(/meta skuid "williamos-fabric" reject/g)).toHaveLength(1)
+  })
+
+  it("scopes every CONNECT destination to the signed operation and rejects private or mapped-private destinations", () => {
+    expect(allowedHostForOperation("CREATE_WORKSPACE", "ssh.github.com")).toBe(true)
+    expect(allowedHostForOperation("RESTORE_DOTNET", "api.nuget.org")).toBe(true)
+    expect(allowedHostForOperation("RESTORE_DOTNET", "globalcdn.nuget.org")).toBe(true)
+    expect(allowedHostForOperation("PUSH_AUTHORIZED_BRANCH", "ssh.github.com")).toBe(true)
+    expect(allowedHostForOperation("BUILD_DOTNET_RELEASE", "ssh.github.com")).toBe(false)
+    expect(allowedHostForOperation("RESTORE_DOTNET", "ssh.github.com")).toBe(false)
+    for (const address of ["192.168.1.156", "::ffff:192.168.1.156", "::ffff:c0a8:019c", "10.0.0.1", "127.0.0.1", "172.16.0.1", "169.254.1.1", "fc00::1", "fd00::1", "fe80::1", "::1"]) {
+      expect(isDeniedDestination(address)).toBe(true)
+    }
+    expect(isDeniedDestination("140.82.112.36")).toBe(false)
+    expect(isDeniedDestination("2606:50c0:8000::154")).toBe(false)
+  })
+
+  it("keeps GitHub private credentials outside worker-readable configuration and uses a signed PUSH broker", () => {
+    const ssh = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf"), "utf8")
+    const worker = fs.readFileSync(path.join(root, "scripts/execution-fabric/live/aegis-remote-dev-worker.sh"), "utf8")
+    const launcher = fs.readFileSync(path.join(root, "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")
+    expect(ssh).not.toContain("github-account.key")
+    expect(worker).not.toContain('push origin "HEAD:refs/heads/$BRANCH"')
+    expect(worker).toContain("williamos-aegis-remote-dev-git-client.mjs")
+    expect(launcher).toContain("WILLIAMOS_NETWORK_TICKET_B64")
+    expect(launcher).toContain("WILLIAMOS_NETWORK_PACKET_B64")
   })
 
   it("ships one fixed production OS adapter and CLI with no caller provider, clock, path, or command injection", () => {
@@ -263,6 +310,9 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(adapter).not.toContain("shell: true")
     expect(adapter).toContain("fs.constants.O_EXCL")
     expect(adapter).toContain("recoverJournal(authority)")
+    expect(adapter).toContain('run("/usr/sbin/usermod", ["-G", "", "--home", "/var/empty/williamos-fabric"')
+    expect(adapter.indexOf('run("/usr/bin/loginctl", ["terminate-user", "williamos-fabric"]')).toBeLessThan(adapter.indexOf("applyAssets(manifest, authority)"))
+    expect(adapter).toContain("same(lines, expected)")
     expect(verifier).toContain('const OWNER_PUBLIC_KEY_PATH = "/etc/williamos-fabric/owner-prerequisite-authority.pem"')
     expect(verifier).toContain('const INSTALLED_VERIFIER_PATH = "/usr/local/libexec/williamos-aegis-root-handoff.mjs"')
     expect(cli).toContain("/usr/bin/flock")
