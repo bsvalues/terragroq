@@ -14,7 +14,7 @@ import {
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
-import { inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { exactNftBoundaryLines, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -373,6 +373,14 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(nft.indexOf(gitBrokerProxy)).toBeLessThan(nft.indexOf(allOtherUsersDenied))
     expect(nft.match(/meta skuid "williamos-fabric" reject/g)).toHaveLength(1)
     expect(enforcer).toContain('meta skuid "williamos-git-broker" ip daddr 127.0.0.1 tcp dport 17734 accept')
+    const exactLiveLines = nft.split(/\r?\n/).map((line) => line.trim().replace(/\s+/g, " ")).filter(Boolean)
+    expect(exactNftBoundaryLines(exactLiveLines)).toBe(true)
+    for (const drift of [
+      exactLiveLines.filter((line) => !line.includes('skuid "williamos-git-broker"')),
+      exactLiveLines.filter((line) => !line.includes('skuid "williamos-fabric" ip daddr 127.0.0.1')),
+      [...exactLiveLines.slice(0, 6), exactLiveLines[7], exactLiveLines[6], ...exactLiveLines.slice(8)],
+      [...exactLiveLines.slice(0, -2), 'meta skuid "other" accept', ...exactLiveLines.slice(-2)],
+    ]) expect(exactNftBoundaryLines(drift)).toBe(false)
   })
 
   it("scopes every CONNECT destination to the signed operation and rejects private or mapped-private destinations", () => {
@@ -492,7 +500,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(cli).toContain("--wait --pipe --collect")
     expect(cli).toContain("williamos-aegis-root-handoff.service")
     expect(adapter.indexOf('run("/usr/bin/loginctl", ["terminate-user", "williamos-fabric"]')).toBeLessThan(adapter.indexOf("applyAssets(manifest, authority)"))
-    expect(adapter).toContain("same(lines, expected)")
+    expect(adapter).toContain("exactNftBoundaryLines(lines)")
     expect(verifier).toContain('const OWNER_PUBLIC_KEY_PATH = "/etc/williamos-fabric/owner-prerequisite-authority.pem"')
     expect(verifier).toContain('const INSTALLED_VERIFIER_PATH = "/usr/local/libexec/williamos-aegis-root-handoff.mjs"')
     expect(cli).toContain("/usr/bin/flock")

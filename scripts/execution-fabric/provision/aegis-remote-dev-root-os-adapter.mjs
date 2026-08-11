@@ -264,23 +264,27 @@ export function inspectRootAdapterContract() {
 function appendOnly(directory) {
   try { return /^[A-Za-z-]*a[A-Za-z-]*\s+/.test(run("/usr/bin/lsattr", ["-d", "--", directory])) } catch { return false }
 }
+const EXPECTED_NFT_BOUNDARY_LINES = Object.freeze([
+  "table inet williamos_aegis_remote_dev {",
+  "chain output {",
+  "type filter hook output priority filter; policy accept;",
+  'meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject',
+  'meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject',
+  'meta skuid "williamos-fabric" ip daddr 127.0.0.1 tcp dport 17734 accept',
+  'meta skuid "williamos-git-broker" ip daddr 127.0.0.1 tcp dport 17734 accept',
+  'ip daddr 127.0.0.1 tcp dport 17734 reject',
+  'meta skuid "williamos-fabric" reject',
+  "}",
+  "}",
+])
+export function exactNftBoundaryLines(lines) {
+  return Array.isArray(lines) && same(lines, EXPECTED_NFT_BOUNDARY_LINES)
+}
 function networkBoundaryMatches() {
   try {
     const rules = run("/usr/sbin/nft", ["list", "chain", "inet", "williamos_aegis_remote_dev", "output"])
-    const expected = [
-      "table inet williamos_aegis_remote_dev {",
-      "chain output {",
-      "type filter hook output priority filter; policy accept;",
-      'meta skuid "williamos-fabric" ip daddr 192.168.1.156 reject',
-      'meta skuid "williamos-fabric" ip6 daddr ::ffff:192.168.1.156 reject',
-      'meta skuid "williamos-fabric" ip daddr 127.0.0.1 tcp dport 17734 accept',
-      'ip daddr 127.0.0.1 tcp dport 17734 reject',
-      'meta skuid "williamos-fabric" reject',
-      "}",
-      "}",
-    ]
     const lines = rules.split(/\r?\n/).map((line) => line.trim().replace(/\s+/g, " ")).filter(Boolean)
-    if (!same(lines, expected)) return false
+    if (!exactNftBoundaryLines(lines)) return false
     for (const unit of ["williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service", "williamos-aegis-remote-dev-git-broker.socket"]) {
       if (run("/usr/bin/systemctl", ["is-active", unit]) !== "active" || run("/usr/bin/systemctl", ["is-enabled", unit]) !== "enabled") return false
     }
