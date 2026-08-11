@@ -319,16 +319,18 @@ describe("Execution Fabric recommendation-only placement", () => {
   })
 
   it.each([
-    ["duplicate risk tuple", (bounded: JsonObject) => { bounded.risk_classes = ["R0", "R0"] }],
-    ["reordered workload tuple", (bounded: JsonObject) => { bounded.workload_classes = ["HASH_VERIFY", "CI_BUILD_TEST", "COMPRESSION"] }],
-  ])("rejects %s before placement reasoning", (_case, mutate) => {
+    ["duplicate risk tuple", (bounded: JsonObject) => { bounded.risk_classes = ["R0", "R0"] }, "const mismatch"],
+    ["truncated risk tuple", (bounded: JsonObject) => { bounded.risk_classes = ["R0"] }, "shorter than minItems"],
+    ["reordered workload tuple", (bounded: JsonObject) => { bounded.workload_classes = ["HASH_VERIFY", "CI_BUILD_TEST", "COMPRESSION"] }, "const mismatch"],
+    ["truncated workload tuple", (bounded: JsonObject) => { bounded.workload_classes = ["CI_BUILD_TEST", "HASH_VERIFY"] }, "shorter than minItems"],
+  ])("rejects %s before placement reasoning", (_case, mutate, detail) => {
     const registry = observedRegistry()
     const aegis = registry.nodes.find((node: JsonObject) => node.id === "aegis")
     mutate(aegis.authority.bounded_compute)
 
     expectRejected(
       evaluatePlacement(registry, workload("cpu-heavy-build"), { evaluatedAt, schema: registrySchema }),
-      "const mismatch",
+      detail,
     )
   })
 

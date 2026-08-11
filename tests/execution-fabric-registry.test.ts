@@ -124,6 +124,8 @@ function assertSchemaConformance(value: unknown, rawRule: unknown, location = "$
     if (typeof rule.maximum === "number") expect(value, `${location}: maximum`).toBeLessThanOrEqual(rule.maximum)
   }
   if (Array.isArray(value)) {
+    if (typeof rule.minItems === "number") expect(value.length, `${location}: minItems`).toBeGreaterThanOrEqual(rule.minItems)
+    if (typeof rule.maxItems === "number") expect(value.length, `${location}: maxItems`).toBeLessThanOrEqual(rule.maxItems)
     if (Array.isArray(rule.prefixItems)) {
       ;(rule.prefixItems as unknown[]).forEach((itemRule, index) => {
         if (index < value.length) assertSchemaConformance(value[index], itemRule, `${location}[${index}]`)
@@ -371,8 +373,10 @@ describe("Execution Fabric registry schema and identity", () => {
   it.each([
     ["duplicate risk classes", (bounded: JsonObject) => { bounded.risk_classes = ["R0", "R0"] }],
     ["reordered risk classes", (bounded: JsonObject) => { bounded.risk_classes = ["R1", "R0"] }],
+    ["truncated risk classes", (bounded: JsonObject) => { bounded.risk_classes = ["R0"] }],
     ["duplicate workload classes", (bounded: JsonObject) => { bounded.workload_classes = ["CI_BUILD_TEST", "HASH_VERIFY", "HASH_VERIFY"] }],
     ["reordered workload classes", (bounded: JsonObject) => { bounded.workload_classes = ["HASH_VERIFY", "CI_BUILD_TEST", "COMPRESSION"] }],
+    ["truncated workload classes", (bounded: JsonObject) => { bounded.workload_classes = ["CI_BUILD_TEST", "HASH_VERIFY"] }],
   ])("rejects %s in the exact bounded-compute tuple", (_case, mutate) => {
     const invalidSeed = clone(canonicalSeed)
     const bounded = (nodeById(invalidSeed, "aegis").authority as JsonObject).bounded_compute as JsonObject

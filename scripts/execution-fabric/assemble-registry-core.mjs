@@ -147,6 +147,8 @@ function validateSchema(value, rawRule, location = '$') {
     if (typeof rule.maximum === 'number' && value > rule.maximum) errors.push(`${location}: above maximum`);
   }
   if (Array.isArray(value)) {
+    if (Number.isInteger(rule.minItems) && value.length < rule.minItems) errors.push(`${location}: shorter than minItems`);
+    if (Number.isInteger(rule.maxItems) && value.length > rule.maxItems) errors.push(`${location}: longer than maxItems`);
     if (Array.isArray(rule.prefixItems)) {
       rule.prefixItems.forEach((itemRule, index) => {
         if (index < value.length) errors.push(...validateSchema(value[index], itemRule, `${location}[${index}]`));

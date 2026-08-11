@@ -132,7 +132,7 @@ runtime, storage, or remote-system gates.
 
 - Focused Authority Registry suite: `16/16 PASS`.
 - Standing authority eligibility suite: `4/4 PASS`.
-- Canonical Fabric registry suite: `111/111 PASS`.
+- Canonical Fabric registry suite: `113/113 PASS`.
 - Eligibility evaluation remains non-authorizing: `execution_authorized=false`
   and `dispatch_allowed=false` until durable trusted-main integration exists.
 - Broad worker, command-runner, scheduler, runtime, persistence, tool-call,
