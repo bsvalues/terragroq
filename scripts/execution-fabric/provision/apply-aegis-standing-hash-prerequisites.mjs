@@ -840,7 +840,7 @@ function createExclusiveDirectory(fsApi, item, { ownershipAlreadySet = false } =
 }
 
 function assertPrivilegeTransitionAvailable(processApi) {
-  const methods = ["geteuid", "getegid", "seteuid", "setegid"]
+  const methods = ["geteuid", "getegid", "seteuid", "setegid", "getgroups", "setgroups"]
   if (methods.some((name) => typeof processApi[name] !== "function")
     || processApi.geteuid() !== 0 || processApi.getegid() !== 0) {
     fail("AEGIS_PROVISION_PRIVILEGE_DROP_UNAVAILABLE", "root applier cannot establish the bounded service identity")
@@ -849,19 +849,40 @@ function assertPrivilegeTransitionAvailable(processApi) {
 
 function runAsAccount(processApi, account, action) {
   assertPrivilegeTransitionAvailable(processApi)
+  const originalGroups = processApi.getgroups()
+  if (!Array.isArray(originalGroups) || originalGroups.some((group) => !Number.isSafeInteger(group) || group < 0)) {
+    fail("AEGIS_PROVISION_PRIVILEGE_DROP_UNAVAILABLE", "root supplementary groups cannot be retained safely")
+  }
   let groupChanged = false
+  let transitionEstablished = false
   try {
+    processApi.setgroups([account.gid])
     processApi.setegid(account.gid)
     groupChanged = true
     processApi.seteuid(account.uid)
-    if (processApi.geteuid() !== account.uid || processApi.getegid() !== account.gid) {
+    const boundedGroups = [...processApi.getgroups()].sort((left, right) => left - right)
+    if (processApi.geteuid() !== account.uid || processApi.getegid() !== account.gid
+      || !same(boundedGroups, [account.gid])) {
       fail("AEGIS_PROVISION_PRIVILEGE_DROP_FAILED", "effective service identity differs")
     }
+    transitionEstablished = true
     return action()
+  } catch (error) {
+    if (!transitionEstablished && !error?.code) {
+      fail("AEGIS_PROVISION_PRIVILEGE_DROP_FAILED", "effective service identity transition failed")
+    }
+    throw error
   } finally {
-    if (processApi.geteuid() !== 0) processApi.seteuid(0)
-    if (groupChanged || processApi.getegid() !== 0) processApi.setegid(0)
-    if (processApi.geteuid() !== 0 || processApi.getegid() !== 0) {
+    try {
+      if (processApi.geteuid() !== 0) processApi.seteuid(0)
+      if (groupChanged || processApi.getegid() !== 0) processApi.setegid(0)
+      processApi.setgroups(originalGroups)
+    } catch {
+      fail("AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED", "root applier identity restoration failed")
+    }
+    const restoredGroups = [...processApi.getgroups()].sort((left, right) => left - right)
+    const expectedGroups = [...originalGroups].sort((left, right) => left - right)
+    if (processApi.geteuid() !== 0 || processApi.getegid() !== 0 || !same(restoredGroups, expectedGroups)) {
       fail("AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED", "root applier identity was not restored")
     }
   }
@@ -1034,6 +1055,7 @@ export function provisionAegisStandingHashPrerequisites({
   const evidence = evidenceBase(manifest, authority, publicKey, mode, journalPath, planned)
   if (mode === "dry-run") return evidence
   assertPrivilegeTransitionAvailable(processApi)
+  runAsAccount(processApi, account, () => undefined)
 
   const consumed = {
     schema_version: "1.0-aegis-standing-hash-mutation-journal",

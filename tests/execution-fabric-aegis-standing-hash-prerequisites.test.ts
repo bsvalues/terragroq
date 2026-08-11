@@ -289,7 +289,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/canonical-json.mjs", sha256: "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs", sha256: "c18ecec38a5086788d7f4532b471efc6548cd293c27f3983a92934464015fb16", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "319acc6055138b428b656b524220c38a0c6cbd52f18aad3f3186746f0d216332", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "0d370baa055411a8e482791a0b99f5b289894ff5511de1ebaf0f89339a176007", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "7700f0660f16e1d6adefc8c2e96bf3c5a43d724c5a6b76c97a5d24b0c101e6a0", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
@@ -793,10 +793,14 @@ function injectedLinuxFs(options: {
   }
 }
 
-function injectedRootProcess() {
+function injectedRootProcess(failOperation?: string) {
   let uid = 0
   let gid = 0
+  let groups = [0]
   const events: Json[] = []
+  const reject = (operation: string) => {
+    if (failOperation === operation) throw new Error(`INJECTED_${operation.toUpperCase()}_FAILURE`)
+  }
   return {
     events,
     identity: () => ({ uid, gid }),
@@ -805,13 +809,21 @@ function injectedRootProcess() {
       getuid: () => uid,
       geteuid: () => uid,
       getegid: () => gid,
+      getgroups: () => [...groups],
       seteuid(next: number) {
+        reject(next === 0 ? "restore-euid" : "drop-euid")
         events.push({ kind: "seteuid", from: uid, to: next })
         uid = next
       },
       setegid(next: number) {
+        reject(next === 0 ? "restore-egid" : "drop-egid")
         events.push({ kind: "setegid", from: gid, to: next })
         gid = next
+      },
+      setgroups(next: number[]) {
+        reject(next.length === 1 && next[0] === 734 ? "drop-groups" : "restore-groups")
+        events.push({ kind: "setgroups", from: [...groups], to: [...next] })
+        groups = [...next]
       },
     },
   }
@@ -819,7 +831,7 @@ function injectedRootProcess() {
 
 function implementationInput(overrides: Json = {}) {
   const virtual = injectedLinuxFs(overrides.virtualOptions)
-  const rootProcess = injectedRootProcess()
+  const rootProcess = injectedRootProcess(overrides.processFailure)
   virtual.setIdentityProvider(rootProcess.identity)
   const publicKey = overrides.publicKey ?? TRANSPORT_PUBLIC_KEY + "\n"
   const normalizedPublicKey = publicKey.trim()
@@ -1027,8 +1039,10 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
     }
     expect(processEvents).toContainEqual({ kind: "setegid", from: 0, to: 734 })
     expect(processEvents).toContainEqual({ kind: "seteuid", from: 0, to: 734 })
-    expect(processEvents.at(-2)).toEqual({ kind: "seteuid", from: 734, to: 0 })
-    expect(processEvents.at(-1)).toEqual({ kind: "setegid", from: 734, to: 0 })
+    expect(processEvents).toContainEqual({ kind: "setgroups", from: [0], to: [734] })
+    expect(processEvents).toContainEqual({ kind: "seteuid", from: 734, to: 0 })
+    expect(processEvents).toContainEqual({ kind: "setegid", from: 734, to: 0 })
+    expect(processEvents).toContainEqual({ kind: "setgroups", from: [734], to: [0] })
     expect(virtual.events).not.toContainEqual(expect.objectContaining({ kind: "chown", uid: 734 }))
     expect(virtual.events).not.toContainEqual(expect.objectContaining({ kind: "fchown", uid: 734 }))
   })
@@ -1043,6 +1057,20 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
     expect(() => applyAegisStandingHashPrerequisites(options)).toThrow(expect.objectContaining({
       code: "AEGIS_PROVISION_PRIVILEGE_DROP_UNAVAILABLE",
     }))
+    expect(journalRecords(virtual, authority.authorityId)).toEqual([])
+  })
+
+  it.each([
+    "drop-groups",
+    "drop-egid",
+    "drop-euid",
+    "restore-euid",
+    "restore-egid",
+    "restore-groups",
+  ])("exercises and restores the %s transition before consuming authority", (processFailure) => {
+    const authority = applyAuthority()
+    const { virtual, options } = implementationInput({ authority, mode: "apply", processFailure })
+    expect(() => applyAegisStandingHashPrerequisites(options)).toThrow(/AEGIS_PROVISION_PRIVILEGE_(DROP|RESTORE)_FAILED/)
     expect(journalRecords(virtual, authority.authorityId)).toEqual([])
   })
 
