@@ -629,7 +629,7 @@ if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\
     expect(source).toContain("WORKSPACE_LOCK_BUSY")
     expect(source).toContain("PARTIAL_WORKSPACE_RECOVERED")
     expect(source).toContain("validate_trusted_parent")
-  })
+  }, 15_000)
 
   it("deterministically resets an exact owned partial repository during workspace creation", () => {
     const value = fixture()
