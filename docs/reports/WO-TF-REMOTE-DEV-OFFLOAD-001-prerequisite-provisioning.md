@@ -28,7 +28,7 @@ evidence was changed while producing this package.
 - standing AEGIS authority: disabled
 
 The package manifest JCS SHA-256 is
-`cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a`.
+`1fb6fde76456483a34166b67b6b4413d05c9d69261223f2315d2718de64c359c`.
 It is recorded by the trusted planner constant and recomputed in the test
 evidence for this correction.
 The trusted planner pins that complete manifest digest. The manifest binds the
@@ -115,9 +115,9 @@ the first mutation.
    fixed `/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs`
    forced command. The exact key fingerprint is an owner input.
 3. **Trusted repositories**: reconcile
-   `/var/lib/williamos/fabric/workspaces/terragroq` to clean remote-equal commit
+   `/var/lib/williamos-remote-dev/control/terragroq` to clean remote-equal commit
    `fea7785fd480d3b5f107c286cc8eb1bac6d04793`; create root-reviewed bare mirror
-   `/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git` and prove
+   `/var/lib/williamos-remote-dev/repositories/terrafusion_os_1.0.git` and prove
    commit `ffd2fa35f5152de2b95e7f63b220050d18193d7a` exists. Drift or local work
    blocks; it is never reset away.
 4. **Toolchain**: install fixed paths and versions: Git `2.43.0`, Node

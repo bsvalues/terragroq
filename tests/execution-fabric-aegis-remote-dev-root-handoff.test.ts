@@ -14,7 +14,7 @@ import {
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
-import { exactNftBoundaryLines, inspectDurableLedgerReconciliation, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { exactNftBoundaryLines, inspectDurableLedgerReconciliation, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -93,7 +93,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
   it("pins the merged prerequisite generation and every applied asset exactly", () => {
     const manifest = validateRootHandoffManifest(loadManifest())
     expect(manifest.trustedMain.minimumCommit).toBe("bcca6069a917d706314f7c8cb7b3cd40cdd910da")
-    expect(manifest.prerequisitePackage).toMatchObject({ packageId: "aegis-remote-dev-root-prerequisites-issue-734-v2", semanticSupersession: true, historicalSuccessClaimed: false, supersededPreflight: { manifestJcsSha256: "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a" } })
+    expect(manifest.prerequisitePackage).toMatchObject({ packageId: "aegis-remote-dev-root-prerequisites-issue-734-v2", semanticSupersession: true, historicalSuccessClaimed: false, supersededPreflight: { manifestJcsSha256: "1fb6fde76456483a34166b67b6b4413d05c9d69261223f2315d2718de64c359c" } })
     expect(manifest.appliedAssets.length).toBeGreaterThanOrEqual(7)
     for (const asset of manifest.appliedAssets) expect(rawSha(asset.source)).toBe(asset.sha256)
     expect(inspectRootHandoffBundle(root)).toMatchObject({ status: "BUNDLE_INTERNAL_CONSISTENCY_ONLY", externalTrustRootRequired: true, applyAuthorized: false, drift: [] })
@@ -349,6 +349,38 @@ describe("AEGIS root-owned prerequisite handoff", () => {
       { status: 1, signal: null, error: new Error("spawn failed"), stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" },
       { status: 2, signal: null, error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" },
     ]) expect(inspectNoSudoCapabilityEvidence(value)).toBe(false)
+  })
+
+  it("isolates trusted remote-development repositories from the preserved standing runtime root", () => {
+    const prerequisite = JSON.parse(fs.readFileSync(path.join(root, "config/execution-fabric/aegis-remote-dev-prerequisites.json"), "utf8"))
+    const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
+    const report = fs.readFileSync(path.join(root, "docs/reports/WO-TF-REMOTE-DEV-OFFLOAD-001-prerequisite-provisioning.md"), "utf8")
+    expect(prerequisite.repositories.controlPlane.path).toBe("/var/lib/williamos-remote-dev/control/terragroq")
+    expect(prerequisite.repositories.targetMirror.path).toBe("/var/lib/williamos-remote-dev/repositories/terrafusion_os_1.0.git")
+    expect(adapter).toContain('const CONTROL_REPOSITORY = "/var/lib/williamos-remote-dev/control/terragroq"')
+    expect(adapter).toContain('const TARGET_MIRROR = "/var/lib/williamos-remote-dev/repositories/terrafusion_os_1.0.git"')
+    expect(adapter).toContain("const controlExists = lexists(control); const mirrorExists = lexists(mirror)")
+    expect(adapter).toContain("parentsExact: trustedRepositoryParents()")
+    expect(adapter).not.toContain("const controlExists = fs.existsSync(control)")
+    expect(adapter).not.toContain('/var/lib/williamos/fabric/workspaces/terragroq')
+    expect(adapter).not.toContain('/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git')
+    const repositoryFunction = adapter.slice(adapter.indexOf("function repositoryState"), adapter.indexOf("function rootAssetsState"))
+    expect(repositoryFunction.indexOf("try {")).toBeLessThan(repositoryFunction.indexOf("const controlExists = lexists(control)"))
+    expect(report).toContain("`1fb6fde76456483a34166b67b6b4413d05c9d69261223f2315d2718de64c359c`")
+    expect(report).not.toContain("`cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a`")
+  })
+
+  it("treats only two truly absent repositories under safe parents as reconcilable", () => {
+    expect(inspectTrustedRepositoryReconciliation({ parentsExact: true, controlExists: false, controlExact: false, mirrorExists: false, mirrorExact: false })).toBe("ABSENT")
+    expect(inspectTrustedRepositoryReconciliation({ parentsExact: true, controlExists: true, controlExact: true, mirrorExists: true, mirrorExact: true })).toBe("MATCH")
+    for (const state of [
+      { parentsExact: false, controlExists: false, controlExact: false, mirrorExists: false, mirrorExact: false },
+      { parentsExact: true, controlExists: true, controlExact: false, mirrorExists: false, mirrorExact: false },
+      { parentsExact: true, controlExists: true, controlExact: true, mirrorExists: false, mirrorExact: false },
+      { parentsExact: true, controlExists: false, controlExact: false, mirrorExists: true, mirrorExact: true },
+      { parentsExact: true, controlExists: true, controlExact: true, mirrorExists: true, mirrorExact: false },
+      { parentsExact: true, controlExists: undefined, controlExact: false, mirrorExists: false, mirrorExact: false },
+    ]) expect(inspectTrustedRepositoryReconciliation(state)).toBe("DRIFT")
   })
 
   it("reconciles only an exact preserved closed HASH ledger when the new ticket directory alone is absent", () => {

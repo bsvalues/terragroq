@@ -46,14 +46,14 @@ function readyObservation() {
     },
     repositories: {
       controlPlane: {
-        path: "/var/lib/williamos/fabric/workspaces/terragroq",
+        path: "/var/lib/williamos-remote-dev/control/terragroq",
         remote: "https://github.com/bsvalues/terragroq.git",
         head: "fea7785fd480d3b5f107c286cc8eb1bac6d04793",
         clean: true,
         remoteMainEqual: true,
       },
       targetMirror: {
-        path: "/var/lib/williamos/fabric/repositories/terrafusion_os_1.0.git",
+        path: "/var/lib/williamos-remote-dev/repositories/terrafusion_os_1.0.git",
         remote: "https://github.com/bsvalues/terrafusion_os_1.0.git",
         commitPresent: "ffd2fa35f5152de2b95e7f63b220050d18193d7a",
         bare: true,
