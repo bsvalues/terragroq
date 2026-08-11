@@ -56,6 +56,20 @@ function writeExecutable(file: string, body: string) {
   fs.chmodSync(file, 0o755)
 }
 
+function installPreflightFakes(value: ReturnType<typeof fixture>) {
+  writeExecutable(path.join(value.fakeBin, "hostname"), "#!/usr/bin/env bash\nprintf '%s\\n' aegis\n")
+  writeExecutable(path.join(value.fakeBin, "nproc"), "#!/usr/bin/env bash\nprintf '%s\\n' 12\n")
+  writeExecutable(path.join(value.fakeBin, "df"), "#!/usr/bin/env bash\nprintf '%s\\n' Available 100000000000\n")
+  writeExecutable(path.join(value.fakeBin, "awk"), `#!/usr/bin/env bash
+if [[ "\${@: -1}" == /proc/meminfo ]]; then printf '%s\n' 12884901888; exit 0; fi
+exec /usr/bin/awk "$@"
+`)
+  writeExecutable(path.join(value.fakeBin, "git"), `#!/usr/bin/env bash
+if [[ "\${1:-}" == --version ]]; then printf '%s\n' 'git version 2.50.0'; fi
+exit 0
+`)
+}
+
 function fixture() {
   const hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "remote-dev-worker-")); tempRoots.push(hostRoot)
   const physicalWorkspace = path.join(hostRoot, "srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001")
@@ -359,7 +373,12 @@ describe("fixed AEGIS remote development worker", () => {
     const source = fs.readFileSync(worker, "utf8")
     expect(source).toContain("CONTAINMENT_UNAVAILABLE")
     expect(source).toContain("SCRATCH_CONFINEMENT_FAILED")
-    for (const variable of ["TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME", "NUGET_PACKAGES", "DOTNET_CLI_HOME", "COREPACK_HOME", "npm_config_cache"]) expect(source).toContain(`${variable}=`)
+    for (const [variable, suffix] of [
+      ["TMPDIR", "tmp"], ["TMP", "tmp"], ["TEMP", "tmp"],
+      ["XDG_CACHE_HOME", "xdg-cache"], ["NUGET_PACKAGES", "nuget"],
+      ["DOTNET_CLI_HOME", "dotnet-home"], ["COREPACK_HOME", "corepack"],
+      ["npm_config_cache", "npm-cache"],
+    ]) expect(source).toContain(`${variable}="$scratch_root/${suffix}"`)
     expect(source).toContain('run_ordinary_profile "$PHYSICAL_WORKSPACE" "$SCRATCH_DIR"')
     expect(fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")).toContain('ReadOnlyPaths=/tmp /var/tmp /run/user/${uid}')
     expect(source).toContain('measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"')
@@ -385,7 +404,8 @@ describe("fixed AEGIS remote development worker", () => {
 
   it("probes both namespace profiles before acquisition and removes the exact workspace through the parent cleanup profile", () => {
     const preflight = fixture(); fs.rmSync(preflight.physicalWorkspace, { recursive: true, force: true })
-    expect(runWorker("PROVE_PREFLIGHT", preflight, { env: { FAKE_REQUIRE_PROFILE_PROBES: "1" } }).json).not.toMatchObject({ status: "CONTAINMENT_UNAVAILABLE" })
+    installPreflightFakes(preflight)
+    expect(runWorker("PROVE_PREFLIGHT", preflight).json).toMatchObject({ status: "SUCCEEDED" })
 
     const cleanup = fixture()
     fs.writeFileSync(path.join(cleanup.physicalWorkspace, ".williamos-post-merge-proven"), `${cleanup.packet.runId}:${cleanup.baseSha}\n`)
@@ -403,20 +423,14 @@ describe("fixed AEGIS remote development worker", () => {
     for (const operation of ["RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE"]) {
       expect(runWorker(operation, value, { env }).json).toMatchObject({ status: "SUCCEEDED" })
     }
-    expect(fs.readFileSync(worker, "utf8")).toContain('cd -- "$working_directory"')
+    expect(fs.readFileSync(worker, "utf8")).toContain('cd -- "$working_directory" || exit 125')
   }, 45_000)
 
   it("disables systemd manager expansion and preserves fixed preflight Bash variables", () => {
     const value = fixture(); fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
-    writeExecutable(path.join(value.fakeBin, "hostname"), "#!/usr/bin/env bash\nprintf '%s\\n' aegis\n")
+    installPreflightFakes(value)
     writeExecutable(path.join(value.fakeBin, "id"), `#!/usr/bin/env bash
 if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\n' '${bashUid}'; fi
-`)
-    writeExecutable(path.join(value.fakeBin, "nproc"), "#!/usr/bin/env bash\nprintf '%s\\n' 12\n")
-    writeExecutable(path.join(value.fakeBin, "df"), "#!/usr/bin/env bash\nprintf '%s\\n' Available 100000000000\n")
-    writeExecutable(path.join(value.fakeBin, "git"), `#!/usr/bin/env bash
-if [[ "\${1:-}" == --version ]]; then printf '%s\n' 'git version 2.50.0'; fi
-exit 0
 `)
     const result = runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_REQUIRE_NO_EXPAND: "1" } })
     expect(result.json).toMatchObject({ status: "SUCCEEDED" })

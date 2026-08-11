@@ -16,7 +16,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $trustedAegisFingerprint = 'SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo'
-$trustedWorkerSha256 = '1eef474ddcd557267f9bcbe7e835774d419048ee12dec4b6a2a2f9111407011b'
+$trustedWorkerSha256 = 'a721abdda3f7feb2833a47c2021d846962b44f0fc48a16a1a9dbe024774a71d1'
 
 function Write-ResultAndExit {
     param([string]$Status, [string]$ReasonCode, [string]$Detail, [int]$ExitCode)
@@ -176,7 +176,7 @@ try{relay=JSON.parse(fs.readFileSync(0,"utf8"));policy=JSON.parse(Buffer.from(re
 const operations=["PROVE_PREFLIGHT","CREATE_WORKSPACE","APPLY_RESERVED_PATCH","RESTORE_DOTNET","TEST_WORKFLOW_CONTRACT","TEST_DOTNET_INFORMATIONAL","BUILD_DOTNET_RELEASE","COMMIT_RESERVED_PATHS","PUSH_AUTHORIZED_BRANCH","PROVE_POST_MERGE","CLEAN_EXACT_WORKSPACE"];
 const paths=[".github/workflows/dotnet-test.yml",".github/workflows/terrafusion-ci.yml","tests/ci-terrafusion-unit-informational.test.ts","docs/brain/evidence/WO-TF-REMOTE-DEV-OFFLOAD-001-proof.md"];
 const limits={cpuThreads:12,memoryBytes:12884901888,scratchBytes:85899345920,timeoutSeconds:5400,maxAttempts:3};
-const policyDigest=hash(Buffer.from(jcs(policy),"utf8"));if(policyDigest!=="1cb71dfb0774a93605387a1c224fb2a66ad7dfda023d546b6cab39447c3a1661")fail("POLICY_DIGEST_MISMATCH","canonical policy differs");
+const policyDigest=hash(Buffer.from(jcs(policy),"utf8"));if(policyDigest!=="fbfb7fa8f46b8fa061e0f6afd1c1a0f081a0627232d3711d708b7fd4a23d3899")fail("POLICY_DIGEST_MISMATCH","canonical policy differs");
 exact(packet,["schemaVersion","runId","workOrderId","repository","baseRef","baseSha","branch","nodeId","workspace","transport","resourceLimits","operations","patch","authority","bindings"],"PACKET_FIELDS_INVALID");
 if(packet.schemaVersion!==1||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(packet.runId)||packet.workOrderId!=="WO-TF-REMOTE-DEV-OFFLOAD-001"||packet.repository!=="bsvalues/terrafusion_os_1.0"||packet.baseRef!=="refs/heads/main"||!/^[a-f0-9]{40}$/.test(packet.baseSha)||!/^codex\/wo-tf-remote-dev-offload-001-[a-z0-9-]+$/.test(packet.branch)||packet.nodeId!=="aegis"||packet.workspace!=="/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001")fail("IDENTITY_MISMATCH","immutable packet identity differs");
 exact(packet.transport,["controller","relay","worker"],"TRANSPORT_FIELDS_INVALID");if(jcs(packet.transport)!==jcs({controller:"omen",relay:"hermes",worker:"aegis"}))fail("TRANSPORT_MISMATCH","Hermes mediation is mandatory");
@@ -227,7 +227,8 @@ if($state.inFlightOperation){$state.terminalStatus='BLOCKED';$state.terminalReas
 $knownHosts=Join-Path $markerRoot ($packet.runId+'.known_hosts');[IO.File]::WriteAllText($knownHosts,$knownHost+[Environment]::NewLine,[Text.UTF8Encoding]::new($false))
 $state.inFlightOperation=$relay.operation;SaveState
 try{$ssh=@(Get-Command ssh.exe -CommandType Application -ErrorAction Stop)[0].Source}catch{Fail 'AEGIS_SSH_UNAVAILABLE' 'SSH is unavailable' 2};$psi=[Diagnostics.ProcessStartInfo]::new();$psi.FileName=$ssh;$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardInput=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
-$psi.Arguments='-o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="'+$knownHosts+'" aegis /usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-network-launcher.mjs '+$relay.ticket+' '+$relay.operation+' '+$relay.packet+' '+$relay.patch+' '+$attempt+' '+$relay.previous
+$remotePatchArgument="'"+$relay.patch+"'"
+$psi.Arguments='-o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="'+$knownHosts+'" aegis /usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-network-launcher.mjs '+$relay.ticket+' '+$relay.operation+' '+$relay.packet+' '+$remotePatchArgument+' '+$attempt+' '+$relay.previous
 $process=[Diagnostics.Process]::new();$process.StartInfo=$psi;if(-not$process.Start()){Fail 'AEGIS_START_FAILED' 'AEGIS process did not start'};$process.StandardInput.BaseStream.Write($workerBytes,0,$workerBytes.Length);$process.StandardInput.Close();$outTask=$process.StandardOutput.ReadToEndAsync();$errTask=$process.StandardError.ReadToEndAsync();if(-not$process.WaitForExit(([int]$packet.resourceLimits.timeoutSeconds)*1000)){try{$process.Kill()}catch{};$state.terminalStatus='BLOCKED';$state.terminalReason='AEGIS_TIMEOUT';SaveState;Fail 'AEGIS_TIMEOUT' 'AEGIS worker timed out'};$stdout=$outTask.GetAwaiter().GetResult();$stderr=$errTask.GetAwaiter().GetResult()
 if($process.ExitCode-ne0){
   $recoverable=$null;$workerLines=@($stdout-split"`r?`n"|Where-Object{$_.Trim()});if($process.ExitCode-eq2-and$workerLines.Count-eq1){try{$recoverable=$workerLines[0]|ConvertFrom-Json -Depth 40}catch{$recoverable=$null}}

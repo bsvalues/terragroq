@@ -242,7 +242,7 @@ run_ordinary_profile() {
   [[ "$writable_root" == "$PHYSICAL_WORKSPACE" || "$writable_root" == "$PHYSICAL_PARENT" ]] || return 125
   [[ "$scratch_root" == "$SCRATCH_DIR" || "$scratch_root" == "$PHYSICAL_PARENT" ]] || return 125
   (
-    cd -- "$working_directory"
+    cd -- "$working_directory" || exit 125
     TMPDIR="$scratch_root/tmp" TMP="$scratch_root/tmp" TEMP="$scratch_root/tmp" \
       XDG_CACHE_HOME="$scratch_root/xdg-cache" NUGET_PACKAGES="$scratch_root/nuget" \
       DOTNET_CLI_HOME="$scratch_root/dotnet-home" COREPACK_HOME="$scratch_root/corepack" \

@@ -19,6 +19,8 @@ const SHA256 = /^[a-f0-9]{64}$/
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 const DECIMAL_ID = /^(?:0|[1-9][0-9]{0,39})$/
 const ENFORCED_SLICE = /^\/user\.slice\/user-([1-9][0-9]*)\.slice\/user@\1\.service\/app\.slice\/williamos-aegis-remote-dev\.slice$/
+const ENVELOPE_MAX_BYTES = 65_536
+const WORKER_STREAM_MAX_BYTES = 20_000
 const EXPECTED_ENDPOINTS = deepFreeze([
   { host: "ssh.github.com", port: 443, operations: ["git-fetch", "git-push"] },
   { host: "api.github.com", port: 443, operations: ["github-pr"] },
@@ -66,7 +68,7 @@ function blocked(error) {
   return { status: "BLOCKED", executionAuthorized: false, reasons: [{ code: "WORKER_NETWORK_BOUNDARY_UNPROVEN", detail: String(error?.message ?? error).slice(0, 512) }] }
 }
 function parseCanonical(bytes) {
-  if (!Buffer.isBuffer(bytes) || bytes.length < 2 || bytes.length > 65_536) fail("network receipt size differs")
+  if (!Buffer.isBuffer(bytes) || bytes.length < 2 || bytes.length > ENVELOPE_MAX_BYTES) fail("network receipt size differs")
   let text
   try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes) } catch { fail("network receipt is not UTF-8") }
   let value
@@ -182,7 +184,7 @@ export function fixedTicketUnitContract(ticketId) {
 function decodeEnvelopeBase64(value, label) {
   if (typeof value !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) fail(`${label} encoding differs`)
   const bytes = Buffer.from(value, "base64")
-  if (bytes.length > 32_768 || bytes.toString("base64") !== value) fail(`${label} encoding differs`)
+  if (bytes.length > WORKER_STREAM_MAX_BYTES || bytes.toString("base64") !== value) fail(`${label} encoding differs`)
   return bytes
 }
 
@@ -218,14 +220,47 @@ export function createTicketTombstone(directory, ticketId) {
   }
 }
 
-function workerExecutionEnvelope(ticketId, exitCode, stdout, stderr) {
-  return Buffer.from(`${canonicalize({
+function encodeWorkerExecutionEnvelope(ticketId, exitCode, stdout, stderr) {
+  const envelope = Buffer.from(`${canonicalize({
     schemaVersion: 1,
     ticketId,
     workerExitCode: exitCode,
     workerStdoutBase64: stdout.toString("base64"),
     workerStderrBase64: stderr.toString("base64"),
   })}\n`, "utf8")
+  if (envelope.length > ENVELOPE_MAX_BYTES) fail("worker execution envelope exceeds the transport budget")
+  return envelope
+}
+
+function workerOutputTruncatedEnvelope(ticketId, exitCode, stdoutBytes, stderrBytes, stderr = Buffer.alloc(0)) {
+  const blockedOutput = Buffer.from(`${canonicalize({
+    status: "BLOCKED",
+    executionAuthorized: false,
+    reasonCode: "WORKER_OUTPUT_TRUNCATED",
+    workerExitCode: Number.isSafeInteger(exitCode) ? exitCode : null,
+    workerStdoutBytes: stdoutBytes,
+    workerStderrBytes: stderrBytes,
+  })}\n`, "utf8")
+  const diagnostic = Buffer.concat([
+    Buffer.from(`WORKER_OUTPUT_TRUNCATED\tstdoutBytes=${stdoutBytes}\tstderrBytes=${stderrBytes}\tworkerExitCode=${Number.isSafeInteger(exitCode) ? exitCode : "unavailable"}\n`, "utf8"),
+    stderr.subarray(0, 4096),
+  ])
+  return encodeWorkerExecutionEnvelope(ticketId, 2, blockedOutput, diagnostic)
+}
+
+export function createWorkerExecutionEnvelope(ticketId, exitCode, stdout, stderr) {
+  if (!RUN_ID.test(ticketId) || !Number.isSafeInteger(exitCode) || exitCode < 0 || exitCode > 255
+    || !Buffer.isBuffer(stdout) || !Buffer.isBuffer(stderr)) fail("worker execution result differs")
+  if (stdout.length > WORKER_STREAM_MAX_BYTES || stderr.length > WORKER_STREAM_MAX_BYTES) {
+    return workerOutputTruncatedEnvelope(ticketId, exitCode, stdout.length, stderr.length, stderr)
+  }
+  return encodeWorkerExecutionEnvelope(ticketId, exitCode, stdout, stderr)
+}
+
+export function createWorkerOverflowEnvelope(ticketId, exitCode, stdout, stderr) {
+  if (!RUN_ID.test(ticketId) || (exitCode !== null && (!Number.isSafeInteger(exitCode) || exitCode < 0 || exitCode > 255))
+    || !Buffer.isBuffer(stdout) || !Buffer.isBuffer(stderr)) fail("worker overflow result differs")
+  return workerOutputTruncatedEnvelope(ticketId, exitCode, stdout.length, stderr.length, stderr)
 }
 
 function readRootControlledFile(file, mode) {
@@ -387,12 +422,15 @@ function child(args) {
     if (result.status !== "WORKER_NETWORK_BOUNDARY_VERIFIED") fail(result.reasons?.[0]?.detail ?? "worker network boundary differs")
     executionUid()
     const worker = spawnSync("/usr/bin/bash", ["-s", "--", bound.operation, bound.packetB64, bound.patchB64, bound.attempt, bound.previous, authorization.ticketId], {
-      input: workerBytes, stdio: ["pipe", "pipe", "pipe"], env: workerEnvironment(), maxBuffer: 32_768,
+      input: workerBytes, stdio: ["pipe", "pipe", "pipe"], env: workerEnvironment(), maxBuffer: WORKER_STREAM_MAX_BYTES + 1,
     })
+    if (worker.error?.code === "ENOBUFS") {
+      return createWorkerOverflowEnvelope(authorization.ticketId, worker.status, worker.stdout ?? Buffer.alloc(0), worker.stderr ?? Buffer.alloc(0))
+    }
     if (worker.error || worker.status === null) fail("worker process did not settle cleanly")
-    return workerExecutionEnvelope(authorization.ticketId, worker.status, worker.stdout, worker.stderr)
+    return createWorkerExecutionEnvelope(authorization.ticketId, worker.status, worker.stdout, worker.stderr)
   } catch (error) {
-    return workerExecutionEnvelope(authorization.ticketId, 2, Buffer.from(`${JSON.stringify(blocked(error))}\n`, "utf8"), Buffer.alloc(0))
+    return createWorkerExecutionEnvelope(authorization.ticketId, 2, Buffer.from(`${JSON.stringify(blocked(error))}\n`, "utf8"), Buffer.alloc(0))
   }
 }
 function parent(args) {
@@ -413,7 +451,7 @@ function parent(args) {
     ...fixedServiceProperties(bound.operation, uid),
     "/usr/bin/env", "-i", "HOME=/nonexistent", "PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C",
     "/usr/bin/node", INSTALL_PATH, "--child", ...args,
-  ], { input: workerBytes, stdio: ["pipe", "pipe", "pipe"], env, maxBuffer: 65_536 })
+  ], { input: workerBytes, stdio: ["pipe", "pipe", "pipe"], env, maxBuffer: ENVELOPE_MAX_BYTES })
   if (launched.error || launched.status !== 0) fail("fixed enforced-slice launch failed")
   const outcome = inspectWorkerExecutionEnvelope(launched.stdout, authorization.ticketId)
   process.stdout.write(outcome.workerStdout)
@@ -426,12 +464,15 @@ function main() {
     const args = process.argv.slice(2)
     if (args[0] === "--child") {
       process.stdout.write(child(args.slice(1)))
-      process.exit(0)
+      process.exitCode = 0
+      return
     }
-    process.exit(parent(args))
+    process.exitCode = parent(args)
+    return
   } catch (error) {
     process.stdout.write(`${JSON.stringify(blocked(error))}\n`)
-    process.exit(2)
+    process.exitCode = 2
+    return
   }
 }
 

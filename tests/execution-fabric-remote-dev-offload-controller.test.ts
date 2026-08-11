@@ -138,6 +138,8 @@ describe("inactive Hermes-mediated remote development controller", () => {
     const source = fs.readFileSync(controller, "utf8")
     expect(source).toContain("/usr/local/libexec/williamos-aegis-remote-dev-network-launcher.mjs")
     expect(source).not.toContain("aegis bash -s --")
+    expect(source).toContain("$remotePatchArgument=\"'\"+$relay.patch+\"'\"")
+    expect(source).toContain("+$remotePatchArgument+")
   })
 })
 

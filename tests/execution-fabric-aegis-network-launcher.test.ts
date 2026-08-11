@@ -5,7 +5,7 @@ import path from "node:path"
 
 import { describe, expect, it } from "vitest"
 
-import { createTicketTombstone, fixedTicketUnitContract, inspectSignedLaunchAuthorization, inspectWorkerExecutionEnvelope, inspectWorkerNetworkBinding } from "../scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"
+import { createTicketTombstone, createWorkerExecutionEnvelope, createWorkerOverflowEnvelope, fixedTicketUnitContract, inspectSignedLaunchAuthorization, inspectWorkerExecutionEnvelope, inspectWorkerNetworkBinding } from "../scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"
 
 const jcs = (value: any): string => value === null ? "null"
   : typeof value === "string" ? JSON.stringify(value)
@@ -201,11 +201,8 @@ describe("fixed AEGIS enforced-slice worker launcher", () => {
   it("atomically consumes a ticket outside the user manager so manager restart cannot replay it", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-ticket-consumption-"))
     const ticketId = fixture().input.expectedTicketId
-    const userManagerUnits = new Set<string>()
     try {
       createTicketTombstone(directory, ticketId)
-      userManagerUnits.add(fixedTicketUnitContract(ticketId).unitName)
-      userManagerUnits.clear()
       expect(() => createTicketTombstone(directory, ticketId)).toThrow()
       expect(fs.existsSync(path.join(directory, `${ticketId}.consumed`))).toBe(true)
     } finally {
@@ -258,6 +255,45 @@ describe("fixed AEGIS enforced-slice worker launcher", () => {
     })
   })
 
+  it("keeps the maximum valid dual-stream result inside the canonical transport envelope", () => {
+    const ticketId = fixture().input.expectedTicketId
+    const stdout = Buffer.alloc(20_000, 0x61)
+    const stderr = Buffer.alloc(20_000, 0x62)
+    const envelope = createWorkerExecutionEnvelope(ticketId, 17, stdout, stderr)
+
+    expect(envelope.length).toBeLessThanOrEqual(65_536)
+    expect(inspectWorkerExecutionEnvelope(envelope, ticketId)).toEqual({ workerExitCode: 17, workerStdout: stdout, workerStderr: stderr })
+  })
+
+  it("returns an explicit bounded truncation result instead of an oversized envelope", () => {
+    const ticketId = fixture().input.expectedTicketId
+    const envelope = createWorkerExecutionEnvelope(ticketId, 17, Buffer.alloc(20_001, 0x61), Buffer.from("diagnostic\n"))
+    const result = inspectWorkerExecutionEnvelope(envelope, ticketId)
+
+    expect(envelope.length).toBeLessThanOrEqual(65_536)
+    expect(result.workerExitCode).toBe(2)
+    expect(JSON.parse(result.workerStdout.toString("utf8"))).toMatchObject({
+      status: "BLOCKED", executionAuthorized: false, reasonCode: "WORKER_OUTPUT_TRUNCATED",
+      workerExitCode: 17, workerStdoutBytes: 20_001, workerStderrBytes: 11,
+    })
+    expect(result.workerStderr.toString("utf8")).toContain("WORKER_OUTPUT_TRUNCATED")
+  })
+
+  it("reports the observed stream counts truthfully when only one live capture overflows", () => {
+    const ticketId = fixture().input.expectedTicketId
+    const result = inspectWorkerExecutionEnvelope(
+      createWorkerOverflowEnvelope(ticketId, null, Buffer.alloc(20_002, 0x61), Buffer.alloc(0)),
+      ticketId,
+    )
+
+    expect(JSON.parse(result.workerStdout.toString("utf8"))).toMatchObject({
+      reasonCode: "WORKER_OUTPUT_TRUNCATED",
+      workerExitCode: null,
+      workerStdoutBytes: 20_002,
+      workerStderrBytes: 0,
+    })
+  })
+
   it.each([
     ["other ticket", (value: any) => { value.ticketId = "0f8fad5b-d9cb-469f-a165-70867728950e" }],
     ["invalid exit", (value: any) => { value.workerExitCode = 256 }],
@@ -273,7 +309,13 @@ describe("fixed AEGIS enforced-slice worker launcher", () => {
       workerStderrBase64: "",
     }
     mutate(value)
-    expect(() => inspectWorkerExecutionEnvelope(Buffer.from(`${JSON.stringify(value)}\n`), ticketId)).toThrow()
+    expect(() => inspectWorkerExecutionEnvelope(canonical(value), ticketId)).toThrow()
+  })
+
+  it("lets Node drain pipe-backed launcher output before exiting", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")
+    expect(source).not.toContain("process.exit(")
+    expect(source.match(/process\.exitCode =/g)).toHaveLength(3)
   })
 
   it("accepts only a worker process beneath the exact attested slice generation", () => {

@@ -1,3 +1,4 @@
+import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -20,6 +21,7 @@ const root = process.cwd()
 const authorityPath = path.join(root, "config/execution-fabric/remote-dev-offload-v1-activation.json")
 const authority = () => JSON.parse(fs.readFileSync(authorityPath, "utf8"))
 const fabricatedClaimId = "claim-766b694bc86df27f564d5adb"
+const normalizedDigest = (bytes: Buffer) => crypto.createHash("sha256").update(Buffer.from(bytes.toString("utf8").replace(/\r\n/g, "\n"), "utf8")).digest("hex")
 
 function candidate() {
   const value = authority()
@@ -139,6 +141,7 @@ describe("TerraFusion remote development one-run activation", () => {
     ]))
 
     for (const binding of ["networkProvider", "networkPolicy", "networkLauncher"] as const) {
+      expect(value.bindings[binding].sha256).toBe(normalizedDigest(fs.readFileSync(path.join(root, value.bindings[binding].path))))
       const drifted = authority()
       drifted.bindings[binding].sha256 = "0".repeat(64)
       expect(validateRemoteDevActivationAuthority(drifted, candidate())).toMatchObject({

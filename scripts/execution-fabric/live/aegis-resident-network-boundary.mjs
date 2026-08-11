@@ -222,9 +222,9 @@ export function inspectResidentNetworkBoundaryEvidence(input) {
 }
 
 function readRepository(relativePath) { return fs.readFileSync(new URL(relativePath, ROOT)) }
-function trustedGit(args, encoding = null) {
+function trustedGit(args, encoding = null, acceptedStatuses = [0]) {
   const result = spawnSync("/usr/bin/git", args, { cwd: REPOSITORY_ROOT, encoding, shell: false, windowsHide: true, timeout: 5000, maxBuffer: 4 * 1024 * 1024, env: TRUSTED_GIT_ENV })
-  if (result.status !== 0) fail("fixed trusted-main Git proof failed")
+  if (result.error || !acceptedStatuses.includes(result.status)) fail("fixed trusted-main Git proof failed")
   return result
 }
 function proveCriticalFiles() {
@@ -308,7 +308,7 @@ export async function proveResidentAegisNetworkBoundary() {
     validatePolicy(policy)
     const identity = trustedResidentIdentity()
     const trustedMain = createTrustedProofProviders().proveTrustedCheckout()
-    const ancestry = trustedGit(["--no-replace-objects", "merge-base", "--is-ancestor", policy.trustedMain.minimumCommit, trustedMain.head_commit], "utf8")
+    const ancestry = trustedGit(["--no-replace-objects", "merge-base", "--is-ancestor", policy.trustedMain.minimumCommit, trustedMain.head_commit], "utf8", [0, 1])
     if (ancestry.status !== 0) fail("network provider minimum trusted-main ancestry is unproven")
     proveCriticalFiles()
     const activationBytes = readRepository(ACTIVATION_PATH)
