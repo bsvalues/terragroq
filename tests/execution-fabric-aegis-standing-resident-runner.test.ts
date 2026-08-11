@@ -106,7 +106,7 @@ function claimFailure(binding = claimBinding()): Json {
       admission_id: binding.admission_id,
       admission_sha256: binding.admission_sha256,
     },
-    claim: { claim_id: binding.claim_id },
+    claim: { claim_id: binding.claim_id, claimed_at: "2026-08-10T22:00:00.000Z" },
     lease: null,
     request_binding_sha256: binding.request_binding_sha256,
     immutable: true,

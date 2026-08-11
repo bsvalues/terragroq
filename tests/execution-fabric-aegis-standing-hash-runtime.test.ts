@@ -300,6 +300,7 @@ describe("AEGIS standing HASH_VERIFY runtime", () => {
     expect(runtime.persistClaimFailure).toHaveBeenCalledWith(expect.objectContaining({
       status: "FAILED_CLOSED",
       result: "CLAIM_BINDING_MISMATCH",
+      claim: expect.objectContaining({ claimed_at: "2026-08-10T22:00:00.010Z" }),
       lease: null,
       chronology: expect.objectContaining({ failed_at: "2026-08-10T22:00:00.020Z" }),
     }))

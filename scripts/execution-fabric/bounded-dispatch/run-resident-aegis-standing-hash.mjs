@@ -722,6 +722,7 @@ export function createStandingLedgerProviders({
     const retainedClaim = readLedgerWith(fsApi, claimPath, uid, validateFile)
     if (!recordDigestValid(retainedClaim, "claim_record_sha256")
       || retainedClaim.claim_id !== evidence.claim?.claim_id
+      || retainedClaim.claimed_at !== evidence.claim?.claimed_at
       || retainedClaim.request_binding_sha256 !== evidence.request_binding_sha256) {
       fail("LEDGER_UNTRUSTED", "claim-only failure does not bind a durable admission claim")
     }

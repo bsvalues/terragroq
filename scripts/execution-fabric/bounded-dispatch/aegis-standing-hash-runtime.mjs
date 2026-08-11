@@ -266,8 +266,8 @@ export async function executeAegisStandingHash(options) {
     claim = object(await options.claimAdmission(claimBinding), "claim result")
     if (claim.claimed !== true) fail("ADMISSION_REPLAY", "exact admission and request binding was already claimed")
     claimAcquired = true
-    sameBinding(claim, claimBinding, Object.keys(claimBinding), "CLAIM_BINDING_MISMATCH", "claim")
     claimedAt = timestamp(claim.claimed_at, "claim.claimed_at")
+    sameBinding(claim, claimBinding, Object.keys(claimBinding), "CLAIM_BINDING_MISMATCH", "claim")
 
     const lease = object(await options.acquireLease(requestedLease), "lease result")
     if (lease.acquired !== true) fail("CONCURRENCY_LIMIT_REACHED", "the single standing execution lease is occupied")
