@@ -855,6 +855,7 @@ function runAsAccount(processApi, account, action) {
   }
   let groupChanged = false
   let transitionEstablished = false
+  let pendingError
   try {
     processApi.setgroups([account.gid])
     processApi.setegid(account.gid)
@@ -868,22 +869,44 @@ function runAsAccount(processApi, account, action) {
     transitionEstablished = true
     return action()
   } catch (error) {
+    let outgoing = error
     if (!transitionEstablished && !String(error?.code ?? "").startsWith("AEGIS_PROVISION_")) {
-      fail("AEGIS_PROVISION_PRIVILEGE_DROP_FAILED", "effective service identity transition failed")
+      outgoing = new Error(
+        "AEGIS_PROVISION_PRIVILEGE_DROP_FAILED: effective service identity transition failed",
+        { cause: error },
+      )
+      outgoing.code = "AEGIS_PROVISION_PRIVILEGE_DROP_FAILED"
+      outgoing.causeCode = error?.code ?? null
     }
-    throw error
+    pendingError = outgoing
+    throw outgoing
   } finally {
+    let restoreFailure = null
+    let restoreCause = null
     try {
       if (processApi.geteuid() !== 0) processApi.seteuid(0)
       if (groupChanged || processApi.getegid() !== 0) processApi.setegid(0)
       processApi.setgroups(originalGroups)
-    } catch {
-      fail("AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED", "root applier identity restoration failed")
+      const restoredGroups = [...processApi.getgroups()].sort((left, right) => left - right)
+      const expectedGroups = [...originalGroups].sort((left, right) => left - right)
+      if (processApi.geteuid() !== 0 || processApi.getegid() !== 0 || !same(restoredGroups, expectedGroups)) {
+        restoreFailure = "root applier identity was not restored"
+      }
+    } catch (error) {
+      restoreFailure = "root applier identity restoration failed"
+      restoreCause = error
     }
-    const restoredGroups = [...processApi.getgroups()].sort((left, right) => left - right)
-    const expectedGroups = [...originalGroups].sort((left, right) => left - right)
-    if (processApi.geteuid() !== 0 || processApi.getegid() !== 0 || !same(restoredGroups, expectedGroups)) {
-      fail("AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED", "root applier identity was not restored")
+    if (restoreFailure !== null) {
+      if (pendingError) {
+        pendingError.restoreFailureCode = "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED"
+        pendingError.restoreFailureReason = restoreFailure
+        pendingError.restoreFailureCauseCode = restoreCause?.code ?? null
+      } else {
+        const error = new Error(`AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED: ${restoreFailure}`, { cause: restoreCause })
+        error.code = "AEGIS_PROVISION_PRIVILEGE_RESTORE_FAILED"
+        error.causeCode = restoreCause?.code ?? null
+        throw error
+      }
     }
   }
 }
