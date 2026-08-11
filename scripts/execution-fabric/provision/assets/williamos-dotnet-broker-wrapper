@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-export HTTPS_PROXY=http://127.0.0.1:17734
-export NO_PROXY=
+ticket="${WILLIAMOS_NETWORK_TICKET_B64:-}"
+[[ -n "$ticket" && "${WILLIAMOS_NETWORK_OPERATION:-}" == "RESTORE_DOTNET" && "$ticket" =~ ^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$ ]] || exit 64
+expected="$(/usr/bin/node -e 'process.stdout.write(`http://WilliamOS:${encodeURIComponent(process.argv[1])}@127.0.0.1:17734`)' "$ticket")"
+[[ "${HTTPS_PROXY:-}" == "$expected" && "${https_proxy:-}" == "$expected" && -z "${NO_PROXY:-}" && -z "${no_proxy:-}" ]] || exit 64
 exec /usr/share/dotnet/dotnet "$@"

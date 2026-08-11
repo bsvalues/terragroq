@@ -5,8 +5,9 @@ Requires=williamos-aegis-remote-dev-egress.service
 
 [Service]
 Type=simple
-User=williamos-fabric
+User=williamos-git-broker
 Group=williamos-fabric
+UMask=0007
 ExecStart=/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-git-broker.mjs
 LoadCredential=github_account_key:/etc/williamos-fabric/github-account.key
 NoNewPrivileges=yes
@@ -24,3 +25,6 @@ ReadWritePaths=-/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001 /run/willia
 InaccessiblePaths=/run/user
 MemoryMax=268435456
 TasksMax=32
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost

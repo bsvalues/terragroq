@@ -238,6 +238,30 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(state.records[firstIntent + 1]).toMatchObject({ phase: "STEP_APPLIED", detail: { stepId: manifest.steps[0].id } })
   })
 
+  it("resumes from durable post-apply verification by committing without duplicating the verification record", async () => {
+    const manifest = loadManifest(); const signed = signedAuthority(manifest); let claimed = false; let crash = true
+    const records: any[] = []
+    const verified = completeObservation(manifest)
+    verified.prerequisites = Object.fromEntries(manifest.steps.map((step: { id: string }) => [step.id, "MATCH"]))
+    const adapter = {
+      acquireLease: async () => true, releaseLease: async () => undefined, reprove: async () => verified,
+      claim: async () => claimed ? { resume: true } : (claimed = true),
+      recover: async () => ({ records, committed: false }),
+      append: async (record: any) => {
+        if (crash && (record.phase === "COMMITTED" || record.phase === "FAILED_PARTIAL")) throw new Error("synthetic process loss")
+        records.push(record)
+      },
+      effectApplied: async () => true, apply: async () => { throw new Error("must not apply") }, verify: async () => verified,
+      publishSuccess: async () => undefined,
+    }
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:05:00.000Z", adapter)).toMatchObject({ status: "BLOCKED", reasonCode: "PARTIAL_APPLY_INERT" })
+    expect(records.filter((record) => record.phase === "POST_APPLY_VERIFIED")).toHaveLength(1)
+    crash = false
+    expect(await executeRootHandoffTransaction(manifest, signed.envelope, signed.publicKey, "2026-08-11T20:06:00.000Z", adapter)).toMatchObject({ status: "PREREQUISITES_APPLIED_VERIFIED" })
+    expect(records.filter((record) => record.phase === "POST_APPLY_VERIFIED")).toHaveLength(1)
+    expect(records.at(-1).phase).toBe("COMMITTED")
+  })
+
   it("accepts only an exact conclusive sudo denial and rejects password, signal, or ambiguous errors", () => {
     expect(inspectNoSudoCapabilityEvidence({ status: 1, signal: null, error: null, stdout: "", stderr: "User williamos-fabric is not allowed to run sudo on aegis.\n" })).toBe(true)
     expect(inspectNoSudoCapabilityEvidence({ status: 1, signal: null, error: null, stdout: "", stderr: "Sorry, user williamos-fabric may not run sudo on aegis.\n" })).toBe(true)
@@ -275,9 +299,12 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(allowedHostForOperation("PUSH_AUTHORIZED_BRANCH", "ssh.github.com")).toBe(true)
     expect(allowedHostForOperation("BUILD_DOTNET_RELEASE", "ssh.github.com")).toBe(false)
     expect(allowedHostForOperation("RESTORE_DOTNET", "ssh.github.com")).toBe(false)
-    for (const address of ["192.168.1.156", "::ffff:192.168.1.156", "::ffff:c0a8:019c", "10.0.0.1", "127.0.0.1", "172.16.0.1", "169.254.1.1", "fc00::1", "fd00::1", "fe80::1", "::1"]) {
+    for (const address of ["192.168.1.156", "::ffff:192.168.1.156", "::ffff:c0a8:019c", "10.0.0.1", "100.64.0.1", "127.0.0.1", "172.16.0.1", "169.254.1.1", "192.0.2.1", "198.18.0.1", "198.51.100.1", "203.0.113.1", "fc00::1", "fd00::1", "fe80::1", "::1"]) {
       expect(isDeniedDestination(address)).toBe(true)
     }
+    const authority = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"), "utf8")
+    expect(authority).toContain("const current = Date.now()")
+    expect(authority).toContain("current >= expires")
     expect(isDeniedDestination("140.82.112.36")).toBe(false)
     expect(isDeniedDestination("2606:50c0:8000::154")).toBe(false)
   })
@@ -293,15 +320,30 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(launcher).toContain("WILLIAMOS_NETWORK_PACKET_B64")
     expect(launcher).toContain('bound.operation === "RESTORE_DOTNET"')
     expect(launcher).toContain("HTTPS_PROXY: proxy")
+    const dotnet = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/williamos-dotnet-broker-wrapper"), "utf8")
+    expect(dotnet).toContain('"${HTTPS_PROXY:-}" == "$expected"')
+    expect(dotnet).toContain('"${https_proxy:-}" == "$expected"')
+    expect(dotnet).not.toContain("export HTTPS_PROXY=http://127.0.0.1:17734")
     const broker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs"), "utf8")
     expect(broker).toContain('decoded.subarray(0, separator).toString("ascii") !== "WilliamOS"')
     expect(broker).toContain("authorizeConnect(authorization.ticket, authorization.operation")
     expect(broker).toContain("407 Proxy Authentication Required")
     expect(broker).toContain('request.headers["proxy-authorization"] === undefined ? 407 : 403')
     const gitBroker = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-broker.mjs"), "utf8")
+    const gitService = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-git-broker.service"), "utf8")
     expect(gitBroker).toContain('bound.runId !== authorization.payload.runId')
-    expect(gitBroker).toContain("server.maxConnections = 1")
-    expect(gitBroker).toMatch(/createServer\(\(socket\) => \{\s+server\.close\(\)/)
+    expect(gitBroker).toContain("fs.constants.O_EXCL")
+    expect(gitBroker).toContain(".git-consumed")
+    expect(gitBroker.indexOf("consumeGitTicket(authorization.payload)")).toBeLessThan(gitBroker.indexOf("exactCredential()"))
+    expect(gitService).toContain("User=williamos-git-broker")
+    expect(gitService).toContain("Group=williamos-fabric")
+    expect(gitService).toContain("IPAddressDeny=any")
+    expect(gitService).toContain("IPAddressAllow=localhost")
+    expect(gitService).not.toContain("User=williamos-fabric")
+    expect(gitBroker).toContain('name.startsWith("url.")')
+    expect(gitBroker).toContain('"remote", "get-url", "--push", "--all", "origin"')
+    expect(gitBroker).toContain('"push", REMOTE')
+    expect(worker).toContain('chmod 2770 -- "$PHYSICAL_WORKSPACE"')
   })
 
   it("ships one fixed production OS adapter and CLI with no caller provider, clock, path, or command injection", () => {
@@ -322,6 +364,12 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(adapter).toContain("fs.constants.O_EXCL")
     expect(adapter).toContain("recoverJournal(authority)")
     expect(adapter).toContain('run("/usr/sbin/usermod", ["-G", "", "--home", "/var/empty/williamos-fabric"')
+    expect(adapter).toContain('"williamos-git-broker"')
+    expect(adapter).toContain('"merge-base", "--is-ancestor", manifest.trustedMain.minimumCommit, authority.trustedMainCommit')
+    expect(adapter).toContain("existingReceiptMatches")
+    expect(adapter).toContain("proveRootServiceFence")
+    expect(cli).toContain("KillMode=control-group")
+    expect(cli).toContain("williamos-aegis-root-handoff.service")
     expect(adapter.indexOf('run("/usr/bin/loginctl", ["terminate-user", "williamos-fabric"]')).toBeLessThan(adapter.indexOf("applyAssets(manifest, authority)"))
     expect(adapter).toContain("same(lines, expected)")
     expect(verifier).toContain('const OWNER_PUBLIC_KEY_PATH = "/etc/williamos-fabric/owner-prerequisite-authority.pem"')

@@ -650,6 +650,7 @@ case "$OPERATION" in
       timeout 15 mkdir -- "$PHYSICAL_WORKSPACE" || die_block "WORKSPACE_CREATE_FAILED" "cannot create exact workspace"
       timeout 10 node -e 'const fs=require("node:fs"),[file,run,wo,repo,branch,base]=process.argv.slice(1);const tmp=`${file}.${process.pid}.tmp`;fs.writeFileSync(tmp,JSON.stringify({run_id:run,work_order_id:wo,repository:repo,branch,base_sha:base}),{mode:0o600,flag:"wx"});fs.renameSync(tmp,file)' "$MARKER_PATH" "$RUN_ID" "$PACKET_WORK_ORDER" "$PACKET_REPOSITORY" "$BRANCH" "$BASE_SHA" || die_block "WORKSPACE_CREATE_FAILED" "cannot publish ownership marker"
     fi
+    timeout 10 chmod 2770 -- "$PHYSICAL_WORKSPACE" || die_block "WORKSPACE_CREATE_FAILED" "cannot bind exact Git broker group access"
     [[ -d "$SCRATCH_DIR" ]] || timeout 10 mkdir -m 0700 -- "$SCRATCH_DIR" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create exact scratch directory"
     timeout 10 mkdir -p -m 0700 -- "$SCRATCH_DIR/tmp" "$SCRATCH_DIR/xdg-cache" "$SCRATCH_DIR/nuget" "$SCRATCH_DIR/dotnet-home" "$SCRATCH_DIR/corepack" "$SCRATCH_DIR/npm-cache" || die_block "SCRATCH_CONFINEMENT_FAILED" "cannot create bounded cache directories"
     validate_workspace_project

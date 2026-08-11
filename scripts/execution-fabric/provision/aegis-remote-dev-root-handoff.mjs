@@ -14,7 +14,7 @@ const EXPECTED_PACKAGE_JCS = "cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0e
 const EXPECTED_MACHINE = "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b"
 const EXPECTED_STORAGE_UUID = "5744648d-9289-4d4e-ac6a-707e8405a5d6"
 const EXPECTED_TRUSTED_EVIDENCE = Object.freeze({
-  "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json": "e5a122722e5cc6a3af0b3ce7c3699c0b0ab463818a055ee0098bff558c380f87",
+  "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json": "40113824944b902b245078fdebdee2b1a1c5c67c8a22dd5612a28db8a574e648",
   "config/execution-fabric/aegis-resident-identity.json": "69a9008e680ef236367c8b4b3ebf85b9d96dbc9cf3545b97c2275761b327643d",
   "config/execution-fabric/aegis-bounded-dispatch-authority-scopes/WO-EF-DISPATCH-AEGIS-001.json": "90f089b0d64989edafcc96e847e77993a0c352d99a2716bbfb72bd3fbc27cfc7",
   "docs/reports/bounded-dispatch/WO-EF-DISPATCH-AEGIS-001-claim.json": "40385c3163908c30d4eb559cded69ac2d05ae46c31a029dbbdc94d821139f845",
@@ -43,26 +43,26 @@ const EXPECTED_ASSET_DIGESTS = Object.freeze({
   "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs": "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7",
   "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs": "2d2a20daad959b41007c74eb26dce1279f016a1e3b2f87596e73b3a68da4d031",
   "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507",
-  "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "70396303a910c0ecd83e938dd562e32e50cfde8e9c3abe3873e5b2857c45f6f3",
+  "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "1a256ad534219152713bdc2b46353f56d011eb8ce5bae62f11f5857e96fdb9e8",
   "config/execution-fabric/aegis-resident-network-boundary.json": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6",
-  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "21bbdfb46a7b75fc627922f342d2d10bf93633acd1f46b401db638538fd94c58",
-  "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh": "56630f270af148f1b02c94abfe33bac3512804eafe3ccd0a99de76564d4bc6da",
+  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "e9de287e466816b34b8636ff60b428bde0bce0755b75236387b94c3eeeacbfa7",
+  "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh": "6b8e44ccd3d2efefed76020b445d3d92babeb6a8b6e4aea75a246b68d7d39004",
   "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf": "bb6967f25ae614d152c2bbaf4073eae4575f98819f9b4a855b5de20a60e4e789",
   "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf": "a6e83ce0c8b2d2c8127a268c5bd48f27ff3199894f0179afc412a5b01f7fe9c6",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-enforcer.mjs": "931b0a9b0e98f4e6f3cc023e83e07914eafea53ae1844858e89f68e86247b1d5",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-broker.mjs": "e82f2d8e640cd1d2ca80ca5edc7108c8efcf4fd2d2ec55105bc4d04b15177206",
-  "scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs": "e51a5c2b90d7e8c0a7fe8786c605d8c4cbec485b3a9db06b952931c93a7cd765",
+  "scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs": "4068b982659a1d032aaf420b23006c68cc0b06f296b3e9873ce5affa19f29dbc",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-proxy-connect.mjs": "45a29680a83ff59fb925f998faf819915ec45ee22237f1b3a2679b6f496a8346",
   "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-client.mjs": "27ddbbbb3bcfc1278f1b3e043ba5d30e5627b6071f633ce699c1ab7bd1e55e49",
-  "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-broker.mjs": "6f27e7e37dcdb026d545129e7de95418018f7b229e42ee4dffcafae199082be0",
+  "scripts/execution-fabric/provision/assets/aegis-remote-dev-git-broker.mjs": "6f808db949e403545241bb97abd326137c58115ccfd4897c3fb304649bb6d8c3",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-broker.service": "540a3137c055896f1ad223d64c7a0af94eb01a7fb89fefc81f045b8e6ca6d3e7",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-git-broker.socket": "116392f032d35c89f473522a1420f46715cbd4e2ae5c2853bc6adf8bb6e4ad15",
-  "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-git-broker.service": "75deee46e82534aa6955361248ebf4c103c3a822049cd257f419f04621713437",
+  "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-git-broker.service": "8927b71a2a41d992f111f87414030aa8fdac2054c26eded9d1fd993c6a57a5f7",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.nft": "7ae54384fa8eea7ad5c35bbeff4ae00bfb8b0f9f83fdfcd4bfeeb6622d59e867",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.service": "36e5b23c6e0937a5ee76ef5d7249e4ff13babfb0664f84a91626f5e20193a83a",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev.slice": "fc588c814d41b0f5be77ac7436d02f95644aa03b373912f70da6c41a61baff7c",
   "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev.tmpfiles": "108fa6b6d3e9140868cf50c900c36e96fcd58dcfddb01ce631a57a27c389f96f",
-  "scripts/execution-fabric/provision/assets/williamos-dotnet-broker-wrapper": "f09d0fc345c40a15366939e2d2cf6dd7b67f39aa59dc929f39246d2f3d362891",
+  "scripts/execution-fabric/provision/assets/williamos-dotnet-broker-wrapper": "5347bbe1faf43487597000e72fa446aed2c8cf87720666defb72952db7b16132",
 })
 
 function canonicalizeJcs(value) {
@@ -262,9 +262,12 @@ export async function executeRootHandoffTransaction(manifest, envelope, publicKe
       if (!await adapter.effectApplied(step.id)) await adapter.apply(step.id)
       await append("STEP_APPLIED", { stepId: step.id })
     }
-    const verified = buildRootHandoffPlan(manifest, await adapter.verify())
-    if (verified.status !== "ALREADY_VERIFIED") throw new Error("post-apply prerequisite verification differs")
-    await append("POST_APPLY_VERIFIED", { storage: "VERIFY_ONLY", scheduler: "DISABLED", standingAuthority: false, dispatchOccurred: false })
+    const postApplyVerified = recovery.records.some((record) => record.phase === "POST_APPLY_VERIFIED")
+    if (!postApplyVerified) {
+      const verified = buildRootHandoffPlan(manifest, await adapter.verify())
+      if (verified.status !== "ALREADY_VERIFIED") throw new Error("post-apply prerequisite verification differs")
+      await append("POST_APPLY_VERIFIED", { storage: "VERIFY_ONLY", scheduler: "DISABLED", standingAuthority: false, dispatchOccurred: false })
+    }
     await append("COMMITTED", { transactionId: envelope.payload.transactionId })
     committed = true
     await adapter.publishSuccess(envelope.payload, previous)
@@ -293,6 +296,13 @@ function productionTrust(manifest, authority) {
   if (!cliAsset || sha256(rootFile(INSTALLED_CLI_PATH, 0o555)) !== cliAsset.sha256) throw new Error("installed root CLI differs")
   const remote = fixedRun("/usr/bin/git", ["-c", "protocol.file.allow=never", "ls-remote", "--exit-code", manifest.trustedMain.remote, manifest.trustedMain.ref]).split(/\s+/)[0]
   if (remote !== authority.trustedMainCommit) throw new Error("fresh origin/main authority equality differs")
+  const ancestry = fs.mkdtempSync("/tmp/williamos-root-trust-")
+  try {
+    fixedRun("/usr/bin/git", ["--no-replace-objects", "init", "--bare", ancestry])
+    fixedRun("/usr/bin/git", ["--no-replace-objects", "-C", ancestry, "fetch", "--no-tags", "--force", manifest.trustedMain.remote, `${manifest.trustedMain.ref}:refs/williamos/authority-main`])
+    if (fixedRun("/usr/bin/git", ["--no-replace-objects", "-C", ancestry, "rev-parse", "refs/williamos/authority-main"]) !== authority.trustedMainCommit) throw new Error("fetched authority main differs")
+    fixedRun("/usr/bin/git", ["--no-replace-objects", "-C", ancestry, "merge-base", "--is-ancestor", manifest.trustedMain.minimumCommit, authority.trustedMainCommit])
+  } finally { fs.rmSync(ancestry, { recursive: true, force: true }) }
   for (const asset of manifest.appliedAssets) {
     const source = path.join(BUNDLE_ROOT, ...asset.source.split("/")); const bytes = rootFile(source, asset.mode === "0555" ? 0o555 : 0o444)
     if (sha256(bytes) !== asset.sha256) throw new Error(`${asset.source} exact bundle bytes differ`)

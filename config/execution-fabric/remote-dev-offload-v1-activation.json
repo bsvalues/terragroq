@@ -64,11 +64,11 @@
   "bindings": {
     "worker": {
       "path": "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
-      "sha256": "70396303a910c0ecd83e938dd562e32e50cfde8e9c3abe3873e5b2857c45f6f3"
+      "sha256": "1a256ad534219152713bdc2b46353f56d011eb8ce5bae62f11f5857e96fdb9e8"
     },
     "controller": {
       "path": "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1",
-      "sha256": "2428b08735af38bf1471042d009b9be9719c54b31ab8132b9d80714aa3a2ca1c"
+      "sha256": "8171d62cd608509792920937d6830571fb1e99e13cad682601d82014ceb00cf9"
     },
     "contract": {
       "path": "scripts/execution-fabric/live/remote-dev-offload-contract.mjs",
@@ -76,11 +76,11 @@
     },
     "policy": {
       "path": "config/execution-fabric/remote-dev-offload-v1.policy.json",
-      "sha256": "57b6efaafad160fcf0936479fb35302bf226ce2c23369e28b7f2c2f0c4da1b4e"
+      "sha256": "4ec0baac93dd8d53ccc36eb366dcb240eafe1b7849aa666d580b81906ad29efb"
     },
     "inactiveScope": {
       "path": "config/execution-fabric/remote-dev-offload-v1-inactive-scope.json",
-      "sha256": "a548213bdd76b9d49ff295674fa166c7dfa3e968dd5a07344b4cd8cb880a8fa7"
+      "sha256": "f2886d506f25bf94f209c60fc1436bb489f2f1d2cfcc429d3f57798ef943c1c6"
     },
     "networkProvider": {
       "path": "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs",
@@ -96,15 +96,15 @@
     },
     "rootPrerequisiteManifest": {
       "path": "config/execution-fabric/aegis-remote-dev-root-handoff.json",
-      "sha256": "ee57991955bfb8f4f89dc55f22e59649194594011e7ef9bcbf363f20c6a3e25d"
+      "sha256": "f59eddb761d00aaa8365b2915189d9c3f7fac8348488272900c833a289178efe"
     },
     "rootPrerequisiteVerifier": {
       "path": "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs",
-      "sha256": "bad3b44c6a6874498cb2f765c585ce8f5bb0ee57eb7677ddf35b5d345b909da1"
+      "sha256": "b53a2ccab49e83469d0b9319bde2f43e34d5cc1e425b224a623fd6d7786c81c5"
     },
     "rootPrerequisiteAdapter": {
       "path": "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs",
-      "sha256": "21bbdfb46a7b75fc627922f342d2d10bf93633acd1f46b401db638538fd94c58"
+      "sha256": "e9de287e466816b34b8636ff60b428bde0bce0755b75236387b94c3eeeacbfa7"
     }
   },
   "executionIdentity": {

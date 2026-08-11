@@ -71,9 +71,11 @@ export function isDeniedDestination(address) {
   if (mapped) return isDeniedDestination(mapped)
   if (net.isIP(normalized) === 4) {
     const octets = normalized.split(".").map(Number)
-    return normalized === "192.168.1.156" || octets[0] === 10 || octets[0] === 127 || (octets[0] === 169 && octets[1] === 254)
+    return normalized === "192.168.1.156" || octets[0] === 10 || octets[0] === 127 || (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) || (octets[0] === 169 && octets[1] === 254)
       || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) || (octets[0] === 192 && octets[1] === 168)
-      || octets[0] === 0 || octets[0] >= 224
+      || (octets[0] === 192 && octets[1] === 0 && octets[2] === 0) || (octets[0] === 192 && octets[1] === 0 && octets[2] === 2)
+      || (octets[0] === 198 && (octets[1] === 18 || octets[1] === 19 || (octets[1] === 51 && octets[2] === 100)))
+      || (octets[0] === 203 && octets[1] === 0 && octets[2] === 113) || octets[0] === 0 || octets[0] >= 224
   }
   if (net.isIP(normalized) === 6) return !/^[23][0-9a-f]{0,3}:/.test(normalized)
   return true
@@ -108,7 +110,9 @@ function fixedRuntimeAuthorization(ticketB64, expectedOperation, packetB64 = nul
     || !SHA256.test(payload.packetSha256) || !SHA256.test(payload.patchSha256) || !SHA256.test(payload.workerSha256)
     || payload.workerSha256 !== receipt.workerSha256 || !Number.isInteger(payload.attempt) || payload.attempt < 1 || payload.attempt > 3) fail("runtime ticket binding differs")
   const issued = Date.parse(payload.issuedAt); const expires = Date.parse(payload.expiresAt); const observed = Date.parse(receipt.observedAt); const receiptExpires = Date.parse(receipt.expiresAt)
-  if (![issued, expires, observed, receiptExpires].every(Number.isFinite) || issued < observed || expires > receiptExpires || expires <= issued || expires - issued > 30_000) fail("runtime ticket time binding differs")
+  const current = Date.now()
+  if (![issued, expires, observed, receiptExpires, current].every(Number.isFinite) || current < issued || current >= expires || current >= receiptExpires
+    || issued < observed || expires > receiptExpires || expires <= issued || expires - issued > 30_000) fail("runtime ticket time binding differs")
   if (packetB64 !== null && digest(canonicalBase64(packetB64, 1_048_576)) !== payload.packetSha256) fail("runtime packet binding differs")
   const signature = canonicalBase64(ticket.signature, 128)
   if (signature.length !== 64 || digest(publicKeyBytes) !== receipt.launchAuthority?.publicKeySha256) fail("runtime signing authority differs")

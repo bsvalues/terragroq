@@ -18,6 +18,7 @@ const STEPS = Object.freeze([
 ])
 const sha = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex")
 const canonical = (value) => value === null ? "null" : typeof value === "string" ? JSON.stringify(value) : typeof value === "number" ? JSON.stringify(value) : typeof value === "boolean" ? String(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
+const same = (left, right) => canonical(left) === canonical(right)
 
 function fail(code, detail) { const error = new Error(detail); error.code = code; throw error }
 function run(executable, args, options = {}) {
@@ -82,6 +83,14 @@ function accountIds(name) {
 }
 function supplementaryGroups(name) {
   try { return run("/usr/bin/id", ["-G", name]).split(/\s+/).filter(Boolean).map(Number) } catch { return [] }
+}
+function exactSharedGitGroup(gid) {
+  try {
+    const group = run("/usr/bin/getent", ["group", "williamos-fabric"]).split(":")
+    const primary = run("/usr/bin/getent", ["passwd"]).split(/\r?\n/).filter(Boolean).map((line) => line.split(":"))
+      .filter((fields) => Number(fields[3]) === gid).map((fields) => fields[0]).sort()
+    return group.length === 4 && group[3] === "" && same(primary, ["williamos-fabric", "williamos-git-broker"])
+  } catch { return false }
 }
 function userProcesses(uid) {
   const result = spawnSync("/usr/bin/pgrep", ["-u", String(uid)], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV })
@@ -292,6 +301,7 @@ function recoverJournal(authority) {
 function observe(manifest, authority, trust) {
   const ids = accountIds("williamos-fabric")
   const brokerIds = accountIds("williamos-egress-broker")
+  const gitBrokerIds = accountIds("williamos-git-broker")
   const transportPath = "/etc/ssh/authorized_keys/williamos-fabric"
   const transport = fs.existsSync(transportPath) ? fs.readFileSync(transportPath, "utf8") : ""
   const rootAssets = rootAssetsState(manifest, authority)
@@ -301,11 +311,12 @@ function observe(manifest, authority, trust) {
   const ledger = (() => { try { const s = fs.lstatSync("/var/lib/williamos/fabric/ledger"); return trustedParents("/var/lib/williamos/fabric/ledger") && s.isDirectory() && !s.isSymbolicLink() && s.uid === ids?.uid && s.gid === ids?.gid && (s.mode & 0o7777) === 0o700 && run("/usr/bin/findmnt", ["-n", "-o", "FSTYPE", "--target", "/var/lib/williamos/fabric/ledger"]) === "ext4" } catch { return false } })()
   const processState = ids ? userProcesses(ids.uid) : { proven: true, pids: [], onlyManager: true }
   const brokerProcessState = brokerIds ? userProcesses(brokerIds.uid) : { proven: true, pids: [], onlyManager: true }
-  const identityMatch = (() => { try { const shadow = run("/usr/bin/getent", ["shadow", "williamos-fabric"]).split(":")[1]; const linger = fs.existsSync(`/var/lib/systemd/linger/williamos-fabric`); return ids?.home === "/var/empty/williamos-fabric" && ids?.shell === "/bin/bash" && /^!/.test(shadow) && linger && noSudoCapability() && same(supplementaryGroups("williamos-fabric"), [ids.gid]) && processState.proven && processState.onlyManager && brokerIds?.home === "/var/empty/williamos-egress-broker" && brokerIds?.shell === "/usr/sbin/nologin" && same(supplementaryGroups("williamos-egress-broker"), [brokerIds.gid]) } catch { return false } })()
+  const gitBrokerProcessState = gitBrokerIds ? userProcesses(gitBrokerIds.uid) : { proven: true, pids: [], onlyManager: true }
+  const identityMatch = (() => { try { const shadow = run("/usr/bin/getent", ["shadow", "williamos-fabric"]).split(":")[1]; const linger = fs.existsSync(`/var/lib/systemd/linger/williamos-fabric`); return ids?.home === "/var/empty/williamos-fabric" && ids?.shell === "/bin/bash" && /^!/.test(shadow) && linger && noSudoCapability() && same(supplementaryGroups("williamos-fabric"), [ids.gid]) && processState.proven && processState.onlyManager && brokerIds?.home === "/var/empty/williamos-egress-broker" && brokerIds?.shell === "/usr/sbin/nologin" && brokerProcessState.proven && same(supplementaryGroups("williamos-egress-broker"), [brokerIds.gid]) && gitBrokerIds?.home === "/var/empty/williamos-git-broker" && gitBrokerIds?.shell === "/usr/sbin/nologin" && gitBrokerIds.gid === ids.gid && gitBrokerProcessState.proven && gitBrokerProcessState.pids.length === 0 && same(supplementaryGroups("williamos-git-broker"), [ids.gid]) && exactSharedGitGroup(ids.gid) } catch { return false } })()
   const expectedTransport = (() => { try { const key = fs.readFileSync(path.join(STAGED_ROOT, "hermes-transport.pub"), "utf8").trim(); return `from="192.168.1.154",restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" ${key}\n` } catch { return null } })()
   const githubMatch = exactFile("/etc/williamos-fabric/github_known_hosts", authority.inputs.githubHostKnownHostsSha256, 0, 0, 0o444) && exactFile("/etc/williamos-fabric/github-account.key", authority.inputs.githubAccountPrivateKeySha256, 0, 0, 0o400)
   const states = {
-    RECONCILE_BOUNDED_IDENTITY: identityMatch ? "MATCH" : ids && (!processState.proven || (processState.pids.length > 0 && !processState.onlyManager) || !brokerProcessState.proven || brokerProcessState.pids.length > 0 || !noSudoCapability()) ? "DRIFT" : "ABSENT",
+    RECONCILE_BOUNDED_IDENTITY: identityMatch ? "MATCH" : ids && (!processState.proven || (processState.pids.length > 0 && !processState.onlyManager) || !brokerProcessState.proven || brokerProcessState.pids.length > 0 || !gitBrokerProcessState.proven || gitBrokerProcessState.pids.length > 0 || !noSudoCapability()) ? "DRIFT" : "ABSENT",
     INSTALL_ROOT_LAUNCH_ASSETS: rootAssets,
     INSTALL_DUAL_STACK_BROKER_BOUNDARY: nft ? "MATCH" : (() => { try { const table = spawnSync("/usr/sbin/nft", ["list", "table", "inet", "williamos_aegis_remote_dev"], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV }); const active = ["williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service"].some((unit) => spawnSync("/usr/bin/systemctl", ["is-active", "--quiet", unit], { shell: false, timeout: 5000, env: FIXED_ENV }).status === 0); return table.status === 0 || active ? "DRIFT" : "ABSENT" } catch { return "DRIFT" } })(),
     INSTALL_GITHUB_HOST_AUTH_BOUNDARY: githubMatch ? "MATCH" : fs.existsSync("/etc/williamos-fabric/github_known_hosts") || fs.existsSync("/etc/williamos-fabric/github-account.key") ? "DRIFT" : "ABSENT",
@@ -334,6 +345,13 @@ function applyIdentity() {
   run("/usr/sbin/usermod", ["-G", "", "--home", "/var/empty/williamos-egress-broker", "--shell", "/usr/sbin/nologin", "--lock", "williamos-egress-broker"])
   broker = accountIds("williamos-egress-broker")
   if (!broker || !same(supplementaryGroups("williamos-egress-broker"), [broker.gid])) fail("IDENTITY_DRIFT", "egress broker identity retains supplementary groups")
+  let gitBroker = accountIds("williamos-git-broker")
+  if (!gitBroker) { run("/usr/sbin/useradd", ["--system", "--gid", "williamos-fabric", "--home-dir", "/var/empty/williamos-git-broker", "--shell", "/usr/sbin/nologin", "--no-create-home", "williamos-git-broker"]); gitBroker = accountIds("williamos-git-broker") }
+  const gitBrokerProcesses = userProcesses(gitBroker.uid); if (!gitBrokerProcesses.proven || gitBrokerProcesses.pids.length) fail("IDENTITY_ACTIVE", "Git broker identity unexpectedly owns a process before asset apply")
+  ensureRootDirectory("/var/empty/williamos-git-broker", 0o755)
+  run("/usr/sbin/usermod", ["-G", "", "--gid", "williamos-fabric", "--home", "/var/empty/williamos-git-broker", "--shell", "/usr/sbin/nologin", "--lock", "williamos-git-broker"])
+  gitBroker = accountIds("williamos-git-broker")
+  if (!gitBroker || gitBroker.gid !== ids.gid || !same(supplementaryGroups("williamos-git-broker"), [ids.gid]) || !exactSharedGitGroup(ids.gid)) fail("IDENTITY_DRIFT", "Git broker identity or exact shared primary group differs")
 }
 function applyAssets(manifest, authority) {
   for (const asset of manifest.appliedAssets) {
@@ -387,6 +405,7 @@ function applyRepositories(manifest, authority) {
   if (!fs.existsSync(control)) run("/usr/bin/git", ["clone", "--no-checkout", "ssh://git@ssh.github.com:443/bsvalues/terragroq.git", control], gitOptions)
   run("/usr/bin/git", ["fetch", "--force", "origin", `+refs/heads/main:refs/remotes/origin/main`], { ...gitOptions, cwd: control })
   if (run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control }) !== authority.trustedMainCommit) fail("REPOSITORY_DRIFT", "fresh control-plane main differs from signed authority")
+  run("/usr/bin/git", ["--no-replace-objects", "merge-base", "--is-ancestor", manifest.trustedMain.minimumCommit, authority.trustedMainCommit], { cwd: control })
   if (run("/usr/bin/git", ["status", "--porcelain"], { cwd: control }) !== "") fail("REPOSITORY_DRIFT", "control checkout is dirty")
   run("/usr/bin/git", ["checkout", "-B", "main", authority.trustedMainCommit], { cwd: control })
   if (!fs.existsSync(mirror)) run("/usr/bin/git", ["clone", "--mirror", "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git", mirror], gitOptions)
@@ -431,13 +450,25 @@ function publishReceipt(manifest, authority, journalHeadSha256) {
   const bytes = Buffer.from(`${canonical(receipt)}\n`, "utf8"); const destination = "/var/lib/williamos-fabric/remote-dev-prerequisite-verified.json"
   if (fs.existsSync(destination)) {
     const current = readCanonicalRootJson(destination, 0o444)
-    if (!Buffer.from(`${canonical(current)}\n`, "utf8").equals(bytes)) fail("SUCCESS_RECEIPT_CONFLICT", "canonical success receipt belongs to another transaction or journal head")
-    return sha(bytes)
+    if (!existingReceiptMatches(current, receipt)) fail("SUCCESS_RECEIPT_CONFLICT", "canonical success receipt belongs to another transaction or journal head")
+    return sha(Buffer.from(`${canonical(current)}\n`, "utf8"))
   }
   let handle
   try { handle = fs.openSync(destination, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o444) } catch (error) { fail("SUCCESS_RECEIPT_CONFLICT", `canonical success receipt publication failed: ${error?.code ?? "unknown"}`) }
   fs.writeFileSync(handle, bytes); fs.fsyncSync(handle); fs.closeSync(handle); const directory = fs.openSync("/var/lib/williamos-fabric", fs.constants.O_RDONLY); fs.fsyncSync(directory); fs.closeSync(directory)
   return sha(bytes)
+}
+
+function existingReceiptMatches(current, expected) {
+  const completed = Date.parse(current?.completedAt)
+  return Number.isFinite(completed) && canonical({ ...current, completedAt: expected.completedAt }) === canonical(expected)
+}
+
+function proveRootServiceFence() {
+  const cgroup = fs.readFileSync("/proc/self/cgroup", "utf8").trim()
+  if (cgroup !== "0::/system.slice/williamos-aegis-root-handoff.service") fail("ROOT_HANDOFF_FENCE_UNPROVEN", "root verifier is not in the fixed system service cgroup")
+  const pids = fs.readFileSync("/sys/fs/cgroup/system.slice/williamos-aegis-root-handoff.service/cgroup.procs", "utf8").trim().split(/\s+/).filter(Boolean)
+  if (!pids.length || !pids.includes(String(process.pid)) || pids.some((pid) => !/^[1-9][0-9]*$/.test(pid))) fail("ROOT_HANDOFF_FENCE_UNPROVEN", "root verifier cgroup identity differs")
 }
 
 function exactRootDirectory(directory, mode, append = false) { try { const s = fs.lstatSync(directory); return trustedParents(directory) && s.isDirectory() && !s.isSymbolicLink() && s.uid === 0 && s.gid === 0 && (s.mode & 0o7777) === mode && (!append || appendOnly(directory)) } catch { return false } }
@@ -446,7 +477,7 @@ export function createRootProductionAdapter(manifest, authority, trust) {
   if (!exactRootDirectory(EVIDENCE_ROOT, 0o700, true) || !exactRootDirectory(CLAIM_ROOT, 0o700, true) || !exactRootDirectory(JOURNAL_ROOT, 0o700, true) || !exactRootDirectory(STAGED_ROOT, 0o700)) fail("EXTERNAL_BOOTSTRAP_INCOMPLETE", "root evidence, claim, journal, or staged directory trust differs")
   let head = "0".repeat(64); let sequence = 0
   return Object.freeze({
-    acquireLease: async () => true,
+    acquireLease: async () => { proveRootServiceFence(); return true },
     releaseLease: async () => undefined,
     reprove: async () => observe(manifest, authority, trust),
     claim: async (authorityId, transactionId) => {
