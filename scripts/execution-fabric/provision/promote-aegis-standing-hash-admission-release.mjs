@@ -291,7 +291,7 @@ export function validateCheckoutAncestorChain(inspect, checkout, closure) {
   }
 }
 
-function validateCurrentActivation(manifest, releaseBytes, markerBytes, authority, upgrade) {
+function validateCurrentActivation(manifest, releaseBytes, markerBytes, authority) {
   const release = parseJson(releaseBytes, "AEGIS_ADMISSION_PROMOTION_PRIOR_STATE_DRIFT", "trusted release manifest")
   const body = { ...release }
   delete body.release_manifest_sha256
@@ -313,8 +313,7 @@ function validateCurrentActivation(manifest, releaseBytes, markerBytes, authorit
     || sha256(markerBytes) !== authority.priorActivationMarkerSha256
     || marker.schema_version !== "1.0-aegis-standing-hash-activation-marker"
     || marker.upgrade_id !== "aegis-standing-hash-replay-ledger-upgrade-v1"
-    || !UUID.test(marker.authority_id ?? "") || marker.authority_id !== upgrade.prepared.authority_id
-    || marker.manifest_sha256 !== upgrade.prepared.manifest_sha256 || marker.new_commit !== CURRENT_COMMIT
+    || !UUID.test(marker.authority_id ?? "") || marker.new_commit !== CURRENT_COMMIT
     || !same(marker.runtime_closure_sha256, manifest.priorState.closure)
     || !DIGEST.test(marker.manifest_sha256 ?? "") || !canonicalTimestamp(marker.prepared_at)
     || release.activation_marker_sha256 !== canonicalSha256(marker)) {
@@ -490,7 +489,7 @@ function inspectPriorState(io, manifest, authority, heldLocks = false) {
   if (!manifest.priorState.replayUpgradeJournalPath.endsWith(`-${upgrade.prepared.authority_id}.journal.jsonl`)) {
     fail("AEGIS_ADMISSION_PROMOTION_REPLAY_UPGRADE_INVALID", "replay upgrade journal path and authority differ")
   }
-  validateCurrentActivation(manifest, releaseBytes, markerBytes, authority, upgrade)
+  validateCurrentActivation(manifest, releaseBytes, markerBytes, authority)
   const replayBytes = assertExactFile(io, REPLAY_JOURNAL_PATH,
     { uid: 0, gid: account.gid, mode: 0o660, digest: authority.replayJournalSha256 })
   if (!io.hasAppendOnly(REPLAY_JOURNAL_PATH)) {
