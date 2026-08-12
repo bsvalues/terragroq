@@ -22,6 +22,27 @@ const COMMIT = /^[a-f0-9]{40}$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const PLACEHOLDER = /__[A-Z0-9_]+__/
 const MAX_FILE_BYTES = 16 * 1024 * 1024
+export const EXPECTED_PRIOR_PROVISIONING_PLAN = Object.freeze([
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/opt/williamos" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/opt/williamos/releases" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/usr/local/libexec/williamos" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/etc/williamos" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/etc/williamos/fabric" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/var/lib/williamos/fabric/standing-hash-requests" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/var/lib/williamos/fabric/standing-hash-ledger" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/home/williamos-fabric/.ssh" }),
+  Object.freeze({
+    type: "INSTALL_REVIEWED_CHECKOUT",
+    path: "/opt/williamos/releases/13709f5789c25dea408283730a6bd35e8fd894ab",
+    source_path: "/root/williamos-issue-595-inputs-b58e7c045-v5/reviewed",
+    commit: "13709f5789c25dea408283730a6bd35e8fd894ab",
+  }),
+  Object.freeze({ type: "INSTALL_FILE", id: "bootstrap", path: "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs" }),
+  Object.freeze({ type: "INSTALL_FILE", id: "ssh-entrypoint", path: "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs" }),
+  Object.freeze({ type: "INSTALL_FILE", id: "replay-epoch-initializer", path: "/usr/local/libexec/williamos/aegis-standing-hash-replay-epoch.mjs" }),
+  Object.freeze({ type: "INSTALL_FILE", id: "authorized-keys", path: "/home/williamos-fabric/.ssh/authorized_keys" }),
+  Object.freeze({ type: "INSTALL_FILE", id: "release-manifest", path: "/etc/williamos/fabric/trusted-main-release.json" }),
+])
 const AUTHORITY_KEYS = Object.freeze([
   "schemaVersion", "authorityId", "upgradeId", "repository", "machineIdSha256",
   "priorCommit", "newCommit", "manifestSha256", "priorProvisioningAuthorityId",
@@ -269,6 +290,7 @@ function verifyPriorJournals(io, manifest, authority) {
     || provisioningRecords.some((record, index) => record.sequence !== index)
     || provisioningRecords.some(({ record_type }) => record_type === "APPLY_FAILED_PARTIAL_STATE")
     || !same(started, completed) || !same(consumed.planned_mutations, normalizedCompleted)
+    || !same(consumed.planned_mutations, EXPECTED_PRIOR_PROVISIONING_PLAN)
     || completed.some((_description, index) => provisioningRecords[(index * 2) + 1]?.record_type !== "MUTATION_STARTED"
       || provisioningRecords[(index * 2) + 2]?.record_type !== "MUTATION_COMPLETED")
     || repairRecords.length !== 2 || repairRecords.some((record, index) => record.sequence !== index)

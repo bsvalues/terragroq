@@ -8,6 +8,7 @@ import {
   LSATTR,
   ACTIVATION_MARKER_PATH,
   AUTHORITY_ROOT,
+  EXPECTED_PRIOR_PROVISIONING_PLAN,
   LEDGER_MUTATION_LOCK_PATH,
   NODE_MUTATION_LOCK_PATH,
   canonicalizeUpgradeJcs,
@@ -155,13 +156,11 @@ function fixture(options: {
     release_manifest_sha256: canonicalSha256(priorReleaseBody) })}\n`)
   file(manifest.priorState.trustedReleaseManifestPath, priorRelease, 0, 0, 0o444)
   const canonicalJson = manifest.priorState.installedFiles.find((item: any) => item.id === "canonical-json")
-  const planned = [
-    { type: "INSTALL_FILE", id: "bootstrap", path: manifest.priorState.installedFiles[0].path },
-    { type: "INSTALL_FILE", id: "authorized-keys", path: manifest.priorState.authorizedKeysPath },
-    { type: "INSTALL_FILE", id: "release-manifest", path: manifest.priorState.trustedReleaseManifestPath },
-  ]
+  const planned = structuredClone(EXPECTED_PRIOR_PROVISIONING_PLAN)
   const provisionBytes = provisioningJournal(manifest.priorState.provisioningManifestSha256, planned, {
     bootstrap: manifest.priorState.installedFiles[0].sha256,
+    "ssh-entrypoint": manifest.priorState.installedFiles[1].sha256,
+    "replay-epoch-initializer": manifest.priorState.installedFiles[2].sha256,
     "authorized-keys": sha256(authorizedKeys),
     "release-manifest": sha256(priorRelease),
   })
