@@ -34,7 +34,7 @@ const CONFIG_PATH = path.resolve("config/execution-fabric/aegis-standing-hash-ad
 const BOOTSTRAP_PATH = "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs"
 const STANDING_AUTHORITY = JSON.parse(fs.readFileSync(
   path.resolve("config/execution-fabric/aegis-standing-compute-authority.v1.json"), "utf8"))
-const PRIOR = "2593e782fdbaefbc05f617cdac3acde4a4255be0"
+const PRIOR = "a92cd9d8814eb01e96b92da5b7640e5016b0c8f5"
 const SOURCE = "a".repeat(40)
 const EVIDENCE = "c".repeat(40)
 const RELEASE = "d".repeat(40)
@@ -59,6 +59,8 @@ type Entry = {
 }
 
 type FixtureOptions = {
+  priorCommit?: string
+  retainedCommit?: string
   platform?: string
   euid?: number
   hostname?: string
@@ -131,9 +133,11 @@ function upgradeJournal(options: FixtureOptions) {
 }
 
 function fixture(options: FixtureOptions = {}) {
+  const priorCommit = options.priorCommit ?? PRIOR
+  const retainedCommit = options.retainedCommit ?? priorCommit
   const manifest = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"))
-  manifest.priorState.commit = PRIOR
-  manifest.priorState.releaseRoot = `/opt/williamos/releases/${PRIOR}`
+  manifest.priorState.commit = priorCommit
+  manifest.priorState.releaseRoot = `/opt/williamos/releases/${priorCommit}`
   manifest.priorState.replayUpgradeJournalPath =
     `/var/lib/williamos-aegis-standing-hash-replay-ledger-upgrade-${UPGRADE_AUTHORITY_ID}.journal.jsonl`
   manifest.evidenceRelease = {
@@ -324,7 +328,7 @@ function fixture(options: FixtureOptions = {}) {
     schema_version: "1.0-aegis-standing-hash-activation-marker",
     upgrade_id: "aegis-standing-hash-replay-ledger-upgrade-v1",
     authority_id: UPGRADE_AUTHORITY_ID,
-    new_commit: options.markerUpgradeMismatch ? SOURCE : PRIOR,
+    new_commit: options.markerUpgradeMismatch ? SOURCE : retainedCommit,
     runtime_closure_sha256: manifest.priorState.closure,
     manifest_sha256: "4".repeat(64),
     prepared_at: "2026-08-12T17:55:00.000Z",
@@ -334,8 +338,8 @@ function fixture(options: FixtureOptions = {}) {
     schema_version: "1.0-williamos-trusted-main-release",
     repository: "bsvalues/terragroq",
     trusted_ref: "refs/heads/main",
-    head_commit: PRIOR,
-    release_root: manifest.priorState.releaseRoot,
+    head_commit: retainedCommit,
+    release_root: `/opt/williamos/releases/${retainedCommit}`,
     reviewed: true,
     deployed_at: "2026-08-12T17:55:01.000Z",
     file_sha256: manifest.priorState.closure,
@@ -360,7 +364,7 @@ function fixture(options: FixtureOptions = {}) {
     promotionId: manifest.promotionId,
     repository: manifest.repository,
     machineIdSha256: manifest.machine.machineIdSha256,
-    priorCommit: PRIOR,
+    priorCommit,
     newCommit: RELEASE,
     evidenceCommit: EVIDENCE,
     packageCommit: PACKAGE,
@@ -417,7 +421,7 @@ function fixture(options: FixtureOptions = {}) {
       if (options.checkoutDrift === checkout) throw Object.assign(new Error("dirty checkout"),
         { code: "AEGIS_ADMISSION_PROMOTION_CHECKOUT_DRIFT" })
       expect(repository).toBe("bsvalues/terragroq")
-      const expectedCommit = checkout === manifest.priorState.releaseRoot ? PRIOR
+      const expectedCommit = checkout === manifest.priorState.releaseRoot ? manifest.priorState.commit
         : checkout === evidenceCheckoutPath ? EVIDENCE
           : checkout === manifest.packageRelease.checkoutPath ? PACKAGE : RELEASE
       expect(commit).toBe(expectedCommit)
@@ -531,28 +535,44 @@ function expectFailureCode(action: () => unknown, code: string) {
 }
 
 describe("AEGIS standing HASH admission release promotion", () => {
-  it("binds the checked-in promotion package to the final reviewed live release", () => {
+  it("retains the completed live-012 promotion manifest as historical evidence", () => {
     const manifest = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"))
-    expect(validateAegisStandingHashAdmissionReleasePromotionManifest(manifest)).toMatchObject({
+    expect(manifest).toMatchObject({
       priorState: { commit: "2593e782fdbaefbc05f617cdac3acde4a4255be0" },
       evidenceRelease: {
         sourceCommit: "b1637a0d16394361dff74e1fb85851ba61f91235",
-        admissionPath: "docs/reports/standing-dispatch/admission-issue-595-live-011.json",
+        admissionPath: "docs/reports/standing-dispatch/admission-issue-595-live-012.json",
       },
-      newRelease: { commit: "5494c2356282caf55d08ab1e98694208de665ca1" },
-      packageRelease: { commit: "e694c3d17f8c87e17b21558a1aaf8299348c9721" },
-      install: { requestId: "issue-595-live-011" },
+      newRelease: { commit: "a92cd9d8814eb01e96b92da5b7640e5016b0c8f5" },
+      packageRelease: { commit: "83c9db147865eca345dd36c3f47f238be777f25e" },
+      install: { requestId: "issue-595-live-012" },
+    })
+    expect(validateAegisStandingHashAdmissionReleasePromotionManifest(manifest)).toMatchObject({
+      priorState: { commit: "2593e782fdbaefbc05f617cdac3acde4a4255be0" },
     })
   })
 
   it("accepts only the two reviewed exact service-home states", () => {
-    const manifest = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"))
+    const manifest = fixture().manifest
     manifest.serviceAccount.home = "/var/empty/williamos-fabric"
     expect(validateAegisStandingHashAdmissionReleasePromotionManifest(manifest).serviceAccount.home)
       .toBe("/var/empty/williamos-fabric")
     manifest.serviceAccount.home = "/tmp/williamos-fabric"
     expect(() => validateAegisStandingHashAdmissionReleasePromotionManifest(manifest))
       .toThrow("AEGIS_ADMISSION_PROMOTION_MANIFEST_INVALID")
+  })
+
+  it("accepts the exact manifest-selected retained generation", () => {
+    const value = fixture()
+    expect(run(value)).toMatchObject({ status: "DRY_RUN", prior_commit: PRIOR })
+  })
+
+  it("rejects a reviewed prior generation when root-owned activation retains another generation", () => {
+    const value = fixture({
+      priorCommit: "b92cd9d8814eb01e96b92da5b7640e5016b0c8f5",
+      retainedCommit: PRIOR,
+    })
+    expectFailureCode(() => run(value), "AEGIS_ADMISSION_PROMOTION_PRIOR_STATE_DRIFT")
   })
 
   it("performs a complete dry-run without consuming authority or mutating host state", () => {
