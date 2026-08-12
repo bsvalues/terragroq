@@ -18,6 +18,7 @@ export const PRIVATE_KEY_PATH = "C:\\Users\\bs\\.ssh\\id_ed25519_williamos_aegis
 export const PUBLIC_KEY_PATH = `${PRIVATE_KEY_PATH}.pub`
 export const EVIDENCE_PATH = `${PRIVATE_KEY_PATH}.generation-evidence.json`
 export const JOURNAL_PATH = `${PRIVATE_KEY_PATH}.generation-journal.jsonl`
+export const RECOVERY_CLAIM_PATH = `${JOURNAL_PATH}.recovery-claim.json`
 export const SSH_KEYGEN_PATH = "C:\\Windows\\System32\\OpenSSH\\ssh-keygen.exe"
 export const ICACLS_PATH = "C:\\Windows\\System32\\icacls.exe"
 export const WHOAMI_PATH = "C:\\Windows\\System32\\whoami.exe"
@@ -27,7 +28,7 @@ const AUTHORITY_KEYS = Object.freeze([
   "schemaVersion", "authorityId", "purpose", "packageId", "manifestSha256",
   "generationHost", "generationAccount", "sourceAddress", "algorithm",
   "privateKeyPath", "publicKeyPath", "evidencePath", "issuedAt", "expiresAt",
-  "singleUse", "consumed",
+  "singleUse", "consumed", "recovery",
 ])
 export const AUTHORITY_PURPOSE = "GENERATE_DEDICATED_HERMES_AEGIS_STANDING_HASH_TRANSPORT_KEY"
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -35,6 +36,7 @@ const SHA256 = /^[a-f0-9]{64}$/
 const SSH_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}$/
 const MAX_AUTHORITY_AGE_MS = 15 * 60 * 1000
 const MAX_FILE_BYTES = 1024 * 1024
+const RECOVERABLE_LEGACY_MANIFEST_SHA256 = "614a0723adae356aa729966b29aeae7dcd5859c78ab99beda1dc256c6dd0e9fd"
 
 export const canonicalize = canonicalizeJcs
 
@@ -160,7 +162,7 @@ function validateManifest(manifest) {
   return manifest
 }
 
-export function validateHermesKeyGenerationAuthority(manifest, authority, now) {
+export function validateHermesKeyGenerationAuthority(manifest, authority, now, recovery = { recoverable: false }) {
   if (!exactKeys(authority, AUTHORITY_KEYS) || authority.schemaVersion !== 1
     || !GUID.test(authority.authorityId ?? "") || authority.purpose !== AUTHORITY_PURPOSE
     || authority.singleUse !== true) {
@@ -181,6 +183,16 @@ export function validateHermesKeyGenerationAuthority(manifest, authority, now) {
   for (const [key, value] of Object.entries(expected)) {
     if (authority[key] !== value) fail("HERMES_KEY_AUTHORITY_SCOPE_MISMATCH", `authority ${key} differs`)
   }
+  if (recovery.recoverable) {
+    if (!exactKeys(authority.recovery, ["priorAuthorityId", "priorAuthoritySha256", "terminalJournalSha256"])
+      || authority.recovery.priorAuthorityId !== recovery.priorAuthorityId
+      || authority.recovery.priorAuthoritySha256 !== recovery.priorAuthoritySha256
+      || authority.recovery.terminalJournalSha256 !== recovery.terminalJournalSha256) {
+      fail("HERMES_KEY_AUTHORITY_SCOPE_MISMATCH", "authority does not bind the exact retained recovery journal")
+    }
+  } else if (authority.recovery !== null) {
+    fail("HERMES_KEY_AUTHORITY_SCOPE_MISMATCH", "initial authority must not claim a recovery journal")
+  }
   const issued = Date.parse(authority.issuedAt)
   const expires = Date.parse(authority.expiresAt)
   const current = Date.parse(now)
@@ -188,6 +200,9 @@ export function validateHermesKeyGenerationAuthority(manifest, authority, now) {
     || !canonicalTimestamp(now) || ![issued, expires, current].every(Number.isFinite)
     || expires <= issued || expires - issued > MAX_AUTHORITY_AGE_MS || current < issued || current >= expires) {
     fail("HERMES_KEY_AUTHORITY_EXPIRED", "authority is outside its exact bounded validity window")
+  }
+  if (recovery.recoverable && issued <= Date.parse(recovery.failedAt)) {
+    fail("HERMES_KEY_AUTHORITY_SCOPE_MISMATCH", "recovery authority must be issued after the retained failure")
   }
   return authority
 }
@@ -224,7 +239,155 @@ function appendJournal(fsApi, record) {
   }
 }
 
-function consumeAuthority(fsApi, authority, manifestSha256, consumedAt) {
+function inspectRecoverableJournal(fsApi, manifestSha256) {
+  if (!existsNoFollow(fsApi, JOURNAL_PATH).exists) {
+    if (existsNoFollow(fsApi, RECOVERY_CLAIM_PATH).exists) {
+      fail("HERMES_KEY_AUTHORITY_REPLAY", "recovery claim exists without a retained generation journal")
+    }
+    return Object.freeze({
+      recoverable: false,
+      nextSequence: 0,
+      priorAuthorityId: null,
+      priorAuthoritySha256: null,
+      terminalJournalSha256: null,
+      failedAt: null,
+    })
+  }
+  if (existsNoFollow(fsApi, RECOVERY_CLAIM_PATH).exists) {
+    fail("HERMES_KEY_AUTHORITY_REPLAY", "retained recovery claim already fences this journal")
+  }
+  let records
+  let bytes
+  try {
+    bytes = readStableFile(fsApi, JOURNAL_PATH, 64 * 1024)
+    const text = bytes.toString("utf8")
+    if (!text.endsWith("\n") || text.endsWith("\n\n") || text.includes("\r")) {
+      fail("HERMES_KEY_AUTHORITY_REPLAY", "retained generation journal encoding is not canonical")
+    }
+    records = text.slice(0, -1).split("\n").map((line) => {
+      const parsed = JSON.parse(line)
+      if (line !== canonicalize(parsed)) {
+        fail("HERMES_KEY_AUTHORITY_REPLAY", "retained generation journal record is not canonical")
+      }
+      return parsed
+    })
+  } catch (error) {
+    if (error?.code) throw error
+    fail("HERMES_KEY_AUTHORITY_REPLAY", "retained generation journal is not canonical JSONL")
+  }
+  const [consumed, started, failed] = records
+  const exactCleanFailure = records.length === 3
+    && exactKeys(consumed, [
+      "schemaVersion", "recordType", "sequence", "authorityId", "authoritySha256", "packageId",
+      "manifestSha256", "consumedAt", "privateKeyPath", "publicKeyPath", "evidencePath",
+      "parentDirectoryDurability", "recoveryFence",
+    ])
+    && consumed.schemaVersion === "1.0-hermes-aegis-standing-hash-key-generation-journal"
+    && consumed.recordType === "AUTHORITY_CONSUMED" && consumed.sequence === 0
+    && GUID.test(consumed.authorityId ?? "") && SHA256.test(consumed.authoritySha256 ?? "")
+    && consumed.packageId === PACKAGE_ID
+    && [manifestSha256, RECOVERABLE_LEGACY_MANIFEST_SHA256].includes(consumed.manifestSha256)
+    && canonicalTimestamp(consumed.consumedAt)
+    && consumed.privateKeyPath === PRIVATE_KEY_PATH && consumed.publicKeyPath === PUBLIC_KEY_PATH
+    && consumed.evidencePath === EVIDENCE_PATH
+    && consumed.parentDirectoryDurability === "WINDOWS_DIRECTORY_FSYNC_UNAVAILABLE"
+    && consumed.recoveryFence === "RETAINED_ARTIFACT_OR_JOURNAL_REJECTS_REUSE"
+    && exactKeys(started, ["recordType", "sequence", "startedAt"])
+    && started.recordType === "KEY_GENERATION_STARTED" && started.sequence === 1
+    && canonicalTimestamp(started.startedAt)
+    && exactKeys(failed, [
+      "recordType", "sequence", "failedAt", "failureCode", "privateKeyExists", "publicKeyExists",
+      "evidenceExists", "privateKeyInspected", "automaticCleanupPerformed",
+    ])
+    && failed.recordType === "GENERATION_FAILED_PARTIAL_STATE" && failed.sequence === 2
+    && canonicalTimestamp(failed.failedAt) && failed.failureCode === "HERMES_KEY_GENERATION_FAILED"
+    && failed.privateKeyExists === false && failed.publicKeyExists === false && failed.evidenceExists === false
+    && failed.privateKeyInspected === false && failed.automaticCleanupPerformed === false
+    && Date.parse(consumed.consumedAt) <= Date.parse(started.startedAt)
+    && Date.parse(started.startedAt) <= Date.parse(failed.failedAt)
+  if (!exactCleanFailure) {
+    fail("HERMES_KEY_AUTHORITY_REPLAY", "retained generation journal is not the exact recoverable no-artifact failure")
+  }
+  return Object.freeze({
+    recoverable: true,
+    nextSequence: 3,
+    priorAuthorityId: consumed.authorityId,
+    priorAuthoritySha256: consumed.authoritySha256,
+    terminalJournalSha256: sha256(bytes),
+    failedAt: failed.failedAt,
+  })
+}
+
+function claimRecovery(fsApi, authority, manifestSha256, consumedAt, recovery) {
+  const claim = {
+    schemaVersion: "1.0-hermes-aegis-standing-hash-recovery-claim",
+    authorityId: authority.authorityId,
+    authoritySha256: canonicalSha256(authority),
+    priorAuthorityId: recovery.priorAuthorityId,
+    priorAuthoritySha256: recovery.priorAuthoritySha256,
+    terminalJournalSha256: recovery.terminalJournalSha256,
+    manifestSha256,
+    claimedAt: consumedAt,
+    singleUse: true,
+    privateKeyInspected: false,
+  }
+  let descriptor
+  let claimCreated = false
+  try {
+    descriptor = fsApi.openSync(RECOVERY_CLAIM_PATH,
+      flags(fsApi).O_WRONLY | flags(fsApi).O_CREAT | flags(fsApi).O_EXCL | (flags(fsApi).O_NOFOLLOW ?? 0), 0o600)
+    claimCreated = true
+    writeAll(fsApi, descriptor, Buffer.from(`${canonicalize(claim)}\n`, "utf8"))
+    fsApi.fsyncSync(descriptor)
+  } catch (error) {
+    if (error?.code === "EEXIST") fail("HERMES_KEY_AUTHORITY_REPLAY", "exclusive recovery claim already exists")
+    if (claimCreated) {
+      error.authorityConsumed = true
+      error.recoveryClaimPath = RECOVERY_CLAIM_PATH
+    }
+    throw error
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        fsApi.closeSync(descriptor)
+      } catch (error) {
+        if (claimCreated) {
+          error.authorityConsumed = true
+          error.recoveryClaimPath = RECOVERY_CLAIM_PATH
+        }
+        throw error
+      }
+    }
+  }
+}
+
+function consumeAuthority(fsApi, authority, manifestSha256, consumedAt, recovery) {
+  if (recovery.recoverable) {
+    if (authority.authorityId === recovery.priorAuthorityId) {
+      fail("HERMES_KEY_AUTHORITY_REPLAY", "recovery requires a distinct fresh authority")
+    }
+    claimRecovery(fsApi, authority, manifestSha256, consumedAt, recovery)
+    try {
+      appendJournal(fsApi, {
+        recordType: "RECOVERY_AUTHORITY_CONSUMED",
+        sequence: recovery.nextSequence,
+        authorityId: authority.authorityId,
+        authoritySha256: canonicalSha256(authority),
+        priorAuthorityId: recovery.priorAuthorityId,
+        priorAuthoritySha256: recovery.priorAuthoritySha256,
+        packageId: authority.packageId,
+        manifestSha256,
+        consumedAt,
+        recoveryBasis: "EXACT_NO_ARTIFACT_KEYGEN_FAILURE",
+        privateKeyInspected: false,
+      })
+    } catch (error) {
+      error.authorityConsumed = true
+      error.recoveryClaimPath = RECOVERY_CLAIM_PATH
+      throw error
+    }
+    return recovery.nextSequence + 1
+  }
   const record = {
     schemaVersion: "1.0-hermes-aegis-standing-hash-key-generation-journal",
     recordType: "AUTHORITY_CONSUMED",
@@ -254,16 +417,27 @@ function consumeAuthority(fsApi, authority, manifestSha256, consumedAt) {
   } finally {
     if (descriptor !== undefined) fsApi.closeSync(descriptor)
   }
+  return 1
 }
 
 function sanitizedEnvironment() {
   return Object.freeze({
     SystemRoot: "C:\\Windows",
     WINDIR: "C:\\Windows",
+    SystemDrive: "C:",
+    COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+    OS: "Windows_NT",
     PATH: "C:\\Windows\\System32\\OpenSSH;C:\\Windows\\System32",
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
     USERNAME: GENERATION_ACCOUNT,
+    USERDOMAIN: "HERMES",
     USERPROFILE: "C:\\Users\\bs",
+    HOMEDRIVE: "C:",
+    HOMEPATH: "\\Users\\bs",
     HOME: "C:\\Users\\bs",
+    LOCALAPPDATA: "C:\\Users\\bs\\AppData\\Local",
+    APPDATA: "C:\\Users\\bs\\AppData\\Roaming",
+    PROGRAMDATA: "C:\\ProgramData",
     TEMP: "C:\\Users\\bs\\AppData\\Local\\Temp",
     TMP: "C:\\Users\\bs\\AppData\\Local\\Temp",
   })
@@ -407,9 +581,6 @@ export function createHermesAegisStandingHashKey({
   assertFixedExecutable(fsApi, SSH_KEYGEN_PATH)
   assertFixedExecutable(fsApi, ICACLS_PATH)
   assertAbsentTargets(fsApi)
-  if (existsNoFollow(fsApi, JOURNAL_PATH).exists) {
-    fail("HERMES_KEY_AUTHORITY_REPLAY", "exclusive generation journal already exists")
-  }
 
   const manifestFile = path.resolve(repoRoot, ...MANIFEST_PATH.split("/"))
   const manifestBytes = readStableFile(fsApi, manifestFile)
@@ -421,9 +592,10 @@ export function createHermesAegisStandingHashKey({
     fail("HERMES_KEY_PACKAGE_INVALID", "manifest is not valid JSON")
   }
   const now = clock()
-  validateHermesKeyGenerationAuthority(manifest, authority, now)
-  const authoritySha256 = canonicalSha256(authority)
   const manifestSha256 = canonicalSha256(manifest)
+  const recovery = inspectRecoverableJournal(fsApi, manifestSha256)
+  validateHermesKeyGenerationAuthority(manifest, authority, now, recovery)
+  const authoritySha256 = canonicalSha256(authority)
   const planned = {
     schemaVersion: "1.0-hermes-aegis-standing-hash-key-plan",
     status: "DRY_RUN",
@@ -442,6 +614,7 @@ export function createHermesAegisStandingHashKey({
     journalPath: JOURNAL_PATH,
     generatedFresh: false,
     existedBefore: false,
+    recoveryEligible: recovery.recoverable,
     authorityConsumed: false,
     privateKeyInspected: false,
     privateKeyLocalOnly: true,
@@ -452,9 +625,8 @@ export function createHermesAegisStandingHashKey({
   if (mode === "dry-run") return planned
 
   const consumedAt = clock()
-  validateHermesKeyGenerationAuthority(manifest, authority, consumedAt)
-  consumeAuthority(fsApi, authority, manifestSha256, consumedAt)
-  let sequence = 1
+  validateHermesKeyGenerationAuthority(manifest, authority, consumedAt, recovery)
+  let sequence = consumeAuthority(fsApi, authority, manifestSha256, consumedAt, recovery)
   try {
     assertAbsentTargets(fsApi)
     appendJournal(fsApi, { recordType: "KEY_GENERATION_STARTED", sequence: sequence++, startedAt: clock() })
