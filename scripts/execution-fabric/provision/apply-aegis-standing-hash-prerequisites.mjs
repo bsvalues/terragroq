@@ -12,6 +12,27 @@ import {
 } from "./aegis-standing-hash-prerequisites.mjs"
 import { canonicalizeJcs } from "../canonical-json.mjs"
 
+/**
+ * @typedef {{dev:number, ino:number, mode:number, nlink:number, uid:number, gid:number, size:number,
+ * mtimeMs:number, ctimeMs:number, isFile:()=>boolean, isDirectory:()=>boolean, isSymbolicLink:()=>boolean}} FabricStats
+ * @typedef {{constants:typeof fs.constants, lstatSync:(path:import("node:fs").PathLike)=>FabricStats,
+ * fstatSync:(fd:number)=>FabricStats, realpathSync:(path:import("node:fs").PathLike)=>string,
+ * openSync:(path:import("node:fs").PathLike, flags:number, mode?:number)=>number,
+ * readFileSync:(path:import("node:fs").PathLike|number)=>Buffer, closeSync:(fd:number)=>void,
+ * fsyncSync:(fd:number)=>void, writeSync:(fd:number, buffer:Buffer, offset:number, length:number, position:number|null)=>number,
+ * mkdirSync:(path:import("node:fs").PathLike, options:{recursive?:boolean, mode?:number})=>unknown,
+ * chmodSync:(path:import("node:fs").PathLike, mode:number)=>void, chownSync:(path:import("node:fs").PathLike, uid:number, gid:number)=>void,
+ * fchmodSync:(fd:number, mode:number)=>void, fchownSync:(fd:number, uid:number, gid:number)=>void,
+ * readdirSync:(path:import("node:fs").PathLike)=>string[], linkSync:(existing:import("node:fs").PathLike, target:import("node:fs").PathLike)=>void,
+ * renameSync:(oldPath:import("node:fs").PathLike, newPath:import("node:fs").PathLike)=>void,
+ * unlinkSync:(path:import("node:fs").PathLike)=>void, rmdirSync:(path:import("node:fs").PathLike)=>void,
+ * rmSync:(path:import("node:fs").PathLike, options:{recursive?:boolean, force?:boolean})=>void}} FabricFsApi
+ * @typedef {{platform:string, getuid?:()=>number, geteuid?:()=>number, getegid?:()=>number, getgroups?:()=>number[],
+ * seteuid?:(uid:number)=>void, setegid?:(gid:number)=>void, setgroups?:(groups:number[])=>void}} FabricProcessApi
+ * @typedef {{sourcePath:string, expected:{repository:string,commit:string}}} CheckoutInspectionInput
+ * @typedef {{sourcePath:string, destination:string, expected:{repository:string,commit:string}}} CheckoutPublishInput
+ */
+
 export const MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-provisioning-package.v1.json"
 export const JOURNAL_PREFIX = "/var/lib/williamos-aegis-standing-hash-"
 export const AUTHORIZED_KEYS_RECORD_OPTIONS = Object.freeze([
@@ -51,6 +72,7 @@ const EXPECTED_MUTATIONS = Object.freeze([
   "INSTALL_ROOT_OWNED_BOOTSTRAP",
   "INSTALL_ROOT_OWNED_RELEASE_MANIFEST",
   "INSTALL_ROOT_OWNED_SSH_ENTRYPOINT",
+  "INSTALL_ROOT_OWNED_CANONICAL_JSON",
   "INSTALL_ROOT_OWNED_REPLAY_EPOCH_INITIALIZER",
   "CREATE_PRIVATE_REQUEST_ROOT",
   "CREATE_PRIVATE_LEDGER_ROOT",
@@ -86,6 +108,7 @@ const CANONICAL_JSON_SOURCE = "scripts/execution-fabric/canonical-json.mjs"
 const EXPECTED_ROOT_ASSETS = Object.freeze({
   bootstrap: "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs",
   "ssh-entrypoint": "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs",
+  "canonical-json": "/usr/local/libexec/canonical-json.mjs",
   "replay-epoch-initializer": "/usr/local/libexec/williamos/aegis-standing-hash-replay-epoch.mjs",
   "release-manifest": "/etc/williamos/fabric/trusted-main-release.json",
 })
@@ -111,9 +134,9 @@ const SSH_ENTRYPOINT_SOURCE = "scripts/execution-fabric/provision/aegis-standing
 const REPLAY_INITIALIZER_SOURCE = "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs"
 const APPLY_SOURCE = "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs"
 const KEY_GENERATOR_SOURCE = "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs"
+const REPAIR_SOURCE = "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs"
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const SHA256 = /^[a-f0-9]{64}$/
-const SSH_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}$/
 const MAX_FILE_BYTES = 1024 * 1024
 const GIT_EXECUTABLE = "/usr/bin/git"
 const GIT_MAX_OUTPUT_BYTES = 1024 * 1024
@@ -216,7 +239,7 @@ function validateManifest(manifest) {
     const asset = assets[id]
     if (asset?.path !== expectedPath || asset.type !== "file" || asset.owner !== "root"
       || asset.group !== "root" || asset.singleLink !== true
-      || asset.mode !== (id === "release-manifest" ? "0444" : "0555")) {
+      || asset.mode !== (["release-manifest", "canonical-json"].includes(id) ? "0444" : "0555")) {
       fail("AEGIS_PROVISION_PACKAGE_INVALID", `root-owned asset ${id} differs`)
     }
   }
@@ -261,7 +284,7 @@ function validateManifest(manifest) {
     fail("AEGIS_PROVISION_PACKAGE_INVALID", "apply contract differs")
   }
   const bindingPaths = (manifest.bindings ?? []).map(({ path: bindingPath }) => bindingPath)
-  if (!same(bindingPaths, [...EXPECTED_CLOSURE, CANONICAL_JSON_SOURCE, SSH_ENTRYPOINT_SOURCE, REPLAY_INITIALIZER_SOURCE, APPLY_SOURCE, KEY_GENERATOR_SOURCE])
+  if (!same(bindingPaths, [...EXPECTED_CLOSURE, CANONICAL_JSON_SOURCE, SSH_ENTRYPOINT_SOURCE, REPLAY_INITIALIZER_SOURCE, APPLY_SOURCE, KEY_GENERATOR_SOURCE, REPAIR_SOURCE])
     || manifest.bindings.some((binding) => !SHA256.test(binding.sha256 ?? "") || binding.textNormalization !== "LF")) {
     fail("AEGIS_PROVISION_PACKAGE_INVALID", "reviewed package bindings differ")
   }
@@ -506,6 +529,7 @@ function assertRootOwnedDirect(candidate, fsApi, kind) {
   return stats
 }
 
+/** @param {string} checkoutRoot @param {FabricFsApi} fsApi */
 export function assertNoGitAlternates(checkoutRoot, fsApi = fs) {
   const alternatesPath = path.posix.join(checkoutRoot, ".git", "objects", "info", "alternates")
   if (existsNoFollow(fsApi, alternatesPath).exists) {
@@ -722,6 +746,7 @@ function buildLayout(manifest, closure, publicKey, account) {
   files.push(
     { id: "bootstrap", path: EXPECTED_ROOT_ASSETS.bootstrap, bytes: closure.get(EXPECTED_CLOSURE[0]), uid: 0, gid: 0, mode: 0o555 },
     { id: "ssh-entrypoint", path: EXPECTED_ROOT_ASSETS["ssh-entrypoint"], bytes: closure.get(SSH_ENTRYPOINT_SOURCE), uid: 0, gid: 0, mode: 0o555 },
+    { id: "canonical-json", path: EXPECTED_ROOT_ASSETS["canonical-json"], bytes: closure.get(CANONICAL_JSON_SOURCE), uid: 0, gid: 0, mode: 0o444 },
     { id: "replay-epoch-initializer", path: EXPECTED_ROOT_ASSETS["replay-epoch-initializer"], bytes: closure.get(REPLAY_INITIALIZER_SOURCE), uid: 0, gid: 0, mode: 0o555 },
     { id: "authorized-keys", path: manifest.invocationBoundary.authorizedKeysPath, bytes: Buffer.from(publicKey.authorizedRecord, "utf8"), ...account, mode: 0o600 },
   )
@@ -1025,6 +1050,12 @@ function evidenceBase(manifest, authority, publicKey, mode, journalPath, planned
   }
 }
 
+/**
+ * @param {{authority?:object, publicKeyBytes?:string|Buffer, keyGenerationEvidence?:object, mode?:string,
+ * repoRoot?:string, fsApi?:FabricFsApi, processApi?:FabricProcessApi, hostname?:()=>string, clock?:()=>string,
+ * machineIdentitySha256?:string, accountIdentity?:{uid:number,gid:number,home?:string}, reviewedCheckoutSourcePath?:string,
+ * checkoutApi?:{inspect:(input:CheckoutInspectionInput)=>object,publish:(input:CheckoutPublishInput)=>object}, packageClosure?:Map<string,Buffer>}} [options]
+ */
 export function provisionAegisStandingHashPrerequisites({
   authority,
   publicKeyBytes,
