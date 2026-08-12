@@ -17,7 +17,7 @@
   },
   "serviceAccount": {
     "name": "williamos-fabric",
-    "home": "/var/empty/williamos-fabric",
+    "home": "/home/williamos-fabric",
     "shell": "/bin/bash"
   },
   "priorState": {
@@ -80,7 +80,7 @@
   "packageRelease": {
     "commit": "05dad92db571fb4bf6d2bd1218621eb60277a836",
     "checkoutPath": "/root/williamos-package/05dad92db571fb4bf6d2bd1218621eb60277a836",
-    "installerSha256": "1cbb6c0ab4b458df09bd4a73fbed424a16b43a102a324c853b9b4b298d04f152",
+    "installerSha256": "b909e31347ea8c30c7145147ee5e61af07b815986a1c563c1938552349e39699",
     "validatorSha256": "10f4f1fa333e71cfa9a0d0988dade630608cdd9d2f841e1cf3be8e24d85258f1",
     "evaluatorSha256": "5394ef5cb93f5d70277716e041ebdd825969a17fa984ca84a6605e98bcb22073",
     "standingAuthoritySha256": "393a6f684c4c85228821b8604fa66d62482f3b4876c01ab839e67528a4be10fa"

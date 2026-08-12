@@ -149,7 +149,7 @@ function validateManifest(manifest) {
     || manifest.machine?.platform !== "linux" || manifest.machine?.effectiveUid !== 0
     || manifest.machine?.hostname !== "aegis" || !DIGEST.test(manifest.machine?.machineIdSha256 ?? "")
     || manifest.serviceAccount?.name !== "williamos-fabric"
-    || manifest.serviceAccount?.home !== "/var/empty/williamos-fabric" || manifest.serviceAccount?.shell !== "/bin/bash"
+    || manifest.serviceAccount?.home !== "/home/williamos-fabric" || manifest.serviceAccount?.shell !== "/bin/bash"
     || prior?.commit !== CURRENT_COMMIT || prior.releaseRoot !== `/opt/williamos/releases/${CURRENT_COMMIT}`
     || prior.trustedReleaseManifestPath !== TRUSTED_RELEASE_MANIFEST_PATH
     || prior.activationMarkerPath !== ACTIVATION_MARKER_PATH || prior.replayJournalPath !== REPLAY_JOURNAL_PATH
