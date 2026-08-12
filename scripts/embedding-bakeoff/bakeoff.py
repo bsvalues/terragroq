@@ -81,6 +81,8 @@ def run(corpus_dir, backend, base_url, model, api_key, k, dim):
         "recall@10": M.mean([r["recall@10"] for r in per_query]),
         "mrr": M.mean([r["mrr"] for r in per_query]),
         "ndcg@10": M.mean([r["ndcg@10"] for r in per_query]),
+        "mrr_ci95": M.bootstrap_ci([r["mrr"] for r in per_query]),
+        "ndcg@10_ci95": M.bootstrap_ci([r["ndcg@10"] for r in per_query]),
         "near_dup_discrimination": M.mean([r["near_dup_ok"] for r in per_query]),
         "false_positive_rate": M.false_positive_rate(no_gold_top1, fp_threshold),
         "fp_threshold": round(fp_threshold, 4),

@@ -47,8 +47,8 @@ class TestPipeline(unittest.TestCase):
                     "false_positive_rate", "near_dup_discrimination"):
             self.assertIn(key, s)
             self.assertIsNotNone(s[key])
-        self.assertEqual(s["queries"], 52)
-        self.assertEqual(s["documents"], 34)
+        self.assertEqual(s["queries"], 80)
+        self.assertEqual(s["documents"], 49)
         self.assertTrue(0.0 <= s["recall@5"] <= 1.0)
         # lexical floor must still retrieve obvious lexically-overlapping matches
         self.assertGreater(s["recall@10"], 0.3)
@@ -60,6 +60,9 @@ class TestPipeline(unittest.TestCase):
         # manifest records the fingerprint + dimension
         self.assertEqual(len(result["manifest"]["corpus_fingerprint"]), 64)
         self.assertEqual(result["manifest"]["embedding_dim"], 2048)
+        ci = s["mrr_ci95"]
+        self.assertEqual(len(ci), 2)
+        self.assertLessEqual(ci[0], ci[1])
 
 
 if __name__ == "__main__":
