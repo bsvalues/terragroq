@@ -322,7 +322,7 @@ function validateCurrentActivation(manifest, releaseBytes, markerBytes, authorit
   }
 }
 
-function validateReplayUpgradeJournal(bytes) {
+function validateReplayUpgradeJournal(bytes, manifest) {
   let records
   try { records = bytes.toString("utf8").trimEnd().split("\n").map((line) => JSON.parse(line)) } catch {
     fail("AEGIS_ADMISSION_PROMOTION_REPLAY_UPGRADE_INVALID", "replay upgrade journal is malformed")
@@ -333,7 +333,7 @@ function validateReplayUpgradeJournal(bytes) {
     || prepared.schema_version !== "1.0-aegis-standing-hash-replay-ledger-upgrade-journal"
     || !UUID.test(prepared.authority_id ?? "") || !DIGEST.test(prepared.authority_sha256 ?? "")
     || !DIGEST.test(prepared.manifest_sha256 ?? "")
-    || prepared.new_commit !== CURRENT_COMMIT || committed?.record_type !== "COMMITTED"
+    || prepared.new_commit !== manifest.evidenceRelease.sourceCommit || committed?.record_type !== "COMMITTED"
     || committed.phase !== 2 || !same(committed.completed_mutations, REPLAY_UPGRADE_ORDER)
     || committed.replay_epoch_initialized !== false || committed.operational !== false
     || records.some((record) => String(record?.record_type ?? "").startsWith("FAILED"))) {
@@ -486,7 +486,7 @@ function inspectPriorState(io, manifest, authority, heldLocks = false) {
   }
   const upgradeBytes = assertExactFile(io, manifest.priorState.replayUpgradeJournalPath,
     { uid: 0, gid: 0, mode: 0o600, digest: authority.replayUpgradeJournalSha256 })
-  const upgrade = validateReplayUpgradeJournal(upgradeBytes)
+  const upgrade = validateReplayUpgradeJournal(upgradeBytes, manifest)
   if (!manifest.priorState.replayUpgradeJournalPath.endsWith(`-${upgrade.prepared.authority_id}.journal.jsonl`)) {
     fail("AEGIS_ADMISSION_PROMOTION_REPLAY_UPGRADE_INVALID", "replay upgrade journal path and authority differ")
   }
@@ -582,7 +582,7 @@ function recoverCommittedPromotion(io, manifest, manifestBytes, authority, mutat
   }
   const upgradeBytes = assertExactFile(io, manifest.priorState.replayUpgradeJournalPath,
     { uid: 0, gid: 0, mode: 0o600, digest: authority.replayUpgradeJournalSha256 })
-  validateReplayUpgradeJournal(upgradeBytes)
+  validateReplayUpgradeJournal(upgradeBytes, manifest)
   assertExactFile(io, manifest.priorState.authorizedKeysPath,
     { uid: account.uid, gid: account.gid, mode: 0o600, digest: authority.priorAuthorizedKeysSha256 })
   assertExactFile(io, NODE_LEASE_PATH, { absent: true })
