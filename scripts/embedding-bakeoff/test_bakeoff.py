@@ -86,6 +86,7 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(result["manifest"]["top_k"], 3)
         self.assertTrue(all(len(row["top_k"]) == 3 for row in result["per_query"]))
         self.assertIn("recall@k", result["summary"])
+        self.assertTrue(all(len(row["ranking"]) == 49 for row in result["per_query"]))
 
     def test_output_parent_is_created_before_execution(self):
         with tempfile.TemporaryDirectory() as root:

@@ -173,12 +173,16 @@ def run(corpus_dir, backend, base_url, model, api_key, k, dim,
     for q, qv in zip(queries, q_vecs):
         ranked = rank(qv, doc_vecs, doc_ids)
         ranked_ids = [rid for rid, _ in ranked]
-        top1 = ranked[0][1] if ranked else 0.0
         gold = q.get("gold", [])
         split = "calibration" if q["id"] in CALIBRATION_QUERY_IDS else "evaluation"
+        ranking_evidence = [{"id": doc_id, "similarity": round(similarity, 10)}
+                            for doc_id, similarity in ranked]
+        top1_evidence = round(ranking_evidence[0]["similarity"], 6) if ranking_evidence else 0.0
         row = {
             "id": q["id"], "type": q["type"], "gold": gold,
-            "split": split, "top_k": ranked_ids[:k], "top1_sim": round(top1, 6),
+            "split": split,
+            "ranking": ranking_evidence,
+            "top_k": ranked_ids[:k], "top1_sim": top1_evidence,
             "recall@5": M.recall_at_k(ranked_ids, gold, 5),
             "recall@10": M.recall_at_k(ranked_ids, gold, 10),
             "recall@k": M.recall_at_k(ranked_ids, gold, k),
@@ -189,11 +193,11 @@ def run(corpus_dir, backend, base_url, model, api_key, k, dim,
         }
         per_query.append(row)
         if split == "calibration" and gold:
-            calibration_gold_top1.append(top1)
+            calibration_gold_top1.append(top1_evidence)
         elif split == "calibration":
-            calibration_no_gold_top1.append(top1)
+            calibration_no_gold_top1.append(top1_evidence)
         elif split == "evaluation" and not gold:
-            evaluation_no_gold_top1.append(top1)
+            evaluation_no_gold_top1.append(top1_evidence)
 
     gold_midpoint = M.median(calibration_gold_top1) or 0.0
     no_gold_ceiling = max(calibration_no_gold_top1, default=0.0)

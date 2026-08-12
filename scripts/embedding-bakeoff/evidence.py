@@ -7,6 +7,7 @@ import math
 import os
 import shutil
 import tempfile
+import urllib.parse
 
 import metrics as M
 from bakeoff import (CALIBRATION_QUERY_IDS, canonical_json_bytes, corpus_fingerprint,
@@ -54,6 +55,10 @@ def validate_result(result, docs, queries, model, runtime, host,
         raise ValueError("standing evidence is only valid for an admitted endpoint model run")
     if manifest.get("model") != model.get("model_id"):
         raise ValueError("result model does not match the model manifest")
+    base_url = manifest.get("base_url")
+    endpoint_host = (urllib.parse.urlparse(base_url).hostname or "").lower() if isinstance(base_url, str) else ""
+    if endpoint_host not in {str(value).lower() for value in host.get("endpoint_hosts", [])}:
+        raise ValueError("result endpoint host is not bound by the host manifest")
     if manifest.get("corpus_fingerprint") != corpus_fingerprint(docs, queries):
         raise ValueError("result bundle corpus fingerprint does not match the frozen corpus")
     expected_vector_contract = {
@@ -88,6 +93,9 @@ def validate_result(result, docs, queries, model, runtime, host,
 
     queries_by_id = {query["id"]: query for query in queries}
     docs_by_id = {doc["id"] for doc in docs}
+    top_k_size = manifest.get("top_k")
+    if isinstance(top_k_size, bool) or not isinstance(top_k_size, int) or not 0 < top_k_size <= len(docs):
+        raise ValueError("result top_k is invalid")
     if len(rows) != len(queries) or {row.get("id") for row in rows} != set(queries_by_id):
         raise ValueError("result must contain exactly one row for every frozen query")
     for row in rows:
@@ -95,15 +103,50 @@ def validate_result(result, docs, queries, model, runtime, host,
         expected_split = "calibration" if row["id"] in CALIBRATION_QUERY_IDS else "evaluation"
         if row.get("type") != query["type"] or row.get("gold") != query["gold"] or row.get("split") != expected_split:
             raise ValueError(f"result row {row['id']} does not match frozen labels and split")
+        ranking = row.get("ranking")
+        if not isinstance(ranking, list) or len(ranking) != len(docs):
+            raise ValueError(f"result row {row['id']} must retain the full ranking")
+        ranked_ids = []
+        for ranked in ranking:
+            if not isinstance(ranked, dict) or set(ranked) != {"id", "similarity"}:
+                raise ValueError(f"result row {row['id']} has malformed ranking evidence")
+            similarity = ranked["similarity"]
+            if (isinstance(similarity, bool) or not isinstance(similarity, (int, float)) or
+                    not math.isfinite(similarity) or not -1.000001 <= similarity <= 1.000001):
+                raise ValueError(f"result row {row['id']} has invalid similarity evidence")
+            ranked_ids.append(ranked["id"])
+        if len(set(ranked_ids)) != len(docs) or set(ranked_ids) != docs_by_id:
+            raise ValueError(f"result row {row['id']} ranking is not a document permutation")
         top_k = row.get("top_k")
-        if not isinstance(top_k, list) or not top_k or len(top_k) != len(set(top_k)) or any(value not in docs_by_id for value in top_k):
+        if top_k != ranked_ids[:top_k_size]:
             raise ValueError(f"result row {row['id']} has invalid top_k")
-        for field in ("top1_sim", "recall@5", "recall@10", "recall@k", "mrr", "ndcg@10", "ndcg@k"):
-            value = row.get(field)
-            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)):
-                raise ValueError(f"result row {row['id']} has invalid {field}")
+        expected_row = {
+            "top1_sim": round(ranking[0]["similarity"], 6),
+            "recall@5": M.recall_at_k(ranked_ids, query["gold"], 5),
+            "recall@10": M.recall_at_k(ranked_ids, query["gold"], 10),
+            "recall@k": M.recall_at_k(ranked_ids, query["gold"], top_k_size),
+            "mrr": M.mrr(ranked_ids, query["gold"]),
+            "ndcg@10": M.ndcg_at_k(ranked_ids, query["gold"], 10),
+            "ndcg@k": M.ndcg_at_k(ranked_ids, query["gold"], top_k_size),
+            "near_dup_ok": M.near_dup_ok(ranked_ids, query["gold"], query.get("distractor")),
+        }
+        for field, expected in expected_row.items():
+            if not close_enough(row.get(field), expected):
+                raise ValueError(f"result row {row['id']} {field} does not match ranking evidence")
 
     evaluated = [row for row in rows if row["split"] == "evaluation"]
+    calibration_gold = [row["top1_sim"] for row in rows
+                        if row["split"] == "calibration" and row["gold"]]
+    calibration_no_gold = [row["top1_sim"] for row in rows
+                           if row["split"] == "calibration" and not row["gold"]]
+    evaluation_no_gold = [row["top1_sim"] for row in evaluated if not row["gold"]]
+    gold_midpoint = M.median(calibration_gold) or 0.0
+    no_gold_ceiling = max(calibration_no_gold, default=0.0)
+    threshold = ((gold_midpoint + no_gold_ceiling) / 2.0
+                 if gold_midpoint > no_gold_ceiling else gold_midpoint)
+    by_type = {}
+    for row in evaluated:
+        by_type.setdefault(row["type"], []).append(row)
     recomputed = {
         "recall@5": M.mean([row["recall@5"] for row in evaluated]),
         "recall@10": M.mean([row["recall@10"] for row in evaluated]),
@@ -112,11 +155,26 @@ def validate_result(result, docs, queries, model, runtime, host,
         "ndcg@10": M.mean([row["ndcg@10"] for row in evaluated]),
         "ndcg@k": M.mean([row["ndcg@k"] for row in evaluated]),
         "near_dup_discrimination": M.mean([row.get("near_dup_ok") for row in evaluated]),
+        "false_positive_rate": M.false_positive_rate(evaluation_no_gold, threshold),
+        "fp_threshold": round(threshold, 6),
+        "mrr_ci95": M.bootstrap_ci([row["mrr"] for row in evaluated]),
+        "ndcg@10_ci95": M.bootstrap_ci([row["ndcg@10"] for row in evaluated]),
+        "per_category_recall@5": {
+            query_type: M.mean([row["recall@5"] for row in typed_rows])
+            for query_type, typed_rows in sorted(by_type.items())
+        },
     }
     for field, expected in recomputed.items():
-        if not close_enough(summary.get(field), expected):
+        actual = summary.get(field)
+        if isinstance(expected, (dict, list)):
+            matches = actual == expected
+        else:
+            matches = close_enough(actual, expected)
+        if not matches:
             raise ValueError(f"result summary {field} does not match per-query evidence")
-    if summary.get("queries") != len(queries) or summary.get("documents") != len(docs):
+    if (summary.get("queries") != len(queries) or summary.get("documents") != len(docs) or
+            summary.get("evaluation_queries") != len(evaluated) or
+            summary.get("calibration_queries") != len(queries) - len(evaluated)):
         raise ValueError("result summary corpus counts do not match the frozen corpus")
 
 
