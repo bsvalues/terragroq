@@ -249,6 +249,23 @@ describe("AEGIS v1 limited standing compute authority", () => {
       .toMatchObject({ status: "REJECTED", code: "INVALID_SHAPE" })
   })
 
+  it("enforces the reviewed one-hour evidence freshness ceiling", () => {
+    const atBoundary = request()
+    for (const field of ["placement_evidence", "capability_evidence"] as const) {
+      atBoundary[field].observed_at = "2026-08-10T21:00:00.000Z"
+      atBoundary[field].expires_at = "2026-08-10T22:01:00.000Z"
+      const { evidence_sha256: _ignored, ...body } = atBoundary[field]
+      atBoundary[field].evidence_sha256 = sha256(body)
+    }
+    expect(evaluate(atBoundary)).toMatchObject({ status: "ADMITTED" })
+
+    const tooOld = structuredClone(atBoundary)
+    tooOld.placement_evidence.observed_at = "2026-08-10T20:59:59.999Z"
+    const { evidence_sha256: _ignored, ...body } = tooOld.placement_evidence
+    tooOld.placement_evidence.evidence_sha256 = sha256(body)
+    expect(evaluate(tooOld)).toMatchObject({ status: "REJECTED", code: "EVIDENCE_STALE" })
+  })
+
   it("rejects missing, unsafe, mismatched, and malformed bindings", () => {
     expect(evaluateAegisStandingEligibility({ authority, request: request(), candidateAdmission: null, now: () => now }))
       .toMatchObject({ status: "REJECTED", code: "ADMISSION_REQUIRED" })
