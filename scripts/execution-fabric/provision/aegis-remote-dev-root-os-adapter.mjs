@@ -120,18 +120,24 @@ function exactSharedGitGroup(gid) {
     return group.length === 4 && group[3] === "" && same(primary, ["williamos-fabric", "williamos-git-broker"])
   } catch { return false }
 }
+export function inspectUserProcessArgv(argvs) {
+  return Array.isArray(argvs) && argvs.every((argv) => Array.isArray(argv) && (
+    (["/usr/lib/systemd/systemd", "/lib/systemd/systemd"].includes(argv[0]) && argv.length === 2 && argv[1] === "--user")
+    || (argv.length === 1 && argv[0] === "(sd-pam)")
+  ))
+}
 function userProcesses(uid) {
   const result = spawnSync("/usr/bin/pgrep", ["-u", String(uid)], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV })
   if (result.error || ![0, 1].includes(result.status)) return { proven: false, pids: [], onlyManager: false }
   const pids = result.status === 1 ? [] : String(result.stdout ?? "").trim().split(/\s+/).filter(Boolean)
-  let onlyManager = true
+  const argvs = []
   for (const pid of pids) {
     try {
       const argv = fs.readFileSync(`/proc/${pid}/cmdline`).toString("utf8").split("\0").filter(Boolean)
-      if (![/^\/usr\/lib\/systemd\/systemd$/, /^\/lib\/systemd\/systemd$/].some((pattern) => pattern.test(argv[0] ?? "")) || !argv.includes("--user")) onlyManager = false
-    } catch { onlyManager = false }
+      argvs.push(argv)
+    } catch { return { proven: false, pids, onlyManager: false } }
   }
-  return { proven: true, pids, onlyManager }
+  return { proven: true, pids, onlyManager: inspectUserProcessArgv(argvs) }
 }
 function sharedGroupProcessesExact(gid, allowedUids) {
   try {
@@ -608,7 +614,7 @@ function applyTransport(authority) {
     if (lexists(temporary)) { if (!exactFile(temporary, sha(Buffer.from(line)), 0, 0, 0o444)) fail("TRANSPORT_DRIFT", "transaction transport staging file differs") }
     else { const handle = fs.openSync(temporary, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o444); fs.writeFileSync(handle, line); fs.fsyncSync(handle); fs.fchmodSync(handle, 0o444); fs.closeSync(handle); const stagedParent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(stagedParent); fs.closeSync(stagedParent) }
     fs.renameSync(temporary, destination); const parent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(parent); fs.closeSync(parent)
-  } else if (state === "ABSENT") { const handle = fs.openSync(destination, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o444); fs.writeFileSync(handle, line); fs.fsyncSync(handle); fs.closeSync(handle); const parent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(parent); fs.closeSync(parent) }
+  } else if (state === "ABSENT") { const handle = fs.openSync(destination, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o444); fs.writeFileSync(handle, line); fs.fchmodSync(handle, 0o444); fs.fsyncSync(handle); fs.closeSync(handle); const parent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(parent); fs.closeSync(parent) }
   run("/usr/sbin/sshd", ["-t"])
   for (const address of [HERMES_SOURCE_ADDRESS, PREVIOUS_HERMES_SOURCE_ADDRESS]) {
     const effective = run("/usr/sbin/sshd", ["-T", "-C", `user=williamos-fabric,host=aegis,addr=${address}`])
