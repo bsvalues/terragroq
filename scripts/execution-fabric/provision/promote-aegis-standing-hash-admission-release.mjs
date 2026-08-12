@@ -20,7 +20,6 @@ export const LEDGER_MUTATION_LOCK_PATH = "/var/lib/williamos/fabric/standing-has
 export const REQUEST_ROOT = "/var/lib/williamos/fabric/standing-hash-requests"
 export const AUTHORITY_ROOT = "/var/lib/williamos/fabric/standing-hash-promotion-authorities"
 
-const CURRENT_COMMIT = "2593e782fdbaefbc05f617cdac3acde4a4255be0"
 const REPOSITORY = "bsvalues/terragroq"
 const DIGEST = /^[a-f0-9]{64}$/
 const COMMIT = /^[a-f0-9]{40}$/
@@ -151,7 +150,7 @@ function validateManifest(manifest) {
     || manifest.machine?.hostname !== "aegis" || !DIGEST.test(manifest.machine?.machineIdSha256 ?? "")
     || manifest.serviceAccount?.name !== "williamos-fabric"
     || !ALLOWED_SERVICE_HOMES.has(manifest.serviceAccount?.home) || manifest.serviceAccount?.shell !== "/bin/bash"
-    || prior?.commit !== CURRENT_COMMIT || prior.releaseRoot !== `/opt/williamos/releases/${CURRENT_COMMIT}`
+    || !COMMIT.test(prior?.commit ?? "") || prior.releaseRoot !== `/opt/williamos/releases/${prior.commit}`
     || prior.trustedReleaseManifestPath !== TRUSTED_RELEASE_MANIFEST_PATH
     || prior.activationMarkerPath !== ACTIVATION_MARKER_PATH || prior.replayJournalPath !== REPLAY_JOURNAL_PATH
     || prior.requestRoot !== REQUEST_ROOT || prior.authorizedKeysPath !== "/home/williamos-fabric/.ssh/authorized_keys"
@@ -300,7 +299,7 @@ function validateCurrentActivation(manifest, releaseBytes, markerBytes, authorit
     "release_manifest_sha256"])
     || sha256(releaseBytes) !== authority.priorReleaseManifestSha256
     || release.schema_version !== "1.0-williamos-trusted-main-release" || release.repository !== REPOSITORY
-    || release.trusted_ref !== "refs/heads/main" || release.head_commit !== CURRENT_COMMIT
+    || release.trusted_ref !== "refs/heads/main" || release.head_commit !== manifest.priorState.commit
     || release.release_root !== manifest.priorState.releaseRoot || release.reviewed !== true
     || !canonicalTimestamp(release.deployed_at) || !same(release.file_sha256, manifest.priorState.closure)
     || release.activation_marker_path !== ACTIVATION_MARKER_PATH
@@ -313,7 +312,7 @@ function validateCurrentActivation(manifest, releaseBytes, markerBytes, authorit
     || sha256(markerBytes) !== authority.priorActivationMarkerSha256
     || marker.schema_version !== "1.0-aegis-standing-hash-activation-marker"
     || marker.upgrade_id !== "aegis-standing-hash-replay-ledger-upgrade-v1"
-    || !UUID.test(marker.authority_id ?? "") || marker.new_commit !== CURRENT_COMMIT
+    || !UUID.test(marker.authority_id ?? "") || marker.new_commit !== manifest.priorState.commit
     || !same(marker.runtime_closure_sha256, manifest.priorState.closure)
     || !DIGEST.test(marker.manifest_sha256 ?? "") || !canonicalTimestamp(marker.prepared_at)
     || release.activation_marker_sha256 !== canonicalSha256(marker)) {
