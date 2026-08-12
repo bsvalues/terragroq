@@ -15,7 +15,7 @@ import {
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
 import { isTrustedAtomicInstallSourceMode } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
-import { exactLedgerAncestorContract, exactNftBoundaryJson, exactNftBoundaryLines, inspectBrokerReadinessSamples, inspectDurableLedgerReconciliation, inspectExactInertNetworkPredecessor, inspectForcedCommandTransportReconciliation, inspectNftTableList, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { exactLedgerAncestorContract, exactNftBoundaryJson, exactNftBoundaryLines, inspectBrokerReadinessSamples, inspectDurableLedgerReconciliation, inspectExactInertNetworkPredecessor, inspectForcedCommandTransportReconciliation, inspectNftTableList, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, inspectUserProcessArgv, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -96,6 +96,18 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(isTrustedAtomicInstallSourceMode(0o444)).toBe(true)
     expect(isTrustedAtomicInstallSourceMode(0o555)).toBe(true)
     expect(isTrustedAtomicInstallSourceMode(0o600)).toBe(false)
+  })
+  it("accepts only the exact systemd user-manager and sd-pam companion processes", () => {
+    expect(inspectUserProcessArgv([["/usr/lib/systemd/systemd", "--user"], ["(sd-pam)"]])).toBe(true)
+    expect(inspectUserProcessArgv([["/lib/systemd/systemd", "--user"], ["(sd-pam)"]])).toBe(true)
+    expect(inspectUserProcessArgv([["/usr/lib/systemd/systemd", "--user", "--foreign"]])).toBe(false)
+    expect(inspectUserProcessArgv([["(sd-pam)", "--foreign"]])).toBe(false)
+    expect(inspectUserProcessArgv([["/usr/lib/systemd/systemd", "--user"], ["/bin/bash"]])).toBe(false)
+    expect(inspectUserProcessArgv("not-an-array" as never)).toBe(false)
+  })
+  it("forces the requested destination mode after umask-restricted creation", () => {
+    const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
+    expect(adapter).toMatch(/state === "ABSENT"[^\n]+fs\.writeFileSync\(handle, line\); fs\.fchmodSync\(handle, 0o444\); fs\.fsyncSync\(handle\)/)
   })
   it("adopts only the exact restrictive predecessor with its egress enforcement active and enabled", () => {
     const exact = { firstReceiptExact: true, secondReceiptExact: true, nftSemanticExact: true,
