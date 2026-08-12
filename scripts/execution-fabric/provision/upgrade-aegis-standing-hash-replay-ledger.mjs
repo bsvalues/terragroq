@@ -252,13 +252,13 @@ function trustedRelease(manifest, deployedAt, activationMarkerSha256) {
   return { ...body, release_manifest_sha256: canonicalSha256(body) }
 }
 
-function inspectPriorState(io, manifest, authority, repoRoot, heldLocks = false) {
+function inspectPriorState(io, manifest, authority, heldLocks = false) {
   const account = io.account(manifest.serviceAccount.name)
   if (!same(account, { uid: account.uid, gid: account.gid, home: manifest.serviceAccount.home, shell: manifest.serviceAccount.shell })
     || !Number.isSafeInteger(account.uid) || account.uid <= 0 || !Number.isSafeInteger(account.gid) || account.gid <= 0) {
     fail("AEGIS_REPLAY_UPGRADE_ACCOUNT_INVALID", "williamos-fabric account identity differs")
   }
-  const packagePath = path.resolve(repoRoot, ...manifest.priorState.provisioningManifestPath.split("/"))
+  const packagePath = path.posix.join(manifest.priorState.releaseRoot, manifest.priorState.provisioningManifestPath)
   const priorPackageBytes = assertExactFile(io, packagePath, { sha256: manifest.priorState.provisioningManifestSha256 })
   const priorPackage = parseJson(priorPackageBytes, "AEGIS_REPLAY_UPGRADE_PRIOR_STATE_DRIFT", "prior provisioning manifest")
   const priorClosure = Object.fromEntries((priorPackage.reviewedRelease?.runtimeClosurePaths ?? []).map((relativePath) => [
@@ -367,7 +367,7 @@ export function upgradeAegisStandingHashReplayLedger({
   validateAuthority(loadedManifest, authority, now, loadedManifestSha256)
   const mutationJournal = `${loadedManifest.install.journalPrefix}${authority.authorityId}.journal.jsonl`
   if (io.inspect(mutationJournal) !== null) fail("AEGIS_REPLAY_UPGRADE_AUTHORITY_REPLAY", "authority journal already exists")
-  const prior = inspectPriorState(io, loadedManifest, authority, repoRoot)
+  const prior = inspectPriorState(io, loadedManifest, authority)
   verifyNewCheckouts(io, loadedManifest, authority, loadedBytes)
 
   const plan = [...loadedManifest.install.activationOrder]
@@ -415,7 +415,7 @@ export function upgradeAegisStandingHashReplayLedger({
       heldLocks.push(lockPath)
     }
     assertExactFile(io, NODE_LEASE_PATH, { absent: true })
-    inspectPriorState(io, loadedManifest, authority, repoRoot, true)
+    inspectPriorState(io, loadedManifest, authority, true)
     verifyNewCheckouts(io, loadedManifest, authority, loadedBytes)
     io.createJournal(mutationJournal, {
     schema_version: "1.0-aegis-standing-hash-replay-ledger-upgrade-journal",

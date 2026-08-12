@@ -109,7 +109,8 @@ function fixture(options: {
     bindings: Object.entries(priorClosure).map(([bindingPath, digest]) => ({ path: bindingPath, sha256: digest })),
   })}\n`)
   manifest.priorState.provisioningManifestSha256 = sha256(packageBytes)
-  file(path.resolve("C:/fixture", ...manifest.priorState.provisioningManifestPath.split("/")), packageBytes, 1000, 1000, 0o644)
+  file(path.posix.join(manifest.priorState.releaseRoot, manifest.priorState.provisioningManifestPath),
+    packageBytes, 0, 0, 0o444)
   for (const root of manifest.priorState.privateRoots) directory(root.path, ACCOUNT.uid, ACCOUNT.gid, Number.parseInt(root.mode, 8))
   directory(manifest.priorState.releaseRoot, 0, 0, 0o755)
   for (const installed of manifest.priorState.installedFiles) {
@@ -426,6 +427,14 @@ describe("AEGIS standing hash replay-ledger one-shot upgrade", () => {
     value.entries.get(value.manifest.priorState.installedFiles[0].path)!.bytes = Buffer.from("drift\n")
     expect(() => run(value, "apply")).toThrow("AEGIS_REPLAY_UPGRADE_PRIOR_STATE_DRIFT")
     expect(value.entries.has(value.mutationJournal)).toBe(false)
+  })
+
+  it("reads prior provisioning evidence from the retained prior release rather than the launching checkout", () => {
+    const value = fixture()
+    expect(() => run(value)).not.toThrow()
+    expect(value.entries.has(path.resolve("C:/fixture", ...value.manifest.priorState.provisioningManifestPath.split("/")))).toBe(false)
+    expect(value.entries.has(path.posix.join(value.manifest.priorState.releaseRoot,
+      value.manifest.priorState.provisioningManifestPath))).toBe(true)
   })
 
   it("binds the privileged upgrader and replay initializer to the clean package checkout", () => {
