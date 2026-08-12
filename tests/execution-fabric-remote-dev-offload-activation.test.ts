@@ -108,8 +108,9 @@ describe("TerraFusion remote development one-run activation", () => {
   })
 
   it("rejects not-yet-valid and expired use", () => {
-    expect(inspectRemoteDevActivationWindow(authority(), "2026-08-11T03:59:59.999Z")).toMatchObject({ status: "BLOCKED", executionAuthorized: false, reasons: [{ code: "ACTIVATION_NOT_YET_VALID" }] })
-    expect(inspectRemoteDevActivationWindow(authority(), "2026-08-11T08:00:00.000Z")).toMatchObject({ status: "BLOCKED", executionAuthorized: false, reasons: [{ code: "ACTIVATION_EXPIRED" }] })
+    const value = authority()
+    expect(inspectRemoteDevActivationWindow(value, new Date(Date.parse(value.run.validFrom) - 1).toISOString())).toMatchObject({ status: "BLOCKED", executionAuthorized: false, reasons: [{ code: "ACTIVATION_NOT_YET_VALID" }] })
+    expect(inspectRemoteDevActivationWindow(value, value.run.expiresAt)).toMatchObject({ status: "BLOCKED", executionAuthorized: false, reasons: [{ code: "ACTIVATION_EXPIRED" }] })
   })
 
   it("rejects stale trusted-main artifact bindings and HASH_VERIFY scope reuse", () => {
