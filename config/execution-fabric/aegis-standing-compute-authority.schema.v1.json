@@ -112,7 +112,7 @@
       "additionalProperties": false,
       "required": ["maximum_age_ms", "maximum_admission_age_ms", "placement_required", "capability_required", "exact_source_commit_required", "reviewed_adapter_template_profile_digests_required", "one_time_job_claim_required", "lease_and_fencing_required"],
       "properties": {
-        "maximum_age_ms": { "const": 300000 },
+        "maximum_age_ms": { "const": 3600000 },
         "maximum_admission_age_ms": { "const": 86400000 },
         "placement_required": { "const": true },
         "capability_required": { "const": true },

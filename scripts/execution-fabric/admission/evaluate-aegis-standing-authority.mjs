@@ -49,7 +49,7 @@ const EXPECTED_AUTHORITY = {
     autonomous_selection: false,
   },
   evidence_policy: {
-    maximum_age_ms: 300000,
+    maximum_age_ms: 3600000,
     maximum_admission_age_ms: 86400000,
     placement_required: true,
     capability_required: true,
