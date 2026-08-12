@@ -735,6 +735,21 @@ describe("AEGIS standing HASH admission release promotion", () => {
     expectFailureCode(() => run(value, "apply"), "AEGIS_ADMISSION_PROMOTION_AUTHORITY_REPLAY")
   })
 
+  it("refuses committed recovery when a preserved replay invariant drifted", () => {
+    const value = fixture()
+    expect(run(value, "apply")).toMatchObject({ status: "COMMITTED" })
+    const prepared = JSON.parse(value.entries.get(value.mutationJournal)!.bytes!.toString("utf8").split("\n")[0])
+    value.entries.set(NODE_MUTATION_LOCK_PATH, {
+      type: "file",
+      bytes: recordBytes({ schema_version: "1.0-aegis-standing-hash-promotion-lock",
+        authority_id: AUTHORITY_ID, promotion_id: value.manifest.promotionId, acquired_at: prepared.prepared_at }),
+      uid: ACCOUNT.uid, gid: ACCOUNT.gid, mode: 0o600, direct: true, nlink: 1,
+    })
+    value.entries.get(REPLAY_JOURNAL_PATH)!.appendOnly = false
+    expectFailureCode(() => run(value, "apply"), "AEGIS_ADMISSION_PROMOTION_RECOVERY_UNCERTAIN")
+    expect(value.entries.has(NODE_MUTATION_LOCK_PATH)).toBe(true)
+  })
+
   it("reports recovery uncertainty after independently attempting every rollback", () => {
     const value = fixture({ failCommittedJournal: true, failRollback: "marker" })
     let failure: any

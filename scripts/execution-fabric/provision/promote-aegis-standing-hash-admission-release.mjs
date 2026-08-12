@@ -535,6 +535,13 @@ function trustedRelease(manifest, deployedAt, activationMarkerSha256) {
 function recoverCommittedPromotion(io, manifest, manifestBytes, authority, mutationJournal) {
   validateAuthority(manifest, authority, authority.issuedAt, sha256(manifestBytes))
   const account = io.account(manifest.serviceAccount.name)
+  if (!same(account, { uid: account.uid, gid: account.gid,
+    home: manifest.serviceAccount.home, shell: manifest.serviceAccount.shell })
+    || !Number.isSafeInteger(account.uid) || account.uid <= 0
+    || !Number.isSafeInteger(account.gid) || account.gid <= 0) {
+    fail("AEGIS_ADMISSION_PROMOTION_RECOVERY_UNCERTAIN", "service account identity drifted")
+  }
+  assertExactDirectory(io, REQUEST_ROOT, { uid: account.uid, gid: account.gid, mode: 0o700 })
   const journalBytes = assertExactFile(io, mutationJournal, { uid: 0, gid: 0, mode: 0o600 })
   let records
   try { records = journalBytes.toString("utf8").trim().split("\n").map(JSON.parse) }
@@ -566,6 +573,17 @@ function recoverCommittedPromotion(io, manifest, manifestBytes, authority, mutat
       [manifest.newRelease.trustArtifacts.requestSourcePath]: manifest.newRelease.trustArtifacts.requestSha256,
       [manifest.newRelease.trustArtifacts.admissionPath]: manifest.newRelease.trustArtifacts.admissionSha256,
       [manifest.newRelease.trustArtifacts.inputPath]: manifest.newRelease.trustArtifacts.inputSha256 })
+  const replayBytes = assertExactFile(io, REPLAY_JOURNAL_PATH,
+    { uid: 0, gid: account.gid, mode: 0o660, digest: authority.replayJournalSha256 })
+  validateEpochOnlyReplayJournal(replayBytes)
+  if (!io.hasAppendOnly(REPLAY_JOURNAL_PATH)) {
+    fail("AEGIS_ADMISSION_PROMOTION_RECOVERY_UNCERTAIN", "replay journal append-only state drifted")
+  }
+  const upgradeBytes = assertExactFile(io, manifest.priorState.replayUpgradeJournalPath,
+    { uid: 0, gid: 0, mode: 0o600, digest: authority.replayUpgradeJournalSha256 })
+  validateReplayUpgradeJournal(upgradeBytes)
+  assertExactFile(io, manifest.priorState.authorizedKeysPath,
+    { uid: account.uid, gid: account.gid, mode: 0o600, digest: authority.priorAuthorizedKeysSha256 })
   assertExactFile(io, NODE_LEASE_PATH, { absent: true })
   const lockRecord = Buffer.from(`${canonicalizePromotionJcs({
     schema_version: "1.0-aegis-standing-hash-promotion-lock",
