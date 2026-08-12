@@ -444,6 +444,9 @@ export function createStandingLedgerProviders({
   const rootStats = fsApi.lstatSync(lexicalRoot)
   const root = fsApi.realpathSync(lexicalRoot)
   if (root !== lexicalRoot || !validateDirectory(rootStats, uid)) fail("LEDGER_UNTRUSTED", "standing ledger root is not private")
+  if ((readJournal === null) !== (appendJournal === null)) {
+    fail("JOURNAL_PROVIDER_INVALID", "standing journal read and append providers must be supplied together")
+  }
   const privateReplayLedger = readJournal || appendJournal ? null : createAegisStandingHashReplayLedger({
     ledgerRoot: root,
     uid,
@@ -619,7 +622,7 @@ export function createStandingLedgerProviders({
     for (const { record } of epochs) {
       if (!recordDigestValid(record, "journal_record_sha256")) fail("JOURNAL_UNTRUSTED", "standing journal epoch is invalid")
     }
-    if (epochs.length !== 1 || Date.parse(epochs[0].record.initialized_at) >= issuedAtMs) {
+    if (epochs.length !== 1 || epochs[0].realtime_ms >= issuedAtMs) {
       fail("JOURNAL_EPOCH_NOT_ESTABLISHED", "a retained replay epoch must predate the reviewed admission")
     }
     return entries

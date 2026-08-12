@@ -335,6 +335,27 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     })).resolves.toMatchObject({ claimed: true })
   })
 
+  it("requires injected replay-journal providers to be supplied as one complete pair", () => {
+    const root = tempRoot("aegis-standing-partial-journal-provider-")
+    expect(() => ledger(root, { appendJournal: undefined, readJournal: () => [] } as any)).toThrow("JOURNAL_PROVIDER_INVALID")
+    expect(() => ledger(root, { readJournal: undefined, appendJournal: () => undefined } as any)).toThrow("JOURNAL_PROVIDER_INVALID")
+  })
+
+  it("uses retained append chronology rather than caller-authored epoch time", async () => {
+    const root = tempRoot("aegis-standing-epoch-append-time-")
+    const epoch = { record_type: "EPOCH", epoch_id: "aegis-standing-hash-replay-epoch-v1",
+      initialized_at: "2026-08-10T21:00:00.000Z" } as Json
+    epoch.journal_record_sha256 = sha256Object(epoch)
+    const providers = ledger(root, { readJournal: () => [{
+      record: epoch,
+      realtime_ms: Date.parse("2026-08-10T22:00:03.000Z"),
+      uid: process.getuid?.() ?? 1000,
+      identifier: "williamos-aegis-standing-hash",
+    }], appendJournal: () => undefined })
+    await expect(providers.claimAdmission({ ...claimBinding(),
+      admission_issued_at: "2026-08-10T22:00:02.000Z" })).rejects.toThrow("JOURNAL_EPOCH_NOT_ESTABLISHED")
+  })
+
   it("rejects replay from the privileged journal even if the local claim is deleted", async () => {
     const root = tempRoot("aegis-standing-journal-replay-")
     const providers = ledger(root)

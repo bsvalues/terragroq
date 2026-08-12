@@ -27,6 +27,7 @@ const AUTHORITY_KEYS = Object.freeze([
   "priorProvisioningJournalSha256", "priorRepairAuthorityId", "priorRepairJournalSha256",
   "priorReleaseManifestSha256", "priorAuthorizedKeysSha256", "priorInstalledSha256",
   "newClosureSha256", "newInstallerSha256", "reviewedCheckoutPath", "packageCommit", "packageCheckoutPath",
+  "evidenceCommit", "evidenceCheckoutPath",
   "issuedAt", "expiresAt", "singleUse", "consumed",
 ])
 
@@ -129,7 +130,7 @@ function validateManifest(manifest) {
     || !next.installerBindings || Object.keys(next.installerBindings).length !== 2
     || next.installerBindings["scripts/execution-fabric/provision/upgrade-aegis-standing-hash-replay-ledger.mjs"] === undefined
     || next.installerBindings[install.replayInitializerSource] === undefined
-    || !COMMIT.test(packageRelease?.commit ?? "") || packageRelease.commit === next.commit
+    || !COMMIT.test(packageRelease?.commit ?? "")
     || typeof packageRelease.checkoutPath !== "string" || !path.posix.isAbsolute(packageRelease.checkoutPath)
     || Object.values({ ...next.closure, ...next.installerBindings }).some((digest) => !DIGEST.test(digest))) {
     fail("AEGIS_REPLAY_UPGRADE_MANIFEST_INVALID", "new reviewed release binding differs")
@@ -172,6 +173,10 @@ function validateAuthority(manifest, authority, now, manifestSha256) {
   }
   for (const key of ["priorProvisioningJournalSha256", "priorRepairJournalSha256", "priorReleaseManifestSha256", "priorAuthorizedKeysSha256"]) {
     if (!DIGEST.test(authority[key] ?? "")) fail("AEGIS_REPLAY_UPGRADE_AUTHORITY_SCOPE_MISMATCH", `${key} is invalid`)
+  }
+  if (!COMMIT.test(authority.evidenceCommit ?? "") || typeof authority.evidenceCheckoutPath !== "string"
+    || !path.posix.isAbsolute(authority.evidenceCheckoutPath)) {
+    fail("AEGIS_REPLAY_UPGRADE_AUTHORITY_SCOPE_MISMATCH", "evidence release binding is invalid")
   }
   const issued = Date.parse(authority.issuedAt)
   const expires = Date.parse(authority.expiresAt)
@@ -308,13 +313,16 @@ function verifyMachine(io, manifest, injectedMachineIdSha256) {
   if (observed !== manifest.machine.machineIdSha256) fail("AEGIS_REPLAY_UPGRADE_MACHINE_REJECTED", "machine identity differs")
 }
 
-function verifyNewCheckouts(io, manifest, manifestBytes) {
+function verifyNewCheckouts(io, manifest, authority, manifestBytes) {
   try {
     io.verifyCheckout(manifest.newRelease.reviewedCheckoutPath, manifest.newRelease.commit, manifest.repository,
       manifest.newRelease.closure)
     io.verifyCheckout(manifest.packageRelease.checkoutPath, manifest.packageRelease.commit, manifest.repository,
-      { [UPGRADE_MANIFEST_PATH]: sha256(manifestBytes), ...manifest.newRelease.installerBindings })
+      manifest.newRelease.installerBindings)
+    io.verifyCheckout(authority.evidenceCheckoutPath, authority.evidenceCommit, manifest.repository,
+      { [UPGRADE_MANIFEST_PATH]: sha256(manifestBytes) })
     io.verifyAncestry(manifest.packageRelease.checkoutPath, manifest.newRelease.commit, manifest.packageRelease.commit)
+    io.verifyAncestry(authority.evidenceCheckoutPath, manifest.packageRelease.commit, authority.evidenceCommit)
   } catch (error) {
     if (error?.code === "AEGIS_REPLAY_UPGRADE_CHECKOUT_DRIFT") throw error
     fail("AEGIS_REPLAY_UPGRADE_CHECKOUT_DRIFT", String(error?.message ?? error).slice(0, 256))
@@ -323,7 +331,7 @@ function verifyNewCheckouts(io, manifest, manifestBytes) {
     const sourcePath = path.posix.join(manifest.newRelease.reviewedCheckoutPath, relativePath)
     if (sha256(io.read(sourcePath)) !== digest) fail("AEGIS_REPLAY_UPGRADE_CHECKOUT_DRIFT", `${relativePath} digest differs`)
   }
-  if (sha256(io.read(path.posix.join(manifest.packageRelease.checkoutPath, UPGRADE_MANIFEST_PATH))) !== sha256(manifestBytes)) {
+  if (sha256(io.read(path.posix.join(authority.evidenceCheckoutPath, UPGRADE_MANIFEST_PATH))) !== sha256(manifestBytes)) {
     fail("AEGIS_REPLAY_UPGRADE_CHECKOUT_DRIFT", "package manifest bytes differ")
   }
   for (const [relativePath, digest] of Object.entries(manifest.newRelease.installerBindings)) {
@@ -360,7 +368,7 @@ export function upgradeAegisStandingHashReplayLedger({
   const mutationJournal = `${loadedManifest.install.journalPrefix}${authority.authorityId}.journal.jsonl`
   if (io.inspect(mutationJournal) !== null) fail("AEGIS_REPLAY_UPGRADE_AUTHORITY_REPLAY", "authority journal already exists")
   const prior = inspectPriorState(io, loadedManifest, authority, repoRoot)
-  verifyNewCheckouts(io, loadedManifest, loadedBytes)
+  verifyNewCheckouts(io, loadedManifest, authority, loadedBytes)
 
   const plan = [...loadedManifest.install.activationOrder]
   const evidence = {
@@ -408,7 +416,7 @@ export function upgradeAegisStandingHashReplayLedger({
     }
     assertExactFile(io, NODE_LEASE_PATH, { absent: true })
     inspectPriorState(io, loadedManifest, authority, repoRoot, true)
-    verifyNewCheckouts(io, loadedManifest, loadedBytes)
+    verifyNewCheckouts(io, loadedManifest, authority, loadedBytes)
     io.createJournal(mutationJournal, {
     schema_version: "1.0-aegis-standing-hash-replay-ledger-upgrade-journal",
     record_type: "PREPARED",
@@ -501,15 +509,20 @@ export function upgradeAegisStandingHashReplayLedger({
       next_non_root_step: "INITIALIZE_REPLAY_EPOCH_AS_WILLIAMOS_FABRIC",
     })
   } catch (error) {
-    let recoveryError = null
-    try {
-      if (completed.includes("REPLACE_BOOTSTRAP")) io.atomicReplace(loadedManifest.install.bootstrapPath,
-        prior.installedBytes.bootstrap, 0, 0, modeNumber(loadedManifest.install.executableMode))
-      if (completed.includes("REPLACE_REPLAY_INITIALIZER")) io.atomicReplace(loadedManifest.install.replayInitializerPath,
-        prior.installedBytes["replay-epoch-initializer"], 0, 0, modeNumber(loadedManifest.install.executableMode))
-      if (releaseManifestReplaced || completed.includes("REPLACE_TRUSTED_RELEASE_MANIFEST")) io.atomicReplace(
-        loadedManifest.priorState.trustedReleaseManifestPath, prior.priorReleaseBytes, 0, 0, 0o444)
-    } catch (restoreError) { recoveryError = restoreError }
+    const recoveryErrors = []
+    const restore = (required, action) => {
+      if (!required) return false
+      try { action(); return true } catch (restoreError) { recoveryErrors.push(restoreError); return false }
+    }
+    const bootstrapRestored = restore(completed.includes("REPLACE_BOOTSTRAP"), () => io.atomicReplace(
+      loadedManifest.install.bootstrapPath, prior.installedBytes.bootstrap, 0, 0,
+      modeNumber(loadedManifest.install.executableMode)))
+    const initializerRestored = restore(completed.includes("REPLACE_REPLAY_INITIALIZER"), () => io.atomicReplace(
+      loadedManifest.install.replayInitializerPath, prior.installedBytes["replay-epoch-initializer"], 0, 0,
+      modeNumber(loadedManifest.install.executableMode)))
+    const releaseManifestRestored = restore(releaseManifestReplaced || completed.includes("REPLACE_TRUSTED_RELEASE_MANIFEST"),
+      () => io.atomicReplace(loadedManifest.priorState.trustedReleaseManifestPath,
+        prior.priorReleaseBytes, 0, 0, 0o444))
     try {
       if (journalCreated) io.appendJournal(mutationJournal, {
         record_type: "FAILED_PARTIAL",
@@ -518,9 +531,9 @@ export function upgradeAegisStandingHashReplayLedger({
         failure_code: error?.code ?? "AEGIS_REPLAY_UPGRADE_APPLY_FAILED",
         completed_mutations: completed,
         activation_manifest_replaced: releaseManifestReplaced,
-        prior_bootstrap_restored: completed.includes("REPLACE_BOOTSTRAP") && recoveryError === null,
-        prior_initializer_restored: completed.includes("REPLACE_REPLAY_INITIALIZER") && recoveryError === null,
-        prior_release_manifest_restored: releaseManifestReplaced && recoveryError === null,
+        prior_bootstrap_restored: bootstrapRestored,
+        prior_initializer_restored: initializerRestored,
+        prior_release_manifest_restored: releaseManifestRestored,
       })
     } catch (journalError) {
       fail("AEGIS_REPLAY_UPGRADE_EVIDENCE_UNCERTAIN", "partial failure journal was not durable", {
@@ -528,20 +541,25 @@ export function upgradeAegisStandingHashReplayLedger({
         authorityConsumed: true, mutationJournal, completedMutations: completed,
       })
     }
-    if (recoveryError) fail("AEGIS_REPLAY_UPGRADE_RECOVERY_UNCERTAIN", "prior executable restoration failed", {
-      causeCode: recoveryError?.code ?? null, originalFailureCode: error?.code ?? null,
+    if (recoveryErrors.length > 0) fail("AEGIS_REPLAY_UPGRADE_RECOVERY_UNCERTAIN", "prior activation restoration failed", {
+      causeCode: recoveryErrors[0]?.code ?? null, originalFailureCode: error?.code ?? null,
       authorityConsumed: journalCreated, mutationJournal: journalCreated ? mutationJournal : null, completedMutations: completed,
     })
     Object.assign(error, { authorityConsumed: journalCreated,
       mutationJournal: journalCreated ? mutationJournal : null, completedMutations: completed })
     throw error
   } finally {
+    let releaseFailure = null
     for (const lockPath of heldLocks.reverse()) {
       try { io.releaseLock(lockPath, lockRecord, prior.account.uid, prior.account.gid, 0o600) }
       catch (releaseError) {
-        if (!journalCreated) throw releaseError
+        releaseFailure ??= releaseError
       }
     }
+    if (releaseFailure) fail("AEGIS_REPLAY_UPGRADE_LOCK_RELEASE_UNCERTAIN", "upgrade lock release could not be proven", {
+      causeCode: releaseFailure?.code ?? null, authorityConsumed: journalCreated,
+      mutationJournal: journalCreated ? mutationJournal : null, completedMutations: completed,
+    })
   }
   return { ...evidence, status: "COMMITTED", authority_consumed: true,
     completed_mutations: completed, activated: true, replay_epoch_initialized: false, operational: false,
@@ -607,8 +625,10 @@ export function createNodeUpgradeIo() {
   const inspect = (targetPath) => {
     try {
       const stats = fs.lstatSync(targetPath)
+      let direct = false
+      try { direct = fs.realpathSync(targetPath) === targetPath } catch {}
       return { type: stats.isFile() ? "file" : stats.isDirectory() ? "directory" : "other",
-        direct: fs.realpathSync(targetPath) === targetPath, nlink: stats.nlink, uid: stats.uid, gid: stats.gid,
+        direct, nlink: stats.nlink, uid: stats.uid, gid: stats.gid,
         mode: stats.mode & 0o7777 }
     } catch (error) { if (error?.code === "ENOENT") return null; throw error }
   }
@@ -691,7 +711,7 @@ export function createNodeUpgradeIo() {
     fsyncParent(journalPath)
   }
   return {
-    platform: () => process.platform, euid: () => process.getuid?.(), hostname: () => os.hostname(), inspect, read, readStable, account,
+    platform: () => process.platform, euid: () => process.geteuid?.() ?? process.getuid?.(), hostname: () => os.hostname(), inspect, read, readStable, account,
     verifyCheckout, verifyAncestry,
     publishRelease(source, destination) {
       safeParents(destination)
@@ -772,7 +792,7 @@ export function main(argv = process.argv.slice(2), dependencies = {}) {
     if (!UUID.test(authority.authorityId ?? "") || cli.authorityPath !== `${AUTHORITY_ROOT}/${authority.authorityId}.json`) {
       fail("AEGIS_REPLAY_UPGRADE_AUTHORITY_PATH_INVALID", "authority filename does not match authority_id")
     }
-    const packageManifestPath = path.posix.join(authority.packageCheckoutPath ?? "", UPGRADE_MANIFEST_PATH)
+    const packageManifestPath = path.posix.join(authority.evidenceCheckoutPath ?? "", UPGRADE_MANIFEST_PATH)
     const packageManifestBytes = io.read(packageManifestPath)
     const result = upgradeAegisStandingHashReplayLedger({ ...dependencies, io, authority, mode: cli.mode,
       manifestBytes: packageManifestBytes })

@@ -25,6 +25,7 @@ const PROVISION_ID = "10000000-0000-4000-8000-000000000002"
 const REPAIR_ID = "10000000-0000-4000-8000-000000000003"
 const NEW_COMMIT = "a".repeat(40)
 const PACKAGE_COMMIT = "b".repeat(40)
+const EVIDENCE_COMMIT = "c".repeat(40)
 const ACCOUNT = { uid: 734, gid: 734, home: "/var/empty/williamos-fabric", shell: "/bin/bash" }
 const sha256 = (bytes: crypto.BinaryLike) => crypto.createHash("sha256").update(bytes).digest("hex")
 const canonicalSha256 = (value: unknown) => sha256(Buffer.from(canonicalizeUpgradeJcs(value), "utf8"))
@@ -81,6 +82,8 @@ function fixture(options: {
   ancestryValid?: boolean
   authorityMode?: number
   failAcquireLock?: string
+  failReleaseLock?: string
+  failRestoreMutation?: string
 } = {}) {
   const manifest = loadFinalizedManifest()
   const entries = new Map<string, Entry>()
@@ -139,7 +142,9 @@ function fixture(options: {
   }
 
   const manifestBytes = Buffer.from(`${canonicalizeUpgradeJcs(manifest)}\n`)
-  file(path.posix.join(manifest.packageRelease.checkoutPath,
+  const evidenceCheckoutPath = "/root/reviewed/evidence"
+  directory(evidenceCheckoutPath, 0, 0, 0o755)
+  file(path.posix.join(evidenceCheckoutPath,
     "config/execution-fabric/aegis-standing-hash-replay-ledger-upgrade.v1.json"), manifestBytes, 0, 0, 0o444)
 
   const authority = {
@@ -163,6 +168,8 @@ function fixture(options: {
     reviewedCheckoutPath: manifest.newRelease.reviewedCheckoutPath,
     packageCommit: manifest.packageRelease.commit,
     packageCheckoutPath: manifest.packageRelease.checkoutPath,
+    evidenceCommit: EVIDENCE_COMMIT,
+    evidenceCheckoutPath,
     issuedAt: "2026-08-12T17:55:00.000Z",
     expiresAt: "2026-08-12T18:05:00.000Z",
     singleUse: true,
@@ -212,18 +219,24 @@ function fixture(options: {
       }
       const prior = checkout === manifest.priorState.releaseRoot
       const packageCheckout = checkout === manifest.packageRelease.checkoutPath
-      expect(commit).toBe(prior ? manifest.priorState.commit : packageCheckout ? manifest.packageRelease.commit : manifest.newRelease.commit)
+      const evidenceCheckout = checkout === evidenceCheckoutPath
+      expect(commit).toBe(prior ? manifest.priorState.commit : packageCheckout ? manifest.packageRelease.commit
+        : evidenceCheckout ? EVIDENCE_COMMIT : manifest.newRelease.commit)
       expect(repository).toBe(manifest.repository)
-      expect(closure).toEqual(prior ? priorClosure : packageCheckout ? {
+      expect(closure).toEqual(prior ? priorClosure : packageCheckout ? manifest.newRelease.installerBindings : evidenceCheckout ? {
         "config/execution-fabric/aegis-standing-hash-replay-ledger-upgrade.v1.json": sha256(manifestBytes),
-        ...manifest.newRelease.installerBindings,
       } : manifest.newRelease.closure)
     },
     verifyAncestry: (checkout: string, ancestor: string, descendant: string) => {
       events.push(`ancestry:${checkout}`)
-      expect(checkout).toBe(manifest.packageRelease.checkoutPath)
-      expect(ancestor).toBe(manifest.newRelease.commit)
-      expect(descendant).toBe(manifest.packageRelease.commit)
+      if (checkout === manifest.packageRelease.checkoutPath) {
+        expect(ancestor).toBe(manifest.newRelease.commit)
+        expect(descendant).toBe(manifest.packageRelease.commit)
+      } else {
+        expect(checkout).toBe(evidenceCheckoutPath)
+        expect(ancestor).toBe(manifest.packageRelease.commit)
+        expect(descendant).toBe(EVIDENCE_COMMIT)
+      }
       if (options.ancestryValid === false) throw Object.assign(new Error("not ancestor"), { code: "CHECKOUT_DRIFT" })
     },
     publishRelease: (source: string, destination: string) => {
@@ -254,12 +267,16 @@ function fixture(options: {
       const entry = entries.get(target)
       expect(entry).toMatchObject({ uid, gid, mode, direct: true, nlink: 1 })
       expect(entry!.bytes).toEqual(bytes)
+      if (options.failReleaseLock === target) throw Object.assign(new Error("release failed"), { code: "EIO" })
       events.push(`LOCK_RELEASED:${target}`)
       entries.delete(target)
     },
     atomicReplace: (target: string, bytes: Buffer, uid: number, gid: number, mode: number) => {
       const name = target === manifest.install.replayInitializerPath ? "REPLACE_REPLAY_INITIALIZER"
         : target === manifest.install.bootstrapPath ? "REPLACE_BOOTSTRAP" : "REPLACE_TRUSTED_RELEASE_MANIFEST"
+      if (options.failRestoreMutation === name && events.includes(name)) {
+        throw Object.assign(new Error(`injected restore ${name}`), { code: "INJECTED_RESTORE_FAILURE" })
+      }
       maybeFail(name)
       events.push(name)
       file(target, bytes, uid, gid, mode)
@@ -427,6 +444,14 @@ describe("AEGIS standing hash replay-ledger one-shot upgrade", () => {
     expect(value.entries.has(value.mutationJournal)).toBe(false)
   })
 
+  it("binds finalized manifest bytes through a later evidence checkout without a self-referential package commit", () => {
+    const value = fixture()
+    run(value)
+    expect(value.events).toContain(`verify:${value.authority.evidenceCheckoutPath}`)
+    expect(value.events).toContain(`ancestry:${value.authority.evidenceCheckoutPath}`)
+    expect(value.authority.evidenceCommit).not.toBe(value.manifest.packageRelease.commit)
+  })
+
   it.each([NODE_MUTATION_LOCK_PATH, LEDGER_MUTATION_LOCK_PATH])("fails closed when %s is occupied", (lockPath) => {
     const value = fixture({ occupiedLock: lockPath })
     expect(() => run(value, "apply")).toThrow("AEGIS_REPLAY_UPGRADE_LOCK_OCCUPIED")
@@ -438,6 +463,16 @@ describe("AEGIS standing hash replay-ledger one-shot upgrade", () => {
     expect(() => run(value, "apply")).toThrow("AEGIS_REPLAY_UPGRADE_LOCK_OCCUPIED")
     expect(value.entries.has(NODE_MUTATION_LOCK_PATH)).toBe(false)
     expect(value.entries.has(value.mutationJournal)).toBe(false)
+  })
+
+  it("fails closed instead of returning committed when lock release cannot be proven", () => {
+    const value = fixture({ failReleaseLock: LEDGER_MUTATION_LOCK_PATH })
+    let failure: any
+    try { run(value, "apply") } catch (error) { failure = error }
+    expect(failure.code).toBe("AEGIS_REPLAY_UPGRADE_LOCK_RELEASE_UNCERTAIN")
+    expect(failure.authorityConsumed).toBe(true)
+    expect(value.entries.has(LEDGER_MUTATION_LOCK_PATH)).toBe(true)
+    expect(value.entries.has(NODE_MUTATION_LOCK_PATH)).toBe(false)
   })
 
   it("rejects a CLI authority outside the fixed UUID path before reading it", () => {
@@ -515,6 +550,17 @@ describe("AEGIS standing hash replay-ledger one-shot upgrade", () => {
     expect(value.entries.get(value.manifest.priorState.trustedReleaseManifestPath)!.bytes).toEqual(priorManifest)
     const records = value.entries.get(value.mutationJournal)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
     expect(records[1]).toMatchObject({ record_type: "FAILED_PARTIAL", activation_manifest_replaced: true,
+      prior_release_manifest_restored: true })
+  })
+
+  it("attempts the prior manifest restoration even when an earlier executable restoration fails", () => {
+    const value = fixture({ failAfterReplace: "REPLACE_TRUSTED_RELEASE_MANIFEST", failRestoreMutation: "REPLACE_BOOTSTRAP" })
+    let failure: any
+    try { run(value, "apply") } catch (error) { failure = error }
+    expect(failure.code).toBe("AEGIS_REPLAY_UPGRADE_RECOVERY_UNCERTAIN")
+    expect(value.entries.get(value.manifest.priorState.trustedReleaseManifestPath)!.bytes).toEqual(value.priorRelease)
+    const records = value.entries.get(value.mutationJournal)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
+    expect(records[1]).toMatchObject({ prior_bootstrap_restored: false, prior_initializer_restored: true,
       prior_release_manifest_restored: true })
   })
 

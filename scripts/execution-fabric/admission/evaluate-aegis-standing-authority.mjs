@@ -62,7 +62,7 @@ const EXPECTED_AUTHORITY = {
     integration_id: "aegis-hash-verify-standing-integration-v1",
     operation_core_sha256: "c5965a206b5f26c0db21176a609775d1ca176409b644bbc241fde74565bd8d8f",
     runtime_sha256: "eb1cf0517caf3a4c4a1935ed8bea73c53fed64cc1ad3effa3963e6e237c22be2",
-    resident_runner_sha256: "fd6e7025dad2534f06793e61608f3eada56c9df7061c88001bad1a3a7ece8aab",
+    resident_runner_sha256: "726313f4075929bcd5392c682ffa3b1a351649619ececa63f5062c1029f3f529",
     replay_ledger_sha256: "19dc17134e8d2ab09bc1938bd114866c5fbccd39a8830133265c816d9da05112",
     standing_contract_sha256: "0ad6aa6ef3a5e10a19de1417bf82edcf9a7f4b9c12e3c736fa6150b99d4e7163",
     trusted_release_manifest_required: true,
