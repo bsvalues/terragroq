@@ -47,7 +47,7 @@ class TestPipeline(unittest.TestCase):
                     "false_positive_rate", "near_dup_discrimination"):
             self.assertIn(key, s)
             self.assertIsNotNone(s[key])
-        self.assertEqual(s["queries"], 40)
+        self.assertEqual(s["queries"], 52)
         self.assertEqual(s["documents"], 34)
         self.assertTrue(0.0 <= s["recall@5"] <= 1.0)
         # lexical floor must still retrieve obvious lexically-overlapping matches

@@ -38,3 +38,15 @@
 {"id": "q38", "type": "false-positive", "query": "How do I configure the Kubernetes ingress for the payment microservice?", "gold": []}
 {"id": "q39", "type": "false-positive", "query": "What is the capital of France?", "gold": []}
 {"id": "q40", "type": "false-positive", "query": "How do I reset my Gmail account password?", "gold": []}
+{"id": "q41", "type": "semantic", "query": "What rule stops the runtime from quietly switching to a backup service after an error?", "gold": ["gov-rule-0005"]}
+{"id": "q42", "type": "semantic", "query": "How are edits kept all-or-nothing so a failure never leaves half-written source files?", "gold": ["gov-sea"]}
+{"id": "q43", "type": "semantic", "query": "What keeps an autonomous worker from reaching out to the public internet on its own?", "gold": ["gov-egress"]}
+{"id": "q44", "type": "semantic", "query": "Which machine is meant for heavy compilation and running the test suite?", "gold": ["gov-nodes"]}
+{"id": "q45", "type": "cross-lingual", "query": "systematic valuation of many properties as of a single date", "gold": ["appr-mass", "es-avaluo"]}
+{"id": "q46", "type": "cross-lingual", "query": "avaluo de una propiedad comparando ventas recientes similares", "gold": ["appr-comps"]}
+{"id": "q47", "type": "semantic", "query": "How do reviewers ensure they approved the exact code that will merge and not an older version?", "gold": ["gov-exact-head"]}
+{"id": "q48", "type": "semantic", "query": "What proves that two databases hold exactly the same rows after a copy?", "gold": ["code-manifest"]}
+{"id": "q49", "type": "semantic", "query": "How do we confirm new activity goes to the new database and not the retired one?", "gold": ["code-canary"]}
+{"id": "q50", "type": "semantic", "query": "What guardrail inspects each shell command before it is allowed to run?", "gold": ["gov-capg", "code-capg-failclosed"]}
+{"id": "q51", "type": "cross-lingual", "query": "network isolation that blocks outbound traffic by default", "gold": ["es-egress"]}
+{"id": "q52", "type": "semantic", "query": "How do I point WilliamOS at the county Postgres to store its state?", "gold": ["gov-sovereign-pg"]}
