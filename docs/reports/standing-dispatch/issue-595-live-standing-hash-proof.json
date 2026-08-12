@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0-issue-595-live-standing-hash-proof",
+  "issue": 595,
+  "work_order_id": "WO-EF-AEGIS-STANDING-001",
+  "status": "PASS",
+  "node": {
+    "node_id": "aegis",
+    "machine_id_sha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b",
+    "execution_account": "williamos-fabric",
+    "privilege": "non-root-no-sudo"
+  },
+  "reviewed_chain": {
+    "package_commit": "a16422261cfb0021092c8e3511f0571a576a8c59",
+    "admission_commit": "f765a65248d2931481f71575af02573239b68e88",
+    "promotion_merge_commit": "c529db677b26abe6eb7b23a81e8329bb00e2ca7f",
+    "promotion_authority_id": "300689e1-3287-4a9a-98b3-213929c76789",
+    "admission_id": "admission-issue-595-live-014",
+    "request_id": "issue-595-live-014",
+    "authority_sha256": "e5e2dc8e99dd55c09bbb5ff5e15292fae89287b818cbf408810bd7efbd088665"
+  },
+  "execution": {
+    "status": "COMPLETED",
+    "result": "VERIFIED",
+    "job_id": "job-issue-595-live-014",
+    "lease_id": "lease-issue-595-live-014",
+    "fencing_token": 1,
+    "started_at": "2026-08-12T20:30:42.917Z",
+    "completed_at": "2026-08-12T20:30:42.918Z",
+    "expected_sha256": "2b52099784df706a881bf037310215a8c2f55367c83223523a5916f94784aa30",
+    "observed_sha256": "2b52099784df706a881bf037310215a8c2f55367c83223523a5916f94784aa30",
+    "matched": true,
+    "completion_evidence_sha256": "138b3ff93367dc66e4bfe0a1d75436d5e183ecf37768fbf8a174d8063f6b3d70",
+    "completion_file_sha256": "16c2453a8f61e27a1d41c2915c9da0bba96e01ed8d742d59d041dce44bf4ea84",
+    "lease_release_sha256": "d41c05f96b443dd4ac3594d3122821744af8332fc63da6a82295ddd2993a952c",
+    "lease_release_file_sha256": "9cda7bf5103f8c2f993ada183bb60ec2fbd8c91a16b7b84270ce250bb9d85ad3",
+    "fence_sha256": "6dc6790909c0a59fac3a613621fdafac6bbff3dfe1e7d41f961728ec7e36f6bb",
+    "fence_file_sha256": "9bd69bf818e9a3a1899389597b956129dd594ffa888b863659acba0f0388b933",
+    "replay_journal_sha256": "fa49519e33b2f37c008c882e28c7fa7acb01f5e3c433e56902577052570acf55",
+    "lease_released": true
+  },
+  "negative_proof": {
+    "identical_admission_replay": {
+      "status": "FAILED_CLOSED",
+      "code": "ADMISSION_REPLAY",
+      "execution_authorized": false,
+      "detail": "exact admission and request binding was already claimed"
+    },
+    "fencing": {
+      "live_fence_retained": "fence-1.json",
+      "strict_increase_provider_test": "tests/execution-fabric-aegis-standing-resident-runner.test.ts",
+      "synthetic_second_live_claim_created": false,
+      "reason": "A second fabricated claim would add control evidence outside the reviewed live admission. The live fence is retained; stale-token rejection remains covered by the independently reviewed provider suite."
+    }
+  },
+  "safety": {
+    "scheduler_activated": false,
+    "autonomous_selection": false,
+    "shell_executed": false,
+    "network_accessed_by_workload": false,
+    "workload_storage_written": false,
+    "control_evidence_storage_written": true,
+    "authority_escalated": false,
+    "storage_nas_backup_authority": false,
+    "county_pacs_touched": false,
+    "private_key_inspected": false
+  }
+}
