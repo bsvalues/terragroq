@@ -35,7 +35,8 @@ The corrected evaluator:
 - fingerprints canonical, order-independent corpus content including scoring labels, query types,
   distractors, and the calibration split;
 - validates unique corpus identifiers and every gold/distractor reference;
-- accepts only literal RFC1918, ULA, or loopback endpoints; DNS and special-use addresses fail closed;
+- performs no endpoint network execution; real result bundles must come from a separately admitted
+  Fabric adapter bound to an exact endpoint and trusted inventory;
 - requires exact model, runtime, and host manifests for endpoint runs;
 - rejects missing, duplicate, incomplete, non-finite, misindexed, or mixed-dimension endpoint rows;
 - separates fixed calibration queries from evaluation queries for false-positive measurement;

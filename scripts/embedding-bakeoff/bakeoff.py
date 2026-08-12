@@ -5,7 +5,7 @@ Embeds a known-answer corpus + gold queries via a backend, ranks documents by co
 similarity, scores retrieval quality, and writes a per-model report + run manifest.
 
   python bakeoff.py --backend lexical
-  BASE_URL=http://127.0.0.1:11434/v1 MODEL=bge-m3 python bakeoff.py --backend endpoint
+  python bakeoff.py --backend lexical
 
 Quality dominates speed: this scores Recall@5/10, MRR, nDCG@10, false-positive rate,
 near-duplicate discrimination, and per-category (factual/code/config/long-doc/multilingual)
@@ -300,16 +300,10 @@ def urllib_hostname(base_url):
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--corpus", default=os.path.join(os.path.dirname(__file__), "corpus"))
-    p.add_argument("--backend", default=os.environ.get("BACKEND", "lexical"))
-    p.add_argument("--base-url", default=os.environ.get("BASE_URL"))
-    p.add_argument("--model", default=os.environ.get("MODEL"))
-    p.add_argument("--api-key", default=os.environ.get("EMBED_API_KEY"))
+    p.add_argument("--backend", choices=("lexical",), default="lexical")
     p.add_argument("--k", type=int, default=10)
     p.add_argument("--dim", type=int, default=2048, help="lexical backend dimension")
     p.add_argument("--out", default=None)
-    p.add_argument("--model-manifest")
-    p.add_argument("--runtime-manifest")
-    p.add_argument("--host-manifest")
     args = p.parse_args(argv)
 
     if args.out:
@@ -317,8 +311,7 @@ def main(argv=None):
         os.makedirs(output_parent, exist_ok=True)
         if not os.path.isdir(output_parent):
             raise ValueError("output parent is not a directory")
-    result = run(args.corpus, args.backend, args.base_url, args.model, args.api_key, args.k, args.dim,
-                 args.model_manifest, args.runtime_manifest, args.host_manifest)
+    result = run(args.corpus, args.backend, None, None, None, args.k, args.dim)
     text = json.dumps(result, indent=2)
     if args.out:
         fd, temporary = tempfile.mkstemp(prefix=".embedding-result-", suffix=".json", dir=output_parent)
@@ -333,7 +326,7 @@ def main(argv=None):
             if os.path.exists(temporary):
                 os.unlink(temporary)
     s = result["summary"]
-    print(json.dumps({"model": args.model or args.backend, "summary": {
+    print(json.dumps({"model": args.backend, "summary": {
         k: s[k] for k in ("recall@5", "recall@10", "mrr", "ndcg@10",
                           "near_dup_discrimination", "false_positive_rate")}}, indent=2))
     return 0

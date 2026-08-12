@@ -11,19 +11,13 @@ model or dimension — that is Phase 3.
 # Deterministic lexical baseline (no model — the quality floor + self-test):
 python3 bakeoff.py --backend lexical
 
-# A real model via any OpenAI-compatible /v1/embeddings endpoint (Ollama, vLLM, llama.cpp, ...):
-BASE_URL=http://127.0.0.1:11434/v1 MODEL=<exact-model-id> python3 bakeoff.py \
-  --backend endpoint \
-  --model-manifest manifests/model.json \
-  --runtime-manifest manifests/runtime.json \
-  --host-manifest manifests/host.json \
-  --out results/model.json
+# Real-model execution is intentionally absent from this harness. A separately reviewed Fabric
+# adapter must produce a result bundle matching this contract.
 ```
 
-The app/harness knows only the OpenAI wire format — no provider is hard-coded. Point `BASE_URL` at
-an admitted literal RFC1918, ULA, or loopback IP. DNS hostnames, metadata/link-local/reserved
-addresses, IPv4-mapped IPv6, and unspecified addresses fail closed. Node placement
-must come from the current execution-fabric inventory; do not infer GPU hardware from stale docs.
+The response validator knows only the OpenAI wire format; no provider is hard-coded. The harness
+does not open a network connection. Node placement and exact endpoint admission belong to the
+separately reviewed Fabric adapter and current inventory.
 
 ## Self-test (offline, no model)
 

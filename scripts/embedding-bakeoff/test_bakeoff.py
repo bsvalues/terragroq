@@ -8,16 +8,20 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest import mock
 
 import metrics as M
 from bakeoff import (corpus_fingerprint, load_jsonl, main, reject_secret_fields, run,
                      validate_corpus_manifest)
-from embed import (NoRedirectHandler, _endpoint_batch, cosine, embed_texts,
-                   lexical_embed, validate_sovereign_base_url)
+from embed import (cosine, embed_texts, lexical_embed, validate_endpoint_payload,
+                   validate_sovereign_base_url)
 from evidence import build as build_evidence
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def sha256_path(path):
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
 
 
 class TestMetrics(unittest.TestCase):
@@ -123,29 +127,6 @@ class TestPipeline(unittest.TestCase):
         reject_secret_fields({"tokenizer_sha256": "safe-model-provenance"})
 
 
-class FakeResponse:
-    def __init__(self, value):
-        self.value = value
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def read(self):
-        return json.dumps(self.value).encode("utf-8")
-
-
-class FakeOpener:
-    def __init__(self, responses):
-        self.responses = list(responses)
-
-    def open(self, _request, timeout=None):
-        del timeout
-        return self.responses.pop(0)
-
-
 class TestEndpointBoundary(unittest.TestCase):
     def test_cosine_rejects_mixed_dimensions(self):
         with self.assertRaisesRegex(ValueError, "dimension mismatch"):
@@ -185,8 +166,7 @@ class TestEndpointBoundary(unittest.TestCase):
             {"index": 1, "embedding": [0.0, 2.0]},
             {"index": 0, "embedding": [3.0, 0.0]},
         ]}
-        with mock.patch("urllib.request.build_opener", return_value=FakeOpener([FakeResponse(response)])):
-            vectors = _endpoint_batch("http://127.0.0.1:11434/v1", "model", ["a", "b"], None, 1)
+        vectors = validate_endpoint_payload(response, "model", 2)
         self.assertEqual(vectors, [[1.0, 0.0], [0.0, 1.0]])
 
     def test_response_rejects_missing_duplicate_mixed_and_nonfinite_rows(self):
@@ -198,35 +178,23 @@ class TestEndpointBoundary(unittest.TestCase):
         ]
         for response in failures:
             with self.subTest(response=response):
-                with mock.patch("urllib.request.build_opener", return_value=FakeOpener([FakeResponse(response)])):
-                    with self.assertRaises(ValueError):
-                        _endpoint_batch("http://10.0.0.158:11434/v1", "model", ["a", "b"], None, 1)
+                with self.assertRaises(ValueError):
+                    validate_endpoint_payload(response, "model", 2)
 
     def test_response_rejects_model_drift(self):
         response = {"model": "other", "data": [{"index": 0, "embedding": [1.0]}]}
-        with mock.patch("urllib.request.build_opener", return_value=FakeOpener([FakeResponse(response)])):
-            with self.assertRaisesRegex(ValueError, "model does not match"):
-                _endpoint_batch("http://10.0.0.158:11434/v1", "model", ["a"], None, 1)
+        with self.assertRaisesRegex(ValueError, "model does not match"):
+            validate_endpoint_payload(response, "model", 1)
 
     def test_response_requires_model_identity(self):
         response = {"data": [{"index": 0, "embedding": [1.0]}]}
-        with mock.patch("urllib.request.build_opener", return_value=FakeOpener([FakeResponse(response)])):
-            with self.assertRaisesRegex(ValueError, "model does not match"):
-                _endpoint_batch("http://10.0.0.158:11434/v1", "model", ["a"], None, 1)
+        with self.assertRaisesRegex(ValueError, "model does not match"):
+            validate_endpoint_payload(response, "model", 1)
 
-    def test_redirect_handler_fails_closed(self):
-        with self.assertRaisesRegex(ValueError, "redirects are forbidden"):
-            NoRedirectHandler().redirect_request(None, None, 302, "Found", {}, "https://example.com")
-
-    def test_dimension_change_across_batches_is_rejected(self):
-        responses = [
-            FakeResponse({"model": "model", "data": [{"index": 0, "embedding": [1.0, 0.0]}]}),
-            FakeResponse({"model": "model", "data": [{"index": 0, "embedding": [1.0, 0.0, 0.0]}]}),
-        ]
-        with mock.patch("urllib.request.build_opener", return_value=FakeOpener(responses)):
-            with self.assertRaisesRegex(ValueError, "dimension changed"):
-                embed_texts(["a", "b"], backend="endpoint", base_url="http://10.0.0.158:11434/v1",
-                            model="model", batch_size=1)
+    def test_endpoint_execution_is_disabled_without_trusted_adapter(self):
+        with self.assertRaisesRegex(ValueError, "trusted Fabric adapter"):
+            embed_texts(["a"], backend="endpoint", base_url="http://10.0.0.158:11434/v1",
+                        model="model")
 
 
 class TestEvidencePackage(unittest.TestCase):
@@ -253,10 +221,19 @@ class TestEvidencePackage(unittest.TestCase):
         for name in ("model", "runtime", "host"):
             with open(paths[name], "w", encoding="utf-8") as fh:
                 json.dump(values[name], fh)
-        with mock.patch("bakeoff.embed_texts",
-                        side_effect=lambda texts, **_kwargs: [lexical_embed(text, 128) for text in texts]):
-            result = run(corpus, "endpoint", "http://10.0.0.158:11434/v1", "test-model", None, 10, 128,
-                         paths["model"], paths["runtime"], paths["host"])
+        result = run(corpus, "lexical", None, "test-model", None, 10, 128)
+        result["manifest"].update({
+            "backend": "endpoint",
+            "base_url": "http://10.0.0.158:11434/v1",
+            "provenance": {
+                "model": values["model"],
+                "model_manifest_sha256": sha256_path(paths["model"]),
+                "runtime": values["runtime"],
+                "runtime_manifest_sha256": sha256_path(paths["runtime"]),
+                "host": values["host"],
+                "host_manifest_sha256": sha256_path(paths["host"]),
+            },
+        })
         with open(paths["result"], "w", encoding="utf-8") as fh:
             json.dump(result, fh)
         return corpus, paths, result

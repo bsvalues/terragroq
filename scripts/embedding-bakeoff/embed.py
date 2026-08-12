@@ -14,7 +14,6 @@ import json
 import math
 import re
 import urllib.parse
-import urllib.request
 
 
 ALLOWED_IPV4_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
@@ -23,11 +22,6 @@ ALLOWED_IPV4_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
 ALLOWED_IPV6_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
     "fc00::/7", "::1/128",
 ))
-
-
-class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise ValueError(f"embedding endpoint redirects are forbidden: HTTP {code}")
 
 
 def l2_normalize(vec):
@@ -85,30 +79,16 @@ def _validate_embedding(value, row_index):
     return [float(item) for item in value]
 
 
-def _endpoint_batch(base_url, model, texts, api_key, timeout):
-    validate_sovereign_base_url(base_url)
-    payload = json.dumps({"model": model, "input": texts}).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = "Bearer " + api_key
-    req = urllib.request.Request(
-        base_url.rstrip("/") + "/embeddings",
-        data=payload,
-        headers=headers,
-        method="POST",
-    )
-    opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(req, timeout=timeout) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+def validate_endpoint_payload(data, model, expected_count):
     if not isinstance(data, dict) or data.get("model") != model:
         raise ValueError("endpoint response model does not match the requested model")
     rows = data.get("data")
-    if not isinstance(rows, list) or len(rows) != len(texts):
-        raise ValueError(f"endpoint returned {len(rows) if isinstance(rows, list) else 0} rows for {len(texts)} inputs")
+    if not isinstance(rows, list) or len(rows) != expected_count:
+        raise ValueError(f"endpoint returned {len(rows) if isinstance(rows, list) else 0} rows for {expected_count} inputs")
     indexes = [row.get("index") if isinstance(row, dict) else None for row in rows]
     if any(isinstance(index, bool) or not isinstance(index, int) for index in indexes):
         raise ValueError("endpoint indexes must be integers")
-    if sorted(indexes) != list(range(len(texts))):
+    if sorted(indexes) != list(range(expected_count)):
         raise ValueError("endpoint indexes must be unique and cover every input exactly once")
     ordered = sorted(rows, key=lambda row: row["index"])
     vectors = [_validate_embedding(row.get("embedding"), row["index"]) for row in ordered]
@@ -116,6 +96,11 @@ def _endpoint_batch(base_url, model, texts, api_key, timeout):
     if len(dimensions) != 1:
         raise ValueError("endpoint returned mixed embedding dimensions")
     return [l2_normalize(vector) for vector in vectors]
+
+
+def _endpoint_batch(base_url, model, texts, api_key, timeout):
+    del base_url, model, texts, api_key, timeout
+    raise ValueError("endpoint execution is disabled until a trusted Fabric adapter supplies the result")
 
 
 def embed_texts(texts, backend="lexical", base_url=None, model=None, api_key=None,
