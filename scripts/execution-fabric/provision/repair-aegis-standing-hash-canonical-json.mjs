@@ -72,6 +72,11 @@ const EXPECTED_PRIVATE_ROOTS = Object.freeze([
   "/var/lib/williamos/fabric/ledger",
 ])
 const AUTHORIZED_KEYS_PATH = "/home/williamos-fabric/.ssh/authorized_keys"
+const EXPECTED_SERVICE_ACCOUNT = Object.freeze({
+  name: "williamos-fabric",
+  home: "/var/empty/williamos-fabric",
+  shell: "/bin/bash",
+})
 const EXPECTED_HISTORICAL_PLAN = Object.freeze([
   Object.freeze({ type: "CREATE_DIRECTORY", path: "/opt/williamos" }),
   Object.freeze({ type: "CREATE_DIRECTORY", path: "/opt/williamos/releases" }),
@@ -281,14 +286,15 @@ function runFixedGit(args, cwd, { acceptedStatuses = [0] } = {}) {
 function resolveServiceAccount(fsApi) {
   const passwd = readStableFile(fsApi, "/etc/passwd", { maximumBytes: 1024 * 1024 }).toString("utf8")
   const group = readStableFile(fsApi, "/etc/group", { maximumBytes: 1024 * 1024 }).toString("utf8")
-  const passwdMatches = passwd.split("\n").filter((line) => line.startsWith("williamos-fabric:"))
-  const groupMatches = group.split("\n").filter((line) => line.startsWith("williamos-fabric:"))
+  const passwdMatches = passwd.split("\n").filter((line) => line.startsWith(`${EXPECTED_SERVICE_ACCOUNT.name}:`))
+  const groupMatches = group.split("\n").filter((line) => line.startsWith(`${EXPECTED_SERVICE_ACCOUNT.name}:`))
   const passwdFields = passwdMatches[0]?.split(":")
   const groupFields = groupMatches[0]?.split(":")
   const uid = Number(passwdFields?.[2])
   const gid = Number(passwdFields?.[3])
   if (passwdMatches.length !== 1 || groupMatches.length !== 1 || passwdFields?.length !== 7
-    || groupFields?.length !== 4 || passwdFields[5] !== "/home/williamos-fabric"
+    || groupFields?.length !== 4 || passwdFields[5] !== EXPECTED_SERVICE_ACCOUNT.home
+    || passwdFields[6] !== EXPECTED_SERVICE_ACCOUNT.shell
     || !Number.isSafeInteger(uid) || uid <= 0 || !Number.isSafeInteger(gid) || gid <= 0
     || Number(groupFields[2]) !== gid) {
     fail("AEGIS_CANONICAL_REPAIR_ACCOUNT_INVALID", "exact williamos-fabric account identity differs")
@@ -514,6 +520,7 @@ function validateManifest(manifest) {
     || repair.targetParentPath !== "/usr/local/libexec" || repair.targetParentOwner !== "root"
     || repair.targetParentGroup !== "root" || repair.targetParentDirectRequired !== true
     || repair.targetParentGroupOrWorldWriteAllowed !== false
+    || repair.serviceAccount === undefined || !same(repair.serviceAccount, EXPECTED_SERVICE_ACCOUNT)
     || repair.authorizedKeysPath !== AUTHORIZED_KEYS_PATH || repair.authorizedKeyExactRecordRequired !== true
     || !Number.isFinite(repair.authorityMaximumAgeSeconds) || repair.authorityMaximumAgeSeconds <= 0
     || !same(assets, EXPECTED_INSTALLED_ASSETS)
@@ -527,6 +534,10 @@ function validateManifest(manifest) {
     fail("AEGIS_CANONICAL_REPAIR_PACKAGE_INVALID", "canonical JSON source binding differs")
   }
   return { manifest, repair, sourceBinding }
+}
+
+export function validateCanonicalJsonRepairManifest(manifest) {
+  return validateManifest(structuredClone(manifest))
 }
 
 function validateAuthority(manifest, repair, sourceBinding, authority, now) {

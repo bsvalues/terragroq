@@ -398,6 +398,11 @@
     "targetParentGroup": "root",
     "targetParentDirectRequired": true,
     "targetParentGroupOrWorldWriteAllowed": false,
+    "serviceAccount": {
+      "name": "williamos-fabric",
+      "home": "/var/empty/williamos-fabric",
+      "shell": "/bin/bash"
+    },
     "privateRootsRequired": true,
     "authorizedKeysPath": "/home/williamos-fabric/.ssh/authorized_keys",
     "authorizedKeyExactRecordRequired": true
@@ -495,7 +500,7 @@
     },
     {
       "path": "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs",
-      "sha256": "2ac9e9fa764f3882b4de34c9c8efe9b12e2548e57ecefe4c0d097b7c41f08b92",
+      "sha256": "38c269df7f0b5fcb0c2e5103890b37ccfd96cb05495bbeabf607feab21cceccd",
       "textNormalization": "LF"
     }
   ]
