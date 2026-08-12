@@ -491,6 +491,8 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     expect(launcherBytes.toString("utf8")).toContain("stat -Lc '%u:%g:%a' \"$KERNEL_LOCK\"")
     expect(launcherBytes.toString("utf8")).not.toContain("stat -Lc '%u:%g:%a:%F' \"$KERNEL_LOCK\"")
     expect(installerSource).toContain('fs.readdirSync("/proc/self/fd")')
+    expect(installerSource).toContain("trustedKernelLockParent()")
+    expect(installerSource).toContain('(lock.mode & 0o7777) === 0o1777')
     expect(installerSource).toContain("return descriptors.length === 1")
     expect(installerSource).toContain('fs.readFileSync("/proc/locks", "utf8")')
     expect(installerSource).toContain('Number(match[1]) === process.pid')
