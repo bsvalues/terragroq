@@ -6,8 +6,13 @@ import json
 import math
 import os
 import shutil
+import sys
 import tempfile
 import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
 
 import metrics as M
 from bakeoff import (corpus_fingerprint, load_jsonl, main, reject_secret_fields, run,
@@ -15,9 +20,6 @@ from bakeoff import (corpus_fingerprint, load_jsonl, main, reject_secret_fields,
 from embed import (cosine, embed_texts, lexical_embed, validate_endpoint_payload,
                    validate_sovereign_base_url)
 from evidence import build as build_evidence
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-
 
 def sha256_path(path):
     with open(path, "rb") as fh:
@@ -175,6 +177,7 @@ class TestEndpointBoundary(unittest.TestCase):
             {"model": "model", "data": [{"index": 0, "embedding": [1.0]}, {"index": 0, "embedding": [2.0]}]},
             {"model": "model", "data": [{"index": 0, "embedding": [1.0]}, {"index": 1, "embedding": [1.0, 2.0]}]},
             {"model": "model", "data": [{"index": 0, "embedding": [1.0]}, {"index": 1, "embedding": [float("nan")]}]},
+            {"model": "model", "data": [{"index": 0, "embedding": [1.0]}, {"index": 1, "embedding": [0.0]}]},
         ]
         for response in failures:
             with self.subTest(response=response):
@@ -195,6 +198,10 @@ class TestEndpointBoundary(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "trusted Fabric adapter"):
             embed_texts(["a"], backend="endpoint", base_url="http://10.0.0.158:11434/v1",
                         model="model")
+
+    def test_missing_endpoint_url_is_rejected_cleanly(self):
+        with self.assertRaisesRegex(ValueError, "non-empty string"):
+            validate_sovereign_base_url(None)
 
 
 class TestEvidencePackage(unittest.TestCase):
@@ -288,6 +295,9 @@ class TestEvidencePackage(unittest.TestCase):
                     "gold_queries": 999, "no_gold_queries": 999,
                 }}),
                 lambda value: value["summary"].update({"fp_threshold_policy": "caller-controlled"}),
+                lambda value: value["manifest"]["corpus_files"].update({
+                    "documents_sha256": "0" * 64,
+                }),
             ]
             for mutate in mutations:
                 candidate = json.loads(json.dumps(result))
@@ -297,6 +307,19 @@ class TestEvidencePackage(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     build_evidence(corpus, paths["model"], paths["runtime"],
                                    paths["host"], paths["result"], out)
+
+    def test_incomplete_runtime_manifest_is_rejected(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            with open(paths["runtime"], "w", encoding="utf-8") as fh:
+                json.dump({}, fh)
+            result["manifest"]["provenance"]["runtime"] = {}
+            result["manifest"]["provenance"]["runtime_manifest_sha256"] = sha256_path(paths["runtime"])
+            with open(paths["result"], "w", encoding="utf-8") as fh:
+                json.dump(result, fh)
+            with self.assertRaisesRegex(ValueError, "runtime manifest missing required fields"):
+                build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                               paths["result"], os.path.join(root, "evidence"))
 
     def test_external_endpoint_is_rejected_even_when_caller_manifest_matches(self):
         with tempfile.TemporaryDirectory() as root:

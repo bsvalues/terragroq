@@ -53,6 +53,8 @@ def lexical_embed(text, dim=2048):
 
 
 def validate_sovereign_base_url(base_url):
+    if not isinstance(base_url, str) or not base_url:
+        raise ValueError("endpoint base_url must be a non-empty string")
     parsed = urllib.parse.urlparse(base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("endpoint base_url must be an absolute http(s) URL")
@@ -76,7 +78,10 @@ def _validate_embedding(value, row_index):
     for item in value:
         if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item):
             raise ValueError(f"endpoint row {row_index} contains a non-finite or non-numeric value")
-    return [float(item) for item in value]
+    vector = [float(item) for item in value]
+    if not any(item != 0.0 for item in vector):
+        raise ValueError(f"endpoint row {row_index} contains a zero-norm embedding")
+    return vector
 
 
 def validate_endpoint_payload(data, model, expected_count):

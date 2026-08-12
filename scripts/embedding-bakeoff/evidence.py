@@ -11,7 +11,7 @@ import urllib.parse
 
 import metrics as M
 from bakeoff import (CALIBRATION_QUERY_IDS, canonical_json_bytes, corpus_fingerprint,
-                     load_jsonl, reject_secret_fields, validate_corpus,
+                     load_jsonl, load_manifest, reject_secret_fields, validate_corpus,
                      validate_corpus_manifest)
 from embed import validate_sovereign_base_url
 
@@ -64,6 +64,12 @@ def validate_result(result, docs, queries, corpus_manifest, model, runtime, host
         raise ValueError("result endpoint host is not bound by the host manifest")
     if manifest.get("corpus_fingerprint") != corpus_fingerprint(docs, queries):
         raise ValueError("result bundle corpus fingerprint does not match the frozen corpus")
+    expected_corpus_files = {
+        "documents_sha256": corpus_manifest["documents_sha256"],
+        "queries_sha256": corpus_manifest["queries_sha256"],
+    }
+    if manifest.get("corpus_files") != expected_corpus_files:
+        raise ValueError("result bundle corpus file hashes do not match the frozen corpus")
     if manifest.get("corpus_manifest") != corpus_manifest:
         raise ValueError("result bundle corpus manifest does not match the frozen corpus")
     expected_vector_contract = {
@@ -225,9 +231,12 @@ def build(corpus_dir, model_manifest_path, runtime_manifest_path, host_manifest_
     queries = load_jsonl(queries_path)
     validate_corpus(docs, queries)
     corpus_manifest = validate_corpus_manifest(corpus_dir, docs, queries)
-    model = load_json(model_manifest_path)
-    runtime = load_json(runtime_manifest_path)
-    host = load_json(host_manifest_path)
+    model = load_manifest(model_manifest_path,
+        ("schema_version", "model_id", "revision", "weights_sha256", "license", "source"), "model")
+    runtime = load_manifest(runtime_manifest_path,
+        ("schema_version", "runtime_id", "version", "executable_sha256", "endpoint_contract"), "runtime")
+    host = load_manifest(host_manifest_path,
+        ("schema_version", "node_id", "machine_id_sha256", "inventory_snapshot_sha256", "topology_id", "endpoint_hosts"), "host")
     result = load_json(result_path)
     for name, value in (("model", model), ("runtime", runtime), ("host", host)):
         reject_secret_fields(value, name)

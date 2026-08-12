@@ -21,7 +21,7 @@ import tempfile
 import time
 
 import metrics as M
-from embed import cosine, embed_texts
+from embed import cosine, embed_texts, validate_sovereign_base_url
 
 
 def load_jsonl(path):
@@ -168,6 +168,7 @@ def run(corpus_dir, backend, base_url, model, api_key, k, dim,
             ("schema_version", "node_id", "machine_id_sha256", "inventory_snapshot_sha256", "topology_id", "endpoint_hosts"), "host")
         if model_manifest["model_id"] != model:
             raise ValueError("--model must match model manifest model_id")
+        validate_sovereign_base_url(base_url)
         endpoint_host = urllib_hostname(base_url)
         endpoint_hosts = host_manifest["endpoint_hosts"]
         if (not isinstance(endpoint_hosts, list) or not endpoint_hosts or
