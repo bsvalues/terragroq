@@ -98,7 +98,10 @@ describe("Hermes bridge CLI", () => {
       local: null,
       workOrder: null,
     }))
-    const root = "C:\\runtime-agreement"
+    // Absolute-on-current-platform root so captureRuntimeAgreement's internal
+    // path.resolve() is a no-op and the derived state/evidence paths stay stable
+    // across OSes (C:\\runtime-agreement on Windows, /runtime-agreement on POSIX).
+    const root = path.resolve(path.sep, "runtime-agreement")
 
     await expect(captureRuntimeAgreement({
       runtimeRoot: root,
