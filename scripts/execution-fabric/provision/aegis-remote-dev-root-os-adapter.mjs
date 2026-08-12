@@ -158,6 +158,29 @@ export function inspectDurableLedgerReconciliation({ ledgerExact, ledgerExists, 
   if (ledgerExact && ledgerExists && ledgerRecordsExact && !ticketExact && !ticketExists) return "ABSENT"
   return "DRIFT"
 }
+export function exactLedgerAncestorContract(entries, uid, gid) {
+  if (!Number.isSafeInteger(uid) || !Number.isSafeInteger(gid) || !Array.isArray(entries)) return false
+  const expected = [
+    ["/var", 0, 0, 0o755], ["/var/lib", 0, 0, 0o755],
+    ["/var/lib/williamos", uid, gid, 0o750],
+    ["/var/lib/williamos/fabric", uid, gid, 0o700],
+    ["/var/lib/williamos/fabric/ledger", uid, gid, 0o700],
+  ]
+  return entries.length === expected.length && entries.every((entry, index) => {
+    const [entryPath, owner, group, mode] = expected[index]
+    return entry?.path === entryPath && entry.directory === true && entry.symlink === false
+      && entry.uid === owner && entry.gid === group && entry.mode === mode
+  })
+}
+function ledgerAncestorContract(ids) {
+  try {
+    const entries = ["/var", "/var/lib", "/var/lib/williamos", "/var/lib/williamos/fabric", "/var/lib/williamos/fabric/ledger"].map((entryPath) => {
+      const stat = fs.lstatSync(entryPath)
+      return { path: entryPath, uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o7777, directory: stat.isDirectory(), symlink: stat.isSymbolicLink() }
+    })
+    return exactLedgerAncestorContract(entries, ids.uid, ids.gid)
+  } catch { return false }
+}
 
 function closedHashLedgerRecordsExact(manifest, ids) {
   try {
@@ -427,7 +450,7 @@ function observe(manifest, authority, trust) {
   const nft = networkBoundaryMatches()
   const repositories = repositoryState(manifest, authority)
   const toolchain = toolchainState(manifest, authority)
-  const ledger = (() => { try { const s = fs.lstatSync("/var/lib/williamos/fabric/ledger"); return trustedParents("/var/lib/williamos/fabric/ledger") && s.isDirectory() && !s.isSymbolicLink() && s.uid === ids?.uid && s.gid === ids?.gid && (s.mode & 0o7777) === 0o700 && run("/usr/bin/findmnt", ["-n", "-o", "FSTYPE", "--target", "/var/lib/williamos/fabric/ledger"]) === "ext4" } catch { return false } })()
+  const ledger = (() => { try { return ids !== null && ledgerAncestorContract(ids) && run("/usr/bin/findmnt", ["-n", "-o", "FSTYPE", "--target", "/var/lib/williamos/fabric/ledger"]) === "ext4" } catch { return false } })()
   const ledgerRecordsExact = closedHashLedgerRecordsExact(manifest, ids)
   const processState = ids ? userProcesses(ids.uid) : { proven: true, pids: [], onlyManager: true }
   const brokerProcessState = brokerIds ? userProcesses(brokerIds.uid) : { proven: true, pids: [], onlyManager: true }
