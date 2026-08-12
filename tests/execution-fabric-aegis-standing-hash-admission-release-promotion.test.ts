@@ -527,10 +527,18 @@ function expectFailureCode(action: () => unknown, code: string) {
 }
 
 describe("AEGIS standing HASH admission release promotion", () => {
-  it("keeps the checked-in promotion package fail-closed until final reviewed values are substituted", () => {
+  it("binds the checked-in promotion package to the final reviewed live release", () => {
     const manifest = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"))
-    expect(() => validateAegisStandingHashAdmissionReleasePromotionManifest(manifest))
-      .toThrow("AEGIS_ADMISSION_PROMOTION_NOT_FINALIZED")
+    expect(validateAegisStandingHashAdmissionReleasePromotionManifest(manifest)).toMatchObject({
+      priorState: { commit: "b1637a0d16394361dff74e1fb85851ba61f91235" },
+      evidenceRelease: {
+        sourceCommit: "b1637a0d16394361dff74e1fb85851ba61f91235",
+        admissionPath: "docs/reports/standing-dispatch/admission-issue-595-live-003.json",
+      },
+      newRelease: { commit: "f7091ca18e174958fd658a08a6c5ec950fa95f19" },
+      packageRelease: { commit: "05dad92db571fb4bf6d2bd1218621eb60277a836" },
+      install: { requestId: "issue-595-live-003" },
+    })
   })
 
   it("performs a complete dry-run without consuming authority or mutating host state", () => {
