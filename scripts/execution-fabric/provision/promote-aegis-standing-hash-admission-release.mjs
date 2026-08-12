@@ -597,6 +597,15 @@ function recoverCommittedPromotion(io, manifest, manifestBytes, authority, mutat
     fail("AEGIS_ADMISSION_PROMOTION_AUTHORITY_REPLAY",
       "committed authority has no stale owned lock requiring recovery")
   }
+  for (const lockPath of retainedLocks) {
+    try {
+      assertExactFile(io, lockPath,
+        { uid: account.uid, gid: account.gid, mode: 0o600, digest: sha256(lockRecord) })
+    } catch (error) {
+      fail("AEGIS_ADMISSION_PROMOTION_RECOVERY_UNCERTAIN",
+        "retained lock ownership could not be proven before recovery", { causeCode: error?.code ?? null })
+    }
+  }
   for (const lockPath of retainedLocks) io.releaseLock(lockPath, lockRecord, account.uid, account.gid, 0o600)
   return {
     schema_version: "1.0-aegis-standing-hash-admission-release-promotion-evidence",

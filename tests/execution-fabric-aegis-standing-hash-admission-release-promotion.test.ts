@@ -750,6 +750,22 @@ describe("AEGIS standing HASH admission release promotion", () => {
     expect(value.entries.has(NODE_MUTATION_LOCK_PATH)).toBe(true)
   })
 
+  it("preflights every retained lock before deleting either one", () => {
+    const value = fixture()
+    expect(run(value, "apply")).toMatchObject({ status: "COMMITTED" })
+    const prepared = JSON.parse(value.entries.get(value.mutationJournal)!.bytes!.toString("utf8").split("\n")[0])
+    const lockBytes = recordBytes({ schema_version: "1.0-aegis-standing-hash-promotion-lock",
+      authority_id: AUTHORITY_ID, promotion_id: value.manifest.promotionId, acquired_at: prepared.prepared_at })
+    for (const lockPath of [LEDGER_MUTATION_LOCK_PATH, NODE_MUTATION_LOCK_PATH]) {
+      value.entries.set(lockPath, { type: "file", bytes: lockBytes, uid: ACCOUNT.uid, gid: ACCOUNT.gid,
+        mode: 0o600, direct: true, nlink: 1 })
+    }
+    value.entries.get(NODE_MUTATION_LOCK_PATH)!.bytes = Buffer.from("foreign\n")
+    expectFailureCode(() => run(value, "apply"), "AEGIS_ADMISSION_PROMOTION_RECOVERY_UNCERTAIN")
+    expect(value.entries.has(LEDGER_MUTATION_LOCK_PATH)).toBe(true)
+    expect(value.entries.has(NODE_MUTATION_LOCK_PATH)).toBe(true)
+  })
+
   it("reports recovery uncertainty after independently attempting every rollback", () => {
     const value = fixture({ failCommittedJournal: true, failRollback: "marker" })
     let failure: any
