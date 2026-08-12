@@ -118,11 +118,11 @@ function runRelay(encoded: string, input: string, env: NodeJS.ProcessEnv) {
   })
 }
 
-function streamedRelayBootstrap(expectedDigest: string) {
+function streamedRelayBootstrap(expectedDigest: string, envelopePath = "C:\\temp\\envelope.json", envelopeDigest = "b".repeat(64), relayPath = "C:\\temp\\relay.ps1") {
   const source = fs.readFileSync(controller, "utf8")
   const match = source.match(/\$relayBootstrap = @'\r?\n([\s\S]*?)\r?\n'@/)
   if (!match) throw new Error("streamed relay bootstrap is absent")
-  return match[1].replace("__RELAY_SHA__", expectedDigest)
+  return match[1].replace("__RELAY_SHA__", expectedDigest).replace("__ENVELOPE_SHA__", envelopeDigest).replace("__ENVELOPE_PATH__", envelopePath).replace("__RELAY_PATH__", relayPath)
 }
 
 function isolatedProgramDataEnv(programData: string, extra: NodeJS.ProcessEnv = {}) {
@@ -145,6 +145,12 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(source).toContain("resources:{canonicalProfileEquivalent:false,...packet.resourceLimits}")
     expect(source).toContain("let result=contract.bindRemoteDevPacket")
     expect(source).toContain("$transportInput = @{ relayGzip = $relayGzipB64")
+    expect(source).toContain("$scpCommand")
+    expect(source).toContain("hermes:'+$remoteTransportPath")
+    expect(source).toContain("$cleanupEncoded")
+    expect(source).toContain("[Guid]::NewGuid().ToString('N')")
+    expect(source).toContain("[IO.FileAttributes]::ReparsePoint")
+    expect(source).toContain("$transportSha256")
     expect(source).not.toContain("Replace('__RELAY_GZIP__'")
     expect(streamedRelayBootstrap("a".repeat(64))).not.toContain("$psi.ArgumentList.Add")
     expect(source).toContain("$expected='__RELAY_SHA__'")
@@ -165,8 +171,11 @@ describe("inactive Hermes-mediated remote development controller", () => {
       relayInput: Buffer.from("").toString("base64"),
       relaySha256: goodDigest,
     })
-    const encoded = Buffer.from(streamedRelayBootstrap(goodDigest), "utf16le").toString("base64")
-    const success = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { input: goodEnvelope, encoding: "utf8", timeout: 15_000 })
+    const envelopePath = path.join(testRoot, `relay-envelope-${crypto.randomUUID()}.json`)
+    fs.writeFileSync(envelopePath, goodEnvelope)
+    const envelopeDigest = crypto.createHash("sha256").update(goodEnvelope).digest("hex")
+    const encoded = Buffer.from(streamedRelayBootstrap(goodDigest, envelopePath, envelopeDigest, path.join(testRoot, `relay-${crypto.randomUUID()}.ps1`)), "utf16le").toString("base64")
+    const success = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", timeout: 15_000 })
     expect(success.status, success.stderr).toBe(7)
     expect(success.stdout).toBe("RELAY_OK")
 
@@ -177,9 +186,13 @@ describe("inactive Hermes-mediated remote development controller", () => {
       relayInput: Buffer.from("").toString("base64"),
       relaySha256: swappedDigest,
     })
-    const rejected = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { input: swappedEnvelope, encoding: "utf8", timeout: 15_000 })
+    fs.writeFileSync(envelopePath, swappedEnvelope)
+    const rejected = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", timeout: 15_000 })
     expect(rejected.status).toBe(64)
     expect(rejected.stdout).not.toContain("ATTACKER_RELAY")
+    expect(fs.existsSync(envelopePath)).toBe(false)
+    const replay = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", timeout: 15_000 })
+    expect(replay.status).not.toBe(0)
   })
   it("blocks before SSH while the trusted-main proof scope is inactive", () => {
     const value = fixture()
