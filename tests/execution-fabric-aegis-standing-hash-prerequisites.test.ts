@@ -25,11 +25,91 @@ import {
   REPAIR_JOURNAL_PREFIX,
   TARGET_PATH as CANONICAL_JSON_TARGET,
   canonicalJsonRepairErrorEvidence,
+  canonicalizeRepairJcs,
   repairAegisStandingHashCanonicalJson,
+  validateHistoricalReleaseRoot,
   validateHistoricalRootMutationIds,
 } from "../scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs"
 
-type Json = Record<string, unknown>
+type JsonPrimitive = string | number | boolean | null
+type JsonValue = JsonPrimitive | JsonObject | JsonValue[]
+type JsonObject = { [key: string]: JsonValue | undefined }
+type ManifestBinding = { path: string, sha256: string, textNormalization: string }
+type RootOwnedAsset = JsonObject & {
+  id: string, path: string, type: string, owner: string, group: string, mode: string, direct: boolean, singleLink: boolean,
+}
+type RuntimeRoot = JsonObject & { path: string }
+type RootMutation = JsonObject & { id: string }
+type RepairMutation = JsonObject & { type: string, path: string, id?: string, sha256?: string }
+type InstalledAsset = JsonObject & { id: string, path: string, sha256: string, mode: string }
+type RepairManifest = JsonObject & {
+  id: string
+  sourcePath: string
+  previousAppliedManifestSha256: string
+  previousRootMutationIds: string[]
+  previousPlannedMutations: RepairMutation[]
+  installedAssets: InstalledAsset[]
+  authorizedKeysPath: string
+  trustedReleaseManifestPath: string
+}
+type ProvisioningManifest = {
+  [key: string]: unknown
+  schemaVersion: number
+  packageId: string
+  issue: { number: number, workOrderId: string }
+  trustedMain: { repository: string, ref: string, commit: string }
+  identity: { hostname: string, machineIdSha256: string, account: string }
+  reviewedRelease: {
+    repository: string, ref: string, commit: string, releaseRoot: string, releaseManifestPath: string,
+    manifestSchemaVersion: string, runtimeClosurePaths: string[], bootstrapSourcePath: string,
+  }
+  bindings: ManifestBinding[]
+  rootOwnedAssets: RootOwnedAsset[]
+  existingRuntimeRoots: RuntimeRoot[]
+  rootMutations: RootMutation[]
+  invocationBoundary: JsonObject
+  standingExecutionBoundary: JsonObject
+  blockedScope: string[]
+  repair: RepairManifest
+}
+type MutableAuthority = JsonObject & { authorityId: string, rootMutationIds: string[] }
+type FixtureProcessApi = { platform: string, getuid?: () => number, [key: string]: unknown }
+type FixtureEvent = JsonObject & { kind: string, path?: string, mode?: number }
+type ReadyObservation = JsonObject & {
+  identity: JsonObject
+  reviewedRelease: JsonObject
+  rootOwnedAssets: Record<string, JsonObject>
+  existingRuntimeRoots: Record<string, JsonObject>
+  privateRoots: Record<string, JsonObject>
+  replayJournal: JsonObject
+  invocationBoundary: JsonObject
+  standingExecutionBoundary: JsonObject
+}
+type ApplyFixtureOptions = NonNullable<Parameters<typeof applyAegisStandingHashPrerequisites>[0]> & {
+  authority: MutableAuthority
+}
+type CheckoutInput = { sourcePath: string, expected: { repository: string, commit: string } }
+type CheckoutPublishInput = CheckoutInput & { destination: string }
+type RepairFixtureOptions = NonNullable<Parameters<typeof repairAegisStandingHashCanonicalJson>[0]> & {
+  authority: RepairAuthority
+}
+type RepairAuthority = JsonObject & {
+  authorityId: string
+  previousProvisioningJournalSha256: string
+  sourceSha256: string
+}
+type JournalRecord = JsonObject & {
+  record_type?: string
+  sequence?: number
+  status?: string
+  type?: string
+  id?: string
+  path?: string
+  source_path?: string
+  commit?: string
+  sha256?: string
+  planned_mutations?: RepairMutation[]
+}
 
 const repoRoot = path.resolve(import.meta.dirname, "..")
 const reviewedCheckoutSourcePath = "/opt/williamos/source/terragroq"
@@ -62,19 +142,73 @@ function publicKeySha256(publicKey = TRANSPORT_PUBLIC_KEY): string {
   return crypto.createHash("sha256").update(`${publicKey.trim()}\n`, "utf8").digest("hex")
 }
 
-function manifest(): Json {
-  return JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function readyObservation(value = manifest()): Json {
+function parseJsonObject(text: string): JsonObject {
+  const value: unknown = JSON.parse(text)
+  if (!isJsonObject(value)) throw new TypeError("expected a JSON object")
+  return value
+}
+
+function isStringArray(value: JsonValue | undefined): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+}
+
+function isRepairMutation(value: JsonValue): value is RepairMutation {
+  return isJsonObject(value) && typeof value.type === "string" && typeof value.path === "string"
+}
+
+function isInstalledAsset(value: JsonValue): value is InstalledAsset {
+  return isJsonObject(value) && typeof value.id === "string" && typeof value.path === "string"
+    && typeof value.sha256 === "string" && typeof value.mode === "string"
+}
+
+function isProvisioningManifest(value: JsonObject): value is ProvisioningManifest & JsonObject {
+  const trustedMain = value.trustedMain
+  const identity = value.identity
+  const reviewedRelease = value.reviewedRelease
+  const repair = value.repair
+  return typeof value.schemaVersion === "number" && typeof value.packageId === "string"
+    && isJsonObject(value.issue) && isJsonObject(trustedMain) && typeof trustedMain.commit === "string"
+    && typeof trustedMain.repository === "string" && typeof trustedMain.ref === "string"
+    && isJsonObject(identity) && typeof identity.hostname === "string" && typeof identity.machineIdSha256 === "string"
+    && typeof identity.account === "string" && isJsonObject(reviewedRelease)
+    && typeof reviewedRelease.releaseRoot === "string" && isStringArray(reviewedRelease.runtimeClosurePaths)
+    && Array.isArray(value.bindings) && value.bindings.every((entry) => isJsonObject(entry)
+      && typeof entry.path === "string" && typeof entry.sha256 === "string" && typeof entry.textNormalization === "string")
+    && Array.isArray(value.rootOwnedAssets) && Array.isArray(value.existingRuntimeRoots) && Array.isArray(value.rootMutations)
+    && isJsonObject(value.invocationBoundary) && isJsonObject(value.standingExecutionBoundary)
+    && isStringArray(value.blockedScope) && isJsonObject(repair) && typeof repair.id === "string"
+    && typeof repair.sourcePath === "string" && typeof repair.previousAppliedManifestSha256 === "string"
+    && isStringArray(repair.previousRootMutationIds) && Array.isArray(repair.previousPlannedMutations)
+    && repair.previousPlannedMutations.every(isRepairMutation) && Array.isArray(repair.installedAssets)
+    && repair.installedAssets.every(isInstalledAsset) && typeof repair.authorizedKeysPath === "string"
+    && typeof repair.trustedReleaseManifestPath === "string"
+}
+
+function manifest(): ProvisioningManifest {
+  const value = parseJsonObject(fs.readFileSync(manifestPath, "utf8"))
+  if (!isProvisioningManifest(value)) throw new TypeError("invalid provisioning manifest fixture")
+  return value
+}
+
+function requiredBinding(value: ProvisioningManifest, bindingPath: string) {
+  const binding = value.bindings.find((candidate) => candidate.path === bindingPath)
+  if (!binding) throw new Error(`missing manifest binding: ${bindingPath}`)
+  return binding
+}
+
+function readyObservation(value = manifest()): ReadyObservation {
   const exactClosure = Object.fromEntries(
     value.reviewedRelease.runtimeClosurePaths.map((closurePath: string) => {
-      const binding = value.bindings.find(({ path: bindingPath }: Json) => bindingPath === closurePath)
+      const binding = requiredBinding(value, closurePath)
       return [closurePath, binding.sha256]
     }),
   )
   const rootOwnedAssets = Object.fromEntries(
-    value.rootOwnedAssets.map((asset: Json) => [
+    value.rootOwnedAssets.map((asset) => [
       asset.id,
       {
         exists: true,
@@ -101,7 +235,7 @@ function readyObservation(value = manifest()): Json {
       rootExecutionAllowed: false,
       sudoAllowed: false,
     },
-    existingRuntimeRoots: Object.fromEntries(value.existingRuntimeRoots.map((root: Json) => [
+    existingRuntimeRoots: Object.fromEntries(value.existingRuntimeRoots.map((root) => [
       root.path,
       { exists: true, ...root },
     ])),
@@ -170,7 +304,7 @@ function readyObservation(value = manifest()): Json {
   }
 }
 
-function proposedAuthority(value = manifest()): Json {
+function proposedAuthority(value = manifest()): MutableAuthority {
   return {
     schemaVersion: 1,
     authorityId: "0f8fad5b-d9cb-469f-a165-70867728950e",
@@ -182,7 +316,7 @@ function proposedAuthority(value = manifest()): Json {
     account: value.identity.account,
     workOrderId: value.issue.workOrderId,
     issueNumber: value.issue.number,
-    rootMutationIds: value.rootMutations.map(({ id }: Json) => id),
+    rootMutationIds: value.rootMutations.map(({ id }) => id),
     dedicatedTransportKeyFingerprint: `SHA256:${"A".repeat(43)}`,
     dedicatedTransportPublicKeySha256: "b".repeat(64),
     dedicatedTransportKeyGenerationEvidenceSha256: "c".repeat(64),
@@ -317,9 +451,9 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/canonical-json.mjs", sha256: "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs", sha256: "ebcf0d068e11c1a3f98b515f9a59a456955d8d30abdbb8bab7897b9b315caf9a", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "ec84ced541b0cfad3be37a727792825122bdff688f780a46ce5b51f80a9ba4e8", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "05724974cd0248fd30aaeb1483649a1d908e3d9f4d5a29019c0df1194cb0a222", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "72d343f3cdae8e84acc31edf7726982f4596a9a0cdd1c37692f2b85db009aeba", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs", sha256: "2b606a16a7bc4a48afea9e40e0d3757596ba26f223bbc5323f690c811db38313", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs", sha256: "2ac9e9fa764f3882b4de34c9c8efe9b12e2548e57ecefe4c0d097b7c41f08b92", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
       "scheduler-activation",
@@ -339,7 +473,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
 
   it("fails closed when any required observation section is incomplete", () => {
     const observed = readyObservation()
-    delete observed.replayJournal
+    Reflect.deleteProperty(observed, "replayJournal")
 
     expect(buildStandingProvisioningPlan(manifest(), observed)).toMatchObject({
       status: "BLOCKED",
@@ -353,7 +487,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
 
   it("cannot report READY without exact preserved runtime-root observations", () => {
     const missing = readyObservation()
-    delete missing.existingRuntimeRoots
+    Reflect.deleteProperty(missing, "existingRuntimeRoots")
     expect(buildStandingProvisioningPlan(manifest(), missing)).toMatchObject({
       status: "BLOCKED",
       reasonCode: "PREFLIGHT_EVIDENCE_INCOMPLETE",
@@ -402,7 +536,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
     const observed = readyObservation()
     observed.reviewedRelease = { exists: false }
     observed.rootOwnedAssets = Object.fromEntries(
-      manifest().rootOwnedAssets.map(({ id }: Json) => [id, { exists: false }]),
+      manifest().rootOwnedAssets.map(({ id }) => [id, { exists: false }]),
     )
     observed.privateRoots = {
       request: { exists: false },
@@ -464,14 +598,14 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
   })
 
   it.each([
-    ["consumed", (authority: Json) => { authority.consumed = true }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_CONSUMED"],
+    ["consumed", (authority: JsonObject) => { authority.consumed = true }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_CONSUMED"],
     ["expired", () => {}, "2026-08-11T18:15:00.000Z", "PROVISIONING_AUTHORITY_EXPIRED"],
-    ["extra field", (authority: Json) => { authority.unreviewed = true }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_INVALID"],
-    ["malformed consumed", (authority: Json) => { authority.consumed = true; authority.unreviewed = true }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_INVALID"],
-    ["noncanonical timestamp", (authority: Json) => { authority.issuedAt = "2026-08-11T18:00:00Z" }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_EXPIRED"],
-    ["relative checkout", (authority: Json) => { authority.reviewedCheckoutSourcePath = "tmp/checkout" }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_SCOPE_MISMATCH"],
-    ["non-normalized checkout", (authority: Json) => { authority.reviewedCheckoutSourcePath = "/opt/williamos/source/../source/terragroq" }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_SCOPE_MISMATCH"],
-    ["scope mismatch", (authority: Json) => { authority.rootMutationIds = [...authority.rootMutationIds].reverse() }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_SCOPE_MISMATCH"],
+    ["extra field", (authority: JsonObject) => { authority.unreviewed = true }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_INVALID"],
+    ["malformed consumed", (authority: JsonObject) => { authority.consumed = true; authority.unreviewed = true }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_INVALID"],
+    ["noncanonical timestamp", (authority: JsonObject) => { authority.issuedAt = "2026-08-11T18:00:00Z" }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_EXPIRED"],
+    ["relative checkout", (authority: JsonObject) => { authority.reviewedCheckoutSourcePath = "tmp/checkout" }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_SCOPE_MISMATCH"],
+    ["non-normalized checkout", (authority: JsonObject) => { authority.reviewedCheckoutSourcePath = "/opt/williamos/source/../source/terragroq" }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_SCOPE_MISMATCH"],
+    ["scope mismatch", (authority: JsonObject & { rootMutationIds: string[] }) => { authority.rootMutationIds = [...authority.rootMutationIds].reverse() }, "2026-08-11T18:05:00.000Z", "PROVISIONING_AUTHORITY_SCOPE_MISMATCH"],
   ])("returns the typed failure for %s authority", (_label, mutate, now, reasonCode) => {
     const authority = proposedAuthority()
     mutate(authority)
@@ -500,7 +634,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
     const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-standing-package-"))
     temporaryRoots.push(temporaryRoot)
     const value = manifest()
-    const packageFiles = [manifestRelativePath, ...value.bindings.map(({ path: bindingPath }: Json) => bindingPath)]
+    const packageFiles = [manifestRelativePath, ...value.bindings.map(({ path: bindingPath }) => bindingPath)]
     for (const relativePath of packageFiles) {
       const destination = path.join(temporaryRoot, ...relativePath.split("/"))
       fs.mkdirSync(path.dirname(destination), { recursive: true })
@@ -520,7 +654,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
     })
   })
 })
-function keyGenerationEvidence(value = manifest(), publicKey = TRANSPORT_PUBLIC_KEY): Json {
+function keyGenerationEvidence(value = manifest(), publicKey = TRANSPORT_PUBLIC_KEY): JsonObject {
   return {
     schemaVersion: "1.0-hermes-aegis-standing-hash-key-evidence",
     status: "GENERATED",
@@ -590,7 +724,7 @@ describe("dedicated key generation evidence compatibility", () => {
   })
 })
 
-function applyAuthority(value = manifest(), evidence = keyGenerationEvidence(value), publicKey = TRANSPORT_PUBLIC_KEY, sourcePath = reviewedCheckoutSourcePath): Json {
+function applyAuthority(value = manifest(), evidence = keyGenerationEvidence(value), publicKey = TRANSPORT_PUBLIC_KEY, sourcePath = reviewedCheckoutSourcePath): MutableAuthority {
   return {
     ...proposedAuthority(value),
     dedicatedTransportKeyFingerprint: publicKeyFingerprint(publicKey),
@@ -646,14 +780,14 @@ function injectedLinuxFs(options: {
   const virtualWriteOffsets = new Map<number, number>()
   const fsyncCounts = new Map<string, number>()
   let partialWriteInjected = false
-  const events: Json[] = []
+  const events: FixtureEvent[] = []
   let identityProvider = () => ({ uid: 0, gid: 0 })
   let nextDescriptor = 10_000
   let nextInode = 100
   const normalize = (candidate: fs.PathLike) => String(candidate).startsWith("/")
     ? path.posix.resolve(String(candidate))
     : path.resolve(String(candidate))
-  const node = (kind: VirtualNode["kind"], mode: number, bytes = Buffer.alloc(0), uid = 0, gid = 0): VirtualNode => ({
+  const node = (kind: VirtualNode["kind"], mode: number, bytes: Buffer = Buffer.alloc(0), uid = 0, gid = 0): VirtualNode => ({
     kind,
     bytes: Buffer.from(bytes),
     uid,
@@ -699,6 +833,20 @@ function injectedLinuxFs(options: {
     isDirectory: () => value.kind === "directory",
     isSymbolicLink: () => value.kind === "symlink",
   })
+  function readVirtualFileSync(candidate: number | fs.PathLike): Buffer
+  function readVirtualFileSync(candidate: number | fs.PathLike, encoding: BufferEncoding): string
+  function readVirtualFileSync(candidate: number | fs.PathLike, encoding?: BufferEncoding): Buffer | string {
+    if (typeof candidate !== "number") {
+      return encoding ? fs.readFileSync(candidate, { encoding }) : fs.readFileSync(candidate)
+    }
+    const value = descriptors.get(candidate)
+    if (!value) throw new Error("BAD_DESCRIPTOR")
+    if (value.kind === "real") {
+      return encoding ? fs.readFileSync(value.fd!, { encoding }) : fs.readFileSync(value.fd!)
+    }
+    const bytes = Buffer.from(nodes.get(value.path!)!.bytes)
+    return encoding ? bytes.toString(encoding) : bytes
+  }
   const isRepoPath = (candidate: fs.PathLike) => {
     const relative = path.relative(repoRoot, normalize(candidate))
     return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
@@ -751,18 +899,7 @@ function injectedLinuxFs(options: {
       if (!value) throw new Error("BAD_DESCRIPTOR")
       return value.kind === "real" ? fs.fstatSync(value.fd!) : stats(nodes.get(value.path!)!)
     },
-    readFileSync(candidate: number | fs.PathLike, encoding?: BufferEncoding) {
-      if (typeof candidate !== "number") {
-        return encoding ? fs.readFileSync(candidate, { encoding }) : fs.readFileSync(candidate)
-      }
-      const value = descriptors.get(candidate)
-      if (!value) throw new Error("BAD_DESCRIPTOR")
-      if (value.kind === "real") {
-        return encoding ? fs.readFileSync(value.fd!, { encoding }) : fs.readFileSync(value.fd!)
-      }
-      const bytes = Buffer.from(nodes.get(value.path!)!.bytes)
-      return encoding ? bytes.toString(encoding) : bytes
-    },
+    readFileSync: readVirtualFileSync,
     closeSync(descriptor: number) {
       const value = descriptors.get(descriptor)
       if (!value) throw new Error("BAD_DESCRIPTOR")
@@ -772,12 +909,12 @@ function injectedLinuxFs(options: {
       virtualWriteOffsets.delete(descriptor)
       events.push({ kind: "close", descriptor })
     },
-    mkdirSync(candidate: fs.PathLike, config: Json) {
+    mkdirSync(candidate: fs.PathLike, config: { mode?: number }) {
       const target = normalize(candidate)
       if (target === failPath) throw Object.assign(new Error("INJECTED_WRITE_FAILURE"), { code: "EIO" })
       if (nodes.has(target)) throw Object.assign(new Error("EEXIST"), { code: "EEXIST" })
       const identity = identityProvider()
-      nodes.set(target, node("directory", config.mode, Buffer.alloc(0), identity.uid, identity.gid))
+      nodes.set(target, node("directory", config.mode ?? 0o777, Buffer.alloc(0), identity.uid, identity.gid))
       events.push({ kind: "mkdir", path: target, mode: config.mode })
     },
     chownSync(candidate: fs.PathLike, uid: number, gid: number) {
@@ -856,6 +993,35 @@ function injectedLinuxFs(options: {
       nodes.set(target, value)
       events.push({ kind: "link", source, path: target })
     },
+    readdirSync(candidate: fs.PathLike) {
+      const directory = normalize(candidate)
+      const prefix = `${directory}/`
+      return [...nodes.keys()]
+        .filter((entry) => entry.startsWith(prefix) && !entry.slice(prefix.length).includes("/"))
+        .map((entry) => entry.slice(prefix.length))
+    },
+    renameSync(oldPath: fs.PathLike, newPath: fs.PathLike) {
+      const source = normalize(oldPath)
+      const target = normalize(newPath)
+      const value = nodes.get(source)
+      if (!value) throw missing()
+      if (nodes.has(target)) throw Object.assign(new Error("EEXIST"), { code: "EEXIST" })
+      nodes.set(target, value)
+      nodes.delete(source)
+    },
+    rmdirSync(candidate: fs.PathLike) {
+      const target = normalize(candidate)
+      if ([...nodes.keys()].some((entry) => entry.startsWith(`${target}/`))) {
+        throw Object.assign(new Error("ENOTEMPTY"), { code: "ENOTEMPTY" })
+      }
+      nodes.delete(target)
+    },
+    rmSync(candidate: fs.PathLike, options: { recursive?: boolean, force?: boolean }) {
+      const target = normalize(candidate)
+      const matches = [...nodes.keys()].filter((entry) => entry === target || (options.recursive && entry.startsWith(`${target}/`)))
+      if (matches.length === 0 && !options.force) throw missing()
+      for (const entry of matches) nodes.delete(entry)
+    },
     unlinkSync(candidate: fs.PathLike) {
       const target = normalize(candidate)
       const value = nodes.get(target)
@@ -906,7 +1072,7 @@ function injectedRootProcess(failOperation?: string | string[] | { operation: st
   let uid = 0
   let gid = 0
   let groups = [0]
-  const events: Json[] = []
+  const events: FixtureEvent[] = []
   const failureSpecs = (Array.isArray(failOperation) ? failOperation : failOperation ? [failOperation] : [])
     .map((entry) => typeof entry === "string" ? { operation: entry, occurrence: 1 } : entry)
   const operationCounts = new Map<string, number>()
@@ -945,7 +1111,19 @@ function injectedRootProcess(failOperation?: string | string[] | { operation: st
   }
 }
 
-function implementationInput(overrides: Json = {}) {
+function implementationInput(overrides: {
+  virtualOptions?: Parameters<typeof injectedLinuxFs>[0]
+  processFailure?: Parameters<typeof injectedRootProcess>[0]
+  publicKey?: string
+  keyGenerationEvidence?: JsonObject
+  reviewedCheckoutSourcePath?: string
+  authority?: MutableAuthority
+  checkoutApi?: ApplyFixtureOptions["checkoutApi"]
+  mode?: string
+  processApi?: FixtureProcessApi
+  hostnameApi?: () => string
+  clock?: () => string
+} = {}) {
   const virtual = injectedLinuxFs(overrides.virtualOptions)
   const rootProcess = injectedRootProcess(overrides.processFailure)
   virtual.setIdentityProvider(rootProcess.identity)
@@ -955,20 +1133,20 @@ function implementationInput(overrides: Json = {}) {
   const checkoutSourcePath = overrides.reviewedCheckoutSourcePath ?? reviewedCheckoutSourcePath
   const authority = overrides.authority ?? applyAuthority(manifest(), keyEvidence, normalizedPublicKey, checkoutSourcePath)
   const checkoutApi = overrides.checkoutApi ?? {
-    inspect: ({ sourcePath, expected }: Json) => ({
+    inspect: ({ sourcePath, expected }: CheckoutInput) => ({
       sourcePath,
       repository: expected.repository,
       headCommit: expected.commit,
       clean: true,
       gitMetadata: true,
     }),
-    publish: ({ destination, sourcePath, expected }: Json) => {
+    publish: ({ destination, sourcePath, expected }: CheckoutPublishInput) => {
       virtual.installCheckout(destination)
       return { sourcePath, destination, repository: expected.repository, headCommit: expected.commit, clean: true, gitMetadata: true, published: true }
     },
   }
   const packageClosure = new Map(
-    manifest().bindings.map(({ path: bindingPath }: Json) => [
+    manifest().bindings.map(({ path: bindingPath }) => [
       bindingPath,
       Buffer.from(fs.readFileSync(path.join(repoRoot, ...bindingPath.split("/"))).toString("utf8").replace(/\r\n/g, "\n"), "utf8"),
     ]),
@@ -990,7 +1168,7 @@ function implementationInput(overrides: Json = {}) {
       reviewedCheckoutSourcePath: checkoutSourcePath,
       checkoutApi,
       packageClosure,
-    },
+    } satisfies ApplyFixtureOptions,
     processEvents: rootProcess.events,
   }
 }
@@ -999,11 +1177,27 @@ function errorCode(error: unknown): string | undefined {
   return (error as { code?: string })?.code
 }
 
-function journalRecords(virtual: ReturnType<typeof injectedLinuxFs>, authorityId: string): Json[] {
+function isJournalRecord(value: JsonObject): value is JournalRecord {
+  return (value.record_type === undefined || typeof value.record_type === "string")
+    && (value.sequence === undefined || typeof value.sequence === "number")
+    && (value.status === undefined || typeof value.status === "string")
+    && (value.type === undefined || typeof value.type === "string")
+    && (value.sha256 === undefined || typeof value.sha256 === "string")
+    && (value.planned_mutations === undefined || (Array.isArray(value.planned_mutations)
+      && value.planned_mutations.every(isRepairMutation)))
+}
+
+function parseJournalRecord(line: string): JournalRecord {
+  const value = parseJsonObject(line)
+  if (!isJournalRecord(value)) throw new TypeError("invalid journal record fixture")
+  return value
+}
+
+function journalRecords(virtual: ReturnType<typeof injectedLinuxFs>, authorityId: string): JournalRecord[] {
   const journal = virtual.bytesAt("/var/lib/williamos-aegis-standing-hash-" + authorityId + ".mutation-journal.jsonl")
   if (!journal) return []
   const text = journal.toString("utf8").trimEnd()
-  return text ? text.split("\n").map((line) => JSON.parse(line)) : []
+  return text ? text.split("\n").map(parseJournalRecord) : []
 }
 
 describe("injected AEGIS standing HASH prerequisite apply", () => {
@@ -1036,14 +1230,14 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
   })
 
   it.each([
-    ["package", (authority: Json) => { authority.packageId = "other" }, NOW, "AEGIS_PROVISION_AUTHORITY_SCOPE_MISMATCH"],
-    ["manifest", (authority: Json) => { authority.manifestSha256 = "0".repeat(64) }, NOW, "AEGIS_PROVISION_AUTHORITY_SCOPE_MISMATCH"],
-    ["work order", (authority: Json) => { authority.workOrderId = "WO-OTHER" }, NOW, "AEGIS_PROVISION_AUTHORITY_SCOPE_MISMATCH"],
-    ["mutation order", (authority: Json) => { authority.rootMutationIds.reverse() }, NOW, "AEGIS_PROVISION_AUTHORITY_SCOPE_MISMATCH"],
-    ["extra field", (authority: Json) => { authority.unreviewed = true }, NOW, "AEGIS_PROVISION_AUTHORITY_INVALID"],
-    ["checkout source", (authority: Json) => { authority.reviewedCheckoutSourcePath = "/tmp/unbound" }, NOW, "AEGIS_PROVISION_AUTHORITY_SCOPE_MISMATCH"],
+    ["package", (authority: MutableAuthority) => { authority.packageId = "other" }, NOW, "AEGIS_PROVISION_AUTHORITY_SCOPE_MISMATCH"],
+    ["manifest", (authority: MutableAuthority) => { authority.manifestSha256 = "0".repeat(64) }, NOW, "AEGIS_PROVISION_AUTHORITY_SCOPE_MISMATCH"],
+    ["work order", (authority: MutableAuthority) => { authority.workOrderId = "WO-OTHER" }, NOW, "AEGIS_PROVISION_AUTHORITY_SCOPE_MISMATCH"],
+    ["mutation order", (authority: MutableAuthority) => { authority.rootMutationIds.reverse() }, NOW, "AEGIS_PROVISION_AUTHORITY_SCOPE_MISMATCH"],
+    ["extra field", (authority: MutableAuthority) => { authority.unreviewed = true }, NOW, "AEGIS_PROVISION_AUTHORITY_INVALID"],
+    ["checkout source", (authority: MutableAuthority) => { authority.reviewedCheckoutSourcePath = "/tmp/unbound" }, NOW, "AEGIS_PROVISION_AUTHORITY_SCOPE_MISMATCH"],
     ["expired", () => {}, "2026-08-11T18:15:00.000Z", "AEGIS_PROVISION_AUTHORITY_EXPIRED"],
-    ["consumed", (authority: Json) => { authority.consumed = true }, NOW, "AEGIS_PROVISION_AUTHORITY_REPLAY"],
+    ["consumed", (authority: MutableAuthority) => { authority.consumed = true }, NOW, "AEGIS_PROVISION_AUTHORITY_REPLAY"],
   ])("rejects invalid %s authority without writes", (_label, mutate, now, code) => {
     const authority = applyAuthority()
     mutate(authority)
@@ -1250,7 +1444,7 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
     ["fabric group", { path: "/var/lib/williamos/fabric", kind: "directory", mode: 0o700, uid: 734, gid: 0 }],
     ["fabric mode", { path: "/var/lib/williamos/fabric", kind: "directory", mode: 0o750, uid: 734, gid: 734 }],
     ["fabric symlink", { path: "/var/lib/williamos/fabric", kind: "symlink", mode: 0o700, uid: 734, gid: 734 }],
-  ])("rejects preserved %s drift before consuming authority", (_label, existing) => {
+  ] as const)("rejects preserved %s drift before consuming authority", (_label, existing) => {
     const { virtual, options } = implementationInput({
       mode: "apply",
       virtualOptions: { existing: [existing] },
@@ -1468,12 +1662,12 @@ describe("injected AEGIS standing HASH prerequisite apply", () => {
   })
 })
 
-function canonicalDigest(value: Json): string {
+function canonicalDigest(value: unknown): string {
   return crypto.createHash("sha256").update(canonicalizeJcs(value)).digest("hex")
 }
 
 function repairFixture(overrides: {
-  authority?: (value: Json) => void
+  authority?: (value: RepairAuthority) => void
   clock?: string
   hostname?: string
   machineIdentitySha256?: string
@@ -1483,8 +1677,8 @@ function repairFixture(overrides: {
   previousJournalBytes?: Buffer
   omitMutationPath?: string
   omitArtifactPath?: string
-  mutateHistoricalPlan?: (planned: Json[]) => void
-  mutateHistoricalRecords?: (records: Json[], planned: Json[]) => void
+  mutateHistoricalPlan?: (planned: RepairMutation[]) => void
+  mutateHistoricalRecords?: (records: JournalRecord[], planned: RepairMutation[]) => void
   directoryDrift?: { path: string, uid?: number, gid?: number, mode?: number }
   gitConfigBytes?: Buffer
   gitOrigin?: string
@@ -1494,6 +1688,7 @@ function repairFixture(overrides: {
   trackedModes?: Record<string, "100644" | "100755">
   checkoutFileMode?: { path: string, mode: number }
   checkoutAncestorDrift?: { path: string, kind?: VirtualNode["kind"], mode?: number, uid?: number, gid?: number }
+  targetParentDrift?: { kind?: VirtualNode["kind"], mode?: number, uid?: number, gid?: number }
   failPath?: string
   failWritePath?: string
   partialWrite?: { recordType: string, bytes: number }
@@ -1501,7 +1696,7 @@ function repairFixture(overrides: {
 } = {}) {
   const value = manifest()
   const repair = value.repair
-  const binding = value.bindings.find(({ path: bindingPath }: Json) => bindingPath === repair.sourcePath)
+  const binding = requiredBinding(value, repair.sourcePath)
   const releaseBody = {
     schema_version: value.reviewedRelease.manifestSchemaVersion,
     repository: value.trustedMain.repository,
@@ -1512,7 +1707,7 @@ function repairFixture(overrides: {
     deployed_at: NOW,
     file_sha256: Object.fromEntries(value.reviewedRelease.runtimeClosurePaths.map((relativePath: string) => [
       relativePath,
-      value.bindings.find(({ path: bindingPath }: Json) => bindingPath === relativePath).sha256,
+      requiredBinding(value, relativePath).sha256,
     ])),
   }
   const release = { ...releaseBody, release_manifest_sha256: canonicalDigest(releaseBody) }
@@ -1525,8 +1720,9 @@ function repairFixture(overrides: {
     "ssh-entrypoint": "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs",
     "replay-epoch-initializer": "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs",
   }
-  const authorizedKeyBytes = Buffer.from(`${authorizedKeyRecord}\n`, "utf8")
-  const planned = [
+  const historicalAuthorizedKeyRecord = authorizedKeyRecord.replace(/ williamos-aegis-standing-hash$/, "")
+  const authorizedKeyBytes = Buffer.from(`${historicalAuthorizedKeyRecord}\n`, "utf8")
+  const planned: RepairMutation[] = [
     { type: "CREATE_DIRECTORY", path: "/opt/williamos" },
     { type: "CREATE_DIRECTORY", path: "/opt/williamos/releases" },
     { type: "CREATE_DIRECTORY", path: "/usr/local/libexec/williamos" },
@@ -1542,7 +1738,7 @@ function repairFixture(overrides: {
       source_path: "/opt/williamos/source/terragroq",
       commit: value.trustedMain.commit,
     },
-    ...repair.installedAssets.map((asset: Json) => ({
+    ...repair.installedAssets.map((asset) => ({
       type: "INSTALL_FILE",
       id: asset.id,
       path: asset.path,
@@ -1560,11 +1756,11 @@ function repairFixture(overrides: {
   ].filter(({ path: operationPath }) => operationPath !== overrides.omitMutationPath)
   overrides.mutateHistoricalPlan?.(planned)
   const recordedFileSha256: Record<string, string> = {
-    ...Object.fromEntries(repair.installedAssets.map(({ id, sha256 }: Json) => [id, sha256])),
+    ...Object.fromEntries(repair.installedAssets.map(({ id, sha256 }) => [id, sha256])),
     "authorized-keys": crypto.createHash("sha256").update(authorizedKeyBytes).digest("hex"),
     "release-manifest": crypto.createHash("sha256").update(releaseBytes).digest("hex"),
   }
-  const records: Json[] = [{
+  const records: JournalRecord[] = [{
     schema_version: "1.0-aegis-standing-hash-mutation-journal",
     record_type: "AUTHORITY_CONSUMED",
     sequence: 0,
@@ -1577,7 +1773,7 @@ function repairFixture(overrides: {
   }]
   let sequence = 1
   for (const description of planned) {
-    const recordedDescription = description.type === "INSTALL_FILE"
+    const recordedDescription = description.type === "INSTALL_FILE" && typeof description.id === "string"
       ? { ...description, sha256: recordedFileSha256[description.id] }
       : description
     records.push({ record_type: "MUTATION_STARTED", sequence: sequence++, ...recordedDescription })
@@ -1621,6 +1817,13 @@ function repairFixture(overrides: {
     return ancestors
   }))]
   const existing: NonNullable<Parameters<typeof injectedLinuxFs>[0]>["existing"] = [
+    ...(overrides.targetParentDrift ? [{
+      path: "/usr/local/libexec",
+      kind: overrides.targetParentDrift.kind ?? "directory",
+      mode: overrides.targetParentDrift.mode ?? 0o755,
+      uid: overrides.targetParentDrift.uid ?? 0,
+      gid: overrides.targetParentDrift.gid ?? 0,
+    }] : []),
     { path: "/opt/williamos", kind: "directory", mode: 0o755 },
     { path: "/opt/williamos/releases", kind: "directory", mode: 0o755 },
     { path: "/usr/local/libexec/williamos", kind: "directory", mode: 0o755 },
@@ -1706,7 +1909,7 @@ function repairFixture(overrides: {
       occurrence: overrides.failFsync.occurrence,
     } : undefined,
   })
-  const authority: Json = {
+  const authority: RepairAuthority = {
     schemaVersion: 1,
     authorityId: repairAuthorityId,
     repairId: repair.id,
@@ -1721,7 +1924,7 @@ function repairFixture(overrides: {
     previousProvisioningPlanSha256: canonicalDigest(planned),
     installedReleaseManifestSha256: crypto.createHash("sha256").update(releaseBytes).digest("hex"),
     installedAuthorizedKeysSha256: crypto.createHash("sha256").update(authorizedKeyBytes).digest("hex"),
-    installedAssetSha256: Object.fromEntries(repair.installedAssets.map(({ id, sha256 }: Json) => [id, sha256])),
+    installedAssetSha256: Object.fromEntries(repair.installedAssets.map(({ id, sha256 }) => [id, sha256])),
     sourceSha256: binding.sha256,
     targetPath: CANONICAL_JSON_TARGET,
     issuedAt: "2026-08-11T18:00:00.000Z",
@@ -1770,12 +1973,30 @@ function repairFixture(overrides: {
         }
         throw new Error(`unexpected fixed Git operation: ${operation}`)
       },
-    },
+    } satisfies RepairFixtureOptions,
   }
 }
 
 describe("AEGIS canonical JSON one-shot root repair", () => {
-  it.each(manifest().repair.previousRootMutationIds)("rejects historical root mutation omission: %s", (omittedId) => {
+  it.each([
+    ["nested string", { nested: ["valid", "\ud800"] }],
+    ["object key", { ["bad\udc00"]: true }],
+  ])("rejects a recursive lone surrogate in a %s exactly like repository JCS", (_label, value) => {
+    expect(() => canonicalizeRepairJcs(value)).toThrow("JCS strings must not contain lone surrogates")
+    expect(() => canonicalizeJcs(value)).toThrow("JCS strings must not contain lone surrogates")
+  })
+
+  it("binds the reviewed release root to the exact historical checkout operation and trusted commit", () => {
+    const value = manifest()
+    expect(validateHistoricalReleaseRoot(value, value.repair.previousPlannedMutations))
+      .toBe(`/opt/williamos/releases/${value.trustedMain.commit}`)
+    const drifted = structuredClone(value)
+    drifted.reviewedRelease.releaseRoot = "/opt/williamos/releases/foreign"
+    expect(() => validateHistoricalReleaseRoot(drifted, drifted.repair.previousPlannedMutations))
+      .toThrow(expect.objectContaining({ code: "AEGIS_CANONICAL_REPAIR_PACKAGE_INVALID" }))
+  })
+
+  it.each(manifest().repair.previousRootMutationIds as string[])("rejects historical root mutation omission: %s", (omittedId: string) => {
     const incomplete = manifest().repair.previousRootMutationIds.filter((id: string) => id !== omittedId)
     expect(() => validateHistoricalRootMutationIds(incomplete)).toThrow(expect.objectContaining({
       code: "AEGIS_CANONICAL_REPAIR_PACKAGE_INVALID",
@@ -1802,19 +2023,22 @@ describe("AEGIS canonical JSON one-shot root repair", () => {
     expect(crypto.createHash("sha256").update(fixture.virtual.bytesAt(CANONICAL_JSON_TARGET)!).digest("hex"))
       .toBe(fixture.authority.sourceSha256)
     const journal = fixture.virtual.bytesAt(`${REPAIR_JOURNAL_PREFIX}${fixture.authority.authorityId}.journal.jsonl`)!
-      .toString("utf8").trimEnd().split("\n").map((line) => JSON.parse(line))
+      .toString("utf8").trimEnd().split("\n").map(parseJournalRecord)
     expect(journal.map(({ record_type }) => record_type)).toEqual(["AUTHORITY_CONSUMED", "REPAIR_COMPLETE"])
   })
 
   it("accepts the actual apply journal shape with digest-free planned files and digested execution records", () => {
     const fixture = repairFixture()
-    const plannedFiles = fixture.records[0].planned_mutations.filter(({ type }: Json) => type === "INSTALL_FILE")
-    const startedFiles = fixture.records.filter(({ record_type }: Json) => record_type === "MUTATION_STARTED")
-      .filter(({ type }: Json) => type === "INSTALL_FILE")
-    const completedFiles = fixture.records.filter(({ record_type }: Json) => record_type === "MUTATION_COMPLETED")
-      .filter(({ type }: Json) => type === "INSTALL_FILE")
-    expect(plannedFiles.every((operation: Json) => operation.sha256 === undefined)).toBe(true)
-    expect([...startedFiles, ...completedFiles].every((operation: Json) => /^[a-f0-9]{64}$/.test(operation.sha256))).toBe(true)
+    const plannedMutations = fixture.records[0]?.planned_mutations
+    if (!plannedMutations) throw new TypeError("historical authority record is missing planned mutations")
+    const plannedFiles = plannedMutations.filter(({ type }) => type === "INSTALL_FILE")
+    const startedFiles = fixture.records.filter(({ record_type }) => record_type === "MUTATION_STARTED")
+      .filter(({ type }) => type === "INSTALL_FILE")
+    const completedFiles = fixture.records.filter(({ record_type }) => record_type === "MUTATION_COMPLETED")
+      .filter(({ type }) => type === "INSTALL_FILE")
+    expect(plannedFiles.every((operation) => operation.sha256 === undefined)).toBe(true)
+    expect([...startedFiles, ...completedFiles].every((operation) =>
+      typeof operation.sha256 === "string" && /^[a-f0-9]{64}$/.test(operation.sha256))).toBe(true)
     expect(repairAegisStandingHashCanonicalJson(fixture.options)).toMatchObject({ status: "DRY_RUN" })
   })
 
@@ -1822,7 +2046,7 @@ describe("AEGIS canonical JSON one-shot root repair", () => {
     const fixture = repairFixture({
       mutateHistoricalRecords: (records) => {
         for (const record of records) {
-          if (["MUTATION_STARTED", "MUTATION_COMPLETED"].includes(record.record_type)
+          if (typeof record.record_type === "string" && ["MUTATION_STARTED", "MUTATION_COMPLETED"].includes(record.record_type)
             && record.id === "replay-epoch-initializer") record.sha256 = "0".repeat(64)
         }
       },
@@ -1836,7 +2060,7 @@ describe("AEGIS canonical JSON one-shot root repair", () => {
     const fixture = repairFixture({
       mutateHistoricalRecords: (records) => {
         for (const record of records) {
-          if (["MUTATION_STARTED", "MUTATION_COMPLETED"].includes(record.record_type)
+          if (typeof record.record_type === "string" && ["MUTATION_STARTED", "MUTATION_COMPLETED"].includes(record.record_type)
             && record.id === "authorized-keys") delete record.sha256
         }
       },
@@ -1877,8 +2101,8 @@ describe("AEGIS canonical JSON one-shot root repair", () => {
       .toThrow(expect.objectContaining({ code: "AEGIS_CANONICAL_REPAIR_PRIOR_STATE_DRIFT" }))
   })
 
-  it.each(manifest().repair.previousPlannedMutations.map(({ path: mutationPath }: Json) => mutationPath))(
-    "rejects a self-consistent historical journal omitting required mutation %s", (omittedPath) => {
+  it.each(manifest().repair.previousPlannedMutations.map(({ path: mutationPath }) => mutationPath))(
+    "rejects a self-consistent historical journal omitting required mutation %s", (omittedPath: string) => {
     const fixture = repairFixture({ omitMutationPath: omittedPath })
     expect(() => repairAegisStandingHashCanonicalJson(fixture.options)).toThrow(expect.objectContaining({
       code: "AEGIS_CANONICAL_REPAIR_PRIOR_PLAN_INVALID",
@@ -1905,7 +2129,7 @@ describe("AEGIS canonical JSON one-shot root repair", () => {
     "/var/lib/williamos/fabric/standing-hash-ledger",
     "/var/lib/williamos/fabric/ledger",
     "/home/williamos-fabric/.ssh",
-    ...manifest().repair.installedAssets.map(({ path: assetPath }: Json) => assetPath),
+    ...manifest().repair.installedAssets.map(({ path: assetPath }) => assetPath),
     "/home/williamos-fabric/.ssh/authorized_keys",
     manifest().reviewedRelease.releaseRoot,
     `${manifest().reviewedRelease.releaseRoot}/.git`,
@@ -1930,7 +2154,6 @@ describe("AEGIS canonical JSON one-shot root repair", () => {
     ["/var/lib/williamos/fabric/ledger", 734, 734, 0o700],
     ["/home/williamos-fabric/.ssh", 734, 734, 0o700],
     [manifest().reviewedRelease.releaseRoot, 0, 0, 0o755],
-    [`${manifest().reviewedRelease.releaseRoot}/.git`, 0, 0, 0o755],
   ] as const
   it.each(historicalDirectories.flatMap(([directoryPath, uid, gid, mode]) => [
     [`${directoryPath} owner`, { path: directoryPath, uid: uid === 0 ? 734 : 0 }],
@@ -1945,9 +2168,9 @@ describe("AEGIS canonical JSON one-shot root repair", () => {
 
   const checkoutFile = `${manifest().reviewedRelease.releaseRoot}/${manifest().reviewedRelease.runtimeClosurePaths[0]}`
   it.each([
-    ["non-executable mode drift", 0o600],
     ["writable mode drift", 0o664],
     ["setuid special bit", 0o4644],
+    ["Git non-executable owner execute drift", 0o744],
   ])("rejects historical tracked-file %s", (_label, mode) => {
     const fixture = repairFixture({ checkoutFileMode: { path: checkoutFile, mode } })
     expect(() => repairAegisStandingHashCanonicalJson(fixture.options)).toThrow(expect.objectContaining({
@@ -1955,6 +2178,20 @@ describe("AEGIS canonical JSON one-shot root repair", () => {
     }))
     expect(fixture.virtual.bytesAt(`${REPAIR_JOURNAL_PREFIX}${fixture.authority.authorityId}.journal.jsonl`)).toBeUndefined()
   })
+
+  it("accepts the authentic commentless historical authorized-key record", () => {
+    const fixture = repairFixture()
+    expect(fixture.virtual.bytesAt("/home/williamos-fabric/.ssh/authorized_keys")?.toString("utf8"))
+      .toBe(`${authorizedKeyRecord.replace(/ williamos-aegis-standing-hash$/, "")}\n`)
+    expect(repairAegisStandingHashCanonicalJson(fixture.options)).toMatchObject({ status: "DRY_RUN" })
+  })
+
+  it.each([0o400, 0o440, 0o444, 0o600, 0o640])(
+    "accepts historically hardened restrictive regular-file mode %o", (mode) => {
+      const fixture = repairFixture({ checkoutFileMode: { path: checkoutFile, mode } })
+      expect(repairAegisStandingHashCanonicalJson(fixture.options)).toMatchObject({ status: "DRY_RUN" })
+    },
+  )
 
   it("accepts executable metadata only when the Git index proves mode 100755", () => {
     const relativePath = manifest().reviewedRelease.runtimeClosurePaths[0]
@@ -1970,6 +2207,24 @@ describe("AEGIS canonical JSON one-shot root repair", () => {
     const fixture = repairFixture({ checkoutAncestorDrift })
     expect(() => repairAegisStandingHashCanonicalJson({ ...fixture.options, mode: "apply" }))
       .toThrow(expect.objectContaining({ code: "AEGIS_CANONICAL_REPAIR_CHECKOUT_DIRECTORY_METADATA_DRIFT" }))
+    expect(fixture.virtual.bytesAt(`${REPAIR_JOURNAL_PREFIX}${fixture.authority.authorityId}.journal.jsonl`)).toBeUndefined()
+  })
+
+  it.each([0o500, 0o550, 0o555, 0o700, 0o750])(
+    "accepts historically hardened restrictive ancestor mode %o", (mode) => {
+      const fixture = repairFixture({ checkoutAncestorDrift: { path: trackedPathAncestor, mode } })
+      expect(repairAegisStandingHashCanonicalJson(fixture.options)).toMatchObject({ status: "DRY_RUN" })
+    },
+  )
+
+  it.each([
+    ["writable", { mode: 0o775 }],
+    ["symlinked", { kind: "symlink" as const }],
+    ["foreign owner", { uid: 734 }],
+  ])("rejects %s /usr/local/libexec before authority consumption", (_label, targetParentDrift) => {
+    const fixture = repairFixture({ targetParentDrift })
+    expect(() => repairAegisStandingHashCanonicalJson({ ...fixture.options, mode: "apply" }))
+      .toThrow(expect.objectContaining({ code: "AEGIS_CANONICAL_REPAIR_PARENT_UNTRUSTED" }))
     expect(fixture.virtual.bytesAt(`${REPAIR_JOURNAL_PREFIX}${fixture.authority.authorityId}.journal.jsonl`)).toBeUndefined()
   })
 
@@ -2017,7 +2272,7 @@ describe("AEGIS canonical JSON one-shot root repair", () => {
     expect(fixture.virtual.statAt(CANONICAL_JSON_TARGET)).toBeUndefined()
     expect([...fixture.virtual.nodes.keys()].some((target) => target.startsWith(`${CANONICAL_JSON_TARGET}.repair-`))).toBe(false)
     const journal = fixture.virtual.bytesAt(`${REPAIR_JOURNAL_PREFIX}${fixture.authority.authorityId}.journal.jsonl`)!
-      .toString("utf8").trimEnd().split("\n").map((line) => JSON.parse(line))
+      .toString("utf8").trimEnd().split("\n").map(parseJournalRecord)
     expect(journal.map(({ record_type }) => record_type)).toEqual(["AUTHORITY_CONSUMED", "REPAIR_FAILED"])
     expect(journal[1]).toMatchObject({
       failure_code: "AEGIS_CANONICAL_REPAIR_WRITE_FAILED",

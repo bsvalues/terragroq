@@ -6,6 +6,20 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
+/**
+ * @typedef {{dev:number, ino:number, mode:number, nlink:number, uid:number, gid:number, size:number,
+ * mtimeMs:number, ctimeMs:number, isFile:()=>boolean, isDirectory:()=>boolean, isSymbolicLink:()=>boolean}} RepairStats
+ * @typedef {{constants:typeof fs.constants, lstatSync:(path:import("node:fs").PathLike)=>RepairStats,
+ * fstatSync:(fd:number)=>RepairStats, realpathSync:(path:import("node:fs").PathLike)=>string,
+ * openSync:(path:import("node:fs").PathLike, flags:number, mode?:number)=>number,
+ * readFileSync:(path:import("node:fs").PathLike|number)=>Buffer, closeSync:(fd:number)=>void,
+ * fsyncSync:(fd:number)=>void, writeSync:(fd:number, buffer:Buffer, offset:number, length:number, position:number|null)=>number,
+ * fchmodSync:(fd:number, mode:number)=>void, fchownSync:(fd:number, uid:number, gid:number)=>void,
+ * linkSync:(existing:import("node:fs").PathLike, target:import("node:fs").PathLike)=>void,
+ * unlinkSync:(path:import("node:fs").PathLike)=>void}} RepairFsApi
+ * @typedef {{platform:string, getuid?:()=>number}} RepairProcessApi
+ */
+
 export const MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-provisioning-package.v1.json"
 export const TARGET_PATH = "/usr/local/libexec/canonical-json.mjs"
 export const PREVIOUS_JOURNAL_PREFIX = "/var/lib/williamos-aegis-standing-hash-"
@@ -103,18 +117,40 @@ const AUTHORITY_KEYS = Object.freeze([
   "issuedAt", "expiresAt", "singleUse", "consumed",
 ])
 
+function assertValidUnicode(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index)
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (!(next >= 0xdc00 && next <= 0xdfff)) throw new TypeError("JCS strings must not contain lone surrogates")
+      index += 1
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      throw new TypeError("JCS strings must not contain lone surrogates")
+    }
+  }
+}
+
 function canonicalize(value) {
-  if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value)
+  if (typeof value === "string") {
+    assertValidUnicode(value)
+    return JSON.stringify(value)
+  }
+  if (value === null || typeof value === "boolean") return JSON.stringify(value)
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new TypeError("canonical JSON numbers must be finite")
     return JSON.stringify(value)
   }
   if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`
   if (value && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalize(value[key])}`).join(",")}}`
+    return `{${Object.keys(value).sort().map((key) => {
+      assertValidUnicode(key)
+      return `${JSON.stringify(key)}:${canonicalize(value[key])}`
+    }).join(",")}}`
   }
   throw new TypeError("unsupported canonical JSON value")
 }
+
+export const canonicalizeRepairJcs = canonicalize
 
 const sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex")
 const canonicalSha256 = (value) => sha256(Buffer.from(canonicalize(value), "utf8"))
@@ -186,6 +222,26 @@ function assertDirectDirectory(fsApi, directoryPath, { uid, gid, mode }) {
   if (!stats.isDirectory() || stats.isSymbolicLink() || fsApi.realpathSync(directoryPath) !== directoryPath
     || stats.uid !== uid || stats.gid !== gid || (stats.mode & 0o7777) !== mode) {
     fail("AEGIS_CANONICAL_REPAIR_PRIOR_STATE_DRIFT", `${directoryPath} directory state differs`)
+  }
+}
+
+function assertHardenedCheckoutDirectory(fsApi, directoryPath, label = directoryPath) {
+  const stats = fsApi.lstatSync(directoryPath)
+  const mode = stats.mode & 0o7777
+  if (!stats.isDirectory() || stats.isSymbolicLink() || fsApi.realpathSync(directoryPath) !== directoryPath
+    || stats.uid !== 0 || stats.gid !== 0 || (mode & 0o7000) !== 0
+    || (mode & 0o022) !== 0 || (mode & 0o500) !== 0o500) {
+    fail("AEGIS_CANONICAL_REPAIR_CHECKOUT_DIRECTORY_METADATA_DRIFT", `${label} directory is outside the hardened mode set`)
+  }
+}
+
+function hardenedRegularFileMode(stats, { executable, label }) {
+  const mode = stats.mode & 0o7777
+  const executableModeMatches = executable ? (mode & 0o100) === 0o100 : (mode & 0o111) === 0
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1
+    || stats.uid !== 0 || stats.gid !== 0 || (mode & 0o7000) !== 0
+    || (mode & 0o022) !== 0 || (mode & 0o400) !== 0o400 || !executableModeMatches) {
+    fail("AEGIS_CANONICAL_REPAIR_CHECKOUT_FILE_METADATA_DRIFT", `${label} file is outside the hardened mode set`)
   }
 }
 
@@ -410,6 +466,16 @@ export function validateHistoricalRootMutationIds(rootMutationIds) {
   return [...rootMutationIds]
 }
 
+export function validateHistoricalReleaseRoot(manifest, previousPlannedMutations) {
+  const expectedReleaseRoot = `/opt/williamos/releases/${manifest?.trustedMain?.commit ?? "<invalid>"}`
+  const checkout = previousPlannedMutations?.find?.(({ type }) => type === "INSTALL_REVIEWED_CHECKOUT")
+  if (manifest?.reviewedRelease?.releaseRoot !== expectedReleaseRoot || checkout?.path !== expectedReleaseRoot
+    || checkout?.commit !== manifest?.trustedMain?.commit) {
+    fail("AEGIS_CANONICAL_REPAIR_PACKAGE_INVALID", "historical release root differs from the trusted commit plan")
+  }
+  return expectedReleaseRoot
+}
+
 function validateManifest(manifest) {
   const repair = manifest?.repair
   const assets = repair?.installedAssets
@@ -434,8 +500,20 @@ function validateManifest(manifest) {
     || repair.historicalCheckoutCleanTrackedAndUntrackedRequired !== true
     || repair.historicalCheckoutAlternatesAllowed !== false
     || repair.historicalCheckoutExactTrackedFileMetadataRequired !== true
-    || repair.historicalCheckoutTrackedPathAncestorMode !== "0755"
+    || !same(repair.historicalCheckoutHardenedModePolicy, {
+      owner: "root",
+      group: "root",
+      specialBitsAllowed: false,
+      groupOrWorldWriteAllowed: false,
+      regularFileOwnerReadRequired: true,
+      gitNonExecutableBitsAllowed: false,
+      gitExecutableOwnerExecuteRequired: true,
+      directoryOwnerReadExecuteRequired: true,
+    })
     || repair.historicalCheckoutExactTrackedPathAncestorMetadataRequired !== true
+    || repair.targetParentPath !== "/usr/local/libexec" || repair.targetParentOwner !== "root"
+    || repair.targetParentGroup !== "root" || repair.targetParentDirectRequired !== true
+    || repair.targetParentGroupOrWorldWriteAllowed !== false
     || repair.authorizedKeysPath !== AUTHORIZED_KEYS_PATH || repair.authorizedKeyExactRecordRequired !== true
     || !Number.isFinite(repair.authorityMaximumAgeSeconds) || repair.authorityMaximumAgeSeconds <= 0
     || !same(assets, EXPECTED_INSTALLED_ASSETS)
@@ -443,6 +521,7 @@ function validateManifest(manifest) {
     fail("AEGIS_CANONICAL_REPAIR_PACKAGE_INVALID", "repair package semantics differ")
   }
   validateHistoricalRootMutationIds(repair.previousRootMutationIds)
+  validateHistoricalReleaseRoot(manifest, repair.previousPlannedMutations)
   const sourceBinding = manifest.bindings?.find(({ path: bindingPath }) => bindingPath === repair.sourcePath)
   if (!sourceBinding || sourceBinding.sha256 !== EXPECTED_SOURCE_SHA256 || sourceBinding.textNormalization !== "LF") {
     fail("AEGIS_CANONICAL_REPAIR_PACKAGE_INVALID", "canonical JSON source binding differs")
@@ -594,11 +673,12 @@ function canonicalRepository(value) {
 
 function validateHistoricalGitConfig(fsApi, checkoutRoot) {
   const configPath = path.posix.join(checkoutRoot, ".git", "config")
+  hardenedRegularFileMode(fsApi.lstatSync(configPath), { executable: false, label: ".git/config" })
   const text = readStableFile(fsApi, configPath, {
     uid: 0,
     gid: 0,
-    mode: 0o644,
     direct: true,
+    nonWritable: true,
     maximumBytes: 64 * 1024,
   }).toString("utf8").replace(/\r\n/g, "\n")
   if (text.includes("\0") || /\\\n/.test(text)) {
@@ -670,27 +750,19 @@ function validateTrackedFileMetadata(fsApi, checkoutRoot, bytes, requiredPaths) 
       ancestorDirectories.add(ancestor)
       ancestor = path.posix.dirname(ancestor)
     }
-    trackedFiles.push({ relativePath, expectedMode: match[1] === "100755" ? 0o755 : 0o644 })
+    trackedFiles.push({ relativePath, executable: match[1] === "100755" })
   }
   for (const relativeDirectory of [...ancestorDirectories].sort((left, right) =>
     left.split("/").length - right.split("/").length || left.localeCompare(right))) {
     const directoryPath = path.posix.join(checkoutRoot, relativeDirectory)
-    const stats = fsApi.lstatSync(directoryPath)
-    if (!stats.isDirectory() || stats.isSymbolicLink() || fsApi.realpathSync(directoryPath) !== directoryPath
-      || stats.uid !== 0 || stats.gid !== 0 || (stats.mode & 0o7777) !== 0o755) {
-      fail(
-        "AEGIS_CANONICAL_REPAIR_CHECKOUT_DIRECTORY_METADATA_DRIFT",
-        `${relativeDirectory} ancestor metadata differs from the hardened checkout`,
-      )
-    }
+    assertHardenedCheckoutDirectory(fsApi, directoryPath, relativeDirectory)
   }
-  for (const { relativePath, expectedMode } of trackedFiles) {
+  for (const { relativePath, executable } of trackedFiles) {
     const installedPath = path.posix.join(checkoutRoot, relativePath)
     const stats = fsApi.lstatSync(installedPath)
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1
-      || fsApi.realpathSync(installedPath) !== installedPath || stats.uid !== 0 || stats.gid !== 0
-      || (stats.mode & 0o7777) !== expectedMode) {
-      fail("AEGIS_CANONICAL_REPAIR_CHECKOUT_FILE_METADATA_DRIFT", `${relativePath} metadata differs from its Git mode`)
+    hardenedRegularFileMode(stats, { executable, label: relativePath })
+    if (fsApi.realpathSync(installedPath) !== installedPath) {
+      fail("AEGIS_CANONICAL_REPAIR_CHECKOUT_FILE_METADATA_DRIFT", `${relativePath} is indirect`)
     }
   }
   if (trackedFiles.length === 0 || requiredPaths.some((relativePath) => !seen.has(relativePath))) {
@@ -702,7 +774,7 @@ function validateHistoricalCheckout(fsApi, manifest, gitRunner) {
   const checkoutRoot = manifest.reviewedRelease.releaseRoot
   const gitRoot = path.posix.join(checkoutRoot, ".git")
   assertDirectDirectory(fsApi, checkoutRoot, { uid: 0, gid: 0, mode: 0o755 })
-  assertDirectDirectory(fsApi, gitRoot, { uid: 0, gid: 0, mode: 0o755 })
+  assertHardenedCheckoutDirectory(fsApi, gitRoot, ".git")
   const alternatesPath = path.posix.join(gitRoot, "objects", "info", "alternates")
   if (existsNoFollow(fsApi, alternatesPath).exists) {
     fail("AEGIS_CANONICAL_REPAIR_CHECKOUT_ALTERNATES_REJECTED", "historical checkout uses Git object alternates")
@@ -715,7 +787,9 @@ function validateHistoricalCheckout(fsApi, manifest, gitRunner) {
   }
   const head = run(["rev-parse", "--verify", "HEAD^{commit}"]).stdout.toString("utf8").trim()
   const symbolic = run(["symbolic-ref", "-q", "HEAD"], { acceptedStatuses: [0, 1] })
-  const headText = readStableFile(fsApi, path.posix.join(gitRoot, "HEAD"), {
+  const headPath = path.posix.join(gitRoot, "HEAD")
+  hardenedRegularFileMode(fsApi.lstatSync(headPath), { executable: false, label: ".git/HEAD" })
+  const headText = readStableFile(fsApi, headPath, {
     uid: 0,
     gid: 0,
     direct: true,
@@ -765,14 +839,13 @@ function validateInstalledState(fsApi, manifest, repair, authority, previous, ac
   const authorizedKeyText = authorizedKeyBytes.toString("utf8")
   if (sha256(authorizedKeyBytes) !== authority.installedAuthorizedKeysSha256
     || !authorizedKeyText.startsWith(AUTHORIZED_KEY_PREFIX)
-    || !/^[^\r\n]+ williamos-aegis-standing-hash\n$/.test(authorizedKeyText)
+    || !/^[^\r\n ]+\n$/.test(authorizedKeyText.slice(AUTHORIZED_KEY_PREFIX.length))
     || authorizedKeyText.trimEnd().split(/\r?\n/).length !== 1) {
     fail("AEGIS_CANONICAL_REPAIR_PRIOR_STATE_DRIFT", "installed restricted authorized key differs")
   }
 
   assertDirectDirectory(fsApi, manifest.reviewedRelease.releaseRoot, { uid: 0, gid: 0, mode: 0o755 })
-  assertDirectDirectory(fsApi, path.posix.join(manifest.reviewedRelease.releaseRoot, ".git"),
-    { uid: 0, gid: 0, mode: 0o755 })
+  assertHardenedCheckoutDirectory(fsApi, path.posix.join(manifest.reviewedRelease.releaseRoot, ".git"), ".git")
   const releaseHead = readStableFile(fsApi, path.posix.join(manifest.reviewedRelease.releaseRoot, ".git", "HEAD"),
     { uid: 0, gid: 0, direct: true, nonWritable: true, maximumBytes: 128 }).toString("utf8")
   if (releaseHead !== `${EXPECTED_COMMIT}\n`) {
@@ -807,6 +880,11 @@ function validateInstalledState(fsApi, manifest, repair, authority, previous, ac
   }
 }
 
+/**
+ * @param {{authority?:object, mode?:string, repoRoot?:string, fsApi?:RepairFsApi, processApi?:RepairProcessApi,
+ * hostname?:()=>string, clock?:()=>string, machineIdentitySha256?:string, randomUUID?:()=>string,
+ * gitRunner?:(args:string[], cwd:string)=>{status:number|null,stdout:Buffer,stderr?:Buffer,error?:Error}}} [options]
+ */
 export function repairAegisStandingHashCanonicalJson({
   authority,
   mode = "dry-run",
@@ -849,6 +927,7 @@ export function repairAegisStandingHashCanonicalJson({
   }
   const target = existsNoFollow(fsApi, TARGET_PATH)
   if (target.exists) fail("AEGIS_CANONICAL_REPAIR_TARGET_EXISTS", "target exists; overwrite and adoption are refused")
+  assertSafeRootParent(fsApi, TARGET_PATH)
 
   const previousJournalPath = `${PREVIOUS_JOURNAL_PREFIX}${authority.previousProvisioningAuthorityId}.mutation-journal.jsonl`
   const previousBytes = readStableFile(fsApi, previousJournalPath, { uid: 0, gid: 0, mode: 0o600, direct: true })

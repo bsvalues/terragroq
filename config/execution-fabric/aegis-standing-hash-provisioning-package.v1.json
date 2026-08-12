@@ -382,8 +382,22 @@
     "historicalCheckoutCleanTrackedAndUntrackedRequired": true,
     "historicalCheckoutAlternatesAllowed": false,
     "historicalCheckoutExactTrackedFileMetadataRequired": true,
-    "historicalCheckoutTrackedPathAncestorMode": "0755",
+    "historicalCheckoutHardenedModePolicy": {
+      "owner": "root",
+      "group": "root",
+      "specialBitsAllowed": false,
+      "groupOrWorldWriteAllowed": false,
+      "regularFileOwnerReadRequired": true,
+      "gitNonExecutableBitsAllowed": false,
+      "gitExecutableOwnerExecuteRequired": true,
+      "directoryOwnerReadExecuteRequired": true
+    },
     "historicalCheckoutExactTrackedPathAncestorMetadataRequired": true,
+    "targetParentPath": "/usr/local/libexec",
+    "targetParentOwner": "root",
+    "targetParentGroup": "root",
+    "targetParentDirectRequired": true,
+    "targetParentGroupOrWorldWriteAllowed": false,
     "privateRootsRequired": true,
     "authorizedKeysPath": "/home/williamos-fabric/.ssh/authorized_keys",
     "authorizedKeyExactRecordRequired": true
@@ -471,7 +485,7 @@
     },
     {
       "path": "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs",
-      "sha256": "ec84ced541b0cfad3be37a727792825122bdff688f780a46ce5b51f80a9ba4e8",
+      "sha256": "05724974cd0248fd30aaeb1483649a1d908e3d9f4d5a29019c0df1194cb0a222",
       "textNormalization": "LF"
     },
     {
@@ -481,7 +495,7 @@
     },
     {
       "path": "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs",
-      "sha256": "2b606a16a7bc4a48afea9e40e0d3757596ba26f223bbc5323f690c811db38313",
+      "sha256": "2ac9e9fa764f3882b4de34c9c8efe9b12e2548e57ecefe4c0d097b7c41f08b92",
       "textNormalization": "LF"
     }
   ]

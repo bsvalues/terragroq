@@ -12,6 +12,27 @@ import {
 } from "./aegis-standing-hash-prerequisites.mjs"
 import { canonicalizeJcs } from "../canonical-json.mjs"
 
+/**
+ * @typedef {{dev:number, ino:number, mode:number, nlink:number, uid:number, gid:number, size:number,
+ * mtimeMs:number, ctimeMs:number, isFile:()=>boolean, isDirectory:()=>boolean, isSymbolicLink:()=>boolean}} FabricStats
+ * @typedef {{constants:typeof fs.constants, lstatSync:(path:import("node:fs").PathLike)=>FabricStats,
+ * fstatSync:(fd:number)=>FabricStats, realpathSync:(path:import("node:fs").PathLike)=>string,
+ * openSync:(path:import("node:fs").PathLike, flags:number, mode?:number)=>number,
+ * readFileSync:(path:import("node:fs").PathLike|number)=>Buffer, closeSync:(fd:number)=>void,
+ * fsyncSync:(fd:number)=>void, writeSync:(fd:number, buffer:Buffer, offset:number, length:number, position:number|null)=>number,
+ * mkdirSync:(path:import("node:fs").PathLike, options:{recursive?:boolean, mode?:number})=>unknown,
+ * chmodSync:(path:import("node:fs").PathLike, mode:number)=>void, chownSync:(path:import("node:fs").PathLike, uid:number, gid:number)=>void,
+ * fchmodSync:(fd:number, mode:number)=>void, fchownSync:(fd:number, uid:number, gid:number)=>void,
+ * readdirSync:(path:import("node:fs").PathLike)=>string[], linkSync:(existing:import("node:fs").PathLike, target:import("node:fs").PathLike)=>void,
+ * renameSync:(oldPath:import("node:fs").PathLike, newPath:import("node:fs").PathLike)=>void,
+ * unlinkSync:(path:import("node:fs").PathLike)=>void, rmdirSync:(path:import("node:fs").PathLike)=>void,
+ * rmSync:(path:import("node:fs").PathLike, options:{recursive?:boolean, force?:boolean})=>void}} FabricFsApi
+ * @typedef {{platform:string, getuid?:()=>number, geteuid?:()=>number, getegid?:()=>number, getgroups?:()=>number[],
+ * seteuid?:(uid:number)=>void, setegid?:(gid:number)=>void, setgroups?:(groups:number[])=>void}} FabricProcessApi
+ * @typedef {{sourcePath:string, expected:{repository:string,commit:string}}} CheckoutInspectionInput
+ * @typedef {{sourcePath:string, destination:string, expected:{repository:string,commit:string}}} CheckoutPublishInput
+ */
+
 export const MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-provisioning-package.v1.json"
 export const JOURNAL_PREFIX = "/var/lib/williamos-aegis-standing-hash-"
 export const AUTHORIZED_KEYS_RECORD_OPTIONS = Object.freeze([
@@ -508,6 +529,7 @@ function assertRootOwnedDirect(candidate, fsApi, kind) {
   return stats
 }
 
+/** @param {string} checkoutRoot @param {FabricFsApi} fsApi */
 export function assertNoGitAlternates(checkoutRoot, fsApi = fs) {
   const alternatesPath = path.posix.join(checkoutRoot, ".git", "objects", "info", "alternates")
   if (existsNoFollow(fsApi, alternatesPath).exists) {
@@ -1028,6 +1050,12 @@ function evidenceBase(manifest, authority, publicKey, mode, journalPath, planned
   }
 }
 
+/**
+ * @param {{authority?:object, publicKeyBytes?:string|Buffer, keyGenerationEvidence?:object, mode?:string,
+ * repoRoot?:string, fsApi?:FabricFsApi, processApi?:FabricProcessApi, hostname?:()=>string, clock?:()=>string,
+ * machineIdentitySha256?:string, accountIdentity?:{uid:number,gid:number,home?:string}, reviewedCheckoutSourcePath?:string,
+ * checkoutApi?:{inspect:(input:CheckoutInspectionInput)=>object,publish:(input:CheckoutPublishInput)=>object}, packageClosure?:Map<string,Buffer>}} [options]
+ */
 export function provisionAegisStandingHashPrerequisites({
   authority,
   publicKeyBytes,
