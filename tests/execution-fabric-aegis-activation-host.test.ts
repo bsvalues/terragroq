@@ -1,0 +1,137 @@
+import crypto from "node:crypto"
+import fs from "node:fs"
+import path from "node:path"
+import { describe, expect, it } from "vitest"
+import {
+  inspectActivationSessionToken,
+  inspectTicketMintRequest,
+  ACTIVATION_ID,
+  AUTHORITY_REFERENCE,
+  inspectActivationHostPhase,
+  inspectActivationBridgeReceipt,
+  inspectMintRecord,
+  inspectStrandedActivationLedger,
+  inspectActivationUnitState,
+  inspectLeaseHolderState,
+} from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
+
+const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
+const canonical = (value:any):string => value===null||["string","boolean","number"].includes(typeof value)?JSON.stringify(value):Array.isArray(value)?`[${value.map(canonical).join(",")}]`:`{${Object.keys(value).sort().map(k=>`${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`
+const runId = "a3961b87-ed54-45d0-a975-678a02f1e163"
+const root = path.resolve(import.meta.dirname, "..")
+const session = () => ({
+  schemaVersion: 1,
+  activationId: ACTIVATION_ID,
+  authorityReference: AUTHORITY_REFERENCE,
+  runId,
+  claimId: "claim-" + "a".repeat(24),
+  leaseId: "lease-" + "b".repeat(24),
+  proofId: "33333333-3333-4333-8333-333333333333",
+  workspace: "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001",
+  branch: "codex/wo-tf-remote-dev-offload-001-734",
+  baseSha: "ffd2fa35f5152de2b95e7f63b220050d18193d7a",
+  issuedAt: "2026-08-12T22:30:00.000Z",
+  expiresAt: "2026-08-12T23:30:00.000Z",
+  daemonPid: 1234,
+  daemonStartTicks: "5678",
+})
+
+describe("AEGIS production activation host trust", () => {
+  it("accepts only the exact active issue #734 session", () => {
+    expect(inspectActivationSessionToken(session(), "2026-08-12T22:45:00.000Z")).toMatchObject({ status: "ACTIVE_SESSION_VERIFIED" })
+    for (const mutate of [
+      (v: any) => { v.activationId = "other" },
+      (v: any) => { v.runId = crypto.randomUUID() },
+      (v: any) => { v.workspace = "/tmp/other" },
+      (v: any) => { v.expiresAt = "2026-08-12T22:45:00.000Z" },
+      (v: any) => { v.extra = true },
+    ]) { const value: any = session(); mutate(value); expect(inspectActivationSessionToken(value, "2026-08-12T22:45:00.000Z")).toMatchObject({ status: "BLOCKED" }) }
+  })
+
+  it("binds every ticket to one operation and exact packet, patch, attempt, and evidence predecessor", () => {
+    const packet = Buffer.from("packet")
+    const patch = Buffer.from("patch")
+    const request = { operation: "CREATE_WORKSPACE", attempt: 1, previousEvidenceSha256: null, packetSha256: sha("packet"), patchSha256: sha("patch") }
+    expect(inspectTicketMintRequest(request, packet, patch)).toMatchObject({ status: "TICKET_REQUEST_VERIFIED" })
+    expect(inspectTicketMintRequest({ ...request, operation: "ARBITRARY_SHELL" }, packet, patch)).toMatchObject({ status: "BLOCKED" })
+    expect(inspectTicketMintRequest({ ...request, packetSha256: "f".repeat(64) }, packet, patch)).toMatchObject({ status: "BLOCKED" })
+    expect(inspectTicketMintRequest({ ...request, extra: true }, packet, patch)).toMatchObject({ status: "BLOCKED" })
+  })
+
+  it("accepts recovery only for one exact durable claimed phase inside the authority window", () => {
+    const phase = { schemaVersion: 1, phase: "ACTIVATION_CLAIMED_LEASED", runId, claimId: "claim-" + "a".repeat(24), leaseId: "lease-" + "b".repeat(24), authorityReference: AUTHORITY_REFERENCE, claimedAt: "2026-08-12T22:10:00.000Z", expiresAt: "2026-08-13T02:06:00.000Z" }
+    expect(inspectActivationHostPhase(phase, "2026-08-12T22:30:00.000Z")).toMatchObject({ status: "RECOVERY_REQUIRED" })
+    expect(inspectActivationHostPhase({ ...phase, extra: true }, "2026-08-12T22:30:00.000Z")).toMatchObject({ status: "BLOCKED" })
+    expect(inspectActivationHostPhase(phase, phase.expiresAt)).toMatchObject({ status: "RECOVERY_REQUIRED" })
+    expect(inspectActivationHostPhase(phase, "2026-08-13T02:36:00.000Z")).toMatchObject({ status: "BLOCKED" })
+  })
+
+  it("makes each exact operation tuple a single durable mint generation", () => {
+    const value = { schemaVersion: 1, mintKey: "a".repeat(64), runId, claimId: "claim-" + "b".repeat(24), operation: "CREATE_WORKSPACE", attempt: 1, previousEvidenceSha256: null, packetSha256: "c".repeat(64), patchSha256: "d".repeat(64), ticketSha256: "e".repeat(64) }
+    expect(inspectMintRecord(value, value)).toMatchObject({ status: "MINT_REPLAY_EXACT" })
+    expect(inspectMintRecord(value, { ...value, ticketSha256: "f".repeat(64) })).toMatchObject({ status: "BLOCKED" })
+  })
+
+  it("requires a deterministic root bridge receipt binding every installed byte and prerequisite receipt", () => {
+    const value = { schemaVersion: 1, status: "ACTIVATION_BRIDGE_VERIFIED", runId, authorityId: "22222222-2222-4222-8222-222222222222", authoritySha256: "f".repeat(64), machineIdSha256: "a".repeat(64), bootId: "11111111-1111-4111-8111-111111111111", controlCommit: "b".repeat(40), prerequisiteReceiptSha256: "41ea35adc284b37e381f1162e5cd2315f8a0ef2da5c2326e1a224c15e4fa541c", assets: [{ destination: "/usr/local/libexec/host", sha256: "c".repeat(64), mode: "0555" }], schedulerEnabled: false, standingAuthority: false, executionAuthorized: false }
+    expect(inspectActivationBridgeReceipt(value, value)).toMatchObject({ status: "ACTIVATION_BRIDGE_VERIFIED" })
+    expect(inspectActivationBridgeReceipt(value, { ...value, assets: [] })).toMatchObject({ status: "BLOCKED" })
+  })
+
+  it("recovers a crash between canonical lease acquisition and host phase publication only from exact ledger records", () => {
+    const expected={claimKeySha256:"a".repeat(64),requestSha256:"b".repeat(64),scopeSha256:"c".repeat(64)}
+    const claim:any={schema_version:"0.1-aegis-single-use-claim",claim_id:"claim-"+"a".repeat(24),request_sha256:expected.requestSha256,scope_sha256:expected.scopeSha256,authority_reference:AUTHORITY_REFERENCE,maximum_attempts:3,claim_key_sha256:expected.claimKeySha256,claimed_at:"2026-08-12T22:10:00.000Z"};claim.claim_sha256=sha(canonical(claim))
+    const lease:any={schema_version:"0.1-resident-aegis-runtime-lease",lease_id:"lease-"+"b".repeat(24),claim_id:claim.claim_id,acquired_at:"2026-08-12T22:10:01.000Z",holder:{pid:123,boot_id:"22222222-2222-4222-8222-222222222222",process_start_ticks:"456"}};lease.lease_sha256=sha(canonical(lease))
+    expect(inspectStrandedActivationLedger(claim,lease,expected)).toMatchObject({status:"STRANDED_LEASE_RECOVERY_REQUIRED"})
+    expect(inspectStrandedActivationLedger({...claim,request_sha256:"f".repeat(64)},lease,expected)).toMatchObject({status:"BLOCKED"})
+  })
+
+  it("confines the authenticated root socket request to only the activation state, ledger, and ticket roots", () => {
+    const service=fs.readFileSync(path.join(root,"scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-activation@.service"),"utf8").replace(/\r\n/g,"\n")
+    expect(service).toContain("StandardInput=socket")
+    expect(service).toContain("User=root\nGroup=root")
+    expect(service).toContain("ReadWritePaths=/run/williamos-fabric /var/lib/williamos/fabric/ledger /var/lib/williamos-fabric/remote-dev-launch-tickets")
+    expect(service).not.toContain("/var/lib/williamos-remote-dev")
+  })
+
+  it("authenticates the socket peer by uid, executable, exact entrypoint argv, and ssh session cgroup", () => {
+    const peer=fs.readFileSync(path.join(root,"scripts/execution-fabric/provision/assets/aegis-remote-dev-activation-peer.py"),"utf8")
+    for(const proof of ["SO_PEERCRED","EXPECTED_UID = 999","/proc/{pid}/exe","/proc/{pid}/cmdline","/usr/sbin/sshd","sshd: williamos-fabric@notty","/proc/net/tcp","192.168.88.9","EXPECTED_SCRIPT"]) expect(peer).toContain(proof)
+    expect(peer).not.toContain('"session-"')
+    expect(peer).not.toContain("sudo")
+  })
+
+  it("proves repository config and empty hooks before the first root Git command", () => {
+    const source=fs.readFileSync(path.join(root,"scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"),"utf8")
+    const start=source.indexOf("function prepareSnapshot")
+    expect(source.indexOf("canonical control Git config differs",start)).toBeLessThan(source.indexOf("const git = args => run",start))
+    expect(source.indexOf("canonical empty hooks differ",start)).toBeLessThan(source.indexOf("const git = args => run",start))
+  })
+
+  it("never recovers a phase or stranded lease while the original activation unit is still active", () => {
+    const source=fs.readFileSync(path.join(root,"scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"),"utf8")
+    expect(source).toContain('run("/usr/bin/systemctl",["is-active",UNIT],{statuses:[3,4]})')
+    expect(source).toContain('throw new Error("activation unit is not proven inactive")')
+  })
+
+  it("accepts failed transient units only after MainPID is proven absent", () => {
+    expect(inspectActivationUnitState("inactive",0)).toBe("INACTIVE")
+    expect(inspectActivationUnitState("unknown",0)).toBe("INACTIVE")
+    expect(inspectActivationUnitState("failed",0)).toBe("RESET_REQUIRED")
+    expect(inspectActivationUnitState("failed",123)).toBe("DRIFT")
+    for(const state of ["active","activating","deactivating"])expect(inspectActivationUnitState(state,0)).toBe("DRIFT")
+  })
+
+  it("recovers a stranded lease only when its exact recorded holder is dead", () => {
+    const holder={pid:4242,boot_id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",process_start_ticks:"101"}
+    expect(inspectLeaseHolderState(holder,holder.boot_id,"101")).toBe("ACTIVE")
+    expect(inspectLeaseHolderState(holder,holder.boot_id,null)).toBe("DEAD")
+    expect(inspectLeaseHolderState(holder,"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","101")).toBe("DEAD")
+    expect(inspectLeaseHolderState({...holder,pid:0},holder.boot_id,null)).toBe("DRIFT")
+  })
+
+  it("re-disables the bridge before replaying an existing settlement", () => {
+    const source=fs.readFileSync(path.join(root,"scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"),"utf8")
+    expect(source).toContain('if (fs.existsSync(SETTLEMENT_FILE)) { run("/usr/bin/systemctl",["disable","--now","williamos-aegis-remote-dev-activation.socket"])')
+  })
+})

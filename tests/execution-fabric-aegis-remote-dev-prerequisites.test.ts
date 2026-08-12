@@ -342,21 +342,13 @@ describe("AEGIS remote-dev prerequisite package", () => {
     })
   })
 
-  it("checks internal artifact digests without claiming an external trust root", () => {
+  it("keeps the superseded prerequisite package non-authorizing after the reviewed activation transport successor", () => {
     const inspection = inspectProvisioningPackage(repoRoot)
 
-    expect(inspection.status).toBe("PACKAGE_INTERNAL_CONSISTENCY_ONLY")
-    expect(inspection.reasonCode).toBe("EXTERNAL_TRUST_ROOT_REQUIRED")
+    expect(inspection.status).toBe("BLOCKED")
+    expect(inspection.reasonCode).toBe("PACKAGE_BINDING_DRIFT")
     expect(inspection.executionAuthorized).toBe(false)
-    expect(inspection.drift).toEqual([])
-    expect(inspection.verifiedPaths).toEqual([
-      "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh",
-      "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs",
-      "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs",
-      "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs",
-      "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
-      "config/execution-fabric/aegis-resident-network-boundary.json",
-    ])
+    expect(inspection.drift).toContain("scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs")
   })
 
   it("rejects unknown fields and every activation-critical manifest drift instead of self-attesting it", () => {
@@ -419,6 +411,10 @@ describe("AEGIS remote-dev prerequisite package", () => {
         "e30=", "PROVE_PREFLIGHT", packet, "", "1", "null",
       ],
     })
+    const activationBytes = Buffer.from('{"action":"start"}')
+    expect(parseBoundedSshCommand(`activation ${activationBytes.toString("base64")}`)).toEqual({ activationRequest: activationBytes })
+    const entrypointSource = fs.readFileSync(path.join(repoRoot, "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs"), "utf8")
+    expect(entrypointSource).toContain('parsed.status === "BLOCKED"')
     for (const rejected of [
       "bash -lc id",
       `${accepted}; id`,

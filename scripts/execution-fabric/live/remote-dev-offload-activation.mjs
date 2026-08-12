@@ -50,6 +50,7 @@ const REPOSITORY_ROOT = fileURLToPath(ROOT)
 const ACTIVATION_PATH = "config/execution-fabric/remote-dev-offload-v1-activation.json"
 const IDENTITY_PATH = "config/execution-fabric/aegis-resident-identity.json"
 const PREREQUISITE_RECEIPT_PATH = "/var/lib/williamos-fabric/remote-dev-prerequisite-verified.json"
+const BRIDGE_RECEIPT_PATH = "/var/lib/williamos-fabric/remote-dev-activation-bridge-verified.json"
 const LIVE_SESSIONS = new WeakMap()
 const ARTIFACT_PATHS = {
   worker: "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
@@ -63,6 +64,12 @@ const ARTIFACT_PATHS = {
   rootPrerequisiteManifest: "config/execution-fabric/aegis-remote-dev-root-handoff.json",
   rootPrerequisiteVerifier: "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs",
   rootPrerequisiteAdapter: "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs",
+  activationHost: "scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs",
+  activationBootstrap: "scripts/execution-fabric/provision/aegis-remote-dev-activation-bridge-bootstrap.mjs",
+  activationPeer: "scripts/execution-fabric/provision/assets/aegis-remote-dev-activation-peer.py",
+  activationSocket: "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-activation.socket",
+  activationService: "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-activation@.service",
+  sshEntrypoint: "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs",
 }
 const BASELINE_ARTIFACT_PATHS = {
   contract: "config/execution-fabric/aegis-bounded-dispatch-contract.json",
@@ -112,6 +119,12 @@ const ACTIVATION_CRITICAL_PATHS = [
   ARTIFACT_PATHS.rootPrerequisiteManifest,
   ARTIFACT_PATHS.rootPrerequisiteVerifier,
   ARTIFACT_PATHS.rootPrerequisiteAdapter,
+  ARTIFACT_PATHS.activationHost,
+  ARTIFACT_PATHS.activationBootstrap,
+  ARTIFACT_PATHS.activationPeer,
+  ARTIFACT_PATHS.activationSocket,
+  ARTIFACT_PATHS.activationService,
+  ARTIFACT_PATHS.sshEntrypoint,
   "scripts/execution-fabric/canonical-json.mjs",
   "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-hash-verify.mjs",
   IDENTITY_PATH,
@@ -376,11 +389,11 @@ export function inspectRootPrerequisiteReceiptEvidence(bytes, manifest, currentM
   try {
     const receipt = JSON.parse(Buffer.from(bytes).toString("utf8"))
     if (!Buffer.from(bytes).equals(Buffer.from(`${canonicalizeJcs(receipt)}\n`, "utf8"))) fail("ROOT_PREREQUISITES_UNPROVEN", "prerequisite receipt is not canonical JSON")
-    exactKeys(receipt, ["schemaVersion", "status", "workOrderId", "transactionId", "authorityId", "completedAt", "machineIdSha256", "trustedMainCommit", "rootHandoffManifestSha256", "historicalPreflightManifestJcsSha256", "appliedAssets", "authoritySha256", "inputsSha256", "launchAuthorityPublicKeySha256", "storage", "journalHeadSha256", "schedulerEnabled", "standingAuthority", "dispatchOccurred", "closedHashMutation", "executionAuthorized", "activationAuthorized"], "prerequisite receipt")
+    exactKeys(receipt, ["schemaVersion", "status", "workOrderId", "transactionId", "authorityId", "completedAt", "machineIdSha256", "trustedMainCommit", "reviewedPackageCommit", "observedFreshMainCommit", "rootHandoffManifestSha256", "historicalPreflightManifestJcsSha256", "appliedAssets", "authoritySha256", "inputsSha256", "launchAuthorityPublicKeySha256", "storage", "journalHeadSha256", "schedulerEnabled", "standingAuthority", "dispatchOccurred", "closedHashMutation", "executionAuthorized", "activationAuthorized"], "prerequisite receipt")
     if (receipt.schemaVersion !== 1 || receipt.status !== "PREREQUISITES_VERIFIED" || receipt.workOrderId !== "WO-TF-REMOTE-DEV-OFFLOAD-001"
       || !GUID.test(receipt.transactionId) || !GUID.test(receipt.authorityId) || !UTC.test(receipt.completedAt) || !Number.isFinite(Date.parse(receipt.completedAt))
       || receipt.machineIdSha256 !== currentMachine || receipt.machineIdSha256 !== manifest.target?.machineIdSha256
-      || !SHA40.test(currentControlCommit ?? "") || receipt.trustedMainCommit !== currentControlCommit || receipt.rootHandoffManifestSha256 !== jcsDigest(manifest)
+      || !SHA40.test(currentControlCommit ?? "") || receipt.trustedMainCommit !== "98b458b998010f8ccfe9902fd307d75c0ec8c309" || receipt.reviewedPackageCommit !== receipt.trustedMainCommit || receipt.observedFreshMainCommit !== receipt.trustedMainCommit || receipt.rootHandoffManifestSha256 !== jcsDigest(manifest)
       || receipt.historicalPreflightManifestJcsSha256 !== manifest.prerequisitePackage?.supersededPreflight?.manifestJcsSha256 || !same(receipt.appliedAssets, manifest.appliedAssets)
       || !SHA256.test(receipt.authoritySha256) || !SHA256.test(receipt.inputsSha256) || !SHA256.test(receipt.launchAuthorityPublicKeySha256)
       || !same(receipt.storage, { mode: "VERIFY_ONLY", filesystemUuid: manifest.storage?.filesystemUuid, projectId: 734, hardLimitBytes: 85899345920 })
@@ -390,7 +403,7 @@ export function inspectRootPrerequisiteReceiptEvidence(bytes, manifest, currentM
   } catch (error) { return blocked(error) }
 }
 
-function proveRootPrerequisites(currentControlCommit) {
+function proveRootPrerequisites(currentControlCommit, authority) {
   const manifest = JSON.parse(read(ARTIFACT_PATHS.rootPrerequisiteManifest)); const { bytes } = readRootPrerequisiteReceipt()
   const currentMachine = crypto.createHash("sha256").update(fs.readFileSync("/etc/machine-id", "utf8").trim()).digest("hex")
   const result = inspectRootPrerequisiteReceiptEvidence(bytes, manifest, currentMachine, currentControlCommit)
@@ -403,9 +416,23 @@ function proveRootPrerequisites(currentControlCommit) {
     }
     const stat = fs.lstatSync(asset.destination)
     const installedSha256 = crypto.createHash("sha256").update(fs.readFileSync(asset.destination)).digest("hex")
+    const bridgeEntrypoint = asset.destination === "/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" && installedSha256 === authority.bindings.sshEntrypoint.sha256 && (stat.mode & 0o7777) === 0o555
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== 0 || stat.gid !== 0
-      || (stat.mode & 0o7777) !== Number.parseInt(asset.mode, 8) || installedSha256 !== asset.sha256) fail("ROOT_PREREQUISITES_UNPROVEN", "installed prerequisite bytes or metadata differ")
+      || (!bridgeEntrypoint && ((stat.mode & 0o7777) !== Number.parseInt(asset.mode, 8) || installedSha256 !== asset.sha256))) fail("ROOT_PREREQUISITES_UNPROVEN", "installed prerequisite bytes or metadata differ")
   }
+  let bridgeBytes, bridge
+  try { const s=fs.lstatSync(BRIDGE_RECEIPT_PATH); if(s.isSymbolicLink()||!s.isFile()||s.nlink!==1||s.uid!==0||s.gid!==0||(s.mode&0o7777)!==0o444) throw new Error(); bridgeBytes = fs.readFileSync(BRIDGE_RECEIPT_PATH); bridge = JSON.parse(bridgeBytes) } catch { fail("ROOT_PREREQUISITES_UNPROVEN", "activation bridge receipt is unavailable") }
+  if (!bridgeBytes.equals(Buffer.from(`${canonicalizeJcs(bridge)}\n`)) || bridge.schemaVersion !== 1 || bridge.status !== "ACTIVATION_BRIDGE_VERIFIED" || bridge.runId !== authority.run.runId
+    || bridge.machineIdSha256 !== currentMachine || bridge.controlCommit !== currentControlCommit || bridge.prerequisiteReceiptSha256 !== crypto.createHash("sha256").update(bytes).digest("hex")
+    || bridge.schedulerEnabled !== false || bridge.standingAuthority !== false || bridge.executionAuthorized !== false) fail("ROOT_PREREQUISITES_UNPROVEN", "activation bridge receipt binding differs")
+  const expectedAssets = [
+    ["activationHost", "/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs", "0555"],
+    ["activationPeer", "/usr/local/libexec/williamos-aegis-remote-dev-activation-peer.py", "0555"],
+    ["activationSocket", "/etc/systemd/system/williamos-aegis-remote-dev-activation.socket", "0444"],
+    ["activationService", "/etc/systemd/system/williamos-aegis-remote-dev-activation@.service", "0444"],
+    ["sshEntrypoint", "/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs", "0555"],
+  ].map(([name,destination,mode]) => ({ destination, sha256: authority.bindings[name].sha256, mode }))
+  if (!same(bridge.assets, expectedAssets)) fail("ROOT_PREREQUISITES_UNPROVEN", "activation bridge assets differ")
   return result
 }
 
@@ -429,7 +456,7 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
     if (controlPlane.status !== "CONTROL_PLANE_TRUSTED_MAIN_VERIFIED") fail(controlPlane.reasons?.[0]?.code ?? "TRUSTED_MAIN_UNPROVEN", controlPlane.reasons?.[0]?.detail ?? "control-plane trusted main is unproven")
     const criticalFiles = inspectActivationCriticalWorkingFiles(authority)
     if (criticalFiles.status !== "ACTIVATION_CRITICAL_FILES_VERIFIED") fail("TRUSTED_MAIN_UNPROVEN", criticalFiles.reasons?.[0]?.detail ?? "activation-critical working files are unproven")
-    const prerequisites = proveRootPrerequisites(checkout.head_commit)
+    const prerequisites = proveRootPrerequisites(checkout.head_commit, authority)
     if (prerequisites.status !== "ROOT_PREREQUISITES_VERIFIED") fail("ROOT_PREREQUISITES_UNPROVEN", "root prerequisite receipt differs")
     const networkBoundary = await proveResidentAegisNetworkBoundary()
     if (networkBoundary.status !== "RESIDENT_NETWORK_BOUNDARY_VERIFIED") {
@@ -516,5 +543,20 @@ export async function settleRemoteDevActivation(session) {
     if (settled.status !== "SETTLEMENT_EVIDENCE_VERIFIED") fail(settled.reasons?.[0]?.code ?? "ACTIVATION_EVIDENCE_MISMATCH", settled.reasons?.[0]?.detail ?? "settlement evidence is unavailable")
     LIVE_SESSIONS.delete(session)
     return { status: "CONSUMED_SINGLE_USE", executionAuthorized: false, runId: state.runId, claimId: state.claimId, leaseReleased: true, replayRejected: true, releaseSha256: settled.releaseSha256, schedulerActivated: false, standingAegisAuthority: false }
+  } catch (error) { return blocked(error) }
+}
+
+export async function recoverRemoteDevActivationSettlement(authority, candidate, recovery) {
+  try {
+    const matched = validateRemoteDevActivationAuthority(authority, candidate)
+    if (matched.status !== "ACTIVATION_AUTHORITY_MATCHED") fail("ACTIVATION_EVIDENCE_MISMATCH", "recovery authority differs")
+    exactKeys(recovery, ["runId", "claimId", "leaseId"], "recovery")
+    if (recovery.runId !== authority.run.runId || !/^claim-[a-f0-9]{24}$/.test(recovery.claimId) || !/^lease-[a-f0-9]{24}$/.test(recovery.leaseId)) fail("ACTIVATION_EVIDENCE_MISMATCH", "recovery claim or lease differs")
+    const state = {
+      ledger: createLedgerProviders(), runId: recovery.runId, authorityReference: authority.authorityReference,
+      maximumAttempts: authority.resources.maxAttempts, requestSha256: jcsDigest(candidate), scopeSha256: normalizedDigest(read(ACTIVATION_PATH)),
+      claimId: recovery.claimId, leaseId: recovery.leaseId, leaseReleased: false, settling: false,
+    }
+    return await settleRemoteDevActivationState(state)
   } catch (error) { return blocked(error) }
 }
