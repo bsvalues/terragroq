@@ -1,6 +1,7 @@
 import { streamText, convertToModelMessages, type UIMessage } from "ai"
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL } from "@/lib/ai/config"
+import { williamosInference } from "@/lib/ai/provider"
 import { getActiveDoctrine } from "@/app/actions/doctrine"
 import { getActiveDecisions } from "@/app/actions/decisions"
 import { searchMemory } from "@/app/actions/memory"
@@ -176,7 +177,7 @@ RULES:
   let result
   try {
     result = streamText({
-      model: CHAT_MODEL,
+      model: williamosInference(CHAT_MODEL),
       system,
       messages: await convertToModelMessages(groundedMessages),
     })
