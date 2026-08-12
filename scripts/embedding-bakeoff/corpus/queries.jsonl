@@ -1,0 +1,40 @@
+{"id": "q01", "type": "factual", "query": "What does doctrine RULE-0005 forbid?", "gold": ["gov-rule-0005"]}
+{"id": "q02", "type": "factual", "query": "How does CAPG classify shell commands and what does it do on an unrecognized command?", "gold": ["gov-capg", "code-capg-failclosed"]}
+{"id": "q03", "type": "factual", "query": "What is the HYBRID_SOVEREIGN doctrine about local versus external inference?", "gold": ["gov-hybrid"]}
+{"id": "q04", "type": "factual", "query": "What are the roles of the four lab nodes OMEN, HERMES, AEGIS, and ATLAS?", "gold": ["gov-nodes"]}
+{"id": "q05", "type": "factual", "query": "What does the owner-touch meter measure?", "gold": ["gov-owner-touch"]}
+{"id": "q06", "type": "factual", "query": "What does exact-head review mean for pull requests?", "gold": ["gov-exact-head"]}
+{"id": "q07", "type": "factual", "query": "What is required for NO_UNAUTHORIZED_EXTERNAL_EGRESS?", "gold": ["gov-egress"]}
+{"id": "q08", "type": "factual", "query": "Why must WilliamOS state never point at the TerraFusion database?", "gold": ["gov-sovereign-pg"]}
+{"id": "q09", "type": "factual", "query": "What is the authority boundary for creating new product outcomes?", "gold": ["gov-authority"]}
+{"id": "q10", "type": "factual", "query": "What is issue #638 about?", "gold": ["gov-638"]}
+{"id": "q11", "type": "factual", "query": "What is the T2 memory and retrieval gate?", "gold": ["gov-t2-gate"]}
+{"id": "q12", "type": "factual", "query": "What does the #655 migration harness provide?", "gold": ["gov-655-harness"]}
+{"id": "q13", "type": "code", "query": "Where does the schema bootstrap acquire a single pg client for BEGIN, DDL, and COMMIT?", "gold": ["code-apply-schema"]}
+{"id": "q14", "type": "code", "query": "How does the app wire the OpenAI-compatible inference provider into streamText?", "gold": ["code-provider"]}
+{"id": "q15", "type": "code", "query": "How is it proven that writes land on ATLAS and Neon receives no new writes?", "gold": ["code-canary"]}
+{"id": "q16", "type": "code", "query": "How does the database state manifest detect that two databases have identical content?", "gold": ["code-manifest"]}
+{"id": "q17", "type": "code", "query": "When does the Neon state probe return NO_CANONICAL_STATE?", "gold": ["code-classify"]}
+{"id": "q18", "type": "code", "query": "What does restore-dump.sh ensure before restoring and what does it refuse?", "gold": ["code-restore"]}
+{"id": "q19", "type": "code", "query": "How does SEA prevent a silent partial write when applying an edit?", "gold": ["gov-sea"]}
+{"id": "q20", "type": "code", "query": "How does the CAPG classify function behave on a rule-evaluation exception?", "gold": ["code-capg-failclosed"]}
+{"id": "q21", "type": "config", "query": "What environment variable selects the inference endpoint and what is its default?", "gold": ["cfg-ai-base-url"]}
+{"id": "q22", "type": "config", "query": "Where does the auth base URL come from after the Vercel removal?", "gold": ["cfg-auth-base"]}
+{"id": "q23", "type": "config", "query": "Which Vercel and v0 environment variables were removed from auth-origin resolution?", "gold": ["cfg-auth-base"]}
+{"id": "q24", "type": "config", "query": "What command starts Hermes Agent's OpenAI-compatible server and on what port?", "gold": ["cfg-hermes-gateway"]}
+{"id": "q25", "type": "near-dup", "query": "What host and port does the sovereign WilliamOS Postgres bind to?", "gold": ["cfg-wos-pg-port"], "distractor": "cfg-tf-pg-port"}
+{"id": "q26", "type": "near-dup", "query": "What port does TerraFusion's tf-postgres listen on?", "gold": ["cfg-tf-pg-port"], "distractor": "cfg-wos-pg-port"}
+{"id": "q27", "type": "long-doc", "query": "Which remediation item became the final gate keeping issue #638 open?", "gold": ["long-retirement"]}
+{"id": "q28", "type": "long-doc", "query": "Why was the Vercel integration disconnect R0 safe to perform?", "gold": ["long-retirement"]}
+{"id": "q29", "type": "long-doc", "query": "What did Pilot 0 prove about the agent runtime's own approval gate versus host-enforced deny-egress?", "gold": ["long-pilot0"]}
+{"id": "q30", "type": "multilingual", "query": "Que es el avaluo masivo?", "gold": ["es-avaluo"]}
+{"id": "q31", "type": "multilingual", "query": "Como funciona la contencion de red y el egreso externo?", "gold": ["es-egress"]}
+{"id": "q32", "type": "factual", "query": "What is mass appraisal?", "gold": ["appr-mass"]}
+{"id": "q33", "type": "factual", "query": "How does the sales comparison approach estimate a property's value?", "gold": ["appr-comps"]}
+{"id": "q34", "type": "factual", "query": "What does an assessment ratio study measure and what is the coefficient of dispersion?", "gold": ["appr-ratio"]}
+{"id": "q35", "type": "factual", "query": "When is the cost approach to value most reliable?", "gold": ["appr-cost"]}
+{"id": "q36", "type": "factual", "query": "What is the income approach and when does it apply?", "gold": ["appr-income"]}
+{"id": "q37", "type": "false-positive", "query": "What is the airspeed velocity of an unladen swallow?", "gold": []}
+{"id": "q38", "type": "false-positive", "query": "How do I configure the Kubernetes ingress for the payment microservice?", "gold": []}
+{"id": "q39", "type": "false-positive", "query": "What is the capital of France?", "gold": []}
+{"id": "q40", "type": "false-positive", "query": "How do I reset my Gmail account password?", "gold": []}
