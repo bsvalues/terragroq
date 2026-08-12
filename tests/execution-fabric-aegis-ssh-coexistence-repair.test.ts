@@ -1,6 +1,8 @@
 import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
+import os from "node:os"
+import { spawn, spawnSync } from "node:child_process"
 
 import { describe, expect, it, vi } from "vitest"
 
@@ -492,12 +494,36 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     expect(launcherBytes.toString("utf8")).not.toContain("stat -Lc '%u:%g:%a:%F' \"$KERNEL_LOCK\"")
     expect(installerSource).toContain('fs.readdirSync("/proc/self/fd")')
     expect(installerSource).toContain("trustedKernelLockParent()")
+    expect(installerSource).toContain("target === LOCK_PATH || target === KERNEL_LOCK_PATH")
+    expect(installerSource).toContain("return trustedKernelLockParent()")
     expect(installerSource).toContain('(lock.mode & 0o7777) === 0o1777')
     expect(installerSource).toContain("return descriptors.length === 1")
     expect(installerSource).toContain('fs.readFileSync("/proc/locks", "utf8")')
     expect(installerSource).toContain('Number(match[1]) === process.pid')
     expect(installerSource).toContain('const openedBefore = fs.fstatSync(fd, { bigint: true })')
     expect(installerSource).toContain('openedAfter = fs.fstatSync(fd, { bigint: true })')
+  })
+
+  it.runIf(process.platform === "linux")("retains a pathname flock across exec, excludes a concurrent holder, and releases it on exit", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-ssh-flock-"))
+    const lock = path.join(root, "repair.lock"), ready = path.join(root, "ready")
+    const first = spawn("/usr/bin/flock", ["--exclusive", "--nonblock", "--no-fork", lock,
+      "/bin/sh", "-c", `echo $$ > '${ready}'; exec sleep 30`], { stdio: "ignore" })
+    try {
+      for (let index = 0; index < 100 && !fs.existsSync(ready); index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(fs.existsSync(ready)).toBe(true)
+      const ownerPid = Number(fs.readFileSync(ready, "utf8").trim())
+      expect(ownerPid).toBe(first.pid)
+      expect(fs.readFileSync("/proc/locks", "utf8")).toMatch(new RegExp(`FLOCK\\s+ADVISORY\\s+WRITE\\s+${ownerPid}\\s+`))
+      expect(spawnSync("/usr/bin/flock", ["--exclusive", "--nonblock", lock, "/bin/true"]).status).not.toBe(0)
+    } finally {
+      first.kill("SIGTERM")
+      await new Promise<void>((resolve) => first.once("exit", () => resolve()))
+    }
+    expect(spawnSync("/usr/bin/flock", ["--exclusive", "--nonblock", lock, "/bin/true"]).status).toBe(0)
+    fs.rmSync(root, { recursive: true, force: true })
   })
 
   it("rechecks inactivity after mutation while all reservations remain held", () => {

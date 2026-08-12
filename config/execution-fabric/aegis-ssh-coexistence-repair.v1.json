@@ -66,12 +66,12 @@
   "installer": {
     "sourcePath": "scripts/execution-fabric/provision/repair-aegis-ssh-coexistence.mjs",
     "installedPath": "/usr/local/libexec/williamos-aegis-ssh-coexistence-repair.mjs",
-    "sha256": "bc1b1333d5b41f3c6b33c5610025950778f149bc47b6ddae0978eb1b0520218f"
+    "sha256": "8eead3815fac6b628f62cb97415bb4f29c400ef118570390c3abd01fb4695cba"
   },
   "launcher": {
     "sourcePath": "scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh",
     "executedPath": "/usr/local/share/williamos/aegis-ssh-coexistence-repair-bundle/scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh",
-    "sha256": "8452e996893aec8a69bbcd7f1f061d5432fd3f1fe8bfca13562830729dfd613f",
+    "sha256": "badcc2d5b1aeeb7a6bdcf14ec93b8adc519b98d1a1d81707386136ffe6db884b",
     "owner": "root",
     "group": "root",
     "mode": "0555"
