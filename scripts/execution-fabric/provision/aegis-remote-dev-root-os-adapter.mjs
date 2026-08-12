@@ -81,9 +81,11 @@ function ensureRootDirectory(directory, mode = 0o755) {
     if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) fail("DESTINATION_PARENT_UNTRUSTED", `${cursor} is not root-controlled`)
   }
 }
+export function isTrustedAtomicInstallSourceMode(mode) { return [0o400, 0o444, 0o555].includes(mode) }
 function atomicInstall(source, destination, expectedSha, mode, uid = 0, gid = 0) {
   const parent = path.dirname(destination); ensureRootDirectory(parent)
-  if (!exactFile(source, expectedSha, 0, 0, 0o444) && !exactFile(source, expectedSha, 0, 0, 0o555)) fail("BUNDLE_ASSET_UNTRUSTED", `${source} differs from signed bytes`)
+  const sourceTrusted = [0o400, 0o444, 0o555].some((sourceMode) => isTrustedAtomicInstallSourceMode(sourceMode) && exactFile(source, expectedSha, 0, 0, sourceMode))
+  if (!sourceTrusted) fail("BUNDLE_ASSET_UNTRUSTED", `${source} differs from signed bytes`)
   if (fs.existsSync(destination)) {
     if (!exactFile(destination, expectedSha, uid, gid, mode)) fail("EXISTING_STATE_DRIFT", `${destination} differs; overwrite refused`)
     return
