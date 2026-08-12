@@ -63,6 +63,9 @@ function fixture() {
       version: "0.11.4",
       executable_sha256: "3".repeat(64),
       container_image_sha256: "4".repeat(64),
+      docker_executable_sha256: "b".repeat(64),
+      git_executable_sha256: "c".repeat(64),
+      nvidia_smi_executable_sha256: "d".repeat(64),
       python_executable_sha256: "5".repeat(64),
       node_executable_sha256: "6".repeat(64),
       powershell_executable_sha256: "7".repeat(64),
@@ -82,7 +85,7 @@ function fixture() {
       machine_id_sha256: "8".repeat(64),
       inventory_snapshot_sha256: "9".repeat(64),
       host_manifest_sha256: "a".repeat(64),
-      endpoint_contract: "ollama-loopback-api-embed-v1",
+      endpoint_contract: "ollama-isolated-loopback-api-embed-v1",
     },
     limits: {
       timeout_ms: 60_000,
@@ -91,10 +94,11 @@ function fixture() {
       max_result_bytes: 8_388_608,
       max_cpu_threads: 4,
       max_memory_bytes: 8_589_934_592,
-      max_gpu_vram_bytes: 4_294_967_296,
+      max_gpu_vram_bytes: 0,
       minimum_memory_available_bytes: 4_294_967_296,
-      minimum_gpu_vram_available_bytes: 2_147_483_648,
-      network_scope: "loopback-only",
+      minimum_gpu_vram_available_bytes: 0,
+      gpu_execution: "CPU_ONLY",
+      network_scope: "isolated-internal-loopback-only",
     },
     permission_set_sha256: permissionSha256,
     valid_from: "2026-08-12T20:00:00.000Z",
@@ -110,6 +114,9 @@ function fixture() {
     gpu_vram_total_bytes: 12_884_901_888,
     container_image_sha256: admission.runtime.container_image_sha256,
     ollama_executable_sha256: admission.runtime.executable_sha256,
+    docker_executable_sha256: admission.runtime.docker_executable_sha256,
+    git_executable_sha256: admission.runtime.git_executable_sha256,
+    nvidia_smi_executable_sha256: admission.runtime.nvidia_smi_executable_sha256,
     python_executable_sha256: admission.runtime.python_executable_sha256,
     node_executable_sha256: admission.runtime.node_executable_sha256,
     powershell_executable_sha256: admission.runtime.powershell_executable_sha256,
@@ -149,6 +156,9 @@ function attestation(admission: any) {
     memory_total_bytes: 34_359_738_368,
     gpu_vram_total_bytes: 12_884_901_888,
     container_image_sha256: admission.runtime.container_image_sha256,
+    docker_executable_sha256: admission.runtime.docker_executable_sha256,
+    git_executable_sha256: admission.runtime.git_executable_sha256,
+    nvidia_smi_executable_sha256: admission.runtime.nvidia_smi_executable_sha256,
     ollama_executable_sha256: admission.runtime.executable_sha256,
     python_executable_sha256: admission.runtime.python_executable_sha256,
     node_executable_sha256: admission.runtime.node_executable_sha256,
@@ -168,6 +178,9 @@ function attestation(admission: any) {
     runtime_version: admission.runtime.version,
     runtime_executable_sha256: admission.runtime.executable_sha256,
     container_image_sha256: admission.runtime.container_image_sha256,
+    docker_executable_sha256: admission.runtime.docker_executable_sha256,
+    git_executable_sha256: admission.runtime.git_executable_sha256,
+    nvidia_smi_executable_sha256: admission.runtime.nvidia_smi_executable_sha256,
     python_executable_sha256: admission.runtime.python_executable_sha256,
     node_executable_sha256: admission.runtime.node_executable_sha256,
     powershell_executable_sha256: admission.runtime.powershell_executable_sha256,
@@ -228,7 +241,7 @@ describe("resident HERMES embedding bake-off adapter", () => {
       execution_commit: "a".repeat(40),
       corpus_manifest_sha256: "0b0fdf909583990975a771195c7f7a8b6e5e938f01800369b1d6cf9fb5ca7dee",
       node_id: "hermes-node",
-      endpoint_contract: "ollama-loopback-api-embed-v1",
+      endpoint_contract: "ollama-isolated-loopback-api-embed-v1",
       maximum_attempts: 1,
       maximum_concurrency: 1,
       scheduler_activated: false,
@@ -266,7 +279,7 @@ describe("resident HERMES embedding bake-off adapter", () => {
     expect(value.claimSingleUse).toHaveBeenCalledTimes(1)
     expect(value.acquireExclusiveLease).toHaveBeenCalledTimes(1)
     expect(value.invokeFixedEvaluator).toHaveBeenCalledWith(expect.objectContaining({
-      endpoint: "http://127.0.0.1:11434/api/embed",
+      endpoint: "http://127.0.0.1:11435/api/embed",
       evaluator_path: "scripts/embedding-bakeoff/fabric_measure.py",
     }))
     expect(value.releaseExclusiveLease).toHaveBeenCalledWith({ lease_id: "lease-issue-704-test", claim_id: "claim-issue-704-test", fencing_token: 1 })
@@ -330,7 +343,7 @@ describe("resident HERMES embedding bake-off adapter", () => {
     ["model drift", (result: any) => { result.model_id = "qwen3-embedding:4b" }],
     ["runtime drift", (result: any) => { result.runtime_id = "other-runtime" }],
     ["host drift", (result: any) => { result.node_id = "omen" }],
-    ["endpoint drift", (result: any) => { result.endpoint = "http://127.0.0.1:11435/api/embed" }],
+    ["endpoint drift", (result: any) => { result.endpoint = "http://127.0.0.1:11436/api/embed" }],
   ])("fails closed on evaluator-reported %s", async (_name, mutate) => {
     const value = runtime()
     value.invokeFixedEvaluator.mockImplementation(async () => { const result = output(value.admission); mutate(result); return result })
@@ -347,11 +360,24 @@ describe("resident HERMES embedding bake-off adapter", () => {
     await expect(executeResidentHermesEmbeddingBakeoff(release)).rejects.toMatchObject({ message: expect.stringContaining("LEASE_RELEASE_FAILED"), dispatchAttempted: true, leaseReleased: false })
   })
 
+  it("rejects completion after the trusted host attestation expires", async () => {
+    const value = runtime()
+    value.collectTrustedHostAttestation.mockImplementation(async () => {
+      const observed: any = attestation(value.admission)
+      observed.expires_at = "2026-08-12T20:00:00.500Z"
+      delete observed.attestation_sha256
+      observed.attestation_sha256 = canonicalDigest(observed)
+      return observed
+    })
+    await expect(executeResidentHermesEmbeddingBakeoff(value)).rejects.toThrow("COMPLETION_CHRONOLOGY_INVALID")
+    expect(value.releaseExclusiveLease).toHaveBeenCalledTimes(1)
+  })
+
   it("keeps the production runner fixed, zero-argument, loopback-only, and evaluator-only", () => {
     const source = fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/bounded-dispatch/run-resident-hermes-embedding-bakeoff.mjs"), "utf8")
     expect(source).toContain('const EVALUATOR_PATH = path.join(REPOSITORY_ROOT, EMBEDDING_CONTRACT.evaluatorPath)')
     expect(source).toContain('const GIT_EXECUTABLE = "C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe"')
-    expect(source).toContain('endpoint !== "http://127.0.0.1:11434/api/embed"')
+    expect(source).toContain('endpoint !== "http://127.0.0.1:11435/api/embed"')
     expect(source).toContain('process.argv.length !== 2')
     expect(source.match(/spawnSync\(/g)).toHaveLength(3)
     expect(source).toContain('spawnSync(POWERSHELL_EXECUTABLE, ["-NoLogo"')
@@ -385,6 +411,9 @@ describe("resident HERMES embedding bake-off adapter", () => {
     expect(source).toContain("Get-FileSha256 $python")
     expect(source).toContain("Get-FileSha256 $node")
     expect(source).toContain("Get-FileSha256 $powershell")
+    expect(source).toContain("Get-FileSha256 $docker")
+    expect(source).toContain("Get-FileSha256 $git")
+    expect(source).toContain("Get-FileSha256 $nvidiaSmi")
     expect(source).not.toMatch(/https:\/\/|Invoke-Expression|Start-Process|cmd\.exe|Get-Content.*credential/i)
   })
 

@@ -9,7 +9,7 @@ export const EMBEDDING_CONTRACT = Object.freeze({
   corpusSourceCommit: "d544f19708e4aa9c7f430c3cc9fde4ff0f5c1b85",
   nodeId: "hermes-node",
   providerId: "resident-hermes",
-  endpoint: "http://127.0.0.1:11434/api/embed",
+  endpoint: "http://127.0.0.1:11435/api/embed",
   corpusManifestPath: "scripts/embedding-bakeoff/corpus/manifest.json",
   corpusManifestSha256: "0b0fdf909583990975a771195c7f7a8b6e5e938f01800369b1d6cf9fb5ca7dee",
   corpusId: "williamos-r1b-adversarial-v1",
@@ -155,30 +155,33 @@ function validateAdmission(admission) {
   for (const key of ["model_id", "revision", "license", "source"]) identifier(admission.model[key], `admission.model.${key}`)
   digest(admission.model.weights_sha256, "admission.model.weights_sha256")
   digest(admission.model.manifest_sha256, "admission.model.manifest_sha256")
-  exactKeys(admission.runtime, ["runtime_id", "version", "executable_sha256", "container_image_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "canonical_json_sha256", "collector_sha256", "bounded_launcher_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"], "admission.runtime")
+  exactKeys(admission.runtime, ["runtime_id", "version", "executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "canonical_json_sha256", "collector_sha256", "bounded_launcher_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"], "admission.runtime")
   identifier(admission.runtime.runtime_id, "admission.runtime.runtime_id")
   identifier(admission.runtime.version, "admission.runtime.version")
-  for (const key of ["executable_sha256", "container_image_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "canonical_json_sha256", "collector_sha256", "bounded_launcher_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"]) digest(admission.runtime[key], `admission.runtime.${key}`)
+  for (const key of ["executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "canonical_json_sha256", "collector_sha256", "bounded_launcher_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"]) digest(admission.runtime[key], `admission.runtime.${key}`)
   exactKeys(admission.placement, ["node_id", "machine_id_sha256", "inventory_snapshot_sha256", "host_manifest_sha256", "endpoint_contract"], "admission.placement")
-  if (admission.placement.node_id !== EMBEDDING_CONTRACT.nodeId || admission.placement.endpoint_contract !== "ollama-loopback-api-embed-v1") {
+  if (admission.placement.node_id !== EMBEDDING_CONTRACT.nodeId || admission.placement.endpoint_contract !== "ollama-isolated-loopback-api-embed-v1") {
     fail("PLACEMENT_BINDING_MISMATCH", "admission is not for the fixed resident HERMES endpoint contract")
   }
   digest(admission.placement.inventory_snapshot_sha256, "admission.placement.inventory_snapshot_sha256")
   digest(admission.placement.machine_id_sha256, "admission.placement.machine_id_sha256")
   digest(admission.placement.host_manifest_sha256, "admission.placement.host_manifest_sha256")
-  exactKeys(admission.limits, ["timeout_ms", "max_input_bytes", "max_scratch_bytes", "max_result_bytes", "max_cpu_threads", "max_memory_bytes", "max_gpu_vram_bytes", "minimum_memory_available_bytes", "minimum_gpu_vram_available_bytes", "network_scope"], "admission.limits")
+  exactKeys(admission.limits, ["timeout_ms", "max_input_bytes", "max_scratch_bytes", "max_result_bytes", "max_cpu_threads", "max_memory_bytes", "max_gpu_vram_bytes", "minimum_memory_available_bytes", "minimum_gpu_vram_available_bytes", "gpu_execution", "network_scope"], "admission.limits")
   integer(admission.limits.timeout_ms, "admission.limits.timeout_ms", 1000, 900_000)
   integer(admission.limits.max_input_bytes, "admission.limits.max_input_bytes", 1, 524_288)
   integer(admission.limits.max_result_bytes, "admission.limits.max_result_bytes", 1, 16_777_216)
   integer(admission.limits.max_scratch_bytes, "admission.limits.max_scratch_bytes", 1, Number.MAX_SAFE_INTEGER)
   integer(admission.limits.max_cpu_threads, "admission.limits.max_cpu_threads", 1, 64)
   integer(admission.limits.max_memory_bytes, "admission.limits.max_memory_bytes", 67_108_864, 68_719_476_736)
-  for (const key of ["max_gpu_vram_bytes", "minimum_memory_available_bytes", "minimum_gpu_vram_available_bytes"]) integer(admission.limits[key], `admission.limits.${key}`, 1, Number.MAX_SAFE_INTEGER)
+  integer(admission.limits.max_gpu_vram_bytes, "admission.limits.max_gpu_vram_bytes", 0, Number.MAX_SAFE_INTEGER)
+  integer(admission.limits.minimum_memory_available_bytes, "admission.limits.minimum_memory_available_bytes", 1, Number.MAX_SAFE_INTEGER)
+  integer(admission.limits.minimum_gpu_vram_available_bytes, "admission.limits.minimum_gpu_vram_available_bytes", 0, Number.MAX_SAFE_INTEGER)
   const maximumRetainedBytes = admission.limits.max_input_bytes + admission.limits.max_result_bytes
   if (!Number.isSafeInteger(maximumRetainedBytes) || admission.limits.max_scratch_bytes < maximumRetainedBytes) {
     fail("SCRATCH_CEILING_INVALID", "scratch ceiling must cover the sealed input and bounded result")
   }
-  if (admission.limits.network_scope !== "loopback-only") fail("NETWORK_SCOPE_INVALID", "only loopback networking is admitted")
+  if (admission.limits.gpu_execution !== "CPU_ONLY" || admission.limits.max_gpu_vram_bytes !== 0
+    || admission.limits.network_scope !== "isolated-internal-loopback-only") fail("NETWORK_SCOPE_INVALID", "execution must remain CPU-only on an isolated internal loopback endpoint")
   digest(admission.permission_set_sha256, "admission.permission_set_sha256")
   timestamp(admission.valid_from, "admission.valid_from")
   timestamp(admission.expires_at, "admission.expires_at")
@@ -186,7 +189,7 @@ function validateAdmission(admission) {
 }
 
 function validateHostAttestation(value, admission, observedAt) {
-  exactKeys(value, ["schema_version", "collector_id", "node_id", "machine_id_sha256", "inventory_snapshot_sha256", "host_manifest_sha256", "model_id", "weights_sha256", "model_manifest_sha256", "runtime_id", "runtime_version", "runtime_executable_sha256", "container_image_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "inventory", "resources", "endpoint", "observed_at", "expires_at", "attestation_sha256", "verified"], "host attestation")
+  exactKeys(value, ["schema_version", "collector_id", "node_id", "machine_id_sha256", "inventory_snapshot_sha256", "host_manifest_sha256", "model_id", "weights_sha256", "model_manifest_sha256", "runtime_id", "runtime_version", "runtime_executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "inventory", "resources", "endpoint", "observed_at", "expires_at", "attestation_sha256", "verified"], "host attestation")
   if (value.schema_version !== "1.0-trusted-hermes-live-embedding-attestation" || value.collector_id !== "reviewed-resident-hermes-live-collector"
     || value.node_id !== EMBEDDING_CONTRACT.nodeId || value.machine_id_sha256 !== admission.placement.machine_id_sha256
     || value.inventory_snapshot_sha256 !== admission.placement.inventory_snapshot_sha256
@@ -195,6 +198,9 @@ function validateHostAttestation(value, admission, observedAt) {
     || value.runtime_id !== admission.runtime.runtime_id
     || value.runtime_version !== admission.runtime.version || value.runtime_executable_sha256 !== admission.runtime.executable_sha256
     || value.container_image_sha256 !== admission.runtime.container_image_sha256
+    || value.docker_executable_sha256 !== admission.runtime.docker_executable_sha256
+    || value.git_executable_sha256 !== admission.runtime.git_executable_sha256
+    || value.nvidia_smi_executable_sha256 !== admission.runtime.nvidia_smi_executable_sha256
     || value.python_executable_sha256 !== admission.runtime.python_executable_sha256
     || value.node_executable_sha256 !== admission.runtime.node_executable_sha256
     || value.powershell_executable_sha256 !== admission.runtime.powershell_executable_sha256
@@ -203,7 +209,7 @@ function validateHostAttestation(value, admission, observedAt) {
   digest(value.attestation_sha256, "host attestation.attestation_sha256")
   timestamp(value.observed_at, "host attestation.observed_at")
   timestamp(value.expires_at, "host attestation.expires_at")
-  exactKeys(value.inventory, ["node_id", "machine_id_sha256", "cpu_threads", "memory_total_bytes", "gpu_vram_total_bytes", "container_image_sha256", "ollama_executable_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256"], "host attestation.inventory")
+  exactKeys(value.inventory, ["node_id", "machine_id_sha256", "cpu_threads", "memory_total_bytes", "gpu_vram_total_bytes", "container_image_sha256", "ollama_executable_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256"], "host attestation.inventory")
   exactKeys(value.resources, ["cpu_threads", "memory_total_bytes", "memory_available_bytes", "gpu_vram_total_bytes", "gpu_vram_available_bytes"], "host attestation.resources")
   for (const key of Object.keys(value.resources)) integer(value.resources[key], `host attestation.resources.${key}`, 1, Number.MAX_SAFE_INTEGER)
   if (value.inventory_snapshot_sha256 !== canonicalDigest(value.inventory)
@@ -212,6 +218,9 @@ function validateHostAttestation(value, admission, observedAt) {
     || value.inventory.gpu_vram_total_bytes !== value.resources.gpu_vram_total_bytes
     || value.inventory.container_image_sha256 !== value.container_image_sha256
     || value.inventory.ollama_executable_sha256 !== value.runtime_executable_sha256
+    || value.inventory.docker_executable_sha256 !== value.docker_executable_sha256
+    || value.inventory.git_executable_sha256 !== value.git_executable_sha256
+    || value.inventory.nvidia_smi_executable_sha256 !== value.nvidia_smi_executable_sha256
     || value.inventory.python_executable_sha256 !== value.python_executable_sha256
     || value.inventory.node_executable_sha256 !== value.node_executable_sha256
     || value.inventory.powershell_executable_sha256 !== value.powershell_executable_sha256) fail("HOST_ATTESTATION_INVENTORY_MISMATCH", "live inventory does not bind the attested identities")
@@ -332,7 +341,9 @@ export async function executeResidentHermesEmbeddingBakeoff(options) {
       || output.node_id !== EMBEDDING_CONTRACT.nodeId || output.endpoint !== EMBEDDING_CONTRACT.endpoint) fail("RESULT_BINDING_MISMATCH", "evaluator result does not match exact admitted model/runtime/host/corpus bindings")
     if (output.external_provider_used !== false || output.fallback_used !== false) fail("FORBIDDEN_SIDE_EFFECT", "evaluator reported fallback or external-provider activity")
     const completedAt = timestamp(options.clock(), "trusted completion clock")
-    if (Date.parse(completedAt) < Date.parse(startedAt) || Date.parse(completedAt) >= Date.parse(prepared.admission.expires_at) || Date.parse(completedAt) - Date.parse(startedAt) > prepared.admission.limits.timeout_ms) fail("COMPLETION_CHRONOLOGY_INVALID", "completion exceeds chronology, admission, or timeout")
+    if (Date.parse(completedAt) < Date.parse(startedAt) || Date.parse(completedAt) >= Date.parse(prepared.admission.expires_at)
+      || Date.parse(completedAt) >= Date.parse(hostAttestation.expires_at)
+      || Date.parse(completedAt) - Date.parse(startedAt) > prepared.admission.limits.timeout_ms) fail("COMPLETION_CHRONOLOGY_INVALID", "completion exceeds chronology, admission, host attestation, or timeout")
     result = { schema_version: "1.0-hermes-embedding-bakeoff-result", status: "COMPLETED", result: "SUCCEEDED", execution_semantics: "AT_MOST_ONCE_ADMISSION_CONSUMPTION", request_id: options.request.request_id, work_order_id: EMBEDDING_CONTRACT.workOrderId, admission_id: prepared.admission.admission_id, request_sha256: prepared.preparation.request_sha256, admission_sha256: prepared.preparation.admission_sha256, corpus_source_commit: EMBEDDING_CONTRACT.corpusSourceCommit, execution_commit: prepared.admission.execution_commit, corpus_manifest_sha256: EMBEDDING_CONTRACT.corpusManifestSha256, corpus_fingerprint: EMBEDDING_CONTRACT.corpusFingerprint, model: structuredClone(prepared.admission.model), runtime: structuredClone(prepared.admission.runtime), host_attestation: structuredClone(hostAttestation), result_bundle: { sha256: output.result_sha256, byte_length: output.result_bytes.byteLength }, claim: { claim_id: claim.claim_id, claimed_at: claim.claimed_at, maximum_attempts: 1 }, lease: { lease_id: lease.lease_id, fencing_token: lease.fencing_token, acquired_at: lease.acquired_at, stale_lease_recovered: lease.stale_lease_recovered, stale_lease_sha256: lease.stale_lease_sha256 }, chronology: { prepared_at: preparedAt, started_at: startedAt, completed_at: completedAt }, endpoint_contract: prepared.admission.placement.endpoint_contract, authority_scope: { canonical_vector_write_authorized: false, database_mutation_authorized: false }, scheduler_activated: false, autonomous_dispatch: false, external_provider_used: false, fallback_used: false, lease_released: false }
   } catch (error) { executionError = annotate(error, { dispatchAttempted, claimId: claim.claim_id, leaseId: lease.lease_id, fencingToken: lease.fencing_token, leaseReleased: false }); throw executionError } finally {
     try { const release = await options.releaseExclusiveLease({ lease_id: lease.lease_id, claim_id: claim.claim_id, fencing_token: lease.fencing_token }); released = release === true } catch { released = false }

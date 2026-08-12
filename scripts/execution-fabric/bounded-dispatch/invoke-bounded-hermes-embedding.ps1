@@ -2,12 +2,18 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $PythonExecutable = "C:\Python313\python.exe"
+$DockerExecutable = "C:\Program Files\Docker\Docker\resources\bin\docker.exe"
 $HermesRoot = "C:\HermesLab"
 $LedgerRoot = "C:\HermesLab\embedding-bakeoff-ledger"
 $WorkRoot = "C:\HermesLab\work"
 $RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\.."))
 $EvaluatorPath = [IO.Path]::GetFullPath((Join-Path $RepositoryRoot "scripts\embedding-bakeoff\fabric_measure.py"))
+$ModelsRoot = "D:\HermesData\ollama\models"
 $ExecutionWorkRoot = $null
+$ExecutionContainer = $null
+$ExecutionNetwork = $null
+$ExecutionContainerOwned = $false
+$ExecutionNetworkOwned = $false
 
 function Write-Receipt {
   param([hashtable]$Receipt)
@@ -87,10 +93,13 @@ try {
   [UInt64]$maxInputBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_MAX_INPUT_BYTES" 1 524288
   [UInt64]$maxResultBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_MAX_RESULT_BYTES" 1 16777216
   [UInt64]$maxScratchBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_MAX_SCRATCH_BYTES" 1 68719476736
+  [UInt64]$maxCpuThreads = Get-BoundedUInt64 "HERMES_EMBEDDING_MAX_CPU_THREADS" 1 64
   [UInt64]$processMemoryBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_PROCESS_MEMORY_BYTES" 67108864 68719476736
   [UInt64]$jobMemoryBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_JOB_MEMORY_BYTES" 67108864 68719476736
   [UInt64]$cpuRatePercent = Get-BoundedUInt64 "HERMES_EMBEDDING_CPU_RATE_PERCENT" 1 100
   [UInt64]$activeProcessLimit = Get-BoundedUInt64 "HERMES_EMBEDDING_ACTIVE_PROCESS_LIMIT" 1 1
+  $containerImageSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_CONTAINER_IMAGE_SHA256"
+  if ($containerImageSha256 -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("ENVIRONMENT_INVALID") }
   $affinityRaw = Get-RequiredEnvironment "HERMES_EMBEDDING_CPU_AFFINITY_MASK"
   if ($affinityRaw -cnotmatch '^0x[0-9A-Fa-f]{1,16}$') { throw [InvalidOperationException]::new("ENVIRONMENT_INVALID") }
   [UInt64]$cpuAffinityMask = [Convert]::ToUInt64($affinityRaw.Substring(2), 16)
@@ -106,12 +115,50 @@ try {
   [void][IO.Directory]::CreateDirectory($ExecutionWorkRoot)
   Assert-NoReparsePoint $ExecutionWorkRoot $true
   Assert-NoReparsePoint $PythonExecutable $true
+  Assert-NoReparsePoint $DockerExecutable $true
   Assert-NoReparsePoint $EvaluatorPath $true
+  Assert-NoReparsePoint $ModelsRoot $true
   $hermesPrefix = $HermesRoot.TrimEnd('\') + '\'
   if (-not $RepositoryRoot.StartsWith($hermesPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw [InvalidOperationException]::new("REPOSITORY_ROOT_INVALID") }
   if (-not [StringComparer]::OrdinalIgnoreCase.Equals($EvaluatorPath, (Join-Path $RepositoryRoot "scripts\embedding-bakeoff\fabric_measure.py"))) { throw [InvalidOperationException]::new("EVALUATOR_PATH_INVALID") }
   $inputLength = ([IO.FileInfo]::new($sealedInputPath)).Length
   if ($inputLength -lt 1 -or [UInt64]$inputLength -gt $maxInputBytes) { throw [InvalidOperationException]::new("INPUT_SIZE_INVALID") }
+
+  if (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 11435 -State Listen -ErrorAction SilentlyContinue) { throw [InvalidOperationException]::new("LOOPBACK_PORT_OCCUPIED") }
+  $ExecutionContainer = "williamos-r1b-$executionHash"
+  $ExecutionNetwork = "williamos-r1b-$($executionHash.Substring(0, 24))"
+  & $DockerExecutable container inspect $ExecutionContainer *> $null
+  if ($LASTEXITCODE -eq 0) { throw [InvalidOperationException]::new("CONTAINER_NAME_OCCUPIED") }
+  & $DockerExecutable network inspect $ExecutionNetwork *> $null
+  if ($LASTEXITCODE -eq 0) { throw [InvalidOperationException]::new("NETWORK_NAME_OCCUPIED") }
+  & $DockerExecutable network create --internal $ExecutionNetwork | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("NETWORK_CREATE_FAILED") }
+  $ExecutionNetworkOwned = $true
+  $memoryLimit = "$($maxMemoryBytes)b"
+  $containerId = (& $DockerExecutable run --detach --name $ExecutionContainer --label "williamos.execution-hash=$executionHash" --network $ExecutionNetwork --cpus ([string]$maxCpuThreads) --memory $memoryLimit --memory-swap $memoryLimit --pids-limit 64 --read-only --tmpfs '/root/.ollama:rw,noexec,nosuid,size=16777216' --mount "type=bind,source=$ModelsRoot,target=/root/.ollama/models,readonly" --env 'OLLAMA_HOST=0.0.0.0:11434' --env 'OLLAMA_KEEP_ALIVE=0' --publish '127.0.0.1:11435:11434' "sha256:$containerImageSha256").Trim()
+  if ($LASTEXITCODE -ne 0 -or $containerId -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("CONTAINER_START_FAILED") }
+  $ExecutionContainerOwned = $true
+  $container = (& $DockerExecutable inspect $ExecutionContainer | ConvertFrom-Json)[0]
+  $resourceBindingFailed = $LASTEXITCODE -ne 0
+  $resourceBindingFailed = $resourceBindingFailed -or [string]($container.Image) -cne "sha256:$containerImageSha256"
+  $resourceBindingFailed = $resourceBindingFailed -or [int64]($container.HostConfig.Memory) -ne [int64]$maxMemoryBytes
+  $resourceBindingFailed = $resourceBindingFailed -or [int64]($container.HostConfig.MemorySwap) -ne [int64]$maxMemoryBytes
+  $resourceBindingFailed = $resourceBindingFailed -or [int64]($container.HostConfig.NanoCpus) -ne ([int64]$maxCpuThreads * 1000000000)
+  $resourceBindingFailed = $resourceBindingFailed -or [int64]($container.HostConfig.PidsLimit) -ne 64
+  $resourceBindingFailed = $resourceBindingFailed -or $container.HostConfig.ReadonlyRootfs -ne $true
+  $resourceBindingFailed = $resourceBindingFailed -or @($container.HostConfig.DeviceRequests).Count -ne 0
+  $resourceBindingFailed = $resourceBindingFailed -or [string]($container.HostConfig.NetworkMode) -cne $ExecutionNetwork
+  $resourceBindingFailed = $resourceBindingFailed -or [string]($container.HostConfig.PortBindings.'11434/tcp'[0].HostIp) -cne '127.0.0.1'
+  $resourceBindingFailed = $resourceBindingFailed -or [string]($container.HostConfig.PortBindings.'11434/tcp'[0].HostPort) -cne '11435'
+  if ($resourceBindingFailed) { throw [InvalidOperationException]::new("CONTAINER_RESOURCE_BINDING_FAILED") }
+  $ready = $false
+  for ($attempt = 0; $attempt -lt 60; $attempt += 1) {
+    try {
+      $version = Invoke-RestMethod -Method Get -Uri 'http://127.0.0.1:11435/api/version' -TimeoutSec 2
+      if ([string]$version.version -match '^\d+\.\d+\.\d+$') { $ready = $true; break }
+    } catch { Start-Sleep -Milliseconds 500 }
+  }
+  if (-not $ready) { throw [InvalidOperationException]::new("ISOLATED_OLLAMA_NOT_READY") }
 
   if (-not ("WilliamOS.ExecutionFabric.BoundedJob" -as [type])) {
     Add-Type -TypeDefinition @'
@@ -300,6 +347,14 @@ namespace WilliamOS.ExecutionFabric {
   if (-not $run.TimedOut -and -not $run.OutputLimitExceeded -and -not $run.ScratchLimitExceeded -and ($resultLength -lt 1 -or [UInt64]$resultLength -gt $maxResultBytes)) { throw [InvalidOperationException]::new("RESULT_SIZE_INVALID") }
   $resultSha256 = if ($resultLength -gt 0 -and [UInt64]$resultLength -le $maxResultBytes) { (Get-FileHash -LiteralPath $resultPath -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
   $status = if ($run.TimedOut) { "TIMED_OUT" } elseif ($run.OutputLimitExceeded -or $run.ScratchLimitExceeded) { "FAILED_CLOSED" } elseif ($run.ExitCode -eq 0) { "COMPLETED" } else { "FAILED_CLOSED" }
+  & $DockerExecutable rm --force $ExecutionContainer | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("CONTAINER_CLEANUP_FAILED") }
+  $ExecutionContainer = $null
+  $ExecutionContainerOwned = $false
+  & $DockerExecutable network rm $ExecutionNetwork | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("NETWORK_CLEANUP_FAILED") }
+  $ExecutionNetwork = $null
+  $ExecutionNetworkOwned = $false
   Remove-Item -LiteralPath $ExecutionWorkRoot -Recurse -Force
   $ExecutionWorkRoot = $null
   Write-Receipt ([ordered]@{
@@ -314,6 +369,14 @@ namespace WilliamOS.ExecutionFabric {
     cpu_affinity_mask = ("0x{0:x}" -f $cpuAffinityMask)
     process_memory_bytes = $processMemoryBytes
     job_memory_bytes = $jobMemoryBytes
+    isolated_ollama_container = $true
+    internal_network = $true
+    gpu_execution = "CPU_ONLY"
+    container_cpu_threads = [int]$maxCpuThreads
+    container_memory_bytes = $maxMemoryBytes
+    container_pids_limit = 64
+    container_cleaned = $true
+    network_cleaned = $true
     result_bytes = $resultLength
     result_sha256 = $resultSha256
     external_provider_used = $false
@@ -321,6 +384,12 @@ namespace WilliamOS.ExecutionFabric {
   })
   if ($run.ExitCode -ne 0) { exit 2 }
 } catch {
+  if ($ExecutionContainerOwned -and $ExecutionContainer) {
+    try { & $DockerExecutable rm --force $ExecutionContainer *> $null } catch { }
+  }
+  if ($ExecutionNetworkOwned -and $ExecutionNetwork) {
+    try { & $DockerExecutable network rm $ExecutionNetwork *> $null } catch { }
+  }
   if ($ExecutionWorkRoot -and [IO.Directory]::Exists($ExecutionWorkRoot)) {
     try { Remove-Item -LiteralPath $ExecutionWorkRoot -Recurse -Force } catch { }
   }

@@ -61,6 +61,8 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain("REPARSE_POINT")
     expect(source).toContain("HERMES_EMBEDDING_TIMEOUT_MS")
     expect(source).toContain("HERMES_EMBEDDING_MAX_SCRATCH_BYTES")
+    expect(source).toContain("HERMES_EMBEDDING_MAX_CPU_THREADS")
+    expect(source).toContain("HERMES_EMBEDDING_CONTAINER_IMAGE_SHA256")
     expect(source).toContain("HERMES_EMBEDDING_PROCESS_MEMORY_BYTES")
     expect(source).toContain("HERMES_EMBEDDING_JOB_MEMORY_BYTES")
     expect(source).toContain("HERMES_EMBEDDING_CPU_RATE_PERCENT")
@@ -71,6 +73,22 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain('"TMP=$ExecutionWorkRoot"')
     expect(source).toContain('"SCRATCH_SIZE_LIMIT_EXCEEDED"')
     expect(source).not.toContain("GetEnvironmentVariables")
+  })
+
+  it("runs inference in one CPU-only isolated and resource-bounded Ollama container", () => {
+    expect(source).toContain("network create --internal")
+    expect(source).toContain("--cpus ([string]$maxCpuThreads)")
+    expect(source).toContain("--memory $memoryLimit")
+    expect(source).toContain("--memory-swap $memoryLimit")
+    expect(source).toContain("--pids-limit 64")
+    expect(source).toContain("--read-only")
+    expect(source).toContain("target=/root/.ollama/models,readonly")
+    expect(source).toContain("127.0.0.1:11435:11434")
+    expect(source).toContain("@($container.HostConfig.DeviceRequests).Count -ne 0")
+    expect(source).toContain('gpu_execution = "CPU_ONLY"')
+    expect(source).toContain("container_cleaned = $true")
+    expect(source).toContain("network_cleaned = $true")
+    expect(source).not.toMatch(/--gpus|scheduler|autonomous/i)
   })
 
   it("emits a secret-free bounded receipt", () => {

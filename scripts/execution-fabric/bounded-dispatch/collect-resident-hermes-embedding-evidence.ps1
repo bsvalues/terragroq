@@ -8,13 +8,14 @@ $nvidiaSmi = 'C:\WINDOWS\system32\nvidia-smi.exe'
 $python = 'C:\Python313\python.exe'
 $powershell = 'C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe'
 $node = 'C:\Program Files\nodejs\node.exe'
+$git = 'C:\Program Files\Git\cmd\git.exe'
 $container = 'ollama'
 $model = [Environment]::GetEnvironmentVariable('WILLIAMOS_EMBEDDING_MODEL_ID')
 
 if ($model -notmatch '^[a-z0-9][a-z0-9._-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$') {
   throw 'HERMES_EMBEDDING_COLLECTOR_MODEL_ID_WALL'
 }
-foreach ($fixedExecutable in @($docker, $nvidiaSmi, $python, $powershell, $node)) {
+foreach ($fixedExecutable in @($docker, $nvidiaSmi, $python, $powershell, $node, $git)) {
   if (-not (Test-Path -LiteralPath $fixedExecutable -PathType Leaf)) {
     throw 'HERMES_EMBEDDING_COLLECTOR_EXECUTABLE_WALL'
   }
@@ -104,6 +105,9 @@ $inventory = [ordered]@{
   gpu_vram_total_bytes = $gpuVramTotalBytes
   container_image_sha256 = $containerImageSha256
   ollama_executable_sha256 = $runtimeExecutableSha256
+  docker_executable_sha256 = Get-FileSha256 $docker
+  git_executable_sha256 = Get-FileSha256 $git
+  nvidia_smi_executable_sha256 = Get-FileSha256 $nvidiaSmi
   python_executable_sha256 = Get-FileSha256 $python
   node_executable_sha256 = Get-FileSha256 $node
   powershell_executable_sha256 = Get-FileSha256 $powershell
@@ -122,6 +126,9 @@ $result = [ordered]@{
   runtime_version = [string]$version.version
   runtime_executable_sha256 = $runtimeExecutableSha256
   container_image_sha256 = $containerImageSha256
+  docker_executable_sha256 = $inventory.docker_executable_sha256
+  git_executable_sha256 = $inventory.git_executable_sha256
+  nvidia_smi_executable_sha256 = $inventory.nvidia_smi_executable_sha256
   python_executable_sha256 = $inventory.python_executable_sha256
   node_executable_sha256 = $inventory.node_executable_sha256
   powershell_executable_sha256 = $inventory.powershell_executable_sha256

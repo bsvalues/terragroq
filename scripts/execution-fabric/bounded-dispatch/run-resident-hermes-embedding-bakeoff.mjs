@@ -19,6 +19,8 @@ const HOST_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\host-man
 const PYTHON_EXECUTABLE = "C:\\Python313\\python.exe"
 const NODE_EXECUTABLE = "C:\\Program Files\\nodejs\\node.exe"
 const POWERSHELL_EXECUTABLE = "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+const DOCKER_EXECUTABLE = "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe"
+const NVIDIA_SMI_EXECUTABLE = "C:\\WINDOWS\\system32\\nvidia-smi.exe"
 const GIT_EXECUTABLE = "C:\\Program Files\\Git\\cmd\\git.exe"
 const EVALUATOR_PATH = path.join(REPOSITORY_ROOT, EMBEDDING_CONTRACT.evaluatorPath)
 const COLLECTOR_PATH = path.join(REPOSITORY_ROOT, EMBEDDING_CONTRACT.collectorPath)
@@ -65,6 +67,9 @@ function readFixedJson(filePath, root, label) {
 }
 
 export function proveTrustedAdmission({ admission, admissionSha256 }) {
+  if (sha256(fs.readFileSync(GIT_EXECUTABLE)) !== admission.runtime.git_executable_sha256) {
+    throw new Error("trusted Git executable bytes do not match admission")
+  }
   const git = (...args) => {
     const result = spawnSync(GIT_EXECUTABLE, args, {
       cwd: REPOSITORY_ROOT,
@@ -231,7 +236,9 @@ export async function collectTrustedHostAttestation({ admission }) {
   if (path.resolve(process.execPath).toLowerCase() !== NODE_EXECUTABLE.toLowerCase()
     || sha256(fs.readFileSync(NODE_EXECUTABLE)) !== admission.runtime.node_executable_sha256
     || sha256(fs.readFileSync(PYTHON_EXECUTABLE)) !== admission.runtime.python_executable_sha256
-    || sha256(fs.readFileSync(POWERSHELL_EXECUTABLE)) !== admission.runtime.powershell_executable_sha256) {
+    || sha256(fs.readFileSync(POWERSHELL_EXECUTABLE)) !== admission.runtime.powershell_executable_sha256
+    || sha256(fs.readFileSync(DOCKER_EXECUTABLE)) !== admission.runtime.docker_executable_sha256
+    || sha256(fs.readFileSync(NVIDIA_SMI_EXECUTABLE)) !== admission.runtime.nvidia_smi_executable_sha256) {
     throw new Error("resident interpreter bytes do not match admission")
   }
   const observed = spawnSync(POWERSHELL_EXECUTABLE, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", COLLECTOR_PATH], {
@@ -245,7 +252,7 @@ export async function collectTrustedHostAttestation({ admission }) {
   })
   if (observed.status !== 0 || observed.error || !observed.stdout) throw new Error("reviewed resident HERMES live collector failed")
   const live = JSON.parse(observed.stdout.replace(/^\uFEFF/, ""))
-  const expectedFields = ["schema_version", "collector_id", "node_id", "machine_id_sha256", "model_id", "weights_sha256", "model_manifest_sha256", "runtime_id", "runtime_version", "runtime_executable_sha256", "container_image_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "inventory", "resources", "observed_at", "expires_at"]
+  const expectedFields = ["schema_version", "collector_id", "node_id", "machine_id_sha256", "model_id", "weights_sha256", "model_manifest_sha256", "runtime_id", "runtime_version", "runtime_executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "inventory", "resources", "observed_at", "expires_at"]
   if (!live || typeof live !== "object" || Array.isArray(live)
     || JSON.stringify(Object.keys(live).sort()) !== JSON.stringify(expectedFields.sort())
     || live.schema_version !== "1.0-resident-hermes-live-embedding-observation") {
@@ -265,6 +272,9 @@ export async function collectTrustedHostAttestation({ admission }) {
     runtime_version: live.runtime_version,
     runtime_executable_sha256: live.runtime_executable_sha256,
     container_image_sha256: live.container_image_sha256,
+    docker_executable_sha256: live.docker_executable_sha256,
+    git_executable_sha256: live.git_executable_sha256,
+    nvidia_smi_executable_sha256: live.nvidia_smi_executable_sha256,
     python_executable_sha256: live.python_executable_sha256,
     node_executable_sha256: live.node_executable_sha256,
     powershell_executable_sha256: live.powershell_executable_sha256,
@@ -288,7 +298,7 @@ function writeExclusive(filePath, bytes) {
 }
 
 export async function invokeFixedEvaluator({ admission, host_attestation, endpoint, evaluator_path }) {
-  if (endpoint !== "http://127.0.0.1:11434/api/embed" || evaluator_path !== EMBEDDING_CONTRACT.evaluatorPath
+  if (endpoint !== "http://127.0.0.1:11435/api/embed" || evaluator_path !== EMBEDDING_CONTRACT.evaluatorPath
     || path.resolve(EVALUATOR_PATH) !== path.resolve(REPOSITORY_ROOT, "scripts/embedding-bakeoff/fabric_measure.py")) {
     throw new Error("fixed evaluator or loopback endpoint binding changed")
   }
@@ -302,6 +312,7 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
     model_manifest: modelManifest,
     runtime_manifest: runtimeManifest,
     host_manifest: hostManifest,
+    execution_limits: { max_cpu_threads: admission.limits.max_cpu_threads, gpu_execution: admission.limits.gpu_execution },
   })}\n`, "utf8")
   if (evaluatorInput.byteLength > admission.limits.max_input_bytes) throw new Error("fixed evaluator input exceeds admitted ceiling")
   const executionKey = sha256(canonicalizeJcs({ admission, host_attestation }))
@@ -323,11 +334,13 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
       HERMES_EMBEDDING_MAX_INPUT_BYTES: String(admission.limits.max_input_bytes),
       HERMES_EMBEDDING_MAX_RESULT_BYTES: String(admission.limits.max_result_bytes),
       HERMES_EMBEDDING_MAX_SCRATCH_BYTES: String(admission.limits.max_scratch_bytes),
+      HERMES_EMBEDDING_MAX_CPU_THREADS: String(admission.limits.max_cpu_threads),
       HERMES_EMBEDDING_PROCESS_MEMORY_BYTES: String(admission.limits.max_memory_bytes),
       HERMES_EMBEDDING_JOB_MEMORY_BYTES: String(admission.limits.max_memory_bytes),
       HERMES_EMBEDDING_CPU_RATE_PERCENT: "100",
       HERMES_EMBEDDING_CPU_AFFINITY_MASK: affinityMask,
       HERMES_EMBEDDING_ACTIVE_PROCESS_LIMIT: "1",
+      HERMES_EMBEDDING_CONTAINER_IMAGE_SHA256: admission.runtime.container_image_sha256,
     },
   })
   let receipt
@@ -335,7 +348,10 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
   if (run.status !== 0 || receipt.status !== "COMPLETED" || receipt.evaluator_exit_code !== 0
     || receipt.job_assigned_before_resume !== true || receipt.external_provider_used !== false || receipt.fallback_used !== false
     || receipt.active_process_limit !== 1 || receipt.cpu_rate_percent !== 100 || receipt.cpu_affinity_mask !== affinityMask
-    || receipt.process_memory_bytes !== admission.limits.max_memory_bytes || receipt.job_memory_bytes !== admission.limits.max_memory_bytes) {
+    || receipt.process_memory_bytes !== admission.limits.max_memory_bytes || receipt.job_memory_bytes !== admission.limits.max_memory_bytes
+    || receipt.isolated_ollama_container !== true || receipt.internal_network !== true || receipt.gpu_execution !== "CPU_ONLY"
+    || receipt.container_cpu_threads !== admission.limits.max_cpu_threads || receipt.container_memory_bytes !== admission.limits.max_memory_bytes
+    || receipt.container_pids_limit !== 64 || receipt.container_cleaned !== true || receipt.network_cleaned !== true) {
     throw new Error(`bounded embedding evaluator failed closed: ${receipt.reason_code ?? "UNKNOWN"}`)
   }
   const resultBytes = readFixedBytes(resultPath, LEDGER_ROOT, "bounded evaluator result")
