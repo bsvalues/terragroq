@@ -152,6 +152,9 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(source).toContain("$p.WaitForExit(5400000)")
     expect(source).toContain("if($stdout.Trim()){ExitTerminalOutput $stdout.Trim()}")
     expect(source).toContain("CLEANUP_RECOVERY_EXHAUSTED';SaveState;ExitTerminalOutput")
+    const processHelper = source.slice(source.indexOf("function Invoke-BoundedProcess"), source.indexOf("$allowedOperations"))
+    expect(processHelper.indexOf("$stdoutTask = $process.StandardOutput.ReadToEndAsync()")).toBeGreaterThan(-1)
+    expect(processHelper.indexOf("$stdoutTask = $process.StandardOutput.ReadToEndAsync()")).toBeLessThan(processHelper.indexOf("$process.StandardInput.Write($StandardInput)"))
   })
 
   it.runIf(process.platform === "win32")("runs under Windows PowerShell 5.1 and rejects a swapped relay plus matching attacker digest", () => {
