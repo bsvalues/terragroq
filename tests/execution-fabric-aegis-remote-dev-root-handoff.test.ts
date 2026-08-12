@@ -105,8 +105,8 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(inspectExactInertNetworkPredecessor({ ...exact, egressActiveEnabled: false })).toBe("DRIFT")
     expect(inspectExactInertNetworkPredecessor({ ...exact, egressEnabledInactive: true })).toBe("DRIFT")
     const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
-    expect(adapter).toContain("partial-network-inert-afd68274-062e-4b1e-8ff3-a5542898c8e4.json")
-    expect(adapter).toContain("a6e5222382cd23682fd9fb887d1baca186a7c2aeef48d8dd69f3a40eb15ef6a1")
+    expect(adapter).toContain("partial-network-inert-9dd7b361-e3a9-4dba-b1ca-0fb76305a9c8.json")
+    expect(adapter).toContain("afafe1e9022f911a088c73a10bd350132ff5f79dbf9875ae36b74c2190735d0c")
   })
   it("binds a stable reviewed package while proving fresh-main ancestry and critical-byte equality", () => {
     const verifier = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"), "utf8")
@@ -473,17 +473,23 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(report).not.toContain("`cf39e367f9f5437d43f7d93456b16414f5aa47c44954e59b0ecf9b8b89018d6a`")
   })
 
-  it("treats only two truly absent repositories under safe parents as reconcilable", () => {
-    expect(inspectTrustedRepositoryReconciliation({ parentsExact: true, controlExists: false, controlExact: false, mirrorExists: false, mirrorExact: false })).toBe("ABSENT")
-    expect(inspectTrustedRepositoryReconciliation({ parentsExact: true, controlExists: true, controlExact: true, mirrorExists: true, mirrorExact: true })).toBe("MATCH")
+  it("treats only absence or the exact transaction-owned no-checkout clone as reconcilable", () => {
+    expect(inspectTrustedRepositoryReconciliation({ parentsExact: true, controlExists: false, controlExact: false, controlPartialExact: false, mirrorExists: false, mirrorExact: false })).toBe("ABSENT")
+    expect(inspectTrustedRepositoryReconciliation({ parentsExact: true, controlExists: true, controlExact: false, controlPartialExact: true, mirrorExists: false, mirrorExact: false })).toBe("ABSENT")
+    expect(inspectTrustedRepositoryReconciliation({ parentsExact: true, controlExists: true, controlExact: true, controlPartialExact: false, mirrorExists: true, mirrorExact: true })).toBe("MATCH")
     for (const state of [
-      { parentsExact: false, controlExists: false, controlExact: false, mirrorExists: false, mirrorExact: false },
-      { parentsExact: true, controlExists: true, controlExact: false, mirrorExists: false, mirrorExact: false },
-      { parentsExact: true, controlExists: true, controlExact: true, mirrorExists: false, mirrorExact: false },
-      { parentsExact: true, controlExists: false, controlExact: false, mirrorExists: true, mirrorExact: true },
-      { parentsExact: true, controlExists: true, controlExact: true, mirrorExists: true, mirrorExact: false },
-      { parentsExact: true, controlExists: undefined, controlExact: false, mirrorExists: false, mirrorExact: false },
+      { parentsExact: false, controlExists: false, controlExact: false, controlPartialExact: false, mirrorExists: false, mirrorExact: false },
+      { parentsExact: true, controlExists: true, controlExact: false, controlPartialExact: false, mirrorExists: false, mirrorExact: false },
+      { parentsExact: true, controlExists: true, controlExact: true, controlPartialExact: false, mirrorExists: false, mirrorExact: false },
+      { parentsExact: true, controlExists: false, controlExact: false, controlPartialExact: false, mirrorExists: true, mirrorExact: true },
+      { parentsExact: true, controlExists: true, controlExact: true, controlPartialExact: false, mirrorExists: true, mirrorExact: false },
+      { parentsExact: true, controlExists: false, controlExact: true, controlPartialExact: false, mirrorExists: false, mirrorExact: false },
+      { parentsExact: true, controlExists: true, controlExact: true, controlPartialExact: true, mirrorExists: false, mirrorExact: false },
+      { parentsExact: true, controlExists: true, controlExact: true, controlPartialExact: true, mirrorExists: true, mirrorExact: true },
+      { parentsExact: true, controlExists: undefined, controlExact: false, controlPartialExact: false, mirrorExists: false, mirrorExact: false },
     ]) expect(inspectTrustedRepositoryReconciliation(state)).toBe("DRIFT")
+    const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
+    expect(adapter.indexOf('run("/usr/bin/git", ["checkout", "-B", "main", authority.trustedMainCommit]')).toBeLessThan(adapter.indexOf('if (run("/usr/bin/git", ["status", "--porcelain"]'))
   })
 
   it("reconciles only an exact preserved closed HASH ledger when the new ticket directory alone is absent", () => {

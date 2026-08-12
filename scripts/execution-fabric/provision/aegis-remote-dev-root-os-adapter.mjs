@@ -271,11 +271,12 @@ function trustedRepositoryParents() {
   return true
 }
 
-export function inspectTrustedRepositoryReconciliation({ parentsExact, controlExists, controlExact, mirrorExists, mirrorExact }) {
-  if (![parentsExact, controlExists, controlExact, mirrorExists, mirrorExact].every((value) => typeof value === "boolean")) return "DRIFT"
+export function inspectTrustedRepositoryReconciliation({ parentsExact, controlExists, controlExact, controlPartialExact, mirrorExists, mirrorExact }) {
+  if (![parentsExact, controlExists, controlExact, controlPartialExact, mirrorExists, mirrorExact].every((value) => typeof value === "boolean")) return "DRIFT"
   if (!parentsExact) return "DRIFT"
-  if (!controlExists && !mirrorExists) return "ABSENT"
-  return controlExists && controlExact && mirrorExists && mirrorExact ? "MATCH" : "DRIFT"
+  if (!controlExists && !controlExact && !controlPartialExact && !mirrorExists && !mirrorExact) return "ABSENT"
+  if (controlExists && !controlExact && controlPartialExact && !mirrorExists && !mirrorExact) return "ABSENT"
+  return controlExists && controlExact && !controlPartialExact && mirrorExists && mirrorExact ? "MATCH" : "DRIFT"
 }
 
 function repositoryState(manifest, authority) {
@@ -283,13 +284,21 @@ function repositoryState(manifest, authority) {
   const mirror = TARGET_MIRROR
   try {
     const controlExists = lexists(control); const mirrorExists = lexists(mirror)
-    let controlMatch = false; let mirrorMatch = false
+    let controlMatch = false; let controlPartialMatch = false; let mirrorMatch = false
     if (controlExists) {
       if (!rootOwnedRepositoryTree(control)
-        || run("/usr/bin/git", ["remote", "get-url", "origin"], { cwd: control }) !== "ssh://git@ssh.github.com:443/bsvalues/terragroq.git"
-        || run("/usr/bin/git", ["status", "--porcelain"], { cwd: control }) !== "") return "DRIFT"
-      controlMatch = run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "HEAD"], { cwd: control }) === authority.trustedMainCommit
-        && run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control }) === authority.trustedMainCommit
+        || run("/usr/bin/git", ["remote", "get-url", "origin"], { cwd: control }) !== "ssh://git@ssh.github.com:443/bsvalues/terragroq.git") return "DRIFT"
+      const controlHead = run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "HEAD"], { cwd: control })
+      const controlOrigin = run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control })
+      const status = run("/usr/bin/git", ["status", "--porcelain"], { cwd: control })
+      controlMatch = status === "" && controlHead === authority.trustedMainCommit && controlOrigin === authority.trustedMainCommit
+      const lines = (value) => value ? value.split(/\r?\n/).filter(Boolean).sort() : []
+      const tracked = lines(run("/usr/bin/git", ["--no-replace-objects", "ls-tree", "-r", "--name-only", "HEAD"], { cwd: control }))
+      const deleted = lines(run("/usr/bin/git", ["diff", "--cached", "--diff-filter=D", "--name-only"], { cwd: control }))
+      controlPartialMatch = exactFile("/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/partial-network-inert-9dd7b361-e3a9-4dba-b1ca-0fb76305a9c8.json","afafe1e9022f911a088c73a10bd350132ff5f79dbf9875ae36b74c2190735d0c",0,0,0o400)
+        && controlHead === "9a47acf2af49e71ea9d689f19d24c35ff6fef4d5" && controlOrigin === controlHead && tracked.length > 0 && same(deleted, tracked)
+        && run("/usr/bin/git", ["diff", "--cached", "--diff-filter=ACMRTUXB", "--name-only"], { cwd: control }) === ""
+        && run("/usr/bin/git", ["diff", "--name-only"], { cwd: control }) === "" && run("/usr/bin/git", ["ls-files", "--others", "--exclude-standard"], { cwd: control }) === ""
     }
     if (mirrorExists) {
       if (!rootOwnedRepositoryTree(mirror)
@@ -300,6 +309,7 @@ function repositoryState(manifest, authority) {
       parentsExact: trustedRepositoryParents(),
       controlExists,
       controlExact: controlMatch,
+      controlPartialExact: controlPartialMatch,
       mirrorExists,
       mirrorExact: mirrorMatch,
     })
@@ -441,7 +451,7 @@ function exactInertNetworkPredecessor() {
     const worker=accountIds("williamos-fabric"), gitBroker=accountIds("williamos-git-broker"); if(!worker||!gitBroker) return false
     const parsed=JSON.parse(run("/usr/sbin/nft",["-j","list","table","inet","williamos_aegis_remote_dev"])); const items=parsed.nftables.filter(item=>!item.metainfo).map(item=>{const copy=structuredClone(item);for(const value of Object.values(copy)) delete value.handle;return copy})
     const unit=(name,active,enabled)=>run("/usr/bin/systemctl",["is-active",name],{statuses:[0,3]})===active&&run("/usr/bin/systemctl",["is-enabled",name],{statuses:[0,1,3]})===enabled
-    return inspectExactInertNetworkPredecessor({ firstReceiptExact:exactFile("/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/rollback-inert-53730e34-f199-49c0-8285-4567ea653730.json","a42ed3b6ea7afbdeb6a9b7085a0e77870aa61400aad1b6fec81681b4f8cf1d23",0,0,0o400), secondReceiptExact:exactFile("/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/partial-network-inert-afd68274-062e-4b1e-8ff3-a5542898c8e4.json","a6e5222382cd23682fd9fb887d1baca186a7c2aeef48d8dd69f3a40eb15ef6a1",0,0,0o400), nftSemanticExact:exactNftBoundaryJson(items,worker.uid,gitBroker.uid), egressActiveEnabled:unit("williamos-aegis-remote-dev-egress.service","active","enabled"), brokerInactiveDisabled:unit("williamos-aegis-remote-dev-broker.service","inactive","disabled"), gitSocketInactiveDisabled:unit("williamos-aegis-remote-dev-git-broker.socket","inactive","disabled"), gitServiceInactive:run("/usr/bin/systemctl",["is-active","williamos-aegis-remote-dev-git-broker.service"],{statuses:[3]})==="inactive", listenerConnectionsAbsent:run("/usr/bin/ss",["-H","-tn","sport = :17734 or dport = :17734"])===""&&run("/usr/bin/ss",["-H","-ltn","sport = :17734"])==="", workerWorkspaceDispatchAbsent:!activeProofWorkerExists()&&!lexists("/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001") }) === "RECONCILE_EXACT_INERT_PREDECESSOR"
+    return inspectExactInertNetworkPredecessor({ firstReceiptExact:exactFile("/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/rollback-inert-53730e34-f199-49c0-8285-4567ea653730.json","a42ed3b6ea7afbdeb6a9b7085a0e77870aa61400aad1b6fec81681b4f8cf1d23",0,0,0o400), secondReceiptExact:exactFile("/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/partial-network-inert-9dd7b361-e3a9-4dba-b1ca-0fb76305a9c8.json","afafe1e9022f911a088c73a10bd350132ff5f79dbf9875ae36b74c2190735d0c",0,0,0o400), nftSemanticExact:exactNftBoundaryJson(items,worker.uid,gitBroker.uid), egressActiveEnabled:unit("williamos-aegis-remote-dev-egress.service","active","enabled"), brokerInactiveDisabled:unit("williamos-aegis-remote-dev-broker.service","inactive","disabled"), gitSocketInactiveDisabled:unit("williamos-aegis-remote-dev-git-broker.socket","inactive","disabled"), gitServiceInactive:run("/usr/bin/systemctl",["is-active","williamos-aegis-remote-dev-git-broker.service"],{statuses:[3]})==="inactive", listenerConnectionsAbsent:run("/usr/bin/ss",["-H","-tn","sport = :17734 or dport = :17734"])===""&&run("/usr/bin/ss",["-H","-ltn","sport = :17734"])==="", workerWorkspaceDispatchAbsent:!activeProofWorkerExists()&&!lexists("/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001") }) === "RECONCILE_EXACT_INERT_PREDECESSOR"
   } catch { return false }
 }
 function activeProofWorkerExists() {
@@ -617,8 +627,8 @@ function applyRepositories(manifest, authority) {
   run("/usr/bin/git", ["fetch", "--force", "origin", `+refs/heads/main:refs/remotes/origin/main`], { ...gitOptions, cwd: control })
   if (run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control }) !== authority.trustedMainCommit) fail("REPOSITORY_DRIFT", "fresh control-plane main differs from signed authority")
   run("/usr/bin/git", ["--no-replace-objects", "merge-base", "--is-ancestor", manifest.trustedMain.minimumCommit, authority.trustedMainCommit], { cwd: control })
-  if (run("/usr/bin/git", ["status", "--porcelain"], { cwd: control }) !== "") fail("REPOSITORY_DRIFT", "control checkout is dirty")
   run("/usr/bin/git", ["checkout", "-B", "main", authority.trustedMainCommit], { cwd: control })
+  if (run("/usr/bin/git", ["status", "--porcelain"], { cwd: control }) !== "") fail("REPOSITORY_DRIFT", "control checkout is dirty after exact checkout")
   if (!fs.existsSync(mirror)) run("/usr/bin/git", ["clone", "--mirror", "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git", mirror], gitOptions)
   run("/usr/bin/git", [`--git-dir=${mirror}`, "fetch", "--force", "origin", "+refs/heads/main:refs/heads/main"], gitOptions)
   run("/usr/bin/git", [`--git-dir=${mirror}`, "cat-file", "-e", "ffd2fa35f5152de2b95e7f63b220050d18193d7a^{commit}"])
