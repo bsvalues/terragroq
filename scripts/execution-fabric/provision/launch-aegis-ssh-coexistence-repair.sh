@@ -6,7 +6,7 @@ SOURCE="$BUNDLE_ROOT/scripts/execution-fabric/provision/repair-aegis-ssh-coexist
 DESTINATION=/usr/local/libexec/williamos-aegis-ssh-coexistence-repair.mjs
 LAUNCHER="$BUNDLE_ROOT/scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh"
 KERNEL_LOCK=/run/lock/williamos-aegis-ssh-coexistence-repair.kernel.lock
-INSTALLER_SHA256=d272d73ee9dc6684452bc80d5e97c66b73ca903813f3840d81019a0263d54689
+INSTALLER_SHA256=bc1b1333d5b41f3c6b33c5610025950778f149bc47b6ddae0978eb1b0520218f
 
 [ "$(id -u)" = 0 ] || { echo "AEGIS_SSH_REPAIR_ROOT_REQUIRED" >&2; exit 2; }
 [ "$(readlink -f -- "$0")" = "$LAUNCHER" ] || { echo "AEGIS_SSH_REPAIR_LAUNCHER_UNTRUSTED" >&2; exit 2; }
