@@ -5,6 +5,9 @@ import { pathToFileURL, fileURLToPath } from "node:url"
 
 const BOOTSTRAP_PATH = "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs"
 const RELEASE_MANIFEST_PATH = "/etc/williamos/fabric/trusted-main-release.json"
+export const ACTIVATION_MARKER_PATH = "/etc/williamos/fabric/aegis-standing-hash-replay-ledger-upgrade-v1.activation.json"
+const ACTIVATION_MARKER_SCHEMA = "1.0-aegis-standing-hash-activation-marker"
+const ACTIVATION_UPGRADE_ID = "aegis-standing-hash-replay-ledger-upgrade-v1"
 const RELEASES_ROOT = "/opt/williamos/releases"
 const ENTRYPOINT = "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs"
 const BOOTSTRAP_SOURCE = "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs"
@@ -14,8 +17,20 @@ const REQUIRED_CLOSURE = [
   "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs",
   "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs",
   "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs",
+  "scripts/execution-fabric/provision/aegis-standing-hash-replay-ledger.mjs",
+  "scripts/execution-fabric/canonical-json.mjs",
 ]
 const DIGEST = /^[a-f0-9]{64}$/
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const ACTIVATION_MARKER_FIELDS = [
+  "authority_id",
+  "manifest_sha256",
+  "new_commit",
+  "prepared_at",
+  "runtime_closure_sha256",
+  "schema_version",
+  "upgrade_id",
+]
 
 const canonical = (value) => Array.isArray(value)
   ? `[${value.map(canonical).join(",")}]`
@@ -29,13 +44,13 @@ const fail = (code, detail) => {
   throw error
 }
 
-function readRootOwnedFile(filePath, maximumBytes) {
+function readRootOwnedFile(filePath, maximumBytes, { nonWritable = false } = {}) {
   const lexical = path.resolve(filePath)
   let descriptor
   try {
     const before = fs.lstatSync(lexical)
     if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.uid !== 0
-      || (before.mode & 0o022) !== 0 || before.size > maximumBytes) {
+      || (before.mode & (nonWritable ? 0o222 : 0o022)) !== 0 || before.size > maximumBytes) {
       fail("ROOT_FILE_UNTRUSTED", `${filePath} is not an immutable root-owned file`)
     }
     if (fs.realpathSync(lexical) !== lexical) fail("ROOT_FILE_UNTRUSTED", `${filePath} is indirect`)
@@ -49,6 +64,40 @@ function readRootOwnedFile(filePath, maximumBytes) {
   } finally {
     if (descriptor !== undefined) fs.closeSync(descriptor)
   }
+}
+
+export function validateActivationMarker(manifest, markerBytes) {
+  if (manifest?.activation_marker_path !== ACTIVATION_MARKER_PATH
+    || !DIGEST.test(manifest?.activation_marker_sha256 ?? "")) {
+    fail("RELEASE_MANIFEST_UNTRUSTED", "release manifest activation marker binding is invalid")
+  }
+  let marker
+  try { marker = JSON.parse(markerBytes.toString("utf8")) } catch {
+    fail("ACTIVATION_MARKER_UNTRUSTED", "activation marker is not valid JSON")
+  }
+  const preparedAt = Date.parse(marker?.prepared_at)
+  if (!marker || Array.isArray(marker)
+    || JSON.stringify(Object.keys(marker).sort()) !== JSON.stringify(ACTIVATION_MARKER_FIELDS)
+    || marker.schema_version !== ACTIVATION_MARKER_SCHEMA
+    || marker.upgrade_id !== ACTIVATION_UPGRADE_ID
+    || !UUID.test(marker.authority_id ?? "")
+    || marker.new_commit !== manifest.head_commit
+    || canonical(marker.runtime_closure_sha256) !== canonical(manifest.file_sha256)
+    || !DIGEST.test(marker.manifest_sha256 ?? "")
+    || !Number.isFinite(preparedAt) || new Date(preparedAt).toISOString() !== marker.prepared_at) {
+    fail("ACTIVATION_MARKER_UNTRUSTED", "activation marker binding is invalid")
+  }
+  const markerSha256 = sha256(Buffer.from(canonical(marker), "utf8"))
+  if (markerSha256 !== manifest.activation_marker_sha256) {
+    fail("ACTIVATION_MARKER_UNTRUSTED", "activation marker digest differs from the release manifest")
+  }
+  return marker
+}
+
+function verifiedActivationMarker(manifest) {
+  verifyRootOwnedDirectoryChain(path.dirname(ACTIVATION_MARKER_PATH))
+  const markerBytes = readRootOwnedFile(ACTIVATION_MARKER_PATH, 16384, { nonWritable: true })
+  return validateActivationMarker(manifest, markerBytes)
 }
 
 function verifyRootOwnedDirectoryChain(directoryPath) {
@@ -85,12 +134,15 @@ function verifiedManifest() {
     || manifest.repository !== "bsvalues/terragroq" || manifest.trusted_ref !== "refs/heads/main"
     || manifest.reviewed !== true || !/^[a-f0-9]{40}$/.test(manifest.head_commit ?? "")
     || !Number.isFinite(Date.parse(manifest.deployed_at))
+    || manifest.activation_marker_path !== ACTIVATION_MARKER_PATH
+    || !DIGEST.test(manifest.activation_marker_sha256 ?? "")
     || manifest.release_manifest_sha256 !== sha256(Buffer.from(canonical(body), "utf8"))) {
     fail("RELEASE_MANIFEST_UNTRUSTED", "release manifest binding is invalid")
   }
   if (!manifest.file_sha256 || JSON.stringify(Object.keys(manifest.file_sha256).sort()) !== JSON.stringify([...REQUIRED_CLOSURE].sort())) {
     fail("RELEASE_MANIFEST_UNTRUSTED", "release manifest does not name the exact executable closure")
   }
+  verifiedActivationMarker(manifest)
   const releaseRoot = path.resolve(RELEASES_ROOT, manifest.head_commit)
   if (manifest.release_root !== releaseRoot || path.dirname(releaseRoot) !== RELEASES_ROOT) {
     fail("RELEASE_MANIFEST_UNTRUSTED", "release root is not the content-addressed reviewed-main directory")
@@ -117,7 +169,9 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 
-main().catch((error) => {
+const isMain = process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+
+if (isMain) main().catch((error) => {
   process.stderr.write(`${JSON.stringify({
     schema_version: "1.0-aegis-standing-bootstrap-error",
     status: "FAILED_CLOSED",

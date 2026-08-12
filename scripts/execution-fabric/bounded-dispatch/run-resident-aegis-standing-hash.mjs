@@ -6,12 +6,11 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 import { executeAegisStandingHash } from "./aegis-standing-hash-runtime.mjs"
+import { createAegisStandingHashReplayLedger } from "../provision/aegis-standing-hash-replay-ledger.mjs"
 
 export const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
 
 const GIT_BINARY = "/usr/bin/git"
-const JOURNALCTL_BINARY = "/usr/bin/journalctl"
-const SYSTEMD_CAT_BINARY = "/usr/bin/systemd-cat"
 const TRUSTED_REF = "refs/heads/main"
 const REPORT_ROOT = "docs/reports/standing-dispatch"
 const INPUT_ROOT = `${REPORT_ROOT}/inputs`
@@ -42,6 +41,8 @@ export const STANDING_TRUSTED_FILES = [
   "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs",
   "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs",
   "scripts/execution-fabric/bounded-dispatch/aegis-hash-verify.mjs",
+  "scripts/execution-fabric/provision/aegis-standing-hash-replay-ledger.mjs",
+  "scripts/execution-fabric/canonical-json.mjs",
   "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs",
   "config/execution-fabric/aegis-standing-compute-authority.v1.json",
   "config/execution-fabric/aegis-standing-compute-authority.schema.v1.json",
@@ -207,14 +208,21 @@ function exactRecordKeys(value, expected) {
     && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...expected].sort())
 }
 
+function canonicalTimestamp(value) {
+  const milliseconds = typeof value === "string" ? Date.parse(value) : NaN
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value
+}
+
 function validateReleaseManifest(manifest, head) {
-  const fields = ["schema_version", "repository", "trusted_ref", "head_commit", "release_root", "reviewed", "deployed_at", "file_sha256", "release_manifest_sha256"]
+  const fields = ["schema_version", "repository", "trusted_ref", "head_commit", "release_root", "reviewed", "deployed_at", "file_sha256", "activation_marker_path", "activation_marker_sha256", "release_manifest_sha256"]
   const executableClosure = [
     "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs",
     "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs",
     "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs",
     "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs",
     "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs",
+    "scripts/execution-fabric/provision/aegis-standing-hash-replay-ledger.mjs",
+    "scripts/execution-fabric/canonical-json.mjs",
   ]
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)
     || JSON.stringify(Object.keys(manifest).sort()) !== JSON.stringify(fields.sort())) {
@@ -226,7 +234,9 @@ function validateReleaseManifest(manifest, head) {
     || manifest.repository !== "bsvalues/terragroq" || manifest.trusted_ref !== TRUSTED_REF
     || manifest.head_commit !== head || manifest.reviewed !== true
     || manifest.release_root !== `/opt/williamos/releases/${head}`
-    || !Number.isFinite(Date.parse(manifest.deployed_at))
+    || !canonicalTimestamp(manifest.deployed_at)
+    || manifest.activation_marker_path !== "/etc/williamos/fabric/aegis-standing-hash-replay-ledger-upgrade-v1.activation.json"
+    || !DIGEST.test(manifest.activation_marker_sha256 ?? "")
     || !manifest.file_sha256 || JSON.stringify(Object.keys(manifest.file_sha256).sort()) !== JSON.stringify(executableClosure.sort())
     || Object.values(manifest.file_sha256 ?? {}).some((value) => !DIGEST.test(value))
     || manifest.release_manifest_sha256 !== sha256(canonicalBytes(body))) {
@@ -336,20 +346,13 @@ export function createStandingTrustedProof({ repositoryRoot = REPOSITORY_ROOT, a
          || integration.runtime_sha256 !== digests["scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs"]
          || integration.operation_core_sha256 !== digests["scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs"]
          || integration.resident_runner_sha256 !== digests["scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs"]
+         || integration.replay_ledger_sha256 !== digests["scripts/execution-fabric/provision/aegis-standing-hash-replay-ledger.mjs"]
          || integration.standing_contract_sha256 !== digests["config/execution-fabric/aegis-standing-hash-template.v1.json"]) {
          fail("INTEGRATION_BINDING_MISMATCH", "active authority does not bind the exact standing integration bytes")
        }
     }
     if (runGit(["rev-parse", "HEAD"]).toString("utf8").trim() !== head) fail("TRUSTED_MAIN_MISMATCH", "trusted main changed during proof")
     return { schema_version: "1.0-aegis-standing-trusted-proof", trusted_ref: TRUSTED_REF, head_commit: head, release_manifest_sha256: releaseManifest.release_manifest_sha256, source_commit: sourceCommit, source_is_ancestor: true, clean: true, exact_file_count: paths.length, file_sha256: digests, verified: true }
-}
-
-function requirePrivateRoot(root, uid, validateDirectory) {
-  const lexical = path.resolve(root)
-  const stats = fs.lstatSync(lexical)
-  const real = fs.realpathSync(lexical)
-  if (real !== lexical || !validateDirectory(stats, uid)) fail("LEDGER_UNTRUSTED", "standing ledger root is not private")
-  return real
 }
 
 function syncDirectory(directoryPath) {
@@ -398,49 +401,6 @@ function processStartTicks(pid, fsApi = fs) {
   return fields[19]
 }
 
-function fixedProcess(binary, args, options = {}) {
-  const result = spawnSync(binary, args, {
-    encoding: "utf8",
-    shell: false,
-    windowsHide: true,
-    timeout: 15_000,
-    maxBuffer: 4 * 1024 * 1024,
-    env: { HOME: "/nonexistent", PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
-    ...options,
-  })
-  if (result.error || result.status !== 0) fail("JOURNAL_UNAVAILABLE", `${path.basename(binary)} failed closed`)
-  return result.stdout ?? ""
-}
-
-function defaultReadJournal() {
-  const output = fixedProcess(JOURNALCTL_BINARY, ["--no-pager", "--output=json", `--identifier=${JOURNAL_IDENTIFIER}`])
-  return output.split(/\r?\n/).filter(Boolean).map((line) => {
-    let envelope
-    let record
-    try {
-      envelope = JSON.parse(line)
-      record = JSON.parse(envelope.MESSAGE)
-    } catch {
-      fail("JOURNAL_UNTRUSTED", "standing journal contains malformed evidence")
-    }
-    const realtime = Number(envelope.__REALTIME_TIMESTAMP)
-    if (!Number.isSafeInteger(realtime) || realtime <= 0) fail("JOURNAL_UNTRUSTED", "standing journal timestamp is invalid")
-    return {
-      record,
-      realtime_ms: Math.floor(realtime / 1000),
-      uid: Number(envelope._UID),
-      identifier: envelope.SYSLOG_IDENTIFIER,
-    }
-  })
-}
-
-function defaultAppendJournal(record) {
-  fixedProcess(SYSTEMD_CAT_BINARY, [`--identifier=${JOURNAL_IDENTIFIER}`, "--priority=info", "--level-prefix=false"], {
-    input: `${JSON.stringify(record)}\n`,
-  })
-  fixedProcess(JOURNALCTL_BINARY, ["--sync"])
-}
-
 function defaultHolder() {
   return {
     pid: process.pid,
@@ -464,6 +424,7 @@ export function createStandingLedgerProviders({
   fsApi = fs,
   platform = process.platform,
   getuid = process.getuid,
+  getgid = process.getgid,
   username = () => os.userInfo().username,
   clock = () => new Date().toISOString(),
   holderIdentity = defaultHolder,
@@ -471,16 +432,30 @@ export function createStandingLedgerProviders({
   validateDirectory = (stats, uid) => stats.isDirectory() && !stats.isSymbolicLink() && stats.uid === uid && (stats.mode & 0o077) === 0,
   validateFile = (stats, uid) => stats.isFile() && !stats.isSymbolicLink() && stats.nlink === 1 && stats.uid === uid && (stats.mode & 0o077) === 0,
   syncDirectory: sync = syncDirectory,
-  readJournal = defaultReadJournal,
-  appendJournal = defaultAppendJournal,
+  readJournal = null,
+  appendJournal = null,
 } = {}) {
-  if (platform !== "linux" || typeof getuid !== "function") fail("PLATFORM_MISMATCH", "standing AEGIS ledger requires Linux")
+  if (platform !== "linux" || typeof getuid !== "function" || typeof getgid !== "function") fail("PLATFORM_MISMATCH", "standing AEGIS ledger requires Linux")
   const uid = getuid()
-  if (!Number.isSafeInteger(uid) || uid <= 0 || username() !== "williamos-fabric") fail("EXECUTION_IDENTITY_MISMATCH", "standing AEGIS ledger requires its non-root account")
+  const gid = getgid()
+  if (!Number.isSafeInteger(uid) || uid <= 0 || !Number.isSafeInteger(gid) || gid <= 0
+    || username() !== "williamos-fabric") fail("EXECUTION_IDENTITY_MISMATCH", "standing AEGIS ledger requires its non-root account")
   const lexicalRoot = path.resolve(requestedRoot)
   const rootStats = fsApi.lstatSync(lexicalRoot)
   const root = fsApi.realpathSync(lexicalRoot)
   if (root !== lexicalRoot || !validateDirectory(rootStats, uid)) fail("LEDGER_UNTRUSTED", "standing ledger root is not private")
+  const privateReplayLedger = readJournal || appendJournal ? null : createAegisStandingHashReplayLedger({
+    ledgerRoot: root,
+    uid,
+    gid,
+    fsApi,
+    clock,
+    validateDirectory,
+    validateFile,
+    syncDirectory: sync,
+  })
+  const readReplayJournal = readJournal ?? (() => privateReplayLedger.read().map((entry) => ({ ...entry, uid })))
+  const appendReplayJournal = appendJournal ?? ((record) => privateReplayLedger.append(record))
   const nodeLeasePath = path.resolve(requestedNodeLeasePath)
   const nodeLeaseRoot = path.dirname(nodeLeasePath)
   const nodeLeaseRootStats = fsApi.lstatSync(nodeLeaseRoot)
@@ -623,7 +598,7 @@ export function createStandingLedgerProviders({
   }
 
   const journalEntries = () => {
-    const entries = readJournal()
+    const entries = readReplayJournal()
     if (!Array.isArray(entries)) fail("JOURNAL_UNTRUSTED", "standing journal response is invalid")
     return entries.map((entry) => {
       if (!entry || typeof entry !== "object" || !entry.record || !Number.isSafeInteger(entry.realtime_ms) || entry.realtime_ms <= 0
@@ -637,19 +612,15 @@ export function createStandingLedgerProviders({
   const ensureJournalEpoch = (admissionIssuedAt) => {
     const issuedAtMs = Date.parse(admissionIssuedAt)
     if (!Number.isFinite(issuedAtMs)) fail("ADMISSION_TIME_INVALID", "standing admission issue time is invalid")
-    let entries = journalEntries()
-    let epochs = entries.filter(({ record }) => record.record_type === "EPOCH" && record.epoch_id === JOURNAL_EPOCH_ID)
+    const entries = journalEntries()
+    const epochs = entries.filter(({ record }) => record.record_type === "EPOCH" && record.epoch_id === JOURNAL_EPOCH_ID)
     if (epochs.length === 0) {
-      const body = { record_type: "EPOCH", epoch_id: JOURNAL_EPOCH_ID, initialized_at: clock() }
-      body.journal_record_sha256 = sha256(canonicalBytes(body))
-      appendJournal(body)
-      entries = journalEntries()
-      epochs = entries.filter(({ record }) => record.record_type === "EPOCH" && record.epoch_id === JOURNAL_EPOCH_ID)
+      fail("JOURNAL_EPOCH_NOT_ESTABLISHED", "the replay epoch must be initialized before admission")
     }
     for (const { record } of epochs) {
       if (!recordDigestValid(record, "journal_record_sha256")) fail("JOURNAL_UNTRUSTED", "standing journal epoch is invalid")
     }
-    if (!epochs.some(({ realtime_ms }) => realtime_ms < issuedAtMs)) {
+    if (epochs.length !== 1 || Date.parse(epochs[0].record.initialized_at) >= issuedAtMs) {
       fail("JOURNAL_EPOCH_NOT_ESTABLISHED", "a retained replay epoch must predate the reviewed admission")
     }
     return entries
@@ -665,8 +636,7 @@ export function createStandingLedgerProviders({
       .filter((record) => record?.record_type === "CLAIM" && record.claim_key_sha256 === key)
     for (const retained of journalClaims) {
       if (!recordDigestValid(retained, "journal_record_sha256")
-        || retained.admission_sha256 !== binding.admission_sha256
-        || retained.request_binding_sha256 !== binding.request_binding_sha256) {
+        || canonical(Object.fromEntries(Object.keys(binding).map((field) => [field, retained[field]]))) !== canonical(binding)) {
         fail("JOURNAL_UNTRUSTED", "retained journal claim is invalid")
       }
     }
@@ -680,6 +650,15 @@ export function createStandingLedgerProviders({
       }
       return { claimed: false, ...binding, claimed_at: journalClaims[0].claimed_at }
     }
+    const journalBody = { record_type: "CLAIM", ...binding, claim_key_sha256: key, claimed_at: body.claimed_at }
+    journalBody.journal_record_sha256 = sha256(canonicalBytes(journalBody))
+    appendReplayJournal(journalBody)
+    const confirmed = journalEntries().map(({ record }) => record)
+      .filter((record) => record?.record_type === "CLAIM" && record.claim_key_sha256 === key)
+    if (confirmed.length !== 1 || !recordDigestValid(confirmed[0], "journal_record_sha256")
+      || canonical(Object.fromEntries(Object.keys(binding).map((field) => [field, confirmed[0][field]]))) !== canonical(binding)) {
+      fail("JOURNAL_UNTRUSTED", "standing claim was not durably retained by the private replay journal")
+    }
     try { writeExclusiveWith(fsApi, filePath, body, sync) } catch (error) {
       if (error?.code !== "EEXIST") throw error
       const retained = readLedgerWith(fsApi, filePath, uid, validateFile)
@@ -688,17 +667,7 @@ export function createStandingLedgerProviders({
         fail("LEDGER_UNTRUSTED", "retained standing claim is invalid")
       }
       lastClaim = retained
-      fail("JOURNAL_UNTRUSTED", "local claim exists without its independently retained journal claim")
-    }
-    const journalBody = { record_type: "CLAIM", claim_key_sha256: key, admission_sha256: binding.admission_sha256, request_binding_sha256: binding.request_binding_sha256, claimed_at: body.claimed_at }
-    journalBody.journal_record_sha256 = sha256(canonicalBytes(journalBody))
-    appendJournal(journalBody)
-    const confirmed = journalEntries().map(({ record }) => record)
-      .filter((record) => record?.record_type === "CLAIM" && record.claim_key_sha256 === key)
-    if (confirmed.length !== 1 || !recordDigestValid(confirmed[0], "journal_record_sha256")
-      || confirmed[0].admission_sha256 !== binding.admission_sha256
-      || confirmed[0].request_binding_sha256 !== binding.request_binding_sha256) {
-      fail("JOURNAL_UNTRUSTED", "standing claim was not durably retained by the privileged journal")
+      return { claimed: true, ...binding, claimed_at: retained.claimed_at }
     }
     lastClaim = body
     return { claimed: true, ...binding, claimed_at: body.claimed_at }

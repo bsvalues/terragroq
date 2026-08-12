@@ -134,6 +134,7 @@ function ledger(root = tempRoot("aegis-standing-ledger-"), overrides: Json = {})
     fsApi: fs,
     platform: "linux",
     getuid: () => process.getuid?.() ?? 1000,
+    getgid: () => process.getgid?.() ?? 1000,
     username: () => "williamos-fabric",
     validateDirectory: (stats: fs.Stats) => stats.isDirectory() && !stats.isSymbolicLink(),
     validateFile: (stats: fs.Stats) => stats.isFile() && !stats.isSymbolicLink() && stats.nlink === 1,
@@ -272,9 +273,9 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     expect(descriptorReads.some((candidate) => typeof candidate === "number")).toBe(true)
 
     const driftedFs = Object.create(fs) as typeof fs
-    Object.defineProperty(driftedFs, "fstatSync", {
-      value: (descriptor: number) => {
-        const stats = fs.fstatSync(descriptor)
+    Object.defineProperty(driftedFs, "lstatSync", {
+      value: (candidate: fs.PathLike) => {
+        const stats = fs.lstatSync(candidate)
         return new Proxy(stats, {
           get(statsTarget, statsProperty, statsReceiver) {
             if (statsProperty === "ino") return statsTarget.ino + 1
@@ -312,13 +313,21 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     expect(() => readResidentMachineIdentity({ fsApi: injectedFs, machineIdPath })).toThrow("MACHINE_ID_UNTRUSTED")
   })
 
-  it("fails closed until a retained privileged journal epoch predates admission", async () => {
+  it("fails closed until an initializer-created replay epoch predates admission", async () => {
     const root = tempRoot("aegis-standing-epoch-")
     journalByRoot.set(root, [])
     const providers = ledger(root)
 
     await expect(providers.claimAdmission(claimBinding())).rejects.toThrow("JOURNAL_EPOCH_NOT_ESTABLISHED")
-    expect(journalByRoot.get(root)?.map((entry) => entry.record.record_type)).toEqual(["EPOCH"])
+    expect(journalByRoot.get(root)).toEqual([])
+    const epoch = { record_type: "EPOCH", epoch_id: "aegis-standing-hash-replay-epoch-v1", initialized_at: "2026-08-10T22:00:01.000Z" } as Json
+    epoch.journal_record_sha256 = sha256Object(epoch)
+    journalByRoot.get(root)!.push({
+      record: epoch,
+      realtime_ms: Date.parse(epoch.initialized_at),
+      uid: process.getuid?.() ?? 1000,
+      identifier: "williamos-aegis-standing-hash",
+    })
 
     await expect(providers.claimAdmission({
       ...claimBinding(),
@@ -856,12 +865,16 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
       release_root: `/opt/williamos/releases/${commit}`,
       reviewed: true,
       deployed_at: "2026-08-10T21:58:00.000Z",
+      activation_marker_path: "/etc/williamos/fabric/aegis-standing-hash-replay-ledger-upgrade-v1.activation.json",
+      activation_marker_sha256: "e".repeat(64),
       file_sha256: Object.fromEntries([
         "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs",
         "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs",
         "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs",
         "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs",
         "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs",
+        "scripts/execution-fabric/provision/aegis-standing-hash-replay-ledger.mjs",
+        "scripts/execution-fabric/canonical-json.mjs",
       ].map((relative) => [relative, sha256(closure[relative])])),
     }
     const releaseManifest = { ...releaseBody, release_manifest_sha256: sha256Object(releaseBody) }
@@ -929,11 +942,11 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
       process.cwd(), "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs",
     ), "utf8")
     expect(source).toContain('const GIT_BINARY = "/usr/bin/git"')
-    expect(source).toContain('const JOURNALCTL_BINARY = "/usr/bin/journalctl"')
-    expect(source).toContain('const SYSTEMD_CAT_BINARY = "/usr/bin/systemd-cat"')
+    expect(source).not.toContain('const JOURNALCTL_BINARY = "/usr/bin/journalctl"')
+    expect(source).not.toContain('const SYSTEMD_CAT_BINARY = "/usr/bin/systemd-cat"')
+    expect(source).toContain("createAegisStandingHashReplayLedger")
     expect(source).toContain('spawnSync(GIT_BINARY, ["--no-replace-objects", ...args]')
-    expect(source).toContain("spawnSync(binary, args")
-    expect(source.match(/spawnSync\(/g)).toHaveLength(2)
+    expect(source.match(/spawnSync\(/g)).toHaveLength(1)
     expect(source).not.toMatch(/\b(?:fetch|WebSocket|XMLHttpRequest|createConnection|connect)\s*\(/)
     expect(source).not.toMatch(/node:(?:http|https|net|tls|dns)|\bssh\b|api\.github\.com|\bgh\b/)
     expect(source).not.toMatch(/\b(?:exec|execFile|fork)Sync?\s*\(|shell:\s*true/)
