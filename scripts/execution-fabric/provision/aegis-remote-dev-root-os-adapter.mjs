@@ -14,6 +14,10 @@ const CONTROL_REPOSITORY = "/var/lib/williamos-remote-dev/control/terragroq"
 const TARGET_MIRROR = "/var/lib/williamos-remote-dev/repositories/terrafusion_os_1.0.git"
 const HERMES_SOURCE_ADDRESS = "192.168.88.9"
 const PREVIOUS_HERMES_SOURCE_ADDRESS = "192.168.1.154"
+const STANDING_ROOT_KEY_PATH = "/etc/ssh/authorized_keys/williamos-fabric-standing-hash"
+const STANDING_ROOT_KEY_SHA256 = "d054724aeea3ff42bf646d4d3aed078be21183e3a67c9ae1f8d4768e97dd2967"
+const STANDING_ENTRYPOINT_PATH = "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs"
+const STANDING_ENTRYPOINT_SHA256 = "ebcf0d068e11c1a3f98b515f9a59a456955d8d30abdbb8bab7897b9b315caf9a"
 const FIXED_ENV = Object.freeze({ HOME: "/nonexistent", PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1" })
 const STEPS = Object.freeze([
   "RECONCILE_BOUNDED_IDENTITY", "INSTALL_ROOT_LAUNCH_ASSETS", "INSTALL_DUAL_STACK_BROKER_BOUNDARY",
@@ -500,6 +504,8 @@ function observe(manifest, authority, trust) {
   const distinctBrokerIdentities = ids?.uid > 0 && brokerIds?.uid > 0 && gitBrokerIds?.uid > 0 && new Set([ids.uid, brokerIds.uid, gitBrokerIds.uid]).size === 3
   const identityMatch = (() => { try { const shadow = run("/usr/bin/getent", ["shadow", "williamos-fabric"]).split(":")[1]; const linger = fs.existsSync(`/var/lib/systemd/linger/williamos-fabric`); return ids?.home === "/var/empty/williamos-fabric" && ids?.shell === "/bin/bash" && /^!/.test(shadow) && linger && noSudoCapability() && same(supplementaryGroups("williamos-fabric"), [ids.gid]) && processState.proven && processState.onlyManager && brokerIds?.home === "/var/empty/williamos-egress-broker" && brokerIds?.shell === "/usr/sbin/nologin" && brokerProcessState.proven && same(supplementaryGroups("williamos-egress-broker"), [brokerIds.gid]) && gitBrokerIds?.home === "/var/empty/williamos-git-broker" && gitBrokerIds?.shell === "/usr/sbin/nologin" && gitBrokerIds.gid === ids.gid && gitBrokerProcessState.proven && gitBrokerProcessState.pids.length === 0 && same(supplementaryGroups("williamos-git-broker"), [ids.gid]) && exactSharedGitGroup(ids.gid) && sharedGroupProcessesExact(ids.gid, [ids.uid, gitBrokerIds.uid]) } catch { return false } })()
   const transportLines = (() => { try { const key = fs.readFileSync(path.join(STAGED_ROOT, "hermes-transport.pub"), "utf8").trim(); const suffix = `restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" ${key}\n`; return { expected: `from="${HERMES_SOURCE_ADDRESS}",${suffix}`, predecessor: `from="${PREVIOUS_HERMES_SOURCE_ADDRESS}",${suffix}` } } catch { return { expected: null, predecessor: null } } })()
+  const standingTransportExact = exactFile(STANDING_ROOT_KEY_PATH, STANDING_ROOT_KEY_SHA256, 0, 0, 0o444)
+    && exactFile(STANDING_ENTRYPOINT_PATH, STANDING_ENTRYPOINT_SHA256, 0, 0, 0o555)
   const githubMatch = exactFile("/etc/williamos-fabric/github_known_hosts", authority.inputs.githubHostKnownHostsSha256, 0, 0, 0o444) && exactFile("/etc/williamos-fabric/github-account.key", authority.inputs.githubAccountPrivateKeySha256, 0, 0, 0o400)
   const states = {
     RECONCILE_BOUNDED_IDENTITY: identityMatch && distinctBrokerIdentities ? "MATCH" : ids && (!distinctBrokerIdentities || !processState.proven || (processState.pids.length > 0 && !processState.onlyManager) || !brokerProcessState.proven || brokerProcessState.pids.length > 0 || !gitBrokerProcessState.proven || gitBrokerProcessState.pids.length > 0 || !noSudoCapability()) ? "DRIFT" : "ABSENT",
@@ -509,7 +515,7 @@ function observe(manifest, authority, trust) {
     RECONCILE_TRUSTED_REPOSITORIES: repositories,
     INSTALL_PINNED_TOOLCHAIN: toolchain,
     CREATE_DURABLE_LEDGER: inspectDurableLedgerReconciliation({ ledgerExact: ledger, ledgerExists: fs.existsSync("/var/lib/williamos/fabric/ledger"), ledgerRecordsExact, ticketExact: appendOnly("/var/lib/williamos-fabric/remote-dev-launch-tickets"), ticketExists: lexists("/var/lib/williamos-fabric/remote-dev-launch-tickets") }),
-    INSTALL_FORCED_COMMAND_TRANSPORT: transportLines.expected && transportLines.predecessor ? (() => { const inspected = inspectTransportPath(transportPath, transportLines.expected, transportLines.predecessor); const state = inspectForcedCommandTransportReconciliation({ current: inspected.current, expected: transportLines.expected, predecessor: transportLines.predecessor, pathOccupied: inspected.occupied, currentMetadataExact: inspected.currentMetadataExact, predecessorMetadataExact: inspected.predecessorMetadataExact }); return state === "RECONCILE_EXACT_PREDECESSOR" ? "ABSENT" : state })() : "DRIFT",
+    INSTALL_FORCED_COMMAND_TRANSPORT: standingTransportExact && transportLines.expected && transportLines.predecessor ? (() => { const inspected = inspectTransportPath(transportPath, transportLines.expected, transportLines.predecessor); const state = inspectForcedCommandTransportReconciliation({ current: inspected.current, expected: transportLines.expected, predecessor: transportLines.predecessor, pathOccupied: inspected.occupied, currentMetadataExact: inspected.currentMetadataExact, predecessorMetadataExact: inspected.predecessorMetadataExact }); return state === "RECONCILE_EXACT_PREDECESSOR" ? "ABSENT" : state })() : "DRIFT",
   }
   return { platform: { os: process.platform, effectiveUid: process.getuid?.(), hostname: run("/usr/bin/hostname", ["-s"]), machineIdSha256: sha(Buffer.from(fs.readFileSync("/etc/machine-id", "utf8").trim(), "utf8")) }, ...trust, trustedMain: { ...trust.trustedMain, exactCleanHead: repositories === "MATCH", criticalBytesMatch: rootAssets }, storage: storageObservation(), prerequisites: states }
 }
@@ -570,6 +576,10 @@ function applyGithub(authority) {
   if (!fingerprint.includes(authority.inputs.githubAccountKeyFingerprint)) fail("GITHUB_KEY_DRIFT", "GitHub account key fingerprint differs")
 }
 function applyTransport(authority) {
+  if (!exactFile(STANDING_ROOT_KEY_PATH, STANDING_ROOT_KEY_SHA256, 0, 0, 0o444)
+    || !exactFile(STANDING_ENTRYPOINT_PATH, STANDING_ENTRYPOINT_SHA256, 0, 0, 0o555)) {
+    fail("TRANSPORT_DRIFT", "standing authorized key or forced-command entrypoint differs")
+  }
   const source = staged("hermes-transport.pub", authority.inputs.hermesTransportPublicKeySha256, 0o400)
   const fingerprint = run("/usr/bin/ssh-keygen", ["-lf", source, "-E", "sha256"])
   if (!fingerprint.includes(authority.inputs.hermesTransportKeyFingerprint)) fail("TRANSPORT_KEY_DRIFT", "Hermes transport key fingerprint differs")
@@ -590,7 +600,7 @@ function applyTransport(authority) {
   run("/usr/sbin/sshd", ["-t"])
   for (const address of [HERMES_SOURCE_ADDRESS, PREVIOUS_HERMES_SOURCE_ADDRESS]) {
     const effective = run("/usr/sbin/sshd", ["-T", "-C", `user=williamos-fabric,host=aegis,addr=${address}`])
-    for (const required of ["passwordauthentication no", "kbdinteractiveauthentication no", "hostbasedauthentication no", "pubkeyauthentication yes", "authenticationmethods publickey", "forcecommand /usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs", "allowtcpforwarding no", "permittty no", "permituserenvironment no", "permituserrc no", "authorizedkeysfile /etc/ssh/authorized_keys/williamos-fabric", "authorizedkeyscommand none", "authorizedprincipalscommand none", "trustedusercakeys none"]) if (!effective.includes(required)) fail("TRANSPORT_DRIFT", "effective SSH restriction differs")
+    for (const required of ["passwordauthentication no", "kbdinteractiveauthentication no", "hostbasedauthentication no", "pubkeyauthentication yes", "authenticationmethods publickey", "forcecommand none", "allowagentforwarding no", "allowtcpforwarding no", "x11forwarding no", "permittty no", "permittunnel no", "gatewayports no", "permituserenvironment no", "permituserrc no", "authorizedkeysfile /etc/ssh/authorized_keys/williamos-fabric /etc/ssh/authorized_keys/williamos-fabric-standing-hash", "authorizedkeyscommand none", "authorizedprincipalscommand none", "trustedusercakeys none"]) if (!effective.includes(required)) fail("TRANSPORT_DRIFT", "effective SSH restriction differs")
   }
   run("/usr/bin/loginctl", ["enable-linger", "williamos-fabric"])
 }

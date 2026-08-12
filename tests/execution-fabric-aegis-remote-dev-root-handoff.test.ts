@@ -127,6 +127,43 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(adapterSource).toContain('current: currentMetadataExact ? expected : predecessorMetadataExact ? predecessor : "OCCUPIED_UNTRUSTED"')
     expect(adapterSource).toContain("const stagedParent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(stagedParent)")
   })
+
+  it("lets each exact authorized key select its forced command without opening account-wide shell access", () => {
+    const sshdAsset = fs.readFileSync(path.join(root,
+      "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf"), "utf8")
+    expect(sshdAsset).toContain(
+      "AuthorizedKeysFile /etc/ssh/authorized_keys/williamos-fabric /etc/ssh/authorized_keys/williamos-fabric-standing-hash")
+    expect(sshdAsset).not.toMatch(/^\s*ForceCommand\b/m)
+    expect(sshdAsset).not.toMatch(/^\s*PermitUserEnvironment\b/m)
+    for (const restriction of [
+      "PasswordAuthentication no", "KbdInteractiveAuthentication no", "AuthenticationMethods publickey",
+      "AllowAgentForwarding no", "AllowTcpForwarding no", "X11Forwarding no", "PermitTTY no",
+      "PermitTunnel no", "GatewayPorts no", "PermitUserRC no",
+    ]) expect(sshdAsset).toContain(restriction)
+
+    const adapter = fs.readFileSync(path.join(root,
+      "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
+    expect(adapter).toContain('"forcecommand none"')
+    expect(adapter).toContain(
+      '"authorizedkeysfile /etc/ssh/authorized_keys/williamos-fabric /etc/ssh/authorized_keys/williamos-fabric-standing-hash"')
+    expect(adapter).toContain('const STANDING_ROOT_KEY_SHA256 = "d054724aeea3ff42bf646d4d3aed078be21183e3a67c9ae1f8d4768e97dd2967"')
+    expect(adapter).toContain('const STANDING_ENTRYPOINT_SHA256 = "ebcf0d068e11c1a3f98b515f9a59a456955d8d30abdbb8bab7897b9b315caf9a"')
+    expect(adapter).toContain("exactFile(STANDING_ROOT_KEY_PATH, STANDING_ROOT_KEY_SHA256, 0, 0, 0o444)")
+    expect(adapter).toContain("exactFile(STANDING_ENTRYPOINT_PATH, STANDING_ENTRYPOINT_SHA256, 0, 0, 0o555)")
+    expect(adapter).toContain("const standingTransportExact = exactFile(STANDING_ROOT_KEY_PATH")
+    expect(adapter).toContain("INSTALL_FORCED_COMMAND_TRANSPORT: standingTransportExact && transportLines.expected")
+    for (const effectiveRestriction of [
+      "allowagentforwarding no", "allowtcpforwarding no", "x11forwarding no", "permittty no",
+      "permittunnel no", "gatewayports no", "permituserenvironment no", "permituserrc no",
+    ]) expect(adapter).toContain(`"${effectiveRestriction}"`)
+
+    const remoteDevCommand = 'restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs"'
+    const standingCommand = 'command="/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs"'
+    expect(adapter).toContain(remoteDevCommand)
+    const standingManifest = JSON.parse(fs.readFileSync(path.join(root,
+      "config/execution-fabric/aegis-standing-hash-provisioning-package.v1.json"), "utf8"))
+    expect(standingManifest.invocationBoundary.authorizedKeyOptions).toContain(standingCommand)
+  })
   it("pins the merged prerequisite generation and every applied asset exactly", () => {
     const manifest = validateRootHandoffManifest(loadManifest())
     expect(manifest.trustedMain.minimumCommit).toBe("bcca6069a917d706314f7c8cb7b3cd40cdd910da")
