@@ -14,7 +14,7 @@ import {
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
-import { exactLedgerAncestorContract, exactNftBoundaryJson, exactNftBoundaryLines, inspectBrokerReadinessSamples, inspectDurableLedgerReconciliation, inspectForcedCommandTransportReconciliation, inspectNftTableList, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { exactLedgerAncestorContract, exactNftBoundaryJson, exactNftBoundaryLines, inspectBrokerReadinessSamples, inspectDurableLedgerReconciliation, inspectExactInertNetworkPredecessor, inspectForcedCommandTransportReconciliation, inspectNftTableList, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -90,6 +90,14 @@ function signedAuthority(manifest = loadManifest(), overrides: Record<string, un
 }
 
 describe("AEGIS root-owned prerequisite handoff", () => {
+  it("adopts only the exact restrictive predecessor with its egress oneshot enabled and inactive", () => {
+    const exact = { firstReceiptExact: true, secondReceiptExact: true, nftSemanticExact: true,
+      egressEnabledInactive: true, brokerInactiveDisabled: true, gitSocketInactiveDisabled: true,
+      gitServiceInactive: true, listenerConnectionsAbsent: true, workerWorkspaceDispatchAbsent: true }
+    expect(inspectExactInertNetworkPredecessor(exact)).toBe("RECONCILE_EXACT_INERT_PREDECESSOR")
+    expect(inspectExactInertNetworkPredecessor({ ...exact, egressEnabledInactive: false })).toBe("DRIFT")
+    expect(inspectExactInertNetworkPredecessor({ ...exact, egressActiveEnabled: true })).toBe("DRIFT")
+  })
   it("binds a stable reviewed package while proving fresh-main ancestry and critical-byte equality", () => {
     const verifier = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"), "utf8")
     const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
