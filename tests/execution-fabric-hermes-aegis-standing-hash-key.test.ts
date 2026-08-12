@@ -34,6 +34,7 @@ const modulePath = path.join(
 const NOW = "2026-08-11T18:05:00.000Z"
 const PURPOSE = "GENERATE_DEDICATED_HERMES_AEGIS_STANDING_HASH_TRANSPORT_KEY"
 const LEGACY_MANIFEST_SHA256 = "614a0723adae356aa729966b29aeae7dcd5859c78ab99beda1dc256c6dd0e9fd"
+const IMMEDIATELY_PRECEDING_MANIFEST_SHA256 = "5774d4e98ba2620a9bf0433c00c795f69357ef473e91d85e6e8338ada8c2821c"
 
 function manifest(): Json {
   return JSON.parse(fs.readFileSync(manifestPath, "utf8"))
@@ -627,7 +628,9 @@ describe("injected Hermes AEGIS standing HASH dedicated-key generation", () => {
     expect(recoveryClaimFsync).toBeLessThan(secondKeygen)
   })
 
-  it("recovers the exact retained no-artifact journal from the pre-upgrade manifest", () => {
+  it.each([LEGACY_MANIFEST_SHA256, IMMEDIATELY_PRECEDING_MANIFEST_SHA256])(
+    "recovers the exact retained no-artifact journal from reviewed manifest %s",
+    (recoverableManifestSha256) => {
     const source = harness({
       mode: "apply",
       responses: [{ status: 255, stdout: "", stderr: "" }],
@@ -636,7 +639,7 @@ describe("injected Hermes AEGIS standing HASH dedicated-key generation", () => {
     expect(() => createHermesAegisStandingHashKey(source.options)).toThrow()
     const records = source.virtual.bytesAt(JOURNAL_PATH)!.toString("utf8").trimEnd()
       .split("\n").map((line) => JSON.parse(line))
-    records[0].manifestSha256 = LEGACY_MANIFEST_SHA256
+    records[0].manifestSha256 = recoverableManifestSha256
     const journal = `${records.map((record) => canonicalize(record)).join("\n")}\n`
     const terminalJournalSha256 = crypto.createHash("sha256").update(journal).digest("hex")
     const value = harness({ existing: [{ target: JOURNAL_PATH, bytes: journal }], mode: "apply" })
@@ -652,7 +655,8 @@ describe("injected Hermes AEGIS standing HASH dedicated-key generation", () => {
 
     expect(createHermesAegisStandingHashKey(value.options)).toMatchObject({ status: "GENERATED" })
     expect(value.virtual.has(RECOVERY_CLAIM_PATH)).toBe(true)
-  })
+    },
+  )
 
   it("reports recovery authority consumed when journal append fails after the exclusive claim", () => {
     const source = harness({

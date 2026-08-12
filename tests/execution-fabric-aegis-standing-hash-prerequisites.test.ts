@@ -13,7 +13,7 @@ import {
   validateStandingProvisioningManifest,
 } from "../scripts/execution-fabric/provision/aegis-standing-hash-prerequisites.mjs"
 import {
-  ACCEPTED_KEY_GENERATION_MANIFEST_SHA256,
+  LEGACY_KEY_GENERATION_MANIFEST_SHA256,
   applyAegisStandingHashPrerequisites,
   assertNoGitAlternates,
   standingProvisioningErrorEvidence,
@@ -292,8 +292,8 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/canonical-json.mjs", sha256: "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs", sha256: "c18ecec38a5086788d7f4532b471efc6548cd293c27f3983a92934464015fb16", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "4ae1ea7bb7933c7aea1a79a6d31da204d92d306b2ba7249460ec4e4a35302a3c", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "563d5fb28aabff56db69c515e9e7b2de7ee1cdb675ea192edb9ba06152cf9fa2", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "92a0f36e4af132340e6fa3d8bf32ac1e716f52f08779530792c7dc8dc5216d1d", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "71ca5a166b5ddeb0e7b087530d1dd3448d0b42b5b33fd69ff4f4c545fa5b701f", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
       "scheduler-activation",
@@ -521,7 +521,7 @@ describe("dedicated key generation evidence compatibility", () => {
   it("accepts the exact reviewed pre-remediation manifest generation", () => {
     const value = manifest()
     const evidence = keyGenerationEvidence(value)
-    evidence.manifestSha256 = ACCEPTED_KEY_GENERATION_MANIFEST_SHA256[0]
+    evidence.manifestSha256 = LEGACY_KEY_GENERATION_MANIFEST_SHA256
 
     expect(validateHermesKeyGenerationEvidence(value, evidence, {
       fingerprint: publicKeyFingerprint(),

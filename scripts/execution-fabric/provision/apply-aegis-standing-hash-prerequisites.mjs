@@ -58,10 +58,9 @@ const EXPECTED_MUTATIONS = Object.freeze([
   "ESTABLISH_REPLAY_JOURNAL_EPOCH",
   "INSTALL_FORCED_COMMAND_AUTHORIZED_KEY",
 ])
-export const ACCEPTED_KEY_GENERATION_MANIFEST_SHA256 = Object.freeze([
-  // Key generation completed against the immediately preceding reviewed package.
-  "5774d4e98ba2620a9bf0433c00c795f69357ef473e91d85e6e8338ada8c2821c",
-])
+// Key generation completed against the immediately preceding reviewed package.
+export const LEGACY_KEY_GENERATION_MANIFEST_SHA256 =
+  "5774d4e98ba2620a9bf0433c00c795f69357ef473e91d85e6e8338ada8c2821c"
 const PREREQUISITE_CODE_MAP = Object.freeze({
   PACKAGE_INVALID: "AEGIS_PROVISION_PACKAGE_INVALID",
   PROVISIONING_AUTHORITY_INVALID: "AEGIS_PROVISION_AUTHORITY_INVALID",
@@ -314,7 +313,7 @@ export function validateHermesKeyGenerationEvidence(manifest, evidence, publicKe
   const currentManifestSha256 = canonicalSha256(manifest)
   const acceptedManifestSha256 = new Set([
     currentManifestSha256,
-    ...ACCEPTED_KEY_GENERATION_MANIFEST_SHA256,
+    LEGACY_KEY_GENERATION_MANIFEST_SHA256,
   ])
   if (!exactKeys(evidence, KEY_EVIDENCE_KEYS)
     || evidence.schemaVersion !== "1.0-hermes-aegis-standing-hash-key-evidence"
