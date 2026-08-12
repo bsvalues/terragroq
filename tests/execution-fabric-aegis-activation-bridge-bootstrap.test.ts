@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { inspectBridgeBootstrapAuthority, inspectBridgeDestinationState } from "../scripts/execution-fabric/provision/aegis-remote-dev-activation-bridge-bootstrap.mjs"
+import { inspectBridgeBootstrapAuthority, inspectBridgeDestinationState, inspectBridgeReceiptState } from "../scripts/execution-fabric/provision/aegis-remote-dev-activation-bridge-bootstrap.mjs"
 
 describe("AEGIS activation bridge bootstrap authority", () => {
   it("accepts only one exact signed-payload shape in its fifteen-minute window", () => {
@@ -18,5 +18,11 @@ describe("AEGIS activation bridge bootstrap authority", () => {
     expect(inspectBridgeDestinationState(destination,"018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7","0555",current)).toBe("EXACT_PREDECESSOR")
     expect(inspectBridgeDestinationState(destination,"f".repeat(64),"0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState("/usr/local/libexec/other","018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7","0555",current)).toBe("DRIFT")
+  })
+
+  it("accepts only the exact first bridge receipt as a bounded successor predecessor", () => {
+    expect(inspectBridgeReceiptState("f068311975a4daa58e65e787b793f58654ade149fe53150c5675af911393c7f9","0".repeat(64))).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeReceiptState("0".repeat(64),"1".repeat(64))).toBe("DRIFT")
+    expect(inspectBridgeReceiptState("1".repeat(64),"1".repeat(64))).toBe("MATCH")
   })
 })
