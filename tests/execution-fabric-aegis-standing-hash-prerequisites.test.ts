@@ -133,6 +133,7 @@ const applyModulePath = path.join(
 )
 const temporaryRoots: string[] = []
 const NOW = "2026-08-11T18:05:00.000Z"
+const RETAINED_ISSUE_595_CHECKOUT_SOURCE = "/root/williamos-issue-595-inputs-b58e7c045-v5/reviewed"
 const TRANSPORT_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBmJhq4P/5J2slHqQ06b2KX8K6B0+Q6l6v7EoZ1WlWVy williamos-aegis-standing-hash"
 
 function publicKeyFingerprint(publicKey = TRANSPORT_PUBLIC_KEY): string {
@@ -449,6 +450,8 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
         workloadAllowed: false,
       },
     })
+    expect(canonicalDigest(value.repair.previousPlannedMutations))
+      .toBe("ef8a08cf9c74610bf5c81dab1e7849e08172b9cc122bb231eef2f7787af68642")
     expect(value.bindings).toEqual([
       { path: "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs", sha256: "7d4b713c00f73726ce39f20856c53a69865968d98d2daf08e2ce038c612ce14b", textNormalization: "LF" },
       { path: "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs", sha256: "1e817dc0c87803a93d503d29183b6af66bd776173812d0270985b5e261db54a1", textNormalization: "LF" },
@@ -460,7 +463,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "05724974cd0248fd30aaeb1483649a1d908e3d9f4d5a29019c0df1194cb0a222", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "72d343f3cdae8e84acc31edf7726982f4596a9a0cdd1c37692f2b85db009aeba", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs", sha256: "38c269df7f0b5fcb0c2e5103890b37ccfd96cb05495bbeabf607feab21cceccd", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs", sha256: "9fb82c26899c7a1f6faa03f2914acbfd53ebde374bab9f1daeac451fb0cca622", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
       "scheduler-activation",
@@ -1741,12 +1744,11 @@ function repairFixture(overrides: {
     { type: "CREATE_DIRECTORY", path: "/etc/williamos/fabric" },
     { type: "CREATE_DIRECTORY", path: "/var/lib/williamos/fabric/standing-hash-requests" },
     { type: "CREATE_DIRECTORY", path: "/var/lib/williamos/fabric/standing-hash-ledger" },
-    { type: "CREATE_DIRECTORY", path: "/var/lib/williamos/fabric/ledger" },
     { type: "CREATE_DIRECTORY", path: "/home/williamos-fabric/.ssh" },
     {
       type: "INSTALL_REVIEWED_CHECKOUT",
       path: value.reviewedRelease.releaseRoot,
-      source_path: "/opt/williamos/source/terragroq",
+      source_path: RETAINED_ISSUE_595_CHECKOUT_SOURCE,
       commit: value.trustedMain.commit,
     },
     ...repair.installedAssets.map((asset) => ({

@@ -71,6 +71,11 @@ const EXPECTED_PRIVATE_ROOTS = Object.freeze([
   "/var/lib/williamos/fabric/standing-hash-ledger",
   "/var/lib/williamos/fabric/ledger",
 ])
+const EXPECTED_HISTORICAL_CREATED_PRIVATE_ROOTS = Object.freeze([
+  "/var/lib/williamos/fabric/standing-hash-requests",
+  "/var/lib/williamos/fabric/standing-hash-ledger",
+])
+const EXPECTED_HISTORICAL_CHECKOUT_SOURCE = "/root/williamos-issue-595-inputs-b58e7c045-v5/reviewed"
 const AUTHORIZED_KEYS_PATH = "/home/williamos-fabric/.ssh/authorized_keys"
 const EXPECTED_SERVICE_ACCOUNT = Object.freeze({
   name: "williamos-fabric",
@@ -83,12 +88,12 @@ const EXPECTED_HISTORICAL_PLAN = Object.freeze([
   Object.freeze({ type: "CREATE_DIRECTORY", path: "/usr/local/libexec/williamos" }),
   Object.freeze({ type: "CREATE_DIRECTORY", path: "/etc/williamos" }),
   Object.freeze({ type: "CREATE_DIRECTORY", path: "/etc/williamos/fabric" }),
-  ...EXPECTED_PRIVATE_ROOTS.map((directoryPath) => Object.freeze({ type: "CREATE_DIRECTORY", path: directoryPath })),
+  ...EXPECTED_HISTORICAL_CREATED_PRIVATE_ROOTS.map((directoryPath) => Object.freeze({ type: "CREATE_DIRECTORY", path: directoryPath })),
   Object.freeze({ type: "CREATE_DIRECTORY", path: "/home/williamos-fabric/.ssh" }),
   Object.freeze({
     type: "INSTALL_REVIEWED_CHECKOUT",
     path: `/opt/williamos/releases/${EXPECTED_COMMIT}`,
-    source_path: "/opt/williamos/source/terragroq",
+    source_path: EXPECTED_HISTORICAL_CHECKOUT_SOURCE,
     commit: EXPECTED_COMMIT,
   }),
   ...EXPECTED_INSTALLED_ASSETS.map(({ id, path: assetPath }) => Object.freeze({
