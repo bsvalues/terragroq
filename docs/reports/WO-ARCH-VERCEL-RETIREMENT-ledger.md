@@ -79,3 +79,40 @@ Owner-only:
 
 `SUPABASE_NOT_PRESENT` recorded here; remaining acceptance items are delivered by R0–R5 with
 before/after call-path evidence per PR.
+
+## Status update — R0 COMPLETE (post-R1A)
+
+### R0 — COMPLETE (owner dashboard action)
+The Vercel GitHub deployment/check integration has been disconnected. This satisfies the #638
+acceptance criterion "no Vercel-required PR check/deploy gate."
+
+```
+R0: COMPLETE
+Evidence:
+- Git integration disconnected (Vercel project Settings -> Git -> Disconnect)
+- post-disconnect PRs (#680, #683, #685) generated ZERO Vercel deployments
+  (verified via Vercel API: latest deployment dpl_FK9... predates the disconnect;
+   project updatedAt ~19 min later; project live:false)
+- no new Vercel PR checks on post-disconnect PRs
+- last deployment predates disconnect
+- project remains parked/inert (domains + old deployments retained as rollback/evidence)
+- project deletion DEFERRED until #638 retirement closure
+```
+
+### Remediation status (updated)
+
+| Item | Status |
+|---|---|
+| R0 — Git integration disconnect | ✅ **COMPLETE** (owner) |
+| R1A — chat inference → sovereign OpenAI-compatible seam | ✅ done (PR #683; Vercel AI Gateway removed from chat) |
+| R1B — embeddings → sovereign embedding model | ⏸ **HELD** (current-generation bake-off first; no pgvector dimension freeze). NOTE: embeddings still call the gateway model string until R1B, so a fully "no active Vercel AI Gateway path" close depends on R1B or an explicit decision to move embeddings off-gateway with a TBD local model. |
+| R2 — sealed CI required-checks (`ci-review-ingestion.mjs`) | ⏭ **DROPPED** (traced: sealed WO-MAO evidence, no live effect; main unprotected; live merge-gate names Vercel nowhere) |
+| R3 — sealed `terragroq.vercel.app` health targets | ⏭ **DROPPED** (traced: sealed evidence in hash-pinned PLANs, never fetched at runtime) |
+| R4 — auth-origin `VERCEL_URL`/`VERCEL_PROJECT_PRODUCTION_URL` removal | ▶ **PENDING** (active path: `lib/auth-origins.ts`) |
+| R5 — docs "canonical production URL" language | ○ optional (historical/doc hygiene; Azure/owned-target docs already exist) |
+| Supabase audit | ✅ **SUPABASE_NOT_PRESENT** |
+
+Remaining to genuinely close #638: **R4** (auth/origin without `VERCEL_URL`), **R1A review/merge**,
+and the embeddings/R1B disposition (held). R2/R3 are recorded as dropped-by-trace (sealed history);
+R5 is optional. Project deletion is a separate post-closure decision (delete vs preserve as
+historical rollback evidence).
