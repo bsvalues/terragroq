@@ -34,7 +34,8 @@ const CONFIG_PATH = path.resolve("config/execution-fabric/aegis-standing-hash-ad
 const BOOTSTRAP_PATH = "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs"
 const STANDING_AUTHORITY = JSON.parse(fs.readFileSync(
   path.resolve("config/execution-fabric/aegis-standing-compute-authority.v1.json"), "utf8"))
-const PRIOR = "b1637a0d16394361dff74e1fb85851ba61f91235"
+const PRIOR = "2593e782fdbaefbc05f617cdac3acde4a4255be0"
+const SOURCE = "a".repeat(40)
 const EVIDENCE = "c".repeat(40)
 const RELEASE = "d".repeat(40)
 const PACKAGE = "e".repeat(40)
@@ -130,10 +131,12 @@ function upgradeJournal(options: FixtureOptions) {
 
 function fixture(options: FixtureOptions = {}) {
   const manifest = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"))
+  manifest.priorState.commit = PRIOR
+  manifest.priorState.releaseRoot = `/opt/williamos/releases/${PRIOR}`
   manifest.priorState.replayUpgradeJournalPath =
     `/var/lib/williamos-aegis-standing-hash-replay-ledger-upgrade-${UPGRADE_AUTHORITY_ID}.journal.jsonl`
   manifest.evidenceRelease = {
-    sourceCommit: PRIOR,
+    sourceCommit: SOURCE,
     admissionPath: "docs/reports/standing-dispatch/admission-job-595.json",
     admissionSha256: "0".repeat(64),
     inputPath: "docs/reports/standing-dispatch/inputs/WO-EF-AEGIS-STANDING-001-fabric-integrity.json",
@@ -159,7 +162,7 @@ function fixture(options: FixtureOptions = {}) {
       approval_status: STANDING_AUTHORITY.outcome_eligibility.approval_status,
       dependency_status: STANDING_AUTHORITY.outcome_eligibility.dependency_status },
     work_order_id: "WO-EF-AEGIS-STANDING-001",
-    source: { repository: "bsvalues/terragroq", commit_sha: PRIOR },
+    source: { repository: "bsvalues/terragroq", commit_sha: SOURCE },
     workload: { workload_class: "HASH_VERIFY", template_id: "aegis.hash-verify.v1",
       adapter_id: "resident-aegis-hash-verify-v1", profile_id: "resident-aegis-bounded-hash-verify-v1" },
     execution_identity: {
@@ -530,7 +533,7 @@ describe("AEGIS standing HASH admission release promotion", () => {
   it("binds the checked-in promotion package to the final reviewed live release", () => {
     const manifest = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"))
     expect(validateAegisStandingHashAdmissionReleasePromotionManifest(manifest)).toMatchObject({
-      priorState: { commit: "b1637a0d16394361dff74e1fb85851ba61f91235" },
+      priorState: { commit: "2593e782fdbaefbc05f617cdac3acde4a4255be0" },
       evidenceRelease: {
         sourceCommit: "b1637a0d16394361dff74e1fb85851ba61f91235",
         admissionPath: "docs/reports/standing-dispatch/admission-issue-595-live-007.json",

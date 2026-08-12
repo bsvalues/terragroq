@@ -20,7 +20,7 @@ export const LEDGER_MUTATION_LOCK_PATH = "/var/lib/williamos/fabric/standing-has
 export const REQUEST_ROOT = "/var/lib/williamos/fabric/standing-hash-requests"
 export const AUTHORITY_ROOT = "/var/lib/williamos/fabric/standing-hash-promotion-authorities"
 
-const CURRENT_COMMIT = "b1637a0d16394361dff74e1fb85851ba61f91235"
+const CURRENT_COMMIT = "2593e782fdbaefbc05f617cdac3acde4a4255be0"
 const REPOSITORY = "bsvalues/terragroq"
 const DIGEST = /^[a-f0-9]{64}$/
 const COMMIT = /^[a-f0-9]{40}$/
@@ -189,7 +189,7 @@ function validateManifest(manifest) {
     || !DIGEST.test(packageRelease?.standingAuthoritySha256 ?? "") || !SAFE_ID.test(install.requestId ?? "")
     || install.requestPath !== `${REQUEST_ROOT}/${install.requestId}.json`
     || !/^\/var\/lib\/williamos-aegis-standing-hash-admission-release-promotion-$/.test(install.journalPrefix)
-    || evidence.sourceCommit !== prior.commit
+    || evidence.sourceCommit === prior.commit
     || next.closure[REQUIRED_CLOSURE[0]] !== prior.closure[REQUIRED_CLOSURE[0]]
     || new Set([prior.commit, next.commit, packageRelease.commit]).size !== 3) {
     fail("AEGIS_ADMISSION_PROMOTION_MANIFEST_INVALID", "final promotion binding differs")
@@ -445,8 +445,8 @@ function verifyCheckouts(io, manifest, authority, manifestBytes) {
     io.verifyCheckout(authority.evidenceCheckoutPath, authority.evidenceCommit, REPOSITORY, evidenceClosure)
     io.verifyCheckout(manifest.newRelease.checkoutPath, manifest.newRelease.commit, REPOSITORY, releaseClosure)
     io.verifyCheckout(manifest.packageRelease.checkoutPath, manifest.packageRelease.commit, REPOSITORY, packageClosure)
-    io.verifyAncestry(authority.evidenceCheckoutPath, manifest.priorState.commit, manifest.evidenceRelease.sourceCommit)
-    io.verifyAncestry(authority.evidenceCheckoutPath, manifest.evidenceRelease.sourceCommit, manifest.packageRelease.commit)
+    io.verifyAncestry(authority.evidenceCheckoutPath, manifest.evidenceRelease.sourceCommit, manifest.priorState.commit)
+    io.verifyAncestry(authority.evidenceCheckoutPath, manifest.priorState.commit, manifest.packageRelease.commit)
     io.verifyAncestry(authority.evidenceCheckoutPath, manifest.packageRelease.commit, manifest.newRelease.commit)
     io.verifyAncestry(authority.evidenceCheckoutPath, manifest.newRelease.commit, authority.evidenceCommit)
   } catch (error) {

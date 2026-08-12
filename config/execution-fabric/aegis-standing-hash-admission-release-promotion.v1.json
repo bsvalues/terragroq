@@ -21,8 +21,8 @@
     "shell": "/bin/bash"
   },
   "priorState": {
-    "commit": "b1637a0d16394361dff74e1fb85851ba61f91235",
-    "releaseRoot": "/opt/williamos/releases/b1637a0d16394361dff74e1fb85851ba61f91235",
+    "commit": "2593e782fdbaefbc05f617cdac3acde4a4255be0",
+    "releaseRoot": "/opt/williamos/releases/2593e782fdbaefbc05f617cdac3acde4a4255be0",
     "trustedReleaseManifestPath": "/etc/williamos/fabric/trusted-main-release.json",
     "activationMarkerPath": "/etc/williamos/fabric/aegis-standing-hash-replay-ledger-upgrade-v1.activation.json",
     "replayUpgradeJournalPath": "/var/lib/williamos-aegis-standing-hash-replay-ledger-upgrade-7e48443b-e522-4e20-a6b4-88395b407a81.journal.jsonl",
