@@ -6,7 +6,7 @@ SOURCE="$BUNDLE_ROOT/scripts/execution-fabric/provision/repair-aegis-ssh-coexist
 DESTINATION=/usr/local/libexec/williamos-aegis-ssh-coexistence-repair.mjs
 LAUNCHER="$BUNDLE_ROOT/scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh"
 KERNEL_LOCK=/run/lock/williamos-aegis-ssh-coexistence-repair.kernel.lock
-INSTALLER_SHA256=189a44c945320e1671bedc4cb27bc063ff9f79c02e27d9386f36c44a0f79494f
+INSTALLER_SHA256=d272d73ee9dc6684452bc80d5e97c66b73ca903813f3840d81019a0263d54689
 
 [ "$(id -u)" = 0 ] || { echo "AEGIS_SSH_REPAIR_ROOT_REQUIRED" >&2; exit 2; }
 [ "$(readlink -f -- "$0")" = "$LAUNCHER" ] || { echo "AEGIS_SSH_REPAIR_LAUNCHER_UNTRUSTED" >&2; exit 2; }
@@ -18,14 +18,13 @@ INSTALLER_SHA256=189a44c945320e1671bedc4cb27bc063ff9f79c02e27d9386f36c44a0f79494
 umask 077
 [ ! -L "$KERNEL_LOCK" ] || { echo "AEGIS_SSH_REPAIR_KERNEL_LOCK_UNTRUSTED" >&2; exit 2; }
 if [ "${WILLIAMOS_SSH_REPAIR_LOCK_STAGE:-}" != "LOCKED" ]; then
-  exec 9>>"$KERNEL_LOCK"
-  [ -f "$KERNEL_LOCK" ] && [ "$(stat -Lc '%u:%g:%a' "$KERNEL_LOCK")" = "0:0:600" ] || { echo "AEGIS_SSH_REPAIR_KERNEL_LOCK_UNTRUSTED" >&2; exit 2; }
+  if [ -e "$KERNEL_LOCK" ]; then
+    [ -f "$KERNEL_LOCK" ] && [ "$(stat -Lc '%u:%g:%a' "$KERNEL_LOCK")" = "0:0:600" ] || { echo "AEGIS_SSH_REPAIR_KERNEL_LOCK_UNTRUSTED" >&2; exit 2; }
+  fi
   export WILLIAMOS_SSH_REPAIR_LOCK_STAGE=LOCKED
-  exec /usr/bin/flock --exclusive --nonblock --no-fork 9 "$LAUNCHER" "$@"
+  exec /usr/bin/flock --exclusive --nonblock --no-fork "$KERNEL_LOCK" "$LAUNCHER" "$@"
 fi
-[ "${WILLIAMOS_SSH_REPAIR_KERNEL_LOCK_FD:-}" = "9" ] || export WILLIAMOS_SSH_REPAIR_KERNEL_LOCK_FD=9
-[ "$(readlink -f -- /proc/self/fd/9)" = "$KERNEL_LOCK" ] || { echo "AEGIS_SSH_REPAIR_KERNEL_LOCK_UNTRUSTED" >&2; exit 2; }
-[ -f /proc/self/fd/9 ] && [ "$(stat -Lc '%u:%g:%a' /proc/self/fd/9)" = "0:0:600" ] || { echo "AEGIS_SSH_REPAIR_KERNEL_LOCK_UNTRUSTED" >&2; exit 2; }
+[ -f "$KERNEL_LOCK" ] && [ "$(stat -Lc '%u:%g:%a' "$KERNEL_LOCK")" = "0:0:600" ] || { echo "AEGIS_SSH_REPAIR_KERNEL_LOCK_UNTRUSTED" >&2; exit 2; }
 install -o root -g root -m 0555 "$SOURCE" "$DESTINATION.tmp"
 [ "$(sha256sum "$DESTINATION.tmp" | cut -d ' ' -f 1)" = "$INSTALLER_SHA256" ] || { rm -f "$DESTINATION.tmp"; exit 2; }
 mv -f "$DESTINATION.tmp" "$DESTINATION"
