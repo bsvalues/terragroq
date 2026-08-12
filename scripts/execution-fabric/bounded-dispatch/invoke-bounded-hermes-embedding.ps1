@@ -7,6 +7,7 @@ $LedgerRoot = "C:\HermesLab\embedding-bakeoff-ledger"
 $WorkRoot = "C:\HermesLab\work"
 $RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\.."))
 $EvaluatorPath = [IO.Path]::GetFullPath((Join-Path $RepositoryRoot "scripts\embedding-bakeoff\fabric_measure.py"))
+$ExecutionWorkRoot = $null
 
 function Write-Receipt {
   param([hashtable]$Receipt)
@@ -82,10 +83,10 @@ try {
   $sealedInputPath = Assert-ExactChildPath (Get-RequiredEnvironment "HERMES_EMBEDDING_SEALED_INPUT_PATH") $LedgerRoot '^sealed-([a-f0-9]{64})\.json$' $true
   $resultPath = Assert-ExactChildPath (Get-RequiredEnvironment "HERMES_EMBEDDING_RESULT_PATH") $LedgerRoot '^result-([a-f0-9]{64})\.json$' $false
   if ([IO.Path]::GetFileName($sealedInputPath).Substring(7, 64) -cne [IO.Path]::GetFileName($resultPath).Substring(7, 64)) { throw [InvalidOperationException]::new("PATH_BINDING_MISMATCH") }
-
   [UInt64]$timeoutMs = Get-BoundedUInt64 "HERMES_EMBEDDING_TIMEOUT_MS" 1000 900000
   [UInt64]$maxInputBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_MAX_INPUT_BYTES" 1 524288
   [UInt64]$maxResultBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_MAX_RESULT_BYTES" 1 16777216
+  [UInt64]$maxScratchBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_MAX_SCRATCH_BYTES" 1 68719476736
   [UInt64]$processMemoryBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_PROCESS_MEMORY_BYTES" 67108864 68719476736
   [UInt64]$jobMemoryBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_JOB_MEMORY_BYTES" 67108864 68719476736
   [UInt64]$cpuRatePercent = Get-BoundedUInt64 "HERMES_EMBEDDING_CPU_RATE_PERCENT" 1 100
@@ -99,6 +100,11 @@ try {
   Assert-NoReparsePoint $HermesRoot $true
   Assert-NoReparsePoint $LedgerRoot $true
   Assert-NoReparsePoint $WorkRoot $true
+  $executionHash = [IO.Path]::GetFileName($sealedInputPath).Substring(7, 64)
+  $ExecutionWorkRoot = Join-Path $WorkRoot "embedding-$executionHash"
+  if ([IO.Directory]::Exists($ExecutionWorkRoot) -or [IO.File]::Exists($ExecutionWorkRoot)) { throw [InvalidOperationException]::new("WORK_ROOT_OCCUPIED") }
+  [void][IO.Directory]::CreateDirectory($ExecutionWorkRoot)
+  Assert-NoReparsePoint $ExecutionWorkRoot $true
   Assert-NoReparsePoint $PythonExecutable $true
   Assert-NoReparsePoint $EvaluatorPath $true
   $hermesPrefix = $HermesRoot.TrimEnd('\') + '\'
@@ -122,6 +128,7 @@ namespace WilliamOS.ExecutionFabric {
     public int ExitCode;
     public bool TimedOut;
     public bool OutputLimitExceeded;
+    public bool ScratchLimitExceeded;
   }
 
   public static class BoundedJob {
@@ -198,7 +205,15 @@ namespace WilliamOS.ExecutionFabric {
       return handle;
     }
 
-    public static BoundedJobResult Run(string python, string evaluator, string inputPath, string resultPath, string workingDirectory, uint timeoutMs, ulong maxResultBytes, ulong processMemoryBytes, ulong jobMemoryBytes, uint cpuRatePercent, ulong affinityMask, string[] environment) {
+    static ulong DirectoryBytes(string root) {
+      ulong total = 0;
+      foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)) {
+        checked { total += (ulong)new FileInfo(file).Length; }
+      }
+      return total;
+    }
+
+    public static BoundedJobResult Run(string python, string evaluator, string inputPath, string resultPath, string workingDirectory, string scratchRoot, uint timeoutMs, ulong maxResultBytes, ulong maxScratchBytes, ulong processMemoryBytes, ulong jobMemoryBytes, uint cpuRatePercent, ulong affinityMask, string[] environment) {
       if (IntPtr.Size == 4 && (processMemoryBytes > UInt32.MaxValue || jobMemoryBytes > UInt32.MaxValue || affinityMask > UInt32.MaxValue)) throw new InvalidOperationException("64-bit launcher required");
       UIntPtr available, system;
       Check(GetProcessAffinityMask(GetCurrentProcess(), out available, out system), "GetProcessAffinityMask");
@@ -239,8 +254,10 @@ namespace WilliamOS.ExecutionFabric {
           while (true) {
             uint remaining = elapsed.ElapsedMilliseconds >= timeoutMs ? 0 : timeoutMs - (uint)elapsed.ElapsedMilliseconds;
             wait = WaitForSingleObject(processInfo.hProcess, Math.Min(remaining, 50));
-            long resultSize; Check(GetFileSizeEx(output.DangerousGetHandle(), out resultSize), "GetFileSizeEx");
+            long inputSize, resultSize; Check(GetFileSizeEx(input.DangerousGetHandle(), out inputSize), "GetFileSizeEx"); Check(GetFileSizeEx(output.DangerousGetHandle(), out resultSize), "GetFileSizeEx");
             if (resultSize < 0 || (ulong)resultSize > maxResultBytes) { Check(TerminateJobObject(job, 125), "TerminateJobObject"); WaitForSingleObject(processInfo.hProcess, INFINITE); return new BoundedJobResult { ExitCode = 125, OutputLimitExceeded = true }; }
+            ulong retainedBytes; checked { retainedBytes = (ulong)inputSize + (ulong)resultSize + DirectoryBytes(scratchRoot); }
+            if (retainedBytes > maxScratchBytes) { Check(TerminateJobObject(job, 126), "TerminateJobObject"); WaitForSingleObject(processInfo.hProcess, INFINITE); return new BoundedJobResult { ExitCode = 126, ScratchLimitExceeded = true }; }
             if (wait == WAIT_OBJECT_0) break;
             if (wait != WAIT_TIMEOUT) { TerminateJobObject(job, 2); throw new Win32Exception(Marshal.GetLastWin32Error(), "WaitForSingleObject"); }
             if (elapsed.ElapsedMilliseconds >= timeoutMs) { Check(TerminateJobObject(job, 124), "TerminateJobObject"); WaitForSingleObject(processInfo.hProcess, INFINITE); return new BoundedJobResult { ExitCode = 124, TimedOut = true }; }
@@ -268,25 +285,27 @@ namespace WilliamOS.ExecutionFabric {
   $childEnvironment = @(
     "SystemRoot=C:\WINDOWS",
     "WINDIR=C:\WINDOWS",
-    "TEMP=C:\HermesLab\work",
-    "TMP=C:\HermesLab\work",
+    "TEMP=$ExecutionWorkRoot",
+    "TMP=$ExecutionWorkRoot",
     "PYTHONIOENCODING=utf-8",
     "PYTHONUTF8=1",
     "PYTHONNOUSERSITE=1",
     "PYTHONDONTWRITEBYTECODE=1",
     "NO_PROXY=127.0.0.1,localhost"
   )
-  $run = [WilliamOS.ExecutionFabric.BoundedJob]::Run($PythonExecutable, $EvaluatorPath, $sealedInputPath, $resultPath, [IO.Path]::GetDirectoryName($EvaluatorPath), [uint32]$timeoutMs, $maxResultBytes, $processMemoryBytes, $jobMemoryBytes, [uint32]$cpuRatePercent, $cpuAffinityMask, $childEnvironment)
+  $run = [WilliamOS.ExecutionFabric.BoundedJob]::Run($PythonExecutable, $EvaluatorPath, $sealedInputPath, $resultPath, [IO.Path]::GetDirectoryName($EvaluatorPath), $ExecutionWorkRoot, [uint32]$timeoutMs, $maxResultBytes, $maxScratchBytes, $processMemoryBytes, $jobMemoryBytes, [uint32]$cpuRatePercent, $cpuAffinityMask, $childEnvironment)
   if (-not [IO.File]::Exists($resultPath)) { throw [InvalidOperationException]::new("RESULT_MISSING") }
   Assert-NoReparsePoint $resultPath $true
   $resultLength = ([IO.FileInfo]::new($resultPath)).Length
-  if (-not $run.TimedOut -and -not $run.OutputLimitExceeded -and ($resultLength -lt 1 -or [UInt64]$resultLength -gt $maxResultBytes)) { throw [InvalidOperationException]::new("RESULT_SIZE_INVALID") }
+  if (-not $run.TimedOut -and -not $run.OutputLimitExceeded -and -not $run.ScratchLimitExceeded -and ($resultLength -lt 1 -or [UInt64]$resultLength -gt $maxResultBytes)) { throw [InvalidOperationException]::new("RESULT_SIZE_INVALID") }
   $resultSha256 = if ($resultLength -gt 0 -and [UInt64]$resultLength -le $maxResultBytes) { (Get-FileHash -LiteralPath $resultPath -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
-  $status = if ($run.TimedOut) { "TIMED_OUT" } elseif ($run.OutputLimitExceeded) { "FAILED_CLOSED" } elseif ($run.ExitCode -eq 0) { "COMPLETED" } else { "FAILED_CLOSED" }
+  $status = if ($run.TimedOut) { "TIMED_OUT" } elseif ($run.OutputLimitExceeded -or $run.ScratchLimitExceeded) { "FAILED_CLOSED" } elseif ($run.ExitCode -eq 0) { "COMPLETED" } else { "FAILED_CLOSED" }
+  Remove-Item -LiteralPath $ExecutionWorkRoot -Recurse -Force
+  $ExecutionWorkRoot = $null
   Write-Receipt ([ordered]@{
     schema_version = "1.0-hermes-embedding-job-receipt"
     status = $status
-    reason_code = if ($run.TimedOut) { "TIMEOUT" } elseif ($run.OutputLimitExceeded) { "RESULT_SIZE_LIMIT_EXCEEDED" } elseif ($run.ExitCode -eq 0) { $null } else { "EVALUATOR_FAILED" }
+    reason_code = if ($run.TimedOut) { "TIMEOUT" } elseif ($run.OutputLimitExceeded) { "RESULT_SIZE_LIMIT_EXCEEDED" } elseif ($run.ScratchLimitExceeded) { "SCRATCH_SIZE_LIMIT_EXCEEDED" } elseif ($run.ExitCode -eq 0) { $null } else { "EVALUATOR_FAILED" }
     evaluator_exit_code = $run.ExitCode
     timed_out = $run.TimedOut
     job_assigned_before_resume = $true
@@ -302,6 +321,9 @@ namespace WilliamOS.ExecutionFabric {
   })
   if ($run.ExitCode -ne 0) { exit 2 }
 } catch {
+  if ($ExecutionWorkRoot -and [IO.Directory]::Exists($ExecutionWorkRoot)) {
+    try { Remove-Item -LiteralPath $ExecutionWorkRoot -Recurse -Force } catch { }
+  }
   $reason = [string]$_.Exception.Message
   if ($reason -cnotmatch '^[A-Z][A-Z0-9_]{2,63}$') { $reason = "LAUNCHER_INTERNAL_ERROR" }
   Stop-Closed $reason

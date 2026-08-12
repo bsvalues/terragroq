@@ -43,6 +43,8 @@ describe("bounded resident HERMES embedding launcher", () => {
       "TerminateJobObject",
       "WaitForSingleObject",
       "GetFileSizeEx",
+      "DirectoryBytes",
+      "ScratchLimitExceeded",
     ]) expect(source).toContain(token)
 
     expect(source).toContain("ActiveProcessLimit = 1")
@@ -58,12 +60,16 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain('^result-([a-f0-9]{64})\\.json$')
     expect(source).toContain("REPARSE_POINT")
     expect(source).toContain("HERMES_EMBEDDING_TIMEOUT_MS")
+    expect(source).toContain("HERMES_EMBEDDING_MAX_SCRATCH_BYTES")
     expect(source).toContain("HERMES_EMBEDDING_PROCESS_MEMORY_BYTES")
     expect(source).toContain("HERMES_EMBEDDING_JOB_MEMORY_BYTES")
     expect(source).toContain("HERMES_EMBEDDING_CPU_RATE_PERCENT")
     expect(source).toContain("HERMES_EMBEDDING_CPU_AFFINITY_MASK")
     expect(source).toContain("HERMES_EMBEDDING_ACTIVE_PROCESS_LIMIT")
     expect(source).toContain('"NO_PROXY=127.0.0.1,localhost"')
+    expect(source).toContain('"TEMP=$ExecutionWorkRoot"')
+    expect(source).toContain('"TMP=$ExecutionWorkRoot"')
+    expect(source).toContain('"SCRATCH_SIZE_LIMIT_EXCEEDED"')
     expect(source).not.toContain("GetEnvironmentVariables")
   })
 

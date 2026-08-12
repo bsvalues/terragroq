@@ -13,13 +13,16 @@ const PACKET_ROOT = "C:\\HermesLab\\embedding-bakeoff-admission"
 const LEDGER_ROOT = "C:\\HermesLab\\embedding-bakeoff-ledger"
 const REQUEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\request.json"
 const ADMISSION_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\admission.json"
-const HOST_ATTESTATION_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\trusted-host-attestation.json"
 const MODEL_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\model-manifest.json"
 const RUNTIME_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\runtime-manifest.json"
 const HOST_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\host-manifest.json"
 const PYTHON_EXECUTABLE = "C:\\Python313\\python.exe"
+const NODE_EXECUTABLE = "C:\\Program Files\\nodejs\\node.exe"
+const POWERSHELL_EXECUTABLE = "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
 const GIT_EXECUTABLE = "C:\\Program Files\\Git\\cmd\\git.exe"
 const EVALUATOR_PATH = path.join(REPOSITORY_ROOT, EMBEDDING_CONTRACT.evaluatorPath)
+const COLLECTOR_PATH = path.join(REPOSITORY_ROOT, EMBEDDING_CONTRACT.collectorPath)
+const BOUNDED_LAUNCHER_PATH = path.join(REPOSITORY_ROOT, EMBEDDING_CONTRACT.boundedLauncherPath)
 const TRUSTED_MAIN_REF = "refs/heads/main"
 
 const REVIEWED_SOURCE_BINDINGS = Object.freeze([
@@ -28,11 +31,14 @@ const REVIEWED_SOURCE_BINDINGS = Object.freeze([
   [EMBEDDING_CONTRACT.embedPath, "embed_sha256"],
   [EMBEDDING_CONTRACT.metricsPath, "metrics_sha256"],
   [EMBEDDING_CONTRACT.canonicalJsonPath, "canonical_json_sha256"],
+  [EMBEDDING_CONTRACT.collectorPath, "collector_sha256"],
+  [EMBEDDING_CONTRACT.boundedLauncherPath, "bounded_launcher_sha256"],
   [EMBEDDING_CONTRACT.adapterPath, "adapter_sha256"],
   [EMBEDDING_CONTRACT.runnerPath, "runner_sha256"],
 ])
 
 function sha256(value) { return crypto.createHash("sha256").update(value).digest("hex") }
+function canonicalDigest(value) { return sha256(canonicalizeJcs(value)) }
 
 function ensureExactRoot(root, expectedRelative) {
   const hermes = fs.realpathSync(HERMES_ROOT)
@@ -135,26 +141,58 @@ function holderIsAlive(pid) {
   try { process.kill(pid, 0); return true } catch (error) { return error?.code !== "ESRCH" }
 }
 
+function allocateFencingToken(root, minimum = 1) {
+  let floor = minimum - 1
+  for (const name of fs.readdirSync(root)) {
+    const match = /^embedding-fence-(\d+)\.json$/.exec(name)
+    if (!match) continue
+    const token = Number(match[1])
+    if (!Number.isSafeInteger(token) || token < 1) throw new Error("embedding fence ledger is malformed")
+    const fencePath = path.join(root, name)
+    if (fs.lstatSync(fencePath).isSymbolicLink()) throw new Error("embedding fence ledger contains a symbolic link")
+    const retained = JSON.parse(fs.readFileSync(fencePath, "utf8"))
+    if (retained.schema_version !== "1.0-hermes-embedding-fence" || retained.fencing_token !== token) {
+      throw new Error("embedding fence ledger content is malformed")
+    }
+    floor = Math.max(floor, token)
+  }
+  for (let candidate = floor + 1; candidate <= Number.MAX_SAFE_INTEGER; candidate += 1) {
+    const fencePath = path.join(root, `embedding-fence-${candidate}.json`)
+    let descriptor
+    try {
+      descriptor = fs.openSync(fencePath, "wx")
+      fs.writeFileSync(descriptor, `${JSON.stringify({ schema_version: "1.0-hermes-embedding-fence", fencing_token: candidate, allocated_at: new Date().toISOString() })}\n`, "utf8")
+      return candidate
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error
+    } finally { if (descriptor !== undefined) fs.closeSync(descriptor) }
+  }
+  throw new Error("embedding fence token space exhausted")
+}
+
 export async function acquireExclusiveLease(binding) {
-  const leasePath = path.join(ensureExactRoot(LEDGER_ROOT, "embedding-bakeoff-ledger"), "active-embedding-lease.json")
+  const root = ensureExactRoot(LEDGER_ROOT, "embedding-bakeoff-ledger")
+  const leasePath = path.join(root, "active-embedding-lease.json")
   const acquiredAt = new Date().toISOString()
   const leaseId = `lease-${sha256(canonicalizeJcs({ ...binding, acquired_at: acquiredAt })).slice(0, 24)}`
   let staleLeaseSha256 = null
+  let minimumFence = 1
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let descriptor
     try {
+      const fencingToken = allocateFencingToken(root, minimumFence)
       descriptor = fs.openSync(leasePath, "wx")
-      fs.writeFileSync(descriptor, `${JSON.stringify({ schema_version: "1.0-hermes-embedding-exclusive-lease", lease_id: leaseId, ...binding, holder_pid: process.pid, acquired_at: acquiredAt })}\n`, "utf8")
-      return { acquired: true, lease_id: leaseId, fencing_token: binding.fencing_token, acquired_at: acquiredAt, stale_lease_recovered: staleLeaseSha256 !== null, stale_lease_sha256: staleLeaseSha256 }
+      fs.writeFileSync(descriptor, `${JSON.stringify({ schema_version: "1.0-hermes-embedding-exclusive-lease", lease_id: leaseId, ...binding, fencing_token: fencingToken, holder_pid: process.pid, acquired_at: acquiredAt })}\n`, "utf8")
+      return { acquired: true, lease_id: leaseId, fencing_token: fencingToken, acquired_at: acquiredAt, stale_lease_recovered: staleLeaseSha256 !== null, stale_lease_sha256: staleLeaseSha256 }
     } catch (error) {
       if (error?.code !== "EEXIST") throw error
       if (attempt > 0 || fs.lstatSync(leasePath).isSymbolicLink()) {
-        return { acquired: false, lease_id: leaseId, fencing_token: binding.fencing_token, acquired_at: acquiredAt, stale_lease_recovered: false, stale_lease_sha256: null }
+        return { acquired: false, lease_id: leaseId, fencing_token: minimumFence, acquired_at: acquiredAt, stale_lease_recovered: false, stale_lease_sha256: null }
       }
       const retainedBytes = fs.readFileSync(leasePath)
       let retained
       try { retained = JSON.parse(retainedBytes.toString("utf8")) } catch {
-        return { acquired: false, lease_id: leaseId, fencing_token: binding.fencing_token, acquired_at: acquiredAt, stale_lease_recovered: false, stale_lease_sha256: null }
+        return { acquired: false, lease_id: leaseId, fencing_token: minimumFence, acquired_at: acquiredAt, stale_lease_recovered: false, stale_lease_sha256: null }
       }
       const retainedFields = ["schema_version", "lease_id", "claim_id", "request_sha256", "admission_sha256", "node_id", "fencing_token", "valid_until", "holder_pid", "acquired_at"]
       const exactRetainedFields = retained && typeof retained === "object" && !Array.isArray(retained)
@@ -163,9 +201,10 @@ export async function acquireExclusiveLease(binding) {
         && new Date(retained.valid_until).toISOString() === retained.valid_until
       if (!exactRetainedFields || retained.schema_version !== "1.0-hermes-embedding-exclusive-lease" || !canonicalExpiry
         || Date.parse(retained.valid_until) > Date.now() || holderIsAlive(retained.holder_pid)) {
-        return { acquired: false, lease_id: leaseId, fencing_token: binding.fencing_token, acquired_at: acquiredAt, stale_lease_recovered: false, stale_lease_sha256: null }
+        return { acquired: false, lease_id: leaseId, fencing_token: minimumFence, acquired_at: acquiredAt, stale_lease_recovered: false, stale_lease_sha256: null }
       }
       staleLeaseSha256 = sha256(retainedBytes)
+      minimumFence = retained.fencing_token + 1
       fs.renameSync(leasePath, path.join(path.dirname(leasePath), `stale-embedding-lease-${staleLeaseSha256}.json`))
     } finally { if (descriptor !== undefined) fs.closeSync(descriptor) }
   }
@@ -181,12 +220,62 @@ export async function releaseExclusiveLease({ lease_id, claim_id, fencing_token 
 }
 
 export async function collectTrustedHostAttestation({ admission }) {
-  const attestation = readFixedJson(HOST_ATTESTATION_PATH, PACKET_ROOT, "trusted host attestation")
-  if (sha256(readFixedBytes(MODEL_MANIFEST_PATH, PACKET_ROOT, "model manifest")) !== admission.model.manifest_sha256
-    || sha256(readFixedBytes(RUNTIME_MANIFEST_PATH, PACKET_ROOT, "runtime manifest")) !== admission.runtime.manifest_sha256
-    || sha256(readFixedBytes(HOST_MANIFEST_PATH, PACKET_ROOT, "host manifest")) !== admission.placement.host_manifest_sha256) {
+  const modelManifestBytes = readFixedBytes(MODEL_MANIFEST_PATH, PACKET_ROOT, "model manifest")
+  const runtimeManifestBytes = readFixedBytes(RUNTIME_MANIFEST_PATH, PACKET_ROOT, "runtime manifest")
+  const hostManifestBytes = readFixedBytes(HOST_MANIFEST_PATH, PACKET_ROOT, "host manifest")
+  if (sha256(modelManifestBytes) !== admission.model.manifest_sha256
+    || sha256(runtimeManifestBytes) !== admission.runtime.manifest_sha256
+    || sha256(hostManifestBytes) !== admission.placement.host_manifest_sha256) {
     throw new Error("fixed model, runtime, or host manifest bytes do not match admission")
   }
+  if (path.resolve(process.execPath).toLowerCase() !== NODE_EXECUTABLE.toLowerCase()
+    || sha256(fs.readFileSync(NODE_EXECUTABLE)) !== admission.runtime.node_executable_sha256
+    || sha256(fs.readFileSync(PYTHON_EXECUTABLE)) !== admission.runtime.python_executable_sha256
+    || sha256(fs.readFileSync(POWERSHELL_EXECUTABLE)) !== admission.runtime.powershell_executable_sha256) {
+    throw new Error("resident interpreter bytes do not match admission")
+  }
+  const observed = spawnSync(POWERSHELL_EXECUTABLE, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", COLLECTOR_PATH], {
+    cwd: path.dirname(COLLECTOR_PATH), encoding: "utf8", windowsHide: true, timeout: 30_000, maxBuffer: 1_048_576,
+    env: {
+      SystemRoot: "C:\\WINDOWS",
+      WINDIR: "C:\\WINDOWS",
+      PATH: "C:\\WINDOWS\\System32",
+      WILLIAMOS_EMBEDDING_MODEL_ID: admission.model.model_id,
+    },
+  })
+  if (observed.status !== 0 || observed.error || !observed.stdout) throw new Error("reviewed resident HERMES live collector failed")
+  const live = JSON.parse(observed.stdout.replace(/^\uFEFF/, ""))
+  const expectedFields = ["schema_version", "collector_id", "node_id", "machine_id_sha256", "model_id", "weights_sha256", "model_manifest_sha256", "runtime_id", "runtime_version", "runtime_executable_sha256", "container_image_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "inventory", "resources", "observed_at", "expires_at"]
+  if (!live || typeof live !== "object" || Array.isArray(live)
+    || JSON.stringify(Object.keys(live).sort()) !== JSON.stringify(expectedFields.sort())
+    || live.schema_version !== "1.0-resident-hermes-live-embedding-observation") {
+    throw new Error("reviewed resident HERMES live collector returned an invalid observation")
+  }
+  const attestation = {
+    schema_version: "1.0-trusted-hermes-live-embedding-attestation",
+    collector_id: live.collector_id,
+    node_id: live.node_id,
+    machine_id_sha256: live.machine_id_sha256,
+    inventory_snapshot_sha256: canonicalDigest(live.inventory),
+    host_manifest_sha256: sha256(hostManifestBytes),
+    model_id: live.model_id,
+    weights_sha256: live.weights_sha256,
+    model_manifest_sha256: live.model_manifest_sha256,
+    runtime_id: live.runtime_id,
+    runtime_version: live.runtime_version,
+    runtime_executable_sha256: live.runtime_executable_sha256,
+    container_image_sha256: live.container_image_sha256,
+    python_executable_sha256: live.python_executable_sha256,
+    node_executable_sha256: live.node_executable_sha256,
+    powershell_executable_sha256: live.powershell_executable_sha256,
+    inventory: live.inventory,
+    resources: live.resources,
+    endpoint: EMBEDDING_CONTRACT.endpoint,
+    observed_at: live.observed_at,
+    expires_at: live.expires_at,
+    verified: true,
+  }
+  attestation.attestation_sha256 = canonicalDigest(attestation)
   return attestation
 }
 
@@ -220,20 +309,39 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
   const resultPath = path.join(ledgerRoot, `result-${executionKey}.json`)
   if (evaluatorInput.byteLength > admission.limits.max_scratch_bytes) throw new Error("sealed input exceeds admitted scratch ceiling")
   writeExclusive(sealedInputPath, evaluatorInput)
-  const run = spawnSync(PYTHON_EXECUTABLE, [EVALUATOR_PATH], {
-    cwd: path.dirname(EVALUATOR_PATH), windowsHide: true, timeout: admission.limits.timeout_ms,
-    maxBuffer: admission.limits.max_result_bytes, input: evaluatorInput,
+  const affinityMask = admission.limits.max_cpu_threads === 64
+    ? "0xffffffffffffffff"
+    : `0x${((1n << BigInt(admission.limits.max_cpu_threads)) - 1n).toString(16)}`
+  const run = spawnSync(POWERSHELL_EXECUTABLE, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", BOUNDED_LAUNCHER_PATH], {
+    cwd: path.dirname(BOUNDED_LAUNCHER_PATH), windowsHide: true, timeout: admission.limits.timeout_ms + 30_000,
+    maxBuffer: 1_048_576,
     env: {
-      PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1",
       SystemRoot: "C:\\WINDOWS", WINDIR: "C:\\WINDOWS",
-      TEMP: "C:\\HermesLab\\work", TMP: "C:\\HermesLab\\work",
+      HERMES_EMBEDDING_SEALED_INPUT_PATH: sealedInputPath,
+      HERMES_EMBEDDING_RESULT_PATH: resultPath,
+      HERMES_EMBEDDING_TIMEOUT_MS: String(admission.limits.timeout_ms),
+      HERMES_EMBEDDING_MAX_INPUT_BYTES: String(admission.limits.max_input_bytes),
+      HERMES_EMBEDDING_MAX_RESULT_BYTES: String(admission.limits.max_result_bytes),
+      HERMES_EMBEDDING_MAX_SCRATCH_BYTES: String(admission.limits.max_scratch_bytes),
+      HERMES_EMBEDDING_PROCESS_MEMORY_BYTES: String(admission.limits.max_memory_bytes),
+      HERMES_EMBEDDING_JOB_MEMORY_BYTES: String(admission.limits.max_memory_bytes),
+      HERMES_EMBEDDING_CPU_RATE_PERCENT: "100",
+      HERMES_EMBEDDING_CPU_AFFINITY_MASK: affinityMask,
+      HERMES_EMBEDDING_ACTIVE_PROCESS_LIMIT: "1",
     },
   })
-  if (run.status !== 0) throw new Error(`fixed embedding evaluator failed with status ${run.status ?? "none"}`)
-  const resultBytes = Buffer.from(run.stdout)
+  let receipt
+  try { receipt = JSON.parse(Buffer.from(run.stdout ?? []).toString("utf8").replace(/^\uFEFF/, "").trim()) } catch { throw new Error("bounded embedding launcher returned an invalid receipt") }
+  if (run.status !== 0 || receipt.status !== "COMPLETED" || receipt.evaluator_exit_code !== 0
+    || receipt.job_assigned_before_resume !== true || receipt.external_provider_used !== false || receipt.fallback_used !== false
+    || receipt.active_process_limit !== 1 || receipt.cpu_rate_percent !== 100 || receipt.cpu_affinity_mask !== affinityMask
+    || receipt.process_memory_bytes !== admission.limits.max_memory_bytes || receipt.job_memory_bytes !== admission.limits.max_memory_bytes) {
+    throw new Error(`bounded embedding evaluator failed closed: ${receipt.reason_code ?? "UNKNOWN"}`)
+  }
+  const resultBytes = readFixedBytes(resultPath, LEDGER_ROOT, "bounded evaluator result")
   if (resultBytes.byteLength > admission.limits.max_result_bytes) throw new Error("fixed evaluator result exceeds admitted ceiling")
   if (evaluatorInput.byteLength + resultBytes.byteLength > admission.limits.max_scratch_bytes) throw new Error("fixed evaluator artifacts exceed admitted scratch ceiling")
-  writeExclusive(resultPath, resultBytes)
+  if (receipt.result_bytes !== resultBytes.byteLength || receipt.result_sha256 !== sha256(resultBytes)) throw new Error("bounded launcher receipt does not match evaluator result")
   const result = JSON.parse(resultBytes.toString("utf8"))
   const provenance = result?.manifest?.provenance
   return {

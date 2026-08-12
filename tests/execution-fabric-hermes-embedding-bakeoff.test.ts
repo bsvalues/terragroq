@@ -32,6 +32,8 @@ function fixture() {
   copy(EMBEDDING_CONTRACT.embedPath)
   copy(EMBEDDING_CONTRACT.metricsPath)
   copy(EMBEDDING_CONTRACT.canonicalJsonPath)
+  copy(EMBEDDING_CONTRACT.collectorPath)
+  copy(EMBEDDING_CONTRACT.boundedLauncherPath)
   const evaluator = fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.evaluatorPath))
   const permissionSha256 = sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.permissionPath)))
   const admission: any = {
@@ -60,19 +62,26 @@ function fixture() {
       runtime_id: "ollama",
       version: "0.11.4",
       executable_sha256: "3".repeat(64),
+      container_image_sha256: "4".repeat(64),
+      python_executable_sha256: "5".repeat(64),
+      node_executable_sha256: "6".repeat(64),
+      powershell_executable_sha256: "7".repeat(64),
       evaluator_sha256: sha256(evaluator),
       bakeoff_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.bakeoffPath))),
       embed_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.embedPath))),
       metrics_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.metricsPath))),
       canonical_json_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.canonicalJsonPath))),
+      collector_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.collectorPath))),
+      bounded_launcher_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.boundedLauncherPath))),
       adapter_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.adapterPath))),
       runner_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.runnerPath))),
       manifest_sha256: "4".repeat(64),
     },
     placement: {
       node_id: EMBEDDING_CONTRACT.nodeId,
-      inventory_snapshot_sha256: "5".repeat(64),
-      host_manifest_sha256: "6".repeat(64),
+      machine_id_sha256: "8".repeat(64),
+      inventory_snapshot_sha256: "9".repeat(64),
+      host_manifest_sha256: "a".repeat(64),
       endpoint_contract: "ollama-loopback-api-embed-v1",
     },
     limits: {
@@ -80,6 +89,11 @@ function fixture() {
       max_input_bytes: 524_288,
       max_scratch_bytes: 536_870_912,
       max_result_bytes: 8_388_608,
+      max_cpu_threads: 4,
+      max_memory_bytes: 8_589_934_592,
+      max_gpu_vram_bytes: 4_294_967_296,
+      minimum_memory_available_bytes: 4_294_967_296,
+      minimum_gpu_vram_available_bytes: 2_147_483_648,
       network_scope: "loopback-only",
     },
     permission_set_sha256: permissionSha256,
@@ -88,6 +102,18 @@ function fixture() {
     maximum_attempts: 1,
     status: "ADMITTED_SINGLE_USE",
   }
+  admission.placement.inventory_snapshot_sha256 = canonicalDigest({
+    node_id: EMBEDDING_CONTRACT.nodeId,
+    machine_id_sha256: admission.placement.machine_id_sha256,
+    cpu_threads: 16,
+    memory_total_bytes: 34_359_738_368,
+    gpu_vram_total_bytes: 12_884_901_888,
+    container_image_sha256: admission.runtime.container_image_sha256,
+    ollama_executable_sha256: admission.runtime.executable_sha256,
+    python_executable_sha256: admission.runtime.python_executable_sha256,
+    node_executable_sha256: admission.runtime.node_executable_sha256,
+    powershell_executable_sha256: admission.runtime.powershell_executable_sha256,
+  })
   const request: any = {
     schema_version: "1.0-hermes-embedding-bakeoff-request",
     request_id: "issue-704-granite-test-run",
@@ -104,6 +130,8 @@ function fixture() {
       [EMBEDDING_CONTRACT.embedPath]: admitted.runtime.embed_sha256,
       [EMBEDDING_CONTRACT.metricsPath]: admitted.runtime.metrics_sha256,
       [EMBEDDING_CONTRACT.canonicalJsonPath]: admitted.runtime.canonical_json_sha256,
+      [EMBEDDING_CONTRACT.collectorPath]: admitted.runtime.collector_sha256,
+      [EMBEDDING_CONTRACT.boundedLauncherPath]: admitted.runtime.bounded_launcher_sha256,
       [EMBEDDING_CONTRACT.adapterPath]: admitted.runtime.adapter_sha256,
       [EMBEDDING_CONTRACT.runnerPath]: admitted.runtime.runner_sha256,
     }),
@@ -114,20 +142,45 @@ function fixture() {
 }
 
 function attestation(admission: any) {
-  const value: any = {
-    schema_version: "1.0-trusted-hermes-embedding-host-attestation",
-    collector_id: "trusted-resident-hermes-collector",
+  const inventory = {
     node_id: EMBEDDING_CONTRACT.nodeId,
-    machine_id_sha256: "7".repeat(64),
+    machine_id_sha256: admission.placement.machine_id_sha256,
+    cpu_threads: 16,
+    memory_total_bytes: 34_359_738_368,
+    gpu_vram_total_bytes: 12_884_901_888,
+    container_image_sha256: admission.runtime.container_image_sha256,
+    ollama_executable_sha256: admission.runtime.executable_sha256,
+    python_executable_sha256: admission.runtime.python_executable_sha256,
+    node_executable_sha256: admission.runtime.node_executable_sha256,
+    powershell_executable_sha256: admission.runtime.powershell_executable_sha256,
+  }
+  const value: any = {
+    schema_version: "1.0-trusted-hermes-live-embedding-attestation",
+    collector_id: "reviewed-resident-hermes-live-collector",
+    node_id: EMBEDDING_CONTRACT.nodeId,
+    machine_id_sha256: admission.placement.machine_id_sha256,
     inventory_snapshot_sha256: admission.placement.inventory_snapshot_sha256,
     host_manifest_sha256: admission.placement.host_manifest_sha256,
     model_id: admission.model.model_id,
     weights_sha256: admission.model.weights_sha256,
+    model_manifest_sha256: admission.model.manifest_sha256,
     runtime_id: admission.runtime.runtime_id,
     runtime_version: admission.runtime.version,
     runtime_executable_sha256: admission.runtime.executable_sha256,
+    container_image_sha256: admission.runtime.container_image_sha256,
+    python_executable_sha256: admission.runtime.python_executable_sha256,
+    node_executable_sha256: admission.runtime.node_executable_sha256,
+    powershell_executable_sha256: admission.runtime.powershell_executable_sha256,
+    inventory,
+    resources: {
+      cpu_threads: inventory.cpu_threads,
+      memory_total_bytes: inventory.memory_total_bytes,
+      memory_available_bytes: 17_179_869_184,
+      gpu_vram_total_bytes: inventory.gpu_vram_total_bytes,
+      gpu_vram_available_bytes: 8_589_934_592,
+    },
     endpoint: EMBEDDING_CONTRACT.endpoint,
-    observed_at: "2026-08-12T20:00:00.150Z",
+    observed_at: "2026-08-12T20:00:00.250Z",
     expires_at: "2026-08-12T20:05:00.000Z",
     verified: true,
   }
@@ -217,7 +270,7 @@ describe("resident HERMES embedding bake-off adapter", () => {
       evaluator_path: "scripts/embedding-bakeoff/fabric_measure.py",
     }))
     expect(value.releaseExclusiveLease).toHaveBeenCalledWith({ lease_id: "lease-issue-704-test", claim_id: "claim-issue-704-test", fencing_token: 1 })
-    expect(result).toMatchObject({ status: "COMPLETED", result: "SUCCEEDED", lease_released: true, scheduler_activated: false, autonomous_dispatch: false, external_provider_used: false, fallback_used: false, authority_scope: { canonical_vector_write_authorized: false, database_mutation_authorized: false } })
+    expect(result).toMatchObject({ status: "COMPLETED", result: "SUCCEEDED", execution_semantics: "AT_MOST_ONCE_ADMISSION_CONSUMPTION", lease_released: true, scheduler_activated: false, autonomous_dispatch: false, external_provider_used: false, fallback_used: false, authority_scope: { canonical_vector_write_authorized: false, database_mutation_authorized: false } })
     expect(result.attestation_sha256).toMatch(/^[a-f0-9]{64}$/)
   })
 
@@ -229,16 +282,20 @@ describe("resident HERMES embedding bake-off adapter", () => {
     expect(value.invokeFixedEvaluator).not.toHaveBeenCalled()
   })
 
-  it("rejects occupied or incorrectly fenced leases before host collection", async () => {
-    for (const lease of [
-      { acquired: false, lease_id: "lease-occupied", fencing_token: 1, acquired_at: "2026-08-12T20:00:00.150Z", stale_lease_recovered: false, stale_lease_sha256: null },
-      { acquired: true, lease_id: "lease-wrong-fence", fencing_token: 2, acquired_at: "2026-08-12T20:00:00.150Z", stale_lease_recovered: false, stale_lease_sha256: null },
-    ]) {
-      const value = runtime(); value.acquireExclusiveLease.mockResolvedValue(lease)
-      await expect(executeResidentHermesEmbeddingBakeoff(value)).rejects.toThrow(lease.acquired ? "LEASE_FENCE_MISMATCH" : "CONCURRENCY_LIMIT_REACHED")
-      expect(value.collectTrustedHostAttestation).not.toHaveBeenCalled()
-      expect(value.releaseExclusiveLease).toHaveBeenCalledTimes(lease.acquired ? 1 : 0)
-    }
+  it("rejects an occupied lease before host collection", async () => {
+    const value = runtime()
+    value.acquireExclusiveLease.mockResolvedValue({ acquired: false, lease_id: "lease-occupied", fencing_token: 2, acquired_at: "2026-08-12T20:00:00.150Z", stale_lease_recovered: false, stale_lease_sha256: null })
+    await expect(executeResidentHermesEmbeddingBakeoff(value)).rejects.toThrow("CONCURRENCY_LIMIT_REACHED")
+    expect(value.collectTrustedHostAttestation).not.toHaveBeenCalled()
+    expect(value.releaseExclusiveLease).not.toHaveBeenCalled()
+  })
+
+  it("accepts the monotonic fencing token allocated by the exclusive lease", async () => {
+    const value = runtime()
+    value.acquireExclusiveLease.mockResolvedValue({ acquired: true, lease_id: "lease-next-fence", fencing_token: 9, acquired_at: "2026-08-12T20:00:00.150Z", stale_lease_recovered: true, stale_lease_sha256: "b".repeat(64) })
+    const result = await executeResidentHermesEmbeddingBakeoff(value)
+    expect(result.lease).toMatchObject({ fencing_token: 9, stale_lease_recovered: true, stale_lease_sha256: "b".repeat(64) })
+    expect(value.releaseExclusiveLease).toHaveBeenCalledWith({ lease_id: "lease-next-fence", claim_id: "claim-issue-704-test", fencing_token: 9 })
   })
 
   it("releases the lease after host-attestation or evaluator failure", async () => {
@@ -251,6 +308,20 @@ describe("resident HERMES embedding bake-off adapter", () => {
     evaluatorFailure.invokeFixedEvaluator.mockRejectedValue(new Error("offline evaluator failure"))
     await expect(executeResidentHermesEmbeddingBakeoff(evaluatorFailure)).rejects.toMatchObject({ dispatchAttempted: true, leaseReleased: true })
     expect(evaluatorFailure.releaseExclusiveLease).toHaveBeenCalledTimes(1)
+  })
+
+  it("fails closed when live available capacity is below the admitted envelope", async () => {
+    const value = runtime()
+    value.collectTrustedHostAttestation.mockImplementation(async () => {
+      const observed: any = attestation(value.admission)
+      observed.resources.memory_available_bytes = value.admission.limits.minimum_memory_available_bytes - 1
+      delete observed.attestation_sha256
+      observed.attestation_sha256 = canonicalDigest(observed)
+      return observed
+    })
+    await expect(executeResidentHermesEmbeddingBakeoff(value)).rejects.toThrow("RESOURCE_CAPACITY_INSUFFICIENT")
+    expect(value.invokeFixedEvaluator).not.toHaveBeenCalled()
+    expect(value.releaseExclusiveLease).toHaveBeenCalledTimes(1)
   })
 
   it.each([
@@ -282,22 +353,43 @@ describe("resident HERMES embedding bake-off adapter", () => {
     expect(source).toContain('const GIT_EXECUTABLE = "C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe"')
     expect(source).toContain('endpoint !== "http://127.0.0.1:11434/api/embed"')
     expect(source).toContain('process.argv.length !== 2')
-    expect(source.match(/spawnSync\(/g)).toHaveLength(2)
-    expect(source).toContain('spawnSync(PYTHON_EXECUTABLE, [EVALUATOR_PATH')
-    expect(source).toContain("input: evaluatorInput")
+    expect(source.match(/spawnSync\(/g)).toHaveLength(3)
+    expect(source).toContain('spawnSync(POWERSHELL_EXECUTABLE, ["-NoLogo"')
+    expect(source).toContain("COLLECTOR_PATH")
+    expect(source).toContain("BOUNDED_LAUNCHER_PATH")
+    expect(source).toContain("HERMES_EMBEDDING_SEALED_INPUT_PATH")
+    expect(source).toContain("HERMES_EMBEDDING_MAX_SCRATCH_BYTES")
     expect(source).toContain("merge-base\", \"--is-ancestor")
     expect(source).toContain("refs/heads/main")
     expect(source).toContain("resident executable source closure differs from the admitted commit")
     expect(source).toContain("GIT_CONFIG_NOSYSTEM: \"1\"")
     expect(source).toContain("const key = admission_sha256")
     expect(source).toContain("stale-embedding-lease-")
+    expect(source).toContain("embedding-fence-")
     expect(source).toContain('process.platform !== "win32"')
     expect(source).toContain("readFixedBytes(MODEL_MANIFEST_PATH")
+    expect(source).not.toContain("trusted-host-attestation.json")
     expect(source).not.toMatch(/process\.env|https:\/\/|\/api\/generate|child_process\.exec|execSync|fetch\(/)
   })
 
+  it("collects live HERMES identity, runtime, model, and capacity from fixed local surfaces", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), EMBEDDING_CONTRACT.collectorPath), "utf8")
+    expect(source).toContain("if ($args.Count -ne 0)")
+    expect(source).toContain("Get-CimInstance Win32_ComputerSystemProduct")
+    expect(source).toContain("Get-CimInstance Win32_ComputerSystem")
+    expect(source).toContain("Get-CimInstance Win32_OperatingSystem")
+    expect(source).toContain("http://127.0.0.1:11434/api/version")
+    expect(source).toContain("http://127.0.0.1:11434/api/tags")
+    expect(source).toContain("sha256sum /usr/bin/ollama")
+    expect(source).toContain("sha256sum $weightsPath")
+    expect(source).toContain("Get-FileSha256 $python")
+    expect(source).toContain("Get-FileSha256 $node")
+    expect(source).toContain("Get-FileSha256 $powershell")
+    expect(source).not.toMatch(/https:\/\/|Invoke-Expression|Start-Process|cmd\.exe|Get-Content.*credential/i)
+  })
+
   it("rejects drift in every imported evaluator source before claim", () => {
-    for (const relativePath of [EMBEDDING_CONTRACT.bakeoffPath, EMBEDDING_CONTRACT.embedPath, EMBEDDING_CONTRACT.metricsPath, EMBEDDING_CONTRACT.canonicalJsonPath]) {
+    for (const relativePath of [EMBEDDING_CONTRACT.bakeoffPath, EMBEDDING_CONTRACT.embedPath, EMBEDDING_CONTRACT.metricsPath, EMBEDDING_CONTRACT.canonicalJsonPath, EMBEDDING_CONTRACT.collectorPath, EMBEDDING_CONTRACT.boundedLauncherPath]) {
       const value = fixture()
       fs.appendFileSync(path.join(value.repositoryRoot, relativePath), "\n# drift\n")
       expect(prepareResidentHermesEmbeddingBakeoff({ ...value, evaluatedAt: "2026-08-12T20:00:00.000Z" }))
