@@ -24,3 +24,4 @@ docs/reports/bounded-dispatch/aegis-inputs/*.json text eol=lf
 worker-tier/**/*.py text eol=lf
 worker-tier/**/*.sh text eol=lf
 worker-tier/**/*.md text eol=lf
+scripts/omen-inventory.ps1 text eol=lf
