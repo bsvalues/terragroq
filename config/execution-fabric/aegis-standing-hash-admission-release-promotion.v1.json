@@ -48,15 +48,15 @@
   },
   "evidenceRelease": {
     "sourceCommit": "b1637a0d16394361dff74e1fb85851ba61f91235",
-    "admissionPath": "docs/reports/standing-dispatch/admission-issue-595-live-005.json",
-    "admissionSha256": "df1b6a69ea92b5b8009a7014894619584a0bbe6f327870d45b1c729204ce8506",
+    "admissionPath": "docs/reports/standing-dispatch/admission-issue-595-live-007.json",
+    "admissionSha256": "cbab0ed20d3f238443f21afdce18d914f07d8e4b31220398ba9f76ce5ccfff4e",
     "inputPath": "docs/reports/standing-dispatch/inputs/WO-EF-AEGIS-STANDING-001-fabric-integrity.json",
     "inputSha256": "2b52099784df706a881bf037310215a8c2f55367c83223523a5916f94784aa30"
   },
   "newRelease": {
-    "commit": "2593e782fdbaefbc05f617cdac3acde4a4255be0",
-    "checkoutPath": "/root/williamos-release/2593e782fdbaefbc05f617cdac3acde4a4255be0",
-    "releaseRoot": "/opt/williamos/releases/2593e782fdbaefbc05f617cdac3acde4a4255be0",
+    "commit": "61a8b2ec4ca0514269a93a960893f239f48abed4",
+    "checkoutPath": "/root/williamos-release/61a8b2ec4ca0514269a93a960893f239f48abed4",
+    "releaseRoot": "/opt/williamos/releases/61a8b2ec4ca0514269a93a960893f239f48abed4",
     "trustedRef": "refs/heads/main",
     "manifestSchemaVersion": "1.0-williamos-trusted-main-release",
     "closure": {
@@ -69,25 +69,25 @@
       "scripts/execution-fabric/canonical-json.mjs": "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21"
     },
     "trustArtifacts": {
-      "requestSourcePath": "docs/reports/standing-dispatch/private-requests/issue-595-live-005.json",
-      "requestSha256": "720e4eb64ef2dd955f15f45d46bc6c3a150bbd45afdd01c05df4408440e86d83",
-      "admissionPath": "docs/reports/standing-dispatch/admission-issue-595-live-005.json",
-      "admissionSha256": "df1b6a69ea92b5b8009a7014894619584a0bbe6f327870d45b1c729204ce8506",
+      "requestSourcePath": "docs/reports/standing-dispatch/private-requests/issue-595-live-007.json",
+      "requestSha256": "e1343839d1fe3c74395dd80b065bb7eaef03a38d270d03a2f02b2f186aa9b10a",
+      "admissionPath": "docs/reports/standing-dispatch/admission-issue-595-live-007.json",
+      "admissionSha256": "cbab0ed20d3f238443f21afdce18d914f07d8e4b31220398ba9f76ce5ccfff4e",
       "inputPath": "docs/reports/standing-dispatch/inputs/WO-EF-AEGIS-STANDING-001-fabric-integrity.json",
       "inputSha256": "2b52099784df706a881bf037310215a8c2f55367c83223523a5916f94784aa30"
     }
   },
   "packageRelease": {
-    "commit": "05dad92db571fb4bf6d2bd1218621eb60277a836",
-    "checkoutPath": "/root/williamos-package/05dad92db571fb4bf6d2bd1218621eb60277a836",
+    "commit": "9648a7c93306e41183ce8345615678521a253c89",
+    "checkoutPath": "/root/williamos-package/9648a7c93306e41183ce8345615678521a253c89",
     "installerSha256": "b909e31347ea8c30c7145147ee5e61af07b815986a1c563c1938552349e39699",
     "validatorSha256": "10f4f1fa333e71cfa9a0d0988dade630608cdd9d2f841e1cf3be8e24d85258f1",
     "evaluatorSha256": "5394ef5cb93f5d70277716e041ebdd825969a17fa984ca84a6605e98bcb22073",
     "standingAuthoritySha256": "393a6f684c4c85228821b8604fa66d62482f3b4876c01ab839e67528a4be10fa"
   },
   "install": {
-    "requestId": "issue-595-live-005",
-    "requestPath": "/var/lib/williamos/fabric/standing-hash-requests/issue-595-live-005.json",
+    "requestId": "issue-595-live-007",
+    "requestPath": "/var/lib/williamos/fabric/standing-hash-requests/issue-595-live-007.json",
     "requestMode": "0600",
     "journalPrefix": "/var/lib/williamos-aegis-standing-hash-admission-release-promotion-",
     "authorityRoot": "/var/lib/williamos/fabric/standing-hash-promotion-authorities",
