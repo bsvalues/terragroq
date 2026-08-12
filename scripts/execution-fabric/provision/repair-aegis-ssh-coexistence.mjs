@@ -395,7 +395,7 @@ export function validateAegisSshCoexistenceRepairManifest(
   )
     fail("AEGIS_SSH_REPAIR_MANIFEST_INVALID", "proof binding differs");
   if (!same(manifest.failedRecovery, {
-    operation: "SETTLE_FAILED_RECOVERY",
+    operations: ["SETTLE_FAILED_RECOVERY", "SETTLE_POST_MUTATION"],
     failedAuthorityId: FAILED_RECOVERY_AUTHORITY_ID,
     failedAuthoritySha256: FAILED_RECOVERY_AUTHORITY_SHA256,
     failedManifestSha256: FAILED_RECOVERY_MANIFEST_SHA256,
@@ -467,7 +467,7 @@ function validateRecoveryAuthority(authority, manifest, manifestBytes, now, resu
   if (
     !exactKeys(authority, RECOVERY_AUTHORITY_KEYS) ||
     authority.schemaVersion !== 1 ||
-    authority.operation !== "SETTLE_FAILED_RECOVERY" ||
+    !manifest.failedRecovery.operations.includes(authority.operation) ||
     !UUID.test(authority.authorityId ?? "") ||
     authority.authorityId === FAILED_RECOVERY_AUTHORITY_ID ||
     authority.repairId !== manifest.repairId ||
@@ -830,13 +830,19 @@ function exactFailedJournal(io) {
        !same(phases, ["AUTHORITY_CONSUMED", "FAILED_PARTIAL", "FAILED_LOCK_RELEASE_PROVEN"])))
     fail("AEGIS_SSH_REPAIR_RECOVERY_JOURNAL_UNTRUSTED", "failed transaction journal differs");
   const failed = records[1];
-  if (failed && (!exactKeys(failed, ["record_type", "phase", "failed_at", "failure_code", "predecessor_config_restored", "standing_root_key_removed", "authorized_keys_directory_removed", "daemon_identity_unchanged", "normal_ssh_proof_sha256", "lock_release_proven", "scheduler_activated", "workload_executed", "network_accessed"]) ||
+  const rolledBack = failed?.failure_code === "ENOENT";
+  const postMutation = failed?.failure_code === "POST_MUTATION_SETTLED";
+  if (failed && (!exactKeys(failed, ["record_type", "phase", "failed_at", "failure_code", "predecessor_config_restored", "standing_root_key_removed", "authorized_keys_directory_removed", "post_mutation_state_preserved", "daemon_identity_unchanged", "reload_evidence", "normal_ssh_proof_sha256", "lock_release_proven", "scheduler_activated", "workload_executed", "network_accessed"]) ||
       failed.record_type !== "FAILED_PARTIAL" || failed.phase !== 3 || !canonicalTimestamp(failed.failed_at) ||
-      failed.failure_code !== "ENOENT" || failed.predecessor_config_restored !== true || failed.standing_root_key_removed !== true ||
-      failed.authorized_keys_directory_removed !== true || failed.daemon_identity_unchanged !== true ||
+      (!rolledBack && !postMutation) || failed.predecessor_config_restored !== rolledBack ||
+      failed.standing_root_key_removed !== rolledBack || failed.authorized_keys_directory_removed !== rolledBack ||
+      failed.post_mutation_state_preserved !== postMutation || failed.daemon_identity_unchanged !== true ||
       !SHA256.test(failed.normal_ssh_proof_sha256 ?? "") || failed.lock_release_proven !== false ||
       failed.scheduler_activated !== false || failed.workload_executed !== false || failed.network_accessed !== false))
     fail("AEGIS_SSH_REPAIR_RECOVERY_JOURNAL_UNTRUSTED", "failed settlement record differs");
+  if (failed && postMutation) validateReloadEvidence(failed.reload_evidence, failed.reload_evidence?.daemonIdentity);
+  if (failed && rolledBack && failed.reload_evidence !== null)
+    fail("AEGIS_SSH_REPAIR_RECOVERY_JOURNAL_UNTRUSTED", "rollback reload evidence differs");
   const released = records[2];
   if (released && (!exactKeys(released, ["record_type", "phase", "released_at", "reservation_locks"]) ||
       released.record_type !== "FAILED_LOCK_RELEASE_PROVEN" || released.phase !== 4 ||
@@ -850,6 +856,15 @@ function validateDaemonIdentity(value) {
       !Number.isSafeInteger(value.mainPid) || value.mainPid <= 1 ||
       typeof value.startTimestampMonotonic !== "string" || !/^[1-9][0-9]*$/.test(value.startTimestampMonotonic))
     fail("AEGIS_SSH_REPAIR_DAEMON_IDENTITY_DRIFT", "SSH daemon identity differs");
+  return value;
+}
+function validateReloadEvidence(value, daemon) {
+  if (!exactKeys(value, ["daemonIdentity", "configCtime", "reloadAt", "ipv4ListeningAt", "ipv6ListeningAt"]) ||
+      !same(value.daemonIdentity, daemon) || !canonicalTimestamp(value.configCtime) ||
+      !canonicalTimestamp(value.reloadAt) || !canonicalTimestamp(value.ipv4ListeningAt) ||
+      !canonicalTimestamp(value.ipv6ListeningAt) || Date.parse(value.reloadAt) < Date.parse(value.configCtime) ||
+      Date.parse(value.ipv4ListeningAt) < Date.parse(value.reloadAt) || Date.parse(value.ipv6ListeningAt) < Date.parse(value.reloadAt))
+    fail("AEGIS_SSH_REPAIR_RELOAD_EVIDENCE_INVALID", "SSH reload evidence differs");
   return value;
 }
 function validateSshSessionEvidence(value) {
@@ -923,10 +938,25 @@ function settleFailedRecovery({ manifest, manifestBytes, authority, io, assetByt
     installerBytes, launcherBytes, standingKeyBinding, entrypointSha256, io, now: clock(),
     machineIdentitySha256, resume, recovery: true });
   const failed = exactFailedJournal(io);
-  assertFile(io, CONFIG_PATH, { uid: 0, gid: 0, mode: 0o444, sha256: manifest.predecessor.sha256 }, "AEGIS_SSH_REPAIR_RECOVERY_UNCERTAIN");
-  if (io.inspect(STANDING_ROOT_KEY_PATH) || io.inspect(AUTHORIZED_KEYS_ROOT))
+  const postMutation = authority.operation === "SETTLE_POST_MUTATION";
+  assertFile(io, CONFIG_PATH, { uid: 0, gid: 0, mode: 0o444,
+    sha256: postMutation ? manifest.reviewedConfig.sha256 : manifest.predecessor.sha256 },
+    "AEGIS_SSH_REPAIR_RECOVERY_UNCERTAIN");
+  if (postMutation) {
+    assertDirectory(io, AUTHORIZED_KEYS_ROOT, { uid: 0, gid: 0, mode: 0o755 },
+      "AEGIS_SSH_REPAIR_RECOVERY_UNCERTAIN");
+    assertFile(io, STANDING_ROOT_KEY_PATH, { uid: 0, gid: 0, mode: 0o444,
+      sha256: manifest.standingKey.recordSha256 }, "AEGIS_SSH_REPAIR_RECOVERY_UNCERTAIN");
+  } else if (io.inspect(STANDING_ROOT_KEY_PATH) || io.inspect(AUTHORIZED_KEYS_ROOT))
     fail("AEGIS_SSH_REPAIR_RECOVERY_UNCERTAIN", "failed repair retained state");
   assertInactive(io, manifest, initial.account, Buffer.alloc(0), false);
+  let reloadEvidence = null;
+  if (postMutation) {
+    const daemon = validateDaemonIdentity(io.sshDaemonIdentity());
+    reloadEvidence = validateReloadEvidence(io.sshReloadEvidence(CONFIG_PATH, daemon), daemon);
+    io.validateLiveSshd();
+    verifyEffective(io);
+  }
   if (failed.records.length === 3) {
     if (recoveryRecords.at(-1)?.record_type === "LOCK_RELEASE_PROVEN")
       fail("AEGIS_SSH_REPAIR_AUTHORITY_REPLAY", "recovery authority is terminal");
@@ -995,8 +1025,10 @@ function settleFailedRecovery({ manifest, manifestBytes, authority, io, assetByt
     validateRecoveryAuthority(authority, manifest, manifestBytes, clock(), true);
     if (failed.records.length === 1) {
       io.appendJournal(failed.target, { record_type: "FAILED_PARTIAL", phase: 3, failed_at: clock(),
-        failure_code: "ENOENT", predecessor_config_restored: true, standing_root_key_removed: true,
-        authorized_keys_directory_removed: true, daemon_identity_unchanged: true,
+        failure_code: postMutation ? "POST_MUTATION_SETTLED" : "ENOENT",
+        predecessor_config_restored: !postMutation, standing_root_key_removed: !postMutation,
+        authorized_keys_directory_removed: !postMutation, post_mutation_state_preserved: postMutation,
+        daemon_identity_unchanged: true, reload_evidence: reloadEvidence,
         normal_ssh_proof_sha256: canonicalSha256(proof), lock_release_proven: false,
         scheduler_activated: false, workload_executed: false, network_accessed: false });
     }
@@ -1040,7 +1072,7 @@ export function repairAegisSshCoexistence({
   challengeNonce = () => crypto.randomBytes(32).toString("hex"),
   machineIdentitySha256,
 }) {
-  if (authority?.operation === "SETTLE_FAILED_RECOVERY")
+  if (["SETTLE_FAILED_RECOVERY", "SETTLE_POST_MUTATION"].includes(authority?.operation))
     return settleFailedRecovery({ manifest, manifestBytes, authority, io, assetBytes, assetSourcePath,
       installerBytes, launcherBytes, standingKeyBinding, entrypointSha256, clock, challengeNonce,
       machineIdentitySha256 });
@@ -1801,6 +1833,24 @@ export function createNodeRepairIo() {
       const startTimestampMonotonic = fixedRun("/usr/bin/systemctl", ["show", "ssh", "--property=ExecMainStartTimestampMonotonic", "--value"]).trim();
       if (active !== "active") fail("AEGIS_SSH_REPAIR_DAEMON_IDENTITY_DRIFT", "SSH daemon is not active");
       return { mainPid, startTimestampMonotonic };
+    },
+    sshReloadEvidence(target, daemon) {
+      const config = fs.lstatSync(target, { bigint: true });
+      const configCtime = new Date(Number(config.ctimeNs / 1000000n)).toISOString();
+      const output = fixedRun("/usr/bin/journalctl", ["-u", "ssh.service", "-o", "json", "--no-pager"]);
+      const events = output.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      const timestamp = (event) => new Date(Number(event.__REALTIME_TIMESTAMP) / 1000).toISOString();
+      const after = events.filter((event) => String(event._PID) === String(daemon.mainPid) &&
+        Number(event.__REALTIME_TIMESTAMP) / 1000 >= Date.parse(configCtime));
+      const reload = after.find((event) => event.MESSAGE === "Received SIGHUP; restarting.");
+      const ipv4 = reload && after.find((event) => event.MESSAGE === "Server listening on 0.0.0.0 port 22." &&
+        Number(event.__REALTIME_TIMESTAMP) >= Number(reload.__REALTIME_TIMESTAMP));
+      const ipv6 = reload && after.find((event) => event.MESSAGE === "Server listening on :: port 22." &&
+        Number(event.__REALTIME_TIMESTAMP) >= Number(reload.__REALTIME_TIMESTAMP));
+      if (!reload || !ipv4 || !ipv6)
+        fail("AEGIS_SSH_REPAIR_RELOAD_EVIDENCE_INVALID", "reviewed config reload was not proven");
+      return { daemonIdentity: daemon, configCtime, reloadAt: timestamp(reload),
+        ipv4ListeningAt: timestamp(ipv4), ipv6ListeningAt: timestamp(ipv6) };
     },
     sshSessionEvidence() {
       const fields = String(process.env.SSH_CONNECTION ?? "").trim().split(/\s+/);
