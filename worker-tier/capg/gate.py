@@ -68,6 +68,11 @@ class Segment:
     def name(self) -> str:
         return os.path.basename(self.argv[0]) if self.argv else ""
 
+    @property
+    def executable_is_bare(self) -> bool:
+        """ALLOW applies only to a PATH-resolved executable, never a path-spoofed basename."""
+        return bool(self.argv) and "/" not in self.argv[0] and "\\" not in self.argv[0]
+
 
 @dataclass
 class Command:
@@ -137,6 +142,9 @@ class Command:
             if seg.name in ("scp", "rsync", "sftp"):
                 for a in positional:
                     if "://" in a:
+                        host = _host_of(a)
+                        if host:
+                            hosts.append(host)
                         continue
                     if ":" in a:                       # host:path or user@host:path
                         left = a.split(":", 1)[0]
@@ -300,4 +308,8 @@ def classify(command: str, rules: list[Rule] | None = None) -> Verdict:
         # some rule threw; the surviving matches only justify ALLOW — do not allow on partial evaluation
         return Verdict(Decision.ASK, "rule-error",
                        "a policy rule failed to evaluate; not eligible for ALLOW (fail-closed)", "rule-error")
+    if best.decision is Decision.ALLOW and any(not seg.executable_is_bare for seg in cmd.segments):
+        return Verdict(Decision.ASK, "executable-path",
+                       "path-qualified executable is not eligible for ALLOW (fail-closed)",
+                       "path-qualified-executable")
     return Verdict(best.decision, best.category, best.reason, best.name)

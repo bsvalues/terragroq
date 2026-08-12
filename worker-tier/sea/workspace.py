@@ -48,13 +48,19 @@ class Workspace:
         return snap
 
     def restore(self, snap: dict[str, str | None]) -> None:
+        errors: list[str] = []
         for r, content in snap.items():
-            p = self._resolve(r)
-            if content is None:
-                if p.is_file():
-                    p.unlink()
-            else:
-                p.write_text(content)
+            try:
+                p = self._resolve(r)
+                if content is None:
+                    if p.is_file():
+                        p.unlink()
+                else:
+                    p.write_text(content)
+            except Exception as exc:  # noqa: BLE001 - attempt the entire snapshot before failing
+                errors.append(f"{r}: {exc}")
+        if errors:
+            raise WorkspaceError(f"workspace restore failed: {'; '.join(errors)}")
 
     def apply_edit(self, e: Edit) -> tuple[bool, str]:
         p = self._resolve(e.file)
@@ -80,7 +86,10 @@ class Workspace:
         """Apply a batch atomically: snapshot touched files, roll back on the first rejected edit OR
         on any raised exception (e.g. a filesystem error mid-write), so the tree is never left partial."""
         touched = list(dict.fromkeys(e.file for e in edits))
-        snap = self.snapshot(touched)
+        try:
+            snap = self.snapshot(touched)
+        except Exception as exc:  # noqa: BLE001 - no writes may begin without a complete snapshot
+            return False, [f"snapshot failed: {exc}"]
         msgs: list[str] = []
         try:
             for e in edits:
@@ -93,7 +102,9 @@ class Workspace:
         except Exception as ex:  # noqa: BLE001 - any error mid-batch must still roll back cleanly
             try:
                 self.restore(snap)
-            except Exception:  # best-effort restore; report failure regardless
-                pass
+            except WorkspaceError as restore_error:
+                raise WorkspaceError(
+                    f"edit batch failed and workspace rollback was incomplete: {restore_error}"
+                ) from restore_error
             msgs.append(f"exception during apply — rolled back (fail-closed): {ex}")
             return False, msgs

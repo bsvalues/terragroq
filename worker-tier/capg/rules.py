@@ -117,11 +117,11 @@ def _plain_egress(c: Command) -> bool:
 #   find  (-exec/-delete run/mutate), sed (-i mutates), awk (system()/print-to-file execute),
 #   env   (runs the command that follows it), python/python3/pytest (execute arbitrary code).
 # Those fall through to the fail-closed ASK default rather than being blanket-allowed.
-_SAFE = {"ls", "pwd", "whoami", "id", "echo", "printf", "date", "uname", "hostname",
-         "cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "file", "stat",
-         "diff", "cut", "sort", "uniq", "tr", "which", "type", "printenv",
-         "true", "false", "test", "basename", "dirname", "realpath", "readlink", "tree", "du", "df"}
-_SAFE_GIT = {"status", "diff", "log", "show", "branch", "remote", "rev-parse", "describe", "config"}
+_SAFE = {"ls", "pwd", "whoami", "id", "echo", "printf", "uname",
+         "cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "stat",
+         "diff", "cut", "tr", "which", "type", "printenv",
+         "true", "false", "test", "basename", "dirname", "realpath", "readlink", "du", "df"}
+_SHELL_EXECUTION_OR_REDIRECTION = re.compile(r"\$\(|`|[<>]\(|[<>]")
 
 
 def _safe_read(c: Command) -> bool:
@@ -133,13 +133,11 @@ def _safe_read(c: Command) -> bool:
         return False
     # a genuinely read-only command neither redirects output nor runs command substitution;
     # an allowlisted NAME is not enough — args carrying `>`, `` ` `` or `$( )` are not safe-read.
-    if ">" in c.raw or "`" in c.raw or "$(" in c.raw:
+    if _SHELL_EXECUTION_OR_REDIRECTION.search(c.raw):
         return False
     for seg in c.segments:
         n = seg.name
         if n in _SAFE:
-            continue
-        if n == "git" and len(seg.argv) > 1 and seg.argv[1] in _SAFE_GIT:
             continue
         return False
     return True

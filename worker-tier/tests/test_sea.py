@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -176,6 +177,57 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(res.success)
         self.assertEqual(repo.read("mathutil.py"), MATH_BUG)  # no broken code left behind
 
+    def test_verifier_factory_exception_is_terminal_and_restores_workspace(self):
+        repo = TmpRepo({"mathutil.py": MATH_BUG})
+        ws = Workspace(repo.dir)
+        good = edit_json("mathutil.py", "return sum(nums) / len(nums)",
+                         "return sum(nums) / len(nums) if nums else 0.0")
+
+        def factory_raises(_files):
+            raise RuntimeError("factory unavailable")
+
+        res = worker("fix", ["mathutil.py"], ws, MockModelClient([good]),
+                     factory_raises, max_attempts=1)
+
+        self.assertFalse(res.success)
+        self.assertEqual(res.attempts, 1)
+        self.assertIn("verifier failed", res.detail)
+        self.assertIn("factory unavailable", res.detail)
+        self.assertEqual(repo.read("mathutil.py"), MATH_BUG)
+
+    def test_verifier_run_exception_is_terminal_and_restores_workspace(self):
+        repo = TmpRepo({"mathutil.py": MATH_BUG})
+        ws = Workspace(repo.dir)
+        good = edit_json("mathutil.py", "return sum(nums) / len(nums)",
+                         "return sum(nums) / len(nums) if nums else 0.0")
+
+        class RaisingVerifier:
+            def run(self):
+                raise RuntimeError("verification crashed")
+
+        res = worker("fix", ["mathutil.py"], ws, MockModelClient([good]),
+                     lambda _files: RaisingVerifier(), max_attempts=1)
+
+        self.assertFalse(res.success)
+        self.assertEqual(res.attempts, 1)
+        self.assertIn("verifier failed", res.detail)
+        self.assertIn("verification crashed", res.detail)
+        self.assertEqual(repo.read("mathutil.py"), MATH_BUG)
+
+    def test_verifier_exception_with_incomplete_restore_raises_workspace_error(self):
+        repo = TmpRepo({"mathutil.py": MATH_BUG})
+        ws = Workspace(repo.dir)
+        good = edit_json("mathutil.py", "return sum(nums) / len(nums)",
+                         "return sum(nums) / len(nums) if nums else 0.0")
+
+        def factory_raises(_files):
+            raise RuntimeError("factory unavailable")
+
+        with mock.patch.object(ws, "restore", side_effect=WorkspaceError("restore denied")):
+            with self.assertRaisesRegex(WorkspaceError, "restore denied"):
+                worker("fix", ["mathutil.py"], ws, MockModelClient([good]),
+                       factory_raises, max_attempts=1)
+
 
 class ReviewRemediateTests(unittest.TestCase):
     def test_review_flags_bug(self):
@@ -200,6 +252,30 @@ class ReviewRemediateTests(unittest.TestCase):
         self.assertEqual(res.role, "remediate")
         self.assertIn("price - price * pct / 100", repo.read("discount.py"))
 
+    def test_remediate_verifier_exception_is_terminal_and_restores_workspace(self):
+        repo = TmpRepo({"discount.py": DISC_BUG})
+        ws = Workspace(repo.dir)
+        fix = edit_json("discount.py", "return price * pct / 100",
+                        "return price - price * pct / 100")
+        from sea import Verdict
+
+        def factory_raises(_files):
+            raise RuntimeError("remediation verifier unavailable")
+
+        res = remediate(
+            "discount.py",
+            Verdict("FAIL", "wrong return", "price - price*pct/100"),
+            ws,
+            MockModelClient([fix]),
+            factory_raises,
+            max_attempts=1,
+        )
+
+        self.assertFalse(res.success)
+        self.assertEqual(res.role, "remediate")
+        self.assertIn("verifier failed", res.detail)
+        self.assertEqual(repo.read("discount.py"), DISC_BUG)
+
 
 class SeaRegressionHardening(unittest.TestCase):
     """One test per #631 review finding."""
@@ -215,6 +291,39 @@ class SeaRegressionHardening(unittest.TestCase):
         ok, msgs = ws.apply_edits(edits)
         self.assertFalse(ok)
         self.assertEqual(repo.read("a.py"), "ORIGINAL\n")  # first edit rolled back, not left partial
+
+    def test_rejected_edit_with_incomplete_restore_raises_workspace_error(self):
+        from sea.schema import Edit
+        repo = TmpRepo({"a.py": "ORIGINAL\n"})
+        ws = Workspace(repo.dir)
+        edits = [
+            Edit(file="a.py", operation="rewrite", content="NEW"),
+            Edit(file="missing.py", operation="replace", old_text="missing", new_text="X"),
+        ]
+
+        with mock.patch.object(ws, "restore", side_effect=WorkspaceError("restore denied")):
+            with self.assertRaisesRegex(WorkspaceError, "restore denied"):
+                ws.apply_edits(edits)
+
+    def test_apply_exception_with_incomplete_restore_raises_workspace_error(self):
+        from sea.schema import Edit
+        repo = TmpRepo({"a.py": "ORIGINAL\n"})
+        ws = Workspace(repo.dir)
+        edits = [
+            Edit(file="a.py", operation="rewrite", content="NEW"),
+            Edit(file="b.py", operation="rewrite", content="SECOND"),
+        ]
+        real_apply_edit = ws.apply_edit
+
+        def fail_second_edit(edit):
+            if edit.file == "b.py":
+                raise OSError("write denied")
+            return real_apply_edit(edit)
+
+        with mock.patch.object(ws, "apply_edit", side_effect=fail_second_edit):
+            with mock.patch.object(ws, "restore", side_effect=WorkspaceError("restore denied")):
+                with self.assertRaisesRegex(WorkspaceError, "rollback was incomplete.*restore denied"):
+                    ws.apply_edits(edits)
 
     def test_compile_check_writes_no_pyc(self):
         # finding: py_compile left __pycache__/*.pyc behind even for later-rejected files.
