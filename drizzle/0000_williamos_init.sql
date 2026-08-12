@@ -1,0 +1,617 @@
+-- WilliamOS sovereign schema bootstrap.
+-- Generated from lib/db/schema.ts via drizzle-kit; installs the full schema onto a FRESH
+-- self-hosted Postgres. Requires the pgvector extension. See docs/db/sovereign-postgres.md.
+-- Do not hand-edit the table DDL below; regenerate per the doc when schema.ts changes.
+CREATE EXTENSION IF NOT EXISTS vector;
+--> statement-breakpoint
+CREATE TABLE "access_grant" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"publicTokenHash" text NOT NULL,
+	"tokenPrefix" text,
+	"scope" text NOT NULL,
+	"targetResourceType" text NOT NULL,
+	"targetResourceId" text NOT NULL,
+	"recipientEmailHash" text,
+	"recipientEmailEncrypted" text,
+	"emailVerificationRequired" boolean DEFAULT false NOT NULL,
+	"createdByOperatorId" text NOT NULL,
+	"createdReason" text,
+	"status" text DEFAULT 'active' NOT NULL,
+	"expiresAt" timestamp NOT NULL,
+	"maxUses" integer DEFAULT 1 NOT NULL,
+	"useCount" integer DEFAULT 0 NOT NULL,
+	"lastUsedAt" timestamp,
+	"revokedAt" timestamp,
+	"revokedBy" text,
+	"revokeReason" text,
+	"metadata" jsonb,
+	"auditCorrelationId" text NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "access_grant_event" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"grantId" integer,
+	"correlationId" text NOT NULL,
+	"eventType" text NOT NULL,
+	"actorType" text NOT NULL,
+	"outcome" text NOT NULL,
+	"scope" text,
+	"targetResourceType" text,
+	"targetResourceId" text,
+	"reasonCode" text,
+	"ipAddressHash" text,
+	"userAgentHash" text,
+	"tokenPrefix" text,
+	"metadata" jsonb,
+	"createdAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "access_grant_session" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"grantId" integer NOT NULL,
+	"sessionTokenHash" text NOT NULL,
+	"recipientEmailVerified" boolean DEFAULT false NOT NULL,
+	"ipAddressHash" text,
+	"userAgentHash" text,
+	"expiresAt" timestamp NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"lastSeenAt" timestamp
+);
+--> statement-breakpoint
+CREATE TABLE "account" (
+	"id" text PRIMARY KEY NOT NULL,
+	"accountId" text NOT NULL,
+	"providerId" text NOT NULL,
+	"userId" text NOT NULL,
+	"accessToken" text,
+	"refreshToken" text,
+	"idToken" text,
+	"accessTokenExpiresAt" timestamp,
+	"refreshTokenExpiresAt" timestamp,
+	"scope" text,
+	"password" text,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "agent_claim" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"agent" text NOT NULL,
+	"claim" text NOT NULL,
+	"classification" text DEFAULT 'REQUIRES_VERIFICATION' NOT NULL,
+	"workOrderId" integer,
+	"evidenceId" integer,
+	"command" text,
+	"repo" text,
+	"branch" text,
+	"head" text,
+	"conflictId" integer,
+	"status" text DEFAULT 'open' NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "authority_grant" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"workOrderId" integer,
+	"grantedBy" text NOT NULL,
+	"grantedTo" text DEFAULT 'operator' NOT NULL,
+	"authorityLevel" text NOT NULL,
+	"scope" text,
+	"allowedActions" text[] DEFAULT '{}' NOT NULL,
+	"blockedActions" text[] DEFAULT '{}' NOT NULL,
+	"reason" text,
+	"status" text DEFAULT 'active' NOT NULL,
+	"expiresAt" timestamp,
+	"revokedAt" timestamp,
+	"revokedBy" text,
+	"revokeReason" text,
+	"contentHash" text,
+	"createdAt" timestamp DEFAULT timezone('UTC', now()) NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "conflict_record" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"detectedBetween" text NOT NULL,
+	"severity" text DEFAULT 'medium' NOT NULL,
+	"system" text,
+	"workOrderId" integer,
+	"doctrineRule" text,
+	"description" text,
+	"resolution" text,
+	"resolvedBy" text,
+	"resolvedAt" timestamp,
+	"status" text DEFAULT 'open' NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "decision" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"title" text NOT NULL,
+	"context" text,
+	"decision" text NOT NULL,
+	"rationale" text,
+	"consequences" text,
+	"status" text DEFAULT 'proposed' NOT NULL,
+	"authority" text DEFAULT 'advisory' NOT NULL,
+	"owner" text DEFAULT 'Bill' NOT NULL,
+	"scope" text,
+	"evidence" text[] DEFAULT '{}' NOT NULL,
+	"tags" text[] DEFAULT '{}' NOT NULL,
+	"locked" boolean DEFAULT false NOT NULL,
+	"supersedesId" integer,
+	"supersededById" integer,
+	"reviewAt" timestamp,
+	"decidedAt" timestamp,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "doctrine" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"title" text NOT NULL,
+	"statement" text NOT NULL,
+	"category" text DEFAULT 'principle' NOT NULL,
+	"scope" text,
+	"status" text DEFAULT 'active' NOT NULL,
+	"priority" integer DEFAULT 0 NOT NULL,
+	"active" boolean DEFAULT true NOT NULL,
+	"allowed" text[] DEFAULT '{}' NOT NULL,
+	"forbidden" text[] DEFAULT '{}' NOT NULL,
+	"requiresApproval" text[] DEFAULT '{}' NOT NULL,
+	"evidence" text[] DEFAULT '{}' NOT NULL,
+	"owner" text DEFAULT 'Bill' NOT NULL,
+	"locked" boolean DEFAULT false NOT NULL,
+	"supersedesId" integer,
+	"supersededById" integer,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "document" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"title" text NOT NULL,
+	"source" text,
+	"mimeType" text DEFAULT 'text/plain' NOT NULL,
+	"content" text NOT NULL,
+	"chunkCount" integer DEFAULT 0 NOT NULL,
+	"status" text DEFAULT 'indexed' NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "document_chunk" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"documentId" integer NOT NULL,
+	"chunkIndex" integer NOT NULL,
+	"content" text NOT NULL,
+	"embedding" vector(1536),
+	"createdAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "event_log" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"type" text NOT NULL,
+	"summary" text NOT NULL,
+	"register" text,
+	"refId" integer,
+	"metadata" jsonb,
+	"createdAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "evidence_record" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"workOrderId" integer NOT NULL,
+	"result" text NOT NULL,
+	"repo" text,
+	"branch" text,
+	"head" text,
+	"worktreeStatus" text,
+	"filesChanged" text[] DEFAULT '{}' NOT NULL,
+	"validators" text[] DEFAULT '{}' NOT NULL,
+	"knownFailures" text[] DEFAULT '{}' NOT NULL,
+	"outOfScopeChanges" text[] DEFAULT '{}' NOT NULL,
+	"deferredItems" text[] DEFAULT '{}' NOT NULL,
+	"nextValidMove" text,
+	"notes" text,
+	"contentHash" text,
+	"artifactPath" text,
+	"createdAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "goal" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"command" text NOT NULL,
+	"lane" text NOT NULL,
+	"mode" text NOT NULL,
+	"risk" text NOT NULL,
+	"authority" text DEFAULT 'A0_READ_ONLY' NOT NULL,
+	"verdict" text NOT NULL,
+	"rationale" text,
+	"mistakePatterns" text[] DEFAULT '{}' NOT NULL,
+	"matchedRules" text[] DEFAULT '{}' NOT NULL,
+	"recommendedMove" text,
+	"requiresApproval" boolean DEFAULT false NOT NULL,
+	"linkedWorkOrderId" integer,
+	"status" text DEFAULT 'classified' NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "goal_outcome_intake_receipt" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"idempotencyKey" text NOT NULL,
+	"requestHash" text NOT NULL,
+	"goalId" integer NOT NULL,
+	"outcomeKey" text NOT NULL,
+	"resultDigest" text NOT NULL,
+	"replayCount" integer DEFAULT 0 NOT NULL,
+	"firstSubmittedAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"lastReplayedAt" timestamp with time zone,
+	CONSTRAINT "goal_outcome_intake_receipt_user_key_unique" UNIQUE("userId","idempotencyKey"),
+	CONSTRAINT "goal_outcome_intake_receipt_user_goal_unique" UNIQUE("userId","goalId"),
+	CONSTRAINT "goal_outcome_intake_receipt_user_outcome_unique" UNIQUE("userId","outcomeKey"),
+	CONSTRAINT "goal_outcome_intake_receipt_replay_count_check" CHECK ("goal_outcome_intake_receipt"."replayCount" >= 0)
+);
+--> statement-breakpoint
+CREATE TABLE "governance_event" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"eventType" text NOT NULL,
+	"entityType" text,
+	"entityId" text,
+	"actor" text,
+	"reason" text,
+	"beforeHash" text,
+	"afterHash" text,
+	"evidenceId" integer,
+	"metadata" jsonb,
+	"createdAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "lock_record" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"kind" text DEFAULT 'HOLD' NOT NULL,
+	"title" text NOT NULL,
+	"scope" text,
+	"posture" text,
+	"reason" text,
+	"allowedActions" text[] DEFAULT '{}' NOT NULL,
+	"blockedActions" text[] DEFAULT '{}' NOT NULL,
+	"status" text DEFAULT 'active' NOT NULL,
+	"newPosture" text,
+	"releasedBy" text,
+	"releaseReason" text,
+	"releasedAt" timestamp,
+	"createdAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "loop_run" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"target" text NOT NULL,
+	"workOrderId" integer,
+	"loopType" text NOT NULL,
+	"authority" text DEFAULT 'A0_READ_ONLY' NOT NULL,
+	"iteration" integer DEFAULT 1 NOT NULL,
+	"maxIterations" integer DEFAULT 1 NOT NULL,
+	"mode" text,
+	"actionsTaken" text[] DEFAULT '{}' NOT NULL,
+	"evidenceCollected" text[] DEFAULT '{}' NOT NULL,
+	"findings" text[] DEFAULT '{}' NOT NULL,
+	"blockers" text[] DEFAULT '{}' NOT NULL,
+	"stopReason" text,
+	"nextValidMove" text,
+	"status" text DEFAULT 'completed' NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "memory_fact" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"content" text NOT NULL,
+	"kind" text DEFAULT 'fact' NOT NULL,
+	"source" text,
+	"confidence" text DEFAULT 'medium' NOT NULL,
+	"authority" text DEFAULT 'unreviewed' NOT NULL,
+	"stale" boolean DEFAULT false NOT NULL,
+	"tags" text[] DEFAULT '{}' NOT NULL,
+	"pinned" boolean DEFAULT false NOT NULL,
+	"embedding" vector(1536),
+	"reviewedAt" timestamp,
+	"lastUsedAt" timestamp,
+	"supersededById" integer,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "outcome_queue_acquisition_attempt" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"campaignWindowId" text NOT NULL,
+	"processIdentity" text NOT NULL,
+	"leaseHolder" text NOT NULL,
+	"acquisitionKeyDigest" text NOT NULL,
+	"leaseIdentityDigest" text NOT NULL,
+	"checkpointDigest" text NOT NULL,
+	"checkpointOutcomeId" text NOT NULL,
+	"checkpointSequence" integer NOT NULL,
+	"checkpointState" text NOT NULL,
+	"checkpointHeadSha" text,
+	"checkpointMergeSha" text,
+	"checkpointPrNumber" integer,
+	"outcomeKey" text,
+	"fencingToken" integer,
+	"leaseExpiresAt" timestamp with time zone,
+	"activeWorkOrderId" integer,
+	"disposition" text NOT NULL,
+	"reason" text,
+	"attemptedAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "outcome_queue_acquisition_attempt_fence_check" CHECK ("outcome_queue_acquisition_attempt"."fencingToken" IS NULL OR "outcome_queue_acquisition_attempt"."fencingToken" > 0),
+	CONSTRAINT "outcome_queue_acquisition_attempt_checkpoint_check" CHECK ("outcome_queue_acquisition_attempt"."checkpointSequence" >= 0
+        AND ("outcome_queue_acquisition_attempt"."checkpointPrNumber" IS NULL OR "outcome_queue_acquisition_attempt"."checkpointPrNumber" > 0))
+);
+--> statement-breakpoint
+CREATE TABLE "outcome_queue_acquisition_receipt" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"acquisitionKey" text NOT NULL,
+	"outcomeKey" text NOT NULL,
+	"firstFencingToken" integer NOT NULL,
+	"latestFencingToken" integer NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "outcome_queue_acquisition_receipt_user_key_unique" UNIQUE("userId","acquisitionKey"),
+	CONSTRAINT "outcome_queue_acquisition_receipt_fence_check" CHECK ("outcome_queue_acquisition_receipt"."firstFencingToken" > 0
+        AND "outcome_queue_acquisition_receipt"."latestFencingToken" >= "outcome_queue_acquisition_receipt"."firstFencingToken")
+);
+--> statement-breakpoint
+CREATE TABLE "outcome_queue_item" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"outcomeKey" text NOT NULL,
+	"goalId" integer,
+	"goalRef" text,
+	"title" text NOT NULL,
+	"objective" text,
+	"queueOrder" integer DEFAULT 0 NOT NULL,
+	"dependencyKeys" text[] DEFAULT '{}' NOT NULL,
+	"riskClass" text DEFAULT 'R1' NOT NULL,
+	"approvalState" text DEFAULT 'unapproved' NOT NULL,
+	"approvedBy" text,
+	"approvedAt" timestamp with time zone,
+	"approvalDecisionId" integer,
+	"authorityState" text DEFAULT 'unverified' NOT NULL,
+	"authorityLevel" text DEFAULT 'A0_READ_ONLY' NOT NULL,
+	"authorityGrantRef" text,
+	"authoritySubject" text DEFAULT 'operator' NOT NULL,
+	"authorityAction" text DEFAULT 'outcome:execute' NOT NULL,
+	"lifecycleState" text DEFAULT 'suggested' NOT NULL,
+	"lifecycleReason" text,
+	"activeWorkOrderId" integer,
+	"executionBinding" text,
+	"leaseHolder" text,
+	"leaseToken" text,
+	"leaseExpiresAt" timestamp with time zone,
+	"fencingToken" integer DEFAULT 0 NOT NULL,
+	"version" integer DEFAULT 0 NOT NULL,
+	"acquisitionKey" text,
+	"terminalResult" text,
+	"terminalEvidenceId" integer,
+	"terminalEvidenceRefs" text[] DEFAULT '{}' NOT NULL,
+	"terminalKey" text,
+	"supersedesOutcomeKey" text,
+	"supersededByOutcomeKey" text,
+	"suggestedAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"activatedAt" timestamp with time zone,
+	"terminalAt" timestamp with time zone,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "outcome_queue_item_lifecycle_state_check" CHECK ("outcome_queue_item"."lifecycleState" IN ('suggested', 'approved', 'blocked', 'active', 'completed', 'declined', 'superseded')),
+	CONSTRAINT "outcome_queue_item_approval_state_check" CHECK ("outcome_queue_item"."approvalState" IN ('unapproved', 'approved', 'revoked')),
+	CONSTRAINT "outcome_queue_item_authority_state_check" CHECK ("outcome_queue_item"."authorityState" IN ('unverified', 'matched', 'denied', 'expired', 'revoked')),
+	CONSTRAINT "outcome_queue_item_nonnegative_fence_check" CHECK ("outcome_queue_item"."fencingToken" >= 0 AND "outcome_queue_item"."version" >= 0),
+	CONSTRAINT "outcome_queue_item_active_binding_check" CHECK ("outcome_queue_item"."lifecycleState" <> 'active' OR (
+        "outcome_queue_item"."executionBinding" IS NOT NULL
+        AND "outcome_queue_item"."leaseHolder" IS NOT NULL
+        AND "outcome_queue_item"."leaseToken" IS NOT NULL
+        AND "outcome_queue_item"."leaseExpiresAt" IS NOT NULL
+        AND "outcome_queue_item"."acquisitionKey" IS NOT NULL
+        AND "outcome_queue_item"."fencingToken" > 0
+      ))
+);
+--> statement-breakpoint
+CREATE TABLE "outcome_queue_mutation_attempt" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"idempotencyKey" text NOT NULL,
+	"requestHash" text NOT NULL,
+	"resultDigest" text NOT NULL,
+	"attemptOrdinal" integer NOT NULL,
+	"disposition" text NOT NULL,
+	"attemptedAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "outcome_queue_mutation_attempt_user_ordinal_unique" UNIQUE("userId","idempotencyKey","attemptOrdinal"),
+	CONSTRAINT "outcome_queue_mutation_attempt_ordinal_check" CHECK ("outcome_queue_mutation_attempt"."attemptOrdinal" > 0),
+	CONSTRAINT "outcome_queue_mutation_attempt_disposition_check" CHECK ("outcome_queue_mutation_attempt"."disposition" IN ('COMMITTED', 'REPLAY'))
+);
+--> statement-breakpoint
+CREATE TABLE "outcome_queue_mutation_receipt" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"idempotencyKey" text NOT NULL,
+	"operation" text NOT NULL,
+	"outcomeKey" text,
+	"requestHash" text NOT NULL,
+	"requestBinding" jsonb NOT NULL,
+	"resultBinding" jsonb NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "outcome_queue_mutation_receipt_user_key_unique" UNIQUE("userId","idempotencyKey")
+);
+--> statement-breakpoint
+CREATE TABLE "parked_idea" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"idea" text NOT NULL,
+	"lane" text,
+	"whyItMatters" text,
+	"whyNotNow" text,
+	"maturity" text DEFAULT 'seed' NOT NULL,
+	"unlockCondition" text,
+	"relatedWorkOrderId" integer,
+	"promoteRequires" text,
+	"status" text DEFAULT 'parked' NOT NULL,
+	"promotedWorkOrderId" integer,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "session" (
+	"id" text PRIMARY KEY NOT NULL,
+	"expiresAt" timestamp NOT NULL,
+	"token" text NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL,
+	"ipAddress" text,
+	"userAgent" text,
+	"userId" text NOT NULL,
+	CONSTRAINT "session_token_unique" UNIQUE("token")
+);
+--> statement-breakpoint
+CREATE TABLE "truth_claim" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"claim" text NOT NULL,
+	"system" text,
+	"source" text,
+	"truthType" text DEFAULT 'UNKNOWN' NOT NULL,
+	"confidence" text DEFAULT 'medium' NOT NULL,
+	"freshness" text DEFAULT 'fresh' NOT NULL,
+	"evidenceId" integer,
+	"verificationRequiredBefore" text[] DEFAULT '{}' NOT NULL,
+	"capturedAt" timestamp DEFAULT now() NOT NULL,
+	"expiresAt" timestamp,
+	"status" text DEFAULT 'active' NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "user" (
+	"id" text PRIMARY KEY NOT NULL,
+	"name" text NOT NULL,
+	"email" text NOT NULL,
+	"emailVerified" boolean DEFAULT false NOT NULL,
+	"image" text,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "user_email_unique" UNIQUE("email")
+);
+--> statement-breakpoint
+CREATE TABLE "verification" (
+	"id" text PRIMARY KEY NOT NULL,
+	"identifier" text NOT NULL,
+	"value" text NOT NULL,
+	"expiresAt" timestamp NOT NULL,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "work_order" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"ref" text,
+	"title" text NOT NULL,
+	"description" text,
+	"goal" text,
+	"loop" text,
+	"scope" text,
+	"nonGoals" text[] DEFAULT '{}' NOT NULL,
+	"allowedFiles" text[] DEFAULT '{}' NOT NULL,
+	"forbiddenFiles" text[] DEFAULT '{}' NOT NULL,
+	"validators" text[] DEFAULT '{}' NOT NULL,
+	"stopConditions" text[] DEFAULT '{}' NOT NULL,
+	"lane" text,
+	"phase" text,
+	"status" text DEFAULT 'draft' NOT NULL,
+	"priority" text DEFAULT 'medium' NOT NULL,
+	"assignee" text,
+	"authorityLevel" text DEFAULT 'A0_READ_ONLY' NOT NULL,
+	"authorityGranted" text,
+	"authorityGrantId" integer,
+	"acceptanceCriteria" text[] DEFAULT '{}' NOT NULL,
+	"agent" text,
+	"approvedBy" text,
+	"approvedAt" timestamp,
+	"linkedDecisionId" integer,
+	"evidence" text[] DEFAULT '{}' NOT NULL,
+	"result" text,
+	"commitRef" text,
+	"tagRef" text,
+	"commitAllowed" boolean DEFAULT false NOT NULL,
+	"tagAllowed" boolean DEFAULT false NOT NULL,
+	"pushAllowed" boolean DEFAULT false NOT NULL,
+	"supersedesId" integer,
+	"supersededById" integer,
+	"dueAt" timestamp,
+	"closedAt" timestamp,
+	"completedAt" timestamp,
+	"createdAt" timestamp DEFAULT now() NOT NULL,
+	"updatedAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+ALTER TABLE "access_grant_event" ADD CONSTRAINT "access_grant_event_grantId_access_grant_id_fk" FOREIGN KEY ("grantId") REFERENCES "public"."access_grant"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "access_grant_session" ADD CONSTRAINT "access_grant_session_grantId_access_grant_id_fk" FOREIGN KEY ("grantId") REFERENCES "public"."access_grant"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "account" ADD CONSTRAINT "account_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "goal_outcome_intake_receipt" ADD CONSTRAINT "goal_outcome_intake_receipt_goalId_goal_id_fk" FOREIGN KEY ("goalId") REFERENCES "public"."goal"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_goalId_goal_id_fk" FOREIGN KEY ("goalId") REFERENCES "public"."goal"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_approvalDecisionId_decision_id_fk" FOREIGN KEY ("approvalDecisionId") REFERENCES "public"."decision"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_activeWorkOrderId_work_order_id_fk" FOREIGN KEY ("activeWorkOrderId") REFERENCES "public"."work_order"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "session" ADD CONSTRAINT "session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "access_grant_public_token_hash_idx" ON "access_grant" USING btree ("publicTokenHash");--> statement-breakpoint
+CREATE INDEX "access_grant_user_status_expires_idx" ON "access_grant" USING btree ("userId","status","expiresAt");--> statement-breakpoint
+CREATE INDEX "access_grant_target_idx" ON "access_grant" USING btree ("targetResourceType","targetResourceId");--> statement-breakpoint
+CREATE INDEX "access_grant_recipient_email_hash_idx" ON "access_grant" USING btree ("recipientEmailHash");--> statement-breakpoint
+CREATE INDEX "access_grant_event_grant_created_idx" ON "access_grant_event" USING btree ("grantId","createdAt");--> statement-breakpoint
+CREATE INDEX "access_grant_event_correlation_idx" ON "access_grant_event" USING btree ("correlationId");--> statement-breakpoint
+CREATE INDEX "access_grant_event_type_created_idx" ON "access_grant_event" USING btree ("eventType","createdAt");--> statement-breakpoint
+CREATE UNIQUE INDEX "access_grant_session_token_hash_idx" ON "access_grant_session" USING btree ("sessionTokenHash");--> statement-breakpoint
+CREATE INDEX "access_grant_session_grant_expires_idx" ON "access_grant_session" USING btree ("grantId","expiresAt");--> statement-breakpoint
+CREATE INDEX "outcome_queue_acquisition_attempt_campaign_idx" ON "outcome_queue_acquisition_attempt" USING btree ("userId","campaignWindowId","attemptedAt");--> statement-breakpoint
+CREATE INDEX "outcome_queue_acquisition_attempt_identity_idx" ON "outcome_queue_acquisition_attempt" USING btree ("userId","acquisitionKeyDigest","attemptedAt");--> statement-breakpoint
+CREATE INDEX "outcome_queue_acquisition_receipt_user_outcome_idx" ON "outcome_queue_acquisition_receipt" USING btree ("userId","outcomeKey");--> statement-breakpoint
+CREATE UNIQUE INDEX "outcome_queue_item_user_key_idx" ON "outcome_queue_item" USING btree ("userId","outcomeKey");--> statement-breakpoint
+CREATE UNIQUE INDEX "outcome_queue_item_user_acquisition_idx" ON "outcome_queue_item" USING btree ("userId","acquisitionKey");--> statement-breakpoint
+CREATE UNIQUE INDEX "outcome_queue_item_user_terminal_idx" ON "outcome_queue_item" USING btree ("userId","terminalKey");--> statement-breakpoint
+CREATE UNIQUE INDEX "outcome_queue_item_one_active_per_user_idx" ON "outcome_queue_item" USING btree ("userId") WHERE "outcome_queue_item"."lifecycleState" = 'active';--> statement-breakpoint
+CREATE INDEX "outcome_queue_item_selection_idx" ON "outcome_queue_item" USING btree ("userId","lifecycleState","approvalState","authorityState","queueOrder");--> statement-breakpoint
+CREATE INDEX "outcome_queue_item_lease_idx" ON "outcome_queue_item" USING btree ("userId","lifecycleState","leaseExpiresAt");--> statement-breakpoint
+CREATE INDEX "outcome_queue_item_goal_idx" ON "outcome_queue_item" USING btree ("goalId");--> statement-breakpoint
+CREATE INDEX "outcome_queue_item_approval_decision_idx" ON "outcome_queue_item" USING btree ("approvalDecisionId");--> statement-breakpoint
+CREATE INDEX "outcome_queue_item_work_order_idx" ON "outcome_queue_item" USING btree ("activeWorkOrderId");--> statement-breakpoint
+CREATE INDEX "outcome_queue_mutation_attempt_request_idx" ON "outcome_queue_mutation_attempt" USING btree ("userId","requestHash","attemptedAt");--> statement-breakpoint
+CREATE INDEX "outcome_queue_mutation_receipt_user_outcome_idx" ON "outcome_queue_mutation_receipt" USING btree ("userId","outcomeKey","createdAt");
