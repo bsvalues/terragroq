@@ -72,8 +72,8 @@ function Invoke-BoundedProcess {
     foreach ($argument in $Arguments) { [void]$psi.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::new(); $process.StartInfo = $psi
     if (-not $process.Start()) { throw 'process did not start' }
-    if ($null -ne $StandardInput) { $process.StandardInput.Write($StandardInput); $process.StandardInput.Close() }
     $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
+    if ($null -ne $StandardInput) { $process.StandardInput.Write($StandardInput); $process.StandardInput.Close() }
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
         try { $process.Kill($true) } catch { try { $process.Kill() } catch {} }
         [void]$process.WaitForExit(5000)
