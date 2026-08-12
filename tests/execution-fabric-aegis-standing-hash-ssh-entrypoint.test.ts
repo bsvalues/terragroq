@@ -12,7 +12,7 @@ const ADMISSION = "docs/reports/standing-dispatch/admission-001.json"
 const REQUEST_FIRST = `${NODE} ${BOOTSTRAP} --request ${REQUEST} --admission ${ADMISSION}`
 
 const baseEnv = () => ({
-  SSH_CONNECTION: "192.168.1.154 49152 192.168.1.155 22",
+  SSH_CONNECTION: "192.168.88.9 49152 192.168.88.6 22",
   SSH_ORIGINAL_COMMAND: REQUEST_FIRST,
   ATTACKER_SECRET: "must-not-reach-child",
   NODE_OPTIONS: "--require=/tmp/attacker.cjs",

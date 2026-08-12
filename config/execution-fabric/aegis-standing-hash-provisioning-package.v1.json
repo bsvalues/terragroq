@@ -153,7 +153,7 @@
   },
   "invocationBoundary": {
     "sourceHost": "hermes",
-    "sourceAddress": "192.168.1.154",
+    "sourceAddress": "192.168.88.9",
     "targetHost": "aegis",
     "targetHostEd25519Fingerprint": "SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo",
     "account": "williamos-fabric",
@@ -173,7 +173,7 @@
     "existingKeyReuseAllowed": false,
     "authorizedKeyOptions": [
       "restrict",
-      "from=\"192.168.1.154\"",
+      "from=\"192.168.88.9\"",
       "command=\"/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs\"",
       "no-agent-forwarding",
       "no-port-forwarding",
@@ -357,7 +357,7 @@
     },
     {
       "path": "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs",
-      "sha256": "c18ecec38a5086788d7f4532b471efc6548cd293c27f3983a92934464015fb16",
+      "sha256": "ebcf0d068e11c1a3f98b515f9a59a456955d8d30abdbb8bab7897b9b315caf9a",
       "textNormalization": "LF"
     },
     {
@@ -367,12 +367,12 @@
     },
     {
       "path": "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs",
-      "sha256": "92a0f36e4af132340e6fa3d8bf32ac1e716f52f08779530792c7dc8dc5216d1d",
+      "sha256": "90c79d97e73061d3177693c345513f4b942a82e877033b6ef5cb0af4a09c59cf",
       "textNormalization": "LF"
     },
     {
       "path": "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs",
-      "sha256": "71ca5a166b5ddeb0e7b087530d1dd3448d0b42b5b33fd69ff4f4c545fa5b701f",
+      "sha256": "72d343f3cdae8e84acc31edf7726982f4596a9a0cdd1c37692f2b85db009aeba",
       "textNormalization": "LF"
     }
   ]
