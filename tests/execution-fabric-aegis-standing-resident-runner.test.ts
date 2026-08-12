@@ -706,6 +706,16 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     expect(executeIndex).toBeGreaterThan(reconcileIndex)
   })
 
+  it("trusts only the computed immutable release root for non-root Git proof", () => {
+    const source = fs.readFileSync(path.join(
+      process.cwd(), "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs",
+    ), "utf8")
+    expect(source).toContain('GIT_CONFIG_COUNT: "1"')
+    expect(source).toContain('GIT_CONFIG_KEY_0: "safe.directory"')
+    expect(source).toContain("GIT_CONFIG_VALUE_0: REPOSITORY_ROOT")
+    expect(source).not.toContain('GIT_CONFIG_VALUE_0: "*"')
+  })
+
   it("never deletes a replacement lease created after atomic retirement", async () => {
     const root = tempRoot("aegis-remote-release-replacement-")
     fs.chmodSync(root, 0o700)
