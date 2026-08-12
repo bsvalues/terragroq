@@ -573,9 +573,13 @@ function recoverCommittedPromotion(io, manifest, manifestBytes, authority, mutat
     promotion_id: manifest.promotionId,
     acquired_at: prepared.prepared_at,
   })}\n`, "utf8")
-  for (const lockPath of [LEDGER_MUTATION_LOCK_PATH, NODE_MUTATION_LOCK_PATH]) {
-    if (io.inspect(lockPath) !== null) io.releaseLock(lockPath, lockRecord, account.uid, account.gid, 0o600)
+  const retainedLocks = [LEDGER_MUTATION_LOCK_PATH, NODE_MUTATION_LOCK_PATH]
+    .filter((lockPath) => io.inspect(lockPath) !== null)
+  if (retainedLocks.length === 0) {
+    fail("AEGIS_ADMISSION_PROMOTION_AUTHORITY_REPLAY",
+      "committed authority has no stale owned lock requiring recovery")
   }
+  for (const lockPath of retainedLocks) io.releaseLock(lockPath, lockRecord, account.uid, account.gid, 0o600)
   return {
     schema_version: "1.0-aegis-standing-hash-admission-release-promotion-evidence",
     status: "COMMITTED_RECOVERED",

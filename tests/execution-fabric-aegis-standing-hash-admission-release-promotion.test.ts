@@ -729,6 +729,12 @@ describe("AEGIS standing HASH admission release promotion", () => {
     expect(records.map(({ record_type }) => record_type)).toEqual(["AUTHORITY_CONSUMED", "COMMITTED"])
   })
 
+  it("rejects replay of a committed authority when no stale owned lock remains", () => {
+    const value = fixture()
+    expect(run(value, "apply")).toMatchObject({ status: "COMMITTED" })
+    expectFailureCode(() => run(value, "apply"), "AEGIS_ADMISSION_PROMOTION_AUTHORITY_REPLAY")
+  })
+
   it("reports recovery uncertainty after independently attempting every rollback", () => {
     const value = fixture({ failCommittedJournal: true, failRollback: "marker" })
     let failure: any
