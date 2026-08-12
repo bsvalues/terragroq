@@ -710,18 +710,32 @@ function applyLedger() {
   run("/usr/bin/systemd-tmpfiles", ["--create", "/etc/tmpfiles.d/williamos-aegis-remote-dev.conf"])
   run("/usr/bin/chattr", ["+a", "/var/lib/williamos-fabric/remote-dev-launch-tickets"])
 }
+export function inspectSuccessReceiptMode({ exact, mode }) {
+  if (exact !== true) return "DRIFT"
+  return mode === 0o444 ? "MATCH" : mode === 0o400 ? "RECONCILE_EXACT_MODE_PREDECESSOR" : "DRIFT"
+}
 function publishReceipt(manifest, authority, journalHeadSha256, trust, binding=trust.trustedMain) {
   const launchKey = launchKeyEvidence(authority); if (!launchKey.match) fail("LAUNCH_KEY_DRIFT", "root launch key evidence differs at publication")
   const receipt = { schemaVersion: 1, status: "PREREQUISITES_VERIFIED", workOrderId: "WO-TF-REMOTE-DEV-OFFLOAD-001", transactionId: authority.transactionId, authorityId: authority.authorityId, completedAt: run("/usr/bin/date", ["-u", "+%Y-%m-%dT%H:%M:%S.%3NZ"]), machineIdSha256: manifest.target.machineIdSha256, trustedMainCommit: authority.trustedMainCommit, reviewedPackageCommit: binding.reviewedPackageCommit, observedFreshMainCommit: binding.observedFreshMainCommit, rootHandoffManifestSha256: authority.rootHandoffManifestSha256, historicalPreflightManifestJcsSha256: manifest.prerequisitePackage.supersededPreflight.manifestJcsSha256, appliedAssets: manifest.appliedAssets, authoritySha256: sha(Buffer.from(canonical(authority), "utf8")), inputsSha256: sha(Buffer.from(canonical(authority.inputs), "utf8")), launchAuthorityPublicKeySha256: launchKey.publicSha256, storage: authority.storage, journalHeadSha256, schedulerEnabled: false, standingAuthority: false, dispatchOccurred: false, closedHashMutation: false, executionAuthorized: false, activationAuthorized: false }
   const bytes = Buffer.from(`${canonical(receipt)}\n`, "utf8"); const destination = "/var/lib/williamos-fabric/remote-dev-prerequisite-verified.json"
   if (fs.existsSync(destination)) {
-    const current = readCanonicalRootJson(destination, 0o444)
+    let current; let mode
+    try { current = readCanonicalRootJson(destination, 0o444); mode = 0o444 }
+    catch { current = readCanonicalRootJson(destination, 0o400); mode = 0o400 }
     if (!existingReceiptMatches(current, receipt)) fail("SUCCESS_RECEIPT_CONFLICT", "canonical success receipt belongs to another transaction or journal head")
+    const state = inspectSuccessReceiptMode({ exact: true, mode })
+    if (state === "RECONCILE_EXACT_MODE_PREDECESSOR") {
+      fs.chmodSync(destination, 0o444)
+      const handle = fs.openSync(destination, fs.constants.O_RDONLY); fs.fsyncSync(handle); fs.closeSync(handle)
+      const directory = fs.openSync("/var/lib/williamos-fabric", fs.constants.O_RDONLY); fs.fsyncSync(directory); fs.closeSync(directory)
+      current = readCanonicalRootJson(destination, 0o444)
+      if (!existingReceiptMatches(current, receipt)) fail("SUCCESS_RECEIPT_CONFLICT", "canonical success receipt mode reconciliation differs")
+    }
     return sha(Buffer.from(`${canonical(current)}\n`, "utf8"))
   }
   let handle
   try { handle = fs.openSync(destination, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o444) } catch (error) { fail("SUCCESS_RECEIPT_CONFLICT", `canonical success receipt publication failed: ${error?.code ?? "unknown"}`) }
-  fs.writeFileSync(handle, bytes); fs.fsyncSync(handle); fs.closeSync(handle); const directory = fs.openSync("/var/lib/williamos-fabric", fs.constants.O_RDONLY); fs.fsyncSync(directory); fs.closeSync(directory)
+  fs.writeFileSync(handle, bytes); fs.fchmodSync(handle, 0o444); fs.fsyncSync(handle); fs.closeSync(handle); const directory = fs.openSync("/var/lib/williamos-fabric", fs.constants.O_RDONLY); fs.fsyncSync(directory); fs.closeSync(directory)
   return sha(bytes)
 }
 

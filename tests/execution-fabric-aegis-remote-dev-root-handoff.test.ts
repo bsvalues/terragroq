@@ -15,7 +15,7 @@ import {
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
 import { isTrustedAtomicInstallSourceMode } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
-import { exactControlRepositoryConfig, exactLedgerAncestorContract, exactNftBoundaryJson, exactNftBoundaryLines, inspectBrokerReadinessSamples, inspectDurableLedgerReconciliation, inspectEmptyGitHooks, inspectExactInertNetworkPredecessor, inspectForcedCommandTransportReconciliation, inspectNftTableList, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, inspectUserProcessArgv, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { exactControlRepositoryConfig, exactLedgerAncestorContract, exactNftBoundaryJson, exactNftBoundaryLines, inspectBrokerReadinessSamples, inspectDurableLedgerReconciliation, inspectEmptyGitHooks, inspectExactInertNetworkPredecessor, inspectForcedCommandTransportReconciliation, inspectNftTableList, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectSuccessReceiptMode, inspectTrustedRepositoryReconciliation, inspectUserProcessArgv, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -714,6 +714,11 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(adapter).toContain('"williamos-git-broker"')
     expect(adapter).toContain('"merge-base", "--is-ancestor", manifest.trustedMain.minimumCommit, authority.trustedMainCommit')
     expect(adapter).toContain("existingReceiptMatches")
+    expect(inspectSuccessReceiptMode({ exact: true, mode: 0o444 })).toBe("MATCH")
+    expect(inspectSuccessReceiptMode({ exact: true, mode: 0o400 })).toBe("RECONCILE_EXACT_MODE_PREDECESSOR")
+    expect(inspectSuccessReceiptMode({ exact: false, mode: 0o400 })).toBe("DRIFT")
+    expect(inspectSuccessReceiptMode({ exact: true, mode: 0o600 })).toBe("DRIFT")
+    expect(adapter).toContain("fs.fchmodSync(handle, 0o444)")
     expect(adapter).toContain("proveRootServiceFence")
     expect(adapter).toContain("sharedGroupProcessesExact")
     expect(adapter).toContain("isProofWorkerUnitName(path.basename(String(entry)))")
