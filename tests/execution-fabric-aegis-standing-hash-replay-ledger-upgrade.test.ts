@@ -26,6 +26,7 @@ const REPAIR_ID = "10000000-0000-4000-8000-000000000003"
 const NEW_COMMIT = "a".repeat(40)
 const PACKAGE_COMMIT = "b".repeat(40)
 const EVIDENCE_COMMIT = "c".repeat(40)
+const FINAL_REVIEWED_COMMIT = "b1637a0d16394361dff74e1fb85851ba61f91235"
 const ACCOUNT = { uid: 734, gid: 734, home: "/var/empty/williamos-fabric", shell: "/bin/bash" }
 const sha256 = (bytes: crypto.BinaryLike) => crypto.createHash("sha256").update(bytes).digest("hex")
 const canonicalSha256 = (value: unknown) => sha256(Buffer.from(canonicalizeUpgradeJcs(value), "utf8"))
@@ -329,8 +330,8 @@ describe("AEGIS standing hash replay-ledger one-shot upgrade", () => {
   it("pins the checked-in package to the exact reviewed runtime and installer release", () => {
     const manifest = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"))
     expect(validateAegisStandingHashReplayLedgerUpgradeManifest(manifest)).toMatchObject({
-      newRelease: { commit: "b1637a0d16394361dff74e1fb85851ba61f91235" },
-      packageRelease: { commit: "b1637a0d16394361dff74e1fb85851ba61f91235" },
+      newRelease: { commit: FINAL_REVIEWED_COMMIT },
+      packageRelease: { commit: FINAL_REVIEWED_COMMIT },
     })
   })
 
