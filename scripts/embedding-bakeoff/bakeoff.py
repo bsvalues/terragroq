@@ -106,6 +106,28 @@ def validate_corpus(docs, queries):
             raise ValueError(f"query {query['id']} has an invalid distractor")
 
 
+def validate_corpus_manifest(corpus_dir, docs, queries):
+    manifest_path = os.path.join(corpus_dir, "manifest.json")
+    if not os.path.isfile(manifest_path):
+        raise ValueError("corpus manifest.json is required")
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    expected = {
+        "schema_version": "1.0-r1b-corpus",
+        "corpus_id": "williamos-r1b-adversarial-v1",
+        "status": "FROZEN",
+        "documents": len(docs),
+        "queries": len(queries),
+        "calibration_query_ids": sorted(CALIBRATION_QUERY_IDS),
+        "documents_sha256": sha256_file(os.path.join(corpus_dir, "documents.jsonl")),
+        "queries_sha256": sha256_file(os.path.join(corpus_dir, "queries.jsonl")),
+        "corpus_fingerprint": corpus_fingerprint(docs, queries),
+    }
+    if manifest != expected:
+        raise ValueError("corpus manifest does not match the frozen corpus")
+    return manifest
+
+
 CALIBRATION_QUERY_IDS = frozenset(
     [f"q{number:02d}" for number in range(1, 13)] + ["q37", "q38"]
 )
@@ -133,6 +155,7 @@ def run(corpus_dir, backend, base_url, model, api_key, k, dim,
     docs = load_jsonl(os.path.join(corpus_dir, "documents.jsonl"))
     queries = load_jsonl(os.path.join(corpus_dir, "queries.jsonl"))
     validate_corpus(docs, queries)
+    corpus_manifest = validate_corpus_manifest(corpus_dir, docs, queries)
     doc_ids = [d["id"] for d in docs]
 
     provenance = {}
@@ -244,6 +267,7 @@ def run(corpus_dir, backend, base_url, model, api_key, k, dim,
         "backend": backend, "model": model, "base_url": base_url,
         "embedding_dim": embedding_dimension,
         "corpus_fingerprint": corpus_fingerprint(docs, queries),
+        "corpus_manifest": corpus_manifest,
         "corpus_files": {
             "documents_sha256": sha256_file(os.path.join(corpus_dir, "documents.jsonl")),
             "queries_sha256": sha256_file(os.path.join(corpus_dir, "queries.jsonl")),

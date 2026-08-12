@@ -57,12 +57,10 @@ def validate_sovereign_base_url(base_url):
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("endpoint base_url must not contain credentials, query parameters, or fragments")
     hostname = parsed.hostname.lower()
-    if hostname == "localhost" or "." not in hostname:
-        return
     try:
         address = ipaddress.ip_address(hostname)
     except ValueError as exc:
-        raise ValueError("endpoint hostname must be localhost, a single-label fabric host, or a private IP") from exc
+        raise ValueError("endpoint hostname must be a literal private/loopback IP") from exc
     if not (address.is_private or address.is_loopback):
         raise ValueError("external embedding endpoints are forbidden")
 

@@ -5,12 +5,14 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import tempfile
 import unittest
 from unittest import mock
 
 import metrics as M
-from bakeoff import corpus_fingerprint, main, reject_secret_fields, run
+from bakeoff import (corpus_fingerprint, load_jsonl, main, reject_secret_fields, run,
+                     validate_corpus_manifest)
 from embed import (NoRedirectHandler, _endpoint_batch, cosine, embed_texts,
                    lexical_embed, validate_sovereign_base_url)
 from evidence import build as build_evidence
@@ -66,6 +68,8 @@ class TestPipeline(unittest.TestCase):
             self.assertIn(expected, cats)
         # manifest records the fingerprint + dimension
         self.assertEqual(len(result["manifest"]["corpus_fingerprint"]), 64)
+        self.assertEqual(result["manifest"]["corpus_manifest"]["corpus_id"],
+                         "williamos-r1b-adversarial-v1")
         self.assertEqual(result["manifest"]["embedding_dim"], 2048)
         ci = s["mrr_ci95"]
         self.assertEqual(len(ci), 2)
@@ -79,6 +83,22 @@ class TestPipeline(unittest.TestCase):
         expected = corpus_fingerprint(docs, queries)
         self.assertEqual(expected, corpus_fingerprint(list(reversed(docs)), queries))
         self.assertNotEqual(expected, corpus_fingerprint(docs, [{**queries[0], "gold": ["b"]}]))
+
+    def test_corpus_manifest_fails_closed_on_drift(self):
+        source = os.path.join(HERE, "corpus")
+        with tempfile.TemporaryDirectory() as root:
+            corpus = os.path.join(root, "corpus")
+            shutil.copytree(source, corpus)
+            manifest_path = os.path.join(corpus, "manifest.json")
+            with open(manifest_path, encoding="utf-8") as fh:
+                manifest = json.load(fh)
+            manifest["queries"] += 1
+            with open(manifest_path, "w", encoding="utf-8") as fh:
+                json.dump(manifest, fh)
+            docs = load_jsonl(os.path.join(corpus, "documents.jsonl"))
+            queries = load_jsonl(os.path.join(corpus, "queries.jsonl"))
+            with self.assertRaisesRegex(ValueError, "manifest does not match"):
+                validate_corpus_manifest(corpus, docs, queries)
 
     def test_k_controls_top_k_and_metrics(self):
         corpus = os.path.join(HERE, "corpus")
@@ -132,8 +152,16 @@ class TestEndpointBoundary(unittest.TestCase):
             cosine([1.0, 0.0], [1.0])
 
     def test_external_endpoint_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "localhost, a single-label fabric host, or a private IP"):
+        with self.assertRaisesRegex(ValueError, "literal private/loopback IP"):
             validate_sovereign_base_url("https://api.example.com/v1")
+
+    def test_single_label_endpoint_is_rejected_and_private_literal_is_allowed(self):
+        with self.assertRaisesRegex(ValueError, "literal private/loopback IP"):
+            validate_sovereign_base_url("http://aegis:11434/v1")
+        with self.assertRaisesRegex(ValueError, "literal private/loopback IP"):
+            validate_sovereign_base_url("http://localhost:11434/v1")
+        validate_sovereign_base_url("http://127.0.0.1:11434/v1")
+        validate_sovereign_base_url("http://10.0.0.158:11434/v1")
 
     def test_endpoint_url_rejects_embedded_credentials(self):
         with self.assertRaisesRegex(ValueError, "must not contain credentials"):
@@ -159,19 +187,19 @@ class TestEndpointBoundary(unittest.TestCase):
             with self.subTest(response=response):
                 with mock.patch("urllib.request.build_opener", return_value=FakeOpener([FakeResponse(response)])):
                     with self.assertRaises(ValueError):
-                        _endpoint_batch("http://aegis:11434/v1", "model", ["a", "b"], None, 1)
+                        _endpoint_batch("http://10.0.0.158:11434/v1", "model", ["a", "b"], None, 1)
 
     def test_response_rejects_model_drift(self):
         response = {"model": "other", "data": [{"index": 0, "embedding": [1.0]}]}
         with mock.patch("urllib.request.build_opener", return_value=FakeOpener([FakeResponse(response)])):
             with self.assertRaisesRegex(ValueError, "model does not match"):
-                _endpoint_batch("http://aegis:11434/v1", "model", ["a"], None, 1)
+                _endpoint_batch("http://10.0.0.158:11434/v1", "model", ["a"], None, 1)
 
     def test_response_requires_model_identity(self):
         response = {"data": [{"index": 0, "embedding": [1.0]}]}
         with mock.patch("urllib.request.build_opener", return_value=FakeOpener([FakeResponse(response)])):
             with self.assertRaisesRegex(ValueError, "model does not match"):
-                _endpoint_batch("http://aegis:11434/v1", "model", ["a"], None, 1)
+                _endpoint_batch("http://10.0.0.158:11434/v1", "model", ["a"], None, 1)
 
     def test_redirect_handler_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "redirects are forbidden"):
@@ -184,7 +212,7 @@ class TestEndpointBoundary(unittest.TestCase):
         ]
         with mock.patch("urllib.request.build_opener", return_value=FakeOpener(responses)):
             with self.assertRaisesRegex(ValueError, "dimension changed"):
-                embed_texts(["a", "b"], backend="endpoint", base_url="http://aegis:11434/v1",
+                embed_texts(["a", "b"], backend="endpoint", base_url="http://10.0.0.158:11434/v1",
                             model="model", batch_size=1)
 
 
@@ -206,7 +234,7 @@ class TestEvidencePackage(unittest.TestCase):
             "host": {
                 "schema_version": "1", "node_id": "aegis", "machine_id_sha256": "3" * 64,
                 "inventory_snapshot_sha256": "4" * 64, "topology_id": "cpu-only",
-                "endpoint_hosts": ["aegis"],
+                "endpoint_hosts": ["10.0.0.158"],
             },
         }
         for name in ("model", "runtime", "host"):
@@ -214,7 +242,7 @@ class TestEvidencePackage(unittest.TestCase):
                 json.dump(values[name], fh)
         with mock.patch("bakeoff.embed_texts",
                         side_effect=lambda texts, **_kwargs: [lexical_embed(text, 128) for text in texts]):
-            result = run(corpus, "endpoint", "http://aegis:11434/v1", "test-model", None, 10, 128,
+            result = run(corpus, "endpoint", "http://10.0.0.158:11434/v1", "test-model", None, 10, 128,
                          paths["model"], paths["runtime"], paths["host"])
         with open(paths["result"], "w", encoding="utf-8") as fh:
             json.dump(result, fh)
@@ -232,6 +260,17 @@ class TestEvidencePackage(unittest.TestCase):
                 path = os.path.join(targets["generation_path"], target["path"])
                 with open(path, "rb") as fh:
                     self.assertEqual(hashlib.sha256(fh.read()).hexdigest(), target["sha256"])
+            package_path = os.path.join(targets["generation_path"], "evidence-package.json")
+            with open(package_path, encoding="utf-8") as fh:
+                package = json.load(fh)
+            self.assertEqual(package["evidence_class"],
+                             "INTEGRITY_ONLY_NOT_EXECUTION_ATTESTATION")
+            self.assertFalse(package["attestation"]["execution_attested"])
+            self.assertEqual(package["attestation"]["external_provider_status"],
+                             "NOT_INDEPENDENTLY_ATTESTED")
+            self.assertNotIn("external_provider_used", package["safety"])
+            self.assertEqual(targets["verification_scope"], "BYTE_INTEGRITY_ONLY")
+            self.assertEqual(targets["execution_provenance_status"], "NOT_ATTESTED")
 
     def test_fabricated_result_is_rejected_without_partial_generation(self):
         with tempfile.TemporaryDirectory() as root:
@@ -284,7 +323,7 @@ class TestEvidencePackage(unittest.TestCase):
             result["manifest"]["provenance"]["host_manifest_sha256"] = host_sha
             with open(paths["result"], "w", encoding="utf-8") as fh:
                 json.dump(result, fh)
-            with self.assertRaisesRegex(ValueError, "localhost, a single-label fabric host, or a private IP"):
+            with self.assertRaisesRegex(ValueError, "literal private/loopback IP"):
                 build_evidence(corpus, paths["model"], paths["runtime"],
                                paths["host"], paths["result"], os.path.join(root, "evidence"))
 

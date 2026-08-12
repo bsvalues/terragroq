@@ -11,7 +11,8 @@ import urllib.parse
 
 import metrics as M
 from bakeoff import (CALIBRATION_QUERY_IDS, canonical_json_bytes, corpus_fingerprint,
-                     load_jsonl, reject_secret_fields, validate_corpus)
+                     load_jsonl, reject_secret_fields, validate_corpus,
+                     validate_corpus_manifest)
 from embed import validate_sovereign_base_url
 
 
@@ -42,7 +43,7 @@ def close_enough(left, right):
     return math.isclose(left, right, rel_tol=1e-12, abs_tol=1e-12)
 
 
-def validate_result(result, docs, queries, model, runtime, host,
+def validate_result(result, docs, queries, corpus_manifest, model, runtime, host,
                     model_sha, runtime_sha, host_sha):
     if not isinstance(result, dict):
         raise ValueError("result bundle must be a JSON object")
@@ -63,6 +64,8 @@ def validate_result(result, docs, queries, model, runtime, host,
         raise ValueError("result endpoint host is not bound by the host manifest")
     if manifest.get("corpus_fingerprint") != corpus_fingerprint(docs, queries):
         raise ValueError("result bundle corpus fingerprint does not match the frozen corpus")
+    if manifest.get("corpus_manifest") != corpus_manifest:
+        raise ValueError("result bundle corpus manifest does not match the frozen corpus")
     expected_vector_contract = {
         "input_preprocessing": "utf8-text-as-recorded-no-prefix-v1",
         "normalization": "l2",
@@ -221,6 +224,7 @@ def build(corpus_dir, model_manifest_path, runtime_manifest_path, host_manifest_
     docs = load_jsonl(docs_path)
     queries = load_jsonl(queries_path)
     validate_corpus(docs, queries)
+    corpus_manifest = validate_corpus_manifest(corpus_dir, docs, queries)
     model = load_json(model_manifest_path)
     runtime = load_json(runtime_manifest_path)
     host = load_json(host_manifest_path)
@@ -231,11 +235,13 @@ def build(corpus_dir, model_manifest_path, runtime_manifest_path, host_manifest_
     model_sha = sha256_file(model_manifest_path)
     runtime_sha = sha256_file(runtime_manifest_path)
     host_sha = sha256_file(host_manifest_path)
-    validate_result(result, docs, queries, model, runtime, host, model_sha, runtime_sha, host_sha)
+    validate_result(result, docs, queries, corpus_manifest, model, runtime, host,
+                    model_sha, runtime_sha, host_sha)
 
     corpus_bundle = {
         "schema_version": "1.0-r1b-corpus-bundle",
         "corpus_fingerprint": corpus_fingerprint(docs, queries),
+        "corpus_manifest": corpus_manifest,
         "documents": docs,
         "queries": queries,
         "source_file_sha256": {
@@ -256,16 +262,24 @@ def build(corpus_dir, model_manifest_path, runtime_manifest_path, host_manifest_
         "result-bundle.json": canonical_payload(result),
     }
     evidence_package = {
-        "schema_version": "1.0-r1b-evidence-package",
+        "schema_version": "1.1-r1b-integrity-package",
+        "evidence_class": "INTEGRITY_ONLY_NOT_EXECUTION_ATTESTATION",
         "work_order_id": "WO-WILLIAMOS-SOVEREIGN-EMBEDDING-V1",
         "artifacts": {name: sha256_bytes(payload) for name, payload in payloads.items()},
         "host": host,
         "host_manifest_sha256": host_sha,
+        "attestation": {
+            "execution_attested": False,
+            "host_identity_attested": False,
+            "model_weights_attested": False,
+            "runtime_attested": False,
+            "declared_manifests_only": True,
+            "external_provider_status": "NOT_INDEPENDENTLY_ATTESTED",
+        },
         "safety": {
             "canonical_vectors_written": False,
             "database_mutated": False,
             "vector_contract_frozen": False,
-            "external_provider_used": False,
         },
     }
     payloads["evidence-package.json"] = canonical_payload(evidence_package)
@@ -279,6 +293,8 @@ def build(corpus_dir, model_manifest_path, runtime_manifest_path, host_manifest_
             {"artifact": "evidence_package", "path": "evidence-package.json", "sha256": sha256_bytes(payloads["evidence-package.json"])},
         ],
         "standing_capability": "HASH_VERIFY",
+        "verification_scope": "BYTE_INTEGRITY_ONLY",
+        "execution_provenance_status": "NOT_ATTESTED",
         "dispatch_requested": False,
     }
     payloads["standing-hash-targets.json"] = canonical_payload(targets)

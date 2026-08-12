@@ -21,7 +21,8 @@ BASE_URL=http://127.0.0.1:11434/v1 MODEL=<exact-model-id> python3 bakeoff.py \
 ```
 
 The app/harness knows only the OpenAI wire format — no provider is hard-coded. Point `BASE_URL` at
-an admitted private/loopback Fabric endpoint. External endpoint hostnames fail closed. Node placement
+an admitted literal private/loopback IP. DNS hostnames, including `localhost` and single-label
+Fabric names, fail closed to remove search-domain and rebinding ambiguity. Node placement
 must come from the current execution-fabric inventory; do not infer GPU hardware from stale docs.
 
 ## Self-test (offline, no model)
@@ -45,6 +46,8 @@ near-duplicate distractor?), and per-category Recall@5 by query type.
   Spanish twins. **No protected / county / PACS data.**
 - `queries.jsonl` — `{id, type, query, gold:[doc_ids], distractor?}`. 80 queries across
   factual, code, config, near-dup, long-doc, multilingual, and false-positive (no-gold trap) types.
+- `manifest.json` — the frozen corpus identity, counts, calibration split, source hashes, and full
+  evaluation fingerprint. A mismatch fails before inference.
 
 The fingerprint is order-independent and binds every evaluation-relevant field, including labels,
 types, distractors, and the fixed calibration split. Keep the corpus frozen within one bake-off.
@@ -53,8 +56,10 @@ types, distractors, and the fixed calibration split. Keep the corpus frozen with
 
 For each `model × host × runtime`, retain exact model, runtime, and host manifests plus measured
 throughput/timing. Resource telemetry and warm/cold measurements belong in the admitted node lane;
-the harness does not invent them. OMEN is an upper-bound measurement lane, HERMES is the existing
-local-AI node, AEGIS is CPU/verification, and ATLAS remains authoritative state. No GPU is assumed.
+the harness does not invent them. HERMES is the existing local-AI node, AEGIS remains
+`HASH_VERIFY`-only, and ATLAS remains authoritative state. The owner-authorized OMEN 8B upper-bound
+comparison requires its own bounded execution packet and is not executable through this harness
+change. No GPU is assumed.
 
 ## Outputs
 
@@ -77,7 +82,11 @@ python3 evidence.py --corpus corpus \
 ```
 
 Each run is written as one immutable `generations/<evidence-package-sha256>/` directory only after
-the complete result and provenance chain validates. `standing-hash-targets.json` exposes four exact
+the result structure and caller-declared manifest chain validate. The package is explicitly
+`INTEGRITY_ONLY_NOT_EXECUTION_ATTESTATION`: it does not attest host identity, model weights, runtime,
+execution, or absence of an external provider. Those claims require a separately trusted collector
+and admitted workload. `standing-hash-targets.json` exposes four exact
 artifacts for the already-proven AEGIS
 `HASH_VERIFY` capability: benchmark corpus, model/runtime manifest, result bundle, and evidence
-package. Building this file does not dispatch work or expand AEGIS authority.
+package. Standing `HASH_VERIFY` proves those bytes only. Building this file does not dispatch work,
+attest execution provenance, or expand AEGIS authority.
