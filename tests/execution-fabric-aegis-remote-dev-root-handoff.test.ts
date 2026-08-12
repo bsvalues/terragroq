@@ -14,7 +14,7 @@ import {
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
-import { exactLedgerAncestorContract, exactNftBoundaryJson, exactNftBoundaryLines, inspectDurableLedgerReconciliation, inspectForcedCommandTransportReconciliation, inspectNftTableList, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { exactLedgerAncestorContract, exactNftBoundaryJson, exactNftBoundaryLines, inspectBrokerReadinessSamples, inspectDurableLedgerReconciliation, inspectForcedCommandTransportReconciliation, inspectNftTableList, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -90,6 +90,12 @@ function signedAuthority(manifest = loadManifest(), overrides: Record<string, un
 }
 
 describe("AEGIS root-owned prerequisite handoff", () => {
+  it("bounds broker readiness and fails closed on timeout", () => {
+    expect(inspectBrokerReadinessSamples([false, false, true])).toBe("BROKER_READY")
+    expect(inspectBrokerReadinessSamples(Array(50).fill(false))).toBe("BROKER_READINESS_TIMEOUT")
+    expect(inspectBrokerReadinessSamples([])).toBe("BROKER_READINESS_UNPROVEN")
+    expect(inspectBrokerReadinessSamples(Array(51).fill(false))).toBe("BROKER_READINESS_UNPROVEN")
+  })
   it("detects the governed nft table in multiline output", () => {
     expect(inspectNftTableList("table inet foreign\ntable inet williamos_aegis_remote_dev\n")).toBe(true)
     expect(inspectNftTableList("table inet foreign\ntable inet other\n")).toBe(false)
