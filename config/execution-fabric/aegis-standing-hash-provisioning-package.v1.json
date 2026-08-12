@@ -327,12 +327,11 @@
       { "type": "CREATE_DIRECTORY", "path": "/etc/williamos/fabric" },
       { "type": "CREATE_DIRECTORY", "path": "/var/lib/williamos/fabric/standing-hash-requests" },
       { "type": "CREATE_DIRECTORY", "path": "/var/lib/williamos/fabric/standing-hash-ledger" },
-      { "type": "CREATE_DIRECTORY", "path": "/var/lib/williamos/fabric/ledger" },
       { "type": "CREATE_DIRECTORY", "path": "/home/williamos-fabric/.ssh" },
       {
         "type": "INSTALL_REVIEWED_CHECKOUT",
         "path": "/opt/williamos/releases/13709f5789c25dea408283730a6bd35e8fd894ab",
-        "source_path": "/opt/williamos/source/terragroq",
+        "source_path": "/root/williamos-issue-595-inputs-b58e7c045-v5/reviewed",
         "commit": "13709f5789c25dea408283730a6bd35e8fd894ab"
       },
       { "type": "INSTALL_FILE", "id": "bootstrap", "path": "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs" },
@@ -500,7 +499,7 @@
     },
     {
       "path": "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs",
-      "sha256": "38c269df7f0b5fcb0c2e5103890b37ccfd96cb05495bbeabf607feab21cceccd",
+      "sha256": "9fb82c26899c7a1f6faa03f2914acbfd53ebde374bab9f1daeac451fb0cca622",
       "textNormalization": "LF"
     }
   ]
