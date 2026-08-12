@@ -154,8 +154,9 @@ function fixture(options: Options = {}) {
     kernelLockHeld: () => options.kernelLockHeld !== false,
     remoteDevInactive: () => !options.activeRemoteDev && !(options.inactiveAfterMutation && entries.has(STANDING_ROOT_KEY_PATH)),
     workerUnitsInactive: () => !options.activeWorker,
-    validateStagedSshd: () => {
+    validateStagedSshd: (asset: string) => {
       events.push("VALIDATE_STAGED_SSHD")
+      if (!path.isAbsolute(asset)) throw Object.assign(new Error("relative staged config"), { code: "RELATIVE_STAGED_CONFIG" })
       if (options.failStage) throw Object.assign(new Error("staged invalid"), { code: "STAGED_INVALID" })
     },
     validateLiveSshd: () => {
@@ -243,7 +244,7 @@ function fixture(options: Options = {}) {
 
 function run(value: ReturnType<typeof fixture>, mode: "dry-run" | "apply" = "dry-run") {
   return repairAegisSshCoexistence({ manifest, manifestBytes, authority: value.authority, mode,
-    io: value.io as any, assetBytes, assetSourcePath: path.join(root, REVIEWED_CONFIG_ASSET),
+    io: value.io as any, assetBytes, assetSourcePath: `/bundle/${REVIEWED_CONFIG_ASSET}`,
     installerBytes, launcherBytes, standingKeyBinding: fixtureStandingBinding,
     entrypointSha256: manifest.standingEntrypoint.sha256, clock: value.nextTime,
     challengeNonce: () => "ab".repeat(32),
@@ -335,7 +336,8 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     const value = fixture(options as Options)
     const machine = (options as Options).machine ?? manifest.identity.machineIdSha256
     expectCode(() => repairAegisSshCoexistence({ manifest, manifestBytes, authority: value.authority, mode: "apply",
-      io: value.io as any, assetBytes, installerBytes, launcherBytes, standingKeyBinding: fixtureStandingBinding,
+      io: value.io as any, assetBytes, assetSourcePath: `/bundle/${REVIEWED_CONFIG_ASSET}`,
+      installerBytes, launcherBytes, standingKeyBinding: fixtureStandingBinding,
       entrypointSha256: manifest.standingEntrypoint.sha256,
       clock: () => NOW, machineIdentitySha256: machine }), code)
     expect(value.events).not.toContain("JOURNAL_AUTHORITY_CONSUMED")
@@ -479,6 +481,8 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     expect(launcherBytes.toString("utf8")).toContain(`INSTALLER_SHA256=${liveManifest.installer.sha256}`)
     expect(launcherBytes.toString("utf8")).toContain("/usr/bin/flock -n 9")
     expect(launcherBytes.toString("utf8")).toContain("WILLIAMOS_SSH_REPAIR_LAUNCHER_PATH")
+    expect(launcherBytes.toString("utf8")).toContain('[ ! -L "$LAUNCHER" ]')
+    expect(launcherBytes.toString("utf8")).toContain('[ ! -L "$SOURCE" ]')
   })
 
   it("rechecks inactivity after mutation while all reservations remain held", () => {

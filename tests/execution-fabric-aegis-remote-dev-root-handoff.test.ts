@@ -150,6 +150,8 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(adapter).toContain('const STANDING_ENTRYPOINT_SHA256 = "ebcf0d068e11c1a3f98b515f9a59a456955d8d30abdbb8bab7897b9b315caf9a"')
     expect(adapter).toContain("exactFile(STANDING_ROOT_KEY_PATH, STANDING_ROOT_KEY_SHA256, 0, 0, 0o444)")
     expect(adapter).toContain("exactFile(STANDING_ENTRYPOINT_PATH, STANDING_ENTRYPOINT_SHA256, 0, 0, 0o555)")
+    expect(adapter).toContain("const standingTransportExact = exactFile(STANDING_ROOT_KEY_PATH")
+    expect(adapter).toContain("INSTALL_FORCED_COMMAND_TRANSPORT: standingTransportExact && transportLines.expected")
     for (const effectiveRestriction of [
       "allowagentforwarding no", "allowtcpforwarding no", "x11forwarding no", "permittty no",
       "permittunnel no", "gatewayports no", "permituserenvironment no", "permituserrc no",
