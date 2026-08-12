@@ -662,9 +662,9 @@ function applyLedger() {
   run("/usr/bin/systemd-tmpfiles", ["--create", "/etc/tmpfiles.d/williamos-aegis-remote-dev.conf"])
   run("/usr/bin/chattr", ["+a", "/var/lib/williamos-fabric/remote-dev-launch-tickets"])
 }
-function publishReceipt(manifest, authority, journalHeadSha256) {
+function publishReceipt(manifest, authority, journalHeadSha256, trust, binding=trust.trustedMain) {
   const launchKey = launchKeyEvidence(authority); if (!launchKey.match) fail("LAUNCH_KEY_DRIFT", "root launch key evidence differs at publication")
-  const receipt = { schemaVersion: 1, status: "PREREQUISITES_VERIFIED", workOrderId: "WO-TF-REMOTE-DEV-OFFLOAD-001", transactionId: authority.transactionId, authorityId: authority.authorityId, completedAt: run("/usr/bin/date", ["-u", "+%Y-%m-%dT%H:%M:%S.%3NZ"]), machineIdSha256: manifest.target.machineIdSha256, trustedMainCommit: authority.trustedMainCommit, rootHandoffManifestSha256: authority.rootHandoffManifestSha256, historicalPreflightManifestJcsSha256: manifest.prerequisitePackage.supersededPreflight.manifestJcsSha256, appliedAssets: manifest.appliedAssets, authoritySha256: sha(Buffer.from(canonical(authority), "utf8")), inputsSha256: sha(Buffer.from(canonical(authority.inputs), "utf8")), launchAuthorityPublicKeySha256: launchKey.publicSha256, storage: authority.storage, journalHeadSha256, schedulerEnabled: false, standingAuthority: false, dispatchOccurred: false, closedHashMutation: false, executionAuthorized: false, activationAuthorized: false }
+  const receipt = { schemaVersion: 1, status: "PREREQUISITES_VERIFIED", workOrderId: "WO-TF-REMOTE-DEV-OFFLOAD-001", transactionId: authority.transactionId, authorityId: authority.authorityId, completedAt: run("/usr/bin/date", ["-u", "+%Y-%m-%dT%H:%M:%S.%3NZ"]), machineIdSha256: manifest.target.machineIdSha256, trustedMainCommit: authority.trustedMainCommit, reviewedPackageCommit: binding.reviewedPackageCommit, observedFreshMainCommit: binding.observedFreshMainCommit, rootHandoffManifestSha256: authority.rootHandoffManifestSha256, historicalPreflightManifestJcsSha256: manifest.prerequisitePackage.supersededPreflight.manifestJcsSha256, appliedAssets: manifest.appliedAssets, authoritySha256: sha(Buffer.from(canonical(authority), "utf8")), inputsSha256: sha(Buffer.from(canonical(authority.inputs), "utf8")), launchAuthorityPublicKeySha256: launchKey.publicSha256, storage: authority.storage, journalHeadSha256, schedulerEnabled: false, standingAuthority: false, dispatchOccurred: false, closedHashMutation: false, executionAuthorized: false, activationAuthorized: false }
   const bytes = Buffer.from(`${canonical(receipt)}\n`, "utf8"); const destination = "/var/lib/williamos-fabric/remote-dev-prerequisite-verified.json"
   if (fs.existsSync(destination)) {
     const current = readCanonicalRootJson(destination, 0o444)
@@ -710,7 +710,7 @@ export function createRootProductionAdapter(manifest, authority, trust) {
       if (!claimWindow.resumeAllowed) return { expired: true }
       const existingClaim = () => {
         const existing = readCanonicalRootJson(destination)
-        return existing.authorityId === authorityId && existing.transactionId === transactionId && existing.authoritySha256 === sha(Buffer.from(canonical(authority), "utf8")) ? { resume: true } : false
+        return existing.authorityId === authorityId && existing.transactionId === transactionId && existing.authoritySha256 === sha(Buffer.from(canonical(authority), "utf8")) && existing.reviewedPackageCommit===trust.trustedMain.reviewedPackageCommit && /^[0-9a-f]{40}$/.test(existing.observedFreshMainCommit) ? { resume: true, observedFreshMainCommit:existing.observedFreshMainCommit } : false
       }
       try { return existingClaim() } catch (error) { if (error?.code !== "ENOENT") throw error }
       if (!claimWindow.createAllowed) return { expired: true }
@@ -719,7 +719,7 @@ export function createRootProductionAdapter(manifest, authority, trust) {
         if (error?.code !== "EEXIST") throw error
         return existingClaim()
       }
-      fs.writeFileSync(handle, `${canonical({ authorityId, transactionId, authoritySha256: sha(Buffer.from(canonical(authority), "utf8")) })}\n`); fs.fsyncSync(handle); fs.closeSync(handle); const directory = fs.openSync(CLAIM_ROOT, fs.constants.O_RDONLY); fs.fsyncSync(directory); fs.closeSync(directory); return true
+      fs.writeFileSync(handle, `${canonical({ authorityId, transactionId, authoritySha256: sha(Buffer.from(canonical(authority), "utf8")), reviewedPackageCommit:trust.trustedMain.reviewedPackageCommit, observedFreshMainCommit:trust.trustedMain.observedFreshMainCommit })}\n`); fs.fsyncSync(handle); fs.closeSync(handle); const directory = fs.openSync(CLAIM_ROOT, fs.constants.O_RDONLY); fs.fsyncSync(directory); fs.closeSync(directory); return true
     },
     recover: async () => {
       const recovered = recoverJournal(authority)
@@ -743,6 +743,7 @@ export function createRootProductionAdapter(manifest, authority, trust) {
       else fail("STEP_NOT_ALLOWLISTED", "root handoff step differs")
     },
     verify: async () => observe(manifest, authority, trust),
-    publishSuccess: async (_payload, journalHeadSha256) => { publishReceipt(manifest, authority, journalHeadSha256) },
+    trust: Object.freeze({reviewedPackageCommit:trust.trustedMain.reviewedPackageCommit,observedFreshMainCommit:trust.trustedMain.observedFreshMainCommit}),
+    publishSuccess: async (_payload, journalHeadSha256, binding) => { publishReceipt(manifest, authority, journalHeadSha256, trust, binding) },
   })
 }

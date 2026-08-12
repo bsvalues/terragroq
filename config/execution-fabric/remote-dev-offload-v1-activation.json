@@ -96,15 +96,15 @@
     },
     "rootPrerequisiteManifest": {
       "path": "config/execution-fabric/aegis-remote-dev-root-handoff.json",
-      "sha256": "80d80d223a7832b6e521fff018c14199b4d5687743d7ee0dc0fab7db2c9b0004"
+      "sha256": "cc78b46e98a0ed7a051c671a4a2c7d8ae5d1582633d5b733fe62e15c3459ce57"
     },
     "rootPrerequisiteVerifier": {
       "path": "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs",
-      "sha256": "863fbfa612bc83cd1cea03ea6977714552066a37877a85cf3709223324be7b2b"
+      "sha256": "339c4e224210cc7001cf8b45fff3cf30c3a0848b43bfb4d179b4fa9daa50a4a2"
     },
     "rootPrerequisiteAdapter": {
       "path": "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs",
-      "sha256": "bf62c737cdd546b8f5d76919695de15588be552c187dd87fcdcfcf456f223523"
+      "sha256": "1e58b4c506c4cb3db9a81f0572bea4009aaf4e184243a3dd16d578d62ee07d7d"
     }
   },
   "executionIdentity": {

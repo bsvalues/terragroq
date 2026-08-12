@@ -90,6 +90,17 @@ function signedAuthority(manifest = loadManifest(), overrides: Record<string, un
 }
 
 describe("AEGIS root-owned prerequisite handoff", () => {
+  it("binds a stable reviewed package while proving fresh-main ancestry and critical-byte equality", () => {
+    const verifier = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"), "utf8")
+    const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
+    for (const expected of ["reviewedPackageCommit", "observedFreshMainCommit", "merge-base", "critical bytes differ", "--no-replace-objects"]) expect(verifier).toContain(expected)
+    for (const expected of ["reviewedPackageCommit", "observedFreshMainCommit"]) expect(adapter).toContain(expected)
+  })
+  it("resumes from the durable observed main after harmless current-main advancement", () => {
+    const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
+    expect(adapter).toContain("observedFreshMainCommit:existing.observedFreshMainCommit")
+    expect(adapter).not.toContain("existing.observedFreshMainCommit===trust.trustedMain.observedFreshMainCommit")
+  })
   it("requires stable repeated staged-input evidence with exact diagnostics", () => {
     const source = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
     expect(source).toContain("const first=inspect(),second=inspect()")

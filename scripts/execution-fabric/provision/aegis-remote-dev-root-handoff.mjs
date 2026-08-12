@@ -45,7 +45,7 @@ const EXPECTED_ASSET_DIGESTS = Object.freeze({
   "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507",
   "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "7e9286b38d76e88eef13aa37628e69151aca2527b6bdfd50d9b835de0a5cb022",
   "config/execution-fabric/aegis-resident-network-boundary.json": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6",
-  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "a4aaf35d98865ce0ceaa8e7afbe02259bc3f82682fed4d283ad1d940776aee64",
+  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "1e58b4c506c4cb3db9a81f0572bea4009aaf4e184243a3dd16d578d62ee07d7d",
   "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh": "4f76725ae7188ae676b5afde4d1622a8c6cdaea0b1bc8d1288dab04700b17ccd",
   "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf": "bb6967f25ae614d152c2bbaf4073eae4575f98819f9b4a855b5de20a60e4e789",
   "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf": "0f97b3005ab5a90733c7bcde47a4d1232ea1121d375229c0e31630c3b177da99",
@@ -240,6 +240,7 @@ export async function executeRootHandoffTransaction(manifest, envelope, publicKe
   const authority = validateOwnerAuthority(manifest, envelope, publicKey, now, false)
   if (authority.status !== "OWNER_AUTHORITY_VERIFIED" && authority.status !== "OWNER_AUTHORITY_RESUME_ONLY_VERIFIED") return authority
   const initialWindow = authority.status === "OWNER_AUTHORITY_VERIFIED"
+  let trustBinding=adapter.trust??{reviewedPackageCommit:envelope.payload.trustedMainCommit,observedFreshMainCommit:envelope.payload.trustedMainCommit}
   let lease = false; let previous = "0".repeat(64); let sequence = 0; let recovery = { records: [], committed: false }; let committed = false
   const append = async (phase, detail) => { const record = journalRecord(previous, ++sequence, phase, detail); await adapter.append(record); previous = record.recordSha256 }
   try {
@@ -250,22 +251,25 @@ export async function executeRootHandoffTransaction(manifest, envelope, publicKe
     if (plan.status !== "READY_FOR_SIGNED_AUTHORITY" && plan.status !== "ALREADY_VERIFIED") return plan
     const claim = await adapter.claim(envelope.payload.authorityId, envelope.payload.transactionId, initialWindow)
     const resume = typeof claim === "object" && claim?.resume === true
+    if(resume && SHA40.test(claim.observedFreshMainCommit)) trustBinding={reviewedPackageCommit:trustBinding.reviewedPackageCommit,observedFreshMainCommit:claim.observedFreshMainCommit}
     if (typeof claim === "object" && claim?.expired === true) return blocked("OWNER_AUTHORITY_EXPIRED", "trusted claim-boundary time is outside the signed create or resume window")
     if (!initialWindow && !resume) return blocked("OWNER_AUTHORITY_EXPIRED", "initial authority window elapsed and no exact durable claim exists")
     if (claim !== true && !resume) return blocked("OWNER_AUTHORITY_CONSUMED", "owner authority already has a durable claim")
     if (resume) {
       recovery = await adapter.recover(envelope.payload.authorityId, envelope.payload.transactionId)
       if (!recovery || !Array.isArray(recovery.records)) throw new Error("durable recovery evidence is unavailable")
+      const consumedRecord=recovery.records.find(record=>record.phase==="AUTHORITY_CONSUMED")
+      if(SHA40.test(claim.observedFreshMainCommit) && consumedRecord && (consumedRecord.detail?.reviewedPackageCommit!==trustBinding.reviewedPackageCommit||consumedRecord.detail?.observedFreshMainCommit!==trustBinding.observedFreshMainCommit)) throw new Error("durable trust generation differs")
       sequence = recovery.records.at(-1)?.sequence ?? 0; previous = recovery.records.at(-1)?.recordSha256 ?? "0".repeat(64)
       if (recovery.committed === true) {
         committed = true
         const current = buildRootHandoffPlan(manifest, await adapter.verify())
         if (current.status !== "ALREADY_VERIFIED") throw new Error("committed prerequisite state no longer verifies")
-        await adapter.publishSuccess(envelope.payload, previous)
+        await adapter.publishSuccess(envelope.payload, previous, trustBinding)
         return { status: "PREREQUISITES_APPLIED_VERIFIED", reasonCode: "ROOT_HANDOFF_COMMITTED", transactionId: envelope.payload.transactionId, finalEvidenceSha256: previous, executionAuthorized: false, applyAuthorized: false, rollbackAuthorized: false }
       }
-      if (recovery.records.length === 0) await append("AUTHORITY_CONSUMED", { authorityId: envelope.payload.authorityId, transactionId: envelope.payload.transactionId })
-    } else await append("AUTHORITY_CONSUMED", { authorityId: envelope.payload.authorityId, transactionId: envelope.payload.transactionId })
+      if (recovery.records.length === 0) await append("AUTHORITY_CONSUMED", { authorityId: envelope.payload.authorityId, transactionId: envelope.payload.transactionId, ...trustBinding })
+    } else await append("AUTHORITY_CONSUMED", { authorityId: envelope.payload.authorityId, transactionId: envelope.payload.transactionId, ...trustBinding })
     let applied = new Set(recovery.records.filter((record) => record.phase === "STEP_APPLIED").map((record) => record.detail?.stepId))
     const intended = new Set(recovery.records.filter((record) => record.phase === "STEP_INTENT").map((record) => record.detail?.stepId))
     const pendingIntent = [...recovery.records].reverse().find((record) => record.phase === "STEP_INTENT" && !applied.has(record.detail?.stepId))?.detail?.stepId
@@ -286,7 +290,7 @@ export async function executeRootHandoffTransaction(manifest, envelope, publicKe
     }
     await append("COMMITTED", { transactionId: envelope.payload.transactionId })
     committed = true
-    await adapter.publishSuccess(envelope.payload, previous)
+    await adapter.publishSuccess(envelope.payload, previous, trustBinding)
     return { status: "PREREQUISITES_APPLIED_VERIFIED", reasonCode: "ROOT_HANDOFF_COMMITTED", transactionId: envelope.payload.transactionId, finalEvidenceSha256: previous, executionAuthorized: false, applyAuthorized: false, rollbackAuthorized: false }
   } catch (error) {
     if (!committed) try { await append("FAILED_PARTIAL", { detail: String(error?.message ?? error).slice(0, 256) }) } catch {}
@@ -311,13 +315,20 @@ function productionTrust(manifest, authority) {
   const cliAsset = manifest.appliedAssets.find((asset) => asset.destination === INSTALLED_CLI_PATH)
   if (!cliAsset || sha256(rootFile(INSTALLED_CLI_PATH, 0o555)) !== cliAsset.sha256) throw new Error("installed root CLI differs")
   const remote = fixedRun("/usr/bin/git", ["-c", "protocol.file.allow=never", "ls-remote", "--exit-code", manifest.trustedMain.remote, manifest.trustedMain.ref]).split(/\s+/)[0]
-  if (remote !== authority.trustedMainCommit) throw new Error("fresh origin/main authority equality differs")
+  if (!SHA40.test(remote)) throw new Error("fresh origin/main identity differs")
   const ancestry = fs.mkdtempSync("/tmp/williamos-root-trust-")
   try {
     fixedRun("/usr/bin/git", ["--no-replace-objects", "init", "--bare", ancestry])
     fixedRun("/usr/bin/git", ["--no-replace-objects", "-C", ancestry, "fetch", "--no-tags", "--force", manifest.trustedMain.remote, `${manifest.trustedMain.ref}:refs/williamos/authority-main`])
-    if (fixedRun("/usr/bin/git", ["--no-replace-objects", "-C", ancestry, "rev-parse", "refs/williamos/authority-main"]) !== authority.trustedMainCommit) throw new Error("fetched authority main differs")
-    fixedRun("/usr/bin/git", ["--no-replace-objects", "-C", ancestry, "merge-base", "--is-ancestor", manifest.trustedMain.minimumCommit, authority.trustedMainCommit])
+    if (fixedRun("/usr/bin/git", ["--no-replace-objects", "-C", ancestry, "rev-parse", "refs/williamos/authority-main"]) !== remote) throw new Error("fetched fresh main differs")
+    fixedRun("/usr/bin/git", ["--no-replace-objects", "-C", ancestry, "fetch", "--no-tags", "--force", manifest.trustedMain.remote, `${authority.trustedMainCommit}:refs/williamos/reviewed-package`])
+    fixedRun("/usr/bin/git", ["--no-replace-objects", "-C", ancestry, "merge-base", "--is-ancestor", authority.trustedMainCommit, remote])
+    const critical=[...manifest.appliedAssets.map(x=>x.source),...manifest.trustedEvidence.map(x=>x.path),"config/execution-fabric/aegis-remote-dev-root-handoff.json","scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"]
+    for(const criticalPath of new Set(critical)) {
+      const reviewed=fixedRun("/usr/bin/git",["--no-replace-objects","-C",ancestry,"rev-parse",`${authority.trustedMainCommit}:${criticalPath}`])
+      const fresh=fixedRun("/usr/bin/git",["--no-replace-objects","-C",ancestry,"rev-parse",`${remote}:${criticalPath}`])
+      if(reviewed!==fresh) throw new Error(`${criticalPath} fresh main critical bytes differ`)
+    }
   } finally { fs.rmSync(ancestry, { recursive: true, force: true }) }
   for (const asset of manifest.appliedAssets) {
     const source = path.join(BUNDLE_ROOT, ...asset.source.split("/")); const bytes = rootFile(source, asset.mode === "0555" ? 0o555 : 0o444)
@@ -335,7 +346,7 @@ function productionTrust(manifest, authority) {
   if (active) throw new Error("proof worker is already active")
   const bootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()
   if (bootId !== authority.bootId || !GUID.test(bootId)) throw new Error("signed boot generation differs")
-  return { bootstrap: { verifierRootOwned: true, verifierMode: "0555", ownerPublicKeyRootOwned: true, ownerPublicKeyMode: "0444" }, trustedMain: { remote: manifest.trustedMain.remote, ref: manifest.trustedMain.ref, minimumCommit: manifest.trustedMain.minimumCommit, authorityCommit: remote, freshRemoteAuthorityEquality: true, exactCleanHead: true, replaceObjectsDisabled: true, configIsolation: true, criticalBytesMatch: true }, scheduler: { enabled: inactive.scheduler.state !== "disabled", standingAuthority: inactive.scheduler.standingAegisAuthority, dispatchOccurred: active }, closedHash: { changed: false }, bootId, authorityId: authority.authorityId }
+  return { bootstrap: { verifierRootOwned: true, verifierMode: "0555", ownerPublicKeyRootOwned: true, ownerPublicKeyMode: "0444" }, trustedMain: { remote: manifest.trustedMain.remote, ref: manifest.trustedMain.ref, minimumCommit: manifest.trustedMain.minimumCommit, authorityCommit: authority.trustedMainCommit, reviewedPackageCommit: authority.trustedMainCommit, observedFreshMainCommit: remote, freshRemoteAuthorityEquality: true, exactCleanHead: true, replaceObjectsDisabled: true, configIsolation: true, criticalBytesMatch: true }, scheduler: { enabled: inactive.scheduler.state !== "disabled", standingAuthority: inactive.scheduler.standingAegisAuthority, dispatchOccurred: active }, closedHash: { changed: false }, bootId, authorityId: authority.authorityId }
 }
 function productionInputs(authority) {
   const fixed = [
