@@ -80,7 +80,10 @@
   "packageRelease": {
     "commit": "__FINAL_PACKAGE_COMMIT__",
     "checkoutPath": "__FINAL_PACKAGE_CHECKOUT_PATH__",
-    "installerSha256": "__SHA256_PROMOTION_INSTALLER__"
+    "installerSha256": "__SHA256_PROMOTION_INSTALLER__",
+    "validatorSha256": "__SHA256_PROMOTION_VALIDATOR__",
+    "evaluatorSha256": "__SHA256_STANDING_AUTHORITY_EVALUATOR__",
+    "standingAuthoritySha256": "__SHA256_STANDING_AUTHORITY__"
   },
   "install": {
     "requestId": "__SAFE_REQUEST_ID__",

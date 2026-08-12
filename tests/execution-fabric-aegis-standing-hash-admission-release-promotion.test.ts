@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import { evaluateAegisStandingEligibility } from "../scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs"
 import { issueAegisStandingHashAdmission } from "../scripts/execution-fabric/admission/issue-aegis-standing-hash-admission.mjs"
+import { validatePromotionArtifacts } from "../scripts/execution-fabric/admission/validate-aegis-standing-promotion-artifacts.mjs"
 
 import {
   ACTIVATION_MARKER_PATH,
@@ -16,9 +17,11 @@ import {
   NODE_MUTATION_LOCK_PATH,
   PROMOTION_INSTALLER_PATH,
   PROMOTION_MANIFEST_PATH,
+  PROMOTION_VALIDATOR_PATH,
   REPLAY_JOURNAL_PATH,
   REQUEST_ROOT,
   STANDING_AUTHORITY_PATH,
+  STANDING_EVALUATOR_PATH,
   TRUSTED_RELEASE_MANIFEST_PATH,
   admissionReleasePromotionErrorEvidence,
   main,
@@ -218,6 +221,9 @@ function fixture(options: FixtureOptions = {}) {
   const admissionBytes = recordBytes(admission)
   const requestBytes = recordBytes(issuedRequest)
   const installerBytes = fs.readFileSync(path.resolve(PROMOTION_INSTALLER_PATH))
+  const validatorBytes = fs.readFileSync(path.resolve(PROMOTION_VALIDATOR_PATH))
+  const evaluatorBytes = fs.readFileSync(path.resolve(STANDING_EVALUATOR_PATH))
+  const standingAuthorityBytes = fs.readFileSync(path.resolve(STANDING_AUTHORITY_PATH))
   manifest.evidenceRelease.admissionSha256 = sha256(admissionBytes)
   manifest.evidenceRelease.inputSha256 = sha256(inputBytes)
   manifest.newRelease.trustArtifacts = {
@@ -243,6 +249,9 @@ function fixture(options: FixtureOptions = {}) {
     manifest.newRelease.closure[key] = sha256(bytes)
   }
   manifest.packageRelease.installerSha256 = sha256(installerBytes)
+  manifest.packageRelease.validatorSha256 = sha256(validatorBytes)
+  manifest.packageRelease.evaluatorSha256 = sha256(evaluatorBytes)
+  manifest.packageRelease.standingAuthoritySha256 = sha256(standingAuthorityBytes)
 
   const replayBytes = epochReplay(options)
   const upgradeBytes = upgradeJournal(options)
@@ -294,7 +303,9 @@ function fixture(options: FixtureOptions = {}) {
     manifest.newRelease.trustArtifacts.inputPath, inputBytes)
   directory(manifest.packageRelease.checkoutPath, 0, 0, 0o755)
   placeRootOwnedFile(manifest.packageRelease.checkoutPath, PROMOTION_INSTALLER_PATH, installerBytes)
-  placeRootOwnedFile(manifest.packageRelease.checkoutPath, STANDING_AUTHORITY_PATH, recordBytes(STANDING_AUTHORITY))
+  placeRootOwnedFile(manifest.packageRelease.checkoutPath, PROMOTION_VALIDATOR_PATH, validatorBytes)
+  placeRootOwnedFile(manifest.packageRelease.checkoutPath, STANDING_EVALUATOR_PATH, evaluatorBytes)
+  placeRootOwnedFile(manifest.packageRelease.checkoutPath, STANDING_AUTHORITY_PATH, standingAuthorityBytes)
 
   if (options.artifactDrift) {
     const artifactPath = options.artifactDrift === "request"
@@ -416,6 +427,7 @@ function fixture(options: FixtureOptions = {}) {
       events.push("ANCESTRY")
       if (options.ancestryDrift) throw Object.assign(new Error("not ancestor"), { code: "ANCESTRY_DRIFT" })
     },
+    evaluateStandingArtifacts: (_validatorPath: string, payload: unknown) => validatePromotionArtifacts(payload),
     publishRelease: (source: string, destination: string) => {
       maybeFail("PUBLISH_CONTENT_ADDRESSED_RELEASE")
       events.push("PUBLISH_CONTENT_ADDRESSED_RELEASE")
@@ -682,16 +694,15 @@ describe("AEGIS standing HASH admission release promotion", () => {
     expect(records.map(({ record_type }) => record_type)).toEqual(["AUTHORITY_CONSUMED", "FAILED_PARTIAL"])
   })
 
-  it("records no COMMITTED state when initial lock release fails but recovery proves release", () => {
+  it("retains one COMMITTED terminal when an initial lock release failure is recovered", () => {
     const value = fixture({ failReleaseLock: LEDGER_MUTATION_LOCK_PATH })
-    expectFailureCode(() => run(value, "apply"), "LOCK_RELEASE_FAILED")
-    expect(value.entries.get(ACTIVATION_MARKER_PATH)!.bytes).toEqual(value.markerBytes)
-    expect(value.entries.get(TRUSTED_RELEASE_MANIFEST_PATH)!.bytes).toEqual(value.releaseBytes)
-    expect(value.entries.has(value.manifest.install.requestPath)).toBe(false)
+    expect(run(value, "apply")).toMatchObject({ status: "COMMITTED", lock_release_retried: true })
+    expect(value.entries.get(ACTIVATION_MARKER_PATH)!.bytes).not.toEqual(value.markerBytes)
+    expect(value.entries.get(TRUSTED_RELEASE_MANIFEST_PATH)!.bytes).not.toEqual(value.releaseBytes)
+    expect(value.entries.has(value.manifest.install.requestPath)).toBe(true)
     expect(value.entries.has(LEDGER_MUTATION_LOCK_PATH)).toBe(false)
     const records = value.entries.get(value.mutationJournal)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
-    expect(records.map(({ record_type }) => record_type)).toEqual(["AUTHORITY_CONSUMED", "FAILED_PARTIAL"])
-    expect(records.at(-1)).toMatchObject({ failure_code: "LOCK_RELEASE_FAILED", lock_release_proven: true })
+    expect(records.map(({ record_type }) => record_type)).toEqual(["AUTHORITY_CONSUMED", "COMMITTED"])
   })
 
   it("reports recovery uncertainty after independently attempting every rollback", () => {

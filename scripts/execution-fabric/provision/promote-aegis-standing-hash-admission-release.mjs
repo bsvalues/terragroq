@@ -6,11 +6,11 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
-import { evaluateAegisStandingEligibility } from "../admission/evaluate-aegis-standing-authority.mjs"
-
 export const PROMOTION_MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-admission-release-promotion.v1.json"
 export const PROMOTION_INSTALLER_PATH = "scripts/execution-fabric/provision/promote-aegis-standing-hash-admission-release.mjs"
 export const STANDING_AUTHORITY_PATH = "config/execution-fabric/aegis-standing-compute-authority.v1.json"
+export const STANDING_EVALUATOR_PATH = "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs"
+export const PROMOTION_VALIDATOR_PATH = "scripts/execution-fabric/admission/validate-aegis-standing-promotion-artifacts.mjs"
 export const TRUSTED_RELEASE_MANIFEST_PATH = "/etc/williamos/fabric/trusted-main-release.json"
 export const ACTIVATION_MARKER_PATH = "/etc/williamos/fabric/aegis-standing-hash-replay-ledger-upgrade-v1.activation.json"
 export const REPLAY_JOURNAL_PATH = "/var/lib/aegis-standing-hash-replay-journal.jsonl"
@@ -138,7 +138,8 @@ function validateManifest(manifest) {
     || !exactKeys(evidence, ["sourceCommit", "admissionPath", "admissionSha256", "inputPath", "inputSha256"])
     || !exactKeys(next, ["commit", "checkoutPath", "releaseRoot", "trustedRef", "manifestSchemaVersion", "closure", "trustArtifacts"])
     || !exactKeys(next?.trustArtifacts, ["requestSourcePath", "requestSha256", "admissionPath", "admissionSha256", "inputPath", "inputSha256"])
-    || !exactKeys(packageRelease, ["commit", "checkoutPath", "installerSha256"])
+    || !exactKeys(packageRelease, ["commit", "checkoutPath", "installerSha256", "validatorSha256",
+      "evaluatorSha256", "standingAuthoritySha256"])
     || !exactKeys(install, ["requestId", "requestPath", "requestMode", "journalPrefix", "authorityRoot",
       "activationMarkerPath", "activationOrder"])
     || manifest?.schemaVersion !== 1 || manifest.promotionId !== "aegis-standing-hash-admission-release-promotion-v1"
@@ -183,7 +184,9 @@ function validateManifest(manifest) {
     || next.trustArtifacts.admissionSha256 !== evidence.admissionSha256
     || next.trustArtifacts.inputPath !== evidence.inputPath || next.trustArtifacts.inputSha256 !== evidence.inputSha256
     || !COMMIT.test(packageRelease?.commit ?? "") || !path.posix.isAbsolute(packageRelease?.checkoutPath ?? "")
-    || !DIGEST.test(packageRelease?.installerSha256 ?? "") || !SAFE_ID.test(install.requestId ?? "")
+    || !DIGEST.test(packageRelease?.installerSha256 ?? "") || !DIGEST.test(packageRelease?.validatorSha256 ?? "")
+    || !DIGEST.test(packageRelease?.evaluatorSha256 ?? "")
+    || !DIGEST.test(packageRelease?.standingAuthoritySha256 ?? "") || !SAFE_ID.test(install.requestId ?? "")
     || install.requestPath !== `${REQUEST_ROOT}/${install.requestId}.json`
     || !/^\/var\/lib\/williamos-aegis-standing-hash-admission-release-promotion-$/.test(install.journalPrefix)
     || evidence.sourceCommit !== prior.commit
@@ -386,17 +389,15 @@ function promotionJobScope(request) {
   }
 }
 
-function validateTrustArtifacts(manifest, requestBytes, admissionBytes, inputBytes, standingAuthorityBytes, epoch, now) {
+function validateTrustArtifacts(io, manifest, requestBytes, admissionBytes, inputBytes,
+  standingAuthorityBytes, epoch, now) {
   const request = parseJson(requestBytes, "AEGIS_ADMISSION_PROMOTION_ARTIFACT_INVALID", "private request")
   const admission = parseJson(admissionBytes, "AEGIS_ADMISSION_PROMOTION_ARTIFACT_INVALID", "admission")
   const standingAuthority = parseJson(standingAuthorityBytes,
     "AEGIS_ADMISSION_PROMOTION_ARTIFACT_INVALID", "standing authority")
-  const eligibility = evaluateAegisStandingEligibility({
-    authority: standingAuthority,
-    request,
-    candidateAdmission: admission,
-    now: () => Date.parse(now),
-  })
+  const eligibility = io.evaluateStandingArtifacts(
+    path.posix.join(manifest.packageRelease.checkoutPath, PROMOTION_VALIDATOR_PATH),
+    { authority: standingAuthority, request, candidateAdmission: admission, now })
   if (eligibility.status !== "ADMITTED" || eligibility.execution_authorized !== true
     || eligibility.dispatch_allowed !== true || eligibility.scheduler_activated !== false
     || eligibility.autonomous_selection !== false) {
@@ -434,7 +435,12 @@ function verifyCheckouts(io, manifest, authority, manifestBytes) {
     [releaseArtifacts.admissionPath]: releaseArtifacts.admissionSha256,
     [releaseArtifacts.inputPath]: releaseArtifacts.inputSha256,
   }
-  const packageClosure = { [PROMOTION_INSTALLER_PATH]: manifest.packageRelease.installerSha256 }
+  const packageClosure = {
+    [PROMOTION_INSTALLER_PATH]: manifest.packageRelease.installerSha256,
+    [PROMOTION_VALIDATOR_PATH]: manifest.packageRelease.validatorSha256,
+    [STANDING_EVALUATOR_PATH]: manifest.packageRelease.evaluatorSha256,
+    [STANDING_AUTHORITY_PATH]: manifest.packageRelease.standingAuthoritySha256,
+  }
   try {
     io.verifyCheckout(authority.evidenceCheckoutPath, authority.evidenceCommit, REPOSITORY, evidenceClosure)
     io.verifyCheckout(manifest.newRelease.checkoutPath, manifest.newRelease.commit, REPOSITORY, releaseClosure)
@@ -558,7 +564,7 @@ export function promoteAegisStandingHashAdmissionRelease({
     loadedManifest.newRelease.trustArtifacts.inputPath))
   const standingAuthorityBytes = io.read(path.posix.join(loadedManifest.packageRelease.checkoutPath,
     STANDING_AUTHORITY_PATH))
-  validateTrustArtifacts(loadedManifest, requestBytes, admissionBytes, inputBytes,
+  validateTrustArtifacts(io, loadedManifest, requestBytes, admissionBytes, inputBytes,
     standingAuthorityBytes, prior.epoch, now)
 
   const evidence = {
@@ -599,6 +605,7 @@ export function promoteAegisStandingHashAdmissionRelease({
   const heldLocks = []
   const completed = []
   let journalCreated = false
+  let journalCommitted = false
   let releasePublished = false
   let releaseRemoved = false
   let requestInstalled = false
@@ -674,11 +681,6 @@ export function promoteAegisStandingHashAdmissionRelease({
     assertExactFile(io, loadedManifest.priorState.authorizedKeysPath,
       { uid: prior.account.uid, gid: prior.account.gid, mode: 0o600, digest: authority.priorAuthorizedKeysSha256 })
 
-    while (heldLocks.length > 0) {
-      const lockPath = heldLocks.at(-1)
-      io.releaseLock(lockPath, lockRecord, prior.account.uid, prior.account.gid, 0o600)
-      heldLocks.pop()
-    }
     io.appendJournal(mutationJournal, {
       record_type: "COMMITTED",
       phase: 2,
@@ -698,7 +700,35 @@ export function promoteAegisStandingHashAdmissionRelease({
       account_mutated: false,
       storage_root_mutated: false,
     })
+    journalCommitted = true
+    while (heldLocks.length > 0) {
+      const lockPath = heldLocks.at(-1)
+      io.releaseLock(lockPath, lockRecord, prior.account.uid, prior.account.gid, 0o600)
+      heldLocks.pop()
+    }
   } catch (error) {
+    if (journalCommitted) {
+      const lockErrors = []
+      while (heldLocks.length > 0) {
+        const lockPath = heldLocks.at(-1)
+        try { io.releaseLock(lockPath, lockRecord, prior.account.uid, prior.account.gid, 0o600) }
+        catch (lockError) { lockErrors.push(lockError) }
+        heldLocks.pop()
+      }
+      if (lockErrors.length > 0) {
+        fail("AEGIS_ADMISSION_PROMOTION_POST_COMMIT_LOCK_UNCERTAIN",
+          "promotion committed but lock release could not be proven", {
+            causeCode: lockErrors[0]?.code ?? null,
+            originalFailureCode: error?.code ?? null,
+            authorityConsumed: true,
+            mutationJournal,
+            completedMutations: completed,
+            activated: true,
+          })
+      }
+      return { ...evidence, status: "COMMITTED", authority_consumed: true,
+        completed_mutations: completed, activated: true, lock_release_retried: true }
+    }
     const recoveryErrors = []
     let lockReleaseRecoveryFailed = false
     let releaseManifestRestored = false
@@ -804,6 +834,7 @@ function writeFile(targetPath, bytes, uid, gid, mode, exclusive) {
   const temporary = exclusive ? targetPath : `${targetPath}.promotion-${crypto.randomUUID()}.tmp`
   let descriptor
   let created = false
+  let renamed = false
   try {
     descriptor = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
       | (fs.constants.O_NOFOLLOW ?? 0), mode)
@@ -819,11 +850,22 @@ function writeFile(targetPath, bytes, uid, gid, mode, exclusive) {
     fs.fsyncSync(descriptor)
     fs.closeSync(descriptor)
     descriptor = undefined
-    if (!exclusive) fs.renameSync(temporary, targetPath)
+    if (!exclusive) { fs.renameSync(temporary, targetPath); renamed = true }
     fsyncParent(targetPath)
   } catch (error) {
     if (descriptor !== undefined) { try { fs.closeSync(descriptor) } catch {}; descriptor = undefined }
-    if (created) try { fs.unlinkSync(temporary) } catch {}
+    if (created && !renamed) {
+      try {
+        fs.unlinkSync(temporary)
+        fsyncParent(temporary)
+      } catch (cleanupError) {
+        fail("AEGIS_ADMISSION_PROMOTION_WRITE_CLEANUP_UNCERTAIN",
+          "failed exclusive or temporary write could not be durably removed", {
+            causeCode: cleanupError?.code ?? null,
+            originalFailureCode: error?.code ?? null,
+          })
+      }
+    }
     throw error
   } finally {
     if (descriptor !== undefined) try { fs.closeSync(descriptor) } catch {}
@@ -961,6 +1003,22 @@ export function createNodePromotionIo() {
     verifyCheckout,
     verifyAncestry(checkout, ancestor, descendant) {
       fixedGit(checkout, ["merge-base", "--is-ancestor", ancestor, descendant])
+    },
+    evaluateStandingArtifacts(validatorPath, payload) {
+      const result = spawnSync("/usr/bin/node", [validatorPath], {
+        shell: false,
+        encoding: "utf8",
+        timeout: 30_000,
+        maxBuffer: MAX_BYTES,
+        input: canonicalizePromotionJcs(payload),
+        env: { PATH: "/usr/bin:/bin", HOME: "/root", LANG: "C", LC_ALL: "C", NODE_OPTIONS: "" },
+      })
+      const stdout = String(result.stdout ?? "").trim()
+      if (result.error || result.signal || ![0, 2].includes(result.status) || !stdout || stdout.includes("\n")) {
+        fail("AEGIS_ADMISSION_PROMOTION_ARTIFACT_INVALID", "standing validator process failed closed")
+      }
+      return parseJson(Buffer.from(stdout, "utf8"),
+        "AEGIS_ADMISSION_PROMOTION_ARTIFACT_INVALID", "standing validator result")
     },
     publishRelease(source, destination) {
       safeParents(destination)
