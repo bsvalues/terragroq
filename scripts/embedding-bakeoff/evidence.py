@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""Build deterministic R1B artifacts for independent standing HASH_VERIFY."""
+"""Build immutable R1B evidence generations for standing HASH_VERIFY."""
 import argparse
 import hashlib
 import json
+import math
 import os
+import shutil
 import tempfile
 
-from bakeoff import (canonical_json_bytes, corpus_fingerprint, load_jsonl,
-                     reject_secret_fields, validate_corpus)
+import metrics as M
+from bakeoff import (CALIBRATION_QUERY_IDS, canonical_json_bytes, corpus_fingerprint,
+                     load_jsonl, reject_secret_fields, validate_corpus)
+
+
+def canonical_payload(value):
+    return canonical_json_bytes(value) + b"\n"
 
 
 def sha256_bytes(value):
@@ -27,21 +34,115 @@ def load_json(path):
         return json.load(fh)
 
 
-def write_canonical(path, value):
-    parent = os.path.dirname(os.path.abspath(path))
-    os.makedirs(parent, exist_ok=True)
-    payload = canonical_json_bytes(value) + b"\n"
-    fd, temporary = tempfile.mkstemp(prefix=".r1b-evidence-", suffix=".json", dir=parent)
+def close_enough(left, right):
+    if left is None or right is None:
+        return left is right
+    return math.isclose(left, right, rel_tol=1e-12, abs_tol=1e-12)
+
+
+def validate_result(result, docs, queries, model, runtime, host,
+                    model_sha, runtime_sha, host_sha):
+    if not isinstance(result, dict):
+        raise ValueError("result bundle must be a JSON object")
+    reject_secret_fields(result, "result")
+    summary = result.get("summary")
+    manifest = result.get("manifest")
+    rows = result.get("per_query")
+    if not isinstance(summary, dict) or not isinstance(manifest, dict) or not isinstance(rows, list):
+        raise ValueError("result bundle requires summary, manifest, and per_query")
+    if manifest.get("backend") != "endpoint":
+        raise ValueError("standing evidence is only valid for an admitted endpoint model run")
+    if manifest.get("model") != model.get("model_id"):
+        raise ValueError("result model does not match the model manifest")
+    if manifest.get("corpus_fingerprint") != corpus_fingerprint(docs, queries):
+        raise ValueError("result bundle corpus fingerprint does not match the frozen corpus")
+    expected_vector_contract = {
+        "input_preprocessing": "utf8-text-as-recorded-no-prefix-v1",
+        "normalization": "l2",
+        "metric": "cosine",
+        "chunking": "frozen-corpus-chunks-v1",
+    }
+    if manifest.get("vector_contract") != expected_vector_contract:
+        raise ValueError("result vector contract is missing or changed")
+    dimension = manifest.get("embedding_dim")
+    if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension <= 0:
+        raise ValueError("result embedding dimension must be a positive integer")
+    if model.get("dimension") is not None and model["dimension"] != dimension:
+        raise ValueError("result embedding dimension does not match the model manifest")
+    provenance = manifest.get("provenance", {})
+    expected_provenance = {
+        "model": model,
+        "model_manifest_sha256": model_sha,
+        "runtime": runtime,
+        "runtime_manifest_sha256": runtime_sha,
+        "host": host,
+        "host_manifest_sha256": host_sha,
+    }
+    if provenance != expected_provenance:
+        raise ValueError("result provenance does not exactly match supplied manifests")
+    timing = manifest.get("timing", {})
+    for field in ("documents_seconds", "queries_seconds", "documents_per_second", "queries_per_second"):
+        value = timing.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"result timing {field} is invalid")
+
+    queries_by_id = {query["id"]: query for query in queries}
+    docs_by_id = {doc["id"] for doc in docs}
+    if len(rows) != len(queries) or {row.get("id") for row in rows} != set(queries_by_id):
+        raise ValueError("result must contain exactly one row for every frozen query")
+    for row in rows:
+        query = queries_by_id[row["id"]]
+        expected_split = "calibration" if row["id"] in CALIBRATION_QUERY_IDS else "evaluation"
+        if row.get("type") != query["type"] or row.get("gold") != query["gold"] or row.get("split") != expected_split:
+            raise ValueError(f"result row {row['id']} does not match frozen labels and split")
+        top_k = row.get("top_k")
+        if not isinstance(top_k, list) or not top_k or len(top_k) != len(set(top_k)) or any(value not in docs_by_id for value in top_k):
+            raise ValueError(f"result row {row['id']} has invalid top_k")
+        for field in ("top1_sim", "recall@5", "recall@10", "recall@k", "mrr", "ndcg@10", "ndcg@k"):
+            value = row.get(field)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)):
+                raise ValueError(f"result row {row['id']} has invalid {field}")
+
+    evaluated = [row for row in rows if row["split"] == "evaluation"]
+    recomputed = {
+        "recall@5": M.mean([row["recall@5"] for row in evaluated]),
+        "recall@10": M.mean([row["recall@10"] for row in evaluated]),
+        "recall@k": M.mean([row["recall@k"] for row in evaluated]),
+        "mrr": M.mean([row["mrr"] for row in evaluated]),
+        "ndcg@10": M.mean([row["ndcg@10"] for row in evaluated]),
+        "ndcg@k": M.mean([row["ndcg@k"] for row in evaluated]),
+        "near_dup_discrimination": M.mean([row.get("near_dup_ok") for row in evaluated]),
+    }
+    for field, expected in recomputed.items():
+        if not close_enough(summary.get(field), expected):
+            raise ValueError(f"result summary {field} does not match per-query evidence")
+    if summary.get("queries") != len(queries) or summary.get("documents") != len(docs):
+        raise ValueError("result summary corpus counts do not match the frozen corpus")
+
+
+def write_generation(out_dir, generation, artifacts):
+    generations = os.path.join(out_dir, "generations")
+    os.makedirs(generations, exist_ok=True)
+    destination = os.path.join(generations, generation)
+    if os.path.exists(destination):
+        for name, payload in artifacts.items():
+            with open(os.path.join(destination, name), "rb") as fh:
+                if fh.read() != payload:
+                    raise ValueError("existing immutable evidence generation does not match")
+        return destination
+    staging = tempfile.mkdtemp(prefix=".r1b-generation-", dir=generations)
     try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(payload)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(temporary, path)
+        for name, payload in artifacts.items():
+            path = os.path.join(staging, name)
+            with open(path, "wb") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+        os.replace(staging, destination)
     finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-    return sha256_bytes(payload)
+        if os.path.exists(staging):
+            shutil.rmtree(staging)
+    return destination
 
 
 def build(corpus_dir, model_manifest_path, runtime_manifest_path, host_manifest_path,
@@ -55,57 +156,42 @@ def build(corpus_dir, model_manifest_path, runtime_manifest_path, host_manifest_
     runtime = load_json(runtime_manifest_path)
     host = load_json(host_manifest_path)
     result = load_json(result_path)
-    for name, value in (("model", model), ("runtime", runtime), ("host", host), ("result", result)):
+    for name, value in (("model", model), ("runtime", runtime), ("host", host)):
         reject_secret_fields(value, name)
 
-    os.makedirs(out_dir, exist_ok=True)
-    corpus_artifact = {
-        "schema_version": "1.0-r1b-corpus-artifact",
-        "corpus_fingerprint": corpus_fingerprint(docs, queries),
-        "documents_sha256": sha256_file(docs_path),
-        "queries_sha256": sha256_file(queries_path),
-        "documents": len(docs),
-        "queries": len(queries),
-    }
-    corpus_path = os.path.join(out_dir, "corpus-artifact.json")
-    corpus_sha = write_canonical(corpus_path, corpus_artifact)
+    model_sha = sha256_file(model_manifest_path)
+    runtime_sha = sha256_file(runtime_manifest_path)
+    host_sha = sha256_file(host_manifest_path)
+    validate_result(result, docs, queries, model, runtime, host, model_sha, runtime_sha, host_sha)
 
+    corpus_bundle = {
+        "schema_version": "1.0-r1b-corpus-bundle",
+        "corpus_fingerprint": corpus_fingerprint(docs, queries),
+        "documents": docs,
+        "queries": queries,
+        "source_file_sha256": {
+            "documents": sha256_file(docs_path),
+            "queries": sha256_file(queries_path),
+        },
+    }
     model_runtime = {
         "schema_version": "1.0-r1b-model-runtime-manifest",
         "model": model,
-        "model_manifest_sha256": sha256_file(model_manifest_path),
+        "model_manifest_sha256": model_sha,
         "runtime": runtime,
-        "runtime_manifest_sha256": sha256_file(runtime_manifest_path),
+        "runtime_manifest_sha256": runtime_sha,
     }
-    model_runtime_path = os.path.join(out_dir, "model-runtime-manifest.json")
-    model_runtime_sha = write_canonical(model_runtime_path, model_runtime)
-
-    result_bundle_path = os.path.join(out_dir, "result-bundle.json")
-    result_bundle_sha = write_canonical(result_bundle_path, result)
-
-    result_corpus = result.get("manifest", {}).get("corpus_fingerprint")
-    if result_corpus != corpus_artifact["corpus_fingerprint"]:
-        raise ValueError("result bundle corpus fingerprint does not match the frozen corpus")
-    if result.get("manifest", {}).get("backend") == "endpoint":
-        provenance = result["manifest"].get("provenance", {})
-        expected = {
-            "model_manifest_sha256": sha256_file(model_manifest_path),
-            "runtime_manifest_sha256": sha256_file(runtime_manifest_path),
-            "host_manifest_sha256": sha256_file(host_manifest_path),
-        }
-        for field, digest in expected.items():
-            if provenance.get(field) != digest:
-                raise ValueError(f"result bundle {field} does not match the supplied manifest")
+    payloads = {
+        "corpus-bundle.json": canonical_payload(corpus_bundle),
+        "model-runtime-manifest.json": canonical_payload(model_runtime),
+        "result-bundle.json": canonical_payload(result),
+    }
     evidence_package = {
         "schema_version": "1.0-r1b-evidence-package",
         "work_order_id": "WO-WILLIAMOS-SOVEREIGN-EMBEDDING-V1",
-        "artifacts": {
-            "corpus_artifact_sha256": corpus_sha,
-            "model_runtime_manifest_sha256": model_runtime_sha,
-            "result_bundle_sha256": result_bundle_sha,
-            "host_manifest_sha256": sha256_file(host_manifest_path),
-        },
+        "artifacts": {name: sha256_bytes(payload) for name, payload in payloads.items()},
         "host": host,
+        "host_manifest_sha256": host_sha,
         "safety": {
             "canonical_vectors_written": False,
             "database_mutated": False,
@@ -113,23 +199,23 @@ def build(corpus_dir, model_manifest_path, runtime_manifest_path, host_manifest_
             "external_provider_used": False,
         },
     }
-    evidence_path = os.path.join(out_dir, "evidence-package.json")
-    evidence_sha = write_canonical(evidence_path, evidence_package)
-
+    payloads["evidence-package.json"] = canonical_payload(evidence_package)
     targets = {
         "schema_version": "1.0-r1b-standing-hash-targets",
         "work_order_id": "WO-WILLIAMOS-SOVEREIGN-EMBEDDING-V1",
         "targets": [
-            {"artifact": "benchmark_corpus", "path": "corpus-artifact.json", "sha256": corpus_sha},
-            {"artifact": "model_runtime_manifest", "path": "model-runtime-manifest.json", "sha256": model_runtime_sha},
-            {"artifact": "result_bundle", "path": "result-bundle.json", "sha256": result_bundle_sha},
-            {"artifact": "evidence_package", "path": "evidence-package.json", "sha256": evidence_sha},
+            {"artifact": "benchmark_corpus", "path": "corpus-bundle.json", "sha256": sha256_bytes(payloads["corpus-bundle.json"])},
+            {"artifact": "model_runtime_manifest", "path": "model-runtime-manifest.json", "sha256": sha256_bytes(payloads["model-runtime-manifest.json"])},
+            {"artifact": "result_bundle", "path": "result-bundle.json", "sha256": sha256_bytes(payloads["result-bundle.json"])},
+            {"artifact": "evidence_package", "path": "evidence-package.json", "sha256": sha256_bytes(payloads["evidence-package.json"])},
         ],
         "standing_capability": "HASH_VERIFY",
         "dispatch_requested": False,
     }
-    write_canonical(os.path.join(out_dir, "standing-hash-targets.json"), targets)
-    return targets
+    payloads["standing-hash-targets.json"] = canonical_payload(targets)
+    generation = sha256_bytes(payloads["evidence-package.json"])
+    destination = write_generation(out_dir, generation, payloads)
+    return {**targets, "generation": generation, "generation_path": destination}
 
 
 def main(argv=None):

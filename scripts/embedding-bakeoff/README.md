@@ -76,6 +76,8 @@ python3 evidence.py --corpus corpus \
   --out-dir results/model-evidence
 ```
 
-`standing-hash-targets.json` exposes four exact artifacts for the already-proven AEGIS
+Each run is written as one immutable `generations/<evidence-package-sha256>/` directory only after
+the complete result and provenance chain validates. `standing-hash-targets.json` exposes four exact
+artifacts for the already-proven AEGIS
 `HASH_VERIFY` capability: benchmark corpus, model/runtime manifest, result bundle, and evidence
 package. Building this file does not dispatch work or expand AEGIS authority.

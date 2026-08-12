@@ -17,6 +17,11 @@ import urllib.parse
 import urllib.request
 
 
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError(f"embedding endpoint redirects are forbidden: HTTP {code}")
+
+
 def l2_normalize(vec):
     norm = math.sqrt(sum(x * x for x in vec)) or 1.0
     return [x / norm for x in vec]
@@ -83,11 +88,12 @@ def _endpoint_batch(base_url, model, texts, api_key, timeout):
         headers=headers,
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    opener = urllib.request.build_opener(NoRedirectHandler())
+    with opener.open(req, timeout=timeout) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-    if isinstance(data, dict) and data.get("model") not in (None, model):
+    if not isinstance(data, dict) or data.get("model") != model:
         raise ValueError("endpoint response model does not match the requested model")
-    rows = data.get("data") if isinstance(data, dict) else None
+    rows = data.get("data")
     if not isinstance(rows, list) or len(rows) != len(texts):
         raise ValueError(f"endpoint returned {len(rows) if isinstance(rows, list) else 0} rows for {len(texts)} inputs")
     indexes = [row.get("index") if isinstance(row, dict) else None for row in rows]

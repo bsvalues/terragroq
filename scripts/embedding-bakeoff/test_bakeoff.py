@@ -11,7 +11,8 @@ from unittest import mock
 
 import metrics as M
 from bakeoff import corpus_fingerprint, main, reject_secret_fields, run
-from embed import _endpoint_batch, cosine, embed_texts, validate_sovereign_base_url
+from embed import (NoRedirectHandler, _endpoint_batch, cosine, embed_texts,
+                   lexical_embed, validate_sovereign_base_url)
 from evidence import build as build_evidence
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -111,6 +112,15 @@ class FakeResponse:
         return json.dumps(self.value).encode("utf-8")
 
 
+class FakeOpener:
+    def __init__(self, responses):
+        self.responses = list(responses)
+
+    def open(self, _request, timeout=None):
+        del timeout
+        return self.responses.pop(0)
+
+
 class TestEndpointBoundary(unittest.TestCase):
     def test_cosine_rejects_mixed_dimensions(self):
         with self.assertRaisesRegex(ValueError, "dimension mismatch"):
@@ -125,70 +135,111 @@ class TestEndpointBoundary(unittest.TestCase):
             validate_sovereign_base_url("http://user:secret@aegis:11434/v1")
 
     def test_response_is_reordered_by_complete_unique_indexes(self):
-        response = {"data": [
+        response = {"model": "model", "data": [
             {"index": 1, "embedding": [0.0, 2.0]},
             {"index": 0, "embedding": [3.0, 0.0]},
         ]}
-        with mock.patch("urllib.request.urlopen", return_value=FakeResponse(response)):
+        with mock.patch("urllib.request.build_opener", return_value=FakeOpener([FakeResponse(response)])):
             vectors = _endpoint_batch("http://127.0.0.1:11434/v1", "model", ["a", "b"], None, 1)
         self.assertEqual(vectors, [[1.0, 0.0], [0.0, 1.0]])
 
     def test_response_rejects_missing_duplicate_mixed_and_nonfinite_rows(self):
         failures = [
-            {"data": [{"index": 0, "embedding": [1.0]}]},
-            {"data": [{"index": 0, "embedding": [1.0]}, {"index": 0, "embedding": [2.0]}]},
-            {"data": [{"index": 0, "embedding": [1.0]}, {"index": 1, "embedding": [1.0, 2.0]}]},
-            {"data": [{"index": 0, "embedding": [1.0]}, {"index": 1, "embedding": [float("nan")]}]},
+            {"model": "model", "data": [{"index": 0, "embedding": [1.0]}]},
+            {"model": "model", "data": [{"index": 0, "embedding": [1.0]}, {"index": 0, "embedding": [2.0]}]},
+            {"model": "model", "data": [{"index": 0, "embedding": [1.0]}, {"index": 1, "embedding": [1.0, 2.0]}]},
+            {"model": "model", "data": [{"index": 0, "embedding": [1.0]}, {"index": 1, "embedding": [float("nan")]}]},
         ]
         for response in failures:
             with self.subTest(response=response):
-                with mock.patch("urllib.request.urlopen", return_value=FakeResponse(response)):
+                with mock.patch("urllib.request.build_opener", return_value=FakeOpener([FakeResponse(response)])):
                     with self.assertRaises(ValueError):
                         _endpoint_batch("http://aegis:11434/v1", "model", ["a", "b"], None, 1)
 
     def test_response_rejects_model_drift(self):
         response = {"model": "other", "data": [{"index": 0, "embedding": [1.0]}]}
-        with mock.patch("urllib.request.urlopen", return_value=FakeResponse(response)):
+        with mock.patch("urllib.request.build_opener", return_value=FakeOpener([FakeResponse(response)])):
             with self.assertRaisesRegex(ValueError, "model does not match"):
                 _endpoint_batch("http://aegis:11434/v1", "model", ["a"], None, 1)
 
+    def test_response_requires_model_identity(self):
+        response = {"data": [{"index": 0, "embedding": [1.0]}]}
+        with mock.patch("urllib.request.build_opener", return_value=FakeOpener([FakeResponse(response)])):
+            with self.assertRaisesRegex(ValueError, "model does not match"):
+                _endpoint_batch("http://aegis:11434/v1", "model", ["a"], None, 1)
+
+    def test_redirect_handler_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "redirects are forbidden"):
+            NoRedirectHandler().redirect_request(None, None, 302, "Found", {}, "https://example.com")
+
     def test_dimension_change_across_batches_is_rejected(self):
         responses = [
-            FakeResponse({"data": [{"index": 0, "embedding": [1.0, 0.0]}]}),
-            FakeResponse({"data": [{"index": 0, "embedding": [1.0, 0.0, 0.0]}]}),
+            FakeResponse({"model": "model", "data": [{"index": 0, "embedding": [1.0, 0.0]}]}),
+            FakeResponse({"model": "model", "data": [{"index": 0, "embedding": [1.0, 0.0, 0.0]}]}),
         ]
-        with mock.patch("urllib.request.urlopen", side_effect=responses):
+        with mock.patch("urllib.request.build_opener", return_value=FakeOpener(responses)):
             with self.assertRaisesRegex(ValueError, "dimension changed"):
                 embed_texts(["a", "b"], backend="endpoint", base_url="http://aegis:11434/v1",
                             model="model", batch_size=1)
 
 
 class TestEvidencePackage(unittest.TestCase):
-    def test_builds_four_standing_hash_targets(self):
+    def make_valid_run(self, root):
         corpus = os.path.join(HERE, "corpus")
-        result = run(corpus, "lexical", None, None, None, 10, 128)
+        paths = {name: os.path.join(root, name + ".json")
+                 for name in ("result", "model", "runtime", "host")}
+        values = {
+            "model": {
+                "schema_version": "1", "model_id": "test-model", "revision": "exact",
+                "weights_sha256": "1" * 64, "license": "Apache-2.0", "source": "fixture",
+                "dimension": 128,
+            },
+            "runtime": {
+                "schema_version": "1", "runtime_id": "fixture", "version": "1",
+                "executable_sha256": "2" * 64, "endpoint_contract": "openai-embeddings-v1",
+            },
+            "host": {
+                "schema_version": "1", "node_id": "aegis", "machine_id_sha256": "3" * 64,
+                "inventory_snapshot_sha256": "4" * 64, "topology_id": "cpu-only",
+                "endpoint_hosts": ["aegis"],
+            },
+        }
+        for name in ("model", "runtime", "host"):
+            with open(paths[name], "w", encoding="utf-8") as fh:
+                json.dump(values[name], fh)
+        with mock.patch("bakeoff.embed_texts",
+                        side_effect=lambda texts, **_kwargs: [lexical_embed(text, 128) for text in texts]):
+            result = run(corpus, "endpoint", "http://aegis:11434/v1", "test-model", None, 10, 128,
+                         paths["model"], paths["runtime"], paths["host"])
+        with open(paths["result"], "w", encoding="utf-8") as fh:
+            json.dump(result, fh)
+        return corpus, paths, result
+
+    def test_builds_four_standing_hash_targets(self):
         with tempfile.TemporaryDirectory() as root:
-            paths = {name: os.path.join(root, name + ".json")
-                     for name in ("result", "model", "runtime", "host")}
-            values = {
-                "result": result,
-                "model": {"model_id": "lexical-floor", "revision": "test"},
-                "runtime": {"runtime_id": "python", "version": "test"},
-                "host": {"node_id": "test-host", "machine_id_sha256": "0" * 64},
-            }
-            for name, path in paths.items():
-                with open(path, "w", encoding="utf-8") as fh:
-                    json.dump(values[name], fh)
+            corpus, paths, _result = self.make_valid_run(root)
             out = os.path.join(root, "evidence")
-            targets = build_evidence(corpus, paths["model"], paths["runtime"],
-                                     paths["host"], paths["result"], out)
+            targets = build_evidence(corpus, paths["model"], paths["runtime"], paths["host"], paths["result"], out)
             self.assertEqual([target["artifact"] for target in targets["targets"]], [
                 "benchmark_corpus", "model_runtime_manifest", "result_bundle", "evidence_package",
             ])
             for target in targets["targets"]:
-                path = os.path.join(out, target["path"])
+                path = os.path.join(targets["generation_path"], target["path"])
                 with open(path, "rb") as fh:
                     self.assertEqual(hashlib.sha256(fh.read()).hexdigest(), target["sha256"])
+
+    def test_fabricated_result_is_rejected_without_partial_generation(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            out = os.path.join(root, "evidence")
+            first = build_evidence(corpus, paths["model"], paths["runtime"], paths["host"], paths["result"], out)
+            result["summary"]["mrr"] = 0.0
+            with open(paths["result"], "w", encoding="utf-8") as fh:
+                json.dump(result, fh)
+            with self.assertRaisesRegex(ValueError, "does not match per-query evidence"):
+                build_evidence(corpus, paths["model"], paths["runtime"], paths["host"], paths["result"], out)
+            generations = os.listdir(os.path.join(out, "generations"))
+            self.assertEqual(generations, [first["generation"]])
 
 
 if __name__ == "__main__":

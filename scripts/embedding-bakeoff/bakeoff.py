@@ -59,7 +59,7 @@ def load_manifest(path, required_fields, kind):
 
 
 SECRET_FIELD = re.compile(
-    r"(?:api[_-]?key|apikey|password|passwd|secret|access[_-]?token|auth[_-]?token|cookie|credential|private[_-]?key)",
+    r"(?:api[_-]?(?:key|token)|apikey|authorization|bearer[_-]?token|password|passwd|secret|access[_-]?token|auth[_-]?token|cookie|credential|private[_-]?key)",
     re.I,
 )
 
@@ -133,9 +133,14 @@ def run(corpus_dir, backend, base_url, model, api_key, k, dim,
         runtime_manifest = load_manifest(runtime_manifest_path,
             ("schema_version", "runtime_id", "version", "executable_sha256", "endpoint_contract"), "runtime")
         host_manifest = load_manifest(host_manifest_path,
-            ("schema_version", "node_id", "machine_id_sha256", "inventory_snapshot_sha256", "topology_id"), "host")
+            ("schema_version", "node_id", "machine_id_sha256", "inventory_snapshot_sha256", "topology_id", "endpoint_hosts"), "host")
         if model_manifest["model_id"] != model:
             raise ValueError("--model must match model manifest model_id")
+        endpoint_host = urllib_hostname(base_url)
+        endpoint_hosts = host_manifest["endpoint_hosts"]
+        if (not isinstance(endpoint_hosts, list) or not endpoint_hosts or
+                endpoint_host not in {str(value).lower() for value in endpoint_hosts}):
+            raise ValueError("embedding endpoint host is not bound by the host manifest")
         provenance = {
             "model": model_manifest,
             "model_manifest_sha256": sha256_file(model_manifest_path),
@@ -248,6 +253,11 @@ def run(corpus_dir, backend, base_url, model, api_key, k, dim,
         "note": "Phase-2 measurement. No model/dimension frozen (Phase 3).",
     }
     return {"summary": summary, "manifest": manifest, "per_query": per_query}
+
+
+def urllib_hostname(base_url):
+    from urllib.parse import urlparse
+    return (urlparse(base_url).hostname or "").lower()
 
 
 def main(argv=None):

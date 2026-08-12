@@ -45,14 +45,16 @@ The corrected evaluator:
 
 `evidence.py` creates deterministic artifacts for the existing AEGIS standing integrity lane:
 
-1. `corpus-artifact.json`
+1. `corpus-bundle.json`
 2. `model-runtime-manifest.json`
 3. `result-bundle.json`
 4. `evidence-package.json`
 
-`standing-hash-targets.json` binds the expected SHA-256 of all four. It is an integrity request
-description, not autonomous dispatch and not an AEGIS authority expansion. A valid admitted model run
-must produce these artifacts before standing verification can be claimed.
+`standing-hash-targets.json` binds the expected SHA-256 of all four. The complete package is
+validated in memory, then published as one immutable content-addressed generation so a failed rebuild
+cannot mix old targets with new results. It is an integrity request description, not autonomous
+dispatch and not an AEGIS authority expansion. A valid admitted model run must produce these artifacts
+before standing verification can be claimed.
 
 ## Remaining gates
 
