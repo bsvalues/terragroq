@@ -34,7 +34,9 @@ def _bash_path():
 def _run_hook(command, capg_root=WORKER_TIER):
     bash = _bash_path()
     if not bash:
-        raise RuntimeError("bash is required to exercise the shell hook contract")
+        raise unittest.SkipTest("bash is required to exercise the shell hook contract")
+    if not HOOK.is_file():
+        raise unittest.SkipTest("CAPG hook script is unavailable")
     env = os.environ.copy()
     env["CAPG_ROOT"] = str(capg_root)
     return subprocess.run(

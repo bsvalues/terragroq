@@ -60,7 +60,7 @@ class Workspace:
             except Exception as exc:  # noqa: BLE001 - attempt the entire snapshot before failing
                 errors.append(f"{r}: {exc}")
         if errors:
-            raise WorkspaceError(f"snapshot restore failed: {'; '.join(errors)}")
+            raise WorkspaceError(f"workspace restore failed: {'; '.join(errors)}")
 
     def apply_edit(self, e: Edit) -> tuple[bool, str]:
         p = self._resolve(e.file)
