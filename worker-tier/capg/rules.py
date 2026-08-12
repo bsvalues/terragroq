@@ -22,16 +22,18 @@ _CHMOD_ROOT = re.compile(r"\b(chmod|chown)\b[^\n]*\s-\w*R\w*\s[^\n]*\s(/|/etc|/u
 
 
 def _rm_rf_danger(c: Command) -> bool:
+    from .gate import _RM_DANGER_TARGET
     for seg in c.segments:
-        if seg.name != "rm":
+        # match `rm` anywhere in the argv, not only argv[0], so wrappers like
+        # `sudo rm -rf /`, `env X=1 rm -rf /`, `nice rm -rf ~`, `xargs rm -rf` are caught too.
+        if "rm" not in seg.argv:
             continue
-        flags = "".join(t for t in seg.argv[1:] if t.startswith("-"))
-        recursive = ("r" in flags.lower()) or ("--recursive" in seg.argv)
-        force = ("f" in flags.lower()) or ("--force" in seg.argv)
-        if recursive and force:
-            from .gate import _RM_DANGER_TARGET
-            if _RM_DANGER_TARGET.search(seg.raw):
-                return True
+        flag_tokens = [t for t in seg.argv if t.startswith("-")]
+        flags = "".join(flag_tokens).lower()
+        recursive = ("r" in flags) or ("--recursive" in seg.argv)
+        force = ("f" in flags) or ("--force" in seg.argv)
+        if recursive and force and _RM_DANGER_TARGET.search(seg.raw):
+            return True
     return False
 
 
@@ -111,12 +113,15 @@ def _plain_egress(c: Command) -> bool:
 
 # ---------- ALLOW: clearly-safe read-only ----------
 
+# Read-only, non-mutating, non-executing utilities only. Deliberately EXCLUDES:
+#   find  (-exec/-delete run/mutate), sed (-i mutates), awk (system()/print-to-file execute),
+#   env   (runs the command that follows it), python/python3/pytest (execute arbitrary code).
+# Those fall through to the fail-closed ASK default rather than being blanket-allowed.
 _SAFE = {"ls", "pwd", "whoami", "id", "echo", "printf", "date", "uname", "hostname",
-         "cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "find", "file", "stat",
-         "diff", "cut", "sort", "uniq", "tr", "awk", "sed", "which", "type", "env", "printenv",
+         "cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "file", "stat",
+         "diff", "cut", "sort", "uniq", "tr", "which", "type", "printenv",
          "true", "false", "test", "basename", "dirname", "realpath", "readlink", "tree", "du", "df"}
 _SAFE_GIT = {"status", "diff", "log", "show", "branch", "remote", "rev-parse", "describe", "config"}
-_SAFE_PY = {"-m", "py_compile", "pytest", "-c"}  # narrow: compile/tests
 
 
 def _safe_read(c: Command) -> bool:
@@ -131,13 +136,6 @@ def _safe_read(c: Command) -> bool:
         if n in _SAFE:
             continue
         if n == "git" and len(seg.argv) > 1 and seg.argv[1] in _SAFE_GIT:
-            continue
-        if n in ("python", "python3") and any(a in _SAFE_PY for a in seg.argv):
-            # only allow compile / pytest, not arbitrary -c payloads that could do anything
-            if "-c" in seg.argv:
-                return False
-            continue
-        if n in ("pytest",):
             continue
         return False
     return True

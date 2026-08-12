@@ -201,5 +201,42 @@ class ReviewRemediateTests(unittest.TestCase):
         self.assertIn("price - price * pct / 100", repo.read("discount.py"))
 
 
+class SeaRegressionHardening(unittest.TestCase):
+    """One test per #631 review finding."""
+
+    def test_apply_edits_rolls_back_on_exception(self):
+        # finding: a filesystem error mid-batch left the tree partially edited (no restore).
+        from sea.schema import Edit
+        repo = TmpRepo({"a.py": "ORIGINAL\n"})
+        ws = Workspace(repo.dir)
+        os.mkdir(os.path.join(repo.dir, "adir"))          # dir; rewriting to it raises IsADirectoryError
+        edits = [Edit(file="a.py", operation="rewrite", content="NEW"),
+                 Edit(file="adir", operation="rewrite", content="X")]
+        ok, msgs = ws.apply_edits(edits)
+        self.assertFalse(ok)
+        self.assertEqual(repo.read("a.py"), "ORIGINAL\n")  # first edit rolled back, not left partial
+
+    def test_compile_check_writes_no_pyc(self):
+        # finding: py_compile left __pycache__/*.pyc behind even for later-rejected files.
+        repo = TmpRepo({"m.py": "x = 1\n"})
+        res = Verifier(repo.dir, ["m.py"], compile_py=True).run()
+        self.assertTrue(res.ok)
+        for _dp, dirs, files in os.walk(repo.dir):
+            self.assertNotIn("__pycache__", dirs)
+            self.assertFalse(any(f.endswith(".pyc") for f in files))
+
+    def test_compile_check_detects_syntax_error(self):
+        repo = TmpRepo({"bad.py": "def (:\n"})
+        self.assertFalse(Verifier(repo.dir, ["bad.py"], compile_py=True).run().ok)
+
+    def test_base_url_not_doubled(self):
+        # finding: base_url ending in /api or /v1 produced /api/api/chat, /v1/v1/....
+        from sea import ModelClient
+        self.assertEqual(ModelClient("http://h:11434/api", "m", api="ollama").base_url, "http://h:11434")
+        self.assertEqual(ModelClient("http://h:11434/api/", "m", api="ollama").base_url, "http://h:11434")
+        self.assertEqual(ModelClient("https://x/v1", "m", api="openai").base_url, "https://x")
+        self.assertEqual(ModelClient("http://h:11434", "m", api="ollama").base_url, "http://h:11434")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

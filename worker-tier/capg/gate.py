@@ -110,8 +110,44 @@ class Command:
         return hosts
 
     def remote_hosts(self) -> list[str]:
-        """Non-local hosts targeted by ssh/scp/rsync/etc."""
-        return [h for h in self._hosts_for(REMOTE_TOOLS) if not _is_local(h)]
+        """Non-local hosts targeted by ssh/scp/rsync/etc. ssh's destination is the first non-option
+        positional arg — a HOST even when it's a single label (`ssh myserver ...`), which the generic
+        URL-style `_host_of` misses. scp/rsync/sftp carry the host in a `host:path` / `user@host:path`
+        token."""
+        hosts: list[str] = []
+        # ssh-family options that consume the following token as a value (so it isn't the host)
+        _val_opts = {"-p", "-i", "-o", "-l", "-F", "-b", "-c", "-m", "-w", "-W",
+                     "-D", "-L", "-R", "-e", "-J", "-Q", "-S", "-B", "-P"}
+        for seg in self.segments:
+            if seg.name not in REMOTE_TOOLS:
+                continue
+            positional: list[str] = []
+            skip = False
+            for a in seg.argv[1:]:
+                if skip:
+                    skip = False
+                    continue
+                if a.startswith("-"):
+                    if a in _val_opts:
+                        skip = True
+                    continue
+                positional.append(a)
+            if not positional:
+                continue
+            if seg.name in ("scp", "rsync", "sftp"):
+                for a in positional:
+                    if "://" in a:
+                        continue
+                    if ":" in a:                       # host:path or user@host:path
+                        left = a.split(":", 1)[0]
+                        if left:
+                            hosts.append(left.split("@")[-1])
+            else:  # ssh / telnet — the destination is the first positional
+                dest = positional[0].split("@")[-1]
+                dest = dest.split(":", 1)[0] if dest.count(":") == 1 else dest  # strip :port
+                if dest:
+                    hosts.append(dest)
+        return [h for h in hosts if h and not _is_local(h)]
 
     def egress_external(self) -> list[str]:
         """Non-local hosts/URLs targeted by curl/wget/nc/etc."""
@@ -245,15 +281,23 @@ def classify(command: str, rules: list[Rule] | None = None) -> Verdict:
     rules = rules if rules is not None else DEFAULT_RULES
     cmd = Command.parse(command)
     matches = []
+    errored = False
     for r in rules:
         try:
             if r.pred(cmd):
                 matches.append(r)
-        except Exception:  # noqa: BLE001 - a rule bug must never crash the gate; skip it
-            continue
+        except Exception:  # noqa: BLE001 - a rule bug must never crash the gate...
+            errored = True  # ...but a rule we could NOT evaluate must never yield ALLOW (fail-closed)
     if not matches:
+        if errored:
+            return Verdict(Decision.ASK, "rule-error",
+                           "a policy rule failed to evaluate; requires approval (fail-closed)", "rule-error")
         return Verdict(Decision.ASK, "unrecognized",
                        "command not recognised as clearly-safe; requires approval (fail-closed default)",
                        "default-ask")
     best = max(matches, key=lambda r: (int(r.decision), -rules.index(r)))
+    if errored and best.decision < Decision.ASK:
+        # some rule threw; the surviving matches only justify ALLOW — do not allow on partial evaluation
+        return Verdict(Decision.ASK, "rule-error",
+                       "a policy rule failed to evaluate; not eligible for ALLOW (fail-closed)", "rule-error")
     return Verdict(best.decision, best.category, best.reason, best.name)

@@ -77,14 +77,23 @@ class Workspace:
         return False, f"{e.file}: unknown operation {e.operation!r}"
 
     def apply_edits(self, edits: list[Edit]) -> tuple[bool, list[str]]:
-        """Apply a batch atomically: snapshot touched files, roll back on first failure."""
+        """Apply a batch atomically: snapshot touched files, roll back on the first rejected edit OR
+        on any raised exception (e.g. a filesystem error mid-write), so the tree is never left partial."""
         touched = list(dict.fromkeys(e.file for e in edits))
         snap = self.snapshot(touched)
         msgs: list[str] = []
-        for e in edits:
-            ok, msg = self.apply_edit(e)
-            msgs.append(msg)
-            if not ok:
+        try:
+            for e in edits:
+                ok, msg = self.apply_edit(e)
+                msgs.append(msg)
+                if not ok:
+                    self.restore(snap)
+                    return False, msgs
+            return True, msgs
+        except Exception as ex:  # noqa: BLE001 - any error mid-batch must still roll back cleanly
+            try:
                 self.restore(snap)
-                return False, msgs
-        return True, msgs
+            except Exception:  # best-effort restore; report failure regardless
+                pass
+            msgs.append(f"exception during apply — rolled back (fail-closed): {ex}")
+            return False, msgs

@@ -31,12 +31,17 @@ class VerifyResult:
         return "; ".join(bits) if bits else "no checks"
 
 
+# In-memory syntax check: compile() validates the source WITHOUT writing __pycache__/*.pyc, so a
+# rejected (later-rolled-back) edit never leaves stray bytecode behind. `python -m py_compile` would.
+_COMPILE_SRC = "import sys; p = sys.argv[1]; compile(open(p, 'rb').read(), p, 'exec')"
+
+
 def py_compile_check(root: str, files: list[str]) -> CheckResult:
     for f in files:
         if not f.endswith(".py"):
             continue
         r = subprocess.run(
-            [sys.executable, "-m", "py_compile", f],
+            [sys.executable, "-B", "-c", _COMPILE_SRC, f],  # -B: never write bytecode
             cwd=root, capture_output=True, text=True,
         )
         if r.returncode != 0:

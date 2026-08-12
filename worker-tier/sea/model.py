@@ -18,7 +18,7 @@ class ModelError(Exception):
 class ModelClient:
     def __init__(self, base_url: str, model: str, api: str = "auto", api_key: str | None = None,
                  temperature: float = 0.0, timeout: int = 240, num_ctx: int | None = 8192):
-        self.base_url = base_url.rstrip("/")
+        raw = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.temperature = temperature
@@ -27,13 +27,21 @@ class ModelClient:
         # modest window keeps the model's KV cache (and host RAM) small — no need for Hermes' 64K default.
         self.num_ctx = num_ctx
         if api == "auto":
-            looks_ollama = ("/v1" not in self.base_url) and (
-                self.base_url.endswith("/api") or ":11434" in self.base_url or ":11500" in self.base_url
+            # detect from the ORIGINAL url before we strip its api-path segment below
+            looks_ollama = ("/v1" not in raw) and (
+                raw.endswith("/api") or ":11434" in raw or ":11500" in raw
             )
             api = "ollama" if looks_ollama else "openai"
         if api not in ("ollama", "openai"):
             raise ValueError(f"unknown api {api!r}")
         self.api = api
+        # Strip a trailing api-path segment the caller may already have included, so chat() appending
+        # "/api/chat" or "/v1/chat/completions" never produces "/api/api/chat" or "/v1/v1/...".
+        if raw.endswith("/api"):
+            raw = raw[:-len("/api")]
+        elif raw.endswith("/v1"):
+            raw = raw[:-len("/v1")]
+        self.base_url = raw.rstrip("/")
 
     def _post(self, path: str, payload: dict) -> dict:
         data = json.dumps(payload).encode()
