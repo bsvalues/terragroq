@@ -113,7 +113,7 @@ function upgradeJournal(options: FixtureOptions) {
     phase: 1,
     authority_id: UPGRADE_AUTHORITY_ID,
     authority_sha256: "3".repeat(64),
-    manifest_sha256: (options.markerUpgradeMismatch ? "5" : "4").repeat(64),
+    manifest_sha256: "4".repeat(64),
     new_commit: options.upgradeSourceMismatch ? PRIOR : SOURCE,
   }
   const committed = {
@@ -324,7 +324,7 @@ function fixture(options: FixtureOptions = {}) {
     schema_version: "1.0-aegis-standing-hash-activation-marker",
     upgrade_id: "aegis-standing-hash-replay-ledger-upgrade-v1",
     authority_id: UPGRADE_AUTHORITY_ID,
-    new_commit: PRIOR,
+    new_commit: options.markerUpgradeMismatch ? SOURCE : PRIOR,
     runtime_closure_sha256: manifest.priorState.closure,
     manifest_sha256: "4".repeat(64),
     prepared_at: "2026-08-12T17:55:00.000Z",
@@ -537,11 +537,11 @@ describe("AEGIS standing HASH admission release promotion", () => {
       priorState: { commit: "2593e782fdbaefbc05f617cdac3acde4a4255be0" },
       evidenceRelease: {
         sourceCommit: "b1637a0d16394361dff74e1fb85851ba61f91235",
-        admissionPath: "docs/reports/standing-dispatch/admission-issue-595-live-010.json",
+        admissionPath: "docs/reports/standing-dispatch/admission-issue-595-live-011.json",
       },
-      newRelease: { commit: "ecea782bf8539c094d8b9a4a8c6ed16eb2ad4629" },
-      packageRelease: { commit: "7df85e37ea3f47c720465273a05c743196fa54de" },
-      install: { requestId: "issue-595-live-010" },
+      newRelease: { commit: "5494c2356282caf55d08ab1e98694208de665ca1" },
+      packageRelease: { commit: "e694c3d17f8c87e17b21558a1aaf8299348c9721" },
+      install: { requestId: "issue-595-live-011" },
     })
   })
 
@@ -616,7 +616,7 @@ describe("AEGIS standing HASH admission release promotion", () => {
     ["expired authority", { authorityExpired: true }, "AEGIS_ADMISSION_PROMOTION_AUTHORITY_EXPIRED"],
     ["uncommitted replay upgrade", { upgradeUncommitted: true }, "AEGIS_ADMISSION_PROMOTION_REPLAY_UPGRADE_INVALID"],
     ["wrong replay upgrade source", { upgradeSourceMismatch: true }, "AEGIS_ADMISSION_PROMOTION_REPLAY_UPGRADE_INVALID"],
-    ["activation marker/replay upgrade mismatch", { markerUpgradeMismatch: true }, "AEGIS_ADMISSION_PROMOTION_PRIOR_STATE_DRIFT"],
+    ["activation marker/current release mismatch", { markerUpgradeMismatch: true }, "AEGIS_ADMISSION_PROMOTION_PRIOR_STATE_DRIFT"],
     ["replay claim", { replayClaim: true }, "AEGIS_ADMISSION_PROMOTION_REPLAY_STATE_INVALID"],
     ["corrupt replay chain", { replayCorrupt: true }, "AEGIS_ADMISSION_PROMOTION_REPLAY_STATE_INVALID"],
     ["backdated epoch body with later durable envelope", { epochEnvelopeAfterAdmission: true }, "AEGIS_ADMISSION_PROMOTION_ARTIFACT_INVALID"],
