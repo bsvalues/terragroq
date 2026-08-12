@@ -13,9 +13,11 @@ import {
   validateStandingProvisioningManifest,
 } from "../scripts/execution-fabric/provision/aegis-standing-hash-prerequisites.mjs"
 import {
+  ACCEPTED_KEY_GENERATION_MANIFEST_SHA256,
   applyAegisStandingHashPrerequisites,
   assertNoGitAlternates,
   standingProvisioningErrorEvidence,
+  validateHermesKeyGenerationEvidence,
 } from "../scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs"
 import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
 
@@ -290,8 +292,8 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/canonical-json.mjs", sha256: "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs", sha256: "c18ecec38a5086788d7f4532b471efc6548cd293c27f3983a92934464015fb16", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "2c69221e56659d3f358c8a81236e59dc61e8994bae7a98b558c6648fee5021d6", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "a6614aa312ca0d2247536b35a24fb704cc186e9339b3ca8badc76e67c623017e", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "4ae1ea7bb7933c7aea1a79a6d31da204d92d306b2ba7249460ec4e4a35302a3c", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "563d5fb28aabff56db69c515e9e7b2de7ee1cdb675ea192edb9ba06152cf9fa2", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
       "scheduler-activation",
@@ -514,6 +516,30 @@ function keyGenerationEvidence(value = manifest(), publicKey = TRANSPORT_PUBLIC_
     publicKeyFingerprint: publicKeyFingerprint(publicKey),
   }
 }
+
+describe("dedicated key generation evidence compatibility", () => {
+  it("accepts the exact reviewed pre-remediation manifest generation", () => {
+    const value = manifest()
+    const evidence = keyGenerationEvidence(value)
+    evidence.manifestSha256 = ACCEPTED_KEY_GENERATION_MANIFEST_SHA256[0]
+
+    expect(validateHermesKeyGenerationEvidence(value, evidence, {
+      fingerprint: publicKeyFingerprint(),
+      fileSha256: publicKeySha256(),
+    })).toMatchObject({ evidence })
+  })
+
+  it("rejects any other stale key-generation manifest", () => {
+    const value = manifest()
+    const evidence = keyGenerationEvidence(value)
+    evidence.manifestSha256 = "0".repeat(64)
+
+    expect(() => validateHermesKeyGenerationEvidence(value, evidence, {
+      fingerprint: publicKeyFingerprint(),
+      fileSha256: publicKeySha256(),
+    })).toThrow(expect.objectContaining({ code: "AEGIS_PROVISION_KEY_GENERATION_EVIDENCE_INVALID" }))
+  })
+})
 
 function applyAuthority(value = manifest(), evidence = keyGenerationEvidence(value), publicKey = TRANSPORT_PUBLIC_KEY, sourcePath = reviewedCheckoutSourcePath): Json {
   return {
