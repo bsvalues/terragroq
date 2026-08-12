@@ -478,10 +478,10 @@ export function upgradeAegisStandingHashReplayLedger({
     step("CREATE_ACTIVATION_MARKER", () => io.createFileExclusive(
       loadedManifest.install.activationMarkerPath, activationMarkerBytes, 0, 0, 0o444,
     ))
-    step("REPLACE_TRUSTED_RELEASE_MANIFEST", () => io.atomicReplace(
-      loadedManifest.priorState.trustedReleaseManifestPath, releaseBytes, 0, 0, 0o444,
-    ))
-    releaseManifestReplaced = true
+    step("REPLACE_TRUSTED_RELEASE_MANIFEST", () => {
+      releaseManifestReplaced = true
+      io.atomicReplace(loadedManifest.priorState.trustedReleaseManifestPath, releaseBytes, 0, 0, 0o444)
+    })
     io.appendJournal(mutationJournal, {
       record_type: "COMMITTED",
       phase: 2,
@@ -517,10 +517,10 @@ export function upgradeAegisStandingHashReplayLedger({
         failed_at: clock(),
         failure_code: error?.code ?? "AEGIS_REPLAY_UPGRADE_APPLY_FAILED",
         completed_mutations: completed,
-        activation_manifest_replaced: completed.includes("REPLACE_TRUSTED_RELEASE_MANIFEST"),
+        activation_manifest_replaced: releaseManifestReplaced,
         prior_bootstrap_restored: completed.includes("REPLACE_BOOTSTRAP") && recoveryError === null,
         prior_initializer_restored: completed.includes("REPLACE_REPLAY_INITIALIZER") && recoveryError === null,
-        prior_release_manifest_restored: completed.includes("REPLACE_TRUSTED_RELEASE_MANIFEST") && recoveryError === null,
+        prior_release_manifest_restored: releaseManifestReplaced && recoveryError === null,
       })
     } catch (journalError) {
       fail("AEGIS_REPLAY_UPGRADE_EVIDENCE_UNCERTAIN", "partial failure journal was not durable", {

@@ -7,7 +7,7 @@
     {
       "path": "config/execution-fabric/aegis-standing-compute-authority.v1.json",
       "byte_length": 3634,
-      "sha256": "38fc915fc2a026b8c6b48ab426fc3561f308d46695cf5f57a56f35e696a720bb"
+      "sha256": "9e08599cd4b89ac50534ff457cc990d4ac5d7c25c376b7ddf8051aea2a3faf33"
     },
     {
       "path": "config/execution-fabric/aegis-standing-hash-template.v1.json",

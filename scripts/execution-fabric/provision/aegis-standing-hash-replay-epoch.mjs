@@ -391,7 +391,6 @@ export function initializeAegisStandingHashReplayEpoch({
     fsApi,
     clock,
     validateDirectory,
-    validateFile,
     syncDirectory,
   })
   const readJournal = () => {

@@ -451,7 +451,6 @@ export function createStandingLedgerProviders({
     fsApi,
     clock,
     validateDirectory,
-    validateFile,
     syncDirectory: sync,
   })
   const readReplayJournal = readJournal ?? (() => privateReplayLedger.read().map((entry) => ({ ...entry, uid })))

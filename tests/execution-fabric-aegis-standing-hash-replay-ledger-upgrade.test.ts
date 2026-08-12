@@ -75,6 +75,7 @@ function fixture(options: {
   dirtyCheckout?: boolean
   appendOnlyPostcheck?: boolean
   failMutation?: string
+  failAfterReplace?: string
   failTerminalJournal?: boolean
   occupiedLock?: string
   ancestryValid?: boolean
@@ -262,6 +263,10 @@ function fixture(options: {
       maybeFail(name)
       events.push(name)
       file(target, bytes, uid, gid, mode)
+      if (options.failAfterReplace === name && !injectedFailures.has(`after:${name}`)) {
+        injectedFailures.add(`after:${name}`)
+        throw Object.assign(new Error(`injected post-replace ${name}`), { code: "INJECTED_POST_REPLACE_FAILURE" })
+      }
     },
     run: (binary: string, args: string[]) => {
       if (binary === CHATTR) {
@@ -497,7 +502,20 @@ describe("AEGIS standing hash replay-ledger one-shot upgrade", () => {
     expect(value.entries.get(ACTIVATION_MARKER_PATH)).toBeDefined()
     const records = value.entries.get(value.mutationJournal)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
     expect(records[1]).toMatchObject({ prior_bootstrap_restored: true, prior_initializer_restored: true,
-      activation_manifest_replaced: false })
+      activation_manifest_replaced: true, prior_release_manifest_restored: true })
+  })
+
+  it("restores the prior manifest when durability fails after its rename", () => {
+    const value = fixture({ failAfterReplace: "REPLACE_TRUSTED_RELEASE_MANIFEST" })
+    const priorManifest = Buffer.from(value.entries.get(value.manifest.priorState.trustedReleaseManifestPath)!.bytes!)
+    let failure: any
+    try { run(value, "apply") } catch (error) { failure = error }
+
+    expect(failure.code).toBe("INJECTED_POST_REPLACE_FAILURE")
+    expect(value.entries.get(value.manifest.priorState.trustedReleaseManifestPath)!.bytes).toEqual(priorManifest)
+    const records = value.entries.get(value.mutationJournal)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
+    expect(records[1]).toMatchObject({ record_type: "FAILED_PARTIAL", activation_manifest_replaced: true,
+      prior_release_manifest_restored: true })
   })
 
   it("reports uncertain evidence if a partial failure cannot be durably terminalized", () => {
