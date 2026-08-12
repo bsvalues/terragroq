@@ -66,27 +66,43 @@
   "installer": {
     "sourcePath": "scripts/execution-fabric/provision/repair-aegis-ssh-coexistence.mjs",
     "installedPath": "/usr/local/libexec/williamos-aegis-ssh-coexistence-repair.mjs",
-    "sha256": "8fc504b5df89aa4e54b1b7d5c9ba0aeaae3c5688c04f22e0b5ed287719547c01"
+    "sha256": "5630aa2bb2be587f93b79c146fc0f33e96709ee1e8843bfe79e275de23e2742d"
   },
   "launcher": {
     "sourcePath": "scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh",
-    "sha256": "a06d05be001640f6bf10d1d74df213056403d5df9876103b57f0f35d649a98eb",
+    "executedPath": "/usr/local/share/williamos/aegis-ssh-coexistence-repair-bundle/scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh",
+    "sha256": "46b61f4343f7a5a86f77717792362cbf33a6e240d3d63faf14cc84047d2c9e0c",
     "owner": "root",
     "group": "root",
     "mode": "0555"
   },
+  "trustedServiceParents": [
+    { "path": "/home/williamos-fabric", "uid": 999, "gid": 987, "mode": "0755" },
+    { "path": "/home/williamos-fabric/.ssh", "uid": 999, "gid": 987, "mode": "0700" },
+    { "path": "/var/lib/williamos/fabric/ledger", "uid": 999, "gid": 987, "mode": "0700" },
+    { "path": "/var/lib/williamos/fabric/standing-hash-ledger", "uid": 999, "gid": 987, "mode": "0700" }
+  ],
   "reservationLocks": [
     "/var/lib/williamos/fabric/ledger/resident-aegis-mutation.lock",
     "/var/lib/williamos/fabric/standing-hash-ledger/standing-hash-mutation.lock",
     "/run/lock/williamos-aegis-ssh-coexistence-repair.lock"
   ],
+  "kernelLock": {
+    "path": "/run/lock/williamos-aegis-ssh-coexistence-repair.kernel.lock",
+    "owner": "root",
+    "group": "root",
+    "mode": "0600",
+    "mechanism": "FLOCK_INHERITED_FD"
+  },
   "authProof": {
     "root": "/var/lib/williamos/fabric/ssh-coexistence-repair-auth-proofs",
     "result": "STANDING_AUTHENTICATED",
     "sourceAddress": "192.168.88.9",
     "owner": "root",
     "group": "root",
-    "mode": "0600"
+    "mode": "0600",
+    "challengeNonceBytes": 32,
+    "maximumAgeSeconds": 900
   },
   "inactivity": {
     "absentPaths": [
