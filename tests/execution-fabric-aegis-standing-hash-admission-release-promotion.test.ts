@@ -535,20 +535,20 @@ function expectFailureCode(action: () => unknown, code: string) {
 }
 
 describe("AEGIS standing HASH admission release promotion", () => {
-  it("retains the completed live-012 promotion manifest as historical evidence", () => {
+  it("binds the checked-in promotion manifest to live-014 while retaining earlier artifacts separately", () => {
     const manifest = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"))
     expect(manifest).toMatchObject({
-      priorState: { commit: "2593e782fdbaefbc05f617cdac3acde4a4255be0" },
+      priorState: { commit: "a92cd9d8814eb01e96b92da5b7640e5016b0c8f5" },
       evidenceRelease: {
         sourceCommit: "b1637a0d16394361dff74e1fb85851ba61f91235",
-        admissionPath: "docs/reports/standing-dispatch/admission-issue-595-live-012.json",
+        admissionPath: "docs/reports/standing-dispatch/admission-issue-595-live-014.json",
       },
-      newRelease: { commit: "a92cd9d8814eb01e96b92da5b7640e5016b0c8f5" },
-      packageRelease: { commit: "83c9db147865eca345dd36c3f47f238be777f25e" },
-      install: { requestId: "issue-595-live-012" },
+      newRelease: { commit: "f765a65248d2931481f71575af02573239b68e88" },
+      packageRelease: { commit: "a16422261cfb0021092c8e3511f0571a576a8c59" },
+      install: { requestId: "issue-595-live-014" },
     })
     expect(validateAegisStandingHashAdmissionReleasePromotionManifest(manifest)).toMatchObject({
-      priorState: { commit: "2593e782fdbaefbc05f617cdac3acde4a4255be0" },
+      priorState: { commit: "a92cd9d8814eb01e96b92da5b7640e5016b0c8f5" },
     })
   })
 
