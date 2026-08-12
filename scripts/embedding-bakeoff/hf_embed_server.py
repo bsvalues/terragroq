@@ -12,7 +12,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from sentence_transformers import SentenceTransformer
 
 MODEL_ID = os.environ["HF_MODEL"]
-_model = SentenceTransformer(MODEL_ID, trust_remote_code=True, device="cpu")
+_model = SentenceTransformer(MODEL_ID, trust_remote_code=True,
+                             device=os.environ.get("DEVICE", "cpu"))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -38,4 +39,4 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    HTTPServer(("127.0.0.1", int(os.environ.get("PORT", "11600"))), Handler).serve_forever()
+    HTTPServer((os.environ.get("HOST", "127.0.0.1"), int(os.environ.get("PORT", "11600"))), Handler).serve_forever()
