@@ -519,9 +519,12 @@ function keyGenerationEvidence(value = manifest(), publicKey = TRANSPORT_PUBLIC_
 
 describe("dedicated key generation evidence compatibility", () => {
   it("accepts the exact reviewed pre-remediation manifest generation", () => {
+    const approvedHistoricalManifestSha256 =
+      "5774d4e98ba2620a9bf0433c00c795f69357ef473e91d85e6e8338ada8c2821c"
+    expect(LEGACY_KEY_GENERATION_MANIFEST_SHA256).toBe(approvedHistoricalManifestSha256)
     const value = manifest()
     const evidence = keyGenerationEvidence(value)
-    evidence.manifestSha256 = LEGACY_KEY_GENERATION_MANIFEST_SHA256
+    evidence.manifestSha256 = approvedHistoricalManifestSha256
 
     expect(validateHermesKeyGenerationEvidence(value, evidence, {
       fingerprint: publicKeyFingerprint(),
