@@ -51,6 +51,7 @@ const EXPECTED_MUTATIONS = Object.freeze([
   "INSTALL_ROOT_OWNED_BOOTSTRAP",
   "INSTALL_ROOT_OWNED_RELEASE_MANIFEST",
   "INSTALL_ROOT_OWNED_SSH_ENTRYPOINT",
+  "INSTALL_ROOT_OWNED_CANONICAL_JSON",
   "INSTALL_ROOT_OWNED_REPLAY_EPOCH_INITIALIZER",
   "CREATE_PRIVATE_REQUEST_ROOT",
   "CREATE_PRIVATE_LEDGER_ROOT",
@@ -86,6 +87,7 @@ const CANONICAL_JSON_SOURCE = "scripts/execution-fabric/canonical-json.mjs"
 const EXPECTED_ROOT_ASSETS = Object.freeze({
   bootstrap: "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs",
   "ssh-entrypoint": "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs",
+  "canonical-json": "/usr/local/libexec/canonical-json.mjs",
   "replay-epoch-initializer": "/usr/local/libexec/williamos/aegis-standing-hash-replay-epoch.mjs",
   "release-manifest": "/etc/williamos/fabric/trusted-main-release.json",
 })
@@ -111,9 +113,9 @@ const SSH_ENTRYPOINT_SOURCE = "scripts/execution-fabric/provision/aegis-standing
 const REPLAY_INITIALIZER_SOURCE = "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs"
 const APPLY_SOURCE = "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs"
 const KEY_GENERATOR_SOURCE = "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs"
+const REPAIR_SOURCE = "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs"
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const SHA256 = /^[a-f0-9]{64}$/
-const SSH_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}$/
 const MAX_FILE_BYTES = 1024 * 1024
 const GIT_EXECUTABLE = "/usr/bin/git"
 const GIT_MAX_OUTPUT_BYTES = 1024 * 1024
@@ -216,7 +218,7 @@ function validateManifest(manifest) {
     const asset = assets[id]
     if (asset?.path !== expectedPath || asset.type !== "file" || asset.owner !== "root"
       || asset.group !== "root" || asset.singleLink !== true
-      || asset.mode !== (id === "release-manifest" ? "0444" : "0555")) {
+      || asset.mode !== (["release-manifest", "canonical-json"].includes(id) ? "0444" : "0555")) {
       fail("AEGIS_PROVISION_PACKAGE_INVALID", `root-owned asset ${id} differs`)
     }
   }
@@ -261,7 +263,7 @@ function validateManifest(manifest) {
     fail("AEGIS_PROVISION_PACKAGE_INVALID", "apply contract differs")
   }
   const bindingPaths = (manifest.bindings ?? []).map(({ path: bindingPath }) => bindingPath)
-  if (!same(bindingPaths, [...EXPECTED_CLOSURE, CANONICAL_JSON_SOURCE, SSH_ENTRYPOINT_SOURCE, REPLAY_INITIALIZER_SOURCE, APPLY_SOURCE, KEY_GENERATOR_SOURCE])
+  if (!same(bindingPaths, [...EXPECTED_CLOSURE, CANONICAL_JSON_SOURCE, SSH_ENTRYPOINT_SOURCE, REPLAY_INITIALIZER_SOURCE, APPLY_SOURCE, KEY_GENERATOR_SOURCE, REPAIR_SOURCE])
     || manifest.bindings.some((binding) => !SHA256.test(binding.sha256 ?? "") || binding.textNormalization !== "LF")) {
     fail("AEGIS_PROVISION_PACKAGE_INVALID", "reviewed package bindings differ")
   }
@@ -722,6 +724,7 @@ function buildLayout(manifest, closure, publicKey, account) {
   files.push(
     { id: "bootstrap", path: EXPECTED_ROOT_ASSETS.bootstrap, bytes: closure.get(EXPECTED_CLOSURE[0]), uid: 0, gid: 0, mode: 0o555 },
     { id: "ssh-entrypoint", path: EXPECTED_ROOT_ASSETS["ssh-entrypoint"], bytes: closure.get(SSH_ENTRYPOINT_SOURCE), uid: 0, gid: 0, mode: 0o555 },
+    { id: "canonical-json", path: EXPECTED_ROOT_ASSETS["canonical-json"], bytes: closure.get(CANONICAL_JSON_SOURCE), uid: 0, gid: 0, mode: 0o444 },
     { id: "replay-epoch-initializer", path: EXPECTED_ROOT_ASSETS["replay-epoch-initializer"], bytes: closure.get(REPLAY_INITIALIZER_SOURCE), uid: 0, gid: 0, mode: 0o555 },
     { id: "authorized-keys", path: manifest.invocationBoundary.authorizedKeysPath, bytes: Buffer.from(publicKey.authorizedRecord, "utf8"), ...account, mode: 0o600 },
   )

@@ -78,6 +78,16 @@
       "singleLink": true
     },
     {
+      "id": "canonical-json",
+      "path": "/usr/local/libexec/canonical-json.mjs",
+      "type": "file",
+      "owner": "root",
+      "group": "root",
+      "mode": "0444",
+      "direct": true,
+      "singleLink": true
+    },
+    {
       "id": "release-manifest",
       "path": "/etc/williamos/fabric/trusted-main-release.json",
       "type": "file",
@@ -243,6 +253,10 @@
       "asset": "rootOwnedAssets.ssh-entrypoint"
     },
     {
+      "id": "INSTALL_ROOT_OWNED_CANONICAL_JSON",
+      "asset": "rootOwnedAssets.canonical-json"
+    },
+    {
       "id": "INSTALL_ROOT_OWNED_REPLAY_EPOCH_INITIALIZER",
       "asset": "rootOwnedAssets.replay-epoch-initializer"
     },
@@ -283,6 +297,96 @@
     "consumeBeforeFirstMutationRequired": true,
     "refuseExistingDrift": true,
     "mutationJournalRequired": true
+  },
+  "repair": {
+    "id": "aegis-standing-hash-canonical-json-repair-v1",
+    "sourcePath": "scripts/execution-fabric/canonical-json.mjs",
+    "targetPath": "/usr/local/libexec/canonical-json.mjs",
+    "targetOwner": "root",
+    "targetGroup": "root",
+    "targetMode": "0444",
+    "targetSingleLink": true,
+    "previousAppliedManifestSha256": "adb43b325199e3eb167298887ed01e7c434a88b0838ace17f1086132ae0f46ec",
+    "previousRootMutationIds": [
+      "INSTALL_REVIEWED_RELEASE_CLOSURE",
+      "INSTALL_ROOT_OWNED_BOOTSTRAP",
+      "INSTALL_ROOT_OWNED_RELEASE_MANIFEST",
+      "INSTALL_ROOT_OWNED_SSH_ENTRYPOINT",
+      "INSTALL_ROOT_OWNED_REPLAY_EPOCH_INITIALIZER",
+      "CREATE_PRIVATE_REQUEST_ROOT",
+      "CREATE_PRIVATE_LEDGER_ROOT",
+      "CREATE_PRIVATE_NODE_LEASE_ROOT",
+      "ESTABLISH_REPLAY_JOURNAL_EPOCH",
+      "INSTALL_FORCED_COMMAND_AUTHORIZED_KEY"
+    ],
+    "previousPlannedMutations": [
+      { "type": "CREATE_DIRECTORY", "path": "/opt/williamos" },
+      { "type": "CREATE_DIRECTORY", "path": "/opt/williamos/releases" },
+      { "type": "CREATE_DIRECTORY", "path": "/usr/local/libexec/williamos" },
+      { "type": "CREATE_DIRECTORY", "path": "/etc/williamos" },
+      { "type": "CREATE_DIRECTORY", "path": "/etc/williamos/fabric" },
+      { "type": "CREATE_DIRECTORY", "path": "/var/lib/williamos/fabric/standing-hash-requests" },
+      { "type": "CREATE_DIRECTORY", "path": "/var/lib/williamos/fabric/standing-hash-ledger" },
+      { "type": "CREATE_DIRECTORY", "path": "/var/lib/williamos/fabric/ledger" },
+      { "type": "CREATE_DIRECTORY", "path": "/home/williamos-fabric/.ssh" },
+      {
+        "type": "INSTALL_REVIEWED_CHECKOUT",
+        "path": "/opt/williamos/releases/13709f5789c25dea408283730a6bd35e8fd894ab",
+        "source_path": "/opt/williamos/source/terragroq",
+        "commit": "13709f5789c25dea408283730a6bd35e8fd894ab"
+      },
+      { "type": "INSTALL_FILE", "id": "bootstrap", "path": "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs" },
+      { "type": "INSTALL_FILE", "id": "ssh-entrypoint", "path": "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs" },
+      { "type": "INSTALL_FILE", "id": "replay-epoch-initializer", "path": "/usr/local/libexec/williamos/aegis-standing-hash-replay-epoch.mjs" },
+      { "type": "INSTALL_FILE", "id": "authorized-keys", "path": "/home/williamos-fabric/.ssh/authorized_keys" },
+      { "type": "INSTALL_FILE", "id": "release-manifest", "path": "/etc/williamos/fabric/trusted-main-release.json" }
+    ],
+    "previousProvisioningJournalRequired": true,
+    "previousProvisioningApplyCompleteRequired": true,
+    "authorityMaximumAgeSeconds": 900,
+    "singleUseAuthorityRequired": true,
+    "consumeBeforeMutationRequired": true,
+    "missingTargetOnly": true,
+    "overwriteAllowed": false,
+    "adoptionAllowed": false,
+    "atomicExclusiveInstallRequired": true,
+    "durableRepairJournalRequired": true,
+    "networkAllowed": false,
+    "schedulerAllowed": false,
+    "workloadAllowed": false,
+    "installedAssets": [
+      {
+        "id": "bootstrap",
+        "path": "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs",
+        "sha256": "7d4b713c00f73726ce39f20856c53a69865968d98d2daf08e2ce038c612ce14b",
+        "mode": "0555"
+      },
+      {
+        "id": "ssh-entrypoint",
+        "path": "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs",
+        "sha256": "ebcf0d068e11c1a3f98b515f9a59a456955d8d30abdbb8bab7897b9b315caf9a",
+        "mode": "0555"
+      },
+      {
+        "id": "replay-epoch-initializer",
+        "path": "/usr/local/libexec/williamos/aegis-standing-hash-replay-epoch.mjs",
+        "sha256": "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802",
+        "mode": "0555"
+      }
+    ],
+    "trustedReleaseManifestPath": "/etc/williamos/fabric/trusted-main-release.json",
+    "trustedReleaseRootRequired": true,
+    "historicalCheckoutGitExecutable": "/usr/bin/git",
+    "historicalCheckoutOriginRepository": "bsvalues/terragroq",
+    "historicalCheckoutDetachedHeadRequired": true,
+    "historicalCheckoutCleanTrackedAndUntrackedRequired": true,
+    "historicalCheckoutAlternatesAllowed": false,
+    "historicalCheckoutExactTrackedFileMetadataRequired": true,
+    "historicalCheckoutTrackedPathAncestorMode": "0755",
+    "historicalCheckoutExactTrackedPathAncestorMetadataRequired": true,
+    "privateRootsRequired": true,
+    "authorizedKeysPath": "/home/williamos-fabric/.ssh/authorized_keys",
+    "authorizedKeyExactRecordRequired": true
   },
   "rollback": {
     "automatic": false,
@@ -367,12 +471,17 @@
     },
     {
       "path": "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs",
-      "sha256": "ee3118289cde6b2b57aba98b209e5894c444161a99bb3e5f6dfefa99d9a0bc18",
+      "sha256": "ec84ced541b0cfad3be37a727792825122bdff688f780a46ce5b51f80a9ba4e8",
       "textNormalization": "LF"
     },
     {
       "path": "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs",
       "sha256": "72d343f3cdae8e84acc31edf7726982f4596a9a0cdd1c37692f2b85db009aeba",
+      "textNormalization": "LF"
+    },
+    {
+      "path": "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs",
+      "sha256": "2b606a16a7bc4a48afea9e40e0d3757596ba26f223bbc5323f690c811db38313",
       "textNormalization": "LF"
     }
   ]

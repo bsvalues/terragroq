@@ -5,7 +5,7 @@ import path from "node:path"
 import { canonicalizeJcs } from "../canonical-json.mjs"
 
 const MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-provisioning-package.v1.json"
-const EXPECTED_MANIFEST_SHA256 = "adb43b325199e3eb167298887ed01e7c434a88b0838ace17f1086132ae0f46ec"
+const EXPECTED_MANIFEST_SHA256 = "84dba4f44ffb72dea283c3742f9aa1e565cdb65c00b17a629af38ab795c47ed4"
 const SHA256 = /^[a-f0-9]{64}$/
 const COMMIT = /^[a-f0-9]{40}$/
 const SSH_SHA256_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}$/
@@ -248,6 +248,7 @@ export function buildStandingProvisioningPlan(rawManifest, observed) {
     if (!present && observation.exists === false) {
       if (id === "bootstrap") absent(true, "INSTALL_ROOT_OWNED_BOOTSTRAP")
       else if (id === "ssh-entrypoint") absent(true, "INSTALL_ROOT_OWNED_SSH_ENTRYPOINT")
+      else if (id === "canonical-json") absent(true, "INSTALL_ROOT_OWNED_CANONICAL_JSON")
       else if (id === "replay-epoch-initializer") absent(true, "INSTALL_ROOT_OWNED_REPLAY_EPOCH_INITIALIZER")
       else if (id === "release-manifest") absent(true, "INSTALL_ROOT_OWNED_RELEASE_MANIFEST")
       else if (id === "release-root") absent(true, "INSTALL_REVIEWED_RELEASE_CLOSURE")
