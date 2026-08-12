@@ -49,7 +49,9 @@ def run(corpus_dir, backend, base_url, model, api_key, k, dim):
 
     doc_vecs = embed_texts([d["text"] for d in docs], backend=backend, base_url=base_url,
                            model=model, api_key=api_key, dim=dim)
-    q_vecs = embed_texts([q["query"] for q in queries], backend=backend, base_url=base_url,
+    query_instruction = os.environ.get("QUERY_INSTRUCTION", "")
+    q_texts = [(query_instruction + q["query"]) if query_instruction else q["query"] for q in queries]
+    q_vecs = embed_texts(q_texts, backend=backend, base_url=base_url,
                          model=model, api_key=api_key, dim=dim)
 
     per_query = []
@@ -84,6 +86,8 @@ def run(corpus_dir, backend, base_url, model, api_key, k, dim):
         "mrr_ci95": M.bootstrap_ci([r["mrr"] for r in per_query]),
         "ndcg@10_ci95": M.bootstrap_ci([r["ndcg@10"] for r in per_query]),
         "near_dup_discrimination": M.mean([r["near_dup_ok"] for r in per_query]),
+        "current_truth_discrimination": M.mean(
+            [r["near_dup_ok"] for r in per_query if r["type"] == "current-truth"]),
         "false_positive_rate": M.false_positive_rate(no_gold_top1, fp_threshold),
         "fp_threshold": round(fp_threshold, 4),
         "per_category_recall@5": {
@@ -97,6 +101,7 @@ def run(corpus_dir, backend, base_url, model, api_key, k, dim):
         "corpus_fingerprint": corpus_fingerprint(docs, queries),
         "host": os.uname().nodename if hasattr(os, "uname") else None,
         "ran_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "query_instruction": bool(os.environ.get("QUERY_INSTRUCTION", "")),
         "note": "Phase-2 measurement. No model/dimension frozen (Phase 3).",
     }
     return {"summary": summary, "manifest": manifest, "per_query": per_query}
@@ -122,7 +127,8 @@ def main(argv=None):
     s = result["summary"]
     print(json.dumps({"model": args.model or args.backend, "summary": {
         k: s[k] for k in ("recall@5", "recall@10", "mrr", "ndcg@10",
-                          "near_dup_discrimination", "false_positive_rate")}}, indent=2))
+                          "near_dup_discrimination", "current_truth_discrimination",
+                          "false_positive_rate")}}, indent=2))
     return 0
 
 

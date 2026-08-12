@@ -1,0 +1,47 @@
+{"id": "ct1", "type": "current-truth", "query": "How does WilliamOS route model inference today?", "gold": ["cur-inference"], "distractor": "sup-inference"}
+{"id": "ct2", "type": "current-truth", "query": "Where does WilliamOS store its state right now?", "gold": ["cur-db"], "distractor": "sup-db"}
+{"id": "ct3", "type": "current-truth", "query": "What is the current deployment status of Vercel in WilliamOS?", "gold": ["cur-vercel"], "distractor": "sup-vercel"}
+{"id": "ct4", "type": "current-truth", "query": "How is the auth base URL currently resolved?", "gold": ["cur-auth"], "distractor": "sup-auth"}
+{"id": "ct5", "type": "current-truth", "query": "What is the current worker-kernel decision for WilliamOS?", "gold": ["cur-kernel"], "distractor": "sup-kernel"}
+{"id": "ct6", "type": "current-truth", "query": "What is the current state of the embedding dimension decision?", "gold": ["cur-embed"], "distractor": "sup-embed"}
+{"id": "ct7", "type": "current-truth", "query": "Where does heavy development run now?", "gold": ["cur-offload"], "distractor": "sup-offload"}
+{"id": "ct8", "type": "current-truth", "query": "What was the old superseded inference path before the sovereign seam?", "gold": ["sup-inference"], "distractor": "cur-inference"}
+{"id": "ct9", "type": "current-truth", "query": "What database did WilliamOS use before the sovereign cutover?", "gold": ["sup-db"], "distractor": "cur-db"}
+{"id": "ct10", "type": "current-truth", "query": "Which legacy configuration auto-deployed every push to Vercel?", "gold": ["sup-vercel"], "distractor": "cur-vercel"}
+{"id": "ct11", "type": "current-truth", "query": "Which superseded design proposed a custom bespoke gateway on the nested Codex runtime?", "gold": ["sup-kernel"], "distractor": "cur-kernel"}
+{"id": "ct12", "type": "current-truth", "query": "Which retired configuration used openai/text-embedding-3-small at 1536 dimensions?", "gold": ["sup-embed"], "distractor": "cur-embed"}
+{"id": "ct13", "type": "current-truth", "query": "When OMEN was still the primary dev machine, what did it host?", "gold": ["sup-offload"], "distractor": "cur-offload"}
+{"id": "ct14", "type": "current-truth", "query": "What was the old auth fallback that used VERCEL_URL?", "gold": ["sup-auth"], "distractor": "cur-auth"}
+{"id": "a1", "type": "authority", "query": "Which grant profile may approve a pending decision but may not merge?", "gold": ["auth-approver"], "distractor": "auth-operator"}
+{"id": "a2", "type": "authority", "query": "Which grant profile is read-only and cannot approve anything?", "gold": ["auth-readonly"], "distractor": "auth-approver"}
+{"id": "a3", "type": "authority", "query": "Which grant profile may merge but may not change authority grants?", "gold": ["auth-operator"], "distractor": "auth-approver"}
+{"id": "a4", "type": "false-positive", "query": "Which grant profile is allowed to perform production database writes?", "gold": []}
+{"id": "cp1", "type": "capg", "query": "Which CAPG class denies rm -rf and force-push and fails closed?", "gold": ["capg-deny"], "distractor": "capg-allow"}
+{"id": "cp2", "type": "capg", "query": "Which CAPG class allows read-only inspection like git status?", "gold": ["capg-allow"], "distractor": "capg-deny"}
+{"id": "cp3", "type": "capg", "query": "Which CAPG class asks the owner before ambiguous mutations?", "gold": ["capg-ask"]}
+{"id": "w1", "type": "workorder", "query": "Which Work Order governs retiring Vercel from WilliamOS?", "gold": ["wo-vercel"]}
+{"id": "w2", "type": "workorder", "query": "Which Work Order is the embedding bake-off gate that must close before issue #638?", "gold": ["wo-embed"]}
+{"id": "w3", "type": "workorder", "query": "Which Work Order adopts the Nous Hermes Agent as the worker kernel?", "gold": ["wo-kernel"]}
+{"id": "w4", "type": "workorder", "query": "Which closed Work Order established the placement and dispatch substrate for remote development?", "gold": ["wo-538"]}
+{"id": "p1", "type": "evidence", "query": "What commit merged the Vercel retirement ledger PR #675?", "gold": ["pr-675"]}
+{"id": "p2", "type": "evidence", "query": "Which PR moved inference off the Vercel gateway, and what commit merged it?", "gold": ["pr-683"], "distractor": "sup-inference"}
+{"id": "p3", "type": "evidence", "query": "Which PR removed VERCEL_URL from the auth origins and what was its merge commit?", "gold": ["pr-688"]}
+{"id": "p4", "type": "evidence", "query": "Is the sovereign schema PR #650 merged yet, or still open?", "gold": ["pr-650"]}
+{"id": "t1", "type": "topology", "query": "What GPU does HERMES have and how much VRAM?", "gold": ["topo-gpu"]}
+{"id": "t2", "type": "topology", "query": "Does the AEGIS worker have an NVIDIA driver and GPU runtime installed?", "gold": ["topo-aegis"]}
+{"id": "t3", "type": "topology", "query": "What is the role of each node in the lab?", "gold": ["topo-nodes"], "distractor": "fr-nodes"}
+{"id": "cf1", "type": "config", "query": "What port does the sovereign williamos-postgres listen on?", "gold": ["cfg-ports"], "distractor": "sup-db"}
+{"id": "cf2", "type": "config", "query": "What is WilliamOS's default-deny egress policy for auxiliary providers?", "gold": ["cfg-egress"]}
+{"id": "co1", "type": "code", "query": "Which function wires the provider-agnostic inference seam using createOpenAICompatible?", "gold": ["code-provider"]}
+{"id": "co2", "type": "code", "query": "How many tables does the sovereign schema create and how does it enable pgvector?", "gold": ["code-schema"], "distractor": "pr-650"}
+{"id": "s1", "type": "statutory", "query": "How is ad valorem property tax computed from market value and the millage rate?", "gold": ["stat-advalorem"]}
+{"id": "s2", "type": "statutory", "query": "What COD threshold does IAAO consider acceptable for residential assessment uniformity?", "gold": ["stat-iaao"]}
+{"id": "s3", "type": "statutory", "query": "What does the abbreviation TAV stand for?", "gold": ["stat-tav"]}
+{"id": "d1", "type": "domain", "query": "Is county PACS data available to WilliamOS state, or off-limits?", "gold": ["tf-pacs"]}
+{"id": "x1", "type": "cross-lingual", "query": "default-deny outbound network isolation policy for providers", "gold": ["cfg-egress", "es-egress"]}
+{"id": "x2", "type": "cross-lingual", "query": "Cual es la politica de salida de red para los proveedores?", "gold": ["es-egress", "cfg-egress"]}
+{"id": "x3", "type": "cross-lingual", "query": "Quel est le role de chaque noeud du laboratoire?", "gold": ["fr-nodes", "topo-nodes"]}
+{"id": "sm1", "type": "semantic", "query": "What prevents WilliamOS from quietly using a cloud model when the local model is down?", "gold": ["rule-0005-doc"], "distractor": "distr-fallback-allowed"}
+{"id": "sm2", "type": "semantic", "query": "What structured-edit mechanism applies bounded code edits with atomic rollback?", "gold": ["sea-note"]}
+{"id": "sm3", "type": "semantic", "query": "Where does the operator runbook say the sovereign database port differs from TerraFusion's?", "gold": ["long-buried"]}
+{"id": "sm4", "type": "semantic", "query": "Which governed external providers are permitted under the sovereignty doctrine?", "gold": ["hybrid-doctrine"], "distractor": "cfg-egress"}
