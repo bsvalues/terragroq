@@ -123,7 +123,7 @@ const authority=JSON.parse(fs.readFileSync(activationAuthorityPath,"utf8"));
 const policy=JSON.parse(fs.readFileSync(policyPath,"utf8"));
 const packet=JSON.parse(fs.readFileSync(packetPath,"utf8"));
 const dispatchEnvelope=JSON.parse(fs.readFileSync(envelopePath,"utf8"));
-const result=contract.bindRemoteDevPacket(packet,policy,{now:new Date().toISOString(),seenRunIds:[],branch:packet.branch,dispatchEnvelope});
+let result=contract.bindRemoteDevPacket(packet,policy,{now:new Date().toISOString(),seenRunIds:[],branch:packet.branch,dispatchEnvelope});
 if(result.status==="INACTIVE_TRUSTED_MAIN_READY"&&result.executionAuthorized===false&&JSON.stringify(result.packet)===JSON.stringify(packet)){
  const candidate={runId:packet.runId,workOrderId:authority.workOrderId,issue:authority.issue,repository:packet.repository,baseRef:packet.baseRef,baseSha:packet.baseSha,nodeId:packet.nodeId,workspace:packet.workspace,branch:packet.branch,operations:packet.operations,resources:{canonicalProfileEquivalent:false,...packet.resourceLimits},network:authority.network,executionIdentity:authority.executionIdentity};
  const active=activation.validateRemoteDevActivationAuthority(authority,candidate);

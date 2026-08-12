@@ -136,6 +136,7 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(source).toContain("'ACTIVATION_SETTLEMENT_FAILED' -NoFail")
     expect(source).toContain("$script:activationStarted=$true;$started=InvokeActivation")
     expect(source).toContain("resources:{canonicalProfileEquivalent:false,...packet.resourceLimits}")
+    expect(source).toContain("let result=contract.bindRemoteDevPacket")
     expect(source).toContain("if($stdout.Trim()){ExitTerminalOutput $stdout.Trim()}")
     expect(source).toContain("CLEANUP_RECOVERY_EXHAUSTED';SaveState;ExitTerminalOutput")
   })
