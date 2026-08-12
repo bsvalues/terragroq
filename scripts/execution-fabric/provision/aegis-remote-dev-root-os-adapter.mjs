@@ -31,9 +31,9 @@ const sha = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex")
 const canonical = (value) => value === null ? "null" : typeof value === "string" ? JSON.stringify(value) : typeof value === "number" ? JSON.stringify(value) : typeof value === "boolean" ? String(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
 const same = (left, right) => canonical(left) === canonical(right)
 
-export function inspectForcedCommandTransportReconciliation({ current, expected, predecessor, pathOccupied = current !== "", currentMetadataExact = false, predecessorMetadataExact = false }) {
+export function inspectForcedCommandTransportReconciliation({ current, expected, predecessor, pathOccupied = current !== "", currentMetadataExact = false, currentModePredecessorExact = false, predecessorMetadataExact = false }) {
   if (typeof current !== "string" || typeof expected !== "string" || typeof predecessor !== "string" || !expected || !predecessor || expected === predecessor) return "DRIFT"
-  if (current === expected) return currentMetadataExact ? "MATCH" : "DRIFT"
+  if (current === expected) return currentMetadataExact ? "MATCH" : currentModePredecessorExact ? "RECONCILE_EXACT_MODE_PREDECESSOR" : "DRIFT"
   if (current === predecessor) return predecessorMetadataExact ? "RECONCILE_EXACT_PREDECESSOR" : "DRIFT"
   if (current === "") return pathOccupied ? "DRIFT" : "ABSENT"
   return "DRIFT"
@@ -64,8 +64,9 @@ function inspectTransportPath(file, expected, predecessor) {
   const occupied = lexists(file)
   if (!occupied) return { occupied: false, current: "", currentMetadataExact: false, predecessorMetadataExact: false }
   const currentMetadataExact = exactFile(file, sha(Buffer.from(expected)), 0, 0, 0o444)
+  const currentModePredecessorExact = exactFile(file, sha(Buffer.from(expected)), 0, 0, 0o400)
   const predecessorMetadataExact = exactFile(file, sha(Buffer.from(predecessor)), 0, 0, 0o444)
-  return { occupied: true, current: currentMetadataExact ? expected : predecessorMetadataExact ? predecessor : "OCCUPIED_UNTRUSTED", currentMetadataExact, predecessorMetadataExact }
+  return { occupied: true, current: currentMetadataExact || currentModePredecessorExact ? expected : predecessorMetadataExact ? predecessor : "OCCUPIED_UNTRUSTED", currentMetadataExact, currentModePredecessorExact, predecessorMetadataExact }
 }
 function readCanonicalRootJson(file, mode = 0o400) {
   const stat = fs.lstatSync(file)
@@ -554,7 +555,7 @@ function observe(manifest, authority, trust) {
     RECONCILE_TRUSTED_REPOSITORIES: repositories,
     INSTALL_PINNED_TOOLCHAIN: toolchain,
     CREATE_DURABLE_LEDGER: inspectDurableLedgerReconciliation({ ledgerExact: ledger, ledgerExists: fs.existsSync("/var/lib/williamos/fabric/ledger"), ledgerRecordsExact, ticketExact: appendOnly("/var/lib/williamos-fabric/remote-dev-launch-tickets"), ticketExists: lexists("/var/lib/williamos-fabric/remote-dev-launch-tickets") }),
-    INSTALL_FORCED_COMMAND_TRANSPORT: standingTransportExact && transportLines.expected && transportLines.predecessor ? (() => { const inspected = inspectTransportPath(transportPath, transportLines.expected, transportLines.predecessor); const state = inspectForcedCommandTransportReconciliation({ current: inspected.current, expected: transportLines.expected, predecessor: transportLines.predecessor, pathOccupied: inspected.occupied, currentMetadataExact: inspected.currentMetadataExact, predecessorMetadataExact: inspected.predecessorMetadataExact }); return state === "RECONCILE_EXACT_PREDECESSOR" ? "ABSENT" : state })() : "DRIFT",
+    INSTALL_FORCED_COMMAND_TRANSPORT: standingTransportExact && transportLines.expected && transportLines.predecessor ? (() => { const inspected = inspectTransportPath(transportPath, transportLines.expected, transportLines.predecessor); const state = inspectForcedCommandTransportReconciliation({ current: inspected.current, expected: transportLines.expected, predecessor: transportLines.predecessor, pathOccupied: inspected.occupied, currentMetadataExact: inspected.currentMetadataExact, currentModePredecessorExact: inspected.currentModePredecessorExact, predecessorMetadataExact: inspected.predecessorMetadataExact }); return state === "RECONCILE_EXACT_PREDECESSOR" || state === "RECONCILE_EXACT_MODE_PREDECESSOR" ? "ABSENT" : state })() : "DRIFT",
   }
   return { platform: { os: process.platform, effectiveUid: process.getuid?.(), hostname: run("/usr/bin/hostname", ["-s"]), machineIdSha256: sha(Buffer.from(fs.readFileSync("/etc/machine-id", "utf8").trim(), "utf8")) }, ...trust, trustedMain: { ...trust.trustedMain, exactCleanHead: repositories === "MATCH", criticalBytesMatch: rootAssets }, storage: storageObservation(), prerequisites: states }
 }
@@ -624,8 +625,14 @@ function applyTransport(authority) {
   if (!fingerprint.includes(authority.inputs.hermesTransportKeyFingerprint)) fail("TRANSPORT_KEY_DRIFT", "Hermes transport key fingerprint differs")
   const directory = "/etc/ssh/authorized_keys"; ensureRootDirectory(directory, 0o755)
   const key = fs.readFileSync(source, "utf8").trim(); const suffix = `restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" ${key}\n`; const line = `from="${HERMES_SOURCE_ADDRESS}",${suffix}`; const predecessor = `from="${PREVIOUS_HERMES_SOURCE_ADDRESS}",${suffix}`
-  const destination = `${directory}/williamos-fabric`; const inspected = inspectTransportPath(destination, line, predecessor); const state = inspectForcedCommandTransportReconciliation({ current: inspected.current, expected: line, predecessor, pathOccupied: inspected.occupied, currentMetadataExact: inspected.currentMetadataExact, predecessorMetadataExact: inspected.predecessorMetadataExact })
+  const destination = `${directory}/williamos-fabric`; const inspected = inspectTransportPath(destination, line, predecessor); const state = inspectForcedCommandTransportReconciliation({ current: inspected.current, expected: line, predecessor, pathOccupied: inspected.occupied, currentMetadataExact: inspected.currentMetadataExact, currentModePredecessorExact: inspected.currentModePredecessorExact, predecessorMetadataExact: inspected.predecessorMetadataExact })
   if (state === "DRIFT") fail("TRANSPORT_DRIFT", "existing forced-command transport differs")
+  if (state === "RECONCILE_EXACT_MODE_PREDECESSOR") {
+    fs.chmodSync(destination, 0o444)
+    const handle = fs.openSync(destination, fs.constants.O_RDONLY); fs.fsyncSync(handle); fs.closeSync(handle)
+    const parent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(parent); fs.closeSync(parent)
+    if (!exactFile(destination, sha(Buffer.from(line)), 0, 0, 0o444)) fail("TRANSPORT_DRIFT", "forced-command mode reconciliation did not converge")
+  }
   if (state === "RECONCILE_EXACT_PREDECESSOR") {
     if (!exactFile(destination, sha(Buffer.from(predecessor)), 0, 0, 0o444)) fail("TRANSPORT_DRIFT", "predecessor forced-command transport metadata differs")
     const snapshot = `${JOURNAL_ROOT}/${authority.transactionId}.transport-predecessor`
