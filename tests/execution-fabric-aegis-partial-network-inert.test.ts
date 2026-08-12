@@ -15,6 +15,6 @@ describe("AEGIS partial network inert settlement", () => {
   })
   it("binds the exact consumed failed transaction generation", () => {
     const source = fs.readFileSync(path.resolve(import.meta.dirname, "../scripts/execution-fabric/provision/aegis-partial-network-inert.mjs"), "utf8")
-    for (const expected of ["afd68274-062e-4b1e-8ff3-a5542898c8e4", "43049fd96b3d5788f7c4a43315ed4e6b41d3df4d76897a418188753800f8ed41", "a87bcdfe-5932-4e84-9872-51f4e3e9f058", "18a61bd84b125072eb40af460fe44ca9327ba6033a4c6b22f191e83656650cd1", "observedFreshMainCommit", "reviewedPackageCommit", "2b008e5693edf52959b2f37a6ebf1cfbd9238ced", "INSTALL_GITHUB_HOST_AUTH_BOUNDARY", "github_known_hosts differs from signed bytes"]) expect(source).toContain(expected)
+    for (const expected of ["9dd7b361-e3a9-4dba-b1ca-0fb76305a9c8", "227cabd15311483e3f23136a42bb7b8ffa681eeb8158b3913b3fed41e403c05d", "d611f473-34a4-4e25-aad9-5a35aa8fc814", "d8ad68748f4302de4ce3d2f7080d7d216d06ee0c221c920385506927e1c7899e", "observedFreshMainCommit", "reviewedPackageCommit", "9a47acf2af49e71ea9d689f19d24c35ff6fef4d5", "RECONCILE_TRUSTED_REPOSITORIES", "control checkout is dirty"]) expect(source).toContain(expected)
   })
 })
