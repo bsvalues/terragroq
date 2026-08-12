@@ -22,6 +22,7 @@
     "fabric:shadow-outcome": "node scripts/execution-fabric/shadow-outcome-evidence.mjs"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "2.0.52",
     "@ai-sdk/react": "^3.0.214",
     "@opentelemetry/api-logs": "^0.200.0",
     "@opentelemetry/instrumentation": "^0.200.0",
