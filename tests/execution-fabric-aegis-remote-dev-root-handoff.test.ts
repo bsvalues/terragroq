@@ -14,7 +14,7 @@ import {
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
-import { exactLedgerAncestorContract, exactNftBoundaryJson, exactNftBoundaryLines, inspectDurableLedgerReconciliation, inspectForcedCommandTransportReconciliation, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { exactLedgerAncestorContract, exactNftBoundaryJson, exactNftBoundaryLines, inspectDurableLedgerReconciliation, inspectForcedCommandTransportReconciliation, inspectNftTableList, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -90,6 +90,10 @@ function signedAuthority(manifest = loadManifest(), overrides: Record<string, un
 }
 
 describe("AEGIS root-owned prerequisite handoff", () => {
+  it("detects the governed nft table in multiline output", () => {
+    expect(inspectNftTableList("table inet foreign\ntable inet williamos_aegis_remote_dev\n")).toBe(true)
+    expect(inspectNftTableList("table inet foreign\ntable inet other\n")).toBe(false)
+  })
   it("binds the moved endpoints and permits only the exact predecessor transport migration", () => {
     const manifest = validateRootHandoffManifest(loadManifest())
     expect(manifest.target).toMatchObject({ hostname: "aegis", transportAddress: "192.168.88.6" })
