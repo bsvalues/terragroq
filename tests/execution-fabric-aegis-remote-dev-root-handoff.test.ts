@@ -97,13 +97,13 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(isTrustedAtomicInstallSourceMode(0o555)).toBe(true)
     expect(isTrustedAtomicInstallSourceMode(0o600)).toBe(false)
   })
-  it("adopts only the exact restrictive predecessor with its egress oneshot enabled and inactive", () => {
+  it("adopts only the exact restrictive predecessor with its egress enforcement active and enabled", () => {
     const exact = { firstReceiptExact: true, secondReceiptExact: true, nftSemanticExact: true,
-      egressEnabledInactive: true, brokerInactiveDisabled: true, gitSocketInactiveDisabled: true,
+      egressActiveEnabled: true, brokerInactiveDisabled: true, gitSocketInactiveDisabled: true,
       gitServiceInactive: true, listenerConnectionsAbsent: true, workerWorkspaceDispatchAbsent: true }
     expect(inspectExactInertNetworkPredecessor(exact)).toBe("RECONCILE_EXACT_INERT_PREDECESSOR")
-    expect(inspectExactInertNetworkPredecessor({ ...exact, egressEnabledInactive: false })).toBe("DRIFT")
-    expect(inspectExactInertNetworkPredecessor({ ...exact, egressActiveEnabled: true })).toBe("DRIFT")
+    expect(inspectExactInertNetworkPredecessor({ ...exact, egressActiveEnabled: false })).toBe("DRIFT")
+    expect(inspectExactInertNetworkPredecessor({ ...exact, egressEnabledInactive: true })).toBe("DRIFT")
     const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
     expect(adapter).toContain("partial-network-inert-afd68274-062e-4b1e-8ff3-a5542898c8e4.json")
     expect(adapter).toContain("a6e5222382cd23682fd9fb887d1baca186a7c2aeef48d8dd69f3a40eb15ef6a1")
