@@ -326,11 +326,12 @@ function run(value: ReturnType<typeof fixture>, mode: "dry-run" | "apply" = "dry
 }
 
 describe("AEGIS standing hash replay-ledger one-shot upgrade", () => {
-  it("keeps the checked-in package fail-closed until final head and digests are substituted", () => {
+  it("pins the checked-in package to the exact reviewed runtime and installer release", () => {
     const manifest = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"))
-    expect(() => validateAegisStandingHashReplayLedgerUpgradeManifest(manifest)).toThrow(
-      "AEGIS_REPLAY_UPGRADE_NOT_FINALIZED",
-    )
+    expect(validateAegisStandingHashReplayLedgerUpgradeManifest(manifest)).toMatchObject({
+      newRelease: { commit: "b1637a0d16394361dff74e1fb85851ba61f91235" },
+      packageRelease: { commit: "b1637a0d16394361dff74e1fb85851ba61f91235" },
+    })
   })
 
   it("performs a complete dry-run without consuming authority or mutating state", () => {

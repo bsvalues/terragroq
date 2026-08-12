@@ -70,28 +70,28 @@
     ]
   },
   "newRelease": {
-    "commit": "__FINAL_HEAD_COMMIT__",
-    "reviewedCheckoutPath": "__FINAL_REVIEWED_CHECKOUT_PATH__",
-    "releaseRoot": "/opt/williamos/releases/__FINAL_HEAD_COMMIT__",
+    "commit": "b1637a0d16394361dff74e1fb85851ba61f91235",
+    "reviewedCheckoutPath": "/root/williamos-reviewed/b1637a0d16394361dff74e1fb85851ba61f91235",
+    "releaseRoot": "/opt/williamos/releases/b1637a0d16394361dff74e1fb85851ba61f91235",
     "trustedRef": "refs/heads/main",
     "manifestSchemaVersion": "1.0-williamos-trusted-main-release",
     "closure": {
-      "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs": "__SHA256_BOOTSTRAP__",
-      "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs": "__SHA256_RESIDENT_RUNNER__",
-      "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs": "__SHA256_RUNTIME__",
-      "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs": "__SHA256_HASH_CORE__",
-      "scripts/execution-fabric/provision/aegis-standing-hash-replay-ledger.mjs": "__SHA256_REPLAY_LEDGER__",
-      "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs": "__SHA256_AUTHORITY_EVALUATOR__",
-      "scripts/execution-fabric/canonical-json.mjs": "__SHA256_CANONICAL_JSON__"
+      "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs": "8d547f5cb719860e3d9e0aa03bf67592a2396f8e932ba852498df0c4887ccd58",
+      "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs": "91a73ccb292064db2aaaeb38383edf76a44197e22ace511ec4e882b6024bc9ef",
+      "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs": "eb1cf0517caf3a4c4a1935ed8bea73c53fed64cc1ad3effa3963e6e237c22be2",
+      "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs": "c5965a206b5f26c0db21176a609775d1ca176409b644bbc241fde74565bd8d8f",
+      "scripts/execution-fabric/provision/aegis-standing-hash-replay-ledger.mjs": "db26c78059cd012aa5852aee4c5dc45af100aafbd7469b3dafefff42018de46f",
+      "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs": "5394ef5cb93f5d70277716e041ebdd825969a17fa984ca84a6605e98bcb22073",
+      "scripts/execution-fabric/canonical-json.mjs": "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21"
     },
     "installerBindings": {
-      "scripts/execution-fabric/provision/upgrade-aegis-standing-hash-replay-ledger.mjs": "__SHA256_PRIVILEGED_UPGRADER__",
-      "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs": "__SHA256_REPLAY_INITIALIZER__"
+      "scripts/execution-fabric/provision/upgrade-aegis-standing-hash-replay-ledger.mjs": "a8b6c2a99652911bc3e37df5cc6c829da89ede4dde85a0a88fd82586741a54a9",
+      "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs": "f2fa83eb5f82f2f3a9a8abefe7bb0c9c8c5db1f716cb5b31196715b6771660dd"
     }
   },
   "packageRelease": {
-    "commit": "__FINAL_PACKAGE_COMMIT__",
-    "checkoutPath": "__FINAL_PACKAGE_CHECKOUT_PATH__"
+    "commit": "b1637a0d16394361dff74e1fb85851ba61f91235",
+    "checkoutPath": "/root/williamos-package/b1637a0d16394361dff74e1fb85851ba61f91235"
   },
   "install": {
     "replayJournalPath": "/var/lib/aegis-standing-hash-replay-journal.jsonl",
