@@ -544,6 +544,16 @@ describe("AEGIS standing HASH admission release promotion", () => {
     })
   })
 
+  it("accepts only the two reviewed exact service-home states", () => {
+    const manifest = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"))
+    manifest.serviceAccount.home = "/var/empty/williamos-fabric"
+    expect(validateAegisStandingHashAdmissionReleasePromotionManifest(manifest).serviceAccount.home)
+      .toBe("/var/empty/williamos-fabric")
+    manifest.serviceAccount.home = "/tmp/williamos-fabric"
+    expect(() => validateAegisStandingHashAdmissionReleasePromotionManifest(manifest))
+      .toThrow("AEGIS_ADMISSION_PROMOTION_MANIFEST_INVALID")
+  })
+
   it("performs a complete dry-run without consuming authority or mutating host state", () => {
     const value = fixture()
     const before = [...value.entries].map(([key, entry]) => [key, entry.bytes?.toString("hex")])
