@@ -95,8 +95,11 @@ class TestPipeline(unittest.TestCase):
             self.assertTrue(os.path.isfile(output))
 
     def test_retained_manifests_reject_secret_fields(self):
-        with self.assertRaisesRegex(ValueError, "secret-like field"):
-            reject_secret_fields({"nested": {"api_token": "must-not-be-retained"}})
+        for field in ("api_token", "token", "session_token", "refreshToken", "authorization"):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "secret-like field"):
+                    reject_secret_fields({"nested": {field: "must-not-be-retained"}})
+        reject_secret_fields({"tokenizer_sha256": "safe-model-provenance"})
 
 
 class FakeResponse:
@@ -241,6 +244,48 @@ class TestEvidencePackage(unittest.TestCase):
                 build_evidence(corpus, paths["model"], paths["runtime"], paths["host"], paths["result"], out)
             generations = os.listdir(os.path.join(out, "generations"))
             self.assertEqual(generations, [first["generation"]])
+
+    def test_external_endpoint_and_false_ranking_or_calibration_are_rejected(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            out = os.path.join(root, "evidence")
+            mutations = [
+                lambda value: value["manifest"].update({"base_url": "https://api.example.com/v1"}),
+                lambda value: value["per_query"][0]["ranking"].__setitem__(0, {
+                    **value["per_query"][0]["ranking"][0], "similarity": -1.0,
+                }),
+                lambda value: value["summary"].update({"fp_calibration": {
+                    "gold_queries": 999, "no_gold_queries": 999,
+                }}),
+                lambda value: value["summary"].update({"fp_threshold_policy": "caller-controlled"}),
+            ]
+            for mutate in mutations:
+                candidate = json.loads(json.dumps(result))
+                mutate(candidate)
+                with open(paths["result"], "w", encoding="utf-8") as fh:
+                    json.dump(candidate, fh)
+                with self.assertRaises(ValueError):
+                    build_evidence(corpus, paths["model"], paths["runtime"],
+                                   paths["host"], paths["result"], out)
+
+    def test_external_endpoint_is_rejected_even_when_caller_manifest_matches(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            with open(paths["host"], encoding="utf-8") as fh:
+                host = json.load(fh)
+            host["endpoint_hosts"] = ["api.example.com"]
+            with open(paths["host"], "w", encoding="utf-8") as fh:
+                json.dump(host, fh)
+            with open(paths["host"], "rb") as fh:
+                host_sha = hashlib.sha256(fh.read()).hexdigest()
+            result["manifest"]["base_url"] = "https://api.example.com/v1"
+            result["manifest"]["provenance"]["host"] = host
+            result["manifest"]["provenance"]["host_manifest_sha256"] = host_sha
+            with open(paths["result"], "w", encoding="utf-8") as fh:
+                json.dump(result, fh)
+            with self.assertRaisesRegex(ValueError, "localhost, a single-label fabric host, or a private IP"):
+                build_evidence(corpus, paths["model"], paths["runtime"],
+                               paths["host"], paths["result"], os.path.join(root, "evidence"))
 
 
 if __name__ == "__main__":

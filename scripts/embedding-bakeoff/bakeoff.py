@@ -58,16 +58,22 @@ def load_manifest(path, required_fields, kind):
     return value
 
 
-SECRET_FIELD = re.compile(
-    r"(?:api[_-]?(?:key|token)|apikey|authorization|bearer[_-]?token|password|passwd|secret|access[_-]?token|auth[_-]?token|cookie|credential|private[_-]?key)",
-    re.I,
+SECRET_FIELD_COMPACT = (
+    "apikey", "apitoken", "authorization", "bearertoken", "password", "passwd",
+    "secret", "accesstoken", "authtoken", "sessiontoken", "refreshtoken", "idtoken",
+    "cookie", "credential", "privatekey",
 )
+
+
+def is_secret_field(key):
+    compact = re.sub(r"[^a-z0-9]", "", str(key).lower())
+    return compact == "token" or any(marker in compact for marker in SECRET_FIELD_COMPACT)
 
 
 def reject_secret_fields(value, path="manifest"):
     if isinstance(value, dict):
         for key, nested in value.items():
-            if SECRET_FIELD.search(str(key)):
+            if is_secret_field(key):
                 raise ValueError(f"secret-like field is forbidden in retained evidence: {path}.{key}")
             reject_secret_fields(nested, f"{path}.{key}")
     elif isinstance(value, list):

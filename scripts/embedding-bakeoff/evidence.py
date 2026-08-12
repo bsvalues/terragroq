@@ -12,6 +12,7 @@ import urllib.parse
 import metrics as M
 from bakeoff import (CALIBRATION_QUERY_IDS, canonical_json_bytes, corpus_fingerprint,
                      load_jsonl, reject_secret_fields, validate_corpus)
+from embed import validate_sovereign_base_url
 
 
 def canonical_payload(value):
@@ -56,6 +57,7 @@ def validate_result(result, docs, queries, model, runtime, host,
     if manifest.get("model") != model.get("model_id"):
         raise ValueError("result model does not match the model manifest")
     base_url = manifest.get("base_url")
+    validate_sovereign_base_url(base_url)
     endpoint_host = (urllib.parse.urlparse(base_url).hostname or "").lower() if isinstance(base_url, str) else ""
     if endpoint_host not in {str(value).lower() for value in host.get("endpoint_hosts", [])}:
         raise ValueError("result endpoint host is not bound by the host manifest")
@@ -117,6 +119,9 @@ def validate_result(result, docs, queries, model, runtime, host,
             ranked_ids.append(ranked["id"])
         if len(set(ranked_ids)) != len(docs) or set(ranked_ids) != docs_by_id:
             raise ValueError(f"result row {row['id']} ranking is not a document permutation")
+        similarities = [ranked["similarity"] for ranked in ranking]
+        if any(left < right for left, right in zip(similarities, similarities[1:])):
+            raise ValueError(f"result row {row['id']} ranking is not ordered by similarity")
         top_k = row.get("top_k")
         if top_k != ranked_ids[:top_k_size]:
             raise ValueError(f"result row {row['id']} has invalid top_k")
@@ -163,6 +168,10 @@ def validate_result(result, docs, queries, model, runtime, host,
             query_type: M.mean([row["recall@5"] for row in typed_rows])
             for query_type, typed_rows in sorted(by_type.items())
         },
+        "fp_calibration": {
+            "gold_queries": len(calibration_gold),
+            "no_gold_queries": len(calibration_no_gold),
+        },
     }
     for field, expected in recomputed.items():
         actual = summary.get(field)
@@ -172,6 +181,8 @@ def validate_result(result, docs, queries, model, runtime, host,
             matches = close_enough(actual, expected)
         if not matches:
             raise ValueError(f"result summary {field} does not match per-query evidence")
+    if summary.get("fp_threshold_policy") != "midpoint of fixed-split median gold and max no-gold when separable; otherwise median gold":
+        raise ValueError("result summary fp_threshold_policy does not match the frozen policy")
     if (summary.get("queries") != len(queries) or summary.get("documents") != len(docs) or
             summary.get("evaluation_queries") != len(evaluated) or
             summary.get("calibration_queries") != len(queries) - len(evaluated)):
