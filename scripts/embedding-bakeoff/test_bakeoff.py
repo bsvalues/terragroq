@@ -443,13 +443,13 @@ class TestEvidencePackage(unittest.TestCase):
             },
         }
         path = os.path.join(root, "execution-attestation.json")
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(attestation, fh)
+        with open(path, "wb") as fh:
+            fh.write(canonical_payload(attestation))
         return path, attestation
 
     def write_attestation(self, path, value):
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(value, fh)
+        with open(path, "wb") as fh:
+            fh.write(canonical_payload(value))
 
     def test_builds_four_standing_hash_targets(self):
         with tempfile.TemporaryDirectory() as root:
@@ -475,7 +475,7 @@ class TestEvidencePackage(unittest.TestCase):
             self.assertEqual(targets["verification_scope"], "BYTE_INTEGRITY_ONLY")
             self.assertEqual(targets["execution_provenance_status"], "NOT_ATTESTED")
 
-    def test_valid_execution_attestation_promotes_truthful_package_flags(self):
+    def test_valid_execution_claim_retains_integrity_without_attesting_provenance(self):
         with tempfile.TemporaryDirectory() as root:
             corpus, paths, result = self.make_valid_run(root)
             attestation_path, attestation = self.make_attestation(root, corpus, paths, result)
@@ -486,19 +486,45 @@ class TestEvidencePackage(unittest.TestCase):
             with open(os.path.join(targets["generation_path"], "evidence-package.json"),
                       encoding="utf-8") as fh:
                 package = json.load(fh)
-            embedded = package["execution_attestation"]
+            embedded = package["execution_claim"]
             canonical = canonical_payload(attestation)
             self.assertEqual(base64.b64decode(embedded["canonical_bytes_base64"]), canonical)
             self.assertEqual(embedded["sha256"], hashlib.sha256(canonical).hexdigest())
+            self.assertEqual(package["schema_version"],
+                             "1.2-r1b-execution-claim-integrity-package")
             self.assertEqual(package["evidence_class"],
-                             "SOFTWARE_ROOTED_EXECUTION_ATTESTATION")
-            self.assertTrue(package["attestation"]["execution_attested"])
-            self.assertTrue(package["attestation"]["host_identity_attested"])
-            self.assertTrue(package["attestation"]["model_weights_attested"])
-            self.assertTrue(package["attestation"]["runtime_attested"])
-            self.assertFalse(package["attestation"]["declared_manifests_only"])
+                             "INTEGRITY_ONLY_WITH_CALLER_EXECUTION_CLAIM")
+            self.assertNotIn("execution_attestation", package)
+            self.assertFalse(package["attestation"]["execution_attested"])
+            self.assertFalse(package["attestation"]["host_identity_attested"])
+            self.assertFalse(package["attestation"]["model_weights_attested"])
+            self.assertFalse(package["attestation"]["runtime_attested"])
+            self.assertTrue(package["attestation"]["declared_manifests_only"])
+            self.assertEqual(embedded["validation"], {
+                "byte_integrity": "CANONICAL_BYTES_RETAINED",
+                "schema_consistency": "VALIDATED",
+                "provenance": "CALLER_SUPPLIED_NOT_INDEPENDENTLY_ATTESTED",
+                "signature_verified": False,
+                "hardware_root_verified": False,
+                "trusted_host_verified": False,
+            })
+            self.assertNotIn("external_provider_used", package["safety"])
+            self.assertNotIn("fallback_used", package["safety"])
+            self.assertNotIn("scheduler_state", package["safety"])
+            self.assertEqual(targets["verification_scope"],
+                             "BYTE_INTEGRITY_AND_EXECUTION_CLAIM_SCHEMA_VALIDATION")
             self.assertEqual(targets["execution_provenance_status"],
-                             "SOFTWARE_ROOTED_ATTESTED")
+                             "CALLER_SUPPLIED_NOT_INDEPENDENTLY_ATTESTED")
+
+    def test_execution_claim_rejects_noncanonical_bytes(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            claim_path, claim = self.make_attestation(root, corpus, paths, result)
+            with open(claim_path, "w", encoding="utf-8") as fh:
+                json.dump(claim, fh)
+            with self.assertRaisesRegex(ValueError, "must use canonical JSON UTF-8"):
+                build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                               paths["result"], os.path.join(root, "evidence"), claim_path)
 
     def test_attestation_rejects_result_and_manifest_mismatch(self):
         with tempfile.TemporaryDirectory() as root:

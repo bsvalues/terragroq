@@ -48,54 +48,54 @@ def close_enough(left, right):
 
 def require_exact_object(value, fields, label):
     if not isinstance(value, dict) or set(value) != set(fields):
-        raise ValueError(f"execution attestation {label} must contain exactly: {', '.join(fields)}")
+        raise ValueError(f"execution claim {label} must contain exactly: {', '.join(fields)}")
     return value
 
 
 def require_identity(value, label):
     if not isinstance(value, str) or not value.strip() or value != value.strip():
-        raise ValueError(f"execution attestation {label} must be a non-empty identity")
+        raise ValueError(f"execution claim {label} must be a non-empty identity")
     if any(ord(char) < 0x20 for char in value):
-        raise ValueError(f"execution attestation {label} contains control characters")
+        raise ValueError(f"execution claim {label} contains control characters")
 
 
 def parse_utc_timestamp(value, label):
     pattern = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z"
     if not isinstance(value, str) or re.fullmatch(pattern, value) is None:
-        raise ValueError(f"execution attestation {label} must be an ISO-8601 UTC timestamp")
+        raise ValueError(f"execution claim {label} must be an ISO-8601 UTC timestamp")
     try:
         parsed = datetime.datetime.fromisoformat(value[:-1] + "+00:00")
     except ValueError as error:
         raise ValueError(
-            f"execution attestation {label} must be an ISO-8601 UTC timestamp"
+            f"execution claim {label} must be an ISO-8601 UTC timestamp"
         ) from error
     if parsed.tzinfo != datetime.timezone.utc:
-        raise ValueError(f"execution attestation {label} must be UTC")
+        raise ValueError(f"execution claim {label} must be UTC")
     return parsed
 
 
-def validate_execution_attestation(attestation, corpus_manifest, corpus_sha, result_sha,
-                                   model, runtime, host, model_sha, runtime_sha, host_sha):
-    """Validate the closed, secret-free software-rooted execution statement."""
+def validate_execution_claim(claim, corpus_manifest, corpus_sha, result_sha,
+                             model, runtime, host, model_sha, runtime_sha, host_sha):
+    """Validate an unsigned caller claim without promoting its provenance."""
     root_fields = (
         "schema_version", "attestation_type", "work_order_id", "artifact_bindings",
         "admission", "execution", "chronology",
     )
-    require_exact_object(attestation, root_fields, "root")
-    reject_secret_fields(attestation, "execution attestation")
-    if attestation["schema_version"] != "1.0-r1b-software-execution-attestation":
-        raise ValueError("execution attestation schema_version is unsupported")
-    if attestation["attestation_type"] != "SOFTWARE_ROOTED_EXECUTION_ATTESTATION":
-        raise ValueError("execution attestation type is unsupported")
-    if attestation["work_order_id"] != "WO-WILLIAMOS-SOVEREIGN-EMBEDDING-V1":
-        raise ValueError("execution attestation work order does not match")
+    require_exact_object(claim, root_fields, "root")
+    reject_secret_fields(claim, "execution claim")
+    if claim["schema_version"] != "1.0-r1b-software-execution-attestation":
+        raise ValueError("execution claim schema_version is unsupported")
+    if claim["attestation_type"] != "SOFTWARE_ROOTED_EXECUTION_ATTESTATION":
+        raise ValueError("execution claim legacy attestation_type is unsupported")
+    if claim["work_order_id"] != "WO-WILLIAMOS-SOVEREIGN-EMBEDDING-V1":
+        raise ValueError("execution claim work order does not match")
 
     binding_fields = (
         "corpus_manifest", "corpus_fingerprint", "corpus_files",
         "result_bundle_sha256", "model_manifest_sha256",
         "runtime_manifest_sha256", "host_manifest_sha256",
     )
-    bindings = require_exact_object(attestation["artifact_bindings"], binding_fields,
+    bindings = require_exact_object(claim["artifact_bindings"], binding_fields,
                                     "artifact_bindings")
     expected_bindings = {
         "corpus_manifest": corpus_manifest,
@@ -110,15 +110,15 @@ def validate_execution_attestation(attestation, corpus_manifest, corpus_sha, res
         "host_manifest_sha256": host_sha,
     }
     if bindings != expected_bindings:
-        raise ValueError("execution attestation artifact bindings do not match validated evidence")
+        raise ValueError("execution claim artifact bindings do not match validated evidence")
 
     admission_fields = (
         "status", "authority_id", "scope_id", "placement_id", "request_id", "claim_id",
         "lease_id",
     )
-    admission = require_exact_object(attestation["admission"], admission_fields, "admission")
+    admission = require_exact_object(claim["admission"], admission_fields, "admission")
     if admission["status"] != "ADMITTED":
-        raise ValueError("execution attestation admission status must be ADMITTED")
+        raise ValueError("execution claim admission status must be ADMITTED")
     for field in admission_fields[1:]:
         require_identity(admission[field], f"admission.{field}")
 
@@ -142,17 +142,17 @@ def validate_execution_attestation(attestation, corpus_manifest, corpus_sha, res
         "root_of_trust", "provider", "external_provider_used", "fallback_used",
         "scheduler_state", "pre_execution", "post_execution",
     )
-    execution = require_exact_object(attestation["execution"], execution_fields, "execution")
+    execution = require_exact_object(claim["execution"], execution_fields, "execution")
     if execution["root_of_trust"] != "SOFTWARE":
-        raise ValueError("execution attestation root_of_trust must be SOFTWARE")
+        raise ValueError("execution claim root_of_trust must be SOFTWARE")
     if execution["provider"] != "LOCAL_SOFTWARE_ROOTED":
-        raise ValueError("execution attestation provider must be LOCAL_SOFTWARE_ROOTED")
+        raise ValueError("execution claim provider must be LOCAL_SOFTWARE_ROOTED")
     if execution["external_provider_used"] is not False:
-        raise ValueError("execution attestation forbids external providers")
+        raise ValueError("execution claim forbids external providers")
     if execution["fallback_used"] is not False:
-        raise ValueError("execution attestation forbids fallback execution")
+        raise ValueError("execution claim forbids fallback execution")
     if execution["scheduler_state"] != "disabled":
-        raise ValueError("execution attestation requires scheduler_state disabled")
+        raise ValueError("execution claim requires scheduler_state disabled")
     identity_fields = ("host", "model", "runtime")
     expected_identity = {
         "host": host_identity,
@@ -164,20 +164,29 @@ def validate_execution_attestation(attestation, corpus_manifest, corpus_sha, res
     post = require_exact_object(execution["post_execution"], identity_fields,
                                 "execution.post_execution")
     if pre != expected_identity or post != expected_identity or pre != post:
-        raise ValueError("execution attestation pre/post identity does not match supplied manifests")
+        raise ValueError("execution claim pre/post identity does not match supplied manifests")
 
     chronology_fields = (
         "authority_issued_at", "request_admitted_at", "lease_acquired_at",
         "execution_started_at", "execution_completed_at", "attested_at",
         "authority_expires_at",
     )
-    chronology = require_exact_object(attestation["chronology"], chronology_fields, "chronology")
+    chronology = require_exact_object(claim["chronology"], chronology_fields, "chronology")
     ordered = [parse_utc_timestamp(chronology[field], f"chronology.{field}")
                for field in chronology_fields]
     if any(left > right for left, right in zip(ordered, ordered[1:])):
-        raise ValueError("execution attestation chronology is stale or out of order")
+        raise ValueError("execution claim chronology is stale or out of order")
 
-    return canonical_payload(attestation)
+    return canonical_payload(claim)
+
+
+def validate_execution_attestation(attestation, corpus_manifest, corpus_sha, result_sha,
+                                   model, runtime, host, model_sha, runtime_sha, host_sha):
+    """Backward-compatible alias for validation of the legacy claim schema."""
+    return validate_execution_claim(
+        attestation, corpus_manifest, corpus_sha, result_sha,
+        model, runtime, host, model_sha, runtime_sha, host_sha,
+    )
 
 
 def validate_result(result, docs, queries, corpus_manifest, model, runtime, host,
@@ -407,31 +416,40 @@ def build(corpus_dir, model_manifest_path, runtime_manifest_path, host_manifest_
         "model-runtime-manifest.json": canonical_payload(model_runtime),
         "result-bundle.json": canonical_payload(result),
     }
-    attestation_bytes = None
+    execution_claim_bytes = None
     if execution_attestation_path is not None:
-        attestation_bytes = validate_execution_attestation(
-            load_json(execution_attestation_path), corpus_manifest,
+        with open(execution_attestation_path, "rb") as fh:
+            supplied_claim_bytes = fh.read()
+        try:
+            supplied_claim = json.loads(supplied_claim_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("execution claim must be canonical JSON UTF-8") from error
+        execution_claim_bytes = validate_execution_claim(
+            supplied_claim, corpus_manifest,
             corpus_bundle["corpus_fingerprint"], sha256_bytes(payloads["result-bundle.json"]),
             model, runtime, host, model_sha, runtime_sha, host_sha,
         )
-    execution_attested = attestation_bytes is not None
+        if supplied_claim_bytes != execution_claim_bytes:
+            raise ValueError("execution claim bytes must use canonical JSON UTF-8 encoding")
+    execution_claim_supplied = execution_claim_bytes is not None
     evidence_package = {
-        "schema_version": ("1.2-r1b-attested-integrity-package" if execution_attested
+        "schema_version": ("1.2-r1b-execution-claim-integrity-package"
+                           if execution_claim_supplied
                            else "1.1-r1b-integrity-package"),
-        "evidence_class": ("SOFTWARE_ROOTED_EXECUTION_ATTESTATION" if execution_attested
+        "evidence_class": ("INTEGRITY_ONLY_WITH_CALLER_EXECUTION_CLAIM"
+                           if execution_claim_supplied
                            else "INTEGRITY_ONLY_NOT_EXECUTION_ATTESTATION"),
         "work_order_id": "WO-WILLIAMOS-SOVEREIGN-EMBEDDING-V1",
         "artifacts": {name: sha256_bytes(payload) for name, payload in payloads.items()},
         "host": host,
         "host_manifest_sha256": host_sha,
         "attestation": {
-            "execution_attested": execution_attested,
-            "host_identity_attested": execution_attested,
-            "model_weights_attested": execution_attested,
-            "runtime_attested": execution_attested,
-            "declared_manifests_only": not execution_attested,
-            "external_provider_status": ("ATTESTED_NOT_USED" if execution_attested
-                                         else "NOT_INDEPENDENTLY_ATTESTED"),
+            "execution_attested": False,
+            "host_identity_attested": False,
+            "model_weights_attested": False,
+            "runtime_attested": False,
+            "declared_manifests_only": True,
+            "external_provider_status": "NOT_INDEPENDENTLY_ATTESTED",
         },
         "safety": {
             "canonical_vectors_written": False,
@@ -439,17 +457,20 @@ def build(corpus_dir, model_manifest_path, runtime_manifest_path, host_manifest_
             "vector_contract_frozen": False,
         },
     }
-    if execution_attested:
-        evidence_package["execution_attestation"] = {
+    if execution_claim_supplied:
+        evidence_package["execution_claim"] = {
             "encoding": "base64-canonical-json-utf8",
-            "canonical_bytes_base64": base64.b64encode(attestation_bytes).decode("ascii"),
-            "sha256": sha256_bytes(attestation_bytes),
+            "canonical_bytes_base64": base64.b64encode(execution_claim_bytes).decode("ascii"),
+            "sha256": sha256_bytes(execution_claim_bytes),
+            "validation": {
+                "byte_integrity": "CANONICAL_BYTES_RETAINED",
+                "schema_consistency": "VALIDATED",
+                "provenance": "CALLER_SUPPLIED_NOT_INDEPENDENTLY_ATTESTED",
+                "signature_verified": False,
+                "hardware_root_verified": False,
+                "trusted_host_verified": False,
+            },
         }
-        evidence_package["safety"].update({
-            "external_provider_used": False,
-            "fallback_used": False,
-            "scheduler_state": "disabled",
-        })
     payloads["evidence-package.json"] = canonical_payload(evidence_package)
     targets = {
         "schema_version": "1.0-r1b-standing-hash-targets",
@@ -461,10 +482,12 @@ def build(corpus_dir, model_manifest_path, runtime_manifest_path, host_manifest_
             {"artifact": "evidence_package", "path": "evidence-package.json", "sha256": sha256_bytes(payloads["evidence-package.json"])},
         ],
         "standing_capability": "HASH_VERIFY",
-        "verification_scope": ("BYTE_INTEGRITY_AND_SOFTWARE_ROOTED_EXECUTION_ATTESTATION"
-                               if execution_attested else "BYTE_INTEGRITY_ONLY"),
-        "execution_provenance_status": ("SOFTWARE_ROOTED_ATTESTED" if execution_attested
-                                        else "NOT_ATTESTED"),
+        "verification_scope": ("BYTE_INTEGRITY_AND_EXECUTION_CLAIM_SCHEMA_VALIDATION"
+                               if execution_claim_supplied else "BYTE_INTEGRITY_ONLY"),
+        "execution_provenance_status": (
+            "CALLER_SUPPLIED_NOT_INDEPENDENTLY_ATTESTED"
+            if execution_claim_supplied else "NOT_ATTESTED"
+        ),
         "dispatch_requested": False,
     }
     payloads["standing-hash-targets.json"] = canonical_payload(targets)
