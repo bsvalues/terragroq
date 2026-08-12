@@ -14,7 +14,7 @@ import {
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
-import { exactLedgerAncestorContract, exactNftBoundaryLines, inspectDurableLedgerReconciliation, inspectForcedCommandTransportReconciliation, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { exactLedgerAncestorContract, exactNftBoundaryJson, exactNftBoundaryLines, inspectDurableLedgerReconciliation, inspectForcedCommandTransportReconciliation, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -473,6 +473,17 @@ describe("AEGIS root-owned prerequisite handoff", () => {
       [...exactLiveLines.slice(0, 6), exactLiveLines[7], exactLiveLines[6], ...exactLiveLines.slice(8)],
       [...exactLiveLines.slice(0, -2), 'meta skuid "other" accept', ...exactLiveLines.slice(-2)],
     ]) expect(exactNftBoundaryLines(drift)).toBe(false)
+    const uid = (right: number) => ({ match: { op: "==", left: { meta: { key: "skuid" } }, right } })
+    const ip = (protocol: string, right: string) => ({ match: { op: "==", left: { payload: { protocol, field: "daddr" } }, right } })
+    const port = { match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 17734 } }
+    const rule = (expr: any[]) => ({ rule: { family: "inet", table: "williamos_aegis_remote_dev", chain: "output", expr } })
+    const semantic = [{ table: { family: "inet", name: "williamos_aegis_remote_dev" } }, { chain: { family: "inet", table: "williamos_aegis_remote_dev", name: "output", type: "filter", hook: "output", prio: 0, policy: "accept" } },
+      rule([uid(999), ip("ip", "192.168.1.156"), { reject: { type: "icmp", expr: "port-unreachable" } }]), rule([uid(999), ip("ip6", "::ffff:192.168.1.156"), { reject: { type: "icmpv6", expr: "port-unreachable" } }]), rule([uid(999), ip("ip", "127.0.0.1"), port, { accept: null }]), rule([uid(995), ip("ip", "127.0.0.1"), port, { accept: null }]), rule([ip("ip", "127.0.0.1"), port, { reject: { type: "icmp", expr: "port-unreachable" } }]), rule([uid(999), { reject: { type: "icmpx", expr: "port-unreachable" } }])]
+    expect(exactNftBoundaryJson(semantic, 999, 995)).toBe(true)
+    expect(exactNftBoundaryJson(semantic, 998, 995)).toBe(false)
+    expect(exactNftBoundaryJson(semantic, 999, 999)).toBe(false)
+    expect(exactNftBoundaryJson(semantic, 0, 995)).toBe(false)
+    expect(exactNftBoundaryJson(semantic, -1, 995)).toBe(false)
   })
 
   it("scopes every CONNECT destination to the signed operation and rejects private or mapped-private destinations", () => {

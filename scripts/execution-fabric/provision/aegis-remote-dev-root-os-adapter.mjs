@@ -384,11 +384,20 @@ const EXPECTED_NFT_BOUNDARY_LINES = Object.freeze([
 export function exactNftBoundaryLines(lines) {
   return Array.isArray(lines) && same(lines, EXPECTED_NFT_BOUNDARY_LINES)
 }
+export function exactNftBoundaryJson(items, workerUid, gitBrokerUid) {
+  if (!Number.isSafeInteger(workerUid) || !Number.isSafeInteger(gitBrokerUid) || workerUid <= 0 || gitBrokerUid <= 0 || workerUid === gitBrokerUid) return false
+  const uid = right => ({ match: { op: "==", left: { meta: { key: "skuid" } }, right } })
+  const ip = (protocol, right) => ({ match: { op: "==", left: { payload: { protocol, field: "daddr" } }, right } })
+  const port = { match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 17734 } }
+  const rule = expr => ({ rule: { family: "inet", table: "williamos_aegis_remote_dev", chain: "output", expr } })
+  return same(items, [{ table: { family: "inet", name: "williamos_aegis_remote_dev" } }, { chain: { family: "inet", table: "williamos_aegis_remote_dev", name: "output", type: "filter", hook: "output", prio: 0, policy: "accept" } },
+    rule([uid(workerUid), ip("ip", "192.168.1.156"), { reject: { type: "icmp", expr: "port-unreachable" } }]), rule([uid(workerUid), ip("ip6", "::ffff:192.168.1.156"), { reject: { type: "icmpv6", expr: "port-unreachable" } }]), rule([uid(workerUid), ip("ip", "127.0.0.1"), port, { accept: null }]), rule([uid(gitBrokerUid), ip("ip", "127.0.0.1"), port, { accept: null }]), rule([ip("ip", "127.0.0.1"), port, { reject: { type: "icmp", expr: "port-unreachable" } }]), rule([uid(workerUid), { reject: { type: "icmpx", expr: "port-unreachable" } }])])
+}
 function networkBoundaryMatches() {
   try {
-    const rules = run("/usr/sbin/nft", ["list", "chain", "inet", "williamos_aegis_remote_dev", "output"])
-    const lines = rules.split(/\r?\n/).map((line) => line.trim().replace(/\s+/g, " ")).filter(Boolean)
-    if (!exactNftBoundaryLines(lines)) return false
+    const worker=accountIds("williamos-fabric"), gitBroker=accountIds("williamos-git-broker"); if(!worker||!gitBroker) return false
+    const parsed=JSON.parse(run("/usr/sbin/nft", ["-j", "list", "table", "inet", "williamos_aegis_remote_dev"])); const items=parsed.nftables.filter(item=>!item.metainfo).map(item=>{ const copy=structuredClone(item); for(const value of Object.values(copy)) delete value.handle; return copy })
+    if (!exactNftBoundaryJson(items,worker.uid,gitBroker.uid)) return false
     for (const unit of ["williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service", "williamos-aegis-remote-dev-git-broker.socket"]) {
       if (run("/usr/bin/systemctl", ["is-active", unit]) !== "active" || run("/usr/bin/systemctl", ["is-enabled", unit]) !== "enabled") return false
     }
@@ -455,11 +464,12 @@ function observe(manifest, authority, trust) {
   const processState = ids ? userProcesses(ids.uid) : { proven: true, pids: [], onlyManager: true }
   const brokerProcessState = brokerIds ? userProcesses(brokerIds.uid) : { proven: true, pids: [], onlyManager: true }
   const gitBrokerProcessState = gitBrokerIds ? userProcesses(gitBrokerIds.uid) : { proven: true, pids: [], onlyManager: true }
+  const distinctBrokerIdentities = ids?.uid > 0 && brokerIds?.uid > 0 && gitBrokerIds?.uid > 0 && new Set([ids.uid, brokerIds.uid, gitBrokerIds.uid]).size === 3
   const identityMatch = (() => { try { const shadow = run("/usr/bin/getent", ["shadow", "williamos-fabric"]).split(":")[1]; const linger = fs.existsSync(`/var/lib/systemd/linger/williamos-fabric`); return ids?.home === "/var/empty/williamos-fabric" && ids?.shell === "/bin/bash" && /^!/.test(shadow) && linger && noSudoCapability() && same(supplementaryGroups("williamos-fabric"), [ids.gid]) && processState.proven && processState.onlyManager && brokerIds?.home === "/var/empty/williamos-egress-broker" && brokerIds?.shell === "/usr/sbin/nologin" && brokerProcessState.proven && same(supplementaryGroups("williamos-egress-broker"), [brokerIds.gid]) && gitBrokerIds?.home === "/var/empty/williamos-git-broker" && gitBrokerIds?.shell === "/usr/sbin/nologin" && gitBrokerIds.gid === ids.gid && gitBrokerProcessState.proven && gitBrokerProcessState.pids.length === 0 && same(supplementaryGroups("williamos-git-broker"), [ids.gid]) && exactSharedGitGroup(ids.gid) && sharedGroupProcessesExact(ids.gid, [ids.uid, gitBrokerIds.uid]) } catch { return false } })()
   const transportLines = (() => { try { const key = fs.readFileSync(path.join(STAGED_ROOT, "hermes-transport.pub"), "utf8").trim(); const suffix = `restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" ${key}\n`; return { expected: `from="${HERMES_SOURCE_ADDRESS}",${suffix}`, predecessor: `from="${PREVIOUS_HERMES_SOURCE_ADDRESS}",${suffix}` } } catch { return { expected: null, predecessor: null } } })()
   const githubMatch = exactFile("/etc/williamos-fabric/github_known_hosts", authority.inputs.githubHostKnownHostsSha256, 0, 0, 0o444) && exactFile("/etc/williamos-fabric/github-account.key", authority.inputs.githubAccountPrivateKeySha256, 0, 0, 0o400)
   const states = {
-    RECONCILE_BOUNDED_IDENTITY: identityMatch ? "MATCH" : ids && (!processState.proven || (processState.pids.length > 0 && !processState.onlyManager) || !brokerProcessState.proven || brokerProcessState.pids.length > 0 || !gitBrokerProcessState.proven || gitBrokerProcessState.pids.length > 0 || !noSudoCapability()) ? "DRIFT" : "ABSENT",
+    RECONCILE_BOUNDED_IDENTITY: identityMatch && distinctBrokerIdentities ? "MATCH" : ids && (!distinctBrokerIdentities || !processState.proven || (processState.pids.length > 0 && !processState.onlyManager) || !brokerProcessState.proven || brokerProcessState.pids.length > 0 || !gitBrokerProcessState.proven || gitBrokerProcessState.pids.length > 0 || !noSudoCapability()) ? "DRIFT" : "ABSENT",
     INSTALL_ROOT_LAUNCH_ASSETS: rootAssets,
     INSTALL_DUAL_STACK_BROKER_BOUNDARY: nft ? "MATCH" : (() => { try { const table = spawnSync("/usr/sbin/nft", ["list", "table", "inet", "williamos_aegis_remote_dev"], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV }); const active = ["williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service"].some((unit) => spawnSync("/usr/bin/systemctl", ["is-active", "--quiet", unit], { shell: false, timeout: 5000, env: FIXED_ENV }).status === 0); return table.status === 0 || active ? "DRIFT" : "ABSENT" } catch { return "DRIFT" } })(),
     INSTALL_GITHUB_HOST_AUTH_BOUNDARY: githubMatch ? "MATCH" : fs.existsSync("/etc/williamos-fabric/github_known_hosts") || fs.existsSync("/etc/williamos-fabric/github-account.key") ? "DRIFT" : "ABSENT",
