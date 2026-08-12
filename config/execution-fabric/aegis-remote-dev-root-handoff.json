@@ -284,7 +284,7 @@
     {
       "source": "scripts/execution-fabric/provision/assets/aegis-remote-dev-egress-enforcer.mjs",
       "destination": "/usr/local/libexec/williamos-aegis-remote-dev-egress-enforcer.mjs",
-      "sha256": "ab6620219fd506be40b2f80bb983e4a592a1600e7254e40993bde4534d3d0ba3",
+      "sha256": "108f2eacb6a225e9349c0cd0c628ab32e204776da4f630e6cb708c6817a01509",
       "owner": "root",
       "group": "root",
       "mode": "0555"
@@ -364,7 +364,7 @@
     {
       "source": "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-egress.service",
       "destination": "/etc/systemd/system/williamos-aegis-remote-dev-egress.service",
-      "sha256": "36e5b23c6e0937a5ee76ef5d7249e4ff13babfb0664f84a91626f5e20193a83a",
+      "sha256": "1ce8d0a58025c148012bdbd3d86cdb0becaa5312eef818ce1df1aa538c3cad8e",
       "owner": "root",
       "group": "root",
       "mode": "0444"

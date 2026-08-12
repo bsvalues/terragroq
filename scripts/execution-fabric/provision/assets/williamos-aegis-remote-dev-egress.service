@@ -11,6 +11,9 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+RuntimeDirectory=williamos-aegis-remote-dev-egress
+RuntimeDirectoryMode=0700
+ReadWritePaths=/run/williamos-aegis-remote-dev-egress
 ExecStart=/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-egress-enforcer.mjs --enforce
 ExecStop=/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-egress-enforcer.mjs --enforce
 
