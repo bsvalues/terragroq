@@ -1,5 +1,6 @@
 #!/usr/bin/node
 import { spawnSync } from "node:child_process"
+import fs from "node:fs"
 
 const ENV = Object.freeze({ HOME: "/nonexistent", PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C", LC_ALL: "C" })
 const TABLE = "williamos_aegis_remote_dev"
@@ -12,9 +13,9 @@ const RULES = [
   `add rule inet ${TABLE} output meta skuid "williamos-fabric" reject`,
 ]
 
-function run(args, input) {
-  const result = spawnSync("/usr/sbin/nft", args, { encoding: "utf8", shell: false, timeout: 5000, maxBuffer: 1_048_576, env: ENV, input })
-  if (result.error || result.status !== 0) throw new Error("fixed nft enforcement failed")
+function run(args) {
+  const result = spawnSync("/usr/sbin/nft", args, { encoding: "utf8", shell: false, timeout: 5000, maxBuffer: 1_048_576, env: ENV })
+  if (result.error || result.signal || result.status !== 0) throw new Error(`fixed nft enforcement failed: status=${result.status ?? "null"} signal=${result.signal ?? "null"} error=${result.error?.code ?? "none"} stderr=${String(result.stderr ?? "").trim() || "empty"}`)
   return result.stdout ?? ""
 }
 
@@ -27,9 +28,14 @@ if (process.platform !== "linux" || process.getuid?.() !== 0 || process.argv.len
     const lines = exists.status === 0
       ? [`flush chain inet ${TABLE} output`, ...RULES]
       : [`add table inet ${TABLE}`, `add chain inet ${TABLE} output { type filter hook output priority filter; policy accept; }`, ...RULES]
-    run(["-c", "-f", "-"], `${lines.join("\n")}\n`)
-    run(["-f", "-"], `${lines.join("\n")}\n`)
-  } catch {
+    const transaction = `/run/williamos-aegis-remote-dev-egress/egress-enforcement-${process.pid}.nft`
+    const handle = fs.openSync(transaction, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o400)
+    try {
+      fs.writeFileSync(handle, `${lines.join("\n")}\n`); fs.fsyncSync(handle); fs.closeSync(handle)
+      run(["-c", "-f", transaction]); run(["-f", transaction])
+    } finally { try { fs.closeSync(handle) } catch {}; fs.rmSync(transaction, { force: true }) }
+  } catch (error) {
+    process.stderr.write(`${String(error?.message ?? error)}\n`)
     process.exitCode = 2
   }
 }
