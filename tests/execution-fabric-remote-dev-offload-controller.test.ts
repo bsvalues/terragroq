@@ -126,6 +126,18 @@ function isolatedProgramDataEnv(programData: string, extra: NodeJS.ProcessEnv = 
 }
 
 describe("inactive Hermes-mediated remote development controller", () => {
+  it("owns activation start and terminal settlement in the reviewed relay", () => {
+    const source=fs.readFileSync(controller,"utf8")
+    expect(source).toContain("@{action='start'}")
+    expect(source).toContain("@{action='settle'}")
+    expect(source).toContain("leaseReleased-ne$true")
+    expect(source).toContain("replayRejected-ne$true")
+    expect(source).toContain("if($script:activationStarted-and(Get-Command InvokeActivation")
+    expect(source).toContain("'ACTIVATION_SETTLEMENT_FAILED' -NoFail")
+    expect(source).toContain("$script:activationStarted=$true;$started=InvokeActivation")
+    expect(source).toContain("if($stdout.Trim()){ExitTerminalOutput $stdout.Trim()}")
+    expect(source).toContain("CLEANUP_RECOVERY_EXHAUSTED';SaveState;ExitTerminalOutput")
+  })
   it("blocks before SSH while the trusted-main proof scope is inactive", () => {
     const value = fixture()
     const result = run(value.args)

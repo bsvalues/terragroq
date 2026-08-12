@@ -1,0 +1,13 @@
+[Unit]
+Description=WilliamOS bounded AEGIS activation bridge
+
+[Socket]
+ListenStream=/run/williamos-fabric/remote-dev-activation.sock
+SocketUser=williamos-fabric
+SocketGroup=williamos-fabric
+SocketMode=0600
+Accept=yes
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

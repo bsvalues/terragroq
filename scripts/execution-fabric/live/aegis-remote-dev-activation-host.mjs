@@ -1,0 +1,307 @@
+import crypto from "node:crypto"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { fork, spawnSync } from "node:child_process"
+import { pathToFileURL } from "node:url"
+
+export const ACTIVATION_ID = "remote-dev-offload-v1-issue-734-single-use-001"
+export const AUTHORITY_REFERENCE = "issue-734-terrafusion-remote-dev-single-use-001"
+const RUN_ID = "a3961b87-ed54-45d0-a975-678a02f1e163"
+const WORKSPACE = "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001"
+const BRANCH = "codex/wo-tf-remote-dev-offload-001-734"
+const BASE_SHA = "ffd2fa35f5152de2b95e7f63b220050d18193d7a"
+const CONTROL_REPOSITORY = "/var/lib/williamos-remote-dev/control/terragroq"
+const INSTALLED_SELF = "/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs"
+const PRIVATE_KEY = "/etc/williamos-fabric/aegis-remote-dev-launch-authority.key"
+const PUBLIC_KEY = "/etc/williamos-fabric/aegis-remote-dev-launch-authority.pem"
+const BRIDGE_RECEIPT = "/var/lib/williamos-fabric/remote-dev-activation-bridge-verified.json"
+const STATE_ROOT = `/run/williamos-fabric/activation-${RUN_ID}`
+const PREPARING_ROOT = `${STATE_ROOT}.preparing`
+const PREPARED_FILE = `${STATE_ROOT}/prepared.json`
+const SESSION_FILE = `${STATE_ROOT}/session.json`
+const SETTLEMENT_FILE = `${STATE_ROOT}/settlement.json`
+const PHASE_FILE = `${STATE_ROOT}/phase.json`
+const MINT_ROOT = `${STATE_ROOT}/mints`
+const SNAPSHOT = `${STATE_ROOT}/control`
+const UNIT = `williamos-aegis-activation-${RUN_ID}.service`
+const LEDGER_ROOT = "/var/lib/williamos/fabric/ledger"
+const OPERATIONS = Object.freeze(["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "APPLY_RESERVED_PATCH", "RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE", "COMMIT_RESERVED_PATHS", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE", "CLEAN_EXACT_WORKSPACE"])
+const ENV = Object.freeze({ HOME: "/nonexistent", PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1" })
+const SHA = /^[a-f0-9]{64}$/
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const canonical = value => {
+  if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
+  if (value && typeof value === "object") return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
+  throw new TypeError("unsupported canonical value")
+}
+const exactKeys = (value, keys) => JSON.stringify(Object.keys(value ?? {}).sort()) === JSON.stringify([...keys].sort())
+const sha = value => crypto.createHash("sha256").update(value).digest("hex")
+const blocked = detail => ({ status: "BLOCKED", reasonCode: "ACTIVATION_HOST_DRIFT", detail, executionAuthorized: false, activationAuthorized: false })
+
+export function inspectActivationHostPhase(value, now) {
+  try {
+    if (!exactKeys(value, ["schemaVersion", "phase", "runId", "claimId", "leaseId", "authorityReference", "claimedAt", "expiresAt"])) throw new Error("activation phase keys differ")
+    const current = Date.parse(now), claimed = Date.parse(value.claimedAt), expires = Date.parse(value.expiresAt)
+    if (value.schemaVersion !== 1 || value.phase !== "ACTIVATION_CLAIMED_LEASED" || value.runId !== RUN_ID || value.authorityReference !== AUTHORITY_REFERENCE
+      || !/^claim-[a-f0-9]{24}$/.test(value.claimId) || !/^lease-[a-f0-9]{24}$/.test(value.leaseId)
+      || ![current, claimed, expires].every(Number.isFinite) || current < claimed || current >= expires + 1_800_000) throw new Error("activation phase differs")
+    return { status: "RECOVERY_REQUIRED", executionAuthorized: false, runId: RUN_ID, claimId: value.claimId, leaseId: value.leaseId }
+  } catch (error) { return blocked(String(error.message)) }
+}
+
+export function inspectMintRecord(expected, observed) {
+  try {
+    const keys = ["schemaVersion", "mintKey", "runId", "claimId", "operation", "attempt", "previousEvidenceSha256", "packetSha256", "patchSha256", "ticketSha256"]
+    if (!exactKeys(expected, keys) || !exactKeys(observed, keys) || canonical(expected) !== canonical(observed) || expected.schemaVersion !== 1 || !SHA.test(expected.mintKey)
+      || expected.runId !== RUN_ID || !/^claim-[a-f0-9]{24}$/.test(expected.claimId) || !OPERATIONS.includes(expected.operation) || ![1,2,3].includes(expected.attempt)
+      || !(expected.previousEvidenceSha256 === null || SHA.test(expected.previousEvidenceSha256)) || ![expected.packetSha256, expected.patchSha256, expected.ticketSha256].every(value => SHA.test(value))) throw new Error("mint record differs")
+    return { status: "MINT_REPLAY_EXACT", executionAuthorized: false, mintKey: expected.mintKey }
+  } catch (error) { return blocked(String(error.message)) }
+}
+
+export function inspectActivationBridgeReceipt(expected, observed) {
+  try {
+    const keys = ["schemaVersion", "status", "runId", "authorityId", "authoritySha256", "machineIdSha256", "bootId", "controlCommit", "prerequisiteReceiptSha256", "assets", "schedulerEnabled", "standingAuthority", "executionAuthorized"]
+    if (!exactKeys(expected, keys) || !exactKeys(observed, keys) || canonical(expected) !== canonical(observed) || expected.schemaVersion !== 1 || expected.status !== "ACTIVATION_BRIDGE_VERIFIED"
+      || expected.runId !== RUN_ID || !GUID.test(expected.authorityId) || !SHA.test(expected.authoritySha256) || !SHA.test(expected.machineIdSha256) || !GUID.test(expected.bootId) || !/^[a-f0-9]{40}$/.test(expected.controlCommit)
+      || expected.prerequisiteReceiptSha256 !== "41ea35adc284b37e381f1162e5cd2315f8a0ef2da5c2326e1a224c15e4fa541c" || !Array.isArray(expected.assets) || expected.assets.length < 1
+      || expected.assets.some(asset => !exactKeys(asset, ["destination", "sha256", "mode"]) || typeof asset.destination !== "string" || !asset.destination.startsWith("/") || !SHA.test(asset.sha256) || !/^0[0-7]{3}$/.test(asset.mode))
+      || expected.schedulerEnabled !== false || expected.standingAuthority !== false || expected.executionAuthorized !== false) throw new Error("activation bridge receipt differs")
+    return { status: "ACTIVATION_BRIDGE_VERIFIED", executionAuthorized: false, runId: RUN_ID }
+  } catch (error) { return blocked(String(error.message)) }
+}
+
+export function inspectStrandedActivationLedger(claim, lease, expected) {
+  try {
+    const claimKeys=["schema_version","claim_id","request_sha256","scope_sha256","authority_reference","maximum_attempts","claim_key_sha256","claimed_at","claim_sha256"],leaseKeys=["schema_version","lease_id","claim_id","acquired_at","holder","lease_sha256"]
+    const {claim_sha256,...claimBody}=claim??{}, {lease_sha256,...leaseBody}=lease??{}
+    if(!exactKeys(expected,["claimKeySha256","requestSha256","scopeSha256"])||!exactKeys(claim,claimKeys)||!exactKeys(lease,leaseKeys)||claim.schema_version!=="0.1-aegis-single-use-claim"||claim.claim_key_sha256!==expected.claimKeySha256||claim.request_sha256!==expected.requestSha256||claim.scope_sha256!==expected.scopeSha256||claim.authority_reference!==AUTHORITY_REFERENCE||claim.maximum_attempts!==3||!/^claim-[a-f0-9]{24}$/.test(claim.claim_id)||claim_sha256!==sha(Buffer.from(canonical(claimBody)))||lease.schema_version!=="0.1-resident-aegis-runtime-lease"||!/^lease-[a-f0-9]{24}$/.test(lease.lease_id)||lease.claim_id!==claim.claim_id||!exactKeys(lease.holder,["pid","boot_id","process_start_ticks"])||lease_sha256!==sha(Buffer.from(canonical(leaseBody))))throw new Error("stranded ledger differs")
+    return {status:"STRANDED_LEASE_RECOVERY_REQUIRED",executionAuthorized:false,claimId:claim.claim_id,leaseId:lease.lease_id,claimedAt:claim.claimed_at}
+  } catch(error){return blocked(String(error.message))}
+}
+
+function verifyBridgeReceiptLive() {
+  const observed = JSON.parse(exactRootFile(BRIDGE_RECEIPT, 0o444))
+  const expected = { ...observed, machineIdSha256: sha(Buffer.from(fs.readFileSync("/etc/machine-id", "utf8").trim())), bootId: fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() }
+  if (inspectActivationBridgeReceipt(expected, observed).status !== "ACTIVATION_BRIDGE_VERIFIED") throw new Error("activation bridge receipt is unproven")
+  for (const asset of observed.assets) { const bytes = exactRootFile(asset.destination, Number.parseInt(asset.mode, 8)); if (sha(bytes) !== asset.sha256) throw new Error("activation bridge installed asset differs") }
+  if (sha(exactRootFile("/var/lib/williamos-fabric/remote-dev-prerequisite-verified.json", 0o444)) !== observed.prerequisiteReceiptSha256) throw new Error("canonical prerequisite receipt differs")
+  return observed
+}
+
+export function inspectActivationSessionToken(value, now) {
+  try {
+    const keys = ["schemaVersion", "activationId", "authorityReference", "runId", "claimId", "leaseId", "proofId", "workspace", "branch", "baseSha", "issuedAt", "expiresAt", "daemonPid", "daemonStartTicks"]
+    const current = Date.parse(now), issued = Date.parse(value?.issuedAt), expires = Date.parse(value?.expiresAt)
+    if (!exactKeys(value, keys) || value.schemaVersion !== 1 || value.activationId !== ACTIVATION_ID || value.authorityReference !== AUTHORITY_REFERENCE || value.runId !== RUN_ID
+      || !/^claim-[a-f0-9]{24}$/.test(value.claimId) || !/^lease-[a-f0-9]{24}$/.test(value.leaseId) || !GUID.test(value.proofId)
+      || value.workspace !== WORKSPACE || value.branch !== BRANCH || value.baseSha !== BASE_SHA || !Number.isSafeInteger(value.daemonPid) || value.daemonPid <= 1
+      || !/^\d+$/.test(value.daemonStartTicks) || ![current, issued, expires].every(Number.isFinite) || current < issued || current >= expires || expires - issued > 14_400_000) throw new Error("session binding differs")
+    return { status: "ACTIVE_SESSION_VERIFIED", executionAuthorized: false, runId: RUN_ID, claimId: value.claimId, leaseId: value.leaseId, proofId: value.proofId }
+  } catch (error) { return blocked(String(error.message)) }
+}
+
+export function inspectTicketMintRequest(request, packetBytes, patchBytes) {
+  try {
+    const keys = ["operation", "attempt", "previousEvidenceSha256", "packetSha256", "patchSha256"]
+    if (!exactKeys(request, keys) || !OPERATIONS.includes(request.operation) || ![1, 2, 3].includes(request.attempt)
+      || !(request.previousEvidenceSha256 === null || SHA.test(request.previousEvidenceSha256)) || request.packetSha256 !== sha(packetBytes) || request.patchSha256 !== sha(patchBytes)) throw new Error("ticket request differs")
+    return { status: "TICKET_REQUEST_VERIFIED", executionAuthorized: false, operation: request.operation }
+  } catch (error) { return blocked(String(error.message)) }
+}
+
+function run(file, args, options = {}) {
+  const result = spawnSync(file, args, { encoding: "utf8", shell: false, timeout: options.timeout ?? 30_000, env: ENV, cwd: options.cwd })
+  if (result.error || result.signal || !(options.statuses ?? [0]).includes(result.status)) throw new Error(`${path.basename(file)} ${args[0] ?? ""} failed`)
+  return String(result.stdout ?? "").trim()
+}
+function trustedParents(file) { let cursor = "/"; for (const part of path.dirname(file).slice(1).split("/").filter(Boolean)) { cursor = path.join(cursor, part); const s = fs.lstatSync(cursor); if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== 0 || (s.mode & 0o022)) return false } return true }
+function exactRootFile(file, mode) { const s = fs.lstatSync(file); if (!trustedParents(file) || !s.isFile() || s.isSymbolicLink() || s.nlink !== 1 || s.uid !== 0 || s.gid !== 0 || (s.mode & 0o7777) !== mode) throw new Error(`${file} trust differs`); return fs.readFileSync(file) }
+function exactLedgerFile(file) { const gid=Number(run("/usr/bin/id",["-g","williamos-fabric"]));for(const [p,uid,mode] of [["/var",0,0o755],["/var/lib",0,0o755],["/var/lib/williamos",999,0o750],["/var/lib/williamos/fabric",999,0o700],[LEDGER_ROOT,999,0o700]]){const v=fs.lstatSync(p);if(!v.isDirectory()||v.isSymbolicLink()||v.uid!==uid||(v.mode&0o7777)!==mode||(uid===999&&v.gid!==gid))throw new Error("ledger ancestor trust differs")}const s=fs.lstatSync(file);if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1||s.uid!==999||s.gid!==gid||(s.mode&0o7777)!==0o600)throw new Error(`${file} ledger trust differs`);return JSON.parse(fs.readFileSync(file)) }
+function writeRootJson(file, value, mode = 0o444) { const bytes = Buffer.from(`${canonical(value)}\n`); const temp = `${file}.${process.pid}.tmp`; const fd = fs.openSync(temp, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, mode); fs.writeFileSync(fd, bytes); fs.fchmodSync(fd, mode); fs.fsyncSync(fd); fs.closeSync(fd); fs.renameSync(temp, file); const parent = fs.openSync(path.dirname(file), fs.constants.O_RDONLY | fs.constants.O_DIRECTORY); fs.fsyncSync(parent); fs.closeSync(parent) }
+function createRootJson(file, value, mode = 0o400) { const bytes = Buffer.from(`${canonical(value)}\n`); const fd = fs.openSync(file, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, mode); try { fs.writeFileSync(fd, bytes); fs.fchmodSync(fd, mode); fs.fsyncSync(fd) } finally { fs.closeSync(fd) } const parent = fs.openSync(path.dirname(file), fs.constants.O_RDONLY | fs.constants.O_DIRECTORY); try { fs.fsyncSync(parent) } finally { fs.closeSync(parent) } }
+function startTicks(pid) { return fs.readFileSync(`/proc/${pid}/stat`, "utf8").trim().split(/\s+/)[21] }
+function trustedNow() { const value = run("/usr/bin/date", ["-u", "+%Y-%m-%dT%H:%M:%S.%3NZ"]); if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) throw new Error("trusted time differs"); return value }
+export function inspectActivationUnitState(state,mainPid){if((state==="inactive"||state==="unknown")&&mainPid===0)return "INACTIVE";if(state==="failed"&&mainPid===0)return "RESET_REQUIRED";return "DRIFT"}
+export function inspectLeaseHolderState(holder,currentBootId,observedStartTicks){if(!exactKeys(holder,["pid","boot_id","process_start_ticks"])||!Number.isSafeInteger(holder.pid)||holder.pid<=1||!GUID.test(holder.boot_id)||!/^\d+$/.test(holder.process_start_ticks))return "DRIFT";return holder.boot_id===currentBootId&&observedStartTicks===holder.process_start_ticks?"ACTIVE":"DEAD"}
+function requireActivationUnitInactive(){const value=run("/usr/bin/systemctl",["is-active",UNIT],{statuses:[3,4]}),mainPid=Number(run("/usr/bin/systemctl",["show",UNIT,"--property=MainPID","--value"],{statuses:[0,1]}));const state=inspectActivationUnitState(value,mainPid);if(state==="DRIFT")throw new Error("activation unit is not proven inactive");if(state==="RESET_REQUIRED")run("/usr/bin/systemctl",["reset-failed",UNIT])}
+
+function prepareSnapshot() {
+  const exactConfig = `[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n[remote "origin"]\n\turl = ssh://git@ssh.github.com:443/bsvalues/terragroq.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`
+  for (const candidate of [CONTROL_REPOSITORY, `${CONTROL_REPOSITORY}/.git`]) { const s = fs.lstatSync(candidate); if (!trustedParents(candidate) || !s.isDirectory() || s.isSymbolicLink() || s.uid !== 0 || s.gid !== 0 || (s.mode & 0o7777) !== 0o700) throw new Error("canonical control tree trust differs") }
+  if (!exactRootFile(`${CONTROL_REPOSITORY}/.git/config`, 0o600).equals(Buffer.from(exactConfig))) throw new Error("canonical control Git config differs")
+  const hooks = "/usr/local/share/williamos/empty-git-hooks", hs = fs.lstatSync(hooks)
+  if (!trustedParents(hooks) || !hs.isDirectory() || hs.isSymbolicLink() || hs.uid !== 0 || hs.gid !== 0 || (hs.mode & 0o7777) !== 0o555 || fs.readdirSync(hooks).length !== 0) throw new Error("canonical empty hooks differ")
+  const git = args => run("/usr/bin/git", ["-c", `safe.directory=${CONTROL_REPOSITORY}`, "-c", "core.hooksPath=/usr/local/share/williamos/empty-git-hooks", "-C", CONTROL_REPOSITORY, ...args])
+  const head = git(["rev-parse", "HEAD"]), main = git(["rev-parse", "refs/heads/main"]), status = git(["status", "--porcelain=v1", "--untracked-files=all"])
+  if (head !== main || status !== "") throw new Error("canonical control checkout differs")
+  if (fs.existsSync(STATE_ROOT) || fs.existsSync(PREPARING_ROOT)) throw new Error("activation state already exists")
+  const fabricGid = Number(run("/usr/bin/id", ["-g", "williamos-fabric"]))
+  const stagedSnapshot=`${PREPARING_ROOT}/control`, stagedMints=`${PREPARING_ROOT}/mints`
+  fs.mkdirSync(PREPARING_ROOT, { mode: 0o750 }); fs.chownSync(PREPARING_ROOT, 0, fabricGid); fs.chmodSync(PREPARING_ROOT, 0o750)
+  fs.mkdirSync(stagedMints, { mode: 0o700 })
+  fs.cpSync(CONTROL_REPOSITORY, stagedSnapshot, { recursive: true, dereference: false, errorOnExist: true })
+  for (const entry of fs.readdirSync(stagedSnapshot, { recursive: true })) { const target = path.join(stagedSnapshot, String(entry)); const s = fs.lstatSync(target); if (s.isSymbolicLink()) throw new Error("snapshot contains symlink"); fs.chownSync(target, 0, 0); fs.chmodSync(target, s.isDirectory() ? 0o555 : 0o444) }
+  fs.chmodSync(stagedSnapshot, 0o555)
+  writeRootJson(`${PREPARING_ROOT}/prepared.json`, {schemaVersion:1,status:"ACTIVATION_SNAPSHOT_PREPARED",runId:RUN_ID,controlCommit:head}, 0o444)
+  fs.renameSync(PREPARING_ROOT,STATE_ROOT); const pfd=fs.openSync(path.dirname(STATE_ROOT),fs.constants.O_RDONLY|fs.constants.O_DIRECTORY);fs.fsyncSync(pfd);fs.closeSync(pfd)
+  return head
+}
+
+function inspectPreparedState(){const v=JSON.parse(exactRootFile(PREPARED_FILE,0o444));if(!exactKeys(v,["schemaVersion","status","runId","controlCommit"])||v.schemaVersion!==1||v.status!=="ACTIVATION_SNAPSHOT_PREPARED"||v.runId!==RUN_ID||!/^[a-f0-9]{40}$/.test(v.controlCommit))throw new Error("prepared activation state differs");return v.controlCommit}
+function recoverStrandedPhase(){
+  const authority=JSON.parse(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`)),candidate={runId:authority.run.runId,workOrderId:authority.workOrderId,issue:authority.issue,repository:authority.target.repository,baseRef:authority.target.baseRef,baseSha:authority.trustedMain.target.pinnedCommit,nodeId:authority.target.nodeId,workspace:authority.target.workspace,branch:authority.target.branch,operations:authority.operations,resources:authority.resources,network:authority.network,executionIdentity:authority.executionIdentity}
+  const scopeSha256=sha(Buffer.from(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`,"utf8").replace(/\r\n/g,"\n"))),requestSha256=sha(Buffer.from(canonical(candidate))),claimKeySha256=sha(Buffer.from(canonical({authority_reference:AUTHORITY_REFERENCE,scope_sha256:scopeSha256}))),claimPath=`${LEDGER_ROOT}/claim-${claimKeySha256}.json`
+  if(!fs.existsSync(claimPath))return false
+   const claim=exactLedgerFile(claimPath),lease=exactLedgerFile(`${LEDGER_ROOT}/resident-aegis-active.json`),proof=inspectStrandedActivationLedger(claim,lease,{claimKeySha256,requestSha256,scopeSha256});if(proof.status!=="STRANDED_LEASE_RECOVERY_REQUIRED")throw new Error("stranded activation ledger differs")
+   let observedStartTicks=null;try{observedStartTicks=startTicks(lease.holder.pid)}catch(error){if(error?.code!=="ENOENT")throw error}const currentBootId=fs.readFileSync("/proc/sys/kernel/random/boot_id","utf8").trim(),holderState=inspectLeaseHolderState(lease.holder,currentBootId,observedStartTicks);if(holderState!=="DEAD")throw new Error("stranded activation lease holder is not proven dead")
+  writeRootJson(PHASE_FILE,{schemaVersion:1,phase:"ACTIVATION_CLAIMED_LEASED",runId:RUN_ID,claimId:proof.claimId,leaseId:proof.leaseId,authorityReference:AUTHORITY_REFERENCE,claimedAt:proof.claimedAt,expiresAt:authority.run.expiresAt});return true
+}
+
+function sessionEnvelope(payload) { return { payload, signature: crypto.sign(null, Buffer.from(canonical(payload)), exactRootFile(PRIVATE_KEY, 0o400)).toString("base64") } }
+
+async function childMain() {
+  if (process.getuid?.() === 0 || os.userInfo().username !== "williamos-fabric") throw new Error("activation child identity differs")
+  const authority = JSON.parse(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`))
+  const module = await import(`${pathToFileURL(`${SNAPSHOT}/scripts/execution-fabric/live/remote-dev-offload-activation.mjs`).href}?run=${RUN_ID}`)
+  const candidate = { runId: authority.run.runId, workOrderId: authority.workOrderId, issue: authority.issue, repository: authority.target.repository, baseRef: authority.target.baseRef, baseSha: authority.trustedMain.target.pinnedCommit, nodeId: authority.target.nodeId, workspace: authority.target.workspace, branch: authority.target.branch, operations: authority.operations, resources: authority.resources, network: authority.network, executionIdentity: authority.executionIdentity }
+  const authorized = await module.authorizeRemoteDevActivation(authority, candidate)
+  if (authorized.status !== "AUTHORIZED_SINGLE_USE" || authorized.executionAuthorized !== true) throw new Error(JSON.stringify(authorized))
+  process.send?.({ type: "authorized", value: authorized })
+  process.on("message", async message => {
+    if (message?.type !== "settle") return
+    const settled = await module.settleRemoteDevActivation(authorized.session)
+    process.send?.({ type: "settled", value: settled })
+    process.exit(settled.status === "CONSUMED_SINGLE_USE" ? 0 : 2)
+  })
+}
+
+async function recoveryChildMain() {
+  if (process.getuid?.() === 0 || os.userInfo().username !== "williamos-fabric") throw new Error("activation recovery identity differs")
+  const authority = JSON.parse(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`))
+  const module = await import(`${pathToFileURL(`${SNAPSHOT}/scripts/execution-fabric/live/remote-dev-offload-activation.mjs`).href}?recover=${RUN_ID}`)
+  const candidate = { runId: authority.run.runId, workOrderId: authority.workOrderId, issue: authority.issue, repository: authority.target.repository, baseRef: authority.target.baseRef, baseSha: authority.trustedMain.target.pinnedCommit, nodeId: authority.target.nodeId, workspace: authority.target.workspace, branch: authority.target.branch, operations: authority.operations, resources: authority.resources, network: authority.network, executionIdentity: authority.executionIdentity }
+  const phase = JSON.parse(exactRootFile(PHASE_FILE, 0o444))
+  if (inspectActivationHostPhase(phase, trustedNow()).status !== "RECOVERY_REQUIRED") throw new Error("activation recovery phase differs")
+  const settled = await module.recoverRemoteDevActivationSettlement(authority, candidate, { runId: phase.runId, claimId: phase.claimId, leaseId: phase.leaseId })
+  if (settled.status !== "SETTLEMENT_EVIDENCE_VERIFIED") throw new Error(JSON.stringify(settled))
+  process.send?.({ type: "recovered", value: settled })
+}
+
+async function daemonMain() {
+  if (process.getuid?.() !== 0 || process.argv[1] !== INSTALLED_SELF) throw new Error("fixed root daemon required")
+  const snapshotGit = args => run("/usr/bin/git", ["-c", `safe.directory=${SNAPSHOT}`, "-c", "core.hooksPath=/usr/local/share/williamos/empty-git-hooks", "-C", SNAPSHOT, ...args])
+  const head = snapshotGit(["rev-parse", "HEAD"])
+  const account = run("/usr/bin/id", ["-u", "williamos-fabric"]), group = run("/usr/bin/id", ["-g", "williamos-fabric"])
+  const child = fork(INSTALLED_SELF, ["child"], { uid: Number(account), gid: Number(group), cwd: SNAPSHOT, stdio: ["ignore", "ignore", "ignore", "ipc"], env: ENV })
+  const daemonPid = process.pid, daemonStartTicks = startTicks(daemonPid)
+  child.on("message", message => {
+    if (message?.type === "authorized") {
+      const value = message.value
+      const payload = { schemaVersion: 1, activationId: ACTIVATION_ID, authorityReference: AUTHORITY_REFERENCE, runId: value.runId, claimId: value.claimId, leaseId: value.leaseId, proofId: value.networkProofId, workspace: WORKSPACE, branch: BRANCH, baseSha: BASE_SHA, issuedAt: trustedNow(), expiresAt: JSON.parse(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`)).run.expiresAt, daemonPid, daemonStartTicks }
+      if (inspectActivationSessionToken(payload, trustedNow()).status !== "ACTIVE_SESSION_VERIFIED" || head !== snapshotGit(["rev-parse", "HEAD"])) throw new Error("authorized session differs")
+      writeRootJson(PHASE_FILE, { schemaVersion: 1, phase: "ACTIVATION_CLAIMED_LEASED", runId: RUN_ID, claimId: payload.claimId, leaseId: payload.leaseId, authorityReference: AUTHORITY_REFERENCE, claimedAt: payload.issuedAt, expiresAt: payload.expiresAt })
+      writeRootJson(SESSION_FILE, sessionEnvelope(payload))
+    } else if (message?.type === "settled") {
+      writeRootJson(SETTLEMENT_FILE, message.value)
+      process.exit(message.value?.status === "CONSUMED_SINGLE_USE" ? 0 : 2)
+    }
+  })
+  process.on("SIGUSR1", () => child.send({ type: "settle" }))
+  child.on("exit", code => { if (!fs.existsSync(SETTLEMENT_FILE)) process.exit(code ?? 2) })
+}
+
+function startMain() {
+  if (process.getuid?.() !== 0 || process.argv[1] !== INSTALLED_SELF) throw new Error("fixed root host required")
+  verifyBridgeReceiptLive()
+   if (fs.existsSync(SETTLEMENT_FILE)) { run("/usr/bin/systemctl",["disable","--now","williamos-aegis-remote-dev-activation.socket"]);process.stdout.write(exactRootFile(SETTLEMENT_FILE,0o444)); return }
+  if (fs.existsSync(SESSION_FILE)) {
+    const envelope = JSON.parse(exactRootFile(SESSION_FILE, 0o444)); const value = envelope.payload
+    if (!crypto.verify(null, Buffer.from(canonical(value)), exactRootFile(PUBLIC_KEY, 0o444), Buffer.from(envelope.signature, "base64")) || inspectActivationSessionToken(value, value.issuedAt).status !== "ACTIVE_SESSION_VERIFIED") throw new Error("existing activation session differs")
+    let alive=false;try{alive=startTicks(value.daemonPid)===value.daemonStartTicks}catch(error){if(error?.code!=="ENOENT")throw error}
+    if(alive&&inspectActivationSessionToken(value,trustedNow()).status==="ACTIVE_SESSION_VERIFIED"){process.stdout.write(fs.readFileSync(SESSION_FILE));return}
+  }
+  if (fs.existsSync(PHASE_FILE)) {
+    requireActivationUnitInactive()
+    const phase = JSON.parse(exactRootFile(PHASE_FILE, 0o444)); if (inspectActivationHostPhase(phase, trustedNow()).status !== "RECOVERY_REQUIRED") throw new Error("existing activation phase differs")
+    const account = Number(run("/usr/bin/id", ["-u", "williamos-fabric"])), group = Number(run("/usr/bin/id", ["-g", "williamos-fabric"]))
+    const child = fork(INSTALLED_SELF, ["recover"], { uid: account, gid: group, cwd: SNAPSHOT, stdio: ["ignore", "ignore", "ignore", "ipc"], env: ENV })
+    child.on("message", message => { if (message?.type === "recovered") writeRootJson(SETTLEMENT_FILE, message.value) })
+    for (let index = 0; index < 100 && !fs.existsSync(SETTLEMENT_FILE); index++) spawnSync("/usr/bin/sleep", ["0.1"])
+    if (!fs.existsSync(SETTLEMENT_FILE)) throw new Error("activation recovery settlement unavailable")
+    process.stdout.write(fs.readFileSync(SETTLEMENT_FILE)); return
+  }
+  if (!fs.existsSync(STATE_ROOT)) prepareSnapshot(); else inspectPreparedState()
+  requireActivationUnitInactive()
+  if (recoverStrandedPhase()) return startMain()
+  const result = run("/usr/bin/systemd-run", ["--unit", UNIT.replace(/\.service$/, ""), "--property", "Type=simple", "--property", "NoNewPrivileges=yes", "--property", "PrivateTmp=yes", "--property", "ProtectSystem=strict", "--property", `ReadWritePaths=${STATE_ROOT} /var/lib/williamos/fabric/ledger /var/lib/williamos-fabric/remote-dev-launch-tickets`, "/usr/bin/node", INSTALLED_SELF, "daemon"])
+  for (let index = 0; index < 100 && !fs.existsSync(SESSION_FILE); index++) spawnSync("/usr/bin/sleep", ["0.1"])
+  if (!fs.existsSync(SESSION_FILE)) throw new Error(`activation daemon did not publish session: ${result}`)
+  process.stdout.write(fs.readFileSync(SESSION_FILE))
+}
+
+function mintMain(requestPath, packetPath, patchPath) {
+  if (process.getuid?.() !== 0 || process.argv[1] !== INSTALLED_SELF) throw new Error("fixed root ticket minter required")
+  verifyBridgeReceiptLive()
+  const sessionEnvelope = JSON.parse(exactRootFile(SESSION_FILE, 0o444)); const payload = sessionEnvelope.payload
+  if (!crypto.verify(null, Buffer.from(canonical(payload)), exactRootFile(PUBLIC_KEY, 0o444), Buffer.from(sessionEnvelope.signature, "base64"))) throw new Error("session signature differs")
+  if (inspectActivationSessionToken(payload, trustedNow()).status !== "ACTIVE_SESSION_VERIFIED" || startTicks(payload.daemonPid) !== payload.daemonStartTicks) throw new Error("active daemon differs")
+  const request = JSON.parse(fs.readFileSync(requestPath)), packetBytes = fs.readFileSync(packetPath), patchBytes = fs.readFileSync(patchPath)
+  if (inspectTicketMintRequest(request, packetBytes, patchBytes).status !== "TICKET_REQUEST_VERIFIED") throw new Error("ticket request unproven")
+  const packet = JSON.parse(packetBytes)
+  if (packet.runId !== RUN_ID || packet.workspace !== WORKSPACE || packet.branch !== BRANCH || packet.baseSha !== BASE_SHA) throw new Error("packet session binding differs")
+  const mintKey = sha(Buffer.from(canonical({ runId: RUN_ID, claimId: payload.claimId, operation: request.operation, attempt: request.attempt, previousEvidenceSha256: request.previousEvidenceSha256, packetSha256: request.packetSha256, patchSha256: request.patchSha256 })))
+  const mintFile = `${MINT_ROOT}/${mintKey}.json`
+  if (!fs.existsSync(mintFile)) {
+    const issuedAt = trustedNow(), expiresAt = new Date(Date.parse(issuedAt) + 30_000).toISOString()
+    const ticketPayload = { schemaVersion: 1, ticketId: crypto.randomUUID(), activationId: ACTIVATION_ID, authorityReference: AUTHORITY_REFERENCE, runId: RUN_ID, proofId: payload.proofId, claimId: payload.claimId, leaseId: payload.leaseId, operation: request.operation, attempt: request.attempt, previousEvidenceSha256: request.previousEvidenceSha256, packetSha256: request.packetSha256, patchSha256: request.patchSha256, workerSha256: JSON.parse(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`)).bindings.worker.sha256, issuedAt, expiresAt }
+    const ticket = { payload: ticketPayload, signature: crypto.sign(null, Buffer.from(canonical(ticketPayload)), exactRootFile(PRIVATE_KEY, 0o400)).toString("base64") }
+    const record = { schemaVersion: 1, mintKey, runId: RUN_ID, claimId: payload.claimId, operation: request.operation, attempt: request.attempt, previousEvidenceSha256: request.previousEvidenceSha256, packetSha256: request.packetSha256, patchSha256: request.patchSha256, ticketSha256: sha(Buffer.from(`${canonical(ticket)}\n`)) }
+    try { createRootJson(mintFile, { record, ticket }, 0o400) } catch (error) { if (error?.code !== "EEXIST") throw error }
+  }
+  const stored = JSON.parse(exactRootFile(mintFile, 0o400)); const expected = { schemaVersion: 1, mintKey, runId: RUN_ID, claimId: payload.claimId, operation: request.operation, attempt: request.attempt, previousEvidenceSha256: request.previousEvidenceSha256, packetSha256: request.packetSha256, patchSha256: request.patchSha256, ticketSha256: sha(Buffer.from(`${canonical(stored.ticket)}\n`)) }
+  if (!exactKeys(stored, ["record", "ticket"]) || inspectMintRecord(expected, stored.record).status !== "MINT_REPLAY_EXACT") throw new Error("durable mint record differs")
+  process.stdout.write(Buffer.from(`${canonical(stored.ticket)}\n`))
+}
+
+function settleMain() {
+  verifyBridgeReceiptLive()
+  if(fs.existsSync(SETTLEMENT_FILE)){run("/usr/bin/systemctl",["disable","--now","williamos-aegis-remote-dev-activation.socket"]);process.stdout.write(exactRootFile(SETTLEMENT_FILE,0o444));return}
+  const envelope = JSON.parse(exactRootFile(SESSION_FILE, 0o444)); const payload = envelope.payload
+  if (!crypto.verify(null, Buffer.from(canonical(payload)), exactRootFile(PUBLIC_KEY, 0o444), Buffer.from(envelope.signature, "base64")) || inspectActivationSessionToken(payload, payload.issuedAt).status !== "ACTIVE_SESSION_VERIFIED" || inspectActivationHostPhase(JSON.parse(exactRootFile(PHASE_FILE, 0o444)), trustedNow()).status !== "RECOVERY_REQUIRED" || startTicks(payload.daemonPid) !== payload.daemonStartTicks) throw new Error("active daemon differs")
+  process.kill(payload.daemonPid, "SIGUSR1")
+  for (let index = 0; index < 100 && !fs.existsSync(SETTLEMENT_FILE); index++) spawnSync("/usr/bin/sleep", ["0.1"])
+  if (!fs.existsSync(SETTLEMENT_FILE)) throw new Error("activation settlement unavailable")
+  run("/usr/bin/systemctl", ["disable", "--now", "williamos-aegis-remote-dev-activation.socket"])
+  process.stdout.write(fs.readFileSync(SETTLEMENT_FILE))
+}
+
+function serveMain() {
+  const request = JSON.parse(fs.readFileSync(0, "utf8"))
+  if (!exactKeys(request, request.action === "mint" ? ["action", "request", "packetBase64", "patchBase64"] : ["action"])) throw new Error("activation bridge request differs")
+  if (request.action === "start") return startMain()
+  if (request.action === "settle") return settleMain()
+  if (request.action !== "mint" || typeof request.request !== "object" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(request.packetBase64) || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(request.patchBase64)) throw new Error("activation bridge mint differs")
+  const packet = Buffer.from(request.packetBase64, "base64"), patch = Buffer.from(request.patchBase64, "base64")
+  if (packet.length < 2 || packet.length > 1_048_576 || patch.length > 1_048_576) throw new Error("activation bridge payload size differs")
+  const root = fs.mkdtempSync(`${STATE_ROOT}/request-`), requestPath = `${root}/request.json`, packetPath = `${root}/packet.json`, patchPath = `${root}/patch.bin`
+  try {
+    fs.writeFileSync(requestPath, `${canonical(request.request)}\n`, { mode: 0o400 }); fs.writeFileSync(packetPath, packet, { mode: 0o400 }); fs.writeFileSync(patchPath, patch, { mode: 0o400 })
+    mintMain(requestPath, packetPath, patchPath)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+}
+
+if (process.argv[1] === new URL(import.meta.url).pathname) {
+  try {
+    if (process.argv[2] === "child") await childMain()
+    else if (process.argv[2] === "recover") await recoveryChildMain()
+    else if (process.argv[2] === "daemon") await daemonMain()
+    else if (process.argv[2] === "start") startMain()
+    else if (process.argv[2] === "mint") mintMain(process.argv[3], process.argv[4], process.argv[5])
+    else if (process.argv[2] === "settle") settleMain()
+    else if (process.argv[2] === "serve") serveMain()
+    else throw new Error("operation differs")
+  } catch (error) { console.log(canonical(blocked(String(error.message)))); process.exitCode = 2 }
+}
