@@ -278,6 +278,8 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     expect(liveManifest.trustedServiceParents).toEqual([
       { path: "/home/williamos-fabric", uid: 999, gid: 987, mode: "0755" },
       { path: "/home/williamos-fabric/.ssh", uid: 999, gid: 987, mode: "0700" },
+      { path: "/var/lib/williamos", uid: 999, gid: 987, mode: "0750" },
+      { path: "/var/lib/williamos/fabric", uid: 999, gid: 987, mode: "0700" },
       { path: "/var/lib/williamos/fabric/ledger", uid: 999, gid: 987, mode: "0700" },
       { path: "/var/lib/williamos/fabric/standing-hash-ledger", uid: 999, gid: 987, mode: "0700" },
     ])
@@ -479,10 +481,16 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     expect(readStable).not.toHaveBeenCalled()
     expect(stderr.value).toContain("AEGIS_SSH_REPAIR_LAUNCHER_REQUIRED")
     expect(launcherBytes.toString("utf8")).toContain(`INSTALLER_SHA256=${liveManifest.installer.sha256}`)
-    expect(launcherBytes.toString("utf8")).toContain("/usr/bin/flock -n 9")
+    expect(launcherBytes.toString("utf8")).toContain("/usr/bin/flock --exclusive --nonblock --no-fork 9")
     expect(launcherBytes.toString("utf8")).toContain("WILLIAMOS_SSH_REPAIR_LAUNCHER_PATH")
     expect(launcherBytes.toString("utf8")).toContain('[ ! -L "$LAUNCHER" ]')
     expect(launcherBytes.toString("utf8")).toContain('[ ! -L "$SOURCE" ]')
+    const installerSource = installerBytes.toString("utf8")
+    expect(launcherBytes.toString("utf8")).toContain("--exclusive --nonblock --no-fork 9")
+    expect(installerSource).toContain('fs.readFileSync("/proc/locks", "utf8")')
+    expect(installerSource).toContain('Number(match[1]) === process.pid')
+    expect(installerSource).toContain('const openedBefore = fs.fstatSync(fd, { bigint: true })')
+    expect(installerSource).toContain('openedAfter = fs.fstatSync(fd, { bigint: true })')
   })
 
   it("rechecks inactivity after mutation while all reservations remain held", () => {

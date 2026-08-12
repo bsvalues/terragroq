@@ -66,12 +66,12 @@
   "installer": {
     "sourcePath": "scripts/execution-fabric/provision/repair-aegis-ssh-coexistence.mjs",
     "installedPath": "/usr/local/libexec/williamos-aegis-ssh-coexistence-repair.mjs",
-    "sha256": "de3280e045bcd8cc4cac6b72099bb51a77145232a6e2f9e4f91941fc39c565d5"
+    "sha256": "189a44c945320e1671bedc4cb27bc063ff9f79c02e27d9386f36c44a0f79494f"
   },
   "launcher": {
     "sourcePath": "scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh",
     "executedPath": "/usr/local/share/williamos/aegis-ssh-coexistence-repair-bundle/scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh",
-    "sha256": "2263ae76fc11104b2b4017e7d8e238b19dc5ef74efcd78857a491be45f957a68",
+    "sha256": "83868785dfc950f90770bd82bca1cd5e04ae796d7b39d7b759d65df9e461cb61",
     "owner": "root",
     "group": "root",
     "mode": "0555"
@@ -79,6 +79,8 @@
   "trustedServiceParents": [
     { "path": "/home/williamos-fabric", "uid": 999, "gid": 987, "mode": "0755" },
     { "path": "/home/williamos-fabric/.ssh", "uid": 999, "gid": 987, "mode": "0700" },
+    { "path": "/var/lib/williamos", "uid": 999, "gid": 987, "mode": "0750" },
+    { "path": "/var/lib/williamos/fabric", "uid": 999, "gid": 987, "mode": "0700" },
     { "path": "/var/lib/williamos/fabric/ledger", "uid": 999, "gid": 987, "mode": "0700" },
     { "path": "/var/lib/williamos/fabric/standing-hash-ledger", "uid": 999, "gid": 987, "mode": "0700" }
   ],
