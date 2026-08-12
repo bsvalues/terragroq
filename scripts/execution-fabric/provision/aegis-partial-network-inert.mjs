@@ -3,11 +3,11 @@ import fs from "node:fs"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 
-const TX = "afd68274-062e-4b1e-8ff3-a5542898c8e4"
-const FAILED_HEAD = "43049fd96b3d5788f7c4a43315ed4e6b41d3df4d76897a418188753800f8ed41"
-const APPLY_AUTHORITY = "a87bcdfe-5932-4e84-9872-51f4e3e9f058"
-const APPLY_AUTHORITY_SHA256 = "18a61bd84b125072eb40af460fe44ca9327ba6033a4c6b22f191e83656650cd1"
-const APPLY_REVIEWED_COMMIT = "2b008e5693edf52959b2f37a6ebf1cfbd9238ced"
+const TX = "9dd7b361-e3a9-4dba-b1ca-0fb76305a9c8"
+const FAILED_HEAD = "227cabd15311483e3f23136a42bb7b8ffa681eeb8158b3913b3fed41e403c05d"
+const APPLY_AUTHORITY = "d611f473-34a4-4e25-aad9-5a35aa8fc814"
+const APPLY_AUTHORITY_SHA256 = "d8ad68748f4302de4ce3d2f7080d7d216d06ee0c221c920385506927e1c7899e"
+const APPLY_REVIEWED_COMMIT = "9a47acf2af49e71ea9d689f19d24c35ff6fef4d5"
 const MACHINE = "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b"
 const ROOT = "/var/lib/williamos-fabric/remote-dev-prerequisite-handoff"
 const INSTALLED_SELF = "/usr/local/libexec/williamos-aegis-partial-network-inert.mjs"
@@ -55,10 +55,10 @@ function validateAuthority(file) {
 }
 
 function proveFailedTransaction() {
-  const names = fs.readdirSync(`${ROOT}/journal`).filter(n => n.startsWith(`${TX}.`)).sort(); if (names.length !== 7) throw new Error("journal record set differs")
-  const phases = ["AUTHORITY_CONSUMED", "STEP_INTENT", "STEP_APPLIED", "STEP_INTENT", "STEP_APPLIED", "STEP_INTENT", "FAILED_PARTIAL"], steps = [null, "RECONCILE_BOUNDED_IDENTITY", "RECONCILE_BOUNDED_IDENTITY", "INSTALL_DUAL_STACK_BROKER_BOUNDARY", "INSTALL_DUAL_STACK_BROKER_BOUNDARY", "INSTALL_GITHUB_HOST_AUTH_BOUNDARY", null]
+  const names = fs.readdirSync(`${ROOT}/journal`).filter(n => n.startsWith(`${TX}.`)).sort(); if (names.length !== 9) throw new Error("journal record set differs")
+  const phases = ["AUTHORITY_CONSUMED", "STEP_INTENT", "STEP_APPLIED", "STEP_INTENT", "STEP_APPLIED", "STEP_INTENT", "STEP_APPLIED", "STEP_INTENT", "FAILED_PARTIAL"], steps = [null, "RECONCILE_BOUNDED_IDENTITY", "RECONCILE_BOUNDED_IDENTITY", "INSTALL_DUAL_STACK_BROKER_BOUNDARY", "INSTALL_DUAL_STACK_BROKER_BOUNDARY", "INSTALL_GITHUB_HOST_AUTH_BOUNDARY", "INSTALL_GITHUB_HOST_AUTH_BOUNDARY", "RECONCILE_TRUSTED_REPOSITORIES", null]
   let previous = "0".repeat(64)
-  for (let i = 0; i < names.length; i++) { const r = canonicalRootJson(`${ROOT}/journal/${names[i]}`); if (!exactKeys(r, ["schemaVersion", "sequence", "previousSha256", "phase", "detail", "recordSha256"])) throw new Error("journal schema differs"); const digest = sha(Buffer.from(canonical({ schemaVersion:r.schemaVersion, sequence:r.sequence, previousSha256:r.previousSha256, phase:r.phase, detail:r.detail }))); if (r.schemaVersion !== 1 || r.sequence !== i + 1 || r.previousSha256 !== previous || r.phase !== phases[i] || r.recordSha256 !== digest || names[i] !== `${TX}.${String(i+1).padStart(6,"0")}.${digest}.json` || (steps[i] && r.detail?.stepId !== steps[i])) throw new Error("journal chain differs"); if (i === 0 && (r.detail?.authorityId !== APPLY_AUTHORITY || r.detail?.transactionId !== TX)) throw new Error("journal authority differs"); if (i === 6 && (digest !== FAILED_HEAD || r.detail?.detail !== "/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/staged/github_known_hosts differs from signed bytes")) throw new Error("terminal failure differs"); previous = digest }
+  for (let i = 0; i < names.length; i++) { const r = canonicalRootJson(`${ROOT}/journal/${names[i]}`); if (!exactKeys(r, ["schemaVersion", "sequence", "previousSha256", "phase", "detail", "recordSha256"])) throw new Error("journal schema differs"); const digest = sha(Buffer.from(canonical({ schemaVersion:r.schemaVersion, sequence:r.sequence, previousSha256:r.previousSha256, phase:r.phase, detail:r.detail }))); if (r.schemaVersion !== 1 || r.sequence !== i + 1 || r.previousSha256 !== previous || r.phase !== phases[i] || r.recordSha256 !== digest || names[i] !== `${TX}.${String(i+1).padStart(6,"0")}.${digest}.json` || (steps[i] && r.detail?.stepId !== steps[i])) throw new Error("journal chain differs"); if (i === 0 && (r.detail?.authorityId !== APPLY_AUTHORITY || r.detail?.transactionId !== TX)) throw new Error("journal authority differs"); if (i === 8 && (digest !== FAILED_HEAD || r.detail?.detail !== "control checkout is dirty")) throw new Error("terminal failure differs"); previous = digest }
   const claim = canonicalRootJson(`${ROOT}/claims/${APPLY_AUTHORITY}.claimed`); if (!exactKeys(claim,["authorityId","transactionId","authoritySha256","observedFreshMainCommit","reviewedPackageCommit"]) || claim.authorityId !== APPLY_AUTHORITY || claim.transactionId !== TX || claim.authoritySha256 !== APPLY_AUTHORITY_SHA256 || claim.observedFreshMainCommit !== APPLY_REVIEWED_COMMIT || claim.reviewedPackageCommit !== APPLY_REVIEWED_COMMIT) throw new Error("apply claim differs")
 }
 
