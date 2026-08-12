@@ -332,16 +332,32 @@ function claimRecovery(fsApi, authority, manifestSha256, consumedAt, recovery) {
     privateKeyInspected: false,
   }
   let descriptor
+  let claimCreated = false
   try {
     descriptor = fsApi.openSync(RECOVERY_CLAIM_PATH,
       flags(fsApi).O_WRONLY | flags(fsApi).O_CREAT | flags(fsApi).O_EXCL | (flags(fsApi).O_NOFOLLOW ?? 0), 0o600)
+    claimCreated = true
     writeAll(fsApi, descriptor, Buffer.from(`${canonicalize(claim)}\n`, "utf8"))
     fsApi.fsyncSync(descriptor)
   } catch (error) {
     if (error?.code === "EEXIST") fail("HERMES_KEY_AUTHORITY_REPLAY", "exclusive recovery claim already exists")
+    if (claimCreated) {
+      error.authorityConsumed = true
+      error.recoveryClaimPath = RECOVERY_CLAIM_PATH
+    }
     throw error
   } finally {
-    if (descriptor !== undefined) fsApi.closeSync(descriptor)
+    if (descriptor !== undefined) {
+      try {
+        fsApi.closeSync(descriptor)
+      } catch (error) {
+        if (claimCreated) {
+          error.authorityConsumed = true
+          error.recoveryClaimPath = RECOVERY_CLAIM_PATH
+        }
+        throw error
+      }
+    }
   }
 }
 

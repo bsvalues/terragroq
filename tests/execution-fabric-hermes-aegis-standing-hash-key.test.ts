@@ -691,6 +691,47 @@ describe("injected Hermes AEGIS standing HASH dedicated-key generation", () => {
     expect(value.spawnSyncApi).not.toHaveBeenCalled()
   })
 
+  it.each(["writeSync", "fsyncSync", "closeSync"])(
+    "reports recovery authority consumed when the exclusive claim %s fails",
+    (operation) => {
+      const source = harness({
+        mode: "apply",
+        responses: [{ status: 255, stdout: "", stderr: "" }],
+        clock: () => "2026-08-11T18:04:00.000Z",
+      })
+      expect(() => createHermesAegisStandingHashKey(source.options)).toThrow()
+      const retained = source.virtual.bytesAt(JOURNAL_PATH)!
+      const value = harness({ existing: [{ target: JOURNAL_PATH, bytes: retained }], mode: "apply" })
+      value.options.authority = authority({
+        authorityId: "62da20c9-ec34-4b91-95e3-180dfb6a9469",
+        issuedAt: "2026-08-11T18:04:30.000Z",
+        recovery: {
+          priorAuthorityId: authority().authorityId,
+          priorAuthoritySha256: canonicalSha256(authority()),
+          terminalJournalSha256: crypto.createHash("sha256").update(retained).digest("hex"),
+        },
+      })
+      const original = value.virtual.api[operation].bind(value.virtual.api)
+      let injected = false
+      value.virtual.api[operation] = (...args: any[]) => {
+        if (!injected && value.virtual.has(RECOVERY_CLAIM_PATH)) {
+          injected = true
+          throw Object.assign(new Error("EIO"), { code: "EIO" })
+        }
+        return original(...args)
+      }
+
+      try {
+        createHermesAegisStandingHashKey(value.options)
+        throw new Error("EXPECTED_REJECTION")
+      } catch (error) {
+        expect(error).toMatchObject({ code: "EIO", authorityConsumed: true, recoveryClaimPath: RECOVERY_CLAIM_PATH })
+      }
+      expect(value.virtual.has(RECOVERY_CLAIM_PATH)).toBe(true)
+      expect(value.spawnSyncApi).not.toHaveBeenCalled()
+    },
+  )
+
   it("rejects a recovery authority that is stale or not bound to the terminal journal", () => {
     const value = harness({
       mode: "apply",
