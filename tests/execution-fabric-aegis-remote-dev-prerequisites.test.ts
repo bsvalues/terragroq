@@ -35,7 +35,9 @@ function readyObservation() {
     transport: {
       account: "williamos-fabric",
       sourceHost: "hermes",
-      sourceAddress: "192.168.1.154",
+      sourceAddress: "192.168.88.9",
+      targetHost: "aegis",
+      targetAddress: "192.168.88.6",
       forcedCommandPath: "/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs",
       unrestrictedShellAllowed: false,
       passwordAuthenticationAllowed: false,
@@ -160,6 +162,27 @@ function readyObservation() {
 }
 
 describe("AEGIS remote-dev prerequisite package", () => {
+  it("binds the moved Hermes source and AEGIS target without widening transport", () => {
+    const value = manifest()
+    expect(value.transport).toMatchObject({
+      sourceHost: "hermes",
+      sourceAddress: "192.168.88.9",
+      targetHost: "aegis",
+      targetAddress: "192.168.88.6",
+      passwordAuthenticationAllowed: false,
+      ptyAllowed: false,
+      forwardingAllowed: false,
+      unrestrictedShellAllowed: false,
+    })
+    for (const [field, stale] of [["sourceAddress", "192.168.1.154"], ["targetAddress", "192.168.1.157"]] as const) {
+      const drift = structuredClone(value)
+      drift.transport[field] = stale
+      expect(() => validateProvisioningManifest(drift)).toThrow()
+    }
+    const observed = readyObservation()
+    observed.transport.targetHost = "not-aegis"
+    expect(buildProvisioningPlan(value, observed)).toMatchObject({ status: "BLOCKED", reasonCode: "PREREQUISITE_DRIFT" })
+  })
   it("binds the package to the trusted merge, inactive proof scope, and exact audited boundary", () => {
     const value = manifest()
 
@@ -333,7 +356,6 @@ describe("AEGIS remote-dev prerequisite package", () => {
       "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs",
       "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
       "config/execution-fabric/aegis-resident-network-boundary.json",
-      "config/execution-fabric/remote-dev-offload-v1-activation.json",
     ])
   })
 

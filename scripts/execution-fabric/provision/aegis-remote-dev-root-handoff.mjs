@@ -10,7 +10,7 @@ const SHA40 = /^[a-f0-9]{40}$/
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const PLACEHOLDER = /owner-approved|published|placeholder|example|todo/i
 const EXPECTED_COMMIT = "bcca6069a917d706314f7c8cb7b3cd40cdd910da"
-const EXPECTED_PACKAGE_JCS = "1fb6fde76456483a34166b67b6b4413d05c9d69261223f2315d2718de64c359c"
+const EXPECTED_PACKAGE_JCS = "8b956f9e7ae53cf37ba3d2a916d9848522f159ef17afa8c261e7d1454f397034"
 const EXPECTED_MACHINE = "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b"
 const EXPECTED_STORAGE_UUID = "5744648d-9289-4d4e-ac6a-707e8405a5d6"
 const EXPECTED_TRUSTED_EVIDENCE = Object.freeze({
@@ -37,15 +37,15 @@ const AUTHORITY_ROOT = "/var/lib/williamos-fabric/remote-dev-prerequisite-handof
 const BUNDLE_ROOT = "/usr/local/share/williamos/aegis-root-handoff-bundle"
 const STAGED_ROOT = "/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/staged"
 const EXPECTED_ASSET_DIGESTS = Object.freeze({
-  "config/execution-fabric/aegis-remote-dev-prerequisites.json": "6dceb72cc61185700b20b89c54b2936b2338451f67ca738ce05eafd2f358876d",
-  "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs": "f4c2d081674809c2ebc3525acdc80dcbaf8ecf284bfa20017c430fa3ce6ae691",
+  "config/execution-fabric/aegis-remote-dev-prerequisites.json": "f56cb79c4c47fef20ba53dc4ec79b69f6eec926b301619c8cc6145724f733a15",
+  "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs": "6342460a67cb018dad68fd3ce0494af5484d1b7f4f4c2e6398ac219c8f47be84",
   "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh": "7e92a1b3acf541f978f086ee1cec8191cc2b9732bc7f83380e4ecb13fec8d9d4",
   "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs": "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7",
   "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs": "02de9ec83f7dbc3e8a9858438ca4afe87af7ca123e6be79f90a579dc7bf78633",
   "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs": "c4c664578cf8d43822b28c0421ac7fa7a96a06cc9203fd15f4474264b4665507",
   "scripts/execution-fabric/live/aegis-remote-dev-worker.sh": "7e9286b38d76e88eef13aa37628e69151aca2527b6bdfd50d9b835de0a5cb022",
   "config/execution-fabric/aegis-resident-network-boundary.json": "212e330a8647cb73b77f2d5b1d922495bc41baf06d4aca47dcbac5fc98604bb6",
-  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "5fba15230a425f607c4b9fb52509c21a90230c83802d606922762612c78ee505",
+  "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs": "edaf0ad2a8cf7014934b6167626bf48263ddc60314fc0e9c439585d8a2c513c5",
   "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.sh": "4f76725ae7188ae676b5afde4d1622a8c6cdaea0b1bc8d1288dab04700b17ccd",
   "scripts/execution-fabric/provision/assets/90-williamos-aegis-github.conf": "bb6967f25ae614d152c2bbaf4073eae4575f98819f9b4a855b5de20a60e4e789",
   "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf": "a6e83ce0c8b2d2c8127a268c5bd48f27ff3199894f0179afc412a5b01f7fe9c6",
@@ -98,14 +98,15 @@ function reviewedSourceBytes(repoRoot, relativePath) {
 
 export function validateRootHandoffManifest(raw) {
   const value = structuredClone(raw)
-  exact(value, ["schemaVersion", "handoffId", "status", "trustedMain", "prerequisitePackage", "target", "bootstrap", "storage", "posture", "authority", "evidence", "trustedEvidence", "steps", "appliedAssets", "rollback"], "manifest")
+  exact(value, ["schemaVersion", "handoffId", "status", "trustedMain", "prerequisitePackage", "target", "transport", "bootstrap", "storage", "posture", "authority", "evidence", "trustedEvidence", "steps", "appliedAssets", "rollback"], "manifest")
   if (value.schemaVersion !== 1 || value.handoffId !== "aegis-remote-dev-root-handoff-issue-734-v1" || value.status !== "UNTRUSTED_UNTIL_ROOT_BOOTSTRAP") throw new Error("handoff identity differs")
   if (!same(value.trustedMain, { repository: "bsvalues/terragroq", remote: "https://github.com/bsvalues/terragroq.git", ref: "refs/heads/main", minimumCommit: EXPECTED_COMMIT, freshRemoteAuthorityEqualityRequired: true, replaceObjectsDisabled: true, configIsolationRequired: true })) throw new Error("trusted-main boundary differs")
   exact(value.prerequisitePackage, ["packageId", "generationBaseCommit", "canonicalManifestPath", "semanticSupersession", "historicalSuccessClaimed", "supersededPreflight"], "prerequisitePackage")
   if (value.prerequisitePackage.packageId !== "aegis-remote-dev-root-prerequisites-issue-734-v2" || value.prerequisitePackage.generationBaseCommit !== EXPECTED_COMMIT
     || value.prerequisitePackage.canonicalManifestPath !== MANIFEST_PATH || value.prerequisitePackage.semanticSupersession !== true || value.prerequisitePackage.historicalSuccessClaimed !== false) throw new Error("canonical prerequisite package differs")
   if (!same(value.prerequisitePackage.supersededPreflight, { packageId: "aegis-remote-dev-prerequisites-issue-734-v1", manifestPath: "config/execution-fabric/aegis-remote-dev-prerequisites.json", manifestJcsSha256: EXPECTED_PACKAGE_JCS, plannerPath: "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.mjs", installerPath: "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh" })) throw new Error("superseded preflight provenance differs")
-  if (!same(value.target, { nodeId: "aegis", hostname: "aegis", machineIdSha256: EXPECTED_MACHINE, os: "linux", effectiveUid: 0 })) throw new Error("root target differs")
+  if (!same(value.target, { nodeId: "aegis", hostname: "aegis", transportAddress: "192.168.88.6", machineIdSha256: EXPECTED_MACHINE, os: "linux", effectiveUid: 0 })) throw new Error("root target differs")
+  if (!same(value.transport, { sourceHost: "hermes", sourceAddress: "192.168.88.9", targetHost: "aegis", targetAddress: "192.168.88.6" })) throw new Error("root transport differs")
   if (!same(value.bootstrap, { verifierPath: "/usr/local/libexec/williamos-aegis-root-handoff.mjs", verifierMode: "0555", adapterPath: "/usr/local/libexec/williamos-aegis-root-os-adapter.mjs", adapterMode: "0555", cliPath: "/usr/local/sbin/williamos-aegis-root-handoff", cliMode: "0555", manifestPath: INSTALLED_MANIFEST_PATH, manifestMode: "0444", bundleRoot: BUNDLE_ROOT, evidenceDirectoriesPrecreated: true, ownerPublicKeyPath: "/etc/williamos-fabric/owner-prerequisite-authority.pem", ownerPublicKeyMode: "0444", outOfBandRootInstallRequired: true })) throw new Error("external bootstrap differs")
   if (!same(value.storage, { mode: "VERIFY_ONLY", mechanism: "LOOPBACK_XFS_PROJECT_QUOTA_V1", backingImageRealPath: "/var/lib/williamos/fabric/aegis-remote-dev-workspaces.xfs", backingImageBytes: 107374182400, filesystemUuid: EXPECTED_STORAGE_UUID, mountPath: "/srv/william", projectId: 734, hardLimitBytes: 85899345920, formatAllowed: false, mountAllowed: false, remountAllowed: false, quotaMutationAllowed: false, workspaceCreationAllowed: false })) throw new Error("storage posture differs")
   if (!same(value.posture, { proofActivation: "INACTIVE_PENDING_PREREQUISITES", generalSchedulerEnabled: false, standingAegisAuthorityEnabled: false, dispatchAuthorized: false, closedHashWorkOrder: "WO-EF-DISPATCH-AEGIS-001", closedHashMutationAllowed: false, atlasAllowed: false, hermesConfigurationMutationAllowed: false })) throw new Error("posture differs")

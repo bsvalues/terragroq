@@ -14,7 +14,7 @@ import {
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
-import { exactNftBoundaryLines, inspectDurableLedgerReconciliation, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { exactNftBoundaryLines, inspectDurableLedgerReconciliation, inspectForcedCommandTransportReconciliation, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -90,10 +90,31 @@ function signedAuthority(manifest = loadManifest(), overrides: Record<string, un
 }
 
 describe("AEGIS root-owned prerequisite handoff", () => {
+  it("binds the moved endpoints and permits only the exact predecessor transport migration", () => {
+    const manifest = validateRootHandoffManifest(loadManifest())
+    expect(manifest.target).toMatchObject({ hostname: "aegis", transportAddress: "192.168.88.6" })
+    expect(manifest.transport).toEqual({ sourceHost: "hermes", sourceAddress: "192.168.88.9", targetHost: "aegis", targetAddress: "192.168.88.6" })
+    const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixedReviewedKey hermes"
+    const command = 'restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs"'
+    const expected = `from="192.168.88.9",${command} ${key}\n`
+    const predecessor = `from="192.168.1.154",${command} ${key}\n`
+    expect(inspectForcedCommandTransportReconciliation({ current: expected, expected, predecessor, currentMetadataExact: true })).toBe("MATCH")
+    expect(inspectForcedCommandTransportReconciliation({ current: expected, expected, predecessor, currentMetadataExact: false })).toBe("DRIFT")
+    expect(inspectForcedCommandTransportReconciliation({ current: predecessor, expected, predecessor, predecessorMetadataExact: true })).toBe("RECONCILE_EXACT_PREDECESSOR")
+    expect(inspectForcedCommandTransportReconciliation({ current: predecessor, expected, predecessor, predecessorMetadataExact: false })).toBe("DRIFT")
+    expect(inspectForcedCommandTransportReconciliation({ current: "", expected, predecessor, pathOccupied: false })).toBe("ABSENT")
+    expect(inspectForcedCommandTransportReconciliation({ current: "", expected, predecessor, pathOccupied: true })).toBe("DRIFT")
+    expect(inspectForcedCommandTransportReconciliation({ current: `${predecessor}ssh-ed25519 foreign\n`, expected, predecessor, pathOccupied: true })).toBe("DRIFT")
+    const adapterSource = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
+    expect(adapterSource).toContain("exactFile(snapshot, sha(Buffer.from(predecessor)), 0, 0, 0o400)")
+    expect(adapterSource).toContain("exactFile(temporary, sha(Buffer.from(line)), 0, 0, 0o444)")
+    expect(adapterSource).toContain('current: currentMetadataExact ? expected : predecessorMetadataExact ? predecessor : "OCCUPIED_UNTRUSTED"')
+    expect(adapterSource).toContain("const stagedParent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(stagedParent)")
+  })
   it("pins the merged prerequisite generation and every applied asset exactly", () => {
     const manifest = validateRootHandoffManifest(loadManifest())
     expect(manifest.trustedMain.minimumCommit).toBe("bcca6069a917d706314f7c8cb7b3cd40cdd910da")
-    expect(manifest.prerequisitePackage).toMatchObject({ packageId: "aegis-remote-dev-root-prerequisites-issue-734-v2", semanticSupersession: true, historicalSuccessClaimed: false, supersededPreflight: { manifestJcsSha256: "1fb6fde76456483a34166b67b6b4413d05c9d69261223f2315d2718de64c359c" } })
+    expect(manifest.prerequisitePackage).toMatchObject({ packageId: "aegis-remote-dev-root-prerequisites-issue-734-v2", semanticSupersession: true, historicalSuccessClaimed: false, supersededPreflight: { manifestJcsSha256: "8b956f9e7ae53cf37ba3d2a916d9848522f159ef17afa8c261e7d1454f397034" } })
     expect(manifest.appliedAssets.length).toBeGreaterThanOrEqual(7)
     for (const asset of manifest.appliedAssets) expect(rawSha(asset.source)).toBe(asset.sha256)
     expect(inspectRootHandoffBundle(root)).toMatchObject({ status: "BUNDLE_INTERNAL_CONSISTENCY_ONLY", externalTrustRootRequired: true, applyAuthorized: false, drift: [] })
