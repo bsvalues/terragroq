@@ -116,3 +116,15 @@ Remaining to genuinely close #638: **R4** (auth/origin without `VERCEL_URL`), **
 and the embeddings/R1B disposition (held). R2/R3 are recorded as dropped-by-trace (sealed history);
 R5 is optional. Project deletion is a separate post-closure decision (delete vs preserve as
 historical rollback evidence).
+
+### R1B — OUTSTANDING #638 ACCEPTANCE GATE (owner decision)
+
+**#638 remains OPEN.** R1B (moving embeddings off the OpenAI/Vercel gateway path onto a sovereign
+embedding model) is an explicit, separately-tracked completion gate — not deferred trivia. There is
+**no placeholder/TBD embedding model** and **no premature 1536-dimension freeze**: the vector space
+will be chosen by a bounded embedding-model bake-off (retrieval quality + HERMES/OMEN/ATLAS
+performance), then the pgvector dimension is frozen. #638 can close truthfully only after R1B is
+chosen and implemented, the re-index implications are resolved, and the Neon state is classified.
+
+R4 is COMPLETE (PR #688) — auth/origin resolves without `VERCEL_URL`. R0/R1A/R4/Supabase are done;
+R1B is the remaining live-path item keeping the issue open.
