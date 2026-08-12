@@ -95,7 +95,8 @@ class TestPipeline(unittest.TestCase):
             self.assertTrue(os.path.isfile(output))
 
     def test_retained_manifests_reject_secret_fields(self):
-        for field in ("api_token", "token", "session_token", "refreshToken", "authorization"):
+        for field in ("api_token", "token", "session_token", "refreshToken", "authorization",
+                      "github_token", "service_token", "deploymentToken"):
             with self.subTest(field=field):
                 with self.assertRaisesRegex(ValueError, "secret-like field"):
                     reject_secret_fields({"nested": {field: "must-not-be-retained"}})

@@ -66,8 +66,11 @@ SECRET_FIELD_COMPACT = (
 
 
 def is_secret_field(key):
-    compact = re.sub(r"[^a-z0-9]", "", str(key).lower())
-    return compact == "token" or any(marker in compact for marker in SECRET_FIELD_COMPACT)
+    raw = str(key)
+    snake = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", raw).lower()
+    parts = [part for part in re.split(r"[^a-z0-9]+", snake) if part]
+    compact = "".join(parts)
+    return "token" in parts or any(marker in compact for marker in SECRET_FIELD_COMPACT)
 
 
 def reject_secret_fields(value, path="manifest"):
