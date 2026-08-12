@@ -27,7 +27,7 @@
   },
   "standingKey": {
     "sourcePath": "/home/williamos-fabric/.ssh/authorized_keys",
-    "destinationPath": "/etc/ssh/authorized_keys/williamos-fabric-standing-hash",
+    "destinationPath": "/etc/ssh/williamos-fabric-standing-hash.authorized_keys",
     "recordSha256": "d054724aeea3ff42bf646d4d3aed078be21183e3a67c9ae1f8d4768e97dd2967",
     "fingerprint": "SHA256:dlhYn3gjgDUQ09vFt583lXl2JKMhyFQMVoFE0sQpa48",
     "sourceOwner": "williamos-fabric",
@@ -57,7 +57,7 @@
   },
   "reviewedConfig": {
     "sourcePath": "scripts/execution-fabric/provision/assets/90-williamos-fabric-ssh-coexistence.conf",
-    "sha256": "0f97b3005ab5a90733c7bcde47a4d1232ea1121d375229c0e31630c3b177da99",
+    "sha256": "2c630125af21fef105325dd546e535c80e2b628bc37662fa2570ae7fa0bc29b4",
     "destinationPath": "/etc/ssh/sshd_config.d/90-williamos-fabric-remote-dev.conf",
     "owner": "root",
     "group": "root",
@@ -66,12 +66,12 @@
   "installer": {
     "sourcePath": "scripts/execution-fabric/provision/repair-aegis-ssh-coexistence.mjs",
     "installedPath": "/usr/local/libexec/williamos-aegis-ssh-coexistence-repair.mjs",
-    "sha256": "4d651e12bed75a23865035a4b2d4e964ab533c28e4847b91cdc6030c7bb26086"
+    "sha256": "0170795cf987d61b9a1c8ea85f9f60eedbae249c1432834ad9711600457d9570"
   },
   "launcher": {
     "sourcePath": "scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh",
     "executedPath": "/usr/local/share/williamos/aegis-ssh-coexistence-repair-bundle/scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh",
-    "sha256": "c82ecd5ef8734a85a87e6bf3ce7f59aaf9dc70cc937405362df45d4fee51d56c",
+    "sha256": "1f01ddd6f7a0ac65c3243f950b4e7312d3fd7e27834d5a1d4ef7cce6d8c12039",
     "owner": "root",
     "group": "root",
     "mode": "0555"

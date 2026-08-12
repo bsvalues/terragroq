@@ -498,6 +498,7 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     expect(installerSource).toContain("function trustedParentFor(target) { return target === LOCK_PATH ? trustedKernelLockParent() : trustedParents(target) }")
     expect(installerSource).toContain("parentsTrusted: trustedParentFor")
     expect(installerSource).toContain("if (!trustedParentFor(target)) fail(code")
+    expect(STANDING_ROOT_KEY_PATH).toBe("/etc/ssh/williamos-fabric-standing-hash.authorized_keys")
     expect(installerSource).toContain("return descriptors.length === 1")
     expect(installerSource).toContain('fs.readFileSync("/proc/locks", "utf8")')
     expect(installerSource).toContain('Number(match[1]) === process.pid')
