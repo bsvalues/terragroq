@@ -67,3 +67,29 @@ def median(values):
     n = len(vals)
     mid = n // 2
     return vals[mid] if n % 2 else (vals[mid - 1] + vals[mid]) / 2.0
+
+
+import random as _random
+
+
+def bootstrap_ci(values, n=1000, lo=2.5, hi=97.5, seed=1234):
+    """Percentile bootstrap 95% CI for the mean of per-query metric values."""
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return None
+    rng = _random.Random(seed)
+    means = []
+    for _ in range(n):
+        total = 0.0
+        for _i in range(len(vals)):
+            total += vals[rng.randrange(len(vals))]
+        means.append(total / len(vals))
+    means.sort()
+
+    def pct(p):
+        k = (len(means) - 1) * (p / 100.0)
+        f = int(k)
+        c = min(f + 1, len(means) - 1)
+        return means[f] + (means[c] - means[f]) * (k - f)
+
+    return [round(pct(lo), 4), round(pct(hi), 4)]

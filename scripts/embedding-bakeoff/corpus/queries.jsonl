@@ -50,3 +50,31 @@
 {"id": "q50", "type": "semantic", "query": "What guardrail inspects each shell command before it is allowed to run?", "gold": ["gov-capg", "code-capg-failclosed"]}
 {"id": "q51", "type": "cross-lingual", "query": "network isolation that blocks outbound traffic by default", "gold": ["es-egress"]}
 {"id": "q52", "type": "semantic", "query": "How do I point WilliamOS at the county Postgres to store its state?", "gold": ["gov-sovereign-pg"]}
+{"id": "q53", "type": "old-vs-current", "query": "How does WilliamOS route model inference today?", "gold": ["cfg-ai-base-url"], "distractor": "old-ai-gateway"}
+{"id": "q54", "type": "old-vs-current", "query": "What is the current approach to running local worker execution?", "gold": ["current-worker-kernel"], "distractor": "old-nested-adapter"}
+{"id": "q55", "type": "near-dup", "query": "Which CAPG policy sample classifies a destructive command as DENY?", "gold": ["capg-deny-sample"], "distractor": "capg-allow-sample"}
+{"id": "q56", "type": "near-dup", "query": "Which grant profile may approve a pending decision but not merge?", "gold": ["near-dup-authority-b"], "distractor": "near-dup-authority-a"}
+{"id": "q57", "type": "near-dup", "query": "Which grant profile is read-only and cannot approve anything?", "gold": ["near-dup-authority-a"], "distractor": "near-dup-authority-b"}
+{"id": "q58", "type": "statutory", "query": "How is property tax based on market value assessed each year?", "gold": ["statutory-advalorem"]}
+{"id": "q59", "type": "abbrev", "query": "What COD threshold does IAAO consider acceptable for residential uniformity?", "gold": ["iaao-cod"]}
+{"id": "q60", "type": "abbrev", "query": "What does TAV stand for and how is it used?", "gold": ["tav-terminology"]}
+{"id": "q61", "type": "ocr", "query": "What is the WilliamOS database snapshot retention period?", "gold": ["ocr-noisy-backup"]}
+{"id": "q62", "type": "adversarial", "query": "What is WilliamOS's policy on falling back to a cloud model when the local model fails?", "gold": ["gov-rule-0005"], "distractor": "distractor-fallback-allowed"}
+{"id": "q63", "type": "not-this-but-that", "query": "WilliamOS must not use the TerraFusion tf-postgres; which database does it use instead?", "gold": ["gov-sovereign-pg", "cfg-wos-pg-port"]}
+{"id": "q64", "type": "code-symbol", "query": "What wires the inference seam using createOpenAICompatible?", "gold": ["code-provider"]}
+{"id": "q65", "type": "code-symbol", "query": "Which function name builds the OpenAI-compatible inference client for the chat app?", "gold": ["code-provider"]}
+{"id": "q66", "type": "cross-lingual", "query": "which lab node is the development and test worker?", "gold": ["gov-nodes", "es-nodes"]}
+{"id": "q67", "type": "cross-lingual", "query": "default-deny outbound network isolation policy", "gold": ["gov-egress", "es-egress", "fr-egress"]}
+{"id": "q68", "type": "semantic", "query": "What second-stage component reorders retrieval results without replacing the embedding model?", "gold": ["reranker-note"]}
+{"id": "q69", "type": "adversarial", "query": "Does WilliamOS keep succeeding by quietly using a cloud model when the local one is down?", "gold": ["gov-rule-0005"], "distractor": "distractor-fallback-allowed"}
+{"id": "q70", "type": "statutory", "query": "What is the millage-rate basis for computing the annual tax levy?", "gold": ["statutory-advalorem", "tav-terminology"]}
+{"id": "q71", "type": "semantic", "query": "Which superseded design was rejected as a persistent host runtime with direct host access?", "gold": ["old-nested-adapter"]}
+{"id": "q72", "type": "multilingual", "query": "Que rol tiene el nodo ATLAS en el laboratorio?", "gold": ["es-nodes", "gov-nodes"]}
+{"id": "q73", "type": "semantic", "query": "What contained environment does the current governed worker kernel run inside?", "gold": ["current-worker-kernel"]}
+{"id": "q74", "type": "adversarial", "query": "Is automatic cloud fallback enabled in WilliamOS for resilience?", "gold": ["gov-rule-0005"], "distractor": "distractor-fallback-allowed"}
+{"id": "q75", "type": "abbrev", "query": "What is the IAAO uniformity metric and its acronym?", "gold": ["iaao-cod", "appr-ratio"]}
+{"id": "q76", "type": "ocr", "query": "Where is the offsite database backup copy stored?", "gold": ["ocr-noisy-backup"]}
+{"id": "q77", "type": "false-positive", "query": "Which operator grant profile is allowed to perform production writes?", "gold": []}
+{"id": "q78", "type": "cross-lingual", "query": "Quel confinement refuse la sortie externe par defaut?", "gold": ["fr-egress", "es-egress", "gov-egress"]}
+{"id": "q79", "type": "statutory", "query": "How are recently sold comparable properties adjusted to value a subject property?", "gold": ["appr-comps"]}
+{"id": "q80", "type": "legacy", "query": "Which legacy configuration used the model openai/gpt-5-mini through a cloud gateway?", "gold": ["old-ai-gateway"]}
