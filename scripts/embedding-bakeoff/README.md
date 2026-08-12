@@ -21,8 +21,8 @@ BASE_URL=http://127.0.0.1:11434/v1 MODEL=<exact-model-id> python3 bakeoff.py \
 ```
 
 The app/harness knows only the OpenAI wire format — no provider is hard-coded. Point `BASE_URL` at
-an admitted literal private/loopback IP. DNS hostnames, including `localhost` and single-label
-Fabric names, fail closed to remove search-domain and rebinding ambiguity. Node placement
+an admitted literal RFC1918, ULA, or loopback IP. DNS hostnames, metadata/link-local/reserved
+addresses, IPv4-mapped IPv6, and unspecified addresses fail closed. Node placement
 must come from the current execution-fabric inventory; do not infer GPU hardware from stale docs.
 
 ## Self-test (offline, no model)
@@ -57,9 +57,9 @@ types, distractors, and the fixed calibration split. Keep the corpus frozen with
 For each `model × host × runtime`, retain exact model, runtime, and host manifests plus measured
 throughput/timing. Resource telemetry and warm/cold measurements belong in the admitted node lane;
 the harness does not invent them. HERMES is the existing local-AI node, AEGIS remains
-`HASH_VERIFY`-only, and ATLAS remains authoritative state. The owner-authorized OMEN 8B upper-bound
-comparison requires its own bounded execution packet and is not executable through this harness
-change. No GPU is assumed.
+`HASH_VERIFY`-only, and ATLAS remains authoritative state. Any upper-bound or heavy-model comparison
+requires a separately recorded execution packet; it is not executable through this harness change.
+No GPU is assumed.
 
 ## Outputs
 

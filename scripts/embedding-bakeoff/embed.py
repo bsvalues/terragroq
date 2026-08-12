@@ -17,6 +17,14 @@ import urllib.parse
 import urllib.request
 
 
+ALLOWED_IPV4_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8",
+))
+ALLOWED_IPV6_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
+    "fc00::/7", "::1/128",
+))
+
+
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise ValueError(f"embedding endpoint redirects are forbidden: HTTP {code}")
@@ -61,8 +69,11 @@ def validate_sovereign_base_url(base_url):
         address = ipaddress.ip_address(hostname)
     except ValueError as exc:
         raise ValueError("endpoint hostname must be a literal private/loopback IP") from exc
-    if not (address.is_private or address.is_loopback):
-        raise ValueError("external embedding endpoints are forbidden")
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        raise ValueError("IPv4-mapped embedding endpoint addresses are forbidden")
+    allowed_networks = ALLOWED_IPV4_NETWORKS if address.version == 4 else ALLOWED_IPV6_NETWORKS
+    if not any(address in network for network in allowed_networks):
+        raise ValueError("embedding endpoint is outside the admitted RFC1918/ULA/loopback ranges")
 
 
 def _validate_embedding(value, row_index):

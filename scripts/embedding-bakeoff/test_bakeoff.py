@@ -163,6 +163,19 @@ class TestEndpointBoundary(unittest.TestCase):
         validate_sovereign_base_url("http://127.0.0.1:11434/v1")
         validate_sovereign_base_url("http://10.0.0.158:11434/v1")
 
+    def test_special_use_endpoint_addresses_are_rejected(self):
+        rejected = (
+            "169.254.169.254", "0.0.0.0", "192.0.2.1", "224.0.0.1",
+            "fe80::1", "::", "::ffff:127.0.0.1",
+        )
+        for address in rejected:
+            with self.subTest(address=address):
+                with self.assertRaises(ValueError):
+                    validate_sovereign_base_url(f"http://[{address}]:11434/v1"
+                                                if ":" in address else f"http://{address}:11434/v1")
+        validate_sovereign_base_url("http://[::1]:11434/v1")
+        validate_sovereign_base_url("http://[fd00::158]:11434/v1")
+
     def test_endpoint_url_rejects_embedded_credentials(self):
         with self.assertRaisesRegex(ValueError, "must not contain credentials"):
             validate_sovereign_base_url("http://user:secret@aegis:11434/v1")

@@ -35,7 +35,7 @@ The corrected evaluator:
 - fingerprints canonical, order-independent corpus content including scoring labels, query types,
   distractors, and the calibration split;
 - validates unique corpus identifiers and every gold/distractor reference;
-- accepts only literal loopback/private-IP endpoints; all DNS names fail closed;
+- accepts only literal RFC1918, ULA, or loopback endpoints; DNS and special-use addresses fail closed;
 - requires exact model, runtime, and host manifests for endpoint runs;
 - rejects missing, duplicate, incomplete, non-finite, misindexed, or mixed-dimension endpoint rows;
 - separates fixed calibration queries from evaluation queries for false-positive measurement;
@@ -65,9 +65,9 @@ collector before execution evidence can be claimed.
 
 The next execution packet must derive current topology from the reviewed Fabric inventory and assign
 each candidate to an already-authorized provider or a separately admitted bounded embedding-bakeoff
-adapter. It must include Granite R2 multilingual and Qwen3 Embedding 4B. The owner has authorized an
-OMEN 8B upper-bound comparison, but it requires a separate bounded execution packet that reconciles
-the heavy-work offload policy; this repository harness does not execute it. AEGIS remains `HASH_VERIFY`-only until a real
+adapter. It must include Granite R2 multilingual and Qwen3 Embedding 4B. Any upper-bound or
+heavy-model comparison requires its own recorded execution packet and reconciliation with the
+heavy-work offload policy. AEGIS remains `HASH_VERIFY`-only until a real
 workload justifies a separately reviewed execution capability.
 
 No model or vector dimension is selected in this phase. Neon classification and any schema/re-index
