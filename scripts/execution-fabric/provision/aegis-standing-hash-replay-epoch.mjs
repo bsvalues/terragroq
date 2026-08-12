@@ -6,7 +6,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { canonicalizeJcs } from "../canonical-json.mjs"
-import { createAegisStandingHashReplayLedger } from "./aegis-standing-hash-replay-ledger.mjs"
+import { createAegisStandingHashReplayLedger, REPLAY_JOURNAL_ROOT } from "./aegis-standing-hash-replay-ledger.mjs"
 
 export const JOURNAL_IDENTIFIER = "williamos-aegis-standing-hash"
 export const JOURNAL_EPOCH_ID = "aegis-standing-hash-replay-epoch-v1"
@@ -365,6 +365,7 @@ export function initializeAegisStandingHashReplayEpoch({
   clock = () => new Date().toISOString(),
   fsApi = fs,
   ledgerRoot = LEDGER_ROOT,
+  replayLedgerRoot = REPLAY_JOURNAL_ROOT,
   randomUUID = crypto.randomUUID,
   holderIdentity = (uid, token) => defaultHolderIdentity(fsApi, uid, token),
   holderLiveness = (holder) => defaultHolderLiveness(fsApi, holder),
@@ -385,12 +386,11 @@ export function initializeAegisStandingHashReplayEpoch({
   if (hostname() !== "aegis") reject("AEGIS_REPLAY_HOST_REJECTED", "exact aegis hostname is required")
 
   const ledger = replayLedger ?? createAegisStandingHashReplayLedger({
-    ledgerRoot,
+    ledgerRoot: replayLedgerRoot,
     uid,
     gid,
     fsApi,
     clock,
-    validateDirectory,
     syncDirectory,
   })
   const readJournal = () => {

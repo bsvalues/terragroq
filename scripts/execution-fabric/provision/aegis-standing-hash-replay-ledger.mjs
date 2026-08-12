@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process"
 import { canonicalizeJcs } from "../canonical-json.mjs"
 
 export const REPLAY_JOURNAL_BASENAME = "aegis-standing-hash-replay-journal.jsonl"
+export const REPLAY_JOURNAL_ROOT = "/var/lib"
 export const REPLAY_JOURNAL_MAX_BYTES = 4 * 1024 * 1024
 
 const DIGEST = /^[a-f0-9]{64}$/
@@ -129,8 +130,8 @@ export function createAegisStandingHashReplayLedger({
   gid,
   fsApi = fs,
   clock = () => new Date().toISOString(),
-  validateDirectory = (stats, currentUid) => stats.isDirectory() && !stats.isSymbolicLink()
-    && stats.uid === currentUid && (stats.mode & 0o077) === 0,
+  validateDirectory = (stats) => stats.isDirectory() && !stats.isSymbolicLink()
+    && stats.uid === 0 && (stats.mode & 0o022) === 0,
   validateFile = (stats) => stats.isFile() && !stats.isSymbolicLink()
     && stats.nlink === 1 && stats.uid === 0 && stats.gid === gid && (stats.mode & 0o7777) === 0o660,
   hasAppendOnlyAttribute = (journalPath) => {

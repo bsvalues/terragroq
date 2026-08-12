@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 import { executeAegisStandingHash } from "./aegis-standing-hash-runtime.mjs"
-import { createAegisStandingHashReplayLedger } from "../provision/aegis-standing-hash-replay-ledger.mjs"
+import { createAegisStandingHashReplayLedger, REPLAY_JOURNAL_ROOT } from "../provision/aegis-standing-hash-replay-ledger.mjs"
 
 export const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
 
@@ -420,6 +420,7 @@ function defaultHolderIsAlive(holder) {
 
 export function createStandingLedgerProviders({
   ledgerRoot: requestedRoot = LEDGER_ROOT,
+  replayLedgerRoot = REPLAY_JOURNAL_ROOT,
   nodeLeasePath: requestedNodeLeasePath = NODE_LEASE_PATH,
   fsApi = fs,
   platform = process.platform,
@@ -448,12 +449,11 @@ export function createStandingLedgerProviders({
     fail("JOURNAL_PROVIDER_INVALID", "standing journal read and append providers must be supplied together")
   }
   const privateReplayLedger = readJournal || appendJournal ? null : createAegisStandingHashReplayLedger({
-    ledgerRoot: root,
+    ledgerRoot: replayLedgerRoot,
     uid,
     gid,
     fsApi,
     clock,
-    validateDirectory,
     syncDirectory: sync,
   })
   const readReplayJournal = readJournal ?? (() => privateReplayLedger.read().map((entry) => ({ ...entry, uid })))

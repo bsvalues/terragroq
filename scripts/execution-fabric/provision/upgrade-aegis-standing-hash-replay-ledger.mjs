@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 export const UPGRADE_MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-replay-ledger-upgrade.v1.json"
-export const REPLAY_JOURNAL_PATH = "/var/lib/williamos/fabric/standing-hash-ledger/aegis-standing-hash-replay-journal.jsonl"
+export const REPLAY_JOURNAL_PATH = "/var/lib/aegis-standing-hash-replay-journal.jsonl"
 export const NODE_LEASE_PATH = "/var/lib/williamos/fabric/ledger/resident-aegis-active.json"
 export const LEDGER_MUTATION_LOCK_PATH = "/var/lib/williamos/fabric/standing-hash-ledger/standing-hash-mutation.lock"
 export const NODE_MUTATION_LOCK_PATH = "/var/lib/williamos/fabric/ledger/resident-aegis-mutation.lock"
@@ -514,15 +514,15 @@ export function upgradeAegisStandingHashReplayLedger({
       if (!required) return false
       try { action(); return true } catch (restoreError) { recoveryErrors.push(restoreError); return false }
     }
+    const releaseManifestRestored = restore(releaseManifestReplaced || completed.includes("REPLACE_TRUSTED_RELEASE_MANIFEST"),
+      () => io.atomicReplace(loadedManifest.priorState.trustedReleaseManifestPath,
+        prior.priorReleaseBytes, 0, 0, 0o444))
     const bootstrapRestored = restore(completed.includes("REPLACE_BOOTSTRAP"), () => io.atomicReplace(
       loadedManifest.install.bootstrapPath, prior.installedBytes.bootstrap, 0, 0,
       modeNumber(loadedManifest.install.executableMode)))
     const initializerRestored = restore(completed.includes("REPLACE_REPLAY_INITIALIZER"), () => io.atomicReplace(
       loadedManifest.install.replayInitializerPath, prior.installedBytes["replay-epoch-initializer"], 0, 0,
       modeNumber(loadedManifest.install.executableMode)))
-    const releaseManifestRestored = restore(releaseManifestReplaced || completed.includes("REPLACE_TRUSTED_RELEASE_MANIFEST"),
-      () => io.atomicReplace(loadedManifest.priorState.trustedReleaseManifestPath,
-        prior.priorReleaseBytes, 0, 0, 0o444))
     try {
       if (journalCreated) io.appendJournal(mutationJournal, {
         record_type: "FAILED_PARTIAL",
@@ -675,7 +675,7 @@ export function createNodeUpgradeIo() {
     const head = fixedGit(checkout, ["rev-parse", "--verify", "HEAD^{commit}"]).stdout.trim()
     const symbolic = fixedGit(checkout, ["symbolic-ref", "-q", "HEAD"], [0, 1])
     const origin = fixedGit(checkout, ["remote", "get-url", "--all", "origin"]).stdout.trim()
-    const normalizedOrigin = origin.replace(/^git@github.com:/, "").replace(/^https:\/\/github.com\//, "").replace(/\.git$/, "")
+    const normalizedOrigin = origin.replace(/^git@github\.com:/, "").replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "")
     if (head !== commit || symbolic.status !== 1 || symbolic.stdout !== "" || normalizedOrigin !== repository
       || fixedGit(checkout, ["status", "--porcelain=v1", "--untracked-files=all"]).stdout !== "") {
       fail("AEGIS_REPLAY_UPGRADE_CHECKOUT_DRIFT", "checkout is not exact, detached, clean, and reviewed")

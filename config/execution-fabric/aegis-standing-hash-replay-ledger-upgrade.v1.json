@@ -94,7 +94,7 @@
     "checkoutPath": "__FINAL_PACKAGE_CHECKOUT_PATH__"
   },
   "install": {
-    "replayJournalPath": "/var/lib/williamos/fabric/standing-hash-ledger/aegis-standing-hash-replay-journal.jsonl",
+    "replayJournalPath": "/var/lib/aegis-standing-hash-replay-journal.jsonl",
     "replayJournalOwner": "root",
     "replayJournalGroup": "williamos-fabric",
     "replayJournalMode": "0660",
