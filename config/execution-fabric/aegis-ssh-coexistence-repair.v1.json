@@ -71,7 +71,7 @@
   "launcher": {
     "sourcePath": "scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh",
     "executedPath": "/usr/local/share/williamos/aegis-ssh-coexistence-repair-bundle/scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh",
-    "sha256": "83868785dfc950f90770bd82bca1cd5e04ae796d7b39d7b759d65df9e461cb61",
+    "sha256": "80b1614caa241de500fb33af48dad12d6091083e869eddee15e1df552581819d",
     "owner": "root",
     "group": "root",
     "mode": "0555"
