@@ -72,6 +72,7 @@ function request(id = "001"): Json {
       operation_core_sha256: "8".repeat(64),
       runtime_sha256: "5".repeat(64),
       resident_runner_sha256: "6".repeat(64),
+      replay_ledger_sha256: "8".repeat(64),
       standing_contract_sha256: "7".repeat(64),
     },
     placement_evidence: {

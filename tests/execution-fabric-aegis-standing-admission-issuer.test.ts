@@ -48,6 +48,7 @@ function request(): Json {
       operation_core_sha256: authority.standing_integration.operation_core_sha256,
       runtime_sha256: authority.standing_integration.runtime_sha256,
       resident_runner_sha256: authority.standing_integration.resident_runner_sha256,
+      replay_ledger_sha256: authority.standing_integration.replay_ledger_sha256,
       standing_contract_sha256: authority.standing_integration.standing_contract_sha256,
     },
     input: { relative_path: "inputs/input.bin", expected_sha256: crypto.createHash("sha256").update(exactInput).digest("hex"), expected_byte_length: exactInput.length },

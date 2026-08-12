@@ -62,7 +62,8 @@ const EXPECTED_AUTHORITY = {
     integration_id: "aegis-hash-verify-standing-integration-v1",
     operation_core_sha256: "c5965a206b5f26c0db21176a609775d1ca176409b644bbc241fde74565bd8d8f",
     runtime_sha256: "eb1cf0517caf3a4c4a1935ed8bea73c53fed64cc1ad3effa3963e6e237c22be2",
-    resident_runner_sha256: "1e817dc0c87803a93d503d29183b6af66bd776173812d0270985b5e261db54a1",
+    resident_runner_sha256: "91a73ccb292064db2aaaeb38383edf76a44197e22ace511ec4e882b6024bc9ef",
+    replay_ledger_sha256: "db26c78059cd012aa5852aee4c5dc45af100aafbd7469b3dafefff42018de46f",
     standing_contract_sha256: "0ad6aa6ef3a5e10a19de1417bf82edcf9a7f4b9c12e3c736fa6150b99d4e7163",
     trusted_release_manifest_required: true,
     status: "ACTIVE",
@@ -248,12 +249,12 @@ function validateRequest(request, authority, nowMs) {
   exact(request.execution_identity, ["node_id", "machine_id_sha256", "execution_account", "privilege"], "request.execution_identity")
   for (const field of ["node_id", "machine_id_sha256", "execution_account", "privilege"]) same(request.execution_identity[field], authority.node_identity[field], "IDENTITY_MISMATCH", `execution identity ${field} does not match`)
 
-  exact(request.reviewed_binding, ["adapter_sha256", "template_sha256", "profile_sha256", "operation_core_sha256", "runtime_sha256", "resident_runner_sha256", "standing_contract_sha256"], "request.reviewed_binding")
+  exact(request.reviewed_binding, ["adapter_sha256", "template_sha256", "profile_sha256", "operation_core_sha256", "runtime_sha256", "resident_runner_sha256", "replay_ledger_sha256", "standing_contract_sha256"], "request.reviewed_binding")
   for (const field of ["adapter_sha256", "template_sha256", "profile_sha256"]) {
     digest(request.reviewed_binding[field], `request.reviewed_binding.${field}`)
     same(request.reviewed_binding[field], adapter[field], "REVIEWED_DIGEST_MISMATCH", `${field} does not match the active reviewed binding`)
   }
-  for (const field of ["operation_core_sha256", "runtime_sha256", "resident_runner_sha256", "standing_contract_sha256"]) {
+  for (const field of ["operation_core_sha256", "runtime_sha256", "resident_runner_sha256", "replay_ledger_sha256", "standing_contract_sha256"]) {
     digest(request.reviewed_binding[field], `request.reviewed_binding.${field}`)
     same(request.reviewed_binding[field], authority.standing_integration[field], "REVIEWED_DIGEST_MISMATCH", `${field} does not match the active standing integration`)
   }

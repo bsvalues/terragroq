@@ -57,6 +57,7 @@ function request(): Json {
       operation_core_sha256: authority.standing_integration.operation_core_sha256,
       runtime_sha256: authority.standing_integration.runtime_sha256,
       resident_runner_sha256: authority.standing_integration.resident_runner_sha256,
+      replay_ledger_sha256: authority.standing_integration.replay_ledger_sha256,
       standing_contract_sha256: authority.standing_integration.standing_contract_sha256,
     },
     input: {
@@ -161,6 +162,7 @@ describe("AEGIS v1 limited standing compute authority", () => {
       operation_core_sha256: sha256File("scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs"),
       runtime_sha256: sha256File("scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs"),
       resident_runner_sha256: sha256File("scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs"),
+      replay_ledger_sha256: sha256File("scripts/execution-fabric/provision/aegis-standing-hash-replay-ledger.mjs"),
       standing_contract_sha256: sha256File("config/execution-fabric/aegis-standing-hash-template.v1.json"),
       trusted_release_manifest_required: true,
       status: "ACTIVE",

@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "upgradeId": "aegis-standing-hash-replay-ledger-upgrade-v1",
+  "issue": 595,
+  "workOrderId": "WO-EF-AEGIS-STANDING-001",
+  "repository": "bsvalues/terragroq",
+  "authority": {
+    "maximumAgeSeconds": 900,
+    "singleUse": true,
+    "consumeBeforeMutation": true
+  },
+  "machine": {
+    "platform": "linux",
+    "effectiveUid": 0,
+    "hostname": "aegis",
+    "machineIdSha256": "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b"
+  },
+  "serviceAccount": {
+    "name": "williamos-fabric",
+    "home": "/var/empty/williamos-fabric",
+    "shell": "/bin/bash"
+  },
+  "priorState": {
+    "commit": "13709f5789c25dea408283730a6bd35e8fd894ab",
+    "releaseRoot": "/opt/williamos/releases/13709f5789c25dea408283730a6bd35e8fd894ab",
+    "provisioningManifestPath": "config/execution-fabric/aegis-standing-hash-provisioning-package.v1.json",
+    "provisioningManifestSha256": "103b4d23bba40db01690733b065536edcf5ea0ed50950833d1fa8681eb055d6b",
+    "provisioningJournalPrefix": "/var/lib/williamos-aegis-standing-hash-",
+    "repairJournalPrefix": "/var/lib/williamos-aegis-standing-hash-canonical-json-repair-",
+    "trustedReleaseManifestPath": "/etc/williamos/fabric/trusted-main-release.json",
+    "authorizedKeysPath": "/home/williamos-fabric/.ssh/authorized_keys",
+    "authorizedKeyPrefix": "restrict,from=\"192.168.88.9\",command=\"/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs\",no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-pty,no-user-rc ssh-ed25519 ",
+    "installedFiles": [
+      {
+        "id": "bootstrap",
+        "path": "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs",
+        "sha256": "7d4b713c00f73726ce39f20856c53a69865968d98d2daf08e2ce038c612ce14b",
+        "mode": "0555"
+      },
+      {
+        "id": "ssh-entrypoint",
+        "path": "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs",
+        "sha256": "ebcf0d068e11c1a3f98b515f9a59a456955d8d30abdbb8bab7897b9b315caf9a",
+        "mode": "0555"
+      },
+      {
+        "id": "replay-epoch-initializer",
+        "path": "/usr/local/libexec/williamos/aegis-standing-hash-replay-epoch.mjs",
+        "sha256": "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802",
+        "mode": "0555"
+      },
+      {
+        "id": "canonical-json",
+        "path": "/usr/local/libexec/canonical-json.mjs",
+        "sha256": "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21",
+        "mode": "0444"
+      }
+    ],
+    "privateRoots": [
+      { "path": "/var/lib/williamos", "mode": "0750" },
+      { "path": "/var/lib/williamos/fabric", "mode": "0700" },
+      { "path": "/var/lib/williamos/fabric/standing-hash-requests", "mode": "0700" },
+      { "path": "/var/lib/williamos/fabric/standing-hash-ledger", "mode": "0700" },
+      { "path": "/var/lib/williamos/fabric/ledger", "mode": "0700" }
+    ],
+    "inactivePaths": [
+      "/var/lib/williamos/fabric/ledger/resident-aegis-active.json",
+      "/var/lib/williamos/fabric/ledger/resident-aegis-mutation.lock",
+      "/var/lib/williamos/fabric/standing-hash-ledger/standing-hash-mutation.lock"
+    ]
+  },
+  "newRelease": {
+    "commit": "__FINAL_HEAD_COMMIT__",
+    "reviewedCheckoutPath": "__FINAL_REVIEWED_CHECKOUT_PATH__",
+    "releaseRoot": "/opt/williamos/releases/__FINAL_HEAD_COMMIT__",
+    "trustedRef": "refs/heads/main",
+    "manifestSchemaVersion": "1.0-williamos-trusted-main-release",
+    "closure": {
+      "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs": "__SHA256_BOOTSTRAP__",
+      "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs": "__SHA256_RESIDENT_RUNNER__",
+      "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs": "__SHA256_RUNTIME__",
+      "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs": "__SHA256_HASH_CORE__",
+      "scripts/execution-fabric/provision/aegis-standing-hash-replay-ledger.mjs": "__SHA256_REPLAY_LEDGER__",
+      "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs": "__SHA256_AUTHORITY_EVALUATOR__",
+      "scripts/execution-fabric/canonical-json.mjs": "__SHA256_CANONICAL_JSON__"
+    },
+    "installerBindings": {
+      "scripts/execution-fabric/provision/upgrade-aegis-standing-hash-replay-ledger.mjs": "__SHA256_PRIVILEGED_UPGRADER__",
+      "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs": "__SHA256_REPLAY_INITIALIZER__"
+    }
+  },
+  "packageRelease": {
+    "commit": "__FINAL_PACKAGE_COMMIT__",
+    "checkoutPath": "__FINAL_PACKAGE_CHECKOUT_PATH__"
+  },
+  "install": {
+    "replayJournalPath": "/var/lib/aegis-standing-hash-replay-journal.jsonl",
+    "replayJournalOwner": "root",
+    "replayJournalGroup": "williamos-fabric",
+    "replayJournalMode": "0660",
+    "appendOnlyRequired": true,
+    "replayHelperSource": "scripts/execution-fabric/provision/aegis-standing-hash-replay-ledger.mjs",
+    "replayHelperPath": "/usr/local/libexec/williamos/aegis-standing-hash-replay-ledger.mjs",
+    "replayInitializerSource": "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs",
+    "replayInitializerPath": "/usr/local/libexec/williamos/aegis-standing-hash-replay-epoch.mjs",
+    "bootstrapSource": "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs",
+    "bootstrapPath": "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs",
+    "executableMode": "0555",
+    "journalPrefix": "/var/lib/williamos-aegis-standing-hash-replay-ledger-upgrade-",
+    "authorityRoot": "/var/lib/williamos/fabric/standing-hash-upgrade-authorities",
+    "activationMarkerPath": "/etc/williamos/fabric/aegis-standing-hash-replay-ledger-upgrade-v1.activation.json",
+    "chattr": "/usr/bin/chattr",
+    "lsattr": "/usr/bin/lsattr",
+    "activationOrder": [
+      "PUBLISH_CONTENT_ADDRESSED_RELEASE",
+      "CREATE_EMPTY_REPLAY_JOURNAL",
+      "SET_AND_VERIFY_APPEND_ONLY",
+      "INSTALL_REPLAY_HELPER",
+      "REPLACE_REPLAY_INITIALIZER",
+      "REPLACE_BOOTSTRAP",
+      "CREATE_ACTIVATION_MARKER",
+      "REPLACE_TRUSTED_RELEASE_MANIFEST"
+    ]
+  },
+  "forbiddenMutations": [
+    "authorized_keys",
+    "account",
+    "network",
+    "workload",
+    "scheduler",
+    "privilege-escalation",
+    "storage-root",
+    "prior-release",
+    "prior-evidence"
+  ]
+}

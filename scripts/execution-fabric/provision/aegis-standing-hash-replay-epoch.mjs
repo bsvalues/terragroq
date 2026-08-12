@@ -3,17 +3,15 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 import { canonicalizeJcs } from "../canonical-json.mjs"
+import { createAegisStandingHashReplayLedger, REPLAY_JOURNAL_ROOT } from "./aegis-standing-hash-replay-ledger.mjs"
 
-export const JOURNALCTL_BINARY = "/usr/bin/journalctl"
-export const SYSTEMD_CAT_BINARY = "/usr/bin/systemd-cat"
 export const JOURNAL_IDENTIFIER = "williamos-aegis-standing-hash"
 export const JOURNAL_EPOCH_ID = "aegis-standing-hash-replay-epoch-v1"
-export const LEDGER_ROOT = "/var/lib/williamos/fabric/ledger"
-export const EPOCH_LOCK_BASENAME = "aegis-standing-hash-replay-epoch.lock"
+export const LEDGER_ROOT = "/var/lib/williamos/fabric/standing-hash-ledger"
+export const EPOCH_LOCK_BASENAME = "standing-hash-mutation.lock"
 
 const DIGEST = /^[a-f0-9]{64}$/
 const BOOT_ID = /^[a-f0-9-]{36}$/
@@ -26,14 +24,6 @@ const EPOCH_KEYS = Object.freeze([
   "record_type",
 ])
 const HOLDER_KEYS = Object.freeze(["boot_id", "pid", "process_start_ticks", "token", "uid"])
-const FIXED_ENV = Object.freeze({
-  HOME: "/home/williamos-fabric",
-  LANG: "C",
-  LC_ALL: "C",
-  LOGNAME: "williamos-fabric",
-  PATH: "/usr/bin:/bin",
-  USER: "williamos-fabric",
-})
 
 function reject(code, detail) {
   const error = new Error(`${code}: ${detail}`)
@@ -366,31 +356,16 @@ export function parseAegisStandingHashJournal(output, uid) {
   return { records, epochs }
 }
 
-function runFixedProcess(spawnSyncApi, binary, args, input) {
-  const result = spawnSyncApi(binary, args, {
-    encoding: "utf8",
-    env: FIXED_ENV,
-    ...(input === undefined ? {} : { input }),
-    maxBuffer: 4 * 1024 * 1024,
-    shell: false,
-    timeout: 15_000,
-    windowsHide: true,
-  })
-  if (!result || result.error || result.status !== 0) {
-    reject("AEGIS_REPLAY_JOURNAL_UNAVAILABLE", `${path.basename(binary)} failed closed`)
-  }
-  return result.stdout ?? ""
-}
-
 export function initializeAegisStandingHashReplayEpoch({
   platform = process.platform,
   getuid = process.getuid,
+  getgid = process.getgid,
   username = () => os.userInfo().username,
   hostname = os.hostname,
   clock = () => new Date().toISOString(),
-  spawnSyncApi = spawnSync,
   fsApi = fs,
   ledgerRoot = LEDGER_ROOT,
+  replayLedgerRoot = REPLAY_JOURNAL_ROOT,
   randomUUID = crypto.randomUUID,
   holderIdentity = (uid, token) => defaultHolderIdentity(fsApi, uid, token),
   holderLiveness = (holder) => defaultHolderLiveness(fsApi, holder),
@@ -399,19 +374,34 @@ export function initializeAegisStandingHashReplayEpoch({
   validateFile = (stats, currentUid) => stats.isFile() && !stats.isSymbolicLink()
     && stats.nlink === 1 && stats.uid === currentUid && (stats.mode & 0o077) === 0,
   syncDirectory = (directoryPath) => syncDirectoryDurably(fsApi, directoryPath),
+  replayLedger = null,
 } = {}) {
   if (platform !== "linux") reject("AEGIS_REPLAY_LINUX_REQUIRED", "initializer is Linux-only")
   const uid = typeof getuid === "function" ? getuid() : undefined
-  if (!Number.isSafeInteger(uid) || uid <= 0 || username() !== "williamos-fabric") {
+  const gid = typeof getgid === "function" ? getgid() : undefined
+  if (!Number.isSafeInteger(uid) || uid <= 0 || !Number.isSafeInteger(gid) || gid <= 0
+    || username() !== "williamos-fabric") {
     reject("AEGIS_REPLAY_IDENTITY_REJECTED", "exact non-root williamos-fabric identity is required")
   }
   if (hostname() !== "aegis") reject("AEGIS_REPLAY_HOST_REJECTED", "exact aegis hostname is required")
 
-  const readJournal = () => parseAegisStandingHashJournal(runFixedProcess(
-    spawnSyncApi,
-    JOURNALCTL_BINARY,
-    ["--no-pager", "--output=json", `--identifier=${JOURNAL_IDENTIFIER}`],
-  ), uid)
+  const ledger = replayLedger ?? createAegisStandingHashReplayLedger({
+    ledgerRoot: replayLedgerRoot,
+    uid,
+    gid,
+    fsApi,
+    clock,
+    syncDirectory,
+  })
+  const readJournal = () => {
+    const records = ledger.read().map(({ record }) => record)
+    return {
+      records,
+      epochs: records
+        .filter((record) => record?.record_type === "EPOCH" || Object.hasOwn(record ?? {}, "epoch_id"))
+        .map(validateAegisStandingHashEpochRecord),
+    }
+  }
 
   const lock = createEpochLock({
     fsApi,
@@ -428,7 +418,6 @@ export function initializeAegisStandingHashReplayEpoch({
     let retained = readJournal()
     if (retained.epochs.length === 1) {
       const [epoch] = retained.epochs
-      runFixedProcess(spawnSyncApi, JOURNALCTL_BINARY, ["--sync"])
       retained = readJournal()
       if (retained.epochs.length !== 1
         || canonicalizeJcs(retained.epochs[0]) !== canonicalizeJcs(epoch)) {
@@ -455,13 +444,7 @@ export function initializeAegisStandingHashReplayEpoch({
     }
 
     const epoch = createAegisStandingHashEpochRecord(clock())
-    runFixedProcess(
-      spawnSyncApi,
-      SYSTEMD_CAT_BINARY,
-      [`--identifier=${JOURNAL_IDENTIFIER}`, "--priority=info", "--level-prefix=false"],
-      `${canonicalizeJcs(epoch)}\n`,
-    )
-    runFixedProcess(spawnSyncApi, JOURNALCTL_BINARY, ["--sync"])
+    ledger.append(epoch)
 
     retained = readJournal()
     if (retained.epochs.length !== 1
@@ -485,8 +468,9 @@ export function initializeAegisStandingHashReplayEpoch({
   }
 }
 
-export function main() {
+export function main(argv = process.argv.slice(2)) {
   try {
+    if (argv.length !== 0) reject("AEGIS_REPLAY_ARGUMENT_REJECTED", "initializer accepts no arguments")
     const evidence = initializeAegisStandingHashReplayEpoch()
     process.stdout.write(`${canonicalizeJcs(evidence)}\n`)
     return 0
