@@ -532,6 +532,66 @@ function trustedRelease(manifest, deployedAt, activationMarkerSha256) {
   return { ...body, release_manifest_sha256: canonicalSha256(body) }
 }
 
+function recoverCommittedPromotion(io, manifest, manifestBytes, authority, mutationJournal) {
+  validateAuthority(manifest, authority, authority.issuedAt, sha256(manifestBytes))
+  const account = io.account(manifest.serviceAccount.name)
+  const journalBytes = assertExactFile(io, mutationJournal, { uid: 0, gid: 0, mode: 0o600 })
+  let records
+  try { records = journalBytes.toString("utf8").trim().split("\n").map(JSON.parse) }
+  catch { fail("AEGIS_ADMISSION_PROMOTION_AUTHORITY_REPLAY", "authority journal already exists") }
+  const [prepared, committed] = records
+  if (records.length !== 2 || prepared?.record_type !== "AUTHORITY_CONSUMED"
+    || prepared.authority_id !== authority.authorityId || prepared.authority_sha256 !== canonicalSha256(authority)
+    || prepared.manifest_sha256 !== sha256(manifestBytes) || prepared.new_commit !== manifest.newRelease.commit
+    || !canonicalTimestamp(prepared.prepared_at) || committed?.record_type !== "COMMITTED"
+    || !same(committed.completed_mutations, ACTIVATION_ORDER)) {
+    fail("AEGIS_ADMISSION_PROMOTION_AUTHORITY_REPLAY", "authority journal is not one exact recoverable committed run")
+  }
+  verifyCheckouts(io, manifest, authority, manifestBytes)
+  const requestBytes = io.read(path.posix.join(manifest.newRelease.checkoutPath,
+    manifest.newRelease.trustArtifacts.requestSourcePath))
+  assertExactFile(io, manifest.install.requestPath,
+    { uid: account.uid, gid: account.gid, mode: 0o600, digest: committed.request_sha256 })
+  const markerBytes = assertExactFile(io, ACTIVATION_MARKER_PATH,
+    { uid: 0, gid: 0, mode: 0o444, digest: committed.activation_marker_sha256 })
+  const marker = parseJson(markerBytes, "AEGIS_ADMISSION_PROMOTION_RECOVERY_UNCERTAIN", "activation marker")
+  assertExactFile(io, TRUSTED_RELEASE_MANIFEST_PATH,
+    { uid: 0, gid: 0, mode: 0o444, digest: committed.release_manifest_sha256 })
+  if (marker.authority_id !== authority.authorityId || marker.new_commit !== manifest.newRelease.commit
+    || marker.manifest_sha256 !== sha256(manifestBytes) || sha256(requestBytes) !== committed.request_sha256) {
+    fail("AEGIS_ADMISSION_PROMOTION_RECOVERY_UNCERTAIN", "committed activation no longer matches its journal")
+  }
+  io.verifyCheckout(manifest.newRelease.releaseRoot, manifest.newRelease.commit, REPOSITORY,
+    { ...manifest.newRelease.closure,
+      [manifest.newRelease.trustArtifacts.requestSourcePath]: manifest.newRelease.trustArtifacts.requestSha256,
+      [manifest.newRelease.trustArtifacts.admissionPath]: manifest.newRelease.trustArtifacts.admissionSha256,
+      [manifest.newRelease.trustArtifacts.inputPath]: manifest.newRelease.trustArtifacts.inputSha256 })
+  assertExactFile(io, NODE_LEASE_PATH, { absent: true })
+  const lockRecord = Buffer.from(`${canonicalizePromotionJcs({
+    schema_version: "1.0-aegis-standing-hash-promotion-lock",
+    authority_id: authority.authorityId,
+    promotion_id: manifest.promotionId,
+    acquired_at: prepared.prepared_at,
+  })}\n`, "utf8")
+  for (const lockPath of [LEDGER_MUTATION_LOCK_PATH, NODE_MUTATION_LOCK_PATH]) {
+    if (io.inspect(lockPath) !== null) io.releaseLock(lockPath, lockRecord, account.uid, account.gid, 0o600)
+  }
+  return {
+    schema_version: "1.0-aegis-standing-hash-admission-release-promotion-evidence",
+    status: "COMMITTED_RECOVERED",
+    mode: "APPLY",
+    authority_id: authority.authorityId,
+    authority_consumed: true,
+    mutation_journal: mutationJournal,
+    completed_mutations: [...ACTIVATION_ORDER],
+    activated: true,
+    stale_owned_locks_released: true,
+    workload_executed: false,
+    scheduler_activated: false,
+    network_accessed: false,
+  }
+}
+
 export function promoteAegisStandingHashAdmissionRelease({
   authority,
   mode = "dry-run",
@@ -551,9 +611,15 @@ export function promoteAegisStandingHashAdmissionRelease({
   const manifestSha256 = sha256(loadedBytes)
   verifyMachine(io, loadedManifest, machineIdentitySha256)
   const now = clock()
-  validateAuthority(loadedManifest, authority, now, manifestSha256)
+  if (!UUID.test(authority?.authorityId ?? "")) {
+    fail("AEGIS_ADMISSION_PROMOTION_AUTHORITY_INVALID", "authority identity is invalid")
+  }
   const mutationJournal = `${loadedManifest.install.journalPrefix}${authority.authorityId}.journal.jsonl`
-  if (io.inspect(mutationJournal) !== null) fail("AEGIS_ADMISSION_PROMOTION_AUTHORITY_REPLAY", "authority journal already exists")
+  if (io.inspect(mutationJournal) !== null) {
+    if (mode === "apply") return recoverCommittedPromotion(io, loadedManifest, loadedBytes, authority, mutationJournal)
+    fail("AEGIS_ADMISSION_PROMOTION_AUTHORITY_REPLAY", "authority journal already exists")
+  }
+  validateAuthority(loadedManifest, authority, now, manifestSha256)
   const prior = inspectPriorState(io, loadedManifest, authority)
   verifyCheckouts(io, loadedManifest, authority, loadedBytes)
   const requestBytes = io.read(path.posix.join(loadedManifest.newRelease.checkoutPath,
@@ -1030,7 +1096,18 @@ export function createNodePromotionIo() {
         renamed = true
         fsyncParent(destination)
       } catch (error) {
-        if (!renamed) try { fs.rmSync(temporary, { recursive: true, force: true }) } catch {}
+        if (!renamed) {
+          try {
+            fs.rmSync(temporary, { recursive: true, force: true })
+            fsyncParent(temporary)
+          } catch (cleanupError) {
+            fail("AEGIS_ADMISSION_PROMOTION_PUBLISH_CLEANUP_UNCERTAIN",
+              "failed temporary release could not be durably removed", {
+                causeCode: cleanupError?.code ?? null,
+                originalFailureCode: error?.code ?? null,
+              })
+          }
+        }
         throw error
       }
     },

@@ -705,6 +705,30 @@ describe("AEGIS standing HASH admission release promotion", () => {
     expect(records.map(({ record_type }) => record_type)).toEqual(["AUTHORITY_CONSUMED", "COMMITTED"])
   })
 
+  it("recovers stale owned locks from one exact durable committed journal after restart", () => {
+    const value = fixture()
+    expect(run(value, "apply")).toMatchObject({ status: "COMMITTED" })
+    const prepared = JSON.parse(value.entries.get(value.mutationJournal)!.bytes!.toString("utf8").split("\n")[0])
+    const lockBytes = recordBytes({
+      schema_version: "1.0-aegis-standing-hash-promotion-lock",
+      authority_id: AUTHORITY_ID,
+      promotion_id: value.manifest.promotionId,
+      acquired_at: prepared.prepared_at,
+    })
+    value.entries.set(NODE_MUTATION_LOCK_PATH, {
+      type: "file", bytes: lockBytes, uid: ACCOUNT.uid, gid: ACCOUNT.gid,
+      mode: 0o600, direct: true, nlink: 1,
+    })
+    expect(run(value, "apply")).toMatchObject({
+      status: "COMMITTED_RECOVERED",
+      authority_consumed: true,
+      stale_owned_locks_released: true,
+    })
+    expect(value.entries.has(NODE_MUTATION_LOCK_PATH)).toBe(false)
+    const records = value.entries.get(value.mutationJournal)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
+    expect(records.map(({ record_type }) => record_type)).toEqual(["AUTHORITY_CONSUMED", "COMMITTED"])
+  })
+
   it("reports recovery uncertainty after independently attempting every rollback", () => {
     const value = fixture({ failCommittedJournal: true, failRollback: "marker" })
     let failure: any
