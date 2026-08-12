@@ -41,7 +41,7 @@ const RELEASE = "d".repeat(40)
 const PACKAGE = "e".repeat(40)
 const AUTHORITY_ID = "11111111-1111-4111-8111-111111111111"
 const UPGRADE_AUTHORITY_ID = "22222222-2222-4222-8222-222222222222"
-const ACCOUNT = { uid: 734, gid: 734, home: "/home/williamos-fabric", shell: "/bin/bash" }
+const ACCOUNT = { uid: 734, gid: 734, home: "/var/empty/williamos-fabric", shell: "/bin/bash" }
 const NOW = "2026-08-12T18:05:00.000Z"
 const EPOCH_AT = "2026-08-12T18:00:00.000Z"
 const ISSUED_AT = "2026-08-12T18:01:00.000Z"
@@ -68,6 +68,7 @@ type FixtureOptions = {
   replayCorrupt?: boolean
   epochEnvelopeAfterAdmission?: boolean
   upgradeUncommitted?: boolean
+  upgradeSourceMismatch?: boolean
   markerUpgradeMismatch?: boolean
   occupiedPath?: string
   checkoutDrift?: string
@@ -113,7 +114,7 @@ function upgradeJournal(options: FixtureOptions) {
     authority_id: UPGRADE_AUTHORITY_ID,
     authority_sha256: "3".repeat(64),
     manifest_sha256: (options.markerUpgradeMismatch ? "5" : "4").repeat(64),
-    new_commit: PRIOR,
+    new_commit: options.upgradeSourceMismatch ? PRIOR : SOURCE,
   }
   const committed = {
     record_type: options.upgradeUncommitted ? "FAILED_PARTIAL" : "COMMITTED",
@@ -536,11 +537,11 @@ describe("AEGIS standing HASH admission release promotion", () => {
       priorState: { commit: "2593e782fdbaefbc05f617cdac3acde4a4255be0" },
       evidenceRelease: {
         sourceCommit: "b1637a0d16394361dff74e1fb85851ba61f91235",
-        admissionPath: "docs/reports/standing-dispatch/admission-issue-595-live-008.json",
+        admissionPath: "docs/reports/standing-dispatch/admission-issue-595-live-010.json",
       },
-      newRelease: { commit: "ce85147772dee0d8ac73177ec9f4d4b8fdcccc5f" },
-      packageRelease: { commit: "50b96f10140c8b2c3d0a21950265968388ac27a2" },
-      install: { requestId: "issue-595-live-008" },
+      newRelease: { commit: "ecea782bf8539c094d8b9a4a8c6ed16eb2ad4629" },
+      packageRelease: { commit: "7df85e37ea3f47c720465273a05c743196fa54de" },
+      install: { requestId: "issue-595-live-010" },
     })
   })
 
@@ -614,6 +615,7 @@ describe("AEGIS standing HASH admission release promotion", () => {
     ["consumed authority", { authorityConsumed: true }, "AEGIS_ADMISSION_PROMOTION_AUTHORITY_REPLAY"],
     ["expired authority", { authorityExpired: true }, "AEGIS_ADMISSION_PROMOTION_AUTHORITY_EXPIRED"],
     ["uncommitted replay upgrade", { upgradeUncommitted: true }, "AEGIS_ADMISSION_PROMOTION_REPLAY_UPGRADE_INVALID"],
+    ["wrong replay upgrade source", { upgradeSourceMismatch: true }, "AEGIS_ADMISSION_PROMOTION_REPLAY_UPGRADE_INVALID"],
     ["activation marker/replay upgrade mismatch", { markerUpgradeMismatch: true }, "AEGIS_ADMISSION_PROMOTION_PRIOR_STATE_DRIFT"],
     ["replay claim", { replayClaim: true }, "AEGIS_ADMISSION_PROMOTION_REPLAY_STATE_INVALID"],
     ["corrupt replay chain", { replayCorrupt: true }, "AEGIS_ADMISSION_PROMOTION_REPLAY_STATE_INVALID"],
