@@ -19,13 +19,13 @@ umask 077
 [ ! -L "$KERNEL_LOCK" ] || { echo "AEGIS_SSH_REPAIR_KERNEL_LOCK_UNTRUSTED" >&2; exit 2; }
 if [ "${WILLIAMOS_SSH_REPAIR_LOCK_STAGE:-}" != "LOCKED" ]; then
   exec 9>>"$KERNEL_LOCK"
-  [ "$(stat -Lc '%u:%g:%a:%F' "$KERNEL_LOCK")" = "0:0:600:regular file" ] || { echo "AEGIS_SSH_REPAIR_KERNEL_LOCK_UNTRUSTED" >&2; exit 2; }
+  [ -f "$KERNEL_LOCK" ] && [ "$(stat -Lc '%u:%g:%a' "$KERNEL_LOCK")" = "0:0:600" ] || { echo "AEGIS_SSH_REPAIR_KERNEL_LOCK_UNTRUSTED" >&2; exit 2; }
   export WILLIAMOS_SSH_REPAIR_LOCK_STAGE=LOCKED
   exec /usr/bin/flock --exclusive --nonblock --no-fork 9 "$LAUNCHER" "$@"
 fi
 [ "${WILLIAMOS_SSH_REPAIR_KERNEL_LOCK_FD:-}" = "9" ] || export WILLIAMOS_SSH_REPAIR_KERNEL_LOCK_FD=9
 [ "$(readlink -f -- /proc/self/fd/9)" = "$KERNEL_LOCK" ] || { echo "AEGIS_SSH_REPAIR_KERNEL_LOCK_UNTRUSTED" >&2; exit 2; }
-[ "$(stat -Lc '%u:%g:%a:%F' /proc/self/fd/9)" = "0:0:600:regular file" ] || { echo "AEGIS_SSH_REPAIR_KERNEL_LOCK_UNTRUSTED" >&2; exit 2; }
+[ -f /proc/self/fd/9 ] && [ "$(stat -Lc '%u:%g:%a' /proc/self/fd/9)" = "0:0:600" ] || { echo "AEGIS_SSH_REPAIR_KERNEL_LOCK_UNTRUSTED" >&2; exit 2; }
 install -o root -g root -m 0555 "$SOURCE" "$DESTINATION.tmp"
 [ "$(sha256sum "$DESTINATION.tmp" | cut -d ' ' -f 1)" = "$INSTALLER_SHA256" ] || { rm -f "$DESTINATION.tmp"; exit 2; }
 mv -f "$DESTINATION.tmp" "$DESTINATION"
