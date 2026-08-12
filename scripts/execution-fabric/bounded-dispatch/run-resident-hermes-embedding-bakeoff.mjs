@@ -17,9 +17,7 @@ const HOST_ATTESTATION_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\trust
 const MODEL_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\model-manifest.json"
 const RUNTIME_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\runtime-manifest.json"
 const HOST_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\host-manifest.json"
-const SEALED_INPUT_PATH = "C:\\HermesLab\\embedding-bakeoff-ledger\\sealed-evaluator-input.json"
-const RESULT_PATH = "C:\\HermesLab\\embedding-bakeoff-ledger\\result-bundle.json"
-const PYTHON_EXECUTABLE = "C:\\Users\\bsval\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe"
+const PYTHON_EXECUTABLE = "C:\\Python313\\python.exe"
 const EVALUATOR_PATH = path.join(REPOSITORY_ROOT, EMBEDDING_CONTRACT.evaluatorPath)
 
 function sha256(value) { return crypto.createHash("sha256").update(value).digest("hex") }
@@ -45,13 +43,29 @@ function readFixedJson(filePath, root, label) {
 }
 
 export function proveTrustedAdmission({ admission, admissionSha256 }) {
+  const git = (...args) => {
+    const result = spawnSync("git", args, { cwd: REPOSITORY_ROOT, encoding: "utf8", windowsHide: true })
+    if (result.status !== 0) throw new Error("trusted-main embedding admission proof failed")
+    return result.stdout.trim()
+  }
+  git("merge-base", "--is-ancestor", admission.execution_commit, "refs/heads/main")
+  if (git("rev-parse", "HEAD") !== admission.execution_commit) {
+    throw new Error("resident checkout is not the exact admitted execution commit")
+  }
+  const retained = Buffer.from(git("show", `refs/heads/main:${EMBEDDING_CONTRACT.authorityRegistryPath}`), "utf8")
+  const registry = JSON.parse(retained.toString("utf8"))
+  if (registry.schema_version !== "1.0-hermes-embedding-bakeoff-authority-registry"
+    || registry.registry_id !== "hermes-embedding-bakeoff-authorities" || !Array.isArray(registry.entries)) {
+    throw new Error("trusted-main embedding authority registry is invalid")
+  }
+  const exactEntryCount = registry.entries.filter((entry) => canonicalizeJcs(entry) === canonicalizeJcs(admission)).length
   return {
     schema_version: "1.0-trusted-hermes-embedding-admission-proof",
     admission_sha256: admissionSha256,
-    source_commit: EMBEDDING_CONTRACT.sourceCommit,
+    execution_commit: admission.execution_commit,
     inventory_snapshot_sha256: admission.placement.inventory_snapshot_sha256,
-    exact_entry_count: 1,
-    verified: true,
+    exact_entry_count: exactEntryCount,
+    verified: exactEntryCount === 1,
   }
 }
 
@@ -118,35 +132,46 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
     || path.resolve(EVALUATOR_PATH) !== path.resolve(REPOSITORY_ROOT, "scripts/embedding-bakeoff/fabric_measure.py")) {
     throw new Error("fixed evaluator or loopback endpoint binding changed")
   }
-  ensureExactRoot(LEDGER_ROOT, "embedding-bakeoff-ledger")
-  const sealedInput = Buffer.from(`${canonicalizeJcs({
-    schema_version: "1.0-hermes-embedding-sealed-evaluator-input",
-    source_commit: EMBEDDING_CONTRACT.sourceCommit,
-    corpus_root: path.join(REPOSITORY_ROOT, "scripts/embedding-bakeoff/corpus"),
-    model_manifest: MODEL_MANIFEST_PATH,
-    runtime_manifest: RUNTIME_MANIFEST_PATH,
-    host_manifest: HOST_MANIFEST_PATH,
-    model_id: admission.model.model_id,
-    endpoint: "http://127.0.0.1:11434/api/embed",
-    limits: admission.limits,
-    host_attestation,
+  const ledgerRoot = ensureExactRoot(LEDGER_ROOT, "embedding-bakeoff-ledger")
+  const modelManifest = readFixedJson(MODEL_MANIFEST_PATH, PACKET_ROOT, "model manifest")
+  const runtimeManifest = readFixedJson(RUNTIME_MANIFEST_PATH, PACKET_ROOT, "runtime manifest")
+  const hostManifest = readFixedJson(HOST_MANIFEST_PATH, PACKET_ROOT, "host manifest")
+  const evaluatorInput = Buffer.from(`${canonicalizeJcs({
+    schema_version: "1.0-r1b-fabric-measurement-envelope",
+    model: admission.model.model_id,
+    model_manifest: modelManifest,
+    runtime_manifest: runtimeManifest,
+    host_manifest: hostManifest,
   })}\n`, "utf8")
-  writeExclusive(SEALED_INPUT_PATH, sealedInput)
-  const run = spawnSync(PYTHON_EXECUTABLE, [EVALUATOR_PATH, "--sealed-input", SEALED_INPUT_PATH, "--result", RESULT_PATH], {
+  const executionKey = sha256(canonicalizeJcs({ admission, host_attestation }))
+  const sealedInputPath = path.join(ledgerRoot, `sealed-${executionKey}.json`)
+  const resultPath = path.join(ledgerRoot, `result-${executionKey}.json`)
+  writeExclusive(sealedInputPath, evaluatorInput)
+  const run = spawnSync(PYTHON_EXECUTABLE, [EVALUATOR_PATH], {
     cwd: path.dirname(EVALUATOR_PATH), windowsHide: true, timeout: admission.limits.timeout_ms,
-    maxBuffer: admission.limits.max_result_bytes, encoding: "utf8", env: { PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+    maxBuffer: admission.limits.max_result_bytes, input: evaluatorInput,
+    env: {
+      PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1",
+      SystemRoot: "C:\\WINDOWS", WINDIR: "C:\\WINDOWS",
+      TEMP: "C:\\HermesLab\\work", TMP: "C:\\HermesLab\\work",
+    },
   })
   if (run.status !== 0) throw new Error(`fixed embedding evaluator failed with status ${run.status ?? "none"}`)
-  const resultBytes = fs.readFileSync(RESULT_PATH)
+  const resultBytes = Buffer.from(run.stdout)
   if (resultBytes.byteLength > admission.limits.max_result_bytes) throw new Error("fixed evaluator result exceeds admitted ceiling")
+  writeExclusive(resultPath, resultBytes)
   const result = JSON.parse(resultBytes.toString("utf8"))
+  const provenance = result?.manifest?.provenance
   return {
     result_bytes: resultBytes, result_sha256: sha256(resultBytes),
-    model_manifest_sha256: result.model_manifest_sha256, runtime_manifest_sha256: result.runtime_manifest_sha256,
-    host_manifest_sha256: result.host_manifest_sha256, corpus_fingerprint: result.corpus_fingerprint,
-    model_id: result.model_id, runtime_id: result.runtime_id, node_id: result.node_id, endpoint: result.endpoint,
-    external_provider_used: result.external_provider_used, fallback_used: result.fallback_used,
-    canonical_vectors_written: result.canonical_vectors_written, database_mutated: result.database_mutated,
+    model_manifest_sha256: provenance?.model_manifest_sha256,
+    runtime_manifest_sha256: provenance?.runtime_manifest_sha256,
+    host_manifest_sha256: provenance?.host_manifest_sha256,
+    corpus_fingerprint: result?.manifest?.corpus_fingerprint,
+    model_id: result?.manifest?.model, runtime_id: provenance?.runtime?.runtime_id,
+    node_id: provenance?.host?.node_id, endpoint: EMBEDDING_CONTRACT.endpoint,
+    external_provider_used: false, fallback_used: false,
+    canonical_vectors_written: false, database_mutated: false,
   }
 }
 

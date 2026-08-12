@@ -6,7 +6,7 @@ import { canonicalizeJcs } from "../canonical-json.mjs"
 
 export const EMBEDDING_CONTRACT = Object.freeze({
   workOrderId: "WO-R1B-EXEC-001",
-  sourceCommit: "d544f19708e4aa9c7f430c3cc9fde4ff0f5c1b85",
+  corpusSourceCommit: "d544f19708e4aa9c7f430c3cc9fde4ff0f5c1b85",
   nodeId: "hermes-node",
   providerId: "resident-hermes",
   endpoint: "http://127.0.0.1:11434/api/embed",
@@ -15,7 +15,10 @@ export const EMBEDDING_CONTRACT = Object.freeze({
   corpusId: "williamos-r1b-adversarial-v1",
   corpusFingerprint: "ee6177d86d905ccf3402aa248f1b6a724bcbcc0cf9067aad207f1616c22c0318",
   evaluatorPath: "scripts/embedding-bakeoff/fabric_measure.py",
+  adapterPath: "scripts/execution-fabric/bounded-dispatch/resident-hermes-embedding-bakeoff.mjs",
+  runnerPath: "scripts/execution-fabric/bounded-dispatch/run-resident-hermes-embedding-bakeoff.mjs",
   permissionPath: "config/execution-fabric/agent-forge-embedding-bakeoff-permission.json",
+  authorityRegistryPath: "config/execution-fabric/embedding-bakeoff-authority-registry.json",
 })
 
 const SHA256 = /^[a-f0-9]{64}$/
@@ -116,9 +119,10 @@ function validateRequest(request) {
 }
 
 function validateAdmission(admission) {
-  exactKeys(admission, ["schema_version", "admission_id", "work_order_id", "source_commit", "corpus", "model", "runtime", "placement", "limits", "permission_set_sha256", "valid_from", "expires_at", "maximum_attempts", "status"], "admission")
+  exactKeys(admission, ["schema_version", "admission_id", "work_order_id", "corpus_source_commit", "execution_commit", "corpus", "model", "runtime", "placement", "limits", "permission_set_sha256", "valid_from", "expires_at", "maximum_attempts", "status"], "admission")
   if (admission.schema_version !== "1.0-hermes-embedding-bakeoff-admission" || admission.work_order_id !== EMBEDDING_CONTRACT.workOrderId
-    || admission.source_commit !== EMBEDDING_CONTRACT.sourceCommit || admission.maximum_attempts !== 1
+    || admission.corpus_source_commit !== EMBEDDING_CONTRACT.corpusSourceCommit
+    || !SHA40.test(admission.execution_commit) || admission.maximum_attempts !== 1
     || admission.status !== "ADMITTED_SINGLE_USE") fail("ADMISSION_INVALID", "admission identity, source, attempt, or status is invalid")
   identifier(admission.admission_id, "admission.admission_id")
   exactKeys(admission.corpus, ["manifest_path", "manifest_sha256", "corpus_id", "corpus_fingerprint", "documents", "queries"], "admission.corpus")
@@ -131,10 +135,10 @@ function validateAdmission(admission) {
   for (const key of ["model_id", "revision", "license", "source"]) identifier(admission.model[key], `admission.model.${key}`)
   digest(admission.model.weights_sha256, "admission.model.weights_sha256")
   digest(admission.model.manifest_sha256, "admission.model.manifest_sha256")
-  exactKeys(admission.runtime, ["runtime_id", "version", "executable_sha256", "evaluator_sha256", "manifest_sha256"], "admission.runtime")
+  exactKeys(admission.runtime, ["runtime_id", "version", "executable_sha256", "evaluator_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"], "admission.runtime")
   identifier(admission.runtime.runtime_id, "admission.runtime.runtime_id")
   identifier(admission.runtime.version, "admission.runtime.version")
-  for (const key of ["executable_sha256", "evaluator_sha256", "manifest_sha256"]) digest(admission.runtime[key], `admission.runtime.${key}`)
+  for (const key of ["executable_sha256", "evaluator_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"]) digest(admission.runtime[key], `admission.runtime.${key}`)
   exactKeys(admission.placement, ["node_id", "inventory_snapshot_sha256", "host_manifest_sha256", "endpoint_contract"], "admission.placement")
   if (admission.placement.node_id !== EMBEDDING_CONTRACT.nodeId || admission.placement.endpoint_contract !== "ollama-loopback-api-embed-v1") {
     fail("PLACEMENT_BINDING_MISMATCH", "admission is not for the fixed resident HERMES endpoint contract")
@@ -178,6 +182,10 @@ function prepareOrThrow({ repositoryRoot, request, admission, evaluatedAt, prove
   if (corpus.sha256 !== EMBEDDING_CONTRACT.corpusManifestSha256) fail("CORPUS_BINDING_MISMATCH", "frozen corpus manifest bytes changed")
   const evaluator = readConfined(repositoryRoot, EMBEDDING_CONTRACT.evaluatorPath, "reviewed evaluator")
   if (evaluator.sha256 !== admission.runtime.evaluator_sha256) fail("EVALUATOR_BINDING_MISMATCH", "reviewed evaluator bytes do not match admission")
+  const adapter = readConfined(repositoryRoot, EMBEDDING_CONTRACT.adapterPath, "reviewed adapter")
+  if (adapter.sha256 !== admission.runtime.adapter_sha256) fail("ADAPTER_BINDING_MISMATCH", "reviewed adapter bytes do not match admission")
+  const runner = readConfined(repositoryRoot, EMBEDDING_CONTRACT.runnerPath, "reviewed runner")
+  if (runner.sha256 !== admission.runtime.runner_sha256) fail("RUNNER_BINDING_MISMATCH", "reviewed runner bytes do not match admission")
   const permission = readConfined(repositoryRoot, EMBEDDING_CONTRACT.permissionPath, "embedding Forge permission")
   let permissionValue
   try { permissionValue = JSON.parse(permission.bytes.toString("utf8")) } catch { fail("FORGE_PERMISSION_MISMATCH", "Forge permission is not JSON") }
@@ -185,15 +193,17 @@ function prepareOrThrow({ repositoryRoot, request, admission, evaluatedAt, prove
   if (permission.sha256 !== admission.permission_set_sha256) fail("FORGE_PERMISSION_MISMATCH", "admission does not bind the exact Forge permission bytes")
   if (typeof proveTrustedAdmission !== "function") fail("ADMISSION_UNPROVEN", "trusted admission proof is required")
   const proof = proveTrustedAdmission({ admission: structuredClone(admission), admissionSha256, evaluatedAt })
-  exactKeys(proof, ["schema_version", "admission_sha256", "source_commit", "inventory_snapshot_sha256", "exact_entry_count", "verified"], "trusted admission proof")
+  exactKeys(proof, ["schema_version", "admission_sha256", "execution_commit", "inventory_snapshot_sha256", "exact_entry_count", "verified"], "trusted admission proof")
   if (proof.schema_version !== "1.0-trusted-hermes-embedding-admission-proof" || proof.admission_sha256 !== admissionSha256
-    || proof.source_commit !== EMBEDDING_CONTRACT.sourceCommit || proof.inventory_snapshot_sha256 !== admission.placement.inventory_snapshot_sha256
+    || proof.execution_commit !== admission.execution_commit || proof.inventory_snapshot_sha256 !== admission.placement.inventory_snapshot_sha256
     || proof.exact_entry_count !== 1 || proof.verified !== true) fail("ADMISSION_UNPROVEN", "trusted admission proof is invalid")
   const preparation = {
     schema_version: "1.0-hermes-embedding-bakeoff-preparation", status: "READY_FOR_SINGLE_USE_CLAIM",
     request_id: request.request_id, work_order_id: EMBEDDING_CONTRACT.workOrderId, admission_id: admission.admission_id,
-    request_sha256: canonicalDigest(request), admission_sha256: admissionSha256, source_commit: admission.source_commit,
-    corpus_manifest_sha256: corpus.sha256, evaluator_sha256: evaluator.sha256, permission_set_sha256: permission.sha256,
+    request_sha256: canonicalDigest(request), admission_sha256: admissionSha256,
+    corpus_source_commit: admission.corpus_source_commit, execution_commit: admission.execution_commit,
+    corpus_manifest_sha256: corpus.sha256, evaluator_sha256: evaluator.sha256,
+    adapter_sha256: adapter.sha256, runner_sha256: runner.sha256, permission_set_sha256: permission.sha256,
     node_id: EMBEDDING_CONTRACT.nodeId, endpoint_contract: admission.placement.endpoint_contract,
     model_id: admission.model.model_id, runtime_id: admission.runtime.runtime_id, prepared_at: evaluatedAt,
     valid_until: admission.expires_at, maximum_attempts: 1, maximum_concurrency: 1,
@@ -258,7 +268,7 @@ export async function executeResidentHermesEmbeddingBakeoff(options) {
     if (output.external_provider_used !== false || output.fallback_used !== false || output.canonical_vectors_written !== false || output.database_mutated !== false) fail("FORBIDDEN_SIDE_EFFECT", "evaluator reported fallback, external provider, canonical-vector, or database activity")
     const completedAt = timestamp(options.clock(), "trusted completion clock")
     if (Date.parse(completedAt) < Date.parse(startedAt) || Date.parse(completedAt) >= Date.parse(prepared.admission.expires_at) || Date.parse(completedAt) - Date.parse(startedAt) > prepared.admission.limits.timeout_ms) fail("COMPLETION_CHRONOLOGY_INVALID", "completion exceeds chronology, admission, or timeout")
-    result = { schema_version: "1.0-hermes-embedding-bakeoff-result", status: "COMPLETED", result: "SUCCEEDED", request_id: options.request.request_id, work_order_id: EMBEDDING_CONTRACT.workOrderId, admission_id: prepared.admission.admission_id, request_sha256: prepared.preparation.request_sha256, admission_sha256: prepared.preparation.admission_sha256, source_commit: EMBEDDING_CONTRACT.sourceCommit, corpus_manifest_sha256: EMBEDDING_CONTRACT.corpusManifestSha256, corpus_fingerprint: EMBEDDING_CONTRACT.corpusFingerprint, model: structuredClone(prepared.admission.model), runtime: structuredClone(prepared.admission.runtime), host_attestation: structuredClone(hostAttestation), result_bundle: { sha256: output.result_sha256, byte_length: output.result_bytes.byteLength }, claim: { claim_id: claim.claim_id, claimed_at: claim.claimed_at, maximum_attempts: 1 }, lease: { lease_id: lease.lease_id, fencing_token: lease.fencing_token, acquired_at: lease.acquired_at }, chronology: { prepared_at: preparedAt, started_at: startedAt, completed_at: completedAt }, endpoint_contract: prepared.admission.placement.endpoint_contract, scheduler_activated: false, autonomous_dispatch: false, external_provider_used: false, fallback_used: false, canonical_vectors_written: false, database_mutated: false, lease_released: false }
+    result = { schema_version: "1.0-hermes-embedding-bakeoff-result", status: "COMPLETED", result: "SUCCEEDED", request_id: options.request.request_id, work_order_id: EMBEDDING_CONTRACT.workOrderId, admission_id: prepared.admission.admission_id, request_sha256: prepared.preparation.request_sha256, admission_sha256: prepared.preparation.admission_sha256, corpus_source_commit: EMBEDDING_CONTRACT.corpusSourceCommit, execution_commit: prepared.admission.execution_commit, corpus_manifest_sha256: EMBEDDING_CONTRACT.corpusManifestSha256, corpus_fingerprint: EMBEDDING_CONTRACT.corpusFingerprint, model: structuredClone(prepared.admission.model), runtime: structuredClone(prepared.admission.runtime), host_attestation: structuredClone(hostAttestation), result_bundle: { sha256: output.result_sha256, byte_length: output.result_bytes.byteLength }, claim: { claim_id: claim.claim_id, claimed_at: claim.claimed_at, maximum_attempts: 1 }, lease: { lease_id: lease.lease_id, fencing_token: lease.fencing_token, acquired_at: lease.acquired_at }, chronology: { prepared_at: preparedAt, started_at: startedAt, completed_at: completedAt }, endpoint_contract: prepared.admission.placement.endpoint_contract, scheduler_activated: false, autonomous_dispatch: false, external_provider_used: false, fallback_used: false, canonical_vectors_written: false, database_mutated: false, lease_released: false }
   } catch (error) { executionError = annotate(error, { dispatchAttempted, claimId: claim.claim_id, leaseId: lease.lease_id, fencingToken: lease.fencing_token, leaseReleased: false }); throw executionError } finally {
     try { const release = await options.releaseExclusiveLease({ lease_id: lease.lease_id, claim_id: claim.claim_id, fencing_token: lease.fencing_token }); released = release === true } catch { released = false }
     if (executionError) executionError.leaseReleased = released

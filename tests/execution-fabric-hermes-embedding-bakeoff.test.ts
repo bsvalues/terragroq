@@ -25,6 +25,8 @@ function fixture() {
   }
   copy(EMBEDDING_CONTRACT.corpusManifestPath)
   copy(EMBEDDING_CONTRACT.permissionPath)
+  copy(EMBEDDING_CONTRACT.adapterPath)
+  copy(EMBEDDING_CONTRACT.runnerPath)
   const evaluator = Buffer.from("# reviewed fixture evaluator\n", "utf8")
   const evaluatorPath = path.join(root, EMBEDDING_CONTRACT.evaluatorPath)
   fs.mkdirSync(path.dirname(evaluatorPath), { recursive: true })
@@ -34,7 +36,8 @@ function fixture() {
     schema_version: "1.0-hermes-embedding-bakeoff-admission",
     admission_id: "issue-704-granite-test-admission",
     work_order_id: EMBEDDING_CONTRACT.workOrderId,
-    source_commit: EMBEDDING_CONTRACT.sourceCommit,
+    corpus_source_commit: EMBEDDING_CONTRACT.corpusSourceCommit,
+    execution_commit: "a".repeat(40),
     corpus: {
       manifest_path: EMBEDDING_CONTRACT.corpusManifestPath,
       manifest_sha256: EMBEDDING_CONTRACT.corpusManifestSha256,
@@ -56,6 +59,8 @@ function fixture() {
       version: "0.11.4",
       executable_sha256: "3".repeat(64),
       evaluator_sha256: sha256(evaluator),
+      adapter_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.adapterPath))),
+      runner_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.runnerPath))),
       manifest_sha256: "4".repeat(64),
     },
     placement: {
@@ -87,7 +92,7 @@ function fixture() {
   const proveTrustedAdmission = ({ admissionSha256, admission: admitted }: any) => ({
     schema_version: "1.0-trusted-hermes-embedding-admission-proof",
     admission_sha256: admissionSha256,
-    source_commit: EMBEDDING_CONTRACT.sourceCommit,
+    execution_commit: admitted.execution_commit,
     inventory_snapshot_sha256: admitted.placement.inventory_snapshot_sha256,
     exact_entry_count: 1,
     verified: true,
@@ -155,7 +160,8 @@ describe("resident HERMES embedding bake-off adapter", () => {
     expect(prepareResidentHermesEmbeddingBakeoff({ ...fixture(), evaluatedAt: "2026-08-12T20:00:00.000Z" })).toMatchObject({
       status: "READY_FOR_SINGLE_USE_CLAIM",
       work_order_id: "WO-R1B-EXEC-001",
-      source_commit: "d544f19708e4aa9c7f430c3cc9fde4ff0f5c1b85",
+      corpus_source_commit: "d544f19708e4aa9c7f430c3cc9fde4ff0f5c1b85",
+      execution_commit: "a".repeat(40),
       corpus_manifest_sha256: "0b0fdf909583990975a771195c7f7a8b6e5e938f01800369b1d6cf9fb5ca7dee",
       node_id: "hermes-node",
       endpoint_contract: "ollama-loopback-api-embed-v1",
@@ -179,7 +185,7 @@ describe("resident HERMES embedding bake-off adapter", () => {
   })
 
   it.each([
-    ["source commit", (value: any) => { value.admission.source_commit = "a".repeat(40) }, "ADMISSION_INVALID"],
+    ["corpus source commit", (value: any) => { value.admission.corpus_source_commit = "b".repeat(40) }, "ADMISSION_INVALID"],
     ["corpus fingerprint", (value: any) => { value.admission.corpus.corpus_fingerprint = "f".repeat(64) }, "CORPUS_BINDING_MISMATCH"],
     ["node", (value: any) => { value.admission.placement.node_id = "omen" }, "PLACEMENT_BINDING_MISMATCH"],
     ["network", (value: any) => { value.admission.limits.network_scope = "lan" }, "NETWORK_SCOPE_INVALID"],
@@ -263,16 +269,25 @@ describe("resident HERMES embedding bake-off adapter", () => {
   it("keeps the production runner fixed, zero-argument, loopback-only, and evaluator-only", () => {
     const source = fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/bounded-dispatch/run-resident-hermes-embedding-bakeoff.mjs"), "utf8")
     expect(source).toContain('const EVALUATOR_PATH = path.join(REPOSITORY_ROOT, EMBEDDING_CONTRACT.evaluatorPath)')
-    expect(source).toContain('endpoint: "http://127.0.0.1:11434/api/embed"')
+    expect(source).toContain('endpoint !== "http://127.0.0.1:11434/api/embed"')
     expect(source).toContain('process.argv.length !== 2')
-    expect(source.match(/spawnSync\(/g)).toHaveLength(1)
+    expect(source.match(/spawnSync\(/g)).toHaveLength(2)
     expect(source).toContain('spawnSync(PYTHON_EXECUTABLE, [EVALUATOR_PATH')
+    expect(source).toContain("input: evaluatorInput")
+    expect(source).toContain("merge-base\", \"--is-ancestor")
+    expect(source).toContain("refs/heads/main")
     expect(source).not.toMatch(/process\.env|https:\/\/|\/api\/generate|child_process\.exec|execSync|fetch\(/)
   })
 
   it("publishes scope only and cannot activate authority, scheduling, fallback, downloads, or writes", () => {
     const permission = JSON.parse(fs.readFileSync(path.join(process.cwd(), EMBEDDING_CONTRACT.permissionPath), "utf8"))
+    const authority = JSON.parse(fs.readFileSync(path.join(process.cwd(), EMBEDDING_CONTRACT.authorityRegistryPath), "utf8"))
     expect(permission).toMatchObject({ maximum_attempts: 1, maximum_concurrency: 1, scheduler_activation_allowed: false, autonomous_dispatch_allowed: false, fallback_allowed: false, external_provider_allowed: false, status: "SCOPE_ONLY_NOT_AUTHORITY" })
     expect(permission.prohibited_actions).toEqual(expect.arrayContaining(["authority-mutation", "model-download", "canonical-vector-write", "database-mutation", "external-provider-access", "silent-fallback"]))
+    expect(authority).toEqual({
+      schema_version: "1.0-hermes-embedding-bakeoff-authority-registry",
+      registry_id: "hermes-embedding-bakeoff-authorities",
+      entries: [],
+    })
   })
 })
