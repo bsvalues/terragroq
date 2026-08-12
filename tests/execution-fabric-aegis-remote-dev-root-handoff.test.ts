@@ -14,7 +14,7 @@ import {
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
-import { exactNftBoundaryLines, inspectDurableLedgerReconciliation, inspectForcedCommandTransportReconciliation, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
+import { exactLedgerAncestorContract, exactNftBoundaryLines, inspectDurableLedgerReconciliation, inspectForcedCommandTransportReconciliation, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
 const root = path.resolve(import.meta.dirname, "..")
@@ -405,6 +405,17 @@ describe("AEGIS root-owned prerequisite handoff", () => {
   })
 
   it("reconciles only an exact preserved closed HASH ledger when the new ticket directory alone is absent", () => {
+    const exactAncestors = [
+      { path: "/var", uid: 0, gid: 0, mode: 0o755, directory: true, symlink: false },
+      { path: "/var/lib", uid: 0, gid: 0, mode: 0o755, directory: true, symlink: false },
+      { path: "/var/lib/williamos", uid: 999, gid: 987, mode: 0o750, directory: true, symlink: false },
+      { path: "/var/lib/williamos/fabric", uid: 999, gid: 987, mode: 0o700, directory: true, symlink: false },
+      { path: "/var/lib/williamos/fabric/ledger", uid: 999, gid: 987, mode: 0o700, directory: true, symlink: false },
+    ]
+    expect(exactLedgerAncestorContract(exactAncestors, 999, 987)).toBe(true)
+    expect(exactLedgerAncestorContract(exactAncestors.map((entry) => entry.path.endsWith("/fabric") ? { ...entry, uid: 0 } : entry), 999, 987)).toBe(false)
+    expect(exactLedgerAncestorContract(exactAncestors.map((entry) => entry.path.endsWith("/fabric") ? { ...entry, mode: 0o770 } : entry), 999, 987)).toBe(false)
+    expect(exactLedgerAncestorContract(exactAncestors.map((entry) => entry.path.endsWith("/fabric") ? { ...entry, symlink: true } : entry), 999, 987)).toBe(false)
     const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
     expect(adapter).toContain('ticketExists: lexists("/var/lib/williamos-fabric/remote-dev-launch-tickets")')
     expect(adapter).not.toContain('ticketExists: fs.existsSync("/var/lib/williamos-fabric/remote-dev-launch-tickets")')
