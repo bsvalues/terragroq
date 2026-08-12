@@ -21,7 +21,7 @@ describe("AEGIS activation bridge bootstrap authority", () => {
   })
 
   it("accepts only the exact first bridge receipt as a bounded successor predecessor", () => {
-    expect(inspectBridgeReceiptState("94f3b20f42c991fbe0e0477967e346c52e953b2a2be21236fd11ad104444c614","0".repeat(64))).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeReceiptState("fd3fe9eccb7bf14192e13f5ff1149f192405f512d8bcdd9f0e946a6c5ad0a657","0".repeat(64))).toBe("EXACT_PREDECESSOR")
     expect(inspectBridgeReceiptState("0".repeat(64),"1".repeat(64))).toBe("DRIFT")
     expect(inspectBridgeReceiptState("1".repeat(64),"1".repeat(64))).toBe("MATCH")
   })

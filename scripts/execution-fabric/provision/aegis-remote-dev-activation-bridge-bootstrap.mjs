@@ -19,7 +19,7 @@ const ASSET_LAYOUT = Object.freeze([
 ])
 const SSH_ENTRYPOINT = "/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs"
 const SSH_ENTRYPOINT_PREDECESSOR_SHA256 = "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7"
-const BRIDGE_RECEIPT_PREDECESSOR_SHA256 = "94f3b20f42c991fbe0e0477967e346c52e953b2a2be21236fd11ad104444c614"
+const BRIDGE_RECEIPT_PREDECESSOR_SHA256 = "fd3fe9eccb7bf14192e13f5ff1149f192405f512d8bcdd9f0e946a6c5ad0a657"
 const SHA = /^[a-f0-9]{64}$/; const SHA40 = /^[a-f0-9]{40}$/; const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const canonical = value => value === null || ["string","boolean","number"].includes(typeof value) ? JSON.stringify(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.keys(value).sort().map(k=>`${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex")
