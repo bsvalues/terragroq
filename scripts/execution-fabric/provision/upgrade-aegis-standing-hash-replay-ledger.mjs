@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 export const UPGRADE_MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-replay-ledger-upgrade.v1.json"
+export const PRIOR_PROVISIONING_MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-provisioning-package.v1.json"
 export const REPLAY_JOURNAL_PATH = "/var/lib/aegis-standing-hash-replay-journal.jsonl"
 export const NODE_LEASE_PATH = "/var/lib/williamos/fabric/ledger/resident-aegis-active.json"
 export const LEDGER_MUTATION_LOCK_PATH = "/var/lib/williamos/fabric/standing-hash-ledger/standing-hash-mutation.lock"
@@ -21,6 +22,27 @@ const COMMIT = /^[a-f0-9]{40}$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const PLACEHOLDER = /__[A-Z0-9_]+__/
 const MAX_FILE_BYTES = 16 * 1024 * 1024
+export const EXPECTED_PRIOR_PROVISIONING_PLAN = Object.freeze([
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/opt/williamos" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/opt/williamos/releases" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/usr/local/libexec/williamos" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/etc/williamos" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/etc/williamos/fabric" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/var/lib/williamos/fabric/standing-hash-requests" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/var/lib/williamos/fabric/standing-hash-ledger" }),
+  Object.freeze({ type: "CREATE_DIRECTORY", path: "/home/williamos-fabric/.ssh" }),
+  Object.freeze({
+    type: "INSTALL_REVIEWED_CHECKOUT",
+    path: "/opt/williamos/releases/13709f5789c25dea408283730a6bd35e8fd894ab",
+    source_path: "/root/williamos-issue-595-inputs-b58e7c045-v5/reviewed",
+    commit: "13709f5789c25dea408283730a6bd35e8fd894ab",
+  }),
+  Object.freeze({ type: "INSTALL_FILE", id: "bootstrap", path: "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs" }),
+  Object.freeze({ type: "INSTALL_FILE", id: "ssh-entrypoint", path: "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs" }),
+  Object.freeze({ type: "INSTALL_FILE", id: "replay-epoch-initializer", path: "/usr/local/libexec/williamos/aegis-standing-hash-replay-epoch.mjs" }),
+  Object.freeze({ type: "INSTALL_FILE", id: "authorized-keys", path: "/home/williamos-fabric/.ssh/authorized_keys" }),
+  Object.freeze({ type: "INSTALL_FILE", id: "release-manifest", path: "/etc/williamos/fabric/trusted-main-release.json" }),
+])
 const AUTHORITY_KEYS = Object.freeze([
   "schemaVersion", "authorityId", "upgradeId", "repository", "machineIdSha256",
   "priorCommit", "newCommit", "manifestSha256", "priorProvisioningAuthorityId",
@@ -94,6 +116,7 @@ function validateManifest(manifest) {
     || manifest.repository !== "bsvalues/terragroq" || manifest.authority?.maximumAgeSeconds !== 900
     || manifest.authority?.singleUse !== true || manifest.authority?.consumeBeforeMutation !== true
     || !COMMIT.test(prior?.commit ?? "") || prior.releaseRoot !== `/opt/williamos/releases/${prior.commit}`
+    || prior.provisioningManifestPath !== PRIOR_PROVISIONING_MANIFEST_PATH
     || !DIGEST.test(prior?.provisioningManifestSha256 ?? "")
     || prior.trustedReleaseManifestPath !== "/etc/williamos/fabric/trusted-main-release.json"
     || prior.authorizedKeysPath !== "/home/williamos-fabric/.ssh/authorized_keys"
@@ -225,12 +248,67 @@ function verifyPriorJournals(io, manifest, authority) {
     provisioningRecords = provisioning.toString("utf8").trimEnd().split("\n").map(JSON.parse)
     repairRecords = repair.toString("utf8").trimEnd().split("\n").map(JSON.parse)
   } catch { fail("AEGIS_REPLAY_UPGRADE_PRIOR_JOURNAL_INVALID", "prior journal JSON is malformed") }
-  if (provisioningRecords[0]?.record_type !== "AUTHORITY_CONSUMED"
-    || provisioningRecords.at(-1)?.record_type !== "APPLY_COMPLETE"
+  const consumed = provisioningRecords[0]
+  const complete = provisioningRecords.at(-1)
+  const mutationDescription = (record) => {
+    const description = { ...record }
+    delete description.record_type
+    delete description.sequence
+    return description
+  }
+  const started = provisioningRecords.filter(({ record_type }) => record_type === "MUTATION_STARTED")
+    .map(mutationDescription)
+  const completed = provisioningRecords.filter(({ record_type }) => record_type === "MUTATION_COMPLETED")
+    .map(mutationDescription)
+  const expectedFileSha256 = {
+    ...Object.fromEntries(manifest.priorState.installedFiles.map(({ id, sha256: digest }) => [id, digest])),
+    "authorized-keys": authority.priorAuthorizedKeysSha256,
+    "release-manifest": authority.priorReleaseManifestSha256,
+  }
+  const normalizedCompleted = completed.map((operation) => {
+    if (operation?.type !== "INSTALL_FILE") return operation
+    if (!exactKeys(operation, ["type", "id", "path", "sha256"])
+      || !DIGEST.test(operation.sha256 ?? "") || operation.sha256 !== expectedFileSha256[operation.id]) {
+      fail("AEGIS_REPLAY_UPGRADE_PRIOR_JOURNAL_INVALID", `prior file digest differs: ${operation?.id ?? "<invalid>"}`)
+    }
+    const planned = { ...operation }
+    delete planned.sha256
+    return planned
+  })
+  const repairConsumed = repairRecords[0]
+  const repairComplete = repairRecords[1]
+  const canonicalJson = manifest.priorState.installedFiles.find(({ id }) => id === "canonical-json")
+  if (provisioningRecords.length < 3 || consumed?.schema_version !== "1.0-aegis-standing-hash-mutation-journal"
+    || consumed.record_type !== "AUTHORITY_CONSUMED" || consumed.authority_id !== authority.priorProvisioningAuthorityId
+    || !DIGEST.test(consumed.manifest_sha256 ?? "")
+    || consumed.package_id !== "aegis-standing-hash-provisioning-issue-595-v1"
+    || !Array.isArray(consumed.planned_mutations)
+    || complete?.record_type !== "APPLY_COMPLETE" || complete.replay_epoch_initialized !== false
+    || complete.workload_executed !== false || complete.scheduler_activated !== false
+    || complete.completed_mutation_count !== completed.length
+    || provisioningRecords.length !== 2 + (completed.length * 2)
     || provisioningRecords.some((record, index) => record.sequence !== index)
     || provisioningRecords.some(({ record_type }) => record_type === "APPLY_FAILED_PARTIAL_STATE")
-    || repairRecords.length !== 2 || repairRecords[0]?.record_type !== "AUTHORITY_CONSUMED"
-    || repairRecords[1]?.record_type !== "REPAIR_COMPLETE" || repairRecords.some((record, index) => record.sequence !== index)) {
+    || !same(started, completed) || !same(consumed.planned_mutations, normalizedCompleted)
+    || !same(consumed.planned_mutations, EXPECTED_PRIOR_PROVISIONING_PLAN)
+    || completed.some((_description, index) => provisioningRecords[(index * 2) + 1]?.record_type !== "MUTATION_STARTED"
+      || provisioningRecords[(index * 2) + 2]?.record_type !== "MUTATION_COMPLETED")
+    || repairRecords.length !== 2 || repairRecords.some((record, index) => record.sequence !== index)
+    || repairConsumed?.schema_version !== "1.0-aegis-standing-hash-canonical-json-repair-journal"
+    || repairConsumed.record_type !== "AUTHORITY_CONSUMED" || repairConsumed.authority_id !== authority.priorRepairAuthorityId
+    || repairConsumed.previous_provisioning_authority_id !== authority.priorProvisioningAuthorityId
+    || repairConsumed.previous_provisioning_journal_sha256 !== authority.priorProvisioningJournalSha256
+    || repairConsumed.previous_provisioning_manifest_sha256 !== consumed.manifest_sha256
+    || repairConsumed.previous_provisioning_plan_sha256 !== canonicalSha256(consumed.planned_mutations)
+    || repairConsumed.installed_authorized_keys_sha256 !== authority.priorAuthorizedKeysSha256
+    || repairConsumed.installed_release_manifest_sha256 !== authority.priorReleaseManifestSha256
+    || repairConsumed.target_path !== canonicalJson?.path || repairConsumed.target_sha256 !== canonicalJson?.sha256
+    || repairComplete?.record_type !== "REPAIR_COMPLETE" || repairComplete.target_path !== canonicalJson?.path
+    || repairComplete.target_sha256 !== canonicalJson?.sha256 || repairComplete.target_owner !== "root"
+    || repairComplete.target_group !== "root" || repairComplete.target_mode !== canonicalJson?.mode
+    || repairComplete.target_single_link !== true || repairComplete.network_accessed !== false
+    || repairComplete.replay_epoch_initialized !== false || repairComplete.workload_executed !== false
+    || repairComplete.scheduler_activated !== false) {
     fail("AEGIS_REPLAY_UPGRADE_PRIOR_JOURNAL_INVALID", "prior provisioning and repair are not exact successful terminals")
   }
   return { provisioningPath, repairPath }
@@ -252,30 +330,16 @@ function trustedRelease(manifest, deployedAt, activationMarkerSha256) {
   return { ...body, release_manifest_sha256: canonicalSha256(body) }
 }
 
-function inspectPriorState(io, manifest, authority, repoRoot, heldLocks = false) {
+function inspectPriorState(io, manifest, authority, heldLocks = false) {
   const account = io.account(manifest.serviceAccount.name)
   if (!same(account, { uid: account.uid, gid: account.gid, home: manifest.serviceAccount.home, shell: manifest.serviceAccount.shell })
     || !Number.isSafeInteger(account.uid) || account.uid <= 0 || !Number.isSafeInteger(account.gid) || account.gid <= 0) {
     fail("AEGIS_REPLAY_UPGRADE_ACCOUNT_INVALID", "williamos-fabric account identity differs")
   }
-  const packagePath = path.resolve(repoRoot, ...manifest.priorState.provisioningManifestPath.split("/"))
-  const priorPackageBytes = assertExactFile(io, packagePath, { sha256: manifest.priorState.provisioningManifestSha256 })
-  const priorPackage = parseJson(priorPackageBytes, "AEGIS_REPLAY_UPGRADE_PRIOR_STATE_DRIFT", "prior provisioning manifest")
-  const priorClosure = Object.fromEntries((priorPackage.reviewedRelease?.runtimeClosurePaths ?? []).map((relativePath) => [
-    relativePath,
-    priorPackage.bindings?.find(({ path: bindingPath }) => bindingPath === relativePath)?.sha256,
-  ]))
-  if (priorPackage.packageId !== "aegis-standing-hash-provisioning-issue-595-v1"
-    || priorPackage.trustedMain?.commit !== manifest.priorState.commit
-    || priorPackage.reviewedRelease?.releaseRoot !== manifest.priorState.releaseRoot
-    || Object.keys(priorClosure).length === 0 || Object.values(priorClosure).some((digest) => !DIGEST.test(digest))) {
-    fail("AEGIS_REPLAY_UPGRADE_PRIOR_STATE_DRIFT", "prior provisioning manifest release binding differs")
-  }
   for (const root of manifest.priorState.privateRoots) {
     assertExactDirectory(io, root.path, { uid: account.uid, gid: account.gid, mode: modeNumber(root.mode) })
   }
   assertExactDirectory(io, manifest.priorState.releaseRoot, { uid: 0, gid: 0, mode: 0o755 })
-  io.verifyCheckout(manifest.priorState.releaseRoot, manifest.priorState.commit, manifest.repository, priorClosure)
   const installedBytes = Object.fromEntries(manifest.priorState.installedFiles.map((item) => [item.id,
     assertExactFile(io, item.path, { uid: 0, gid: 0, mode: modeNumber(item.mode), sha256: item.sha256 })]))
   const authorizedKeys = assertExactFile(io, manifest.priorState.authorizedKeysPath,
@@ -289,10 +353,20 @@ function inspectPriorState(io, manifest, authority, repoRoot, heldLocks = false)
     { uid: 0, gid: 0, mode: 0o444, sha256: authority.priorReleaseManifestSha256 })
   const release = parseJson(releaseBytes, "AEGIS_REPLAY_UPGRADE_PRIOR_STATE_DRIFT", "prior release manifest")
   if (release.head_commit !== manifest.priorState.commit || release.release_root !== manifest.priorState.releaseRoot
-    || release.repository !== manifest.repository || release.reviewed !== true) {
+    || release.repository !== manifest.repository || release.reviewed !== true
+    || release.schema_version !== "1.0-williamos-trusted-main-release" || release.trusted_ref !== "refs/heads/main"
+    || !release.file_sha256 || Object.keys(release.file_sha256).length === 0
+    || Object.values(release.file_sha256).some((digest) => !DIGEST.test(digest))) {
     fail("AEGIS_REPLAY_UPGRADE_PRIOR_STATE_DRIFT", "prior trusted release manifest semantics differ")
   }
+  const releaseBody = { ...release }
+  delete releaseBody.release_manifest_sha256
+  if (!DIGEST.test(release.release_manifest_sha256 ?? "")
+    || release.release_manifest_sha256 !== canonicalSha256(releaseBody)) {
+    fail("AEGIS_REPLAY_UPGRADE_PRIOR_STATE_DRIFT", "prior trusted release manifest digest differs")
+  }
   verifyPriorJournals(io, manifest, authority)
+  io.verifyCheckout(manifest.priorState.releaseRoot, manifest.priorState.commit, manifest.repository, release.file_sha256)
   assertExactFile(io, NODE_LEASE_PATH, { absent: true })
   for (const lockPath of [NODE_MUTATION_LOCK_PATH, LEDGER_MUTATION_LOCK_PATH]) {
     if (heldLocks) assertExactFile(io, lockPath, { uid: account.uid, gid: account.gid, mode: 0o600 })
@@ -367,7 +441,7 @@ export function upgradeAegisStandingHashReplayLedger({
   validateAuthority(loadedManifest, authority, now, loadedManifestSha256)
   const mutationJournal = `${loadedManifest.install.journalPrefix}${authority.authorityId}.journal.jsonl`
   if (io.inspect(mutationJournal) !== null) fail("AEGIS_REPLAY_UPGRADE_AUTHORITY_REPLAY", "authority journal already exists")
-  const prior = inspectPriorState(io, loadedManifest, authority, repoRoot)
+  const prior = inspectPriorState(io, loadedManifest, authority)
   verifyNewCheckouts(io, loadedManifest, authority, loadedBytes)
 
   const plan = [...loadedManifest.install.activationOrder]
@@ -415,7 +489,7 @@ export function upgradeAegisStandingHashReplayLedger({
       heldLocks.push(lockPath)
     }
     assertExactFile(io, NODE_LEASE_PATH, { absent: true })
-    inspectPriorState(io, loadedManifest, authority, repoRoot, true)
+    inspectPriorState(io, loadedManifest, authority, true)
     verifyNewCheckouts(io, loadedManifest, authority, loadedBytes)
     io.createJournal(mutationJournal, {
     schema_version: "1.0-aegis-standing-hash-replay-ledger-upgrade-journal",
