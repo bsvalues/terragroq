@@ -90,6 +90,12 @@ function signedAuthority(manifest = loadManifest(), overrides: Record<string, un
 }
 
 describe("AEGIS root-owned prerequisite handoff", () => {
+  it("requires stable repeated staged-input evidence with exact diagnostics", () => {
+    const source = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
+    expect(source).toContain("const first=inspect(),second=inspect()")
+    expect(source).toContain("stable signed-input predicate differs")
+    expect(source).toContain("expectedSha,expectedMode:mode")
+  })
   it("bounds broker readiness and fails closed on timeout", () => {
     expect(inspectBrokerReadinessSamples([false, false, true])).toBe("BROKER_READY")
     expect(inspectBrokerReadinessSamples(Array(50).fill(false))).toBe("BROKER_READINESS_TIMEOUT")

@@ -91,7 +91,9 @@ function atomicInstall(source, destination, expectedSha, mode, uid = 0, gid = 0)
 }
 function staged(name, expectedSha, mode) {
   const file = path.join(STAGED_ROOT, name)
-  if (!exactFile(file, expectedSha, 0, 0, mode)) fail("SIGNED_INPUT_UNAVAILABLE", `${name} does not match signed authority`)
+  const inspect=()=>{try{const s=fs.lstatSync(file);return {regular:s.isFile()&&!s.isSymbolicLink(),nlink:s.nlink,uid:s.uid,gid:s.gid,mode:s.mode&0o7777,sha256:sha(fs.readFileSync(file))}}catch(error){return {error:error?.code??"UNKNOWN"}}}
+  const first=inspect(),second=inspect()
+  if (!same(first,second) || !first.regular || first.nlink!==1 || first.uid!==0 || first.gid!==0 || first.mode!==mode || first.sha256!==expectedSha || !trustedParents(file)) fail("SIGNED_INPUT_UNAVAILABLE", `${name} stable signed-input predicate differs: ${canonical({first,second,expectedSha,expectedMode:mode})}`)
   return file
 }
 function accountIds(name) {
