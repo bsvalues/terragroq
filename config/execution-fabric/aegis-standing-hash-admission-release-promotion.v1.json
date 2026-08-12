@@ -25,10 +25,10 @@
     "releaseRoot": "/opt/williamos/releases/b1637a0d16394361dff74e1fb85851ba61f91235",
     "trustedReleaseManifestPath": "/etc/williamos/fabric/trusted-main-release.json",
     "activationMarkerPath": "/etc/williamos/fabric/aegis-standing-hash-replay-ledger-upgrade-v1.activation.json",
-    "replayUpgradeJournalPath": "__EXACT_REPLAY_UPGRADE_JOURNAL_PATH__",
-    "replayUpgradeJournalSha256": "__EXACT_REPLAY_UPGRADE_JOURNAL_SHA256__",
+    "replayUpgradeJournalPath": "/var/lib/williamos-aegis-standing-hash-replay-ledger-upgrade-7e48443b-e522-4e20-a6b4-88395b407a81.journal.jsonl",
+    "replayUpgradeJournalSha256": "7ae81d0b55034af7835ac5af29bafc0df2718da36ff52ca805ee5f67d69298a4",
     "replayJournalPath": "/var/lib/aegis-standing-hash-replay-journal.jsonl",
-    "replayJournalSha256": "__EXACT_EPOCH_ONLY_REPLAY_JOURNAL_SHA256__",
+    "replayJournalSha256": "82646bce7615165b16dd4b0fe04fcbf412f431a7d660d32b569c882ef7b303b6",
     "authorizedKeysPath": "/home/williamos-fabric/.ssh/authorized_keys",
     "requestRoot": "/var/lib/williamos/fabric/standing-hash-requests",
     "closure": {
@@ -47,47 +47,47 @@
     ]
   },
   "evidenceRelease": {
-    "sourceCommit": "__APPROVED_INPUT_SOURCE_COMMIT__",
-    "admissionPath": "__TRACKED_ADMISSION_PATH__",
-    "admissionSha256": "__SHA256_EXACT_ADMISSION_BYTES__",
-    "inputPath": "__TRACKED_INPUT_PATH__",
-    "inputSha256": "__SHA256_EXACT_INPUT_BYTES__"
+    "sourceCommit": "b1637a0d16394361dff74e1fb85851ba61f91235",
+    "admissionPath": "docs/reports/standing-dispatch/admission-issue-595-live-003.json",
+    "admissionSha256": "901db0083668b235a91b0b675192427bee7b1ff016491d8e4290cdc98b50840e",
+    "inputPath": "docs/reports/standing-dispatch/inputs/WO-EF-AEGIS-STANDING-001-fabric-integrity.json",
+    "inputSha256": "2b52099784df706a881bf037310215a8c2f55367c83223523a5916f94784aa30"
   },
   "newRelease": {
-    "commit": "__FINAL_RELEASE_COMMIT__",
-    "checkoutPath": "__FINAL_RELEASE_CHECKOUT_PATH__",
-    "releaseRoot": "/opt/williamos/releases/__FINAL_RELEASE_COMMIT__",
+    "commit": "f7091ca18e174958fd658a08a6c5ec950fa95f19",
+    "checkoutPath": "/root/williamos-release/f7091ca18e174958fd658a08a6c5ec950fa95f19",
+    "releaseRoot": "/opt/williamos/releases/f7091ca18e174958fd658a08a6c5ec950fa95f19",
     "trustedRef": "refs/heads/main",
     "manifestSchemaVersion": "1.0-williamos-trusted-main-release",
     "closure": {
-      "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs": "__SHA256_BOOTSTRAP__",
-      "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs": "__SHA256_RESIDENT_RUNNER__",
-      "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs": "__SHA256_RUNTIME__",
-      "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs": "__SHA256_HASH_CORE__",
-      "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs": "__SHA256_AUTHORITY_EVALUATOR__",
-      "scripts/execution-fabric/provision/aegis-standing-hash-replay-ledger.mjs": "__SHA256_REPLAY_LEDGER__",
-      "scripts/execution-fabric/canonical-json.mjs": "__SHA256_CANONICAL_JSON__"
+      "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs": "8d547f5cb719860e3d9e0aa03bf67592a2396f8e932ba852498df0c4887ccd58",
+      "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs": "91a73ccb292064db2aaaeb38383edf76a44197e22ace511ec4e882b6024bc9ef",
+      "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs": "eb1cf0517caf3a4c4a1935ed8bea73c53fed64cc1ad3effa3963e6e237c22be2",
+      "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs": "c5965a206b5f26c0db21176a609775d1ca176409b644bbc241fde74565bd8d8f",
+      "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs": "5394ef5cb93f5d70277716e041ebdd825969a17fa984ca84a6605e98bcb22073",
+      "scripts/execution-fabric/provision/aegis-standing-hash-replay-ledger.mjs": "db26c78059cd012aa5852aee4c5dc45af100aafbd7469b3dafefff42018de46f",
+      "scripts/execution-fabric/canonical-json.mjs": "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21"
     },
     "trustArtifacts": {
-      "requestSourcePath": "__TRACKED_PRIVATE_REQUEST_SOURCE_PATH__",
-      "requestSha256": "__SHA256_EXACT_REQUEST_BYTES__",
-      "admissionPath": "__TRACKED_ADMISSION_PATH__",
-      "admissionSha256": "__SHA256_EXACT_ADMISSION_BYTES__",
-      "inputPath": "__TRACKED_INPUT_PATH__",
-      "inputSha256": "__SHA256_EXACT_INPUT_BYTES__"
+      "requestSourcePath": "docs/reports/standing-dispatch/private-requests/issue-595-live-003.json",
+      "requestSha256": "858bc89bd29fc9f6969f78740c6b6cb3cace009b6fff7ae9f6bb32bb9a5c8934",
+      "admissionPath": "docs/reports/standing-dispatch/admission-issue-595-live-003.json",
+      "admissionSha256": "901db0083668b235a91b0b675192427bee7b1ff016491d8e4290cdc98b50840e",
+      "inputPath": "docs/reports/standing-dispatch/inputs/WO-EF-AEGIS-STANDING-001-fabric-integrity.json",
+      "inputSha256": "2b52099784df706a881bf037310215a8c2f55367c83223523a5916f94784aa30"
     }
   },
   "packageRelease": {
-    "commit": "__FINAL_PACKAGE_COMMIT__",
-    "checkoutPath": "__FINAL_PACKAGE_CHECKOUT_PATH__",
-    "installerSha256": "__SHA256_PROMOTION_INSTALLER__",
-    "validatorSha256": "__SHA256_PROMOTION_VALIDATOR__",
-    "evaluatorSha256": "__SHA256_STANDING_AUTHORITY_EVALUATOR__",
-    "standingAuthoritySha256": "__SHA256_STANDING_AUTHORITY__"
+    "commit": "05dad92db571fb4bf6d2bd1218621eb60277a836",
+    "checkoutPath": "/root/williamos-package/05dad92db571fb4bf6d2bd1218621eb60277a836",
+    "installerSha256": "1cbb6c0ab4b458df09bd4a73fbed424a16b43a102a324c853b9b4b298d04f152",
+    "validatorSha256": "10f4f1fa333e71cfa9a0d0988dade630608cdd9d2f841e1cf3be8e24d85258f1",
+    "evaluatorSha256": "5394ef5cb93f5d70277716e041ebdd825969a17fa984ca84a6605e98bcb22073",
+    "standingAuthoritySha256": "393a6f684c4c85228821b8604fa66d62482f3b4876c01ab839e67528a4be10fa"
   },
   "install": {
-    "requestId": "__SAFE_REQUEST_ID__",
-    "requestPath": "/var/lib/williamos/fabric/standing-hash-requests/__SAFE_REQUEST_ID__.json",
+    "requestId": "issue-595-live-003",
+    "requestPath": "/var/lib/williamos/fabric/standing-hash-requests/issue-595-live-003.json",
     "requestMode": "0600",
     "journalPrefix": "/var/lib/williamos-aegis-standing-hash-admission-release-promotion-",
     "authorityRoot": "/var/lib/williamos/fabric/standing-hash-promotion-authorities",
