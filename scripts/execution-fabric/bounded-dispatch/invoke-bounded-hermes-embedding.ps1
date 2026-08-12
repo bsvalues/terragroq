@@ -52,6 +52,12 @@ function Get-BoundedUInt64 {
   return $value
 }
 
+function Get-LowerSha256([byte[]]$Bytes) {
+  $algorithm = [Security.Cryptography.SHA256]::Create()
+  try { return -join ($algorithm.ComputeHash($Bytes) | ForEach-Object { $_.ToString('x2') }) }
+  finally { $algorithm.Dispose() }
+}
+
 function Assert-NoReparsePoint {
   param([string]$Path, [bool]$LeafMustExist)
   $full = [IO.Path]::GetFullPath($Path)
@@ -94,12 +100,22 @@ try {
   [UInt64]$maxResultBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_MAX_RESULT_BYTES" 1 16777216
   [UInt64]$maxScratchBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_MAX_SCRATCH_BYTES" 1 68719476736
   [UInt64]$maxCpuThreads = Get-BoundedUInt64 "HERMES_EMBEDDING_MAX_CPU_THREADS" 1 64
+  [UInt64]$inferenceMemoryBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_INFERENCE_MEMORY_BYTES" 67108864 68719476736
   [UInt64]$processMemoryBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_PROCESS_MEMORY_BYTES" 67108864 68719476736
   [UInt64]$jobMemoryBytes = Get-BoundedUInt64 "HERMES_EMBEDDING_JOB_MEMORY_BYTES" 67108864 68719476736
   [UInt64]$cpuRatePercent = Get-BoundedUInt64 "HERMES_EMBEDDING_CPU_RATE_PERCENT" 1 100
   [UInt64]$activeProcessLimit = Get-BoundedUInt64 "HERMES_EMBEDDING_ACTIVE_PROCESS_LIMIT" 1 1
   $containerImageSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_CONTAINER_IMAGE_SHA256"
   if ($containerImageSha256 -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("ENVIRONMENT_INVALID") }
+  $runtimeExecutableSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_RUNTIME_EXECUTABLE_SHA256"
+  $modelId = Get-RequiredEnvironment "HERMES_EMBEDDING_MODEL_ID"
+  $modelManifestSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_MODEL_MANIFEST_SHA256"
+  $weightsSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_WEIGHTS_SHA256"
+  $identityInvalid = $runtimeExecutableSha256 -cnotmatch '^[a-f0-9]{64}$'
+  $identityInvalid = $identityInvalid -or $modelManifestSha256 -cnotmatch '^[a-f0-9]{64}$'
+  $identityInvalid = $identityInvalid -or $weightsSha256 -cnotmatch '^[a-f0-9]{64}$'
+  $identityInvalid = $identityInvalid -or $modelId -cnotmatch '^[a-z0-9][a-z0-9._-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$'
+  if ($identityInvalid) { throw [InvalidOperationException]::new("ENVIRONMENT_INVALID") }
   $affinityRaw = Get-RequiredEnvironment "HERMES_EMBEDDING_CPU_AFFINITY_MASK"
   if ($affinityRaw -cnotmatch '^0x[0-9A-Fa-f]{1,16}$') { throw [InvalidOperationException]::new("ENVIRONMENT_INVALID") }
   [UInt64]$cpuAffinityMask = [Convert]::ToUInt64($affinityRaw.Substring(2), 16)
@@ -134,16 +150,19 @@ try {
   & $DockerExecutable network create --internal $ExecutionNetwork | Out-Null
   if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("NETWORK_CREATE_FAILED") }
   $ExecutionNetworkOwned = $true
-  $memoryLimit = "$($maxMemoryBytes)b"
-  $containerId = (& $DockerExecutable run --detach --name $ExecutionContainer --label "williamos.execution-hash=$executionHash" --network $ExecutionNetwork --cpus ([string]$maxCpuThreads) --memory $memoryLimit --memory-swap $memoryLimit --pids-limit 64 --read-only --tmpfs '/root/.ollama:rw,noexec,nosuid,size=16777216' --mount "type=bind,source=$ModelsRoot,target=/root/.ollama/models,readonly" --env 'OLLAMA_HOST=0.0.0.0:11434' --env 'OLLAMA_KEEP_ALIVE=0' --publish '127.0.0.1:11435:11434' "sha256:$containerImageSha256").Trim()
+  $memoryLimit = "$($inferenceMemoryBytes)b"
+  $lastCpu = $maxCpuThreads - 1
+  $cpuSet = if ($lastCpu -eq 0) { '0' } else { "0-$lastCpu" }
+  $containerId = (& $DockerExecutable run --detach --name $ExecutionContainer --label "williamos.execution-hash=$executionHash" --network $ExecutionNetwork --cpus ([string]$maxCpuThreads) --cpuset-cpus $cpuSet --memory $memoryLimit --memory-swap $memoryLimit --pids-limit 64 --read-only --tmpfs '/root/.ollama:rw,noexec,nosuid,size=16777216' --mount "type=bind,source=$ModelsRoot,target=/root/.ollama/models,readonly" --env 'OLLAMA_HOST=0.0.0.0:11434' --env 'OLLAMA_KEEP_ALIVE=0' --publish '127.0.0.1:11435:11434' "sha256:$containerImageSha256").Trim()
   if ($LASTEXITCODE -ne 0 -or $containerId -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("CONTAINER_START_FAILED") }
   $ExecutionContainerOwned = $true
   $container = (& $DockerExecutable inspect $ExecutionContainer | ConvertFrom-Json)[0]
   $resourceBindingFailed = $LASTEXITCODE -ne 0
   $resourceBindingFailed = $resourceBindingFailed -or [string]($container.Image) -cne "sha256:$containerImageSha256"
-  $resourceBindingFailed = $resourceBindingFailed -or [int64]($container.HostConfig.Memory) -ne [int64]$maxMemoryBytes
-  $resourceBindingFailed = $resourceBindingFailed -or [int64]($container.HostConfig.MemorySwap) -ne [int64]$maxMemoryBytes
+  $resourceBindingFailed = $resourceBindingFailed -or [int64]($container.HostConfig.Memory) -ne [int64]$inferenceMemoryBytes
+  $resourceBindingFailed = $resourceBindingFailed -or [int64]($container.HostConfig.MemorySwap) -ne [int64]$inferenceMemoryBytes
   $resourceBindingFailed = $resourceBindingFailed -or [int64]($container.HostConfig.NanoCpus) -ne ([int64]$maxCpuThreads * 1000000000)
+  $resourceBindingFailed = $resourceBindingFailed -or [string]($container.HostConfig.CpusetCpus) -cne $cpuSet
   $resourceBindingFailed = $resourceBindingFailed -or [int64]($container.HostConfig.PidsLimit) -ne 64
   $resourceBindingFailed = $resourceBindingFailed -or $container.HostConfig.ReadonlyRootfs -ne $true
   $resourceBindingFailed = $resourceBindingFailed -or @($container.HostConfig.DeviceRequests).Count -ne 0
@@ -151,6 +170,17 @@ try {
   $resourceBindingFailed = $resourceBindingFailed -or [string]($container.HostConfig.PortBindings.'11434/tcp'[0].HostIp) -cne '127.0.0.1'
   $resourceBindingFailed = $resourceBindingFailed -or [string]($container.HostConfig.PortBindings.'11434/tcp'[0].HostPort) -cne '11435'
   if ($resourceBindingFailed) { throw [InvalidOperationException]::new("CONTAINER_RESOURCE_BINDING_FAILED") }
+  $runtimeHash = (@(& $DockerExecutable exec $ExecutionContainer sha256sum /usr/bin/ollama) -join '').Trim()
+  if ($LASTEXITCODE -ne 0 -or $runtimeHash -cnotmatch '^([a-f0-9]{64})\s+/usr/bin/ollama$' -or $Matches[1] -cne $runtimeExecutableSha256) { throw [InvalidOperationException]::new("RUNTIME_REVERIFICATION_FAILED") }
+  $modelParts = $modelId.Split(':')
+  $modelManifestPath = "/root/.ollama/models/manifests/registry.ollama.ai/library/$($modelParts[0])/$($modelParts[1])"
+  $modelManifestText = (@(& $DockerExecutable exec $ExecutionContainer cat $modelManifestPath) -join "`n").Trim()
+  if ($LASTEXITCODE -ne 0 -or (Get-LowerSha256 ([Text.Encoding]::UTF8.GetBytes($modelManifestText))) -cne $modelManifestSha256) { throw [InvalidOperationException]::new("MODEL_MANIFEST_REVERIFICATION_FAILED") }
+  $modelManifest = $modelManifestText | ConvertFrom-Json
+  $modelLayers = @($modelManifest.layers | Where-Object mediaType -eq 'application/vnd.ollama.image.model')
+  if ($modelLayers.Count -ne 1 -or [string]$modelLayers[0].digest -cne "sha256:$weightsSha256") { throw [InvalidOperationException]::new("MODEL_WEIGHTS_BINDING_FAILED") }
+  $weightsHash = (@(& $DockerExecutable exec $ExecutionContainer sha256sum "/root/.ollama/models/blobs/sha256-$weightsSha256") -join '').Trim()
+  if ($LASTEXITCODE -ne 0 -or $weightsHash -cnotmatch '^([a-f0-9]{64})\s+' -or $Matches[1] -cne $weightsSha256) { throw [InvalidOperationException]::new("MODEL_WEIGHTS_REVERIFICATION_FAILED") }
   $ready = $false
   for ($attempt = 0; $attempt -lt 60; $attempt += 1) {
     try {
@@ -373,8 +403,13 @@ namespace WilliamOS.ExecutionFabric {
     internal_network = $true
     gpu_execution = "CPU_ONLY"
     container_cpu_threads = [int]$maxCpuThreads
-    container_memory_bytes = $maxMemoryBytes
+    container_memory_bytes = $inferenceMemoryBytes
+    aggregate_memory_bytes = $jobMemoryBytes + $inferenceMemoryBytes
     container_pids_limit = 64
+    shared_cpu_affinity = $true
+    runtime_reverified = $true
+    model_manifest_reverified = $true
+    model_weights_reverified = $true
     container_cleaned = $true
     network_cleaned = $true
     result_bytes = $resultLength

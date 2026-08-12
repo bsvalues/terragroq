@@ -335,12 +335,17 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
       HERMES_EMBEDDING_MAX_RESULT_BYTES: String(admission.limits.max_result_bytes),
       HERMES_EMBEDDING_MAX_SCRATCH_BYTES: String(admission.limits.max_scratch_bytes),
       HERMES_EMBEDDING_MAX_CPU_THREADS: String(admission.limits.max_cpu_threads),
-      HERMES_EMBEDDING_PROCESS_MEMORY_BYTES: String(admission.limits.max_memory_bytes),
-      HERMES_EMBEDDING_JOB_MEMORY_BYTES: String(admission.limits.max_memory_bytes),
+      HERMES_EMBEDDING_PROCESS_MEMORY_BYTES: String(admission.limits.max_evaluator_memory_bytes),
+      HERMES_EMBEDDING_JOB_MEMORY_BYTES: String(admission.limits.max_evaluator_memory_bytes),
+      HERMES_EMBEDDING_INFERENCE_MEMORY_BYTES: String(admission.limits.max_inference_memory_bytes),
       HERMES_EMBEDDING_CPU_RATE_PERCENT: "100",
       HERMES_EMBEDDING_CPU_AFFINITY_MASK: affinityMask,
       HERMES_EMBEDDING_ACTIVE_PROCESS_LIMIT: "1",
       HERMES_EMBEDDING_CONTAINER_IMAGE_SHA256: admission.runtime.container_image_sha256,
+      HERMES_EMBEDDING_RUNTIME_EXECUTABLE_SHA256: admission.runtime.executable_sha256,
+      HERMES_EMBEDDING_MODEL_ID: admission.model.model_id,
+      HERMES_EMBEDDING_MODEL_MANIFEST_SHA256: admission.model.manifest_sha256,
+      HERMES_EMBEDDING_WEIGHTS_SHA256: admission.model.weights_sha256,
     },
   })
   let receipt
@@ -348,9 +353,11 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
   if (run.status !== 0 || receipt.status !== "COMPLETED" || receipt.evaluator_exit_code !== 0
     || receipt.job_assigned_before_resume !== true || receipt.external_provider_used !== false || receipt.fallback_used !== false
     || receipt.active_process_limit !== 1 || receipt.cpu_rate_percent !== 100 || receipt.cpu_affinity_mask !== affinityMask
-    || receipt.process_memory_bytes !== admission.limits.max_memory_bytes || receipt.job_memory_bytes !== admission.limits.max_memory_bytes
+    || receipt.process_memory_bytes !== admission.limits.max_evaluator_memory_bytes || receipt.job_memory_bytes !== admission.limits.max_evaluator_memory_bytes
     || receipt.isolated_ollama_container !== true || receipt.internal_network !== true || receipt.gpu_execution !== "CPU_ONLY"
-    || receipt.container_cpu_threads !== admission.limits.max_cpu_threads || receipt.container_memory_bytes !== admission.limits.max_memory_bytes
+    || receipt.container_cpu_threads !== admission.limits.max_cpu_threads || receipt.container_memory_bytes !== admission.limits.max_inference_memory_bytes
+    || receipt.aggregate_memory_bytes !== admission.limits.max_evaluator_memory_bytes + admission.limits.max_inference_memory_bytes || receipt.shared_cpu_affinity !== true
+    || receipt.runtime_reverified !== true || receipt.model_manifest_reverified !== true || receipt.model_weights_reverified !== true
     || receipt.container_pids_limit !== 64 || receipt.container_cleaned !== true || receipt.network_cleaned !== true) {
     throw new Error(`bounded embedding evaluator failed closed: ${receipt.reason_code ?? "UNKNOWN"}`)
   }
@@ -368,6 +375,7 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
     corpus_fingerprint: result?.manifest?.corpus_fingerprint,
     model_id: result?.manifest?.model, runtime_id: provenance?.runtime?.runtime_id,
     node_id: provenance?.host?.node_id, endpoint: EMBEDDING_CONTRACT.endpoint,
+    execution_receipt: receipt,
     external_provider_used: false, fallback_used: false,
   }
 }

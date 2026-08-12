@@ -94,6 +94,8 @@ function fixture() {
       max_result_bytes: 8_388_608,
       max_cpu_threads: 4,
       max_memory_bytes: 8_589_934_592,
+      max_evaluator_memory_bytes: 536_870_912,
+      max_inference_memory_bytes: 8_053_063_680,
       max_gpu_vram_bytes: 0,
       minimum_memory_available_bytes: 4_294_967_296,
       minimum_gpu_vram_available_bytes: 0,
@@ -214,6 +216,36 @@ function output(admission: any) {
     runtime_id: admission.runtime.runtime_id,
     node_id: EMBEDDING_CONTRACT.nodeId,
     endpoint: EMBEDDING_CONTRACT.endpoint,
+    execution_receipt: {
+      schema_version: "1.0-hermes-embedding-job-receipt",
+      status: "COMPLETED",
+      reason_code: null,
+      evaluator_exit_code: 0,
+      timed_out: false,
+      job_assigned_before_resume: true,
+      active_process_limit: 1,
+      cpu_rate_percent: 100,
+      cpu_affinity_mask: "0xf",
+      process_memory_bytes: admission.limits.max_evaluator_memory_bytes,
+      job_memory_bytes: admission.limits.max_evaluator_memory_bytes,
+      isolated_ollama_container: true,
+      internal_network: true,
+      gpu_execution: "CPU_ONLY",
+      container_cpu_threads: admission.limits.max_cpu_threads,
+      container_memory_bytes: admission.limits.max_inference_memory_bytes,
+      aggregate_memory_bytes: admission.limits.max_memory_bytes,
+      container_pids_limit: 64,
+      shared_cpu_affinity: true,
+      runtime_reverified: true,
+      model_manifest_reverified: true,
+      model_weights_reverified: true,
+      container_cleaned: true,
+      network_cleaned: true,
+      result_bytes: resultBytes.byteLength,
+      result_sha256: sha256(resultBytes),
+      external_provider_used: false,
+      fallback_used: false,
+    },
     external_provider_used: false,
     fallback_used: false,
   }
@@ -267,6 +299,7 @@ describe("resident HERMES embedding bake-off adapter", () => {
     ["node", (value: any) => { value.admission.placement.node_id = "omen" }, "PLACEMENT_BINDING_MISMATCH"],
     ["network", (value: any) => { value.admission.limits.network_scope = "lan" }, "NETWORK_SCOPE_INVALID"],
     ["scratch ceiling", (value: any) => { value.admission.limits.max_scratch_bytes = 1 }, "SCRATCH_CEILING_INVALID"],
+    ["aggregate memory ceiling", (value: any) => { value.admission.limits.max_inference_memory_bytes += 1 }, "MEMORY_CEILING_INVALID"],
     ["attempt count", (value: any) => { value.admission.maximum_attempts = 2 }, "ADMISSION_INVALID"],
   ])("fails closed on changed %s binding", (_name, mutate, code) => {
     const value = fixture(); mutate(value); value.request.admission_sha256 = canonicalDigest(value.admission)
@@ -283,7 +316,7 @@ describe("resident HERMES embedding bake-off adapter", () => {
       evaluator_path: "scripts/embedding-bakeoff/fabric_measure.py",
     }))
     expect(value.releaseExclusiveLease).toHaveBeenCalledWith({ lease_id: "lease-issue-704-test", claim_id: "claim-issue-704-test", fencing_token: 1 })
-    expect(result).toMatchObject({ status: "COMPLETED", result: "SUCCEEDED", execution_semantics: "AT_MOST_ONCE_ADMISSION_CONSUMPTION", lease_released: true, scheduler_activated: false, autonomous_dispatch: false, external_provider_used: false, fallback_used: false, authority_scope: { canonical_vector_write_authorized: false, database_mutation_authorized: false } })
+    expect(result).toMatchObject({ status: "COMPLETED", result: "SUCCEEDED", execution_semantics: "AT_MOST_ONCE_ADMISSION_CONSUMPTION", execution_receipt: { isolated_ollama_container: true, runtime_reverified: true, model_manifest_reverified: true, model_weights_reverified: true, container_cleaned: true }, lease_released: true, scheduler_activated: false, autonomous_dispatch: false, external_provider_used: false, fallback_used: false, authority_scope: { canonical_vector_write_authorized: false, database_mutation_authorized: false } })
     expect(result.attestation_sha256).toMatch(/^[a-f0-9]{64}$/)
   })
 
