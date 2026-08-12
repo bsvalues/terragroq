@@ -36,6 +36,7 @@ const SHA256 = /^[a-f0-9]{64}$/
 const SSH_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}$/
 const MAX_AUTHORITY_AGE_MS = 15 * 60 * 1000
 const MAX_FILE_BYTES = 1024 * 1024
+const RECOVERABLE_LEGACY_MANIFEST_SHA256 = "614a0723adae356aa729966b29aeae7dcd5859c78ab99beda1dc256c6dd0e9fd"
 
 export const canonicalize = canonicalizeJcs
 
@@ -284,7 +285,8 @@ function inspectRecoverableJournal(fsApi, manifestSha256) {
     && consumed.schemaVersion === "1.0-hermes-aegis-standing-hash-key-generation-journal"
     && consumed.recordType === "AUTHORITY_CONSUMED" && consumed.sequence === 0
     && GUID.test(consumed.authorityId ?? "") && SHA256.test(consumed.authoritySha256 ?? "")
-    && consumed.packageId === PACKAGE_ID && consumed.manifestSha256 === manifestSha256
+    && consumed.packageId === PACKAGE_ID
+    && [manifestSha256, RECOVERABLE_LEGACY_MANIFEST_SHA256].includes(consumed.manifestSha256)
     && canonicalTimestamp(consumed.consumedAt)
     && consumed.privateKeyPath === PRIVATE_KEY_PATH && consumed.publicKeyPath === PUBLIC_KEY_PATH
     && consumed.evidencePath === EVIDENCE_PATH
@@ -349,19 +351,25 @@ function consumeAuthority(fsApi, authority, manifestSha256, consumedAt, recovery
       fail("HERMES_KEY_AUTHORITY_REPLAY", "recovery requires a distinct fresh authority")
     }
     claimRecovery(fsApi, authority, manifestSha256, consumedAt, recovery)
-    appendJournal(fsApi, {
-      recordType: "RECOVERY_AUTHORITY_CONSUMED",
-      sequence: recovery.nextSequence,
-      authorityId: authority.authorityId,
-      authoritySha256: canonicalSha256(authority),
-      priorAuthorityId: recovery.priorAuthorityId,
-      priorAuthoritySha256: recovery.priorAuthoritySha256,
-      packageId: authority.packageId,
-      manifestSha256,
-      consumedAt,
-      recoveryBasis: "EXACT_NO_ARTIFACT_KEYGEN_FAILURE",
-      privateKeyInspected: false,
-    })
+    try {
+      appendJournal(fsApi, {
+        recordType: "RECOVERY_AUTHORITY_CONSUMED",
+        sequence: recovery.nextSequence,
+        authorityId: authority.authorityId,
+        authoritySha256: canonicalSha256(authority),
+        priorAuthorityId: recovery.priorAuthorityId,
+        priorAuthoritySha256: recovery.priorAuthoritySha256,
+        packageId: authority.packageId,
+        manifestSha256,
+        consumedAt,
+        recoveryBasis: "EXACT_NO_ARTIFACT_KEYGEN_FAILURE",
+        privateKeyInspected: false,
+      })
+    } catch (error) {
+      error.authorityConsumed = true
+      error.recoveryClaimPath = RECOVERY_CLAIM_PATH
+      throw error
+    }
     return recovery.nextSequence + 1
   }
   const record = {

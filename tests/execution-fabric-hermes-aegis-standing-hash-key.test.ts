@@ -33,6 +33,7 @@ const modulePath = path.join(
 )
 const NOW = "2026-08-11T18:05:00.000Z"
 const PURPOSE = "GENERATE_DEDICATED_HERMES_AEGIS_STANDING_HASH_TRANSPORT_KEY"
+const LEGACY_MANIFEST_SHA256 = "614a0723adae356aa729966b29aeae7dcd5859c78ab99beda1dc256c6dd0e9fd"
 
 function manifest(): Json {
   return JSON.parse(fs.readFileSync(manifestPath, "utf8"))
@@ -624,6 +625,70 @@ describe("injected Hermes AEGIS standing HASH dedicated-key generation", () => {
       .filter(({ kind, executable }) => kind === "spawn" && executable === SSH_KEYGEN_PATH)[1].index
     expect(recoveryClaimFsync).toBeGreaterThanOrEqual(0)
     expect(recoveryClaimFsync).toBeLessThan(secondKeygen)
+  })
+
+  it("recovers the exact retained no-artifact journal from the pre-upgrade manifest", () => {
+    const source = harness({
+      mode: "apply",
+      responses: [{ status: 255, stdout: "", stderr: "" }],
+      clock: () => "2026-08-11T18:04:00.000Z",
+    })
+    expect(() => createHermesAegisStandingHashKey(source.options)).toThrow()
+    const records = source.virtual.bytesAt(JOURNAL_PATH)!.toString("utf8").trimEnd()
+      .split("\n").map((line) => JSON.parse(line))
+    records[0].manifestSha256 = LEGACY_MANIFEST_SHA256
+    const journal = `${records.map((record) => canonicalize(record)).join("\n")}\n`
+    const terminalJournalSha256 = crypto.createHash("sha256").update(journal).digest("hex")
+    const value = harness({ existing: [{ target: JOURNAL_PATH, bytes: journal }], mode: "apply" })
+    value.options.authority = authority({
+      authorityId: "62da20c9-ec34-4b91-95e3-180dfb6a9469",
+      issuedAt: "2026-08-11T18:04:30.000Z",
+      recovery: {
+        priorAuthorityId: records[0].authorityId,
+        priorAuthoritySha256: records[0].authoritySha256,
+        terminalJournalSha256,
+      },
+    })
+
+    expect(createHermesAegisStandingHashKey(value.options)).toMatchObject({ status: "GENERATED" })
+    expect(value.virtual.has(RECOVERY_CLAIM_PATH)).toBe(true)
+  })
+
+  it("reports recovery authority consumed when journal append fails after the exclusive claim", () => {
+    const source = harness({
+      mode: "apply",
+      responses: [{ status: 255, stdout: "", stderr: "" }],
+      clock: () => "2026-08-11T18:04:00.000Z",
+    })
+    expect(() => createHermesAegisStandingHashKey(source.options)).toThrow()
+    const retained = source.virtual.bytesAt(JOURNAL_PATH)!
+    const value = harness({ existing: [{ target: JOURNAL_PATH, bytes: retained }], mode: "apply" })
+    value.options.authority = authority({
+      authorityId: "62da20c9-ec34-4b91-95e3-180dfb6a9469",
+      issuedAt: "2026-08-11T18:04:30.000Z",
+      recovery: {
+        priorAuthorityId: authority().authorityId,
+        priorAuthoritySha256: canonicalSha256(authority()),
+        terminalJournalSha256: crypto.createHash("sha256").update(retained).digest("hex"),
+      },
+    })
+    const openSync = value.virtual.api.openSync.bind(value.virtual.api)
+    value.virtual.api.openSync = (candidate: fs.PathLike, flags: number, mode?: number) => {
+      if (value.virtual.has(RECOVERY_CLAIM_PATH)
+        && value.virtual.normalize(candidate) === value.virtual.normalize(JOURNAL_PATH)) {
+        throw Object.assign(new Error("EIO"), { code: "EIO" })
+      }
+      return openSync(candidate, flags, mode)
+    }
+
+    try {
+      createHermesAegisStandingHashKey(value.options)
+      throw new Error("EXPECTED_REJECTION")
+    } catch (error) {
+      expect(error).toMatchObject({ code: "EIO", authorityConsumed: true, recoveryClaimPath: RECOVERY_CLAIM_PATH })
+    }
+    expect(value.virtual.has(RECOVERY_CLAIM_PATH)).toBe(true)
+    expect(value.spawnSyncApi).not.toHaveBeenCalled()
   })
 
   it("rejects a recovery authority that is stale or not bound to the terminal journal", () => {
