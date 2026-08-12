@@ -25,8 +25,13 @@ ALLOWED_IPV6_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
 
 
 def l2_normalize(vec):
-    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-    return [x / norm for x in vec]
+    norm = math.hypot(*vec)
+    if not math.isfinite(norm) or norm <= 0.0:
+        raise ValueError("embedding norm must be finite and positive")
+    normalized = [x / norm for x in vec]
+    if any(not math.isfinite(item) for item in normalized) or not any(item != 0.0 for item in normalized):
+        raise ValueError("normalized embedding must be finite and nonzero")
+    return normalized
 
 
 def cosine(a, b):
@@ -60,6 +65,10 @@ def validate_sovereign_base_url(base_url):
         raise ValueError("endpoint base_url must be an absolute http(s) URL")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("endpoint base_url must not contain credentials, query parameters, or fragments")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("endpoint base_url contains an invalid port") from exc
     hostname = parsed.hostname.lower()
     try:
         address = ipaddress.ip_address(hostname)

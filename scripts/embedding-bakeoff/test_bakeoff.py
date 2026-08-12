@@ -134,6 +134,15 @@ class TestEndpointBoundary(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "dimension mismatch"):
             cosine([1.0, 0.0], [1.0])
 
+    def test_normalization_is_stable_for_large_values_and_rejects_zero(self):
+        self.assertEqual(validate_endpoint_payload({
+            "model": "model", "data": [{"index": 0, "embedding": [1e308]}],
+        }, "model", 1), [[1.0]])
+        with self.assertRaisesRegex(ValueError, "zero-norm"):
+            validate_endpoint_payload({
+                "model": "model", "data": [{"index": 0, "embedding": [0.0]}],
+            }, "model", 1)
+
     def test_external_endpoint_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "literal private/loopback IP"):
             validate_sovereign_base_url("https://api.example.com/v1")
@@ -202,6 +211,12 @@ class TestEndpointBoundary(unittest.TestCase):
     def test_missing_endpoint_url_is_rejected_cleanly(self):
         with self.assertRaisesRegex(ValueError, "non-empty string"):
             validate_sovereign_base_url(None)
+
+    def test_malformed_endpoint_ports_are_rejected(self):
+        for url in ("http://127.0.0.1:notaport/v1", "http://127.0.0.1:65536/v1"):
+            with self.subTest(url=url):
+                with self.assertRaisesRegex(ValueError, "invalid port"):
+                    validate_sovereign_base_url(url)
 
 
 class TestEvidencePackage(unittest.TestCase):
