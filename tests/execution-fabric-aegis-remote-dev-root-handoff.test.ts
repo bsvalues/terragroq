@@ -265,6 +265,14 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(plan.mutations.map((entry: any) => entry.id)).not.toEqual(expect.arrayContaining(["FORMAT_STORAGE", "MOUNT_STORAGE", "REMOUNT_STORAGE", "CREATE_WORKSPACE", "SET_QUOTA"]))
     expect(hasExactStorageMountSemantics(["rw", "nosuid", "nodev", "relatime", "attr2", "inode64", "prjquota"])).toBe(true)
     expect(hasExactStorageMountSemantics(["rw", "nosuid", "nodev", "prjquota", "noexec"])).toBe(false)
+    const predecessor = completeObservation(manifest)
+    predecessor.prerequisites.RECONCILE_TRUSTED_REPOSITORIES = "RECONCILE_EXACT_PREDECESSOR"
+    const predecessorPlan = buildRootHandoffPlan(manifest, predecessor)
+    expect(predecessorPlan.status).toBe("READY_FOR_SIGNED_AUTHORITY")
+    expect(predecessorPlan.mutations).toEqual(expect.arrayContaining([expect.objectContaining({ id: "RECONCILE_TRUSTED_REPOSITORIES" })]))
+    const foreignTransition = completeObservation(manifest)
+    foreignTransition.prerequisites.INSTALL_PINNED_TOOLCHAIN = "RECONCILE_EXACT_PREDECESSOR"
+    expect(buildRootHandoffPlan(manifest, foreignTransition)).toMatchObject({ status: "BLOCKED", reasonCode: "PREREQUISITE_DRIFT" })
   })
 
   it("classifies only UUID-named transient proof workers as recovery blockers", () => {

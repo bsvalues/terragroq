@@ -187,8 +187,9 @@ export function buildRootHandoffPlan(rawManifest, observed) {
   const mutations = []
   for (const step of manifest.steps) {
     const state = observed?.prerequisites?.[step.id]
-    if (state === "DRIFT" || (state !== "ABSENT" && state !== "MATCH")) return blocked("PREREQUISITE_DRIFT", `${step.id} state is not exact`, [step.id])
-    if (state === "ABSENT") mutations.push({ id: step.id, idempotencyPredicate: step.idempotencyPredicate })
+    const exactPredecessor = step.id === "RECONCILE_TRUSTED_REPOSITORIES" && state === "RECONCILE_EXACT_PREDECESSOR"
+    if (state === "DRIFT" || (state !== "ABSENT" && state !== "MATCH" && !exactPredecessor)) return blocked("PREREQUISITE_DRIFT", `${step.id} state is not exact`, [step.id])
+    if (state === "ABSENT" || exactPredecessor) mutations.push({ id: step.id, idempotencyPredicate: step.idempotencyPredicate })
   }
   return { status: mutations.length ? "READY_FOR_SIGNED_AUTHORITY" : "ALREADY_VERIFIED", reasonCode: mutations.length ? "SIGNED_OWNER_AUTHORITY_REQUIRED" : "NO_MUTATION_REQUIRED", executionAuthorized: false, applyAuthorized: false, rollbackAuthorized: false, drift: [], mutations }
 }

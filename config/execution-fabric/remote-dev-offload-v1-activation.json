@@ -100,7 +100,7 @@
     },
     "rootPrerequisiteVerifier": {
       "path": "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs",
-        "sha256": "fde06f02f864759840b6baefa03e7d23c4736c66f046048dd657697953e783e0"
+        "sha256": "1522f114d2c65c0f17d381413c41d892a466529d97c3ee761882dc892360d35f"
     },
     "rootPrerequisiteAdapter": {
       "path": "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs",
