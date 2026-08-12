@@ -58,20 +58,40 @@ function loadFinalizedManifest() {
   return manifest
 }
 
-function provisioningJournal(manifestSha256: string) {
-  return Buffer.from([
-    JSON.stringify({ schema_version: "1.0-aegis-standing-hash-mutation-journal", record_type: "AUTHORITY_CONSUMED",
-      sequence: 0, authority_id: PROVISION_ID, manifest_sha256: manifestSha256,
-      package_id: "aegis-standing-hash-provisioning-issue-595-v1" }),
-    JSON.stringify({ record_type: "APPLY_COMPLETE", sequence: 1 }),
-  ].join("\n") + "\n")
+function provisioningJournal(manifestSha256: string, planned: any[], fileSha256: Record<string, string>) {
+  const records: any[] = [{
+    schema_version: "1.0-aegis-standing-hash-mutation-journal", record_type: "AUTHORITY_CONSUMED",
+    sequence: 0, authority_id: PROVISION_ID, manifest_sha256: manifestSha256,
+    package_id: "aegis-standing-hash-provisioning-issue-595-v1", planned_mutations: planned,
+  }]
+  for (const operation of planned) {
+    const completed = operation.type === "INSTALL_FILE" ? { ...operation, sha256: fileSha256[operation.id] } : operation
+    records.push({ ...completed, record_type: "MUTATION_STARTED", sequence: records.length })
+    records.push({ ...completed, record_type: "MUTATION_COMPLETED", sequence: records.length })
+  }
+  records.push({ record_type: "APPLY_COMPLETE", sequence: records.length,
+    completed_mutation_count: planned.length, replay_epoch_initialized: false,
+    workload_executed: false, scheduler_activated: false })
+  return Buffer.from(`${records.map((record) => JSON.stringify(record)).join("\n")}\n`)
 }
 
-function repairJournal() {
+function repairJournal(input: { manifestSha256: string; provisionBytes: Buffer; plan: any[];
+  authorizedKeysSha256: string; releaseManifestSha256: string; target: any }) {
   return Buffer.from([
     JSON.stringify({ schema_version: "1.0-aegis-standing-hash-canonical-json-repair-journal",
-      record_type: "AUTHORITY_CONSUMED", sequence: 0, authority_id: REPAIR_ID }),
-    JSON.stringify({ record_type: "REPAIR_COMPLETE", sequence: 1 }),
+      record_type: "AUTHORITY_CONSUMED", sequence: 0, authority_id: REPAIR_ID,
+      previous_provisioning_authority_id: PROVISION_ID,
+      previous_provisioning_journal_sha256: sha256(input.provisionBytes),
+      previous_provisioning_manifest_sha256: input.manifestSha256,
+      previous_provisioning_plan_sha256: canonicalSha256(input.plan),
+      installed_authorized_keys_sha256: input.authorizedKeysSha256,
+      installed_release_manifest_sha256: input.releaseManifestSha256,
+      target_path: input.target.path, target_sha256: input.target.sha256 }),
+    JSON.stringify({ record_type: "REPAIR_COMPLETE", sequence: 1,
+      target_path: input.target.path, target_sha256: input.target.sha256,
+      target_owner: "root", target_group: "root", target_mode: input.target.mode,
+      target_single_link: true, network_accessed: false, replay_epoch_initialized: false,
+      workload_executed: false, scheduler_activated: false }),
   ].join("\n") + "\n")
 }
 
@@ -134,8 +154,20 @@ function fixture(options: {
   const priorRelease = Buffer.from(`${JSON.stringify({ ...priorReleaseBody,
     release_manifest_sha256: canonicalSha256(priorReleaseBody) })}\n`)
   file(manifest.priorState.trustedReleaseManifestPath, priorRelease, 0, 0, 0o444)
-  const provisionBytes = provisioningJournal(manifest.priorState.provisioningManifestSha256)
-  const repairBytes = repairJournal()
+  const canonicalJson = manifest.priorState.installedFiles.find((item: any) => item.id === "canonical-json")
+  const planned = [
+    { type: "INSTALL_FILE", id: "bootstrap", path: manifest.priorState.installedFiles[0].path },
+    { type: "INSTALL_FILE", id: "authorized-keys", path: manifest.priorState.authorizedKeysPath },
+    { type: "INSTALL_FILE", id: "release-manifest", path: manifest.priorState.trustedReleaseManifestPath },
+  ]
+  const provisionBytes = provisioningJournal(manifest.priorState.provisioningManifestSha256, planned, {
+    bootstrap: manifest.priorState.installedFiles[0].sha256,
+    "authorized-keys": sha256(authorizedKeys),
+    "release-manifest": sha256(priorRelease),
+  })
+  const repairBytes = repairJournal({ manifestSha256: manifest.priorState.provisioningManifestSha256,
+    provisionBytes, plan: planned, authorizedKeysSha256: sha256(authorizedKeys),
+    releaseManifestSha256: sha256(priorRelease), target: canonicalJson })
   const provisionPath = `${manifest.priorState.provisioningJournalPrefix}${PROVISION_ID}.mutation-journal.jsonl`
   const repairPath = `${manifest.priorState.repairJournalPrefix}${REPAIR_ID}.journal.jsonl`
   file(provisionPath, provisionBytes, 0, 0, 0o600)
@@ -334,6 +366,25 @@ function run(value: ReturnType<typeof fixture>, mode: "dry-run" | "apply" = "dry
   })
 }
 
+function rewritePriorEvidence(value: ReturnType<typeof fixture>,
+  mutateProvisioning: (records: any[]) => void, mutateRepair: (records: any[]) => void = () => {}) {
+  const provisioningPath = `${value.manifest.priorState.provisioningJournalPrefix}${PROVISION_ID}.mutation-journal.jsonl`
+  const repairPath = `${value.manifest.priorState.repairJournalPrefix}${REPAIR_ID}.journal.jsonl`
+  const provisioning = value.entries.get(provisioningPath)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
+  mutateProvisioning(provisioning)
+  const provisioningBytes = Buffer.from(`${provisioning.map((record) => JSON.stringify(record)).join("\n")}\n`)
+  value.entries.get(provisioningPath)!.bytes = provisioningBytes
+  value.authority.priorProvisioningJournalSha256 = sha256(provisioningBytes)
+
+  const repair = value.entries.get(repairPath)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
+  repair[0].previous_provisioning_journal_sha256 = sha256(provisioningBytes)
+  repair[0].previous_provisioning_plan_sha256 = canonicalSha256(provisioning[0].planned_mutations)
+  mutateRepair(repair)
+  const repairBytes = Buffer.from(`${repair.map((record) => JSON.stringify(record)).join("\n")}\n`)
+  value.entries.get(repairPath)!.bytes = repairBytes
+  value.authority.priorRepairJournalSha256 = sha256(repairBytes)
+}
+
 describe("AEGIS standing hash replay-ledger one-shot upgrade", () => {
   it("pins the checked-in package to the exact reviewed runtime and installer release", () => {
     const manifest = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"))
@@ -443,6 +494,31 @@ describe("AEGIS standing hash replay-ledger one-shot upgrade", () => {
     const first = JSON.parse(value.entries.get(journalPath)!.bytes!.toString("utf8").split("\n")[0])
     expect(first).toMatchObject({ authority_id: PROVISION_ID,
       manifest_sha256: value.manifest.priorState.provisioningManifestSha256 })
+  })
+
+  it("rejects a hash-rebound prior journal with an incomplete mutation pair", () => {
+    const value = fixture()
+    rewritePriorEvidence(value, (records) => {
+      records.splice(2, 1)
+      records.forEach((record, index) => { record.sequence = index })
+    })
+    expect(() => run(value)).toThrow("AEGIS_REPLAY_UPGRADE_PRIOR_JOURNAL_INVALID")
+  })
+
+  it("rejects a hash-rebound prior journal whose declared plan differs from completion", () => {
+    const value = fixture()
+    rewritePriorEvidence(value, (records) => {
+      records[0].planned_mutations[0].path = "/untrusted"
+    })
+    expect(() => run(value)).toThrow("AEGIS_REPLAY_UPGRADE_PRIOR_JOURNAL_INVALID")
+  })
+
+  it("rejects a hash-rebound prior journal whose terminal safety flags are active", () => {
+    const value = fixture()
+    rewritePriorEvidence(value, (records) => {
+      records.at(-1).workload_executed = true
+    })
+    expect(() => run(value)).toThrow("AEGIS_REPLAY_UPGRADE_PRIOR_JOURNAL_INVALID")
   })
 
   it("rejects a prior provisioning-manifest path traversal before mutation", () => {

@@ -227,16 +227,66 @@ function verifyPriorJournals(io, manifest, authority) {
     provisioningRecords = provisioning.toString("utf8").trimEnd().split("\n").map(JSON.parse)
     repairRecords = repair.toString("utf8").trimEnd().split("\n").map(JSON.parse)
   } catch { fail("AEGIS_REPLAY_UPGRADE_PRIOR_JOURNAL_INVALID", "prior journal JSON is malformed") }
-  if (provisioningRecords[0]?.record_type !== "AUTHORITY_CONSUMED"
-    || provisioningRecords[0].authority_id !== authority.priorProvisioningAuthorityId
-    || provisioningRecords[0].manifest_sha256 !== manifest.priorState.provisioningManifestSha256
-    || provisioningRecords[0].package_id !== "aegis-standing-hash-provisioning-issue-595-v1"
-    || provisioningRecords.at(-1)?.record_type !== "APPLY_COMPLETE"
+  const consumed = provisioningRecords[0]
+  const complete = provisioningRecords.at(-1)
+  const mutationDescription = (record) => {
+    const description = { ...record }
+    delete description.record_type
+    delete description.sequence
+    return description
+  }
+  const started = provisioningRecords.filter(({ record_type }) => record_type === "MUTATION_STARTED")
+    .map(mutationDescription)
+  const completed = provisioningRecords.filter(({ record_type }) => record_type === "MUTATION_COMPLETED")
+    .map(mutationDescription)
+  const expectedFileSha256 = {
+    ...Object.fromEntries(manifest.priorState.installedFiles.map(({ id, sha256: digest }) => [id, digest])),
+    "authorized-keys": authority.priorAuthorizedKeysSha256,
+    "release-manifest": authority.priorReleaseManifestSha256,
+  }
+  const normalizedCompleted = completed.map((operation) => {
+    if (operation?.type !== "INSTALL_FILE") return operation
+    if (!exactKeys(operation, ["type", "id", "path", "sha256"])
+      || !DIGEST.test(operation.sha256 ?? "") || operation.sha256 !== expectedFileSha256[operation.id]) {
+      fail("AEGIS_REPLAY_UPGRADE_PRIOR_JOURNAL_INVALID", `prior file digest differs: ${operation?.id ?? "<invalid>"}`)
+    }
+    const planned = { ...operation }
+    delete planned.sha256
+    return planned
+  })
+  const repairConsumed = repairRecords[0]
+  const repairComplete = repairRecords[1]
+  const canonicalJson = manifest.priorState.installedFiles.find(({ id }) => id === "canonical-json")
+  if (provisioningRecords.length < 3 || consumed?.schema_version !== "1.0-aegis-standing-hash-mutation-journal"
+    || consumed.record_type !== "AUTHORITY_CONSUMED" || consumed.authority_id !== authority.priorProvisioningAuthorityId
+    || !DIGEST.test(consumed.manifest_sha256 ?? "")
+    || consumed.package_id !== "aegis-standing-hash-provisioning-issue-595-v1"
+    || !Array.isArray(consumed.planned_mutations)
+    || complete?.record_type !== "APPLY_COMPLETE" || complete.replay_epoch_initialized !== false
+    || complete.workload_executed !== false || complete.scheduler_activated !== false
+    || complete.completed_mutation_count !== completed.length
+    || provisioningRecords.length !== 2 + (completed.length * 2)
     || provisioningRecords.some((record, index) => record.sequence !== index)
     || provisioningRecords.some(({ record_type }) => record_type === "APPLY_FAILED_PARTIAL_STATE")
-    || repairRecords.length !== 2 || repairRecords[0]?.record_type !== "AUTHORITY_CONSUMED"
-    || repairRecords[0].authority_id !== authority.priorRepairAuthorityId
-    || repairRecords[1]?.record_type !== "REPAIR_COMPLETE" || repairRecords.some((record, index) => record.sequence !== index)) {
+    || !same(started, completed) || !same(consumed.planned_mutations, normalizedCompleted)
+    || completed.some((_description, index) => provisioningRecords[(index * 2) + 1]?.record_type !== "MUTATION_STARTED"
+      || provisioningRecords[(index * 2) + 2]?.record_type !== "MUTATION_COMPLETED")
+    || repairRecords.length !== 2 || repairRecords.some((record, index) => record.sequence !== index)
+    || repairConsumed?.schema_version !== "1.0-aegis-standing-hash-canonical-json-repair-journal"
+    || repairConsumed.record_type !== "AUTHORITY_CONSUMED" || repairConsumed.authority_id !== authority.priorRepairAuthorityId
+    || repairConsumed.previous_provisioning_authority_id !== authority.priorProvisioningAuthorityId
+    || repairConsumed.previous_provisioning_journal_sha256 !== authority.priorProvisioningJournalSha256
+    || repairConsumed.previous_provisioning_manifest_sha256 !== consumed.manifest_sha256
+    || repairConsumed.previous_provisioning_plan_sha256 !== canonicalSha256(consumed.planned_mutations)
+    || repairConsumed.installed_authorized_keys_sha256 !== authority.priorAuthorizedKeysSha256
+    || repairConsumed.installed_release_manifest_sha256 !== authority.priorReleaseManifestSha256
+    || repairConsumed.target_path !== canonicalJson?.path || repairConsumed.target_sha256 !== canonicalJson?.sha256
+    || repairComplete?.record_type !== "REPAIR_COMPLETE" || repairComplete.target_path !== canonicalJson?.path
+    || repairComplete.target_sha256 !== canonicalJson?.sha256 || repairComplete.target_owner !== "root"
+    || repairComplete.target_group !== "root" || repairComplete.target_mode !== canonicalJson?.mode
+    || repairComplete.target_single_link !== true || repairComplete.network_accessed !== false
+    || repairComplete.replay_epoch_initialized !== false || repairComplete.workload_executed !== false
+    || repairComplete.scheduler_activated !== false) {
     fail("AEGIS_REPLAY_UPGRADE_PRIOR_JOURNAL_INVALID", "prior provisioning and repair are not exact successful terminals")
   }
   return { provisioningPath, repairPath }
