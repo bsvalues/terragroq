@@ -113,7 +113,19 @@ def worker(task: str, targets: list[str], ws: Workspace, model,
             receipt.add("apply_failed", attempt=attempt, reason=msgs[-1])
             continue
 
-        vres = make_verifier(targets).run()
+        try:
+            vres = make_verifier(targets).run()
+        except Exception as exc:  # noqa: BLE001 - verifier faults must fail closed after edits
+            ws.restore(snap)
+            detail = (
+                f"verifier failed after edit; workspace restored: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            receipt.add("verify_error", attempt=attempt, reason=detail)
+            return RoleResult(
+                "worker", False, attempt, detail,
+                [], None, None, receipt.to_dict(),
+            )
         receipt.add("verify", attempt=attempt, ok=vres.ok, summary=vres.summary())
         if vres.ok:
             return RoleResult("worker", True, attempt, "verified",

@@ -121,18 +121,7 @@ _SAFE = {"ls", "pwd", "whoami", "id", "echo", "printf", "uname",
          "cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "stat",
          "diff", "cut", "tr", "which", "type", "printenv",
          "true", "false", "test", "basename", "dirname", "realpath", "readlink", "du", "df"}
-_SAFE_GIT = {"status", "diff", "log", "show", "rev-parse", "describe"}
 _SHELL_EXECUTION_OR_REDIRECTION = re.compile(r"\$\(|`|[<>]\(|[<>]")
-
-
-def _safe_git(seg) -> bool:
-    if len(seg.argv) < 2 or seg.argv[1] not in _SAFE_GIT:
-        return False
-    unsafe_options = {"--ext-diff", "--textconv", "--exec"}
-    return not any(
-        arg in unsafe_options or arg == "--output" or arg.startswith("--output=")
-        for arg in seg.argv[2:]
-    )
 
 
 def _safe_read(c: Command) -> bool:
@@ -149,8 +138,6 @@ def _safe_read(c: Command) -> bool:
     for seg in c.segments:
         n = seg.name
         if n in _SAFE:
-            continue
-        if n == "git" and _safe_git(seg):
             continue
         return False
     return True
