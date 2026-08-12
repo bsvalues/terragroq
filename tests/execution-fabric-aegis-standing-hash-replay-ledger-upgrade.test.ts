@@ -437,6 +437,15 @@ describe("AEGIS standing hash replay-ledger one-shot upgrade", () => {
       value.manifest.priorState.provisioningManifestPath))).toBe(true)
   })
 
+  it("rejects a prior provisioning-manifest path traversal before mutation", () => {
+    const value = fixture()
+    value.manifest.priorState.provisioningManifestPath = "../../untrusted.json"
+    value.manifestBytes = Buffer.from(`${canonicalizeUpgradeJcs(value.manifest)}\n`)
+    value.authority.manifestSha256 = sha256(value.manifestBytes)
+    expect(() => run(value)).toThrow("AEGIS_REPLAY_UPGRADE_MANIFEST_INVALID")
+    expect(value.entries.has(value.mutationJournal)).toBe(false)
+  })
+
   it("binds the privileged upgrader and replay initializer to the clean package checkout", () => {
     const value = fixture()
     expect(Object.keys(value.manifest.newRelease.installerBindings).sort()).toEqual([

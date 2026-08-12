@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 export const UPGRADE_MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-replay-ledger-upgrade.v1.json"
+export const PRIOR_PROVISIONING_MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-provisioning-package.v1.json"
 export const REPLAY_JOURNAL_PATH = "/var/lib/aegis-standing-hash-replay-journal.jsonl"
 export const NODE_LEASE_PATH = "/var/lib/williamos/fabric/ledger/resident-aegis-active.json"
 export const LEDGER_MUTATION_LOCK_PATH = "/var/lib/williamos/fabric/standing-hash-ledger/standing-hash-mutation.lock"
@@ -94,6 +95,7 @@ function validateManifest(manifest) {
     || manifest.repository !== "bsvalues/terragroq" || manifest.authority?.maximumAgeSeconds !== 900
     || manifest.authority?.singleUse !== true || manifest.authority?.consumeBeforeMutation !== true
     || !COMMIT.test(prior?.commit ?? "") || prior.releaseRoot !== `/opt/williamos/releases/${prior.commit}`
+    || prior.provisioningManifestPath !== PRIOR_PROVISIONING_MANIFEST_PATH
     || !DIGEST.test(prior?.provisioningManifestSha256 ?? "")
     || prior.trustedReleaseManifestPath !== "/etc/williamos/fabric/trusted-main-release.json"
     || prior.authorizedKeysPath !== "/home/williamos-fabric/.ssh/authorized_keys"
@@ -259,6 +261,9 @@ function inspectPriorState(io, manifest, authority, heldLocks = false) {
     fail("AEGIS_REPLAY_UPGRADE_ACCOUNT_INVALID", "williamos-fabric account identity differs")
   }
   const packagePath = path.posix.join(manifest.priorState.releaseRoot, manifest.priorState.provisioningManifestPath)
+  if (!packagePath.startsWith(`${manifest.priorState.releaseRoot}/`)) {
+    fail("AEGIS_REPLAY_UPGRADE_PRIOR_STATE_DRIFT", "prior provisioning manifest escaped the retained release")
+  }
   const priorPackageBytes = assertExactFile(io, packagePath, { sha256: manifest.priorState.provisioningManifestSha256 })
   const priorPackage = parseJson(priorPackageBytes, "AEGIS_REPLAY_UPGRADE_PRIOR_STATE_DRIFT", "prior provisioning manifest")
   const priorClosure = Object.fromEntries((priorPackage.reviewedRelease?.runtimeClosurePaths ?? []).map((relativePath) => [
