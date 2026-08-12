@@ -1,6 +1,7 @@
 """Offline self-test for the embedding bake-off. No model or endpoint required:
 verifies metric correctness on known inputs and runs the full pipeline end-to-end with the
 deterministic lexical backend (which also serves as the quality floor)."""
+import base64
 import hashlib
 import json
 import math
@@ -19,7 +20,7 @@ from bakeoff import (corpus_fingerprint, load_jsonl, main, reject_secret_fields,
                      validate_corpus_manifest)
 from embed import (cosine, embed_texts, lexical_embed, validate_endpoint_payload,
                    validate_sovereign_base_url)
-from evidence import build as build_evidence
+from evidence import build as build_evidence, canonical_payload
 
 def sha256_path(path):
     with open(path, "rb") as fh:
@@ -260,6 +261,81 @@ class TestEvidencePackage(unittest.TestCase):
             json.dump(result, fh)
         return corpus, paths, result
 
+    def make_attestation(self, root, corpus, paths, result):
+        with open(paths["model"], encoding="utf-8") as fh:
+            model = json.load(fh)
+        with open(paths["runtime"], encoding="utf-8") as fh:
+            runtime = json.load(fh)
+        with open(paths["host"], encoding="utf-8") as fh:
+            host = json.load(fh)
+        identity = {
+            "host": {
+                "node_id": host["node_id"],
+                "machine_id_sha256": host["machine_id_sha256"],
+                "inventory_snapshot_sha256": host["inventory_snapshot_sha256"],
+                "topology_id": host["topology_id"],
+            },
+            "model": {
+                "model_id": model["model_id"],
+                "revision": model["revision"],
+                "weights_sha256": model["weights_sha256"],
+            },
+            "runtime": {
+                "runtime_id": runtime["runtime_id"],
+                "version": runtime["version"],
+                "executable_sha256": runtime["executable_sha256"],
+            },
+        }
+        attestation = {
+            "schema_version": "1.0-r1b-software-execution-attestation",
+            "attestation_type": "SOFTWARE_ROOTED_EXECUTION_ATTESTATION",
+            "work_order_id": "WO-WILLIAMOS-SOVEREIGN-EMBEDDING-V1",
+            "artifact_bindings": {
+                "corpus_manifest": result["manifest"]["corpus_manifest"],
+                "corpus_fingerprint": result["manifest"]["corpus_fingerprint"],
+                "corpus_files": result["manifest"]["corpus_files"],
+                "result_bundle_sha256": hashlib.sha256(canonical_payload(result)).hexdigest(),
+                "model_manifest_sha256": sha256_path(paths["model"]),
+                "runtime_manifest_sha256": sha256_path(paths["runtime"]),
+                "host_manifest_sha256": sha256_path(paths["host"]),
+            },
+            "admission": {
+                "status": "ADMITTED",
+                "authority_id": "authority-704",
+                "scope_id": "scope-embedding-bakeoff",
+                "placement_id": "placement-aegis",
+                "request_id": "request-704-001",
+                "claim_id": "claim-704-001",
+                "lease_id": "lease-704-001",
+            },
+            "execution": {
+                "root_of_trust": "SOFTWARE",
+                "provider": "LOCAL_SOFTWARE_ROOTED",
+                "external_provider_used": False,
+                "fallback_used": False,
+                "scheduler_state": "disabled",
+                "pre_execution": identity,
+                "post_execution": json.loads(json.dumps(identity)),
+            },
+            "chronology": {
+                "authority_issued_at": "2026-08-12T18:00:00Z",
+                "request_admitted_at": "2026-08-12T18:01:00Z",
+                "lease_acquired_at": "2026-08-12T18:02:00Z",
+                "execution_started_at": "2026-08-12T18:03:00Z",
+                "execution_completed_at": "2026-08-12T18:04:00Z",
+                "attested_at": "2026-08-12T18:05:00Z",
+                "authority_expires_at": "2026-08-12T19:00:00Z",
+            },
+        }
+        path = os.path.join(root, "execution-attestation.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(attestation, fh)
+        return path, attestation
+
+    def write_attestation(self, path, value):
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(value, fh)
+
     def test_builds_four_standing_hash_targets(self):
         with tempfile.TemporaryDirectory() as root:
             corpus, paths, _result = self.make_valid_run(root)
@@ -283,6 +359,135 @@ class TestEvidencePackage(unittest.TestCase):
             self.assertNotIn("external_provider_used", package["safety"])
             self.assertEqual(targets["verification_scope"], "BYTE_INTEGRITY_ONLY")
             self.assertEqual(targets["execution_provenance_status"], "NOT_ATTESTED")
+
+    def test_valid_execution_attestation_promotes_truthful_package_flags(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, attestation = self.make_attestation(root, corpus, paths, result)
+            targets = build_evidence(
+                corpus, paths["model"], paths["runtime"], paths["host"], paths["result"],
+                os.path.join(root, "evidence"), attestation_path,
+            )
+            with open(os.path.join(targets["generation_path"], "evidence-package.json"),
+                      encoding="utf-8") as fh:
+                package = json.load(fh)
+            embedded = package["execution_attestation"]
+            canonical = canonical_payload(attestation)
+            self.assertEqual(base64.b64decode(embedded["canonical_bytes_base64"]), canonical)
+            self.assertEqual(embedded["sha256"], hashlib.sha256(canonical).hexdigest())
+            self.assertEqual(package["evidence_class"],
+                             "SOFTWARE_ROOTED_EXECUTION_ATTESTATION")
+            self.assertTrue(package["attestation"]["execution_attested"])
+            self.assertTrue(package["attestation"]["host_identity_attested"])
+            self.assertTrue(package["attestation"]["model_weights_attested"])
+            self.assertTrue(package["attestation"]["runtime_attested"])
+            self.assertFalse(package["attestation"]["declared_manifests_only"])
+            self.assertEqual(targets["execution_provenance_status"],
+                             "SOFTWARE_ROOTED_ATTESTED")
+
+    def test_attestation_rejects_result_and_manifest_mismatch(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, original = self.make_attestation(root, corpus, paths, result)
+            mutations = (
+                ("result bundle", lambda value: value["artifact_bindings"].update({
+                    "result_bundle_sha256": "0" * 64,
+                })),
+                ("manifest", lambda value: value["artifact_bindings"].update({
+                    "model_manifest_sha256": "0" * 64,
+                })),
+            )
+            for label, mutate in mutations:
+                with self.subTest(label=label):
+                    candidate = json.loads(json.dumps(original))
+                    mutate(candidate)
+                    self.write_attestation(attestation_path, candidate)
+                    with self.assertRaisesRegex(ValueError, "artifact bindings do not match"):
+                        build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                                       paths["result"], os.path.join(root, "evidence"),
+                                       attestation_path)
+
+    def test_attestation_rejects_missing_fields(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, attestation = self.make_attestation(root, corpus, paths, result)
+            del attestation["admission"]["lease_id"]
+            self.write_attestation(attestation_path, attestation)
+            with self.assertRaisesRegex(ValueError, "admission must contain exactly"):
+                build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                               paths["result"], os.path.join(root, "evidence"), attestation_path)
+
+    def test_attestation_rejects_secret_fields(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, attestation = self.make_attestation(root, corpus, paths, result)
+            attestation["admission"]["api_token"] = "must-not-be-retained"
+            self.write_attestation(attestation_path, attestation)
+            with self.assertRaisesRegex(ValueError, "secret-like field"):
+                build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                               paths["result"], os.path.join(root, "evidence"), attestation_path)
+
+    def test_attestation_rejects_external_provider_and_fallback(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, original = self.make_attestation(root, corpus, paths, result)
+            mutations = (
+                ("external", lambda value: value["execution"].update({
+                    "external_provider_used": True,
+                })),
+                ("fallback", lambda value: value["execution"].update({"fallback_used": True})),
+            )
+            for label, mutate in mutations:
+                with self.subTest(label=label):
+                    candidate = json.loads(json.dumps(original))
+                    mutate(candidate)
+                    self.write_attestation(attestation_path, candidate)
+                    with self.assertRaisesRegex(ValueError, "forbids"):
+                        build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                                       paths["result"], os.path.join(root, "evidence"),
+                                       attestation_path)
+
+    def test_attestation_rejects_scheduler(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, attestation = self.make_attestation(root, corpus, paths, result)
+            attestation["execution"]["scheduler_state"] = "enabled"
+            self.write_attestation(attestation_path, attestation)
+            with self.assertRaisesRegex(ValueError, "scheduler_state disabled"):
+                build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                               paths["result"], os.path.join(root, "evidence"), attestation_path)
+
+    def test_attestation_rejects_identity_drift(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, attestation = self.make_attestation(root, corpus, paths, result)
+            attestation["execution"]["post_execution"]["model"]["model_id"] = "drifted"
+            self.write_attestation(attestation_path, attestation)
+            with self.assertRaisesRegex(ValueError, "pre/post identity"):
+                build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                               paths["result"], os.path.join(root, "evidence"), attestation_path)
+
+    def test_attestation_rejects_stale_or_invalid_chronology(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, original = self.make_attestation(root, corpus, paths, result)
+            mutations = (
+                ("out-of-order", lambda value: value["chronology"].update({
+                    "execution_started_at": "2026-08-12T18:04:30Z",
+                })),
+                ("expired", lambda value: value["chronology"].update({
+                    "authority_expires_at": "2026-08-12T18:03:30Z",
+                })),
+            )
+            for label, mutate in mutations:
+                with self.subTest(label=label):
+                    candidate = json.loads(json.dumps(original))
+                    mutate(candidate)
+                    self.write_attestation(attestation_path, candidate)
+                    with self.assertRaisesRegex(ValueError, "stale or out of order"):
+                        build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                                       paths["result"], os.path.join(root, "evidence"),
+                                       attestation_path)
 
     def test_fabricated_result_is_rejected_without_partial_generation(self):
         with tempfile.TemporaryDirectory() as root:
