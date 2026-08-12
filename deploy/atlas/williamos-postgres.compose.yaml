@@ -1,0 +1,39 @@
+# Sovereign WilliamOS Postgres — runs on ATLAS, isolated from TerraFusion's tf-postgres.
+#
+# TerraFusion Postgres stays on :5432 and is NOT touched by this stack. This service binds
+# a DIFFERENT host port (15432) and uses its own named volume and credentials.
+#
+# Credentials are supplied at runtime via an env file (NOT committed). Create one next to
+# this file (e.g. atlas.env) with 0600 perms — it is git-ignored via *.env; never commit it:
+#   POSTGRES_USER=williamos
+#   POSTGRES_PASSWORD=<generated-strong-password>
+#   POSTGRES_DB=williamos
+# Then:  docker compose --env-file atlas.env -f williamos-postgres.compose.yaml up -d
+#
+# The DATABASE_URL the app uses is then:
+#   postgres://williamos:<password>@<atlas-host>:15432/williamos?sslmode=disable   (lab-internal)
+name: williamos-data
+
+services:
+  williamos-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: williamos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in the env file}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the env file}
+      POSTGRES_DB: ${POSTGRES_DB:-williamos}
+    ports:
+      # host 15432 -> container 5432. Bind to loopback + LAN as needed; keep off 5432 (TF).
+      - "15432:5432"
+    volumes:
+      - williamos_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  williamos_pgdata:
+    name: williamos_pgdata
