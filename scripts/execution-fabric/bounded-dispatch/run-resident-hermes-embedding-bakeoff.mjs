@@ -27,6 +27,7 @@ const REVIEWED_SOURCE_BINDINGS = Object.freeze([
   [EMBEDDING_CONTRACT.bakeoffPath, "bakeoff_sha256"],
   [EMBEDDING_CONTRACT.embedPath, "embed_sha256"],
   [EMBEDDING_CONTRACT.metricsPath, "metrics_sha256"],
+  [EMBEDDING_CONTRACT.canonicalJsonPath, "canonical_json_sha256"],
   [EMBEDDING_CONTRACT.adapterPath, "adapter_sha256"],
   [EMBEDDING_CONTRACT.runnerPath, "runner_sha256"],
 ])
@@ -43,14 +44,18 @@ function ensureExactRoot(root, expectedRelative) {
   return real
 }
 
-function readFixedJson(filePath, root, label) {
+function readFixedBytes(filePath, root, label) {
   const realRoot = ensureExactRoot(root, path.basename(root))
   const real = fs.realpathSync(filePath)
   const relative = path.relative(realRoot, real)
   if (relative.startsWith("..") || path.isAbsolute(relative) || fs.lstatSync(filePath).isSymbolicLink()) {
     throw new Error(`${label} is outside the fixed resident HERMES packet root`)
   }
-  return JSON.parse(fs.readFileSync(real, "utf8").replace(/^\uFEFF/, ""))
+  return fs.readFileSync(real)
+}
+
+function readFixedJson(filePath, root, label) {
+  return JSON.parse(readFixedBytes(filePath, root, label).toString("utf8").replace(/^\uFEFF/, ""))
 }
 
 export function proveTrustedAdmission({ admission, admissionSha256 }) {
@@ -111,7 +116,7 @@ export function proveTrustedAdmission({ admission, admissionSha256 }) {
 export async function claimSingleUse({ request_id, request_sha256, admission_sha256, maximum_attempts }) {
   if (process.platform !== "win32") throw new Error("resident HERMES embedding execution requires Windows")
   const root = ensureExactRoot(LEDGER_ROOT, "embedding-bakeoff-ledger")
-  const key = sha256(canonicalizeJcs({ request_id, request_sha256, admission_sha256 }))
+  const key = admission_sha256
   const claimPath = path.join(root, `claim-${key}.json`)
   const claimedAt = new Date().toISOString()
   let descriptor
@@ -125,34 +130,61 @@ export async function claimSingleUse({ request_id, request_sha256, admission_sha
   return { claimed: true, claim_id: `claim-${key.slice(0, 24)}`, claimed_at: claimedAt }
 }
 
+function holderIsAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid < 1) return true
+  try { process.kill(pid, 0); return true } catch (error) { return error?.code !== "ESRCH" }
+}
+
 export async function acquireExclusiveLease(binding) {
   const leasePath = path.join(ensureExactRoot(LEDGER_ROOT, "embedding-bakeoff-ledger"), "active-embedding-lease.json")
   const acquiredAt = new Date().toISOString()
   const leaseId = `lease-${sha256(canonicalizeJcs({ ...binding, acquired_at: acquiredAt })).slice(0, 24)}`
-  let descriptor
-  try {
-    descriptor = fs.openSync(leasePath, "wx")
-    fs.writeFileSync(descriptor, `${JSON.stringify({ schema_version: "1.0-hermes-embedding-exclusive-lease", lease_id: leaseId, ...binding, acquired_at: acquiredAt })}\n`, "utf8")
-  } catch (error) {
-    if (error?.code === "EEXIST") return { acquired: false, lease_id: leaseId, fencing_token: binding.fencing_token, acquired_at: acquiredAt }
-    throw error
-  } finally { if (descriptor !== undefined) fs.closeSync(descriptor) }
-  return { acquired: true, lease_id: leaseId, fencing_token: binding.fencing_token, acquired_at: acquiredAt }
+  let staleLeaseSha256 = null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let descriptor
+    try {
+      descriptor = fs.openSync(leasePath, "wx")
+      fs.writeFileSync(descriptor, `${JSON.stringify({ schema_version: "1.0-hermes-embedding-exclusive-lease", lease_id: leaseId, ...binding, holder_pid: process.pid, acquired_at: acquiredAt })}\n`, "utf8")
+      return { acquired: true, lease_id: leaseId, fencing_token: binding.fencing_token, acquired_at: acquiredAt, stale_lease_recovered: staleLeaseSha256 !== null, stale_lease_sha256: staleLeaseSha256 }
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error
+      if (attempt > 0 || fs.lstatSync(leasePath).isSymbolicLink()) {
+        return { acquired: false, lease_id: leaseId, fencing_token: binding.fencing_token, acquired_at: acquiredAt, stale_lease_recovered: false, stale_lease_sha256: null }
+      }
+      const retainedBytes = fs.readFileSync(leasePath)
+      let retained
+      try { retained = JSON.parse(retainedBytes.toString("utf8")) } catch {
+        return { acquired: false, lease_id: leaseId, fencing_token: binding.fencing_token, acquired_at: acquiredAt, stale_lease_recovered: false, stale_lease_sha256: null }
+      }
+      const retainedFields = ["schema_version", "lease_id", "claim_id", "request_sha256", "admission_sha256", "node_id", "fencing_token", "valid_until", "holder_pid", "acquired_at"]
+      const exactRetainedFields = retained && typeof retained === "object" && !Array.isArray(retained)
+        && JSON.stringify(Object.keys(retained).sort()) === JSON.stringify(retainedFields.sort())
+      const canonicalExpiry = typeof retained?.valid_until === "string" && !Number.isNaN(Date.parse(retained.valid_until))
+        && new Date(retained.valid_until).toISOString() === retained.valid_until
+      if (!exactRetainedFields || retained.schema_version !== "1.0-hermes-embedding-exclusive-lease" || !canonicalExpiry
+        || Date.parse(retained.valid_until) > Date.now() || holderIsAlive(retained.holder_pid)) {
+        return { acquired: false, lease_id: leaseId, fencing_token: binding.fencing_token, acquired_at: acquiredAt, stale_lease_recovered: false, stale_lease_sha256: null }
+      }
+      staleLeaseSha256 = sha256(retainedBytes)
+      fs.renameSync(leasePath, path.join(path.dirname(leasePath), `stale-embedding-lease-${staleLeaseSha256}.json`))
+    } finally { if (descriptor !== undefined) fs.closeSync(descriptor) }
+  }
+  throw new Error("exclusive lease recovery did not converge")
 }
 
 export async function releaseExclusiveLease({ lease_id, claim_id, fencing_token }) {
   const leasePath = path.join(ensureExactRoot(LEDGER_ROOT, "embedding-bakeoff-ledger"), "active-embedding-lease.json")
   const retained = JSON.parse(fs.readFileSync(leasePath, "utf8"))
-  if (retained.lease_id !== lease_id || retained.claim_id !== claim_id || retained.fencing_token !== fencing_token) return false
+  if (retained.lease_id !== lease_id || retained.claim_id !== claim_id || retained.fencing_token !== fencing_token || retained.holder_pid !== process.pid) return false
   fs.unlinkSync(leasePath)
   return true
 }
 
 export async function collectTrustedHostAttestation({ admission }) {
   const attestation = readFixedJson(HOST_ATTESTATION_PATH, PACKET_ROOT, "trusted host attestation")
-  if (sha256(fs.readFileSync(MODEL_MANIFEST_PATH)) !== admission.model.manifest_sha256
-    || sha256(fs.readFileSync(RUNTIME_MANIFEST_PATH)) !== admission.runtime.manifest_sha256
-    || sha256(fs.readFileSync(HOST_MANIFEST_PATH)) !== admission.placement.host_manifest_sha256) {
+  if (sha256(readFixedBytes(MODEL_MANIFEST_PATH, PACKET_ROOT, "model manifest")) !== admission.model.manifest_sha256
+    || sha256(readFixedBytes(RUNTIME_MANIFEST_PATH, PACKET_ROOT, "runtime manifest")) !== admission.runtime.manifest_sha256
+    || sha256(readFixedBytes(HOST_MANIFEST_PATH, PACKET_ROOT, "host manifest")) !== admission.placement.host_manifest_sha256) {
     throw new Error("fixed model, runtime, or host manifest bytes do not match admission")
   }
   return attestation
@@ -217,6 +249,7 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
 }
 
 async function main() {
+  if (process.platform !== "win32") throw new Error("resident HERMES embedding execution requires Windows")
   if (process.argv.length !== 2) throw new Error("resident HERMES embedding runner accepts no arguments")
   const request = readFixedJson(REQUEST_PATH, PACKET_ROOT, "embedding request")
   const admission = readFixedJson(ADMISSION_PATH, PACKET_ROOT, "embedding admission")

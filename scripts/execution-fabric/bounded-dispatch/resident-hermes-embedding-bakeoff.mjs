@@ -18,6 +18,7 @@ export const EMBEDDING_CONTRACT = Object.freeze({
   bakeoffPath: "scripts/embedding-bakeoff/bakeoff.py",
   embedPath: "scripts/embedding-bakeoff/embed.py",
   metricsPath: "scripts/embedding-bakeoff/metrics.py",
+  canonicalJsonPath: "scripts/execution-fabric/canonical-json.mjs",
   adapterPath: "scripts/execution-fabric/bounded-dispatch/resident-hermes-embedding-bakeoff.mjs",
   runnerPath: "scripts/execution-fabric/bounded-dispatch/run-resident-hermes-embedding-bakeoff.mjs",
   permissionPath: "config/execution-fabric/agent-forge-embedding-bakeoff-permission.json",
@@ -77,6 +78,7 @@ function admittedSourceClosure(admission) {
     [EMBEDDING_CONTRACT.bakeoffPath]: admission.runtime.bakeoff_sha256,
     [EMBEDDING_CONTRACT.embedPath]: admission.runtime.embed_sha256,
     [EMBEDDING_CONTRACT.metricsPath]: admission.runtime.metrics_sha256,
+    [EMBEDDING_CONTRACT.canonicalJsonPath]: admission.runtime.canonical_json_sha256,
     [EMBEDDING_CONTRACT.adapterPath]: admission.runtime.adapter_sha256,
     [EMBEDDING_CONTRACT.runnerPath]: admission.runtime.runner_sha256,
   }
@@ -149,10 +151,10 @@ function validateAdmission(admission) {
   for (const key of ["model_id", "revision", "license", "source"]) identifier(admission.model[key], `admission.model.${key}`)
   digest(admission.model.weights_sha256, "admission.model.weights_sha256")
   digest(admission.model.manifest_sha256, "admission.model.manifest_sha256")
-  exactKeys(admission.runtime, ["runtime_id", "version", "executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"], "admission.runtime")
+  exactKeys(admission.runtime, ["runtime_id", "version", "executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "canonical_json_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"], "admission.runtime")
   identifier(admission.runtime.runtime_id, "admission.runtime.runtime_id")
   identifier(admission.runtime.version, "admission.runtime.version")
-  for (const key of ["executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"]) digest(admission.runtime[key], `admission.runtime.${key}`)
+  for (const key of ["executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "canonical_json_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"]) digest(admission.runtime[key], `admission.runtime.${key}`)
   exactKeys(admission.placement, ["node_id", "inventory_snapshot_sha256", "host_manifest_sha256", "endpoint_contract"], "admission.placement")
   if (admission.placement.node_id !== EMBEDDING_CONTRACT.nodeId || admission.placement.endpoint_contract !== "ollama-loopback-api-embed-v1") {
     fail("PLACEMENT_BINDING_MISMATCH", "admission is not for the fixed resident HERMES endpoint contract")
@@ -205,6 +207,8 @@ function prepareOrThrow({ repositoryRoot, request, admission, evaluatedAt, prove
   if (embed.sha256 !== admission.runtime.embed_sha256) fail("SOURCE_CLOSURE_MISMATCH", "reviewed embedding module bytes do not match admission")
   const metrics = readConfined(repositoryRoot, EMBEDDING_CONTRACT.metricsPath, "reviewed metrics module")
   if (metrics.sha256 !== admission.runtime.metrics_sha256) fail("SOURCE_CLOSURE_MISMATCH", "reviewed metrics module bytes do not match admission")
+  const canonicalJson = readConfined(repositoryRoot, EMBEDDING_CONTRACT.canonicalJsonPath, "reviewed canonical JSON module")
+  if (canonicalJson.sha256 !== admission.runtime.canonical_json_sha256) fail("SOURCE_CLOSURE_MISMATCH", "reviewed canonical JSON module bytes do not match admission")
   const adapter = readConfined(repositoryRoot, EMBEDDING_CONTRACT.adapterPath, "reviewed adapter")
   if (adapter.sha256 !== admission.runtime.adapter_sha256) fail("ADAPTER_BINDING_MISMATCH", "reviewed adapter bytes do not match admission")
   const runner = readConfined(repositoryRoot, EMBEDDING_CONTRACT.runnerPath, "reviewed runner")
@@ -228,6 +232,7 @@ function prepareOrThrow({ repositoryRoot, request, admission, evaluatedAt, prove
     corpus_source_commit: admission.corpus_source_commit, execution_commit: admission.execution_commit,
     corpus_manifest_sha256: corpus.sha256, evaluator_sha256: evaluator.sha256,
     bakeoff_sha256: bakeoff.sha256, embed_sha256: embed.sha256, metrics_sha256: metrics.sha256,
+    canonical_json_sha256: canonicalJson.sha256,
     adapter_sha256: adapter.sha256, runner_sha256: runner.sha256, permission_set_sha256: permission.sha256,
     node_id: EMBEDDING_CONTRACT.nodeId, endpoint_contract: admission.placement.endpoint_contract,
     model_id: admission.model.model_id, runtime_id: admission.runtime.runtime_id, prepared_at: evaluatedAt,
@@ -261,11 +266,12 @@ export async function executeResidentHermesEmbeddingBakeoff(options) {
   exactKeys(claim, ["claimed", "claim_id", "claimed_at"], "single-use claim")
   if (claim.claimed !== true) fail("REQUEST_ALREADY_CONSUMED", "single-use claim was not acquired")
   identifier(claim.claim_id, "claim.claim_id"); timestamp(claim.claimed_at, "claim.claimed_at")
-  const requestedLease = { claim_id: claim.claim_id, request_sha256: prepared.preparation.request_sha256, admission_sha256: prepared.preparation.admission_sha256, node_id: EMBEDDING_CONTRACT.nodeId, fencing_token: 1 }
+  const requestedLease = { claim_id: claim.claim_id, request_sha256: prepared.preparation.request_sha256, admission_sha256: prepared.preparation.admission_sha256, node_id: EMBEDDING_CONTRACT.nodeId, fencing_token: 1, valid_until: prepared.admission.expires_at }
   const lease = await options.acquireExclusiveLease(requestedLease)
-  exactKeys(lease, ["acquired", "lease_id", "fencing_token", "acquired_at"], "exclusive lease")
+  exactKeys(lease, ["acquired", "lease_id", "fencing_token", "acquired_at", "stale_lease_recovered", "stale_lease_sha256"], "exclusive lease")
   if (lease.acquired !== true) fail("CONCURRENCY_LIMIT_REACHED", "resident HERMES embedding lease is occupied")
   identifier(lease.lease_id, "lease.lease_id"); integer(lease.fencing_token, "lease.fencing_token", 1, Number.MAX_SAFE_INTEGER); timestamp(lease.acquired_at, "lease.acquired_at")
+  if (typeof lease.stale_lease_recovered !== "boolean" || (lease.stale_lease_sha256 !== null && !SHA256.test(lease.stale_lease_sha256))) fail("LEASE_RECOVERY_INVALID", "lease recovery evidence is malformed")
   if (lease.fencing_token !== requestedLease.fencing_token) {
     try { await options.releaseExclusiveLease({ lease_id: lease.lease_id, claim_id: claim.claim_id, fencing_token: lease.fencing_token }) } catch {}
     fail("LEASE_FENCE_MISMATCH", "lease fencing token does not match the single admitted attempt")
@@ -293,7 +299,7 @@ export async function executeResidentHermesEmbeddingBakeoff(options) {
     if (output.external_provider_used !== false || output.fallback_used !== false) fail("FORBIDDEN_SIDE_EFFECT", "evaluator reported fallback or external-provider activity")
     const completedAt = timestamp(options.clock(), "trusted completion clock")
     if (Date.parse(completedAt) < Date.parse(startedAt) || Date.parse(completedAt) >= Date.parse(prepared.admission.expires_at) || Date.parse(completedAt) - Date.parse(startedAt) > prepared.admission.limits.timeout_ms) fail("COMPLETION_CHRONOLOGY_INVALID", "completion exceeds chronology, admission, or timeout")
-    result = { schema_version: "1.0-hermes-embedding-bakeoff-result", status: "COMPLETED", result: "SUCCEEDED", request_id: options.request.request_id, work_order_id: EMBEDDING_CONTRACT.workOrderId, admission_id: prepared.admission.admission_id, request_sha256: prepared.preparation.request_sha256, admission_sha256: prepared.preparation.admission_sha256, corpus_source_commit: EMBEDDING_CONTRACT.corpusSourceCommit, execution_commit: prepared.admission.execution_commit, corpus_manifest_sha256: EMBEDDING_CONTRACT.corpusManifestSha256, corpus_fingerprint: EMBEDDING_CONTRACT.corpusFingerprint, model: structuredClone(prepared.admission.model), runtime: structuredClone(prepared.admission.runtime), host_attestation: structuredClone(hostAttestation), result_bundle: { sha256: output.result_sha256, byte_length: output.result_bytes.byteLength }, claim: { claim_id: claim.claim_id, claimed_at: claim.claimed_at, maximum_attempts: 1 }, lease: { lease_id: lease.lease_id, fencing_token: lease.fencing_token, acquired_at: lease.acquired_at }, chronology: { prepared_at: preparedAt, started_at: startedAt, completed_at: completedAt }, endpoint_contract: prepared.admission.placement.endpoint_contract, authority_scope: { canonical_vector_write_authorized: false, database_mutation_authorized: false }, scheduler_activated: false, autonomous_dispatch: false, external_provider_used: false, fallback_used: false, lease_released: false }
+    result = { schema_version: "1.0-hermes-embedding-bakeoff-result", status: "COMPLETED", result: "SUCCEEDED", request_id: options.request.request_id, work_order_id: EMBEDDING_CONTRACT.workOrderId, admission_id: prepared.admission.admission_id, request_sha256: prepared.preparation.request_sha256, admission_sha256: prepared.preparation.admission_sha256, corpus_source_commit: EMBEDDING_CONTRACT.corpusSourceCommit, execution_commit: prepared.admission.execution_commit, corpus_manifest_sha256: EMBEDDING_CONTRACT.corpusManifestSha256, corpus_fingerprint: EMBEDDING_CONTRACT.corpusFingerprint, model: structuredClone(prepared.admission.model), runtime: structuredClone(prepared.admission.runtime), host_attestation: structuredClone(hostAttestation), result_bundle: { sha256: output.result_sha256, byte_length: output.result_bytes.byteLength }, claim: { claim_id: claim.claim_id, claimed_at: claim.claimed_at, maximum_attempts: 1 }, lease: { lease_id: lease.lease_id, fencing_token: lease.fencing_token, acquired_at: lease.acquired_at, stale_lease_recovered: lease.stale_lease_recovered, stale_lease_sha256: lease.stale_lease_sha256 }, chronology: { prepared_at: preparedAt, started_at: startedAt, completed_at: completedAt }, endpoint_contract: prepared.admission.placement.endpoint_contract, authority_scope: { canonical_vector_write_authorized: false, database_mutation_authorized: false }, scheduler_activated: false, autonomous_dispatch: false, external_provider_used: false, fallback_used: false, lease_released: false }
   } catch (error) { executionError = annotate(error, { dispatchAttempted, claimId: claim.claim_id, leaseId: lease.lease_id, fencingToken: lease.fencing_token, leaseReleased: false }); throw executionError } finally {
     try { const release = await options.releaseExclusiveLease({ lease_id: lease.lease_id, claim_id: claim.claim_id, fencing_token: lease.fencing_token }); released = release === true } catch { released = false }
     if (executionError) executionError.leaseReleased = released

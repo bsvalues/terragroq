@@ -31,6 +31,7 @@ function fixture() {
   copy(EMBEDDING_CONTRACT.bakeoffPath)
   copy(EMBEDDING_CONTRACT.embedPath)
   copy(EMBEDDING_CONTRACT.metricsPath)
+  copy(EMBEDDING_CONTRACT.canonicalJsonPath)
   const evaluator = fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.evaluatorPath))
   const permissionSha256 = sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.permissionPath)))
   const admission: any = {
@@ -63,6 +64,7 @@ function fixture() {
       bakeoff_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.bakeoffPath))),
       embed_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.embedPath))),
       metrics_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.metricsPath))),
+      canonical_json_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.canonicalJsonPath))),
       adapter_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.adapterPath))),
       runner_sha256: sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.runnerPath))),
       manifest_sha256: "4".repeat(64),
@@ -101,6 +103,7 @@ function fixture() {
       [EMBEDDING_CONTRACT.bakeoffPath]: admitted.runtime.bakeoff_sha256,
       [EMBEDDING_CONTRACT.embedPath]: admitted.runtime.embed_sha256,
       [EMBEDDING_CONTRACT.metricsPath]: admitted.runtime.metrics_sha256,
+      [EMBEDDING_CONTRACT.canonicalJsonPath]: admitted.runtime.canonical_json_sha256,
       [EMBEDDING_CONTRACT.adapterPath]: admitted.runtime.adapter_sha256,
       [EMBEDDING_CONTRACT.runnerPath]: admitted.runtime.runner_sha256,
     }),
@@ -156,7 +159,7 @@ function runtime(value = fixture()) {
     ...value,
     clock: () => times.shift()!,
     claimSingleUse: vi.fn(async () => ({ claimed: true, claim_id: "claim-issue-704-test", claimed_at: "2026-08-12T20:00:00.100Z" })),
-    acquireExclusiveLease: vi.fn(async () => ({ acquired: true, lease_id: "lease-issue-704-test", fencing_token: 1, acquired_at: "2026-08-12T20:00:00.150Z" })),
+    acquireExclusiveLease: vi.fn(async () => ({ acquired: true, lease_id: "lease-issue-704-test", fencing_token: 1, acquired_at: "2026-08-12T20:00:00.150Z", stale_lease_recovered: false, stale_lease_sha256: null })),
     releaseExclusiveLease: vi.fn(async () => true),
     collectTrustedHostAttestation: vi.fn(async () => attestation(value.admission)),
     invokeFixedEvaluator: vi.fn(async () => output(value.admission)),
@@ -228,8 +231,8 @@ describe("resident HERMES embedding bake-off adapter", () => {
 
   it("rejects occupied or incorrectly fenced leases before host collection", async () => {
     for (const lease of [
-      { acquired: false, lease_id: "lease-occupied", fencing_token: 1, acquired_at: "2026-08-12T20:00:00.150Z" },
-      { acquired: true, lease_id: "lease-wrong-fence", fencing_token: 2, acquired_at: "2026-08-12T20:00:00.150Z" },
+      { acquired: false, lease_id: "lease-occupied", fencing_token: 1, acquired_at: "2026-08-12T20:00:00.150Z", stale_lease_recovered: false, stale_lease_sha256: null },
+      { acquired: true, lease_id: "lease-wrong-fence", fencing_token: 2, acquired_at: "2026-08-12T20:00:00.150Z", stale_lease_recovered: false, stale_lease_sha256: null },
     ]) {
       const value = runtime(); value.acquireExclusiveLease.mockResolvedValue(lease)
       await expect(executeResidentHermesEmbeddingBakeoff(value)).rejects.toThrow(lease.acquired ? "LEASE_FENCE_MISMATCH" : "CONCURRENCY_LIMIT_REACHED")
@@ -266,7 +269,7 @@ describe("resident HERMES embedding bake-off adapter", () => {
 
   it("rejects non-monotonic chronology and an unconfirmed lease release", async () => {
     const chronology = runtime()
-    chronology.acquireExclusiveLease.mockResolvedValue({ acquired: true, lease_id: "lease-time", fencing_token: 1, acquired_at: "2026-08-12T20:00:00.050Z" })
+    chronology.acquireExclusiveLease.mockResolvedValue({ acquired: true, lease_id: "lease-time", fencing_token: 1, acquired_at: "2026-08-12T20:00:00.050Z", stale_lease_recovered: false, stale_lease_sha256: null })
     await expect(executeResidentHermesEmbeddingBakeoff(chronology)).rejects.toThrow("CLAIM_LEASE_CHRONOLOGY_INVALID")
 
     const release = runtime(); release.releaseExclusiveLease.mockResolvedValue(false)
@@ -286,11 +289,15 @@ describe("resident HERMES embedding bake-off adapter", () => {
     expect(source).toContain("refs/heads/main")
     expect(source).toContain("resident executable source closure differs from the admitted commit")
     expect(source).toContain("GIT_CONFIG_NOSYSTEM: \"1\"")
+    expect(source).toContain("const key = admission_sha256")
+    expect(source).toContain("stale-embedding-lease-")
+    expect(source).toContain('process.platform !== "win32"')
+    expect(source).toContain("readFixedBytes(MODEL_MANIFEST_PATH")
     expect(source).not.toMatch(/process\.env|https:\/\/|\/api\/generate|child_process\.exec|execSync|fetch\(/)
   })
 
   it("rejects drift in every imported evaluator source before claim", () => {
-    for (const relativePath of [EMBEDDING_CONTRACT.bakeoffPath, EMBEDDING_CONTRACT.embedPath, EMBEDDING_CONTRACT.metricsPath]) {
+    for (const relativePath of [EMBEDDING_CONTRACT.bakeoffPath, EMBEDDING_CONTRACT.embedPath, EMBEDDING_CONTRACT.metricsPath, EMBEDDING_CONTRACT.canonicalJsonPath]) {
       const value = fixture()
       fs.appendFileSync(path.join(value.repositoryRoot, relativePath), "\n# drift\n")
       expect(prepareResidentHermesEmbeddingBakeoff({ ...value, evaluatedAt: "2026-08-12T20:00:00.000Z" }))
