@@ -36,7 +36,10 @@ const SHA256 = /^[a-f0-9]{64}$/
 const SSH_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}$/
 const MAX_AUTHORITY_AGE_MS = 15 * 60 * 1000
 const MAX_FILE_BYTES = 1024 * 1024
-const RECOVERABLE_LEGACY_MANIFEST_SHA256 = "614a0723adae356aa729966b29aeae7dcd5859c78ab99beda1dc256c6dd0e9fd"
+const RECOVERABLE_LEGACY_MANIFEST_SHA256 = Object.freeze([
+  "614a0723adae356aa729966b29aeae7dcd5859c78ab99beda1dc256c6dd0e9fd",
+  "5774d4e98ba2620a9bf0433c00c795f69357ef473e91d85e6e8338ada8c2821c",
+])
 
 export const canonicalize = canonicalizeJcs
 
@@ -286,7 +289,7 @@ function inspectRecoverableJournal(fsApi, manifestSha256) {
     && consumed.recordType === "AUTHORITY_CONSUMED" && consumed.sequence === 0
     && GUID.test(consumed.authorityId ?? "") && SHA256.test(consumed.authoritySha256 ?? "")
     && consumed.packageId === PACKAGE_ID
-    && [manifestSha256, RECOVERABLE_LEGACY_MANIFEST_SHA256].includes(consumed.manifestSha256)
+    && [manifestSha256, ...RECOVERABLE_LEGACY_MANIFEST_SHA256].includes(consumed.manifestSha256)
     && canonicalTimestamp(consumed.consumedAt)
     && consumed.privateKeyPath === PRIVATE_KEY_PATH && consumed.publicKeyPath === PUBLIC_KEY_PATH
     && consumed.evidencePath === EVIDENCE_PATH

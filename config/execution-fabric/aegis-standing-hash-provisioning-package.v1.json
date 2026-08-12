@@ -367,12 +367,12 @@
     },
     {
       "path": "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs",
-      "sha256": "2c69221e56659d3f358c8a81236e59dc61e8994bae7a98b558c6648fee5021d6",
+      "sha256": "92a0f36e4af132340e6fa3d8bf32ac1e716f52f08779530792c7dc8dc5216d1d",
       "textNormalization": "LF"
     },
     {
       "path": "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs",
-      "sha256": "a6614aa312ca0d2247536b35a24fb704cc186e9339b3ca8badc76e67c623017e",
+      "sha256": "71ca5a166b5ddeb0e7b087530d1dd3448d0b42b5b33fd69ff4f4c545fa5b701f",
       "textNormalization": "LF"
     }
   ]
