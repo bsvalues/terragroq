@@ -21,3 +21,6 @@ docs/reports/shadow-admission/*.json text eol=lf
 docs/reports/shadow-admission/*.md text eol=lf
 docs/reports/bounded-dispatch/*.json text eol=lf
 docs/reports/bounded-dispatch/aegis-inputs/*.json text eol=lf
+worker-tier/**/*.py text eol=lf
+worker-tier/**/*.sh text eol=lf
+worker-tier/**/*.md text eol=lf
