@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0-r1b-corpus",
+  "corpus_id": "williamos-r1b-adversarial-v1",
+  "status": "FROZEN",
+  "documents": 49,
+  "queries": 80,
+  "calibration_query_ids": [
+    "q01",
+    "q02",
+    "q03",
+    "q04",
+    "q05",
+    "q06",
+    "q07",
+    "q08",
+    "q09",
+    "q10",
+    "q11",
+    "q12",
+    "q37",
+    "q38"
+  ],
+  "documents_sha256": "6cc1a2f6f07a681bfc3dc85349d2b2531a1f90e7bc48d4e58ab774d7999f3df5",
+  "queries_sha256": "e18e9667f4d6b6eaf88d70d50e1af4dcc6c0574ebaa6195ef4fb8d237e1dfa29",
+  "corpus_fingerprint": "ee6177d86d905ccf3402aa248f1b6a724bcbcc0cf9067aad207f1616c22c0318"
+}
