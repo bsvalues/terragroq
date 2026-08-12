@@ -118,6 +118,13 @@ function runRelay(encoded: string, input: string, env: NodeJS.ProcessEnv) {
   })
 }
 
+function streamedRelayBootstrap(expectedDigest: string) {
+  const source = fs.readFileSync(controller, "utf8")
+  const match = source.match(/\$relayBootstrap = @'\r?\n([\s\S]*?)\r?\n'@/)
+  if (!match) throw new Error("streamed relay bootstrap is absent")
+  return match[1].replace("__RELAY_SHA__", expectedDigest)
+}
+
 function isolatedProgramDataEnv(programData: string, extra: NodeJS.ProcessEnv = {}) {
   const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
   for (const key of Object.keys(env)) if (key.toLowerCase() === "programdata") delete env[key]
@@ -137,8 +144,39 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(source).toContain("$script:activationStarted=$true;$started=InvokeActivation")
     expect(source).toContain("resources:{canonicalProfileEquivalent:false,...packet.resourceLimits}")
     expect(source).toContain("let result=contract.bindRemoteDevPacket")
+    expect(source).toContain("$transportInput = @{ relayGzip = $relayGzipB64")
+    expect(source).not.toContain("Replace('__RELAY_GZIP__'")
+    expect(streamedRelayBootstrap("a".repeat(64))).not.toContain("$psi.ArgumentList.Add")
+    expect(source).toContain("$expected='__RELAY_SHA__'")
+    expect(source).toContain("$relayBootstrap = $relayBootstrap.Replace('__RELAY_SHA__', $relaySha256)")
+    expect(source).toContain("$p.WaitForExit(5400000)")
     expect(source).toContain("if($stdout.Trim()){ExitTerminalOutput $stdout.Trim()}")
     expect(source).toContain("CLEANUP_RECOVERY_EXHAUSTED';SaveState;ExitTerminalOutput")
+  })
+
+  it.runIf(process.platform === "win32")("runs under Windows PowerShell 5.1 and rejects a swapped relay plus matching attacker digest", () => {
+    const goodRelay = Buffer.from("[Console]::Out.Write('RELAY_OK');exit 7", "utf8")
+    const goodDigest = crypto.createHash("sha256").update(goodRelay).digest("hex")
+    const goodEnvelope = JSON.stringify({
+      relayGzip: zlib.gzipSync(goodRelay).toString("base64"),
+      relayInput: Buffer.from("").toString("base64"),
+      relaySha256: goodDigest,
+    })
+    const encoded = Buffer.from(streamedRelayBootstrap(goodDigest), "utf16le").toString("base64")
+    const success = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { input: goodEnvelope, encoding: "utf8", timeout: 15_000 })
+    expect(success.status, success.stderr).toBe(7)
+    expect(success.stdout).toBe("RELAY_OK")
+
+    const swappedRelay = Buffer.from("[Console]::Out.Write('ATTACKER_RELAY');exit 0", "utf8")
+    const swappedDigest = crypto.createHash("sha256").update(swappedRelay).digest("hex")
+    const swappedEnvelope = JSON.stringify({
+      relayGzip: zlib.gzipSync(swappedRelay).toString("base64"),
+      relayInput: Buffer.from("").toString("base64"),
+      relaySha256: swappedDigest,
+    })
+    const rejected = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { input: swappedEnvelope, encoding: "utf8", timeout: 15_000 })
+    expect(rejected.status).toBe(64)
+    expect(rejected.stdout).not.toContain("ATTACKER_RELAY")
   })
   it("blocks before SSH while the trusted-main proof scope is inactive", () => {
     const value = fixture()
