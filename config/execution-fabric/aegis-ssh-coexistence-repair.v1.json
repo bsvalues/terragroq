@@ -66,12 +66,12 @@
   "installer": {
     "sourcePath": "scripts/execution-fabric/provision/repair-aegis-ssh-coexistence.mjs",
     "installedPath": "/usr/local/libexec/williamos-aegis-ssh-coexistence-repair.mjs",
-    "sha256": "3884688f5b60504ca48ff559d31a48ac7c8cc63b52166d5e2e976af63c7504d5"
+    "sha256": "3a213367aa81d93fd1501f4e761c93557c939e54ab94c0d3a8ba4aa99f7ae65c"
   },
   "launcher": {
     "sourcePath": "scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh",
     "executedPath": "/usr/local/share/williamos/aegis-ssh-coexistence-repair-bundle/scripts/execution-fabric/provision/launch-aegis-ssh-coexistence-repair.sh",
-    "sha256": "0e811d87224b2389bc739f9dd7cb9c7c759ad156c4a39d0ab066056c6e7db303",
+    "sha256": "578a11ebb04f619fb1cf1eaa105e99398f7a739bd844c5faa4b41eb781396f74",
     "owner": "root",
     "group": "root",
     "mode": "0555"
@@ -134,7 +134,7 @@
     "mode": "0600"
   },
   "failedRecovery": {
-    "operation": "SETTLE_FAILED_RECOVERY",
+    "operations": ["SETTLE_FAILED_RECOVERY", "SETTLE_POST_MUTATION"],
     "failedAuthorityId": "babd50b8-b42c-4fef-bd4f-39c152256ddc",
     "failedAuthoritySha256": "f01b973bad66b1facd92e116f476ec854a6b6632de5ea28c163ee1cceff53623",
     "failedManifestSha256": "3aa8f73203cbf7e5b89c91cbbdc421e2d2eeef3e00bd3a085d4c2715f4267761",

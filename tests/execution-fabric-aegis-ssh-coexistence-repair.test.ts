@@ -54,6 +54,7 @@ type Options = {
   sourceChangesDuringRead?: boolean,
   authorizedKeysDirectory?: "exact" | "wrong-mode" | "file", failDirectoryRemoval?: boolean,
   daemonDrift?: boolean,
+  missingReloadEvidence?: boolean,
   failAfterProofIntent?: boolean, failAfterProofCreate?: boolean,
 }
 
@@ -196,6 +197,12 @@ function fixture(options: Options = {}) {
     sshDaemonIdentity: () => options.daemonDrift
       ? { mainPid: 4322, startTimestampMonotonic: "987654322" }
       : { mainPid: 4321, startTimestampMonotonic: "987654321" },
+    sshReloadEvidence: (_target: string, daemon: any) => {
+      if (options.missingReloadEvidence) throw Object.assign(new Error("reload absent"), { code: "AEGIS_SSH_REPAIR_RELOAD_EVIDENCE_INVALID" })
+      return { daemonIdentity: daemon, configCtime: "2026-08-12T16:40:18.000Z",
+        reloadAt: "2026-08-12T16:40:18.305Z", ipv4ListeningAt: "2026-08-12T16:40:18.324Z",
+        ipv6ListeningAt: "2026-08-12T16:40:18.325Z" }
+    },
     sshSessionEvidence: () => ({ sourceAddress: "192.168.88.9", sourcePort: 42123,
       targetAddress: "192.168.88.6", targetPort: 22, socketInode: "173400", loginUid: 1000, auditSessionId: 734,
       sshdAncestorPid: 4000, sshdAncestorStartTimeTicks: "987650000",
@@ -330,7 +337,7 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     ])
     expect(liveManifest.kernelLock).toEqual({ path: KERNEL_LOCK_PATH, owner: "root", group: "root", mode: "0600", mechanism: "FLOCK_INHERITED_FD" })
     expect(liveManifest.failedRecovery).toEqual({
-      operation: "SETTLE_FAILED_RECOVERY",
+      operations: ["SETTLE_FAILED_RECOVERY", "SETTLE_POST_MUTATION"],
       failedAuthorityId: "babd50b8-b42c-4fef-bd4f-39c152256ddc",
       failedAuthoritySha256: "f01b973bad66b1facd92e116f476ec854a6b6632de5ea28c163ee1cceff53623",
       failedManifestSha256: "3aa8f73203cbf7e5b89c91cbbdc421e2d2eeef3e00bd3a085d4c2715f4267761",
@@ -568,7 +575,7 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     expect(installerSource).toContain('openedAfter = fs.fstatSync(fd, { bigint: true })')
   })
 
-  it("settles only the exact consumed babd recovery after an independent normal SSH proof with unchanged daemon identity", () => {
+  it("settles exact post-mutation babd state without rewriting or reloading after an independent normal SSH proof", () => {
     const options: Options = {}
     const value = fixture(options)
     const failedId = "babd50b8-b42c-4fef-bd4f-39c152256ddc"
@@ -583,7 +590,7 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     }
     value.entries.set(failedJournal, { type: "file", bytes: recordBytes(failedFirst), uid: 0, gid: 0, mode: 0o600, direct: true, nlink: 1 })
     const recoveryAuthority = {
-      schemaVersion: 1, operation: "SETTLE_FAILED_RECOVERY",
+      schemaVersion: 1, operation: "SETTLE_POST_MUTATION",
       authorityId: "22222222-2222-4222-8222-222222222222", repairId: manifest.repairId,
       manifestSha256: sha256(manifestBytes), machineIdSha256: manifest.identity.machineIdSha256,
       failedAuthorityId: failedId, failedAuthoritySha256: failedFirst.authority_sha256,
@@ -595,11 +602,17 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
       issuedAt: "2026-08-12T20:00:00.000Z", expiresAt: "2026-08-12T20:10:00.000Z",
       resumeExpiresAt: "2026-08-12T20:30:00.000Z", singleUse: true, consumed: false,
     }
+    value.entries.set(CONFIG_PATH, { type: "file", bytes: Buffer.from(assetBytes), uid: 0, gid: 0, mode: 0o444, direct: true, nlink: 1 })
+    value.entries.set(AUTHORIZED_KEYS_ROOT, { type: "directory", uid: 0, gid: 0, mode: 0o755, direct: true, nlink: 1 })
+    value.entries.set(STANDING_ROOT_KEY_PATH, { type: "file", bytes: standingBytes(), uid: 0, gid: 0, mode: 0o444, direct: true, nlink: 1 })
     const invoke = () => repairAegisSshCoexistence({ manifest, manifestBytes, authority: recoveryAuthority,
       mode: "apply", io: value.io as any, assetBytes, assetSourcePath: `/bundle/${REVIEWED_CONFIG_ASSET}`,
       installerBytes, launcherBytes, standingKeyBinding: fixtureStandingBinding,
       entrypointSha256: manifest.standingEntrypoint.sha256, clock: value.nextTime,
       challengeNonce: () => "cd".repeat(32), machineIdentitySha256: manifest.identity.machineIdSha256 })
+    options.missingReloadEvidence = true
+    expectCode(invoke, "AEGIS_SSH_REPAIR_RELOAD_EVIDENCE_INVALID")
+    options.missingReloadEvidence = false
     const waiting: any = invoke()
     expect(waiting).toMatchObject({ status: "AWAITING_RECOVERY_AUTH_PROBE", authority_consumed: true })
     options.daemonDrift = true
@@ -632,9 +645,18 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     options.failAfterProofCreate = false
     expect(produce()).toMatchObject({ status: "RECOVERY_AUTH_PROOF_RECORDED" })
     expect(invoke()).toMatchObject({ status: "FAILED_RECOVERY_SETTLED", daemon_identity_unchanged: true, normal_ssh_proven: true })
+    expect(value.events).not.toContain("RELOAD_SSHD")
+    expect(value.events).not.toContain("REPLACE_SSHD_CONFIG")
     expectCode(invoke, "AEGIS_SSH_REPAIR_AUTHORITY_REPLAY")
     const phases = value.entries.get(failedJournal)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
     expect(phases.map(({ record_type }) => record_type)).toEqual(["AUTHORITY_CONSUMED", "FAILED_PARTIAL", "FAILED_LOCK_RELEASE_PROVEN"])
+  })
+
+  it("refuses post-mutation settlement when a crash preceded the reviewed-config reload", () => {
+    const source = fs.readFileSync(path.join(root, INSTALLER_PATH), "utf8")
+    expect(source).toContain("sshReloadEvidence(CONFIG_PATH, daemon)")
+    expect(source).toContain("io.validateLiveSshd()")
+    expect(source).toContain("verifyEffective(io)")
   })
 
   it("creates the exact authorized_keys directory and records its transaction ownership", () => {
