@@ -405,6 +405,21 @@ function networkBoundaryMatches() {
     return listener.split(/\r?\n/).filter(Boolean).length === 1 && listener.includes("127.0.0.1:17734")
   } catch { return false }
 }
+export function inspectExactInertNetworkPredecessor(o) {
+  const keys=["firstReceiptExact","secondReceiptExact","nftSemanticExact","egressActiveEnabled","brokerInactiveDisabled","gitSocketInactiveDisabled","gitServiceInactive","listenerConnectionsAbsent","workerWorkspaceDispatchAbsent"]
+  return o && same(Object.keys(o).sort(),keys.sort()) && keys.every(key=>o[key]===true) ? "RECONCILE_EXACT_INERT_PREDECESSOR" : "DRIFT"
+}
+export function inspectNftTableList(stdout) {
+  return typeof stdout === "string" && stdout.split(/\r?\n/).includes("table inet williamos_aegis_remote_dev")
+}
+function exactInertNetworkPredecessor() {
+  try {
+    const worker=accountIds("williamos-fabric"), gitBroker=accountIds("williamos-git-broker"); if(!worker||!gitBroker) return false
+    const parsed=JSON.parse(run("/usr/sbin/nft",["-j","list","table","inet","williamos_aegis_remote_dev"])); const items=parsed.nftables.filter(item=>!item.metainfo).map(item=>{const copy=structuredClone(item);for(const value of Object.values(copy)) delete value.handle;return copy})
+    const unit=(name,active,enabled)=>run("/usr/bin/systemctl",["is-active",name],{statuses:[0,3]})===active&&run("/usr/bin/systemctl",["is-enabled",name],{statuses:[0,1,3]})===enabled
+    return inspectExactInertNetworkPredecessor({ firstReceiptExact:exactFile("/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/rollback-inert-53730e34-f199-49c0-8285-4567ea653730.json","a42ed3b6ea7afbdeb6a9b7085a0e77870aa61400aad1b6fec81681b4f8cf1d23",0,0,0o400), secondReceiptExact:exactFile("/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/partial-network-inert-6497fdbf-7e91-4e59-a1c1-65619278e14e.json","fabd986d038f5f9d68e272b0b7b74600caf9c07381ce26db9e6e72e35f7c35aa",0,0,0o400), nftSemanticExact:exactNftBoundaryJson(items,worker.uid,gitBroker.uid), egressActiveEnabled:unit("williamos-aegis-remote-dev-egress.service","active","enabled"), brokerInactiveDisabled:unit("williamos-aegis-remote-dev-broker.service","inactive","disabled"), gitSocketInactiveDisabled:unit("williamos-aegis-remote-dev-git-broker.socket","inactive","disabled"), gitServiceInactive:run("/usr/bin/systemctl",["is-active","williamos-aegis-remote-dev-git-broker.service"],{statuses:[3]})==="inactive", listenerConnectionsAbsent:run("/usr/bin/ss",["-H","-tn","sport = :17734 or dport = :17734"])===""&&run("/usr/bin/ss",["-H","-ltn","sport = :17734"])==="", workerWorkspaceDispatchAbsent:!activeProofWorkerExists()&&!lexists("/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001") }) === "RECONCILE_EXACT_INERT_PREDECESSOR"
+  } catch { return false }
+}
 function activeProofWorkerExists() {
   try {
     const active = run("/usr/bin/systemctl", ["list-units", "--all", "--plain", "--no-legend", "williamos-aegis-remote-dev-*.service"], { statuses: [0, 1] })
@@ -471,7 +486,7 @@ function observe(manifest, authority, trust) {
   const states = {
     RECONCILE_BOUNDED_IDENTITY: identityMatch && distinctBrokerIdentities ? "MATCH" : ids && (!distinctBrokerIdentities || !processState.proven || (processState.pids.length > 0 && !processState.onlyManager) || !brokerProcessState.proven || brokerProcessState.pids.length > 0 || !gitBrokerProcessState.proven || gitBrokerProcessState.pids.length > 0 || !noSudoCapability()) ? "DRIFT" : "ABSENT",
     INSTALL_ROOT_LAUNCH_ASSETS: rootAssets,
-    INSTALL_DUAL_STACK_BROKER_BOUNDARY: nft ? "MATCH" : (() => { try { const table = spawnSync("/usr/sbin/nft", ["list", "table", "inet", "williamos_aegis_remote_dev"], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV }); const active = ["williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service"].some((unit) => spawnSync("/usr/bin/systemctl", ["is-active", "--quiet", unit], { shell: false, timeout: 5000, env: FIXED_ENV }).status === 0); return table.status === 0 || active ? "DRIFT" : "ABSENT" } catch { return "DRIFT" } })(),
+    INSTALL_DUAL_STACK_BROKER_BOUNDARY: nft ? "MATCH" : exactInertNetworkPredecessor() ? "ABSENT" : (() => { try { const table = spawnSync("/usr/sbin/nft", ["list", "tables"], { encoding: "utf8", shell: false, timeout: 5000, env: FIXED_ENV }); const unitResults = ["williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service","williamos-aegis-remote-dev-git-broker.socket","williamos-aegis-remote-dev-git-broker.service"].map((unit) => spawnSync("/usr/bin/systemctl", ["is-active", unit], { shell: false, timeout: 5000, env: FIXED_ENV })); if(unitResults.some(result=>result.error||result.signal||!((result.status===0&&result.stdout==="active\n")||(result.status===3&&result.stdout==="inactive\n")))||table.error||table.signal||table.status!==0) return "DRIFT"; const tablePresent=inspectNftTableList(table.stdout); const active=unitResults.some(result=>result.status===0); const sockets=run("/usr/bin/ss",["-H","-tn","sport = :17734 or dport = :17734"]); return tablePresent || active || sockets!=="" ? "DRIFT" : "ABSENT" } catch { return "DRIFT" } })(),
     INSTALL_GITHUB_HOST_AUTH_BOUNDARY: githubMatch ? "MATCH" : fs.existsSync("/etc/williamos-fabric/github_known_hosts") || fs.existsSync("/etc/williamos-fabric/github-account.key") ? "DRIFT" : "ABSENT",
     RECONCILE_TRUSTED_REPOSITORIES: repositories,
     INSTALL_PINNED_TOOLCHAIN: toolchain,

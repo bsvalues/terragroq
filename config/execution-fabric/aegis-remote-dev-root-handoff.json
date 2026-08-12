@@ -252,7 +252,7 @@
     {
       "source": "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs",
       "destination": "/usr/local/libexec/williamos-aegis-root-os-adapter.mjs",
-      "sha256": "382cfc3091a47ac8a858fc5c86ffce7d44308f9961abaf402e8175ce88200e13",
+      "sha256": "a3b94ccaea7dc12f01c9ce247fe1219f479050cd1e4f24d81f2f55e8a4cdc4d5",
       "owner": "root",
       "group": "root",
       "mode": "0555"
