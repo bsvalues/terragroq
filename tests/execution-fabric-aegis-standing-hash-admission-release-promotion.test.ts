@@ -533,11 +533,11 @@ describe("AEGIS standing HASH admission release promotion", () => {
       priorState: { commit: "b1637a0d16394361dff74e1fb85851ba61f91235" },
       evidenceRelease: {
         sourceCommit: "b1637a0d16394361dff74e1fb85851ba61f91235",
-        admissionPath: "docs/reports/standing-dispatch/admission-issue-595-live-003.json",
+        admissionPath: "docs/reports/standing-dispatch/admission-issue-595-live-004.json",
       },
-      newRelease: { commit: "f7091ca18e174958fd658a08a6c5ec950fa95f19" },
+      newRelease: { commit: "76389b0f908853bdf851bfb584011bd030b0519d" },
       packageRelease: { commit: "05dad92db571fb4bf6d2bd1218621eb60277a836" },
-      install: { requestId: "issue-595-live-003" },
+      install: { requestId: "issue-595-live-004" },
     })
   })
 
