@@ -104,6 +104,9 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(inspectExactInertNetworkPredecessor(exact)).toBe("RECONCILE_EXACT_INERT_PREDECESSOR")
     expect(inspectExactInertNetworkPredecessor({ ...exact, egressEnabledInactive: false })).toBe("DRIFT")
     expect(inspectExactInertNetworkPredecessor({ ...exact, egressActiveEnabled: true })).toBe("DRIFT")
+    const adapter = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
+    expect(adapter).toContain("partial-network-inert-afd68274-062e-4b1e-8ff3-a5542898c8e4.json")
+    expect(adapter).toContain("a6e5222382cd23682fd9fb887d1baca186a7c2aeef48d8dd69f3a40eb15ef6a1")
   })
   it("binds a stable reviewed package while proving fresh-main ancestry and critical-byte equality", () => {
     const verifier = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"), "utf8")
