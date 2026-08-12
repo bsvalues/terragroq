@@ -1,9 +1,6 @@
 export type TrustedOriginSource =
   | "BETTER_AUTH_URL"
   | "BETTER_AUTH_TRUSTED_ORIGINS"
-  | "VERCEL_PROJECT_PRODUCTION_URL"
-  | "VERCEL_URL"
-  | "V0_RUNTIME_URL"
   | "development-default"
 
 export type TrustedOriginEntry = {
@@ -122,31 +119,19 @@ function addOrigin(
 }
 
 export function resolveAuthBaseUrl() {
-  return (
-    process.env.BETTER_AUTH_URL ??
-    (process.env.VERCEL_PROJECT_PRODUCTION_URL
-      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-      : process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : process.env.V0_RUNTIME_URL)
-  )
+  // Canonical self-hosted auth base URL. Vercel/v0 env fallbacks removed (#638 R4);
+  // configure BETTER_AUTH_URL (and BETTER_AUTH_TRUSTED_ORIGINS) explicitly.
+  return process.env.BETTER_AUTH_URL
 }
 
 function resolveAuthBaseUrlSource(): TrustedOriginSource | null {
-  if (process.env.BETTER_AUTH_URL) return "BETTER_AUTH_URL"
-  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return "VERCEL_PROJECT_PRODUCTION_URL"
-  if (process.env.VERCEL_URL) return "VERCEL_URL"
-  if (process.env.V0_RUNTIME_URL) return "V0_RUNTIME_URL"
-  return null
+  return process.env.BETTER_AUTH_URL ? "BETTER_AUTH_URL" : null
 }
 
 function trustedOriginEnvSignature() {
   return JSON.stringify({
     betterAuthUrl: process.env.BETTER_AUTH_URL ?? null,
     trustedOrigins: process.env.BETTER_AUTH_TRUSTED_ORIGINS ?? null,
-    vercelProjectProductionUrl: process.env.VERCEL_PROJECT_PRODUCTION_URL ?? null,
-    vercelUrl: process.env.VERCEL_URL ?? null,
-    v0RuntimeUrl: process.env.V0_RUNTIME_URL ?? null,
     nodeEnv: process.env.NODE_ENV ?? null,
   })
 }
@@ -187,17 +172,6 @@ export function resolveTrustedOriginConfig(): TrustedOriginConfig {
     )
   }
 
-  addOrigin(
-    origins,
-    invalidConfiguredOrigins,
-    process.env.VERCEL_PROJECT_PRODUCTION_URL,
-    "VERCEL_PROJECT_PRODUCTION_URL",
-    { hostnameOnly: true },
-  )
-  addOrigin(origins, invalidConfiguredOrigins, process.env.VERCEL_URL, "VERCEL_URL", {
-    hostnameOnly: true,
-  })
-  addOrigin(origins, invalidConfiguredOrigins, process.env.V0_RUNTIME_URL, "V0_RUNTIME_URL")
 
   if (process.env.NODE_ENV === "development") {
     addOrigin(origins, invalidConfiguredOrigins, "http://localhost:3000", "development-default")
