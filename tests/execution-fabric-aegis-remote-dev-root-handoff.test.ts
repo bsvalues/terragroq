@@ -156,6 +156,7 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     const expected = `from="192.168.88.9",${command} ${key}\n`
     const predecessor = `from="192.168.1.154",${command} ${key}\n`
     expect(inspectForcedCommandTransportReconciliation({ current: expected, expected, predecessor, currentMetadataExact: true })).toBe("MATCH")
+    expect(inspectForcedCommandTransportReconciliation({ current: expected, expected, predecessor, currentModePredecessorExact: true })).toBe("RECONCILE_EXACT_MODE_PREDECESSOR")
     expect(inspectForcedCommandTransportReconciliation({ current: expected, expected, predecessor, currentMetadataExact: false })).toBe("DRIFT")
     expect(inspectForcedCommandTransportReconciliation({ current: predecessor, expected, predecessor, predecessorMetadataExact: true })).toBe("RECONCILE_EXACT_PREDECESSOR")
     expect(inspectForcedCommandTransportReconciliation({ current: predecessor, expected, predecessor, predecessorMetadataExact: false })).toBe("DRIFT")
@@ -165,7 +166,9 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     const adapterSource = fs.readFileSync(path.join(root, "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"), "utf8")
     expect(adapterSource).toContain("exactFile(snapshot, sha(Buffer.from(predecessor)), 0, 0, 0o400)")
     expect(adapterSource).toContain("exactFile(temporary, sha(Buffer.from(line)), 0, 0, 0o444)")
-    expect(adapterSource).toContain('current: currentMetadataExact ? expected : predecessorMetadataExact ? predecessor : "OCCUPIED_UNTRUSTED"')
+    expect(adapterSource).toContain("currentModePredecessorExact")
+    expect(adapterSource).toContain('state === "RECONCILE_EXACT_MODE_PREDECESSOR"')
+    expect(adapterSource).toContain("fs.chmodSync(destination, 0o444)")
     expect(adapterSource).toContain("const stagedParent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(stagedParent)")
   })
 
