@@ -3,6 +3,7 @@ verifies metric correctness on known inputs and runs the full pipeline end-to-en
 deterministic lexical backend (which also serves as the quality floor)."""
 import base64
 import hashlib
+import io
 import json
 import math
 import os
@@ -10,12 +11,14 @@ import shutil
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import metrics as M
+import fabric_measure as F
 from bakeoff import (corpus_fingerprint, load_jsonl, main, reject_secret_fields, run,
                      validate_corpus_manifest)
 from embed import (cosine, embed_texts, lexical_embed, validate_endpoint_payload,
@@ -218,6 +221,118 @@ class TestEndpointBoundary(unittest.TestCase):
             with self.subTest(url=url):
                 with self.assertRaisesRegex(ValueError, "invalid port"):
                     validate_sovereign_base_url(url)
+
+
+class TestFabricMeasurementAdapter(unittest.TestCase):
+    class FakeResponse:
+        def __init__(self, payload, status=200, headers=None):
+            self.payload = json.dumps(payload).encode("utf-8")
+            self.status = status
+            self.headers = headers or {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, limit):
+            return self.payload[:limit]
+
+    def make_envelope(self):
+        return {
+            "schema_version": "1.0-r1b-fabric-measurement-envelope",
+            "model": "test-model",
+            "model_manifest": {
+                "schema_version": "1", "model_id": "test-model", "revision": "exact",
+                "weights_sha256": "1" * 64, "license": "Apache-2.0", "source": "fixture",
+                "dimension": 2,
+            },
+            "runtime_manifest": {
+                "schema_version": "1", "runtime_id": "ollama", "version": "1",
+                "executable_sha256": "2" * 64, "endpoint_contract": "ollama-embed-v1",
+            },
+            "host_manifest": {
+                "schema_version": "1", "node_id": "hermes-node",
+                "machine_id_sha256": "3" * 64,
+                "inventory_snapshot_sha256": "4" * 64, "topology_id": "resident",
+                "endpoint_hosts": ["127.0.0.1"],
+            },
+        }
+
+    def test_fabric_measurement_envelope_requires_exact_validated_shape(self):
+        envelope = self.make_envelope()
+        self.assertIs(F.validate_envelope(envelope), envelope)
+        mutations = (
+            lambda value: value.update({"extra": True}),
+            lambda value: value["model_manifest"].pop("revision"),
+            lambda value: value["runtime_manifest"].update({"api_token": "secret"}),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                candidate = json.loads(json.dumps(envelope))
+                mutate(candidate)
+                with self.assertRaises(ValueError):
+                    F.validate_envelope(candidate)
+
+    def test_fabric_measurement_stdin_rejects_non_envelope_fail_closed(self):
+        original_stdin, original_stdout, original_stderr = F.sys.stdin, F.sys.stdout, F.sys.stderr
+        stdout, stderr = io.StringIO(), io.StringIO()
+        try:
+            F.sys.stdin = SimpleNamespace(buffer=io.BytesIO(b'{}'))
+            F.sys.stdout, F.sys.stderr = stdout, stderr
+            self.assertEqual(F.main(), 2)
+        finally:
+            F.sys.stdin, F.sys.stdout, F.sys.stderr = original_stdin, original_stdout, original_stderr
+        self.assertEqual(stdout.getvalue(), "")
+        error = json.loads(stderr.getvalue())
+        self.assertEqual(error["status"], "FAILED_CLOSED")
+        self.assertFalse(error["external_provider_used"])
+        self.assertFalse(error["fallback_used"])
+        self.assertFalse(error["scheduler_activated"])
+        self.assertFalse(error["autonomous_dispatch"])
+
+    def test_fabric_measurement_uses_only_fixed_loopback_route(self):
+        captured = []
+
+        def opener(request, timeout):
+            captured.append((request, timeout))
+            return self.FakeResponse({"model": "test-model", "embeddings": [[3.0, 4.0]]})
+
+        self.assertEqual(F.invoke_fixed_loopback("test-model", ["hello"], opener=opener),
+                         [[0.6, 0.8]])
+        request, timeout = captured[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/embed")
+        self.assertEqual(timeout, F.TIMEOUT_SECONDS)
+        self.assertEqual(json.loads(request.data), {"model": "test-model", "input": ["hello"]})
+        self.assertEqual(request.get_method(), "POST")
+
+    def test_fabric_measurement_converts_ollama_payload_before_validation(self):
+        payload = {"model": "test-model", "embeddings": [[2.0, 0.0], [0.0, 5.0]]}
+        opener = lambda _request, timeout: self.FakeResponse(payload)
+        self.assertEqual(F.invoke_fixed_loopback("test-model", ["a", "b"], opener=opener),
+                         [[1.0, 0.0], [0.0, 1.0]])
+
+    def test_fabric_measurement_rejects_embedding_count_drift(self):
+        payload = {"model": "test-model", "embeddings": [[1.0, 0.0]]}
+        opener = lambda _request, timeout: self.FakeResponse(payload)
+        with self.assertRaisesRegex(ValueError, "1 rows for 2 inputs"):
+            F.invoke_fixed_loopback("test-model", ["a", "b"], opener=opener)
+
+    def test_fabric_measurement_rejects_dimension_drift_across_batches(self):
+        responses = iter((
+            {"model": "test-model", "embeddings": [[1.0, 0.0]] * F.BATCH_SIZE},
+            {"model": "test-model", "embeddings": [[1.0, 0.0, 0.0]]},
+        ))
+        opener = lambda _request, timeout: self.FakeResponse(next(responses))
+        with self.assertRaisesRegex(ValueError, "dimension changed"):
+            F.invoke_fixed_loopback("test-model", ["text"] * (F.BATCH_SIZE + 1), opener=opener)
+
+    def test_fabric_measurement_rejects_model_drift(self):
+        payload = {"model": "other-model", "embeddings": [[1.0, 0.0]]}
+        opener = lambda _request, timeout: self.FakeResponse(payload)
+        with self.assertRaisesRegex(ValueError, "model does not match"):
+            F.invoke_fixed_loopback("test-model", ["a"], opener=opener)
 
 
 class TestEvidencePackage(unittest.TestCase):
