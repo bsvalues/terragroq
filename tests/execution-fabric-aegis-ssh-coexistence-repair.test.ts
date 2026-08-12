@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import {
   AUTHORITY_ROOT,
+  AUTHORIZED_KEYS_ROOT,
   CONFIG_PATH,
   HOME_KEY_PATH,
   INSTALLER_PATH,
@@ -24,6 +25,8 @@ import {
   canonicalizeRepairJcs,
   main,
   repairAegisSshCoexistence,
+  recordRecoverySshProof,
+  inspectSshSessionEvidence,
   sshCoexistenceRepairErrorEvidence,
   validateAegisSshCoexistenceRepairManifest,
 } from "../scripts/execution-fabric/provision/repair-aegis-ssh-coexistence.mjs"
@@ -49,6 +52,9 @@ type Options = {
   inactiveAfterMutation?: boolean, entrypointMode?: number, failAcquirePath?: string,
   kernelLockHeld?: boolean, activeWorker?: boolean, untrustedParents?: boolean,
   sourceChangesDuringRead?: boolean,
+  authorizedKeysDirectory?: "exact" | "wrong-mode" | "file", failDirectoryRemoval?: boolean,
+  daemonDrift?: boolean,
+  failAfterProofIntent?: boolean, failAfterProofCreate?: boolean,
 }
 
 const sha256 = (bytes: Buffer | string) => crypto.createHash("sha256").update(bytes).digest("hex")
@@ -87,6 +93,9 @@ function fixture(options: Options = {}) {
   file(HOME_KEY_PATH, options.standingBytes ?? standingBytes(), 999, 987, options.standingMode ?? 0o600)
   file(STANDING_ENTRYPOINT_PATH, fixtureEntrypointBytes, 0, 0, options.entrypointMode ?? 0o555)
   directory(manifest.inactivity.ticketDirectory, 0, 987, 0o3770)
+  if (options.authorizedKeysDirectory === "exact") directory(AUTHORIZED_KEYS_ROOT, 0, 0, 0o755)
+  if (options.authorizedKeysDirectory === "wrong-mode") directory(AUTHORIZED_KEYS_ROOT, 0, 0, 0o777)
+  if (options.authorizedKeysDirectory === "file") file(AUTHORIZED_KEYS_ROOT, Buffer.from("occupied\n"), 0, 0, 0o755)
   if (options.occupiedPath) file(options.occupiedPath, Buffer.from("foreign\n"), 0, 0, 0o444)
 
   const authority = {
@@ -184,6 +193,17 @@ function fixture(options: Options = {}) {
       challengeIssuedAt: challenge.challenge_issued_at,
       authenticatedAt: new Date(Date.parse(challenge.challenge_issued_at) + 1).toISOString(),
     }),
+    sshDaemonIdentity: () => options.daemonDrift
+      ? { mainPid: 4322, startTimestampMonotonic: "987654322" }
+      : { mainPid: 4321, startTimestampMonotonic: "987654321" },
+    sshSessionEvidence: () => ({ sourceAddress: "192.168.88.9", sourcePort: 42123,
+      targetAddress: "192.168.88.6", targetPort: 22, socketInode: "173400", loginUid: 1000, auditSessionId: 734,
+      sshdAncestorPid: 4000, sshdAncestorStartTimeTicks: "987650000",
+      sshdAncestorCmdlineSha256: "a".repeat(64) }),
+    recoveryAuthProof: (target: string) => {
+      const entry = entries.get(target)
+      return entry?.bytes ? JSON.parse(entry.bytes.toString("utf8")) : null
+    },
     acquireLock: (target: string, bytes: Buffer, uid: number, gid: number, mode: number, resume: boolean) => {
       if (options.failAcquirePath === target) throw Object.assign(new Error("reservation busy"), { code: "LOCK_OCCUPIED" })
       if (entries.has(target)) {
@@ -210,11 +230,34 @@ function fixture(options: Options = {}) {
       events.push(`JOURNAL_${record.record_type}`)
       const entry = entries.get(target)!
       entry.bytes = Buffer.concat([entry.bytes!, recordBytes(record)])
+      if (record.record_type === "NORMAL_SSH_PROOF_INTENT" && options.failAfterProofIntent && !injected.has("proof-intent")) {
+        injected.add("proof-intent"); throw Object.assign(new Error("crash after proof intent"), { code: "INJECTED_PROOF_INTENT_CRASH" })
+      }
+    },
+    ensureDirectoryExact: (target: string, uid: number, gid: number, mode: number, resumeOwnedPartial = false) => {
+      const current = entries.get(target)
+      if (current) {
+        if (resumeOwnedPartial && current.type === "directory" && current.uid === uid && current.gid === gid && current.mode === 0o700) {
+          current.mode = mode; events.push("RECOVER_AUTHORIZED_KEYS_DIRECTORY"); return true
+        }
+        if (current.type !== "directory" || current.uid !== uid || current.gid !== gid || current.mode !== mode) throw Object.assign(new Error("directory drift"), { code: "DIRECTORY_DRIFT" })
+        return false
+      }
+      entries.set(target, { type: "directory", uid, gid, mode, direct: true, nlink: 1 })
+      events.push("CREATE_AUTHORIZED_KEYS_DIRECTORY")
+      return true
+    },
+    removeDirectoryExactEmpty: (target: string) => {
+      if (options.failDirectoryRemoval) throw Object.assign(new Error("directory not empty"), { code: "DIRECTORY_NOT_EMPTY" })
+      entries.delete(target); events.push("ROLLBACK_AUTHORIZED_KEYS_DIRECTORY")
     },
     createFileExclusive: (target: string, bytes: Buffer, uid: number, gid: number, mode: number) => {
       maybeFail("COPY_STANDING_KEY_TO_ROOT")
       if (entries.has(target)) throw Object.assign(new Error("exists"), { code: "EEXIST" })
       events.push("COPY_STANDING_KEY_TO_ROOT"); file(target, bytes, uid, gid, mode)
+      if (target.endsWith(".recovery.json") && options.failAfterProofCreate && !injected.has("proof-create")) {
+        injected.add("proof-create"); throw Object.assign(new Error("crash after proof create"), { code: "INJECTED_PROOF_CREATE_CRASH" })
+      }
       after("COPY_STANDING_KEY_TO_ROOT")
     },
     atomicReplace: (target: string, bytes: Buffer, uid: number, gid: number, mode: number) => {
@@ -286,6 +329,22 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
       { path: "/var/lib/williamos/fabric/standing-hash-ledger", uid: 999, gid: 987, mode: "0700" },
     ])
     expect(liveManifest.kernelLock).toEqual({ path: KERNEL_LOCK_PATH, owner: "root", group: "root", mode: "0600", mechanism: "FLOCK_INHERITED_FD" })
+    expect(liveManifest.failedRecovery).toEqual({
+      operation: "SETTLE_FAILED_RECOVERY",
+      failedAuthorityId: "babd50b8-b42c-4fef-bd4f-39c152256ddc",
+      failedAuthoritySha256: "f01b973bad66b1facd92e116f476ec854a6b6632de5ea28c163ee1cceff53623",
+      failedManifestSha256: "3aa8f73203cbf7e5b89c91cbbdc421e2d2eeef3e00bd3a085d4c2715f4267761",
+      normalSshProofSuffix: ".recovery.json", maximumResumeSeconds: 1800,
+    })
+  })
+
+  it("rejects forged or wrong server-observed SSH socket provenance", () => {
+    const value = fixture()
+    const exact = value.io.sshSessionEvidence()
+    expect(inspectSshSessionEvidence(exact)).toBe(true)
+    expect(inspectSshSessionEvidence({ ...exact, sourceAddress: "192.168.88.10" })).toBe(false)
+    expect(inspectSshSessionEvidence({ ...exact, targetAddress: "127.0.0.1" })).toBe(false)
+    expect(inspectSshSessionEvidence({ ...exact, socketInode: "0" })).toBe(false)
   })
 
   it("dry-runs staged validation without authority consumption or host mutation", () => {
@@ -300,7 +359,7 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
   it("copies only the standing key, replaces only the config, and commits after live proof", () => {
     const value = fixture()
     expect(run(value, "apply")).toMatchObject({ status: "COMMITTED", authority_consumed: true,
-      mutations: ["COPY_STANDING_KEY_TO_ROOT", "REPLACE_SSHD_CONFIG", "RELOAD_SSHD"], scheduler_activated: false,
+      mutations: ["CREATE_AUTHORIZED_KEYS_DIRECTORY", "COPY_STANDING_KEY_TO_ROOT", "REPLACE_SSHD_CONFIG", "RELOAD_SSHD"], scheduler_activated: false,
       workload_executed: false, network_accessed: false })
     expect(value.entries.get(STANDING_ROOT_KEY_PATH)).toMatchObject({ uid: 0, gid: 0, mode: 0o444 })
     expect(value.entries.get(STANDING_ROOT_KEY_PATH)!.bytes).toEqual(standingBytes())
@@ -492,17 +551,177 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     expect(launcherBytes.toString("utf8")).toContain('[ -f "$KERNEL_LOCK" ]')
     expect(launcherBytes.toString("utf8")).toContain("stat -Lc '%u:%g:%a' \"$KERNEL_LOCK\"")
     expect(launcherBytes.toString("utf8")).not.toContain("stat -Lc '%u:%g:%a:%F' \"$KERNEL_LOCK\"")
-    expect(installerSource).toContain('fs.readdirSync("/proc/self/fd")')
+    expect(installerSource).toMatch(/fs\s*\.readdirSync\("\/proc\/self\/fd"\)/)
     expect(installerSource).toContain("trustedKernelLockParent()")
     expect(installerSource).toContain('(lock.mode & 0o7777) === 0o1777')
-    expect(installerSource).toContain("function trustedParentFor(target) { return target === LOCK_PATH ? trustedKernelLockParent() : trustedParents(target) }")
+    expect(installerSource).toMatch(/function trustedParentFor\(target\)[\s\S]*target === LOCK_PATH[\s\S]*trustedKernelLockParent\(\)/)
     expect(installerSource).toContain("parentsTrusted: trustedParentFor")
-    expect(installerSource).toContain("if (!trustedParentFor(target)) fail(code")
+    expect(installerSource).toMatch(/if\s*\(!trustedParentFor\(target\)\)\s*fail\(code/)
     expect(installerSource).toContain("return descriptors.length === 1")
     expect(installerSource).toContain('fs.readFileSync("/proc/locks", "utf8")')
+    expect(installerSource).toContain('fs.realpathSync(`/proc/${current}/exe`)')
+    expect(installerSource).toContain('executable === "/usr/sbin/sshd"')
+    expect(installerSource).toContain('/^sshd: [A-Za-z0-9._-]+@notty$/')
+    expect(installerSource).toContain('sshdSessionSocket(ancestor.sshdAncestorPid)')
     expect(installerSource).toContain('Number(match[1]) === process.pid')
     expect(installerSource).toContain('const openedBefore = fs.fstatSync(fd, { bigint: true })')
     expect(installerSource).toContain('openedAfter = fs.fstatSync(fd, { bigint: true })')
+  })
+
+  it("settles only the exact consumed babd recovery after an independent normal SSH proof with unchanged daemon identity", () => {
+    const options: Options = {}
+    const value = fixture(options)
+    const failedId = "babd50b8-b42c-4fef-bd4f-39c152256ddc"
+    const failedJournal = `${JOURNAL_PREFIX}${failedId}.journal.jsonl`
+    const failedFirst = {
+      authority_id: failedId,
+      authority_sha256: "f01b973bad66b1facd92e116f476ec854a6b6632de5ea28c163ee1cceff53623",
+      consumed_at: "2026-08-12T16:35:05.184Z",
+      manifest_sha256: "3aa8f73203cbf7e5b89c91cbbdc421e2d2eeef3e00bd3a085d4c2715f4267761",
+      phase: 0, record_type: "AUTHORITY_CONSUMED",
+      schema_version: "1.0-aegis-ssh-coexistence-repair-journal",
+    }
+    value.entries.set(failedJournal, { type: "file", bytes: recordBytes(failedFirst), uid: 0, gid: 0, mode: 0o600, direct: true, nlink: 1 })
+    const recoveryAuthority = {
+      schemaVersion: 1, operation: "SETTLE_FAILED_RECOVERY",
+      authorityId: "22222222-2222-4222-8222-222222222222", repairId: manifest.repairId,
+      manifestSha256: sha256(manifestBytes), machineIdSha256: manifest.identity.machineIdSha256,
+      failedAuthorityId: failedId, failedAuthoritySha256: failedFirst.authority_sha256,
+      failedManifestSha256: failedFirst.manifest_sha256,
+      predecessorConfigSha256: manifest.predecessor.sha256,
+      standingAuthorizedKeySha256: manifest.standingKey.recordSha256,
+      standingEntrypointSha256: manifest.standingEntrypoint.sha256,
+      installerSha256: manifest.installer.sha256, launcherSha256: manifest.launcher.sha256,
+      issuedAt: "2026-08-12T20:00:00.000Z", expiresAt: "2026-08-12T20:10:00.000Z",
+      resumeExpiresAt: "2026-08-12T20:30:00.000Z", singleUse: true, consumed: false,
+    }
+    const invoke = () => repairAegisSshCoexistence({ manifest, manifestBytes, authority: recoveryAuthority,
+      mode: "apply", io: value.io as any, assetBytes, assetSourcePath: `/bundle/${REVIEWED_CONFIG_ASSET}`,
+      installerBytes, launcherBytes, standingKeyBinding: fixtureStandingBinding,
+      entrypointSha256: manifest.standingEntrypoint.sha256, clock: value.nextTime,
+      challengeNonce: () => "cd".repeat(32), machineIdentitySha256: manifest.identity.machineIdSha256 })
+    const waiting: any = invoke()
+    expect(waiting).toMatchObject({ status: "AWAITING_RECOVERY_AUTH_PROBE", authority_consumed: true })
+    options.daemonDrift = true
+    expectCode(invoke, "AEGIS_SSH_REPAIR_DAEMON_IDENTITY_DRIFT")
+    options.daemonDrift = false
+    const recoveryJournal = `${JOURNAL_PREFIX}${recoveryAuthority.authorityId}.recovery.journal.jsonl`
+    const releaseRecord = value.entries.get(recoveryJournal)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
+      .find(({ record_type }) => record_type === "LOCK_RELEASE_PROVEN_AWAITING_AUTH_PROBE")
+    const proof = { schemaVersion: 2, operation: "NORMAL_SSH_AUTHENTICATED",
+        producer: "/usr/local/libexec/williamos-aegis-ssh-coexistence-repair.mjs",
+        producerSha256: manifest.installer.sha256,
+        recoveryAuthorityId: recoveryAuthority.authorityId, failedAuthorityId: failedId,
+        challengeNonce: waiting.auth_challenge.challenge_nonce,
+        challengeIssuedAt: waiting.auth_challenge.challenge_issued_at,
+        releaseProvenAt: releaseRecord.released_at,
+        daemonIdentity: waiting.auth_challenge.daemon_identity,
+        session: value.io.sshSessionEvidence(),
+        authenticatedAt: new Date(Date.parse(releaseRecord.released_at) + 1000).toISOString() }
+    value.entries.set(waiting.auth_proof_path, { type: "file", uid: 0, gid: 0, mode: 0o600, direct: true, nlink: 1, bytes: recordBytes(proof) })
+    expectCode(invoke, "AEGIS_SSH_REPAIR_AUTH_PROOF_INVALID")
+    value.entries.delete(waiting.auth_proof_path)
+    const produce = () => recordRecoverySshProof({ manifest, manifestBytes, authority: recoveryAuthority, io: value.io as any,
+      assetBytes, assetSourcePath: `/bundle/${REVIEWED_CONFIG_ASSET}`, installerBytes, launcherBytes,
+      standingKeyBinding: fixtureStandingBinding, entrypointSha256: manifest.standingEntrypoint.sha256,
+      clock: value.nextTime, machineIdentitySha256: manifest.identity.machineIdSha256 })
+    options.failAfterProofIntent = true
+    expectCode(produce, "INJECTED_PROOF_INTENT_CRASH")
+    options.failAfterProofIntent = false; options.failAfterProofCreate = true
+    expectCode(produce, "INJECTED_PROOF_CREATE_CRASH")
+    options.failAfterProofCreate = false
+    expect(produce()).toMatchObject({ status: "RECOVERY_AUTH_PROOF_RECORDED" })
+    expect(invoke()).toMatchObject({ status: "FAILED_RECOVERY_SETTLED", daemon_identity_unchanged: true, normal_ssh_proven: true })
+    expectCode(invoke, "AEGIS_SSH_REPAIR_AUTHORITY_REPLAY")
+    const phases = value.entries.get(failedJournal)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
+    expect(phases.map(({ record_type }) => record_type)).toEqual(["AUTHORITY_CONSUMED", "FAILED_PARTIAL", "FAILED_LOCK_RELEASE_PROVEN"])
+  })
+
+  it("creates the exact authorized_keys directory and records its transaction ownership", () => {
+    const value = fixture()
+    expect(run(value, "apply")).toMatchObject({ status: "COMMITTED" })
+    expect(value.entries.get(AUTHORIZED_KEYS_ROOT)).toMatchObject({ type: "directory", uid: 0, gid: 0, mode: 0o755, direct: true })
+    const first = JSON.parse(value.entries.get(value.journalPath)!.bytes!.toString("utf8").split("\n")[0])
+    expect(first.authorized_keys_directory_preexisted).toBe(false)
+  })
+
+  it.each(["wrong-mode", "file"] as const)("rejects an occupied %s authorized_keys path before consumption", (authorizedKeysDirectory) => {
+    const value = fixture({ authorizedKeysDirectory })
+    expectCode(() => run(value, "apply"), "AEGIS_SSH_REPAIR_AUTHORIZED_KEYS_DIRECTORY_DRIFT")
+    expect(value.events).not.toContain("JOURNAL_AUTHORITY_CONSUMED")
+  })
+
+  it("preserves a preexisting exact authorized_keys directory during rollback", () => {
+    const value = fixture({ authorizedKeysDirectory: "exact", failMutation: "COPY_STANDING_KEY_TO_ROOT" })
+    expectCode(() => run(value, "apply"), "INJECTED_FAILURE")
+    expect(value.entries.get(AUTHORIZED_KEYS_ROOT)).toMatchObject({ type: "directory", uid: 0, gid: 0, mode: 0o755 })
+    expect(value.events).not.toContain("ROLLBACK_AUTHORIZED_KEYS_DIRECTORY")
+  })
+
+  it("resumes after a crash during the transaction-owned directory metadata transition", () => {
+    const value = fixture()
+    value.entries.set(AUTHORIZED_KEYS_ROOT, { type: "directory", uid: 0, gid: 0, mode: 0o700, direct: true, nlink: 1 })
+    const consumed = {
+      schema_version: "1.0-aegis-ssh-coexistence-repair-journal", record_type: "AUTHORITY_CONSUMED", phase: 0,
+      authority_id: value.authority.authorityId, authority_sha256: sha256(Buffer.from(canonicalizeRepairJcs(value.authority))),
+      manifest_sha256: sha256(manifestBytes), authorized_keys_directory_preexisted: false,
+      consumed_at: "2026-08-12T20:04:00.000Z",
+    }
+    value.entries.set(value.journalPath, { type: "file", bytes: recordBytes(consumed), uid: 0, gid: 0, mode: 0o600, direct: true, nlink: 1 })
+    expect(run(value, "apply")).toMatchObject({ status: "COMMITTED" })
+    expect(value.entries.get(AUTHORIZED_KEYS_ROOT)).toMatchObject({ type: "directory", mode: 0o755 })
+    expect(value.events).toContain("RECOVER_AUTHORIZED_KEYS_DIRECTORY")
+  })
+
+  it("repairs a crash after recovery challenge by durably proving release before reading a later SSH proof", () => {
+    const value = fixture()
+    const failedId = "babd50b8-b42c-4fef-bd4f-39c152256ddc"
+    const failedJournal = `${JOURNAL_PREFIX}${failedId}.journal.jsonl`
+    value.entries.set(failedJournal, { type: "file", uid: 0, gid: 0, mode: 0o600, direct: true, nlink: 1, bytes: recordBytes({
+      authority_id: failedId, authority_sha256: "f01b973bad66b1facd92e116f476ec854a6b6632de5ea28c163ee1cceff53623",
+      consumed_at: "2026-08-12T16:35:05.184Z", manifest_sha256: "3aa8f73203cbf7e5b89c91cbbdc421e2d2eeef3e00bd3a085d4c2715f4267761",
+      phase: 0, record_type: "AUTHORITY_CONSUMED", schema_version: "1.0-aegis-ssh-coexistence-repair-journal",
+    }) })
+    const authority: any = { schemaVersion: 1, operation: "SETTLE_FAILED_RECOVERY",
+      authorityId: "22222222-2222-4222-8222-222222222222", repairId: manifest.repairId,
+      manifestSha256: sha256(manifestBytes), machineIdSha256: manifest.identity.machineIdSha256,
+      failedAuthorityId: failedId, failedAuthoritySha256: "f01b973bad66b1facd92e116f476ec854a6b6632de5ea28c163ee1cceff53623",
+      failedManifestSha256: "3aa8f73203cbf7e5b89c91cbbdc421e2d2eeef3e00bd3a085d4c2715f4267761",
+      predecessorConfigSha256: manifest.predecessor.sha256, standingAuthorizedKeySha256: manifest.standingKey.recordSha256,
+      standingEntrypointSha256: manifest.standingEntrypoint.sha256, installerSha256: manifest.installer.sha256,
+      launcherSha256: manifest.launcher.sha256, issuedAt: "2026-08-12T20:00:00.000Z",
+      expiresAt: "2026-08-12T20:10:00.000Z", resumeExpiresAt: "2026-08-12T20:30:00.000Z", singleUse: true, consumed: false }
+    const recoveryJournal = `${JOURNAL_PREFIX}${authority.authorityId}.recovery.journal.jsonl`
+    const first = { schema_version: "1.0-aegis-ssh-failed-recovery-journal", record_type: "AUTHORITY_CONSUMED", phase: 0,
+      authority_id: authority.authorityId, authority_sha256: sha256(Buffer.from(canonicalizeRepairJcs(authority))),
+      manifest_sha256: sha256(manifestBytes), failed_authority_id: failedId,
+      failed_authority_sha256: authority.failedAuthoritySha256, failed_manifest_sha256: authority.failedManifestSha256,
+      consumed_at: "2026-08-12T20:04:00.000Z" }
+    const challenge = { record_type: "RECOVERY_CHALLENGE_ISSUED", phase: 1, challenge_nonce: "ef".repeat(32),
+      challenge_issued_at: "2026-08-12T20:04:01.000Z", daemon_identity: { mainPid: 4321, startTimestampMonotonic: "987654321" } }
+    value.entries.set(recoveryJournal, { type: "file", uid: 0, gid: 0, mode: 0o600, direct: true, nlink: 1,
+      bytes: Buffer.concat([recordBytes(first), recordBytes(challenge)]) })
+    const invoke = () => repairAegisSshCoexistence({ manifest, manifestBytes, authority, mode: "apply", io: value.io as any,
+      assetBytes, assetSourcePath: `/bundle/${REVIEWED_CONFIG_ASSET}`, installerBytes, launcherBytes,
+      standingKeyBinding: fixtureStandingBinding, entrypointSha256: manifest.standingEntrypoint.sha256,
+      clock: value.nextTime, challengeNonce: () => "00".repeat(32), machineIdentitySha256: manifest.identity.machineIdSha256 })
+    const waiting: any = invoke()
+    expect(waiting.status).toBe("AWAITING_RECOVERY_AUTH_PROBE")
+    let records = value.entries.get(recoveryJournal)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
+    expect(records.at(-1).record_type).toBe("LOCK_RELEASE_PROVEN_AWAITING_AUTH_PROBE")
+    expect(recordRecoverySshProof({ manifest, manifestBytes, authority, io: value.io as any,
+      assetBytes, assetSourcePath: `/bundle/${REVIEWED_CONFIG_ASSET}`, installerBytes, launcherBytes,
+      standingKeyBinding: fixtureStandingBinding, entrypointSha256: manifest.standingEntrypoint.sha256,
+      clock: value.nextTime, machineIdentitySha256: manifest.identity.machineIdSha256 }))
+      .toMatchObject({ status: "RECOVERY_AUTH_PROOF_RECORDED" })
+    expect(invoke()).toMatchObject({ status: "FAILED_RECOVERY_SETTLED" })
+  })
+
+  it("fails recovery closed when a transaction-created authorized_keys directory is no longer exact and empty", () => {
+    const value = fixture({ failMutation: "COPY_STANDING_KEY_TO_ROOT", failDirectoryRemoval: true })
+    const failure = expectCode(() => run(value, "apply"), "AEGIS_SSH_REPAIR_RECOVERY_UNCERTAIN")
+    expect(failure.causeCode).toBe("DIRECTORY_NOT_EMPTY")
+    expect(value.entries.has(AUTHORIZED_KEYS_ROOT)).toBe(true)
   })
 
   it.runIf(process.platform === "linux")("retains the repair pathname flock across exec and releases it only on child exit", async () => {
@@ -545,8 +764,9 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
   it("contains no scheduler, workload execution, service activation, network, or broad deletion primitive", () => {
     const source = installerBytes.toString("utf8")
     expect(source).not.toMatch(/\b(?:fetch|WebSocket|curl|wget|systemctl"\s*,\s*\["(?:start|enable|restart)|execFile|execSync)\b/)
-    expect(source).not.toMatch(/\b(?:rmSync|rmdirSync|removePublishedRelease)\b/)
+    expect(source).not.toMatch(/\b(?:rmSync|removePublishedRelease)\b/)
+    expect(source).toContain("fs.rmdirSync(target)")
     expect(source).not.toContain("shell: true")
-    expect(manifest.mutations).toEqual(["COPY_STANDING_KEY_TO_ROOT", "REPLACE_SSHD_CONFIG", "RELOAD_SSHD"])
+    expect(manifest.mutations).toEqual(["CREATE_AUTHORIZED_KEYS_DIRECTORY", "COPY_STANDING_KEY_TO_ROOT", "REPLACE_SSHD_CONFIG", "RELOAD_SSHD"])
   })
 })
