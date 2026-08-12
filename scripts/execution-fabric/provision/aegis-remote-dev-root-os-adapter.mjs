@@ -12,6 +12,9 @@ const LAUNCH_PRIVATE_KEY = "/etc/williamos-fabric/aegis-remote-dev-launch-author
 const LAUNCH_PUBLIC_KEY = "/etc/williamos-fabric/aegis-remote-dev-launch-authority.pem"
 const CONTROL_REPOSITORY = "/var/lib/williamos-remote-dev/control/terragroq"
 const TARGET_MIRROR = "/var/lib/williamos-remote-dev/repositories/terrafusion_os_1.0.git"
+const REVIEWED_CONTROL_PREDECESSOR = "a0462cfd5f6be035a95b773fea01d36545761e0d"
+const EMPTY_GIT_HOOKS = "/usr/local/share/williamos/empty-git-hooks"
+const EXACT_CONTROL_REPOSITORY_CONFIG = `[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n[remote "origin"]\n\turl = ssh://git@ssh.github.com:443/bsvalues/terragroq.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`
 const HERMES_SOURCE_ADDRESS = "192.168.88.9"
 const PREVIOUS_HERMES_SOURCE_ADDRESS = "192.168.1.154"
 const STANDING_ROOT_KEY_PATH = "/etc/ssh/authorized_keys/williamos-fabric-standing-hash"
@@ -277,12 +280,27 @@ function trustedRepositoryParents() {
   return true
 }
 
-export function inspectTrustedRepositoryReconciliation({ parentsExact, controlExists, controlExact, controlPartialExact, mirrorExists, mirrorExact }) {
-  if (![parentsExact, controlExists, controlExact, controlPartialExact, mirrorExists, mirrorExact].every((value) => typeof value === "boolean")) return "DRIFT"
+export function inspectTrustedRepositoryReconciliation({ parentsExact, controlExists, controlExact, controlPartialExact, controlPredecessorExact, mirrorExists, mirrorExact }) {
+  if (![parentsExact, controlExists, controlExact, controlPartialExact, controlPredecessorExact, mirrorExists, mirrorExact].every((value) => typeof value === "boolean")) return "DRIFT"
   if (!parentsExact) return "DRIFT"
-  if (!controlExists && !controlExact && !controlPartialExact && !mirrorExists && !mirrorExact) return "ABSENT"
-  if (controlExists && !controlExact && controlPartialExact && !mirrorExists && !mirrorExact) return "ABSENT"
-  return controlExists && controlExact && !controlPartialExact && mirrorExists && mirrorExact ? "MATCH" : "DRIFT"
+  if (!controlExists && !controlExact && !controlPartialExact && !controlPredecessorExact && !mirrorExists && !mirrorExact) return "ABSENT"
+  if (controlExists && !controlExact && controlPartialExact && !controlPredecessorExact && !mirrorExists && !mirrorExact) return "ABSENT"
+  if (controlExists && !controlExact && !controlPartialExact && controlPredecessorExact && mirrorExists && mirrorExact) return "RECONCILE_EXACT_PREDECESSOR"
+  return controlExists && controlExact && !controlPartialExact && !controlPredecessorExact && mirrorExists && mirrorExact ? "MATCH" : "DRIFT"
+}
+export function exactControlRepositoryConfig(bytes) { return typeof bytes === "string" && bytes === EXACT_CONTROL_REPOSITORY_CONFIG }
+export function inspectEmptyGitHooks({ directory, symlink, uid, gid, mode, entries }) {
+  return directory === true && symlink === false && uid === 0 && gid === 0 && mode === 0o555 && Array.isArray(entries) && entries.length === 0
+}
+function exactEmptyGitHooks() {
+  try {
+    const stat = fs.lstatSync(EMPTY_GIT_HOOKS)
+    return trustedParents(EMPTY_GIT_HOOKS) && inspectEmptyGitHooks({ directory: stat.isDirectory(), symlink: stat.isSymbolicLink(), uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o7777, entries: fs.readdirSync(EMPTY_GIT_HOOKS) })
+  } catch { return false }
+}
+function hooklessGitArgs(args) {
+  if (!exactEmptyGitHooks()) fail("REPOSITORY_HOOK_BOUNDARY_UNPROVEN", "fixed empty root-controlled Git hooks directory differs")
+  return ["-c", `core.hooksPath=${EMPTY_GIT_HOOKS}`, ...args]
 }
 
 function repositoryState(manifest, authority) {
@@ -290,32 +308,35 @@ function repositoryState(manifest, authority) {
   const mirror = TARGET_MIRROR
   try {
     const controlExists = lexists(control); const mirrorExists = lexists(mirror)
-    let controlMatch = false; let controlPartialMatch = false; let mirrorMatch = false
+    let controlMatch = false; let controlPartialMatch = false; let controlPredecessorMatch = false; let mirrorMatch = false
     if (controlExists) {
-      if (!rootOwnedRepositoryTree(control)
-        || run("/usr/bin/git", ["remote", "get-url", "origin"], { cwd: control }) !== "ssh://git@ssh.github.com:443/bsvalues/terragroq.git") return "DRIFT"
-      const controlHead = run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "HEAD"], { cwd: control })
-      const controlOrigin = run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control })
-      const status = run("/usr/bin/git", ["status", "--porcelain"], { cwd: control })
+      const config = path.join(control, ".git/config")
+      if (!rootOwnedRepositoryTree(control) || !exactFile(config, sha(Buffer.from(EXACT_CONTROL_REPOSITORY_CONFIG)), 0, 0, 0o600) || !exactControlRepositoryConfig(fs.readFileSync(config, "utf8"))
+        || run("/usr/bin/git", hooklessGitArgs(["remote", "get-url", "origin"]), { cwd: control }) !== "ssh://git@ssh.github.com:443/bsvalues/terragroq.git") return "DRIFT"
+      const controlHead = run("/usr/bin/git", hooklessGitArgs(["--no-replace-objects", "rev-parse", "HEAD"]), { cwd: control })
+      const controlOrigin = run("/usr/bin/git", hooklessGitArgs(["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"]), { cwd: control })
+      const status = run("/usr/bin/git", hooklessGitArgs(["status", "--porcelain"]), { cwd: control })
       controlMatch = status === "" && controlHead === authority.trustedMainCommit && controlOrigin === authority.trustedMainCommit
+      controlPredecessorMatch = status === "" && controlHead === REVIEWED_CONTROL_PREDECESSOR && controlOrigin === REVIEWED_CONTROL_PREDECESSOR
       const lines = (value) => value ? value.split(/\r?\n/).filter(Boolean).sort() : []
-      const tracked = lines(run("/usr/bin/git", ["--no-replace-objects", "ls-tree", "-r", "--name-only", "HEAD"], { cwd: control }))
-      const deleted = lines(run("/usr/bin/git", ["diff", "--cached", "--diff-filter=D", "--name-only"], { cwd: control }))
+      const tracked = lines(run("/usr/bin/git", hooklessGitArgs(["--no-replace-objects", "ls-tree", "-r", "--name-only", "HEAD"]), { cwd: control }))
+      const deleted = lines(run("/usr/bin/git", hooklessGitArgs(["diff", "--cached", "--diff-filter=D", "--name-only"]), { cwd: control }))
       controlPartialMatch = exactFile("/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/partial-network-inert-9dd7b361-e3a9-4dba-b1ca-0fb76305a9c8.json","afafe1e9022f911a088c73a10bd350132ff5f79dbf9875ae36b74c2190735d0c",0,0,0o400)
         && controlHead === "9a47acf2af49e71ea9d689f19d24c35ff6fef4d5" && controlOrigin === controlHead && tracked.length > 0 && same(deleted, tracked)
-        && run("/usr/bin/git", ["diff", "--cached", "--diff-filter=ACMRTUXB", "--name-only"], { cwd: control }) === ""
-        && run("/usr/bin/git", ["diff", "--name-only"], { cwd: control }) === "" && run("/usr/bin/git", ["ls-files", "--others", "--exclude-standard"], { cwd: control }) === ""
+        && run("/usr/bin/git", hooklessGitArgs(["diff", "--cached", "--diff-filter=ACMRTUXB", "--name-only"]), { cwd: control }) === ""
+        && run("/usr/bin/git", hooklessGitArgs(["diff", "--name-only"]), { cwd: control }) === "" && run("/usr/bin/git", hooklessGitArgs(["ls-files", "--others", "--exclude-standard"]), { cwd: control }) === ""
     }
     if (mirrorExists) {
       if (!rootOwnedRepositoryTree(mirror)
-        || run("/usr/bin/git", [`--git-dir=${mirror}`, "remote", "get-url", "origin"]) !== "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git") return "DRIFT"
-      mirrorMatch = spawnSync("/usr/bin/git", [`--git-dir=${mirror}`, "cat-file", "-e", "ffd2fa35f5152de2b95e7f63b220050d18193d7a^{commit}"], { shell: false, timeout: 5000, env: FIXED_ENV }).status === 0
+        || run("/usr/bin/git", hooklessGitArgs([`--git-dir=${mirror}`, "remote", "get-url", "origin"])) !== "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git") return "DRIFT"
+      mirrorMatch = spawnSync("/usr/bin/git", hooklessGitArgs([`--git-dir=${mirror}`, "cat-file", "-e", "ffd2fa35f5152de2b95e7f63b220050d18193d7a^{commit}"]), { shell: false, timeout: 5000, env: FIXED_ENV }).status === 0
     }
     return inspectTrustedRepositoryReconciliation({
       parentsExact: trustedRepositoryParents(),
       controlExists,
       controlExact: controlMatch,
       controlPartialExact: controlPartialMatch,
+      controlPredecessorExact: controlPredecessorMatch,
       mirrorExists,
       mirrorExact: mirrorMatch,
     })
@@ -628,16 +649,18 @@ function applyRepositories(manifest, authority) {
   const gitOptions = { timeout: 300_000, env: { GIT_SSH_COMMAND: rootSsh } }
   ensureRootDirectory("/var/lib/williamos-remote-dev/control")
   ensureRootDirectory("/var/lib/williamos-remote-dev/repositories")
-  if (repositoryState(manifest, authority) === "DRIFT") fail("REPOSITORY_DRIFT", "existing control checkout, target mirror, or prospective namespace parent is not exact")
-  if (!fs.existsSync(control)) run("/usr/bin/git", ["clone", "--no-checkout", "ssh://git@ssh.github.com:443/bsvalues/terragroq.git", control], gitOptions)
-  run("/usr/bin/git", ["fetch", "--force", "origin", `+refs/heads/main:refs/remotes/origin/main`], { ...gitOptions, cwd: control })
-  if (run("/usr/bin/git", ["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"], { cwd: control }) !== authority.trustedMainCommit) fail("REPOSITORY_DRIFT", "fresh control-plane main differs from signed authority")
-  run("/usr/bin/git", ["--no-replace-objects", "merge-base", "--is-ancestor", manifest.trustedMain.minimumCommit, authority.trustedMainCommit], { cwd: control })
-  run("/usr/bin/git", ["checkout", "-B", "main", authority.trustedMainCommit], { cwd: control })
-  if (run("/usr/bin/git", ["status", "--porcelain"], { cwd: control }) !== "") fail("REPOSITORY_DRIFT", "control checkout is dirty after exact checkout")
-  if (!fs.existsSync(mirror)) run("/usr/bin/git", ["clone", "--mirror", "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git", mirror], gitOptions)
-  run("/usr/bin/git", [`--git-dir=${mirror}`, "fetch", "--force", "origin", "+refs/heads/main:refs/heads/main"], gitOptions)
-  run("/usr/bin/git", [`--git-dir=${mirror}`, "cat-file", "-e", "ffd2fa35f5152de2b95e7f63b220050d18193d7a^{commit}"])
+  const state = repositoryState(manifest, authority)
+  if (state === "DRIFT") fail("REPOSITORY_DRIFT", "existing control checkout, target mirror, or prospective namespace parent is not exact")
+  if (!fs.existsSync(control)) run("/usr/bin/git", hooklessGitArgs(["clone", "--no-checkout", "ssh://git@ssh.github.com:443/bsvalues/terragroq.git", control]), gitOptions)
+  run("/usr/bin/git", hooklessGitArgs(["fetch", "--force", "origin", `+refs/heads/main:refs/remotes/origin/main`]), { ...gitOptions, cwd: control })
+  if (run("/usr/bin/git", hooklessGitArgs(["--no-replace-objects", "rev-parse", "refs/remotes/origin/main"]), { cwd: control }) !== authority.trustedMainCommit) fail("REPOSITORY_DRIFT", "fresh control-plane main differs from signed authority")
+  run("/usr/bin/git", hooklessGitArgs(["--no-replace-objects", "merge-base", "--is-ancestor", manifest.trustedMain.minimumCommit, authority.trustedMainCommit]), { cwd: control })
+  if (state === "RECONCILE_EXACT_PREDECESSOR") run("/usr/bin/git", hooklessGitArgs(["--no-replace-objects", "merge-base", "--is-ancestor", REVIEWED_CONTROL_PREDECESSOR, authority.trustedMainCommit]), { cwd: control })
+  run("/usr/bin/git", hooklessGitArgs(["checkout", "-B", "main", authority.trustedMainCommit]), { cwd: control })
+  if (run("/usr/bin/git", hooklessGitArgs(["status", "--porcelain"]), { cwd: control }) !== "") fail("REPOSITORY_DRIFT", "control checkout is dirty after exact checkout")
+  if (!fs.existsSync(mirror)) run("/usr/bin/git", hooklessGitArgs(["clone", "--mirror", "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git", mirror]), gitOptions)
+  run("/usr/bin/git", hooklessGitArgs([`--git-dir=${mirror}`, "fetch", "--force", "origin", "+refs/heads/main:refs/heads/main"]), gitOptions)
+  run("/usr/bin/git", hooklessGitArgs([`--git-dir=${mirror}`, "cat-file", "-e", "ffd2fa35f5152de2b95e7f63b220050d18193d7a^{commit}"]))
   if (repositoryState(manifest, authority) !== "MATCH") fail("REPOSITORY_DRIFT", "trusted repositories differ after reconciliation")
 }
 function applyToolchain(manifest, authority) {
