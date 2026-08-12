@@ -1837,7 +1837,9 @@ export function createNodeRepairIo() {
     sshReloadEvidence(target, daemon) {
       const config = fs.lstatSync(target, { bigint: true });
       const configCtime = new Date(Number(config.ctimeNs / 1000000n)).toISOString();
-      const output = fixedRun("/usr/bin/journalctl", ["-u", "ssh.service", "-o", "json", "--no-pager"]);
+      const since = `@${Math.floor(Number(config.ctimeNs / 1000000n) / 1000)}`;
+      const output = fixedRun("/usr/bin/journalctl", [`_PID=${daemon.mainPid}`, "--since", since,
+        "-o", "json", "--no-pager"]);
       const events = output.split("\n").filter(Boolean).map((line) => JSON.parse(line));
       const timestamp = (event) => new Date(Number(event.__REALTIME_TIMESTAMP) / 1000).toISOString();
       const after = events.filter((event) => String(event._PID) === String(daemon.mainPid) &&

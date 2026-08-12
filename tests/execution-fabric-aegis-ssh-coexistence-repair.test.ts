@@ -657,6 +657,8 @@ describe("AEGIS Issue #595 SSH coexistence one-shot root repair", () => {
     expect(source).toContain("sshReloadEvidence(CONFIG_PATH, daemon)")
     expect(source).toContain("io.validateLiveSshd()")
     expect(source).toContain("verifyEffective(io)")
+    expect(source).toContain('`_PID=${daemon.mainPid}`')
+    expect(source).toContain('"--since", since')
   })
 
   it("creates the exact authorized_keys directory and records its transaction ownership", () => {
