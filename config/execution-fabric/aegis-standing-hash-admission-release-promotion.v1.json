@@ -47,8 +47,6 @@
     ]
   },
   "evidenceRelease": {
-    "commit": "__FINAL_EVIDENCE_COMMIT__",
-    "checkoutPath": "__FINAL_EVIDENCE_CHECKOUT_PATH__",
     "sourceCommit": "__APPROVED_INPUT_SOURCE_COMMIT__",
     "admissionPath": "__TRACKED_ADMISSION_PATH__",
     "admissionSha256": "__SHA256_EXACT_ADMISSION_BYTES__",

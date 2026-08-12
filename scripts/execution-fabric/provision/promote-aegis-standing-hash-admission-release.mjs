@@ -132,7 +132,7 @@ function validateManifest(manifest) {
     || !exactKeys(prior, ["commit", "releaseRoot", "trustedReleaseManifestPath", "activationMarkerPath",
       "replayUpgradeJournalPath", "replayUpgradeJournalSha256", "replayJournalPath", "replayJournalSha256",
       "authorizedKeysPath", "requestRoot", "closure", "inactivePaths"])
-    || !exactKeys(evidence, ["commit", "checkoutPath", "sourceCommit", "admissionPath", "admissionSha256", "inputPath", "inputSha256"])
+    || !exactKeys(evidence, ["sourceCommit", "admissionPath", "admissionSha256", "inputPath", "inputSha256"])
     || !exactKeys(next, ["commit", "checkoutPath", "releaseRoot", "trustedRef", "manifestSchemaVersion", "closure", "trustArtifacts"])
     || !exactKeys(next?.trustArtifacts, ["requestSourcePath", "requestSha256", "admissionPath", "admissionSha256", "inputPath", "inputSha256"])
     || !exactKeys(packageRelease, ["commit", "checkoutPath", "installerSha256"])
@@ -167,8 +167,7 @@ function validateManifest(manifest) {
   if (!DIGEST.test(prior.replayUpgradeJournalSha256 ?? "") || !DIGEST.test(prior.replayJournalSha256 ?? "")
     || typeof prior.replayUpgradeJournalPath !== "string"
     || !/^\/var\/lib\/williamos-aegis-standing-hash-replay-ledger-upgrade-[0-9a-f-]{36}\.journal\.jsonl$/i.test(prior.replayUpgradeJournalPath)
-    || !COMMIT.test(evidence?.commit ?? "") || !COMMIT.test(evidence?.sourceCommit ?? "")
-    || !path.posix.isAbsolute(evidence?.checkoutPath ?? "")
+    || !COMMIT.test(evidence?.sourceCommit ?? "")
     || !DIGEST.test(evidence?.admissionSha256 ?? "") || !DIGEST.test(evidence?.inputSha256 ?? "")
     || !COMMIT.test(next?.commit ?? "") || !path.posix.isAbsolute(next?.checkoutPath ?? "")
     || next.releaseRoot !== `/opt/williamos/releases/${next.commit}` || next.trustedRef !== "refs/heads/main"
@@ -184,7 +183,8 @@ function validateManifest(manifest) {
     || !DIGEST.test(packageRelease?.installerSha256 ?? "") || !SAFE_ID.test(install.requestId ?? "")
     || install.requestPath !== `${REQUEST_ROOT}/${install.requestId}.json`
     || !/^\/var\/lib\/williamos-aegis-standing-hash-admission-release-promotion-$/.test(install.journalPrefix)
-    || new Set([prior.commit, evidence.commit, next.commit, packageRelease.commit]).size !== 4) {
+    || evidence.sourceCommit !== prior.commit
+    || new Set([prior.commit, next.commit, packageRelease.commit]).size !== 3) {
     fail("AEGIS_ADMISSION_PROMOTION_MANIFEST_INVALID", "final promotion binding differs")
   }
   safeRelative(evidence.admissionPath, "docs/reports/standing-dispatch")
@@ -209,7 +209,6 @@ function validateAuthority(manifest, authority, now, manifestSha256) {
     machineIdSha256: manifest.machine.machineIdSha256,
     priorCommit: manifest.priorState.commit,
     newCommit: manifest.newRelease.commit,
-    evidenceCommit: manifest.evidenceRelease.commit,
     packageCommit: manifest.packageRelease.commit,
     manifestSha256,
     replayUpgradeJournalSha256: manifest.priorState.replayUpgradeJournalSha256,
@@ -221,11 +220,16 @@ function validateAuthority(manifest, authority, now, manifestSha256) {
       input: manifest.newRelease.trustArtifacts.inputSha256,
     },
     reviewedCheckoutPath: manifest.newRelease.checkoutPath,
-    evidenceCheckoutPath: manifest.evidenceRelease.checkoutPath,
     packageCheckoutPath: manifest.packageRelease.checkoutPath,
   }
   for (const [key, value] of Object.entries(expected)) {
     if (!same(authority[key], value)) fail("AEGIS_ADMISSION_PROMOTION_AUTHORITY_SCOPE_MISMATCH", `${key} differs`)
+  }
+  if (!COMMIT.test(authority.evidenceCommit ?? "") || typeof authority.evidenceCheckoutPath !== "string"
+    || !path.posix.isAbsolute(authority.evidenceCheckoutPath)
+    || new Set([manifest.priorState.commit, manifest.packageRelease.commit,
+      manifest.newRelease.commit, authority.evidenceCommit]).size !== 4) {
+    fail("AEGIS_ADMISSION_PROMOTION_AUTHORITY_SCOPE_MISMATCH", "evidence release binding is invalid")
   }
   for (const key of ["priorReleaseManifestSha256", "priorActivationMarkerSha256", "priorAuthorizedKeysSha256"]) {
     if (!DIGEST.test(authority[key] ?? "")) fail("AEGIS_ADMISSION_PROMOTION_AUTHORITY_SCOPE_MISMATCH", `${key} is invalid`)
@@ -264,7 +268,7 @@ function assertExactDirectory(io, targetPath, { uid, gid, mode }) {
   }
 }
 
-function validateCurrentActivation(manifest, releaseBytes, markerBytes, authority) {
+function validateCurrentActivation(manifest, releaseBytes, markerBytes, authority, upgrade) {
   const release = parseJson(releaseBytes, "AEGIS_ADMISSION_PROMOTION_PRIOR_STATE_DRIFT", "trusted release manifest")
   const body = { ...release }
   delete body.release_manifest_sha256
@@ -286,7 +290,8 @@ function validateCurrentActivation(manifest, releaseBytes, markerBytes, authorit
     || sha256(markerBytes) !== authority.priorActivationMarkerSha256
     || marker.schema_version !== "1.0-aegis-standing-hash-activation-marker"
     || marker.upgrade_id !== "aegis-standing-hash-replay-ledger-upgrade-v1"
-    || !UUID.test(marker.authority_id ?? "") || marker.new_commit !== CURRENT_COMMIT
+    || !UUID.test(marker.authority_id ?? "") || marker.authority_id !== upgrade.prepared.authority_id
+    || marker.manifest_sha256 !== upgrade.prepared.manifest_sha256 || marker.new_commit !== CURRENT_COMMIT
     || !same(marker.runtime_closure_sha256, manifest.priorState.closure)
     || !DIGEST.test(marker.manifest_sha256 ?? "") || !canonicalTimestamp(marker.prepared_at)
     || release.activation_marker_sha256 !== canonicalSha256(marker)) {
@@ -304,13 +309,14 @@ function validateReplayUpgradeJournal(bytes) {
   if (records.length !== 2 || prepared?.record_type !== "PREPARED"
     || prepared.schema_version !== "1.0-aegis-standing-hash-replay-ledger-upgrade-journal"
     || !UUID.test(prepared.authority_id ?? "") || !DIGEST.test(prepared.authority_sha256 ?? "")
+    || !DIGEST.test(prepared.manifest_sha256 ?? "")
     || prepared.new_commit !== CURRENT_COMMIT || committed?.record_type !== "COMMITTED"
     || committed.phase !== 2 || !same(committed.completed_mutations, REPLAY_UPGRADE_ORDER)
     || committed.replay_epoch_initialized !== false || committed.operational !== false
     || records.some((record) => String(record?.record_type ?? "").startsWith("FAILED"))) {
     fail("AEGIS_ADMISSION_PROMOTION_REPLAY_UPGRADE_INVALID", "replay upgrade lacks one exact committed terminal")
   }
-  return prepared.authority_id
+  return { prepared, committed }
 }
 
 function validateEpochOnlyReplayJournal(bytes) {
@@ -342,7 +348,7 @@ function validateEpochOnlyReplayJournal(bytes) {
     || entries.some((entry) => entry.record?.record_type === "CLAIM")) {
     fail("AEGIS_ADMISSION_PROMOTION_REPLAY_STATE_INVALID", "exactly one epoch and no claim are required")
   }
-  return record
+  return { record, recordedAt: entries[0].recorded_at }
 }
 
 function promotionJobScope(request) {
@@ -377,12 +383,12 @@ function validateTrustArtifacts(manifest, requestBytes, admissionBytes, inputByt
     || admission.single_use !== true || admission.consumption_count !== 0 || admission.consumed_at !== null
     || !same(admission.job_scope, jobScope) || admission.job_scope_sha256 !== canonicalSha256(jobScope)
     || admission.revoked_at !== null || !canonicalTimestamp(admission.issued_at) || !canonicalTimestamp(admission.expires_at)
-    || issued <= Date.parse(epoch.initialized_at) || issued > current || expires <= current || expires - issued > 86_400_000) {
+    || issued <= Date.parse(epoch.recordedAt) || issued > current || expires <= current || expires - issued > 86_400_000) {
     fail("AEGIS_ADMISSION_PROMOTION_ARTIFACT_INVALID", "request, admission, input, freshness, or epoch binding differs")
   }
 }
 
-function verifyCheckouts(io, manifest, manifestBytes) {
+function verifyCheckouts(io, manifest, authority, manifestBytes) {
   const evidenceClosure = {
     [PROMOTION_MANIFEST_PATH]: sha256(manifestBytes),
     [manifest.evidenceRelease.admissionPath]: manifest.evidenceRelease.admissionSha256,
@@ -397,19 +403,19 @@ function verifyCheckouts(io, manifest, manifestBytes) {
   }
   const packageClosure = { [PROMOTION_INSTALLER_PATH]: manifest.packageRelease.installerSha256 }
   try {
-    io.verifyCheckout(manifest.evidenceRelease.checkoutPath, manifest.evidenceRelease.commit, REPOSITORY, evidenceClosure)
+    io.verifyCheckout(authority.evidenceCheckoutPath, authority.evidenceCommit, REPOSITORY, evidenceClosure)
     io.verifyCheckout(manifest.newRelease.checkoutPath, manifest.newRelease.commit, REPOSITORY, releaseClosure)
     io.verifyCheckout(manifest.packageRelease.checkoutPath, manifest.packageRelease.commit, REPOSITORY, packageClosure)
-    io.verifyAncestry(manifest.evidenceRelease.checkoutPath, manifest.priorState.commit, manifest.evidenceRelease.sourceCommit)
-    io.verifyAncestry(manifest.evidenceRelease.checkoutPath, manifest.evidenceRelease.sourceCommit, manifest.packageRelease.commit)
-    io.verifyAncestry(manifest.evidenceRelease.checkoutPath, manifest.packageRelease.commit, manifest.newRelease.commit)
-    io.verifyAncestry(manifest.evidenceRelease.checkoutPath, manifest.newRelease.commit, manifest.evidenceRelease.commit)
+    io.verifyAncestry(authority.evidenceCheckoutPath, manifest.priorState.commit, manifest.evidenceRelease.sourceCommit)
+    io.verifyAncestry(authority.evidenceCheckoutPath, manifest.evidenceRelease.sourceCommit, manifest.packageRelease.commit)
+    io.verifyAncestry(authority.evidenceCheckoutPath, manifest.packageRelease.commit, manifest.newRelease.commit)
+    io.verifyAncestry(authority.evidenceCheckoutPath, manifest.newRelease.commit, authority.evidenceCommit)
   } catch (error) {
     if (error?.code === "AEGIS_ADMISSION_PROMOTION_CHECKOUT_DRIFT") throw error
     fail("AEGIS_ADMISSION_PROMOTION_CHECKOUT_DRIFT", String(error?.message ?? error).slice(0, 256))
   }
   for (const [checkout, closure] of [
-    [manifest.evidenceRelease.checkoutPath, evidenceClosure],
+    [authority.evidenceCheckoutPath, evidenceClosure],
     [manifest.newRelease.checkoutPath, releaseClosure],
     [manifest.packageRelease.checkoutPath, packageClosure],
   ]) {
@@ -432,7 +438,6 @@ function inspectPriorState(io, manifest, authority, heldLocks = false) {
     { uid: 0, gid: 0, mode: 0o444, digest: authority.priorReleaseManifestSha256 })
   const markerBytes = assertExactFile(io, ACTIVATION_MARKER_PATH,
     { uid: 0, gid: 0, mode: 0o444, digest: authority.priorActivationMarkerSha256 })
-  validateCurrentActivation(manifest, releaseBytes, markerBytes, authority)
   io.verifyCheckout(manifest.priorState.releaseRoot, manifest.priorState.commit, REPOSITORY, manifest.priorState.closure)
   for (const [relative, digest] of Object.entries(manifest.priorState.closure)) {
     if (sha256(io.read(path.posix.join(manifest.priorState.releaseRoot, relative))) !== digest) {
@@ -441,10 +446,11 @@ function inspectPriorState(io, manifest, authority, heldLocks = false) {
   }
   const upgradeBytes = assertExactFile(io, manifest.priorState.replayUpgradeJournalPath,
     { uid: 0, gid: 0, mode: 0o600, digest: authority.replayUpgradeJournalSha256 })
-  const upgradeAuthorityId = validateReplayUpgradeJournal(upgradeBytes)
-  if (!manifest.priorState.replayUpgradeJournalPath.endsWith(`-${upgradeAuthorityId}.journal.jsonl`)) {
+  const upgrade = validateReplayUpgradeJournal(upgradeBytes)
+  if (!manifest.priorState.replayUpgradeJournalPath.endsWith(`-${upgrade.prepared.authority_id}.journal.jsonl`)) {
     fail("AEGIS_ADMISSION_PROMOTION_REPLAY_UPGRADE_INVALID", "replay upgrade journal path and authority differ")
   }
+  validateCurrentActivation(manifest, releaseBytes, markerBytes, authority, upgrade)
   const replayBytes = assertExactFile(io, REPLAY_JOURNAL_PATH,
     { uid: 0, gid: account.gid, mode: 0o660, digest: authority.replayJournalSha256 })
   if (!io.hasAppendOnly(REPLAY_JOURNAL_PATH)) {
@@ -510,7 +516,7 @@ export function promoteAegisStandingHashAdmissionRelease({
   const mutationJournal = `${loadedManifest.install.journalPrefix}${authority.authorityId}.journal.jsonl`
   if (io.inspect(mutationJournal) !== null) fail("AEGIS_ADMISSION_PROMOTION_AUTHORITY_REPLAY", "authority journal already exists")
   const prior = inspectPriorState(io, loadedManifest, authority)
-  verifyCheckouts(io, loadedManifest, loadedBytes)
+  verifyCheckouts(io, loadedManifest, authority, loadedBytes)
   const requestBytes = io.read(path.posix.join(loadedManifest.newRelease.checkoutPath,
     loadedManifest.newRelease.trustArtifacts.requestSourcePath))
   const admissionBytes = io.read(path.posix.join(loadedManifest.newRelease.checkoutPath,
@@ -557,6 +563,7 @@ export function promoteAegisStandingHashAdmissionRelease({
   const heldLocks = []
   const completed = []
   let journalCreated = false
+  let releasePublished = false
   let requestInstalled = false
   let markerReplaced = false
   let releaseManifestReplaced = false
@@ -566,7 +573,7 @@ export function promoteAegisStandingHashAdmissionRelease({
       heldLocks.push(lockPath)
     }
     inspectPriorState(io, loadedManifest, authority, true)
-    verifyCheckouts(io, loadedManifest, loadedBytes)
+    verifyCheckouts(io, loadedManifest, authority, loadedBytes)
     io.createJournal(mutationJournal, {
       schema_version: "1.0-aegis-standing-hash-admission-release-promotion-journal",
       record_type: "AUTHORITY_CONSUMED",
@@ -601,7 +608,7 @@ export function promoteAegisStandingHashAdmissionRelease({
       action()
       completed.push(name)
     }
-    step("PUBLISH_CONTENT_ADDRESSED_RELEASE", () => {}, () => {
+    step("PUBLISH_CONTENT_ADDRESSED_RELEASE", () => { releasePublished = true }, () => {
       io.publishRelease(loadedManifest.newRelease.checkoutPath, loadedManifest.newRelease.releaseRoot)
       io.verifyCheckout(loadedManifest.newRelease.releaseRoot, loadedManifest.newRelease.commit, REPOSITORY,
         { ...loadedManifest.newRelease.closure,
@@ -674,6 +681,14 @@ export function promoteAegisStandingHashAdmissionRelease({
       () => io.removeExact(loadedManifest.install.requestPath, requestBytes,
         prior.account.uid, prior.account.gid, modeNumber(loadedManifest.install.requestMode)),
       () => { requestRemoved = true },
+    )
+    if (releasePublished) recover(
+      () => io.removePublishedRelease(loadedManifest.newRelease.releaseRoot, loadedManifest.newRelease.commit,
+        REPOSITORY, { ...loadedManifest.newRelease.closure,
+          [loadedManifest.newRelease.trustArtifacts.requestSourcePath]: loadedManifest.newRelease.trustArtifacts.requestSha256,
+          [loadedManifest.newRelease.trustArtifacts.admissionPath]: loadedManifest.newRelease.trustArtifacts.admissionSha256,
+          [loadedManifest.newRelease.trustArtifacts.inputPath]: loadedManifest.newRelease.trustArtifacts.inputSha256 }),
+      () => {},
     )
     while (heldLocks.length > 0) {
       const lockPath = heldLocks.at(-1)
@@ -911,6 +926,16 @@ export function createNodePromotionIo() {
       const temporary = `${destination}.promotion-${crypto.randomUUID()}.tmp`
       fs.cpSync(source, temporary, { recursive: true, dereference: false, errorOnExist: true, force: false, verbatimSymlinks: true })
       fs.renameSync(temporary, destination)
+      fsyncParent(destination)
+    },
+    removePublishedRelease(destination, commit, repository, closure) {
+      if (inspect(destination) === null) return
+      const expectedPrefix = "/opt/williamos/releases/"
+      if (destination !== `${expectedPrefix}${commit}` || path.posix.dirname(destination) !== expectedPrefix.slice(0, -1)) {
+        fail("AEGIS_ADMISSION_PROMOTION_ROLLBACK_UNSAFE", "published release path is outside the owned release root")
+      }
+      verifyCheckout(destination, commit, repository, closure)
+      fs.rmSync(destination, { recursive: true, force: false })
       fsyncParent(destination)
     },
     createFileExclusive(targetPath, bytes, uid, gid, mode) { writeFile(targetPath, bytes, uid, gid, mode, true) },

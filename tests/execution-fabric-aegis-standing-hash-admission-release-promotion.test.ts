@@ -55,7 +55,9 @@ type FixtureOptions = {
   authorityExpired?: boolean
   replayClaim?: boolean
   replayCorrupt?: boolean
+  epochEnvelopeAfterAdmission?: boolean
   upgradeUncommitted?: boolean
+  markerUpgradeMismatch?: boolean
   occupiedPath?: string
   checkoutDrift?: string
   ancestryDrift?: boolean
@@ -76,7 +78,8 @@ const recordBytes = (record: unknown) => Buffer.from(`${canonicalizePromotionJcs
 function epochReplay(options: FixtureOptions) {
   const epochBody = { record_type: "EPOCH", epoch_id: "aegis-standing-hash-replay-epoch-v1", initialized_at: EPOCH_AT }
   const epoch = { ...epochBody, journal_record_sha256: canonicalSha256(epochBody) }
-  const firstBody = { sequence: 1, previous_entry_sha256: null, recorded_at: EPOCH_AT, record: epoch }
+  const firstBody = { sequence: 1, previous_entry_sha256: null,
+    recorded_at: options.epochEnvelopeAfterAdmission ? "2026-08-12T18:02:00.000Z" : EPOCH_AT, record: epoch }
   const entries: any[] = [{ ...firstBody, entry_sha256: canonicalSha256(firstBody) }]
   if (options.replayClaim) {
     const claim = { record_type: "CLAIM", claim_key_sha256: "9".repeat(64) }
@@ -95,6 +98,7 @@ function upgradeJournal(options: FixtureOptions) {
     phase: 1,
     authority_id: UPGRADE_AUTHORITY_ID,
     authority_sha256: "3".repeat(64),
+    manifest_sha256: (options.markerUpgradeMismatch ? "5" : "4").repeat(64),
     new_commit: PRIOR,
   }
   const committed = {
@@ -116,14 +120,13 @@ function fixture(options: FixtureOptions = {}) {
   manifest.priorState.replayUpgradeJournalPath =
     `/var/lib/williamos-aegis-standing-hash-replay-ledger-upgrade-${UPGRADE_AUTHORITY_ID}.journal.jsonl`
   manifest.evidenceRelease = {
-    commit: EVIDENCE,
-    checkoutPath: `/root/reviewed/evidence-${EVIDENCE}`,
     sourceCommit: PRIOR,
     admissionPath: "docs/reports/standing-dispatch/admission-job-595.json",
     admissionSha256: "0".repeat(64),
     inputPath: "docs/reports/standing-dispatch/inputs/WO-EF-AEGIS-STANDING-001-fabric-integrity.json",
     inputSha256: "0".repeat(64),
   }
+  const evidenceCheckoutPath = `/root/reviewed/evidence-${EVIDENCE}`
   manifest.newRelease.commit = RELEASE
   manifest.newRelease.checkoutPath = `/root/reviewed/release-${RELEASE}`
   manifest.newRelease.releaseRoot = `/opt/williamos/releases/${RELEASE}`
@@ -221,10 +224,10 @@ function fixture(options: FixtureOptions = {}) {
     file(path.posix.join(manifest.priorState.releaseRoot, relative),
       execFileSync("git", ["show", `${PRIOR}:${relative}`], { encoding: null }), 0, 0, 0o444)
   }
-  directory(manifest.evidenceRelease.checkoutPath, 0, 0, 0o755)
-  file(path.posix.join(manifest.evidenceRelease.checkoutPath, manifest.evidenceRelease.admissionPath),
+  directory(evidenceCheckoutPath, 0, 0, 0o755)
+  file(path.posix.join(evidenceCheckoutPath, manifest.evidenceRelease.admissionPath),
     admissionBytes, 0, 0, 0o444)
-  file(path.posix.join(manifest.evidenceRelease.checkoutPath, manifest.evidenceRelease.inputPath),
+  file(path.posix.join(evidenceCheckoutPath, manifest.evidenceRelease.inputPath),
     inputBytes, 0, 0, 0o444)
   placeClosure(manifest.newRelease.checkoutPath, manifest.newRelease.closure, "release")
   file(path.posix.join(manifest.newRelease.checkoutPath, manifest.newRelease.trustArtifacts.requestSourcePath),
@@ -278,7 +281,7 @@ function fixture(options: FixtureOptions = {}) {
   if (options.occupiedPath) file(options.occupiedPath, Buffer.from("occupied\n"), ACCOUNT.uid, ACCOUNT.gid, 0o600)
 
   const manifestBytes = Buffer.from(`${canonicalizePromotionJcs(manifest)}\n`, "utf8")
-  file(path.posix.join(manifest.evidenceRelease.checkoutPath, PROMOTION_MANIFEST_PATH), manifestBytes, 0, 0, 0o444)
+  file(path.posix.join(evidenceCheckoutPath, PROMOTION_MANIFEST_PATH), manifestBytes, 0, 0, 0o444)
   const authority = {
     schemaVersion: 1,
     authorityId: AUTHORITY_ID,
@@ -300,7 +303,7 @@ function fixture(options: FixtureOptions = {}) {
       request: sha256(requestBytes), admission: sha256(admissionBytes), input: sha256(inputBytes),
     },
     reviewedCheckoutPath: manifest.newRelease.checkoutPath,
-    evidenceCheckoutPath: manifest.evidenceRelease.checkoutPath,
+    evidenceCheckoutPath,
     packageCheckoutPath: manifest.packageRelease.checkoutPath,
     issuedAt: options.authorityExpired ? "2026-08-12T17:00:00.000Z" : "2026-08-12T18:00:00.000Z",
     expiresAt: options.authorityExpired ? "2026-08-12T17:10:00.000Z" : "2026-08-12T18:15:00.000Z",
@@ -343,7 +346,7 @@ function fixture(options: FixtureOptions = {}) {
         { code: "AEGIS_ADMISSION_PROMOTION_CHECKOUT_DRIFT" })
       expect(repository).toBe("bsvalues/terragroq")
       const expectedCommit = checkout === manifest.priorState.releaseRoot ? PRIOR
-        : checkout === manifest.evidenceRelease.checkoutPath ? EVIDENCE
+        : checkout === evidenceCheckoutPath ? EVIDENCE
           : checkout === manifest.packageRelease.checkoutPath ? PACKAGE : RELEASE
       expect(commit).toBe(expectedCommit)
       for (const relative of Object.keys(closure)) expect(entries.has(path.posix.join(checkout, relative))).toBe(true)
@@ -362,6 +365,12 @@ function fixture(options: FixtureOptions = {}) {
         }
       }
       after("PUBLISH_CONTENT_ADDRESSED_RELEASE")
+    },
+    removePublishedRelease: (destination: string) => {
+      events.push("ROLLBACK_PUBLISH_CONTENT_ADDRESSED_RELEASE")
+      for (const target of [...entries.keys()]) {
+        if (target === destination || target.startsWith(`${destination}/`)) entries.delete(target)
+      }
     },
     createFileExclusive: (target: string, bytes: Buffer, uid: number, gid: number, mode: number) => {
       maybeFail("INSTALL_PRIVATE_REQUEST")
@@ -458,6 +467,14 @@ describe("AEGIS standing HASH admission release promotion", () => {
     expect(value.events.every((event) => event.startsWith("VERIFY:") || event === "ANCESTRY")).toBe(true)
   })
 
+  it("loads the promotion manifest from the external authority evidence checkout", () => {
+    const value = fixture()
+    expect(value.entries.has(path.posix.join(value.manifest.packageRelease.checkoutPath, PROMOTION_MANIFEST_PATH))).toBe(false)
+    expect(value.entries.has(path.posix.join(value.manifest.newRelease.checkoutPath, PROMOTION_MANIFEST_PATH))).toBe(false)
+    expect(value.entries.has(path.posix.join(value.authority.evidenceCheckoutPath, PROMOTION_MANIFEST_PATH))).toBe(true)
+    expect(run(value)).toMatchObject({ status: "DRY_RUN", authority_consumed: false })
+  })
+
   it("applies the exact bounded mutation order and installs only one private request", () => {
     const value = fixture()
     const result = run(value, "apply")
@@ -500,8 +517,10 @@ describe("AEGIS standing HASH admission release promotion", () => {
     ["consumed authority", { authorityConsumed: true }, "AEGIS_ADMISSION_PROMOTION_AUTHORITY_REPLAY"],
     ["expired authority", { authorityExpired: true }, "AEGIS_ADMISSION_PROMOTION_AUTHORITY_EXPIRED"],
     ["uncommitted replay upgrade", { upgradeUncommitted: true }, "AEGIS_ADMISSION_PROMOTION_REPLAY_UPGRADE_INVALID"],
+    ["activation marker/replay upgrade mismatch", { markerUpgradeMismatch: true }, "AEGIS_ADMISSION_PROMOTION_PRIOR_STATE_DRIFT"],
     ["replay claim", { replayClaim: true }, "AEGIS_ADMISSION_PROMOTION_REPLAY_STATE_INVALID"],
     ["corrupt replay chain", { replayCorrupt: true }, "AEGIS_ADMISSION_PROMOTION_REPLAY_STATE_INVALID"],
+    ["backdated epoch body with later durable envelope", { epochEnvelopeAfterAdmission: true }, "AEGIS_ADMISSION_PROMOTION_ARTIFACT_INVALID"],
     ["active node lease", { occupiedPath: NODE_LEASE_PATH }, "AEGIS_ADMISSION_PROMOTION_PRIOR_STATE_DRIFT"],
     ["occupied node lock", { occupiedPath: NODE_MUTATION_LOCK_PATH }, "AEGIS_ADMISSION_PROMOTION_PRIOR_STATE_DRIFT"],
     ["existing request", { occupiedPath: `${REQUEST_ROOT}/issue-595-admission-001.json` }, "AEGIS_ADMISSION_PROMOTION_PRIOR_STATE_DRIFT"],
@@ -533,6 +552,8 @@ describe("AEGIS standing HASH admission release promotion", () => {
     expect(value.entries.get(ACTIVATION_MARKER_PATH)!.bytes).toEqual(value.markerBytes)
     expect(value.entries.get(TRUSTED_RELEASE_MANIFEST_PATH)!.bytes).toEqual(value.releaseBytes)
     expect(value.entries.has(value.manifest.install.requestPath)).toBe(false)
+    expect(value.entries.has(value.manifest.newRelease.releaseRoot)).toBe(false)
+    expect(value.events).toContain("ROLLBACK_PUBLISH_CONTENT_ADDRESSED_RELEASE")
     const records = value.entries.get(value.mutationJournal)!.bytes!.toString("utf8").trim().split("\n").map(JSON.parse)
     expect(records.at(-1).record_type).toBe("FAILED_PARTIAL")
   })
