@@ -13,8 +13,8 @@ describe("AEGIS partial network inert settlement", () => {
     const source = fs.readFileSync(path.resolve(import.meta.dirname, "../scripts/execution-fabric/provision/aegis-partial-network-inert.mjs"), "utf8")
     for (const expected of ["GIT_CONFIG_NOSYSTEM", "GIT_NO_REPLACE_OBJECTS", "ensureActionRoot", "function mutate(p,args)", "mutate(p,[\"disable\", BROKER])", "mutate(p,[\"stop\", BROKER])", "mutate(p,[\"disable\", GIT_SOCKET])", "mutate(p,[\"stop\", GIT_SOCKET])", "authority expired before mutation", "authority expired before settlement", "applied evidence differs", "STOP:${GIT_SERVICE}", "/proc", "sport = :17734 or dport = :17734"]) expect(source).toContain(expected)
   })
-  it("binds the authorized V3 failed transaction generation", () => {
+  it("binds the exact consumed failed transaction generation", () => {
     const source = fs.readFileSync(path.resolve(import.meta.dirname, "../scripts/execution-fabric/provision/aegis-partial-network-inert.mjs"), "utf8")
-    for (const expected of ["864e0fde-3e8a-4800-9fb5-6e4b64cd746b", "733bab36726e108a814279bfe79393554a28aeb33c8a9ff9619574bf25890fd0", "6cf932f6-fb5a-4a2b-b5c3-367b8e3182d9", "1cbb5e3a98a294ff02dd45b1f99dfab4102718d87229bdde9545d6a11ebc91ab", "INSTALL_GITHUB_HOST_AUTH_BOUNDARY", "github_known_hosts differs from signed bytes"]) expect(source).toContain(expected)
+    for (const expected of ["afd68274-062e-4b1e-8ff3-a5542898c8e4", "43049fd96b3d5788f7c4a43315ed4e6b41d3df4d76897a418188753800f8ed41", "a87bcdfe-5932-4e84-9872-51f4e3e9f058", "18a61bd84b125072eb40af460fe44ca9327ba6033a4c6b22f191e83656650cd1", "INSTALL_GITHUB_HOST_AUTH_BOUNDARY", "github_known_hosts differs from signed bytes"]) expect(source).toContain(expected)
   })
 })

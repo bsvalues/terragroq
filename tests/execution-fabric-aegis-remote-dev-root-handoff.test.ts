@@ -14,6 +14,7 @@ import {
   validateOwnerAuthority,
   validateRootHandoffManifest,
 } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-handoff.mjs"
+import { isTrustedAtomicInstallSourceMode } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { exactLedgerAncestorContract, exactNftBoundaryJson, exactNftBoundaryLines, inspectBrokerReadinessSamples, inspectDurableLedgerReconciliation, inspectExactInertNetworkPredecessor, inspectForcedCommandTransportReconciliation, inspectNftTableList, inspectNoSudoCapabilityEvidence, inspectRootAdapterContract, inspectRootClaimWindow, inspectTrustedRepositoryReconciliation, isProofWorkerUnitName as isAdapterProofWorkerUnitName } from "../scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs"
 import { allowedHostForOperation, isDeniedDestination } from "../scripts/execution-fabric/provision/assets/aegis-remote-dev-runtime-authority.mjs"
 
@@ -90,6 +91,12 @@ function signedAuthority(manifest = loadManifest(), overrides: Record<string, un
 }
 
 describe("AEGIS root-owned prerequisite handoff", () => {
+  it("accepts exact root-owned 0400 signed staging inputs for atomic installation", () => {
+    expect(isTrustedAtomicInstallSourceMode(0o400)).toBe(true)
+    expect(isTrustedAtomicInstallSourceMode(0o444)).toBe(true)
+    expect(isTrustedAtomicInstallSourceMode(0o555)).toBe(true)
+    expect(isTrustedAtomicInstallSourceMode(0o600)).toBe(false)
+  })
   it("adopts only the exact restrictive predecessor with its egress oneshot enabled and inactive", () => {
     const exact = { firstReceiptExact: true, secondReceiptExact: true, nftSemanticExact: true,
       egressEnabledInactive: true, brokerInactiveDisabled: true, gitSocketInactiveDisabled: true,
