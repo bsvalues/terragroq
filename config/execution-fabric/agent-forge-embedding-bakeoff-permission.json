@@ -6,7 +6,7 @@
   "allowed_actions": [
     "invoke-fixed-loopback-embedding-endpoint",
     "invoke-fixed-reviewed-evaluator",
-    "emit-bounded-attested-result"
+    "emit-bounded-result-receipt"
   ],
   "prohibited_actions": [
     "arbitrary-executable",

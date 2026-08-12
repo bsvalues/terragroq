@@ -18,7 +18,18 @@ const MODEL_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\model-m
 const RUNTIME_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\runtime-manifest.json"
 const HOST_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\host-manifest.json"
 const PYTHON_EXECUTABLE = "C:\\Python313\\python.exe"
+const GIT_EXECUTABLE = "C:\\Program Files\\Git\\cmd\\git.exe"
 const EVALUATOR_PATH = path.join(REPOSITORY_ROOT, EMBEDDING_CONTRACT.evaluatorPath)
+const TRUSTED_MAIN_REF = "refs/heads/main"
+
+const REVIEWED_SOURCE_BINDINGS = Object.freeze([
+  [EMBEDDING_CONTRACT.evaluatorPath, "evaluator_sha256"],
+  [EMBEDDING_CONTRACT.bakeoffPath, "bakeoff_sha256"],
+  [EMBEDDING_CONTRACT.embedPath, "embed_sha256"],
+  [EMBEDDING_CONTRACT.metricsPath, "metrics_sha256"],
+  [EMBEDDING_CONTRACT.adapterPath, "adapter_sha256"],
+  [EMBEDDING_CONTRACT.runnerPath, "runner_sha256"],
+])
 
 function sha256(value) { return crypto.createHash("sha256").update(value).digest("hex") }
 
@@ -44,15 +55,42 @@ function readFixedJson(filePath, root, label) {
 
 export function proveTrustedAdmission({ admission, admissionSha256 }) {
   const git = (...args) => {
-    const result = spawnSync("git", args, { cwd: REPOSITORY_ROOT, encoding: "utf8", windowsHide: true })
+    const result = spawnSync(GIT_EXECUTABLE, args, {
+      cwd: REPOSITORY_ROOT,
+      encoding: null,
+      windowsHide: true,
+      env: {
+        SystemRoot: "C:\\WINDOWS",
+        WINDIR: "C:\\WINDOWS",
+        TEMP: "C:\\HermesLab\\work",
+        TMP: "C:\\HermesLab\\work",
+        PATH: "C:\\Program Files\\Git\\cmd;C:\\WINDOWS\\System32",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "NUL",
+        GIT_NO_REPLACE_OBJECTS: "1",
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_TERMINAL_PROMPT: "0",
+      },
+    })
     if (result.status !== 0) throw new Error("trusted-main embedding admission proof failed")
-    return result.stdout.trim()
+    return Buffer.from(result.stdout)
   }
-  git("merge-base", "--is-ancestor", admission.execution_commit, "refs/heads/main")
-  if (git("rev-parse", "HEAD") !== admission.execution_commit) {
+  const gitText = (...args) => git(...args).toString("utf8").trim()
+  git("merge-base", "--is-ancestor", admission.execution_commit, TRUSTED_MAIN_REF)
+  if (gitText("rev-parse", "HEAD") !== admission.execution_commit) {
     throw new Error("resident checkout is not the exact admitted execution commit")
   }
-  const retained = Buffer.from(git("show", `refs/heads/main:${EMBEDDING_CONTRACT.authorityRegistryPath}`), "utf8")
+  const closure = {}
+  for (const [relativePath, digestField] of REVIEWED_SOURCE_BINDINGS) {
+    const reviewed = git("show", `${admission.execution_commit}:${relativePath}`)
+    const live = fs.readFileSync(path.resolve(REPOSITORY_ROOT, relativePath))
+    const expected = admission.runtime[digestField]
+    if (sha256(reviewed) !== expected || sha256(live) !== expected || !reviewed.equals(live)) {
+      throw new Error("resident executable source closure differs from the admitted commit")
+    }
+    closure[relativePath] = expected
+  }
+  const retained = git("show", `${TRUSTED_MAIN_REF}:${EMBEDDING_CONTRACT.authorityRegistryPath}`)
   const registry = JSON.parse(retained.toString("utf8"))
   if (registry.schema_version !== "1.0-hermes-embedding-bakeoff-authority-registry"
     || registry.registry_id !== "hermes-embedding-bakeoff-authorities" || !Array.isArray(registry.entries)) {
@@ -64,6 +102,7 @@ export function proveTrustedAdmission({ admission, admissionSha256 }) {
     admission_sha256: admissionSha256,
     execution_commit: admission.execution_commit,
     inventory_snapshot_sha256: admission.placement.inventory_snapshot_sha256,
+    source_closure_sha256: sha256(canonicalizeJcs(closure)),
     exact_entry_count: exactEntryCount,
     verified: exactEntryCount === 1,
   }
@@ -143,9 +182,11 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
     runtime_manifest: runtimeManifest,
     host_manifest: hostManifest,
   })}\n`, "utf8")
+  if (evaluatorInput.byteLength > admission.limits.max_input_bytes) throw new Error("fixed evaluator input exceeds admitted ceiling")
   const executionKey = sha256(canonicalizeJcs({ admission, host_attestation }))
   const sealedInputPath = path.join(ledgerRoot, `sealed-${executionKey}.json`)
   const resultPath = path.join(ledgerRoot, `result-${executionKey}.json`)
+  if (evaluatorInput.byteLength > admission.limits.max_scratch_bytes) throw new Error("sealed input exceeds admitted scratch ceiling")
   writeExclusive(sealedInputPath, evaluatorInput)
   const run = spawnSync(PYTHON_EXECUTABLE, [EVALUATOR_PATH], {
     cwd: path.dirname(EVALUATOR_PATH), windowsHide: true, timeout: admission.limits.timeout_ms,
@@ -159,6 +200,7 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
   if (run.status !== 0) throw new Error(`fixed embedding evaluator failed with status ${run.status ?? "none"}`)
   const resultBytes = Buffer.from(run.stdout)
   if (resultBytes.byteLength > admission.limits.max_result_bytes) throw new Error("fixed evaluator result exceeds admitted ceiling")
+  if (evaluatorInput.byteLength + resultBytes.byteLength > admission.limits.max_scratch_bytes) throw new Error("fixed evaluator artifacts exceed admitted scratch ceiling")
   writeExclusive(resultPath, resultBytes)
   const result = JSON.parse(resultBytes.toString("utf8"))
   const provenance = result?.manifest?.provenance
@@ -171,7 +213,6 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
     model_id: result?.manifest?.model, runtime_id: provenance?.runtime?.runtime_id,
     node_id: provenance?.host?.node_id, endpoint: EMBEDDING_CONTRACT.endpoint,
     external_provider_used: false, fallback_used: false,
-    canonical_vectors_written: false, database_mutated: false,
   }
 }
 
