@@ -125,7 +125,8 @@ class RegressionHardening(unittest.TestCase):
         # finding: find/-exec, -delete, sed -i, awk system(), env <cmd>, python -m/-c were ALLOWed.
         for c in ["find . -delete", "sed -i s/a/b/ file.txt", "awk {print} file",
                   "env FOO=bar somebinary", "python3 -m http.server 8000",
-                  "python3 -m pytest -q", "python3 script.py"]:
+                  "python3 -m pytest -q", "python3 script.py",
+                  "grep x file > out.txt", "echo hi > /tmp/f", "cat $(whoami).log"]:
             self.assertNotEqual(d(c), Decision.ALLOW, c)
 
     def test_wrapped_rm_is_denied(self):

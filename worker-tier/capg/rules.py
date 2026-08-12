@@ -131,6 +131,10 @@ def _safe_read(c: Command) -> bool:
         return False
     if _WRITE_SYS.search(c.raw) or _REDIR_DISK.search(c.raw):
         return False
+    # a genuinely read-only command neither redirects output nor runs command substitution;
+    # an allowlisted NAME is not enough — args carrying `>`, `` ` `` or `$( )` are not safe-read.
+    if ">" in c.raw or "`" in c.raw or "$(" in c.raw:
+        return False
     for seg in c.segments:
         n = seg.name
         if n in _SAFE:
