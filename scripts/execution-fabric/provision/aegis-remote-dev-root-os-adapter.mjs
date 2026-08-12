@@ -12,6 +12,8 @@ const LAUNCH_PRIVATE_KEY = "/etc/williamos-fabric/aegis-remote-dev-launch-author
 const LAUNCH_PUBLIC_KEY = "/etc/williamos-fabric/aegis-remote-dev-launch-authority.pem"
 const CONTROL_REPOSITORY = "/var/lib/williamos-remote-dev/control/terragroq"
 const TARGET_MIRROR = "/var/lib/williamos-remote-dev/repositories/terrafusion_os_1.0.git"
+const HERMES_SOURCE_ADDRESS = "192.168.88.9"
+const PREVIOUS_HERMES_SOURCE_ADDRESS = "192.168.1.154"
 const FIXED_ENV = Object.freeze({ HOME: "/nonexistent", PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1" })
 const STEPS = Object.freeze([
   "RECONCILE_BOUNDED_IDENTITY", "INSTALL_ROOT_LAUNCH_ASSETS", "INSTALL_DUAL_STACK_BROKER_BOUNDARY",
@@ -21,6 +23,14 @@ const STEPS = Object.freeze([
 const sha = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex")
 const canonical = (value) => value === null ? "null" : typeof value === "string" ? JSON.stringify(value) : typeof value === "number" ? JSON.stringify(value) : typeof value === "boolean" ? String(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
 const same = (left, right) => canonical(left) === canonical(right)
+
+export function inspectForcedCommandTransportReconciliation({ current, expected, predecessor, pathOccupied = current !== "", currentMetadataExact = false, predecessorMetadataExact = false }) {
+  if (typeof current !== "string" || typeof expected !== "string" || typeof predecessor !== "string" || !expected || !predecessor || expected === predecessor) return "DRIFT"
+  if (current === expected) return currentMetadataExact ? "MATCH" : "DRIFT"
+  if (current === predecessor) return predecessorMetadataExact ? "RECONCILE_EXACT_PREDECESSOR" : "DRIFT"
+  if (current === "") return pathOccupied ? "DRIFT" : "ABSENT"
+  return "DRIFT"
+}
 
 function fail(code, detail) { const error = new Error(detail); error.code = code; throw error }
 function run(executable, args, options = {}) {
@@ -43,6 +53,13 @@ function exactFile(file, expectedSha, owner = 0, group = 0, mode) {
   } catch { return false }
 }
 function lexists(file) { try { fs.lstatSync(file); return true } catch (error) { if (error?.code === "ENOENT") return false; throw error } }
+function inspectTransportPath(file, expected, predecessor) {
+  const occupied = lexists(file)
+  if (!occupied) return { occupied: false, current: "", currentMetadataExact: false, predecessorMetadataExact: false }
+  const currentMetadataExact = exactFile(file, sha(Buffer.from(expected)), 0, 0, 0o444)
+  const predecessorMetadataExact = exactFile(file, sha(Buffer.from(predecessor)), 0, 0, 0o444)
+  return { occupied: true, current: currentMetadataExact ? expected : predecessorMetadataExact ? predecessor : "OCCUPIED_UNTRUSTED", currentMetadataExact, predecessorMetadataExact }
+}
 function readCanonicalRootJson(file, mode = 0o400) {
   const stat = fs.lstatSync(file)
   if (!trustedParents(file) || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== 0 || stat.gid !== 0 || (stat.mode & 0o7777) !== mode || stat.size < 3 || stat.size > 1_048_576) fail("EVIDENCE_FILE_UNTRUSTED", `${file} trust differs`)
@@ -406,7 +423,6 @@ function observe(manifest, authority, trust) {
   const brokerIds = accountIds("williamos-egress-broker")
   const gitBrokerIds = accountIds("williamos-git-broker")
   const transportPath = "/etc/ssh/authorized_keys/williamos-fabric"
-  const transport = fs.existsSync(transportPath) ? fs.readFileSync(transportPath, "utf8") : ""
   const rootAssets = rootAssetsState(manifest, authority)
   const nft = networkBoundaryMatches()
   const repositories = repositoryState(manifest, authority)
@@ -417,7 +433,7 @@ function observe(manifest, authority, trust) {
   const brokerProcessState = brokerIds ? userProcesses(brokerIds.uid) : { proven: true, pids: [], onlyManager: true }
   const gitBrokerProcessState = gitBrokerIds ? userProcesses(gitBrokerIds.uid) : { proven: true, pids: [], onlyManager: true }
   const identityMatch = (() => { try { const shadow = run("/usr/bin/getent", ["shadow", "williamos-fabric"]).split(":")[1]; const linger = fs.existsSync(`/var/lib/systemd/linger/williamos-fabric`); return ids?.home === "/var/empty/williamos-fabric" && ids?.shell === "/bin/bash" && /^!/.test(shadow) && linger && noSudoCapability() && same(supplementaryGroups("williamos-fabric"), [ids.gid]) && processState.proven && processState.onlyManager && brokerIds?.home === "/var/empty/williamos-egress-broker" && brokerIds?.shell === "/usr/sbin/nologin" && brokerProcessState.proven && same(supplementaryGroups("williamos-egress-broker"), [brokerIds.gid]) && gitBrokerIds?.home === "/var/empty/williamos-git-broker" && gitBrokerIds?.shell === "/usr/sbin/nologin" && gitBrokerIds.gid === ids.gid && gitBrokerProcessState.proven && gitBrokerProcessState.pids.length === 0 && same(supplementaryGroups("williamos-git-broker"), [ids.gid]) && exactSharedGitGroup(ids.gid) && sharedGroupProcessesExact(ids.gid, [ids.uid, gitBrokerIds.uid]) } catch { return false } })()
-  const expectedTransport = (() => { try { const key = fs.readFileSync(path.join(STAGED_ROOT, "hermes-transport.pub"), "utf8").trim(); return `from="192.168.1.154",restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" ${key}\n` } catch { return null } })()
+  const transportLines = (() => { try { const key = fs.readFileSync(path.join(STAGED_ROOT, "hermes-transport.pub"), "utf8").trim(); const suffix = `restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" ${key}\n`; return { expected: `from="${HERMES_SOURCE_ADDRESS}",${suffix}`, predecessor: `from="${PREVIOUS_HERMES_SOURCE_ADDRESS}",${suffix}` } } catch { return { expected: null, predecessor: null } } })()
   const githubMatch = exactFile("/etc/williamos-fabric/github_known_hosts", authority.inputs.githubHostKnownHostsSha256, 0, 0, 0o444) && exactFile("/etc/williamos-fabric/github-account.key", authority.inputs.githubAccountPrivateKeySha256, 0, 0, 0o400)
   const states = {
     RECONCILE_BOUNDED_IDENTITY: identityMatch ? "MATCH" : ids && (!processState.proven || (processState.pids.length > 0 && !processState.onlyManager) || !brokerProcessState.proven || brokerProcessState.pids.length > 0 || !gitBrokerProcessState.proven || gitBrokerProcessState.pids.length > 0 || !noSudoCapability()) ? "DRIFT" : "ABSENT",
@@ -427,7 +443,7 @@ function observe(manifest, authority, trust) {
     RECONCILE_TRUSTED_REPOSITORIES: repositories,
     INSTALL_PINNED_TOOLCHAIN: toolchain,
     CREATE_DURABLE_LEDGER: inspectDurableLedgerReconciliation({ ledgerExact: ledger, ledgerExists: fs.existsSync("/var/lib/williamos/fabric/ledger"), ledgerRecordsExact, ticketExact: appendOnly("/var/lib/williamos-fabric/remote-dev-launch-tickets"), ticketExists: lexists("/var/lib/williamos-fabric/remote-dev-launch-tickets") }),
-    INSTALL_FORCED_COMMAND_TRANSPORT: transport === expectedTransport && exactFile(transportPath, sha(Buffer.from(expectedTransport)), 0, 0, 0o444) ? "MATCH" : transport ? "DRIFT" : "ABSENT",
+    INSTALL_FORCED_COMMAND_TRANSPORT: transportLines.expected && transportLines.predecessor ? (() => { const inspected = inspectTransportPath(transportPath, transportLines.expected, transportLines.predecessor); const state = inspectForcedCommandTransportReconciliation({ current: inspected.current, expected: transportLines.expected, predecessor: transportLines.predecessor, pathOccupied: inspected.occupied, currentMetadataExact: inspected.currentMetadataExact, predecessorMetadataExact: inspected.predecessorMetadataExact }); return state === "RECONCILE_EXACT_PREDECESSOR" ? "ABSENT" : state })() : "DRIFT",
   }
   return { platform: { os: process.platform, effectiveUid: process.getuid?.(), hostname: run("/usr/bin/hostname", ["-s"]), machineIdSha256: sha(Buffer.from(fs.readFileSync("/etc/machine-id", "utf8").trim(), "utf8")) }, ...trust, trustedMain: { ...trust.trustedMain, exactCleanHead: repositories === "MATCH", criticalBytesMatch: rootAssets }, storage: storageObservation(), prerequisites: states }
 }
@@ -492,11 +508,21 @@ function applyTransport(authority) {
   const fingerprint = run("/usr/bin/ssh-keygen", ["-lf", source, "-E", "sha256"])
   if (!fingerprint.includes(authority.inputs.hermesTransportKeyFingerprint)) fail("TRANSPORT_KEY_DRIFT", "Hermes transport key fingerprint differs")
   const directory = "/etc/ssh/authorized_keys"; ensureRootDirectory(directory, 0o755)
-  const key = fs.readFileSync(source, "utf8").trim(); const line = `from="192.168.1.154",restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" ${key}\n`
-  const destination = `${directory}/williamos-fabric`; if (fs.existsSync(destination)) { if (!exactFile(destination, sha(Buffer.from(line)), 0, 0, 0o444)) fail("TRANSPORT_DRIFT", "existing forced-command transport differs") }
-  else { const handle = fs.openSync(destination, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o444); fs.writeFileSync(handle, line); fs.fsyncSync(handle); fs.closeSync(handle); const parent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(parent); fs.closeSync(parent) }
+  const key = fs.readFileSync(source, "utf8").trim(); const suffix = `restrict,command="/usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs" ${key}\n`; const line = `from="${HERMES_SOURCE_ADDRESS}",${suffix}`; const predecessor = `from="${PREVIOUS_HERMES_SOURCE_ADDRESS}",${suffix}`
+  const destination = `${directory}/williamos-fabric`; const inspected = inspectTransportPath(destination, line, predecessor); const state = inspectForcedCommandTransportReconciliation({ current: inspected.current, expected: line, predecessor, pathOccupied: inspected.occupied, currentMetadataExact: inspected.currentMetadataExact, predecessorMetadataExact: inspected.predecessorMetadataExact })
+  if (state === "DRIFT") fail("TRANSPORT_DRIFT", "existing forced-command transport differs")
+  if (state === "RECONCILE_EXACT_PREDECESSOR") {
+    if (!exactFile(destination, sha(Buffer.from(predecessor)), 0, 0, 0o444)) fail("TRANSPORT_DRIFT", "predecessor forced-command transport metadata differs")
+    const snapshot = `${JOURNAL_ROOT}/${authority.transactionId}.transport-predecessor`
+    if (lexists(snapshot)) { if (!exactFile(snapshot, sha(Buffer.from(predecessor)), 0, 0, 0o400)) fail("TRANSPORT_DRIFT", "transaction predecessor snapshot differs") }
+    else { const snapshotHandle = fs.openSync(snapshot, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o400); fs.writeFileSync(snapshotHandle, predecessor); fs.fsyncSync(snapshotHandle); fs.closeSync(snapshotHandle); const journal = fs.openSync(JOURNAL_ROOT, fs.constants.O_RDONLY); fs.fsyncSync(journal); fs.closeSync(journal) }
+    const temporary = `${destination}.${authority.transactionId}.tmp`
+    if (lexists(temporary)) { if (!exactFile(temporary, sha(Buffer.from(line)), 0, 0, 0o444)) fail("TRANSPORT_DRIFT", "transaction transport staging file differs") }
+    else { const handle = fs.openSync(temporary, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o444); fs.writeFileSync(handle, line); fs.fsyncSync(handle); fs.fchmodSync(handle, 0o444); fs.closeSync(handle); const stagedParent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(stagedParent); fs.closeSync(stagedParent) }
+    fs.renameSync(temporary, destination); const parent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(parent); fs.closeSync(parent)
+  } else if (state === "ABSENT") { const handle = fs.openSync(destination, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o444); fs.writeFileSync(handle, line); fs.fsyncSync(handle); fs.closeSync(handle); const parent = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(parent); fs.closeSync(parent) }
   run("/usr/sbin/sshd", ["-t"])
-  for (const address of ["192.168.1.154", "192.168.1.155"]) {
+  for (const address of [HERMES_SOURCE_ADDRESS, PREVIOUS_HERMES_SOURCE_ADDRESS]) {
     const effective = run("/usr/sbin/sshd", ["-T", "-C", `user=williamos-fabric,host=aegis,addr=${address}`])
     for (const required of ["passwordauthentication no", "kbdinteractiveauthentication no", "hostbasedauthentication no", "pubkeyauthentication yes", "authenticationmethods publickey", "forcecommand /usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs", "allowtcpforwarding no", "permittty no", "permituserenvironment no", "permituserrc no", "authorizedkeysfile /etc/ssh/authorized_keys/williamos-fabric", "authorizedkeyscommand none", "authorizedprincipalscommand none", "trustedusercakeys none"]) if (!effective.includes(required)) fail("TRANSPORT_DRIFT", "effective SSH restriction differs")
   }

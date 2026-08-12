@@ -9,7 +9,7 @@ import { canonicalizeJcs } from "../canonical-json.mjs"
 const MANIFEST_PATH = "config/execution-fabric/aegis-remote-dev-prerequisites.json"
 const SHA256 = /^[a-f0-9]{64}$/
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const EXPECTED_MANIFEST_SHA256 = "1fb6fde76456483a34166b67b6b4413d05c9d69261223f2315d2718de64c359c"
+const EXPECTED_MANIFEST_SHA256 = "8b956f9e7ae53cf37ba3d2a916d9848522f159ef17afa8c261e7d1454f397034"
 const EXPECTED_BINDINGS = Object.freeze([
   "scripts/execution-fabric/provision/aegis-remote-dev-prerequisites.sh",
   "scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs",
@@ -17,7 +17,6 @@ const EXPECTED_BINDINGS = Object.freeze([
   "scripts/execution-fabric/live/aegis-resident-network-boundary.mjs",
   "scripts/execution-fabric/live/aegis-remote-dev-worker.sh",
   "config/execution-fabric/aegis-resident-network-boundary.json",
-  "config/execution-fabric/remote-dev-offload-v1-activation.json",
 ])
 
 function sha256(value) {
@@ -58,7 +57,8 @@ function validateManifest(manifest) {
   if (manifest.proof?.workOrderId !== "WO-TF-REMOTE-DEV-OFFLOAD-001" || manifest.proof?.issue?.repository !== "bsvalues/terrafusion_os_1.0" || manifest.proof?.issue?.number !== 734
     || manifest.proof?.activationStatus !== "INACTIVE_PENDING_PREREQUISITES" || manifest.proof?.generalSchedulerEnabled !== false || manifest.proof?.standingAegisAuthorityEnabled !== false) throw new Error("proof scope differs")
   if (manifest.identity?.account !== "williamos-fabric" || manifest.identity?.privilege !== "non-root-no-sudo" || manifest.identity?.machineIdSha256 !== "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b") throw new Error("identity scope differs")
-  if (manifest.transport?.account !== "williamos-fabric" || manifest.transport?.sourceHost !== "hermes" || manifest.transport?.sourceAddress !== "192.168.1.154"
+  if (manifest.transport?.account !== "williamos-fabric" || manifest.transport?.sourceHost !== "hermes" || manifest.transport?.sourceAddress !== "192.168.88.9"
+    || manifest.transport?.targetHost !== "aegis" || manifest.transport?.targetAddress !== "192.168.88.6"
     || manifest.transport?.unrestrictedBsWorkerPathAllowed !== false || manifest.transport?.unrestrictedShellAllowed !== false || manifest.transport?.passwordAuthenticationAllowed !== false
     || manifest.transport?.ptyAllowed !== false || manifest.transport?.forwardingAllowed !== false) throw new Error("transport boundary differs")
   const storage = {
@@ -165,6 +165,8 @@ export function buildProvisioningPlan(rawManifest, observed) {
   check("transport.account", observed.transport.account, manifest.transport.account)
   check("transport.sourceHost", observed.transport.sourceHost, manifest.transport.sourceHost)
   check("transport.sourceAddress", observed.transport.sourceAddress, manifest.transport.sourceAddress)
+  check("transport.targetHost", observed.transport.targetHost, manifest.transport.targetHost)
+  check("transport.targetAddress", observed.transport.targetAddress, manifest.transport.targetAddress)
   check("transport.forcedCommandPath", observed.transport.forcedCommandPath, manifest.transport.forcedCommandPath)
   check("transport.unrestrictedShellAllowed", observed.transport.unrestrictedShellAllowed, false)
   check("transport.passwordAuthenticationAllowed", observed.transport.passwordAuthenticationAllowed, false)
