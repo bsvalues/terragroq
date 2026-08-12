@@ -25,11 +25,12 @@ describe("auth trusted origin resolution", () => {
     process.env = originalEnv
   })
 
-  it("uses the same base URL precedence as Better Auth", () => {
+  it("uses BETTER_AUTH_URL as the canonical base and ignores Vercel env vars", () => {
     process.env.BETTER_AUTH_URL = "https://auth.example.com"
     process.env.VERCEL_PROJECT_PRODUCTION_URL = "prod.example.com"
     process.env.VERCEL_URL = "preview.example.com"
 
+    // Vercel/v0 fallbacks were removed (#638 R4): only BETTER_AUTH_URL resolves.
     expect(resolveAuthBaseUrl()).toBe("https://auth.example.com")
   })
 
@@ -46,7 +47,6 @@ describe("auth trusted origin resolution", () => {
   it("parses configured trusted origins and keeps development defaults", () => {
     process.env.BETTER_AUTH_TRUSTED_ORIGINS =
       "http://localhost:3000, https://operator.example.com\nhttps://preview.example.com"
-    process.env.VERCEL_PROJECT_PRODUCTION_URL = "terragroq.vercel.app"
 
     const config = resolveTrustedOriginConfig()
 
@@ -56,7 +56,6 @@ describe("auth trusted origin resolution", () => {
         "http://127.0.0.1:3000",
         "https://operator.example.com",
         "https://preview.example.com",
-        "https://terragroq.vercel.app",
       ]),
     )
     expect(config.invalidConfiguredOrigins).toEqual([])
