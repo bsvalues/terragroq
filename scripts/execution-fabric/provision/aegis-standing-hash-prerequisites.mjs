@@ -5,13 +5,13 @@ import path from "node:path"
 import { canonicalizeJcs } from "../canonical-json.mjs"
 
 const MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-provisioning-package.v1.json"
-const EXPECTED_MANIFEST_SHA256 = "35b45b5a44cd3e203b920ff43385211a89236cfdfe89cb5f5fc9c7cfa5ed9406"
+const EXPECTED_MANIFEST_SHA256 = "adb43b325199e3eb167298887ed01e7c434a88b0838ace17f1086132ae0f46ec"
 const SHA256 = /^[a-f0-9]{64}$/
 const COMMIT = /^[a-f0-9]{40}$/
 const SSH_SHA256_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}$/
 const AUTHORIZED_KEY_OPTIONS = Object.freeze([
   "restrict",
-  'from="192.168.1.154"',
+  'from="192.168.88.9"',
   'command="/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs"',
   "no-agent-forwarding",
   "no-port-forwarding",

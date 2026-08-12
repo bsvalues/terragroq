@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url"
 
 const NODE = "/usr/bin/node"
 const BOOTSTRAP = "/usr/local/libexec/williamos/aegis-standing-hash-bootstrap.mjs"
-const SOURCE_IP = "192.168.1.154"
+const SOURCE_IP = "192.168.88.9"
 const SAFE_ID = "[A-Za-z0-9][A-Za-z0-9._-]{2,255}"
 const ADMISSION = `docs/reports/standing-dispatch/(${SAFE_ID}\\.json)`
 const regexEscape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")

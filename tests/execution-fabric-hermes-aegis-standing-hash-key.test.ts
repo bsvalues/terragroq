@@ -50,7 +50,7 @@ function authority(overrides: Json = {}): Json {
     manifestSha256: canonicalSha256(value),
     generationHost: "hermes",
     generationAccount: "bs",
-    sourceAddress: "192.168.1.154",
+    sourceAddress: "192.168.88.9",
     algorithm: "ssh-ed25519",
     privateKeyPath: PRIVATE_KEY_PATH,
     publicKeyPath: PUBLIC_KEY_PATH,

@@ -269,7 +269,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
         exclusiveLeaseAndFenceRequired: true,
       },
       invocationBoundary: {
-        sourceAddress: "192.168.1.154",
+        sourceAddress: "192.168.88.9",
         targetHostEd25519Fingerprint: "SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo",
         account: "williamos-fabric",
         dedicatedTransportKeyRequired: true,
@@ -290,10 +290,10 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs", sha256: "c5965a206b5f26c0db21176a609775d1ca176409b644bbc241fde74565bd8d8f", textNormalization: "LF" },
       { path: "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs", sha256: "0775904a9ceb7fae71e1ce9100f5017c5f05885c1a16e380f52971a4ac4665f8", textNormalization: "LF" },
       { path: "scripts/execution-fabric/canonical-json.mjs", sha256: "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs", sha256: "c18ecec38a5086788d7f4532b471efc6548cd293c27f3983a92934464015fb16", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs", sha256: "ebcf0d068e11c1a3f98b515f9a59a456955d8d30abdbb8bab7897b9b315caf9a", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "92a0f36e4af132340e6fa3d8bf32ac1e716f52f08779530792c7dc8dc5216d1d", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "71ca5a166b5ddeb0e7b087530d1dd3448d0b42b5b33fd69ff4f4c545fa5b701f", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "ee3118289cde6b2b57aba98b209e5894c444161a99bb3e5f6dfefa99d9a0bc18", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "72d343f3cdae8e84acc31edf7726982f4596a9a0cdd1c37692f2b85db009aeba", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
       "scheduler-activation",
@@ -504,7 +504,7 @@ function keyGenerationEvidence(value = manifest(), publicKey = TRANSPORT_PUBLIC_
     generatedAt: "2026-08-11T17:59:00.000Z",
     generationHost: "hermes",
     generationAccount: "bs",
-    sourceAddress: "192.168.1.154",
+    sourceAddress: "192.168.88.9",
     algorithm: "ssh-ed25519",
     privateKeyPath: value.invocationBoundary.dedicatedTransportPrivateKeyPath,
     publicKeyPath: value.invocationBoundary.dedicatedTransportPublicKeyPath,
@@ -518,6 +518,13 @@ function keyGenerationEvidence(value = manifest(), publicKey = TRANSPORT_PUBLIC_
 }
 
 describe("dedicated key generation evidence compatibility", () => {
+  it("rejects null evidence with the contract-specific failure code", () => {
+    expect(() => validateHermesKeyGenerationEvidence(manifest(), null, {
+      fingerprint: publicKeyFingerprint(),
+      fileSha256: publicKeySha256(),
+    })).toThrow(expect.objectContaining({ code: "AEGIS_PROVISION_KEY_GENERATION_EVIDENCE_INVALID" }))
+  })
+
   it("accepts the exact reviewed pre-remediation manifest generation", () => {
     const approvedHistoricalManifestSha256 =
       "5774d4e98ba2620a9bf0433c00c795f69357ef473e91d85e6e8338ada8c2821c"
@@ -525,6 +532,7 @@ describe("dedicated key generation evidence compatibility", () => {
     const value = manifest()
     const evidence = keyGenerationEvidence(value)
     evidence.manifestSha256 = approvedHistoricalManifestSha256
+    evidence.sourceAddress = "192.168.1.154"
 
     expect(validateHermesKeyGenerationEvidence(value, evidence, {
       fingerprint: publicKeyFingerprint(),
@@ -536,6 +544,17 @@ describe("dedicated key generation evidence compatibility", () => {
     const value = manifest()
     const evidence = keyGenerationEvidence(value)
     evidence.manifestSha256 = "0".repeat(64)
+
+    expect(() => validateHermesKeyGenerationEvidence(value, evidence, {
+      fingerprint: publicKeyFingerprint(),
+      fileSha256: publicKeySha256(),
+    })).toThrow(expect.objectContaining({ code: "AEGIS_PROVISION_KEY_GENERATION_EVIDENCE_INVALID" }))
+  })
+
+  it("rejects the historical manifest with a non-historical source address", () => {
+    const value = manifest()
+    const evidence = keyGenerationEvidence(value)
+    evidence.manifestSha256 = LEGACY_KEY_GENERATION_MANIFEST_SHA256
 
     expect(() => validateHermesKeyGenerationEvidence(value, evidence, {
       fingerprint: publicKeyFingerprint(),
@@ -556,7 +575,7 @@ function applyAuthority(value = manifest(), evidence = keyGenerationEvidence(val
 
 const authorizedKeyRecord = [
   "restrict",
-  'from="192.168.1.154"',
+  'from="192.168.88.9"',
   'command="/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs"',
   "no-agent-forwarding",
   "no-port-forwarding",

@@ -16,7 +16,7 @@ export const MANIFEST_PATH = "config/execution-fabric/aegis-standing-hash-provis
 export const JOURNAL_PREFIX = "/var/lib/williamos-aegis-standing-hash-"
 export const AUTHORIZED_KEYS_RECORD_OPTIONS = Object.freeze([
   "restrict",
-  'from="192.168.1.154"',
+  'from="192.168.88.9"',
   'command="/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs"',
   "no-agent-forwarding",
   "no-port-forwarding",
@@ -241,7 +241,7 @@ function validateManifest(manifest) {
     }
   }
   if (manifest.invocationBoundary?.authorizedKeysPath !== "/home/williamos-fabric/.ssh/authorized_keys"
-    || manifest.invocationBoundary?.sourceAddress !== "192.168.1.154"
+    || manifest.invocationBoundary?.sourceAddress !== "192.168.88.9"
     || manifest.invocationBoundary?.forcedCommandPath !== EXPECTED_ROOT_ASSETS["ssh-entrypoint"]
     || manifest.invocationBoundary?.dedicatedTransportKeyAlgorithm !== "ssh-ed25519"
     || manifest.invocationBoundary?.dedicatedTransportPrivateKeyInspectionAllowed !== false
@@ -310,13 +310,18 @@ function parsePublicKey(bytes) {
 }
 
 export function validateHermesKeyGenerationEvidence(manifest, evidence, publicKey) {
+  if (!exactKeys(evidence, KEY_EVIDENCE_KEYS)) {
+    fail("AEGIS_PROVISION_KEY_GENERATION_EVIDENCE_INVALID", "dedicated key generation evidence differs")
+  }
   const currentManifestSha256 = canonicalSha256(manifest)
   const acceptedManifestSha256 = new Set([
     currentManifestSha256,
     LEGACY_KEY_GENERATION_MANIFEST_SHA256,
   ])
-  if (!exactKeys(evidence, KEY_EVIDENCE_KEYS)
-    || evidence.schemaVersion !== "1.0-hermes-aegis-standing-hash-key-evidence"
+  const acceptedSourceAddress = evidence.manifestSha256 === LEGACY_KEY_GENERATION_MANIFEST_SHA256
+    ? "192.168.1.154"
+    : manifest.invocationBoundary.sourceAddress
+  if (evidence.schemaVersion !== "1.0-hermes-aegis-standing-hash-key-evidence"
     || evidence.status !== "GENERATED"
     || evidence.packageId !== manifest.packageId
     || !acceptedManifestSha256.has(evidence.manifestSha256)
@@ -324,7 +329,7 @@ export function validateHermesKeyGenerationEvidence(manifest, evidence, publicKe
     || !SHA256.test(evidence.generationAuthoritySha256 ?? "")
     || !canonicalTimestamp(evidence.generatedAt)
     || evidence.generationHost !== "hermes" || evidence.generationAccount !== "bs"
-    || evidence.sourceAddress !== "192.168.1.154" || evidence.algorithm !== "ssh-ed25519"
+    || evidence.sourceAddress !== acceptedSourceAddress || evidence.algorithm !== "ssh-ed25519"
     || evidence.privateKeyPath !== manifest.invocationBoundary.dedicatedTransportPrivateKeyPath
     || evidence.publicKeyPath !== manifest.invocationBoundary.dedicatedTransportPublicKeyPath
     || evidence.generatedFresh !== true || evidence.existedBefore !== false
